@@ -12,6 +12,14 @@ export const ProcessCpuSchema = z.object({
   user: z.number(),
   system: z.number(),
   total: z.number(),
+  capacity: z.number().positive().optional(),
+  normalizedTotal: z.number().optional(),
+});
+
+export const HostCpuSchema = z.object({
+  logicalCores: z.number().int().positive(),
+  availableParallelism: z.number().int().positive(),
+  totalUsage: z.number().optional(),
 });
 
 export const EventLoopDelaySchema = z.object({
@@ -25,6 +33,7 @@ export const ProcessSnapshotSchema = z.object({
   uptimeSeconds: z.number(),
   memory: ProcessMemorySchema,
   cpu: ProcessCpuSchema,
+  hostCpu: HostCpuSchema.optional(),
   eventLoop: EventLoopDelaySchema,
 });
 
@@ -36,6 +45,7 @@ export const ProcessSnapshotHistorySchema = z.object({
 
 export type ProcessMemory = z.infer<typeof ProcessMemorySchema>;
 export type ProcessCpu = z.infer<typeof ProcessCpuSchema>;
+export type HostCpu = z.infer<typeof HostCpuSchema>;
 export type EventLoopDelay = z.infer<typeof EventLoopDelaySchema>;
 export type ProcessSnapshot = z.infer<typeof ProcessSnapshotSchema>;
 export type ProcessSnapshotHistory = z.infer<typeof ProcessSnapshotHistorySchema>;

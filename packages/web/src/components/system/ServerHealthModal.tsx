@@ -6,6 +6,9 @@ import {
   ModalBody,
   Button,
   Chip,
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
 } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
 import type { CoreCapabilityDiagnostics, CoreRadioCapabilities, ProcessSnapshot } from '@tx5dr/contracts';
@@ -303,7 +306,7 @@ function Sparkline({
 interface MetricCardProps {
   title: string;
   primaryLabel: string;
-  primaryValue: string;
+  primaryValue: React.ReactNode;
   rows?: { label: string; value: string; barPercent?: number }[];
   sparkValues: number[];
   sparkWarn?: number;
@@ -312,7 +315,6 @@ interface MetricCardProps {
   sparkFormatValue?: (v: number) => string;
   /** 多线模式：传入后 sparkValues/sparkWarn/sparkCritical/sparkFormatValue 被忽略 */
   sparkSeries?: SparklineSeries[];
-  children?: React.ReactNode;
 }
 
 function MetricCard({
@@ -390,6 +392,115 @@ function safeFixed(value: number | null | undefined, digits: number): string {
   return value.toFixed(digits);
 }
 
+function toCapacityPercent(value: number | null | undefined, capacity: number | null | undefined): number {
+  if (value == null || Number.isNaN(value)) return 0;
+  const resolvedCapacity = capacity && capacity > 0 ? capacity : 100;
+  return (value / resolvedCapacity) * 100;
+}
+
+function normalizedCpuPercent(value: number | null | undefined, capacity: number | null | undefined): number | null {
+  if (value == null || Number.isNaN(value)) return null;
+  return toCapacityPercent(value, capacity);
+}
+
+function formatCpuLoad(
+  total: number | null | undefined,
+  capacity: number | null | undefined,
+  normalizedTotal?: number | null
+): string {
+  const value = normalizedTotal ?? normalizedCpuPercent(total, capacity);
+  if (value == null || Number.isNaN(value)) return '—';
+  return `${value.toFixed(1)}%`;
+}
+
+function formatOptionalPercent(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '—';
+  return `${value.toFixed(1)}%`;
+}
+
+function formatOptionalNumber(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '—';
+  return value.toString();
+}
+
+function CpuDetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-xs text-default-500">{label}</span>
+      <span className="text-xs font-mono text-default-700">{value}</span>
+    </div>
+  );
+}
+
+function CpuLoadValue({ snapshot }: { snapshot: ProcessSnapshot }) {
+  const { t } = useTranslation('settings');
+  const [isOpen, setIsOpen] = useState(false);
+  const normalizedTotal = snapshot.cpu.normalizedTotal ?? normalizedCpuPercent(snapshot.cpu.total, snapshot.cpu.capacity);
+
+  return (
+    <Popover
+      isOpen={isOpen}
+      onOpenChange={setIsOpen}
+      placement="top-start"
+      showArrow
+    >
+      <PopoverTrigger>
+        <span
+          role="button"
+          tabIndex={0}
+          className="inline-flex cursor-help rounded outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          onMouseEnter={() => setIsOpen(true)}
+          onMouseLeave={() => setIsOpen(false)}
+          onFocus={() => setIsOpen(true)}
+          onBlur={() => setIsOpen(false)}
+        >
+          {formatCpuLoad(snapshot.cpu.total, snapshot.cpu.capacity, snapshot.cpu.normalizedTotal)}
+        </span>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 p-3">
+        <div className="flex w-full flex-col gap-2">
+          <div className="text-xs font-semibold text-default-600 uppercase tracking-wider">
+            {t('serverHealth.cpuFullData')}
+          </div>
+          <CpuDetailRow
+            label={t('serverHealth.displayLoad')}
+            value={formatOptionalPercent(normalizedTotal)}
+          />
+          <CpuDetailRow
+            label={t('serverHealth.rawProcessCpu')}
+            value={formatOptionalPercent(snapshot.cpu.total)}
+          />
+          <CpuDetailRow
+            label={t('serverHealth.userRaw')}
+            value={formatOptionalPercent(snapshot.cpu.user)}
+          />
+          <CpuDetailRow
+            label={t('serverHealth.systemRaw')}
+            value={formatOptionalPercent(snapshot.cpu.system)}
+          />
+          <CpuDetailRow
+            label={t('serverHealth.availableCapacity')}
+            value={formatOptionalPercent(snapshot.cpu.capacity)}
+          />
+          <div className="my-1 h-px bg-default-200" />
+          <CpuDetailRow
+            label={t('serverHealth.hostCpuTotal')}
+            value={formatOptionalPercent(snapshot.hostCpu?.totalUsage)}
+          />
+          <CpuDetailRow
+            label={t('serverHealth.logicalCores')}
+            value={formatOptionalNumber(snapshot.hostCpu?.logicalCores)}
+          />
+          <CpuDetailRow
+            label={t('serverHealth.availableParallelism')}
+            value={formatOptionalNumber(snapshot.hostCpu?.availableParallelism)}
+          />
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // ─── Time range selector ─────────────────────────────────────────────────────
 
 type TimeRange = 5 | 15 | 30;
@@ -446,7 +557,7 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
     [displaySnapshots]
   );
   const cpuValues = useMemo(
-    () => displaySnapshots.map(s => s.cpu.total ?? 0),
+    () => displaySnapshots.map(s => s.cpu.normalizedTotal ?? normalizedCpuPercent(s.cpu.total, s.cpu.capacity) ?? 0),
     [displaySnapshots]
   );
   const elValues = useMemo(
@@ -547,24 +658,22 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
 
                 {/* CPU card */}
                 <MetricCard
-                  title={t('serverHealth.cpu')}
+                  title={t('serverHealth.cpuLoad')}
                   primaryLabel={t('serverHealth.total')}
-                  primaryValue={`${safeFixed(latest.cpu.total, 1)}%`}
+                  primaryValue={<CpuLoadValue snapshot={latest} />}
                   sparkValues={cpuValues.length > 0 ? cpuValues : [0]}
-                  sparkWarn={70}
-                  sparkCritical={90}
                   sparkTimestamps={timestamps}
                   sparkFormatValue={(v) => `${v.toFixed(1)}%`}
                   rows={[
                     {
                       label: t('serverHealth.user'),
-                      value: `${safeFixed(latest.cpu.user, 1)}%`,
-                      barPercent: latest.cpu.user ?? 0,
+                      value: `${safeFixed(normalizedCpuPercent(latest.cpu.user, latest.cpu.capacity), 1)}%`,
+                      barPercent: toCapacityPercent(latest.cpu.user, latest.cpu.capacity),
                     },
                     {
                       label: t('serverHealth.system'),
-                      value: `${safeFixed(latest.cpu.system, 1)}%`,
-                      barPercent: latest.cpu.system ?? 0,
+                      value: `${safeFixed(normalizedCpuPercent(latest.cpu.system, latest.cpu.capacity), 1)}%`,
+                      barPercent: toCapacityPercent(latest.cpu.system, latest.cpu.capacity),
                     },
                   ]}
                 />
@@ -592,7 +701,7 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
                 <Sparkline
                   values={elValues.length > 0 ? elValues : [0]}
                   height={52}
-                  warnThreshold={30}
+                  warnThreshold={50}
                   criticalThreshold={100}
                   timestamps={timestamps}
                   formatValue={(v) => `${v.toFixed(1)} ms`}

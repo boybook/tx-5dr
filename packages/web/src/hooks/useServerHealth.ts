@@ -9,24 +9,26 @@ export const SERVER_HEALTH_MAX_DISPLAY = 900;
 export type HealthLevel = 'good' | 'warn' | 'critical' | 'unknown';
 
 const MB = 1024 * 1024;
+const HEAP_WARN_BYTES = 512 * MB;
+const HEAP_CRITICAL_BYTES = 2048 * MB;
+const EVENT_LOOP_WARN_MS = 50;
+const EVENT_LOOP_CRITICAL_MS = 100;
 
 export function getHealthLevel(snapshot: ProcessSnapshot | null): HealthLevel {
   if (!snapshot) return 'unknown';
 
-  const { memory, cpu, eventLoop } = snapshot;
+  const { memory, eventLoop } = snapshot;
 
   if (
-    memory.heapUsed > 1024 * MB ||
-    cpu.total > 90 ||
-    eventLoop.p99 > 100
+    eventLoop.p99 > EVENT_LOOP_CRITICAL_MS ||
+    memory.heapUsed > HEAP_CRITICAL_BYTES
   ) {
     return 'critical';
   }
 
   if (
-    memory.heapUsed > 512 * MB ||
-    cpu.total > 70 ||
-    eventLoop.p99 > 50
+    eventLoop.p99 > EVENT_LOOP_WARN_MS ||
+    memory.heapUsed > HEAP_WARN_BYTES
   ) {
     return 'warn';
   }
