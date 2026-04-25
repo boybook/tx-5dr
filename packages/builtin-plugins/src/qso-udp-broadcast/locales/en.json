@@ -1,0 +1,18 @@
+{
+  "pluginName": "QSO UDP Broadcast",
+  "pluginDescription": "Broadcast completed QSO ADIF records over UDP in WSJT/JTDX-compatible formats.",
+  "enableType12": "Enable WSJT/JTDX LoggedADIF Type 12",
+  "enableType12Desc": "Send a WSJT/JTDX UDP binary LoggedADIF packet when a QSO is completed.",
+  "type12Host": "Type 12 host",
+  "type12HostDesc": "UDP host or IP address for WSJT/JTDX LoggedADIF Type 12 packets.",
+  "type12Port": "Type 12 port",
+  "type12PortDesc": "UDP port for WSJT/JTDX LoggedADIF Type 12 packets. Default: 2237.",
+  "enableRawAdif": "Enable raw ADIF",
+  "enableRawAdifDesc": "Send a raw single-record ADIF datagram when a QSO is completed.",
+  "rawAdifHost": "Raw ADIF host",
+  "rawAdifHostDesc": "UDP host or IP address for raw ADIF datagrams.",
+  "rawAdifPort": "Raw ADIF port",
+  "rawAdifPortDesc": "UDP port for raw ADIF datagrams. Default: 2333.",
+  "udpClientId": "UDP client ID",
+  "udpClientIdDesc": "Client identifier written into WSJT/JTDX Type 12 packets."
+}

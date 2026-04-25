@@ -69,6 +69,12 @@ import {
   BUILTIN_LOTW_SYNC_PLUGIN_NAME,
 } from './lotw-sync/index.js';
 
+import {
+  qsoUdpBroadcastPlugin,
+  qsoUdpBroadcastLocales,
+  BUILTIN_QSO_UDP_BROADCAST_PLUGIN_NAME,
+} from './qso-udp-broadcast/index.js';
+
 // ===== Shared types =====
 
 export interface BuiltinPluginEntry {
@@ -88,6 +94,7 @@ export {
   BUILTIN_QRZ_SYNC_PLUGIN_NAME,
   BUILTIN_LOTW_SYNC_PLUGIN_NAME,
   BUILTIN_AUTOCALL_IDLE_FREQUENCY_PLUGIN_NAME,
+  BUILTIN_QSO_UDP_BROADCAST_PLUGIN_NAME,
 };
 
 // ===== Registry =====
@@ -148,5 +155,10 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
     locales: lotwSyncLocales,
     enabledByDefault: true,
     dirPath: lotwSyncDirPath,
+  },
+  {
+    definition: qsoUdpBroadcastPlugin,
+    locales: qsoUdpBroadcastLocales,
+    enabledByDefault: true,
   },
 ];

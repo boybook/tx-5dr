@@ -95,6 +95,18 @@ async function invokeRecordQSO(manager: RadioOperatorManager, payload: { operato
   await handler!(payload);
 }
 
+function attachQSOHookSpy(manager: RadioOperatorManager) {
+  const notifyQSOComplete = vi.fn().mockResolvedValue(undefined);
+  const autoSync = vi.fn();
+  manager.setPluginManager({
+    notifyQSOComplete,
+    logbookSyncHost: {
+      onQSOComplete: autoSync,
+    },
+  } as any);
+  return { notifyQSOComplete, autoSync };
+}
+
 describe('RadioOperatorManager automatic QSO logging', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -122,7 +134,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
 
     const { manager, eventEmitter } = createManager({
       logBook: { id: 'log-1', name: 'Test Log', provider },
-      callsign: null,
+      callsign: 'BG5DRB',
       activeSlotPacks: [
         buildSlotPack(`ft8-${base}`, base, [
           {
@@ -142,6 +154,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     const addedSpy = vi.fn();
     eventEmitter.on('qsoRecordUpdated', updatedSpy);
     eventEmitter.on('qsoRecordAdded', addedSpy);
+    const { notifyQSOComplete, autoSync } = attachQSOHookSpy(manager);
 
     await invokeRecordQSO(manager, {
       operatorId: 'op1',
@@ -165,6 +178,89 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     expect(updatedSpy).not.toHaveBeenCalled();
     expect(addedSpy).toHaveBeenCalledTimes(1);
     expect(provider.addQSO.mock.calls[0]?.[0]?.messageHistory).toEqual(['BG5DRB N0CALL -12']);
+    expect(autoSync).toHaveBeenCalledTimes(1);
+    expect(notifyQSOComplete).toHaveBeenCalledTimes(1);
+    expect(notifyQSOComplete).toHaveBeenCalledWith(
+      'op1',
+      expect.objectContaining({
+        id: 'temp-2',
+        callsign: 'N0CALL',
+        messageHistory: ['BG5DRB N0CALL -12'],
+      }),
+    );
+  });
+
+  it('notifies QSO completion hooks when an automatic QSO is merged into an existing record', async () => {
+    const base = Date.parse('2026-04-05T13:00:00.000Z');
+    const provider = {
+      addQSO: vi.fn(),
+      updateQSO: vi.fn().mockResolvedValue(undefined),
+      getQSO: vi.fn().mockResolvedValue({
+        id: 'existing-1',
+        callsign: 'N0CALL',
+        frequency: 14_074_000,
+        mode: 'FT8',
+        startTime: base - 30_000,
+        endTime: base + MODES.FT8.slotMs,
+        reportSent: '-12',
+        reportReceived: '-09',
+        messageHistory: ['merged message'],
+      }),
+      getLastQSOWithCallsign: vi.fn().mockResolvedValue({
+        id: 'existing-1',
+        callsign: 'N0CALL',
+        frequency: 14_074_000,
+        mode: 'FT8',
+        startTime: base - 30_000,
+        endTime: base - 15_000,
+        reportSent: '-10',
+        reportReceived: '-08',
+        messageHistory: ['old message'],
+      }),
+      getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 1 }),
+    };
+
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      callsign: 'BG5DRB',
+      activeSlotPacks: [],
+      storedRecords: [],
+    });
+    const updatedSpy = vi.fn();
+    const addedSpy = vi.fn();
+    eventEmitter.on('qsoRecordUpdated', updatedSpy);
+    eventEmitter.on('qsoRecordAdded', addedSpy);
+    const { notifyQSOComplete, autoSync } = attachQSOHookSpy(manager);
+
+    await invokeRecordQSO(manager, {
+      operatorId: 'op1',
+      qsoRecord: {
+        id: 'temp-merged',
+        callsign: 'n0call',
+        frequency: 14_074_000,
+        mode: 'FT8',
+        startTime: base,
+        endTime: base + MODES.FT8.slotMs,
+        reportSent: '-12',
+        reportReceived: '-09',
+        messageHistory: [],
+        myCallsign: 'BG5DRB',
+      },
+    });
+
+    expect(provider.addQSO).not.toHaveBeenCalled();
+    expect(provider.updateQSO).toHaveBeenCalledTimes(1);
+    expect(addedSpy).not.toHaveBeenCalled();
+    expect(updatedSpy).toHaveBeenCalledTimes(1);
+    expect(autoSync).not.toHaveBeenCalled();
+    expect(notifyQSOComplete).toHaveBeenCalledTimes(1);
+    expect(notifyQSOComplete).toHaveBeenCalledWith(
+      'op1',
+      expect.objectContaining({
+        id: 'existing-1',
+        callsign: 'N0CALL',
+      }),
+    );
   });
 
   it('replaces the queued transmission when a late decode advances standard-qso during the current TX slot', async () => {
