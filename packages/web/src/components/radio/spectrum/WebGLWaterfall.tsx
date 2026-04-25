@@ -77,6 +77,8 @@ interface WebGLWaterfallProps {
   onRightClickSetFrequency?: (frequency: number) => void;
   onActualRangeChange?: (range: { min: number; max: number } | null) => void;
   hoverFrequency?: number | null;
+  markerAxis?: SpectrumAxis | null;
+  markerOnly?: boolean;
   /** 纹理总行数，不足时底部用暗色填充，实现从顶部逐渐填充的效果 */
   totalRows?: number;
   /** 当前是否处于发射状态，用于 TX/RX 自动范围分离 */
@@ -126,6 +128,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   onRightClickSetFrequency,
   onActualRangeChange,
   hoverFrequency,
+  markerAxis = null,
+  markerOnly = false,
   totalRows,
   isTransmitting = false,
 }) => {
@@ -213,7 +217,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const handleResizeRef = useRef<() => void>(() => {});
   const rebuildTextureRef = useRef<(rows: ArrayLike<number>[], axis: SpectrumAxis | null) => void>(() => {});
   const processRenderBatchRef = useRef<(batch: SpectrumRenderBatch | null) => void>(() => {});
-  const axis = viewState.axis;
+  const axis = viewState.axis ?? markerAxis;
 
   const resetAutoRangeState = useCallback(() => {
     rangeUpdateCounterRef.current = 0;
@@ -1592,6 +1596,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     <div
       ref={containerRef}
       className={`relative ${className}`}
+      style={{ height: `${height}px` }}
       onMouseDown={onDragFrequencyChange ? handleGenericFrequencyDragMouseDown : undefined}
       onDoubleClick={(e) => {
         if (!onDoubleClickSetFrequency) {
@@ -1611,11 +1616,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         }
       }}
     >
-      <canvas
-        ref={canvasRef}
-        className="w-full"
-        style={{ height: `${height}px` }}
-      />
+      {!markerOnly && (
+        <canvas
+          ref={canvasRef}
+          className="w-full"
+          style={{ height: `${height}px` }}
+        />
+      )}
 
       {/* 频率标记层 */}
       <div className="absolute inset-0 pointer-events-none">
