@@ -52,8 +52,8 @@
   },
   "filter": {
     "grid": "Grid",
-    "gridPlaceholder": "Enter a grid, e.g. PM01 or PM01AA",
-    "gridHelp": "Supports 4/6/8-character grid prefix matching, so PM01 also matches PM01AA.",
+    "gridPlaceholder": "Enter a grid, e.g. FN31 or FN31AB",
+    "gridHelp": "Supports 4/6/8-character grid prefix matching, so FN31 also matches FN31AB.",
     "band": "Band",
     "allBands": "All Bands",
     "bandFilter": "Band Filter",

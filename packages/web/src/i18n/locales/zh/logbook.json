@@ -53,7 +53,7 @@
   "filter": {
     "grid": "网格",
     "gridPlaceholder": "搜索网格",
-    "gridHelp": "支持 4/6/8 位网格前缀匹配，例如 PM01 可匹配 PM01AA。",
+    "gridHelp": "支持 4/6/8 位网格前缀匹配，例如 FN31 可匹配 FN31AB。",
     "band": "频段",
     "allBands": "全部频段",
     "bandFilter": "频段筛选",
