@@ -78,7 +78,17 @@
     "enableHighlightDesc": "When enabled, highlights new callsigns, DXCC entities, and grids based on logbook analysis",
     "highlightTypeConfig": "Highlight Type Config",
     "preview": "Preview",
-    "resetToDefault": "Reset to Default"
+    "resetToDefault": "Reset to Default",
+    "frameTable": {
+      "title": "FrameTable Cycle Backgrounds",
+      "description": "Configure the even/odd cycle backgrounds used by FrameTable in light and dark themes. The main table updates after saving.",
+      "lightTheme": "Light Theme",
+      "darkTheme": "Dark Theme",
+      "themeDescription": "Changing colors below updates this preview immediately.",
+      "evenCycle": "Even Cycle Background",
+      "oddCycle": "Odd Cycle Background",
+      "preview": "Live Preview"
+    }
   },
   "profileSetup": {
     "created": "Profile \"{{name}}\" created and activated",

@@ -78,7 +78,17 @@
     "enableHighlightDesc": "开启后将根据日志本分析结果高亮显示新的呼号、DXCC 实体和网格",
     "highlightTypeConfig": "高亮类型配置",
     "preview": "效果预览",
-    "resetToDefault": "重置为默认值"
+    "resetToDefault": "重置为默认值",
+    "frameTable": {
+      "title": "FrameTable 周期背景色",
+      "description": "分别配置亮色和暗色主题下，偶数/奇数周期在 FrameTable 中的背景色。保存后主界面即时生效。",
+      "lightTheme": "亮色主题",
+      "darkTheme": "暗色主题",
+      "themeDescription": "调整下方颜色时，预览会立即更新。",
+      "evenCycle": "偶数周期背景",
+      "oddCycle": "奇数周期背景",
+      "preview": "实时预览"
+    }
   },
   "profileSetup": {
     "created": "Profile「{{name}}」已创建并激活",
