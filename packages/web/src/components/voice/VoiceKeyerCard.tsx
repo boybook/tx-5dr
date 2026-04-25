@@ -774,11 +774,13 @@ export const VoiceKeyerCard: React.FC = () => {
                 const selected = Number(Array.from(keys)[0]);
                 if (selected) void updateSlotCount(selected);
               }}
-              className="w-16 sm:w-20"
+              className="w-20 sm:w-24"
               classNames={{ trigger: 'h-7 min-h-7', value: 'text-xs' }}
             >
               {[3, 4, 5, 6, 8, 10, 12].map((count) => (
-                <SelectItem key={String(count)} textValue={String(count)}>{count}</SelectItem>
+                <SelectItem key={String(count)} textValue={t('keyer.slotCountOption', { count })}>
+                  {t('keyer.slotCountOption', { count })}
+                </SelectItem>
               ))}
             </Select>
           )}

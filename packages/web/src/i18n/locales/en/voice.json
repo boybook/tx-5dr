@@ -106,6 +106,7 @@
     "editMode": "Edit",
     "stop": "Stop",
     "slotCount": "Slots",
+    "slotCountOption": "{{count}} slots",
     "loadFailed": "Voice keyer load failed",
     "recordTooShort": "Recording is too short",
     "recordSaved": "Recording saved",
