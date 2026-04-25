@@ -128,14 +128,14 @@ function getTxProgressStyle(durationMs: number): React.CSSProperties {
   };
 }
 
-function getRemainingSeconds(nextRunAt: number | null): number | null {
+function getRemainingSeconds(nextRunAt: number | null, intervalSec: number): number | null {
   if (!nextRunAt) return null;
-  return Math.max(0, Math.ceil((nextRunAt - Date.now()) / 1000));
+  return Math.min(intervalSec, Math.max(0, Math.ceil((nextRunAt - Date.now()) / 1000)));
 }
 
 function getWaitProgressStyle(nextRunAt: number, intervalSec: number): React.CSSProperties {
   const totalMs = Math.max(1000, intervalSec * 1000);
-  const remainingMs = Math.max(0, nextRunAt - Date.now());
+  const remainingMs = Math.min(totalMs, Math.max(0, nextRunAt - Date.now()));
   const elapsedMs = Math.max(0, totalMs - remainingMs);
   const startPercent = Math.max(0, Math.min(100, (elapsedMs / totalMs) * 100));
 
@@ -828,7 +828,7 @@ export const VoiceKeyerCard: React.FC = () => {
                         : 'bg-content2';
                     if (panelMode === 'operate') {
                       const transmitting = active && status.mode === 'playing';
-                      const remainingSeconds = waiting ? getRemainingSeconds(status.nextRunAt) : null;
+                      const remainingSeconds = waiting ? getRemainingSeconds(status.nextRunAt, intervalValue) : null;
                       return (
                         <div
                           key={slot.id}
