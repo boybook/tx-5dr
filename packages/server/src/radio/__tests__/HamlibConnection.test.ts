@@ -11,6 +11,7 @@ type MockRig = {
   setSplitFreq: ReturnType<typeof vi.fn>;
   setMode: ReturnType<typeof vi.fn>;
   setPtt: ReturnType<typeof vi.fn>;
+  getPtt: ReturnType<typeof vi.fn>;
   getFrequency: ReturnType<typeof vi.fn>;
   getMode: ReturnType<typeof vi.fn>;
   getLevel: ReturnType<typeof vi.fn>;
@@ -88,6 +89,7 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
     setSplitFreq: vi.fn().mockResolvedValue(0),
     setMode: vi.fn().mockResolvedValue(0),
     setPtt: vi.fn().mockResolvedValue(0),
+    getPtt: vi.fn().mockResolvedValue(false),
     getFrequency: vi.fn().mockResolvedValue(7100000),
     getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 2400 }),
     getLevel: vi.fn().mockResolvedValue(0),
@@ -136,6 +138,32 @@ describe('HamlibConnection', () => {
 
     await expect(connection.getDCD()).resolves.toBe(true);
     expect(rig.getDcd).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads PTT state via low-priority Hamlib polling', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getPtt: vi.fn().mockResolvedValue(true),
+    });
+
+    await expect(connection.getPTT()).resolves.toBe(true);
+    expect(rig.getPtt).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips PTT polling while a critical CAT write is active', async () => {
+    const firstWrite = createDeferred<number>();
+    const { connection, rig } = createConnectedConnection({
+      setFrequency: vi.fn().mockReturnValue(firstWrite.promise),
+      getPtt: vi.fn().mockResolvedValue(true),
+    });
+
+    const writePromise = connection.setFrequency(7100000);
+    await Promise.resolve();
+
+    await expect(connection.getPTT()).rejects.toThrow(/busy/);
+    expect(rig.getPtt).not.toHaveBeenCalled();
+
+    firstWrite.resolve(0);
+    await writePromise;
   });
 
   it('skips DCD polling while a critical CAT write is active', async () => {

@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import * as nodeWav from 'node-wav';
 import { VoiceKeyerManager } from '../VoiceKeyerManager.js';
 
@@ -35,6 +35,7 @@ async function createManager() {
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) await rm(dir, { recursive: true, force: true });
@@ -107,4 +108,58 @@ describe('VoiceKeyerManager', () => {
     expect(audioStreamManager.playAudio).not.toHaveBeenCalled();
     expect(manager.getStatus().error).toContain('locked');
   });
+
+  describe('manual PTT overrides repeat CQ', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    it('clears repeat countdown during manual PTT and restarts a full interval after release', async () => {
+      const { manager, voiceSessionManager } = await createManager();
+      await manager.saveSlotAudio('BG5DRB', '1', makeWav());
+      await manager.updateSlot('BG5DRB', '1', { repeatEnabled: true, repeatIntervalSec: 4 });
+
+      await manager.play({ callsign: 'BG5DRB', slotId: '1', repeat: true, connectionId: 'c1', label: 'Op' });
+      await vi.waitFor(() => expect(manager.getStatus().mode).toBe('playing'));
+      await vi.advanceTimersByTimeAsync(PTT_AUDIO_WINDOW_MS);
+      await vi.waitFor(() => expect(manager.getStatus().mode).toBe('repeat-waiting'));
+
+      const firstCountdown = manager.getStatus().nextRunAt;
+      expect(firstCountdown).toEqual(expect.any(Number));
+      expect(voiceSessionManager.startTransmit).toHaveBeenCalledTimes(1);
+
+      manager.setManualPttActive(true);
+      expect(manager.getStatus().nextRunAt).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(voiceSessionManager.startTransmit).toHaveBeenCalledTimes(1);
+
+      manager.setManualPttActive(false);
+      await vi.waitFor(() => expect(manager.getStatus().nextRunAt).toEqual(expect.any(Number)));
+      const restartedCountdown = manager.getStatus().nextRunAt!;
+      expect(restartedCountdown).toBeGreaterThan(Date.now() + 3_500);
+
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(voiceSessionManager.startTransmit).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(voiceSessionManager.startTransmit).toHaveBeenCalledTimes(2));
+    });
+
+    it('stops active playback when manual PTT starts', async () => {
+      const { manager, voiceSessionManager, audioStreamManager } = await createManager();
+      await manager.saveSlotAudio('BG5DRB', '1', makeWav());
+      await manager.updateSlot('BG5DRB', '1', { repeatEnabled: true, repeatIntervalSec: 4 });
+
+      await manager.play({ callsign: 'BG5DRB', slotId: '1', repeat: true, connectionId: 'c1', label: 'Op' });
+      await vi.waitFor(() => expect(manager.getStatus().mode).toBe('playing'));
+
+      manager.setManualPttActive(true);
+      await vi.waitFor(() => expect(manager.getStatus().mode).toBe('idle'));
+
+      expect(audioStreamManager.stopCurrentPlayback).toHaveBeenCalled();
+      expect(voiceSessionManager.stopTransmit).toHaveBeenCalledWith('voice-keyer:c1');
+    });
+  });
 });
+
+const PTT_AUDIO_WINDOW_MS = 150 + 500;

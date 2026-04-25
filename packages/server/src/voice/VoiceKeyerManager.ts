@@ -17,6 +17,7 @@ const MAX_AUDIO_DURATION_MS = 120_000;
 const MIN_AUDIO_DURATION_MS = 500;
 const PTT_LEAD_IN_MS = 150;
 const PTT_TAIL_MS = 500;
+type WaitWakeReason = 'elapsed' | 'ptt-change' | 'stop';
 
 interface StoredManifest {
   version: 1;
@@ -34,7 +35,7 @@ interface ActivePlayback {
   repeating: boolean;
   stopRequested: boolean;
   timer: NodeJS.Timeout | null;
-  timerResolve: (() => void) | null;
+  timerResolve: ((reason: WaitWakeReason) => void) | null;
 }
 
 export interface VoiceKeyerManagerEvents {
@@ -50,6 +51,7 @@ export interface VoiceKeyerManagerDeps {
 export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
   private rootDir: string | null = null;
   private active: ActivePlayback | null = null;
+  private manualPttActive = false;
   private status: VoiceKeyerStatus = {
     active: false,
     callsign: null,
@@ -201,12 +203,7 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
     }
 
     active.stopRequested = true;
-    if (active.timer) {
-      clearTimeout(active.timer);
-      active.timer = null;
-    }
-    active.timerResolve?.();
-    active.timerResolve = null;
+    this.interruptActiveWait(active, 'stop');
     this.setStatus({
       ...this.status,
       active: true,
@@ -235,6 +232,30 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
     }
   }
 
+  setManualPttActive(active: boolean): void {
+    if (this.manualPttActive === active) {
+      return;
+    }
+    this.manualPttActive = active;
+
+    const current = this.active;
+    if (!current || current.stopRequested) {
+      return;
+    }
+
+    if (active && this.status.mode === 'playing') {
+      void this.stopActive('manual PTT override');
+      return;
+    }
+
+    if (this.status.mode === 'repeat-waiting') {
+      if (active) {
+        this.setStatus(this.statusFor(current, 'repeat-waiting', null));
+      }
+      this.interruptActiveWait(current, 'ptt-change');
+    }
+  }
+
   private async runPlaybackLoop(active: ActivePlayback): Promise<void> {
     try {
       while (!active.stopRequested && this.active === active) {
@@ -243,20 +264,10 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
           break;
         }
 
-        const panel = await this.getPanel(active.callsign);
-        const slot = this.requireSlot(panel, active.slotId);
-        if (!slot.repeatEnabled) {
+        const shouldPlayAgain = await this.waitForRepeatDelay(active);
+        if (!shouldPlayAgain) {
           break;
         }
-        const waitMs = slot.repeatIntervalSec * 1000;
-        const nextRunAt = Date.now() + waitMs;
-        this.setStatus(this.statusFor(active, 'repeat-waiting', nextRunAt));
-        await new Promise<void>((resolve) => {
-          active.timerResolve = resolve;
-          active.timer = setTimeout(resolve, waitMs);
-        });
-        active.timer = null;
-        active.timerResolve = null;
       }
     } catch (error) {
       logger.error('Voice keyer playback failed', error);
@@ -286,13 +297,13 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
     this.setStatus(this.statusFor(active, 'playing'));
     await this.sleep(PTT_LEAD_IN_MS, active);
     if (active.stopRequested || this.active !== active) {
-      throw new Error('playback interrupted');
+      return;
     }
     await this.deps.audioStreamManager.playAudio(decoded.samples, decoded.sampleRate, {
       injectIntoMonitor: true,
     });
     if (active.stopRequested || this.active !== active) {
-      throw new Error('playback interrupted');
+      return;
     }
     await this.sleep(PTT_TAIL_MS, active);
     await this.deps.voiceSessionManager.stopTransmit(active.keyerClientId);
@@ -303,6 +314,69 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
       return Promise.resolve();
     }
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async waitForRepeatDelay(active: ActivePlayback): Promise<boolean> {
+    while (!active.stopRequested && this.active === active) {
+      const panel = await this.getPanel(active.callsign);
+      const slot = this.requireSlot(panel, active.slotId);
+      if (!slot.repeatEnabled) {
+        return false;
+      }
+
+      if (this.manualPttActive) {
+        this.setStatus(this.statusFor(active, 'repeat-waiting', null));
+        const reason = await this.waitForWake(active);
+        if (reason === 'stop') {
+          return false;
+        }
+        continue;
+      }
+
+      const waitMs = slot.repeatIntervalSec * 1000;
+      const nextRunAt = Date.now() + waitMs;
+      this.setStatus(this.statusFor(active, 'repeat-waiting', nextRunAt));
+      const reason = await this.waitForWake(active, waitMs);
+      if (reason === 'elapsed') {
+        return !active.stopRequested && this.active === active;
+      }
+      if (reason === 'stop') {
+        return false;
+      }
+    }
+
+    return false;
+  }
+
+  private waitForWake(active: ActivePlayback, waitMs?: number): Promise<WaitWakeReason> {
+    return new Promise<WaitWakeReason>((resolve) => {
+      active.timerResolve = resolve;
+      if (typeof waitMs === 'number') {
+        active.timer = setTimeout(() => {
+          active.timer = null;
+          active.timerResolve = null;
+          resolve('elapsed');
+        }, waitMs);
+      }
+    }).finally(() => {
+      if (active.timer) {
+        clearTimeout(active.timer);
+        active.timer = null;
+      }
+      if (active.timerResolve) {
+        active.timerResolve = null;
+      }
+    });
+  }
+
+  private interruptActiveWait(active: ActivePlayback, reason: WaitWakeReason): void {
+    if (active.timer) {
+      clearTimeout(active.timer);
+      active.timer = null;
+    }
+    const resolve = active.timerResolve;
+    active.timerResolve = null;
+    resolve?.(reason);
   }
 
   private decodeWav(buffer: Buffer): { sampleRate: number; samples: Float32Array } {
@@ -432,6 +506,7 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
       || !active.repeating
       || this.status.mode !== 'repeat-waiting'
       || !active.timerResolve
+      || this.manualPttActive
     ) {
       return;
     }
@@ -443,10 +518,7 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
     const nextRunAt = Date.now() + waitMs;
     this.setStatus(this.statusFor(active, 'repeat-waiting', nextRunAt));
     active.timer = setTimeout(() => {
-      active.timer = null;
-      const resolve = active.timerResolve;
-      active.timerResolve = null;
-      resolve?.();
+      this.interruptActiveWait(active, 'elapsed');
     }, waitMs);
   }
 
