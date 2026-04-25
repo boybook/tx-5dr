@@ -1,27 +1,29 @@
 import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Card,
-  CardBody,
   Button,
-  Input,
-  Select,
-  SelectItem,
   Chip,
-  Tabs,
-  Tab,
   Modal,
-  ModalContent,
-  ModalHeader,
   ModalBody,
+  ModalContent,
   ModalFooter,
+  ModalHeader,
+  Tab,
+  Table,
+  TableBody,
+  TableCell,
+  TableColumn,
+  TableHeader,
+  TableRow,
+  Tabs,
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faPlus, faTrash, faArrowUp, faArrowDown, faUndo } from '@fortawesome/free-solid-svg-icons';
-import { api, getBandFromFrequency } from '@tx5dr/core';
+import { faPlus, faTrash, faArrowUp, faArrowDown, faUndo, faEdit } from '@fortawesome/free-solid-svg-icons';
+import { api } from '@tx5dr/core';
 import type { PresetFrequency } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
 import { createLogger } from '../../utils/logger';
+import { FrequencyPresetAddModal } from './FrequencyPresetAddModal';
 
 const logger = createLogger('FrequencyPresetSettings');
 
@@ -35,8 +37,6 @@ interface FrequencyPresetSettingsProps {
   initialModeFilter?: string;
 }
 
-const MODE_OPTIONS = ['FT8', 'FT4', 'VOICE'];
-const RADIO_MODE_OPTIONS = ['USB', 'LSB', 'FM', 'AM'];
 const FILTER_ALL = '__all__';
 
 function notifyFrequencyPresetsUpdated(): void {
@@ -51,7 +51,6 @@ export const FrequencyPresetSettings = forwardRef<
 
   const [presets, setPresets] = useState<PresetFrequency[]>([]);
   const [originalPresets, setOriginalPresets] = useState<PresetFrequency[]>([]);
-  const [isCustomized, setIsCustomized] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [_isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
@@ -61,11 +60,8 @@ export const FrequencyPresetSettings = forwardRef<
 
   // 添加表单状态
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [newMode, setNewMode] = useState('FT8');
-  const [newRadioMode, setNewRadioMode] = useState('USB');
-  const [newFreqMHz, setNewFreqMHz] = useState('');
-  const [newDescription, setNewDescription] = useState('');
-  const [addError, setAddError] = useState('');
+  const [addInitialMode, setAddInitialMode] = useState('FT8');
+  const [editingPresetIndex, setEditingPresetIndex] = useState<number | null>(null);
 
   // 恢复默认确认
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
@@ -137,7 +133,6 @@ export const FrequencyPresetSettings = forwardRef<
       if (result.success) {
         setPresets(result.presets);
         setOriginalPresets(result.presets);
-        setIsCustomized(result.isCustomized);
         if (initialModeFilter && result.presets.some((preset) => preset.mode === initialModeFilter)) {
           setModeFilter(initialModeFilter);
         }
@@ -158,7 +153,6 @@ export const FrequencyPresetSettings = forwardRef<
       const result = await api.updateFrequencyPresets(presets);
       if (result.success) {
         setOriginalPresets([...presets]);
-        setIsCustomized(result.isCustomized);
         notifyFrequencyPresetsUpdated();
       }
     } catch (err) {
@@ -176,7 +170,6 @@ export const FrequencyPresetSettings = forwardRef<
       if (result.success) {
         setPresets(result.presets);
         setOriginalPresets(result.presets);
-        setIsCustomized(false);
         notifyFrequencyPresetsUpdated();
       }
     } catch (err) {
@@ -225,73 +218,38 @@ export const FrequencyPresetSettings = forwardRef<
     }
   };
 
-  const handleAdd = () => {
-    setAddError('');
-    const freqValue = parseFloat(newFreqMHz);
-    if (isNaN(freqValue) || freqValue <= 0) {
-      setAddError(t('freqPresets.invalidFrequency'));
-      return;
-    }
-    if (freqValue < 0.1 || freqValue > 1000) {
-      setAddError(t('freqPresets.frequencyRange'));
-      return;
-    }
-
-    const frequencyHz = Math.round(freqValue * 1000000);
-    const inferredBand = getBandFromFrequency(frequencyHz);
-
-    if (!inferredBand || inferredBand === 'Unknown') {
-      setAddError(t('freqPresets.unknownBand'));
-      return;
-    }
-
-    // 检查重复
-    if (presets.some(p => p.frequency === frequencyHz)) {
-      setAddError(t('freqPresets.duplicate'));
-      return;
-    }
-
-    const description = newDescription.trim() || `${freqValue.toFixed(3)} MHz ${inferredBand}`;
-
-    const newPreset: PresetFrequency = {
-      band: inferredBand,
-      mode: newMode,
-      radioMode: newRadioMode,
-      frequency: frequencyHz,
-      description,
-    };
-
-    setPresets([...presets, newPreset]);
-    setIsAddModalOpen(false);
-    setNewFreqMHz('');
-    setNewDescription('');
-    setAddError('');
-  };
-
   const openAddModal = () => {
     // 如果当前在某个模式 tab 下，默认选中该模式
     const initialMode = modeFilter !== FILTER_ALL ? modeFilter : 'FT8';
-    setNewMode(initialMode);
-    setNewRadioMode(initialMode === 'VOICE' ? 'USB' : 'USB');
-    setNewFreqMHz('');
-    setNewDescription('');
-    setAddError('');
+    setAddInitialMode(initialMode);
+    setEditingPresetIndex(null);
     setIsAddModalOpen(true);
+  };
+
+  const openEditModal = (realIndex: number) => {
+    setEditingPresetIndex(realIndex);
+    setIsAddModalOpen(true);
+  };
+
+  const closePresetModal = () => {
+    setIsAddModalOpen(false);
+    setEditingPresetIndex(null);
+  };
+
+  const handlePresetModalSave = (preset: PresetFrequency) => {
+    if (editingPresetIndex === null) {
+      setPresets([...presets, preset]);
+      return;
+    }
+
+    const next = [...presets];
+    next[editingPresetIndex] = preset;
+    setPresets(next);
   };
 
   const formatFrequency = (hz: number): string => {
     return (hz / 1000000).toFixed(3);
   };
-  const inferredBand = useMemo(() => {
-    const freqValue = parseFloat(newFreqMHz);
-    if (!Number.isFinite(freqValue) || freqValue <= 0) {
-      return null;
-    }
-    const frequencyHz = Math.round(freqValue * 1_000_000);
-    const band = getBandFromFrequency(frequencyHz);
-    return band && band !== 'Unknown' ? band : null;
-  }, [newFreqMHz]);
-
   // 统计每个模式的预设数量
   const modeCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -318,87 +276,127 @@ export const FrequencyPresetSettings = forwardRef<
   }
 
   const renderTable = (items: PresetFrequency[], indices: number[]) => {
-    if (items.length === 0) {
-      return (
-        <div className="py-8 text-center text-default-400">
-          {t('freqPresets.empty')}
-        </div>
-      );
-    }
+    const columns = [
+      { key: 'band', label: t('freqPresets.band') },
+      ...(modeFilter === FILTER_ALL ? [{ key: 'mode', label: t('freqPresets.mode') }] : []),
+      { key: 'frequency', label: t('freqPresets.frequencyMHz') },
+      { key: 'description', label: t('freqPresets.descriptionLabel') },
+      { key: 'actions', label: '' },
+    ];
+
+    const rows = items.map((preset, filteredIdx) => ({
+      key: `${preset.mode}-${preset.frequency}-${indices[filteredIdx]}`,
+      preset,
+      filteredIdx,
+      realIndex: indices[filteredIdx],
+    }));
 
     return (
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-divider bg-default-50">
-              <th className="text-left px-3 py-2 font-medium text-default-600">{t('freqPresets.band')}</th>
-              {modeFilter === FILTER_ALL && (
-                <th className="text-left px-3 py-2 font-medium text-default-600">{t('freqPresets.mode')}</th>
-              )}
-              <th className="text-left px-3 py-2 font-medium text-default-600">{t('freqPresets.frequencyMHz')}</th>
-              <th className="text-left px-3 py-2 font-medium text-default-600">{t('freqPresets.descriptionLabel')}</th>
-              <th className="text-right px-3 py-2 font-medium text-default-600 w-[120px]"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((preset, filteredIdx) => {
-              const realIndex = indices[filteredIdx];
-              const isFirst = filteredIdx === 0;
-              const isLast = filteredIdx === items.length - 1;
+      <Table
+        aria-label={t('freqPresets.title')}
+        isCompact
+        isHeaderSticky
+        removeWrapper
+        classNames={{
+          base: 'overflow-visible',
+          table: 'min-w-full',
+          thead: 'sticky top-0 z-20 [&>tr:first-child]:shadow-small [&>tr:last-child]:hidden',
+          th: 'h-9 bg-default-50 py-1.5 text-default-600',
+          td: 'h-10 py-1.5',
+        }}
+      >
+        <TableHeader columns={columns}>
+          {(column) => (
+            <TableColumn key={column.key} align={column.key === 'actions' ? 'end' : 'start'}>
+              {column.label}
+            </TableColumn>
+          )}
+        </TableHeader>
+        <TableBody items={rows} emptyContent={t('freqPresets.empty')}>
+          {(row) => (
+            <TableRow key={row.key}>
+              {(columnKey) => {
+                const preset = row.preset;
+                const realIndex = row.realIndex;
+                const isFirst = row.filteredIdx === 0;
+                const isLast = row.filteredIdx === items.length - 1;
 
-              return (
-                <tr key={`${preset.frequency}-${realIndex}`} className="border-b border-divider last:border-b-0 hover:bg-default-50 transition-colors">
-                  <td className="px-3 py-2">
-                    <Chip size="sm" variant="flat" color="default">{preset.band}</Chip>
-                  </td>
-                  {modeFilter === FILTER_ALL && (
-                    <td className="px-3 py-2">
-                      <Chip size="sm" variant="flat" color={preset.mode === 'FT8' ? 'primary' : 'secondary'}>{preset.mode}</Chip>
-                    </td>
-                  )}
-                  <td className="px-3 py-2 font-mono">{formatFrequency(preset.frequency)}</td>
-                  <td className="px-3 py-2 text-default-500">{preset.description || ''}</td>
-                  <td className="px-3 py-2 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <Button
-                        isIconOnly
-                        size="sm"
-                        variant="light"
-                        isDisabled={isFirst}
-                        onPress={() => handleMoveUp(realIndex, filteredIdx)}
-                        aria-label={t('freqPresets.moveUp')}
-                      >
-                        <FontAwesomeIcon icon={faArrowUp} className="text-xs" />
-                      </Button>
-                      <Button
-                        isIconOnly
-                        size="sm"
-                        variant="light"
-                        isDisabled={isLast}
-                        onPress={() => handleMoveDown(realIndex, filteredIdx)}
-                        aria-label={t('freqPresets.moveDown')}
-                      >
-                        <FontAwesomeIcon icon={faArrowDown} className="text-xs" />
-                      </Button>
-                      <Button
-                        isIconOnly
-                        size="sm"
-                        variant="light"
-                        color="danger"
-                        isDisabled={presets.length <= 1}
-                        onPress={() => handleRemove(realIndex)}
-                        aria-label={t('freqPresets.remove')}
-                      >
-                        <FontAwesomeIcon icon={faTrash} className="text-xs" />
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                switch (columnKey) {
+                  case 'band':
+                    return (
+                      <TableCell>
+                        <Chip size="sm" variant="flat" color="default">{preset.band}</Chip>
+                      </TableCell>
+                    );
+                  case 'mode':
+                    return (
+                      <TableCell>
+                        <Chip size="sm" variant="flat" color={preset.mode === 'FT8' ? 'primary' : 'secondary'}>{preset.mode}</Chip>
+                      </TableCell>
+                    );
+                  case 'frequency':
+                    return <TableCell className="font-mono">{formatFrequency(preset.frequency)}</TableCell>;
+                  case 'description':
+                    return <TableCell className="text-default-500">{preset.description || ''}</TableCell>;
+                  case 'actions':
+                    return (
+                      <TableCell>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            isIconOnly
+                            size="sm"
+                            variant="light"
+                            onPress={() => openEditModal(realIndex)}
+                            aria-label={t('freqPresets.edit')}
+                            className="h-8 min-w-8 w-8"
+                          >
+                            <FontAwesomeIcon icon={faEdit} className="text-xs" />
+                          </Button>
+                          <Button
+                            isIconOnly
+                            size="sm"
+                            variant="light"
+                            isDisabled={isFirst}
+                            onPress={() => handleMoveUp(realIndex, row.filteredIdx)}
+                            aria-label={t('freqPresets.moveUp')}
+                            className="h-8 min-w-8 w-8"
+                          >
+                            <FontAwesomeIcon icon={faArrowUp} className="text-xs" />
+                          </Button>
+                          <Button
+                            isIconOnly
+                            size="sm"
+                            variant="light"
+                            isDisabled={isLast}
+                            onPress={() => handleMoveDown(realIndex, row.filteredIdx)}
+                            aria-label={t('freqPresets.moveDown')}
+                            className="h-8 min-w-8 w-8"
+                          >
+                            <FontAwesomeIcon icon={faArrowDown} className="text-xs" />
+                          </Button>
+                          <Button
+                            isIconOnly
+                            size="sm"
+                            variant="light"
+                            color="danger"
+                            isDisabled={presets.length <= 1}
+                            onPress={() => handleRemove(realIndex)}
+                            aria-label={t('freqPresets.remove')}
+                            className="h-8 min-w-8 w-8"
+                          >
+                            <FontAwesomeIcon icon={faTrash} className="text-xs" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    );
+                  default:
+                    return <TableCell>{null}</TableCell>;
+                }
+              }}
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
     );
   };
 
@@ -411,13 +409,6 @@ export const FrequencyPresetSettings = forwardRef<
           <p className="text-sm text-default-500 mt-1">{t('freqPresets.description')}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Chip
-            size="sm"
-            color={isCustomized || hasUnsavedChanges() ? 'warning' : 'default'}
-            variant="flat"
-          >
-            {isCustomized || hasUnsavedChanges() ? t('freqPresets.customized') : t('freqPresets.default')}
-          </Chip>
           <Chip size="sm" variant="flat" color="default">
             {t('freqPresets.presetCount', { count: presets.length })}
           </Chip>
@@ -429,7 +420,6 @@ export const FrequencyPresetSettings = forwardRef<
         selectedKey={modeFilter}
         onSelectionChange={(key) => setModeFilter(key as string)}
         size="sm"
-        variant="underlined"
       >
         <Tab
           key={FILTER_ALL}
@@ -456,11 +446,7 @@ export const FrequencyPresetSettings = forwardRef<
       </Tabs>
 
       {/* 预设列表 */}
-      <Card>
-        <CardBody className="p-0">
-          {renderTable(filteredPresets, realIndices)}
-        </CardBody>
-      </Card>
+      {renderTable(filteredPresets, realIndices)}
 
       {/* 操作按钮 */}
       <div className="flex items-center justify-between">
@@ -484,73 +470,15 @@ export const FrequencyPresetSettings = forwardRef<
         </Button>
       </div>
 
-      {/* 添加预设模态框 */}
-      <Modal isOpen={isAddModalOpen} onClose={() => setIsAddModalOpen(false)} size="md">
-        <ModalContent>
-          <ModalHeader>{t('freqPresets.addTitle')}</ModalHeader>
-          <ModalBody>
-            <div className="flex gap-3">
-              <Input
-                label={t('freqPresets.band')}
-                value={inferredBand ?? t('freqPresets.bandAutoPending')}
-                isReadOnly
-                className="flex-1"
-              />
-              <Select
-                label={t('freqPresets.mode')}
-                selectedKeys={[newMode]}
-                onSelectionChange={(keys) => {
-                  const val = Array.from(keys)[0] as string;
-                  if (val) setNewMode(val);
-                }}
-                className="flex-1"
-              >
-                {MODE_OPTIONS.map(mode => (
-                  <SelectItem key={mode} textValue={mode}>{mode}</SelectItem>
-                ))}
-              </Select>
-              <Select
-                label={t('freqPresets.radioMode')}
-                selectedKeys={[newRadioMode]}
-                onSelectionChange={(keys) => {
-                  const val = Array.from(keys)[0] as string;
-                  if (val) setNewRadioMode(val);
-                }}
-                className="flex-1"
-              >
-                {RADIO_MODE_OPTIONS.map(mode => (
-                  <SelectItem key={mode} textValue={mode}>{mode}</SelectItem>
-                ))}
-              </Select>
-            </div>
-            <Input
-              label={t('freqPresets.frequencyMHz')}
-              placeholder={t('freqPresets.freqPlaceholder')}
-              value={newFreqMHz}
-              onValueChange={setNewFreqMHz}
-              type="number"
-              step="0.001"
-              description={t('freqPresets.frequencyRange')}
-              isInvalid={!!addError}
-              errorMessage={addError}
-            />
-            <Input
-              label={t('freqPresets.descriptionLabel')}
-              placeholder={t('freqPresets.descPlaceholder')}
-              value={newDescription}
-              onValueChange={setNewDescription}
-            />
-          </ModalBody>
-          <ModalFooter>
-            <Button variant="flat" onPress={() => setIsAddModalOpen(false)}>
-              {t('common:button.cancel')}
-            </Button>
-            <Button color="primary" onPress={handleAdd}>
-              {t('freqPresets.add')}
-            </Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
+      <FrequencyPresetAddModal
+        isOpen={isAddModalOpen}
+        presets={presets}
+        initialMode={addInitialMode}
+        initialRadioMode="USB"
+        editingPreset={editingPresetIndex === null ? null : presets[editingPresetIndex]}
+        onClose={closePresetModal}
+        onAdd={handlePresetModalSave}
+      />
 
       {/* 恢复默认确认模态框 */}
       <Modal isOpen={isResetConfirmOpen} onClose={() => setIsResetConfirmOpen(false)} size="sm">

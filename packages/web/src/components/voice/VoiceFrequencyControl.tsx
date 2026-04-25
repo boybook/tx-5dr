@@ -8,23 +8,18 @@ import {
   Listbox,
   ListboxItem,
   ListboxSection,
-  Modal,
-  ModalContent,
-  ModalHeader,
-  ModalBody,
-  ModalFooter,
-  Input,
 } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { api, ApiError } from '@tx5dr/core';
 import { useConnection, useRadioConnectionState, useRadioState } from '../../store/radioStore';
 import { useHasMinRole, useCan, useAbility } from '../../store/authStore';
-import { UserRole } from '@tx5dr/contracts';
+import { UserRole, type PresetFrequency } from '@tx5dr/contracts';
 import { subject as caslSubject } from '@casl/ability';
 import { showErrorToast } from '../../utils/errorToast';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
 import { isCoreCapabilityAvailable } from '../../utils/radioControl';
+import { FrequencyPresetAddModal } from '../settings/FrequencyPresetAddModal';
 
 const logger = createLogger('VoiceFrequencyControl');
 const CURRENT_CUSTOM_VOICE_FREQUENCY_KEY = '__current_custom_voice_frequency__';
@@ -194,10 +189,7 @@ export const VoiceFrequencyControl: React.FC = () => {
   const [currentRadioMode, setCurrentRadioMode] = useState<string>('USB');
   const currentRadioModeRef = React.useRef(currentRadioMode);
   currentRadioModeRef.current = currentRadioMode;
-  const [isCustomModalOpen, setIsCustomModalOpen] = useState(false);
-  const [customInput, setCustomInput] = useState('');
-  const [customError, setCustomError] = useState('');
-  const [isSettingFreq, setIsSettingFreq] = useState(false);
+  const [isAddPresetModalOpen, setIsAddPresetModalOpen] = useState(false);
 
   // Pending frequency tracking: suppresses stale server echo (e.g. from 5s radio polling)
   // overwriting user's just-typed value. Also used as a trailing-debounce buffer so that
@@ -400,6 +392,19 @@ export const VoiceFrequencyControl: React.FC = () => {
     } satisfies FrequencyPreset;
   }, [currentFrequency, currentRadioMode, formatFrequencyLabel, presets, t]);
 
+  const currentPresetForEdit = useMemo<PresetFrequency | null>(() => {
+    const preset = presets.find(item => item.frequency === currentFrequency);
+    if (!preset) return null;
+
+    return {
+      band: preset.band,
+      mode: 'VOICE',
+      radioMode: preset.radioMode ?? currentRadioMode,
+      frequency: preset.frequency,
+      description: preset.label,
+    };
+  }, [currentFrequency, currentRadioMode, presets]);
+
   const listboxSections = useMemo(() => {
     const entries = Object.entries(groupedPresets);
 
@@ -528,69 +533,6 @@ export const VoiceFrequencyControl: React.FC = () => {
     connection.state.radioService?.setVoiceRadioMode(mode);
   };
 
-  // Handle custom frequency confirm
-  const handleCustomConfirm = async () => {
-    const trimmed = customInput.trim();
-    if (!trimmed) return;
-
-    const value = parseFloat(trimmed);
-    if (isNaN(value) || value <= 0) {
-      setCustomError(t('frequency.switchFailed'));
-      return;
-    }
-
-    let frequencyHz: number;
-    if (trimmed.includes('.')) {
-      frequencyHz = Math.round(value * 1000000);
-    } else {
-      frequencyHz = Math.round(value);
-    }
-
-    if (frequencyHz < 1000000 || frequencyHz > 1000000000) {
-      setCustomError(t('frequency.switchFailed'));
-      return;
-    }
-
-    setIsSettingFreq(true);
-    setCurrentFrequency(frequencyHz);
-    pendingFreqRef.current = { intendedFrequency: frequencyHz, sentAt: Date.now() };
-    if (freqDebounceTimerRef.current) {
-      clearTimeout(freqDebounceTimerRef.current);
-      freqDebounceTimerRef.current = null;
-    }
-    try {
-      const response = await api.setRadioFrequency({
-        frequency: frequencyHz,
-        mode: 'VOICE',
-        band: 'Custom',
-        description: `${(frequencyHz / 1000000).toFixed(3)} MHz`,
-        radioMode: currentRadioModeRef.current,
-      });
-
-      if (response.success) {
-        if (pendingFreqRef.current) {
-          pendingFreqRef.current = { intendedFrequency: frequencyHz, sentAt: Date.now() };
-        }
-        setIsCustomModalOpen(false);
-        setCustomInput('');
-        setCustomError('');
-        addToast({
-          title: t('frequency.switchSuccess'),
-          description: t('frequency.switched', { freq: (frequencyHz / 1000000).toFixed(3) }),
-          color: 'success',
-          timeout: 3000,
-        });
-      }
-    } catch (error) {
-      logger.error('Failed to set custom voice frequency:', error);
-      if (error instanceof ApiError) {
-        showErrorToast({ userMessage: error.userMessage, suggestions: error.suggestions, severity: error.severity, code: error.code });
-      }
-    } finally {
-      setIsSettingFreq(false);
-    }
-  };
-
   const handleOpenVoicePresetSettings = useCallback(() => {
     window.dispatchEvent(new CustomEvent('openSettingsModal', {
       detail: {
@@ -599,6 +541,54 @@ export const VoiceFrequencyControl: React.FC = () => {
       },
     }));
   }, []);
+
+  const handleSaveCurrentFrequencyPreset = useCallback(async (
+    preset: PresetFrequency,
+    previousPreset?: PresetFrequency | null,
+  ) => {
+    try {
+      const currentPresetsResponse = await api.getFrequencyPresets();
+      if (!currentPresetsResponse.success) {
+        throw new Error('Failed to load frequency presets');
+      }
+
+      const nextPresets = [...currentPresetsResponse.presets];
+      if (previousPreset) {
+        const existingIndex = nextPresets.findIndex(item =>
+          item.mode === previousPreset.mode && item.frequency === previousPreset.frequency,
+        );
+        if (existingIndex >= 0) {
+          nextPresets[existingIndex] = preset;
+        } else {
+          nextPresets.push(preset);
+        }
+      } else {
+        nextPresets.push(preset);
+      }
+
+      const updateResponse = await api.updateFrequencyPresets(nextPresets);
+      if (!updateResponse.success) {
+        throw new Error('Failed to save frequency preset');
+      }
+
+      window.dispatchEvent(new CustomEvent('frequencyPresetsUpdated'));
+      addToast({
+        title: previousPreset ? t('frequency.editPresetSuccess') : t('frequency.addPresetSuccess'),
+        description: preset.description || formatFrequencyLabel(preset.frequency),
+        color: 'success',
+        timeout: 3000,
+      });
+      void loadVoicePresets();
+    } catch (error) {
+      logger.error('Failed to save current voice frequency preset:', error);
+      if (error instanceof ApiError) {
+        showErrorToast({ userMessage: error.userMessage, suggestions: error.suggestions, severity: error.severity, code: error.code });
+        throw error;
+      }
+      showErrorToast({ userMessage: t('common:freqPresets.saveFailed'), severity: 'error' });
+      throw error;
+    }
+  }, [formatFrequencyLabel, loadVoicePresets, t]);
 
   return (
     <Card className="w-full h-full bg-default-50 dark:bg-default-100/50 border border-default-200 dark:border-default-100" shadow="none">
@@ -690,89 +680,41 @@ export const VoiceFrequencyControl: React.FC = () => {
         </div>
 
         {/* Voice frequency actions */}
-        {(canWriteFrequency || canManageFrequencyPresets) && (
+        {canManageFrequencyPresets && (
           <div className="flex-shrink-0">
-            <div className={`grid gap-2 ${canWriteFrequency && canManageFrequencyPresets ? 'grid-cols-2' : 'grid-cols-1'}`}>
-              {canWriteFrequency && (
-                <Button
-                  size="sm"
-                  variant="flat"
-                  onPress={() => setIsCustomModalOpen(true)}
-                  className="w-full"
-                >
-                  {t('frequency.manualTune')}
-                </Button>
-              )}
-              {canManageFrequencyPresets && (
-                <Button
-                  size="sm"
-                  variant="flat"
-                  onPress={handleOpenVoicePresetSettings}
-                  className="w-full"
-                >
-                  {t('frequency.managePresets')}
-                </Button>
-              )}
+            <div className="grid gap-2 grid-cols-2">
+              <Button
+                size="sm"
+                variant="flat"
+                color="primary"
+                onPress={() => setIsAddPresetModalOpen(true)}
+                className="w-full h-auto min-h-8 whitespace-normal leading-tight"
+              >
+                {currentPresetForEdit ? t('frequency.editCurrentPreset') : t('frequency.addCurrentPreset')}
+              </Button>
+              <Button
+                size="sm"
+                variant="flat"
+                onPress={handleOpenVoicePresetSettings}
+                className="w-full h-auto min-h-8 whitespace-normal leading-tight"
+              >
+                {t('frequency.managePresets')}
+              </Button>
             </div>
           </div>
         )}
       </CardBody>
 
-      {/* Custom frequency modal */}
-      <Modal
-        isOpen={isCustomModalOpen}
-        onClose={() => {
-          setIsCustomModalOpen(false);
-          setCustomInput('');
-          setCustomError('');
-        }}
-        placement="center"
-        size="sm"
-      >
-        <ModalContent>
-          <ModalHeader>{t('frequency.customTitle')}</ModalHeader>
-          <ModalBody>
-            <Input
-              autoFocus
-              label={t('frequency.currentFrequency')}
-              placeholder={t('frequency.inputPlaceholder')}
-              value={customInput}
-              onValueChange={(v) => {
-                setCustomInput(v);
-                if (customError) setCustomError('');
-              }}
-              variant="flat"
-              isInvalid={!!customError}
-              errorMessage={customError}
-              description={t('frequency.inputHint')}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !isSettingFreq) handleCustomConfirm();
-              }}
-            />
-          </ModalBody>
-          <ModalFooter>
-            <Button
-              variant="flat"
-              onPress={() => {
-                setIsCustomModalOpen(false);
-                setCustomInput('');
-                setCustomError('');
-              }}
-              isDisabled={isSettingFreq}
-            >
-              {t('common:button.cancel')}
-            </Button>
-            <Button
-              color="primary"
-              onPress={handleCustomConfirm}
-              isLoading={isSettingFreq}
-              isDisabled={!customInput.trim()}
-            >
-              {t('frequency.confirm')}
-            </Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
+      <FrequencyPresetAddModal
+        isOpen={isAddPresetModalOpen}
+        presets={presets}
+        initialMode="VOICE"
+        initialRadioMode={currentRadioMode}
+        initialFrequencyHz={currentFrequency}
+        editingPreset={currentPresetForEdit}
+        onClose={() => setIsAddPresetModalOpen(false)}
+        onAdd={handleSaveCurrentFrequencyPreset}
+      />
     </Card>
   );
 };
