@@ -289,6 +289,55 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBeUndefined();
   });
 
+  it('applies no-reply memory before watched novelty autocall proposals', async () => {
+    const { eventEmitter, operator, pluginManager } = await createHarness({
+      pluginConfigs: {
+        'no-reply-memory-filter': {
+          enabled: true,
+          settings: {},
+        },
+        'watched-novelty-autocall': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'watched-novelty-autocall': {
+          watchNewDxcc: true,
+          triggerMode: 'cq',
+          autocallPriority: 80,
+        },
+      },
+      analyzeCallsign: async (callsign) => ({
+        callsign,
+        isNewDxccEntity: true,
+        dxccStatus: 'current',
+        dxccEntity: 'Fresh DX',
+      }),
+    });
+
+    await pluginManager.notifyQSOFail(operator.config.id, {
+      targetCallsign: 'DX5MEM',
+      reason: 'tx1_max_call_attempts',
+      stage: 'TX1',
+      unansweredTransmissions: 8,
+      hadTargetReply: false,
+    });
+    await pluginManager.notifyQSOFail(operator.config.id, {
+      targetCallsign: 'DX5MEM',
+      reason: 'tx1_max_call_attempts',
+      stage: 'TX1',
+      unansweredTransmissions: 8,
+      hadTargetReply: false,
+    });
+
+    const slotInfo = createSlotInfo(75_000);
+    eventEmitter.emit('slotStart', slotInfo, createSlotPack(slotInfo, [
+      { message: 'CQ DX5MEM OJ11', snr: -5 },
+    ]));
+    await flushAsyncWork();
+
+    expect(operator.isTransmitting).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBeUndefined();
+  });
+
   it('can auto-select an idle transmit frequency before accepting an autocall proposal', async () => {
     const observedSlotIds: string[] = [];
     const { eventEmitter, operator } = await createHarness({

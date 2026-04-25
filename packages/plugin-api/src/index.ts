@@ -32,6 +32,7 @@ export type {
   StrategyDecision,
   StrategyDecisionMeta,
   LastMessageInfo,
+  QSOFailureInfo,
 } from './hooks.js';
 export type {
   StrategyRuntime,
