@@ -53,6 +53,7 @@ import { CallsignContextTracker } from './slot/CallsignContextTracker.js';
 import { NtpCalibrationService } from './services/NtpCalibrationService.js';
 import { RigctldBridge } from './rigctld/RigctldBridge.js';
 import { SquelchStatusMonitor } from './radio/SquelchStatusMonitor.js';
+import { PhysicalPttMonitor } from './radio/PhysicalPttMonitor.js';
 import type { RigctldBridgeConfig, RigctldStatus } from '@tx5dr/contracts';
 
 /**
@@ -100,12 +101,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private radioBridge: RadioBridge;
   private rigctldBridge: RigctldBridge;
   private squelchStatusMonitor: SquelchStatusMonitor;
+  private physicalPttMonitor: PhysicalPttMonitor;
   private transmissionPipeline: TransmissionPipeline;
   private clockCoordinator!: ClockCoordinator;  // 在 initialize() 中初始化
   private engineLifecycle!: EngineLifecycle;     // 在构造函数末尾初始化
   private _pluginManager!: PluginManager;        // 在构造函数末尾初始化
   private _callsignTracker: CallsignContextTracker;
   private ntpCalibrationService: NtpCalibrationService;
+  private voiceManualPttActive = false;
+  private voiceKeyerPttActive = false;
+  private physicalPttActive = false;
+  private unifiedVoicePttActive = false;
 
   // 频谱分析配置常量
   private static readonly SPECTRUM_CONFIG = {
@@ -331,8 +337,18 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getEngineMode: () => this.engineMode,
       emitStatus: (status) => this.emit('squelchStatusChanged', status),
     });
+    this.physicalPttMonitor = new PhysicalPttMonitor({
+      radioManager: this.radioManager,
+      getEngineMode: () => this.engineMode,
+      // CAT PTT reads report the radio's TX/RX state, not who caused TX.
+      // Keep polling paused while tx5dr or the keyer is holding PTT so our own
+      // keyer transmission is not misclassified as a physical manual override.
+      isSoftwarePttActive: () => this.voiceManualPttActive || this.voiceKeyerPttActive,
+      emitStatus: (active) => this.handlePhysicalPttChanged(active),
+    });
     this.on('radioStatusChanged', () => {
       this.squelchStatusMonitor.reevaluate();
+      this.physicalPttMonitor.reevaluate();
     });
 
     this.rigctldBridge = new RigctldBridge(this.radioManager);
@@ -572,8 +588,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.emit('voicePttLockChanged', lock);
     });
     this.voiceSessionManager.on('pttStatusChanged', (data) => {
-      this.squelchStatusMonitor.setPTTActive(data.isTransmitting);
-      this.emit('pttStatusChanged', data);
+      this.handleVoiceSoftwarePttChanged(data);
     });
     this.voiceSessionManager.on('voiceRadioModeChanged', (data) => {
       this.emit('voiceRadioModeChanged', data);
@@ -635,6 +650,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
     await this.stop();
     this.squelchStatusMonitor.stop();
+    this.physicalPttMonitor.stop();
 
     // rigctld bridge: tear down outside the engine resource pipeline so we
     // stop accepting external connections before the radio is torn down.
@@ -842,7 +858,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     this.emitModeAndStatusSnapshot();
 
+    this.resetVoicePttState();
     this.squelchStatusMonitor.reevaluate();
+    this.physicalPttMonitor.reevaluate();
 
     if (shouldResumeAfterSwitch) {
       await this.engineLifecycle.startAndWaitForRunning();
@@ -850,6 +868,52 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
 
     logger.info(`Engine mode switched to ${targetEngineMode}/${targetMode.name}`);
+  }
+
+  private handleVoiceSoftwarePttChanged(data: { isTransmitting: boolean; operatorIds: string[]; source?: 'manual' | 'voice-keyer' }): void {
+    if (data.source === 'voice-keyer') {
+      this.voiceKeyerPttActive = data.isTransmitting;
+    } else {
+      this.voiceManualPttActive = data.isTransmitting;
+    }
+
+    this.physicalPttMonitor.setSoftwarePttActive(this.voiceManualPttActive || this.voiceKeyerPttActive);
+    this.applyUnifiedVoicePttState(data.operatorIds ?? []);
+  }
+
+  private handlePhysicalPttChanged(active: boolean): void {
+    this.physicalPttActive = active;
+    this.voiceKeyerManager?.setManualPttActive(this.voiceManualPttActive || this.physicalPttActive);
+    this.applyUnifiedVoicePttState([]);
+  }
+
+  private resetVoicePttState(): void {
+    this.voiceManualPttActive = false;
+    this.voiceKeyerPttActive = false;
+    this.physicalPttActive = false;
+    this.voiceKeyerManager?.setManualPttActive(false);
+    this.physicalPttMonitor.setSoftwarePttActive(false);
+    this.applyUnifiedVoicePttState([]);
+  }
+
+  private applyUnifiedVoicePttState(operatorIds: string[]): void {
+    const manualPttActive = this.voiceManualPttActive || this.physicalPttActive;
+    this.voiceKeyerManager?.setManualPttActive(manualPttActive);
+
+    const unifiedActive = manualPttActive || this.voiceKeyerPttActive;
+    const changed = unifiedActive !== this.unifiedVoicePttActive;
+    this.unifiedVoicePttActive = unifiedActive;
+
+    this.radioManager.setPTTActive(unifiedActive);
+    this.spectrumScheduler.setPTTActive(unifiedActive);
+    this.squelchStatusMonitor.setPTTActive(unifiedActive);
+
+    if (changed) {
+      this.emit('pttStatusChanged', {
+        isTransmitting: unifiedActive,
+        operatorIds: unifiedActive ? operatorIds : [],
+      });
+    }
   }
 
   private emitModeAndStatusSnapshot(): void {

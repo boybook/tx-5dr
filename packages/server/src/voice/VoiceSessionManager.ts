@@ -13,7 +13,7 @@ const logger = createLogger('VoiceSessionManager');
 
 export interface VoiceSessionManagerEvents {
   voicePttLockChanged: (lock: VoicePTTLock) => void;
-  pttStatusChanged: (data: { isTransmitting: boolean; operatorIds: string[] }) => void;
+  pttStatusChanged: (data: { isTransmitting: boolean; operatorIds: string[]; source: 'manual' | 'voice-keyer' }) => void;
   voiceRadioModeChanged: (data: { radioMode: string }) => void;
 }
 
@@ -109,7 +109,7 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
       await this.radioManager.setPTT(true);
 
       // 3. Broadcast PTT status (frontend handles monitor muting via gain node)
-      this.emit('pttStatusChanged', { isTransmitting: true, operatorIds: [] });
+      this.emit('pttStatusChanged', { isTransmitting: true, operatorIds: [], source: this.getPttSource(clientId) });
 
       logger.info('Voice transmission started', { clientId, label });
       return { success: true };
@@ -202,8 +202,18 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
     this.diagnostics.endSession();
 
     // 2. Broadcast PTT status (frontend handles monitor unmuting via gain node)
-    this.emit('pttStatusChanged', { isTransmitting: false, operatorIds: [] });
+    this.emit('pttStatusChanged', {
+      isTransmitting: false,
+      operatorIds: [],
+      source: this.getPttSource(this.pttLockManager.getLockHolder()),
+    });
 
     logger.info('Voice transmission stopped', { reason });
+  }
+
+  private getPttSource(clientId: string | null | undefined): 'manual' | 'voice-keyer' {
+    return typeof clientId === 'string' && clientId.startsWith('voice-keyer:')
+      ? 'voice-keyer'
+      : 'manual';
   }
 }

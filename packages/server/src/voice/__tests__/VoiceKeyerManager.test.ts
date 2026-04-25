@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import * as nodeWav from 'node-wav';
 import { VoiceKeyerManager } from '../VoiceKeyerManager.js';
 
@@ -13,6 +13,16 @@ function makeWav(durationSec = 1, sampleRate = 16000): Buffer {
     samples[i] = Math.sin((i / sampleRate) * Math.PI * 2 * 440) * 0.2;
   }
   return nodeWav.encode([samples], { sampleRate, float: false, bitDepth: 16 });
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 async function createManager() {
@@ -35,6 +45,7 @@ async function createManager() {
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) await rm(dir, { recursive: true, force: true });
@@ -107,4 +118,96 @@ describe('VoiceKeyerManager', () => {
     expect(audioStreamManager.playAudio).not.toHaveBeenCalled();
     expect(manager.getStatus().error).toContain('locked');
   });
+
+  describe('manual PTT overrides repeat CQ', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    it('clears repeat countdown during manual PTT and restarts a full interval after release', async () => {
+      const { manager, voiceSessionManager } = await createManager();
+      await manager.saveSlotAudio('BG5DRB', '1', makeWav());
+      await manager.updateSlot('BG5DRB', '1', { repeatEnabled: true, repeatIntervalSec: 4 });
+
+      await manager.play({ callsign: 'BG5DRB', slotId: '1', repeat: true, connectionId: 'c1', label: 'Op' });
+      await vi.waitFor(() => expect(manager.getStatus().mode).toBe('playing'));
+      await vi.advanceTimersByTimeAsync(PTT_AUDIO_WINDOW_MS);
+      await vi.waitFor(() => expect(manager.getStatus().mode).toBe('repeat-waiting'));
+
+      const firstCountdown = manager.getStatus().nextRunAt;
+      expect(firstCountdown).toEqual(expect.any(Number));
+      expect(voiceSessionManager.startTransmit).toHaveBeenCalledTimes(1);
+
+      manager.setManualPttActive(true);
+      expect(manager.getStatus().nextRunAt).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(voiceSessionManager.startTransmit).toHaveBeenCalledTimes(1);
+
+      manager.setManualPttActive(false);
+      await vi.waitFor(() => expect(manager.getStatus().nextRunAt).toEqual(expect.any(Number)));
+      const restartedCountdown = manager.getStatus().nextRunAt!;
+      expect(restartedCountdown).toBeGreaterThan(Date.now() + 3_500);
+
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(voiceSessionManager.startTransmit).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(voiceSessionManager.startTransmit).toHaveBeenCalledTimes(2));
+    });
+
+    it('can start repeat CQ in countdown mode without an immediate first transmission', async () => {
+      const { manager, voiceSessionManager } = await createManager();
+      await manager.saveSlotAudio('BG5DRB', '1', makeWav());
+      await manager.updateSlot('BG5DRB', '1', { repeatEnabled: true, repeatIntervalSec: 4 });
+
+      await manager.play({
+        callsign: 'BG5DRB',
+        slotId: '1',
+        repeat: true,
+        startImmediately: false,
+        connectionId: 'c1',
+        label: 'Op',
+      });
+
+      await vi.waitFor(() => expect(manager.getStatus().mode).toBe('repeat-waiting'));
+      expect(voiceSessionManager.startTransmit).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(voiceSessionManager.startTransmit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(voiceSessionManager.startTransmit).toHaveBeenCalledTimes(1));
+    });
+
+    it('stops active playback but keeps repeat CQ waiting when manual PTT starts', async () => {
+      const { manager, voiceSessionManager, audioStreamManager } = await createManager();
+      const playback = createDeferred<void>();
+      audioStreamManager.playAudio.mockReturnValueOnce(playback.promise);
+      audioStreamManager.stopCurrentPlayback.mockImplementationOnce(async () => {
+        playback.reject(new Error('playback interrupted'));
+        await playback.promise.catch(() => undefined);
+        return 1200;
+      });
+
+      await manager.saveSlotAudio('BG5DRB', '1', makeWav());
+      await manager.updateSlot('BG5DRB', '1', { repeatEnabled: true, repeatIntervalSec: 4 });
+
+      await manager.play({ callsign: 'BG5DRB', slotId: '1', repeat: true, connectionId: 'c1', label: 'Op' });
+      await vi.waitFor(() => expect(manager.getStatus().mode).toBe('playing'));
+      await vi.advanceTimersByTimeAsync(PTT_AUDIO_WINDOW_MS);
+      await vi.waitFor(() => expect(audioStreamManager.playAudio).toHaveBeenCalled());
+
+      manager.setManualPttActive(true);
+      await vi.waitFor(() => expect(manager.getStatus().mode).toBe('repeat-waiting'));
+
+      expect(audioStreamManager.stopCurrentPlayback).toHaveBeenCalled();
+      await vi.waitFor(() => expect(voiceSessionManager.stopTransmit).toHaveBeenCalledWith('voice-keyer:c1'));
+      expect(manager.getStatus().nextRunAt).toBeNull();
+      expect(manager.getStatus().error).toBeNull();
+
+      manager.setManualPttActive(false);
+      await vi.waitFor(() => expect(manager.getStatus().nextRunAt).toEqual(expect.any(Number)));
+    });
+  });
 });
+
+const PTT_AUDIO_WINDOW_MS = 150 + 500;

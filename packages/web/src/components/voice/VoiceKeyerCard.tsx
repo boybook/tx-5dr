@@ -18,7 +18,6 @@ import {
   faClock,
   faCircle,
   faPen,
-  faPause,
   faPlay,
   faRepeat,
   faStop,
@@ -128,6 +127,44 @@ function getTxProgressStyle(durationMs: number): React.CSSProperties {
   };
 }
 
+function getRemainingSeconds(nextRunAt: number | null, intervalSec: number): number | null {
+  if (!nextRunAt) return null;
+  return Math.min(intervalSec, Math.max(0, Math.ceil((nextRunAt - Date.now()) / 1000)));
+}
+
+function getWaitProgressStyle(nextRunAt: number, intervalSec: number): React.CSSProperties {
+  const totalMs = Math.max(1000, intervalSec * 1000);
+  const remainingMs = Math.min(totalMs, Math.max(0, nextRunAt - Date.now()));
+  const elapsedMs = Math.max(0, totalMs - remainingMs);
+  const startPercent = Math.max(0, Math.min(100, (elapsedMs / totalMs) * 100));
+
+  return {
+    '--voice-keyer-progress-start': `${startPercent}%`,
+    animation: `voice-keyer-wait-progress ${Math.max(1, remainingMs)}ms linear forwards`,
+  } as React.CSSProperties;
+}
+
+const VoiceKeyerWaitProgress = React.memo(function VoiceKeyerWaitProgress({
+  nextRunAt,
+  intervalSec,
+}: {
+  nextRunAt: number;
+  intervalSec: number;
+}) {
+  const style = useMemo(
+    () => getWaitProgressStyle(nextRunAt, intervalSec),
+    [intervalSec, nextRunAt],
+  );
+
+  return (
+    <span
+      key={`${nextRunAt}-${intervalSec}`}
+      className="voice-keyer-wait-progress absolute inset-y-0 left-0 pointer-events-none bg-warning/25"
+      style={style}
+    />
+  );
+});
+
 function mergeChunks(chunks: Float32Array[]): Float32Array {
   const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
   const merged = new Float32Array(length);
@@ -198,10 +235,11 @@ export const VoiceKeyerCard: React.FC = () => {
   const radioService = connection.state.radioService;
 
   const [isCollapsed, setIsCollapsed] = useState(true);
+  const [bodyOverflowVisible, setBodyOverflowVisible] = useState(false);
   const [panel, setPanel] = useState<VoiceKeyerPanel | null>(null);
   const [status, setStatus] = useState<VoiceKeyerStatus>(idleStatus);
   const [loading, setLoading] = useState(false);
-  const [tick, setTick] = useState(0);
+  const [, setCountdownTick] = useState(0);
   const [selectedOperatorId, setSelectedOperatorId] = useState<string | null>(currentOperatorId);
   const [recordingSlotId, setRecordingSlotId] = useState<string | null>(null);
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
@@ -239,7 +277,7 @@ export const VoiceKeyerCard: React.FC = () => {
     if (!(status.active && status.mode === 'repeat-waiting')) {
       return undefined;
     }
-    const timer = window.setInterval(() => setTick(value => value + 1), 1000);
+    const timer = window.setInterval(() => setCountdownTick(value => value + 1), 1000);
     return () => window.clearInterval(timer);
   }, [status.active, status.mode]);
 
@@ -453,13 +491,18 @@ export const VoiceKeyerCard: React.FC = () => {
     }
   }, [callsign, previewPlayingSlotId, stopPreview, t]);
 
-  const updateSlot = useCallback(async (slotId: string, update: Partial<Pick<VoiceKeyerSlot, 'label' | 'repeatEnabled' | 'repeatIntervalSec'>>) => {
-    if (!callsign) return;
+  const updateSlot = useCallback(async (
+    slotId: string,
+    update: Partial<Pick<VoiceKeyerSlot, 'label' | 'repeatEnabled' | 'repeatIntervalSec'>>,
+  ): Promise<VoiceKeyerPanel | null> => {
+    if (!callsign) return null;
     try {
       const response = await api.updateVoiceKeyerSlot(callsign, slotId, update);
       setPanel(response.panel);
+      return response.panel;
     } catch (error) {
       logger.error('Failed to update voice keyer slot', error);
+      return null;
     }
   }, [callsign]);
 
@@ -503,15 +546,33 @@ export const VoiceKeyerCard: React.FC = () => {
     }
   }, [callsign, t]);
 
-  const playSlot = useCallback((slot: VoiceKeyerSlot, repeat = false) => {
+  const playSlot = useCallback((slot: VoiceKeyerSlot, repeat = false, startImmediately = true) => {
     if (!canOperate || !slot.hasAudio || !callsign) return;
     stopPreview();
-    radioService?.playVoiceKeyer(callsign, slot.id, repeat);
+    radioService?.playVoiceKeyer(callsign, slot.id, repeat, startImmediately);
   }, [callsign, canOperate, radioService, stopPreview]);
 
   const stopKeyer = useCallback(() => {
     radioService?.stopVoiceKeyer();
   }, [radioService]);
+
+  const toggleRepeat = useCallback(async (slot: VoiceKeyerSlot) => {
+    const repeatEnabled = !slot.repeatEnabled;
+    updateSlotLocal(slot.id, { repeatEnabled });
+    const updatedPanel = await updateSlot(slot.id, { repeatEnabled });
+    if (!updatedPanel) {
+      updateSlotLocal(slot.id, { repeatEnabled: slot.repeatEnabled });
+      return;
+    }
+
+    const updatedSlot = updatedPanel.slots.find(candidate => candidate.id === slot.id) ?? slot;
+    const activeOnThisSlot = activeForCallsign && status.slotId === slot.id;
+    if (repeatEnabled) {
+      playSlot(updatedSlot, true, false);
+    } else if (activeOnThisSlot) {
+      stopKeyer();
+    }
+  }, [activeForCallsign, playSlot, status.slotId, stopKeyer, updateSlot, updateSlotLocal]);
 
   const changePanelMode = useCallback((mode: KeyerPanelMode) => {
     if (mode === panelMode) return;
@@ -618,21 +679,27 @@ export const VoiceKeyerCard: React.FC = () => {
 
   const statusText = useMemo(() => {
     if (!status.active) return hasCallsign ? callsign : t('keyer.noCallsign');
-    if (status.mode === 'repeat-waiting' && status.nextRunAt) {
-      const seconds = Math.max(0, Math.ceil((status.nextRunAt - Date.now()) / 1000));
-      return t('keyer.waiting', { callsign: status.callsign, seconds });
-    }
+    if (status.mode === 'repeat-waiting' && status.nextRunAt) return t('keyer.waitingArmed', { callsign: status.callsign });
+    if (status.mode === 'repeat-waiting') return t('keyer.waitingForPtt', { callsign: status.callsign });
     if (status.mode === 'playing') return t('keyer.transmittingSlot', { callsign: status.callsign, slot: status.slotId });
     if (status.mode === 'stopping') return t('keyer.stopping');
     if (status.mode === 'error') return t('keyer.error');
     return callsign;
-  }, [callsign, hasCallsign, status.active, status.callsign, status.mode, status.nextRunAt, status.slotId, t, tick]);
+  }, [callsign, hasCallsign, status.active, status.callsign, status.mode, status.nextRunAt, status.slotId, t]);
+
+  const toggleCollapsed = useCallback(() => {
+    setBodyOverflowVisible(false);
+    setShortcutMenuSlotId(null);
+    setIsCollapsed(current => !current);
+  }, []);
+
+  const bodyOverflowClass = bodyOverflowVisible ? 'overflow-visible' : 'overflow-hidden';
 
   return (
-    <Card className="w-full" shadow="sm">
+    <Card className="w-full overflow-visible" shadow="sm">
       <CardHeader
         className="flex items-center justify-between gap-2 cursor-pointer select-none py-2"
-        onClick={() => setIsCollapsed(prev => !prev)}
+        onClick={toggleCollapsed}
       >
         <div className="flex min-w-0 items-center gap-2">
           <FontAwesomeIcon
@@ -716,11 +783,13 @@ export const VoiceKeyerCard: React.FC = () => {
                 const selected = Number(Array.from(keys)[0]);
                 if (selected) void updateSlotCount(selected);
               }}
-              className="w-16 sm:w-20"
+              className="w-20 sm:w-24"
               classNames={{ trigger: 'h-7 min-h-7', value: 'text-xs' }}
             >
               {[3, 4, 5, 6, 8, 10, 12].map((count) => (
-                <SelectItem key={String(count)} textValue={String(count)}>{count}</SelectItem>
+                <SelectItem key={String(count)} textValue={t('keyer.slotCountOption', { count })}>
+                  {t('keyer.slotCountOption', { count })}
+                </SelectItem>
               ))}
             </Select>
           )}
@@ -728,11 +797,17 @@ export const VoiceKeyerCard: React.FC = () => {
       </CardHeader>
 
       <div
-        className="grid transition-[grid-template-rows] duration-200 ease-in-out"
+        className={`grid transition-[grid-template-rows] duration-200 ease-in-out ${bodyOverflowClass}`}
         style={{ gridTemplateRows: isCollapsed ? '0fr' : '1fr' }}
+        onTransitionEnd={(event) => {
+          if (event.target !== event.currentTarget || event.propertyName !== 'grid-template-rows') return;
+          if (!isCollapsed) {
+            setBodyOverflowVisible(true);
+          }
+        }}
       >
-        <div className="overflow-hidden">
-          <CardBody className="pt-0">
+        <div className={bodyOverflowClass}>
+          <CardBody className="overflow-visible pt-0">
             {!canOperate && (
               <div className="rounded-md bg-warning-50 px-2 py-1.5 text-xs text-warning dark:bg-warning-50/10">
                 {hasCallsign ? t('keyer.operatorRequired') : t('keyer.noOperator')}
@@ -762,21 +837,26 @@ export const VoiceKeyerCard: React.FC = () => {
                     const previewLoading = previewLoadingSlotId === slot.id;
                     const previewPlaying = previewPlayingSlotId === slot.id;
                     const shortcutPreset = slotShortcuts[slot.id] ?? VOICE_KEYER_SHORTCUT_NONE;
+                    const waiting = active && status.mode === 'repeat-waiting';
+                    const activeToneClass = waiting
+                      ? 'bg-warning-50 dark:bg-warning-950/20'
+                      : active
+                        ? 'bg-danger-50 dark:bg-danger-950/20'
+                        : 'bg-content2';
                     if (panelMode === 'operate') {
                       const transmitting = active && status.mode === 'playing';
+                      const remainingSeconds = waiting ? getRemainingSeconds(status.nextRunAt, intervalValue) : null;
                       return (
                         <div
                           key={slot.id}
-                          className={`rounded-lg p-2 transition-colors ${
-                            active ? 'bg-danger-50 dark:bg-danger-950/20' : 'bg-content2'
-                          }`}
+                          className={`rounded-lg p-2 transition-colors ${activeToneClass}`}
                         >
                           <Button
                             color={transmitting ? 'danger' : active ? 'warning' : 'primary'}
                             variant={transmitting ? 'solid' : active ? 'flat' : 'solid'}
-                            className="relative h-16 w-full overflow-hidden rounded-md px-2"
+                            className="relative h-16 w-full overflow-hidden rounded-md px-2 pt-1 pb-1.5"
                             onPress={() => active ? stopKeyer() : playSlot(slot, slot.repeatEnabled)}
-                            isDisabled={!slot.hasAudio || !canOperate || (status.active && !active)}
+                            isDisabled={!slot.hasAudio || !canOperate}
                           >
                             {transmitting && (
                               <span
@@ -785,12 +865,22 @@ export const VoiceKeyerCard: React.FC = () => {
                                 style={getTxProgressStyle(slot.durationMs)}
                               />
                             )}
+                            {waiting && status.nextRunAt && (
+                              <VoiceKeyerWaitProgress
+                                nextRunAt={status.nextRunAt}
+                                intervalSec={intervalValue}
+                              />
+                            )}
                             <div className="relative z-10 flex w-full flex-col items-start gap-1 text-left">
                               <div className="flex w-full items-center justify-between gap-1">
                                 <span className="font-mono text-xs font-semibold">
                                   {getShortcutOptionLabel(shortcutPreset)}
                                 </span>
-                                <span className="text-[11px] opacity-80">{formatDuration(slot.durationMs)}</span>
+                                <span className={`font-mono opacity-90 ${waiting ? 'text-sm font-semibold tabular-nums' : 'text-[11px]'}`}>
+                                  {waiting
+                                    ? remainingSeconds !== null ? `${remainingSeconds}s` : 'PTT'
+                                    : formatDuration(slot.durationMs)}
+                                </span>
                               </div>
                               <span className="max-w-full truncate text-sm font-semibold">
                                 {slot.hasAudio ? slot.label : t('keyer.emptySlot')}
@@ -804,11 +894,7 @@ export const VoiceKeyerCard: React.FC = () => {
                               color={slot.repeatEnabled ? 'warning' : 'default'}
                               variant={slot.repeatEnabled ? 'solid' : 'flat'}
                               aria-label={t('keyer.repeatToggle')}
-                              onPress={() => {
-                                const repeatEnabled = !slot.repeatEnabled;
-                                updateSlotLocal(slot.id, { repeatEnabled });
-                                void updateSlot(slot.id, { repeatEnabled });
-                              }}
+                              onPress={() => void toggleRepeat(slot)}
                               isDisabled={!canOperate || !slot.hasAudio}
                               className="h-7 min-w-7 rounded-md"
                             >
@@ -838,9 +924,7 @@ export const VoiceKeyerCard: React.FC = () => {
                     return (
                       <div
                         key={slot.id}
-                        className={`rounded-lg p-2 transition-colors ${
-                          active ? 'bg-danger-50 dark:bg-danger-950/20' : 'bg-content2'
-                        }`}
+                        className={`rounded-lg p-2 transition-colors ${activeToneClass}`}
                       >
                         <div className="flex items-center justify-between gap-1">
                           <div
@@ -939,7 +1023,7 @@ export const VoiceKeyerCard: React.FC = () => {
                             <FontAwesomeIcon icon={faTrash} className="text-xs" />
                           </Button>
                         </div>
-                        {recording ? (
+                        {recording && (
                           <div className="mt-1 flex h-6 items-center gap-1 rounded-md bg-danger-50 px-1.5 text-danger dark:bg-danger-950/20">
                             <span className="shrink-0 text-[10px] font-semibold uppercase">{t('keyer.recordingActive')}</span>
                             <div
@@ -961,39 +1045,6 @@ export const VoiceKeyerCard: React.FC = () => {
                             >
                               {formatRecordingElapsed(recordingElapsedMs)}
                             </span>
-                          </div>
-                        ) : (
-                          <div className="mt-1 flex h-6 items-center gap-1 text-[11px] text-default-500">
-                            <Button
-                              isIconOnly
-                              size="sm"
-                              color={slot.repeatEnabled ? 'warning' : 'default'}
-                              variant="flat"
-                              aria-label={t('keyer.repeatToggle')}
-                              onPress={() => {
-                                const repeatEnabled = !slot.repeatEnabled;
-                                updateSlotLocal(slot.id, { repeatEnabled });
-                                void updateSlot(slot.id, { repeatEnabled });
-                              }}
-                              isDisabled={!canOperate}
-                              className="h-6 min-w-6 rounded-md"
-                            >
-                              <FontAwesomeIcon icon={active && status.mode === 'repeat-waiting' ? faPause : faRepeat} className="text-[10px]" />
-                            </Button>
-                            <Input
-                              type="number"
-                              min={1}
-                              max={300}
-                              size="sm"
-                              variant="flat"
-                              value={String(intervalValue)}
-                              aria-label={t('keyer.repeatInterval')}
-                              classNames={{ inputWrapper: 'h-6 min-h-6 px-1', input: 'text-[11px]' }}
-                              onValueChange={(value) => updateSlotLocal(slot.id, { repeatIntervalSec: Math.max(1, Math.min(300, Math.round(Number(value) || 1))) })}
-                              onBlur={(event) => void updateSlot(slot.id, { repeatIntervalSec: Number(event.currentTarget.value) || 1 })}
-                              isDisabled={!canOperate}
-                            />
-                            <span>s</span>
                           </div>
                         )}
                       </div>

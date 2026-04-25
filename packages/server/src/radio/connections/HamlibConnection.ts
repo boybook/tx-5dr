@@ -711,6 +711,31 @@ export class HamlibConnection
     }, { critical: true });
   }
 
+  async getPTT(): Promise<boolean> {
+    this.checkConnected();
+    const result = await this.ioQueue.runLowPriority({ sessionId: this.ioSessionId }, async (activeSessionId) => {
+      this.ensureSession(activeSessionId);
+      try {
+        const value = (await Promise.race([
+          this.rig!.getPtt(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get PTT timeout')), 1000)
+          ),
+        ])) as boolean;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getPTT');
+      }
+    });
+
+    if (result === RADIO_IO_SKIPPED) {
+      throw new Error('PTT poll skipped because radio I/O is busy');
+    }
+
+    return result;
+  }
+
   /**
    * 设置模式
    */
