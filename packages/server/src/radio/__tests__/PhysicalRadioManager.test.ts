@@ -28,6 +28,7 @@ type TestRadioConnection = {
   getFrequency?: ReturnType<typeof vi.fn>;
   getMode?: ReturnType<typeof vi.fn>;
   setFrequency?: ReturnType<typeof vi.fn>;
+  setPTT?: ReturnType<typeof vi.fn>;
   setTuner?: ReturnType<typeof vi.fn>;
   setMode?: ReturnType<typeof vi.fn>;
   startTuning?: ReturnType<typeof vi.fn>;
@@ -452,6 +453,9 @@ describe('PhysicalRadioManager', () => {
       startBackgroundTasks: vi.fn().mockImplementation(() => {
         order.push('background');
       }),
+      setPTT: vi.fn().mockImplementation(async () => {
+        order.push('ptt-off');
+      }),
       setKnownFrequency: vi.fn(),
       getTunerCapabilities: vi.fn().mockImplementation(async () => {
         order.push('tuner');
@@ -494,6 +498,7 @@ describe('PhysicalRadioManager', () => {
 
     expect(order).toEqual([
       'connect',
+      'ptt-off',
       'tuner',
       'restore',
       'capability',
@@ -503,6 +508,7 @@ describe('PhysicalRadioManager', () => {
       'connected',
     ]);
     expect(connection.startBackgroundTasks).toHaveBeenCalledTimes(1);
+    expect(connection.setPTT).toHaveBeenCalledWith(false);
     expect(connection.setFrequency).toHaveBeenCalledWith(14074000);
     expect(testManager.capabilityManager.onConnected).toHaveBeenCalledTimes(1);
 

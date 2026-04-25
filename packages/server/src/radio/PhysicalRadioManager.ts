@@ -1520,6 +1520,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     const connection = this.createConnectionSession(config);
     await this.openConnectionSession(connection, config);
+    await this.releasePTTAfterConnect(connection);
     await this.bootstrapConnectedSession(connection);
     this.activateConnectedSession(connection);
 
@@ -1559,6 +1560,15 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     if (!connection.isHealthy()) {
       throw new Error('connection health check failed');
+    }
+  }
+
+  private async releasePTTAfterConnect(connection: IRadioConnection): Promise<void> {
+    try {
+      logger.debug('Post-connect safety: releasing PTT');
+      await connection.setPTT?.(false);
+    } catch (error) {
+      logger.warn(`Post-connect PTT release failed: ${buildCapabilityDiagnosticMessage(error)}`);
     }
   }
 
