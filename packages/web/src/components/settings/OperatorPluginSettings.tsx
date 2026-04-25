@@ -1,20 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronRight } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
-import { PluginSettingField } from './PluginSettingField';
 import { createLogger } from '../../utils/logger';
 import { pluginApi } from '../../utils/pluginApi';
 import { usePluginSnapshot } from '../../hooks/usePluginSnapshot';
-import { resolvePluginName } from '../../utils/pluginLocales';
 import { PluginStrategySelector } from '../plugins/PluginStrategySelector';
 import {
-  arePluginSettingValuesEqual,
   getPluginSettingValidationIssue,
   normalizePluginSettingsForSave,
 } from '../../utils/pluginSettings';
+import { PluginOperatorSettingsForm } from '../plugins/PluginOperatorSettingsForm';
 
 const logger = createLogger('OperatorPluginSettings');
 
@@ -126,7 +123,7 @@ export const OperatorPluginSettings: React.FC<OperatorPluginSettingsProps> = ({ 
     }
   }, [operatorId, relevantPlugins, settingsMap]);
 
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
 
   if (!hasStrategyChoice && relevantPlugins.length === 0) return null;
 
@@ -154,78 +151,21 @@ export const OperatorPluginSettings: React.FC<OperatorPluginSettingsProps> = ({ 
         </>
       )}
       {expanded && relevantPlugins.map(plugin => {
-        const operatorEntries = Object.entries(plugin.settings ?? {}).filter(
-          ([, d]) => d.scope === 'operator'
-        );
         const currentSettings = settingsMap[plugin.name] ?? {};
         const originalSettings = originalSettingsMap[plugin.name] ?? {};
-        const persistableKeys = operatorEntries
-          .filter(([, descriptor]) => descriptor.type !== 'info')
-          .map(([key]) => key);
-        const hasValidationIssues = persistableKeys.some((key) => {
-          const descriptor = plugin.settings?.[key];
-          return descriptor
-            ? Boolean(getPluginSettingValidationIssue(plugin.name, key, descriptor, currentSettings[key], currentSettings))
-            : false;
-        });
-        const normalizedHasChanges = persistableKeys.some((key) => {
-          const descriptor = plugin.settings?.[key];
-          return descriptor
-            ? !arePluginSettingValuesEqual(
-              descriptor,
-              currentSettings[key],
-              originalSettings[key],
-              plugin.name,
-              key,
-            )
-            : currentSettings[key] !== originalSettings[key];
-        });
-
         return (
-          <section
+          <PluginOperatorSettingsForm
             key={plugin.name}
-            className="rounded-xl border border-default-200/70 bg-default-50/40 px-4 py-3"
-          >
-            <div className="mb-3 flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <h5 className="text-sm font-medium text-default-700">
-                  {resolvePluginName(plugin.name, plugin.name)}
-                </h5>
-                <p className="mt-1 text-xs text-default-400">
-                  {plugin.type === 'strategy'
-                    ? t('plugins.operatorStrategySettingsHint', 'Settings for the current strategy plugin.')
-                    : t('plugins.operatorPluginSettingsHint', 'Operator-specific plugin settings.')}
-                </p>
-              </div>
-              {normalizedHasChanges && (
-                <Button
-                  size="sm"
-                  color="primary"
-                  variant="flat"
-                  isLoading={savingMap[plugin.name]}
-                  isDisabled={hasValidationIssues}
-                  onPress={() => handleSave(plugin.name)}
-                  className="shrink-0"
-                >
-                  {t('common:button.save')}
-                </Button>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              {operatorEntries.map(([key, descriptor]) => (
-                <PluginSettingField
-                  key={key}
-                  fieldKey={key}
-                  descriptor={descriptor}
-                  value={currentSettings[key] ?? descriptor.default}
-                  onChange={(val) => handleChange(plugin.name, key, val)}
-                  pluginName={plugin.name}
-                  settings={currentSettings}
-                />
-              ))}
-            </div>
-          </section>
+            plugin={plugin}
+            settings={currentSettings}
+            originalSettings={originalSettings}
+            onChange={(key, value) => handleChange(plugin.name, key, value)}
+            onSave={() => { void handleSave(plugin.name); }}
+            isSaving={savingMap[plugin.name]}
+            description={plugin.type === 'strategy'
+              ? t('plugins.operatorStrategySettingsHint', 'Settings for the current strategy plugin.')
+              : t('plugins.operatorPluginSettingsHint', 'Operator-specific plugin settings.')}
+          />
         );
       })}
     </div>

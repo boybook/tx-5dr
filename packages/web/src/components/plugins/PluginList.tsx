@@ -21,13 +21,17 @@ import {
 import type { ChipProps } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPuzzlePiece, faCircleQuestion } from '@fortawesome/free-solid-svg-icons';
-import type { PluginStatus } from '@tx5dr/contracts';
+import type { PluginStatus, RadioOperatorConfig } from '@tx5dr/contracts';
 import { PluginSettingsPanel } from './PluginSettingsPanel';
 import { api } from '@tx5dr/core';
 import { createLogger } from '../../utils/logger';
 import { usePluginSnapshot } from '../../hooks/usePluginSnapshot';
 import { resolvePluginDescription, resolvePluginName } from '../../utils/pluginLocales';
 import { arePluginSettingValuesEqual, normalizePluginSettingsForSave } from '../../utils/pluginSettings';
+import {
+  SelectedPluginOperatorSettingsPanel,
+  type SelectedPluginOperatorSettingsPanelRef,
+} from './SelectedPluginOperatorSettingsPanel';
 
 const logger = createLogger('PluginList');
 
@@ -66,6 +70,11 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
   const [globalSettingsMap, setGlobalSettingsMap] = useState<Record<string, Record<string, unknown>>>({});
   const [originalGlobalSettingsMap, setOriginalGlobalSettingsMap] = useState<Record<string, Record<string, unknown>>>({});
   const [loadingSettingsMap, setLoadingSettingsMap] = useState<Record<string, boolean>>({});
+  const [operators, setOperators] = useState<RadioOperatorConfig[]>([]);
+  const [operatorsLoading, setOperatorsLoading] = useState(false);
+  const [operatorsError, setOperatorsError] = useState<string | null>(null);
+  const [operatorSettingsDirty, setOperatorSettingsDirty] = useState(false);
+  const operatorSettingsPanelRef = useRef<SelectedPluginOperatorSettingsPanelRef | null>(null);
 
   const getDefaultGlobalSettings = useCallback((plugin: PluginStatus) => {
     const defaults: Record<string, unknown> = {};
@@ -183,11 +192,35 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
     void ensureGlobalSettingsLoaded(selectedPlugin);
   }, [selectedPlugin, ensureGlobalSettingsLoaded]);
 
+  const loadOperators = useCallback(async () => {
+    setOperatorsLoading(true);
+    setOperatorsError(null);
+    try {
+      const response = await api.getOperators();
+      setOperators(response.data ?? []);
+    } catch (err: unknown) {
+      logger.error('Failed to load operators for plugin settings', err);
+      setOperatorsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setOperatorsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadOperators();
+  }, [loadOperators]);
+
+  useEffect(() => {
+    setOperatorSettingsDirty(false);
+  }, [selectedPlugin?.name]);
+
   const dirty = useMemo(() => {
     const toggleChanged = Object.entries(enabledDrafts).some(
       ([name, enabled]) => enabled !== originalEnabledMap[name]
     );
     if (toggleChanged) return true;
+
+    if (operatorSettingsDirty) return true;
 
     return Object.keys(globalSettingsMap).some((pluginName) => {
       const plugin = plugins.find((entry) => entry.name === pluginName);
@@ -200,7 +233,7 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
           : current[key] !== original[key];
       });
     });
-  }, [enabledDrafts, globalSettingsMap, originalEnabledMap, originalGlobalSettingsMap, plugins]);
+  }, [enabledDrafts, globalSettingsMap, operatorSettingsDirty, originalEnabledMap, originalGlobalSettingsMap, plugins]);
 
   const hasUnsavedChanges = useCallback(() => dirty, [dirty]);
 
@@ -224,7 +257,7 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
       });
     });
 
-    if (toggleChanges.length === 0 && settingChanges.length === 0) return;
+    if (toggleChanges.length === 0 && settingChanges.length === 0 && !operatorSettingsPanelRef.current?.hasUnsavedChanges()) return;
 
     setSaving(true);
     try {
@@ -253,6 +286,8 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
           [pluginName]: normalizedSettings,
         }));
       }
+
+      await operatorSettingsPanelRef.current?.save();
 
       setOriginalEnabledMap((prev) => {
         const next = { ...prev };
@@ -328,7 +363,7 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
                   }}
                 />
                 {isSelected && (
-                  <div className="-mt-1">
+                  <div className="-mt-1 flex flex-col gap-3">
                     <PluginSettingsPanel
                       plugin={plugin}
                       settings={globalSettingsMap[plugin.name] ?? {}}
@@ -343,6 +378,15 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
                           },
                         }));
                       }}
+                    />
+                    <SelectedPluginOperatorSettingsPanel
+                      ref={operatorSettingsPanelRef}
+                      plugin={plugin}
+                      operators={operators}
+                      isLoadingOperators={operatorsLoading}
+                      operatorsError={operatorsError}
+                      onRetryLoadOperators={loadOperators}
+                      onUnsavedChanges={setOperatorSettingsDirty}
                     />
                   </div>
                 )}
@@ -377,7 +421,7 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
                   }}
                 />
                 {isSelected && (
-                  <div className="-mt-1">
+                  <div className="-mt-1 flex flex-col gap-3">
                     <PluginSettingsPanel
                       plugin={plugin}
                       settings={globalSettingsMap[plugin.name] ?? {}}
@@ -392,6 +436,15 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
                           },
                         }));
                       }}
+                    />
+                    <SelectedPluginOperatorSettingsPanel
+                      ref={operatorSettingsPanelRef}
+                      plugin={plugin}
+                      operators={operators}
+                      isLoadingOperators={operatorsLoading}
+                      operatorsError={operatorsError}
+                      onRetryLoadOperators={loadOperators}
+                      onUnsavedChanges={setOperatorSettingsDirty}
                     />
                   </div>
                 )}

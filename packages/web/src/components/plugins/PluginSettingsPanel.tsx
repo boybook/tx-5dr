@@ -46,7 +46,7 @@ export const PluginSettingsPanel: React.FC<PluginSettingsPanelProps> = ({
         {hasOperatorEntries
           ? t(
             'plugins.noGlobalSettingsWithOperatorHint',
-            'This plugin has no global settings. Configure its operator-specific settings from the operator settings panel.',
+            'This plugin has no global settings. Configure its operator-specific settings below.',
           )
           : t('plugins.noGlobalSettings', 'No global settings for this plugin.')}
       </div>
