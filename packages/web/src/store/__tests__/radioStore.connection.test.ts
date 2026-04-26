@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { getRadioServiceBootstrapAction } from '../radio/bootstrap';
 import { connectionReducer, initialConnectionState } from '../radioStore';
 
 describe('radioStore connection reducer', () => {
@@ -21,5 +22,17 @@ describe('radioStore connection reducer', () => {
     expect(disconnectedState.isConnected).toBe(false);
     expect(disconnectedState.isConnecting).toBe(false);
     expect(disconnectedState.wasEverConnected).toBe(true);
+  });
+
+  it('force reconnects when reusing an already open singleton service', () => {
+    expect(getRadioServiceBootstrapAction({ isConnected: true, isConnecting: false })).toBe('forceReconnect');
+  });
+
+  it('force reconnects when reusing a connecting singleton service', () => {
+    expect(getRadioServiceBootstrapAction({ isConnected: false, isConnecting: true })).toBe('forceReconnect');
+  });
+
+  it('connects when bootstrapping an idle singleton service', () => {
+    expect(getRadioServiceBootstrapAction({ isConnected: false, isConnecting: false })).toBe('connect');
   });
 });
