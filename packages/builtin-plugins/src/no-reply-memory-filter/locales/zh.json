@@ -2,5 +2,12 @@
   "pluginName": "无回复记忆过滤器",
   "pluginDescription": "临时压低刚被多次主动呼叫但没有回复的电台，避免自动追呼反复浪费通联机会。",
   "memoryOverview": "记忆策略",
-  "memoryOverviewDesc": "按呼号全局记忆近期无回复失败。分数低于阈值时会阻止自动追呼；随着时间推移分数会惰性恢复，对方主动叫我时不会被拦截。"
+  "memoryOverviewDesc": "按当前电台操作员记忆近期无回复失败。分数低于阈值时会阻止自动追呼；随着时间推移分数会惰性恢复，对方主动叫我时不会被拦截。",
+  "blockThreshold": "阈值分数",
+  "blockThresholdDesc": "当前分数低于该值时，阻止自动追呼该呼号。",
+  "failurePenalty": "失败扣分",
+  "failurePenaltyDesc": "TX1 阶段完全无回复并放弃目标时扣除的分数。因直接呼叫切换目标时扣除一半。",
+  "recoveryPerCycle": "每回合恢复分数",
+  "recoveryPerCycleDesc": "记忆分数按时间惰性恢复时，每个 FT8 收发回合增加的分数。",
+  "memoryManagerTitle": "记忆分数"
 }

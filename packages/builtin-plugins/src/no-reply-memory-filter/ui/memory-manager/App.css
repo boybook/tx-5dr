@@ -1,0 +1,132 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--tx5dr-text);
+  font-family: var(--tx5dr-font);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.memory-panel {
+  width: 100%;
+  padding: 6px 10px 8px;
+  font-size: 12px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--tx5dr-text-secondary);
+  font-size: 11px;
+}
+
+.refresh-button {
+  min-width: 44px;
+  height: 24px;
+  border: 1px solid var(--tx5dr-border);
+  border-radius: var(--tx5dr-radius-sm);
+  padding: 0 7px;
+  color: var(--tx5dr-text-secondary);
+  background: var(--tx5dr-bg-content);
+  font: inherit;
+  cursor: pointer;
+}
+
+.refresh-button:hover:not(:disabled) {
+  color: var(--tx5dr-text);
+}
+
+.alert {
+  margin-bottom: 6px;
+  border: 1px solid rgba(243,18,96,0.3);
+  border-radius: var(--tx5dr-radius-sm);
+  padding: 6px 8px;
+  color: var(--tx5dr-danger);
+  background: rgba(243,18,96,0.08);
+}
+
+.empty {
+  padding: 8px;
+  color: var(--tx5dr-text-secondary);
+  text-align: center;
+}
+
+.memory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.memory-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 64px 28px;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+}
+
+.callsign {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--tx5dr-text);
+  font-family: var(--tx5dr-font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+input[type="number"] {
+  width: 64px;
+  height: 28px;
+  border: 1px solid var(--tx5dr-border);
+  border-radius: var(--tx5dr-radius-sm);
+  padding: 3px 5px;
+  color: var(--tx5dr-text);
+  background: var(--tx5dr-bg-content);
+  font-family: var(--tx5dr-font-mono);
+  font-size: 12px;
+}
+
+input[type="number"]:focus {
+  border-color: var(--tx5dr-primary);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--tx5dr-focus-ring);
+}
+
+input[type="number"].invalid {
+  border-color: var(--tx5dr-danger);
+}
+
+.delete-button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--tx5dr-border);
+  border-radius: var(--tx5dr-radius-sm);
+  padding: 0;
+  color: var(--tx5dr-text-secondary);
+  background: var(--tx5dr-bg-content);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.delete-button:hover:not(:disabled) {
+  color: var(--tx5dr-danger);
+  border-color: rgba(243,18,96,0.35);
+}
+
+button:disabled,
+input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
