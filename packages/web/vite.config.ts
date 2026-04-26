@@ -5,6 +5,8 @@ import type { ProxyOptions } from 'vite';
 
 // Keep CI/local builds quiet until we intentionally refresh the browserslist DB.
 process.env.BROWSERSLIST_IGNORE_OLD_DATA = 'true';
+const DEFAULT_WEB_PORT = 8076;
+const configuredWebPort = Number(process.env.WEB_PORT || process.env.TX5DR_WEB_DEV_PORT || DEFAULT_WEB_PORT);
 
 function createProxyOptions(target: string, options?: { rewrite?: (path: string) => string }): ProxyOptions {
   return {
@@ -77,9 +79,9 @@ export default defineConfig({
     include: ['events'],
   },
   server: {
-    port: 5173,
+    port: Number.isFinite(configuredWebPort) ? configuredWebPort : DEFAULT_WEB_PORT,
     host: '0.0.0.0',
-    strictPort: true,
+    strictPort: false,
     allowedHosts: true,
     proxy: {
       '/api': createProxyOptions('http://localhost:4000'),

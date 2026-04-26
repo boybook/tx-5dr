@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const net = require('net');
 const { spawn, spawnSync } = require('child_process');
 
 const mode = process.argv[2] || process.env.TX5DR_DEV_MODE || 'web';
@@ -10,6 +11,7 @@ if (!['web', 'electron'].includes(mode)) {
 }
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
+const DEFAULT_WEB_PORT = 8076;
 const LIVEKIT_SIGNAL_PORT = Number(process.env.LIVEKIT_SIGNAL_PORT || 7880);
 const LIVEKIT_TCP_PORT = Number(process.env.LIVEKIT_TCP_PORT || 7881);
 const LIVEKIT_CREDENTIAL_PATH = path.join(PROJECT_ROOT, '.tmp', 'livekit-credentials.env');
@@ -24,6 +26,10 @@ let livekitRuntime = {
   credentialPath: null,
   configPath: null,
 };
+let selectedWebPort = Number(process.env.WEB_PORT || process.env.TX5DR_WEB_DEV_PORT || DEFAULT_WEB_PORT);
+if (!Number.isInteger(selectedWebPort) || selectedWebPort <= 0 || selectedWebPort > 65535) {
+  selectedWebPort = DEFAULT_WEB_PORT;
+}
 
 function triplet() {
   const platform = process.env.PLATFORM || process.platform;
@@ -255,6 +261,28 @@ function waitForHttp(url, timeoutMs = 15000, intervalMs = 250) {
   });
 }
 
+function canListen(port, host = '0.0.0.0') {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port, host);
+  });
+}
+
+async function findFreePort(start, maxStep = 50, host = '0.0.0.0') {
+  for (let i = 0; i <= maxStep; i += 1) {
+    const candidate = start + i;
+    // eslint-disable-next-line no-await-in-loop
+    if (await canListen(candidate, host)) {
+      return candidate;
+    }
+  }
+  throw new Error(`No free web port found from ${start} to ${start + maxStep}`);
+}
+
 function terminate(child, signal = 'SIGTERM') {
   if (!child || child.killed) return;
   try {
@@ -347,7 +375,10 @@ async function startLiveKit() {
   };
 }
 
-function startTurbo() {
+async function startTurbo() {
+  selectedWebPort = await findFreePort(selectedWebPort, 50, '0.0.0.0');
+  console.log(`[dev-runtime] Web dev server port: ${selectedWebPort}`);
+
   const args = ['turbo', 'run', 'dev', '--parallel', '--filter=!@tx5dr/client-tools'];
   if (mode === 'web') {
     args.push('--filter=!@tx5dr/electron-main');
@@ -355,6 +386,8 @@ function startTurbo() {
 
   const env = {
     ...process.env,
+    WEB_PORT: String(selectedWebPort),
+    TX5DR_WEB_DEV_PORT: String(selectedWebPort),
     LIVEKIT_URL: `ws://127.0.0.1:${LIVEKIT_SIGNAL_PORT}`,
   };
 
@@ -423,7 +456,7 @@ function installSignalHandlers() {
   try {
     installSignalHandlers();
     await startLiveKit();
-    startTurbo();
+    await startTurbo();
   } catch (error) {
     console.error(`[dev-runtime] ${error instanceof Error ? error.message : String(error)}`);
     terminate(livekitChild, 'SIGTERM');

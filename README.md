@@ -178,7 +178,7 @@ yarn install
 ```bash
 # Browser mode (server + web)
 yarn dev
-# → http://localhost:5173
+# → http://localhost:8076 (or the next free port)
 
 # Electron mode
 yarn dev:electron

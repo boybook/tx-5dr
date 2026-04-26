@@ -11,21 +11,88 @@ import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
 
-const PORT = Number(process.env.PORT || 5173);
+const DEFAULT_HTTP_PORT = 8076;
+const DEFAULT_HTTPS_PORT = 8443;
+const DEFAULT_PORT_SCAN_STEPS = 50;
+
+const PORT = Number(process.env.PORT || DEFAULT_HTTP_PORT);
 const HOST = process.env.HOST || (process.env.PUBLIC === '1' ? '0.0.0.0' : '127.0.0.1');
 const TARGET = process.env.TARGET || 'http://127.0.0.1:4000';
 const DEV_WEB_TARGET = process.env.DEV_WEB_TARGET || '';
 const LIVEKIT_TARGET = process.env.LIVEKIT_TARGET || '';
 const HTTPS_ENABLE = process.env.HTTPS_ENABLE === '1';
-const HTTPS_PORT = Number(process.env.HTTPS_PORT || 8443);
+const HTTPS_PORT = Number(process.env.HTTPS_PORT || DEFAULT_HTTPS_PORT);
 const HTTPS_CERT_FILE = process.env.HTTPS_CERT_FILE || '';
 const HTTPS_KEY_FILE = process.env.HTTPS_KEY_FILE || '';
 const HTTPS_REDIRECT_EXTERNAL_HTTP = process.env.HTTPS_REDIRECT_EXTERNAL_HTTP !== '0';
+const READY_FILE = process.env.TX5DR_CLIENT_TOOLS_READY_FILE || '';
+const LOG_FILE = process.env.TX5DR_CLIENT_TOOLS_LOG_FILE || '';
+const PORT_SCAN_STEPS = Number(process.env.TX5DR_PORT_SCAN_STEPS || DEFAULT_PORT_SCAN_STEPS);
 
 // DEFAULT to packaged path layout; allow override via STATIC_DIR
 const resourcesPath = process.env.APP_RESOURCES || process.cwd();
 const defaultStaticDir = path.join(resourcesPath, 'app', 'packages', 'web', 'dist');
 const STATIC_DIR = process.env.STATIC_DIR || defaultStaticDir;
+let activeHttpPort = PORT;
+let activeHttpsPort = HTTPS_PORT;
+let httpsAvailable = false;
+let httpsStartupError = null;
+
+const originalConsole = {
+  log: console.log.bind(console),
+  info: console.info.bind(console),
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
+  debug: console.debug.bind(console),
+};
+
+function formatLogArgs(args) {
+  return args.map((arg) => {
+    if (arg instanceof Error) {
+      return arg.stack || arg.message;
+    }
+    if (typeof arg === 'object' && arg !== null) {
+      try { return JSON.stringify(arg); } catch { return String(arg); }
+    }
+    return String(arg);
+  }).join(' ');
+}
+
+function writeFileLog(level, args) {
+  if (!LOG_FILE) return;
+  try {
+    fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+    const line = `[${new Date().toISOString()}] [${level.padEnd(5)}] ${formatLogArgs(args)}\n`;
+    fs.appendFileSync(LOG_FILE, line, 'utf-8');
+  } catch {
+    // Avoid recursive logging if the log file cannot be written.
+  }
+}
+
+function installFileLogger() {
+  console.log = (...args) => {
+    originalConsole.log(...args);
+    writeFileLog('INFO', args);
+  };
+  console.info = (...args) => {
+    originalConsole.info(...args);
+    writeFileLog('INFO', args);
+  };
+  console.warn = (...args) => {
+    originalConsole.warn(...args);
+    writeFileLog('WARN', args);
+  };
+  console.error = (...args) => {
+    originalConsole.error(...args);
+    writeFileLog('ERROR', args);
+  };
+  console.debug = (...args) => {
+    originalConsole.debug(...args);
+    writeFileLog('DEBUG', args);
+  };
+}
+
+installFileLogger();
 
 const MIME = new Map(Object.entries({
   '.html': 'text/html; charset=utf-8',
@@ -52,6 +119,11 @@ function addCors(res) {
 function serveFile(res, absPath) {
   fs.stat(absPath, (err, stat) => {
     if (err || !stat.isFile()) {
+      console.warn('[client-tools] static file not found:', {
+        path: absPath,
+        code: err?.code || null,
+        message: err?.message || 'not a file',
+      });
       res.statusCode = 404;
       addCors(res);
       res.end('Not Found');
@@ -62,7 +134,12 @@ function serveFile(res, absPath) {
     res.setHeader('Content-Type', type);
     addCors(res);
     const stream = fs.createReadStream(absPath);
-    stream.on('error', () => {
+    stream.on('error', (streamError) => {
+      console.error('[client-tools] static file stream failed:', {
+        path: absPath,
+        code: streamError?.code || null,
+        message: streamError?.message || String(streamError),
+      });
       res.statusCode = 500;
       addCors(res);
       res.end('Internal Server Error');
@@ -96,7 +173,7 @@ function isLoopbackHostname(hostname) {
 function buildForwardedHeaders(req, entryScheme, targetBase = TARGET) {
   const hostHeader = req.headers.host || '';
   const parsedHost = parseHostHeader(hostHeader);
-  const forwardedPort = parsedHost.port || String(entryScheme === 'https' ? HTTPS_PORT : PORT);
+  const forwardedPort = parsedHost.port || String(entryScheme === 'https' ? activeHttpsPort : activeHttpPort);
   const targetUrl = new URL(targetBase);
 
   return {
@@ -138,6 +215,14 @@ function proxyHttp(req, res, entryScheme, targetBase = TARGET, rewritePath = nul
     const offlineCodes = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ETIMEDOUT', 'ECONNRESET']);
     const isOffline = offlineCodes.has(err && err.code);
     const status = isOffline ? 503 : 502;
+    console.warn('[client-tools] proxy request failed:', {
+      method: req.method,
+      url: req.url,
+      target: targetBase,
+      code: err?.code || null,
+      message: err?.message || String(err),
+      status,
+    });
     const headers = {
       'Content-Type': 'application/json; charset=utf-8',
       'x-proxy-error': isOffline ? 'backend_offline' : 'proxy_error',
@@ -178,7 +263,7 @@ function stripPrefixFromUrl(rawUrl, prefix) {
 }
 
 function shouldRedirectToHttps(req) {
-  if (!HTTPS_ENABLE || !HTTPS_REDIRECT_EXTERNAL_HTTP) return false;
+  if (!HTTPS_ENABLE || !httpsAvailable || !HTTPS_REDIRECT_EXTERNAL_HTTP) return false;
   const { hostname } = parseHostHeader(req.headers.host || '');
   return Boolean(hostname) && !isLoopbackHostname(hostname);
 }
@@ -187,7 +272,7 @@ function buildHttpsRedirectUrl(req) {
   const parsed = parseHostHeader(req.headers.host || '');
   const hostname = parsed.hostname || 'localhost';
   const targetHost = hostname.includes(':') && !hostname.startsWith('[') ? `[${hostname}]` : hostname;
-  return `https://${targetHost}:${HTTPS_PORT}${req.url || '/'}`;
+  return `https://${targetHost}:${activeHttpsPort}${req.url || '/'}`;
 }
 
 function handleRequest(req, res, entryScheme) {
@@ -235,10 +320,23 @@ function handleRequest(req, res, entryScheme) {
     }
 
     if (!fs.existsSync(absPath)) {
+      if (pathname !== '/index.html') {
+        console.warn('[client-tools] static file missing, falling back to index:', {
+          pathname,
+          staticDir: STATIC_DIR,
+          fallback: path.join(STATIC_DIR, 'index.html'),
+        });
+      }
       return serveFile(res, path.join(STATIC_DIR, 'index.html'));
     }
     return serveFile(res, absPath);
-  } catch {
+  } catch (err) {
+    console.error('[client-tools] request handler failed:', {
+      method: req?.method,
+      url: req?.url,
+      message: err?.message || String(err),
+      stack: err?.stack || null,
+    });
     res.statusCode = 500;
     addCors(res);
     res.end('Internal Server Error');
@@ -254,6 +352,11 @@ function attachUpgrade(server, entryScheme) {
       const isLiveKitUpgrade = LIVEKIT_TARGET && (pathname === '/livekit' || pathname.startsWith('/livekit/'));
       const targetBase = isApiUpgrade ? TARGET : (isLiveKitUpgrade ? LIVEKIT_TARGET : DEV_WEB_TARGET);
       if (!targetBase) {
+        console.warn('[client-tools] websocket upgrade rejected: no target', {
+          url: req.url,
+          isApiUpgrade,
+          isLiveKitUpgrade,
+        });
         socket.destroy();
         return;
       }
@@ -304,9 +407,29 @@ function attachUpgrade(server, entryScheme) {
             socket.pipe(upstream);
           });
 
-      socket.on('error', () => upstream.destroy());
-      upstream.on('error', () => socket.destroy());
-    } catch {
+      socket.on('error', (err) => {
+        console.warn('[client-tools] downstream websocket socket error:', {
+          url: req.url,
+          code: err?.code || null,
+          message: err?.message || String(err),
+        });
+        upstream.destroy();
+      });
+      upstream.on('error', (err) => {
+        console.warn('[client-tools] upstream websocket socket error:', {
+          url: req.url,
+          target: targetBase,
+          code: err?.code || null,
+          message: err?.message || String(err),
+        });
+        socket.destroy();
+      });
+    } catch (err) {
+      console.error('[client-tools] websocket upgrade failed:', {
+        url: req?.url,
+        message: err?.message || String(err),
+        stack: err?.stack || null,
+      });
       socket.destroy();
     }
   });
@@ -393,15 +516,80 @@ if (HTTPS_ENABLE && HTTPS_CERT_FILE && HTTPS_KEY_FILE && fs.existsSync(HTTPS_CER
     attachUpgrade(httpsServer, 'https');
   } catch (err) {
     console.error('[client-tools] failed to create HTTPS server:', err);
+    httpsStartupError = {
+      code: err?.code || null,
+      message: err?.message || String(err),
+    };
     httpsServer = null;
   }
+} else if (HTTPS_ENABLE) {
+  httpsStartupError = {
+    code: 'HTTPS_CERT_MISSING',
+    message: 'HTTPS requested but certificate or key file is missing',
+    certFile: HTTPS_CERT_FILE || null,
+    keyFile: HTTPS_KEY_FILE || null,
+  };
+  console.warn('[client-tools] HTTPS requested but certificate or key file is missing', {
+    certFile: HTTPS_CERT_FILE || null,
+    keyFile: HTTPS_KEY_FILE || null,
+    certExists: HTTPS_CERT_FILE ? fs.existsSync(HTTPS_CERT_FILE) : false,
+    keyExists: HTTPS_KEY_FILE ? fs.existsSync(HTTPS_KEY_FILE) : false,
+  });
 }
 
 const httpsSockets = httpsServer ? trackSockets(httpsServer) : null;
+let startupComplete = false;
+
+function writeReadyFile(state) {
+  if (!READY_FILE) return;
+  try {
+    fs.mkdirSync(path.dirname(READY_FILE), { recursive: true });
+    fs.writeFileSync(READY_FILE, JSON.stringify({
+      pid: process.pid,
+      timestamp: new Date().toISOString(),
+      requestedPort: PORT,
+      httpPort: state.httpPort ?? null,
+      httpOk: Boolean(state.httpOk),
+      requestedHttpsPort: HTTPS_PORT,
+      httpsPort: state.httpsPort ?? null,
+      httpsOk: Boolean(state.httpsOk),
+      httpsEnabled: HTTPS_ENABLE,
+      staticDir: STATIC_DIR,
+      staticDirExists: fs.existsSync(STATIC_DIR),
+      target: TARGET,
+      livekitTarget: LIVEKIT_TARGET || null,
+      devWebTarget: DEV_WEB_TARGET || null,
+      error: state.error ?? null,
+    }, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[client-tools] failed to write ready file:', {
+      readyFile: READY_FILE,
+      message: err?.message || String(err),
+    });
+  }
+}
+
+console.info('[client-tools] starting', {
+  pid: process.pid,
+  requestedPort: PORT,
+  host: HOST,
+  target: TARGET,
+  livekitTarget: LIVEKIT_TARGET || null,
+  devWebTarget: DEV_WEB_TARGET || null,
+  staticDir: STATIC_DIR,
+  staticDirExists: fs.existsSync(STATIC_DIR),
+  httpsEnabled: HTTPS_ENABLE,
+  requestedHttpsPort: HTTPS_PORT,
+  httpsCertExists: HTTPS_CERT_FILE ? fs.existsSync(HTTPS_CERT_FILE) : false,
+  httpsKeyExists: HTTPS_KEY_FILE ? fs.existsSync(HTTPS_KEY_FILE) : false,
+  readyFile: READY_FILE || null,
+  logFile: LOG_FILE || null,
+});
 
 httpServer.on('listening', () => {
   const addr = httpServer.address();
   const finalPort = typeof addr === 'object' && addr ? addr.port : PORT;
+  activeHttpPort = finalPort;
   console.log(`[client-tools] http server listening on http://${HOST}:${finalPort}`);
   console.log(`[client-tools] static dir: ${STATIC_DIR}`);
   console.log(`[client-tools] api target: ${TARGET}`);
@@ -414,16 +602,21 @@ httpServer.on('listening', () => {
 });
 
 httpServer.on('error', (err) => {
+  if (!startupComplete) return;
   console.error('[client-tools] server error:', err);
   process.exit(1);
 });
 
 if (httpsServer) {
   httpsServer.on('listening', () => {
-    console.log(`[client-tools] https server listening on https://${HOST}:${HTTPS_PORT}`);
+    const addr = httpsServer.address();
+    activeHttpsPort = typeof addr === 'object' && addr ? addr.port : HTTPS_PORT;
+    httpsAvailable = true;
+    console.log(`[client-tools] https server listening on https://${HOST}:${activeHttpsPort}`);
   });
 
   httpsServer.on('error', (err) => {
+    if (!startupComplete) return;
     console.error('[client-tools] https server error:', err);
   });
 }
@@ -433,20 +626,45 @@ function listenWithFallback(server, startPort, host) {
     let attempt = 0;
     function tryListen(p) {
       server.once('error', onError);
-      server.listen(p, host, () => {
+      server.once('listening', onListening);
+      server.listen(p, host);
+
+      function onListening() {
         server.off('error', onError);
-        resolve(true);
-      });
+        resolve({ ok: true, port: p, error: null });
+      }
+
       function onError(err) {
         server.off('error', onError);
-        if (err && err.code === 'EADDRINUSE' && attempt < 50) {
+        server.off('listening', onListening);
+        if (err && err.code === 'EADDRINUSE' && attempt < PORT_SCAN_STEPS) {
           attempt += 1;
           const next = p + 1;
           console.warn(`[client-tools] port ${p} in use, trying ${next}...`);
           setTimeout(() => tryListen(next), 100);
         } else {
-          console.error('[client-tools] failed to bind port:', err?.code || err);
-          resolve(false);
+          const exhausted = err?.code === 'EADDRINUSE' && attempt >= PORT_SCAN_STEPS;
+          const message = exhausted
+            ? `Port range ${startPort}-${startPort + PORT_SCAN_STEPS} exhausted`
+            : (err?.message || String(err));
+          console.error('[client-tools] failed to bind port:', {
+            code: err?.code || null,
+            message,
+            attemptedPort: p,
+            startPort,
+            endPort: startPort + PORT_SCAN_STEPS,
+          });
+          resolve({
+            ok: false,
+            port: null,
+            error: {
+              code: err?.code || null,
+              message,
+              attemptedPort: p,
+              startPort,
+              endPort: startPort + PORT_SCAN_STEPS,
+            },
+          });
         }
       }
     }
@@ -454,24 +672,44 @@ function listenWithFallback(server, startPort, host) {
   });
 }
 
-function listenExact(server, port, host) {
-  return new Promise((resolve) => {
-    server.once('error', (err) => {
-      console.error('[client-tools] failed to bind HTTPS port:', err?.code || err);
-      resolve(false);
-    });
-    server.listen(port, host, () => resolve(true));
-  });
-}
-
 Promise.all([
   listenWithFallback(httpServer, Number(PORT), HOST),
-  httpsServer ? listenExact(httpsServer, Number(HTTPS_PORT), HOST) : Promise.resolve(true),
-]).then(([httpOk, httpsOk]) => {
-  if (!httpOk) process.exit(1);
-  if (!httpsOk && httpsServer) {
+  httpsServer ? listenWithFallback(httpsServer, Number(HTTPS_PORT), HOST) : Promise.resolve({ ok: !HTTPS_ENABLE, port: null, error: httpsStartupError }),
+]).then(([httpResult, httpsResult]) => {
+  startupComplete = true;
+  if (!httpResult.ok) {
+    writeReadyFile({
+      httpOk: false,
+      httpPort: null,
+      httpsOk: Boolean(httpsResult.ok && httpsResult.port),
+      httpsPort: httpsResult.port,
+      error: httpResult.error,
+    });
+    process.exit(1);
+  }
+  activeHttpPort = httpResult.port;
+  if (httpsResult.ok && httpsResult.port) {
+    activeHttpsPort = httpsResult.port;
+    httpsAvailable = true;
+  }
+  if (!httpsResult.ok && httpsServer) {
+    httpsAvailable = false;
+    console.warn('[client-tools] HTTPS entrypoint disabled after bind failure:', httpsResult.error);
     try { httpsServer.close(); } catch {}
   }
+  writeReadyFile({
+    httpOk: true,
+    httpPort: httpResult.port,
+    httpsOk: Boolean(httpsResult.ok && httpsResult.port),
+    httpsPort: httpsResult.ok ? httpsResult.port : null,
+    error: httpsResult.ok ? null : httpsResult.error,
+  });
+  console.info('[client-tools] startup complete', {
+    httpPort: httpResult.port,
+    httpsPort: httpsResult.ok ? httpsResult.port : null,
+    httpsEnabled: HTTPS_ENABLE,
+    httpsOk: Boolean(httpsResult.ok && httpsResult.port),
+  });
 });
 
 let shuttingDown = false;
@@ -479,6 +717,7 @@ let shuttingDown = false;
 function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+  console.info('[client-tools] shutting down');
 
   const closers = [
     closeServerFast(httpServer, httpSockets),
@@ -490,5 +729,9 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 process.on('uncaughtException', (err) => {
-  console.error('[client-tools] uncaught exception:', err.message);
+  console.error('[client-tools] uncaught exception:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[client-tools] unhandled rejection:', reason);
 });

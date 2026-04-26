@@ -27,8 +27,12 @@ export async function systemRoutes(fastify: FastifyInstance) {
   }
 
   // 获取网络访问地址
-  fastify.get('/network-info', async (_request, reply) => {
-    const webPort = parseInt(process.env.WEB_PORT || '5173', 10);
+  fastify.get('/network-info', async (request, reply) => {
+    const forwardedPort = Array.isArray(request.headers['x-forwarded-port'])
+      ? request.headers['x-forwarded-port'][0]
+      : request.headers['x-forwarded-port'];
+    const parsedWebPort = parseInt(String(forwardedPort || process.env.WEB_PORT || '8076'), 10);
+    const webPort = Number.isFinite(parsedWebPort) ? parsedWebPort : 8076;
     const interfaces = os.networkInterfaces();
     const addresses: { ip: string; url: string }[] = [];
 

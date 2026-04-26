@@ -255,7 +255,7 @@ yarn build:standalone       # Electron构建
 ```
 
 ### 开发服务器
-http://localhost:5173 + Vite代理4000 + 热更新
+http://localhost:8076（冲突时向上递增）+ Vite代理4000 + 热更新
 
 ## 性能优化
 

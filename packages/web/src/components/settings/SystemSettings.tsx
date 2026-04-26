@@ -1832,6 +1832,14 @@ export const SystemSettings = forwardRef<
                   <p className="break-all text-sm text-default-700">
                     {desktopHttpsBrowserUrl || t('system.desktopHttpsAccessUrlPending')}
                   </p>
+                  {desktopHttpsStatus && (
+                    <p className={SETTINGS_SUBDESC_CLASS}>
+                      {t('system.desktopHttpsEffectivePorts', {
+                        httpPort: desktopHttpsStatus.httpPort,
+                        httpsPort: desktopHttpsStatus.effectiveHttpsPort ?? t('system.desktopHttpsPortInactive'),
+                      })}
+                    </p>
+                  )}
                   <div className="flex flex-wrap gap-2">
                     {desktopHttpsStatus?.browserAccessUrl && (
                       <Button

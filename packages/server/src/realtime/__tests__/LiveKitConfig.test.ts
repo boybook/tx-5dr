@@ -72,13 +72,13 @@ describe('LiveKitConfig', () => {
     const resolved = LiveKitConfig.resolvePublicWsUrl({
       headers: {
         host: '127.0.0.1:4000',
-        origin: 'http://localhost:5173',
-        referer: 'http://localhost:5173/',
+        origin: 'http://localhost:8076',
+        referer: 'http://localhost:8076/',
       },
       protocol: 'http',
     });
 
-    expect(resolved).toBe('ws://localhost:5173/livekit');
+    expect(resolved).toBe('ws://localhost:8076/livekit');
   });
 
   it('prefers the configured advanced override when present', async () => {

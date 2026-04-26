@@ -178,7 +178,7 @@ yarn install
 ```bash
 # 浏览器模式（server + web）
 yarn dev
-# → http://localhost:5173
+# → http://localhost:8076（或下一个可用端口）
 
 # Electron 模式
 yarn dev:electron

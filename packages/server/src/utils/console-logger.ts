@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { appendFileSync } from 'fs';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { getLogFilePath } from './app-paths.js';
@@ -151,8 +152,7 @@ export class ConsoleLogger {
     if (this.logQueue.length === 0) return;
     const entries = this.logQueue.splice(0);
     try {
-      const fsSync = require('fs');
-      fsSync.appendFileSync(this.logFilePath, entries.join('\n') + '\n', 'utf-8');
+      appendFileSync(this.logFilePath, entries.join('\n') + '\n', 'utf-8');
     } catch (error) {
       this.originalConsole.error('[FileLogger] flushSync failed:', error);
     }

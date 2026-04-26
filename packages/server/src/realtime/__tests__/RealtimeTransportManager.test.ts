@@ -174,14 +174,14 @@ describe('RealtimeTransportManager', () => {
     const session = await manager.issueSession(createIssueSessionParams({
       requestHeaders: {
         host: '127.0.0.1:4000',
-        origin: 'http://localhost:5173',
-        referer: 'http://localhost:5173/',
+        origin: 'http://localhost:8076',
+        referer: 'http://localhost:8076/',
       },
       requestProtocol: 'http',
     }));
 
     expect(session.offers).toHaveLength(1);
     expect(session.offers[0]?.transport).toBe('ws-compat');
-    expect(session.offers[0]?.url).toBe('ws://localhost:5173/api/realtime/ws-compat');
+    expect(session.offers[0]?.url).toBe('ws://localhost:8076/api/realtime/ws-compat');
   });
 });
