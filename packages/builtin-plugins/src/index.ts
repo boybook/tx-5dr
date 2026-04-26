@@ -31,6 +31,7 @@ import { snrFilterPlugin, snrFilterLocales } from './snr-filter/index.js';
 import {
   noReplyMemoryFilterPlugin,
   noReplyMemoryFilterLocales,
+  noReplyMemoryFilterDirPath,
   BUILTIN_NO_REPLY_MEMORY_FILTER_PLUGIN_NAME,
 } from './no-reply-memory-filter/index.js';
 
@@ -124,6 +125,7 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
     definition: noReplyMemoryFilterPlugin,
     locales: noReplyMemoryFilterLocales,
     enabledByDefault: false,
+    dirPath: noReplyMemoryFilterDirPath,
   },
   {
     definition: callsignFilterPlugin,
