@@ -1036,6 +1036,7 @@ async function resolveValidatedPageSession(
     user: ReturnType<typeof toPluginRequestUser>;
     resource?: PluginPageBoundResource;
     instanceTarget: PluginPageSession['instanceTarget'];
+    files: ScopedPluginFileStoreProvider;
     page: {
       sessionId: string;
       pageId: string;
@@ -1090,6 +1091,7 @@ async function resolveValidatedPageSession(
   }
 
   const activeSession = engine.pluginManager.touchPluginPageSession(pageSessionId) ?? session;
+  const pageFiles = createPageScopedFileStore(engine, pluginName, activeSession.pageId, activeSession);
 
   return {
     page,
@@ -1100,6 +1102,7 @@ async function resolveValidatedPageSession(
       user: toPluginRequestUser(user),
       resource: activeSession.resource,
       instanceTarget: activeSession.instanceTarget,
+      files: pageFiles,
       page: {
         sessionId: activeSession.sessionId,
         pageId: activeSession.pageId,
@@ -1116,6 +1119,24 @@ async function resolveValidatedPageSession(
       },
     },
   };
+}
+
+function createPageScopedFileStore(
+  engine: DigitalRadioEngine,
+  pluginName: string,
+  pageId: string,
+  session: PluginPageSession,
+): ScopedPluginFileStoreProvider {
+  const fileRoot = path.join(engine.pluginManager.getPluginStorageDir(pluginName), 'files');
+  const backingStore = new PluginFileStoreProvider(fileRoot);
+
+  return new ScopedPluginFileStoreProvider(
+    backingStore,
+    getPluginPageFileScopePath(pageId, {
+      instanceTarget: session.instanceTarget,
+      resource: session.resource,
+    }),
+  );
 }
 
 // ===== Route registration =====
@@ -1434,15 +1455,7 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
         return;
       }
 
-      const fileRoot = path.join(engine.pluginManager.getPluginStorageDir(name), 'files');
-      const backingStore = new PluginFileStoreProvider(fileRoot);
-      const scopedStore = new ScopedPluginFileStoreProvider(
-        backingStore,
-        getPluginPageFileScopePath(pageId, {
-          instanceTarget: sessionContext.session.instanceTarget,
-          resource: sessionContext.session.resource,
-        }),
-      );
+      const scopedStore = sessionContext.requestContext.files;
 
       if (type === 'tx5dr:file:upload') {
         if (!filePath || typeof data !== 'string') {

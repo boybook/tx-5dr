@@ -307,10 +307,10 @@ export function App() {
     const uploadPath = `certificates/uploads/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
 
     try {
-      await window.tx5dr.fileUpload(uploadPath, file);
+      const storedPath = await window.tx5dr.fileUpload(uploadPath, file);
       const result: any = await window.tx5dr.invoke('importCertificate', {
         callsign,
-        path: uploadPath,
+        path: storedPath,
       });
 
       if (result?.success) {

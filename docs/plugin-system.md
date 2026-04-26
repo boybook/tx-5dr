@@ -1261,7 +1261,7 @@ panels: [
 | `tx5dr.storeGet(key, default)` | 读取页面私有 KV（按实例目标 + 绑定资源 + pageId 共享，返回 Promise） |
 | `tx5dr.storeSet(key, value)` | 写入页面私有 KV |
 | `tx5dr.storeDelete(key)` | 删除页面私有 KV |
-| `tx5dr.fileUpload(path, file)` | 上传文件到当前页面 scope（按实例目标 + 绑定资源 + pageId 收口） |
+| `tx5dr.fileUpload(path, file)` | 上传文件到当前页面 scope（按实例目标 + 绑定资源 + pageId 收口），返回可在当前 page handler 中通过 `requestContext.files` 读取的相对路径 |
 | `tx5dr.fileRead(path)` | 从当前页面 scope 读取文件（返回 Blob 或 null） |
 | `tx5dr.fileDelete(path)` | 删除当前页面 scope 下的文件 |
 | `tx5dr.fileList(prefix?)` | 列出当前页面 scope 下的文件路径 |
@@ -1396,6 +1396,7 @@ interface PluginFileStore {
 
 **安全约束**：所有路径参数相对于插件文件根目录解析，禁止目录穿越（`..`、绝对路径等会被拒绝）。
 iframe 页面里的 `tx5dr.file*` 与运行时 `ctx.files` 指向同一物理文件根目录，但宿主会按 `instanceTarget + bound resource + pageId` 自动收口到独立 scope。
+插件的 `ctx.ui.registerPageHandler()` 处理 iframe `invoke` 请求时，宿主会在 `requestContext.files` 上提供同一个 page-scoped 文件视图。插件需要处理上传文件时，应让 iframe 调用 `tx5dr.fileUpload(relativePath, file)`，再把返回的 `relativePath` 传给 `tx5dr.invoke()`；服务端 handler 通过 `requestContext.files.read(relativePath)` 读取，并在处理后按需 `delete(relativePath)` 清理临时文件。插件不应自行拼接 `page-resources/...` 内部路径。
 
 **典型用途**：
 - LoTW 证书文件（`.p12`）

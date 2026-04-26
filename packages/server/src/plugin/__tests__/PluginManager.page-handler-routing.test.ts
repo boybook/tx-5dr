@@ -150,6 +150,12 @@ describe('PluginManager page handler routing', () => {
           operatorIds: [operatorId],
         },
         instanceTarget: { kind: 'operator', operatorId },
+        files: {
+          write: async () => {},
+          read: async () => null,
+          delete: async () => false,
+          list: async () => [],
+        },
         page: {
           sessionId: `session-${operatorId}`,
           pageId: 'settings',

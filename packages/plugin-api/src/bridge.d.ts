@@ -132,9 +132,11 @@ interface Tx5drBridge {
    * Upload a file to the page-scoped file storage.
    *
    * Files are stored under a sandboxed directory determined by the page's
-   * instance target and resource binding.
+   * instance target and resource binding. The resolved value is the same
+   * relative path, suitable for passing to `tx5dr.invoke()` and reading from
+   * `requestContext.files` in the page handler.
    */
-  fileUpload(path: string, file: File | Blob): Promise<void>;
+  fileUpload(path: string, file: File | Blob): Promise<string>;
 
   /** Read a file from page-scoped storage. Returns `null` if not found. */
   fileRead(path: string): Promise<Blob | null>;

@@ -493,6 +493,14 @@ export interface PluginUIRequestContext {
   readonly resource?: PluginUIBoundResource;
   readonly instanceTarget: PluginUIInstanceTarget;
   readonly page: PluginUIPageContext;
+  /**
+   * Page-scoped file storage shared with iframe `tx5dr.file*()` calls.
+   *
+   * Use this in `registerPageHandler()` handlers to read files uploaded by the
+   * current iframe page session without reconstructing host-internal scope
+   * paths.
+   */
+  readonly files: PluginFileStore;
 }
 
 /**

@@ -146,8 +146,10 @@ export {
 
 /** Plugin page scope path utilities. */
 export {
+  getPluginPageFileScopePath,
   getPluginPageScopePath,
   getPluginPageScopeSegments,
+  getPluginPageStorePath,
 } from './utils/page-scope.js';
 export type { PluginPageBoundResource } from './utils/page-scope.js';
 
