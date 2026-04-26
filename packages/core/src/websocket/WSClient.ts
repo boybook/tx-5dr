@@ -163,15 +163,26 @@ export class WSClient extends WSMessageHandler {
       };
 
       socket.onerror = (error) => {
-        logger.error('Connection error:', error);
-        this.emitWSEvent('error', new Error('WebSocket connection error'));
+        const isCurrent = this.ws === socket;
+        if (!isCurrent || this.manualDisconnect || replacedBySelf) {
+          logger.debug('Ignoring WebSocket error from inactive or closing socket');
+          if (!opened && !settled) {
+            settled = true;
+            clearHandshakeTimer();
+            reject(new Error('WebSocket connection superseded'));
+          }
+          return;
+        }
+
+        // Browser WebSocket "error" is a transport signal. During expected
+        // reconnects it often fires before close, so do not route it through the
+        // app-level "error" event used by server error messages/toasts.
+        logger.warn('WebSocket transport error:', error);
         if (!opened && !settled) {
           settled = true;
           clearHandshakeTimer();
-          if (this.ws === socket) {
-            this.isConnecting = false;
-            this.connectPromise = null;
-          }
+          this.isConnecting = false;
+          this.connectPromise = null;
           reject(new Error('WebSocket connection failed'));
         }
       };

@@ -33,6 +33,7 @@ import {
   radioReducer,
   slotPacksReducer,
 } from './reducers';
+import { getRadioServiceBootstrapAction } from './bootstrap';
 import { createSpectrumNegotiator } from './spectrumNegotiation';
 
 const logger = createLogger('RadioStore');
@@ -116,6 +117,15 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
         connectionDispatch({ type: 'connectFailed' });
       }
     }, 10000);
+
+    const bootstrapAction = getRadioServiceBootstrapAction(radioService.getConnectionStatus());
+    logger.info('Bootstrapping WebSocket connection', { action: bootstrapAction });
+    const bootstrapPromise = bootstrapAction === 'forceReconnect'
+      ? radioService.forceReconnect()
+      : radioService.connect();
+    void bootstrapPromise.catch((err) => {
+      logger.warn('WebSocket bootstrap failed, WSClient background reconnect continues', err);
+    });
 
     return () => {
       clearTimeout(initialConnectTimer);

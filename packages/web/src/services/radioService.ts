@@ -41,23 +41,6 @@ export class RadioService {
     this.wsClient.onWSEvent('disconnected', () => {
       this._isDecoding = false;
     });
-
-    // 自动尝试连接
-    this.autoConnect();
-  }
-
-  /**
-   * 自动连接到服务器
-   */
-  private async autoConnect(): Promise<void> {
-    try {
-      logger.info('Auto-connecting...');
-      await this.connect();
-      logger.info('Auto-connect succeeded');
-    } catch (error) {
-      logger.warn('Auto-connect failed, WSClient reconnect will retry', error);
-      // wsClient.connect() 内部已调用 scheduleReconnect()
-    }
   }
 
   /**
