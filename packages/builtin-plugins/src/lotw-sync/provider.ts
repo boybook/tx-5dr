@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // LoTWSyncProvider — certificate parsing and HTTP response handling requires any
 
-import { createSign, randomUUID, createHash, X509Certificate } from 'crypto';
+import { constants, createHash, privateEncrypt, randomUUID, X509Certificate } from 'crypto';
 import { gzipSync } from 'zlib';
 import forge from 'node-forge';
 import type {
@@ -84,6 +84,30 @@ const LOTW_DXCC_OID = '1.3.6.1.4.1.12348.1.4';
 
 const LOTW_UPLOAD_URL = 'https://lotw.arrl.org/lotw/upload';
 const LOTW_REPORT_URL = 'https://lotw.arrl.org/lotwuser/lotwreport.adi';
+// ASN.1 DigestInfo prefix for SHA-1, used by RSASSA-PKCS1-v1_5 signatures.
+const SHA1_DIGEST_INFO_PREFIX = Buffer.from('3021300906052b0e03021a05000414', 'hex');
+
+function isLotwAdifResponse(responseText: string): boolean {
+  return responseText.toLowerCase().includes('<eoh>');
+}
+
+function classifyLotwErrorResponse(responseText: string): 'lotw_auth_failed' | 'lotw_response_invalid' {
+  const normalized = responseText.toLowerCase().replace(/\s+/g, ' ');
+  const authFailurePatterns = [
+    /\bincorrect\b.{0,80}\bpassword\b/,
+    /\bpassword\b.{0,80}\bincorrect\b/,
+    /\binvalid\b.{0,80}\bpassword\b/,
+    /\bpassword\b.{0,80}\binvalid\b/,
+    /\blogin\b.{0,80}\bpassword\b/,
+    /\bpassword\b.{0,80}\blogin\b/,
+    /\bauthentication\b.{0,80}\bfailed\b/,
+    /\blogin\b.{0,80}\bfailed\b/,
+  ];
+
+  return authFailurePatterns.some(pattern => pattern.test(normalized))
+    ? 'lotw_auth_failed'
+    : 'lotw_response_invalid';
+}
 
 // ===== Types =====
 
@@ -560,17 +584,12 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
 
       const response = await this.doFetch(url, { method: 'GET', timeout: 15000 });
       const responseText = await response.text();
-      const lowerText = responseText.toLowerCase();
 
-      if (lowerText.includes('<eoh>')) {
+      if (isLotwAdifResponse(responseText)) {
         return { success: true, message: 'lotw_connection_success' };
       }
 
-      if (lowerText.includes('password') || lowerText.includes('incorrect') || lowerText.includes('invalid')) {
-        return { success: false, message: 'lotw_auth_failed' };
-      }
-
-      return { success: false, message: 'lotw_response_invalid' };
+      return { success: false, message: classifyLotwErrorResponse(responseText) };
     } catch (error) {
       this.ctx.log.error('Connection test failed', error);
       const message = this.handleNetworkError(error);
@@ -683,13 +702,9 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
 
       const response = await this.doFetch(url, { method: 'GET', timeout: 30000 });
       const responseText = await response.text();
-      const lowerText = responseText.toLowerCase();
 
-      if (lowerText.includes('password') || lowerText.includes('incorrect') || lowerText.includes('invalid')) {
-        return { downloaded: 0, matched: 0, updated: 0, errors: ['lotw_auth_failed'] };
-      }
-      if (!lowerText.includes('<eoh>')) {
-        return { downloaded: 0, matched: 0, updated: 0, errors: ['lotw_response_invalid'] };
+      if (!isLotwAdifResponse(responseText)) {
+        return { downloaded: 0, matched: 0, updated: 0, errors: [classifyLotwErrorResponse(responseText)] };
       }
 
       const remoteRecords = parseADIFContent(responseText, 'lotw');
@@ -1124,10 +1139,12 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
 
   private signLog(privateKeyPem: string, signData: string): string {
     try {
-      const signer = createSign('RSA-SHA1');
-      signer.update(signData, 'utf8');
-      signer.end();
-      return signer.sign(privateKeyPem).toString('base64');
+      const sha1Digest = createHash('sha1').update(signData, 'utf8').digest();
+      const digestInfo = Buffer.concat([SHA1_DIGEST_INFO_PREFIX, sha1Digest]);
+      return privateEncrypt(
+        { key: privateKeyPem, padding: constants.RSA_PKCS1_PADDING },
+        digestInfo,
+      ).toString('base64');
     } catch (error) {
       this.ctx.log.error('Failed to sign LoTW payload', error);
       throw new Error('lotw_upload_sign_failed');

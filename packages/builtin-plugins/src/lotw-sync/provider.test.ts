@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { constants, createHash, generateKeyPairSync, publicDecrypt } from 'crypto';
 
 import type { QSORecord } from '@tx5dr/contracts';
 import { LoTWSyncProvider } from './provider.js';
@@ -22,6 +23,7 @@ function createContext() {
   const store = new Map<string, unknown>();
   const queryQSOs = vi.fn(async (_filter?: unknown) => [] as QSORecord[]);
   const updateQSO = vi.fn(async () => undefined);
+  const addQSO = vi.fn(async () => undefined);
   const notifyUpdated = vi.fn(async () => undefined);
 
   return {
@@ -38,6 +40,7 @@ function createContext() {
         forCallsign: vi.fn(() => ({
           queryQSOs,
           updateQSO,
+          addQSO,
           notifyUpdated,
         })),
       },
@@ -57,11 +60,59 @@ function createContext() {
     } as any,
     queryQSOs,
     updateQSO,
+    addQSO,
     notifyUpdated,
   };
 }
 
+function lotwResponse(body: string): Response {
+  return new Response(body, {
+    status: 200,
+    headers: { 'Content-Type': 'application/x-arrl-adif; charset=iso-8859-1' },
+  });
+}
+
+function configureProvider(provider: LoTWSyncProvider): void {
+  provider.setConfig('BG5DRB', {
+    username: 'user',
+    password: 'pass',
+    uploadLocation: {
+      callsign: 'BG5DRB',
+      dxccId: 291,
+      gridSquare: 'PM01AA',
+      cqZone: '24',
+      ituZone: '44',
+    },
+    autoUploadQSO: false,
+  });
+}
+
 describe('LoTWSyncProvider', () => {
+  it('signs LoTW payloads without relying on OpenSSL SHA1 digest providers', () => {
+    const { ctx } = createContext();
+    const provider = new LoTWSyncProvider(ctx);
+    const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 1024 });
+    const signData = '20MN0CALL14.074FT82026-04-1712:00:00Z';
+
+    const signature = Buffer.from(
+      (provider as any).signLog(
+        privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+        signData,
+      ),
+      'base64',
+    );
+
+    const decrypted = publicDecrypt(
+      { key: publicKey.export({ type: 'spki', format: 'pem' }).toString(), padding: constants.RSA_PKCS1_PADDING },
+      signature,
+    );
+    const expectedDigestInfo = Buffer.concat([
+      Buffer.from('3021300906052b0e03021a05000414', 'hex'),
+      createHash('sha1').update(signData, 'utf8').digest(),
+    ]);
+    expect(decrypted).toEqual(expectedDigestInfo);
+  });
+
   it('auto-upload uses explicit records without rescanning the logbook', async () => {
     const { ctx, queryQSOs, updateQSO, notifyUpdated } = createContext();
     const provider = new LoTWSyncProvider(ctx);
@@ -146,5 +197,61 @@ describe('LoTWSyncProvider', () => {
     expect(queryQSOs).toHaveBeenCalledTimes(1);
     expect(queryQSOs).toHaveBeenCalledWith({});
     expect(prepareUpload).toHaveBeenCalledWith(expect.anything(), [qso], 'BG5DRB');
+  });
+
+  it('downloads valid LoTW ADIF even when field names contain invalid', async () => {
+    const { ctx, addQSO, notifyUpdated } = createContext();
+    ctx.fetch.mockResolvedValue(lotwResponse(
+      'ARRL Logbook of the World Status Report\n'
+      + '<PROGRAMID:4>LoTW <APP_LoTW_NUMREC:1>1 <eoh>\n'
+      + '<CALL:6>N0CALL <BAND:3>20M <FREQ:8>14.07400 <MODE:3>FT8 '
+      + '<QSO_DATE:8>20260420 <TIME_ON:6>054315 '
+      + '<APP_LoTW_GRIDSQUARE_Invalid:6>KN87SC <eor>',
+    ));
+
+    const provider = new LoTWSyncProvider(ctx);
+    configureProvider(provider);
+
+    const result = await provider.download('BG5DRB', {
+      since: Date.parse('2026-03-27T00:00:00.000Z'),
+    });
+
+    expect(result.errors).toBeUndefined();
+    expect(result.downloaded).toBe(1);
+    expect(result.updated).toBe(1);
+    expect(addQSO).toHaveBeenCalledTimes(1);
+    expect(notifyUpdated).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports LoTW auth failure only for explicit credential errors', async () => {
+    const { ctx } = createContext();
+    ctx.fetch.mockImplementation(async () => lotwResponse('Login failed: incorrect password'));
+
+    const provider = new LoTWSyncProvider(ctx);
+    configureProvider(provider);
+
+    await expect(provider.testConnection('BG5DRB')).resolves.toEqual({
+      success: false,
+      message: 'lotw_auth_failed',
+    });
+    await expect(provider.download('BG5DRB')).resolves.toMatchObject({
+      errors: ['lotw_auth_failed'],
+    });
+  });
+
+  it('reports invalid LoTW response when the response is not ADIF or an auth failure', async () => {
+    const { ctx } = createContext();
+    ctx.fetch.mockImplementation(async () => lotwResponse('LoTW service is temporarily unavailable'));
+
+    const provider = new LoTWSyncProvider(ctx);
+    configureProvider(provider);
+
+    await expect(provider.testConnection('BG5DRB')).resolves.toEqual({
+      success: false,
+      message: 'lotw_response_invalid',
+    });
+    await expect(provider.download('BG5DRB')).resolves.toMatchObject({
+      errors: ['lotw_response_invalid'],
+    });
   });
 });

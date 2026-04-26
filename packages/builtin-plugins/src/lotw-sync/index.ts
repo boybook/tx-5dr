@@ -4,7 +4,7 @@ import type { PluginDefinition, PluginUIRequestContext } from '@tx5dr/plugin-api
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import { LoTWSyncProvider, type LoTWPluginConfig } from './provider.js';
-import { normalizeCallsign, getPluginPageScopePath } from '@tx5dr/plugin-api';
+import { normalizeCallsign } from '@tx5dr/plugin-api';
 
 export const BUILTIN_LOTW_SYNC_PLUGIN_NAME = 'lotw-sync';
 
@@ -24,13 +24,6 @@ function requireBoundCallsign(
   }
 
   throw new Error('Callsign binding is required');
-}
-
-function getBoundFilePath(callsign: string, relativePath: string): string {
-  return path.posix.join(
-    getPluginPageScopePath({ kind: 'callsign', value: callsign }),
-    relativePath,
-  );
 }
 
 function buildDefaultConfig(callsign: string): LoTWPluginConfig {
@@ -185,13 +178,12 @@ export const lotwSyncPlugin: PluginDefinition = {
             if (!uploadedPath) {
               throw new Error('No certificate path provided');
             }
-            const scopedPath = getBoundFilePath(cs, uploadedPath);
-            const buffer = await ctx.files.read(scopedPath);
+            const buffer = await requestContext.files.read(uploadedPath);
             if (!buffer) {
               throw new Error('Uploaded certificate file not found');
             }
             const imported = await provider.importCertificate(cs, buffer);
-            await ctx.files.delete(scopedPath).catch(() => {});
+            await requestContext.files.delete(uploadedPath).catch(() => {});
             return {
               success: true,
               certificate: imported.certificate,
