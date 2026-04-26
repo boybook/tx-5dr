@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useI18n } from '../../../_shared/ui/useI18n';
 import { useAutoResize } from '../../../_shared/ui/useAutoResize';
+import { resolveSelectedStationId } from './stationSelection';
 import './App.css';
 
 interface Station {
@@ -104,12 +105,7 @@ export function App() {
         }).then((result: any) => {
           if (result?.stations) {
             setStations(result.stations);
-            // Set selected station
-            if (config.stationId) {
-              setStationId(config.stationId);
-            } else if (result.stations.length === 1) {
-              setStationId(result.stations[0].station_id);
-            }
+            setStationId(resolveSelectedStationId(result.stations, config.stationId));
           }
         }).catch(() => {
           // If station fetch fails but we have a saved stationId, show fallback
@@ -145,15 +141,7 @@ export function App() {
         setTestStatus({ type: 'success', text: t('connected') });
         if (result.stations) {
           setStations(result.stations);
-          // Preserve current selection if still valid
-          const currentValid = result.stations.some(
-            (s: Station) => s.station_id === stationId,
-          );
-          if (!currentValid && result.stations.length === 1) {
-            setStationId(result.stations[0].station_id);
-          } else if (!currentValid) {
-            setStationId('');
-          }
+          setStationId(resolveSelectedStationId(result.stations, stationId));
         }
       } else {
         setTestStatus({
