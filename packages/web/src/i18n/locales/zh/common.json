@@ -342,6 +342,8 @@
     "desktopHttpsValidTo": "有效期截止：{{value}}",
     "desktopHttpsAccessUrl": "推荐浏览器访问地址",
     "desktopHttpsAccessUrlPending": "保存并启用后显示",
+    "desktopHttpsEffectivePorts": "实际端口：HTTP {{httpPort}} / HTTPS {{httpsPort}}",
+    "desktopHttpsPortInactive": "未启用",
     "desktopHttpsLanHint": "启用后会同时给出本机和局域网访问地址。",
     "desktopHttpsSelfSignedLimitations": "自签名证书的限制：浏览器会提示“不安全”或“证书不受信任”；每台设备第一次访问都需要手动放行；更适合自用、内网或测试，不适合长期公开对外。",
     "desktopHttpsImportedHint": "正式证书建议用于域名和公网访问。v1 仅支持手动导入 PEM 证书与 PEM 私钥，不会自动申请 Let's Encrypt 证书。",

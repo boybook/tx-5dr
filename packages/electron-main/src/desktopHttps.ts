@@ -56,6 +56,7 @@ export async function buildDesktopHttpsStatus(params: {
   config?: Partial<PersistentDesktopHttpsConfig> | null;
   hostname: string;
   httpPort: number;
+  httpsPort?: number | null;
   lanAddresses: string[];
 }): Promise<DesktopHttpsStatus> {
   const config = sanitizeDesktopHttpsConfig(params.config);
@@ -82,9 +83,10 @@ export async function buildDesktopHttpsStatus(params: {
     }
   }
 
-  const canUseHttps = config.enabled && certificateStatus === 'valid';
+  const canUseHttps = config.enabled && certificateStatus === 'valid' && Boolean(params.httpsPort);
   const effectiveScheme = canUseHttps ? 'https' : 'http';
-  const effectivePort = canUseHttps ? config.httpsPort : params.httpPort;
+  const effectiveHttpsPort = canUseHttps ? params.httpsPort! : null;
+  const effectivePort = effectiveHttpsPort ?? params.httpPort;
   const shareUrls = buildShareUrls(effectiveScheme, effectivePort, params.hostname, params.lanAddresses);
 
   return {
@@ -93,6 +95,9 @@ export async function buildDesktopHttpsStatus(params: {
     httpsPort: config.httpsPort,
     redirectExternalHttp: config.redirectExternalHttp,
     activeScheme: canUseHttps ? 'https' : 'http',
+    activePort: effectivePort,
+    httpPort: params.httpPort,
+    effectiveHttpsPort,
     browserAccessUrl: shareUrls[0] ?? null,
     shareUrls,
     certificateStatus,

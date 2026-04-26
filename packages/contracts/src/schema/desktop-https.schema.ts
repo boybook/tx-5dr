@@ -32,6 +32,9 @@ export type DesktopHttpsSettings = z.infer<typeof DesktopHttpsSettingsSchema>;
 
 export const DesktopHttpsStatusSchema = DesktopHttpsSettingsSchema.extend({
   activeScheme: DesktopHttpsAccessSchemeSchema.default('http'),
+  activePort: z.number().int().min(1).max(65535),
+  httpPort: z.number().int().min(1).max(65535),
+  effectiveHttpsPort: z.number().int().min(1).max(65535).nullable().default(null),
   browserAccessUrl: z.string().nullable(),
   shareUrls: z.array(z.string()).default([]),
   certificateStatus: DesktopHttpsCertificateStatusSchema.default('missing'),
@@ -40,4 +43,3 @@ export const DesktopHttpsStatusSchema = DesktopHttpsSettingsSchema.extend({
   needsCertificate: z.boolean().default(true),
 });
 export type DesktopHttpsStatus = z.infer<typeof DesktopHttpsStatusSchema>;
-

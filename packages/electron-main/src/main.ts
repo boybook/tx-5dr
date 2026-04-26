@@ -29,6 +29,11 @@ import {
 
 const logger = createLogger('ElectronMain');
 const desktopUpdateService = new DesktopUpdateService();
+const DEFAULT_WEB_HTTP_PORT = 8076;
+const DEFAULT_WEB_HTTPS_PORT = 8443;
+const DEFAULT_PORT_SCAN_STEPS = 50;
+const DEV_FRONTEND_READY_TIMEOUT_MS = 60_000;
+const DEV_BACKEND_READY_TIMEOUT_MS = 60_000;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let serverCheckInterval: any = null;
@@ -38,6 +43,7 @@ let webProcess: import('node:child_process').ChildProcess | null = null;
 let selectedLiveKitPort: number | null = null;
 let selectedWebPort: number | null = null;
 let selectedServerPort: number | null = null;
+let selectedHttpsPort: number | null = null;
 
 // 启动错误跟踪
 let errorType: string = ''; // 错误类型，空字符串表示无错误
@@ -214,7 +220,8 @@ async function getDesktopHttpsStatus(): Promise<DesktopHttpsStatus> {
     configDir: getAppConfigDir(),
     config: getDesktopHttpsConfig(),
     hostname: getHostname(),
-    httpPort: selectedWebPort || 5173,
+    httpPort: selectedWebPort || DEFAULT_WEB_HTTP_PORT,
+    httpsPort: selectedHttpsPort,
     lanAddresses: getLanIpv4Addresses(),
   });
 }
@@ -222,13 +229,16 @@ async function getDesktopHttpsStatus(): Promise<DesktopHttpsStatus> {
 function buildWebChildEnv(serverPort: number): Record<string, string> {
   const httpsConfig = getDesktopHttpsConfig();
   const env: Record<string, string> = {
-    PORT: String(selectedWebPort || 5173),
+    PORT: String(selectedWebPort || DEFAULT_WEB_HTTP_PORT),
     TARGET: `http://127.0.0.1:${serverPort}`,
     PUBLIC: '1',
+    TX5DR_CLIENT_TOOLS_LOG_FILE: getClientToolsLogPath(),
+    TX5DR_CLIENT_TOOLS_READY_FILE: getClientToolsReadyPath(),
+    TX5DR_PORT_SCAN_STEPS: String(DEFAULT_PORT_SCAN_STEPS),
   };
 
   if (isDevelopmentRuntime()) {
-    env.DEV_WEB_TARGET = 'http://127.0.0.1:5173';
+    env.DEV_WEB_TARGET = `http://127.0.0.1:${getDevWebPort()}`;
   } else {
     env.STATIC_DIR = join(resourcesRoot(), 'app', 'packages', 'web', 'dist');
   }
@@ -246,7 +256,7 @@ function buildWebChildEnv(serverPort: number): Record<string, string> {
     fs.existsSync(httpsConfig.keyPath)
   ) {
     env.HTTPS_ENABLE = '1';
-    env.HTTPS_PORT = String(httpsConfig.httpsPort);
+    env.HTTPS_PORT = String(httpsConfig.httpsPort || DEFAULT_WEB_HTTPS_PORT);
     env.HTTPS_CERT_FILE = httpsConfig.certPath;
     env.HTTPS_KEY_FILE = httpsConfig.keyPath;
     env.HTTPS_REDIRECT_EXTERNAL_HTTP = httpsConfig.redirectExternalHttp ? '1' : '0';
@@ -293,6 +303,46 @@ function serverLauncherEntryPath(): string {
   return path.resolve(__dirname, '../../server/dist/scripts/server-launcher.js');
 }
 
+function prepareWebGatewayLaunch(webEntry: string, env: Record<string, string>): void {
+  fs.mkdirSync(getAppLogsDir(), { recursive: true });
+  try {
+    fs.unlinkSync(getClientToolsReadyPath());
+  } catch {
+    // No stale ready file to remove.
+  }
+  logger.info('starting web gateway', {
+    entry: webEntry,
+    requestedPort: env.PORT,
+    target: env.TARGET,
+    staticDir: env.STATIC_DIR ?? null,
+    devWebTarget: env.DEV_WEB_TARGET ?? null,
+    livekitTarget: env.LIVEKIT_TARGET ?? null,
+    httpsEnabled: env.HTTPS_ENABLE === '1',
+    requestedHttpsPort: env.HTTPS_PORT ?? null,
+    logFile: env.TX5DR_CLIENT_TOOLS_LOG_FILE,
+    readyFile: env.TX5DR_CLIENT_TOOLS_READY_FILE,
+  });
+}
+
+async function waitAndApplyWebGatewayReady(env: Record<string, string>, requestedPort: number): Promise<WebGatewayReadyState> {
+  const ready = await waitForWebGatewayReady(env, requestedPort, 15000, 200, webProcess?.pid ?? undefined);
+  selectedWebPort = ready.httpPort || requestedPort;
+  selectedHttpsPort = ready.httpsOk ? ready.httpsPort : null;
+  logger.info('web gateway ready', {
+    requestedPort,
+    httpPort: selectedWebPort,
+    httpsEnabled: ready.httpsEnabled,
+    requestedHttpsPort: ready.requestedHttpsPort,
+    httpsPort: selectedHttpsPort,
+    staticDir: ready.staticDir ?? null,
+    staticDirExists: ready.staticDirExists ?? null,
+    target: ready.target ?? null,
+    livekitTarget: ready.livekitTarget ?? null,
+    devWebTarget: ready.devWebTarget ?? null,
+  });
+  return ready;
+}
+
 async function restartWebGateway(): Promise<void> {
   if (!selectedServerPort || !selectedWebPort) {
     throw new Error('web_gateway_not_ready');
@@ -300,6 +350,7 @@ async function restartWebGateway(): Promise<void> {
 
   const webEntry = webGatewayEntryPath();
   const env = buildWebChildEnv(selectedServerPort);
+  prepareWebGatewayLaunch(webEntry, env);
 
   if (webProcess) {
     await killProcess(webProcess, 'web');
@@ -309,7 +360,7 @@ async function restartWebGateway(): Promise<void> {
   webProcess = runChild('client-tools', webEntry, env);
 
   try {
-    await waitForWebGatewayReady(env, selectedWebPort);
+    await waitAndApplyWebGatewayReady(env, selectedWebPort);
   } catch (error) {
     if (webProcess) {
       await killProcess(webProcess, 'web');
@@ -348,7 +399,8 @@ async function applyDesktopHttpsSettings(update: Partial<PersistentDesktopHttpsC
       configDir: getAppConfigDir(),
       config: next,
       hostname: getHostname(),
-      httpPort: selectedWebPort || 5173,
+      httpPort: selectedWebPort || DEFAULT_WEB_HTTP_PORT,
+      httpsPort: selectedHttpsPort,
       lanAddresses: getLanIpv4Addresses(),
     });
     if (nextStatus.certificateStatus !== 'valid') {
@@ -395,6 +447,19 @@ function getAppLogsDir(): string {
   }
 }
 
+function getClientToolsLogPath(): string {
+  return path.join(getAppLogsDir(), 'client-tools.log');
+}
+
+function getClientToolsReadyPath(): string {
+  return path.join(getAppLogsDir(), 'client-tools-ready.json');
+}
+
+function getDevWebPort(): number {
+  const value = Number(process.env.WEB_PORT || process.env.TX5DR_WEB_DEV_PORT || DEFAULT_WEB_HTTP_PORT);
+  return Number.isInteger(value) && value > 0 && value < 65536 ? value : DEFAULT_WEB_HTTP_PORT;
+}
+
 /**
  * 从 Server 配置目录读取 .admin-token 文件
  * Server 启动时会在配置目录写入该文件
@@ -410,7 +475,13 @@ function readAdminTokenFile(): string | null {
 }
 
 // 寻找可用端口（从起始端口开始递增尝试），可选避免指定端口冲突
-async function findFreePort(start: number, maxStep = 50, avoid?: number, host = '0.0.0.0'): Promise<number> {
+async function findFreePort(
+  start: number,
+  maxStep = 50,
+  avoid?: number,
+  host = '0.0.0.0',
+  options?: { fallbackToRandom?: boolean },
+): Promise<number> {
   function tryPort(port: number): Promise<boolean> {
     return new Promise((resolve) => {
       const srv = net.createServer();
@@ -427,6 +498,9 @@ async function findFreePort(start: number, maxStep = 50, avoid?: number, host = 
     // eslint-disable-next-line no-await-in-loop
     const ok = await tryPort(candidate);
     if (ok) return candidate;
+  }
+  if (options?.fallbackToRandom === false) {
+    throw new Error(`No free port found from ${start} to ${start + maxStep}`);
   }
   // 回退：让系统分配随机端口
   return new Promise((resolve, reject) => {
@@ -752,10 +826,14 @@ function buildLogPathsHint(name: string): string {
   const logPath = log.transports.file.getFile().path;
   const logsDir = path.dirname(logPath);
   const serverLogPath = path.join(logsDir, 'tx5dr-server.log');
+  const clientToolsLogPath = path.join(logsDir, 'client-tools.log');
   if (name === 'server') {
-    return `Log files:\n  - ${serverLogPath}\n  - ${logPath}`;
+    return `Log files:\n  - ${serverLogPath}\n  - ${logPath}\n  - ${clientToolsLogPath}`;
   }
-  return `Log files:\n  - ${logPath}\n  - ${serverLogPath}`;
+  if (name === 'client-tools') {
+    return `Log files:\n  - ${clientToolsLogPath}\n  - ${logPath}\n  - ${serverLogPath}`;
+  }
+  return `Log files:\n  - ${logPath}\n  - ${serverLogPath}\n  - ${clientToolsLogPath}`;
 }
 
 function wireChildProcess(name: string, child: import('node:child_process').ChildProcess) {
@@ -1137,23 +1215,96 @@ async function waitForHttp(url: string, timeoutMs = 15000, intervalMs = 300): Pr
   return waitForUrl(url, timeoutMs, intervalMs);
 }
 
+interface WebGatewayReadyState {
+  pid?: number;
+  requestedPort?: number;
+  httpPort: number | null;
+  httpOk: boolean;
+  requestedHttpsPort?: number;
+  httpsPort: number | null;
+  httpsOk: boolean;
+  httpsEnabled?: boolean;
+  staticDir?: string;
+  staticDirExists?: boolean;
+  target?: string;
+  livekitTarget?: string | null;
+  devWebTarget?: string | null;
+  error?: unknown;
+}
+
+function readWebGatewayReadyFile(expectedPid?: number): WebGatewayReadyState | null {
+  try {
+    const raw = fs.readFileSync(getClientToolsReadyPath(), 'utf-8');
+    const parsed = JSON.parse(raw) as WebGatewayReadyState;
+    if (expectedPid && parsed.pid && parsed.pid !== expectedPid) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 async function waitForWebGatewayReady(
   env: Record<string, string>,
   webPort: number,
   timeoutMs = 15000,
   intervalMs = 200,
-): Promise<void> {
-  const httpOk = await waitForUrl(`http://127.0.0.1:${webPort}`, timeoutMs, intervalMs);
-  if (!httpOk) {
-    throw new Error('web_service_restart_timeout');
+  expectedPid?: number,
+): Promise<WebGatewayReadyState> {
+  const started = Date.now();
+  let ready: WebGatewayReadyState | null = null;
+  while (Date.now() - started <= timeoutMs) {
+    ready = readWebGatewayReadyFile(expectedPid);
+    if (ready) break;
+    await new Promise(r => setTimeout(r, intervalMs));
   }
 
-  if (env.HTTPS_ENABLE === '1' && env.HTTPS_PORT) {
-    const httpsOk = await waitForUrl(`https://127.0.0.1:${env.HTTPS_PORT}`, timeoutMs, intervalMs);
-    if (!httpsOk) {
-      throw new Error('web_https_restart_timeout');
-    }
+  if (!ready) {
+    logger.warn('web gateway ready file not found, falling back to HTTP probe', {
+      readyFile: getClientToolsReadyPath(),
+      expectedPid,
+      webPort,
+    });
+    const probeOk = await waitForUrl(`http://127.0.0.1:${webPort}`, timeoutMs, intervalMs);
+    ready = {
+      httpPort: webPort,
+      httpOk: probeOk,
+      httpsPort: null,
+      httpsOk: false,
+      target: env.TARGET,
+      livekitTarget: env.LIVEKIT_TARGET ?? null,
+      devWebTarget: env.DEV_WEB_TARGET ?? null,
+    };
   }
+
+  if (!ready.httpOk || !ready.httpPort) {
+    throw new Error(`web_gateway_bind_failed:${JSON.stringify(ready.error ?? {})}`);
+  }
+
+  const httpOk = await waitForUrl(`http://127.0.0.1:${ready.httpPort}`, timeoutMs, intervalMs);
+  if (!httpOk) {
+    throw new Error(`web_service_restart_timeout:http:${ready.httpPort}`);
+  }
+
+  if (ready.httpsOk && ready.httpsPort) {
+    const httpsOk = await waitForUrl(`https://127.0.0.1:${ready.httpsPort}`, timeoutMs, intervalMs);
+    if (!httpsOk) {
+      logger.warn('web HTTPS endpoint did not respond after ready signal', {
+        httpsPort: ready.httpsPort,
+        requestedHttpsPort: ready.requestedHttpsPort,
+      });
+      ready.httpsOk = false;
+      ready.httpsPort = null;
+    }
+  } else if (env.HTTPS_ENABLE === '1') {
+    logger.warn('web HTTPS endpoint is disabled or unavailable', {
+      requestedHttpsPort: ready.requestedHttpsPort,
+      error: ready.error ?? null,
+    });
+  }
+
+  return ready;
 }
 
 /**
@@ -1227,9 +1378,9 @@ function createDockMenu() {
  */
 function getWebUrl(): string {
   if (process.env.NODE_ENV === 'development' && !app.isPackaged) {
-    return 'http://localhost:5173';
+    return `http://localhost:${getDevWebPort()}`;
   }
-  return `http://127.0.0.1:${selectedWebPort || 5173}`;
+  return `http://127.0.0.1:${selectedWebPort || DEFAULT_WEB_HTTP_PORT}`;
 }
 
 /**
@@ -1443,12 +1594,16 @@ function openLogInTerminal() {
   const electronLogPath = log.transports.file.getFile().path;
   const logDir = path.dirname(electronLogPath);
   const serverLogPath = path.join(logDir, 'tx5dr-server.log');
+  const clientToolsLogPath = path.join(logDir, 'client-tools.log');
   logger.info(`opening logs in terminal: ${logDir}`);
 
   // 收集存在的日志文件
   const logFiles = [electronLogPath];
   if (fs.existsSync(serverLogPath)) {
     logFiles.push(serverLogPath);
+  }
+  if (fs.existsSync(clientToolsLogPath)) {
+    logFiles.push(clientToolsLogPath);
   }
   const tailTarget = logFiles.map(f => `"${f}"`).join(' ');
 
@@ -1621,6 +1776,7 @@ async function cleanup(): Promise<ChildShutdownResult[]> {
   selectedLiveKitPort = null;
   selectedServerPort = null;
   selectedWebPort = null;
+  selectedHttpsPort = null;
 
   // 清理系统托盘
   if (trayInstance) {
@@ -1659,51 +1815,67 @@ async function createWindow() {
   // 在 server 就绪后轮询获取
 
   if (isDevelopment) {
-    logger.info('development mode: using external server (http://localhost:5173)');
+    const devWebPort = getDevWebPort();
+    const devWebUrl = `http://localhost:${devWebPort}`;
+    logger.info(`development mode: using external server (${devWebUrl})`);
 
     // 在开发模式下，等待前端 Vite 服务器准备就绪
-    logger.info('waiting for frontend server...');
-    const webReady = await waitForHttp('http://localhost:5173', 30000, 300);
+    logger.info('waiting for frontend server...', {
+      url: devWebUrl,
+      timeoutMs: DEV_FRONTEND_READY_TIMEOUT_MS,
+    });
+    const webReady = await waitForHttp(devWebUrl, DEV_FRONTEND_READY_TIMEOUT_MS, 300);
 
     if (!webReady) {
-      logger.error('cannot connect to frontend server (http://localhost:5173)');
+      logger.error(`cannot connect to frontend server (${devWebUrl})`);
       errorType = 'TIMEOUT';
       hasStartupError = true;
-      const logPath = log.transports.file.getFile().path;
       dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Cannot connect to dev server (http://localhost:5173)\nPlease run yarn dev\n\nLog file: ${logPath}`);
+        `Cannot connect to dev server (${devWebUrl})\nPlease run yarn dev or yarn dev:electron\n\n${buildLogPathsHint('client-tools')}`);
       return;
     }
 
     logger.info('frontend server connected');
 
     // 等待后端服务器准备就绪
-    logger.info('waiting for backend server...');
-    const serverReady = await waitForHttp('http://localhost:4000', 30000, 300);
+    logger.info('waiting for backend server...', {
+      url: 'http://localhost:4000',
+      timeoutMs: DEV_BACKEND_READY_TIMEOUT_MS,
+    });
+    const serverReady = await waitForHttp('http://localhost:4000', DEV_BACKEND_READY_TIMEOUT_MS, 300);
 
     if (!serverReady) {
       logger.error('cannot connect to backend server (http://localhost:4000)');
       errorType = 'TIMEOUT';
       hasStartupError = true;
-      const logPath = log.transports.file.getFile().path;
       dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Cannot connect to backend server (http://localhost:4000)\nPlease run yarn dev\n\nLog file: ${logPath}`);
+        `Cannot connect to backend server (http://localhost:4000)\nPlease run yarn dev or yarn dev:electron\n\n${buildLogPathsHint('server')}`);
       return;
     }
 
     logger.info('backend server connected');
 
     selectedServerPort = 4000;
-    selectedWebPort = await findFreePort(5174, 50, selectedServerPort, '0.0.0.0');
+    try {
+      selectedWebPort = await findFreePort(devWebPort + 1, DEFAULT_PORT_SCAN_STEPS, selectedServerPort, '0.0.0.0', { fallbackToRandom: false });
+    } catch (error) {
+      logger.error('development browser gateway port range exhausted', error);
+      errorType = 'PORT_CONFLICT';
+      hasStartupError = true;
+      dialog.showErrorBox('TX-5DR - Startup Failed',
+        `Development browser gateway port range exhausted\n\n${error instanceof Error ? `${error.message}\n\n` : ''}${buildLogPathsHint('client-tools')}`);
+      return;
+    }
 
     const webEntry = webGatewayEntryPath();
     const webEnv = buildWebChildEnv(selectedServerPort);
+    prepareWebGatewayLaunch(webEntry, webEnv);
 
     logger.info(`starting development browser gateway on port ${selectedWebPort}`);
     webProcess = runChild('client-tools', webEntry, webEnv);
 
     try {
-      await waitForWebGatewayReady(webEnv, selectedWebPort);
+      await waitAndApplyWebGatewayReady(webEnv, selectedWebPort);
       logger.info('development browser gateway ready');
     } catch (error) {
       if (webProcess) {
@@ -1713,9 +1885,8 @@ async function createWindow() {
       logger.error('development browser gateway startup timeout', error);
       errorType = 'TIMEOUT';
       hasStartupError = true;
-      const logPath = log.transports.file.getFile().path;
       dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Development browser gateway startup timeout\n\n${error instanceof Error ? `${error.message}\n\n` : ''}Log file: ${logPath}`);
+        `Development browser gateway startup timeout\n\n${error instanceof Error ? `${error.message}\n\n` : ''}${buildLogPathsHint('client-tools')}`);
       return;
     }
   } else {
@@ -1735,7 +1906,18 @@ async function createWindow() {
     const livekitPort = livekitEnabled ? await findFreePort(7880, 50, undefined, '127.0.0.1') : null;
     const livekitTcpPort = livekitEnabled ? await findFreePort(7881, 50, livekitPort ?? undefined, '127.0.0.1') : null;
     const serverPort = await findFreePort(4000, 50, undefined, '0.0.0.0');
-    const webPort = await findFreePort(5173, 50, serverPort, '0.0.0.0'); // 避免和 serverPort 冲突
+    let webPort: number;
+    try {
+      webPort = await findFreePort(DEFAULT_WEB_HTTP_PORT, DEFAULT_PORT_SCAN_STEPS, serverPort, '0.0.0.0', { fallbackToRandom: false }); // 避免和 serverPort 冲突
+    } catch (error) {
+      logger.error('web gateway port range exhausted', error);
+      errorType = 'PORT_CONFLICT';
+      crashedProcessName = 'client-tools';
+      hasStartupError = true;
+      dialog.showErrorBox('TX-5DR - Startup Failed',
+        `Web gateway port range exhausted\n\n${error instanceof Error ? `${error.message}\n\n` : ''}${buildLogPathsHint('client-tools')}`);
+      return;
+    }
     selectedLiveKitPort = livekitPort;
     selectedServerPort = serverPort;
     selectedWebPort = webPort;
@@ -1857,10 +2039,11 @@ async function createWindow() {
     logger.info('backend server ready');
 
     const webEnv = buildWebChildEnv(serverPort);
+    prepareWebGatewayLaunch(webEntry, webEnv);
     webProcess = runChild('client-tools', webEntry, webEnv);
 
     try {
-      await waitForWebGatewayReady(webEnv, selectedWebPort);
+      await waitAndApplyWebGatewayReady(webEnv, selectedWebPort);
     } catch (error) {
       if (webProcess) {
         await killProcess(webProcess, 'web');
@@ -1913,10 +2096,10 @@ const startApp = async () => {
   const logsDir = getAppLogsDir();
   fs.mkdirSync(logsDir, { recursive: true });
   log.transports.file.resolvePathFn = () => path.join(logsDir, 'electron-main.log');
-  // Limit file log level in production; dev keeps default (silly = all levels)
+  // Keep production diagnostics detailed enough for startup/child-process issues.
   if (app.isPackaged) {
-    log.transports.file.level = 'warn';
-    log.transports.console.level = 'warn';
+    log.transports.file.level = 'info';
+    log.transports.console.level = 'info';
   }
   log.initialize();
   Object.assign(console, log.functions);
@@ -2088,13 +2271,13 @@ function setupIpcHandlers() {
       // 加载通联日志页面
       if (process.env.NODE_ENV === 'development' && !app.isPackaged) {
         // 开发模式：使用 Vite
-        const logbookUrl = `http://localhost:5173/logbook.html?${queryString}${authParam}`;
+        const logbookUrl = `${getWebUrl()}/logbook.html?${queryString}${authParam}`;
         logger.info(`IPC window:openLogbook loading dev URL: ${logbookUrl}`);
         await logbookWindow.loadURL(logbookUrl);
         logbookWindow.webContents.openDevTools();
       } else {
         // 生产模式：连接内置静态 web 服务
-        const fullUrl = `http://127.0.0.1:${selectedWebPort || 5173}/logbook.html?${queryString}${authParam}`;
+        const fullUrl = `${getWebUrl()}/logbook.html?${queryString}${authParam}`;
         logger.info(`IPC window:openLogbook loading prod URL: ${fullUrl}`);
         await logbookWindow.loadURL(fullUrl);
       }
@@ -2148,12 +2331,12 @@ function setupIpcHandlers() {
 
       // 加载频谱图页面
       if (process.env.NODE_ENV === 'development' && !app.isPackaged) {
-        const spectrumUrl = `http://localhost:5173/spectrum.html${authParam}`;
+        const spectrumUrl = `${getWebUrl()}/spectrum.html${authParam}`;
         logger.info(`IPC window:openSpectrumWindow loading dev URL: ${spectrumUrl}`);
         await spectrumWindow.loadURL(spectrumUrl);
         spectrumWindow.webContents.openDevTools();
       } else {
-        const fullUrl = `http://127.0.0.1:${selectedWebPort || 5173}/spectrum.html${authParam}`;
+        const fullUrl = `${getWebUrl()}/spectrum.html${authParam}`;
         logger.info(`IPC window:openSpectrumWindow loading prod URL: ${fullUrl}`);
         await spectrumWindow.loadURL(fullUrl);
       }

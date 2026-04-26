@@ -205,13 +205,13 @@ TX-5DR.app/Contents/Resources/
 
 1. `electron-main` 启动,使用便携式 Node.js 运行两个子进程:
    - `server:4000` - Fastify 后端
-   - `web-proxy:5173` - 静态服务 + 反向代理
-2. BrowserWindow 加载 `http://127.0.0.1:5173`
+   - `web-proxy:8076+` - 静态服务 + 反向代理（8076 起，冲突时向上递增）
+2. BrowserWindow 加载实际协商出的 `http://127.0.0.1:<web-port>`
 3. 前端通过 `/api` 路由与后端通信,web-proxy 负责代理
 
 **开发环境**:
 
-1. `yarn dev:electron` 启动 Vite dev server (5173) 和 Fastify (4000)
+1. `yarn dev:electron` 启动 Vite dev server (8076 起，冲突时向上递增) 和 Fastify (4000)
 2. Electron 连接到本地开发服务器
 3. 支持热重载
 

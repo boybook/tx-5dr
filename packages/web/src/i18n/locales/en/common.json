@@ -342,6 +342,8 @@
     "desktopHttpsValidTo": "Valid until: {{value}}",
     "desktopHttpsAccessUrl": "Recommended browser URL",
     "desktopHttpsAccessUrlPending": "Shown after you save and enable it",
+    "desktopHttpsEffectivePorts": "Active ports: HTTP {{httpPort}} / HTTPS {{httpsPort}}",
+    "desktopHttpsPortInactive": "inactive",
     "desktopHttpsLanHint": "Once enabled, both local and LAN access URLs will be shown here.",
     "desktopHttpsSelfSignedLimitations": "Self-signed limitations: browsers will show an \"unsafe\" or \"untrusted certificate\" warning; every device must manually continue on first visit; this is better for personal, internal, or testing use, not for long-term public access.",
     "desktopHttpsImportedHint": "Proper certificates are recommended for domain-based and public access. In v1, you manually import a PEM certificate and PEM private key; the app does not request Let's Encrypt certificates automatically.",
