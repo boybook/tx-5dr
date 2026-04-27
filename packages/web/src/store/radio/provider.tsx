@@ -103,11 +103,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
       logger,
     });
 
-    const wsClient = radioService.wsClientInstance;
-    Object.entries(eventMap).forEach(([event, handler]) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      wsClient.onWSEvent(event as any, handler as any);
-    });
+    const unsubscribeProviderEvents = radioService.replaceProviderEventHandlers(eventMap);
 
     connectionDispatch({ type: 'SET_RADIO_SERVICE', payload: radioService });
 
@@ -130,16 +126,10 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       clearTimeout(initialConnectTimer);
 
-      if (radioServiceRef.current) {
-        const currentWsClient = radioServiceRef.current.wsClientInstance;
-        Object.entries(eventMap).forEach(([event, handler]) => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          currentWsClient.offWSEvent(event as any, handler as any);
-        });
-      }
+      unsubscribeProviderEvents();
 
       // Don't disconnect the singleton — it will be reused by the next mount
-      // (HMR / React Strict Mode). The connection stays alive across re-mounts.
+      // (auth key changes / React Strict Mode). The connection stays alive across re-mounts.
       radioServiceRef.current = null;
     };
   }, []);

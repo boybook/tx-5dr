@@ -5,10 +5,10 @@ import { HamlibConfigSchema } from './radio.schema.js';
  * High-level runtime state tracked by the RadioPowerController.
  *
  * - `off`: radio is known to be off (or was never connected).
- * - `waking`: power-on command sent, waiting for the radio to respond.
- * - `awake`: radio is responding; the engine is being started (if autoEngine).
- * - `shutting_down`: engine is stopping in preparation for a power-off command.
- * - `entering_standby`: powerstat(2) sent, waiting for radio to drop CAT link.
+ * - `waking`: physical power-on command sent, waiting for the radio to respond.
+ * - `awake`: radio is physically responding; software engine startup is optional.
+ * - `shutting_down`: physical power-off command is being applied.
+ * - `entering_standby`: physical standby command is being applied.
  * - `failed`: last transition failed; UI should show an error + retry.
  */
 export const RadioPowerStateSchema = z.enum([
@@ -53,14 +53,15 @@ export type RadioPowerStateEvent = z.infer<typeof RadioPowerStateEventSchema>;
 /**
  * REST request body: POST /api/radio/power
  */
-/** Allowed target states for a power request. */
+/** Allowed physical radio target states for a power request. */
 export const RadioPowerTargetSchema = z.enum(['on', 'off', 'standby', 'operate']);
 export type RadioPowerTarget = z.infer<typeof RadioPowerTargetSchema>;
 
 export const RadioPowerRequestSchema = z.object({
   profileId: z.string().min(1),
+  /** Physical radio power target. This is not the TX-5DR software engine state. */
   state: RadioPowerTargetSchema,
-  /** Automatically start the engine after successful power-on. Defaults to true. */
+  /** Automatically start the TX-5DR engine after successful physical power-on. */
   autoEngine: z.boolean().optional().default(true),
 });
 export type RadioPowerRequest = z.infer<typeof RadioPowerRequestSchema>;
@@ -70,6 +71,7 @@ export type RadioPowerRequest = z.infer<typeof RadioPowerRequestSchema>;
  */
 export const RadioPowerResponseSchema = z.object({
   success: z.boolean(),
+  target: RadioPowerTargetSchema,
   state: RadioPowerStateSchema,
 });
 export type RadioPowerResponse = z.infer<typeof RadioPowerResponseSchema>;

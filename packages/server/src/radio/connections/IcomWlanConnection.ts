@@ -1218,7 +1218,7 @@ export class IcomWlanConnection
       } catch (error) {
         throw this.convertError(error, 'setPowerState');
       }
-    });
+    }, { critical: true });
   }
 
   /**

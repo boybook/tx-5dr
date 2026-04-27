@@ -2275,7 +2275,7 @@ export class HamlibConnection
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setPowerState');
       }
-    });
+    }, { critical: true });
   }
 
   async getRepeaterShift(): Promise<string> {

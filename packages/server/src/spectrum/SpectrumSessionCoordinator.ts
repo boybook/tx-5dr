@@ -343,8 +343,13 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   }
 
   private async buildState(kind: SpectrumKind | null): Promise<SpectrumSessionState> {
-    const currentRadioFrequency = await this.resolveCurrentRadioFrequency();
-    const voice = await this.resolveVoiceState(currentRadioFrequency);
+    const deferCatReads = this.shouldDeferRadioCatReads();
+    const currentRadioFrequency = deferCatReads
+      ? this.lastKnownRadioFrequency
+      : await this.resolveCurrentRadioFrequency();
+    const voice = deferCatReads
+      ? this.toVoiceState(this.cachedVoiceState)
+      : await this.resolveVoiceState(currentRadioFrequency);
     const standardFrequencyHz = await this.resolveCurrentStandardFrequency(currentRadioFrequency);
 
     switch (kind) {
@@ -673,7 +678,9 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     const currentRadioFrequency = normalizeRadioFrequency(currentRadioFrequencyOverride) ?? this.lastKnownRadioFrequency;
     const activeConnection = this.engine.getRadioManager().getActiveConnection();
     const now = Date.now();
+    const deferCatReads = this.shouldDeferRadioCatReads();
     const canTryDisplayState = Boolean(activeConnection?.getSpectrumDisplayState)
+      && !deferCatReads
       && (this.displayStateFailedAt === null || now - this.displayStateFailedAt >= DISPLAY_STATE_RETRY_MS);
     let configured: RadioSpectrumDisplayState | null = null;
     const cacheTtlMs = activeConnection instanceof IcomWlanConnection
@@ -835,7 +842,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   private async buildZoomState(display: Awaited<ReturnType<SpectrumSessionCoordinator['resolveRadioDisplayState']>>): Promise<ZoomState> {
     const connection = this.getZoomCapableConnection();
     const isCenterMode = display.mode === 'center' || display.mode === 'scroll-center';
-    if (!connection || !this.engine.getRadioManager().isConnected() || !isCenterMode) {
+    if (!connection || !this.engine.getRadioManager().isConnected() || !isCenterMode || this.shouldDeferRadioCatReads()) {
       return {
         levels: [],
         currentLevelId: null,
@@ -878,6 +885,10 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   }
 
   private async stepRadioZoom(direction: 'in' | 'out'): Promise<void> {
+    if (this.shouldDeferRadioCatReads()) {
+      return;
+    }
+
     const display = await this.resolveRadioDisplayState();
     const zoom = await this.buildZoomState(display);
     if (!zoom.visible || !zoom.currentLevelId) {
@@ -1027,7 +1038,11 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     display: Awaited<ReturnType<SpectrumSessionCoordinator['resolveRadioDisplayState']>>,
     standardFrequencyHint?: number | null,
   ): Promise<DigitalWindowState> {
-    if (!this.engine.getRadioManager().isConnected() || this.engine.getEngineMode() !== 'digital') {
+    if (
+      !this.engine.getRadioManager().isConnected()
+      || this.engine.getEngineMode() !== 'digital'
+      || this.shouldDeferRadioCatReads()
+    ) {
       this.clearPendingDigitalTransition();
       return this.createEmptyDigitalWindowState();
     }
@@ -1083,6 +1098,10 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   }
 
   private async toggleDigitalWindow(): Promise<void> {
+    if (this.shouldDeferRadioCatReads()) {
+      return;
+    }
+
     const display = await this.resolveRadioDisplayState();
     const state = await this.buildDigitalWindowState(display);
     if (!state.supported || !state.canToggle || state.standardFrequencyHz === null) {
@@ -1190,7 +1209,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   }
 
   private async doEnsureVoiceRadioFollowMode(): Promise<void> {
-    if (!this.engine.getRadioManager().isConnected()) {
+    if (!this.engine.getRadioManager().isConnected() || this.shouldDeferRadioCatReads()) {
       return;
     }
 
@@ -1219,6 +1238,10 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   }
 
   private getDisplayConfigurableConnection(): IRadioConnection | null {
+    if (this.shouldDeferRadioCatReads()) {
+      return null;
+    }
+
     const connection = this.engine.getRadioManager().getActiveConnection();
     if (!connection || typeof connection.configureSpectrumDisplay !== 'function') {
       return null;
@@ -1294,6 +1317,10 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       return this.toVoiceState(this.cachedVoiceState);
     }
 
+    if (this.shouldDeferRadioCatReads()) {
+      return this.toVoiceState(this.cachedVoiceState);
+    }
+
     let radioMode: string | null = this.cachedVoiceState.radioMode;
     let bandwidthLabel: string | number | null = this.cachedVoiceState.rawBandwidthLabel;
     const coreCapabilities = this.engine.getRadioManager().getCoreCapabilities();
@@ -1361,6 +1388,18 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
           offsetModel: null,
         };
     }
+  }
+
+  private shouldDeferRadioCatReads(): boolean {
+    const radioManager = this.engine.getRadioManager() as {
+      isCriticalRadioOperationActive?: () => boolean;
+      isSessionMutationInProgress?: () => boolean;
+    };
+
+    return Boolean(
+      radioManager.isCriticalRadioOperationActive?.()
+      || radioManager.isSessionMutationInProgress?.(),
+    );
   }
 
   private normalizeBandwidthProfile(bandwidthLabel: string | number | null): 'narrow' | 'normal' | 'wide' {

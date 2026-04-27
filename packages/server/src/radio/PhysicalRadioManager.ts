@@ -306,6 +306,24 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private intentionalDisconnectFlag: { active: boolean; reason?: string } = { active: false };
 
   /**
+   * 电源事务标志：物理 power 操作期间抑制 reconnect 与 stale session 错误。
+   */
+  private powerOperationFlag: { active: boolean; reason?: string } = { active: false };
+
+  /**
+   * wake flow 已经建立并 bootstrap 完成的 session。
+   * 只允许状态机下一次 CONNECT 回调一次性 adopt，普通 reconnect 不得复用旧 session。
+   */
+  private preconnectedSessionToAdopt: IRadioConnection | null = null;
+
+  /**
+   * 轻量 session mutation gate：串行化 connect / wake / disconnect，避免同一 CAT
+   * 端口被 reconnect 与 power 操作同时 open。
+   */
+  private sessionMutationTail: Promise<unknown> = Promise.resolve();
+  private sessionMutationActive = false;
+
+  /**
    * 连接事件清理器列表（用于断开时清理）
    */
   private connectionEventListeners: Map<string, (...args: any[]) => void> = new Map();
@@ -376,7 +394,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     // 如果已有连接，先内部断开（不触发事件，避免时序混乱）
     if (this.connection || this.radioActor) {
       logger.info('Disconnecting existing connection before applying new config');
-      await this.internalDisconnect('config switch');
+      await this.runSessionMutation('applyConfig disconnect', () => this.internalDisconnect('config switch'));
       // doConnect() 会在开头清理旧连接，不需要额外等待
     }
 
@@ -414,81 +432,85 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 设计约束：全程使用同一个 rig 实例，避免 ICOM 串口短时间反复 open/close 的稳定性问题
    */
   async wakeAndConnect(config: HamlibConfig): Promise<void> {
-    logger.info(`Wake flow starting: ${config.type}`);
+    await this.runSessionMutation('wakeAndConnect', async () => {
+      logger.info(`Wake flow starting: ${config.type}`);
 
-    if (this.connection || this.radioActor) {
-      await this.internalDisconnect('preparing wake flow');
-    }
-
-    this.currentConfig = config;
-    this.resetConnectionSessionState();
-
-    const connection = RadioConnectionFactory.create(config);
-    this.connection = connection;
-    this.setupConnectionEventForwarding();
-
-    try {
-      // 1. Control-only 连接
-      logger.info('Wake flow: opening control-only link');
-      await connection.connect(config, { mode: 'control-only' });
-
-      if (!connection.setPowerState) {
-        throw new RadioError({
-          code: RadioErrorCode.INVALID_CONFIG,
-          message: 'Active connection does not implement setPowerState',
-          userMessage: 'Power control is not supported by this connection type',
-          suggestions: [],
-        });
+      if (this.connection || this.radioActor) {
+        await this.internalDisconnect('preparing wake flow');
       }
 
-      // 2. 发送开机指令
-      // 注意：setPowerState 内部 race 一个超时，但 Hamlib 底层 rig_set_powerstat
-      // 在 ICOM 电台上可能阻塞很久（发送 175 字节 0xFE 前导 + 等电台 CI-V ACK）。
-      // 即使这里抛 timeout，前导也已经送达电台；readiness probe 才是判断电台是否
-      // 真的响应的权威入口。因此 catch 超时错误并继续。
-      logger.info('Wake flow: sending powerstat(on)');
+      this.currentConfig = config;
+      this.resetConnectionSessionState();
+
+      const connection = RadioConnectionFactory.create(config);
+      this.connection = connection;
+      this.setupConnectionEventForwarding();
+
       try {
-        await connection.setPowerState('on');
+        // 1. Control-only 连接
+        logger.info('Wake flow: opening control-only link');
+        await connection.connect(config, { mode: 'control-only' });
+
+        if (!connection.setPowerState) {
+          throw new RadioError({
+            code: RadioErrorCode.INVALID_CONFIG,
+            message: 'Active connection does not implement setPowerState',
+            userMessage: 'Power control is not supported by this connection type',
+            suggestions: [],
+          });
+        }
+
+        // 2. 发送开机指令
+        // 注意：setPowerState 内部 race 一个超时，但 Hamlib 底层 rig_set_powerstat
+        // 在 ICOM 电台上可能阻塞很久（发送 175 字节 0xFE 前导 + 等电台 CI-V ACK）。
+        // 即使这里抛 timeout，前导也已经送达电台；readiness probe 才是判断电台是否
+        // 真的响应的权威入口。因此 catch 超时错误并继续。
+        logger.info('Wake flow: sending powerstat(on)');
+        try {
+          await connection.setPowerState('on');
+        } catch (error) {
+          logger.warn('setPowerState("on") returned before ACK (continuing to readiness probe):', error);
+        }
+
+        // 3. 等待电台响应
+        const totalTimeout = config.type === 'icom-wlan' ? 30_000 : 20_000;
+        logger.info(`Wake flow: waiting for radio readiness (timeout ${totalTimeout}ms)`);
+        await this.pollRadioReadiness(connection, totalTimeout);
+
+        // 4. 升级为完整连接
+        logger.info('Wake flow: promoting control link to full connection');
+        if (!connection.promoteToFull) {
+          throw new RadioError({
+            code: RadioErrorCode.INVALID_CONFIG,
+            message: 'Active connection does not implement promoteToFull',
+            userMessage: 'Power control is not supported by this connection type',
+            suggestions: [],
+          });
+        }
+        await connection.promoteToFull();
+
+        // 5. Bootstrap（恢复频率、初始化 capability 管理器等）
+        logger.info('Wake flow: bootstrap');
+        await this.bootstrapConnectedSession(connection);
+        this.activateConnectedSession(connection);
+
+        // 6. 初始化状态机并让其进入 CONNECTED 态
+        this.preconnectedSessionToAdopt = connection;
+        await this.initializeStateMachine(config);
+        this.radioActor!.send({ type: 'CONNECT', config });
+        await this.waitForConnected(10_000);
+
+        logger.info('Wake flow completed successfully');
       } catch (error) {
-        logger.warn('setPowerState("on") returned before ACK (continuing to readiness probe):', error);
+        logger.error('Wake flow failed:', error);
+        // 清理失败的连接
+        this.cleanupConnectionListeners();
+        try { await connection.disconnect('wake flow failed'); } catch {}
+        this.connection = null;
+        this.preconnectedSessionToAdopt = null;
+        throw error;
       }
-
-      // 3. 等待电台响应
-      const totalTimeout = config.type === 'icom-wlan' ? 30_000 : 20_000;
-      logger.info(`Wake flow: waiting for radio readiness (timeout ${totalTimeout}ms)`);
-      await this.pollRadioReadiness(connection, totalTimeout);
-
-      // 4. 升级为完整连接
-      logger.info('Wake flow: promoting control link to full connection');
-      if (!connection.promoteToFull) {
-        throw new RadioError({
-          code: RadioErrorCode.INVALID_CONFIG,
-          message: 'Active connection does not implement promoteToFull',
-          userMessage: 'Power control is not supported by this connection type',
-          suggestions: [],
-        });
-      }
-      await connection.promoteToFull();
-
-      // 5. Bootstrap（恢复频率、初始化 capability 管理器等）
-      logger.info('Wake flow: bootstrap');
-      await this.bootstrapConnectedSession(connection);
-      this.activateConnectedSession(connection);
-
-      // 6. 初始化状态机并让其进入 CONNECTED 态
-      await this.initializeStateMachine(config);
-      this.radioActor!.send({ type: 'CONNECT', config });
-      await this.waitForConnected(10_000);
-
-      logger.info('Wake flow completed successfully');
-    } catch (error) {
-      logger.error('Wake flow failed:', error);
-      // 清理失败的连接
-      this.cleanupConnectionListeners();
-      try { await connection.disconnect('wake flow failed'); } catch {}
-      this.connection = null;
-      throw error;
-    }
+    });
   }
 
   /**
@@ -541,6 +563,28 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   /**
+   * 清除尚未被 RadioBridge 消费的主动断线标志。
+   * 仅在物理电源命令失败、需要保持当前连接/引擎时调用。
+   */
+  clearIntentionalDisconnect(): void {
+    if (this.intentionalDisconnectFlag.active) {
+      logger.info(`Cleared intentional disconnect: ${this.intentionalDisconnectFlag.reason || 'no reason'}`);
+    }
+    this.intentionalDisconnectFlag = { active: false };
+  }
+
+  async withPowerOperation<T>(reason: string, task: () => Promise<T>): Promise<T> {
+    this.powerOperationFlag = { active: true, reason };
+    this.stopReconnectForExternalOperation(reason);
+    try {
+      await this.waitForSessionMutationIdle(reason);
+      return await task();
+    } finally {
+      this.powerOperationFlag = { active: false };
+    }
+  }
+
+  /**
    * 查询 intentional disconnect 标志（不清除）
    */
   isIntentionalDisconnect(): boolean {
@@ -556,44 +600,54 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     return snapshot;
   }
 
+  private stopReconnectForExternalOperation(reason: string): void {
+    if (!this.radioActor) {
+      return;
+    }
+    logger.info(`Stopping pending reconnect before ${reason}`);
+    this.radioActor.send({ type: 'STOP_RECONNECT' });
+  }
+
   /**
    * 断开连接（外部接口，会触发事件）
    */
   async disconnect(reason?: string): Promise<void> {
-    // 防重入保护：避免重复断开导致 hamlib 线程冲突
-    if (this.isDisconnecting) {
-      logger.warn('Disconnect already in progress, skipping');
-      return;
-    }
-
-    this.isDisconnecting = true;
-
-    try {
-      const fastShutdown = isProcessShuttingDown();
-      logger.info(`Disconnecting: ${reason || 'user request'}`);
-
-      this.stopFrequencyMonitoring();
-      this.stopTunerMonitoring();
-
-      // 先主动清理连接资源
-      if (this.connection) {
-        try { await this.connection.disconnect(reason); } catch {}
-        this.cleanupConnectionListeners();
-        this.connection = null;
+    await this.runSessionMutation('disconnect', async () => {
+      // 防重入保护：避免重复断开导致 hamlib 线程冲突
+      if (this.isDisconnecting) {
+        logger.warn('Disconnect already in progress, skipping');
+        return;
       }
 
-      // 然后通知状态机
-      if (this.radioActor) {
-        this.radioActor.send({ type: 'DISCONNECT', reason });
-        if (!fastShutdown) {
-          try { await this.waitForState(RadioState.DISCONNECTED, 5000); } catch {}
-        } else {
-          logger.info('Skipping radio state wait during process shutdown');
+      this.isDisconnecting = true;
+
+      try {
+        const fastShutdown = isProcessShuttingDown();
+        logger.info(`Disconnecting: ${reason || 'user request'}`);
+
+        this.stopFrequencyMonitoring();
+        this.stopTunerMonitoring();
+
+        // 先主动清理连接资源
+        if (this.connection) {
+          try { await this.connection.disconnect(reason); } catch {}
+          this.cleanupConnectionListeners();
+          this.connection = null;
         }
+
+        // 然后通知状态机
+        if (this.radioActor) {
+          this.radioActor.send({ type: 'DISCONNECT', reason });
+          if (!fastShutdown) {
+            try { await this.waitForState(RadioState.DISCONNECTED, 5000); } catch {}
+          } else {
+            logger.info('Skipping radio state wait during process shutdown');
+          }
+        }
+      } finally {
+        this.isDisconnecting = false;
       }
-    } finally {
-      this.isDisconnecting = false;
-    }
+    });
 
     // isDisconnecting 已恢复 false，手动发出事件（单一事件出口）
     this.emit('disconnected', reason);
@@ -655,6 +709,23 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   isConnected(): boolean {
     return this.connection !== null && this.radioActor !== null &&
            isRadioState(this.radioActor, RadioState.CONNECTED);
+  }
+
+  /**
+   * 任何会改变 CAT session 所属权的事务都应让旁路读操作退避。
+   * power 事务也是 session mutation 的策略外壳，避免 spectrum/能力轮询
+   * 在关机、开机或断开窗口内继续访问即将失效的连接。
+   */
+  isSessionMutationInProgress(): boolean {
+    return this.isDisconnecting
+      || this.sessionMutationActive
+      || this.intentionalDisconnectFlag.active
+      || this.powerOperationFlag.active;
+  }
+
+  isCriticalRadioOperationActive(): boolean {
+    return this.isSessionMutationInProgress()
+      || Boolean(this.connection?.isCriticalOperationActive?.());
   }
 
   /**
@@ -1112,6 +1183,15 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       throw new Error('radio capability system is disabled for ICOM WLAN');
     }
 
+    if (!this.connection || !this.isConnected()) {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_STATE,
+        message: `Radio not connected, cannot write capability: ${id}`,
+        userMessage: 'Radio not connected',
+        suggestions: ['Connect to radio first'],
+      });
+    }
+
     if (id === 'tuner_switch') {
       if (typeof value !== 'boolean') {
         throw new Error('tuner_switch expects a boolean value');
@@ -1457,10 +1537,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       // 连接回调 - 使用传入的配置参数
       onConnect: async (cfg: HamlibConfig) => {
         logger.debug('State machine callback: onConnect');
-        // 如果连接已经由 wake flow 建立（control-only → promoted → bootstrapped），
-        // 则跳过重新连接，让状态机直接进入 CONNECTED
-        if (this.connection && this.connection.getState() === RadioConnectionState.CONNECTED) {
-          logger.info('Connection already established (wake flow), onConnect short-circuited');
+        if (this.tryAdoptPreconnectedSession()) {
           return;
         }
         // 如果未传入配置，回退到从 ConfigManager 读取
@@ -1535,22 +1612,73 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 执行连接（状态机回调）
    */
   private async doConnect(config: HamlibConfig): Promise<void> {
-    logger.info(`Executing connection: ${config.type}`);
-    this.resetConnectionSessionState();
-    await this.prepareConnectionSession(config);
+    await this.runSessionMutation('connect', async () => {
+      logger.info(`Executing connection: ${config.type}`);
+      this.resetConnectionSessionState();
+      await this.prepareConnectionSession(config);
 
-    const connection = this.createConnectionSession(config);
-    await this.openConnectionSession(connection, config);
-    await this.releasePTTAfterConnect(connection);
-    await this.bootstrapConnectedSession(connection);
-    this.activateConnectedSession(connection);
+      const connection = this.createConnectionSession(config);
+      await this.openConnectionSession(connection, config);
+      await this.releasePTTAfterConnect(connection);
+      await this.bootstrapConnectedSession(connection);
+      this.activateConnectedSession(connection);
 
-    logger.info('Connection established');
+      logger.info('Connection established');
+    });
   }
 
   private resetConnectionSessionState(): void {
+    this.preconnectedSessionToAdopt = null;
     this.resetCoreCapabilities();
     this.cachedTunerCapabilities = null;
+  }
+
+  private tryAdoptPreconnectedSession(): boolean {
+    const sessionToAdopt = this.preconnectedSessionToAdopt;
+    if (!sessionToAdopt) {
+      return false;
+    }
+
+    // One-shot: consume the adoption grant even if the session no longer matches.
+    this.preconnectedSessionToAdopt = null;
+
+    if (
+      this.connection === sessionToAdopt &&
+      sessionToAdopt.getState() === RadioConnectionState.CONNECTED
+    ) {
+      logger.info('Connection already established by wake flow, adopting preconnected session');
+      return true;
+    }
+
+    logger.warn('Ignoring stale preconnected session adoption request');
+    return false;
+  }
+
+  private async runSessionMutation<T>(label: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.sessionMutationTail.catch(() => undefined);
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.sessionMutationTail = previous.then(() => current);
+
+    await previous;
+    this.sessionMutationActive = true;
+    logger.debug(`Session mutation start: ${label}`);
+    try {
+      return await task();
+    } finally {
+      this.sessionMutationActive = false;
+      logger.debug(`Session mutation end: ${label}`);
+      release();
+    }
+  }
+
+  private async waitForSessionMutationIdle(reason: string): Promise<void> {
+    if (this.sessionMutationActive) {
+      logger.info(`Waiting for active session mutation before ${reason}`);
+    }
+    await this.sessionMutationTail.catch(() => undefined);
   }
 
   private async prepareConnectionSession(config: HamlibConfig): Promise<void> {
@@ -1633,6 +1761,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private async doDisconnect(reason?: string): Promise<void> {
     logger.info(`Executing disconnect: ${reason || ''}`);
 
+    this.preconnectedSessionToAdopt = null;
     this.stopFrequencyMonitoring();
     this.stopTunerMonitoring();
     this.capabilityManager.onDisconnected();
@@ -1659,6 +1788,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private async internalDisconnect(reason?: string): Promise<void> {
     logger.info(`Internal disconnect: ${reason || ''}`);
 
+    this.preconnectedSessionToAdopt = null;
     this.stopFrequencyMonitoring();
     this.stopTunerMonitoring();
 
@@ -1688,6 +1818,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         logger.info('Intentional disconnect flag active; suppressing CONNECTION_LOST');
         return;
       }
+      if (this.powerOperationFlag.active) {
+        logger.info('Power operation active; suppressing CONNECTION_LOST');
+        return;
+      }
       if (this.radioActor && !this.isDisconnecting) {
         this.radioActor.send({ type: 'CONNECTION_LOST', reason });
       }
@@ -1697,6 +1831,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     // 错误 → 转发给上层（RadioBridge）+ 通知状态机
     const onError = (error: Error) => {
+      if (this.shouldSuppressSessionCancellationError(error)) {
+        logger.debug(`Suppressing stale session error during session mutation: ${error.message}`);
+        return;
+      }
       logger.error(`Connection error: ${error.message}`);
       // 向上层转发错误（RadioBridge 监听此事件推送到前端）
       this.emit('error', error);
@@ -1704,6 +1842,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       // 不要让它们触发 HEALTH_CHECK_FAILED → 重连循环
       if (this.intentionalDisconnectFlag.active) {
         logger.info('Intentional disconnect flag active; suppressing HEALTH_CHECK_FAILED');
+        return;
+      }
+      if (this.powerOperationFlag.active) {
+        logger.info('Power operation active; suppressing HEALTH_CHECK_FAILED');
         return;
       }
       // 同时通知状态机触发重连逻辑
@@ -1781,6 +1923,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 被动断线后清理连接资源
    */
   private cleanupAfterDisconnect(): void {
+    this.preconnectedSessionToAdopt = null;
     this.stopFrequencyMonitoring();
     this.stopTunerMonitoring();
     this.capabilityManager.onDisconnected();
@@ -1896,10 +2039,31 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     return connection?.getType?.() === RadioConnectionType.ICOM_WLAN;
   }
 
+  private isSessionCancellationError(error: Error): boolean {
+    const message = error.message.toLowerCase();
+    return message.includes('radio session changed')
+      || message.includes('current state: disconnected')
+      || message.includes('radio not connected');
+  }
+
+  private shouldSuppressSessionCancellationError(error: Error): boolean {
+    if (!this.isSessionCancellationError(error)) {
+      return false;
+    }
+    return this.isDisconnecting
+      || this.sessionMutationActive
+      || this.intentionalDisconnectFlag.active
+      || this.powerOperationFlag.active;
+  }
+
   /**
    * 处理连接错误
    */
   private handleConnectionError(error: Error): void {
+    if (this.shouldSuppressSessionCancellationError(error)) {
+      logger.debug(`Suppressing stale session health error: ${error.message}`);
+      return;
+    }
     logger.error(`Connection error: ${error.message}`);
 
     // 触发状态机健康检查失败

@@ -9,7 +9,7 @@
 import React from 'react';
 import type { CapabilityDescriptor, CapabilityState } from '@tx5dr/contracts';
 import { WSMessageType } from '@tx5dr/contracts';
-import { useConnection } from '../store/radioStore';
+import { useConnection, useRadioState } from '../store/radioStore';
 
 // ===== 组件 Props 接口 =====
 
@@ -71,14 +71,16 @@ export function getSurfaceComponent(id: string): SurfaceCapabilityComponent | un
  */
 export function useCapabilityWriter(): (id: string, value?: boolean | number | string, action?: boolean) => void {
   const connection = useConnection();
+  const { state: radioState } = useRadioState();
 
   return React.useCallback(
     (id: string, value?: boolean | number | string, action?: boolean) => {
+      if (!radioState.radioConnected) return;
       const wsClient = connection.state.radioService?.wsClientInstance;
       if (!wsClient) return;
       wsClient.send(WSMessageType.WRITE_RADIO_CAPABILITY, { id, value, action });
     },
-    [connection.state.radioService],
+    [connection.state.radioService, radioState.radioConnected],
   );
 }
 

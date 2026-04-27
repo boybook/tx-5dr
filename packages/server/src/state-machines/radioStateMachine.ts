@@ -31,6 +31,26 @@ const logger = createLogger('RadioStateMachine');
 /** 指数退避延迟序列（毫秒） */
 const RECONNECT_DELAYS = [2000, 4000, 8000, 16000, 30000];
 
+function delayWithAbort(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
+  }
+
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener('abort', abort);
+    const timeoutId = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, delayMs);
+    const abort = () => {
+      clearTimeout(timeoutId);
+      cleanup();
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', abort, { once: true });
+  });
+}
+
 /**
  * 创建电台状态机
  */
@@ -70,9 +90,9 @@ export function createRadioStateMachine(
        * 重连 Actor（带退避延迟的连接尝试）
        */
       reconnectActor: fromPromise<void, { radioInput: RadioInput; config: HamlibConfig; delayMs: number }>(
-        async ({ input: { radioInput, config, delayMs } }) => {
+        async ({ input: { radioInput, config, delayMs }, signal }) => {
           logger.debug(`Waiting ${delayMs}ms before reconnect...`);
-          await new Promise(resolve => setTimeout(resolve, delayMs));
+          await delayWithAbort(delayMs, signal);
           logger.info('Starting reconnect attempt');
           await radioInput.onConnect(config);
           logger.info('Reconnect succeeded');

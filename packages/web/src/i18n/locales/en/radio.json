@@ -223,18 +223,18 @@
   "power": {
     "on": {
       "label": "Power On",
-      "description": "Send power-on command and start the engine once the radio responds.",
+      "description": "Send a physical radio power-on command; TX-5DR may start the engine after the radio responds.",
       "confirm": "Power on the radio?"
     },
     "off": {
       "label": "Power Off",
-      "description": "Stop the engine, send power-off command, then disconnect.",
-      "confirm": "Power off the radio? The engine will stop first."
+      "description": "Send a physical radio power-off command; TX-5DR stops related resources and disconnects after it succeeds.",
+      "confirm": "Power off the radio? TX-5DR will stop related resources after the command succeeds."
     },
     "standby": {
       "label": "Standby",
-      "description": "Put the radio into low-power standby. The CAT link will drop and the engine will stop.",
-      "confirm": "Enter standby? The engine will stop and you will need to power on again."
+      "description": "Put the radio into low-power standby. After success, the CAT link may drop and TX-5DR will stop related resources.",
+      "confirm": "Put the radio into standby? You may need to power on again to recover."
     },
     "operate": {
       "label": "Operate",

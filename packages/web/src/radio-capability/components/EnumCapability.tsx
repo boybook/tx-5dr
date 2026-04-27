@@ -44,7 +44,13 @@ export const EnumCapabilityPanel: React.FC<CapabilityComponentProps> = ({
           selectedKey={selectedKey ?? undefined}
           onSelectionChange={(key) => {
             const option = options.find((item) => String(item.value) === String(key));
-            if (option) {
+            if (
+              option
+              && isSupported
+              && canControl
+              && canWrite
+              && String(option.value) !== selectedKey
+            ) {
               onWrite(capabilityId, option.value);
             }
           }}
@@ -62,7 +68,13 @@ export const EnumCapabilityPanel: React.FC<CapabilityComponentProps> = ({
           onSelectionChange={(keys) => {
             const nextKey = Array.from(keys)[0];
             const option = options.find((item) => String(item.value) === String(nextKey));
-            if (option) {
+            if (
+              option
+              && isSupported
+              && canControl
+              && canWrite
+              && String(option.value) !== selectedKey
+            ) {
               onWrite(capabilityId, option.value);
             }
           }}

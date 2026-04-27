@@ -1,8 +1,8 @@
 /**
  * Radio power management routes
  *
- * Handles on/off/standby/operate transitions that are outside the capability
- * system because they affect connection reachability.
+ * Handles physical radio on/off/standby/operate transitions that are outside
+ * the capability system because they affect connection reachability.
  */
 import { FastifyInstance } from 'fastify';
 import { RadioPowerRequestSchema } from '@tx5dr/contracts';
@@ -32,8 +32,8 @@ export async function powerRoutes(fastify: FastifyInstance) {
     async (req, reply) => {
       try {
         const body = RadioPowerRequestSchema.parse(req.body);
-        await controller.handleRequest(body);
-        return reply.send({ success: true, state: body.state });
+        const state = await controller.handleRequest(body);
+        return reply.send({ success: true, target: body.state, state });
       } catch (e) {
         if (e instanceof Error && e.name === 'ZodError') {
           throw new RadioError({

@@ -9,7 +9,7 @@ vi.mock('icom-wlan-node', () => ({
 import { PhysicalRadioManager } from '../PhysicalRadioManager.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { RadioConnectionFactory } from '../connections/RadioConnectionFactory.js';
-import { RadioConnectionType } from '../connections/IRadioConnection.js';
+import { RadioConnectionState, RadioConnectionType } from '../connections/IRadioConnection.js';
 
 type TestRadioActor = {
   send: ReturnType<typeof vi.fn>;
@@ -24,6 +24,7 @@ type TestRadioConnection = {
   isCriticalOperationActive?: ReturnType<typeof vi.fn>;
   startBackgroundTasks?: ReturnType<typeof vi.fn>;
   getType?: ReturnType<typeof vi.fn>;
+  getState?: ReturnType<typeof vi.fn>;
   setKnownFrequency?: ReturnType<typeof vi.fn>;
   getTunerCapabilities?: ReturnType<typeof vi.fn>;
   getTunerStatus?: ReturnType<typeof vi.fn>;
@@ -35,11 +36,15 @@ type TestRadioConnection = {
   setMode?: ReturnType<typeof vi.fn>;
   startTuning?: ReturnType<typeof vi.fn>;
   applyOperatingState?: ReturnType<typeof vi.fn>;
+  setPowerState?: ReturnType<typeof vi.fn>;
+  probeResponding?: ReturnType<typeof vi.fn>;
+  promoteToFull?: ReturnType<typeof vi.fn>;
 };
 
 type PhysicalRadioManagerTestAccessor = {
   radioActor: TestRadioActor | null;
   connection: TestRadioConnection;
+  preconnectedSessionToAdopt?: TestRadioConnection | null;
   lastKnownFrequency: number | null;
   configManager: {
     getLastEngineMode: ReturnType<typeof vi.fn>;
@@ -58,6 +63,10 @@ type PhysicalRadioManagerTestAccessor = {
   postConnectSettleMs: number;
   checkFrequencyChange: () => Promise<void>;
   startFrequencyMonitoring: () => void;
+  setupConnectionEventForwarding: () => void;
+  handleConnectionError: (error: Error) => void;
+  initializeStateMachine: (config: HamlibConfig) => Promise<void>;
+  doConnect: (config: HamlibConfig) => Promise<void>;
   markCoreCapabilityUnsupported: (capability: string, error: Error) => void;
   coreCapabilityStates: Record<string, 'unknown' | 'supported' | 'unsupported'>;
 };
@@ -273,6 +282,249 @@ describe('PhysicalRadioManager', () => {
     });
   });
 
+  it('stops pending reconnect before a power operation', async () => {
+    await manager.withPowerOperation('power on', async () => undefined);
+
+    expect(send).toHaveBeenCalledWith({ type: 'STOP_RECONNECT' });
+  });
+
+  it('suppresses stale radio session errors during power/session mutations', async () => {
+    await manager.withPowerOperation('power off', async () => {
+      asTestManager(manager).handleConnectionError(new Error('radio session changed'));
+    });
+
+    expect(send).toHaveBeenCalledWith({ type: 'STOP_RECONNECT' });
+    expect(send).not.toHaveBeenCalledWith({
+      type: 'HEALTH_CHECK_FAILED',
+      error: expect.any(Error),
+    });
+  });
+
+  it('waits for an in-flight session mutation before starting a power operation', async () => {
+    let releaseConnect!: () => void;
+    const connectOpening = new Promise<void>((resolve) => {
+      releaseConnect = resolve;
+    });
+    const order: string[] = [];
+    const config = {
+      type: 'serial',
+      serial: { path: 'COM3', rigModel: 1049 },
+    } as HamlibConfig;
+    const testManager = asTestManager(manager);
+    testManager.radioActor = null;
+
+    const connection: TestRadioConnection = {
+      on: vi.fn(),
+      off: vi.fn(),
+      connect: vi.fn().mockImplementation(async () => {
+        order.push('connect-open-start');
+        await connectOpening;
+        order.push('connect-open-end');
+      }),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      isHealthy: vi.fn().mockReturnValue(true),
+      isCriticalOperationActive: vi.fn().mockReturnValue(false),
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
+      startBackgroundTasks: vi.fn(),
+      setPTT: vi.fn().mockResolvedValue(undefined),
+      setKnownFrequency: vi.fn(),
+      getTunerCapabilities: vi.fn().mockResolvedValue({ supported: false, hasSwitch: false, hasManualTune: false }),
+      getFrequency: vi.fn().mockResolvedValue(14074000),
+    };
+    vi.spyOn(RadioConnectionFactory, 'create').mockReturnValue(connection as never);
+
+    const connect = testManager.doConnect(config);
+    await vi.waitFor(() => {
+      expect(order).toEqual(['connect-open-start']);
+    });
+
+    const power = manager.withPowerOperation('power off', async () => {
+      order.push('power-operation');
+    });
+    await Promise.resolve();
+    expect(order).toEqual(['connect-open-start']);
+
+    releaseConnect();
+    await connect;
+    await power;
+
+    expect(order).toEqual(['connect-open-start', 'connect-open-end', 'power-operation']);
+  });
+
+  it('serializes wake flow behind an in-flight reconnect open', async () => {
+    let releaseReconnect!: () => void;
+    const reconnectOpening = new Promise<void>((resolve) => {
+      releaseReconnect = resolve;
+    });
+    const order: string[] = [];
+    const config = {
+      type: 'serial',
+      serial: { path: 'COM3', rigModel: 1049 },
+    } as HamlibConfig;
+    const testManager = asTestManager(manager);
+    testManager.radioActor = null;
+
+    const reconnectConnection: TestRadioConnection = {
+      on: vi.fn(),
+      off: vi.fn(),
+      connect: vi.fn().mockImplementation(async () => {
+        order.push('reconnect-open-start');
+        await reconnectOpening;
+        order.push('reconnect-open-end');
+      }),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      isHealthy: vi.fn().mockReturnValue(true),
+      isCriticalOperationActive: vi.fn().mockReturnValue(false),
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
+      startBackgroundTasks: vi.fn(),
+      setPTT: vi.fn().mockResolvedValue(undefined),
+      setKnownFrequency: vi.fn(),
+      getTunerCapabilities: vi.fn().mockResolvedValue({ supported: false, hasSwitch: false, hasManualTune: false }),
+      getFrequency: vi.fn().mockResolvedValue(14074000),
+    };
+    const wakeConnection: TestRadioConnection = {
+      on: vi.fn(),
+      off: vi.fn(),
+      connect: vi.fn().mockImplementation(async () => {
+        order.push('wake-open');
+      }),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      isHealthy: vi.fn().mockReturnValue(true),
+      isCriticalOperationActive: vi.fn().mockReturnValue(false),
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
+      getState: vi.fn().mockReturnValue(RadioConnectionState.CONNECTED),
+      setPowerState: vi.fn().mockResolvedValue(undefined),
+      probeResponding: vi.fn().mockResolvedValue(true),
+      promoteToFull: vi.fn().mockResolvedValue(undefined),
+      startBackgroundTasks: vi.fn(),
+      setKnownFrequency: vi.fn(),
+      getTunerCapabilities: vi.fn().mockResolvedValue({ supported: false, hasSwitch: false, hasManualTune: false }),
+      getFrequency: vi.fn().mockResolvedValue(14074000),
+    };
+    vi.spyOn(RadioConnectionFactory, 'create')
+      .mockReturnValueOnce(reconnectConnection as never)
+      .mockReturnValueOnce(wakeConnection as never);
+
+    const reconnect = testManager.doConnect(config);
+    await vi.waitFor(() => {
+      expect(order).toEqual(['reconnect-open-start']);
+    });
+
+    const wake = manager.wakeAndConnect(config);
+    await Promise.resolve();
+    expect(wakeConnection.connect).not.toHaveBeenCalled();
+
+    releaseReconnect();
+    await reconnect;
+    await wake;
+
+    expect(order).toEqual(['reconnect-open-start', 'reconnect-open-end', 'wake-open']);
+  });
+
+  it('does not adopt a stale connected session during normal reconnect', async () => {
+    const config = {
+      type: 'serial',
+      serial: { path: 'COM3', rigModel: 1049 },
+    } as HamlibConfig;
+    const testManager = asTestManager(manager);
+    testManager.radioActor = null;
+    testManager.connection = {
+      getState: vi.fn().mockReturnValue(RadioConnectionState.CONNECTED),
+    };
+    const doConnect = vi.spyOn(testManager, 'doConnect').mockResolvedValue(undefined);
+
+    await testManager.initializeStateMachine(config);
+    const actor = testManager.radioActor as any;
+    actor.send({ type: 'CONNECT', config });
+
+    await vi.waitFor(() => {
+      expect(doConnect).toHaveBeenCalledWith(config);
+    });
+
+    actor.stop();
+  });
+
+  it('keeps reconnecting when a stale connected session cannot reopen', async () => {
+    vi.useFakeTimers();
+    try {
+      const config = {
+        type: 'serial',
+        serial: { path: 'COM3', rigModel: 1049 },
+      } as HamlibConfig;
+      const testManager = asTestManager(manager);
+      testManager.radioActor = null;
+      testManager.connection = {
+        getState: vi.fn().mockReturnValue(RadioConnectionState.CONNECTED),
+      };
+      const connected = vi.fn();
+      manager.on('connected', connected);
+      const doConnect = vi.spyOn(testManager, 'doConnect')
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('device missing'));
+
+      await testManager.initializeStateMachine(config);
+      const actor = testManager.radioActor as any;
+
+      actor.send({ type: 'CONNECT', config });
+      await vi.waitFor(() => {
+        expect(connected).toHaveBeenCalledTimes(1);
+      });
+
+      actor.send({
+        type: 'HEALTH_CHECK_FAILED',
+        error: new Error('IO error'),
+      });
+      expect(actor.getSnapshot().value).toBe('reconnecting');
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await vi.waitFor(() => {
+        expect(doConnect).toHaveBeenCalledTimes(2);
+      });
+
+      expect(connected).toHaveBeenCalledTimes(1);
+      expect(actor.getSnapshot().value).toBe('reconnecting');
+
+      actor.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('adopts a wake preconnected session once only', async () => {
+    const config = {
+      type: 'serial',
+      serial: { path: 'COM3', rigModel: 1049 },
+    } as HamlibConfig;
+    const testManager = asTestManager(manager);
+    const preconnectedSession: TestRadioConnection = {
+      getState: vi.fn().mockReturnValue(RadioConnectionState.CONNECTED),
+    };
+    testManager.radioActor = null;
+    testManager.connection = preconnectedSession;
+    testManager.preconnectedSessionToAdopt = preconnectedSession;
+    const doConnect = vi.spyOn(testManager, 'doConnect').mockResolvedValue(undefined);
+
+    await testManager.initializeStateMachine(config);
+    let actor = testManager.radioActor as any;
+    actor.send({ type: 'CONNECT', config });
+
+    await vi.waitFor(() => {
+      expect(actor.getSnapshot().value).toBe('connected');
+    });
+    expect(doConnect).not.toHaveBeenCalled();
+    actor.stop();
+
+    await testManager.initializeStateMachine(config);
+    actor = testManager.radioActor as any;
+    actor.send({ type: 'CONNECT', config });
+
+    await vi.waitFor(() => {
+      expect(doConnect).toHaveBeenCalledWith(config);
+    });
+
+    actor.stop();
+  });
+
 
   it('queues a serialized capability refresh after direct frequency writes', async () => {
     const refreshAll = vi.spyOn(asTestManager(manager).capabilityManager, 'refreshAll').mockResolvedValue(undefined);
@@ -461,6 +713,8 @@ describe('PhysicalRadioManager', () => {
   });
 
   it('routes tuner action capability writes through the manager tuning flow', async () => {
+    asTestManager(manager).connection = {};
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
     const startTuning = vi.spyOn(manager, 'startTuning').mockResolvedValue(true);
     const capabilityWrite = vi.spyOn(asTestManager(manager).capabilityManager, 'writeCapability');
 
@@ -471,6 +725,8 @@ describe('PhysicalRadioManager', () => {
   });
 
   it('fails tuner action capability writes when tuning does not complete successfully', async () => {
+    asTestManager(manager).connection = {};
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
     vi.spyOn(manager, 'startTuning').mockResolvedValue(false);
     const capabilityWrite = vi.spyOn(asTestManager(manager).capabilityManager, 'writeCapability');
 
@@ -480,6 +736,8 @@ describe('PhysicalRadioManager', () => {
   });
 
   it('routes tuner switch capability writes through the manager tuner control flow', async () => {
+    asTestManager(manager).connection = {};
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
     const setTuner = vi.spyOn(manager, 'setTuner').mockResolvedValue(undefined);
     const capabilityWrite = vi.spyOn(asTestManager(manager).capabilityManager, 'writeCapability');
 

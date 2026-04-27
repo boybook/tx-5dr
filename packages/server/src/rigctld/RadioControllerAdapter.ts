@@ -252,11 +252,9 @@ export class RadioControllerAdapter implements RadioController {
   }
 
   /**
-   * Powerstat write routes through RadioPowerController so all the usual
-   * Profile-level side-effects (engine wake / teardown, active profile
-   * synchronization, broadcast events) are honored. Without that plumbing a
-   * direct `connection.setPowerState()` would leave the engine state machine
-   * out of step with the physical rig.
+   * Powerstat write routes through RadioPowerController so physical radio
+   * power, CAT reachability, active profile synchronization, and optional
+   * engine side-effects stay in one orchestration path.
    */
   async setPowerStat(on: boolean): Promise<void> {
     const powerController = RadioPowerController.tryGetInstance();
