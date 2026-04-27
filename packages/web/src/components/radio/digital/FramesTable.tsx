@@ -594,26 +594,21 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
           </div>
         </ScrollShadow>
 
-        <div
-          className={`
-            absolute inset-x-0 bottom-3 z-10 flex justify-center px-3 transition-all duration-150 ease-out
-            ${showScrollToBottomButton ? 'pointer-events-none opacity-100 translate-y-0' : 'pointer-events-none opacity-0 translate-y-1'}
-          `}
-          aria-hidden={!showScrollToBottomButton}
-        >
-          <Button
-            size="sm"
-            variant="light"
-            radius="full"
-            aria-label={t('common:framesTable.scrollToBottom')}
-            className="pointer-events-auto h-7 min-w-0 bg-background/75 px-3 text-xs text-default-500 shadow-sm ring-1 ring-default-200/70 backdrop-blur supports-[backdrop-filter]:bg-background/60"
-            onPress={handleScrollToBottomClick}
-            startContent={<FontAwesomeIcon icon={faArrowDown} className="text-[10px]" />}
-            isDisabled={!showScrollToBottomButton}
-          >
-            {t('common:framesTable.scrollToBottom')}
-          </Button>
-        </div>
+        {showScrollToBottomButton && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center px-3 transition-all duration-150 ease-out">
+            <Button
+              size="sm"
+              variant="light"
+              radius="full"
+              aria-label={t('common:framesTable.scrollToBottom')}
+              className="pointer-events-auto h-7 min-w-0 bg-background/75 px-3 text-xs text-default-500 shadow-sm ring-1 ring-default-200/70 backdrop-blur supports-[backdrop-filter]:bg-background/60"
+              onPress={handleScrollToBottomClick}
+              startContent={<FontAwesomeIcon icon={faArrowDown} className="text-[10px]" />}
+            >
+              {t('common:framesTable.scrollToBottom')}
+            </Button>
+          </div>
+        )}
       </div>
     </>
   );
