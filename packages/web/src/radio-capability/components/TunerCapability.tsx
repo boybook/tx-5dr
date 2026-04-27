@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useCallback } from 'react';
-import { Switch, Button, Spinner, Tooltip } from '@heroui/react';
+import { Switch, Button, Tooltip } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
@@ -16,6 +16,7 @@ import { useCapabilityState } from '../../store/radioStore';
 
 import { useCan } from '../../store/authStore';
 import { createLogger } from '../../utils/logger';
+import { getCapabilityUnavailableText, isCapabilityAvailable } from '../availability';
 
 const logger = createLogger('TunerCapability');
 
@@ -30,6 +31,8 @@ export const TunerCapabilityPanel: React.FC<CapabilityComponentProps> = ({
   const { t } = useTranslation();
   const canControl = useCan('execute', 'RadioControl');
   const [isLoading, setIsLoading] = useState(false);
+  const switchState = useCapabilityState('tuner_switch');
+  const tuneState = useCapabilityState('tuner_tune');
 
   // tuner_switch 和 tuner_tune 共用一个面板卡片（compoundGroup）
   // 这里根据 compoundRole 渲染不同控件
@@ -38,11 +41,13 @@ export const TunerCapabilityPanel: React.FC<CapabilityComponentProps> = ({
   if (role === 'switch') {
     const enabled = typeof state?.value === 'boolean' ? state.value : false;
     const isSupported = state?.supported ?? false;
-    const tuningStatus = (state?.meta as { status?: string } | undefined)?.status;
+    const isAvailable = isCapabilityAvailable(state);
+    const unavailableText = getCapabilityUnavailableText(state, t, capabilityId)
+      ?? getCapabilityUnavailableText(tuneState, t, 'tuner_tune');
     const swr = (state?.meta as { swr?: number } | undefined)?.swr;
 
     const handleToggle = useCallback(async () => {
-      if (!canControl || isLoading) return;
+      if (!canControl || !isAvailable || isLoading) return;
       setIsLoading(true);
       try {
         onWrite(capabilityId, !enabled);
@@ -50,7 +55,7 @@ export const TunerCapabilityPanel: React.FC<CapabilityComponentProps> = ({
         // 等待 WS 确认后 setIsLoading(false)，通过 state 变化检测
         setTimeout(() => setIsLoading(false), 2000);
       }
-    }, [canControl, isLoading, capabilityId, enabled, onWrite]);
+    }, [canControl, isAvailable, isLoading, capabilityId, enabled, onWrite]);
 
     return (
       <div className="flex items-center justify-between gap-4">
@@ -70,17 +75,14 @@ export const TunerCapabilityPanel: React.FC<CapabilityComponentProps> = ({
               SWR {swr.toFixed(2)}
             </div>
           )}
-          {tuningStatus === 'tuning' && (
-            <div className="text-xs text-warning mt-0.5 flex items-center gap-1">
-              <Spinner size="sm" color="warning" />
-              {t('radio:tuner.tuning')}
-            </div>
+          {unavailableText && (
+            <div className="text-xs text-warning-600 mt-0.5">{unavailableText}</div>
           )}
         </div>
         <Switch
           isSelected={enabled}
           onValueChange={handleToggle}
-          isDisabled={!isSupported || !canControl || isLoading}
+          isDisabled={!isSupported || !isAvailable || !canControl || isLoading}
           size="sm"
         />
       </div>
@@ -89,30 +91,35 @@ export const TunerCapabilityPanel: React.FC<CapabilityComponentProps> = ({
 
   if (role === 'action') {
     // tuner_switch 的状态用于判断调谐器是否已启用
-    const switchState = useCapabilityState('tuner_switch');
     const tunerEnabled = typeof switchState?.value === 'boolean' ? switchState.value : false;
     const tuningStatus = (switchState?.meta as { status?: string } | undefined)?.status;
     const isTuning = tuningStatus === 'tuning';
+    const isTuneLoading = isLoading || isTuning;
     const isSupported = state?.supported ?? false;
+    const isAvailable = isCapabilityAvailable(state) && isCapabilityAvailable(switchState);
 
     const handleTune = useCallback(async () => {
-      if (!canControl || isTuning || !tunerEnabled) return;
+      if (!canControl || !isAvailable || isTuneLoading || !tunerEnabled) return;
+      setIsLoading(true);
       logger.info('Manual tuning triggered');
       onWrite(capabilityId, undefined, true);
-    }, [canControl, isTuning, tunerEnabled, capabilityId, onWrite]);
+      setTimeout(() => setIsLoading(false), 2000);
+    }, [canControl, isAvailable, isTuneLoading, tunerEnabled, capabilityId, onWrite]);
 
     return (
-      <Button
-        size="sm"
-        variant="flat"
-        color={isTuning ? 'warning' : 'default'}
-        onPress={handleTune}
-        isLoading={isTuning}
-        isDisabled={!isSupported || !canControl || !tunerEnabled}
-        className="w-full"
-      >
-        {isTuning ? t('radio:tuner.tuning') : t(descriptor.labelI18nKey)}
-      </Button>
+      <div className="space-y-1">
+        <Button
+          size="sm"
+          variant="flat"
+          color={isTuneLoading ? 'warning' : 'default'}
+          onPress={handleTune}
+          isLoading={isTuneLoading}
+          isDisabled={!isSupported || !isAvailable || !canControl || !tunerEnabled || isTuneLoading}
+          className="w-full"
+        >
+          {isTuneLoading ? t('radio:tuner.tuning') : t(descriptor.labelI18nKey)}
+        </Button>
+      </div>
     );
   }
 
@@ -128,31 +135,39 @@ export const TunerCapabilitySurface: React.FC = () => {
   const tuneState = useCapabilityState('tuner_tune');
   const onWrite = useCapabilityWriter();
 
-  const [isLoading, setIsLoading] = useState(false);
+  const [isSwitchLoading, setIsSwitchLoading] = useState(false);
+  const [isTuneLoading, setIsTuneLoading] = useState(false);
 
   const enabled = typeof switchState?.value === 'boolean' ? switchState.value : false;
   const tunerSupported = switchState?.supported ?? false;
   const tuneSupported = tuneState?.supported ?? false;
+  const tunerAvailable = isCapabilityAvailable(switchState);
+  const tuneAvailable = isCapabilityAvailable(tuneState);
+  const unavailableText = getCapabilityUnavailableText(switchState, t, 'tuner_switch')
+    ?? getCapabilityUnavailableText(tuneState, t, 'tuner_tune');
   const tuningStatus = (switchState?.meta as { status?: string } | undefined)?.status;
   const swr = (switchState?.meta as { swr?: number } | undefined)?.swr;
   const isTuning = tuningStatus === 'tuning';
+  const isManualTuneLoading = isTuneLoading || isTuning;
 
   if (!canControl || !tunerSupported) {
     return null;
   }
 
   const handleToggle = useCallback(() => {
-    if (!canControl) return;
-    setIsLoading(true);
+    if (!canControl || !tunerAvailable) return;
+    setIsSwitchLoading(true);
     onWrite('tuner_switch', !enabled);
-    setTimeout(() => setIsLoading(false), 2000);
-  }, [canControl, enabled, onWrite]);
+    setTimeout(() => setIsSwitchLoading(false), 2000);
+  }, [canControl, tunerAvailable, enabled, onWrite]);
 
   const handleTune = useCallback(() => {
-    if (!canControl || !enabled) return;
+    if (!canControl || !tunerAvailable || !tuneAvailable || !enabled || isManualTuneLoading) return;
+    setIsTuneLoading(true);
     logger.info('Manual tuning triggered from surface');
     onWrite('tuner_tune', undefined, true);
-  }, [canControl, enabled, onWrite]);
+    setTimeout(() => setIsTuneLoading(false), 2000);
+  }, [canControl, tunerAvailable, tuneAvailable, enabled, isManualTuneLoading, onWrite]);
 
   return (
     <div className="py-2 space-y-3 min-w-[160px]">
@@ -163,7 +178,7 @@ export const TunerCapabilitySurface: React.FC = () => {
           <Switch
             isSelected={enabled}
             onValueChange={handleToggle}
-            isDisabled={!canControl || isLoading}
+            isDisabled={!canControl || !tunerAvailable || isSwitchLoading}
             size="sm"
           />
         </div>
@@ -174,13 +189,13 @@ export const TunerCapabilitySurface: React.FC = () => {
         <Button
           size="sm"
           variant="flat"
-          color={isTuning ? 'warning' : 'default'}
+          color={isManualTuneLoading ? 'warning' : 'default'}
           onPress={handleTune}
-          isLoading={isTuning}
-          isDisabled={!canControl || !enabled || isTuning}
+          isLoading={isManualTuneLoading}
+          isDisabled={!canControl || !tunerAvailable || !tuneAvailable || !enabled || isManualTuneLoading}
           className="w-full"
         >
-          {isTuning ? t('radio:tuner.tuning') : t('radio:capability.tuner_tune.label')}
+          {isManualTuneLoading ? t('radio:tuner.tuning') : t('radio:capability.tuner_tune.label')}
         </Button>
       )}
 
@@ -196,6 +211,9 @@ export const TunerCapabilitySurface: React.FC = () => {
             </span>
           </div>
         </div>
+      )}
+      {unavailableText && (
+        <p className="text-xs text-warning-600">{unavailableText}</p>
       )}
     </div>
   );

@@ -335,6 +335,11 @@ export class HamlibConnection
   private supportedParms: Set<string> = new Set();
 
   /**
+   * 电台支持的 VFO 操作集合（连接时检测）
+   */
+  private supportedVfoOps: Set<string> = new Set();
+
+  /**
    * Hamlib rig caps 中声明的 TX 频率/功率范围。
    */
   private txFrequencyRanges: TxFrequencyRange[] = [];
@@ -623,6 +628,7 @@ export class HamlibConnection
     await this.detectSupportedModes();
     this.detectSupportedFunctions();
     this.detectSupportedParms();
+    this.detectSupportedVfoOps();
     this.detectTxFrequencyRanges();
     await this.initializeRigStateSnapshot();
 
@@ -648,6 +654,7 @@ export class HamlibConnection
     this.supportedModes.clear();
     this.supportedFunctions.clear();
     this.supportedParms.clear();
+    this.supportedVfoOps.clear();
     this.txFrequencyRanges = [];
     this.currentRadioMode = null;
 
@@ -910,6 +917,27 @@ export class HamlibConnection
       logger.warn('Failed to detect supported radio parameters', error);
     }
   }
+
+  private detectSupportedVfoOps(): void {
+    if (!this.rig || typeof (this.rig as any).getSupportedVfoOps !== 'function') {
+      this.supportedVfoOps.clear();
+      logger.warn('Hamlib VFO operation detection is not available on this build');
+      return;
+    }
+
+    try {
+      const ops = ((this.rig as any).getSupportedVfoOps() as unknown[])
+        .filter((op): op is string => typeof op === 'string')
+        .map((op) => op.trim().toUpperCase())
+        .filter((op) => op.length > 0);
+      this.supportedVfoOps = new Set(ops);
+      logger.info('Supported radio VFO operations detected', { ops: Array.from(this.supportedVfoOps).sort() });
+    } catch (error) {
+      this.supportedVfoOps.clear();
+      logger.warn('Failed to detect supported radio VFO operations', error);
+    }
+  }
+
 
   private detectTxFrequencyRanges(): void {
     if (!this.rig || typeof this.rig.getFrequencyRanges !== 'function') {
@@ -1220,10 +1248,28 @@ export class HamlibConnection
     return this.runSerializedTask('getTunerCapabilities', async () => {
       this.checkConnected();
 
+      const hasStaticFunctionInfo = this.supportedFunctions.size > 0;
+      const hasStaticVfoOpInfo = this.supportedVfoOps.size > 0;
+      const staticHasSwitch = this.supportedFunctions.has('TUNER');
+      const staticHasManualTune = this.supportedVfoOps.has('TUNE');
+
+      if (this.currentConfig?.type === 'serial' || hasStaticFunctionInfo || hasStaticVfoOpInfo) {
+        const supported = staticHasSwitch || staticHasManualTune;
+        logger.debug('Tuner capabilities from Hamlib static caps', {
+          supported,
+          hasSwitch: staticHasSwitch,
+          hasManualTune: staticHasManualTune,
+        });
+        return {
+          supported,
+          hasSwitch: staticHasSwitch,
+          hasManualTune: staticHasManualTune,
+        };
+      }
+
       try {
-        // 通过实际读取 TUNER 函数状态来探测支持情况。
-        // getSupportedFunctions() 只返回当前激活的功能，天调关闭时 TUNER 不在列表中，
-        // 导致误判为不支持。直接调用 getFunction('TUNER') 才能准确区分「关闭」和「不存在」。
+        // Network rigctld may not expose useful static caps for the remote rig.
+        // Fall back to the historical runtime probe in that case.
         await Promise.race([
           this.rig!.getFunction('TUNER'),
           new Promise((_, reject) =>
@@ -1325,7 +1371,7 @@ export class HamlibConnection
         this.lastSuccessfulOperation = Date.now();
         logger.debug(`Tuner set: ${enabled ? 'enabled' : 'disabled'}`);
       } catch (error) {
-        throw this.convertError(error, 'setTuner');
+        throw this.convertOptionalOperationError(error, 'setTuner');
       }
     });
   }
@@ -1357,7 +1403,7 @@ export class HamlibConnection
 
         return status;
       } catch (error) {
-        throw this.convertError(error, 'getTunerStatus');
+        throw this.convertOptionalOperationError(error, 'getTunerStatus');
       }
     });
   }
@@ -1383,7 +1429,7 @@ export class HamlibConnection
         return true;
       } catch (error) {
         logger.error('Failed to start tuning:', error);
-        throw this.convertError(error, 'startTuning');
+        throw this.convertOptionalOperationError(error, 'startTuning');
       }
     });
   }
@@ -1404,6 +1450,10 @@ export class HamlibConnection
 
   isSupportedParm(parmName: string): boolean {
     return this.supportedParms.has(parmName.trim().toUpperCase());
+  }
+
+  isSupportedVfoOp(opName: string): boolean {
+    return this.supportedVfoOps.has(opName.trim().toUpperCase());
   }
 
   /**
@@ -2868,6 +2918,7 @@ export class HamlibConnection
       this.supportedModes.clear();
       this.supportedFunctions.clear();
       this.supportedParms.clear();
+      this.supportedVfoOps.clear();
       this.txFrequencyRanges = [];
       this.currentRadioMode = null;
       this.splitSupportState = 'unknown';

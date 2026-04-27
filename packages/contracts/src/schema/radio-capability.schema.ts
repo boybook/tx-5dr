@@ -42,6 +42,18 @@ export type CapabilityOptionValue = z.infer<typeof CapabilityOptionValueSchema>;
 export const CapabilityValueSchema = z.union([z.boolean(), z.number(), z.string()]);
 export type CapabilityValue = z.infer<typeof CapabilityValueSchema>;
 
+export const CapabilityAvailabilitySchema = z.enum(['available', 'unavailable', 'unknown']);
+export type CapabilityAvailability = z.infer<typeof CapabilityAvailabilitySchema>;
+
+export const CapabilityAvailabilityReasonSchema = z.enum([
+  'runtime_error',
+  'busy',
+  'unsupported_by_current_mode',
+  'radio_reported_unavailable',
+  'unknown',
+]);
+export type CapabilityAvailabilityReason = z.infer<typeof CapabilityAvailabilityReasonSchema>;
+
 /**
  * 枚举项定义。
  */
@@ -161,8 +173,20 @@ export const CapabilityStateSchema = z.object({
   /** 能力 ID，与 CapabilityDescriptor.id 对应 */
   id: z.string(),
 
-  /** 当前连接的电台是否支持此能力（探测结果） */
+  /** 当前连接的电台型号/后端是否声明支持此能力 */
   supported: z.boolean(),
+
+  /**
+   * 当前运行时是否可用。
+   * 兼容旧客户端：缺省时应按 supported=true 视为 available，supported=false 视为 unknown。
+   */
+  availability: CapabilityAvailabilitySchema.optional(),
+
+  /** 当前不可用的机器可读原因 */
+  availabilityReason: CapabilityAvailabilityReasonSchema.optional(),
+
+  /** 最近一次运行时读写错误摘要 */
+  lastError: z.string().optional(),
 
   /**
    * 当前值

@@ -95,7 +95,7 @@ describe('RadioCapabilityManager', () => {
     manager.onDisconnected();
   });
 
-  it('downgrades a statically supported hamlib capability when the first read fails recoverably', async () => {
+  it('marks a statically supported hamlib capability unavailable when the first read fails recoverably', async () => {
     const manager = new RadioCapabilityManager();
     const connection = new MockConnection(RadioConnectionType.HAMLIB, {
       isSupportedLevel: vi.fn((level: string) => level === 'SQL'),
@@ -117,9 +117,67 @@ describe('RadioCapabilityManager', () => {
 
     expect(getCapability(snapshot, 'sql')).toMatchObject({
       id: 'sql',
-      supported: false,
+      supported: true,
+      availability: 'unavailable',
+      availabilityReason: 'runtime_error',
       value: null,
     });
+
+    manager.onDisconnected();
+  });
+
+  it('recovers an unavailable supported capability after a later successful read', async () => {
+    const manager = new RadioCapabilityManager();
+    const getSQL = vi.fn()
+      .mockRejectedValueOnce(new RadioError({
+        code: RadioErrorCode.INVALID_OPERATION,
+        message: 'Optional radio operation unavailable (getSQL): Feature not available',
+        userMessage: 'Radio operation is not supported by this model',
+        severity: RadioErrorSeverity.WARNING,
+        context: { operation: 'getSQL', optional: true, recoverable: true },
+      }))
+      .mockResolvedValue(0.25);
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      isSupportedLevel: vi.fn((level: string) => level === 'SQL'),
+      getSQL,
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+    expect(getCapability(manager.getCapabilityStates(), 'sql')).toMatchObject({
+      supported: true,
+      availability: 'unavailable',
+      value: null,
+    });
+
+    await expect(manager.refreshAll()).resolves.toBeUndefined();
+
+    expect(getCapability(manager.getCapabilityStates(), 'sql')).toMatchObject({
+      supported: true,
+      availability: 'available',
+      value: 0.25,
+    });
+
+    manager.onDisconnected();
+  });
+
+  it('rejects writes to a supported capability while it is currently unavailable', async () => {
+    const manager = new RadioCapabilityManager();
+    const setSQL = vi.fn().mockResolvedValue(undefined);
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      isSupportedLevel: vi.fn((level: string) => level === 'SQL'),
+      getSQL: vi.fn().mockRejectedValue(new RadioError({
+        code: RadioErrorCode.INVALID_OPERATION,
+        message: 'Optional radio operation unavailable (getSQL): Feature not available',
+        userMessage: 'Radio operation is not supported by this model',
+        severity: RadioErrorSeverity.WARNING,
+        context: { operation: 'getSQL', optional: true, recoverable: true },
+      })),
+      setSQL,
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+    await expect(manager.writeCapability('sql', 0.5)).rejects.toThrow('currently unavailable');
+    expect(setSQL).not.toHaveBeenCalled();
 
     manager.onDisconnected();
   });

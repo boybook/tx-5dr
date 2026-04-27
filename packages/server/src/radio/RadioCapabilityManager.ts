@@ -58,6 +58,18 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
     await this.runtime.writeCapability(id, value, action);
   }
 
+  markCapabilityUnavailable(id: string, error: unknown): void {
+    const currentState = this.runtime.getCapabilityStates().find((capability) => capability.id === id);
+    this.runtime.setCapabilityState(id, {
+      supported: true,
+      availability: 'unavailable',
+      availabilityReason: 'runtime_error',
+      lastError: error instanceof Error ? error.message : String(error),
+      value: null,
+      meta: currentState?.meta,
+    });
+  }
+
   syncTunerStatus(status: TunerStatus): void {
     const currentState = this.runtime.getCapabilityStates().find((capability) => capability.id === 'tuner_switch');
     const currentMeta = currentState?.meta as { status?: string; swr?: number } | undefined;

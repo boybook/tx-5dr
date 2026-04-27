@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import type { CapabilityComponentProps } from '../CapabilityRegistry';
 import type { CapabilityDescriptor } from '@tx5dr/contracts';
 import { useCan } from '../../store/authStore';
+import { getCapabilityUnavailableText, isCapabilityInteractive } from '../availability';
 import { formatCapabilityNumber, fromDisplayNumber, toDisplayNumber } from '../display-utils';
 
 const WRITE_DEBOUNCE_MS = 150;
@@ -115,6 +116,8 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
 
   const isSupported = state?.supported ?? false;
   const canWrite = descriptor.writable;
+  const isInteractive = isCapabilityInteractive(state, canControl, canWrite);
+  const unavailableText = getCapabilityUnavailableText(state, t, capabilityId);
   const serverValue = typeof state?.value === 'number' ? state.value : null;
   const range = descriptor.range ?? { min: 0, max: 1, step: 0.01 };
   const usesSlider = descriptor.display?.mode === 'percent';
@@ -253,7 +256,7 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
               size="sm"
               selectedKey={rfPowerMode}
               onSelectionChange={handleRfPowerModeChange}
-              isDisabled={!isSupported || !canControl || !canWrite}
+              isDisabled={!isInteractive}
               aria-label={t('radio:capability.rf_power.label')}
               classNames={RF_POWER_MODE_TABS_CLASSNAMES}
             >
@@ -274,7 +277,7 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
           value={isDiscreteSlider ? discreteSliderValue : displayValue}
           onChange={handleSliderChange}
           onChangeEnd={handleSliderChangeEnd}
-          isDisabled={!isSupported || !canControl || !canWrite}
+          isDisabled={!isInteractive}
           className="w-full"
           aria-label={t(descriptor.labelI18nKey)}
         />
@@ -293,13 +296,16 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
           min={String(minDisplayValue)}
           max={String(maxDisplayValue)}
           step={String(toDisplayNumber(range.step ?? 1, descriptor))}
-          isDisabled={!isSupported || !canControl || !canWrite}
+          isDisabled={!isInteractive}
           aria-label={t(descriptor.labelI18nKey)}
         />
       )}
 
       {!isSupported && (
         <p className="text-xs text-default-400">{t('radio:capability.panel.notSupported')}</p>
+      )}
+      {unavailableText && (
+        <p className="text-xs text-warning-600">{unavailableText}</p>
       )}
     </div>
   );

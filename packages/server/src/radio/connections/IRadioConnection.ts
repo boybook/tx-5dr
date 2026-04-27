@@ -442,6 +442,12 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
   getMeterCapabilities?(): MeterCapabilities;
 
   /**
+   * 查询 Hamlib 静态 VFO 操作能力。
+   * @optional 仅 Hamlib 连接用于统一能力探测
+   */
+  isSupportedVfoOp?(opName: string): boolean;
+
+  /**
    * 通知连接对象当前工作频率，用于选择正确的 S 表标准（HF vs VHF/UHF）。
    * 由 PhysicalRadioManager 在检测到频率变化时调用。
    *

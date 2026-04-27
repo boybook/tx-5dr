@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import type { CapabilityComponentProps } from '../CapabilityRegistry';
 import { useCan } from '../../store/authStore';
 import { formatCapabilityOption } from '../display-utils';
+import { getCapabilityUnavailableText, isCapabilityInteractive } from '../availability';
 
 export const EnumCapabilityPanel: React.FC<CapabilityComponentProps> = ({
   capabilityId,
@@ -17,6 +18,8 @@ export const EnumCapabilityPanel: React.FC<CapabilityComponentProps> = ({
   const canControl = useCan('execute', 'RadioControl');
   const isSupported = state?.supported ?? false;
   const canWrite = descriptor.writable;
+  const isInteractive = isCapabilityInteractive(state, canControl, canWrite);
+  const unavailableText = getCapabilityUnavailableText(state, t, capabilityId);
   const options = descriptor.options ?? [];
 
   const selectedKey = useMemo(() => {
@@ -46,15 +49,13 @@ export const EnumCapabilityPanel: React.FC<CapabilityComponentProps> = ({
             const option = options.find((item) => String(item.value) === String(key));
             if (
               option
-              && isSupported
-              && canControl
-              && canWrite
+              && isInteractive
               && String(option.value) !== selectedKey
             ) {
               onWrite(capabilityId, option.value);
             }
           }}
-          isDisabled={!isSupported || !canControl || !canWrite}
+          isDisabled={!isInteractive}
           aria-label={t(descriptor.labelI18nKey)}
         >
           {options.map((option) => (
@@ -70,15 +71,13 @@ export const EnumCapabilityPanel: React.FC<CapabilityComponentProps> = ({
             const option = options.find((item) => String(item.value) === String(nextKey));
             if (
               option
-              && isSupported
-              && canControl
-              && canWrite
+              && isInteractive
               && String(option.value) !== selectedKey
             ) {
               onWrite(capabilityId, option.value);
             }
           }}
-          isDisabled={!isSupported || !canControl || !canWrite || options.length === 0}
+          isDisabled={!isInteractive || options.length === 0}
           aria-label={t(descriptor.labelI18nKey)}
         >
           {options.map((option) => (
@@ -91,6 +90,9 @@ export const EnumCapabilityPanel: React.FC<CapabilityComponentProps> = ({
 
       {!isSupported && (
         <p className="text-xs text-default-400">{t('radio:capability.panel.notSupported')}</p>
+      )}
+      {unavailableText && (
+        <p className="text-xs text-warning-600">{unavailableText}</p>
       )}
     </div>
   );

@@ -9,6 +9,7 @@ interface HamlibSupportProbeConnection extends IRadioConnection {
   isSupportedLevel(level: string): boolean;
   isSupportedFunction(functionName: string): boolean;
   isSupportedParm(parmName: string): boolean;
+  isSupportedVfoOp?(opName: string): boolean;
 }
 
 export function hasHamlibSupportProbe(connection: IRadioConnection): connection is HamlibSupportProbeConnection {
@@ -16,6 +17,27 @@ export function hasHamlibSupportProbe(connection: IRadioConnection): connection 
   return typeof candidate.isSupportedLevel === 'function'
     && typeof candidate.isSupportedFunction === 'function'
     && typeof candidate.isSupportedParm === 'function';
+}
+
+export function isHamlibStaticLevelSupported(connection: IRadioConnection, level: string): boolean {
+  const candidate = connection as Partial<HamlibSupportProbeConnection>;
+  return connection.getType() === RadioConnectionType.HAMLIB
+    && typeof candidate.isSupportedLevel === 'function'
+    && candidate.isSupportedLevel(level);
+}
+
+export function isHamlibStaticFunctionSupported(connection: IRadioConnection, functionName: string): boolean {
+  const candidate = connection as Partial<HamlibSupportProbeConnection>;
+  return connection.getType() === RadioConnectionType.HAMLIB
+    && typeof candidate.isSupportedFunction === 'function'
+    && candidate.isSupportedFunction(functionName);
+}
+
+export function isHamlibStaticVfoOpSupported(connection: IRadioConnection, opName: string): boolean {
+  const candidate = connection as Partial<HamlibSupportProbeConnection>;
+  return connection.getType() === RadioConnectionType.HAMLIB
+    && typeof candidate.isSupportedVfoOp === 'function'
+    && candidate.isSupportedVfoOp(opName);
 }
 
 export function createPercentDescriptor(
@@ -131,9 +153,7 @@ export function buildModeBandwidthOptions(values: Array<string | number>): Capab
 export function createHamlibLevelProbe(level: string) {
   return async (connection: IRadioConnection, fallback?: () => Promise<void>): Promise<boolean> => {
     if (
-      connection.getType() === RadioConnectionType.HAMLIB
-      && hasHamlibSupportProbe(connection)
-      && connection.isSupportedLevel(level)
+      isHamlibStaticLevelSupported(connection, level)
     ) {
       return true;
     }
