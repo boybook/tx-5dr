@@ -34,6 +34,7 @@ const DEFAULT_WEB_HTTPS_PORT = 8443;
 const DEFAULT_PORT_SCAN_STEPS = 50;
 const DEV_FRONTEND_READY_TIMEOUT_MS = 60_000;
 const DEV_BACKEND_READY_TIMEOUT_MS = 60_000;
+const DEV_PROCESS_MEMORY_LOG_INTERVAL_MS = 30_000;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let serverCheckInterval: any = null;
@@ -54,6 +55,8 @@ let trayInstance: Tray | null = null; // 系统托盘实例（Windows/Linux）
 let isQuitting: boolean = false; // 主动退出标志，防止子进程被杀时弹崩溃错误
 const intentionalChildShutdowns = new WeakSet<import('node:child_process').ChildProcess>();
 let notificationPermissionHandlersConfigured = false;
+let ipcHandlersConfigured = false;
+let devProcessMemoryLogInterval: NodeJS.Timeout | null = null;
 
 type QuitSource = 'tray-menu' | 'window-close' | 'renderer' | 'before-quit' | 'will-quit' | 'unknown';
 
@@ -199,6 +202,27 @@ function configureNotificationPermissionHandlers(): void {
 
 function isDevelopmentRuntime(): boolean {
   return process.env.NODE_ENV === 'development' && !app.isPackaged;
+}
+
+function isEnvFlagEnabled(name: string): boolean {
+  const value = process.env[name]?.toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+}
+
+function isEnvFlagDisabled(name: string): boolean {
+  const value = process.env[name]?.toLowerCase();
+  return value === '0' || value === 'false' || value === 'no' || value === 'off';
+}
+
+function shouldOpenDevTools(): boolean {
+  return isDevelopmentRuntime() && (
+    isEnvFlagEnabled('TX5DR_ELECTRON_OPEN_DEVTOOLS') ||
+    isEnvFlagEnabled('ELECTRON_OPEN_DEVTOOLS')
+  );
+}
+
+function shouldLogDevProcessMemory(): boolean {
+  return isDevelopmentRuntime() && !isEnvFlagDisabled('TX5DR_ELECTRON_MEMORY_LOG');
 }
 
 function getLanIpv4Addresses(): string[] {
@@ -1390,6 +1414,12 @@ function getWebUrl(): string {
   return `http://127.0.0.1:${selectedWebPort || DEFAULT_WEB_HTTP_PORT}`;
 }
 
+function closeMainWindowToBackground(windowInstance: BrowserWindow, reason: string): void {
+  logger.info(`destroying main window renderer for background mode (${reason})`);
+  windowInstance.destroy();
+  logDevProcessMemory(`main-window-destroy:${reason}`);
+}
+
 /**
  * 仅创建主窗口（不启动子进程），用于托盘/Dock恢复窗口
  */
@@ -1436,7 +1466,7 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
   logger.info('main window created');
   mainWindowInstance = mainWindow;
 
-  // Windows/Linux: 关闭窗口时询问用户行为（macOS 遵循平台惯例直接隐藏）
+  // Windows/Linux: 关闭窗口时询问用户行为；后台模式销毁 renderer，避免隐藏窗口继续占用内存。
   if (process.platform !== 'darwin') {
     mainWindow.on('close', (event) => {
       if (isQuitting) return;
@@ -1445,7 +1475,7 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
 
       if (settings.closeBehavior === 'tray') {
         event.preventDefault();
-        mainWindow.hide();
+        closeMainWindowToBackground(mainWindow, 'saved-tray');
         return;
       }
 
@@ -1474,7 +1504,7 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
           if (checkboxChecked) {
             saveElectronSettings({ ...settings, closeBehavior: 'tray' });
           }
-          mainWindow.hide();
+          closeMainWindowToBackground(mainWindow, 'ask-tray');
         } else if (response === 1) {
           if (checkboxChecked) {
             saveElectronSettings({ ...settings, closeBehavior: 'quit' });
@@ -1574,7 +1604,6 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
   logger.info(`loading URL: ${urlWithAuth}`);
   await mainWindow.loadURL(urlWithAuth);
 
-  setupIpcHandlers();
   return mainWindow;
 }
 
@@ -1681,6 +1710,102 @@ async function openInBrowser() {
   await shell.openExternal(url);
 }
 
+function redactSensitiveUrl(value: string): string {
+  return value.replace(/([?&]auth_token=)[^&]*/g, '$1<redacted>');
+}
+
+function formatMetricMemory(value: number | undefined): string | null {
+  if (typeof value !== 'number') {
+    return null;
+  }
+  return `${(value / 1024).toFixed(1)}MB`;
+}
+
+function getWindowMetadataByPid(): Map<number, Array<Record<string, unknown>>> {
+  const windowsByPid = new Map<number, Array<Record<string, unknown>>>();
+
+  for (const windowInstance of BrowserWindow.getAllWindows()) {
+    try {
+      if (windowInstance.isDestroyed()) {
+        continue;
+      }
+
+      const pid = windowInstance.webContents.getOSProcessId();
+      const windows = windowsByPid.get(pid) ?? [];
+      windows.push({
+        id: windowInstance.id,
+        title: windowInstance.getTitle(),
+        visible: windowInstance.isVisible(),
+        minimized: windowInstance.isMinimized(),
+        url: redactSensitiveUrl(windowInstance.webContents.getURL()),
+      });
+      windowsByPid.set(pid, windows);
+    } catch (error) {
+      logger.warn('failed to collect window metadata for process memory log', error);
+    }
+  }
+
+  return windowsByPid;
+}
+
+function logDevProcessMemory(reason: string): void {
+  if (!shouldLogDevProcessMemory()) {
+    return;
+  }
+
+  try {
+    const windowsByPid = getWindowMetadataByPid();
+    const processes = app.getAppMetrics()
+      .map((metric) => ({
+        pid: metric.pid,
+        type: metric.type,
+        name: metric.name ?? null,
+        serviceName: metric.serviceName ?? null,
+        workingSet: formatMetricMemory(metric.memory.workingSetSize),
+        peakWorkingSet: formatMetricMemory(metric.memory.peakWorkingSetSize),
+        privateBytes: formatMetricMemory(metric.memory.privateBytes),
+        cpuPercent: Number(metric.cpu.percentCPUUsage.toFixed(1)),
+        windows: windowsByPid.get(metric.pid) ?? [],
+      }))
+      .sort((left, right) => {
+        const rightMemory = right.workingSet ? Number.parseFloat(right.workingSet) : 0;
+        const leftMemory = left.workingSet ? Number.parseFloat(left.workingSet) : 0;
+        return rightMemory - leftMemory;
+      });
+
+    logger.info('dev electron process memory', {
+      reason,
+      processes,
+      childPids: {
+        web: webProcess?.pid ?? null,
+        server: serverProcess?.pid ?? null,
+        livekit: livekitProcess?.pid ?? null,
+      },
+    });
+  } catch (error) {
+    logger.warn('failed to collect dev electron process memory', error);
+  }
+}
+
+function startDevProcessMemoryLogger(): void {
+  if (!shouldLogDevProcessMemory() || devProcessMemoryLogInterval) {
+    return;
+  }
+
+  logDevProcessMemory('startup');
+  devProcessMemoryLogInterval = setInterval(() => {
+    logDevProcessMemory('interval');
+  }, DEV_PROCESS_MEMORY_LOG_INTERVAL_MS);
+}
+
+function stopDevProcessMemoryLogger(): void {
+  if (!devProcessMemoryLogInterval) {
+    return;
+  }
+  clearInterval(devProcessMemoryLogInterval);
+  devProcessMemoryLogInterval = null;
+}
+
 async function checkServerHealth(): Promise<boolean> {
   return new Promise((resolve) => {
     const options = {
@@ -1778,6 +1903,7 @@ async function cleanupChildProcesses(isDevelopment: boolean): Promise<ChildShutd
 // 清理函数
 async function cleanup(): Promise<ChildShutdownResult[]> {
   const isDevelopment = process.env.NODE_ENV === 'development' && !app.isPackaged;
+  stopDevProcessMemoryLogger();
   const childResults = await cleanupChildProcesses(isDevelopment);
 
   selectedLiveKitPort = null;
@@ -2126,10 +2252,12 @@ const startApp = async () => {
   // 创建系统托盘（Windows/Linux）或 Dock 菜单（macOS）
   createTray();
   createDockMenu();
+  setupIpcHandlers();
 
   logger.info('calling createWindow');
   await createWindow();
   logger.info('createWindow complete');
+  startDevProcessMemoryLogger();
 
   if (app.isPackaged) {
     void desktopUpdateService.checkForUpdates().catch((error) => {
@@ -2239,6 +2367,12 @@ process.on('SIGTERM', () => {
  * 设置IPC处理器
  */
 function setupIpcHandlers() {
+  if (ipcHandlersConfigured) {
+    logger.debug('IPC handlers already configured, skipping');
+    return;
+  }
+  ipcHandlersConfigured = true;
+
   // 处理打开通联日志窗口的请求
   ipcMain.handle('window:openLogbook', async (_event, queryString: string) => {
     logger.info(`IPC window:openLogbook, queryString: ${queryString}`);
@@ -2281,7 +2415,9 @@ function setupIpcHandlers() {
         const logbookUrl = `${getWebUrl()}/logbook.html?${queryString}${authParam}`;
         logger.info(`IPC window:openLogbook loading dev URL: ${logbookUrl}`);
         await logbookWindow.loadURL(logbookUrl);
-        logbookWindow.webContents.openDevTools();
+        if (shouldOpenDevTools()) {
+          logbookWindow.webContents.openDevTools();
+        }
       } else {
         // 生产模式：连接内置静态 web 服务
         const fullUrl = `${getWebUrl()}/logbook.html?${queryString}${authParam}`;
@@ -2341,7 +2477,9 @@ function setupIpcHandlers() {
         const spectrumUrl = `${getWebUrl()}/spectrum.html${authParam}`;
         logger.info(`IPC window:openSpectrumWindow loading dev URL: ${spectrumUrl}`);
         await spectrumWindow.loadURL(spectrumUrl);
-        spectrumWindow.webContents.openDevTools();
+        if (shouldOpenDevTools()) {
+          spectrumWindow.webContents.openDevTools();
+        }
       } else {
         const fullUrl = `${getWebUrl()}/spectrum.html${authParam}`;
         logger.info(`IPC window:openSpectrumWindow loading prod URL: ${fullUrl}`);

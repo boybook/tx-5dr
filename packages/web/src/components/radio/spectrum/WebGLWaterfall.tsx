@@ -97,6 +97,24 @@ function areAxesEqual(left: SpectrumAxis | null, right: SpectrumAxis | null): bo
   ) || (left === null && right === null);
 }
 
+type MutableRef<T> = { current: T };
+
+export interface WaterfallTextureMemoryRefs {
+  textureDataRef: MutableRef<Uint8Array | null>;
+  lastDataLengthRef: MutableRef<number>;
+  textureHeightRef: MutableRef<number>;
+  rowCountRef: MutableRef<number>;
+  headRowRef: MutableRef<number>;
+}
+
+export function releaseWaterfallTextureMemoryRefs(refs: WaterfallTextureMemoryRefs): void {
+  refs.textureDataRef.current = null;
+  refs.lastDataLengthRef.current = 0;
+  refs.textureHeightRef.current = 1;
+  refs.rowCountRef.current = 0;
+  refs.headRowRef.current = 0;
+}
+
 export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   controller,
   className = '',
@@ -788,34 +806,43 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     rebuildTextureRef.current = rebuildTexture;
   }, [rebuildTexture]);
 
-  const clearTexture = useCallback(() => {
+  const releaseTextureStorage = useCallback((shouldRender = true) => {
     const gl = glRef.current;
     const texture = textureRef.current;
     const program = programRef.current;
-    if (!gl || !texture || !program || gl.isContextLost()) {
+    releaseWaterfallTextureMemoryRefs({
+      textureDataRef,
+      lastDataLengthRef,
+      textureHeightRef,
+      rowCountRef,
+      headRowRef,
+    });
+
+    if (!gl || !texture || gl.isContextLost()) {
       return;
     }
-
-    const width = Math.max(currentAxisRef.current?.binCount ?? 1, 1);
-    const textureHeight = Math.max(textureHeightRef.current, 1);
-    const dataSize = width * textureHeight;
-
-    if (!textureDataRef.current || textureDataRef.current.length !== dataSize) {
-      textureDataRef.current = new Uint8Array(dataSize);
-    }
-    textureDataRef.current.fill(0);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, textureHeight, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureDataRef.current);
-    updateTextureMetadata(textureHeight, 0);
-    if (scrollRowsLocationRef.current) {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array(1));
+
+    if (program && scrollRowsLocationRef.current) {
       gl.useProgram(program);
       gl.uniform1f(scrollRowsLocationRef.current, 0);
     }
-    render();
-  }, [render, updateTextureMetadata]);
+    if (program && headRowLocationRef.current) {
+      gl.useProgram(program);
+      gl.uniform1f(headRowLocationRef.current, 0);
+    }
+    if (program && textureHeightLocationRef.current) {
+      gl.useProgram(program);
+      gl.uniform1f(textureHeightLocationRef.current, 1);
+    }
+    if (shouldRender) {
+      render();
+    }
+  }, [render]);
 
   const appendRowsToTexture = useCallback((rowsToAppend: ArrayLike<number>[], nextAxis: SpectrumAxis | null) => {
     const gl = glRef.current;
@@ -1038,14 +1065,21 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       // 释放 WebGL 资源，防止泄漏
       const gl = glRef.current;
       if (gl) {
+        releaseTextureStorage(false);
         if (programRef.current) { gl.deleteProgram(programRef.current); programRef.current = null; }
         if (textureRef.current) { gl.deleteTexture(textureRef.current); textureRef.current = null; }
         if (colorMapTextureRef.current) { gl.deleteTexture(colorMapTextureRef.current); colorMapTextureRef.current = null; }
         if (positionBufferRef.current) { gl.deleteBuffer(positionBufferRef.current); positionBufferRef.current = null; }
         if (texCoordBufferRef.current) { gl.deleteBuffer(texCoordBufferRef.current); texCoordBufferRef.current = null; }
+        try {
+          gl.getExtension('WEBGL_lose_context')?.loseContext();
+        } catch (error) {
+          logger.debug('WEBGL_lose_context cleanup failed', error);
+        }
+        glRef.current = null;
       }
     };
-  }, [initWebGL]);
+  }, [initWebGL, releaseTextureStorage]);
 
   const processRenderBatch = useCallback((batch: SpectrumRenderBatch | null) => {
     if (!batch) {
@@ -1064,7 +1098,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       lastDataTimeRef.current = 0;
       updateViewState(null, false);
       resetAutoRangeState();
-      clearTexture();
+      releaseTextureStorage();
       return;
     }
 
@@ -1154,7 +1188,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     scrollAnimRef.current = requestAnimationFrame(animate);
   }, [
     appendRowsToTexture,
-    clearTexture,
+    releaseTextureStorage,
     rebuildTexture,
     render,
     resetAutoRangeState,

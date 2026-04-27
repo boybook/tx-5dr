@@ -29,8 +29,17 @@ export interface SpectrumRenderBatch {
   totalRows: number;
 }
 
+export type SpectrumHistoryLimits = number | Partial<Record<SpectrumKind, number>>;
+
+interface RetainedSpectrumFrame {
+  timestamp: number;
+  kind: SpectrumKind;
+  frequencyRange: { min: number; max: number };
+  binCount: number;
+}
+
 interface CanonicalSpectrumFrame {
-  frame: SpectrumFrame;
+  frame: RetainedSpectrumFrame;
   values: Float32Array;
   receivedAt: number;
   cachedViewKey: string | null;
@@ -51,8 +60,10 @@ interface StreamContext {
 
 type HistoryMap = Record<SpectrumKind, CanonicalSpectrumFrame[]>;
 type PendingMap = Record<SpectrumKind, QueuedSpectrumFrame[]>;
+type HistoryLimitMap = Record<SpectrumKind, number>;
 
 const DEFAULT_HISTORY = 120;
+const SPECTRUM_KINDS: SpectrumKind[] = ['audio', 'radio-sdr', 'openwebrx-sdr'];
 const DEFAULT_FRAME_DURATION_MS = 100;
 const MIN_FRAME_DURATION_MS = 40;
 const MAX_FRAME_DURATION_MS = 140;
@@ -72,6 +83,22 @@ function createPendingMap(): PendingMap {
     audio: [],
     'radio-sdr': [],
     'openwebrx-sdr': [],
+  };
+}
+
+function normalizeHistoryLimits(limits: SpectrumHistoryLimits): HistoryLimitMap {
+  if (typeof limits === 'number') {
+    return {
+      audio: limits,
+      'radio-sdr': limits,
+      'openwebrx-sdr': limits,
+    };
+  }
+
+  return {
+    audio: limits.audio ?? DEFAULT_HISTORY,
+    'radio-sdr': limits['radio-sdr'] ?? DEFAULT_HISTORY,
+    'openwebrx-sdr': limits['openwebrx-sdr'] ?? DEFAULT_HISTORY,
   };
 }
 
@@ -114,6 +141,18 @@ function decodeFrameValues(frame: SpectrumFrame): Float32Array {
 
 function getBinCount(frame: SpectrumFrame): number {
   return frame.meta.displayBinCount ?? frame.meta.sourceBinCount ?? frame.binaryData.format.length;
+}
+
+function retainFrameMeta(frame: SpectrumFrame): RetainedSpectrumFrame {
+  return {
+    timestamp: frame.timestamp,
+    kind: frame.kind,
+    frequencyRange: {
+      min: frame.frequencyRange.min,
+      max: frame.frequencyRange.max,
+    },
+    binCount: getBinCount(frame),
+  };
 }
 
 function cropSpectrumToRange(
@@ -164,7 +203,7 @@ function cropSpectrumToViewport(
 
 function buildViewKey(
   kind: SpectrumKind,
-  frame: SpectrumFrame,
+  frame: RetainedSpectrumFrame,
   context: StreamContext
 ): string {
   if (kind === 'radio-sdr') {
@@ -181,11 +220,11 @@ function buildViewKey(
       : `${kind}:missing`;
   }
 
-  return `${kind}:full:${frame.frequencyRange.min}:${frame.frequencyRange.max}:${getBinCount(frame)}`;
+  return `${kind}:full:${frame.frequencyRange.min}:${frame.frequencyRange.max}:${frame.binCount}`;
 }
 
 export class SpectrumStreamController {
-  private readonly historyLimit: number;
+  private readonly historyLimits: HistoryLimitMap;
   private readonly frameListeners = new Set<() => void>();
   private readonly statusListeners = new Set<() => void>();
   private readonly histories: HistoryMap = createHistoryMap();
@@ -207,8 +246,8 @@ export class SpectrumStreamController {
   private lastArrivalTime = 0;
   private arrivalIntervalEma = DEFAULT_FRAME_DURATION_MS;
 
-  constructor(historyLimit = DEFAULT_HISTORY) {
-    this.historyLimit = historyLimit;
+  constructor(historyLimits: SpectrumHistoryLimits = DEFAULT_HISTORY) {
+    this.historyLimits = normalizeHistoryLimits(historyLimits);
   }
 
   subscribeFrameTick = (listener: () => void): (() => void) => {
@@ -252,28 +291,13 @@ export class SpectrumStreamController {
   }
 
   destroy(): void {
-    if (this.rafId !== null) {
-      cancelAnimationFrame(this.rafId);
-      this.rafId = null;
-    }
-    this.pendingBatch = null;
+    this.clearBufferedFrames();
     this.frameListeners.clear();
     this.statusListeners.clear();
   }
 
   reset(): void {
-    if (this.rafId !== null) {
-      cancelAnimationFrame(this.rafId);
-      this.rafId = null;
-    }
-
-    for (const history of Object.values(this.histories)) {
-      history.length = 0;
-    }
-    for (const pending of Object.values(this.pendingByKind)) {
-      pending.length = 0;
-    }
-
+    this.clearBufferedFrames();
     this.pendingBatch = {
       mode: 'reset',
       rows: [],
@@ -282,11 +306,25 @@ export class SpectrumStreamController {
       hasBacklog: false,
       totalRows: 0,
     };
+    this.syncStatusSnapshot();
+    this.notifyFrameListeners();
+  }
+
+  private clearBufferedFrames(): void {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+
+    for (const kind of SPECTRUM_KINDS) {
+      this.histories[kind].length = 0;
+      this.pendingByKind[kind].length = 0;
+    }
+
+    this.pendingBatch = null;
     this.lastRenderTime = 0;
     this.lastArrivalTime = 0;
     this.arrivalIntervalEma = DEFAULT_FRAME_DURATION_MS;
-    this.syncStatusSnapshot();
-    this.notifyFrameListeners();
   }
 
   updateContext(nextContext: Partial<StreamContext>): void {
@@ -333,7 +371,7 @@ export class SpectrumStreamController {
     }
 
     const canonicalFrame = this.storeCanonicalFrame({
-      frame,
+      frame: retainFrameMeta(frame),
       values,
       receivedAt,
       cachedViewKey: null,
@@ -385,7 +423,8 @@ export class SpectrumStreamController {
       return;
     }
 
-    const batchSize = this.determineBatchSize(pendingQueue.length, backlogAge, frameDuration);
+    const historyLimit = this.getHistoryLimit(selectedKind);
+    const batchSize = this.determineBatchSize(pendingQueue.length, backlogAge, frameDuration, historyLimit);
     const frames = pendingQueue.splice(0, batchSize);
     const rows: Float32Array[] = [];
     let axis: SpectrumAxis | null = null;
@@ -409,7 +448,7 @@ export class SpectrumStreamController {
         axis,
         frameToken,
         hasBacklog: pendingQueue.length > 0,
-        totalRows: Math.min(this.histories[selectedKind].length, this.historyLimit),
+        totalRows: Math.min(this.histories[selectedKind].length, historyLimit),
       };
       this.notifyFrameListeners();
     }
@@ -419,16 +458,21 @@ export class SpectrumStreamController {
     }
   };
 
-  private determineBatchSize(queueLength: number, backlogAge: number, frameDuration: number): number {
+  private determineBatchSize(
+    queueLength: number,
+    backlogAge: number,
+    frameDuration: number,
+    historyLimit: number
+  ): number {
     if (queueLength <= 1) {
       return 1;
     }
 
     let batchSize = 1;
-    if (queueLength >= this.historyLimit / 2) {
+    if (queueLength >= historyLimit / 2) {
       batchSize = Math.max(batchSize, 4);
     }
-    if (queueLength >= this.historyLimit) {
+    if (queueLength >= historyLimit) {
       batchSize = Math.max(batchSize, 6);
     }
     if (backlogAge > frameDuration * 2) {
@@ -446,10 +490,14 @@ export class SpectrumStreamController {
 
   private trimPendingQueue(kind: SpectrumKind): void {
     const pendingQueue = this.pendingByKind[kind];
-    const overflow = pendingQueue.length - this.historyLimit;
+    const overflow = pendingQueue.length - this.getHistoryLimit(kind);
     if (overflow > 0) {
       pendingQueue.splice(0, overflow);
     }
+  }
+
+  private getHistoryLimit(kind: SpectrumKind): number {
+    return this.historyLimits[kind];
   }
 
   private storeCanonicalFrame(nextFrame: CanonicalSpectrumFrame): CanonicalSpectrumFrame {
@@ -462,8 +510,9 @@ export class SpectrumStreamController {
     }
 
     history.unshift(nextFrame);
-    if (history.length > this.historyLimit) {
-      history.length = this.historyLimit;
+    const historyLimit = this.getHistoryLimit(nextFrame.frame.kind);
+    if (history.length > historyLimit) {
+      history.length = historyLimit;
     }
     return nextFrame;
   }
@@ -556,7 +605,7 @@ export class SpectrumStreamController {
       axis = {
         minHz: frame.frame.frequencyRange.min,
         maxHz: frame.frame.frequencyRange.max,
-        binCount: getBinCount(frame.frame),
+        binCount: frame.frame.binCount,
       };
     }
 
