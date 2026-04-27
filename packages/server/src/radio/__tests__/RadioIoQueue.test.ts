@@ -92,6 +92,73 @@ describe('RadioIoQueue', () => {
     await active;
   });
 
+  it('reuses a queued task with the same id and session', async () => {
+    const queue = new RadioIoQueue();
+    const releaseActive = createDeferred<void>();
+    const task = vi.fn().mockResolvedValue('frequency');
+
+    const active = queue.run({ sessionId: 1 }, async () => {
+      await releaseActive.promise;
+    });
+
+    await vi.waitFor(() => {
+      expect(queue.isBusy()).toBe(true);
+    });
+
+    const first = queue.run({ sessionId: 1, id: 'getFrequency' }, task);
+    const second = queue.run({ sessionId: 1, id: 'getFrequency' }, async () => 'duplicate');
+
+    releaseActive.resolve(undefined);
+    await active;
+
+    await expect(Promise.all([first, second])).resolves.toEqual(['frequency', 'frequency']);
+    expect(task).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses an active task with the same id and session', async () => {
+    const queue = new RadioIoQueue();
+    const releaseRead = createDeferred<string>();
+    const task = vi.fn().mockReturnValue(releaseRead.promise);
+
+    const first = queue.run({ sessionId: 1, id: 'getFrequency' }, task);
+
+    await vi.waitFor(() => {
+      expect(task).toHaveBeenCalledTimes(1);
+    });
+
+    const second = queue.run({ sessionId: 1, id: 'getFrequency' }, async () => 'duplicate');
+
+    releaseRead.resolve('frequency');
+    await expect(Promise.all([first, second])).resolves.toEqual(['frequency', 'frequency']);
+    expect(task).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not dedupe different ids or tasks without ids', async () => {
+    const queue = new RadioIoQueue();
+    const events: string[] = [];
+
+    await Promise.all([
+      queue.run({ sessionId: 1, id: 'A' }, async () => events.push('A')),
+      queue.run({ sessionId: 1, id: 'B' }, async () => events.push('B')),
+      queue.run({ sessionId: 1 }, async () => events.push('no-id-1')),
+      queue.run({ sessionId: 1 }, async () => events.push('no-id-2')),
+    ]);
+
+    expect(events).toEqual(['A', 'B', 'no-id-1', 'no-id-2']);
+  });
+
+  it('clears dedupe entries after rejection so future calls can retry', async () => {
+    const queue = new RadioIoQueue();
+    const task = vi.fn()
+      .mockRejectedValueOnce(new Error('transient'))
+      .mockResolvedValueOnce('ok');
+
+    await expect(queue.run({ sessionId: 1, id: 'getFrequency' }, task)).rejects.toThrow('transient');
+    await expect(queue.run({ sessionId: 1, id: 'getFrequency' }, task)).resolves.toBe('ok');
+
+    expect(task).toHaveBeenCalledTimes(2);
+  });
+
   it('does not interrupt the active task when a critical task is queued', async () => {
     const queue = new RadioIoQueue();
     const events: string[] = [];

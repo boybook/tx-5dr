@@ -54,6 +54,9 @@ import { RadioState, type RadioInput } from '../state-machines/types.js';
 import { ConfigManager } from '../config/config-manager.js';
 
 const logger = createLogger('PhysicalRadioManager');
+const NORMAL_FREQUENCY_POLL_MS = 2000;
+const FAST_FREQUENCY_POLL_MS = 500;
+const FAST_FREQUENCY_POLL_WINDOW_MS = 5000;
 
 /**
  * PhysicalRadioManager 事件接口
@@ -269,6 +272,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 频率监控
    */
   private frequencyPollingInterval: NodeJS.Timeout | null = null;
+  private frequencyMonitoringActive = false;
+  private frequencyMonitoringGeneration = 0;
+  private activeFrequencyPollGeneration: number | null = null;
+  private fastFrequencyPollingUntil = 0;
   private lastKnownFrequency: number | null = null;
   private cachedTunerCapabilities: TunerCapabilities | null = null;
   private readonly postConnectSettleMs = 250;
@@ -2165,7 +2172,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   // ==================== 频率监控 ====================
 
   /**
-   * 启动频率监控（每5秒检查一次）
+   * 启动频率监控。默认低频轮询；检测到频率变化后短时间加速。
    */
   private startFrequencyMonitoring(): void {
     if (this.frequencyPollingInterval) {
@@ -2176,24 +2183,74 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       return;
     }
 
-    logger.debug('Starting frequency monitoring (every 5s)');
+    logger.debug('Starting frequency monitoring', {
+      normalIntervalMs: NORMAL_FREQUENCY_POLL_MS,
+      fastIntervalMs: FAST_FREQUENCY_POLL_MS,
+    });
 
-    // 启动定时器
-    this.frequencyPollingInterval = setInterval(() => {
-      void this.checkFrequencyChange();
-    }, 5000);
+    this.frequencyMonitoringActive = true;
+    this.frequencyMonitoringGeneration += 1;
+    this.scheduleNextFrequencyPoll();
   }
 
   /**
    * 停止频率监控
    */
   private stopFrequencyMonitoring(): void {
+    this.frequencyMonitoringActive = false;
+    this.frequencyMonitoringGeneration += 1;
     if (this.frequencyPollingInterval) {
-      clearInterval(this.frequencyPollingInterval);
+      clearTimeout(this.frequencyPollingInterval);
       this.frequencyPollingInterval = null;
       logger.debug('Frequency monitoring stopped');
     }
+    this.fastFrequencyPollingUntil = 0;
     this.lastKnownFrequency = null;
+  }
+
+  private scheduleNextFrequencyPoll(delayMs = this.getFrequencyPollingDelayMs()): void {
+    if (!this.frequencyMonitoringActive || !this.connection) {
+      return;
+    }
+
+    if (this.frequencyPollingInterval) {
+      clearTimeout(this.frequencyPollingInterval);
+    }
+
+    const generation = this.frequencyMonitoringGeneration;
+    this.frequencyPollingInterval = setTimeout(() => {
+      this.frequencyPollingInterval = null;
+      void this.runFrequencyPollingCycle(generation);
+    }, delayMs);
+  }
+
+  private async runFrequencyPollingCycle(generation: number): Promise<void> {
+    if (!this.frequencyMonitoringActive || generation !== this.frequencyMonitoringGeneration) {
+      return;
+    }
+
+    if (this.activeFrequencyPollGeneration === generation) {
+      this.scheduleNextFrequencyPoll();
+      return;
+    }
+
+    this.activeFrequencyPollGeneration = generation;
+    try {
+      await this.checkFrequencyChange();
+    } finally {
+      if (this.activeFrequencyPollGeneration === generation) {
+        this.activeFrequencyPollGeneration = null;
+      }
+      if (generation === this.frequencyMonitoringGeneration) {
+        this.scheduleNextFrequencyPoll();
+      }
+    }
+  }
+
+  private getFrequencyPollingDelayMs(): number {
+    return Date.now() < this.fastFrequencyPollingUntil
+      ? FAST_FREQUENCY_POLL_MS
+      : NORMAL_FREQUENCY_POLL_MS;
   }
 
   /**
@@ -2242,6 +2299,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
           } MHz -> ${(currentFrequency / 1000000).toFixed(3)} MHz`
         );
 
+        if (previousKnownFrequency !== null) {
+          this.fastFrequencyPollingUntil = Date.now() + FAST_FREQUENCY_POLL_WINDOW_MS;
+        }
         this.updateKnownFrequency(currentFrequency);
 
         // 发射频率变化事件

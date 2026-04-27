@@ -145,10 +145,10 @@ export class IcomWlanConnection
   private async runSerializedTask<T>(
     taskName: string,
     task: () => Promise<T>,
-    options?: { critical?: boolean },
+    options?: { critical?: boolean; id?: string },
   ): Promise<T> {
     const sessionId = this.ioSessionId;
-    return this.ioQueue.run({ sessionId, critical: options?.critical }, async (activeSessionId) => {
+    return this.ioQueue.run({ sessionId, critical: options?.critical, id: options?.id }, async (activeSessionId) => {
       this.ensureSession(activeSessionId);
       const result = await task();
       this.ensureSession(activeSessionId);
@@ -428,7 +428,7 @@ export class IcomWlanConnection
       } catch (error) {
         throw this.convertError(error, 'getFrequency');
       }
-    });
+    }, { id: 'getFrequency' });
   }
 
   /**
@@ -533,7 +533,7 @@ export class IcomWlanConnection
       } catch (error) {
         throw this.convertError(error, 'getMode');
       }
-    });
+    }, { id: 'getMode' });
   }
 
   /**

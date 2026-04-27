@@ -13,6 +13,7 @@ type MockRig = {
   setFrequency: ReturnType<typeof vi.fn>;
   setMode: ReturnType<typeof vi.fn>;
   setPtt: ReturnType<typeof vi.fn>;
+  readOperatingFrequency: ReturnType<typeof vi.fn>;
   readOperatingMode: ReturnType<typeof vi.fn>;
   readTransceiverState: ReturnType<typeof vi.fn>;
   readSWR: ReturnType<typeof vi.fn>;
@@ -56,6 +57,7 @@ function createConnectedConnection(): { connection: IcomWlanConnection; rig: Moc
     setFrequency: vi.fn().mockResolvedValue(undefined),
     setMode: vi.fn().mockResolvedValue(undefined),
     setPtt: vi.fn().mockResolvedValue(undefined),
+    readOperatingFrequency: vi.fn().mockResolvedValue(7100000),
     readOperatingMode: vi.fn().mockResolvedValue({ mode: 1, modeName: 'USB', filterName: 'Normal' }),
     readTransceiverState: vi.fn().mockResolvedValue('RX'),
     readSWR: vi.fn().mockResolvedValue(null),
@@ -154,6 +156,22 @@ describe('IcomWlanConnection', () => {
     });
     expect(rig.setFrequency).toHaveBeenCalledWith(7100000);
     expect(rig.setMode).toHaveBeenCalledTimes(1);
+  });
+
+  it('dedupes concurrent getFrequency reads through the CAT queue', async () => {
+    const read = createDeferred<number>();
+    const { connection, rig } = createConnectedConnection();
+    rig.readOperatingFrequency.mockReturnValueOnce(read.promise);
+
+    const first = connection.getFrequency();
+    await Promise.resolve();
+    const second = connection.getFrequency();
+
+    expect(rig.readOperatingFrequency).toHaveBeenCalledTimes(1);
+
+    read.resolve(7100000);
+    await expect(Promise.all([first, second])).resolves.toEqual([7100000, 7100000]);
+    expect(rig.readOperatingFrequency).toHaveBeenCalledTimes(1);
   });
 
   it('treats null ICOM mode readback as a recoverable optional read failure', async () => {
