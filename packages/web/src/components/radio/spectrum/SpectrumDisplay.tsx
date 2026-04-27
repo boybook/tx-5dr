@@ -7,8 +7,8 @@ import { api } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioModeState, useSpectrum } from '../../../store/radioStore';
 import { createLogger } from '../../../utils/logger';
 import { setPreferredSpectrumKind } from '../../../utils/spectrumPreferences';
-import { useTargetRxFrequencies } from '../../../hooks/useTargetRxFrequencies';
-import { useTxFrequencies } from '../../../hooks/useTxFrequencies';
+import { useTargetRxFrequencies, type RxFrequency } from '../../../hooks/useTargetRxFrequencies';
+import { useTxFrequencies, type TxFrequency } from '../../../hooks/useTxFrequencies';
 import { WebGLWaterfall } from './WebGLWaterfall';
 import type { AutoRangeConfig, PresetMarker, TxBandOverlay } from './WebGLWaterfall';
 import { SpectrumStreamController } from '../../../spectrum/SpectrumStreamController';
@@ -377,15 +377,66 @@ export function getCollapsedSpectrumPosition(frequency: number): number {
   return ((clampCollapsedSpectrumFrequency(frequency) - BASEBAND_INTERACTION_RANGE.min) / span) * 100;
 }
 
+interface SpectrumMarkerResolutionInput {
+  isOpenWebRXSdrSelected: boolean;
+  isOpenWebRXDetailMode: boolean;
+  showMarkers: boolean;
+  showRxMarkers: boolean;
+  showTxMarkers: boolean;
+  isVoiceMode: boolean;
+  rxFrequencies: RxFrequency[];
+  txFrequencies: TxFrequency[];
+}
+
+export function resolveSpectrumMarkerFrequencies({
+  isOpenWebRXSdrSelected,
+  isOpenWebRXDetailMode,
+  showMarkers,
+  showRxMarkers,
+  showTxMarkers,
+  isVoiceMode,
+  rxFrequencies,
+  txFrequencies,
+}: SpectrumMarkerResolutionInput): { rxFrequencies: RxFrequency[]; txFrequencies: TxFrequency[] } {
+  if (!showMarkers || isVoiceMode) {
+    return { rxFrequencies: [], txFrequencies: [] };
+  }
+
+  if (isOpenWebRXSdrSelected && !isOpenWebRXDetailMode) {
+    return { rxFrequencies: [], txFrequencies: [] };
+  }
+
+  return {
+    rxFrequencies: showRxMarkers ? rxFrequencies : [],
+    txFrequencies: showTxMarkers ? txFrequencies : [],
+  };
+}
+
+export function resolveCollapsedSpectrumMarkerFrequencies({
+  showMarkers,
+  isVoiceMode,
+  rxFrequencies,
+  txFrequencies,
+}: Pick<SpectrumMarkerResolutionInput, 'showMarkers' | 'isVoiceMode' | 'rxFrequencies' | 'txFrequencies'>): {
+  rxFrequencies: RxFrequency[];
+  txFrequencies: TxFrequency[];
+} {
+  if (!showMarkers || isVoiceMode) {
+    return { rxFrequencies: [], txFrequencies: [] };
+  }
+
+  return { rxFrequencies, txFrequencies };
+}
+
 interface CollapsedSpectrumBarProps {
   className?: string;
   controller: SpectrumStreamController;
   height: number;
   isVoiceMode: boolean;
   hoverFrequency?: number | null;
-  rxFrequencies: Array<{ callsign: string; frequency: number }>;
-  txFrequencies: Array<{ operatorId: string; frequency: number; callsign?: string }>;
-  onTxFrequencyChange: (operatorId: string, frequency: number) => void;
+  rxFrequencies: RxFrequency[];
+  txFrequencies: TxFrequency[];
+  onTxFrequencyChange?: (operatorId: string, frequency: number) => void;
   onRestore: () => void;
 }
 
@@ -607,6 +658,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     });
   }, [connection.state.radioService, operators]);
 
+  const displayTxFrequencyChange = showMarkers && canDragTxMarker && !isVoiceMode
+    ? handleTxFrequencyChange
+    : undefined;
+  const collapsedTxFrequencyChange = showMarkers && !isVoiceMode
+    ? handleTxFrequencyChange
+    : undefined;
+
   const handleRightClickSetFrequency = useCallback((frequency: number) => {
     if (currentOperatorId) {
       handleTxFrequencyChange(currentOperatorId, frequency);
@@ -774,20 +832,36 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const sourceTabOrder: SpectrumKind[] = [OPENWEBRX_SDR_SOURCE, RADIO_SDR_SOURCE, AUDIO_SOURCE];
   const visibleSourceTabs = sourceTabOrder.filter(kind => availableSources.some(source => source.kind === kind));
   const voiceOverlayIsInteractive = Boolean(sessionState?.interaction.canDragVoiceOverlay);
-  const openWebRXTxFrequencies = React.useMemo(() => {
-    if (!isOpenWebRXSdrSelected || !showMarkers || !showTxMarkers || isVoiceMode) {
-      return [];
-    }
-
-    return isOpenWebRXDetailMode ? txFrequencies : [];
-  }, [isOpenWebRXDetailMode, isOpenWebRXSdrSelected, isVoiceMode, showMarkers, showTxMarkers, txFrequencies]);
-  const openWebRXRxFrequencies = React.useMemo(() => {
-    if (!isOpenWebRXSdrSelected || !showMarkers || !showRxMarkers || isVoiceMode) {
-      return [];
-    }
-
-    return isOpenWebRXDetailMode ? rxFrequencies : [];
-  }, [isOpenWebRXDetailMode, isOpenWebRXSdrSelected, isVoiceMode, rxFrequencies, showMarkers, showRxMarkers]);
+  const displaySpectrumMarkers = React.useMemo(() => resolveSpectrumMarkerFrequencies({
+    isOpenWebRXSdrSelected,
+    isOpenWebRXDetailMode,
+    showMarkers,
+    showRxMarkers,
+    showTxMarkers,
+    isVoiceMode,
+    rxFrequencies,
+    txFrequencies,
+  }), [
+    isOpenWebRXDetailMode,
+    isOpenWebRXSdrSelected,
+    isVoiceMode,
+    rxFrequencies,
+    showMarkers,
+    showRxMarkers,
+    showTxMarkers,
+    txFrequencies,
+  ]);
+  const collapsedSpectrumMarkers = React.useMemo(() => resolveCollapsedSpectrumMarkerFrequencies({
+    showMarkers,
+    isVoiceMode,
+    rxFrequencies,
+    txFrequencies,
+  }), [
+    isVoiceMode,
+    rxFrequencies,
+    showMarkers,
+    txFrequencies,
+  ]);
   const effectiveHoverFrequency = hoverFrequency;
   const openWebRXFullRange = isOpenWebRXSdrSelected ? (streamStatus.fullRange ?? openWebRXStreamRange) : null;
   const voiceBandOverlay: TxBandOverlay[] = React.useMemo(() => {
@@ -1157,9 +1231,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         height={isVoiceMode ? COLLAPSED_VOICE_HEIGHT : COLLAPSED_DIGITAL_HEIGHT}
         isVoiceMode={isVoiceMode}
         hoverFrequency={effectiveHoverFrequency}
-        rxFrequencies={showMarkers && !isVoiceMode ? rxFrequencies : []}
-        txFrequencies={showMarkers && !isVoiceMode ? txFrequencies : []}
-        onTxFrequencyChange={handleTxFrequencyChange}
+        rxFrequencies={collapsedSpectrumMarkers.rxFrequencies}
+        txFrequencies={collapsedSpectrumMarkers.txFrequencies}
+        onTxFrequencyChange={collapsedTxFrequencyChange}
         onRestore={handleRestoreSpectrum}
       />
     );
@@ -1239,21 +1313,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         interactionFrequencyStepHz={frequencyGestureStepHz}
         txBandOverlays={voiceBandOverlay}
         presetMarkers={presetMarkers}
-        rxFrequencies={
-          isOpenWebRXSdrSelected
-            ? openWebRXRxFrequencies
-            : (showMarkers && showRxMarkers && !isVoiceMode ? rxFrequencies : [])
-        }
-        txFrequencies={
-          isOpenWebRXSdrSelected
-            ? openWebRXTxFrequencies
-            : (showMarkers && showTxMarkers && !isVoiceMode ? txFrequencies : [])
-        }
-        onTxFrequencyChange={
-          showMarkers && canDragTxMarker && !isVoiceMode
-            ? handleTxFrequencyChange
-            : undefined
-        }
+        rxFrequencies={displaySpectrumMarkers.rxFrequencies}
+        txFrequencies={displaySpectrumMarkers.txFrequencies}
+        onTxFrequencyChange={displayTxFrequencyChange}
         onTxBandOverlayFrequencyChange={voiceOverlayIsInteractive ? (_id, frequency) => void handleVoiceFrequencyChange(frequency) : undefined}
         onPresetMarkerClick={presetMarkers.length > 0 ? handleRadioFrequencyGesture : undefined}
         // Voice-mode whole-spectrum drag tuning is intentionally disabled.
