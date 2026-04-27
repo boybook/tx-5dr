@@ -9,7 +9,12 @@ export type CapabilityRuntimeValue = CapabilityState['value'];
 export type ReadFn = (conn: IRadioConnection) => Promise<CapabilityRuntimeValue>;
 export type WriteFn = (conn: IRadioConnection, value: CapabilityValue) => Promise<void>;
 export type ActionFn = (conn: IRadioConnection) => Promise<void>;
-export type ProbeFn = (conn: IRadioConnection) => Promise<boolean>;
+export type CapabilitySupportSource = 'static-caps' | 'runtime-probe' | 'backend-declared';
+export type ProbeSupportResult = boolean | {
+  supported: boolean;
+  source: CapabilitySupportSource;
+};
+export type ProbeFn = (conn: IRadioConnection) => Promise<ProbeSupportResult>;
 export type DescriptorResolver = (conn: IRadioConnection) => Promise<CapabilityDescriptor>;
 
 export interface CapabilityDefinition {

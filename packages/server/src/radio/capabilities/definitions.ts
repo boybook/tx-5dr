@@ -9,12 +9,53 @@ import {
   buildDcsCodeOptions,
   buildModeBandwidthOptions,
   buildTuningStepOptions,
-  createHamlibLevelProbe,
   createBooleanDescriptor,
   createOption,
   createPercentDescriptor,
   hasHamlibSupportProbe,
+  isHamlibStaticFunctionSupported,
+  isHamlibStaticLevelSupported,
+  isHamlibStaticVfoOpSupported,
 } from './definition-builders.js';
+import type { CapabilitySupportSource, ProbeSupportResult } from './types.js';
+
+function getHamlibConfigType(conn: Parameters<CapabilityDefinition['probeSupport']>[0]): string | undefined {
+  return conn.getConnectionInfo?.().config?.type;
+}
+
+function staticSupportResult(
+  supported: boolean,
+  source: CapabilitySupportSource = 'static-caps',
+): ProbeSupportResult {
+  return { supported, source };
+}
+
+function shouldTrustNegativeHamlibStaticCaps(conn: Parameters<CapabilityDefinition['probeSupport']>[0]): boolean {
+  return conn.getType() === RadioConnectionType.HAMLIB
+    && getHamlibConfigType(conn) === 'serial'
+    && hasHamlibSupportProbe(conn);
+}
+
+function probeHamlibStaticLevel(conn: Parameters<CapabilityDefinition['probeSupport']>[0], level: string): ProbeSupportResult | null {
+  if (isHamlibStaticLevelSupported(conn, level)) {
+    return staticSupportResult(true);
+  }
+  return shouldTrustNegativeHamlibStaticCaps(conn) ? staticSupportResult(false) : null;
+}
+
+function probeHamlibStaticFunction(conn: Parameters<CapabilityDefinition['probeSupport']>[0], functionName: string): ProbeSupportResult | null {
+  if (isHamlibStaticFunctionSupported(conn, functionName)) {
+    return staticSupportResult(true);
+  }
+  return shouldTrustNegativeHamlibStaticCaps(conn) ? staticSupportResult(false) : null;
+}
+
+function probeHamlibStaticVfoOp(conn: Parameters<CapabilityDefinition['probeSupport']>[0], opName: string): ProbeSupportResult | null {
+  if (isHamlibStaticVfoOpSupported(conn, opName)) {
+    return staticSupportResult(true);
+  }
+  return shouldTrustNegativeHamlibStaticCaps(conn) ? staticSupportResult(false) : null;
+}
 
 function createDefinitions(): CapabilityDefinition[] {
   return [
@@ -36,9 +77,11 @@ function createDefinitions(): CapabilityDefinition[] {
         surfaceGroup: 'tuner',
       },
       probeSupport: async (conn) => {
+        const staticProbe = probeHamlibStaticFunction(conn, 'TUNER');
+        if (staticProbe) return staticProbe;
         if (!conn.getTunerCapabilities) return false;
         const caps = await conn.getTunerCapabilities();
-        return caps.hasSwitch;
+        return { supported: caps.hasSwitch, source: 'backend-declared' };
       },
       read: (conn) => conn.getTunerStatus!().then((status) => status.enabled),
       write: (conn, value) => conn.setTuner!(Boolean(value)),
@@ -60,9 +103,11 @@ function createDefinitions(): CapabilityDefinition[] {
         surfaceGroup: 'tuner',
       },
       probeSupport: async (conn) => {
+        const staticProbe = probeHamlibStaticVfoOp(conn, 'TUNE');
+        if (staticProbe) return staticProbe;
         if (!conn.getTunerCapabilities) return false;
         const caps = await conn.getTunerCapabilities();
-        return caps.hasManualTune;
+        return { supported: caps.hasManualTune, source: 'backend-declared' };
       },
       action: async (conn) => {
         const result = await conn.startTuning!();
@@ -98,12 +143,11 @@ function createDefinitions(): CapabilityDefinition[] {
           : descriptor;
       },
       probeSupport: async (conn) => {
-        if (conn.getType() === RadioConnectionType.HAMLIB && hasHamlibSupportProbe(conn) && conn.isSupportedLevel('RFPOWER')) {
-          return true;
-        }
+        const staticProbe = probeHamlibStaticLevel(conn, 'RFPOWER');
+        if (staticProbe) return staticProbe;
         if (!conn.getRFPower) return false;
         await conn.getRFPower();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getRFPower!(),
       write: (conn, value) => conn.setRFPower!(value as number),
@@ -117,12 +161,11 @@ function createDefinitions(): CapabilityDefinition[] {
         'radio:capability.af_gain.description',
       ),
       probeSupport: async (conn) => {
-        if (conn.getType() === RadioConnectionType.HAMLIB && hasHamlibSupportProbe(conn) && conn.isSupportedLevel('AF')) {
-          return true;
-        }
+        const staticProbe = probeHamlibStaticLevel(conn, 'AF');
+        if (staticProbe) return staticProbe;
         if (!conn.getAFGain) return false;
         await conn.getAFGain();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getAFGain!(),
       write: (conn, value) => conn.setAFGain!(value as number),
@@ -136,12 +179,11 @@ function createDefinitions(): CapabilityDefinition[] {
         'radio:capability.sql.description',
       ),
       probeSupport: async (conn) => {
-        if (conn.getType() === RadioConnectionType.HAMLIB && hasHamlibSupportProbe(conn) && conn.isSupportedLevel('SQL')) {
-          return true;
-        }
+        const staticProbe = probeHamlibStaticLevel(conn, 'SQL');
+        if (staticProbe) return staticProbe;
         if (!conn.getSQL) return false;
         await conn.getSQL();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getSQL!(),
       write: (conn, value) => conn.setSQL!(value as number),
@@ -155,12 +197,11 @@ function createDefinitions(): CapabilityDefinition[] {
         'radio:capability.mic_gain.description',
       ),
       probeSupport: async (conn) => {
-        if (conn.getType() === RadioConnectionType.HAMLIB && hasHamlibSupportProbe(conn) && conn.isSupportedLevel('MICGAIN')) {
-          return true;
-        }
+        const staticProbe = probeHamlibStaticLevel(conn, 'MICGAIN');
+        if (staticProbe) return staticProbe;
         if (!conn.getMicGain) return false;
         await conn.getMicGain();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getMicGain!(),
       write: (conn, value) => conn.setMicGain!(value as number),
@@ -177,9 +218,11 @@ function createDefinitions(): CapabilityDefinition[] {
         compoundGroup: 'compressor',
       },
       probeSupport: async (conn) => {
+        const staticProbe = probeHamlibStaticFunction(conn, 'COMP');
+        if (staticProbe) return staticProbe;
         if (!conn.getCompressorEnabled) return false;
         await conn.getCompressorEnabled();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getCompressorEnabled!(),
       write: (conn, value) => conn.setCompressorEnabled!(Boolean(value)),
@@ -196,8 +239,11 @@ function createDefinitions(): CapabilityDefinition[] {
         compoundGroup: 'compressor',
       },
       probeSupport: async (conn) => {
+        const staticProbe = probeHamlibStaticLevel(conn, 'COMP');
+        if (staticProbe) return staticProbe;
         if (!conn.getCompressorLevel) return false;
-        return createHamlibLevelProbe('COMP')(conn, () => conn.getCompressorLevel!().then(() => undefined));
+        await conn.getCompressorLevel();
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getCompressorLevel!(),
       write: (conn, value) => conn.setCompressorLevel!(value as number),
@@ -211,8 +257,11 @@ function createDefinitions(): CapabilityDefinition[] {
         'radio:capability.monitor_gain.description',
       ),
       probeSupport: async (conn) => {
+        const staticProbe = probeHamlibStaticLevel(conn, 'MONITOR_GAIN');
+        if (staticProbe) return staticProbe;
         if (!conn.getMonitorGain) return false;
-        return createHamlibLevelProbe('MONITOR_GAIN')(conn, () => conn.getMonitorGain!().then(() => undefined));
+        await conn.getMonitorGain();
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getMonitorGain!(),
       write: (conn, value) => conn.setMonitorGain!(value as number),
@@ -226,9 +275,11 @@ function createDefinitions(): CapabilityDefinition[] {
         'radio:capability.nb.description',
       ),
       probeSupport: async (conn) => {
+        const staticProbe = probeHamlibStaticFunction(conn, 'NB');
+        if (staticProbe) return staticProbe;
         if (!conn.getNBEnabled) return false;
         await conn.getNBEnabled();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getNBEnabled!(),
       write: (conn, value) => conn.setNBEnabled!(value as number),
@@ -242,9 +293,11 @@ function createDefinitions(): CapabilityDefinition[] {
         'radio:capability.nr.description',
       ),
       probeSupport: async (conn) => {
+        const staticProbe = probeHamlibStaticFunction(conn, 'NR');
+        if (staticProbe) return staticProbe;
         if (!conn.getNREnabled) return false;
         await conn.getNREnabled();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getNREnabled!(),
       write: (conn, value) => conn.setNREnabled!(value as number),
@@ -260,7 +313,7 @@ function createDefinitions(): CapabilityDefinition[] {
       probeSupport: async (conn) => {
         if (!conn.getLockMode) return false;
         await conn.getLockMode();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getLockMode!(),
       write: (conn, value) => conn.setLockMode!(Boolean(value)),
@@ -274,9 +327,11 @@ function createDefinitions(): CapabilityDefinition[] {
         'radio:capability.mute.description',
       ),
       probeSupport: async (conn) => {
+        const staticProbe = probeHamlibStaticFunction(conn, 'MUTE');
+        if (staticProbe) return staticProbe;
         if (!conn.getMuteEnabled) return false;
         await conn.getMuteEnabled();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getMuteEnabled!(),
       write: (conn, value) => conn.setMuteEnabled!(Boolean(value)),
@@ -290,9 +345,11 @@ function createDefinitions(): CapabilityDefinition[] {
         'radio:capability.vox.description',
       ),
       probeSupport: async (conn) => {
+        const staticProbe = probeHamlibStaticFunction(conn, 'VOX');
+        if (staticProbe) return staticProbe;
         if (!conn.getVOXEnabled) return false;
         await conn.getVOXEnabled();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getVOXEnabled!(),
       write: (conn, value) => conn.setVOXEnabled!(Boolean(value)),
@@ -328,8 +385,11 @@ function createDefinitions(): CapabilityDefinition[] {
         hasSurfaceControl: false,
       }),
       probeSupport: async (conn) => {
+        const staticProbe = probeHamlibStaticLevel(conn, 'AGC');
+        if (staticProbe) return staticProbe;
         if (!conn.getAgcMode) return false;
-        return createHamlibLevelProbe('AGC')(conn, () => conn.getAgcMode!().then(() => undefined));
+        await conn.getAgcMode();
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getAgcMode!(),
       write: (conn, value) => conn.setAgcMode!(String(value)),
@@ -363,8 +423,11 @@ function createDefinitions(): CapabilityDefinition[] {
         hasSurfaceControl: false,
       }),
       probeSupport: async (conn) => {
+        const staticProbe = probeHamlibStaticLevel(conn, 'PREAMP');
+        if (staticProbe) return staticProbe;
         if (!conn.getPreampLevel) return false;
-        return createHamlibLevelProbe('PREAMP')(conn, () => conn.getPreampLevel!().then(() => undefined));
+        await conn.getPreampLevel();
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getPreampLevel!(),
       write: (conn, value) => conn.setPreampLevel!(value as number),
@@ -398,8 +461,11 @@ function createDefinitions(): CapabilityDefinition[] {
         hasSurfaceControl: false,
       }),
       probeSupport: async (conn) => {
+        const staticProbe = probeHamlibStaticLevel(conn, 'ATT');
+        if (staticProbe) return staticProbe;
         if (!conn.getAttenuatorLevel) return false;
-        return createHamlibLevelProbe('ATT')(conn, () => conn.getAttenuatorLevel!().then(() => undefined));
+        await conn.getAttenuatorLevel();
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getAttenuatorLevel!(),
       write: (conn, value) => conn.setAttenuatorLevel!(value as number),
@@ -442,7 +508,7 @@ function createDefinitions(): CapabilityDefinition[] {
         }
         const bandwidths = await conn.getSupportedModeBandwidths();
         await conn.getModeBandwidth();
-        return bandwidths.length > 0;
+        return { supported: bandwidths.length > 0, source: 'runtime-probe' };
       },
       read: (conn) => conn.getModeBandwidth!(),
       write: (conn, value) => conn.setModeBandwidth!(value as RadioModeBandwidth),
@@ -483,7 +549,7 @@ function createDefinitions(): CapabilityDefinition[] {
       probeSupport: async (conn) => {
         if (!conn.getRitOffset) return false;
         await conn.getRitOffset();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getRitOffset!(),
       write: (conn, value) => conn.setRitOffset!(value as number),
@@ -524,7 +590,7 @@ function createDefinitions(): CapabilityDefinition[] {
       probeSupport: async (conn) => {
         if (!conn.getXitOffset) return false;
         await conn.getXitOffset();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getXitOffset!(),
       write: (conn, value) => conn.setXitOffset!(value as number),
@@ -562,7 +628,7 @@ function createDefinitions(): CapabilityDefinition[] {
       probeSupport: async (conn) => {
         if (!conn.getTuningStep) return false;
         await conn.getTuningStep();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getTuningStep!(),
       write: (conn, value) => conn.setTuningStep!(value as number),
@@ -593,7 +659,7 @@ function createDefinitions(): CapabilityDefinition[] {
       probeSupport: async (conn) => {
         if (!conn.getRepeaterShift) return false;
         await conn.getRepeaterShift();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getRepeaterShift!(),
       write: (conn, value) => conn.setRepeaterShift!(String(value)),
@@ -617,7 +683,7 @@ function createDefinitions(): CapabilityDefinition[] {
       probeSupport: async (conn) => {
         if (!conn.getRepeaterOffset) return false;
         await conn.getRepeaterOffset();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getRepeaterOffset!(),
       write: (conn, value) => conn.setRepeaterOffset!(value as number),
@@ -655,7 +721,7 @@ function createDefinitions(): CapabilityDefinition[] {
       probeSupport: async (conn) => {
         if (!conn.getCtcssTone) return false;
         await conn.getCtcssTone();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getCtcssTone!(),
       write: (conn, value) => conn.setCtcssTone!(value as number),
@@ -693,7 +759,7 @@ function createDefinitions(): CapabilityDefinition[] {
       probeSupport: async (conn) => {
         if (!conn.getDcsCode) return false;
         await conn.getDcsCode();
-        return true;
+        return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getDcsCode!(),
       write: (conn, value) => conn.setDcsCode!(value as number),

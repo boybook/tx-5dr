@@ -8,7 +8,7 @@ import type { IRadioConnection } from '../connections/IRadioConnection.js';
 import { createLogger } from '../../utils/logger.js';
 import { isRecoverableOptionalRadioError } from '../optionalRadioError.js';
 import { CAPABILITY_DEFINITION_MAP, CAPABILITY_DEFINITIONS } from './definitions.js';
-import type { CapabilityRuntimeEvents } from './types.js';
+import type { CapabilityRuntimeEvents, CapabilitySupportSource, ProbeSupportResult } from './types.js';
 
 const logger = createLogger('CapabilityRuntimeRegistry');
 
@@ -21,6 +21,7 @@ function shouldEnforceDiscreteNumberOptions(descriptor: CapabilityDescriptor): b
 export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEvents> {
   private connection: IRadioConnection | null = null;
   private readonly supportedCapabilities = new Set<string>();
+  private readonly supportSources = new Map<string, CapabilitySupportSource>();
   private readonly valueCache = new Map<string, CapabilityState>();
   private readonly descriptorCache = new Map<string, CapabilityDescriptor>();
   private readonly pollingTimers = new Map<string, ReturnType<typeof setInterval>>();
@@ -55,6 +56,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     this.connection = connection;
     this.stopAllPolling();
     this.supportedCapabilities.clear();
+    this.supportSources.clear();
     this.valueCache.clear();
 
     await this.resolveDescriptors(connection);
@@ -72,6 +74,8 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       logger.warn('Initial capability read encountered an unexpected error', error);
     }
 
+    this.startPolling();
+
     logger.info('Capability probe complete', {
       supported: Array.from(this.supportedCapabilities),
     });
@@ -84,6 +88,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     this.clearPTTState();
     this.connection = null;
     this.supportedCapabilities.clear();
+    this.supportSources.clear();
     this.valueCache.clear();
     this.descriptorCache.clear();
     this.emit('capabilityList', { descriptors: [], capabilities: [] });
@@ -124,13 +129,24 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       throw new Error(`Capability '${id}' is not supported by current radio`);
     }
 
+    this.assertCapabilityAvailable(id);
+
     if (action) {
       if (!definition.action) {
         throw new Error(`No action handler for capability '${id}'`);
       }
 
       logger.info(`Executing action: ${id}`);
-      await definition.action(this.connection);
+      try {
+        await definition.action(this.connection);
+        this.markCapabilityAvailable(id, this.valueCache.get(id)?.value ?? null, true);
+      } catch (error) {
+        if (isRecoverableOptionalRadioError(error)) {
+          this.markCapabilityUnavailable(id, error);
+          throw new Error(`Capability '${id}' is currently unavailable`);
+        }
+        throw error;
+      }
       return;
     }
 
@@ -145,11 +161,20 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     }
 
     logger.info(`Writing capability: ${id}`, { value });
-    await definition.write(this.connection, value);
+    try {
+      await definition.write(this.connection, value);
+    } catch (error) {
+      if (isRecoverableOptionalRadioError(error)) {
+        this.markCapabilityUnavailable(id, error);
+        throw new Error(`Capability '${id}' is currently unavailable`);
+      }
+      throw error;
+    }
 
     const optimisticState: CapabilityState = {
       id,
       supported: true,
+      availability: 'available',
       value,
       meta: this.valueCache.get(id)?.meta,
       updatedAt: Date.now(),
@@ -186,6 +211,9 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       supported?: boolean;
       value: CapabilityState['value'];
       meta?: CapabilityState['meta'];
+      availability?: CapabilityState['availability'];
+      availabilityReason?: CapabilityState['availabilityReason'];
+      lastError?: string;
     },
   ): void {
     const descriptor = this.descriptorCache.get(id);
@@ -198,11 +226,15 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       this.supportedCapabilities.add(id);
     } else {
       this.supportedCapabilities.delete(id);
+      this.supportSources.delete(id);
     }
 
     const updatedState: CapabilityState = {
       id,
       supported,
+      availability: nextState.availability ?? (supported ? 'available' : 'unknown'),
+      availabilityReason: nextState.availabilityReason,
+      lastError: nextState.lastError,
       value: nextState.value,
       meta: nextState.meta,
       updatedAt: Date.now(),
@@ -254,10 +286,14 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
 
     for (const definition of CAPABILITY_DEFINITIONS) {
       try {
-        const supported = await definition.probeSupport(this.connection);
+        const probeResult = await definition.probeSupport(this.connection);
+        const { supported, source } = this.normalizeProbeResult(probeResult);
         if (supported) {
           this.supportedCapabilities.add(definition.id);
-          logger.debug(`Capability supported: ${definition.id}`);
+          if (source) {
+            this.supportSources.set(definition.id, source);
+          }
+          logger.debug(`Capability supported: ${definition.id}`, { source });
         }
       } catch (error) {
         if (isRecoverableOptionalRadioError(error)) {
@@ -344,10 +380,11 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       const newValue = await definition.read(this.connection);
       const cached = this.valueCache.get(id);
 
-      if (!cached || cached.value !== newValue) {
+      if (!cached || cached.value !== newValue || cached.availability !== 'available' || cached.lastError) {
         const newState: CapabilityState = {
           id,
           supported: true,
+          availability: 'available',
           value: newValue,
           meta: cached?.meta,
           updatedAt: Date.now(),
@@ -365,9 +402,17 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
           this.emit('capabilityChanged', newState);
         }
       }
+
+      if (id === 'tuner_switch') {
+        this.markRelatedTunerActionAvailable();
+      }
     } catch (error) {
       if (isRecoverableOptionalRadioError(error)) {
-        this.markCapabilityUnsupported(id, error);
+        if (this.supportedCapabilities.has(id)) {
+          this.markCapabilityUnavailable(id, error);
+        } else {
+          this.markCapabilityUnsupported(id, error);
+        }
         return;
       }
 
@@ -406,6 +451,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     const hadPollingTimer = this.pollingTimers.has(id);
 
     this.supportedCapabilities.delete(id);
+    this.supportSources.delete(id);
     this.valueCache.delete(id);
 
     const timer = this.pollingTimers.get(id);
@@ -422,10 +468,73 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       this.emit('capabilityChanged', {
         id,
         supported: false,
+        availability: 'unknown',
         value: null,
+        lastError: this.formatCapabilityError(error),
         updatedAt: Date.now(),
       });
     }
+  }
+
+  private markCapabilityUnavailable(id: string, error: unknown): void {
+    const cached = this.valueCache.get(id);
+    const unavailableState: CapabilityState = {
+      id,
+      supported: true,
+      availability: 'unavailable',
+      availabilityReason: 'runtime_error',
+      lastError: this.formatCapabilityError(error),
+      value: null,
+      meta: cached?.meta,
+      updatedAt: Date.now(),
+    };
+
+    this.supportedCapabilities.add(id);
+    this.valueCache.set(id, unavailableState);
+    logger.info(`Capability temporarily unavailable: ${id}`, {
+      reason: unavailableState.lastError,
+      source: this.supportSources.get(id),
+    });
+    this.emit('capabilityChanged', unavailableState);
+  }
+
+  private markCapabilityAvailable(id: string, value: CapabilityState['value'], emit = false): void {
+    const cached = this.valueCache.get(id);
+    const availableState: CapabilityState = {
+      id,
+      supported: true,
+      availability: 'available',
+      value,
+      meta: cached?.meta,
+      updatedAt: Date.now(),
+    };
+    this.valueCache.set(id, availableState);
+    if (emit) {
+      this.emit('capabilityChanged', availableState);
+    }
+  }
+
+  private markRelatedTunerActionAvailable(): void {
+    const id = 'tuner_tune';
+    if (!this.supportedCapabilities.has(id)) {
+      return;
+    }
+
+    const cached = this.valueCache.get(id);
+    if (cached?.availability !== 'unavailable') {
+      return;
+    }
+
+    const availableState: CapabilityState = {
+      id,
+      supported: true,
+      availability: 'available',
+      value: null,
+      meta: cached.meta,
+      updatedAt: Date.now(),
+    };
+    this.valueCache.set(id, availableState);
+    this.emit('capabilityChanged', availableState);
   }
 
   private buildSnapshot(): CapabilityState[] {
@@ -443,6 +552,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
           return {
             id: definition.id,
             supported: true,
+            availability: 'available',
             value: null,
             updatedAt: Date.now(),
           };
@@ -451,10 +561,32 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
         return {
           id: definition.id,
           supported: false,
+          availability: 'unknown',
           value: null,
           updatedAt: Date.now(),
         };
       });
+  }
+
+  private normalizeProbeResult(result: ProbeSupportResult): { supported: boolean; source?: CapabilitySupportSource } {
+    if (typeof result === 'boolean') {
+      return { supported: result, source: result ? 'runtime-probe' : undefined };
+    }
+    return result;
+  }
+
+  private assertCapabilityAvailable(id: string): void {
+    const cached = this.valueCache.get(id);
+    if (cached?.availability === 'unavailable') {
+      throw new Error(`Capability '${id}' is currently unavailable`);
+    }
+  }
+
+  private formatCapabilityError(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return String(error);
   }
 
   private assertWriteValue(descriptor: CapabilityDescriptor, value: CapabilityValue): void {

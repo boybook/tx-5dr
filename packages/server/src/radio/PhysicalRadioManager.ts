@@ -1247,6 +1247,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     } catch (error) {
       // 天调设置失败不影响主连接状态
       logger.error(`Failed to set tuner: ${(error as Error).message}`);
+      if (!this.shouldBypassCapabilitySystem() && isRecoverableOptionalRadioError(error)) {
+        this.capabilityManager.markCapabilityUnavailable('tuner_switch', error);
+      }
       throw error;
     }
   }
@@ -1337,9 +1340,14 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     } catch (error) {
       // 调谐失败不影响主连接状态
       logger.error(`Failed to start tuning: ${(error as Error).message}`);
+      const isRecoverableTunerError = isRecoverableOptionalRadioError(error);
+      if (!this.shouldBypassCapabilitySystem() && isRecoverableTunerError) {
+        this.capabilityManager.markCapabilityUnavailable('tuner_switch', error);
+        this.capabilityManager.markCapabilityUnavailable('tuner_tune', error);
+      }
 
       // 调谐失败，广播失败状态
-      if (this.connection.getTunerStatus) {
+      if (this.connection.getTunerStatus && !isRecoverableTunerError) {
         const failedStatus: import('@tx5dr/contracts').TunerStatus = {
           enabled: true,
           active: false,
