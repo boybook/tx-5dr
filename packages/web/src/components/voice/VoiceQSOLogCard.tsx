@@ -279,7 +279,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
                 });
               }}
               isDisabled={!currentOperatorId || !myCallsign}
-              className="h-8 min-w-0 w-8 px-0 sm:w-auto sm:px-2"
+              className="h-7 min-h-7 min-w-0 w-8 px-0 sm:w-auto sm:px-2"
               title={t('radio:operator.viewLog')}
               aria-label={t('radio:operator.viewLog')}
               startContent={<FontAwesomeIcon icon={faBook} />}
