@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+import { UserRole } from '@tx5dr/contracts';
 import { createRadioEventMap } from '../radio/createEventMap';
 import { initialRadioState } from '../radioStore';
 import type { AuthState } from '../authStore';
+import type { RadioService } from '../../services/radioService';
 
 describe('createRadioEventMap voice frequency sync', () => {
 
@@ -17,7 +19,7 @@ describe('createRadioEventMap voice frequency sync', () => {
       authEnabled: false,
       allowPublicViewing: true,
       jwt: null,
-      role: 'admin' as any,
+      role: UserRole.ADMIN,
       label: null,
       operatorIds: [],
       isPublicViewer: false,
@@ -36,8 +38,8 @@ describe('createRadioEventMap voice frequency sync', () => {
         subscribeSpectrum: vi.fn(),
         sendHandshake: vi.fn(),
         setClientEnabledOperators: vi.fn(),
-        wsClientInstance: {} as any,
-      } as any,
+        wsClientInstance: {},
+      } as unknown as RadioService,
       radioServiceRef: { current: null },
       clientInstanceId: 'client-test',
       radioStateRef: { current: initialRadioState },
@@ -85,7 +87,7 @@ describe('createRadioEventMap voice frequency sync', () => {
       authEnabled: false,
       allowPublicViewing: true,
       jwt: null,
-      role: 'admin' as any,
+      role: UserRole.ADMIN,
       label: null,
       operatorIds: [],
       isPublicViewer: false,
@@ -104,8 +106,8 @@ describe('createRadioEventMap voice frequency sync', () => {
         subscribeSpectrum: vi.fn(),
         sendHandshake: vi.fn(),
         setClientEnabledOperators: vi.fn(),
-        wsClientInstance: {} as any,
-      } as any,
+        wsClientInstance: {},
+      } as unknown as RadioService,
       radioServiceRef: { current: null },
       clientInstanceId: 'client-test',
       radioStateRef: { current: initialRadioState },

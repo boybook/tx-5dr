@@ -1595,7 +1595,7 @@ export const SystemSettings = forwardRef<
             className="space-y-2"
             as="div"
           >
-            {ntpServers.map((item, index) => (
+            {ntpServers.map((item) => (
               <NtpServerReorderItem
                 key={item.id}
                 item={item}
