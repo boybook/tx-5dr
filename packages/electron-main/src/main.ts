@@ -52,6 +52,7 @@ let crashedProcessName: string = ''; // 崩溃的子进程名
 let mainWindowInstance: BrowserWindow | null = null; // 主窗口实例
 let trayInstance: Tray | null = null; // 系统托盘实例（Windows/Linux）
 let isQuitting: boolean = false; // 主动退出标志，防止子进程被杀时弹崩溃错误
+const intentionalChildShutdowns = new WeakSet<import('node:child_process').ChildProcess>();
 let notificationPermissionHandlersConfigured = false;
 
 type QuitSource = 'tray-menu' | 'window-close' | 'renderer' | 'before-quit' | 'will-quit' | 'unknown';
@@ -735,6 +736,7 @@ function killProcess(
     }
 
     logger.info(`stopping child process: ${name} (PID: ${proc.pid})`);
+    intentionalChildShutdowns.add(proc);
 
     let forced = false;
     let softTimer: NodeJS.Timeout | null = null;
@@ -859,6 +861,11 @@ function wireChildProcess(name: string, child: import('node:child_process').Chil
     logger.info(`[child:${name}] exited with code ${code}, signal ${signal}`);
 
     if (isQuitting) return;
+
+    if (intentionalChildShutdowns.delete(child)) {
+      logger.info(`[child:${name}] intentional shutdown complete`);
+      return;
+    }
 
     if (code !== 0) {
       if (!errorType) {
