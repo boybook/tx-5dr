@@ -355,8 +355,6 @@ export function PluginMarketplace({ isActive, onOpenInstalledPlugin }: PluginMar
   const isLoading = Boolean(catalogLoading[channel]) && !catalogMeta;
   const loadError = catalogError[channel];
   const listedCount = filteredItems.length;
-  const installedCount = currentItems.filter((item) => item.isInstalled).length;
-  const updatesCount = currentItems.filter((item) => item.hasUpdate || item.hasChannelSwitch).length;
 
   const runPluginAction = useCallback(async (action: PluginAction, item: MarketItemState) => {
     const { entry } = item;
