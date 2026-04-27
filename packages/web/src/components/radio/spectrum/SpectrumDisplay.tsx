@@ -24,7 +24,12 @@ type ElectronWindowHelper = Window & {
   };
 };
 
-const WATERFALL_HISTORY = 120;
+const WATERFALL_HISTORY_ROWS = 120;
+const SPECTRUM_HISTORY_LIMITS = {
+  audio: 120,
+  'radio-sdr': 60,
+  'openwebrx-sdr': 40,
+} satisfies Partial<Record<SpectrumKind, number>>;
 const SETTINGS_STORAGE_KEY = 'spectrum-range-settings';
 const OPENWEBRX_VIEWPORT_STORAGE_KEY = 'openwebrx-spectrum-viewports';
 const AUDIO_SOURCE: SpectrumKind = 'audio';
@@ -454,7 +459,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const { capabilities, selectedKind, sessionState, setSelectedKind, setSubscribedKind } = useSpectrum();
   const controllerRef = useRef<SpectrumStreamController | null>(null);
   if (!controllerRef.current) {
-    controllerRef.current = new SpectrumStreamController(WATERFALL_HISTORY);
+    controllerRef.current = new SpectrumStreamController(SPECTRUM_HISTORY_LIMITS);
   }
   const streamController = controllerRef.current;
   const streamStatus = useSyncExternalStore(
@@ -1222,7 +1227,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         maxDb={currentManualRangeSettings.maxDb}
         autoRange={!isRadioSdrSelected && !isOpenWebRXSdrSelected && audioRangeSettings.mode === 'auto'}
         autoRangeConfig={audioRangeSettings.auto}
-        totalRows={WATERFALL_HISTORY}
+        totalRows={WATERFALL_HISTORY_ROWS}
         frequencyRangeMode={frequencyRangeMode}
         referenceFrequencyHz={spectrumReferenceFrequency}
         basebandInteractionRange={BASEBAND_INTERACTION_RANGE}

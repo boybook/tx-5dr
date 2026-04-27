@@ -40,6 +40,7 @@ const POV_SYNC_INTERVAL_MS = 120;
 const POV_SYNC_ALTITUDE_EPSILON = 0.025;
 const POV_SYNC_CENTER_EPSILON_WITH_GRIDS = 1.2;
 const POV_SYNC_CENTER_EPSILON_IDLE = 999;
+const WORKED_GRID_CACHE_LIMIT = 4;
 
 type GlobeControls = {
   autoRotate: boolean;
@@ -208,6 +209,12 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     depthWrite: false,
   }), []);
 
+  useEffect(() => () => {
+    globeMaterial.dispose();
+    workedGridTileMaterial2.dispose();
+    workedGridTileMaterial4.dispose();
+  }, [globeMaterial, workedGridTileMaterial2, workedGridTileMaterial4]);
+
   const landPolygons = useMemo(() => {
     const land = feature(landTopology as LandTopology, (landTopology as LandTopology).objects.land);
     return land.type === 'FeatureCollection'
@@ -318,6 +325,8 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     const cacheKey = `${logBookId}:${bandFilter || 'all'}`;
     const cached = workedGridCacheRef.current.get(cacheKey);
     if (cached) {
+      workedGridCacheRef.current.delete(cacheKey);
+      workedGridCacheRef.current.set(cacheKey, cached);
       setWorkedGridItems(cached);
       setWorkedGridError(null);
       setWorkedGridLoading(false);
@@ -343,6 +352,13 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         }
 
         workedGridCacheRef.current.set(cacheKey, response.data.items);
+        while (workedGridCacheRef.current.size > WORKED_GRID_CACHE_LIMIT) {
+          const oldestKey = workedGridCacheRef.current.keys().next().value;
+          if (!oldestKey) {
+            break;
+          }
+          workedGridCacheRef.current.delete(oldestKey);
+        }
         setWorkedGridItems(response.data.items);
         logger.info('Worked grids for page globe loaded', {
           logBookId,
@@ -718,7 +734,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         tileHeight="height"
         tileAltitude={getGridTileAltitude}
         tileMaterial={(tile: object) => ((tile as GlobeGridTile).precision === 4 ? workedGridTileMaterial4 : workedGridTileMaterial2)}
-        tileCurvatureResolution={3}
+        tileCurvatureResolution={2}
         tilesTransitionDuration={0}
         tileLabel={(tile) => {
           const workedTile = tile as GlobeGridTile;
@@ -729,7 +745,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         pointLng="lng"
         pointAltitude={(point) => ((point as GlobeStationPoint).isHome ? 0.06 : 0.012)}
         pointRadius="size"
-        pointResolution={18}
+        pointResolution={10}
         pointColor="color"
         pointLabel={(point) => {
           const stationPoint = point as GlobeStationPoint;
@@ -745,8 +761,8 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         arcColor="color"
         arcAltitude="altitude"
         arcStroke="stroke"
-        arcCurveResolution={96}
-        arcCircularResolution={8}
+        arcCurveResolution={48}
+        arcCircularResolution={6}
         arcLabel={(arc) => {
           const globeArc = arc as GlobeArc;
           return `${globeArc.callsign} · ${globeArc.grid}<br/>${globeArc.mode} · ${(globeArc.frequency / 1_000_000).toFixed(3)} MHz<br/>${formatUtcTime(globeArc.startTime)} UTC`;
@@ -766,7 +782,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         labelColor={() => 'rgba(254,226,226,0.92)'}
         labelAltitude={0.012}
         labelSize={(label) => ((label as WorkedGridLabel).precision === 4 ? 0.42 : 0.7)}
-        labelResolution={4}
+        labelResolution={2}
         labelIncludeDot={false}
         labelLabel={(label) => {
           const workedGridLabel = label as WorkedGridLabel;
