@@ -63,6 +63,7 @@ type PhysicalRadioManagerTestAccessor = {
   postConnectSettleMs: number;
   checkFrequencyChange: () => Promise<void>;
   startFrequencyMonitoring: () => void;
+  stopFrequencyMonitoring: () => void;
   setupConnectionEventForwarding: () => void;
   handleConnectionError: (error: Error) => void;
   initializeStateMachine: (config: HamlibConfig) => Promise<void>;
@@ -73,6 +74,17 @@ type PhysicalRadioManagerTestAccessor = {
 
 function asTestManager(manager: PhysicalRadioManager): PhysicalRadioManagerTestAccessor {
   return manager as unknown as PhysicalRadioManagerTestAccessor;
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+
+  return { promise, resolve, reject };
 }
 
 describe('PhysicalRadioManager', () => {
@@ -797,6 +809,137 @@ describe('PhysicalRadioManager', () => {
     await Promise.resolve();
 
     expect(refreshAll).not.toHaveBeenCalled();
+  });
+
+  it('uses a 2s default frequency polling interval', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    const testManager = asTestManager(manager);
+    const getFrequency = vi.fn().mockResolvedValue(14074000);
+    testManager.connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.ICOM_WLAN),
+      isCriticalOperationActive: vi.fn().mockReturnValue(false),
+      getFrequency,
+      setKnownFrequency: vi.fn(),
+    };
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+
+    try {
+      testManager.startFrequencyMonitoring();
+
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(getFrequency).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(getFrequency).toHaveBeenCalledTimes(1);
+    } finally {
+      testManager.stopFrequencyMonitoring();
+      vi.useRealTimers();
+    }
+  });
+
+  it('switches to 0.5s frequency polling for 5s after detecting a radio-side change', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    const testManager = asTestManager(manager);
+    testManager.lastKnownFrequency = 14074000;
+    const getFrequency = vi.fn()
+      .mockResolvedValueOnce(14075000)
+      .mockResolvedValue(14075000);
+    testManager.connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.ICOM_WLAN),
+      isCriticalOperationActive: vi.fn().mockReturnValue(false),
+      getFrequency,
+      setKnownFrequency: vi.fn(),
+    };
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+
+    try {
+      testManager.startFrequencyMonitoring();
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(getFrequency).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(499);
+      expect(getFrequency).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(getFrequency).toHaveBeenCalledTimes(2);
+    } finally {
+      testManager.stopFrequencyMonitoring();
+      vi.useRealTimers();
+    }
+  });
+
+  it('returns to 2s polling after the fast frequency polling window expires', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    const testManager = asTestManager(manager);
+    testManager.lastKnownFrequency = 14074000;
+    const getFrequency = vi.fn()
+      .mockResolvedValueOnce(14075000)
+      .mockResolvedValue(14075000);
+    testManager.connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.ICOM_WLAN),
+      isCriticalOperationActive: vi.fn().mockReturnValue(false),
+      getFrequency,
+      setKnownFrequency: vi.fn(),
+    };
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+
+    try {
+      testManager.startFrequencyMonitoring();
+      await vi.advanceTimersByTimeAsync(2500);
+      expect(getFrequency).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      const callsAfterFastWindow = getFrequency.mock.calls.length;
+
+      await vi.advanceTimersByTimeAsync(1499);
+      expect(getFrequency).toHaveBeenCalledTimes(callsAfterFastWindow);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(getFrequency).toHaveBeenCalledTimes(callsAfterFastWindow + 1);
+    } finally {
+      testManager.stopFrequencyMonitoring();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not stack frequency polls while a previous read is still pending', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    const testManager = asTestManager(manager);
+    const read = createDeferred<number>();
+    const getFrequency = vi.fn().mockReturnValue(read.promise);
+    testManager.connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.ICOM_WLAN),
+      isCriticalOperationActive: vi.fn().mockReturnValue(false),
+      getFrequency,
+      setKnownFrequency: vi.fn(),
+    };
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+
+    try {
+      testManager.startFrequencyMonitoring();
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(getFrequency).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(getFrequency).toHaveBeenCalledTimes(1);
+
+      read.resolve(14074000);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(getFrequency).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(getFrequency).toHaveBeenCalledTimes(2);
+    } finally {
+      testManager.stopFrequencyMonitoring();
+      vi.useRealTimers();
+    }
   });
 
   it('completes conservative post-connect bootstrap before emitting connected', async () => {

@@ -699,7 +699,7 @@ export class HamlibConnection
       } catch (error) {
         throw this.convertError(error, 'getFrequency');
       }
-    });
+    }, { id: 'getFrequency' });
   }
 
   /**
@@ -785,14 +785,14 @@ export class HamlibConnection
   async getMode(): Promise<RadioModeInfo> {
     return this.runSerializedTask('getMode', async () => {
       return this.performModeRead();
-    });
+    }, { id: 'getMode' });
   }
 
   async getModeBandwidth(): Promise<RadioModeReadBandwidth> {
     return this.runSerializedTask('getModeBandwidth', async () => {
       const modeInfo = await this.performModeRead();
       return modeInfo.bandwidth;
-    });
+    }, { id: 'getModeBandwidth' });
   }
 
   async setModeBandwidth(bandwidth: RadioModeBandwidth): Promise<void> {
@@ -1070,7 +1070,7 @@ export class HamlibConnection
       } catch (error) {
         throw this.convertError(error, 'getSpectrumSupportSummary');
       }
-    });
+    }, { id: 'getSpectrumSupportSummary' });
   }
 
   async getSpectrumSpans(): Promise<number[]> {
@@ -1083,7 +1083,7 @@ export class HamlibConnection
       } catch (error) {
         throw this.convertError(error, 'getSpectrumSpans');
       }
-    });
+    }, { id: 'getSpectrumSpans' });
   }
 
   async getCurrentSpectrumSpan(): Promise<number | null> {
@@ -1095,7 +1095,7 @@ export class HamlibConnection
       } catch (error) {
         throw this.convertError(error, 'getCurrentSpectrumSpan');
       }
-    });
+    }, { id: 'getCurrentSpectrumSpan' });
   }
 
   async setSpectrumSpan(spanHz: number): Promise<void> {
@@ -1129,7 +1129,7 @@ export class HamlibConnection
       } catch (error) {
         throw this.convertError(error, 'getSpectrumDisplayState');
       }
-    });
+    }, { id: 'getSpectrumDisplayState' });
   }
 
   async configureSpectrumDisplay(config: {
@@ -2631,10 +2631,10 @@ export class HamlibConnection
   private async runSerializedTask<T>(
     taskName: string,
     task: () => Promise<T>,
-    options?: { critical?: boolean },
+    options?: { critical?: boolean; id?: string },
   ): Promise<T> {
     const sessionId = this.ioSessionId;
-    return this.ioQueue.run({ sessionId, critical: options?.critical }, async (activeSessionId) => {
+    return this.ioQueue.run({ sessionId, critical: options?.critical, id: options?.id }, async (activeSessionId) => {
       this.ensureSession(activeSessionId);
       const result = await task();
       this.ensureSession(activeSessionId);

@@ -283,6 +283,23 @@ describe('HamlibConnection', () => {
     expect(rig.getSplit).toHaveBeenCalledTimes(1);
   });
 
+  it('dedupes concurrent getFrequency reads through the CAT queue', async () => {
+    const read = createDeferred<number>();
+    const { connection, rig } = createConnectedConnection({
+      getFrequency: vi.fn().mockReturnValue(read.promise),
+    });
+
+    const first = connection.getFrequency();
+    await Promise.resolve();
+    const second = connection.getFrequency();
+
+    expect(rig.getFrequency).toHaveBeenCalledTimes(1);
+
+    read.resolve(7100000);
+    await expect(Promise.all([first, second])).resolves.toEqual([7100000, 7100000]);
+    expect(rig.getFrequency).toHaveBeenCalledTimes(1);
+  });
+
   it('prefers DATA mode for digital intent when supported', async () => {
     const { connection, rig } = createConnectedConnection();
     asTestConnection(connection).supportedModes = new Set(['USB', 'PKTUSB']);
