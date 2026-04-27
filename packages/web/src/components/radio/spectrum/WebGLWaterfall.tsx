@@ -14,6 +14,7 @@ export interface AutoRangeConfig {
 }
 
 export interface RxFrequency {
+  operatorId: string;
   callsign: string;
   frequency: number;
 }
@@ -192,7 +193,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const latestGestureFrequencyRef = useRef<number | null>(null);
 
   // RX Popover hover状态
-  const [hoveredRxCallsign, setHoveredRxCallsign] = React.useState<string | null>(null);
+  const [hoveredRxMarkerId, setHoveredRxMarkerId] = React.useState<string | null>(null);
   const [hoveredPresetMarkerId, setHoveredPresetMarkerId] = React.useState<string | null>(null);
 
   // TX Popover hover状态（多操作员时使用）
@@ -1217,6 +1218,15 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   }, [viewState.hasData, resetAutoRangeState]);
 
   useEffect(() => {
+    if (hoveredRxMarkerId === null) {
+      return;
+    }
+    if (!rxFrequencies.some(({ operatorId }) => operatorId === hoveredRxMarkerId)) {
+      setHoveredRxMarkerId(null);
+    }
+  }, [hoveredRxMarkerId, rxFrequencies]);
+
+  useEffect(() => {
     resetAutoRangeState();
   }, [
     autoRange,
@@ -1856,19 +1866,19 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         })}
 
         {/* RX标记 - 绿色，带Popover (hover触发) */}
-        {rxFrequencies.map(({ callsign, frequency }) => {
+        {rxFrequencies.map(({ operatorId, callsign, frequency }) => {
           const position = getMarkerPosition(frequency);
           if (position === null) {
             return null;
           }
-          const isOpen = hoveredRxCallsign === callsign;
+          const isOpen = hoveredRxMarkerId === operatorId;
           return (
             <Popover
-              key={`rx-${callsign}`}
+              key={`rx-${operatorId}`}
               placement="bottom"
               isOpen={isOpen}
               onOpenChange={(open) => {
-                if (!open) setHoveredRxCallsign(null);
+                if (!open) setHoveredRxMarkerId(null);
               }}
             >
               <PopoverTrigger>
@@ -1876,8 +1886,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
                   className="absolute top-0 h-full pointer-events-auto cursor-pointer hover:opacity-80 transition-opacity"
                   style={{ left: `${position}%`, transform: 'translateX(-50%)' }}
                   data-waterfall-marker-interactive="true"
-                  onMouseEnter={() => setHoveredRxCallsign(callsign)}
-                  onMouseLeave={() => setHoveredRxCallsign(null)}
+                  onMouseEnter={() => setHoveredRxMarkerId(operatorId)}
+                  onMouseLeave={() => setHoveredRxMarkerId(null)}
                 >
                   <div className="w-0.5 h-full bg-green-500/50" />
                   <div
@@ -1888,8 +1898,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
                 </div>
               </PopoverTrigger>
               <PopoverContent
-                onMouseEnter={() => setHoveredRxCallsign(callsign)}
-                onMouseLeave={() => setHoveredRxCallsign(null)}
+                onMouseEnter={() => setHoveredRxMarkerId(operatorId)}
+                onMouseLeave={() => setHoveredRxMarkerId(null)}
               >
                 <div className="px-2 py-1">
                   <div className="text-sm font-semibold">{callsign}</div>
