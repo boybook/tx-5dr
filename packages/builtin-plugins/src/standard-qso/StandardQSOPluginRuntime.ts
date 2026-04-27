@@ -1083,7 +1083,25 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         this.updateSlots();
     }
 
+    private syncOperatorConfig(): void {
+        const nextConfig = this.operator.config;
+        const previousConfig = this._context.config;
+        const shouldRegenerateSlots =
+            previousConfig.myCallsign !== nextConfig.myCallsign ||
+            previousConfig.myGrid !== nextConfig.myGrid;
+
+        this._context = {
+            ...this._context,
+            config: nextConfig,
+        };
+
+        if (shouldRegenerateSlots) {
+            this.updateSlots();
+        }
+    }
+
     get context(): QSOContext {
+        this.syncOperatorConfig();
         return this._context;
     }
 
@@ -1196,6 +1214,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     }
 
     requestCall(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): void {
+        this.syncOperatorConfig();
         this.logger.debug(`requestCall: myCallsign=${this.operator.config.myCallsign}, target=${callsign}`, lastMessage);
         this.clearPost73RetryContext('manual requestCall');
         if (!lastMessage) {
@@ -1287,16 +1306,19 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     }
 
     decide(messages: ParsedFT8Message[], meta?: StrategyDecisionMeta): Promise<StrategyDecision> {
+        this.syncOperatorConfig();
         return this.handleReceivedAndDicideNext(messages, {
             isReDecision: meta?.isReDecision,
         });
     }
 
     getTransmitText(): string | null {
+        this.syncOperatorConfig();
         return this.handleTransmitSlot();
     }
 
     getSnapshot(): StrategyRuntimeSnapshot {
+        this.syncOperatorConfig();
         return {
             currentState: this.state,
             slots: this.getSlots(),
@@ -1312,6 +1334,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     }
 
     patchContext(patch: Partial<StrategyRuntimeContext>): void {
+        this.syncOperatorConfig();
         this._context = {
             ...this._context,
             ...patch,
@@ -1329,6 +1352,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     }
 
     setState(state: SlotsIndex): void {
+        this.syncOperatorConfig();
         const oldState = this.state;
         // Audit anomaly: external setState that aborts an active QSO by jumping to TX6.
         // Triggered intentionally only when:
