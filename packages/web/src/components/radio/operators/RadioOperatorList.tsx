@@ -1,12 +1,17 @@
 import * as React from 'react';
-import { Button } from '@heroui/react';
+import { Alert, Button } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
 import { useOperators, useConnection } from '../../../store/radioStore';
+import { useRadioModeState } from '../../../store/radio/hooks';
 import { useAuth } from '../../../store/authStore';
 import { RadioOperator } from './RadioOperator';
 import { hasHiddenOperators } from '../../../utils/operatorPreferences';
 import { useTranslation } from 'react-i18next';
+import {
+  deriveSameCallsignStandardFrequencyWarning,
+  formatSameCallsignWarningCallsigns,
+} from '../../../utils/standardDigitalFrequencyWarning';
 
 interface RadioOperatorListProps {
   onCreateOperator?: () => void; // 创建操作员的回调
@@ -16,7 +21,19 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
   const { t } = useTranslation('radio');
   const { operators } = useOperators();
   const connection = useConnection();
+  const { currentMode, currentRadioFrequency } = useRadioModeState();
   const { state: authState } = useAuth();
+  const standardFrequencyWarning = React.useMemo(
+    () => deriveSameCallsignStandardFrequencyWarning(
+      operators,
+      currentMode?.name,
+      currentRadioFrequency,
+    ),
+    [operators, currentMode?.name, currentRadioFrequency],
+  );
+  const standardFrequencyWarningCallsigns = standardFrequencyWarning
+    ? formatSameCallsignWarningCallsigns(standardFrequencyWarning.groups)
+    : '';
 
   // 连接后请求操作员列表
   React.useEffect(() => {
@@ -90,6 +107,18 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
 
   return (
     <div className="space-y-4">
+      {standardFrequencyWarning && (
+        <Alert
+          color="warning"
+          variant="flat"
+          title={t('operator.standardFrequencyMultiTxTitle')}
+          className="text-xs"
+        >
+          {t('operator.standardFrequencyMultiTxDesc', {
+            callsigns: standardFrequencyWarningCallsigns,
+          })}
+        </Alert>
+      )}
       {operators.map((operator) => (
         <RadioOperator
           key={operator.id}

@@ -311,7 +311,9 @@
     "connectFirst": "Please connect to server first",
     "connectStatus": "Connection: {{connected}} / Service: {{service}}",
     "initialized": "Initialized",
-    "notInitialized": "Not initialized"
+    "notInitialized": "Not initialized",
+    "standardFrequencyMultiTxTitle": "Same-callsign same-cycle multi-TX is prohibited",
+    "standardFrequencyMultiTxDesc": "This is a prohibited transmission on standard FT8/FT4 frequencies. Stop one transmitter immediately or move it to a different cycle. Callsign: {{callsigns}}."
   },
   "profile": {
     "reconnecting": "Reconnecting to \"{{name}}\"",

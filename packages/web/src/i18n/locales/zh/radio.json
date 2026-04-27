@@ -311,7 +311,9 @@
     "connectFirst": "请先连接到服务器",
     "connectStatus": "连接状态: {{connected}} / 服务: {{service}}",
     "initialized": "已初始化",
-    "notInitialized": "未初始化"
+    "notInitialized": "未初始化",
+    "standardFrequencyMultiTxTitle": "禁止同呼号同周期多路发射",
+    "standardFrequencyMultiTxDesc": "这是 FT8/FT4 标准频率下的违规发射行为，请立刻停止其中一路发射或调整到不同周期。涉及呼号：{{callsigns}}。"
   },
   "profile": {
     "reconnecting": "正在重新连接「{{name}}」",

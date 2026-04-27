@@ -208,6 +208,125 @@ describe('PluginManager standard-qso late re-decision', () => {
     };
   }
 
+  async function createMultiOperatorRuntimeHarness(options?: {
+    operatorCount?: number;
+    myCallsign?: string;
+    myGrid?: string;
+    autoReplyToCQ?: boolean;
+    replyToWorkedStations?: boolean;
+    hasWorkedCallsign?: boolean | ((callsign: string) => boolean | Promise<boolean>);
+  }) {
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string; callsign: string }) => {
+      const result = typeof options?.hasWorkedCallsign === 'function'
+        ? options.hasWorkedCallsign(data.callsign)
+        : (options?.hasWorkedCallsign ?? false);
+      void Promise.resolve(result).then((hasWorked) => {
+        eventEmitter.emit('hasWorkedCallsignResponse' as any, {
+          requestId: data.requestId,
+          hasWorked,
+        });
+      });
+    });
+
+    let pluginManager!: PluginManager;
+    const operators: RadioOperator[] = [];
+    const isTargetBeingWorkedByOtherOperators = (
+      myCallsign: string,
+      targetCallsign: string,
+      currentOperatorId: string,
+    ): boolean => {
+      const normalizedMyCall = myCallsign.toUpperCase();
+      const normalizedTarget = targetCallsign.toUpperCase();
+      return operators.some((operator) => {
+        if (operator.config.id === currentOperatorId) return false;
+        if (operator.config.myCallsign.toUpperCase() !== normalizedMyCall) return false;
+        const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+        const currentTarget = String(status.context?.targetCallsign ?? '').toUpperCase();
+        return currentTarget === normalizedTarget && status.currentSlot !== 'TX6';
+      });
+    };
+
+    for (let index = 0; index < (options?.operatorCount ?? 2); index += 1) {
+      operators.push(new RadioOperator({
+        id: `operator-${index + 1}`,
+        mode: MODES.FT8,
+        myCallsign: options?.myCallsign ?? 'BG4IAJ',
+        myGrid: options?.myGrid ?? 'OM96',
+        frequency: 1000 + index * 200,
+        transmitCycles: [0],
+        maxQSOTimeoutCycles: 6,
+        maxCallAttempts: 5,
+        autoReplyToCQ: options?.autoReplyToCQ ?? false,
+        autoResumeCQAfterFail: false,
+        autoResumeCQAfterSuccess: false,
+        replyToWorkedStations: options?.replyToWorkedStations ?? false,
+        prioritizeNewCalls: true,
+        targetSelectionPriorityMode: 'dxcc_first',
+      }, eventEmitter, isTargetBeingWorkedByOtherOperators));
+    }
+
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-multi-test-'));
+    tempDirs.push(dataDir);
+
+    pluginManager = new PluginManager({
+      eventEmitter,
+      getOperators: () => operators,
+      getOperatorById: (id) => operators.find((operator) => operator.config.id === id),
+      getCurrentMode: () => MODES.FT8,
+      getOperatorAutomationSnapshot: (id) => pluginManager.getOperatorAutomationSnapshot(id),
+      requestOperatorCall: (operatorId, callsign, lastMessage) => {
+        pluginManager.requestCall(operatorId, callsign, lastMessage);
+      },
+      getRadioFrequency: async () => 7074000,
+      setRadioFrequency: () => {},
+      getRadioBand: () => '40m',
+      getRadioConnected: () => true,
+      getLatestSlotPack: () => null,
+      interruptOperatorTransmission: async () => undefined,
+      hasWorkedCallsign: async (_operatorId, callsign) => {
+        if (typeof options?.hasWorkedCallsign === 'function') {
+          return options.hasWorkedCallsign(callsign);
+        }
+        return options?.hasWorkedCallsign ?? false;
+      },
+      resetOperatorRuntime: () => {},
+      dataDir,
+    });
+
+    pluginManager.loadConfig({
+      configs: {},
+      operatorStrategies: Object.fromEntries(operators.map((operator) => [
+        operator.config.id,
+        'standard-qso',
+      ])),
+      operatorSettings: Object.fromEntries(operators.map((operator) => [
+        operator.config.id,
+        {
+          'standard-qso': {
+            autoReplyToCQ: operator.config.autoReplyToCQ,
+            autoResumeCQAfterFail: operator.config.autoResumeCQAfterFail,
+            autoResumeCQAfterSuccess: operator.config.autoResumeCQAfterSuccess,
+            replyToWorkedStations: operator.config.replyToWorkedStations,
+            targetSelectionPriorityMode: operator.config.targetSelectionPriorityMode,
+            maxQSOTimeoutCycles: operator.config.maxQSOTimeoutCycles,
+            maxCallAttempts: operator.config.maxCallAttempts,
+          },
+        },
+      ])),
+    });
+
+    await pluginManager.start();
+    operators.forEach((operator) => operator.start());
+
+    return {
+      dataDir,
+      eventEmitter,
+      operators,
+      pluginManager,
+    };
+  }
+
   function patchRuntimeContext(
     pluginManager: PluginManager,
     operatorId: string,
@@ -844,6 +963,75 @@ describe('PluginManager standard-qso late re-decision', () => {
 
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX2');
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBe('JA1AAA');
+
+    await pluginManager.shutdown();
+  });
+
+  it('refreshes operator config after plugin initialization before choosing between direct calls and CQ', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      autoReplyToCQ: true,
+    });
+
+    operator.config.myCallsign = 'BI7ALG';
+    operator.config.myGrid = 'OL78';
+
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('CQ BI7ALG OL78');
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(15_000), createSlotPack(createSlotInfo(15_000), [
+      {
+        message: 'BI7ALG BG4JLJ -06',
+        snr: 10,
+        freq: 919,
+      },
+      {
+        message: 'CQ DX LA9GX JO59',
+        snr: -17,
+        freq: 1197,
+      },
+    ]));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX3');
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBe('BG4JLJ');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toMatch(/^BG4JLJ BI7ALG R/);
+
+    await pluginManager.shutdown();
+  });
+
+  it('assigns simultaneous direct callers across same-callsign operators after config refresh', async () => {
+    const { operators, pluginManager } = await createMultiOperatorRuntimeHarness({
+      operatorCount: 2,
+    });
+
+    for (const operator of operators) {
+      operator.config.myCallsign = 'BI7ALG';
+      operator.config.myGrid = 'OL78';
+    }
+
+    const slotInfo = createSlotInfo(15_000);
+    await (pluginManager as any).handleSlotStart(slotInfo, createSlotPack(slotInfo, [
+      {
+        message: 'BI7ALG BG4JLJ -06',
+        snr: 10,
+        freq: 919,
+      },
+      {
+        message: 'BI7ALG BA7IWL OL63',
+        snr: 1,
+        freq: 1619,
+      },
+    ]));
+
+    const firstStatus = pluginManager.getOperatorRuntimeStatus(operators[0].config.id);
+    const secondStatus = pluginManager.getOperatorRuntimeStatus(operators[1].config.id);
+
+    expect(firstStatus.currentSlot).toBe('TX3');
+    expect(firstStatus.context?.targetCallsign).toBe('BG4JLJ');
+    expect(secondStatus.currentSlot).toBe('TX2');
+    expect(secondStatus.context?.targetCallsign).toBe('BA7IWL');
+    expect(new Set([
+      firstStatus.context?.targetCallsign,
+      secondStatus.context?.targetCallsign,
+    ])).toEqual(new Set(['BG4JLJ', 'BA7IWL']));
 
     await pluginManager.shutdown();
   });
