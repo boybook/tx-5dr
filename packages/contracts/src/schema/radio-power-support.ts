@@ -17,32 +17,40 @@ import type { HamlibConfig } from './radio.schema.js';
 export interface PowerCapableRigEntry {
   mfg: string | RegExp;
   model: string | RegExp;
+  /**
+   * Physical powerstat targets that are safe to expose while CAT is connected.
+   * `on` is represented by canPowerOn and is not part of this connected-state list.
+   */
+  supportedStates?: ReadonlyArray<'operate' | 'standby' | 'off'>;
 }
 
 export const POWER_CAPABLE_RIGS: ReadonlyArray<PowerCapableRigEntry> = [
   // Icom modern transceivers (CI-V 0x18 command)
-  { mfg: /^icom$/i, model: /^IC-?705$/i },
-  { mfg: /^icom$/i, model: /^IC-?7300$/i },
-  { mfg: /^icom$/i, model: /^IC-?7610$/i },
-  { mfg: /^icom$/i, model: /^IC-?7100$/i },
-  { mfg: /^icom$/i, model: /^IC-?7851$/i },
-  { mfg: /^icom$/i, model: /^IC-?9700$/i },
-  { mfg: /^icom$/i, model: /^IC-?R8600$/i },
+  { mfg: /^icom$/i, model: /^IC-?705$/i, supportedStates: ['off', 'standby', 'operate'] },
+  { mfg: /^icom$/i, model: /^IC-?7300$/i, supportedStates: ['off', 'standby', 'operate'] },
+  { mfg: /^icom$/i, model: /^IC-?7610$/i, supportedStates: ['off', 'standby', 'operate'] },
+  { mfg: /^icom$/i, model: /^IC-?7100$/i, supportedStates: ['off', 'standby', 'operate'] },
+  { mfg: /^icom$/i, model: /^IC-?7851$/i, supportedStates: ['off', 'standby', 'operate'] },
+  { mfg: /^icom$/i, model: /^IC-?9700$/i, supportedStates: ['off', 'standby', 'operate'] },
+  { mfg: /^icom$/i, model: /^IC-?R8600$/i, supportedStates: ['off', 'standby', 'operate'] },
 
   // Kenwood
-  { mfg: /^kenwood$/i, model: /^TS-590SG?$/i },
-  { mfg: /^kenwood$/i, model: /^TS-890$/i },
-  { mfg: /^kenwood$/i, model: /^TS-990$/i },
+  { mfg: /^kenwood$/i, model: /^TS-590SG?$/i, supportedStates: ['off', 'standby'] },
+  { mfg: /^kenwood$/i, model: /^TS-890$/i, supportedStates: ['off', 'standby'] },
+  { mfg: /^kenwood$/i, model: /^TS-990$/i, supportedStates: ['off', 'standby'] },
 
-  // Yaesu
-  { mfg: /^yaesu$/i, model: /^FT-991A?$/i },
-  { mfg: /^yaesu$/i, model: /^FTDX-?10$/i },
-  { mfg: /^yaesu$/i, model: /^FTDX-?101(MP|D)?$/i },
-  { mfg: /^yaesu$/i, model: /^FT-?710$/i },
+  // Yaesu: FT-710 rejects powerstat(operate), so do not expose it by default.
+  { mfg: /^yaesu$/i, model: /^FT-991A?$/i, supportedStates: ['off', 'standby'] },
+  { mfg: /^yaesu$/i, model: /^FTDX-?10$/i, supportedStates: ['off', 'standby'] },
+  { mfg: /^yaesu$/i, model: /^FTDX-?101(MP|D)?$/i, supportedStates: ['off', 'standby'] },
+  { mfg: /^yaesu$/i, model: /^FT-?710$/i, supportedStates: ['off'] },
 ];
 
-export function isRigModelPowerCapable(mfgName: string, modelName: string): boolean {
-  return POWER_CAPABLE_RIGS.some((entry) => {
+export function findPowerCapableRigEntry(
+  mfgName: string,
+  modelName: string
+): PowerCapableRigEntry | undefined {
+  return POWER_CAPABLE_RIGS.find((entry) => {
     const mfgOk =
       typeof entry.mfg === 'string'
         ? entry.mfg.toLowerCase() === mfgName.toLowerCase()
@@ -55,6 +63,10 @@ export function isRigModelPowerCapable(mfgName: string, modelName: string): bool
   });
 }
 
+export function isRigModelPowerCapable(mfgName: string, modelName: string): boolean {
+  return findPowerCapableRigEntry(mfgName, modelName) !== undefined;
+}
+
 export type PowerSupportReason =
   | 'model-unsupported'
   | 'network-mode-no-wake'
@@ -65,6 +77,8 @@ export interface PowerSupportDecision {
   canPowerOn: boolean;
   /** Whether the UI should surface a "power off" control. */
   canPowerOff: boolean;
+  /** Connected-state physical power targets the UI may offer. */
+  supportedStates: Array<'operate' | 'standby' | 'off'>;
   /** Machine-readable reason when `canPowerOn` is false. */
   reason?: PowerSupportReason;
 }
@@ -85,23 +99,32 @@ export function decidePowerSupport(
 ): PowerSupportDecision {
   switch (config.type) {
     case 'none':
-      return { canPowerOn: false, canPowerOff: false, reason: 'none-mode' };
+      return { canPowerOn: false, canPowerOff: false, supportedStates: [], reason: 'none-mode' };
     case 'network':
-      return { canPowerOn: false, canPowerOff: true, reason: 'network-mode-no-wake' };
+      return {
+        canPowerOn: false,
+        canPowerOff: true,
+        supportedStates: ['off'],
+        reason: 'network-mode-no-wake',
+      };
     case 'icom-wlan':
       // ICOM WLAN 的 CI-V-over-UDP 通道在电台关机后无法维持；即便已连接
       // 发送 powerstat(off) 也不能可靠恢复。整体不暴露电源控制。
-      return { canPowerOn: false, canPowerOff: false, reason: 'model-unsupported' };
+      return { canPowerOn: false, canPowerOff: false, supportedStates: [], reason: 'model-unsupported' };
     case 'serial': {
       if (!rigInfo) {
-        return { canPowerOn: false, canPowerOff: false, reason: 'model-unsupported' };
+        return { canPowerOn: false, canPowerOff: false, supportedStates: [], reason: 'model-unsupported' };
       }
-      const supported = isRigModelPowerCapable(rigInfo.mfgName, rigInfo.modelName);
-      return supported
-        ? { canPowerOn: true, canPowerOff: true }
-        : { canPowerOn: false, canPowerOff: false, reason: 'model-unsupported' };
+      const entry = findPowerCapableRigEntry(rigInfo.mfgName, rigInfo.modelName);
+      return entry
+        ? {
+            canPowerOn: true,
+            canPowerOff: true,
+            supportedStates: [...(entry.supportedStates ?? ['off'])],
+          }
+        : { canPowerOn: false, canPowerOff: false, supportedStates: [], reason: 'model-unsupported' };
     }
     default:
-      return { canPowerOn: false, canPowerOff: false, reason: 'model-unsupported' };
+      return { canPowerOn: false, canPowerOff: false, supportedStates: [], reason: 'model-unsupported' };
   }
 }

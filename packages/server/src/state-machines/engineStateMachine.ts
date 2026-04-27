@@ -76,24 +76,6 @@ export function createEngineStateMachine(
         }
       ),
 
-      /**
-       * 唤醒异步操作（control-only link + powerstat(ON) + readiness poll）
-       */
-      wakeActor: fromPromise<void, { engineInput: EngineInput }>(
-        async ({ input: { engineInput } }) => {
-          if (!engineInput.onWake) {
-            throw new Error('onWake callback not provided to engine state machine');
-          }
-          logger.info('Calling onWake()');
-          try {
-            await engineInput.onWake();
-            logger.info('onWake() succeeded');
-          } catch (error) {
-            logger.error('onWake() failed:', error);
-            throw error;
-          }
-        }
-      ),
     },
     actions: {
       /**
@@ -182,43 +164,6 @@ export function createEngineStateMachine(
         on: {
           START: {
             target: EngineState.STARTING,
-          },
-          POWER_ON: {
-            target: EngineState.WAKING,
-          },
-        },
-      },
-
-      /**
-       * 唤醒中：仅启动 radio 控制链路并发送 powerstat(ON)，等待电台响应
-       */
-      [EngineState.WAKING]: {
-        entry: [
-          'clearForcedStop',
-          'clearError',
-          { type: 'notifyStateChange', params: { engineInput: input, state: EngineState.WAKING } },
-        ],
-        invoke: {
-          src: 'wakeActor',
-          input: { engineInput: input },
-          onDone: {
-            // 唤醒成功，无缝进入 STARTING 完成完整启动（radio 资源会走 promote 路径）
-            target: EngineState.STARTING,
-          },
-          onError: {
-            target: EngineState.IDLE,
-            actions: [
-              assign(({ event }) => ({
-                error: event.error as Error,
-              })),
-              { type: 'invokeErrorHandler', params: { engineInput: input } },
-            ],
-          },
-        },
-        on: {
-          FORCE_STOP: {
-            target: EngineState.IDLE,
-            actions: ['markForcedStop'],
           },
         },
       },

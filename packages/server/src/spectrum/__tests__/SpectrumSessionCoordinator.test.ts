@@ -5,14 +5,26 @@ import { IcomWlanConnection } from '../../radio/connections/IcomWlanConnection.j
 
 class MockEngine extends EventEmitter<Record<string, never>> {
   readonly radioManager = {
+    getActiveConnection: vi.fn((): any => null),
     getConfig: vi.fn(() => ({ type: 'icom-wlan' })),
     getCoreCapabilities: vi.fn(() => ({ readRadioMode: true })),
+    getIcomWlanManager: vi.fn((): any => null),
     getMode: vi.fn(),
     isConnected: vi.fn(() => false),
+    isCriticalRadioOperationActive: vi.fn(() => false),
+    isSessionMutationInProgress: vi.fn(() => false),
   };
 
   getRadioManager() {
     return this.radioManager as any;
+  }
+
+  getEngineMode() {
+    return 'digital';
+  }
+
+  getStatus() {
+    return { currentMode: { name: 'FT8' } };
   }
 }
 
@@ -69,5 +81,25 @@ describe('SpectrumSessionCoordinator', () => {
 
     expect(span).toBe(50_000);
     expect(getCurrentSpectrumSpan).not.toHaveBeenCalled();
+  });
+
+  it('does not issue CAT-backed spectrum reads while a radio session mutation is active', async () => {
+    const engine = new MockEngine();
+    const spectrumCoordinator = new EventEmitter();
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    const connection = {
+      configureSpectrumDisplay: vi.fn(),
+      getSpectrumDisplayState: vi.fn().mockRejectedValue(new Error('must not read spectrum state')),
+    };
+
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.isSessionMutationInProgress.mockReturnValue(true);
+    engine.radioManager.getActiveConnection.mockReturnValue(connection);
+
+    const state = await coordinator.refresh('radio-sdr');
+
+    expect(state.kind).toBe('radio-sdr');
+    expect(connection.getSpectrumDisplayState).not.toHaveBeenCalled();
+    expect(engine.radioManager.getMode).not.toHaveBeenCalled();
   });
 });

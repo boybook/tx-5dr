@@ -190,18 +190,18 @@
   "power": {
     "on": {
       "label": "开机",
-      "description": "发送开机指令，电台响应后自动启动引擎。",
+      "description": "发送电台开机指令；电台响应后可按当前操作自动启动 TX-5DR 引擎。",
       "confirm": "确定开机吗？"
     },
     "off": {
       "label": "关机",
-      "description": "先停止引擎，再发送关机指令并断开连接。",
-      "confirm": "确定关机吗？引擎会先停止。"
+      "description": "向电台发送物理关机指令；成功后 TX-5DR 会停止相关资源并断开连接。",
+      "confirm": "确定让电台关机吗？成功后 TX-5DR 会停止相关资源。"
     },
     "standby": {
       "label": "待机",
-      "description": "让电台进入低功耗待机。CAT 连接会断开，引擎会停止。",
-      "confirm": "进入待机？引擎会停止，需重新开机恢复。"
+      "description": "让电台进入低功耗待机。成功后 CAT 连接可能断开，TX-5DR 会停止相关资源。",
+      "confirm": "让电台进入待机？成功后可能需要重新开机恢复。"
     },
     "operate": {
       "label": "工作",

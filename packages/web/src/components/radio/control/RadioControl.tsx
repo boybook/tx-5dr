@@ -524,6 +524,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const [modeError, setModeError] = useState<string | null>(null);
   const [availableFrequencies, setAvailableFrequencies] = useState<FrequencyOption[]>([]);
   const [isLoadingFrequencies, setIsLoadingFrequencies] = useState(false);
+  const isRadioConnectedRef = React.useRef(connection.state.isConnected);
+
+  React.useEffect(() => {
+    isRadioConnectedRef.current = connection.state.isConnected;
+  }, [connection.state.isConnected]);
   const [currentFrequency, setCurrentFrequency] = useState<string>('14074000');
 
   // 简化的UI状态管理
@@ -779,7 +784,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   // 加载并恢复上次选择的频率
   React.useEffect(() => {
     const loadLastFrequency = async () => {
-      if (!connection.state.isConnected || availableFrequencies.length === 0) {
+      if (!isRadioConnectedRef.current || availableFrequencies.length === 0) {
         return;
       }
 
@@ -798,7 +803,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
             logger.debug(`Restoring last frequency: ${matchingFreq.label}`);
             setCurrentFrequency(matchingFreq.key);
             // 自动设置频率到电台
-            autoSetFrequency(matchingFreq);
+            await autoSetFrequency(matchingFreq);
           }
         }
       } catch (error) {
@@ -809,7 +814,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
     // 延迟执行，等待频率列表和模式都加载完成
     if (availableFrequencies.length > 0) {
-      setTimeout(loadLastFrequency, 500);
+      const timeoutId = window.setTimeout(() => {
+        void loadLastFrequency();
+      }, 500);
+      return () => window.clearTimeout(timeoutId);
     }
   }, [availableFrequencies, radioMode.currentMode, connection.state.isConnected]);
 
@@ -1185,7 +1193,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   // 自动设置频率到后端（避免递归调用）
   const autoSetFrequency = async (frequency: FrequencyOption) => {
-    if (!connection.state.isConnected) return;
+    if (!isRadioConnectedRef.current) return;
 
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

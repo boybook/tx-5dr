@@ -35,7 +35,15 @@ interface PowerControlButtonProps {
   onPowerOnSuccess?: () => void;
 }
 
-const TARGET_ICON: Record<'operate' | 'standby' | 'off', typeof faPlay> = {
+type ConnectedPowerTarget = Exclude<RadioPowerTarget, 'on'>;
+
+export function getRenderablePowerTargets(
+  support: Pick<RadioPowerSupportInfo, 'supportedStates'>
+): ConnectedPowerTarget[] {
+  return [...support.supportedStates];
+}
+
+const TARGET_ICON: Record<ConnectedPowerTarget, typeof faPlay> = {
   operate: faPlay,
   standby: faMoon,
   off: faPowerOff,
@@ -82,10 +90,14 @@ export function PowerControlButton({ profileId, compact, onPowerOnSuccess }: Pow
   useWSEvent(connection.state.radioService, 'radioPowerState', (event: RadioPowerStateEvent) => {
     if (event.profileId && event.profileId !== profileId) return;
     setProgress(event);
-    if (event.state === 'awake' && lastTargetRef.current === 'on') {
+    if (event.state === 'awake' && event.stage !== 'starting_engine' && lastTargetRef.current === 'on') {
       onPowerOnSuccess?.();
     }
-    if (event.state === 'awake' || event.state === 'off' || event.state === 'failed') {
+    if (
+      (event.state === 'awake' && event.stage !== 'starting_engine')
+      || event.state === 'off'
+      || event.state === 'failed'
+    ) {
       setPending(false);
       activeRequest.current = false;
       lastTargetRef.current = null;
@@ -220,9 +232,16 @@ export function PowerControlButton({ profileId, compact, onPowerOnSuccess }: Pow
   }
 
   // 已连接：Select 下拉
-  const supportedStates = support.supportedStates.length > 0
-    ? support.supportedStates
-    : (['off'] as Array<'operate' | 'standby' | 'off'>);
+  const supportedStates = getRenderablePowerTargets(support);
+  if (supportedStates.length === 0) {
+    return compact ? null : (
+      <Tooltip content={unsupportedReason ?? t('power.unsupported.modelUnsupported')} placement="top">
+        <Button size="sm" isIconOnly variant="light" isDisabled>
+          <FontAwesomeIcon icon={faPowerOff} className="text-default-300" />
+        </Button>
+      </Tooltip>
+    );
+  }
 
   // 紧凑模式（卡片右上角）：图标按钮触发 Dropdown 菜单，显示三个平级选项
   if (compact) {

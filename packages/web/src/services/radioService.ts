@@ -18,6 +18,8 @@ const logger = createLogger('RadioService');
 export class RadioService {
   private wsClient: WSClient;
   private _isDecoding = false;
+  private providerEventHandlers: Array<{ event: string; handler: (data?: unknown) => void }> = [];
+  private providerEventOwner: symbol | null = null;
 
   constructor() {
     // 创建WebSocket客户端
@@ -66,6 +68,7 @@ export class RadioService {
    * 断开连接
    */
   disconnect(): void {
+    this.clearProviderEventHandlers();
     this.wsClient.disconnect();
     this._isDecoding = false;
   }
@@ -170,6 +173,40 @@ export class RadioService {
    */
   get wsClientInstance(): WSClient {
     return this.wsClient;
+  }
+
+  /**
+   * RadioProvider owns the store-level websocket subscriptions. Keep them
+   * replaceable so HMR/auth remounts cannot accumulate duplicate handlers.
+   */
+  replaceProviderEventHandlers(eventMap: Record<string, (data?: unknown) => void>): () => void {
+    this.clearProviderEventHandlers();
+
+    const owner = Symbol('radio-provider-events');
+    const nextHandlers = Object.entries(eventMap).map(([event, handler]) => ({ event, handler }));
+
+    for (const { event, handler } of nextHandlers) {
+      this.wsClient.onWSEvent(event as never, handler as never);
+    }
+
+    this.providerEventOwner = owner;
+    this.providerEventHandlers = nextHandlers;
+
+    return () => {
+      this.clearProviderEventHandlers(owner);
+    };
+  }
+
+  clearProviderEventHandlers(owner?: symbol): void {
+    if (owner && this.providerEventOwner !== owner) {
+      return;
+    }
+
+    for (const { event, handler } of this.providerEventHandlers) {
+      this.wsClient.offWSEvent(event as never, handler as never);
+    }
+    this.providerEventHandlers = [];
+    this.providerEventOwner = null;
   }
 
   /**
@@ -420,8 +457,11 @@ export class RadioService {
 
 }
 
-// Module-level singleton: survives HMR re-mounts so duplicate connections are never created.
-let _singleton: RadioService | null = null;
+// Module-level singleton: survives React re-mounts so duplicate connections are never created.
+const radioServiceGlobal = globalThis as typeof globalThis & {
+  __tx5drRadioService?: RadioService | null;
+};
+let _singleton: RadioService | null = radioServiceGlobal.__tx5drRadioService ?? null;
 
 /**
  * Get or create the singleton RadioService instance.
@@ -430,6 +470,7 @@ let _singleton: RadioService | null = null;
 export function getOrCreateRadioService(): RadioService {
   if (!_singleton) {
     _singleton = new RadioService();
+    radioServiceGlobal.__tx5drRadioService = _singleton;
   }
   return _singleton;
 }
@@ -441,5 +482,12 @@ export function destroyRadioService(): void {
   if (_singleton) {
     _singleton.disconnect();
     _singleton = null;
+    radioServiceGlobal.__tx5drRadioService = null;
   }
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    destroyRadioService();
+  });
 }

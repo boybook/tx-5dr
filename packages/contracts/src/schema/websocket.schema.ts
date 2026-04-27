@@ -216,7 +216,7 @@ export const SystemStatusSchema = z.object({
   /** 当前电台调制模式（语音模式下使用，如 USB/LSB/FM/AM） */
   currentRadioMode: z.string().optional(),
   /** 引擎状态机当前状态 */
-  engineState: z.enum(['idle', 'waking', 'starting', 'running', 'stopping']).optional(),
+  engineState: z.enum(['idle', 'starting', 'running', 'stopping']).optional(),
   /** 引擎状态机上下文的精简投影 */
   engineContext: z.object({
     error: z.string().optional(),

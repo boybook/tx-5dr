@@ -18,6 +18,7 @@ TX-5DR 数字电台核心后端：Fastify + 数字电台引擎 + 音频处理 + 
 | `ClockCoordinator` | `subsystems/ClockCoordinator.ts` | 时钟/解码/频谱/SlotPack 事件桥接、PSKReporter 转发 |
 | `AudioVolumeController` | `subsystems/AudioVolumeController.ts` | 音量读写 + ConfigManager 持久化 + 事件广播 |
 | `EngineLifecycle` | `subsystems/EngineLifecycle.ts` | 资源注册、XState 引擎状态机、doStart/doStop、状态标志 |
+| `RadioPowerController` | `radio/RadioPowerController.ts` | 电台物理电源 on/off/standby/operate 编排、可选引擎联动 |
 | `ListenerManager` | `subsystems/ListenerManager.ts` | 监听器注册/批量精确清理工具类 |
 
 #### 事件注册位置
@@ -33,6 +34,7 @@ TX-5DR 数字电台核心后端：Fastify + 数字电台引擎 + 音频处理 + 
 - 新的时钟/解码事件 → `ClockCoordinator`
 - 音量控制 → `AudioVolumeController`
 - 资源启停顺序/资源蓝图 → `EngineLifecycle.rebuildResourcePlan()`
+- 电台物理电源管理 → `RadioPowerController`（power 不代表 TX-5DR 引擎启停）
 - 连接成功后的一次性 radio bootstrap → `PhysicalRadioManager.bootstrapConnectedSession()`
 - Profile 管理 → `config/ProfileManager.ts`
 - 状态机逻辑 → `state-machines/engineStateMachine.ts` / `radioStateMachine.ts`
@@ -47,6 +49,8 @@ TX-5DR 数字电台核心后端：Fastify + 数字电台引擎 + 音频处理 + 
 - meter / capability / frequency monitoring 一律视为低优先级观察流，关键操作期间允许跳过
 - 观察流失败默认不打断连接；只有关键控制链路失败才进入健康状态机
 - `startBackgroundTasks()` 只能在连接完成且保守 bootstrap 结束后调用
+- 物理电台电源、CAT 连接、TX-5DR 引擎是三条轴线；只有 `RadioPowerController` 可做显式联动
+- `operate` 是 Hamlib physical powerstat 目标，不得当作“停止引擎/关机”
 
 ### 电台连接与状态机
 
@@ -66,6 +70,7 @@ radio/connections/
   └─ NullConnection.ts         ← 空对象模式
 radio/
   ├─ PhysicalRadioManager.ts   ← 编排器（驱动电台状态机）
+  ├─ RadioPowerController.ts   ← 物理电台电源事务
   └─ FrequencyManager.ts       ← 频率管理
 state-machines/
   ├─ types.ts                  ← EngineState/RadioState 枚举 + Context/Event 类型

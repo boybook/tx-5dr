@@ -72,6 +72,19 @@ describe('DigitalRadioEngine mode switching', () => {
       emitStatusSnapshot: vi.fn(() => {
         sequence.push('emitStatusSnapshot');
       }),
+      resetVoicePttState: vi.fn(() => {
+        sequence.push('resetVoicePttState');
+      }),
+      squelchStatusMonitor: {
+        reevaluate: vi.fn(() => {
+          sequence.push('squelchStatusMonitor.reevaluate');
+        }),
+      },
+      physicalPttMonitor: {
+        reevaluate: vi.fn(() => {
+          sequence.push('physicalPttMonitor.reevaluate');
+        }),
+      },
     };
 
     await (DigitalRadioEngine.prototype as unknown as {
@@ -117,6 +130,13 @@ describe('DigitalRadioEngine mode switching', () => {
       clockCoordinator: null,
       emitModeAndStatusSnapshot: vi.fn(() => undefined),
       emitStatusSnapshot: vi.fn(() => undefined),
+      resetVoicePttState: vi.fn(() => undefined),
+      squelchStatusMonitor: {
+        reevaluate: vi.fn(() => undefined),
+      },
+      physicalPttMonitor: {
+        reevaluate: vi.fn(() => undefined),
+      },
     };
 
     await (DigitalRadioEngine.prototype as unknown as {

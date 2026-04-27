@@ -37,6 +37,7 @@ describe('radioStateMachine', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -166,6 +167,29 @@ describe('radioStateMachine', () => {
       await waitForRadioState(actor, RadioState.CONNECTED, 2000);
 
       expect(isRadioState(actor, RadioState.CONNECTED)).toBe(true);
+
+      actor.stop();
+    });
+
+    it('cancels pending reconnect backoff before it opens a new session', async () => {
+      const actor = createRadioActor(mockInput);
+      actor.start();
+
+      actor.send({ type: 'CONNECT', config: mockConfig });
+      await waitForRadioState(actor, RadioState.CONNECTED, 1000);
+      expect(mockInput.onConnect).toHaveBeenCalledTimes(1);
+
+      vi.useFakeTimers();
+      actor.send({ type: 'CONNECTION_LOST', reason: 'network interrupted' });
+      expect(actor.getSnapshot().value).toBe(RadioState.RECONNECTING);
+
+      actor.send({ type: 'STOP_RECONNECT' });
+      expect(actor.getSnapshot().value).toBe(RadioState.DISCONNECTED);
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await Promise.resolve();
+
+      expect(mockInput.onConnect).toHaveBeenCalledTimes(1);
 
       actor.stop();
     });
