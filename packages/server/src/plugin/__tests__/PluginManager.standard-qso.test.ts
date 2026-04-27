@@ -1259,6 +1259,51 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('preserves active QSO protocol messages during late re-decision even when filters reject them', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BD7PWV',
+      myGrid: 'OL62',
+      targetCallsign: 'JA4RSI',
+      pluginConfigs: {
+        'snr-filter': {
+          enabled: true,
+          settings: {
+            minSNR: -15,
+          },
+        },
+      },
+    });
+
+    patchRuntimeContext(pluginManager, operator.config.id, {
+      targetCallsign: 'JA4RSI',
+      targetGrid: 'PM64',
+      reportSent: -13,
+      reportReceived: -18,
+    });
+    setRuntimeState(pluginManager, operator.config.id, 'TX3');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA4RSI BD7PWV R-13');
+
+    await (pluginManager as any).handleSlotStart(
+      createSlotInfo(60_000),
+      createSlotPack(createSlotInfo(45_000), []),
+    );
+
+    const changed = await pluginManager.reDecideOperator(
+      operator.config.id,
+      createSlotPack(createSlotInfo(45_000), [{
+        message: 'BD7PWV JA4RSI RR73',
+        snr: -21,
+        freq: 971,
+      }]),
+    );
+
+    expect(changed).toBe(true);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX5');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA4RSI BD7PWV 73');
+
+    await pluginManager.shutdown();
+  });
+
   it('biases candidate scores using worked-station-bias', async () => {
     const { operator, pluginManager } = await createRuntimeHarness({
       pluginConfigs: {

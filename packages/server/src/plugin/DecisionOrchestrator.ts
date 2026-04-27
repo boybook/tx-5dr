@@ -5,12 +5,13 @@
  * Extracted from PluginManager to separate decision logic from plugin
  * lifecycle management. No reverse dependency on PluginManager.
  */
-import type {
-  FrameMessage,
-  LogbookAnalysis,
-  ParsedFT8Message,
-  SlotInfo,
-  SlotPack,
+import {
+  FT8MessageType,
+  type FrameMessage,
+  type LogbookAnalysis,
+  type ParsedFT8Message,
+  type SlotInfo,
+  type SlotPack,
 } from '@tx5dr/contracts';
 import type {
   AutoCallExecutionPlan,
@@ -32,10 +33,20 @@ function getParsedMessageSenderCallsign(message: ParsedFT8Message['message']): s
     : undefined;
 }
 
+function getParsedMessageTargetCallsign(message: ParsedFT8Message['message']): string | undefined {
+  return 'targetCallsign' in message && typeof message.targetCallsign === 'string'
+    ? message.targetCallsign.toUpperCase()
+    : undefined;
+}
+
 function getParsedMessageGrid(message: ParsedFT8Message['message']): string | undefined {
   return 'grid' in message && typeof message.grid === 'string' && message.grid.trim().length > 0
     ? message.grid.trim().toUpperCase()
     : undefined;
+}
+
+function getParsedMessageKey(message: ParsedFT8Message): string {
+  return `${message.slotId}|${message.rawMessage}|${message.df}|${message.dt}`;
 }
 
 export class DecisionOrchestrator {
@@ -329,11 +340,12 @@ export class DecisionOrchestrator {
     messages: ParsedFT8Message[],
   ): Promise<ParsedFT8Message[]> {
     const automaticTargetMessages = this.filterAutomaticTargetMessages(operatorId, messages);
-    return this.deps.dispatcher.dispatchFilterCandidates(
+    const filteredMessages = await this.deps.dispatcher.dispatchFilterCandidates(
       operatorId,
       automaticTargetMessages,
       (instance) => this.deps.getCtxForInstance(instance),
     );
+    return this.preserveActiveQsoMessages(operatorId, automaticTargetMessages, filteredMessages);
   }
 
   private filterAutomaticTargetMessages(
@@ -360,6 +372,64 @@ export class DecisionOrchestrator {
       });
       return false;
     });
+  }
+
+  private preserveActiveQsoMessages(
+    operatorId: string,
+    sourceMessages: ParsedFT8Message[],
+    filteredMessages: ParsedFT8Message[],
+  ): ParsedFT8Message[] {
+    const operator = this.deps.getOperatorById(operatorId);
+    const automation = this.deps.getOperatorAutomationSnapshot(operatorId);
+    const currentState = automation?.currentState ?? '';
+    const targetCallsign = automation?.context?.targetCallsign?.trim().toUpperCase();
+    const myCallsign = operator?.config.myCallsign.trim().toUpperCase();
+
+    if (!operator || !targetCallsign || !myCallsign || currentState === 'TX6') {
+      return filteredMessages;
+    }
+
+    const filteredKeys = new Set(filteredMessages.map(getParsedMessageKey));
+    const activeQsoMessages = sourceMessages.filter((message) => (
+      !filteredKeys.has(getParsedMessageKey(message))
+      && this.isActiveQsoProtocolMessage(message, targetCallsign, myCallsign)
+    ));
+
+    if (activeQsoMessages.length === 0) {
+      return filteredMessages;
+    }
+
+    logger.debug('Preserved active QSO protocol messages after candidate filters', {
+      operatorId,
+      targetCallsign,
+      currentState,
+      preservedMessages: activeQsoMessages.map((message) => message.rawMessage),
+    });
+
+    return [...filteredMessages, ...activeQsoMessages];
+  }
+
+  private isActiveQsoProtocolMessage(
+    message: ParsedFT8Message,
+    targetCallsign: string,
+    myCallsign: string,
+  ): boolean {
+    const senderCallsign = getParsedMessageSenderCallsign(message.message);
+    const target = getParsedMessageTargetCallsign(message.message);
+    if (senderCallsign !== targetCallsign || target !== myCallsign) {
+      return false;
+    }
+
+    switch (message.message.type) {
+      case FT8MessageType.CALL:
+      case FT8MessageType.SIGNAL_REPORT:
+      case FT8MessageType.ROGER_REPORT:
+      case FT8MessageType.RRR:
+      case FT8MessageType.SEVENTY_THREE:
+        return true;
+      default:
+        return false;
+    }
   }
 
   private async invokeStrategyDecision(
