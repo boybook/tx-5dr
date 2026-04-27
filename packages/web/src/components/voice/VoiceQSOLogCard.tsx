@@ -13,7 +13,7 @@ import {
   PopoverContent,
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChevronRight } from '@fortawesome/free-solid-svg-icons';
+import { faBook, faChevronRight } from '@fortawesome/free-solid-svg-icons';
 import { addToast } from '@heroui/toast';
 import { useRadioModeState, usePTTState, useConnection, useOperators, useCurrentOperatorId } from '../../store/radioStore';
 import { useTranslation } from 'react-i18next';
@@ -21,6 +21,7 @@ import { createLogger } from '../../utils/logger';
 import { api } from '@tx5dr/core';
 import { useWSEvent } from '../../hooks/useWSEvent';
 import type { QSORecord } from '@tx5dr/contracts';
+import { openLogbookWindow } from '../../utils/windowManager';
 
 const logger = createLogger('VoiceQSOLogCard');
 
@@ -62,7 +63,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
   onDeleteComplete,
   onCancelEdit,
 }) => {
-  const { t } = useTranslation('voice');
+  const { t } = useTranslation(['voice', 'radio']);
   const radioMode = useRadioModeState();
   const { pttStatus } = usePTTState();
   const connection = useConnection();
@@ -264,9 +265,27 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
           </span>
         </div>
 
-        {/* Operator selector - stop click propagation to prevent collapse toggle */}
+        {/* Header actions - stop click propagation to prevent collapse toggle */}
         {operators.length > 0 && (
-          <div onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+            <Button
+              size="sm"
+              variant="flat"
+              onPress={() => {
+                if (!currentOperatorId || !myCallsign) return;
+                openLogbookWindow({
+                  operatorId: currentOperatorId,
+                  logBookId: myCallsign,
+                });
+              }}
+              isDisabled={!currentOperatorId || !myCallsign}
+              className="h-8 min-w-0 w-8 px-0 sm:w-auto sm:px-2"
+              title={t('radio:operator.viewLog')}
+              aria-label={t('radio:operator.viewLog')}
+              startContent={<FontAwesomeIcon icon={faBook} />}
+            >
+              <span className="hidden sm:inline">{t('radio:operator.log')}</span>
+            </Button>
             <Select
               size="sm"
               variant="flat"
