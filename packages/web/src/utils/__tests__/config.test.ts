@@ -5,6 +5,7 @@ function stubLocation(rawUrl: string): void {
   const url = new URL(rawUrl);
   vi.stubGlobal('window', {
     location: {
+      href: url.href,
       protocol: url.protocol,
       host: url.host,
       hostname: url.hostname,
@@ -30,7 +31,23 @@ describe('normalizeWsUrl', () => {
     stubLocation('https://5dr2.992218.xyz/');
 
     expect(normalizeWsUrl('ws://radio.example.test:8076/api/realtime/ws-compat')).toBe(
-      'wss://radio.example.test:8076/api/realtime/ws-compat',
+      'wss://5dr2.992218.xyz/api/realtime/ws-compat',
+    );
+  });
+
+  it('uses the Electron/local page origin for realtime websocket offers', () => {
+    stubLocation('http://127.0.0.1:8076/');
+
+    expect(normalizeWsUrl('wss://5dr2.992218.xyz:8076/api/realtime/rtc-data-audio')).toBe(
+      'ws://127.0.0.1:8076/api/realtime/rtc-data-audio',
+    );
+  });
+
+  it('resolves relative realtime websocket paths against the current page origin', () => {
+    stubLocation('https://5dr2.992218.xyz/');
+
+    expect(normalizeWsUrl('/api/realtime/ws-compat')).toBe(
+      'wss://5dr2.992218.xyz/api/realtime/ws-compat',
     );
   });
 });
