@@ -16,6 +16,7 @@ import type { PresetFrequency } from '@tx5dr/contracts';
 
 const MODE_OPTIONS = ['FT8', 'FT4', 'VOICE'];
 const RADIO_MODE_OPTIONS = ['USB', 'LSB', 'FM', 'AM'];
+const CUSTOM_BAND = 'custom';
 
 interface FrequencyPresetAddModalProps {
   isOpen: boolean;
@@ -26,6 +27,7 @@ interface FrequencyPresetAddModalProps {
   editingPreset?: PresetFrequency | null;
   onClose: () => void;
   onAdd: (preset: PresetFrequency, previousPreset?: PresetFrequency | null) => void | Promise<void>;
+  onDelete?: (preset: PresetFrequency) => void | Promise<void>;
 }
 
 export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = ({
@@ -37,6 +39,7 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
   editingPreset,
   onClose,
   onAdd,
+  onDelete,
 }) => {
   const { t } = useTranslation();
   const [newMode, setNewMode] = useState(initialMode);
@@ -45,6 +48,7 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
   const [newDescription, setNewDescription] = useState('');
   const [addError, setAddError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -60,6 +64,7 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
     setNewDescription(editingPreset?.description ?? '');
     setAddError('');
     setIsSubmitting(false);
+    setIsDeleting(false);
   }, [editingPreset, initialFrequencyHz, initialMode, initialRadioMode, isOpen]);
 
   const inferredBand = useMemo(() => {
@@ -71,6 +76,14 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
     const band = getBandFromFrequency(frequencyHz);
     return band && band !== 'Unknown' ? band : null;
   }, [newFreqMHz]);
+  const hasValidFrequencyInput = useMemo(() => {
+    const freqValue = parseFloat(newFreqMHz);
+    return Number.isFinite(freqValue) && freqValue > 0;
+  }, [newFreqMHz]);
+  const bandLabel = useMemo(
+    () => inferredBand ?? (hasValidFrequencyInput ? t('freqPresets.customBand') : t('freqPresets.bandAutoPending')),
+    [hasValidFrequencyInput, inferredBand, t],
+  );
 
   const handleAdd = async () => {
     setAddError('');
@@ -86,20 +99,17 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
 
     const frequencyHz = Math.round(freqValue * 1_000_000);
     const band = getBandFromFrequency(frequencyHz);
-
-    if (!band || band === 'Unknown') {
-      setAddError(t('freqPresets.unknownBand'));
-      return;
-    }
+    const normalizedBand = band && band !== 'Unknown' ? band : CUSTOM_BAND;
 
     if (presets.some(p => p.frequency === frequencyHz && p.frequency !== editingPreset?.frequency)) {
       setAddError(t('freqPresets.duplicate'));
       return;
     }
 
-    const description = newDescription.trim() || `${freqValue.toFixed(3)} MHz ${band}`;
+    const displayBand = normalizedBand === CUSTOM_BAND ? t('freqPresets.customBand') : normalizedBand;
+    const description = newDescription.trim() || `${freqValue.toFixed(3)} MHz ${displayBand}`;
     const newPreset: PresetFrequency = {
-      band,
+      band: normalizedBand,
       mode: newMode,
       radioMode: newRadioMode,
       frequency: frequencyHz,
@@ -117,6 +127,21 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
     }
   };
 
+  const handleDelete = async () => {
+    if (!editingPreset || !onDelete || presets.length <= 1) return;
+
+    setAddError('');
+    setIsDeleting(true);
+    try {
+      await onDelete(editingPreset);
+      onClose();
+    } catch {
+      setAddError(t('freqPresets.deleteFailed'));
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   return (
     <Modal isOpen={isOpen} onClose={onClose} size="md">
       <ModalContent>
@@ -125,7 +150,9 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
           <div className="flex gap-3">
             <Input
               label={t('freqPresets.band')}
-              value={inferredBand ?? t('freqPresets.bandAutoPending')}
+              value={bandLabel}
+              description={hasValidFrequencyInput && !inferredBand ? t('freqPresets.unknownBand') : undefined}
+              color={hasValidFrequencyInput && !inferredBand ? 'warning' : 'default'}
               isReadOnly
               className="flex-1"
             />
@@ -182,13 +209,28 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
             }}
           />
         </ModalBody>
-        <ModalFooter>
-          <Button variant="flat" onPress={onClose} isDisabled={isSubmitting}>
-            {t('common:button.cancel')}
-          </Button>
-          <Button color="primary" onPress={handleAdd} isLoading={isSubmitting}>
-            {editingPreset ? t('freqPresets.saveEdit') : t('freqPresets.add')}
-          </Button>
+        <ModalFooter className="justify-between">
+          <div>
+            {editingPreset && onDelete && (
+              <Button
+                color="danger"
+                variant="flat"
+                onPress={handleDelete}
+                isLoading={isDeleting}
+                isDisabled={isSubmitting || presets.length <= 1}
+              >
+                {t('freqPresets.delete')}
+              </Button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="flat" onPress={onClose} isDisabled={isSubmitting || isDeleting}>
+              {t('common:button.cancel')}
+            </Button>
+            <Button color="primary" onPress={handleAdd} isLoading={isSubmitting} isDisabled={isDeleting}>
+              {editingPreset ? t('freqPresets.saveEdit') : t('freqPresets.add')}
+            </Button>
+          </div>
         </ModalFooter>
       </ModalContent>
     </Modal>

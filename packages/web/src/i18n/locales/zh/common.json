@@ -525,6 +525,7 @@
     "descriptionLabel": "描述",
     "add": "添加预设",
     "edit": "编辑",
+    "delete": "删除预设",
     "remove": "删除",
     "moveUp": "上移",
     "moveDown": "下移",
@@ -532,7 +533,8 @@
     "duplicate": "已存在相同频率的预设",
     "invalidFrequency": "请输入有效的频率值",
     "frequencyRange": "频率范围: 0.1 - 1000 MHz",
-    "unknownBand": "无法根据该频率识别业余频段",
+    "unknownBand": "无法根据该频率识别业余频段，将作为自定义预设保存。",
+    "customBand": "自定义",
     "bandAutoPending": "将根据频率自动推断",
     "addTitle": "添加新预设",
     "editTitle": "编辑预设",
@@ -542,7 +544,8 @@
     "allModes": "全部",
     "presetCount": "共 {{count}} 个预设",
     "loadFailed": "加载频率预设失败",
-    "saveFailed": "保存频率预设失败"
+    "saveFailed": "保存频率预设失败",
+    "deleteFailed": "删除频率预设失败"
   },
   "clock": {
     "title": "时钟校准",

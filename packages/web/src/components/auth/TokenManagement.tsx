@@ -36,6 +36,7 @@ const ROLE_COLORS: Record<string, 'default' | 'primary' | 'warning'> = {
   operator: 'primary',
   admin: 'warning',
 };
+const CUSTOM_BAND = 'custom';
 
 type CreateLoginCredentialInitMode = 'none' | 'admin' | 'self-service';
 
@@ -241,6 +242,9 @@ export function TokenManagement() {
     { key: '90d', label: t('auth:token.expiryOptions.90d') },
   ], [t]);
   const { operators } = useOperators();
+  const formatBandLabel = useCallback((band?: string | null): string => (
+    !band || band.toLowerCase() === CUSTOM_BAND ? t('common:freqPresets.customBand') : band
+  ), [t]);
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -910,7 +914,7 @@ export function TokenManagement() {
                                   >
                                     {frequencyPresets.map((preset) => (
                                       <Checkbox key={String(preset.frequency)} value={String(preset.frequency)}>
-                                        <span className="text-xs">{preset.description || `${(preset.frequency / 1e6).toFixed(3)} MHz`} — {preset.band} {preset.mode}</span>
+                                        <span className="text-xs">{preset.description || `${(preset.frequency / 1e6).toFixed(3)} MHz`} — {formatBandLabel(preset.band)} {preset.mode}</span>
                                       </Checkbox>
                                     ))}
                                   </CheckboxGroup>

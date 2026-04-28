@@ -38,6 +38,7 @@ interface FrequencyPresetSettingsProps {
 }
 
 const FILTER_ALL = '__all__';
+const CUSTOM_BAND = 'custom';
 
 function notifyFrequencyPresetsUpdated(): void {
   window.dispatchEvent(new CustomEvent('frequencyPresetsUpdated'));
@@ -247,9 +248,17 @@ export const FrequencyPresetSettings = forwardRef<
     setPresets(next);
   };
 
+  const handlePresetModalDelete = () => {
+    if (editingPresetIndex === null || presets.length <= 1) return;
+    handleRemove(editingPresetIndex);
+  };
+
   const formatFrequency = (hz: number): string => {
     return (hz / 1000000).toFixed(3);
   };
+  const formatBandLabel = (band?: string | null): string => (
+    !band || band.toLowerCase() === CUSTOM_BAND ? t('freqPresets.customBand') : band
+  );
   // 统计每个模式的预设数量
   const modeCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -325,7 +334,7 @@ export const FrequencyPresetSettings = forwardRef<
                   case 'band':
                     return (
                       <TableCell>
-                        <Chip size="sm" variant="flat" color="default">{preset.band}</Chip>
+                        <Chip size="sm" variant="flat" color="default">{formatBandLabel(preset.band)}</Chip>
                       </TableCell>
                     );
                   case 'mode':
@@ -478,6 +487,7 @@ export const FrequencyPresetSettings = forwardRef<
         editingPreset={editingPresetIndex === null ? null : presets[editingPresetIndex]}
         onClose={closePresetModal}
         onAdd={handlePresetModalSave}
+        onDelete={handlePresetModalDelete}
       />
 
       {/* 恢复默认确认模态框 */}

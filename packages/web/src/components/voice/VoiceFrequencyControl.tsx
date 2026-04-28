@@ -23,6 +23,7 @@ import { FrequencyPresetAddModal } from '../settings/FrequencyPresetAddModal';
 
 const logger = createLogger('VoiceFrequencyControl');
 const CURRENT_CUSTOM_VOICE_FREQUENCY_KEY = '__current_custom_voice_frequency__';
+const CUSTOM_BAND = 'custom';
 
 /**
  * Shared ref for tracking which digit is currently active (hovered or editing).
@@ -264,6 +265,12 @@ export const VoiceFrequencyControl: React.FC = () => {
 
   const RADIO_MODES = ['USB', 'LSB', 'FM', 'AM'];
   const formatFrequencyLabel = useCallback((frequency: number) => `${(frequency / 1000000).toFixed(3)} MHz`, []);
+  const formatBandLabel = useCallback((band?: string | null) => {
+    if (!band || band.toLowerCase() === CUSTOM_BAND) {
+      return t('frequency.customBand');
+    }
+    return band;
+  }, [t]);
   const loadVoicePresets = useCallback(async () => {
     if (!connection.state.isConnected) return;
 
@@ -285,7 +292,7 @@ export const VoiceFrequencyControl: React.FC = () => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           .map((p: any) => ({
             key: String(p.frequency),
-            label: p.description || `${p.band} ${(p.frequency / 1000000).toFixed(3)} MHz`,
+            label: p.description || `${formatBandLabel(p.band)} ${(p.frequency / 1000000).toFixed(3)} MHz`,
             frequency: p.frequency,
             band: p.band,
             mode: p.mode,
@@ -308,7 +315,7 @@ export const VoiceFrequencyControl: React.FC = () => {
     } finally {
       setIsLoadingPresets(false);
     }
-  }, [connection.state.isConnected]);
+  }, [connection.state.isConnected, formatBandLabel]);
 
   // Load voice frequency presets + restore last frequency
   useEffect(() => {
@@ -369,12 +376,12 @@ export const VoiceFrequencyControl: React.FC = () => {
     }
     const groups: Record<string, FrequencyPreset[]> = {};
     for (const preset of filtered) {
-      const band = preset.band || 'Other';
+      const band = formatBandLabel(preset.band);
       if (!groups[band]) groups[band] = [];
       groups[band].push(preset);
     }
     return groups;
-  }, [presets, isAdmin, canSetFrequency, ability]);
+  }, [presets, isAdmin, canSetFrequency, ability, formatBandLabel]);
 
   const currentPresetSelection = useMemo(() => {
     const preset = presets.find(item => item.frequency === currentFrequency);
@@ -386,7 +393,7 @@ export const VoiceFrequencyControl: React.FC = () => {
       key: CURRENT_CUSTOM_VOICE_FREQUENCY_KEY,
       label: formatFrequencyLabel(currentFrequency),
       frequency: currentFrequency,
-      band: t('frequency.customFrequency'),
+      band: CUSTOM_BAND,
       mode: 'VOICE',
       radioMode: currentRadioMode,
     } satisfies FrequencyPreset;
@@ -413,10 +420,10 @@ export const VoiceFrequencyControl: React.FC = () => {
     }
 
     return [
-      [t('frequency.customFrequency'), [currentPresetSelection]],
+      [formatBandLabel(currentPresetSelection.band), [currentPresetSelection]],
       ...entries,
     ] as [string, FrequencyPreset[]][];
-  }, [currentPresetSelection, groupedPresets, t]);
+  }, [currentPresetSelection, formatBandLabel, groupedPresets]);
 
   // Break frequency into individual digits with their place values
   // Fixed format: XXX.XXX.XXX (3+3+3 digits, leading zeros shown dimmed)
@@ -590,6 +597,44 @@ export const VoiceFrequencyControl: React.FC = () => {
     }
   }, [formatFrequencyLabel, loadVoicePresets, t]);
 
+  const handleDeleteCurrentFrequencyPreset = useCallback(async (preset: PresetFrequency) => {
+    try {
+      const currentPresetsResponse = await api.getFrequencyPresets();
+      if (!currentPresetsResponse.success) {
+        throw new Error('Failed to load frequency presets');
+      }
+
+      const nextPresets = currentPresetsResponse.presets.filter(item =>
+        !(item.mode === preset.mode && item.frequency === preset.frequency),
+      );
+      if (nextPresets.length === currentPresetsResponse.presets.length || nextPresets.length === 0) {
+        throw new Error('Failed to delete frequency preset');
+      }
+
+      const updateResponse = await api.updateFrequencyPresets(nextPresets);
+      if (!updateResponse.success) {
+        throw new Error('Failed to delete frequency preset');
+      }
+
+      window.dispatchEvent(new CustomEvent('frequencyPresetsUpdated'));
+      addToast({
+        title: t('frequency.deletePresetSuccess'),
+        description: preset.description || formatFrequencyLabel(preset.frequency),
+        color: 'success',
+        timeout: 3000,
+      });
+      void loadVoicePresets();
+    } catch (error) {
+      logger.error('Failed to delete current voice frequency preset:', error);
+      if (error instanceof ApiError) {
+        showErrorToast({ userMessage: error.userMessage, suggestions: error.suggestions, severity: error.severity, code: error.code });
+        throw error;
+      }
+      showErrorToast({ userMessage: t('common:freqPresets.deleteFailed'), severity: 'error' });
+      throw error;
+    }
+  }, [formatFrequencyLabel, loadVoicePresets, t]);
+
   return (
     <Card className="w-full h-full bg-default-50 dark:bg-default-100/50 border border-default-200 dark:border-default-100" shadow="none">
       <CardHeader className="pb-1 flex-shrink-0">
@@ -714,6 +759,7 @@ export const VoiceFrequencyControl: React.FC = () => {
         editingPreset={currentPresetForEdit}
         onClose={() => setIsAddPresetModalOpen(false)}
         onAdd={handleSaveCurrentFrequencyPreset}
+        onDelete={handleDeleteCurrentFrequencyPreset}
       />
     </Card>
   );
