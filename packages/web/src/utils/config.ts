@@ -106,16 +106,12 @@ export function getLogbookWebSocketUrl(params: { operatorId?: string; logBookId?
 export function normalizeWsUrl(serverUrl: string): string {
   const isPageSecure = window.location.protocol === 'https:';
   try {
-    const url = new URL(serverUrl);
+    const url = new URL(serverUrl, window.location.href);
     url.protocol = isPageSecure ? 'wss:' : 'ws:';
 
-    // If a reverse proxy leaked its internal listen port, keep realtime WS
-    // traffic on the same browser origin so Cloudflare/default HTTPS ports work.
-    if (
-      url.pathname.startsWith('/api/realtime/')
-      && url.hostname === window.location.hostname
-      && url.host !== window.location.host
-    ) {
+    // Realtime endpoints are served by the same /api entrypoint as the page.
+    // Ignore server-advertised hosts/ports that may be internal reverse-proxy details.
+    if (url.pathname.startsWith('/api/realtime/')) {
       url.hostname = window.location.hostname;
       url.port = window.location.port;
     }
