@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'eventemitter3';
 
 const { mockConfigManager, MockRtAudio } = vi.hoisted(() => {
   class HoistedMockRtAudio {
@@ -44,6 +45,10 @@ import { AudioStreamManager } from '../AudioStreamManager.js';
 type MockIcomAdapter = {
   sendAudio: ReturnType<typeof vi.fn>;
   getSampleRate: ReturnType<typeof vi.fn>;
+  startReceiving?: ReturnType<typeof vi.fn>;
+  stopReceiving?: ReturnType<typeof vi.fn>;
+  on?: EventEmitter['on'];
+  removeAllListeners?: EventEmitter['removeAllListeners'];
 };
 
 function createIcomManager(adapter: MockIcomAdapter): AudioStreamManager {
@@ -109,5 +114,32 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
     const playbackError = await playbackResult;
     expect(playbackError).toBeInstanceOf(Error);
     expect(playbackError.message).toBe('playback interrupted');
+  });
+
+  it('emits native 12k ICOM input frames while still writing the digital ring buffer', async () => {
+    const adapter = Object.assign(new EventEmitter(), {
+      sendAudio: vi.fn().mockResolvedValue(undefined),
+      getSampleRate: vi.fn().mockReturnValue(12000),
+      startReceiving: vi.fn(),
+      stopReceiving: vi.fn(),
+    });
+    const manager = new AudioStreamManager();
+    manager.setIcomWlanAudioAdapter(adapter as never);
+    const nativeFrames: Array<{ samples: Float32Array; sampleRate: number; sourceKind: string; sequence: number }> = [];
+    manager.on('nativeAudioInputData', frame => nativeFrames.push(frame));
+
+    await manager.startStream();
+    adapter.emit('audioData', new Float32Array([0.1, 0.2, 0.3, 0.4]));
+
+    expect(adapter.startReceiving).toHaveBeenCalledOnce();
+    expect(nativeFrames).toHaveLength(1);
+    expect(nativeFrames[0]?.sampleRate).toBe(12000);
+    expect(nativeFrames[0]?.sourceKind).toBe('icom-wlan');
+    expect(nativeFrames[0]?.sequence).toBe(0);
+    expect(nativeFrames[0]?.samples[0]).toBeCloseTo(0.1);
+    expect(nativeFrames[0]?.samples[3]).toBeCloseTo(0.4);
+    expect(manager.getAudioProvider().getAvailableMs()).toBeGreaterThan(0);
+
+    await manager.stopStream();
   });
 });

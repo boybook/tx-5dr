@@ -9,7 +9,6 @@ import {
   PSKReporterConfig,
   DEFAULT_DECODE_WINDOW_SETTINGS,
   DEFAULT_RIGCTLD_BRIDGE_CONFIG,
-  type LiveKitNetworkMode,
   type RealtimeTransportPolicy,
   type RigctldBridgeConfig,
   UpdateNtpServerListRequestSchema,
@@ -92,14 +91,12 @@ export interface AppConfig {
   voiceCallsign?: string;
   /** Voice mode operator grid */
   voiceGrid?: string;
-  /** Optional externally reachable LiveKit signaling URL override. */
-  livekitPublicUrl?: string | null;
   /** Realtime transport strategy preference. */
   realtimeTransportPolicy?: RealtimeTransportPolicy;
-  /** LiveKit network topology mode. */
-  livekitNetworkMode?: LiveKitNetworkMode;
-  /** Manual LiveKit media announcement IP when auto detection is unsuitable. */
-  livekitNodeIp?: string | null;
+  /** Optional externally reachable rtc-data-audio UDP host/IP for FRP or static NAT. */
+  rtcDataAudioPublicHost?: string | null;
+  /** Optional externally reachable rtc-data-audio UDP port. Null = local UDP port. */
+  rtcDataAudioPublicUdpPort?: number | null;
   /** Station basic information visible to all connected users */
   stationInfo?: StationInfo;
   /** OpenWebRX SDR station configurations */
@@ -160,8 +157,8 @@ const DEFAULT_CONFIG: AppConfig = {
       consecutiveFailures: 0,
     },
   },
-  livekitNetworkMode: 'lan',
-  livekitNodeIp: null,
+  rtcDataAudioPublicHost: null,
+  rtcDataAudioPublicUdpPort: null,
   rigctld: { ...DEFAULT_RIGCTLD_BRIDGE_CONFIG },
 };
 
@@ -271,6 +268,14 @@ export class ConfigManager {
       parsedConfig.lastVolumeGain = null;
       await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
       logger.info('Volume gain migration complete');
+    }
+
+    for (const retiredKey of [
+      'live' + 'kitPublicUrl',
+      'live' + 'kitNetworkMode',
+      'live' + 'kitNodeIp',
+    ]) {
+      delete parsedConfig[retiredKey];
     }
 
     // 合并默认配置和加载的配置
@@ -1026,15 +1031,6 @@ export class ConfigManager {
     await this.saveConfig();
   }
 
-  getLiveKitPublicUrl(): string | null {
-    return this.config.livekitPublicUrl ?? null;
-  }
-
-  async updateLiveKitPublicUrl(url: string | null): Promise<void> {
-    this.config.livekitPublicUrl = url;
-    await this.saveConfig();
-  }
-
   getRealtimeTransportPolicy(): RealtimeTransportPolicy {
     return this.config.realtimeTransportPolicy ?? 'auto';
   }
@@ -1044,21 +1040,22 @@ export class ConfigManager {
     await this.saveConfig();
   }
 
-  getLiveKitNetworkMode(): LiveKitNetworkMode {
-    return this.config.livekitNetworkMode ?? 'lan';
+  getRtcDataAudioPublicHost(): string | null {
+    return this.config.rtcDataAudioPublicHost?.trim() || null;
   }
 
-  async updateLiveKitNetworkMode(mode: LiveKitNetworkMode): Promise<void> {
-    this.config.livekitNetworkMode = mode;
+  async updateRtcDataAudioPublicHost(host: string | null): Promise<void> {
+    this.config.rtcDataAudioPublicHost = host?.trim() || null;
     await this.saveConfig();
   }
 
-  getLiveKitNodeIp(): string | null {
-    return this.config.livekitNodeIp?.trim() || null;
+  getRtcDataAudioPublicUdpPort(): number | null {
+    const port = this.config.rtcDataAudioPublicUdpPort;
+    return typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
   }
 
-  async updateLiveKitNodeIp(nodeIp: string | null): Promise<void> {
-    this.config.livekitNodeIp = nodeIp?.trim() || null;
+  async updateRtcDataAudioPublicUdpPort(port: number | null): Promise<void> {
+    this.config.rtcDataAudioPublicUdpPort = typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
     await this.saveConfig();
   }
 

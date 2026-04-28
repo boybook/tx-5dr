@@ -42,7 +42,7 @@ This turns a single half-duplex transceiver into an effectively full-duplex FT8/
 - **Remote Voice QSO**: Transmit and receive voice (SSB/FM) remotely through the browser — your microphone audio is streamed to the server and transmitted via the radio (requires HTTPS)
 - **Logbook & Sync**: Built-in ADIF logbook with two-way sync to WaveLog, QRZ.com, and LoTW
 - **PSKReporter**: Auto-report decoded signals to the global PSKReporter network
-- **Audio Monitoring**: Real-time browser audio monitoring over LiveKit/WebRTC
+- **Audio Monitoring**: Low-latency browser monitoring over WebRTC DataChannel with WebSocket fallback
 - **Multi-language**: Full English and Chinese UI
 
 ---
@@ -102,33 +102,27 @@ sudo bash /usr/share/tx5dr/install.sh
 | `tx5dr update` | Download and install latest nightly |
 | `tx5dr doctor` | Full environment diagnostics |
 | `tx5dr logs` | Follow server logs (`--nginx` for nginx) |
-| `tx5dr livekit-creds status` | Show managed LiveKit credential status |
-| `tx5dr livekit-creds rotate` | Rotate managed LiveKit credentials and config |
-| `tx5dr enable-livekit` | Install and enable LiveKit (optional, can be added later) |
-| `tx5dr disable-livekit` | Disable LiveKit, switch to ws-compat mode |
+| `tx5dr doctor --fix` | Run diagnostics and apply safe environment fixes |
 
 ### Service Layout
 
 Linux Server is not a single standalone process. The installer sets up and wires together:
 
-- `tx5dr`: the backend application and Web API
-- `livekit-server` *(optional)*: the bundled realtime audio and signaling service
+- `tx5dr`: the backend application, Web API, and embedded `rtc-data-audio` WebRTC DataChannel endpoint
 - `nginx`: the public reverse proxy and HTTPS entrypoint
 
-`install.sh` and the `tx5dr` CLI handle installation, configuration, diagnostics, and coordinated restarts across these components. During installation, you can choose whether to install LiveKit. Without it, voice features run over WebSocket audio (ws-compat) — you can always add LiveKit later via `sudo tx5dr enable-livekit`.
+`install.sh` and the `tx5dr` CLI handle installation, configuration, diagnostics, firewall checks, and coordinated restarts across these components. Realtime voice defaults to `rtc-data-audio` on UDP `50110`, with `ws-compat` as the automatic TCP fallback.
 
 ### System Requirements
 
 - **Debian 12+** (recommended) or **Ubuntu 22.04+**
 - **Node.js 20+** (auto-installed by `install.sh`)
 - **nginx** (auto-installed)
-- **LiveKit** *(optional)*: Linux packages bundle `livekit-server` at `/usr/share/tx5dr/bin/livekit-server`. Without LiveKit, voice uses WebSocket audio (ws-compat) — all features remain fully functional
+- **Realtime voice UDP**: allow `50110/udp` by default, or set `RTC_DATA_AUDIO_UDP_PORT` in `/etc/tx5dr/config.env`
 - For voice features: **HTTPS** (configure SSL in `/etc/nginx/conf.d/tx5dr.conf`)
-- If LiveKit is enabled, browsers enter signaling through the site's same-origin `/livekit` path (`7880/tcp` does not need public exposure). You still need to expose `7881/tcp` and `50000-50100/udp` for media transport
-- If you use a dedicated domain, an extra reverse proxy layer, or a non-standard path, configure the custom browser-facing entrypoint in "System Settings > Realtime Audio"; the same page also exposes the shared LAN / Internet Auto / Internet Manual LiveKit media modes
-- Linux Server and Docker now generate a managed `livekit.resolved.yaml` from that shared configuration. Do not hand-edit the generated runtime YAML
+- For FRP/static NAT: map one public UDP port to the server UDP port, then set the public host/IP and UDP port in "System Settings > Realtime Audio > WebRTC Data Audio external UDP address"
 - Download source override: set `TX5DR_DOWNLOAD_SOURCE=github|oss|auto` in `/etc/tx5dr/config.env` if you need to force a specific source
-- Server-only CPU profile capture is available from `System Settings > Performance Diagnostics`, or by setting `TX5DR_SERVER_CPU_PROFILE=1` in `/etc/tx5dr/config.env` for a manual override. This never enables profiling for nginx, LiveKit, Electron main, or other child processes
+- Server-only CPU profile capture is available from `System Settings > Performance Diagnostics`, or by setting `TX5DR_SERVER_CPU_PROFILE=1` in `/etc/tx5dr/config.env` for a manual override. This never enables profiling for nginx, Electron main, or other child processes
 - CPU profile files are flushed only when the backend server exits cleanly. Use a normal restart such as `sudo tx5dr restart` or `docker restart tx5dr`, not a force kill
 - Generated files are stored under `logs/diagnostics/cpu` in the managed runtime root. Linux service installs use `/var/lib/tx5dr/logs/diagnostics/cpu`; official Docker uses `/app/data/logs/diagnostics/cpu` in-container and `./data/logs/diagnostics/cpu` on the host
 
@@ -146,11 +140,7 @@ docker compose up -d
 docker exec tx5dr cat /app/data/config/.admin-token
 ```
 
-This starts TX-5DR in standalone mode with WebSocket audio (ws-compat, ~50–100 ms latency). To enable LiveKit for lower-latency voice (~20–50 ms via WebRTC):
-
-```bash
-docker compose -f docker-compose.livekit.yml up -d
-```
+This starts TX-5DR with `rtc-data-audio` enabled by default and `ws-compat` as fallback. The default compose file exposes `8076/tcp`, `8443/tcp`, and `50110/udp`. For FRP/static NAT, forward one UDP port to `50110/udp` and configure the public endpoint in the realtime settings page.
 
 For the full deployment guide — including device mapping, serial port setup, audio configuration, and troubleshooting — see **[docker/README.md](docker/README.md)**.
 
@@ -184,9 +174,9 @@ yarn dev
 yarn dev:electron
 ```
 
-- `yarn dev` / `yarn dev:electron` auto-manage a local LiveKit instance and its credential file when possible, then expose it to browsers through the same-origin `/livekit` proxy
-- If port `7880` is already occupied by an unknown LiveKit instance, development mode automatically falls back to `ws-compat` instead of issuing invalid tokens
-- Running `yarn workspace @tx5dr/server dev` without LiveKit credentials is supported; the backend starts in `ws-compat` mode and logs a warning
+- `yarn dev` / `yarn dev:electron` start the embedded server realtime stack directly; signaling is same-origin at `/api/realtime/rtc-data-audio`
+- Development uses fixed UDP `50110` by default (`RTC_DATA_AUDIO_UDP_PORT` can override it)
+- If `node-datachannel` cannot load on the current platform, the backend still starts and offers `ws-compat` only
 
 ### Build
 

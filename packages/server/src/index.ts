@@ -7,7 +7,6 @@ import { initializeConsoleLogger, ConsoleLogger } from './utils/console-logger.j
 import { setGlobalInspector } from './state-machines/inspector.js';
 import { createLogger, setLogLevel, getActiveLogLevel } from './utils/logger.js';
 import { ConfigManager } from './config/config-manager.js';
-import { writeManagedLiveKitRuntimeConfig } from './realtime/LiveKitRuntimeConfig.js';
 import { markProcessShuttingDown } from './utils/process-shutdown.js';
 
 const logger = createLogger('Server');
@@ -123,19 +122,6 @@ async function start() {
       logger.info(`log level set from config: ${configLogLevel}`);
     } else {
       logger.info(`log level: ${getActiveLogLevel()} (from env/default)`);
-    }
-
-    try {
-      await writeManagedLiveKitRuntimeConfig({
-        settings: {
-          networkMode: ConfigManager.getInstance().getLiveKitNetworkMode(),
-          nodeIp: ConfigManager.getInstance().getLiveKitNodeIp(),
-        },
-      });
-    } catch (error) {
-      logger.warn('managed LiveKit runtime config sync skipped', {
-        message: error instanceof Error ? error.message : String(error),
-      });
     }
 
     await server.listen({ port: PORT, host: '0.0.0.0' });

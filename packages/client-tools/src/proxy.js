@@ -19,7 +19,6 @@ const PORT = Number(process.env.PORT || DEFAULT_HTTP_PORT);
 const HOST = process.env.HOST || (process.env.PUBLIC === '1' ? '0.0.0.0' : '127.0.0.1');
 const TARGET = process.env.TARGET || 'http://127.0.0.1:4000';
 const DEV_WEB_TARGET = process.env.DEV_WEB_TARGET || '';
-const LIVEKIT_TARGET = process.env.LIVEKIT_TARGET || '';
 const HTTPS_ENABLE = process.env.HTTPS_ENABLE === '1';
 const HTTPS_PORT = Number(process.env.HTTPS_PORT || DEFAULT_HTTPS_PORT);
 const HTTPS_CERT_FILE = process.env.HTTPS_CERT_FILE || '';
@@ -245,23 +244,6 @@ function proxyHttp(req, res, entryScheme, targetBase = TARGET, rewritePath = nul
   }
 }
 
-function stripPrefixFromUrl(rawUrl, prefix) {
-  const parsed = url.parse(rawUrl || '/');
-  const pathname = parsed.pathname || '/';
-  let nextPathname = pathname;
-
-  if (pathname === prefix) {
-    nextPathname = '/';
-  } else if (pathname.startsWith(`${prefix}/`)) {
-    nextPathname = pathname.slice(prefix.length) || '/';
-  }
-
-  return url.format({
-    ...parsed,
-    pathname: nextPathname,
-  });
-}
-
 function shouldRedirectToHttps(req) {
   if (!HTTPS_ENABLE || !httpsAvailable || !HTTPS_REDIRECT_EXTERNAL_HTTP) return false;
   const { hostname } = parseHostHeader(req.headers.host || '');
@@ -293,16 +275,6 @@ function handleRequest(req, res, entryScheme) {
 
     if (pathname === '/api' || pathname.startsWith('/api/')) {
       return proxyHttp(req, res, entryScheme);
-    }
-
-    if (LIVEKIT_TARGET && (pathname === '/livekit' || pathname.startsWith('/livekit/'))) {
-      return proxyHttp(
-        req,
-        res,
-        entryScheme,
-        LIVEKIT_TARGET,
-        (requestUrl) => stripPrefixFromUrl(requestUrl, '/livekit'),
-      );
     }
 
     if (DEV_WEB_TARGET) {
@@ -349,13 +321,11 @@ function attachUpgrade(server, entryScheme) {
       const u = url.parse(req.url || '/');
       const pathname = u.pathname || '';
       const isApiUpgrade = pathname === '/api/ws' || pathname.startsWith('/api/');
-      const isLiveKitUpgrade = LIVEKIT_TARGET && (pathname === '/livekit' || pathname.startsWith('/livekit/'));
-      const targetBase = isApiUpgrade ? TARGET : (isLiveKitUpgrade ? LIVEKIT_TARGET : DEV_WEB_TARGET);
+      const targetBase = isApiUpgrade ? TARGET : DEV_WEB_TARGET;
       if (!targetBase) {
         console.warn('[client-tools] websocket upgrade rejected: no target', {
           url: req.url,
           isApiUpgrade,
-          isLiveKitUpgrade,
         });
         socket.destroy();
         return;
@@ -368,9 +338,7 @@ function attachUpgrade(server, entryScheme) {
 
       const target = new URL(targetBase);
       const port = Number(target.port || (target.protocol === 'https:' ? 443 : 80));
-      const upstreamPath = isLiveKitUpgrade
-        ? stripPrefixFromUrl(req.url || '/', '/livekit')
-        : (req.url || '/');
+      const upstreamPath = req.url || '/';
       const connect = () => {
         const forwardedHeaders = buildForwardedHeaders(req, entryScheme, targetBase);
         const headers = [
@@ -557,7 +525,6 @@ function writeReadyFile(state) {
       staticDir: STATIC_DIR,
       staticDirExists: fs.existsSync(STATIC_DIR),
       target: TARGET,
-      livekitTarget: LIVEKIT_TARGET || null,
       devWebTarget: DEV_WEB_TARGET || null,
       error: state.error ?? null,
     }, null, 2), 'utf-8');
@@ -574,7 +541,6 @@ console.info('[client-tools] starting', {
   requestedPort: PORT,
   host: HOST,
   target: TARGET,
-  livekitTarget: LIVEKIT_TARGET || null,
   devWebTarget: DEV_WEB_TARGET || null,
   staticDir: STATIC_DIR,
   staticDirExists: fs.existsSync(STATIC_DIR),
@@ -593,9 +559,6 @@ httpServer.on('listening', () => {
   console.log(`[client-tools] http server listening on http://${HOST}:${finalPort}`);
   console.log(`[client-tools] static dir: ${STATIC_DIR}`);
   console.log(`[client-tools] api target: ${TARGET}`);
-  if (LIVEKIT_TARGET) {
-    console.log(`[client-tools] livekit target: ${LIVEKIT_TARGET}`);
-  }
   if (DEV_WEB_TARGET) {
     console.log(`[client-tools] dev web target: ${DEV_WEB_TARGET}`);
   }

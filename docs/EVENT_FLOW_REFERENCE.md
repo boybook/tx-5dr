@@ -375,16 +375,16 @@ interface MixedAudio {
 }
 ```
 
-### AudioMonitorService 事件
+### BufferedPreviewAudioService 事件
 
 | 事件名称 | 数据结构 | 触发条件 | 频率 | 订阅者 |
 |---------|---------|---------|------|--------|
-| `audioData` | `{ audioData, sampleRate, samples, timestamp }` | 音频监听数据 | **~20次/秒** | LiveKitBridgeManager |
-| `stats` | `AudioMonitorStats` | 监听统计信息 | ~1次/秒 | 内部调试/统计 |
+| `audioData` | `{ audioData, sampleRate, samples, timestamp }` | buffered preview 数据 | **~20次/秒** | BufferedPreviewRxSource |
+| `stats` | `BufferedPreviewAudioStats` | 监听统计信息 | ~1次/秒 | 内部调试/统计 |
 
 **代码位置**:
-- 发布: `packages/server/src/audio/AudioMonitorService.ts`
-- 订阅: `packages/server/src/realtime/LiveKitBridgeManager.ts`
+- 发布: `packages/server/src/audio/BufferedPreviewAudioService.ts`
+- 订阅: `packages/server/src/realtime/RealtimeRxAudioRouter.ts`（仅 OpenWebRX/buffered preview）
 
 ---
 
@@ -682,23 +682,19 @@ useEffect(() => {
 
 ```
 1. AudioStreamManager 接收音频
-   RingBufferAudioProvider.write(audioData)
+   ├─ radio: nativeAudioInputData（语音/数字模式都使用原生监听源）
+   └─ openwebrx-preview: RingBufferAudioProvider.write(audioData)
       ↓
-2. AudioMonitorService 自动启动
-   每10ms检查缓冲区
-   达到120ms水位 → 读取60ms块
+2. RealtimeRxAudioRouter 选择来源
+   ├─ radio → NativeRadioRxSource
+   └─ openwebrx-preview → BufferedPreviewRxSource
       ↓
-3. LiveKitBridgeManager 订阅音频块
-   转换 Float32 → PCM16
+3. 当前 transport publisher 订阅 router 输出
+   ├─ rtc-data-audio: PCM16 DataChannel, 高采样率源在出口直接整数抽取到 <=24k
+   └─ ws-compat: PCM16 WebSocket fallback, 使用同一直接抽取策略
       ↓
-4. 作为 bridge participant 发布到 LiveKit 房间
-   room = radio:<profileId> / openwebrx-preview:<sessionId>
-      ↓
-5. 浏览器通过 `/api/realtime/token` 获取 token
-   再直连 LiveKit signaling（默认 `ws(s)://当前主机:7880`）
-      ↓
-6. livekit-client 订阅远端音轨
-   直接播放到扬声器
+4. 浏览器复用 AudioContext + AudioWorklet runtime
+   按帧 sampleRate 元数据播放新鲜帧，过旧帧丢弃，不补播旧音频
 ```
 
 ---
@@ -710,7 +706,7 @@ useEffect(() => {
 | 事件 | 频率 | 数据量 | 性能影响 | 优化措施 |
 |-----|------|--------|---------|---------|
 | `audioFrame` | ~50Hz | ~480字节/帧 | 中 | 环形缓冲区 |
-| `AudioMonitorService.audioData` | ~20Hz | ~5.8KB/次 (48kHz 60ms) | 中 | 服务端桥接到 LiveKit |
+| `RealtimeRxAudioRouter.audioFrame` | source dependent | PCM frame | 中 | rtc-data-audio / ws-compat publisher |
 | `spectrumData` | ~6.7Hz | ~32KB (4096点FFT) | 中 | WebWorker并行 |
 
 ### 中频事件 (1-10次/秒)
@@ -721,7 +717,7 @@ useEffect(() => {
 | `subWindow` | ~20/分钟 | <1KB | 低 |
 | `slotPackUpdated` | ~4/分钟 | 可变 (取决于解码结果) | 中 |
 | `meterData` | ~3.3Hz | ~200字节 | 低 |
-| `AudioMonitorService.stats` | ~1Hz | ~100字节 | 低 |
+| `BufferedPreviewAudioService.stats` | ~1Hz | ~100字节 | 低 |
 
 ### 按需事件
 
@@ -768,7 +764,7 @@ useEffect(() => {
 
 ### P2 - 辅助功能
 
-1. **音频监听**: LiveKit 远端音轨
+1. **音频监听**: 默认 rtc-data-audio DataChannel，回退 ws-compat
    - 影响: 音频监听与 OpenWebRX 试听质量
    - 延迟容忍: <200ms
 
@@ -815,8 +811,8 @@ useEffect(() => {
    - 当前: 环形缓冲区
    - 建议: 已优化,无需改进
 
-4. **LiveKit 音频桥接**
-   - 当前: WebRTC 实时传输
+4. **Realtime 音频传输边缘**
+   - 当前: rtc-data-audio 默认、ws-compat 回退
    - 建议: 优先关注公网映射、ICE/UDP 端口和服务端桥接负载
 
 ### 内存泄漏风险
@@ -829,7 +825,7 @@ useEffect(() => {
 4. **组件卸载**: 所有 `onWSEvent` 配对 `offWSEvent`
 
 **需注意的场景**:
-- AudioMonitorService 多次初始化/销毁
+- BufferedPreviewAudioService 多次初始化/销毁
 - 频繁切换操作员时的事件订阅
 - WebSocket 重连时的旧监听器
 
@@ -909,7 +905,7 @@ useEffect(() => {
 **变更内容**:
 - ✅ 深度分析所有事件优化空间
   - `audioFrame` (50Hz): 确认已充分优化（环形缓冲区）
-  - `LiveKit audio bridge` (20Hz): 已迁移到统一 WebRTC 实时链路
+  - `旧实时音频桥` (20Hz): 已迁移到统一 WebRTC DataChannel 实时链路
   - `operatorStatusUpdate` (0.2Hz): 发现 70-80% 冗余触发
 - ✅ 实现 `operatorStatusUpdate` 状态去重
   - 添加关键字段哈希计算

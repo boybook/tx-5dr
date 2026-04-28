@@ -6,7 +6,6 @@ import { join } from 'path';
 import http from 'http';
 import https from 'https';
 import { spawn, spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import type { DesktopHttpsStatus } from '@tx5dr/contracts';
@@ -38,10 +37,8 @@ const DEV_PROCESS_MEMORY_LOG_INTERVAL_MS = 30_000;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let serverCheckInterval: any = null;
-let livekitProcess: import('node:child_process').ChildProcess | null = null;
 let serverProcess: import('node:child_process').ChildProcess | null = null;
 let webProcess: import('node:child_process').ChildProcess | null = null;
-let selectedLiveKitPort: number | null = null;
 let selectedWebPort: number | null = null;
 let selectedServerPort: number | null = null;
 let selectedHttpsPort: number | null = null;
@@ -72,10 +69,9 @@ interface ChildShutdownResult {
   skipped: boolean;
 }
 
-const CHILD_SHUTDOWN_OPTIONS: Record<'web' | 'server' | 'livekit', ChildShutdownOptions> = {
+const CHILD_SHUTDOWN_OPTIONS: Record<'web' | 'server', ChildShutdownOptions> = {
   web: { softTimeoutMs: 1000, forceTimeoutMs: 400 },
   server: { softTimeoutMs: 1800, forceTimeoutMs: 500 },
-  livekit: { softTimeoutMs: 1000, forceTimeoutMs: 400 },
 };
 
 // ===== Electron 本地设置 =====
@@ -84,13 +80,6 @@ const ELECTRON_SETTINGS_FILE = 'electron-settings.json';
 interface ElectronSettings {
   closeBehavior: 'ask' | 'tray' | 'quit';
   desktopHttps?: PersistentDesktopHttpsConfig;
-}
-
-interface LiveKitCredentialFileData {
-  apiKey: string;
-  apiSecret: string;
-  createdAt: string;
-  rotatedAt: string;
 }
 
 interface WindowsVCRuntimeStatus {
@@ -268,10 +257,6 @@ function buildWebChildEnv(serverPort: number): Record<string, string> {
     env.STATIC_DIR = join(resourcesRoot(), 'app', 'packages', 'web', 'dist');
   }
 
-  const livekitTarget = resolveLiveKitGatewayTarget();
-  if (livekitTarget) {
-    env.LIVEKIT_TARGET = livekitTarget;
-  }
 
   if (
     httpsConfig.enabled &&
@@ -288,30 +273,6 @@ function buildWebChildEnv(serverPort: number): Record<string, string> {
   }
 
   return env;
-}
-
-function resolveLiveKitGatewayTarget(): string | null {
-  if (process.env.LIVEKIT_DISABLED === '1' && !selectedLiveKitPort) {
-    return null;
-  }
-
-  if (selectedLiveKitPort) {
-    return `http://127.0.0.1:${selectedLiveKitPort}`;
-  }
-
-  const raw = process.env.LIVEKIT_URL?.trim();
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    const parsed = new URL(raw);
-    parsed.protocol = parsed.protocol === 'wss:' ? 'https:' : 'http:';
-    return parsed.toString().replace(/\/$/, '');
-  } catch (error) {
-    logger.warn('failed to resolve livekit gateway target from environment', { raw, error });
-    return null;
-  }
 }
 
 function webGatewayEntryPath(): string {
@@ -341,7 +302,6 @@ function prepareWebGatewayLaunch(webEntry: string, env: Record<string, string>):
     target: env.TARGET,
     staticDir: env.STATIC_DIR ?? null,
     devWebTarget: env.DEV_WEB_TARGET ?? null,
-    livekitTarget: env.LIVEKIT_TARGET ?? null,
     httpsEnabled: env.HTTPS_ENABLE === '1',
     requestedHttpsPort: env.HTTPS_PORT ?? null,
     logFile: env.TX5DR_CLIENT_TOOLS_LOG_FILE,
@@ -362,7 +322,6 @@ async function waitAndApplyWebGatewayReady(env: Record<string, string>, requeste
     staticDir: ready.staticDir ?? null,
     staticDirExists: ready.staticDirExists ?? null,
     target: ready.target ?? null,
-    livekitTarget: ready.livekitTarget ?? null,
     devWebTarget: ready.devWebTarget ?? null,
   });
   return ready;
@@ -557,45 +516,6 @@ function nodePath() {
   const res = resourcesRoot();
   const exe = process.platform === 'win32' ? 'node.exe' : 'node';
   return path.join(res, 'bin', triplet(), exe);
-}
-
-function livekitServerPath() {
-  if (process.env.LIVEKIT_BINARY_PATH) {
-    return fs.existsSync(process.env.LIVEKIT_BINARY_PATH) ? process.env.LIVEKIT_BINARY_PATH : null;
-  }
-
-  const res = resourcesRoot();
-  const exe = process.platform === 'win32' ? 'livekit-server.exe' : 'livekit-server';
-  const bundled = path.join(res, 'bin', triplet(), exe);
-  if (fs.existsSync(bundled)) {
-    return bundled;
-  }
-
-  const candidates = [resolveCommand(exe)];
-  if (process.platform === 'darwin') {
-    candidates.push(
-      '/opt/homebrew/bin/livekit-server',
-      '/opt/homebrew/opt/livekit/bin/livekit-server',
-      '/usr/local/bin/livekit-server',
-      '/usr/local/opt/livekit/bin/livekit-server',
-    );
-  } else if (process.platform === 'linux') {
-    candidates.push('/usr/local/bin/livekit-server', '/usr/bin/livekit-server');
-  }
-
-  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || null;
-}
-
-function resolveCommand(command: string): string | null {
-  const probe = process.platform === 'win32'
-    ? spawnSync('where', [command], { encoding: 'utf8' })
-    : spawnSync('which', [command], { encoding: 'utf8' });
-  if (probe.status !== 0) {
-    return null;
-  }
-
-  const resolved = probe.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
-  return resolved || null;
 }
 
 function queryWindowsRegistryValue(key: string, valueName: string): string | null {
@@ -1047,160 +967,6 @@ function runNativeModuleCheck(
   });
 }
 
-function runBinaryChild(
-  name: string,
-  binaryPath: string,
-  args: string[],
-  extraEnv: Record<string, string> = {},
-  cwd = path.dirname(binaryPath)
-) {
-  const child = spawn(binaryPath, args, {
-    cwd,
-    env: createChildEnv(extraEnv),
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  wireChildProcess(name, child);
-  return child;
-}
-
-function buildLiveKitConfig(signalingPort: number, tcpPort: number, apiKey: string, apiSecret: string): string {
-  const runtimeSettings = readManagedLiveKitSettings();
-  return [
-    `port: ${signalingPort}`,
-    'rtc:',
-    `  tcp_port: ${tcpPort}`,
-    '  port_range_start: 50000',
-    '  port_range_end: 50100',
-    ...(runtimeSettings.networkMode === 'internet-auto'
-      ? ['  use_external_ip: true']
-      : [
-          '  use_external_ip: false',
-          ...(runtimeSettings.networkMode === 'internet-manual' && runtimeSettings.nodeIp
-            ? [`  node_ip: ${runtimeSettings.nodeIp}`]
-            : []),
-        ]),
-    'keys:',
-    `  ${apiKey}: ${apiSecret}`,
-    'logging:',
-    '  level: info',
-    '',
-  ].join('\n');
-}
-
-function readManagedLiveKitSettings(): { networkMode: 'lan' | 'internet-auto' | 'internet-manual'; nodeIp: string | null } {
-  const configPath = path.join(getAppConfigDir(), 'config.json');
-
-  try {
-    const content = fs.readFileSync(configPath, 'utf-8');
-    const parsed = JSON.parse(content) as {
-      livekitNetworkMode?: string | null;
-      livekitNodeIp?: string | null;
-    };
-    const networkMode = parsed.livekitNetworkMode === 'internet-auto' || parsed.livekitNetworkMode === 'internet-manual'
-      ? parsed.livekitNetworkMode
-      : 'lan';
-    const nodeIp = parsed.livekitNodeIp?.trim() || null;
-
-    if (networkMode === 'internet-manual' && nodeIp && net.isIP(nodeIp) === 4) {
-      return { networkMode, nodeIp };
-    }
-    if (networkMode === 'internet-manual') {
-      logger.warn('invalid manual LiveKit node IP in desktop config, falling back to lan mode', { nodeIp });
-      return { networkMode: 'lan', nodeIp: null };
-    }
-
-    return { networkMode, nodeIp };
-  } catch (error) {
-    logger.debug('failed to read desktop LiveKit runtime settings, using defaults', {
-      message: error instanceof Error ? error.message : String(error),
-    });
-    return { networkMode: 'lan', nodeIp: null };
-  }
-}
-
-function getLiveKitCredentialPath(): string {
-  return path.join(getAppConfigDir(), 'livekit-credentials.env');
-}
-
-function parseEnvFile(content: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) {
-      continue;
-    }
-
-    const separatorIndex = line.indexOf('=');
-    if (separatorIndex <= 0) {
-      continue;
-    }
-
-    const key = line.slice(0, separatorIndex).trim();
-    let value = line.slice(separatorIndex + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"'))
-      || (value.startsWith('\'') && value.endsWith('\''))
-    ) {
-      value = value.slice(1, -1);
-    }
-    result[key] = value;
-  }
-  return result;
-}
-
-function renderLiveKitCredentialEnv(data: LiveKitCredentialFileData): string {
-  return [
-    '# Managed by TX-5DR. Rotate this file only via TX-5DR tools.',
-    `LIVEKIT_API_KEY=${data.apiKey}`,
-    `LIVEKIT_API_SECRET=${data.apiSecret}`,
-    `LIVEKIT_CREDENTIALS_CREATED_AT=${data.createdAt}`,
-    `LIVEKIT_CREDENTIALS_ROTATED_AT=${data.rotatedAt}`,
-    '',
-  ].join('\n');
-}
-
-function ensureLiveKitCredentials(): { path: string; data: LiveKitCredentialFileData } {
-  const configDir = getAppConfigDir();
-  fs.mkdirSync(configDir, { recursive: true });
-  const credentialPath = getLiveKitCredentialPath();
-
-  try {
-    if (fs.existsSync(credentialPath)) {
-      const parsed = parseEnvFile(fs.readFileSync(credentialPath, 'utf-8'));
-      const apiKey = parsed.LIVEKIT_API_KEY?.trim();
-      const apiSecret = parsed.LIVEKIT_API_SECRET?.trim();
-      if (apiKey && apiSecret) {
-        const createdAt = parsed.LIVEKIT_CREDENTIALS_CREATED_AT?.trim() || new Date().toISOString();
-        const rotatedAt = parsed.LIVEKIT_CREDENTIALS_ROTATED_AT?.trim() || createdAt;
-        return {
-          path: credentialPath,
-          data: { apiKey, apiSecret, createdAt, rotatedAt },
-        };
-      }
-    }
-  } catch (error) {
-    logger.warn('failed to read existing LiveKit credentials, regenerating', error);
-  }
-
-  const now = new Date().toISOString();
-  const data: LiveKitCredentialFileData = {
-    apiKey: `tx5dr-${randomBytes(8).toString('hex')}`,
-    apiSecret: randomBytes(24).toString('hex'),
-    createdAt: now,
-    rotatedAt: now,
-  };
-  fs.writeFileSync(credentialPath, renderLiveKitCredentialEnv(data), 'utf-8');
-  return { path: credentialPath, data };
-}
-
-function ensureLiveKitConfig(signalingPort: number, tcpPort: number, apiKey: string, apiSecret: string): string {
-  const configDir = getAppConfigDir();
-  fs.mkdirSync(configDir, { recursive: true });
-  const configPath = path.join(configDir, 'livekit.resolved.yaml');
-  fs.writeFileSync(configPath, buildLiveKitConfig(signalingPort, tcpPort, apiKey, apiSecret), 'utf-8');
-  return configPath;
-}
-
 // 简单 HTTP 等待
 async function waitForUrl(url: string, timeoutMs = 15000, intervalMs = 300): Promise<boolean> {
   const started = Date.now();
@@ -1258,7 +1024,6 @@ interface WebGatewayReadyState {
   staticDir?: string;
   staticDirExists?: boolean;
   target?: string;
-  livekitTarget?: string | null;
   devWebTarget?: string | null;
   error?: unknown;
 }
@@ -1304,8 +1069,7 @@ async function waitForWebGatewayReady(
       httpsPort: null,
       httpsOk: false,
       target: env.TARGET,
-      livekitTarget: env.LIVEKIT_TARGET ?? null,
-      devWebTarget: env.DEV_WEB_TARGET ?? null,
+        devWebTarget: env.DEV_WEB_TARGET ?? null,
     };
   }
 
@@ -1779,7 +1543,6 @@ function logDevProcessMemory(reason: string): void {
       childPids: {
         web: webProcess?.pid ?? null,
         server: serverProcess?.pid ?? null,
-        livekit: livekitProcess?.pid ?? null,
       },
     });
   } catch (error) {
@@ -1889,12 +1652,6 @@ async function cleanupChildProcesses(isDevelopment: boolean): Promise<ChildShutd
     if (currentServerProcess) {
       tasks.push(killProcess(currentServerProcess, 'server', CHILD_SHUTDOWN_OPTIONS.server));
     }
-
-    const currentLivekitProcess = livekitProcess;
-    livekitProcess = null;
-    if (currentLivekitProcess) {
-      tasks.push(killProcess(currentLivekitProcess, 'livekit', CHILD_SHUTDOWN_OPTIONS.livekit));
-    }
   }
 
   return Promise.all(tasks);
@@ -1906,7 +1663,6 @@ async function cleanup(): Promise<ChildShutdownResult[]> {
   stopDevProcessMemoryLogger();
   const childResults = await cleanupChildProcesses(isDevelopment);
 
-  selectedLiveKitPort = null;
   selectedServerPort = null;
   selectedWebPort = null;
   selectedHttpsPort = null;
@@ -2023,73 +1779,35 @@ async function createWindow() {
       return;
     }
   } else {
-    // 生产模式：启动 LiveKit -> server -> web
-    logger.info('production mode: starting livekit, server, and web child processes');
+    // 生产模式：启动 server -> web，实时语音由 server 内置 rtc-data-audio 提供。
+    logger.info('production mode: starting server and web child processes');
     const res = resourcesRoot();
-    const livekitBinary = livekitServerPath();
     const serverEntry = join(res, 'app', 'packages', 'server', 'dist', 'index.js');
     const serverLauncherEntry = serverLauncherEntryPath();
     const webEntry = webGatewayEntryPath();
-    const livekitEnabled = Boolean(livekitBinary);
-    if (!livekitEnabled) {
-      logger.warn('livekit binary not found, starting in ws compatibility mode');
-    }
 
-    // 自动端口探测，避免端口占用导致启动失败
-    const livekitPort = livekitEnabled ? await findFreePort(7880, 50, undefined, '127.0.0.1') : null;
-    const livekitTcpPort = livekitEnabled ? await findFreePort(7881, 50, livekitPort ?? undefined, '127.0.0.1') : null;
     const serverPort = await findFreePort(4000, 50, undefined, '0.0.0.0');
     let webPort: number;
     try {
-      webPort = await findFreePort(DEFAULT_WEB_HTTP_PORT, DEFAULT_PORT_SCAN_STEPS, serverPort, '0.0.0.0', { fallbackToRandom: false }); // 避免和 serverPort 冲突
+      webPort = await findFreePort(DEFAULT_WEB_HTTP_PORT, DEFAULT_PORT_SCAN_STEPS, serverPort, '0.0.0.0', { fallbackToRandom: false });
     } catch (error) {
       logger.error('web gateway port range exhausted', error);
       errorType = 'PORT_CONFLICT';
       crashedProcessName = 'client-tools';
       hasStartupError = true;
       dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Web gateway port range exhausted\n\n${error instanceof Error ? `${error.message}\n\n` : ''}${buildLogPathsHint('client-tools')}`);
+        `Web gateway port range exhausted
+
+${error instanceof Error ? `${error.message}
+
+` : ''}${buildLogPathsHint('client-tools')}`);
       return;
     }
-    selectedLiveKitPort = livekitPort;
     selectedServerPort = serverPort;
     selectedWebPort = webPort;
 
-    logger.info(`ports selected: livekit=${livekitPort ?? 'disabled'}, livekitTcp=${livekitTcpPort ?? 'disabled'}, server=${serverPort}, web=${webPort}`);
+    logger.info(`ports selected: server=${serverPort}, web=${webPort}, rtcDataAudioUdp=${process.env.RTC_DATA_AUDIO_UDP_PORT || '50110'}`);
 
-    let livekitCredentialPath: string | null = null;
-    let livekitConfigPath: string | null = null;
-
-    if (livekitEnabled && livekitBinary && livekitPort && livekitTcpPort) {
-      const credentialState = ensureLiveKitCredentials();
-      livekitCredentialPath = credentialState.path;
-      livekitConfigPath = ensureLiveKitConfig(
-        livekitPort,
-        livekitTcpPort,
-        credentialState.data.apiKey,
-        credentialState.data.apiSecret,
-      );
-
-      livekitProcess = runBinaryChild('livekit', livekitBinary, ['--config', livekitConfigPath]);
-
-      // Non-blocking: monitor LiveKit readiness in background.
-      // Server's LiveKitBridgeManager will auto-detect availability via recovery probe.
-      void waitForHttp(`http://127.0.0.1:${livekitPort}`, 15000, 200).then(async (livekitOk) => {
-        if (!livekitOk) {
-          logger.warn('livekit startup timeout, server will operate in ws-compat mode and auto-recover when livekit becomes available');
-          if (livekitProcess) {
-            await killProcess(livekitProcess, 'livekit');
-            livekitProcess = null;
-          }
-        } else {
-          logger.info('livekit service ready');
-        }
-      }).catch((error) => {
-        logger.warn('livekit readiness check failed', error);
-      });
-    }
-
-    // Pre-flight: check native modules in an isolated child process
     logger.warn('running native module check...');
     const nativeCheck = await runNativeModuleCheck(serverEntry);
     for (const mod of nativeCheck.modules) {
@@ -2102,53 +1820,54 @@ async function createWindow() {
     if (!nativeCheck.success) {
       const okModules = nativeCheck.modules.filter(m => m.ok).map(m => m.name);
       const failedModules = nativeCheck.modules.filter(m => !m.ok);
+      const degradedRtcOnly = nativeCheck.crashedModule === 'node-datachannel'
+        || (failedModules.length > 0 && failedModules.every(m => m.name === 'node-datachannel'));
 
-      let detail: string;
-      if (nativeCheck.crashedModule) {
-        logger.error(`native module crashed the check process: ${nativeCheck.crashedModule} (exit=${nativeCheck.exitCode}, signal=${nativeCheck.signal})`);
-        detail = `The following module crashed during loading:\n  ${nativeCheck.crashedModule}`;
-      } else if (nativeCheck.timeout) {
-        logger.error('native module check timed out');
-        detail = 'The native module check process timed out (30s).';
+      if (degradedRtcOnly) {
+        logger.warn('node-datachannel native check failed; continuing with ws-compat fallback available', nativeCheck);
       } else {
-        detail = 'The following modules failed to load:\n' +
-          failedModules.map(m => `  ${m.name}: ${m.error}`).join('\n');
+        let detail: string;
+        if (nativeCheck.crashedModule) {
+          logger.error(`native module crashed the check process: ${nativeCheck.crashedModule} (exit=${nativeCheck.exitCode}, signal=${nativeCheck.signal})`);
+          detail = `The following module crashed during loading:
+  ${nativeCheck.crashedModule}`;
+        } else if (nativeCheck.timeout) {
+          logger.error('native module check timed out');
+          detail = 'The native module check process timed out (30s).';
+        } else {
+          detail = `The following modules failed to load:
+${failedModules.map(m => `  ${m.name}: ${m.error}`).join('\n')}`;
+        }
+
+        const okHint = okModules.length > 0
+          ? `
+Successfully loaded: ${okModules.join(', ')}`
+          : '';
+        const failHint = failedModules.length > 0
+          ? `
+Failed to load: ${failedModules.map(m => m.name).join(', ')}`
+          : '';
+
+        hasStartupError = true;
+        errorType = 'NATIVE_MODULE';
+        dialog.showErrorBox('TX-5DR - Startup Failed',
+          `Native module compatibility check failed.
+${detail}${okHint}${failHint}
+
+        ` +
+          'This usually means the native binary is incompatible with the current system.\n\n' +
+          buildLogPathsHint('server'));
+        return;
       }
-
-      const okHint = okModules.length > 0
-        ? `\nSuccessfully loaded: ${okModules.join(', ')}`
-        : '';
-      const failHint = failedModules.length > 0
-        ? `\nFailed to load: ${failedModules.map(m => m.name).join(', ')}`
-        : '';
-
-      hasStartupError = true;
-      errorType = 'NATIVE_MODULE';
-      dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Native module compatibility check failed.\n${detail}${okHint}${failHint}\n\n` +
-        'This usually means the native binary is incompatible with the current system.\n\n' +
-        buildLogPathsHint('server'));
-      return;
     }
-    logger.warn('all native modules ok');
+    logger.warn('native module check complete');
 
-    // Start server immediately — do not wait for LiveKit to become ready.
-    // Server's LiveKitBridgeManager handles LiveKit availability detection
-    // and recovery probing, falling back to ws-compat when unavailable.
     serverProcess = runChild('server', serverLauncherEntry, {
       PORT: String(serverPort),
       WEB_PORT: String(webPort),
       TX5DR_SERVER_ENTRY: serverEntry,
-      LIVEKIT_DISABLED: livekitEnabled ? '0' : '1',
-      ...(livekitEnabled && livekitPort && livekitTcpPort && livekitCredentialPath && livekitConfigPath
-        ? {
-            LIVEKIT_URL: `ws://127.0.0.1:${livekitPort}`,
-            LIVEKIT_CREDENTIALS_FILE: livekitCredentialPath,
-            LIVEKIT_CONFIG_PATH: livekitConfigPath,
-            LIVEKIT_TCP_PORT: String(livekitTcpPort),
-            LIVEKIT_UDP_PORT_RANGE: '50000-50100',
-          }
-        : {}),
+      RTC_DATA_AUDIO_UDP_PORT: process.env.RTC_DATA_AUDIO_UDP_PORT || '50110',
+      RTC_DATA_AUDIO_ICE_UDP_MUX: process.env.RTC_DATA_AUDIO_ICE_UDP_MUX || '1',
     });
 
     logger.info('waiting for backend server...');
@@ -2159,14 +1878,17 @@ async function createWindow() {
       crashedProcessName = crashedProcessName || 'server';
       hasStartupError = true;
       dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Backend server startup timeout\n\n` +
-        `Backend port: ${serverPort}\n` +
-        `LiveKit mode: ${livekitProcess ? 'enabled' : 'disabled (ws-compat fallback)'}\n` +
-        `${livekitPort ? `LiveKit signaling port: ${livekitPort}\n` : ''}` +
-        `${livekitTcpPort ? `LiveKit ICE/TCP port: ${livekitTcpPort}\n` : ''}` +
-        `${livekitConfigPath ? `Config file: ${livekitConfigPath}\n` : ''}` +
-        `${buildLogPathsHint('server')}\n\n` +
-        'Please inspect the backend and LiveKit logs to confirm the realtime voice service is reachable.');
+        `Backend server startup timeout
+
+` +
+        `Backend port: ${serverPort}
+` +
+        `rtc-data-audio UDP port: ${process.env.RTC_DATA_AUDIO_UDP_PORT || '50110'}
+` +
+        `${buildLogPathsHint('server')}
+
+` +
+        'Please inspect the backend logs. If node-datachannel is unavailable, realtime audio can still fall back to ws-compat.');
       return;
     }
     logger.info('backend server ready');
@@ -2187,7 +1909,11 @@ async function createWindow() {
       crashedProcessName = crashedProcessName || 'client-tools';
       hasStartupError = true;
       dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Web service startup timeout\n\n${error instanceof Error ? `${error.message}\n\n` : ''}${buildLogPathsHint('client-tools')}`);
+        `Web service startup timeout
+
+${error instanceof Error ? `${error.message}
+
+` : ''}${buildLogPathsHint('client-tools')}`);
       return;
     }
     logger.info('web service ready');

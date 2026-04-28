@@ -31,12 +31,9 @@ fi
 
 log "Starting TX-5DR Docker container initialization..."
 
-export LIVEKIT_CREDENTIALS_FILE="${LIVEKIT_CREDENTIALS_FILE:-/app/data/realtime/livekit-credentials.env}"
-export LIVEKIT_CONFIG_PATH="${LIVEKIT_CONFIG_PATH:-/app/data/realtime/livekit.resolved.yaml}"
-if [[ -f "$LIVEKIT_CREDENTIALS_FILE" ]]; then
-    log "Using LiveKit managed credential file: $LIVEKIT_CREDENTIALS_FILE"
-fi
-
+export RTC_DATA_AUDIO_UDP_PORT="${RTC_DATA_AUDIO_UDP_PORT:-50110}"
+export RTC_DATA_AUDIO_ICE_UDP_MUX="${RTC_DATA_AUDIO_ICE_UDP_MUX:-1}"
+log "rtc-data-audio UDP port: ${RTC_DATA_AUDIO_UDP_PORT}"
 # 定义数据目录
 DATA_DIRS=(
     "/app/data/config"
@@ -237,19 +234,6 @@ CERTEOF
     fi
 else
     log "Using existing SSL certificate: $SSL_DIR"
-fi
-
-# ── Nginx: conditionally remove LiveKit proxy ─────────────────────────────
-NGINX_CONF="/etc/nginx/conf.d/tx5dr.conf"
-if [[ -f "$NGINX_CONF" ]] && [[ -z "${LIVEKIT_URL:-}" ]]; then
-    log "LiveKit not configured, removing /livekit/ proxy from nginx config"
-    awk '
-        /# LiveKit signaling proxy/ { skip = 1 }
-        skip && /^    \}/ { skip = 0; next }
-        !skip { print }
-    ' "$NGINX_CONF" > "${NGINX_CONF}.tmp" && mv "${NGINX_CONF}.tmp" "$NGINX_CONF"
-else
-    log "LiveKit configured: ${LIVEKIT_URL:-}"
 fi
 
 # Patch nginx config with HTTPS server block if certificate exists and HTTPS block is missing

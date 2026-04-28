@@ -17,6 +17,7 @@ import type { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.j
 import { createLogger } from '../utils/logger.js';
 import type { VoiceTxFrameMeta, VoiceTxProcessedFrameStats } from '../voice/VoiceTxDiagnostics.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
+import { VoiceTxOutputPipeline, type VoiceTxOutputSinkState } from './VoiceTxOutputPipeline.js';
 
 const logger = createLogger('AudioStreamManager');
 const INTERNAL_SAMPLE_RATE = 12000;
@@ -24,8 +25,20 @@ const ICOM_WLAN_TX_CHUNK_SIZE = 1200;
 const ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS = 150;
 const ICOM_WLAN_TX_MAX_WAIT_SLICE_MS = 20;
 
+export type NativeAudioInputSourceKind = 'audio-device' | 'icom-wlan';
+
+export interface NativeAudioInputFrame {
+  samples: Float32Array;
+  sampleRate: number;
+  channels: number;
+  timestamp: number;
+  sequence: number;
+  sourceKind: NativeAudioInputSourceKind;
+}
+
 export interface AudioStreamEvents {
   'audioData': (samples: Float32Array) => void;
+  'nativeAudioInputData': (frame: NativeAudioInputFrame) => void;
   'txMonitorAudioData': (data: { samples: Float32Array; sampleRate: number }) => void;
   'error': (error: Error) => void;
   'started': () => void;
@@ -42,7 +55,7 @@ export interface VoiceTxOutputObserver {
     meta: VoiceTxFrameMeta;
     queueDepthFrames: number;
     queuedAudioMs: number;
-    reason: 'backpressure' | 'output-unavailable';
+    reason: 'backpressure' | 'output-unavailable' | 'stale' | 'jitter-trim';
   }) => void;
   onFrameProcessed?: (data: VoiceTxProcessedFrameStats) => void;
   onWriteFailure?: (data: {
@@ -119,6 +132,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private readonly voiceFrameQueue: QueuedVoiceFrame[] = [];
   private voiceQueueDurationMs = 0;
   private voiceQueueProcessing = false;
+  private voiceTxOutputPipeline: VoiceTxOutputPipeline;
+  private nativeAudioInputSequence = 0;
   private static readonly MAX_VOICE_QUEUE_FRAMES = 25;
   private static readonly MAX_VOICE_QUEUE_DURATION_MS = 500;
 
@@ -135,6 +150,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     // 创建音频缓冲区提供者，使用统一的内部采样率（12kHz）
     this.audioProvider = new RingBufferAudioProvider(INTERNAL_SAMPLE_RATE, INTERNAL_SAMPLE_RATE * 5); // 5秒缓冲
+    this.voiceTxOutputPipeline = new VoiceTxOutputPipeline({
+      getSinkState: () => this.getVoiceTxOutputSinkState(),
+      getObserver: () => this.voiceOutputObserver,
+      getVolumeGain: () => this.volumeGain,
+      writeOutputChunk: (samples, sink) => this.writeVoiceTxOutputChunk(samples, sink),
+    });
     logger.info('audio stream manager initialized', { sampleRate: this.sampleRate, bufferSize: this.bufferSize, internalSampleRate: INTERNAL_SAMPLE_RATE });
   }
 
@@ -219,6 +240,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
         // 订阅音频数据
         this.icomWlanAudioAdapter.on('audioData', (samples: Float32Array) => {
+          this.emitNativeAudioInputData(samples, this.icomWlanAudioAdapter?.getSampleRate() ?? INTERNAL_SAMPLE_RATE, 'icom-wlan');
           this.audioProvider.writeAudio(samples);
           this.emit('audioData', samples);
         });
@@ -230,7 +252,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
         this.deviceId = 'icom-wlan-input';
         this.isStreaming = true;
-        logger.info('ICOM WLAN audio input started (12kHz -> 48kHz)');
+        logger.info('ICOM WLAN audio input started (native 12kHz)');
         this.emit('started');
         return;
       }
@@ -918,6 +940,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
           const samples = this.convertBufferToFloat32(pcm);
           if (samples.length === 0) return;
+          this.emitNativeAudioInputData(samples, this.sampleRate, 'audio-device');
 
           if (this.sampleRate !== INTERNAL_SAMPLE_RATE) {
             resampleAudioProfessional(
@@ -943,6 +966,25 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       },
       null
     );
+  }
+
+  private emitNativeAudioInputData(
+    samples: Float32Array,
+    sampleRate: number,
+    sourceKind: NativeAudioInputSourceKind,
+  ): void {
+    if (this.listenerCount('nativeAudioInputData') === 0 || samples.length === 0) {
+      return;
+    }
+
+    this.emit('nativeAudioInputData', {
+      samples: new Float32Array(samples),
+      sampleRate,
+      channels: this.channels,
+      timestamp: Date.now(),
+      sequence: this.nativeAudioInputSequence++,
+      sourceKind,
+    });
   }
 
   private openOutputStream(outputDeviceId: number): void {
@@ -1019,6 +1061,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.voiceFrameQueue.length = 0;
     this.voiceQueueDurationMs = 0;
     this.voiceAccumBuffer = new Float32Array(0);
+    this.voiceTxOutputPipeline.clear();
+  }
+
+  setVoiceTxOutputEnabled(enabled: boolean): void {
+    this.voiceTxOutputPipeline.setOutputEnabled(enabled);
   }
 
   /**
@@ -1378,6 +1425,61 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private voiceAccumBuffer: Float32Array = new Float32Array(0);
 
   async playVoiceAudio(pcmData: Float32Array, frameSampleRate: number, meta: VoiceTxFrameMeta): Promise<void> {
+    this.voiceTxOutputPipeline.ingest(pcmData, frameSampleRate, meta);
+    return;
+  }
+
+  private getVoiceTxOutputSinkState(): VoiceTxOutputSinkState {
+    if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
+      const outputSampleRate = this.icomWlanAudioAdapter.getSampleRate();
+      return {
+        available: this.isOutputting,
+        kind: 'icom-wlan',
+        outputSampleRate,
+        outputBufferSize: Math.max(80, Math.round(outputSampleRate * 0.01)),
+      };
+    }
+
+    return {
+      available: this.isOutputting && Boolean(this.rtAudioOutput),
+      kind: 'rtaudio',
+      outputSampleRate: this.sampleRate,
+      outputBufferSize: Math.max(64, this.bufferSize || 1024),
+    };
+  }
+
+  private async writeVoiceTxOutputChunk(samples: Float32Array, sink: VoiceTxOutputSinkState): Promise<boolean> {
+    if (sink.kind === 'icom-wlan') {
+      if (!this.icomWlanAudioAdapter) {
+        return false;
+      }
+      try {
+        await this.icomWlanAudioAdapter.sendAudio(samples);
+        return true;
+      } catch (error) {
+        logger.error('Voice audio ICOM WLAN send failed', error);
+        return false;
+      }
+    }
+
+    if (!this.rtAudioOutput) {
+      return false;
+    }
+
+    try {
+      const buffer = Buffer.allocUnsafe(samples.length * 4);
+      for (let index = 0; index < samples.length; index += 1) {
+        buffer.writeFloatLE(samples[index] ?? 0, index * 4);
+      }
+      this.rtAudioOutput.write(buffer);
+      return true;
+    } catch (error) {
+      logger.debug('Voice audio RtAudio write failed', error);
+      return false;
+    }
+  }
+
+  async playVoiceAudioLegacy(pcmData: Float32Array, frameSampleRate: number, meta: VoiceTxFrameMeta): Promise<void> {
     const queuedFrame: QueuedVoiceFrame = {
       pcmData,
       frameSampleRate,
@@ -1540,9 +1642,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           });
         }
 
+        const processedAt = Date.now();
+        const serverPipelineMs = Math.max(0, processedAt - frame.meta.serverReceivedAtMs);
         const endToEndMs = typeof frame.meta.clientSentAtMs === 'number'
-          ? Math.max(0, Date.now() - frame.meta.clientSentAtMs)
-          : Math.max(0, Date.now() - frame.meta.serverReceivedAtMs);
+          ? Math.max(0, processedAt - frame.meta.clientSentAtMs)
+          : null;
 
         this.voiceOutputObserver?.onFrameProcessed?.({
           meta: frame.meta,
@@ -1551,6 +1655,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           resampleMs,
           queueWaitMs,
           writeMs,
+          serverPipelineMs,
           endToEndMs,
           outputBufferedMs,
           outputSampleRate,

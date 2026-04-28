@@ -296,23 +296,21 @@ jobs:
             | `tx5dr start` | `tx5dr start` | Start server and verify startup; prints Web UI URL / 启动服务并校验启动结果，同时输出访问地址 |
             | `tx5dr stop` | `tx5dr stop` | Stop TX-5DR server / 停止服务 |
             | `tx5dr restart` | `tx5dr restart` | Restart TX-5DR server / 重启服务 |
-            | `tx5dr status` | `tx5dr status` | Show dashboard for server, LiveKit, nginx, ports, token, and config paths / 显示服务、LiveKit、nginx、端口、令牌和配置路径 |
+            | `tx5dr status` | `tx5dr status` | Show dashboard for server, nginx, rtc-data-audio UDP, token, and config paths / 显示服务、nginx、rtc-data-audio UDP、令牌和配置路径 |
             | `tx5dr logs` | `tx5dr logs` | Follow TX-5DR logs / 跟踪 TX-5DR 日志 |
             | `tx5dr logs --nginx` | `tx5dr logs --nginx` | Follow nginx error log / 跟踪 nginx 错误日志 |
-            | `tx5dr logs --all` | `tx5dr logs --all` | Follow TX-5DR + LiveKit + nginx logs / 同时跟踪 TX-5DR、LiveKit 和 nginx |
+            | `tx5dr logs --all` | `tx5dr logs --all` | Follow TX-5DR + nginx logs / 同时跟踪 TX-5DR 和 nginx |
             | `tx5dr token` | `tx5dr token` | Show admin token and login URL / 显示管理员令牌和登录地址 |
             | `tx5dr token --reset` | `tx5dr token --reset` | Regenerate admin token / 重建管理员令牌 |
             | `tx5dr doctor` | `tx5dr doctor` | Run full environment diagnostics / 执行完整环境诊断 |
             | `tx5dr update` | `tx5dr update` | Download and install latest nightly server build / 下载并安装最新 nightly 服务器版 |
-            | `tx5dr livekit-creds status` | `tx5dr livekit-creds status` | Show managed LiveKit credential status / 查看托管的 LiveKit 凭据状态 |
-            | `tx5dr livekit-creds rotate` | `sudo tx5dr livekit-creds rotate` | Rotate managed LiveKit credentials and regenerate config / 轮换托管的 LiveKit 凭据并重建配置 |
             | `tx5dr enable` | `tx5dr enable` | Enable auto-start on boot / 开机自动启动 |
             | `tx5dr disable` | `tx5dr disable` | Disable auto-start on boot / 关闭开机自启 |
             | `tx5dr version` | `tx5dr version` | Show installed version / 显示当前安装版本 |
 
             ### 🧩 Service Layout 服务关系
-            Linux Server is not a single standalone process. The installer sets up `tx5dr` (backend), bundled `livekit-server` (realtime audio/signaling), and `nginx` (public reverse proxy / HTTPS).
-            Linux 服务器版并不是单个独立进程。安装脚本会自动安装并编排 `tx5dr`（后端）、随包提供的 `livekit-server`（实时音频与 signaling）以及 `nginx`（对外反向代理 / HTTPS）。
+            Linux Server is not a single standalone process. The installer sets up `tx5dr` (backend with embedded rtc-data-audio on UDP 50110) and `nginx` (public reverse proxy / HTTPS).
+            Linux 服务器版并不是单个独立进程。安装脚本会自动安装并编排 `tx5dr`（后端，内置 UDP 50110 上的 rtc-data-audio）以及 `nginx`（对外反向代理 / HTTPS）。
 
             ### 🔒 SSL Notice SSL 提示
             Voice features (browser microphone) require HTTPS. Configure SSL in `/etc/nginx/conf.d/tx5dr.conf`.
@@ -381,23 +379,21 @@ jobs:
             | `tx5dr start` | `tx5dr start` | Start server and verify startup; prints Web UI URL / 启动服务并校验启动结果，同时输出访问地址 |
             | `tx5dr stop` | `tx5dr stop` | Stop TX-5DR server / 停止服务 |
             | `tx5dr restart` | `tx5dr restart` | Restart TX-5DR server / 重启服务 |
-            | `tx5dr status` | `tx5dr status` | Show dashboard for server, LiveKit, nginx, ports, token, and config paths / 显示服务、LiveKit、nginx、端口、令牌和配置路径 |
+            | `tx5dr status` | `tx5dr status` | Show dashboard for server, nginx, rtc-data-audio UDP, token, and config paths / 显示服务、nginx、rtc-data-audio UDP、令牌和配置路径 |
             | `tx5dr logs` | `tx5dr logs` | Follow TX-5DR logs / 跟踪 TX-5DR 日志 |
             | `tx5dr logs --nginx` | `tx5dr logs --nginx` | Follow nginx error log / 跟踪 nginx 错误日志 |
-            | `tx5dr logs --all` | `tx5dr logs --all` | Follow TX-5DR + LiveKit + nginx logs / 同时跟踪 TX-5DR、LiveKit 和 nginx |
+            | `tx5dr logs --all` | `tx5dr logs --all` | Follow TX-5DR + nginx logs / 同时跟踪 TX-5DR 和 nginx |
             | `tx5dr token` | `tx5dr token` | Show admin token and login URL / 显示管理员令牌和登录地址 |
             | `tx5dr token --reset` | `tx5dr token --reset` | Regenerate admin token / 重建管理员令牌 |
             | `tx5dr doctor` | `tx5dr doctor` | Run full environment diagnostics / 执行完整环境诊断 |
             | `tx5dr update` | `tx5dr update` | Download and install latest nightly server build / 下载并安装最新 nightly 服务器版 |
-            | `tx5dr livekit-creds status` | `tx5dr livekit-creds status` | Show managed LiveKit credential status / 查看托管的 LiveKit 凭据状态 |
-            | `tx5dr livekit-creds rotate` | `sudo tx5dr livekit-creds rotate` | Rotate managed LiveKit credentials and regenerate config / 轮换托管的 LiveKit 凭据并重建配置 |
             | `tx5dr enable` | `tx5dr enable` | Enable auto-start on boot / 开机自动启动 |
             | `tx5dr disable` | `tx5dr disable` | Disable auto-start on boot / 关闭开机自启 |
             | `tx5dr version` | `tx5dr version` | Show installed version / 显示当前安装版本 |
 
             ### 🧩 Service Layout 服务关系
-            Linux Server is not a single standalone process. The installer sets up `tx5dr` (backend), bundled `livekit-server` (realtime audio/signaling), and `nginx` (public reverse proxy / HTTPS).
-            Linux 服务器版并不是单个独立进程。安装脚本会自动安装并编排 `tx5dr`（后端）、随包提供的 `livekit-server`（实时音频与 signaling）以及 `nginx`（对外反向代理 / HTTPS）。
+            Linux Server is not a single standalone process. The installer sets up `tx5dr` (backend with embedded rtc-data-audio on UDP 50110) and `nginx` (public reverse proxy / HTTPS).
+            Linux 服务器版并不是单个独立进程。安装脚本会自动安装并编排 `tx5dr`（后端，内置 UDP 50110 上的 rtc-data-audio）以及 `nginx`（对外反向代理 / HTTPS）。
 
             ### 🔧 System Requirements 系统要求
             - Debian 12+ / Ubuntu 22.04+, Node.js 20+, nginx

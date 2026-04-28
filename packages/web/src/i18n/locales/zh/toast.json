@@ -31,15 +31,15 @@
     },
     "realtimeConnectivityWarning": {
       "title": "实时语音连接异常",
-      "description": "实时语音连接异常，客户端可能无法正常发送或听到内容。\n\n排查建议：\n- 确认 LiveKit signaling 端口 {{signalingPort}} 已开放\n- 确认 LiveKit ICE/TCP 端口 {{rtcTcpPort}} 已开放\n- 确认 UDP 端口范围 {{udpPortRange}} 可通\n- 确认客户端可访问 {{signalingUrl}}\n\n技术详情：{{details}}"
+      "description": "实时语音连接异常，客户端可能无法正常发送或听到内容。\n\n排查建议：\n- 确认 /api/realtime/rtc-data-audio 信令可达\n- 确认 rtc-data-audio UDP 端口 {{localUdpPort}} 已开放或映射\n- 确认配置的公网 UDP 端点可通\n- 确认客户端可访问 {{signalingUrl}}\n\n技术详情：{{details}}"
     },
-    "realtimeBridgeDown": {
+    "realtimeServiceDown": {
       "title": "实时语音服务异常",
-      "description": "服务端实时语音桥接异常，客户端可能无法正常发送或听到内容。\n\n排查建议：\n- 确认 LiveKit signaling 端口 {{signalingPort}} 已开放\n- 确认 LiveKit ICE/TCP 端口 {{rtcTcpPort}} 已开放\n- 确认 UDP 端口范围 {{udpPortRange}} 可通\n- 确认客户端可访问 {{signalingUrl}}\n\n技术详情：{{details}}"
+      "description": "服务端实时语音服务异常，客户端可能无法正常发送或听到内容。\n\n排查建议：\n- 确认 /api/realtime/rtc-data-audio 信令可达\n- 确认 rtc-data-audio UDP 端口 {{localUdpPort}} 已开放或映射\n- 确认配置的公网 UDP 端点可通\n- 确认客户端可访问 {{signalingUrl}}\n\n技术详情：{{details}}"
     },
     "realtimeNoAudio": {
       "title": "实时语音无音频数据",
-      "description": "实时语音房间已建立，但服务端没有收到可发布的音频数据。\n\n排查建议：\n- 检查当前音频源是否真的在输出数据\n- 确认 LiveKit signaling 端口 {{signalingPort}} 已开放\n- 确认 LiveKit ICE/TCP 端口 {{rtcTcpPort}} 已开放\n- 确认 UDP 端口范围 {{udpPortRange}} 可通\n- 确认客户端可访问 {{signalingUrl}}\n\n技术详情：{{details}}"
+      "description": "实时语音会话已连接，但服务端没有收到可发布的音频数据。\n\n排查建议：\n- 检查当前音频源是否真的在输出数据\n- 确认 /api/realtime/rtc-data-audio 信令可达\n- 确认 rtc-data-audio UDP 端口 {{localUdpPort}} 已开放或映射\n- 确认配置的公网 UDP 端点可通\n- 确认客户端可访问 {{signalingUrl}}\n\n技术详情：{{details}}"
     }
   }
 }

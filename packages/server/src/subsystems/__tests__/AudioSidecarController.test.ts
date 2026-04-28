@@ -2,14 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'eventemitter3';
 import { AudioSidecarStatus } from '@tx5dr/contracts';
 
-vi.mock('../../audio/AudioMonitorService.js', () => ({
-  AudioMonitorService: class {
-    constructor(_provider: unknown) {}
-    destroy = vi.fn();
-    injectTxMonitorAudio = vi.fn();
-  },
-}));
-
 import { AudioSidecarController } from '../AudioSidecarController.js';
 import { RadioError, RadioErrorCode } from '../../utils/errors/RadioError.js';
 import { ConfigManager } from '../../config/config-manager.js';
@@ -196,7 +188,7 @@ describe('AudioSidecarController', () => {
     expect(sidecar.getStatus()).toBe(AudioSidecarStatus.RETRYING);
   });
 
-  it('keeps the same AudioMonitorService instance across runtime loss + recovery', async () => {
+  it('recovers runtime loss without creating a buffered monitor side path', async () => {
     const { engineEmitter, audioStreamManager, audioVolumeController } = makeDeps();
 
     const sidecar = new AudioSidecarController({
@@ -207,41 +199,18 @@ describe('AudioSidecarController', () => {
 
     await sidecar.start();
     await flushAsync();
-    const firstMonitor = sidecar.getAudioMonitorService();
-    expect(firstMonitor).not.toBeNull();
+    expect(audioStreamManager.getAudioProvider).not.toHaveBeenCalled();
 
     // Simulate runtime loss followed by automatic recovery.
     audioStreamManager.startStream.mockRejectedValueOnce(temporaryDeviceNotFound());
     audioStreamManager.emit('error', new Error('device disappeared'));
     await flushAsync();
     expect(sidecar.getStatus()).toBe(AudioSidecarStatus.RETRYING);
-    expect(sidecar.getAudioMonitorService()).toBe(firstMonitor);
 
     await vi.advanceTimersByTimeAsync(30_000);
     await flushAsync();
 
     expect(sidecar.isConnected()).toBe(true);
-    // Downstream consumers subscribed to firstMonitor must still be bound to
-    // the live instance after recovery.
-    expect(sidecar.getAudioMonitorService()).toBe(firstMonitor);
-  });
-
-  it('forwards TX monitor audio chunks to the monitor side path without replacing the monitor', async () => {
-    const { engineEmitter, audioStreamManager, audioVolumeController } = makeDeps();
-
-    const sidecar = new AudioSidecarController({
-      engineEmitter: engineEmitter as any,
-      audioStreamManager: audioStreamManager as any,
-      audioVolumeController: audioVolumeController as any,
-    });
-
-    await sidecar.start();
-    await flushAsync();
-
-    const monitor = sidecar.getAudioMonitorService() as any;
-    const samples = new Float32Array([0.1, -0.1, 0.2]);
-    audioStreamManager.emit('txMonitorAudioData', { samples, sampleRate: 16000 });
-
-    expect(monitor.injectTxMonitorAudio).toHaveBeenCalledWith(samples, 16000);
+    expect(audioStreamManager.getAudioProvider).not.toHaveBeenCalled();
   });
 });

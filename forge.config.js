@@ -343,10 +343,6 @@ module.exports = {
       console.log('🔨 Building all packages...');
       const { execSync } = require('child_process');
       execSync('yarn build', { stdio: 'inherit' });
-      const targetPlatform = process.env.PLATFORM || process.platform;
-      const targetArch = process.env.ARCH || process.arch;
-      console.log(`📡 Preparing LiveKit binary for ${targetPlatform}-${targetArch}...`);
-      execSync(`node scripts/prepare-livekit-binary.mjs --target ${targetPlatform}-${targetArch}`, { stdio: 'inherit' });
       console.log('✅ Build completed');
     },
     // 签名前的文件清理：在签名之前精简 node_modules 与平台特定清理
@@ -439,6 +435,12 @@ module.exports = {
         // naudiodon2: 清理编译源码
         rmrf(join(nm, 'naudiodon2', 'src'));
         rmrf(join(nm, 'naudiodon2', 'binding.gyp'));
+        // node-datachannel: runtime needs dist/ plus build/Release/node_datachannel.node.
+        // Keep the compiled addon and remove only source/build metadata.
+        rmrf(join(nm, 'node-datachannel', 'src'));
+        rmrf(join(nm, 'node-datachannel', 'CMakeLists.txt'));
+        rmrf(join(nm, 'node-datachannel', 'BULDING.md'));
+        rmrf(join(nm, 'node-datachannel', 'rollup.config.mjs'));
         console.log('✅ native 模块编译源码清理完成');
       } catch (err) {
         console.warn('⚠️ 清理 native 模块编译源码遇到问题：', (err && err.message) || err);
@@ -645,7 +647,6 @@ module.exports = {
           // buildPath 指向 app 内容根目录, 外部资源在 Resources/ 下
           const binaries = [
             path.join(buildPath, 'Resources', 'bin', triplet, 'node'),
-            path.join(buildPath, 'Resources', 'bin', triplet, 'livekit-server'),
           ];
 
           for (const binaryPath of binaries) {

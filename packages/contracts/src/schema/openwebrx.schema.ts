@@ -56,7 +56,7 @@ export const OpenWebRXTestResultSchema = z.object({
  * OpenWebRX 试听状态
  */
 export const OpenWebRXListenStatusSchema = z.object({
-  /** 试听会话ID，用于生成 LiveKit preview 房间 */
+  /** 试听会话 ID，用于生成实时音频 preview 会话 */
   previewSessionId: z.string().optional(),
   /** 站点ID */
   stationId: z.string(),

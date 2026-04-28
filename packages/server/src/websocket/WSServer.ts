@@ -605,7 +605,7 @@ export class WSServer extends WSMessageHandler {
       };
       const key = issue.code === 'NO_AUDIO_TRACK'
         ? ServerMessageKey.REALTIME_NO_AUDIO
-        : ServerMessageKey.REALTIME_BRIDGE_DOWN;
+        : ServerMessageKey.REALTIME_SERVICE_DOWN;
       this.broadcastTextMessage(
         'Realtime connectivity issue',
         issue.userMessage || 'Realtime voice service encountered an error',
@@ -615,9 +615,9 @@ export class WSServer extends WSMessageHandler {
         {
           details: issue.technicalDetails || issue.userMessage || 'Unknown realtime error',
           signalingUrl: issue.context?.signalingUrl || 'unknown',
-          signalingPort: issue.context?.signalingPort || 'unknown',
-          rtcTcpPort: issue.context?.rtcTcpPort || 'unknown',
-          udpPortRange: issue.context?.udpPortRange || 'unknown',
+          localUdpPort: issue.context?.localUdpPort || 'unknown',
+          publicEndpoint: issue.context?.publicEndpoint || 'disabled',
+          iceServers: issue.context?.iceServers || 'unknown',
         },
       );
     });
