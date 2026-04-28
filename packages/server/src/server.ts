@@ -178,7 +178,9 @@ export async function createServer() {
 
   // Register CORS plugin - 允许所有跨域
   await fastify.register(cors, {
-    origin: true, // 允许所有来源
+    origin: (origin, callback) => {
+      callback(null, origin || false);
+    },
     credentials: true,
   });
 

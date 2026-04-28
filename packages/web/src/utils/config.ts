@@ -105,11 +105,29 @@ export function getLogbookWebSocketUrl(params: { operatorId?: string; logBookId?
  */
 export function normalizeWsUrl(serverUrl: string): string {
   const isPageSecure = window.location.protocol === 'https:';
-  if (isPageSecure && serverUrl.startsWith('ws://')) {
-    return 'wss://' + serverUrl.slice(5);
-  }
-  if (!isPageSecure && serverUrl.startsWith('wss://')) {
-    return 'ws://' + serverUrl.slice(6);
+  try {
+    const url = new URL(serverUrl);
+    url.protocol = isPageSecure ? 'wss:' : 'ws:';
+
+    // If a reverse proxy leaked its internal listen port, keep realtime WS
+    // traffic on the same browser origin so Cloudflare/default HTTPS ports work.
+    if (
+      url.pathname.startsWith('/api/realtime/')
+      && url.hostname === window.location.hostname
+      && url.host !== window.location.host
+    ) {
+      url.hostname = window.location.hostname;
+      url.port = window.location.port;
+    }
+
+    return url.toString();
+  } catch {
+    if (isPageSecure && serverUrl.startsWith('ws://')) {
+      return 'wss://' + serverUrl.slice(5);
+    }
+    if (!isPageSecure && serverUrl.startsWith('wss://')) {
+      return 'ws://' + serverUrl.slice(6);
+    }
   }
   return serverUrl;
 }
