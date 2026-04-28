@@ -1975,6 +1975,29 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   private async restoreSavedFrequencyIfAvailable(): Promise<number | null> {
+    const voiceState = this.getSavedStartupVoiceState();
+    if (voiceState) {
+      const result = await this.applyOperatingState({
+        frequency: voiceState.frequency,
+        mode: voiceState.radioMode,
+        bandwidth: voiceState.radioMode ? 'nochange' : undefined,
+        options: voiceState.radioMode ? { intent: 'voice' } : undefined,
+        tolerateModeFailure: true,
+      });
+
+      if (!result.frequencyApplied) {
+        logger.warn(`Bootstrap voice frequency restore failed: ${(voiceState.frequency / 1000000).toFixed(3)} MHz`);
+        return null;
+      }
+
+      if (result.modeError) {
+        logger.warn(`Bootstrap voice frequency restored but radio mode restore failed: ${result.modeError.message}`);
+      }
+
+      logger.info(`Bootstrap voice operating state restored: ${(voiceState.frequency / 1000000).toFixed(3)} MHz${voiceState.radioMode ? ` (${voiceState.radioMode})` : ''}`);
+      return voiceState.frequency;
+    }
+
     const targetFrequency = this.getSavedStartupFrequency();
     if (!targetFrequency) {
       logger.info('No saved frequency config, skipping bootstrap restore');
@@ -1995,11 +2018,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     const engineMode = this.configManager.getLastEngineMode();
 
     if (engineMode === 'voice') {
-      const lastVoice = this.configManager.getLastVoiceFrequency();
-      if (lastVoice?.frequency) {
-        logger.info(`Restoring voice frequency during bootstrap: ${(lastVoice.frequency / 1000000).toFixed(3)} MHz (${lastVoice.description || lastVoice.radioMode || 'voice'})`);
-        return lastVoice.frequency;
-      }
       return null;
     }
 
@@ -2010,6 +2028,23 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     return null;
+  }
+
+  private getSavedStartupVoiceState(): { frequency: number; radioMode?: string } | null {
+    if (this.configManager.getLastEngineMode() !== 'voice') {
+      return null;
+    }
+
+    const lastVoice = this.configManager.getLastVoiceFrequency();
+    if (!lastVoice?.frequency) {
+      return null;
+    }
+
+    logger.info(`Restoring voice operating state during bootstrap: ${(lastVoice.frequency / 1000000).toFixed(3)} MHz (${lastVoice.description || lastVoice.radioMode || 'voice'})`);
+    return {
+      frequency: lastVoice.frequency,
+      radioMode: lastVoice.radioMode,
+    };
   }
 
   private async captureInitialFrequency(): Promise<void> {

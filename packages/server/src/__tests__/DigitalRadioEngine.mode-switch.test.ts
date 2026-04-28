@@ -72,6 +72,9 @@ describe('DigitalRadioEngine mode switching', () => {
       emitStatusSnapshot: vi.fn(() => {
         sequence.push('emitStatusSnapshot');
       }),
+      restoreLastVoiceOperatingState: vi.fn(async () => {
+        sequence.push('restoreLastVoiceOperatingState');
+      }),
       resetVoicePttState: vi.fn(() => {
         sequence.push('resetVoicePttState');
       }),
@@ -130,6 +133,7 @@ describe('DigitalRadioEngine mode switching', () => {
       clockCoordinator: null,
       emitModeAndStatusSnapshot: vi.fn(() => undefined),
       emitStatusSnapshot: vi.fn(() => undefined),
+      restoreLastVoiceOperatingState: vi.fn(async () => undefined),
       resetVoicePttState: vi.fn(() => undefined),
       squelchStatusMonitor: {
         reevaluate: vi.fn(() => undefined),
@@ -146,5 +150,46 @@ describe('DigitalRadioEngine mode switching', () => {
     expect(fakeEngine.stop).not.toHaveBeenCalled();
     expect(fakeEngine.engineLifecycle.startAndWaitForRunning).not.toHaveBeenCalled();
     expect(fakeEngine.engineLifecycle.rebuildResourcePlan).toHaveBeenCalledOnce();
+  });
+
+  it('restores voice frequency and radio mode when entering voice mode', async () => {
+    const applyOperatingState = vi.fn(async () => ({
+      frequencyApplied: true,
+      modeApplied: true,
+    }));
+    const emit = vi.fn();
+    const configManager = {
+      getLastVoiceFrequency: vi.fn(() => ({
+        frequency: 14270000,
+        radioMode: 'USB',
+        band: '20m',
+        description: '14.270 MHz 20m Calling',
+      })),
+    };
+    const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
+      radioManager: {
+        isConnected: vi.fn(() => true),
+        applyOperatingState,
+      },
+      emit,
+    });
+
+    await (DigitalRadioEngine.prototype as unknown as {
+      restoreLastVoiceOperatingState: (configManager: ConfigManager) => Promise<void>;
+    }).restoreLastVoiceOperatingState.call(fakeEngine, configManager as unknown as ConfigManager);
+
+    expect(applyOperatingState).toHaveBeenCalledWith({
+      frequency: 14270000,
+      mode: 'USB',
+      bandwidth: 'nochange',
+      options: { intent: 'voice' },
+      tolerateModeFailure: true,
+    });
+    expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
+      frequency: 14270000,
+      mode: 'VOICE',
+      radioMode: 'USB',
+      source: 'program',
+    }));
   });
 });
