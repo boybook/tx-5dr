@@ -13,6 +13,7 @@ import { WebGLWaterfall } from './WebGLWaterfall';
 import type { AutoRangeConfig, PresetMarker, TxBandOverlay } from './WebGLWaterfall';
 import { SpectrumStreamController } from '../../../spectrum/SpectrumStreamController';
 import { readSpectrumSubscriptionPaused, setSpectrumSubscriptionPaused } from '../../../utils/spectrumSubscriptionPause';
+import { resetOperatorsForOperatingStateChange } from '../../../utils/operatorReset';
 
 const logger = createLogger('SpectrumDisplay');
 
@@ -528,6 +529,12 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const openWebRXPanStateRef = useRef<{ startX: number; startCenterHz: number; width: number } | null>(null);
 
   const isElectron = typeof window !== 'undefined' && (window as ElectronWindowHelper).electronAPI !== undefined;
+  const resetOperatorsAfterOperatingStateChange = useCallback(() => {
+    resetOperatorsForOperatingStateChange({
+      operators,
+      radioService: connection.state.radioService,
+    });
+  }, [connection.state.radioService, operators]);
   const canPopOut = showPopOut && isElectron;
   const rxFrequencies = useTargetRxFrequencies();
   const txFrequencies = useTxFrequencies();
@@ -680,17 +687,20 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     const nextRadioMode = sessionState?.voice.radioMode ?? currentRadioMode ?? 'USB';
 
     try {
-      await api.setRadioFrequency({
+      const response = await api.setRadioFrequency({
         frequency: Math.round(snappedFrequency),
         mode: 'VOICE',
         band: 'Custom',
         description: `${(snappedFrequency / 1_000_000).toFixed(3)} MHz`,
         radioMode: nextRadioMode,
       });
+      if (response.success) {
+        resetOperatorsAfterOperatingStateChange();
+      }
     } catch (error) {
       logger.error('Failed to set voice frequency from SDR overlay', error);
     }
-  }, [connection.state.isConnected, currentRadioMode, frequencyGestureStepHz, sessionState?.voice.radioMode]);
+  }, [connection.state.isConnected, currentRadioMode, frequencyGestureStepHz, resetOperatorsAfterOperatingStateChange, sessionState?.voice.radioMode]);
 
   const handleRadioFrequencyGesture = useCallback((frequency: number) => {
     void handleVoiceFrequencyChange(frequency);
