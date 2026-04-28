@@ -1,36 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'eventemitter3';
 import { UserRole } from '@tx5dr/contracts';
+import { decodeWsCompatAudioFrame, int16ToFloat32Pcm } from '@tx5dr/core';
 
 const mockGetRealtimeTransportPolicy = vi.fn<[], 'auto' | 'force-compat'>();
-const mockGetLiveKitPublicUrl = vi.fn<[], string | null>();
-const mockLiveKitEnabled = vi.fn<[], boolean>();
-const mockLiveKitRuntimeAvailable = vi.fn<[], boolean>();
 const mockGetConnectivityHints = vi.fn();
-const mockIssueClientToken = vi.fn();
-const mockFinalizeToken = vi.fn();
-const mockGetScopeHealth = vi.fn();
+const mockResolveSource = vi.fn();
+const mockRtcDataAudioAvailable = vi.fn<[], boolean>();
+const mockRtcDataAudioBuildOffer = vi.fn();
+const mockRtcDataAudioAcceptConnection = vi.fn();
 
 vi.mock('../../config/config-manager.js', () => ({
   ConfigManager: {
     getInstance: () => ({
       getRealtimeTransportPolicy: () => mockGetRealtimeTransportPolicy(),
-      getLiveKitPublicUrl: () => mockGetLiveKitPublicUrl(),
     }),
   },
 }));
 
-vi.mock('../LiveKitConfig.js', () => ({
-  LiveKitConfig: {
-    isEnabled: () => mockLiveKitEnabled(),
-    isRuntimeAvailable: () => mockLiveKitRuntimeAvailable(),
-    getConnectivityHints: () => mockGetConnectivityHints(),
-  },
-}));
-
-vi.mock('../LiveKitAuthService.js', () => ({
-  LiveKitAuthService: class {
-    issueClientToken = mockIssueClientToken;
-    finalizeToken = mockFinalizeToken;
+vi.mock('../RtcDataAudioManager.js', () => ({
+  buildRtcDataAudioConnectivityHints: () => mockGetConnectivityHints(),
+  RtcDataAudioManager: class {
+    isAvailable = async () => mockRtcDataAudioAvailable();
+    isAvailableCached = () => mockRtcDataAudioAvailable();
+    getUnavailableReason = () => mockRtcDataAudioAvailable() ? null : 'mock-unavailable';
+    buildOffer = mockRtcDataAudioBuildOffer;
+    acceptConnection = mockRtcDataAudioAcceptConnection;
   },
 }));
 
@@ -38,7 +33,7 @@ vi.mock('../../openwebrx/OpenWebRXStationManager.js', () => ({
   OpenWebRXStationManager: {
     getInstance: () => ({
       getListenStatus: () => null,
-      getAudioMonitorService: () => null,
+      getBufferedPreviewAudioService: () => null,
     }),
   },
 }));
@@ -49,35 +44,25 @@ describe('RealtimeTransportManager', () => {
     vi.clearAllMocks();
 
     mockGetRealtimeTransportPolicy.mockReturnValue('auto');
-    mockGetLiveKitPublicUrl.mockReturnValue(null);
-    mockLiveKitEnabled.mockReturnValue(true);
-    mockLiveKitRuntimeAvailable.mockReturnValue(true);
     mockGetConnectivityHints.mockReturnValue({
-      signalingUrl: 'ws://livekit.example.test:7880',
-      signalingPort: 7880,
-      rtcTcpPort: 7881,
-      udpPortRange: '50000-50100',
-      publicUrlOverrideActive: false,
+      signalingUrl: 'ws://radio.example.test:8076/api/realtime/rtc-data-audio',
+      localUdpPort: 50110,
+      publicCandidateEnabled: false,
+      publicEndpoint: null,
+      iceServers: ['stun:stun.l.google.com:19302'],
+      fallbackTransport: 'ws-compat',
     });
-    mockGetScopeHealth.mockReturnValue({
-      healthy: true,
-      updatedAt: Date.now(),
-      issueCode: null,
-    });
-    mockIssueClientToken.mockReturnValue({
-      url: 'ws://livekit.example.test:7880',
-      token: 'livekit-token',
-      participantIdentity: 'listener-1',
-      participantName: 'Listener',
-      roomName: 'radio-room',
-    });
-    mockFinalizeToken.mockResolvedValue({
-      url: 'ws://livekit.example.test:7880',
-      token: 'livekit-token',
-      participantIdentity: 'listener-1',
-      participantName: 'Listener',
-      roomName: 'radio-room',
-    });
+    mockResolveSource.mockReset();
+    mockRtcDataAudioAvailable.mockReturnValue(true);
+    mockRtcDataAudioBuildOffer.mockImplementation((params) => ({
+      transport: 'rtc-data-audio',
+      direction: params.direction,
+      url: 'ws://radio.example.test:8076/api/realtime/rtc-data-audio',
+      token: 'rtc-token',
+      participantIdentity: params.direction === 'send' ? 'rtc-send:test' : null,
+      participantName: params.label ?? null,
+    }));
+    mockRtcDataAudioAcceptConnection.mockReset();
   });
 
   afterEach(() => {
@@ -88,7 +73,7 @@ describe('RealtimeTransportManager', () => {
     const { RealtimeTransportManager } = await import('../RealtimeTransportManager.js');
     return RealtimeTransportManager.initialize(
       {} as never,
-      { getScopeHealth: mockGetScopeHealth } as never,
+      { resolveSource: mockResolveSource } as never,
     );
   }
 
@@ -100,7 +85,6 @@ describe('RealtimeTransportManager', () => {
       direction: 'recv' as const,
       role: UserRole.VIEWER,
       clientKind: 'web',
-      roomName: 'radio-room',
       requestHeaders: {
         host: 'radio.example.test:8076',
         'x-forwarded-proto': 'http',
@@ -109,6 +93,16 @@ describe('RealtimeTransportManager', () => {
       ...overrides,
     };
   }
+
+  it('prefers rtc-data-audio by default and keeps ws-compat as fallback', async () => {
+    const manager = await createManager();
+    const session = await manager.issueSession(createIssueSessionParams());
+
+    expect(session.preferredTransport).toBe('rtc-data-audio');
+    expect(session.selectionReason).toBe('default-rtc-data-audio');
+    expect(session.forcedCompatibilityMode).toBe(false);
+    expect(session.offers.map((offer) => offer.transport)).toEqual(['rtc-data-audio', 'ws-compat']);
+  });
 
   it('returns ws-compat only when server policy forces compatibility mode', async () => {
     mockGetRealtimeTransportPolicy.mockReturnValue('force-compat');
@@ -121,10 +115,9 @@ describe('RealtimeTransportManager', () => {
     expect(session.selectionReason).toBe('server-policy');
     expect(session.forcedCompatibilityMode).toBe(true);
     expect(session.offers.map((offer) => offer.transport)).toEqual(['ws-compat']);
-    expect(mockIssueClientToken).not.toHaveBeenCalled();
   });
 
-  it('respects an explicit ws-compat override and skips the livekit offer', async () => {
+  it('respects an explicit ws-compat override', async () => {
     const manager = await createManager();
     const session = await manager.issueSession(createIssueSessionParams({
       transportOverride: 'ws-compat',
@@ -134,37 +127,19 @@ describe('RealtimeTransportManager', () => {
     expect(session.selectionReason).toBe('client-override');
     expect(session.forcedCompatibilityMode).toBe(true);
     expect(session.offers.map((offer) => offer.transport)).toEqual(['ws-compat']);
-    expect(mockIssueClientToken).not.toHaveBeenCalled();
   });
 
-  it('falls back to ws-compat when livekit is disabled even if the client asked for livekit', async () => {
-    mockLiveKitEnabled.mockReturnValue(false);
-
-    const manager = await createManager();
-    const session = await manager.issueSession(createIssueSessionParams({
-      transportOverride: 'livekit',
-    }));
-
-    expect(session.preferredTransport).toBe('ws-compat');
-    expect(session.selectionReason).toBe('livekit-disabled');
-    expect(session.forcedCompatibilityMode).toBe(true);
-    expect(session.offers.map((offer) => offer.transport)).toEqual(['ws-compat']);
-  });
-
-  it('prefers ws-compat first but still keeps livekit as a secondary offer when the receive bridge is unhealthy', async () => {
-    mockGetScopeHealth.mockReturnValue({
-      healthy: false,
-      updatedAt: Date.now(),
-      issueCode: 'SIGNALING_UNREACHABLE',
-    });
+  it('falls back to ws-compat when rtc-data-audio is unavailable', async () => {
+    mockRtcDataAudioAvailable.mockReturnValue(false);
+    mockRtcDataAudioBuildOffer.mockResolvedValue(null);
 
     const manager = await createManager();
     const session = await manager.issueSession(createIssueSessionParams());
 
     expect(session.preferredTransport).toBe('ws-compat');
-    expect(session.selectionReason).toBe('bridge-unhealthy');
+    expect(session.selectionReason).toBe('rtc-data-audio-unavailable');
     expect(session.forcedCompatibilityMode).toBe(false);
-    expect(session.offers.map((offer) => offer.transport)).toEqual(['ws-compat', 'livekit']);
+    expect(session.offers.map((offer) => offer.transport)).toEqual(['ws-compat']);
   });
 
   it('derives the compat websocket URL from the browser origin when a dev proxy rewrites host to the backend', async () => {
@@ -183,5 +158,64 @@ describe('RealtimeTransportManager', () => {
     expect(session.offers).toHaveLength(1);
     expect(session.offers[0]?.transport).toBe('ws-compat');
     expect(session.offers[0]?.url).toBe('ws://localhost:8076/api/realtime/ws-compat');
+  });
+
+  it('sends ws-compat recv frames through the transport-edge integer decimator', async () => {
+    const source = Object.assign(new EventEmitter(), {
+      id: 'native-radio:radio',
+      sourcePath: 'native-radio',
+      getLatestStats: () => null,
+    });
+    mockResolveSource.mockReturnValue(source);
+
+    const manager = await createManager();
+    const session = await manager.issueSession(createIssueSessionParams({
+      transportOverride: 'ws-compat',
+    }));
+    const offer = session.offers[0];
+    expect(offer?.transport).toBe('ws-compat');
+
+    const sent: Array<string | Buffer> = [];
+    const socket = {
+      readyState: 1,
+      send: vi.fn((payload: string | Buffer) => {
+        sent.push(payload);
+      }),
+      close: vi.fn(),
+      once: vi.fn(),
+      on: vi.fn(),
+    };
+
+    manager.acceptCompatConnection(socket as never, `/api/realtime/ws-compat?token=${offer?.token}`);
+    const sourceSamples = new Float32Array(96).fill(0.5);
+    source.emit('audioFrame', {
+      samples: sourceSamples,
+      sampleRate: 48000,
+      channels: 1,
+      timestamp: 1234,
+      sequence: 10,
+      sourceKind: 'native-radio',
+      nativeSourceKind: 'audio-device',
+    });
+
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(sent[0]).toBe(JSON.stringify({
+      type: 'ready',
+      transport: 'ws-compat',
+      direction: 'recv',
+      scope: 'radio',
+    }));
+    expect(Buffer.isBuffer(sent[1])).toBe(true);
+    const binary = sent[1] as Buffer;
+    const decoded = decodeWsCompatAudioFrame(
+      binary.buffer.slice(binary.byteOffset, binary.byteOffset + binary.byteLength),
+    );
+    expect(decoded.sampleRate).toBe(24000);
+    expect(decoded.samplesPerChannel).toBe(48);
+    expect(decoded.sequence).toBe(0);
+    expect(decoded.timestampMs).toBe(1234);
+    const float32 = int16ToFloat32Pcm(decoded.pcm);
+    expect(float32[0]).toBeCloseTo(0.5, 3);
+    expect(float32[float32.length - 1]).toBeCloseTo(0.5, 3);
   });
 });

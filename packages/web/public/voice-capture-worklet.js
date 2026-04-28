@@ -2,7 +2,7 @@ class VoiceCaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.targetSampleRate = 16000;
-    this.frameSamples = 320;
+    this.frameSamples = 160;
     this.sourceBuffer = new Float32Array(0);
     this.sourceOffset = 0;
   }

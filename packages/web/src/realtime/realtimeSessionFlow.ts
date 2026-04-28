@@ -24,8 +24,8 @@ interface ExecuteRealtimeSessionFlowOptions {
   previewSessionId?: string;
   transportOverride?: RealtimeTransportKind;
   connectStage: 'connect' | 'publish' | 'subscribe';
-  startLiveKit: (offer: RealtimeTransportOffer) => Promise<void>;
   startCompat: (offer: RealtimeTransportOffer) => Promise<void>;
+  startRtcDataAudio: (offer: RealtimeTransportOffer, hints?: RealtimeConnectivityHints) => Promise<void>;
   cleanupFailedAttempt: (options?: CleanupFailedAttemptOptions) => Promise<void> | void;
 }
 
@@ -39,12 +39,13 @@ export interface ExecuteRealtimeSessionFlowResult {
 async function startOffer(
   offer: RealtimeTransportOffer,
   options: ExecuteRealtimeSessionFlowOptions,
+  hints?: RealtimeConnectivityHints,
 ): Promise<void> {
-  if (offer.transport === 'livekit') {
-    await options.startLiveKit(offer);
-  } else {
-    await options.startCompat(offer);
+  if (offer.transport === 'rtc-data-audio') {
+    await options.startRtcDataAudio(offer, hints);
+    return;
   }
+  await options.startCompat(offer);
 }
 
 export async function executeRealtimeSessionFlow(
@@ -70,62 +71,46 @@ export async function executeRealtimeSessionFlow(
     effectiveTransportPolicy = session.effectiveTransportPolicy;
     selectionReason = session.selectionReason;
 
-    const primaryOffer = session.offers[0];
+    const offers = session.offers;
+    const primaryOffer = offers[0];
     if (!primaryOffer) {
       throw new Error('No realtime transport offer is available');
     }
 
-    const fallbackOffer = session.offers[1] ?? null;
-    selectedTransport = primaryOffer.transport;
-    errorStage = options.connectStage;
-
-    try {
-      await startOffer(primaryOffer, options);
-      return {
-        connectivityHints,
-        transport: primaryOffer.transport,
-      };
-    } catch (primaryError) {
-      // No fallback available — re-throw immediately
-      if (!fallbackOffer) {
-        throw primaryError;
-      }
-
-      // Cleanup primary attempt, preserving AudioContext for fallback
-      logger.warn('Primary transport failed, falling back', {
-        scope: options.scope,
-        direction: options.direction,
-        primary: primaryOffer.transport,
-        fallback: fallbackOffer.transport,
-        primaryError,
-      });
+    let lastError: unknown = null;
+    for (let index = 0; index < offers.length; index += 1) {
+      const offer = offers[index]!;
+      selectedTransport = offer.transport;
+      errorStage = options.connectStage;
       try {
-        await options.cleanupFailedAttempt({ isFallback: true });
-      } catch (cleanupError) {
-        logger.warn('Cleanup before fallback also failed', { cleanupError });
-      }
-
-      // Try fallback offer
-      selectedTransport = fallbackOffer.transport;
-      try {
-        await startOffer(fallbackOffer, options);
+        await startOffer(offer, options, connectivityHints);
         return {
           connectivityHints,
-          transport: fallbackOffer.transport,
-          fallbackUsed: true,
+          transport: offer.transport,
+          fallbackUsed: index > 0,
         };
-      } catch (fallbackError) {
-        // Both transports failed — throw the fallback error (more relevant to user)
-        logger.error('Fallback transport also failed', {
+      } catch (attemptError) {
+        lastError = attemptError;
+        const nextOffer = offers[index + 1];
+        if (!nextOffer) {
+          break;
+        }
+        logger.warn('Realtime transport failed, trying next offer', {
           scope: options.scope,
           direction: options.direction,
-          primary: primaryOffer.transport,
-          fallback: fallbackOffer.transport,
-          fallbackError,
+          failed: offer.transport,
+          next: nextOffer.transport,
+          attemptError,
         });
-        throw fallbackError;
+        try {
+          await options.cleanupFailedAttempt({ isFallback: true });
+        } catch (cleanupError) {
+          logger.warn('Cleanup before fallback also failed', { cleanupError });
+        }
       }
     }
+
+    throw lastError ?? new Error('All realtime transport offers failed');
   } catch (error) {
     if (selectedTransport) {
       logger.warn('Realtime transport start failed', {

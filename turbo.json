@@ -2,29 +2,27 @@
   "$schema": "https://turborepo.org/schema.json",
   "globalPassThroughEnv": [
     "GLIBC_TUNABLES",
-    "LIVEKIT_URL",
-    "LIVEKIT_DISABLED",
-    "LIVEKIT_CREDENTIALS_FILE",
-    "LIVEKIT_CONFIG_FILE",
-    "LIVEKIT_CONFIG_PATH",
-    "LIVEKIT_SIGNAL_PORT",
-    "LIVEKIT_TCP_PORT",
-    "LIVEKIT_UDP_PORT_RANGE",
-    "LIVEKIT_API_KEY",
-    "LIVEKIT_API_SECRET",
     "RIGCTLD_ENABLED",
     "RIGCTLD_BIND",
-    "RIGCTLD_PORT"
+    "RIGCTLD_PORT",
+    "RTC_DATA_AUDIO_UDP_PORT",
+    "RTC_DATA_AUDIO_ICE_UDP_MUX"
   ],
   "tasks": {
     "build": {
-      "dependsOn": ["^build"],
-      "outputs": ["dist/**"]
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        "dist/**"
+      ]
     },
     "dev": {
       "cache": false,
       "persistent": true,
-      "dependsOn": ["^build"]
+      "dependsOn": [
+        "^build"
+      ]
     },
     "lint": {
       "outputs": []
@@ -33,5 +31,7 @@
       "outputs": []
     }
   },
-  "globalDependencies": ["packages/shared-config/**"]
-} 
+  "globalDependencies": [
+    "packages/shared-config/**"
+  ]
+}

@@ -95,13 +95,13 @@ check_nginx_realtime_proxy_config() {
     content=$(read_file_maybe_sudo "$conf" 2>/dev/null || true)
     [[ -n "$content" ]] || return 1
 
-    local api_block_count compat_block_count livekit_block_count
+    local api_block_count compat_block_count rtc_data_block_count
     api_block_count=$(printf "%s\n" "$content" | grep -c 'location /api/ {')
     compat_block_count=$(printf "%s\n" "$content" | grep -c 'location /api/realtime/ws-compat {')
-    livekit_block_count=$(printf "%s\n" "$content" | grep -c 'location /livekit/ {')
+    rtc_data_block_count=$(printf "%s\n" "$content" | grep -c 'location /api/realtime/rtc-data-audio {')
     [[ "$api_block_count" -gt 0 ]] || return 1
     [[ "$compat_block_count" -ge "$api_block_count" ]] || return 1
-    [[ "$livekit_block_count" -ge "$api_block_count" ]] || return 1
+    [[ "$rtc_data_block_count" -ge "$api_block_count" ]] || return 1
 
     printf "%s\n" "$content" | grep -Fq 'proxy_set_header Upgrade $http_upgrade;' || return 1
     printf "%s\n" "$content" | grep -Fq 'proxy_set_header Connection $connection_upgrade;' || return 1
@@ -114,128 +114,28 @@ check_tx5dr_service() {
     systemctl is-active --quiet tx5dr 2>/dev/null
 }
 
-check_livekit_service() {
-    systemctl is-active --quiet tx5dr-livekit 2>/dev/null
-}
-
-check_livekit_binary() {
-    get_livekit_binary_path >/dev/null 2>&1
-}
-
-check_livekit_credentials_exists() {
-    [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" == "1" ]] && return 0
-    [[ -f "$(get_livekit_credentials_path)" ]]
-}
-
-check_livekit_credentials_loaded() {
-    [[ -n "${LIVEKIT_API_KEY:-}" && -n "${LIVEKIT_API_SECRET:-}" ]]
-}
-
-get_livekit_credential_timestamp() {
-    local key="$1"
-    local file
-    file=$(get_livekit_credentials_path)
-    if [[ ! -f "$file" ]]; then
-        return 1
-    fi
-    grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d= -f2-
-}
-
-check_livekit_config_exists() {
-    [[ -f "$(get_livekit_config_path)" ]]
-}
-
-get_livekit_config_contents() {
-    local file
-    file=$(get_livekit_config_path)
-    read_file_maybe_sudo "$file"
-}
-
-_escape_regex() {
-    printf '%s' "$1" | sed 's/[][(){}.^$*+?|\/-]/\\&/g'
-}
-
-check_livekit_config_consistency() {
-    local content
-    content=$(get_livekit_config_contents) || return 1
-    check_livekit_credentials_loaded || return 1
-
-    local quoted_api_key
-    local quoted_api_secret
-    local plain_api_key
-    local plain_api_secret
-    quoted_api_key=$(yaml_single_quote "${LIVEKIT_API_KEY}")
-    quoted_api_secret=$(yaml_single_quote "${LIVEKIT_API_SECRET}")
-    plain_api_key="${LIVEKIT_API_KEY}"
-    plain_api_secret="${LIVEKIT_API_SECRET}"
-
-    echo "$content" | grep -Eq "^port:[[:space:]]*${LIVEKIT_SIGNAL_PORT}[[:space:]]*$" || return 1
-    echo "$content" | grep -Eq "^[[:space:]]+tcp_port:[[:space:]]*${LIVEKIT_TCP_PORT}[[:space:]]*$" || return 1
-    echo "$content" | grep -Eq "^[[:space:]]+port_range_start:[[:space:]]*${LIVEKIT_UDP_PORT_START}[[:space:]]*$" || return 1
-    echo "$content" | grep -Eq "^[[:space:]]+port_range_end:[[:space:]]*${LIVEKIT_UDP_PORT_END}[[:space:]]*$" || return 1
-
-    if printf "%s\n" "$content" | grep -Fqx "  ${quoted_api_key}: ${quoted_api_secret}"; then
-        return 0
-    fi
-    if printf "%s\n" "$content" | grep -Fqx "  ${plain_api_key}: ${plain_api_secret}"; then
-        return 0
-    fi
-
-    return 1
-}
-
-check_livekit_config() {
-    check_livekit_config_exists && check_livekit_config_consistency
-}
-
-check_livekit_url_consistency() {
-    local url_port
-    url_port=$(get_url_port "${LIVEKIT_URL}")
-    [[ "$url_port" == "${LIVEKIT_SIGNAL_PORT}" ]]
-}
-
-check_livekit_tcp_port() {
-    is_port_open "${LIVEKIT_TCP_PORT}"
-}
-
-describe_livekit_udp_binding() {
-    local ports
-    ports=$(list_udp_ports_in_range "${LIVEKIT_UDP_PORT_START}" "${LIVEKIT_UDP_PORT_END}" | paste -sd ',' -)
-    if [[ -n "$ports" ]]; then
-        printf "bound: %s" "$ports"
-    else
-        printf "idle (no active UDP allocations observed)"
-    fi
-}
-
-describe_livekit_credentials_state() {
-    if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" == "1" ]]; then
-        printf "environment override (%s)" "${LIVEKIT_CREDENTIAL_OVERRIDE_SOURCE:-environment}"
-        return 0
-    fi
-    if ! check_livekit_credentials_exists; then
-        printf "missing"
-        return 0
-    fi
-    if ! check_livekit_credentials_loaded; then
-        printf "invalid"
-        return 0
-    fi
-
-    local rotated_at
-    rotated_at=$(get_livekit_credential_timestamp "LIVEKIT_CREDENTIALS_ROTATED_AT" 2>/dev/null || true)
-    if [[ -n "$rotated_at" ]]; then
-        printf "managed (%s)" "$rotated_at"
-        return 0
-    fi
-
-    printf "managed"
-}
-
 check_ports() {
     local api_port="${API_PORT:-4000}"
     local http_port="${HTTP_PORT:-8076}"
     is_port_open "$api_port" && is_port_open "$http_port"
+}
+
+check_rtc_data_audio_udp_config() {
+    local port="${RTC_DATA_AUDIO_UDP_PORT:-50110}"
+    [[ "$port" =~ ^[0-9]+$ ]] && [[ "$port" -ge 1 ]] && [[ "$port" -le 65535 ]]
+}
+
+fix_rtc_data_audio_firewall() {
+    local port="${RTC_DATA_AUDIO_UDP_PORT:-50110}"
+    check_rtc_data_audio_udp_config || return 1
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then
+        ufw allow "${port}/udp" >/dev/null 2>&1 || true
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+        firewall-cmd --add-port="${port}/udp" --permanent >/dev/null 2>&1 || true
+        firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
+    check_rtc_data_audio_udp_config
 }
 
 check_tx5dr_user() {
@@ -414,259 +314,19 @@ fix_nginx() {
 }
 
 fix_nginx_realtime_proxy_config() {
+    local template="/usr/share/tx5dr/nginx-site.conf"
     local conf
     conf=$(get_tx5dr_nginx_conf_path)
-    [[ -f "$conf" ]] || return 1
-
-    local tmp_file
-    tmp_file=$(mktemp)
-
-    awk -v api_port="${API_PORT}" -v livekit_host="127.0.0.1:${LIVEKIT_SIGNAL_PORT}" '
-        function flush_pending_xff() {
-            if (pending_xff == "") {
-                return;
-            }
-
-            print pending_xff;
-            if (!has_forwarded_host_after_xff) {
-                print pending_indent "proxy_set_header X-Forwarded-Host $http_host;";
-            }
-            if (!has_forwarded_port_after_xff) {
-                print pending_indent "proxy_set_header X-Forwarded-Port $server_port;";
-            }
-
-            pending_xff = "";
-            pending_indent = "";
-            has_forwarded_host_after_xff = 0;
-            has_forwarded_port_after_xff = 0;
-        }
-
-        function print_compat_block(block_indent, inner_indent) {
-            print block_indent "location /api/realtime/ws-compat {";
-            print inner_indent "proxy_pass http://127.0.0.1:" api_port ";";
-            print inner_indent "proxy_http_version 1.1;";
-            print inner_indent "proxy_set_header Upgrade $http_upgrade;";
-            print inner_indent "proxy_set_header Connection $connection_upgrade;";
-            print inner_indent "proxy_set_header Host $http_host;";
-            print inner_indent "proxy_set_header X-Real-IP $remote_addr;";
-            print inner_indent "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;";
-            print inner_indent "proxy_set_header X-Forwarded-Host $http_host;";
-            print inner_indent "proxy_set_header X-Forwarded-Port $server_port;";
-            print inner_indent "proxy_set_header X-Forwarded-Proto $scheme;";
-            print "";
-            print inner_indent "proxy_connect_timeout 7d;";
-            print inner_indent "proxy_send_timeout 7d;";
-            print inner_indent "proxy_read_timeout 7d;";
-            print block_indent "}";
-        }
-
-        function print_livekit_block(block_indent, inner_indent) {
-            print block_indent "location /livekit/ {";
-            print inner_indent "proxy_pass http://" livekit_host "/;";
-            print inner_indent "proxy_http_version 1.1;";
-            print inner_indent "proxy_set_header Upgrade $http_upgrade;";
-            print inner_indent "proxy_set_header Connection $connection_upgrade;";
-            print inner_indent "proxy_set_header Host $http_host;";
-            print inner_indent "proxy_set_header X-Real-IP $remote_addr;";
-            print inner_indent "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;";
-            print inner_indent "proxy_set_header X-Forwarded-Host $http_host;";
-            print inner_indent "proxy_set_header X-Forwarded-Port $server_port;";
-            print inner_indent "proxy_set_header X-Forwarded-Proto $scheme;";
-            print "";
-            print inner_indent "proxy_connect_timeout 7d;";
-            print inner_indent "proxy_send_timeout 7d;";
-            print inner_indent "proxy_read_timeout 7d;";
-            print block_indent "}";
-        }
-
-        function brace_delta(line, opens, closes, temp) {
-            temp = line;
-            opens = gsub(/\{/, "{", temp);
-            temp = line;
-            closes = gsub(/\}/, "}", temp);
-            return opens - closes;
-        }
-
-        {
-            line = $0;
-            delta = brace_delta(line);
-
-            if (line ~ /^[[:space:]]*server[[:space:]]*\{[[:space:]]*$/) {
-                in_server = 1;
-                server_depth = delta;
-                has_compat_block = 0;
-                has_livekit_block = 0;
-                realtime_blocks_inserted = 0;
-            }
-
-            gsub(/proxy_set_header Host \$host;/, "proxy_set_header Host $http_host;", line);
-
-            if (in_server && line ~ /^[[:space:]]*location \/api\/realtime\/ws-compat[[:space:]]*\{/) {
-                has_compat_block = 1;
-            }
-            if (in_server && line ~ /^[[:space:]]*location \/livekit\/[[:space:]]*\{/) {
-                has_livekit_block = 1;
-            }
-
-            if (pending_xff != "") {
-                if (line ~ /^[[:space:]]*proxy_set_header X-Forwarded-Host \$http_host;/) {
-                    has_forwarded_host_after_xff = 1;
-                    server_depth += delta;
-                    if (in_server && server_depth == 0) {
-                        flush_pending_xff();
-                        in_server = 0;
-                        has_compat_block = 0;
-                        has_livekit_block = 0;
-                        realtime_blocks_inserted = 0;
-                    }
-                    next;
-                }
-                if (line ~ /^[[:space:]]*proxy_set_header X-Forwarded-Port \$server_port;/) {
-                    has_forwarded_port_after_xff = 1;
-                    server_depth += delta;
-                    if (in_server && server_depth == 0) {
-                        flush_pending_xff();
-                        in_server = 0;
-                        has_compat_block = 0;
-                        has_livekit_block = 0;
-                        realtime_blocks_inserted = 0;
-                    }
-                    next;
-                }
-                flush_pending_xff();
-            }
-
-            if (in_server && !realtime_blocks_inserted && line ~ /^[[:space:]]*location \/api\/ \{/) {
-                match(line, /^[[:space:]]*/);
-                block_indent = substr(line, RSTART, RLENGTH);
-                inner_indent = block_indent "    ";
-                if (!has_compat_block) {
-                    print_compat_block(block_indent, inner_indent);
-                    print "";
-                }
-                if (!has_livekit_block) {
-                    print_livekit_block(block_indent, inner_indent);
-                    print "";
-                }
-                realtime_blocks_inserted = 1;
-            }
-
-            if (line ~ /^[[:space:]]*proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;/) {
-                pending_xff = line;
-                match(line, /^[[:space:]]*/);
-                pending_indent = substr(line, RSTART, RLENGTH);
-                server_depth += delta;
-                if (in_server && server_depth == 0) {
-                    flush_pending_xff();
-                    in_server = 0;
-                    has_compat_block = 0;
-                    has_livekit_block = 0;
-                    realtime_blocks_inserted = 0;
-                }
-                next;
-            }
-
-            print line;
-            server_depth += delta;
-
-            if (in_server && server_depth == 0) {
-                in_server = 0;
-                has_compat_block = 0;
-                has_livekit_block = 0;
-                realtime_blocks_inserted = 0;
-            }
-        }
-
-        END {
-            flush_pending_xff();
-        }
-    ' "$conf" > "$tmp_file"
-
-    cat "$tmp_file" > "$conf"
-    rm -f "$tmp_file"
-
+    [[ -f "$template" ]] || return 1
+    mkdir -p "$(dirname "$conf")"
+    sed -e "s|%%LISTEN_PORT%%|${HTTP_PORT:-8076}|g" \
+        -e "s|%%WEB_ROOT%%|/usr/share/tx5dr/web|g" \
+        -e "s|%%API_HOST%%|127.0.0.1:${API_PORT:-4000}|g" \
+        "$template" > "$conf"
     if check_nginx_config; then
         systemctl reload nginx 2>/dev/null || true
     fi
-
     check_nginx_realtime_proxy_config
-}
-
-fix_livekit_binary() {
-    log_info "Installing LiveKit server"
-    curl -sSL https://get.livekit.io | bash 2>&1 || true
-    check_livekit_binary
-}
-
-random_hex() {
-    local bytes="${1:-16}"
-    od -An -N"${bytes}" -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
-}
-
-write_livekit_credentials_file() {
-    local target
-    target=$(get_livekit_credentials_path)
-    local now created_at
-    now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-    created_at="$now"
-
-    if [[ -f "$target" ]]; then
-        created_at=$(get_livekit_credential_timestamp "LIVEKIT_CREDENTIALS_CREATED_AT" 2>/dev/null || true)
-        [[ -n "$created_at" ]] || created_at="$now"
-    fi
-
-    mkdir -p "$(dirname "$target")"
-    cat > "$target" <<EOF
-# Managed by TX-5DR. Rotate via tx5dr livekit-creds rotate.
-LIVEKIT_API_KEY=tx5dr-$(random_hex 8)
-LIVEKIT_API_SECRET=$(random_hex 24)
-LIVEKIT_CREDENTIALS_CREATED_AT=${created_at}
-LIVEKIT_CREDENTIALS_ROTATED_AT=${now}
-EOF
-
-    chmod 640 "$target"
-    if id tx5dr &>/dev/null; then
-        chown tx5dr:tx5dr "$target" 2>/dev/null || true
-    fi
-
-    load_config
-    check_livekit_credentials_loaded
-}
-
-fix_livekit_credentials() {
-    if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" == "1" ]]; then
-        return 0
-    fi
-    if check_livekit_credentials_loaded && check_livekit_credentials_exists; then
-        return 0
-    fi
-    write_livekit_credentials_file
-}
-
-fix_livekit_config() {
-    local render_cli="/usr/share/tx5dr/packages/server/dist/realtime/livekit-config-cli.js"
-    local target
-    target=$(get_livekit_config_path)
-
-    [[ -f "$render_cli" ]] || return 1
-    check_livekit_credentials_loaded || return 1
-    mkdir -p "$(dirname "$target")"
-
-    node "$render_cli" \
-        --app-config "${TX5DR_CONFIG_DIR:-/var/lib/tx5dr/config}/config.json" \
-        --credential-file "$(get_livekit_credentials_path)" \
-        --output "$target" \
-        --signal-port "${LIVEKIT_SIGNAL_PORT}" \
-        --tcp-port "${LIVEKIT_TCP_PORT}" \
-        --udp-start "${LIVEKIT_UDP_PORT_START}" \
-        --udp-end "${LIVEKIT_UDP_PORT_END}"
-
-    chmod 640 "$target"
-    if id tx5dr &>/dev/null; then
-        chown tx5dr:tx5dr "$target" 2>/dev/null || true
-    fi
-
-    check_livekit_config
 }
 
 fix_tx5dr_user_groups() {
@@ -920,7 +580,6 @@ fix_nginx_ssl_config() {
 run_doctor() {
     load_config
     local issues=0
-    local livekit_diag_needed=0
 
     echo ""
     echo -e "${_BOLD}TX-5DR $(msg ALL_CHECKS_PASSED | head -c0)Environment Check${_NC}"
@@ -987,9 +646,9 @@ run_doctor() {
         fi
 
         if check_nginx_realtime_proxy_config; then
-            check_line "$(msg CHECK_NGINX_REALTIME_PROXY)" "ok" "ws-compat + forwarded host/port"
+            check_line "$(msg CHECK_NGINX_REALTIME_PROXY)" "ok" "rtc-data-audio + ws-compat + forwarded host/port"
         else
-            check_line "$(msg CHECK_NGINX_REALTIME_PROXY)" "fail" "missing ws-compat upgrade or forwarded port preservation"
+            check_line "$(msg CHECK_NGINX_REALTIME_PROXY)" "fail" "missing realtime upgrade route or forwarded port preservation"
             echo -e "      ${_DIM}$(msg FIX_NGINX_REALTIME_PROXY)${_NC}"
             issues=$((issues + 1))
         fi
@@ -1014,64 +673,6 @@ run_doctor() {
         issues=$((issues + 1))
     fi
 
-    if check_livekit_binary; then
-        check_line "$(msg CHECK_LIVEKIT_BINARY)" "ok" "$(get_livekit_binary_path)"
-    else
-        check_line "$(msg CHECK_LIVEKIT_BINARY)" "fail" "not found"
-        echo -e "      ${_DIM}$(msg FIX_LIVEKIT_BINARY)${_NC}"
-        issues=$((issues + 1))
-        livekit_diag_needed=1
-    fi
-
-    if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" == "1" ]]; then
-        check_line "$(msg CHECK_LIVEKIT_CREDENTIAL_FILE)" "ok" "environment override"
-    elif check_livekit_credentials_exists; then
-        if check_livekit_credentials_loaded; then
-            check_line "$(msg CHECK_LIVEKIT_CREDENTIAL_FILE)" "ok" "$(get_livekit_credentials_path)"
-        else
-            check_line "$(msg CHECK_LIVEKIT_CREDENTIAL_FILE)" "fail" "invalid: $(get_livekit_credentials_path)"
-            echo -e "      ${_DIM}$(msg FIX_LIVEKIT_CREDENTIALS)${_NC}"
-            issues=$((issues + 1))
-            livekit_diag_needed=1
-        fi
-    else
-        check_line "$(msg CHECK_LIVEKIT_CREDENTIAL_FILE)" "fail" "missing: $(get_livekit_credentials_path)"
-        echo -e "      ${_DIM}$(msg FIX_LIVEKIT_CREDENTIALS)${_NC}"
-        issues=$((issues + 1))
-        livekit_diag_needed=1
-    fi
-
-    if check_livekit_config_exists; then
-        if check_livekit_config_consistency; then
-            check_line "$(msg CHECK_LIVEKIT_CONFIG)" "ok" "$(get_livekit_config_path)"
-        else
-            check_line "$(msg CHECK_LIVEKIT_CONFIG)" "fail" "mismatch with current ports or credential file"
-            echo -e "      ${_DIM}$(msg FIX_LIVEKIT_CONFIG)${_NC}"
-            issues=$((issues + 1))
-            livekit_diag_needed=1
-        fi
-    else
-        check_line "$(msg CHECK_LIVEKIT_CONFIG)" "fail" "missing: $(get_livekit_config_path)"
-        echo -e "      ${_DIM}$(msg FIX_LIVEKIT_CONFIG)${_NC}"
-        issues=$((issues + 1))
-        livekit_diag_needed=1
-    fi
-
-    if check_livekit_url_consistency; then
-        check_line "$(msg CHECK_LIVEKIT_URL)" "ok" "${LIVEKIT_URL}"
-    else
-        check_line "$(msg CHECK_LIVEKIT_URL)" "fail" "${LIVEKIT_URL} (expected port ${LIVEKIT_SIGNAL_PORT})"
-        issues=$((issues + 1))
-        livekit_diag_needed=1
-    fi
-
-    if check_livekit_service; then
-        check_line "$(msg CHECK_LIVEKIT_SERVICE)" "ok" "$(get_systemd_state tx5dr-livekit)"
-    else
-        check_line "$(msg CHECK_LIVEKIT_SERVICE)" "fail" "$(get_systemd_state tx5dr-livekit)"
-        issues=$((issues + 1))
-        livekit_diag_needed=1
-    fi
 
     # Ports
     if is_port_open "${API_PORT}"; then
@@ -1081,36 +682,19 @@ run_doctor() {
         issues=$((issues + 1))
     fi
 
-    if is_port_open "${LIVEKIT_SIGNAL_PORT:-7880}"; then
-        check_line "$(msg CHECK_LIVEKIT_SIGNAL_PORT "${LIVEKIT_SIGNAL_PORT:-7880}")" "ok" "open"
-    else
-        check_line "$(msg CHECK_LIVEKIT_SIGNAL_PORT "${LIVEKIT_SIGNAL_PORT:-7880}")" "fail" "closed"
-        issues=$((issues + 1))
-        livekit_diag_needed=1
-    fi
-
-    if check_livekit_tcp_port; then
-        check_line "$(msg CHECK_LIVEKIT_TCP_PORT "${LIVEKIT_TCP_PORT}")" "ok" "open"
-    else
-        check_line "$(msg CHECK_LIVEKIT_TCP_PORT "${LIVEKIT_TCP_PORT}")" "fail" "closed"
-        issues=$((issues + 1))
-        livekit_diag_needed=1
-    fi
-
-    check_line "$(msg CHECK_LIVEKIT_UDP_RANGE "${LIVEKIT_UDP_PORT_START}" "${LIVEKIT_UDP_PORT_END}")" "ok" "$(describe_livekit_udp_binding)"
-
-    local credential_state
-    credential_state=$(describe_livekit_credentials_state)
-    if [[ "$credential_state" == "missing" || "$credential_state" == "invalid" ]]; then
-        check_line "$(msg CHECK_LIVEKIT_CREDENTIALS)" "fail" "$credential_state"
-    else
-        check_line "$(msg CHECK_LIVEKIT_CREDENTIALS)" "ok" "$credential_state"
-    fi
 
     if is_port_open "${HTTP_PORT}"; then
         check_line "$(msg CHECK_PORT_HTTP "$HTTP_PORT")" "ok" "open"
     else
         check_line "$(msg CHECK_PORT_HTTP "$HTTP_PORT")" "fail" "closed"
+        issues=$((issues + 1))
+    fi
+
+    if check_rtc_data_audio_udp_config; then
+        check_line "$(msg CHECK_RTC_DATA_AUDIO_UDP "${RTC_DATA_AUDIO_UDP_PORT:-50110}")" "ok" "configured"
+    else
+        check_line "$(msg CHECK_RTC_DATA_AUDIO_UDP "${RTC_DATA_AUDIO_UDP_PORT:-50110}")" "fail" "invalid"
+        echo -e "      ${_DIM}$(msg FIX_RTC_DATA_AUDIO_UDP)${_NC}"
         issues=$((issues + 1))
     fi
 
@@ -1184,20 +768,6 @@ run_doctor() {
         issues=$((issues + 1))
     fi
 
-    if [[ $livekit_diag_needed -eq 1 ]]; then
-        echo ""
-        log_warn "LiveKit diagnostics"
-        echo -e "      ${_DIM}Config: $(get_livekit_config_path)${_NC}"
-        echo -e "      ${_DIM}Browser entry: same-origin /livekit${_NC}"
-        echo -e "      ${_DIM}Expected ports: internal signaling ${LIVEKIT_SIGNAL_PORT}, tcp ${LIVEKIT_TCP_PORT}, udp ${LIVEKIT_UDP_PORT_START}-${LIVEKIT_UDP_PORT_END}${_NC}"
-        echo -e "      ${_DIM}Bridge URL: ${LIVEKIT_URL}${_NC}"
-        local recent_logs
-        recent_logs=$(sudo journalctl -u tx5dr-livekit -n 8 --no-pager 2>/dev/null || true)
-        if [[ -n "$recent_logs" ]]; then
-            echo -e "      ${_DIM}Recent tx5dr-livekit logs:${_NC}"
-            echo "$recent_logs" | sed 's/^/        /'
-        fi
-    fi
 
     echo ""
     if [[ $issues -eq 0 ]]; then

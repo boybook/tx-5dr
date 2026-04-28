@@ -150,7 +150,6 @@ COPY linux/nginx-site.conf /tmp/nginx-site.conf.template
 RUN sed -e 's|%%LISTEN_PORT%%|80|g' \
         -e 's|%%WEB_ROOT%%|/app/packages/web/dist|g' \
         -e 's|%%API_HOST%%|127.0.0.1:4000|g' \
-        -e 's|%%LIVEKIT_HOST%%|livekit:7880|g' \
         /tmp/nginx-site.conf.template > /etc/nginx/conf.d/tx5dr.conf \
     && rm /tmp/nginx-site.conf.template
 
@@ -160,8 +159,6 @@ COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 # 复制entrypoint脚本
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-COPY docker/init-livekit.sh /init-livekit.sh
-RUN chmod +x /init-livekit.sh
 
 # 创建数据目录
 RUN mkdir -p /app/data/config /app/data/plugins /app/data/logs /app/data/cache /app/data/realtime
@@ -175,6 +172,8 @@ EXPOSE 80
 EXPOSE 443
 # rigctld-compatible TCP bridge (enable via Web UI → System Settings → Rigctld Bridge)
 EXPOSE 4532
+# rtc-data-audio WebRTC DataChannel UDP
+EXPOSE 50110/udp
 
 # 设置entrypoint
 ENTRYPOINT ["/entrypoint.sh"]

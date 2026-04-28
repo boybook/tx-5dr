@@ -100,10 +100,13 @@ function toContextRecord(
 
   if (options.hints) {
     context.signalingUrl = options.hints.signalingUrl;
-    context.signalingPort = String(options.hints.signalingPort);
-    context.rtcTcpPort = String(options.hints.rtcTcpPort);
-    context.udpPortRange = options.hints.udpPortRange;
-    context.publicUrlOverrideActive = String(options.hints.publicUrlOverrideActive);
+    context.localUdpPort = String(options.hints.localUdpPort);
+    context.publicCandidateEnabled = String(options.hints.publicCandidateEnabled);
+    context.publicEndpoint = options.hints.publicEndpoint
+      ? `${options.hints.publicEndpoint.host}:${options.hints.publicEndpoint.port}`
+      : '';
+    context.iceServers = options.hints.iceServers.join(',');
+    context.fallbackTransport = options.hints.fallbackTransport;
   }
 
   for (const [key, value] of Object.entries(extra)) {
@@ -123,24 +126,24 @@ function buildNetworkSuggestions(
   const suggestions: string[] = [];
 
   if (includeSettingsHint) {
-    suggestions.push(i18n.t('radio:realtime.suggestionCheckPublicUrl'));
+    suggestions.push(i18n.t('radio:realtime.suggestionCheckRtcDataAudioSettings'));
   }
 
   if (hints) {
-    suggestions.push(i18n.t('radio:realtime.suggestionCheckSignalingPort', {
-      port: hints.signalingPort,
-    }));
-    suggestions.push(i18n.t('radio:realtime.suggestionCheckRtcTcpPort', {
-      port: hints.rtcTcpPort,
-    }));
-    suggestions.push(i18n.t('radio:realtime.suggestionCheckUdpRange', {
-      range: hints.udpPortRange,
-    }));
     suggestions.push(i18n.t('radio:realtime.suggestionCheckDirectUrl', {
       url: hints.signalingUrl,
     }));
+    suggestions.push(i18n.t('radio:realtime.suggestionCheckRtcDataUdpPort', {
+      port: hints.publicEndpoint?.port ?? hints.localUdpPort,
+    }));
+    if (hints.publicEndpoint) {
+      suggestions.push(i18n.t('radio:realtime.suggestionCheckRtcDataPublicEndpoint', {
+        endpoint: `${hints.publicEndpoint.host}:${hints.publicEndpoint.port}`,
+      }));
+    }
+    suggestions.push(i18n.t('radio:realtime.suggestionFallbackWsCompat'));
   } else {
-    suggestions.push(i18n.t('radio:realtime.suggestionCheckPublicUrl'));
+    suggestions.push(i18n.t('radio:realtime.suggestionCheckRtcDataAudioSettings'));
     suggestions.push(i18n.t('radio:realtime.suggestionCheckGenericPorts'));
   }
 
@@ -174,7 +177,7 @@ export function buildRealtimeConnectivityIssue(
   const lowerMessage = message.toLowerCase();
   const scopeLabel = getScopeLabel(options.scope);
   const hints = options.hints;
-  const overrideActive = hints?.publicUrlOverrideActive ?? false;
+  const publicCandidateEnabled = hints?.publicCandidateEnabled ?? false;
   const browserRuntime = detectBrowserAudioRuntime();
 
   if (error instanceof RealtimeConnectivityError) {
@@ -250,7 +253,7 @@ export function buildRealtimeConnectivityIssue(
       options,
       'NO_AUDIO_TRACK',
       i18n.t('radio:realtime.noAudioTrack', { scope: scopeLabel }),
-      buildNetworkSuggestions(options, overrideActive),
+      buildNetworkSuggestions(options, publicCandidateEnabled),
       message,
     );
   }
@@ -291,7 +294,7 @@ export function buildRealtimeConnectivityIssue(
     lowerMessage.includes('failed to fetch') ||
     lowerMessage.includes('networkerror')
   ) {
-    const code = overrideActive ? 'PUBLIC_URL_MISCONFIGURED' : 'SIGNALING_UNREACHABLE';
+    const code = publicCandidateEnabled ? 'PUBLIC_URL_MISCONFIGURED' : 'SIGNALING_UNREACHABLE';
     const userMessage = code === 'PUBLIC_URL_MISCONFIGURED'
       ? i18n.t('radio:realtime.publicUrlMisconfigured', { scope: scopeLabel })
       : i18n.t('radio:realtime.signalingUnreachable', { scope: scopeLabel });
@@ -316,7 +319,7 @@ export function buildRealtimeConnectivityIssue(
       options,
       'ICE_CONNECTION_FAILED',
       i18n.t('radio:realtime.iceFailed', { scope: scopeLabel }),
-      buildNetworkSuggestions(options, overrideActive),
+      buildNetworkSuggestions(options, publicCandidateEnabled),
       message,
     );
   }
@@ -325,7 +328,7 @@ export function buildRealtimeConnectivityIssue(
     options,
     'UNKNOWN_REALTIME_ERROR',
     i18n.t('radio:realtime.unknownFailure', { scope: scopeLabel }),
-    buildNetworkSuggestions(options, overrideActive),
+    buildNetworkSuggestions(options, publicCandidateEnabled),
     message,
   );
 }

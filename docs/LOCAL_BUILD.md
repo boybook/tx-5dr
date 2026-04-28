@@ -253,3 +253,28 @@ codesign --force --sign "Developer ID Application: JUNXUAN BAO (85SV63Z4H5)" \
 - [Apple 代码签名指南](https://developer.apple.com/library/archive/documentation/Security/Conceptual/CodeSigningGuide/)
 - [Apple 公证文档](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution)
 - [docs/GITHUB_RELEASE_SETUP.md](./GITHUB_RELEASE_SETUP.md)
+
+## Realtime DataChannel Native Addon
+
+`rtc-data-audio` uses `node-datachannel`, a native N-API addon backed by libdatachannel. Install dependencies on the target platform/architecture before packaging so the correct prebuilt binary is present.
+
+The DataChannel signaling WebSocket is same-origin at `/api/realtime/rtc-data-audio`. Media normally uses one fixed UDP port for easier LAN tunneling/NAT mapping:
+
+```bash
+RTC_DATA_AUDIO_UDP_PORT=50110
+RTC_DATA_AUDIO_ICE_UDP_MUX=1
+```
+
+If `RTC_DATA_AUDIO_UDP_PORT` is not set, the server defaults to the fixed port `50110`. Use one UDP port per server instance; for parallel local instances, set a different `RTC_DATA_AUDIO_UDP_PORT` before startup.
+
+For FRP or static NAT, map one UDP port from the public/VPS side to the server's local UDP port, then set the public hostname/IP and public UDP port in Settings -> Monitoring / Voice Server -> WebRTC Data Audio external UDP address. Leave the host empty for LAN-only deployments or to disable public ICE candidate publishing. These settings affect new or reconnected sessions; active sessions are not hot-updated.
+
+Required validation per platform:
+
+```bash
+yarn workspace @tx5dr/server dev:check-native
+yarn workspace @tx5dr/server build
+yarn workspace @tx5dr/web build
+```
+
+For Docker multi-arch builds, install dependencies inside each target image (`linux/amd64` and `linux/arm64`) instead of copying `node_modules` across architectures.

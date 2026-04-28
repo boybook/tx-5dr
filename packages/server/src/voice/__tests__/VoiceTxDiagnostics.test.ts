@@ -34,6 +34,7 @@ describe('VoiceTxDiagnostics', () => {
       resampleMs: 3,
       queueWaitMs: 28,
       writeMs: 4,
+      serverPipelineMs: 24,
       endToEndMs: 36,
       outputBufferedMs: 24,
       outputSampleRate: 48000,
@@ -47,6 +48,7 @@ describe('VoiceTxDiagnostics', () => {
     expect(snapshot.transport.clientToServerMs.current).toBe(12);
     expect(snapshot.serverIngress.queueDepthFrames).toBe(1);
     expect(snapshot.serverOutput.queueWaitMs.current).toBe(28);
+    expect(snapshot.serverOutput.serverPipelineMs.current).toBe(24);
     expect(snapshot.serverOutput.outputBufferedMs.current).toBe(24);
     expect(snapshot.serverOutput.outputBufferSize).toBe(768);
     expect(snapshot.summary.bottleneckStage).toBe('server-queue');
@@ -61,8 +63,8 @@ describe('VoiceTxDiagnostics', () => {
     const diagnostics = new VoiceTxDiagnostics();
     diagnostics.startSession('conn_2', 'tester');
     diagnostics.noteIngress({
-      transport: 'livekit',
-      participantIdentity: 'livekit-send:test',
+      transport: 'rtc-data-audio',
+      participantIdentity: 'rtc-data-send:test',
       sequence: null,
       clientSentAtMs: null,
       serverReceivedAtMs: Date.now(),
@@ -74,7 +76,7 @@ describe('VoiceTxDiagnostics', () => {
     const snapshot = diagnostics.getSnapshot();
     expect(snapshot.summary.active).toBe(false);
     expect(snapshot.summary.clientId).toBe('conn_2');
-    expect(snapshot.summary.transport).toBe('livekit');
+    expect(snapshot.summary.transport).toBe('rtc-data-audio');
     expect(snapshot.transport.receivedFrames).toBe(1);
 
     vi.useRealTimers();

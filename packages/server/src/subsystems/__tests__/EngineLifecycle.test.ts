@@ -16,7 +16,6 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' = 'FT8') {
   const audioSidecar = {
     start: vi.fn(),
     stop: vi.fn(),
-    getAudioMonitorService: () => null,
     isConnected: () => false,
     getStatus: () => 'idle',
     buildStatusPayload: () => ({

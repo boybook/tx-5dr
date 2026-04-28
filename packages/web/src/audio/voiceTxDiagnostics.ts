@@ -1,4 +1,5 @@
 import type { RealtimeTransportKind } from '@tx5dr/contracts';
+import type { RealtimeClockConfidence } from '../realtime/RealtimeClockSync';
 
 const ROLLING_WINDOW_MS = 5_000;
 const PEAK_WINDOW_MS = 10_000;
@@ -18,16 +19,15 @@ export interface VoiceTxLocalDiagnostics {
   transport: RealtimeTransportKind | null;
   framesSent: number;
   sendSkippedFrames: number;
+  clientDroppedFrames: number;
   samplesPerFrame: number | null;
   frameIntervalMs: VoiceTxLocalMetricWindow;
   encodeAndSendMs: VoiceTxLocalMetricWindow;
+  sendBufferedAudioMs: VoiceTxLocalMetricWindow;
   socketBufferedAmountBytes: number | null;
+  clockConfidence: RealtimeClockConfidence;
+  degraded: boolean;
   pttToFirstSentFrameMs: number | null;
-  pttToTrackUnmuteMs: number | null;
-  livekitBitrateKbps: number | null;
-  livekitPacketsSent: number | null;
-  livekitRoundTripTimeMs: number | null;
-  livekitJitterMs: number | null;
   updatedAt: number | null;
 }
 
@@ -83,37 +83,35 @@ export class VoiceTxLocalStatsCollector {
   private transport: RealtimeTransportKind | null = null;
   private framesSent = 0;
   private sendSkippedFrames = 0;
+  private clientDroppedFrames = 0;
   private samplesPerFrame: number | null = null;
   private socketBufferedAmountBytes: number | null = null;
+  private clockConfidence: RealtimeClockConfidence = 'unknown';
+  private degraded = false;
   private pttActivatedAt: number | null = null;
   private pttToFirstSentFrameMs: number | null = null;
-  private pttToTrackUnmuteMs: number | null = null;
-  private livekitBitrateKbps: number | null = null;
-  private livekitPacketsSent: number | null = null;
-  private livekitRoundTripTimeMs: number | null = null;
-  private livekitJitterMs: number | null = null;
   private lastSentAt: number | null = null;
   private updatedAt: number | null = null;
   private readonly frameIntervalMs = new MetricSeries();
   private readonly encodeAndSendMs = new MetricSeries();
+  private readonly sendBufferedAudioMs = new MetricSeries();
 
   reset(transport: RealtimeTransportKind | null = null): void {
     this.transport = transport;
     this.framesSent = 0;
     this.sendSkippedFrames = 0;
+    this.clientDroppedFrames = 0;
     this.samplesPerFrame = null;
     this.socketBufferedAmountBytes = null;
+    this.clockConfidence = 'unknown';
+    this.degraded = false;
     this.pttActivatedAt = null;
     this.pttToFirstSentFrameMs = null;
-    this.pttToTrackUnmuteMs = null;
-    this.livekitBitrateKbps = null;
-    this.livekitPacketsSent = null;
-    this.livekitRoundTripTimeMs = null;
-    this.livekitJitterMs = null;
     this.lastSentAt = null;
     this.updatedAt = null;
     this.frameIntervalMs.reset();
     this.encodeAndSendMs.reset();
+    this.sendBufferedAudioMs.reset();
   }
 
   setTransport(transport: RealtimeTransportKind | null): void {
@@ -124,32 +122,17 @@ export class VoiceTxLocalStatsCollector {
   notePTTActivated(): void {
     this.pttActivatedAt = Date.now();
     this.pttToFirstSentFrameMs = null;
-    this.pttToTrackUnmuteMs = null;
     this.updatedAt = this.pttActivatedAt;
   }
 
-  noteTrackUnmuted(durationMs: number): void {
-    this.pttToTrackUnmuteMs = durationMs;
-    if (this.pttToFirstSentFrameMs === null) {
-      this.pttToFirstSentFrameMs = durationMs;
-    }
-    this.updatedAt = Date.now();
-  }
-
-  noteLiveKitSenderStats(data: {
-    bitrateKbps: number | null;
-    packetsSent: number | null;
-    roundTripTimeMs: number | null;
-    jitterMs: number | null;
-  }): void {
-    this.livekitBitrateKbps = data.bitrateKbps;
-    this.livekitPacketsSent = data.packetsSent;
-    this.livekitRoundTripTimeMs = data.roundTripTimeMs;
-    this.livekitJitterMs = data.jitterMs;
-    this.updatedAt = Date.now();
-  }
-
-  noteFrameSent(samplesPerFrame: number, sendDurationMs: number, socketBufferedAmountBytes: number | null): void {
+  noteFrameSent(
+    samplesPerFrame: number,
+    sendDurationMs: number,
+    socketBufferedAmountBytes: number | null,
+    sendBufferedAudioMs: number | null = null,
+    clockConfidence: RealtimeClockConfidence = 'unknown',
+    degraded = false,
+  ): void {
     const now = Date.now();
     if (this.lastSentAt !== null) {
       this.frameIntervalMs.record(now - this.lastSentAt, now);
@@ -158,15 +141,23 @@ export class VoiceTxLocalStatsCollector {
     this.framesSent += 1;
     this.samplesPerFrame = samplesPerFrame;
     this.socketBufferedAmountBytes = socketBufferedAmountBytes;
+    this.clockConfidence = clockConfidence;
+    this.degraded = degraded;
     this.encodeAndSendMs.record(sendDurationMs, now);
+    if (sendBufferedAudioMs !== null) {
+      this.sendBufferedAudioMs.record(sendBufferedAudioMs, now);
+    }
     if (this.pttActivatedAt !== null && this.pttToFirstSentFrameMs === null) {
       this.pttToFirstSentFrameMs = now - this.pttActivatedAt;
     }
     this.updatedAt = now;
   }
 
-  noteFrameSkipped(): void {
+  noteFrameSkipped(dropped = false): void {
     this.sendSkippedFrames += 1;
+    if (dropped) {
+      this.clientDroppedFrames += 1;
+    }
     this.updatedAt = Date.now();
   }
 
@@ -176,16 +167,15 @@ export class VoiceTxLocalStatsCollector {
       transport: this.transport,
       framesSent: this.framesSent,
       sendSkippedFrames: this.sendSkippedFrames,
+      clientDroppedFrames: this.clientDroppedFrames,
       samplesPerFrame: this.samplesPerFrame,
       frameIntervalMs: this.frameIntervalMs.snapshot(now),
       encodeAndSendMs: this.encodeAndSendMs.snapshot(now),
+      sendBufferedAudioMs: this.sendBufferedAudioMs.snapshot(now),
       socketBufferedAmountBytes: this.socketBufferedAmountBytes,
+      clockConfidence: this.clockConfidence,
+      degraded: this.degraded,
       pttToFirstSentFrameMs: this.pttToFirstSentFrameMs,
-      pttToTrackUnmuteMs: this.pttToTrackUnmuteMs,
-      livekitBitrateKbps: this.livekitBitrateKbps,
-      livekitPacketsSent: this.livekitPacketsSent,
-      livekitRoundTripTimeMs: this.livekitRoundTripTimeMs,
-      livekitJitterMs: this.livekitJitterMs,
       updatedAt: this.updatedAt,
     };
   }

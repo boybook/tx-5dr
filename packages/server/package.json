@@ -10,7 +10,7 @@
     "./cpu-profile": "./dist/services/ServerCpuProfileManager.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "rm -rf dist && tsc",
     "dev": "NODE_ENV=development GLIBC_TUNABLES=\"${GLIBC_TUNABLES:+$GLIBC_TUNABLES:}glibc.rtld.execstack=2\" tsx watch --watch-path=src src/index.ts",
     "dev:prof": "NODE_ENV=development GLIBC_TUNABLES=\"${GLIBC_TUNABLES:+$GLIBC_TUNABLES:}glibc.rtld.execstack=2\" tsx --prof src/index.ts",
     "clinic:doctor": "yarn build && clinic doctor -- node dist/index.js",
@@ -28,7 +28,6 @@
     "@fastify/jwt": "^10.0.0",
     "@fastify/multipart": "^9.4.0",
     "@fastify/websocket": "^11.1.0",
-    "@livekit/rtc-node": "^0.13.24",
     "@openwebrx-js/api": "0.1.7",
     "@tx5dr/builtin-plugins": "workspace:*",
     "@tx5dr/contracts": "workspace:*",
@@ -45,8 +44,8 @@
     "fastify-plugin": "^5.1.0",
     "hamlib": "0.6.1",
     "icom-wlan-node": "0.5.1",
-    "livekit-server-sdk": "^2.15.0",
     "mic": "^2.1.2",
+    "node-datachannel": "0.32.3",
     "node-forge": "^1.4.0",
     "node-wav": "^0.0.2",
     "rubato-fft-node": "^0.1.0",

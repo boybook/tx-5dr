@@ -1,7 +1,7 @@
 [Unit]
 Description=TX-5DR Digital Radio Server
-After=network.target nginx.service tx5dr-livekit.service
-Wants=nginx.service tx5dr-livekit.service
+After=network.target nginx.service
+Wants=nginx.service
 
 [Service]
 Type=simple

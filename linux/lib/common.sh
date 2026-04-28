@@ -88,26 +88,12 @@ MSG_EN_CHECK_NGINX_RUNNING="nginx running"
 MSG_ZH_CHECK_NGINX_RUNNING="nginx 运行中"
 MSG_EN_CHECK_NGINX_REALTIME_PROXY="nginx realtime proxy"
 MSG_ZH_CHECK_NGINX_REALTIME_PROXY="nginx 实时语音代理"
+MSG_EN_CHECK_RTC_DATA_AUDIO_UDP="rtc-data-audio UDP port %s"
+MSG_ZH_CHECK_RTC_DATA_AUDIO_UDP="rtc-data-audio UDP 端口 %s"
+MSG_EN_FIX_RTC_DATA_AUDIO_UDP="Allow the UDP port in firewall: sudo tx5dr doctor --fix"
+MSG_ZH_FIX_RTC_DATA_AUDIO_UDP="放行 UDP 端口: sudo tx5dr doctor --fix"
 MSG_EN_CHECK_SERVICE="TX-5DR service"
 MSG_ZH_CHECK_SERVICE="TX-5DR 服务"
-MSG_EN_CHECK_LIVEKIT_BINARY="LiveKit binary"
-MSG_ZH_CHECK_LIVEKIT_BINARY="LiveKit 二进制"
-MSG_EN_CHECK_LIVEKIT_CONFIG="LiveKit config"
-MSG_ZH_CHECK_LIVEKIT_CONFIG="LiveKit 配置"
-MSG_EN_CHECK_LIVEKIT_URL="LiveKit bridge URL"
-MSG_ZH_CHECK_LIVEKIT_URL="LiveKit 桥接 URL"
-MSG_EN_CHECK_LIVEKIT_SERVICE="LiveKit service"
-MSG_ZH_CHECK_LIVEKIT_SERVICE="LiveKit 服务"
-MSG_EN_CHECK_LIVEKIT_SIGNAL_PORT="LiveKit signaling port %s"
-MSG_ZH_CHECK_LIVEKIT_SIGNAL_PORT="LiveKit signaling 端口 %s"
-MSG_EN_CHECK_LIVEKIT_TCP_PORT="LiveKit RTC TCP port %s"
-MSG_ZH_CHECK_LIVEKIT_TCP_PORT="LiveKit RTC TCP 端口 %s"
-MSG_EN_CHECK_LIVEKIT_UDP_RANGE="LiveKit UDP range %s-%s"
-MSG_ZH_CHECK_LIVEKIT_UDP_RANGE="LiveKit UDP 范围 %s-%s"
-MSG_EN_CHECK_LIVEKIT_CREDENTIALS="LiveKit credentials"
-MSG_ZH_CHECK_LIVEKIT_CREDENTIALS="LiveKit 凭据"
-MSG_EN_CHECK_LIVEKIT_CREDENTIAL_FILE="LiveKit credential file"
-MSG_ZH_CHECK_LIVEKIT_CREDENTIAL_FILE="LiveKit 凭据文件"
 MSG_EN_CHECK_PORT_BACKEND="Backend port %s"
 MSG_ZH_CHECK_PORT_BACKEND="后端端口 %s"
 MSG_EN_CHECK_PORT_HTTP="HTTP port %s"
@@ -125,12 +111,6 @@ MSG_EN_FIX_NGINX="Install nginx manually: sudo dnf install nginx  or  sudo apt i
 MSG_ZH_FIX_NGINX="请手动安装 nginx：sudo dnf install nginx  或  sudo apt install nginx"
 MSG_EN_FIX_NGINX_REALTIME_PROXY="Repair nginx realtime proxy routes: sudo tx5dr doctor --fix"
 MSG_ZH_FIX_NGINX_REALTIME_PROXY="修复 nginx 的实时语音代理路由: sudo tx5dr doctor --fix"
-MSG_EN_FIX_LIVEKIT_BINARY="Reinstall the tx5dr package, or install manually: curl -sSL https://get.livekit.io | bash"
-MSG_ZH_FIX_LIVEKIT_BINARY="重新安装 tx5dr 软件包，或手动安装: curl -sSL https://get.livekit.io | bash"
-MSG_EN_FIX_LIVEKIT_CONFIG="Regenerate config: sudo rm -f /var/lib/tx5dr/realtime/livekit.resolved.yaml && sudo /usr/share/tx5dr/postinstall.sh"
-MSG_ZH_FIX_LIVEKIT_CONFIG="重新生成配置: sudo rm -f /var/lib/tx5dr/realtime/livekit.resolved.yaml && sudo /usr/share/tx5dr/postinstall.sh"
-MSG_EN_FIX_LIVEKIT_CREDENTIALS="Regenerate credentials: sudo tx5dr livekit-creds rotate"
-MSG_ZH_FIX_LIVEKIT_CREDENTIALS="重新生成凭据: sudo tx5dr livekit-creds rotate"
 
 MSG_EN_INSTALLING_NODEJS="Installing Node.js 22..."
 MSG_ZH_INSTALLING_NODEJS="正在安装 Node.js 22..."
@@ -301,66 +281,17 @@ read_env_file_value() {
 # Load TX-5DR config
 load_config() {
     local default_download_base_url="https://tx5dr.oss-cn-hangzhou.aliyuncs.com"
-    local config_env="/etc/tx5dr/config.env"
-    local inherited_livekit_api_key="${LIVEKIT_API_KEY:-}"
-    local inherited_livekit_api_secret="${LIVEKIT_API_SECRET:-}"
-    local config_file_livekit_override=0
-
-    unset LIVEKIT_API_KEY LIVEKIT_API_SECRET
-
-    if env_file_has_key "$config_env" "LIVEKIT_API_KEY" && env_file_has_key "$config_env" "LIVEKIT_API_SECRET"; then
-        config_file_livekit_override=1
-    fi
-
     if [[ -f /etc/tx5dr/config.env ]]; then
         # shellcheck disable=SC1091
         source /etc/tx5dr/config.env 2>/dev/null || true
-    fi
-
-    LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE=0
-    LIVEKIT_CREDENTIAL_OVERRIDE_SOURCE=""
-    LIVEKIT_CREDENTIALS_FILE="${LIVEKIT_CREDENTIALS_FILE:-/etc/tx5dr/livekit-credentials.env}"
-
-    local managed_livekit_api_key=""
-    local managed_livekit_api_secret=""
-    managed_livekit_api_key=$(read_env_file_value "${LIVEKIT_CREDENTIALS_FILE}" "LIVEKIT_API_KEY" 2>/dev/null || true)
-    managed_livekit_api_secret=$(read_env_file_value "${LIVEKIT_CREDENTIALS_FILE}" "LIVEKIT_API_SECRET" 2>/dev/null || true)
-
-    if [[ -n "$inherited_livekit_api_key" && -n "$inherited_livekit_api_secret" ]]; then
-        if [[ -z "$managed_livekit_api_key" || -z "$managed_livekit_api_secret" \
-           || "$inherited_livekit_api_key" != "$managed_livekit_api_key" \
-           || "$inherited_livekit_api_secret" != "$managed_livekit_api_secret" ]]; then
-            LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE=1
-            LIVEKIT_CREDENTIAL_OVERRIDE_SOURCE="environment"
-        fi
-        LIVEKIT_API_KEY="$inherited_livekit_api_key"
-        LIVEKIT_API_SECRET="$inherited_livekit_api_secret"
-    elif [[ $config_file_livekit_override -eq 1 && -n "${LIVEKIT_API_KEY:-}" && -n "${LIVEKIT_API_SECRET:-}" ]]; then
-        if [[ -z "$managed_livekit_api_key" || -z "$managed_livekit_api_secret" \
-           || "${LIVEKIT_API_KEY}" != "$managed_livekit_api_key" \
-           || "${LIVEKIT_API_SECRET}" != "$managed_livekit_api_secret" ]]; then
-            LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE=1
-            LIVEKIT_CREDENTIAL_OVERRIDE_SOURCE="$config_env"
-        fi
-    fi
-
-    if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" != "1" && (-z "${LIVEKIT_API_KEY:-}" || -z "${LIVEKIT_API_SECRET:-}") ]]; then
-        [[ -n "$managed_livekit_api_key" ]] && LIVEKIT_API_KEY="$managed_livekit_api_key"
-        [[ -n "$managed_livekit_api_secret" ]] && LIVEKIT_API_SECRET="$managed_livekit_api_secret"
     fi
 
     HTTP_PORT="${TX5DR_HTTP_PORT:-8076}"
     HTTPS_PORT="${TX5DR_HTTPS_PORT:-8443}"
     SSL_DIR="${TX5DR_SSL_DIR:-/etc/tx5dr/ssl}"
     API_PORT="${PORT:-4000}"
-    LIVEKIT_SIGNAL_PORT="${LIVEKIT_SIGNAL_PORT:-7880}"
-    LIVEKIT_TCP_PORT="${LIVEKIT_TCP_PORT:-7881}"
-    LIVEKIT_UDP_PORT_START="${LIVEKIT_UDP_PORT_START:-50000}"
-    LIVEKIT_UDP_PORT_END="${LIVEKIT_UDP_PORT_END:-50100}"
-    LIVEKIT_API_KEY="${LIVEKIT_API_KEY:-}"
-    LIVEKIT_API_SECRET="${LIVEKIT_API_SECRET:-}"
-    LIVEKIT_URL="${LIVEKIT_URL:-ws://127.0.0.1:${LIVEKIT_SIGNAL_PORT}}"
-    LIVEKIT_CONFIG_FILE="${LIVEKIT_CONFIG_FILE:-/var/lib/tx5dr/realtime/livekit.resolved.yaml}"
+    RTC_DATA_AUDIO_UDP_PORT="${RTC_DATA_AUDIO_UDP_PORT:-50110}"
+    RTC_DATA_AUDIO_ICE_UDP_MUX="${RTC_DATA_AUDIO_ICE_UDP_MUX:-1}"
     CONFIG_DIR="${TX5DR_CONFIG_DIR:-/var/lib/tx5dr/config}"
     DATA_DIR="${TX5DR_DATA_DIR:-/var/lib/tx5dr}"
     PLUGIN_DIR="${DATA_DIR%/}/plugins"
@@ -554,24 +485,6 @@ get_server_manifest_version() {
 get_server_manifest_commit_title() {
     local manifest_json="$1"
     manifest_lookup_value "$manifest_json" "commit_title"
-}
-
-get_livekit_binary_path() {
-    local bundled="${LIVEKIT_BINARY_PATH:-/usr/share/tx5dr/bin/livekit-server}"
-    if [[ -x "$bundled" ]]; then
-        printf "%s" "$bundled"
-        return 0
-    fi
-
-    command -v livekit-server 2>/dev/null || return 1
-}
-
-get_livekit_config_path() {
-    printf "%s" "${LIVEKIT_CONFIG_FILE:-/var/lib/tx5dr/realtime/livekit.resolved.yaml}"
-}
-
-get_livekit_credentials_path() {
-    printf "%s" "${LIVEKIT_CREDENTIALS_FILE:-/etc/tx5dr/livekit-credentials.env}"
 }
 
 read_file_maybe_sudo() {

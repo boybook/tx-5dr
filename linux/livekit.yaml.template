@@ -1,9 +1,0 @@
-port: __LIVEKIT_SIGNAL_PORT__
-rtc:
-  tcp_port: __LIVEKIT_TCP_PORT__
-  port_range_start: __LIVEKIT_UDP_PORT_START__
-  port_range_end: __LIVEKIT_UDP_PORT_END__
-keys:
-  __LIVEKIT_API_KEY__: __LIVEKIT_API_SECRET__
-logging:
-  level: info
