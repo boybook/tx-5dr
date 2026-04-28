@@ -11,7 +11,7 @@ import {
 } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { api, ApiError } from '@tx5dr/core';
-import { useConnection, useRadioConnectionState, useRadioState } from '../../store/radioStore';
+import { useConnection, useOperators, useRadioConnectionState, useRadioState } from '../../store/radioStore';
 import { useHasMinRole, useCan, useAbility } from '../../store/authStore';
 import { UserRole, type PresetFrequency } from '@tx5dr/contracts';
 import { subject as caslSubject } from '@casl/ability';
@@ -19,6 +19,7 @@ import { showErrorToast } from '../../utils/errorToast';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
 import { isCoreCapabilityAvailable } from '../../utils/radioControl';
+import { resetOperatorsForOperatingStateChange } from '../../utils/operatorReset';
 import { FrequencyPresetAddModal } from '../settings/FrequencyPresetAddModal';
 
 const logger = createLogger('VoiceFrequencyControl');
@@ -173,6 +174,7 @@ interface FrequencyPreset {
 export const VoiceFrequencyControl: React.FC = () => {
   const { t } = useTranslation('voice');
   const connection = useConnection();
+  const { operators } = useOperators();
   const radioConnection = useRadioConnectionState();
   const radio = useRadioState();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
@@ -202,6 +204,13 @@ export const VoiceFrequencyControl: React.FC = () => {
   const FREQ_MATCH_TOLERANCE_HZ = 10;
   const FREQ_DEBOUNCE_MS = 50;
 
+  const resetOperatorsAfterOperatingStateChange = useCallback(() => {
+    resetOperatorsForOperatingStateChange({
+      operators,
+      radioService: connection.state.radioService,
+    });
+  }, [connection.state.radioService, operators]);
+
   // Accept a server-pushed frequency, honoring any pending local intent.
   // Server echoes (via WS frequencyChanged OR global radio store sync) can lag behind
   // rapid user edits — if a pending intent exists and the echo doesn't match it within
@@ -229,17 +238,20 @@ export const VoiceFrequencyControl: React.FC = () => {
     const freq = pending.intendedFrequency;
     pendingFreqRef.current = { intendedFrequency: freq, sentAt: Date.now() };
     try {
-      await api.setRadioFrequency({
+      const response = await api.setRadioFrequency({
         frequency: freq,
         mode: 'VOICE',
         band: overrides?.band ?? 'Custom',
         description: overrides?.description ?? `${(freq / 1000000).toFixed(3)} MHz`,
         radioMode: overrides?.radioMode ?? currentRadioModeRef.current,
       });
+      if (response.success) {
+        resetOperatorsAfterOperatingStateChange();
+      }
     } catch (error) {
       logger.error('Failed to set frequency:', error);
     }
-  }, []);
+  }, [resetOperatorsAfterOperatingStateChange]);
 
   // Apply a new frequency from digit edits. Updates UI immediately, marks pending,
   // and coalesces rapid consecutive edits via a 50ms trailing debounce.
@@ -518,6 +530,7 @@ export const VoiceFrequencyControl: React.FC = () => {
         if (pendingFreqRef.current) {
           pendingFreqRef.current = { intendedFrequency: preset.frequency, sentAt: Date.now() };
         }
+        resetOperatorsAfterOperatingStateChange();
         addToast({
           title: t('frequency.switchSuccess'),
           description: t('frequency.switched', { freq: (preset.frequency / 1000000).toFixed(3) }),

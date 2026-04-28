@@ -3,7 +3,7 @@ import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, Pop
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faSatelliteDish, faPowerOff } from '@fortawesome/free-solid-svg-icons';
-import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState, useAudioSidecarState, useRadioState } from '../../../store/radioStore';
+import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState, useAudioSidecarState, useRadioState, useOperators } from '../../../store/radioStore';
 import type { AudioSidecarStatusPayload } from '@tx5dr/contracts';
 import { AudioSidecarStatus } from '@tx5dr/contracts';
 import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
@@ -35,6 +35,7 @@ import type { VoiceCaptureController } from '../../../hooks/useVoiceCaptureContr
 import {
   presentRealtimeConnectivityFailure,
 } from '../../../realtime/realtimeConnectivity';
+import { resetOperatorsForOperatingStateChange } from '../../../utils/operatorReset';
 
 const logger = createLogger('RadioControl');
 
@@ -489,6 +490,7 @@ interface RadioControlProps {
 export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings, voiceCaptureController }) => {
   const { t, i18n } = useTranslation('radio');
   const connection = useConnection();
+  const { operators } = useOperators();
   const radioConnection = useRadioConnectionState();
   const radioMode = useRadioModeState();
   const { pttStatus, voicePttLock } = usePTTState();
@@ -563,6 +565,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const [customFrequencyError, setCustomFrequencyError] = useState('');
   const [isSettingCustomFrequency, setIsSettingCustomFrequency] = useState(false);
   const [customFrequencyOption, setCustomFrequencyOption] = useState<FrequencyOption | null>(null); // 保存自定义频率选项
+
+  const resetOperatorsAfterOperatingStateChange = React.useCallback(() => {
+    resetOperatorsForOperatingStateChange({
+      operators,
+      radioService: connection.state.radioService,
+    });
+  }, [connection.state.radioService, operators]);
 
   useEffect(() => {
     if (!canOpenRadioControl && isControlPanelOpen) {
@@ -919,6 +928,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       try {
         // Use WSClient to send mode switch command
         connection.state.radioService?.wsClientInstance.setMode({ name: 'VOICE' } as ModeDescriptor);
+        resetOperatorsAfterOperatingStateChange();
         logger.info('Mode switch requested: VOICE');
       } catch (error) {
         logger.error('Failed to switch to VOICE mode:', error);
@@ -935,6 +945,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     try {
       const response = await api.switchMode(selectedMode);
       if (response.success) {
+        resetOperatorsAfterOperatingStateChange();
         logger.info(`Mode switched to: ${selectedMode.name}`);
       }
     } catch (error) {
@@ -1116,6 +1127,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
         setIsCustomFrequencyModalOpen(false);
         setCustomFrequencyInput('');
         setCustomFrequencyError('');
+        resetOperatorsAfterOperatingStateChange();
 
         // 更新当前频率显示
         setCurrentFrequency(String(frequency));
@@ -1258,6 +1270,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
       if (!response.success) {
         logger.debug('Auto set frequency failed:', response.message);
+        return;
       }
     } catch (error) {
       logger.debug('Auto set frequency failed:', error);
@@ -1340,6 +1353,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       if (response.success) {
         setCurrentFrequency(selectedFrequencyKey);
         setCustomFrequencyOption(null);
+        resetOperatorsAfterOperatingStateChange();
 
         const successMessage = selectedFrequency.radioMode
           ? t('frequency.switchedWithMode', { label: selectedFrequency.label, mode: selectedFrequency.radioMode })
