@@ -48,8 +48,8 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
       onFrameEnqueued: ({ queueDepthFrames, queuedAudioMs }) => {
         this.diagnostics.noteQueueState(queueDepthFrames, queuedAudioMs);
       },
-      onFrameDropped: ({ queueDepthFrames, queuedAudioMs }) => {
-        this.diagnostics.noteDropped(queueDepthFrames, queuedAudioMs);
+      onFrameDropped: ({ queueDepthFrames, queuedAudioMs, reason }) => {
+        this.diagnostics.noteDropped(queueDepthFrames, queuedAudioMs, reason);
       },
       onFrameProcessed: (stats) => {
         this.diagnostics.noteProcessed(stats);
@@ -103,10 +103,12 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
 
     try {
       this.audioStreamManager.clearVoicePlaybackQueue();
+      this.audioStreamManager.setVoiceTxOutputEnabled(false);
       this.diagnostics.startSession(clientId, label);
 
       // 2. Activate radio PTT
       await this.radioManager.setPTT(true);
+      this.audioStreamManager.setVoiceTxOutputEnabled(true);
 
       // 3. Broadcast PTT status (frontend handles monitor muting via gain node)
       this.emit('pttStatusChanged', { isTransmitting: true, operatorIds: [], source: this.getPttSource(clientId) });
@@ -118,6 +120,7 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
       logger.error('Failed to start voice transmission, rolling back', err);
       try { await this.radioManager.setPTT(false); } catch { /* best effort */ }
       this.pttLockManager.releaseLock(clientId);
+      this.audioStreamManager.setVoiceTxOutputEnabled(false);
       this.audioStreamManager.clearVoicePlaybackQueue();
       this.diagnostics.endSession();
       return { success: false, reason: 'Failed to activate PTT' };
@@ -198,6 +201,7 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
       logger.error('Failed to deactivate radio PTT', err);
     }
 
+    this.audioStreamManager.setVoiceTxOutputEnabled(false);
     this.audioStreamManager.clearVoicePlaybackQueue();
     this.diagnostics.endSession();
 

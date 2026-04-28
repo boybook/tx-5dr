@@ -12,7 +12,6 @@ import { ResourceManager, type SimplifiedResourceConfig } from '../utils/Resourc
 import { IcomWlanAudioAdapter } from '../audio/IcomWlanAudioAdapter.js';
 import { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.js';
 import { AudioDeviceManager } from '../audio/audio-device-manager.js';
-import type { AudioMonitorService } from '../audio/AudioMonitorService.js';
 import type { AudioSidecarController } from './AudioSidecarController.js';
 import {
   createEngineActor,
@@ -99,10 +98,6 @@ export class EngineLifecycle {
 
   getIsPTTActive(): boolean {
     return this.deps.subsystems.transmissionPipeline.getIsPTTActive();
-  }
-
-  getAudioMonitorService(): AudioMonitorService | null {
-    return this.deps.getAudioSidecar().getAudioMonitorService();
   }
 
   getOpenWebRXAudioAdapter(): OpenWebRXAudioAdapter | null {

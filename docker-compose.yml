@@ -1,8 +1,6 @@
-# TX-5DR 独立模式（Standalone）
-# 使用 WebSocket 音频传输，所有功能完全可用
-# 启动：docker compose up -d
-#
-# 如需 LiveKit 低延迟语音，请改用 docker-compose.livekit.yml
+# TX-5DR standalone mode
+# Realtime voice defaults to rtc-data-audio with ws-compat fallback.
+# Start: docker compose up -d
 
 services:
   tx5dr:
@@ -12,6 +10,7 @@ services:
     ports:
       - "8076:80"
       - "8443:443"   # HTTPS（自签名证书，可替换 ./data/ssl/ 中的证书）
+      - "50110:50110/udp" # rtc-data-audio WebRTC DataChannel UDP
       # rigctld 兼容桥接（供 N1MM Logger+ / WSJT-X / JTDX 使用）
       # 需要在 Web UI → 系统设置 → Rigctld 桥接 中启用，并将监听地址改为 0.0.0.0
       - "4532:4532"
@@ -51,7 +50,9 @@ services:
       - TX5DR_DATA_DIR=/app/data
       - TX5DR_LOGS_DIR=/app/data/logs
       - TX5DR_CACHE_DIR=/app/data/cache
-      # 音频环境变量
+      # 实时音频与音频环境变量
+      - RTC_DATA_AUDIO_UDP_PORT=50110
+      - RTC_DATA_AUDIO_ICE_UDP_MUX=1
       - PULSE_RUNTIME_PATH=/run/user/1000/pulse
       - PULSE_STATE_PATH=/var/lib/pulse
     # 音频(audio)和串口(dialout)设备访问

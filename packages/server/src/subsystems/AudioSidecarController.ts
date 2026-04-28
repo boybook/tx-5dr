@@ -6,7 +6,6 @@ import {
   type DigitalRadioEngineEvents,
 } from '@tx5dr/contracts';
 import { AudioStreamManager } from '../audio/AudioStreamManager.js';
-import { AudioMonitorService } from '../audio/AudioMonitorService.js';
 import type { AudioVolumeController } from './AudioVolumeController.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
@@ -28,7 +27,7 @@ export interface AudioSidecarDeps {
  * 本地音频旁路控制器。
  *
  * 负责：
- * - 在引擎 RUNNING 后 fire-and-forget 地启动本地音频流（input/output/monitor）。
+ * - 在引擎 RUNNING 后 fire-and-forget 地启动本地音频流（input/output）。
  * - 启动失败按指数退避无限重试，不阻塞引擎主状态机。
  * - 运行时丢失（设备拔出/驱动错误）同样触发重试。
  * - 通过 `audioSidecarStatusChanged` 事件向前端广播当前状态。
@@ -45,10 +44,8 @@ export class AudioSidecarController {
   private lastError: AudioSidecarError | null = null;
   private deviceName: string | null = null;
 
-  private audioMonitorService: AudioMonitorService | null = null;
   private pendingAttempt = 0;
   private audioStreamErrorHandler: ((error: Error) => void) | null = null;
-  private txMonitorAudioHandler: ((data: { samples: Float32Array; sampleRate: number }) => void) | null = null;
   private isStopping = false;
 
   constructor(private deps: AudioSidecarDeps) {}
@@ -76,13 +73,13 @@ export class AudioSidecarController {
    * 取消所有 timer、关闭音频资源、停止 voice session，回到 IDLE。
    */
   async stop(reason = 'engine-stopped'): Promise<void> {
-    if (this.status === AudioSidecarStatus.IDLE && !this.retryTimer && !this.audioMonitorService) {
+    if (this.status === AudioSidecarStatus.IDLE && !this.retryTimer) {
       return;
     }
     this.isStopping = true;
     logger.info('stopping audio sidecar', { reason, previousStatus: this.status });
     this.clearRetryTimer();
-    await this.teardownAudio({ destroyMonitor: true });
+    await this.teardownAudio();
     this.retryAttempt = 0;
     this.lastError = null;
     this.deviceName = null;
@@ -114,10 +111,6 @@ export class AudioSidecarController {
 
   getStatus(): AudioSidecarStatus {
     return this.status;
-  }
-
-  getAudioMonitorService(): AudioMonitorService | null {
-    return this.audioMonitorService;
   }
 
   buildStatusPayload(): AudioSidecarStatusPayload {
@@ -156,19 +149,10 @@ export class AudioSidecarController {
     }
 
     if (attemptId !== this.pendingAttempt || this.isStopping) {
-      await this.teardownAudio({ destroyMonitor: false });
+      await this.teardownAudio();
       return;
     }
 
-    // Reuse the existing AudioMonitorService across retries so downstream
-    // consumers (LiveKit bridge, WS/PCM clients) keep their event
-    // subscriptions alive. The monitor only references audioProvider (created
-    // once in AudioStreamManager's constructor) and idles while audio is
-    // paused, so it is safe to keep attached.
-    if (!this.audioMonitorService) {
-      this.audioMonitorService = new AudioMonitorService(this.deps.audioStreamManager.getAudioProvider());
-    }
-    this.attachTxMonitorInjection();
     this.attachAudioStreamErrorListener();
     this.deps.audioVolumeController.restoreGainForCurrentSlot();
 
@@ -222,21 +206,8 @@ export class AudioSidecarController {
     return RETRY_DELAYS_MS[idx] ?? STEADY_RETRY_MS;
   }
 
-  private async teardownAudio({ destroyMonitor }: { destroyMonitor: boolean }): Promise<void> {
+  private async teardownAudio(): Promise<void> {
     this.detachAudioStreamErrorListener();
-
-    // Only destroy the monitor when the sidecar is being fully stopped
-    // (engine shutdown / destroy). During a runtime loss + retry the monitor
-    // stays alive so downstream consumers keep their subscriptions.
-    if (destroyMonitor && this.audioMonitorService) {
-      this.detachTxMonitorInjection();
-      try {
-        this.audioMonitorService.destroy();
-      } catch (err) {
-        logger.warn('failed to destroy AudioMonitorService', err);
-      }
-      this.audioMonitorService = null;
-    }
 
     try {
       await this.deps.audioStreamManager.stopOutput();
@@ -270,26 +241,6 @@ export class AudioSidecarController {
     this.deps.audioStreamManager.on('error', handler);
   }
 
-  private attachTxMonitorInjection(): void {
-    if (this.txMonitorAudioHandler || !this.audioMonitorService) return;
-
-    // Keep TX monitor injection as an explicit side path:
-    // AudioStreamManager emits only chunks that were submitted to TX output,
-    // and AudioMonitorService broadcasts them without writing RX ring buffers.
-    const monitor = this.audioMonitorService;
-    const handler = (data: { samples: Float32Array; sampleRate: number }) => {
-      monitor.injectTxMonitorAudio(data.samples, data.sampleRate);
-    };
-    this.deps.audioStreamManager.on('txMonitorAudioData', handler);
-    this.txMonitorAudioHandler = handler;
-  }
-
-  private detachTxMonitorInjection(): void {
-    if (!this.txMonitorAudioHandler) return;
-    this.deps.audioStreamManager.off('txMonitorAudioData', this.txMonitorAudioHandler);
-    this.txMonitorAudioHandler = null;
-  }
-
   private detachAudioStreamErrorListener(): void {
     if (!this.audioStreamErrorHandler) return;
     this.deps.audioStreamManager.off('error', this.audioStreamErrorHandler);
@@ -298,9 +249,7 @@ export class AudioSidecarController {
 
   private async handleRuntimeLoss(): Promise<void> {
     if (this.isStopping) return;
-    // Keep the AudioMonitorService alive so LiveKit / WS-PCM consumers don't
-    // lose their event subscriptions while we reopen the local audio stream.
-    await this.teardownAudio({ destroyMonitor: false });
+    await this.teardownAudio();
     if (this.isStopping) return;
     this.retryAttempt = 1;
     this.setStatus(AudioSidecarStatus.RETRYING);

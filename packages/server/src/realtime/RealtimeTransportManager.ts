@@ -1,7 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { WebSocket } from 'ws';
 import type {
-  RealtimeConnectivityHints,
   RealtimeScope,
   RealtimeSessionDirection,
   RealtimeSessionResponse,
@@ -12,16 +11,16 @@ import type {
 import { UserRole as UserRoleEnum } from '@tx5dr/contracts';
 import { USER_ROLE_LEVEL } from '@tx5dr/contracts';
 import { float32ToInt16Pcm, encodeWsCompatAudioFrame, decodeWsCompatAudioFrame, int16ToFloat32Pcm } from '@tx5dr/core';
-import type { AudioMonitorService } from '../audio/AudioMonitorService.js';
 import { ConfigManager } from '../config/config-manager.js';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
-import { OpenWebRXStationManager } from '../openwebrx/OpenWebRXStationManager.js';
 import { createLogger } from '../utils/logger.js';
-import { LiveKitAuthService } from './LiveKitAuthService.js';
-import { LiveKitBridgeManager } from './LiveKitBridgeManager.js';
-import { LiveKitConfig } from './LiveKitConfig.js';
 import type { VoiceTxFrameMeta } from '../voice/VoiceTxDiagnostics.js';
 import { resolveBrowserFacingRequestOrigin } from './requestOrigin.js';
+import { handleRealtimeClockSyncControlMessage } from './RealtimeClockSyncControl.js';
+import { RealtimeTransportAudioDecimator } from './RealtimeTransportAudioDecimator.js';
+import type { RealtimeRxAudioRouter } from './RealtimeRxAudioRouter.js';
+import type { RealtimeAudioFrame, RealtimeRxAudioSourceStats } from './RealtimeRxAudioSource.js';
+import { buildRtcDataAudioConnectivityHints, RtcDataAudioManager } from './RtcDataAudioManager.js';
 
 const logger = createLogger('RealtimeTransportManager');
 const COMPAT_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -42,10 +41,8 @@ interface CompatSocketContext {
 type RealtimeTransportSelectionReason =
   | 'client-override'
   | 'server-policy'
-  | 'bridge-unhealthy'
-  | 'livekit-disabled'
-  | 'runtime-unavailable'
-  | 'default-livekit';
+  | 'default-rtc-data-audio'
+  | 'rtc-data-audio-unavailable';
 
 export interface IssueRealtimeSessionParams {
   scope: RealtimeScope;
@@ -56,9 +53,7 @@ export interface IssueRealtimeSessionParams {
   operatorIds?: string[];
   label?: string | null;
   clientKind: string;
-  publicLiveKitUrl?: string;
   previewSessionId?: string;
-  roomName: string;
   requestHeaders?: Record<string, string | string[] | undefined>;
   requestProtocol?: string;
 }
@@ -71,8 +66,11 @@ function buildCompatIdentity(direction: RealtimeSessionDirection, stablePart: st
 export class RealtimeTransportManager {
   private static instance: RealtimeTransportManager | null = null;
 
-  static initialize(engine: DigitalRadioEngine, liveKitBridgeManager: LiveKitBridgeManager): RealtimeTransportManager {
-    RealtimeTransportManager.instance = new RealtimeTransportManager(engine, liveKitBridgeManager);
+  static initialize(
+    engine: DigitalRadioEngine,
+    rxAudioRouter: RealtimeRxAudioRouter,
+  ): RealtimeTransportManager {
+    RealtimeTransportManager.instance = new RealtimeTransportManager(engine, rxAudioRouter);
     return RealtimeTransportManager.instance;
   }
 
@@ -83,44 +81,54 @@ export class RealtimeTransportManager {
     return RealtimeTransportManager.instance;
   }
 
-  private readonly authService = new LiveKitAuthService();
   private readonly compatSessions = new Map<string, CompatSessionRecord>();
   private readonly compatSocketContexts = new WeakMap<WebSocket, CompatSocketContext>();
-  private readonly stationManager = OpenWebRXStationManager.getInstance();
+  private readonly rtcDataAudioManager: RtcDataAudioManager;
 
   private constructor(
     private readonly engine: DigitalRadioEngine,
-    private readonly liveKitBridgeManager: LiveKitBridgeManager,
-  ) {}
+    private readonly rxAudioRouter: RealtimeRxAudioRouter,
+  ) {
+    this.rtcDataAudioManager = new RtcDataAudioManager(engine, rxAudioRouter);
+  }
 
   async issueSession(params: IssueRealtimeSessionParams): Promise<RealtimeSessionResponse> {
-    const hints = LiveKitConfig.getConnectivityHints({
+    const hints = buildRtcDataAudioConnectivityHints({
       headers: params.requestHeaders,
-      protocol: params.requestProtocol,
+      requestProtocol: params.requestProtocol,
     });
+    const rtcDataAudioAvailable = await this.rtcDataAudioManager.isAvailable();
     const selection = this.determineTransportSelection(
       params.scope,
       params.direction,
       params.transportOverride,
+      rtcDataAudioAvailable,
     );
     const forceCompat = selection.forcedCompatibilityMode;
     const preferredTransport = selection.transport;
-    const liveKitOffer = forceCompat || params.transportOverride === 'ws-compat'
-      ? null
-      : await this.buildLiveKitOffer(params, hints);
+
     const compatOffer = this.buildCompatOffer(params);
+    const rtcDataAudioOffer = !forceCompat && (preferredTransport === 'rtc-data-audio' || (!params.transportOverride && params.scope === 'radio'))
+      ? await this.rtcDataAudioManager.buildOffer(params)
+      : null;
 
     const offers: RealtimeTransportOffer[] = [];
-    const preferredOffer = preferredTransport === 'livekit' ? liveKitOffer : compatOffer;
-    const secondaryOffer = preferredTransport === 'livekit' ? compatOffer : liveKitOffer;
+    const pushOffer = (offer: RealtimeTransportOffer | null): void => {
+      if (!offer) return;
+      if (!offers.some((existing) => existing.transport === offer.transport)) {
+        offers.push(offer);
+      }
+    };
 
-    if (preferredOffer) {
-      offers.push(preferredOffer);
-    }
-    // Only include a secondary LiveKit offer if runtime is actually available
-    if (secondaryOffer && secondaryOffer.transport !== preferredTransport && !params.transportOverride) {
-      if (secondaryOffer.transport !== 'livekit' || LiveKitConfig.isRuntimeAvailable()) {
-        offers.push(secondaryOffer);
+    if (preferredTransport === 'rtc-data-audio') {
+      pushOffer(rtcDataAudioOffer);
+      if (!params.transportOverride) {
+        pushOffer(compatOffer);
+      }
+    } else {
+      pushOffer(compatOffer);
+      if (!params.transportOverride && rtcDataAudioOffer && selection.reason !== 'server-policy') {
+        pushOffer(rtcDataAudioOffer);
       }
     }
 
@@ -137,6 +145,8 @@ export class RealtimeTransportManager {
       forcedCompatibilityMode: forceCompat,
       selectionReason: selection.reason,
       offers: offers.map((offer) => offer.transport),
+      rtcDataAudioAvailable,
+      rtcDataAudioUnavailableReason: this.rtcDataAudioManager.getUnavailableReason(),
     });
 
     return {
@@ -152,11 +162,20 @@ export class RealtimeTransportManager {
   }
 
   getPreferredTransport(scope: RealtimeScope, direction: RealtimeSessionDirection): RealtimeTransportKind {
-    return this.determineTransportSelection(scope, direction).transport;
+    return this.determineTransportSelection(
+      scope,
+      direction,
+      undefined,
+      this.rtcDataAudioManager.isAvailableCached(),
+    ).transport;
   }
 
-  getScopeHealth(scope: RealtimeScope): { healthy: boolean; updatedAt: number; issueCode: string | null } {
-    return this.liveKitBridgeManager.getScopeHealth(scope);
+  getSourceStats(scope: RealtimeScope, previewSessionId?: string): RealtimeRxAudioSourceStats | null {
+    return this.rxAudioRouter.getLatestStats(scope, previewSessionId);
+  }
+
+  acceptRtcDataAudioConnection(socket: WebSocket, rawUrl: string): void {
+    this.rtcDataAudioManager.acceptConnection(socket, rawUrl);
   }
 
   acceptCompatConnection(socket: WebSocket, rawUrl: string): void {
@@ -177,45 +196,73 @@ export class RealtimeTransportManager {
     this.compatSessions.delete(token);
     const context: CompatSocketContext = {};
     this.compatSocketContexts.set(socket, context);
+    const sendClockSyncJson = (payload: Record<string, unknown>): void => {
+      if (socket.readyState === 1) {
+        socket.send(JSON.stringify(payload));
+      }
+    };
 
     if (session.direction === 'recv') {
-      const monitor = this.resolveAudioMonitor(session.scope, session.previewSessionId);
-      if (!monitor) {
+      const source = this.rxAudioRouter.resolveSource(session.scope, session.previewSessionId);
+      if (!source) {
         socket.close(4004, 'Realtime audio source is not available');
         return;
       }
 
       let sequence = 0;
-      const handleAudioData = (data: {
-        audioData: ArrayBuffer;
-        sampleRate: number;
-        samples: number;
-        timestamp: number;
-      }) => {
+      const decimator = new RealtimeTransportAudioDecimator();
+      let hasLoggedFirstCompatDownlinkFrame = false;
+      const handleAudioData = (frame: RealtimeAudioFrame) => {
         if (socket.readyState !== 1) {
           return;
         }
 
         try {
-          const pcm = float32ToInt16Pcm(new Float32Array(data.audioData));
+          const transportFrame = decimator.process(frame);
+          if (
+            transportFrame.samples.length === 0
+            || !Number.isFinite(transportFrame.sampleRate)
+            || transportFrame.sampleRate <= 0
+          ) {
+            return;
+          }
+          const pcm = float32ToInt16Pcm(transportFrame.samples);
+          const serverSentAtMs = Date.now();
           const payload = encodeWsCompatAudioFrame({
             sequence: sequence++,
-            timestampMs: data.timestamp,
-            sampleRate: data.sampleRate,
-            channels: 1,
-            samplesPerChannel: data.samples,
+            timestampMs: transportFrame.timestamp,
+            serverSentAtMs,
+            sampleRate: transportFrame.sampleRate,
+            channels: transportFrame.channels,
+            samplesPerChannel: transportFrame.samplesPerChannel,
             pcm,
           });
           socket.send(Buffer.from(payload));
+          if (!hasLoggedFirstCompatDownlinkFrame) {
+            hasLoggedFirstCompatDownlinkFrame = true;
+            logger.info('First compatibility downlink audio frame sent', {
+              scope: session.scope,
+              sourceId: source.id,
+              sourcePath: frame.sourceKind,
+              nativeSourceKind: frame.nativeSourceKind ?? null,
+              sourceSampleRate: transportFrame.inputSampleRate,
+              transportSampleRate: transportFrame.sampleRate,
+              downsampleFactor: transportFrame.downsampleFactor,
+              samplesPerChannel: transportFrame.samplesPerChannel,
+            });
+          }
         } catch (error) {
           logger.debug('Failed to send compatibility audio frame', error);
         }
       };
 
-      monitor.on('audioData', handleAudioData);
+      source.on('audioFrame', handleAudioData);
       context.cleanup = () => {
-        monitor.off('audioData', handleAudioData);
+        source.off('audioFrame', handleAudioData);
       };
+      socket.on('message', (payload: Buffer | ArrayBuffer | Buffer[]) => {
+        handleRealtimeClockSyncControlMessage(payload, sendClockSyncJson);
+      });
       socket.send(JSON.stringify({
         type: 'ready',
         transport: 'ws-compat',
@@ -233,6 +280,9 @@ export class RealtimeTransportManager {
 
       let hasLoggedFirstCompatUplinkFrame = false;
       socket.on('message', (payload: Buffer | ArrayBuffer | Buffer[]) => {
+        if (handleRealtimeClockSyncControlMessage(payload, sendClockSyncJson)) {
+          return;
+        }
         if (!session.participantIdentity) {
           return;
         }
@@ -263,7 +313,7 @@ export class RealtimeTransportManager {
           }
           const serverReceivedAtMs = Date.now();
           const wrappedNow = serverReceivedAtMs >>> 0;
-          const transportDelta = (wrappedNow - decoded.timestampMs) >>> 0;
+          const transportDelta = decoded.timestampMs > 0 ? ((wrappedNow - decoded.timestampMs) >>> 0) : Number.POSITIVE_INFINITY;
           const clientSentAtMs = transportDelta <= 60_000
             ? serverReceivedAtMs - transportDelta
             : null;
@@ -297,6 +347,7 @@ export class RealtimeTransportManager {
     scope: RealtimeScope,
     direction: RealtimeSessionDirection,
     transportOverride?: RealtimeTransportKind,
+    rtcDataAudioAvailable = this.rtcDataAudioManager.isAvailableCached(),
   ): {
     transport: RealtimeTransportKind;
     forcedCompatibilityMode: boolean;
@@ -304,9 +355,8 @@ export class RealtimeTransportManager {
     reason: RealtimeTransportSelectionReason;
   } {
     const policy = ConfigManager.getInstance().getRealtimeTransportPolicy();
-    const liveKitEnabled = LiveKitConfig.isEnabled();
 
-    // OpenWebRX preview always uses ws-compat — no LiveKit bridge for this scope
+    // OpenWebRX preview remains on ws-compat in rtc-data-audio v1.
     if (scope === 'openwebrx-preview') {
       return {
         transport: 'ws-compat',
@@ -334,93 +384,37 @@ export class RealtimeTransportManager {
       };
     }
 
-    if (!liveKitEnabled) {
-      return {
-        transport: 'ws-compat',
-        forcedCompatibilityMode: true,
-        policy,
-        reason: 'livekit-disabled',
-      };
+    if (transportOverride === 'rtc-data-audio') {
+      return rtcDataAudioAvailable
+        ? {
+            transport: 'rtc-data-audio',
+            forcedCompatibilityMode: false,
+            policy,
+            reason: 'client-override',
+          }
+        : {
+            transport: 'ws-compat',
+            forcedCompatibilityMode: false,
+            policy,
+            reason: 'rtc-data-audio-unavailable',
+          };
     }
 
-    // Runtime availability check: covers both send and recv directions
-    if (!LiveKitConfig.isRuntimeAvailable()) {
+    if (rtcDataAudioAvailable) {
       return {
-        transport: 'ws-compat',
+        transport: 'rtc-data-audio',
         forcedCompatibilityMode: false,
         policy,
-        reason: 'runtime-unavailable',
+        reason: 'default-rtc-data-audio',
       };
-    }
-
-    if (transportOverride === 'livekit') {
-      return {
-        transport: 'livekit',
-        forcedCompatibilityMode: false,
-        policy,
-        reason: 'client-override',
-      };
-    }
-
-    if (direction === 'recv') {
-      const health = this.liveKitBridgeManager.getScopeHealth(scope);
-      if (!health.healthy) {
-        return {
-          transport: 'ws-compat',
-          forcedCompatibilityMode: false,
-          policy,
-          reason: 'bridge-unhealthy',
-        };
-      }
     }
 
     return {
-      transport: 'livekit',
+      transport: 'ws-compat',
       forcedCompatibilityMode: false,
       policy,
-      reason: 'default-livekit',
+      reason: 'rtc-data-audio-unavailable',
     };
-  }
-
-  private async buildLiveKitOffer(
-    params: IssueRealtimeSessionParams,
-    hints: RealtimeConnectivityHints,
-  ): Promise<RealtimeTransportOffer | null> {
-    if (!LiveKitConfig.isEnabled() || !LiveKitConfig.isRuntimeAvailable()) {
-      return null;
-    }
-
-    try {
-      const tokenResponse = this.authService.issueClientToken({
-        roomName: params.roomName,
-        scope: params.scope,
-        publish: params.direction === 'send',
-        publicWsUrl: params.publicLiveKitUrl,
-        role: params.role,
-        tokenId: params.tokenId,
-        operatorIds: params.operatorIds,
-        label: params.label,
-        clientKind: params.clientKind,
-        previewSessionId: params.previewSessionId,
-      });
-      const finalized = await this.authService.finalizeToken(tokenResponse);
-      return {
-        transport: 'livekit',
-        direction: params.direction,
-        url: finalized.url || hints.signalingUrl,
-        token: finalized.token,
-        participantIdentity: finalized.participantIdentity,
-        participantName: finalized.participantName,
-        roomName: finalized.roomName,
-      };
-    } catch (error) {
-      logger.warn('Failed to build LiveKit realtime offer, compatibility mode will be used', {
-        scope: params.scope,
-        direction: params.direction,
-        error,
-      });
-      return null;
-    }
   }
 
   private buildCompatOffer(params: IssueRealtimeSessionParams): RealtimeTransportOffer {
@@ -449,7 +443,6 @@ export class RealtimeTransportManager {
       token,
       participantIdentity,
       participantName: params.label ?? null,
-      roomName: params.roomName,
     };
   }
 
@@ -467,15 +460,4 @@ export class RealtimeTransportManager {
     return `${wsProtocol}://${origin.host}/api/realtime/ws-compat`;
   }
 
-  private resolveAudioMonitor(scope: RealtimeScope, previewSessionId?: string): AudioMonitorService | null {
-    if (scope === 'radio') {
-      return this.engine.getAudioMonitorService();
-    }
-
-    const status = this.stationManager.getListenStatus();
-    if (!status?.isListening || !status.previewSessionId || status.previewSessionId !== previewSessionId) {
-      return null;
-    }
-    return this.stationManager.getAudioMonitorService();
-  }
 }

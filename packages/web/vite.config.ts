@@ -85,9 +85,6 @@ export default defineConfig({
     allowedHosts: true,
     proxy: {
       '/api': createProxyOptions('http://localhost:4000'),
-      '/livekit': createProxyOptions('http://localhost:7880', {
-        rewrite: (path) => path.replace(/^\/livekit(?=\/|$)/, '') || '/',
-      }),
     },
   },
 }); 

@@ -28,7 +28,6 @@ import { printAppPaths } from './utils/debug-paths.js';
 import { PhysicalRadioManager } from './radio/PhysicalRadioManager.js';
 import { FrequencyManager } from './radio/FrequencyManager.js';
 import { TransmissionTracker } from './transmission/TransmissionTracker.js';
-import { AudioMonitorService } from './audio/AudioMonitorService.js';
 import type { OpenWebRXAudioAdapter } from './openwebrx/OpenWebRXAudioAdapter.js';
 import { MemoryLeakDetector } from './utils/MemoryLeakDetector.js';
 import { ResourceManager } from './utils/ResourceManager.js';
@@ -394,8 +393,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.engineLifecycle;
   }
 
-  public getAudioMonitorService(): AudioMonitorService | null {
-    return this.audioSidecar.getAudioMonitorService();
+  public getAudioStreamManager(): AudioStreamManager {
+    return this.audioStreamManager;
   }
 
   public getAudioSidecar(): AudioSidecarController {

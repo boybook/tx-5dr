@@ -31,15 +31,15 @@
     },
     "realtimeConnectivityWarning": {
       "title": "Realtime Voice Connectivity Issue",
-      "description": "Realtime voice connectivity failed, so the client may be unable to hear or send audio.\n\nChecks:\n- Confirm LiveKit signaling port {{signalingPort}} is open\n- Confirm LiveKit ICE/TCP port {{rtcTcpPort}} is open\n- Confirm UDP range {{udpPortRange}} is reachable\n- Confirm the client can reach {{signalingUrl}}\n\nTechnical details: {{details}}"
+      "description": "Realtime voice connectivity failed, so the client may be unable to hear or send audio.\n\nChecks:\n- Confirm /api/realtime/rtc-data-audio signaling is reachable\n- Confirm rtc-data-audio UDP port {{localUdpPort}} is open or mapped\n- Confirm the configured public UDP endpoint is reachable\n- Confirm the client can reach {{signalingUrl}}\n\nTechnical details: {{details}}"
     },
-    "realtimeBridgeDown": {
+    "realtimeServiceDown": {
       "title": "Realtime Voice Service Issue",
-      "description": "The server-side realtime audio bridge failed, so clients may be unable to hear or send audio.\n\nChecks:\n- Confirm LiveKit signaling port {{signalingPort}} is open\n- Confirm LiveKit ICE/TCP port {{rtcTcpPort}} is open\n- Confirm UDP range {{udpPortRange}} is reachable\n- Confirm the client can reach {{signalingUrl}}\n\nTechnical details: {{details}}"
+      "description": "The server-side realtime audio service failed, so clients may be unable to hear or send audio.\n\nChecks:\n- Confirm /api/realtime/rtc-data-audio signaling is reachable\n- Confirm rtc-data-audio UDP port {{localUdpPort}} is open or mapped\n- Confirm the configured public UDP endpoint is reachable\n- Confirm the client can reach {{signalingUrl}}\n\nTechnical details: {{details}}"
     },
     "realtimeNoAudio": {
       "title": "Realtime Voice Has No Audio",
-      "description": "The realtime room is up, but the server is not receiving any audio frames to publish.\n\nChecks:\n- Verify the selected audio source is actually producing data\n- Confirm LiveKit signaling port {{signalingPort}} is open\n- Confirm LiveKit ICE/TCP port {{rtcTcpPort}} is open\n- Confirm UDP range {{udpPortRange}} is reachable\n- Confirm the client can reach {{signalingUrl}}\n\nTechnical details: {{details}}"
+      "description": "The realtime audio session is connected, but the server is not receiving any audio frames to publish.\n\nChecks:\n- Verify the selected audio source is actually producing data\n- Confirm /api/realtime/rtc-data-audio signaling is reachable\n- Confirm rtc-data-audio UDP port {{localUdpPort}} is open or mapped\n- Confirm the configured public UDP endpoint is reachable\n- Confirm the client can reach {{signalingUrl}}\n\nTechnical details: {{details}}"
     }
   }
 }

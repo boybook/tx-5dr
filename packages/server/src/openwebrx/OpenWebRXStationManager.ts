@@ -4,7 +4,7 @@ import type { ServerConfig } from '@openwebrx-js/api';
 import type { OpenWebRXStationConfig, OpenWebRXListenStatus, OpenWebRXTestResult } from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
 import { RingBufferAudioProvider } from '../audio/AudioBufferProvider.js';
-import { AudioMonitorService } from '../audio/AudioMonitorService.js';
+import { BufferedPreviewAudioService } from '../audio/BufferedPreviewAudioService.js';
 import { OpenWebRXProfileService } from './OpenWebRXProfileService.js';
 import { createLogger } from '../utils/logger.js';
 import { randomUUID } from 'crypto';
@@ -28,7 +28,7 @@ interface ListenSession {
   status: OpenWebRXListenStatus;
   smeterInterval: ReturnType<typeof setInterval> | null;
   audioProvider: RingBufferAudioProvider;
-  audioMonitorService: AudioMonitorService;
+  bufferedPreviewAudioService: BufferedPreviewAudioService;
 }
 
 /**
@@ -39,8 +39,8 @@ interface ListenSession {
  *   OpenWebRXClient audio event (12kHz Int16Array)
  *     → Float32Array conversion
  *     → RingBufferAudioProvider (12kHz ring buffer)
- *     → AudioMonitorService (20ms chunking, resample to 48kHz, sequence numbers)
- *     → LiveKit bridge (WebRTC audio room)
+ *     → BufferedPreviewAudioService (20ms chunking, resample to 16kHz, sequence numbers)
+ *     → Realtime transport publisher (WS/PCM preview)
  */
 export class OpenWebRXStationManager extends EventEmitter<OpenWebRXStationManagerEvents> {
   private static instance: OpenWebRXStationManager | null = null;
@@ -124,11 +124,11 @@ export class OpenWebRXStationManager extends EventEmitter<OpenWebRXStationManage
   // ===== Listen Session =====
 
   /**
-   * Get the AudioMonitorService for the active listen session.
-   * Used by WSServer to route audio data to the dedicated binary WS.
+   * Get the BufferedPreviewAudioService for the active listen session.
+   * Used by RealtimeRxAudioRouter for OpenWebRX preview playback.
    */
-  getAudioMonitorService(): AudioMonitorService | null {
-    return this.activeSession?.audioMonitorService ?? null;
+  getBufferedPreviewAudioService(): BufferedPreviewAudioService | null {
+    return this.activeSession?.bufferedPreviewAudioService ?? null;
   }
 
   async startListen(options: {
@@ -161,9 +161,9 @@ export class OpenWebRXStationManager extends EventEmitter<OpenWebRXStationManage
       isListening: false,
     };
 
-    // Create audio pipeline: RingBuffer → AudioMonitorService
+    // Create audio pipeline: RingBuffer → BufferedPreviewAudioService
     const audioProvider = new RingBufferAudioProvider(OPENWEBRX_SAMPLE_RATE, OPENWEBRX_SAMPLE_RATE * 5);
-    const audioMonitorService = new AudioMonitorService(audioProvider);
+    const bufferedPreviewAudioService = new BufferedPreviewAudioService(audioProvider);
 
     const session: ListenSession = {
       previewSessionId: status.previewSessionId!,
@@ -172,7 +172,7 @@ export class OpenWebRXStationManager extends EventEmitter<OpenWebRXStationManage
       status,
       smeterInterval: null,
       audioProvider,
-      audioMonitorService,
+      bufferedPreviewAudioService,
     };
 
     this.activeSession = session;
@@ -253,7 +253,7 @@ export class OpenWebRXStationManager extends EventEmitter<OpenWebRXStationManage
         status.smeterDb = level > 0 ? 10 * Math.log10(level) : -100;
       });
 
-      // Audio listener: write to RingBuffer (AudioMonitorService handles the rest)
+      // Audio listener: write to RingBuffer (BufferedPreviewAudioService handles the rest)
       let audioChunkCount = 0;
       client.on('audio', (pcm: Int16Array) => {
         audioChunkCount++;
@@ -345,7 +345,7 @@ export class OpenWebRXStationManager extends EventEmitter<OpenWebRXStationManage
       status.connected = false;
       status.isListening = false;
 
-      audioMonitorService.destroy();
+      bufferedPreviewAudioService.destroy();
       try { client.disconnect(); } catch { /* ignore */ }
       this.activeSession = null;
 
@@ -364,7 +364,7 @@ export class OpenWebRXStationManager extends EventEmitter<OpenWebRXStationManage
       clearInterval(session.smeterInterval);
     }
 
-    session.audioMonitorService.destroy();
+    session.bufferedPreviewAudioService.destroy();
 
     try {
       session.client.disconnect();

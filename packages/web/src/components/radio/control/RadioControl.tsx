@@ -573,8 +573,15 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     return t('monitor.transportWebrtc');
   }, [t]);
 
+  const formatMonitorSampleRate = React.useCallback((sampleRate: number | undefined): string => {
+    if (!sampleRate || !Number.isFinite(sampleRate)) {
+      return 'PCM';
+    }
+    return `PCM ${sampleRate >= 1000 ? `${(sampleRate / 1000).toFixed(sampleRate % 1000 === 0 ? 0 : 1)}k` : sampleRate}`;
+  }, []);
+
   const getNextMonitorTransport = React.useCallback((): RealtimeTransportKind => (
-    audioMonitor.transportKind === 'ws-compat' ? 'livekit' : 'ws-compat'
+    audioMonitor.transportKind === 'ws-compat' ? 'rtc-data-audio' : 'ws-compat'
   ), [audioMonitor.transportKind]);
 
   const getVoiceTransportLabel = React.useCallback((transport: RealtimeTransportKind | null | undefined): string => {
@@ -593,7 +600,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   const currentVoiceTransport = voiceCaptureController?.activeTransport ?? null;
   const effectiveVoiceTransport = currentVoiceTransport ?? voiceCaptureController?.preferredTransport ?? null;
-  const nextVoiceTransport = effectiveVoiceTransport === 'ws-compat' ? 'livekit' : 'ws-compat';
+  const nextVoiceTransport = effectiveVoiceTransport === 'ws-compat' ? 'rtc-data-audio' : 'ws-compat';
   const monitorActivationCta = React.useMemo(() => deriveMonitorActivationCtaState(
     radioMode.engineMode === 'voice',
     connection.state.isConnected,
@@ -661,32 +668,68 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     }
   }, [t, voiceTxDiagnostics?.display.bottleneckStage]);
 
-  const isLiveKitVoiceTx = voiceTxDiagnostics?.display.transport === 'livekit';
-  const softwareLatencyLabel = React.useMemo(() => {
-    switch (voiceTxDiagnostics?.display.softwareLatencyKind) {
-      case 'measured':
-        return t('voiceTx.softwareLatencyMeasured');
-      case 'estimated':
-        return t('voiceTx.softwareLatencyEstimated');
-      case 'partial':
-        return t('voiceTx.softwareLatencyPartial');
-      case 'unavailable':
-      default:
-        return t('voiceTx.softwareLatencyUnavailable');
+  const voiceTxLatencyBreakdownSummary = React.useMemo(() => {
+    if (!voiceTxDiagnostics) {
+      return '';
     }
-  }, [t, voiceTxDiagnostics?.display.softwareLatencyKind]);
 
-  const finalLatencyLabel = React.useMemo(() => {
-    switch (voiceTxDiagnostics?.display.estimatedFinalLatencyKind) {
+    return [
+      `${t('voiceTx.timingNetwork')} ${formatLatencyMetric(voiceTxDiagnostics.display.networkLatencyMs)}`,
+      `${t('voiceTx.timingServer')} ${formatLatencyMetric(voiceTxDiagnostics.display.serverPipelineMs)}`,
+      `${t('voiceTx.timingOutput')} ${formatLatencyMetric(voiceTxDiagnostics.display.outputBufferedMs)}`,
+    ].join(' · ');
+  }, [
+    formatLatencyMetric,
+    t,
+    voiceTxDiagnostics,
+  ]);
+
+  const voiceTxBufferingSummary = React.useMemo(() => {
+    if (!voiceTxDiagnostics) {
+      return '';
+    }
+
+    return [
+      `${t('voiceTx.startupShort')} ${formatLatencyMetric(voiceTxDiagnostics.display.startupMs)}`,
+      `${t('voiceTx.localBacklogShort')} ${formatLatencyMetric(voiceTxDiagnostics.display.localBacklogMs)}`,
+      `${t('voiceTx.jitterTargetShort')} ${formatLatencyMetric(voiceTxDiagnostics.serverIngress.jitterTargetMs)}`,
+    ].join(' · ');
+  }, [
+    formatLatencyMetric,
+    t,
+    voiceTxDiagnostics,
+  ]);
+
+  const voiceTxAnomalySummary = React.useMemo(() => {
+    if (!voiceTxDiagnostics) {
+      return '';
+    }
+
+    return [
+      `${t('voiceTx.dropShort')} ${formatIntegerMetric(voiceTxDiagnostics.display.droppedFrames)}`,
+      `${t('voiceTx.underrunShort')} ${formatIntegerMetric(voiceTxDiagnostics.display.underrunCount)}`,
+      voiceTxBottleneckLabel,
+    ].join(' · ');
+  }, [
+    formatIntegerMetric,
+    t,
+    voiceTxBottleneckLabel,
+    voiceTxDiagnostics,
+  ]);
+
+  const voiceTxEndToEndLabel = React.useMemo(() => {
+    switch (voiceTxDiagnostics?.display.endToEndLatencyKind) {
+      case 'measured':
+        return t('voiceTx.endToEndLatencyMeasured');
       case 'estimated':
-        return t('voiceTx.finalLatencyEstimated');
+        return t('voiceTx.endToEndLatencyEstimated');
       case 'partial':
-        return t('voiceTx.finalLatencyPartial');
+        return t('voiceTx.endToEndLatencyPartial');
       case 'unavailable':
       default:
-        return t('voiceTx.finalLatencyUnavailable');
+        return t('voiceTx.endToEndLatencyUnavailable');
     }
-  }, [t, voiceTxDiagnostics?.display.estimatedFinalLatencyKind]);
+  }, [t, voiceTxDiagnostics?.display.endToEndLatencyKind]);
 
   const handleSwitchVoiceTransport = React.useCallback(async () => {
     if (!voiceCaptureController || isSwitchingVoiceTransport) {
@@ -1522,44 +1565,59 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                             <>
                               <div className="flex justify-between items-center">
                                 {t('monitor.latency')}
-                                <span className={`font-mono ${
-                                  audioMonitor.stats.latencyMs < 50 ? 'text-success' :
-                                  audioMonitor.stats.latencyMs < 100 ? 'text-warning' :
-                                  'text-danger'
-                                }`}>
-                                  {audioMonitor.stats.latencyMs.toFixed(0)}ms
+                                <span
+                                  className={`font-mono ${
+                                    audioMonitor.stats.endToEndLatencyMs == null ? 'text-default-400' :
+                                    audioMonitor.stats.endToEndLatencyMs < 80 ? 'text-success' :
+                                    audioMonitor.stats.endToEndLatencyMs < 160 ? 'text-warning' :
+                                    'text-danger'
+                                  }`}
+                                  title={
+                                    audioMonitor.stats.endToEndLatencyMs == null
+                                      ? undefined
+                                      : `${t('monitor.sourceToSend')}: ${audioMonitor.stats.sourceToSendMs?.toFixed(0) ?? '-'}ms · ${t('monitor.transport')}: ${audioMonitor.stats.transportMs?.toFixed(0) ?? audioMonitor.stats.networkAgeMs?.toFixed(0) ?? '-'}ms · ${t('monitor.enqueue')}: ${audioMonitor.stats.mainToWorkletMs?.toFixed(0) ?? '-'}ms · ${t('monitor.buffer')}: ${audioMonitor.stats.playbackQueueMs.toFixed(0)}ms · ${t('monitor.output')}: ${audioMonitor.stats.outputDeviceLatencyMs.toFixed(0)}ms · RTT: ${audioMonitor.stats.clockRttMs?.toFixed(0) ?? '-'}ms`
+                                  }
+                                >
+                                  {audioMonitor.stats.endToEndLatencyMs == null
+                                    ? t('monitor.estimating')
+                                    : `${audioMonitor.stats.endToEndLatencyMs.toFixed(0)}ms`}
                                 </span>
                               </div>
 
                               <div className="flex justify-between items-center">
                                 {t('monitor.buffer')}
                                 <span className="font-mono text-default-400">
-                                  {audioMonitor.stats.bufferFillPercent.toFixed(0)}%
+                                  {audioMonitor.stats.playbackQueueMs.toFixed(0)}
+                                  /
+                                  {audioMonitor.stats.receiver?.targetBufferMs?.toFixed(0) ?? '-'}ms
                                 </span>
                               </div>
 
                               <div className="flex justify-between items-center">
                                 {t('monitor.active')}
-                                <div className={`w-2 h-2 rounded-full ${
+                                <span className={`w-2 h-2 rounded-full ${
                                   audioMonitor.stats.isActive ? 'bg-success animate-pulse' : 'bg-default-300'
                                 }`} />
                               </div>
+
+                              <div className="flex justify-between items-center">
+                                {t('monitor.transportMode')}
+                                <span className="font-mono text-default-400">
+                                  {getMonitorTransportLabel(audioMonitor.transportKind)}
+                                </span>
+                              </div>
+
+                              <div className="flex justify-between items-center">
+                                {t('monitor.audioFormat')}
+                                <span className="font-mono text-default-400">
+                                  {formatMonitorSampleRate(
+                                    audioMonitor.stats.receiver?.inputSampleRate
+                                      ?? audioMonitor.stats.source?.sampleRate,
+                                  )}
+                                </span>
+                              </div>
                             </>
                           )}
-
-                          <div className="flex justify-between items-center">
-                            {t('monitor.codec')}
-                            <span className="font-mono text-default-400 uppercase">
-                              {audioMonitor.codec}
-                            </span>
-                          </div>
-
-                          <div className="flex justify-between items-center">
-                            {t('monitor.transportMode')}
-                            <span className="font-mono text-default-400">
-                              {getMonitorTransportLabel(audioMonitor.transportKind)}
-                            </span>
-                          </div>
 
                           <Button
                             size="sm"
@@ -1626,7 +1684,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                     <div className="flex justify-between items-center gap-3">
                       <span className="text-default-500">{t('voiceTx.codec')}</span>
                       <span className="font-mono text-default-400 uppercase text-right">
-                        {effectiveVoiceTransport === 'ws-compat' ? 'pcm/ws' : 'webrtc'}
+                        PCM 16k
                       </span>
                     </div>
 
@@ -1647,145 +1705,45 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                     </div>
 
                     {voiceTxDiagnostics && (
-                      <div className="space-y-2 rounded-md border border-divider px-2 py-2 bg-content2/40">
+                      <div className="space-y-1 border-t border-divider pt-2 text-[11px]">
                         <div className="flex justify-between items-center gap-3">
-                          <span className="text-default-500">{t('voiceTx.bottleneck')}</span>
+                          <span className="text-default-500">{t('voiceTx.endToEndLatency')}</span>
                           <span className="font-mono text-default-400 text-right">
-                            {voiceTxBottleneckLabel}
+                            {voiceTxDiagnostics.display.endToEndLatencyMs != null
+                              ? formatLatencyMetric(voiceTxDiagnostics.display.endToEndLatencyMs)
+                              : voiceTxEndToEndLabel}
                           </span>
                         </div>
 
                         <div className="flex justify-between items-center gap-3">
-                          <span className="text-default-500">{t('voiceTx.softwareLatency')}</span>
-                          <span className="font-mono text-default-400 text-right">
-                            {voiceTxDiagnostics.display.softwareLatencyMs != null
-                              ? formatLatencyMetric(voiceTxDiagnostics.display.softwareLatencyMs)
-                              : softwareLatencyLabel}
+                          <span className="text-default-500">{t('voiceTx.latencyBreakdown')}</span>
+                          <span className="font-mono text-right text-default-400">
+                            {voiceTxLatencyBreakdownSummary}
                           </span>
                         </div>
 
-                        {voiceTxDiagnostics.display.softwareLatencyMs != null && (
-                          <div className="text-[10px] text-default-400 text-right">
-                            {softwareLatencyLabel}
+                        <div className="flex justify-between items-center gap-3">
+                          <span className="text-default-500">{t('voiceTx.buffering')}</span>
+                          <span className="font-mono text-right text-default-400">
+                            {voiceTxBufferingSummary}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between items-center gap-3">
+                          <span className="text-default-500">{t('voiceTx.anomalies')}</span>
+                          <span className="font-mono text-right text-default-400">
+                            {voiceTxAnomalySummary}
+                          </span>
+                        </div>
+
+                        {voiceTxDiagnostics.serverOutput.writeFailures > 0 && (
+                          <div className="flex justify-between items-center gap-3 text-[11px] text-warning-500">
+                            <span>{t('voiceTx.writeFailures')}</span>
+                            <span className="font-mono">
+                              {formatIntegerMetric(voiceTxDiagnostics.serverOutput.writeFailures)}
+                            </span>
                           </div>
                         )}
-
-                        <div className="flex justify-between items-center gap-3">
-                          <span className="text-default-500">{t('voiceTx.finalLatency')}</span>
-                          <span className="font-mono text-default-400 text-right">
-                            {voiceTxDiagnostics.display.estimatedFinalLatencyMs != null
-                              ? formatLatencyMetric(voiceTxDiagnostics.display.estimatedFinalLatencyMs)
-                              : finalLatencyLabel}
-                          </span>
-                        </div>
-
-                        {voiceTxDiagnostics.display.estimatedFinalLatencyMs != null && (
-                          <div className="text-[10px] text-default-400 text-right">
-                            {finalLatencyLabel}
-                          </div>
-                        )}
-
-                        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-                          <span className="text-default-500">{t('voiceTx.clientFirstFrame')}</span>
-                          <span className="font-mono text-right text-default-400">
-                            {formatLatencyMetric(
-                              voiceTxDiagnostics.client?.pttToFirstSentFrameMs
-                              ?? voiceTxDiagnostics.client?.pttToTrackUnmuteMs,
-                            )}
-                          </span>
-
-                          {isLiveKitVoiceTx ? (
-                            <>
-                              <span className="text-default-500">{t('voiceTx.livekitBitrate')}</span>
-                              <span className="font-mono text-right text-default-400">
-                                {voiceTxDiagnostics.client?.livekitBitrateKbps != null
-                                  ? `${voiceTxDiagnostics.client.livekitBitrateKbps.toFixed(0)}kbps`
-                                  : '--'}
-                              </span>
-
-                              <span className="text-default-500">{t('voiceTx.livekitRtt')}</span>
-                              <span className="font-mono text-right text-default-400">
-                                {formatLatencyMetric(voiceTxDiagnostics.client?.livekitRoundTripTimeMs)}
-                              </span>
-
-                              <span className="text-default-500">{t('voiceTx.livekitPacketsSent')}</span>
-                              <span className="font-mono text-right text-default-400">
-                                {formatIntegerMetric(voiceTxDiagnostics.client?.livekitPacketsSent)}
-                              </span>
-                            </>
-                          ) : (
-                            <>
-                              <span className="text-default-500">{t('voiceTx.clientSendCost')}</span>
-                              <span className="font-mono text-right text-default-400">
-                                {formatLatencyMetric(voiceTxDiagnostics.client?.encodeAndSendMs.rolling)}
-                              </span>
-
-                              <span className="text-default-500">{t('voiceTx.clientFrameInterval')}</span>
-                              <span className="font-mono text-right text-default-400">
-                                {formatLatencyMetric(voiceTxDiagnostics.client?.frameIntervalMs.rolling)}
-                              </span>
-
-                              <span className="text-default-500">{t('voiceTx.clientBufferedAmount')}</span>
-                              <span className="font-mono text-right text-default-400">
-                                {voiceTxDiagnostics.client?.socketBufferedAmountBytes != null
-                                  ? `${Math.round(voiceTxDiagnostics.client.socketBufferedAmountBytes)}B`
-                                  : '--'}
-                              </span>
-                            </>
-                          )}
-
-                          <span className="text-default-500">{t('voiceTx.transportLatency')}</span>
-                          <span className="font-mono text-right text-default-400">
-                            {voiceTxDiagnostics.display.transport === 'livekit'
-                              ? t('voiceTx.notDirectlyMeasured')
-                              : formatLatencyMetric(voiceTxDiagnostics.display.transportLatencyMs)}
-                          </span>
-
-                          <span className="text-default-500">{t('voiceTx.ingressInterval')}</span>
-                          <span className="font-mono text-right text-default-400">
-                            {formatLatencyMetric(voiceTxDiagnostics.serverIngress.frameIntervalMs.rolling)}
-                          </span>
-
-                          <span className="text-default-500">{t('voiceTx.queueDepth')}</span>
-                          <span className="font-mono text-right text-default-400">
-                            {formatIntegerMetric(voiceTxDiagnostics.serverIngress.queueDepthFrames)}
-                          </span>
-
-                          <span className="text-default-500">{t('voiceTx.queueLatency')}</span>
-                          <span className="font-mono text-right text-default-400">
-                            {formatLatencyMetric(voiceTxDiagnostics.serverOutput.queueWaitMs.rolling)}
-                          </span>
-
-                          <span className="text-default-500">{t('voiceTx.resampleCost')}</span>
-                          <span className="font-mono text-right text-default-400">
-                            {formatLatencyMetric(voiceTxDiagnostics.serverOutput.resampleMs.rolling)}
-                          </span>
-
-                          <span className="text-default-500">{t('voiceTx.outputWriteCost')}</span>
-                          <span className="font-mono text-right text-default-400">
-                            {formatLatencyMetric(voiceTxDiagnostics.serverOutput.writeMs.rolling)}
-                          </span>
-
-                          <span className="text-default-500">{t('voiceTx.endToEnd')}</span>
-                          <span className="font-mono text-right text-default-400">
-                            {formatLatencyMetric(voiceTxDiagnostics.serverOutput.endToEndMs.rolling)}
-                          </span>
-
-                          <span className="text-default-500">{t('voiceTx.outputBuffered')}</span>
-                          <span className="font-mono text-right text-default-400">
-                            {formatLatencyMetric(voiceTxDiagnostics.serverOutput.outputBufferedMs.rolling)}
-                          </span>
-
-                          <span className="text-default-500">{t('voiceTx.droppedFrames')}</span>
-                          <span className="font-mono text-right text-default-400">
-                            {formatIntegerMetric(voiceTxDiagnostics.serverIngress.droppedFrames)}
-                          </span>
-
-                          <span className="text-default-500">{t('voiceTx.writeFailures')}</span>
-                          <span className="font-mono text-right text-default-400">
-                            {formatIntegerMetric(voiceTxDiagnostics.serverOutput.writeFailures)}
-                          </span>
-                        </div>
                       </div>
                     )}
 

@@ -32,10 +32,8 @@ import { stationRoutes } from './routes/station.js';
 import { callsignRoutes } from './routes/callsigns.js';
 import { openwebrxRoutes } from './routes/openwebrx.js';
 import { realtimeRoutes } from './routes/realtime.js';
-import { LiveKitConfig } from './realtime/LiveKitConfig.js';
-import { LiveKitBridgeManager } from './realtime/LiveKitBridgeManager.js';
 import { RealtimeTransportManager } from './realtime/RealtimeTransportManager.js';
-import { getLiveKitCredentialRuntimeStatus } from './realtime/LiveKitCredentialState.js';
+import { RealtimeRxAudioRouter } from './realtime/RealtimeRxAudioRouter.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from './utils/errors/RadioError.js';
 import { createLogger } from './utils/logger.js';
 import { ConsoleLogger } from './utils/console-logger.js';
@@ -138,13 +136,6 @@ export async function createServer() {
   const authManager = AuthManager.getInstance();
   await authManager.initialize();
   fastify.log.info('Auth manager initialized');
-  const liveKitCredentialStatus = getLiveKitCredentialRuntimeStatus();
-  if (!LiveKitConfig.isExplicitlyDisabled() && !liveKitCredentialStatus.initialized) {
-    fastify.log.warn({
-      credentialFilePath: liveKitCredentialStatus.filePath,
-    }, 'LiveKit credentials are missing, realtime transport will fall back to ws-compat mode');
-  }
-  LiveKitConfig.logEffectiveConfig();
 
   // 注册认证插件（全局 JWT 验证）
   await fastify.register(authPlugin);
@@ -166,18 +157,19 @@ export async function createServer() {
   const processMonitor = ProcessMonitor.getInstance();
   processMonitor.start();
 
-  // 初始化 LiveKit bridge（统一音频数据面）
-  bootLogger.info('starting LiveKit bridge...');
-  const liveKitBridgeManager = new LiveKitBridgeManager(digitalRadioEngine);
-  await liveKitBridgeManager.start();
-  const realtimeTransportManager = RealtimeTransportManager.initialize(digitalRadioEngine, liveKitBridgeManager);
-  if (LiveKitConfig.isRuntimeAvailable()) {
-    bootLogger.info('LiveKit bridge started, runtime available');
-  } else {
-    bootLogger.info('LiveKit bridge started in degraded mode, ws-compat active', {
-      reason: LiveKitConfig.getRuntimeUnavailableReason(),
-    });
-  }
+  // 初始化实时音频路由器（统一音频数据面）
+  const realtimeRxAudioRouter = new RealtimeRxAudioRouter(
+    digitalRadioEngine.getAudioStreamManager(),
+  );
+  bootLogger.info('starting realtime audio transport manager...');
+  const realtimeTransportManager = RealtimeTransportManager.initialize(
+    digitalRadioEngine,
+    realtimeRxAudioRouter,
+  );
+  fastify.addHook('onClose', async () => {
+    realtimeRxAudioRouter.dispose();
+  });
+  bootLogger.info('realtime audio transport manager started');
 
   // 初始化WebSocket服务器（集成业务逻辑）
   const wsServer = new WSServer(digitalRadioEngine, processMonitor);
@@ -339,7 +331,7 @@ export async function createServer() {
   await fastify.register(authRoutes, { prefix: '/api/auth' });
   fastify.log.info('Auth routes registered');
 
-  // 实时房间 token
+  // 实时音频会话
   await fastify.register(realtimeRoutes, { prefix: '/api/realtime' });
   fastify.log.info('Realtime routes registered');
 
@@ -433,13 +425,16 @@ export async function createServer() {
   // 服务器关闭时清理WebSocket连接
   fastify.addHook('onClose', async () => {
     processMonitor.stop();
-    await liveKitBridgeManager.stop();
     wsServer.cleanup();
     logbookWsServer.cleanup();
   });
 
   fastify.get('/api/realtime/ws-compat', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
     realtimeTransportManager.acceptCompatConnection(socket, req.url);
+  });
+
+  fastify.get('/api/realtime/rtc-data-audio', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
+    realtimeTransportManager.acceptRtcDataAudioConnection(socket, req.url);
   });
 
   return fastify;

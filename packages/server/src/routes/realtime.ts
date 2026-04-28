@@ -8,19 +8,16 @@ import {
   RealtimeVoiceTxStatsResponseSchema,
 } from '@tx5dr/contracts';
 import { AuthManager } from '../auth/AuthManager.js';
-import { ConfigManager } from '../config/config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { OpenWebRXStationManager } from '../openwebrx/OpenWebRXStationManager.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
-import { LiveKitConfig } from '../realtime/LiveKitConfig.js';
 import { RealtimeTransportManager } from '../realtime/RealtimeTransportManager.js';
-import { buildOpenWebRXPreviewRoomName, buildRadioRoomName } from '../realtime/room-names.js';
 
 type ParsedRealtimeSessionRequest = {
   scope: 'radio' | 'openwebrx-preview';
   direction: 'recv' | 'send';
   previewSessionId?: string;
-  transportOverride?: 'livekit' | 'ws-compat';
+  transportOverride?: 'rtc-data-audio' | 'ws-compat';
 };
 
 export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
@@ -67,10 +64,7 @@ export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
       label = 'local admin';
     }
 
-    let roomName: string;
-    if (body.scope === 'radio') {
-      roomName = buildRadioRoomName(ConfigManager.getInstance().getActiveProfileId());
-    } else {
+    if (body.scope === 'openwebrx-preview') {
       const status = openWebRXStationManager.getListenStatus();
       if (!status?.isListening || status.previewSessionId !== body.previewSessionId) {
         throw new RadioError({
@@ -79,15 +73,12 @@ export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
           userMessage: 'OpenWebRX preview is no longer active',
         });
       }
-      roomName = buildOpenWebRXPreviewRoomName(body.previewSessionId!);
     }
 
     const response = await transportManager.issueSession({
-      roomName,
       scope: body.scope,
       direction: body.direction,
       transportOverride: body.transportOverride,
-      publicLiveKitUrl: LiveKitConfig.resolvePublicWsUrl(request),
       role,
       tokenId,
       operatorIds,
@@ -125,10 +116,7 @@ export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
       }
     }
 
-    let source = null;
-    if (query.scope === 'radio') {
-      source = digitalRadioEngine.getAudioMonitorService()?.getLatestStats() ?? null;
-    } else {
+    if (query.scope === 'openwebrx-preview') {
       const status = openWebRXStationManager.getListenStatus();
       if (!status?.isListening || status.previewSessionId !== query.previewSessionId) {
         throw new RadioError({
@@ -137,13 +125,12 @@ export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
           userMessage: 'OpenWebRX preview is no longer active',
         });
       }
-      source = openWebRXStationManager.getAudioMonitorService()?.getLatestStats() ?? null;
     }
 
     return reply.send(RealtimeStatsResponseSchema.parse({
       scope: query.scope,
       previewSessionId: query.previewSessionId ?? null,
-      source,
+      source: transportManager.getSourceStats(query.scope, query.previewSessionId),
       transport: transportManager.getPreferredTransport(query.scope, 'recv'),
     }));
   });
@@ -183,6 +170,10 @@ export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
           queueDepthFrames: 0,
           queuedAudioMs: 0,
           droppedFrames: 0,
+          staleDroppedFrames: 0,
+          underrunCount: 0,
+          plcFrames: 0,
+          jitterTargetMs: 0,
         },
         serverOutput: {
           resampleMs: {
@@ -200,7 +191,22 @@ export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
             rolling: null,
             peak: null,
           },
+          serverPipelineMs: {
+            current: null,
+            rolling: null,
+            peak: null,
+          },
           endToEndMs: {
+            current: null,
+            rolling: null,
+            peak: null,
+          },
+          outputBufferedMs: {
+            current: null,
+            rolling: null,
+            peak: null,
+          },
+          outputWriteIntervalMs: {
             current: null,
             rolling: null,
             peak: null,

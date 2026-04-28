@@ -13,17 +13,11 @@ import { FrequencyManager } from '../radio/FrequencyManager.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { requireAbility } from '../auth/authPlugin.js';
-import { LiveKitConfig } from '../realtime/LiveKitConfig.js';
 import { RealtimeTransportManager } from '../realtime/RealtimeTransportManager.js';
-import { getLiveKitCredentialRuntimeStatus } from '../realtime/LiveKitCredentialState.js';
+import { buildRtcDataAudioConnectivityHints, getRtcDataAudioLocalUdpPort } from '../realtime/RtcDataAudioManager.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { WSServer } from '../websocket/WSServer.js';
 import { WSMessageType } from '@tx5dr/contracts';
-import {
-  normalizeManagedLiveKitSettings,
-  validateManagedLiveKitSettings,
-  writeManagedLiveKitRuntimeConfig,
-} from '../realtime/LiveKitRuntimeConfig.js';
 
 /**
  * 设置管理API路由
@@ -34,25 +28,33 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   const transportManager = RealtimeTransportManager.getInstance();
 
   const buildRealtimeSettingsData = (request: FastifyRequest) => {
-    const publicWsUrl = configManager.getLiveKitPublicUrl();
     const transportPolicy = configManager.getRealtimeTransportPolicy();
-    const networkMode = configManager.getLiveKitNetworkMode();
-    const nodeIp = configManager.getLiveKitNodeIp();
-    const connectivityHints = LiveKitConfig.getConnectivityHints(request);
-    const health = transportManager.getScopeHealth('radio');
+    const rtcDataAudioPublicHost = configManager.getRtcDataAudioPublicHost();
+    const rtcDataAudioLocalUdpPort = getRtcDataAudioLocalUdpPort();
+    const rtcDataAudioPublicUdpPort = configManager.getRtcDataAudioPublicUdpPort();
+    const rtcDataAudioEffectivePublicUdpPort = rtcDataAudioPublicUdpPort ?? rtcDataAudioLocalUdpPort;
+    const connectivityHints = buildRtcDataAudioConnectivityHints({
+      headers: request.headers,
+      requestProtocol: request.protocol,
+    });
 
     return RealtimeSettingsResponseDataSchema.parse({
-      publicWsUrl,
       transportPolicy,
-      networkMode,
-      nodeIp,
+      rtcDataAudioPublicHost,
+      rtcDataAudioPublicUdpPort,
       runtime: {
-        liveKitEnabled: LiveKitConfig.isEnabled(),
         connectivityHints,
         radioReceiveTransport: transportManager.getPreferredTransport('radio', 'recv'),
-        radioBridgeHealthy: health.healthy,
-        radioBridgeIssueCode: health.issueCode,
-        credentialStatus: getLiveKitCredentialRuntimeStatus(),
+        rtcDataAudio: {
+          localUdpPort: rtcDataAudioLocalUdpPort,
+          publicCandidateEnabled: Boolean(rtcDataAudioPublicHost),
+          publicEndpoint: rtcDataAudioPublicHost
+            ? {
+                host: rtcDataAudioPublicHost,
+                port: rtcDataAudioEffectivePublicUdpPort,
+              }
+            : null,
+        },
       },
     });
   };
@@ -166,18 +168,12 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const body = RealtimeSettingsSchema.parse(request.body);
-      const publicWsUrl = body.publicWsUrl?.trim() || null;
-      const managedSettings = normalizeManagedLiveKitSettings({
-        networkMode: body.networkMode ?? configManager.getLiveKitNetworkMode(),
-        nodeIp: body.nodeIp ?? configManager.getLiveKitNodeIp(),
-      });
-      validateManagedLiveKitSettings(managedSettings);
+      const rtcDataAudioPublicHost = body.rtcDataAudioPublicHost?.trim() || null;
+      const rtcDataAudioPublicUdpPort = body.rtcDataAudioPublicUdpPort ?? null;
 
-      await configManager.updateLiveKitPublicUrl(publicWsUrl);
       await configManager.updateRealtimeTransportPolicy(body.transportPolicy ?? 'auto');
-      await configManager.updateLiveKitNetworkMode(managedSettings.networkMode);
-      await configManager.updateLiveKitNodeIp(managedSettings.nodeIp);
-      await writeManagedLiveKitRuntimeConfig({ settings: managedSettings });
+      await configManager.updateRtcDataAudioPublicHost(rtcDataAudioPublicHost);
+      await configManager.updateRtcDataAudioPublicUdpPort(rtcDataAudioPublicUdpPort);
 
       const data = buildRealtimeSettingsData(request);
       WSServer.getInstance()?.broadcast(WSMessageType.REALTIME_SETTINGS_CHANGED, data);
@@ -188,13 +184,6 @@ export async function settingsRoutes(fastify: FastifyInstance) {
         data,
       });
     } catch (error) {
-      if (error instanceof Error && error.message.includes('nodeIp')) {
-        throw new RadioError({
-          code: RadioErrorCode.INVALID_CONFIG,
-          message: error.message,
-          userMessage: 'Manual LiveKit media mode requires a valid public IPv4 address',
-        });
-      }
       throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
     }
   });

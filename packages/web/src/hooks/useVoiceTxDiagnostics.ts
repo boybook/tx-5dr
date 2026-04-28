@@ -17,10 +17,21 @@ export interface VoiceTxDiagnosticsData extends RealtimeVoiceTxStatsResponse {
   client: VoiceTxLocalDiagnostics | null;
   display: {
     transportLatencyMs: number | null;
+    networkLatencyMs: number | null;
+    serverPipelineMs: number | null;
     softwareLatencyMs: number | null;
     softwareLatencyKind: 'measured' | 'estimated' | 'partial' | 'unavailable';
+    endToEndLatencyMs: number | null;
+    endToEndLatencyKind: 'measured' | 'estimated' | 'partial' | 'unavailable';
     estimatedFinalLatencyMs: number | null;
     estimatedFinalLatencyKind: 'estimated' | 'partial' | 'unavailable';
+    startupMs: number | null;
+    localBacklogMs: number | null;
+    queueLatencyMs: number | null;
+    outputBufferedMs: number | null;
+    droppedFrames: number;
+    underrunCount: number;
+    clockReliable: boolean;
     bottleneckStage: RealtimeVoiceTxBottleneckStage | null;
     transport: RealtimeTransportKind | null;
   };
@@ -33,15 +44,14 @@ function pickBottleneckStage(
   const candidates: Array<{ stage: RealtimeVoiceTxBottleneckStage; value: number }> = [
     {
       stage: 'client-capture',
-      value: client?.encodeAndSendMs.rolling ?? 0,
+      value: Math.max(
+        client?.encodeAndSendMs.rolling ?? 0,
+        client?.sendBufferedAudioMs.rolling ?? 0,
+      ),
     },
     {
       stage: 'transport',
       value: server?.transport.clientToServerMs.rolling ?? 0,
-    },
-    {
-      stage: 'server-ingress',
-      value: server?.serverIngress.frameIntervalMs.rolling ?? 0,
     },
     {
       stage: 'server-queue',
@@ -128,42 +138,48 @@ export function useVoiceTxDiagnostics(
       ?? clientStats?.transport
       ?? serverStats?.summary.transport
       ?? null;
-    const transportLatencyMs = transport === 'ws-compat'
+    const transportLatencyMs = transport === 'ws-compat' || transport === 'rtc-data-audio'
       ? serverStats?.transport.clientToServerMs.rolling ?? null
       : null;
     const bottleneckStage = pickBottleneckStage(clientStats, serverStats);
-    const clientStartupMs = clientStats?.pttToFirstSentFrameMs
-      ?? clientStats?.pttToTrackUnmuteMs
-      ?? null;
+    const clientStartupMs = clientStats?.pttToFirstSentFrameMs ?? null;
     const serverEndToEndMs = serverStats?.serverOutput.endToEndMs.rolling ?? null;
-    const livekitOneWayEstimateMs = clientStats?.livekitRoundTripTimeMs != null
-      ? clientStats.livekitRoundTripTimeMs / 2
-      : null;
-
-    let softwareLatencyMs: number | null = null;
-    let softwareLatencyKind: 'measured' | 'estimated' | 'partial' | 'unavailable' = 'unavailable';
-
-    if (transport === 'ws-compat' && clientStartupMs != null && serverEndToEndMs != null) {
-      softwareLatencyMs = clientStartupMs + serverEndToEndMs;
-      softwareLatencyKind = 'measured';
-    } else if (transport === 'livekit' && clientStartupMs != null && serverEndToEndMs != null && livekitOneWayEstimateMs != null) {
-      softwareLatencyMs = clientStartupMs + livekitOneWayEstimateMs + serverEndToEndMs;
-      softwareLatencyKind = 'estimated';
-    } else if (clientStartupMs != null && serverEndToEndMs != null) {
-      softwareLatencyMs = clientStartupMs + serverEndToEndMs;
-      softwareLatencyKind = 'partial';
-    }
-
+    const serverPipelineMs = serverStats?.serverOutput.serverPipelineMs.rolling ?? null;
     const outputBufferedMs = serverStats?.serverOutput.outputBufferedMs.rolling ?? null;
-    const estimatedFinalLatencyMs = softwareLatencyMs != null && outputBufferedMs != null
-      ? softwareLatencyMs + outputBufferedMs
+    const clockReliable = transportLatencyMs != null
+      && serverEndToEndMs != null
+      && (clientStats?.clockConfidence === 'medium' || clientStats?.clockConfidence === 'high');
+    const softwareLatencyMs = serverEndToEndMs;
+    const softwareLatencyKind: 'measured' | 'estimated' | 'partial' | 'unavailable' =
+      serverEndToEndMs == null
+        ? 'unavailable'
+        : clockReliable
+          ? 'measured'
+          : 'partial';
+    const estimatedFinalLatencyMs = serverEndToEndMs != null && outputBufferedMs != null
+      ? serverEndToEndMs + outputBufferedMs
       : null;
     const estimatedFinalLatencyKind: 'estimated' | 'partial' | 'unavailable' =
       estimatedFinalLatencyMs != null
-        ? 'estimated'
-        : softwareLatencyMs != null
+        ? (clockReliable ? 'estimated' : 'partial')
+        : serverEndToEndMs != null
           ? 'partial'
           : 'unavailable';
+    const endToEndLatencyMs = estimatedFinalLatencyMs ?? serverEndToEndMs;
+    const endToEndLatencyKind: 'measured' | 'estimated' | 'partial' | 'unavailable' =
+      estimatedFinalLatencyMs != null
+        ? (clockReliable ? 'estimated' : 'partial')
+        : serverEndToEndMs != null
+          ? (clockReliable ? 'measured' : 'partial')
+          : 'unavailable';
+    const queuedAudioMs = serverStats?.serverIngress.queuedAudioMs ?? null;
+    const queueWaitMs = serverStats?.serverOutput.queueWaitMs.rolling ?? null;
+    const queueLatencyMs = queuedAudioMs != null || queueWaitMs != null
+      ? Math.max(queuedAudioMs ?? 0, queueWaitMs ?? 0)
+      : null;
+    const droppedFrames = (clientStats?.clientDroppedFrames ?? 0)
+      + (serverStats?.serverIngress.droppedFrames ?? 0);
+    const underrunCount = serverStats?.serverIngress.underrunCount ?? 0;
 
     return {
       scope: serverStats?.scope ?? 'radio',
@@ -198,6 +214,10 @@ export function useVoiceTxDiagnostics(
         queueDepthFrames: 0,
         queuedAudioMs: 0,
         droppedFrames: 0,
+        staleDroppedFrames: 0,
+        underrunCount: 0,
+        plcFrames: 0,
+        jitterTargetMs: 0,
       },
       serverOutput: serverStats?.serverOutput ?? {
         resampleMs: {
@@ -215,12 +235,22 @@ export function useVoiceTxDiagnostics(
           rolling: null,
           peak: null,
         },
+        serverPipelineMs: {
+          current: null,
+          rolling: null,
+          peak: null,
+        },
         endToEndMs: {
           current: null,
           rolling: null,
           peak: null,
         },
         outputBufferedMs: {
+          current: null,
+          rolling: null,
+          peak: null,
+        },
+        outputWriteIntervalMs: {
           current: null,
           rolling: null,
           peak: null,
@@ -232,10 +262,21 @@ export function useVoiceTxDiagnostics(
       client: clientStats,
       display: {
         transportLatencyMs,
+        networkLatencyMs: clockReliable ? transportLatencyMs : null,
+        serverPipelineMs,
         softwareLatencyMs,
         softwareLatencyKind,
+        endToEndLatencyMs,
+        endToEndLatencyKind,
         estimatedFinalLatencyMs,
         estimatedFinalLatencyKind,
+        startupMs: clientStartupMs,
+        localBacklogMs: clientStats?.sendBufferedAudioMs.rolling ?? null,
+        queueLatencyMs,
+        outputBufferedMs,
+        droppedFrames,
+        underrunCount,
+        clockReliable,
         bottleneckStage,
         transport,
       },
