@@ -436,10 +436,10 @@ export class PluginManager {
 
     this.orchestrator.invalidateDecisionMessageSet(operatorId);
     operator.start();
+    runtime.requestCall(callsign, lastMessage);
     if (lastMessage) {
       operator.setTransmitCycles((lastMessage.slotInfo.cycleNumber + 1) % 2);
     }
-    runtime.requestCall(callsign, lastMessage);
   }
 
   notifyTransmissionQueued(operatorId: string, transmission: string): void {

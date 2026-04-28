@@ -386,6 +386,112 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     }
   });
 
+  it('uses the double-click request target before changing transmit cycle and refreshing the panel status', async () => {
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: {
+        id: 'log-1',
+        name: 'Test Log',
+        provider: {
+          addQSO: vi.fn().mockResolvedValue(undefined),
+          updateQSO: vi.fn(),
+          getQSO: vi.fn(),
+          getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+          getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 0 }),
+          hasWorkedCallsign: vi.fn().mockResolvedValue(false),
+        },
+      },
+      callsign: 'BG5DRB',
+      clockNow: 60_001,
+      encodeQueue,
+    });
+
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-operator-request-call-'));
+    eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string }) => {
+      eventEmitter.emit('hasWorkedCallsignResponse' as any, {
+        requestId: data.requestId,
+        hasWorked: false,
+      });
+    });
+
+    let pluginManager!: PluginManager;
+    pluginManager = new PluginManager({
+      eventEmitter,
+      getOperators: () => manager.getAllOperators(),
+      getOperatorById: (id) => manager.getOperatorById(id),
+      getCurrentMode: () => MODES.FT8,
+      getOperatorAutomationSnapshot: (id) => pluginManager.getOperatorAutomationSnapshot(id),
+      requestOperatorCall: () => {},
+      getRadioFrequency: async () => 7_074_000,
+      setRadioFrequency: () => {},
+      getRadioBand: () => '40m',
+      getRadioConnected: () => true,
+      getLatestSlotPack: () => null,
+      interruptOperatorTransmission: async () => {},
+      hasWorkedCallsign: async () => false,
+      resetOperatorRuntime: () => {},
+      dataDir,
+    });
+
+    try {
+      manager.setPluginManager(pluginManager);
+      pluginManager.loadConfig({
+        configs: {},
+        operatorStrategies: {},
+        operatorSettings: {},
+      });
+
+      await manager.addOperator({
+        id: 'op1',
+        myCallsign: 'BG5DRB',
+        myGrid: 'PL09',
+        frequency: 1824,
+        transmitCycles: [1],
+        mode: MODES.FT8,
+      });
+      await pluginManager.start();
+      manager.start();
+
+      const statusSpy = vi.fn();
+      eventEmitter.on('operatorStatusUpdate', statusSpy);
+
+      pluginManager.requestCall('op1', 'BH3RAU', {
+        message: {
+          message: 'CQ BH3RAU OM99',
+          snr: 0,
+          dt: 0.6,
+          freq: 1502,
+          confidence: 1,
+        },
+        slotInfo: createSlotInfo(45_000),
+      });
+
+      expect(encodeQueue.push).toHaveBeenCalledTimes(1);
+      expect(encodeQueue.push.mock.calls[0]?.[0]).toMatchObject({
+        operatorId: 'op1',
+        message: 'BH3RAU BG5DRB PL09',
+        frequency: 1824,
+      });
+
+      const latestStatus = statusSpy.mock.calls.at(-1)?.[0];
+      expect(latestStatus).toMatchObject({
+        id: 'op1',
+        currentSlot: 'TX1',
+        context: {
+          targetCall: 'BH3RAU',
+        },
+        slots: {
+          TX1: 'BH3RAU BG5DRB PL09',
+        },
+        transmitCycles: [0],
+      });
+    } finally {
+      manager.stop();
+      await pluginManager.shutdown().catch(() => undefined);
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('reDecideOnLateDecodes rejects a slotPack from the current TX slot (not the prior RX slot)', async () => {
     // 2026-04-19 BG5DRB 事故修复（方案 B）：addTransmissionFrame 的 slotPackUpdated
     // 在「多 operator 混合 TX」场景下会把当前 TX 槽的 slotPack 喂给 reDecideOnLateDecodes。

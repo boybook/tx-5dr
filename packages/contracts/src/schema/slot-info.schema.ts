@@ -148,7 +148,9 @@ export const SlotPackSchema = z.object({
     /** 去重后的帧数 */
     totalFramesAfterDedup: z.number().default(0),
     /** 最后更新时间戳 */
-    lastUpdated: z.number().default(() => Date.now())
+    lastUpdated: z.number().default(() => Date.now()),
+    /** SlotPack 单调更新序号，用于客户端丢弃乱序旧包 */
+    updateSeq: z.number().int().nonnegative().optional()
   }).default({}),
   /** 解码历史（用于调试） */
   decodeHistory: z.array(z.object({

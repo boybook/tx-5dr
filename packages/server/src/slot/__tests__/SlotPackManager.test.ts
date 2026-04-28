@@ -61,4 +61,51 @@ describe('SlotPackManager event routing', () => {
     // 但 slotPackDecodeUpdated 只在 RX 解码写入时触发；TX echo 不应该走这条路径
     expect(slotPackDecodeUpdatedSpy).not.toHaveBeenCalled();
   });
+
+  it('replaces a transmission frame for the same operator and slot when requested', () => {
+    const manager = new SlotPackManager();
+    manager.setPersistenceEnabled(false);
+
+    manager.addTransmissionFrame('slot-60000', 'op-1', 'CQ BG5BNW PM00', 2550, 60_000);
+    manager.addTransmissionFrame('slot-60000', 'op-1', 'R9WXK BG5BNW PM00', 2550, 60_000, true);
+
+    const slotPack = manager.getSlotPack('slot-60000');
+    expect(slotPack?.frames.filter(frame => frame.snr === -999)).toEqual([
+      expect.objectContaining({
+        operatorId: 'op-1',
+        message: 'R9WXK BG5BNW PM00',
+      }),
+    ]);
+    expect(slotPack?.stats.updateSeq).toBe(2);
+  });
+
+  it('keeps transmission frames from different operators in the same slot', () => {
+    const manager = new SlotPackManager();
+    manager.setPersistenceEnabled(false);
+
+    manager.addTransmissionFrame('slot-60000', 'op-1', 'R9WXK BG5BNW PM00', 2550, 60_000);
+    manager.addTransmissionFrame('slot-60000', 'op-2', 'R8KBM BG5DRB PM00', 2450, 60_000, true);
+
+    const txFrames = manager.getSlotPack('slot-60000')?.frames.filter(frame => frame.snr === -999) ?? [];
+    expect(txFrames).toHaveLength(2);
+    expect(txFrames.map(frame => frame.operatorId).sort()).toEqual(['op-1', 'op-2']);
+  });
+
+  it('emits immutable snapshots with increasing updateSeq values', () => {
+    const manager = new SlotPackManager();
+    manager.setPersistenceEnabled(false);
+    const emitted: SlotPack[] = [];
+    manager.on('slotPackUpdated', (slotPack) => emitted.push(slotPack));
+
+    manager.processDecodeResult(buildDecodeResult(45_000, [{ message: 'CQ BG5DRB PM00', snr: -5 }]));
+    manager.addTransmissionFrame('slot-45000', 'op-1', 'BG5DRB BG2DIH 73', 569, 45_000);
+
+    expect(emitted).toHaveLength(2);
+    expect(emitted[0]?.stats.updateSeq).toBe(1);
+    expect(emitted[1]?.stats.updateSeq).toBe(2);
+    expect(emitted[0]?.frames.map(frame => frame.message)).toEqual(['CQ BG5DRB PM00']);
+    expect(emitted[1]?.frames.map(frame => frame.message)).toContain('BG5DRB BG2DIH 73');
+    expect(emitted[0]?.frames).not.toBe(emitted[1]?.frames);
+    expect(emitted[0]?.stats).not.toBe(emitted[1]?.stats);
+  });
 });
