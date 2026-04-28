@@ -160,6 +160,27 @@ describe('RealtimeTransportManager', () => {
     expect(session.offers[0]?.url).toBe('ws://localhost:8076/api/realtime/ws-compat');
   });
 
+  it('does not leak an internal nginx listen port into Cloudflare-facing compat websocket URLs', async () => {
+    mockGetRealtimeTransportPolicy.mockReturnValue('force-compat');
+
+    const manager = await createManager();
+    const session = await manager.issueSession(createIssueSessionParams({
+      requestHeaders: {
+        host: '5dr2.992218.xyz',
+        origin: 'https://5dr2.992218.xyz',
+        referer: 'https://5dr2.992218.xyz/',
+        'x-forwarded-host': '5dr2.992218.xyz',
+        'x-forwarded-port': '8076',
+        'x-forwarded-proto': 'http',
+      },
+      requestProtocol: 'http',
+    }));
+
+    expect(session.offers).toHaveLength(1);
+    expect(session.offers[0]?.transport).toBe('ws-compat');
+    expect(session.offers[0]?.url).toBe('wss://5dr2.992218.xyz/api/realtime/ws-compat');
+  });
+
   it('sends ws-compat recv frames through the transport-edge integer decimator', async () => {
     const source = Object.assign(new EventEmitter(), {
       id: 'native-radio:radio',

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  buildRtcDataAudioConnectivityHints,
   getRtcDataAudioLocalUdpPort,
   resolveRtcDataAudioPortRange,
 } from '../RtcDataAudioManager.js';
@@ -75,5 +76,21 @@ describe('RtcDataAudioManager port configuration', () => {
       portRangeEnd: 50110,
       enableIceUdpMux: true,
     });
+  });
+
+  it('does not advertise an internal reverse-proxy port in signaling hints', () => {
+    const hints = buildRtcDataAudioConnectivityHints({
+      headers: {
+        host: '5dr2.992218.xyz',
+        origin: 'https://5dr2.992218.xyz',
+        referer: 'https://5dr2.992218.xyz/',
+        'x-forwarded-host': '5dr2.992218.xyz',
+        'x-forwarded-port': '8076',
+        'x-forwarded-proto': 'http',
+      },
+      requestProtocol: 'http',
+    });
+
+    expect(hints.signalingUrl).toBe('wss://5dr2.992218.xyz/api/realtime/rtc-data-audio');
   });
 });

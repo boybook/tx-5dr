@@ -107,7 +107,7 @@ check_nginx_realtime_proxy_config() {
     printf "%s\n" "$content" | grep -Fq 'proxy_set_header Connection $connection_upgrade;' || return 1
     printf "%s\n" "$content" | grep -Fq 'proxy_set_header Host $http_host;' || return 1
     printf "%s\n" "$content" | grep -Fq 'proxy_set_header X-Forwarded-Host $http_host;' || return 1
-    printf "%s\n" "$content" | grep -Fq 'proxy_set_header X-Forwarded-Port $server_port;' || return 1
+    printf "%s\n" "$content" | grep -Fq 'proxy_set_header X-Forwarded-Port $http_x_forwarded_port;' || return 1
 }
 
 check_tx5dr_service() {
