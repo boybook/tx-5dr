@@ -19,7 +19,7 @@ const NATIVE_MODULES = [
   'audify',
   'serialport',
   'bcrypt',
-  '@livekit/rtc-node',
+  'node-datachannel',
   'rubato-fft-node',
   'hamlib',
   'icom-wlan-node',

@@ -30,10 +30,15 @@ export interface VoiceTxProcessedFrameStats {
   resampleMs: number;
   queueWaitMs: number;
   writeMs: number;
+  serverPipelineMs: number;
   endToEndMs: number | null;
   outputBufferedMs: number | null;
   outputSampleRate: number | null;
   outputBufferSize: number | null;
+  outputWriteIntervalMs?: number | null;
+  jitterTargetMs?: number;
+  underrunCount?: number;
+  plcFrames?: number;
 }
 
 class MetricSeries {
@@ -103,9 +108,13 @@ export class VoiceTxDiagnostics {
   private sequenceGaps = 0;
   private lastSequence: number | null = null;
   private droppedFrames = 0;
+  private staleDroppedFrames = 0;
   private writeFailures = 0;
   private queueDepthFrames = 0;
   private queuedAudioMs = 0;
+  private jitterTargetMs = 0;
+  private underrunCount = 0;
+  private plcFrames = 0;
   private outputSampleRate: number | null = null;
   private outputBufferSize: number | null = null;
   private lastFrameReceivedAt: number | null = null;
@@ -115,8 +124,10 @@ export class VoiceTxDiagnostics {
   private readonly resampleMs = new MetricSeries();
   private readonly queueWaitMs = new MetricSeries();
   private readonly writeMs = new MetricSeries();
+  private readonly serverPipelineMs = new MetricSeries();
   private readonly endToEndMs = new MetricSeries();
   private readonly outputBufferedMs = new MetricSeries();
+  private readonly outputWriteIntervalMs = new MetricSeries();
 
   startSession(clientId: string, label: string): void {
     const now = Date.now();
@@ -175,12 +186,15 @@ export class VoiceTxDiagnostics {
     this.activeSession.updatedAt = Date.now();
   }
 
-  noteDropped(queueDepthFrames: number, queuedAudioMs: number): void {
+  noteDropped(queueDepthFrames: number, queuedAudioMs: number, reason?: 'backpressure' | 'output-unavailable' | 'stale' | 'jitter-trim'): void {
     if (!this.activeSession) {
       return;
     }
 
     this.droppedFrames += 1;
+    if (reason === 'stale') {
+      this.staleDroppedFrames += 1;
+    }
     this.noteQueueState(queueDepthFrames, queuedAudioMs);
   }
 
@@ -195,11 +209,24 @@ export class VoiceTxDiagnostics {
     this.resampleMs.record(stats.resampleMs);
     this.queueWaitMs.record(stats.queueWaitMs);
     this.writeMs.record(stats.writeMs);
+    this.serverPipelineMs.record(stats.serverPipelineMs);
     if (typeof stats.endToEndMs === 'number' && stats.endToEndMs >= 0) {
       this.endToEndMs.record(stats.endToEndMs);
     }
     if (typeof stats.outputBufferedMs === 'number' && stats.outputBufferedMs >= 0) {
       this.outputBufferedMs.record(stats.outputBufferedMs);
+    }
+    if (typeof stats.outputWriteIntervalMs === 'number' && stats.outputWriteIntervalMs >= 0) {
+      this.outputWriteIntervalMs.record(stats.outputWriteIntervalMs);
+    }
+    if (typeof stats.jitterTargetMs === 'number' && stats.jitterTargetMs >= 0) {
+      this.jitterTargetMs = stats.jitterTargetMs;
+    }
+    if (typeof stats.underrunCount === 'number' && stats.underrunCount >= 0) {
+      this.underrunCount = Math.round(stats.underrunCount);
+    }
+    if (typeof stats.plcFrames === 'number' && stats.plcFrames >= 0) {
+      this.plcFrames = Math.round(stats.plcFrames);
     }
     this.activeSession.updatedAt = Date.now();
   }
@@ -246,13 +273,19 @@ export class VoiceTxDiagnostics {
         queueDepthFrames: this.queueDepthFrames,
         queuedAudioMs: this.queuedAudioMs,
         droppedFrames: this.droppedFrames,
+        staleDroppedFrames: this.staleDroppedFrames,
+        underrunCount: this.underrunCount,
+        plcFrames: this.plcFrames,
+        jitterTargetMs: this.jitterTargetMs,
       },
       serverOutput: {
         resampleMs: this.resampleMs.snapshot(now),
         queueWaitMs: this.queueWaitMs.snapshot(now),
         writeMs: this.writeMs.snapshot(now),
+        serverPipelineMs: this.serverPipelineMs.snapshot(now),
         endToEndMs: this.endToEndMs.snapshot(now),
         outputBufferedMs: this.outputBufferedMs.snapshot(now),
+        outputWriteIntervalMs: this.outputWriteIntervalMs.snapshot(now),
         outputSampleRate: this.outputSampleRate,
         outputBufferSize: this.outputBufferSize,
         writeFailures: this.writeFailures,
@@ -268,10 +301,6 @@ export class VoiceTxDiagnostics {
       {
         stage: 'transport',
         value: snapshot.transport.clientToServerMs.rolling ?? 0,
-      },
-      {
-        stage: 'server-ingress',
-        value: snapshot.serverIngress.frameIntervalMs.rolling ?? 0,
       },
       {
         stage: 'server-queue',
@@ -326,13 +355,19 @@ export class VoiceTxDiagnostics {
         queueDepthFrames: 0,
         queuedAudioMs: 0,
         droppedFrames: 0,
+        staleDroppedFrames: 0,
+        underrunCount: 0,
+        plcFrames: 0,
+        jitterTargetMs: 0,
       },
       serverOutput: {
         resampleMs: this.emptyMetricWindow(),
         queueWaitMs: this.emptyMetricWindow(),
         writeMs: this.emptyMetricWindow(),
+        serverPipelineMs: this.emptyMetricWindow(),
         endToEndMs: this.emptyMetricWindow(),
         outputBufferedMs: this.emptyMetricWindow(),
+        outputWriteIntervalMs: this.emptyMetricWindow(),
         outputSampleRate: null,
         outputBufferSize: null,
         writeFailures: 0,
@@ -353,9 +388,13 @@ export class VoiceTxDiagnostics {
     this.sequenceGaps = 0;
     this.lastSequence = null;
     this.droppedFrames = 0;
+    this.staleDroppedFrames = 0;
     this.writeFailures = 0;
     this.queueDepthFrames = 0;
     this.queuedAudioMs = 0;
+    this.jitterTargetMs = 0;
+    this.underrunCount = 0;
+    this.plcFrames = 0;
     this.outputSampleRate = null;
     this.outputBufferSize = null;
     this.lastFrameReceivedAt = null;
@@ -364,7 +403,9 @@ export class VoiceTxDiagnostics {
     this.resampleMs.reset();
     this.queueWaitMs.reset();
     this.writeMs.reset();
+    this.serverPipelineMs.reset();
     this.endToEndMs.reset();
     this.outputBufferedMs.reset();
+    this.outputWriteIntervalMs.reset();
   }
 }

@@ -34,10 +34,10 @@ export function useVoiceCaptureController(
   engineMode: EngineMode,
 ): VoiceCaptureController {
   const captureRef = useRef<VoiceCapture | null>(null);
-  const preferredTransportRef = useRef<RealtimeTransportKind>('livekit');
+  const preferredTransportRef = useRef<RealtimeTransportKind>('rtc-data-audio');
 
   const [captureState, setCaptureState] = useState<VoiceCaptureState>('idle');
-  const [preferredTransport, setPreferredTransportState] = useState<RealtimeTransportKind>('livekit');
+  const [preferredTransport, setPreferredTransportState] = useState<RealtimeTransportKind>('rtc-data-audio');
   const [activeTransport, setActiveTransport] = useState<RealtimeTransportKind | null>(null);
   const [participantIdentity, setParticipantIdentity] = useState<string | null>(null);
   const [isPTTActive, setIsPTTActiveState] = useState(false);

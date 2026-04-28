@@ -3,12 +3,12 @@ import { resolveExistingMonitorStart } from '../useAudioMonitorPlayback';
 
 describe('useAudioMonitorPlayback helpers', () => {
   it('reuses the pending start promise while playback is initializing', async () => {
-    const pending = Promise.resolve<'livekit'>('livekit');
+    const pending = Promise.resolve<'rtc-data-audio'>('rtc-data-audio');
 
     const result = resolveExistingMonitorStart(false, null, true, pending);
 
     expect(result).toBe(pending);
-    await expect(result).resolves.toBe('livekit');
+    await expect(result).resolves.toBe('rtc-data-audio');
   });
 
   it('returns the active transport when playback is already running', () => {

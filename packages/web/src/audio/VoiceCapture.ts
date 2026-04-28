@@ -1,6 +1,4 @@
-import { encodeWsCompatAudioFrame } from '@tx5dr/core';
-import type { RealtimeTransportOffer, RealtimeTransportKind } from '@tx5dr/contracts';
-import { Room, RoomEvent, Track, LocalAudioTrack } from 'livekit-client';
+import type { RealtimeConnectivityHints, RealtimeTransportOffer, RealtimeTransportKind } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger';
 import { normalizeWsUrl } from '../utils/config';
 import {
@@ -15,26 +13,23 @@ import {
 } from './audioRuntime';
 import { executeRealtimeSessionFlow } from '../realtime/realtimeSessionFlow';
 import { showRealtimeTransportFallbackToast } from '../realtime/realtimeConnectivity';
+import { RtcDataAudioClient } from '../realtime/RtcDataAudioClient';
 import {
   VoiceTxLocalStatsCollector,
   type VoiceTxLocalDiagnostics,
 } from './voiceTxDiagnostics';
+import { RealtimeClockSync, type RealtimeClockConfidence } from '../realtime/RealtimeClockSync';
+import { VoiceTxUplinkSender } from './VoiceTxUplinkSender';
 
 const logger = createLogger('VoiceCapture');
 const COMPAT_CAPTURE_CONNECT_TIMEOUT_MS = 5000;
-const LIVEKIT_SENDER_STATS_INTERVAL_MS = 1000;
-
+const VOICE_TX_CLOCK_SYNC_INTERVAL_MS = 1000;
 type AudioTrackConstraints = {
   sampleRate?: number;
   channelCount?: number;
   echoCancellation?: boolean;
   noiseSuppression?: boolean;
   autoGainControl?: boolean;
-};
-type OutboundRtpStatsLike = {
-  packetsSent?: number;
-  roundTripTime?: number;
-  jitter?: number;
 };
 
 export interface VoiceCaptureOptions {
@@ -63,9 +58,8 @@ const AUDIO_CONSTRAINTS: AudioTrackConstraints = {
 export class VoiceCapture {
   private options: VoiceCaptureOptions;
   private state: VoiceCaptureState = 'idle';
-  private room: Room | null = null;
-  private localTrack: LocalAudioTrack | null = null;
   private compatSocket: WebSocket | null = null;
+  private rtcDataAudioClient: RtcDataAudioClient | null = null;
   private mediaStream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
   private mediaSource: MediaStreamAudioSourceNode | null = null;
@@ -73,14 +67,16 @@ export class VoiceCapture {
   private levelAnalyserBuffer: Float32Array | null = null;
   private levelMonitorTimer: number | null = null;
   private captureBackend: CompatCaptureBackend | null = null;
+  private captureBackendSourceConnected = false;
   private startPromise: Promise<void> | null = null;
   private pttActive = false;
   private _participantIdentity: string | null = null;
   private transportKind: RealtimeTransportKind | null = null;
-  private compatSequence = 0;
   private _inputLevel = 0;
   private readonly localTxStats = new VoiceTxLocalStatsCollector();
-  private liveKitStatsTimer: number | null = null;
+  private readonly clockSync = new RealtimeClockSync();
+  private clockSyncTimer: number | null = null;
+  private uplinkSender: VoiceTxUplinkSender | null = null;
 
   constructor(options: VoiceCaptureOptions) {
     this.options = options;
@@ -111,12 +107,7 @@ export class VoiceCapture {
   }
 
   async prepareCaptureFromGesture(): Promise<void> {
-    this.mediaStream = await requestInteractiveMicrophone(AUDIO_CONSTRAINTS, this.mediaStream);
-    this.audioContext = await ensureInteractiveAudioContext(this.audioContext);
-    if (!this.mediaSource) {
-      this.mediaSource = this.audioContext.createMediaStreamSource(this.mediaStream);
-    }
-    this.ensureInputLevelMonitor();
+    await this.ensureCompatCaptureRuntime();
   }
 
   async ensureStartedFromGesture(options?: VoiceCaptureStartOptions): Promise<void> {
@@ -151,12 +142,10 @@ export class VoiceCapture {
           direction: 'send',
           transportOverride: options?.transportOverride,
           connectStage: 'connect',
-          startLiveKit: (offer) => this.startLiveKitCapture(offer),
           startCompat: (offer) => this.startCompatCapture(offer),
+          startRtcDataAudio: (offer) => this.startRtcDataAudioCapture(offer),
           cleanupFailedAttempt: () => {
-            // cleanupTransportOnly already preserves AudioContext and MediaStream,
-            // so the isFallback flag is not needed here.
-            this.cleanupTransportOnly();
+            this.cleanupTransportOnly({ preserveCaptureBackend: true });
           },
         });
         if (result.fallbackUsed) {
@@ -196,83 +185,92 @@ export class VoiceCapture {
     if (active) {
       this.localTxStats.notePTTActivated();
     }
-
-    if (this.transportKind === 'livekit' && this.localTrack) {
-      if (active) {
-        const unmuteStartedAt = performance.now();
-        void this.localTrack.unmute().then(() => {
-          this.localTxStats.noteTrackUnmuted(performance.now() - unmuteStartedAt);
-        }).catch((error) => {
-          logger.error('Failed to unmute LiveKit microphone track', error);
-        });
-      } else {
-        void this.localTrack.mute().catch((error) => {
-          logger.error('Failed to mute LiveKit microphone track', error);
-        });
-      }
-    }
   }
 
-  private async startLiveKitCapture(
-    offer: RealtimeTransportOffer,
-  ): Promise<void> {
+  private estimateServerTimeMs(clientTimeMs: number): number | null {
+    const snapshot = this.clockSync.getSnapshot();
+    if (
+      snapshot.offsetMs === null
+      || (snapshot.confidence !== 'medium' && snapshot.confidence !== 'high')
+    ) {
+      return null;
+    }
+    return clientTimeMs + snapshot.offsetMs;
+  }
+
+  private getClockConfidence(): RealtimeClockConfidence {
+    return this.clockSync.getSnapshot().confidence;
+  }
+
+  private startClockSync(sendControl: (payload: Record<string, unknown>) => boolean | void): void {
+    this.stopClockSync();
+    this.clockSync.reset();
+
+    const sendPing = () => {
+      try {
+        sendControl(this.clockSync.createPing(Date.now()));
+      } catch (error) {
+        logger.debug('Failed to send voice TX clock sync ping', error);
+      }
+    };
+
+    sendPing();
+    this.clockSyncTimer = window.setInterval(sendPing, VOICE_TX_CLOCK_SYNC_INTERVAL_MS);
+  }
+
+  private stopClockSync(): void {
+    if (this.clockSyncTimer !== null) {
+      window.clearInterval(this.clockSyncTimer);
+      this.clockSyncTimer = null;
+    }
+    this.clockSync.reset();
+  }
+
+  private handleClockSyncControlMessage(message: unknown): void {
+    this.clockSync.handlePong(message);
+  }
+
+  private async ensureCompatCaptureRuntime(): Promise<{
+    mediaStream: MediaStream;
+    audioContext: AudioContext;
+    mediaSource: MediaStreamAudioSourceNode;
+    captureBackend: CompatCaptureBackend;
+  }> {
     const mediaStream = await requestInteractiveMicrophone(AUDIO_CONSTRAINTS, this.mediaStream);
     const audioContext = await ensureInteractiveAudioContext(this.audioContext);
     const mediaSource = this.mediaSource ?? audioContext.createMediaStreamSource(mediaStream);
-    const sourceTrack = mediaStream.getAudioTracks()[0];
-    if (!sourceTrack) {
-      throw new Error('No microphone track is available for LiveKit capture');
-    }
 
-    const room = new Room({
-      adaptiveStream: false,
-      dynacast: false,
-    });
-    room.on(RoomEvent.Disconnected, () => {
-      logger.warn('LiveKit voice capture disconnected unexpectedly');
-    });
-    await room.connect(offer.url, offer.token, {
-      autoSubscribe: false,
-    });
-
-    const localTrack = new LocalAudioTrack(
-      sourceTrack,
-      AUDIO_CONSTRAINTS,
-      true,
-      audioContext,
-    );
-    await room.localParticipant.publishTrack(localTrack, {
-      source: Track.Source.Microphone,
-      name: 'voice-tx',
-    });
-    await localTrack.mute();
-
-    this.transportKind = 'livekit';
-    this.localTxStats.reset('livekit');
-    this.room = room;
-    this.localTrack = localTrack;
     this.mediaStream = mediaStream;
     this.audioContext = audioContext;
     this.mediaSource = mediaSource;
-    this._participantIdentity = offer.participantIdentity ?? null;
-    this.ensureInputLevelMonitor();
 
-    if (this.pttActive) {
-      await this.localTrack.unmute();
+    if (!this.captureBackend) {
+      this.captureBackend = await createCompatCaptureBackend(audioContext);
+      this.captureBackendSourceConnected = false;
     }
 
-    logger.info('Voice capture connected via LiveKit', {
-      roomName: offer.roomName,
-      participantIdentity: offer.participantIdentity,
-    });
-    this.startLiveKitSenderStatsPolling();
+    if (!this.captureBackendSourceConnected) {
+      mediaSource.connect(this.captureBackend.inputNode);
+      this.captureBackendSourceConnected = true;
+    }
+
+    this.ensureInputLevelMonitor();
+    return {
+      mediaStream,
+      audioContext,
+      mediaSource,
+      captureBackend: this.captureBackend,
+    };
   }
 
   private async startCompatCapture(offer: RealtimeTransportOffer): Promise<void> {
-    const mediaStream = await requestInteractiveMicrophone(AUDIO_CONSTRAINTS, this.mediaStream);
-    const audioContext = await ensureInteractiveAudioContext(this.audioContext);
-    const mediaSource = this.mediaSource ?? audioContext.createMediaStreamSource(mediaStream);
-    const captureBackend = await createCompatCaptureBackend(audioContext);
+    const {
+      mediaStream,
+      audioContext,
+      mediaSource,
+      captureBackend,
+    } = await this.ensureCompatCaptureRuntime();
+    captureBackend.setFrameHandler(null);
 
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(`${normalizeWsUrl(offer.url)}?token=${encodeURIComponent(offer.token)}`);
@@ -312,30 +310,64 @@ export class VoiceCapture {
     }
 
     let hasLoggedFirstCompatFrame = false;
+    const sender = new VoiceTxUplinkSender({
+      transport: 'ws-compat',
+      sendBinary: (payload) => {
+        if (!this.compatSocket || this.compatSocket.readyState !== WebSocket.OPEN) {
+          return false;
+        }
+        this.compatSocket.send(payload);
+        return true;
+      },
+      getBufferedAmount: () => this.compatSocket?.bufferedAmount ?? null,
+      estimateServerTimeMs: (clientTimeMs) => this.estimateServerTimeMs(clientTimeMs),
+      getClockConfidence: () => this.getClockConfidence(),
+    });
+    this.uplinkSender = sender;
+    this.localTxStats.reset('ws-compat');
+
+    if (this.compatSocket) {
+      this.compatSocket.onmessage = (event) => {
+        if (typeof event.data !== 'string') {
+          return;
+        }
+        try {
+          this.handleClockSyncControlMessage(JSON.parse(event.data) as unknown);
+        } catch {
+          // ignore non-JSON control frames
+        }
+      };
+    }
+    this.startClockSync((payload) => {
+      if (!this.compatSocket || this.compatSocket.readyState !== WebSocket.OPEN) {
+        return false;
+      }
+      this.compatSocket.send(JSON.stringify(payload));
+      return true;
+    });
+
     captureBackend.setFrameHandler((frame) => {
       if (!this.pttActive) {
         return;
       }
-      if (!this.compatSocket || this.compatSocket.readyState !== WebSocket.OPEN) {
+      if (!this.compatSocket || this.compatSocket.readyState !== WebSocket.OPEN || this.uplinkSender !== sender) {
         this.localTxStats.noteFrameSkipped();
         return;
       }
 
       try {
-        const sendStartedAt = performance.now();
-        const payload = encodeWsCompatAudioFrame({
-          sequence: this.compatSequence++,
-          timestampMs: Date.now(),
-          sampleRate: frame.sampleRate,
-          channels: 1,
-          samplesPerChannel: frame.samplesPerChannel,
-          pcm: new Int16Array(frame.buffer),
-        });
-        this.compatSocket.send(payload);
+        const result = sender.sendFrame(frame);
+        if (!result.sent) {
+          this.localTxStats.noteFrameSkipped(result.dropped);
+          return;
+        }
         this.localTxStats.noteFrameSent(
-          frame.samplesPerChannel,
-          performance.now() - sendStartedAt,
-          this.compatSocket.bufferedAmount,
+          result.samplesPerChannel,
+          result.sendDurationMs,
+          result.bufferedAmountBytes,
+          result.bufferedAudioMs,
+          sender.clockConfidence,
+          result.degraded,
         );
         if (!hasLoggedFirstCompatFrame) {
           hasLoggedFirstCompatFrame = true;
@@ -349,10 +381,7 @@ export class VoiceCapture {
       }
     });
 
-    mediaSource.connect(captureBackend.inputNode);
-
     this.transportKind = 'ws-compat';
-    this.localTxStats.reset('ws-compat');
     this.mediaStream = mediaStream;
     this.audioContext = audioContext;
     this.mediaSource = mediaSource;
@@ -361,6 +390,93 @@ export class VoiceCapture {
     this._participantIdentity = offer.participantIdentity ?? null;
 
     logger.info('Voice capture connected via compatibility WebSocket', {
+      participantIdentity: offer.participantIdentity,
+    });
+  }
+
+
+  private async startRtcDataAudioCapture(
+    offer: RealtimeTransportOffer,
+    hints?: RealtimeConnectivityHints,
+  ): Promise<void> {
+    const {
+      mediaStream,
+      audioContext,
+      mediaSource,
+      captureBackend,
+    } = await this.ensureCompatCaptureRuntime();
+    captureBackend.setFrameHandler(null);
+    const client = new RtcDataAudioClient({
+      offer,
+      iceServers: hints?.iceServers,
+      onControlMessage: (message) => {
+        this.handleClockSyncControlMessage(message);
+      },
+      onClose: () => {
+        if (this.rtcDataAudioClient === client) {
+          logger.warn('rtc-data-audio uplink closed unexpectedly');
+        }
+      },
+    });
+    this.rtcDataAudioClient = client;
+    await client.connect();
+    this.startClockSync((payload) => client.sendJson(payload));
+
+    let hasLoggedFirstFrame = false;
+    const sender = new VoiceTxUplinkSender({
+      transport: 'rtc-data-audio',
+      sendBinary: (payload) => client.sendBinary(payload),
+      getBufferedAmount: () => client.bufferedAmount,
+      estimateServerTimeMs: (clientTimeMs) => this.estimateServerTimeMs(clientTimeMs),
+      getClockConfidence: () => this.getClockConfidence(),
+    });
+    this.uplinkSender = sender;
+    this.localTxStats.reset('rtc-data-audio');
+
+    captureBackend.setFrameHandler((frame) => {
+      if (!this.pttActive) {
+        return;
+      }
+      if (!this.rtcDataAudioClient?.isOpen || this.uplinkSender !== sender) {
+        this.localTxStats.noteFrameSkipped();
+        return;
+      }
+
+      try {
+        const result = sender.sendFrame(frame);
+        if (!result.sent) {
+          this.localTxStats.noteFrameSkipped(result.dropped);
+          return;
+        }
+        this.localTxStats.noteFrameSent(
+          result.samplesPerChannel,
+          result.sendDurationMs,
+          result.bufferedAmountBytes,
+          result.bufferedAudioMs,
+          sender.clockConfidence,
+          result.degraded,
+        );
+        if (!hasLoggedFirstFrame) {
+          hasLoggedFirstFrame = true;
+          logger.info('First rtc-data-audio uplink audio frame sent', {
+            sampleRate: frame.sampleRate,
+            samplesPerChannel: frame.samplesPerChannel,
+          });
+        }
+      } catch (error) {
+        logger.debug('Failed to send rtc-data-audio uplink audio frame', error);
+      }
+    });
+
+    this.transportKind = 'rtc-data-audio';
+    this.mediaStream = mediaStream;
+    this.audioContext = audioContext;
+    this.mediaSource = mediaSource;
+    this.ensureInputLevelMonitor();
+    this.captureBackend = captureBackend;
+    this._participantIdentity = offer.participantIdentity ?? null;
+
+    logger.info('Voice capture connected via rtc-data-audio', {
       participantIdentity: offer.participantIdentity,
     });
   }
@@ -442,28 +558,20 @@ export class VoiceCapture {
     this._inputLevel = 0;
   }
 
-  private cleanupTransportOnly(): void {
-    if (this.liveKitStatsTimer !== null) {
-      window.clearInterval(this.liveKitStatsTimer);
-      this.liveKitStatsTimer = null;
-    }
+  private cleanupTransportOnly(options: { preserveCaptureBackend?: boolean } = {}): void {
+    const preserveCaptureBackend = options.preserveCaptureBackend === true;
 
     if (this.captureBackend) {
-      try {
-        this.captureBackend.close();
-      } catch {
-        // ignore
+      this.captureBackend.setFrameHandler(null);
+      if (!preserveCaptureBackend) {
+        try {
+          this.captureBackend.close();
+        } catch {
+          // ignore
+        }
+        this.captureBackend = null;
+        this.captureBackendSourceConnected = false;
       }
-      this.captureBackend = null;
-    }
-
-    if (this.localTrack) {
-      try {
-        this.localTrack.stop();
-      } catch {
-        // ignore
-      }
-      this.localTrack = null;
     }
 
     if (this.compatSocket) {
@@ -475,72 +583,26 @@ export class VoiceCapture {
       this.compatSocket = null;
     }
 
-    if (this.room) {
-      void this.room.disconnect();
-      this.room = null;
+    if (this.rtcDataAudioClient) {
+      try {
+        this.rtcDataAudioClient.close();
+      } catch {
+        // ignore
+      }
+      this.rtcDataAudioClient = null;
     }
 
     this.transportKind = null;
     this._participantIdentity = null;
-    this.compatSequence = 0;
+    this.uplinkSender = null;
+    this.stopClockSync();
     this.localTxStats.reset(null);
-  }
-
-  private startLiveKitSenderStatsPolling(): void {
-    if (!this.localTrack) {
-      return;
-    }
-
-    if (this.liveKitStatsTimer !== null) {
-      window.clearInterval(this.liveKitStatsTimer);
-      this.liveKitStatsTimer = null;
-    }
-
-    const pollStats = async () => {
-      if (!this.localTrack) {
-        return;
-      }
-
-      try {
-        const report = await this.localTrack.getRTCStatsReport();
-        let packetsSent: number | null = null;
-        let roundTripTimeMs: number | null = null;
-        let jitterMs: number | null = null;
-
-        report?.forEach((entry) => {
-          if (entry.type === 'outbound-rtp') {
-            const outbound = entry as OutboundRtpStatsLike;
-            packetsSent = typeof outbound.packetsSent === 'number' ? outbound.packetsSent : packetsSent;
-            roundTripTimeMs = typeof outbound.roundTripTime === 'number'
-              ? outbound.roundTripTime * 1000
-              : roundTripTimeMs;
-            jitterMs = typeof outbound.jitter === 'number'
-              ? outbound.jitter * 1000
-              : jitterMs;
-          }
-        });
-
-        this.localTxStats.noteLiveKitSenderStats({
-          bitrateKbps: Number.isFinite(this.localTrack.currentBitrate) ? this.localTrack.currentBitrate / 1000 : null,
-          packetsSent,
-          roundTripTimeMs,
-          jitterMs,
-        });
-      } catch (error) {
-        logger.debug('Failed to poll LiveKit sender stats', error);
-      }
-    };
-
-    void pollStats();
-    this.liveKitStatsTimer = window.setInterval(() => {
-      void pollStats();
-    }, LIVEKIT_SENDER_STATS_INTERVAL_MS);
   }
 
   private cleanup(options: VoiceCaptureCleanupOptions = {}): void {
     const { preserveInteractiveRuntime = false } = options;
 
-    this.cleanupTransportOnly();
+    this.cleanupTransportOnly({ preserveCaptureBackend: preserveInteractiveRuntime });
 
     if (!preserveInteractiveRuntime) {
       this.resetInputLevelMonitor();
@@ -553,6 +615,7 @@ export class VoiceCapture {
         // ignore
       }
       this.mediaSource = null;
+      this.captureBackendSourceConnected = false;
     }
 
     if (!preserveInteractiveRuntime) {

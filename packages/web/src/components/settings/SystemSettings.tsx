@@ -23,10 +23,7 @@ import type {
   PSKReporterStatus,
   AuthStatus,
   NetworkInfo,
-  LiveKitNetworkMode,
   RealtimeSettingsResponseData,
-  RealtimeConnectivityErrorCode,
-  RealtimeCredentialStatus,
   RealtimeTransportPolicy,
   DesktopHttpsStatus,
   DesktopHttpsMode,
@@ -188,19 +185,6 @@ const DEFAULT_DECODE_WINDOW_STATE: DecodeWindowState = {
   ft4CustomWindows: [...FT4_WINDOW_PRESETS[DEFAULT_DECODE_WINDOW_SETTINGS.ft4?.preset ?? 'balanced']],
 };
 
-function buildLiveKitExampleUrl(baseUrl: string): string {
-  try {
-    const url = new URL(baseUrl);
-    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    url.pathname = '/livekit';
-    url.search = '';
-    url.hash = '';
-    return url.toString().replace(/\/$/, '/livekit');
-  } catch {
-    return 'ws://127.0.0.1/livekit';
-  }
-}
-
 function formatDateTimeValue(value?: string | null): string {
   if (!value) return '-';
   const time = new Date(value);
@@ -354,62 +338,16 @@ function getCpuLoadInfo(count: number, t: (key: string) => string): { label: str
 }
 
 function getRealtimeTransportLabel(
-  transport: 'livekit' | 'ws-compat' | null | undefined,
+  transport: 'rtc-data-audio' | 'ws-compat' | null | undefined,
   t: (key: string) => string,
 ): string {
-  if (transport === 'livekit') {
-    return t('system.realtimePathLiveKit');
+  if (transport === 'rtc-data-audio') {
+    return t('system.realtimePathRtcDataAudio');
   }
   if (transport === 'ws-compat') {
     return t('system.realtimePathCompat');
   }
   return t('system.realtimeUnknown');
-}
-
-function getRealtimeIssueLabel(
-  issueCode: RealtimeConnectivityErrorCode | null | undefined,
-  t: (key: string, options?: Record<string, unknown>) => string,
-): string {
-  if (!issueCode) {
-    return t('system.realtimeNoRecentIssue');
-  }
-
-  switch (issueCode) {
-    case 'PUBLIC_URL_MISCONFIGURED':
-      return t('radio:realtime.publicUrlMisconfigured', { scope: t('radio:realtime.scopeRadio') });
-    case 'SIGNALING_UNREACHABLE':
-      return t('radio:realtime.signalingUnreachable', { scope: t('radio:realtime.scopeRadio') });
-    case 'ICE_CONNECTION_FAILED':
-      return t('radio:realtime.iceFailed', { scope: t('radio:realtime.scopeRadio') });
-    case 'NO_AUDIO_TRACK':
-      return t('radio:realtime.noAudioTrack', { scope: t('radio:realtime.scopeRadio') });
-    case 'AUDIO_PLAYBACK_BLOCKED':
-      return t('radio:realtime.audioPlaybackBlocked', { scope: t('radio:realtime.scopeRadio') });
-    case 'MEDIA_DEVICE_PERMISSION_DENIED':
-      return t('radio:realtime.mediaPermissionDenied');
-    case 'SESSION_EXPIRED_OR_INVALID':
-      return t('radio:realtime.sessionExpired', { scope: t('radio:realtime.scopeRadio') });
-    case 'TOKEN_REQUEST_FAILED':
-      return t('radio:realtime.tokenRequestFailed', { scope: t('radio:realtime.scopeRadio') });
-    default:
-      return t('radio:realtime.unknownFailure', { scope: t('radio:realtime.scopeRadio') });
-  }
-}
-
-function getRealtimeCredentialSourceLabel(
-  source: RealtimeCredentialStatus['source'] | null | undefined,
-  t: (key: string) => string,
-): string {
-  switch (source) {
-    case 'managed-file':
-      return t('system.realtimeCredentialManaged');
-    case 'environment-override':
-      return t('system.realtimeCredentialEnvOverride');
-    case 'missing':
-      return t('system.realtimeCredentialMissing');
-    default:
-      return t('system.realtimeUnknown');
-  }
 }
 
 const logger = createLogger('SystemSettings');
@@ -459,14 +397,12 @@ export const SystemSettings = forwardRef<
 
   // 网络信息
   const [networkInfo, setNetworkInfo] = useState<NetworkInfo | null>(null);
-  const [liveKitPublicUrl, setLiveKitPublicUrl] = useState('');
-  const [originalLiveKitPublicUrl, setOriginalLiveKitPublicUrl] = useState('');
   const [realtimeTransportPolicy, setRealtimeTransportPolicy] = useState<RealtimeTransportPolicy>('auto');
   const [originalRealtimeTransportPolicy, setOriginalRealtimeTransportPolicy] = useState<RealtimeTransportPolicy>('auto');
-  const [liveKitNetworkMode, setLiveKitNetworkMode] = useState<LiveKitNetworkMode>('lan');
-  const [originalLiveKitNetworkMode, setOriginalLiveKitNetworkMode] = useState<LiveKitNetworkMode>('lan');
-  const [liveKitNodeIp, setLiveKitNodeIp] = useState('');
-  const [originalLiveKitNodeIp, setOriginalLiveKitNodeIp] = useState('');
+  const [rtcDataAudioPublicHost, setRtcDataAudioPublicHost] = useState('');
+  const [originalRtcDataAudioPublicHost, setOriginalRtcDataAudioPublicHost] = useState('');
+  const [rtcDataAudioPublicUdpPort, setRtcDataAudioPublicUdpPort] = useState('');
+  const [originalRtcDataAudioPublicUdpPort, setOriginalRtcDataAudioPublicUdpPort] = useState('');
   const [realtimeRuntime, setRealtimeRuntime] = useState<RealtimeRuntimeView | null>(null);
   const [urlCopied, setUrlCopied] = useState(false);
   const [ntpServers, setNtpServers] = useState<NtpServerDraftItem[]>([]);
@@ -481,7 +417,6 @@ export const SystemSettings = forwardRef<
   const [closeBehavior, setCloseBehavior] = useState<string>('ask');
   const [originalCloseBehavior, setOriginalCloseBehavior] = useState<string>('ask');
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
-  const isMacElectron = isElectron && typeof window !== 'undefined' && window.navigator.userAgent.includes('Macintosh');
   const [desktopHttpsStatus, setDesktopHttpsStatus] = useState<DesktopHttpsStatus | null>(null);
   const [desktopHttpsEnabled, setDesktopHttpsEnabled] = useState(false);
   const [originalDesktopHttpsEnabled, setOriginalDesktopHttpsEnabled] = useState(false);
@@ -920,37 +855,31 @@ export const SystemSettings = forwardRef<
     data: RealtimeSettingsResponseData,
     options?: { preserveDraft?: boolean },
   ) => {
-    const nextPublicUrl = data.publicWsUrl ?? '';
     const nextPolicy = data.transportPolicy ?? 'auto';
-    const nextNetworkMode = data.networkMode ?? 'lan';
-    const nextNodeIp = data.nodeIp ?? '';
+    const nextRtcPublicHost = data.rtcDataAudioPublicHost ?? '';
+    const nextRtcPublicUdpPort = data.rtcDataAudioPublicUdpPort ? String(data.rtcDataAudioPublicUdpPort) : '';
     const preserveDraft = options?.preserveDraft === true;
-    const hasLocalDraft = liveKitPublicUrl !== originalLiveKitPublicUrl
-      || realtimeTransportPolicy !== originalRealtimeTransportPolicy
-      || liveKitNetworkMode !== originalLiveKitNetworkMode
-      || liveKitNodeIp !== originalLiveKitNodeIp;
+    const hasLocalDraft = realtimeTransportPolicy !== originalRealtimeTransportPolicy
+      || rtcDataAudioPublicHost !== originalRtcDataAudioPublicHost
+      || rtcDataAudioPublicUdpPort !== originalRtcDataAudioPublicUdpPort;
 
     if (!preserveDraft || !hasLocalDraft) {
-      setLiveKitPublicUrl(nextPublicUrl);
       setRealtimeTransportPolicy(nextPolicy);
-      setLiveKitNetworkMode(nextNetworkMode);
-      setLiveKitNodeIp(nextNodeIp);
+      setRtcDataAudioPublicHost(nextRtcPublicHost);
+      setRtcDataAudioPublicUdpPort(nextRtcPublicUdpPort);
     }
 
-    setOriginalLiveKitPublicUrl(nextPublicUrl);
     setOriginalRealtimeTransportPolicy(nextPolicy);
-    setOriginalLiveKitNetworkMode(nextNetworkMode);
-    setOriginalLiveKitNodeIp(nextNodeIp);
+    setOriginalRtcDataAudioPublicHost(nextRtcPublicHost);
+    setOriginalRtcDataAudioPublicUdpPort(nextRtcPublicUdpPort);
     setRealtimeRuntime(data.runtime ?? null);
   }, [
-    liveKitPublicUrl,
-    originalLiveKitPublicUrl,
     realtimeTransportPolicy,
     originalRealtimeTransportPolicy,
-    liveKitNetworkMode,
-    originalLiveKitNetworkMode,
-    liveKitNodeIp,
-    originalLiveKitNodeIp,
+    rtcDataAudioPublicHost,
+    originalRtcDataAudioPublicHost,
+    rtcDataAudioPublicUdpPort,
+    originalRtcDataAudioPublicUdpPort,
   ]);
 
   const loadRealtimeSettings = useCallback(async () => {
@@ -1051,10 +980,9 @@ export const SystemSettings = forwardRef<
       hasPskrChanges() ||
       hasDecodeWindowChanges() ||
       hasNtpServerChanges() ||
-      liveKitPublicUrl !== originalLiveKitPublicUrl ||
       realtimeTransportPolicy !== originalRealtimeTransportPolicy ||
-      liveKitNetworkMode !== originalLiveKitNetworkMode ||
-      liveKitNodeIp !== originalLiveKitNodeIp ||
+      rtcDataAudioPublicHost !== originalRtcDataAudioPublicHost ||
+      rtcDataAudioPublicUdpPort !== originalRtcDataAudioPublicUdpPort ||
       (isElectron && closeBehavior !== originalCloseBehavior) ||
       (isElectron && (
         desktopHttpsEnabled !== originalDesktopHttpsEnabled ||
@@ -1155,18 +1083,19 @@ export const SystemSettings = forwardRef<
       }
 
       if (
-        liveKitPublicUrl !== originalLiveKitPublicUrl
-        || realtimeTransportPolicy !== originalRealtimeTransportPolicy
-        || liveKitNetworkMode !== originalLiveKitNetworkMode
-        || liveKitNodeIp !== originalLiveKitNodeIp
+        realtimeTransportPolicy !== originalRealtimeTransportPolicy
+        || rtcDataAudioPublicHost !== originalRtcDataAudioPublicHost
+        || rtcDataAudioPublicUdpPort !== originalRtcDataAudioPublicUdpPort
       ) {
-        const normalizedPublicUrl = liveKitPublicUrl.trim();
-        const normalizedNodeIp = liveKitNodeIp.trim();
+        const normalizedRtcPublicHost = rtcDataAudioPublicHost.trim();
+        const normalizedRtcPublicUdpPort = rtcDataAudioPublicUdpPort.trim();
+        const parsedRtcPublicUdpPort = normalizedRtcPublicUdpPort
+          ? Number.parseInt(normalizedRtcPublicUdpPort, 10)
+          : null;
         const realtimeResult = await api.updateRealtimeSettings({
-          publicWsUrl: normalizedPublicUrl || null,
           transportPolicy: realtimeTransportPolicy,
-          networkMode: liveKitNetworkMode,
-          nodeIp: normalizedNodeIp || null,
+          rtcDataAudioPublicHost: normalizedRtcPublicHost || null,
+          rtcDataAudioPublicUdpPort: Number.isFinite(parsedRtcPublicUdpPort) ? parsedRtcPublicUdpPort : null,
         });
         applyRealtimeSettingsSnapshot(realtimeResult.data);
       }
@@ -1227,16 +1156,13 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, ntpServers, originalNtpServers, liveKitPublicUrl, originalLiveKitPublicUrl, realtimeTransportPolicy, originalRealtimeTransportPolicy, liveKitNetworkMode, originalLiveKitNetworkMode, liveKitNodeIp, originalLiveKitNodeIp, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, ntpServers, originalNtpServers, realtimeTransportPolicy, originalRealtimeTransportPolicy, rtcDataAudioPublicHost, originalRtcDataAudioPublicHost, rtcDataAudioPublicUdpPort, originalRtcDataAudioPublicUdpPort, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
 
   const runtimeHints = realtimeRuntime?.connectivityHints ?? null;
-  const runtimeIssueLabel = getRealtimeIssueLabel(realtimeRuntime?.radioBridgeIssueCode ?? null, t);
-  const runtimeCredential = realtimeRuntime?.credentialStatus ?? null;
-  const realtimeUrlOverrideActive = runtimeHints?.publicUrlOverrideActive ?? false;
-  const liveKitApplyHint = isElectron
-    ? t('system.liveKitNetworkModeApplyHintElectron')
-    : t('system.liveKitNetworkModeApplyHintServer');
-  const manualNodeIpVisible = liveKitNetworkMode === 'internet-manual';
+  const rtcDataAudioRuntime = realtimeRuntime?.rtcDataAudio ?? null;
+  const rtcPublicEndpointLabel = rtcDataAudioRuntime?.publicEndpoint
+    ? `${rtcDataAudioRuntime.publicEndpoint.host}:${rtcDataAudioRuntime.publicEndpoint.port}`
+    : t('system.rtcDataAudioPublicCandidateDisabled');
   const desktopHttpsCertificateMeta = desktopHttpsStatus?.certificateMeta ?? null;
   const desktopHttpsBrowserUrl = desktopHttpsStatus?.browserAccessUrl ?? null;
   const desktopUpdateSourceLabel = desktopUpdateStatus?.metadataSource
@@ -1878,8 +1804,8 @@ export const SystemSettings = forwardRef<
           </Alert>
 
           <Alert color="primary" variant="flat" className="text-xs">
-            <p>{t('system.realtimeLiveKitBenefitsTitle')}</p>
-            <p className="mt-1">{t('system.realtimeLiveKitBenefitsDesc')}</p>
+            <p>{t('system.realtimeRtcDataAudioBenefitsTitle')}</p>
+            <p className="mt-1">{t('system.realtimeRtcDataAudioBenefitsDesc')}</p>
           </Alert>
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -1890,15 +1816,7 @@ export const SystemSettings = forwardRef<
                 <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.realtimeBrowserEntryDesc')}</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <Chip
-                  size="sm"
-                  color={realtimeUrlOverrideActive ? 'warning' : 'success'}
-                  variant="flat"
-                >
-                  {realtimeUrlOverrideActive
-                    ? t('system.realtimeBrowserEntryOverrideBadge')
-                    : t('system.realtimeBrowserEntryDefaultBadge')}
-                </Chip>
+                <Chip size="sm" color="primary" variant="flat">rtc-data-audio</Chip>
                 <Chip
                   size="sm"
                   color={(runtimeHints?.signalingUrl || '').startsWith('wss:') ? 'success' : 'default'}
@@ -1906,6 +1824,7 @@ export const SystemSettings = forwardRef<
                 >
                   {(runtimeHints?.signalingUrl || '').startsWith('wss:') ? 'WSS' : 'WS'}
                 </Chip>
+                <Chip size="sm" color="default" variant="flat">fallback: ws-compat</Chip>
               </div>
               <div className="space-y-2">
                 <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeBrowserEntryCurrentLabel')}</p>
@@ -1913,18 +1832,7 @@ export const SystemSettings = forwardRef<
                   {runtimeHints?.signalingUrl || t('system.realtimeUrlPending')}
                 </code>
               </div>
-              <p className={SETTINGS_MUTED_CLASS}>
-                {realtimeUrlOverrideActive
-                  ? t('system.liveKitPublicUrlManualHint')
-                  : t('system.liveKitPublicUrlAutoHint')}
-              </p>
-              {networkInfo && networkInfo.addresses.length > 0 && (
-                <p className={SETTINGS_MUTED_CLASS}>
-                  {t('system.liveKitPublicUrlExample', {
-                    url: buildLiveKitExampleUrl(networkInfo.addresses[0].url),
-                  })}
-                </p>
-              )}
+              <p className={SETTINGS_MUTED_CLASS}>{t('system.realtimeBrowserEntryRtcHint')}</p>
             </div>
 
             <div className={`${SETTINGS_PANEL_CLASS} space-y-3`}>
@@ -1955,55 +1863,59 @@ export const SystemSettings = forwardRef<
               </p>
             </div>
 
-            <div className={`${SETTINGS_PANEL_CLASS} space-y-3`}>
+            <div className={`${SETTINGS_PANEL_CLASS} space-y-3 xl:col-span-2`}>
               <div>
                 <p className={SETTINGS_MUTED_CLASS}>03</p>
-                <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.liveKitNetworkModeTitle')}</h5>
-                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.liveKitNetworkModeDesc')}</p>
+                <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.rtcDataAudioPublicUdpTitle')}</h5>
+                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.rtcDataAudioPublicUdpDesc')}</p>
               </div>
-              <Select
-                selectedKeys={[liveKitNetworkMode]}
-                onSelectionChange={(keys) => {
-                  const value = Array.from(keys)[0] as LiveKitNetworkMode | undefined;
-                  if (value) {
-                    setLiveKitNetworkMode(value);
-                  }
-                }}
-                isDisabled={isSaving}
-                size="sm"
-                variant="bordered"
-              >
-                <SelectItem key="lan">{t('system.liveKitNetworkModeLan')}</SelectItem>
-                <SelectItem key="internet-auto">{t('system.liveKitNetworkModeInternetAuto')}</SelectItem>
-                <SelectItem key="internet-manual">{t('system.liveKitNetworkModeInternetManual')}</SelectItem>
-              </Select>
-              <p className={SETTINGS_MUTED_CLASS}>
-                {liveKitNetworkMode === 'internet-manual'
-                  ? t('system.liveKitNetworkModeInternetManualHint')
-                  : liveKitNetworkMode === 'internet-auto'
-                    ? t('system.liveKitNetworkModeInternetAutoHint')
-                    : t('system.liveKitNetworkModeLanHint')}
-              </p>
-            </div>
-
-            <div className={`${SETTINGS_PANEL_CLASS} space-y-3`}>
-              <div>
-                <p className={SETTINGS_MUTED_CLASS}>04</p>
-                <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.liveKitNodeIpTitle')}</h5>
-                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.liveKitNodeIpDesc')}</p>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
+                <Input
+                  value={rtcDataAudioPublicHost}
+                  onValueChange={setRtcDataAudioPublicHost}
+                  placeholder={t('system.rtcDataAudioPublicHostPlaceholder')}
+                  isDisabled={isSaving}
+                  size="sm"
+                  variant="bordered"
+                  label={t('system.rtcDataAudioPublicHostLabel')}
+                />
+                <Input
+                  value={rtcDataAudioPublicUdpPort}
+                  onValueChange={setRtcDataAudioPublicUdpPort}
+                  placeholder={String(rtcDataAudioRuntime?.localUdpPort ?? 50110)}
+                  isDisabled={isSaving}
+                  size="sm"
+                  variant="bordered"
+                  type="number"
+                  min={1}
+                  max={65535}
+                  label={t('system.rtcDataAudioPublicUdpPortLabel')}
+                />
               </div>
-              <Input
-                value={liveKitNodeIp}
-                onValueChange={setLiveKitNodeIp}
-                placeholder={t('system.liveKitNodeIpPlaceholder')}
-                isDisabled={isSaving || !manualNodeIpVisible}
-                size="sm"
-                variant="bordered"
-              />
+              <div className="flex flex-wrap items-center gap-2">
+                <Chip
+                  size="sm"
+                  color={rtcDataAudioRuntime?.publicCandidateEnabled ? 'success' : 'default'}
+                  variant="flat"
+                >
+                  {rtcDataAudioRuntime?.publicCandidateEnabled
+                    ? t('system.rtcDataAudioPublicCandidateEnabled')
+                    : t('system.rtcDataAudioPublicCandidateDisabled')}
+                </Chip>
+                <Chip size="sm" color="primary" variant="flat">
+                  {t('system.rtcDataAudioLocalUdpPort', { port: rtcDataAudioRuntime?.localUdpPort ?? 50110 })}
+                </Chip>
+                <Chip size="sm" color="default" variant="flat">
+                  {t('system.rtcDataAudioPublicEndpoint', { endpoint: rtcPublicEndpointLabel })}
+                </Chip>
+              </div>
               <p className={SETTINGS_MUTED_CLASS}>
-                {manualNodeIpVisible
-                  ? t('system.liveKitNodeIpManualHint')
-                  : t('system.liveKitNodeIpAutoHint')}
+                {rtcDataAudioRuntime?.publicEndpoint
+                  ? t('system.rtcDataAudioPublicEndpointActive', {
+                      host: rtcDataAudioRuntime.publicEndpoint.host,
+                      port: rtcDataAudioRuntime.publicEndpoint.port,
+                    })
+                  : t('system.rtcDataAudioPublicUdpHint')}
               </p>
             </div>
           </div>
@@ -2014,7 +1926,7 @@ export const SystemSettings = forwardRef<
           </Alert>
 
           <Alert color="default" variant="flat" className="text-xs">
-            {liveKitApplyHint}
+            {t('system.realtimeRtcDataAudioApplyHint')}
           </Alert>
 
           <details className="pt-3 border-t border-divider group">
@@ -2027,34 +1939,6 @@ export const SystemSettings = forwardRef<
             </summary>
 
             <div className="mt-4 space-y-3">
-              <div className={`${SETTINGS_PANEL_CLASS} space-y-3`}>
-                <div>
-                  <p className={SETTINGS_MUTED_CLASS}>{t('system.advanced')}</p>
-                  <h6 className={SETTINGS_SUBTITLE_CLASS}>{t('system.liveKitPublicUrl')}</h6>
-                  <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.liveKitPublicUrlDesc')}</p>
-                </div>
-                <Input
-                  value={liveKitPublicUrl}
-                  onValueChange={setLiveKitPublicUrl}
-                  placeholder={t('system.liveKitPublicUrlPlaceholder')}
-                  isDisabled={isSaving}
-                  size="sm"
-                  variant="bordered"
-                />
-                <p className={SETTINGS_MUTED_CLASS}>
-                  {liveKitPublicUrl.trim()
-                    ? t('system.liveKitPublicUrlManualHint')
-                    : t('system.liveKitPublicUrlAutoHint')}
-                </p>
-                {isMacElectron && (
-                  <Alert color="warning" variant="flat" className="text-xs">
-                    <p>{t('system.liveKitMacInstallHint')}</p>
-                    <p className="mt-1 font-mono">brew install livekit</p>
-                    <p className="mt-1">{t('system.liveKitMacFallbackHint')}</p>
-                  </Alert>
-                )}
-              </div>
-
               <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
                 <div className={`${SETTINGS_PANEL_CLASS} py-2`}>
                   <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeCurrentPolicyLabel')}</p>
@@ -2076,7 +1960,7 @@ export const SystemSettings = forwardRef<
                   <div className="mt-2">
                     <Chip
                       size="sm"
-                      color={(realtimeRuntime?.radioReceiveTransport ?? 'ws-compat') === 'livekit' ? 'primary' : 'warning'}
+                      color={(realtimeRuntime?.radioReceiveTransport ?? 'ws-compat') === 'rtc-data-audio' ? 'primary' : 'warning'}
                       variant="flat"
                     >
                       {getRealtimeTransportLabel(realtimeRuntime?.radioReceiveTransport ?? null, t)}
@@ -2086,71 +1970,19 @@ export const SystemSettings = forwardRef<
                 </div>
 
                 <div className={`${SETTINGS_PANEL_CLASS} py-2`}>
-                  <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeLiveKitServiceLabel')}</p>
+                  <p className={SETTINGS_SUBDESC_CLASS}>{t('system.rtcDataAudioPublicUdpTitle')}</p>
                   <div className="mt-2">
                     <Chip
                       size="sm"
-                      color={realtimeRuntime?.liveKitEnabled ? 'success' : 'warning'}
+                      color={rtcDataAudioRuntime?.publicCandidateEnabled ? 'success' : 'default'}
                       variant="flat"
                     >
-                      {realtimeRuntime?.liveKitEnabled
-                        ? t('system.realtimeStatusEnabled')
-                        : t('system.realtimeStatusDisabled')}
+                      {rtcDataAudioRuntime?.publicCandidateEnabled
+                        ? t('system.rtcDataAudioPublicCandidateEnabled')
+                        : t('system.rtcDataAudioPublicCandidateDisabled')}
                     </Chip>
                   </div>
-                </div>
-
-                <div className={`${SETTINGS_PANEL_CLASS} py-2`}>
-                  <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeBridgeHealthLabel')}</p>
-                  <div className="mt-2">
-                    <Chip
-                      size="sm"
-                      color={realtimeRuntime?.radioBridgeHealthy === false ? 'danger' : 'success'}
-                      variant="flat"
-                    >
-                      {realtimeRuntime?.radioBridgeHealthy === false
-                        ? t('system.realtimeBridgeHealthUnhealthy')
-                        : t('system.realtimeBridgeHealthHealthy')}
-                    </Chip>
-                  </div>
-                  <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>{runtimeIssueLabel}</p>
-                </div>
-
-                <div className={`${SETTINGS_PANEL_CLASS} py-2 md:col-span-2 xl:col-span-2`}>
-                  <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeCredentialStatusLabel')}</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <Chip
-                      size="sm"
-                      color={runtimeCredential?.initialized ? 'success' : 'danger'}
-                      variant="flat"
-                    >
-                      {runtimeCredential?.initialized
-                        ? t('system.realtimeCredentialReady')
-                        : t('system.realtimeCredentialMissing')}
-                    </Chip>
-                    <Chip
-                      size="sm"
-                      color={runtimeCredential?.source === 'environment-override' ? 'warning' : 'default'}
-                      variant="flat"
-                    >
-                      {getRealtimeCredentialSourceLabel(runtimeCredential?.source ?? null, t)}
-                    </Chip>
-                  </div>
-                  <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>
-                    {runtimeCredential?.apiKeyPreview
-                      ? t('system.realtimeCredentialPreview', { value: runtimeCredential.apiKeyPreview })
-                      : t('system.realtimeCredentialMissingHint')}
-                  </p>
-                  {runtimeCredential?.rotatedAt && (
-                    <p className={`mt-1 ${SETTINGS_MUTED_CLASS}`}>
-                      {t('system.realtimeCredentialRotatedAt', { value: runtimeCredential.rotatedAt })}
-                    </p>
-                  )}
-                  {runtimeCredential?.filePath && (
-                    <p className={`mt-1 break-all ${SETTINGS_MUTED_CLASS}`}>
-                      {t('system.realtimeCredentialFile', { value: runtimeCredential.filePath })}
-                    </p>
-                  )}
+                  <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>{rtcPublicEndpointLabel}</p>
                 </div>
               </div>
 
@@ -2161,15 +1993,15 @@ export const SystemSettings = forwardRef<
                 <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
                   <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
                     <span className="text-default-700">{t('system.realtimePortSignaling')}</span>
-                    <code className={SETTINGS_SUBDESC_CLASS}>{runtimeHints?.signalingPort ?? 7880}</code>
-                  </div>
-                  <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
-                    <span className="text-default-700">{t('system.realtimePortIceTcp')}</span>
-                    <code className={SETTINGS_SUBDESC_CLASS}>{runtimeHints?.rtcTcpPort ?? 7881}</code>
+                    <code className={SETTINGS_SUBDESC_CLASS}>/api/realtime/rtc-data-audio</code>
                   </div>
                   <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
                     <span className="text-default-700">{t('system.realtimePortUdp')}</span>
-                    <code className={SETTINGS_SUBDESC_CLASS}>{runtimeHints?.udpPortRange ?? '50000-50100'}</code>
+                    <code className={SETTINGS_SUBDESC_CLASS}>{rtcDataAudioRuntime?.localUdpPort ?? 50110}/udp</code>
+                  </div>
+                  <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
+                    <span className="text-default-700">{t('system.rtcDataAudioPublicEndpointLabel')}</span>
+                    <code className={SETTINGS_SUBDESC_CLASS}>{rtcPublicEndpointLabel}</code>
                   </div>
                   <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
                     <span className="text-default-700">{t('system.realtimePortCompat')}</span>
@@ -2184,10 +2016,9 @@ export const SystemSettings = forwardRef<
                 </div>
 
                 <div className={`mt-3 space-y-1 ${SETTINGS_SUBDESC_CLASS}`}>
-                  <p>{t('system.realtimePortHintAuto')}</p>
+                  <p>{t('system.realtimePortHintRtcDataAudio')}</p>
                   <p>{t('system.realtimePortHintCompat')}</p>
                   <p>{t('system.realtimePortHintFallback')}</p>
-                  <p>{t('system.realtimeCredentialLinuxHint')}</p>
                 </div>
               </div>
             </div>

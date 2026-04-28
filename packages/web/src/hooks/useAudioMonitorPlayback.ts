@@ -1,8 +1,8 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
-import { Room, RoomEvent, Track, type RemoteAudioTrack } from 'livekit-client';
 import { api } from '@tx5dr/core';
-import { decodeWsCompatAudioFrame, int16ToFloat32Pcm } from '@tx5dr/core';
+import { decodeRealtimePcmAudioFrame, int16ToFloat32Pcm } from '@tx5dr/core';
 import type {
+  RealtimeConnectivityHints,
   RealtimeScope,
   RealtimeSourceStats,
   RealtimeTransportKind,
@@ -21,21 +21,18 @@ import {
 } from '../audio/audioRuntime';
 import { executeRealtimeSessionFlow } from '../realtime/realtimeSessionFlow';
 import { showRealtimeTransportFallbackToast } from '../realtime/realtimeConnectivity';
+import { RtcDataAudioClient } from '../realtime/RtcDataAudioClient';
+import {
+  RealtimeClockSync,
+  type RealtimeClockConfidence,
+} from '../realtime/RealtimeClockSync';
 
 const logger = createLogger('useAudioMonitorPlayback');
 const STATS_POLL_INTERVAL_MS = 1000;
-const AUDIO_TRACK_WAIT_TIMEOUT_MS = 5000;
+const CLOCK_SYNC_INTERVAL_MS = 1000;
+const AUDIO_PATH_WAIT_TIMEOUT_MS = 5000;
 const TRANSPORT_SWITCH_DRAIN_TIMEOUT_MS = 1200;
 const VOLUME_RAMP_SECONDS = 0.003;
-
-type InboundRtpStatsLike = {
-  jitterBufferEmittedCount?: number;
-  jitterBufferDelay?: number;
-  jitter?: number;
-  packetsLost?: number;
-  packetsReceived?: number;
-  concealedSamples?: number;
-};
 
 interface ReceiverStatsData {
   latencyMs?: number;
@@ -48,6 +45,21 @@ interface ReceiverStatsData {
   bufferFillPercent?: number;
   queueDurationMs?: number;
   targetBufferMs?: number;
+  endToEndLatencyMs?: number | null;
+  networkAgeMs?: number | null;
+  playbackQueueMs?: number;
+  sourceToSendMs?: number | null;
+  transportMs?: number | null;
+  mainToWorkletMs?: number | null;
+  outputDeviceLatencyMs?: number;
+  clockRttMs?: number | null;
+  clockConfidence?: RealtimeClockConfidence;
+  outputSourceTimestampMs?: number | null;
+  nextOutputSourceTimestampMs?: number | null;
+  statsGeneratedAtMs?: number;
+  statsReceivedAtMs?: number;
+  underrunCount?: number;
+  inputSampleRate?: number;
 }
 
 function waitForSocketClosed(socket: WebSocket, timeoutMs = TRANSPORT_SWITCH_DRAIN_TIMEOUT_MS): Promise<void> {
@@ -76,50 +88,19 @@ function waitForSocketClosed(socket: WebSocket, timeoutMs = TRANSPORT_SWITCH_DRA
   });
 }
 
-function waitForRoomDisconnected(room: Room, timeoutMs = TRANSPORT_SWITCH_DRAIN_TIMEOUT_MS): Promise<void> {
-  return new Promise<void>((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      room.off(RoomEvent.Disconnected, finish);
-      resolve();
-    };
-
-    room.on(RoomEvent.Disconnected, finish);
-    window.setTimeout(finish, timeoutMs);
-  });
-}
-
-
-function setLiveKitTrackVolume(track: RemoteAudioTrack, linear: number, rampSeconds: number): void {
-  const liveKitTrack = track as unknown as {
-    gainNode?: GainNode;
-    elementVolume?: number;
-  };
-
-  if (liveKitTrack.gainNode) {
-    const gainParam = liveKitTrack.gainNode.gain;
-    const contextTime = liveKitTrack.gainNode.context.currentTime;
-    gainParam.cancelScheduledValues(contextTime);
-    if (rampSeconds > 0) {
-      gainParam.setTargetAtTime(linear, contextTime, rampSeconds);
-    } else {
-      gainParam.setValueAtTime(linear, contextTime);
-    }
-    liveKitTrack.elementVolume = linear;
-    return;
-  }
-
-  track.setVolume(linear);
-}
-
 export interface MonitorStatsData {
   latencyMs: number;
   bufferFillPercent: number;
   isActive: boolean;
+  endToEndLatencyMs: number | null;
+  networkAgeMs: number | null;
+  playbackQueueMs: number;
+  sourceToSendMs: number | null;
+  transportMs: number | null;
+  mainToWorkletMs: number | null;
+  outputDeviceLatencyMs: number;
+  clockRttMs: number | null;
+  clockConfidence: RealtimeClockConfidence;
   source?: RealtimeSourceStats | null;
   receiver?: ReceiverStatsData | null;
 }
@@ -146,7 +127,6 @@ export interface UseAudioMonitorPlaybackReturn {
   stop: () => void;
   stats: MonitorStatsData | null;
   setVolume: (db: number) => void;
-  codec: 'webrtc' | 'pcm/ws';
   transportKind: RealtimeTransportKind | null;
 }
 
@@ -173,6 +153,19 @@ export function resolveExistingMonitorStart(
   return null;
 }
 
+function getAudioOutputLatencyMs(audioContext: AudioContext | null): number {
+  if (!audioContext) {
+    return 0;
+  }
+  const outputLatency = Number((audioContext as AudioContext & { outputLatency?: number }).outputLatency ?? 0);
+  const baseLatency = Number(audioContext.baseLatency ?? 0);
+  return Math.max(0, (baseLatency + outputLatency) * 1000);
+}
+
+function isClockSyncControlMessage(message: unknown): boolean {
+  return Boolean(message && typeof message === 'object' && (message as { type?: unknown }).type === 'clock-sync');
+}
+
 export function useAudioMonitorPlayback(
   options: UseAudioMonitorPlaybackOptions
 ): UseAudioMonitorPlaybackReturn {
@@ -183,76 +176,63 @@ export function useAudioMonitorPlayback(
   const [transportKind, setTransportKind] = useState<RealtimeTransportKind | null>(null);
   const isPlayingRef = useRef(false);
   const transportKindRef = useRef<RealtimeTransportKind | null>(null);
-  const roomRef = useRef<Room | null>(null);
-  const attachedTracksRef = useRef<Map<string, RemoteAudioTrack>>(new Map());
-  const attachedElementsRef = useRef<Map<string, HTMLMediaElement>>(new Map());
   const audioContextRef = useRef<AudioContext | null>(null);
   const compatPlaybackBackendRef = useRef<CompatPlaybackBackend | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
   const compatSocketRef = useRef<WebSocket | null>(null);
+  const rtcDataAudioClientRef = useRef<RtcDataAudioClient | null>(null);
   const isInitializingRef = useRef(false);
   const startPromiseRef = useRef<Promise<RealtimeTransportKind> | null>(null);
   const currentVolumeRef = useRef(1);
   const sourceStatsRef = useRef<RealtimeSourceStats | null>(null);
   const receiverStatsRef = useRef<ReceiverStatsData | null>(null);
   const statsPollTimerRef = useRef<number | null>(null);
+  const clockSyncTimerRef = useRef<number | null>(null);
+  const clockSyncRef = useRef(new RealtimeClockSync());
   const displayLatencyRef = useRef<number | null>(null);
   const displayBufferFillRef = useRef<number | null>(null);
+  const lastReceivedFrameRef = useRef<{
+    sourceTimestampMs: number;
+    serverSentAtMs?: number;
+    receivedAtClientMs: number;
+  } | null>(null);
   const activePreviewSessionIdRef = useRef<string | null>(previewSessionId ?? null);
   const intentionalDisconnectRef = useRef(false);
-  const pendingTrackWaitersRef = useRef<Array<{
+  const pendingAudioPathWaitersRef = useRef<Array<{
     resolve: () => void;
     reject: (error: Error) => void;
     timer: number;
   }>>([]);
 
-  const resolvePendingTrackWaiters = useCallback(() => {
-    const waiters = pendingTrackWaitersRef.current.splice(0);
+  const resolvePendingAudioPathWaiters = useCallback(() => {
+    const waiters = pendingAudioPathWaitersRef.current.splice(0);
     waiters.forEach(({ resolve, timer }) => {
       window.clearTimeout(timer);
       resolve();
     });
-  }, [transportKind]);
+  }, []);
 
-  const rejectPendingTrackWaiters = useCallback((message: string) => {
-    const waiters = pendingTrackWaitersRef.current.splice(0);
+  const rejectPendingAudioPathWaiters = useCallback((message: string) => {
+    const waiters = pendingAudioPathWaitersRef.current.splice(0);
     waiters.forEach(({ reject, timer }) => {
       window.clearTimeout(timer);
       reject(new Error(message));
     });
   }, []);
 
-  const waitForPlaybackPath = useCallback(async (timeoutMs = AUDIO_TRACK_WAIT_TIMEOUT_MS): Promise<void> => {
-    if (attachedTracksRef.current.size > 0 || compatSocketRef.current) {
+  const waitForPlaybackPath = useCallback(async (timeoutMs = AUDIO_PATH_WAIT_TIMEOUT_MS): Promise<void> => {
+    if (compatSocketRef.current || rtcDataAudioClientRef.current) {
       return;
     }
 
     await new Promise<void>((resolve, reject) => {
       const timer = window.setTimeout(() => {
-        pendingTrackWaitersRef.current = pendingTrackWaitersRef.current.filter((entry) => entry.timer !== timer);
+        pendingAudioPathWaitersRef.current = pendingAudioPathWaitersRef.current.filter((entry) => entry.timer !== timer);
         reject(new Error('No realtime audio path became available before timeout'));
       }, timeoutMs);
 
-      pendingTrackWaitersRef.current.push({ resolve, reject, timer });
+      pendingAudioPathWaitersRef.current.push({ resolve, reject, timer });
     });
-  }, []);
-
-  const detachAllTracks = useCallback(() => {
-    attachedTracksRef.current.forEach((track, key) => {
-      try {
-        track.detach();
-      } catch {
-        // ignore
-      }
-
-      const element = attachedElementsRef.current.get(key);
-      if (element?.parentElement) {
-        element.parentElement.removeChild(element);
-      }
-    });
-
-    attachedTracksRef.current.clear();
-    attachedElementsRef.current.clear();
   }, []);
 
   const updateIsPlaying = useCallback((next: boolean) => {
@@ -269,20 +249,25 @@ export function useAudioMonitorPlayback(
     options: {
       preserveSessionContext?: boolean;
       preserveAudioContext?: boolean;
+      preserveCompatPlaybackRuntime?: boolean;
     } = {},
   ) => {
     const {
       preserveSessionContext = false,
       preserveAudioContext = false,
+      preserveCompatPlaybackRuntime = false,
     } = options;
 
     if (statsPollTimerRef.current !== null) {
       window.clearInterval(statsPollTimerRef.current);
       statsPollTimerRef.current = null;
     }
+    if (clockSyncTimerRef.current !== null) {
+      window.clearInterval(clockSyncTimerRef.current);
+      clockSyncTimerRef.current = null;
+    }
 
-    detachAllTracks();
-    rejectPendingTrackWaiters('Realtime playback stopped before audio path became available');
+    rejectPendingAudioPathWaiters('Realtime playback stopped before audio path became available');
 
     if (compatSocketRef.current) {
       try {
@@ -293,21 +278,27 @@ export function useAudioMonitorPlayback(
       compatSocketRef.current = null;
     }
 
-    if (roomRef.current) {
-      void roomRef.current.disconnect();
-      roomRef.current = null;
+    if (rtcDataAudioClientRef.current) {
+      try {
+        rtcDataAudioClientRef.current.close();
+      } catch {
+        // ignore
+      }
+      rtcDataAudioClientRef.current = null;
     }
 
-    if (compatPlaybackBackendRef.current) {
+    if (compatPlaybackBackendRef.current && !preserveCompatPlaybackRuntime) {
       try {
         compatPlaybackBackendRef.current.close();
       } catch {
         // ignore
       }
       compatPlaybackBackendRef.current = null;
+    } else if (compatPlaybackBackendRef.current && preserveCompatPlaybackRuntime) {
+      compatPlaybackBackendRef.current.reset();
     }
 
-    if (gainNodeRef.current) {
+    if (gainNodeRef.current && !preserveCompatPlaybackRuntime) {
       try {
         gainNodeRef.current.disconnect();
       } catch {
@@ -316,13 +307,15 @@ export function useAudioMonitorPlayback(
       gainNodeRef.current = null;
     }
 
-    if (!preserveAudioContext && audioContextRef.current) {
+    if (!preserveAudioContext && !preserveCompatPlaybackRuntime && audioContextRef.current) {
       void closeAudioContext(audioContextRef.current);
       audioContextRef.current = null;
     }
 
     sourceStatsRef.current = null;
     receiverStatsRef.current = null;
+    lastReceivedFrameRef.current = null;
+    clockSyncRef.current.reset();
     displayLatencyRef.current = null;
     displayBufferFillRef.current = null;
     updateTransportKind(null);
@@ -334,7 +327,7 @@ export function useAudioMonitorPlayback(
     }
 
     isInitializingRef.current = false;
-  }, [detachAllTracks, rejectPendingTrackWaiters, updateIsPlaying, updateTransportKind]);
+  }, [rejectPendingAudioPathWaiters, updateIsPlaying, updateTransportKind]);
 
   const cleanup = useCallback(() => {
     cleanupTransportState();
@@ -354,50 +347,121 @@ export function useAudioMonitorPlayback(
       return;
     }
 
-    const rawLatencyMs = Math.max(
+    const sourceLatencyMs = source?.latencyMs ?? 0;
+    const targetBufferMs = receiver?.targetBufferMs ?? 80;
+    const playbackQueueMs = Math.max(0, receiver?.playbackQueueMs ?? receiver?.queueDurationMs ?? receiver?.latencyMs ?? 0);
+    const effectiveQueueMs = Math.min(playbackQueueMs, targetBufferMs);
+    const stableBufferFillPercent = Math.max(
       0,
-      (source?.latencyMs ?? 0) + (receiver?.latencyMs ?? receiver?.jitterMs ?? 0),
+      Math.min(100, (effectiveQueueMs / Math.max(targetBufferMs, 1)) * 100),
     );
-    const rawBufferFillPercent = receiver?.bufferFillPercent
-      ?? source?.bufferFillPercent
-      ?? 0;
-    let latencyMs = rawLatencyMs;
-    let bufferFillPercent = rawBufferFillPercent;
-
-    if (transportKind === 'ws-compat') {
-      const sourceLatencyMs = source?.latencyMs ?? 0;
-      const targetBufferMs = receiver?.targetBufferMs ?? 80;
-      const queueDurationMs = receiver?.queueDurationMs ?? receiver?.latencyMs ?? 0;
-      const effectiveQueueMs = Math.min(queueDurationMs, targetBufferMs);
-      const stableLatencyMs = Math.max(0, sourceLatencyMs + effectiveQueueMs);
-      const stableBufferFillPercent = Math.max(
-        0,
-        Math.min(100, (effectiveQueueMs / Math.max(targetBufferMs, 1)) * 100),
+    const outputDeviceLatencyMs = getAudioOutputLatencyMs(audioContextRef.current);
+    const clockSnapshot = clockSyncRef.current.getSnapshot();
+    const clientNowMs = Date.now();
+    let networkAgeMs: number | null = null;
+    let sourceToSendMs: number | null = null;
+    let transportMs: number | null = null;
+    const lastReceivedFrame = lastReceivedFrameRef.current;
+    if (clockSnapshot.offsetMs != null && lastReceivedFrame) {
+      const sourceTimestampMs = clockSyncRef.current.unwrapServerTimestamp(
+        lastReceivedFrame.sourceTimestampMs,
+        lastReceivedFrame.receivedAtClientMs,
       );
-      const alpha = 0.35;
-
-      latencyMs = displayLatencyRef.current == null
-        ? stableLatencyMs
-        : (displayLatencyRef.current * (1 - alpha)) + (stableLatencyMs * alpha);
-      bufferFillPercent = displayBufferFillRef.current == null
-        ? stableBufferFillPercent
-        : (displayBufferFillRef.current * (1 - alpha)) + (stableBufferFillPercent * alpha);
-
-      displayLatencyRef.current = latencyMs;
-      displayBufferFillRef.current = bufferFillPercent;
-    } else {
-      displayLatencyRef.current = rawLatencyMs;
-      displayBufferFillRef.current = rawBufferFillPercent;
+      if (sourceTimestampMs != null) {
+        const browserReceivedAtServerClockMs = lastReceivedFrame.receivedAtClientMs + clockSnapshot.offsetMs;
+        networkAgeMs = Math.max(
+          0,
+          browserReceivedAtServerClockMs - sourceTimestampMs,
+        );
+        if (typeof lastReceivedFrame.serverSentAtMs === 'number') {
+          const serverSentAtMs = clockSyncRef.current.unwrapServerTimestamp(
+            lastReceivedFrame.serverSentAtMs,
+            lastReceivedFrame.receivedAtClientMs,
+          );
+          if (serverSentAtMs != null) {
+            sourceToSendMs = Math.max(0, serverSentAtMs - sourceTimestampMs);
+            transportMs = Math.max(0, browserReceivedAtServerClockMs - serverSentAtMs);
+          }
+        }
+      }
     }
 
-    const isActive = source?.isActive ?? (attachedTracksRef.current.size > 0 || Boolean(compatSocketRef.current));
+    let estimatedEndToEndLatencyMs: number | null = null;
+    const outputSourceTimestampMs = receiver?.outputSourceTimestampMs ?? receiver?.nextOutputSourceTimestampMs ?? null;
+    if (
+      sourceToSendMs != null
+      && transportMs != null
+      && receiver?.mainToWorkletMs != null
+    ) {
+      estimatedEndToEndLatencyMs = Math.max(
+        0,
+        sourceToSendMs + transportMs + receiver.mainToWorkletMs + playbackQueueMs + outputDeviceLatencyMs,
+      );
+    } else if (clockSnapshot.offsetMs != null && outputSourceTimestampMs != null) {
+      const sourceTimestampMs = clockSyncRef.current.unwrapServerTimestamp(outputSourceTimestampMs, clientNowMs);
+      if (sourceTimestampMs != null) {
+        const statsAgeMs = receiver?.statsReceivedAtMs
+          ? Math.max(0, Math.min(500, clientNowMs - receiver.statsReceivedAtMs))
+          : 0;
+        const projectedSourceTimestampMs = sourceTimestampMs + statsAgeMs;
+        estimatedEndToEndLatencyMs = Math.max(
+          0,
+          (clientNowMs + clockSnapshot.offsetMs + outputDeviceLatencyMs) - projectedSourceTimestampMs,
+        );
+      }
+    } else if (clockSnapshot.offsetMs != null && networkAgeMs != null) {
+      estimatedEndToEndLatencyMs = Math.max(0, networkAgeMs + playbackQueueMs + outputDeviceLatencyMs);
+    }
+
+    const alpha = 0.35;
+
+    const latencyMs = estimatedEndToEndLatencyMs == null
+      ? null
+      : displayLatencyRef.current == null
+        ? estimatedEndToEndLatencyMs
+        : (displayLatencyRef.current * (1 - alpha)) + (estimatedEndToEndLatencyMs * alpha);
+    const bufferFillPercent = displayBufferFillRef.current == null
+      ? stableBufferFillPercent
+      : (displayBufferFillRef.current * (1 - alpha)) + (stableBufferFillPercent * alpha);
+
+    displayLatencyRef.current = latencyMs;
+    displayBufferFillRef.current = bufferFillPercent;
+
+    const isActive = source?.isActive ?? Boolean(compatSocketRef.current || rtcDataAudioClientRef.current);
+    const legacyLatencyMs = latencyMs ?? Math.max(0, sourceLatencyMs + playbackQueueMs);
+    const receiverWithDerivedStats: ReceiverStatsData | null = receiver
+      ? {
+          ...receiver,
+          latencyMs: legacyLatencyMs,
+          bufferFillPercent,
+          queueDurationMs: playbackQueueMs,
+          playbackQueueMs,
+          endToEndLatencyMs: latencyMs,
+          networkAgeMs,
+          sourceToSendMs,
+          transportMs,
+          mainToWorkletMs: receiver.mainToWorkletMs ?? null,
+          outputDeviceLatencyMs,
+          clockRttMs: clockSnapshot.rttMs,
+          clockConfidence: clockSnapshot.confidence,
+        }
+      : null;
 
     setStats({
-      latencyMs,
+      latencyMs: legacyLatencyMs,
       bufferFillPercent,
       isActive,
+      endToEndLatencyMs: latencyMs,
+      networkAgeMs,
+      playbackQueueMs,
+      sourceToSendMs,
+      transportMs,
+      mainToWorkletMs: receiver?.mainToWorkletMs ?? null,
+      outputDeviceLatencyMs,
+      clockRttMs: clockSnapshot.rttMs,
+      clockConfidence: clockSnapshot.confidence,
       source,
-      receiver,
+      receiver: receiverWithDerivedStats,
     });
   }, []);
 
@@ -417,49 +481,8 @@ export function useAudioMonitorPlayback(
   }, [recomputeStats, scope]);
 
   const pollReceiverStats = useCallback(async () => {
-    if (transportKind === 'ws-compat') {
-      recomputeStats();
-      return;
-    }
-
-    const firstTrack = attachedTracksRef.current.values().next().value as RemoteAudioTrack | undefined;
-    if (!firstTrack) {
-      receiverStatsRef.current = null;
-      recomputeStats();
-      return;
-    }
-
-    try {
-      const report = await firstTrack.getRTCStatsReport();
-      let receiver: ReceiverStatsData | null = null;
-
-      report?.forEach((entry) => {
-        if (entry.type !== 'inbound-rtp') {
-          return;
-        }
-
-        const inbound = entry as InboundRtpStatsLike;
-        const emittedCount = inbound.jitterBufferEmittedCount ?? 0;
-        const latencyMs = emittedCount > 0 && typeof inbound.jitterBufferDelay === 'number'
-          ? (inbound.jitterBufferDelay / emittedCount) * 1000
-          : undefined;
-
-        receiver = {
-          latencyMs,
-          jitterMs: typeof inbound.jitter === 'number' ? inbound.jitter * 1000 : undefined,
-          packetsLost: inbound.packetsLost,
-          packetsReceived: inbound.packetsReceived,
-          bitrateKbps: Number.isFinite(firstTrack.currentBitrate) ? firstTrack.currentBitrate / 1000 : undefined,
-          concealedSamples: inbound.concealedSamples,
-        };
-      });
-
-      receiverStatsRef.current = receiver;
-      recomputeStats();
-    } catch (error) {
-      logger.debug('Failed to poll receiver monitor stats', error);
-    }
-  }, [recomputeStats, transportKind]);
+    recomputeStats();
+  }, [recomputeStats]);
 
   const startStatsPolling = useCallback(() => {
     if (statsPollTimerRef.current !== null) {
@@ -475,145 +498,74 @@ export function useAudioMonitorPlayback(
     }, STATS_POLL_INTERVAL_MS);
   }, [pollReceiverStats, pollSourceStats]);
 
-  const attachRemoteTrack = useCallback((key: string, track: RemoteAudioTrack) => {
-    if (attachedTracksRef.current.has(key)) {
-      return;
+  const handleClockSyncControlMessage = useCallback((message: unknown) => {
+    if (clockSyncRef.current.handlePong(message)) {
+      recomputeStats();
     }
+  }, [recomputeStats]);
 
-    track.setPlayoutDelay(0);
-
-    const element = track.attach();
-    element.autoplay = true;
-    element.setAttribute('playsinline', 'true');
-    element.style.display = 'none';
-    document.body.appendChild(element);
-    setLiveKitTrackVolume(track, currentVolumeRef.current, 0);
-
-    attachedTracksRef.current.set(key, track);
-    attachedElementsRef.current.set(key, element);
-    resolvePendingTrackWaiters();
-    void pollReceiverStats();
-    recomputeStats();
-  }, [pollReceiverStats, recomputeStats, resolvePendingTrackWaiters]);
-
-  const attachBridgeTrackPublication = useCallback((
-    participantIdentity: string,
-    publication: { trackSid?: string; trackName?: string; track?: { kind?: string } | null },
-  ) => {
-    if (!participantIdentity.startsWith('bridge:')) {
-      return;
+  const startClockSync = useCallback((sendControl: (payload: Record<string, unknown>) => boolean | void) => {
+    if (clockSyncTimerRef.current !== null) {
+      window.clearInterval(clockSyncTimerRef.current);
+      clockSyncTimerRef.current = null;
     }
+    clockSyncRef.current.reset();
 
-    if (!publication.track || publication.track.kind !== Track.Kind.Audio) {
-      return;
-    }
-
-    const key = publication.trackSid || `${participantIdentity}:${publication.trackName || 'audio'}`;
-    attachRemoteTrack(key, publication.track as RemoteAudioTrack);
-  }, [attachRemoteTrack]);
-
-  const attachExistingBridgeTracks = useCallback((room: Room) => {
-    room.remoteParticipants.forEach((participant) => {
-      participant.trackPublications.forEach((publication) => {
-        attachBridgeTrackPublication(participant.identity, publication);
-      });
-    });
-  }, [attachBridgeTrackPublication]);
-
-  const preparePlaybackFromGesture = useCallback(async () => {
-    audioContextRef.current = await ensureInteractiveAudioContext(audioContextRef.current);
-  }, []);
-
-  const startLiveKitPlayback = useCallback(async (
-    offer: RealtimeTransportOffer,
-  ) => {
-    const audioContext = await ensureInteractiveAudioContext(audioContextRef.current);
-    audioContextRef.current = audioContext;
-
-    const room = new Room({
-      adaptiveStream: false,
-      dynacast: false,
-      webAudioMix: {
-        audioContext,
-      },
-    });
-    const handleDisconnected = () => {
-      if (!intentionalDisconnectRef.current && roomRef.current === room) {
-        cleanup();
+    const sendPing = () => {
+      try {
+        sendControl(clockSyncRef.current.createPing(Date.now()));
+      } catch (error) {
+        logger.debug('Failed to send realtime clock sync ping', error);
       }
     };
 
-    room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-      attachBridgeTrackPublication(participant.identity, {
-        trackSid: publication.trackSid,
-        trackName: publication.trackName,
-        track,
-      });
-    });
+    sendPing();
+    clockSyncTimerRef.current = window.setInterval(sendPing, CLOCK_SYNC_INTERVAL_MS);
+  }, []);
 
-    room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
-      if (track.kind !== Track.Kind.Audio) {
-        return;
-      }
+  const ensureCompatPlaybackRuntime = useCallback(async (): Promise<{
+    audioContext: AudioContext;
+    backend: CompatPlaybackBackend;
+  }> => {
+    audioContextRef.current = await ensureInteractiveAudioContext(audioContextRef.current);
+    const audioContext = audioContextRef.current;
+    if (compatPlaybackBackendRef.current && gainNodeRef.current) {
+      return { audioContext, backend: compatPlaybackBackendRef.current };
+    }
 
-      const key = publication.trackSid || `${participant.identity}:${publication.trackName}`;
-      const existingTrack = attachedTracksRef.current.get(key);
-      if (existingTrack) {
-        try {
-          existingTrack.detach();
-        } catch {
-          // ignore
-        }
-      }
-
-      const element = attachedElementsRef.current.get(key);
-      if (element?.parentElement) {
-        element.parentElement.removeChild(element);
-      }
-
-      attachedTracksRef.current.delete(key);
-      attachedElementsRef.current.delete(key);
-      void pollReceiverStats();
-      recomputeStats();
-    });
-    room.on(RoomEvent.Disconnected, handleDisconnected);
-
-    try {
-      await room.connect(offer.url, offer.token, {
-        autoSubscribe: true,
-      });
-
-      if (!room.canPlaybackAudio) {
-        await room.startAudio();
-      }
-
-      attachExistingBridgeTracks(room);
-      await waitForPlaybackPath(AUDIO_TRACK_WAIT_TIMEOUT_MS);
-      roomRef.current = room;
-      updateTransportKind('livekit');
-      resolvePendingTrackWaiters();
-    } catch (error) {
-      room.off(RoomEvent.Disconnected, handleDisconnected);
+    if (compatPlaybackBackendRef.current) {
       try {
-        await room.disconnect();
+        compatPlaybackBackendRef.current.close();
       } catch {
         // ignore
       }
-      throw error;
+      compatPlaybackBackendRef.current = null;
     }
-  }, [attachBridgeTrackPublication, attachExistingBridgeTracks, cleanup, pollReceiverStats, recomputeStats, resolvePendingTrackWaiters, updateTransportKind, waitForPlaybackPath]);
-
-  const startCompatPlayback = useCallback(async (offer: RealtimeTransportOffer) => {
-    const audioContext = await ensureInteractiveAudioContext(audioContextRef.current);
-    audioContextRef.current = audioContext;
+    if (gainNodeRef.current) {
+      try {
+        gainNodeRef.current.disconnect();
+      } catch {
+        // ignore
+      }
+      gainNodeRef.current = null;
+    }
 
     const backend = await createCompatPlaybackBackend(audioContext, (backendStats: CompatPlaybackStats) => {
+      const statsReceivedAtMs = Date.now();
       receiverStatsRef.current = {
         latencyMs: backendStats.latencyMs,
         bufferFillPercent: backendStats.bufferFillPercent,
         droppedSamples: backendStats.droppedSamples,
         queueDurationMs: backendStats.queueDurationMs,
+        playbackQueueMs: backendStats.queueDurationMs,
         targetBufferMs: backendStats.targetBufferMs,
+        outputSourceTimestampMs: backendStats.outputSourceTimestampMs,
+        nextOutputSourceTimestampMs: backendStats.nextOutputSourceTimestampMs,
+        mainToWorkletMs: backendStats.mainToWorkletMs,
+        statsGeneratedAtMs: backendStats.statsGeneratedAtMs,
+        statsReceivedAtMs,
+        underrunCount: backendStats.underrunCount,
+        inputSampleRate: backendStats.inputSampleRate,
       };
       recomputeStats();
     });
@@ -623,6 +575,16 @@ export function useAudioMonitorPlayback(
     gainNode.connect(audioContext.destination);
     compatPlaybackBackendRef.current = backend;
     gainNodeRef.current = gainNode;
+    return { audioContext, backend };
+  }, [recomputeStats]);
+
+  const preparePlaybackFromGesture = useCallback(async () => {
+    await ensureCompatPlaybackRuntime();
+  }, [ensureCompatPlaybackRuntime]);
+
+  const startCompatPlayback = useCallback(async (offer: RealtimeTransportOffer) => {
+    const { backend } = await ensureCompatPlaybackRuntime();
+    backend.reset();
 
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(`${normalizeWsUrl(offer.url)}?token=${encodeURIComponent(offer.token)}`);
@@ -636,16 +598,28 @@ export function useAudioMonitorPlayback(
         }
         settled = true;
         reject(new Error('Realtime compatibility playback timed out before audio frames arrived'));
-      }, AUDIO_TRACK_WAIT_TIMEOUT_MS);
+      }, AUDIO_PATH_WAIT_TIMEOUT_MS);
 
       ws.onopen = () => {
         updateTransportKind('ws-compat');
+        startClockSync((payload) => {
+          if (ws.readyState !== WebSocket.OPEN) {
+            return false;
+          }
+          ws.send(JSON.stringify(payload));
+          return true;
+        });
+        resolvePendingAudioPathWaiters();
       };
 
       ws.onmessage = (event) => {
         if (typeof event.data === 'string') {
           try {
             const message = JSON.parse(event.data) as { type?: string };
+            if (isClockSyncControlMessage(message)) {
+              handleClockSyncControlMessage(message);
+              return;
+            }
             if (message.type === 'ready' && !settled) {
               settled = true;
               window.clearTimeout(timer);
@@ -658,12 +632,19 @@ export function useAudioMonitorPlayback(
         }
 
         try {
-          const decoded = decodeWsCompatAudioFrame(event.data as ArrayBuffer);
+          const decoded = decodeRealtimePcmAudioFrame(event.data as ArrayBuffer);
+          const receivedAtClientMs = Date.now();
           const float32 = int16ToFloat32Pcm(decoded.pcm);
+          lastReceivedFrameRef.current = {
+            sourceTimestampMs: decoded.timestampMs,
+            serverSentAtMs: decoded.serverSentAtMs,
+            receivedAtClientMs,
+          };
           backend.handleAudioData({
             buffer: float32.buffer,
             sampleRate: decoded.sampleRate,
             clientTimestamp: decoded.timestampMs,
+            clientReceivedAtMs: receivedAtClientMs,
           });
 
           if (!settled) {
@@ -697,7 +678,7 @@ export function useAudioMonitorPlayback(
       };
     });
 
-    resolvePendingTrackWaiters();
+    resolvePendingAudioPathWaiters();
 
     if (compatSocketRef.current) {
       const activeSocket = compatSocketRef.current;
@@ -707,7 +688,51 @@ export function useAudioMonitorPlayback(
         }
       };
     }
-  }, [recomputeStats, resolvePendingTrackWaiters, updateTransportKind]);
+  }, [cleanup, ensureCompatPlaybackRuntime, handleClockSyncControlMessage, resolvePendingAudioPathWaiters, startClockSync, updateTransportKind]);
+
+  const startRtcDataAudioPlayback = useCallback(async (
+    offer: RealtimeTransportOffer,
+    hints?: RealtimeConnectivityHints,
+  ) => {
+    const { backend } = await ensureCompatPlaybackRuntime();
+    backend.reset();
+
+    const client = new RtcDataAudioClient({
+      offer,
+      iceServers: hints?.iceServers,
+      onBinaryMessage: (payload) => {
+        try {
+          const decoded = decodeRealtimePcmAudioFrame(payload);
+          const receivedAtClientMs = Date.now();
+          const float32 = int16ToFloat32Pcm(decoded.pcm);
+          lastReceivedFrameRef.current = {
+            sourceTimestampMs: decoded.timestampMs,
+            serverSentAtMs: decoded.serverSentAtMs,
+            receivedAtClientMs,
+          };
+          backend.handleAudioData({
+            buffer: float32.buffer,
+            sampleRate: decoded.sampleRate,
+            clientTimestamp: decoded.timestampMs,
+            clientReceivedAtMs: receivedAtClientMs,
+          });
+        } catch (error) {
+          logger.debug('Failed to decode rtc-data-audio downlink frame', error);
+        }
+      },
+      onControlMessage: handleClockSyncControlMessage,
+      onClose: () => {
+        if (rtcDataAudioClientRef.current === client && !intentionalDisconnectRef.current) {
+          cleanup();
+        }
+      },
+    });
+    rtcDataAudioClientRef.current = client;
+    resolvePendingAudioPathWaiters();
+    await client.connect();
+    startClockSync((payload) => client.sendJson(payload));
+    updateTransportKind('rtc-data-audio');
+  }, [cleanup, ensureCompatPlaybackRuntime, handleClockSyncControlMessage, resolvePendingAudioPathWaiters, startClockSync, updateTransportKind]);
 
   const start = useCallback(async (startOptions?: string | AudioMonitorStartOptions) => {
     const existingStart = resolveExistingMonitorStart(
@@ -741,12 +766,13 @@ export function useAudioMonitorPlayback(
         previewSessionId: effectivePreviewSessionId,
         transportOverride,
         connectStage: 'connect',
-        startLiveKit: startLiveKitPlayback,
         startCompat: startCompatPlayback,
+        startRtcDataAudio: startRtcDataAudioPlayback,
         cleanupFailedAttempt: async (cleanupOptions) => {
           cleanupTransportState({
             preserveSessionContext: true,
             preserveAudioContext: cleanupOptions?.isFallback ?? false,
+            preserveCompatPlaybackRuntime: cleanupOptions?.isFallback ?? false,
           });
           if (intentionalDisconnectRef.current) {
             throw new Error('Realtime playback intentionally interrupted');
@@ -757,6 +783,7 @@ export function useAudioMonitorPlayback(
         showRealtimeTransportFallbackToast(scope);
       }
       updateTransportKind(result.transport);
+      await waitForPlaybackPath(AUDIO_PATH_WAIT_TIMEOUT_MS);
       startStatsPolling();
       updateIsPlaying(true);
       return result.transport;
@@ -773,7 +800,7 @@ export function useAudioMonitorPlayback(
       isInitializingRef.current = false;
       startPromiseRef.current = null;
     }
-  }, [cleanup, cleanupTransportState, previewSessionId, scope, startCompatPlayback, startLiveKitPlayback, startStatsPolling, updateIsPlaying, updateTransportKind]);
+  }, [cleanup, cleanupTransportState, previewSessionId, scope, startCompatPlayback, startRtcDataAudioPlayback, startStatsPolling, updateIsPlaying, updateTransportKind, waitForPlaybackPath]);
 
   const startFromGesture = useCallback(async (
     startOptions?: string | AudioMonitorStartOptions,
@@ -793,18 +820,21 @@ export function useAudioMonitorPlayback(
     }
 
     if (isPlayingRef.current) {
-      const activeRoom = roomRef.current;
       const activeCompatSocket = compatSocketRef.current;
+      const activeRtcDataAudioClient = rtcDataAudioClientRef.current;
       const drainTasks: Promise<void>[] = [];
-      if (activeRoom) {
-        drainTasks.push(waitForRoomDisconnected(activeRoom));
-      }
       if (activeCompatSocket) {
         drainTasks.push(waitForSocketClosed(activeCompatSocket));
       }
+      if (activeRtcDataAudioClient) {
+        activeRtcDataAudioClient.close();
+      }
 
       intentionalDisconnectRef.current = true;
-      cleanupTransportState({ preserveAudioContext: true });
+      cleanupTransportState({
+        preserveAudioContext: true,
+        preserveCompatPlaybackRuntime: true,
+      });
 
       if (drainTasks.length > 0) {
         await Promise.allSettled(drainTasks);
@@ -825,9 +855,6 @@ export function useAudioMonitorPlayback(
   const setVolume = useCallback((db: number) => {
     const linear = Math.max(0, Math.pow(10, db / 20));
     currentVolumeRef.current = linear;
-    attachedTracksRef.current.forEach((track) => {
-      setLiveKitTrackVolume(track, linear, VOLUME_RAMP_SECONDS);
-    });
     if (gainNodeRef.current) {
       const gainParam = gainNodeRef.current.gain;
       const contextTime = gainNodeRef.current.context.currentTime;
@@ -845,7 +872,6 @@ export function useAudioMonitorPlayback(
     stop,
     stats,
     setVolume,
-    codec: transportKind === 'ws-compat' ? 'pcm/ws' : 'webrtc',
     transportKind,
   };
 }

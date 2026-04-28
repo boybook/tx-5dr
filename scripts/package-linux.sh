@@ -116,16 +116,6 @@ log "Staging package files..."
 APP_ROOT="$STAGING/usr/share/tx5dr"
 mkdir -p "$APP_ROOT"
 
-LIVEKIT_TARGET=""
-case "$ARCH" in
-    amd64) LIVEKIT_TARGET="linux-x64" ;;
-    arm64) LIVEKIT_TARGET="linux-arm64" ;;
-    *)
-        err "Unsupported LiveKit target arch: $ARCH"
-        exit 1
-        ;;
-esac
-
 # --- Copy server dist + runtime workspace packages ---
 mkdir -p "$APP_ROOT/packages/server"
 cp -r "$PROJECT_ROOT/packages/server/dist" "$APP_ROOT/packages/server/"
@@ -243,6 +233,12 @@ find "$NM" -maxdepth 1 -name "turbo*" -exec rm -rf {} + 2>/dev/null || true
 log "Cleaning native module source code..."
 rm -rf "$NM/audify/vendor" "$NM/audify/src" "$NM/audify/binding.gyp" 2>/dev/null || true
 rm -rf "$NM/naudiodon2/src" "$NM/naudiodon2/binding.gyp" 2>/dev/null || true
+# node-datachannel runtime needs dist/ plus build/Release/node_datachannel.node.
+# Keep the compiled addon and remove only source/build metadata.
+rm -rf "$NM/node-datachannel/src" \
+    "$NM/node-datachannel/CMakeLists.txt" \
+    "$NM/node-datachannel/BULDING.md" \
+    "$NM/node-datachannel/rollup.config.mjs" 2>/dev/null || true
 
 # 3. Clean .npm cache dirs
 find "$NM" -type d -name ".npm" -exec rm -rf {} + 2>/dev/null || true
@@ -306,16 +302,6 @@ cp -r "$PROJECT_ROOT/packages/web/dist/." "$APP_ROOT/web/"
 
 # --- Copy nginx template (for postinstall) ---
 cp "$PROJECT_ROOT/linux/nginx-site.conf" "$APP_ROOT/nginx-site.conf"
-cp "$PROJECT_ROOT/linux/livekit.yaml.template" "$APP_ROOT/livekit.yaml.template"
-
-# --- Bundle LiveKit realtime server binary ---
-mkdir -p "$APP_ROOT/bin"
-log "Preparing bundled LiveKit binary for $LIVEKIT_TARGET..."
-node "$PROJECT_ROOT/scripts/prepare-livekit-binary.mjs" \
-    --target "$LIVEKIT_TARGET" \
-    --output "$APP_ROOT/bin/livekit-server"
-chmod 755 "$APP_ROOT/bin/livekit-server"
-
 # --- Shared library and install script ---
 mkdir -p "$APP_ROOT/lib"
 cp "$PROJECT_ROOT/linux/lib/"*.sh "$APP_ROOT/lib/"
@@ -333,7 +319,6 @@ chmod 755 "$STAGING/usr/bin/tx5dr"
 # --- systemd service ---
 mkdir -p "$STAGING/lib/systemd/system"
 cp "$PROJECT_ROOT/linux/tx5dr.service" "$STAGING/lib/systemd/system/tx5dr.service"
-cp "$PROJECT_ROOT/linux/tx5dr-livekit.service" "$STAGING/lib/systemd/system/tx5dr-livekit.service"
 
 # --- Default config ---
 mkdir -p "$STAGING/etc/tx5dr"

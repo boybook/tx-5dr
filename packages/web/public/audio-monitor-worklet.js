@@ -17,6 +17,8 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
     this.inputSampleRate = sampleRate;
     this.ringBufferSize = Math.max(Math.ceil(this.outputSampleRate * 2), 48000);
     this.ringBuffer = new Float32Array(this.ringBufferSize);
+    this.timestampBuffer = new Float64Array(this.ringBufferSize);
+    this.timestampBuffer.fill(Number.NaN);
     this.writeIndex = 0;
     this.readIndex = 0;
     this.availableSamples = 0;
@@ -26,7 +28,7 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
 
     // 统计信息
     this.lastStatsTime = 0;
-    this.statsIntervalMs = 1000; // 每秒发送一次统计信息
+    this.statsIntervalMs = 250; // 更高频率上报，避免端到端估算使用陈旧播放时间戳
     this.totalDroppedSamples = 0;
     this.audioLevel = 0;
 
@@ -35,17 +37,33 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
     this.overflowCount = 0; // 溢出次数
     this.frameCount = 0; // 帧计数器
     this.consecutiveUnderrunFrames = 0; // 连续欠载帧计数
+    this.lastOutputSourceTimestampMs = null;
+    this.lastMainToWorkletMs = null;
 
     // 播放状态控制
     this.isPlaying = false;
-    this.PREFILL_MS = 80;       // 预填充目标：80ms（约4个20ms包）
+    this.isRecovering = false;
+    this.INITIAL_TARGET_MS = 70;
+    this.MIN_TARGET_MS = 40;
+    this.MAX_TARGET_MS = 220;
+    this.QUEUE_HEADROOM_MS = 20;
+    this.TARGET_INCREASE_MS = 25;
+    this.TARGET_DECREASE_MS = 10;
+    this.UNDERRUN_RECOVERY_FRAMES = 3;
+    this.ADAPT_INCREASE_COOLDOWN_MS = 1500;
+    this.ADAPT_DECREASE_AFTER_MS = 8000;
+    this.ADAPT_DECREASE_COOLDOWN_MS = 5000;
+    this.adaptiveTargetMs = this.INITIAL_TARGET_MS;
+    const now = Date.now();
+    this.lastUnderrunAt = now;
+    this.lastTargetChangeAt = now;
     this.MIN_BUFFER_MS = 30;    // 低水位阈值：30ms（仅用于日志）
     this.prefillComplete = false;
 
     // 接收来自主线程的消息
     this.port.onmessage = (e) => {
       if (e.data.type === 'audioData') {
-        this.writeAudioData(e.data.buffer, e.data.sampleRate, e.data.clientTimestamp);
+        this.writeAudioData(e.data.buffer, e.data.sampleRate, e.data.clientTimestamp, e.data.clientReceivedAtMs);
       } else if (e.data.type === 'reset') {
         this.reset();
       }
@@ -55,18 +73,21 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
   /**
    * 写入音频数据到环形缓冲区
    */
-  writeAudioData(buffer, sampleRate, clientTimestamp) {
+  writeAudioData(buffer, sampleRate, clientTimestamp, clientReceivedAtMs) {
     const audioData = new Float32Array(buffer);
+    this.lastMainToWorkletMs = typeof clientReceivedAtMs === 'number'
+      ? Math.max(0, Date.now() - clientReceivedAtMs)
+      : null;
     const frameSampleRate = Number(sampleRate) > 0 ? Number(sampleRate) : this.outputSampleRate;
     this.inputSampleRate = frameSampleRate;
     const resampledData = this.resampleToOutputRate(audioData, frameSampleRate);
     const samples = resampledData.length;
 
     this.frameCount++;
-    this.enqueueSamples(resampledData, samples);
+    this.enqueueSamples(resampledData, samples, Number(clientTimestamp));
   }
 
-  enqueueSamples(samplesData, sampleCount = samplesData.length) {
+  enqueueSamples(samplesData, sampleCount = samplesData.length, sourceTimestampMs = Number.NaN) {
     if (!samplesData || sampleCount <= 0) {
       return;
     }
@@ -85,6 +106,9 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
     // 写入数据
     for (let i = 0; i < sampleCount; i++) {
       this.ringBuffer[this.writeIndex] = samplesData[i];
+      this.timestampBuffer[this.writeIndex] = Number.isFinite(sourceTimestampMs)
+        ? sourceTimestampMs + ((i / this.outputSampleRate) * 1000)
+        : Number.NaN;
       this.writeIndex = (this.writeIndex + 1) % this.ringBufferSize;
     }
 
@@ -92,6 +116,25 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
       this.availableSamples + sampleCount,
       this.ringBufferSize
     );
+    this.trimExcessQueue();
+  }
+
+  trimExcessQueue() {
+    const maxQueueSamples = Math.ceil(((this.adaptiveTargetMs + this.QUEUE_HEADROOM_MS) / 1000) * this.outputSampleRate);
+    if (this.availableSamples <= maxQueueSamples) {
+      return;
+    }
+
+    const trimToSamples = Math.ceil((this.adaptiveTargetMs / 1000) * this.outputSampleRate);
+    const dropCount = Math.max(0, this.availableSamples - trimToSamples);
+    if (dropCount <= 0) {
+      return;
+    }
+
+    this.readIndex = (this.readIndex + dropCount) % this.ringBufferSize;
+    this.availableSamples -= dropCount;
+    this.totalDroppedSamples += dropCount;
+    this.overflowCount++;
   }
 
   /**
@@ -102,9 +145,10 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
     const bufferMs = this.availableSamples / (this.outputSampleRate / 1000);
 
     // 预填充检查
-    if (!this.isPlaying) {
-      if (bufferMs >= this.PREFILL_MS) {
+    if (!this.isPlaying || this.isRecovering) {
+      if (bufferMs >= this.adaptiveTargetMs) {
         this.isPlaying = true;
+        this.isRecovering = false;
         this.prefillComplete = true;
         this.consecutiveUnderrunFrames = 0;
       } else {
@@ -120,12 +164,15 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
     let totalSquare = 0;
     let hadUnderrun = false;
     let lastValidSample = 0;
+    let outputSourceTimestampMs = null;
 
     for (let i = 0; i < samples; i++) {
       if (this.availableSamples > 0) {
         const sample = this.ringBuffer[this.readIndex];
+        const sourceTimestampMs = this.timestampBuffer[this.readIndex];
         output[i] = sample;
         lastValidSample = sample;
+        outputSourceTimestampMs = Number.isFinite(sourceTimestampMs) ? sourceTimestampMs : null;
         totalSquare += sample * sample;
         this.readIndex = (this.readIndex + 1) % this.ringBufferSize;
         this.availableSamples--;
@@ -140,14 +187,11 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
     if (hadUnderrun) {
       this.underrunCount++;
       this.consecutiveUnderrunFrames++;
-      // 极端保护：连续欠载超过10帧（~27ms），暂停等待预填充
-      if (this.consecutiveUnderrunFrames > 10) {
-        this.isPlaying = false;
-        this.consecutiveUnderrunFrames = 0;
-      }
+      this.noteUnderrun(Date.now());
     } else {
       this.consecutiveUnderrunFrames = 0;
     }
+    this.lastOutputSourceTimestampMs = outputSourceTimestampMs;
 
     if (samples > 0) {
       this.audioLevel = Math.sqrt(totalSquare / samples);
@@ -158,23 +202,32 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
    * 计算并发送统计信息
    */
   sendStats(currentTime) {
+    this.maybeReduceTarget(Date.now());
     if (currentTime - this.lastStatsTime >= this.statsIntervalMs / 1000) {
       const bufferFillPercent = (this.availableSamples / this.ringBufferSize) * 100;
       const isActive = this.audioLevel > 0.001; // 音频活动阈值
 
       // 延迟按实际输出采样率估算，否则16k输入会被错误放大。
       const latencyMs = (this.availableSamples / (this.outputSampleRate / 1000));
+      const nextOutputSourceTimestampMs = this.availableSamples > 0 && Number.isFinite(this.timestampBuffer[this.readIndex])
+        ? this.timestampBuffer[this.readIndex]
+        : null;
 
       this.port.postMessage({
         type: 'stats',
         data: {
           latencyMs,
           queueDurationMs: latencyMs,
-          targetBufferMs: this.PREFILL_MS,
-          bufferFillPercent,
+          targetBufferMs: this.adaptiveTargetMs,
+          bufferFillPercent: Math.max(0, Math.min(100, (latencyMs / Math.max(this.adaptiveTargetMs, 1)) * 100)),
           isActive,
           audioLevel: this.audioLevel,
           droppedSamples: this.totalDroppedSamples,
+          underrunCount: this.underrunCount,
+          outputSourceTimestampMs: this.lastOutputSourceTimestampMs,
+          nextOutputSourceTimestampMs,
+          mainToWorkletMs: this.lastMainToWorkletMs,
+          statsGeneratedAtMs: Date.now(),
           availableSamples: this.availableSamples,
           sampleRate: this.outputSampleRate,
           inputSampleRate: this.inputSampleRate,
@@ -183,6 +236,31 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
 
       this.lastStatsTime = currentTime;
     }
+  }
+
+  noteUnderrun(now) {
+    this.lastUnderrunAt = now;
+    if ((now - this.lastTargetChangeAt) >= this.ADAPT_INCREASE_COOLDOWN_MS) {
+      this.adaptiveTargetMs = Math.min(this.MAX_TARGET_MS, this.adaptiveTargetMs + this.TARGET_INCREASE_MS);
+      this.lastTargetChangeAt = now;
+    }
+    if (this.consecutiveUnderrunFrames >= this.UNDERRUN_RECOVERY_FRAMES) {
+      this.isRecovering = true;
+    }
+  }
+
+  maybeReduceTarget(now) {
+    if (this.adaptiveTargetMs <= this.MIN_TARGET_MS) {
+      return;
+    }
+    if ((now - this.lastUnderrunAt) < this.ADAPT_DECREASE_AFTER_MS) {
+      return;
+    }
+    if ((now - this.lastTargetChangeAt) < this.ADAPT_DECREASE_COOLDOWN_MS) {
+      return;
+    }
+    this.adaptiveTargetMs = Math.max(this.MIN_TARGET_MS, this.adaptiveTargetMs - this.TARGET_DECREASE_MS);
+    this.lastTargetChangeAt = now;
   }
 
   resampleToOutputRate(input, inputSampleRate) {
@@ -247,7 +325,18 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
     this.readIndex = 0;
     this.availableSamples = 0;
     this.totalDroppedSamples = 0;
+    this.underrunCount = 0;
+    this.consecutiveUnderrunFrames = 0;
+    this.isPlaying = false;
+    this.isRecovering = false;
+    this.adaptiveTargetMs = this.INITIAL_TARGET_MS;
+    const now = Date.now();
+    this.lastUnderrunAt = now;
+    this.lastTargetChangeAt = now;
     this.audioLevel = 0;
+    this.lastOutputSourceTimestampMs = null;
+    this.lastMainToWorkletMs = null;
+    this.timestampBuffer.fill(Number.NaN);
     this.resampleInputBuffer = new Float32Array(0);
     this.resampleSourcePosition = 0;
     this.resampleInputRate = this.outputSampleRate;

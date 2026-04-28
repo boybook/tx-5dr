@@ -3,10 +3,7 @@ import { z } from 'zod';
 export const RealtimeScopeSchema = z.enum(['radio', 'openwebrx-preview']);
 export type RealtimeScope = z.infer<typeof RealtimeScopeSchema>;
 
-export const RealtimeParticipantKindSchema = z.enum(['listener', 'publisher', 'bridge']);
-export type RealtimeParticipantKind = z.infer<typeof RealtimeParticipantKindSchema>;
-
-export const RealtimeTransportKindSchema = z.enum(['livekit', 'ws-compat']);
+export const RealtimeTransportKindSchema = z.enum(['rtc-data-audio', 'ws-compat']);
 export type RealtimeTransportKind = z.infer<typeof RealtimeTransportKindSchema>;
 
 export const RealtimeSessionDirectionSchema = z.enum(['recv', 'send']);
@@ -27,10 +24,14 @@ export type RealtimeConnectivityErrorCode = z.infer<typeof RealtimeConnectivityE
 
 export const RealtimeConnectivityHintsSchema = z.object({
   signalingUrl: z.string(),
-  signalingPort: z.number().int().positive(),
-  rtcTcpPort: z.number().int().positive(),
-  udpPortRange: z.string(),
-  publicUrlOverrideActive: z.boolean(),
+  localUdpPort: z.number().int().min(1).max(65535),
+  publicCandidateEnabled: z.boolean(),
+  publicEndpoint: z.object({
+    host: z.string(),
+    port: z.number().int().min(1).max(65535),
+  }).nullable(),
+  iceServers: z.array(z.string()),
+  fallbackTransport: z.literal('ws-compat'),
 });
 export type RealtimeConnectivityHints = z.infer<typeof RealtimeConnectivityHintsSchema>;
 
@@ -45,14 +46,6 @@ export const RealtimeConnectivityIssueSchema = z.object({
 });
 export type RealtimeConnectivityIssue = z.infer<typeof RealtimeConnectivityIssueSchema>;
 
-export const RealtimeTokenRequestSchema = z.object({
-  scope: RealtimeScopeSchema,
-  publish: z.boolean().optional(),
-  previewSessionId: z.string().optional(),
-});
-
-export type RealtimeTokenRequest = z.infer<typeof RealtimeTokenRequestSchema>;
-
 export const RealtimeSessionRequestSchema = z.object({
   scope: RealtimeScopeSchema,
   direction: RealtimeSessionDirectionSchema,
@@ -62,30 +55,6 @@ export const RealtimeSessionRequestSchema = z.object({
 
 export type RealtimeSessionRequest = z.infer<typeof RealtimeSessionRequestSchema>;
 
-export const RealtimeParticipantMetadataSchema = z.object({
-  role: z.string(),
-  tokenId: z.string().nullable().optional(),
-  operatorIds: z.array(z.string()).optional(),
-  clientKind: z.string(),
-  participantKind: RealtimeParticipantKindSchema,
-  scope: RealtimeScopeSchema,
-  previewSessionId: z.string().optional(),
-});
-
-export type RealtimeParticipantMetadata = z.infer<typeof RealtimeParticipantMetadataSchema>;
-
-export const RealtimeTokenResponseSchema = z.object({
-  url: z.string(),
-  roomName: z.string(),
-  token: z.string(),
-  participantIdentity: z.string(),
-  participantName: z.string(),
-  participantMetadata: RealtimeParticipantMetadataSchema,
-  connectivityHints: RealtimeConnectivityHintsSchema,
-});
-
-export type RealtimeTokenResponse = z.infer<typeof RealtimeTokenResponseSchema>;
-
 export const RealtimeTransportOfferSchema = z.object({
   transport: RealtimeTransportKindSchema,
   direction: RealtimeSessionDirectionSchema,
@@ -93,7 +62,6 @@ export const RealtimeTransportOfferSchema = z.object({
   token: z.string(),
   participantIdentity: z.string().nullable().optional(),
   participantName: z.string().nullable().optional(),
-  roomName: z.string().nullable().optional(),
 });
 
 export type RealtimeTransportOffer = z.infer<typeof RealtimeTransportOfferSchema>;
@@ -101,8 +69,74 @@ export type RealtimeTransportOffer = z.infer<typeof RealtimeTransportOfferSchema
 export const RealtimeTransportPolicySchema = z.enum(['auto', 'force-compat']);
 export type RealtimeTransportPolicy = z.infer<typeof RealtimeTransportPolicySchema>;
 
-export const LiveKitNetworkModeSchema = z.enum(['lan', 'internet-auto', 'internet-manual']);
-export type LiveKitNetworkMode = z.infer<typeof LiveKitNetworkModeSchema>;
+function isValidIpv4Literal(value: string): boolean {
+  const parts = value.split('.');
+  return parts.length === 4 && parts.every((part) => {
+    if (!/^\d{1,3}$/.test(part)) {
+      return false;
+    }
+    const parsed = Number.parseInt(part, 10);
+    return parsed >= 0 && parsed <= 255;
+  });
+}
+
+function isValidIpv6Literal(value: string): boolean {
+  if (!value.includes(':') || value.includes('[') || value.includes(']')) {
+    return false;
+  }
+  try {
+    // WHATWG URL parsing gives us a portable IPv6 sanity check without Node-only APIs.
+    // The schema still forbids bracket notation because the setting is host-only.
+    const parsed = new URL(`http://[${value}]/`);
+    return parsed.hostname.length > 2;
+  } catch {
+    return false;
+  }
+}
+
+function isValidDnsHostname(value: string): boolean {
+  if (value.length > 253 || value.endsWith('.')) {
+    return false;
+  }
+  const labels = value.split('.');
+  return labels.every((label) => (
+    label.length >= 1
+    && label.length <= 63
+    && /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/.test(label)
+  ));
+}
+
+function isValidRtcDataAudioPublicHost(value: string): boolean {
+  const host = value.trim();
+  if (!host || /\s/.test(host) || /[/?#@]/.test(host) || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(host)) {
+    return false;
+  }
+  return isValidIpv4Literal(host) || isValidIpv6Literal(host) || isValidDnsHostname(host);
+}
+
+export const RtcDataAudioPublicHostSchema = z.preprocess(
+  (value) => (typeof value === 'string' ? value.trim() : value),
+  z.union([
+    z.literal('').transform(() => null),
+    z.string().min(1).max(253).refine(isValidRtcDataAudioPublicHost, {
+      message: 'Public host must be an IP address or DNS hostname without scheme, port, or path',
+    }),
+    z.null(),
+  ]),
+);
+export type RtcDataAudioPublicHost = z.infer<typeof RtcDataAudioPublicHostSchema>;
+
+export const RtcDataAudioPublicUdpPortSchema = z.preprocess((value) => {
+  if (value === '' || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : value;
+  }
+  return value;
+}, z.number().int().min(1).max(65535).nullable());
+export type RtcDataAudioPublicUdpPort = z.infer<typeof RtcDataAudioPublicUdpPortSchema>;
 
 export const RealtimeSessionResponseSchema = z.object({
   scope: RealtimeScopeSchema,
@@ -112,10 +146,8 @@ export const RealtimeSessionResponseSchema = z.object({
   selectionReason: z.enum([
     'client-override',
     'server-policy',
-    'bridge-unhealthy',
-    'livekit-disabled',
-    'runtime-unavailable',
-    'default-livekit',
+    'default-rtc-data-audio',
+    'rtc-data-audio-unavailable',
   ]),
   forcedCompatibilityMode: z.boolean(),
   offers: z.array(RealtimeTransportOfferSchema).min(1),
@@ -125,34 +157,27 @@ export const RealtimeSessionResponseSchema = z.object({
 export type RealtimeSessionResponse = z.infer<typeof RealtimeSessionResponseSchema>;
 
 export const RealtimeSettingsSchema = z.object({
-  publicWsUrl: z.string().url().nullable().optional(),
   transportPolicy: RealtimeTransportPolicySchema.optional(),
-  networkMode: LiveKitNetworkModeSchema.optional(),
-  nodeIp: z.string().nullable().optional(),
+  rtcDataAudioPublicHost: RtcDataAudioPublicHostSchema.optional(),
+  rtcDataAudioPublicUdpPort: RtcDataAudioPublicUdpPortSchema.optional(),
 });
 
 export type RealtimeSettings = z.infer<typeof RealtimeSettingsSchema>;
 
-export const RealtimeCredentialSourceSchema = z.enum(['managed-file', 'environment-override', 'missing']);
-export type RealtimeCredentialSource = z.infer<typeof RealtimeCredentialSourceSchema>;
-
-export const RealtimeCredentialStatusSchema = z.object({
-  initialized: z.boolean(),
-  source: RealtimeCredentialSourceSchema,
-  filePath: z.string().nullable(),
-  apiKeyPreview: z.string().nullable(),
-  createdAt: z.string().nullable(),
-  rotatedAt: z.string().nullable(),
+export const RealtimeRtcDataAudioRuntimeSchema = z.object({
+  localUdpPort: z.number().int().min(1).max(65535),
+  publicCandidateEnabled: z.boolean(),
+  publicEndpoint: z.object({
+    host: z.string(),
+    port: z.number().int().min(1).max(65535),
+  }).nullable(),
 });
-export type RealtimeCredentialStatus = z.infer<typeof RealtimeCredentialStatusSchema>;
+export type RealtimeRtcDataAudioRuntime = z.infer<typeof RealtimeRtcDataAudioRuntimeSchema>;
 
 export const RealtimeSettingsRuntimeSchema = z.object({
-  liveKitEnabled: z.boolean(),
   connectivityHints: RealtimeConnectivityHintsSchema,
   radioReceiveTransport: RealtimeTransportKindSchema,
-  radioBridgeHealthy: z.boolean(),
-  radioBridgeIssueCode: RealtimeConnectivityErrorCodeSchema.nullable(),
-  credentialStatus: RealtimeCredentialStatusSchema,
+  rtcDataAudio: RealtimeRtcDataAudioRuntimeSchema,
 });
 
 export type RealtimeSettingsRuntime = z.infer<typeof RealtimeSettingsRuntimeSchema>;
@@ -234,6 +259,10 @@ export const RealtimeVoiceTxServerIngressStatsSchema = z.object({
   queueDepthFrames: z.number().int().nonnegative(),
   queuedAudioMs: z.number().nonnegative(),
   droppedFrames: z.number().int().nonnegative(),
+  staleDroppedFrames: z.number().int().nonnegative(),
+  underrunCount: z.number().int().nonnegative(),
+  plcFrames: z.number().int().nonnegative(),
+  jitterTargetMs: z.number().nonnegative(),
 });
 
 export type RealtimeVoiceTxServerIngressStats = z.infer<typeof RealtimeVoiceTxServerIngressStatsSchema>;
@@ -242,8 +271,10 @@ export const RealtimeVoiceTxServerOutputStatsSchema = z.object({
   resampleMs: RealtimeVoiceTxMetricWindowSchema,
   queueWaitMs: RealtimeVoiceTxMetricWindowSchema,
   writeMs: RealtimeVoiceTxMetricWindowSchema,
+  serverPipelineMs: RealtimeVoiceTxMetricWindowSchema,
   endToEndMs: RealtimeVoiceTxMetricWindowSchema,
   outputBufferedMs: RealtimeVoiceTxMetricWindowSchema,
+  outputWriteIntervalMs: RealtimeVoiceTxMetricWindowSchema,
   outputSampleRate: z.number().nullable(),
   outputBufferSize: z.number().nullable(),
   writeFailures: z.number().int().nonnegative(),
