@@ -284,6 +284,15 @@ export class RadioOperatorManager {
     this.eventEmitter.on('operatorTransmitCyclesChanged', handleOperatorTransmitCyclesChanged);
     this.eventListeners.set('operatorTransmitCyclesChanged', handleOperatorTransmitCyclesChanged);
 
+    // operator.start()/stop() 可能来自插件 requestCall，而不是显式 startOperator/stopOperator。
+    // 这里保证面板能收到 isTransmitting 的即时变化；槽位/状态变化由 addOperator 中的监听器刷新。
+    const handleOperatorStatusChanged = (data: { operatorId: string }) => {
+      logger.debug(`Operator ${data.operatorId} status changed`);
+      this.emitOperatorStatusUpdate(data.operatorId);
+    };
+    this.eventEmitter.on('operatorStatusChanged' as any, handleOperatorStatusChanged);
+    this.eventListeners.set('operatorStatusChanged', handleOperatorStatusChanged);
+
     // 监听操作员切换发射槽位事件
     const handleOperatorSlotChanged = (data: { operatorId: string; slot: string }) => {
       const operator = this.operators.get(data.operatorId);

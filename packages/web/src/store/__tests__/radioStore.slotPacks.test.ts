@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SlotPack } from '@tx5dr/contracts';
 import { initialSlotPacksState, slotPacksReducer } from '../radioStore';
 
-function createSlotPack(slotId: string, startMs: number, message: string): SlotPack {
+function createSlotPack(slotId: string, startMs: number, message: string, updateSeq?: number): SlotPack {
   return {
     slotId,
     startMs,
@@ -22,6 +22,7 @@ function createSlotPack(slotId: string, startMs: number, message: string): SlotP
       totalFramesBeforeDedup: 1,
       totalFramesAfterDedup: 1,
       lastUpdated: startMs,
+      ...(updateSeq !== undefined && { updateSeq }),
     },
     decodeHistory: [],
   };
@@ -47,5 +48,34 @@ describe('radioStore slot packs reducer', () => {
     expect(committedState.slotPacks.map((slotPack) => slotPack.slotId)).toEqual(['new-slot']);
     expect(committedState.pendingSlotPacks).toEqual([]);
     expect(committedState.isSyncing).toBe(false);
+  });
+
+  it('ignores out-of-order slot pack updates with an older updateSeq', () => {
+    const newerState = slotPacksReducer(initialSlotPacksState, {
+      type: 'slotPackUpdated',
+      payload: createSlotPack('slot-1', 1000, 'R9WXK BG5BNW PM00', 2),
+    });
+
+    const staleState = slotPacksReducer(newerState, {
+      type: 'slotPackUpdated',
+      payload: createSlotPack('slot-1', 1000, 'CQ BG5BNW PM00', 1),
+    });
+
+    expect(staleState.slotPacks).toBe(newerState.slotPacks);
+    expect(staleState.slotPacks[0]?.frames[0]?.message).toBe('R9WXK BG5BNW PM00');
+  });
+
+  it('still accepts legacy slot pack updates without updateSeq', () => {
+    const initialState = slotPacksReducer(initialSlotPacksState, {
+      type: 'slotPackUpdated',
+      payload: createSlotPack('slot-1', 1000, 'CQ BG5BNW PM00'),
+    });
+
+    const updatedState = slotPacksReducer(initialState, {
+      type: 'slotPackUpdated',
+      payload: createSlotPack('slot-1', 1000, 'R9WXK BG5BNW PM00'),
+    });
+
+    expect(updatedState.slotPacks[0]?.frames[0]?.message).toBe('R9WXK BG5BNW PM00');
   });
 });

@@ -128,16 +128,18 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       // 更新统计信息
       slotPack.stats.lastUpdated = timestamp;
       slotPack.stats.totalFramesAfterDedup = slotPack.frames.length;
+      this.bumpUpdateSeq(slotPack);
+      const snapshot = this.snapshotSlotPack(slotPack);
 
       // 异步存储到本地（不阻塞主流程）
       if (this.persistenceEnabled) {
-        this.persistence.store(slotPack, 'updated', this.currentMode.name).catch(error => {
+        this.persistence.store(snapshot, 'updated', this.currentMode.name).catch(error => {
           logger.error('store transmission frame failed', error);
         });
       }
 
       // 发出更新事件
-      this.emit('slotPackUpdated', { ...slotPack });
+      this.emit('slotPackUpdated', snapshot);
 
     } catch (error) {
       logger.error('add transmission frame failed', error);
@@ -219,26 +221,29 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     const allFrames = [...slotPack.frames, ...correctedFrames];
     slotPack.frames = this.deduplicateAndOptimizeFrames(allFrames);
     slotPack.stats.totalFramesAfterDedup = slotPack.frames.length;
+    this.bumpUpdateSeq(slotPack);
 
     // 确保 lastSlotPack 指向最新的 SlotPack
     if (slotPack.startMs > (this.lastSlotPack?.startMs || 0)) {
       this.lastSlotPack = slotPack;
     }
 
+    const snapshot = this.snapshotSlotPack(slotPack);
+
     // 异步存储到本地（不阻塞主流程）
     if (this.persistenceEnabled) {
-      this.persistence.store(slotPack, 'updated', this.currentMode.name).catch(error => {
+      this.persistence.store(snapshot, 'updated', this.currentMode.name).catch(error => {
         logger.error('store SlotPack update failed', error);
       });
     }
 
     // 发出通用更新事件（给前端/PSKReporter/callsignTracker 等消费者）
-    this.emit('slotPackUpdated', { ...slotPack });
+    this.emit('slotPackUpdated', snapshot);
     // 额外发出 decode-only 事件，专供「晚到解码重决策」订阅，
     // 区别于 addTransmissionFrame 仅更新 TX echo 时的 slotPackUpdated
-    this.emit('slotPackDecodeUpdated', { ...slotPack });
+    this.emit('slotPackDecodeUpdated', this.snapshotSlotPack(slotPack));
 
-    return { ...slotPack };
+    return snapshot;
   }
   
   /**
@@ -268,12 +273,26 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
         successfulDecodes: 0,
         totalFramesBeforeDedup: 0,
         totalFramesAfterDedup: 0,
-        lastUpdated: timestamp
+        lastUpdated: timestamp,
+        updateSeq: 0
       },
       decodeHistory: []
     };
     
     return slotPack;
+  }
+
+  private bumpUpdateSeq(slotPack: SlotPack): void {
+    slotPack.stats.updateSeq = (slotPack.stats.updateSeq ?? 0) + 1;
+  }
+
+  private snapshotSlotPack(slotPack: SlotPack): SlotPack {
+    return {
+      ...slotPack,
+      frames: slotPack.frames.map(frame => ({ ...frame })),
+      stats: { ...slotPack.stats },
+      decodeHistory: slotPack.decodeHistory.map(entry => ({ ...entry })),
+    };
   }
   
   /**

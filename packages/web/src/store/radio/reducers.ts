@@ -423,6 +423,17 @@ export function slotPacksReducer(state: SlotPacksState, action: SlotPacksAction)
     let updatedSlotPacks: SlotPack[];
 
     if (existingIndex >= 0) {
+      const existingSlotPack = slotPacks[existingIndex];
+      const existingSeq = existingSlotPack?.stats?.updateSeq;
+      const incomingSeq = newSlotPack.stats?.updateSeq;
+      if (
+        typeof existingSeq === 'number' &&
+        typeof incomingSeq === 'number' &&
+        incomingSeq < existingSeq
+      ) {
+        return slotPacks;
+      }
+
       updatedSlotPacks = [...slotPacks];
       updatedSlotPacks[existingIndex] = newSlotPack;
     } else {
