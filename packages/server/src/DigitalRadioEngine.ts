@@ -856,6 +856,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
 
     this.emitModeAndStatusSnapshot();
+    if (targetEngineMode === 'voice') {
+      await this.restoreLastVoiceOperatingState(configManager);
+    }
 
     this.resetVoicePttState();
     this.squelchStatusMonitor.reevaluate();
@@ -867,6 +870,55 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
 
     logger.info(`Engine mode switched to ${targetEngineMode}/${targetMode.name}`);
+  }
+
+  private async restoreLastVoiceOperatingState(configManager: ConfigManager): Promise<void> {
+    const lastVoice = configManager.getLastVoiceFrequency();
+    if (!lastVoice?.frequency || !this.radioManager.isConnected()) {
+      return;
+    }
+
+    try {
+      const applyResult = await this.radioManager.applyOperatingState({
+        frequency: lastVoice.frequency,
+        mode: lastVoice.radioMode,
+        bandwidth: lastVoice.radioMode ? 'nochange' : undefined,
+        options: lastVoice.radioMode ? { intent: 'voice' } : undefined,
+        tolerateModeFailure: true,
+      });
+
+      if (!applyResult.frequencyApplied) {
+        logger.warn(`Failed to restore last voice frequency: ${(lastVoice.frequency / 1000000).toFixed(3)} MHz`);
+        return;
+      }
+
+      if (applyResult.modeError) {
+        logger.warn(`Restored last voice frequency but failed to set radio mode: ${applyResult.modeError.message}`);
+      }
+
+      const band = lastVoice.band || this.resolveBandLabel(lastVoice.frequency);
+      const description = lastVoice.description || `${(lastVoice.frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
+      this.emit('frequencyChanged', {
+        frequency: lastVoice.frequency,
+        mode: 'VOICE',
+        band,
+        description,
+        radioMode: lastVoice.radioMode,
+        radioConnected: true,
+        source: 'program',
+      });
+      logger.info(`Restored last voice operating state: ${description}${lastVoice.radioMode ? ` (${lastVoice.radioMode})` : ''}`);
+    } catch (error) {
+      logger.warn(`Failed to restore last voice operating state: ${(error as Error).message}`);
+    }
+  }
+
+  private resolveBandLabel(frequency: number): string {
+    try {
+      return getBandFromFrequency(frequency);
+    } catch {
+      return 'Unknown';
+    }
   }
 
   private handleVoiceSoftwarePttChanged(data: { isTransmitting: boolean; operatorIds: string[]; source?: 'manual' | 'voice-keyer' }): void {
