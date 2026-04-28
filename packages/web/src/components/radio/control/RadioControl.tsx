@@ -46,6 +46,7 @@ const MODE_SELECT_MIN_WIDTH_PX = 92;
 const MODE_SELECT_MAX_WIDTH_PX = 160;
 const CUSTOM_FREQUENCY_ACTION_KEY = '__custom__';
 const CURRENT_CUSTOM_FREQUENCY_KEY = '__custom_frequency__';
+const CUSTOM_BAND = 'custom';
 
 const clampWidth = (value: number, minWidth: number, maxWidth: number): number => (
   Math.min(maxWidth, Math.max(minWidth, value))
@@ -518,6 +519,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const tunerEnabled = typeof tunerSwitchCapState?.value === 'boolean' ? tunerSwitchCapState.value : false;
   const tunerIsTuning = (tunerSwitchCapState?.meta as { status?: string } | undefined)?.status === 'tuning';
   const ability = useAbility();
+  const formatBandLabel = React.useCallback((band?: string | null) => (
+    !band || band.toLowerCase() === CUSTOM_BAND ? t('frequency.custom') : band
+  ), [t]);
   const [isErrorHistoryOpen, setIsErrorHistoryOpen] = useState(false);
   const [availableModes, setAvailableModes] = useState<ModeDescriptor[]>([]);
   const [isLoadingModes, setIsLoadingModes] = useState(false);
@@ -784,7 +788,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     };
 
     loadModes();
-  }, [connection.state.isConnected]);
+  }, [connection.state.isConnected, formatBandLabel]);
 
   // 加载预设频率列表
   React.useEffect(() => {
@@ -803,7 +807,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const frequencyOptions: FrequencyOption[] = response.presets.map((preset: any) => ({
             key: String(preset.frequency),
-            label: preset.description || `${preset.band} ${(preset.frequency / 1000000).toFixed(3)} MHz`,
+            label: preset.description || `${formatBandLabel(preset.band)} ${(preset.frequency / 1000000).toFixed(3)} MHz`,
             frequency: preset.frequency,
             band: preset.band,
             mode: preset.mode,

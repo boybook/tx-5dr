@@ -525,6 +525,7 @@
     "descriptionLabel": "Description",
     "add": "Add Preset",
     "edit": "Edit",
+    "delete": "Delete Preset",
     "remove": "Remove",
     "moveUp": "Move Up",
     "moveDown": "Move Down",
@@ -532,7 +533,8 @@
     "duplicate": "A preset with this frequency already exists",
     "invalidFrequency": "Please enter a valid frequency",
     "frequencyRange": "Frequency range: 0.1 - 1000 MHz",
-    "unknownBand": "Cannot infer an amateur band from this frequency",
+    "unknownBand": "This frequency does not match a known amateur band and will be saved as a custom preset.",
+    "customBand": "Custom",
     "bandAutoPending": "Auto-inferred from frequency",
     "addTitle": "Add New Preset",
     "editTitle": "Edit Preset",
@@ -542,7 +544,8 @@
     "allModes": "All",
     "presetCount": "{{count}} presets",
     "loadFailed": "Failed to load frequency presets",
-    "saveFailed": "Failed to save frequency presets"
+    "saveFailed": "Failed to save frequency presets",
+    "deleteFailed": "Failed to delete frequency preset"
   },
   "clock": {
     "title": "Clock Calibration",
