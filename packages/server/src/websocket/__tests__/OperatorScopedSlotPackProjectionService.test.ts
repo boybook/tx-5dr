@@ -103,4 +103,43 @@ describe('OperatorScopedSlotPackProjectionService', () => {
     expect(projected.frames[0]).not.toHaveProperty('logbookAnalysis');
     expect(analyzeCallsign).not.toHaveBeenCalled();
   });
+
+  it('projects special event long callsigns parsed from CQ messages', async () => {
+    const analyzeCallsign = vi.fn().mockResolvedValue({
+      isNewCallsign: true,
+      isNewDxccEntity: true,
+      isNewBandDxccEntity: true,
+      isConfirmedDxcc: false,
+      isNewGrid: false,
+      prefix: 'SX',
+      state: undefined,
+      stateConfidence: undefined,
+      dxccId: 236,
+      dxccEntity: 'Greece',
+      dxccStatus: 'current',
+    });
+
+    const service = new OperatorScopedSlotPackProjectionService({
+      callsignTracker: {
+        getGrid: vi.fn().mockReturnValue(undefined),
+      } as any,
+      logManager: {
+        getOperatorLogBook: vi.fn().mockResolvedValue({
+          provider: {
+            analyzeCallsign,
+          },
+        }),
+      } as any,
+    });
+
+    const projected = await service.projectSlotPack(createSlotPack('CQ SX100PAOK'), 'op-special');
+
+    expect(analyzeCallsign).toHaveBeenCalledWith('SX100PAOK', undefined, { band: expect.any(String) });
+    expect(projected.frames[0]?.logbookAnalysis).toMatchObject({
+      callsign: 'SX100PAOK',
+      prefix: 'SX',
+      dxccEntity: 'Greece',
+      dxccStatus: 'current',
+    });
+  });
 });

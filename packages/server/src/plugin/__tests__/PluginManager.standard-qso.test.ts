@@ -512,6 +512,89 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('uses bounded report-first slots when manually calling a special event long callsign', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG5DRB',
+      myGrid: 'PM01',
+    });
+    const sourceSlot = createSlotInfo(45_000);
+
+    pluginManager.requestCall(operator.config.id, 'SX100PAOK', {
+      message: {
+        message: 'CQ SX100PAOK',
+        snr: -10,
+        dt: 0,
+        freq: 1500,
+        confidence: 0.9,
+      },
+      slotInfo: sourceSlot,
+    });
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(status.currentSlot).toBe('TX1');
+    expect(status.context?.targetCallsign).toBe('SX100PAOK');
+    expect(status.slots?.TX1).toBe('<SX100PAOK> BG5DRB -10');
+    expect(status.slots?.TX1).not.toContain('PM01');
+    expect(status.slots?.TX2).toBe('<SX100PAOK> BG5DRB -10');
+    expect(status.slots?.TX3).toBe('<SX100PAOK> BG5DRB RRR');
+    expect(status.slots?.TX4).toBe('<SX100PAOK> BG5DRB RRR');
+    expect(status.slots?.TX5).toBe('<SX100PAOK> BG5DRB 73');
+    for (const slot of ['TX1', 'TX2', 'TX3', 'TX4', 'TX5'] as const) {
+      expect(status.slots?.[slot]?.length).toBeLessThanOrEqual(22);
+    }
+
+    await pluginManager.shutdown();
+  });
+
+  it('advances from TX1 when a special event long callsign sends an R-report', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG5DRB',
+      myGrid: 'PM01',
+      targetCallsign: 'SX100PAOK',
+    });
+    setRuntimeState(pluginManager, operator.config.id, 'TX1');
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), [{
+      message: 'BG5DRB <SX100PAOK> R-10',
+      snr: -7,
+      freq: 1502,
+    }]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(status.currentSlot).toBe('TX4');
+    expect(status.context?.targetCallsign).toBe('SX100PAOK');
+    expect(status.context?.reportReceived).toBe(-10);
+    expect(status.context?.reportSent).toBe(-7);
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('<SX100PAOK> BG5DRB RRR');
+
+    await pluginManager.shutdown();
+  });
+
+  it('advances from TX3 when a special event long callsign sends 73', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG5DRB',
+      myGrid: 'PM01',
+      targetCallsign: 'SX100PAOK',
+    });
+    patchRuntimeContext(pluginManager, operator.config.id, {
+      targetCallsign: 'SX100PAOK',
+      reportSent: -10,
+      reportReceived: -7,
+    });
+    setRuntimeState(pluginManager, operator.config.id, 'TX3');
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), [{
+      message: 'BG5DRB <SX100PAOK> 73',
+      snr: -7,
+      freq: 1502,
+    }]));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX5');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('<SX100PAOK> BG5DRB 73');
+
+    await pluginManager.shutdown();
+  });
+
   it('only retries 73 after returning to CQ when the same target sends RR73 again', async () => {
     const { operator, pluginManager } = await createRuntimeHarness({
       myCallsign: 'BG7XTV',

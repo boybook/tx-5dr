@@ -213,6 +213,15 @@ test('FT8 CQ 带区域标记的消息解析', () => {
   assert.equal(info.countryZh, '中国·北京');
 });
 
+test('FT8 CQ 特殊活动长呼号解析', () => {
+  const info = parseFT8LocationInfo('CQ SX100PAOK');
+
+  assert.equal(info.callsign, 'SX100PAOK');
+  assert.equal(info.country, 'Greece');
+  assert.equal(info.countryZh, '希腊');
+  assert.equal(info.countryCode, 'GR');
+});
+
 test('FT8消息解析 - 美国 slash 位置指示', () => {
   const message = 'CQ W1AW/KH6 BL11';
   const info = parseFT8LocationInfo(message);

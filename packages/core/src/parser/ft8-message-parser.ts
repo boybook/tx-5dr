@@ -1,10 +1,11 @@
 import { FT8Message, FT8MessageFoxRR73, FT8MessageType, getFourCharacterGrid } from '@tx5dr/contracts';
 
 // 基础呼号正则表达式（更宽松的匹配）
-const BASE_CALLSIGN_REGEX = /^[A-Z0-9]{1,6}$/;
+const MAX_CALLSIGN_TOKEN_LENGTH = 12;
+const BASE_CALLSIGN_REGEX = /^[A-Z0-9]{1,12}$/;
 
 // 完整呼号正则表达式（包括前缀和后缀）
-const FULL_CALLSIGN_REGEX = /^[A-Z0-9]{1,8}(\/[A-Z0-9]{1,8})*$/;
+const FULL_CALLSIGN_REGEX = /^[A-Z0-9]{1,12}(\/[A-Z0-9]{1,12})*$/;
 
 // 网格定位正则表达式（4位或6位）
 const GRID_REGEX = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/;
@@ -30,7 +31,7 @@ export class FT8MessageParser {
    * - ✅ BA1ABC → _ B A 1 A B C (位置: 1空格, 2字母, 3数字, 4-6字母)
    * - ❌ Z3Z3Z → Z 3 Z 3 Z (最后数字后有 2 个字符，但倒数第二个是数字)
    */
-  private static isStandardCallsign(callsign: string): boolean {
+  static isStandardCallsign(callsign: string): boolean {
     // 移除可能存在的 <>
     let cleanCallsign = callsign.replace(/[<>]/g, '');
 
@@ -544,7 +545,7 @@ export class FT8MessageParser {
    */
   private static isBasicValidCallsign(callsign: string): boolean {
     // 基本长度检查
-    if (callsign.length < 3 || callsign.length > 8) return false;
+    if (callsign.length < 3 || callsign.length > MAX_CALLSIGN_TOKEN_LENGTH) return false;
 
     // 必须包含至少一个数字
     if (!/\d/.test(callsign)) return false;

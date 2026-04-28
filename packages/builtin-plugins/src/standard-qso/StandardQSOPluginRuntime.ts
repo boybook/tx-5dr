@@ -141,6 +141,26 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 }
             }
 
+            const msgRogerReport = messages
+                .filter((msg) => msg.message.type === FT8MessageType.ROGER_REPORT &&
+                    msg.message.senderCallsign === strategy.context.targetCallsign &&
+                    msg.message.targetCallsign === strategy.context.config.myCallsign)
+                .sort((a, b) => a.snr - b.snr)
+                .pop();
+            if (msgRogerReport) {
+                const msg = msgRogerReport.message as FT8MessageRogerReport;
+                strategy.logger.debug('TX1: received ROGER_REPORT, moving to TX4');
+                strategy.context.reportReceived = msg.report;
+                strategy.context.reportSent = msgRogerReport.snr;
+                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                    strategy.context.actualFrequency = strategy.context.config.frequency + msgRogerReport.df;
+                }
+                strategy.updateSlots();
+                return {
+                    changeState: 'TX4'
+                }
+            }
+
             // Fox/Hound 模式：Fox 发出邀请 (PREVHOUND RR73; MYCALL <FOXHASH>)
             // 表示 Fox 已有我们之前的信号报告，邀请我们直接发 R-report
             const foxInvite = messages
@@ -436,6 +456,22 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     return {
                         changeState: 'TX5'
                     }
+                }
+            }
+
+            const msg73 = messages
+                .filter((msg) =>
+                    msg.message.type === FT8MessageType.SEVENTY_THREE &&
+                    msg.message.senderCallsign === strategy.context.targetCallsign &&
+                    msg.message.targetCallsign === strategy.context.config.myCallsign)
+                .sort((a, b) => a.snr - b.snr)
+                .pop();
+
+            if (msg73) {
+                strategy.logger.debug('TX3: received 73, moving to TX5');
+                strategy.updateSlots();
+                return {
+                    changeState: 'TX5'
                 }
             }
 
@@ -1413,37 +1449,105 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     getCurrentState(): SlotsIndex {
         return this.state;
     }
+
+    private static readonly MAX_FT8_MESSAGE_CHARS = 22;
+
+    private getBoundedSlotText(
+        slot: SlotsIndex,
+        primaryText: string,
+        fallbackText?: string,
+    ): string {
+        if (primaryText.length <= StandardQSOPluginRuntime.MAX_FT8_MESSAGE_CHARS) {
+            return primaryText;
+        }
+
+        if (fallbackText) {
+            if (fallbackText.length <= StandardQSOPluginRuntime.MAX_FT8_MESSAGE_CHARS) {
+                this.logger.warn(`slot ${slot} message too long, using fallback`, {
+                    targetCallsign: this.context.targetCallsign,
+                    primaryText,
+                    fallbackText,
+                });
+                return fallbackText;
+            }
+        }
+
+        this.logger.warn(`slot ${slot} message too long, suppressing transmission`, {
+            targetCallsign: this.context.targetCallsign,
+            primaryText,
+        });
+        return '';
+    }
+
+    private generateBoundedMessage(
+        slot: SlotsIndex,
+        primary: Parameters<typeof FT8MessageParser.generateMessage>[0],
+        fallback?: Parameters<typeof FT8MessageParser.generateMessage>[0],
+    ): string {
+        return this.getBoundedSlotText(
+            slot,
+            FT8MessageParser.generateMessage(primary),
+            fallback ? FT8MessageParser.generateMessage(fallback) : undefined,
+        );
+    }
+
+    private updateTargetSlotsForSpecialCallsign(targetCallsign: string): void {
+        const report = this.context.reportSent || 0;
+        const wrappedTarget = `<${targetCallsign}>`;
+        const myCallsign = this.operator.config.myCallsign;
+        const reportText = FT8MessageParser.generateSignalReport(report);
+        const signalReport = {
+            type: FT8MessageType.SIGNAL_REPORT,
+            senderCallsign: myCallsign,
+            targetCallsign,
+            report,
+        } as const;
+
+        this.slots.TX1 = this.generateBoundedMessage('TX1', signalReport);
+        this.slots.TX2 = this.generateBoundedMessage('TX2', signalReport);
+        this.slots.TX3 = this.getBoundedSlotText(
+            'TX3',
+            `${wrappedTarget} ${myCallsign} R${reportText}`,
+            `${wrappedTarget} ${myCallsign} RRR`,
+        );
+        this.slots.TX4 = this.getBoundedSlotText('TX4', `${wrappedTarget} ${myCallsign} RRR`);
+        this.slots.TX5 = this.getBoundedSlotText('TX5', `${wrappedTarget} ${myCallsign} 73`);
+    }
     
     updateSlots() {
         if (this.context.targetCallsign) {
-            this.slots.TX1 = FT8MessageParser.generateMessage({
-                type: FT8MessageType.CALL,
-                senderCallsign: this.operator.config.myCallsign,
-                targetCallsign: this.context.targetCallsign,
-                grid: this.context.config.myGrid,
-            });
-            this.slots.TX2 = FT8MessageParser.generateMessage({
-                type: FT8MessageType.SIGNAL_REPORT,
-                senderCallsign: this.operator.config.myCallsign,
-                targetCallsign: this.context.targetCallsign,
-                report: this.context.reportSent || 0,
-            });
-            this.slots.TX3 = FT8MessageParser.generateMessage({
-                type: FT8MessageType.ROGER_REPORT,
-                senderCallsign: this.operator.config.myCallsign,
-                targetCallsign: this.context.targetCallsign,
-                report: this.context.reportSent || 0,
-            });
-            this.slots.TX4 = FT8MessageParser.generateMessage({
-                type: FT8MessageType.RRR,
-                senderCallsign: this.operator.config.myCallsign,
-                targetCallsign: this.context.targetCallsign,
-            });
-            this.slots.TX5 = FT8MessageParser.generateMessage({
-                type: FT8MessageType.SEVENTY_THREE,
-                senderCallsign: this.operator.config.myCallsign,
-                targetCallsign: this.context.targetCallsign,
-            });
+            if (FT8MessageParser.isStandardCallsign(this.context.targetCallsign)) {
+                this.slots.TX1 = FT8MessageParser.generateMessage({
+                    type: FT8MessageType.CALL,
+                    senderCallsign: this.operator.config.myCallsign,
+                    targetCallsign: this.context.targetCallsign,
+                    grid: this.context.config.myGrid,
+                });
+                this.slots.TX2 = FT8MessageParser.generateMessage({
+                    type: FT8MessageType.SIGNAL_REPORT,
+                    senderCallsign: this.operator.config.myCallsign,
+                    targetCallsign: this.context.targetCallsign,
+                    report: this.context.reportSent || 0,
+                });
+                this.slots.TX3 = FT8MessageParser.generateMessage({
+                    type: FT8MessageType.ROGER_REPORT,
+                    senderCallsign: this.operator.config.myCallsign,
+                    targetCallsign: this.context.targetCallsign,
+                    report: this.context.reportSent || 0,
+                });
+                this.slots.TX4 = FT8MessageParser.generateMessage({
+                    type: FT8MessageType.RRR,
+                    senderCallsign: this.operator.config.myCallsign,
+                    targetCallsign: this.context.targetCallsign,
+                });
+                this.slots.TX5 = FT8MessageParser.generateMessage({
+                    type: FT8MessageType.SEVENTY_THREE,
+                    senderCallsign: this.operator.config.myCallsign,
+                    targetCallsign: this.context.targetCallsign,
+                });
+            } else {
+                this.updateTargetSlotsForSpecialCallsign(this.context.targetCallsign);
+            }
         } else {
             this.slots.TX1 = '';
             this.slots.TX2 = '';
