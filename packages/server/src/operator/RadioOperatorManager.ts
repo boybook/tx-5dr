@@ -695,17 +695,24 @@ export class RadioOperatorManager {
     this.emitOperatorStatusUpdate(operatorId);
   }
 
-  setOperatorRuntimeSlotContent(
+  async setOperatorRuntimeSlotContent(
     operatorId: string,
     slot: import('@tx5dr/contracts').OperatorRuntimeSlot,
     content: string,
-  ): void {
+  ): Promise<void> {
     const operator = this.operators.get(operatorId);
     if (!operator) {
       throw new Error(`operator ${operatorId} not found`);
     }
 
-    this._pluginManager?.setOperatorRuntimeSlotContent(operatorId, slot, content);
+    const persistedSettings = this._pluginManager?.setOperatorRuntimeSlotContent(operatorId, slot, content);
+    if (persistedSettings) {
+      await ConfigManager.getInstance().setOperatorPluginSettings(
+        operatorId,
+        'standard-qso',
+        persistedSettings,
+      );
+    }
     logger.debug(`Set operator ${operatorId} runtime slot content: slot=${slot}`);
     this.emitOperatorStatusUpdate(operatorId);
   }

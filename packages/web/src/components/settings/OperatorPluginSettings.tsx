@@ -41,7 +41,7 @@ export const OperatorPluginSettings: React.FC<OperatorPluginSettingsProps> = ({ 
       (p.type === 'strategy'
         ? (p.assignedOperatorIds?.includes(operatorId) ?? false)
         : p.enabled)
-    ) && Object.values(p.settings ?? {}).some(d => d.scope === 'operator')
+    ) && Object.values(p.settings ?? {}).some(d => d.scope === 'operator' && !d.hidden)
   );
   const hasStrategyChoice = plugins.filter((plugin) => plugin.type === 'strategy').length > 1;
 
@@ -86,6 +86,7 @@ export const OperatorPluginSettings: React.FC<OperatorPluginSettingsProps> = ({ 
       const hasValidationIssues = Object.entries(plugin.settings ?? {}).some(([key, descriptor]) => (
         descriptor.scope === 'operator'
         && descriptor.type !== 'info'
+        && !descriptor.hidden
         && Boolean(getPluginSettingValidationIssue(
           plugin.name,
           key,

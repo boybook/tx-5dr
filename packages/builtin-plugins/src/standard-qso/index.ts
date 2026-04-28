@@ -8,7 +8,11 @@ import type {
   OperatorConfig,
 } from '@tx5dr/contracts';
 import {
+  buildStandardQSODefaultTx6Message,
+  normalizeStandardQSOTx6MessageOverride,
   StandardQSOPluginRuntime,
+  STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING,
+  type StandardQSOOperatorConfig,
   type StandardQSOPluginOperator,
 } from './StandardQSOPluginRuntime.js';
 import zhLocale from './locales/zh.json' with { type: 'json' };
@@ -36,9 +40,9 @@ function getStandardQSOConfig(ctx: {
     mode: OperatorConfig['mode'];
     transmitCycles: number[];
   };
-}): OperatorConfig {
+}): StandardQSOOperatorConfig {
   const c = ctx.config;
-  return {
+  const baseConfig: OperatorConfig = {
     id: ctx.operator.id,
     myCallsign: ctx.operator.callsign,
     myGrid: ctx.operator.grid,
@@ -53,6 +57,14 @@ function getStandardQSOConfig(ctx: {
     targetSelectionPriorityMode: ((c.targetSelectionPriorityMode as string) ?? 'dxcc_first') as TargetSelectionPriorityMode,
     maxQSOTimeoutCycles: (c.maxQSOTimeoutCycles as number) ?? 6,
     maxCallAttempts: (c.maxCallAttempts as number) ?? 5,
+  };
+  const defaultTx6Message = buildStandardQSODefaultTx6Message(baseConfig);
+  return {
+    ...baseConfig,
+    tx6MessageOverride: normalizeStandardQSOTx6MessageOverride(
+      c[STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING],
+      defaultTx6Message,
+    ),
   };
 }
 
@@ -121,6 +133,13 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
       min: 1,
       max: 20,
     },
+    [STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING]: {
+      type: 'string',
+      default: '',
+      label: STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING,
+      scope: 'operator',
+      hidden: true,
+    },
   },
 
   /**
@@ -171,4 +190,10 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
 export const standardQSOLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,
   en: enLocale,
+};
+
+export {
+  buildStandardQSODefaultTx6Message,
+  normalizeStandardQSOTx6MessageOverride,
+  STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING,
 };

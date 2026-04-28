@@ -683,8 +683,8 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
       if (!settings || typeof settings !== 'object') {
         return reply.status(400).send({ error: 'settings must be an object' });
       }
-      engine.pluginManager.setOperatorPluginSettings(operatorId, name, settings);
-      await configManager.setOperatorPluginSettings(operatorId, name, settings);
+      const mergedSettings = engine.pluginManager.setOperatorPluginSettings(operatorId, name, settings);
+      await configManager.setOperatorPluginSettings(operatorId, name, mergedSettings);
       logger.info(`Plugin operator settings updated: plugin=${name}, operator=${operatorId}`);
       return reply.send({ success: true });
     },
