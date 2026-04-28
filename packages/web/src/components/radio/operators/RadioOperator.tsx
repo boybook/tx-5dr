@@ -21,6 +21,26 @@ interface RadioOperatorProps {
   operatorStatus: OperatorStatus;
 }
 
+type RuntimeSlotContents = Partial<Record<OperatorRuntimeSlot, string>>;
+
+const SLOT_CONTENT_DEBOUNCE_MS = 400;
+const SLOT_CONTENT_COOLDOWN_MS = 500;
+
+function createRuntimeSlotContents(slots: OperatorStatus['slots']): RuntimeSlotContents {
+  if (!slots) {
+    return {};
+  }
+
+  return {
+    TX1: slots.TX1 || '',
+    TX2: slots.TX2 || '',
+    TX3: slots.TX3 || '',
+    TX4: slots.TX4 || '',
+    TX5: slots.TX5 || '',
+    TX6: slots.TX6 || '',
+  };
+}
+
 export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operatorStatus }) => {
   const { t } = useTranslation('radio');
   const connection = useConnection();
@@ -93,6 +113,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     (operatorStatus.context.frequency ?? 1500).toString()
   );
 
+  // 时隙内容的本地草稿。展开区 Input 编辑时，服务端推送会先进入缓冲，避免覆盖光标与中间态。
+  const [localSlotContents, setLocalSlotContents] = React.useState<RuntimeSlotContents>(() =>
+    createRuntimeSlotContents(operatorStatus.slots)
+  );
+
   // 展开/收起时隙内容的状态
   const [isSlotContentExpanded, setIsSlotContentExpanded] = React.useState(false);
   const expandedContentRef = React.useRef<HTMLDivElement | null>(null);
@@ -105,19 +130,26 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   
   // 防抖定时器ref
   const debounceTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+  const slotDebounceTimersRef = React.useRef<Partial<Record<OperatorRuntimeSlot, ReturnType<typeof setTimeout>>>>({});
+  const slotCooldownTimersRef = React.useRef<Partial<Record<OperatorRuntimeSlot, ReturnType<typeof setTimeout>>>>({});
 
   // 正在聚焦编辑的字段集合 — 聚焦期间服务端推送不会覆盖这些字段
   const [focusedFields, setFocusedFields] = React.useState<Set<string>>(new Set());
+  const [focusedSlotFields, setFocusedSlotFields] = React.useState<Set<OperatorRuntimeSlot>>(new Set());
 
   // 冷却中的字段集合 — 失焦后短暂保护期，期间缓冲服务端推送
   const [cooldownFields, setCooldownFields] = React.useState<Set<string>>(new Set());
+  const [cooldownSlotFields, setCooldownSlotFields] = React.useState<Set<OperatorRuntimeSlot>>(new Set());
 
   // 冷却期缓冲区：存储冷却期间服务端推送的最新值
   const cooldownBufferRef = React.useRef<Record<string, string | number>>({});
+  const cooldownSlotBufferRef = React.useRef<RuntimeSlotContents>({});
 
   // localContext ref，供回调函数读取最新值
   const localContextRef = React.useRef(localContext);
   localContextRef.current = localContext;
+  const localSlotContentsRef = React.useRef(localSlotContents);
+  localSlotContentsRef.current = localSlotContents;
 
   // 立即停止发射Popover状态
   const [isForceStopPopoverOpen, setIsForceStopPopoverOpen] = React.useState(false);
@@ -246,6 +278,43 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     }
   }, [operatorStatus.context, focusedFields, cooldownFields, reportSentRaw, frequencyRaw]);
 
+  // 同步服务端时隙内容到本地草稿
+  // - 聚焦中的 slot：保留用户正在输入的内容
+  // - 冷却中的 slot：只缓冲服务端最新值，等冷却结束再应用
+  // - 其他 slot：直接跟随服务端
+  React.useEffect(() => {
+    const serverSlots = createRuntimeSlotContents(operatorStatus.slots);
+    const slotKeys = new Set<OperatorRuntimeSlot>([
+      ...(Object.keys(serverSlots) as OperatorRuntimeSlot[]),
+      ...(Object.keys(localSlotContentsRef.current) as OperatorRuntimeSlot[]),
+    ]);
+
+    for (const slot of slotKeys) {
+      if (cooldownSlotFields.has(slot)) {
+        cooldownSlotBufferRef.current[slot] = serverSlots[slot] || '';
+      }
+    }
+
+    setLocalSlotContents(prevSlots => {
+      const nextSlots = { ...prevSlots };
+      let hasChanged = false;
+
+      for (const slot of slotKeys) {
+        if (focusedSlotFields.has(slot) || cooldownSlotFields.has(slot)) {
+          continue;
+        }
+
+        const nextContent = serverSlots[slot] || '';
+        if (nextSlots[slot] !== nextContent) {
+          nextSlots[slot] = nextContent;
+          hasChanged = true;
+        }
+      }
+
+      return hasChanged ? nextSlots : prevSlots;
+    });
+  }, [operatorStatus.slots, focusedSlotFields, cooldownSlotFields]);
+
   // 同步服务端transmitCycles到本地状态
   React.useEffect(() => {
     if (operatorStatus.transmitCycles) {
@@ -259,6 +328,16 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = null;
+      }
+      for (const timer of Object.values(slotDebounceTimersRef.current)) {
+        if (timer) {
+          clearTimeout(timer);
+        }
+      }
+      for (const timer of Object.values(slotCooldownTimersRef.current)) {
+        if (timer) {
+          clearTimeout(timer);
+        }
       }
     };
   }, []);
@@ -372,9 +451,89 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   }, []);
 
   // 处理时隙内容变化
-  const handleSlotContentChange = (slot: OperatorRuntimeSlot, content: string) => {
+  const handleSlotContentChange = React.useCallback((slot: OperatorRuntimeSlot, content: string) => {
+    setLocalSlotContents(prevSlots => (
+      prevSlots[slot] === content ? prevSlots : { ...prevSlots, [slot]: content }
+    ));
+
+    const existingTimer = slotDebounceTimersRef.current[slot];
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    slotDebounceTimersRef.current[slot] = setTimeout(() => {
+      setOperatorRuntimeSlotContent(slot, content);
+      delete slotDebounceTimersRef.current[slot];
+    }, SLOT_CONTENT_DEBOUNCE_MS);
+  }, [setOperatorRuntimeSlotContent]);
+
+  const handleSlotContentFocus = React.useCallback((slot: OperatorRuntimeSlot) => {
+    const cooldownTimer = slotCooldownTimersRef.current[slot];
+    if (cooldownTimer) {
+      clearTimeout(cooldownTimer);
+      delete slotCooldownTimersRef.current[slot];
+    }
+    delete cooldownSlotBufferRef.current[slot];
+
+    setCooldownSlotFields(prev => {
+      if (!prev.has(slot)) return prev;
+      const next = new Set(prev);
+      next.delete(slot);
+      return next;
+    });
+    setFocusedSlotFields(prev => {
+      if (prev.has(slot)) return prev;
+      const next = new Set(prev);
+      next.add(slot);
+      return next;
+    });
+  }, []);
+
+  const handleSlotContentBlur = React.useCallback((slot: OperatorRuntimeSlot) => {
+    const pendingTimer = slotDebounceTimersRef.current[slot];
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      delete slotDebounceTimersRef.current[slot];
+    }
+
+    const content = localSlotContentsRef.current[slot] || '';
     setOperatorRuntimeSlotContent(slot, content);
-  };
+
+    setFocusedSlotFields(prev => {
+      if (!prev.has(slot)) return prev;
+      const next = new Set(prev);
+      next.delete(slot);
+      return next;
+    });
+    setCooldownSlotFields(prev => {
+      const next = new Set(prev);
+      next.add(slot);
+      return next;
+    });
+
+    const existingCooldownTimer = slotCooldownTimersRef.current[slot];
+    if (existingCooldownTimer) {
+      clearTimeout(existingCooldownTimer);
+    }
+
+    slotCooldownTimersRef.current[slot] = setTimeout(() => {
+      setCooldownSlotFields(prev => {
+        if (!prev.has(slot)) return prev;
+        const next = new Set(prev);
+        next.delete(slot);
+        return next;
+      });
+
+      const bufferedContent = cooldownSlotBufferRef.current[slot];
+      if (bufferedContent !== undefined) {
+        setLocalSlotContents(prevSlots => (
+          prevSlots[slot] === bufferedContent ? prevSlots : { ...prevSlots, [slot]: bufferedContent }
+        ));
+        delete cooldownSlotBufferRef.current[slot];
+      }
+      delete slotCooldownTimersRef.current[slot];
+    }, SLOT_CONTENT_COOLDOWN_MS);
+  }, [setOperatorRuntimeSlotContent]);
 
   // 处理快速状态切换
   const handleQuickStateChange = (slot: OperatorRuntimeSlot) => {
@@ -1018,6 +1177,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               <div className="grid grid-cols-1 gap-0 text-xs">
                 {Object.entries(operatorStatus.slots).map(([slot, content]) => {
                   const runtimeSlot = slot as OperatorRuntimeSlot;
+                  const displayedContent = localSlotContents[runtimeSlot] ?? content ?? '';
                   return (
                   <div 
                     key={runtimeSlot} 
@@ -1033,7 +1193,10 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                     <div className="flex px-1 items-center gap-2">
                       <span className="text-sm font-medium text-default-600 min-w-[30px]">{runtimeSlot}:</span>
                       <Input
-                        value={content || ''}
+                        value={displayedContent}
+                        onFocus={() => handleSlotContentFocus(runtimeSlot)}
+                        onBlur={() => handleSlotContentBlur(runtimeSlot)}
+                        onKeyDown={handleInputKeyDown}
                         onChange={(e) => handleSlotContentChange(runtimeSlot, e.target.value)}
                         size="sm"
                         variant="bordered"

@@ -105,7 +105,7 @@ export function normalizePluginSettingsForSave(
   const normalized: Record<string, unknown> = {};
 
   for (const [key, descriptor] of Object.entries(plugin.settings ?? {})) {
-    if (descriptor.type === 'info') {
+    if (descriptor.type === 'info' || descriptor.hidden) {
       continue;
     }
 

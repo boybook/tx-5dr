@@ -1032,7 +1032,7 @@ export class WSServer extends WSMessageHandler {
     try {
       const { operatorId, slot, content } = data;
       this.logOperatorCommand('setOperatorRuntimeSlotContent', connectionId, { operatorId, slot, content });
-      this.digitalRadioEngine.operatorManager.setOperatorRuntimeSlotContent(operatorId, slot, content);
+      await this.digitalRadioEngine.operatorManager.setOperatorRuntimeSlotContent(operatorId, slot, content);
     } catch (error) {
       this.handleCommandError(error, 'setOperatorRuntimeSlotContent');
     }

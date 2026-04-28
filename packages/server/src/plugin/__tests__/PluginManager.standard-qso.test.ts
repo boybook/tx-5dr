@@ -7,6 +7,7 @@ import type { DigitalRadioEngineEvents, ParsedFT8Message, SlotInfo, SlotPack } f
 import { FT8MessageType, MODES } from '@tx5dr/contracts';
 import { FT8MessageParser, RadioOperator } from '@tx5dr/core';
 import type { ScoredCandidate } from '@tx5dr/plugin-api';
+import { STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING } from '@tx5dr/builtin-plugins';
 import { PluginManager } from '../PluginManager.js';
 
 function createSlotInfo(startMs: number): SlotInfo {
@@ -351,6 +352,44 @@ describe('PluginManager standard-qso late re-decision', () => {
   function getCurrentTransmission(pluginManager: PluginManager, operatorId: string): string | null {
     return pluginManager.getCurrentTransmission(operatorId);
   }
+
+  it('keeps manual TX6 slot content after standard-qso regenerates slots', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG5DRB',
+      myGrid: 'OL32',
+    });
+
+    const persistedSettings = pluginManager.setOperatorRuntimeSlotContent(
+      operator.config.id,
+      'TX6',
+      'CQ DX BG5DRB OL32',
+    );
+    expect(persistedSettings?.[STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING]).toBe('CQ DX BG5DRB OL32');
+
+    patchRuntimeContext(pluginManager, operator.config.id, {
+      targetCallsign: 'JA1AAA',
+      targetGrid: 'PM95',
+      reportSent: -12,
+    });
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).slots?.TX6).toBe('CQ DX BG5DRB OL32');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('CQ DX BG5DRB OL32');
+  });
+
+  it('restores manual TX6 slot content from standard-qso operator settings', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG5DRB',
+      myGrid: 'OL32',
+      operatorPluginSettings: {
+        'standard-qso': {
+          [STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING]: 'CQ TEST BG5DRB OL32',
+        },
+      },
+    });
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).slots?.TX6).toBe('CQ TEST BG5DRB OL32');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('CQ TEST BG5DRB OL32');
+  });
 
   it('re-decides late R-report and advances the standard-qso runtime', async () => {
     const { operator, pluginManager } = await createRuntimeHarness({

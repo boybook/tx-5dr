@@ -26,6 +26,34 @@ import type {
 import { FT8MessageParser } from '@tx5dr/core';
 import type { PluginLogger } from '@tx5dr/plugin-api';
 
+export const STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING = 'tx6MessageOverride';
+
+export type StandardQSOOperatorConfig = OperatorConfig & {
+    tx6MessageOverride?: string;
+};
+
+export function normalizeStandardQSOTx6MessageOverride(
+    content: unknown,
+    defaultMessage: string,
+): string {
+    if (typeof content !== 'string') {
+        return '';
+    }
+    const trimmed = content.trim();
+    if (!trimmed || trimmed === defaultMessage) {
+        return '';
+    }
+    return trimmed;
+}
+
+export function buildStandardQSODefaultTx6Message(config: Pick<OperatorConfig, 'myCallsign' | 'myGrid'>): string {
+    return FT8MessageParser.generateMessage({
+        type: FT8MessageType.CQ,
+        senderCallsign: config.myCallsign,
+        grid: config.myGrid,
+    });
+}
+
 /** Fallback logger that writes to console (used when no PluginLogger is provided). */
 const fallbackLogger: PluginLogger = {
     debug(msg: string, data?: Record<string, unknown>) { console.debug(`[QSOStrategy] ${msg}`, data ?? ''); },
@@ -54,7 +82,7 @@ interface StateHandleResult {
 }
 
 export interface StandardQSOPluginOperator {
-    readonly config: OperatorConfig;
+    readonly config: StandardQSOOperatorConfig;
     hasWorkedCallsign(callsign: string): Promise<boolean>;
     isTargetBeingWorkedByOthers(targetCallsign: string): boolean;
     recordQSOLog(qsoRecord: QSORecord): void;
@@ -1095,6 +1123,8 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         TX6: '',
     };
     private _context: QSOContext;
+    private tx6MessageOverride = '';
+    private lastConfigTx6MessageOverride: string | undefined;
     private timeoutCycles: number = 0;
     public callAttempts: number = 0; // 呼叫尝试次数计数器（TX1状态专用）
     public qsoStartTime?: number; // QSO开始时间
@@ -1122,14 +1152,27 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     private syncOperatorConfig(): void {
         const nextConfig = this.operator.config;
         const previousConfig = this._context.config;
+        const nextDefaultTx6Message = buildStandardQSODefaultTx6Message(nextConfig);
+        const hasConfigTx6MessageOverride = Object.prototype.hasOwnProperty.call(nextConfig, STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING);
+        const nextConfigTx6MessageOverride = hasConfigTx6MessageOverride
+            ? normalizeStandardQSOTx6MessageOverride(nextConfig.tx6MessageOverride, nextDefaultTx6Message)
+            : undefined;
+        const nextTx6MessageOverride = hasConfigTx6MessageOverride && nextConfigTx6MessageOverride !== this.lastConfigTx6MessageOverride
+            ? nextConfigTx6MessageOverride ?? ''
+            : this.tx6MessageOverride;
         const shouldRegenerateSlots =
             previousConfig.myCallsign !== nextConfig.myCallsign ||
-            previousConfig.myGrid !== nextConfig.myGrid;
+            previousConfig.myGrid !== nextConfig.myGrid ||
+            this.tx6MessageOverride !== nextTx6MessageOverride;
 
         this._context = {
             ...this._context,
             config: nextConfig,
         };
+        this.tx6MessageOverride = nextTx6MessageOverride;
+        if (hasConfigTx6MessageOverride) {
+            this.lastConfigTx6MessageOverride = nextConfigTx6MessageOverride ?? '';
+        }
 
         if (shouldRegenerateSlots) {
             this.updateSlots();
@@ -1428,6 +1471,13 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         if (!Object.prototype.hasOwnProperty.call(this.slots, slot)) {
             throw new Error(`Invalid slot: ${slot}`);
         }
+        if (slot === 'TX6') {
+            const defaultMessage = buildStandardQSODefaultTx6Message(this.operator.config);
+            this.tx6MessageOverride = normalizeStandardQSOTx6MessageOverride(content, defaultMessage);
+            this.slots.TX6 = this.tx6MessageOverride || defaultMessage;
+            this.notifySlotsUpdated();
+            return;
+        }
         this.slots[slot as SlotsIndex] = content || '';
         this.notifySlotsUpdated();
     }
@@ -1555,11 +1605,8 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             this.slots.TX4 = '';
             this.slots.TX5 = '';
         }
-        this.slots.TX6 = FT8MessageParser.generateMessage({
-            type: FT8MessageType.CQ,
-            senderCallsign: this.operator.config.myCallsign,
-            grid: this.operator.config.myGrid,
-        });
+        const defaultTx6Message = buildStandardQSODefaultTx6Message(this.operator.config);
+        this.slots.TX6 = this.tx6MessageOverride || defaultTx6Message;
 
         // 通知操作员slots已更新
         this.notifySlotsUpdated();

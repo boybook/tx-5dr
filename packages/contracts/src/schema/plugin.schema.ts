@@ -110,6 +110,8 @@ export const PluginSettingDescriptorSchema = z.object({
   min: z.number().optional(),
   max: z.number().optional(),
   options: z.array(PluginSettingOptionSchema).optional(),
+  /** Internal settings are persisted/injected but hidden from generated UIs. */
+  hidden: z.boolean().optional(),
   /** 设置作用域：global（所有操作员共享）或 operator（每操作员独立），默认 global */
   scope: PluginSettingScopeSchema.optional().default('global'),
 });

@@ -31,7 +31,7 @@ export function getDefaultOperatorPluginSettings(plugin: PluginStatus): Record<s
 }
 
 export function hasOperatorPluginSettings(plugin: PluginStatus): boolean {
-  return Object.values(plugin.settings ?? {}).some((descriptor) => descriptor.scope === 'operator');
+  return Object.values(plugin.settings ?? {}).some((descriptor) => descriptor.scope === 'operator' && !descriptor.hidden);
 }
 
 export function canConfigurePluginForOperator(plugin: PluginStatus, operatorId: string): boolean {
@@ -50,7 +50,7 @@ export const PluginOperatorSettingsForm: React.FC<PluginOperatorSettingsFormProp
 }) => {
   const { t } = useTranslation('settings');
   const operatorEntries = useMemo(() => Object.entries(plugin.settings ?? {}).filter(
-    ([, descriptor]) => descriptor.scope === 'operator'
+    ([, descriptor]) => descriptor.scope === 'operator' && !descriptor.hidden
   ), [plugin.settings]);
   const currentSettings = useMemo(
     () => ({ ...getDefaultOperatorPluginSettings(plugin), ...settings }),

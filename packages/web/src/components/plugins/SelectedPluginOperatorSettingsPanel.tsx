@@ -111,7 +111,7 @@ export const SelectedPluginOperatorSettingsPanel = forwardRef<SelectedPluginOper
       const original = originalSettingsMap[operatorId] ?? {};
       return Object.keys(current).some((key) => {
         const descriptor = plugin.settings?.[key];
-        if (descriptor?.scope !== 'operator') return false;
+        if (descriptor?.scope !== 'operator' || descriptor.hidden) return false;
         return descriptor
           ? !arePluginSettingValuesEqual(descriptor, current[key], original[key], plugin.name, key)
           : current[key] !== original[key];
@@ -140,6 +140,7 @@ export const SelectedPluginOperatorSettingsPanel = forwardRef<SelectedPluginOper
       const hasValidationIssues = Object.entries(plugin.settings ?? {}).some(([key, descriptor]) => (
         descriptor.scope === 'operator'
         && descriptor.type !== 'info'
+        && !descriptor.hidden
         && Boolean(getPluginSettingValidationIssue(
           plugin.name,
           key,

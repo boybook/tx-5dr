@@ -33,8 +33,11 @@ import { PluginContextFactory } from './PluginContextFactory.js';
 import { LogbookSyncHost } from './LogbookSyncHost.js';
 import { PluginPageSessionStore, type PluginPageSession } from './PluginPageSessionStore.js';
 import {
+  buildStandardQSODefaultTx6Message,
   BUILTIN_PLUGINS,
   BUILTIN_STANDARD_QSO_PLUGIN_NAME,
+  normalizeStandardQSOTx6MessageOverride,
+  STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING,
 } from '@tx5dr/builtin-plugins';
 import { BUILTIN_MIGRATIONS } from './builtin-migrations/index.js';
 import { toPluginStatus, toPluginSystemSnapshot } from './types.js';
@@ -386,12 +389,18 @@ export class PluginManager {
     operatorId: string,
     slot: StrategyRuntimeSlot,
     content: string,
-  ): void {
+  ): Record<string, unknown> | undefined {
     const runtime = this.getStrategyRuntime(operatorId);
-    if (!runtime) return;
+    if (!runtime) return undefined;
+    const activeStrategy = this.pluginsConfig.operatorStrategies?.[operatorId] ?? BUILTIN_STANDARD_QSO_PLUGIN_NAME;
+    let persistedSettings: Record<string, unknown> | undefined;
+    if (activeStrategy === BUILTIN_STANDARD_QSO_PLUGIN_NAME && slot === 'TX6') {
+      persistedSettings = this.updateStandardQSOTx6OverrideSetting(operatorId, content);
+    }
     runtime.setSlotContent({ slot, content });
     this.orchestrator.invalidateDecisionMessageSet(operatorId);
     this.eventEmitter.emit('operatorSlotContentChanged', { operatorId, slot, content });
+    return persistedSettings;
   }
 
   getCurrentTransmission(operatorId: string): string | null {
@@ -689,20 +698,65 @@ export class PluginManager {
     operatorId: string,
     pluginName: string,
     settings: Record<string, unknown>,
-  ): void {
+  ): Record<string, unknown> {
+    const mergedSettings = this.mergePreservedHiddenOperatorSettings(operatorId, pluginName, settings);
     if (!this.pluginsConfig.operatorSettings) this.pluginsConfig.operatorSettings = {};
     if (!this.pluginsConfig.operatorSettings[operatorId]) {
       this.pluginsConfig.operatorSettings[operatorId] = {};
     }
-    this.pluginsConfig.operatorSettings[operatorId][pluginName] = settings;
+    this.pluginsConfig.operatorSettings[operatorId][pluginName] = mergedSettings;
 
     // 通知该操作员的实例配置变更
     const instance = this.instances.get(operatorId)?.get(pluginName);
     if (instance?.enabled) {
-      instance.plugin.definition.hooks?.onConfigChange?.(settings, instance.ctx);
+      instance.plugin.definition.hooks?.onConfigChange?.(mergedSettings, instance.ctx);
     }
     this.bumpGeneration();
     this.broadcastStatusChanged(pluginName);
+    return mergedSettings;
+  }
+
+  private mergePreservedHiddenOperatorSettings(
+    operatorId: string,
+    pluginName: string,
+    settings: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const plugin = this.loadedPlugins.get(pluginName);
+    const existing = this.pluginsConfig.operatorSettings?.[operatorId]?.[pluginName] ?? {};
+    const merged = { ...settings };
+    for (const [key, descriptor] of Object.entries(plugin?.definition.settings ?? {})) {
+      if (!descriptor.hidden || key in merged || !(key in existing)) {
+        continue;
+      }
+      merged[key] = existing[key];
+    }
+    return merged;
+  }
+
+  private updateStandardQSOTx6OverrideSetting(
+    operatorId: string,
+    content: string,
+  ): Record<string, unknown> | undefined {
+    const operator = this.deps.getOperatorById(operatorId);
+    if (!operator) {
+      return undefined;
+    }
+    const defaultMessage = buildStandardQSODefaultTx6Message(operator.config);
+    const override = normalizeStandardQSOTx6MessageOverride(content, defaultMessage);
+    const currentSettings = this.pluginsConfig.operatorSettings?.[operatorId]?.[BUILTIN_STANDARD_QSO_PLUGIN_NAME] ?? {};
+    const nextSettings = { ...currentSettings };
+    if (override) {
+      nextSettings[STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING] = override;
+    } else {
+      delete nextSettings[STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING];
+    }
+
+    if (!this.pluginsConfig.operatorSettings) this.pluginsConfig.operatorSettings = {};
+    if (!this.pluginsConfig.operatorSettings[operatorId]) {
+      this.pluginsConfig.operatorSettings[operatorId] = {};
+    }
+    this.pluginsConfig.operatorSettings[operatorId][BUILTIN_STANDARD_QSO_PLUGIN_NAME] = nextSettings;
+    return nextSettings;
   }
 
   /**

@@ -21,9 +21,12 @@ import {
 } from './autocall-idle-frequency/index.js';
 
 import {
+  buildStandardQSODefaultTx6Message,
+  normalizeStandardQSOTx6MessageOverride,
   standardQSOStrategyPlugin,
   standardQSOLocales,
   BUILTIN_STANDARD_QSO_PLUGIN_NAME,
+  STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING,
 } from './standard-qso/index.js';
 
 import { snrFilterPlugin, snrFilterLocales } from './snr-filter/index.js';
@@ -97,6 +100,9 @@ export interface BuiltinPluginEntry {
 
 export {
   BUILTIN_STANDARD_QSO_PLUGIN_NAME,
+  STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING,
+  buildStandardQSODefaultTx6Message,
+  normalizeStandardQSOTx6MessageOverride,
   BUILTIN_WAVELOG_SYNC_PLUGIN_NAME,
   BUILTIN_QRZ_SYNC_PLUGIN_NAME,
   BUILTIN_LOTW_SYNC_PLUGIN_NAME,
