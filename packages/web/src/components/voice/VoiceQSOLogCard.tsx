@@ -79,6 +79,11 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
   const [endTime, setEndTime] = useState<number | null>(null);
   const [currentFrequency, setCurrentFrequency] = useState(14270000);
   const prevTransmitting = useRef(false);
+  const liveFrequency = radioMode.currentRadioFrequency && radioMode.currentRadioFrequency > 0
+    ? radioMode.currentRadioFrequency
+    : null;
+  const liveFrequencyRef = useRef<number | null>(null);
+  liveFrequencyRef.current = liveFrequency;
 
   // Current operator info
   const currentOperator = operators.find(op => op.id === currentOperatorId);
@@ -96,6 +101,14 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     }) as any
   );
+
+  // Keep the new-QSO form aligned with the live radio state. While editing,
+  // the form intentionally shows the selected record's saved frequency.
+  useEffect(() => {
+    if (!editingQSO && liveFrequency !== null) {
+      setCurrentFrequency(liveFrequency);
+    }
+  }, [editingQSO, liveFrequency]);
 
   // Auto-fill start/end time from PTT events (only in new mode)
   useEffect(() => {
@@ -117,6 +130,9 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
   useEffect(() => {
     if (!editingQSO) {
       resetForm();
+      if (liveFrequencyRef.current !== null) {
+        setCurrentFrequency(liveFrequencyRef.current);
+      }
       return;
     }
     setFormData({
@@ -148,13 +164,18 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
 
     setIsSubmitting(true);
     try {
+      const qsoFrequency = editingQSO ? currentFrequency : (liveFrequency ?? currentFrequency);
+      const qsoMode = editingQSO
+        ? (editingQSO.mode || radioMode.currentRadioMode || 'USB')
+        : (radioMode.currentRadioMode || 'USB');
+
       if (editingQSO) {
         // Edit mode: update existing QSO
         const logbookId = editingQSO.myCallsign || myCallsign;
         const result = await api.updateQSO(logbookId, editingQSO.id, {
           callsign: formData.callsign.toUpperCase().trim(),
-          frequency: currentFrequency,
-          mode: radioMode.currentRadioMode || 'USB',
+          frequency: qsoFrequency,
+          mode: qsoMode,
           startTime: startTime ?? editingQSO.startTime,
           endTime: endTime ?? editingQSO.endTime,
           reportSent: formData.rstSent || '59',
@@ -174,8 +195,8 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
         // New mode: create QSO
         const body = {
           callsign: formData.callsign.toUpperCase().trim(),
-          frequency: currentFrequency,
-          mode: radioMode.currentRadioMode || 'USB',
+          frequency: qsoFrequency,
+          mode: qsoMode,
           startTime: startTime || Date.now(),
           endTime: endTime || Date.now(),
           reportSent: formData.rstSent || '59',
@@ -248,6 +269,10 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
   };
 
   const isEditing = !!editingQSO;
+  const displayedFrequency = isEditing ? currentFrequency : (liveFrequency ?? currentFrequency);
+  const displayedMode = isEditing
+    ? (editingQSO.mode || radioMode.currentRadioMode || 'USB')
+    : (radioMode.currentRadioMode || 'USB');
 
   return (
     <Card className="w-full" shadow="sm">
@@ -404,8 +429,8 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
 
         {/* Auto-filled info */}
         <div className="flex gap-4 text-xs text-default-400">
-          <span>{t('qso.frequency')}: <span className="font-mono">{((currentFrequency || 0) / 1000000).toFixed(3)} MHz</span></span>
-          <span>{t('qso.mode')}: <span className="font-mono">{radioMode.currentRadioMode || 'USB'}</span></span>
+          <span>{t('qso.frequency')}: <span className="font-mono">{((displayedFrequency || 0) / 1000000).toFixed(3)} MHz</span></span>
+          <span>{t('qso.mode')}: <span className="font-mono">{displayedMode}</span></span>
         </div>
 
         {/* Action buttons */}
