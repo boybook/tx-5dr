@@ -8,21 +8,16 @@ import type {
   UserRole,
   ResolvedVoiceTxBufferPolicy,
   VoiceTxBufferPreference,
+  ResolvedRealtimeAudioCodecPolicy,
 } from '@tx5dr/contracts';
 import { resolveVoiceTxBufferPolicy, UserRole as UserRoleEnum, USER_ROLE_LEVEL } from '@tx5dr/contracts';
-import {
-  decodeRealtimePcmAudioFrame,
-  encodeRealtimePcmAudioFrame,
-  float32ToInt16Pcm,
-  int16ToFloat32Pcm,
-} from '@tx5dr/core';
 import { ConfigManager } from '../config/config-manager.js';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import type { VoiceTxFrameMeta } from '../voice/VoiceTxDiagnostics.js';
 import { createLogger } from '../utils/logger.js';
 import { resolveBrowserFacingRequestOrigin } from './requestOrigin.js';
 import { handleRealtimeClockSyncControlMessage } from './RealtimeClockSyncControl.js';
-import { RealtimeTransportAudioDecimator, type RealtimeTransportAudioFrame } from './RealtimeTransportAudioDecimator.js';
+import { RealtimeDownlinkAudioEncoder, RealtimeUplinkAudioDecoder } from './RealtimeAudioCodecPipeline.js';
 import type { RealtimeRxAudioRouter } from './RealtimeRxAudioRouter.js';
 import type { RealtimeAudioFrame, RealtimeRxAudioSource } from './RealtimeRxAudioSource.js';
 import {
@@ -55,6 +50,7 @@ interface RtcDataAudioSessionRecord {
   participantIdentity: string | null;
   participantName: string | null;
   voiceTxBufferPolicy?: ResolvedVoiceTxBufferPolicy;
+  audioCodecPolicy: ResolvedRealtimeAudioCodecPolicy;
   expiresAt: number;
 }
 
@@ -69,6 +65,7 @@ export interface BuildRtcDataAudioOfferParams {
   requestProtocol?: string;
   voiceTxBufferPreference?: VoiceTxBufferPreference;
   voiceTxBufferPolicy?: ResolvedVoiceTxBufferPolicy;
+  audioCodecPolicy?: ResolvedRealtimeAudioCodecPolicy;
 }
 
 function buildRtcIdentity(direction: RealtimeSessionDirection, stablePart: string): string {
@@ -149,11 +146,19 @@ function normalizeBinaryPayload(payload: string | Buffer | ArrayBuffer): ArrayBu
   return payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength) as ArrayBuffer;
 }
 
-function sourceFrameBufferedLimitBytes(frame: RealtimeTransportAudioFrame): number {
+function sourceFrameBufferedLimitBytes(frame: {
+  codec: 'opus' | 'pcm-s16le';
+  codecSampleRate: number;
+  channels: number;
+  wireBytes: number;
+}): number {
+  if (frame.codec === 'opus') {
+    return Math.max(2048, frame.wireBytes * 8);
+  }
   const channels = Number.isFinite(frame.channels) && frame.channels > 0
     ? Math.floor(frame.channels)
     : 1;
-  const bytesPerMs = (frame.sampleRate * channels * 2) / 1000;
+  const bytesPerMs = (frame.codecSampleRate * channels * 2) / 1000;
   return Math.max(2048, Math.ceil(bytesPerMs * RTC_DATA_AUDIO_BUFFERED_TARGET_MS));
 }
 
@@ -199,6 +204,14 @@ export class RtcDataAudioManager {
     const voiceTxBufferPolicy = params.direction === 'send'
       ? (params.voiceTxBufferPolicy ?? resolveVoiceTxBufferPolicy(params.voiceTxBufferPreference))
       : undefined;
+    const audioCodecPolicy = params.audioCodecPolicy ?? {
+      preference: 'pcm' as const,
+      resolvedCodec: 'pcm-s16le' as const,
+      fallbackReason: 'client-forced-pcm' as const,
+      codecSampleRate: null,
+      bitrateBps: null,
+      frameDurationMs: null,
+    };
 
     this.sessions.set(token, {
       token,
@@ -208,6 +221,7 @@ export class RtcDataAudioManager {
       participantIdentity,
       participantName: params.label ?? null,
       ...(voiceTxBufferPolicy ? { voiceTxBufferPolicy } : {}),
+      audioCodecPolicy,
       expiresAt: Date.now() + RTC_DATA_AUDIO_TOKEN_TTL_MS,
     });
 
@@ -400,8 +414,8 @@ export class RtcDataAudioManager {
   ): () => void {
     let cleanupSource: (() => void) | null = null;
     let source: RealtimeRxAudioSource | null = null;
-    let sequence = 0;
-    const decimator = new RealtimeTransportAudioDecimator();
+    const downlinkEncoder = new RealtimeDownlinkAudioEncoder(session.audioCodecPolicy);
+    const uplinkDecoder = new RealtimeUplinkAudioDecoder();
     let hasLoggedFirstFrame = false;
     let droppedStaleFrames = 0;
     let droppedBackpressureFrames = 0;
@@ -435,47 +449,33 @@ export class RtcDataAudioManager {
           droppedStaleFrames += 1;
           return;
         }
-        const transportFrame = decimator.process(frame);
-        if (
-          transportFrame.samples.length === 0
-          || !Number.isFinite(transportFrame.sampleRate)
-          || transportFrame.sampleRate <= 0
-        ) {
-          return;
-        }
-        if (dataChannel.bufferedAmount() > sourceFrameBufferedLimitBytes(transportFrame)) {
-          droppedBackpressureFrames += 1;
-          return;
-        }
+        const packets = downlinkEncoder.encodeSourceFrame(frame);
+        for (const packet of packets) {
+          if (dataChannel.bufferedAmount() > sourceFrameBufferedLimitBytes(packet)) {
+            droppedBackpressureFrames += 1;
+            return;
+          }
 
-        const serverSentAtMs = Date.now();
-        const payload = encodeRealtimePcmAudioFrame({
-          sequence: sequence++,
-          timestampMs: transportFrame.timestamp,
-          serverSentAtMs,
-          sampleRate: transportFrame.sampleRate,
-          channels: transportFrame.channels,
-          samplesPerChannel: transportFrame.samplesPerChannel,
-          pcm: float32ToInt16Pcm(transportFrame.samples),
-        });
-        const sent = dataChannel.sendMessageBinary(new Uint8Array(payload));
-        if (!sent) {
-          droppedBackpressureFrames += 1;
-          return;
-        }
+          const sent = dataChannel.sendMessageBinary(new Uint8Array(packet.payload));
+          if (!sent) {
+            droppedBackpressureFrames += 1;
+            return;
+          }
 
-        if (!hasLoggedFirstFrame) {
-          hasLoggedFirstFrame = true;
-          logger.info('First rtc-data-audio downlink frame sent', {
-            scope: session.scope,
-            sourceId: source?.id ?? null,
-            sourcePath: frame.sourceKind,
-            nativeSourceKind: frame.nativeSourceKind ?? null,
-            sourceSampleRate: transportFrame.inputSampleRate,
-            transportSampleRate: transportFrame.sampleRate,
-            downsampleFactor: transportFrame.downsampleFactor,
-            samplesPerChannel: transportFrame.samplesPerChannel,
-          });
+          if (!hasLoggedFirstFrame) {
+            hasLoggedFirstFrame = true;
+            logger.info('First rtc-data-audio downlink frame sent', {
+              scope: session.scope,
+              sourceId: source?.id ?? null,
+              sourcePath: frame.sourceKind,
+              nativeSourceKind: frame.nativeSourceKind ?? null,
+              codec: packet.codec,
+              sourceSampleRate: packet.sourceSampleRate,
+              transportSampleRate: packet.codecSampleRate,
+              samplesPerChannel: packet.samplesPerChannel,
+              wireBytes: packet.wireBytes,
+            });
+          }
         }
       };
 
@@ -501,8 +501,10 @@ export class RtcDataAudioManager {
         return;
       }
       try {
-        const decoded = decodeRealtimePcmAudioFrame(buffer);
-        const float32 = int16ToFloat32Pcm(decoded.pcm);
+        const decoded = uplinkDecoder.decode(buffer);
+        if (!decoded) {
+          return;
+        }
         const serverReceivedAtMs = Date.now();
         const wrappedNow = serverReceivedAtMs >>> 0;
         const transportDelta = decoded.timestampMs > 0 ? ((wrappedNow - decoded.timestampMs) >>> 0) : Number.POSITIVE_INFINITY;
@@ -519,7 +521,7 @@ export class RtcDataAudioManager {
           samplesPerChannel: decoded.samplesPerChannel,
           ...(session.voiceTxBufferPolicy ? { voiceTxBufferPolicy: session.voiceTxBufferPolicy } : {}),
         };
-        void this.engine.getVoiceSessionManager()?.handleParticipantAudioFrame(meta, float32);
+        void this.engine.getVoiceSessionManager()?.handleParticipantAudioFrame(meta, decoded.samples);
       } catch (error) {
         logger.debug('Failed to decode rtc-data-audio uplink frame', error);
       }

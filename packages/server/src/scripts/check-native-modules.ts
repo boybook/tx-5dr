@@ -20,6 +20,7 @@ const NATIVE_MODULES = [
   'serialport',
   'bcrypt',
   'node-datachannel',
+  '@discordjs/opus',
   'rubato-fft-node',
   'hamlib',
   'icom-wlan-node',

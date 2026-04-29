@@ -9,6 +9,42 @@ export type RealtimeTransportKind = z.infer<typeof RealtimeTransportKindSchema>;
 export const RealtimeSessionDirectionSchema = z.enum(['recv', 'send']);
 export type RealtimeSessionDirection = z.infer<typeof RealtimeSessionDirectionSchema>;
 
+export const RealtimeAudioCodecSchema = z.enum(['opus', 'pcm-s16le']);
+export type RealtimeAudioCodec = z.infer<typeof RealtimeAudioCodecSchema>;
+
+export const RealtimeAudioCodecPreferenceSchema = z.enum(['auto', 'opus', 'pcm']);
+export type RealtimeAudioCodecPreference = z.infer<typeof RealtimeAudioCodecPreferenceSchema>;
+
+export const DEFAULT_REALTIME_AUDIO_CODEC_PREFERENCE: RealtimeAudioCodecPreference = 'auto';
+
+export const RealtimeAudioCodecCapabilitiesSchema = z.object({
+  opus: z.object({
+    encode: z.boolean().optional(),
+    decode: z.boolean().optional(),
+    sampleRates: z.array(z.number().int().positive()).optional(),
+    encodeSampleRates: z.array(z.number().int().positive()).optional(),
+    decodeSampleRates: z.array(z.number().int().positive()).optional(),
+  }).optional(),
+  pcmS16le: z.boolean().optional(),
+}).optional();
+export type RealtimeAudioCodecCapabilities = z.infer<typeof RealtimeAudioCodecCapabilitiesSchema>;
+
+export const ResolvedRealtimeAudioCodecPolicySchema = z.object({
+  preference: RealtimeAudioCodecPreferenceSchema,
+  resolvedCodec: RealtimeAudioCodecSchema,
+  fallbackReason: z.enum([
+    'not-needed',
+    'client-forced-pcm',
+    'client-opus-unavailable',
+    'server-opus-unavailable',
+    'scope-not-supported',
+  ]).nullable(),
+  codecSampleRate: z.number().int().positive().nullable(),
+  bitrateBps: z.number().int().positive().nullable(),
+  frameDurationMs: z.number().int().positive().nullable(),
+});
+export type ResolvedRealtimeAudioCodecPolicy = z.infer<typeof ResolvedRealtimeAudioCodecPolicySchema>;
+
 export const VoiceTxBufferProfileSchema = z.enum(['low-latency', 'balanced', 'stable', 'custom']);
 export type VoiceTxBufferProfile = z.infer<typeof VoiceTxBufferProfileSchema>;
 
@@ -169,6 +205,8 @@ export const RealtimeSessionRequestSchema = z.object({
   previewSessionId: z.string().optional(),
   transportOverride: RealtimeTransportKindSchema.optional(),
   voiceTxBufferPreference: VoiceTxBufferPreferenceSchema.optional(),
+  audioCodecPreference: RealtimeAudioCodecPreferenceSchema.default(DEFAULT_REALTIME_AUDIO_CODEC_PREFERENCE),
+  audioCodecCapabilities: RealtimeAudioCodecCapabilitiesSchema,
 });
 
 export type RealtimeSessionRequest = z.infer<typeof RealtimeSessionRequestSchema>;
@@ -271,6 +309,7 @@ export const RealtimeSessionResponseSchema = z.object({
   offers: z.array(RealtimeTransportOfferSchema).min(1),
   connectivityHints: RealtimeConnectivityHintsSchema,
   voiceTxBufferPolicy: ResolvedVoiceTxBufferPolicySchema.optional(),
+  audioCodecPolicy: ResolvedRealtimeAudioCodecPolicySchema,
 });
 
 export type RealtimeSessionResponse = z.infer<typeof RealtimeSessionResponseSchema>;

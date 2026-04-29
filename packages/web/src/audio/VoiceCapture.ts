@@ -3,6 +3,8 @@ import {
   type RealtimeConnectivityHints,
   type RealtimeTransportOffer,
   type RealtimeTransportKind,
+  type RealtimeAudioCodecPreference,
+  type ResolvedRealtimeAudioCodecPolicy,
   type ResolvedVoiceTxBufferPolicy,
   type VoiceTxBufferPreference,
 } from '@tx5dr/contracts';
@@ -27,6 +29,10 @@ import {
 } from './voiceTxDiagnostics';
 import { RealtimeClockSync, type RealtimeClockConfidence } from '../realtime/RealtimeClockSync';
 import { VoiceTxUplinkSender } from './VoiceTxUplinkSender';
+import {
+  getRealtimeAudioCodecCapabilities,
+  loadRealtimeAudioCodecPreference,
+} from './realtimeAudioCodec';
 
 const logger = createLogger('VoiceCapture');
 const COMPAT_CAPTURE_CONNECT_TIMEOUT_MS = 5000;
@@ -47,6 +53,7 @@ export interface VoiceCaptureOptions {
 interface VoiceCaptureStartOptions {
   transportOverride?: RealtimeTransportKind;
   voiceTxBufferPreference?: VoiceTxBufferPreference;
+  audioCodecPreference?: RealtimeAudioCodecPreference;
 }
 
 interface VoiceCaptureCleanupOptions {
@@ -86,6 +93,7 @@ export class VoiceCapture {
   private clockSyncTimer: number | null = null;
   private uplinkSender: VoiceTxUplinkSender | null = null;
   private activeTxBufferPolicy: ResolvedVoiceTxBufferPolicy | null = null;
+  private activeAudioCodecPolicy: ResolvedRealtimeAudioCodecPolicy | null = null;
 
   constructor(options: VoiceCaptureOptions) {
     this.options = options;
@@ -117,6 +125,10 @@ export class VoiceCapture {
 
   get currentTxBufferPolicy(): ResolvedVoiceTxBufferPolicy | null {
     return this.activeTxBufferPolicy;
+  }
+
+  get currentAudioCodecPolicy(): ResolvedRealtimeAudioCodecPolicy | null {
+    return this.activeAudioCodecPolicy;
   }
 
   async prepareCaptureFromGesture(): Promise<void> {
@@ -155,15 +167,18 @@ export class VoiceCapture {
           direction: 'send',
           transportOverride: options?.transportOverride,
           voiceTxBufferPreference: options?.voiceTxBufferPreference,
+          audioCodecPreference: options?.audioCodecPreference ?? loadRealtimeAudioCodecPreference(),
+          audioCodecCapabilities: await getRealtimeAudioCodecCapabilities(),
           connectStage: 'connect',
-          startCompat: (offer, txBufferPolicy) => this.startCompatCapture(offer, txBufferPolicy),
-          startRtcDataAudio: (offer, hints, txBufferPolicy) => this.startRtcDataAudioCapture(offer, hints, txBufferPolicy),
+          startCompat: (offer, txBufferPolicy, audioCodecPolicy) => this.startCompatCapture(offer, txBufferPolicy, audioCodecPolicy),
+          startRtcDataAudio: (offer, hints, txBufferPolicy, audioCodecPolicy) => this.startRtcDataAudioCapture(offer, hints, txBufferPolicy, audioCodecPolicy),
           cleanupFailedAttempt: () => {
             this.cleanupTransportOnly({ preserveCaptureBackend: true });
           },
         });
         this.activeTxBufferPolicy = result.voiceTxBufferPolicy
           ?? resolveVoiceTxBufferPolicy(options?.voiceTxBufferPreference);
+        this.activeAudioCodecPolicy = result.audioCodecPolicy;
         if (result.fallbackUsed) {
           showRealtimeTransportFallbackToast('radio');
         }
@@ -282,6 +297,7 @@ export class VoiceCapture {
   private async startCompatCapture(
     offer: RealtimeTransportOffer,
     txBufferPolicy?: ResolvedVoiceTxBufferPolicy,
+    audioCodecPolicy?: ResolvedRealtimeAudioCodecPolicy,
   ): Promise<void> {
     const {
       mediaStream,
@@ -342,6 +358,7 @@ export class VoiceCapture {
       estimateServerTimeMs: (clientTimeMs) => this.estimateServerTimeMs(clientTimeMs),
       getClockConfidence: () => this.getClockConfidence(),
       txBufferPolicy,
+      audioCodecPolicy,
     });
     this.uplinkSender = sender;
     this.localTxStats.reset('ws-compat');
@@ -388,6 +405,8 @@ export class VoiceCapture {
           result.bufferedAudioMs,
           sender.clockConfidence,
           result.degraded,
+          result.codec,
+          result.bitrateKbps,
         );
         if (!hasLoggedFirstCompatFrame) {
           hasLoggedFirstCompatFrame = true;
@@ -419,6 +438,7 @@ export class VoiceCapture {
     offer: RealtimeTransportOffer,
     hints?: RealtimeConnectivityHints,
     txBufferPolicy?: ResolvedVoiceTxBufferPolicy,
+    audioCodecPolicy?: ResolvedRealtimeAudioCodecPolicy,
   ): Promise<void> {
     const {
       mediaStream,
@@ -451,6 +471,7 @@ export class VoiceCapture {
       estimateServerTimeMs: (clientTimeMs) => this.estimateServerTimeMs(clientTimeMs),
       getClockConfidence: () => this.getClockConfidence(),
       txBufferPolicy,
+      audioCodecPolicy,
     });
     this.uplinkSender = sender;
     this.localTxStats.reset('rtc-data-audio');
@@ -477,6 +498,8 @@ export class VoiceCapture {
           result.bufferedAudioMs,
           sender.clockConfidence,
           result.degraded,
+          result.codec,
+          result.bitrateKbps,
         );
         if (!hasLoggedFirstFrame) {
           hasLoggedFirstFrame = true;
@@ -617,6 +640,7 @@ export class VoiceCapture {
     this.transportKind = null;
     this._participantIdentity = null;
     this.activeTxBufferPolicy = null;
+    this.activeAudioCodecPolicy = null;
     this.uplinkSender = null;
     this.stopClockSync();
     this.localTxStats.reset(null);

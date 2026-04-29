@@ -41,10 +41,10 @@ function wait(ms: number): Promise<void> {
 describe('VoiceTxOutputPipeline', () => {
   it('starts playout after a small realtime jitter target and writes output chunks', async () => {
     const writes: number[] = [];
-    const processed: number[] = [];
+    const outputBuffered: number[] = [];
     const observer: VoiceTxOutputObserver = {
-      onFrameProcessed: ({ queuedAudioMs, jitterTargetMs }) => {
-        processed.push(queuedAudioMs);
+      onFrameProcessed: ({ outputBufferedMs, jitterTargetMs }) => {
+        outputBuffered.push(outputBufferedMs ?? 0);
         expect(jitterTargetMs).toBeGreaterThanOrEqual(30);
       },
     };
@@ -67,7 +67,8 @@ describe('VoiceTxOutputPipeline', () => {
 
     expect(writes.length).toBeGreaterThan(0);
     expect(writes.every((length) => length === sink.outputBufferSize)).toBe(true);
-    expect(processed.length).toBeGreaterThan(0);
+    expect(outputBuffered.length).toBeGreaterThan(0);
+    expect(outputBuffered.every((value) => value <= 10)).toBe(true);
   });
 
   it('drops stale frames instead of letting old speech accumulate', () => {

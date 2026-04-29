@@ -27,6 +27,8 @@ export interface VoiceTxLocalDiagnostics {
   socketBufferedAmountBytes: number | null;
   clockConfidence: RealtimeClockConfidence;
   degraded: boolean;
+  codec: 'opus' | 'pcm-s16le' | null;
+  bitrateKbps: VoiceTxLocalMetricWindow;
   pttToFirstSentFrameMs: number | null;
   updatedAt: number | null;
 }
@@ -88,6 +90,7 @@ export class VoiceTxLocalStatsCollector {
   private socketBufferedAmountBytes: number | null = null;
   private clockConfidence: RealtimeClockConfidence = 'unknown';
   private degraded = false;
+  private codec: 'opus' | 'pcm-s16le' | null = null;
   private pttActivatedAt: number | null = null;
   private pttToFirstSentFrameMs: number | null = null;
   private lastSentAt: number | null = null;
@@ -95,6 +98,7 @@ export class VoiceTxLocalStatsCollector {
   private readonly frameIntervalMs = new MetricSeries();
   private readonly encodeAndSendMs = new MetricSeries();
   private readonly sendBufferedAudioMs = new MetricSeries();
+  private readonly bitrateKbps = new MetricSeries();
 
   reset(transport: RealtimeTransportKind | null = null): void {
     this.transport = transport;
@@ -105,6 +109,7 @@ export class VoiceTxLocalStatsCollector {
     this.socketBufferedAmountBytes = null;
     this.clockConfidence = 'unknown';
     this.degraded = false;
+    this.codec = null;
     this.pttActivatedAt = null;
     this.pttToFirstSentFrameMs = null;
     this.lastSentAt = null;
@@ -112,6 +117,7 @@ export class VoiceTxLocalStatsCollector {
     this.frameIntervalMs.reset();
     this.encodeAndSendMs.reset();
     this.sendBufferedAudioMs.reset();
+    this.bitrateKbps.reset();
   }
 
   setTransport(transport: RealtimeTransportKind | null): void {
@@ -132,6 +138,8 @@ export class VoiceTxLocalStatsCollector {
     sendBufferedAudioMs: number | null = null,
     clockConfidence: RealtimeClockConfidence = 'unknown',
     degraded = false,
+    codec: 'opus' | 'pcm-s16le' | null = null,
+    bitrateKbps: number | null = null,
   ): void {
     const now = Date.now();
     if (this.lastSentAt !== null) {
@@ -143,9 +151,13 @@ export class VoiceTxLocalStatsCollector {
     this.socketBufferedAmountBytes = socketBufferedAmountBytes;
     this.clockConfidence = clockConfidence;
     this.degraded = degraded;
+    this.codec = codec;
     this.encodeAndSendMs.record(sendDurationMs, now);
     if (sendBufferedAudioMs !== null) {
       this.sendBufferedAudioMs.record(sendBufferedAudioMs, now);
+    }
+    if (bitrateKbps !== null) {
+      this.bitrateKbps.record(bitrateKbps, now);
     }
     if (this.pttActivatedAt !== null && this.pttToFirstSentFrameMs === null) {
       this.pttToFirstSentFrameMs = now - this.pttActivatedAt;
@@ -175,6 +187,8 @@ export class VoiceTxLocalStatsCollector {
       socketBufferedAmountBytes: this.socketBufferedAmountBytes,
       clockConfidence: this.clockConfidence,
       degraded: this.degraded,
+      codec: this.codec,
+      bitrateKbps: this.bitrateKbps.snapshot(now),
       pttToFirstSentFrameMs: this.pttToFirstSentFrameMs,
       updatedAt: this.updatedAt,
     };

@@ -1,12 +1,18 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { api } from '@tx5dr/core';
-import { decodeRealtimePcmAudioFrame, int16ToFloat32Pcm } from '@tx5dr/core';
+import {
+  decodeRealtimeAudioFrame,
+  int16ToFloat32Pcm,
+  isRealtimeEncodedAudioFrame,
+} from '@tx5dr/core';
 import type {
+  RealtimeAudioCodecPreference,
   RealtimeConnectivityHints,
   RealtimeScope,
   RealtimeSourceStats,
   RealtimeTransportKind,
   RealtimeTransportOffer,
+  ResolvedRealtimeAudioCodecPolicy,
 } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger';
 import { normalizeWsUrl } from '../utils/config';
@@ -26,6 +32,11 @@ import {
   RealtimeClockSync,
   type RealtimeClockConfidence,
 } from '../realtime/RealtimeClockSync';
+import {
+  BrowserOpusDecoder,
+  getRealtimeAudioCodecCapabilities,
+  loadRealtimeAudioCodecPreference,
+} from '../audio/realtimeAudioCodec';
 
 const logger = createLogger('useAudioMonitorPlayback');
 const STATS_POLL_INTERVAL_MS = 1000;
@@ -60,6 +71,8 @@ interface ReceiverStatsData {
   statsReceivedAtMs?: number;
   underrunCount?: number;
   inputSampleRate?: number;
+  codec?: 'opus' | 'pcm-s16le';
+  codecFallbackReason?: ResolvedRealtimeAudioCodecPolicy['fallbackReason'];
 }
 
 function waitForSocketClosed(socket: WebSocket, timeoutMs = TRANSPORT_SWITCH_DRAIN_TIMEOUT_MS): Promise<void> {
@@ -113,6 +126,7 @@ export interface UseAudioMonitorPlaybackOptions {
 export interface AudioMonitorStartOptions {
   previewSessionId?: string;
   transportOverride?: RealtimeTransportKind;
+  audioCodecPreference?: RealtimeAudioCodecPreference;
 }
 
 export interface UseAudioMonitorPlaybackReturn {
@@ -181,6 +195,7 @@ export function useAudioMonitorPlayback(
   const gainNodeRef = useRef<GainNode | null>(null);
   const compatSocketRef = useRef<WebSocket | null>(null);
   const rtcDataAudioClientRef = useRef<RtcDataAudioClient | null>(null);
+  const opusDecoderRef = useRef<BrowserOpusDecoder | null>(null);
   const isInitializingRef = useRef(false);
   const startPromiseRef = useRef<Promise<RealtimeTransportKind> | null>(null);
   const currentVolumeRef = useRef(1);
@@ -197,6 +212,8 @@ export function useAudioMonitorPlayback(
     receivedAtClientMs: number;
   } | null>(null);
   const activePreviewSessionIdRef = useRef<string | null>(previewSessionId ?? null);
+  const activeAudioCodecPolicyRef = useRef<ResolvedRealtimeAudioCodecPolicy | null>(null);
+  const wireByteSamplesRef = useRef<Array<{ at: number; bytes: number }>>([]);
   const intentionalDisconnectRef = useRef(false);
   const pendingAudioPathWaitersRef = useRef<Array<{
     resolve: () => void;
@@ -287,6 +304,13 @@ export function useAudioMonitorPlayback(
       rtcDataAudioClientRef.current = null;
     }
 
+    try {
+      opusDecoderRef.current?.close();
+    } catch {
+      // ignore
+    }
+    opusDecoderRef.current = null;
+
     if (compatPlaybackBackendRef.current && !preserveCompatPlaybackRuntime) {
       try {
         compatPlaybackBackendRef.current.close();
@@ -315,6 +339,8 @@ export function useAudioMonitorPlayback(
     sourceStatsRef.current = null;
     receiverStatsRef.current = null;
     lastReceivedFrameRef.current = null;
+    activeAudioCodecPolicyRef.current = null;
+    wireByteSamplesRef.current = [];
     clockSyncRef.current.reset();
     displayLatencyRef.current = null;
     displayBufferFillRef.current = null;
@@ -338,6 +364,27 @@ export function useAudioMonitorPlayback(
       cleanup();
     };
   }, [cleanup]);
+
+  const recordWireBytes = useCallback((bytes: number) => {
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+      return;
+    }
+    const now = Date.now();
+    wireByteSamplesRef.current.push({ at: now, bytes });
+    wireByteSamplesRef.current = wireByteSamplesRef.current.filter((entry) => (now - entry.at) <= 5000);
+  }, []);
+
+  const getWireBitrateKbps = useCallback((): number | undefined => {
+    const now = Date.now();
+    const samples = wireByteSamplesRef.current.filter((entry) => (now - entry.at) <= 3000);
+    if (samples.length === 0) {
+      return undefined;
+    }
+    const firstAt = samples[0]?.at ?? now;
+    const elapsedMs = Math.max(1000, now - firstAt);
+    const bytes = samples.reduce((sum, entry) => sum + entry.bytes, 0);
+    return (bytes * 8) / elapsedMs;
+  }, []);
 
   const recomputeStats = useCallback(() => {
     const source = sourceStatsRef.current;
@@ -481,8 +528,14 @@ export function useAudioMonitorPlayback(
   }, [recomputeStats, scope]);
 
   const pollReceiverStats = useCallback(async () => {
+    if (receiverStatsRef.current) {
+      receiverStatsRef.current = {
+        ...receiverStatsRef.current,
+        bitrateKbps: getWireBitrateKbps(),
+      };
+    }
     recomputeStats();
-  }, [recomputeStats]);
+  }, [getWireBitrateKbps, recomputeStats]);
 
   const startStatsPolling = useCallback(() => {
     if (statsPollTimerRef.current !== null) {
@@ -503,6 +556,71 @@ export function useAudioMonitorPlayback(
       recomputeStats();
     }
   }, [recomputeStats]);
+
+  const handleDecodedAudioSamples = useCallback((data: {
+    samples: Float32Array;
+    sampleRate: number;
+    sourceTimestampMs: number;
+    serverSentAtMs?: number;
+    receivedAtClientMs: number;
+    inputSampleRate: number;
+    codec: 'opus' | 'pcm-s16le';
+  }) => {
+    const backend = compatPlaybackBackendRef.current;
+    if (!backend || data.samples.length === 0) {
+      return;
+    }
+    lastReceivedFrameRef.current = {
+      sourceTimestampMs: data.sourceTimestampMs,
+      serverSentAtMs: data.serverSentAtMs,
+      receivedAtClientMs: data.receivedAtClientMs,
+    };
+    backend.handleAudioData({
+      buffer: data.samples.buffer,
+      sampleRate: data.sampleRate,
+      clientTimestamp: data.sourceTimestampMs,
+      clientReceivedAtMs: data.receivedAtClientMs,
+    });
+    receiverStatsRef.current = {
+      ...(receiverStatsRef.current ?? {}),
+      codec: data.codec,
+      codecFallbackReason: activeAudioCodecPolicyRef.current?.fallbackReason ?? null,
+      inputSampleRate: data.inputSampleRate,
+      bitrateKbps: getWireBitrateKbps(),
+    };
+    recomputeStats();
+  }, [getWireBitrateKbps, recomputeStats]);
+
+  const ensureOpusDecoder = useCallback((): BrowserOpusDecoder => {
+    if (!opusDecoderRef.current) {
+      opusDecoderRef.current = new BrowserOpusDecoder((frame) => {
+        handleDecodedAudioSamples({
+          ...frame,
+          codec: 'opus',
+        });
+      });
+    }
+    return opusDecoderRef.current;
+  }, [handleDecodedAudioSamples]);
+
+  const handleRealtimeBinaryFrame = useCallback((payload: ArrayBuffer) => {
+    recordWireBytes(payload.byteLength);
+    const frame = decodeRealtimeAudioFrame(payload);
+    const receivedAtClientMs = Date.now();
+    if (isRealtimeEncodedAudioFrame(frame)) {
+      ensureOpusDecoder().decode(payload, receivedAtClientMs);
+      return;
+    }
+    handleDecodedAudioSamples({
+      samples: int16ToFloat32Pcm(frame.pcm),
+      sampleRate: frame.sampleRate,
+      sourceTimestampMs: frame.timestampMs,
+      serverSentAtMs: frame.serverSentAtMs,
+      receivedAtClientMs,
+      inputSampleRate: frame.sampleRate,
+      codec: 'pcm-s16le',
+    });
+  }, [ensureOpusDecoder, handleDecodedAudioSamples, recordWireBytes]);
 
   const startClockSync = useCallback((sendControl: (payload: Record<string, unknown>) => boolean | void) => {
     if (clockSyncTimerRef.current !== null) {
@@ -552,7 +670,9 @@ export function useAudioMonitorPlayback(
 
     const backend = await createCompatPlaybackBackend(audioContext, (backendStats: CompatPlaybackStats) => {
       const statsReceivedAtMs = Date.now();
+      const previous = receiverStatsRef.current;
       receiverStatsRef.current = {
+        ...(previous ?? {}),
         latencyMs: backendStats.latencyMs,
         bufferFillPercent: backendStats.bufferFillPercent,
         droppedSamples: backendStats.droppedSamples,
@@ -565,7 +685,8 @@ export function useAudioMonitorPlayback(
         statsGeneratedAtMs: backendStats.statsGeneratedAtMs,
         statsReceivedAtMs,
         underrunCount: backendStats.underrunCount,
-        inputSampleRate: backendStats.inputSampleRate,
+        inputSampleRate: previous?.inputSampleRate ?? backendStats.inputSampleRate,
+        bitrateKbps: getWireBitrateKbps(),
       };
       recomputeStats();
     });
@@ -576,15 +697,21 @@ export function useAudioMonitorPlayback(
     compatPlaybackBackendRef.current = backend;
     gainNodeRef.current = gainNode;
     return { audioContext, backend };
-  }, [recomputeStats]);
+  }, [getWireBitrateKbps, recomputeStats]);
 
   const preparePlaybackFromGesture = useCallback(async () => {
     await ensureCompatPlaybackRuntime();
   }, [ensureCompatPlaybackRuntime]);
 
-  const startCompatPlayback = useCallback(async (offer: RealtimeTransportOffer) => {
+  const startCompatPlayback = useCallback(async (
+    offer: RealtimeTransportOffer,
+    _txBufferPolicy?: unknown,
+    audioCodecPolicy?: ResolvedRealtimeAudioCodecPolicy,
+  ) => {
     const { backend } = await ensureCompatPlaybackRuntime();
     backend.reset();
+    activeAudioCodecPolicyRef.current = audioCodecPolicy ?? null;
+    wireByteSamplesRef.current = [];
 
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(`${normalizeWsUrl(offer.url)}?token=${encodeURIComponent(offer.token)}`);
@@ -632,20 +759,7 @@ export function useAudioMonitorPlayback(
         }
 
         try {
-          const decoded = decodeRealtimePcmAudioFrame(event.data as ArrayBuffer);
-          const receivedAtClientMs = Date.now();
-          const float32 = int16ToFloat32Pcm(decoded.pcm);
-          lastReceivedFrameRef.current = {
-            sourceTimestampMs: decoded.timestampMs,
-            serverSentAtMs: decoded.serverSentAtMs,
-            receivedAtClientMs,
-          };
-          backend.handleAudioData({
-            buffer: float32.buffer,
-            sampleRate: decoded.sampleRate,
-            clientTimestamp: decoded.timestampMs,
-            clientReceivedAtMs: receivedAtClientMs,
-          });
+          handleRealtimeBinaryFrame(event.data as ArrayBuffer);
 
           if (!settled) {
             settled = true;
@@ -688,34 +802,25 @@ export function useAudioMonitorPlayback(
         }
       };
     }
-  }, [cleanup, ensureCompatPlaybackRuntime, handleClockSyncControlMessage, resolvePendingAudioPathWaiters, startClockSync, updateTransportKind]);
+  }, [cleanup, ensureCompatPlaybackRuntime, handleClockSyncControlMessage, handleRealtimeBinaryFrame, resolvePendingAudioPathWaiters, startClockSync, updateTransportKind]);
 
   const startRtcDataAudioPlayback = useCallback(async (
     offer: RealtimeTransportOffer,
     hints?: RealtimeConnectivityHints,
+    _txBufferPolicy?: unknown,
+    audioCodecPolicy?: ResolvedRealtimeAudioCodecPolicy,
   ) => {
     const { backend } = await ensureCompatPlaybackRuntime();
     backend.reset();
+    activeAudioCodecPolicyRef.current = audioCodecPolicy ?? null;
+    wireByteSamplesRef.current = [];
 
     const client = new RtcDataAudioClient({
       offer,
       iceServers: hints?.iceServers,
       onBinaryMessage: (payload) => {
         try {
-          const decoded = decodeRealtimePcmAudioFrame(payload);
-          const receivedAtClientMs = Date.now();
-          const float32 = int16ToFloat32Pcm(decoded.pcm);
-          lastReceivedFrameRef.current = {
-            sourceTimestampMs: decoded.timestampMs,
-            serverSentAtMs: decoded.serverSentAtMs,
-            receivedAtClientMs,
-          };
-          backend.handleAudioData({
-            buffer: float32.buffer,
-            sampleRate: decoded.sampleRate,
-            clientTimestamp: decoded.timestampMs,
-            clientReceivedAtMs: receivedAtClientMs,
-          });
+          handleRealtimeBinaryFrame(payload);
         } catch (error) {
           logger.debug('Failed to decode rtc-data-audio downlink frame', error);
         }
@@ -732,7 +837,7 @@ export function useAudioMonitorPlayback(
     await client.connect();
     startClockSync((payload) => client.sendJson(payload));
     updateTransportKind('rtc-data-audio');
-  }, [cleanup, ensureCompatPlaybackRuntime, handleClockSyncControlMessage, resolvePendingAudioPathWaiters, startClockSync, updateTransportKind]);
+  }, [cleanup, ensureCompatPlaybackRuntime, handleClockSyncControlMessage, handleRealtimeBinaryFrame, resolvePendingAudioPathWaiters, startClockSync, updateTransportKind]);
 
   const start = useCallback(async (startOptions?: string | AudioMonitorStartOptions) => {
     const existingStart = resolveExistingMonitorStart(
@@ -750,6 +855,8 @@ export function useAudioMonitorPlayback(
       : (startOptions ?? {});
     const effectivePreviewSessionId = normalizedOptions.previewSessionId ?? previewSessionId ?? undefined;
     const transportOverride = normalizedOptions.transportOverride;
+    const audioCodecPreference = normalizedOptions.audioCodecPreference ?? loadRealtimeAudioCodecPreference();
+    const audioCodecCapabilities = await getRealtimeAudioCodecCapabilities();
 
     if (scope === 'openwebrx-preview' && !effectivePreviewSessionId) {
       throw new Error('previewSessionId is required for OpenWebRX preview playback');
@@ -765,6 +872,8 @@ export function useAudioMonitorPlayback(
         direction: 'recv',
         previewSessionId: effectivePreviewSessionId,
         transportOverride,
+        audioCodecPreference,
+        audioCodecCapabilities,
         connectStage: 'connect',
         startCompat: startCompatPlayback,
         startRtcDataAudio: startRtcDataAudioPlayback,

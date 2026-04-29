@@ -690,11 +690,11 @@ useEffect(() => {
    └─ openwebrx-preview → BufferedPreviewRxSource
       ↓
 3. 当前 transport publisher 订阅 router 输出
-   ├─ rtc-data-audio: PCM16 DataChannel, 高采样率源在出口直接整数抽取到 <=24k
-   └─ ws-compat: PCM16 WebSocket fallback, 使用同一直接抽取策略
+   ├─ rtc-data-audio: codec-aware DataChannel，默认 Opus，失败同传输回 PCM
+   └─ ws-compat: codec-aware WebSocket fallback，默认 Opus，失败同传输回 PCM
       ↓
 4. 浏览器复用 AudioContext + AudioWorklet runtime
-   按帧 sampleRate 元数据播放新鲜帧，过旧帧丢弃，不补播旧音频
+   Opus 解码后或 PCM 直接按帧 sampleRate 元数据播放新鲜帧，过旧帧丢弃，不补播旧音频
 ```
 
 ---

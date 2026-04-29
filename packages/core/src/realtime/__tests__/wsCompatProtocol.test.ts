@@ -2,9 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   decodeRealtimePcmAudioFrame,
+  decodeRealtimeAudioFrame,
+  decodeRealtimeEncodedAudioFrame,
   decodeWsCompatAudioFrame,
+  encodeRealtimeEncodedAudioFrame,
   encodeRealtimePcmAudioFrame,
   encodeWsCompatAudioFrame,
+  getRealtimeEncodedAudioFrameHeaderBytes,
   getRealtimePcmAudioFrameHeaderBytes,
   getWsCompatAudioFrameHeaderBytes,
 } from '../wsCompatProtocol.js';
@@ -27,6 +31,37 @@ test('realtime PCM frames preserve metadata and payload', () => {
   assert.equal(decoded.channels, 2);
   assert.equal(decoded.samplesPerChannel, 3);
   assert.deepEqual(Array.from(decoded.pcm), Array.from(pcm));
+});
+
+test('realtime encoded Opus frames use compact metadata and payload', () => {
+  const payload = new Uint8Array([1, 2, 3, 4, 5]);
+  const encoded = encodeRealtimeEncodedAudioFrame({
+    codec: 'opus',
+    sequence: 42,
+    timestampMs: 1234,
+    serverSentAtMs: 1300,
+    sourceSampleRate: 48000,
+    codecSampleRate: 48000,
+    channels: 1,
+    samplesPerChannel: 480,
+    frameDurationMs: 10,
+    payload,
+  });
+
+  assert.equal(encoded.byteLength, getRealtimeEncodedAudioFrameHeaderBytes() + payload.byteLength);
+  assert.equal(getRealtimeEncodedAudioFrameHeaderBytes(), 16);
+  const decoded = decodeRealtimeEncodedAudioFrame(encoded);
+  assert.equal(decoded.codec, 'opus');
+  assert.equal(decoded.sequence, 42);
+  assert.equal(decoded.timestampMs, 1234);
+  assert.equal(decoded.serverSentAtMs, undefined);
+  assert.equal(decoded.sourceSampleRate, 48000);
+  assert.equal(decoded.codecSampleRate, 48000);
+  assert.equal(decoded.samplesPerChannel, 480);
+  assert.deepEqual(Array.from(decoded.payload), Array.from(payload));
+
+  const generic = decodeRealtimeAudioFrame(encoded);
+  assert.equal('codec' in generic ? generic.codec : 'pcm-s16le', 'opus');
 });
 
 test('ws-compat protocol exports remain binary-compatible aliases', () => {

@@ -1,8 +1,8 @@
 import * as React from 'react';
-import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner, Alert} from "@heroui/react";
+import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner, Alert, Tabs, Tab, Tooltip} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faSatelliteDish, faPowerOff } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faSatelliteDish, faPowerOff, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState, useAudioSidecarState, useRadioState, useOperators } from '../../../store/radioStore';
 import type { AudioSidecarStatusPayload } from '@tx5dr/contracts';
 import { AudioSidecarStatus } from '@tx5dr/contracts';
@@ -10,7 +10,7 @@ import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
 import { RadioControlPanel } from './RadioControlPanel';
 import { TunerCapabilitySurface } from '../../../radio-capability/components/TunerCapability';
 import { api, ApiError } from '@tx5dr/core';
-import type { ModeDescriptor, RealtimeTransportKind, VoiceTxBufferProfile } from '@tx5dr/contracts';
+import type { ModeDescriptor, RealtimeAudioCodecPreference, RealtimeTransportKind, VoiceTxBufferProfile } from '@tx5dr/contracts';
 import type { ConnectionState } from '../../../store/radioStore';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { subject as caslSubject } from '@casl/ability';
@@ -36,6 +36,10 @@ import {
   presentRealtimeConnectivityFailure,
 } from '../../../realtime/realtimeConnectivity';
 import { resetOperatorsForOperatingStateChange } from '../../../utils/operatorReset';
+import {
+  loadRealtimeAudioCodecPreference,
+  saveRealtimeAudioCodecPreference,
+} from '../../../audio/realtimeAudioCodec';
 
 const logger = createLogger('RadioControl');
 
@@ -54,6 +58,7 @@ const VOICE_TX_BUFFER_PROFILES: Array<Exclude<VoiceTxBufferProfile, 'custom'> | 
   'stable',
   'custom',
 ];
+const REALTIME_AUDIO_CODEC_PREFERENCES: RealtimeAudioCodecPreference[] = ['auto', 'opus', 'pcm'];
 
 const clampWidth = (value: number, minWidth: number, maxWidth: number): number => (
   Math.min(maxWidth, Math.max(minWidth, value))
@@ -547,11 +552,14 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const [isTogglingListen, setIsTogglingListen] = useState(false);
   const [isSwitchingMonitorTransport, setIsSwitchingMonitorTransport] = useState(false);
   const [isSwitchingVoiceTransport, setIsSwitchingVoiceTransport] = useState(false);
+  const [isVoiceTxPopoverOpen, setIsVoiceTxPopoverOpen] = useState(false);
+  const hasAutoOpenedVoiceTxUnderrunPopoverRef = React.useRef(false);
 
   // 音频监听 (reusable hook)
   const audioMonitor = useAudioMonitorPlayback({ scope: 'radio' });
   const [monitorVolume, setMonitorVolume] = useState(1.0); // 监听音量（线性增益）
   const [hasActivatedMonitorPlayback, setHasActivatedMonitorPlayback] = useState(false);
+  const [monitorAudioCodecPreference, setMonitorAudioCodecPreference] = useState<RealtimeAudioCodecPreference>(() => loadRealtimeAudioCodecPreference());
   const monitorWheelPixelRemainderRef = React.useRef(0);
 
   // OpenWebRX client count (for multi-user confirmation)
@@ -594,9 +602,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   const formatMonitorSampleRate = React.useCallback((sampleRate: number | undefined): string => {
     if (!sampleRate || !Number.isFinite(sampleRate)) {
-      return 'PCM';
+      return '--';
     }
-    return `PCM ${sampleRate >= 1000 ? `${(sampleRate / 1000).toFixed(sampleRate % 1000 === 0 ? 0 : 1)}k` : sampleRate}`;
+    return sampleRate >= 1000 ? `${(sampleRate / 1000).toFixed(sampleRate % 1000 === 0 ? 0 : 1)}k` : `${sampleRate}`;
   }, []);
 
   const getNextMonitorTransport = React.useCallback((): RealtimeTransportKind => (
@@ -630,6 +638,26 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     voiceCaptureController,
     radioMode.engineMode === 'voice' && Boolean(voiceCaptureController),
   );
+
+  React.useEffect(() => {
+    const hasRisingUnderruns = Boolean(voiceTxDiagnostics?.display.underrunIncreasingTrend);
+    const isTransmitting = Boolean(voiceCaptureController?.isPTTActive);
+
+    if (!isTransmitting || !hasRisingUnderruns) {
+      hasAutoOpenedVoiceTxUnderrunPopoverRef.current = false;
+      return;
+    }
+
+    if (hasAutoOpenedVoiceTxUnderrunPopoverRef.current) {
+      return;
+    }
+
+    hasAutoOpenedVoiceTxUnderrunPopoverRef.current = true;
+    setIsVoiceTxPopoverOpen(true);
+  }, [
+    voiceCaptureController?.isPTTActive,
+    voiceTxDiagnostics?.display.underrunIncreasingTrend,
+  ]);
   const voiceTxStatusLabel = React.useMemo(() => {
     if (voiceCaptureController?.isPTTActive) {
       return t('voiceTx.statusTransmitting');
@@ -694,7 +722,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
     return [
       `${t('voiceTx.timingNetwork')} ${formatLatencyMetric(voiceTxDiagnostics.display.networkLatencyMs)}`,
-      `${t('voiceTx.timingServer')} ${formatLatencyMetric(voiceTxDiagnostics.display.serverPipelineMs)}`,
+      `${t('voiceTx.timingServer')} ${formatLatencyMetric(voiceTxDiagnostics.display.queueLatencyMs)}`,
       `${t('voiceTx.timingOutput')} ${formatLatencyMetric(voiceTxDiagnostics.display.outputBufferedMs)}`,
     ].join(' · ');
   }, [
@@ -1080,7 +1108,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       audioMonitor.stop();
     } else {
       try {
-        await audioMonitor.startFromGesture();
+        await audioMonitor.startFromGesture({ audioCodecPreference: monitorAudioCodecPreference });
         setHasActivatedMonitorPlayback(true);
       } catch (error) {
         logger.error('Failed to start audio monitor', error);
@@ -1100,7 +1128,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     const nextTransport = getNextMonitorTransport();
     setIsSwitchingMonitorTransport(true);
     try {
-      await audioMonitor.switchTransportFromGesture(nextTransport);
+      await audioMonitor.switchTransportFromGesture(nextTransport, { audioCodecPreference: monitorAudioCodecPreference });
     } catch (error) {
       logger.error('Failed to switch monitor transport', error);
       presentRealtimeConnectivityFailure(error, {
@@ -1111,6 +1139,46 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       setIsSwitchingMonitorTransport(false);
     }
   };
+
+  const getAudioCodecPreferenceLabel = React.useCallback((preference: RealtimeAudioCodecPreference): string => {
+    switch (preference) {
+      case 'opus':
+        return 'Opus';
+      case 'pcm':
+        return 'PCM';
+      case 'auto':
+      default:
+        return t('monitor.codecAuto');
+    }
+  }, [t]);
+
+  const handleMonitorCodecPreferenceChange = React.useCallback(async (preference: RealtimeAudioCodecPreference) => {
+    setMonitorAudioCodecPreference(preference);
+    saveRealtimeAudioCodecPreference(preference);
+    voiceCaptureController?.setAudioCodecPreference(preference);
+    if (!audioMonitor.isPlaying || isSwitchingMonitorTransport) {
+      return;
+    }
+    setIsSwitchingMonitorTransport(true);
+    try {
+      audioMonitor.stop();
+      await audioMonitor.startFromGesture({ audioCodecPreference: preference });
+    } catch (error) {
+      logger.error('Failed to switch monitor codec', error);
+      presentRealtimeConnectivityFailure(error, {
+        scope: 'radio',
+        stage: 'connect',
+      });
+    } finally {
+      setIsSwitchingMonitorTransport(false);
+    }
+  }, [audioMonitor, isSwitchingMonitorTransport, t, voiceCaptureController]);
+
+  const handleVoiceCodecPreferenceChange = React.useCallback((preference: RealtimeAudioCodecPreference) => {
+    voiceCaptureController?.setAudioCodecPreference(preference);
+    setMonitorAudioCodecPreference(preference);
+    saveRealtimeAudioCodecPreference(preference);
+  }, [voiceCaptureController]);
 
   // 频率格式验证和转换
   const parseFrequencyInput = (input: string): { frequency: number; error: string } | null => {
@@ -1568,7 +1636,12 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
             )}
             {isOperator && (
               <ToolbarIconTooltip label={t('control.txVolumeGain')}>
-                <Popover>
+                <Popover
+                  classNames={{
+                    base: "w-52 min-w-0 max-w-[calc(100vw-1rem)]",
+                    content: "w-full min-w-0 px-3 py-2 pt-3 space-y-2",
+                  }}
+                >
                   <PopoverTrigger>
                     <Button
                       isIconOnly
@@ -1617,11 +1690,12 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                       <FontAwesomeIcon icon={faHeadphones} className="text-xs" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-72 py-2 pt-3 space-y-2">
+                  <PopoverContent>
                     <div className="space-y-2">
                       {/* 监听音量滑块 */}
                       <div className="flex flex-col items-center px-2">
                         <Slider
+                          className="w-10"
                           orientation="vertical"
                           minValue={-60}
                           maxValue={20}
@@ -1689,11 +1763,55 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                               <div className="flex justify-between items-center">
                                 {t('monitor.audioFormat')}
                                 <span className="font-mono text-default-400">
+                                  {audioMonitor.stats.receiver?.codec === 'opus' ? 'Opus' : 'PCM'}
+                                </span>
+                              </div>
+
+                              <div className="flex justify-between items-center">
+                                {t('monitor.sampleRate')}
+                                <span className="font-mono text-default-400">
                                   {formatMonitorSampleRate(
                                     audioMonitor.stats.receiver?.inputSampleRate
                                       ?? audioMonitor.stats.source?.sampleRate,
                                   )}
                                 </span>
+                              </div>
+
+                              <div className="flex justify-between items-center">
+                                {t('monitor.bitrate')}
+                                <span className="font-mono text-default-400">
+                                  {audioMonitor.stats.receiver?.bitrateKbps
+                                    ? `${audioMonitor.stats.receiver.bitrateKbps.toFixed(0)} kbps`
+                                    : '--'}
+                                </span>
+                              </div>
+
+                              <div className="space-y-1 pt-1">
+                                <div className="text-default-500">{t('monitor.codecPreference')}</div>
+                                <Tabs
+                                  size="sm"
+                                  fullWidth
+                                  selectedKey={monitorAudioCodecPreference}
+                                  onSelectionChange={(key) => {
+                                    void handleMonitorCodecPreferenceChange(key as RealtimeAudioCodecPreference);
+                                  }}
+                                  isDisabled={isSwitchingMonitorTransport}
+                                  aria-label={t('monitor.codecPreference')}
+                                  classNames={{
+                                    tabList: 'gap-1 p-0.5',
+                                    tab: 'h-6 px-1 text-[11px]',
+                                  }}
+                                >
+                                  {REALTIME_AUDIO_CODEC_PREFERENCES.map((preference) => (
+                                    <Tab key={preference} title={getAudioCodecPreferenceLabel(preference)} />
+                                  ))}
+                                </Tabs>
+                                {audioMonitor.stats.receiver?.codecFallbackReason
+                                  && audioMonitor.stats.receiver.codecFallbackReason !== 'client-forced-pcm' && (
+                                  <div className="text-[11px] text-warning text-center">
+                                    {t('monitor.codecFallbackPcm')}
+                                  </div>
+                                )}
                               </div>
                             </>
                           )}
@@ -1729,7 +1847,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
             )}
             {radioMode.engineMode === 'voice' && isOperator && voiceCaptureController && (
               <ToolbarIconTooltip label={t('voiceTx.audioUplink')}>
-                <Popover>
+                <Popover
+                  isOpen={isVoiceTxPopoverOpen}
+                  onOpenChange={setIsVoiceTxPopoverOpen}
+                >
                   <PopoverTrigger>
                     <Button
                       isIconOnly
@@ -1763,8 +1884,55 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                     <div className="flex justify-between items-center gap-3">
                       <span className="text-default-500">{t('voiceTx.codec')}</span>
                       <span className="font-mono text-default-400 uppercase text-right">
-                        PCM 16k
+                        {voiceCaptureController.activeAudioCodecPolicy?.resolvedCodec === 'opus' ? 'Opus' : 'PCM'}
                       </span>
+                    </div>
+
+                    <div className="flex justify-between items-center gap-3">
+                      <span className="text-default-500">{t('monitor.sampleRate')}</span>
+                      <span className="font-mono text-default-400 text-right">
+                        16k
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center gap-3">
+                      <span className="text-default-500">{t('monitor.bitrate')}</span>
+                      <span className="font-mono text-default-400 text-right">
+                        {voiceCaptureController.getDiagnostics()?.bitrateKbps.rolling
+                          ? `${voiceCaptureController.getDiagnostics()?.bitrateKbps.rolling?.toFixed(0)} kbps`
+                          : '--'}
+                      </span>
+                    </div>
+
+                    <div className="space-y-1.5 border-t border-divider pt-2">
+                      <div className="flex justify-between items-center gap-3">
+                        <span className="text-default-500">{t('monitor.codecPreference')}</span>
+                        <span className="font-mono text-default-400 text-right">
+                          {getAudioCodecPreferenceLabel(voiceCaptureController.audioCodecPreference)}
+                        </span>
+                      </div>
+                      <Tabs
+                        size="sm"
+                        fullWidth
+                        selectedKey={voiceCaptureController.audioCodecPreference}
+                        onSelectionChange={(key) => handleVoiceCodecPreferenceChange(key as RealtimeAudioCodecPreference)}
+                        isDisabled={voiceCaptureController.isPTTActive || voiceCaptureController.captureState === 'starting'}
+                        aria-label={t('monitor.codecPreference')}
+                        classNames={{
+                          tabList: 'gap-1 p-0.5',
+                          tab: 'h-6 px-1 text-[11px]',
+                        }}
+                      >
+                        {REALTIME_AUDIO_CODEC_PREFERENCES.map((preference) => (
+                          <Tab key={preference} title={getAudioCodecPreferenceLabel(preference)} />
+                        ))}
+                      </Tabs>
+                      {voiceCaptureController.activeAudioCodecPolicy?.fallbackReason
+                        && voiceCaptureController.activeAudioCodecPolicy.fallbackReason !== 'client-forced-pcm' && (
+                        <div className="text-[11px] text-warning text-center">
+                          {t('monitor.codecFallbackPcm')}
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex justify-between items-center gap-3">
@@ -1785,28 +1953,44 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
                     <div className="space-y-1.5 border-t border-divider pt-2">
                       <div className="flex justify-between items-center gap-3">
-                        <span className="text-default-500">{t('voiceTx.bufferPolicy')}</span>
+                        <span className="inline-flex items-center gap-1 text-default-500">
+                          {t('voiceTx.bufferPolicy')}
+                          <Tooltip
+                            size="sm"
+                            placement="top"
+                            content={t('voiceTx.bufferPolicyHelp')}
+                            classNames={{ content: 'max-w-52 whitespace-normal text-xs leading-snug' }}
+                          >
+                            <span
+                              className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center text-default-400"
+                              aria-label={t('voiceTx.bufferPolicyHelp')}
+                            >
+                              <FontAwesomeIcon icon={faCircleInfo} className="text-[11px]" />
+                            </span>
+                          </Tooltip>
+                        </span>
                         <span className="font-mono text-default-400 text-right">
                           {activeVoiceTxBufferPolicy
                             ? `${getVoiceTxBufferProfileLabel(selectedVoiceTxBufferProfile)} · ${activeVoiceTxBufferPolicy.targetMs}ms`
                             : '--'}
                         </span>
                       </div>
-                      <div className="grid grid-cols-4 gap-1">
+                      <Tabs
+                        size="sm"
+                        fullWidth
+                        selectedKey={selectedVoiceTxBufferProfile}
+                        onSelectionChange={(key) => handleVoiceTxBufferProfileChange(key as VoiceTxBufferProfile)}
+                        isDisabled={isVoiceTxBufferControlDisabled}
+                        aria-label={t('voiceTx.bufferPolicy')}
+                        classNames={{
+                          tabList: 'gap-1 p-0.5',
+                          tab: 'h-6 px-1 text-[11px]',
+                        }}
+                      >
                         {VOICE_TX_BUFFER_PROFILES.map((profile) => (
-                          <Button
-                            key={profile}
-                            size="sm"
-                            variant={selectedVoiceTxBufferProfile === profile ? 'solid' : 'flat'}
-                            color={selectedVoiceTxBufferProfile === profile ? 'primary' : 'default'}
-                            className="min-w-0 px-1 text-[11px]"
-                            isDisabled={isVoiceTxBufferControlDisabled}
-                            onPress={() => handleVoiceTxBufferProfileChange(profile)}
-                          >
-                            {getVoiceTxBufferProfileLabel(profile)}
-                          </Button>
+                          <Tab key={profile} title={getVoiceTxBufferProfileLabel(profile)} />
                         ))}
-                      </div>
+                      </Tabs>
                       {selectedVoiceTxBufferProfile === 'custom' && (
                         <Input
                           size="sm"
@@ -1859,12 +2043,24 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                           </span>
                         </div>
 
-                        <div className="flex justify-between items-center gap-3">
-                          <span className="text-default-500">{t('voiceTx.anomalies')}</span>
-                          <span className="font-mono text-right text-default-400">
+                        <div className={`flex justify-between items-center gap-3 ${
+                          voiceTxDiagnostics.display.underrunIncreasingTrend ? 'text-danger' : ''
+                        }`}>
+                          <span className={voiceTxDiagnostics.display.underrunIncreasingTrend ? 'text-danger' : 'text-default-500'}>
+                            {t('voiceTx.anomalies')}
+                          </span>
+                          <span className={`font-mono text-right ${
+                            voiceTxDiagnostics.display.underrunIncreasingTrend ? 'text-danger' : 'text-default-400'
+                          }`}>
                             {voiceTxAnomalySummary}
                           </span>
                         </div>
+
+                        {voiceTxDiagnostics.display.underrunIncreasingTrend && (
+                          <div className="w-full min-w-0 max-w-full rounded-md bg-danger/10 px-2 py-1 text-[11px] leading-snug text-danger whitespace-normal break-words">
+                            {t('voiceTx.underrunTrendWarning')}
+                          </div>
+                        )}
 
                         {voiceTxDiagnostics.serverOutput.writeFailures > 0 && (
                           <div className="flex justify-between items-center gap-3 text-[11px] text-warning-500">

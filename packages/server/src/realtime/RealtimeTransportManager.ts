@@ -9,16 +9,23 @@ import type {
   UserRole,
   ResolvedVoiceTxBufferPolicy,
   VoiceTxBufferPreference,
+  RealtimeAudioCodecCapabilities,
+  RealtimeAudioCodecPreference,
+  ResolvedRealtimeAudioCodecPolicy,
 } from '@tx5dr/contracts';
 import { resolveVoiceTxBufferPolicy, UserRole as UserRoleEnum, USER_ROLE_LEVEL } from '@tx5dr/contracts';
-import { float32ToInt16Pcm, encodeWsCompatAudioFrame, decodeWsCompatAudioFrame, int16ToFloat32Pcm } from '@tx5dr/core';
 import { ConfigManager } from '../config/config-manager.js';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { createLogger } from '../utils/logger.js';
 import type { VoiceTxFrameMeta } from '../voice/VoiceTxDiagnostics.js';
 import { resolveBrowserFacingRequestOrigin } from './requestOrigin.js';
 import { handleRealtimeClockSyncControlMessage } from './RealtimeClockSyncControl.js';
-import { RealtimeTransportAudioDecimator } from './RealtimeTransportAudioDecimator.js';
+import {
+  RealtimeDownlinkAudioEncoder,
+  RealtimeOpusCodecService,
+  RealtimeUplinkAudioDecoder,
+  resolveRealtimeAudioCodecPolicy,
+} from './RealtimeAudioCodecPipeline.js';
 import type { RealtimeRxAudioRouter } from './RealtimeRxAudioRouter.js';
 import type { RealtimeAudioFrame, RealtimeRxAudioSourceStats } from './RealtimeRxAudioSource.js';
 import { buildRtcDataAudioConnectivityHints, RtcDataAudioManager } from './RtcDataAudioManager.js';
@@ -33,6 +40,7 @@ interface CompatSessionRecord {
   previewSessionId?: string;
   participantIdentity: string | null;
   voiceTxBufferPolicy?: ResolvedVoiceTxBufferPolicy;
+  audioCodecPolicy: ResolvedRealtimeAudioCodecPolicy;
   expiresAt: number;
 }
 
@@ -59,6 +67,8 @@ export interface IssueRealtimeSessionParams {
   requestHeaders?: Record<string, string | string[] | undefined>;
   requestProtocol?: string;
   voiceTxBufferPreference?: VoiceTxBufferPreference;
+  audioCodecPreference?: RealtimeAudioCodecPreference;
+  audioCodecCapabilities?: RealtimeAudioCodecCapabilities;
 }
 
 function buildCompatIdentity(direction: RealtimeSessionDirection, stablePart: string): string {
@@ -112,10 +122,18 @@ export class RealtimeTransportManager {
     const voiceTxBufferPolicy = params.direction === 'send'
       ? resolveVoiceTxBufferPolicy(params.voiceTxBufferPreference)
       : undefined;
+    const opusAvailable = await RealtimeOpusCodecService.getInstance().isAvailable();
+    const audioCodecPolicy = resolveRealtimeAudioCodecPolicy({
+      scope: params.scope,
+      direction: params.direction,
+      preference: params.audioCodecPreference,
+      capabilities: params.audioCodecCapabilities,
+      serverOpusAvailable: opusAvailable,
+    });
 
-    const compatOffer = this.buildCompatOffer(params, voiceTxBufferPolicy);
+    const compatOffer = this.buildCompatOffer(params, voiceTxBufferPolicy, audioCodecPolicy);
     const rtcDataAudioOffer = !forceCompat && (preferredTransport === 'rtc-data-audio' || (!params.transportOverride && params.scope === 'radio'))
-      ? await this.rtcDataAudioManager.buildOffer({ ...params, voiceTxBufferPolicy })
+      ? await this.rtcDataAudioManager.buildOffer({ ...params, voiceTxBufferPolicy, audioCodecPolicy })
       : null;
 
     const offers: RealtimeTransportOffer[] = [];
@@ -153,6 +171,8 @@ export class RealtimeTransportManager {
       offers: offers.map((offer) => offer.transport),
       rtcDataAudioAvailable,
       rtcDataAudioUnavailableReason: this.rtcDataAudioManager.getUnavailableReason(),
+      audioCodec: audioCodecPolicy.resolvedCodec,
+      audioCodecFallbackReason: audioCodecPolicy.fallbackReason,
     });
 
     return {
@@ -165,6 +185,7 @@ export class RealtimeTransportManager {
       offers,
       connectivityHints: hints,
       ...(voiceTxBufferPolicy ? { voiceTxBufferPolicy } : {}),
+      audioCodecPolicy,
     };
   }
 
@@ -216,8 +237,7 @@ export class RealtimeTransportManager {
         return;
       }
 
-      let sequence = 0;
-      const decimator = new RealtimeTransportAudioDecimator();
+      const downlinkEncoder = new RealtimeDownlinkAudioEncoder(session.audioCodecPolicy);
       let hasLoggedFirstCompatDownlinkFrame = false;
       const handleAudioData = (frame: RealtimeAudioFrame) => {
         if (socket.readyState !== 1) {
@@ -225,38 +245,23 @@ export class RealtimeTransportManager {
         }
 
         try {
-          const transportFrame = decimator.process(frame);
-          if (
-            transportFrame.samples.length === 0
-            || !Number.isFinite(transportFrame.sampleRate)
-            || transportFrame.sampleRate <= 0
-          ) {
-            return;
-          }
-          const pcm = float32ToInt16Pcm(transportFrame.samples);
-          const serverSentAtMs = Date.now();
-          const payload = encodeWsCompatAudioFrame({
-            sequence: sequence++,
-            timestampMs: transportFrame.timestamp,
-            serverSentAtMs,
-            sampleRate: transportFrame.sampleRate,
-            channels: transportFrame.channels,
-            samplesPerChannel: transportFrame.samplesPerChannel,
-            pcm,
-          });
-          socket.send(Buffer.from(payload));
-          if (!hasLoggedFirstCompatDownlinkFrame) {
-            hasLoggedFirstCompatDownlinkFrame = true;
-            logger.info('First compatibility downlink audio frame sent', {
-              scope: session.scope,
-              sourceId: source.id,
-              sourcePath: frame.sourceKind,
-              nativeSourceKind: frame.nativeSourceKind ?? null,
-              sourceSampleRate: transportFrame.inputSampleRate,
-              transportSampleRate: transportFrame.sampleRate,
-              downsampleFactor: transportFrame.downsampleFactor,
-              samplesPerChannel: transportFrame.samplesPerChannel,
-            });
+          const packets = downlinkEncoder.encodeSourceFrame(frame);
+          for (const packet of packets) {
+            socket.send(Buffer.from(packet.payload));
+            if (!hasLoggedFirstCompatDownlinkFrame) {
+              hasLoggedFirstCompatDownlinkFrame = true;
+              logger.info('First compatibility downlink audio frame sent', {
+                scope: session.scope,
+                sourceId: source.id,
+                sourcePath: frame.sourceKind,
+                nativeSourceKind: frame.nativeSourceKind ?? null,
+                codec: packet.codec,
+                sourceSampleRate: packet.sourceSampleRate,
+                transportSampleRate: packet.codecSampleRate,
+                samplesPerChannel: packet.samplesPerChannel,
+                wireBytes: packet.wireBytes,
+              });
+            }
           }
         } catch (error) {
           logger.debug('Failed to send compatibility audio frame', error);
@@ -286,6 +291,7 @@ export class RealtimeTransportManager {
       }));
 
       let hasLoggedFirstCompatUplinkFrame = false;
+      const uplinkDecoder = new RealtimeUplinkAudioDecoder();
       socket.on('message', (payload: Buffer | ArrayBuffer | Buffer[]) => {
         if (handleRealtimeClockSyncControlMessage(payload, sendClockSyncJson)) {
           return;
@@ -305,15 +311,18 @@ export class RealtimeTransportManager {
         }
 
         try {
-          const decoded = decodeWsCompatAudioFrame(
+          const decoded = uplinkDecoder.decode(
             buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
           );
-          const float32 = int16ToFloat32Pcm(decoded.pcm);
+          if (!decoded) {
+            return;
+          }
           if (!hasLoggedFirstCompatUplinkFrame) {
             hasLoggedFirstCompatUplinkFrame = true;
             logger.info('First compatibility uplink audio frame received', {
               scope: session.scope,
               participantIdentity: session.participantIdentity,
+              codec: decoded.codec,
               sampleRate: decoded.sampleRate,
               samplesPerChannel: decoded.samplesPerChannel,
             });
@@ -334,7 +343,7 @@ export class RealtimeTransportManager {
             samplesPerChannel: decoded.samplesPerChannel,
             ...(session.voiceTxBufferPolicy ? { voiceTxBufferPolicy: session.voiceTxBufferPolicy } : {}),
           };
-          void this.engine.getVoiceSessionManager()?.handleParticipantAudioFrame(meta, float32);
+          void this.engine.getVoiceSessionManager()?.handleParticipantAudioFrame(meta, decoded.samples);
         } catch (error) {
           logger.debug('Failed to decode compatibility uplink audio frame', error);
         }
@@ -428,6 +437,7 @@ export class RealtimeTransportManager {
   private buildCompatOffer(
     params: IssueRealtimeSessionParams,
     voiceTxBufferPolicy?: ResolvedVoiceTxBufferPolicy,
+    audioCodecPolicy?: ResolvedRealtimeAudioCodecPolicy,
   ): RealtimeTransportOffer {
     if (params.direction === 'send' && USER_ROLE_LEVEL[params.role] < USER_ROLE_LEVEL[UserRoleEnum.OPERATOR]) {
       throw new Error('Operator role or above is required to publish audio');
@@ -445,6 +455,13 @@ export class RealtimeTransportManager {
       previewSessionId: params.previewSessionId,
       participantIdentity,
       ...(voiceTxBufferPolicy ? { voiceTxBufferPolicy } : {}),
+      audioCodecPolicy: audioCodecPolicy ?? resolveRealtimeAudioCodecPolicy({
+        scope: params.scope,
+        direction: params.direction,
+        preference: 'pcm',
+        capabilities: undefined,
+        serverOpusAvailable: false,
+      }),
       expiresAt: Date.now() + COMPAT_TOKEN_TTL_MS,
     });
 

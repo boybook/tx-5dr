@@ -3,6 +3,26 @@ const REALTIME_PCM_AUDIO_FRAME_V2_HEADER_BYTES = 24;
 const REALTIME_PCM_AUDIO_FRAME_MAGIC = 0x54583544; // TX5D
 const REALTIME_PCM_AUDIO_FRAME_VERSION = 1;
 const REALTIME_PCM_AUDIO_FRAME_DIAGNOSTICS_VERSION = 2;
+const REALTIME_ENCODED_AUDIO_FRAME_HEADER_BYTES = 16;
+const REALTIME_ENCODED_AUDIO_FRAME_MAGIC = 0x54583545; // TX5E
+const REALTIME_ENCODED_AUDIO_FRAME_DURATION_MS = 10;
+
+export type RealtimeAudioCodec = 'opus' | 'pcm-s16le';
+
+export interface RealtimeEncodedAudioFrame {
+  codec: 'opus';
+  sequence: number;
+  timestampMs: number;
+  serverSentAtMs?: number;
+  sourceSampleRate: number;
+  codecSampleRate: number;
+  channels: number;
+  samplesPerChannel: number;
+  frameDurationMs: number;
+  payload: Uint8Array;
+}
+
+export type RealtimeAudioFrame = RealtimePcmAudioFrame | RealtimeEncodedAudioFrame;
 
 export interface RealtimePcmAudioFrame {
   sequence: number;
@@ -101,6 +121,98 @@ export function decodeRealtimePcmAudioFrame(input: ArrayBufferLike): RealtimePcm
 
 export function decodeWsCompatAudioFrame(input: ArrayBufferLike): WsCompatAudioFrame {
   return decodeRealtimePcmAudioFrame(input);
+}
+
+export function getRealtimeEncodedAudioFrameHeaderBytes(): number {
+  return REALTIME_ENCODED_AUDIO_FRAME_HEADER_BYTES;
+}
+
+export function encodeRealtimeEncodedAudioFrame(frame: RealtimeEncodedAudioFrame): ArrayBuffer {
+  const payload = frame.payload instanceof Uint8Array
+    ? frame.payload
+    : new Uint8Array(frame.payload);
+  const buffer = new ArrayBuffer(REALTIME_ENCODED_AUDIO_FRAME_HEADER_BYTES + payload.byteLength);
+  const view = new DataView(buffer);
+
+  view.setUint32(0, REALTIME_ENCODED_AUDIO_FRAME_MAGIC);
+  view.setUint8(4, encodeRealtimeAudioCodecId(frame.codec));
+  view.setUint8(5, frame.channels);
+  view.setUint16(6, frame.codecSampleRate);
+  view.setUint32(8, frame.sequence >>> 0);
+  view.setUint32(12, frame.timestampMs >>> 0);
+  new Uint8Array(buffer, REALTIME_ENCODED_AUDIO_FRAME_HEADER_BYTES).set(payload);
+  return buffer;
+}
+
+export function decodeRealtimeEncodedAudioFrame(input: ArrayBufferLike): RealtimeEncodedAudioFrame {
+  const buffer = input instanceof ArrayBuffer
+    ? input
+    : input.slice(0) as ArrayBuffer;
+
+  if (buffer.byteLength < REALTIME_ENCODED_AUDIO_FRAME_HEADER_BYTES) {
+    throw new Error('Realtime encoded audio frame is too short');
+  }
+
+  const view = new DataView(buffer);
+  const magic = view.getUint32(0);
+  if (magic !== REALTIME_ENCODED_AUDIO_FRAME_MAGIC) {
+    throw new Error('Realtime encoded audio frame magic mismatch');
+  }
+
+  const codec = decodeRealtimeAudioCodecId(view.getUint8(4));
+  const channels = view.getUint8(5);
+  const codecSampleRate = view.getUint16(6);
+  if (channels <= 0 || codecSampleRate <= 0) {
+    throw new Error('Realtime encoded audio frame format is invalid');
+  }
+  const frameDurationMs = REALTIME_ENCODED_AUDIO_FRAME_DURATION_MS;
+
+  return {
+    codec,
+    sequence: view.getUint32(8),
+    timestampMs: view.getUint32(12),
+    sourceSampleRate: codecSampleRate,
+    codecSampleRate,
+    channels,
+    samplesPerChannel: Math.round((codecSampleRate * frameDurationMs) / 1000),
+    frameDurationMs,
+    payload: new Uint8Array(buffer.slice(REALTIME_ENCODED_AUDIO_FRAME_HEADER_BYTES)),
+  };
+}
+
+export function decodeRealtimeAudioFrame(input: ArrayBufferLike): RealtimeAudioFrame {
+  const buffer = input instanceof ArrayBuffer
+    ? input
+    : input.slice(0) as ArrayBuffer;
+  if (buffer.byteLength < 4) {
+    throw new Error('Realtime audio frame is too short');
+  }
+  const magic = new DataView(buffer).getUint32(0);
+  if (magic === REALTIME_PCM_AUDIO_FRAME_MAGIC) {
+    return decodeRealtimePcmAudioFrame(buffer);
+  }
+  if (magic === REALTIME_ENCODED_AUDIO_FRAME_MAGIC) {
+    return decodeRealtimeEncodedAudioFrame(buffer);
+  }
+  throw new Error('Realtime audio frame magic mismatch');
+}
+
+export function isRealtimeEncodedAudioFrame(frame: RealtimeAudioFrame): frame is RealtimeEncodedAudioFrame {
+  return (frame as RealtimeEncodedAudioFrame).codec === 'opus';
+}
+
+function encodeRealtimeAudioCodecId(codec: RealtimeEncodedAudioFrame['codec']): number {
+  if (codec === 'opus') {
+    return 1;
+  }
+  throw new Error(`Unsupported realtime encoded audio codec: ${codec}`);
+}
+
+function decodeRealtimeAudioCodecId(codecId: number): RealtimeEncodedAudioFrame['codec'] {
+  if (codecId === 1) {
+    return 'opus';
+  }
+  throw new Error(`Unsupported realtime encoded audio codec id: ${codecId}`);
 }
 
 export function float32ToInt16Pcm(samples: Float32Array): Int16Array {

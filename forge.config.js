@@ -113,6 +113,25 @@ function findFilesByExt(dir, ext) {
   return results;
 }
 
+/** Keep only the @discordjs/opus prebuild for the current packaged platform. */
+function cleanDiscordOpusPrebuilds(prebuildDir, platform, arch) {
+  let removedCount = 0;
+  try {
+    if (!fs.existsSync(prebuildDir)) return removedCount;
+    const keepNeedle = `-${platform}-${arch}-`;
+    for (const entry of fs.readdirSync(prebuildDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (!entry.name.includes(keepNeedle)) {
+        rmrf(join(prebuildDir, entry.name));
+        removedCount++;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return removedCount;
+}
+
 // ========== DEBUG: macOS Signing Config ==========
 if (process.platform === 'darwin') {
   console.log('========== DEBUG: macOS Signing Config ==========');
@@ -306,7 +325,8 @@ module.exports = {
           icon: join(__dirname, 'packages', 'electron-main', 'assets', 'AppIcon.png'),
           categories: ['Utility', 'AudioVideo'],
           description: 'TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio',
-          genericName: 'Ham Radio Application'
+          genericName: 'Ham Radio Application',
+          depends: ['libopus0']
         }
       }
     },
@@ -320,7 +340,8 @@ module.exports = {
           categories: ['Utility', 'AudioVideo'],
           description: 'TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio',
           genericName: 'Ham Radio Application',
-          license: 'MIT'
+          license: 'MIT',
+          requires: ['opus']
         }
       }
     },
@@ -441,6 +462,12 @@ module.exports = {
         rmrf(join(nm, 'node-datachannel', 'CMakeLists.txt'));
         rmrf(join(nm, 'node-datachannel', 'BULDING.md'));
         rmrf(join(nm, 'node-datachannel', 'rollup.config.mjs'));
+        // @discordjs/opus: keep lib/, package.json and prebuild/*.node only.
+        rmrf(join(nm, '@discordjs', 'opus', 'src'));
+        rmrf(join(nm, '@discordjs', 'opus', 'deps'));
+        rmrf(join(nm, '@discordjs', 'opus', 'typings'));
+        rmrf(join(nm, '@discordjs', 'opus', 'node_modules'));
+        rmrf(join(nm, '@discordjs', 'opus', 'binding.gyp'));
         console.log('✅ native 模块编译源码清理完成');
       } catch (err) {
         console.warn('⚠️ 清理 native 模块编译源码遇到问题：', (err && err.message) || err);
@@ -513,6 +540,7 @@ module.exports = {
       const wsjtxPrebuilds = join(nm, 'wsjtx-lib', 'prebuilds');
       const hamlibPrebuilds = join(nm, 'hamlib', 'prebuilds');
       const serialportPrebuilds = join(nm, '@serialport', 'bindings-cpp', 'prebuilds');
+      const discordOpusPrebuilds = join(nm, '@discordjs', 'opus', 'prebuild');
 
       if (platform === 'linux') {
         try {
@@ -536,7 +564,9 @@ module.exports = {
           rmGlob(serialportPrebuilds, 'android-');
           rmrf(join(serialportPrebuilds, removeArch));
 
-          console.log('✅ [Linux] 清理完成');
+          const opusRemoved = cleanDiscordOpusPrebuilds(discordOpusPrebuilds, platform, arch);
+
+          console.log(`✅ [Linux] 清理完成 (Opus 非本平台预构建 ${opusRemoved} 个)`);
         } catch (error) {
           console.warn('⚠️ [Linux] 清理跨架构文件时出现警告:', error.message);
         }
@@ -562,7 +592,9 @@ module.exports = {
           rmGlob(serialportPrebuilds, 'win32-');
           rmGlob(serialportPrebuilds, 'android-');
 
-          console.log('✅ [macOS] 清理完成');
+          const opusRemoved = cleanDiscordOpusPrebuilds(discordOpusPrebuilds, platform, arch);
+
+          console.log(`✅ [macOS] 清理完成 (Opus 非本平台预构建 ${opusRemoved} 个)`);
         } catch (error) {
           console.warn('⚠️ [macOS] 清理跨架构文件时出现警告:', error.message);
         }
@@ -585,7 +617,9 @@ module.exports = {
           rmGlob(serialportPrebuilds, 'darwin-');
           rmGlob(serialportPrebuilds, 'android-');
 
-          console.log('✅ [Windows] 清理完成');
+          const opusRemoved = cleanDiscordOpusPrebuilds(discordOpusPrebuilds, platform, arch);
+
+          console.log(`✅ [Windows] 清理完成 (Opus 非本平台预构建 ${opusRemoved} 个)`);
         } catch (error) {
           console.warn('⚠️ [Windows] 清理跨架构文件时出现警告:', error.message);
         }
@@ -633,6 +667,28 @@ module.exports = {
           console.log(`✅ [macOS] RPATH 修复完成 (处理 ${fixedCount}/${nodeFiles.length} 个文件)`);
         } catch (error) {
           console.warn('⚠️ [macOS] RPATH 修复遇到问题:', error.message);
+        }
+      }
+
+      // macOS: 显式签名 native .node 模块，确保新增 Opus addon 也被覆盖。
+      if (platform === 'darwin' && process.env.APPLE_IDENTITY) {
+        try {
+          console.log('🔐 [macOS] 签名 native .node 模块 (签名前)...');
+          const path = require('path');
+          const entitlementsPath = path.join(process.cwd(), 'build/entitlements.mac.plist');
+          const nodeFiles = findFilesByExt(join(appRoot, 'node_modules'), '.node');
+
+          for (const nodeFile of nodeFiles) {
+            console.log(`  签名: ${nodeFile}`);
+            execSync(
+              `codesign --force --sign "${process.env.APPLE_IDENTITY}" --options runtime --entitlements "${entitlementsPath}" --timestamp "${nodeFile}"`,
+              { stdio: 'inherit' }
+            );
+          }
+          console.log(`✅ [macOS] native .node 模块签名完成 (${nodeFiles.length})`);
+        } catch (error) {
+          console.error('❌ [macOS] native .node 模块签名失败:', error.message);
+          throw error;
         }
       }
 

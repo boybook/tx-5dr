@@ -2,6 +2,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   UserRole,
   type VoiceTxBufferPreference,
+  type RealtimeAudioCodecCapabilities,
+  type RealtimeAudioCodecPreference,
   type RealtimeStatsRequest,
   RealtimeStatsRequestSchema,
   RealtimeStatsResponseSchema,
@@ -20,6 +22,8 @@ type ParsedRealtimeSessionRequest = {
   previewSessionId?: string;
   transportOverride?: 'rtc-data-audio' | 'ws-compat';
   voiceTxBufferPreference?: VoiceTxBufferPreference;
+  audioCodecPreference?: RealtimeAudioCodecPreference;
+  audioCodecCapabilities?: RealtimeAudioCodecCapabilities;
 };
 
 export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
@@ -90,6 +94,8 @@ export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
       requestHeaders: request.headers,
       requestProtocol: request.protocol,
       voiceTxBufferPreference: body.voiceTxBufferPreference,
+      audioCodecPreference: body.audioCodecPreference,
+      audioCodecCapabilities: body.audioCodecCapabilities,
     });
 
     return reply.send(response);
