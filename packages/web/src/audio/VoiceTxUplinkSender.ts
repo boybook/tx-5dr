@@ -1,10 +1,8 @@
 import { encodeRealtimePcmAudioFrame } from '@tx5dr/core';
-import type { RealtimeTransportKind } from '@tx5dr/contracts';
+import { resolveVoiceTxBufferPolicy, type RealtimeTransportKind, type ResolvedVoiceTxBufferPolicy } from '@tx5dr/contracts';
 import type { RealtimeClockConfidence } from '../realtime/RealtimeClockSync';
 import type { CompatCaptureFrame } from './compatAudioBackends';
 
-const VOICE_TX_MAX_BUFFERED_AUDIO_MS = 80;
-const VOICE_TX_DEGRADED_BUFFERED_AUDIO_MS = 200;
 const PCM_BYTES_PER_SAMPLE = 2;
 
 export interface VoiceTxUplinkSendResult {
@@ -23,6 +21,7 @@ export interface VoiceTxUplinkSenderOptions {
   getBufferedAmount: () => number | null;
   estimateServerTimeMs: (clientTimeMs: number) => number | null;
   getClockConfidence: () => RealtimeClockConfidence;
+  txBufferPolicy?: ResolvedVoiceTxBufferPolicy;
 }
 
 export class VoiceTxUplinkSender {
@@ -32,11 +31,12 @@ export class VoiceTxUplinkSender {
 
   sendFrame(frame: CompatCaptureFrame): VoiceTxUplinkSendResult {
     const sendStartedAt = performance.now();
+    const txBufferPolicy = this.options.txBufferPolicy ?? resolveVoiceTxBufferPolicy();
     const bufferedAmountBytes = this.options.getBufferedAmount();
     const bufferedAudioMs = estimateBufferedAudioMs(bufferedAmountBytes, frame.sampleRate, 1);
-    const degraded = (bufferedAudioMs ?? 0) > VOICE_TX_DEGRADED_BUFFERED_AUDIO_MS;
+    const degraded = (bufferedAudioMs ?? 0) > txBufferPolicy.uplinkDegradedBufferedAudioMs;
 
-    if ((bufferedAudioMs ?? 0) > VOICE_TX_MAX_BUFFERED_AUDIO_MS) {
+    if ((bufferedAudioMs ?? 0) > txBufferPolicy.uplinkMaxBufferedAudioMs) {
       return {
         sent: false,
         dropped: true,

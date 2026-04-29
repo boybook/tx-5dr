@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   UserRole,
+  type VoiceTxBufferPreference,
   type RealtimeStatsRequest,
   RealtimeStatsRequestSchema,
   RealtimeStatsResponseSchema,
@@ -18,6 +19,7 @@ type ParsedRealtimeSessionRequest = {
   direction: 'recv' | 'send';
   previewSessionId?: string;
   transportOverride?: 'rtc-data-audio' | 'ws-compat';
+  voiceTxBufferPreference?: VoiceTxBufferPreference;
 };
 
 export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
@@ -87,6 +89,7 @@ export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
       previewSessionId: body.previewSessionId,
       requestHeaders: request.headers,
       requestProtocol: request.protocol,
+      voiceTxBufferPreference: body.voiceTxBufferPreference,
     });
 
     return reply.send(response);

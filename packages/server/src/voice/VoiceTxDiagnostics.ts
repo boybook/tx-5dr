@@ -3,6 +3,7 @@ import type {
   RealtimeVoiceTxBottleneckStage,
   RealtimeVoiceTxMetricWindow,
   RealtimeVoiceTxStatsResponse,
+  ResolvedVoiceTxBufferPolicy,
 } from '@tx5dr/contracts';
 
 const ROLLING_WINDOW_MS = 5_000;
@@ -21,6 +22,7 @@ export interface VoiceTxFrameMeta {
   serverReceivedAtMs: number;
   sampleRate: number;
   samplesPerChannel: number;
+  voiceTxBufferPolicy?: ResolvedVoiceTxBufferPolicy;
 }
 
 export interface VoiceTxProcessedFrameStats {

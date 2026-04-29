@@ -10,7 +10,7 @@ import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
 import { RadioControlPanel } from './RadioControlPanel';
 import { TunerCapabilitySurface } from '../../../radio-capability/components/TunerCapability';
 import { api, ApiError } from '@tx5dr/core';
-import type { ModeDescriptor, RealtimeTransportKind } from '@tx5dr/contracts';
+import type { ModeDescriptor, RealtimeTransportKind, VoiceTxBufferProfile } from '@tx5dr/contracts';
 import type { ConnectionState } from '../../../store/radioStore';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { subject as caslSubject } from '@casl/ability';
@@ -48,6 +48,12 @@ const MODE_SELECT_MAX_WIDTH_PX = 160;
 const CUSTOM_FREQUENCY_ACTION_KEY = '__custom__';
 const CURRENT_CUSTOM_FREQUENCY_KEY = '__custom_frequency__';
 const CUSTOM_BAND = 'custom';
+const VOICE_TX_BUFFER_PROFILES: Array<Exclude<VoiceTxBufferProfile, 'custom'> | 'custom'> = [
+  'low-latency',
+  'balanced',
+  'stable',
+  'custom',
+];
 
 const clampWidth = (value: number, minWidth: number, maxWidth: number): number => (
   Math.min(maxWidth, Math.max(minWidth, value))
@@ -743,6 +749,61 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
         return t('voiceTx.endToEndLatencyUnavailable');
     }
   }, [t, voiceTxDiagnostics?.display.endToEndLatencyKind]);
+
+  const getVoiceTxBufferProfileLabel = React.useCallback((profile: VoiceTxBufferProfile): string => {
+    switch (profile) {
+      case 'low-latency':
+        return t('voiceTx.bufferProfileLow');
+      case 'stable':
+        return t('voiceTx.bufferProfileHigh');
+      case 'custom':
+        return t('voiceTx.bufferProfileCustom');
+      case 'balanced':
+      default:
+        return t('voiceTx.bufferProfileBalanced');
+    }
+  }, [t]);
+
+  const activeVoiceTxBufferPolicy = voiceCaptureController?.activeTxBufferPolicy
+    ?? voiceCaptureController?.resolvedTxBufferPolicy
+    ?? null;
+  const selectedVoiceTxBufferProfile = voiceCaptureController?.txBufferPreference.profile ?? 'balanced';
+  const voiceTxCustomBufferMs = voiceCaptureController?.txBufferPreference.customTargetBufferMs
+    ?? voiceCaptureController?.resolvedTxBufferPolicy.targetMs
+    ?? 90;
+  const isVoiceTxBufferControlDisabled = Boolean(
+    voiceCaptureController?.isPTTActive || voiceCaptureController?.captureState === 'starting',
+  );
+
+  const handleVoiceTxBufferProfileChange = React.useCallback((profile: VoiceTxBufferProfile) => {
+    if (!voiceCaptureController || isVoiceTxBufferControlDisabled) {
+      return;
+    }
+    if (profile === 'custom') {
+      const target = voiceCaptureController.txBufferPreference.customTargetBufferMs
+        ?? voiceCaptureController.resolvedTxBufferPolicy.targetMs;
+      voiceCaptureController.setTxBufferPreference({
+        profile: 'custom',
+        customTargetBufferMs: Math.max(40, Math.min(500, Math.round(target))),
+      });
+      return;
+    }
+    voiceCaptureController.setTxBufferPreference({ profile });
+  }, [isVoiceTxBufferControlDisabled, voiceCaptureController]);
+
+  const handleVoiceTxCustomBufferChange = React.useCallback((value: string) => {
+    if (!voiceCaptureController || isVoiceTxBufferControlDisabled) {
+      return;
+    }
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) {
+      return;
+    }
+    voiceCaptureController.setTxBufferPreference({
+      profile: 'custom',
+      customTargetBufferMs: Math.max(40, Math.min(500, parsed)),
+    });
+  }, [isVoiceTxBufferControlDisabled, voiceCaptureController]);
 
   const handleSwitchVoiceTransport = React.useCallback(async () => {
     if (!voiceCaptureController || isSwitchingVoiceTransport) {
@@ -1556,7 +1617,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                       <FontAwesomeIcon icon={faHeadphones} className="text-xs" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="py-2 pt-3 space-y-2">
+                  <PopoverContent className="w-72 py-2 pt-3 space-y-2">
                     <div className="space-y-2">
                       {/* 监听音量滑块 */}
                       <div className="flex flex-col items-center px-2">
@@ -1720,6 +1781,57 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                       <span className="font-mono text-default-400 text-right">
                         {getVoiceTransportLabel(voiceCaptureController.preferredTransport)}
                       </span>
+                    </div>
+
+                    <div className="space-y-1.5 border-t border-divider pt-2">
+                      <div className="flex justify-between items-center gap-3">
+                        <span className="text-default-500">{t('voiceTx.bufferPolicy')}</span>
+                        <span className="font-mono text-default-400 text-right">
+                          {activeVoiceTxBufferPolicy
+                            ? `${getVoiceTxBufferProfileLabel(selectedVoiceTxBufferProfile)} · ${activeVoiceTxBufferPolicy.targetMs}ms`
+                            : '--'}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-4 gap-1">
+                        {VOICE_TX_BUFFER_PROFILES.map((profile) => (
+                          <Button
+                            key={profile}
+                            size="sm"
+                            variant={selectedVoiceTxBufferProfile === profile ? 'solid' : 'flat'}
+                            color={selectedVoiceTxBufferProfile === profile ? 'primary' : 'default'}
+                            className="min-w-0 px-1 text-[11px]"
+                            isDisabled={isVoiceTxBufferControlDisabled}
+                            onPress={() => handleVoiceTxBufferProfileChange(profile)}
+                          >
+                            {getVoiceTxBufferProfileLabel(profile)}
+                          </Button>
+                        ))}
+                      </div>
+                      {selectedVoiceTxBufferProfile === 'custom' && (
+                        <Input
+                          size="sm"
+                          type="number"
+                          min={40}
+                          max={500}
+                          step={10}
+                          value={String(voiceTxCustomBufferMs)}
+                          onValueChange={handleVoiceTxCustomBufferChange}
+                          isDisabled={isVoiceTxBufferControlDisabled}
+                          label={t('voiceTx.customBufferTarget')}
+                          labelPlacement="outside-left"
+                          endContent={<span className="text-[11px] text-default-400">ms</span>}
+                          classNames={{
+                            base: 'pt-1',
+                            label: 'text-[11px] text-default-500',
+                            input: 'text-right font-mono text-xs',
+                          }}
+                        />
+                      )}
+                      {voiceCaptureController.isPTTActive && (
+                        <div className="text-[11px] text-warning text-center">
+                          {t('voiceTx.bufferPolicyDisabledDuringTx')}
+                        </div>
+                      )}
                     </div>
 
                     {voiceTxDiagnostics && (
