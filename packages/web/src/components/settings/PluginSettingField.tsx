@@ -1,5 +1,5 @@
 import React from 'react';
-import { Switch, Input, Select, SelectItem, Textarea } from '@heroui/react';
+import { Button, Switch, Input, Select, SelectItem, Textarea } from '@heroui/react';
 import type { PluginSettingDescriptor } from '@tx5dr/contracts';
 import i18n from '../../i18n/index';
 import { resolvePluginLabel } from '../../utils/pluginLocales';
@@ -132,6 +132,105 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
         minRows={3}
         variant="bordered"
       />
+    );
+  }
+
+  if (descriptor.type === 'object[]') {
+    const rows = Array.isArray(value)
+      ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+      : Array.isArray(descriptor.default)
+        ? descriptor.default.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+        : [];
+    const fields = descriptor.itemFields ?? [];
+    const nextId = () => {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+      }
+      return `item-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    };
+    const updateRow = (index: number, key: string, nextValue: unknown) => {
+      onChange(rows.map((row, rowIndex) => rowIndex === index ? { ...row, [key]: nextValue } : row));
+    };
+    const removeRow = (index: number) => {
+      onChange(rows.filter((_, rowIndex) => rowIndex !== index));
+    };
+    const addRow = () => {
+      const nextRow: Record<string, unknown> = { id: nextId() };
+      for (const field of fields) {
+        if (!(field.key in nextRow)) {
+          nextRow[field.key] = field.type === 'boolean' ? false : '';
+        }
+      }
+      onChange([...rows, nextRow]);
+    };
+
+    return (
+      <div className="rounded-lg border border-default-200/70 bg-content1 px-3 py-2.5">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium text-default-700">{label}</div>
+            {description && (
+              <div className="mt-0.5 text-xs leading-5 text-default-500">{description}</div>
+            )}
+          </div>
+          <Button size="sm" variant="flat" onPress={addRow}>
+            {i18n.t('common:button.add', { defaultValue: 'Add' })}
+          </Button>
+        </div>
+        {rows.length === 0 ? (
+          <div className="rounded-md border border-dashed border-default-200 px-3 py-4 text-center text-xs text-default-400">
+            {i18n.t('settings:plugins.noItems', { defaultValue: 'No items yet.' })}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {rows.map((row, index) => (
+              <div key={String(row.id ?? index)} className="rounded-md border border-default-200/70 bg-default-50/50 p-2">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-default-500">
+                    {i18n.t('settings:plugins.itemNumber', { index: index + 1, defaultValue: `Item ${index + 1}` })}
+                  </span>
+                  <Button size="sm" color="danger" variant="light" onPress={() => removeRow(index)}>
+                    {i18n.t('common:button.delete', { defaultValue: 'Delete' })}
+                  </Button>
+                </div>
+                <div className="grid gap-2 md:grid-cols-2">
+                  {fields.map((field) => {
+                    const fieldLabel = resolvePluginLabel(field.label, pluginName);
+                    const fieldDescription = field.description ? resolvePluginLabel(field.description, pluginName) : undefined;
+                    if (field.type === 'boolean') {
+                      return (
+                        <div key={field.key} className="flex items-center justify-between gap-3 rounded-md border border-default-200/60 bg-content1 px-3 py-2">
+                          <span className="text-sm text-default-700">{fieldLabel}</span>
+                          <Switch
+                            size="sm"
+                            isSelected={Boolean(row[field.key])}
+                            onValueChange={(nextValue) => updateRow(index, field.key, nextValue)}
+                          />
+                        </div>
+                      );
+                    }
+                    return (
+                      <Input
+                        key={field.key}
+                        size="sm"
+                        label={fieldLabel}
+                        description={fieldDescription}
+                        placeholder={field.placeholder}
+                        type={field.type === 'number' ? 'number' : 'text'}
+                        value={String(row[field.key] ?? '')}
+                        onValueChange={(nextValue) =>
+                          updateRow(index, field.key, field.type === 'number' ? Number(nextValue) : nextValue)
+                        }
+                        variant="bordered"
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     );
   }
 

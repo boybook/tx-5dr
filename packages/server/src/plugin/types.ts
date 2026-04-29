@@ -7,6 +7,7 @@ import type {
 } from '@tx5dr/plugin-api';
 import type {
   PluginPanelMetaPayload,
+  PluginUIPanelContributionGroup,
   PluginSource,
   PluginStatus,
   PluginSystemSnapshot,
@@ -209,6 +210,7 @@ export function toPluginSystemSnapshot(
   state: PluginSystemRuntimeState,
   plugins: PluginStatus[],
   panelMeta: PluginPanelMetaPayload[],
+  panelContributions: PluginUIPanelContributionGroup[],
 ): PluginSystemSnapshot {
   return {
     state: state.state,
@@ -216,5 +218,6 @@ export function toPluginSystemSnapshot(
     lastError: state.lastError,
     plugins,
     panelMeta,
+    panelContributions,
   };
 }

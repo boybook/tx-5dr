@@ -6,7 +6,7 @@ import type {
   PluginUIPageSessionInfo,
 } from '@tx5dr/plugin-api';
 import type { EventEmitter } from 'eventemitter3';
-import type { DigitalRadioEngineEvents, PluginPanelMetaPayload } from '@tx5dr/contracts';
+import type { DigitalRadioEngineEvents, PluginPanelDescriptor, PluginPanelMetaPayload } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import type { PluginPageSession } from './PluginPageSessionStore.js';
 
@@ -33,6 +33,12 @@ export class PluginUIBridge implements UIBridge {
       pageId?: string,
     ) => PluginPageSession[],
     private readonly onPanelMeta?: (payload: PluginPanelMetaPayload) => void,
+    private readonly onPanelContributions?: (
+      pluginName: string,
+      instanceTarget: PluginUIInstanceTarget,
+      groupId: string,
+      panels: PluginPanelDescriptor[],
+    ) => void,
   ) {
     this.operatorId = instanceTarget.kind === 'operator'
       ? instanceTarget.operatorId
@@ -59,6 +65,18 @@ export class PluginUIBridge implements UIBridge {
     };
     this.onPanelMeta?.(payload);
     this.eventEmitter.emit('pluginPanelMeta', payload);
+  }
+
+  setPanelContributions(groupId: string, panels: PluginPanelDescriptor[]): void {
+    logger.debug(`Plugin UI panel contributions: plugin=${this.pluginName}, group=${groupId}, count=${panels.length}`);
+    if (!this.onPanelContributions) {
+      throw new Error('panel_contributions_not_supported');
+    }
+    this.onPanelContributions(this.pluginName, this.instanceTarget, groupId, panels);
+  }
+
+  clearPanelContributions(groupId: string): void {
+    this.setPanelContributions(groupId, []);
   }
 
   registerPageHandler(handler: PluginUIHandler): void {

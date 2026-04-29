@@ -40,6 +40,7 @@ export const PluginCardSlotStack: React.FC<PluginCardSlotStackProps> = ({
               title={entry.resolvedTitle}
               component={entry.panel.component}
               pageId={entry.panel.pageId}
+              params={entry.panel.params}
               variant="pane"
               minHeight={200}
               className="h-full"
@@ -84,6 +85,7 @@ export const PluginTabbedPaneHost: React.FC<PluginTabbedPaneHostProps> = ({
         title={entry.resolvedTitle}
         component={entry.panel.component}
         pageId={entry.panel.pageId}
+        params={entry.panel.params}
         variant="pane"
         minHeight={minPaneHeight}
         fillHeight

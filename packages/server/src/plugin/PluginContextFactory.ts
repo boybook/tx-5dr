@@ -2,11 +2,13 @@ import path from 'path';
 import type {
   LogbookSyncProvider,
   PluginContext,
+  PluginUIInstanceTarget,
   QSOQueryFilter,
 } from '@tx5dr/plugin-api';
 import type {
   LogBookStatistics,
   PluginLogEntry,
+  PluginPanelDescriptor,
   PluginPanelMetaPayload,
   ModeDescriptor,
   PluginUIPageDescriptor,
@@ -29,6 +31,12 @@ export class PluginContextFactory {
   constructor(
     private deps: PluginManagerDeps,
     private readonly onPanelMeta?: (payload: PluginPanelMetaPayload) => void,
+    private readonly onPanelContributions?: (
+      pluginName: string,
+      instanceTarget: PluginUIInstanceTarget,
+      groupId: string,
+      panels: PluginPanelDescriptor[],
+    ) => void,
   ) {}
 
   async create(
@@ -56,6 +64,7 @@ export class PluginContextFactory {
       (pluginName, instanceTarget, pageId) =>
         this.deps.listPluginPageSessions?.(pluginName, instanceTarget, pageId) ?? [],
       this.onPanelMeta,
+      this.onPanelContributions,
     );
     const pluginLogger = this.createLogger(plugin.definition.name);
     const operatorControl = this.createOperatorControl(operatorId, instanceScope);

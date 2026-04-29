@@ -48,6 +48,7 @@ export const VoiceRightTopTabs: React.FC<VoiceRightTopTabsProps> = ({
             title={entry.resolvedTitle}
             component={entry.panel.component}
             pageId={entry.panel.pageId}
+            params={entry.panel.params}
             variant="pane"
             minHeight={260}
             fillHeight

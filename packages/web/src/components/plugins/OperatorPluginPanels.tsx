@@ -53,6 +53,7 @@ export const OperatorPluginPanels: React.FC<OperatorPluginPanelsProps> = ({ oper
                     title={entry.resolvedTitle}
                     component={entry.panel.component}
                     pageId={entry.panel.pageId}
+                    params={entry.panel.params}
                     initialPanelMeta={entry.initialPanelMeta}
                   />
                 </div>

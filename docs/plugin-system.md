@@ -586,6 +586,21 @@ interface UIBridge {
   /** 推送结构化面板数据（panelId 必须与 panels[].id 匹配） */
   send(panelId: string, data: unknown): void;
 
+  /** 更新静态或动态面板的标题、可见性等运行期 meta */
+  setPanelMeta(panelId: string, meta: {
+    title?: string;
+    visible?: boolean;
+  }): void;
+
+  /**
+   * 替换一个运行期 UI Contribution group。
+   * 静态 PluginDefinition.panels 会由宿主作为保留的 manifest group 暴露。
+   */
+  setPanelContributions(groupId: string, panels: PluginPanelDescriptor[]): void;
+
+  /** 清空一个运行期 UI Contribution group */
+  clearPanelContributions(groupId: string): void;
+
   /**
    * 注册 iframe 页面消息处理器
    * iframe 通过 bridge.invoke(action, data) 发送请求，宿主路由到此处理器
@@ -653,7 +668,7 @@ interface PluginUIHandler {
 }
 ```
 
-`panelId` 必须与 `PluginDefinition.panels[].id` 匹配。数据通过 `pluginData` 事件推送到前端对应面板。
+`panelId` 必须与当前插件实例贡献出的静态或动态 panel id 匹配。数据通过 `pluginData` 事件推送到前端对应面板。
 `requestContext` 由宿主基于页面 session 注入；插件不应再信任 iframe 自报的 `callsign` / `operatorId` / `pageSessionId` 做鉴权。
 其中：
 
@@ -964,7 +979,7 @@ if (!decision.eligible) {
 ```typescript
 interface PluginSettingDescriptor {
   /** 值类型 */
-  type: 'boolean' | 'number' | 'string' | 'string[]' | 'info';
+  type: 'boolean' | 'number' | 'string' | 'string[]' | 'object[]' | 'info';
 
   /** 默认值。type='info' 时通常传空字符串即可 */
   default: unknown;
@@ -992,6 +1007,40 @@ interface PluginSettingDescriptor {
 
   /** 枚举选项（type='string' 时显示为下拉） */
   options?: Array<{ label: string; value: string }>;
+
+  /** type='object[]' 时用于生成每一项的字段编辑器 */
+  itemFields?: Array<{
+    key: string;
+    type?: 'string' | 'number' | 'boolean';
+    label: string;
+    description?: string;
+    placeholder?: string;
+    required?: boolean;
+  }>;
+}
+```
+
+#### `object[]` 类型的语义
+
+- `object[]` 用于声明“由宿主生成编辑器的对象列表”，适合全局共享的 Tab、URL、规则条目等简单结构
+- 每一项的字段由 `itemFields` 描述；当前生成式编辑器支持 `string`、`number`、`boolean` 三类字段
+- 宿主只负责配置表单和持久化，插件仍应在运行时自行清洗、去重和补默认值
+- 如果某个对象需要复杂交互、远程校验或多步骤选择，应改用 iframe 设置页面，而不是把所有逻辑塞进 `object[]`
+
+示例：
+
+```typescript
+settings: {
+  voiceRightTabs: {
+    type: 'object[]',
+    default: [],
+    label: 'voiceRightTabs',
+    scope: 'global',
+    itemFields: [
+      { key: 'title', type: 'string', label: 'tabTitle', required: true },
+      { key: 'url', type: 'string', label: 'tabUrl', required: true },
+    ],
+  },
 }
 ```
 
@@ -1098,6 +1147,8 @@ interface PluginPanelDescriptor {
   component: 'table' | 'key-value' | 'chart' | 'log' | 'iframe';
   /** 仅 component='iframe' 时需要，引用 ui.pages 中的页面 id */
   pageId?: string;
+  /** 可选字符串参数，会传入 iframe 的 tx5dr.params */
+  params?: Record<string, string>;
   /** 面板渲染位置。默认 'operator'（操作员卡片）*/
   slot?: 'operator' | 'automation' | 'main-right' | 'voice-left-top' | 'voice-right-top';
   /** 面板宽度偏好。默认 'half'；operator host 可将 'full' 解释为整行 */
@@ -1139,6 +1190,48 @@ ctx.ui.send('panel-id', { '总通联': 42, '今日': 5 });
 ```
 
 数据通过 WebSocket `pluginData` 事件实时推送，无需轮询。
+
+#### 运行期 UI Contribution
+
+`PluginDefinition.panels` 是 manifest 里的静态面板声明。宿主内部会把它规范化为一个保留的 contribution group：
+
+```typescript
+{
+  pluginName: 'my-plugin',
+  groupId: 'manifest',
+  source: 'manifest',
+  panels: definition.panels ?? [],
+}
+```
+
+如果插件需要在运行时动态增加、替换或删除面板，应使用同一套 UI Contribution 机制，而不是在 iframe 内做二级 Tab：
+
+```typescript
+ctx.ui.setPanelContributions('voice-right-web-tabs', [
+  {
+    id: 'voice-right-tab:dx-cluster',
+    title: 'DX Cluster',
+    component: 'iframe',
+    pageId: 'voice-right-webview',
+    params: { tabId: 'dx-cluster' },
+    slot: 'voice-right-top',
+    width: 'full',
+  },
+]);
+
+// 删除该组运行期面板
+ctx.ui.clearPanelContributions('voice-right-web-tabs');
+```
+
+约束：
+
+- `groupId` 必须是插件内稳定 ID；不要使用保留的 `manifest`
+- `setPanelContributions(groupId, panels)` 是“替换整个 group”的语义；传空数组等价于清空该 group
+- 静态面板和动态面板使用相同的 slot、iframe、权限、meta、snapshot 和 websocket 渲染管线
+- 同一插件实例内，合并后的 `panel.id` 必须唯一；动态面板不能和 manifest 面板或其他 runtime group 冲突
+- iframe 动态面板的 `pageId` 必须引用已声明的 `ui.pages[].id`
+- `params` 只允许字符串键值，会和宿主注入的 `operatorId`、`panelId` 一起出现在 `tx5dr.params`
+- `ctx.ui.setPanelMeta(panelId, meta)` 对静态与动态面板都有效；动态面板被删除后前端不再显示该 meta
 
 ### 4.8 持久化存储
 
@@ -1357,7 +1450,7 @@ observer.observe(document.body);
 |------|---------------------|-----------|
 | 声明方式 | `panels[].component='iframe'` + `pageId` | 仅 `ui.pages[]` |
 | 渲染位置 | 操作员卡片 / 自动化 Popover | 弹窗、设置模态框 |
-| 传入参数 | `{ operatorId }` 自动传入 | 由调用方传入（如 `{ callsign }`） |
+| 传入参数 | `{ operatorId, panelId, ...panel.params }` 自动传入 | 由调用方传入（如 `{ callsign }`） |
 | 生命周期 | 跟随操作员卡片展开/折叠 | 跟随弹窗打开/关闭 |
 | 典型场景 | 实时数据展示、快捷控制 | 配置表单、向导流程 |
 
@@ -2192,6 +2285,7 @@ Pipeline 额外安全网
 | `pluginData` | Server → Client | 插件通过 `ctx.ui.send()` 推送的面板数据，载荷包含 `pluginName + operatorId + panelId + data` |
 | `pluginLog` | Server → Client | 插件 `ctx.log.*` 的日志条目（前端显示于 Settings → Plugins 的日志面板） |
 | `pluginPagePush` | Server → Client | 插件通过 `ctx.ui.pushToPage()` 推送到 iframe 页面的消息 |
+| `pluginPanelContributionsChanged` | Server → Client | 插件运行期面板 contribution group 被替换或清空，载荷是合并前的 group 变更 |
 | `pluginUserAction` | Client → Server | 插件自定义用户动作（触发 `hooks.onUserAction`） |
 
 > 补充：操作员 runtime 的核心控制命令不是插件专用事件，它们走系统级 WebSocket 命令：

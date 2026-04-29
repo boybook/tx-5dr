@@ -16,6 +16,7 @@ interface PluginPanelRendererProps {
   title: string;
   component: 'table' | 'key-value' | 'chart' | 'log' | 'iframe';
   pageId?: string;
+  params?: Record<string, string>;
   /** 'card' wraps in a Card, 'inline' renders compact chrome, 'pane' is full-bleed host content. */
   variant?: 'card' | 'inline' | 'pane';
   minHeight?: number;
@@ -32,6 +33,7 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
   title: staticTitle,
   component,
   pageId,
+  params,
   variant = 'card',
   minHeight = 0,
   fillHeight = false,
@@ -72,7 +74,7 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
           key={`${pluginName}:${pageId}:${pluginGeneration}`}
           pluginName={pluginName}
           pageId={pageId}
-          params={{ operatorId }}
+          params={{ operatorId, panelId, ...(params ?? {}) }}
           minHeight={minHeight}
           fillHeight={fillHeight}
           className={className}
@@ -91,7 +93,7 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
             key={`${pluginName}:${pageId}:${pluginGeneration}`}
             pluginName={pluginName}
             pageId={pageId}
-            params={{ operatorId }}
+            params={{ operatorId, panelId, ...(params ?? {}) }}
             minHeight={Math.max(minHeight, 64)}
             fillHeight={fillHeight}
             className={className}
@@ -111,7 +113,7 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
             key={`${pluginName}:${pageId}:${pluginGeneration}`}
             pluginName={pluginName}
             pageId={pageId}
-            params={{ operatorId }}
+            params={{ operatorId, panelId, ...(params ?? {}) }}
             minHeight={minHeight}
             fillHeight={fillHeight}
             className={className}
