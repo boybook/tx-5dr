@@ -237,6 +237,7 @@ else
 fi
 
 # Patch nginx config with HTTPS server block if certificate exists and HTTPS block is missing
+NGINX_CONF="/etc/nginx/conf.d/tx5dr.conf"
 if [[ -f "$SSL_CERT" ]] && [[ -f "$SSL_KEY" ]] && [[ -f "$NGINX_CONF" ]]; then
     if ! grep -q 'ssl_certificate[[:space:]]*/app/data/ssl/server\.crt' "$NGINX_CONF" 2>/dev/null; then
         log "Adding HTTPS server block to nginx config..."
