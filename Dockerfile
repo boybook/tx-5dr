@@ -123,6 +123,7 @@ RUN apt-get update && apt-get install -y \
     libxi6 \
     libxext6 \
     libhamlib4 \
+    libopus0 \
     udev \
     nginx \
     supervisor \

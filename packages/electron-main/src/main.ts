@@ -1820,11 +1820,12 @@ ${error instanceof Error ? `${error.message}
     if (!nativeCheck.success) {
       const okModules = nativeCheck.modules.filter(m => m.ok).map(m => m.name);
       const failedModules = nativeCheck.modules.filter(m => !m.ok);
-      const degradedRtcOnly = nativeCheck.crashedModule === 'node-datachannel'
-        || (failedModules.length > 0 && failedModules.every(m => m.name === 'node-datachannel'));
+      const degradableRealtimeModules = new Set(['node-datachannel', '@discordjs/opus']);
+      const degradedRealtimeOnly = (nativeCheck.crashedModule && degradableRealtimeModules.has(nativeCheck.crashedModule))
+        || (failedModules.length > 0 && failedModules.every(m => degradableRealtimeModules.has(m.name)));
 
-      if (degradedRtcOnly) {
-        logger.warn('node-datachannel native check failed; continuing with ws-compat fallback available', nativeCheck);
+      if (degradedRealtimeOnly) {
+        logger.warn('degradable realtime native check failed; continuing with PCM/ws fallback available', nativeCheck);
       } else {
         let detail: string;
         if (nativeCheck.crashedModule) {

@@ -18,6 +18,29 @@ vi.mock('../../config/config-manager.js', () => ({
   },
 }));
 
+vi.mock('@discordjs/opus', () => ({
+  OpusEncoder: class {
+    setBitrate(): void {}
+    encode(buffer: Buffer): Buffer {
+      return Buffer.from(buffer);
+    }
+    decode(buffer: Buffer): Buffer {
+      return Buffer.from(buffer);
+    }
+  },
+  default: {
+    OpusEncoder: class {
+      setBitrate(): void {}
+      encode(buffer: Buffer): Buffer {
+        return Buffer.from(buffer);
+      }
+      decode(buffer: Buffer): Buffer {
+        return Buffer.from(buffer);
+      }
+    },
+  },
+}));
+
 vi.mock('../RtcDataAudioManager.js', () => ({
   buildRtcDataAudioConnectivityHints: () => mockGetConnectivityHints(),
   RtcDataAudioManager: class {
@@ -102,6 +125,11 @@ describe('RealtimeTransportManager', () => {
     expect(session.selectionReason).toBe('default-rtc-data-audio');
     expect(session.forcedCompatibilityMode).toBe(false);
     expect(session.offers.map((offer) => offer.transport)).toEqual(['rtc-data-audio', 'ws-compat']);
+    expect(session.audioCodecPolicy).toMatchObject({
+      preference: 'auto',
+      resolvedCodec: 'pcm-s16le',
+      fallbackReason: 'client-opus-unavailable',
+    });
   });
 
   it('returns ws-compat only when server policy forces compatibility mode', async () => {
@@ -165,6 +193,21 @@ describe('RealtimeTransportManager', () => {
         targetMs: 220,
       }),
     }));
+  });
+
+  it('resolves Opus when the client advertises matching codec capability', async () => {
+    const manager = await createManager();
+    const session = await manager.issueSession(createIssueSessionParams({
+      audioCodecPreference: 'auto',
+      audioCodecCapabilities: {
+        opus: { decode: true, sampleRates: [48000, 24000, 16000, 12000] },
+        pcmS16le: true,
+      },
+    }));
+
+    expect(session.audioCodecPolicy.resolvedCodec).toBe('opus');
+    expect(session.audioCodecPolicy.bitrateBps).toBe(32000);
+    expect(session.audioCodecPolicy.frameDurationMs).toBe(10);
   });
 
   it('falls back to ws-compat when rtc-data-audio is unavailable', async () => {

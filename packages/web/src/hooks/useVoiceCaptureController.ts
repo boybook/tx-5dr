@@ -3,7 +3,9 @@ import {
   resolveVoiceTxBufferPolicy,
   VoiceTxBufferPreferenceSchema,
   type EngineMode,
+  type RealtimeAudioCodecPreference,
   type RealtimeTransportKind,
+  type ResolvedRealtimeAudioCodecPolicy,
   type ResolvedVoiceTxBufferPolicy,
   type VoiceTxBufferPreference,
 } from '@tx5dr/contracts';
@@ -12,6 +14,10 @@ import { VoiceCapture, type VoiceCaptureState } from '../audio/VoiceCapture';
 import { createLogger } from '../utils/logger';
 import { presentRealtimeConnectivityFailure } from '../realtime/realtimeConnectivity';
 import type { VoiceTxLocalDiagnostics } from '../audio/voiceTxDiagnostics';
+import {
+  loadRealtimeAudioCodecPreference,
+  saveRealtimeAudioCodecPreference,
+} from '../audio/realtimeAudioCodec';
 
 const logger = createLogger('useVoiceCaptureController');
 const VOICE_TX_BUFFER_PREFERENCE_STORAGE_KEY = 'tx5dr.voiceTx.bufferPreference';
@@ -26,12 +32,15 @@ export interface VoiceCaptureController {
   txBufferPreference: VoiceTxBufferPreference;
   resolvedTxBufferPolicy: ResolvedVoiceTxBufferPolicy;
   activeTxBufferPolicy: ResolvedVoiceTxBufferPolicy | null;
+  audioCodecPreference: RealtimeAudioCodecPreference;
+  activeAudioCodecPolicy: ResolvedRealtimeAudioCodecPolicy | null;
   getInputLevel: () => number;
   getDiagnostics: () => VoiceTxLocalDiagnostics | null;
   startFromGesture: () => Promise<string | null>;
   switchTransportFromGesture: (transport: RealtimeTransportKind) => Promise<void>;
   setPreferredTransport: (transport: RealtimeTransportKind) => void;
   setTxBufferPreference: (preference: VoiceTxBufferPreference) => void;
+  setAudioCodecPreference: (preference: RealtimeAudioCodecPreference) => void;
   setPTTActive: (active: boolean) => void;
   stop: () => void;
 }
@@ -76,6 +85,7 @@ export function useVoiceCaptureController(
   const captureRef = useRef<VoiceCapture | null>(null);
   const preferredTransportRef = useRef<RealtimeTransportKind>('rtc-data-audio');
   const txBufferPreferenceRef = useRef<VoiceTxBufferPreference>(loadTxBufferPreference());
+  const audioCodecPreferenceRef = useRef<RealtimeAudioCodecPreference>(loadRealtimeAudioCodecPreference());
 
   const [captureState, setCaptureState] = useState<VoiceCaptureState>('idle');
   const [preferredTransport, setPreferredTransportState] = useState<RealtimeTransportKind>('rtc-data-audio');
@@ -84,6 +94,8 @@ export function useVoiceCaptureController(
   const [isPTTActive, setIsPTTActiveState] = useState(false);
   const [txBufferPreference, setTxBufferPreferenceState] = useState<VoiceTxBufferPreference>(() => txBufferPreferenceRef.current);
   const [activeTxBufferPolicy, setActiveTxBufferPolicy] = useState<ResolvedVoiceTxBufferPolicy | null>(null);
+  const [audioCodecPreference, setAudioCodecPreferenceState] = useState<RealtimeAudioCodecPreference>(() => audioCodecPreferenceRef.current);
+  const [activeAudioCodecPolicy, setActiveAudioCodecPolicy] = useState<ResolvedRealtimeAudioCodecPolicy | null>(null);
 
   const syncFromCapture = useCallback(() => {
     const capture = captureRef.current;
@@ -92,6 +104,7 @@ export function useVoiceCaptureController(
     setParticipantIdentity(capture?.participantIdentity ?? null);
     setIsPTTActiveState(capture?.isPTTActive ?? false);
     setActiveTxBufferPolicy(capture?.currentTxBufferPolicy ?? null);
+    setActiveAudioCodecPolicy(capture?.currentAudioCodecPolicy ?? null);
   }, []);
 
   const setPreferredTransport = useCallback((transport: RealtimeTransportKind) => {
@@ -107,6 +120,21 @@ export function useVoiceCaptureController(
     txBufferPreferenceRef.current = parsed.data;
     setTxBufferPreferenceState(parsed.data);
     saveTxBufferPreference(parsed.data);
+
+    const capture = captureRef.current;
+    if (capture?.captureState === 'capturing' && !capture.isPTTActive) {
+      capture.stop();
+      syncFromCapture();
+    }
+  }, [syncFromCapture]);
+
+  const setAudioCodecPreference = useCallback((preference: RealtimeAudioCodecPreference) => {
+    if (preference !== 'auto' && preference !== 'opus' && preference !== 'pcm') {
+      return;
+    }
+    audioCodecPreferenceRef.current = preference;
+    setAudioCodecPreferenceState(preference);
+    saveRealtimeAudioCodecPreference(preference);
 
     const capture = captureRef.current;
     if (capture?.captureState === 'capturing' && !capture.isPTTActive) {
@@ -137,6 +165,7 @@ export function useVoiceCaptureController(
     await capture.startFromGesture({
       transportOverride: resolveTransportOverride(preferredTransportRef.current),
       voiceTxBufferPreference: txBufferPreferenceRef.current,
+      audioCodecPreference: audioCodecPreferenceRef.current,
     });
     syncFromCapture();
     return capture.participantIdentity;
@@ -171,6 +200,7 @@ export function useVoiceCaptureController(
       setParticipantIdentity(null);
       setIsPTTActiveState(false);
       setActiveTxBufferPolicy(null);
+      setActiveAudioCodecPolicy(null);
       return;
     }
 
@@ -200,6 +230,7 @@ export function useVoiceCaptureController(
       setParticipantIdentity(null);
       setIsPTTActiveState(false);
       setActiveTxBufferPolicy(null);
+      setActiveAudioCodecPolicy(null);
     };
   }, [engineMode, radioService, switchTransportFromGesture, syncFromCapture]);
 
@@ -217,27 +248,33 @@ export function useVoiceCaptureController(
     txBufferPreference,
     resolvedTxBufferPolicy,
     activeTxBufferPolicy,
+    audioCodecPreference,
+    activeAudioCodecPolicy,
     getInputLevel,
     getDiagnostics,
     startFromGesture,
     switchTransportFromGesture,
     setPreferredTransport,
     setTxBufferPreference,
+    setAudioCodecPreference,
     setPTTActive,
     stop,
   }), [
     activeTransport,
     activeTxBufferPolicy,
+    activeAudioCodecPolicy,
     captureState,
     getInputLevel,
     getDiagnostics,
     isPTTActive,
     participantIdentity,
     preferredTransport,
+    audioCodecPreference,
     resolvedTxBufferPolicy,
     setPTTActive,
     setPreferredTransport,
     setTxBufferPreference,
+    setAudioCodecPreference,
     startFromGesture,
     stop,
     switchTransportFromGesture,

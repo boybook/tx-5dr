@@ -233,7 +233,11 @@ export class VoiceTxOutputPipeline {
           queuedAudioMs: this.getQueuedMs(sink.outputSampleRate),
         });
       } else if (consumed.meta) {
-        const outputBufferedMs = this.getQueuedMs(sink.outputSampleRate) + chunkMs;
+        // This is the device-side delay for the chunk just written. The
+        // remaining software jitter queue has already contributed to
+        // queueWaitMs/serverPipelineMs for its own frames, so including it here
+        // would double-count TX latency in diagnostics.
+        const outputBufferedMs = chunkMs;
         const queueWaitMs = consumed.enqueuedAt === null ? 0 : Math.max(0, writeAt - consumed.enqueuedAt);
         const serverPipelineMs = Math.max(0, writeAt - consumed.meta.serverReceivedAtMs);
         const endToEndMs = typeof consumed.meta.clientSentAtMs === 'number'

@@ -256,7 +256,7 @@ codesign --force --sign "Developer ID Application: JUNXUAN BAO (85SV63Z4H5)" \
 
 ## Realtime DataChannel Native Addon
 
-`rtc-data-audio` uses `node-datachannel`, a native N-API addon backed by libdatachannel. Install dependencies on the target platform/architecture before packaging so the correct prebuilt binary is present.
+`rtc-data-audio` uses `node-datachannel`, a native N-API addon backed by libdatachannel. Realtime Opus uses the optional native `@discordjs/opus` package. Install dependencies on the target platform/architecture before packaging so the correct prebuilt binaries are present.
 
 The DataChannel signaling WebSocket is same-origin at `/api/realtime/rtc-data-audio`. Media normally uses one fixed UDP port for easier LAN tunneling/NAT mapping:
 
@@ -268,6 +268,8 @@ RTC_DATA_AUDIO_ICE_UDP_MUX=1
 If `RTC_DATA_AUDIO_UDP_PORT` is not set, the server defaults to the fixed port `50110`. Use one UDP port per server instance; for parallel local instances, set a different `RTC_DATA_AUDIO_UDP_PORT` before startup.
 
 For FRP or static NAT, map one UDP port from the public/VPS side to the server's local UDP port, then set the public hostname/IP and public UDP port in Settings -> Monitoring / Voice Server -> WebRTC Data Audio external UDP address. Leave the host empty for LAN-only deployments or to disable public ICE candidate publishing. These settings affect new or reconnected sessions; active sessions are not hot-updated.
+
+Codec negotiation is independent of the transport and does not add ports. Browser WebCodecs plus server `@discordjs/opus` enable Opus by default; if either side cannot load Opus, the session resolves to PCM on the same `rtc-data-audio` or `ws-compat` connection. Native-module checks treat both `node-datachannel` and `@discordjs/opus` as degradable realtime dependencies. Docker and Linux packages declare `libopus`/`libopus0` as a runtime dependency, and macOS Electron packaging signs all bundled `.node` addons before notarization.
 
 Required validation per platform:
 

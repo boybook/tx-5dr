@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@tx5dr/core';
 import type {
   RealtimeVoiceTxBottleneckStage,
@@ -12,6 +12,9 @@ import { createLogger } from '../utils/logger';
 const logger = createLogger('useVoiceTxDiagnostics');
 const ACTIVE_POLL_INTERVAL_MS = 250;
 const IDLE_POLL_INTERVAL_MS = 1000;
+const UNDERRUN_TREND_WINDOW_MS = 4_000;
+const UNDERRUN_TREND_MIN_DELTA = 3;
+const UNDERRUN_TREND_MIN_RISING_STEPS = 2;
 
 export interface VoiceTxDiagnosticsData extends RealtimeVoiceTxStatsResponse {
   client: VoiceTxLocalDiagnostics | null;
@@ -31,6 +34,7 @@ export interface VoiceTxDiagnosticsData extends RealtimeVoiceTxStatsResponse {
     outputBufferedMs: number | null;
     droppedFrames: number;
     underrunCount: number;
+    underrunIncreasingTrend: boolean;
     clockReliable: boolean;
     bottleneckStage: RealtimeVoiceTxBottleneckStage | null;
     transport: RealtimeTransportKind | null;
@@ -89,15 +93,56 @@ export function useVoiceTxDiagnostics(
 ): VoiceTxDiagnosticsData | null {
   const [serverStats, setServerStats] = useState<RealtimeVoiceTxStatsResponse | null>(null);
   const [clientStats, setClientStats] = useState<VoiceTxLocalDiagnostics | null>(null);
+  const [underrunIncreasingTrend, setUnderrunIncreasingTrend] = useState(false);
+  const underrunHistoryRef = useRef<Array<{ at: number; count: number }>>([]);
 
   useEffect(() => {
     if (!enabled) {
       setServerStats(null);
       setClientStats(null);
+      setUnderrunIncreasingTrend(false);
+      underrunHistoryRef.current = [];
       return;
     }
 
     let cancelled = false;
+
+    const recordUnderrunSample = (count: number, active: boolean) => {
+      if (!active) {
+        underrunHistoryRef.current = [];
+        setUnderrunIncreasingTrend(false);
+        return;
+      }
+
+      const now = Date.now();
+      const history = underrunHistoryRef.current;
+      const previous = history[history.length - 1];
+      if (previous && count < previous.count) {
+        history.length = 0;
+      }
+
+      history.push({ at: now, count });
+      while (history.length > 0 && now - history[0]!.at > UNDERRUN_TREND_WINDOW_MS) {
+        history.shift();
+      }
+
+      const first = history[0];
+      const latest = history[history.length - 1];
+      let risingSteps = 0;
+      for (let index = 1; index < history.length; index += 1) {
+        if (history[index]!.count > history[index - 1]!.count) {
+          risingSteps += 1;
+        }
+      }
+
+      const increasing = Boolean(
+        first
+        && latest
+        && latest.count - first.count >= UNDERRUN_TREND_MIN_DELTA
+        && risingSteps >= UNDERRUN_TREND_MIN_RISING_STEPS,
+      );
+      setUnderrunIncreasingTrend(increasing);
+    };
 
     const tick = async () => {
       const localStats = voiceCaptureController?.getDiagnostics() ?? null;
@@ -109,6 +154,7 @@ export function useVoiceTxDiagnostics(
         const response = await api.getRealtimeVoiceTxStats('radio');
         if (!cancelled) {
           setServerStats(response);
+          recordUnderrunSample(response.serverIngress.underrunCount, response.summary.active);
         }
       } catch (error) {
         logger.debug('Failed to poll realtime voice TX stats', error);
@@ -276,10 +322,11 @@ export function useVoiceTxDiagnostics(
         outputBufferedMs,
         droppedFrames,
         underrunCount,
+        underrunIncreasingTrend,
         clockReliable,
         bottleneckStage,
         transport,
       },
     };
-  }, [clientStats, serverStats, voiceCaptureController?.activeTransport, voiceCaptureController?.isPTTActive]);
+  }, [clientStats, serverStats, underrunIncreasingTrend, voiceCaptureController?.activeTransport, voiceCaptureController?.isPTTActive]);
 }

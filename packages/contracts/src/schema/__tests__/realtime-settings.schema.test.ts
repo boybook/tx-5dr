@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   RealtimeSessionRequestSchema,
+  ResolvedRealtimeAudioCodecPolicySchema,
   RealtimeTransportKindSchema,
   RealtimeSettingsSchema,
   resolveVoiceTxBufferPolicy,
@@ -18,6 +19,58 @@ describe('Realtime transport schemas', () => {
       direction: 'recv',
       transportOverride: retiredTransport,
     })).toThrow();
+  });
+});
+
+describe('Realtime audio codec schemas', () => {
+  it('accepts codec preferences and client capabilities', () => {
+    const parsed = RealtimeSessionRequestSchema.parse({
+      scope: 'radio',
+      direction: 'recv',
+      audioCodecPreference: 'opus',
+      audioCodecCapabilities: {
+        opus: {
+          decode: true,
+          sampleRates: [48000, 24000, 16000, 12000],
+          encodeSampleRates: [16000],
+          decodeSampleRates: [48000, 24000, 16000, 12000],
+        },
+        pcmS16le: true,
+      },
+    });
+
+    expect(parsed.audioCodecPreference).toBe('opus');
+    expect(parsed.audioCodecCapabilities?.opus?.decode).toBe(true);
+    expect(parsed.audioCodecCapabilities?.opus?.encodeSampleRates).toEqual([16000]);
+  });
+
+  it('defaults old clients to automatic codec negotiation', () => {
+    const parsed = RealtimeSessionRequestSchema.parse({
+      scope: 'radio',
+      direction: 'recv',
+    });
+
+    expect(parsed.audioCodecPreference).toBe('auto');
+  });
+
+  it('describes resolved Opus and PCM fallback policies', () => {
+    expect(ResolvedRealtimeAudioCodecPolicySchema.parse({
+      preference: 'auto',
+      resolvedCodec: 'opus',
+      fallbackReason: null,
+      codecSampleRate: null,
+      bitrateBps: 32000,
+      frameDurationMs: 10,
+    }).resolvedCodec).toBe('opus');
+
+    expect(ResolvedRealtimeAudioCodecPolicySchema.parse({
+      preference: 'opus',
+      resolvedCodec: 'pcm-s16le',
+      fallbackReason: 'server-opus-unavailable',
+      codecSampleRate: null,
+      bitrateBps: null,
+      frameDurationMs: null,
+    }).fallbackReason).toBe('server-opus-unavailable');
   });
 });
 

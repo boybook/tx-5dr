@@ -239,6 +239,12 @@ rm -rf "$NM/node-datachannel/src" \
     "$NM/node-datachannel/CMakeLists.txt" \
     "$NM/node-datachannel/BULDING.md" \
     "$NM/node-datachannel/rollup.config.mjs" 2>/dev/null || true
+# @discordjs/opus runtime only needs lib/, package.json and prebuild/*.node.
+rm -rf "$NM/@discordjs/opus/src" \
+    "$NM/@discordjs/opus/deps" \
+    "$NM/@discordjs/opus/typings" \
+    "$NM/@discordjs/opus/node_modules" \
+    "$NM/@discordjs/opus/binding.gyp" 2>/dev/null || true
 
 # 3. Clean .npm cache dirs
 find "$NM" -type d -name ".npm" -exec rm -rf {} + 2>/dev/null || true
@@ -269,6 +275,11 @@ case "$ARCH" in
     amd64) KEEP_PREBUILD="linux-x64" ;;
     arm64) KEEP_PREBUILD="linux-arm64" ;;
 esac
+KEEP_OPUS_NEEDLE=""
+case "$ARCH" in
+    amd64) KEEP_OPUS_NEEDLE="-linux-x64-" ;;
+    arm64) KEEP_OPUS_NEEDLE="-linux-arm64-" ;;
+esac
 
 for prebuilds_dir in \
     "$NM/wsjtx-lib/prebuilds" \
@@ -294,6 +305,19 @@ if [[ "$ARCH" == "amd64" ]]; then
     find "$NM" -path "*/prebuilds/linux-arm64" -type d -exec rm -rf {} + 2>/dev/null || true
 elif [[ "$ARCH" == "arm64" ]]; then
     find "$NM" -path "*/prebuilds/linux-x64" -type d -exec rm -rf {} + 2>/dev/null || true
+fi
+
+# @discordjs/opus uses singular "prebuild" directories named by Node ABI,
+# platform and arch, e.g. node-v127-napi-v3-linux-x64-glibc-2.39.
+OPUS_PREBUILD_DIR="$NM/@discordjs/opus/prebuild"
+if [[ -n "$KEEP_OPUS_NEEDLE" && -d "$OPUS_PREBUILD_DIR" ]]; then
+    for subdir in "$OPUS_PREBUILD_DIR"/*/; do
+        [[ -d "$subdir" ]] || continue
+        dir_name=$(basename "$subdir")
+        if [[ "$dir_name" != *"$KEEP_OPUS_NEEDLE"* ]]; then
+            rm -rf "$subdir"
+        fi
+    done
 fi
 
 # --- Copy web static files ---
@@ -344,15 +368,17 @@ build_package() {
     rm -f "$OUTPUT_DIR"/tx5dr*"${VERSION}"*"${ARCH}"*."${format}" 2>/dev/null || true
 
     # Package names differ between deb (Debian/Ubuntu) and rpm (Fedora/RHEL)
-    local alsa_dep nginx_dep hamlib_dep pulse_dep
+    local alsa_dep nginx_dep hamlib_dep pulse_dep opus_dep
     if [[ "$format" == "rpm" ]]; then
         alsa_dep="alsa-lib"
         hamlib_dep="hamlib"
         pulse_dep="pulseaudio-libs"
+        opus_dep="opus"
     else
         alsa_dep="libasound2"
         hamlib_dep="libhamlib4"
         pulse_dep="libpulse0"
+        opus_dep="libopus0"
     fi
 
     local extra_flags=()
@@ -372,6 +398,7 @@ build_package() {
         --depends "$alsa_dep" \
         --depends "$pulse_dep" \
         --depends "$hamlib_dep" \
+        --depends "$opus_dep" \
         --after-install "$PROJECT_ROOT/linux/postinstall.sh" \
         --before-remove "$PROJECT_ROOT/linux/preremove.sh" \
         --config-files /etc/tx5dr/config.env \
