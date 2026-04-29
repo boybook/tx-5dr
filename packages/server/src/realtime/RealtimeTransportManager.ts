@@ -7,9 +7,10 @@ import type {
   RealtimeTransportKind,
   RealtimeTransportOffer,
   UserRole,
+  ResolvedVoiceTxBufferPolicy,
+  VoiceTxBufferPreference,
 } from '@tx5dr/contracts';
-import { UserRole as UserRoleEnum } from '@tx5dr/contracts';
-import { USER_ROLE_LEVEL } from '@tx5dr/contracts';
+import { resolveVoiceTxBufferPolicy, UserRole as UserRoleEnum, USER_ROLE_LEVEL } from '@tx5dr/contracts';
 import { float32ToInt16Pcm, encodeWsCompatAudioFrame, decodeWsCompatAudioFrame, int16ToFloat32Pcm } from '@tx5dr/core';
 import { ConfigManager } from '../config/config-manager.js';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
@@ -31,6 +32,7 @@ interface CompatSessionRecord {
   direction: RealtimeSessionDirection;
   previewSessionId?: string;
   participantIdentity: string | null;
+  voiceTxBufferPolicy?: ResolvedVoiceTxBufferPolicy;
   expiresAt: number;
 }
 
@@ -56,6 +58,7 @@ export interface IssueRealtimeSessionParams {
   previewSessionId?: string;
   requestHeaders?: Record<string, string | string[] | undefined>;
   requestProtocol?: string;
+  voiceTxBufferPreference?: VoiceTxBufferPreference;
 }
 
 function buildCompatIdentity(direction: RealtimeSessionDirection, stablePart: string): string {
@@ -106,10 +109,13 @@ export class RealtimeTransportManager {
     );
     const forceCompat = selection.forcedCompatibilityMode;
     const preferredTransport = selection.transport;
+    const voiceTxBufferPolicy = params.direction === 'send'
+      ? resolveVoiceTxBufferPolicy(params.voiceTxBufferPreference)
+      : undefined;
 
-    const compatOffer = this.buildCompatOffer(params);
+    const compatOffer = this.buildCompatOffer(params, voiceTxBufferPolicy);
     const rtcDataAudioOffer = !forceCompat && (preferredTransport === 'rtc-data-audio' || (!params.transportOverride && params.scope === 'radio'))
-      ? await this.rtcDataAudioManager.buildOffer(params)
+      ? await this.rtcDataAudioManager.buildOffer({ ...params, voiceTxBufferPolicy })
       : null;
 
     const offers: RealtimeTransportOffer[] = [];
@@ -158,6 +164,7 @@ export class RealtimeTransportManager {
       forcedCompatibilityMode: forceCompat,
       offers,
       connectivityHints: hints,
+      ...(voiceTxBufferPolicy ? { voiceTxBufferPolicy } : {}),
     };
   }
 
@@ -325,6 +332,7 @@ export class RealtimeTransportManager {
             serverReceivedAtMs,
             sampleRate: decoded.sampleRate,
             samplesPerChannel: decoded.samplesPerChannel,
+            ...(session.voiceTxBufferPolicy ? { voiceTxBufferPolicy: session.voiceTxBufferPolicy } : {}),
           };
           void this.engine.getVoiceSessionManager()?.handleParticipantAudioFrame(meta, float32);
         } catch (error) {
@@ -417,7 +425,10 @@ export class RealtimeTransportManager {
     };
   }
 
-  private buildCompatOffer(params: IssueRealtimeSessionParams): RealtimeTransportOffer {
+  private buildCompatOffer(
+    params: IssueRealtimeSessionParams,
+    voiceTxBufferPolicy?: ResolvedVoiceTxBufferPolicy,
+  ): RealtimeTransportOffer {
     if (params.direction === 'send' && USER_ROLE_LEVEL[params.role] < USER_ROLE_LEVEL[UserRoleEnum.OPERATOR]) {
       throw new Error('Operator role or above is required to publish audio');
     }
@@ -433,6 +444,7 @@ export class RealtimeTransportManager {
       direction: params.direction,
       previewSessionId: params.previewSessionId,
       participantIdentity,
+      ...(voiceTxBufferPolicy ? { voiceTxBufferPolicy } : {}),
       expiresAt: Date.now() + COMPAT_TOKEN_TTL_MS,
     });
 

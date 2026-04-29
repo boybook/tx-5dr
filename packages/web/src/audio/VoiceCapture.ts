@@ -1,4 +1,11 @@
-import type { RealtimeConnectivityHints, RealtimeTransportOffer, RealtimeTransportKind } from '@tx5dr/contracts';
+import {
+  resolveVoiceTxBufferPolicy,
+  type RealtimeConnectivityHints,
+  type RealtimeTransportOffer,
+  type RealtimeTransportKind,
+  type ResolvedVoiceTxBufferPolicy,
+  type VoiceTxBufferPreference,
+} from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger';
 import { normalizeWsUrl } from '../utils/config';
 import {
@@ -39,6 +46,7 @@ export interface VoiceCaptureOptions {
 
 interface VoiceCaptureStartOptions {
   transportOverride?: RealtimeTransportKind;
+  voiceTxBufferPreference?: VoiceTxBufferPreference;
 }
 
 interface VoiceCaptureCleanupOptions {
@@ -77,6 +85,7 @@ export class VoiceCapture {
   private readonly clockSync = new RealtimeClockSync();
   private clockSyncTimer: number | null = null;
   private uplinkSender: VoiceTxUplinkSender | null = null;
+  private activeTxBufferPolicy: ResolvedVoiceTxBufferPolicy | null = null;
 
   constructor(options: VoiceCaptureOptions) {
     this.options = options;
@@ -104,6 +113,10 @@ export class VoiceCapture {
 
   get diagnostics(): VoiceTxLocalDiagnostics {
     return this.localTxStats.getSnapshot();
+  }
+
+  get currentTxBufferPolicy(): ResolvedVoiceTxBufferPolicy | null {
+    return this.activeTxBufferPolicy;
   }
 
   async prepareCaptureFromGesture(): Promise<void> {
@@ -141,13 +154,16 @@ export class VoiceCapture {
           scope: 'radio',
           direction: 'send',
           transportOverride: options?.transportOverride,
+          voiceTxBufferPreference: options?.voiceTxBufferPreference,
           connectStage: 'connect',
-          startCompat: (offer) => this.startCompatCapture(offer),
-          startRtcDataAudio: (offer) => this.startRtcDataAudioCapture(offer),
+          startCompat: (offer, txBufferPolicy) => this.startCompatCapture(offer, txBufferPolicy),
+          startRtcDataAudio: (offer, hints, txBufferPolicy) => this.startRtcDataAudioCapture(offer, hints, txBufferPolicy),
           cleanupFailedAttempt: () => {
             this.cleanupTransportOnly({ preserveCaptureBackend: true });
           },
         });
+        this.activeTxBufferPolicy = result.voiceTxBufferPolicy
+          ?? resolveVoiceTxBufferPolicy(options?.voiceTxBufferPreference);
         if (result.fallbackUsed) {
           showRealtimeTransportFallbackToast('radio');
         }
@@ -263,7 +279,10 @@ export class VoiceCapture {
     };
   }
 
-  private async startCompatCapture(offer: RealtimeTransportOffer): Promise<void> {
+  private async startCompatCapture(
+    offer: RealtimeTransportOffer,
+    txBufferPolicy?: ResolvedVoiceTxBufferPolicy,
+  ): Promise<void> {
     const {
       mediaStream,
       audioContext,
@@ -322,6 +341,7 @@ export class VoiceCapture {
       getBufferedAmount: () => this.compatSocket?.bufferedAmount ?? null,
       estimateServerTimeMs: (clientTimeMs) => this.estimateServerTimeMs(clientTimeMs),
       getClockConfidence: () => this.getClockConfidence(),
+      txBufferPolicy,
     });
     this.uplinkSender = sender;
     this.localTxStats.reset('ws-compat');
@@ -398,6 +418,7 @@ export class VoiceCapture {
   private async startRtcDataAudioCapture(
     offer: RealtimeTransportOffer,
     hints?: RealtimeConnectivityHints,
+    txBufferPolicy?: ResolvedVoiceTxBufferPolicy,
   ): Promise<void> {
     const {
       mediaStream,
@@ -429,6 +450,7 @@ export class VoiceCapture {
       getBufferedAmount: () => client.bufferedAmount,
       estimateServerTimeMs: (clientTimeMs) => this.estimateServerTimeMs(clientTimeMs),
       getClockConfidence: () => this.getClockConfidence(),
+      txBufferPolicy,
     });
     this.uplinkSender = sender;
     this.localTxStats.reset('rtc-data-audio');
@@ -594,6 +616,7 @@ export class VoiceCapture {
 
     this.transportKind = null;
     this._participantIdentity = null;
+    this.activeTxBufferPolicy = null;
     this.uplinkSender = null;
     this.stopClockSync();
     this.localTxStats.reset(null);

@@ -9,6 +9,123 @@ export type RealtimeTransportKind = z.infer<typeof RealtimeTransportKindSchema>;
 export const RealtimeSessionDirectionSchema = z.enum(['recv', 'send']);
 export type RealtimeSessionDirection = z.infer<typeof RealtimeSessionDirectionSchema>;
 
+export const VoiceTxBufferProfileSchema = z.enum(['low-latency', 'balanced', 'stable', 'custom']);
+export type VoiceTxBufferProfile = z.infer<typeof VoiceTxBufferProfileSchema>;
+
+export const VoiceTxCustomTargetBufferMsSchema = z.preprocess((value) => {
+  if (value === '' || value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : value;
+  }
+  return value;
+}, z.number().int().min(40).max(500).optional());
+
+export const VoiceTxBufferPreferenceSchema = z.object({
+  profile: VoiceTxBufferProfileSchema.default('balanced'),
+  customTargetBufferMs: VoiceTxCustomTargetBufferMsSchema,
+}).superRefine((value, ctx) => {
+  if (value.profile === 'custom' && typeof value.customTargetBufferMs !== 'number') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['customTargetBufferMs'],
+      message: 'Custom TX buffer target is required for custom profile',
+    });
+  }
+});
+export type VoiceTxBufferPreference = z.infer<typeof VoiceTxBufferPreferenceSchema>;
+
+export const ResolvedVoiceTxBufferPolicySchema = z.object({
+  profile: VoiceTxBufferProfileSchema,
+  targetMs: z.number().int().min(1),
+  minMs: z.number().int().min(1),
+  maxMs: z.number().int().min(1),
+  headroomMs: z.number().int().min(1),
+  staleFrameMs: z.number().int().min(1),
+  uplinkMaxBufferedAudioMs: z.number().int().min(1),
+  uplinkDegradedBufferedAudioMs: z.number().int().min(1),
+});
+export type ResolvedVoiceTxBufferPolicy = z.infer<typeof ResolvedVoiceTxBufferPolicySchema>;
+
+export const DEFAULT_VOICE_TX_BUFFER_PROFILE: VoiceTxBufferProfile = 'balanced';
+
+const VOICE_TX_BUFFER_PRESETS: Record<Exclude<VoiceTxBufferProfile, 'custom'>, ResolvedVoiceTxBufferPolicy> = {
+  'low-latency': {
+    profile: 'low-latency',
+    targetMs: 40,
+    minMs: 30,
+    maxMs: 140,
+    headroomMs: 20,
+    staleFrameMs: 220,
+    uplinkMaxBufferedAudioMs: 80,
+    uplinkDegradedBufferedAudioMs: 200,
+  },
+  balanced: {
+    profile: 'balanced',
+    targetMs: 90,
+    minMs: 60,
+    maxMs: 240,
+    headroomMs: 40,
+    staleFrameMs: 450,
+    uplinkMaxBufferedAudioMs: 180,
+    uplinkDegradedBufferedAudioMs: 360,
+  },
+  stable: {
+    profile: 'stable',
+    targetMs: 170,
+    minMs: 120,
+    maxMs: 420,
+    headroomMs: 80,
+    staleFrameMs: 850,
+    uplinkMaxBufferedAudioMs: 340,
+    uplinkDegradedBufferedAudioMs: 680,
+  },
+};
+
+function clampVoiceTxBufferValue(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+export function resolveVoiceTxBufferPolicy(
+  preference?: VoiceTxBufferPreference | null,
+): ResolvedVoiceTxBufferPolicy {
+  const parsedPreference = preference
+    ? VoiceTxBufferPreferenceSchema.safeParse(preference)
+    : null;
+  const normalizedPreference = parsedPreference?.success
+    ? parsedPreference.data
+    : { profile: DEFAULT_VOICE_TX_BUFFER_PROFILE as VoiceTxBufferProfile };
+
+  if (normalizedPreference.profile !== 'custom') {
+    return { ...VOICE_TX_BUFFER_PRESETS[normalizedPreference.profile] };
+  }
+
+  const targetMs = clampVoiceTxBufferValue(normalizedPreference.customTargetBufferMs ?? 90, 40, 500);
+  const minMs = clampVoiceTxBufferValue(targetMs * 0.65, 30, targetMs);
+  const maxMs = clampVoiceTxBufferValue(targetMs * 2.5, targetMs + 40, 900);
+  const headroomMs = clampVoiceTxBufferValue(targetMs * 0.45, 20, 180);
+  const staleFrameMs = clampVoiceTxBufferValue(targetMs * 5, maxMs + 80, 1800);
+  const uplinkMaxBufferedAudioMs = clampVoiceTxBufferValue(targetMs * 2, 80, 1000);
+  const uplinkDegradedBufferedAudioMs = clampVoiceTxBufferValue(
+    targetMs * 4,
+    uplinkMaxBufferedAudioMs + 60,
+    2000,
+  );
+
+  return {
+    profile: 'custom',
+    targetMs,
+    minMs,
+    maxMs,
+    headroomMs,
+    staleFrameMs,
+    uplinkMaxBufferedAudioMs,
+    uplinkDegradedBufferedAudioMs,
+  };
+}
+
 export const RealtimeConnectivityErrorCodeSchema = z.enum([
   'TOKEN_REQUEST_FAILED',
   'SIGNALING_UNREACHABLE',
@@ -51,6 +168,7 @@ export const RealtimeSessionRequestSchema = z.object({
   direction: RealtimeSessionDirectionSchema,
   previewSessionId: z.string().optional(),
   transportOverride: RealtimeTransportKindSchema.optional(),
+  voiceTxBufferPreference: VoiceTxBufferPreferenceSchema.optional(),
 });
 
 export type RealtimeSessionRequest = z.infer<typeof RealtimeSessionRequestSchema>;
@@ -152,6 +270,7 @@ export const RealtimeSessionResponseSchema = z.object({
   forcedCompatibilityMode: z.boolean(),
   offers: z.array(RealtimeTransportOfferSchema).min(1),
   connectivityHints: RealtimeConnectivityHintsSchema,
+  voiceTxBufferPolicy: ResolvedVoiceTxBufferPolicySchema.optional(),
 });
 
 export type RealtimeSessionResponse = z.infer<typeof RealtimeSessionResponseSchema>;

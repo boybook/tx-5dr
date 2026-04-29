@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { resolveVoiceTxBufferPolicy, type ResolvedVoiceTxBufferPolicy } from '@tx5dr/contracts';
 import { VoiceTxOutputPipeline, type VoiceTxOutputSinkState } from '../VoiceTxOutputPipeline.js';
 import type { VoiceTxOutputObserver } from '../AudioStreamManager.js';
 import type { VoiceTxFrameMeta } from '../../voice/VoiceTxDiagnostics.js';
@@ -10,7 +11,11 @@ const sink: VoiceTxOutputSinkState = {
   outputBufferSize: 480,
 };
 
-function createMeta(sequence: number, clientSentAtMs: number | null = Date.now()): VoiceTxFrameMeta {
+function createMeta(
+  sequence: number,
+  clientSentAtMs: number | null = Date.now(),
+  voiceTxBufferPolicy: ResolvedVoiceTxBufferPolicy = resolveVoiceTxBufferPolicy({ profile: 'low-latency' }),
+): VoiceTxFrameMeta {
   return {
     transport: 'rtc-data-audio',
     participantIdentity: 'rtc-data-send:test',
@@ -19,6 +24,7 @@ function createMeta(sequence: number, clientSentAtMs: number | null = Date.now()
     serverReceivedAtMs: Date.now(),
     sampleRate: 16000,
     samplesPerChannel: 160,
+    voiceTxBufferPolicy,
   };
 }
 
@@ -82,5 +88,28 @@ describe('VoiceTxOutputPipeline', () => {
 
     expect(dropped).toEqual(['stale']);
     expect(pipeline.getQueuedMs(sink.outputSampleRate)).toBe(0);
+  });
+
+  it('uses the selected TX buffer policy to allow larger stable queues', () => {
+    const dropped: string[] = [];
+    const observer: VoiceTxOutputObserver = {
+      onFrameDropped: ({ reason }) => {
+        dropped.push(reason);
+      },
+    };
+    const pipeline = new VoiceTxOutputPipeline({
+      getSinkState: () => sink,
+      getObserver: () => observer,
+      getVolumeGain: () => 1,
+      writeOutputChunk: () => true,
+    });
+    const stablePolicy = resolveVoiceTxBufferPolicy({ profile: 'stable' });
+
+    for (let index = 0; index < 20; index += 1) {
+      pipeline.ingest(createInputFrame(), 16000, createMeta(index, Date.now(), stablePolicy));
+    }
+    pipeline.clear();
+
+    expect(dropped).not.toContain('jitter-trim');
   });
 });

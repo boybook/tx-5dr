@@ -1,19 +1,16 @@
 import { performance } from 'node:perf_hooks';
+import { resolveVoiceTxBufferPolicy, type ResolvedVoiceTxBufferPolicy } from '@tx5dr/contracts';
 import { StreamingLinearResampler } from '../realtime/StreamingAudioResampler.js';
 import type { VoiceTxFrameMeta } from '../voice/VoiceTxDiagnostics.js';
 import type { VoiceTxOutputObserver } from './AudioStreamManager.js';
 
-const TARGET_INITIAL_MS = 40;
-const TARGET_MIN_MS = 30;
-const TARGET_MAX_MS = 140;
-const TARGET_HEADROOM_MS = 20;
-const STALE_FRAME_MS = 200;
 const TARGET_INCREASE_MS = 20;
 const TARGET_DECREASE_MS = 10;
 const TARGET_INCREASE_COOLDOWN_MS = 1000;
 const TARGET_DECREASE_AFTER_MS = 5000;
 const TARGET_DECREASE_COOLDOWN_MS = 3000;
 const MAX_PLC_CHUNKS = 2;
+const DEFAULT_VOICE_TX_BUFFER_POLICY = resolveVoiceTxBufferPolicy();
 
 export interface VoiceTxOutputSinkState {
   available: boolean;
@@ -54,7 +51,9 @@ export class VoiceTxOutputPipeline {
   private outputLoopActive = false;
   private outputEnabled = true;
   private playoutStarted = false;
-  private adaptiveTargetMs = TARGET_INITIAL_MS;
+  private currentPolicy: ResolvedVoiceTxBufferPolicy = DEFAULT_VOICE_TX_BUFFER_POLICY;
+  private currentPolicySignature = this.policySignature(DEFAULT_VOICE_TX_BUFFER_POLICY);
+  private adaptiveTargetMs = DEFAULT_VOICE_TX_BUFFER_POLICY.targetMs;
   private lastUnderrunAt = 0;
   private lastTargetChangeAt = 0;
   private lastOutputWriteAt: number | null = null;
@@ -75,7 +74,8 @@ export class VoiceTxOutputPipeline {
     }
 
     const now = Date.now();
-    if (typeof meta.clientSentAtMs === 'number' && (now - meta.clientSentAtMs) > STALE_FRAME_MS) {
+    const policy = this.applyPolicy(meta.voiceTxBufferPolicy, now);
+    if (typeof meta.clientSentAtMs === 'number' && (now - meta.clientSentAtMs) > policy.staleFrameMs) {
       this.dropFrame(meta, 'stale');
       return;
     }
@@ -105,7 +105,7 @@ export class VoiceTxOutputPipeline {
       queuedAudioMs: this.getQueuedMs(sink.outputSampleRate),
     });
 
-    this.trimQueue(sink, meta);
+    this.trimQueue(sink, meta, policy);
     if (this.outputEnabled) {
       this.ensureOutputLoop();
     }
@@ -132,7 +132,9 @@ export class VoiceTxOutputPipeline {
     this.resampler = null;
     this.resamplerInputRate = 0;
     this.resamplerOutputRate = 0;
-    this.adaptiveTargetMs = TARGET_INITIAL_MS;
+    this.currentPolicy = DEFAULT_VOICE_TX_BUFFER_POLICY;
+    this.currentPolicySignature = this.policySignature(DEFAULT_VOICE_TX_BUFFER_POLICY);
+    this.adaptiveTargetMs = DEFAULT_VOICE_TX_BUFFER_POLICY.targetMs;
     this.lastUnderrunAt = 0;
     this.lastTargetChangeAt = 0;
     this.lastOutputWriteAt = null;
@@ -336,8 +338,12 @@ export class VoiceTxOutputPipeline {
     return out;
   }
 
-  private trimQueue(sink: VoiceTxOutputSinkState, meta: VoiceTxFrameMeta): void {
-    const maxQueueMs = this.adaptiveTargetMs + TARGET_HEADROOM_MS;
+  private trimQueue(
+    sink: VoiceTxOutputSinkState,
+    meta: VoiceTxFrameMeta,
+    policy = this.currentPolicy,
+  ): void {
+    const maxQueueMs = this.adaptiveTargetMs + policy.headroomMs;
     if (this.getQueuedMs(sink.outputSampleRate) <= maxQueueMs) {
       return;
     }
@@ -412,13 +418,13 @@ export class VoiceTxOutputPipeline {
     this.underrunCount += 1;
     this.lastUnderrunAt = now;
     if ((now - this.lastTargetChangeAt) >= TARGET_INCREASE_COOLDOWN_MS) {
-      this.adaptiveTargetMs = Math.min(TARGET_MAX_MS, this.adaptiveTargetMs + TARGET_INCREASE_MS);
+      this.adaptiveTargetMs = Math.min(this.currentPolicy.maxMs, this.adaptiveTargetMs + TARGET_INCREASE_MS);
       this.lastTargetChangeAt = now;
     }
   }
 
   private maybeReduceTarget(now: number): void {
-    if (this.adaptiveTargetMs <= TARGET_MIN_MS) {
+    if (this.adaptiveTargetMs <= this.currentPolicy.minMs) {
       return;
     }
     if ((now - this.lastUnderrunAt) < TARGET_DECREASE_AFTER_MS) {
@@ -427,8 +433,35 @@ export class VoiceTxOutputPipeline {
     if ((now - this.lastTargetChangeAt) < TARGET_DECREASE_COOLDOWN_MS) {
       return;
     }
-    this.adaptiveTargetMs = Math.max(TARGET_MIN_MS, this.adaptiveTargetMs - TARGET_DECREASE_MS);
+    this.adaptiveTargetMs = Math.max(this.currentPolicy.minMs, this.adaptiveTargetMs - TARGET_DECREASE_MS);
     this.lastTargetChangeAt = now;
+  }
+
+  private applyPolicy(policy: ResolvedVoiceTxBufferPolicy | undefined, now: number): ResolvedVoiceTxBufferPolicy {
+    const nextPolicy = policy ?? DEFAULT_VOICE_TX_BUFFER_POLICY;
+    const nextSignature = this.policySignature(nextPolicy);
+    if (nextSignature !== this.currentPolicySignature) {
+      this.currentPolicy = nextPolicy;
+      this.currentPolicySignature = nextSignature;
+      this.adaptiveTargetMs = nextPolicy.targetMs;
+      this.lastUnderrunAt = 0;
+      this.lastTargetChangeAt = now;
+      this.playoutStarted = false;
+    }
+    return this.currentPolicy;
+  }
+
+  private policySignature(policy: ResolvedVoiceTxBufferPolicy): string {
+    return [
+      policy.profile,
+      policy.targetMs,
+      policy.minMs,
+      policy.maxMs,
+      policy.headroomMs,
+      policy.staleFrameMs,
+      policy.uplinkMaxBufferedAudioMs,
+      policy.uplinkDegradedBufferedAudioMs,
+    ].join(':');
   }
 
   private fallbackMeta(): VoiceTxFrameMeta {
@@ -441,6 +474,7 @@ export class VoiceTxOutputPipeline {
       serverReceivedAtMs: now,
       sampleRate: 0,
       samplesPerChannel: 0,
+      voiceTxBufferPolicy: this.currentPolicy,
     };
   }
 }

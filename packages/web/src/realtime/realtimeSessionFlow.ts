@@ -5,6 +5,8 @@ import type {
   RealtimeSessionDirection,
   RealtimeTransportKind,
   RealtimeTransportOffer,
+  type ResolvedVoiceTxBufferPolicy,
+  type VoiceTxBufferPreference,
 } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger';
 import {
@@ -23,15 +25,21 @@ interface ExecuteRealtimeSessionFlowOptions {
   direction: RealtimeSessionDirection;
   previewSessionId?: string;
   transportOverride?: RealtimeTransportKind;
+  voiceTxBufferPreference?: VoiceTxBufferPreference;
   connectStage: 'connect' | 'publish' | 'subscribe';
-  startCompat: (offer: RealtimeTransportOffer) => Promise<void>;
-  startRtcDataAudio: (offer: RealtimeTransportOffer, hints?: RealtimeConnectivityHints) => Promise<void>;
+  startCompat: (offer: RealtimeTransportOffer, txBufferPolicy?: ResolvedVoiceTxBufferPolicy) => Promise<void>;
+  startRtcDataAudio: (
+    offer: RealtimeTransportOffer,
+    hints?: RealtimeConnectivityHints,
+    txBufferPolicy?: ResolvedVoiceTxBufferPolicy,
+  ) => Promise<void>;
   cleanupFailedAttempt: (options?: CleanupFailedAttemptOptions) => Promise<void> | void;
 }
 
 export interface ExecuteRealtimeSessionFlowResult {
   connectivityHints?: RealtimeConnectivityHints;
   transport: RealtimeTransportKind;
+  voiceTxBufferPolicy?: ResolvedVoiceTxBufferPolicy;
   /** true if primary transport failed and a fallback transport was used */
   fallbackUsed?: boolean;
 }
@@ -40,12 +48,13 @@ async function startOffer(
   offer: RealtimeTransportOffer,
   options: ExecuteRealtimeSessionFlowOptions,
   hints?: RealtimeConnectivityHints,
+  txBufferPolicy?: ResolvedVoiceTxBufferPolicy,
 ): Promise<void> {
   if (offer.transport === 'rtc-data-audio') {
-    await options.startRtcDataAudio(offer, hints);
+    await options.startRtcDataAudio(offer, hints, txBufferPolicy);
     return;
   }
-  await options.startCompat(offer);
+  await options.startCompat(offer, txBufferPolicy);
 }
 
 export async function executeRealtimeSessionFlow(
@@ -63,6 +72,7 @@ export async function executeRealtimeSessionFlow(
       direction: options.direction,
       ...(options.previewSessionId ? { previewSessionId: options.previewSessionId } : {}),
       ...(options.transportOverride ? { transportOverride: options.transportOverride } : {}),
+      ...(options.voiceTxBufferPreference ? { voiceTxBufferPreference: options.voiceTxBufferPreference } : {}),
     });
 
     connectivityHints = options.transportOverride === 'ws-compat'
@@ -83,10 +93,11 @@ export async function executeRealtimeSessionFlow(
       selectedTransport = offer.transport;
       errorStage = options.connectStage;
       try {
-        await startOffer(offer, options, connectivityHints);
+        await startOffer(offer, options, connectivityHints, session.voiceTxBufferPolicy);
         return {
           connectivityHints,
           transport: offer.transport,
+          ...(session.voiceTxBufferPolicy ? { voiceTxBufferPolicy: session.voiceTxBufferPolicy } : {}),
           fallbackUsed: index > 0,
         };
       } catch (attemptError) {

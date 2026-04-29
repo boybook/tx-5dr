@@ -6,8 +6,10 @@ import type {
   RealtimeSessionDirection,
   RealtimeTransportOffer,
   UserRole,
+  ResolvedVoiceTxBufferPolicy,
+  VoiceTxBufferPreference,
 } from '@tx5dr/contracts';
-import { UserRole as UserRoleEnum, USER_ROLE_LEVEL } from '@tx5dr/contracts';
+import { resolveVoiceTxBufferPolicy, UserRole as UserRoleEnum, USER_ROLE_LEVEL } from '@tx5dr/contracts';
 import {
   decodeRealtimePcmAudioFrame,
   encodeRealtimePcmAudioFrame,
@@ -52,6 +54,7 @@ interface RtcDataAudioSessionRecord {
   previewSessionId?: string;
   participantIdentity: string | null;
   participantName: string | null;
+  voiceTxBufferPolicy?: ResolvedVoiceTxBufferPolicy;
   expiresAt: number;
 }
 
@@ -64,6 +67,8 @@ export interface BuildRtcDataAudioOfferParams {
   label?: string | null;
   requestHeaders?: Record<string, string | string[] | undefined>;
   requestProtocol?: string;
+  voiceTxBufferPreference?: VoiceTxBufferPreference;
+  voiceTxBufferPolicy?: ResolvedVoiceTxBufferPolicy;
 }
 
 function buildRtcIdentity(direction: RealtimeSessionDirection, stablePart: string): string {
@@ -191,6 +196,9 @@ export class RtcDataAudioManager {
     const participantIdentity = params.direction === 'send'
       ? buildRtcIdentity(params.direction, params.tokenId || params.role.toLowerCase())
       : null;
+    const voiceTxBufferPolicy = params.direction === 'send'
+      ? (params.voiceTxBufferPolicy ?? resolveVoiceTxBufferPolicy(params.voiceTxBufferPreference))
+      : undefined;
 
     this.sessions.set(token, {
       token,
@@ -199,6 +207,7 @@ export class RtcDataAudioManager {
       previewSessionId: params.previewSessionId,
       participantIdentity,
       participantName: params.label ?? null,
+      ...(voiceTxBufferPolicy ? { voiceTxBufferPolicy } : {}),
       expiresAt: Date.now() + RTC_DATA_AUDIO_TOKEN_TTL_MS,
     });
 
@@ -508,6 +517,7 @@ export class RtcDataAudioManager {
           serverReceivedAtMs,
           sampleRate: decoded.sampleRate,
           samplesPerChannel: decoded.samplesPerChannel,
+          ...(session.voiceTxBufferPolicy ? { voiceTxBufferPolicy: session.voiceTxBufferPolicy } : {}),
         };
         void this.engine.getVoiceSessionManager()?.handleParticipantAudioFrame(meta, float32);
       } catch (error) {

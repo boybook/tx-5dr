@@ -3,6 +3,8 @@ import {
   RealtimeSessionRequestSchema,
   RealtimeTransportKindSchema,
   RealtimeSettingsSchema,
+  resolveVoiceTxBufferPolicy,
+  VoiceTxBufferPreferenceSchema,
 } from '../realtime.schema.js';
 
 describe('Realtime transport schemas', () => {
@@ -16,6 +18,46 @@ describe('Realtime transport schemas', () => {
       direction: 'recv',
       transportOverride: retiredTransport,
     })).toThrow();
+  });
+});
+
+describe('VoiceTxBufferPreferenceSchema', () => {
+  it('accepts preset and custom TX buffer profiles', () => {
+    expect(VoiceTxBufferPreferenceSchema.parse({ profile: 'low-latency' }).profile).toBe('low-latency');
+    expect(VoiceTxBufferPreferenceSchema.parse({ profile: 'balanced' }).profile).toBe('balanced');
+    expect(VoiceTxBufferPreferenceSchema.parse({ profile: 'stable' }).profile).toBe('stable');
+    expect(VoiceTxBufferPreferenceSchema.parse({
+      profile: 'custom',
+      customTargetBufferMs: '240',
+    }).customTargetBufferMs).toBe(240);
+  });
+
+  it('rejects invalid custom TX buffer targets', () => {
+    expect(() => VoiceTxBufferPreferenceSchema.parse({ profile: 'custom' })).toThrow();
+    expect(() => VoiceTxBufferPreferenceSchema.parse({ profile: 'custom', customTargetBufferMs: 39 })).toThrow();
+    expect(() => VoiceTxBufferPreferenceSchema.parse({ profile: 'custom', customTargetBufferMs: 501 })).toThrow();
+  });
+
+  it('defaults send sessions to balanced when no preference is provided', () => {
+    const parsed = RealtimeSessionRequestSchema.parse({
+      scope: 'radio',
+      direction: 'send',
+    });
+    expect(parsed.voiceTxBufferPreference).toBeUndefined();
+    expect(resolveVoiceTxBufferPolicy(parsed.voiceTxBufferPreference).targetMs).toBe(90);
+  });
+
+  it('resolves different TX buffer presets to different jitter budgets', () => {
+    expect(resolveVoiceTxBufferPolicy({ profile: 'low-latency' }).targetMs).toBe(40);
+    expect(resolveVoiceTxBufferPolicy({ profile: 'balanced' }).targetMs).toBe(90);
+    expect(resolveVoiceTxBufferPolicy({ profile: 'stable' }).targetMs).toBe(170);
+    expect(resolveVoiceTxBufferPolicy({
+      profile: 'custom',
+      customTargetBufferMs: 250,
+    })).toMatchObject({
+      profile: 'custom',
+      targetMs: 250,
+    });
   });
 });
 

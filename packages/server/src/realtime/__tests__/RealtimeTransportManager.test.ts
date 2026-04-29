@@ -129,6 +129,44 @@ describe('RealtimeTransportManager', () => {
     expect(session.offers.map((offer) => offer.transport)).toEqual(['ws-compat']);
   });
 
+  it('resolves TX buffer policy for ws-compat send sessions', async () => {
+    const manager = await createManager();
+    const session = await manager.issueSession(createIssueSessionParams({
+      direction: 'send',
+      role: UserRole.OPERATOR,
+      transportOverride: 'ws-compat',
+      voiceTxBufferPreference: { profile: 'stable' },
+    }));
+
+    expect(session.offers.map((offer) => offer.transport)).toEqual(['ws-compat']);
+    expect(session.voiceTxBufferPolicy).toMatchObject({
+      profile: 'stable',
+      targetMs: 170,
+      uplinkMaxBufferedAudioMs: 340,
+    });
+  });
+
+  it('passes TX buffer policy into rtc-data-audio send offers', async () => {
+    const manager = await createManager();
+    const session = await manager.issueSession(createIssueSessionParams({
+      direction: 'send',
+      role: UserRole.OPERATOR,
+      voiceTxBufferPreference: { profile: 'custom', customTargetBufferMs: 220 },
+    }));
+
+    expect(session.offers.map((offer) => offer.transport)).toEqual(['rtc-data-audio', 'ws-compat']);
+    expect(session.voiceTxBufferPolicy).toMatchObject({
+      profile: 'custom',
+      targetMs: 220,
+    });
+    expect(mockRtcDataAudioBuildOffer).toHaveBeenCalledWith(expect.objectContaining({
+      voiceTxBufferPolicy: expect.objectContaining({
+        profile: 'custom',
+        targetMs: 220,
+      }),
+    }));
+  });
+
   it('falls back to ws-compat when rtc-data-audio is unavailable', async () => {
     mockRtcDataAudioAvailable.mockReturnValue(false);
     mockRtcDataAudioBuildOffer.mockResolvedValue(null);

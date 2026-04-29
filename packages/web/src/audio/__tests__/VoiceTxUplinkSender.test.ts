@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { decodeRealtimePcmAudioFrame } from '@tx5dr/core';
+import { resolveVoiceTxBufferPolicy } from '@tx5dr/contracts';
 import { VoiceTxUplinkSender } from '../VoiceTxUplinkSender';
 
 function createFrame(samplesPerChannel = 160) {
@@ -23,6 +24,7 @@ describe('VoiceTxUplinkSender', () => {
       getBufferedAmount: () => 0,
       estimateServerTimeMs: (clientTimeMs) => clientTimeMs + 50,
       getClockConfidence: () => 'high',
+      txBufferPolicy: resolveVoiceTxBufferPolicy({ profile: 'balanced' }),
     });
 
     const result = sender.sendFrame(createFrame());
@@ -46,6 +48,7 @@ describe('VoiceTxUplinkSender', () => {
       getBufferedAmount: () => 3000,
       estimateServerTimeMs: () => null,
       getClockConfidence: () => 'unknown',
+      txBufferPolicy: resolveVoiceTxBufferPolicy({ profile: 'low-latency' }),
     });
 
     const result = sender.sendFrame(createFrame());
