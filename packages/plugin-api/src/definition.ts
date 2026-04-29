@@ -156,11 +156,15 @@ export interface PluginDefinition {
   quickSettings?: PluginQuickSetting[];
 
   /**
-   * Panel descriptors used to render plugin-owned UI sections.
+   * Static panel descriptors used to render plugin-owned UI sections.
    *
    * Structured panels (`key-value`, `table`, `log`, `chart`) receive live data
    * through {@link PluginContext.ui.send}. Iframe panels (`component: 'iframe'`)
    * render a custom HTML page and communicate via `invoke` / `onPush`.
+   * The host exposes these static descriptors as the reserved `manifest`
+   * contribution group. Plugins that need to add or remove panels at runtime
+   * should use {@link PluginContext.ui.setPanelContributions} instead of
+   * predeclaring placeholder panels.
    *
    * Each panel has a `slot` that controls where it renders: `'operator'` (the
    * default, shown in the operator card), `'automation'` (shown in the

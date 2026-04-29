@@ -87,4 +87,34 @@ describe('PluginUIBridge', () => {
 
     expect(() => bridge.pushToSession('session-2', 'updated')).toThrow('page_session_not_found');
   });
+
+  it('forwards runtime panel contribution groups for the current plugin instance', () => {
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const onContributions = vi.fn();
+    const bridge = new PluginUIBridge(
+      'demo',
+      { kind: 'operator', operatorId: 'operator-1' },
+      eventEmitter,
+      () => [],
+      undefined,
+      onContributions,
+    );
+
+    const panels = [{
+      id: 'dynamic-panel',
+      title: 'Dynamic',
+      component: 'iframe' as const,
+      pageId: 'dashboard',
+      params: { tabId: 'one' },
+      slot: 'voice-right-top' as const,
+    }];
+    bridge.setPanelContributions('voice-tabs', panels);
+
+    expect(onContributions).toHaveBeenCalledWith(
+      'demo',
+      { kind: 'operator', operatorId: 'operator-1' },
+      'voice-tabs',
+      panels,
+    );
+  });
 });

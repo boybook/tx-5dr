@@ -13,6 +13,7 @@ const EMPTY_SNAPSHOT: PluginSystemSnapshot = {
   generation: 0,
   plugins: [],
   panelMeta: [],
+  panelContributions: [],
 };
 
 export function usePluginSnapshot(): PluginSystemSnapshot {
@@ -49,6 +50,27 @@ export function usePluginSnapshot(): PluginSystemSnapshot {
           ...prev,
           generation: data.generation,
           plugins: nextPlugins,
+        };
+      });
+    },
+  );
+
+  useWSEvent(
+    connection.state.radioService,
+    'pluginPanelContributionsChanged',
+    (group: NonNullable<PluginSystemSnapshot['panelContributions']>[number]) => {
+      setSnapshot((prev) => {
+        const existing = prev.panelContributions ?? [];
+        const nextGroups = existing.filter((entry) => {
+          const sameTarget = JSON.stringify(entry.instanceTarget ?? null) === JSON.stringify(group.instanceTarget ?? null);
+          return !(entry.pluginName === group.pluginName && entry.groupId === group.groupId && sameTarget);
+        });
+        if (group.panels.length > 0) {
+          nextGroups.push(group);
+        }
+        return {
+          ...prev,
+          panelContributions: nextGroups,
         };
       });
     },

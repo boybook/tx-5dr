@@ -1181,7 +1181,7 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
     '/:name/ui/*',
     async (req, reply) => {
       const { name } = req.params;
-      const filePath = req.params['*'] || 'index.html';
+      let filePath = req.params['*'] || 'index.html';
 
       const loaded = engine.pluginManager.getLoadedPlugin(name);
       if (!loaded) {
@@ -1192,8 +1192,16 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
         return reply.status(404).send({ error: 'Plugin has no static file directory' });
       }
 
-      const declaredPage = loaded.definition.ui?.pages?.find((page) => page.entry === filePath) ?? null;
+      let declaredPage = loaded.definition.ui?.pages?.find((page) => page.entry === filePath) ?? null;
       const isHtmlFile = path.extname(filePath).toLowerCase() === '.html';
+      if (isHtmlFile && !declaredPage) {
+        const pageId = path.basename(filePath, '.html');
+        const pageById = loaded.definition.ui?.pages?.find((page) => page.id === pageId) ?? null;
+        if (pageById) {
+          declaredPage = pageById;
+          filePath = pageById.entry;
+        }
+      }
       if (isHtmlFile && !declaredPage) {
         return reply.status(404).send({ error: 'Plugin page not found' });
       }

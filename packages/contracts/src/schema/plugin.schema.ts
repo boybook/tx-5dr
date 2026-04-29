@@ -61,7 +61,7 @@ export type PluginPanelComponent = z.infer<typeof PluginPanelComponentSchema>;
  * These values control both validation expectations and default frontend
  * rendering in plugin settings UIs.
  */
-export const PluginSettingTypeSchema = z.enum(['boolean', 'number', 'string', 'string[]', 'info']);
+export const PluginSettingTypeSchema = z.enum(['boolean', 'number', 'string', 'string[]', 'object[]', 'info']);
 
 /**
  * Supported generated-form field types for plugin settings.
@@ -80,6 +80,16 @@ export const PluginSettingOptionSchema = z.object({
  * Label/value pair used by select-like plugin settings.
  */
 export type PluginSettingOption = z.infer<typeof PluginSettingOptionSchema>;
+
+export const PluginObjectArrayFieldSchema = z.object({
+  key: z.string(),
+  type: z.enum(['string', 'number', 'boolean']).optional().default('string'),
+  label: z.string(),
+  description: z.string().optional(),
+  placeholder: z.string().optional(),
+  required: z.boolean().optional(),
+});
+export type PluginObjectArrayField = z.infer<typeof PluginObjectArrayFieldSchema>;
 
 /**
  * Persistence and UI scope for a plugin setting.
@@ -110,6 +120,8 @@ export const PluginSettingDescriptorSchema = z.object({
   min: z.number().optional(),
   max: z.number().optional(),
   options: z.array(PluginSettingOptionSchema).optional(),
+  /** Field schema used by generated editors for `object[]` settings. */
+  itemFields: z.array(PluginObjectArrayFieldSchema).optional(),
   /** Internal settings are persisted/injected but hidden from generated UIs. */
   hidden: z.boolean().optional(),
   /** 设置作用域：global（所有操作员共享）或 operator（每操作员独立），默认 global */
@@ -214,7 +226,8 @@ export type PluginPanelWidth = z.infer<typeof PluginPanelWidthSchema>;
  *
  * Panels are passive containers rendered by the host. A plugin sends data into
  * them through `ctx.ui.send(panelId, data)`. When `component` is `'iframe'`,
- * the panel renders a custom UI page inside a sandboxed iframe instead.
+ * the panel renders a custom UI page inside a sandboxed iframe instead. Static
+ * manifest panels and runtime UI contributions use this same descriptor.
  */
 export const PluginPanelDescriptorSchema = z.object({
   id: z.string(),
@@ -222,6 +235,8 @@ export const PluginPanelDescriptorSchema = z.object({
   component: PluginPanelComponentSchema,
   /** Required when `component` is `'iframe'`. References a page id from `ui.pages`. */
   pageId: z.string().optional(),
+  /** Optional string params forwarded to iframe panels as URL/init params. */
+  params: z.record(z.string(), z.string()).optional(),
   /** Where the panel renders. Defaults to `'operator'` (operator card live-panel area). */
   slot: PluginPanelSlotSchema.optional(),
   /** Preferred width hint. Defaults to `'half'`. */
@@ -232,6 +247,29 @@ export const PluginPanelDescriptorSchema = z.object({
  * Declarative definition of a plugin-owned panel in the frontend.
  */
 export type PluginPanelDescriptor = z.infer<typeof PluginPanelDescriptorSchema>;
+
+export const PluginUIPanelContributionTargetSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('global') }),
+  z.object({ kind: z.literal('operator'), operatorId: z.string() }),
+]);
+export type PluginUIPanelContributionTarget = z.infer<typeof PluginUIPanelContributionTargetSchema>;
+
+/**
+ * A normalized group of plugin UI panels.
+ *
+ * Static `PluginDefinition.panels` are emitted by the host as the reserved
+ * `manifest` group. Runtime groups are replaced by
+ * `ctx.ui.setPanelContributions(groupId, panels)` and cleared by publishing an
+ * empty panel list for the same group.
+ */
+export const PluginUIPanelContributionGroupSchema = z.object({
+  pluginName: z.string(),
+  groupId: z.string(),
+  source: z.enum(['manifest', 'runtime']),
+  instanceTarget: PluginUIPanelContributionTargetSchema.optional(),
+  panels: z.array(PluginPanelDescriptorSchema),
+});
+export type PluginUIPanelContributionGroup = z.infer<typeof PluginUIPanelContributionGroupSchema>;
 
 // ===== 自定义 UI 页面 =====
 
@@ -424,6 +462,7 @@ export const PluginSystemSnapshotSchema = z.object({
   generation: z.number().int().nonnegative(),
   plugins: z.array(PluginStatusSchema),
   panelMeta: z.array(PluginPanelMetaPayloadSchema).optional().default([]),
+  panelContributions: z.array(PluginUIPanelContributionGroupSchema).optional().default([]),
   lastError: z.string().optional(),
 });
 export type PluginSystemSnapshot = z.infer<typeof PluginSystemSnapshotSchema>;

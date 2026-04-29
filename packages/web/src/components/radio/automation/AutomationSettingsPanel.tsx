@@ -11,7 +11,6 @@ import {
 import { useConnection } from '../../../store/radioStore';
 import { api } from '@tx5dr/core';
 import type {
-  PluginPanelDescriptor,
   PluginQuickAction,
   PluginQuickSetting,
   PluginSettingDescriptor,
@@ -31,6 +30,10 @@ import {
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCheck } from '@fortawesome/free-solid-svg-icons';
 import { PluginPanelRenderer } from '../../plugins/PluginPanelRenderer';
+import {
+  getVisiblePluginPanelsForSlot,
+  type VisiblePluginPanelEntry,
+} from '../../plugins/pluginPanelSlots';
 
 const logger = createLogger('AutomationSettingsPanel');
 
@@ -42,7 +45,7 @@ interface PluginQuickGroup {
   plugin: PluginStatus;
   actions: PluginQuickAction[];
   settings: PluginQuickSetting[];
-  panels: PluginPanelDescriptor[];
+  panels: VisiblePluginPanelEntry[];
 }
 
 const QUICK_ACTION_SPINNER = (
@@ -173,14 +176,29 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
   }, [schemaPlugins]);
 
   const activeGroups = React.useMemo<PluginQuickGroup[]>(() => {
+    const automationPanels = getVisiblePluginPanelsForSlot({
+      plugins: pluginSnapshot.plugins,
+      panelContributions: pluginSnapshot.panelContributions,
+      getMeta,
+      operatorId,
+      slot: 'automation',
+      pluginGeneration: pluginSnapshot.generation,
+      initialPanelMeta: pluginSnapshot.panelMeta,
+    });
+    const panelsByPlugin = new Map<string, VisiblePluginPanelEntry[]>();
+    for (const panel of automationPanels) {
+      const existing = panelsByPlugin.get(panel.pluginName) ?? [];
+      existing.push(panel);
+      panelsByPlugin.set(panel.pluginName, existing);
+    }
+
     return pluginSnapshot.plugins
       .map((plugin, index) => ({ plugin, index }))
       .filter((plugin) => {
         const settings = (plugin.plugin.quickSettings ?? []).filter((entry) => hasOperatorQuickSetting(plugin.plugin, entry));
         const actions = plugin.plugin.quickActions ?? [];
-        const panels = (plugin.plugin.panels ?? []).filter((p) => p.slot === 'automation');
-        const visiblePanels = panels.filter((p) => getMeta(plugin.plugin.name, operatorId, p.id).visible !== false);
-        if (settings.length === 0 && actions.length === 0 && visiblePanels.length === 0) {
+        const panels = panelsByPlugin.get(plugin.plugin.name) ?? [];
+        if (settings.length === 0 && actions.length === 0 && panels.length === 0) {
           return false;
         }
         if (plugin.plugin.type === 'strategy') {
@@ -200,9 +218,16 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
         plugin: plugin.plugin,
         settings: (plugin.plugin.quickSettings ?? []).filter((entry) => hasOperatorQuickSetting(plugin.plugin, entry)),
         actions: plugin.plugin.quickActions ?? [],
-        panels: (plugin.plugin.panels ?? []).filter((p) => p.slot === 'automation'),
+        panels: panelsByPlugin.get(plugin.plugin.name) ?? [],
       }));
-  }, [getMeta, operatorId, pluginSnapshot.plugins]);
+  }, [
+    getMeta,
+    operatorId,
+    pluginSnapshot.generation,
+    pluginSnapshot.panelContributions,
+    pluginSnapshot.panelMeta,
+    pluginSnapshot.plugins,
+  ]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -590,22 +615,22 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
             </div>
           )}
 
-          {panels.filter((p) => getMeta(plugin.name, operatorId, p.id).visible !== false).length > 0 && (
+          {panels.length > 0 && (
             <div className="space-y-1.5">
               {panels
-                .filter((p) => getMeta(plugin.name, operatorId, p.id).visible !== false)
-                .map((panel) => (
+                .map((entry) => (
                   <PluginPanelRenderer
-                    key={`${plugin.name}:${panel.id}`}
-                    pluginName={plugin.name}
+                    key={entry.key}
+                    pluginName={entry.pluginName}
                     operatorId={operatorId}
-                    panelId={panel.id}
-                    pluginGeneration={pluginSnapshot.generation}
-                    title={resolvePluginLabel(panel.title, plugin.name)}
-                    component={panel.component}
-                    pageId={panel.pageId}
+                    panelId={entry.panel.id}
+                    pluginGeneration={entry.pluginGeneration}
+                    title={entry.resolvedTitle}
+                    component={entry.panel.component}
+                    pageId={entry.panel.pageId}
+                    params={entry.panel.params}
                     variant="inline"
-                    initialPanelMeta={pluginSnapshot.panelMeta}
+                    initialPanelMeta={entry.initialPanelMeta}
                   />
                 ))}
             </div>

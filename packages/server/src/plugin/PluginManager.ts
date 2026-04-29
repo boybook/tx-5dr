@@ -1,9 +1,11 @@
 import type {
   DigitalRadioEngineEvents,
+  PluginPanelDescriptor,
   PluginPanelMetaPayload,
   PluginRuntimeLogEntry,
   PluginStatus,
   PluginSystemSnapshot,
+  PluginUIPanelContributionGroup,
   PluginsConfig,
   SlotInfo,
   SlotPack,
@@ -76,6 +78,7 @@ export class PluginManager {
   private _logbookSyncHost: import('./LogbookSyncHost.js').LogbookSyncHost;
   private readonly pageSessions = new PluginPageSessionStore();
   private readonly panelMetaState = new Map<string, PluginPanelMetaPayload>();
+  private readonly runtimePanelContributions = new Map<string, PluginUIPanelContributionGroup>();
   private pluginRuntimeLogHistory: PluginRuntimeLogEntry[] = [];
 
   private systemState: PluginSystemRuntimeState = {
@@ -100,7 +103,12 @@ export class PluginManager {
     };
     deps.listPluginPageSessions = (pluginName, instanceTarget, pageId) =>
       this.pageSessions.listByPluginInstance(pluginName, instanceTarget, pageId);
-    this.contextFactory = new PluginContextFactory(deps, (payload) => this.recordPanelMeta(payload));
+    this.contextFactory = new PluginContextFactory(
+      deps,
+      (payload) => this.recordPanelMeta(payload),
+      (pluginName, instanceTarget, groupId, panels) =>
+        this.setRuntimePanelContributions(pluginName, instanceTarget, groupId, panels),
+    );
     this.dispatcher = new PluginHookDispatcher(
       (operatorId) => this.getActiveInstances(operatorId),
       (operatorId) => this.getStrategyInstance(operatorId),
@@ -523,6 +531,7 @@ export class PluginManager {
       this.systemState,
       this.getPluginStatuses(),
       this.getPanelMetaSnapshot(),
+      this.getPanelContributionSnapshot(),
     );
   }
 
@@ -1059,6 +1068,7 @@ export class PluginManager {
     this.instances.clear();
     this.globalInstances.clear();
     this.loadedPlugins.clear();
+    this.runtimePanelContributions.clear();
     this.orchestrator.clearAllDecisionStates();
   }
 
@@ -1157,6 +1167,168 @@ export class PluginManager {
     this.deps.eventEmitter.emit('pluginList', snapshot);
   }
 
+  private getPanelContributionSnapshot(): PluginUIPanelContributionGroup[] {
+    const manifestGroups: PluginUIPanelContributionGroup[] = [];
+    for (const plugin of this.loadedPlugins.values()) {
+      const panels = plugin.definition.panels ?? [];
+      if (panels.length === 0) {
+        continue;
+      }
+      manifestGroups.push({
+        pluginName: plugin.definition.name,
+        groupId: 'manifest',
+        source: 'manifest',
+        panels,
+      });
+    }
+
+    return [
+      ...manifestGroups,
+      ...Array.from(this.runtimePanelContributions.values()).map((group) => ({
+        ...group,
+        panels: group.panels.map((panel) => ({ ...panel, params: panel.params ? { ...panel.params } : undefined })),
+      })),
+    ];
+  }
+
+  private getInstanceTargetKey(instanceTarget: PluginUIInstanceTarget): string {
+    return instanceTarget.kind === 'operator'
+      ? `operator:${instanceTarget.operatorId}`
+      : 'global';
+  }
+
+  private getRuntimePanelContributionKey(
+    pluginName: string,
+    instanceTarget: PluginUIInstanceTarget,
+    groupId: string,
+  ): string {
+    return `${pluginName}:${this.getInstanceTargetKey(instanceTarget)}:${groupId}`;
+  }
+
+  private validateRuntimePanelContributions(
+    pluginName: string,
+    instanceTarget: PluginUIInstanceTarget,
+    groupId: string,
+    panels: PluginPanelDescriptor[],
+  ): void {
+    if (!groupId || groupId.trim() !== groupId || groupId === 'manifest') {
+      throw new Error('Panel contribution groupId must be stable and must not be "manifest"');
+    }
+
+    const plugin = this.loadedPlugins.get(pluginName);
+    if (!plugin) {
+      throw new Error(`Plugin not found: ${pluginName}`);
+    }
+
+    const uiPageIds = new Set((plugin.definition.ui?.pages ?? []).map((page) => page.id));
+    const ids = new Set<string>();
+    for (const panel of panels) {
+      if (!panel.id || ids.has(panel.id)) {
+        throw new Error(`Duplicate or empty panel id in contribution group "${groupId}": ${panel.id}`);
+      }
+      ids.add(panel.id);
+
+      if (panel.component === 'iframe') {
+        if (!panel.pageId) {
+          throw new Error(`Iframe panel "${panel.id}" must declare pageId`);
+        }
+        if (!uiPageIds.has(panel.pageId)) {
+          throw new Error(`Iframe panel "${panel.id}" references unknown ui page "${panel.pageId}"`);
+        }
+      }
+
+      if (panel.params) {
+        for (const [key, value] of Object.entries(panel.params)) {
+          if (typeof key !== 'string' || typeof value !== 'string') {
+            throw new Error(`Panel "${panel.id}" params must be string key-value pairs`);
+          }
+        }
+      }
+    }
+
+    const replacementKey = this.getRuntimePanelContributionKey(pluginName, instanceTarget, groupId);
+    const mergedIds = new Set<string>();
+    const collect = (panel: PluginPanelDescriptor) => {
+      if (mergedIds.has(panel.id)) {
+        throw new Error(`Panel id "${panel.id}" conflicts with another contribution in plugin "${pluginName}"`);
+      }
+      mergedIds.add(panel.id);
+    };
+
+    for (const panel of plugin.definition.panels ?? []) {
+      collect(panel);
+    }
+    for (const [key, group] of this.runtimePanelContributions) {
+      if (key === replacementKey || group.pluginName !== pluginName) {
+        continue;
+      }
+      if (JSON.stringify(group.instanceTarget) !== JSON.stringify(instanceTarget)) {
+        continue;
+      }
+      for (const panel of group.panels) {
+        collect(panel);
+      }
+    }
+    for (const panel of panels) {
+      collect(panel);
+    }
+  }
+
+  private setRuntimePanelContributions(
+    pluginName: string,
+    instanceTarget: PluginUIInstanceTarget,
+    groupId: string,
+    panels: PluginPanelDescriptor[],
+  ): void {
+    this.validateRuntimePanelContributions(pluginName, instanceTarget, groupId, panels);
+
+    const key = this.getRuntimePanelContributionKey(pluginName, instanceTarget, groupId);
+    const group: PluginUIPanelContributionGroup = {
+      pluginName,
+      groupId,
+      source: 'runtime',
+      instanceTarget,
+      panels: panels.map((panel) => ({ ...panel, params: panel.params ? { ...panel.params } : undefined })),
+    };
+
+    if (panels.length === 0) {
+      this.runtimePanelContributions.delete(key);
+    } else {
+      this.runtimePanelContributions.set(key, group);
+    }
+
+    this.bumpGeneration();
+    this.deps.eventEmitter.emit('pluginPanelContributionsChanged', {
+      ...group,
+      panels: panels.length === 0 ? [] : group.panels,
+    });
+  }
+
+  private clearRuntimePanelContributionsForInstance(instance: PluginInstance): void {
+    const instanceTarget = instance.scope.kind === 'operator'
+      ? { kind: 'operator' as const, operatorId: instance.scope.operatorId }
+      : { kind: 'global' as const };
+    const prefix = `${instance.plugin.definition.name}:${this.getInstanceTargetKey(instanceTarget)}:`;
+    const clearedGroups: PluginUIPanelContributionGroup[] = [];
+
+    for (const [key, group] of this.runtimePanelContributions) {
+      if (!key.startsWith(prefix)) {
+        continue;
+      }
+      this.runtimePanelContributions.delete(key);
+      clearedGroups.push({ ...group, panels: [] });
+    }
+
+    if (clearedGroups.length === 0) {
+      return;
+    }
+
+    this.bumpGeneration();
+    for (const group of clearedGroups) {
+      this.deps.eventEmitter.emit('pluginPanelContributionsChanged', group);
+    }
+  }
+
   private getPanelMetaSnapshot(): PluginPanelMetaPayload[] {
     return Array.from(this.panelMetaState.values()).map((entry) => ({
       ...entry,
@@ -1209,6 +1381,7 @@ export class PluginManager {
 
   private async activateInstance(operatorId: string, instance: PluginInstance): Promise<void> {
     const hook = instance.plugin.definition.onLoad;
+    this.clearRuntimePanelContributionsForInstance(instance);
     if (!hook) return;
     try {
       this.clearPanelMetaForInstance(instance);
@@ -1258,6 +1431,7 @@ export class PluginManager {
       }
     }
     this.clearPanelMetaForInstance(instance);
+    this.clearRuntimePanelContributionsForInstance(instance);
     this._logbookSyncHost.unregisterByPlugin(instance.plugin.definition.name);
     instance.ctx.timers.clearAll();
     // PluginContextFactory 总是创建 PluginStorageProvider 实例（实现 FlushableKVStore）

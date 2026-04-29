@@ -7,6 +7,7 @@ import type {
   OperatorSlots,
   ModeDescriptor,
   PermissionGrant,
+  PluginPanelDescriptor,
 } from '@tx5dr/contracts';
 import type { StrategyRuntimeSnapshot } from './runtime.js';
 
@@ -397,6 +398,18 @@ export interface UIBridge {
    * same keys.
    */
   setPanelMeta(panelId: string, meta: PanelMeta): void;
+
+  /**
+   * Replaces one runtime-owned group of plugin UI panels for this plugin
+   * instance. Static `PluginDefinition.panels` are exposed by the host as the
+   * reserved `manifest` group; plugins should use their own stable group ids.
+   */
+  setPanelContributions(groupId: string, panels: PluginPanelDescriptor[]): void;
+
+  /**
+   * Clears a runtime-owned panel contribution group for this plugin instance.
+   */
+  clearPanelContributions(groupId: string): void;
 
   /**
    * Registers a handler for custom messages sent from iframe UI pages via the
