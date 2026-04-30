@@ -28,7 +28,7 @@ type ElectronWindowHelper = Window & {
 const WATERFALL_HISTORY_ROWS = 120;
 const SPECTRUM_HISTORY_LIMITS = {
   audio: 120,
-  'radio-sdr': 60,
+  'radio-sdr': WATERFALL_HISTORY_ROWS,
   'openwebrx-sdr': 40,
 } satisfies Partial<Record<SpectrumKind, number>>;
 const SETTINGS_STORAGE_KEY = 'spectrum-range-settings';

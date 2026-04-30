@@ -179,6 +179,38 @@ describe('SpectrumStreamController memory behavior', () => {
     expect(Array.from(batch?.rows[0] ?? [])).toEqual([100, 150, 200, 250, 300]);
   });
 
+  it('keeps a full bounded radio SDR history when rebuilding after display range changes', () => {
+    const controller = new SpectrumStreamController({
+      audio: 120,
+      'radio-sdr': 120,
+      'openwebrx-sdr': 40,
+    });
+    controller.updateContext({
+      selectedKind: 'radio-sdr',
+      radioSdrDisplayRange: { min: 0, max: 300 },
+    });
+
+    for (let index = 0; index < 130; index += 1) {
+      controller.pushFrame(makeFrame(
+        'radio-sdr',
+        index + 1,
+        [index, index + 100, index + 200, index + 300, index + 400],
+        { min: 0, max: 400 }
+      ));
+    }
+
+    controller.updateContext({
+      radioSdrDisplayRange: { min: 100, max: 300 },
+    });
+    const batch = controller.consumeRenderBatch();
+
+    expect(batch?.mode).toBe('replace');
+    expect(batch?.rows).toHaveLength(120);
+    expect(batch?.totalRows).toBe(120);
+    expect(batch?.axis).toEqual({ minHz: 100, maxHz: 300, binCount: 5 });
+    expect(getInternals(controller).histories['radio-sdr']).toHaveLength(120);
+  });
+
   it('keeps OpenWebRX viewport transforms and axis metadata', () => {
     const controller = new SpectrumStreamController(4);
     controller.updateContext({
