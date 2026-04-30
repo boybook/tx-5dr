@@ -31,12 +31,12 @@ test('SlotScheduler removes the old subWindow listener on stop/start', async () 
   }
 
   const slotClock = new FakeSlotClock();
-  const decodeRequests: Array<{ slotId: string; windowIdx: number }> = [];
+  const decodeRequests: Array<{ slotId: string; mode: string; windowIdx: number }> = [];
   const scheduler = new SlotScheduler(
     slotClock as unknown as any,
     {
       push: async (request) => {
-        decodeRequests.push({ slotId: request.slotId, windowIdx: request.windowIdx });
+        decodeRequests.push({ slotId: request.slotId, mode: request.mode, windowIdx: request.windowIdx });
       },
       size: () => 0,
     },
@@ -63,7 +63,53 @@ test('SlotScheduler removes the old subWindow listener on stop/start', async () 
   slotClock.emit('subWindow', slotInfo, 0);
   await wait(10);
 
-  assert.deepStrictEqual(decodeRequests, [{ slotId: 'TEST-1-1000', windowIdx: 0 }]);
+  assert.deepStrictEqual(decodeRequests, [{ slotId: 'TEST-1-1000', mode: 'FT8', windowIdx: 0 }]);
+});
+
+test('SlotScheduler tags FT4 decode requests with FT4 mode', async () => {
+  class FakeSlotClock extends EventEmitter<{ subWindow: (slotInfo: SlotInfo, windowIdx: number) => void }> {
+    getMode(): ModeDescriptor {
+      return {
+        name: 'FT4',
+        slotMs: 7500,
+        toleranceMs: 50,
+        windowTiming: [0],
+        transmitTiming: 500,
+        encodeAdvance: 300,
+      };
+    }
+  }
+
+  const slotClock = new FakeSlotClock();
+  const decodeModes: string[] = [];
+  const scheduler = new SlotScheduler(
+    slotClock as unknown as any,
+    {
+      push: async (request) => {
+        decodeModes.push(request.mode);
+      },
+      size: () => 0,
+    },
+    {
+      getBuffer: async () => new ArrayBuffer(32),
+      getSampleRate: () => 12000,
+    }
+  );
+
+  scheduler.start();
+  slotClock.emit('subWindow', {
+    id: 'FT4-1-7500',
+    startMs: 7500,
+    phaseMs: 0,
+    driftMs: 0,
+    cycleNumber: 1,
+    utcSeconds: 7,
+    mode: 'FT4',
+  }, 0);
+  await wait(10);
+  scheduler.stop();
+
+  assert.deepStrictEqual(decodeModes, ['FT4']);
 });
 
 test('SlotClock stop clears pending sub-events for the active slot', async () => {

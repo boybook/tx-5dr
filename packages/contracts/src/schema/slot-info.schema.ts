@@ -89,6 +89,8 @@ export type FrameMessage = z.infer<typeof FrameMessageSchema>;
 export const DecodeRequestSchema = z.object({
   /** 关联的时隙ID */
   slotId: z.string(),
+  /** 解码模式 */
+  mode: z.enum(['FT8', 'FT4']).default('FT8'),
   /** 子窗口索引 */
   windowIdx: z.number().int().nonnegative(),
   /** PCM 音频数据 */
