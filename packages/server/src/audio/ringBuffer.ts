@@ -1,6 +1,7 @@
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('RingBuffer');
+const OVERFLOW_LOG_INTERVAL_MS = 5000;
 
 /**
  * 环形缓冲区 - 用于存储连续的 PCM 音频数据
@@ -16,6 +17,8 @@ export class RingBuffer {
   private startTimestamp: number; // 缓冲区开始时间戳
   private totalSamplesWritten = 0; // 总写入样本数
   private lastWriteTimestamp: number; // 最后写入时间戳
+  private lastOverflowLogAt = 0;
+  private suppressedOverflowSamples = 0;
   
   constructor(sampleRate: number, maxDurationMs: number = 60000) {
     this.sampleRate = sampleRate;
@@ -40,7 +43,7 @@ export class RingBuffer {
     // 如果空间不足，批量移动读指针
     if (samples.length > freeSpace) {
       const needToDrop = samples.length - freeSpace;
-      logger.warn(`Buffer overflow, dropping ${needToDrop} samples`);
+      this.logOverflow(needToDrop, writeTimestamp);
       this.readIndex = (this.readIndex + needToDrop) % this.size;
     }
 
@@ -64,6 +67,23 @@ export class RingBuffer {
 
     // 更新最后写入时间（用于计算时间偏移）
     this.lastWriteTimestamp = writeTimestamp;
+  }
+
+  private logOverflow(droppedSamples: number, now: number): void {
+    this.suppressedOverflowSamples += droppedSamples;
+    if (now - this.lastOverflowLogAt < OVERFLOW_LOG_INTERVAL_MS) {
+      return;
+    }
+
+    logger.warn('Buffer overflow', {
+      droppedSamples,
+      suppressedDroppedSamples: this.suppressedOverflowSamples - droppedSamples,
+      availableSamples: this.getAvailableSamples(),
+      capacitySamples: this.size,
+      sampleRate: this.sampleRate,
+    });
+    this.lastOverflowLogAt = now;
+    this.suppressedOverflowSamples = 0;
   }
   
   /**
@@ -183,4 +203,4 @@ export class RingBuffer {
       uptimeMs: Date.now() - this.startTimestamp
     };
   }
-} 
+}

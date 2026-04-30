@@ -2,7 +2,23 @@ class VoiceCaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.targetSampleRate = 16000;
-    this.frameSamples = 160;
+    this.frameSamples = 320;
+    this.sourceBuffer = new Float32Array(0);
+    this.sourceOffset = 0;
+    this.generation = 0;
+    this.port.onmessage = (event) => {
+      if (event.data?.type === 'reset') {
+        this.reset(event.data.generation);
+      }
+    };
+  }
+
+  reset(generation) {
+    if (Number.isFinite(Number(generation))) {
+      this.generation = Number(generation);
+    } else {
+      this.generation += 1;
+    }
     this.sourceBuffer = new Float32Array(0);
     this.sourceOffset = 0;
   }
@@ -42,6 +58,7 @@ class VoiceCaptureProcessor extends AudioWorkletProcessor {
 
       this.port.postMessage({
         type: 'audioFrame',
+        generation: this.generation,
         sampleRate: this.targetSampleRate,
         samplesPerChannel: this.frameSamples,
         buffer: output.buffer,

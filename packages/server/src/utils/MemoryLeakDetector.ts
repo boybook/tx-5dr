@@ -23,11 +23,12 @@ export class MemoryLeakDetector {
   private readonly CHECK_INTERVAL_MS = 30000; // 检查间隔: 30秒
 
   private constructor() {
-    // 仅在开发环境启用
-    this.isEnabled = process.env.NODE_ENV === 'development';
+    // Listener snapshots are expensive and very noisy. Keep them opt-in so
+    // realtime audio diagnostics are not hidden by hundreds of debug lines.
+    this.isEnabled = process.env.TX5DR_LEAK_DETECTOR === '1';
 
     if (this.isEnabled) {
-      logger.debug('MemoryLeakDetector enabled (development)');
+      logger.info('MemoryLeakDetector enabled');
       this.startMonitoring();
     }
   }
@@ -54,7 +55,6 @@ export class MemoryLeakDetector {
     const baseline = this.getListenerCounts(emitter);
 
     this.monitoredEmitters.set(name, { emitter, baseline });
-    logger.debug(`Registered for monitoring: ${name}, baseline listeners: ${this.formatListenerCounts(baseline)}`);
   }
 
   /**
@@ -65,7 +65,6 @@ export class MemoryLeakDetector {
     if (!this.isEnabled) return;
 
     this.monitoredEmitters.delete(name);
-    logger.debug(`Unregistered from monitoring: ${name}`);
   }
 
   /**
@@ -90,7 +89,6 @@ export class MemoryLeakDetector {
     if (this.checkInterval) {
       clearInterval(this.checkInterval);
       this.checkInterval = null;
-      logger.debug('Monitoring stopped');
     }
   }
 
@@ -102,25 +100,14 @@ export class MemoryLeakDetector {
       return;
     }
 
-    logger.debug(`===== Leak check started (${new Date().toISOString()}) =====`);
-
-    let hasWarnings = false;
-
     for (const [name, { emitter, baseline }] of this.monitoredEmitters.entries()) {
       const current = this.getListenerCounts(emitter);
       const changes = this.compareListenerCounts(baseline, current);
 
-      if (changes.hasChanges) {
-        hasWarnings = true;
-        this.reportChanges(name, baseline, current, changes);
+      if (changes.warnings.length > 0) {
+        this.reportChanges(name, current, changes);
       }
     }
-
-    if (!hasWarnings) {
-      logger.debug('No listener count anomalies detected');
-    }
-
-    logger.debug('===== Leak check complete =====');
   }
 
   /**
@@ -187,46 +174,26 @@ export class MemoryLeakDetector {
    */
   private reportChanges(
     name: string,
-    baseline: Map<string, number>,
     current: Map<string, number>,
     changes: { increased: Map<string, { from: number; to: number }>; decreased: Map<string, { from: number; to: number }>; warnings: string[] }
   ): void {
-    logger.debug(`[${name}] Listener count changes:`);
-
-    if (changes.increased.size > 0) {
-      logger.debug('  Increased:');
-      for (const [eventName, { from, to }] of changes.increased.entries()) {
-        logger.debug(`     "${eventName}": ${from} -> ${to} (+${to - from})`);
-      }
-    }
-
-    if (changes.decreased.size > 0) {
-      logger.debug('  Decreased:');
-      for (const [eventName, { from, to }] of changes.decreased.entries()) {
-        logger.debug(`     "${eventName}": ${from} -> ${to} (${to - from})`);
-      }
-    }
-
-    if (changes.warnings.length > 0) {
-      logger.warn('  Warnings:');
-      for (const warning of changes.warnings) {
-        logger.warn(`     ${warning}`);
-      }
-    }
-
-    logger.debug(`  Current total: ${this.formatListenerCounts(current)}`);
+    logger.warn('Event listener count threshold exceeded', {
+      emitter: name,
+      warnings: changes.warnings,
+      total: this.getTotalListenerCount(current),
+      topEvents: this.getTopListenerCounts(current, 8),
+    });
   }
 
-  /**
-   * 格式化监听器数量为可读字符串
-   */
-  private formatListenerCounts(counts: Map<string, number>): string {
-    if (counts.size === 0) return 'no listeners';
+  private getTotalListenerCount(counts: Map<string, number>): number {
+    return Array.from(counts.values()).reduce((sum, count) => sum + count, 0);
+  }
 
-    const entries = Array.from(counts.entries());
-    const total = entries.reduce((sum, [, count]) => sum + count, 0);
-
-    return `total ${total} (${entries.map(([name, count]) => `${name}:${count}`).join(', ')})`;
+  private getTopListenerCounts(counts: Map<string, number>, limit: number): Array<{ event: string; count: number }> {
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([event, count]) => ({ event, count }));
   }
 
   /**
@@ -234,7 +201,7 @@ export class MemoryLeakDetector {
    */
   checkNow(): void {
     if (!this.isEnabled) {
-      logger.debug('MemoryLeakDetector not enabled (development only)');
+      logger.info('MemoryLeakDetector not enabled');
       return;
     }
     this.checkForLeaks();
@@ -260,7 +227,6 @@ export class MemoryLeakDetector {
   destroy(): void {
     this.stopMonitoring();
     this.monitoredEmitters.clear();
-    logger.debug('MemoryLeakDetector destroyed');
   }
 }
 

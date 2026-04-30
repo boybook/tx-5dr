@@ -69,7 +69,11 @@ export function isOpusPolicy(policy?: ResolvedRealtimeAudioCodecPolicy | null): 
 export class BrowserOpusDecoder {
   private decoder: InstanceType<AudioDecoderConstructor> | null = null;
   private decoderKey: string | null = null;
-  private readonly pendingFrames: Array<{ frame: RealtimeEncodedAudioFrame; receivedAtClientMs: number }> = [];
+  private readonly pendingFrames: Array<{
+    frame: RealtimeEncodedAudioFrame;
+    receivedAtClientMs: number;
+    generation?: number;
+  }> = [];
 
   constructor(private readonly onDecoded: (frame: {
     samples: Float32Array;
@@ -78,9 +82,12 @@ export class BrowserOpusDecoder {
     serverSentAtMs?: number;
     receivedAtClientMs: number;
     inputSampleRate: number;
+    sequence: number;
+    frameDurationMs: number;
+    generation?: number;
   }) => void) {}
 
-  decode(payload: ArrayBuffer, receivedAtClientMs: number): void {
+  decode(payload: ArrayBuffer, receivedAtClientMs: number, generation?: number): void {
     const frame = decodeRealtimeEncodedAudioFrame(payload);
     this.ensureDecoder(frame);
     if (!this.decoder) {
@@ -97,7 +104,7 @@ export class BrowserOpusDecoder {
       duration: frame.frameDurationMs * 1000,
       data: frame.payload,
     });
-    this.pendingFrames.push({ frame, receivedAtClientMs });
+    this.pendingFrames.push({ frame, receivedAtClientMs, generation });
     this.decoder.decode(chunk);
   }
 
@@ -134,6 +141,9 @@ export class BrowserOpusDecoder {
             serverSentAtMs: current?.frame.serverSentAtMs,
             receivedAtClientMs: current?.receivedAtClientMs ?? Date.now(),
             inputSampleRate: current?.frame.codecSampleRate ?? frame.codecSampleRate,
+            sequence: current?.frame.sequence ?? frame.sequence,
+            frameDurationMs: current?.frame.frameDurationMs ?? frame.frameDurationMs,
+            generation: current?.generation,
           });
         } finally {
           try {
@@ -176,7 +186,7 @@ async function probeWebCodecsOpus(): Promise<{
       numberOfChannels: 1,
       bitrate: sampleRate >= 24_000 ? 32_000 : 24_000,
       opus: {
-        frameDuration: 10_000,
+        frameDuration: 20_000,
         application: 'lowdelay',
       },
     };

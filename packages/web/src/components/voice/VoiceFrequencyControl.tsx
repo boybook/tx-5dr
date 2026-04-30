@@ -431,10 +431,18 @@ export const VoiceFrequencyControl: React.FC = () => {
       return entries;
     }
 
-    return [
-      [formatBandLabel(currentPresetSelection.band), [currentPresetSelection]],
-      ...entries,
-    ] as [string, FrequencyPreset[]][];
+    const currentBand = formatBandLabel(currentPresetSelection.band);
+    const merged = entries.map(([band, bandPresets]) => (
+      band === currentBand
+        ? [band, [currentPresetSelection, ...bandPresets]]
+        : [band, bandPresets]
+    )) as [string, FrequencyPreset[]][];
+
+    if (merged.some(([band]) => band === currentBand)) {
+      return merged;
+    }
+
+    return [[currentBand, [currentPresetSelection]], ...entries] as [string, FrequencyPreset[]][];
   }, [currentPresetSelection, formatBandLabel, groupedPresets]);
 
   // Break frequency into individual digits with their place values
@@ -717,8 +725,8 @@ export const VoiceFrequencyControl: React.FC = () => {
               variant="flat"
               className={`p-0${!canWriteFrequency ? ' opacity-50 pointer-events-none' : ''}`}
             >
-              {listboxSections.map(([band, bandPresets]) => (
-                <ListboxSection key={band} title={band} showDivider>
+              {listboxSections.map(([band, bandPresets], sectionIndex) => (
+                <ListboxSection key={`voice-frequency-section-${sectionIndex}-${band}`} title={band} showDivider>
                   {bandPresets.map((preset) => (
                     <ListboxItem
                       key={preset.key}

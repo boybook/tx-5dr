@@ -1,5 +1,10 @@
 import { randomUUID } from 'crypto';
 import type { WebSocket } from 'ws';
+import {
+  createRealtimeTimingProbe,
+  isRealtimeTimingProbeMessage,
+  REALTIME_TIMING_PROBE_INTERVAL_MS,
+} from '@tx5dr/core';
 import type {
   RealtimeScope,
   RealtimeSessionDirection,
@@ -239,6 +244,12 @@ export class RealtimeTransportManager {
 
       const downlinkEncoder = new RealtimeDownlinkAudioEncoder(session.audioCodecPolicy);
       let hasLoggedFirstCompatDownlinkFrame = false;
+      let probeSequence = 0;
+      const probeTimer = setInterval(() => {
+        if (socket.readyState === 1) {
+          socket.send(JSON.stringify(createRealtimeTimingProbe('monitor-downlink', probeSequence++)));
+        }
+      }, REALTIME_TIMING_PROBE_INTERVAL_MS);
       const handleAudioData = (frame: RealtimeAudioFrame) => {
         if (socket.readyState !== 1) {
           return;
@@ -270,6 +281,7 @@ export class RealtimeTransportManager {
 
       source.on('audioFrame', handleAudioData);
       context.cleanup = () => {
+        clearInterval(probeTimer);
         source.off('audioFrame', handleAudioData);
       };
       socket.on('message', (payload: Buffer | ArrayBuffer | Buffer[]) => {
@@ -309,41 +321,50 @@ export class RealtimeTransportManager {
         if (buffer.length === 0) {
           return;
         }
+        if (this.handleVoiceTimingProbe(buffer, session, 'ws-compat')) {
+          return;
+        }
 
         try {
-          const decoded = uplinkDecoder.decode(
+          const decodedPackets = uplinkDecoder.decode(
             buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
           );
-          if (!decoded) {
+          if (decodedPackets.length === 0) {
             return;
           }
-          if (!hasLoggedFirstCompatUplinkFrame) {
-            hasLoggedFirstCompatUplinkFrame = true;
-            logger.info('First compatibility uplink audio frame received', {
-              scope: session.scope,
+          for (const decoded of decodedPackets) {
+            if (!hasLoggedFirstCompatUplinkFrame) {
+              hasLoggedFirstCompatUplinkFrame = true;
+              logger.info('First compatibility uplink audio frame received', {
+                scope: session.scope,
+                participantIdentity: session.participantIdentity,
+                codec: decoded.codec,
+                sampleRate: decoded.sampleRate,
+                samplesPerChannel: decoded.samplesPerChannel,
+              });
+            }
+            const serverReceivedAtMs = Date.now();
+            const wrappedNow = serverReceivedAtMs >>> 0;
+            const transportDelta = decoded.timestampMs > 0 ? ((wrappedNow - decoded.timestampMs) >>> 0) : Number.POSITIVE_INFINITY;
+            const clientSentAtMs = transportDelta <= 60_000
+              ? serverReceivedAtMs - transportDelta
+              : null;
+            const meta: VoiceTxFrameMeta = {
+              transport: 'ws-compat',
               participantIdentity: session.participantIdentity,
+              sequence: decoded.sequence,
+              clientSentAtMs,
+              serverReceivedAtMs,
+              mediaTimestampMs: decoded.timestampMs,
+              frameDurationMs: decoded.sampleRate > 0 ? (decoded.samplesPerChannel / decoded.sampleRate) * 1000 : 20,
               codec: decoded.codec,
               sampleRate: decoded.sampleRate,
               samplesPerChannel: decoded.samplesPerChannel,
-            });
+              ...(decoded.concealment ? { concealment: decoded.concealment } : {}),
+              ...(session.voiceTxBufferPolicy ? { voiceTxBufferPolicy: session.voiceTxBufferPolicy } : {}),
+            };
+            void this.engine.getVoiceSessionManager()?.handleParticipantAudioFrame(meta, decoded.samples);
           }
-          const serverReceivedAtMs = Date.now();
-          const wrappedNow = serverReceivedAtMs >>> 0;
-          const transportDelta = decoded.timestampMs > 0 ? ((wrappedNow - decoded.timestampMs) >>> 0) : Number.POSITIVE_INFINITY;
-          const clientSentAtMs = transportDelta <= 60_000
-            ? serverReceivedAtMs - transportDelta
-            : null;
-          const meta: VoiceTxFrameMeta = {
-            transport: 'ws-compat',
-            participantIdentity: session.participantIdentity,
-            sequence: decoded.sequence,
-            clientSentAtMs,
-            serverReceivedAtMs,
-            sampleRate: decoded.sampleRate,
-            samplesPerChannel: decoded.samplesPerChannel,
-            ...(session.voiceTxBufferPolicy ? { voiceTxBufferPolicy: session.voiceTxBufferPolicy } : {}),
-          };
-          void this.engine.getVoiceSessionManager()?.handleParticipantAudioFrame(meta, decoded.samples);
         } catch (error) {
           logger.debug('Failed to decode compatibility uplink audio frame', error);
         }
@@ -358,6 +379,35 @@ export class RealtimeTransportManager {
 
     socket.once('close', cleanup);
     socket.once('error', cleanup);
+  }
+
+  private handleVoiceTimingProbe(
+    buffer: Buffer,
+    session: CompatSessionRecord,
+    transport: RealtimeTransportKind,
+  ): boolean {
+    if (buffer[0] !== 0x7b) {
+      return false;
+    }
+    try {
+      const message = JSON.parse(buffer.toString('utf-8')) as unknown;
+      if (!isRealtimeTimingProbeMessage(message) || message.stream !== 'voice-uplink' || !session.participantIdentity) {
+        return false;
+      }
+      this.engine.getVoiceSessionManager()?.recordParticipantTimingProbe({
+        participantIdentity: session.participantIdentity,
+        transport,
+        codec: session.audioCodecPolicy.resolvedCodec === 'opus' ? 'opus' : 'pcm-s16le',
+        sequence: message.sequence,
+        sentAtMs: message.sentAtMs,
+        receivedAtMs: Date.now(),
+        intervalMs: message.intervalMs,
+        ...(session.voiceTxBufferPolicy ? { voiceTxBufferPolicy: session.voiceTxBufferPolicy } : {}),
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private determineTransportSelection(

@@ -45,7 +45,7 @@ export const ResolvedRealtimeAudioCodecPolicySchema = z.object({
 });
 export type ResolvedRealtimeAudioCodecPolicy = z.infer<typeof ResolvedRealtimeAudioCodecPolicySchema>;
 
-export const VoiceTxBufferProfileSchema = z.enum(['low-latency', 'balanced', 'stable', 'custom']);
+export const VoiceTxBufferProfileSchema = z.enum(['auto', 'custom']);
 export type VoiceTxBufferProfile = z.infer<typeof VoiceTxBufferProfileSchema>;
 
 export const VoiceTxCustomTargetBufferMsSchema = z.preprocess((value) => {
@@ -59,10 +59,23 @@ export const VoiceTxCustomTargetBufferMsSchema = z.preprocess((value) => {
   return value;
 }, z.number().int().min(40).max(500).optional());
 
-export const VoiceTxBufferPreferenceSchema = z.object({
-  profile: VoiceTxBufferProfileSchema.default('balanced'),
+export const VoiceTxBufferPreferenceSchema = z.preprocess((value) => {
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  const preference = value as { profile?: unknown };
+  if (
+    preference.profile === 'low-latency'
+    || preference.profile === 'balanced'
+    || preference.profile === 'stable'
+  ) {
+    return { ...preference, profile: 'auto' };
+  }
+  return value;
+}, z.object({
+  profile: VoiceTxBufferProfileSchema.default('auto'),
   customTargetBufferMs: VoiceTxCustomTargetBufferMsSchema,
-}).superRefine((value, ctx) => {
+})).superRefine((value, ctx) => {
   if (value.profile === 'custom' && typeof value.customTargetBufferMs !== 'number') {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -85,38 +98,18 @@ export const ResolvedVoiceTxBufferPolicySchema = z.object({
 });
 export type ResolvedVoiceTxBufferPolicy = z.infer<typeof ResolvedVoiceTxBufferPolicySchema>;
 
-export const DEFAULT_VOICE_TX_BUFFER_PROFILE: VoiceTxBufferProfile = 'balanced';
+export const DEFAULT_VOICE_TX_BUFFER_PROFILE: VoiceTxBufferProfile = 'auto';
 
 const VOICE_TX_BUFFER_PRESETS: Record<Exclude<VoiceTxBufferProfile, 'custom'>, ResolvedVoiceTxBufferPolicy> = {
-  'low-latency': {
-    profile: 'low-latency',
-    targetMs: 40,
-    minMs: 30,
-    maxMs: 140,
-    headroomMs: 20,
-    staleFrameMs: 220,
-    uplinkMaxBufferedAudioMs: 80,
-    uplinkDegradedBufferedAudioMs: 200,
-  },
-  balanced: {
-    profile: 'balanced',
-    targetMs: 90,
+  auto: {
+    profile: 'auto',
+    targetMs: 80,
     minMs: 60,
-    maxMs: 240,
+    maxMs: 400,
     headroomMs: 40,
-    staleFrameMs: 450,
+    staleFrameMs: 650,
     uplinkMaxBufferedAudioMs: 180,
     uplinkDegradedBufferedAudioMs: 360,
-  },
-  stable: {
-    profile: 'stable',
-    targetMs: 170,
-    minMs: 120,
-    maxMs: 420,
-    headroomMs: 80,
-    staleFrameMs: 850,
-    uplinkMaxBufferedAudioMs: 340,
-    uplinkDegradedBufferedAudioMs: 680,
   },
 };
 

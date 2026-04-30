@@ -60,7 +60,7 @@ describe('Realtime audio codec schemas', () => {
       fallbackReason: null,
       codecSampleRate: null,
       bitrateBps: 32000,
-      frameDurationMs: 10,
+      frameDurationMs: 20,
     }).resolvedCodec).toBe('opus');
 
     expect(ResolvedRealtimeAudioCodecPolicySchema.parse({
@@ -75,14 +75,18 @@ describe('Realtime audio codec schemas', () => {
 });
 
 describe('VoiceTxBufferPreferenceSchema', () => {
-  it('accepts preset and custom TX buffer profiles', () => {
-    expect(VoiceTxBufferPreferenceSchema.parse({ profile: 'low-latency' }).profile).toBe('low-latency');
-    expect(VoiceTxBufferPreferenceSchema.parse({ profile: 'balanced' }).profile).toBe('balanced');
-    expect(VoiceTxBufferPreferenceSchema.parse({ profile: 'stable' }).profile).toBe('stable');
+  it('accepts auto and custom TX buffer profiles', () => {
+    expect(VoiceTxBufferPreferenceSchema.parse({ profile: 'auto' }).profile).toBe('auto');
     expect(VoiceTxBufferPreferenceSchema.parse({
       profile: 'custom',
       customTargetBufferMs: '240',
     }).customTargetBufferMs).toBe(240);
+  });
+
+  it('migrates legacy TX buffer presets to auto', () => {
+    expect(VoiceTxBufferPreferenceSchema.parse({ profile: 'low-latency' }).profile).toBe('auto');
+    expect(VoiceTxBufferPreferenceSchema.parse({ profile: 'balanced' }).profile).toBe('auto');
+    expect(VoiceTxBufferPreferenceSchema.parse({ profile: 'stable' }).profile).toBe('auto');
   });
 
   it('rejects invalid custom TX buffer targets', () => {
@@ -91,19 +95,22 @@ describe('VoiceTxBufferPreferenceSchema', () => {
     expect(() => VoiceTxBufferPreferenceSchema.parse({ profile: 'custom', customTargetBufferMs: 501 })).toThrow();
   });
 
-  it('defaults send sessions to balanced when no preference is provided', () => {
+  it('defaults send sessions to auto when no preference is provided', () => {
     const parsed = RealtimeSessionRequestSchema.parse({
       scope: 'radio',
       direction: 'send',
     });
     expect(parsed.voiceTxBufferPreference).toBeUndefined();
-    expect(resolveVoiceTxBufferPolicy(parsed.voiceTxBufferPreference).targetMs).toBe(90);
+    expect(resolveVoiceTxBufferPolicy(parsed.voiceTxBufferPreference).targetMs).toBe(80);
   });
 
-  it('resolves different TX buffer presets to different jitter budgets', () => {
-    expect(resolveVoiceTxBufferPolicy({ profile: 'low-latency' }).targetMs).toBe(40);
-    expect(resolveVoiceTxBufferPolicy({ profile: 'balanced' }).targetMs).toBe(90);
-    expect(resolveVoiceTxBufferPolicy({ profile: 'stable' }).targetMs).toBe(170);
+  it('resolves automatic and custom TX buffer policies', () => {
+    expect(resolveVoiceTxBufferPolicy({ profile: 'auto' })).toMatchObject({
+      profile: 'auto',
+      targetMs: 80,
+      minMs: 60,
+      maxMs: 400,
+    });
     expect(resolveVoiceTxBufferPolicy({
       profile: 'custom',
       customTargetBufferMs: 250,

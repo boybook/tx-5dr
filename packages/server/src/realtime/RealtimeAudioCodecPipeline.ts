@@ -24,7 +24,7 @@ const logger = createLogger('RealtimeAudioCodecPipeline');
 const OPUS_STANDARD_SAMPLE_RATES = [48_000, 24_000, 16_000, 12_000, 8_000] as const;
 const OPUS_NATIVE_RX_SAMPLE_RATES = [48_000, 24_000, 16_000, 12_000] as const;
 const OPUS_TX_CAPTURE_SAMPLE_RATE = 16_000;
-const REALTIME_OPUS_FRAME_DURATION_MS = 10;
+const REALTIME_AUDIO_FRAME_DURATION_MS = 20;
 const REALTIME_OPUS_RX_BITRATE_BPS = 32_000;
 const REALTIME_OPUS_TX_BITRATE_BPS = 24_000;
 const MAX_OPUS_CHANNELS = 2;
@@ -64,6 +64,7 @@ export interface DecodedRealtimeAudioPacket {
   channels: number;
   samplesPerChannel: number;
   samples: Float32Array;
+  concealment?: 'opus-plc';
 }
 
 export interface ResolveRealtimeCodecPolicyOptions {
@@ -202,7 +203,7 @@ export function resolveRealtimeAudioCodecPolicy(
     fallbackReason: null,
     codecSampleRate,
     bitrateBps,
-    frameDurationMs: REALTIME_OPUS_FRAME_DURATION_MS,
+    frameDurationMs: REALTIME_AUDIO_FRAME_DURATION_MS,
   };
 }
 
@@ -213,6 +214,8 @@ export class RealtimeDownlinkAudioEncoder {
   private opusKey: string | null = null;
   private resampler: InterleavedStreamingResampler | null = null;
   private fixedFrameBuffer: TimedFixedFrameBuffer | null = null;
+  private pcmKey: string | null = null;
+  private pcmFixedFrameBuffer: TimedFixedFrameBuffer | null = null;
 
   constructor(private readonly policy: ResolvedRealtimeAudioCodecPolicy) {}
 
@@ -233,30 +236,49 @@ export class RealtimeDownlinkAudioEncoder {
       return [];
     }
 
-    const serverSentAtMs = Date.now();
-    const payload = encodeRealtimePcmAudioFrame({
-      sequence: this.sequence++,
-      timestampMs: transportFrame.timestamp,
-      serverSentAtMs,
-      sampleRate: transportFrame.sampleRate,
-      channels: transportFrame.channels,
-      samplesPerChannel: transportFrame.samplesPerChannel,
-      pcm: float32ToInt16Pcm(transportFrame.samples),
-    });
+    const pcmKey = `${frame.sourceKind}:${frame.nativeSourceKind ?? ''}:${transportFrame.sampleRate}:${transportFrame.channels}`;
+    if (this.pcmKey !== pcmKey) {
+      this.pcmKey = pcmKey;
+      this.pcmFixedFrameBuffer = new TimedFixedFrameBuffer(
+        Math.round((transportFrame.sampleRate * REALTIME_AUDIO_FRAME_DURATION_MS) / 1000),
+        transportFrame.channels,
+        transportFrame.sampleRate,
+      );
+    }
+    if (!this.pcmFixedFrameBuffer) {
+      return [];
+    }
 
-    return [{
-      payload,
-      codec: 'pcm-s16le',
-      sequence: this.sequence - 1,
-      timestampMs: transportFrame.timestamp,
-      serverSentAtMs,
-      sourceSampleRate: transportFrame.inputSampleRate,
-      codecSampleRate: transportFrame.sampleRate,
-      channels: transportFrame.channels,
-      samplesPerChannel: transportFrame.samplesPerChannel,
-      frameDurationMs: Math.round((transportFrame.samplesPerChannel / transportFrame.sampleRate) * 1000),
-      wireBytes: payload.byteLength,
-    }];
+    const pcmFrames = this.pcmFixedFrameBuffer.push(transportFrame.samples, transportFrame.timestamp);
+    const packets: RealtimeCodecPacket[] = [];
+    for (const pcmFrame of pcmFrames) {
+      const serverSentAtMs = Date.now();
+      const sequence = this.sequence++;
+      const payload = encodeRealtimePcmAudioFrame({
+        sequence,
+        timestampMs: pcmFrame.timestampMs,
+        serverSentAtMs,
+        sampleRate: transportFrame.sampleRate,
+        channels: transportFrame.channels,
+        samplesPerChannel: pcmFrame.samplesPerChannel,
+        pcm: float32ToInt16Pcm(pcmFrame.samples),
+      });
+
+      packets.push({
+        payload,
+        codec: 'pcm-s16le',
+        sequence,
+        timestampMs: pcmFrame.timestampMs,
+        serverSentAtMs,
+        sourceSampleRate: transportFrame.inputSampleRate,
+        codecSampleRate: transportFrame.sampleRate,
+        channels: transportFrame.channels,
+        samplesPerChannel: pcmFrame.samplesPerChannel,
+        frameDurationMs: REALTIME_AUDIO_FRAME_DURATION_MS,
+        wireBytes: payload.byteLength,
+      });
+    }
+    return packets;
   }
 
   private encodeOpusFrame(frame: RealtimeAudioFrame): RealtimeCodecPacket[] {
@@ -300,7 +322,7 @@ export class RealtimeDownlinkAudioEncoder {
         codecSampleRate,
         channels: sourceChannels,
         samplesPerChannel: opusFrame.samplesPerChannel,
-        frameDurationMs: REALTIME_OPUS_FRAME_DURATION_MS,
+        frameDurationMs: REALTIME_AUDIO_FRAME_DURATION_MS,
         payload: new Uint8Array(encoded.buffer, encoded.byteOffset, encoded.byteLength),
       });
       packets.push({
@@ -313,7 +335,7 @@ export class RealtimeDownlinkAudioEncoder {
         codecSampleRate,
         channels: sourceChannels,
         samplesPerChannel: opusFrame.samplesPerChannel,
-        frameDurationMs: REALTIME_OPUS_FRAME_DURATION_MS,
+        frameDurationMs: REALTIME_AUDIO_FRAME_DURATION_MS,
         wireBytes: payload.byteLength,
       });
     }
@@ -336,7 +358,7 @@ export class RealtimeDownlinkAudioEncoder {
       ? null
       : new InterleavedStreamingResampler(sourceSampleRate, codecSampleRate, channels);
     this.fixedFrameBuffer = new TimedFixedFrameBuffer(
-      Math.round((codecSampleRate * REALTIME_OPUS_FRAME_DURATION_MS) / 1000),
+      Math.round((codecSampleRate * REALTIME_AUDIO_FRAME_DURATION_MS) / 1000),
       channels,
       codecSampleRate,
     );
@@ -346,37 +368,112 @@ export class RealtimeDownlinkAudioEncoder {
 export class RealtimeUplinkAudioDecoder {
   private opusCodec: InstanceType<OpusEncoderConstructor> | null = null;
   private opusKey: string | null = null;
+  private lastOpusSequence: number | null = null;
+  private lastOpusTimestampMs: number | null = null;
+  private lastOpusFrameDurationMs = REALTIME_AUDIO_FRAME_DURATION_MS;
 
-  decode(payload: ArrayBufferLike): DecodedRealtimeAudioPacket | null {
+  decode(payload: ArrayBufferLike): DecodedRealtimeAudioPacket[] {
     const frame = decodeRealtimeAudioFrame(payload);
     if (isRealtimeEncodedAudioFrame(frame)) {
       return this.decodeOpus(frame);
     }
-    return decodePcm(frame);
+    return [decodePcm(frame)];
   }
 
-  private decodeOpus(frame: RealtimeEncodedAudioFrame): DecodedRealtimeAudioPacket | null {
+  private decodeOpus(frame: RealtimeEncodedAudioFrame): DecodedRealtimeAudioPacket[] {
     const sampleRate = resolveOpusCodecSampleRate(frame.codecSampleRate);
     const channels = normalizeOpusChannels(frame.channels);
     const key = `${sampleRate}:${channels}`;
     if (this.opusKey !== key) {
       this.opusKey = key;
       this.opusCodec = RealtimeOpusCodecService.getInstance().createCodec(sampleRate, channels);
+      this.lastOpusSequence = null;
+      this.lastOpusTimestampMs = null;
+      this.lastOpusFrameDurationMs = frame.frameDurationMs || REALTIME_AUDIO_FRAME_DURATION_MS;
     }
+    if (!this.opusCodec) {
+      return [];
+    }
+
+    const packets: DecodedRealtimeAudioPacket[] = [];
+    const plcPacket = this.decodeOpusPlcForGap(frame, sampleRate, channels);
+    if (plcPacket) {
+      packets.push(plcPacket);
+    }
+
+    const realPacket = this.decodeOpusPayload(frame, sampleRate, channels);
+    if (realPacket) {
+      packets.push(realPacket);
+      this.lastOpusSequence = frame.sequence;
+      this.lastOpusTimestampMs = frame.timestampMs;
+      this.lastOpusFrameDurationMs = frame.frameDurationMs || REALTIME_AUDIO_FRAME_DURATION_MS;
+    }
+
+    return packets;
+  }
+
+  private decodeOpusPayload(
+    frame: RealtimeEncodedAudioFrame,
+    sampleRate: number,
+    channels: number,
+  ): DecodedRealtimeAudioPacket | null {
     if (!this.opusCodec) {
       return null;
     }
     const decoded = this.opusCodec.decode(Buffer.from(frame.payload.buffer, frame.payload.byteOffset, frame.payload.byteLength));
-    const pcm = new Int16Array(decoded.buffer.slice(decoded.byteOffset, decoded.byteOffset + decoded.byteLength));
+    const samples = this.decodeOpusPcm(decoded, channels);
     return {
       codec: 'opus',
       sequence: frame.sequence,
       timestampMs: frame.timestampMs,
       sampleRate,
       channels,
-      samplesPerChannel: Math.floor(pcm.length / channels),
-      samples: int16ToFloat32Pcm(pcm),
+      samplesPerChannel: Math.floor(samples.length / channels),
+      samples,
     };
+  }
+
+  private decodeOpusPlcForGap(
+    frame: RealtimeEncodedAudioFrame,
+    sampleRate: number,
+    channels: number,
+  ): DecodedRealtimeAudioPacket | null {
+    if (
+      !this.opusCodec
+      || this.lastOpusSequence === null
+      || frame.sequence <= this.lastOpusSequence + 1
+    ) {
+      return null;
+    }
+
+    try {
+      const decoded = this.opusCodec.decode(Buffer.alloc(0));
+      const samples = this.decodeOpusPcm(decoded, channels);
+      if (samples.length === 0) {
+        return null;
+      }
+      const frameDurationMs = this.lastOpusFrameDurationMs || frame.frameDurationMs || REALTIME_AUDIO_FRAME_DURATION_MS;
+      return {
+        codec: 'opus',
+        sequence: this.lastOpusSequence + 1,
+        timestampMs: (this.lastOpusTimestampMs ?? frame.timestampMs - frameDurationMs) + frameDurationMs,
+        sampleRate,
+        channels,
+        samplesPerChannel: Math.floor(samples.length / channels),
+        samples,
+        concealment: 'opus-plc',
+      };
+    } catch (error) {
+      logger.debug('Opus PLC decode failed; continuing with the next real frame', error);
+      return null;
+    }
+  }
+
+  private decodeOpusPcm(decoded: Buffer, channels: number): Float32Array {
+    const byteLength = decoded.byteLength - (decoded.byteLength % 2);
+    const pcm = new Int16Array(decoded.buffer.slice(decoded.byteOffset, decoded.byteOffset + byteLength));
+    const alignedLength = Math.floor(pcm.length / channels) * channels;
+    return int16ToFloat32Pcm(alignedLength === pcm.length ? pcm : pcm.slice(0, alignedLength));
   }
 }
 

@@ -14,12 +14,14 @@ export interface VoiceTxUplinkSendResult {
   sent: boolean;
   dropped: boolean;
   degraded: boolean;
+  sequence: number | null;
   samplesPerChannel: number;
   sendDurationMs: number;
   bufferedAmountBytes: number | null;
   bufferedAudioMs: number | null;
   codec: 'opus' | 'pcm-s16le';
   bitrateKbps: number | null;
+  pendingOpusFrames: number;
 }
 
 export interface VoiceTxUplinkSenderOptions {
@@ -36,7 +38,9 @@ export class VoiceTxUplinkSender {
   private sequence = 0;
   private opusEncoder: unknown | null = null;
   private opusEncoderKey: string | null = null;
+  private generation = 0;
   private readonly pendingOpusFrames: Array<{
+    generation: number;
     sequence: number;
     timestampMs: number;
     sampleRate: number;
@@ -62,12 +66,14 @@ export class VoiceTxUplinkSender {
         sent: false,
         dropped: true,
         degraded,
+        sequence: null,
         samplesPerChannel: frame.samplesPerChannel,
         sendDurationMs: performance.now() - sendStartedAt,
         bufferedAmountBytes,
         bufferedAudioMs,
         codec,
         bitrateKbps: this.getWireBitrateKbps(),
+        pendingOpusFrames: this.pendingOpusFrames.length,
       };
     }
 
@@ -79,22 +85,28 @@ export class VoiceTxUplinkSender {
       : Date.now() - frameDurationMs;
     const serverFrameStartAtMs = this.options.estimateServerTimeMs(clientFrameStartAtMs);
     const timestampMs = serverFrameStartAtMs === null ? 0 : serverFrameStartAtMs;
-    if (codec === 'opus' && this.tryEncodeOpusFrame(frame, timestampMs, frameDurationMs)) {
+    const opusSequence = codec === 'opus'
+      ? this.tryEncodeOpusFrame(frame, timestampMs, frameDurationMs)
+      : null;
+    if (opusSequence !== null) {
       return {
         sent: true,
         dropped: false,
         degraded,
+        sequence: opusSequence,
         samplesPerChannel: frame.samplesPerChannel,
         sendDurationMs: performance.now() - sendStartedAt,
         bufferedAmountBytes: this.options.getBufferedAmount(),
         bufferedAudioMs,
         codec,
         bitrateKbps: this.getWireBitrateKbps() ?? ((audioCodecPolicy?.bitrateBps ?? 24_000) / 1000),
+        pendingOpusFrames: this.pendingOpusFrames.length,
       };
     }
 
+    const sequence = this.sequence++;
     const payload = encodeRealtimePcmAudioFrame({
-      sequence: this.sequence++,
+      sequence,
       timestampMs,
       sampleRate: frame.sampleRate,
       channels: 1,
@@ -110,16 +122,19 @@ export class VoiceTxUplinkSender {
       sent,
       dropped: !sent,
       degraded,
+      sequence,
       samplesPerChannel: frame.samplesPerChannel,
       sendDurationMs: performance.now() - sendStartedAt,
       bufferedAmountBytes: this.options.getBufferedAmount(),
       bufferedAudioMs,
       codec: 'pcm-s16le',
       bitrateKbps: this.getWireBitrateKbps(),
+      pendingOpusFrames: this.pendingOpusFrames.length,
     };
   }
 
   reset(): void {
+    this.generation += 1;
     this.sequence = 0;
     this.pendingOpusFrames.length = 0;
     this.wireByteSamples.length = 0;
@@ -138,14 +153,14 @@ export class VoiceTxUplinkSender {
     frame: CompatCaptureFrame,
     timestampMs: number,
     frameDurationMs: number,
-  ): boolean {
+  ): number | null {
     const encoder = this.ensureOpusEncoder(frame.sampleRate, 1);
     if (!encoder) {
-      return false;
+      return null;
     }
     const AudioDataCtor = (globalThis as unknown as { AudioData?: new (init: Record<string, unknown>) => { close?: () => void } }).AudioData;
     if (!AudioDataCtor) {
-      return false;
+      return null;
     }
     let audioData: { close?: () => void } | null = null;
     let sequence: number | null = null;
@@ -160,6 +175,7 @@ export class VoiceTxUplinkSender {
       });
       sequence = this.sequence++;
       this.pendingOpusFrames.push({
+        generation: this.generation,
         sequence,
         timestampMs,
         sampleRate: frame.sampleRate,
@@ -168,7 +184,7 @@ export class VoiceTxUplinkSender {
         frameDurationMs: Math.max(1, Math.round(frameDurationMs)),
       });
       (encoder as { encode: (data: unknown) => void }).encode(audioData);
-      return true;
+      return sequence;
     } catch {
       if (sequence !== null) {
         const last = this.pendingOpusFrames[this.pendingOpusFrames.length - 1];
@@ -178,7 +194,7 @@ export class VoiceTxUplinkSender {
         this.sequence = Math.max(0, this.sequence - 1);
       }
       this.closeOpusEncoder();
-      return false;
+      return null;
     } finally {
       audioData?.close?.();
     }
@@ -204,10 +220,13 @@ export class VoiceTxUplinkSender {
     if (!AudioEncoderCtor) {
       return null;
     }
+    const encoderGeneration = this.generation;
     this.opusEncoder = new AudioEncoderCtor({
-      output: (chunk) => this.handleOpusChunk(chunk),
+      output: (chunk) => this.handleOpusChunk(chunk, encoderGeneration),
       error: () => {
-        this.closeOpusEncoder();
+        if (encoderGeneration === this.generation) {
+          this.closeOpusEncoder();
+        }
       },
     });
     const encoder = this.opusEncoder as { configure: (config: Record<string, unknown>) => void };
@@ -219,7 +238,7 @@ export class VoiceTxUplinkSender {
           numberOfChannels: channels,
           bitrate: policy.bitrateBps ?? 24_000,
           opus: {
-            frameDuration: 10_000,
+            frameDuration: 20_000,
             application: 'lowdelay',
           },
         });
@@ -250,9 +269,12 @@ export class VoiceTxUplinkSender {
     this.pendingOpusFrames.length = 0;
   }
 
-  private handleOpusChunk(chunk: unknown): void {
+  private handleOpusChunk(chunk: unknown, generation: number): void {
+    if (generation !== this.generation) {
+      return;
+    }
     const meta = this.pendingOpusFrames.shift();
-    if (!meta) {
+    if (!meta || meta.generation !== generation) {
       return;
     }
     const encodedChunk = chunk as {

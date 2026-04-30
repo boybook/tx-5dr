@@ -1,5 +1,10 @@
 import { randomUUID } from 'crypto';
 import type { WebSocket } from 'ws';
+import {
+  createRealtimeTimingProbe,
+  isRealtimeTimingProbeMessage,
+  REALTIME_TIMING_PROBE_INTERVAL_MS,
+} from '@tx5dr/core';
 import type {
   RealtimeConnectivityHints,
   RealtimeScope,
@@ -420,6 +425,8 @@ export class RtcDataAudioManager {
     let droppedStaleFrames = 0;
     let droppedBackpressureFrames = 0;
     let channelBindingCleaned = false;
+    let probeSequence = 0;
+    let probeTimer: NodeJS.Timeout | null = null;
 
     dataChannel.onOpen(() => {
       sendJson({
@@ -433,6 +440,12 @@ export class RtcDataAudioManager {
       if (session.direction !== 'recv') {
         return;
       }
+
+      probeTimer = setInterval(() => {
+        if (dataChannel.isOpen()) {
+          dataChannel.sendMessage(JSON.stringify(createRealtimeTimingProbe('monitor-downlink', probeSequence++)));
+        }
+      }, REALTIME_TIMING_PROBE_INTERVAL_MS);
 
       source = this.rxAudioRouter.resolveSource(session.scope, session.previewSessionId);
       if (!source) {
@@ -493,6 +506,9 @@ export class RtcDataAudioManager {
       })) {
         return;
       }
+      if (this.handleVoiceTimingProbe(payload, session)) {
+        return;
+      }
       if (session.direction !== 'send' || !session.participantIdentity) {
         return;
       }
@@ -501,27 +517,33 @@ export class RtcDataAudioManager {
         return;
       }
       try {
-        const decoded = uplinkDecoder.decode(buffer);
-        if (!decoded) {
+        const decodedPackets = uplinkDecoder.decode(buffer);
+        if (decodedPackets.length === 0) {
           return;
         }
-        const serverReceivedAtMs = Date.now();
-        const wrappedNow = serverReceivedAtMs >>> 0;
-        const transportDelta = decoded.timestampMs > 0 ? ((wrappedNow - decoded.timestampMs) >>> 0) : Number.POSITIVE_INFINITY;
-        const clientSentAtMs = transportDelta <= 60_000
-          ? serverReceivedAtMs - transportDelta
-          : null;
-        const meta: VoiceTxFrameMeta = {
-          transport: 'rtc-data-audio',
-          participantIdentity: session.participantIdentity,
-          sequence: decoded.sequence,
-          clientSentAtMs,
-          serverReceivedAtMs,
-          sampleRate: decoded.sampleRate,
-          samplesPerChannel: decoded.samplesPerChannel,
-          ...(session.voiceTxBufferPolicy ? { voiceTxBufferPolicy: session.voiceTxBufferPolicy } : {}),
-        };
-        void this.engine.getVoiceSessionManager()?.handleParticipantAudioFrame(meta, decoded.samples);
+        for (const decoded of decodedPackets) {
+          const serverReceivedAtMs = Date.now();
+          const wrappedNow = serverReceivedAtMs >>> 0;
+          const transportDelta = decoded.timestampMs > 0 ? ((wrappedNow - decoded.timestampMs) >>> 0) : Number.POSITIVE_INFINITY;
+          const clientSentAtMs = transportDelta <= 60_000
+            ? serverReceivedAtMs - transportDelta
+            : null;
+          const meta: VoiceTxFrameMeta = {
+            transport: 'rtc-data-audio',
+            participantIdentity: session.participantIdentity,
+            sequence: decoded.sequence,
+            clientSentAtMs,
+            serverReceivedAtMs,
+            mediaTimestampMs: decoded.timestampMs,
+            frameDurationMs: decoded.sampleRate > 0 ? (decoded.samplesPerChannel / decoded.sampleRate) * 1000 : 20,
+            codec: decoded.codec,
+            sampleRate: decoded.sampleRate,
+            samplesPerChannel: decoded.samplesPerChannel,
+            ...(decoded.concealment ? { concealment: decoded.concealment } : {}),
+            ...(session.voiceTxBufferPolicy ? { voiceTxBufferPolicy: session.voiceTxBufferPolicy } : {}),
+          };
+          void this.engine.getVoiceSessionManager()?.handleParticipantAudioFrame(meta, decoded.samples);
+        }
       } catch (error) {
         logger.debug('Failed to decode rtc-data-audio uplink frame', error);
       }
@@ -532,6 +554,10 @@ export class RtcDataAudioManager {
         return;
       }
       channelBindingCleaned = true;
+      if (probeTimer) {
+        clearInterval(probeTimer);
+        probeTimer = null;
+      }
       cleanupSource?.();
       cleanupSource = null;
       if (hasLoggedFirstFrame || droppedStaleFrames > 0 || droppedBackpressureFrames > 0) {
@@ -553,6 +579,42 @@ export class RtcDataAudioManager {
     });
 
     return cleanupChannelBinding;
+  }
+
+  private handleVoiceTimingProbe(payload: string | Buffer | ArrayBuffer, session: RtcDataAudioSessionRecord): boolean {
+    if (session.direction !== 'send' || !session.participantIdentity) {
+      return false;
+    }
+    if (typeof payload !== 'string') {
+      const firstByte = Buffer.isBuffer(payload) ? payload[0] : new Uint8Array(payload)[0];
+      if (firstByte !== 0x7b) {
+        return false;
+      }
+    }
+    try {
+      const text = typeof payload === 'string'
+        ? payload
+        : Buffer.isBuffer(payload)
+          ? payload.toString('utf-8')
+          : Buffer.from(payload).toString('utf-8');
+      const message = JSON.parse(text) as unknown;
+      if (!isRealtimeTimingProbeMessage(message) || message.stream !== 'voice-uplink') {
+        return false;
+      }
+      this.engine.getVoiceSessionManager()?.recordParticipantTimingProbe({
+        participantIdentity: session.participantIdentity,
+        transport: 'rtc-data-audio',
+        codec: session.audioCodecPolicy.resolvedCodec === 'opus' ? 'opus' : 'pcm-s16le',
+        sequence: message.sequence,
+        sentAtMs: message.sentAtMs,
+        receivedAtMs: Date.now(),
+        intervalMs: message.intervalMs,
+        ...(session.voiceTxBufferPolicy ? { voiceTxBufferPolicy: session.voiceTxBufferPolicy } : {}),
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async loadModule(): Promise<NodeDataChannelModule | null> {
