@@ -337,6 +337,41 @@ jobs:
             echo "✅ 文件描述符限制已设置为: $(ulimit -n)"
           fi
 
+          cleanup_macos_dmg_volume() {
+            if [ "${{ matrix.platform }}" != "darwin" ]; then
+              return 0
+            fi
+
+            # appdmg occasionally leaves the transient volume state inconsistent
+            # on macOS CI. Clean up best-effort before retrying packaging.
+            if [ -d "/Volumes/TX-5DR" ]; then
+              hdiutil detach "/Volumes/TX-5DR" -force || true
+            fi
+          }
+
+          package_with_retry() {
+            local attempt=1
+            local max_attempts=2
+
+            while [ "$attempt" -le "$max_attempts" ]; do
+              echo "📦 打包尝试 ${attempt}/${max_attempts}..."
+              if "$@"; then
+                return 0
+              fi
+
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                echo "❌ 打包失败，已达到最大重试次数"
+                return 1
+              fi
+
+              echo "⚠️ 打包失败，清理临时 DMG 挂载后重试..."
+              cleanup_macos_dmg_volume
+              rm -rf out/make
+              attempt=$((attempt + 1))
+              sleep 5
+            done
+          }
+
           # macOS: 解锁钥匙串并提取证书 identity
           if [ "${{ matrix.platform }}" = "darwin" ]; then
             echo "🔓 解锁钥匙串并提取证书..."
@@ -355,10 +390,10 @@ jobs:
 
             # 方式 2: 直接在命令前设置 (更可靠)
             echo "📦 开始打包 (使用环境变量)..."
-            APPLE_IDENTITY="$CERT_IDENTITY" yarn ${{ matrix.build_command }}
+            package_with_retry env APPLE_IDENTITY="$CERT_IDENTITY" yarn ${{ matrix.build_command }}
           else
             echo "📦 开始打包..."
-            yarn ${{ matrix.build_command }}
+            package_with_retry yarn ${{ matrix.build_command }}
           fi
 
       - name: List build outputs (Debug)
