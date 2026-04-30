@@ -8,10 +8,10 @@ import { setGlobalInspector } from './state-machines/inspector.js';
 import { createLogger, setLogLevel, getActiveLogLevel } from './utils/logger.js';
 import { ConfigManager } from './config/config-manager.js';
 import { markProcessShuttingDown } from './utils/process-shutdown.js';
+import { createServerReadyState, resolveServerPortOptions, writeServerReadyFile } from './utils/server-ready.js';
 
 const logger = createLogger('Server');
 
-const PORT = Number(process.env.PORT) || 4000;
 const SERVER_SHUTDOWN_TIMEOUT_MS = 1800;
 
 // ===== 全局错误处理器 =====
@@ -84,6 +84,59 @@ process.on('uncaughtException', (error: Error) => {
   }
 });
 
+
+function isAddressInUseError(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: unknown }).code === 'EADDRINUSE');
+}
+
+async function listenWithPortNegotiation(
+  server: Awaited<ReturnType<typeof createServer>>,
+  options: ReturnType<typeof resolveServerPortOptions>,
+): Promise<number> {
+  for (let step = 0; step <= options.scanSteps; step += 1) {
+    const candidatePort = options.requestedPort + step;
+    try {
+      await server.listen({ port: candidatePort, host: '0.0.0.0' });
+      if (candidatePort !== options.requestedPort) {
+        logger.warn('server port changed after negotiation', {
+          requestedPort: options.requestedPort,
+          actualPort: candidatePort,
+        });
+      }
+      return candidatePort;
+    } catch (error) {
+      const canRetry = options.autoPort && isAddressInUseError(error) && step < options.scanSteps;
+      if (canRetry) {
+        logger.warn('server port in use, trying next port', {
+          port: candidatePort,
+          nextPort: candidatePort + 1,
+        });
+        continue;
+      }
+
+      if (isAddressInUseError(error)) {
+        await writeServerReadyFile(createServerReadyState({
+          requestedPort: options.requestedPort,
+          httpPort: null,
+          autoPort: options.autoPort,
+          error: {
+            code: 'EADDRINUSE',
+            message: options.autoPort
+              ? `Server port range ${options.requestedPort}-${options.requestedPort + options.scanSteps} is unavailable`
+              : `Server port ${candidatePort} is already in use`,
+            attemptedPort: candidatePort,
+            startPort: options.requestedPort,
+            endPort: options.requestedPort + options.scanSteps,
+          },
+        }));
+      }
+      throw error;
+    }
+  }
+
+  throw new Error(`Server port range ${options.requestedPort}-${options.requestedPort + options.scanSteps} is unavailable`);
+}
+
 async function start() {
   try {
     // 初始化 XState Inspector（必须在引擎启动前，否则状态机 actor 无法连接）
@@ -124,8 +177,14 @@ async function start() {
       logger.info(`log level: ${getActiveLogLevel()} (from env/default)`);
     }
 
-    await server.listen({ port: PORT, host: '0.0.0.0' });
-    logger.info(`TX-5DR server running on http://localhost:${PORT}`);
+    const portOptions = resolveServerPortOptions();
+    const actualPort = await listenWithPortNegotiation(server, portOptions);
+    await writeServerReadyFile(createServerReadyState({
+      requestedPort: portOptions.requestedPort,
+      httpPort: actualPort,
+      autoPort: portOptions.autoPort,
+    }));
+    logger.info(`TX-5DR server running on http://localhost:${actualPort}`);
 
     // 启动引擎（仅在有激活的 Profile 时）
     const clockManager = DigitalRadioEngine.getInstance();

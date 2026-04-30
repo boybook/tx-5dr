@@ -1,4 +1,6 @@
 const net = require('net');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -9,10 +11,20 @@ if (!['web', 'electron'].includes(mode)) {
 }
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
+const DEFAULT_SERVER_PORT = 4000;
 const DEFAULT_WEB_PORT = 8076;
 let turboChild = null;
 let shuttingDown = false;
+let selectedServerPort = Number(process.env.PORT || DEFAULT_SERVER_PORT);
 let selectedWebPort = Number(process.env.WEB_PORT || process.env.TX5DR_WEB_DEV_PORT || DEFAULT_WEB_PORT);
+const serverReadyFile = process.env.TX5DR_SERVER_READY_FILE
+  || path.join(os.tmpdir(), `tx5dr-server-ready-${process.pid}.json`);
+const hasExplicitServerPort = Boolean(process.env.PORT && process.env.PORT.trim());
+const strictServerPort = process.env.TX5DR_SERVER_PORT_STRICT === '1'
+  || ['0', 'false', 'no', 'off'].includes(String(process.env.TX5DR_SERVER_PORT_AUTO || '').toLowerCase());
+if (!Number.isInteger(selectedServerPort) || selectedServerPort <= 0 || selectedServerPort > 65535) {
+  selectedServerPort = DEFAULT_SERVER_PORT;
+}
 if (!Number.isInteger(selectedWebPort) || selectedWebPort <= 0 || selectedWebPort > 65535) {
   selectedWebPort = DEFAULT_WEB_PORT;
 }
@@ -28,9 +40,10 @@ function isPortFree(port, host = '0.0.0.0') {
   });
 }
 
-async function findFreePort(start, maxStep = 50, host = '0.0.0.0') {
+async function findFreePort(start, maxStep = 50, host = '0.0.0.0', avoid) {
   for (let i = 0; i <= maxStep; i += 1) {
     const candidate = start + i;
+    if (avoid && candidate === avoid) continue;
     // eslint-disable-next-line no-await-in-loop
     if (await isPortFree(candidate, host)) {
       return candidate;
@@ -49,8 +62,20 @@ function terminate(child, signal = 'SIGTERM') {
 }
 
 async function startTurbo() {
-  selectedWebPort = await findFreePort(selectedWebPort, 50, '0.0.0.0');
+  selectedServerPort = hasExplicitServerPort
+    ? selectedServerPort
+    : strictServerPort
+      ? selectedServerPort
+      : await findFreePort(selectedServerPort, 50, '0.0.0.0');
+  selectedWebPort = await findFreePort(selectedWebPort, 50, '0.0.0.0', selectedServerPort);
+  try {
+    fs.unlinkSync(serverReadyFile);
+  } catch {
+    // No stale ready file to remove.
+  }
+  console.log(`[dev-runtime] Server port: ${selectedServerPort}${hasExplicitServerPort ? ' (explicit)' : strictServerPort ? ' (strict)' : ''}`);
   console.log(`[dev-runtime] Web dev server port: ${selectedWebPort}`);
+  console.log(`[dev-runtime] Server ready file: ${serverReadyFile}`);
   console.log(`[dev-runtime] rtc-data-audio UDP port: ${process.env.RTC_DATA_AUDIO_UDP_PORT || '50110'}`);
 
   const args = ['turbo', 'run', 'dev', '--parallel', '--filter=!@tx5dr/client-tools'];
@@ -60,6 +85,11 @@ async function startTurbo() {
 
   const env = {
     ...process.env,
+    PORT: String(selectedServerPort),
+    TX5DR_BACKEND_TARGET: `http://127.0.0.1:${selectedServerPort}`,
+    TX5DR_SERVER_READY_FILE: serverReadyFile,
+    TX5DR_SERVER_PORT_AUTO: process.env.TX5DR_SERVER_PORT_AUTO || (hasExplicitServerPort ? '0' : '1'),
+    TX5DR_SERVER_PORT_SCAN_STEPS: process.env.TX5DR_SERVER_PORT_SCAN_STEPS || '50',
     WEB_PORT: String(selectedWebPort),
     TX5DR_WEB_DEV_PORT: String(selectedWebPort),
     RTC_DATA_AUDIO_UDP_PORT: process.env.RTC_DATA_AUDIO_UDP_PORT || '50110',
