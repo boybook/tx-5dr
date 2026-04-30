@@ -176,6 +176,7 @@ describe('SpectrumStreamController memory behavior', () => {
 
     expect(batch?.mode).toBe('append');
     expect(batch?.axis).toEqual({ minHz: 100, maxHz: 300, binCount: 5 });
+    expect(batch?.rowTimestamps).toEqual([10]);
     expect(Array.from(batch?.rows[0] ?? [])).toEqual([100, 150, 200, 250, 300]);
   });
 
@@ -206,6 +207,9 @@ describe('SpectrumStreamController memory behavior', () => {
 
     expect(batch?.mode).toBe('replace');
     expect(batch?.rows).toHaveLength(120);
+    expect(batch?.rowTimestamps).toHaveLength(120);
+    expect(batch?.rowTimestamps[0]).toBe(130);
+    expect(batch?.rowTimestamps[119]).toBe(11);
     expect(batch?.totalRows).toBe(120);
     expect(batch?.axis).toEqual({ minHz: 100, maxHz: 300, binCount: 5 });
     expect(getInternals(controller).histories['radio-sdr']).toHaveLength(120);
@@ -225,6 +229,7 @@ describe('SpectrumStreamController memory behavior', () => {
 
     expect(batch?.mode).toBe('append');
     expect(batch?.axis).toEqual({ minHz: 100, maxHz: 300, binCount: 5 });
+    expect(batch?.rowTimestamps).toEqual([11]);
     expect(Array.from(batch?.rows[0] ?? [])).toEqual([100, 150, 200, 250, 300]);
   });
 });

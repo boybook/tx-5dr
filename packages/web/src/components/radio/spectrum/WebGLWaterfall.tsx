@@ -92,6 +92,10 @@ interface WebGLWaterfallProps {
   isTransmitting?: boolean;
   /** 瀑布图颜色和强度曲线主题 */
   themeId?: SpectrumThemeId;
+  /** 是否显示数字模式周期开始分割线 */
+  showCycleMarkers?: boolean;
+  /** 数字模式周期长度（毫秒），例如 FT8=15000、FT4=7500 */
+  cycleSlotMs?: number | null;
 }
 
 const FREQUENCY_GESTURE_DRAG_THRESHOLD_PX = 4;
@@ -122,6 +126,61 @@ export function releaseWaterfallTextureMemoryRefs(refs: WaterfallTextureMemoryRe
   refs.textureHeightRef.current = 1;
   refs.rowCountRef.current = 0;
   refs.headRowRef.current = 0;
+}
+
+export interface CycleMarkerPosition {
+  id: string;
+  topPercent: number;
+  timestamp: number;
+}
+
+export function buildCycleMarkerPositions(
+  rowTimestamps: ArrayLike<number>,
+  cycleSlotMs: number | null | undefined,
+  visibleRows = rowTimestamps.length
+): CycleMarkerPosition[] {
+  const safeVisibleRows = Math.max(1, visibleRows);
+  if (!cycleSlotMs || !Number.isFinite(cycleSlotMs) || cycleSlotMs <= 0 || rowTimestamps.length < 2) {
+    return [];
+  }
+
+  const markers: CycleMarkerPosition[] = [];
+  const seenBoundaries = new Set<number>();
+  const rowCount = rowTimestamps.length;
+
+  for (let index = 0; index < rowCount - 1; index += 1) {
+    const newerTimestamp = rowTimestamps[index];
+    const olderTimestamp = rowTimestamps[index + 1];
+    if (
+      !Number.isFinite(newerTimestamp)
+      || !Number.isFinite(olderTimestamp)
+      || newerTimestamp <= olderTimestamp
+    ) {
+      continue;
+    }
+
+    const firstBoundary = Math.floor(olderTimestamp / cycleSlotMs) * cycleSlotMs + cycleSlotMs;
+    for (let boundary = firstBoundary; boundary <= newerTimestamp; boundary += cycleSlotMs) {
+      if (boundary <= olderTimestamp || seenBoundaries.has(boundary)) {
+        continue;
+      }
+
+      const offsetWithinPair = (newerTimestamp - boundary) / (newerTimestamp - olderTimestamp);
+      const topPercent = ((index + 0.5 + offsetWithinPair) / safeVisibleRows) * 100;
+      if (!Number.isFinite(topPercent) || topPercent < 0 || topPercent > 100) {
+        continue;
+      }
+
+      seenBoundaries.add(boundary);
+      markers.push({
+        id: `${boundary}-${index}`,
+        topPercent,
+        timestamp: boundary,
+      });
+    }
+  }
+
+  return markers;
 }
 
 export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
@@ -160,10 +219,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   totalRows,
   isTransmitting = false,
   themeId = DEFAULT_SPECTRUM_THEME_ID,
+  showCycleMarkers = false,
+  cycleSlotMs = null,
 }) => {
   const { t } = useTranslation('common');
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const cycleMarkerLayerRef = useRef<HTMLDivElement>(null);
   const glRef = useRef<WebGLRenderingContext | null>(null);
   const programRef = useRef<WebGLProgram | null>(null);
   const textureRef = useRef<WebGLTexture | null>(null);
@@ -175,6 +237,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     hasData: false,
   });
   const [actualRange, setActualRange] = React.useState<{min: number, max: number} | null>(null);
+  const [cycleMarkers, setCycleMarkers] = React.useState<CycleMarkerPosition[]>([]);
 
   // TX拖动状态
   const [draggingOperatorId, setDraggingOperatorId] = React.useState<string | null>(null);
@@ -231,6 +294,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const activeRowCountRef = useRef<number>(0); // 当前状态已累积的行数
   const prevTransmittingRef = useRef<boolean | undefined>(undefined);
   const displayRowsRef = useRef<ArrayLike<number>[]>([]);
+  const displayRowTimestampsRef = useRef<number[]>([]);
   const headRowRef = useRef<number>(0);
   const rowCountRef = useRef<number>(0);
   // 平滑滚动相关
@@ -248,6 +312,36 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const rebuildTextureRef = useRef<(rows: ArrayLike<number>[], axis: SpectrumAxis | null) => void>(() => {});
   const processRenderBatchRef = useRef<(batch: SpectrumRenderBatch | null) => void>(() => {});
   const axis = viewState.axis ?? markerAxis;
+
+  const applyCycleMarkerScrollOffset = useCallback((offsetRows: number) => {
+    const markerLayer = cycleMarkerLayerRef.current;
+    if (!markerLayer) {
+      return;
+    }
+
+    const visibleRows = Math.max(textureHeightRef.current, displayRowTimestampsRef.current.length, 1);
+    const offsetPercent = (offsetRows / visibleRows) * 100;
+    markerLayer.style.transform = offsetPercent === 0 ? '' : `translateY(-${offsetPercent}%)`;
+  }, []);
+
+  const refreshCycleMarkers = useCallback((rowTimestamps: number[] = displayRowTimestampsRef.current) => {
+    const visibleRows = Math.max(textureHeightRef.current, rowTimestamps.length, 1);
+    const nextMarkers = buildCycleMarkerPositions(rowTimestamps, showCycleMarkers ? cycleSlotMs : null, visibleRows);
+    setCycleMarkers(currentMarkers => {
+      if (
+        currentMarkers.length === nextMarkers.length
+        && currentMarkers.every((marker, index) => {
+          const nextMarker = nextMarkers[index];
+          return nextMarker
+            && marker.timestamp === nextMarker.timestamp
+            && Math.abs(marker.topPercent - nextMarker.topPercent) < 0.001;
+        })
+      ) {
+        return currentMarkers;
+      }
+      return nextMarkers;
+    });
+  }, [cycleSlotMs, showCycleMarkers]);
 
   const resetAutoRangeState = useCallback(() => {
     rangeUpdateCounterRef.current = 0;
@@ -1096,10 +1190,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     if (batch.mode === 'reset' || batch.rows.length === 0 || !batch.axis) {
       displayRowsRef.current = [];
+      displayRowTimestampsRef.current = [];
       rowCountRef.current = 0;
       headRowRef.current = 0;
       lastAnimatedFrameTokenRef.current = null;
       lastDataTimeRef.current = 0;
+      applyCycleMarkerScrollOffset(0);
+      setCycleMarkers([]);
       updateViewState(null, false);
       resetAutoRangeState();
       releaseTextureStorage();
@@ -1111,9 +1208,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     if (batch.mode === 'replace') {
       displayRowsRef.current = batch.rows.slice(0, maxRows);
+      displayRowTimestampsRef.current = batch.rowTimestamps.slice(0, maxRows);
       rowCountRef.current = displayRowsRef.current.length;
       headRowRef.current = 0;
       lastAnimatedFrameTokenRef.current = batch.frameToken;
+      refreshCycleMarkers(displayRowTimestampsRef.current);
       rebuildTexture(displayRowsRef.current, nextAxis);
       updateViewState(nextAxis, true);
 
@@ -1123,16 +1222,22 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         gl.useProgram(program);
         gl.uniform1f(scrollRowsLocationRef.current, 0);
       }
+      applyCycleMarkerScrollOffset(0);
       render();
       return;
     }
 
     for (let index = 0; index < batch.rows.length; index += 1) {
       displayRowsRef.current.unshift(batch.rows[index]);
+      displayRowTimestampsRef.current.unshift(batch.rowTimestamps[index]);
     }
     if (displayRowsRef.current.length > maxRows) {
       displayRowsRef.current.length = maxRows;
     }
+    if (displayRowTimestampsRef.current.length > maxRows) {
+      displayRowTimestampsRef.current.length = maxRows;
+    }
+    refreshCycleMarkers(displayRowTimestampsRef.current);
 
     appendRowsToTexture(batch.rows, nextAxis);
     updateViewState(nextAxis, true);
@@ -1143,12 +1248,14 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const gl = glRef.current;
     const program = programRef.current;
     if (!gl || !program || gl.isContextLost() || !scrollRowsLocationRef.current) {
+      applyCycleMarkerScrollOffset(0);
       return;
     }
 
     if (!shouldAnimateScroll) {
       gl.useProgram(program);
       gl.uniform1f(scrollRowsLocationRef.current, 0);
+      applyCycleMarkerScrollOffset(0);
       render();
       return;
     }
@@ -1168,6 +1275,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     gl.useProgram(program);
     gl.uniform1f(scrollRowsLocationRef.current, startRows);
+    applyCycleMarkerScrollOffset(startRows);
     render();
 
     const animate = () => {
@@ -1181,17 +1289,22 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       if (currentGl && currentProgram && !currentGl.isContextLost() && scrollRowsLocationRef.current) {
         currentGl.useProgram(currentProgram);
         currentGl.uniform1f(scrollRowsLocationRef.current, offset);
+        applyCycleMarkerScrollOffset(offset);
         render();
       }
 
       if (progress < 1) {
         scrollAnimRef.current = requestAnimationFrame(animate);
+      } else {
+        applyCycleMarkerScrollOffset(0);
       }
     };
 
     scrollAnimRef.current = requestAnimationFrame(animate);
   }, [
     appendRowsToTexture,
+    applyCycleMarkerScrollOffset,
+    refreshCycleMarkers,
     releaseTextureStorage,
     rebuildTexture,
     render,
@@ -1203,6 +1316,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   useEffect(() => {
     processRenderBatchRef.current = processRenderBatch;
   }, [processRenderBatch]);
+
+  useEffect(() => {
+    refreshCycleMarkers();
+  }, [refreshCycleMarkers]);
 
   useEffect(() => {
     processRenderBatchRef.current(controller.primeRenderBatch());
@@ -1666,13 +1783,25 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       {!markerOnly && (
         <canvas
           ref={canvasRef}
-          className="w-full"
+          className="relative z-0 w-full"
           style={{ height: `${height}px` }}
         />
       )}
 
+      {!markerOnly && cycleMarkers.length > 0 && (
+        <div ref={cycleMarkerLayerRef} className="pointer-events-none absolute inset-0 z-20 will-change-transform">
+          {cycleMarkers.map(marker => (
+            <div
+              key={marker.id}
+              className="absolute inset-x-0 h-px bg-white/45 shadow-[0_0_4px_rgba(255,255,255,0.28)]"
+              style={{ top: `${marker.topPercent}%` }}
+            />
+          ))}
+        </div>
+      )}
+
       {/* 频率标记层 */}
-      <div className="absolute inset-0 pointer-events-none">
+      <div className="pointer-events-none absolute inset-0 z-30">
         {/* TX标记 - 红色 */}
         {txBandOverlays.map((overlay) => {
           const isOverridden = localBandOverlayOverride?.id === overlay.id

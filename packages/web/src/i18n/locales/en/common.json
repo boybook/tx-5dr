@@ -175,6 +175,8 @@
     "openwebrxDetailEnable": "Switch to the OpenWebRX digital detail spectrum view",
     "openwebrxDetailDisable": "Currently in the OpenWebRX digital detail spectrum view. Click to return to the full spectrum",
     "themeSettings": "Spectrum Theme",
+    "cycleMarkers": "Cycle separators",
+    "cycleMarkersDescription": "Show a subtle line at each digital cycle start",
     "theme": {
       "classic": "Classic",
       "wsjtxDefault": "WSJT-X Default Style",

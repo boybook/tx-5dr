@@ -175,6 +175,8 @@
     "openwebrxDetailEnable": "切到 OpenWebRX 数字细化频谱视图",
     "openwebrxDetailDisable": "当前处于 OpenWebRX 数字细化频谱视图，点击恢复完整频谱",
     "themeSettings": "频谱主题",
+    "cycleMarkers": "周期分割线",
+    "cycleMarkersDescription": "在每个数字周期开始处显示淡色横线",
     "theme": {
       "classic": "经典",
       "wsjtxDefault": "WSJT-X 默认风格",

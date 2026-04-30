@@ -23,6 +23,7 @@ export interface SpectrumStreamStatus {
 export interface SpectrumRenderBatch {
   mode: 'reset' | 'replace' | 'append';
   rows: Float32Array[];
+  rowTimestamps: number[];
   axis: SpectrumAxis | null;
   frameToken: number | null;
   hasBacklog: boolean;
@@ -301,6 +302,7 @@ export class SpectrumStreamController {
     this.pendingBatch = {
       mode: 'reset',
       rows: [],
+      rowTimestamps: [],
       axis: null,
       frameToken: null,
       hasBacklog: false,
@@ -427,6 +429,7 @@ export class SpectrumStreamController {
     const batchSize = this.determineBatchSize(pendingQueue.length, backlogAge, frameDuration, historyLimit);
     const frames = pendingQueue.splice(0, batchSize);
     const rows: Float32Array[] = [];
+    const rowTimestamps: number[] = [];
     let axis: SpectrumAxis | null = null;
     let frameToken: number | null = null;
 
@@ -436,6 +439,7 @@ export class SpectrumStreamController {
         continue;
       }
       rows.push(transformed.values);
+      rowTimestamps.push(frame.frame.timestamp);
       axis = transformed.axis;
       frameToken = frame.frame.timestamp;
     }
@@ -445,6 +449,7 @@ export class SpectrumStreamController {
       this.pendingBatch = {
         mode: 'append',
         rows,
+        rowTimestamps,
         axis,
         frameToken,
         hasBacklog: pendingQueue.length > 0,
@@ -523,6 +528,7 @@ export class SpectrumStreamController {
       return {
         mode: 'reset',
         rows: [],
+        rowTimestamps: [],
         axis: null,
         frameToken: null,
         hasBacklog: false,
@@ -532,6 +538,7 @@ export class SpectrumStreamController {
 
     const history = this.histories[selectedKind];
     const rows: Float32Array[] = [];
+    const rowTimestamps: number[] = [];
     let axis: SpectrumAxis | null = null;
 
     for (const frame of history) {
@@ -540,6 +547,7 @@ export class SpectrumStreamController {
         continue;
       }
       rows.push(transformed.values);
+      rowTimestamps.push(frame.frame.timestamp);
       if (!axis) {
         axis = transformed.axis;
       }
@@ -548,6 +556,7 @@ export class SpectrumStreamController {
     return {
       mode: rows.length > 0 ? 'replace' : 'reset',
       rows,
+      rowTimestamps,
       axis,
       frameToken: history[0]?.frame.timestamp ?? null,
       hasBacklog: false,
