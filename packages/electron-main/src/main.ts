@@ -54,6 +54,7 @@ const intentionalChildShutdowns = new WeakSet<import('node:child_process').Child
 let notificationPermissionHandlersConfigured = false;
 let ipcHandlersConfigured = false;
 let devProcessMemoryLogInterval: NodeJS.Timeout | null = null;
+let mainAppReadyForWindow = false;
 
 type QuitSource = 'tray-menu' | 'window-close' | 'renderer' | 'before-quit' | 'will-quit' | 'unknown';
 
@@ -437,6 +438,18 @@ function getClientToolsLogPath(): string {
 
 function getClientToolsReadyPath(): string {
   return path.join(getAppLogsDir(), 'client-tools-ready.json');
+}
+
+function getServerReadyPath(): string {
+  return process.env.TX5DR_SERVER_READY_FILE?.trim() || path.join(getAppLogsDir(), 'server-ready.json');
+}
+
+function removeStaleServerReadyFile(): void {
+  try {
+    fs.unlinkSync(getServerReadyPath());
+  } catch {
+    // No stale ready file to remove.
+  }
 }
 
 function getDevWebPort(): number {
@@ -1028,6 +1041,121 @@ interface WebGatewayReadyState {
   error?: unknown;
 }
 
+interface ServerReadyState {
+  pid?: number;
+  timestamp?: string;
+  requestedPort?: number;
+  httpPort: number | null;
+  baseUrl: string | null;
+  healthOk: boolean;
+  autoPort?: boolean;
+  error?: {
+    code?: string | null;
+    message?: string;
+    attemptedPort?: number;
+    startPort?: number;
+    endPort?: number;
+  } | null;
+}
+
+function isValidPort(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) > 0 && Number(value) < 65536;
+}
+
+function readServerReadyFile(minTimestampMs?: number): ServerReadyState | null {
+  try {
+    const raw = fs.readFileSync(getServerReadyPath(), 'utf-8');
+    const parsed = JSON.parse(raw) as ServerReadyState;
+    if (minTimestampMs && parsed.timestamp) {
+      const timestampMs = Date.parse(parsed.timestamp);
+      if (Number.isFinite(timestampMs) && timestampMs < minTimestampMs) {
+        return null;
+      }
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function probeTx5drServer(baseUrl: string, timeoutMs = 2000): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const parsed = new URL(baseUrl);
+      const req = http.request({
+        hostname: parsed.hostname,
+        port: Number(parsed.port || 80),
+        path: '/',
+        method: 'GET',
+        timeout: timeoutMs,
+      }, (res) => {
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          data += chunk;
+          if (data.length > 4096) {
+            req.destroy();
+            resolve(false);
+          }
+        });
+        res.on('end', () => {
+          try {
+            const body = JSON.parse(data) as { status?: string; service?: string };
+            resolve(res.statusCode === 200 && body.status === 'ok' && body.service === 'TX-5DR Server');
+          } catch {
+            resolve(false);
+          }
+        });
+      });
+      req.on('error', () => resolve(false));
+      req.on('timeout', () => {
+        req.destroy();
+        resolve(false);
+      });
+      req.end();
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+async function waitForServerReady(
+  timeoutMs = 15000,
+  intervalMs = 200,
+  minTimestampMs?: number,
+): Promise<ServerReadyState> {
+  const started = Date.now();
+  let lastReady: ServerReadyState | null = null;
+
+  while (Date.now() - started <= timeoutMs) {
+    const ready = readServerReadyFile(minTimestampMs);
+    if (ready) {
+      lastReady = ready;
+      if (ready.error) {
+        throw new Error(`server_ready_error:${JSON.stringify(ready.error)}`);
+      }
+      if (isValidPort(ready.httpPort) && ready.baseUrl && ready.healthOk) {
+        const probeOk = await probeTx5drServer(ready.baseUrl);
+        if (probeOk) {
+          return ready;
+        }
+        logger.warn('server ready file found but health identity probe failed', {
+          readyFile: getServerReadyPath(),
+          baseUrl: ready.baseUrl,
+          httpPort: ready.httpPort,
+        });
+      }
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+
+  throw new Error(`server_ready_timeout:${JSON.stringify({
+    readyFile: getServerReadyPath(),
+    timeoutMs,
+    lastReady,
+  })}`);
+}
+
 function readWebGatewayReadyFile(expectedPid?: number): WebGatewayReadyState | null {
   try {
     const raw = fs.readFileSync(getClientToolsReadyPath(), 'utf-8');
@@ -1172,10 +1300,30 @@ function createDockMenu() {
  * 获取当前 web 界面 URL
  */
 function getWebUrl(): string {
-  if (process.env.NODE_ENV === 'development' && !app.isPackaged) {
+  if (process.env.NODE_ENV === 'development' && !app.isPackaged && !selectedWebPort) {
     return `http://localhost:${getDevWebPort()}`;
   }
   return `http://127.0.0.1:${selectedWebPort || DEFAULT_WEB_HTTP_PORT}`;
+}
+
+function getLoadingPagePath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'app', 'packages', 'electron-main', 'assets', 'loading.html')
+    : join(__dirname, '../assets/loading.html');
+}
+
+async function loadMainAppInWindow(windowInstance: BrowserWindow): Promise<void> {
+  if (windowInstance.isDestroyed()) {
+    logger.warn('cannot load main app because window is destroyed');
+    return;
+  }
+
+  const webUrl = getWebUrl();
+  const urlWithAuth = embeddedAdminToken
+    ? `${webUrl}?auth_token=${encodeURIComponent(embeddedAdminToken)}`
+    : webUrl;
+  logger.info(`loading URL: ${urlWithAuth}`);
+  await windowInstance.loadURL(urlWithAuth);
 }
 
 function closeMainWindowToBackground(windowInstance: BrowserWindow, reason: string): void {
@@ -1342,11 +1490,8 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
     }
   }, 10000);
 
-  // 先加载本地 loading 页面，避免白屏
-  const loadingPath = app.isPackaged
-    ? join(process.resourcesPath, 'app', 'packages', 'electron-main', 'assets', 'loading.html')
-    : join(__dirname, '../assets/loading.html');
-  await mainWindow.loadFile(loadingPath);
+  // 先加载本地 loading 页面，避免白屏；主前端在服务就绪后单独切换。
+  await mainWindow.loadFile(getLoadingPagePath());
 
   // 显示窗口（此时展示 loading 动画）
   mainWindow.show();
@@ -1359,14 +1504,6 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
       app.dock.bounce('critical');
     }
   }
-
-  // 导航到前端服务页面（通过 URL 参数传递 auth token 实现自动登录）
-  const webUrl = getWebUrl();
-  const urlWithAuth = embeddedAdminToken
-    ? `${webUrl}?auth_token=${encodeURIComponent(embeddedAdminToken)}`
-    : webUrl;
-  logger.info(`loading URL: ${urlWithAuth}`);
-  await mainWindow.loadURL(urlWithAuth);
 
   return mainWindow;
 }
@@ -1382,7 +1519,12 @@ function showMainWindow() {
       mainWindowInstance.restore();
     }
   } else {
-    void createMainWindowOnly();
+    void (async () => {
+      const windowInstance = await createMainWindowOnly();
+      if (mainAppReadyForWindow) {
+        await loadMainAppInWindow(windowInstance);
+      }
+    })();
   }
 }
 
@@ -1570,46 +1712,10 @@ function stopDevProcessMemoryLogger(): void {
 }
 
 async function checkServerHealth(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const options = {
-      hostname: '127.0.0.1', // 明确使用 IPv4
-      port: selectedServerPort || 4000,
-      path: '/',
-      method: 'GET',
-      timeout: 2000
-    };
-
-    logger.debug(`health check: connecting to http://127.0.0.1:${options.port}/`);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const req = http.request(options, (res: any) => {
-      logger.debug(`health check: response status ${res.statusCode}`);
-
-      let data = '';
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      res.on('data', (chunk: any) => {
-        data += chunk;
-      });
-
-      res.on('end', () => {
-        logger.debug(`health check: response body: ${data}`);
-        resolve((res.statusCode || 0) < 500);
-      });
-    });
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    req.on('error', (err: any) => {
-      logger.debug(`health check: connection error: ${err.message}`);
-      resolve(false);
-    });
-
-    req.on('timeout', () => {
-      logger.debug('health check: connection timeout');
-      resolve(false);
-    });
-
-    req.end();
-  });
+  const port = selectedServerPort || 4000;
+  const baseUrl = `http://127.0.0.1:${port}`;
+  logger.debug(`health check: connecting to ${baseUrl}/`);
+  return probeTx5drServer(baseUrl);
 }
 
 function closeFrontendWindowsImmediately(): number {
@@ -1666,6 +1772,7 @@ async function cleanup(): Promise<ChildShutdownResult[]> {
   selectedServerPort = null;
   selectedWebPort = null;
   selectedHttpsPort = null;
+  mainAppReadyForWindow = false;
 
   // 清理系统托盘
   if (trayInstance) {
@@ -1700,15 +1807,54 @@ async function createWindow() {
   const isDevelopment = process.env.NODE_ENV === 'development' && !app.isPackaged;
   logger.info(`isDevelopment: ${isDevelopment}`);
 
+  const startupWindow = await createMainWindowOnly();
+
   // Admin Token 将从 Server 生成的 .admin-token 文件中读取
   // 在 server 就绪后轮询获取
 
   if (isDevelopment) {
     const devWebPort = getDevWebPort();
     const devWebUrl = `http://localhost:${devWebPort}`;
-    logger.info(`development mode: using external server (${devWebUrl})`);
+    logger.info('development mode: using external dev services', {
+      devWebUrl,
+      serverReadyFile: getServerReadyPath(),
+    });
 
-    // 在开发模式下，等待前端 Vite 服务器准备就绪
+    // 开发模式由 dev-runtime 启动 server；只信任 server ready 文件，避免误连到占用 4000 的其他服务。
+    logger.info('waiting for backend server ready file...', {
+      readyFile: getServerReadyPath(),
+      timeoutMs: DEV_BACKEND_READY_TIMEOUT_MS,
+    });
+    let serverReady: ServerReadyState;
+    try {
+      serverReady = await waitForServerReady(DEV_BACKEND_READY_TIMEOUT_MS, 300);
+    } catch (error) {
+      logger.error('cannot confirm backend server readiness', error);
+      errorType = 'TIMEOUT';
+      hasStartupError = true;
+      dialog.showErrorBox('TX-5DR - Startup Failed',
+        `Cannot confirm backend server readiness\n\n${error instanceof Error ? `${error.message}\n\n` : ''}` +
+        `Ready file: ${getServerReadyPath()}\n` +
+        `Please run yarn dev:electron so the backend can publish its negotiated port.\n\n${buildLogPathsHint('server')}`);
+      return;
+    }
+
+    if (!isValidPort(serverReady.httpPort)) {
+      logger.error('backend server ready file did not include a valid port', serverReady);
+      errorType = 'TIMEOUT';
+      hasStartupError = true;
+      dialog.showErrorBox('TX-5DR - Startup Failed',
+        `Backend server ready file did not include a valid port\n\nReady file: ${getServerReadyPath()}\n\n${buildLogPathsHint('server')}`);
+      return;
+    }
+
+    selectedServerPort = serverReady.httpPort;
+    logger.info('backend server ready', {
+      port: selectedServerPort,
+      baseUrl: serverReady.baseUrl,
+    });
+
+    // 在开发模式下，等待前端 Vite 服务器准备就绪，再启动 Electron 专用 gateway。
     logger.info('waiting for frontend server...', {
       url: devWebUrl,
       timeoutMs: DEV_FRONTEND_READY_TIMEOUT_MS,
@@ -1726,25 +1872,6 @@ async function createWindow() {
 
     logger.info('frontend server connected');
 
-    // 等待后端服务器准备就绪
-    logger.info('waiting for backend server...', {
-      url: 'http://localhost:4000',
-      timeoutMs: DEV_BACKEND_READY_TIMEOUT_MS,
-    });
-    const serverReady = await waitForHttp('http://localhost:4000', DEV_BACKEND_READY_TIMEOUT_MS, 300);
-
-    if (!serverReady) {
-      logger.error('cannot connect to backend server (http://localhost:4000)');
-      errorType = 'TIMEOUT';
-      hasStartupError = true;
-      dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Cannot connect to backend server (http://localhost:4000)\nPlease run yarn dev or yarn dev:electron\n\n${buildLogPathsHint('server')}`);
-      return;
-    }
-
-    logger.info('backend server connected');
-
-    selectedServerPort = 4000;
     try {
       selectedWebPort = await findFreePort(devWebPort + 1, DEFAULT_PORT_SCAN_STEPS, selectedServerPort, '0.0.0.0', { fallbackToRandom: false });
     } catch (error) {
@@ -1786,6 +1913,7 @@ async function createWindow() {
     const serverLauncherEntry = serverLauncherEntryPath();
     const webEntry = webGatewayEntryPath();
 
+    removeStaleServerReadyFile();
     const serverPort = await findFreePort(4000, 50, undefined, '0.0.0.0');
     let webPort: number;
     try {
@@ -1863,18 +1991,27 @@ ${detail}${okHint}${failHint}
     }
     logger.warn('native module check complete');
 
+    const serverLaunchStartedAt = Date.now();
     serverProcess = runChild('server', serverLauncherEntry, {
       PORT: String(serverPort),
       WEB_PORT: String(webPort),
       TX5DR_SERVER_ENTRY: serverEntry,
+      TX5DR_SERVER_PORT_AUTO: '1',
+      TX5DR_SERVER_PORT_SCAN_STEPS: String(DEFAULT_PORT_SCAN_STEPS),
+      TX5DR_SERVER_READY_FILE: getServerReadyPath(),
       RTC_DATA_AUDIO_UDP_PORT: process.env.RTC_DATA_AUDIO_UDP_PORT || '50110',
       RTC_DATA_AUDIO_ICE_UDP_MUX: process.env.RTC_DATA_AUDIO_ICE_UDP_MUX || '1',
     });
 
-    logger.info('waiting for backend server...');
-    const serverOk = await waitForHttp(`http://127.0.0.1:${selectedServerPort}`, 15000, 200);
-    if (!serverOk) {
-      logger.error('backend server startup timeout');
+    logger.info('waiting for backend server ready file...', {
+      readyFile: getServerReadyPath(),
+      requestedPort: serverPort,
+    });
+    let serverReady: ServerReadyState;
+    try {
+      serverReady = await waitForServerReady(15000, 200, serverLaunchStartedAt);
+    } catch (error) {
+      logger.error('backend server startup timeout', error);
       errorType = 'TIMEOUT';
       crashedProcessName = crashedProcessName || 'server';
       hasStartupError = true;
@@ -1882,19 +2019,38 @@ ${detail}${okHint}${failHint}
         `Backend server startup timeout
 
 ` +
-        `Backend port: ${serverPort}
+        `Requested backend port: ${serverPort}
+` +
+        `Ready file: ${getServerReadyPath()}
 ` +
         `rtc-data-audio UDP port: ${process.env.RTC_DATA_AUDIO_UDP_PORT || '50110'}
 ` +
+        `${error instanceof Error ? `${error.message}\n` : ''}` +
         `${buildLogPathsHint('server')}
 
 ` +
         'Please inspect the backend logs. If node-datachannel is unavailable, realtime audio can still fall back to ws-compat.');
       return;
     }
-    logger.info('backend server ready');
 
-    const webEnv = buildWebChildEnv(serverPort);
+    if (!isValidPort(serverReady.httpPort)) {
+      logger.error('backend server ready file did not include a valid port', serverReady);
+      errorType = 'TIMEOUT';
+      crashedProcessName = crashedProcessName || 'server';
+      hasStartupError = true;
+      dialog.showErrorBox('TX-5DR - Startup Failed',
+        `Backend server ready file did not include a valid port\n\nReady file: ${getServerReadyPath()}\n\n${buildLogPathsHint('server')}`);
+      return;
+    }
+
+    selectedServerPort = serverReady.httpPort;
+    logger.info('backend server ready', {
+      requestedPort: serverPort,
+      actualPort: selectedServerPort,
+      baseUrl: serverReady.baseUrl,
+    });
+
+    const webEnv = buildWebChildEnv(selectedServerPort);
     prepareWebGatewayLaunch(webEntry, webEnv);
     webProcess = runChild('client-tools', webEntry, webEnv);
 
@@ -1942,8 +2098,22 @@ ${error instanceof Error ? `${error.message}
     logger.warn('admin token file not found, starting without authentication');
   }
 
-  logger.info('services ready, creating main window');
-  return createMainWindowOnly();
+  logger.info('services ready, loading main app');
+  mainAppReadyForWindow = true;
+
+  const targetWindow = mainWindowInstance && !mainWindowInstance.isDestroyed()
+    ? mainWindowInstance
+    : startupWindow && !startupWindow.isDestroyed()
+      ? startupWindow
+      : null;
+
+  if (targetWindow) {
+    await loadMainAppInWindow(targetWindow);
+    return targetWindow;
+  }
+
+  logger.info('services ready but main window is closed; staying in background');
+  return undefined;
 }
 
 // 启动应用

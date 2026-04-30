@@ -7,6 +7,7 @@ import type { ProxyOptions } from 'vite';
 process.env.BROWSERSLIST_IGNORE_OLD_DATA = 'true';
 const DEFAULT_WEB_PORT = 8076;
 const configuredWebPort = Number(process.env.WEB_PORT || process.env.TX5DR_WEB_DEV_PORT || DEFAULT_WEB_PORT);
+const backendTarget = process.env.TX5DR_BACKEND_TARGET || `http://localhost:${process.env.PORT || 4000}`;
 
 function createProxyOptions(target: string, options?: { rewrite?: (path: string) => string }): ProxyOptions {
   return {
@@ -84,7 +85,7 @@ export default defineConfig({
     strictPort: false,
     allowedHosts: true,
     proxy: {
-      '/api': createProxyOptions('http://localhost:4000'),
+      '/api': createProxyOptions(backendTarget),
     },
   },
 }); 
