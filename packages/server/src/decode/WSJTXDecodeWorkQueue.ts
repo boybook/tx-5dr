@@ -95,7 +95,8 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
     // 清空消息队列并调用解码
     this.lib.pullMessages();
     const baseFrequency = 0; // 基频，目前为0
-    await this.lib.decode(WSJTXMode.FT8, audioInt16, baseFrequency);
+    const decodeMode = request.mode === 'FT4' ? WSJTXMode.FT4 : WSJTXMode.FT8;
+    await this.lib.decode(decodeMode, audioInt16, baseFrequency);
 
     // 读取消息并映射到帧
     const messages = this.lib.pullMessages() as any[];

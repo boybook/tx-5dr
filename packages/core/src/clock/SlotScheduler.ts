@@ -129,6 +129,7 @@ export class SlotScheduler {
       
       const decodeRequest: DecodeRequest = {
         slotId: slotInfo.id,
+        mode: mode.name === 'FT4' ? 'FT4' : 'FT8',
         windowIdx,
         pcm: pcmBuffer,
         sampleRate: actualSampleRate, // 使用实际采样率
