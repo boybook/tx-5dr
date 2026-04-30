@@ -1,23 +1,34 @@
 import { performance } from 'node:perf_hooks';
-import { resolveVoiceTxBufferPolicy, type ResolvedVoiceTxBufferPolicy } from '@tx5dr/contracts';
+import type { ResolvedVoiceTxBufferPolicy } from '@tx5dr/contracts';
 import { StreamingLinearResampler } from '../realtime/StreamingAudioResampler.js';
 import type { VoiceTxFrameMeta } from '../voice/VoiceTxDiagnostics.js';
+import { createLogger } from '../utils/logger.js';
 import type { VoiceTxOutputObserver } from './AudioStreamManager.js';
+import { VoiceTxJitterController } from './VoiceTxJitterController.js';
+import { VoiceTxOutputDeviceLead } from './VoiceTxOutputDeviceLead.js';
+import { VoiceTxOutputDiagnostics } from './VoiceTxOutputDiagnostics.js';
+import { VoiceTxOutputPlc } from './VoiceTxOutputPlc.js';
+import { VoiceTxOutputQueue, type ConsumedVoiceChunk } from './VoiceTxOutputQueue.js';
+import type { VoiceTxOutputSinkState } from './VoiceTxOutputTypes.js';
 
-const TARGET_INCREASE_MS = 20;
-const TARGET_DECREASE_MS = 10;
-const TARGET_INCREASE_COOLDOWN_MS = 1000;
-const TARGET_DECREASE_AFTER_MS = 5000;
-const TARGET_DECREASE_COOLDOWN_MS = 3000;
-const MAX_PLC_CHUNKS = 2;
-const DEFAULT_VOICE_TX_BUFFER_POLICY = resolveVoiceTxBufferPolicy();
+const logger = createLogger('VoiceTxOutputPipeline');
+const DEBUG_REALTIME_JITTER = process.env.TX5DR_DEBUG_REALTIME_JITTER === '1';
+const DEBUG_VOICE_TX_OUTPUT = process.env.TX5DR_DEBUG_VOICE_TX === '1' || DEBUG_REALTIME_JITTER;
+const MAX_PLC_CHUNKS = 1;
+const RTAUDIO_DEVICE_LEAD_MIN_MS = 100;
+const RTAUDIO_DEVICE_LEAD_MAX_MS = 160;
+const OUTPUT_CATCHUP_MAX_WRITES_PER_TICK = 10;
+const OUTPUT_IDLE_POLL_MS = 5;
+const TX_OUTPUT_DIAGNOSTIC_INTERVAL_MS = 1000;
+const REBUFFER_RESUME_MARGIN_MS = 5;
+const REBUFFER_ENTER_RATIO = 0.6;
+const REBUFFER_ENTER_MIN_MS = 80;
+const REBUFFER_ENTER_TARGET_GAP_MS = 80;
+const REBUFFER_RESUME_TARGET_GAP_MS = 40;
+const REBUFFER_RESUME_MIN_GAP_MS = 60;
+const STALE_TARGET_MARGIN_MS = 200;
 
-export interface VoiceTxOutputSinkState {
-  available: boolean;
-  kind: 'rtaudio' | 'icom-wlan';
-  outputSampleRate: number;
-  outputBufferSize: number;
-}
+export type { VoiceTxOutputSinkState } from './VoiceTxOutputTypes.js';
 
 export interface VoiceTxOutputPipelineDeps {
   getSinkState: () => VoiceTxOutputSinkState;
@@ -26,45 +37,48 @@ export interface VoiceTxOutputPipelineDeps {
   writeOutputChunk: (samples: Float32Array, sink: VoiceTxOutputSinkState) => Promise<boolean> | boolean;
 }
 
-interface VoiceTxQueuedSegment {
-  samples: Float32Array;
-  meta: VoiceTxFrameMeta;
-  enqueuedAt: number;
-  resampleMs: number;
-  offset: number;
-}
-
-interface ConsumedVoiceChunk {
-  samples: Float32Array;
-  meta: VoiceTxFrameMeta | null;
-  enqueuedAt: number | null;
-  resampleMs: number;
-}
-
 export class VoiceTxOutputPipeline {
-  private readonly queue: VoiceTxQueuedSegment[] = [];
+  private readonly outputQueue = new VoiceTxOutputQueue();
   private resampler: StreamingLinearResampler | null = null;
   private resamplerInputRate = 0;
   private resamplerOutputRate = 0;
-  private queuedSamples = 0;
   private outputTimer: NodeJS.Timeout | null = null;
   private outputLoopActive = false;
   private outputEnabled = true;
   private playoutStarted = false;
-  private currentPolicy: ResolvedVoiceTxBufferPolicy = DEFAULT_VOICE_TX_BUFFER_POLICY;
-  private currentPolicySignature = this.policySignature(DEFAULT_VOICE_TX_BUFFER_POLICY);
-  private adaptiveTargetMs = DEFAULT_VOICE_TX_BUFFER_POLICY.targetMs;
-  private lastUnderrunAt = 0;
-  private lastTargetChangeAt = 0;
+  private rebuffering = false;
   private lastOutputWriteAt: number | null = null;
-  private lastOutputSample = 0;
+  private rebufferStartedAtMs: number | null = null;
+  private readonly jitter = new VoiceTxJitterController({
+    logger,
+    debug: DEBUG_VOICE_TX_OUTPUT,
+    debugRealtimeJitter: DEBUG_REALTIME_JITTER,
+  });
+  private readonly outputDeviceLead = new VoiceTxOutputDeviceLead();
+  private readonly plc = new VoiceTxOutputPlc();
   private consecutivePlcChunks = 0;
   private underrunCount = 0;
   private plcFrames = 0;
   private lastSequence: number | null = null;
+  private readonly diagnostics = new VoiceTxOutputDiagnostics(logger, DEBUG_VOICE_TX_OUTPUT, TX_OUTPUT_DIAGNOSTIC_INTERVAL_MS);
   private generation = 0;
+  private lastStaleDropLogAt = 0;
+  private suppressedStaleDropLogs = 0;
 
   constructor(private readonly deps: VoiceTxOutputPipelineDeps) {}
+
+  recordTimingProbe(data: {
+    participantIdentity: string;
+    transport: VoiceTxFrameMeta['transport'];
+    codec?: VoiceTxFrameMeta['codec'];
+    sequence: number;
+    sentAtMs: number;
+    receivedAtMs: number;
+    intervalMs: number;
+    voiceTxBufferPolicy?: ResolvedVoiceTxBufferPolicy;
+  }): void {
+    this.jitter.recordProbeSeed(data);
+  }
 
   ingest(pcmData: Float32Array, frameSampleRate: number, meta: VoiceTxFrameMeta): void {
     const sink = this.deps.getSinkState();
@@ -74,14 +88,38 @@ export class VoiceTxOutputPipeline {
     }
 
     const now = Date.now();
-    const policy = this.applyPolicy(meta.voiceTxBufferPolicy, now);
-    if (typeof meta.clientSentAtMs === 'number' && (now - meta.clientSentAtMs) > policy.staleFrameMs) {
+    const policyApply = this.jitter.applyMediaPolicy(meta.voiceTxBufferPolicy, now, meta);
+    const policy = this.jitter.policy;
+    if (policyApply.changed) {
+      this.outputQueue.clear();
+      this.outputDeviceLead.reset();
+      this.plc.reset();
+      this.playoutStarted = false;
+      this.rebuffering = false;
+      this.rebufferStartedAtMs = null;
+      this.consecutivePlcChunks = 0;
+      this.lastSequence = null;
+      this.lastOutputWriteAt = null;
+    }
+    const staleAgeMs = typeof meta.clientSentAtMs === 'number'
+      ? now - meta.clientSentAtMs
+      : null;
+    const effectiveStaleFrameMs = this.getEffectiveStaleFrameMs(policy);
+    if (typeof staleAgeMs === 'number' && staleAgeMs > effectiveStaleFrameMs) {
+      this.logStaleDrop(meta, sink, staleAgeMs, effectiveStaleFrameMs);
       this.dropFrame(meta, 'stale');
       return;
     }
 
     if (this.hasSequenceGap(meta.sequence)) {
       this.noteUnderrun(now);
+    }
+    if (meta.concealment === 'opus-plc') {
+      this.noteUnderrun(now);
+      this.plcFrames += 1;
+    } else {
+      this.jitter.notePacket(meta, now);
+      this.maybeEnterRebufferProtection();
     }
 
     const resampleStart = performance.now();
@@ -90,22 +128,18 @@ export class VoiceTxOutputPipeline {
     if (playbackFrame.length === 0) {
       return;
     }
+    this.diagnostics.noteIngress(meta, now, resampleMs);
 
-    this.queue.push({
-      samples: playbackFrame,
-      meta,
-      enqueuedAt: now,
-      resampleMs,
-      offset: 0,
-    });
-    this.queuedSamples += playbackFrame.length;
+    this.outputQueue.enqueue(playbackFrame, meta, now, resampleMs);
     this.deps.getObserver()?.onFrameEnqueued?.({
       meta,
-      queueDepthFrames: this.queue.length,
+      queueDepthFrames: this.outputQueue.length,
       queuedAudioMs: this.getQueuedMs(sink.outputSampleRate),
     });
 
     this.trimQueue(sink, meta, policy);
+    this.recordBufferDiagnostics(sink);
+    this.maybeLogDiagnostics('ingest');
     if (this.outputEnabled) {
       this.ensureOutputLoop();
     }
@@ -113,7 +147,7 @@ export class VoiceTxOutputPipeline {
 
   setOutputEnabled(enabled: boolean): void {
     this.outputEnabled = enabled;
-    if (enabled && this.queue.length > 0) {
+    if (enabled && this.outputQueue.length > 0) {
       this.ensureOutputLoop();
     }
   }
@@ -124,36 +158,66 @@ export class VoiceTxOutputPipeline {
       clearTimeout(this.outputTimer);
       this.outputTimer = null;
     }
-    this.queue.length = 0;
-    this.queuedSamples = 0;
+    this.outputQueue.clear();
     this.outputLoopActive = false;
     this.playoutStarted = false;
+    this.rebuffering = false;
     this.resampler?.reset();
     this.resampler = null;
     this.resamplerInputRate = 0;
     this.resamplerOutputRate = 0;
-    this.currentPolicy = DEFAULT_VOICE_TX_BUFFER_POLICY;
-    this.currentPolicySignature = this.policySignature(DEFAULT_VOICE_TX_BUFFER_POLICY);
-    this.adaptiveTargetMs = DEFAULT_VOICE_TX_BUFFER_POLICY.targetMs;
-    this.lastUnderrunAt = 0;
-    this.lastTargetChangeAt = 0;
+    this.jitter.clear();
     this.lastOutputWriteAt = null;
-    this.lastOutputSample = 0;
+    this.rebufferStartedAtMs = null;
+    this.outputDeviceLead.reset();
+    this.plc.reset();
     this.consecutivePlcChunks = 0;
     this.underrunCount = 0;
     this.plcFrames = 0;
     this.lastSequence = null;
+    this.diagnostics.reset();
+    this.lastStaleDropLogAt = 0;
+    this.suppressedStaleDropLogs = 0;
   }
 
   getQueuedMs(outputSampleRate = this.deps.getSinkState().outputSampleRate): number {
     if (!outputSampleRate || outputSampleRate <= 0) {
       return 0;
     }
-    return (this.queuedSamples / outputSampleRate) * 1000;
+    return this.outputQueue.getQueuedMs(outputSampleRate);
   }
 
   getQueueDepthFrames(): number {
-    return this.queue.length;
+    return this.outputQueue.length;
+  }
+
+  getCurrentJitterTargetMs(): number {
+    return this.jitter.targetMs;
+  }
+
+  getOutputBufferState(): {
+    queueMs: number;
+    deviceLeadMs: number;
+    totalBufferedMs: number;
+    targetMs: number;
+    rebufferEnterWaterMs: number;
+    rebufferResumeWaterMs: number;
+    rebuffering: boolean;
+    playoutStarted: boolean;
+  } {
+    const sink = this.deps.getSinkState();
+    const queueMs = this.getQueuedMs(sink.outputSampleRate);
+    const deviceLeadMs = this.getEstimatedOutputDeviceLeadMs(sink.outputSampleRate);
+    return {
+      queueMs,
+      deviceLeadMs,
+      totalBufferedMs: queueMs + deviceLeadMs,
+      targetMs: this.jitter.targetMs,
+      rebufferEnterWaterMs: this.getRebufferEnterWaterMs(),
+      rebufferResumeWaterMs: this.getRebufferResumeWaterMs(),
+      rebuffering: this.rebuffering,
+      playoutStarted: this.playoutStarted,
+    };
   }
 
   private ensureOutputLoop(): void {
@@ -175,11 +239,11 @@ export class VoiceTxOutputPipeline {
       return;
     }
     this.outputLoopActive = true;
-    const startedAt = performance.now();
     const generation = this.generation;
 
     try {
       const sink = this.deps.getSinkState();
+      this.diagnostics.noteTick();
       if (!this.outputEnabled) {
         return;
       }
@@ -191,137 +255,297 @@ export class VoiceTxOutputPipeline {
       this.maybeReduceTarget(Date.now());
       const queueMs = this.getQueuedMs(sink.outputSampleRate);
       const chunkMs = (sink.outputBufferSize / sink.outputSampleRate) * 1000;
-      if (!this.playoutStarted && queueMs < this.adaptiveTargetMs && this.queue.length > 0) {
-        this.scheduleNextTick(Math.min(chunkMs / 2, 5));
+      const deviceLeadMs = this.getEstimatedOutputDeviceLeadMs(sink.outputSampleRate);
+      const totalBufferedMs = queueMs + deviceLeadMs;
+      const desiredDeviceLeadMs = this.getDesiredOutputDeviceLeadMs(sink, chunkMs);
+      this.recordBufferDiagnostics(sink);
+      if (!this.playoutStarted && totalBufferedMs < this.jitter.targetMs && this.outputQueue.length > 0) {
+        this.maybeLogDiagnostics('pre-roll');
+        this.scheduleNextTick(OUTPUT_IDLE_POLL_MS);
         return;
       }
 
-      if (this.queue.length === 0 && this.consecutivePlcChunks >= MAX_PLC_CHUNKS) {
+      if (this.shouldHoldForRebuffer(sink, totalBufferedMs, desiredDeviceLeadMs)) {
+        this.maybeLogDiagnostics(this.rebuffering ? 'rebuffer' : 'rebuffer-wait');
+        this.scheduleNextTick(OUTPUT_IDLE_POLL_MS);
+        return;
+      }
+
+      if (this.outputQueue.length === 0 && deviceLeadMs > chunkMs) {
+        this.maybeLogDiagnostics('device-lead-wait');
+        this.scheduleNextTick(Math.min(OUTPUT_IDLE_POLL_MS, Math.max(1, deviceLeadMs - chunkMs)));
+        return;
+      }
+
+      if (this.outputQueue.length === 0 && this.consecutivePlcChunks >= MAX_PLC_CHUNKS) {
         this.playoutStarted = false;
         return;
       }
 
-      if (this.queue.length > 0) {
+      if (this.outputQueue.length > 0) {
         this.playoutStarted = true;
       }
 
-      const consumed = this.queue.length > 0
-        ? this.consumeChunk(sink.outputBufferSize)
-        : this.createPlcChunk(sink.outputBufferSize);
-      if (consumed.samples.length < sink.outputBufferSize) {
-        this.noteUnderrun(Date.now());
-        consumed.samples = this.padChunk(consumed.samples, sink.outputBufferSize);
+      let writes = 0;
+      while (
+        writes < OUTPUT_CATCHUP_MAX_WRITES_PER_TICK
+        && generation === this.generation
+        && this.outputEnabled
+        && (
+          this.getEstimatedOutputDeviceLeadMs(sink.outputSampleRate) < desiredDeviceLeadMs
+          || (this.outputQueue.length === 0 && this.getEstimatedOutputDeviceLeadMs(sink.outputSampleRate) <= chunkMs * 0.5)
+        )
+      ) {
+        if (this.outputQueue.length === 0 && this.consecutivePlcChunks >= MAX_PLC_CHUNKS) {
+          break;
+        }
+        if (this.rebuffering && this.outputQueue.length === 0) {
+          break;
+        }
+        const currentDeviceLeadMs = this.getEstimatedOutputDeviceLeadMs(sink.outputSampleRate);
+        if (this.rebuffering && this.outputQueue.samples < sink.outputBufferSize) {
+          break;
+        }
+        if (
+          this.outputQueue.length > 0
+          && this.outputQueue.samples < sink.outputBufferSize
+          && currentDeviceLeadMs > chunkMs * 0.75
+        ) {
+          break;
+        }
+        const wrote = await this.writeNextOutputChunk(sink, chunkMs, generation);
+        if (!wrote) {
+          break;
+        }
+        if (this.rebuffering) {
+          this.diagnostics.noteRebufferSafetyWrite(currentDeviceLeadMs);
+        }
+        writes += 1;
       }
+      this.diagnostics.noteWritesPerTick(writes, writes >= OUTPUT_CATCHUP_MAX_WRITES_PER_TICK);
 
-      const processed = this.applyGain(consumed.samples);
-      const writeStart = performance.now();
-      const writeOk = await this.deps.writeOutputChunk(processed, sink);
-      const writeMs = performance.now() - writeStart;
       if (generation !== this.generation) {
         return;
       }
-      const writeAt = Date.now();
-      const outputWriteIntervalMs = this.lastOutputWriteAt === null
-        ? null
-        : Math.max(0, writeAt - this.lastOutputWriteAt);
-      this.lastOutputWriteAt = writeAt;
 
-      if (!writeOk) {
-        this.deps.getObserver()?.onWriteFailure?.({
-          meta: consumed.meta ?? this.fallbackMeta(),
-          queueDepthFrames: this.queue.length,
-          queuedAudioMs: this.getQueuedMs(sink.outputSampleRate),
-        });
-      } else if (consumed.meta) {
-        // This is the device-side delay for the chunk just written. The
-        // remaining software jitter queue has already contributed to
-        // queueWaitMs/serverPipelineMs for its own frames, so including it here
-        // would double-count TX latency in diagnostics.
-        const outputBufferedMs = chunkMs;
-        const queueWaitMs = consumed.enqueuedAt === null ? 0 : Math.max(0, writeAt - consumed.enqueuedAt);
-        const serverPipelineMs = Math.max(0, writeAt - consumed.meta.serverReceivedAtMs);
-        const endToEndMs = typeof consumed.meta.clientSentAtMs === 'number'
-          ? Math.max(0, writeAt - consumed.meta.clientSentAtMs)
-          : null;
-        this.deps.getObserver()?.onFrameProcessed?.({
-          meta: consumed.meta,
-          queueDepthFrames: this.queue.length,
-          queuedAudioMs: this.getQueuedMs(sink.outputSampleRate),
-          resampleMs: consumed.resampleMs,
-          queueWaitMs,
-          writeMs,
-          serverPipelineMs,
-          endToEndMs,
-          outputBufferedMs,
-          outputSampleRate: sink.outputSampleRate,
-          outputBufferSize: sink.outputBufferSize,
-          outputWriteIntervalMs,
-          jitterTargetMs: this.adaptiveTargetMs,
-          underrunCount: this.underrunCount,
-          plcFrames: this.plcFrames,
-        });
+      const nextDeviceLeadMs = this.getEstimatedOutputDeviceLeadMs(sink.outputSampleRate);
+      if (this.rebuffering) {
+        const nextTotalBufferedMs = this.getQueuedMs(sink.outputSampleRate) + nextDeviceLeadMs;
+        if (nextTotalBufferedMs + REBUFFER_RESUME_MARGIN_MS >= this.getRebufferResumeWaterMs()) {
+          this.rebuffering = false;
+          this.rebufferStartedAtMs = null;
+        }
       }
-
-      if (this.queue.length > 0 || this.consecutivePlcChunks < MAX_PLC_CHUNKS) {
-        const elapsedMs = performance.now() - startedAt;
-        this.scheduleNextTick(Math.max(1, chunkMs - elapsedMs));
+      if (this.outputQueue.length > 0 || this.consecutivePlcChunks < MAX_PLC_CHUNKS || nextDeviceLeadMs > chunkMs) {
+        const leadHeadroomMs = Math.max(1, nextDeviceLeadMs - desiredDeviceLeadMs + chunkMs);
+        this.scheduleNextTick(Math.min(OUTPUT_IDLE_POLL_MS, leadHeadroomMs));
       }
+      this.maybeLogDiagnostics('tick');
     } finally {
       this.outputLoopActive = false;
     }
   }
 
-  private consumeChunk(sampleCount: number): ConsumedVoiceChunk {
-    const out = new Float32Array(sampleCount);
-    let outOffset = 0;
-    let firstMeta: VoiceTxFrameMeta | null = null;
-    let firstEnqueuedAt: number | null = null;
-    let resampleMs = 0;
-
-    while (outOffset < sampleCount && this.queue.length > 0) {
-      const segment = this.queue[0]!;
-      if (!firstMeta) {
-        firstMeta = segment.meta;
-        firstEnqueuedAt = segment.enqueuedAt;
-        resampleMs = segment.resampleMs;
-      }
-
-      const available = segment.samples.length - segment.offset;
-      const take = Math.min(sampleCount - outOffset, available);
-      out.set(segment.samples.subarray(segment.offset, segment.offset + take), outOffset);
-      outOffset += take;
-      segment.offset += take;
-      this.queuedSamples = Math.max(0, this.queuedSamples - take);
-
-      if (segment.offset >= segment.samples.length) {
-        this.queue.shift();
-      }
+  private async writeNextOutputChunk(
+    sink: VoiceTxOutputSinkState,
+    chunkMs: number,
+    generation: number,
+  ): Promise<boolean> {
+    const consumed = this.outputQueue.length > 0
+      ? this.consumeChunk(sink.outputBufferSize, sink.outputSampleRate)
+      : this.createPlcChunk(sink.outputBufferSize, sink.outputSampleRate);
+    if (consumed.samples.length < sink.outputBufferSize) {
+      this.diagnostics.notePartialChunk();
+      this.noteUnderrun(Date.now());
+      consumed.samples = this.padChunk(consumed.samples, sink.outputBufferSize, sink.outputSampleRate);
     }
 
-    if (outOffset > 0) {
-      this.lastOutputSample = out[outOffset - 1] ?? this.lastOutputSample;
-      this.consecutivePlcChunks = 0;
+    const processed = this.applyGain(consumed.samples);
+    const writeStart = performance.now();
+    const writeOk = await this.deps.writeOutputChunk(processed, sink);
+    const writeMs = performance.now() - writeStart;
+    if (generation !== this.generation) {
+      return false;
+    }
+    const writeAt = Date.now();
+    const outputWriteIntervalMs = this.lastOutputWriteAt === null
+      ? null
+      : Math.max(0, writeAt - this.lastOutputWriteAt);
+    this.lastOutputWriteAt = writeAt;
+
+    if (!writeOk) {
+      this.deps.getObserver()?.onWriteFailure?.({
+        meta: consumed.meta ?? this.fallbackMeta(),
+        queueDepthFrames: this.outputQueue.length,
+        queuedAudioMs: this.getQueuedMs(sink.outputSampleRate),
+      });
+      this.diagnostics.noteWriteFailure();
+      this.maybeLogDiagnostics('write-failure', true);
+      return false;
     }
 
-    return {
-      samples: outOffset === sampleCount ? out : out.subarray(0, outOffset),
-      meta: firstMeta,
-      enqueuedAt: firstEnqueuedAt,
-      resampleMs,
-    };
+    this.noteOutputDeviceWrite(processed.length, sink.outputSampleRate, writeStart);
+    this.diagnostics.noteOutput(processed, writeMs, outputWriteIntervalMs);
+    if (consumed.meta) {
+      const outputBufferedMs = this.getEstimatedOutputDeviceLeadMs(sink.outputSampleRate);
+      const queueWaitMs = consumed.enqueuedAt === null ? 0 : Math.max(0, writeAt - consumed.enqueuedAt);
+      const serverPipelineMs = Math.max(0, writeAt - consumed.meta.serverReceivedAtMs);
+      const endToEndMs = typeof consumed.meta.clientSentAtMs === 'number'
+        ? Math.max(0, writeAt - consumed.meta.clientSentAtMs)
+        : null;
+      this.deps.getObserver()?.onFrameProcessed?.({
+        meta: consumed.meta,
+        queueDepthFrames: this.outputQueue.length,
+        queuedAudioMs: this.getQueuedMs(sink.outputSampleRate),
+        resampleMs: consumed.resampleMs,
+        queueWaitMs,
+        writeMs,
+        serverPipelineMs,
+        endToEndMs,
+        outputBufferedMs,
+        outputSampleRate: sink.outputSampleRate,
+        outputBufferSize: sink.outputBufferSize,
+        outputWriteIntervalMs,
+        jitterTargetMs: this.jitter.targetMs,
+        underrunCount: this.underrunCount,
+        plcFrames: this.plcFrames,
+      });
+    }
+    return true;
   }
 
-  private createPlcChunk(sampleCount: number): ConsumedVoiceChunk {
-    this.noteUnderrun(Date.now());
-    this.plcFrames += 1;
-    this.consecutivePlcChunks += 1;
-    const out = new Float32Array(sampleCount);
-    let value = this.lastOutputSample;
-    for (let index = 0; index < out.length; index += 1) {
-      value *= 0.92;
-      out[index] = value;
+  private getEstimatedOutputDeviceLeadMs(outputSampleRate: number, now = performance.now()): number {
+    return this.outputDeviceLead.get(outputSampleRate, now);
+  }
+
+  private noteOutputDeviceWrite(sampleCount: number, outputSampleRate: number, now = performance.now()): void {
+    this.outputDeviceLead.noteWrite(sampleCount, outputSampleRate, now);
+  }
+
+  private getDesiredOutputDeviceLeadMs(sink: VoiceTxOutputSinkState, chunkMs: number): number {
+    if (sink.kind !== 'rtaudio') {
+      return chunkMs;
     }
-    this.lastOutputSample = value;
+    return Math.min(
+      RTAUDIO_DEVICE_LEAD_MAX_MS,
+      Math.max(chunkMs * 3, RTAUDIO_DEVICE_LEAD_MIN_MS, this.jitter.targetMs * 0.55),
+    );
+  }
+
+  private shouldHoldForRebuffer(
+    sink: VoiceTxOutputSinkState,
+    totalBufferedMs: number,
+    desiredDeviceLeadMs: number,
+  ): boolean {
+    if (!this.playoutStarted) {
+      return false;
+    }
+
+    const queueMs = this.getQueuedMs(sink.outputSampleRate);
+    const deviceLeadMs = this.getEstimatedOutputDeviceLeadMs(sink.outputSampleRate);
+    if (this.rebuffering) {
+      if (totalBufferedMs + REBUFFER_RESUME_MARGIN_MS >= this.getRebufferResumeWaterMs()) {
+        this.rebuffering = false;
+        this.rebufferStartedAtMs = null;
+        return false;
+      }
+      if (queueMs <= 0 && deviceLeadMs <= 0.5) {
+        this.rebuffering = false;
+        this.rebufferStartedAtMs = null;
+        // Let the normal underrun path emit at most one short tail PLC chunk
+        // before stopping. Rebuffering should not generate repeated padding.
+        return false;
+      }
+      if (this.shouldProtectDeviceLeadDuringRebuffer(sink, deviceLeadMs, desiredDeviceLeadMs)) {
+        return false;
+      }
+      this.diagnostics.noteRebufferHold(this.outputQueue.samples >= sink.outputBufferSize, deviceLeadMs);
+      return true;
+    }
+
+    const enterWaterMs = this.getRebufferEnterWaterMs();
+    if (totalBufferedMs < enterWaterMs) {
+      this.enterRebuffering();
+      if (this.shouldProtectDeviceLeadDuringRebuffer(sink, deviceLeadMs, desiredDeviceLeadMs)) {
+        return false;
+      }
+      this.diagnostics.noteRebufferHold(this.outputQueue.samples >= sink.outputBufferSize, deviceLeadMs);
+      return true;
+    }
+    return false;
+  }
+
+  private maybeEnterRebufferProtection(): void {
+    if (!this.playoutStarted || this.rebuffering) {
+      return;
+    }
+    const sink = this.deps.getSinkState();
+    if (!sink.available || sink.outputSampleRate <= 0 || sink.outputBufferSize <= 0) {
+      return;
+    }
+    const totalBufferedMs = this.getQueuedMs(sink.outputSampleRate)
+      + this.getEstimatedOutputDeviceLeadMs(sink.outputSampleRate);
+    if (totalBufferedMs < this.getRebufferEnterWaterMs()) {
+      this.enterRebuffering();
+      this.maybeLogDiagnostics('rebuffer-target-increase', true);
+    }
+  }
+
+  private getRebufferEnterWaterMs(): number {
+    const targetMs = this.jitter.targetMs;
+    const upperBoundMs = Math.max(REBUFFER_ENTER_MIN_MS, targetMs - REBUFFER_ENTER_TARGET_GAP_MS);
+    return Math.max(
+      REBUFFER_ENTER_MIN_MS,
+      Math.min(upperBoundMs, Math.round(targetMs * REBUFFER_ENTER_RATIO)),
+    );
+  }
+
+  private getRebufferResumeWaterMs(): number {
+    const targetMs = this.jitter.targetMs;
+    const enterWaterMs = this.getRebufferEnterWaterMs();
+    return Math.min(
+      targetMs,
+      Math.max(enterWaterMs + REBUFFER_RESUME_MIN_GAP_MS, targetMs - REBUFFER_RESUME_TARGET_GAP_MS),
+    );
+  }
+
+  private getEffectiveStaleFrameMs(policy = this.jitter.policy): number {
+    return Math.max(policy.staleFrameMs, this.jitter.targetMs + policy.headroomMs + STALE_TARGET_MARGIN_MS);
+  }
+
+  private shouldProtectDeviceLeadDuringRebuffer(
+    sink: VoiceTxOutputSinkState,
+    deviceLeadMs: number,
+    desiredDeviceLeadMs: number,
+  ): boolean {
+    return sink.kind === 'rtaudio'
+      && this.outputQueue.length > 0
+      && this.outputQueue.samples >= sink.outputBufferSize
+      && deviceLeadMs < desiredDeviceLeadMs;
+  }
+
+  private enterRebuffering(): void {
+    if (!this.rebuffering) {
+      this.rebufferStartedAtMs = Date.now();
+    }
+    this.rebuffering = true;
+  }
+
+  private consumeChunk(sampleCount: number, outputSampleRate: number): ConsumedVoiceChunk {
+    const consumed = this.outputQueue.consume(sampleCount);
+    if (consumed.samples.length > 0) {
+      this.plc.applyRestoreCrossfade(consumed.samples, consumed.samples.length, outputSampleRate);
+      this.plc.recordRealOutput(consumed.samples, outputSampleRate);
+      this.consecutivePlcChunks = 0;
+    }
+    return consumed;
+  }
+
+  private createPlcChunk(sampleCount: number, outputSampleRate: number): ConsumedVoiceChunk {
+    this.noteUnderrun(Date.now());
+    this.consecutivePlcChunks += 1;
+    this.diagnostics.notePlcChunk();
+    const out = this.createTailPlcSamples(sampleCount, outputSampleRate);
     return {
       samples: out,
       meta: null,
@@ -330,47 +554,42 @@ export class VoiceTxOutputPipeline {
     };
   }
 
-  private padChunk(samples: Float32Array, sampleCount: number): Float32Array {
+  private padChunk(samples: Float32Array, sampleCount: number, outputSampleRate: number): Float32Array {
     const out = new Float32Array(sampleCount);
-    out.set(samples.subarray(0, Math.min(samples.length, sampleCount)));
-    let value = samples.length > 0 ? samples[samples.length - 1]! : this.lastOutputSample;
-    for (let index = samples.length; index < sampleCount; index += 1) {
-      value *= 0.92;
-      out[index] = value;
+    const realSamples = Math.min(samples.length, sampleCount);
+    out.set(samples.subarray(0, realSamples));
+    if (realSamples > 0) {
+      this.plc.applyRestoreCrossfade(out, realSamples, outputSampleRate);
+      this.plc.recordRealOutput(out.subarray(0, realSamples), outputSampleRate);
     }
-    this.lastOutputSample = value;
+    this.consecutivePlcChunks += 1;
+    this.diagnostics.notePaddedChunk();
+    out.set(this.createTailPlcSamples(sampleCount - realSamples, outputSampleRate), realSamples);
     return out;
+  }
+
+  private createTailPlcSamples(sampleCount: number, outputSampleRate: number): Float32Array {
+    const result = this.plc.createTailSamples(sampleCount, outputSampleRate);
+    if (result.generated) {
+      this.plcFrames += 1;
+    }
+    return result.samples;
   }
 
   private trimQueue(
     sink: VoiceTxOutputSinkState,
     meta: VoiceTxFrameMeta,
-    policy = this.currentPolicy,
+    policy = this.jitter.policy,
   ): void {
-    const maxQueueMs = this.adaptiveTargetMs + policy.headroomMs;
-    if (this.getQueuedMs(sink.outputSampleRate) <= maxQueueMs) {
-      return;
-    }
-
-    const trimToSamples = Math.ceil((this.adaptiveTargetMs / 1000) * sink.outputSampleRate);
-    while (this.queue.length > 0 && this.queuedSamples > trimToSamples) {
-      const segment = this.queue[0]!;
-      const overSamples = this.queuedSamples - trimToSamples;
-      const available = segment.samples.length - segment.offset;
-      const drop = Math.min(overSamples, available);
-      segment.offset += drop;
-      this.queuedSamples = Math.max(0, this.queuedSamples - drop);
-      if (segment.offset >= segment.samples.length) {
-        this.queue.shift();
-      }
-      if (drop > 0) {
-        this.deps.getObserver()?.onFrameDropped?.({
-          meta,
-          queueDepthFrames: this.queue.length,
-          queuedAudioMs: this.getQueuedMs(sink.outputSampleRate),
-          reason: 'jitter-trim',
-        });
-      }
+    const events = this.outputQueue.trimTo(this.jitter.targetMs, policy.headroomMs, sink.outputSampleRate);
+    for (const event of events) {
+      this.diagnostics.noteTrim(event.droppedSamples);
+      this.deps.getObserver()?.onFrameDropped?.({
+        meta: event.meta ?? meta,
+        queueDepthFrames: this.outputQueue.length,
+        queuedAudioMs: this.getQueuedMs(sink.outputSampleRate),
+        reason: 'jitter-trim',
+      });
     }
   }
 
@@ -401,11 +620,45 @@ export class VoiceTxOutputPipeline {
   }
 
   private dropFrame(meta: VoiceTxFrameMeta, reason: 'backpressure' | 'output-unavailable' | 'stale' | 'jitter-trim'): void {
+    this.diagnostics.noteDrop(reason);
+    this.maybeLogDiagnostics(`drop-${reason}`, reason !== 'stale');
     this.deps.getObserver()?.onFrameDropped?.({
       meta,
-      queueDepthFrames: this.queue.length,
+      queueDepthFrames: this.outputQueue.length,
       queuedAudioMs: this.getQueuedMs(),
       reason,
+    });
+  }
+
+  private logStaleDrop(
+    meta: VoiceTxFrameMeta,
+    sink: VoiceTxOutputSinkState,
+    staleAgeMs: number,
+    effectiveStaleFrameMs: number,
+  ): void {
+    if (!DEBUG_VOICE_TX_OUTPUT) {
+      return;
+    }
+    const now = Date.now();
+    if ((now - this.lastStaleDropLogAt) < TX_OUTPUT_DIAGNOSTIC_INTERVAL_MS) {
+      this.suppressedStaleDropLogs += 1;
+      return;
+    }
+    const suppressedSinceLastLog = this.suppressedStaleDropLogs;
+    this.suppressedStaleDropLogs = 0;
+    this.lastStaleDropLogAt = now;
+    logger.warn('Voice TX output dropping stale frame', {
+      staleAgeMs,
+      effectiveStaleFrameMs,
+      policyStaleFrameMs: this.jitter.policy.staleFrameMs,
+      targetMs: this.jitter.targetMs,
+      queueMs: this.getQueuedMs(sink.outputSampleRate),
+      deviceLeadMs: this.getEstimatedOutputDeviceLeadMs(sink.outputSampleRate),
+      suppressedSinceLastLog,
+      participantIdentity: meta.participantIdentity,
+      sequence: meta.sequence,
+      transport: meta.transport,
+      codec: meta.codec,
     });
   }
 
@@ -414,58 +667,56 @@ export class VoiceTxOutputPipeline {
       return false;
     }
     const hasGap = this.lastSequence !== null && sequence > this.lastSequence + 1;
+    if (hasGap) {
+      this.diagnostics.noteSequenceGap(sequence - this.lastSequence! - 1);
+    }
     this.lastSequence = sequence;
     return hasGap;
   }
 
   private noteUnderrun(now: number): void {
     this.underrunCount += 1;
-    this.lastUnderrunAt = now;
-    if ((now - this.lastTargetChangeAt) >= TARGET_INCREASE_COOLDOWN_MS) {
-      this.adaptiveTargetMs = Math.min(this.currentPolicy.maxMs, this.adaptiveTargetMs + TARGET_INCREASE_MS);
-      this.lastTargetChangeAt = now;
+    this.diagnostics.noteUnderrun();
+    if (this.jitter.noteUnderrun(now)) {
+      this.maybeEnterRebufferProtection();
     }
   }
 
   private maybeReduceTarget(now: number): void {
-    if (this.adaptiveTargetMs <= this.currentPolicy.minMs) {
-      return;
+    if (this.jitter.maybeUpdate(now)) {
+      this.maybeEnterRebufferProtection();
     }
-    if ((now - this.lastUnderrunAt) < TARGET_DECREASE_AFTER_MS) {
-      return;
-    }
-    if ((now - this.lastTargetChangeAt) < TARGET_DECREASE_COOLDOWN_MS) {
-      return;
-    }
-    this.adaptiveTargetMs = Math.max(this.currentPolicy.minMs, this.adaptiveTargetMs - TARGET_DECREASE_MS);
-    this.lastTargetChangeAt = now;
   }
 
-  private applyPolicy(policy: ResolvedVoiceTxBufferPolicy | undefined, now: number): ResolvedVoiceTxBufferPolicy {
-    const nextPolicy = policy ?? DEFAULT_VOICE_TX_BUFFER_POLICY;
-    const nextSignature = this.policySignature(nextPolicy);
-    if (nextSignature !== this.currentPolicySignature) {
-      this.currentPolicy = nextPolicy;
-      this.currentPolicySignature = nextSignature;
-      this.adaptiveTargetMs = nextPolicy.targetMs;
-      this.lastUnderrunAt = 0;
-      this.lastTargetChangeAt = now;
-      this.playoutStarted = false;
-    }
-    return this.currentPolicy;
+  private recordBufferDiagnostics(sink: VoiceTxOutputSinkState): void {
+    this.diagnostics.noteBuffer(
+      this.getQueuedMs(sink.outputSampleRate),
+      this.getEstimatedOutputDeviceLeadMs(sink.outputSampleRate),
+    );
   }
 
-  private policySignature(policy: ResolvedVoiceTxBufferPolicy): string {
-    return [
-      policy.profile,
-      policy.targetMs,
-      policy.minMs,
-      policy.maxMs,
-      policy.headroomMs,
-      policy.staleFrameMs,
-      policy.uplinkMaxBufferedAudioMs,
-      policy.uplinkDegradedBufferedAudioMs,
-    ].join(':');
+  private maybeLogDiagnostics(reason: string, force = false): void {
+    const sink = this.deps.getSinkState();
+    const chunkMs = sink.outputSampleRate > 0 ? (sink.outputBufferSize / sink.outputSampleRate) * 1000 : 0;
+    this.diagnostics.maybeLog(reason, {
+      sink,
+      queueMs: this.getQueuedMs(sink.outputSampleRate),
+      deviceLeadMs: this.getEstimatedOutputDeviceLeadMs(sink.outputSampleRate),
+      desiredDeviceLeadMs: this.getDesiredOutputDeviceLeadMs(sink, chunkMs),
+      adaptiveTargetMs: this.jitter.targetMs,
+      playoutStarted: this.playoutStarted,
+      rebuffering: this.rebuffering,
+      rebufferDurationMs: this.rebufferStartedAtMs === null ? 0 : Math.max(0, Date.now() - this.rebufferStartedAtMs),
+      rebufferEnterWaterMs: this.getRebufferEnterWaterMs(),
+      rebufferResumeWaterMs: this.getRebufferResumeWaterMs(),
+      rebufferReason: reason,
+      jitterSnapshot: this.jitter.snapshot,
+      jitterSource: this.jitter.source,
+      policy: this.jitter.policy,
+      underrunCount: this.underrunCount,
+      plcFrames: this.plcFrames,
+      queueDepthFrames: this.outputQueue.length,
+    }, force);
   }
 
   private fallbackMeta(): VoiceTxFrameMeta {
@@ -478,7 +729,7 @@ export class VoiceTxOutputPipeline {
       serverReceivedAtMs: now,
       sampleRate: 0,
       samplesPerChannel: 0,
-      voiceTxBufferPolicy: this.currentPolicy,
+      voiceTxBufferPolicy: this.jitter.policy,
     };
   }
 }

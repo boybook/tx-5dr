@@ -173,6 +173,32 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
     await this.audioStreamManager.playVoiceAudio(pcmData, meta.sampleRate, meta);
   }
 
+  recordParticipantTimingProbe(data: {
+    participantIdentity: string;
+    transport: VoiceTxFrameMeta['transport'];
+    codec?: VoiceTxFrameMeta['codec'];
+    sequence: number;
+    sentAtMs: number;
+    receivedAtMs: number;
+    intervalMs: number;
+    voiceTxBufferPolicy?: VoiceTxFrameMeta['voiceTxBufferPolicy'];
+  }): void {
+    const activeParticipantIdentity = this.pttLockManager.getVoiceAudioClientId();
+    const probeAction = this.pttLockManager.isLocked()
+      ? (data.participantIdentity === activeParticipantIdentity ? 'active' : 'seed-only')
+      : 'seed-only';
+    if (process.env.TX5DR_DEBUG_REALTIME_JITTER === '1') {
+      logger.debug('Voice TX timing probe routed', {
+        probeAction,
+        activeParticipantIdentity,
+        incomingParticipantIdentity: data.participantIdentity,
+        transport: data.transport,
+        codec: data.codec,
+      });
+    }
+    this.audioStreamManager.recordVoiceTxTimingProbe(data);
+  }
+
   getTxDiagnosticsSnapshot() {
     return this.diagnostics.getSnapshot();
   }

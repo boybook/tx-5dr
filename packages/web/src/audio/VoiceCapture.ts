@@ -1,4 +1,8 @@
 import {
+  createRealtimeTimingProbe,
+  REALTIME_TIMING_PROBE_INTERVAL_MS,
+} from '@tx5dr/core';
+import {
   resolveVoiceTxBufferPolicy,
   type RealtimeConnectivityHints,
   type RealtimeTransportOffer,
@@ -28,7 +32,7 @@ import {
   type VoiceTxLocalDiagnostics,
 } from './voiceTxDiagnostics';
 import { RealtimeClockSync, type RealtimeClockConfidence } from '../realtime/RealtimeClockSync';
-import { VoiceTxUplinkSender } from './VoiceTxUplinkSender';
+import { VoiceTxUplinkSender, type VoiceTxUplinkSendResult } from './VoiceTxUplinkSender';
 import {
   getRealtimeAudioCodecCapabilities,
   loadRealtimeAudioCodecPreference,
@@ -37,6 +41,9 @@ import {
 const logger = createLogger('VoiceCapture');
 const COMPAT_CAPTURE_CONNECT_TIMEOUT_MS = 5000;
 const VOICE_TX_CLOCK_SYNC_INTERVAL_MS = 1000;
+const VOICE_TX_CAPTURE_DIAGNOSTIC_INTERVAL_MS = 1000;
+const VOICE_TX_PRE_PTT_STALE_GRACE_MS = 30;
+const VOICE_TX_PTT_FLUSH_GUARD_MS = 40;
 type AudioTrackConstraints = {
   sampleRate?: number;
   channelCount?: number;
@@ -44,6 +51,27 @@ type AudioTrackConstraints = {
   noiseSuppression?: boolean;
   autoGainControl?: boolean;
 };
+
+interface VoiceTxCaptureDiagnosticsWindow {
+  startedAt: number;
+  frames: number;
+  sent: number;
+  skipped: number;
+  dropped: number;
+  degraded: number;
+  intervalSumMs: number;
+  intervalMaxMs: number;
+  sendDurationSumMs: number;
+  sendDurationMaxMs: number;
+  bufferedAudioMaxMs: number;
+  bufferedAmountMaxBytes: number;
+  pendingOpusMax: number;
+  sampleRate: number | null;
+  samplesPerChannel: number | null;
+  codec: 'opus' | 'pcm-s16le' | null;
+  lastSequence: number | null;
+  skipReasons: Record<string, number>;
+}
 
 export interface VoiceCaptureOptions {
   onStateChange?: (state: VoiceCaptureState) => void;
@@ -91,9 +119,15 @@ export class VoiceCapture {
   private readonly localTxStats = new VoiceTxLocalStatsCollector();
   private readonly clockSync = new RealtimeClockSync();
   private clockSyncTimer: number | null = null;
+  private timingProbeTimer: number | null = null;
+  private timingProbeSequence = 0;
   private uplinkSender: VoiceTxUplinkSender | null = null;
   private activeTxBufferPolicy: ResolvedVoiceTxBufferPolicy | null = null;
   private activeAudioCodecPolicy: ResolvedRealtimeAudioCodecPolicy | null = null;
+  private lastCaptureFrameAtMs: number | null = null;
+  private lastCaptureDiagnosticsLogAtMs = 0;
+  private captureDiagnosticsWindow: VoiceTxCaptureDiagnosticsWindow = this.createCaptureDiagnosticsWindow();
+  private pttStartedAtMs: number | null = null;
 
   constructor(options: VoiceCaptureOptions) {
     this.options = options;
@@ -144,13 +178,16 @@ export class VoiceCapture {
     await this.start(options);
   }
 
-  async switchTransportFromGesture(transport: RealtimeTransportKind): Promise<void> {
+  async switchTransportFromGesture(
+    transport: RealtimeTransportKind,
+    options?: Omit<VoiceCaptureStartOptions, 'transportOverride'>,
+  ): Promise<void> {
     await this.prepareCaptureFromGesture();
     if (this.state === 'capturing') {
       this.cleanup({ preserveInteractiveRuntime: true });
       this.setState('idle');
     }
-    await this.start({ transportOverride: transport });
+    await this.start({ ...options, transportOverride: transport });
   }
 
   async start(options?: VoiceCaptureStartOptions): Promise<void> {
@@ -211,11 +248,82 @@ export class VoiceCapture {
   }
 
   setPTTActive(active: boolean): void {
+    const changed = this.pttActive !== active;
+    if (!active && changed) {
+      this.maybeLogCaptureDiagnostics('ptt-stop', true);
+    }
     this.pttActive = active;
+    if (this.isVoiceTxDebugEnabled()) {
+      logger.info('Voice TX PTT state changed', {
+        active,
+        transport: this.transportKind,
+        participantIdentity: this._participantIdentity,
+        txBufferPolicy: this.activeTxBufferPolicy,
+        audioCodecPolicy: this.activeAudioCodecPolicy,
+        clockSync: this.clockSync.getSnapshot(),
+      });
+    }
 
     if (active) {
+      if (changed) {
+        this.flushTxBoundary('ptt-start');
+        this.pttStartedAtMs = Date.now();
+        this.captureDiagnosticsWindow = this.createCaptureDiagnosticsWindow(this.pttStartedAtMs);
+        this.lastCaptureFrameAtMs = null;
+        this.lastCaptureDiagnosticsLogAtMs = 0;
+      }
+      this.stopTimingProbe();
       this.localTxStats.notePTTActivated();
+    } else {
+      if (changed) {
+        this.pttStartedAtMs = null;
+        this.flushTxBoundary('ptt-stop');
+      }
+      this.startTimingProbe();
     }
+  }
+
+  private flushTxBoundary(reason: string): void {
+    try {
+      this.uplinkSender?.reset();
+    } catch (error) {
+      logger.debug('Failed to reset voice TX uplink sender', { reason, error });
+    }
+    try {
+      this.captureBackend?.reset();
+    } catch (error) {
+      logger.debug('Failed to reset voice TX capture backend', { reason, error });
+    }
+  }
+
+  private shouldSendActivePttFrame(frame: CompatCaptureFrame): boolean {
+    if (!this.pttActive) {
+      return false;
+    }
+    const pttStartedAtMs = this.pttStartedAtMs;
+    if (pttStartedAtMs !== null && (Date.now() - pttStartedAtMs) < VOICE_TX_PTT_FLUSH_GUARD_MS) {
+      this.recordCaptureDiagnostics(frame, null, 'ptt-flush-guard');
+      this.localTxStats.noteFrameSkipped(true);
+      return false;
+    }
+    if (
+      pttStartedAtMs !== null
+      && typeof frame.capturedAtMs === 'number'
+      && frame.capturedAtMs < (pttStartedAtMs - VOICE_TX_PRE_PTT_STALE_GRACE_MS)
+    ) {
+      this.recordCaptureDiagnostics(frame, null, 'pre-ptt-stale');
+      this.localTxStats.noteFrameSkipped(true);
+      if (this.isVoiceTxDebugEnabled()) {
+        logger.info('Dropped stale pre-PTT voice TX capture frame', {
+          capturedAtMs: frame.capturedAtMs,
+          pttStartedAtMs,
+          staleByMs: pttStartedAtMs - frame.capturedAtMs,
+          transport: this.transportKind,
+        });
+      }
+      return false;
+    }
+    return true;
   }
 
   private estimateServerTimeMs(clientTimeMs: number): number | null {
@@ -233,7 +341,7 @@ export class VoiceCapture {
     return this.clockSync.getSnapshot().confidence;
   }
 
-  private startClockSync(sendControl: (payload: Record<string, unknown>) => boolean | void): void {
+  private startClockSync(sendControl: (payload: object) => boolean | void): void {
     this.stopClockSync();
     this.clockSync.reset();
 
@@ -259,6 +367,30 @@ export class VoiceCapture {
 
   private handleClockSyncControlMessage(message: unknown): void {
     this.clockSync.handlePong(message);
+  }
+
+  private startTimingProbe(): void {
+    this.stopTimingProbe();
+    const sendProbe = () => {
+      if (this.pttActive) {
+        return;
+      }
+      const probe = createRealtimeTimingProbe('voice-uplink', this.timingProbeSequence++);
+      if (this.compatSocket?.readyState === WebSocket.OPEN) {
+        this.compatSocket.send(JSON.stringify(probe));
+      } else if (this.rtcDataAudioClient?.isOpen) {
+        this.rtcDataAudioClient.sendJson(probe as unknown as Record<string, unknown>);
+      }
+    };
+    sendProbe();
+    this.timingProbeTimer = window.setInterval(sendProbe, REALTIME_TIMING_PROBE_INTERVAL_MS);
+  }
+
+  private stopTimingProbe(): void {
+    if (this.timingProbeTimer !== null) {
+      window.clearInterval(this.timingProbeTimer);
+      this.timingProbeTimer = null;
+    }
   }
 
   private async ensureCompatCaptureRuntime(): Promise<{
@@ -382,18 +514,21 @@ export class VoiceCapture {
       this.compatSocket.send(JSON.stringify(payload));
       return true;
     });
+    this.startTimingProbe();
 
     captureBackend.setFrameHandler((frame) => {
-      if (!this.pttActive) {
+      if (!this.shouldSendActivePttFrame(frame)) {
         return;
       }
       if (!this.compatSocket || this.compatSocket.readyState !== WebSocket.OPEN || this.uplinkSender !== sender) {
+        this.recordCaptureDiagnostics(frame, null, 'transport-not-open');
         this.localTxStats.noteFrameSkipped();
         return;
       }
 
       try {
         const result = sender.sendFrame(frame);
+        this.recordCaptureDiagnostics(frame, result);
         if (!result.sent) {
           this.localTxStats.noteFrameSkipped(result.dropped);
           return;
@@ -416,6 +551,7 @@ export class VoiceCapture {
           });
         }
       } catch (error) {
+        this.recordCaptureDiagnostics(frame, null, 'send-error');
         logger.debug('Failed to send compatibility uplink audio frame', error);
       }
     });
@@ -461,7 +597,8 @@ export class VoiceCapture {
     });
     this.rtcDataAudioClient = client;
     await client.connect();
-    this.startClockSync((payload) => client.sendJson(payload));
+    this.startClockSync((payload) => client.sendJson(payload as Record<string, unknown>));
+    this.startTimingProbe();
 
     let hasLoggedFirstFrame = false;
     const sender = new VoiceTxUplinkSender({
@@ -477,16 +614,18 @@ export class VoiceCapture {
     this.localTxStats.reset('rtc-data-audio');
 
     captureBackend.setFrameHandler((frame) => {
-      if (!this.pttActive) {
+      if (!this.shouldSendActivePttFrame(frame)) {
         return;
       }
       if (!this.rtcDataAudioClient?.isOpen || this.uplinkSender !== sender) {
+        this.recordCaptureDiagnostics(frame, null, 'transport-not-open');
         this.localTxStats.noteFrameSkipped();
         return;
       }
 
       try {
         const result = sender.sendFrame(frame);
+        this.recordCaptureDiagnostics(frame, result);
         if (!result.sent) {
           this.localTxStats.noteFrameSkipped(result.dropped);
           return;
@@ -509,6 +648,7 @@ export class VoiceCapture {
           });
         }
       } catch (error) {
+        this.recordCaptureDiagnostics(frame, null, 'send-error');
         logger.debug('Failed to send rtc-data-audio uplink audio frame', error);
       }
     });
@@ -605,6 +745,7 @@ export class VoiceCapture {
 
   private cleanupTransportOnly(options: { preserveCaptureBackend?: boolean } = {}): void {
     const preserveCaptureBackend = options.preserveCaptureBackend === true;
+    this.maybeLogCaptureDiagnostics('cleanup', true);
 
     if (this.captureBackend) {
       this.captureBackend.setFrameHandler(null);
@@ -642,8 +783,13 @@ export class VoiceCapture {
     this.activeTxBufferPolicy = null;
     this.activeAudioCodecPolicy = null;
     this.uplinkSender = null;
+    this.pttStartedAtMs = null;
+    this.stopTimingProbe();
     this.stopClockSync();
     this.localTxStats.reset(null);
+    this.lastCaptureFrameAtMs = null;
+    this.lastCaptureDiagnosticsLogAtMs = 0;
+    this.captureDiagnosticsWindow = this.createCaptureDiagnosticsWindow();
   }
 
   private cleanup(options: VoiceCaptureCleanupOptions = {}): void {
@@ -676,5 +822,132 @@ export class VoiceCapture {
     }
 
     this.startPromise = null;
+  }
+
+  private createCaptureDiagnosticsWindow(now = Date.now()): VoiceTxCaptureDiagnosticsWindow {
+    return {
+      startedAt: now,
+      frames: 0,
+      sent: 0,
+      skipped: 0,
+      dropped: 0,
+      degraded: 0,
+      intervalSumMs: 0,
+      intervalMaxMs: 0,
+      sendDurationSumMs: 0,
+      sendDurationMaxMs: 0,
+      bufferedAudioMaxMs: 0,
+      bufferedAmountMaxBytes: 0,
+      pendingOpusMax: 0,
+      sampleRate: null,
+      samplesPerChannel: null,
+      codec: null,
+      lastSequence: null,
+      skipReasons: {},
+    };
+  }
+
+  private isVoiceTxDebugEnabled(): boolean {
+    try {
+      return window.localStorage.getItem('tx5dr.debug.voiceTx') === '1'
+        || window.localStorage.getItem('tx5dr.debug.realtimeAudio') === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  private recordCaptureDiagnostics(
+    frame: { sampleRate: number; samplesPerChannel: number },
+    result: VoiceTxUplinkSendResult | null,
+    skippedReason?: string,
+  ): void {
+    if (!this.isVoiceTxDebugEnabled()) {
+      return;
+    }
+    const now = Date.now();
+    const windowStats = this.captureDiagnosticsWindow;
+    if (this.lastCaptureFrameAtMs !== null) {
+      const intervalMs = Math.max(0, now - this.lastCaptureFrameAtMs);
+      windowStats.intervalSumMs += intervalMs;
+      windowStats.intervalMaxMs = Math.max(windowStats.intervalMaxMs, intervalMs);
+    }
+    this.lastCaptureFrameAtMs = now;
+    windowStats.frames += 1;
+    windowStats.sampleRate = frame.sampleRate;
+    windowStats.samplesPerChannel = frame.samplesPerChannel;
+
+    if (result) {
+      if (result.sent) {
+        windowStats.sent += 1;
+      } else {
+        windowStats.skipped += 1;
+      }
+      if (result.dropped) {
+        windowStats.dropped += 1;
+      }
+      if (result.degraded) {
+        windowStats.degraded += 1;
+      }
+      windowStats.sendDurationSumMs += result.sendDurationMs;
+      windowStats.sendDurationMaxMs = Math.max(windowStats.sendDurationMaxMs, result.sendDurationMs);
+      windowStats.bufferedAudioMaxMs = Math.max(windowStats.bufferedAudioMaxMs, result.bufferedAudioMs ?? 0);
+      windowStats.bufferedAmountMaxBytes = Math.max(windowStats.bufferedAmountMaxBytes, result.bufferedAmountBytes ?? 0);
+      windowStats.pendingOpusMax = Math.max(windowStats.pendingOpusMax, result.pendingOpusFrames);
+      windowStats.codec = result.codec;
+      windowStats.lastSequence = result.sequence;
+    } else {
+      windowStats.skipped += 1;
+    }
+
+    if (skippedReason) {
+      windowStats.skipReasons[skippedReason] = (windowStats.skipReasons[skippedReason] ?? 0) + 1;
+    } else if (result?.dropped) {
+      windowStats.skipReasons.transportBackpressure = (windowStats.skipReasons.transportBackpressure ?? 0) + 1;
+    } else if (result && !result.sent) {
+      windowStats.skipReasons.sendReturnedFalse = (windowStats.skipReasons.sendReturnedFalse ?? 0) + 1;
+    }
+
+    this.maybeLogCaptureDiagnostics('frame');
+  }
+
+  private maybeLogCaptureDiagnostics(reason: string, force = false): void {
+    if (!this.isVoiceTxDebugEnabled()) {
+      return;
+    }
+    const now = Date.now();
+    if (!force && (now - this.lastCaptureDiagnosticsLogAtMs) < VOICE_TX_CAPTURE_DIAGNOSTIC_INTERVAL_MS) {
+      return;
+    }
+    const stats = this.captureDiagnosticsWindow;
+    const avg = (sum: number, count: number): number | null => count > 0 ? sum / count : null;
+    logger.info('Voice TX capture diagnostics', {
+      reason,
+      elapsedMs: Math.max(1, now - stats.startedAt),
+      transport: this.transportKind,
+      participantIdentity: this._participantIdentity,
+      pttActive: this.pttActive,
+      frames: stats.frames,
+      sent: stats.sent,
+      skipped: stats.skipped,
+      dropped: stats.dropped,
+      degraded: stats.degraded,
+      avgFrameIntervalMs: avg(stats.intervalSumMs, Math.max(0, stats.frames - 1)),
+      maxFrameIntervalMs: stats.intervalMaxMs,
+      avgSendDurationMs: avg(stats.sendDurationSumMs, stats.frames),
+      maxSendDurationMs: stats.sendDurationMaxMs,
+      bufferedAudioMaxMs: stats.bufferedAudioMaxMs,
+      bufferedAmountMaxBytes: stats.bufferedAmountMaxBytes,
+      pendingOpusMax: stats.pendingOpusMax,
+      sampleRate: stats.sampleRate,
+      samplesPerChannel: stats.samplesPerChannel,
+      codec: stats.codec,
+      lastSequence: stats.lastSequence,
+      skipReasons: stats.skipReasons,
+      clockSync: this.clockSync.getSnapshot(),
+      txBufferPolicy: this.activeTxBufferPolicy,
+      audioCodecPolicy: this.activeAudioCodecPolicy,
+    });
+    this.lastCaptureDiagnosticsLogAtMs = now;
+    this.captureDiagnosticsWindow = this.createCaptureDiagnosticsWindow(now);
   }
 }

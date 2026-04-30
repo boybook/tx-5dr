@@ -8,7 +8,8 @@ import { getLogFilePath } from './app-paths.js';
  * File logger with console interception.
  * Overrides console.* methods to write all output to a local log file,
  * while passing through to the original console unchanged.
- * Level filtering is handled upstream by createLogger — this layer only persists.
+ * Level filtering is handled upstream by createLogger. Raw console.debug is
+ * persisted only when debug logging is explicitly enabled.
  */
 export class ConsoleLogger {
   private static instance: ConsoleLogger | null = null;
@@ -72,8 +73,11 @@ export class ConsoleLogger {
       self.writeLogEntry('INFO', 'console', self.formatArgs(args));
     };
     console.debug = (...args: any[]) => {
-      orig.debug(...args);
-      self.writeLogEntry('DEBUG', 'console', self.formatArgs(args));
+      const debugEnabled = process.env.LOG_LEVEL === 'debug' || process.env.TX5DR_STDOUT_DEBUG === '1';
+      if (debugEnabled) {
+        orig.debug(...args);
+        self.writeLogEntry('DEBUG', 'console', self.formatArgs(args));
+      }
     };
     console.warn = (...args: any[]) => {
       orig.warn(...args);

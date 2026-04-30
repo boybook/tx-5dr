@@ -61,7 +61,7 @@ Opus is the default low-bandwidth codec path:
 - ICOM WLAN 12 kHz frames are encoded as Opus 12 kHz when the browser advertises 12 kHz decode support; otherwise the server uses a low-latency streaming resampler to the negotiated supported Opus rate, usually 48 kHz.
 - 24 kHz and 16 kHz native inputs are encoded at their source rate.
 - Non-standard source rates are normalized by a streaming resampler to the nearest supported Opus rate (`48k/24k/16k/12k/8k`).
-- Opus uses 10 ms frames. Expected software latency overhead is roughly `+8-18 ms`, mainly packetization plus encode/decode scheduling, in exchange for reducing typical realtime mono bitrate from hundreds of kbps PCM to about `24-32 kbps`.
+- Opus uses 20 ms frames. Expected software latency overhead is roughly `+18-30 ms`, mainly packetization plus encode/decode scheduling, in exchange for reducing typical realtime mono bitrate from hundreds of kbps PCM to about `24-32 kbps`.
 
 PCM fallback remains intentionally simple and compatible. High-rate native PCM is reduced only at this transport edge. The source remains native, but publishers can apply a direct integer decimator for common high-rate inputs:
 
@@ -125,10 +125,10 @@ The invariant is that TX monitor audio follows the same RX publisher path as nor
 
 Manual microphone PTT uses the same public transports as monitoring, but the TX path has its own realtime queue policy.
 
-- Browser capture emits 16 kHz mono 10 ms frames.
+- Browser capture emits 16 kHz mono 20 ms frames.
 - `VoiceTxUplinkSender` is the single browser-side sender for `rtc-data-audio` and `ws-compat`; it gates on PTT, encodes Opus when negotiated, assigns sequence numbers, applies clock-sync timestamps when reliable, and drops frames when transport backlog exceeds the realtime budget.
 - Server transport handlers decode Opus/PCM frames through the same codec pipeline and pass decoded samples to `VoiceSessionManager`; they do not own output buffering policy.
-- `VoiceTxOutputPipeline` owns server-side jitter buffering, streaming linear resampling to the selected TX device rate, stale-frame dropping, short PLC/silence recovery, and output write diagnostics.
+- `VoiceTxOutputPipeline` owns server-side jitter buffering, streaming linear resampling to the selected TX device rate, stale-frame dropping, short tail-PLC/silence recovery, and output write diagnostics.
 - TX diagnostics keep strict end-to-end timing separate from server-only timing: `endToEndMs` is recorded only when browser/server clock sync is reliable, while `serverPipelineMs` covers server receive to output write for fallback troubleshooting.
 - PTT startup disables output playout until radio PTT is active; only a small startup buffer is retained, and old frames are trimmed rather than flushed late.
 
@@ -139,6 +139,6 @@ Realtime voice audio is a state stream, not a file stream.
 - Prefer dropping late frames over playing stale audio.
 - Keep publisher queues bounded in milliseconds.
 - Use frame timestamps and sequence numbers for recovery and diagnostics.
-- Do not re-enter large playback prefill after underrun; play silence briefly and resume with fresh frames.
+- Do not re-enter large playback prefill after underrun; use at most one short PLC tail, then silence briefly and resume with fresh frames.
 - Keep sample-rate conversion only at true transport/device edges.
 - During transport fallback, keep the browser AudioContext and AudioWorklet runtime alive; only replace the network transport. This avoids autoplay/microphone gesture regressions and prevents duplicate audio services.

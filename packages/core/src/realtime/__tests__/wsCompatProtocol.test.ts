@@ -43,8 +43,8 @@ test('realtime encoded Opus frames use compact metadata and payload', () => {
     sourceSampleRate: 48000,
     codecSampleRate: 48000,
     channels: 1,
-    samplesPerChannel: 480,
-    frameDurationMs: 10,
+    samplesPerChannel: 960,
+    frameDurationMs: 20,
     payload,
   });
 
@@ -57,7 +57,7 @@ test('realtime encoded Opus frames use compact metadata and payload', () => {
   assert.equal(decoded.serverSentAtMs, undefined);
   assert.equal(decoded.sourceSampleRate, 48000);
   assert.equal(decoded.codecSampleRate, 48000);
-  assert.equal(decoded.samplesPerChannel, 480);
+  assert.equal(decoded.samplesPerChannel, 960);
   assert.deepEqual(Array.from(decoded.payload), Array.from(payload));
 
   const generic = decodeRealtimeAudioFrame(encoded);

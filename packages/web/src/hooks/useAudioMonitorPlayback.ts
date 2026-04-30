@@ -1,9 +1,10 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
-import { api } from '@tx5dr/core';
 import {
+  api,
   decodeRealtimeAudioFrame,
   int16ToFloat32Pcm,
   isRealtimeEncodedAudioFrame,
+  isRealtimeTimingProbeMessage,
 } from '@tx5dr/core';
 import type {
   RealtimeAudioCodecPreference,
@@ -21,6 +22,17 @@ import {
   type CompatPlaybackBackend,
   type CompatPlaybackStats,
 } from '../audio/compatAudioBackends';
+import {
+  loadMonitorPlaybackBufferPreference,
+  loadMonitorPlaybackJitterSeed,
+  normalizeMonitorPlaybackBufferPreference,
+  resolveMonitorPlaybackBufferPolicy,
+  resolveMonitorPlaybackJitterSeedTargetMs,
+  saveMonitorPlaybackBufferPreference,
+  saveMonitorPlaybackJitterSeed,
+  type MonitorPlaybackBufferPreference,
+  type ResolvedMonitorPlaybackBufferPolicy,
+} from '../audio/monitorPlaybackBufferPreference';
 import {
   ensureInteractiveAudioContext,
   closeAudioContext,
@@ -73,6 +85,8 @@ interface ReceiverStatsData {
   inputSampleRate?: number;
   codec?: 'opus' | 'pcm-s16le';
   codecFallbackReason?: ResolvedRealtimeAudioCodecPolicy['fallbackReason'];
+  jitterP95Ms?: number;
+  jitterEwmaMs?: number;
 }
 
 function waitForSocketClosed(socket: WebSocket, timeoutMs = TRANSPORT_SWITCH_DRAIN_TIMEOUT_MS): Promise<void> {
@@ -127,6 +141,7 @@ export interface AudioMonitorStartOptions {
   previewSessionId?: string;
   transportOverride?: RealtimeTransportKind;
   audioCodecPreference?: RealtimeAudioCodecPreference;
+  playbackBufferPreference?: MonitorPlaybackBufferPreference;
 }
 
 export interface UseAudioMonitorPlaybackReturn {
@@ -141,6 +156,9 @@ export interface UseAudioMonitorPlaybackReturn {
   stop: () => void;
   stats: MonitorStatsData | null;
   setVolume: (db: number) => void;
+  playbackBufferPreference: MonitorPlaybackBufferPreference;
+  resolvedPlaybackBufferPolicy: ResolvedMonitorPlaybackBufferPolicy;
+  setPlaybackBufferPreference: (preference: MonitorPlaybackBufferPreference) => void;
   transportKind: RealtimeTransportKind | null;
 }
 
@@ -188,6 +206,10 @@ export function useAudioMonitorPlayback(
   const [isPlaying, setIsPlaying] = useState(false);
   const [stats, setStats] = useState<MonitorStatsData | null>(null);
   const [transportKind, setTransportKind] = useState<RealtimeTransportKind | null>(null);
+  const playbackBufferPreferenceRef = useRef<MonitorPlaybackBufferPreference>(loadMonitorPlaybackBufferPreference());
+  const [playbackBufferPreference, setPlaybackBufferPreferenceState] = useState<MonitorPlaybackBufferPreference>(
+    () => playbackBufferPreferenceRef.current,
+  );
   const isPlayingRef = useRef(false);
   const transportKindRef = useRef<RealtimeTransportKind | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -215,6 +237,7 @@ export function useAudioMonitorPlayback(
   const activeAudioCodecPolicyRef = useRef<ResolvedRealtimeAudioCodecPolicy | null>(null);
   const wireByteSamplesRef = useRef<Array<{ at: number; bytes: number }>>([]);
   const intentionalDisconnectRef = useRef(false);
+  const playbackGenerationRef = useRef(0);
   const pendingAudioPathWaitersRef = useRef<Array<{
     resolve: () => void;
     reject: (error: Error) => void;
@@ -262,6 +285,14 @@ export function useAudioMonitorPlayback(
     setTransportKind(next);
   }, []);
 
+  const setPlaybackBufferPreference = useCallback((preference: MonitorPlaybackBufferPreference) => {
+    const normalized = normalizeMonitorPlaybackBufferPreference(preference);
+    playbackBufferPreferenceRef.current = normalized;
+    setPlaybackBufferPreferenceState(normalized);
+    saveMonitorPlaybackBufferPreference(normalized);
+    compatPlaybackBackendRef.current?.setBufferPreference(normalized, loadMonitorPlaybackJitterSeed()?.targetMs ?? null);
+  }, []);
+
   const cleanupTransportState = useCallback((
     options: {
       preserveSessionContext?: boolean;
@@ -269,6 +300,7 @@ export function useAudioMonitorPlayback(
       preserveCompatPlaybackRuntime?: boolean;
     } = {},
   ) => {
+    playbackGenerationRef.current += 1;
     const {
       preserveSessionContext = false,
       preserveAudioContext = false,
@@ -565,7 +597,13 @@ export function useAudioMonitorPlayback(
     receivedAtClientMs: number;
     inputSampleRate: number;
     codec: 'opus' | 'pcm-s16le';
+    sequence?: number;
+    frameDurationMs?: number;
+    generation?: number;
   }) => {
+    if (data.generation !== undefined && data.generation !== playbackGenerationRef.current) {
+      return;
+    }
     const backend = compatPlaybackBackendRef.current;
     if (!backend || data.samples.length === 0) {
       return;
@@ -580,6 +618,9 @@ export function useAudioMonitorPlayback(
       sampleRate: data.sampleRate,
       clientTimestamp: data.sourceTimestampMs,
       clientReceivedAtMs: data.receivedAtClientMs,
+      sequence: data.sequence,
+      frameDurationMs: data.frameDurationMs,
+      serverSentAtMs: data.serverSentAtMs,
     });
     receiverStatsRef.current = {
       ...(receiverStatsRef.current ?? {}),
@@ -594,6 +635,9 @@ export function useAudioMonitorPlayback(
   const ensureOpusDecoder = useCallback((): BrowserOpusDecoder => {
     if (!opusDecoderRef.current) {
       opusDecoderRef.current = new BrowserOpusDecoder((frame) => {
+        if (frame.generation !== undefined && frame.generation !== playbackGenerationRef.current) {
+          return;
+        }
         handleDecodedAudioSamples({
           ...frame,
           codec: 'opus',
@@ -603,12 +647,15 @@ export function useAudioMonitorPlayback(
     return opusDecoderRef.current;
   }, [handleDecodedAudioSamples]);
 
-  const handleRealtimeBinaryFrame = useCallback((payload: ArrayBuffer) => {
+  const handleRealtimeBinaryFrame = useCallback((payload: ArrayBuffer, generation = playbackGenerationRef.current) => {
+    if (generation !== playbackGenerationRef.current) {
+      return;
+    }
     recordWireBytes(payload.byteLength);
     const frame = decodeRealtimeAudioFrame(payload);
     const receivedAtClientMs = Date.now();
     if (isRealtimeEncodedAudioFrame(frame)) {
-      ensureOpusDecoder().decode(payload, receivedAtClientMs);
+      ensureOpusDecoder().decode(payload, receivedAtClientMs, generation);
       return;
     }
     handleDecodedAudioSamples({
@@ -619,10 +666,13 @@ export function useAudioMonitorPlayback(
       receivedAtClientMs,
       inputSampleRate: frame.sampleRate,
       codec: 'pcm-s16le',
+      sequence: frame.sequence,
+      frameDurationMs: frame.sampleRate > 0 ? (frame.samplesPerChannel / frame.sampleRate) * 1000 : 20,
+      generation,
     });
   }, [ensureOpusDecoder, handleDecodedAudioSamples, recordWireBytes]);
 
-  const startClockSync = useCallback((sendControl: (payload: Record<string, unknown>) => boolean | void) => {
+  const startClockSync = useCallback((sendControl: (payload: object) => boolean | void) => {
     if (clockSyncTimerRef.current !== null) {
       window.clearInterval(clockSyncTimerRef.current);
       clockSyncTimerRef.current = null;
@@ -668,28 +718,47 @@ export function useAudioMonitorPlayback(
       gainNodeRef.current = null;
     }
 
-    const backend = await createCompatPlaybackBackend(audioContext, (backendStats: CompatPlaybackStats) => {
-      const statsReceivedAtMs = Date.now();
-      const previous = receiverStatsRef.current;
-      receiverStatsRef.current = {
-        ...(previous ?? {}),
-        latencyMs: backendStats.latencyMs,
-        bufferFillPercent: backendStats.bufferFillPercent,
-        droppedSamples: backendStats.droppedSamples,
-        queueDurationMs: backendStats.queueDurationMs,
-        playbackQueueMs: backendStats.queueDurationMs,
-        targetBufferMs: backendStats.targetBufferMs,
-        outputSourceTimestampMs: backendStats.outputSourceTimestampMs,
-        nextOutputSourceTimestampMs: backendStats.nextOutputSourceTimestampMs,
-        mainToWorkletMs: backendStats.mainToWorkletMs,
-        statsGeneratedAtMs: backendStats.statsGeneratedAtMs,
-        statsReceivedAtMs,
-        underrunCount: backendStats.underrunCount,
-        inputSampleRate: previous?.inputSampleRate ?? backendStats.inputSampleRate,
-        bitrateKbps: getWireBitrateKbps(),
-      };
-      recomputeStats();
-    });
+    const backend = await createCompatPlaybackBackend(
+      audioContext,
+      (backendStats: CompatPlaybackStats) => {
+        const statsReceivedAtMs = Date.now();
+        const previous = receiverStatsRef.current;
+        receiverStatsRef.current = {
+          ...(previous ?? {}),
+          latencyMs: backendStats.latencyMs,
+          bufferFillPercent: backendStats.bufferFillPercent,
+          droppedSamples: backendStats.droppedSamples,
+          queueDurationMs: backendStats.queueDurationMs,
+          playbackQueueMs: backendStats.queueDurationMs,
+          targetBufferMs: backendStats.targetBufferMs,
+          outputSourceTimestampMs: backendStats.outputSourceTimestampMs,
+          nextOutputSourceTimestampMs: backendStats.nextOutputSourceTimestampMs,
+          mainToWorkletMs: backendStats.mainToWorkletMs,
+          statsGeneratedAtMs: backendStats.statsGeneratedAtMs,
+          statsReceivedAtMs,
+          underrunCount: backendStats.underrunCount,
+          inputSampleRate: previous?.inputSampleRate ?? backendStats.inputSampleRate,
+          bitrateKbps: getWireBitrateKbps(),
+          jitterP95Ms: backendStats.jitterP95Ms,
+          jitterEwmaMs: backendStats.jitterEwmaMs,
+        };
+        if (playbackBufferPreferenceRef.current.profile === 'auto') {
+          const seedTargetMs = resolveMonitorPlaybackJitterSeedTargetMs({
+            targetMs: backendStats.targetBufferMs,
+            p95Ms: backendStats.jitterP95Ms ?? null,
+          });
+          saveMonitorPlaybackJitterSeed({
+            targetMs: seedTargetMs,
+            p95Ms: backendStats.jitterP95Ms ?? null,
+            transport: transportKindRef.current,
+            codec: activeAudioCodecPolicyRef.current?.resolvedCodec ?? previous?.codec ?? null,
+          });
+        }
+        recomputeStats();
+      },
+      playbackBufferPreferenceRef.current,
+      loadMonitorPlaybackJitterSeed()?.targetMs ?? null,
+    );
     const gainNode = audioContext.createGain();
     gainNode.gain.value = currentVolumeRef.current;
     backend.outputNode.connect(gainNode);
@@ -709,6 +778,8 @@ export function useAudioMonitorPlayback(
     audioCodecPolicy?: ResolvedRealtimeAudioCodecPolicy,
   ) => {
     const { backend } = await ensureCompatPlaybackRuntime();
+    const generation = playbackGenerationRef.current;
+    backend.setBufferPreference(playbackBufferPreferenceRef.current, loadMonitorPlaybackJitterSeed()?.targetMs ?? null);
     backend.reset();
     activeAudioCodecPolicyRef.current = audioCodecPolicy ?? null;
     wireByteSamplesRef.current = [];
@@ -728,6 +799,9 @@ export function useAudioMonitorPlayback(
       }, AUDIO_PATH_WAIT_TIMEOUT_MS);
 
       ws.onopen = () => {
+        if (playbackGenerationRef.current !== generation || compatSocketRef.current !== ws) {
+          return;
+        }
         updateTransportKind('ws-compat');
         startClockSync((payload) => {
           if (ws.readyState !== WebSocket.OPEN) {
@@ -740,11 +814,20 @@ export function useAudioMonitorPlayback(
       };
 
       ws.onmessage = (event) => {
+        if (playbackGenerationRef.current !== generation || compatSocketRef.current !== ws) {
+          return;
+        }
         if (typeof event.data === 'string') {
           try {
             const message = JSON.parse(event.data) as { type?: string };
             if (isClockSyncControlMessage(message)) {
               handleClockSyncControlMessage(message);
+              return;
+            }
+            if (isRealtimeTimingProbeMessage(message)) {
+              if (playbackGenerationRef.current === generation) {
+                backend.recordTimingProbe?.(message, Date.now());
+              }
               return;
             }
             if (message.type === 'ready' && !settled) {
@@ -759,7 +842,7 @@ export function useAudioMonitorPlayback(
         }
 
         try {
-          handleRealtimeBinaryFrame(event.data as ArrayBuffer);
+          handleRealtimeBinaryFrame(event.data as ArrayBuffer, generation);
 
           if (!settled) {
             settled = true;
@@ -811,6 +894,8 @@ export function useAudioMonitorPlayback(
     audioCodecPolicy?: ResolvedRealtimeAudioCodecPolicy,
   ) => {
     const { backend } = await ensureCompatPlaybackRuntime();
+    const generation = playbackGenerationRef.current;
+    backend.setBufferPreference(playbackBufferPreferenceRef.current, loadMonitorPlaybackJitterSeed()?.targetMs ?? null);
     backend.reset();
     activeAudioCodecPolicyRef.current = audioCodecPolicy ?? null;
     wireByteSamplesRef.current = [];
@@ -819,13 +904,25 @@ export function useAudioMonitorPlayback(
       offer,
       iceServers: hints?.iceServers,
       onBinaryMessage: (payload) => {
+        if (playbackGenerationRef.current !== generation || rtcDataAudioClientRef.current !== client) {
+          return;
+        }
         try {
-          handleRealtimeBinaryFrame(payload);
+          handleRealtimeBinaryFrame(payload, generation);
         } catch (error) {
           logger.debug('Failed to decode rtc-data-audio downlink frame', error);
         }
       },
-      onControlMessage: handleClockSyncControlMessage,
+      onControlMessage: (message) => {
+        if (playbackGenerationRef.current !== generation || rtcDataAudioClientRef.current !== client) {
+          return;
+        }
+        if (isRealtimeTimingProbeMessage(message)) {
+          backend.recordTimingProbe?.(message, Date.now());
+          return;
+        }
+        handleClockSyncControlMessage(message);
+      },
       onClose: () => {
         if (rtcDataAudioClientRef.current === client && !intentionalDisconnectRef.current) {
           cleanup();
@@ -835,7 +932,7 @@ export function useAudioMonitorPlayback(
     rtcDataAudioClientRef.current = client;
     resolvePendingAudioPathWaiters();
     await client.connect();
-    startClockSync((payload) => client.sendJson(payload));
+    startClockSync((payload) => client.sendJson(payload as Record<string, unknown>));
     updateTransportKind('rtc-data-audio');
   }, [cleanup, ensureCompatPlaybackRuntime, handleClockSyncControlMessage, handleRealtimeBinaryFrame, resolvePendingAudioPathWaiters, startClockSync, updateTransportKind]);
 
@@ -857,12 +954,16 @@ export function useAudioMonitorPlayback(
     const transportOverride = normalizedOptions.transportOverride;
     const audioCodecPreference = normalizedOptions.audioCodecPreference ?? loadRealtimeAudioCodecPreference();
     const audioCodecCapabilities = await getRealtimeAudioCodecCapabilities();
+    if (normalizedOptions.playbackBufferPreference) {
+      setPlaybackBufferPreference(normalizedOptions.playbackBufferPreference);
+    }
 
     if (scope === 'openwebrx-preview' && !effectivePreviewSessionId) {
       throw new Error('previewSessionId is required for OpenWebRX preview playback');
     }
 
     isInitializingRef.current = true;
+    playbackGenerationRef.current += 1;
     intentionalDisconnectRef.current = false;
     activePreviewSessionIdRef.current = effectivePreviewSessionId ?? null;
 
@@ -909,7 +1010,7 @@ export function useAudioMonitorPlayback(
       isInitializingRef.current = false;
       startPromiseRef.current = null;
     }
-  }, [cleanup, cleanupTransportState, previewSessionId, scope, startCompatPlayback, startRtcDataAudioPlayback, startStatsPolling, updateIsPlaying, updateTransportKind, waitForPlaybackPath]);
+  }, [cleanup, cleanupTransportState, previewSessionId, scope, setPlaybackBufferPreference, startCompatPlayback, startRtcDataAudioPlayback, startStatsPolling, updateIsPlaying, updateTransportKind, waitForPlaybackPath]);
 
   const startFromGesture = useCallback(async (
     startOptions?: string | AudioMonitorStartOptions,
@@ -953,6 +1054,8 @@ export function useAudioMonitorPlayback(
     return start({
       previewSessionId: switchOptions?.previewSessionId,
       transportOverride: transport,
+      audioCodecPreference: switchOptions?.audioCodecPreference,
+      playbackBufferPreference: switchOptions?.playbackBufferPreference,
     });
   }, [cleanupTransportState, preparePlaybackFromGesture, start]);
 
@@ -981,6 +1084,9 @@ export function useAudioMonitorPlayback(
     stop,
     stats,
     setVolume,
+    playbackBufferPreference,
+    resolvedPlaybackBufferPolicy: resolveMonitorPlaybackBufferPolicy(playbackBufferPreference),
+    setPlaybackBufferPreference,
     transportKind,
   };
 }

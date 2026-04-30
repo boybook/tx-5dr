@@ -39,22 +39,23 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
     this.consecutiveUnderrunFrames = 0; // 连续欠载帧计数
     this.lastOutputSourceTimestampMs = null;
     this.lastMainToWorkletMs = null;
+    this.plcTailMs = 8;
+    this.plcRestoreCrossfadeMs = 3;
+    this.plcHistory = new Float32Array(0);
+    this.restoreCrossfadePending = false;
 
     // 播放状态控制
     this.isPlaying = false;
     this.isRecovering = false;
-    this.INITIAL_TARGET_MS = 70;
-    this.MIN_TARGET_MS = 40;
-    this.MAX_TARGET_MS = 220;
-    this.QUEUE_HEADROOM_MS = 20;
-    this.TARGET_INCREASE_MS = 25;
-    this.TARGET_DECREASE_MS = 10;
-    this.UNDERRUN_RECOVERY_FRAMES = 3;
-    this.ADAPT_INCREASE_COOLDOWN_MS = 1500;
-    this.ADAPT_DECREASE_AFTER_MS = 8000;
-    this.ADAPT_DECREASE_COOLDOWN_MS = 5000;
-    this.adaptiveTargetMs = this.INITIAL_TARGET_MS;
+    this.bufferPolicy = this.createDefaultBufferPolicy();
+    this.adaptiveTargetMs = this.bufferPolicy.initialTargetMs;
+    this.jitterEstimator = null;
+    this.jitterEstimatorSource = null;
+    this.lastJitterSnapshot = null;
+    this.lastLoggedJitterTargetMs = null;
+    this.lastLoggedJitterMaxAtMs = 0;
     const now = Date.now();
+    this.recreateJitterEstimator(now);
     this.lastUnderrunAt = now;
     this.lastTargetChangeAt = now;
     this.MIN_BUFFER_MS = 30;    // 低水位阈值：30ms（仅用于日志）
@@ -63,17 +64,63 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
     // 接收来自主线程的消息
     this.port.onmessage = (e) => {
       if (e.data.type === 'audioData') {
-        this.writeAudioData(e.data.buffer, e.data.sampleRate, e.data.clientTimestamp, e.data.clientReceivedAtMs);
+        this.writeAudioData(e.data.buffer, e.data.sampleRate, e.data.clientTimestamp, e.data.clientReceivedAtMs, e.data.sequence, e.data.frameDurationMs);
+      } else if (e.data.type === 'timingProbe') {
+        this.recordTimingProbe(e.data.probe, e.data.receivedAtMs);
+      } else if (e.data.type === 'setBufferPolicy') {
+        this.setBufferPolicy(e.data.policy);
       } else if (e.data.type === 'reset') {
         this.reset();
       }
     };
   }
 
+  createDefaultBufferPolicy() {
+    return {
+      adaptive: true,
+      targetBufferMs: 80,
+      initialTargetMs: 80,
+      minTargetMs: 60,
+      maxTargetMs: 400,
+      queueHeadroomMs: 20,
+      targetIncreaseMs: 15,
+      targetDecreaseMs: 5,
+      underrunRecoveryFrames: 3,
+      adaptIncreaseCooldownMs: 2500,
+      adaptDecreaseAfterMs: 10000,
+      adaptDecreaseCooldownMs: 15000,
+    };
+  }
+
+  setBufferPolicy(policy) {
+    const defaults = this.createDefaultBufferPolicy();
+    const next = policy && typeof policy === 'object' ? policy : defaults;
+    const numberOrDefault = (value, fallback) => (
+      Number.isFinite(Number(value)) ? Number(value) : fallback
+    );
+    const initialTargetMs = Math.max(1, numberOrDefault(next.initialTargetMs, defaults.initialTargetMs));
+
+    this.bufferPolicy = {
+      adaptive: next.adaptive === true,
+      targetBufferMs: Math.max(1, numberOrDefault(next.targetBufferMs, initialTargetMs)),
+      initialTargetMs,
+      minTargetMs: Math.max(1, numberOrDefault(next.minTargetMs, defaults.minTargetMs)),
+      maxTargetMs: Math.max(1, numberOrDefault(next.maxTargetMs, defaults.maxTargetMs)),
+      queueHeadroomMs: Math.max(0, numberOrDefault(next.queueHeadroomMs, defaults.queueHeadroomMs)),
+      targetIncreaseMs: Math.max(0, numberOrDefault(next.targetIncreaseMs, defaults.targetIncreaseMs)),
+      targetDecreaseMs: Math.max(0, numberOrDefault(next.targetDecreaseMs, defaults.targetDecreaseMs)),
+      underrunRecoveryFrames: Math.max(1, Math.round(numberOrDefault(next.underrunRecoveryFrames, defaults.underrunRecoveryFrames))),
+      adaptIncreaseCooldownMs: Math.max(0, numberOrDefault(next.adaptIncreaseCooldownMs, defaults.adaptIncreaseCooldownMs)),
+      adaptDecreaseAfterMs: Math.max(0, numberOrDefault(next.adaptDecreaseAfterMs, defaults.adaptDecreaseAfterMs)),
+      adaptDecreaseCooldownMs: Math.max(0, numberOrDefault(next.adaptDecreaseCooldownMs, defaults.adaptDecreaseCooldownMs)),
+    };
+    this.reset();
+  }
+
   /**
    * 写入音频数据到环形缓冲区
    */
-  writeAudioData(buffer, sampleRate, clientTimestamp, clientReceivedAtMs) {
+  writeAudioData(buffer, sampleRate, clientTimestamp, clientReceivedAtMs, sequence, frameDurationMs) {
     const audioData = new Float32Array(buffer);
     this.lastMainToWorkletMs = typeof clientReceivedAtMs === 'number'
       ? Math.max(0, Date.now() - clientReceivedAtMs)
@@ -83,6 +130,11 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
     const resampledData = this.resampleToOutputRate(audioData, frameSampleRate);
     const samples = resampledData.length;
 
+    this.notePacketJitter({
+      sequence,
+      arrivalTimeMs: typeof clientReceivedAtMs === 'number' ? clientReceivedAtMs : Date.now(),
+      frameDurationMs,
+    });
     this.frameCount++;
     this.enqueueSamples(resampledData, samples, Number(clientTimestamp));
   }
@@ -120,7 +172,7 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
   }
 
   trimExcessQueue() {
-    const maxQueueSamples = Math.ceil(((this.adaptiveTargetMs + this.QUEUE_HEADROOM_MS) / 1000) * this.outputSampleRate);
+    const maxQueueSamples = Math.ceil(((this.adaptiveTargetMs + this.bufferPolicy.queueHeadroomMs) / 1000) * this.outputSampleRate);
     if (this.availableSamples <= maxQueueSamples) {
       return;
     }
@@ -160,28 +212,32 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
       }
     }
 
-    // 正常播放 — 不再有低水位硬暂停，缓冲区有数据就读，没数据用衰减填充
+    // 正常播放：缓冲区有数据就读；欠载时只做一次短尾段PLC，之后静音。
     let totalSquare = 0;
     let hadUnderrun = false;
-    let lastValidSample = 0;
     let outputSourceTimestampMs = null;
+    let realSamples = 0;
 
+    while (realSamples < samples && this.availableSamples > 0) {
+      const sample = this.ringBuffer[this.readIndex];
+      const sourceTimestampMs = this.timestampBuffer[this.readIndex];
+      output[realSamples] = sample;
+      outputSourceTimestampMs = Number.isFinite(sourceTimestampMs) ? sourceTimestampMs : null;
+      this.readIndex = (this.readIndex + 1) % this.ringBufferSize;
+      this.availableSamples--;
+      realSamples++;
+    }
+    if (realSamples > 0) {
+      this.applyRestoreCrossfade(output, realSamples);
+      this.recordRealOutput(output.subarray(0, realSamples));
+    }
+    if (realSamples < samples) {
+      output.fill(0, realSamples);
+      this.fillTailPlc(output, realSamples);
+      hadUnderrun = true;
+    }
     for (let i = 0; i < samples; i++) {
-      if (this.availableSamples > 0) {
-        const sample = this.ringBuffer[this.readIndex];
-        const sourceTimestampMs = this.timestampBuffer[this.readIndex];
-        output[i] = sample;
-        lastValidSample = sample;
-        outputSourceTimestampMs = Number.isFinite(sourceTimestampMs) ? sourceTimestampMs : null;
-        totalSquare += sample * sample;
-        this.readIndex = (this.readIndex + 1) % this.ringBufferSize;
-        this.availableSamples--;
-      } else {
-        // 平滑衰减，避免波形突变导致爆音
-        output[i] = lastValidSample * 0.9;
-        lastValidSample *= 0.9;
-        hadUnderrun = true;
-      }
+      totalSquare += output[i] * output[i];
     }
 
     if (hadUnderrun) {
@@ -231,6 +287,8 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
           availableSamples: this.availableSamples,
           sampleRate: this.outputSampleRate,
           inputSampleRate: this.inputSampleRate,
+          jitterP95Ms: this.lastJitterSnapshot?.relativeDelayP95Ms,
+          jitterEwmaMs: this.lastJitterSnapshot?.jitterEwmaMs,
         }
       });
 
@@ -240,27 +298,288 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
 
   noteUnderrun(now) {
     this.lastUnderrunAt = now;
-    if ((now - this.lastTargetChangeAt) >= this.ADAPT_INCREASE_COOLDOWN_MS) {
-      this.adaptiveTargetMs = Math.min(this.MAX_TARGET_MS, this.adaptiveTargetMs + this.TARGET_INCREASE_MS);
+    if (this.bufferPolicy.adaptive) {
+      this.lastJitterSnapshot = this.noteEstimatorUnderrun(now);
+      this.adaptiveTargetMs = this.lastJitterSnapshot?.activeTargetMs ?? Math.min(this.bufferPolicy.maxTargetMs, this.adaptiveTargetMs + 20);
       this.lastTargetChangeAt = now;
     }
-    if (this.consecutiveUnderrunFrames >= this.UNDERRUN_RECOVERY_FRAMES) {
+    if (this.consecutiveUnderrunFrames >= this.bufferPolicy.underrunRecoveryFrames) {
       this.isRecovering = true;
     }
   }
 
   maybeReduceTarget(now) {
-    if (this.adaptiveTargetMs <= this.MIN_TARGET_MS) {
+    if (!this.bufferPolicy.adaptive || !this.jitterEstimator) {
       return;
     }
-    if ((now - this.lastUnderrunAt) < this.ADAPT_DECREASE_AFTER_MS) {
+    this.lastJitterSnapshot = this.updateEstimatorTarget(now);
+    this.adaptiveTargetMs = this.lastJitterSnapshot.activeTargetMs;
+  }
+
+  recordTimingProbe(probe, receivedAtMs = Date.now()) {
+    if (!this.bufferPolicy.adaptive || !this.jitterEstimator || !probe) {
       return;
     }
-    if ((now - this.lastTargetChangeAt) < this.ADAPT_DECREASE_COOLDOWN_MS) {
+    if (this.jitterEstimatorSource === 'packet') {
       return;
     }
-    this.adaptiveTargetMs = Math.max(this.MIN_TARGET_MS, this.adaptiveTargetMs - this.TARGET_DECREASE_MS);
-    this.lastTargetChangeAt = now;
+    this.jitterEstimatorSource = 'probe';
+    this.lastJitterSnapshot = this.recordEstimatorSample({
+      sequence: Number(probe.sequence),
+      senderMs: Number(probe.sentAtMs),
+      arrivalMs: Number(receivedAtMs),
+      stepMs: Number(probe.intervalMs) || 200,
+    });
+    this.adaptiveTargetMs = this.lastJitterSnapshot.activeTargetMs;
+    this.logJitterSnapshot('probe');
+  }
+
+  notePacketJitter(sample) {
+    if (!this.bufferPolicy.adaptive || !this.jitterEstimator) {
+      return;
+    }
+    if (this.jitterEstimatorSource !== 'packet') {
+      this.recreateJitterEstimator(Number(sample.arrivalTimeMs) || Date.now(), this.adaptiveTargetMs);
+      this.jitterEstimatorSource = 'packet';
+    }
+    const stepMs = Number(sample.frameDurationMs) > 0 ? Number(sample.frameDurationMs) : 20;
+    const sequence = Number.isFinite(Number(sample.sequence)) ? Number(sample.sequence) : null;
+    this.lastJitterSnapshot = this.recordEstimatorSample({
+      sequence,
+      senderMs: this.deriveEstimatorSenderMs(sequence, stepMs),
+      arrivalMs: Number(sample.arrivalTimeMs),
+      stepMs,
+    });
+    this.adaptiveTargetMs = this.lastJitterSnapshot.activeTargetMs;
+    this.logJitterSnapshot('packet');
+  }
+
+  recreateJitterEstimator(now, initialTargetMs = this.bufferPolicy.initialTargetMs) {
+    if (!this.bufferPolicy.adaptive) {
+      this.jitterEstimator = null;
+      this.jitterEstimatorSource = null;
+      this.lastJitterSnapshot = null;
+      return;
+    }
+    this.adaptiveTargetMs = Math.max(
+      this.bufferPolicy.minTargetMs,
+      Math.min(this.bufferPolicy.maxTargetMs, Math.round(Number(initialTargetMs) || this.bufferPolicy.initialTargetMs))
+    );
+    this.jitterEstimator = {
+      firstArrivalMs: null,
+      firstSenderMs: null,
+      minRelativeTransitMs: 0,
+      lastSample: null,
+      samples: [],
+      jitterEwmaMs: 0,
+      lastImpairmentAtMs: now,
+      lastTargetChangeAtMs: now,
+    };
+    this.jitterEstimatorSource = null;
+    this.lastJitterSnapshot = this.getEstimatorSnapshot(now);
+    this.lastLoggedJitterTargetMs = null;
+  }
+
+  deriveEstimatorSenderMs(sequence, stepMs) {
+    if (typeof sequence === 'number' && Number.isFinite(sequence)) {
+      return sequence * stepMs;
+    }
+    return this.jitterEstimator?.lastSample ? this.jitterEstimator.lastSample.senderMs + stepMs : 0;
+  }
+
+  recordEstimatorSample(sample) {
+    if (!this.jitterEstimator || !Number.isFinite(sample.arrivalMs)) {
+      return this.getEstimatorSnapshot(Date.now());
+    }
+    const estimator = this.jitterEstimator;
+    let arrivalDeltaMs = null;
+    let senderDeltaMs = null;
+    let jitterSampleMs = null;
+    if (estimator.lastSample) {
+      arrivalDeltaMs = sample.arrivalMs - estimator.lastSample.arrivalMs;
+      senderDeltaMs = sample.senderMs - estimator.lastSample.senderMs;
+      if (!(senderDeltaMs > 0) && typeof sample.sequence === 'number' && typeof estimator.lastSample.sequence === 'number' && sample.sequence > estimator.lastSample.sequence) {
+        senderDeltaMs = (sample.sequence - estimator.lastSample.sequence) * sample.stepMs;
+      }
+      if (arrivalDeltaMs >= 0 && senderDeltaMs > 0 && senderDeltaMs < 5000) {
+        jitterSampleMs = Math.abs(arrivalDeltaMs - senderDeltaMs);
+        estimator.jitterEwmaMs += (jitterSampleMs - estimator.jitterEwmaMs) / 16;
+      }
+    }
+    if (estimator.firstArrivalMs === null || estimator.firstSenderMs === null) {
+      estimator.firstArrivalMs = sample.arrivalMs;
+      estimator.firstSenderMs = sample.senderMs;
+      estimator.minRelativeTransitMs = 0;
+    }
+    const relativeTransitMs = (sample.arrivalMs - estimator.firstArrivalMs) - (sample.senderMs - estimator.firstSenderMs);
+    estimator.minRelativeTransitMs = Math.min(estimator.minRelativeTransitMs, relativeTransitMs);
+    const relativeDelayMs = Math.max(0, relativeTransitMs - estimator.minRelativeTransitMs);
+    estimator.lastSampleDiagnostics = {
+      sequence: sample.sequence,
+      senderMs: sample.senderMs,
+      arrivalMs: sample.arrivalMs,
+      stepMs: sample.stepMs,
+      arrivalDeltaMs,
+      senderDeltaMs,
+      jitterSampleMs,
+      relativeTransitMs,
+      minRelativeTransitMs: estimator.minRelativeTransitMs,
+      relativeDelayMs,
+    };
+    estimator.samples.push({ at: sample.arrivalMs, delayMs: relativeDelayMs });
+    while (estimator.samples.length > 0 && (sample.arrivalMs - estimator.samples[0].at) > 10000) {
+      estimator.samples.shift();
+    }
+    while (estimator.samples.length > 160) {
+      estimator.samples.shift();
+    }
+    estimator.lastSample = sample;
+    return this.updateEstimatorTarget(sample.arrivalMs);
+  }
+
+  updateEstimatorTarget(now) {
+    const snapshot = this.getEstimatorSnapshot(now);
+    if (!this.jitterEstimator) {
+      return snapshot;
+    }
+    if (snapshot.recommendedTargetMs > this.adaptiveTargetMs) {
+      this.adaptiveTargetMs = snapshot.recommendedTargetMs;
+      this.jitterEstimator.lastImpairmentAtMs = now;
+      this.jitterEstimator.lastTargetChangeAtMs = now;
+      const nextSnapshot = this.getEstimatorSnapshot(now);
+      this.lastJitterSnapshot = nextSnapshot;
+      this.logJitterSnapshot('timer');
+      return nextSnapshot;
+    } else if (snapshot.recommendedTargetMs < this.adaptiveTargetMs
+      && (now - this.jitterEstimator.lastImpairmentAtMs) >= this.bufferPolicy.adaptDecreaseAfterMs
+      && (now - this.jitterEstimator.lastTargetChangeAtMs) >= this.bufferPolicy.adaptDecreaseAfterMs) {
+      this.adaptiveTargetMs = Math.max(snapshot.recommendedTargetMs, this.adaptiveTargetMs - 20, this.bufferPolicy.minTargetMs);
+      this.jitterEstimator.lastTargetChangeAtMs = now;
+      this.jitterEstimator.lastImpairmentAtMs = now;
+      const nextSnapshot = this.getEstimatorSnapshot(now);
+      this.lastJitterSnapshot = nextSnapshot;
+      this.logJitterSnapshot('timer');
+      return nextSnapshot;
+    }
+    return this.getEstimatorSnapshot(now);
+  }
+
+  noteEstimatorUnderrun(now) {
+    if (!this.jitterEstimator) {
+      return null;
+    }
+    this.adaptiveTargetMs = Math.min(this.bufferPolicy.maxTargetMs, Math.ceil((this.adaptiveTargetMs + 20) / 20) * 20);
+    this.jitterEstimator.lastImpairmentAtMs = now;
+    this.jitterEstimator.lastTargetChangeAtMs = now;
+    const snapshot = this.getEstimatorSnapshot(now);
+    this.logJitterSnapshot('underrun');
+    return snapshot;
+  }
+
+  getEstimatorSnapshot(now) {
+    const delays = this.jitterEstimator?.samples.map((sample) => sample.delayMs).sort((a, b) => a - b) ?? [];
+    const p95Index = delays.length === 0 ? -1 : Math.min(delays.length - 1, Math.max(0, Math.ceil(delays.length * 0.95) - 1));
+    const p95 = p95Index >= 0 ? delays[p95Index] : 0;
+    const recommended = Math.max(
+      this.bufferPolicy.targetBufferMs,
+      Math.min(this.bufferPolicy.maxTargetMs, Math.max(this.bufferPolicy.minTargetMs, Math.ceil((60 + p95 + 10) / 20) * 20))
+    );
+    return {
+      activeTargetMs: this.adaptiveTargetMs,
+      recommendedTargetMs: recommended,
+      relativeDelayP95Ms: p95,
+      jitterEwmaMs: this.jitterEstimator?.jitterEwmaMs ?? 0,
+      sampleCount: delays.length,
+      lastUpdatedAtMs: now,
+      lastSample: this.jitterEstimator?.lastSampleDiagnostics ?? null,
+    };
+  }
+
+  logJitterSnapshot(reason) {
+    if (!this.lastJitterSnapshot) {
+      return;
+    }
+    const targetChanged = this.lastLoggedJitterTargetMs !== this.lastJitterSnapshot.activeTargetMs;
+    const isAtMax = this.lastJitterSnapshot.activeTargetMs >= this.bufferPolicy.maxTargetMs;
+    const now = Date.now();
+    const shouldRepeatMaxLog = isAtMax && (now - this.lastLoggedJitterMaxAtMs) >= 2000;
+    if (!targetChanged && !shouldRepeatMaxLog) {
+      return;
+    }
+    this.lastLoggedJitterTargetMs = this.lastJitterSnapshot.activeTargetMs;
+    if (isAtMax) {
+      this.lastLoggedJitterMaxAtMs = now;
+    }
+    this.port.postMessage({
+      type: 'jitterDebug',
+      data: {
+        reason,
+        backend: 'audio-worklet',
+        source: this.jitterEstimatorSource,
+        targetMs: this.lastJitterSnapshot.activeTargetMs,
+        recommendedMs: this.lastJitterSnapshot.recommendedTargetMs,
+        p95Ms: this.lastJitterSnapshot.relativeDelayP95Ms,
+        jitterEwmaMs: this.lastJitterSnapshot.jitterEwmaMs,
+        sampleCount: this.lastJitterSnapshot.sampleCount,
+        lastSample: this.lastJitterSnapshot.lastSample,
+        queueMs: this.availableSamples / (this.outputSampleRate / 1000),
+        underruns: this.underrunCount,
+        policy: this.bufferPolicy,
+        isAtMax,
+      }
+    });
+  }
+
+  fillTailPlc(output, offset) {
+    if (this.consecutiveUnderrunFrames > 0 || this.plcHistory.length === 0 || offset >= output.length) {
+      return;
+    }
+    const maxPlcSamples = Math.ceil((this.plcTailMs / 1000) * this.outputSampleRate);
+    const plcSamples = Math.min(output.length - offset, maxPlcSamples, this.plcHistory.length);
+    const sourceSamples = Math.min(this.plcHistory.length, maxPlcSamples);
+    const sourceStart = this.plcHistory.length - sourceSamples;
+    for (let i = 0; i < plcSamples; i++) {
+      const phase = plcSamples <= 1 ? 1 : i / (plcSamples - 1);
+      const fade = Math.cos((phase * Math.PI) / 2);
+      output[offset + i] = this.plcHistory[sourceStart + (i % sourceSamples)] * fade;
+    }
+    this.restoreCrossfadePending = true;
+  }
+
+  applyRestoreCrossfade(output, realSamples) {
+    if (!this.restoreCrossfadePending || this.plcHistory.length === 0) {
+      this.restoreCrossfadePending = false;
+      return;
+    }
+    const crossfadeSamples = Math.min(
+      realSamples,
+      this.plcHistory.length,
+      Math.ceil((this.plcRestoreCrossfadeMs / 1000) * this.outputSampleRate)
+    );
+    const historyStart = this.plcHistory.length - crossfadeSamples;
+    for (let i = 0; i < crossfadeSamples; i++) {
+      const wet = (i + 1) / (crossfadeSamples + 1);
+      output[i] = (this.plcHistory[historyStart + i] * (1 - wet)) + (output[i] * wet);
+    }
+    this.restoreCrossfadePending = false;
+  }
+
+  recordRealOutput(samples) {
+    if (!samples || samples.length === 0) {
+      return;
+    }
+    const maxHistorySamples = Math.ceil((this.plcTailMs / 1000) * this.outputSampleRate);
+    if (samples.length >= maxHistorySamples) {
+      this.plcHistory = new Float32Array(samples.subarray(samples.length - maxHistorySamples));
+      return;
+    }
+    const merged = new Float32Array(Math.min(maxHistorySamples, this.plcHistory.length + samples.length));
+    const keep = Math.max(0, merged.length - samples.length);
+    if (keep > 0) {
+      merged.set(this.plcHistory.subarray(this.plcHistory.length - keep), 0);
+    }
+    merged.set(samples, keep);
+    this.plcHistory = merged;
   }
 
   resampleToOutputRate(input, inputSampleRate) {
@@ -329,13 +648,16 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
     this.consecutiveUnderrunFrames = 0;
     this.isPlaying = false;
     this.isRecovering = false;
-    this.adaptiveTargetMs = this.INITIAL_TARGET_MS;
+    this.adaptiveTargetMs = this.bufferPolicy.initialTargetMs;
     const now = Date.now();
+    this.recreateJitterEstimator(now);
     this.lastUnderrunAt = now;
     this.lastTargetChangeAt = now;
     this.audioLevel = 0;
     this.lastOutputSourceTimestampMs = null;
     this.lastMainToWorkletMs = null;
+    this.plcHistory = new Float32Array(0);
+    this.restoreCrossfadePending = false;
     this.timestampBuffer.fill(Number.NaN);
     this.resampleInputBuffer = new Float32Array(0);
     this.resampleSourcePosition = 0;

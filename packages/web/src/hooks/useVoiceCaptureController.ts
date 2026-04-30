@@ -21,7 +21,7 @@ import {
 
 const logger = createLogger('useVoiceCaptureController');
 const VOICE_TX_BUFFER_PREFERENCE_STORAGE_KEY = 'tx5dr.voiceTx.bufferPreference';
-const DEFAULT_VOICE_TX_BUFFER_PREFERENCE: VoiceTxBufferPreference = { profile: 'balanced' };
+const DEFAULT_VOICE_TX_BUFFER_PREFERENCE: VoiceTxBufferPreference = { profile: 'auto' };
 
 export interface VoiceCaptureController {
   captureState: VoiceCaptureState;
@@ -152,7 +152,10 @@ export function useVoiceCaptureController(
       return;
     }
 
-    await capture.switchTransportFromGesture(transport);
+    await capture.switchTransportFromGesture(transport, {
+      voiceTxBufferPreference: txBufferPreferenceRef.current,
+      audioCodecPreference: audioCodecPreferenceRef.current,
+    });
     syncFromCapture();
   }, [setPreferredTransport, syncFromCapture]);
 

@@ -163,12 +163,12 @@ describe('RealtimeTransportManager', () => {
       direction: 'send',
       role: UserRole.OPERATOR,
       transportOverride: 'ws-compat',
-      voiceTxBufferPreference: { profile: 'stable' },
+      voiceTxBufferPreference: { profile: 'custom', customTargetBufferMs: 170 },
     }));
 
     expect(session.offers.map((offer) => offer.transport)).toEqual(['ws-compat']);
     expect(session.voiceTxBufferPolicy).toMatchObject({
-      profile: 'stable',
+      profile: 'custom',
       targetMs: 170,
       uplinkMaxBufferedAudioMs: 340,
     });
@@ -207,7 +207,7 @@ describe('RealtimeTransportManager', () => {
 
     expect(session.audioCodecPolicy.resolvedCodec).toBe('opus');
     expect(session.audioCodecPolicy.bitrateBps).toBe(32000);
-    expect(session.audioCodecPolicy.frameDurationMs).toBe(10);
+    expect(session.audioCodecPolicy.frameDurationMs).toBe(20);
   });
 
   it('falls back to ws-compat when rtc-data-audio is unavailable', async () => {
@@ -289,7 +289,7 @@ describe('RealtimeTransportManager', () => {
     };
 
     manager.acceptCompatConnection(socket as never, `/api/realtime/ws-compat?token=${offer?.token}`);
-    const sourceSamples = new Float32Array(96).fill(0.5);
+    const sourceSamples = new Float32Array(960).fill(0.5);
     source.emit('audioFrame', {
       samples: sourceSamples,
       sampleRate: 48000,
@@ -313,7 +313,7 @@ describe('RealtimeTransportManager', () => {
       binary.buffer.slice(binary.byteOffset, binary.byteOffset + binary.byteLength),
     );
     expect(decoded.sampleRate).toBe(24000);
-    expect(decoded.samplesPerChannel).toBe(48);
+    expect(decoded.samplesPerChannel).toBe(480);
     expect(decoded.sequence).toBe(0);
     expect(decoded.timestampMs).toBe(1234);
     const float32 = int16ToFloat32Pcm(decoded.pcm);

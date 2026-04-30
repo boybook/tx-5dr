@@ -6,7 +6,7 @@ const originalAudioDecoder = (globalThis as unknown as { AudioDecoder?: unknown 
 const originalEncodedAudioChunk = (globalThis as unknown as { EncodedAudioChunk?: unknown }).EncodedAudioChunk;
 
 class FakeDecodedAudioData {
-  readonly numberOfFrames = 160;
+  readonly numberOfFrames = 320;
   readonly numberOfChannels = 1;
   readonly format = 'f32';
 
@@ -61,8 +61,8 @@ function makeOpusPayload(sequence: number, timestampMs: number): ArrayBuffer {
     sourceSampleRate: 48_000,
     codecSampleRate: 48_000,
     channels: 1,
-    samplesPerChannel: 480,
-    frameDurationMs: 10,
+    samplesPerChannel: 960,
+    frameDurationMs: 20,
     payload: new Uint8Array([sequence & 0xff]),
   });
 }
@@ -88,7 +88,7 @@ describe('BrowserOpusDecoder', () => {
     });
 
     decoder.decode(makeOpusPayload(0, 1000), 2000);
-    decoder.decode(makeOpusPayload(1, 1010), 2010);
+    decoder.decode(makeOpusPayload(1, 1020), 2020);
 
     const fakeDecoder = FakeAudioDecoder.instances[0]!;
     expect(fakeDecoder.chunks).toHaveLength(2);
@@ -98,7 +98,7 @@ describe('BrowserOpusDecoder', () => {
 
     expect(decoded).toEqual([
       { sourceTimestampMs: 1000, receivedAtClientMs: 2000, serverSentAtMs: undefined },
-      { sourceTimestampMs: 1010, receivedAtClientMs: 2010, serverSentAtMs: undefined },
+      { sourceTimestampMs: 1020, receivedAtClientMs: 2020, serverSentAtMs: undefined },
     ]);
   });
 });

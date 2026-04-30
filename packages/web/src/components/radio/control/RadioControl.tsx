@@ -40,6 +40,13 @@ import {
   loadRealtimeAudioCodecPreference,
   saveRealtimeAudioCodecPreference,
 } from '../../../audio/realtimeAudioCodec';
+import {
+  MONITOR_PLAYBACK_BUFFER_CUSTOM_MAX_MS,
+  MONITOR_PLAYBACK_BUFFER_CUSTOM_MIN_MS,
+  MONITOR_PLAYBACK_BUFFER_CUSTOM_STEP_MS,
+  clampMonitorPlaybackBufferTarget,
+  type MonitorPlaybackBufferProfile,
+} from '../../../audio/monitorPlaybackBufferPreference';
 
 const logger = createLogger('RadioControl');
 
@@ -52,13 +59,12 @@ const MODE_SELECT_MAX_WIDTH_PX = 160;
 const CUSTOM_FREQUENCY_ACTION_KEY = '__custom__';
 const CURRENT_CUSTOM_FREQUENCY_KEY = '__custom_frequency__';
 const CUSTOM_BAND = 'custom';
-const VOICE_TX_BUFFER_PROFILES: Array<Exclude<VoiceTxBufferProfile, 'custom'> | 'custom'> = [
-  'low-latency',
-  'balanced',
-  'stable',
+const VOICE_TX_BUFFER_PROFILES: VoiceTxBufferProfile[] = [
+  'auto',
   'custom',
 ];
 const REALTIME_AUDIO_CODEC_PREFERENCES: RealtimeAudioCodecPreference[] = ['auto', 'opus', 'pcm'];
+const MONITOR_PLAYBACK_BUFFER_PROFILES: MonitorPlaybackBufferProfile[] = ['auto', 'custom'];
 
 const clampWidth = (value: number, minWidth: number, maxWidth: number): number => (
   Math.min(maxWidth, Math.max(minWidth, value))
@@ -600,13 +606,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     return t('monitor.transportWebrtc');
   }, [t]);
 
-  const formatMonitorSampleRate = React.useCallback((sampleRate: number | undefined): string => {
-    if (!sampleRate || !Number.isFinite(sampleRate)) {
-      return '--';
-    }
-    return sampleRate >= 1000 ? `${(sampleRate / 1000).toFixed(sampleRate % 1000 === 0 ? 0 : 1)}k` : `${sampleRate}`;
-  }, []);
-
   const getNextMonitorTransport = React.useCallback((): RealtimeTransportKind => (
     audioMonitor.transportKind === 'ws-compat' ? 'rtc-data-audio' : 'ws-compat'
   ), [audioMonitor.transportKind]);
@@ -638,12 +637,14 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     voiceCaptureController,
     radioMode.engineMode === 'voice' && Boolean(voiceCaptureController),
   );
+  const selectedVoiceTxBufferProfile = voiceCaptureController?.txBufferPreference.profile ?? 'auto';
+  const isVoiceTxCustomBufferMode = selectedVoiceTxBufferProfile === 'custom';
 
   React.useEffect(() => {
     const hasRisingUnderruns = Boolean(voiceTxDiagnostics?.display.underrunIncreasingTrend);
     const isTransmitting = Boolean(voiceCaptureController?.isPTTActive);
 
-    if (!isTransmitting || !hasRisingUnderruns) {
+    if (!isTransmitting || !hasRisingUnderruns || !isVoiceTxCustomBufferMode) {
       hasAutoOpenedVoiceTxUnderrunPopoverRef.current = false;
       return;
     }
@@ -655,6 +656,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     hasAutoOpenedVoiceTxUnderrunPopoverRef.current = true;
     setIsVoiceTxPopoverOpen(true);
   }, [
+    isVoiceTxCustomBufferMode,
     voiceCaptureController?.isPTTActive,
     voiceTxDiagnostics?.display.underrunIncreasingTrend,
   ]);
@@ -698,104 +700,109 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     return `${Math.round(value)}`;
   }, []);
 
-  const voiceTxBottleneckLabel = React.useMemo(() => {
-    switch (voiceTxDiagnostics?.display.bottleneckStage) {
-      case 'client-capture':
-        return t('voiceTx.bottleneckClient');
-      case 'transport':
-        return t('voiceTx.bottleneckTransport');
-      case 'server-ingress':
-        return t('voiceTx.bottleneckIngress');
-      case 'server-queue':
-        return t('voiceTx.bottleneckQueue');
-      case 'server-output':
-        return t('voiceTx.bottleneckOutput');
-      default:
-        return t('voiceTx.bottleneckNone');
+  const formatBitrateMetric = React.useCallback((value: number | null | undefined): string => {
+    if (value == null || Number.isNaN(value) || value <= 0) {
+      return '--';
     }
-  }, [t, voiceTxDiagnostics?.display.bottleneckStage]);
-
-  const voiceTxLatencyBreakdownSummary = React.useMemo(() => {
-    if (!voiceTxDiagnostics) {
-      return '';
+    if (value >= 1000) {
+      return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)} Mbps`;
     }
-
-    return [
-      `${t('voiceTx.timingNetwork')} ${formatLatencyMetric(voiceTxDiagnostics.display.networkLatencyMs)}`,
-      `${t('voiceTx.timingServer')} ${formatLatencyMetric(voiceTxDiagnostics.display.queueLatencyMs)}`,
-      `${t('voiceTx.timingOutput')} ${formatLatencyMetric(voiceTxDiagnostics.display.outputBufferedMs)}`,
-    ].join(' · ');
-  }, [
-    formatLatencyMetric,
-    t,
-    voiceTxDiagnostics,
-  ]);
-
-  const voiceTxBufferingSummary = React.useMemo(() => {
-    if (!voiceTxDiagnostics) {
-      return '';
-    }
-
-    return [
-      `${t('voiceTx.startupShort')} ${formatLatencyMetric(voiceTxDiagnostics.display.startupMs)}`,
-      `${t('voiceTx.localBacklogShort')} ${formatLatencyMetric(voiceTxDiagnostics.display.localBacklogMs)}`,
-      `${t('voiceTx.jitterTargetShort')} ${formatLatencyMetric(voiceTxDiagnostics.serverIngress.jitterTargetMs)}`,
-    ].join(' · ');
-  }, [
-    formatLatencyMetric,
-    t,
-    voiceTxDiagnostics,
-  ]);
-
-  const voiceTxAnomalySummary = React.useMemo(() => {
-    if (!voiceTxDiagnostics) {
-      return '';
-    }
-
-    return [
-      `${t('voiceTx.dropShort')} ${formatIntegerMetric(voiceTxDiagnostics.display.droppedFrames)}`,
-      `${t('voiceTx.underrunShort')} ${formatIntegerMetric(voiceTxDiagnostics.display.underrunCount)}`,
-      voiceTxBottleneckLabel,
-    ].join(' · ');
-  }, [
-    formatIntegerMetric,
-    t,
-    voiceTxBottleneckLabel,
-    voiceTxDiagnostics,
-  ]);
-
-  const voiceTxEndToEndLabel = React.useMemo(() => {
-    switch (voiceTxDiagnostics?.display.endToEndLatencyKind) {
-      case 'measured':
-        return t('voiceTx.endToEndLatencyMeasured');
-      case 'estimated':
-        return t('voiceTx.endToEndLatencyEstimated');
-      case 'partial':
-        return t('voiceTx.endToEndLatencyPartial');
-      case 'unavailable':
-      default:
-        return t('voiceTx.endToEndLatencyUnavailable');
-    }
-  }, [t, voiceTxDiagnostics?.display.endToEndLatencyKind]);
+    return `${Math.round(value)} kbps`;
+  }, []);
 
   const getVoiceTxBufferProfileLabel = React.useCallback((profile: VoiceTxBufferProfile): string => {
     switch (profile) {
-      case 'low-latency':
-        return t('voiceTx.bufferProfileLow');
-      case 'stable':
-        return t('voiceTx.bufferProfileHigh');
+      case 'auto':
+        return t('voiceTx.bufferProfileAuto');
       case 'custom':
         return t('voiceTx.bufferProfileCustom');
-      case 'balanced':
       default:
-        return t('voiceTx.bufferProfileBalanced');
+        return t('voiceTx.bufferProfileAuto');
     }
   }, [t]);
 
   const activeVoiceTxBufferPolicy = voiceCaptureController?.activeTxBufferPolicy
     ?? voiceCaptureController?.resolvedTxBufferPolicy
     ?? null;
-  const selectedVoiceTxBufferProfile = voiceCaptureController?.txBufferPreference.profile ?? 'balanced';
+  const voiceTxBufferPolicySummary = React.useMemo(() => {
+    if (!activeVoiceTxBufferPolicy) {
+      return '--';
+    }
+    const profileLabel = getVoiceTxBufferProfileLabel(selectedVoiceTxBufferProfile);
+    if (selectedVoiceTxBufferProfile === 'auto') {
+      const liveTargetMs = voiceCaptureController?.isPTTActive
+        ? voiceTxDiagnostics?.serverIngress.jitterTargetMs
+        : null;
+      return typeof liveTargetMs === 'number' && liveTargetMs > 0
+        ? `${profileLabel} · ${t('voiceTx.bufferAutoLive', { value: formatLatencyMetric(liveTargetMs) })}`
+        : profileLabel;
+    }
+    return `${profileLabel} · ${formatLatencyMetric(activeVoiceTxBufferPolicy.targetMs)}`;
+  }, [
+    activeVoiceTxBufferPolicy,
+    formatLatencyMetric,
+    getVoiceTxBufferProfileLabel,
+    selectedVoiceTxBufferProfile,
+    t,
+    voiceCaptureController?.isPTTActive,
+    voiceTxDiagnostics?.serverIngress.jitterTargetMs,
+  ]);
+
+  const voiceTxAudioPathSummary = React.useMemo(() => {
+    if (!voiceCaptureController) {
+      return '--';
+    }
+    const codec = voiceCaptureController.activeAudioCodecPolicy?.resolvedCodec === 'opus' ? 'Opus' : 'PCM';
+    const transport = currentVoiceTransport
+      ? getVoiceTransportLabel(currentVoiceTransport)
+      : t('voiceTx.notEstablished');
+    return `${codec} · ${transport}`;
+  }, [
+    currentVoiceTransport,
+    getVoiceTransportLabel,
+    t,
+    voiceCaptureController,
+  ]);
+
+  const voiceTxBitrateKbps = voiceTxDiagnostics?.client?.bitrateKbps.rolling
+    ?? voiceTxDiagnostics?.client?.bitrateKbps.current
+    ?? (
+      voiceCaptureController?.activeAudioCodecPolicy?.resolvedCodec === 'opus'
+        && voiceCaptureController.activeAudioCodecPolicy.bitrateBps
+        ? voiceCaptureController.activeAudioCodecPolicy.bitrateBps / 1000
+        : null
+    );
+
+  const voiceTxStabilityLabel = React.useMemo(() => {
+    if (!voiceTxDiagnostics) {
+      return t('voiceTx.stabilityIdle');
+    }
+    if (voiceTxDiagnostics.serverOutput.writeFailures > 0) {
+      return t('voiceTx.stabilityOutputProblem');
+    }
+    if (isVoiceTxCustomBufferMode && voiceTxDiagnostics.display.underrunIncreasingTrend) {
+      return t('voiceTx.stabilityNeedMoreDelay');
+    }
+    return t('voiceTx.stabilityGood');
+  }, [
+    isVoiceTxCustomBufferMode,
+    t,
+    voiceTxDiagnostics,
+  ]);
+
+  const voiceTxLatencyClassName = React.useMemo(() => {
+    const latencyMs = voiceTxDiagnostics?.display.endToEndLatencyMs;
+    if (latencyMs == null) {
+      return 'text-default-400';
+    }
+    if (latencyMs < 150) {
+      return 'text-success';
+    }
+    if (latencyMs <= 300) {
+      return 'text-warning';
+    }
+    return 'text-danger';
+  }, [voiceTxDiagnostics?.display.endToEndLatencyMs]);
   const voiceTxCustomBufferMs = voiceCaptureController?.txBufferPreference.customTargetBufferMs
     ?? voiceCaptureController?.resolvedTxBufferPolicy.targetMs
     ?? 90;
@@ -1151,6 +1158,50 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
         return t('monitor.codecAuto');
     }
   }, [t]);
+
+  const getMonitorPlaybackBufferProfileLabel = React.useCallback((profile: MonitorPlaybackBufferProfile): string => {
+    switch (profile) {
+      case 'custom':
+        return t('monitor.bufferCustom');
+      case 'auto':
+      default:
+        return t('monitor.bufferAuto');
+    }
+  }, [t]);
+
+  const selectedMonitorBufferProfile = audioMonitor.playbackBufferPreference.profile;
+  const monitorCustomBufferMs = audioMonitor.playbackBufferPreference.profile === 'custom'
+    ? audioMonitor.playbackBufferPreference.customTargetBufferMs
+    : audioMonitor.resolvedPlaybackBufferPolicy.targetBufferMs;
+  const isMonitorBufferControlDisabled = isSwitchingMonitorTransport;
+
+  const handleMonitorBufferProfileChange = React.useCallback((profile: MonitorPlaybackBufferProfile) => {
+    if (isMonitorBufferControlDisabled) {
+      return;
+    }
+    if (profile === 'custom') {
+      audioMonitor.setPlaybackBufferPreference({
+        profile: 'custom',
+        customTargetBufferMs: clampMonitorPlaybackBufferTarget(monitorCustomBufferMs),
+      });
+      return;
+    }
+    audioMonitor.setPlaybackBufferPreference({ profile: 'auto' });
+  }, [audioMonitor, isMonitorBufferControlDisabled, monitorCustomBufferMs]);
+
+  const handleMonitorCustomBufferChange = React.useCallback((value: string) => {
+    if (isMonitorBufferControlDisabled) {
+      return;
+    }
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) {
+      return;
+    }
+    audioMonitor.setPlaybackBufferPreference({
+      profile: 'custom',
+      customTargetBufferMs: clampMonitorPlaybackBufferTarget(parsed),
+    });
+  }, [audioMonitor, isMonitorBufferControlDisabled]);
 
   const handleMonitorCodecPreferenceChange = React.useCallback(async (preference: RealtimeAudioCodecPreference) => {
     setMonitorAudioCodecPreference(preference);
@@ -1636,12 +1687,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
             )}
             {isOperator && (
               <ToolbarIconTooltip label={t('control.txVolumeGain')}>
-                <Popover
-                  classNames={{
-                    base: "w-52 min-w-0 max-w-[calc(100vw-1rem)]",
-                    content: "w-full min-w-0 px-3 py-2 pt-3 space-y-2",
-                  }}
-                >
+                <Popover>
                   <PopoverTrigger>
                     <Button
                       isIconOnly
@@ -1653,9 +1699,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                       <FontAwesomeIcon icon={faVolumeUp} className="text-xs" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="py-2 pt-3 space-y-1">
+                  <PopoverContent className="w-auto min-w-0 px-3 py-2 pt-3">
                     <TxVolumeGainControl
                       orientation="vertical"
+                      sliderClassName="w-10"
                       sliderStyle={{ height: '120px' }}
                       ariaLabel={t('control.volumeControl')}
                     />
@@ -1690,39 +1737,44 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                       <FontAwesomeIcon icon={faHeadphones} className="text-xs" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent>
-                    <div className="space-y-2">
+                  <PopoverContent className="w-auto min-w-52 max-w-[calc(100vw-2rem)] px-3 py-3">
+                    <div className="w-max max-w-[min(20rem,calc(100vw-4rem))] space-y-3">
+                      <div className="font-medium text-sm text-default-700">
+                        {t('monitor.audioMonitor')}
+                      </div>
+
                       {/* 监听音量滑块 */}
-                      <div className="flex flex-col items-center px-2">
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-default-500">{t('monitor.monitorVolume')}</span>
+                          <span className="font-mono text-default-400">
+                            {formatDbDisplay(gainToDb(monitorVolume))}
+                          </span>
+                        </div>
                         <Slider
-                          className="w-10"
-                          orientation="vertical"
+                          className="w-48 max-w-full"
                           minValue={-60}
                           maxValue={20}
                           step={0.1}
                           value={[gainToDb(monitorVolume)]}
                           onChange={handleMonitorVolumeChange}
                           onWheel={handleMonitorVolumeWheel}
-                          style={{ height: '120px' }}
                           aria-label={t('monitor.monitorVolume')}
                         />
-                        <div className="text-sm text-default-400 text-center font-mono">
-                          {formatDbDisplay(gainToDb(monitorVolume))}
-                        </div>
                       </div>
 
                       {/* 状态指示器 */}
                       {audioMonitor.isPlaying && (
-                        <div className="space-y-1 pt-2 border-t border-divider text-xs">
+                        <div className="space-y-2 pt-2 border-t border-divider text-xs">
                           {audioMonitor.stats && (
                             <>
-                              <div className="flex justify-between items-center">
-                                {t('monitor.latency')}
+                              <div className="grid grid-cols-[auto_auto] gap-x-5 gap-y-1">
+                                <span className="text-default-500">{t('monitor.latency')}</span>
                                 <span
-                                  className={`font-mono ${
+                                  className={`font-mono text-right whitespace-nowrap ${
                                     audioMonitor.stats.endToEndLatencyMs == null ? 'text-default-400' :
-                                    audioMonitor.stats.endToEndLatencyMs < 80 ? 'text-success' :
-                                    audioMonitor.stats.endToEndLatencyMs < 160 ? 'text-warning' :
+                                    audioMonitor.stats.endToEndLatencyMs < 150 ? 'text-success' :
+                                    audioMonitor.stats.endToEndLatencyMs <= 300 ? 'text-warning' :
                                     'text-danger'
                                   }`}
                                   title={
@@ -1735,59 +1787,44 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                                     ? t('monitor.estimating')
                                     : `${audioMonitor.stats.endToEndLatencyMs.toFixed(0)}ms`}
                                 </span>
-                              </div>
 
-                              <div className="flex justify-between items-center">
-                                {t('monitor.buffer')}
-                                <span className="font-mono text-default-400">
+                                <span className="text-default-500">{t('monitor.buffer')}</span>
+                                <span className="font-mono text-default-400 text-right whitespace-nowrap">
                                   {audioMonitor.stats.playbackQueueMs.toFixed(0)}
                                   /
                                   {audioMonitor.stats.receiver?.targetBufferMs?.toFixed(0) ?? '-'}ms
                                 </span>
-                              </div>
 
-                              <div className="flex justify-between items-center">
-                                {t('monitor.active')}
-                                <span className={`w-2 h-2 rounded-full ${
-                                  audioMonitor.stats.isActive ? 'bg-success animate-pulse' : 'bg-default-300'
-                                }`} />
-                              </div>
-
-                              <div className="flex justify-between items-center">
-                                {t('monitor.transportMode')}
-                                <span className="font-mono text-default-400">
+                                <span className="text-default-500">{t('monitor.audioPath')}</span>
+                                <span className="font-mono text-default-400 text-right whitespace-nowrap">
+                                  {audioMonitor.stats.receiver?.codec === 'opus' ? 'Opus' : 'PCM'}
+                                  {' · '}
                                   {getMonitorTransportLabel(audioMonitor.transportKind)}
                                 </span>
-                              </div>
 
-                              <div className="flex justify-between items-center">
-                                {t('monitor.audioFormat')}
-                                <span className="font-mono text-default-400">
-                                  {audioMonitor.stats.receiver?.codec === 'opus' ? 'Opus' : 'PCM'}
+                                <span className="text-default-500">{t('monitor.bitrate')}</span>
+                                <span className="font-mono text-default-400 text-right whitespace-nowrap">
+                                  {formatBitrateMetric(audioMonitor.stats.receiver?.bitrateKbps)}
                                 </span>
                               </div>
 
-                              <div className="flex justify-between items-center">
-                                {t('monitor.sampleRate')}
-                                <span className="font-mono text-default-400">
-                                  {formatMonitorSampleRate(
-                                    audioMonitor.stats.receiver?.inputSampleRate
-                                      ?? audioMonitor.stats.source?.sampleRate,
-                                  )}
-                                </span>
-                              </div>
-
-                              <div className="flex justify-between items-center">
-                                {t('monitor.bitrate')}
-                                <span className="font-mono text-default-400">
-                                  {audioMonitor.stats.receiver?.bitrateKbps
-                                    ? `${audioMonitor.stats.receiver.bitrateKbps.toFixed(0)} kbps`
-                                    : '--'}
-                                </span>
-                              </div>
-
-                              <div className="space-y-1 pt-1">
-                                <div className="text-default-500">{t('monitor.codecPreference')}</div>
+                              <div className="space-y-1 pt-1 border-t border-divider">
+                                <div className="inline-flex items-center gap-1 text-default-500">
+                                  {t('monitor.codecPreference')}
+                                  <Tooltip
+                                    size="sm"
+                                    placement="top"
+                                    content={t('monitor.codecPreferenceHelp')}
+                                    classNames={{ content: 'max-w-56 whitespace-normal text-xs leading-snug' }}
+                                  >
+                                    <span
+                                      className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center text-default-400"
+                                      aria-label={t('monitor.codecPreferenceHelp')}
+                                    >
+                                      <FontAwesomeIcon icon={faCircleInfo} className="text-[11px]" />
+                                    </span>
+                                  </Tooltip>
+                                </div>
                                 <Tabs
                                   size="sm"
                                   fullWidth
@@ -1813,6 +1850,63 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                                   </div>
                                 )}
                               </div>
+
+                              <div className="space-y-1 pt-1 border-t border-divider">
+                                <div className="flex items-center justify-between gap-2 text-default-500">
+                                  <span className="inline-flex items-center gap-1">
+                                    {t('monitor.bufferPolicy')}
+                                    <Tooltip
+                                      size="sm"
+                                      placement="top"
+                                      content={t('monitor.bufferPolicyHelp')}
+                                      classNames={{ content: 'max-w-52 whitespace-normal text-xs leading-snug' }}
+                                    >
+                                      <span
+                                        className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center text-default-400"
+                                        aria-label={t('monitor.bufferPolicyHelp')}
+                                      >
+                                        <FontAwesomeIcon icon={faCircleInfo} className="text-[11px]" />
+                                      </span>
+                                    </Tooltip>
+                                  </span>
+                                </div>
+                                <Tabs
+                                  size="sm"
+                                  fullWidth
+                                  selectedKey={selectedMonitorBufferProfile}
+                                  onSelectionChange={(key) => handleMonitorBufferProfileChange(key as MonitorPlaybackBufferProfile)}
+                                  isDisabled={isMonitorBufferControlDisabled}
+                                  aria-label={t('monitor.bufferPolicy')}
+                                  classNames={{
+                                    tabList: 'gap-1 p-0.5',
+                                    tab: 'h-6 px-1 text-[11px]',
+                                  }}
+                                >
+                                  {MONITOR_PLAYBACK_BUFFER_PROFILES.map((profile) => (
+                                    <Tab key={profile} title={getMonitorPlaybackBufferProfileLabel(profile)} />
+                                  ))}
+                                </Tabs>
+                                {selectedMonitorBufferProfile === 'custom' && (
+                                  <Input
+                                    size="sm"
+                                    type="number"
+                                    min={MONITOR_PLAYBACK_BUFFER_CUSTOM_MIN_MS}
+                                    max={MONITOR_PLAYBACK_BUFFER_CUSTOM_MAX_MS}
+                                    step={MONITOR_PLAYBACK_BUFFER_CUSTOM_STEP_MS}
+                                    value={String(monitorCustomBufferMs)}
+                                    onValueChange={handleMonitorCustomBufferChange}
+                                    isDisabled={isMonitorBufferControlDisabled}
+                                    label={t('monitor.customBufferTarget')}
+                                    labelPlacement="outside-left"
+                                    endContent={<span className="text-[11px] text-default-400">ms</span>}
+                                    classNames={{
+                                      base: 'pt-1',
+                                      label: 'text-[11px] text-default-500',
+                                      input: 'text-right font-mono text-xs',
+                                    }}
+                                  />
+                                )}
+                              </div>
                             </>
                           )}
 
@@ -1820,7 +1914,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                             size="sm"
                             variant="flat"
                             color={audioMonitor.transportKind === 'ws-compat' ? 'primary' : 'warning'}
-                            className="w-full"
+                            className="w-full h-7"
                             onPress={handleSwitchMonitorTransport}
                             isLoading={isSwitchingMonitorTransport}
                             isDisabled={!audioMonitor.transportKind || isSwitchingMonitorTransport}
@@ -1832,7 +1926,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                         </div>
                       )}
 
-                      <div className="flex items-center justify-center px-2 w-full pt-2 border-t border-divider">
+                      <div className="flex items-center justify-between gap-6 pt-2 border-t border-divider text-xs">
+                        <span className="text-default-500">{t('monitor.monitorSwitch')}</span>
                         <Switch
                           size="sm"
                           isSelected={audioMonitor.isPlaying}
@@ -1868,224 +1963,178 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                       <FontAwesomeIcon icon={faMicrophone} className="text-xs" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="py-2 pt-3 space-y-2">
-                    <div className="space-y-2 text-xs">
+                  <PopoverContent className="w-auto min-w-0 max-w-[calc(100vw-2rem)] px-3 py-3">
+                    <div className="w-max max-w-[min(16rem,calc(100vw-4rem))] space-y-3 text-xs">
                       <div className="font-medium text-sm text-default-700">
                         {t('voiceTx.audioUplink')}
                       </div>
 
-                    <div className="flex justify-between items-center gap-3">
-                      <span className="text-default-500">{t('voiceTx.status')}</span>
-                      <span className="font-mono text-default-400 text-right">
-                        {voiceTxStatusLabel}
-                      </span>
-                    </div>
-
-                    <div className="flex justify-between items-center gap-3">
-                      <span className="text-default-500">{t('voiceTx.codec')}</span>
-                      <span className="font-mono text-default-400 uppercase text-right">
-                        {voiceCaptureController.activeAudioCodecPolicy?.resolvedCodec === 'opus' ? 'Opus' : 'PCM'}
-                      </span>
-                    </div>
-
-                    <div className="flex justify-between items-center gap-3">
-                      <span className="text-default-500">{t('monitor.sampleRate')}</span>
-                      <span className="font-mono text-default-400 text-right">
-                        16k
-                      </span>
-                    </div>
-
-                    <div className="flex justify-between items-center gap-3">
-                      <span className="text-default-500">{t('monitor.bitrate')}</span>
-                      <span className="font-mono text-default-400 text-right">
-                        {voiceCaptureController.getDiagnostics()?.bitrateKbps.rolling
-                          ? `${voiceCaptureController.getDiagnostics()?.bitrateKbps.rolling?.toFixed(0)} kbps`
-                          : '--'}
-                      </span>
-                    </div>
-
-                    <div className="space-y-1.5 border-t border-divider pt-2">
-                      <div className="flex justify-between items-center gap-3">
-                        <span className="text-default-500">{t('monitor.codecPreference')}</span>
-                        <span className="font-mono text-default-400 text-right">
-                          {getAudioCodecPreferenceLabel(voiceCaptureController.audioCodecPreference)}
+                      <div className="grid grid-cols-[auto_auto] gap-x-5 gap-y-1">
+                        <span className="text-default-500">{t('voiceTx.status')}</span>
+                        <span className="font-mono text-default-400 text-right whitespace-nowrap">
+                          {voiceTxStatusLabel}
                         </span>
-                      </div>
-                      <Tabs
-                        size="sm"
-                        fullWidth
-                        selectedKey={voiceCaptureController.audioCodecPreference}
-                        onSelectionChange={(key) => handleVoiceCodecPreferenceChange(key as RealtimeAudioCodecPreference)}
-                        isDisabled={voiceCaptureController.isPTTActive || voiceCaptureController.captureState === 'starting'}
-                        aria-label={t('monitor.codecPreference')}
-                        classNames={{
-                          tabList: 'gap-1 p-0.5',
-                          tab: 'h-6 px-1 text-[11px]',
-                        }}
-                      >
-                        {REALTIME_AUDIO_CODEC_PREFERENCES.map((preference) => (
-                          <Tab key={preference} title={getAudioCodecPreferenceLabel(preference)} />
-                        ))}
-                      </Tabs>
-                      {voiceCaptureController.activeAudioCodecPolicy?.fallbackReason
-                        && voiceCaptureController.activeAudioCodecPolicy.fallbackReason !== 'client-forced-pcm' && (
-                        <div className="text-[11px] text-warning text-center">
-                          {t('monitor.codecFallbackPcm')}
-                        </div>
-                      )}
-                    </div>
 
-                    <div className="flex justify-between items-center gap-3">
-                      <span className="text-default-500">{t('voiceTx.currentTransport')}</span>
-                      <span className="font-mono text-default-400 text-right">
-                        {currentVoiceTransport
-                          ? getVoiceTransportLabel(currentVoiceTransport)
-                          : t('voiceTx.notEstablished')}
-                      </span>
-                    </div>
-
-                    <div className="flex justify-between items-center gap-3">
-                      <span className="text-default-500">{t('voiceTx.plannedTransport')}</span>
-                      <span className="font-mono text-default-400 text-right">
-                        {getVoiceTransportLabel(voiceCaptureController.preferredTransport)}
-                      </span>
-                    </div>
-
-                    <div className="space-y-1.5 border-t border-divider pt-2">
-                      <div className="flex justify-between items-center gap-3">
-                        <span className="inline-flex items-center gap-1 text-default-500">
-                          {t('voiceTx.bufferPolicy')}
-                          <Tooltip
-                            size="sm"
-                            placement="top"
-                            content={t('voiceTx.bufferPolicyHelp')}
-                            classNames={{ content: 'max-w-52 whitespace-normal text-xs leading-snug' }}
-                          >
-                            <span
-                              className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center text-default-400"
-                              aria-label={t('voiceTx.bufferPolicyHelp')}
-                            >
-                              <FontAwesomeIcon icon={faCircleInfo} className="text-[11px]" />
-                            </span>
-                          </Tooltip>
+                        <span className="text-default-500">{t('voiceTx.audioPath')}</span>
+                        <span className="font-mono text-default-400 text-right whitespace-nowrap">
+                          {voiceTxAudioPathSummary}
                         </span>
-                        <span className="font-mono text-default-400 text-right">
-                          {activeVoiceTxBufferPolicy
-                            ? `${getVoiceTxBufferProfileLabel(selectedVoiceTxBufferProfile)} · ${activeVoiceTxBufferPolicy.targetMs}ms`
-                            : '--'}
+
+                        <span className="text-default-500">{t('voiceTx.bitrate')}</span>
+                        <span className="font-mono text-default-400 text-right whitespace-nowrap">
+                          {formatBitrateMetric(voiceTxBitrateKbps)}
                         </span>
-                      </div>
-                      <Tabs
-                        size="sm"
-                        fullWidth
-                        selectedKey={selectedVoiceTxBufferProfile}
-                        onSelectionChange={(key) => handleVoiceTxBufferProfileChange(key as VoiceTxBufferProfile)}
-                        isDisabled={isVoiceTxBufferControlDisabled}
-                        aria-label={t('voiceTx.bufferPolicy')}
-                        classNames={{
-                          tabList: 'gap-1 p-0.5',
-                          tab: 'h-6 px-1 text-[11px]',
-                        }}
-                      >
-                        {VOICE_TX_BUFFER_PROFILES.map((profile) => (
-                          <Tab key={profile} title={getVoiceTxBufferProfileLabel(profile)} />
-                        ))}
-                      </Tabs>
-                      {selectedVoiceTxBufferProfile === 'custom' && (
-                        <Input
-                          size="sm"
-                          type="number"
-                          min={40}
-                          max={500}
-                          step={10}
-                          value={String(voiceTxCustomBufferMs)}
-                          onValueChange={handleVoiceTxCustomBufferChange}
-                          isDisabled={isVoiceTxBufferControlDisabled}
-                          label={t('voiceTx.customBufferTarget')}
-                          labelPlacement="outside-left"
-                          endContent={<span className="text-[11px] text-default-400">ms</span>}
-                          classNames={{
-                            base: 'pt-1',
-                            label: 'text-[11px] text-default-500',
-                            input: 'text-right font-mono text-xs',
-                          }}
-                        />
-                      )}
-                      {voiceCaptureController.isPTTActive && (
-                        <div className="text-[11px] text-warning text-center">
-                          {t('voiceTx.bufferPolicyDisabledDuringTx')}
-                        </div>
-                      )}
-                    </div>
 
-                    {voiceTxDiagnostics && (
-                      <div className="space-y-1 border-t border-divider pt-2 text-[11px]">
-                        <div className="flex justify-between items-center gap-3">
-                          <span className="text-default-500">{t('voiceTx.endToEndLatency')}</span>
-                          <span className="font-mono text-default-400 text-right">
-                            {voiceTxDiagnostics.display.endToEndLatencyMs != null
-                              ? formatLatencyMetric(voiceTxDiagnostics.display.endToEndLatencyMs)
-                              : voiceTxEndToEndLabel}
-                          </span>
-                        </div>
+                        <span className="text-default-500">{t('voiceTx.endToEndLatency')}</span>
+                        <span className={`font-mono text-right whitespace-nowrap ${voiceTxLatencyClassName}`}>
+                          {voiceTxDiagnostics?.display.endToEndLatencyMs != null
+                            ? formatLatencyMetric(voiceTxDiagnostics.display.endToEndLatencyMs)
+                            : t('voiceTx.endToEndLatencyUnavailable')}
+                        </span>
 
-                        <div className="flex justify-between items-center gap-3">
-                          <span className="text-default-500">{t('voiceTx.latencyBreakdown')}</span>
-                          <span className="font-mono text-right text-default-400">
-                            {voiceTxLatencyBreakdownSummary}
-                          </span>
-                        </div>
-
-                        <div className="flex justify-between items-center gap-3">
-                          <span className="text-default-500">{t('voiceTx.buffering')}</span>
-                          <span className="font-mono text-right text-default-400">
-                            {voiceTxBufferingSummary}
-                          </span>
-                        </div>
-
-                        <div className={`flex justify-between items-center gap-3 ${
-                          voiceTxDiagnostics.display.underrunIncreasingTrend ? 'text-danger' : ''
+                        <span className="text-default-500">{t('voiceTx.stability')}</span>
+                        <span className={`font-mono text-right whitespace-nowrap ${
+                          isVoiceTxCustomBufferMode && voiceTxDiagnostics?.display.underrunIncreasingTrend
+                            ? 'text-danger'
+                            : 'text-default-400'
                         }`}>
-                          <span className={voiceTxDiagnostics.display.underrunIncreasingTrend ? 'text-danger' : 'text-default-500'}>
-                            {t('voiceTx.anomalies')}
+                          {voiceTxStabilityLabel}
+                        </span>
+                      </div>
+
+                      <div className="space-y-1.5 border-t border-divider pt-2">
+                        <div className="flex justify-between items-center gap-4">
+                          <span className="inline-flex items-center gap-1 text-default-500">
+                            {t('voiceTx.bufferPolicy')}
+                            <Tooltip
+                              size="sm"
+                              placement="top"
+                              content={t('voiceTx.bufferPolicyHelp')}
+                              classNames={{ content: 'max-w-52 whitespace-normal text-xs leading-snug' }}
+                            >
+                              <span
+                                className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center text-default-400"
+                                aria-label={t('voiceTx.bufferPolicyHelp')}
+                              >
+                                <FontAwesomeIcon icon={faCircleInfo} className="text-[11px]" />
+                              </span>
+                            </Tooltip>
                           </span>
-                          <span className={`font-mono text-right ${
-                            voiceTxDiagnostics.display.underrunIncreasingTrend ? 'text-danger' : 'text-default-400'
-                          }`}>
-                            {voiceTxAnomalySummary}
+                          <span className="font-mono text-default-400 text-right whitespace-nowrap">
+                            {voiceTxBufferPolicySummary}
                           </span>
                         </div>
-
-                        {voiceTxDiagnostics.display.underrunIncreasingTrend && (
+                        <Tabs
+                          size="sm"
+                          fullWidth
+                          selectedKey={selectedVoiceTxBufferProfile}
+                          onSelectionChange={(key) => handleVoiceTxBufferProfileChange(key as VoiceTxBufferProfile)}
+                          isDisabled={isVoiceTxBufferControlDisabled}
+                          aria-label={t('voiceTx.bufferPolicy')}
+                          classNames={{
+                            tabList: 'gap-1 p-0.5',
+                            tab: 'h-6 px-1 text-[11px]',
+                          }}
+                        >
+                          {VOICE_TX_BUFFER_PROFILES.map((profile) => (
+                            <Tab key={profile} title={getVoiceTxBufferProfileLabel(profile)} />
+                          ))}
+                        </Tabs>
+                        {selectedVoiceTxBufferProfile === 'custom' && (
+                          <Input
+                            size="sm"
+                            type="number"
+                            min={40}
+                            max={500}
+                            step={10}
+                            value={String(voiceTxCustomBufferMs)}
+                            onValueChange={handleVoiceTxCustomBufferChange}
+                            isDisabled={isVoiceTxBufferControlDisabled}
+                            label={t('voiceTx.customBufferTarget')}
+                            labelPlacement="outside-left"
+                            endContent={<span className="text-[11px] text-default-400">ms</span>}
+                            classNames={{
+                              base: 'pt-1',
+                              label: 'text-[11px] text-default-500',
+                              input: 'text-right font-mono text-xs',
+                            }}
+                          />
+                        )}
+                        {voiceCaptureController.isPTTActive && (
+                          <div className="text-[11px] text-warning text-center">
+                            {t('voiceTx.bufferPolicyDisabledDuringTx')}
+                          </div>
+                        )}
+                        {isVoiceTxCustomBufferMode && voiceTxDiagnostics?.display.underrunIncreasingTrend && (
                           <div className="w-full min-w-0 max-w-full rounded-md bg-danger/10 px-2 py-1 text-[11px] leading-snug text-danger whitespace-normal break-words">
                             {t('voiceTx.underrunTrendWarning')}
                           </div>
                         )}
+                      </div>
 
-                        {voiceTxDiagnostics.serverOutput.writeFailures > 0 && (
-                          <div className="flex justify-between items-center gap-3 text-[11px] text-warning-500">
+                      <div className="space-y-1.5 border-t border-divider pt-2">
+                        <div className="inline-flex items-center gap-1 text-default-500">
+                          {t('monitor.codecPreference')}
+                          <Tooltip
+                            size="sm"
+                            placement="top"
+                            content={t('monitor.codecPreferenceHelp')}
+                            classNames={{ content: 'max-w-56 whitespace-normal text-xs leading-snug' }}
+                          >
+                            <span
+                              className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center text-default-400"
+                              aria-label={t('monitor.codecPreferenceHelp')}
+                            >
+                              <FontAwesomeIcon icon={faCircleInfo} className="text-[11px]" />
+                            </span>
+                          </Tooltip>
+                        </div>
+                        <Tabs
+                          size="sm"
+                          fullWidth
+                          selectedKey={voiceCaptureController.audioCodecPreference}
+                          onSelectionChange={(key) => handleVoiceCodecPreferenceChange(key as RealtimeAudioCodecPreference)}
+                          isDisabled={voiceCaptureController.isPTTActive || voiceCaptureController.captureState === 'starting'}
+                          aria-label={t('monitor.codecPreference')}
+                          classNames={{
+                            tabList: 'gap-1 p-0.5',
+                            tab: 'h-6 px-1 text-[11px]',
+                          }}
+                        >
+                          {REALTIME_AUDIO_CODEC_PREFERENCES.map((preference) => (
+                            <Tab key={preference} title={getAudioCodecPreferenceLabel(preference)} />
+                          ))}
+                        </Tabs>
+                        {voiceCaptureController.activeAudioCodecPolicy?.fallbackReason
+                          && voiceCaptureController.activeAudioCodecPolicy.fallbackReason !== 'client-forced-pcm' && (
+                          <div className="text-[11px] text-warning text-center">
+                            {t('monitor.codecFallbackPcm')}
+                          </div>
+                        )}
+                      </div>
+
+                      {voiceTxDiagnostics?.serverOutput.writeFailures > 0 && (
+                        <div className="flex justify-between items-center gap-3 text-[11px] text-warning-500">
                             <span>{t('voiceTx.writeFailures')}</span>
                             <span className="font-mono">
                               {formatIntegerMetric(voiceTxDiagnostics.serverOutput.writeFailures)}
                             </span>
                           </div>
-                        )}
-                      </div>
-                    )}
+                      )}
 
-                    <Button
-                      size="sm"
-                      variant="flat"
-                      color={effectiveVoiceTransport === 'ws-compat' ? 'primary' : 'warning'}
-                      className="w-full"
-                      onPress={handleSwitchVoiceTransport}
-                      isLoading={isSwitchingVoiceTransport}
-                      isDisabled={isSwitchingVoiceTransport || voiceCaptureController.isPTTActive || voiceCaptureController.captureState === 'starting'}
-                    >
-                      {effectiveVoiceTransport === 'ws-compat'
-                        ? t('monitor.switchToWebrtc')
-                        : t('monitor.switchToWsPcm')}
-                    </Button>
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        color={effectiveVoiceTransport === 'ws-compat' ? 'primary' : 'warning'}
+                        className="w-full h-7"
+                        onPress={handleSwitchVoiceTransport}
+                        isLoading={isSwitchingVoiceTransport}
+                        isDisabled={isSwitchingVoiceTransport || voiceCaptureController.isPTTActive || voiceCaptureController.captureState === 'starting'}
+                      >
+                        {effectiveVoiceTransport === 'ws-compat'
+                          ? t('monitor.switchToWebrtc')
+                          : t('monitor.switchToWsPcm')}
+                      </Button>
 
                       {voiceCaptureController.isPTTActive && (
                         <div className="text-[11px] text-warning text-center">

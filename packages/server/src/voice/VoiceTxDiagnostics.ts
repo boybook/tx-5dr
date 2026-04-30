@@ -20,9 +20,13 @@ export interface VoiceTxFrameMeta {
   sequence?: number | null;
   clientSentAtMs?: number | null;
   serverReceivedAtMs: number;
+  mediaTimestampMs?: number;
+  frameDurationMs?: number;
+  codec?: 'opus' | 'pcm-s16le';
   sampleRate: number;
   samplesPerChannel: number;
   voiceTxBufferPolicy?: ResolvedVoiceTxBufferPolicy;
+  concealment?: 'opus-plc' | 'pcm-tail';
 }
 
 export interface VoiceTxProcessedFrameStats {
