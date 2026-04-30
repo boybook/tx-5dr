@@ -151,7 +151,7 @@
     "radioSdrSource": "Radio SDR",
     "openwebrxSdrSource": "OpenWebRX",
     "popOut": "Show in separate window",
-    "rangeSettings": "Spectrum Range Settings",
+    "rangeSettings": "Spectrum Settings",
     "autoMode": "Auto Mode",
     "manualMode": "Manual Mode",
     "updateInterval": "Range auto-refresh interval (frames)",
@@ -173,7 +173,21 @@
     "openwebrxDetailInactiveLabel": "FULL",
     "openwebrxDetailActiveLabel": "DET",
     "openwebrxDetailEnable": "Switch to the OpenWebRX digital detail spectrum view",
-    "openwebrxDetailDisable": "Currently in the OpenWebRX digital detail spectrum view. Click to return to the full spectrum"
+    "openwebrxDetailDisable": "Currently in the OpenWebRX digital detail spectrum view. Click to return to the full spectrum",
+    "themeSettings": "Spectrum Theme",
+    "theme": {
+      "classic": "Classic",
+      "wsjtxDefault": "WSJT-X Default Style",
+      "wsjtxDigipan": "WSJT-X Digipan Style",
+      "wsjtxScope": "WSJT-X Scope Style",
+      "wsjtxSunburst": "WSJT-X Sunburst Style",
+      "spectrumLab": "Spectrum Lab Style",
+      "grayHot": "Grey Scale",
+      "amber": "Amber",
+      "ice": "Ice",
+      "openwebrxTurbo": "OpenWebRX Turbo",
+      "sdrppTurbo": "SDR++ Turbo"
+    }
   },
   "splitLayout": {
     "decode": "Decode",

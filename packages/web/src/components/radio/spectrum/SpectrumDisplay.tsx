@@ -14,6 +14,14 @@ import type { AutoRangeConfig, PresetMarker, TxBandOverlay } from './WebGLWaterf
 import { SpectrumStreamController } from '../../../spectrum/SpectrumStreamController';
 import { readSpectrumSubscriptionPaused, setSpectrumSubscriptionPaused } from '../../../utils/spectrumSubscriptionPause';
 import { resetOperatorsForOperatingStateChange } from '../../../utils/operatorReset';
+import {
+  DEFAULT_SPECTRUM_THEME_ID,
+  getSpectrumTheme,
+  getSpectrumThemePreviewGradient,
+  normalizeSpectrumThemeId,
+  SPECTRUM_THEME_IDS,
+  type SpectrumThemeId,
+} from './spectrumThemes';
 
 const logger = createLogger('SpectrumDisplay');
 
@@ -80,6 +88,7 @@ interface LegacyAudioRangeSettings {
 }
 
 interface PersistedRangeSettings {
+  themeId: SpectrumThemeId;
   audio: AudioRangeSettings;
   radioSdr: ManualRangeSettings;
   openWebRxSdr: {
@@ -123,6 +132,7 @@ const DEFAULT_OPENWEBRX_DETAIL_RANGE_SETTINGS: ManualRangeSettings = {
 };
 
 const DEFAULT_PERSISTED_RANGE_SETTINGS: PersistedRangeSettings = {
+  themeId: DEFAULT_SPECTRUM_THEME_ID,
   audio: {
     mode: 'auto',
     manual: {
@@ -206,6 +216,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
   const saved = localStorage.getItem(SETTINGS_STORAGE_KEY);
   if (!saved) {
       return {
+        themeId: DEFAULT_PERSISTED_RANGE_SETTINGS.themeId,
         audio: cloneAudioRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.audio),
         radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
         openWebRxSdr: {
@@ -222,6 +233,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
 
     if (typeof parsed === 'object' && parsed !== null && ('audio' in parsed || 'radioSdr' in parsed)) {
       return {
+        themeId: normalizeSpectrumThemeId((parsed as Partial<PersistedRangeSettings>).themeId),
         audio: normalizeAudioRangeSettings(
           (parsed as Partial<PersistedRangeSettings>).audio,
           DEFAULT_PERSISTED_RANGE_SETTINGS.audio
@@ -261,6 +273,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
     }
 
     return {
+      themeId: DEFAULT_PERSISTED_RANGE_SETTINGS.themeId,
       audio: normalizeAudioRangeSettings(
         parsed as LegacyAudioRangeSettings,
         DEFAULT_PERSISTED_RANGE_SETTINGS.audio
@@ -274,6 +287,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
   } catch (error) {
     logger.error('Failed to parse saved settings', error);
     return {
+      themeId: DEFAULT_PERSISTED_RANGE_SETTINGS.themeId,
       audio: cloneAudioRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.audio),
       radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
       openWebRxSdr: {
@@ -575,6 +589,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     : isRadioSdrSelected
       ? persistedRangeSettings.radioSdr
       : persistedRangeSettings.audio.manual;
+  const selectedSpectrumThemeId = persistedRangeSettings.themeId;
   const audioRangeSettings = persistedRangeSettings.audio;
   const rangeLimits = isOpenWebRXSdrSelected
     ? OPENWEBRX_RANGE_LIMITS
@@ -623,6 +638,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     setPersistedRangeSettings(prev => ({
       ...prev,
       audio: updater(prev.audio),
+    }));
+  }, []);
+
+  const handleSpectrumThemeChange = useCallback((themeId: SpectrumThemeId) => {
+    setPersistedRangeSettings(prev => ({
+      ...prev,
+      themeId,
     }));
   }, []);
 
@@ -1311,6 +1333,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         maxDb={currentManualRangeSettings.maxDb}
         autoRange={!isRadioSdrSelected && !isOpenWebRXSdrSelected && audioRangeSettings.mode === 'auto'}
         autoRangeConfig={audioRangeSettings.auto}
+        themeId={selectedSpectrumThemeId}
         totalRows={WATERFALL_HISTORY_ROWS}
         frequencyRangeMode={frequencyRangeMode}
         referenceFrequencyHz={spectrumReferenceFrequency}
@@ -1417,7 +1440,39 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
             </div>
 
             <div className="px-4 py-3">
-              <div className="space-y-3">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-default-500">
+                    {t('spectrum.themeSettings')}
+                  </div>
+                  <div className="grid grid-cols-8 gap-1.5">
+                    {SPECTRUM_THEME_IDS.map((themeId) => {
+                      const theme = getSpectrumTheme(themeId);
+                      const label = t(theme.labelKey);
+                      const selected = selectedSpectrumThemeId === themeId;
+                      return (
+                        <Tooltip key={themeId} content={label} delay={250}>
+                          <Button
+                            aria-label={label}
+                            title={label}
+                            variant="light"
+                            size="sm"
+                            className={`relative h-7 min-w-0 overflow-hidden rounded-md p-0 ${
+                              selected
+                                ? 'ring-2 ring-primary-400 ring-offset-1 ring-offset-content1'
+                                : 'ring-1 ring-black/10 dark:ring-white/15'
+                            }`}
+                            style={{
+                              backgroundImage: getSpectrumThemePreviewGradient(themeId, '90deg'),
+                            }}
+                            onPress={() => handleSpectrumThemeChange(themeId)}
+                          />
+                        </Tooltip>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="h-px bg-divider" />
                 {!isRadioSdrSelected && !isOpenWebRXSdrSelected && (
                   <Tabs
                     selectedKey={audioRangeSettings.mode}

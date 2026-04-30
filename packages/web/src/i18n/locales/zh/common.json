@@ -151,7 +151,7 @@
     "radioSdrSource": "电台 SDR",
     "openwebrxSdrSource": "OpenWebRX",
     "popOut": "在独立窗口中显示",
-    "rangeSettings": "频谱范围设置",
+    "rangeSettings": "频谱设置",
     "autoMode": "自动模式",
     "manualMode": "手动模式",
     "updateInterval": "范围自动刷新频率（帧）",
@@ -173,7 +173,21 @@
     "openwebrxDetailInactiveLabel": "FULL",
     "openwebrxDetailActiveLabel": "DET",
     "openwebrxDetailEnable": "切到 OpenWebRX 数字细化频谱视图",
-    "openwebrxDetailDisable": "当前处于 OpenWebRX 数字细化频谱视图，点击恢复完整频谱"
+    "openwebrxDetailDisable": "当前处于 OpenWebRX 数字细化频谱视图，点击恢复完整频谱",
+    "themeSettings": "频谱主题",
+    "theme": {
+      "classic": "经典",
+      "wsjtxDefault": "WSJT-X 默认风格",
+      "wsjtxDigipan": "WSJT-X Digipan 风格",
+      "wsjtxScope": "WSJT-X Scope 风格",
+      "wsjtxSunburst": "WSJT-X Sunburst 风格",
+      "spectrumLab": "Spectrum Lab 风格",
+      "grayHot": "灰阶",
+      "amber": "琥珀",
+      "ice": "冰蓝",
+      "openwebrxTurbo": "OpenWebRX Turbo",
+      "sdrppTurbo": "SDR++ Turbo"
+    }
   },
   "splitLayout": {
     "decode": "解码",

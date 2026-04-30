@@ -3,6 +3,12 @@ import { Popover, PopoverTrigger, PopoverContent } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../../utils/logger';
 import type { SpectrumAxis, SpectrumRenderBatch, SpectrumStreamController } from '../../../spectrum/SpectrumStreamController';
+import {
+  buildSpectrumThemeColorLut,
+  DEFAULT_SPECTRUM_THEME_ID,
+  getSafeSpectrumThemeCurve,
+  type SpectrumThemeId,
+} from './spectrumThemes';
 
 const logger = createLogger('WebGLWaterfall');
 
@@ -84,6 +90,8 @@ interface WebGLWaterfallProps {
   totalRows?: number;
   /** 当前是否处于发射状态，用于 TX/RX 自动范围分离 */
   isTransmitting?: boolean;
+  /** 瀑布图颜色和强度曲线主题 */
+  themeId?: SpectrumThemeId;
 }
 
 const FREQUENCY_GESTURE_DRAG_THRESHOLD_PX = 4;
@@ -151,6 +159,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   markerOnly = false,
   totalRows,
   isTransmitting = false,
+  themeId = DEFAULT_SPECTRUM_THEME_ID,
 }) => {
   const { t } = useTranslation('common');
   const containerRef = useRef<HTMLDivElement>(null);
@@ -214,6 +223,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   useEffect(() => { minDbRef.current = minDb; }, [minDb]);
   useEffect(() => { maxDbRef.current = maxDb; }, [maxDb]);
   const actualRangeRef = useRef<{min: number, max: number} | null>(null);
+  const colorMapRef = useRef<Uint8Array>(buildSpectrumThemeColorLut(DEFAULT_SPECTRUM_THEME_ID));
+  const themeCurveRef = useRef(getSafeSpectrumThemeCurve(DEFAULT_SPECTRUM_THEME_ID));
   // TX/RX 自动范围分离：多段冻结机制
   // 每个冻结段记录一段历史行的行数和对应的范围
   const frozenSegmentsRef = useRef<Array<{ rowCount: number; range: { min: number; max: number } }>>([]);
@@ -322,53 +333,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     return calculateInternal();
   }, [minDb, maxDb, autoRangeConfig]);
 
-  // 瀑布图颜色映射 - 经典配色方案
-  const colorMap = useMemo(() => {
-    const colors = [
-      [0, 0x00, 0x00, 0x20],       // 深蓝色
-      [0.0833, 0x00, 0x00, 0x30],
-      [0.1666, 0x00, 0x00, 0x50],
-      [0.25, 0x00, 0x00, 0x91],
-      [0.3333, 0x1E, 0x90, 0xFF],  // 蓝色
-      [0.4166, 0xFF, 0xFF, 0xFF],  // 白色
-      [0.5, 0xFF, 0xFF, 0x00],     // 黄色
-      [0.5833, 0xFE, 0x6D, 0x16],
-      [0.6666, 0xFF, 0x00, 0x00],  // 红色
-      [0.75, 0xC6, 0x00, 0x00],
-      [0.8333, 0x9F, 0x00, 0x00],
-      [0.9166, 0x75, 0x00, 0x00],
-      [1, 0x4A, 0x00, 0x00],       // 深红色
-    ];
-
-    // 生成256个颜色的查找表
-    const colorLUT = new Uint8Array(256 * 4);
-    for (let i = 0; i < 256; i++) {
-      const t = i / 255;
-      let r = 0, g = 0, b = 0;
-      const a = 255;
-
-      // 在颜色节点之间插值
-      for (let j = 0; j < colors.length - 1; j++) {
-        const [t1, r1, g1, b1] = colors[j];
-        const [t2, r2, g2, b2] = colors[j + 1];
-        
-        if (t >= t1 && t <= t2) {
-          const factor = (t - t1) / (t2 - t1);
-          r = r1 + (r2 - r1) * factor;
-          g = g1 + (g2 - g1) * factor;
-          b = b1 + (b2 - b1) * factor;
-          break;
-        }
-      }
-
-      colorLUT[i * 4] = Math.round(r);
-      colorLUT[i * 4 + 1] = Math.round(g);
-      colorLUT[i * 4 + 2] = Math.round(b);
-      colorLUT[i * 4 + 3] = a;
-    }
-
-    return colorLUT;
-  }, []);
+  const colorMap = useMemo(() => buildSpectrumThemeColorLut(themeId), [themeId]);
+  const themeCurve = useMemo(() => getSafeSpectrumThemeCurve(themeId), [themeId]);
+  colorMapRef.current = colorMap;
+  themeCurveRef.current = themeCurve;
 
   // 顶点着色器源码
   const vertexShaderSource = `
@@ -398,6 +366,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     uniform float u_headRow;
     uniform float u_textureHeight;
     uniform float u_scrollRows;
+    uniform float u_themeGamma;
+    uniform float u_themeContrast;
+    uniform float u_themeBias;
 
     varying vec2 v_texCoord;
 
@@ -426,12 +397,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       // 确保值在有效范围内
       normalized = clamp(normalized, 0.0, 1.0);
       
-      // 应用对比度增强
-      // 使用S型曲线来增强中等值的对比度
-      normalized = normalized * normalized * (3.0 - 2.0 * normalized);
-      
-      // 轻微的伽马校正
-      normalized = pow(normalized, 0.8);
+      // Apply the selected theme tone curve without touching the source spectrum data.
+      normalized = clamp((normalized - 0.5) * max(u_themeContrast, 0.01) + 0.5 + u_themeBias, 0.0, 1.0);
+      normalized = pow(normalized, max(u_themeGamma, 0.01));
       
       vec4 color = texture2D(u_colorMap, vec2(normalized, 0.5));
       gl_FragColor = color;
@@ -478,6 +446,32 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     return program;
   }, [createShader]);
 
+  const uploadColorMapTexture = useCallback((
+    gl: WebGLRenderingContext,
+    texture: WebGLTexture,
+    colorMapData: Uint8Array
+  ) => {
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, colorMapData);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }, []);
+
+  const applyThemeCurveUniforms = useCallback((
+    gl: WebGLRenderingContext,
+    program: WebGLProgram,
+    curve: { gamma: number; contrast: number; bias: number }
+  ) => {
+    gl.useProgram(program);
+    gl.uniform1f(gl.getUniformLocation(program, 'u_themeGamma'), curve.gamma);
+    gl.uniform1f(gl.getUniformLocation(program, 'u_themeContrast'), curve.contrast);
+    gl.uniform1f(gl.getUniformLocation(program, 'u_themeBias'), curve.bias);
+  }, []);
+
   // 初始化WebGL
   const initWebGL = useCallback(() => {
     const canvas = canvasRef.current;
@@ -511,12 +505,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       // 创建并缓存颜色映射纹理
       const colorMapTexture = gl.createTexture();
       colorMapTextureRef.current = colorMapTexture;
-      gl.bindTexture(gl.TEXTURE_2D, colorMapTexture);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, colorMap);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      uploadColorMapTexture(gl, colorMapTexture, colorMapRef.current);
+      applyThemeCurveUniforms(gl, program, themeCurveRef.current);
 
       // 创建数据纹理
       const dataTexture = gl.createTexture();
@@ -594,7 +584,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       setError(err instanceof Error ? err.message : 'INIT_FAILED');
       return false;
     }
-  }, [createProgram, colorMap]);
+  }, [applyThemeCurveUniforms, createProgram, uploadColorMapTexture]);
 
   // 渲染
   const render = useCallback(() => {
@@ -611,6 +601,19 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   useEffect(() => {
     renderRef.current = render;
   }, [render]);
+
+  useEffect(() => {
+    const gl = glRef.current;
+    const program = programRef.current;
+    const colorMapTexture = colorMapTextureRef.current;
+    if (!gl || !program || !colorMapTexture || gl.isContextLost()) {
+      return;
+    }
+
+    uploadColorMapTexture(gl, colorMapTexture, colorMap);
+    applyThemeCurveUniforms(gl, program, themeCurve);
+    render();
+  }, [applyThemeCurveUniforms, colorMap, render, themeCurve, uploadColorMapTexture]);
 
   const updateViewState = useCallback((nextAxis: SpectrumAxis | null, hasData: boolean) => {
     currentAxisRef.current = nextAxis;
