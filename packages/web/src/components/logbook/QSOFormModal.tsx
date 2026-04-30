@@ -70,13 +70,11 @@ const QSOFormModal: React.FC<QSOFormModalProps> = ({
   // Modal 打开时从 formData 初始化内部展示状态
   useEffect(() => {
     if (!isOpen) return;
-    setFreqMHz(formData.frequency ? String(formData.frequency / 1e6) : isAdd ? '14.074' : '');
+    setFreqMHz(formData.frequency ? String(formData.frequency / 1e6) : '');
     setStartTimeLocal(
       formData.startTime
         ? new Date(formData.startTime).toISOString().slice(0, 16)
-        : isAdd
-          ? new Date().toISOString().slice(0, 16)
-          : '',
+        : '',
     );
   }, [isOpen]); // eslint-disable-line
 

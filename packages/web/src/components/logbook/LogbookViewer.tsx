@@ -71,6 +71,16 @@ function resolveEditableComment(qso: Pick<QSORecord, 'comment' | 'notes' | 'mess
   return qso.comment ?? qso.notes ?? qso.messageHistory.join(' | ');
 }
 
+function createDefaultAddQSOFormData(): Partial<QSORecord> {
+  return {
+    callsign: '',
+    mode: 'FT8',
+    frequency: 14.074 * 1e6,
+    startTime: Date.now(),
+    messageHistory: [],
+  };
+}
+
 const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, operatorCallsign }) => {
   const { t } = useTranslation('logbook');
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -105,11 +115,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
   // 补录 Modal 状态
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [addFormData, setAddFormData] = useState<Partial<QSORecord>>({
-    callsign: '',
-    mode: 'FT8',
-    messageHistory: [],
-  });
+  const [addFormData, setAddFormData] = useState<Partial<QSORecord>>(createDefaultAddQSOFormData);
   const [isAddSaving, setIsAddSaving] = useState(false);
 
   // 获取操作员连接的日志本
@@ -702,7 +708,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       await api.createQSO(effectiveLogBookId, payload);
       await refreshLogbookData();
       setIsAddModalOpen(false);
-      setAddFormData({ callsign: '', mode: 'FT8', messageHistory: [] });
+      setAddFormData(createDefaultAddQSOFormData());
       logger.debug('QSO record created manually');
     } catch (error) {
       logger.error('Failed to create QSO record:', error);
@@ -1634,7 +1640,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           size="sm"
           startContent={<FontAwesomeIcon icon={faPlus} />}
           onPress={() => {
-            setAddFormData({ callsign: '', mode: 'FT8', messageHistory: [] });
+            setAddFormData(createDefaultAddQSOFormData());
             setIsAddModalOpen(true);
           }}
           className="min-w-0"
@@ -2056,7 +2062,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         isOpen={isAddModalOpen}
         onClose={() => {
           setIsAddModalOpen(false);
-          setAddFormData({ callsign: '', mode: 'FT8', messageHistory: [] });
+          setAddFormData(createDefaultAddQSOFormData());
         }}
         title={t('addQso.title')}
         formData={addFormData}
