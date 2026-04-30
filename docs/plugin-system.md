@@ -355,7 +355,7 @@ interface PluginDefinition {
   description?: string;
 
   /** 可选：所需权限声明 */
-  permissions?: ('network')[];
+  permissions?: ('network' | 'radio:read' | 'radio:control' | 'radio:power')[];
 
   /**
    * 声明式设置项
@@ -512,9 +512,29 @@ interface RadioControl {
   readonly frequency: number;     // 电台当前频率（Hz）
   readonly band: string;          // 当前波段（如 "20m"）
   readonly isConnected: boolean;  // 电台是否已连接
+  readonly capabilities: RadioCapabilitiesControl;
+  readonly power: RadioPowerControl;
   setFrequency(freq: number): Promise<void>;
 }
+
+interface RadioCapabilitiesControl {
+  getSnapshot(): CapabilityList;                         // 需 permissions: ['radio:read']
+  getState(id: string): CapabilityState | null;          // 需 permissions: ['radio:read']
+  refresh(): Promise<CapabilityList>;                    // 需 permissions: ['radio:read']
+  write(payload: WriteCapabilityPayload): Promise<void>; // 需 permissions: ['radio:control']
+}
+
+interface RadioPowerControl {
+  getSupport(profileId?: string): Promise<RadioPowerSupportInfo>; // 需 permissions: ['radio:read']
+  getState(profileId?: string): RadioPowerStateEvent | null;      // 需 permissions: ['radio:read']
+  set(
+    state: 'on' | 'off' | 'standby' | 'operate',
+    options?: { profileId?: string; autoEngine?: boolean },
+  ): Promise<RadioPowerResponse>; // 需 permissions: ['radio:power']
+}
 ```
+
+`ctx.radio` 只在服务端插件上下文中可用，不直接注入 iframe Bridge；自定义 UI 页面如需触发这些操作，应通过 `ctx.ui.registerPageHandler` 把请求转发到服务端插件逻辑。`power.set()` 的 `profileId` 缺省为当前 active profile，`autoEngine` 缺省为 `true`，因此 `await ctx.radio.power.set('on')` 会走物理开机、自动连接并启动 TX-5DR 引擎。
 
 #### LogbookAccess
 
@@ -1702,7 +1722,7 @@ my-plugin/
     "dev": "tsc --watch --outDir ../path/to/TX-5DR/plugins/my-plugin"
   },
   "devDependencies": {
-    "@tx5dr/plugin-api": "^1.0.0",
+    "@tx5dr/plugin-api": "^1.6.0",
     "typescript": "^5.0.0"
   }
 }

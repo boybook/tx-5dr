@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
-import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, type AppAction, type AppSubject } from '@tx5dr/contracts';
+import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type {
   ClockStatusSummary,
   DecodeErrorInfo,
@@ -1997,13 +1997,7 @@ export class WSServer extends WSMessageHandler {
    */
   private async handleWriteRadioCapability(connectionId: string, data: unknown): Promise<void> {
     try {
-      const payload = data as { id?: string; value?: boolean | number; action?: boolean };
-      if (!payload?.id) {
-        this.sendToConnection(connectionId, WSMessageType.ERROR, {
-          message: 'writeRadioCapability: missing capability id',
-        });
-        return;
-      }
+      const payload = WriteCapabilityPayloadSchema.parse(data);
 
       logger.info('writeRadioCapability command', { id: payload.id, value: payload.value, action: payload.action });
 

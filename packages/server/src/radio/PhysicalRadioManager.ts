@@ -22,6 +22,7 @@ import type {
   ReconnectProgress,
   CapabilityDescriptor,
   CapabilityState,
+  CapabilityValue,
   CoreRadioCapabilities,
   CoreCapabilityDiagnostic,
   CoreCapabilityDiagnostics,
@@ -1183,7 +1184,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   async writeCapability(
     id: string,
-    value?: boolean | number,
+    value?: CapabilityValue,
     action?: boolean,
   ): Promise<void> {
     if (this.shouldBypassCapabilitySystem()) {

@@ -12,8 +12,11 @@ import type {
   PluginPanelMetaPayload,
   ModeDescriptor,
   PluginUIPageDescriptor,
+  PluginPermission,
+  RadioPowerTarget,
+  WriteCapabilityPayload,
 } from '@tx5dr/contracts';
-import { MODES } from '@tx5dr/contracts';
+import { MODES, RadioPowerTargetSchema, WriteCapabilityPayloadSchema } from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
 import { PluginStorageProvider } from './PluginStorageProvider.js';
@@ -68,7 +71,7 @@ export class PluginContextFactory {
     );
     const pluginLogger = this.createLogger(plugin.definition.name);
     const operatorControl = this.createOperatorControl(operatorId, instanceScope);
-    const radioControl = this.createRadioControl();
+    const radioControl = this.createRadioControl(plugin);
     const logbookAccess = this.createLogbookAccess(operatorId, instanceScope);
     const bandAccess = this.createBandAccess(operatorId);
     const fileStore = new PluginFileStoreProvider(
@@ -248,8 +251,30 @@ export class PluginContextFactory {
     };
   }
 
-  private createRadioControl() {
+  private createRadioControl(plugin: LoadedPlugin) {
     const deps = this.deps;
+    const assertPermission = (permission: PluginPermission, action: string) => {
+      if (!plugin.definition.permissions?.includes(permission)) {
+        throw new Error(
+          `Plugin '${plugin.definition.name}' requires permission '${permission}' to ${action}`,
+        );
+      }
+    };
+
+    const requireRadioCapabilitySnapshot = () => {
+      if (!deps.getRadioCapabilitySnapshot) {
+        throw new Error('Radio capability API is unavailable in this host');
+      }
+      return deps.getRadioCapabilitySnapshot;
+    };
+
+    const resolvePowerStateGetter = () => {
+      if (!deps.getRadioPowerState) {
+        throw new Error('Radio power API is unavailable in this host');
+      }
+      return deps.getRadioPowerState;
+    };
+
     return {
       get frequency() {
         return ConfigManager.getInstance().getLastSelectedFrequency()?.frequency ?? 0;
@@ -261,7 +286,52 @@ export class PluginContextFactory {
         return deps.getRadioConnected();
       },
       async setFrequency(freq: number) {
+        assertPermission('radio:control', 'set radio frequency');
         deps.setRadioFrequency(freq);
+      },
+      capabilities: {
+        getSnapshot() {
+          assertPermission('radio:read', 'read radio capabilities');
+          return requireRadioCapabilitySnapshot()();
+        },
+        getState(id: string) {
+          assertPermission('radio:read', 'read radio capability state');
+          return requireRadioCapabilitySnapshot()().capabilities.find((capability) => capability.id === id) ?? null;
+        },
+        async refresh() {
+          assertPermission('radio:read', 'refresh radio capabilities');
+          if (!deps.refreshRadioCapabilities) {
+            throw new Error('Radio capability refresh API is unavailable in this host');
+          }
+          return deps.refreshRadioCapabilities();
+        },
+        async write(payload: WriteCapabilityPayload) {
+          assertPermission('radio:control', 'write radio capabilities');
+          if (!deps.writeRadioCapability) {
+            throw new Error('Radio capability write API is unavailable in this host');
+          }
+          await deps.writeRadioCapability(WriteCapabilityPayloadSchema.parse(payload));
+        },
+      },
+      power: {
+        async getSupport(profileId?: string) {
+          assertPermission('radio:read', 'read radio power support');
+          if (!deps.getRadioPowerSupport) {
+            throw new Error('Radio power support API is unavailable in this host');
+          }
+          return deps.getRadioPowerSupport(profileId);
+        },
+        getState(profileId?: string) {
+          assertPermission('radio:read', 'read radio power state');
+          return resolvePowerStateGetter()(profileId);
+        },
+        async set(state: RadioPowerTarget, options?: { profileId?: string; autoEngine?: boolean }) {
+          assertPermission('radio:power', 'control radio power');
+          if (!deps.setRadioPower) {
+            throw new Error('Radio power control API is unavailable in this host');
+          }
+          return deps.setRadioPower(RadioPowerTargetSchema.parse(state), options);
+        },
       },
     };
   }

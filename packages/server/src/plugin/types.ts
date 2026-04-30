@@ -12,6 +12,13 @@ import type {
   PluginStatus,
   PluginSystemSnapshot,
   PluginSystemState,
+  CapabilityList,
+  CapabilityValue,
+  RadioPowerResponse,
+  RadioPowerStateEvent,
+  RadioPowerSupportInfo,
+  RadioPowerTarget,
+  WriteCapabilityPayload,
 } from '@tx5dr/contracts';
 
 /**
@@ -131,6 +138,15 @@ export interface PluginManagerDeps {
   setRadioFrequency: (freq: number) => void;
   getRadioBand: () => string;
   getRadioConnected: () => boolean;
+  getRadioCapabilitySnapshot?: () => CapabilityList;
+  refreshRadioCapabilities?: () => Promise<CapabilityList>;
+  writeRadioCapability?: (payload: WriteCapabilityPayload & { value?: CapabilityValue }) => Promise<void>;
+  getRadioPowerSupport?: (profileId?: string) => Promise<RadioPowerSupportInfo>;
+  getRadioPowerState?: (profileId?: string) => RadioPowerStateEvent | null;
+  setRadioPower?: (
+    state: RadioPowerTarget,
+    options?: { profileId?: string; autoEngine?: boolean },
+  ) => Promise<RadioPowerResponse>;
   getLatestSlotPack: (operatorId?: string) => import('@tx5dr/contracts').SlotPack | null;
   findBestTransmitFrequency?: (
     slotId: string,

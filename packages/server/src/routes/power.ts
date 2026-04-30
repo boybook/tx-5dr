@@ -8,20 +8,11 @@ import { FastifyInstance } from 'fastify';
 import { RadioPowerRequestSchema } from '@tx5dr/contracts';
 import { requireAbility } from '../auth/authPlugin.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
-import { RadioPowerController } from '../radio/RadioPowerController.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 
 export async function powerRoutes(fastify: FastifyInstance) {
   const engine = DigitalRadioEngine.getInstance();
-  const controller = RadioPowerController.create({
-    radioManager: engine.getRadioManager(),
-    getEngineLifecycle: () => engine.getEngineLifecycle(),
-  });
-
-  // Bridge controller progress events onto the engine emitter so WSServer can broadcast them
-  controller.on('powerState', (event) => {
-    engine.emit('radioPowerState', event);
-  });
+  const controller = engine.getRadioPowerController();
 
   /**
    * POST /api/radio/power

@@ -13,6 +13,10 @@ import {
   type DigitalRadioEngineEvents,
   type EngineMode,
   type SquelchStatus,
+  type RadioPowerResponse,
+  type RadioPowerStateEvent,
+  type RadioPowerTarget,
+  type WriteCapabilityPayload,
   resolveWindowTiming,
 } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
@@ -54,6 +58,7 @@ import { RigctldBridge } from './rigctld/RigctldBridge.js';
 import { SquelchStatusMonitor } from './radio/SquelchStatusMonitor.js';
 import { PhysicalPttMonitor } from './radio/PhysicalPttMonitor.js';
 import type { RigctldBridgeConfig, RigctldStatus } from '@tx5dr/contracts';
+import { RadioPowerController } from './radio/RadioPowerController.js';
 
 /**
  * DigitalRadioEngine — 数字电台引擎 Facade
@@ -111,6 +116,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private voiceKeyerPttActive = false;
   private physicalPttActive = false;
   private unifiedVoicePttActive = false;
+  private radioPowerController: RadioPowerController | null = null;
+  private readonly latestRadioPowerStates = new Map<string, RadioPowerStateEvent>();
 
   // 频谱分析配置常量
   private static readonly SPECTRUM_CONFIG = {
@@ -185,6 +192,19 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       },
       getRadioBand: () => ConfigManager.getInstance().getLastSelectedFrequency()?.band ?? '',
       getRadioConnected: () => this.radioManager.isConnected(),
+      getRadioCapabilitySnapshot: () => this.radioManager.getCapabilitySnapshot(),
+      refreshRadioCapabilities: async () => {
+        await this.radioManager.refreshCapabilities();
+        return this.radioManager.getCapabilitySnapshot();
+      },
+      writeRadioCapability: async (payload: WriteCapabilityPayload) => {
+        await this.radioManager.writeCapability(payload.id, payload.value, payload.action);
+      },
+      getRadioPowerSupport: (profileId) => this.getRadioPowerController().getSupportInfo(
+        this.resolvePluginRadioProfileId(profileId),
+      ),
+      getRadioPowerState: (profileId) => this.getLatestRadioPowerState(profileId),
+      setRadioPower: (state, options) => this.setPluginRadioPower(state, options),
       getLatestSlotPack: () => this.slotPackManager.getLatestSlotPack(),
       findBestTransmitFrequency: (slotId, minFreq, maxFreq, guardBandwidth) => (
         this.slotPackManager.findBestTransmitFrequency(slotId, minFreq, maxFreq, guardBandwidth)
@@ -387,6 +407,49 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public getRadioManager(): PhysicalRadioManager {
     return this.radioManager;
+  }
+
+  public getRadioPowerController(): RadioPowerController {
+    if (!this.radioPowerController) {
+      const controller = RadioPowerController.create({
+        radioManager: this.radioManager,
+        getEngineLifecycle: () => this.engineLifecycle,
+      });
+      controller.on('powerState', (event) => {
+        if (event.profileId) {
+          this.latestRadioPowerStates.set(event.profileId, event);
+        }
+        this.emit('radioPowerState', event);
+      });
+      this.radioPowerController = controller;
+    }
+    return this.radioPowerController;
+  }
+
+  private resolvePluginRadioProfileId(profileId?: string): string {
+    const resolved = profileId ?? ConfigManager.getInstance().getActiveProfileId();
+    if (!resolved) {
+      throw new Error('No active radio profile is selected');
+    }
+    return resolved;
+  }
+
+  private getLatestRadioPowerState(profileId?: string): RadioPowerStateEvent | null {
+    const resolved = profileId ?? ConfigManager.getInstance().getActiveProfileId();
+    return resolved ? this.latestRadioPowerStates.get(resolved) ?? null : null;
+  }
+
+  private async setPluginRadioPower(
+    state: RadioPowerTarget,
+    options?: { profileId?: string; autoEngine?: boolean },
+  ): Promise<RadioPowerResponse> {
+    const profileId = this.resolvePluginRadioProfileId(options?.profileId);
+    const finalState = await this.getRadioPowerController().handleRequest({
+      profileId,
+      state,
+      autoEngine: options?.autoEngine ?? true,
+    });
+    return { success: true, target: state, state: finalState };
   }
 
   public getEngineLifecycle(): EngineLifecycle {

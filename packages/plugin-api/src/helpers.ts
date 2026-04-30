@@ -8,6 +8,13 @@ import type {
   ModeDescriptor,
   PermissionGrant,
   PluginPanelDescriptor,
+  CapabilityList,
+  CapabilityState,
+  RadioPowerResponse,
+  RadioPowerStateEvent,
+  RadioPowerSupportInfo,
+  RadioPowerTarget,
+  WriteCapabilityPayload,
 } from '@tx5dr/contracts';
 import type { StrategyRuntimeSnapshot } from './runtime.js';
 
@@ -168,6 +175,12 @@ export interface RadioControl {
   /** Whether the radio transport is currently connected. */
   readonly isConnected: boolean;
 
+  /** Negotiated radio capability controls. Requires radio plugin permissions. */
+  readonly capabilities: RadioCapabilitiesControl;
+
+  /** Physical radio power controls. Requires radio plugin permissions. */
+  readonly power: RadioPowerControl;
+
   /**
    * Requests a frequency change.
    *
@@ -175,6 +188,44 @@ export interface RadioControl {
    * any safety or capability constraints.
    */
   setFrequency(freq: number): Promise<void>;
+}
+
+/**
+ * Access to the host-managed radio capability negotiation system.
+ */
+export interface RadioCapabilitiesControl {
+  /** Returns the current capability descriptor/state snapshot. Requires `radio:read`. */
+  getSnapshot(): CapabilityList;
+
+  /** Returns a single capability state from the current snapshot, or null. Requires `radio:read`. */
+  getState(id: string): CapabilityState | null;
+
+  /** Refreshes readable capability values and returns the updated snapshot. Requires `radio:read`. */
+  refresh(): Promise<CapabilityList>;
+
+  /** Writes a capability value or triggers an action capability. Requires `radio:control`. */
+  write(payload: WriteCapabilityPayload): Promise<void>;
+}
+
+export interface RadioPowerSetOptions {
+  /** Profile to target. Defaults to the active profile. */
+  profileId?: string;
+  /** Start TX-5DR after physical power-on. Defaults to true. */
+  autoEngine?: boolean;
+}
+
+/**
+ * Access to physical radio power management.
+ */
+export interface RadioPowerControl {
+  /** Returns power support information for the active or specified profile. Requires `radio:read`. */
+  getSupport(profileId?: string): Promise<RadioPowerSupportInfo>;
+
+  /** Returns the last known power transition state for the active or specified profile. Requires `radio:read`. */
+  getState(profileId?: string): RadioPowerStateEvent | null;
+
+  /** Requests a physical power transition. Requires `radio:power`. */
+  set(state: RadioPowerTarget, options?: RadioPowerSetOptions): Promise<RadioPowerResponse>;
 }
 
 /**

@@ -26,6 +26,8 @@ import type {
   SlotInfo,
   ParsedFT8Message,
   ModeDescriptor,
+  CapabilityList,
+  RadioPowerStateEvent,
 } from '@tx5dr/contracts';
 import { FT8MessageType } from '../ft8-message-type.js';
 
@@ -166,10 +168,28 @@ export function createMockOperatorControl(
 export function createMockRadioControl(
   overrides?: Partial<RadioControl>,
 ): RadioControl {
+  const capabilitySnapshot: CapabilityList = { descriptors: [], capabilities: [] };
+  const powerState: RadioPowerStateEvent = { state: 'awake', stage: 'idle' };
   return {
     frequency: 14074000,
     band: '20m',
     isConnected: true,
+    capabilities: {
+      getSnapshot: () => capabilitySnapshot,
+      getState: (id) => capabilitySnapshot.capabilities.find((capability) => capability.id === id) ?? null,
+      refresh: async () => capabilitySnapshot,
+      write: async () => {},
+    },
+    power: {
+      getSupport: async (profileId = 'mock-profile') => ({
+        profileId,
+        canPowerOn: true,
+        canPowerOff: true,
+        supportedStates: ['off', 'standby', 'operate'],
+      }),
+      getState: () => powerState,
+      set: async (state) => ({ success: true, target: state, state: state === 'off' ? 'off' : 'awake' }),
+    },
     setFrequency: async () => {},
     ...overrides,
   };

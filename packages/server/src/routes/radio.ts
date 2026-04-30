@@ -11,7 +11,7 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('RadioRoute');
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
-import { HamlibConfigSchema } from '@tx5dr/contracts';
+import { HamlibConfigSchema, WriteCapabilityPayloadSchema } from '@tx5dr/contracts';
 import { requireAbility, requireAbilityFor } from '../auth/authPlugin.js';
 import type { HamlibConfig } from '@tx5dr/contracts';
 import serialport from 'serialport';
@@ -644,7 +644,10 @@ export async function radioRoutes(fastify: FastifyInstance) {
    */
   fastify.post('/capabilities/:id', { preHandler: [requireAbility('execute', 'RadioControl')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const body = req.body as { value?: boolean | number; action?: boolean };
+    const rawBody = req.body && typeof req.body === 'object'
+      ? req.body as Record<string, unknown>
+      : {};
+    const body = WriteCapabilityPayloadSchema.omit({ id: true }).parse(rawBody);
 
     await radioManager.writeCapability(id, body?.value, body?.action);
 
