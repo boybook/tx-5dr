@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Tab, Tabs, Tooltip } from '@heroui/react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Switch, Tab, Tabs, Tooltip } from '@heroui/react';
 import { ArrowsPointingOutIcon, ChevronDownIcon, ChevronUpIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
 import type { SpectrumFrame, SpectrumKind } from '@tx5dr/contracts';
@@ -89,6 +89,7 @@ interface LegacyAudioRangeSettings {
 
 interface PersistedRangeSettings {
   themeId: SpectrumThemeId;
+  showCycleMarkers: boolean;
   audio: AudioRangeSettings;
   radioSdr: ManualRangeSettings;
   openWebRxSdr: {
@@ -133,6 +134,7 @@ const DEFAULT_OPENWEBRX_DETAIL_RANGE_SETTINGS: ManualRangeSettings = {
 
 const DEFAULT_PERSISTED_RANGE_SETTINGS: PersistedRangeSettings = {
   themeId: DEFAULT_SPECTRUM_THEME_ID,
+  showCycleMarkers: true,
   audio: {
     mode: 'auto',
     manual: {
@@ -217,6 +219,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
   if (!saved) {
       return {
         themeId: DEFAULT_PERSISTED_RANGE_SETTINGS.themeId,
+        showCycleMarkers: DEFAULT_PERSISTED_RANGE_SETTINGS.showCycleMarkers,
         audio: cloneAudioRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.audio),
         radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
         openWebRxSdr: {
@@ -234,6 +237,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
     if (typeof parsed === 'object' && parsed !== null && ('audio' in parsed || 'radioSdr' in parsed)) {
       return {
         themeId: normalizeSpectrumThemeId((parsed as Partial<PersistedRangeSettings>).themeId),
+        showCycleMarkers: (parsed as Partial<PersistedRangeSettings>).showCycleMarkers !== false,
         audio: normalizeAudioRangeSettings(
           (parsed as Partial<PersistedRangeSettings>).audio,
           DEFAULT_PERSISTED_RANGE_SETTINGS.audio
@@ -274,6 +278,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
 
     return {
       themeId: DEFAULT_PERSISTED_RANGE_SETTINGS.themeId,
+      showCycleMarkers: DEFAULT_PERSISTED_RANGE_SETTINGS.showCycleMarkers,
       audio: normalizeAudioRangeSettings(
         parsed as LegacyAudioRangeSettings,
         DEFAULT_PERSISTED_RANGE_SETTINGS.audio
@@ -288,6 +293,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
     logger.error('Failed to parse saved settings', error);
     return {
       themeId: DEFAULT_PERSISTED_RANGE_SETTINGS.themeId,
+      showCycleMarkers: DEFAULT_PERSISTED_RANGE_SETTINGS.showCycleMarkers,
       audio: cloneAudioRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.audio),
       radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
       openWebRxSdr: {
@@ -520,7 +526,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const connection = useConnection();
   const { operators } = useOperators();
   const { activeProfileId } = useProfiles();
-  const { currentRadioMode, currentRadioFrequency, engineMode } = useRadioModeState();
+  const { currentMode, currentRadioMode, currentRadioFrequency, engineMode } = useRadioModeState();
   const { pttStatus } = usePTTState();
   const { capabilities, selectedKind, sessionState, setSelectedKind, setSubscribedKind } = useSpectrum();
   const controllerRef = useRef<SpectrumStreamController | null>(null);
@@ -590,6 +596,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       ? persistedRangeSettings.radioSdr
       : persistedRangeSettings.audio.manual;
   const selectedSpectrumThemeId = persistedRangeSettings.themeId;
+  const showCycleMarkers = persistedRangeSettings.showCycleMarkers;
+  const cycleSlotMs = currentMode?.slotMs ?? null;
+  const waterfallViewKey = `${effectiveSelectedKind}:${isOpenWebRXDetailMode ? 'detail' : 'main'}`;
   const audioRangeSettings = persistedRangeSettings.audio;
   const rangeLimits = isOpenWebRXSdrSelected
     ? OPENWEBRX_RANGE_LIMITS
@@ -645,6 +654,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     setPersistedRangeSettings(prev => ({
       ...prev,
       themeId,
+    }));
+  }, []);
+
+  const handleCycleMarkersChange = useCallback((enabled: boolean) => {
+    setPersistedRangeSettings(prev => ({
+      ...prev,
+      showCycleMarkers: enabled,
     }));
   }, []);
 
@@ -783,7 +799,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     };
   }, [connection.state.radioService, isCollapsed, streamController]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     streamController.updateContext({
       selectedKind: effectiveSelectedKind,
       radioSdrDisplayRange: isRadioSdrSelected ? (sessionState?.displayRange ?? radioSdrFullRange ?? null) : null,
@@ -1327,6 +1343,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       onMouseDown={isOpenWebRXSdrSelected && canOpenWebRXLocalViewportPan ? handleOpenWebRXMouseDown : undefined}
     >
       <WebGLWaterfall
+        key={waterfallViewKey}
         controller={streamController}
         height={height}
         minDb={currentManualRangeSettings.minDb}
@@ -1334,6 +1351,8 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         autoRange={!isRadioSdrSelected && !isOpenWebRXSdrSelected && audioRangeSettings.mode === 'auto'}
         autoRangeConfig={audioRangeSettings.auto}
         themeId={selectedSpectrumThemeId}
+        showCycleMarkers={showCycleMarkers}
+        cycleSlotMs={cycleSlotMs}
         totalRows={WATERFALL_HISTORY_ROWS}
         frequencyRangeMode={frequencyRangeMode}
         referenceFrequencyHz={spectrumReferenceFrequency}
@@ -1471,6 +1490,22 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                       );
                     })}
                   </div>
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-lg bg-default-100/50 px-3 py-2 dark:bg-default-50/10">
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-default-700">
+                      {t('spectrum.cycleMarkers')}
+                    </div>
+                    <div className="text-[11px] leading-tight text-default-400">
+                      {t('spectrum.cycleMarkersDescription')}
+                    </div>
+                  </div>
+                  <Switch
+                    size="sm"
+                    isSelected={showCycleMarkers}
+                    onValueChange={handleCycleMarkersChange}
+                    aria-label={t('spectrum.cycleMarkers')}
+                  />
                 </div>
                 <div className="h-px bg-divider" />
                 {!isRadioSdrSelected && !isOpenWebRXSdrSelected && (
