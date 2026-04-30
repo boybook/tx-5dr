@@ -122,6 +122,8 @@ describe('plugin-api testing utilities', () => {
       const radio = createMockRadioControl();
       expect(radio.isConnected).toBe(true);
       expect(radio.frequency).toBe(14074000);
+      expect(radio.capabilities.getSnapshot()).toEqual({ descriptors: [], capabilities: [] });
+      expect(radio.power.getState()).toMatchObject({ state: 'awake', stage: 'idle' });
     });
   });
 

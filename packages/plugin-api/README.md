@@ -59,6 +59,20 @@ export default {
 | `@tx5dr/plugin-api/testing` | Mock factories for unit testing: `createMockContext()`, `createMockSlotInfo()`, `createMockParsedMessage()` |
 | `@tx5dr/plugin-api/bridge` | Ambient type declarations for the iframe Bridge SDK (`window.tx5dr`) |
 
+## Radio Permissions
+
+Server-side plugins can use `ctx.radio` to inspect negotiated radio capabilities and, when explicitly permitted, control radio capabilities or physical power:
+
+```ts
+permissions: ['radio:read', 'radio:control', 'radio:power']
+```
+
+- `radio:read` enables `ctx.radio.capabilities.getSnapshot()` and `ctx.radio.power.getSupport()`.
+- `radio:control` enables `ctx.radio.setFrequency()` and `ctx.radio.capabilities.write()`.
+- `radio:power` enables `ctx.radio.power.set('on' | 'off' | 'standby' | 'operate')`.
+
+These APIs are not exposed directly to iframe pages; custom UI should call a server-side page handler.
+
 ## Bridge SDK Types
 
 Plugin iframe pages communicate with the host via the Bridge SDK (`window.tx5dr`), which is automatically injected by the host. To get IDE autocomplete for the Bridge SDK, add the type reference to your project:

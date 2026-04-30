@@ -49,6 +49,9 @@ export type {
   PluginTimers,
   OperatorControl,
   RadioControl,
+  RadioCapabilitiesControl,
+  RadioPowerControl,
+  RadioPowerSetOptions,
   LogbookAccess,
   CallsignLogbookAccess,
   QSOQueryFilter,
@@ -113,6 +116,17 @@ export type {
   PluginStatus,
   PluginUIPageDescriptor,
   PluginUIConfig,
+  CapabilityList,
+  CapabilityState,
+  CapabilityDescriptor,
+  CapabilityValue,
+  WriteCapabilityPayload,
+  RadioPowerRequest,
+  RadioPowerResponse,
+  RadioPowerState,
+  RadioPowerStateEvent,
+  RadioPowerSupportInfo,
+  RadioPowerTarget,
 } from '@tx5dr/contracts';
 
 /** Logbook sync provider interfaces. */
