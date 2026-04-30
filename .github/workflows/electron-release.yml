@@ -538,7 +538,7 @@ jobs:
             echo "version=nightly" >> $GITHUB_OUTPUT
             echo "channel=nightly" >> $GITHUB_OUTPUT
             echo "channel_path=nightly" >> $GITHUB_OUTPUT
-            echo "app_version=${BASE_VERSION}-nightly.${COMMIT_STAMP}+$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+            echo "app_version=${BASE_VERSION}-nightly.${COMMIT_STAMP}+g$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
           else
             echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
             echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
