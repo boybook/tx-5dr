@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import type { QSORecord } from '@tx5dr/contracts';
 import {
   Button,
@@ -23,6 +23,12 @@ import { useTranslation } from 'react-i18next';
 import { OPEN_ACCOUNT_SECURITY_MODAL_EVENT } from '../components/app/GlobalModalHost';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioModeState } from '../store/radioStore';
 import { useVoiceCaptureController } from '../hooks/useVoiceCaptureController';
+import {
+  createInitialVoiceRightCollapseState,
+  enforceVoiceRightHeightLimit,
+  isVoiceRightMutualExclusionActive,
+  updateVoiceRightCardCollapse,
+} from './voiceRightResponsive';
 
 /**
  * VoiceRightLayout
@@ -50,8 +56,95 @@ export const VoiceRightLayout: React.FC = () => {
   const [selectedQSO, setSelectedQSO] = useState<QSORecord | null>(null);
   const [lastUpdatedQSO, setLastUpdatedQSO] = useState<QSORecord | null>(null);
   const [lastDeletedId, setLastDeletedId] = useState<string | null>(null);
+  const [heightLimited, setHeightLimited] = useState(false);
+  const [lastLimitedHeight, setLastLimitedHeight] = useState<number | null>(null);
+  const [collapseState, setCollapseState] = useState(createInitialVoiceRightCollapseState);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const topWorkspaceRef = useRef<HTMLDivElement | null>(null);
+  const bottomControlsRef = useRef<HTMLDivElement | null>(null);
   const showAuthenticatedIdentity = Boolean(authState.role) && (Boolean(authState.jwt) || !authState.authEnabled);
   const showLoginEntry = authState.authEnabled && !authState.jwt && authState.isPublicViewer;
+
+  const measureHeightLimit = useCallback(() => {
+    const root = rootRef.current;
+    if (!root) return;
+
+    const rootOverflow = root.scrollHeight > root.clientHeight + 2;
+    const top = topWorkspaceRef.current;
+    const bottom = bottomControlsRef.current;
+    const topOverflow = top ? top.scrollHeight > top.clientHeight + 2 : false;
+    const bottomOverflow = bottom ? bottom.scrollHeight > bottom.clientHeight + 2 : false;
+    const nextHeightLimited = rootOverflow || topOverflow || bottomOverflow;
+
+    setHeightLimited(nextHeightLimited);
+    setLastLimitedHeight(current => {
+      if (nextHeightLimited) {
+        return Math.max(current ?? 0, root.clientHeight);
+      }
+      if (current !== null && root.clientHeight > current) {
+        return null;
+      }
+      return current;
+    });
+  }, []);
+
+  useEffect(() => {
+    let frameId: number | null = null;
+    const scheduleMeasure = () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        measureHeightLimit();
+      });
+    };
+
+    scheduleMeasure();
+
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(scheduleMeasure);
+    if (observer) {
+      if (rootRef.current) observer.observe(rootRef.current);
+      if (topWorkspaceRef.current) observer.observe(topWorkspaceRef.current);
+      if (bottomControlsRef.current) observer.observe(bottomControlsRef.current);
+    }
+    window.addEventListener('resize', scheduleMeasure);
+
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+      observer?.disconnect();
+      window.removeEventListener('resize', scheduleMeasure);
+    };
+  }, [measureHeightLimit]);
+
+  useEffect(() => {
+    measureHeightLimit();
+  }, [collapseState.qsoCollapsed, collapseState.keyerCollapsed, selectedQSO, measureHeightLimit]);
+
+  useEffect(() => {
+    if (!heightLimited) return;
+    setCollapseState(current => enforceVoiceRightHeightLimit(current));
+  }, [heightLimited]);
+
+  const handleQsoCollapsedChange = useCallback((collapsed: boolean) => {
+    const mutualExclusionActive = isVoiceRightMutualExclusionActive(
+      heightLimited,
+      lastLimitedHeight,
+      rootRef.current?.clientHeight ?? null,
+    );
+    setCollapseState(current => updateVoiceRightCardCollapse(current, 'qso', collapsed, mutualExclusionActive));
+  }, [heightLimited, lastLimitedHeight]);
+
+  const handleKeyerCollapsedChange = useCallback((collapsed: boolean) => {
+    const mutualExclusionActive = isVoiceRightMutualExclusionActive(
+      heightLimited,
+      lastLimitedHeight,
+      rootRef.current?.clientHeight ?? null,
+    );
+    setCollapseState(current => updateVoiceRightCardCollapse(current, 'keyer', collapsed, mutualExclusionActive));
+  }, [heightLimited, lastLimitedHeight]);
 
   const handleEditComplete = useCallback((updated: QSORecord) => {
     setLastUpdatedQSO(updated);
@@ -81,8 +174,8 @@ export const VoiceRightLayout: React.FC = () => {
   );
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex-1 min-h-0">
+    <div ref={rootRef} className="h-full min-h-0 overflow-hidden flex flex-col">
+      <div ref={topWorkspaceRef} className="flex-1 min-h-0 overflow-hidden">
         <VoiceRightTopTabs
           operatorId={activeOperatorId}
           toolbarRight={(
@@ -182,6 +275,8 @@ export const VoiceRightLayout: React.FC = () => {
               <div className="flex-shrink-0">
                 <VoiceQSOLogCard
                   editingQSO={selectedQSO}
+                  collapsed={collapseState.qsoCollapsed}
+                  onCollapsedChange={handleQsoCollapsedChange}
                   onEditComplete={handleEditComplete}
                   onDeleteComplete={handleDeleteComplete}
                   onCancelEdit={() => setSelectedQSO(null)}
@@ -192,9 +287,12 @@ export const VoiceRightLayout: React.FC = () => {
         />
       </div>
 
-      <div className="flex-shrink-0 p-2 pt-0 md:px-5 md:pb-5 md:pt-0">
+      <div ref={bottomControlsRef} className="flex-shrink-0 min-h-0 overflow-hidden p-2 pt-0 md:px-5 md:pb-5 md:pt-0">
         <div className="mb-3 md:mb-4">
-          <VoiceKeyerCard />
+          <VoiceKeyerCard
+            collapsed={collapseState.keyerCollapsed}
+            onCollapsedChange={handleKeyerCollapsedChange}
+          />
         </div>
         {/* PTT Button + Radio Control */}
         {/* Mobile: stacked vertically. Desktop: side-by-side */}

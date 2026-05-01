@@ -49,6 +49,11 @@ const MAX_RECORDING_MS = 120_000;
 const TX_PROGRESS_OVERHEAD_MS = 650;
 type KeyerPanelMode = 'operate' | 'edit';
 
+interface VoiceKeyerCardProps {
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
+}
+
 function ShortcutChevronIcon({ open }: { open: boolean }): React.ReactElement {
   return (
     <svg
@@ -226,7 +231,10 @@ function encodePcm16Wav(samples: Float32Array, sampleRate: number): Blob {
   return new Blob([buffer], { type: 'audio/wav' });
 }
 
-export const VoiceKeyerCard: React.FC = () => {
+export const VoiceKeyerCard: React.FC<VoiceKeyerCardProps> = ({
+  collapsed,
+  onCollapsedChange,
+}) => {
   const { t } = useTranslation('voice');
   const connection = useConnection();
   const { operators } = useOperators();
@@ -234,7 +242,7 @@ export const VoiceKeyerCard: React.FC = () => {
   const isOperator = useHasMinRole(UserRole.OPERATOR);
   const radioService = connection.state.radioService;
 
-  const [isCollapsed, setIsCollapsed] = useState(true);
+  const [internalCollapsed, setInternalCollapsed] = useState(true);
   const [bodyOverflowVisible, setBodyOverflowVisible] = useState(false);
   const [panel, setPanel] = useState<VoiceKeyerPanel | null>(null);
   const [status, setStatus] = useState<VoiceKeyerStatus>(idleStatus);
@@ -261,6 +269,15 @@ export const VoiceKeyerCard: React.FC = () => {
   const callsign = normalizeCallsign(selectedOperator?.context?.myCall);
   const visibleSlots = useMemo(() => (panel?.slots ?? []).slice(0, panel?.slotCount ?? 0), [panel]);
   const hasCallsign = Boolean(callsign);
+  const isCollapsed = collapsed ?? internalCollapsed;
+
+  const setCollapsed = useCallback((next: boolean | ((current: boolean) => boolean)) => {
+    const resolved = typeof next === 'function' ? next(isCollapsed) : next;
+    if (collapsed === undefined) {
+      setInternalCollapsed(resolved);
+    }
+    onCollapsedChange?.(resolved);
+  }, [collapsed, isCollapsed, onCollapsedChange]);
   const canOperate = isOperator && hasCallsign && connection.state.isConnected;
   const activeForCallsign = status.active && status.callsign === callsign;
   const activeSlot = activeForCallsign ? status.slotId : null;
@@ -690,15 +707,23 @@ export const VoiceKeyerCard: React.FC = () => {
   const toggleCollapsed = useCallback(() => {
     setBodyOverflowVisible(false);
     setShortcutMenuSlotId(null);
-    setIsCollapsed(current => !current);
-  }, []);
+    setCollapsed(current => !current);
+  }, [setCollapsed]);
+
+  useEffect(() => {
+    if (!isCollapsed) {
+      return;
+    }
+    setBodyOverflowVisible(false);
+    setShortcutMenuSlotId(null);
+  }, [isCollapsed]);
 
   const bodyOverflowClass = bodyOverflowVisible ? 'overflow-visible' : 'overflow-hidden';
 
   return (
     <Card className="w-full overflow-visible" shadow="sm">
       <CardHeader
-        className="flex items-center justify-between gap-2 cursor-pointer select-none py-2"
+        className="flex items-center justify-between gap-2 cursor-pointer select-none pb-3"
         onClick={toggleCollapsed}
       >
         <div className="flex min-w-0 items-center gap-2">
@@ -726,7 +751,7 @@ export const VoiceKeyerCard: React.FC = () => {
               classNames={{
                 base: 'shrink-0',
                 tabList: 'h-7 gap-0 p-0.5',
-                tab: 'h-6 px-2',
+                tab: 'h-6 px-2 min-w-7',
                 tabContent: 'text-xs',
               }}
             >
@@ -735,7 +760,7 @@ export const VoiceKeyerCard: React.FC = () => {
                 title={(
                   <span className="flex items-center gap-1">
                     <FontAwesomeIcon icon={faTowerBroadcast} className="text-[10px]" />
-                    {t('keyer.operateMode')}
+                    <span className="hidden sm:inline">{t('keyer.operateMode')}</span>
                   </span>
                 )}
               />
@@ -744,7 +769,7 @@ export const VoiceKeyerCard: React.FC = () => {
                 title={(
                   <span className="flex items-center gap-1">
                     <FontAwesomeIcon icon={faPen} className="text-[10px]" />
-                    {t('keyer.editMode')}
+                    <span className="hidden sm:inline">{t('keyer.editMode')}</span>
                   </span>
                 )}
               />
@@ -763,8 +788,8 @@ export const VoiceKeyerCard: React.FC = () => {
                   setCurrentOperatorId(selected);
                 }
               }}
-              className="w-36"
-              classNames={{ trigger: 'h-7 min-h-7', value: 'font-mono text-xs' }}
+              className="w-32"
+              classNames={{ trigger: 'h-7 min-h-7 px-2', value: 'font-mono text-xs' }}
             >
               {operators.map((op) => (
                 <SelectItem key={op.id} textValue={op.context.myCall || op.id}>

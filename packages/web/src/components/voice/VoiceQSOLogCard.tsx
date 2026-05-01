@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Card,
   CardBody,
@@ -45,6 +45,8 @@ const initialFormData: QSOFormData = {
 
 interface VoiceQSOLogCardProps {
   editingQSO?: QSORecord | null;
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
   onEditComplete?: (updated: QSORecord) => void;
   onDeleteComplete?: (deletedId: string) => void;
   onCancelEdit?: () => void;
@@ -59,6 +61,8 @@ interface VoiceQSOLogCardProps {
  */
 export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
   editingQSO,
+  collapsed,
+  onCollapsedChange,
   onEditComplete,
   onDeleteComplete,
   onCancelEdit,
@@ -70,7 +74,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
   const { operators } = useOperators();
   const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
 
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [internalCollapsed, setInternalCollapsed] = useState(false);
   const [formData, setFormData] = useState<QSOFormData>(initialFormData);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -90,6 +94,15 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
   const myCallsign = currentOperator?.context?.myCall || '';
   const myGrid = currentOperator?.context?.myGrid || '';
   const hasOperator = !!currentOperator && !!myCallsign;
+  const isCollapsed = collapsed ?? internalCollapsed;
+
+  const setCollapsed = useCallback((next: boolean | ((current: boolean) => boolean)) => {
+    const resolved = typeof next === 'function' ? next(isCollapsed) : next;
+    if (collapsed === undefined) {
+      setInternalCollapsed(resolved);
+    }
+    onCollapsedChange?.(resolved);
+  }, [collapsed, isCollapsed, onCollapsedChange]);
 
   // Track current frequency from WS events
   useWSEvent(
@@ -146,8 +159,8 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
     setStartTime(editingQSO.startTime);
     setEndTime(editingQSO.endTime ?? null);
     setCurrentFrequency(editingQSO.frequency);
-    setIsCollapsed(false);
-  }, [editingQSO]);
+    setCollapsed(false);
+  }, [editingQSO, setCollapsed]);
 
   const updateField = (field: keyof QSOFormData, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -278,7 +291,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
     <Card className="w-full" shadow="sm">
       <CardHeader
         className="flex justify-between items-center cursor-pointer select-none pb-3"
-        onClick={() => setIsCollapsed(prev => !prev)}
+        onClick={() => setCollapsed(prev => !prev)}
       >
         <div className="flex items-center gap-2">
           <FontAwesomeIcon
@@ -320,8 +333,8 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
                 const selected = Array.from(keys)[0] as string;
                 if (selected) setCurrentOperatorId(selected);
               }}
-              className="w-40"
-              classNames={{ trigger: 'h-7 min-h-7', value: 'font-mono text-xs' }}
+              className="w-32"
+              classNames={{ trigger: 'h-7 min-h-7 px-2', value: 'font-mono text-xs' }}
             >
               {operators.map((op) => (
                 <SelectItem key={op.id} textValue={op.context.myCall || op.id}>
