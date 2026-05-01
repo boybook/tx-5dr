@@ -3,6 +3,7 @@ import {
   PluginMarketCatalogResponseSchema,
   PluginMarketCatalogSchema,
   PluginMarketChannelSchema,
+  PluginPermissionSchema,
   PluginSourceSchema,
 } from '../../index.js';
 
@@ -56,6 +57,11 @@ describe('plugin market schema', () => {
 
   it('rejects unsupported channels', () => {
     expect(() => PluginMarketChannelSchema.parse('beta')).toThrow();
+  });
+
+  it('accepts host settings permissions', () => {
+    expect(PluginPermissionSchema.parse('settings:ft8')).toBe('settings:ft8');
+    expect(PluginPermissionSchema.parse('settings:ntp')).toBe('settings:ntp');
   });
 
   it('accepts the route response envelope', () => {

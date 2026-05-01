@@ -40,6 +40,10 @@
     "realtimeNoAudio": {
       "title": "Realtime Voice Has No Audio",
       "description": "The realtime audio session is connected, but the server is not receiving any audio frames to publish.\n\nChecks:\n- Verify the selected audio source is actually producing data\n- Confirm /api/realtime/rtc-data-audio signaling is reachable\n- Confirm rtc-data-audio UDP port {{localUdpPort}} is open or mapped\n- Confirm the configured public UDP endpoint is reachable\n- Confirm the client can reach {{signalingUrl}}\n\nTechnical details: {{details}}"
+    },
+    "sameTransmissionLimit": {
+      "title": "Stopped: repeated message",
+      "description": "Operator {{operatorId}} was stopped before sending the same message again (attempt {{attemptedCount}}, limit {{maxCount}}) to avoid repeatedly occupying the frequency: {{transmission}}"
     }
   }
 }

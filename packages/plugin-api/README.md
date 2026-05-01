@@ -73,6 +73,41 @@ permissions: ['radio:read', 'radio:control', 'radio:power']
 
 These APIs are not exposed directly to iframe pages; custom UI should call a server-side page handler.
 
+## Host Settings Permissions
+
+Server-side plugins can use `ctx.settings` to read or update a safe whitelist of host settings when the manifest declares the matching permission. Each settings namespace uses one read/write permission:
+
+| Namespace | Permission | Methods |
+|-----------|------------|---------|
+| `ctx.settings.ft8` | `settings:ft8` | `get()`, `update(patch)` |
+| `ctx.settings.decodeWindows` | `settings:decode-windows` | `get()`, `update(settings)` |
+| `ctx.settings.realtime` | `settings:realtime` | `get()`, `update(settings)` |
+| `ctx.settings.frequencyPresets` | `settings:frequency-presets` | `get()`, `update(presets)`, `reset()` |
+| `ctx.settings.station` | `settings:station` | `get()`, `update(patch)` |
+| `ctx.settings.pskReporter` | `settings:psk-reporter` | `get()`, `update(patch)` |
+| `ctx.settings.ntp` | `settings:ntp` | `get()`, `update({ servers })` |
+
+```ts
+import type { PluginDefinition } from '@tx5dr/plugin-api';
+
+const plugin: PluginDefinition = {
+  name: 'station-policy',
+  version: '1.0.0',
+  type: 'utility',
+  permissions: ['settings:ft8', 'settings:station'],
+  hooks: {
+    async onLoad(ctx) {
+      await ctx.settings.ft8.update({ maxSameTransmissionCount: 0 });
+      await ctx.settings.station.update({ callsign: 'W1AW' });
+    },
+  },
+};
+
+export default plugin;
+```
+
+The whitelist intentionally excludes authentication tokens, operator CRUD, hardware radio connection settings, audio devices, rigctld, OpenWebRX, profiles, and server host/port settings. These APIs are not exposed directly to iframe pages; custom UI should call a server-side page handler with `window.tx5dr.invoke()`.
+
 ## Bridge SDK Types
 
 Plugin iframe pages communicate with the host via the Bridge SDK (`window.tx5dr`), which is automatically injected by the host. To get IDE autocomplete for the Bridge SDK, add the type reference to your project:

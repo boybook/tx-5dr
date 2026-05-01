@@ -9,8 +9,8 @@ import {
   CustomFrequencyPresetsSchema,
   RealtimeSettingsSchema,
 } from '@tx5dr/contracts';
-import { FrequencyManager } from '../radio/FrequencyManager.js';
 import { ConfigManager } from '../config/config-manager.js';
+import { HostSettingsService } from '../plugin/HostSettingsService.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { requireAbility } from '../auth/authPlugin.js';
 import { RealtimeTransportManager } from '../realtime/RealtimeTransportManager.js';
@@ -25,6 +25,7 @@ import { WSMessageType } from '@tx5dr/contracts';
  */
 export async function settingsRoutes(fastify: FastifyInstance) {
   const configManager = ConfigManager.getInstance();
+  const hostSettings = new HostSettingsService(configManager);
   const transportManager = RealtimeTransportManager.getInstance();
 
   const buildRealtimeSettingsData = (request: FastifyRequest) => {
@@ -62,7 +63,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   // 获取 FT8 配置
   fastify.get('/ft8', async (request, reply) => {
     try {
-      const ft8Config = configManager.getFT8Config();
+      const ft8Config = hostSettings.getFT8();
       return reply.code(200).send({
         success: true,
         data: ft8Config,
@@ -83,17 +84,18 @@ export async function settingsRoutes(fastify: FastifyInstance) {
         transmitPower: number;
         autoReply: boolean;
         maxQSOTimeout: number;
+        maxSameTransmissionCount: number;
         decodeWhileTransmitting: boolean;
         spectrumWhileTransmitting: boolean;
       }>;
 
-      await configManager.updateFT8Config(updates);
+      await hostSettings.updateFT8(updates);
       fastify.log.info({ updates }, 'FT8 config updated');
 
       return reply.code(200).send({
         success: true,
         message: 'Configuration saved successfully',
-        data: configManager.getFT8Config(),
+        data: hostSettings.getFT8(),
       });
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
@@ -104,7 +106,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   // 获取解码窗口设置
   fastify.get('/decode-windows', async (request, reply) => {
     try {
-      const settings = configManager.getDecodeWindowSettings() ?? DEFAULT_DECODE_WINDOW_SETTINGS;
+      const settings = hostSettings.getDecodeWindows() ?? DEFAULT_DECODE_WINDOW_SETTINGS;
       return reply.code(200).send({
         success: true,
         data: {
@@ -126,7 +128,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const parsed = DecodeWindowSettingsSchema.parse(request.body);
-      await configManager.updateDecodeWindowSettings(parsed);
+      await hostSettings.updateDecodeWindows(parsed);
 
       // 通知引擎应用新的窗口时序
       const engine = DigitalRadioEngine.getInstance();
@@ -171,9 +173,11 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       const rtcDataAudioPublicHost = body.rtcDataAudioPublicHost?.trim() || null;
       const rtcDataAudioPublicUdpPort = body.rtcDataAudioPublicUdpPort ?? null;
 
-      await configManager.updateRealtimeTransportPolicy(body.transportPolicy ?? 'auto');
-      await configManager.updateRtcDataAudioPublicHost(rtcDataAudioPublicHost);
-      await configManager.updateRtcDataAudioPublicUdpPort(rtcDataAudioPublicUdpPort);
+      await hostSettings.updateRealtime({
+        transportPolicy: body.transportPolicy ?? 'auto',
+        rtcDataAudioPublicHost,
+        rtcDataAudioPublicUdpPort,
+      });
 
       const data = buildRealtimeSettingsData(request);
       WSServer.getInstance()?.broadcast(WSMessageType.REALTIME_SETTINGS_CHANGED, data);
@@ -191,12 +195,11 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   // 获取频率预设列表（包含所有模式：FT8/FT4/VOICE）
   fastify.get('/frequency-presets', async (_request, reply) => {
     try {
-      const custom = configManager.getCustomFrequencyPresets();
-      const freqManager = new FrequencyManager(custom);
+      const data = hostSettings.getFrequencyPresets();
       return reply.code(200).send({
         success: true,
-        presets: freqManager.getPresets(),
-        isCustomized: custom !== null,
+        presets: data.presets,
+        isCustomized: data.isCustomized,
       });
     } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
@@ -209,7 +212,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const parsed = CustomFrequencyPresetsSchema.parse(request.body);
-      await configManager.updateCustomFrequencyPresets(parsed.presets);
+      await hostSettings.updateFrequencyPresets(parsed.presets);
       return reply.code(200).send({
         success: true,
         message: 'Frequency presets saved',
@@ -226,12 +229,12 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     preHandler: [requireAbility('update', 'SettingsFrequencyPresets')],
   }, async (_request, reply) => {
     try {
-      await configManager.resetCustomFrequencyPresets();
+      const data = await hostSettings.resetFrequencyPresets();
       return reply.code(200).send({
         success: true,
         message: 'Frequency presets reset to defaults',
-        presets: FrequencyManager.DEFAULT_PRESETS,
-        isCustomized: false,
+        presets: data.presets,
+        isCustomized: data.isCustomized,
       });
     } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);

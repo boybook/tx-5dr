@@ -11,6 +11,7 @@ import {
   createMockRadioControl,
   createMockLogbookAccess,
   createMockBandAccess,
+  createMockHostSettingsControl,
 } from '../testing/index.js';
 
 describe('plugin-api testing utilities', () => {
@@ -100,6 +101,55 @@ describe('plugin-api testing utilities', () => {
 
       ctx.log.info('test');
       expect(ctx.log._calls).toHaveLength(1);
+    });
+
+    it('includes host settings mocks', async () => {
+      const ctx = createMockContext();
+      await expect(ctx.settings.ft8.update({ maxSameTransmissionCount: 0 })).resolves.toMatchObject({
+        maxSameTransmissionCount: 0,
+      });
+    });
+  });
+
+  describe('createMockHostSettingsControl', () => {
+    it('supports default host settings namespaces', async () => {
+      const settings = createMockHostSettingsControl();
+
+      expect(await settings.ft8.get()).toMatchObject({ myCallsign: 'W1AW' });
+      await expect(settings.ntp.update({ servers: ['time.cloudflare.com'] })).resolves.toMatchObject({
+        servers: ['time.cloudflare.com'],
+      });
+    });
+
+    it('accepts namespace overrides', async () => {
+      const settings = createMockHostSettingsControl({
+        ft8: {
+          get: async () => ({
+            myCallsign: 'JA1ABC',
+            myGrid: 'PM95',
+            frequency: 7_074_000,
+            transmitPower: 10,
+            autoReply: true,
+            maxQSOTimeout: 4,
+            maxSameTransmissionCount: 30,
+            decodeWhileTransmitting: true,
+            spectrumWhileTransmitting: false,
+          }),
+          update: async (patch) => ({
+            myCallsign: 'JA1ABC',
+            myGrid: 'PM95',
+            frequency: 7_074_000,
+            transmitPower: 10,
+            autoReply: true,
+            maxQSOTimeout: 4,
+            maxSameTransmissionCount: patch.maxSameTransmissionCount ?? 30,
+            decodeWhileTransmitting: true,
+            spectrumWhileTransmitting: false,
+          }),
+        },
+      });
+
+      await expect(settings.ft8.get()).resolves.toMatchObject({ myCallsign: 'JA1ABC' });
     });
   });
 

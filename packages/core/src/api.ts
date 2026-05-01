@@ -999,6 +999,7 @@ export const api = {
       transmitPower: number;
       autoReply: boolean;
       maxQSOTimeout: number;
+      maxSameTransmissionCount: number;
       decodeWhileTransmitting: boolean;
       spectrumWhileTransmitting: boolean;
     }>,

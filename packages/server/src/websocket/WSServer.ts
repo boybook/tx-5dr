@@ -469,6 +469,21 @@ export class WSServer extends WSMessageHandler {
       } catch {}
     });
 
+    this.digitalRadioEngine.on('textMessage', (data) => {
+      this.broadcastTextMessage(
+        data.title,
+        data.text,
+        data?.color,
+        data?.timeout,
+        data?.key,
+        data?.params,
+      );
+    });
+
+    this.digitalRadioEngine.on('realtimeSettingsChanged', (data) => {
+      this.broadcast(WSMessageType.REALTIME_SETTINGS_CHANGED, data);
+    });
+
     this.digitalRadioEngine.on('slotPackUpdated', async (slotPack) => {
       await this.broadcastSlotPackUpdated(slotPack);
     });

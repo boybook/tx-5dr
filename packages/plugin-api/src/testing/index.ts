@@ -20,6 +20,11 @@ import type {
   UIBridge,
   PluginFileStore,
 } from '../helpers.js';
+import type {
+  HostFT8Settings,
+  HostFrequencyPresetsSettings,
+  HostSettingsControl,
+} from '../settings.js';
 import type { PluginContext } from '../context.js';
 // Type-only imports from contracts (devDependency — erased at compile time)
 import type {
@@ -28,6 +33,11 @@ import type {
   ModeDescriptor,
   CapabilityList,
   RadioPowerStateEvent,
+  DecodeWindowSettings,
+  NtpServerListSettings,
+  PSKReporterConfig,
+  RealtimeSettings,
+  StationInfo,
 } from '@tx5dr/contracts';
 import { FT8MessageType } from '../ft8-message-type.js';
 
@@ -62,6 +72,7 @@ export interface MockPluginContext extends PluginContext {
   readonly log: MockLogger;
   readonly timers: MockTimers;
   readonly ui: MockUIBridge;
+  readonly settings: HostSettingsControl;
 }
 
 // ===== Factory: KVStore =====
@@ -297,6 +308,73 @@ export function createMockFileStore(): PluginFileStore {
   };
 }
 
+// ===== Factory: HostSettingsControl =====
+
+export function createMockHostSettingsControl(overrides?: Partial<HostSettingsControl>): HostSettingsControl {
+  const ft8: HostFT8Settings = {
+    myCallsign: 'W1AW',
+    myGrid: 'FN31',
+    frequency: 14_074_000,
+    transmitPower: 25,
+    autoReply: false,
+    maxQSOTimeout: 6,
+    maxSameTransmissionCount: 20,
+    decodeWhileTransmitting: false,
+    spectrumWhileTransmitting: true,
+  };
+  const decodeWindows: DecodeWindowSettings = { ft8: { preset: 'balanced' }, ft4: { preset: 'balanced' } };
+  const realtime: RealtimeSettings = { transportPolicy: 'auto', rtcDataAudioPublicHost: null, rtcDataAudioPublicUdpPort: null };
+  const frequencyPresets: HostFrequencyPresetsSettings = {
+    presets: [{ band: '20m', mode: 'FT8', radioMode: 'USB', frequency: 14_074_000, description: '20m FT8' }],
+    isCustomized: false,
+  };
+  const station: StationInfo = { callsign: 'W1AW', qth: { grid: 'FN31' } };
+  const pskReporter: PSKReporterConfig = {
+    enabled: false,
+    receiverCallsign: '',
+    receiverLocator: '',
+    decodingSoftware: 'TX-5DR',
+    antennaInformation: '',
+    reportIntervalSeconds: 30,
+    useTestServer: false,
+    stats: { todayReportCount: 0, totalReportCount: 0, consecutiveFailures: 0 },
+  };
+  const ntp: NtpServerListSettings = { servers: ['pool.ntp.org'], defaultServers: ['pool.ntp.org'] };
+
+  return {
+    ft8: {
+      async get() { return ft8; },
+      async update(patch) { Object.assign(ft8, patch); return ft8; },
+    },
+    decodeWindows: {
+      async get() { return decodeWindows; },
+      async update(settings) { Object.assign(decodeWindows, settings); return decodeWindows; },
+    },
+    realtime: {
+      async get() { return realtime; },
+      async update(settings) { Object.assign(realtime, settings); return realtime; },
+    },
+    frequencyPresets: {
+      async get() { return frequencyPresets; },
+      async update(presets) { frequencyPresets.presets = presets; frequencyPresets.isCustomized = true; return frequencyPresets; },
+      async reset() { frequencyPresets.isCustomized = false; return frequencyPresets; },
+    },
+    station: {
+      async get() { return station; },
+      async update(patch) { Object.assign(station, patch); return station; },
+    },
+    pskReporter: {
+      async get() { return pskReporter; },
+      async update(patch) { Object.assign(pskReporter, patch); return pskReporter; },
+    },
+    ntp: {
+      async get() { return ntp; },
+      async update(request) { ntp.servers = request.servers; return ntp; },
+    },
+    ...overrides,
+  };
+}
+
 // ===== Factory: PluginContext =====
 
 export interface MockPluginContextOptions {
@@ -320,6 +398,8 @@ export interface MockPluginContextOptions {
   logbook?: Partial<LogbookAccess>;
   /** Band access overrides. */
   band?: Partial<BandAccess>;
+  /** Host settings control overrides. */
+  settings?: Partial<HostSettingsControl>;
   /** Pre-constructed stores (uses fresh empty stores when omitted). */
   store?: { global?: MockKVStore; operator?: MockKVStore };
 }
@@ -349,6 +429,7 @@ export function createMockContext(options?: MockPluginContextOptions): MockPlugi
   const logbook = createMockLogbookAccess(opts.logbook);
   const band = createMockBandAccess(opts.band);
 
+  const settings = createMockHostSettingsControl(opts.settings);
   const files = createMockFileStore();
   const logbookSync = { register() { /* no-op in mock */ } };
 
@@ -362,6 +443,7 @@ export function createMockContext(options?: MockPluginContextOptions): MockPlugi
     logbook,
     band,
     ui,
+    settings,
     files,
     logbookSync,
   };

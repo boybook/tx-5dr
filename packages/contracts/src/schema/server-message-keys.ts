@@ -23,4 +23,7 @@ export enum ServerMessageKey {
 
   /** 实时语音链路无音频数据 */
   REALTIME_NO_AUDIO = 'realtimeNoAudio',
+
+  /** 连续相同发射达到安全上限，操作员已停止 */
+  SAME_TRANSMISSION_LIMIT = 'sameTransmissionLimit',
 }
