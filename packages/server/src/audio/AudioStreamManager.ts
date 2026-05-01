@@ -84,6 +84,13 @@ export interface PlayAudioOptions {
    * decoding must continue to use the physical input ring buffer only.
    */
   injectIntoMonitor?: boolean;
+  playbackKind?: PlaybackKind;
+}
+
+export type PlaybackKind = 'digital' | 'voice-keyer' | 'tune-tone';
+
+export interface StopPlaybackOptions {
+  kind?: PlaybackKind;
 }
 
 /**
@@ -119,6 +126,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private playing: boolean = false;             // 是否正在播放
   private playbackStartTime: number = 0;        // 播放开始时间戳
   private currentPlaybackPromise: Promise<void> | null = null;  // 当前播放的Promise
+  private currentPlaybackKind: PlaybackKind | null = null;
   private shouldStopPlayback: boolean = false;  // 停止播放标志
   private voiceOutputObserver: VoiceTxOutputObserver | null = null;
   private voiceTxOutputPipeline: VoiceTxOutputPipeline;
@@ -1060,17 +1068,26 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    * 检查是否正在播放音频
    * @returns 是否正在播放
    */
-  public isPlaying(): boolean {
-    return this.playing;
+  public isPlaying(kind?: PlaybackKind): boolean {
+    return this.playing && (!kind || this.currentPlaybackKind === kind);
+  }
+
+  public getCurrentPlaybackKind(): PlaybackKind | null {
+    return this.playing ? this.currentPlaybackKind : null;
   }
 
   /**
    * 停止当前正在播放的音频（用于重新混音）
    * @returns 已播放的时间(ms)
    */
-  public async stopCurrentPlayback(): Promise<number> {
+  public async stopCurrentPlayback(options: StopPlaybackOptions = {}): Promise<number> {
     if (!this.playing) {
       logger.debug('no audio currently playing');
+      return 0;
+    }
+
+    if (options.kind && this.currentPlaybackKind !== options.kind) {
+      logger.debug(`current playback kind is ${this.currentPlaybackKind ?? 'unknown'}, skip stop for ${options.kind}`);
       return 0;
     }
 
@@ -1095,6 +1112,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.playing = false;
     this.shouldStopPlayback = false;
     this.currentPlaybackPromise = null;
+    this.currentPlaybackKind = null;
 
     logger.debug(`playback stopped, elapsed: ${elapsedTime}ms`);
 
@@ -1106,6 +1124,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   async playAudio(audioData: Float32Array, targetSampleRate: number = 48000, options: PlayAudioOptions = {}): Promise<void> {
     const playStartTime = Date.now();
+    const playbackKind = options.playbackKind ?? 'digital';
 
     // 检查是否使用 ICOM WLAN 输出（零重采样优化）
     if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
@@ -1120,6 +1139,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       // 设置播放状态
       this.playing = true;
       this.playbackStartTime = playStartTime;
+      this.currentPlaybackKind = playbackKind;
       this.shouldStopPlayback = false;
 
       const playbackPromise = (async () => {
@@ -1217,12 +1237,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         throw error;
       } finally {
         // 清理播放状态
-        this.playing = false;
         if (this.currentPlaybackPromise === playbackPromise) {
+          this.playing = false;
           this.currentPlaybackPromise = null;
+          this.currentPlaybackKind = null;
+          this.currentAudioData = null;
+          this.currentSampleRate = 0;
         }
-        this.currentAudioData = null;
-        this.currentSampleRate = 0;
       }
       return;
     }
@@ -1235,6 +1256,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     // 保存播放状态
     this.playing = true;
     this.playbackStartTime = playStartTime;
+    this.currentPlaybackKind = playbackKind;
     this.shouldStopPlayback = false;
 
     logger.info('starting audio playback', {
@@ -1247,7 +1269,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     });
 
     // 保存当前播放的Promise
-    this.currentPlaybackPromise = (async () => {
+    let playbackPromise: Promise<void> | null = null;
+    playbackPromise = (async () => {
       try {
       let playbackData: Float32Array;
 
@@ -1390,14 +1413,18 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         throw error;
       } finally {
         // 清理播放状态
-        this.playing = false;
-        this.currentAudioData = null;
-        this.currentPlaybackPromise = null;
+        if (this.currentPlaybackPromise === playbackPromise) {
+          this.playing = false;
+          this.currentAudioData = null;
+          this.currentPlaybackPromise = null;
+          this.currentPlaybackKind = null;
+        }
       }
     })();
+    this.currentPlaybackPromise = playbackPromise;
 
     // 等待播放完成
-    return this.currentPlaybackPromise;
+    return playbackPromise;
   }
 
   async playVoiceAudio(pcmData: Float32Array, frameSampleRate: number, meta: VoiceTxFrameMeta): Promise<void> {

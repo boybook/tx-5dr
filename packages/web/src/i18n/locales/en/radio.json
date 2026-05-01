@@ -238,7 +238,7 @@
     "suggestionFallbackWsCompat": "If UDP is unavailable on this network, let the session fall back to ws-compat or force compatibility mode."
   },
   "tuner": {
-    "control": "Tuner control",
+    "control": "Antenna tune",
     "switch": "Tuner switch",
     "auto": "Auto tuner",
     "manual": "Manual tune",
@@ -249,7 +249,16 @@
     "enableFirstDesc": "Please enable the tuner switch before manual tuning",
     "tuningStarted": "Tuning started",
     "startFailed": "Failed to start tuning",
-    "toggleFailed": "Failed to toggle tuner"
+    "toggleFailed": "Failed to toggle tuner",
+    "builtInTitle": "Built-in tuner",
+    "builtInDescription": "Use tuner controls reported by the radio.",
+    "builtInUnsupported": "The current radio does not report built-in tuner support.",
+    "externalTitle": "External tuner",
+    "externalDescription": "Transmit a short steady tone to trigger an external antenna tuner. Make sure the frequency is clear and an antenna is connected.",
+    "startToneTune": "Manual tone tune",
+    "stopToneTune": "Stop tone tune {{seconds}}s",
+    "toneBusy": "The transmitter is already active, so tone tune cannot start.",
+    "toneStartFailed": "Failed to start tone tune"
   },
   "error": {
     "unknown": "An unknown error occurred",

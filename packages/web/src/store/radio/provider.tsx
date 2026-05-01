@@ -246,8 +246,12 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
   );
 
   const pttContextValue = useMemo(
-    () => ({ pttStatus: radioState.pttStatus, voicePttLock: radioState.voicePttLock }),
-    [radioState.pttStatus, radioState.voicePttLock],
+    () => ({
+      pttStatus: radioState.pttStatus,
+      tuneToneStatus: radioState.tuneToneStatus,
+      voicePttLock: radioState.voicePttLock,
+    }),
+    [radioState.pttStatus, radioState.tuneToneStatus, radioState.voicePttLock],
   );
 
   const radioErrorsContextValue = useMemo(

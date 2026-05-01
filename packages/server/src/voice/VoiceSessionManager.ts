@@ -20,6 +20,7 @@ export interface VoiceSessionManagerEvents {
 export interface VoiceSessionManagerDeps {
   radioManager: PhysicalRadioManager;
   audioStreamManager: AudioStreamManager;
+  onBeforeStartPTT?: () => Promise<void>;
 }
 
 /**
@@ -33,7 +34,7 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
   private isStarted = false;
   private diagnostics = new VoiceTxDiagnostics();
 
-  constructor(deps: VoiceSessionManagerDeps) {
+  constructor(private readonly deps: VoiceSessionManagerDeps) {
     super();
     this.radioManager = deps.radioManager;
     this.audioStreamManager = deps.audioStreamManager;
@@ -107,6 +108,7 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
       this.diagnostics.startSession(clientId, label);
 
       // 2. Activate radio PTT
+      await this.deps.onBeforeStartPTT?.();
       await this.radioManager.setPTT(true);
       this.audioStreamManager.setVoiceTxOutputEnabled(true);
 

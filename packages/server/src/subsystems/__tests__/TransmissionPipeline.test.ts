@@ -22,10 +22,12 @@ function createPipeline(configType: 'icom-wlan' | 'hamlib') {
     audioMixer: {
       markPlaybackStart: vi.fn(),
       markPlaybackStop: vi.fn(),
+      clearSlotCache: vi.fn(),
     },
     audioStreamManager: {
       playAudio: vi.fn(() => audioDone.promise),
       isPlaying: vi.fn(() => false),
+      getCurrentPlaybackKind: vi.fn<[], 'digital' | 'voice-keyer' | 'tune-tone' | null>(() => null),
       stopCurrentPlayback: vi.fn(),
     },
     radioManager: {
@@ -51,6 +53,7 @@ function createPipeline(configType: 'icom-wlan' | 'hamlib') {
     },
     getCurrentMode: vi.fn(() => ({ name: 'FT8', slotMs: 15000, transmitTiming: 500 })),
     getCompensationMs: vi.fn(() => 0),
+    onBeforeStartPTT: vi.fn().mockResolvedValue(undefined),
   };
 
   const pipeline = new TransmissionPipeline(deps as never);
@@ -104,6 +107,43 @@ describe('TransmissionPipeline PTT release timing', () => {
 
     expect(deps.radioManager.setPTT.mock.calls.map(([active]) => active)).toEqual([true]);
 
+    await pipeline.forceStopPTT();
+  });
+
+  it('does not stop tune tone playback at slot boundaries', async () => {
+    const { pipeline, deps } = createPipeline('hamlib');
+    deps.audioStreamManager.isPlaying.mockReturnValue(true);
+    deps.audioStreamManager.getCurrentPlaybackKind.mockReturnValue('tune-tone');
+
+    await pipeline.onSlotStart();
+
+    expect(deps.audioStreamManager.stopCurrentPlayback).not.toHaveBeenCalled();
+    expect(deps.audioMixer.clearSlotCache).toHaveBeenCalled();
+  });
+
+  it('stops tune tone before starting digital PTT and playback', async () => {
+    const { pipeline, deps, audioDone, mixedAudio } = createPipeline('hamlib');
+    const cleanup = createDeferred<void>();
+    deps.onBeforeStartPTT.mockReturnValueOnce(cleanup.promise);
+
+    const handling = (pipeline as unknown as {
+      handleMixedAudioReady: (mixedAudio: unknown) => Promise<void>;
+    }).handleMixedAudioReady(mixedAudio);
+
+    await vi.waitFor(() => {
+      expect(deps.onBeforeStartPTT).toHaveBeenCalled();
+    });
+    expect(deps.radioManager.setPTT).not.toHaveBeenCalled();
+    expect(deps.audioStreamManager.playAudio).not.toHaveBeenCalled();
+
+    cleanup.resolve();
+    await vi.waitFor(() => {
+      expect(deps.radioManager.setPTT).toHaveBeenCalledWith(true);
+      expect(deps.audioStreamManager.playAudio).toHaveBeenCalled();
+    });
+
+    audioDone.resolve();
+    await handling;
     await pipeline.forceStopPTT();
   });
 });

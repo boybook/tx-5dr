@@ -438,6 +438,9 @@ export function createRadioEventMap({
       logger.debug(`PTT status changed: ${pttData.isTransmitting ? 'transmitting' : 'idle'}, operators=[${pttData.operatorIds?.join(', ') || ''}]`);
       radioDispatch({ type: 'pttStatusChanged', payload: pttData });
     },
+    tuneToneStatusChanged: (data: unknown) => {
+      radioDispatch({ type: 'tuneToneStatusChanged', payload: data as import('@tx5dr/contracts').TuneToneStatus });
+    },
     squelchStatusChanged: (data: unknown) => {
       radioDispatch({ type: 'squelchStatusChanged', payload: data as import('@tx5dr/contracts').SquelchStatus });
     },

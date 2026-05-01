@@ -29,6 +29,7 @@ import type {
   AudioSidecarStatusPayload,
   SquelchStatus,
   SlotInfo,
+  TuneToneStatus,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import type { RadioService } from '../../services/radioService';
@@ -63,6 +64,7 @@ export interface RadioState {
     isTransmitting: boolean;
     operatorIds: string[];
   };
+  tuneToneStatus: TuneToneStatus;
   meterData: MeterData | null;
   hasReceivedMeterData: boolean;
   squelchStatus: SquelchStatus;
@@ -151,6 +153,7 @@ export type RadioAction =
   | { type: 'setCurrentOperator'; payload: string | null }
   | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; status: RadioConnectionStatus; radioInfo: RadioInfo | null; radioConfig?: HamlibConfig; radioConnectionHealth?: ConnectionHealthInfo; reconnectProgress?: ReconnectProgress | null; coreCapabilities?: CoreRadioCapabilities; coreCapabilityDiagnostics?: CoreCapabilityDiagnostics; meterCapabilities?: MeterCapabilities; tunerCapabilities?: TunerCapabilities } }
   | { type: 'pttStatusChanged'; payload: { isTransmitting: boolean; operatorIds: string[] } }
+  | { type: 'tuneToneStatusChanged'; payload: TuneToneStatus }
   | { type: 'meterData'; payload: MeterData }
   | { type: 'squelchStatusChanged'; payload: SquelchStatus }
   | { type: 'setProfiles'; payload: { profiles: RadioProfile[]; activeProfileId: string | null } }
