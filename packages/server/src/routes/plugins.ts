@@ -352,7 +352,9 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
   };
 
   fastify.get('/', async (req, reply) => {
-    if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
+    // Operator-facing UI (automation quick actions/panels) needs plugin
+    // metadata, while mutation routes below remain admin-only.
+    if (!await requireMinimumRole(fastify, req, reply, UserRole.OPERATOR)) {
       return;
     }
     return reply.send(engine.pluginManager.getSnapshot());
