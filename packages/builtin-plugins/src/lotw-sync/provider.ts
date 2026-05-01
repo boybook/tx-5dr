@@ -471,7 +471,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     for (const filePath of files) {
       if (!filePath.endsWith('.json')) continue;
       try {
-        const stored = await this.readCertificateFile(filePath);
+        const stored = await this.readCertificateFile(filePath, this.extractCertificateIdFromPath(filePath));
         summaries.push(this.toSummary(stored));
       } catch {
         this.ctx.log.warn('Failed to read certificate file', { filePath });
@@ -491,11 +491,22 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     return deleted;
   }
 
-  private async readCertificateFile(filePath: string): Promise<StoredCertificate> {
+  private extractCertificateIdFromPath(filePath: string): string | undefined {
+    const fileName = filePath.split('/').pop() ?? '';
+    return fileName.endsWith('.json') ? fileName.slice(0, -'.json'.length) : undefined;
+  }
+
+  private async readCertificateFile(filePath: string, canonicalId?: string): Promise<StoredCertificate> {
     const data = await this.ctx.files.read(filePath);
     if (!data) throw new Error('Certificate file not found: ' + filePath);
-    const parsed = JSON.parse(data.toString('utf-8')) as StoredCertificateFile;
-    return { ...parsed, status: inferStatus(parsed.validFrom, parsed.validTo) };
+    const parsed = JSON.parse(data.toString('utf-8')) as Partial<StoredCertificateFile>;
+    const id = canonicalId ?? parsed.id;
+    if (!id) throw new Error('Certificate ID is missing: ' + filePath);
+    return {
+      ...parsed,
+      id,
+      status: inferStatus(parsed.validFrom as number, parsed.validTo as number),
+    } as StoredCertificate;
   }
 
   private async readCertificateById(callsign: string, certId: string): Promise<StoredCertificate> {

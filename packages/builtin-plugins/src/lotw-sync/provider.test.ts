@@ -21,6 +21,7 @@ function createQso(id: string, overrides: Partial<QSORecord> = {}): QSORecord {
 
 function createContext() {
   const store = new Map<string, unknown>();
+  const files = new Map<string, Buffer>();
   const queryQSOs = vi.fn(async (_filter?: unknown) => [] as QSORecord[]);
   const updateQSO = vi.fn(async () => undefined);
   const addQSO = vi.fn(async () => undefined);
@@ -45,10 +46,15 @@ function createContext() {
         })),
       },
       files: {
-        read: vi.fn(async () => null),
-        write: vi.fn(async () => undefined),
-        list: vi.fn(async () => []),
-        remove: vi.fn(async () => undefined),
+        read: vi.fn(async (path: string) => files.get(path) ?? null),
+        write: vi.fn(async (path: string, data: Buffer) => {
+          files.set(path, data);
+        }),
+        list: vi.fn(async (prefix?: string) => {
+          const paths = Array.from(files.keys());
+          return prefix ? paths.filter((path) => path.startsWith(prefix)) : paths;
+        }),
+        delete: vi.fn(async (path: string) => files.delete(path)),
       },
       log: {
         debug: vi.fn(),
@@ -58,6 +64,7 @@ function createContext() {
       },
       fetch: vi.fn(),
     } as any,
+    files,
     queryQSOs,
     updateQSO,
     addQSO,
@@ -87,6 +94,23 @@ function configureProvider(provider: LoTWSyncProvider): void {
   });
 }
 
+function createStoredCertificate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'current-cert',
+    callsign: 'BG5DRB',
+    dxccId: 291,
+    serial: '1234',
+    validFrom: Date.parse('2025-01-01T00:00:00.000Z'),
+    validTo: Date.parse('2027-01-01T00:00:00.000Z'),
+    qsoStartDate: Date.parse('2025-01-01T00:00:00.000Z'),
+    qsoEndDate: Date.parse('2027-01-01T23:59:59.999Z'),
+    fingerprint: 'ABCDEF',
+    certPem: 'cert',
+    privateKeyPem: 'key',
+    ...overrides,
+  };
+}
+
 describe('LoTWSyncProvider', () => {
   it('signs LoTW payloads without relying on OpenSSL SHA1 digest providers', () => {
     const { ctx } = createContext();
@@ -111,6 +135,40 @@ describe('LoTWSyncProvider', () => {
       createHash('sha1').update(signData, 'utf8').digest(),
     ]);
     expect(decrypted).toEqual(expectedDigestInfo);
+  });
+
+  it('uses the certificate file name as the ID for legacy certificates without stored IDs', async () => {
+    const { ctx, files } = createContext();
+    const provider = new LoTWSyncProvider(ctx);
+    const filePath = 'callsigns/BG5DRB/certificates/legacy-cert.json';
+    const legacyCertificate = createStoredCertificate();
+    delete legacyCertificate.id;
+    files.set(filePath, Buffer.from(JSON.stringify(legacyCertificate), 'utf-8'));
+
+    const certificates = await provider.getCertificates('BG5DRB');
+
+    expect(certificates).toHaveLength(1);
+    expect(certificates[0].id).toBe('legacy-cert');
+    await expect(provider.deleteCertificate('BG5DRB', certificates[0].id)).resolves.toBe(true);
+    expect(files.has(filePath)).toBe(false);
+  });
+
+  it('prefers the certificate file name over stale stored IDs', async () => {
+    const { ctx, files } = createContext();
+    const provider = new LoTWSyncProvider(ctx);
+    const filePath = 'callsigns/BG5DRB/certificates/file-cert.json';
+    files.set(
+      filePath,
+      Buffer.from(JSON.stringify(createStoredCertificate({ id: 'stale-cert' })), 'utf-8'),
+    );
+
+    const certificates = await provider.getCertificates('BG5DRB');
+
+    expect(certificates).toHaveLength(1);
+    expect(certificates[0].id).toBe('file-cert');
+    await expect(provider.deleteCertificate('BG5DRB', certificates[0].id)).resolves.toBe(true);
+    expect(files.has(filePath)).toBe(false);
+    expect(ctx.files.delete).toHaveBeenCalledWith(filePath);
   });
 
   it('auto-upload uses explicit records without rescanning the logbook', async () => {

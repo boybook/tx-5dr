@@ -194,6 +194,10 @@
   gap: var(--tx5dr-spacing-xs);
   flex-shrink: 0;
 }
+.cert-actions .btn {
+  padding: 4px 10px;
+  font-size: var(--tx5dr-font-size-sm);
+}
 .cert-empty {
   font-size: var(--tx5dr-font-size-sm);
   color: var(--tx5dr-text-secondary);

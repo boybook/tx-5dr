@@ -52,7 +52,11 @@ const I18N: Record<string, Record<string, string>> = {
     certPasswordProtected: '证书受密码保护，请导出无密码的 .p12 文件',
     certInvalid: '无效的证书文件',
     certEmpty: '尚未上传证书',
-    certDeleteConfirm: '确定要删除此证书吗？',
+    certDeleteConfirm: '再次点击确认删除',
+    certDeleteCancel: '取消',
+    certDeleted: '证书已删除',
+    certDeleteFailed: '删除失败',
+    deleting: '删除中...',
     certValid: '有效',
     certExpired: '已过期',
     certNotYetValid: '尚未生效',
@@ -104,7 +108,11 @@ const I18N: Record<string, Record<string, string>> = {
     certPasswordProtected: 'Certificate is password protected. Export a .p12 file without a password.',
     certInvalid: 'Invalid certificate file',
     certEmpty: 'No certificates uploaded yet',
-    certDeleteConfirm: 'Delete this certificate?',
+    certDeleteConfirm: 'Click again to confirm',
+    certDeleteCancel: 'Cancel',
+    certDeleted: 'Certificate deleted',
+    certDeleteFailed: 'Delete failed',
+    deleting: 'Deleting...',
     certValid: 'Valid',
     certExpired: 'Expired',
     certNotYetValid: 'Not Yet Valid',
@@ -182,6 +190,9 @@ export function App() {
   const [certificates, setCertificates] = useState<Certificate[]>([]);
   const [uploading, setUploading] = useState(false);
   const [certUploadResult, setCertUploadResult] = useState<ChipState | null>(null);
+  const [certDeleteResult, setCertDeleteResult] = useState<ChipState | null>(null);
+  const [confirmingDeleteCertId, setConfirmingDeleteCertId] = useState<string | null>(null);
+  const [deletingCertId, setDeletingCertId] = useState<string | null>(null);
 
   // Upload Location
   const [locCallsign, setLocCallsign] = useState('');
@@ -347,12 +358,39 @@ export function App() {
   }, [handleCertUpload]);
 
   // ===== Delete certificate =====
-  const handleDeleteCert = useCallback((certId: string) => {
-    if (!confirm(t('certDeleteConfirm'))) return;
-    window.tx5dr.invoke('deleteCertificate', { callsign, id: certId }).then(() => {
+  const handleDeleteCert = useCallback(async (certId: string) => {
+    if (confirmingDeleteCertId !== certId) {
+      setConfirmingDeleteCertId(certId);
+      setCertDeleteResult(null);
+      return;
+    }
+
+    setDeletingCertId(certId);
+    setCertDeleteResult(null);
+    try {
+      const result = await window.tx5dr.invoke('deleteCertificate', { callsign, id: certId }) as { success?: boolean } | null;
+      if (!result?.success) {
+        setCertDeleteResult({ message: t('certDeleteFailed'), type: 'danger' });
+        setTimeout(() => setCertDeleteResult(null), 5000);
+        return;
+      }
+      setConfirmingDeleteCertId(null);
+      setCertDeleteResult({ message: t('certDeleted'), type: 'success' });
       loadCertificates();
-    }).catch(() => {});
-  }, [callsign, loadCertificates, t]);
+      setTimeout(() => setCertDeleteResult(null), 3000);
+    } catch (err: any) {
+      const detail = err?.message ? `: ${err.message}` : '';
+      setCertDeleteResult({ message: `${t('certDeleteFailed')}${detail}`, type: 'danger' });
+      setTimeout(() => setCertDeleteResult(null), 5000);
+    } finally {
+      setDeletingCertId(null);
+    }
+  }, [callsign, confirmingDeleteCertId, loadCertificates, t]);
+
+  const handleCancelDeleteCert = useCallback(() => {
+    setConfirmingDeleteCertId(null);
+    setCertDeleteResult(null);
+  }, []);
 
   // ===== Preflight check =====
   const handlePreflight = useCallback(async () => {
@@ -485,6 +523,11 @@ export function App() {
             {certUploadResult.message}
           </span>
         )}
+        {certDeleteResult && (
+          <span className={`chip chip-${certDeleteResult.type}`}>
+            {certDeleteResult.message}
+          </span>
+        )}
       </div>
       <input
         ref={fileInputRef}
@@ -516,10 +559,26 @@ export function App() {
               <div className="cert-actions">
                 <button
                   className="btn btn-danger"
+                  disabled={deletingCertId === cert.id}
                   onClick={() => handleDeleteCert(cert.id)}
                 >
-                  {t('deleteBtn')}
+                  {deletingCertId === cert.id && <span className="spinner" />}
+                  <span className="btn-text">
+                    {deletingCertId === cert.id
+                      ? t('deleting')
+                      : confirmingDeleteCertId === cert.id
+                        ? t('certDeleteConfirm')
+                        : t('deleteBtn')}
+                  </span>
                 </button>
+                {confirmingDeleteCertId === cert.id && deletingCertId !== cert.id && (
+                  <button
+                    className="btn btn-secondary"
+                    onClick={handleCancelDeleteCert}
+                  >
+                    {t('certDeleteCancel')}
+                  </button>
+                )}
               </div>
             </div>
           ))
