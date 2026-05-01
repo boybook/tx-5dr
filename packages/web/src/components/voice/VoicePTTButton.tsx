@@ -461,21 +461,25 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   const useDisabledVisual = !isOperator || pttState === 'locked-by-other';
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
   const meterPercent = Math.round(Math.max(0, Math.min(1, inputLevel)) * 100);
-  const meterIsArmed = voiceCaptureController.captureState !== 'idle';
-  const meterFillPercent = meterIsArmed
+  const meterHasInput = voiceCaptureController.captureState !== 'idle';
+  const meterIsPttActive = voiceCaptureController.isPTTActive || pttState === 'transmitting';
+  const meterFillPercent = meterHasInput
     ? Math.max(0, Math.min(100, meterPercent))
     : 0;
-  const peakMarkerPercent = meterIsArmed
+  const peakMarkerPercent = meterHasInput
     ? Math.max(0, Math.min(100, meterFillPercent))
     : 0;
   const meterContainerClass = voiceCaptureController.captureState === 'error'
     ? 'border-danger-400/70 bg-danger-50/40 dark:bg-danger-950/20'
-    : meterIsArmed
+    : meterIsPttActive
       ? 'border-success-400/60 bg-content2/90'
-      : 'border-default-300/80 bg-content2/70';
-  const meterFillClass = pttState === 'transmitting'
-    ? 'from-danger-500 via-warning-400 to-success-300'
-    : 'from-primary-500 via-success-400 to-warning-300';
+      : 'border-default-300/70 bg-default-100/45 dark:border-default-600/60 dark:bg-default-900/25 opacity-70';
+  const meterFillClass = meterIsPttActive
+    ? 'bg-gradient-to-t from-danger-500 via-warning-400 to-success-300'
+    : 'bg-default-400/70 dark:bg-default-500/60';
+  const peakMarkerClass = meterIsPttActive
+    ? 'bg-white/90'
+    : 'bg-default-500/45 dark:bg-default-300/35';
   const httpsRoleTitle = isAdmin
     ? t('ptt.httpsRequiredRoleTitleAdmin')
     : isOperator
@@ -643,22 +647,22 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
           <div className="relative h-full w-full rounded-md bg-default-200/70 dark:bg-default-100/10 overflow-hidden">
             <div
               className={`
-                absolute inset-x-0 bottom-0 rounded-md bg-gradient-to-t transition-[height,opacity] duration-75 ease-out
+                absolute inset-x-0 bottom-0 rounded-md transition-[height,opacity] duration-75 ease-out
                 ${meterFillClass}
               `}
               style={{
                 height: `${meterFillPercent}%`,
-                opacity: meterIsArmed ? 1 : 0.35,
+                opacity: meterHasInput ? (meterIsPttActive ? 1 : 0.35) : 0.2,
               }}
             />
             <div
-              className="absolute inset-x-0 h-[2px] rounded-full bg-white/90 transition-[bottom,opacity] duration-100 ease-out"
+              className={`absolute inset-x-0 h-[2px] rounded-full transition-[bottom,opacity] duration-100 ease-out ${peakMarkerClass}`}
               style={{
                 bottom: `${Math.max(0, peakMarkerPercent - 2)}%`,
-                opacity: meterIsArmed && meterFillPercent > 0 ? 1 : 0,
+                opacity: meterHasInput && meterFillPercent > 0 ? (meterIsPttActive ? 1 : 0.35) : 0,
               }}
             />
-            {!meterIsArmed && (
+            {!meterHasInput && (
               <div className="absolute inset-x-0 bottom-0 h-1.5 rounded-full bg-default-400/35" />
             )}
           </div>
