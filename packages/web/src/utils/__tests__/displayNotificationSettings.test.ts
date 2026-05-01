@@ -25,6 +25,7 @@ function createSettings(): DisplayNotificationSettings {
       light: { ...DEFAULT_DISPLAY_SETTINGS.frameTableCycleBackgrounds.light },
       dark: { ...DEFAULT_DISPLAY_SETTINGS.frameTableCycleBackgrounds.dark },
     },
+    frameTableGroupHeaderEnabled: DEFAULT_DISPLAY_SETTINGS.frameTableGroupHeaderEnabled,
   };
 }
 
@@ -67,6 +68,10 @@ describe('displayNotificationSettings utils', () => {
     });
   });
 
+  it('enables FrameTable group headers by default', () => {
+    expect(DEFAULT_DISPLAY_SETTINGS.frameTableGroupHeaderEnabled).toBe(true);
+  });
+
   it('fills FrameTable cycle backgrounds for old stored settings', () => {
     store.set('tx5dr_display_notification_settings', JSON.stringify({
       enabled: false,
@@ -83,7 +88,17 @@ describe('displayNotificationSettings utils', () => {
         newCallsign: { ...DEFAULT_DISPLAY_SETTINGS.highlights.newCallsign },
       },
       frameTableCycleBackgrounds: DEFAULT_DISPLAY_SETTINGS.frameTableCycleBackgrounds,
+      frameTableGroupHeaderEnabled: true,
     });
+  });
+
+  it('keeps stored FrameTable group header setting', () => {
+    store.set('tx5dr_display_notification_settings', JSON.stringify({
+      ...createSettings(),
+      frameTableGroupHeaderEnabled: false,
+    }));
+
+    expect(getDisplayNotificationSettings().frameTableGroupHeaderEnabled).toBe(false);
   });
 
   it('resets FrameTable cycle backgrounds to defaults', () => {
@@ -104,6 +119,14 @@ describe('displayNotificationSettings utils', () => {
     expect(isDefaultSettings(settings)).toBe(true);
 
     settings.frameTableCycleBackgrounds.dark.odd = '#444444';
+    expect(isDefaultSettings(settings)).toBe(false);
+  });
+
+  it('compares FrameTable group header setting when checking default settings', () => {
+    const settings = createSettings();
+    expect(isDefaultSettings(settings)).toBe(true);
+
+    settings.frameTableGroupHeaderEnabled = false;
     expect(isDefaultSettings(settings)).toBe(false);
   });
 

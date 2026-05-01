@@ -27,6 +27,7 @@ export interface DisplayNotificationSettings {
     newCallsign: HighlightConfig;
   };
   frameTableCycleBackgrounds: FrameTableCycleBackgrounds;
+  frameTableGroupHeaderEnabled: boolean;
 }
 
 // 默认设置
@@ -56,6 +57,7 @@ export const DEFAULT_DISPLAY_SETTINGS: DisplayNotificationSettings = {
       odd: 'rgba(217, 119, 6, 0.25)',
     },
   },
+  frameTableGroupHeaderEnabled: true,
 };
 
 // 预设颜色选项
@@ -128,6 +130,7 @@ function cloneDefaultSettings(): DisplayNotificationSettings {
       light: { ...DEFAULT_DISPLAY_SETTINGS.frameTableCycleBackgrounds.light },
       dark: { ...DEFAULT_DISPLAY_SETTINGS.frameTableCycleBackgrounds.dark },
     },
+    frameTableGroupHeaderEnabled: DEFAULT_DISPLAY_SETTINGS.frameTableGroupHeaderEnabled,
   };
 }
 
@@ -162,6 +165,7 @@ function mergeDisplayNotificationSettings(parsed: Partial<DisplayNotificationSet
         odd: parsed?.frameTableCycleBackgrounds?.dark?.odd ?? DEFAULT_DISPLAY_SETTINGS.frameTableCycleBackgrounds.dark.odd,
       },
     },
+    frameTableGroupHeaderEnabled: parsed?.frameTableGroupHeaderEnabled ?? DEFAULT_DISPLAY_SETTINGS.frameTableGroupHeaderEnabled,
   };
 }
 

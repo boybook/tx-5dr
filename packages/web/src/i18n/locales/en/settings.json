@@ -87,6 +87,8 @@
       "themeDescription": "Changing colors below updates this preview immediately.",
       "evenCycle": "Even Cycle Background",
       "oddCycle": "Odd Cycle Background",
+      "groupHeader": "Show Cycle Headers",
+      "groupHeaderDesc": "Show UTC time and band before each cycle in the left decode table for screenshot context.",
       "preview": "Live Preview"
     }
   },
