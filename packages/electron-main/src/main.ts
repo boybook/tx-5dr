@@ -51,6 +51,7 @@ let mainWindowInstance: BrowserWindow | null = null; // 主窗口实例
 let trayInstance: Tray | null = null; // 系统托盘实例（Windows/Linux）
 let isQuitting: boolean = false; // 主动退出标志，防止子进程被杀时弹崩溃错误
 const intentionalChildShutdowns = new WeakSet<import('node:child_process').ChildProcess>();
+let startupErrorDialogShown = false;
 let notificationPermissionHandlersConfigured = false;
 let ipcHandlersConfigured = false;
 let devProcessMemoryLogInterval: NodeJS.Timeout | null = null;
@@ -96,6 +97,8 @@ const DEFAULT_ELECTRON_SETTINGS: ElectronSettings = {
   desktopHttps: DEFAULT_DESKTOP_HTTPS_CONFIG,
 };
 const VC_REDIST_X64_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
+const VC_REDIST_DOWNLOAD_PAGE_ZH_URL = 'https://learn.microsoft.com/zh-cn/cpp/windows/latest-supported-vc-redist';
+const VC_REDIST_DOWNLOAD_PAGE_EN_URL = 'https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist';
 const VC_REDIST_REGISTRY_KEYS = [
   'HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64',
   'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64',
@@ -560,6 +563,10 @@ function isVCRuntimeVersionSufficient(versionStr: string): boolean {
   return parsed.minor >= VC_REDIST_MIN_VERSION.minor;
 }
 
+function getLocalizedVCRuntimeDownloadPageUrl(locale = app.getLocale()): string {
+  return locale.startsWith('zh') ? VC_REDIST_DOWNLOAD_PAGE_ZH_URL : VC_REDIST_DOWNLOAD_PAGE_EN_URL;
+}
+
 function detectWindowsVCRuntime(): WindowsVCRuntimeStatus {
   if (process.platform !== 'win32') {
     return { installed: true, versionOk: true, version: null, source: 'registry', detail: 'not-applicable' };
@@ -795,6 +802,35 @@ function buildLogPathsHint(name: string): string {
   return `Log files:\n  - ${logPath}\n  - ${serverLogPath}\n  - ${clientToolsLogPath}`;
 }
 
+async function showWindowsServerStartupCrashDialog(detail: string): Promise<void> {
+  if (startupErrorDialogShown) {
+    return;
+  }
+  startupErrorDialogShown = true;
+
+  const msgs = getMessages(app.getLocale());
+  const dialogMsgs = msgs.serverStartupCrash;
+  const downloadPageUrl = getLocalizedVCRuntimeDownloadPageUrl();
+  const response = await dialog.showMessageBox({
+    type: 'error',
+    title: dialogMsgs.title,
+    message: dialogMsgs.message,
+    detail: `${dialogMsgs.runtimeHint}\n\n${detail}\n\n${downloadPageUrl}`,
+    buttons: dialogMsgs.buttons,
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+
+  if (response.response === 0) {
+    try {
+      await shell.openExternal(downloadPageUrl);
+    } catch (error) {
+      logger.error('failed to open VC runtime download page', error);
+    }
+  }
+}
+
 function wireChildProcess(name: string, child: import('node:child_process').ChildProcess) {
   const MAX_STDERR_LINES = 20;
   const recentStderr: string[] = [];
@@ -836,8 +872,13 @@ function wireChildProcess(name: string, child: import('node:child_process').Chil
       const stderrHint = recentStderr.length > 0
         ? `\n\nRecent stderr:\n${recentStderr.join('\n')}`
         : '';
+      const detail = `${name} process ${reason}\n\n${buildLogPathsHint(name)}${stderrHint}`;
+      if (process.platform === 'win32' && name === 'server' && !mainAppReadyForWindow) {
+        void showWindowsServerStartupCrashDialog(detail);
+        return;
+      }
       dialog.showErrorBox('TX-5DR - Startup Failed',
-        `${name} process ${reason}\n\n${buildLogPathsHint(name)}${stderrHint}`);
+        detail);
     }
   });
 
@@ -1803,6 +1844,7 @@ async function createWindow() {
   // 重置启动状态（支持重新启动场景）
   hasStartupError = false;
   errorType = '';
+  startupErrorDialogShown = false;
 
   const isDevelopment = process.env.NODE_ENV === 'development' && !app.isPackaged;
   logger.info(`isDevelopment: ${isDevelopment}`);
@@ -2015,6 +2057,10 @@ ${detail}${okHint}${failHint}
       errorType = 'TIMEOUT';
       crashedProcessName = crashedProcessName || 'server';
       hasStartupError = true;
+      if (startupErrorDialogShown) {
+        return;
+      }
+      startupErrorDialogShown = true;
       dialog.showErrorBox('TX-5DR - Startup Failed',
         `Backend server startup timeout
 
@@ -2079,6 +2125,10 @@ ${error instanceof Error ? `${error.message}
   // 最后检查：如果子进程已经崩溃
   if (hasStartupError) {
     logger.error('startup error detected', { errorType, crashedProcessName });
+    if (startupErrorDialogShown) {
+      return;
+    }
+    startupErrorDialogShown = true;
     const processHint = crashedProcessName ? ` [${crashedProcessName}]` : '';
     dialog.showErrorBox('TX-5DR - Startup Failed',
       `Error detected during startup (${errorType}${processHint})\n\n${buildLogPathsHint(crashedProcessName || 'server')}`);

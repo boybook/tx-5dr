@@ -22,6 +22,12 @@ export interface ElectronMessages {
     detail: string;
     buttons: [string, string];
   };
+  serverStartupCrash: {
+    title: string;
+    message: string;
+    runtimeHint: string;
+    buttons: [string, string];
+  };
   httpsSelfSigned: {
     title: string;
     detail: string;
@@ -53,6 +59,12 @@ const ZH: ElectronMessages = {
     detail: '建议下载安装最新的 Microsoft Visual C++ Redistributable (x64)。你也可以继续尝试启动。下载链接如下：',
     buttons: ['打开下载链接', '继续启动'],
   },
+  serverStartupCrash: {
+    title: 'TX-5DR - Server 启动失败',
+    message: 'server 进程启动时异常退出。',
+    runtimeHint: '这类问题可能是由于 Microsoft Visual C++ 运行库缺失或版本过旧导致。建议安装或修复最新版 Microsoft Visual C++ Redistributable (x64)，然后重启 TX-5DR。',
+    buttons: ['打开 VC++ 运行库下载页面', '关闭'],
+  },
   httpsSelfSigned: {
     title: '浏览器可能提示证书不安全',
     detail: '当前浏览器入口使用自签名证书。首次访问时，浏览器可能会提示连接不安全；如果这是你自己的设备，请手动放行后继续访问。',
@@ -83,6 +95,12 @@ const EN: ElectronMessages = {
     message: 'The installed Microsoft Visual C++ Redistributable is too old. TX-5DR requires the 2022 version or newer.',
     detail: 'Please download and install the latest Microsoft Visual C++ Redistributable (x64). You can also continue startup anyway. Download link:',
     buttons: ['Open Download Link', 'Continue Startup'],
+  },
+  serverStartupCrash: {
+    title: 'TX-5DR - Server Startup Failed',
+    message: 'The server process exited unexpectedly during startup.',
+    runtimeHint: 'This can happen when Microsoft Visual C++ Redistributable is missing or outdated. Please install or repair the latest Microsoft Visual C++ Redistributable (x64), then restart TX-5DR.',
+    buttons: ['Open VC++ Runtime Download Page', 'Close'],
   },
   httpsSelfSigned: {
     title: 'Your browser may warn about the certificate',
