@@ -257,6 +257,70 @@ describe('LoTWSyncProvider', () => {
     expect(prepareUpload).toHaveBeenCalledWith(expect.anything(), [qso], 'BG5DRB');
   });
 
+  it('projects SSB sideband records to LoTW contact mode SSB', () => {
+    const { ctx } = createContext();
+    const provider = new LoTWSyncProvider(ctx);
+    vi.spyOn(provider as any, 'signLog').mockReturnValue('A'.repeat(88));
+
+    const tq8 = (provider as any).buildTq8Content(
+      [createQso('voice-usb', {
+        frequency: 14_270_000,
+        mode: 'SSB',
+        submode: 'USB',
+        reportSent: '59',
+        reportReceived: '59',
+      })],
+      createStoredCertificate({
+        certPem: '-----BEGIN CERTIFICATE-----\\nCERTDATA\\n-----END CERTIFICATE-----',
+        privateKeyPem: 'key',
+      }),
+      {
+        callsign: 'BG5DRB',
+        dxccId: 291,
+        gridSquare: 'PM01AA',
+        cqZone: '24',
+        ituZone: '44',
+        iota: '',
+        state: '',
+        county: '',
+      },
+    ) as string;
+
+    expect(tq8).toContain('<MODE:3>SSB');
+    expect(tq8).toContain('<SIGNDATA:');
+    expect(tq8).toContain('20MN0CALL14.27SSB2026-04-1712:00:00Z');
+    expect(tq8).not.toContain('<MODE:3>USB');
+    expect(tq8).not.toContain('14.27USB');
+  });
+
+  it('projects legacy USB records to LoTW contact mode SSB', () => {
+    const { ctx } = createContext();
+    const provider = new LoTWSyncProvider(ctx);
+    vi.spyOn(provider as any, 'signLog').mockReturnValue('A'.repeat(88));
+
+    const tq8 = (provider as any).buildTq8Content(
+      [createQso('legacy-usb', { frequency: 14_270_000, mode: 'USB' })],
+      createStoredCertificate({
+        certPem: '-----BEGIN CERTIFICATE-----\\nCERTDATA\\n-----END CERTIFICATE-----',
+        privateKeyPem: 'key',
+      }),
+      {
+        callsign: 'BG5DRB',
+        dxccId: 291,
+        gridSquare: 'PM01AA',
+        cqZone: '24',
+        ituZone: '44',
+        iota: '',
+        state: '',
+        county: '',
+      },
+    ) as string;
+
+    expect(tq8).toContain('<MODE:3>SSB');
+    expect(tq8).toContain('20MN0CALL14.27SSB2026-04-1712:00:00Z');
+    expect(tq8).not.toContain('<MODE:3>USB');
+  });
+
   it('downloads valid LoTW ADIF even when field names contain invalid', async () => {
     const { ctx, addQSO, notifyUpdated } = createContext();
     ctx.fetch.mockResolvedValue(lotwResponse(

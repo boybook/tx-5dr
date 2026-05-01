@@ -6,7 +6,13 @@
  */
 
 import type { QSORecord } from '@tx5dr/contracts';
-import { getBandFromFrequency, resolveDXCCEntity, DXCC_RESOLVER_VERSION } from '@tx5dr/core';
+import {
+  getBandFromFrequency,
+  normalizeQsoModeForStorage,
+  resolveDXCCEntity,
+  DXCC_RESOLVER_VERSION,
+  toAdifMode,
+} from '@tx5dr/core';
 import { parseLegacyComment, resolveQsoComment } from './qso-text-fields.js';
 
 function mapAdifModeToInternal(mode?: string, submode?: string): Pick<QSORecord, 'mode' | 'submode'> {
@@ -17,28 +23,10 @@ function mapAdifModeToInternal(mode?: string, submode?: string): Pick<QSORecord,
     return { mode: 'FT4', submode: 'FT4' };
   }
 
-  return {
+  return normalizeQsoModeForStorage({
     mode: mode || 'FT8',
     submode: submode || undefined,
-  };
-}
-
-function mapInternalModeToAdif(mode?: string, submode?: string): { mode: string; submode?: string } {
-  const normalizedMode = mode?.trim().toUpperCase();
-  const normalizedSubmode = submode?.trim().toUpperCase();
-
-  if (normalizedMode === 'FT4') {
-    return { mode: 'MFSK', submode: 'FT4' };
-  }
-
-  if (normalizedMode === 'MFSK' && normalizedSubmode) {
-    return { mode: 'MFSK', submode: normalizedSubmode };
-  }
-
-  return {
-    mode: mode || 'FT8',
-    submode: submode || undefined,
-  };
+  });
 }
 
 /**
@@ -87,7 +75,7 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
 }): string {
   const adifFields: string[] = [];
   const opts = { includeStationCallsign: false, includeMyGrid: true, ...options };
-  const adifMode = mapInternalModeToAdif(qso.mode, qso.submode);
+  const adifMode = toAdifMode(qso);
 
   adifFields.push(`<call:${qso.callsign.length}>${qso.callsign}`);
 

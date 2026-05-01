@@ -28,7 +28,7 @@ import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen, faCog, faPlus, faTableCells } from '@fortawesome/free-solid-svg-icons';
 import type { QSORecord, LogBookStatistics, CreateQSORequest, LogBookImportResult } from '@tx5dr/contracts';
-import { api, WSClient, ApiError } from '@tx5dr/core';
+import { api, WSClient, ApiError, getDisplayMode } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../../utils/config';
 import { isElectron } from '../../utils/config';
 import { showErrorToast } from '../../utils/errorToast';
@@ -42,6 +42,7 @@ import { getAuthHeaders, getStoredJwt } from '../../utils/authHeaders';
 const logger = createLogger('LogbookViewer');
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200] as const;
+const MODE_FILTER_OPTIONS = ['FT8', 'FT4', 'SSB', 'USB', 'LSB', 'AM', 'FM', 'CW', 'RTTY', 'PSK31', 'JS8', 'MSK144'] as const;
 
 interface LogbookViewerProps {
   operatorId: string;
@@ -614,7 +615,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       myGrid: qso.myGrid,
       myCallsign: qso.myCallsign,
       frequency: qso.frequency,
-      mode: qso.mode,
+      mode: getDisplayMode(qso),
       startTime: qso.startTime,
       endTime: qso.endTime,
       reportSent: qso.reportSent,
@@ -854,7 +855,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       case "mode":
         return (
           <Chip size="sm" variant="flat" color="secondary">
-            {qso.mode}
+            {getDisplayMode(qso)}
           </Chip>
         );
       case "reportSent":
@@ -1382,8 +1383,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
             }}
           >
             <DropdownItem key="">{t('filter.allModes')}</DropdownItem>
-            <DropdownItem key="FT8">FT8</DropdownItem>
-            <DropdownItem key="FT4">FT4</DropdownItem>
+            {MODE_FILTER_OPTIONS.map((mode) => (
+              <DropdownItem key={mode}>{mode}</DropdownItem>
+            ))}
           </DropdownMenu>
         </Dropdown>
 
@@ -2026,7 +2028,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 <div className="p-3 bg-default-100 rounded-lg space-y-1">
                   <p className="text-sm"><span className="font-medium">{t('deleteQso.time')}</span> {formatDateTime(deletingQSO.startTime)}</p>
                   <p className="text-sm"><span className="font-medium">{t('deleteQso.frequency')}</span> {formatFrequency(deletingQSO.frequency)}</p>
-                  <p className="text-sm"><span className="font-medium">{t('deleteQso.mode')}</span> {deletingQSO.mode}</p>
+                  <p className="text-sm"><span className="font-medium">{t('deleteQso.mode')}</span> {getDisplayMode(deletingQSO)}</p>
                 </div>
                 <div className="p-3 bg-danger-50 dark:bg-danger-100/20 border border-danger-200 dark:border-danger-400/30 rounded-lg">
                   <p className="text-danger-700 dark:text-danger-400 text-sm">

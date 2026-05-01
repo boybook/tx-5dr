@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useConnection, useOperators, useCurrentOperatorId } from '../../store/radioStore';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
-import { api } from '@tx5dr/core';
+import { api, getDisplayMode } from '@tx5dr/core';
 import type { DigitalRadioEngineEvents, QSORecord } from '@tx5dr/contracts';
 
 const logger = createLogger('VoiceRecentQSOList');
@@ -208,7 +208,7 @@ export const VoiceRecentQSOList: React.FC<VoiceRecentQSOListProps> = ({
                   {formatFreq(qso.frequency)}
                 </span>
                 <span className="w-10 text-center text-xs text-default-400 shrink-0">
-                  {qso.mode}
+                  {getDisplayMode(qso)}
                 </span>
                 {/* Mobile: merged RST */}
                 <span className="md:hidden w-16 text-center font-mono text-xs text-default-400 shrink-0">
