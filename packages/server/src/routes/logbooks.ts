@@ -76,6 +76,22 @@ function getBandFrequencyRange(band?: string): { min: number; max: number } | un
   return band ? BAND_FREQUENCY_RANGES[band] : undefined;
 }
 
+function parseUtcDateOnlyStart(date: string): number {
+  const [year, month, day] = date.split('-').map((part) => Number(part));
+  if (!year || !month || !day) {
+    return new Date(date).getTime();
+  }
+  return Date.UTC(year, month - 1, day, 0, 0, 0, 0);
+}
+
+function parseUtcDateOnlyEnd(date: string): number {
+  const [year, month, day] = date.split('-').map((part) => Number(part));
+  if (!year || !month || !day) {
+    return new Date(date).getTime();
+  }
+  return Date.UTC(year, month - 1, day, 23, 59, 59, 999);
+}
+
 function getImportPayloadFromBody(body: unknown): {
   content: string;
   format: LogBookImportFormat;
@@ -727,22 +743,33 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       // 将LogBookExportOptions转换为LogQueryOptions
       const queryOptions: import('@tx5dr/core').LogQueryOptions = {
         callsign: options.callsign,
+        grid: normalizeGridQuery(options.grid),
+        mode: options.mode,
+        dxccStatus: options.dxccStatus,
+        qslFlow: options.qslFlow,
+        excludeModes: options.excludeModes
+          ? options.excludeModes.split(',').map(m => m.trim()).filter(Boolean)
+          : undefined,
+        qslStatus: options.qslStatus,
         orderBy: 'time',
         orderDirection: 'desc'
       };
 
-      // 处理频段过滤（暂时不支持，因为ExportOptions中没有band字段）
+      // 处理频段过滤（转换为频率范围）
+      if (options.band) {
+        const bandFrequencyRange = getBandFrequencyRange(options.band);
+        if (bandFrequencyRange) {
+          queryOptions.frequencyRange = bandFrequencyRange;
+        }
+      }
       
-      // 处理日期范围过滤
+      // 处理日期范围过滤（UTC 自然日，结束日期包含整天）
       if (options.startDate || options.endDate) {
-        const startTime = options.startDate ? new Date(options.startDate).getTime() : 0;
+        const startTime = options.startDate ? parseUtcDateOnlyStart(options.startDate) : 0;
         let endTime = Date.now();
         
         if (options.endDate) {
-          // 结束日期包含整天，所以设置为当天23:59:59
-          const endDate = new Date(options.endDate);
-          endDate.setHours(23, 59, 59, 999);
-          endTime = endDate.getTime();
+          endTime = parseUtcDateOnlyEnd(options.endDate);
         }
         
         queryOptions.timeRange = {

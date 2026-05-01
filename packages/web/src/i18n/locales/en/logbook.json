@@ -231,15 +231,27 @@
       "successTitle": "LoTW Sync Successful",
       "errorTitle": "LoTW Sync Failed",
       "syncError": "LoTW sync failed"
-    },
-    "sync": "Sync"
+    }
   },
   "export": {
     "button": "Export",
     "ariaLabel": "Export format",
     "adif": "ADIF Format",
     "csv": "CSV Format",
-    "errorTitle": "Export Failed"
+    "modalTitle": "Export {{format}} Log",
+    "scopeLabel": "Export range",
+    "all": "Export all",
+    "allDesc": "Export every QSO record in this logbook.",
+    "range": "Export date range",
+    "rangeDesc": "Export only QSO records within the selected UTC date range.",
+    "dateRangeLabel": "UTC date range",
+    "dateRangeDesc": "The end date includes records through 23:59:59.999 UTC on that day.",
+    "dateRangeRequired": "Select both a start date and an end date.",
+    "includeFilters": "Apply current page filters",
+    "includeFiltersDesc": "When enabled, the current callsign, grid, band, mode, and confirmation filters are applied too. It is off by default to avoid accidental scoped exports.",
+    "confirm": "Confirm export",
+    "errorTitle": "Export Failed",
+    "noFiltersDesc": "No page filters are currently active, so there are no filters to apply to this export."
   },
   "import": {
     "button": "Import",
