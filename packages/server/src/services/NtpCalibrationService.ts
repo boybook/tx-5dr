@@ -1,7 +1,7 @@
 import * as dgram from 'node:dgram';
 import { EventEmitter } from 'eventemitter3';
 import type { ClockSourceSystem } from '@tx5dr/core';
-import type { ClockIndicatorState, ClockStatusDetail, ClockStatusSummary, ClockSyncState } from '@tx5dr/contracts';
+import type { ClockIndicatorState, ClockStatusDetail, ClockStatusSummary, ClockSyncState, ModeDescriptor } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { DEFAULT_NTP_SERVERS } from './ntpServers.js';
 
@@ -17,6 +17,14 @@ const SAMPLE_INTERVAL_MS = 250;
 const SYNC_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const WARN_THRESHOLD_MS = 50;
 const ALERT_THRESHOLD_MS = 100;
+const AUTO_APPLY_GUARD_MS = 800;
+const AUTO_APPLY_RETRY_STEP_MS = 50;
+
+interface NtpCalibrationServiceOptions {
+  autoApplyOffset?: boolean;
+  getCurrentMode?: () => ModeDescriptor | null;
+  isDigitalClockRunning?: () => boolean;
+}
 
 interface NtpCalibrationServiceEvents {
   statusChanged: (status: ClockStatusSummary) => void;
@@ -25,25 +33,37 @@ interface NtpCalibrationServiceEvents {
 /**
  * NTP time calibration service.
  * Periodically measures the offset between system clock and NTP servers,
- * but never auto-applies the measured value to the engine clock.
+ * and can optionally auto-apply successful measurements at safe timing points.
  */
 export class NtpCalibrationService extends EventEmitter<NtpCalibrationServiceEvents> {
   private readonly clockSource: ClockSourceSystem;
+  private readonly getCurrentMode: (() => ModeDescriptor | null) | null;
+  private readonly isDigitalClockRunning: (() => boolean) | null;
   private servers: string[];
   private intervalTimer: ReturnType<typeof setInterval> | null = null;
+  private autoApplyTimer: ReturnType<typeof setTimeout> | null = null;
   private measurementPromise: Promise<void> | null = null;
+  private pendingAutoApplyOffsetMs: number | null = null;
   private measuredOffsetMs = 0;
   private appliedOffsetMs = 0;
   private lastSyncTime: number | null = null;
   private syncState: ClockSyncState = 'never';
   private serverUsed: string | null = null;
   private errorMessage: string | null = null;
+  private autoApplyOffset = false;
 
-  constructor(clockSource: ClockSourceSystem, servers: string[] = [...DEFAULT_NTP_SERVERS]) {
+  constructor(
+    clockSource: ClockSourceSystem,
+    servers: string[] = [...DEFAULT_NTP_SERVERS],
+    options: NtpCalibrationServiceOptions = {},
+  ) {
     super();
     this.clockSource = clockSource;
     this.servers = [...servers];
     this.appliedOffsetMs = this.clockSource.getCalibrationOffsetMs();
+    this.autoApplyOffset = options.autoApplyOffset ?? false;
+    this.getCurrentMode = options.getCurrentMode ?? null;
+    this.isDigitalClockRunning = options.isDigitalClockRunning ?? null;
   }
 
   async start(): Promise<void> {
@@ -62,6 +82,7 @@ export class NtpCalibrationService extends EventEmitter<NtpCalibrationServiceEve
       clearInterval(this.intervalTimer);
       this.intervalTimer = null;
     }
+    this.clearPendingAutoApply();
     logger.info('NTP calibration service stopped');
   }
 
@@ -74,6 +95,7 @@ export class NtpCalibrationService extends EventEmitter<NtpCalibrationServiceEve
       serverUsed: this.serverUsed,
       errorMessage: this.errorMessage,
       indicatorState: this.getIndicatorState(),
+      autoApplyOffset: this.autoApplyOffset,
     };
   }
 
@@ -88,6 +110,7 @@ export class NtpCalibrationService extends EventEmitter<NtpCalibrationServiceEve
    * Set a manual offset value and apply it to the clock source.
    */
   setAppliedOffset(offsetMs: number): void {
+    this.clearPendingAutoApply();
     this.appliedOffsetMs = offsetMs;
     this.clockSource.setCalibrationOffsetMs(offsetMs);
     logger.info(`Manual clock offset applied: ${offsetMs.toFixed(1)}ms`);
@@ -104,6 +127,27 @@ export class NtpCalibrationService extends EventEmitter<NtpCalibrationServiceEve
   setServers(servers: string[]): void {
     this.servers = [...servers];
     logger.info(`Updated NTP server list: ${this.servers.join(', ')}`);
+  }
+
+  setAutoApplyOffset(enabled: boolean): void {
+    this.autoApplyOffset = enabled;
+    if (!enabled) {
+      this.clearPendingAutoApply();
+      logger.info('NTP auto-apply disabled');
+      this.emitStatusChanged();
+      return;
+    }
+
+    logger.info('NTP auto-apply enabled');
+    if (this.syncState === 'synced') {
+      this.scheduleAutoApply(this.measuredOffsetMs);
+      if (this.pendingAutoApplyOffsetMs !== null) {
+        this.emitStatusChanged();
+      }
+      return;
+    }
+
+    this.emitStatusChanged();
   }
 
   private getIndicatorState(): ClockIndicatorState {
@@ -159,7 +203,14 @@ export class NtpCalibrationService extends EventEmitter<NtpCalibrationServiceEve
           logger.info(`NTP measurement completed: offset=${this.measuredOffsetMs.toFixed(1)}ms`, { server });
         }
 
-        this.emitStatusChanged();
+        if (this.autoApplyOffset) {
+          this.scheduleAutoApply(this.measuredOffsetMs);
+          if (this.pendingAutoApplyOffsetMs !== null) {
+            this.emitStatusChanged();
+          }
+        } else {
+          this.emitStatusChanged();
+        }
         return;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
@@ -172,6 +223,81 @@ export class NtpCalibrationService extends EventEmitter<NtpCalibrationServiceEve
     this.syncState = this.lastSyncTime ? 'stale' : 'failed';
     this.errorMessage = errorMsg;
     this.emitStatusChanged();
+  }
+
+  private scheduleAutoApply(offsetMs: number): void {
+    if (this.autoApplyTimer) {
+      clearTimeout(this.autoApplyTimer);
+      this.autoApplyTimer = null;
+    }
+    this.pendingAutoApplyOffsetMs = offsetMs;
+    this.tryApplyPendingOffset();
+  }
+
+  private schedulePendingAutoApply(delayMs: number): void {
+    if (this.autoApplyTimer) {
+      clearTimeout(this.autoApplyTimer);
+      this.autoApplyTimer = null;
+    }
+
+    this.autoApplyTimer = setTimeout(() => {
+      this.autoApplyTimer = null;
+      this.tryApplyPendingOffset();
+    }, delayMs);
+  }
+
+  private tryApplyPendingOffset(): void {
+    if (!this.autoApplyOffset || this.pendingAutoApplyOffsetMs === null) {
+      this.clearPendingAutoApply();
+      return;
+    }
+
+    const offsetMs = this.pendingAutoApplyOffsetMs;
+    const safeDelayMs = this.getSafeAutoApplyDelayMs(offsetMs);
+    if (safeDelayMs > 0) {
+      this.schedulePendingAutoApply(safeDelayMs);
+      return;
+    }
+
+    this.pendingAutoApplyOffsetMs = null;
+    this.appliedOffsetMs = offsetMs;
+    this.clockSource.setCalibrationOffsetMs(offsetMs);
+    logger.info(`NTP offset auto-applied: ${offsetMs.toFixed(1)}ms`);
+    this.emitStatusChanged();
+  }
+
+  private clearPendingAutoApply(): void {
+    this.pendingAutoApplyOffsetMs = null;
+    if (this.autoApplyTimer) {
+      clearTimeout(this.autoApplyTimer);
+      this.autoApplyTimer = null;
+    }
+  }
+
+  private getSafeAutoApplyDelayMs(targetOffsetMs: number): number {
+    const mode = this.getCurrentMode?.() ?? null;
+    if (!mode || mode.name === 'VOICE' || mode.slotMs <= 0 || this.isDigitalClockRunning?.() === false) {
+      return 0;
+    }
+
+    const events = getProtectedEventPhases(mode);
+    if (events.length === 0) {
+      return 0;
+    }
+
+    const now = this.clockSource.now();
+    const offsetDeltaMs = targetOffsetMs - this.appliedOffsetMs;
+    const maxSearchMs = mode.slotMs + AUTO_APPLY_GUARD_MS * 2;
+    for (let delayMs = 0; delayMs <= maxSearchMs; delayMs += AUTO_APPLY_RETRY_STEP_MS) {
+      if (
+        isSafeAutoApplyTime(now + delayMs, mode.slotMs, events)
+        && isSafeAutoApplyTime(now + delayMs + offsetDeltaMs, mode.slotMs, events)
+      ) {
+        return delayMs;
+      }
+    }
+
+    return AUTO_APPLY_GUARD_MS;
   }
 
   private queryNtpServer(server: string): Promise<number> {
@@ -247,4 +373,37 @@ function median(values: number[]): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getProtectedEventPhases(mode: ModeDescriptor): number[] {
+  const phases = new Set<number>();
+  const slotMs = mode.slotMs;
+  phases.add(0);
+
+  const transmitTiming = mode.transmitTiming || 0;
+  const encodeAdvance = mode.encodeAdvance || 400;
+  phases.add(normalizePhase(transmitTiming, slotMs));
+  phases.add(normalizePhase(transmitTiming - encodeAdvance, slotMs));
+
+  for (const windowOffset of mode.windowTiming ?? []) {
+    phases.add(normalizePhase(slotMs + windowOffset, slotMs));
+  }
+
+  return [...phases];
+}
+
+function normalizePhase(valueMs: number, slotMs: number): number {
+  return ((valueMs % slotMs) + slotMs) % slotMs;
+}
+
+function isSafeAutoApplyTime(timeMs: number, slotMs: number, protectedPhases: number[]): boolean {
+  const phase = normalizePhase(timeMs, slotMs);
+  return protectedPhases.every((protectedPhase) => (
+    circularDistanceMs(phase, protectedPhase, slotMs) > AUTO_APPLY_GUARD_MS
+  ));
+}
+
+function circularDistanceMs(a: number, b: number, periodMs: number): number {
+  const direct = Math.abs(a - b);
+  return Math.min(direct, periodMs - direct);
 }

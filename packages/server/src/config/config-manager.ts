@@ -109,6 +109,7 @@ export interface AppConfig {
   /** Persisted NTP server order. When absent, built-in defaults are used. */
   ntp?: {
     servers?: string[];
+    autoApplyOffset?: boolean;
   };
 }
 
@@ -1008,7 +1009,22 @@ export class ConfigManager {
 
   async updateNtpServers(servers: string[]): Promise<void> {
     const parsed = UpdateNtpServerListRequestSchema.parse({ servers });
-    this.config.ntp = { servers: parsed.servers };
+    this.config.ntp = {
+      ...(this.config.ntp ?? {}),
+      servers: parsed.servers,
+    };
+    await this.saveConfig();
+  }
+
+  getNtpAutoApplyOffset(): boolean {
+    return this.config.ntp?.autoApplyOffset ?? false;
+  }
+
+  async updateNtpAutoApplyOffset(enabled: boolean): Promise<void> {
+    this.config.ntp = {
+      ...(this.config.ntp ?? {}),
+      autoApplyOffset: enabled,
+    };
     await this.saveConfig();
   }
 

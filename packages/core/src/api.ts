@@ -65,6 +65,7 @@ import type {
   NetworkInfo,
   ClockStatusDetail,
   NtpServerListSettings,
+  SetClockAutoApplyRequest,
   SetClockOffsetRequest,
   UpdateNtpServerListRequest,
   PresetFrequency,
@@ -1755,6 +1756,17 @@ export const api = {
     );
   },
 
+  async setClockAutoApply(data: SetClockAutoApplyRequest, apiBase?: string): Promise<ClockStatusDetail> {
+    return apiRequest<ClockStatusDetail>(
+      '/system/clock/auto-apply',
+      {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      },
+      apiBase,
+    );
+  },
+
   async measureClockOffset(apiBase?: string): Promise<ClockStatusDetail> {
     return apiRequest<ClockStatusDetail>(
       '/system/clock/measure',
@@ -2164,4 +2176,5 @@ export const {
   ,reloadPlugins
   ,getNtpServerListSettings
   ,updateNtpServerListSettings
+  ,setClockAutoApply
 } = api;

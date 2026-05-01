@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Input, Popover, PopoverContent, PopoverTrigger, Tooltip } from '@heroui/react';
+import { Button, Input, Popover, PopoverContent, PopoverTrigger, Switch, Tooltip } from '@heroui/react';
 import type { ClockStatusDetail, ClockStatusSummary } from '@tx5dr/contracts';
 import { UserRole } from '@tx5dr/contracts';
 import { ApiError, api } from '@tx5dr/core';
@@ -87,6 +87,7 @@ export const ClockDisplay: React.FC = () => {
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isMeasuring, setIsMeasuring] = useState(false);
+  const [isUpdatingAutoApply, setIsUpdatingAutoApply] = useState(false);
   const [feedback, setFeedback] = useState<FeedbackState>(null);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout>>();
 
@@ -185,6 +186,28 @@ export const ClockDisplay: React.FC = () => {
     await submitOffset(detail.measuredOffsetMs);
   }, [detail, submitOffset]);
 
+  const handleAutoApplyChange = useCallback(async (enabled: boolean) => {
+    const previousDetail = detail;
+    if (previousDetail) {
+      setDetail({ ...previousDetail, autoApplyOffset: enabled });
+    }
+
+    setIsUpdatingAutoApply(true);
+    try {
+      const nextDetail = await api.setClockAutoApply({ enabled }, getApiBaseUrl());
+      setDetail(nextDetail);
+      setManualOffset(nextDetail.appliedOffsetMs.toString());
+      showFeedback('success', enabled ? t('clock.autoApplyEnabled') : t('clock.autoApplyDisabled'));
+    } catch (error) {
+      if (previousDetail) {
+        setDetail(previousDetail);
+      }
+      showFeedback('error', getFeedbackMessage(error, t('clock.autoApplySaveFailed')));
+    } finally {
+      setIsUpdatingAutoApply(false);
+    }
+  }, [detail, showFeedback, t]);
+
   const tooltipContent = useMemo(() => getIndicatorTooltip(t, summary), [summary, t]);
   const syncDotColor = useMemo(() => getIndicatorDotColor(summary), [summary]);
 
@@ -213,6 +236,7 @@ export const ClockDisplay: React.FC = () => {
   const lastSyncLabel = detail?.lastSyncTime
     ? new Date(detail.lastSyncTime).toLocaleString()
     : null;
+  const autoApplyEnabled = detail?.autoApplyOffset ?? false;
 
   return (
     <Popover isOpen={isOpen} onOpenChange={setIsOpen} placement="bottom-end">
@@ -256,6 +280,17 @@ export const ClockDisplay: React.FC = () => {
             {detail?.errorMessage && (
               <div className="text-danger-500">{t('clock.error', { message: detail.errorMessage })}</div>
             )}
+          </div>
+
+          <div className="rounded-lg border border-divider px-3 py-2">
+            <Switch
+              size="sm"
+              isSelected={autoApplyEnabled}
+              onValueChange={handleAutoApplyChange}
+              isDisabled={isLoadingDetail || isSaving || isMeasuring || isUpdatingAutoApply || !connectionState.isConnected}
+            >
+              <span className="text-xs font-medium">{t('clock.autoApplyNtp')}</span>
+            </Switch>
           </div>
 
           <div className="flex gap-1.5">
