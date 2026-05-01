@@ -25,7 +25,7 @@ const ICOM_WLAN_TX_CHUNK_SIZE = 1200;
 const ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS = 150;
 const ICOM_WLAN_TX_MAX_WAIT_SLICE_MS = 20;
 
-export type NativeAudioInputSourceKind = 'audio-device' | 'icom-wlan';
+export type NativeAudioInputSourceKind = 'audio-device' | 'icom-wlan' | 'openwebrx';
 
 export interface NativeAudioInputFrame {
   samples: Float32Array;
@@ -121,6 +121,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   // OpenWebRX 音频适配器（外部注入）
   private openwebrxAudioAdapter: OpenWebRXAudioAdapter | null = null;
   private usingOpenWebRXInput = false;
+  private openwebrxAudioDataHandler: ((samples: Float32Array) => void) | null = null;
+  private openwebrxErrorHandler: ((error: Error) => void) | null = null;
 
   // 播放状态跟踪（用于重新混音兜底方案）
   private playing: boolean = false;             // 是否正在播放
@@ -166,6 +168,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    * Set OpenWebRX audio adapter (injected by EngineLifecycle)
    */
   setOpenWebRXAudioAdapter(adapter: OpenWebRXAudioAdapter | null): void {
+    if (this.openwebrxAudioAdapter && this.openwebrxAudioAdapter !== adapter) {
+      this.detachOpenWebRXInputHandlers(this.openwebrxAudioAdapter);
+    }
     this.openwebrxAudioAdapter = adapter;
     logger.info(`OpenWebRX audio adapter ${adapter ? 'set' : 'cleared'}`);
   }
@@ -266,19 +271,28 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
 
         // Use OpenWebRX audio adapter
+        const openwebrxAdapter = this.openwebrxAudioAdapter;
         this.usingOpenWebRXInput = true;
-        this.openwebrxAudioAdapter.startReceiving();
+        openwebrxAdapter.startReceiving();
 
         // Subscribe to audio data
-        this.openwebrxAudioAdapter.on('audioData', (samples: Float32Array) => {
+        this.openwebrxAudioDataHandler = (samples: Float32Array) => {
+          this.emitNativeAudioInputData(
+            samples,
+            openwebrxAdapter.getSampleRate(),
+            'openwebrx',
+          );
           this.audioProvider.writeAudio(samples);
           this.emit('audioData', samples);
-        });
+        };
 
-        this.openwebrxAudioAdapter.on('error', (error: Error) => {
+        this.openwebrxErrorHandler = (error: Error) => {
           logger.error('OpenWebRX audio error', error);
           this.emit('error', error);
-        });
+        };
+
+        openwebrxAdapter.on('audioData', this.openwebrxAudioDataHandler);
+        openwebrxAdapter.on('error', this.openwebrxErrorHandler);
 
         this.deviceId = resolvedDeviceId || 'openwebrx-unknown';
         this.isStreaming = true;
@@ -352,6 +366,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.icomWlanAudioAdapter.removeAllListeners('error');
         this.usingIcomWlanInput = false;
         logger.info('ICOM WLAN audio input stopped');
+      }
+
+      // 停止 OpenWebRX 音频输入
+      if (this.usingOpenWebRXInput && this.openwebrxAudioAdapter) {
+        this.detachOpenWebRXInputHandlers(this.openwebrxAudioAdapter);
+        this.openwebrxAudioAdapter.stopReceiving();
+        this.usingOpenWebRXInput = false;
+        logger.info('OpenWebRX audio input stopped');
       }
 
       // 停止传统声卡输入
@@ -984,6 +1006,18 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       sequence: this.nativeAudioInputSequence++,
       sourceKind,
     });
+  }
+
+  private detachOpenWebRXInputHandlers(adapter: OpenWebRXAudioAdapter): void {
+    if (this.openwebrxAudioDataHandler) {
+      adapter.off('audioData', this.openwebrxAudioDataHandler);
+      this.openwebrxAudioDataHandler = null;
+    }
+
+    if (this.openwebrxErrorHandler) {
+      adapter.off('error', this.openwebrxErrorHandler);
+      this.openwebrxErrorHandler = null;
+    }
   }
 
   private openOutputStream(outputDeviceId: number): void {

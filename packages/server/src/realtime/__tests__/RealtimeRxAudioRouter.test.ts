@@ -114,6 +114,36 @@ describe('RealtimeRxAudioRouter', () => {
     });
   });
 
+  it('routes OpenWebRX main input frames through the native radio source', () => {
+    const router = createRouter();
+    const source = router.resolveSource('radio');
+    const frames: Array<{ sampleRate: number; nativeSourceKind?: string; samples: Float32Array }> = [];
+
+    source?.on('audioFrame', frame => frames.push(frame));
+    audioStreamManager.emit('nativeAudioInputData', {
+      samples: new Float32Array([0.2, 0.3, 0.4]),
+      sampleRate: 12000,
+      channels: 1,
+      timestamp: 456,
+      sequence: 8,
+      sourceKind: 'openwebrx',
+    });
+
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      sampleRate: 12000,
+      nativeSourceKind: 'openwebrx',
+      sourceKind: 'native-radio',
+    });
+    expect(frames[0]?.samples).toHaveLength(3);
+    expect(router.getLatestStats('radio')).toMatchObject({
+      sourcePath: 'native-radio',
+      isActive: true,
+      sampleRate: 12000,
+      latestSequence: 0,
+    });
+  });
+
   it('routes voice keyer TX monitor chunks through the native radio source', () => {
     const router = createRouter();
     const source = router.resolveSource('radio');
