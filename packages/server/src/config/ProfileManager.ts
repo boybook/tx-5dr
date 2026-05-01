@@ -70,16 +70,17 @@ export class ProfileManager {
   async updateProfile(id: string, updates: UpdateProfileRequest): Promise<RadioProfile> {
     const configManager = ConfigManager.getInstance();
     const isActiveProfile = configManager.getActiveProfileId() === id;
+    const existingProfile = configManager.getProfile(id);
+    const audioBefore = existingProfile?.audio ?? null;
 
     // 如果更新了电台类型为 icom-wlan，标记锁定但不强制覆盖用户的音频设备选择
     if (updates.radio?.type === 'icom-wlan') {
       updates.audioLockedToRadio = true;
       // 仅在未提供音频配置时默认设置 ICOM WLAN 虚拟设备
       if (!updates.audio) {
-        const existing = configManager.getProfile(id);
-        if (!existing?.audio?.inputDeviceName && !existing?.audio?.outputDeviceName) {
+        if (!existingProfile?.audio?.inputDeviceName && !existingProfile?.audio?.outputDeviceName) {
           updates.audio = {
-            ...(existing?.audio || { sampleRate: 48000, bufferSize: 768 }),
+            ...(existingProfile?.audio || { sampleRate: 48000, bufferSize: 768 }),
             inputDeviceName: 'ICOM WLAN',
             outputDeviceName: 'ICOM WLAN',
           };
@@ -87,12 +88,29 @@ export class ProfileManager {
       }
     }
 
+    const activeAudioChanged = isActiveProfile && this.hasAudioChanged(audioBefore, updates.audio);
+    const engine = isActiveProfile ? DigitalRadioEngine.getInstance() : null;
+    const wasRunning = Boolean(activeAudioChanged && engine?.getStatus().isRunning);
+
+    if (wasRunning) {
+      logger.info('Active Profile audio changed, stopping engine to apply new audio config');
+      await engine?.stop();
+    }
+
     const profile = await configManager.updateProfile(id, updates);
     logger.info(`Profile updated: "${profile.name}" (id: ${id})`);
 
-    if (isActiveProfile && updates.radio) {
-      const engine = DigitalRadioEngine.getInstance();
+    if (activeAudioChanged) {
+      engine?.getAudioStreamManager().reloadAudioConfig();
+    }
+
+    if (isActiveProfile && updates.radio && engine) {
       await applyHamlibSpectrumRuntimeConfig(engine.getRadioManager().getActiveConnection(), profile.radio);
+    }
+
+    if (wasRunning) {
+      logger.info('Restarting engine after active Profile audio update');
+      await engine?.start();
     }
 
     // 广播列表更新事件
@@ -157,6 +175,7 @@ export class ProfileManager {
 
     // 阶段2：切换配置（原子操作）
     await configManager.setActiveProfileId(id);
+    engine.getAudioStreamManager().reloadAudioConfig();
     logger.info(`Profile activated: "${profile.name}" (id: ${id})`);
 
     // 阶段3：广播事件通知前端
@@ -230,5 +249,18 @@ export class ProfileManager {
     } catch {
       // 引擎可能还未初始化，忽略
     }
+  }
+
+  private hasAudioChanged(before: AudioDeviceSettings | null, after?: AudioDeviceSettings): boolean {
+    if (!after) {
+      return false;
+    }
+
+    return (
+      (before?.inputDeviceName ?? undefined) !== (after.inputDeviceName ?? undefined) ||
+      (before?.outputDeviceName ?? undefined) !== (after.outputDeviceName ?? undefined) ||
+      (before?.sampleRate ?? undefined) !== (after.sampleRate ?? undefined) ||
+      (before?.bufferSize ?? undefined) !== (after.bufferSize ?? undefined)
+    );
   }
 }

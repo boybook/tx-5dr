@@ -11,7 +11,13 @@ const { mockState, mockConfigManager, MockRtAudio } = vi.hoisted(() => {
       isDefaultInput?: boolean;
       isDefaultOutput?: boolean;
     }>,
-    openCalls: [] as Array<{ direction: 'input' | 'output'; deviceId: number; streamName: string }>,
+    openCalls: [] as Array<{
+      direction: 'input' | 'output';
+      deviceId: number;
+      streamName: string;
+      sampleRate: number;
+      bufferSize: number;
+    }>,
   };
 
   class HoistedMockRtAudio {
@@ -33,8 +39,8 @@ const { mockState, mockConfigManager, MockRtAudio } = vi.hoisted(() => {
       outputParams: { deviceId: number } | null,
       inputParams: { deviceId: number } | null,
       _format: number,
-      _sampleRate: number,
-      _bufferSize: number,
+      sampleRate: number,
+      bufferSize: number,
       streamName: string,
     ) {
       const direction = outputParams ? 'output' : 'input';
@@ -52,7 +58,7 @@ const { mockState, mockConfigManager, MockRtAudio } = vi.hoisted(() => {
         throw new Error(`RtAudio Error: Code: 7, Message: 'RtApi::openStream: ${direction} device ID is invalid.'`);
       }
 
-      state.openCalls.push({ direction, deviceId: params.deviceId, streamName });
+      state.openCalls.push({ direction, deviceId: params.deviceId, streamName, sampleRate, bufferSize });
     }
 
     start() {}
@@ -230,11 +236,11 @@ describe('audio hotplug recovery', () => {
     const streamManager = new AudioStreamManager();
     await streamManager.startStream('input-3');
 
-    expect(mockState.openCalls).toContainEqual({
+    expect(mockState.openCalls).toContainEqual(expect.objectContaining({
       direction: 'input',
       deviceId: 7,
       streamName: 'TX5DR-Input',
-    });
+    }));
     expect(streamManager.getStatus().inputDeviceId).toBe('input-7');
   });
 
@@ -297,11 +303,11 @@ describe('audio hotplug recovery', () => {
 
     await streamManager.startStream();
 
-    expect(mockState.openCalls).toContainEqual({
+    expect(mockState.openCalls).toContainEqual(expect.objectContaining({
       direction: 'input',
       deviceId: 7,
       streamName: 'TX5DR-Input',
-    });
+    }));
   });
 
   it('uses default devices when audio settings leave device names empty', async () => {
@@ -315,16 +321,44 @@ describe('audio hotplug recovery', () => {
     await streamManager.startStream();
     await streamManager.startOutput();
 
-    expect(mockState.openCalls).toContainEqual({
+    expect(mockState.openCalls).toContainEqual(expect.objectContaining({
       direction: 'input',
       deviceId: 5,
       streamName: 'TX5DR-Input',
-    });
-    expect(mockState.openCalls).toContainEqual({
+    }));
+    expect(mockState.openCalls).toContainEqual(expect.objectContaining({
       direction: 'output',
       deviceId: 6,
       streamName: 'TX5DR-Output',
-    });
+    }));
+  });
+
+  it('uses reloaded sample rate and buffer size when opening RtAudio streams', async () => {
+    mockState.devices = [
+      { id: 7, name: 'IC-705', inputChannels: 1, outputChannels: 1, preferredSampleRate: 48000 },
+    ];
+
+    const streamManager = new AudioStreamManager();
+    setAudioConfig({ sampleRate: 16000, bufferSize: 256 });
+    streamManager.reloadAudioConfig();
+
+    await streamManager.startStream();
+    await streamManager.startOutput();
+
+    expect(mockState.openCalls).toContainEqual(expect.objectContaining({
+      direction: 'input',
+      deviceId: 7,
+      streamName: 'TX5DR-Input',
+      sampleRate: 16000,
+      bufferSize: 256,
+    }));
+    expect(mockState.openCalls).toContainEqual(expect.objectContaining({
+      direction: 'output',
+      deviceId: 7,
+      streamName: 'TX5DR-Output',
+      sampleRate: 16000,
+      bufferSize: 256,
+    }));
   });
 
   it('rebinds stale output device IDs before opening the stream', async () => {
@@ -335,11 +369,11 @@ describe('audio hotplug recovery', () => {
     const streamManager = new AudioStreamManager();
     await streamManager.startOutput('output-3');
 
-    expect(mockState.openCalls).toContainEqual({
+    expect(mockState.openCalls).toContainEqual(expect.objectContaining({
       direction: 'output',
       deviceId: 9,
       streamName: 'TX5DR-Output',
-    });
+    }));
     expect(streamManager.getStatus().outputDeviceId).toBe('output-9');
   });
 
