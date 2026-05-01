@@ -15,8 +15,16 @@ import { faRotateRight } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
 import type {
   AudioDevice,
-  AudioDeviceSettings as AudioDeviceSettingsType
+  AudioDeviceResolution,
+  AudioDeviceSettings as AudioDeviceSettingsType,
+  HamlibConfig,
 } from '@tx5dr/contracts';
+import {
+  formatChannelText,
+  formatDeviceText,
+  getResolutionDescription,
+  getResolutionTone,
+} from './audioDeviceDisplay';
 
 interface AudioDeviceSettingsProps {
   onUnsavedChanges?: (hasChanges: boolean) => void;
@@ -24,6 +32,8 @@ interface AudioDeviceSettingsProps {
   initialConfig?: AudioDeviceSettingsType;
   /** 受控模式：配置变更回调 */
   onChange?: (config: AudioDeviceSettingsType) => void;
+  /** 受控模式下用于解析 ICOM WLAN 等虚拟音频设备 */
+  radioType?: HamlibConfig['type'];
 }
 
 export interface AudioDeviceSettingsRef {
@@ -31,7 +41,7 @@ export interface AudioDeviceSettingsRef {
   save: () => Promise<void>;
 }
 
-export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDeviceSettingsProps>(({ onUnsavedChanges, initialConfig, onChange }, ref) => {
+export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDeviceSettingsProps>(({ onUnsavedChanges, initialConfig, onChange, radioType }, ref) => {
   const { t } = useTranslation('settings');
   const isControlled = initialConfig !== undefined;
   // 状态管理
@@ -42,7 +52,11 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   const [selectedOutputDeviceName, setSelectedOutputDeviceName] = useState<string>(initialConfig?.outputDeviceName || '');
   const [sampleRate, setSampleRate] = useState<number>(initialConfig?.sampleRate || 48000);
   const [bufferSize, setBufferSize] = useState<number>(initialConfig?.bufferSize || 1024);
-  
+  const [deviceResolution, setDeviceResolution] = useState<{
+    input: AudioDeviceResolution;
+    output: AudioDeviceResolution;
+  } | null>(null);
+
   // 加载状态
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -87,6 +101,32 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     loadAudioData();
   }, []);
 
+  useEffect(() => {
+    if (loading) return;
+    let active = true;
+
+    const audio: AudioDeviceSettingsType = {
+      inputDeviceName: selectedInputDeviceName || undefined,
+      outputDeviceName: selectedOutputDeviceName || undefined,
+      sampleRate,
+      bufferSize,
+    };
+
+    api.resolveAudioSettings({ audio, radioType })
+      .then((response) => {
+        if (active) {
+          setDeviceResolution(response.deviceResolution);
+        }
+      })
+      .catch((err) => {
+        logger.debug('Failed to resolve audio device status:', err);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedInputDeviceName, selectedOutputDeviceName, sampleRate, bufferSize, radioType, loading]);
+
   const loadAudioData = async () => {
     try {
       setLoading(true);
@@ -94,9 +134,13 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
 
       if (isControlled) {
         // 受控模式：只加载设备列表，不加载设置
-        const devicesResponse = await api.getAudioDevices();
+        const [devicesResponse, resolutionResponse] = await Promise.all([
+          api.getAudioDevices(),
+          api.resolveAudioSettings({ audio: initialConfig ?? {}, radioType }),
+        ]);
         setInputDevices(devicesResponse.inputDevices);
         setOutputDevices(devicesResponse.outputDevices);
+        setDeviceResolution(resolutionResponse.deviceResolution);
       } else {
         // 并行获取设备列表和当前设置
         const [devicesResponse, settingsResponse] = await Promise.all([
@@ -115,6 +159,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
         setSelectedOutputDeviceName(settings.outputDeviceName || '');
         setSampleRate(settings.sampleRate || 48000);
         setBufferSize(settings.bufferSize || 1024);
+        setDeviceResolution(settingsResponse.deviceResolution);
       }
 
     } catch (err) {
@@ -132,12 +177,22 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
 
       // 重新获取设备列表
       const devicesResponse = await api.getAudioDevices();
-      
+
       setInputDevices(devicesResponse.inputDevices);
       setOutputDevices(devicesResponse.outputDevices);
-      
+      const resolutionResponse = await api.resolveAudioSettings({
+        audio: {
+          inputDeviceName: selectedInputDeviceName || undefined,
+          outputDeviceName: selectedOutputDeviceName || undefined,
+          sampleRate,
+          bufferSize,
+        },
+        radioType,
+      });
+      setDeviceResolution(resolutionResponse.deviceResolution);
+
       logger.debug('Audio device list refreshed');
-      
+
     } catch (err) {
       setError(err instanceof Error ? err.message : t('audio.refreshFailed'));
       logger.error('Failed to refresh audio devices:', err);
@@ -150,7 +205,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     if (e) {
       e.preventDefault();
     }
-    
+
     try {
       setSaving(true);
       setError(null);
@@ -164,11 +219,12 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       };
 
       const response = await api.updateAudioSettings(newSettings);
-      
+
       if (response.success) {
         setCurrentSettings(response.currentSettings);
+        setDeviceResolution(response.deviceResolution);
         setSuccessMessage(response.message || t('audio.updateSuccess'));
-        
+
         // 不自动关闭弹窗，让父组件控制
         // setTimeout(() => {
         //   onClose?.();
@@ -183,6 +239,54 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     } finally {
       setSaving(false);
     }
+  };
+
+  const renderResolutionItem = (
+    selectedName: string,
+    resolution: AudioDeviceResolution | null | undefined,
+    devices: AudioDevice[],
+  ) => {
+    if (!selectedName || devices.some((device) => device.name === selectedName)) {
+      return undefined;
+    }
+
+    const device = resolution?.configuredDevice ?? resolution?.effectiveDevice;
+    const tone = getResolutionTone(resolution);
+    const description = getResolutionDescription(t, resolution);
+    const labelClass = tone === 'warning'
+      ? 'text-warning'
+      : tone === 'virtual'
+        ? 'text-primary'
+        : 'text-default-700';
+    const detailClass = tone === 'warning'
+      ? 'text-warning-400'
+      : tone === 'virtual'
+        ? 'text-primary-400'
+        : 'text-default-400';
+    const statusText = t('audio.deviceUnavailableShort');
+
+    return (
+      <SelectItem
+        key={selectedName}
+        textValue={resolution?.status === 'virtual-selected'
+          ? selectedName
+          : `${selectedName} (${statusText})`}
+        className={tone === 'warning' ? 'text-warning' : undefined}
+      >
+        <div className="flex flex-col">
+          <span className={labelClass}>
+            {selectedName}
+            {tone === 'warning' ? ` (${statusText})` : ''}
+          </span>
+          {device && (
+            <span className="text-xs text-default-400">
+              {formatChannelText(t, device.channels)}, {device.sampleRate}Hz
+            </span>
+          )}
+          {description && <span className={`text-xs ${detailClass}`}>{description}</span>}
+        </div>
+      </SelectItem>
+    );
   };
 
   if (loading) {
@@ -228,7 +332,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
             {refreshingDevices ? t('audio.refreshing') : t('audio.refreshDevices')}
           </Button>
         </div>
-        
+
         <Select
           label={t('audio.inputDevice')}
           placeholder={t('audio.inputDevicePlaceholder')}
@@ -241,34 +345,23 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
           aria-label={t('audio.selectInput')}
         >
           {/* 当前选中的设备如果不在可用设备列表中，则显示为失效状态 */}
-          {(selectedInputDeviceName && !inputDevices.find(d => d.name === selectedInputDeviceName)
-            ? <SelectItem
-                key={selectedInputDeviceName}
-                textValue={`${selectedInputDeviceName} (${t('audio.deviceUnavailableShort')})`}
-                className="text-warning"
-              >
-                <div className="flex flex-col">
-                  <span className="text-warning">{selectedInputDeviceName} ({t('audio.deviceUnavailableShort')})</span>
-                  <span className="text-xs text-warning-400">{t('audio.deviceUnavailable')}</span>
-                </div>
-              </SelectItem>
-            : undefined) as unknown as React.ReactElement}
+          {renderResolutionItem(selectedInputDeviceName, deviceResolution?.input, inputDevices) as unknown as React.ReactElement}
           {/* 可用设备列表 */}
           {(inputDevices.map((device) => (
             <SelectItem
               key={device.name}
-              textValue={`${device.name} ${device.isDefault ? `(${t('audio.default')})` : ''}`}
+              textValue={formatDeviceText(t, device)}
             >
               <div className="flex flex-col">
                 <span className="flex items-center gap-2">
-                  {device.name} {device.isDefault ? `(${t('audio.default')})` : ''}
+                  {formatDeviceText(t, device)}
                   {device.name.startsWith('[SDR]') && (
                     <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300">
                       WebSDR
                     </span>
                   )}
                 </span>
-                <span className="text-xs text-default-400">{device.channels}{t('audio.channels')}, {device.sampleRate}Hz</span>
+                <span className="text-xs text-default-400">{formatChannelText(t, device.channels)}, {device.sampleRate}Hz</span>
               </div>
             </SelectItem>
           )) as unknown as React.ReactElement)}
@@ -286,27 +379,16 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
           aria-label={t('audio.selectOutput')}
         >
           {/* 当前选中的设备如果不在可用设备列表中，则显示为失效状态 */}
-          {(selectedOutputDeviceName && !outputDevices.find(d => d.name === selectedOutputDeviceName)
-            ? <SelectItem
-                key={selectedOutputDeviceName}
-                textValue={`${selectedOutputDeviceName} (${t('audio.deviceUnavailableShort')})`}
-                className="text-warning"
-              >
-                <div className="flex flex-col">
-                  <span className="text-warning">{selectedOutputDeviceName} ({t('audio.deviceUnavailableShort')})</span>
-                  <span className="text-xs text-warning-400">{t('audio.deviceUnavailable')}</span>
-                </div>
-              </SelectItem>
-            : undefined) as unknown as React.ReactElement}
+          {renderResolutionItem(selectedOutputDeviceName, deviceResolution?.output, outputDevices) as unknown as React.ReactElement}
           {/* 可用设备列表 */}
           {(outputDevices.map((device) => (
             <SelectItem
               key={device.name}
-              textValue={`${device.name} ${device.isDefault ? `(${t('audio.default')})` : ''}`}
+              textValue={formatDeviceText(t, device)}
             >
               <div className="flex flex-col">
-                <span>{device.name} {device.isDefault ? `(${t('audio.default')})` : ''}</span>
-                <span className="text-xs text-default-400">{device.channels}{t('audio.channels')}, {device.sampleRate}Hz</span>
+                <span>{formatDeviceText(t, device)}</span>
+                <span className="text-xs text-default-400">{formatChannelText(t, device.channels)}, {device.sampleRate}Hz</span>
               </div>
             </SelectItem>
           )) as unknown as React.ReactElement)}
@@ -362,4 +444,4 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       </div>
     </div>
   );
-}); 
+});

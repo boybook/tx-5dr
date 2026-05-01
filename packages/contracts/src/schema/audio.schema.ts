@@ -10,6 +10,26 @@ export const AudioDeviceSchema = z.object({
   type: z.enum(['input', 'output']),
 });
 
+export const AudioDeviceResolutionStatusSchema = z.enum([
+  'selected',
+  'default',
+  'virtual-selected',
+  'missing',
+]);
+
+export const AudioDeviceResolutionSchema = z.object({
+  configuredDeviceName: z.string().nullable(),
+  configuredDevice: AudioDeviceSchema.nullable(),
+  effectiveDevice: AudioDeviceSchema.nullable(),
+  status: AudioDeviceResolutionStatusSchema,
+  reason: z.string().nullable().optional(),
+});
+
+export const AudioDeviceResolutionSetSchema = z.object({
+  input: AudioDeviceResolutionSchema,
+  output: AudioDeviceResolutionSchema,
+});
+
 // 音频设备列表响应
 export const AudioDevicesResponseSchema = z.object({
   inputDevices: z.array(AudioDeviceSchema),
@@ -29,6 +49,17 @@ export const AudioDeviceSettingsResponseSchema = z.object({
   success: z.boolean(),
   message: z.string().optional(),
   currentSettings: AudioDeviceSettingsSchema,
+  deviceResolution: AudioDeviceResolutionSetSchema,
+});
+
+export const AudioSettingsResolveRequestSchema = z.object({
+  audio: AudioDeviceSettingsSchema,
+  radioType: z.enum(['none', 'network', 'serial', 'icom-wlan']).optional(),
+});
+
+export const AudioSettingsResolveResponseSchema = z.object({
+  success: z.boolean(),
+  deviceResolution: AudioDeviceResolutionSetSchema,
 });
 
 // 音频流配置参数 (用于 Audify/RtAudio)
@@ -64,10 +95,15 @@ export const VolumeGainSchema = z.object({
 
 // 导出类型
 export type AudioDevice = z.infer<typeof AudioDeviceSchema>;
+export type AudioDeviceResolutionStatus = z.infer<typeof AudioDeviceResolutionStatusSchema>;
+export type AudioDeviceResolution = z.infer<typeof AudioDeviceResolutionSchema>;
+export type AudioDeviceResolutionSet = z.infer<typeof AudioDeviceResolutionSetSchema>;
 export type AudioDevicesResponse = z.infer<typeof AudioDevicesResponseSchema>;
 export type AudioDeviceSettings = z.infer<typeof AudioDeviceSettingsSchema>;
 export type AudioDeviceSettingsResponse = z.infer<typeof AudioDeviceSettingsResponseSchema>;
+export type AudioSettingsResolveRequest = z.infer<typeof AudioSettingsResolveRequestSchema>;
+export type AudioSettingsResolveResponse = z.infer<typeof AudioSettingsResolveResponseSchema>;
 export type AudioStreamConfig = z.infer<typeof AudioStreamConfigSchema>;
 export type AudioStreamEventData = z.infer<typeof AudioStreamEventDataSchema>;
 export type AudioMixerConfig = z.infer<typeof AudioMixerConfigSchema>;
-export type VolumeGain = z.infer<typeof VolumeGainSchema>; 
+export type VolumeGain = z.infer<typeof VolumeGainSchema>;

@@ -181,6 +181,7 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
         ref={audioSettingsRef}
         initialConfig={audioConfig}
         onChange={setAudioConfig}
+        radioType={radioConfig.type}
       />
     </div>
   );

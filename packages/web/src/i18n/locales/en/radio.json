@@ -74,6 +74,8 @@
     "deviceUnknown": "Default device",
     "retryingDetail": "Attempt {{attempt}}, next in {{seconds}}s",
     "retryingNoDelay": "Attempt {{attempt}} in progress",
+    "errorInputDeviceUnavailable": "Audio input device \"{{deviceName}}\" is currently unavailable. The audio system will keep retrying automatically.",
+    "errorOutputDeviceUnavailable": "Audio output device \"{{deviceName}}\" is currently unavailable. The audio system will keep retrying automatically.",
     "disabledHint": "Unrecoverable configuration error — check audio device settings",
     "retryNow": "Retry now"
   },
