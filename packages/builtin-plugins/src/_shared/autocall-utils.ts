@@ -40,6 +40,23 @@ export function getTargetCallsign(message: ParsedFT8Message['message']): string 
   return '';
 }
 
+export function getCandidateScore(message: ParsedFT8Message): number | undefined {
+  const score = (message as { score?: unknown }).score;
+  return typeof score === 'number' && Number.isFinite(score) ? score : undefined;
+}
+
+export function compareByScoreThenSnr(left: ParsedFT8Message, right: ParsedFT8Message): number {
+  const leftScore = getCandidateScore(left);
+  const rightScore = getCandidateScore(right);
+  if (leftScore !== undefined && rightScore !== undefined && leftScore !== rightScore) {
+    return rightScore - leftScore;
+  }
+  if (left.snr !== right.snr) {
+    return right.snr - left.snr;
+  }
+  return left.timestamp - right.timestamp;
+}
+
 export function isPureStandby(ctx: PluginContext): boolean {
   if (ctx.operator.isTransmitting) {
     return false;

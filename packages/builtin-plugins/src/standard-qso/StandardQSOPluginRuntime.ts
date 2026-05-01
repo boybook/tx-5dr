@@ -114,7 +114,18 @@ function getCandidatePriorityTuple(strategy: StandardQSOPluginRuntime, candidate
     }
 }
 
+function getCandidateScore(candidate: ParsedFT8Message): number | undefined {
+    const score = (candidate as unknown as { score?: unknown }).score;
+    return typeof score === 'number' && Number.isFinite(score) ? score : undefined;
+}
+
 function compareCandidates(strategy: StandardQSOPluginRuntime, left: ParsedFT8Message, right: ParsedFT8Message): number {
+    const leftScore = getCandidateScore(left);
+    const rightScore = getCandidateScore(right);
+    if (leftScore !== undefined && rightScore !== undefined && leftScore !== rightScore) {
+        return rightScore - leftScore;
+    }
+
     if (strategy.operator.config.targetSelectionPriorityMode === 'balanced') {
         const snrDiff = right.snr - left.snr;
         if (Math.abs(snrDiff) > 3) {
