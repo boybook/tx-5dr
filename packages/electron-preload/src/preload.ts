@@ -2,6 +2,59 @@ import type { DesktopHttpsMode, DesktopHttpsStatus } from '@tx5dr/contracts';
 
 type DesktopUpdateSource = 'oss' | 'github';
 
+
+type ShortcutActionId =
+  | 'toggle-current-operator-tx'
+  | 'halt-current-operator-tx'
+  | 'select-tx-1'
+  | 'select-tx-2'
+  | 'select-tx-3'
+  | 'select-tx-4'
+  | 'select-tx-5'
+  | 'select-tx-6'
+  | 'start-monitoring'
+  | 'stop-monitoring'
+  | 'cycle-operator-next'
+  | 'cycle-operator-previous'
+  | 'reset-current-operator-to-cq'
+  | 'force-stop-all-transmission'
+  | 'run-tuner-tune'
+  | 'toggle-tuner-switch';
+
+interface ShortcutBinding {
+  code: string;
+  key: string;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  enabled: boolean;
+  label: string;
+}
+
+type ShortcutConfig = Record<ShortcutActionId, ShortcutBinding>;
+
+interface ShortcutRegistrationStatus {
+  config: ShortcutConfig;
+  registered: Array<{ actionId: ShortcutActionId; accelerator: string }>;
+  failed: Array<{ actionId: ShortcutActionId; accelerator: string; reason: string }>;
+}
+
+interface ShortcutCommandPayload {
+  actionId: ShortcutActionId;
+  accelerator?: string;
+  source: 'electron';
+}
+
+interface ShortcutRecordedPayload {
+  actionId: ShortcutActionId;
+  binding: ShortcutBinding;
+}
+
+interface ShortcutRecordingCancelledPayload {
+  actionId: ShortcutActionId;
+}
+
 interface DesktopUpdateRecentCommit {
   id: string;
   shortId: string;
@@ -37,6 +90,19 @@ interface DesktopUpdateStatus {
 }
 
 const { contextBridge, ipcRenderer } = require('electron');
+
+const shortcutCommandListeners = new WeakMap<
+  (payload: ShortcutCommandPayload) => void,
+  (_event: unknown, payload: ShortcutCommandPayload) => void
+>();
+const shortcutRecordedListeners = new WeakMap<
+  (payload: ShortcutRecordedPayload) => void,
+  (_event: unknown, payload: ShortcutRecordedPayload) => void
+>();
+const shortcutRecordingCancelledListeners = new WeakMap<
+  (payload: ShortcutRecordingCancelledPayload) => void,
+  (_event: unknown, payload: ShortcutRecordingCancelledPayload) => void
+>();
 
 /**
  * Electron Preload 脚本
@@ -183,6 +249,50 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getAll: () => ipcRenderer.invoke('config:getAll')
   },
 
+  shortcuts: {
+    getConfig: (): Promise<ShortcutConfig> => ipcRenderer.invoke('shortcuts:getConfig'),
+    setConfig: (config: ShortcutConfig): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:setConfig', config),
+    register: (config?: ShortcutConfig): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:register', config),
+    startRecording: (actionId: ShortcutActionId): Promise<void> => ipcRenderer.invoke('shortcuts:startRecording', actionId),
+    stopRecording: (): Promise<void> => ipcRenderer.invoke('shortcuts:stopRecording'),
+    onCommand: (callback: (payload: ShortcutCommandPayload) => void) => {
+      if (shortcutCommandListeners.has(callback)) return;
+      const listener = (_event: unknown, payload: ShortcutCommandPayload) => callback(payload);
+      shortcutCommandListeners.set(callback, listener);
+      ipcRenderer.on('shortcut:command', listener);
+    },
+    offCommand: (callback: (payload: ShortcutCommandPayload) => void) => {
+      const listener = shortcutCommandListeners.get(callback);
+      if (!listener) return;
+      ipcRenderer.removeListener('shortcut:command', listener);
+      shortcutCommandListeners.delete(callback);
+    },
+    onRecorded: (callback: (payload: ShortcutRecordedPayload) => void) => {
+      if (shortcutRecordedListeners.has(callback)) return;
+      const listener = (_event: unknown, payload: ShortcutRecordedPayload) => callback(payload);
+      shortcutRecordedListeners.set(callback, listener);
+      ipcRenderer.on('shortcut:recorded', listener);
+    },
+    offRecorded: (callback: (payload: ShortcutRecordedPayload) => void) => {
+      const listener = shortcutRecordedListeners.get(callback);
+      if (!listener) return;
+      ipcRenderer.removeListener('shortcut:recorded', listener);
+      shortcutRecordedListeners.delete(callback);
+    },
+    onRecordingCancelled: (callback: (payload: ShortcutRecordingCancelledPayload) => void) => {
+      if (shortcutRecordingCancelledListeners.has(callback)) return;
+      const listener = (_event: unknown, payload: ShortcutRecordingCancelledPayload) => callback(payload);
+      shortcutRecordingCancelledListeners.set(callback, listener);
+      ipcRenderer.on('shortcut:recording-cancelled', listener);
+    },
+    offRecordingCancelled: (callback: (payload: ShortcutRecordingCancelledPayload) => void) => {
+      const listener = shortcutRecordingCancelledListeners.get(callback);
+      if (!listener) return;
+      ipcRenderer.removeListener('shortcut:recording-cancelled', listener);
+      shortcutRecordingCancelledListeners.delete(callback);
+    },
+  },
+
   https: {
     getStatus: (): Promise<DesktopHttpsStatus> => ipcRenderer.invoke('https:getStatus'),
     getShareUrls: (): Promise<string[]> => ipcRenderer.invoke('https:getShareUrls'),
@@ -244,6 +354,19 @@ declare global {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         getAll(): Promise<Record<string, any>>;
       };
+      shortcuts: {
+        getConfig(): Promise<ShortcutConfig>;
+        setConfig(config: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
+        register(config?: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
+        startRecording(actionId: ShortcutActionId): Promise<void>;
+        stopRecording(): Promise<void>;
+        onCommand(callback: (payload: ShortcutCommandPayload) => void): void;
+        offCommand(callback: (payload: ShortcutCommandPayload) => void): void;
+        onRecorded(callback: (payload: ShortcutRecordedPayload) => void): void;
+        offRecorded(callback: (payload: ShortcutRecordedPayload) => void): void;
+        onRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): void;
+        offRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): void;
+      };
       https: {
         getStatus(): Promise<DesktopHttpsStatus>;
         getShareUrls(): Promise<string[]>;
@@ -259,7 +382,7 @@ declare global {
       };
     };
   }
-} 
+}
 
 // 导出空对象使其成为模块
-export {}; 
+export {};

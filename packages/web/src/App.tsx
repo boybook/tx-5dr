@@ -20,6 +20,7 @@ import { OpenWebRXProfileSelectModal } from './components/radio/profile/OpenWebR
 import { GlobalModalHost } from './components/app/GlobalModalHost';
 import { QSONotificationBridge } from './components/app/QSONotificationBridge';
 import { useViewportHeightCssVar } from './hooks/useViewportHeight';
+import { GlobalShortcutBridge } from './components/app/GlobalShortcutBridge';
 
 function AppContent() {
   const { state } = useRadioState();
@@ -127,6 +128,7 @@ function AuthGate() {
     <AppErrorBoundary>
       <RadioProvider key={authKey}>
         <AppContent />
+        <GlobalShortcutBridge />
         <GlobalModalHost />
       </RadioProvider>
     </AppErrorBoundary>

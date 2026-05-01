@@ -23,6 +23,7 @@ import { FrequencyPresetSettings, type FrequencyPresetSettingsRef } from './Freq
 import { TokenManagement } from '../auth/TokenManagement';
 import { StationInfoSettings, type StationInfoSettingsRef } from './StationInfoSettings';
 import { OpenWebRXSettings } from './OpenWebRXSettings';
+import { ShortcutSettings, type ShortcutSettingsRef } from './ShortcutSettings';
 import { useHasMinRole, useCan } from '../../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import type { PluginSettingsTabRef } from '../plugins/PluginSettingsTab';
@@ -39,7 +40,7 @@ interface SettingsModalProps {
 }
 
 // 设置标签页类型（radio 和 audio 已迁移到 ProfileModal，logbook_sync 已迁移到 SyncConfigModal）
-export type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'rigctld' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx' | 'plugins';
+export type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'rigctld' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx' | 'plugins' | 'shortcuts';
 
 const DEFAULT_USES_MODAL_FOOTER_SAVE: Record<SettingsTab, boolean> = {
   radio: false,
@@ -54,6 +55,7 @@ const DEFAULT_USES_MODAL_FOOTER_SAVE: Record<SettingsTab, boolean> = {
   station_info: true,
   openwebrx: false,
   plugins: true,
+  shortcuts: true,
 };
 
 export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPresetMode }: SettingsModalProps) {
@@ -84,6 +86,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
   const frequencyPresetSettingsRef = useRef<FrequencyPresetSettingsRef | null>(null);
   const stationInfoSettingsRef = useRef<StationInfoSettingsRef | null>(null);
   const pluginSettingsRef = useRef<PluginSettingsTabRef | null>(null);
+  const shortcutSettingsRef = useRef<ShortcutSettingsRef | null>(null);
 
   // 当弹窗打开时，重置到初始标签页
   useEffect(() => {
@@ -143,6 +146,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         return stationInfoSettingsRef.current?.hasUnsavedChanges() || false;
       case 'plugins':
         return pluginSettingsRef.current?.hasUnsavedChanges() || false;
+      case 'shortcuts':
+        return shortcutSettingsRef.current?.hasUnsavedChanges() || false;
       default:
         return false;
     }
@@ -212,6 +217,11 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         case 'plugins':
           if (pluginSettingsRef.current) {
             await pluginSettingsRef.current.save();
+          }
+          break;
+        case 'shortcuts':
+          if (shortcutSettingsRef.current) {
+            await shortcutSettingsRef.current.save();
           }
           break;
         default:
@@ -297,6 +307,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
           return '📻';
         case 'plugins':
           return '🔌';
+        case 'shortcuts':
+          return '⌨️';
         default:
           return '⚙️';
       }
@@ -324,6 +336,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         return `📻 ${t('openwebrx.tabTitle')}`;
       case 'plugins':
         return `🔌 ${t('plugins.tabTitle', 'Plugins')}`;
+      case 'shortcuts':
+        return `⌨️ ${t('shortcuts.tabTitle')}`;
       default:
         return t('modal.defaultTab');
     }
@@ -404,6 +418,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
             onUsesModalFooterSaveChange={handlePluginFooterSaveChange}
           />
         </React.Suspense>;
+      case 'shortcuts':
+        return <ShortcutSettings ref={shortcutSettingsRef} onUnsavedChanges={setHasUnsavedChanges} />;
       default:
         return null;
     }
@@ -506,6 +522,12 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                     key="display"
                     title={getTabTitle('display', isMobile)}
                   />
+                  {isOperator && (
+                    <Tab
+                      key="shortcuts"
+                      title={getTabTitle('shortcuts', isMobile)}
+                    />
+                  )}
                   {isAdmin && (
                     <Tab
                       key="tokens"
