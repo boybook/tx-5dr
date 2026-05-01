@@ -281,6 +281,10 @@ function getAuthHeaders(): Record<string, string> {
   return jwt ? { Authorization: `Bearer ${jwt}` } : {};
 }
 
+function encodePathSegment(value: string): string {
+  return encodeURIComponent(value);
+}
+
 async function apiBlobRequest(
   url: string,
   options?: globalThis.RequestInit,
@@ -1266,7 +1270,7 @@ export const api = {
    * 获取特定日志本详情
    */
   async getLogBook(id: string, apiBase?: string): Promise<LogBookDetailResponse> {
-    return apiRequest<LogBookDetailResponse>(`/logbooks/${id}`, undefined, apiBase);
+    return apiRequest<LogBookDetailResponse>(`/logbooks/${encodePathSegment(id)}`, undefined, apiBase);
   },
 
   /**
@@ -1295,7 +1299,7 @@ export const api = {
     apiBase?: string
   ): Promise<LogBookActionResponse> {
     return apiRequest<LogBookActionResponse>(
-      `/logbooks/${id}`,
+      `/logbooks/${encodePathSegment(id)}`,
       {
         method: 'PUT',
         body: JSON.stringify(updates),
@@ -1309,7 +1313,7 @@ export const api = {
    */
   async deleteLogBook(id: string, apiBase?: string): Promise<LogBookActionResponse> {
     return apiRequest<LogBookActionResponse>(
-      `/logbooks/${id}`,
+      `/logbooks/${encodePathSegment(id)}`,
       { method: 'DELETE' },
       apiBase
     );
@@ -1324,7 +1328,7 @@ export const api = {
     apiBase?: string
   ): Promise<LogBookActionResponse> {
     return apiRequest<LogBookActionResponse>(
-      `/logbooks/${logBookId}/connect`,
+      `/logbooks/${encodePathSegment(logBookId)}/connect`,
       {
         method: 'POST',
         body: JSON.stringify({ operatorId }),
@@ -1338,7 +1342,7 @@ export const api = {
    */
   async disconnectOperatorFromLogBook(operatorId: string, apiBase?: string): Promise<LogBookActionResponse> {
     return apiRequest<LogBookActionResponse>(
-      `/logbooks/disconnect/${operatorId}`,
+      `/logbooks/disconnect/${encodePathSegment(operatorId)}`,
       { method: 'POST' },
       apiBase
     );
@@ -1364,7 +1368,7 @@ export const api = {
       });
     }
 
-    const url = `${baseUrl}/logbooks/${id}/qsos${params.toString() ? '?' + params.toString() : ''}`;
+    const url = `${baseUrl}/logbooks/${encodePathSegment(id)}/qsos${params.toString() ? '?' + params.toString() : ''}`;
     logger.debug('Request URL:', url);
     const res = await fetch(url, { headers: getAuthHeaders() });
     
@@ -1390,7 +1394,7 @@ export const api = {
       });
     }
 
-    const url = `${baseUrl}/logbooks/${id}/recent-globe${params.toString() ? '?' + params.toString() : ''}`;
+    const url = `${baseUrl}/logbooks/${encodePathSegment(id)}/recent-globe${params.toString() ? '?' + params.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
 
     if (!res.ok) {
@@ -1420,7 +1424,7 @@ export const api = {
       });
     }
 
-    const url = `${baseUrl}/logbooks/${id}/worked-grids${params.toString() ? '?' + params.toString() : ''}`;
+    const url = `${baseUrl}/logbooks/${encodePathSegment(id)}/worked-grids${params.toString() ? '?' + params.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
 
     if (!res.ok) {
@@ -1449,7 +1453,7 @@ export const api = {
       });
     }
     
-    const url = `${baseUrl}/logbooks/${id}/export${params.toString() ? '?' + params.toString() : ''}`;
+    const url = `${baseUrl}/logbooks/${encodePathSegment(id)}/export${params.toString() ? '?' + params.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
     
     if (!res.ok) {
@@ -1464,7 +1468,7 @@ export const api = {
    */
   async importToLogBook(id: string, adifContent: string, apiBase?: string): Promise<LogBookImportResponse> {
     const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/logbooks/${id}/import`, {
+    const res = await fetch(`${baseUrl}/logbooks/${encodePathSegment(id)}/import`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1486,7 +1490,7 @@ export const api = {
     formData.append('file', file);
 
     return apiRequest<LogBookImportResponse>(
-      `/logbooks/${id}/import`,
+      `/logbooks/${encodePathSegment(id)}/import`,
       { method: 'POST', body: formData },
       apiBase
     );
@@ -1497,7 +1501,7 @@ export const api = {
    */
   async createQSO(logbookId: string, data: CreateQSORequest, apiBase?: string): Promise<QSOActionResponse> {
     const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/logbooks/${logbookId}/qsos`, {
+    const res = await fetch(`${baseUrl}/logbooks/${encodePathSegment(logbookId)}/qsos`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1519,7 +1523,7 @@ export const api = {
    */
   async updateQSO(logbookId: string, qsoId: string, updates: UpdateQSORequest, apiBase?: string): Promise<QSOActionResponse> {
     const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/logbooks/${logbookId}/qsos/${qsoId}`, {
+    const res = await fetch(`${baseUrl}/logbooks/${encodePathSegment(logbookId)}/qsos/${encodePathSegment(qsoId)}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -1541,7 +1545,7 @@ export const api = {
    */
   async deleteQSO(logbookId: string, qsoId: string, apiBase?: string): Promise<QSOActionResponse> {
     const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/logbooks/${logbookId}/qsos/${qsoId}`, {
+    const res = await fetch(`${baseUrl}/logbooks/${encodePathSegment(logbookId)}/qsos/${encodePathSegment(qsoId)}`, {
       method: 'DELETE',
       headers: getAuthHeaders(),
     });
