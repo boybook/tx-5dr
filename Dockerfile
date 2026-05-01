@@ -145,6 +145,39 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/yarn.lock ./yarn.lock
 COPY --from=builder /app/turbo.json ./turbo.json
 
+# The runtime stage may upgrade glibc while fixing GLIBCXX compatibility.
+# @discordjs/opus encodes the detected glibc version into its prebuild path,
+# so make the bundled Linux addon discoverable under the runtime glibc too.
+RUN node <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const { find } = require('@discordjs/node-pre-gyp');
+
+const opusRoot = '/app/node_modules/@discordjs/opus';
+const packageJson = path.join(opusRoot, 'package.json');
+if (!fs.existsSync(packageJson)) {
+  throw new Error('@discordjs/opus is missing from node_modules');
+}
+
+const expected = find(packageJson);
+if (!fs.existsSync(expected)) {
+  const prebuildRoot = path.join(opusRoot, 'prebuild');
+  const suffix = `-${process.platform}-${process.arch}-glibc-`;
+  const candidate = fs.readdirSync(prebuildRoot)
+    .filter((name) => name.includes(suffix))
+    .map((name) => path.join(prebuildRoot, name, 'opus.node'))
+    .find((file) => fs.existsSync(file));
+
+  if (!candidate) {
+    throw new Error(`No compatible @discordjs/opus prebuild found for ${process.platform}/${process.arch}`);
+  }
+
+  fs.mkdirSync(path.dirname(expected), { recursive: true });
+  fs.copyFileSync(candidate, expected);
+}
+NODE
+RUN node -e "import('@discordjs/opus').then((m)=>{const r=m.default||m; new r.OpusEncoder(48000,1); console.log('@discordjs/opus runtime ok');})"
+
 # Nginx configuration: shared template + Docker-specific wrapper
 COPY docker/nginx-wrapper.conf /etc/nginx/nginx.conf
 COPY linux/nginx-site.conf /tmp/nginx-site.conf.template
