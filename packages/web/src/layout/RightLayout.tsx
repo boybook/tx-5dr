@@ -66,7 +66,7 @@ export const RightLayout: React.FC = () => {
   }, []);
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full min-h-0 overflow-hidden flex flex-col">
       {/* 顶部工具栏 */}
       <div
         className="flex-shrink-0 flex justify-between items-center p-1 px-2 md:p-2 md:px-3"
@@ -187,19 +187,19 @@ export const RightLayout: React.FC = () => {
       </div>
       
       {/* 主内容区域 */}
-      <div className="flex-1 p-2 pt-0 md:p-5 md:pt-0 flex flex-col gap-2 md:gap-4 min-h-0">
+      <div className="flex-1 p-2 pt-0 md:p-5 md:pt-0 flex flex-col gap-2 md:gap-4 min-h-0 overflow-hidden">
         {/* 和我有关的通联信息 - 占据剩余空间 */}
-        <div className="flex-1 min-h-0">
+        <div className="relative z-0 flex-1 min-h-0 overflow-hidden">
           <MyRelatedFramesTable className="h-full" />
         </div>
         
         {/* 操作员列表 - 固定高度 */}
-        <div className="flex-shrink-0">
+        <div className="relative z-10 flex-shrink-0">
           <RadioOperatorList onCreateOperator={handleCreateOperator} />
         </div>
         
         {/* 电台控制 - 固定高度 */}
-        <div className="flex-shrink-0">
+        <div className="relative z-10 flex-shrink-0">
           <RadioControl onOpenRadioSettings={handleOpenRadioSettings} />
         </div>
       </div>
