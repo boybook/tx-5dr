@@ -589,6 +589,10 @@
     "invalidOffset": "Please enter a valid offset",
     "measure": "Measure",
     "applyNtp": "Apply NTP",
+    "autoApplyNtp": "Auto apply NTP offset",
+    "autoApplyEnabled": "Auto apply NTP offset enabled",
+    "autoApplyDisabled": "Auto apply NTP offset disabled",
+    "autoApplySaveFailed": "Failed to save auto-apply setting",
     "manualOffset": "Manual Offset",
     "apply": "Apply",
     "applySuccess": "Applied offset {{offset}}ms"

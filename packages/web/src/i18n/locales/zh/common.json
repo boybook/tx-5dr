@@ -589,6 +589,10 @@
     "invalidOffset": "请输入有效的偏移值",
     "measure": "测量",
     "applyNtp": "应用 NTP",
+    "autoApplyNtp": "自动应用 NTP 偏移",
+    "autoApplyEnabled": "已开启自动应用 NTP 偏移",
+    "autoApplyDisabled": "已关闭自动应用 NTP 偏移",
+    "autoApplySaveFailed": "保存自动应用设置失败",
     "manualOffset": "手动偏移",
     "apply": "应用",
     "applySuccess": "已应用偏移 {{offset}}ms"

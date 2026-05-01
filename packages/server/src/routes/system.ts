@@ -6,6 +6,7 @@ import os from 'node:os';
 import {
   NtpServerListSettingsSchema,
   ServerCpuProfileStatusSchema,
+  SetClockAutoApplyRequestSchema,
   SetClockOffsetRequestSchema,
   UpdateNtpServerListRequestSchema,
 } from '@tx5dr/contracts';
@@ -77,6 +78,18 @@ export async function systemRoutes(fastify: FastifyInstance) {
     preHandler: [requireAbility('manage', 'all')],
   }, async (_request, reply) => {
     await engine.getNtpCalibrationService().triggerMeasurement();
+    return reply.send(engine.getNtpCalibrationService().getStatus());
+  });
+
+  fastify.put('/clock/auto-apply', {
+    schema: {
+      body: zodToJsonSchema(SetClockAutoApplyRequestSchema),
+    },
+    preHandler: [requireAbility('manage', 'all')],
+  }, async (request, reply) => {
+    const { enabled } = SetClockAutoApplyRequestSchema.parse(request.body);
+    await configManager.updateNtpAutoApplyOffset(enabled);
+    engine.getNtpCalibrationService().setAutoApplyOffset(enabled);
     return reply.send(engine.getNtpCalibrationService().getStatus());
   });
 

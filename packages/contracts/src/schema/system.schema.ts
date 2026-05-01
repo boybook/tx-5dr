@@ -37,6 +37,7 @@ export const ClockStatusDetailSchema = ClockStatusSummarySchema.extend({
   syncState: ClockSyncStateSchema,
   serverUsed: z.string().nullable(),
   errorMessage: z.string().nullable(),
+  autoApplyOffset: z.boolean(),
 });
 export type ClockStatusDetail = z.infer<typeof ClockStatusDetailSchema>;
 
@@ -44,6 +45,11 @@ export const SetClockOffsetRequestSchema = z.object({
   offsetMs: z.number().finite(),
 });
 export type SetClockOffsetRequest = z.infer<typeof SetClockOffsetRequestSchema>;
+
+export const SetClockAutoApplyRequestSchema = z.object({
+  enabled: z.boolean(),
+});
+export type SetClockAutoApplyRequest = z.infer<typeof SetClockAutoApplyRequestSchema>;
 
 // ===== NTP server list settings =====
 
