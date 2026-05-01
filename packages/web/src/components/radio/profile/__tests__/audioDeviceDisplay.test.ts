@@ -10,10 +10,10 @@ import {
 
 const zh = ((key: string, options?: Record<string, unknown>) => {
   const values: Record<string, string> = {
-    'audio.default': '默认',
-    'audio.channels': `${options?.count} 声道`,
-    'audio.deviceUnavailable': '设备当前不可用，音频将自动重试',
-    'audio.deviceVirtualSelected': '虚拟音频设备',
+    'audio.default': '\u9ed8\u8ba4',
+    'audio.channels': `${options?.count} \u58f0\u9053`,
+    'audio.deviceUnavailable': '\u8bbe\u5907\u5f53\u524d\u4e0d\u53ef\u7528\uff0c\u97f3\u9891\u5c06\u81ea\u52a8\u91cd\u8bd5',
+    'audio.deviceVirtualSelected': '\u865a\u62df\u97f3\u9891\u8bbe\u5907',
   };
   return values[key] ?? key;
 }) as unknown as TFunction;
@@ -39,12 +39,12 @@ const defaultInput = {
 
 describe('audio device display helpers', () => {
   it('formats default suffix without duplicate parentheses', () => {
-    expect(formatDeviceText(zh, defaultInput)).toBe('Built-in Mic (默认)');
+    expect(formatDeviceText(zh, defaultInput)).toBe('Built-in Mic (\u9ed8\u8ba4)');
     expect(formatDeviceText(en, defaultInput)).toBe('Built-in Mic (default)');
   });
 
   it('formats channel counts through i18n interpolation', () => {
-    expect(formatChannelText(zh, 2)).toBe('2 声道');
+    expect(formatChannelText(zh, 2)).toBe('2 \u58f0\u9053');
     expect(formatChannelText(en, 2)).toBe('2 ch');
   });
 
@@ -63,7 +63,7 @@ describe('audio device display helpers', () => {
     };
 
     expect(getResolutionTone(missing)).toBe('warning');
-    expect(getResolutionDescription(zh, missing)).toBe('设备当前不可用，音频将自动重试');
+    expect(getResolutionDescription(zh, missing)).toBe('\u8bbe\u5907\u5f53\u524d\u4e0d\u53ef\u7528\uff0c\u97f3\u9891\u5c06\u81ea\u52a8\u91cd\u8bd5');
     expect(getResolutionTone(virtual)).toBe('virtual');
     expect(getResolutionDescription(en, virtual)).toBe('Virtual audio device');
   });
