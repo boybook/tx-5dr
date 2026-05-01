@@ -21,13 +21,18 @@ import {
   ModalHeader,
   ModalBody,
   ModalFooter,
+  Radio,
+  RadioGroup,
+  DateRangePicker,
+  Switch,
   Tooltip,
 } from '@heroui/react';
+import type { DateRangePickerProps } from '@heroui/react';
 import QSOFormModal from './QSOFormModal';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen, faCog, faPlus, faTableCells } from '@fortawesome/free-solid-svg-icons';
-import type { QSORecord, LogBookStatistics, CreateQSORequest, LogBookImportResult } from '@tx5dr/contracts';
+import type { QSORecord, LogBookStatistics, CreateQSORequest, LogBookImportResult, LogBookExportOptions } from '@tx5dr/contracts';
 import { api, WSClient, ApiError, getDisplayMode } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../../utils/config';
 import { isElectron } from '../../utils/config';
@@ -63,6 +68,10 @@ interface QSOFilters {
 }
 
 type DxccViewMode = 'mixed' | 'band' | 'mode';
+type ExportFormat = 'adif' | 'csv';
+type ExportRangeMode = 'all' | 'range';
+type ExportDateRange = NonNullable<DateRangePickerProps['value']>;
+type ExportDateValue = ExportDateRange['start'];
 
 function normalizeGridFilterValue(value: string): string {
   return value.toUpperCase().replace(/\s+/g, '').slice(0, 8);
@@ -80,6 +89,14 @@ function createDefaultAddQSOFormData(): Partial<QSORecord> {
     startTime: Date.now(),
     messageHistory: [],
   };
+}
+
+function formatDateValueForUtcExport(value: ExportDateValue): string {
+  return [
+    String(value.year).padStart(4, '0'),
+    String(value.month).padStart(2, '0'),
+    String(value.day).padStart(2, '0'),
+  ].join('-');
 }
 
 const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, operatorCallsign }) => {
@@ -250,6 +267,11 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // 导出功能（增强错误处理）
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
+  const [pendingExportFormat, setPendingExportFormat] = useState<ExportFormat | null>(null);
+  const [exportRangeMode, setExportRangeMode] = useState<ExportRangeMode>('all');
+  const [exportDateRange, setExportDateRange] = useState<ExportDateRange | null>(null);
+  const [exportIncludeFilters, setExportIncludeFilters] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isImportGuideOpen, setIsImportGuideOpen] = useState(false);
   const [importSuccess, setImportSuccess] = useState<string | null>(null);
@@ -321,31 +343,64 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     setIsSyncConfigOpen(true);
   };
 
-  const handleExport = async (format: 'adif' | 'csv') => {
+  const handleExport = React.useCallback((format: ExportFormat) => {
     if (isExporting) return;
+
+    setPendingExportFormat(format);
+    setExportRangeMode('all');
+    setExportDateRange(null);
+    setExportIncludeFilters(false);
+    setExportError(null);
+    setIsExportDialogOpen(true);
+  }, [isExporting]);
+
+  const handleExportDialogClose = () => {
+    if (isExporting) {
+      return;
+    }
+    setIsExportDialogOpen(false);
+  };
+
+  const handleExportConfirm = async () => {
+    if (isExporting || !pendingExportFormat) return;
+
+    if (exportRangeMode === 'range' && (!exportDateRange?.start || !exportDateRange.end)) {
+      setExportError(t('export.dateRangeRequired'));
+      return;
+    }
 
     try {
       setIsExporting(true);
       setExportError(null);
 
+      const exportOptions: LogBookExportOptions = {
+        format: pendingExportFormat,
+        ...(exportIncludeFilters && hasActiveExportFilters ? filters : {}),
+      };
+
+      if (exportRangeMode === 'range' && exportDateRange?.start && exportDateRange.end) {
+        exportOptions.startDate = formatDateValueForUtcExport(exportDateRange.start);
+        exportOptions.endDate = formatDateValueForUtcExport(exportDateRange.end);
+      }
+
       const exportData = await api.exportLogBook(effectiveLogBookId, {
-        format,
-        ...filters,
+        ...exportOptions,
       });
 
       const blob = new Blob([exportData], {
-        type: format === 'adif' ? 'text/plain' : 'text/csv'
+        type: pendingExportFormat === 'adif' ? 'text/plain' : 'text/csv'
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `logbook_${operatorId}_${new Date().toISOString().split('T')[0]}.${format}`;
+      a.download = `logbook_${operatorId}_${new Date().toISOString().split('T')[0]}.${pendingExportFormat}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      logger.debug(`Successfully exported ${format.toUpperCase()} format log`);
+      logger.debug(`Successfully exported ${pendingExportFormat.toUpperCase()} format log`);
+      setIsExportDialogOpen(false);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : t('error.exportFailed');
       logger.error('Export failed:', error);
@@ -1608,7 +1663,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               variant="bordered"
               size="sm"
               isLoading={isExporting}
-              disabled={qsos.length === 0}
+              isDisabled={actualTotalRecords === 0}
               className="min-w-0"
               startContent={<FontAwesomeIcon icon={faDownload} className="md:hidden" />}
             >
@@ -1752,6 +1807,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     hasFilters,
     statistics,
     isExporting,
+    actualTotalRecords,
     handleFilterChange,
     clearFilters,
     handleExport,
@@ -1844,6 +1900,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
   // 计算加载状态的内容
   const loadingState = loading ? "loading" : "idle";
+  const hasActiveExportFilters = Object.keys(filters).length > 0;
+  const isExportRangeIncomplete = exportRangeMode === 'range' && (!exportDateRange?.start || !exportDateRange.end);
+  const pendingExportFormatLabel = pendingExportFormat === 'csv' ? t('export.csv') : t('export.adif');
 
   // 如果有错误，显示错误信息
   if (error) {
@@ -2073,6 +2132,78 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         isSaving={isAddSaving}
         mode="add"
       />
+
+      {/* 导出范围 Modal */}
+      <Modal
+        isOpen={isExportDialogOpen}
+        onClose={handleExportDialogClose}
+        size="lg"
+        isDismissable={!isExporting}
+      >
+        <ModalContent>
+          <ModalHeader>{t('export.modalTitle', { format: pendingExportFormatLabel })}</ModalHeader>
+          <ModalBody className="gap-4">
+            <RadioGroup
+              label={t('export.scopeLabel')}
+              value={exportRangeMode}
+              onValueChange={(value) => setExportRangeMode(value as ExportRangeMode)}
+              isDisabled={isExporting}
+            >
+              <Radio value="all" description={t('export.allDesc')}>
+                <span className="text-sm">{t('export.all')}</span>
+              </Radio>
+              <Radio value="range" description={t('export.rangeDesc')}>
+                <span className="text-sm">{t('export.range')}</span>
+              </Radio>
+            </RadioGroup>
+
+            {exportRangeMode === 'range' && (
+              <DateRangePicker
+                label={t('export.dateRangeLabel')}
+                description={t('export.dateRangeDesc')}
+                value={exportDateRange}
+                onChange={setExportDateRange}
+                granularity="day"
+                isRequired
+                isDisabled={isExporting}
+                isInvalid={isExportRangeIncomplete}
+                errorMessage={isExportRangeIncomplete ? t('export.dateRangeRequired') : undefined}
+              />
+            )}
+
+            <div className="rounded-2xl border border-default-200 bg-default-50 px-4 py-3 dark:border-default-100/20 dark:bg-default-100/10">
+              <Switch
+                isSelected={exportIncludeFilters && hasActiveExportFilters}
+                onValueChange={setExportIncludeFilters}
+                isDisabled={isExporting || !hasActiveExportFilters}
+              >
+                <span className="text-sm font-medium">{t('export.includeFilters')}</span>
+              </Switch>
+              <p className="mt-2 text-xs text-default-500">
+                {hasActiveExportFilters ? t('export.includeFiltersDesc') : t('export.noFiltersDesc')}
+              </p>
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button
+              variant="flat"
+              onPress={handleExportDialogClose}
+              isDisabled={isExporting}
+            >
+              {t('common:button.cancel')}
+            </Button>
+            <Button
+              color="primary"
+              onPress={handleExportConfirm}
+              isLoading={isExporting}
+              isDisabled={!pendingExportFormat || isExportRangeIncomplete}
+              startContent={!isExporting ? <FontAwesomeIcon icon={faDownload} /> : undefined}
+            >
+              {t('export.confirm')}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
 
       <Modal
         isOpen={isImportGuideOpen}

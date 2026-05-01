@@ -231,15 +231,27 @@
       "successTitle": "LoTW 同步成功",
       "errorTitle": "LoTW 同步失败",
       "syncError": "LoTW 同步失败"
-    },
-    "sync": "同步"
+    }
   },
   "export": {
     "button": "导出",
     "ariaLabel": "导出格式",
     "adif": "ADIF 格式",
     "csv": "CSV 格式",
-    "errorTitle": "导出失败"
+    "modalTitle": "导出 {{format}} 日志",
+    "scopeLabel": "导出范围",
+    "all": "全部导出",
+    "allDesc": "导出当前日志本中的全部通联记录。",
+    "range": "按时间范围导出",
+    "rangeDesc": "只导出指定 UTC 日期范围内的通联记录。",
+    "dateRangeLabel": "UTC 日期范围",
+    "dateRangeDesc": "结束日期会包含当天 23:59:59.999 UTC 之前的记录。",
+    "dateRangeRequired": "请选择完整的开始和结束日期。",
+    "includeFilters": "叠加当前页面筛选",
+    "includeFiltersDesc": "开启后会同时应用当前页面的呼号、网格、频段、模式和确认状态等筛选。默认关闭以避免误导出。",
+    "confirm": "确认导出",
+    "errorTitle": "导出失败",
+    "noFiltersDesc": "当前页面没有启用筛选，因此本次导出没有可叠加的页面筛选。"
   },
   "import": {
     "button": "导入",

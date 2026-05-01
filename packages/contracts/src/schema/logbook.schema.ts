@@ -191,6 +191,14 @@ export const LogBookExportOptionsSchema = z.object({
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   callsign: z.string().optional(),
+  grid: z.string().optional(),
+  band: z.string().optional(),
+  mode: z.string().optional(),
+  dxccStatus: z.enum(['deleted']).optional(),
+  qslFlow: z.enum(['two_way_confirmed', 'not_two_way_confirmed']).optional(),
+  /** 排除的模式列表，逗号分隔，如 "FT8,FT4" */
+  excludeModes: z.string().optional(),
+  qslStatus: z.enum(['confirmed', 'uploaded', 'none']).optional(),
 });
 
 export const LogBookImportFormatSchema = z.enum(['adif', 'csv']);
