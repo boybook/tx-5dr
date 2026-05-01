@@ -147,6 +147,8 @@
   },
   "spectrum": {
     "waiting": "等待频谱数据...",
+    "collapsed": "频谱已收起",
+    "restore": "展开频谱",
     "audioSource": "音频",
     "radioSdrSource": "电台 SDR",
     "openwebrxSdrSource": "OpenWebRX",

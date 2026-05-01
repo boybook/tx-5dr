@@ -472,6 +472,8 @@ const CollapsedSpectrumBar: React.FC<CollapsedSpectrumBarProps> = ({
   onTxFrequencyChange,
   onRestore,
 }) => {
+  const { t } = useTranslation('common');
+
   return (
     <div
       className={`relative overflow-hidden bg-default-50 dark:bg-default-100/50 ${className}`}
@@ -479,7 +481,7 @@ const CollapsedSpectrumBar: React.FC<CollapsedSpectrumBarProps> = ({
     >
       <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(0,0,0,0.08)_1px,transparent_1px),linear-gradient(180deg,rgba(0,0,0,0.06)_1px,transparent_1px)] bg-[length:12.5%_100%,100%_50%] opacity-80 dark:bg-[linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(180deg,rgba(255,255,255,0.05)_1px,transparent_1px)]" />
       <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-gradient-to-r from-transparent via-primary-500/45 to-transparent dark:via-primary-400/35" />
-      <div className="absolute left-2 top-1/2 z-10 -translate-y-1/2 select-none text-[11px] font-medium text-default-400/60 dark:text-default-500/60">频谱已收起</div>
+      <div className="absolute left-2 top-1/2 z-10 -translate-y-1/2 select-none text-[11px] font-medium text-default-400/60 dark:text-default-500/60">{t('spectrum.collapsed')}</div>
       {!isVoiceMode && (
         <WebGLWaterfall
           controller={controller}
@@ -505,7 +507,7 @@ const CollapsedSpectrumBar: React.FC<CollapsedSpectrumBarProps> = ({
         variant="light"
         onPress={onRestore}
         className="absolute right-1 top-1/2 z-20 h-6 min-w-6 w-6 -translate-y-1/2 px-0 text-default-500 hover:bg-black/25 hover:text-default-900 dark:text-default-300 dark:hover:bg-white/15 dark:hover:text-default-50"
-        aria-label="Restore spectrum"
+        aria-label={t('spectrum.restore')}
       >
         <ChevronUpIcon className="h-3.5 w-3.5" />
       </Button>

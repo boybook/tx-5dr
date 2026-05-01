@@ -147,6 +147,8 @@
   },
   "spectrum": {
     "waiting": "Waiting for spectrum data...",
+    "collapsed": "Spectrum collapsed",
+    "restore": "Restore spectrum",
     "audioSource": "Audio",
     "radioSdrSource": "Radio SDR",
     "openwebrxSdrSource": "OpenWebRX",
