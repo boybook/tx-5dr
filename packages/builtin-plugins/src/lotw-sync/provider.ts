@@ -159,6 +159,13 @@ interface StoredCertificate extends StoredCertificateFile {
   status: LoTWCertificateStatus;
 }
 
+interface CertificateInventoryEntry {
+  filePath: string;
+  canonicalId: string;
+  storedId?: string;
+  certificate: StoredCertificate;
+}
+
 interface CertificateAttribute {
   name?: string;
   shortName?: string;
@@ -465,52 +472,31 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
 
   /** List all stored certificates. */
   async getCertificates(callsign: string): Promise<LoTWCertificateSummary[]> {
-    const files = await this.ctx.files.list(this.getCertificateDir(callsign));
-    const summaries: LoTWCertificateSummary[] = [];
-
-    for (const filePath of files) {
-      if (!filePath.endsWith('.json')) continue;
-      try {
-        const stored = await this.readCertificateFile(filePath, this.extractCertificateIdFromPath(filePath));
-        summaries.push(this.toSummary(stored));
-      } catch {
-        this.ctx.log.warn('Failed to read certificate file', { filePath });
-      }
-    }
-
-    return summaries;
+    const inventory = await this.listCertificateInventory(callsign);
+    return inventory.map((entry) => this.toSummary(entry.certificate));
   }
 
   /** Delete a certificate by ID. */
   async deleteCertificate(callsign: string, certId: string): Promise<boolean> {
-    const filePath = this.getCertificateFilePath(callsign, certId);
+    const inventory = await this.listCertificateInventory(callsign);
+    const entry = inventory.find((item) => item.canonicalId === certId || item.storedId === certId);
+    const filePath = entry?.filePath ?? this.getCertificateFilePath(callsign, certId);
     const deleted = await this.ctx.files.delete(filePath);
     if (deleted) {
-      this.ctx.log.info('Certificate deleted', { id: certId });
+      this.ctx.log.info('Certificate deleted', { id: certId, canonicalId: entry?.canonicalId ?? certId });
+      return true;
     }
-    return deleted;
+
+    this.ctx.log.info('Certificate delete skipped because certificate file is already absent', {
+      id: certId,
+      canonicalId: entry?.canonicalId ?? certId,
+    });
+    return true;
   }
 
   private extractCertificateIdFromPath(filePath: string): string | undefined {
     const fileName = filePath.split('/').pop() ?? '';
     return fileName.endsWith('.json') ? fileName.slice(0, -'.json'.length) : undefined;
-  }
-
-  private async readCertificateFile(filePath: string, canonicalId?: string): Promise<StoredCertificate> {
-    const data = await this.ctx.files.read(filePath);
-    if (!data) throw new Error('Certificate file not found: ' + filePath);
-    const parsed = JSON.parse(data.toString('utf-8')) as Partial<StoredCertificateFile>;
-    const id = canonicalId ?? parsed.id;
-    if (!id) throw new Error('Certificate ID is missing: ' + filePath);
-    return {
-      ...parsed,
-      id,
-      status: inferStatus(parsed.validFrom as number, parsed.validTo as number),
-    } as StoredCertificate;
-  }
-
-  private async readCertificateById(callsign: string, certId: string): Promise<StoredCertificate> {
-    return this.readCertificateFile(this.getCertificateFilePath(callsign, certId));
   }
 
   private toSummary(cert: StoredCertificate): LoTWCertificateSummary {
@@ -526,6 +512,74 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       fingerprint: cert.fingerprint,
       status: cert.status,
     };
+  }
+
+  private async listCertificateInventory(callsign: string): Promise<CertificateInventoryEntry[]> {
+    const files = await this.ctx.files.list(this.getCertificateDir(callsign));
+    const entries: CertificateInventoryEntry[] = [];
+
+    for (const filePath of files) {
+      if (!filePath.endsWith('.json')) continue;
+      const canonicalId = this.extractCertificateIdFromPath(filePath);
+      if (!canonicalId) continue;
+
+      try {
+        const data = await this.ctx.files.read(filePath);
+        if (!data) continue;
+
+        const parsed = JSON.parse(data.toString('utf-8')) as Partial<StoredCertificateFile>;
+        const storedId = typeof parsed.id === 'string' && parsed.id.trim() ? parsed.id : undefined;
+        const certificate = {
+          ...parsed,
+          id: canonicalId,
+          status: inferStatus(parsed.validFrom as number, parsed.validTo as number),
+        } as StoredCertificate;
+
+        entries.push({
+          filePath,
+          canonicalId,
+          storedId,
+          certificate,
+        });
+
+        if (storedId !== canonicalId) {
+          await this.repairCertificateId(filePath, parsed, canonicalId, storedId);
+        }
+      } catch (error) {
+        this.ctx.log.warn('Failed to read certificate file', {
+          filePath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return entries;
+  }
+
+  private async repairCertificateId(
+    filePath: string,
+    parsed: Partial<StoredCertificateFile>,
+    canonicalId: string,
+    storedId?: string,
+  ): Promise<void> {
+    try {
+      await this.ctx.files.write(
+        filePath,
+        Buffer.from(JSON.stringify({ ...parsed, id: canonicalId }, null, 2), 'utf-8'),
+      );
+      this.ctx.log.info('Repaired LoTW certificate ID to match file name', {
+        filePath,
+        oldId: storedId ?? null,
+        canonicalId,
+      });
+    } catch (error) {
+      this.ctx.log.warn('Failed to repair LoTW certificate ID', {
+        filePath,
+        oldId: storedId ?? null,
+        canonicalId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private extractCallsign(attributes: CertificateAttribute[], subjectText: string): string {
@@ -843,7 +897,11 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     const location = this.resolveUploadLocation(config, fallbackCallsign);
     const rule = getLoTWLocationRule(location.dxccId ?? null);
 
-    const certificates = await this.getCertificates(fallbackCallsign);
+    const certificateInventory = await this.listCertificateInventory(fallbackCallsign);
+    const certificates = certificateInventory.map((entry) => this.toSummary(entry.certificate));
+    const certificateById = new Map<string, StoredCertificate>(
+      certificateInventory.map((entry) => [entry.canonicalId, entry.certificate] as [string, StoredCertificate]),
+    );
 
     if (certificates.length === 0) {
       issues.push({ code: 'certificate_missing', severity: 'error', message: 'No LoTW certificate has been uploaded yet' });
@@ -876,7 +934,6 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       issues.push({ code: 'no_pending_qsos', severity: 'info', message: 'No pending QSOs need to be uploaded right now' });
     }
 
-    const certificateCache = new Map<string, StoredCertificate>();
     const batches = new Map<string, PreparedBatch>();
     const matchedCertificates = new Map<string, LoTWCertificateSummary>();
     let blockedCount = 0;
@@ -902,16 +959,11 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
         continue;
       }
 
-      let stored = certificateCache.get(summary.id);
+      const stored = certificateById.get(summary.id);
       if (!stored) {
-        try {
-          stored = await this.readCertificateById(summary.callsign, summary.id);
-          certificateCache.set(summary.id, stored);
-        } catch {
-          blockedCount += 1;
-          issues.push({ code: 'certificate_missing', severity: 'error', message: 'Certificate file is missing on disk' });
-          continue;
-        }
+        blockedCount += 1;
+        issues.push({ code: 'certificate_date_range_mismatch', severity: 'error', message: 'Some QSOs do not match any uploaded certificate by callsign, DXCC, and QSO date range' });
+        continue;
       }
 
       matchedCertificates.set(summary.id, this.toSummary(stored));
