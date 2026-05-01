@@ -290,8 +290,8 @@
     "settingsNote": "设置说明",
     "noteInput": "输入设备：用于接收FT8音频信号的设备",
     "noteOutput": "输出设备：用于发送FT8音频信号的设备",
-    "noteSampleRate": "采样率：建议使用48kHz以获得最佳音质",
-    "noteBuffer": "缓冲区：较大的缓冲区可以减少音频爆音，但会增加延迟"
+    "noteSampleRate": "采样率：声卡模式会按此参数打开设备；ICOM WLAN / OpenWebRX 等虚拟音频源使用各自固定采样率",
+    "noteBuffer": "缓冲区：声卡模式会按此参数打开设备；较大的缓冲区可以减少音频爆音，但会增加延迟"
   },
   "radioType": {
     "none": "纯监听",

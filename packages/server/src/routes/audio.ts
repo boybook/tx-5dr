@@ -93,6 +93,7 @@ export async function audioRoutes(fastify: FastifyInstance) {
 
       // 更新配置（只存储设备名称）
       await configManager.updateAudioConfig(settings);
+      digitalRadioEngine.getAudioStreamManager().reloadAudioConfig();
       fastify.log.info({ settings }, 'Audio device config updated');
 
       // 如果引擎之前在运行，重新启动它
@@ -139,6 +140,7 @@ export async function audioRoutes(fastify: FastifyInstance) {
         sampleRate: 48000,
         bufferSize: 1024,
       });
+      digitalRadioEngine.getAudioStreamManager().reloadAudioConfig();
 
       fastify.log.info('Audio device config reset to default');
 

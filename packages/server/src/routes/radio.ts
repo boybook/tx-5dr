@@ -104,6 +104,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       }
 
       await configManager.updateAudioConfig(updatedAudioConfig);
+      engine.getAudioStreamManager().reloadAudioConfig();
       logger.info('Audio devices auto-set to ICOM WLAN');
 
       if (wasRunning) {
