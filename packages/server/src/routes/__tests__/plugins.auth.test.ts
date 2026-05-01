@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UserRole, type PluginSystemSnapshot } from '@tx5dr/contracts';
 
@@ -65,7 +65,7 @@ describe('pluginRoutes auth', () => {
     const { pluginRoutes } = await import('../plugins.js');
     fastify = Fastify();
     fastify.decorateRequest('authUser', null);
-    fastify.addHook('onRequest', async (request) => {
+    fastify.addHook('onRequest', async (request: FastifyRequest) => {
       const role = request.headers['x-role'];
       request.authUser = typeof role === 'string'
         ? {
