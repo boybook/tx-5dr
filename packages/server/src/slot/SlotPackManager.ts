@@ -200,25 +200,8 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       processingTimeMs: result.processingTimeMs
     });
     
-    // 合并和去重帧数据
-    // 首先校正新解码结果中的时间偏移，消除窗口偏移的影响
-    const correctedFrames = result.frames.map(frame => {
-      const originalDt = frame.dt;
-      const windowOffsetSec = ((result as any).windowOffsetMs || 0) / 1000;
-      const correctedDt = originalDt - windowOffsetSec;
-      
-      // 如果有窗口偏移，显示校正信息
-      if ((result as any).windowOffsetMs && (result as any).windowOffsetMs !== 0) {
-        logger.debug(`Time correction window${result.windowIdx}: "${frame.message}" dt: ${originalDt.toFixed(3)}s -> ${correctedDt.toFixed(3)}s (offset: ${windowOffsetSec.toFixed(3)}s)`);
-      }
-      
-      return {
-        ...frame,
-        dt: correctedDt
-      };
-    });
-    
-    const allFrames = [...slotPack.frames, ...correctedFrames];
+    // 合并和去重帧数据。DT 使用解码器返回的原始值，不根据多窗口 offset 二次修正。
+    const allFrames = [...slotPack.frames, ...result.frames];
     slotPack.frames = this.deduplicateAndOptimizeFrames(allFrames);
     slotPack.stats.totalFramesAfterDedup = slotPack.frames.length;
     this.bumpUpdateSeq(slotPack);
