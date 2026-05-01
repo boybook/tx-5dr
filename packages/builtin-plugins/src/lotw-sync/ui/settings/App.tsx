@@ -370,6 +370,8 @@ export function App() {
     try {
       const result = await window.tx5dr.invoke('deleteCertificate', { callsign, id: certId }) as { success?: boolean } | null;
       if (!result?.success) {
+        setConfirmingDeleteCertId(null);
+        loadCertificates();
         setCertDeleteResult({ message: t('certDeleteFailed'), type: 'danger' });
         setTimeout(() => setCertDeleteResult(null), 5000);
         return;
@@ -379,6 +381,8 @@ export function App() {
       loadCertificates();
       setTimeout(() => setCertDeleteResult(null), 3000);
     } catch (err: any) {
+      setConfirmingDeleteCertId(null);
+      loadCertificates();
       const detail = err?.message ? `: ${err.message}` : '';
       setCertDeleteResult({ message: `${t('certDeleteFailed')}${detail}`, type: 'danger' });
       setTimeout(() => setCertDeleteResult(null), 5000);

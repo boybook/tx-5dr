@@ -166,9 +166,86 @@ describe('LoTWSyncProvider', () => {
 
     expect(certificates).toHaveLength(1);
     expect(certificates[0].id).toBe('file-cert');
+    expect(JSON.parse(files.get(filePath)!.toString('utf-8')).id).toBe('file-cert');
     await expect(provider.deleteCertificate('BG5DRB', certificates[0].id)).resolves.toBe(true);
     expect(files.has(filePath)).toBe(false);
     expect(ctx.files.delete).toHaveBeenCalledWith(filePath);
+  });
+
+  it('deletes a certificate when the UI passes a stale stored ID', async () => {
+    const { ctx, files } = createContext();
+    const provider = new LoTWSyncProvider(ctx);
+    const filePath = 'callsigns/BG5DRB/certificates/file-cert.json';
+    files.set(
+      filePath,
+      Buffer.from(JSON.stringify(createStoredCertificate({ id: 'stale-cert' })), 'utf-8'),
+    );
+
+    await expect(provider.deleteCertificate('BG5DRB', 'stale-cert')).resolves.toBe(true);
+
+    expect(files.has(filePath)).toBe(false);
+    expect(ctx.files.delete).toHaveBeenCalledWith(filePath);
+  });
+
+  it('treats deletion of an already-missing certificate as successful', async () => {
+    const { ctx, files } = createContext();
+    const provider = new LoTWSyncProvider(ctx);
+
+    await expect(provider.deleteCertificate('BG5DRB', 'ghost-cert')).resolves.toBe(true);
+
+    expect(files.size).toBe(0);
+    expect(ctx.files.delete).toHaveBeenCalledWith('callsigns/BG5DRB/certificates/ghost-cert.json');
+  });
+
+  it('does not report missing certificate files during preflight when stored IDs are stale', async () => {
+    const { ctx, files, queryQSOs } = createContext();
+    const provider = new LoTWSyncProvider(ctx);
+    provider.setConfig('BG5DRB', {
+      username: 'user',
+      password: 'pass',
+      uploadLocation: {
+        callsign: 'BG5DRB',
+        dxccId: 291,
+        gridSquare: 'PM01AA',
+        cqZone: '24',
+        ituZone: '44',
+        state: 'CA',
+        county: 'Santa Clara',
+      },
+      autoUploadQSO: false,
+    });
+    files.set(
+      'callsigns/BG5DRB/certificates/file-cert.json',
+      Buffer.from(JSON.stringify(createStoredCertificate({ id: 'stale-cert' })), 'utf-8'),
+    );
+    queryQSOs.mockResolvedValue([createQso('qso-1')]);
+
+    const result = await provider.getUploadPreflight('BG5DRB');
+
+    expect(result.ready).toBe(true);
+    expect(result.uploadableCount).toBe(1);
+    expect(result.matchedCertificateIds).toEqual(['file-cert']);
+    expect(result.issues.map((issue) => issue.message)).not.toContain('Certificate file is missing on disk');
+  });
+
+  it('deletes only the targeted certificate when multiple certificates exist', async () => {
+    const { ctx, files } = createContext();
+    const provider = new LoTWSyncProvider(ctx);
+    const targetPath = 'callsigns/BG5DRB/certificates/target-cert.json';
+    const otherPath = 'callsigns/BG5DRB/certificates/other-cert.json';
+    files.set(
+      targetPath,
+      Buffer.from(JSON.stringify(createStoredCertificate({ id: 'stale-target' })), 'utf-8'),
+    );
+    files.set(
+      otherPath,
+      Buffer.from(JSON.stringify(createStoredCertificate({ id: 'other-cert', fingerprint: '123456' })), 'utf-8'),
+    );
+
+    await expect(provider.deleteCertificate('BG5DRB', 'stale-target')).resolves.toBe(true);
+
+    expect(files.has(targetPath)).toBe(false);
+    expect(files.has(otherPath)).toBe(true);
   });
 
   it('auto-upload uses explicit records without rescanning the logbook', async () => {
