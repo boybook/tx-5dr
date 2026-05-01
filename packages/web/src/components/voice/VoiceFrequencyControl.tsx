@@ -667,25 +667,30 @@ export const VoiceFrequencyControl: React.FC = () => {
         {/* Interactive frequency display */}
         <div className="flex-shrink-0 text-center py-2">
           <div className="flex items-center justify-center font-mono font-bold text-foreground">
-            {frequencyDigits.map((entry, i) => {
-              if (entry.isSeparator) {
-                return <span key={`sep-${i}`} className="text-3xl mx-0.5 text-default-400 select-none">.</span>;
-              }
-              return (
-                <FrequencyDigit
-                  key={`d-${i}`}
-                  digit={entry.char}
-                  placeValue={entry.placeValue}
-                  disabled={!canWriteFrequency}
-                  isLeadingZero={entry.isLeadingZero}
-                  onIncrement={() => changeDigitAtPlace(entry.placeValue, 1)}
-                  onDecrement={() => changeDigitAtPlace(entry.placeValue, -1)}
-                  onSetDigit={(v) => setDigitAtPlace(entry.placeValue, v)}
-                />
-              );
-            })}
+            <div className="min-w-0 shrink overflow-hidden flex justify-end" aria-hidden="true">
+              <span className="mr-3 translate-y-1.5 text-xs font-semibold text-default-400 invisible">{t('frequency.mhz')}</span>
+            </div>
+            <div className="flex flex-none items-center justify-center">
+              {frequencyDigits.map((entry, i) => {
+                if (entry.isSeparator) {
+                  return <span key={`sep-${i}`} className="text-3xl mx-0.5 text-default-400 select-none">.</span>;
+                }
+                return (
+                  <FrequencyDigit
+                    key={`d-${i}`}
+                    digit={entry.char}
+                    placeValue={entry.placeValue}
+                    disabled={!canWriteFrequency}
+                    isLeadingZero={entry.isLeadingZero}
+                    onIncrement={() => changeDigitAtPlace(entry.placeValue, 1)}
+                    onDecrement={() => changeDigitAtPlace(entry.placeValue, -1)}
+                    onSetDigit={(v) => setDigitAtPlace(entry.placeValue, v)}
+                  />
+                );
+              })}
+            </div>
+            <span className="ml-3 flex-none self-center translate-y-1.5 text-xs font-semibold text-default-400">{t('frequency.mhz')}</span>
           </div>
-          <div className="text-xs text-default-400 mt-1">{t('frequency.mhz')}</div>
         </div>
 
         {/* Radio mode buttons */}
