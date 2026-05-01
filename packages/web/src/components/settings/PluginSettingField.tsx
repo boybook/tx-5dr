@@ -1,5 +1,7 @@
 import React from 'react';
-import { Button, Switch, Input, Select, SelectItem, Textarea } from '@heroui/react';
+import { Button, Switch, Input, Select, SelectItem, Textarea, Tooltip } from '@heroui/react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 import type { PluginSettingDescriptor } from '@tx5dr/contracts';
 import i18n from '../../i18n/index';
 import { resolvePluginLabel } from '../../utils/pluginLocales';
@@ -17,6 +19,22 @@ interface PluginSettingFieldProps {
   pluginName: string;
   settings?: Record<string, unknown>;
 }
+
+const PluginSettingInfoIcon: React.FC<{ description: string; label: string }> = ({ description, label }) => (
+  <Tooltip
+    content={<div className="max-w-[260px] whitespace-normal text-xs leading-5">{description}</div>}
+    placement="top"
+    closeDelay={80}
+  >
+    <span
+      className="inline-flex h-5 w-5 shrink-0 cursor-help items-center justify-center rounded-full text-default-400 transition-colors hover:text-default-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+      tabIndex={0}
+      aria-label={label}
+    >
+      <FontAwesomeIcon icon={faCircleInfo} className="text-[13px]" />
+    </span>
+  </Tooltip>
+);
 
 /**
  * 通用的单个插件设置项渲染组件
@@ -61,7 +79,15 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
   if (descriptor.type === 'boolean') {
     return (
       <div className="flex items-center justify-between gap-3 rounded-lg border border-default-200/60 bg-content1 px-3 py-2">
-        <span className="text-sm text-default-700">{label}</span>
+        <span className="flex min-w-0 items-center gap-1.5 text-sm text-default-700">
+          <span className="min-w-0">{label}</span>
+          {description && (
+            <PluginSettingInfoIcon
+              description={description}
+              label={`${label}: ${description}`}
+            />
+          )}
+        </span>
         <Switch
           size="sm"
           isSelected={!!value}

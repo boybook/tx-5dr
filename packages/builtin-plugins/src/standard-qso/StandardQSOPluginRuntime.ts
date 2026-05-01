@@ -29,6 +29,7 @@ import type { PluginLogger } from '@tx5dr/plugin-api';
 export const STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING = 'tx6MessageOverride';
 
 export type StandardQSOOperatorConfig = OperatorConfig & {
+    skipTx1?: boolean;
     tx6MessageOverride?: string;
 };
 
@@ -1076,7 +1077,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             }
 
                             strategy.updateSlots();
-                            return { changeState: 'TX1' };
+                            return { changeState: strategy.getInitialOutboundCallState() };
                         } else {
                             strategy.logger.debug(`TX6: skipping CQ from ${callsign} - already worked (SNR: ${cqCall.snr})`);
                         }
@@ -1292,6 +1293,10 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         }
     }
 
+    getInitialOutboundCallState(): SlotsIndex {
+        return this.operator.config.skipTx1 === true ? 'TX2' : 'TX1';
+    }
+
     requestCall(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): void {
         this.syncOperatorConfig();
         this.logger.debug(`requestCall: myCallsign=${this.operator.config.myCallsign}, target=${callsign}`, lastMessage);
@@ -1299,7 +1304,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         if (!lastMessage) {
             this.context.targetCallsign = callsign;
             this.updateSlots();
-            this.changeState('TX1');  // 呼叫他
+            this.changeState(this.getInitialOutboundCallState());  // 呼叫他
             return;
         }
         this.context.targetCallsign = callsign;
@@ -1316,7 +1321,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         }
         if (msg.type === FT8MessageType.UNKNOWN || msg.type === FT8MessageType.CUSTOM) {
             this.updateSlots();
-            this.changeState('TX1');  // 呼叫他
+            this.changeState(this.getInitialOutboundCallState());  // 呼叫他
             return;
         }
         // 包含 targetCallsign 的消息
@@ -1375,13 +1380,13 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             } else {
                 // 和我无关，那么就正常CQ他
                 this.updateSlots();
-                this.changeState('TX1');  // 呼叫他
+                this.changeState(this.getInitialOutboundCallState());  // 呼叫他
             }
             return;
         }
         // 不包含 targetCallsign 的消息
         this.updateSlots();
-        this.changeState('TX1');  // 呼叫他
+        this.changeState(this.getInitialOutboundCallState());  // 呼叫他
     }
 
     decide(messages: ParsedFT8Message[], meta?: StrategyDecisionMeta): Promise<StrategyDecision> {
