@@ -37,6 +37,7 @@ import { PluginPageSessionStore, type PluginPageSession } from './PluginPageSess
 import {
   buildStandardQSODefaultTx6Message,
   BUILTIN_PLUGINS,
+  BUILTIN_SNR_FILTER_PLUGIN_NAME,
   BUILTIN_STANDARD_QSO_PLUGIN_NAME,
   normalizeStandardQSOTx6MessageOverride,
   STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING,
@@ -123,6 +124,7 @@ export class PluginManager {
       analyzeCallsignForOperator: deps.analyzeCallsignForOperator,
       resolveGrid: deps.resolveGrid,
       setOperatorAudioFrequency: deps.setOperatorAudioFrequency,
+      isSnrPriorityEnabled: (operatorId) => this.isSnrPriorityEnabled(operatorId),
       getStrategyRuntime: (operatorId) => this.getStrategyRuntime(operatorId),
       getCtxForInstance: (instance) => this.getCtxForInstance(instance),
       dispatcher: this.dispatcher,
@@ -602,6 +604,17 @@ export class PluginManager {
   /** 获取操作员维度的插件设置 */
   getOperatorPluginSettings(operatorId: string, pluginName: string): Record<string, unknown> {
     return this.pluginsConfig.operatorSettings?.[operatorId]?.[pluginName] ?? {};
+  }
+
+  private isSnrPriorityEnabled(operatorId: string): boolean {
+    const plugin = this.loadedPlugins.get(BUILTIN_SNR_FILTER_PLUGIN_NAME);
+    const instance = this.instances.get(operatorId)?.get(BUILTIN_SNR_FILTER_PLUGIN_NAME);
+    if (!plugin || !instance?.enabled) {
+      return false;
+    }
+
+    const settings = this.buildMergedSettings(plugin, BUILTIN_SNR_FILTER_PLUGIN_NAME, operatorId);
+    return settings.prioritizeHigherSNR === true;
   }
 
   /**

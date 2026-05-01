@@ -1,6 +1,9 @@
-import type { PluginDefinition } from '@tx5dr/plugin-api';
+import type { PluginDefinition, ScoredCandidate } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
+
+export const BUILTIN_SNR_FILTER_PLUGIN_NAME = 'snr-filter';
+const SNR_PRIORITY_SCORE_MULTIPLIER = 1000;
 
 /**
  * SNR Filter — 内置示例工具插件（默认未启用）
@@ -15,7 +18,7 @@ import enLocale from './locales/en.json' with { type: 'json' };
  * 用户可以将此插件作为编写工具插件的参考范本。
  */
 export const snrFilterPlugin: PluginDefinition = {
-  name: 'snr-filter',
+  name: BUILTIN_SNR_FILTER_PLUGIN_NAME,
   version: '1.0.0',
   type: 'utility',
   description: 'Filter candidates below a minimum SNR threshold',
@@ -37,6 +40,13 @@ export const snrFilterPlugin: PluginDefinition = {
       min: -30,
       max: 10,
     },
+    prioritizeHigherSNR: {
+      type: 'boolean',
+      default: true,
+      label: 'prioritizeHigherSNR',
+      description: 'prioritizeHigherSNRDesc',
+      scope: 'global',
+    },
   },
 
   hooks: {
@@ -53,6 +63,24 @@ export const snrFilterPlugin: PluginDefinition = {
       }
 
       return filtered;
+    },
+
+    onScoreCandidates(candidates, ctx) {
+      if (ctx.config.prioritizeHigherSNR !== true) {
+        return candidates;
+      }
+
+      const scored = candidates.map((candidate) => ({
+        ...candidate,
+        score: candidate.score + candidate.snr * SNR_PRIORITY_SCORE_MULTIPLIER,
+      }) satisfies ScoredCandidate);
+
+      ctx.log.debug('SNR priority scoring applied', {
+        candidateCount: candidates.length,
+        multiplier: SNR_PRIORITY_SCORE_MULTIPLIER,
+      });
+
+      return scored;
     },
   },
 };

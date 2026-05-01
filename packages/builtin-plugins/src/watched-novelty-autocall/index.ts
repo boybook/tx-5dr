@@ -10,6 +10,7 @@ import {
   getSenderCallsign,
   getTriggerMode,
   getAutocallPriority as getAutocallPriorityBase,
+  compareByScoreThenSnr,
   isPureStandby,
   shouldTriggerMessage,
   toFrameMessage,
@@ -49,7 +50,8 @@ function findMatchedTarget(
   }
 
   const triggerMode = getTriggerMode(ctx);
-  for (const parsedMessage of messages) {
+  const matches: Array<{ callsign: string; message: ParsedFT8Message; matchedKinds: string[]; order: number }> = [];
+  for (const [order, parsedMessage] of messages.entries()) {
     const callsign = getSenderCallsign(parsedMessage.message);
     if (!callsign || !shouldTriggerMessage(parsedMessage, ctx, triggerMode)) {
       continue;
@@ -57,15 +59,20 @@ function findMatchedTarget(
 
     const matchedKinds = getMatchedNoveltyKinds(parsedMessage, ctx);
     if (matchedKinds.length > 0) {
-      return {
+      matches.push({
         callsign,
         message: parsedMessage,
         matchedKinds,
-      };
+        order,
+      });
     }
   }
 
-  return null;
+  matches.sort((left, right) =>
+    compareByScoreThenSnr(left.message, right.message) || left.order - right.order
+  );
+
+  return matches[0] ?? null;
 }
 
 export const watchedNoveltyAutocallPlugin: PluginDefinition = {

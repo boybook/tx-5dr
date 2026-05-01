@@ -10,6 +10,7 @@ import {
   getSenderCallsign,
   getTriggerMode,
   getAutocallPriority as getAutocallPriorityBase,
+  compareByScoreThenSnr,
   isPureStandby,
   shouldTriggerMessage,
   toFrameMessage,
@@ -100,9 +101,16 @@ function findMatchedTarget(
   }
 
   const triggerMode = getTriggerMode(ctx);
+  const matches: Array<{
+    callsign: string;
+    message: ParsedFT8Message;
+    rule: WatchRule;
+    ruleOrder: number;
+    messageOrder: number;
+  }> = [];
 
-  for (const watchRule of watchRules) {
-    for (const parsedMessage of messages) {
+  for (const [ruleOrder, watchRule] of watchRules.entries()) {
+    for (const [messageOrder, parsedMessage] of messages.entries()) {
       const senderCallsign = getSenderCallsign(parsedMessage.message);
       if (!senderCallsign || !watchRule.matches(senderCallsign)) {
         continue;
@@ -110,11 +118,23 @@ function findMatchedTarget(
       if (!shouldTriggerMessage(parsedMessage, ctx, triggerMode)) {
         continue;
       }
-      return { callsign: senderCallsign, message: parsedMessage, rule: watchRule };
+      matches.push({
+        callsign: senderCallsign,
+        message: parsedMessage,
+        rule: watchRule,
+        ruleOrder,
+        messageOrder,
+      });
     }
   }
 
-  return null;
+  matches.sort((left, right) =>
+    compareByScoreThenSnr(left.message, right.message)
+      || left.ruleOrder - right.ruleOrder
+      || left.messageOrder - right.messageOrder
+  );
+
+  return matches[0] ?? null;
 }
 
 export const watchedCallsignAutocallPlugin: PluginDefinition = {

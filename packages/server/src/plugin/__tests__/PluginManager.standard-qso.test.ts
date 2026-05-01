@@ -1067,6 +1067,90 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('lets snr-filter prioritize a higher-SNR normal CQ over a weak new DXCC CQ', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      autoReplyToCQ: true,
+      pluginConfigs: {
+        'snr-filter': {
+          enabled: true,
+          settings: {
+            minSNR: -30,
+            prioritizeHigherSNR: true,
+          },
+        },
+      },
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(15_000), createSlotPack(createSlotInfo(15_000), [
+      {
+        message: 'CQ DX1NEW OO01',
+        snr: -16,
+        freq: 1200,
+        logbookAnalysis: {
+          callsign: 'DX1NEW',
+          isNewDxccEntity: true,
+          dxccStatus: 'current',
+        },
+      },
+      {
+        message: 'CQ JA1AAA PM95',
+        snr: -3,
+        freq: 1400,
+        logbookAnalysis: {
+          callsign: 'JA1AAA',
+          isNewDxccEntity: false,
+          dxccStatus: 'current',
+        },
+      },
+    ]));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBe('JA1AAA');
+
+    await pluginManager.shutdown();
+  });
+
+  it('keeps novelty-first CQ selection when snr-filter SNR-priority is disabled', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      autoReplyToCQ: true,
+      pluginConfigs: {
+        'snr-filter': {
+          enabled: true,
+          settings: {
+            minSNR: -30,
+            prioritizeHigherSNR: false,
+          },
+        },
+      },
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(15_000), createSlotPack(createSlotInfo(15_000), [
+      {
+        message: 'CQ DX1NEW OO01',
+        snr: -16,
+        freq: 1200,
+        logbookAnalysis: {
+          callsign: 'DX1NEW',
+          isNewDxccEntity: true,
+          dxccStatus: 'current',
+        },
+      },
+      {
+        message: 'CQ JA1AAA PM95',
+        snr: -3,
+        freq: 1400,
+        logbookAnalysis: {
+          callsign: 'JA1AAA',
+          isNewDxccEntity: false,
+          dxccStatus: 'current',
+        },
+      },
+    ]));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBe('DX1NEW');
+
+    await pluginManager.shutdown();
+  });
+
   it('does not auto-reply to a low-score no-reply memory CQ candidate', async () => {
     const { operator, pluginManager } = await createRuntimeHarness({
       autoReplyToCQ: true,
@@ -1856,7 +1940,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
-  it('uses watch list order as the priority when multiple watched callsigns appear', async () => {
+  it('uses SNR as the priority when multiple watched callsigns appear', async () => {
     const { operator, pluginManager } = await createRuntimeHarness({
       startOperator: false,
       pluginConfigs: {
@@ -1898,7 +1982,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     );
 
     expect(operator.isTransmitting).toBe(true);
-    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('BG5DRB BG4IAJ OM96');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG4IAJ OM96');
 
     await pluginManager.shutdown();
   });

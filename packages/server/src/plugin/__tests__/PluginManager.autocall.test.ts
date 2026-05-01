@@ -289,6 +289,123 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBeUndefined();
   });
 
+  it('does not let weak novelty autocall overtake a higher-SNR normal candidate when SNR priority is enabled', async () => {
+    const { eventEmitter, operator, pluginManager } = await createHarness({
+      pluginConfigs: {
+        'snr-filter': {
+          enabled: true,
+          settings: {
+            minSNR: -30,
+            prioritizeHigherSNR: true,
+          },
+        },
+        'watched-novelty-autocall': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'watched-novelty-autocall': {
+          watchNewGrid: true,
+          triggerMode: 'cq',
+          autocallPriority: 80,
+        },
+      },
+      analyzeCallsign: async (callsign) => ({
+        callsign,
+        isNewGrid: callsign === 'DX4LOW',
+        dxccStatus: 'current',
+      }),
+    });
+
+    const slotInfo = createSlotInfo(60_000);
+    eventEmitter.emit('slotStart', slotInfo, createSlotPack(slotInfo, [
+      { message: 'CQ DX4LOW OJ11', snr: -16 },
+      { message: 'CQ JA1AAA PM95', snr: -3 },
+    ]));
+    await flushAsyncWork();
+
+    expect(operator.isTransmitting).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBeUndefined();
+  });
+
+  it('allows novelty autocall when the new grid is also the highest-SNR candidate', async () => {
+    const { eventEmitter, operator, pluginManager } = await createHarness({
+      pluginConfigs: {
+        'snr-filter': {
+          enabled: true,
+          settings: {
+            minSNR: -30,
+            prioritizeHigherSNR: true,
+          },
+        },
+        'watched-novelty-autocall': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'watched-novelty-autocall': {
+          watchNewGrid: true,
+          triggerMode: 'cq',
+          autocallPriority: 80,
+        },
+      },
+      analyzeCallsign: async (callsign) => ({
+        callsign,
+        isNewGrid: callsign === 'DX4HIGH',
+        dxccStatus: 'current',
+      }),
+    });
+
+    const slotInfo = createSlotInfo(75_000);
+    eventEmitter.emit('slotStart', slotInfo, createSlotPack(slotInfo, [
+      { message: 'CQ DX4HIGH OJ11', snr: -3 },
+      { message: 'CQ JA1AAA PM95', snr: -16 },
+    ]));
+    await flushAsyncWork();
+
+    expect(operator.isTransmitting).toBe(true);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBe('DX4HIGH');
+  });
+
+  it('ranks autocall proposals by source score before plugin priority when SNR priority is enabled', async () => {
+    const { eventEmitter, operator, pluginManager } = await createHarness({
+      pluginConfigs: {
+        'snr-filter': {
+          enabled: true,
+          settings: {
+            minSNR: -30,
+            prioritizeHigherSNR: true,
+          },
+        },
+        'watched-callsign-autocall': { enabled: true, settings: {} },
+        'watched-novelty-autocall': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'watched-callsign-autocall': {
+          watchList: ['JA1AAA'],
+          triggerMode: 'cq',
+          autocallPriority: 10,
+        },
+        'watched-novelty-autocall': {
+          watchNewDxcc: true,
+          triggerMode: 'cq',
+          autocallPriority: 100,
+        },
+      },
+      analyzeCallsign: async (callsign) => ({
+        callsign,
+        isNewDxccEntity: callsign === 'DX4LOW',
+        dxccStatus: 'current',
+      }),
+    });
+
+    const slotInfo = createSlotInfo(90_000);
+    eventEmitter.emit('slotStart', slotInfo, createSlotPack(slotInfo, [
+      { message: 'CQ DX4LOW OJ11', snr: -16 },
+      { message: 'CQ JA1AAA PM95', snr: -3 },
+    ]));
+    await flushAsyncWork();
+
+    expect(operator.isTransmitting).toBe(true);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBe('JA1AAA');
+  });
+
   it('applies no-reply memory before watched novelty autocall proposals', async () => {
     const { eventEmitter, operator, pluginManager } = await createHarness({
       pluginConfigs: {

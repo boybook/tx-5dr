@@ -29,7 +29,11 @@ import {
   STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING,
 } from './standard-qso/index.js';
 
-import { snrFilterPlugin, snrFilterLocales } from './snr-filter/index.js';
+import {
+  snrFilterPlugin,
+  snrFilterLocales,
+  BUILTIN_SNR_FILTER_PLUGIN_NAME,
+} from './snr-filter/index.js';
 
 import {
   noReplyMemoryFilterPlugin,
@@ -100,6 +104,7 @@ export interface BuiltinPluginEntry {
 
 export {
   BUILTIN_STANDARD_QSO_PLUGIN_NAME,
+  BUILTIN_SNR_FILTER_PLUGIN_NAME,
   STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING,
   buildStandardQSODefaultTx6Message,
   normalizeStandardQSOTx6MessageOverride,

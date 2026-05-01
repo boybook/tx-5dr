@@ -16,6 +16,7 @@ import {
 import type {
   AutoCallExecutionPlan,
   AutoCallExecutionRequest,
+  ScoredCandidate,
   StrategyDecision,
   StrategyDecisionMeta,
 } from '@tx5dr/plugin-api';
@@ -49,6 +50,11 @@ function getParsedMessageKey(message: ParsedFT8Message): string {
   return `${message.slotId}|${message.rawMessage}|${message.df}|${message.dt}`;
 }
 
+function getScoredCandidateScore(message: ParsedFT8Message | undefined): number | undefined {
+  const score = (message as { score?: unknown } | undefined)?.score;
+  return typeof score === 'number' && Number.isFinite(score) ? score : undefined;
+}
+
 export class DecisionOrchestrator {
   private decisionStates = new Map<string, OperatorDecisionState>();
 
@@ -78,7 +84,7 @@ export class DecisionOrchestrator {
 
       let automaticTargetMessages: ParsedFT8Message[] | undefined;
       if (this.isOperatorPureStandby(operator.config.id)) {
-        automaticTargetMessages = await this.getFilteredAutomaticTargetMessages(
+        automaticTargetMessages = await this.getScoredAutomaticTargetMessages(
           operator.config.id,
           parsedMessages,
         );
@@ -98,21 +104,15 @@ export class DecisionOrchestrator {
       session.lastDecisionTransmission = null;
       session.lastDecisionMessageSet = null;
       session.preDecisionEncodedTransmission = undefined;
-      automaticTargetMessages ??= await this.getFilteredAutomaticTargetMessages(
+      automaticTargetMessages ??= await this.getScoredAutomaticTargetMessages(
         operator.config.id,
         parsedMessages,
       );
-      const scored = await this.deps.dispatcher.dispatchScoreCandidates(
-        operator.config.id,
-        automaticTargetMessages.map((message) => ({ ...message, score: 0 })),
-        (instance) => this.deps.getCtxForInstance(instance),
-      );
-      scored.sort((a, b) => b.score - a.score);
 
       let decision;
       session.decisionInProgress = true;
       try {
-        decision = await this.invokeStrategyDecision(operator.config.id, scored, { isReDecision: false });
+        decision = await this.invokeStrategyDecision(operator.config.id, automaticTargetMessages, { isReDecision: false });
       } finally {
         session.decisionInProgress = false;
       }
@@ -200,21 +200,15 @@ export class DecisionOrchestrator {
     }
 
     const parsedMessages = await this.parseSlotPackMessages(slotPack, operatorId);
-    const automaticTargetMessages = await this.getFilteredAutomaticTargetMessages(
+    const automaticTargetMessages = await this.getScoredAutomaticTargetMessages(
       operatorId,
       parsedMessages,
     );
-    const scored = await this.deps.dispatcher.dispatchScoreCandidates(
-      operatorId,
-      automaticTargetMessages.map((message) => ({ ...message, score: 0 })),
-      (instance) => this.deps.getCtxForInstance(instance),
-    );
-    scored.sort((a, b) => b.score - a.score);
 
     let decision: StrategyDecision | null = null;
     session.decisionInProgress = true;
     try {
-      decision = await this.invokeStrategyDecision(operatorId, scored, { isReDecision: true });
+      decision = await this.invokeStrategyDecision(operatorId, automaticTargetMessages, { isReDecision: true });
     } finally {
       session.decisionInProgress = false;
     }
@@ -346,6 +340,25 @@ export class DecisionOrchestrator {
       (instance) => this.deps.getCtxForInstance(instance),
     );
     return this.preserveActiveQsoMessages(operatorId, automaticTargetMessages, filteredMessages);
+  }
+
+  private async getScoredAutomaticTargetMessages(
+    operatorId: string,
+    messages: ParsedFT8Message[],
+  ): Promise<ScoredCandidate[]> {
+    const filteredMessages = await this.getFilteredAutomaticTargetMessages(operatorId, messages);
+    const scored = await this.deps.dispatcher.dispatchScoreCandidates(
+      operatorId,
+      filteredMessages.map((message) => ({ ...message, score: 0 })),
+      (instance) => this.deps.getCtxForInstance(instance),
+    );
+    return scored.sort((left, right) => {
+      if (left.score !== right.score) {
+        return right.score - left.score;
+      }
+      return messages.findIndex((message) => getParsedMessageKey(message) === getParsedMessageKey(left))
+        - messages.findIndex((message) => getParsedMessageKey(message) === getParsedMessageKey(right));
+    });
   }
 
   private filterAutomaticTargetMessages(
@@ -517,6 +530,7 @@ export class DecisionOrchestrator {
       return;
     }
 
+    const snrPriorityEnabled = this.deps.isSnrPriorityEnabled?.(operatorId) === true;
     const ranked = proposals
       .filter((entry) => this.isAutoCallProposalEligible(operatorId, entry, messages))
       .map((entry) => this.normalizeAutoCallProposal(operatorId, slotInfo, messages, entry))
@@ -524,8 +538,12 @@ export class DecisionOrchestrator {
         ...entry,
         priority: typeof entry.proposal.priority === 'number' ? entry.proposal.priority : 0,
         messageOrder: this.resolveProposalMessageOrder(entry.proposal, messages),
+        sourceScore: this.resolveProposalSourceScore(entry.proposal, messages),
       }))
       .sort((left, right) => {
+        if (snrPriorityEnabled && left.sourceScore !== right.sourceScore) {
+          return right.sourceScore - left.sourceScore;
+        }
         if (left.priority !== right.priority) {
           return right.priority - left.priority;
         }
@@ -590,7 +608,25 @@ export class DecisionOrchestrator {
 
     const decision = evaluateAutomaticTargetEligibility(operator.config.myCallsign, sourceMessage);
     if (decision.eligible) {
-      return true;
+      if (!this.deps.isSnrPriorityEnabled?.(operatorId)) {
+        return true;
+      }
+
+      const sourceScore = getScoredCandidateScore(sourceMessage);
+      const topScore = this.resolveTopMessageScore(messages);
+      if (sourceScore === undefined || topScore === undefined || sourceScore >= topScore) {
+        return true;
+      }
+
+      logger.info('Auto call proposal rejected by SNR-priority', {
+        operatorId,
+        pluginName: entry.pluginName,
+        callsign: entry.proposal.callsign,
+        sourceScore,
+        topScore,
+        rawMessage: sourceMessage.rawMessage,
+      });
+      return false;
     }
 
     logger.info('Auto call proposal rejected by CQ modifier eligibility', {
@@ -679,6 +715,28 @@ export class DecisionOrchestrator {
       message.rawMessage === lastMessage.message.message
     ));
     return rawIndex >= 0 ? rawIndex : Number.MAX_SAFE_INTEGER;
+  }
+
+  private resolveProposalSourceScore(
+    proposal: AutoCallProposalResult['proposal'],
+    messages: ParsedFT8Message[],
+  ): number {
+    const sourceMessage = this.findProposalSourceMessage(proposal, messages);
+    return getScoredCandidateScore(sourceMessage) ?? Number.NEGATIVE_INFINITY;
+  }
+
+  private resolveTopMessageScore(messages: ParsedFT8Message[]): number | undefined {
+    let topScore: number | undefined;
+    for (const message of messages) {
+      const score = getScoredCandidateScore(message);
+      if (score === undefined) {
+        continue;
+      }
+      if (topScore === undefined || score > topScore) {
+        topScore = score;
+      }
+    }
+    return topScore;
   }
 
   private async resolveAutoCallExecutionPlan(
