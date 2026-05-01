@@ -16,7 +16,7 @@ import type {
   SyncUploadOptions,
 } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
-import { getBandFromFrequency } from '@tx5dr/core';
+import { getBandFromFrequency, toLotwContactMode } from '@tx5dr/core';
 import { getPluginPageScopePath, normalizeCallsign as normalizeCallsignBase } from '@tx5dr/plugin-api';
 
 // ===== Types (plugin-internal, formerly in contracts/lotw.schema.ts) =====
@@ -1014,7 +1014,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       const date = formatLoTWDate(qso.startTime);
       const time = formatLoTWTime(qso.startTime);
       const band = this.resolveBand(qso);
-      const mode = (qso.mode || 'FT8').toUpperCase();
+      const mode = toLotwContactMode(qso);
       const frequency = formatFrequencyMHz(qso.frequency);
       const signData = this.buildSignData({ qso, location, dxccId: certificate.dxccId, band, mode, frequency, date, time });
       const signature = this.signLog(certificate.privateKeyPem, signData);

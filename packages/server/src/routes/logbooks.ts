@@ -937,6 +937,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       await logBook.provider.addQSO(record);
       const created = await logBook.provider.getQSO(newId);
+      const createdRecord = created ?? record;
 
       logger.info('QSO record created manually', { logBookId: logBook.id, callsign: body.callsign, operatorId });
 
@@ -945,7 +946,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       digitalRadioEngine.emit('qsoRecordAdded' as any, {
         operatorId: operatorId || '',
         logBookId: logBook.id,
-        qsoRecord: record,
+        qsoRecord: createdRecord,
       });
       try {
         const statistics = await logBook.provider.getStatistics();
@@ -959,9 +960,9 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         logger.warn('Failed to get logbook statistics after manual QSO creation:', statsError);
       }
 
-      // 自动同步到外部服务（WaveLog / QRZ）
+      // 自动同步到外部服务（WaveLog / QRZ / LoTW）
       if (myCallsign && operatorId) {
-        digitalRadioEngine.operatorManager.triggerAutoSync(record, myCallsign, operatorId).catch((err) => {
+        digitalRadioEngine.operatorManager.triggerAutoSync(createdRecord, myCallsign, operatorId).catch((err) => {
           logger.warn('Auto-sync failed for manually created QSO:', err);
         });
       }

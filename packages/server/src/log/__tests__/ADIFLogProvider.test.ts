@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -114,6 +114,128 @@ describe('ADIFLogProvider import', () => {
     expect(exported).toContain('<OPERATOR:6>BG2XYZ');
     expect(exported).not.toContain('<NOTE:11>Manual note');
     expect(exported).not.toContain('<STATE:2>CA');
+
+    await provider.close();
+  });
+
+  it('stores voice sideband QSOs as standard SSB ADIF with submode', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'voice-usb-export',
+      callsign: 'N0CALL',
+      frequency: 14270000,
+      mode: 'USB',
+      startTime: Date.parse('2026-04-17T12:00:00Z'),
+      endTime: Date.parse('2026-04-17T12:05:00Z'),
+      reportSent: '59',
+      reportReceived: '59',
+      messageHistory: [],
+      myCallsign: 'BG5DRB',
+      myGrid: 'PM01AA',
+    }, 'op1');
+
+    const qso = await provider.getQSO('voice-usb-export');
+    const saved = await readFile(join(tempDir, 'logbook.adi'), 'utf-8');
+
+    expect(qso?.mode).toBe('SSB');
+    expect(qso?.submode).toBe('USB');
+    expect(saved).toContain('<MODE:3>SSB');
+    expect(saved).toContain('<SUBMODE:3>USB');
+
+    await provider.close();
+  });
+
+  it('normalizes legacy sideband modes when loading the ADIF cache', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-import-'));
+    tempDirs.push(tempDir);
+    const logFilePath = join(tempDir, 'logbook.adi');
+    await writeFile(logFilePath, buildAdif([
+      '<CALL:6>N0CALL<QSO_DATE:8>20260417<TIME_ON:6>120000<MODE:3>USB<FREQ:9>14.270000<EOR>',
+    ]), 'utf-8');
+
+    const provider = new ADIFLogProvider({
+      logFilePath,
+      autoCreateFile: false,
+      logFileName: 'logbook.adi',
+    });
+    await provider.initialize();
+
+    const qsos = await provider.queryQSOs();
+    const saved = await readFile(logFilePath, 'utf-8');
+
+    expect(qsos).toHaveLength(1);
+    expect(qsos[0].mode).toBe('SSB');
+    expect(qsos[0].submode).toBe('USB');
+    expect(saved).toContain('<MODE:3>SSB');
+    expect(saved).toContain('<SUBMODE:3>USB');
+    expect(saved).not.toContain('<MODE:3>USB');
+
+    await provider.close();
+  });
+
+  it('clears stale sideband submode when a QSO is updated to a non-SSB mode', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'voice-to-fm',
+      callsign: 'N0CALL',
+      frequency: 145500000,
+      mode: 'USB',
+      startTime: Date.parse('2026-04-17T12:00:00Z'),
+      messageHistory: [],
+    }, 'op1');
+
+    await provider.updateQSO('voice-to-fm', { mode: 'FM' });
+    const qso = await provider.getQSO('voice-to-fm');
+    const saved = await readFile(join(tempDir, 'logbook.adi'), 'utf-8');
+
+    expect(qso?.mode).toBe('FM');
+    expect(qso?.submode).toBeUndefined();
+    expect(saved).toContain('<MODE:2>FM');
+    expect(saved).not.toContain('<SUBMODE:3>USB');
+
+    await provider.close();
+  });
+
+  it('filters standard sideband records by displayed USB and aggregate SSB modes', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'voice-usb-filter',
+      callsign: 'N0USB',
+      frequency: 14270000,
+      mode: 'USB',
+      startTime: Date.parse('2026-04-17T12:00:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    await provider.addQSO({
+      id: 'voice-lsb-filter',
+      callsign: 'N0LSB',
+      frequency: 7270000,
+      mode: 'LSB',
+      startTime: Date.parse('2026-04-17T12:10:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    await provider.addQSO({
+      id: 'voice-fm-filter',
+      callsign: 'N0FM',
+      frequency: 145500000,
+      mode: 'FM',
+      startTime: Date.parse('2026-04-17T12:20:00Z'),
+      messageHistory: [],
+    }, 'op1');
+
+    const usbQsos = await provider.queryQSOs({ mode: 'USB' });
+    const ssbQsos = await provider.queryQSOs({ mode: 'SSB' });
+    const fmQsos = await provider.queryQSOs({ mode: 'FM' });
+
+    expect(usbQsos.map(qso => qso.id)).toEqual(['voice-usb-filter']);
+    expect(ssbQsos.map(qso => qso.id).sort()).toEqual(['voice-lsb-filter', 'voice-usb-filter']);
+    expect(fmQsos.map(qso => qso.id)).toEqual(['voice-fm-filter']);
 
     await provider.close();
   });

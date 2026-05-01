@@ -16,7 +16,7 @@ import {
 import type { QSORecord } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
 
-const MODES = ['FT8', 'FT4', 'SSB', 'CW', 'AM', 'FM', 'RTTY', 'PSK31', 'JS8', 'MSK144'];
+const MODES = ['FT8', 'FT4', 'SSB', 'USB', 'LSB', 'CW', 'AM', 'FM', 'RTTY', 'PSK31', 'JS8', 'MSK144'];
 
 export interface QSOFormModalProps {
   isOpen: boolean;

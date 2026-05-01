@@ -18,7 +18,7 @@ import { addToast } from '@heroui/toast';
 import { useRadioModeState, usePTTState, useConnection, useOperators, useCurrentOperatorId } from '../../store/radioStore';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
-import { api } from '@tx5dr/core';
+import { api, getDisplayMode } from '@tx5dr/core';
 import { useWSEvent } from '../../hooks/useWSEvent';
 import type { QSORecord } from '@tx5dr/contracts';
 import { openLogbookWindow } from '../../utils/windowManager';
@@ -166,7 +166,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
     try {
       const qsoFrequency = editingQSO ? currentFrequency : (liveFrequency ?? currentFrequency);
       const qsoMode = editingQSO
-        ? (editingQSO.mode || radioMode.currentRadioMode || 'USB')
+        ? (getDisplayMode(editingQSO) || radioMode.currentRadioMode || 'USB')
         : (radioMode.currentRadioMode || 'USB');
 
       if (editingQSO) {
@@ -271,7 +271,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
   const isEditing = !!editingQSO;
   const displayedFrequency = isEditing ? currentFrequency : (liveFrequency ?? currentFrequency);
   const displayedMode = isEditing
-    ? (editingQSO.mode || radioMode.currentRadioMode || 'USB')
+    ? (getDisplayMode(editingQSO) || radioMode.currentRadioMode || 'USB')
     : (radioMode.currentRadioMode || 'USB');
 
   return (

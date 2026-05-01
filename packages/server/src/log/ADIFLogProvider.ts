@@ -18,6 +18,8 @@ import {
   getCallsignInfo,
   resolveDXCCEntity,
   DXCC_RESOLVER_VERSION,
+  normalizeQsoModeForStorage,
+  toAdifMode,
 } from '@tx5dr/core';
 import { AdifParser } from 'adif-parser-ts';
 import * as path from 'path';
@@ -127,6 +129,22 @@ function normalizeMode(mode?: string): string {
   return (mode || 'UNKNOWN').toUpperCase();
 }
 
+function matchesModeFilter(qso: QSORecord, modeFilter: string): boolean {
+  const normalizedQso = normalizeQsoModeForStorage(qso);
+  const normalizedFilter = normalizeQsoModeForStorage({ mode: modeFilter });
+
+  if (!normalizedFilter.mode) {
+    return true;
+  }
+
+  if ((normalizedQso.mode || '').toUpperCase() !== normalizedFilter.mode) {
+    return false;
+  }
+
+  return !normalizedFilter.submode
+    || (normalizedQso.submode || '').toUpperCase() === normalizedFilter.submode;
+}
+
 function mapAdifModeToInternal(mode?: string, submode?: string): Pick<QSORecord, 'mode' | 'submode'> {
   const normalizedMode = mode?.trim().toUpperCase();
   const normalizedSubmode = submode?.trim().toUpperCase();
@@ -135,28 +153,10 @@ function mapAdifModeToInternal(mode?: string, submode?: string): Pick<QSORecord,
     return { mode: 'FT4', submode: 'FT4' };
   }
 
-  return {
+  return normalizeQsoModeForStorage({
     mode: mode || 'FT8',
     submode: submode || undefined,
-  };
-}
-
-function mapInternalModeToAdif(mode?: string, submode?: string): { mode: string; submode?: string } {
-  const normalizedMode = mode?.trim().toUpperCase();
-  const normalizedSubmode = submode?.trim().toUpperCase();
-
-  if (normalizedMode === 'FT4') {
-    return { mode: 'MFSK', submode: 'FT4' };
-  }
-
-  if (normalizedMode === 'MFSK' && normalizedSubmode) {
-    return { mode: 'MFSK', submode: normalizedSubmode };
-  }
-
-  return {
-    mode: mode || 'FT8',
-    submode: submode || undefined,
-  };
+  });
 }
 
 function hasLegacyTx5drFields(fields: Record<string, unknown>): boolean {
@@ -523,6 +523,7 @@ export class ADIFLogProvider implements ILogProvider {
       logger.debug(`Parsed ${adif.records?.length || 0} records`);
       
       this.qsoCache.clear();
+      let normalizedLegacyVoiceModes = false;
       
       if (adif.records) {
         for (const record of adif.records) {
@@ -530,6 +531,9 @@ export class ADIFLogProvider implements ILogProvider {
             // 直接传递record，而不是record.fields
             const qso = this.adifToQSORecord(record);
             this.qsoCache.set(qso.id, qso);
+            if (['USB', 'LSB'].includes((record.mode || '').trim().toUpperCase())) {
+              normalizedLegacyVoiceModes = true;
+            }
             logger.debug(`Loaded QSO: ${qso.id} - ${qso.callsign}`);
           } catch (err) {
             logger.error('Failed to load record', { err, record });
@@ -538,6 +542,9 @@ export class ADIFLogProvider implements ILogProvider {
       }
       
       logger.debug(`Cache loaded: ${this.qsoCache.size} records`);
+      if (normalizedLegacyVoiceModes) {
+        await this.saveCache();
+      }
     } catch (error) {
       logger.error('Failed to load ADIF log cache', error);
     }
@@ -766,7 +773,7 @@ export class ADIFLogProvider implements ILogProvider {
     const startDate = new Date(qso.startTime);
     const dateStr = startDate.toISOString().slice(0, 10).replace(/-/g, '');
     const timeOnStr = startDate.toISOString().slice(11, 19).replace(/:/g, '');
-    const adifMode = mapInternalModeToAdif(qso.mode, qso.submode);
+    const adifMode = toAdifMode(qso);
     
     let adifRecord = '';
     
@@ -937,11 +944,11 @@ export class ADIFLogProvider implements ILogProvider {
   
   async addQSO(record: QSORecord, operatorId?: string): Promise<void> {
     this.ensureInitialized();
-    record = enrichQSOWithDXCC({
+    record = enrichQSOWithDXCC(normalizeQsoModeForStorage({
       ...record,
       messageHistory: normalizeMessageHistory(record.messageHistory),
       comment: record.comment ?? buildCommentFromMessageHistory(record.messageHistory),
-    });
+    }));
     
     // 生成唯一ID
     if (!record.id || this.qsoCache.has(record.id)) {
@@ -963,13 +970,17 @@ export class ADIFLogProvider implements ILogProvider {
       throw new Error(`QSO with id ${id} not found`);
     }
     
-    const updated = {
+    const nextSubmode = updates.mode !== undefined && updates.submode === undefined
+      ? undefined
+      : updates.submode ?? existing.submode;
+    const updated = normalizeQsoModeForStorage({
       ...existing,
       ...updates,
       id,
+      submode: nextSubmode,
       messageHistory: normalizeMessageHistory(updates.messageHistory ?? existing.messageHistory),
       comment: updates.comment ?? existing.comment ?? buildCommentFromMessageHistory(updates.messageHistory ?? existing.messageHistory),
-    };
+    });
     this.qsoCache.set(id, enrichQSOWithDXCC(updated));
     // 简化处理：更新后重建索引（更新频率低，成本可接受）
     this.rebuildIndexes();
@@ -1036,7 +1047,7 @@ export class ADIFLogProvider implements ILogProvider {
       
       // 模式过滤
       if (options.mode) {
-        results = results.filter(qso => qso.mode === options.mode);
+        results = results.filter(qso => matchesModeFilter(qso, options.mode!));
       }
 
       if (options.dxccStatus) {
@@ -1529,8 +1540,9 @@ export class ADIFLogProvider implements ILogProvider {
     const fingerprintIndex = this.buildFingerprintIndex();
     let didMutate = false;
 
-    for (const record of records) {
+    for (const rawRecord of records) {
       try {
+        const record = normalizeQsoModeForStorage(rawRecord);
         if (!record.callsign || !Number.isFinite(record.startTime) || !record.mode || !Number.isFinite(record.frequency)) {
           result.skipped += 1;
           continue;
