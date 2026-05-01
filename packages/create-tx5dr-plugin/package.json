@@ -1,6 +1,6 @@
 {
   "name": "create-tx5dr-plugin",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "type": "module",
   "description": "Scaffold a new TX-5DR plugin project",
   "license": "MIT",

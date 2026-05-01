@@ -30,6 +30,14 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('RadioOperatorManager');
 
+const DEFAULT_MAX_SAME_TRANSMISSION_COUNT = 20;
+
+interface SameTransmissionGuardState {
+  canonicalMessage: string;
+  count: number;
+  lastCountedSlotStartMs: number;
+}
+
 export interface RadioOperatorManagerOptions {
   eventEmitter: EventEmitter<DigitalRadioEngineEvents>;
   encodeQueue: WSJTXEncodeWorkQueue;
@@ -88,6 +96,9 @@ export class RadioOperatorManager {
 
   // 当前正在实际PTT发射的操作员ID集合
   private activeTransmissionOperatorIds: Set<string> = new Set();
+
+  // 每操作员连续相同发射文本计数，用于防止插件/策略卡住后无限重复发射。
+  private sameTransmissionGuardStates: Map<string, SameTransmissionGuardState> = new Map();
 
   constructor(options: RadioOperatorManagerOptions) {
     this.eventEmitter = options.eventEmitter;
@@ -456,6 +467,7 @@ export class RadioOperatorManager {
     this.logManager.disconnectOperatorFromLogBook(operatorId);
     
     this.operators.delete(operatorId);
+    this.clearSameTransmissionGuard(operatorId);
     this._pluginManager?.removeInstancesForOperator(operatorId);
     logger.info(`Operator removed: ${operatorId}`);
   }
@@ -746,6 +758,7 @@ export class RadioOperatorManager {
       throw new Error(`operator ${operatorId} not found`);
     }
     
+    this.clearSameTransmissionGuard(operatorId);
     operator.start();
     logger.info(`Started transmitting for operator ${operatorId}`);
     this.emitOperatorStatusUpdate(operatorId);
@@ -753,6 +766,106 @@ export class RadioOperatorManager {
     // 立即检查并触发发射（如果在发射周期内）
     this.checkAndTriggerTransmission(operatorId);
     
+  }
+
+  private canonicalizeTransmissionMessage(message: string): string {
+    return message.trim().replace(/\s+/g, ' ').toUpperCase();
+  }
+
+  private getMaxSameTransmissionCount(): number {
+    try {
+      const configured = ConfigManager.getInstance().getFT8Config().maxSameTransmissionCount;
+      if (typeof configured === 'number' && Number.isFinite(configured)) {
+        const normalized = Math.trunc(configured);
+        return normalized <= 0 ? Number.POSITIVE_INFINITY : normalized;
+      }
+    } catch (error) {
+      logger.warn('Failed to read maxSameTransmissionCount, using default', error);
+    }
+    return DEFAULT_MAX_SAME_TRANSMISSION_COUNT;
+  }
+
+  private clearSameTransmissionGuard(operatorId: string): void {
+    this.sameTransmissionGuardStates.delete(operatorId);
+  }
+
+  private shouldAllowTransmission(
+    operatorId: string,
+    transmission: string,
+    slotStartMs: number,
+  ): boolean {
+    const canonicalMessage = this.canonicalizeTransmissionMessage(transmission);
+    if (!canonicalMessage) {
+      return true;
+    }
+
+    const previous = this.sameTransmissionGuardStates.get(operatorId);
+    if (!previous || previous.canonicalMessage !== canonicalMessage) {
+      this.sameTransmissionGuardStates.set(operatorId, {
+        canonicalMessage,
+        count: 1,
+        lastCountedSlotStartMs: slotStartMs,
+      });
+      return true;
+    }
+
+    if (previous.lastCountedSlotStartMs === slotStartMs) {
+      return true;
+    }
+
+    const nextCount = previous.count + 1;
+    const maxCount = this.getMaxSameTransmissionCount();
+    if (nextCount > maxCount) {
+      this.stopOperatorAfterSameTransmissionLimit(operatorId, transmission, nextCount, maxCount);
+      return false;
+    }
+
+    previous.count = nextCount;
+    previous.lastCountedSlotStartMs = slotStartMs;
+    return true;
+  }
+
+  private stopOperatorAfterSameTransmissionLimit(
+    operatorId: string,
+    transmission: string,
+    attemptedCount: number,
+    maxCount: number,
+  ): void {
+    const operator = this.operators.get(operatorId);
+    if (!operator) {
+      return;
+    }
+
+    logger.warn('Same transmission limit reached, stopping operator', {
+      operatorId,
+      transmission,
+      attemptedCount,
+      maxCount,
+    });
+
+    this.eventEmitter.emit('textMessage', {
+      title: 'Repeated transmission stopped',
+      text: `Operator ${operatorId} was stopped after attempting to transmit the same message ${attemptedCount} times in a row.`,
+      color: 'warning',
+      timeout: 8000,
+      key: 'sameTransmissionLimit',
+      params: {
+        operatorId,
+        attemptedCount: String(attemptedCount),
+        maxCount: String(maxCount),
+        transmission,
+      },
+    });
+
+    operator.stop();
+    this.pendingTransmissions = this.pendingTransmissions.filter(
+      (request) => request.operatorId !== operatorId,
+    );
+    this.latestEncodeRequestIds.delete(operatorId);
+    this.activeTransmissionOperatorIds.delete(operatorId);
+    this.clearSameTransmissionGuard(operatorId);
+    this.lastEmittedStatusHash.delete(operatorId);
+    this.emitOperatorStatusUpdate(operatorId);
   }
 
   /**
@@ -802,6 +915,14 @@ export class RadioOperatorManager {
       const operator = this.operators.get(operatorId);
       if (!operator) {
         logger.warn(`Operator ${operatorId} not found, skipping transmit request`);
+        continue;
+      }
+      if (!operator.isTransmitting) {
+        logger.debug(`Operator ${operatorId} is not transmitting, skipping transmit request`);
+        continue;
+      }
+
+      if (!this.shouldAllowTransmission(operatorId, transmission, slotStartMs)) {
         continue;
       }
 
@@ -965,6 +1086,7 @@ export class RadioOperatorManager {
     );
     this.latestEncodeRequestIds.delete(operatorId);
     this.activeTransmissionOperatorIds.delete(operatorId);
+    this.clearSameTransmissionGuard(operatorId);
     this.lastEmittedStatusHash.delete(operatorId);
     logger.info(`Operator plugin runtime reset: operator=${operatorId}, reason=${reason}`);
     this.emitOperatorStatusUpdate(operatorId);
@@ -1048,6 +1170,10 @@ export class RadioOperatorManager {
         return;
       }
 
+      if (!this.shouldAllowTransmission(operatorId, transmission, currentSlotStartMs)) {
+        return;
+      }
+
       // 获取操作员的频率
       const frequency = operator.config.frequency || 0;
 
@@ -1093,6 +1219,7 @@ export class RadioOperatorManager {
       throw new Error(`operator ${operatorId} not found`);
     }
     
+    this.clearSameTransmissionGuard(operatorId);
     operator.stop();
     logger.info(`Stopped transmitting for operator ${operatorId}`);
     this.emitOperatorStatusUpdate(operatorId);
@@ -1108,6 +1235,7 @@ export class RadioOperatorManager {
     this.operators.forEach((operator, operatorId) => {
       if (operator.isTransmitting) {
         operator.stop();
+        this.clearSameTransmissionGuard(operatorId);
         stoppedCount++;
         logger.info(`Stopped transmitting for operator ${operatorId} (radio disconnected)`);
         this.emitOperatorStatusUpdate(operatorId);
@@ -1167,6 +1295,7 @@ export class RadioOperatorManager {
     for (const [id, operator] of this.operators.entries()) {
       operator.stop();
       this.operators.delete(id);
+      this.clearSameTransmissionGuard(id);
       logger.info(`Operator removed: ${id}`);
     }
 
@@ -1265,8 +1394,9 @@ export class RadioOperatorManager {
    * 停止所有操作员
    */
   stop(): void {
-    for (const operator of this.operators.values()) {
+    for (const [operatorId, operator] of this.operators) {
       operator.stop();
+      this.clearSameTransmissionGuard(operatorId);
     }
     this.isRunning = false;
     logger.info('Stopped');
@@ -1287,6 +1417,7 @@ export class RadioOperatorManager {
 
     this.operators.clear();
     this.pendingTransmissions = [];
+    this.sameTransmissionGuardStates.clear();
 
     // 关闭日志管理器
     await this.logManager.close();

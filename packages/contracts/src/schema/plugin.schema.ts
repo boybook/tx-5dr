@@ -36,7 +36,19 @@ export type PluginInstanceScope = z.infer<typeof PluginInstanceScopeSchema>;
  * Permissions let the host gate sensitive capabilities behind manifest-level
  * intent. Plugins should request the smallest possible set.
  */
-export const PluginPermissionSchema = z.enum(['network', 'radio:read', 'radio:control', 'radio:power']);
+export const PluginPermissionSchema = z.enum([
+  'network',
+  'radio:read',
+  'radio:control',
+  'radio:power',
+  'settings:ft8',
+  'settings:decode-windows',
+  'settings:realtime',
+  'settings:frequency-presets',
+  'settings:station',
+  'settings:psk-reporter',
+  'settings:ntp',
+]);
 
 /**
  * Explicit permission declarations requested by a plugin.

@@ -40,6 +40,10 @@
     "realtimeNoAudio": {
       "title": "实时语音无音频数据",
       "description": "实时语音会话已连接，但服务端没有收到可发布的音频数据。\n\n排查建议：\n- 检查当前音频源是否真的在输出数据\n- 确认 /api/realtime/rtc-data-audio 信令可达\n- 确认 rtc-data-audio UDP 端口 {{localUdpPort}} 已开放或映射\n- 确认配置的公网 UDP 端点可通\n- 确认客户端可访问 {{signalingUrl}}\n\n技术详情：{{details}}"
+    },
+    "sameTransmissionLimit": {
+      "title": "已停发：重复消息",
+      "description": "操作员 {{operatorId}} 第 {{attemptedCount}} 次尝试发送相同消息时已自动停发（上限 {{maxCount}} 次），避免重复占用频率：{{transmission}}"
     }
   }
 }

@@ -41,6 +41,16 @@ export type {
   StrategyRuntimeSlot,
   StrategyRuntimeSlotContentUpdate,
 } from './runtime.js';
+export type {
+  HostSettingsControl,
+  HostSettingsNamespace,
+  HostFrequencyPresetsSettingsNamespace,
+  HostFT8Settings,
+  HostFT8SettingsPatch,
+  HostFrequencyPresetsSettings,
+  HostStationInfoPatch,
+  HostPSKReporterSettingsPatch,
+} from './settings.js';
 
 /** Host-provided helper interfaces available through {@link PluginContext}. */
 export type {
@@ -127,6 +137,14 @@ export type {
   RadioPowerStateEvent,
   RadioPowerSupportInfo,
   RadioPowerTarget,
+  DecodeWindowSettings,
+  RealtimeSettings,
+  RealtimeSettingsResponseData,
+  PresetFrequency,
+  StationInfo,
+  PSKReporterConfig,
+  NtpServerListSettings,
+  UpdateNtpServerListRequest,
 } from '@tx5dr/contracts';
 
 /** Logbook sync provider interfaces. */

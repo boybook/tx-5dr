@@ -115,6 +115,14 @@ function areStringArraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function normalizeMaxSameTransmissionCount(value: unknown): number {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 20;
+  }
+  return Math.max(1, Math.min(200, Math.trunc(numeric)));
+}
+
 interface NtpServerReorderItemProps {
   item: NtpServerDraftItem;
   total: number;
@@ -381,6 +389,8 @@ export const SystemSettings = forwardRef<
   const [originalDecodeValue, setOriginalDecodeValue] = useState(false);
   const [spectrumWhileTransmitting, setSpectrumWhileTransmitting] = useState(true);
   const [originalSpectrumValue, setOriginalSpectrumValue] = useState(true);
+  const [maxSameTransmissionCount, setMaxSameTransmissionCount] = useState(20);
+  const [originalMaxSameTransmissionCount, setOriginalMaxSameTransmissionCount] = useState(20);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string>('');
 
@@ -457,14 +467,21 @@ export const SystemSettings = forwardRef<
   const loadSettings = async () => {
     try {
       const result = await api.getFT8Settings();
-      const ft8Data = result.data as { decodeWhileTransmitting?: boolean; spectrumWhileTransmitting?: boolean } | undefined;
+      const ft8Data = result.data as {
+        decodeWhileTransmitting?: boolean;
+        spectrumWhileTransmitting?: boolean;
+        maxSameTransmissionCount?: number;
+      } | undefined;
       const decodeValue = ft8Data?.decodeWhileTransmitting ?? false;
       const spectrumValue = ft8Data?.spectrumWhileTransmitting ?? true;
+      const maxSameCountValue = normalizeMaxSameTransmissionCount(ft8Data?.maxSameTransmissionCount);
 
       setDecodeWhileTransmitting(decodeValue);
       setOriginalDecodeValue(decodeValue);
       setSpectrumWhileTransmitting(spectrumValue);
       setOriginalSpectrumValue(spectrumValue);
+      setMaxSameTransmissionCount(maxSameCountValue);
+      setOriginalMaxSameTransmissionCount(maxSameCountValue);
     } catch (err) {
       logger.error('Failed to load FT8 settings:', err);
       if (err instanceof ApiError) {
@@ -976,6 +993,7 @@ export const SystemSettings = forwardRef<
     return (
       decodeWhileTransmitting !== originalDecodeValue ||
       spectrumWhileTransmitting !== originalSpectrumValue ||
+      maxSameTransmissionCount !== originalMaxSameTransmissionCount ||
       hasAuthChanges() ||
       hasPskrChanges() ||
       hasDecodeWindowChanges() ||
@@ -1015,14 +1033,19 @@ export const SystemSettings = forwardRef<
     setError('');
     try {
       // 保存 FT8 设置
-      const result = await api.updateFT8Settings({
+      const ft8Updates: Parameters<typeof api.updateFT8Settings>[0] = {
         decodeWhileTransmitting,
         spectrumWhileTransmitting,
-      });
+      };
+      if (maxSameTransmissionCount !== originalMaxSameTransmissionCount) {
+        ft8Updates.maxSameTransmissionCount = maxSameTransmissionCount;
+      }
+      const result = await api.updateFT8Settings(ft8Updates);
 
       if (result.success) {
         setOriginalDecodeValue(decodeWhileTransmitting);
         setOriginalSpectrumValue(spectrumWhileTransmitting);
+        setOriginalMaxSameTransmissionCount(maxSameTransmissionCount);
       } else {
         throw new Error(result.message || t('system.saveFailed'));
       }
@@ -1156,7 +1179,7 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, ntpServers, originalNtpServers, realtimeTransportPolicy, originalRealtimeTransportPolicy, rtcDataAudioPublicHost, originalRtcDataAudioPublicHost, rtcDataAudioPublicUdpPort, originalRtcDataAudioPublicUdpPort, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, maxSameTransmissionCount, originalDecodeValue, originalSpectrumValue, originalMaxSameTransmissionCount, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, ntpServers, originalNtpServers, realtimeTransportPolicy, originalRealtimeTransportPolicy, rtcDataAudioPublicHost, originalRtcDataAudioPublicHost, rtcDataAudioPublicUdpPort, originalRtcDataAudioPublicUdpPort, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
 
   const runtimeHints = realtimeRuntime?.connectivityHints ?? null;
   const rtcDataAudioRuntime = realtimeRuntime?.rtcDataAudio ?? null;
@@ -2052,8 +2075,35 @@ export const SystemSettings = forwardRef<
         </CardBody>
       </Card>
 
+      {/* 连续相同发射兜底 */}
+      <Card shadow="none" radius="lg" className="order-1" classNames={SETTINGS_CARD_CLASS_NAMES}>
+        <CardBody className={SETTINGS_CARD_BODY_CLASS}>
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div className="flex-1">
+              <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.maxSameTransmissionCount')}</h4>
+              <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>
+                {t('system.maxSameTransmissionCountDesc')}
+              </p>
+            </div>
+            <Input
+              type="number"
+              min={1}
+              max={200}
+              step={1}
+              value={String(maxSameTransmissionCount)}
+              onValueChange={(value) => setMaxSameTransmissionCount(normalizeMaxSameTransmissionCount(value))}
+              isDisabled={isSaving}
+              label={t('system.maxSameTransmissionCountField')}
+              description={t('system.maxSameTransmissionCountHint')}
+              className="w-full md:w-72"
+              variant="bordered"
+            />
+          </div>
+        </CardBody>
+      </Card>
+
       {/* 发射时频谱分析设置 */}
-      <Card shadow="none" radius="lg" className="order-6" classNames={SETTINGS_CARD_CLASS_NAMES}>
+      <Card shadow="none" radius="lg" className="order-7" classNames={SETTINGS_CARD_CLASS_NAMES}>
         <CardBody className={SETTINGS_CARD_BODY_CLASS}>
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1">
@@ -2079,7 +2129,7 @@ export const SystemSettings = forwardRef<
       </Card>
 
       {/* 解码窗口设置 */}
-      <Card shadow="none" radius="lg" className="order-5" classNames={SETTINGS_CARD_CLASS_NAMES}>
+      <Card shadow="none" radius="lg" className="order-6" classNames={SETTINGS_CARD_CLASS_NAMES}>
         <CardBody className={SETTINGS_CARD_BODY_CLASS}>
           <div>
             <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.decodeWindowTitle')}</h4>

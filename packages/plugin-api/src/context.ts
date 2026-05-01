@@ -10,6 +10,7 @@ import type {
   PluginFileStore,
 } from './helpers.js';
 import type { LogbookSyncRegistrar } from './sync.js';
+import type { HostSettingsControl } from './settings.js';
 
 /**
  * Runtime services exposed to a plugin instance.
@@ -117,6 +118,13 @@ export interface PluginContext {
    * sync provider. The host manages the provider lifecycle and UI integration.
    */
   readonly logbookSync: LogbookSyncRegistrar;
+
+  /**
+   * Permission-gated host settings control surface.
+   *
+   * Each namespace requires the matching `settings:*` manifest permission.
+   */
+  readonly settings: HostSettingsControl;
 
   /**
    * Permission-gated HTTP client.

@@ -46,6 +46,7 @@ export interface AppConfig {
     transmitPower: number;
     autoReply: boolean;
     maxQSOTimeout: number;
+    maxSameTransmissionCount: number;
     decodeWhileTransmitting: boolean; // 发射时允许解码
     spectrumWhileTransmitting: boolean; // 发射时允许频谱分析
   };
@@ -130,6 +131,7 @@ const DEFAULT_CONFIG: AppConfig = {
     transmitPower: 25,
     autoReply: false,
     maxQSOTimeout: 6, // 6个周期 = 90秒
+    maxSameTransmissionCount: 20, // 连续相同发射文本兜底上限；配置为 0 可停用该保护
     decodeWhileTransmitting: false, // 默认关闭,避免误解码残留信号
     spectrumWhileTransmitting: true, // 默认开启,发射时继续频谱分析
   },
@@ -632,8 +634,22 @@ export class ConfigManager {
    * 更新FT8配置
    */
   async updateFT8Config(ft8Config: Partial<AppConfig['ft8']>): Promise<void> {
-    this.config.ft8 = { ...this.config.ft8, ...ft8Config };
+    const updates = { ...ft8Config };
+    if (updates.maxSameTransmissionCount !== undefined) {
+      updates.maxSameTransmissionCount = this.normalizeMaxSameTransmissionCount(
+        updates.maxSameTransmissionCount,
+      );
+    }
+    this.config.ft8 = { ...this.config.ft8, ...updates };
     await this.saveConfig();
+  }
+
+  private normalizeMaxSameTransmissionCount(value: unknown): number {
+    const numeric = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(numeric)) {
+      return DEFAULT_CONFIG.ft8.maxSameTransmissionCount;
+    }
+    return Math.max(0, Math.trunc(numeric));
   }
 
   /**

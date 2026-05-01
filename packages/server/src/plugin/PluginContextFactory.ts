@@ -1,5 +1,6 @@
 import path from 'path';
 import type {
+  HostSettingsControl,
   LogbookSyncProvider,
   PluginContext,
   PluginUIInstanceTarget,
@@ -16,13 +17,19 @@ import type {
   RadioPowerTarget,
   WriteCapabilityPayload,
 } from '@tx5dr/contracts';
-import { MODES, RadioPowerTargetSchema, WriteCapabilityPayloadSchema } from '@tx5dr/contracts';
+import {
+  MODES,
+  RealtimeSettingsResponseDataSchema,
+  RadioPowerTargetSchema,
+  WriteCapabilityPayloadSchema,
+} from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
 import { PluginStorageProvider } from './PluginStorageProvider.js';
 import { PluginFileStoreProvider } from './PluginFileStoreProvider.js';
 import { PluginTimerManager } from './PluginTimerManager.js';
 import { PluginUIBridge } from './PluginUIBridge.js';
+import { HostSettingsService } from './HostSettingsService.js';
 import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
 import { createLogger } from '../utils/logger.js';
 import type { LoadedPlugin, PluginManagerDeps } from './types.js';
@@ -74,6 +81,7 @@ export class PluginContextFactory {
     const radioControl = this.createRadioControl(plugin);
     const logbookAccess = this.createLogbookAccess(operatorId, instanceScope);
     const bandAccess = this.createBandAccess(operatorId);
+    const settingsControl = this.createSettingsControl(plugin);
     const fileStore = new PluginFileStoreProvider(
       path.join(pluginStorageDir, 'files'),
     );
@@ -94,6 +102,7 @@ export class PluginContextFactory {
       band: bandAccess,
       ui: uiBridge,
       files: fileStore,
+      settings: settingsControl,
       logbookSync: {
         register: (provider) => {
           this.validateLogbookSyncProvider(plugin, provider);
@@ -106,6 +115,99 @@ export class PluginContextFactory {
     };
 
     return ctx;
+  }
+
+
+  private createSettingsControl(plugin: LoadedPlugin): HostSettingsControl {
+    const service = new HostSettingsService();
+    const thisDeps = this.deps;
+    const assertPermission = (permission: PluginPermission, action: string) => {
+      if (!plugin.definition.permissions?.includes(permission)) {
+        throw new Error(
+          `Plugin '${plugin.definition.name}' requires permission '${permission}' to ${action}`,
+        );
+      }
+    };
+
+    return {
+      ft8: {
+        async get() {
+          assertPermission('settings:ft8', 'read FT8 settings');
+          return service.getFT8();
+        },
+        async update(patch: Parameters<HostSettingsService['updateFT8']>[0]) {
+          assertPermission('settings:ft8', 'update FT8 settings');
+          return service.updateFT8(patch);
+        },
+      },
+      decodeWindows: {
+        async get() {
+          assertPermission('settings:decode-windows', 'read decode window settings');
+          return service.getDecodeWindows();
+        },
+        async update(settings: Parameters<HostSettingsService['updateDecodeWindows']>[0]) {
+          assertPermission('settings:decode-windows', 'update decode window settings');
+          return service.updateDecodeWindows(settings);
+        },
+      },
+      realtime: {
+        async get() {
+          assertPermission('settings:realtime', 'read realtime settings');
+          return service.getRealtime();
+        },
+        async update(settings: Parameters<HostSettingsService['updateRealtime']>[0]) {
+          assertPermission('settings:realtime', 'update realtime settings');
+          const updated = await service.updateRealtime(settings);
+          const data = RealtimeSettingsResponseDataSchema.parse(updated);
+          thisDeps.eventEmitter.emit('realtimeSettingsChanged', data);
+          return updated;
+        },
+      },
+      frequencyPresets: {
+        async get() {
+          assertPermission('settings:frequency-presets', 'read frequency presets');
+          return service.getFrequencyPresets();
+        },
+        async update(presets: Parameters<HostSettingsService['updateFrequencyPresets']>[0]) {
+          assertPermission('settings:frequency-presets', 'update frequency presets');
+          return service.updateFrequencyPresets(presets);
+        },
+        async reset() {
+          assertPermission('settings:frequency-presets', 'reset frequency presets');
+          return service.resetFrequencyPresets();
+        },
+      },
+      station: {
+        async get() {
+          assertPermission('settings:station', 'read station settings');
+          return service.getStation();
+        },
+        async update(patch: Parameters<HostSettingsService['updateStation']>[0]) {
+          assertPermission('settings:station', 'update station settings');
+          return service.updateStation(patch);
+        },
+      },
+      pskReporter: {
+        async get() {
+          assertPermission('settings:psk-reporter', 'read PSK Reporter settings');
+          return service.getPSKReporter();
+        },
+        async update(patch: Parameters<HostSettingsService['updatePSKReporter']>[0]) {
+          assertPermission('settings:psk-reporter', 'update PSK Reporter settings');
+          return service.updatePSKReporter(patch);
+        },
+      },
+      ntp: {
+        async get() {
+          assertPermission('settings:ntp', 'read NTP settings');
+          return service.getNtp();
+        },
+        async update(request: Parameters<HostSettingsService['updateNtp']>[0]) {
+          assertPermission('settings:ntp', 'update NTP settings');
+          return service.updateNtp(request);
+        },
+      },
+    };
   }
 
   private validateLogbookSyncProvider(

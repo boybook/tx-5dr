@@ -8,6 +8,7 @@ import type { DigitalRadioEngineEvents, FrameMessage, QSORecord, RadioOperatorCo
 import { FT8MessageType, MODES } from '@tx5dr/contracts';
 
 import { FT8MessageParser } from '@tx5dr/core';
+import { ConfigManager } from '../../config/config-manager.js';
 import { LogManager } from '../../log/LogManager.js';
 import { PluginManager } from '../../plugin/PluginManager.js';
 import { RadioOperatorManager } from '../RadioOperatorManager.js';
@@ -106,6 +107,198 @@ function attachQSOHookSpy(manager: RadioOperatorManager) {
   } as any);
   return { notifyQSOComplete, autoSync };
 }
+
+function mockMaxSameTransmissionCount(limit: number) {
+  return vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+    getFT8Config: () => ({ maxSameTransmissionCount: limit }),
+  } as any);
+}
+
+async function addBasicOperator(manager: RadioOperatorManager, id: string, callsign = 'BG4IAJ') {
+  await manager.addOperator({
+    id,
+    myCallsign: callsign,
+    myGrid: 'OM96',
+    frequency: 1500,
+    transmitCycles: [0],
+    mode: MODES.FT8,
+  });
+  const operator = manager.getOperatorById(id);
+  expect(operator).toBeDefined();
+  operator!.start();
+  return operator!;
+}
+
+describe('RadioOperatorManager same transmission guard', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('allows 20 same transmissions and stops the operator before the 21st encode', async () => {
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: {
+        id: 'log-1',
+        name: 'Test Log',
+        provider: {
+          getOrCreateLogBookByCallsign: vi.fn(),
+          getStatistics: vi.fn(),
+        },
+      },
+      callsign: 'BG4IAJ',
+      clockNow: 0,
+      encodeQueue,
+    });
+    const statusSpy = vi.fn();
+    const textMessageSpy = vi.fn();
+    eventEmitter.on('operatorStatusUpdate', statusSpy);
+    eventEmitter.on('textMessage', textMessageSpy);
+
+    await addBasicOperator(manager, 'op1');
+    manager.start();
+
+    for (let index = 0; index < 21; index += 1) {
+      const slotStartMs = index * MODES.FT8.slotMs;
+      eventEmitter.emit('requestTransmit', {
+        operatorId: 'op1',
+        transmission: 'CQ BG4IAJ OM96',
+      });
+      manager.processPendingTransmissions(createSlotInfo(slotStartMs));
+    }
+
+    expect(encodeQueue.push).toHaveBeenCalledTimes(20);
+    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(false);
+    expect(manager.getPendingTransmissionsCount()).toBe(0);
+    expect(manager.getLatestEncodeRequestId('op1')).toBeUndefined();
+    expect(textMessageSpy).toHaveBeenCalledTimes(1);
+    expect(textMessageSpy.mock.calls[0]?.[0]).toMatchObject({
+      color: 'warning',
+      key: 'sameTransmissionLimit',
+      params: {
+        operatorId: 'op1',
+        attemptedCount: '21',
+        maxCount: '20',
+        transmission: 'CQ BG4IAJ OM96',
+      },
+    });
+    expect(statusSpy.mock.calls.at(-1)?.[0]).toMatchObject({
+      id: 'op1',
+      isTransmitting: false,
+    });
+  });
+
+  it('disables the guard when maxSameTransmissionCount is set to 0', async () => {
+    mockMaxSameTransmissionCount(0);
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 0,
+      encodeQueue,
+    });
+    const textMessageSpy = vi.fn();
+    eventEmitter.on('textMessage', textMessageSpy);
+
+    await addBasicOperator(manager, 'op1');
+    manager.start();
+
+    for (let index = 0; index < 25; index += 1) {
+      const slotStartMs = index * MODES.FT8.slotMs;
+      eventEmitter.emit('requestTransmit', {
+        operatorId: 'op1',
+        transmission: 'CQ BG4IAJ OM96',
+      });
+      manager.processPendingTransmissions(createSlotInfo(slotStartMs));
+    }
+
+    expect(encodeQueue.push).toHaveBeenCalledTimes(25);
+    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(true);
+    expect(textMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it('resets the counter when the transmit text changes', async () => {
+    mockMaxSameTransmissionCount(2);
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 0,
+      encodeQueue,
+    });
+
+    await addBasicOperator(manager, 'op1');
+    manager.start();
+
+    for (const [index, transmission] of ['CQ BG4IAJ OM96', 'CQ BG4IAJ OM96', 'BG5DRB BG4IAJ -06', 'CQ BG4IAJ OM96'].entries()) {
+      const slotStartMs = index * MODES.FT8.slotMs;
+      eventEmitter.emit('requestTransmit', { operatorId: 'op1', transmission });
+      manager.processPendingTransmissions(createSlotInfo(slotStartMs));
+    }
+
+    expect(encodeQueue.push).toHaveBeenCalledTimes(4);
+    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(true);
+  });
+
+  it('tracks the same message independently for each operator', async () => {
+    mockMaxSameTransmissionCount(2);
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 0,
+      encodeQueue,
+    });
+
+    await addBasicOperator(manager, 'op1', 'BG4IAJ');
+    await addBasicOperator(manager, 'op2', 'BG4IAJ');
+    manager.start();
+
+    for (let index = 0; index < 3; index += 1) {
+      const slotInfo = createSlotInfo(index * MODES.FT8.slotMs);
+      eventEmitter.emit('requestTransmit', { operatorId: 'op1', transmission: 'CQ BG4IAJ OM96' });
+      eventEmitter.emit('requestTransmit', { operatorId: 'op2', transmission: 'CQ BG4IAJ OM96' });
+      manager.processPendingTransmissions(slotInfo);
+    }
+
+    expect(encodeQueue.push).toHaveBeenCalledTimes(4);
+    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(false);
+    expect(manager.getOperatorById('op2')?.isTransmitting).toBe(false);
+    expect(encodeQueue.push.mock.calls.filter((call) => call[0].operatorId === 'op1')).toHaveLength(2);
+    expect(encodeQueue.push.mock.calls.filter((call) => call[0].operatorId === 'op2')).toHaveLength(2);
+  });
+
+  it('does not count same-slot replacement encodes as another repeated transmission', async () => {
+    mockMaxSameTransmissionCount(1);
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 0,
+      encodeQueue,
+    });
+
+    await addBasicOperator(manager, 'op1');
+    manager.start();
+
+    eventEmitter.emit('requestTransmit', { operatorId: 'op1', transmission: 'CQ BG4IAJ OM96' });
+    manager.processPendingTransmissions(createSlotInfo(0));
+    eventEmitter.emit('requestTransmit', {
+      operatorId: 'op1',
+      transmission: 'CQ BG4IAJ OM96',
+      replaceExisting: true,
+    });
+    manager.processPendingTransmissions(createSlotInfo(0));
+    eventEmitter.emit('requestTransmit', { operatorId: 'op1', transmission: 'CQ BG4IAJ OM96' });
+    manager.processPendingTransmissions(createSlotInfo(MODES.FT8.slotMs));
+
+    expect(encodeQueue.push).toHaveBeenCalledTimes(2);
+    expect(encodeQueue.push.mock.calls[1]?.[0]).toMatchObject({
+      operatorId: 'op1',
+      message: 'CQ BG4IAJ OM96',
+    });
+    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(false);
+  });
+});
 
 describe('RadioOperatorManager automatic QSO logging', () => {
   afterEach(() => {
