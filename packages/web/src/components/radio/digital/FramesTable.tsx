@@ -64,6 +64,8 @@ interface FramesTableProps {
   showLogbookAnalysisVisuals?: boolean; // 是否显示日志本分析的视觉效果（划线、标签等）
   enableCallsignPopover?: boolean; // 是否启用呼号信息浮层（hover国旗区域弹出）
   scrollToBottomTrigger?: number; // 外部触发滚动到底部（递增时触发）
+  showGroupHeader?: boolean; // 是否在周期组前显示轻量上下文标题
+  groupHeaderBand?: string | null; // 当前波段，用于截图上下文
 }
 
 // ─── 纯函数工具（提取到组件外避免重复创建）────────
@@ -108,6 +110,24 @@ const isTargetRelated = (messageObj: FrameDisplayMessage, targetCallsign: string
     return messageObj.logbookAnalysis.callsign.toUpperCase().trim() === upperTarget;
   }
   return false;
+};
+
+const formatGroupHeaderTime = (startMs: number): string => {
+  const date = new Date(startMs);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  const iso = date.toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 19)} UTC`;
+};
+
+const formatGroupHeaderLabel = (group: FrameGroup, band?: string | null): string => {
+  const timeLabel = formatGroupHeaderTime(group.startMs);
+  if (!timeLabel) {
+    return band || '';
+  }
+  return band ? `${timeLabel} · ${band}` : timeLabel;
 };
 
 // ─── Memo 化的消息行组件 ─────────────────────
@@ -308,7 +328,7 @@ MessageRow.displayName = 'MessageRow';
 
 // ─── 主组件 ─────────────────────────────────
 
-export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger }) => {
+export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger, showGroupHeader = false, groupHeaderBand = null }) => {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language === 'zh';
   const highlightTypeLabels = useMemo(() => getHighlightTypeLabels(t), [t]);
@@ -325,6 +345,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   ));
   const { settings, getHighestPriorityHighlight, getHighlightColor, isHighlightEnabled: _isHighlightEnabled } = useDisplayNotificationSettings();
   const cycleBackgrounds = settings.frameTableCycleBackgrounds[activeTheme];
+  const shouldShowGroupHeader = showGroupHeader && settings.frameTableGroupHeaderEnabled;
   const bottomGroupSignature = useMemo(() => getBottomGroupSignature(groups), [groups]);
 
 
@@ -335,10 +356,15 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     getScrollElement: () => scrollRef.current,
     estimateSize: (index) => {
       // 每组高度 ≈ py-1 (8px) + 每行约 24px + space-y-1 间距 (4px)
-      return groups[index].messages.length * 24 + 8 + 4;
+      const headerHeight = shouldShowGroupHeader ? 16 : 0;
+      return groups[index].messages.length * 24 + headerHeight + 8 + 4;
     },
     overscan: 5,
   });
+
+  useLayoutEffect(() => {
+    virtualizer.measure();
+  }, [shouldShowGroupHeader, virtualizer]);
 
   // ─── 自动滚动到底部（与原始逻辑一致）─────
   const checkIfAtBottom = useCallback(() => {
@@ -549,6 +575,12 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                 >
                   {/* 组间距（对应原始的 space-y-1 pt-1） */}
                   <div className="pt-1">
+                    {shouldShowGroupHeader && (
+                      <div className={`ml-1 truncate ${isNarrow ? 'px-2' : 'px-3'} pb-0.5 text-[10px] font-mono leading-4 tracking-[0.08em] text-default-400/80`}>
+                        {formatGroupHeaderLabel(group, groupHeaderBand)}
+                      </div>
+                    )}
+
                     {/* 组容器：与原始结构完全一致 */}
                     <div
                       className={`

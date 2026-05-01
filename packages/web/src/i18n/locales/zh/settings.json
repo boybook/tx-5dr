@@ -87,6 +87,8 @@
       "themeDescription": "调整下方颜色时，预览会立即更新。",
       "evenCycle": "偶数周期背景",
       "oddCycle": "奇数周期背景",
+      "groupHeader": "显示周期小标题",
+      "groupHeaderDesc": "在左侧解码表每个周期前显示 UTC 时间和波段，方便截图识别上下文。",
       "preview": "实时预览"
     }
   },

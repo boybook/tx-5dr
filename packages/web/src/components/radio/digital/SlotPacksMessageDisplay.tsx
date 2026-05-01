@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { FramesTable, FrameGroup, FrameDisplayMessage } from './FramesTable';
-import { parseFT8LocationInfo, FT8MessageParser, evaluateCallsignFilter } from '@tx5dr/core';
+import { parseFT8LocationInfo, FT8MessageParser, evaluateCallsignFilter, getBandFromFrequency, CycleUtils } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useRadioState, useSlotPacks } from '../../../store/radioStore';
 import type { FrameMessage, WSSelectedFrame } from '@tx5dr/contracts';
-import { CycleUtils } from '@tx5dr/core';
 import { useSplitLayoutActions } from '../../common/SplitLayout';
 import { useTranslation } from 'react-i18next';
 import { useCallsignFilterRules } from '../../../hooks/useCallsignFilterRules';
@@ -27,6 +26,15 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
     () => callsignFilter.filterScope === 'auto-reply-and-display' ? callsignFilter.rules : [],
     [callsignFilter.rules, callsignFilter.filterScope],
   );
+  const groupHeaderBand = useMemo(() => {
+    const frequency = radio.state.currentRadioFrequency;
+    if (!frequency || frequency <= 0) {
+      return null;
+    }
+
+    const band = getBandFromFrequency(frequency);
+    return band && band !== 'Unknown' ? band : null;
+  }, [radio.state.currentRadioFrequency]);
 
   // 切换回"解码" tab 时触发滚动到底部
   useEffect(() => {
@@ -193,6 +201,8 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       onMessageHover={onMessageHover}
       enableCallsignPopover
       scrollToBottomTrigger={scrollToBottomTrigger}
+      showGroupHeader
+      groupHeaderBand={groupHeaderBand}
     />
   );
 }; 

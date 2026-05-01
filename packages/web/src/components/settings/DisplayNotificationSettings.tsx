@@ -134,6 +134,13 @@ export const DisplayNotificationSettings = forwardRef<
     }));
   };
 
+  const handleFrameTableGroupHeaderToggle = (frameTableGroupHeaderEnabled: boolean) => {
+    setSettings((prev: DisplaySettings) => ({
+      ...prev,
+      frameTableGroupHeaderEnabled,
+    }));
+  };
+
   // 重置为默认设置
   const handleReset = () => {
     const defaultSettings = getDefaultDisplayNotificationSettings();
@@ -410,6 +417,24 @@ export const DisplayNotificationSettings = forwardRef<
           {t('settings:display.frameTable.description')}
         </p>
         <div className="space-y-4">
+          <Card shadow="none" radius="lg" classNames={{ base: "border border-divider bg-content1" }}>
+            <CardBody className="p-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h5 className="font-semibold text-default-900">
+                    {t('settings:display.frameTable.groupHeader')}
+                  </h5>
+                  <p className="text-sm text-default-600">
+                    {t('settings:display.frameTable.groupHeaderDesc')}
+                  </p>
+                </div>
+                <Switch
+                  isSelected={settings.frameTableGroupHeaderEnabled}
+                  onValueChange={handleFrameTableGroupHeaderToggle}
+                />
+              </div>
+            </CardBody>
+          </Card>
           {renderFrameTableCycleBackgroundCard('light')}
           {renderFrameTableCycleBackgroundCard('dark')}
         </div>
