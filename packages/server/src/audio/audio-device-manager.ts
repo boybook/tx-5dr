@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // AudioDeviceManager - 设备枚举
 
-import { AudioDevice } from '@tx5dr/contracts';
+import { AudioDevice, type AudioDeviceResolution, type AudioDeviceResolutionSet, type AudioDeviceSettings } from '@tx5dr/contracts';
 import audify from 'audify';
 const { RtAudio } = audify;
 type RtAudioInstance = InstanceType<typeof RtAudio>;
@@ -11,8 +11,10 @@ const RTAUDIO_API_UNSPECIFIED = 0;
 const RTAUDIO_API_WINDOWS_WASAPI = 7;
 import { ConfigManager } from '../config/config-manager.js';
 import { createLogger } from '../utils/logger.js';
+import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 
 const logger = createLogger('AudioDeviceManager');
+type RadioType = 'none' | 'network' | 'serial' | 'icom-wlan';
 
 // 音频设备管理器
 export class AudioDeviceManager {
@@ -78,6 +80,17 @@ export class AudioDeviceManager {
     }
 
     return true;
+  }
+
+  private createIcomWlanDevice(type: 'input' | 'output'): AudioDevice {
+    return {
+      id: `icom-wlan-${type}`,
+      name: 'ICOM WLAN',
+      isDefault: false,
+      channels: 1,
+      sampleRate: 12000,
+      type,
+    };
   }
 
   /**
@@ -151,15 +164,7 @@ export class AudioDeviceManager {
       // ICOM WLAN 虚拟设备注入
       if (this.shouldShowIcomWlanDevice()) {
         logger.debug('Injecting ICOM WLAN virtual input device');
-        const icomWlanInputDevice: AudioDevice = {
-          id: 'icom-wlan-input',
-          name: 'ICOM WLAN',
-          isDefault: false,
-          channels: 1,
-          sampleRate: 12000,
-          type: 'input'
-        };
-        result.unshift(icomWlanInputDevice);
+        result.unshift(this.createIcomWlanDevice('input'));
       }
 
       // OpenWebRX SDR 虚拟设备注入
@@ -225,15 +230,7 @@ export class AudioDeviceManager {
       // ICOM WLAN 虚拟设备注入
       if (this.shouldShowIcomWlanDevice()) {
         logger.debug('Injecting ICOM WLAN virtual output device');
-        const icomWlanOutputDevice: AudioDevice = {
-          id: 'icom-wlan-output',
-          name: 'ICOM WLAN',
-          isDefault: false,
-          channels: 1,
-          sampleRate: 12000,
-          type: 'output'
-        };
-        result.unshift(icomWlanOutputDevice);
+        result.unshift(this.createIcomWlanDevice('output'));
       }
 
       logger.debug(`Returning ${result.length} output devices: ${result.map((d: AudioDevice) => d.name).join(', ')}`);
@@ -269,6 +266,91 @@ export class AudioDeviceManager {
     return {
       inputDevices,
       outputDevices,
+    };
+  }
+
+  async resolveAudioSettings(
+    settings: AudioDeviceSettings,
+    radioType?: RadioType,
+  ): Promise<AudioDeviceResolutionSet> {
+    const devices = await this.getAllDevices();
+    const effectiveRadioType = radioType ?? ConfigManager.getInstance().getRadioConfig().type;
+
+    return {
+      input: this.resolveDeviceDirection({
+        configuredDeviceName: settings.inputDeviceName ?? null,
+        devices: devices.inputDevices,
+        direction: 'input',
+        radioType: effectiveRadioType,
+      }),
+      output: this.resolveDeviceDirection({
+        configuredDeviceName: settings.outputDeviceName ?? null,
+        devices: devices.outputDevices,
+        direction: 'output',
+        radioType: effectiveRadioType,
+      }),
+    };
+  }
+
+  private resolveDeviceDirection(params: {
+    configuredDeviceName: string | null;
+    devices: AudioDevice[];
+    direction: 'input' | 'output';
+    radioType: RadioType;
+  }): AudioDeviceResolution {
+    const { configuredDeviceName, devices, direction, radioType } = params;
+    const defaultDevice = devices.find((device) => device.isDefault) ?? devices[0] ?? null;
+
+    if (!configuredDeviceName) {
+      return {
+        configuredDeviceName: null,
+        configuredDevice: null,
+        effectiveDevice: defaultDevice,
+        status: 'default',
+        reason: defaultDevice ? null : 'no-default-device',
+      };
+    }
+
+    const configuredDevice = devices.find((device) => device.name === configuredDeviceName) ?? null;
+    if (configuredDevice) {
+      return {
+        configuredDeviceName,
+        configuredDevice,
+        effectiveDevice: configuredDevice,
+        status: configuredDevice.id.startsWith('openwebrx-') || configuredDevice.id.startsWith('icom-wlan-')
+          ? 'virtual-selected'
+          : 'selected',
+        reason: null,
+      };
+    }
+
+    if (configuredDeviceName === 'ICOM WLAN' && radioType === 'icom-wlan') {
+      const virtualDevice = this.createIcomWlanDevice(direction);
+      return {
+        configuredDeviceName,
+        configuredDevice: virtualDevice,
+        effectiveDevice: virtualDevice,
+        status: 'virtual-selected',
+        reason: 'icom-wlan-radio-audio',
+      };
+    }
+
+    if (configuredDeviceName.startsWith('[SDR]')) {
+      return {
+        configuredDeviceName,
+        configuredDevice: null,
+        effectiveDevice: null,
+        status: 'missing',
+        reason: direction === 'input' ? 'openwebrx-station-missing' : 'openwebrx-output-unsupported',
+      };
+    }
+
+    return {
+      configuredDeviceName,
+      configuredDevice: null,
+      effectiveDevice: null,
+      status: 'missing',
+      reason: 'configured-device-missing',
     };
   }
 
@@ -337,7 +419,7 @@ export class AudioDeviceManager {
   }
 
   /**
-   * 根据设备名称解析为设备ID，如果找不到则使用默认设备
+   * 根据设备名称解析为输入设备ID；空设备名使用默认设备，已配置设备缺失时交给 sidecar 重试。
    */
   async resolveInputDeviceId(deviceName?: string): Promise<string | undefined> {
     if (!deviceName) {
@@ -346,20 +428,22 @@ export class AudioDeviceManager {
       return defaultDevice?.id;
     }
 
+    if (deviceName === 'ICOM WLAN') {
+      return 'icom-wlan-input';
+    }
+
     const device = await this.getInputDeviceByName(deviceName);
     if (device) {
       logger.debug(`Found configured input device: ${device.name} -> ${device.id}`);
       return device.id;
     }
 
-    logger.warn(`Input device "${deviceName}" not found, falling back to default`);
-    const defaultDevice = await this.getDefaultInputDevice();
-    logger.debug(`Fallback to default input device: ${defaultDevice?.name || 'none'}`);
-    return defaultDevice?.id;
+    logger.warn(`Input device "${deviceName}" not found, waiting for automatic retry`);
+    throw this.createMissingConfiguredDeviceError('input', deviceName);
   }
 
   /**
-   * 根据设备名称解析为设备ID，如果找不到则使用默认设备
+   * 根据设备名称解析为输出设备ID；空设备名使用默认设备，已配置设备缺失时交给 sidecar 重试。
    */
   async resolveOutputDeviceId(deviceName?: string): Promise<string | undefined> {
     if (!deviceName) {
@@ -368,16 +452,42 @@ export class AudioDeviceManager {
       return defaultDevice?.id;
     }
 
+    if (deviceName === 'ICOM WLAN') {
+      return 'icom-wlan-output';
+    }
+
     const device = await this.getOutputDeviceByName(deviceName);
     if (device) {
       logger.debug(`Found configured output device: ${device.name} -> ${device.id}`);
       return device.id;
     }
 
-    logger.warn(`Output device "${deviceName}" not found, falling back to default`);
-    const defaultDevice = await this.getDefaultOutputDevice();
-    logger.debug(`Fallback to default output device: ${defaultDevice?.name || 'none'}`);
-    return defaultDevice?.id;
+    logger.warn(`Output device "${deviceName}" not found, waiting for automatic retry`);
+    throw this.createMissingConfiguredDeviceError('output', deviceName);
+  }
+
+  private createMissingConfiguredDeviceError(direction: 'input' | 'output', deviceName: string): RadioError {
+    return new RadioError({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+      message: `Configured audio ${direction} device "${deviceName}" is temporarily unavailable`,
+      userMessage: `Configured audio ${direction} device "${deviceName}" is temporarily unavailable. The system will keep retrying automatically.`,
+      userMessageKey: direction === 'input'
+        ? 'radio:audioSidecar.errorInputDeviceUnavailable'
+        : 'radio:audioSidecar.errorOutputDeviceUnavailable',
+      userMessageParams: { deviceName },
+      severity: RadioErrorSeverity.ERROR,
+      suggestions: [
+        'Reconnect the audio device and wait for the operating system to finish enumerating it',
+        'Check the audio device list to confirm the configured device name appears again',
+        'Keep the current profile selected so automatic retry can recover the audio connection',
+      ],
+      context: {
+        deviceName,
+        direction,
+        temporaryUnavailable: true,
+        recoverable: true,
+      },
+    });
   }
 
   /**

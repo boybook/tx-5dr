@@ -408,6 +408,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
               ref={audioSettingsRef}
               initialConfig={editAudioConfig}
               onChange={setEditAudioConfig}
+              radioType={editRadioConfig.type}
             />
           </div>
         </div>

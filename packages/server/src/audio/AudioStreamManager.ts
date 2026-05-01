@@ -873,6 +873,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         code: RadioErrorCode.DEVICE_NOT_FOUND,
         message: `Configured audio ${direction} device "${configuredDeviceName}" is temporarily unavailable after USB reconnect`,
         userMessage: `Configured audio ${direction} device "${configuredDeviceName}" is temporarily unavailable. The system will keep retrying automatically when reconnect is active.`,
+        userMessageKey: direction === 'input'
+          ? 'radio:audioSidecar.errorInputDeviceUnavailable'
+          : 'radio:audioSidecar.errorOutputDeviceUnavailable',
+        userMessageParams: { deviceName: configuredDeviceName },
         severity: RadioErrorSeverity.ERROR,
         suggestions: [
           'Reconnect the USB audio device and wait for the operating system to finish re-enumerating it',

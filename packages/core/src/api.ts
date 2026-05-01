@@ -7,6 +7,8 @@ import type {
   AudioDevicesResponse,
   AudioDeviceSettings,
   AudioDeviceSettingsResponse,
+  AudioSettingsResolveRequest,
+  AudioSettingsResolveResponse,
   ModeDescriptor,
   CreateRadioOperatorRequest,
   UpdateRadioOperatorRequest,
@@ -789,6 +791,20 @@ export const api = {
         body: JSON.stringify(settings),
       },
       apiBase
+    );
+  },
+
+  async resolveAudioSettings(
+    request: AudioSettingsResolveRequest,
+    apiBase?: string,
+  ): Promise<AudioSettingsResolveResponse> {
+    return apiRequest<AudioSettingsResolveResponse>(
+      '/audio/resolve',
+      {
+        method: 'POST',
+        body: JSON.stringify(request),
+      },
+      apiBase,
     );
   },
 
@@ -2076,6 +2092,7 @@ export const {
   getAudioDevices,
   getAudioSettings,
   updateAudioSettings,
+  resolveAudioSettings,
   resetAudioSettings,
   getAvailableModes,
   getCurrentMode,

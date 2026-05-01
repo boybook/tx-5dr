@@ -74,6 +74,8 @@
     "deviceUnknown": "默认设备",
     "retryingDetail": "第 {{attempt}} 次重试，下次 {{seconds}} 秒后",
     "retryingNoDelay": "第 {{attempt}} 次重试中",
+    "errorInputDeviceUnavailable": "音频输入设备“{{deviceName}}”当前不可用，音频系统将自动重试。",
+    "errorOutputDeviceUnavailable": "音频输出设备“{{deviceName}}”当前不可用，音频系统将自动重试。",
     "disabledHint": "配置不可恢复，请检查音频设备设置",
     "retryNow": "立即重试"
   },

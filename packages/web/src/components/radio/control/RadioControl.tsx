@@ -232,7 +232,7 @@ const AudioSidecarIndicator: React.FC<{
   radioService: ConnectionState['radioService'];
   canOperate: boolean;
 }> = ({ sidecar, radioService, canOperate }) => {
-  const { t } = useTranslation('radio');
+  const { t, i18n } = useTranslation('radio');
   const isRetrying = sidecar.status === AudioSidecarStatus.RETRYING;
   const isDisabled = sidecar.status === AudioSidecarStatus.DISABLED;
   const color: 'warning' | 'danger' = isDisabled ? 'danger' : 'warning';
@@ -256,10 +256,20 @@ const AudioSidecarIndicator: React.FC<{
     return t('audioSidecar.retryingNoDelay', { attempt: sidecar.retryAttempt });
   }, [isRetrying, sidecar.nextRetryMs, sidecar.retryAttempt, t]);
 
-  const errorText = sidecar.lastError?.userMessage || sidecar.lastError?.message || null;
+  const errorText = React.useMemo(() => {
+    const error = sidecar.lastError;
+    if (!error) return null;
+    if (error.userMessageKey && i18n.exists(error.userMessageKey)) {
+      return t(error.userMessageKey, error.userMessageParams ?? {});
+    }
+    return error.userMessage || error.message || null;
+  }, [i18n, sidecar.lastError, t]);
+  const stopPopoverPropagation = React.useCallback((event: React.SyntheticEvent) => {
+    event.stopPropagation();
+  }, []);
 
   return (
-    <Popover placement="bottom-start">
+    <Popover placement="bottom">
       <PopoverTrigger>
         <button
           type="button"
@@ -273,7 +283,14 @@ const AudioSidecarIndicator: React.FC<{
           <Spinner size="sm" color={color} />
         </button>
       </PopoverTrigger>
-      <PopoverContent className="px-3 py-2 max-w-xs space-y-1">
+      <PopoverContent
+        className="px-3 py-2 max-w-xs space-y-1"
+        onClick={stopPopoverPropagation}
+        onMouseDown={stopPopoverPropagation}
+        onPointerDown={stopPopoverPropagation}
+        onPointerUp={stopPopoverPropagation}
+        onKeyDown={stopPopoverPropagation}
+      >
         <div className="text-xs font-medium text-foreground">{t('audioSidecar.popoverTitle')}</div>
         <div className="text-xs text-default-600">
           {statusLabel} · {deviceLabel}
