@@ -61,6 +61,7 @@ function getStandardQSOConfig(ctx: {
   const defaultTx6Message = buildStandardQSODefaultTx6Message(baseConfig);
   return {
     ...baseConfig,
+    skipTx1: c.skipTx1 === true,
     tx6MessageOverride: normalizeStandardQSOTx6MessageOverride(
       c[STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING],
       defaultTx6Message,
@@ -86,24 +87,35 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
       type: 'boolean',
       default: false,
       label: 'autoReplyToCQ',
+      description: 'autoReplyToCQDesc',
       scope: 'operator',
     },
     autoResumeCQAfterFail: {
       type: 'boolean',
       default: false,
       label: 'autoResumeCQAfterFail',
+      description: 'autoResumeCQAfterFailDesc',
       scope: 'operator',
     },
     autoResumeCQAfterSuccess: {
       type: 'boolean',
       default: false,
       label: 'autoResumeCQAfterSuccess',
+      description: 'autoResumeCQAfterSuccessDesc',
       scope: 'operator',
     },
     replyToWorkedStations: {
       type: 'boolean',
       default: false,
       label: 'replyToWorkedStations',
+      description: 'replyToWorkedStationsDesc',
+      scope: 'operator',
+    },
+    skipTx1: {
+      type: 'boolean',
+      default: false,
+      label: 'skipTx1',
+      description: 'skipTx1Desc',
       scope: 'operator',
     },
     targetSelectionPriorityMode: {
@@ -150,6 +162,7 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
     { settingKey: 'autoResumeCQAfterFail' },
     { settingKey: 'autoResumeCQAfterSuccess' },
     { settingKey: 'replyToWorkedStations' },
+    { settingKey: 'skipTx1' },
   ],
 
   createStrategyRuntime(ctx) {

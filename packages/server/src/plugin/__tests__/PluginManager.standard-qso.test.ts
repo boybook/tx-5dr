@@ -29,6 +29,7 @@ function createSlotPack(
     snr: number;
     freq: number;
     operatorId?: string;
+    logbookAnalysis?: ParsedFT8Message['logbookAnalysis'];
   }>,
 ): SlotPack {
   return {
@@ -42,6 +43,7 @@ function createSlotPack(
       freq: frame.freq,
       confidence: 0.9,
       operatorId: frame.operatorId,
+      logbookAnalysis: frame.logbookAnalysis,
     })),
     stats: {
       totalDecodes: frames.length,
@@ -100,6 +102,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     maxQSOTimeoutCycles?: number;
     maxCallAttempts?: number;
     replyToWorkedStations?: boolean;
+    skipTx1?: boolean;
     hasWorkedCallsign?: boolean | ((callsign: string) => boolean | Promise<boolean>);
     pluginConfigs?: Record<string, { enabled: boolean; settings: Record<string, unknown> }>;
     operatorPluginSettings?: Record<string, Record<string, unknown>>;
@@ -177,6 +180,7 @@ describe('PluginManager standard-qso late re-decision', () => {
             autoResumeCQAfterFail: operator.config.autoResumeCQAfterFail,
             autoResumeCQAfterSuccess: operator.config.autoResumeCQAfterSuccess,
             replyToWorkedStations: operator.config.replyToWorkedStations,
+            skipTx1: options?.skipTx1 ?? false,
             targetSelectionPriorityMode: operator.config.targetSelectionPriorityMode,
             maxQSOTimeoutCycles: operator.config.maxQSOTimeoutCycles,
             maxCallAttempts: operator.config.maxCallAttempts,
@@ -389,6 +393,65 @@ describe('PluginManager standard-qso late re-decision', () => {
 
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).slots?.TX6).toBe('CQ TEST BG5DRB OL32');
     expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('CQ TEST BG5DRB OL32');
+  });
+
+  it('exposes skipTx1 as an operator quick setting with a disabled default', async () => {
+    const { pluginManager } = await createRuntimeHarness();
+
+    const standardQso = pluginManager.getSnapshot().plugins.find((plugin) => plugin.name === 'standard-qso');
+
+    expect(standardQso?.settings?.skipTx1).toMatchObject({
+      type: 'boolean',
+      default: false,
+      scope: 'operator',
+    });
+    expect(standardQso?.quickSettings?.some((entry) => entry.settingKey === 'skipTx1')).toBe(true);
+
+    await pluginManager.shutdown();
+  });
+
+  it('starts manual CQ calls at TX2 when skipTx1 is enabled', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG5DRB',
+      myGrid: 'PM01',
+      skipTx1: true,
+    });
+
+    pluginManager.requestCall(operator.config.id, 'JA1AAA', {
+      message: {
+        message: 'CQ JA1AAA PM95',
+        snr: -7,
+        dt: 0,
+        freq: 1300,
+        confidence: 0.9,
+      },
+      slotInfo: createSlotInfo(45_000),
+    });
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(status.currentSlot).toBe('TX2');
+    expect(status.context?.targetCallsign).toBe('JA1AAA');
+    expect(status.slots?.TX1).toBe('JA1AAA BG5DRB PM01');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG5DRB -07');
+
+    await pluginManager.shutdown();
+  });
+
+  it('starts calls without a source message at TX2 with the default report when skipTx1 is enabled', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG5DRB',
+      myGrid: 'PM01',
+      skipTx1: true,
+    });
+
+    pluginManager.requestCall(operator.config.id, 'JA1AAA');
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(status.currentSlot).toBe('TX2');
+    expect(status.context?.targetCallsign).toBe('JA1AAA');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG5DRB +00');
+
+    await pluginManager.shutdown();
   });
 
   it('re-decides late R-report and advances the standard-qso runtime', async () => {
@@ -1278,6 +1341,32 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('auto-replies to CQ at TX2 when skipTx1 is enabled', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      autoReplyToCQ: true,
+      skipTx1: true,
+    });
+
+    await (pluginManager as any).handleSlotStart(
+      createSlotInfo(15_000),
+      createSlotPack(createSlotInfo(15_000), [{
+        message: 'CQ JA1AAA PM95',
+        snr: -5,
+        freq: 1200,
+      }]),
+    );
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(status.currentSlot).toBe('TX2');
+    expect(status.context?.targetCallsign).toBe('JA1AAA');
+    expect(status.slots?.TX1).toBe('JA1AAA BG4IAJ OM96');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG4IAJ -05');
+
+    await pluginManager.shutdown();
+  });
+
   it('treats CQ DX as intercontinental-only for automatic replies', async () => {
     const sameContinent = await createRuntimeHarness({
       myCallsign: 'BG4IAJ',
@@ -1525,6 +1614,86 @@ describe('PluginManager standard-qso late re-decision', () => {
     expect(operator.getTransmitCycles()).toEqual([0]);
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX1');
     expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG4IAJ OM96');
+
+    await pluginManager.shutdown();
+  });
+
+  it('starts watched CQ autocalls at TX2 when skipTx1 is enabled', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      startOperator: false,
+      skipTx1: true,
+      pluginConfigs: {
+        'watched-callsign-autocall': {
+          enabled: true,
+          settings: {},
+        },
+      },
+      operatorPluginSettings: {
+        'watched-callsign-autocall': {
+          watchList: ['JA1AAA'],
+          triggerMode: 'cq',
+        },
+      },
+    });
+
+    await (pluginManager as any).handleSlotStart(
+      createSlotInfo(30_000),
+      createSlotPack(createSlotInfo(15_000), [{
+        message: FT8MessageParser.generateMessage({
+          type: FT8MessageType.CQ,
+          senderCallsign: 'JA1AAA',
+          grid: 'PM95',
+        }),
+        snr: -6,
+        freq: 1500,
+      }]),
+    );
+
+    expect(operator.isTransmitting).toBe(true);
+    expect(operator.getTransmitCycles()).toEqual([0]);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX2');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG4IAJ -06');
+
+    await pluginManager.shutdown();
+  });
+
+  it('starts watched novelty CQ autocalls at TX2 when skipTx1 is enabled', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      startOperator: false,
+      skipTx1: true,
+      pluginConfigs: {
+        'watched-novelty-autocall': {
+          enabled: true,
+          settings: {},
+        },
+      },
+      operatorPluginSettings: {
+        'watched-novelty-autocall': {
+          watchNewCallsign: true,
+          triggerMode: 'cq',
+        },
+      },
+    });
+
+    await (pluginManager as any).handleSlotStart(
+      createSlotInfo(30_000),
+      createSlotPack(createSlotInfo(15_000), [{
+        message: FT8MessageParser.generateMessage({
+          type: FT8MessageType.CQ,
+          senderCallsign: 'JA1AAA',
+          grid: 'PM95',
+        }),
+        snr: -6,
+        freq: 1500,
+        logbookAnalysis: {
+          isNewCallsign: true,
+        },
+      }]),
+    );
+
+    expect(operator.isTransmitting).toBe(true);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX2');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG4IAJ -06');
 
     await pluginManager.shutdown();
   });
