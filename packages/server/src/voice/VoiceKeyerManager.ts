@@ -336,6 +336,7 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
     try {
       await this.deps.audioStreamManager.playAudio(decoded.samples, decoded.sampleRate, {
         injectIntoMonitor: true,
+        playbackKind: 'voice-keyer',
       });
     } catch (error) {
       if ((active.stopRequested || active.playbackInterrupted) && isPlaybackInterrupted(error)) {

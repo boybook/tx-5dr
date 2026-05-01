@@ -86,6 +86,7 @@ export const RadioModeContext = createContext<{
 
 export const PTTContext = createContext<{
   pttStatus: RadioState['pttStatus'];
+  tuneToneStatus: RadioState['tuneToneStatus'];
   voicePttLock: VoicePTTLock | null;
 } | undefined>(undefined);
 

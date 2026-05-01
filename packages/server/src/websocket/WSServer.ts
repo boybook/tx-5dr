@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
-import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, type AppAction, type AppSubject } from '@tx5dr/contracts';
+import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, TuneToneStartPayloadSchema, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type {
   ClockStatusSummary,
   DecodeErrorInfo,
@@ -408,6 +408,8 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.REFRESH_RADIO_CAPABILITIES]: () => this.handleRefreshRadioCapabilities(),
       [WSMessageType.FORCE_STOP_TRANSMISSION]: () => this.handleForceStopTransmission(),
       [WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION]: (data) => this.handleRemoveOperatorFromTransmission(data),
+      [WSMessageType.START_TUNE_TONE]: (data, id) => this.handleStartTuneTone(id, data),
+      [WSMessageType.STOP_TUNE_TONE]: () => this.handleStopTuneTone(),
       [WSMessageType.AUTH_TOKEN]: (data, id) => this.handleAuthToken(id, data),
       [WSMessageType.AUTH_PUBLIC_VIEWER]: (_data, id) => this.handleAuthPublicViewer(id),
       [WSMessageType.VOICE_PTT_REQUEST]: (data, id) => this.handleVoicePttRequest(id, data),
@@ -649,6 +651,11 @@ export class WSServer extends WSMessageHandler {
       this.broadcast(WSMessageType.PTT_STATUS_CHANGED, data);
     });
 
+    this.digitalRadioEngine.on('tuneToneStatusChanged', (data) => {
+      logger.debug('tune tone status changed', { active: data.active, toneHz: data.toneHz, error: data.error });
+      this.broadcast(WSMessageType.TUNE_TONE_STATUS_CHANGED, data);
+    });
+
     this.digitalRadioEngine.on('squelchStatusChanged', (data) => {
       this.broadcast(WSMessageType.SQUELCH_STATUS_CHANGED, data);
     });
@@ -716,6 +723,8 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.FORCE_STOP_TRANSMISSION]: { action: 'execute', subject: 'Engine' },
     [WSMessageType.WRITE_RADIO_CAPABILITY]: { action: 'execute', subject: 'RadioControl' },
     [WSMessageType.REFRESH_RADIO_CAPABILITIES]: { action: 'execute', subject: 'RadioControl' },
+    [WSMessageType.START_TUNE_TONE]: { action: 'execute', subject: 'RadioControl' },
+    [WSMessageType.STOP_TUNE_TONE]: { action: 'execute', subject: 'RadioControl' },
     [WSMessageType.INVOKE_SPECTRUM_CONTROL]: { action: 'execute', subject: 'RadioControl' },
     [WSMessageType.OPENWEBRX_PROFILE_SELECT_RESPONSE]: { action: 'execute', subject: 'RadioFrequency' },
     // Operator-level commands (use Operator subject with conditions)
@@ -1289,6 +1298,13 @@ export class WSServer extends WSMessageHandler {
     const initialFrequencyState = this.buildInitialFrequencyState(status);
     if (initialFrequencyState) {
       connection.send(WSMessageType.FREQUENCY_CHANGED, initialFrequencyState);
+    }
+
+    // 2.2 发送外接天调单音状态，避免重连后按钮状态丢失
+    try {
+      connection.send(WSMessageType.TUNE_TONE_STATUS_CHANGED, this.digitalRadioEngine.getTuneToneStatus());
+    } catch (error) {
+      logger.error('failed to send tune tone status', error);
     }
 
     // 3. 发送当前音量增益
@@ -2056,6 +2072,32 @@ export class WSServer extends WSMessageHandler {
 
     } catch (error) {
       this.handleCommandError(error, 'forceStopTransmission', RadioErrorCode.PTT_ACTIVATION_FAILED);
+    }
+  }
+
+  private async handleStartTuneTone(connectionId: string, data: unknown): Promise<void> {
+    try {
+      const payload = TuneToneStartPayloadSchema.optional().parse(data) ?? {};
+      logger.info('startTuneTone command', payload);
+      await this.digitalRadioEngine.startTuneTone(payload);
+    } catch (error) {
+      logger.error('startTuneTone failed', error);
+      this.sendToConnection(connectionId, WSMessageType.ERROR, {
+        message: `Failed to start tune tone: ${(error as Error).message}`,
+      });
+      this.sendToConnection(connectionId, WSMessageType.TUNE_TONE_STATUS_CHANGED, {
+        ...this.digitalRadioEngine.getTuneToneStatus(),
+        error: (error as Error).message,
+      });
+    }
+  }
+
+  private async handleStopTuneTone(): Promise<void> {
+    try {
+      logger.debug('stopTuneTone command received');
+      await this.digitalRadioEngine.stopTuneTone('client command');
+    } catch (error) {
+      this.handleCommandError(error, 'stopTuneTone', RadioErrorCode.PTT_ACTIVATION_FAILED);
     }
   }
 

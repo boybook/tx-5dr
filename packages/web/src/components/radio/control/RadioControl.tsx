@@ -2,7 +2,7 @@ import * as React from 'react';
 import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner, Alert, Tabs, Tab, Tooltip} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faSatelliteDish, faPowerOff, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faTowerBroadcast, faPowerOff, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState, useAudioSidecarState, useRadioState, useOperators } from '../../../store/radioStore';
 import type { AudioSidecarStatusPayload } from '@tx5dr/contracts';
 import { AudioSidecarStatus } from '@tx5dr/contracts';
@@ -27,7 +27,7 @@ import {
   deriveMonitorActivationCtaState,
   filterDigitalFrequencyOptions,
   isCoreCapabilityAvailable,
-  shouldShowAutoTunerShortcut,
+  shouldShowAntennaTuneEntry,
   shouldShowRadioControlEntry,
 } from '../../../utils/radioControl';
 import { computeSliderWheelUpdate } from '../../../utils/sliderWheel';
@@ -527,7 +527,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const { operators } = useOperators();
   const radioConnection = useRadioConnectionState();
   const radioMode = useRadioModeState();
-  const { pttStatus, voicePttLock } = usePTTState();
+  const { pttStatus, tuneToneStatus, voicePttLock } = usePTTState();
   const { state: radioState } = useRadioState();
   const { activeProfile } = useProfiles();
   const { latestError } = useRadioErrors();
@@ -547,13 +547,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   // 天调按钮状态（从能力系统读取，需在顶层调用 Hook）
   const tunerSwitchCapState = useCapabilityState('tuner_switch');
-  const showTunerShortcut = shouldShowAutoTunerShortcut(
+  const showAntennaTuneEntry = shouldShowAntennaTuneEntry(
     radioConnection.radioConnected,
     canControlRadio,
-    tunerSwitchCapState,
   );
   const tunerEnabled = typeof tunerSwitchCapState?.value === 'boolean' ? tunerSwitchCapState.value : false;
   const tunerIsTuning = (tunerSwitchCapState?.meta as { status?: string } | undefined)?.status === 'tuning';
+  const tuneToneActive = tuneToneStatus.active;
   const ability = useAbility();
   const formatBandLabel = React.useCallback((band?: string | null) => (
     !band || band.toLowerCase() === CUSTOM_BAND ? t('frequency.custom') : band
@@ -2163,8 +2163,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                 </Popover>
               </ToolbarIconTooltip>
             )}
-            {/* 天调控制：仅在已连接、具备权限且电台支持自动天调时显示入口 */}
-            {showTunerShortcut && (
+            {/* 天调控制：已连接且具备电台控制权限时统一露出内置/外接天调入口 */}
+            {showAntennaTuneEntry && (
               <ToolbarIconTooltip label={t('tuner.control')}>
                 <Popover>
                   <PopoverTrigger>
@@ -2173,18 +2173,20 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                       variant="light"
                       size="sm"
                       className={`min-w-unit-6 min-w-6 w-6 h-6 ${
-                        tunerIsTuning
-                          ? 'text-success animate-pulse'
+                        tuneToneActive
+                          ? 'text-danger animate-pulse'
+                          : tunerIsTuning
+                          ? 'text-warning animate-pulse'
                           : tunerEnabled
                           ? 'text-success'
                           : 'text-default-400'
                       }`}
                       aria-label={t('tuner.control')}
                     >
-                      <FontAwesomeIcon icon={faSatelliteDish} className="text-xs" />
+                      <FontAwesomeIcon icon={faTowerBroadcast} className="text-xs" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent>
+                  <PopoverContent className="max-w-[calc(100vw-2rem)]">
                     <TunerCapabilitySurface />
                   </PopoverContent>
                 </Popover>

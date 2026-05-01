@@ -27,6 +27,13 @@ export function shouldShowAutoTunerShortcut(
     && tunerSwitchCapability?.supported === true;
 }
 
+export function shouldShowAntennaTuneEntry(
+  radioConnected: boolean,
+  canControlRadio: boolean,
+): boolean {
+  return radioConnected && canControlRadio;
+}
+
 export function shouldShowRadioControlEntry(
   radioConnected: boolean,
   canControlRadio: boolean,

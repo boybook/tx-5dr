@@ -25,6 +25,7 @@ export interface TransmissionPipelineDeps {
   clockSource: ClockSourceSystem;
   getCurrentMode: () => ModeDescriptor;
   getCompensationMs: () => number;
+  onBeforeStartPTT?: () => Promise<void>;
 }
 
 /**
@@ -106,9 +107,13 @@ export class TransmissionPipeline {
    */
   async onSlotStart(): Promise<void> {
     // 停止上一时隙的残留音频播放，防止 isPlaying 状态泄漏到新时隙
-    if (this.deps.audioStreamManager.isPlaying()) {
+    if (this.isDigitalPlaybackInProgress()) {
       await this.deps.audioStreamManager.stopCurrentPlayback();
       logger.debug('stopped residual audio playback from previous slot');
+    } else if (this.deps.audioStreamManager.isPlaying()) {
+      logger.debug('preserved non-digital playback across slot start', {
+        kind: this.deps.audioStreamManager.getCurrentPlaybackKind(),
+      });
     }
     this.deps.audioMixer.clearSlotCache();
   }
@@ -409,7 +414,7 @@ export class TransmissionPipeline {
       const isMidSlotSwitch = timeSinceSlotStartMs > 0 &&
                               Math.abs(timeSinceSlotStartMs - compensatedTransmitStart) > 100;
 
-      const isCurrentlyPlaying = this.deps.audioStreamManager.isPlaying();
+      const isCurrentlyPlaying = this.isDigitalPlaybackInProgress();
 
       if (isCurrentlyPlaying) {
         logger.debug('playback in progress, triggering remix');
@@ -471,6 +476,8 @@ export class TransmissionPipeline {
       for (const operatorId of mixedAudio.operatorIds) {
         this.deps.transmissionTracker.recordMixedAudioReady(operatorId);
       }
+
+      await this.deps.onBeforeStartPTT?.();
 
       logger.debug('starting PTT and audio playback in parallel');
 
@@ -535,5 +542,14 @@ export class TransmissionPipeline {
         }
       }
     }
+  }
+
+  private isDigitalPlaybackInProgress(): boolean {
+    if (!this.deps.audioStreamManager.isPlaying()) {
+      return false;
+    }
+
+    const kind = this.deps.audioStreamManager.getCurrentPlaybackKind();
+    return kind === null || kind === 'digital';
   }
 }

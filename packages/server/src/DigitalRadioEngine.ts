@@ -17,6 +17,8 @@ import {
   type RadioPowerStateEvent,
   type RadioPowerTarget,
   type WriteCapabilityPayload,
+  type TuneToneStartPayload,
+  type TuneToneStatus,
   resolveWindowTiming,
 } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
@@ -59,6 +61,7 @@ import { SquelchStatusMonitor } from './radio/SquelchStatusMonitor.js';
 import { PhysicalPttMonitor } from './radio/PhysicalPttMonitor.js';
 import type { RigctldBridgeConfig, RigctldStatus } from '@tx5dr/contracts';
 import { RadioPowerController } from './radio/RadioPowerController.js';
+import { TuneToneController } from './radio/TuneToneController.js';
 
 /**
  * DigitalRadioEngine — 数字电台引擎 Facade
@@ -117,6 +120,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private physicalPttActive = false;
   private unifiedVoicePttActive = false;
   private radioPowerController: RadioPowerController | null = null;
+  private tuneToneController: TuneToneController;
   private readonly latestRadioPowerStates = new Map<string, RadioPowerStateEvent>();
 
   // 频谱分析配置常量
@@ -345,6 +349,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       clockSource: this.clockSource,
       getCurrentMode: () => this.currentMode,
       getCompensationMs: () => this.slotClock?.getCompensation() ?? 0,
+      onBeforeStartPTT: () => this.stopTuneTone('another transmission started'),
     });
 
     this.radioBridge = new RadioBridge({
@@ -373,9 +378,24 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       isSoftwarePttActive: () => this.voiceManualPttActive || this.voiceKeyerPttActive,
       emitStatus: (active) => this.handlePhysicalPttChanged(active),
     });
+    this.tuneToneController = new TuneToneController({
+      radioManager: this.radioManager,
+      audioStreamManager: this.audioStreamManager,
+      isTransmitBusy: () => this.isTransmitBusyForTuneTone(),
+      getOperatorToneHz: (operatorId) => this.resolveTuneToneFrequency(operatorId),
+      setSoftwarePttActive: (active) => this.setTuneTonePttActive(active),
+      emitStatus: (status) => this.emit('tuneToneStatusChanged', status),
+    });
     this.on('radioStatusChanged', () => {
       this.squelchStatusMonitor.reevaluate();
       this.physicalPttMonitor.reevaluate();
+    });
+    this.on('radioStatusChanged', (data) => {
+      if (!data.connected) {
+        void this.stopTuneTone('radio disconnected').catch((error) => {
+          logger.warn('Failed to stop tune tone after radio disconnect', error);
+        });
+      }
     });
 
     this.rigctldBridge = new RigctldBridge(this.radioManager);
@@ -615,6 +635,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.voiceSessionManager = new VoiceSessionManager({
       radioManager: this.radioManager,
       audioStreamManager: this.audioStreamManager,
+      onBeforeStartPTT: () => this.stopTuneTone('voice transmission started'),
     });
     this.voiceKeyerManager = new VoiceKeyerManager({
       voiceSessionManager: this.voiceSessionManager,
@@ -708,12 +729,14 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   async stop(): Promise<void> {
+    await this.stopTuneTone('engine stopped');
     return this.engineLifecycle.stop();
   }
 
   async destroy(): Promise<void> {
     logger.info('Destroying...');
     try {
+      await this.stopTuneTone('engine destroyed');
       await this.audioSidecar.stop('engine-destroy');
     } catch (err) {
       logger.warn('audio sidecar stop during destroy failed', err);
@@ -804,11 +827,24 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   public async forceStopTransmission(): Promise<void> {
+    await this.stopTuneTone('force stop transmission');
     return this.transmissionPipeline.forceStopTransmission();
   }
 
   public async removeOperatorFromTransmission(operatorId: string): Promise<void> {
     return this.transmissionPipeline.removeOperatorFromTransmission(operatorId);
+  }
+
+  public async startTuneTone(payload: TuneToneStartPayload = {}): Promise<void> {
+    await this.tuneToneController.start(payload);
+  }
+
+  public async stopTuneTone(reason = 'manual'): Promise<void> {
+    await this.tuneToneController.stop(reason);
+  }
+
+  public getTuneToneStatus(): TuneToneStatus {
+    return this.tuneToneController.getStatus();
   }
 
   public updateTransmitCompensation(compensationMs: number): void {
@@ -822,6 +858,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   async setMode(mode: ModeDescriptor | string): Promise<void> {
     const runSwitch = async () => {
+      await this.stopTuneTone('mode changed');
       // Handle voice mode (string 'VOICE')
       if (mode === 'VOICE' || (typeof mode === 'object' && mode.name === 'VOICE')) {
         if (this.engineMode === 'voice') {
@@ -990,6 +1027,34 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     } catch {
       return 'Unknown';
     }
+  }
+
+  private resolveTuneToneFrequency(operatorId?: string | null): number | null {
+    const operators = operatorId
+      ? [this._operatorManager.getOperatorById(operatorId)]
+      : this._operatorManager.getAllOperators();
+    const operator = operators.find((candidate) => Boolean(candidate));
+    const frequency = operator?.config.frequency;
+    return typeof frequency === 'number' && Number.isFinite(frequency) && frequency > 0
+      ? frequency
+      : null;
+  }
+
+  private isTransmitBusyForTuneTone(): boolean {
+    return this.transmissionPipeline.getIsPTTActive()
+      || this.unifiedVoicePttActive
+      || this.physicalPttActive;
+  }
+
+  private setTuneTonePttActive(active: boolean): void {
+    this.radioManager.setPTTActive(active);
+    this.spectrumScheduler.setPTTActive(active);
+    this.squelchStatusMonitor.setPTTActive(active);
+    this.physicalPttMonitor.setSoftwarePttActive(active || this.voiceManualPttActive || this.voiceKeyerPttActive);
+    this.emit('pttStatusChanged', {
+      isTransmitting: active,
+      operatorIds: [],
+    });
   }
 
   private handleVoiceSoftwarePttChanged(data: { isTransmitting: boolean; operatorIds: string[]; source?: 'manual' | 'voice-keyer' }): void {

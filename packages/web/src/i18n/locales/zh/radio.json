@@ -249,7 +249,16 @@
     "enableFirstDesc": "需要先打开天调开关才能进行手动调谐",
     "tuningStarted": "天调已启动",
     "startFailed": "启动手动调谐失败",
-    "toggleFailed": "切换天调状态失败"
+    "toggleFailed": "切换天调状态失败",
+    "builtInTitle": "电台内置天调",
+    "builtInDescription": "使用电台报告的自动天调能力。",
+    "builtInUnsupported": "当前电台未报告内置天调能力。",
+    "externalTitle": "外接天调",
+    "externalDescription": "发射短时单音，用于触发外部天调调协。请确认频率空闲并已连接天线。",
+    "startToneTune": "手动单音调谐",
+    "stopToneTune": "停止单音调谐 {{seconds}}s",
+    "toneBusy": "当前正在发射，无法启动单音调谐。",
+    "toneStartFailed": "启动单音调谐失败"
   },
   "power": {
     "on": {

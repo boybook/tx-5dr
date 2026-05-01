@@ -113,6 +113,9 @@ export enum WSMessageType {
   PTT_STATUS_CHANGED = 'pttStatusChanged',
   FORCE_STOP_TRANSMISSION = 'forceStopTransmission',
   REMOVE_OPERATOR_FROM_TRANSMISSION = 'removeOperatorFromTransmission',
+  START_TUNE_TONE = 'startTuneTone',
+  STOP_TUNE_TONE = 'stopTuneTone',
+  TUNE_TONE_STATUS_CHANGED = 'tuneToneStatusChanged',
 
   // ===== 电台数值表 =====
   METER_DATA = 'meterData',
@@ -266,6 +269,21 @@ export const PTTStatusSchema = z.object({
   isTransmitting: z.boolean(),
   operatorIds: z.array(z.string()),
 });
+
+export const TuneToneStartPayloadSchema = z.object({
+  operatorId: z.string().optional(),
+  toneHz: z.number().min(100).max(3000).optional(),
+});
+export type TuneToneStartPayload = z.infer<typeof TuneToneStartPayloadSchema>;
+
+export const TuneToneStatusSchema = z.object({
+  active: z.boolean(),
+  toneHz: z.number().nullable(),
+  startedAt: z.number().nullable(),
+  maxDurationMs: z.number(),
+  error: z.string().optional(),
+});
+export type TuneToneStatus = z.infer<typeof TuneToneStatusSchema>;
 
 export const SquelchStatusSchema = z.object({
   supported: z.boolean(),
@@ -1023,6 +1041,36 @@ export const WSRemoveOperatorFromTransmissionMessageSchema = WSBaseMessageSchema
 export type WSRemoveOperatorFromTransmissionMessage = z.infer<typeof WSRemoveOperatorFromTransmissionMessageSchema>;
 
 /**
+ * 启动外接天调单音调谐（客户端到服务端）
+ */
+export const WSStartTuneToneMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.START_TUNE_TONE),
+  data: TuneToneStartPayloadSchema.optional(),
+});
+
+export type WSStartTuneToneMessage = z.infer<typeof WSStartTuneToneMessageSchema>;
+
+/**
+ * 停止外接天调单音调谐（客户端到服务端）
+ */
+export const WSStopTuneToneMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.STOP_TUNE_TONE),
+  data: z.object({}).optional(),
+});
+
+export type WSStopTuneToneMessage = z.infer<typeof WSStopTuneToneMessageSchema>;
+
+/**
+ * 外接天调单音调谐状态（服务端到客户端）
+ */
+export const WSTuneToneStatusChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.TUNE_TONE_STATUS_CHANGED),
+  data: TuneToneStatusSchema,
+});
+
+export type WSTuneToneStatusChangedMessage = z.infer<typeof WSTuneToneStatusChangedMessageSchema>;
+
+/**
  * 电台数值表数据消息（服务端到客户端）
  */
 export const WSMeterDataMessageSchema = WSBaseMessageSchema.extend({
@@ -1286,6 +1334,9 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPTTStatusChangedMessageSchema,
   WSForceStopTransmissionMessageSchema,
   WSRemoveOperatorFromTransmissionMessageSchema,
+  WSStartTuneToneMessageSchema,
+  WSStopTuneToneMessageSchema,
+  WSTuneToneStatusChangedMessageSchema,
 
   // 电台数值表消息
   WSMeterDataMessageSchema,
@@ -1420,6 +1471,7 @@ export interface DigitalRadioEngineEvents {
 
   // PTT状态控制事件
   pttStatusChanged: (data: PTTStatus) => void;
+  tuneToneStatusChanged: (data: TuneToneStatus) => void;
 
   // 电台数值表事件
   meterData: (data: MeterData) => void;

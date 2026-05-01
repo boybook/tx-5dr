@@ -82,6 +82,12 @@ export const initialRadioState: RadioState = {
     isTransmitting: false,
     operatorIds: []
   },
+  tuneToneStatus: {
+    active: false,
+    toneHz: null,
+    startedAt: null,
+    maxDurationMs: 15000,
+  },
   meterData: null,
   hasReceivedMeterData: false,
   squelchStatus: {
@@ -300,6 +306,12 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
           isTransmitting: action.payload.isTransmitting,
           operatorIds: action.payload.operatorIds
         }
+      };
+
+    case 'tuneToneStatusChanged':
+      return {
+        ...state,
+        tuneToneStatus: action.payload,
       };
 
     case 'meterData':

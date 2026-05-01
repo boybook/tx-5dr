@@ -3,6 +3,7 @@ import {
   deriveMonitorActivationCtaState,
   filterDigitalFrequencyOptions,
   isCoreCapabilityAvailable,
+  shouldShowAntennaTuneEntry,
   shouldShowAutoTunerShortcut,
   shouldShowRadioControlEntry,
 } from '../radioControl';
@@ -81,6 +82,12 @@ describe('radioControl utils', () => {
     })).toBe(false);
 
     expect(shouldShowAutoTunerShortcut(true, true, undefined)).toBe(false);
+  });
+
+  it('shows antenna tune entry whenever the connected radio can be controlled', () => {
+    expect(shouldShowAntennaTuneEntry(true, true)).toBe(true);
+    expect(shouldShowAntennaTuneEntry(true, false)).toBe(false);
+    expect(shouldShowAntennaTuneEntry(false, true)).toBe(false);
   });
 
   it('shows radio control entry only when connected and permitted', () => {

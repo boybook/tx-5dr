@@ -311,6 +311,16 @@ export class WSClient extends WSMessageHandler {
     this.send(WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION, { operatorId });
   }
 
+  startTuneTone(options?: { operatorId?: string; toneHz?: number }): void {
+    logger.debug('Sending startTuneTone command', options);
+    this.send(WSMessageType.START_TUNE_TONE, options);
+  }
+
+  stopTuneTone(): void {
+    logger.debug('Sending stopTuneTone command');
+    this.send(WSMessageType.STOP_TUNE_TONE);
+  }
+
   /**
    * 停止自动重连
    */
