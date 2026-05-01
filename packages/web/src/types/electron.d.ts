@@ -1,6 +1,29 @@
 import type { DesktopHttpsMode, DesktopHttpsStatus } from '@tx5dr/contracts';
+import type { ShortcutConfig, ShortcutActionId } from '../utils/shortcutPreferences';
 
 type DesktopUpdateSource = 'oss' | 'github';
+
+
+interface ShortcutRegistrationStatus {
+  config: ShortcutConfig;
+  registered: Array<{ actionId: ShortcutActionId; accelerator: string }>;
+  failed: Array<{ actionId: ShortcutActionId; accelerator: string; reason: string }>;
+}
+
+interface ShortcutCommandPayload {
+  actionId: ShortcutActionId;
+  accelerator?: string;
+  source: 'electron';
+}
+
+interface ShortcutRecordedPayload {
+  actionId: ShortcutActionId;
+  binding: ShortcutConfig[ShortcutActionId];
+}
+
+interface ShortcutRecordingCancelledPayload {
+  actionId: ShortcutActionId;
+}
 
 interface DesktopUpdateRecentCommit {
   id: string;
@@ -74,6 +97,19 @@ interface ElectronAPI {
     get(key: string): Promise<unknown>;
     set(key: string, value: unknown): Promise<void>;
     getAll(): Promise<Record<string, unknown>>;
+  };
+  shortcuts?: {
+    getConfig(): Promise<ShortcutConfig>;
+    setConfig(config: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
+    register(config?: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
+    startRecording(actionId: ShortcutActionId): Promise<void>;
+    stopRecording(): Promise<void>;
+    onCommand(callback: (payload: ShortcutCommandPayload) => void): void;
+    offCommand(callback: (payload: ShortcutCommandPayload) => void): void;
+    onRecorded(callback: (payload: ShortcutRecordedPayload) => void): void;
+    offRecorded(callback: (payload: ShortcutRecordedPayload) => void): void;
+    onRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): void;
+    offRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): void;
   };
   https?: {
     getStatus(): Promise<DesktopHttpsStatus>;

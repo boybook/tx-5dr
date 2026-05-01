@@ -14,6 +14,14 @@ import {
   getRadioOperatorProgressAnimation,
   shouldRadioOperatorPropsBeEqual,
 } from './radioOperatorProgress';
+import {
+  OPERATOR_FORCE_STOP_REQUESTED_EVENT,
+  type OperatorForceStopRequestedDetail,
+} from '../../../utils/operatorForceStopEvents';
+import {
+  OPERATOR_SLOT_SHORTCUT_FEEDBACK_EVENT,
+  type OperatorSlotShortcutFeedbackDetail,
+} from '../../../utils/operatorSlotShortcutFeedbackEvents';
 
 const logger = createLogger('RadioOperator');
 
@@ -120,6 +128,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
   // 展开/收起时隙内容的状态
   const [isSlotContentExpanded, setIsSlotContentExpanded] = React.useState(false);
+  const [shortcutSelectHighlightToken, setShortcutSelectHighlightToken] = React.useState<number | null>(null);
+  const shortcutHighlightTokenRef = React.useRef(0);
   const expandedContentRef = React.useRef<HTMLDivElement | null>(null);
   const [expandedContentHeight, setExpandedContentHeight] = React.useState(0);
   
@@ -164,6 +174,30 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       hasRequestedForceStopRef.current = false;
     }
   }, [operatorStatus.isInActivePTT, operatorStatus.isTransmitting]);
+
+  React.useEffect(() => {
+    const handleShortcutForceStop = (event: Event) => {
+      const detail = (event as CustomEvent<OperatorForceStopRequestedDetail>).detail;
+      if (detail?.operatorId !== operatorStatus.id) return;
+      hasRequestedForceStopRef.current = true;
+      setIsForceStopPopoverOpen(false);
+    };
+
+    window.addEventListener(OPERATOR_FORCE_STOP_REQUESTED_EVENT, handleShortcutForceStop);
+    return () => window.removeEventListener(OPERATOR_FORCE_STOP_REQUESTED_EVENT, handleShortcutForceStop);
+  }, [operatorStatus.id]);
+
+  React.useEffect(() => {
+    const handleShortcutSlotFeedback = (event: Event) => {
+      const detail = (event as CustomEvent<OperatorSlotShortcutFeedbackDetail>).detail;
+      if (detail?.operatorId !== operatorStatus.id) return;
+      shortcutHighlightTokenRef.current += 1;
+      setShortcutSelectHighlightToken(shortcutHighlightTokenRef.current);
+    };
+
+    window.addEventListener(OPERATOR_SLOT_SHORTCUT_FEEDBACK_EVENT, handleShortcutSlotFeedback);
+    return () => window.removeEventListener(OPERATOR_SLOT_SHORTCUT_FEEDBACK_EVENT, handleShortcutSlotFeedback);
+  }, [operatorStatus.id]);
 
   React.useLayoutEffect(() => {
     const element = expandedContentRef.current;
@@ -955,6 +989,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
           
           <div className="flex items-center gap-0">
             <Select
+              key={`slot-select-${shortcutSelectHighlightToken ?? 'idle'}`}
               selectedKeys={[operatorStatus.currentSlot || 'TX6']}
               onSelectionChange={(keys) => {
                 const slot = Array.from(keys)[0] as OperatorRuntimeSlot | undefined;
@@ -966,7 +1001,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               variant="bordered"
               className="w-auto min-w-[200px]"
               classNames={{
-                trigger: "bg-transparent border-none shadow-none p-1 pl-2 h-auto min-h-0 rounded-md data-[hover=true]:bg-content2",
+                trigger: `bg-transparent border-none shadow-none p-1 pl-2 h-auto min-h-0 rounded-md data-[hover=true]:bg-content2 ${shortcutSelectHighlightToken ? 'tx-slot-shortcut-select-glow' : ''}`,
                 value: "text-sm font-mono text-foreground p-0",
                 selectorIcon: "text-default-400 text-xs",
                 popoverContent: "min-w-[260px]",
@@ -1180,7 +1215,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                   const displayedContent = localSlotContents[runtimeSlot] ?? content ?? '';
                   return (
                   <div 
-                    key={runtimeSlot} 
+                    key={runtimeSlot}
                     className={`p-2 py-1 transition-colors duration-200 ${
                       operatorStatus.currentSlot === runtimeSlot 
                         ? 'bg-primary-50 border-primary-200' 

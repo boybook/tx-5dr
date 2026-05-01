@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog, nativeTheme, powerSaveBlocker, session } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog, nativeTheme, powerSaveBlocker, session, globalShortcut } from 'electron';
 import log from 'electron-log/main';
 import { homedir, hostname as getHostname, networkInterfaces } from 'node:os';
 import net from 'node:net';
@@ -56,6 +56,8 @@ let notificationPermissionHandlersConfigured = false;
 let ipcHandlersConfigured = false;
 let devProcessMemoryLogInterval: NodeJS.Timeout | null = null;
 let mainAppReadyForWindow = false;
+let shortcutRecordingWebContentsId: number | null = null;
+let shortcutRecordingActionId: ShortcutActionId | null = null;
 
 type QuitSource = 'tray-menu' | 'window-close' | 'renderer' | 'before-quit' | 'will-quit' | 'unknown';
 
@@ -82,6 +84,56 @@ const ELECTRON_SETTINGS_FILE = 'electron-settings.json';
 interface ElectronSettings {
   closeBehavior: 'ask' | 'tray' | 'quit';
   desktopHttps?: PersistentDesktopHttpsConfig;
+  shortcuts?: ShortcutConfig;
+}
+
+const SHORTCUT_ACTION_IDS = [
+  'toggle-current-operator-tx',
+  'halt-current-operator-tx',
+  'select-tx-1',
+  'select-tx-2',
+  'select-tx-3',
+  'select-tx-4',
+  'select-tx-5',
+  'select-tx-6',
+  'start-monitoring',
+  'stop-monitoring',
+  'cycle-operator-next',
+  'cycle-operator-previous',
+  'reset-current-operator-to-cq',
+  'force-stop-all-transmission',
+  'run-tuner-tune',
+  'toggle-tuner-switch',
+] as const;
+
+type ShortcutActionId = typeof SHORTCUT_ACTION_IDS[number];
+
+interface ShortcutBinding {
+  code: string;
+  key: string;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  enabled: boolean;
+  label: string;
+}
+
+type ShortcutConfig = Record<ShortcutActionId, ShortcutBinding>;
+
+interface ShortcutRegistrationStatus {
+  config: ShortcutConfig;
+  registered: Array<{ actionId: ShortcutActionId; accelerator: string }>;
+  failed: Array<{ actionId: ShortcutActionId; accelerator: string; reason: string }>;
+}
+
+interface ShortcutRecordedPayload {
+  actionId: ShortcutActionId;
+  binding: ShortcutBinding;
+}
+
+interface ShortcutRecordingCancelledPayload {
+  actionId: ShortcutActionId;
 }
 
 interface WindowsVCRuntimeStatus {
@@ -95,6 +147,7 @@ interface WindowsVCRuntimeStatus {
 const DEFAULT_ELECTRON_SETTINGS: ElectronSettings = {
   closeBehavior: 'ask',
   desktopHttps: DEFAULT_DESKTOP_HTTPS_CONFIG,
+  shortcuts: createDefaultShortcutConfig(),
 };
 const VC_REDIST_X64_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
 const VC_REDIST_DOWNLOAD_PAGE_ZH_URL = 'https://learn.microsoft.com/zh-cn/cpp/windows/latest-supported-vc-redist';
@@ -110,6 +163,209 @@ function getElectronSettingsPath(): string {
   return path.join(getAppConfigDir(), ELECTRON_SETTINGS_FILE);
 }
 
+function createShortcutBinding(input: Partial<ShortcutBinding> & { code: string }): ShortcutBinding {
+  const code = typeof input.code === 'string' ? input.code.trim() : '';
+  const binding: ShortcutBinding = {
+    code,
+    key: typeof input.key === 'string' && input.key.trim()
+      ? (input.key.length === 1 ? input.key.toUpperCase() : input.key)
+      : keyFromShortcutCode(code),
+    altKey: Boolean(input.altKey),
+    ctrlKey: Boolean(input.ctrlKey),
+    metaKey: Boolean(input.metaKey),
+    shiftKey: Boolean(input.shiftKey),
+    enabled: input.enabled !== false,
+    label: '',
+  };
+
+  return {
+    ...binding,
+    label: formatShortcutBinding(binding),
+  };
+}
+
+function createDisabledShortcutBinding(): ShortcutBinding {
+  return {
+    code: '',
+    key: '',
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    enabled: false,
+    label: 'Disabled',
+  };
+}
+
+function createDefaultShortcutConfig(): ShortcutConfig {
+  return {
+    'toggle-current-operator-tx': createShortcutBinding({ code: 'KeyN', key: 'N', altKey: true }),
+    'halt-current-operator-tx': createShortcutBinding({ code: 'KeyH', key: 'H', altKey: true }),
+    'select-tx-1': createShortcutBinding({ code: 'Digit1', key: '1', altKey: true }),
+    'select-tx-2': createShortcutBinding({ code: 'Digit2', key: '2', altKey: true }),
+    'select-tx-3': createShortcutBinding({ code: 'Digit3', key: '3', altKey: true }),
+    'select-tx-4': createShortcutBinding({ code: 'Digit4', key: '4', altKey: true }),
+    'select-tx-5': createShortcutBinding({ code: 'Digit5', key: '5', altKey: true }),
+    'select-tx-6': createShortcutBinding({ code: 'Digit6', key: '6', altKey: true }),
+    'start-monitoring': createShortcutBinding({ code: 'KeyM', key: 'M', altKey: true }),
+    'stop-monitoring': createShortcutBinding({ code: 'KeyS', key: 'S', altKey: true }),
+    'cycle-operator-next': createShortcutBinding({ code: 'KeyO', key: 'O', altKey: true }),
+    'cycle-operator-previous': createDisabledShortcutBinding(),
+    'reset-current-operator-to-cq': createDisabledShortcutBinding(),
+    'force-stop-all-transmission': createDisabledShortcutBinding(),
+    'run-tuner-tune': createDisabledShortcutBinding(),
+    'toggle-tuner-switch': createDisabledShortcutBinding(),
+  };
+}
+
+function keyFromShortcutCode(code: string): string {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^Numpad[0-9]$/.test(code)) return `num${code.slice(6)}`;
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
+  if (code === 'Space') return 'Space';
+  if (code === 'Backquote') return '`';
+  if (code === 'Minus') return '-';
+  if (code === 'Equal') return '=';
+  if (code === 'BracketLeft') return '[';
+  if (code === 'BracketRight') return ']';
+  if (code === 'Backslash') return '\\';
+  if (code === 'Semicolon') return ';';
+  if (code === 'Quote') return "'";
+  if (code === 'Comma') return ',';
+  if (code === 'Period') return '.';
+  if (code === 'Slash') return '/';
+  return code;
+}
+
+function formatShortcutBinding(binding: ShortcutBinding): string {
+  if (!binding.enabled || !binding.code) return 'Disabled';
+
+  const parts: string[] = [];
+  if (binding.ctrlKey) parts.push('Ctrl');
+  if (binding.metaKey) parts.push('Meta');
+  if (binding.altKey) parts.push('Alt');
+  if (binding.shiftKey) parts.push('Shift');
+  parts.push(keyFromShortcutCode(binding.code));
+  return parts.join('+');
+}
+
+function normalizeShortcutBinding(value: unknown, fallback: ShortcutBinding): ShortcutBinding {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return createShortcutBinding(fallback);
+  }
+
+  const raw = value as Partial<ShortcutBinding>;
+  if (raw.enabled === false || raw.code === '') {
+    return createDisabledShortcutBinding();
+  }
+
+  if (typeof raw.code !== 'string' || raw.code.trim() === '') {
+    return createShortcutBinding(fallback);
+  }
+
+  return createShortcutBinding(raw as Partial<ShortcutBinding> & { code: string });
+}
+
+function normalizeShortcutConfig(value: unknown): ShortcutConfig {
+  const defaults = createDefaultShortcutConfig();
+  const source = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+
+  return SHORTCUT_ACTION_IDS.reduce((config, actionId) => {
+    config[actionId] = normalizeShortcutBinding(source[actionId], defaults[actionId]);
+    return config;
+  }, {} as ShortcutConfig);
+}
+
+function shortcutBindingToAccelerator(binding: ShortcutBinding): string | null {
+  if (!binding.enabled || !binding.code) return null;
+
+  const key = acceleratorKeyFromShortcutCode(binding.code);
+  if (!key) return null;
+
+  const parts: string[] = [];
+  if (binding.ctrlKey) parts.push('Control');
+  if (binding.metaKey) parts.push(process.platform === 'darwin' ? 'Command' : 'Super');
+  if (binding.altKey) parts.push('Alt');
+  if (binding.shiftKey) parts.push('Shift');
+  parts.push(key);
+  return parts.join('+');
+}
+
+function acceleratorKeyFromShortcutCode(code: string): string | null {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^Numpad[0-9]$/.test(code)) return `num${code.slice(6)}`;
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
+  if (code === 'Space') return 'Space';
+  if (code === 'Backquote') return '`';
+  if (code === 'Minus') return '-';
+  if (code === 'Equal') return '=';
+  if (code === 'BracketLeft') return '[';
+  if (code === 'BracketRight') return ']';
+  if (code === 'Backslash') return '\\';
+  if (code === 'Semicolon') return ';';
+  if (code === 'Quote') return "'";
+  if (code === 'Comma') return ',';
+  if (code === 'Period') return '.';
+  if (code === 'Slash') return '/';
+  return null;
+}
+
+
+function isShortcutActionId(value: unknown): value is ShortcutActionId {
+  return typeof value === 'string' && (SHORTCUT_ACTION_IDS as readonly string[]).includes(value);
+}
+
+function isModifierOnlyShortcutInput(input: { code?: string; key?: string }): boolean {
+  const code = input.code ?? '';
+  const key = input.key ?? '';
+  return code === 'AltLeft'
+    || code === 'AltRight'
+    || code === 'ControlLeft'
+    || code === 'ControlRight'
+    || code === 'MetaLeft'
+    || code === 'MetaRight'
+    || code === 'ShiftLeft'
+    || code === 'ShiftRight'
+    || key === 'Alt'
+    || key === 'Control'
+    || key === 'Meta'
+    || key === 'Shift';
+}
+
+function createShortcutBindingFromElectronInput(input: {
+  code?: string;
+  key?: string;
+  alt?: boolean;
+  control?: boolean;
+  meta?: boolean;
+  shift?: boolean;
+}): ShortcutBinding | null {
+  if (!input.code || isModifierOnlyShortcutInput(input)) return null;
+  if (!input.alt && !input.control && !input.meta && !input.shift) return null;
+
+  return createShortcutBinding({
+    code: input.code,
+    key: input.key || keyFromShortcutCode(input.code),
+    altKey: Boolean(input.alt),
+    ctrlKey: Boolean(input.control),
+    metaKey: Boolean(input.meta),
+    shiftKey: Boolean(input.shift),
+  });
+}
+
+function stopShortcutRecording(options: { restoreGlobalShortcuts?: boolean } = {}): void {
+  shortcutRecordingWebContentsId = null;
+  shortcutRecordingActionId = null;
+
+  if (options.restoreGlobalShortcuts) {
+    applyGlobalShortcutConfig(loadElectronSettings().shortcuts);
+  }
+}
+
 function loadElectronSettings(): ElectronSettings {
   try {
     const raw = fs.readFileSync(getElectronSettingsPath(), 'utf-8');
@@ -118,9 +374,13 @@ function loadElectronSettings(): ElectronSettings {
       ...DEFAULT_ELECTRON_SETTINGS,
       ...parsed,
       desktopHttps: sanitizeDesktopHttpsConfig(parsed?.desktopHttps),
+      shortcuts: normalizeShortcutConfig(parsed?.shortcuts),
     };
   } catch {
-    return { ...DEFAULT_ELECTRON_SETTINGS };
+    return {
+      ...DEFAULT_ELECTRON_SETTINGS,
+      shortcuts: createDefaultShortcutConfig(),
+    };
   }
 }
 
@@ -136,6 +396,62 @@ function saveElectronSettings(settings: ElectronSettings): void {
 
 function getDesktopHttpsConfig(): PersistentDesktopHttpsConfig {
   return sanitizeDesktopHttpsConfig(loadElectronSettings().desktopHttps);
+}
+
+const registeredShortcutAccelerators = new Set<string>();
+
+function unregisterGlobalShortcuts(): void {
+  for (const accelerator of registeredShortcutAccelerators) {
+    globalShortcut.unregister(accelerator);
+  }
+  registeredShortcutAccelerators.clear();
+}
+
+function applyGlobalShortcutConfig(configInput: unknown): ShortcutRegistrationStatus {
+  const config = normalizeShortcutConfig(configInput);
+  const status: ShortcutRegistrationStatus = {
+    config,
+    registered: [],
+    failed: [],
+  };
+
+  unregisterGlobalShortcuts();
+
+  for (const actionId of SHORTCUT_ACTION_IDS) {
+    const accelerator = shortcutBindingToAccelerator(config[actionId]);
+    if (!accelerator) continue;
+
+    try {
+      const ok = globalShortcut.register(accelerator, () => {
+        if (!mainWindowInstance || mainWindowInstance.isDestroyed()) {
+          logger.warn('shortcut command ignored because main window is unavailable', { actionId, accelerator });
+          return;
+        }
+        mainWindowInstance.webContents.send('shortcut:command', { actionId, accelerator, source: 'electron' });
+      });
+
+      if (ok) {
+        registeredShortcutAccelerators.add(accelerator);
+        status.registered.push({ actionId, accelerator });
+      } else {
+        status.failed.push({ actionId, accelerator, reason: 'registration_failed' });
+      }
+    } catch (error) {
+      status.failed.push({
+        actionId,
+        accelerator,
+        reason: error instanceof Error ? error.message : 'registration_error',
+      });
+    }
+  }
+
+  if (status.failed.length > 0) {
+    logger.warn('some global shortcuts failed to register', status.failed);
+  } else {
+    logger.info('global shortcuts registered', status.registered);
+  }
+
+  return status;
 }
 
 function isAllowedNotificationOrigin(rawUrl: string): boolean {
@@ -1515,6 +1831,36 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
     logger.debug(`console [${level}]: ${message}`);
   });
 
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (shortcutRecordingWebContentsId !== mainWindow.webContents.id || !shortcutRecordingActionId) {
+      return;
+    }
+
+    event.preventDefault();
+    if (input.type !== 'keyDown' || input.isAutoRepeat) {
+      return;
+    }
+
+    const actionId = shortcutRecordingActionId;
+    if (input.key === 'Escape') {
+      stopShortcutRecording({ restoreGlobalShortcuts: true });
+      mainWindow.webContents.send('shortcut:recording-cancelled', { actionId } satisfies ShortcutRecordingCancelledPayload);
+      return;
+    }
+
+    if (isModifierOnlyShortcutInput(input)) {
+      return;
+    }
+
+    const binding = createShortcutBindingFromElectronInput(input);
+    if (!binding) {
+      return;
+    }
+
+    stopShortcutRecording({ restoreGlobalShortcuts: true });
+    mainWindow.webContents.send('shortcut:recorded', { actionId, binding } satisfies ShortcutRecordedPayload);
+  });
+
   if (process.platform === 'win32' || process.platform === 'linux') {
     mainWindow.setMenuBarVisibility(false);
   }
@@ -2200,6 +2546,7 @@ const startApp = async () => {
   createTray();
   createDockMenu();
   setupIpcHandlers();
+  applyGlobalShortcutConfig(loadElectronSettings().shortcuts);
 
   logger.info('calling createWindow');
   await createWindow();
@@ -2255,6 +2602,7 @@ async function cleanupAndQuit(source: QuitSource = 'unknown', options?: { relaun
       });
     } finally {
       isCleaningUp = false;
+      unregisterGlobalShortcuts();
       if (relaunchAfterCleanup) {
         app.relaunch();
       }
@@ -2568,6 +2916,44 @@ function setupIpcHandlers() {
     const settings = loadElectronSettings();
     const nextConfig = await disableDesktopHttps(settings.desktopHttps);
     return persistDesktopHttpsConfig(nextConfig);
+  });
+
+  ipcMain.handle('shortcuts:getConfig', () => {
+    return loadElectronSettings().shortcuts ?? createDefaultShortcutConfig();
+  });
+
+  ipcMain.handle('shortcuts:setConfig', (_event, config: unknown) => {
+    const settings = loadElectronSettings();
+    const shortcuts = normalizeShortcutConfig(config);
+    saveElectronSettings({ ...settings, shortcuts });
+    return applyGlobalShortcutConfig(shortcuts);
+  });
+
+  ipcMain.handle('shortcuts:register', (_event, config?: unknown) => {
+    if (config !== undefined) {
+      const settings = loadElectronSettings();
+      const shortcuts = normalizeShortcutConfig(config);
+      saveElectronSettings({ ...settings, shortcuts });
+      return applyGlobalShortcutConfig(shortcuts);
+    }
+
+    return applyGlobalShortcutConfig(loadElectronSettings().shortcuts);
+  });
+
+  ipcMain.handle('shortcuts:startRecording', (event, actionId: unknown) => {
+    if (!isShortcutActionId(actionId)) {
+      throw new Error('invalid_shortcut_action');
+    }
+
+    unregisterGlobalShortcuts();
+    shortcutRecordingWebContentsId = event.sender.id;
+    shortcutRecordingActionId = actionId;
+  });
+
+  ipcMain.handle('shortcuts:stopRecording', (event) => {
+    if (shortcutRecordingWebContentsId === event.sender.id) {
+      stopShortcutRecording({ restoreGlobalShortcuts: true });
+    }
   });
 
   // 配置管理 IPC

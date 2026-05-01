@@ -239,3 +239,31 @@ textarea.font-mono,
 .voice-keyer-wait-progress {
   width: var(--voice-keyer-progress-start, 0%);
 }
+
+@keyframes tx-slot-shortcut-select-glow {
+  0% {
+    box-shadow: 0 0 0 0 hsl(var(--heroui-primary) / 0);
+    background-color: transparent;
+    transform: scale(1);
+  }
+  18% {
+    box-shadow: 0 0 0 3px hsl(var(--heroui-primary) / 0.32), 0 0 18px hsl(var(--heroui-primary) / 0.45);
+    background-color: hsl(var(--heroui-primary) / 0.1);
+    transform: scale(1.015);
+  }
+  70% {
+    box-shadow: 0 0 0 5px hsl(var(--heroui-primary) / 0.1), 0 0 12px hsl(var(--heroui-primary) / 0.22);
+    background-color: hsl(var(--heroui-primary) / 0.06);
+    transform: scale(1.005);
+  }
+  100% {
+    box-shadow: 0 0 0 0 hsl(var(--heroui-primary) / 0);
+    background-color: transparent;
+    transform: scale(1);
+  }
+}
+
+.tx-slot-shortcut-select-glow {
+  animation: tx-slot-shortcut-select-glow 900ms ease-out;
+  will-change: box-shadow, background-color, transform;
+}
