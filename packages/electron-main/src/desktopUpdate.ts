@@ -6,6 +6,7 @@ import { createLogger } from './utils/logger.js';
 const logger = createLogger('DesktopUpdate');
 
 const DEFAULT_OSS_BASE_URL = 'https://tx5dr.oss-cn-hangzhou.aliyuncs.com';
+const WEBSITE_URL = 'https://tx5dr.com';
 const RECENT_COMMITS_LIMIT = 10;
 const COUNTRY_LOOKUP_URLS = [
   'https://ipinfo.io/country',
@@ -86,6 +87,10 @@ export interface DesktopUpdateStatus {
   metadataSource: UpdateSource | null;
   downloadSource: UpdateSource | null;
   errorMessage: string | null;
+  target: 'electron-app';
+  distribution: 'electron';
+  identity: string | null;
+  websiteUrl: string;
 }
 
 function trimSlash(value: string): string {
@@ -161,6 +166,10 @@ function createInitialStatus(): DesktopUpdateStatus {
     metadataSource: null,
     downloadSource: null,
     errorMessage: null,
+    target: 'electron-app',
+    distribution: 'electron',
+    identity: null,
+    websiteUrl: WEBSITE_URL,
   };
 }
 
@@ -328,6 +337,17 @@ function listDownloadOptions(manifest: DesktopUpdateManifest, preferredSource: U
     .filter((asset): asset is DesktopDownloadOption => Boolean(asset));
 }
 
+function updateIdentityFromManifest(manifest: DesktopUpdateManifest): string | null {
+  const latestVersion = normalizeVersion(manifest.version);
+  const latestCommit = manifest.commit?.trim() || null;
+
+  if (BUILD_INFO.channel === 'nightly') {
+    return latestCommit || latestVersion || null;
+  }
+
+  return latestVersion || null;
+}
+
 function shouldUpdateFromManifest(manifest: DesktopUpdateManifest): boolean {
   const latestVersion = normalizeVersion(manifest.version);
   const currentVersion = normalizeVersion(BUILD_INFO.version);
@@ -415,6 +435,7 @@ export class DesktopUpdateService {
       const recentCommits = normalizeRecentCommits(manifest);
       const downloadAsset = downloadOptions[0] || null;
       const updateAvailable = shouldUpdateFromManifest(manifest);
+      const identity = updateIdentityFromManifest(manifest);
 
       this.status = {
         channel: BUILD_INFO.channel,
@@ -433,6 +454,10 @@ export class DesktopUpdateService {
         metadataSource: 'oss',
         downloadSource: downloadAsset?.source || null,
         errorMessage: null,
+        target: 'electron-app',
+        distribution: 'electron',
+        identity,
+        websiteUrl: WEBSITE_URL,
       };
 
       logger.info('desktop update status refreshed', {

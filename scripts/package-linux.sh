@@ -15,7 +15,20 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-VERSION=$(node -p "require('$PROJECT_ROOT/package.json').version")
+VERSION=$(TX5DR_PROJECT_ROOT="$PROJECT_ROOT" node -e '
+const fs = require("fs");
+const path = require("path");
+const root = process.env.TX5DR_PROJECT_ROOT;
+const generated = path.join(root, "packages/server/src/generated/buildInfo.ts");
+let version = process.env.TX5DR_BUILD_VERSION || "";
+if (!version && fs.existsSync(generated)) {
+  const source = fs.readFileSync(generated, "utf8");
+  const match = source.match(/"version"\s*:\s*"([^"]+)/);
+  if (match) version = match[1];
+}
+if (!version) version = require(path.join(root, "package.json")).version;
+process.stdout.write(version);
+')
 FORMAT="${1:-both}"
 SKIP_BUILD=false
 TARGET_ARCH=""
@@ -334,6 +347,22 @@ chmod 755 "$APP_ROOT/install.sh"
 
 # --- Version file ---
 echo "$VERSION" > "$APP_ROOT/version"
+node - "$PROJECT_ROOT" "$APP_ROOT/build-info.json" <<'NODE'
+const fs = require("fs");
+const path = require("path");
+const root = process.argv[2];
+const output = process.argv[3];
+const sourcePath = path.join(root, "packages/server/src/generated/buildInfo.ts");
+let info = { version: process.env.TX5DR_BUILD_VERSION || require(path.join(root, "package.json")).version };
+if (fs.existsSync(sourcePath)) {
+  const source = fs.readFileSync(sourcePath, "utf8");
+  const match = source.match(/SERVER_BUILD_INFO[^=]*=\s*(\{[\s\S]*?\});/);
+  if (match) {
+    try { info = JSON.parse(match[1]); } catch {}
+  }
+}
+fs.writeFileSync(output, `${JSON.stringify(info, null, 2)}\n`);
+NODE
 
 # --- CLI script ---
 mkdir -p "$STAGING/usr/bin"

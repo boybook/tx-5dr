@@ -530,7 +530,13 @@
     "realtimeRtcDataAudioApplyHint": "Saved UDP endpoint settings apply to new realtime sessions or reconnects; active listening/capture sessions are not rebuilt automatically.",
     "rtcDataAudioPublicEndpoint": "Public endpoint: {{endpoint}}",
     "rtcDataAudioPublicEndpointLabel": "Public UDP endpoint",
-    "realtimePortHintRtcDataAudio": "Expose the fixed UDP port shown here when clients connect from outside the LAN. For FRP, map UDP from the VPS to the same server UDP port."
+    "realtimePortHintRtcDataAudio": "Expose the fixed UDP port shown here when clients connect from outside the LAN. For FRP, map UDP from the VPS to the same server UDP port.",
+    "updateTitle": "Version Updates",
+    "updateWebsiteOnlyDesc": "Checks whether a newer build exists. This deployment is updated outside the web UI; use the official website for instructions.",
+    "updateOpenWebsite": "Official website",
+    "updateTargetElectron": "Electron",
+    "updateTargetLinuxServer": "Linux Server",
+    "updateTargetDocker": "Docker"
   },
   "freqPresets": {
     "title": "Frequency Preset Management",

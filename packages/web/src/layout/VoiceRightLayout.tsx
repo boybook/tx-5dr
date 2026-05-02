@@ -17,8 +17,9 @@ import { VoiceRightTopTabs } from '../components/voice/VoiceRightTopTabs';
 import { ThemeToggle } from '../components/common/ThemeToggle';
 import { QSONotificationToggleButton } from '../components/common/QSONotificationToggleButton';
 import { ServerHealthButton } from '../components/system/ServerHealthButton';
+import { SettingsButton } from '../components/common/SettingsButton';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faKey, faLock, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
+import { faKey, faLock, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import { OPEN_ACCOUNT_SECURITY_MODAL_EVENT } from '../components/app/GlobalModalHost';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioModeState } from '../store/radioStore';
@@ -156,9 +157,6 @@ export const VoiceRightLayout: React.FC = () => {
     setSelectedQSO(null);
   }, []);
 
-  const handleOpenSettings = () => {
-    window.dispatchEvent(new CustomEvent('openSettingsModal', { detail: { tab: 'radio' } }));
-  };
 
   const handleOpenRadioSettings = () => {
     window.dispatchEvent(new Event('openProfileModal'));
@@ -248,16 +246,7 @@ export const VoiceRightLayout: React.FC = () => {
                 <ServerHealthButton />
                 <QSONotificationToggleButton />
                 <ThemeToggle variant="dropdown" size="sm" />
-                <Button
-                  onPress={handleOpenSettings}
-                  isIconOnly
-                  variant="light"
-                  size="sm"
-                  title={t('action.openSettings')}
-                  aria-label={t('action.openSettings')}
-                >
-                  <FontAwesomeIcon icon={faCog} className="text-default-400 text-sm" />
-                </Button>
+            <SettingsButton />
               </div>
             </>
           )}

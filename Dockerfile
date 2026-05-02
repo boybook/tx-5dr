@@ -6,6 +6,8 @@ FROM node:22-slim AS builder
 ENV YARN_VERSION=4.9.1
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NODE_ENV=production
+ARG VCS_REF=development
+ARG BUILD_DATE=development
 
 # 显示构建信息
 RUN echo "Building for platform: $(uname -m)" && \
@@ -80,6 +82,14 @@ COPY . .
 
 # 生成ICO文件（如果需要）
 RUN node scripts/generate-ico.js || true
+
+# 生成服务端构建元数据
+RUN node scripts/prepare-server-build-info.mjs \
+    --channel nightly \
+    --version "${VCS_REF}" \
+    --commit "${VCS_REF}" \
+    --build-timestamp "${BUILD_DATE}" \
+    --distribution docker
 
 # 构建应用
 RUN echo "Building application for $(uname -m)..." && \

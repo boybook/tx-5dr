@@ -37,10 +37,12 @@ interface SettingsModalProps {
   onClose: () => void;
   initialTab?: SettingsTab; // 可选的初始标签页
   initialFrequencyPresetMode?: string;
+  initialSection?: SettingsSection;
 }
 
 // 设置标签页类型（radio 和 audio 已迁移到 ProfileModal，logbook_sync 已迁移到 SyncConfigModal）
 export type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'rigctld' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx' | 'plugins' | 'shortcuts';
+export type SettingsSection = 'updates';
 
 const DEFAULT_USES_MODAL_FOOTER_SAVE: Record<SettingsTab, boolean> = {
   radio: false,
@@ -58,7 +60,7 @@ const DEFAULT_USES_MODAL_FOOTER_SAVE: Record<SettingsTab, boolean> = {
   shortcuts: true,
 };
 
-export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPresetMode }: SettingsModalProps) {
+export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPresetMode, initialSection }: SettingsModalProps) {
   const { t } = useTranslation('settings');
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const isOperator = useHasMinRole(UserRole.OPERATOR);
@@ -365,6 +367,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
           <SystemSettings
             ref={systemSettingsRef}
             onUnsavedChanges={setHasUnsavedChanges}
+            initialSection={initialSection}
           />
         );
       case 'rigctld':

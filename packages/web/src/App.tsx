@@ -21,6 +21,7 @@ import { GlobalModalHost } from './components/app/GlobalModalHost';
 import { QSONotificationBridge } from './components/app/QSONotificationBridge';
 import { useViewportHeightCssVar } from './hooks/useViewportHeight';
 import { GlobalShortcutBridge } from './components/app/GlobalShortcutBridge';
+import { UpdateNotificationProvider } from './components/app/UpdateNotificationProvider';
 
 function AppContent() {
   const { state } = useRadioState();
@@ -127,9 +128,11 @@ function AuthGate() {
   return (
     <AppErrorBoundary>
       <RadioProvider key={authKey}>
-        <AppContent />
-        <GlobalShortcutBridge />
-        <GlobalModalHost />
+        <UpdateNotificationProvider>
+          <AppContent />
+          <GlobalShortcutBridge />
+          <GlobalModalHost />
+        </UpdateNotificationProvider>
       </RadioProvider>
     </AppErrorBoundary>
   );

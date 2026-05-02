@@ -94,6 +94,7 @@ import type {
   PluginMarketChannel,
   PluginMarketInstallResult,
   PluginRuntimeInfo,
+  SystemUpdateStatus,
 } from '@tx5dr/contracts';
 
 // ========== 错误处理 ==========
@@ -1741,6 +1742,10 @@ export const api = {
 
   async getNetworkInfo(apiBase?: string): Promise<NetworkInfo> {
     return apiRequest<NetworkInfo>('/system/network-info', undefined, apiBase);
+  },
+
+  async getSystemUpdateStatus(apiBase?: string): Promise<SystemUpdateStatus> {
+    return apiRequest<SystemUpdateStatus>('/system/update-status', undefined, apiBase);
   },
 
   async getClockStatus(apiBase?: string): Promise<ClockStatusDetail> {

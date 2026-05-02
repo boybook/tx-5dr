@@ -1,4 +1,4 @@
-import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
@@ -28,12 +28,14 @@ import type {
   DesktopHttpsStatus,
   DesktopHttpsMode,
   ServerCpuProfileStatus,
+  SystemUpdateStatus,
 } from '@tx5dr/contracts';
 import { DEFAULT_DECODE_WINDOW_SETTINGS, FT8_WINDOW_PRESETS, FT4_WINDOW_PRESETS, isValidNtpServerHost } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
 import { createLogger } from '../../utils/logger';
 import { useConnection } from '../../store/radioStore';
 import { useWSEvent } from '../../hooks/useWSEvent';
+import { useUpdateNotification, type UpdateStatusWithDownloads } from '../app/UpdateNotificationProvider';
 
 interface DecodeWindowState {
   ft8Preset: string;
@@ -42,25 +44,10 @@ interface DecodeWindowState {
   ft4CustomWindows: number[];
 }
 
-interface DesktopUpdateState {
-  channel: 'release' | 'nightly';
-  currentVersion: string;
-  currentCommit: string | null;
-  checking: boolean;
-  updateAvailable: boolean;
-  latestVersion: string | null;
-  latestCommit: string | null;
-  latestCommitTitle: string | null;
-  recentCommits: Array<{
-    id: string;
-    shortId: string;
-    title: string;
-    publishedAt: string | null;
-  }>;
-  publishedAt: string | null;
-  releaseNotes: string | null;
-  downloadUrl: string | null;
-  downloadOptions: Array<{
+interface DesktopUpdateState extends Omit<SystemUpdateStatus, 'currentDigest' | 'latestDigest'> {
+  checking?: boolean;
+  downloadUrl?: string | null;
+  downloadOptions?: Array<{
     name: string;
     url: string;
     packageType: string;
@@ -69,10 +56,17 @@ interface DesktopUpdateState {
     recommended: boolean;
     source: 'oss' | 'github';
   }>;
-  metadataSource: 'oss' | 'github' | null;
-  downloadSource: 'oss' | 'github' | null;
-  errorMessage: string | null;
+  downloadSource?: 'oss' | 'github' | null;
+  recentCommits?: Array<{
+    id: string;
+    shortId: string;
+    title: string;
+    publishedAt: string | null;
+  }>;
+  currentDigest?: string | null;
+  latestDigest?: string | null;
 }
+
 
 type RealtimeRuntimeView = NonNullable<RealtimeSettingsResponseData['runtime']>;
 
@@ -367,6 +361,7 @@ export interface SystemSettingsRef {
 
 interface SystemSettingsProps {
   onUnsavedChanges?: (hasChanges: boolean) => void;
+  initialSection?: 'updates';
 }
 
 function getReportIntervalOptions(t: (key: string) => string) {
@@ -381,7 +376,7 @@ function getReportIntervalOptions(t: (key: string) => string) {
 export const SystemSettings = forwardRef<
   SystemSettingsRef,
   SystemSettingsProps
->(({ onUnsavedChanges }, ref) => {
+>(({ onUnsavedChanges, initialSection }, ref) => {
   const { t } = useTranslation();
   const connection = useConnection();
   const REPORT_INTERVAL_OPTIONS = useMemo(() => getReportIntervalOptions(t), [t]);
@@ -427,6 +422,8 @@ export const SystemSettings = forwardRef<
   const [closeBehavior, setCloseBehavior] = useState<string>('ask');
   const [originalCloseBehavior, setOriginalCloseBehavior] = useState<string>('ask');
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
+  const updateNotification = useUpdateNotification();
+  const updateCardRef = useRef<HTMLDivElement | null>(null);
   const [desktopHttpsStatus, setDesktopHttpsStatus] = useState<DesktopHttpsStatus | null>(null);
   const [desktopHttpsEnabled, setDesktopHttpsEnabled] = useState(false);
   const [originalDesktopHttpsEnabled, setOriginalDesktopHttpsEnabled] = useState(false);
@@ -460,9 +457,23 @@ export const SystemSettings = forwardRef<
     loadElectronCloseBehavior();
     if (isElectron) {
       void loadDesktopHttpsSettings();
-      void loadDesktopUpdateStatus();
     }
+    void loadDesktopUpdateStatus();
   }, []);
+
+  useEffect(() => {
+    if (updateNotification.status) {
+      setDesktopUpdateStatus(updateNotification.status as DesktopUpdateState);
+      setDesktopUpdateError(updateNotification.status.errorMessage || '');
+    }
+  }, [updateNotification.status]);
+
+  useEffect(() => {
+    if (initialSection !== 'updates') return;
+    window.setTimeout(() => {
+      updateCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+  }, [initialSection]);
 
   const loadSettings = async () => {
     try {
@@ -729,34 +740,56 @@ export const SystemSettings = forwardRef<
   }, [applyDesktopHttpsSnapshot]);
 
   const loadDesktopUpdateStatus = useCallback(async () => {
-    if (!window.electronAPI?.updater?.getStatus) return;
     try {
-      const status = await window.electronAPI.updater.getStatus();
-      setDesktopUpdateStatus(status);
+      if (updateNotification.status) {
+        setDesktopUpdateStatus(updateNotification.status as DesktopUpdateState);
+        setDesktopUpdateError(updateNotification.status.errorMessage || '');
+        setDesktopUpdateExpanded(false);
+        return;
+      }
+
+      if (window.electronAPI?.updater?.getStatus) {
+        const status = await window.electronAPI.updater.getStatus();
+        setDesktopUpdateStatus(status as DesktopUpdateState);
+        setDesktopUpdateError(status.errorMessage || '');
+        setDesktopUpdateExpanded(false);
+        return;
+      }
+
+      const status = await api.getSystemUpdateStatus();
+      setDesktopUpdateStatus(status as DesktopUpdateState);
       setDesktopUpdateError(status.errorMessage || '');
       setDesktopUpdateExpanded(false);
     } catch (err) {
-      logger.error('Failed to load desktop update status:', err);
+      logger.error('Failed to load update status:', err);
       setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateCheckFailed'));
     }
-  }, [t]);
+  }, [t, updateNotification.status]);
 
   const handleCheckDesktopUpdate = useCallback(async () => {
-    if (!window.electronAPI?.updater?.check) return;
     setDesktopUpdateBusy(true);
     setDesktopUpdateError('');
     try {
-      const status = await window.electronAPI.updater.check();
-      setDesktopUpdateStatus(status);
+      let status: UpdateStatusWithDownloads | SystemUpdateStatus | DesktopUpdateStatus | null = null;
+      if (updateNotification.refresh) {
+        status = await updateNotification.refresh();
+      }
+      if (!status && window.electronAPI?.updater?.check) {
+        status = await window.electronAPI.updater.check();
+      }
+      if (!status) {
+        status = await api.getSystemUpdateStatus();
+      }
+      setDesktopUpdateStatus(status as DesktopUpdateState);
       setDesktopUpdateError(status.errorMessage || '');
       setDesktopUpdateExpanded(false);
     } catch (err) {
-      logger.error('Failed to check desktop update:', err);
+      logger.error('Failed to check update:', err);
       setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateCheckFailed'));
     } finally {
       setDesktopUpdateBusy(false);
     }
-  }, [t]);
+  }, [t, updateNotification]);
 
   const handleOpenDesktopUpdateDownload = useCallback(async (url?: string) => {
     if (!window.electronAPI?.updater?.openDownload) return;
@@ -771,6 +804,24 @@ export const SystemSettings = forwardRef<
       setDesktopUpdateBusy(false);
     }
   }, [t]);
+
+  const handleOpenUpdateWebsite = useCallback(async () => {
+    const url = desktopUpdateStatus?.websiteUrl || 'https://tx5dr.com';
+    setDesktopUpdateBusy(true);
+    setDesktopUpdateError('');
+    try {
+      if (window.electronAPI?.shell?.openExternal) {
+        await window.electronAPI.shell.openExternal(url);
+      } else {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      }
+    } catch (err) {
+      logger.error('Failed to open update website:', err);
+      setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateOpenFailed'));
+    } finally {
+      setDesktopUpdateBusy(false);
+    }
+  }, [desktopUpdateStatus?.websiteUrl, t]);
 
   const handleOpenDesktopUpdateCommits = useCallback(async () => {
     if (!window.electronAPI?.shell?.openExternal) return;
@@ -1192,6 +1243,12 @@ export const SystemSettings = forwardRef<
     ? t(`system.desktopUpdateSourceValue.${desktopUpdateStatus.metadataSource}`)
     : t('system.desktopUpdateSourceValue.unknown');
   const desktopDownloadOptions = desktopUpdateStatus?.downloadOptions || [];
+  const isElectronUpdateTarget = isElectron || desktopUpdateStatus?.target === 'electron-app';
+  const updateTargetLabel = isElectronUpdateTarget
+    ? t('system.updateTargetElectron', 'Electron')
+    : desktopUpdateStatus?.target === 'docker'
+      ? t('system.updateTargetDocker', 'Docker')
+      : t('system.updateTargetLinuxServer', 'Linux Server');
   const desktopRecentCommits = desktopUpdateStatus?.recentCommits || [];
   const ntpCanRestoreDefaults = !areStringArraysEqual(getNtpServerValues(ntpServers), defaultNtpServers);
   const cpuProfileState = cpuProfileStatus?.state ?? 'idle';
@@ -2585,15 +2642,20 @@ export const SystemSettings = forwardRef<
               </Select>
             </CardBody>
           </Card>
+        </>
+      )}
 
-          <Card shadow="none" radius="lg" className="order-[12]" classNames={SETTINGS_CARD_CLASS_NAMES}>
+      <Card ref={updateCardRef} shadow="none" radius="lg" className="order-[12]" classNames={SETTINGS_CARD_CLASS_NAMES}>
             <CardBody className={`${SETTINGS_CARD_BODY_CLASS} space-y-4`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.desktopUpdateTitle')}</h4>
-                  <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.desktopUpdateDesc')}</p>
+                  <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.updateTitle', 'Version Updates')}</h4>
+                  <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{isElectronUpdateTarget ? t('system.desktopUpdateDesc') : t('system.updateWebsiteOnlyDesc', 'Checks whether a newer build exists. This deployment is updated outside the web UI; use the official website for instructions.')}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  <Chip size="sm" color="default" variant="flat">
+                    {updateTargetLabel}
+                  </Chip>
                   <Chip size="sm" color="default" variant="flat">
                     {desktopUpdateStatus?.channel === 'nightly'
                       ? t('system.desktopUpdateChannelNightly')
@@ -2709,7 +2771,7 @@ export const SystemSettings = forwardRef<
                 </p>
               </div>
 
-              {desktopDownloadOptions.length > 0 && (
+              {isElectronUpdateTarget && desktopDownloadOptions.length > 0 && (
                 <div className={`${SETTINGS_SOFT_PANEL_CLASS} space-y-3`}>
                   <div>
                     <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopUpdateDownloadOptionsTitle')}</p>
@@ -2755,7 +2817,7 @@ export const SystemSettings = forwardRef<
                   {t('system.desktopUpdateCheck')}
                 </Button>
 
-                {desktopDownloadOptions.length === 0 && (
+                {isElectronUpdateTarget && desktopDownloadOptions.length === 0 && (
                   <Button
                     color="primary"
                     onPress={() => { void handleOpenDesktopUpdateDownload(); }}
@@ -2764,11 +2826,19 @@ export const SystemSettings = forwardRef<
                     {t('system.desktopUpdateDownload')}
                   </Button>
                 )}
+
+                {!isElectronUpdateTarget && (
+                  <Button
+                    color="primary"
+                    onPress={() => { void handleOpenUpdateWebsite(); }}
+                    isDisabled={isSaving || desktopUpdateBusy}
+                  >
+                    {t('system.updateOpenWebsite', 'Official website')}
+                  </Button>
+                )}
               </div>
             </CardBody>
           </Card>
-        </>
-      )}
 
       {cpuProfileCard}
 
