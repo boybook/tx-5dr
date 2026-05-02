@@ -1,6 +1,6 @@
 import type { RadioProfile, CreateProfileRequest, UpdateProfileRequest } from '@tx5dr/contracts';
 import type { AudioDeviceSettings } from '@tx5dr/contracts';
-import { ConfigManager } from './config-manager.js';
+import { ConfigManager, normalizeAudioDeviceSettings } from './config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { createLogger } from '../utils/logger.js';
 import { applyHamlibSpectrumRuntimeConfig } from '../spectrum/hamlibSpectrumConfig.js';
@@ -34,7 +34,7 @@ export class ProfileManager {
 
     // ICOM WLAN 模式下，仅在用户未指定音频设备时默认使用 ICOM WLAN 虚拟设备
     const audioLockedToRadio = data.radio.type === 'icom-wlan';
-    let audio: AudioDeviceSettings = data.audio || { sampleRate: 48000, bufferSize: 768 };
+    let audio: AudioDeviceSettings = normalizeAudioDeviceSettings(data.audio || { inputSampleRate: 48000, outputSampleRate: 48000, inputBufferSize: 768, outputBufferSize: 768 });
 
     if (audioLockedToRadio && !audio.inputDeviceName && !audio.outputDeviceName) {
       audio = {
@@ -80,12 +80,16 @@ export class ProfileManager {
       if (!updates.audio) {
         if (!existingProfile?.audio?.inputDeviceName && !existingProfile?.audio?.outputDeviceName) {
           updates.audio = {
-            ...(existingProfile?.audio || { sampleRate: 48000, bufferSize: 768 }),
+            ...normalizeAudioDeviceSettings(existingProfile?.audio),
             inputDeviceName: 'ICOM WLAN',
             outputDeviceName: 'ICOM WLAN',
           };
         }
       }
+    }
+
+    if (updates.audio) {
+      updates.audio = normalizeAudioDeviceSettings({ ...existingProfile?.audio, ...updates.audio });
     }
 
     const activeAudioChanged = isActiveProfile && this.hasAudioChanged(audioBefore, updates.audio);
@@ -256,11 +260,16 @@ export class ProfileManager {
       return false;
     }
 
+    const normalizedBefore = normalizeAudioDeviceSettings(before);
+    const normalizedAfter = normalizeAudioDeviceSettings({ ...before, ...after });
+
     return (
-      (before?.inputDeviceName ?? undefined) !== (after.inputDeviceName ?? undefined) ||
-      (before?.outputDeviceName ?? undefined) !== (after.outputDeviceName ?? undefined) ||
-      (before?.sampleRate ?? undefined) !== (after.sampleRate ?? undefined) ||
-      (before?.bufferSize ?? undefined) !== (after.bufferSize ?? undefined)
+      (normalizedBefore.inputDeviceName ?? undefined) !== (normalizedAfter.inputDeviceName ?? undefined) ||
+      (normalizedBefore.outputDeviceName ?? undefined) !== (normalizedAfter.outputDeviceName ?? undefined) ||
+      (normalizedBefore.inputSampleRate ?? undefined) !== (normalizedAfter.inputSampleRate ?? undefined) ||
+      (normalizedBefore.outputSampleRate ?? undefined) !== (normalizedAfter.outputSampleRate ?? undefined) ||
+      (normalizedBefore.inputBufferSize ?? undefined) !== (normalizedAfter.inputBufferSize ?? undefined) ||
+      (normalizedBefore.outputBufferSize ?? undefined) !== (normalizedAfter.outputBufferSize ?? undefined)
     );
   }
 }

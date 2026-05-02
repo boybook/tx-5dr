@@ -15,6 +15,8 @@ import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/
 
 const logger = createLogger('AudioDeviceManager');
 type RadioType = 'none' | 'network' | 'serial' | 'icom-wlan';
+const RTAUDIO_BUFFER_SIZE_OPTIONS = [128, 256, 512, 768, 1024, 2048, 4096];
+const FALLBACK_SAMPLE_RATES = [8000, 12000, 16000, 22050, 24000, 44100, 48000, 96000];
 
 // 音频设备管理器
 export class AudioDeviceManager {
@@ -60,6 +62,7 @@ export class AudioDeviceManager {
         isDefault: false,
         channels: 1,
         sampleRate: 12000,
+        sampleRates: [12000],
         type: 'input' as const,
       }));
     } catch {
@@ -89,8 +92,19 @@ export class AudioDeviceManager {
       isDefault: false,
       channels: 1,
       sampleRate: 12000,
+      sampleRates: [12000],
       type,
     };
+  }
+
+  private normalizeSampleRates(sampleRates: unknown): number[] {
+    if (!Array.isArray(sampleRates)) {
+      return [];
+    }
+
+    return Array.from(new Set(sampleRates
+      .map((rate) => Math.round(Number(rate)))
+      .filter((rate) => Number.isFinite(rate) && rate > 0))).sort((a, b) => a - b);
   }
 
   /**
@@ -102,12 +116,15 @@ export class AudioDeviceManager {
 
     logger.debug(`Converting device ${device.name} (${type}): rawChannels=${channels}, finalChannels=${finalChannels}`);
 
+    const sampleRates = this.normalizeSampleRates(device.sampleRates);
+
     return {
       id: `${type}-${device.id}`,
       name: device.name || `${type === 'input' ? 'input' : 'output'} device ${device.id}`,
       isDefault: isSystemDefault,
       channels: finalChannels,
       sampleRate: device.preferredSampleRate || 48000,
+      ...(sampleRates.length > 0 ? { sampleRates } : {}),
       type: type,
     };
   }
@@ -157,6 +174,7 @@ export class AudioDeviceManager {
           isDefault: true,
           channels: 1,
           sampleRate: 48000,
+          sampleRates: FALLBACK_SAMPLE_RATES,
           type: 'input',
         });
       }
@@ -186,6 +204,7 @@ export class AudioDeviceManager {
           isDefault: true,
           channels: 1,
           sampleRate: 48000,
+          sampleRates: FALLBACK_SAMPLE_RATES,
           type: 'input',
         },
       ];
@@ -223,6 +242,7 @@ export class AudioDeviceManager {
           isDefault: true,
           channels: 2,
           sampleRate: 48000,
+          sampleRates: FALLBACK_SAMPLE_RATES,
           type: 'output',
         });
       }
@@ -245,6 +265,7 @@ export class AudioDeviceManager {
           isDefault: true,
           channels: 2,
           sampleRate: 48000,
+          sampleRates: FALLBACK_SAMPLE_RATES,
           type: 'output',
         },
       ];
@@ -266,6 +287,8 @@ export class AudioDeviceManager {
     return {
       inputDevices,
       outputDevices,
+      inputBufferSizes: RTAUDIO_BUFFER_SIZE_OPTIONS,
+      outputBufferSizes: RTAUDIO_BUFFER_SIZE_OPTIONS,
     };
   }
 

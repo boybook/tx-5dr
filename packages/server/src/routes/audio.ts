@@ -137,8 +137,10 @@ export async function audioRoutes(fastify: FastifyInstance) {
       await configManager.updateAudioConfig({
         inputDeviceName: undefined,
         outputDeviceName: undefined,
-        sampleRate: 48000,
-        bufferSize: 1024,
+        inputSampleRate: 48000,
+        outputSampleRate: 48000,
+        inputBufferSize: 768,
+        outputBufferSize: 768,
       });
       digitalRadioEngine.getAudioStreamManager().reloadAudioConfig();
 

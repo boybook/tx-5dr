@@ -290,8 +290,21 @@
     "settingsNote": "Settings Notes",
     "noteInput": "Input device: used to receive FT8 audio signals",
     "noteOutput": "Output device: used to transmit FT8 audio signals",
-    "noteSampleRate": "Sample rate: soundcard mode opens the device with this value; virtual audio sources such as ICOM WLAN / OpenWebRX use their fixed rates",
-    "noteBuffer": "Buffer: soundcard mode opens the device with this value; larger buffers reduce audio pops but increase latency"
+    "noteSampleRate": "Sample rate: choose one your sound card supports; ICOM WLAN / OpenWebRX are fixed automatically",
+    "noteBuffer": "Buffer: smaller lowers latency, larger improves stability; applies to sound-card audio",
+    "inputSectionTitle": "Input Device",
+    "outputSectionTitle": "Output Device",
+    "selectInputSampleRate": "Select input sample rate",
+    "selectOutputSampleRate": "Select output sample rate",
+    "selectInputBufferSize": "Select input buffer size",
+    "selectOutputBufferSize": "Select output buffer size",
+    "sampleRateFromDevice": "Good for this sound card",
+    "sampleRateFallback": "Common rates; choose manually",
+    "sampleRateUnsupported": "This rate may not suit this sound card",
+    "bufferSizeFromBackend": "Smaller = lower latency, larger = steadier",
+    "bufferSizeFallback": "Common buffers; choose manually",
+    "bufferSizeUnsupported": "This buffer may be less stable",
+    "virtualAudioFixed": "This audio path uses fixed settings"
   },
   "radioType": {
     "none": "Monitor Only",

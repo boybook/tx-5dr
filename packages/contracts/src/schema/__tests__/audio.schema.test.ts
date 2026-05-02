@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AudioDevicesResponseSchema,
   AudioDeviceResolutionSchema,
   AudioDeviceResolutionStatusSchema,
   AudioDeviceSettingsResponseSchema,
@@ -12,6 +13,7 @@ const device = {
   isDefault: true,
   channels: 2,
   sampleRate: 48000,
+  sampleRates: [44100, 48000],
   type: 'input' as const,
 };
 
@@ -39,7 +41,7 @@ describe('audio device resolution schemas', () => {
   it('requires resolution details on settings responses', () => {
     const parsed = AudioDeviceSettingsResponseSchema.parse({
       success: true,
-      currentSettings: { inputDeviceName: 'USB Audio', sampleRate: 48000 },
+      currentSettings: { inputDeviceName: 'USB Audio', inputSampleRate: 48000 },
       deviceResolution: {
         input: {
           configuredDeviceName: 'USB Audio',
@@ -57,6 +59,63 @@ describe('audio device resolution schemas', () => {
     });
 
     expect(parsed.deviceResolution.input.status).toBe('selected');
+  });
+
+  it('accepts device responses with backend-provided options', () => {
+    const parsed = AudioDevicesResponseSchema.parse({
+      inputDevices: [device],
+      outputDevices: [{ ...device, id: 'output-1', type: 'output' }],
+      inputBufferSizes: [128, 256, 512, 768, 1024],
+      outputBufferSizes: [128, 256, 512, 768, 1024],
+    });
+
+    expect(parsed.inputDevices[0]?.sampleRates).toEqual([44100, 48000]);
+    expect(parsed.inputBufferSizes).toContain(768);
+  });
+
+  it('accepts legacy and split audio settings', () => {
+    expect(AudioDeviceSettingsResponseSchema.parse({
+      success: true,
+      currentSettings: { sampleRate: 48000, bufferSize: 1024 },
+      deviceResolution: {
+        input: {
+          configuredDeviceName: null,
+          configuredDevice: null,
+          effectiveDevice: device,
+          status: 'default',
+        },
+        output: {
+          configuredDeviceName: null,
+          configuredDevice: null,
+          effectiveDevice: device,
+          status: 'default',
+        },
+      },
+    }).currentSettings.sampleRate).toBe(48000);
+
+    expect(AudioDeviceSettingsResponseSchema.parse({
+      success: true,
+      currentSettings: {
+        inputSampleRate: 16000,
+        outputSampleRate: 48000,
+        inputBufferSize: 256,
+        outputBufferSize: 1024,
+      },
+      deviceResolution: {
+        input: {
+          configuredDeviceName: null,
+          configuredDevice: null,
+          effectiveDevice: device,
+          status: 'default',
+        },
+        output: {
+          configuredDeviceName: null,
+          configuredDevice: null,
+          effectiveDevice: device,
+          status: 'default',
+        },
+      },
+    }).currentSettings.outputBufferSize).toBe(1024);
   });
 
   it('accepts resolve responses with every supported status', () => {

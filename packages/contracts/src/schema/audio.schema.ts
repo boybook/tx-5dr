@@ -7,6 +7,7 @@ export const AudioDeviceSchema = z.object({
   isDefault: z.boolean(),
   channels: z.number(),
   sampleRate: z.number(),
+  sampleRates: z.array(z.number().int().positive()).optional(),
   type: z.enum(['input', 'output']),
 });
 
@@ -34,12 +35,18 @@ export const AudioDeviceResolutionSetSchema = z.object({
 export const AudioDevicesResponseSchema = z.object({
   inputDevices: z.array(AudioDeviceSchema),
   outputDevices: z.array(AudioDeviceSchema),
+  inputBufferSizes: z.array(z.number().int().positive()),
+  outputBufferSizes: z.array(z.number().int().positive()),
 });
 
 // 音频设备设置请求
 export const AudioDeviceSettingsSchema = z.object({
   inputDeviceName: z.string().optional(),  // 使用设备名称而非ID
   outputDeviceName: z.string().optional(), // 使用设备名称而非ID  
+  inputSampleRate: z.number().optional(),
+  outputSampleRate: z.number().optional(),
+  inputBufferSize: z.number().optional(),
+  outputBufferSize: z.number().optional(),
   sampleRate: z.number().optional(),
   bufferSize: z.number().optional(),
 });

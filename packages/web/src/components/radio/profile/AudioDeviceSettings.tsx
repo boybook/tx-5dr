@@ -1,7 +1,5 @@
 import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { createLogger } from '../../../utils/logger';
-
-const logger = createLogger('AudioDeviceSettings');
 import { useTranslation } from 'react-i18next';
 import {
   Select,
@@ -20,11 +18,20 @@ import type {
   HamlibConfig,
 } from '@tx5dr/contracts';
 import {
+  deriveBufferSizeOptions,
+  deriveSampleRateOptions,
+  FALLBACK_BUFFER_SIZE_OPTIONS,
+  isVirtualAudioDevice,
+  resolveAudioSettingNumber,
+} from './audioDeviceOptions';
+import {
   formatChannelText,
   formatDeviceText,
   getResolutionDescription,
   getResolutionTone,
 } from './audioDeviceDisplay';
+
+const logger = createLogger('AudioDeviceSettings');
 
 interface AudioDeviceSettingsProps {
   onUnsavedChanges?: (hasChanges: boolean) => void;
@@ -41,62 +48,70 @@ export interface AudioDeviceSettingsRef {
   save: () => Promise<void>;
 }
 
+type Direction = 'input' | 'output';
+
+const DEFAULT_SAMPLE_RATE = 48000;
+const DEFAULT_BUFFER_SIZE = 768;
+
 export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDeviceSettingsProps>(({ onUnsavedChanges, initialConfig, onChange, radioType }, ref) => {
   const { t } = useTranslation('settings');
   const isControlled = initialConfig !== undefined;
-  // 状态管理
   const [inputDevices, setInputDevices] = useState<AudioDevice[]>([]);
   const [outputDevices, setOutputDevices] = useState<AudioDevice[]>([]);
+  const [inputBufferSizes, setInputBufferSizes] = useState<number[]>(FALLBACK_BUFFER_SIZE_OPTIONS);
+  const [outputBufferSizes, setOutputBufferSizes] = useState<number[]>(FALLBACK_BUFFER_SIZE_OPTIONS);
   const [currentSettings, setCurrentSettings] = useState<AudioDeviceSettingsType>(initialConfig ?? {});
   const [selectedInputDeviceName, setSelectedInputDeviceName] = useState<string>(initialConfig?.inputDeviceName || '');
   const [selectedOutputDeviceName, setSelectedOutputDeviceName] = useState<string>(initialConfig?.outputDeviceName || '');
-  const [sampleRate, setSampleRate] = useState<number>(initialConfig?.sampleRate || 48000);
-  const [bufferSize, setBufferSize] = useState<number>(initialConfig?.bufferSize || 1024);
+  const [inputSampleRate, setInputSampleRate] = useState<number>(resolveAudioSettingNumber(initialConfig, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
+  const [outputSampleRate, setOutputSampleRate] = useState<number>(resolveAudioSettingNumber(initialConfig, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
+  const [inputBufferSize, setInputBufferSize] = useState<number>(resolveAudioSettingNumber(initialConfig, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
+  const [outputBufferSize, setOutputBufferSize] = useState<number>(resolveAudioSettingNumber(initialConfig, 'outputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
   const [deviceResolution, setDeviceResolution] = useState<{
     input: AudioDeviceResolution;
     output: AudioDeviceResolution;
   } | null>(null);
 
-  // 加载状态
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [refreshingDevices, setRefreshingDevices] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // 检查是否有未保存的更改
+  const buildSettings = (): AudioDeviceSettingsType => ({
+    inputDeviceName: selectedInputDeviceName || undefined,
+    outputDeviceName: selectedOutputDeviceName || undefined,
+    inputSampleRate,
+    outputSampleRate,
+    inputBufferSize,
+    outputBufferSize,
+  });
+
   const hasUnsavedChanges = () => {
     return (
       selectedInputDeviceName !== (currentSettings.inputDeviceName || '') ||
       selectedOutputDeviceName !== (currentSettings.outputDeviceName || '') ||
-      sampleRate !== (currentSettings.sampleRate || 48000) ||
-      bufferSize !== (currentSettings.bufferSize || 1024)
+      inputSampleRate !== resolveAudioSettingNumber(currentSettings, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE) ||
+      outputSampleRate !== resolveAudioSettingNumber(currentSettings, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE) ||
+      inputBufferSize !== resolveAudioSettingNumber(currentSettings, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE) ||
+      outputBufferSize !== resolveAudioSettingNumber(currentSettings, 'outputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE)
     );
   };
 
-  // 暴露给父组件的方法
   useImperativeHandle(ref, () => ({
     hasUnsavedChanges,
     save: handleSubmit
-  }), [selectedInputDeviceName, selectedOutputDeviceName, sampleRate, bufferSize, currentSettings]);
+  }), [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, currentSettings]);
 
-  // 监听更改并通知父组件
   useEffect(() => {
     onUnsavedChanges?.(hasUnsavedChanges());
-  }, [selectedInputDeviceName, selectedOutputDeviceName, sampleRate, bufferSize, currentSettings, onUnsavedChanges]);
+  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, currentSettings, onUnsavedChanges]);
 
-  // 受控模式：配置变更时通知父组件
   useEffect(() => {
     if (!isControlled || loading) return;
-    onChange?.({
-      inputDeviceName: selectedInputDeviceName || undefined,
-      outputDeviceName: selectedOutputDeviceName || undefined,
-      sampleRate,
-      bufferSize,
-    });
-  }, [selectedInputDeviceName, selectedOutputDeviceName, sampleRate, bufferSize]);
+    onChange?.(buildSettings());
+  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize]);
 
-  // 加载音频设备和当前设置
   useEffect(() => {
     loadAudioData();
   }, []);
@@ -105,14 +120,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     if (loading) return;
     let active = true;
 
-    const audio: AudioDeviceSettingsType = {
-      inputDeviceName: selectedInputDeviceName || undefined,
-      outputDeviceName: selectedOutputDeviceName || undefined,
-      sampleRate,
-      bufferSize,
-    };
-
-    api.resolveAudioSettings({ audio, radioType })
+    api.resolveAudioSettings({ audio: buildSettings(), radioType })
       .then((response) => {
         if (active) {
           setDeviceResolution(response.deviceResolution);
@@ -125,7 +133,22 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     return () => {
       active = false;
     };
-  }, [selectedInputDeviceName, selectedOutputDeviceName, sampleRate, bufferSize, radioType, loading]);
+  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, radioType, loading]);
+
+  const inputEffectiveDevice = getEffectiveDevice('input');
+  const outputEffectiveDevice = getEffectiveDevice('output');
+
+  useEffect(() => {
+    if (inputEffectiveDevice && isVirtualAudioDevice(inputEffectiveDevice) && inputEffectiveDevice.sampleRate > 0 && inputSampleRate !== inputEffectiveDevice.sampleRate) {
+      setInputSampleRate(inputEffectiveDevice.sampleRate);
+    }
+  }, [inputEffectiveDevice?.id, inputEffectiveDevice?.sampleRate, inputSampleRate]);
+
+  useEffect(() => {
+    if (outputEffectiveDevice && isVirtualAudioDevice(outputEffectiveDevice) && outputEffectiveDevice.sampleRate > 0 && outputSampleRate !== outputEffectiveDevice.sampleRate) {
+      setOutputSampleRate(outputEffectiveDevice.sampleRate);
+    }
+  }, [outputEffectiveDevice?.id, outputEffectiveDevice?.sampleRate, outputSampleRate]);
 
   const loadAudioData = async () => {
     try {
@@ -133,32 +156,28 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       setError(null);
 
       if (isControlled) {
-        // 受控模式：只加载设备列表，不加载设置
         const [devicesResponse, resolutionResponse] = await Promise.all([
           api.getAudioDevices(),
           api.resolveAudioSettings({ audio: initialConfig ?? {}, radioType }),
         ]);
-        setInputDevices(devicesResponse.inputDevices);
-        setOutputDevices(devicesResponse.outputDevices);
+        applyDeviceResponse(devicesResponse);
         setDeviceResolution(resolutionResponse.deviceResolution);
       } else {
-        // 并行获取设备列表和当前设置
         const [devicesResponse, settingsResponse] = await Promise.all([
           api.getAudioDevices(),
           api.getAudioSettings()
         ]);
 
-        // 设置设备列表
-        setInputDevices(devicesResponse.inputDevices);
-        setOutputDevices(devicesResponse.outputDevices);
+        applyDeviceResponse(devicesResponse);
 
-        // 设置当前配置
         const settings = settingsResponse.currentSettings;
         setCurrentSettings(settings);
         setSelectedInputDeviceName(settings.inputDeviceName || '');
         setSelectedOutputDeviceName(settings.outputDeviceName || '');
-        setSampleRate(settings.sampleRate || 48000);
-        setBufferSize(settings.bufferSize || 1024);
+        setInputSampleRate(resolveAudioSettingNumber(settings, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
+        setOutputSampleRate(resolveAudioSettingNumber(settings, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
+        setInputBufferSize(resolveAudioSettingNumber(settings, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
+        setOutputBufferSize(resolveAudioSettingNumber(settings, 'outputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
         setDeviceResolution(settingsResponse.deviceResolution);
       }
 
@@ -175,18 +194,10 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       setRefreshingDevices(true);
       setError(null);
 
-      // 重新获取设备列表
       const devicesResponse = await api.getAudioDevices();
-
-      setInputDevices(devicesResponse.inputDevices);
-      setOutputDevices(devicesResponse.outputDevices);
+      applyDeviceResponse(devicesResponse);
       const resolutionResponse = await api.resolveAudioSettings({
-        audio: {
-          inputDeviceName: selectedInputDeviceName || undefined,
-          outputDeviceName: selectedOutputDeviceName || undefined,
-          sampleRate,
-          bufferSize,
-        },
+        audio: buildSettings(),
         radioType,
       });
       setDeviceResolution(resolutionResponse.deviceResolution);
@@ -211,24 +222,12 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       setError(null);
       setSuccessMessage(null);
 
-      const newSettings: AudioDeviceSettingsType = {
-        inputDeviceName: selectedInputDeviceName || undefined,
-        outputDeviceName: selectedOutputDeviceName || undefined,
-        sampleRate,
-        bufferSize,
-      };
-
-      const response = await api.updateAudioSettings(newSettings);
+      const response = await api.updateAudioSettings(buildSettings());
 
       if (response.success) {
         setCurrentSettings(response.currentSettings);
         setDeviceResolution(response.deviceResolution);
         setSuccessMessage(response.message || t('audio.updateSuccess'));
-
-        // 不自动关闭弹窗，让父组件控制
-        // setTimeout(() => {
-        //   onClose?.();
-        // }, 2000);
       } else {
         setError(t('audio.updateFailedGeneric'));
       }
@@ -240,6 +239,20 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       setSaving(false);
     }
   };
+
+  function applyDeviceResponse(devicesResponse: Awaited<ReturnType<typeof api.getAudioDevices>>) {
+    setInputDevices(devicesResponse.inputDevices);
+    setOutputDevices(devicesResponse.outputDevices);
+    setInputBufferSizes(devicesResponse.inputBufferSizes?.length ? devicesResponse.inputBufferSizes : FALLBACK_BUFFER_SIZE_OPTIONS);
+    setOutputBufferSizes(devicesResponse.outputBufferSizes?.length ? devicesResponse.outputBufferSizes : FALLBACK_BUFFER_SIZE_OPTIONS);
+  }
+
+  function getEffectiveDevice(direction: Direction): AudioDevice | null {
+    const selectedName = direction === 'input' ? selectedInputDeviceName : selectedOutputDeviceName;
+    const devices = direction === 'input' ? inputDevices : outputDevices;
+    const resolution = direction === 'input' ? deviceResolution?.input : deviceResolution?.output;
+    return devices.find((device) => device.name === selectedName) ?? resolution?.effectiveDevice ?? null;
+  }
 
   const renderResolutionItem = (
     selectedName: string,
@@ -280,13 +293,132 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
           </span>
           {device && (
             <span className="text-xs text-default-400">
-              {formatChannelText(t, device.channels)}, {device.sampleRate}Hz
+              {formatChannelText(t, device.channels)}, {formatHertz(device.sampleRate)}
             </span>
           )}
           {description && <span className={`text-xs ${detailClass}`}>{description}</span>}
         </div>
       </SelectItem>
     );
+  };
+
+  const renderDeviceItems = (devices: AudioDevice[]) => devices.map((device) => (
+    <SelectItem
+      key={device.name}
+      textValue={formatDeviceText(t, device)}
+    >
+      <div className="flex flex-col">
+        <span className="flex items-center gap-2">
+          {formatDeviceText(t, device)}
+          {device.name.startsWith('[SDR]') && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300">
+              WebSDR
+            </span>
+          )}
+        </span>
+        <span className="text-xs text-default-400">{formatChannelText(t, device.channels)}, {formatHertz(device.sampleRate)}</span>
+      </div>
+    </SelectItem>
+  ));
+
+  const renderDirectionSection = (direction: Direction) => {
+    const isInput = direction === 'input';
+    const selectedName = isInput ? selectedInputDeviceName : selectedOutputDeviceName;
+    const setSelectedName = isInput ? setSelectedInputDeviceName : setSelectedOutputDeviceName;
+    const devices = isInput ? inputDevices : outputDevices;
+    const resolution = isInput ? deviceResolution?.input : deviceResolution?.output;
+    const effectiveDevice = isInput ? inputEffectiveDevice : outputEffectiveDevice;
+    const sampleRate = isInput ? inputSampleRate : outputSampleRate;
+    const setSampleRate = isInput ? setInputSampleRate : setOutputSampleRate;
+    const bufferSize = isInput ? inputBufferSize : outputBufferSize;
+    const setBufferSize = isInput ? setInputBufferSize : setOutputBufferSize;
+    const bufferSizes = isInput ? inputBufferSizes : outputBufferSizes;
+    const sampleOptions = deriveSampleRateOptions(effectiveDevice, sampleRate);
+    const bufferOptions = deriveBufferSizeOptions(bufferSizes, bufferSize);
+    const isVirtual = isVirtualAudioDevice(effectiveDevice);
+
+    return (
+      <div className="space-y-3 rounded-xl border border-divider bg-content1 p-4">
+        <h4 className="text-sm font-semibold text-default-700">
+          {isInput ? t('audio.inputSectionTitle') : t('audio.outputSectionTitle')}
+        </h4>
+
+        <Select
+          label={isInput ? t('audio.inputDevice') : t('audio.outputDevice')}
+          placeholder={isInput ? t('audio.inputDevicePlaceholder') : t('audio.outputDevicePlaceholder')}
+          selectedKeys={selectedName ? [selectedName] : []}
+          onSelectionChange={(keys) => {
+            const selected = Array.from(keys)[0] as string;
+            setSelectedName(selected || '');
+          }}
+          isDisabled={saving}
+          aria-label={isInput ? t('audio.selectInput') : t('audio.selectOutput')}
+        >
+          {renderResolutionItem(selectedName, resolution, devices) as unknown as React.ReactElement}
+          {renderDeviceItems(devices) as unknown as React.ReactElement}
+        </Select>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <Select
+              label={t('audio.sampleRate')}
+              selectedKeys={[sampleRate.toString()]}
+              onSelectionChange={(keys) => {
+                const selected = Array.from(keys)[0] as string;
+                setSampleRate(parseInt(selected, 10));
+              }}
+              isDisabled={saving || isVirtual}
+              aria-label={isInput ? t('audio.selectInputSampleRate') : t('audio.selectOutputSampleRate')}
+            >
+              {sampleOptions.values.map((value) => (
+                <SelectItem key={value.toString()} textValue={formatHertz(value)}>
+                  {formatHertz(value)}
+                </SelectItem>
+              )) as unknown as React.ReactElement}
+            </Select>
+            {renderOptionHint(sampleOptions.isFallback, sampleOptions.isCurrentUnsupported, isVirtual, 'sampleRate')}
+          </div>
+
+          <div className="space-y-1">
+            <Select
+              label={t('audio.bufferSize')}
+              selectedKeys={[bufferSize.toString()]}
+              onSelectionChange={(keys) => {
+                const selected = Array.from(keys)[0] as string;
+                setBufferSize(parseInt(selected, 10));
+              }}
+              isDisabled={saving || isVirtual}
+              aria-label={isInput ? t('audio.selectInputBufferSize') : t('audio.selectOutputBufferSize')}
+            >
+              {bufferOptions.values.map((value) => (
+                <SelectItem key={value.toString()} textValue={formatNumber(value)}>
+                  {formatNumber(value)}
+                </SelectItem>
+              )) as unknown as React.ReactElement}
+            </Select>
+            {renderOptionHint(bufferOptions.isFallback, bufferOptions.isCurrentUnsupported, isVirtual, 'bufferSize')}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderOptionHint = (
+    isFallback: boolean,
+    isCurrentUnsupported: boolean,
+    isVirtual: boolean,
+    kind: 'sampleRate' | 'bufferSize',
+  ) => {
+    if (isVirtual) {
+      return <p className="text-xs text-primary-500">{t('audio.virtualAudioFixed')}</p>;
+    }
+    if (isCurrentUnsupported) {
+      return <p className="text-xs text-warning-500">{t(kind === 'sampleRate' ? 'audio.sampleRateUnsupported' : 'audio.bufferSizeUnsupported')}</p>;
+    }
+    if (isFallback) {
+      return <p className="text-xs text-default-400">{t(kind === 'sampleRate' ? 'audio.sampleRateFallback' : 'audio.bufferSizeFallback')}</p>;
+    }
+    return <p className="text-xs text-default-400">{t(kind === 'sampleRate' ? 'audio.sampleRateFromDevice' : 'audio.bufferSizeFromBackend')}</p>;
   };
 
   if (loading) {
@@ -302,21 +434,18 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
 
   return (
     <div className="space-y-6">
-      {/* 错误提示 */}
       {error && (
         <Alert color="danger" variant="flat" title={t('common.error')}>
           {error}
         </Alert>
       )}
 
-      {/* 成功提示 */}
       {successMessage && (
         <Alert color="success" variant="flat" title={t('common.success')}>
           {successMessage}
         </Alert>
       )}
 
-      {/* 设备配置表单 */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold">{t('audio.deviceConfig')}</h3>
@@ -333,104 +462,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
           </Button>
         </div>
 
-        <Select
-          label={t('audio.inputDevice')}
-          placeholder={t('audio.inputDevicePlaceholder')}
-          selectedKeys={selectedInputDeviceName ? [selectedInputDeviceName] : []}
-          onSelectionChange={(keys) => {
-            const selected = Array.from(keys)[0] as string;
-            setSelectedInputDeviceName(selected || '');
-          }}
-          isDisabled={saving}
-          aria-label={t('audio.selectInput')}
-        >
-          {/* 当前选中的设备如果不在可用设备列表中，则显示为失效状态 */}
-          {renderResolutionItem(selectedInputDeviceName, deviceResolution?.input, inputDevices) as unknown as React.ReactElement}
-          {/* 可用设备列表 */}
-          {(inputDevices.map((device) => (
-            <SelectItem
-              key={device.name}
-              textValue={formatDeviceText(t, device)}
-            >
-              <div className="flex flex-col">
-                <span className="flex items-center gap-2">
-                  {formatDeviceText(t, device)}
-                  {device.name.startsWith('[SDR]') && (
-                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300">
-                      WebSDR
-                    </span>
-                  )}
-                </span>
-                <span className="text-xs text-default-400">{formatChannelText(t, device.channels)}, {device.sampleRate}Hz</span>
-              </div>
-            </SelectItem>
-          )) as unknown as React.ReactElement)}
-        </Select>
-
-        <Select
-          label={t('audio.outputDevice')}
-          placeholder={t('audio.outputDevicePlaceholder')}
-          selectedKeys={selectedOutputDeviceName ? [selectedOutputDeviceName] : []}
-          onSelectionChange={(keys) => {
-            const selected = Array.from(keys)[0] as string;
-            setSelectedOutputDeviceName(selected || '');
-          }}
-          isDisabled={saving}
-          aria-label={t('audio.selectOutput')}
-        >
-          {/* 当前选中的设备如果不在可用设备列表中，则显示为失效状态 */}
-          {renderResolutionItem(selectedOutputDeviceName, deviceResolution?.output, outputDevices) as unknown as React.ReactElement}
-          {/* 可用设备列表 */}
-          {(outputDevices.map((device) => (
-            <SelectItem
-              key={device.name}
-              textValue={formatDeviceText(t, device)}
-            >
-              <div className="flex flex-col">
-                <span>{formatDeviceText(t, device)}</span>
-                <span className="text-xs text-default-400">{formatChannelText(t, device.channels)}, {device.sampleRate}Hz</span>
-              </div>
-            </SelectItem>
-          )) as unknown as React.ReactElement)}
-        </Select>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Select
-            label={t('audio.sampleRate')}
-            selectedKeys={[sampleRate.toString()]}
-            onSelectionChange={(keys) => {
-              const selected = Array.from(keys)[0] as string;
-              setSampleRate(parseInt(selected));
-            }}
-            isDisabled={saving}
-            aria-label={t('audio.selectSampleRate')}
-          >
-            <SelectItem key="8000" textValue="8,000 Hz">8,000 Hz</SelectItem>
-            <SelectItem key="16000" textValue="16,000 Hz">16,000 Hz</SelectItem>
-            <SelectItem key="22050" textValue="22,050 Hz">22,050 Hz</SelectItem>
-            <SelectItem key="44100" textValue="44,100 Hz">44,100 Hz</SelectItem>
-            <SelectItem key="48000" textValue="48,000 Hz">48,000 Hz</SelectItem>
-            <SelectItem key="96000" textValue="96,000 Hz">96,000 Hz</SelectItem>
-          </Select>
-
-          <Select
-            label={t('audio.bufferSize')}
-            selectedKeys={[bufferSize.toString()]}
-            onSelectionChange={(keys) => {
-              const selected = Array.from(keys)[0] as string;
-              setBufferSize(parseInt(selected));
-            }}
-            isDisabled={saving}
-            aria-label={t('audio.selectBufferSize')}
-          >
-            <SelectItem key="128" textValue="128">128</SelectItem>
-            <SelectItem key="256" textValue="256">256</SelectItem>
-            <SelectItem key="512" textValue="512">512</SelectItem>
-            <SelectItem key="1024" textValue="1,024">1,024</SelectItem>
-            <SelectItem key="2048" textValue="2,048">2,048</SelectItem>
-            <SelectItem key="4096" textValue="4,096">4,096</SelectItem>
-          </Select>
-        </div>
+        {renderDirectionSection('input')}
+        {renderDirectionSection('output')}
 
         <div className="mt-6 p-4 bg-default-50 rounded-lg">
           <h4 className="text-sm font-medium text-default-700 mb-2">{t('audio.settingsNote')}</h4>
@@ -445,3 +478,11 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     </div>
   );
 });
+
+function formatHertz(value: number): string {
+  return `${formatNumber(value)} Hz`;
+}
+
+function formatNumber(value: number): string {
+  return value.toLocaleString('en-US');
+}

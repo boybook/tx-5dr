@@ -290,8 +290,21 @@
     "settingsNote": "设置说明",
     "noteInput": "输入设备：用于接收FT8音频信号的设备",
     "noteOutput": "输出设备：用于发送FT8音频信号的设备",
-    "noteSampleRate": "采样率：声卡模式会按此参数打开设备；ICOM WLAN / OpenWebRX 等虚拟音频源使用各自固定采样率",
-    "noteBuffer": "缓冲区：声卡模式会按此参数打开设备；较大的缓冲区可以减少音频爆音，但会增加延迟"
+    "noteSampleRate": "采样率：声卡直连时按声卡能力选择；ICOM WLAN / OpenWebRX 会自动固定",
+    "noteBuffer": "缓冲区：小=低延迟，大=更稳定；声卡直连时生效",
+    "inputSectionTitle": "输入设备",
+    "outputSectionTitle": "输出设备",
+    "selectInputSampleRate": "选择输入采样率",
+    "selectOutputSampleRate": "选择输出采样率",
+    "selectInputBufferSize": "选择输入缓冲区大小",
+    "selectOutputBufferSize": "选择输出缓冲区大小",
+    "sampleRateFromDevice": "适合当前声卡",
+    "sampleRateFallback": "常用采样率，可手动选择",
+    "sampleRateUnsupported": "当前值可能不适合这块声卡",
+    "bufferSizeFromBackend": "小=低延迟，大=更稳定",
+    "bufferSizeFallback": "常用缓冲区，可手动选择",
+    "bufferSizeUnsupported": "当前缓冲区可能不够稳定",
+    "virtualAudioFixed": "此音频路径自动使用固定参数"
   },
   "radioType": {
     "none": "纯监听",

@@ -105,8 +105,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private audioProvider: RingBufferAudioProvider;
   private deviceId: string | null = null;
   private outputDeviceId: string | null = null;
-  private sampleRate: number;
-  private bufferSize: number;
+  private inputSampleRate: number;
+  private outputSampleRate: number;
+  private inputBufferSize: number;
+  private outputBufferSize: number;
   private channels: number = 1;
   private volumeGain: number = Math.pow(10, -10 / 20); // 默认 -10dB
   private volumeGainDb: number = -10; // 以dB为单位的增益值
@@ -141,9 +143,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     const configManager = ConfigManager.getInstance();
     const audioConfig = configManager.getAudioConfig();
 
-    this.sampleRate = audioConfig.sampleRate || 48000;
-    this.bufferSize = audioConfig.bufferSize || 1024;
-    this.currentSampleRate = this.sampleRate;
+    this.inputSampleRate = audioConfig.inputSampleRate ?? audioConfig.sampleRate ?? 48000;
+    this.outputSampleRate = audioConfig.outputSampleRate ?? audioConfig.sampleRate ?? 48000;
+    this.inputBufferSize = audioConfig.inputBufferSize ?? audioConfig.bufferSize ?? 768;
+    this.outputBufferSize = audioConfig.outputBufferSize ?? audioConfig.bufferSize ?? 768;
+    this.currentSampleRate = this.outputSampleRate;
 
     // 创建音频缓冲区提供者，使用统一的内部采样率（12kHz）
     this.audioProvider = new RingBufferAudioProvider(INTERNAL_SAMPLE_RATE, INTERNAL_SAMPLE_RATE * 5); // 5秒缓冲
@@ -153,7 +157,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       getVolumeGain: () => this.volumeGain,
       writeOutputChunk: (samples, sink) => this.writeVoiceTxOutputChunk(samples, sink),
     });
-    logger.info('audio stream manager initialized', { sampleRate: this.sampleRate, bufferSize: this.bufferSize, internalSampleRate: INTERNAL_SAMPLE_RATE });
+    logger.info('audio stream manager initialized', {
+      inputSampleRate: this.inputSampleRate,
+      outputSampleRate: this.outputSampleRate,
+      inputBufferSize: this.inputBufferSize,
+      outputBufferSize: this.outputBufferSize,
+      internalSampleRate: INTERNAL_SAMPLE_RATE,
+    });
   }
 
   /**
@@ -179,7 +189,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    * 获取采样率（供外部使用）
    */
   getSampleRate(): number {
-    return this.sampleRate;
+    return this.inputSampleRate;
   }
 
   /**
@@ -316,8 +326,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       logger.info('audio input starting', {
         deviceId: actualDeviceId,
         channels: this.channels,
-        sampleRate: this.sampleRate,
-        frameSize: this.bufferSize,
+        sampleRate: this.inputSampleRate,
+        frameSize: this.inputBufferSize,
         format: 'Float32',
       });
 
@@ -325,7 +335,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       await this.createAndStartInputWithTimeout(actualDeviceId, resolvedDeviceId ?? deviceId, configuredInputDeviceName);
       
       this.isStreaming = true;
-      logger.info('audio stream started', { sampleRate: this.sampleRate, bufferSize: this.bufferSize });
+      logger.info('audio stream started', { sampleRate: this.inputSampleRate, bufferSize: this.inputBufferSize });
       this.emit('started');
 
     } catch (error) {
@@ -414,7 +424,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    * 获取当前采样率
    */
   getCurrentSampleRate(): number {
-    return this.sampleRate;
+    return this.outputSampleRate;
   }
 
   /**
@@ -425,16 +435,22 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     const configManager = ConfigManager.getInstance();
     const audioConfig = configManager.getAudioConfig();
     
-    const oldSampleRate = this.sampleRate;
-    const oldBufferSize = this.bufferSize;
+    const oldInputSampleRate = this.inputSampleRate;
+    const oldOutputSampleRate = this.outputSampleRate;
+    const oldInputBufferSize = this.inputBufferSize;
+    const oldOutputBufferSize = this.outputBufferSize;
 
-    this.sampleRate = audioConfig.sampleRate || 48000;
-    this.bufferSize = audioConfig.bufferSize || 1024;
-    this.currentSampleRate = this.sampleRate;
+    this.inputSampleRate = audioConfig.inputSampleRate ?? audioConfig.sampleRate ?? 48000;
+    this.outputSampleRate = audioConfig.outputSampleRate ?? audioConfig.sampleRate ?? 48000;
+    this.inputBufferSize = audioConfig.inputBufferSize ?? audioConfig.bufferSize ?? 768;
+    this.outputBufferSize = audioConfig.outputBufferSize ?? audioConfig.bufferSize ?? 768;
+    this.currentSampleRate = this.outputSampleRate;
 
     logger.info('audio config reloaded (restart required)', {
-      sampleRate: `${oldSampleRate}Hz -> ${this.sampleRate}Hz`,
-      bufferSize: `${oldBufferSize} -> ${this.bufferSize}`,
+      inputSampleRate: `${oldInputSampleRate}Hz -> ${this.inputSampleRate}Hz`,
+      outputSampleRate: `${oldOutputSampleRate}Hz -> ${this.outputSampleRate}Hz`,
+      inputBufferSize: `${oldInputBufferSize} -> ${this.inputBufferSize}`,
+      outputBufferSize: `${oldOutputBufferSize} -> ${this.outputBufferSize}`,
     });
   }
   
@@ -447,7 +463,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       isOutputting: this.isOutputting,
       inputDeviceId: this.deviceId,
       outputDeviceId: this.outputDeviceId,
-      sampleRate: this.sampleRate,
+      sampleRate: this.inputSampleRate,
+      inputSampleRate: this.inputSampleRate,
+      outputSampleRate: this.outputSampleRate,
+      inputBufferSize: this.inputBufferSize,
+      outputBufferSize: this.outputBufferSize,
       channels: this.channels,
       bufferStatus: this.audioProvider.getStatus()
     };
@@ -563,15 +583,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       logger.info('audio output starting', {
         deviceId: actualOutputDeviceId,
         channels: this.channels,
-        sampleRate: this.sampleRate,
-        frameSize: this.bufferSize,
+        sampleRate: this.outputSampleRate,
+        frameSize: this.outputBufferSize,
         format: 'Float32',
       });
 
       await this.createAndStartOutputWithTimeout(actualOutputDeviceId, resolvedOutputDeviceId ?? outputDeviceId, configuredOutputDeviceName);
 
       this.isOutputting = true;
-      logger.info('audio output started', { sampleRate: this.sampleRate });
+      logger.info('audio output started', { sampleRate: this.outputSampleRate });
 
     } catch (error) {
       logger.error('failed to start audio output', error);
@@ -948,8 +968,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       null,
       { deviceId: inputDeviceId, nChannels: this.channels, firstChannel: 0 },
       RTAUDIO_FLOAT32,
-      this.sampleRate,
-      this.bufferSize,
+      this.inputSampleRate,
+      this.inputBufferSize,
       'TX5DR-Input',
       (pcm: Buffer) => {
         try {
@@ -961,12 +981,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
           const samples = this.convertBufferToFloat32(pcm);
           if (samples.length === 0) return;
-          this.emitNativeAudioInputData(samples, this.sampleRate, 'audio-device');
+          this.emitNativeAudioInputData(samples, this.inputSampleRate, 'audio-device');
 
-          if (this.sampleRate !== INTERNAL_SAMPLE_RATE) {
+          if (this.inputSampleRate !== INTERNAL_SAMPLE_RATE) {
             resampleAudioProfessional(
               samples,
-              this.sampleRate,
+              this.inputSampleRate,
               INTERNAL_SAMPLE_RATE,
               1
             ).then((resampled) => {
@@ -1029,8 +1049,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       { deviceId: outputDeviceId, nChannels: this.channels, firstChannel: 0 },
       null,
       RTAUDIO_FLOAT32,
-      this.sampleRate,
-      this.bufferSize,
+      this.outputSampleRate,
+      this.outputBufferSize,
       'TX5DR-Output',
       null,
       null
@@ -1298,7 +1318,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       samples: audioData.length,
       sourceSampleRate: targetSampleRate,
       duration: `${(audioData.length / targetSampleRate).toFixed(2)}s`,
-      targetSampleRate: this.sampleRate,
+      targetSampleRate: this.outputSampleRate,
       volumeGain: this.volumeGain.toFixed(2),
     });
 
@@ -1309,12 +1329,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       let playbackData: Float32Array;
 
       // 检查是否需要重采样（12kHz → 设备采样率）
-      if (targetSampleRate !== this.sampleRate) {
-        logger.debug(`resampling for playback: ${targetSampleRate}Hz -> ${this.sampleRate}Hz`);
+      if (targetSampleRate !== this.outputSampleRate) {
+        logger.debug(`resampling for playback: ${targetSampleRate}Hz -> ${this.outputSampleRate}Hz`);
         playbackData = await resampleAudioProfessional(
           audioData,
           targetSampleRate,
-          this.sampleRate,
+          this.outputSampleRate,
           1 // 单声道
         );
         logger.debug(`resample complete: ${audioData.length} -> ${playbackData.length} samples`);
@@ -1325,21 +1345,21 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
       // 保存当前播放的音频数据（仅用于调试/查询，不再原地修改）
       this.currentAudioData = playbackData;
-      this.currentSampleRate = this.sampleRate;
+      this.currentSampleRate = this.outputSampleRate;
       
       // 分块播放，使用 setInterval 高频轮询 + 追赶写入
       // 相比链式 await setTimeout，setInterval 在事件循环延迟后能立即追赶
       const TICK_MS = 5;
-      const framesPerBuffer = Math.max(64, this.bufferSize || 1024);
+      const framesPerBuffer = Math.max(64, this.outputBufferSize || 768);
       const chunkSize = framesPerBuffer * this.channels;
       const totalChunks = Math.ceil(playbackData.length / chunkSize);
 
       // 预缓冲目标（~85ms），控制延迟的同时避免 underrun
-      const prebufferMs = Math.max(60, Math.min(200, Math.round((framesPerBuffer / this.sampleRate) * 1000 * 4)));
-      const prebufferSamples = Math.ceil((prebufferMs / 1000) * this.sampleRate);
+      const prebufferMs = Math.max(60, Math.min(200, Math.round((framesPerBuffer / this.outputSampleRate) * 1000 * 4)));
+      const prebufferSamples = Math.ceil((prebufferMs / 1000) * this.outputSampleRate);
 
       const totalSamples = playbackData.length;
-      const expectedDurationMs = Math.round((totalSamples / this.sampleRate) * 1000);
+      const expectedDurationMs = Math.round((totalSamples / this.outputSampleRate) * 1000);
       logger.debug(`chunked playback: ${totalChunks} chunks, chunkSize=${chunkSize}, prebuffer~${prebufferMs}ms, tick=${TICK_MS}ms, totalSamples=${totalSamples}, expectedDuration=${expectedDurationMs}ms`);
 
       const chunkStartTime = Date.now();
@@ -1380,7 +1400,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             }
             this.rtAudioOutput.write(buffer);
             if (monitorChunk && monitorChunk.length > 0) {
-              this.emit('txMonitorAudioData', { samples: monitorChunk, sampleRate: this.sampleRate });
+              this.emit('txMonitorAudioData', { samples: monitorChunk, sampleRate: this.outputSampleRate });
             }
             samplesWritten += chunk.length;
             return true;
@@ -1416,7 +1436,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
             // Calculate target: how many samples should have been written by now + prebuffer
             const elapsedMs = performance.now() - hrStart;
-            const targetSamples = Math.floor((elapsedMs / 1000) * this.sampleRate) + prebufferSamples;
+            const targetSamples = Math.floor((elapsedMs / 1000) * this.outputSampleRate) + prebufferSamples;
 
             // Catch-up write: write multiple chunks in one tick if behind schedule
             while (cursor < totalChunks && samplesWritten < targetSamples) {
@@ -1493,8 +1513,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     return {
       available: this.isOutputting && Boolean(this.rtAudioOutput),
       kind: 'rtaudio',
-      outputSampleRate: this.sampleRate,
-      outputBufferSize: Math.max(64, this.bufferSize || 1024),
+      outputSampleRate: this.outputSampleRate,
+      outputBufferSize: Math.max(64, this.outputBufferSize || 768),
     };
   }
 

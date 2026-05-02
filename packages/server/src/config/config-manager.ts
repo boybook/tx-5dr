@@ -117,8 +117,12 @@ export interface AppConfig {
 export interface AudioConfig {
   inputDeviceName?: string; // 存储的设备名称
   outputDeviceName?: string; // 存储的设备名称
-  sampleRate: number;
-  bufferSize: number;
+  inputSampleRate?: number;
+  outputSampleRate?: number;
+  inputBufferSize?: number;
+  outputBufferSize?: number;
+  sampleRate?: number;
+  bufferSize?: number;
 }
 
 // 默认配置
@@ -167,9 +171,25 @@ const DEFAULT_CONFIG: AppConfig = {
 
 // 默认音频配置（无 Profile 时的兜底值）
 const DEFAULT_AUDIO: AudioDeviceSettings = {
-  sampleRate: 48000,
-  bufferSize: 768,
+  inputSampleRate: 48000,
+  outputSampleRate: 48000,
+  inputBufferSize: 768,
+  outputBufferSize: 768,
 };
+
+export function normalizeAudioDeviceSettings(audioConfig?: Partial<AudioDeviceSettings> | null): AudioDeviceSettings {
+  const legacySampleRate = audioConfig?.sampleRate;
+  const legacyBufferSize = audioConfig?.bufferSize;
+
+  return {
+    inputDeviceName: audioConfig?.inputDeviceName,
+    outputDeviceName: audioConfig?.outputDeviceName,
+    inputSampleRate: audioConfig?.inputSampleRate ?? legacySampleRate ?? 48000,
+    outputSampleRate: audioConfig?.outputSampleRate ?? legacySampleRate ?? 48000,
+    inputBufferSize: audioConfig?.inputBufferSize ?? legacyBufferSize ?? 768,
+    outputBufferSize: audioConfig?.outputBufferSize ?? legacyBufferSize ?? 768,
+  };
+}
 
 // 默认电台配置（无 Profile 时的兜底值）
 const DEFAULT_RADIO: HamlibConfig = {
@@ -383,7 +403,7 @@ export class ConfigManager {
    */
   private migrateToProfiles(parsedConfig: any): void {
     const oldRadio: HamlibConfig = parsedConfig.radio || DEFAULT_RADIO;
-    const oldAudio: AudioDeviceSettings = parsedConfig.audio || DEFAULT_AUDIO;
+    const oldAudio: AudioDeviceSettings = normalizeAudioDeviceSettings(parsedConfig.audio || DEFAULT_AUDIO);
 
     // 根据电台类型生成默认名称
     let profileName = 'Default Configuration';
@@ -609,7 +629,7 @@ export class ConfigManager {
    */
   getAudioConfig(): AudioDeviceSettings {
     const profile = this.getActiveProfile();
-    return profile?.audio ? { ...profile.audio } : { ...DEFAULT_AUDIO };
+    return normalizeAudioDeviceSettings(profile?.audio ?? DEFAULT_AUDIO);
   }
 
   /**
@@ -618,7 +638,7 @@ export class ConfigManager {
   async updateAudioConfig(audioConfig: Partial<AudioDeviceSettings>): Promise<void> {
     const profile = this.getActiveProfile();
     if (profile) {
-      profile.audio = { ...profile.audio, ...audioConfig };
+      profile.audio = normalizeAudioDeviceSettings({ ...profile.audio, ...audioConfig });
       profile.updatedAt = Date.now();
       await this.saveConfig();
     }
