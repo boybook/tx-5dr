@@ -59,6 +59,17 @@ vi.mock('../config-manager.js', () => ({
   ConfigManager: {
     getInstance: () => mockConfigManager,
   },
+  normalizeAudioDeviceSettings: (audioConfig: Record<string, unknown> | null = {}) => {
+    const config = audioConfig ?? {};
+    return {
+      inputDeviceName: config.inputDeviceName,
+      outputDeviceName: config.outputDeviceName,
+      inputSampleRate: config.inputSampleRate ?? config.sampleRate ?? 48000,
+      outputSampleRate: config.outputSampleRate ?? config.sampleRate ?? 48000,
+      inputBufferSize: config.inputBufferSize ?? config.bufferSize ?? 768,
+      outputBufferSize: config.outputBufferSize ?? config.bufferSize ?? 768,
+    };
+  },
 }));
 
 vi.mock('../../DigitalRadioEngine.js', () => ({
@@ -81,8 +92,10 @@ function makeProfile(overrides: Partial<RadioProfile> = {}): RadioProfile {
     audio: {
       inputDeviceName: 'IC-705',
       outputDeviceName: 'IC-705',
-      sampleRate: 48000,
-      bufferSize: 1024,
+      inputSampleRate: 48000,
+      outputSampleRate: 48000,
+      inputBufferSize: 1024,
+      outputBufferSize: 1024,
     },
     audioLockedToRadio: false,
     createdAt: 1,
@@ -108,16 +121,18 @@ describe('ProfileManager audio runtime config refresh', () => {
       audio: {
         inputDeviceName: 'IC-705',
         outputDeviceName: 'IC-705',
-        sampleRate: 16000,
-        bufferSize: 256,
+        inputSampleRate: 16000,
+        outputSampleRate: 48000,
+        inputBufferSize: 256,
+        outputBufferSize: 1024,
       },
     });
 
     expect(mockEngine.stop).toHaveBeenCalledTimes(1);
     expect(mockReloadAudioConfig).toHaveBeenCalledTimes(1);
     expect(mockEngine.start).toHaveBeenCalledTimes(1);
-    expect(state.profiles[0]?.audio.sampleRate).toBe(16000);
-    expect(state.profiles[0]?.audio.bufferSize).toBe(256);
+    expect(state.profiles[0]?.audio.inputSampleRate).toBe(16000);
+    expect(state.profiles[0]?.audio.inputBufferSize).toBe(256);
   });
 
   it('does not refresh or restart when active Profile audio is unchanged', async () => {
@@ -128,14 +143,36 @@ describe('ProfileManager audio runtime config refresh', () => {
       audio: {
         inputDeviceName: 'IC-705',
         outputDeviceName: 'IC-705',
-        sampleRate: 48000,
-        bufferSize: 1024,
+        inputSampleRate: 48000,
+        outputSampleRate: 48000,
+        inputBufferSize: 1024,
+        outputBufferSize: 1024,
       },
     });
 
     expect(mockEngine.stop).not.toHaveBeenCalled();
     expect(mockReloadAudioConfig).not.toHaveBeenCalled();
     expect(mockEngine.start).not.toHaveBeenCalled();
+  });
+
+  it('merges partial active Profile audio updates before saving', async () => {
+    const manager = ProfileManager.getInstance();
+
+    await manager.updateProfile('profile-1', {
+      audio: {
+        inputSampleRate: 16000,
+      },
+    });
+
+    expect(state.profiles[0]?.audio).toMatchObject({
+      inputDeviceName: 'IC-705',
+      outputDeviceName: 'IC-705',
+      inputSampleRate: 16000,
+      outputSampleRate: 48000,
+      inputBufferSize: 1024,
+      outputBufferSize: 1024,
+    });
+    expect(mockReloadAudioConfig).toHaveBeenCalledTimes(1);
   });
 
   it('reloads audio config after activating a Profile before starting the engine', async () => {

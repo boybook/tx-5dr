@@ -8,6 +8,7 @@ const { mockState, mockConfigManager, MockRtAudio } = vi.hoisted(() => {
       inputChannels?: number;
       outputChannels?: number;
       preferredSampleRate?: number;
+      sampleRates?: number[];
       isDefaultInput?: boolean;
       isDefaultOutput?: boolean;
     }>,
@@ -98,7 +99,16 @@ import { AudioDeviceManager } from '../audio-device-manager.js';
 import { AudioStreamManager } from '../AudioStreamManager.js';
 import { RadioErrorCode } from '../../utils/errors/RadioError.js';
 
-function setAudioConfig(overrides: Partial<{ inputDeviceName?: string; outputDeviceName?: string; sampleRate: number; bufferSize: number }> = {}) {
+function setAudioConfig(overrides: Partial<{
+  inputDeviceName?: string;
+  outputDeviceName?: string;
+  sampleRate: number;
+  bufferSize: number;
+  inputSampleRate: number;
+  outputSampleRate: number;
+  inputBufferSize: number;
+  outputBufferSize: number;
+}> = {}) {
   mockConfigManager.getAudioConfig.mockReturnValue({
     inputDeviceName: 'IC-705',
     outputDeviceName: 'IC-705',
@@ -165,6 +175,50 @@ describe('audio hotplug recovery', () => {
 
     expect(resolution.input.status).toBe('selected');
     expect(resolution.output.status).toBe('selected');
+  });
+
+  it('returns sorted sample rates and backend buffer size options', async () => {
+    mockState.devices = [
+      {
+        id: 3,
+        name: 'IC-705',
+        inputChannels: 1,
+        outputChannels: 1,
+        preferredSampleRate: 48000,
+        sampleRates: [48000, 16000, 44100, 16000],
+        isDefaultInput: true,
+        isDefaultOutput: true,
+      },
+    ];
+    const manager = AudioDeviceManager.getInstance();
+
+    const devices = await manager.getAllDevices();
+
+    expect(devices.inputDevices[0]?.sampleRates).toEqual([16000, 44100, 48000]);
+    expect(devices.outputDevices[0]?.sampleRates).toEqual([16000, 44100, 48000]);
+    expect(devices.inputBufferSizes).toContain(768);
+    expect(devices.outputBufferSizes).toContain(768);
+  });
+
+  it('does not invent sample rate lists for physical devices that do not report them', async () => {
+    mockState.devices = [
+      {
+        id: 3,
+        name: 'IC-705',
+        inputChannels: 1,
+        outputChannels: 1,
+        preferredSampleRate: 48000,
+        isDefaultInput: true,
+        isDefaultOutput: true,
+      },
+    ];
+    const manager = AudioDeviceManager.getInstance();
+
+    const devices = await manager.getAllDevices();
+
+    expect(devices.inputDevices[0]?.sampleRate).toBe(48000);
+    expect(devices.inputDevices[0]?.sampleRates).toBeUndefined();
+    expect(devices.outputDevices[0]?.sampleRates).toBeUndefined();
   });
 
   it('reports missing when configured physical devices disappear', async () => {
@@ -333,13 +387,18 @@ describe('audio hotplug recovery', () => {
     }));
   });
 
-  it('uses reloaded sample rate and buffer size when opening RtAudio streams', async () => {
+  it('uses separate reloaded input and output audio parameters when opening RtAudio streams', async () => {
     mockState.devices = [
       { id: 7, name: 'IC-705', inputChannels: 1, outputChannels: 1, preferredSampleRate: 48000 },
     ];
 
     const streamManager = new AudioStreamManager();
-    setAudioConfig({ sampleRate: 16000, bufferSize: 256 });
+    setAudioConfig({
+      inputSampleRate: 16000,
+      outputSampleRate: 48000,
+      inputBufferSize: 256,
+      outputBufferSize: 1024,
+    });
     streamManager.reloadAudioConfig();
 
     await streamManager.startStream();
@@ -356,8 +415,8 @@ describe('audio hotplug recovery', () => {
       direction: 'output',
       deviceId: 7,
       streamName: 'TX5DR-Output',
-      sampleRate: 16000,
-      bufferSize: 256,
+      sampleRate: 48000,
+      bufferSize: 1024,
     }));
   });
 
