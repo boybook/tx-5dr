@@ -154,3 +154,4 @@ export * from './schema/desktop-https.schema.js';
 
 // Plugin Schema
 export * from './schema/plugin.schema.js';
+export * from './schema/update.schema.js';

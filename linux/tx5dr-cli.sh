@@ -90,10 +90,59 @@ cmd_token() {
     esac
 }
 
+read_local_build_info_value() {
+    local key="$1" file="/usr/share/tx5dr/build-info.json"
+    [[ -f "$file" ]] || return 1
+    if command -v node >/dev/null 2>&1; then
+        env LOOKUP_KEY="$key" node - "$file" <<'NODE'
+const fs = require("fs");
+const file = process.argv[2];
+const key = process.env.LOOKUP_KEY;
+try {
+  const data = JSON.parse(fs.readFileSync(file, "utf8"));
+  const value = data[key];
+  if (typeof value === "string") process.stdout.write(value);
+} catch {
+  process.exit(1);
+}
+NODE
+        return
+    fi
+    grep -oP "\"${key}\":\s*\"\K[^\"]+" "$file" | head -1
+}
+
+confirm_same_nightly_update() {
+    local current_label="$1" remote_label="$2"
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        log_warn "Local nightly already matches remote (${remote_label}); skipping. Use 'tx5dr update --force' to reinstall."
+        return 1
+    fi
+
+    local answer
+    printf "Local nightly already matches remote (%s). Overwrite install? [y/N] " "$remote_label"
+    read -r answer
+    case "$answer" in
+        y|Y|yes|YES) return 0 ;;
+        *) log_info "Update cancelled; current version remains ${current_label}."; return 1 ;;
+    esac
+}
+
 cmd_update() {
+    local force=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f) force=true ;;
+            *) log_error "Unknown update option: $1"; return 1 ;;
+        esac
+        shift
+    done
+
     detect_os
     local current_ver="unknown"
     [[ -f /usr/share/tx5dr/version ]] && current_ver=$(cat /usr/share/tx5dr/version)
+    local current_sha=""
+    current_sha=$(read_local_build_info_value "commitShort" 2>/dev/null || true)
+    [[ -z "$current_sha" ]] && current_sha=$(read_local_build_info_value "commit" 2>/dev/null | cut -c1-7 || true)
 
     echo "$(msg CHECKING_UPDATE)"
 
@@ -147,6 +196,19 @@ cmd_update() {
     fi
     log_info "$(printf "$(msg UPDATE_AVAILABLE)" "$current_ver" "$remote_label")"
     [[ -n "$remote_title" ]] && log_info "Latest summary: $remote_title"
+
+    local same_nightly=false
+    if [[ "${remote_version:-}" == *"-nightly."* || "${remote_label}" == nightly* ]]; then
+        if [[ -n "${remote_sha:-}" && "${remote_sha}" != "unknown" && -n "${current_sha:-}" ]]; then
+            [[ "${remote_sha}" == "${current_sha}" || "${remote_sha:0:7}" == "${current_sha:0:7}" ]] && same_nightly=true
+        elif [[ -n "${remote_version:-}" && "${remote_version}" == "$current_ver" ]]; then
+            same_nightly=true
+        fi
+    fi
+
+    if [[ "$same_nightly" == "true" && "$force" != "true" ]]; then
+        confirm_same_nightly_update "$current_ver" "$remote_label" || return 0
+    fi
 
     local tmp_pkg="/tmp/${asset_name}"
     echo "$(printf "$(msg DOWNLOADING)" "$asset_name")"
@@ -239,7 +301,7 @@ cmd_help() {
     echo "  status   Show service status dashboard"
     echo "  logs     Follow service logs (--nginx / --all)"
     echo "  token    Show admin token (--reset to regenerate)"
-    echo "  update   Download and install latest nightly build"
+    echo "  update   Download and install latest nightly build (--force to reinstall same nightly)"
     echo "  doctor   Run full environment diagnostics (--fix to auto-repair)"
     echo "  ssl      Show SSL certificate status (renew to regenerate)"
     echo "  enable   Enable auto-start on boot"
@@ -254,7 +316,7 @@ case "${1:-help}" in
     restart) cmd_restart ;;
     status) cmd_status ;;
     token) cmd_token "${2:-}" ;;
-    update) cmd_update ;;
+    update) shift; cmd_update "$@" ;;
     doctor) cmd_doctor "${2:-}" ;;
     ssl) cmd_ssl "${2:-}" ;;
     logs) cmd_logs "${2:-}" ;;

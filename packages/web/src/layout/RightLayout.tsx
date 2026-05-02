@@ -14,9 +14,10 @@ import { MyRelatedFramesTable } from '../components/radio/digital/MyRelatedFrame
 import { ThemeToggle } from '../components/common/ThemeToggle';
 import { QSONotificationToggleButton } from '../components/common/QSONotificationToggleButton';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChevronDown, faCog, faKey, faLock, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
+import { faChevronDown, faKey, faLock, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
 import { AutomationSettingsPanel } from '../components/radio/automation/AutomationSettingsPanel';
 import { ServerHealthButton } from '../components/system/ServerHealthButton';
+import { SettingsButton } from '../components/common/SettingsButton';
 import { useTranslation } from 'react-i18next';
 import { OPEN_ACCOUNT_SECURITY_MODAL_EVENT } from '../components/app/GlobalModalHost';
 
@@ -46,10 +47,6 @@ export const RightLayout: React.FC = () => {
     setSelectedMode(selectedKey);
   };
 
-  // 打开设置弹窗
-  const handleOpenSettings = () => {
-    window.dispatchEvent(new CustomEvent('openSettingsModal', { detail: { tab: 'radio' } }));
-  };
 
   // 处理创建操作员
   const handleCreateOperator = () => {
@@ -172,16 +169,7 @@ export const RightLayout: React.FC = () => {
             <ServerHealthButton />
             <QSONotificationToggleButton />
             <ThemeToggle variant="dropdown" size="sm" />
-            <Button
-              onPress={handleOpenSettings}
-              isIconOnly
-              variant="light"
-              size="sm"
-              title={t('action.openSettings')}
-              aria-label={t('action.openSettings')}
-            >
-              <FontAwesomeIcon icon={faCog} className="text-default-400 text-sm" />
-            </Button>
+            <SettingsButton />
           </div>
         </div>
       </div>

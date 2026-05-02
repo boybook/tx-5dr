@@ -530,7 +530,13 @@
     "realtimeRtcDataAudioApplyHint": "保存后的 UDP 端点设置只影响新的实时会话或重连；当前正在监听或采集的会话不会自动重建。",
     "rtcDataAudioPublicEndpoint": "公网端点：{{endpoint}}",
     "rtcDataAudioPublicEndpointLabel": "公网 UDP 端点",
-    "realtimePortHintRtcDataAudio": "外网客户端需要访问这里显示的固定 UDP 端口。使用 FRP 时，请把 VPS 的 UDP 端口映射到服务器同一个 UDP 端口。"
+    "realtimePortHintRtcDataAudio": "外网客户端需要访问这里显示的固定 UDP 端口。使用 FRP 时，请把 VPS 的 UDP 端口映射到服务器同一个 UDP 端口。",
+    "updateTitle": "版本更新",
+    "updateWebsiteOnlyDesc": "检查是否存在新版本。当前部署需要在 Web UI 外更新，请前往官网查看更新说明。",
+    "updateOpenWebsite": "前往官网",
+    "updateTargetElectron": "Electron",
+    "updateTargetLinuxServer": "Linux 服务器",
+    "updateTargetDocker": "Docker"
   },
   "freqPresets": {
     "title": "频率预设管理",

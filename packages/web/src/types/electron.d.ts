@@ -57,6 +57,10 @@ interface DesktopUpdateStatus {
   metadataSource: DesktopUpdateSource | null;
   downloadSource: DesktopUpdateSource | null;
   errorMessage: string | null;
+  target: 'electron-app';
+  distribution: 'electron';
+  identity: string | null;
+  websiteUrl: string;
 }
 
 interface ElectronAPI {

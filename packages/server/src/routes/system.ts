@@ -15,6 +15,7 @@ import { requireAbility } from '../auth/authPlugin.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { ServerCpuProfileManager } from '../services/ServerCpuProfileManager.js';
+import { getSystemUpdateStatus } from '../services/UpdateStatusService.js';
 
 /**
  * 系统信息路由
@@ -26,6 +27,12 @@ export async function systemRoutes(fastify: FastifyInstance) {
   async function getCpuProfileManager() {
     return ServerCpuProfileManager.create({ env: process.env });
   }
+
+  fastify.get('/update-status', {
+    preHandler: [requireAbility('manage', 'all')],
+  }, async (_request, reply) => {
+    return reply.send(await getSystemUpdateStatus());
+  });
 
   // 获取网络访问地址
   fastify.get('/network-info', async (request, reply) => {

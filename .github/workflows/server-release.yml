@@ -65,6 +65,29 @@ jobs:
       - name: Install dependencies
         run: yarn install
 
+      - name: Prepare server build metadata
+        env:
+          RELEASE_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          BASE_VERSION=$(node -p "require('./package.json').version.split('-')[0].split('+')[0]")
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ github.sha }}")
+          if [ -z "$RELEASE_VERSION" ]; then
+            node scripts/prepare-server-build-info.mjs \
+              --channel nightly \
+              --version "${BASE_VERSION}-nightly.${COMMIT_STAMP}+${SHORT_SHA}" \
+              --commit "${{ github.sha }}" \
+              --build-stamp "$COMMIT_STAMP" \
+              --distribution linux-service
+          else
+            node scripts/prepare-server-build-info.mjs \
+              --channel release \
+              --version "${RELEASE_VERSION#v}" \
+              --commit "${{ github.sha }}" \
+              --build-stamp "$COMMIT_STAMP" \
+              --distribution linux-service
+          fi
+
       - name: Build application
         run: yarn build
         env:

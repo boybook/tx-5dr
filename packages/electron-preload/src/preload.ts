@@ -87,6 +87,10 @@ interface DesktopUpdateStatus {
   metadataSource: DesktopUpdateSource | null;
   downloadSource: DesktopUpdateSource | null;
   errorMessage: string | null;
+  target: 'electron-app';
+  distribution: 'electron';
+  identity: string | null;
+  websiteUrl: string;
 }
 
 const { contextBridge, ipcRenderer } = require('electron');
