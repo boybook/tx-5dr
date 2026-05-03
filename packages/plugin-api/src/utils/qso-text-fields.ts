@@ -44,3 +44,11 @@ export function parseLegacyComment(comment?: string): { comment?: string; messag
 export function resolveQsoComment(qso: Pick<QSORecord, 'comment' | 'messageHistory'>): string | undefined {
   return normalizeOptionalString(qso.comment) ?? buildCommentFromMessageHistory(qso.messageHistory);
 }
+
+/**
+ * 清理文本中的 ADIF 保留字符（尖括号）。
+ * ADIF 字段值中不应包含 < >，否则会被解析器误认为字段标签。
+ */
+export function sanitizeAdifFieldValue(value: string): string {
+  return value.replace(/[<>]/g, '');
+}

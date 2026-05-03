@@ -34,7 +34,7 @@ describe('adif-utils', () => {
 
   it('parses standard FT4, COMMENT/NOTES, and MY_* fields without treating contacted station fields as my location', () => {
     const record = parseADIFRecord(
-      '<call:5>BG2AA<qso_date:8>20260101<time_on:6>235955<qso_date_off:8>20260102<time_off:6>000010<mode:4>MFSK<submode:3>FT4<freq:9>14.074000<comment:15>CQ TEST | RR73<state:2>TX<cnty:3>DAL<iota:6>EU-001<my_state:2>CA<my_cnty:2>LA<my_iota:6>AS-007<notes:11>Manual note<eor>',
+      '<call:5>BG2AA<qso_date:8>20260101<time_on:6>235955<qso_date_off:8>20260102<time_off:6>000010<mode:4>MFSK<submode:3>FT4<freq:9>14.074000<comment:14>CQ TEST | RR73<state:2>TX<cnty:3>DAL<iota:6>EU-001<my_state:2>CA<my_cnty:2>LA<my_iota:6>AS-007<notes:11>Manual note<eor>',
       'adif'
     );
 

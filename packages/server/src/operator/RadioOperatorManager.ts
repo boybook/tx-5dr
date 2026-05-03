@@ -21,7 +21,7 @@ import {
 import { CycleUtils, getBandFromFrequency } from '@tx5dr/core';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
-import { buildCommentFromMessageHistory } from '../log/qsoTextFields.js';
+import { buildCommentFromMessageHistory } from '@tx5dr/plugin-api';
 import type { WSJTXEncodeWorkQueue } from '../decode/WSJTXEncodeWorkQueue.js';
 import type { SlotPackManager } from '../slot/SlotPackManager.js';
 import type { CallsignContextTracker } from '../slot/CallsignContextTracker.js';

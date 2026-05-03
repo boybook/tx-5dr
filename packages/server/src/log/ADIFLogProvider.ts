@@ -36,7 +36,8 @@ import {
   normalizeMessageHistory,
   parseLegacyComment,
   resolveQsoComment,
-} from './qsoTextFields.js';
+  sanitizeAdifFieldValue,
+} from '@tx5dr/plugin-api';
 
 const logger = createLogger('ADIFLogProvider');
 
@@ -831,17 +832,23 @@ export class ADIFLogProvider implements ILogProvider {
       adifRecord += `<RST_RCVD:${qso.reportReceived.length}>${qso.reportReceived}`;
     }
     
-    const comment = resolveQsoComment(qso);
+    const comment = sanitizeAdifFieldValue(resolveQsoComment(qso) ?? '') || undefined;
     if (comment) {
       adifRecord += `<COMMENT:${comment.length}>${comment}`;
     }
 
     if (qso.qth) {
-      adifRecord += `<QTH:${qso.qth.length}>${qso.qth}`;
+      const qth = sanitizeAdifFieldValue(qso.qth);
+      if (qth) {
+        adifRecord += `<QTH:${qth.length}>${qth}`;
+      }
     }
 
     if (qso.notes) {
-      adifRecord += `<NOTES:${qso.notes.length}>${qso.notes}`;
+      const notes = sanitizeAdifFieldValue(qso.notes);
+      if (notes) {
+        adifRecord += `<NOTES:${notes.length}>${notes}`;
+      }
     }
 
     const effectiveMyGrid = overrideMyGrid ?? qso.myGrid;
