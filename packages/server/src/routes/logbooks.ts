@@ -477,22 +477,21 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       // 分离分页参数和筛选参数
       const { limit: requestLimit, offset: requestOffset, ...filterOptions } = queryOptions;
-      
+
       logger.debug('Pagination request params:', {
         requestLimit,
         requestOffset,
         filterOptions: Object.keys(filterOptions),
       });
-      
-      // 先获取不带分页限制的筛选后总数
-      const allFilteredQsos = await logBook.provider.queryQSOs(filterOptions);
-      const totalFiltered = allFilteredQsos.length;
 
-      // 应用分页（provider可能不支持offset分页）
       const offset = requestOffset || 0;
       const limit = requestLimit || 100;
-      const paginatedQsos = allFilteredQsos.slice(offset, offset + limit);
-      
+
+      // 带分页的查询 + 两次轻量 count（避免全量扫描+排序）
+      const paginatedQsos = await logBook.provider.queryQSOs({ ...filterOptions, limit, offset });
+      const totalFiltered = await logBook.provider.countQSOs(filterOptions);
+      const totalRecords = await logBook.provider.countQSOs();
+
       logger.debug('Pagination result:', {
         totalFiltered,
         offset,
@@ -502,20 +501,15 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         firstRecordCallsign: paginatedQsos[0]?.callsign,
       });
 
-      // 同时获取不带任何筛选的总记录数（用于统计显示）
-      const baseQueryOptions = { operatorId: filterOptions.operatorId };
-      const allQsos = await logBook.provider.queryQSOs(baseQueryOptions);
-      const totalRecords = allQsos.length;
-
       return reply.send({
         success: true,
         data: paginatedQsos,
         meta: {
-          total: totalFiltered, // 筛选后的总数（用于分页计算）
-          totalRecords, // 总记录数（用于统计显示）
+          total: totalFiltered,
+          totalRecords,
           offset,
           limit,
-          hasFilters: Object.keys(filterOptions).some(key => 
+          hasFilters: Object.keys(filterOptions).some(key =>
             key !== 'operatorId' && filterOptions[key as keyof typeof filterOptions] !== undefined
           )
         }

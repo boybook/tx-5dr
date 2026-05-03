@@ -280,6 +280,14 @@ function startLogMaintenanceTasks(consoleLogger: ConsoleLogger): void {
       }
 
       try {
+        const engine = DigitalRadioEngine.getInstance();
+        await engine.operatorManager.getLogManager().close();
+        logger.info('logbook providers flushed');
+      } catch (error) {
+        logger.warn('logbook flush during shutdown failed', { error });
+      }
+
+      try {
         cleanup();
         logger.info('cleanup complete');
       } catch (error) {
