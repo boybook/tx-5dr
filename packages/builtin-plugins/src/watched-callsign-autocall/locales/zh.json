@@ -16,6 +16,6 @@
   "autocallPriorityDesc": "多个自动起呼插件在同一时隙同时命中时，优先级高者胜出。",
   "workedCallsignSkipDays": "已通联跳过天数",
   "workedCallsignSkipDaysDesc": "在指定天数内已通联过的台站会自动跳过，不会重复起呼。设为 0 表示不检查通联记录。",
-  "removeExactMatchAfterQSO": "QSO 完成后自动移除精准匹配",
-  "removeExactMatchAfterQSODesc": "开启后，当精准匹配（非正则、非前缀）的呼号通联完成后，自动从守候列表中移除该条目，避免重复通联。"
+  "removeExactMatchAfterQSO": "通联完成后自动移除该呼号",
+  "removeExactMatchAfterQSODesc": "开启后，守候列表中精确写出的呼号（非通配、非前缀）在通联完成后会自动移除，避免重复起呼。"
 }

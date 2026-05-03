@@ -16,6 +16,6 @@
   "autocallPriorityDesc": "Higher values win when multiple automatic-call plugins match in the same slot.",
   "workedCallsignSkipDays": "Skip worked callsign (days)",
   "workedCallsignSkipDaysDesc": "Stations worked within this many days are automatically skipped and will not be called again. Set to 0 to disable this check.",
-  "removeExactMatchAfterQSO": "Remove exact match after QSO",
-  "removeExactMatchAfterQSODesc": "When enabled, exact-match callsigns (non-regex, non-prefix) are automatically removed from the watch list after a QSO completes, preventing duplicate contacts."
+  "removeExactMatchAfterQSO": "Remove callsign after QSO",
+  "removeExactMatchAfterQSODesc": "When enabled, explicitly listed callsigns (not wildcards or prefixes) are automatically removed from the watch list after a QSO completes, preventing repeated calls."
 }
