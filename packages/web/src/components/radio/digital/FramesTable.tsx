@@ -66,6 +66,7 @@ interface FramesTableProps {
   scrollToBottomTrigger?: number; // 外部触发滚动到底部（递增时触发）
   showGroupHeader?: boolean; // 是否在周期组前显示轻量上下文标题
   groupHeaderBand?: string | null; // 当前波段，用于截图上下文
+  groupHeaderMode?: string | null; // 当前模式名，如 "FT8"
 }
 
 // ─── 纯函数工具（提取到组件外避免重复创建）────────
@@ -122,12 +123,10 @@ const formatGroupHeaderTime = (startMs: number): string => {
   return `${iso.slice(0, 10)} ${iso.slice(11, 19)} UTC`;
 };
 
-const formatGroupHeaderLabel = (group: FrameGroup, band?: string | null): string => {
+const formatGroupHeaderLabel = (group: FrameGroup, band?: string | null, mode?: string | null): string => {
   const timeLabel = formatGroupHeaderTime(group.startMs);
-  if (!timeLabel) {
-    return band || '';
-  }
-  return band ? `${timeLabel} · ${band}` : timeLabel;
+  const parts = [timeLabel, band, mode].filter(Boolean);
+  return parts.join(' · ');
 };
 
 // ─── Memo 化的消息行组件 ─────────────────────
@@ -328,7 +327,7 @@ MessageRow.displayName = 'MessageRow';
 
 // ─── 主组件 ─────────────────────────────────
 
-export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger, showGroupHeader = false, groupHeaderBand = null }) => {
+export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger, showGroupHeader = false, groupHeaderBand = null, groupHeaderMode = null }) => {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language === 'zh';
   const highlightTypeLabels = useMemo(() => getHighlightTypeLabels(t), [t]);
@@ -577,7 +576,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                   <div className="pt-1">
                     {shouldShowGroupHeader && (
                       <div className={`ml-1 truncate ${isNarrow ? 'px-2' : 'px-3'} pb-0.5 text-[10px] font-mono leading-4 tracking-[0.08em] text-default-400/80`}>
-                        {formatGroupHeaderLabel(group, groupHeaderBand)}
+                        {formatGroupHeaderLabel(group, groupHeaderBand, groupHeaderMode)}
                       </div>
                     )}
 

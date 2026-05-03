@@ -203,6 +203,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       scrollToBottomTrigger={scrollToBottomTrigger}
       showGroupHeader
       groupHeaderBand={groupHeaderBand}
+      groupHeaderMode={radio.state.currentMode?.name ?? null}
     />
   );
 }; 
