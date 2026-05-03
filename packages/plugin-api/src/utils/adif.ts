@@ -13,7 +13,7 @@ import {
   DXCC_RESOLVER_VERSION,
   toAdifMode,
 } from '@tx5dr/core';
-import { parseLegacyComment, resolveQsoComment } from './qso-text-fields.js';
+import { parseLegacyComment, resolveQsoComment, sanitizeAdifFieldValue } from './qso-text-fields.js';
 
 function mapAdifModeToInternal(mode?: string, submode?: string): Pick<QSORecord, 'mode' | 'submode'> {
   const normalizedMode = mode?.trim().toUpperCase();
@@ -197,15 +197,21 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
   if (qso.stationLocationId) {
     adifFields.push(`<app_tx5dr_station_location_id:${qso.stationLocationId.length}>${qso.stationLocationId}`);
   }
-  const comment = resolveQsoComment(qso);
+  const comment = sanitizeAdifFieldValue(resolveQsoComment(qso) ?? '') || undefined;
   if (comment) {
     adifFields.push(`<comment:${comment.length}>${comment}`);
   }
   if (qso.qth) {
-    adifFields.push(`<qth:${qso.qth.length}>${qso.qth}`);
+    const qth = sanitizeAdifFieldValue(qso.qth);
+    if (qth) {
+      adifFields.push(`<qth:${qth.length}>${qth}`);
+    }
   }
   if (qso.notes) {
-    adifFields.push(`<notes:${qso.notes.length}>${qso.notes}`);
+    const notes = sanitizeAdifFieldValue(qso.notes);
+    if (notes) {
+      adifFields.push(`<notes:${notes.length}>${notes}`);
+    }
   }
 
   adifFields.push('<eor>');
@@ -218,13 +224,14 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
  */
 export function parseADIFFields(recordStr: string): Record<string, string> {
   const fields: Record<string, string> = {};
-  const fieldRegex = /<(\w+):(\d+)>([^<]*)/gi;
+  const fieldRegex = /<(\w+):(\d+)>/gi;
   let match;
 
   while ((match = fieldRegex.exec(recordStr)) !== null) {
     const fieldName = match[1].toLowerCase();
     const fieldLength = parseInt(match[2]);
-    const fieldValue = match[3].substring(0, fieldLength);
+    const valueStart = match.index + match[0].length;
+    const fieldValue = recordStr.substring(valueStart, valueStart + fieldLength);
     fields[fieldName] = fieldValue;
   }
 

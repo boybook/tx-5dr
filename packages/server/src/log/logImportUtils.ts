@@ -1,5 +1,5 @@
 import type { LogBookImportFormat, QSORecord } from '@tx5dr/contracts';
-import { parseLegacyComment } from './qsoTextFields.js';
+import { parseLegacyComment } from '@tx5dr/plugin-api';
 
 export interface ParsedTx5drCsvImport {
   records: QSORecord[];

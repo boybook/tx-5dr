@@ -194,4 +194,5 @@ export {
   resolveQsoComment,
   buildCommentFromMessageHistory,
   normalizeMessageHistory,
+  sanitizeAdifFieldValue,
 } from './utils/qso-text-fields.js';
