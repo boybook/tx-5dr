@@ -259,6 +259,8 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
         const cutoff = Date.now() - skipDays * 24 * 60 * 60 * 1000;
         const count = await ctx.logbook.countQSOs({
           callsign: matched.callsign,
+          band: ctx.radio.band,
+          mode: ctx.operator.mode.name,
           timeRange: { start: cutoff, end: Date.now() },
         });
         if (count > 0) {

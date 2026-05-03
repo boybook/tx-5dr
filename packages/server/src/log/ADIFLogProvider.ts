@@ -1106,6 +1106,12 @@ export class ADIFLogProvider implements ILogProvider {
         results = results.filter(qso => matchesModeFilter(qso, options.mode!));
       }
 
+      // 波段过滤（按频率派生波段后比较）
+      if (options.band) {
+        const targetBand = options.band.toUpperCase();
+        results = results.filter(qso => getBandFromFrequency(qso.frequency).toUpperCase() === targetBand);
+      }
+
       if (options.dxccStatus) {
         results = results.filter(qso => qso.dxccStatus === options.dxccStatus);
       }

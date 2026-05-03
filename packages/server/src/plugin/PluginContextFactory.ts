@@ -472,6 +472,7 @@ export class PluginContextFactory {
         timeRange: filter?.timeRange,
         frequencyRange: filter?.frequencyRange,
         mode: filter?.mode,
+        band: filter?.band,
         qslStatus: filter?.qslStatus,
         limit: filter?.limit,
         offset: filter?.offset,

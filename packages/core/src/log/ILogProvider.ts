@@ -41,6 +41,11 @@ export interface LogQueryOptions {
   mode?: string;
 
   /**
+   * 波段（如 '20m', '40m'），按 getBandFromFrequency 派生比较
+   */
+  band?: string;
+
+  /**
    * DXCC 状态筛选
    */
   dxccStatus?: 'deleted';
