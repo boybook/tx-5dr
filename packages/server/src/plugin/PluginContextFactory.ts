@@ -56,6 +56,7 @@ export class PluginContextFactory {
     pluginStorageDir: string,
     onTimer: (timerId: string) => void,
     getPluginSettings: () => Record<string, unknown>,
+    updatePluginSettings?: (patch: Record<string, unknown>) => Promise<void>,
   ): Promise<PluginContext> {
     const globalStorage = new PluginStorageProvider(`${pluginStorageDir}/global.json`);
     const operatorStorageName = operatorId ? `operator-${operatorId}.json` : 'instance-global.json';
@@ -89,6 +90,12 @@ export class PluginContextFactory {
     const ctx: PluginContext = {
       get config() {
         return Object.freeze({ ...getPluginSettings() });
+      },
+      async updateConfig(patch: Record<string, unknown>) {
+        if (!updatePluginSettings) {
+          throw new Error('updateConfig is not available for this plugin instance');
+        }
+        await updatePluginSettings(patch);
       },
       store: {
         global: globalStorage,

@@ -4,7 +4,7 @@
   "watchOverview": "Best For",
   "watchOverviewDesc": "Use this for DX, friends, rare entities, or scheduled skeds you do not want to miss. It is disabled by default; once the current operator has watch rules, the plugin listens only in pure standby and reuses the existing requestCall flow to lock the target and align transmission with the next slot.",
   "watchList": "Watch List",
-  "watchListDesc": "One rule per line, checked in order. Plain text matches one exact callsign. As soon as you use regex syntax, the line is treated as a regex rule instead, for example ^JA for a prefix match or ^BG5DRB$ for one exact callsign. Lines starting with # are kept as comments and ignored during matching. Leave empty to keep this operator disabled.",
+  "watchListDesc": "One rule per line, checked in order. Plain text matches one exact callsign. As soon as you use regex syntax, the line is treated as a regex rule instead, for example ^JA for a prefix match or ^BG5DRB$ for one exact callsign. Lines starting with # are kept as comments and ignored during matching. Leave empty to keep this operator disabled. Already-worked stations are skipped within the configured number of days.",
   "watchListInvalidRegexFormat": "Regex format is invalid on line {{line}}. Please check the expression.",
   "watchListInvalidRegexSyntax": "Regex syntax cannot be parsed on line {{line}}. Check brackets, escaping, or quantifiers.",
   "triggerMode": "Trigger Mode",
@@ -13,5 +13,9 @@
   "triggerCqOrSignoff": "CQ or RR73/73",
   "triggerAny": "Any appearance",
   "autocallPriority": "Autocall Priority",
-  "autocallPriorityDesc": "Higher values win when multiple automatic-call plugins match in the same slot."
+  "autocallPriorityDesc": "Higher values win when multiple automatic-call plugins match in the same slot.",
+  "workedCallsignSkipDays": "Skip worked callsign (days)",
+  "workedCallsignSkipDaysDesc": "Stations worked within this many days are automatically skipped and will not be called again. Set to 0 to disable this check.",
+  "removeExactMatchAfterQSO": "Remove exact match after QSO",
+  "removeExactMatchAfterQSODesc": "When enabled, exact-match callsigns (non-regex, non-prefix) are automatically removed from the watch list after a QSO completes, preventing duplicate contacts."
 }

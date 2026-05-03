@@ -435,6 +435,9 @@ export function createMockContext(options?: MockPluginContextOptions): MockPlugi
 
   return {
     config: opts.config ?? {},
+    async updateConfig(patch: Record<string, unknown>) {
+      // no-op in mock
+    },
     store: { global: globalStore, operator: operatorStore },
     log,
     timers,

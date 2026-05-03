@@ -6,6 +6,7 @@ import {
   type PluginDefinition,
   type SlotInfo,
 } from '@tx5dr/plugin-api';
+import type { QSORecord } from '@tx5dr/contracts';
 import {
   getSenderCallsign,
   getTriggerMode,
@@ -179,6 +180,22 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
       min: 0,
       max: 1000,
     },
+    workedCallsignSkipDays: {
+      type: 'number',
+      default: 365,
+      label: 'workedCallsignSkipDays',
+      description: 'workedCallsignSkipDaysDesc',
+      scope: 'operator',
+      min: 0,
+      max: 3650,
+    },
+    removeExactMatchAfterQSO: {
+      type: 'boolean',
+      default: false,
+      label: 'removeExactMatchAfterQSO',
+      description: 'removeExactMatchAfterQSODesc',
+      scope: 'operator',
+    },
   },
 
   quickSettings: [
@@ -187,7 +204,40 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
   ],
 
   hooks: {
-    onAutoCallCandidate(slotInfo: SlotInfo, messages: ParsedFT8Message[], ctx: PluginContext): AutoCallProposal | null {
+    onQSOComplete(record: QSORecord, ctx: PluginContext): void {
+      if (!ctx.config.removeExactMatchAfterQSO) return;
+
+      const completedCallsign = record.callsign?.trim().toUpperCase();
+      if (!completedCallsign) return;
+
+      const rawWatchList = Array.isArray(ctx.config.watchList)
+        ? [...(ctx.config.watchList as string[])]
+        : [];
+
+      const matchIndex = rawWatchList.findIndex((entry) => {
+        if (typeof entry !== 'string') return false;
+        const trimmed = entry.trim();
+        if (!trimmed || trimmed.startsWith('#')) return false;
+        if (REGEX_META_CHARS.test(trimmed)) return false;
+        return trimmed.toUpperCase() === completedCallsign;
+      });
+
+      if (matchIndex === -1) return;
+
+      const removedEntry = rawWatchList[matchIndex];
+      rawWatchList.splice(matchIndex, 1);
+
+      ctx.updateConfig({ watchList: rawWatchList }).catch((err) => {
+        ctx.log.error('Failed to remove completed callsign from watch list', err);
+      });
+
+      ctx.log.info('Removed exact-match callsign from watch list after QSO completion', {
+        callsign: completedCallsign,
+        removedEntry,
+      });
+    },
+
+    async onAutoCallCandidate(slotInfo: SlotInfo, messages: ParsedFT8Message[], ctx: PluginContext): Promise<AutoCallProposal | null> {
       if (!isPureStandby(ctx)) {
         return null;
       }
@@ -202,6 +252,23 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
           callsign: matched.callsign,
         });
         return null;
+      }
+
+      const skipDays = Number(ctx.config.workedCallsignSkipDays) || 0;
+      if (skipDays > 0) {
+        const cutoff = Date.now() - skipDays * 24 * 60 * 60 * 1000;
+        const count = await ctx.logbook.countQSOs({
+          callsign: matched.callsign,
+          timeRange: { start: cutoff, end: Date.now() },
+        });
+        if (count > 0) {
+          ctx.log.debug('Watched callsign skipped because already worked within time range', {
+            callsign: matched.callsign,
+            skipDays,
+            foundQSOs: count,
+          });
+          return null;
+        }
       }
 
       const lastMessage: LastMessageInfo = {

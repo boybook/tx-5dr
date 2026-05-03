@@ -4,7 +4,7 @@
   "watchOverview": "适用场景",
   "watchOverviewDesc": "适合盯 DX、朋友台、稀有实体或约定 sked。该功能默认不启用；只要为当前操作者填入守候规则，就会在纯待机状态下监听，并在命中时自动设定目标、对齐下一发射时隙开始呼叫。",
   "watchList": "守候呼号列表",
-  "watchListDesc": "每行一个规则，按顺序决定优先级。纯文本会按完整呼号精确匹配；只要写入正则语法，就按正则匹配，例如 ^JA 可守候所有 JA 前缀，^BG5DRB$ 可精确匹配单一呼号。以 # 开头的行会作为注释保留，不参与匹配。留空表示当前操作者不启用。",
+  "watchListDesc": "每行一个规则，按顺序决定优先级。纯文本会按完整呼号精确匹配；只要写入正则语法，就按正则匹配，例如 ^JA 可守候所有 JA 前缀，^BG5DRB$ 可精确匹配单一呼号。以 # 开头的行会作为注释保留，不参与匹配。留空表示当前操作者不启用。已通联过的台站会在指定天数内被自动跳过。",
   "watchListInvalidRegexFormat": "第 {{line}} 行的正则格式无效，请检查表达式。",
   "watchListInvalidRegexSyntax": "第 {{line}} 行的正则无法解析，请检查括号、转义或量词写法。",
   "triggerMode": "触发条件",
@@ -13,5 +13,9 @@
   "triggerCqOrSignoff": "CQ 或 RR73/73",
   "triggerAny": "任意出现",
   "autocallPriority": "自动起呼优先级",
-  "autocallPriorityDesc": "多个自动起呼插件在同一时隙同时命中时，优先级高者胜出。"
+  "autocallPriorityDesc": "多个自动起呼插件在同一时隙同时命中时，优先级高者胜出。",
+  "workedCallsignSkipDays": "已通联跳过天数",
+  "workedCallsignSkipDaysDesc": "在指定天数内已通联过的台站会自动跳过，不会重复起呼。设为 0 表示不检查通联记录。",
+  "removeExactMatchAfterQSO": "QSO 完成后自动移除精准匹配",
+  "removeExactMatchAfterQSODesc": "开启后，当精准匹配（非正则、非前缀）的呼号通联完成后，自动从守候列表中移除该条目，避免重复通联。"
 }
