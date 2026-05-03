@@ -304,7 +304,8 @@
     "bufferSizeFromBackend": "小=低延迟，大=更稳定",
     "bufferSizeFallback": "常用缓冲区，可手动选择",
     "bufferSizeUnsupported": "当前缓冲区可能不够稳定",
-    "virtualAudioFixed": "此音频路径自动使用固定参数"
+    "virtualAudioFixed": "此音频路径自动使用固定参数",
+    "autoMatched": "已自动匹配 USB 音频设备：{{device}}（{{rate}} Hz）"
   },
   "radioType": {
     "none": "纯监听",
