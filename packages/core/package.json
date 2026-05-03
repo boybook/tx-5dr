@@ -1,6 +1,6 @@
 {
   "name": "@tx5dr/core",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "TX-5DR Core Package",
   "type": "module",
   "main": "dist/index.js",

@@ -165,6 +165,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
           watchList: ['JA1AAA'],
           triggerMode: 'cq',
           autocallPriority: 100,
+          workedCallsignSkipDays: 0,
         },
         'watched-novelty-autocall': {
           watchNewDxcc: true,
@@ -381,6 +382,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
           watchList: ['JA1AAA'],
           triggerMode: 'cq',
           autocallPriority: 10,
+          workedCallsignSkipDays: 0,
         },
         'watched-novelty-autocall': {
           watchNewDxcc: true,
@@ -470,6 +472,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
           watchList: ['JA1AAA'],
           triggerMode: 'cq',
           autocallPriority: 100,
+          workedCallsignSkipDays: 0,
         },
       },
       findBestTransmitFrequency: (slotId) => {
@@ -503,6 +506,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
           watchList: ['K1ABC'],
           triggerMode: 'cq',
           autocallPriority: 100,
+          workedCallsignSkipDays: 0,
         },
       },
     });
@@ -529,6 +533,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
           watchList: ['JA1AAA'],
           triggerMode: 'cq',
           autocallPriority: 100,
+          workedCallsignSkipDays: 0,
         },
       },
     });
@@ -551,6 +556,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
           watchList: ['K1ABC'],
           triggerMode: 'cq',
           autocallPriority: 100,
+          workedCallsignSkipDays: 0,
         },
       },
     });
@@ -605,6 +611,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
           watchList: ['JA1AAA'],
           triggerMode: 'cq',
           autocallPriority: 100,
+          workedCallsignSkipDays: 0,
         },
       },
     });

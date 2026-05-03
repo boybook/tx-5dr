@@ -36,6 +36,17 @@ export interface PluginContext {
   readonly config: Readonly<Record<string, unknown>>;
 
   /**
+   * Applies a partial patch to this plugin's settings.
+   *
+   * The patch is shallow-merged with existing resolved settings
+   * according to the instance scope (operator or global).
+   * After the update, the host persists the change, notifies
+   * all instances via {@link PluginHooks.onConfigChange}, and
+   * pushes the new status to the frontend.
+   */
+  updateConfig(patch: Record<string, unknown>): Promise<void>;
+
+  /**
    * Persistent key-value stores provisioned for the plugin.
    *
    * Each scope is isolated by plugin identity. Use `global` for shared plugin

@@ -28,6 +28,7 @@ import {
   type PluginLoaderRuntimeLogEvent,
   validatePluginDefinition,
 } from './PluginLoader.js';
+import { ConfigManager } from '../config/config-manager.js';
 import { PluginDevWatcher } from './PluginDevWatcher.js';
 import { PluginHookDispatcher } from './PluginHookDispatcher.js';
 import { DecisionOrchestrator } from './DecisionOrchestrator.js';
@@ -233,6 +234,12 @@ export class PluginManager {
           }
         },
         () => this.buildMergedSettings(plugin, pluginName, operatorId),
+        async (patch) => {
+          const currentSettings = this.pluginsConfig.operatorSettings?.[operatorId]?.[pluginName] ?? {};
+          const mergedSettings = { ...currentSettings, ...patch };
+          this.setOperatorPluginSettings(operatorId, pluginName, mergedSettings);
+          await ConfigManager.getInstance().setOperatorPluginSettings(operatorId, pluginName, mergedSettings);
+        },
       );
       instance.ctx = ctx;
       if (plugin.definition.type === 'strategy') {
@@ -280,6 +287,21 @@ export class PluginManager {
           }
         },
         () => this.buildMergedSettings(plugin, pluginName, GLOBAL_PLUGIN_SCOPE_ID),
+        async (patch) => {
+          const currentConfig = this.pluginsConfig.configs?.[pluginName] ?? { enabled: true, settings: {} };
+          const currentSettings = currentConfig.settings ?? {};
+          const mergedSettings = { ...currentSettings, ...patch };
+          const mergedConfig = { ...currentConfig, settings: mergedSettings };
+          if (!this.pluginsConfig.configs) this.pluginsConfig.configs = {};
+          this.pluginsConfig.configs[pluginName] = mergedConfig;
+          const globalInstance = this.globalInstances.get(pluginName);
+          if (globalInstance?.enabled) {
+            globalInstance.plugin.definition.hooks?.onConfigChange?.(mergedSettings, globalInstance.ctx);
+          }
+          this.bumpGeneration();
+          this.broadcastStatusChanged(pluginName);
+          await ConfigManager.getInstance().setPluginConfig(pluginName, mergedConfig);
+        },
       );
       instance.ctx = ctx;
       this.globalInstances.set(pluginName, instance);
