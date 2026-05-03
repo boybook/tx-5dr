@@ -285,6 +285,12 @@ export interface ILogProvider {
    * @param options 查询选项
    */
   queryQSOs(options?: LogQueryOptions): Promise<QSORecord[]>;
+
+  /**
+   * Count QSO records matching filters without materializing results.
+   * No sort, no pagination — single-pass iteration only.
+   */
+  countQSOs(options?: LogQueryOptions): Promise<number>;
   
   /**
    * 检查是否已经与某呼号通联过

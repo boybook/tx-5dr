@@ -136,6 +136,7 @@ describe('ADIFLogProvider import', () => {
       myGrid: 'PM01AA',
     }, 'op1');
 
+    await provider.flush();
     const qso = await provider.getQSO('voice-usb-export');
     const saved = await readFile(join(tempDir, 'logbook.adi'), 'utf-8');
 
@@ -189,6 +190,7 @@ describe('ADIFLogProvider import', () => {
     }, 'op1');
 
     await provider.updateQSO('voice-to-fm', { mode: 'FM' });
+    await provider.flush();
     const qso = await provider.getQSO('voice-to-fm');
     const saved = await readFile(join(tempDir, 'logbook.adi'), 'utf-8');
 

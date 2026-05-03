@@ -416,6 +416,8 @@ export class ADIFLogProvider implements ILogProvider {
   private isInitialized: boolean = false;
   private static readonly ALL_KEY = '__ALL__';
   private operatorIndexMap: Map<string, OperatorIndex> = new Map();
+  private saveTimer: NodeJS.Timeout | null = null;
+  private saveFailureCount: number = 0;
   
   constructor(options: ADIFLogProviderOptions = {}) {
     this.options = {
@@ -447,6 +449,9 @@ export class ADIFLogProvider implements ILogProvider {
       }
     }
     
+    // 清理上次崩溃残留的临时文件
+    await fs.unlink(`${this.logFilePath}.tmp`).catch(() => {});
+
     // 加载现有日志到缓存
     await this.loadCache();
     // 构建/重建索引
@@ -508,7 +513,7 @@ export class ADIFLogProvider implements ILogProvider {
 <PROGRAMVERSION:5>1.0.0
 <EOH>
 `;
-    await fs.writeFile(this.logFilePath, header, 'utf-8');
+    await this.atomicWriteFile(this.logFilePath, header);
   }
   
   /**
@@ -923,6 +928,46 @@ export class ADIFLogProvider implements ILogProvider {
   }
   
   /**
+   * 原子写入文件：先写临时文件再 rename，防止进程崩溃时文件截断
+   */
+  private async atomicWriteFile(filePath: string, content: string): Promise<void> {
+    const tmpPath = `${filePath}.tmp`;
+    await fs.writeFile(tmpPath, content, 'utf-8');
+    await fs.rename(tmpPath, filePath);
+  }
+
+  /**
+   * 延迟保存：300ms 内多次写入只触发一次文件 I/O
+   */
+  private scheduleSave(): void {
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      this.saveCache().catch((err) => {
+        this.saveFailureCount++;
+        if (this.saveFailureCount <= 3) {
+          logger.error('Failed to save ADIF cache', { attempt: this.saveFailureCount, error: err });
+        } else if (this.saveFailureCount === 4) {
+          logger.error('ADIF cache save failed repeatedly, further failures will be logged every 10 attempts', { totalFailures: this.saveFailureCount });
+        } else if (this.saveFailureCount % 10 === 0) {
+          logger.error('ADIF cache save still failing', { totalFailures: this.saveFailureCount, error: err });
+        }
+      });
+    }, 300);
+  }
+
+  /**
+   * 立即刷盘，等待完成
+   */
+  async flush(): Promise<void> {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+      await this.saveCache();
+    }
+  }
+
+  /**
    * 保存缓存到文件
    */
   private async saveCache(): Promise<void> {
@@ -933,13 +978,17 @@ export class ADIFLogProvider implements ILogProvider {
 <EOH>
 
 `;
-    
+
     for (const qso of this.qsoCache.values()) {
       // 从ID中提取operatorId（如果存在）
       adifContent += this.qsoRecordToADIF(qso);
     }
-    
-    await fs.writeFile(this.logFilePath, adifContent, 'utf-8');
+
+    await this.atomicWriteFile(this.logFilePath, adifContent);
+    if (this.saveFailureCount > 0) {
+      logger.info('ADIF cache save recovered after failures', { previousFailures: this.saveFailureCount });
+      this.saveFailureCount = 0;
+    }
   }
   
   async addQSO(record: QSORecord, operatorId?: string): Promise<void> {
@@ -959,7 +1008,7 @@ export class ADIFLogProvider implements ILogProvider {
     // 增量更新 ALL 索引
     const allIdx = this.operatorIndexMap.get(ADIFLogProvider.ALL_KEY);
     if (allIdx) addQSOToIndex(allIdx, record);
-    await this.saveCache();
+    this.scheduleSave();
   }
   
   async updateQSO(id: string, updates: Partial<QSORecord>): Promise<void> {
@@ -984,7 +1033,7 @@ export class ADIFLogProvider implements ILogProvider {
     this.qsoCache.set(id, enrichQSOWithDXCC(updated));
     // 简化处理：更新后重建索引（更新频率低，成本可接受）
     this.rebuildIndexes();
-    await this.saveCache();
+    this.scheduleSave();
   }
   
   async deleteQSO(id: string): Promise<void> {
@@ -996,7 +1045,7 @@ export class ADIFLogProvider implements ILogProvider {
     
     // 删除后重建索引
     this.rebuildIndexes();
-    await this.saveCache();
+    this.scheduleSave();
   }
   
   async getQSO(id: string): Promise<QSORecord | null> {
@@ -1124,7 +1173,44 @@ export class ADIFLogProvider implements ILogProvider {
     
     return results;
   }
-  
+
+  async countQSOs(options?: LogQueryOptions): Promise<number> {
+    this.ensureInitialized();
+    let count = 0;
+    for (const qso of this.qsoCache.values()) {
+      if (options?.callsign && !qso.callsign.toUpperCase().includes(options.callsign.toUpperCase())) continue;
+      if (options?.grid) {
+        const sg = normalizeGridSearch(options.grid);
+        if (sg && !normalizeGridSearch(qso.grid)?.startsWith(sg)) continue;
+      }
+      if (options?.frequencyRange && (qso.frequency < options.frequencyRange.min || qso.frequency > options.frequencyRange.max)) continue;
+      if (options?.timeRange && (qso.startTime < options.timeRange.start || qso.startTime > options.timeRange.end)) continue;
+      if (options?.mode && !matchesModeFilter(qso, options.mode)) continue;
+      if (options?.dxccStatus && qso.dxccStatus !== options.dxccStatus) continue;
+      if (options?.qslFlow) {
+        const twoWay = isQSOTwoWayConfirmed(qso);
+        if (options.qslFlow === 'two_way_confirmed' ? !twoWay : twoWay) continue;
+      }
+      if (options?.excludeModes?.length) {
+        const excluded = new Set(options.excludeModes.map(m => m.toUpperCase()));
+        if (excluded.has((qso.mode || '').toUpperCase())) continue;
+      }
+      if (options?.qslStatus) {
+        const isConfirmed = (qso.lotwQslReceived === 'Y' || qso.lotwQslReceived === 'V') || qso.qrzQslReceived === 'Y';
+        const isUploaded = qso.lotwQslSent === 'Y' || qso.qrzQslSent === 'Y';
+        let matches = true;
+        switch (options.qslStatus) {
+          case 'confirmed': matches = isConfirmed; break;
+          case 'uploaded': matches = isUploaded && !isConfirmed; break;
+          case 'none': matches = !isUploaded && !isConfirmed; break;
+        }
+        if (!matches) continue;
+      }
+      count++;
+    }
+    return count;
+  }
+
   async hasWorkedCallsign(
     callsign: string,
     options?: { operatorId?: string; band?: string }
@@ -1585,7 +1671,7 @@ export class ADIFLogProvider implements ILogProvider {
 
     if (didMutate) {
       this.rebuildIndexes();
-      await this.saveCache();
+      this.scheduleSave();
     }
 
     return result;
@@ -1620,11 +1706,13 @@ export class ADIFLogProvider implements ILogProvider {
   }
   
   async close(): Promise<void> {
-    // 保存任何未保存的更改
     if (this.isInitialized) {
-      await this.saveCache();
+      await this.flush();
     }
-    
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
     this.qsoCache.clear();
     this.isInitialized = false;
   }
