@@ -244,6 +244,8 @@ export interface QSOQueryFilter {
   frequencyRange?: { min: number; max: number };
   /** Mode filter (e.g. 'FT8'). */
   mode?: string;
+  /** Band filter (e.g. '20m'). Compared via getBandFromFrequency on stored records. */
+  band?: string;
   /**
    * QSL confirmation status filter.
    * - `'confirmed'`: at least one platform confirmed
