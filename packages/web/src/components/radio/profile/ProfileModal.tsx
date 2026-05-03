@@ -19,12 +19,13 @@ import { faPlus, faTrash, faPen, faArrowLeft, faCheck, faGripVertical } from '@f
 import { addToast } from '@heroui/toast';
 import { Reorder } from 'framer-motion';
 import { api } from '@tx5dr/core';
-import type { RadioProfile, HamlibConfig, AudioDeviceSettings as AudioDeviceSettingsType } from '@tx5dr/contracts';
+import type { RadioProfile, HamlibConfig, AudioDeviceSettings as AudioDeviceSettingsType, SupportedRig } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { useProfiles, useRadioConnectionState } from '../../../store/radioStore';
 import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceSettings';
 import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
 import { PowerControlButton } from './PowerControlButton';
+import { matchAudioDeviceForRig } from './radioAudioDeviceMapping';
 
 interface ProfileModalProps {
   isOpen: boolean;
@@ -49,6 +50,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   const [editAudioConfig, setEditAudioConfig] = useState<AudioDeviceSettingsType>({});
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [rigs, setRigs] = useState<SupportedRig[]>([]);
 
   // 本地排序状态（用于即时 UI 反馈）
   const [localProfiles, setLocalProfiles] = useState<RadioProfile[]>(profiles);
@@ -56,6 +58,15 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
 
   const radioSettingsRef = useRef<RadioDeviceSettingsRef | null>(null);
   const audioSettingsRef = useRef<AudioDeviceSettingsRef | null>(null);
+
+  // Track auto-match state: prevents re-applying for same rig, and respects manual changes
+  const autoAudioAppliedRef = useRef<number | null>(null);
+  const userManuallyChangedAudioRef = useRef(false);
+
+  const handleAudioConfigChange = useCallback((config: AudioDeviceSettingsType) => {
+    setEditAudioConfig(config);
+    userManuallyChangedAudioRef.current = true;
+  }, []);
 
   // 同步 profiles 到本地状态
   useEffect(() => {
@@ -69,6 +80,35 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
       setSelectedProfileId(activeProfileId);
     }
   }, [isOpen, activeProfileId]);
+
+  // Load rigs list for auto-match
+  useEffect(() => {
+    api.getSupportedRigs().then((res) => {
+      if (res.rigs) setRigs(res.rigs);
+    }).catch(() => { /* ignore */ });
+  }, []);
+
+  // Auto-match USB audio device when rigModel changes (serial mode only)
+  useEffect(() => {
+    const rigModel = editRadioConfig.serial?.rigModel;
+    if (!rigModel || editRadioConfig.type !== 'serial') return;
+    if (userManuallyChangedAudioRef.current) return;
+    if (autoAudioAppliedRef.current === rigModel) return;
+
+    matchAudioDeviceForRig(rigModel, rigs, () => api.getAudioDevices())
+      .then((result) => {
+        if (!result) return;
+        setEditAudioConfig((prev) => ({
+          ...prev,
+          inputDeviceName: result.deviceName,
+          outputDeviceName: result.deviceName,
+          inputSampleRate: result.sampleRate,
+          outputSampleRate: result.sampleRate,
+        }));
+        autoAudioAppliedRef.current = rigModel;
+      })
+      .catch(() => { /* silently ignore */ });
+  }, [editRadioConfig.serial?.rigModel, editRadioConfig.type, rigs]);
 
   // 拖拽排序处理：即时更新 UI，debounce 保存到后端
   const handleReorder = useCallback((newOrder: RadioProfile[]) => {
@@ -126,6 +166,8 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     setEditRadioConfig({ type: 'none' });
     setEditAudioConfig({});
     setEditingProfileId(null);
+    autoAudioAppliedRef.current = null;
+    userManuallyChangedAudioRef.current = false;
     setMode('create');
   };
 
@@ -136,6 +178,8 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     setEditRadioConfig(profile.radio);
     setEditAudioConfig(profile.audio);
     setEditingProfileId(profile.id);
+    autoAudioAppliedRef.current = null;
+    userManuallyChangedAudioRef.current = false;
     setMode('edit');
   };
 
@@ -238,6 +282,16 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
 
   // ICOM WLAN 检测：音频锁定提示
   const isIcomWlan = editRadioConfig.type === 'icom-wlan';
+
+  // Reset manual-change flag when radio connection type changes
+  const prevRadioTypeRef = useRef(editRadioConfig.type);
+  useEffect(() => {
+    if (prevRadioTypeRef.current !== editRadioConfig.type) {
+      prevRadioTypeRef.current = editRadioConfig.type;
+      userManuallyChangedAudioRef.current = false;
+      autoAudioAppliedRef.current = null;
+    }
+  }, [editRadioConfig.type]);
 
   // 渲染列表模式
   const renderListMode = () => (
@@ -407,7 +461,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
             <AudioDeviceSettings
               ref={audioSettingsRef}
               initialConfig={editAudioConfig}
-              onChange={setEditAudioConfig}
+              onChange={handleAudioConfigChange}
               radioType={editRadioConfig.type}
             />
           </div>

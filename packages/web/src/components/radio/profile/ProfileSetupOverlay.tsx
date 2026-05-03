@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Modal,
@@ -16,9 +16,10 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowRight, faArrowLeft, faCheck, faWifi, faPlug, faBan, faSatelliteDish } from '@fortawesome/free-solid-svg-icons';
 import { addToast } from '@heroui/toast';
 import { api } from '@tx5dr/core';
-import type { HamlibConfig, AudioDeviceSettings as AudioDeviceSettingsType } from '@tx5dr/contracts';
+import type { HamlibConfig, AudioDeviceSettings as AudioDeviceSettingsType, SupportedRig } from '@tx5dr/contracts';
 import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceSettings';
 import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
+import { matchAudioDeviceForRig } from './radioAudioDeviceMapping';
 
 interface ProfileSetupOverlayProps {
   isOpen: boolean;
@@ -40,17 +41,58 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
   const [audioConfig, setAudioConfig] = useState<AudioDeviceSettingsType>({});
   const [profileName, setProfileName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [rigs, setRigs] = useState<SupportedRig[]>([]);
 
   const radioSettingsRef = useRef<RadioDeviceSettingsRef | null>(null);
   const audioSettingsRef = useRef<AudioDeviceSettingsRef | null>(null);
 
+  // Auto-match tracking
+  const autoAudioAppliedRef = useRef<number | null>(null);
+  const userManuallyChangedAudioRef = useRef(false);
+
+  const handleAudioConfigChange = useCallback((config: AudioDeviceSettingsType) => {
+    setAudioConfig(config);
+    userManuallyChangedAudioRef.current = true;
+  }, []);
+
   const totalSteps = 4;
   const progressValue = ((step + 1) / totalSteps) * 100;
+
+  // Load rigs list for auto-match
+  useEffect(() => {
+    api.getSupportedRigs().then((res) => {
+      if (res.rigs) setRigs(res.rigs);
+    }).catch(() => { /* ignore */ });
+  }, []);
+
+  // Auto-match USB audio device when rigModel changes (serial mode only)
+  useEffect(() => {
+    const rigModel = radioConfig.serial?.rigModel;
+    if (!rigModel || radioConfig.type !== 'serial') return;
+    if (userManuallyChangedAudioRef.current) return;
+    if (autoAudioAppliedRef.current === rigModel) return;
+
+    matchAudioDeviceForRig(rigModel, rigs, () => api.getAudioDevices())
+      .then((result) => {
+        if (!result) return;
+        setAudioConfig((prev) => ({
+          ...prev,
+          inputDeviceName: result.deviceName,
+          outputDeviceName: result.deviceName,
+          inputSampleRate: result.sampleRate,
+          outputSampleRate: result.sampleRate,
+        }));
+        autoAudioAppliedRef.current = rigModel;
+      })
+      .catch(() => { /* silently ignore */ });
+  }, [radioConfig.serial?.rigModel, radioConfig.type, rigs]);
 
   // 步骤1：选择类型后
   const handleSelectType = (type: RadioType) => {
     setSelectedType(type);
     setRadioConfig({ type } as HamlibConfig);
+    autoAudioAppliedRef.current = null;
+    userManuallyChangedAudioRef.current = false;
     // ICOM WLAN 默认使用电台音频设备
     if (type === 'icom-wlan') {
       setAudioConfig({ inputDeviceName: 'ICOM WLAN', outputDeviceName: 'ICOM WLAN' });
@@ -180,7 +222,7 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
       <AudioDeviceSettings
         ref={audioSettingsRef}
         initialConfig={audioConfig}
-        onChange={setAudioConfig}
+        onChange={handleAudioConfigChange}
         radioType={radioConfig.type}
       />
     </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
+import React, { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { createLogger } from '../../../utils/logger';
 import { useTranslation } from 'react-i18next';
 import {
@@ -78,6 +78,28 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  // Sync internal state when initialConfig changes externally (e.g. auto-match from parent).
+  // Uses a ref to suppress the onChange effect during sync so the parent doesn't
+  // interpret the programmatic update as a manual user change.
+  const initialLoadDoneRef = useRef(false);
+  const syncingFromParentRef = useRef(false);
+  useEffect(() => {
+    if (loading) return;
+    if (!initialLoadDoneRef.current) {
+      initialLoadDoneRef.current = true;
+      return;
+    }
+    if (!isControlled || !initialConfig) return;
+    syncingFromParentRef.current = true;
+    setSelectedInputDeviceName(initialConfig.inputDeviceName || '');
+    setSelectedOutputDeviceName(initialConfig.outputDeviceName || '');
+    setInputSampleRate(resolveAudioSettingNumber(initialConfig, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
+    setOutputSampleRate(resolveAudioSettingNumber(initialConfig, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
+    setInputBufferSize(resolveAudioSettingNumber(initialConfig, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
+    setOutputBufferSize(resolveAudioSettingNumber(initialConfig, 'outputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
+    return () => { syncingFromParentRef.current = false; };
+  }, [initialConfig, loading, isControlled]);
+
   const buildSettings = (): AudioDeviceSettingsType => ({
     inputDeviceName: selectedInputDeviceName || undefined,
     outputDeviceName: selectedOutputDeviceName || undefined,
@@ -109,6 +131,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
 
   useEffect(() => {
     if (!isControlled || loading) return;
+    if (syncingFromParentRef.current) return;
     onChange?.(buildSettings());
   }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize]);
 
