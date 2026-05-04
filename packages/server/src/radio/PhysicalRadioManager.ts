@@ -59,6 +59,17 @@ const NORMAL_FREQUENCY_POLL_MS = 2000;
 const FAST_FREQUENCY_POLL_MS = 500;
 const FAST_FREQUENCY_POLL_WINDOW_MS = 5000;
 
+/** Hamlib valid frequency range: 1 kHz to 10 GHz */
+const HAMLIB_MIN_FREQUENCY_HZ = 1000;
+const HAMLIB_MAX_FREQUENCY_HZ = 10_000_000_000;
+
+function isFrequencyInHamlibRange(freq: unknown): freq is number {
+  return typeof freq === 'number'
+    && Number.isFinite(freq)
+    && freq >= HAMLIB_MIN_FREQUENCY_HZ
+    && freq <= HAMLIB_MAX_FREQUENCY_HZ;
+}
+
 /**
  * PhysicalRadioManager 事件接口
  */
@@ -1976,43 +1987,51 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   private async restoreSavedFrequencyIfAvailable(): Promise<number | null> {
-    const voiceState = this.getSavedStartupVoiceState();
-    if (voiceState) {
-      const result = await this.applyOperatingState({
-        frequency: voiceState.frequency,
-        mode: voiceState.radioMode,
-        bandwidth: voiceState.radioMode ? 'nochange' : undefined,
-        options: voiceState.radioMode ? { intent: 'voice' } : undefined,
-        tolerateModeFailure: true,
-      });
+    try {
+      const voiceState = this.getSavedStartupVoiceState();
+      if (voiceState) {
+        const result = await this.applyOperatingState({
+          frequency: voiceState.frequency,
+          mode: voiceState.radioMode,
+          bandwidth: voiceState.radioMode ? 'nochange' : undefined,
+          options: voiceState.radioMode ? { intent: 'voice' } : undefined,
+          tolerateModeFailure: true,
+        });
 
-      if (!result.frequencyApplied) {
-        logger.warn(`Bootstrap voice frequency restore failed: ${(voiceState.frequency / 1000000).toFixed(3)} MHz`);
+        if (!result.frequencyApplied) {
+          logger.warn(`Bootstrap voice frequency restore failed: ${(voiceState.frequency / 1000000).toFixed(3)} MHz`);
+          return null;
+        }
+
+        if (result.modeError) {
+          logger.warn(`Bootstrap voice frequency restored but radio mode restore failed: ${result.modeError.message}`);
+        }
+
+        logger.info(`Bootstrap voice operating state restored: ${(voiceState.frequency / 1000000).toFixed(3)} MHz${voiceState.radioMode ? ` (${voiceState.radioMode})` : ''}`);
+        return voiceState.frequency;
+      }
+
+      const targetFrequency = this.getSavedStartupFrequency();
+      if (!targetFrequency) {
+        logger.info('No valid saved frequency config, skipping bootstrap restore');
         return null;
       }
 
-      if (result.modeError) {
-        logger.warn(`Bootstrap voice frequency restored but radio mode restore failed: ${result.modeError.message}`);
+      const success = await this.setFrequency(targetFrequency);
+      if (!success) {
+        logger.warn(`Bootstrap frequency restore failed: ${(targetFrequency / 1000000).toFixed(3)} MHz`);
+        return null;
       }
 
-      logger.info(`Bootstrap voice operating state restored: ${(voiceState.frequency / 1000000).toFixed(3)} MHz${voiceState.radioMode ? ` (${voiceState.radioMode})` : ''}`);
-      return voiceState.frequency;
-    }
-
-    const targetFrequency = this.getSavedStartupFrequency();
-    if (!targetFrequency) {
-      logger.info('No saved frequency config, skipping bootstrap restore');
+      logger.info(`Bootstrap frequency restored: ${(targetFrequency / 1000000).toFixed(3)} MHz`);
+      return targetFrequency;
+    } catch (error) {
+      logger.warn(
+        `Bootstrap frequency restore failed, will fall through to captureInitialFrequency: ` +
+        `${(error as Error).message}`
+      );
       return null;
     }
-
-    const success = await this.setFrequency(targetFrequency);
-    if (!success) {
-      logger.warn(`Bootstrap frequency restore failed: ${(targetFrequency / 1000000).toFixed(3)} MHz`);
-      return null;
-    }
-
-    logger.info(`Bootstrap frequency restored: ${(targetFrequency / 1000000).toFixed(3)} MHz`);
-    return targetFrequency;
   }
 
   private getSavedStartupFrequency(): number | null {
@@ -2023,12 +2042,24 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     const lastDigital = this.configManager.getLastSelectedFrequency();
-    if (lastDigital?.frequency) {
-      logger.info(`Restoring digital frequency during bootstrap: ${(lastDigital.frequency / 1000000).toFixed(3)} MHz (${lastDigital.description || lastDigital.mode})`);
-      return lastDigital.frequency;
+    if (!lastDigital) {
+      return null;
     }
 
-    return null;
+    if (!isFrequencyInHamlibRange(lastDigital.frequency)) {
+      logger.warn(
+        `Invalid saved digital frequency detected: ${lastDigital.frequency} Hz ` +
+        `(valid range: ${HAMLIB_MIN_FREQUENCY_HZ}-${HAMLIB_MAX_FREQUENCY_HZ} Hz). ` +
+        'Clearing saved digital config to prevent recurrence.'
+      );
+      void this.configManager.clearLastSelectedFrequency().catch(err =>
+        logger.warn('Failed to clear invalid digital frequency from config:', err)
+      );
+      return null;
+    }
+
+    logger.info(`Restoring digital frequency during bootstrap: ${(lastDigital.frequency / 1000000).toFixed(3)} MHz (${lastDigital.description || lastDigital.mode})`);
+    return lastDigital.frequency;
   }
 
   private getSavedStartupVoiceState(): { frequency: number; radioMode?: string } | null {
@@ -2037,7 +2068,19 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     const lastVoice = this.configManager.getLastVoiceFrequency();
-    if (!lastVoice?.frequency) {
+    if (!lastVoice) {
+      return null;
+    }
+
+    if (!isFrequencyInHamlibRange(lastVoice.frequency)) {
+      logger.warn(
+        `Invalid saved voice frequency detected: ${lastVoice.frequency} Hz ` +
+        `(valid range: ${HAMLIB_MIN_FREQUENCY_HZ}-${HAMLIB_MAX_FREQUENCY_HZ} Hz). ` +
+        'Clearing saved voice config to prevent recurrence.'
+      );
+      void this.configManager.clearLastVoiceFrequency().catch(err =>
+        logger.warn('Failed to clear invalid voice frequency from config:', err)
+      );
       return null;
     }
 
