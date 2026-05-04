@@ -36,7 +36,7 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
   constructor(maxConcurrency: number = 4) {
     super();
     this.maxConcurrency = maxConcurrency;
-    this.lib = new WSJTXLib();
+    this.lib = new WSJTXLib({ maxThreads: 4 });
     logger.info(`Initialized (main thread), max concurrency: ${maxConcurrency}`);
   }
   
@@ -92,14 +92,16 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
     // 将 Float32Array 转换为 Int16Array（当前原生解码在 Int16 路径上更稳定）
     const audioInt16 = await this.lib.convertAudioFormat(resampledAudioData, 'int16') as Int16Array;
 
-    // 清空消息队列并调用解码
-    this.lib.pullMessages();
+    // 调用解码（新API：DecodeOptions + DecodeResult.messages）
     const baseFrequency = 0; // 基频，目前为0
     const decodeMode = request.mode === 'FT4' ? WSJTXMode.FT4 : WSJTXMode.FT8;
-    await this.lib.decode(decodeMode, audioInt16, baseFrequency);
+    const rawResult = await this.lib.decode(decodeMode, audioInt16, {
+      frequency: baseFrequency,
+      threads: 1,
+    });
 
     // 读取消息并映射到帧
-    const messages = this.lib.pullMessages() as any[];
+    const messages = rawResult.messages as any[];
     const frames = (messages || []).map((msg: any) => ({
       message: msg.text,
       snr: msg.snr,
