@@ -178,7 +178,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     setEditRadioConfig(profile.radio);
     setEditAudioConfig(profile.audio);
     setEditingProfileId(profile.id);
-    autoAudioAppliedRef.current = null;
+    autoAudioAppliedRef.current = profile.radio.serial?.rigModel ?? null;
     userManuallyChangedAudioRef.current = false;
     setMode('edit');
   };
@@ -289,7 +289,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     if (prevRadioTypeRef.current !== editRadioConfig.type) {
       prevRadioTypeRef.current = editRadioConfig.type;
       userManuallyChangedAudioRef.current = false;
-      autoAudioAppliedRef.current = null;
+      autoAudioAppliedRef.current = editRadioConfig.serial?.rigModel ?? null;
     }
   }, [editRadioConfig.type]);
 
