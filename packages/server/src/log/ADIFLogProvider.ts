@@ -421,6 +421,7 @@ export class ADIFLogProvider implements ILogProvider {
   private saveFailureCount: number = 0;
   private needsFullRewrite: boolean = false;
   private pendingAppendIds: Set<string> = new Set();
+  private foreignRecordIds: Set<string> = new Set();
   
   constructor(options: ADIFLogProviderOptions = {}) {
     this.options = {
@@ -462,6 +463,7 @@ export class ADIFLogProvider implements ILogProvider {
 
     this.needsFullRewrite = false;
     this.pendingAppendIds.clear();
+    this.foreignRecordIds.clear();
     this.isInitialized = true;
   }
   
@@ -544,6 +546,16 @@ export class ADIFLogProvider implements ILogProvider {
             parsedQsos.push(qso);
             if (['USB', 'LSB'].includes((record.mode || '').trim().toUpperCase())) {
               normalizedLegacyVoiceModes = true;
+            }
+            // 检测非 TX-5DR 原生记录：缺少任何 APP_TX5DR_* 自动富化字段
+            const hasTx5drEnrichment =
+              record.app_tx5dr_dxcc_status !== undefined ||
+              record.app_tx5dr_dxcc_source !== undefined ||
+              record.app_tx5dr_dxcc_confidence !== undefined ||
+              record.app_tx5dr_dxcc_needs_review !== undefined ||
+              record.app_tx5dr_station_location_id !== undefined;
+            if (!hasTx5drEnrichment) {
+              this.foreignRecordIds.add(qso.id);
             }
             logger.debug(`Parsed QSO: ${qso.id} - ${qso.callsign}`);
           } catch (err) {
@@ -786,7 +798,9 @@ export class ADIFLogProvider implements ILogProvider {
    * 将QSORecord转换为ADIF记录
    * @param overrideMyGrid 覆盖 qso.myGrid（用于导出时注入兜底网格）
    */
-  private qsoRecordToADIF(qso: QSORecord, overrideMyGrid?: string): string {
+  private qsoRecordToADIF(qso: QSORecord, opts?: { overrideMyGrid?: string; skipAppEnrichment?: boolean }): string {
+    const overrideMyGrid = opts?.overrideMyGrid;
+    const skipAppEnrichment = opts?.skipAppEnrichment ?? false;
     const startDate = new Date(qso.startTime);
     const dateStr = startDate.toISOString().slice(0, 10).replace(/-/g, '');
     const timeOnStr = startDate.toISOString().slice(11, 19).replace(/:/g, '');
@@ -891,20 +905,22 @@ export class ADIFLogProvider implements ILogProvider {
     if (qso.myIota) {
       adifRecord += `<MY_IOTA:${qso.myIota.length}>${qso.myIota}`;
     }
-    if (qso.stationLocationId) {
-      adifRecord += `<APP_TX5DR_STATION_LOCATION_ID:${qso.stationLocationId.length}>${qso.stationLocationId}`;
-    }
-    if (qso.dxccStatus) {
-      adifRecord += `<APP_TX5DR_DXCC_STATUS:${qso.dxccStatus.length}>${qso.dxccStatus}`;
-    }
-    if (qso.dxccSource) {
-      adifRecord += `<APP_TX5DR_DXCC_SOURCE:${qso.dxccSource.length}>${qso.dxccSource}`;
-    }
-    if (qso.dxccConfidence) {
-      adifRecord += `<APP_TX5DR_DXCC_CONFIDENCE:${qso.dxccConfidence.length}>${qso.dxccConfidence}`;
-    }
-    if (qso.dxccNeedsReview !== undefined) {
-      adifRecord += `<APP_TX5DR_DXCC_NEEDS_REVIEW:1>${qso.dxccNeedsReview ? 'Y' : 'N'}`;
+    if (!skipAppEnrichment) {
+      if (qso.stationLocationId) {
+        adifRecord += `<APP_TX5DR_STATION_LOCATION_ID:${qso.stationLocationId.length}>${qso.stationLocationId}`;
+      }
+      if (qso.dxccStatus) {
+        adifRecord += `<APP_TX5DR_DXCC_STATUS:${qso.dxccStatus.length}>${qso.dxccStatus}`;
+      }
+      if (qso.dxccSource) {
+        adifRecord += `<APP_TX5DR_DXCC_SOURCE:${qso.dxccSource.length}>${qso.dxccSource}`;
+      }
+      if (qso.dxccConfidence) {
+        adifRecord += `<APP_TX5DR_DXCC_CONFIDENCE:${qso.dxccConfidence.length}>${qso.dxccConfidence}`;
+      }
+      if (qso.dxccNeedsReview !== undefined) {
+        adifRecord += `<APP_TX5DR_DXCC_NEEDS_REVIEW:1>${qso.dxccNeedsReview ? 'Y' : 'N'}`;
+      }
     }
 
     if (qso.lotwQslSent) {
@@ -1001,7 +1017,7 @@ export class ADIFLogProvider implements ILogProvider {
 
 `;
       for (const qso of sorted) {
-        adifContent += this.qsoRecordToADIF(qso);
+        adifContent += this.qsoRecordToADIF(qso, { skipAppEnrichment: this.foreignRecordIds.has(qso.id) });
       }
 
       await this.atomicWriteFile(this.logFilePath, adifContent);
@@ -1014,7 +1030,7 @@ export class ADIFLogProvider implements ILogProvider {
         if (qso) records.push(qso);
       }
       records.sort((a, b) => a.startTime - b.startTime);
-      const lines = records.map((r) => this.qsoRecordToADIF(r)).join('');
+      const lines = records.map((r) => this.qsoRecordToADIF(r, { skipAppEnrichment: this.foreignRecordIds.has(r.id) })).join('');
       await fs.appendFile(this.logFilePath, lines, 'utf-8');
       this.pendingAppendIds.clear();
     }
@@ -1042,6 +1058,7 @@ export class ADIFLogProvider implements ILogProvider {
     // 增量更新 ALL 索引
     const allIdx = this.operatorIndexMap.get(ADIFLogProvider.ALL_KEY);
     if (allIdx) addQSOToIndex(allIdx, record);
+    this.foreignRecordIds.delete(record.id);
     this.pendingAppendIds.add(record.id);
     this.scheduleSave();
   }
@@ -1066,6 +1083,7 @@ export class ADIFLogProvider implements ILogProvider {
       comment: updates.comment ?? existing.comment ?? buildCommentFromMessageHistory(updates.messageHistory ?? existing.messageHistory),
     });
     this.qsoCache.set(id, enrichQSOWithDXCC(updated));
+    this.foreignRecordIds.delete(id);
     // 更新后需要全量重写文件
     this.needsFullRewrite = true;
     this.pendingAppendIds.clear();
@@ -1492,7 +1510,7 @@ export class ADIFLogProvider implements ILogProvider {
 
     for (const qso of qsos) {
       const effectiveMyGrid = qso.myGrid || exportOptions?.fallbackGrid;
-      adifContent += this.qsoRecordToADIF(qso, effectiveMyGrid);
+      adifContent += this.qsoRecordToADIF(qso, { overrideMyGrid: effectiveMyGrid });
     }
 
     return adifContent;
@@ -1690,6 +1708,7 @@ export class ADIFLogProvider implements ILogProvider {
             id: this.buildImportId(record),
           });
           this.qsoCache.set(insertedRecord.id, insertedRecord);
+          this.foreignRecordIds.add(insertedRecord.id);
           fingerprintIndex.set(fingerprint, insertedRecord.id);
           result.imported += 1;
           didMutate = true;
