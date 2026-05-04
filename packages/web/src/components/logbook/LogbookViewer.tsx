@@ -115,7 +115,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const [sortDescriptor, setSortDescriptor] = useState<{
     column: string;
     direction: 'ascending' | 'descending';
-  }>({ column: 'startTime', direction: 'ascending' });
+  }>({ column: 'startTime', direction: 'descending' });
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
   const [isGridSearchExpanded, setIsGridSearchExpanded] = useState(false);
   const [dxccViewMode, setDxccViewMode] = useState<DxccViewMode>('mixed');

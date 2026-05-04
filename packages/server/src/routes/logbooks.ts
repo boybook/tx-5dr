@@ -446,7 +446,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         limit: options.limit,
         offset: options.offset,
         orderBy: 'time',
-        orderDirection: 'asc'
+        orderDirection: 'desc'
       };
 
       // 处理频段过滤（转换为频率范围）
@@ -539,7 +539,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       const recentQsos = await logBook.provider.queryQSOs({
         timeRange: { start: windowStart, end: now },
         orderBy: 'time',
-        orderDirection: 'asc',
+        orderDirection: 'desc',
       });
 
       const stationInfo = ConfigManager.getInstance().getStationInfo();
@@ -658,7 +658,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       const queryOptions: LogQueryOptions = {
         orderBy: 'time',
-        orderDirection: 'asc',
+        orderDirection: 'desc',
       };
 
       const bandFrequencyRange = getBandFrequencyRange(options.band);
@@ -746,7 +746,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
           : undefined,
         qslStatus: options.qslStatus,
         orderBy: 'time',
-        orderDirection: 'asc'
+        orderDirection: 'desc'
       };
 
       // 处理频段过滤（转换为频率范围）

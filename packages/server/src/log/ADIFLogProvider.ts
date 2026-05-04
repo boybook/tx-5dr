@@ -1207,7 +1207,7 @@ export class ADIFLogProvider implements ILogProvider {
 
       // 排序
       const orderBy = options.orderBy || 'time';
-      const orderDir = options.orderDirection || 'asc';
+      const orderDir = options.orderDirection || 'desc';
       
       results.sort((a, b) => {
         let comparison = 0;
