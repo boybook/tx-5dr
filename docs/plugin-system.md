@@ -1,6 +1,5 @@
 # TX-5DR 插件系统开发指南
 
-> 适用版本：当前主分支  
 > 面向读者：希望为 TX-5DR 编写插件或对插件系统进行二次开发的开发者
 
 ---
@@ -16,36 +15,20 @@
    - 4.3 [OperatorControl](#43-operatorcontrol)
    - 4.4 [Hook 分类与语义](#44-hook-分类与语义)
    - 4.5 [设置系统](#45-设置系统)
-   - 4.6 [QuickActions](#46-quickactions)
+   - 4.6 [QuickActions 与 QuickSettings](#46-quickactions-与-quicksettings)
    - 4.7 [Panels](#47-panels)
    - 4.8 [持久化存储](#48-持久化存储)
    - 4.9 [自定义 UI（iframe 页面与面板）](#49-自定义-uiiframe-页面与面板)
    - 4.10 [文件存储](#410-文件存储)
    - 4.11 [日志同步 Provider](#411-日志同步-provider)
+   - 4.12 [宿主设置访问](#412-宿主设置访问)
+   - 4.13 [插件市场](#413-插件市场)
 5. [编写你的第一个插件](#5-编写你的第一个插件)
    - 5.1 [最简工具插件（JS）](#51-最简工具插件js)
    - 5.2 [TypeScript 完整项目](#52-typescript-完整项目)
    - 5.3 [策略插件示例](#53-策略插件示例)
 6. [内置插件参考](#6-内置插件参考)
-   - 6.1 [standard-qso（内置策略）](#61-standard-qso内置策略)
-   - 6.2 [snr-filter（内置示例工具）](#62-snr-filter内置示例工具)
-   - 6.3 [callsign-prefix-filter（字符串数组过滤示例）](#63-callsign-prefix-filter字符串数组过滤示例)
-   - 6.4 [worked-station-bias（评分示例）](#64-worked-station-bias评分示例)
-   - 6.5 [qso-session-inspector（广播 Hook + 面板示例）](#65-qso-session-inspector广播-hook--面板示例)
-   - 6.6 [watched-callsign-autocall（待机守候自动起呼）](#66-watched-callsign-autocall待机守候自动起呼)
-   - 6.7 [watched-novelty-autocall（守候新类型自动起呼）](#67-watched-novelty-autocall守候新类型自动起呼)
-   - 6.8 [autocall-idle-frequency（自动起呼自动择频）](#68-autocall-idle-frequency自动起呼自动择频)
-   - 6.9 [heartbeat-demo（timer + button quickAction 示例）](#69-heartbeat-demotimer--button-quickaction-示例)
-   - 6.10 [lotw-sync（LoTW 日志同步）](#610-lotw-syncLotW-日志同步)
-   - 6.11 [qrz-sync（QRZ 日志同步）](#611-qrz-syncQRZ-日志同步)
-   - 6.12 [wavelog-sync（WaveLog 日志同步）](#612-wavelog-syncWaveLog-日志同步)
-   - 6.13 [iframe-panel-demo（iframe 面板示例）](#613-iframe-panel-demoiframe-面板示例)
 7. [插件系统架构](#7-插件系统架构)
-   - 7.1 [生命周期](#71-生命周期)
-   - 7.2 [Hook 分发机制](#72-hook-分发机制)
-   - 7.3 [策略运行时实现](#73-策略运行时实现)
-   - 7.4 [错误隔离](#74-错误隔离)
-   - 7.5 [多插件冲突处理](#75-多插件冲突处理)
 8. [REST API 与 WebSocket 事件](#8-rest-api-与-websocket-事件)
 9. [前端 UI 集成](#9-前端-ui-集成)
 10. [新增内置插件指南](#10-新增内置插件指南)
@@ -76,21 +59,11 @@ TX-5DR 的插件系统允许开发者通过编写单个 JavaScript（或 TypeScr
 - **数据展示**：实时统计并在面板中展示通联数据
 - **外部集成**：查询 DX Cluster、上传日志到外部服务
 
-### 建议阅读顺序
-
-本文件偏向“完整技术说明”和“宿主实现约束”。如果你是第一次编写 TX-5DR 插件，推荐按下面顺序阅读：
-
-1. 先阅读官方站点中的插件 API 教程（从最小 utility 插件开始）
-2. 再回到本文件核对完整接口、内置插件说明与宿主仲裁规则
-3. 最后结合 `packages/server/src/plugin/builtins/` 中的真实实现查看细节
-
 ---
 
 ## 2. 核心概念
 
 ### 插件类型
-
-系统定义了两种互不冲突的插件类型：
 
 #### 策略插件（`type: 'strategy'`）
 
@@ -116,12 +89,10 @@ TX-5DR 的插件系统允许开发者通过编写单个 JavaScript（或 TypeScr
 
 ### 实例作用域
 
-除了 `type` 之外，utility 插件还可以声明实例作用域：
-
 - **`instanceScope: 'operator'`**（默认）：为每个操作员分别创建一个实例
-- **`instanceScope: 'global'`**：整个应用只创建一个共享实例
+- **`instanceScope: 'global'`**：整个应用只创建一个共享实例（仅 utility 支持）
 
-`global` 实例的设计目标，是承载“全局资源 + 按呼号分发”的插件，例如日志同步 Provider。此类插件通常需要：
+`global` 实例的设计目标，是承载"全局资源 + 按呼号分发"的插件，例如日志同步 Provider。此类插件通常需要：
 
 - 共享一份证书、登录态或远端客户端
 - 面向多个操作员/多个呼号工作
@@ -138,18 +109,6 @@ TX-5DR 的插件系统允许开发者通过编写单个 JavaScript（或 TypeScr
 
 - **`global` scope**：所有操作员共享，在"插件设置"全局面板中显示（如 API Key、黑名单）
 - **`operator` scope**：每个操作员独立，在操作员配置面板中显示（如 autoReplyToCQ）
-
-### 设置节点类型
-
-插件设置既可以是可编辑字段，也可以是纯展示说明节点：
-
-- **`boolean`**：布尔开关
-- **`number`**：数字输入
-- **`string`**：字符串输入或下拉选择
-- **`string[]`**：字符串数组
-- **`info`**：纯说明文字节点，只用于 UI 展示，不参与持久化、脏数据比较或保存
-
-`info` 适合描述某组设置的用途、策略边界、依赖前提或行为说明，而不是伪装成一个“假的设置项”。
 
 ---
 
@@ -175,112 +134,55 @@ TX-5DR 的插件系统允许开发者通过编写单个 JavaScript（或 TypeScr
 > - Linux（桌面 / 开发环境）：`~/.local/share/TX-5DR/plugins`
 > - Linux server 包：`/var/lib/tx5dr/plugins`
 > - Docker 容器内：`/app/data/plugins`
->
-> **补充说明**：
-> - Docker 官方 `docker-compose.yml` 默认将宿主机 `./data/plugins` 映射到容器内 `/app/data/plugins`
-> - 若自定义了 `TX5DR_DATA_DIR`，插件目录随之变为 `{TX5DR_DATA_DIR}/plugins`
-> - 在应用内可直接从「设置 → 插件」查看当前运行时实际使用的绝对路径
 
-### 内置插件目录（开发者参考）
+### 内置插件目录
 
-内置插件与用户插件遵循**相同的目录结构**，位于：
+内置插件与用户插件遵循**相同的目录结构**，位于独立包 `packages/builtin-plugins/src/`：
 
 ```
-packages/server/src/plugin/builtins/
-├── standard-qso/
-│   ├── index.ts         # 插件定义 + createStrategyRuntime 工厂
-│   ├── StandardQSOPluginRuntime.ts
-│   └── locales/
-│       ├── zh.json
-│       └── en.json
-├── snr-filter/
-    ├── index.ts         # 工具插件 hooks 实现
-    └── locales/
-        ├── zh.json
-        └── en.json
-├── callsign-prefix-filter/
-│   ├── index.ts
-│   └── locales/
-│       ├── zh.json
-│       └── en.json
-├── worked-station-bias/
-│   ├── index.ts
-│   └── locales/
-│       ├── zh.json
-│       └── en.json
-├── qso-session-inspector/
-│   ├── index.ts
-│   └── locales/
-│       ├── zh.json
-│       └── en.json
-├── autocall-idle-frequency/
-│   ├── index.ts
-│   └── locales/
-│       ├── zh.json
-│       └── en.json
-├── heartbeat-demo/
-│   ├── index.ts
-│   └── locales/
-│       ├── zh.json
-│       └── en.json
-├── watched-callsign-autocall/
-│   ├── index.ts
-│   └── locales/
-│       ├── zh.json
-│       └── en.json
-├── watched-novelty-autocall/
-│   ├── index.ts
-│   └── locales/
-│       ├── zh.json
-│       └── en.json
-├── lotw-sync/
-│   ├── index.ts
-│   ├── provider.ts      # LoTWSyncProvider 实现
-│   ├── locales/
-│   │   ├── zh.json
-│   │   └── en.json
-│   └── ui/              # iframe 页面静态资源
-│       ├── settings.html
-│       ├── settings.css
-│       ├── settings.js
-│       ├── download-wizard.html
-│       ├── download-wizard.css
-│       └── download-wizard.js
-├── qrz-sync/
-│   ├── index.ts
-│   ├── provider.ts
-│   ├── locales/
-│   │   ├── zh.json
-│   │   └── en.json
-│   └── ui/
-│       ├── settings.html
-│       ├── settings.css
-│       └── settings.js
-├── wavelog-sync/
-│   ├── index.ts
-│   ├── provider.ts
-│   ├── locales/
-│   │   ├── zh.json
-│   │   └── en.json
-│   └── ui/
-│       ├── settings.html
-│       ├── settings.css
-│       └── settings.js
-└── iframe-panel-demo/
-    ├── index.ts
-    ├── locales/
-    │   ├── zh.json
-    │   └── en.json
-    └── ui/
-        ├── live-monitor.html
-        ├── live-monitor.css
-        ├── live-monitor.js
-        ├── quick-controls.html
-        ├── quick-controls.css
-        └── quick-controls.js
+packages/builtin-plugins/src/
+├── standard-qso/           # 策略插件：标准 QSO 流程
+├── snr-filter/             # 工具插件：SNR 过滤
+├── no-reply-memory-filter/ # 工具插件：无回复记忆过滤
+├── callsign-filter/        # 工具插件：呼号过滤
+├── worked-station-bias/    # 工具插件：已通联偏置评分
+├── watched-callsign-autocall/  # 工具插件：守候呼号自动起呼
+├── watched-novelty-autocall/   # 工具插件：守候新类型自动起呼
+├── autocall-idle-frequency/    # 工具插件：自动起呼择频
+├── lotw-sync/              # 工具插件：LoTW 日志同步
+├── qrz-sync/               # 工具插件：QRZ 日志同步
+├── wavelog-sync/           # 工具插件：WaveLog 日志同步
+└── qso-udp-broadcast/      # 工具插件：QSO UDP 广播
 ```
 
 内置插件的翻译通过 `import ... with { type: 'json' }` 编译进 bundle，无运行时 I/O。
+
+每个插件目录下的结构示例：
+
+```
+standard-qso/
+├── index.ts                # 导出 PluginDefinition + locales + 命名常量
+├── StandardQSOPluginRuntime.ts  # 策略运行时（仅策略插件）
+└── locales/
+    ├── zh.json
+    └── en.json
+```
+
+带自定义 UI 的插件：
+
+```
+lotw-sync/
+├── index.ts
+├── provider.ts             # LogbookSyncProvider 实现
+├── locales/
+│   ├── zh.json
+│   └── en.json
+└── ui/                     # iframe 页面静态资源
+    ├── settings.html
+    ├── settings.css
+    ├── settings.js
+    └── download-wizard.html
+```
 
 ### 插件入口规范
 
@@ -325,9 +227,8 @@ settings: {
 
 > **获取类型支持**：`npm install --save-dev @tx5dr/plugin-api`
 >
-> 对于独立插件项目，`@tx5dr/plugin-api` 是推荐的唯一公共开发入口。
+> 对于独立插件项目，`@tx5dr/plugin-api` 是唯一的公共开发入口。
 > 请优先从这里导入插件定义、上下文、消息类型与常用枚举，而不要直接依赖 `@tx5dr/contracts`。
-> `@tx5dr/contracts` 仍可被 TX-5DR monorepo 内部使用，但不作为外部插件的稳定公共接口。
 
 ### 4.1 PluginDefinition
 
@@ -354,8 +255,17 @@ interface PluginDefinition {
   /** 可选：人类可读的描述 */
   description?: string;
 
+  /** 可选：作者名 */
+  author?: string;
+
   /** 可选：所需权限声明 */
-  permissions?: ('network' | 'radio:read' | 'radio:control' | 'radio:power')[];
+  permissions?: (
+    | 'network'
+    | 'radio:read' | 'radio:control' | 'radio:power'
+    | 'settings:ft8' | 'settings:decode-windows' | 'settings:realtime'
+    | 'settings:frequency-presets' | 'settings:station'
+    | 'settings:psk-reporter' | 'settings:ntp'
+  )[];
 
   /**
    * 声明式设置项
@@ -365,9 +275,15 @@ interface PluginDefinition {
 
   /**
    * 快捷操作按钮
-   * 出现在操作员面板的自动化下拉区域
+   * 出现在操作员面板的自动化下拉区域，点击触发 hooks.onUserAction
    */
   quickActions?: PluginQuickAction[];
+
+  /**
+   * 快捷设置
+   * 引用 operator-scope setting，在自动化面板中渲染为紧凑控件
+   */
+  quickSettings?: PluginQuickSetting[];
 
   /**
    * 数据展示面板
@@ -375,8 +291,18 @@ interface PluginDefinition {
    */
   panels?: PluginPanelDescriptor[];
 
-  /** 声明需要哪些存储作用域（当前主要作为元数据暴露，不做运行时裁剪） */
-  storage?: PluginStorageConfig;
+  /** 声明需要哪些存储作用域 */
+  storage?: { scopes: ('global' | 'operator')[] };
+
+  /**
+   * 自定义 UI 页面声明
+   */
+  ui?: {
+    /** 静态资源目录（相对于插件根目录，默认 'ui'） */
+    dir?: string;
+    /** 注册的页面列表 */
+    pages?: PluginUIPageDescriptor[];
+  };
 
   /**
    * 策略运行时工厂
@@ -384,16 +310,32 @@ interface PluginDefinition {
    */
   createStrategyRuntime?(ctx: PluginContext): StrategyRuntime;
 
-  /** 插件实例加载时调用（插件子系统启动、重载或创建对应 scope 实例时） */
+  /** 插件实例加载时调用 */
   onLoad?(ctx: PluginContext): void | Promise<void>;
 
-  /** 插件实例卸载时调用（插件重载、移除操作员或插件子系统关闭时），定时器自动清理 */
+  /** 插件实例卸载时调用，定时器自动清理 */
   onUnload?(ctx: PluginContext): void | Promise<void>;
 
   /** Hook 实现 */
   hooks?: PluginHooks;
 }
 ```
+
+权限说明：
+
+| 权限 | 授予能力 |
+|------|---------|
+| `network` | `ctx.fetch()` HTTP 请求 |
+| `radio:read` | `ctx.radio.capabilities.getSnapshot()` / `getState()` / `refresh()` |
+| `radio:control` | `ctx.radio.capabilities.write()` |
+| `radio:power` | `ctx.radio.power.*` |
+| `settings:ft8` | `ctx.settings.ft8` |
+| `settings:decode-windows` | `ctx.settings.decodeWindows` |
+| `settings:realtime` | `ctx.settings.realtime` |
+| `settings:frequency-presets` | `ctx.settings.frequencyPresets` |
+| `settings:station` | `ctx.settings.station` |
+| `settings:psk-reporter` | `ctx.settings.pskReporter` |
+| `settings:ntp` | `ctx.settings.ntp` |
 
 ### 4.2 PluginContext
 
@@ -404,10 +346,16 @@ interface PluginContext {
   /** 当前生效的设置值（global + operator 合并，只读） */
   readonly config: Readonly<Record<string, unknown>>;
 
+  /**
+   * 更新本插件实例的设置（自更新）
+   * 浅合并后持久化，触发 onConfigChange，推送前端
+   */
+  updateConfig(patch: Record<string, unknown>): Promise<void>;
+
   /** 持久化 KV 存储 */
   readonly store: {
     readonly global: KVStore;    // 所有操作员共享
-    readonly operator: KVStore;  // 当前实例独占；global 实例时为独立 instance store
+    readonly operator: KVStore;  // 当前实例独占
   };
 
   /** 日志接口（输出到系统日志 + 前端日志面板） */
@@ -416,7 +364,7 @@ interface PluginContext {
   /** 命名定时器管理 */
   readonly timers: PluginTimers;
 
-  /** 操作员控制（见 4.3 节） */
+  /** 操作员控制 */
   readonly operator: OperatorControl;
 
   /** 物理电台控制 */
@@ -431,15 +379,21 @@ interface PluginContext {
   /** 向前端面板推送数据 + 自定义 iframe 页面通信 */
   readonly ui: UIBridge;
 
-  /** 二进制文件持久化存储（见 4.10 节） */
+  /** 二进制文件持久化存储 */
   readonly files: PluginFileStore;
 
-  /** 日志同步 Provider 注册入口（见 4.11 节） */
+  /** 日志同步 Provider 注册入口 */
   readonly logbookSync: LogbookSyncRegistrar;
 
   /**
+   * 宿主设置访问（权限门控）
+   * 每个命名空间需要对应的 settings:* 权限
+   */
+  readonly settings: HostSettingsControl;
+
+  /**
    * 受控 HTTP fetch
-   * 仅声明 `permissions: ['network']` 后可用，否则为 undefined
+   * 仅声明 permissions: ['network'] 后可用，否则为 undefined
    */
   readonly fetch?: (url: string, init?: RequestInit) => Promise<Response>;
 }
@@ -453,27 +407,10 @@ interface KVStore {
   set(key: string, value: unknown): void;
   delete(key: string): void;
   getAll(): Record<string, unknown>;
+  /** 强制 flush 待写入数据到磁盘 */
+  flush(): Promise<void>;
 }
 ```
-
-#### 常用定义类型
-
-`@tx5dr/plugin-api` 还会统一导出一批插件定义层常用类型，便于在 helper/builder 中复用，而无需直接依赖内部 contracts：
-
-- `PluginSettingType`
-- `PluginSettingScope`
-- `PluginSettingDescriptor`
-- `PluginSettingOption`
-- `PluginStorageScope`
-- `PluginStorageConfig`
-- `TargetSelectionPriorityMode`
-
-此外，插件在处理解码结果和日志本分析时，通常也可以直接从 `@tx5dr/plugin-api` 获取这些运行时类型：
-
-- `LogbookAnalysis`
-- `DxccStatus`
-- `ParsedFT8Message`
-- `QSORecord`
 
 写入操作有 300ms debounce；插件实例卸载或插件子系统关闭时会强制 flush。
 
@@ -488,73 +425,81 @@ interface PluginLogger {
 }
 ```
 
-日志同时输出到：系统日志文件、前端设置页 `Settings -> Plugins` 中的“插件日志”面板（通过 `pluginLog` 事件实时显示，当前仅保留本次前端会话内的内存缓冲）。
+日志同时输出到：系统日志文件、前端设置页中的"插件日志"面板。
 
 #### PluginTimers
 
 ```typescript
 interface PluginTimers {
-  /** 设置命名间隔定时器，重复调用同一 id 会替换旧的 */
   set(id: string, intervalMs: number): void;
-  /** 清除指定定时器 */
   clear(id: string): void;
-  /** 清除此插件的所有定时器（onUnload 时自动调用） */
   clearAll(): void;
 }
 ```
 
-定时器触发时调用 `hooks.onTimer(timerId, ctx)`。
+定时器触发时调用 `hooks.onTimer(timerId, ctx)`。`clearAll()` 在 `onUnload` 时自动调用。
 
 #### RadioControl
 
 ```typescript
 interface RadioControl {
-  readonly frequency: number;     // 电台当前频率（Hz）
-  readonly band: string;          // 当前波段（如 "20m"）
-  readonly isConnected: boolean;  // 电台是否已连接
+  readonly frequency: number;
+  readonly band: string;
+  readonly isConnected: boolean;
   readonly capabilities: RadioCapabilitiesControl;
   readonly power: RadioPowerControl;
   setFrequency(freq: number): Promise<void>;
 }
 
 interface RadioCapabilitiesControl {
-  getSnapshot(): CapabilityList;                         // 需 permissions: ['radio:read']
-  getState(id: string): CapabilityState | null;          // 需 permissions: ['radio:read']
-  refresh(): Promise<CapabilityList>;                    // 需 permissions: ['radio:read']
-  write(payload: WriteCapabilityPayload): Promise<void>; // 需 permissions: ['radio:control']
+  getSnapshot(): CapabilityList;                         // 需 radio:read
+  getState(id: string): CapabilityState | null;          // 需 radio:read
+  refresh(): Promise<CapabilityList>;                    // 需 radio:read
+  write(payload: WriteCapabilityPayload): Promise<void>; // 需 radio:control
 }
 
 interface RadioPowerControl {
-  getSupport(profileId?: string): Promise<RadioPowerSupportInfo>; // 需 permissions: ['radio:read']
-  getState(profileId?: string): RadioPowerStateEvent | null;      // 需 permissions: ['radio:read']
-  set(
-    state: 'on' | 'off' | 'standby' | 'operate',
-    options?: { profileId?: string; autoEngine?: boolean },
-  ): Promise<RadioPowerResponse>; // 需 permissions: ['radio:power']
+  getSupport(profileId?: string): Promise<RadioPowerSupportInfo>; // 需 radio:read
+  getState(profileId?: string): RadioPowerStateEvent | null;      // 需 radio:read
+  set(state, options?: { profileId?: string; autoEngine?: boolean }): Promise<RadioPowerResponse>; // 需 radio:power
 }
 ```
 
-`ctx.radio` 只在服务端插件上下文中可用，不直接注入 iframe Bridge；自定义 UI 页面如需触发这些操作，应通过 `ctx.ui.registerPageHandler` 把请求转发到服务端插件逻辑。`power.set()` 的 `profileId` 缺省为当前 active profile，`autoEngine` 缺省为 `true`，因此 `await ctx.radio.power.set('on')` 会走物理开机、自动连接并启动 TX-5DR 引擎。
+`ctx.radio` 只在服务端插件上下文中可用。`power.set()` 的 `profileId` 缺省为当前 active profile，`autoEngine` 缺省为 `true`。
 
 #### LogbookAccess
 
 ```typescript
 interface LogbookAccess {
-  // === 只读查询（原有） ===
+  // 只读查询
   hasWorked(callsign: string): Promise<boolean>;
   hasWorkedDXCC(dxccEntity: string): Promise<boolean>;
   hasWorkedGrid(grid: string): Promise<boolean>;
 
-  // === 高级查询 ===
+  // 高级查询
   queryQSOs(filter: QSOQueryFilter): Promise<QSORecord[]>;
   countQSOs(filter?: QSOQueryFilter): Promise<number>;
 
-  // === 写入 ===
+  // 呼号绑定访问器（global 实例用）
+  forCallsign(callsign: string): CallsignLogbookAccess;
+
+  // 写入
   addQSO(record: QSORecord): Promise<void>;
   updateQSO(qsoId: string, updates: Partial<QSORecord>): Promise<void>;
 
-  // === 通知 ===
-  notifyUpdated(): void;
+  // 通知
+  notifyUpdated(): Promise<void>;
+}
+
+interface CallsignLogbookAccess {
+  readonly callsign: string;
+  getLogBookId(): Promise<string | null>;
+  queryQSOs(filter: QSOQueryFilter): Promise<QSORecord[]>;
+  countQSOs(filter?: QSOQueryFilter): Promise<number>;
+  addQSO(record: QSORecord): Promise<void>;
+  updateQSO(qsoId: string, updates: Partial<QSORecord>): Promise<void>;
+  getStatistics(): Promise<LogBookStatistics | null>;
+  notifyUpdated(operatorId?: string): Promise<void>;
 }
 ```
 
@@ -564,6 +509,7 @@ interface QSOQueryFilter {
   timeRange?: { start: number; end: number };
   frequencyRange?: { min: number; max: number };
   mode?: string;
+  band?: string;
   qslStatus?: 'confirmed' | 'uploaded' | 'none';
   limit?: number;
   offset?: number;
@@ -575,25 +521,12 @@ interface QSOQueryFilter {
 
 ```typescript
 interface BandAccess {
-  getActiveCallers(): ParsedFT8Message[];  // 当前时隙的 CQ 台列表
-  getLatestSlotPack(): SlotPack | null;   // 最新解码包
+  getActiveCallers(): ParsedFT8Message[];
+  getLatestSlotPack(): SlotPack | null;
   findIdleTransmitFrequency(options?: IdleTransmitFrequencyOptions): number | null;
   evaluateAutoTargetEligibility(message: ParsedFT8Message): {
     eligible: boolean;
-    reason:
-      | 'non_cq_message'
-      | 'plain_cq'
-      | 'missing_callsign_identity'
-      | 'missing_target_identity'
-      | 'unsupported_activity_token'
-      | 'unsupported_callback_token'
-      | 'continent_match'
-      | 'continent_mismatch'
-      | 'dx_match'
-      | 'dx_same_continent'
-      | 'entity_match'
-      | 'entity_mismatch'
-      | 'unknown_modifier';
+    reason: string;
     modifier?: string;
   };
 }
@@ -603,56 +536,35 @@ interface BandAccess {
 
 ```typescript
 interface UIBridge {
-  /** 推送结构化面板数据（panelId 必须与 panels[].id 匹配） */
+  /** 推送结构化面板数据 */
   send(panelId: string, data: unknown): void;
 
-  /** 更新静态或动态面板的标题、可见性等运行期 meta */
-  setPanelMeta(panelId: string, meta: {
-    title?: string;
-    visible?: boolean;
-  }): void;
+  /** 更新面板运行期 meta（标题、可见性等） */
+  setPanelMeta(panelId: string, meta: PanelMeta): void;
 
-  /**
-   * 替换一个运行期 UI Contribution group。
-   * 静态 PluginDefinition.panels 会由宿主作为保留的 manifest group 暴露。
-   */
+  /** 替换一个运行期 UI Contribution group */
   setPanelContributions(groupId: string, panels: PluginPanelDescriptor[]): void;
 
   /** 清空一个运行期 UI Contribution group */
   clearPanelContributions(groupId: string): void;
 
-  /**
-   * 注册 iframe 页面消息处理器
-   * iframe 通过 bridge.invoke(action, data) 发送请求，宿主路由到此处理器
-   * 每个插件实例只能注册一个处理器
-   */
+  /** 注册 iframe 页面消息处理器（每实例一个） */
   registerPageHandler(handler: PluginUIHandler): void;
 
-  /**
-   * 主动推送消息到指定页面 session
-   * 当插件已知 pageSessionId 时，优先使用这个接口
-   */
+  /** 推送到指定 page session */
   pushToSession(pageSessionId: string, action: string, data?: unknown): void;
 
-  /**
-   * 列出当前插件实例、当前 pageId 下的活跃 session
-   * 适合后台任务/同步完成后批量通知所有打开中的页面
-   */
-  listActivePageSessions(pageId: string): Array<{
-    sessionId: string;
-    pageId: string;
-    resource?: {
-      kind: 'callsign' | 'operator';
-      value: string;
-    };
-  }>;
+  /** 列出当前实例下某 pageId 的活跃 session */
+  listActivePageSessions(pageId: string): PluginUIPageSessionInfo[];
 
-  /**
-   * 主动推送消息到 iframe 页面
-   * 页面通过 bridge.onPush(action, callback) 接收
-   * 仅当当前插件实例下该 pageId 恰好只有一个活跃 session 时可用
-   */
+  /** 推送到 iframe 页面（仅当该 pageId 恰好有一个 session 时可用） */
   pushToPage(pageId: string, action: string, data?: unknown): void;
+}
+
+interface PanelMeta {
+  title?: string | null;
+  titleValues?: Record<string, unknown>;
+  visible?: boolean;
 }
 
 interface PluginUIHandler {
@@ -660,109 +572,42 @@ interface PluginUIHandler {
     pageId: string,
     action: string,
     data: unknown,
-    requestContext: {
-      pageSessionId: string;
-      user: {
-        tokenId: string;
-        role: 'viewer' | 'operator' | 'admin';
-        operatorIds: string[];
-      };
-      instanceTarget:
-        | { kind: 'global' }
-        | { kind: 'operator'; operatorId: string };
-      resource?: {
-        kind: 'callsign' | 'operator';
-        value: string;
-      };
-      page: {
-        sessionId: string;
-        pageId: string;
-        resource?: {
-          kind: 'callsign' | 'operator';
-          value: string;
-        };
-        push(action: string, data?: unknown): void;
-      };
-    },
+    requestContext: PluginUIRequestContext,
   ): Promise<unknown>;
 }
 ```
 
-`panelId` 必须与当前插件实例贡献出的静态或动态 panel id 匹配。数据通过 `pluginData` 事件推送到前端对应面板。
-`requestContext` 由宿主基于页面 session 注入；插件不应再信任 iframe 自报的 `callsign` / `operatorId` / `pageSessionId` 做鉴权。
-其中：
+`requestContext` 由宿主基于页面 session 注入，包含：
 
-- `requestContext.instanceTarget` 表示本次页面请求最终命中的插件实例（global 或某个 operator 实例）
-- `requestContext.page.push()` 是对当前 session 的便捷封装，等价于 `ctx.ui.pushToSession(requestContext.page.sessionId, ...)`
-- `ctx.ui.pushToSession()` 只允许推送到当前插件实例真实拥有的 session；未知 session 或跨实例 session 会直接报错
-- `ctx.ui.pushToPage()` 现在只是兼容辅助接口：若同一插件实例下该 `pageId` 同时打开了多个页面，会抛出 `explicit_page_session_required`
+- `pageSessionId` — 页面 session ID
+- `user` — 当前用户信息（tokenId, role, operatorIds, permissionGrants）
+- `instanceTarget` — 插件实例目标（global 或 operatorId）
+- `resource` — 绑定的资源（如 callsign）
+- `page` — 页面上下文（含 `push()` 快捷方法）
+- `files` — 页面 scope 的文件存储
 
 ### 4.3 OperatorControl
 
-操作员控制接口，提供对当前操作员的完整访问能力。
-
 ```typescript
 interface OperatorControl {
-  // ===== 只读属性 =====
-
-  /** 操作员唯一 ID */
   readonly id: string;
-
-  /** 是否正在发射 */
   readonly isTransmitting: boolean;
-
-  /** 呼号 */
   readonly callsign: string;
-
-  /** 网格定位符（如 "PL09"） */
   readonly grid: string;
-
-  /** 音频偏移频率（Hz，在通带内，通常 200-3000） */
   readonly frequency: number;
-
-  /** 当前模式（FT8/FT4，含时隙信息） */
   readonly mode: ModeDescriptor;
-
-  /** 发射周期配置（0=偶数时隙，1=奇数时隙） */
   readonly transmitCycles: number[];
+  /** 当前自动化运行时快照 */
+  readonly automation: StrategyRuntimeSnapshot | null;
 
-  // ===== 控制方法 =====
-
-  /** 启用发射 */
   startTransmitting(): void;
-
-  /** 停止发射 */
   stopTransmitting(): void;
-
-  /**
-   * 呼叫指定呼号
-   * lastMessage 为触发呼叫的解码消息（用于确定发射时隙）
-   */
   call(callsign: string, lastMessage?: { message: FrameMessage; slotInfo: SlotInfo }): void;
-
-  /** 设置发射周期（0=偶数，1=奇数，[0,1]=双向） */
   setTransmitCycles(cycles: number | number[]): void;
-
-  // ===== 查询方法 =====
-
-  /** 查询是否已与某呼号通联（异步查询日志本） */
   hasWorkedCallsign(callsign: string): Promise<boolean>;
-
-  /**
-   * 检查是否有其他同呼号操作员正在与该目标通联
-   * 用于防止多操作员重复呼叫同一目标
-   */
   isTargetBeingWorkedByOthers(targetCallsign: string): boolean;
-
-  // ===== 通知方法 =====
-
-  /** 记录 QSO 到日志本 */
   recordQSO(record: QSORecord): void;
-
-  /** 通知前端更新 TX1-TX6 时隙内容显示 */
   notifySlotsUpdated(slots: OperatorSlots): void;
-
-  /** 通知前端状态机状态变更 */
   notifyStateChanged(state: string): void;
 }
 ```
@@ -775,222 +620,90 @@ interface OperatorControl {
 
 | Hook | 参数 | 返回 | 安全网 |
 |------|------|------|--------|
-| `onFilterCandidates` | `candidates: ParsedFT8Message[]` | 过滤后的列表 | 若返回空数组且输入非空，跳过此插件 |
-| `onScoreCandidates` | `candidates: ScoredCandidate[]` | 评分后的列表 | 无 |
-
-`ScoredCandidate` 是 `ParsedFT8Message` 的扩展，附加 `score: number` 字段。通常由工具插件做前置过滤和评分；活跃策略插件如果也声明了这些 hook，同样会参与这条链路。
-
-#### Score Hook 使用规范
-
-对于“偏好排序型” utility 插件，推荐实现 `onScoreCandidates(candidates, ctx)`，通过修改 `candidate.score` 参与 Host 的候选排序，而不是直接发起呼叫或私自跳过整条决策链：
-
-- **排序型插件只调分，不直接控制发射**：例如“已通联偏置”“新实体加分”“低信噪比减分”
-- **建议保留候选集合结构**：返回与输入一一对应的候选对象，仅调整 `score`
-- **加减分可叠加**：多个评分插件会按链式顺序依次累计分值，因此更适合表达“偏好”而不是“强制”
-- **硬过滤应使用 `onFilterCandidates`**：如果你的规则是“绝不考虑某类候选”，应走过滤 hook，而不是给一个极端分数伪装成过滤
-- **最终目标选择仍由 Host/活跃策略决定**：评分插件影响排序，但不替代策略运行时
-
-内置 `worked-station-bias` 就是标准示例：它通过 `ctx.logbook.hasWorked(callsign)` 查询是否已通联，再对候选施加 bonus / penalty，而不直接调用任何起呼控制。
+| `onFilterCandidates` | `candidates: ParsedFT8Message[], ctx` | 过滤后的列表 | 若返回空数组且输入非空，跳过此插件 |
+| `onScoreCandidates` | `candidates: ScoredCandidate[], ctx` | 评分后的列表 | 无 |
+| `onAutoCallCandidate` | `slotInfo, messages, ctx` | `AutoCallProposal \| null` | 多插件按优先级仲裁 |
+| `onConfigureAutoCallExecution` | `request, plan, ctx` | 更新后的 plan | 链式修改执行计划 |
 
 #### Strategy Runtime（仅活跃策略插件）
 
-每个操作员只有一个活跃策略插件。策略插件不再通过黑盒字符串命令参与内部控制，而是必须显式创建 `StrategyRuntime`：
+每个操作员只有一个活跃策略插件。策略插件必须显式创建 `StrategyRuntime`：
 
 | 方法 | 触发时机 | 说明 |
 |------|---------|------|
-| `decide(messages, meta)` | 每个时隙开始（仅对正在发射的操作员） | 核心决策：接收解码消息，决定下一步动作 |
-| `getTransmitText()` | 编码时机（仅当前周期需要发射时） | 返回本时隙要发射的文本，null 表示不发射 |
-| `requestCall(callsign, lastMessage?)` | 用户手动点击呼叫 | 处理用户主动呼叫某呼号的请求 |
+| `decide(messages, meta?)` | 每个时隙开始 | 核心决策，返回 `StrategyDecision` |
+| `getTransmitText()` | 编码时机 | 返回要发射的文本，null 表示不发射 |
+| `requestCall(callsign, lastMessage?)` | 用户手动点击呼叫 | 处理用户主动呼叫 |
 | `patchContext(patch)` | 用户修改上下文 | 更新 target/report 等策略上下文 |
 | `setState(state)` | 用户手动切换 TX 状态 | 直接切换策略运行时状态 |
 | `setSlotContent({ slot, content })` | 用户编辑槽位文本 | 直接更新指定槽位文本 |
 | `getSnapshot()` | 服务端同步状态给客户端 | 返回当前状态/槽位/上下文快照 |
 | `reset(reason?)` | 插件重载、策略切换等 | 重置策略运行时 |
-| `onTransmissionQueued(text)` | 发射内容进入编码队列 | 可选，用于记录“本次内容已排队” |
+| `onTransmissionQueued?(text)` | 发射内容进入编码队列 | 可选通知 |
 
-> **时序参考**（FT8 示例）：
-> - T+0ms：`slotStart` → `runtime.decide(...)`（决策窗口）
-> - T+780ms：`encodeStart` → `runtime.getTransmitText()`（获取发射文本）
-> - T+1180ms：`transmitStart`（PTT 激活，音频播放）
+`StrategyDecision` 接口：
 
-`StrategyDecision.stop` 的统一宿主语义如下：
+```typescript
+interface StrategyDecision {
+  stop?: boolean;        // 停止自动化；isReDecision 时还会中断当前发射
+  qsoFailure?: QSOFailureInfo;
+}
 
-- **普通决策**：`{ stop: true }` 表示停止该 operator 的自动化运行，后续不再继续排队发射
-- **晚到解码重决策**（`meta.isReDecision === true`）：除停止自动化外，Host 还会立即中断该 operator 当前已经在播放/PTT 中的发射贡献
-- **不要把“停止逻辑状态”和“停止当前实际发射”拆成私有黑盒约定**：第三方 strategy 只需返回 `stop: true`，Host 会按 `meta.isReDecision` 统一执行
-- **适用场景**：例如当前 TX 周期中晚到收到对方 `73`，strategy 可以直接返回 `stop: true`，Host 会立刻停掉本 operator 的实际发射，而不是拖到本周期结束
-
-> 注意：运行时的核心控制命令走系统的强类型接口（如 `setOperatorRuntimeState`、`setOperatorRuntimeSlotContent`、`setOperatorTransmitCycles`），而不是走 `pluginUserAction` 这类泛型插件消息。
+interface StrategyDecisionMeta {
+  isReDecision?: boolean; // 是否为晚到解码的重决策
+}
+```
 
 #### Broadcast Hooks（所有活跃插件并发接收）
 
-Fire-and-forget，不阻塞主流程，错误只记录不影响其他插件。
+Fire-and-forget，不阻塞主流程。
 
-| Hook | 触发条件 | 典型用途 |
-|------|---------|---------|
-| `onSlotStart` | 每个时隙开始 | 定时统计、状态检查 |
-| `onDecode` | 收到解码结果（即使未发射）| 监听模式、发现目标自动唤醒 |
-| `onQSOStart` | 锁定目标呼号时 | 记录 QSO 开始时间 |
-| `onQSOComplete` | QSO 成功完成时 | 统计、推送通知、外部上传 |
-| `onQSOFail` | QSO 超时/失败时 | 记录失败原因 |
-| `onTimer` | 命名定时器触发时 | Band hopping、定时停止 |
-| `onUserAction` | 用户点击 QuickAction 按钮 | 响应用户操作（`actionId, payload, ctx`） |
-| `onConfigChange` | 插件设置变更时 | 热更新内部状态 |
+| Hook | 签名 | 典型用途 |
+|------|------|---------|
+| `onSlotStart` | `(slotInfo, messages, ctx)` | 定时统计、状态检查 |
+| `onDecode` | `(messages, ctx)` | 监听模式、发现目标自动唤醒 |
+| `onQSOStart` | `(info: { targetCallsign, grid? }, ctx)` | 记录 QSO 开始时间 |
+| `onQSOComplete` | `(record: QSORecord, ctx)` | 统计、推送通知、外部上传 |
+| `onQSOFail` | `(info: QSOFailureInfo, ctx)` | 记录失败原因 |
+| `onTimer` | `(timerId, ctx)` | Band hopping、定时停止 |
+| `onUserAction` | `(actionId, payload, ctx)` | 响应用户点击 QuickAction |
+| `onConfigChange` | `(changes: Record<string, unknown>, ctx)` | 热更新内部状态 |
 
-`onUserAction` 只用于**插件自定义交互**。系统内部的操作员状态切换、槽位编辑、发射周期切换等核心控制，不再通过这个入口传递。
+`onConfigChange` 接收一个 `changes` 对象，只包含本次变更的 key/value。
 
-#### Autocall Proposal Hook（自动起呼提议）
+#### Autocall Proposal Hook
 
-对于“守候型” utility 插件，推荐实现 `onAutoCallCandidate(slotInfo, messages, ctx)`，返回：
+对于"守候型" utility 插件，推荐实现 `onAutoCallCandidate(slotInfo, messages, ctx)`，返回 `AutoCallProposal | null`：
 
 ```typescript
 {
   callsign: string;
-  priority?: number;
+  priority?: number;     // 优先级，越大越优先
   lastMessage?: { message: FrameMessage; slotInfo: SlotInfo };
 }
 ```
 
-- Host 会收集所有活跃 utility 插件的提议，而不是允许它们在广播 Hook 中直接抢占 `ctx.operator.call(...)`
-- 仲裁顺序为：`priority` 高者优先 → 命中消息在当前时隙中的顺序 → 插件名稳定排序
-- 仲裁完成后，Host 最多只会执行一次统一的 `requestCall(...)`
-- 旧插件仍可继续在 `onSlotStart` / `onDecode` 中直接 `call()`，但新的内置自动起呼插件都应优先改用 proposal hook，以获得可组合、可预测的兼容行为
+- Host 收集所有 proposal 后统一仲裁：`priority` 高者优先 → 命中消息顺序 → 插件名稳定排序
+- 仲裁完成后最多执行一次 `requestCall()`
+- 触发源是 CQ 时，proposal 仍受宿主统一的 directed CQ / modifier 过滤
 
-#### Autocall Proposal 使用规范
+#### Autocall Execution Hook
 
-推荐把 `onAutoCallCandidate(...)` 视为“提议接口”，而不是“立即执行接口”：
-
-- **只提议，不抢执行**：新自动起呼插件应返回 proposal，由 Host 统一仲裁；不要在同一个触发路径里再直接调用 `ctx.operator.call(...)`
-- **只用于 utility 插件**：策略插件继续通过 `StrategyRuntime` 决定流程；proposal hook 主要用于“守候型”“发现型”“机会型”自动起呼工具插件
-- **未命中就返回空**：当前时隙不满足条件时返回 `null` / `undefined`；不要返回空字符串或无效对象
-- **尽量附带 `lastMessage`**：这样 Host 可以在同优先级下按命中的消息顺序稳定排序，也能更好保留触发时隙上下文
-- **`lastMessage.slotInfo` 必须表达“触发消息所属时隙”**：不要把它当成“当前 hook 被调用时的时隙”。自动起呼最终会根据这条消息所在的 RX 时隙来推导下一个 TX 周期，若时隙写错，就可能出现同一时隙误发
-- **插件内部仍负责业务过滤**：例如 trigger mode、是否被其他操作员占用、是否忽略 deleted DXCC、是否满足自己的黑白名单规则
-- **最终是否真的起呼以 Host 为准**：Host 只会在“纯待机”状态接受 proposal——即当前未发射、策略处于待机槽位，且没有已锁定目标
-- **Host 会再做一次统一的“自动目标资格过滤”**：即使插件自己命中了某条 CQ，只要这条 CQ 的 directed token（如 `EU` / `DX` / `JA` / `290` / `POTA`）判定为“不应自动回复”，proposal 仍会被 Host 拒绝
-
-#### 自动起呼时隙语义
-
-自动起呼最容易踩坑的点，不是优先级，而是**时隙语义**：
-
-- `onAutoCallCandidate(slotInfo, messages, ctx)` 中的 `slotInfo` 表示当前这次 Host 广播对应的时隙上下文
-- 但 `messages` 里的每条解码，才真正代表“哪一个 RX 时隙收到的消息”
-- 对于自动起呼来说，后续实际选择哪个 TX 周期，应以**命中的那条消息所属时隙**为准，而不是简单以当前 hook 参数里的 `slotInfo` 为准
-
-推荐规则：
-
-- 如果你能准确拿到触发消息的来源时隙，就把它写进 `lastMessage.slotInfo`
-- 如果你返回的只是当前命中的 `ParsedFT8Message`，Host 也会尽量按消息自身的 `timestamp/slotId` 去恢复正确来源时隙
-- 无论插件内部如何实现，都应保证“收到对方某一时隙的 CQ，自己应在下一相反时隙回复”，而不是在同一时隙直接发射
-
-#### 统一的自动目标资格过滤
-
-从当前版本开始，**自动回复 CQ** 与 **自动起呼 proposal** 共享同一套宿主级资格判定逻辑。它的目标不是“解析所有 CQ 花样”，而是：
-
-- 能明确判断时，自动化按规则放行
-- 不能明确判断时，自动化默认保守拒绝，避免误呼叫
-
-当前规则如下：
-
-- **普通 CQ**：`CQ CALL GRID` 正常允许
-- **大洲定向 CQ**：`CQ EU` / `CQ AS` / `CQ NA` / `CQ SA` / `CQ AF` / `CQ OC` / `CQ AN`
-  - 宿主会根据**自己的呼号**推导自己所属的 continent / DXCC 归属
-  - 只有当自己身份命中对应大洲时，才允许自动回复
-- **`CQ DX`**：
-  - 按 HF 常见操作语义处理为“**本洲之外**”才允许自动回复
-  - 如果宿主无法可靠解析自己或对方的归属，则保守拒绝
-- **前缀 / 实体型定向 CQ**：例如 `CQ JA` / `CQ BG` / `CQ BY`
-  - 宿主会尝试把 token 解释为 DXCC 前缀/实体
-  - 只有当该 token 与自己的 DXCC 归属一致时，才允许自动回复
-- **数字回呼 token**：例如 `CQ 290 K1ABC FN42`
-  - 当前自动化不支持，统一拒绝
-- **活动 / 身份 / 竞赛 token**：例如 `CQ POTA` / `CQ SOTA` / `CQ WWFF` / `CQ QRP` / `CQ TEST`
-  - 当前统一按保守策略拒绝
-- **未知或歧义 token**：
-  - 当前统一拒绝，而不是猜测语义
-
-兼容性约束：
-
-- 这套过滤只影响**自动化**，不影响用户手动点呼
-- 非 CQ 的直接对我呼叫、报告交换、`RRR` / `73` 等消息，不走 CQ directed token 过滤
-- `FT8MessageCQ.flag` 这个字段名为了兼容仍然保留，但语义应理解为“**CQ modifier / directed token**”，不再只是狭义的区域 flag
-
-#### Autocall Execution Hook（自动起呼执行策略）
-
-当某个 proposal 胜出后，Host 会继续串行调用 `onConfigureAutoCallExecution(request, plan, ctx)`：
+proposal 胜出后，Host 串行调用 `onConfigureAutoCallExecution(request, plan, ctx)` 来修改执行计划：
 
 ```typescript
-{
-  request: {
-    sourcePluginName: string;
-    callsign: string;
-    slotInfo: SlotInfo;
-    sourceSlotInfo?: SlotInfo;
-    lastMessage?: { message: FrameMessage; slotInfo: SlotInfo };
-  };
-  plan: {
-    audioFrequency?: number;
-  };
+interface AutoCallExecutionRequest {
+  sourcePluginName: string;
+  callsign: string;
+  slotInfo: SlotInfo;
+  sourceSlotInfo?: SlotInfo;
+  lastMessage?: LastMessageInfo;
+}
+
+interface AutoCallExecutionPlan {
+  audioFrequency?: number;
 }
 ```
-
-- 这一步发生在仲裁之后、真正 `requestCall(...)` 之前
-- 适合放“命中后怎么执行”的共享策略，而不是“是否命中目标”的发现逻辑
-- 多个插件会按 utility pipeline 顺序依次修改 `plan`，因此比在 Host 中硬编码读取某个插件配置更透明，也更便于组合
-- `request.slotInfo` 表示“当前准备开始自动起呼的发射时隙”，`request.sourceSlotInfo` 表示“触发该 proposal 的来源接收时隙”
-- 当前内置的 `autocall-idle-frequency` 就使用这个 hook，基于 `request.sourceSlotInfo` 来决定是否先切到更空闲的发射音频频率
-
-#### 空闲频率选择 API
-
-如果插件需要复用系统内已有的“自动选择空闲发射音频频率”能力，可直接使用：
-
-```typescript
-ctx.band.findIdleTransmitFrequency({
-  slotId: request.sourceSlotInfo?.id,
-  minHz: 300,
-  maxHz: 3000,
-  guardHz: 100,
-});
-```
-
-- 这个 API 暴露在 `plugin-api` 层，而不是要求插件自行实现频谱占用分析
-- 当前底层直接复用了系统内部已有的空闲频率选择逻辑（`SlotPackManager.findBestTransmitFrequency(...)`）
-- 当宿主暂时无法计算，或当前时隙没有合适空闲窗口时，会返回 `null`
-- 对自动起呼场景，通常应分析“来源接收时隙”而不是“当前发射时隙”，否则很可能拿不到实际触发 proposal 的解码环境
-
-#### 自动目标资格 API
-
-如果第三方插件也想复用宿主内置的 directed CQ / modifier 判定，而不是自己手写一套规则，可直接使用：
-
-```typescript
-const decision = ctx.band.evaluateAutoTargetEligibility(candidate);
-
-if (!decision.eligible) {
-  ctx.log.debug('Target rejected by host eligibility rules', {
-    reason: decision.reason,
-    modifier: decision.modifier,
-    message: candidate.rawMessage,
-  });
-}
-```
-
-- 这个接口返回的就是 Host 当前对“这条消息是否允许自动化响应”的最终判断
-- 最常见用法：
-  - 在 `onFilterCandidates(...)` 中直接过滤不合格目标
-  - 在 `onAutoCallCandidate(...)` 中先检查，再决定是否提议自动起呼
-  - 在自定义面板或日志中展示“为什么这条 CQ 没有被自动跟进”
-- 它与 Host 内部用于 `standard-qso` 自动回复 CQ、proposal 型自动起呼仲裁前校验的是同一套规则
-
-#### Autocall Priority 约定
-
-`priority` 建议表达“插件意图强弱”，而不是复用为插件内部规则排序：
-
-- `100+`：强指令型守候，例如显式 watch list、sked、朋友台、指定 DX
-- `60~99`：高价值机会型守候，例如新 DXCC / 新网格 / 新呼号
-- `1~59`：弱偏好型自动起呼，例如轻量机会捕捉或普通偏好补充
-- `0`：未显式配置优先级时的默认层级
-
-推荐把优先级暴露为 **operator scope** 设置，以便不同操作员独立调整；但是否放进 quick settings 由插件 UI 自行决定。
 
 ### 4.5 设置系统
 
@@ -998,37 +711,15 @@ if (!decision.eligible) {
 
 ```typescript
 interface PluginSettingDescriptor {
-  /** 值类型 */
   type: 'boolean' | 'number' | 'string' | 'string[]' | 'object[]' | 'info';
-
-  /** 默认值。type='info' 时通常传空字符串即可 */
   default: unknown;
-
-  /**
-   * i18n key，从插件自带的翻译命名空间查找
-   * 找不到则直接显示此字符串
-   */
-  label: string;
-
-  /** 可选：补充描述。type='info' 时通常作为正文说明显示 */
+  label: string;         // i18n key
   description?: string;
-
-  /**
-   * 作用域
-   * 'global'：所有操作员共享，显示在"插件设置"Tab
-   * 'operator'：每个操作员独立，显示在操作员配置面板
-   * 默认为 'global'
-   */
-  scope?: 'global' | 'operator';
-
-  /** 数值范围（type='number' 时有效） */
+  scope?: 'global' | 'operator';  // 默认 'global'
   min?: number;
   max?: number;
-
-  /** 枚举选项（type='string' 时显示为下拉） */
   options?: Array<{ label: string; value: string }>;
-
-  /** type='object[]' 时用于生成每一项的字段编辑器 */
+  /** type='object[]' 时用于生成编辑器字段 */
   itemFields?: Array<{
     key: string;
     type?: 'string' | 'number' | 'boolean';
@@ -1037,126 +728,70 @@ interface PluginSettingDescriptor {
     placeholder?: string;
     required?: boolean;
   }>;
+  /** 隐藏设置（持久化但不显示在 UI） */
+  hidden?: boolean;
 }
 ```
 
-#### `object[]` 类型的语义
-
-- `object[]` 用于声明“由宿主生成编辑器的对象列表”，适合全局共享的 Tab、URL、规则条目等简单结构
-- 每一项的字段由 `itemFields` 描述；当前生成式编辑器支持 `string`、`number`、`boolean` 三类字段
-- 宿主只负责配置表单和持久化，插件仍应在运行时自行清洗、去重和补默认值
-- 如果某个对象需要复杂交互、远程校验或多步骤选择，应改用 iframe 设置页面，而不是把所有逻辑塞进 `object[]`
-
-示例：
-
-```typescript
-settings: {
-  voiceRightTabs: {
-    type: 'object[]',
-    default: [],
-    label: 'voiceRightTabs',
-    scope: 'global',
-    itemFields: [
-      { key: 'title', type: 'string', label: 'tabTitle', required: true },
-      { key: 'url', type: 'string', label: 'tabUrl', required: true },
-    ],
-  },
-}
-```
-
-#### `info` 类型的语义
-
-- `info` 是一个纯展示节点，不代表真实配置值
-- 不会写入 `ctx.config`
-- 不参与前端脏数据比较
-- 不会进入保存请求
-- 可用于 `global` 和 `operator` 两种 scope
-
-示例：
-
-```typescript
-settings: {
-  strategyOverview: {
-    type: 'info',
-    default: '',
-    label: 'strategyOverview',
-    description: 'strategyOverviewDesc',
-    scope: 'operator',
-  },
-  autoReplyToCQ: {
-    type: 'boolean',
-    default: false,
-    label: 'autoReplyToCQ',
-    scope: 'operator',
-  },
-}
-```
-
-对应翻译：
-
-```json
-{
-  "strategyOverview": "策略说明",
-  "strategyOverviewDesc": "该策略负责标准通联流程，包括自动回复、目标选择与超时控制。"
-}
-```
+- `info` 类型是纯展示节点，不参与持久化和脏数据比较
+- `hidden` 设置仍然持久化和注入 `ctx.config`，只是不在生成的 UI 中显示
+- `object[]` 适合简单的全局共享列表；复杂交互建议用 iframe 设置页面
 
 #### ctx.config 的合并规则
-
-`ctx.config` 是只读的合并视图：
 
 ```
 最终值 = operator-scope 配置 覆盖 global-scope 配置 覆盖 defaults
 ```
 
-同一个 key 不能同时是 global 和 operator scope。
-`info` 类型不参与上述合并。
+同一个 key 不能同时是 global 和 operator scope。`info` 和 `hidden` 类型不参与上述合并中的 scope 覆盖逻辑。
 
 #### 持久化位置
 
 - **Global settings**：`config.plugins.configs[pluginName].settings`（在 `config.json` 中）
 - **Operator settings**：`config.plugins.operatorSettings[operatorId][pluginName]`（在 `config.json` 中）
 
-对于 operator-scope 的 utility 插件，推荐把“是否启用”隐含在配置内容里，而不是额外再做一个单独开关。例如黑名单为空、守候名单为空，都可以自然表示“当前操作者未启用该功能”。
+#### 配置自更新
 
-### 4.6 QuickActions
+插件可通过 `ctx.updateConfig(patch)` 修改自身设置：
 
-QuickActions 出现在操作员面板右上角的自动化下拉面板中。
+```typescript
+await ctx.updateConfig({ lastSyncTime: Date.now() });
+```
+
+此时会走完整的 validate → persist → onConfigChange → 推送前端流程。
+
+### 4.6 QuickActions 与 QuickSettings
+
+#### QuickActions
+
+QuickActions 出现在操作员面板右上角的自动化下拉面板中，点击触发 `hooks.onUserAction`。
 
 ```typescript
 interface PluginQuickAction {
-  /** 唯一 ID */
   id: string;
-
-  /** 显示文本（i18n key 或直接文本） */
-  label: string;
-
-  /** 可选图标名 */
-  icon?: string;
-
-  /**
-   * 'button'：点击触发 hooks.onUserAction(id, payload, ctx)
-   * 'toggle'：开关，绑定到一个 operator-scope boolean setting
-   */
-  type?: 'button' | 'toggle';
-
-  /**
-   * type='toggle' 时必填
-   * 绑定的 setting key，必须是 operator-scope boolean 类型
-   */
-  settingKey?: string;
+  label: string;  // i18n key 或直接文本
+  icon?: string;  // 图标名
 }
 ```
 
-**Toggle 工作原理**：
-1. 前端读取当前 `pluginOperatorSettings[pluginName][settingKey]` 的值决定开关状态
-2. QuickAction toggle 属于插件定义的快捷交互，用户点击后会直接更新对应 operator-scope setting
+#### QuickSettings
+
+QuickSettings 引用一个 operator-scope setting，在自动化面板中渲染为紧凑的开关控件。
+
+```typescript
+interface PluginQuickSetting {
+  settingKey: string;  // 必须是 operator-scope boolean setting
+}
+```
+
+**工作原理**：
+1. 前端读取 `operatorSettings[pluginName][settingKey]` 决定开关状态
+2. 用户切换后直接更新对应 operator-scope setting
 3. 服务端触发 `onConfigChange`，`ctx.config` 动态反映新值
 
-**与设置页保存框架的区别**：
-- 设置 → 插件 Tab 中的 utility 插件启用状态和 global-scope settings，会先进入前端草稿态
-- 这些草稿由设置弹窗底部统一“保存设置”后才提交
-- 操作员设置页中的 operator-scope 设置当前仍按插件区块分别保存
+**与 QuickAction 的区别**：
+- QuickAction（button）：点击 → `hooks.onUserAction`
+- QuickSetting（toggle）：切换 → 更新 setting → `onConfigChange`
 
 ### 4.7 Panels
 
@@ -1167,226 +802,138 @@ interface PluginPanelDescriptor {
   component: 'table' | 'key-value' | 'chart' | 'log' | 'iframe';
   /** 仅 component='iframe' 时需要，引用 ui.pages 中的页面 id */
   pageId?: string;
-  /** 可选字符串参数，会传入 iframe 的 tx5dr.params */
+  /** 可选字符串参数，传入 iframe */
   params?: Record<string, string>;
-  /** 面板渲染位置。默认 'operator'（操作员卡片）*/
+  /** 渲染位置，默认 'operator' */
   slot?: 'operator' | 'automation' | 'main-right' | 'voice-left-top' | 'voice-right-top';
-  /** 面板宽度偏好。默认 'half'；operator host 可将 'full' 解释为整行 */
+  /** 宽度偏好，默认 'half' */
   width?: 'half' | 'full';
 }
 ```
 
-#### 数据格式规范
+#### 数据格式
 
 | component | 期望的 data 格式 |
 |-----------|--------------|
 | `key-value` | `{ [key: string]: string \| number }` |
 | `table` | `Array<Record<string, unknown>>` |
 | `log` | `string[]` |
-| `chart` | 自定义（当前以 JSON 格式原样显示） |
-| `iframe` | 无需 `ctx.ui.send()` 推送数据，iframe 通过 Bridge SDK 与服务端直接通信 |
-
-> **渲染位置（`slot`）**：
-> - `'operator'`（默认）：面板出现在操作员卡片下方的展开区域
-> - `'automation'`：面板出现在右上角自动化 Popover 中
-> - `'main-right'`：面板出现在主界面最右侧的可选插件分屏
-> - `'voice-left-top'`：面板出现在语音模式左侧频率控制卡片上方
-> - `'voice-right-top'`：面板出现在语音模式右侧顶部 Tab 区域
-> - 未指定 `slot` 等同于 `'operator'`
-> - `voice-left-top` 由宿主以卡片位呈现，`main-right`/`voice-right-top` 由宿主以沉浸式 pane 或 tab 呈现
-> - 结构化面板和 iframe 面板均可使用任意 slot
-
-> **宽度偏好（`width`）**：
-> - `'half'`（默认）：按宿主默认紧凑布局渲染
-> - `'full'`：表达“这个面板更重要，优先占据更宽区域”
-> - 当前操作员卡片 host 会把 `width: 'full'` 解释为桌面端跨两列整行显示
-> - `automation` 等其他 host 可以按自己的布局策略忽略该提示，因此 `width` 是宿主可解释的声明式 hint，而不是绝对布局命令
+| `chart` | 自定义（JSON 格式原样显示） |
+| `iframe` | 不需要 `ctx.ui.send()` 推送，iframe 通过 Bridge SDK 通信 |
 
 #### 数据推送
 
 ```typescript
-// 在任意 hook 中
 ctx.ui.send('panel-id', { '总通联': 42, '今日': 5 });
 ```
 
-数据通过 WebSocket `pluginData` 事件实时推送，无需轮询。
+数据通过 WebSocket `pluginData` 事件实时推送。
 
 #### 运行期 UI Contribution
 
-`PluginDefinition.panels` 是 manifest 里的静态面板声明。宿主内部会把它规范化为一个保留的 contribution group：
+`PluginDefinition.panels` 是静态面板声明。运行时动态增减面板使用：
 
 ```typescript
-{
-  pluginName: 'my-plugin',
-  groupId: 'manifest',
-  source: 'manifest',
-  panels: definition.panels ?? [],
-}
-```
-
-如果插件需要在运行时动态增加、替换或删除面板，应使用同一套 UI Contribution 机制，而不是在 iframe 内做二级 Tab：
-
-```typescript
-ctx.ui.setPanelContributions('voice-right-web-tabs', [
-  {
-    id: 'voice-right-tab:dx-cluster',
-    title: 'DX Cluster',
-    component: 'iframe',
-    pageId: 'voice-right-webview',
-    params: { tabId: 'dx-cluster' },
-    slot: 'voice-right-top',
-    width: 'full',
-  },
+ctx.ui.setPanelContributions('my-group', [
+  { id: 'tab-1', title: 'Tab 1', component: 'iframe', pageId: 'my-page', slot: 'voice-right-top' },
 ]);
 
-// 删除该组运行期面板
-ctx.ui.clearPanelContributions('voice-right-web-tabs');
+ctx.ui.clearPanelContributions('my-group');
 ```
 
-约束：
-
-- `groupId` 必须是插件内稳定 ID；不要使用保留的 `manifest`
-- `setPanelContributions(groupId, panels)` 是“替换整个 group”的语义；传空数组等价于清空该 group
-- 静态面板和动态面板使用相同的 slot、iframe、权限、meta、snapshot 和 websocket 渲染管线
-- 同一插件实例内，合并后的 `panel.id` 必须唯一；动态面板不能和 manifest 面板或其他 runtime group 冲突
-- iframe 动态面板的 `pageId` 必须引用已声明的 `ui.pages[].id`
-- `params` 只允许字符串键值，会和宿主注入的 `operatorId`、`panelId` 一起出现在 `tx5dr.params`
-- `ctx.ui.setPanelMeta(panelId, meta)` 对静态与动态面板都有效；动态面板被删除后前端不再显示该 meta
+`groupId` 不能使用保留的 `manifest`。`setPanelContributions` 是替换整个 group 的语义。
 
 ### 4.8 持久化存储
 
 ```typescript
-// global scope — 所有操作员共享
+// global scope
 ctx.store.global.set('blacklist', ['BG5DRB', 'BG5CAM']);
 const blacklist = ctx.store.global.get<string[]>('blacklist', []);
 
-// operator scope — 每个操作员独立
+// operator scope
 ctx.store.operator.set('qsoCount', 42);
-const count = ctx.store.operator.get<number>('qsoCount', 0);
 ```
 
 **存储文件路径**：
 - Global：`{dataDir}/plugin-data/{name}/global.json`
 - Operator：`{dataDir}/plugin-data/{name}/operator-{operatorId}.json`
 
-这样插件源码目录（`{dataDir}/plugins/{name}`）只用于放置插件入口与资源文件，不会再被运行时状态文件污染。
-
-写操作有 300ms debounce；插件实例卸载或插件子系统关闭时自动 flush。
+写入有 300ms debounce；卸载时自动 flush。需要立即持久化时调用 `await ctx.store.global.flush()`。
 
 ### 4.9 自定义 UI（iframe 页面与面板）
 
-插件可以通过 iframe 托管自定义 HTML 页面，提供完全自由的前端交互能力。这些页面可以：
-
-- 作为 **iframe 面板** 嵌入操作员卡片或自动化 Popover（通过 `panels` 中的 `component: 'iframe'`）
-- 作为 **独立页面** 用于设置、向导等场景（如日志同步的配置页面）
+插件可以通过 iframe 托管自定义 HTML 页面。
 
 #### 声明页面
-
-在 `PluginDefinition` 中声明自定义页面：
 
 ```typescript
 const plugin: PluginDefinition = {
   name: 'my-plugin',
-  // ...
   ui: {
-    dir: 'ui',  // 静态资源目录（相对于插件根目录）
+    dir: 'ui',
     pages: [
       {
         id: 'settings',
         title: 'Settings',
         entry: 'settings.html',
-        accessScope: 'operator',
-        resourceBinding: 'callsign',
-      },
-      {
-        id: 'dashboard',
-        title: 'Dashboard',
-        entry: 'dashboard.html',
-        accessScope: 'admin',
-        resourceBinding: 'none',
+        accessScope: 'operator',           // 'admin' | 'operator', 默认 'admin'
+        resourceBinding: 'callsign',       // 'none' | 'callsign' | 'operator', 默认 'none'
       },
     ],
   },
 };
 ```
 
-页面描述符新增两个关键字段：
-
-- `accessScope: 'admin' | 'operator'`
-  - `admin`：仅管理员可访问
-  - `operator`：操作员也可访问
-- `resourceBinding: 'none' | 'callsign' | 'operator'`
-  - `none`：只校验角色
-  - `callsign`：宿主要求请求里携带 `callsign`，并校验该 token 是否有对应呼号访问权
-  - `operator`：宿主要求请求里携带 `operatorId`，并校验是否有对应操作员访问权
-
-这两个字段由宿主固定路由解释，插件**不能自行注册 HTTP 路由**。
-
-用户插件的目录结构：
-
-```
-my-plugin/
-├── plugin.js
-├── locales/
-│   ├── zh.json
-│   └── en.json
-└── ui/
-    ├── settings.html
-    ├── settings.css
-    ├── settings.js
-    ├── dashboard.html
-    ├── dashboard.css
-    └── dashboard.js
-```
+- `accessScope`: `admin` 仅管理员可访问；`operator` 操作员也可访问
+- `resourceBinding`: 宿主据此校验请求中是否携带对应资源并做访问控制
 
 #### 将 iframe 面板嵌入 UI
 
-通过在 `panels` 中声明 `component: 'iframe'` 并引用 `pageId`：
-
 ```typescript
 panels: [
-  // 操作员卡片中的 iframe 面板
   { id: 'live-view', title: 'liveView', component: 'iframe', pageId: 'dashboard' },
-  // 自动化 Popover 中的 iframe 面板
   { id: 'controls', title: 'controls', component: 'iframe', pageId: 'settings', slot: 'automation' },
 ],
 ```
 
 #### Bridge SDK
 
-宿主会自动在每个 iframe 页面中注入 Bridge SDK，通过 `window.tx5dr` 访问。主要 API：
+宿主自动在每个 iframe 页面中注入 Bridge SDK，通过 `window.tx5dr` 访问：
 
 | 方法/属性 | 说明 |
 |-----------|------|
-| `tx5dr.params` | 当前参数对象（只读；会先由 URL bootstrap，再由宿主 init 校准） |
-| `tx5dr.theme` | 当前主题：`'dark'` 或 `'light'` |
-| `tx5dr.locale` | 当前语言：如 `'zh'`、`'zh-CN'` 或 `'en'` |
-| `tx5dr.ready` | 首次宿主 init 后 resolve，返回 `{ params, theme, locale, pageSessionId }` 快照 |
-| `tx5dr.getState()` | 返回当前 Bridge 状态快照 |
-| `tx5dr.onStateChange(callback)` | 监听任意 Bridge 状态变化，返回取消订阅函数 |
-| `tx5dr.onLocaleChange(callback)` | 监听语言变化，返回取消订阅函数 |
-| `tx5dr.invoke(action, data)` | 发送请求到服务端（返回 Promise） |
-| `tx5dr.onPush(action, callback)` | 监听服务端主动推送 |
-| `tx5dr.offPush(action, callback)` | 取消推送监听 |
-| `tx5dr.resize(height)` | 报告内容高度，宿主据此调整 iframe 尺寸 |
-| `tx5dr.onThemeChange(callback)` | 监听主题切换，返回取消订阅函数 |
-| `tx5dr.requestClose()` | 请求关闭当前页面（由父组件处理） |
-| `tx5dr.storeGet(key, default)` | 读取页面私有 KV（按实例目标 + 绑定资源 + pageId 共享，返回 Promise） |
-| `tx5dr.storeSet(key, value)` | 写入页面私有 KV |
-| `tx5dr.storeDelete(key)` | 删除页面私有 KV |
-| `tx5dr.fileUpload(path, file)` | 上传文件到当前页面 scope（按实例目标 + 绑定资源 + pageId 收口），返回可在当前 page handler 中通过 `requestContext.files` 读取的相对路径 |
-| `tx5dr.fileRead(path)` | 从当前页面 scope 读取文件（返回 Blob 或 null） |
-| `tx5dr.fileDelete(path)` | 删除当前页面 scope 下的文件 |
-| `tx5dr.fileList(prefix?)` | 列出当前页面 scope 下的文件路径 |
+| `tx5dr.params` | 只读参数对象 |
+| `tx5dr.theme` | 当前主题：`'dark'` / `'light'` |
+| `tx5dr.locale` | 当前语言：`'zh'` / `'en'` |
+| `tx5dr.pageSessionId` | 宿主分配的页面 session ID |
+| `tx5dr.ready` | Promise，首次宿主 init 后 resolve |
+| `tx5dr.getState()` | 返回 Bridge 状态快照 |
+| `tx5dr.onStateChange(cb)` | 监听状态变化，返回取消函数 |
+| `tx5dr.onLocaleChange(cb)` | 监听语言变化，返回取消函数 |
+| `tx5dr.onThemeChange(cb)` | 监听主题变化，返回取消函数 |
+| `tx5dr.invoke(action, data)` | 发送请求到服务端 → `registerPageHandler` |
+| `tx5dr.onPush(action, cb)` | 监听服务端主动推送 |
+| `tx5dr.offPush(action, cb)` | 取消推送监听 |
+| `tx5dr.resize(height)` | 报告内容高度 |
+| `tx5dr.requestClose()` | 请求关闭当前页面 |
+| `tx5dr.storeGet(key, default?)` | 读取页面 scope KV |
+| `tx5dr.storeSet(key, value)` | 写入页面 scope KV |
+| `tx5dr.storeDelete(key)` | 删除页面 scope KV |
+| `tx5dr.fileUpload(path, file)` | 上传文件到页面 scope |
+| `tx5dr.fileRead(path)` | 读取页面 scope 文件 |
+| `tx5dr.fileDelete(path)` | 删除页面 scope 文件 |
+| `tx5dr.fileList(prefix?)` | 列出页面 scope 文件 |
 
-#### invoke / onPush 通信模型
+#### invoke / onPush 通信
 
-**iframe → 服务端**（请求/响应）：
+**iframe → 服务端**：
 
 ```javascript
-// iframe 端
-var result = await tx5dr.invoke('getState', { key: 'counter' });
+// iframe
+const result = await tx5dr.invoke('getState', { key: 'counter' });
+```
 
+```typescript
 // 服务端（onLoad 中注册）
 ctx.ui.registerPageHandler({
   async onMessage(pageId, action, data) {
@@ -1397,50 +944,33 @@ ctx.ui.registerPageHandler({
 });
 ```
 
-**服务端 → iframe**（主动推送）：
+**服务端 → iframe**：
 
-```javascript
-// 服务端（任意 hook 或定时器中）
+```typescript
+// 服务端
 ctx.ui.pushToPage('dashboard', 'dataUpdated', { value: 42 });
 
-// iframe 端
-tx5dr.onPush('dataUpdated', function(data) {
-  document.getElementById('value').textContent = data.value;
-});
-```
-
-当插件需要更精确地控制推送目标时，推荐改用 session 级 API：
-
-```javascript
-ctx.ui.registerPageHandler({
-  async onMessage(pageId, action, data, requestContext) {
-    if (action === 'save') {
-      await saveSomething(data);
-
-      // 只回推当前发起请求的这个页面 session
-      requestContext.page.push('saved', { ok: true });
-      return { ok: true };
-    }
-  },
-});
-
-// 后台任务/定时器：批量通知当前实例下所有打开中的页面
+// 或者精确推送到特定 session
 for (const session of ctx.ui.listActivePageSessions('dashboard')) {
   ctx.ui.pushToSession(session.sessionId, 'refresh', { reason: 'timer' });
 }
 ```
 
+```javascript
+// iframe
+tx5dr.onPush('dataUpdated', (data) => {
+  document.getElementById('value').textContent = data.value;
+});
+```
+
 #### CSS Design Tokens
 
-宿主自动注入 CSS 变量，iframe 页面无需引入额外样式文件即可适配明暗主题：
+宿主自动注入 CSS 变量，适配明暗主题：
 
 | 变量 | 说明 |
 |------|------|
-| `--tx5dr-bg` | 页面背景色 |
-| `--tx5dr-bg-content` | 内容区域背景色 |
-| `--tx5dr-bg-hover` | 悬停背景色 |
-| `--tx5dr-text` | 主文字颜色 |
-| `--tx5dr-text-secondary` | 次要文字颜色 |
+| `--tx5dr-bg` / `--tx5dr-bg-content` / `--tx5dr-bg-hover` | 背景色 |
+| `--tx5dr-text` / `--tx5dr-text-secondary` | 文字颜色 |
 | `--tx5dr-primary` | 主题色 |
 | `--tx5dr-success` / `--tx5dr-warning` / `--tx5dr-danger` | 状态色 |
 | `--tx5dr-border` | 边框颜色 |
@@ -1449,110 +979,68 @@ for (const session of ctx.ui.listActivePageSessions('dashboard')) {
 | `--tx5dr-font` / `--tx5dr-font-mono` | 字体 |
 | `--tx5dr-font-size-sm` / `-md` / `-lg` | 字号 |
 
-Bridge SDK 会在插件脚本运行前从 iframe URL 读取 `_locale`、`_theme` 和普通 query 参数，因此首屏可以同步读取 `tx5dr.locale/theme/params`。宿主随后发送 `tx5dr:init` 作为权威状态；新插件若依赖完整初始化，应等待 `tx5dr.ready`，或通过 `tx5dr.onStateChange()` / `tx5dr.onLocaleChange()` 响应后续变化，不要假设 postMessage init 一定早于前端框架首轮渲染。
-
-当宿主切换主题时，Design Tokens 自动更新，同时触发 `tx5dr.onThemeChange()` 回调。
-
-#### 高度自适应
-
-iframe 面板默认不占据固定高度。推荐使用 `ResizeObserver` 监听内容变化并报告高度：
-
-```javascript
-var observer = new ResizeObserver(function() {
-  tx5dr.resize(document.body.scrollHeight);
-});
-observer.observe(document.body);
-```
-
-#### iframe 面板 vs 独立 Pages
-
-| 特性 | iframe 面板（panels） | 独立 Pages |
-|------|---------------------|-----------|
-| 声明方式 | `panels[].component='iframe'` + `pageId` | 仅 `ui.pages[]` |
-| 渲染位置 | 操作员卡片 / 自动化 Popover | 弹窗、设置模态框 |
-| 传入参数 | `{ operatorId, panelId, ...panel.params }` 自动传入 | 由调用方传入（如 `{ callsign }`） |
-| 生命周期 | 跟随操作员卡片展开/折叠 | 跟随弹窗打开/关闭 |
-| 典型场景 | 实时数据展示、快捷控制 | 配置表单、向导流程 |
-
 #### 固定宿主路由
 
-插件 UI 统一通过宿主固定路由暴露：
+- `GET /api/plugins/:name/ui/*`：返回静态页面，自动注入 Bridge SDK
+- `POST /api/plugins/:name/ui-invoke`：`tx5dr.invoke()` 转发
+- `POST /api/plugins/:name/ui-store`：`tx5dr.store*()` 请求
+- `POST /api/plugins/:name/ui-files`：`tx5dr.file*()` 请求
+- `POST /api/plugins/:name/ui-session/heartbeat`：刷新 session TTL
 
-- `GET /api/plugins/:name/ui/*`：返回静态页面，并自动注入 Bridge SDK
-- `POST /api/plugins/:name/ui-invoke`：将 `tx5dr.invoke()` 转发给插件页处理器
-- `POST /api/plugins/:name/ui-store`：处理 `tx5dr.store*()` 请求
-- `POST /api/plugins/:name/ui-files`：处理 `tx5dr.file*()` 请求
-- `POST /api/plugins/:name/ui-session/heartbeat`：刷新页面 session TTL
-
-其中 iframe 静态页支持通过 query token 鉴权（`auth_token`，兼容 `token`）；`ui-invoke` 走常规 Bearer Token。
-宿主在页面加载时创建并锁定 `pageSessionId`；后续 invoke / store / file / heartbeat 都由宿主持有该 session，iframe 自报的 session 不作为可信输入。
-这几个路由都属于宿主固定桥接层，插件页面应通过 Bridge SDK 调用，不应自行手写 fetch 并伪造 session。
+iframe 页面应通过 Bridge SDK 调用，不应自行手写 fetch 伪造 session。
 
 ### 4.10 文件存储
 
-插件可以通过 `ctx.files` 持久化二进制文件（如证书、导入数据等），文件存储在插件的数据目录下。
-
 ```typescript
 interface PluginFileStore {
-  /** 写入（或覆盖）文件 */
   write(path: string, data: Buffer): Promise<void>;
-  /** 读取文件，不存在返回 null */
   read(path: string): Promise<Buffer | null>;
-  /** 删除文件，返回是否成功 */
   delete(path: string): Promise<boolean>;
-  /** 列出文件路径 */
   list(prefix?: string): Promise<string[]>;
 }
 ```
 
 **存储路径**：`{dataDir}/plugin-data/{pluginName}/files/`
 
-**安全约束**：所有路径参数相对于插件文件根目录解析，禁止目录穿越（`..`、绝对路径等会被拒绝）。
-iframe 页面里的 `tx5dr.file*` 与运行时 `ctx.files` 指向同一物理文件根目录，但宿主会按 `instanceTarget + bound resource + pageId` 自动收口到独立 scope。
-插件的 `ctx.ui.registerPageHandler()` 处理 iframe `invoke` 请求时，宿主会在 `requestContext.files` 上提供同一个 page-scoped 文件视图。插件需要处理上传文件时，应让 iframe 调用 `tx5dr.fileUpload(relativePath, file)`，再把返回的 `relativePath` 传给 `tx5dr.invoke()`；服务端 handler 通过 `requestContext.files.read(relativePath)` 读取，并在处理后按需 `delete(relativePath)` 清理临时文件。插件不应自行拼接 `page-resources/...` 内部路径。
-
-**典型用途**：
-- LoTW 证书文件（`.p12`）
-- 临时导入/导出数据
-- 缓存的外部资源
-
-在 iframe 页面中可通过 Bridge SDK 的 `tx5dr.fileUpload()` / `tx5dr.fileRead()` 等方法间接访问。
-`tx5dr.store*` 则是独立的 page-scoped KV，作用域同样为 `instanceTarget + bound resource + pageId`，不会自动映射到运行时的 `ctx.store`。
-
-可将两者理解为：
-
-- `ctx.store.*` / `ctx.files`：插件运行时能力，由插件实例直接使用
-- `tx5dr.store*` / `tx5dr.file*`：iframe 页面能力，由宿主按页面 session 收口后的受限访问
-
-两套能力共享同一个插件数据目录，但 iframe 页面侧的作用域更窄，始终以 `instanceTarget + bound resource + pageId` 为边界。
+**安全约束**：所有路径禁止目录穿越（`..`、绝对路径等被拒绝）。
 
 ### 4.11 日志同步 Provider
 
-工具插件可以通过 `ctx.logbookSync.register()` 注册日志同步 Provider，将外部日志服务（如 LoTW、QRZ.com、WaveLog）接入系统的统一同步框架。
+工具插件可以通过 `ctx.logbookSync.register()` 注册日志同步 Provider。
 
 #### LogbookSyncProvider 接口
 
 ```typescript
 interface LogbookSyncProvider {
-  /** 服务唯一标识（如 'lotw'、'qrz'、'wavelog'） */
   readonly id: string;
-  /** 显示名称（i18n key 或文本） */
   readonly displayName: string;
-  /** 可选图标和颜色 */
   readonly icon?: string;
   readonly color?: 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
-  /** 设置页面 ID（引用 ui.pages 中的条目） */
-  readonly settingsPageId: string;
-  /** 运行期访问范围 */
   readonly accessScope?: 'admin' | 'operator';
-  /** 自定义操作菜单（替换默认的上传/下载/全量同步三项） */
+  readonly settingsPageId: string;
   readonly actions?: SyncAction[];
 
   testConnection(callsign: string): Promise<SyncTestResult>;
-  upload(callsign: string): Promise<SyncUploadResult>;
+  upload(callsign: string, options?: SyncUploadOptions): Promise<SyncUploadResult>;
   download(callsign: string, options?: SyncDownloadOptions): Promise<SyncDownloadResult>;
   isConfigured(callsign: string): boolean;
   isAutoUploadEnabled(callsign: string): boolean;
+
+  /** 可选：上传前检查 */
+  getUploadPreflight?(callsign: string): Promise<SyncUploadPreflightResult>;
+}
+```
+
+#### SyncAction
+
+```typescript
+interface SyncAction {
+  id: string;
+  label: string;
+  description?: string;
+  icon?: 'download' | 'upload' | 'sync';
+  operation?: 'upload' | 'download' | 'full_sync';  // 直接执行
+  pageId?: string;                                    // 打开 iframe 页面
 }
 ```
 
@@ -1563,7 +1051,6 @@ onLoad(ctx) {
   const provider = new MyProvider(ctx);
   ctx.logbookSync.register(provider);
 
-  // 同时注册 iframe 设置页面的消息处理器
   ctx.ui.registerPageHandler({
     async onMessage(pageId, action, data) {
       // 处理设置页面的 invoke 请求
@@ -1572,98 +1059,50 @@ onLoad(ctx) {
 },
 ```
 
-建议所有日志同步插件都声明为：
+推荐声明为 `type: 'utility'` + `instanceScope: 'global'`，使用 `ctx.logbook.forCallsign(callsign)` 访问日志本。
 
-- `type: 'utility'`
-- `instanceScope: 'global'`
+### 4.12 宿主设置访问
 
-原因是日志同步天然按“呼号/日志本”工作，而不是按“操作员实例”工作。插件内部应使用：
-
-```typescript
-const logbook = ctx.logbook.forCallsign(callsign);
-await logbook.queryQSOs(...);
-await logbook.updateQSO(...);
-await logbook.notifyUpdated();
-```
-
-也就是说，旧版“每操作员实例各自持有一个同步插件”的方式，已经不再是推荐模型。
-
-#### SyncAction 自定义操作
+插件可通过 `ctx.settings` 访问宿主级设置，每个命名空间需要对应的 `settings:*` 权限：
 
 ```typescript
-interface SyncAction {
-  id: string;
-  label: string;
-  description?: string;
-  icon?: 'download' | 'upload' | 'sync';
-  /** 直接执行对应的 provider 方法 */
-  operation?: 'upload' | 'download' | 'full_sync';
-  /** 或者打开一个 iframe 页面让用户输入后再执行 */
-  pageId?: string;
+interface HostSettingsControl {
+  readonly ft8: HostSettingsNamespace<HostFT8Settings, HostFT8SettingsPatch>;
+  readonly decodeWindows: HostSettingsNamespace<DecodeWindowSettings, DecodeWindowSettings>;
+  readonly realtime: HostSettingsNamespace<RealtimeSettings, RealtimeSettings>;
+  readonly frequencyPresets: HostFrequencyPresetsSettingsNamespace;
+  readonly station: HostSettingsNamespace<StationInfo, HostStationInfoPatch>;
+  readonly pskReporter: HostSettingsNamespace<PSKReporterConfig, HostPSKReporterSettingsPatch>;
+  readonly ntp: HostSettingsNamespace<NtpServerListSettings, UpdateNtpServerListRequest>;
+}
+
+interface HostSettingsNamespace<TValue, TPatch> {
+  get(): Promise<TValue>;
+  update(patch: TPatch): Promise<TValue>;
 }
 ```
 
-- `operation` 和 `pageId` 二选一
-- `pageId` 模式适合需要用户输入的场景（如选择下载时间范围）
+### 4.13 插件市场
 
-#### 数据流
+系统内置官方插件市场，支持从远端 catalog 安装、更新和卸载插件。
 
-Provider 拥有 `ctx.logbook` 的完整访问权限，自行负责：
-- **查询**：`ctx.logbook.forCallsign(callsign).queryQSOs(filter)` 获取需要上传的记录
-- **写入**：`ctx.logbook.forCallsign(callsign).addQSO(record)` / `updateQSO(id, updates)` 写入下载的记录
-- **通知**：`ctx.logbook.forCallsign(callsign).notifyUpdated()` 批量写入完成后刷新前端
-
-宿主在 QSO 完成时自动检查所有 provider 的 `isAutoUploadEnabled()` 并调用 `upload()`。
-
-`notifyUpdated()` 当前会透传完整 `logbookUpdated` payload，包括：
-
-- `logBookId`
-- `statistics`
-- `operatorId?`
-
-其中 `operatorId` 会优先使用该日志本当前关联的操作员；如果在 operator-scope 上下文中调用，则会回落到当前操作员。
-
-#### 结果类型
-
-```typescript
-interface SyncTestResult {
-  success: boolean;
-  message?: string;
-  details?: unknown;
-}
-
-interface SyncUploadResult {
-  uploaded: number;
-  skipped: number;
-  failed: number;
-  errors?: string[];
-}
-
-interface SyncDownloadResult {
-  downloaded: number;
-  matched: number;
-  updated: number;
-  errors?: string[];
-}
-```
-
-#### REST API 端点
+#### REST API
 
 | Method | Path | 说明 |
 |--------|------|------|
-| `GET` | `/api/plugins/sync/providers` | 获取所有已注册的同步 provider 信息 |
-| `POST` | `/api/plugins/sync/providers/:id/test` | 测试连接 |
-| `POST` | `/api/plugins/sync/providers/:id/upload` | 上传 |
-| `POST` | `/api/plugins/sync/providers/:id/download` | 下载 |
-| `GET` | `/api/plugins/sync/configured-status` | 获取各 provider 的配置状态 |
+| `GET` | `/api/plugins/market/catalog` | 获取市场插件索引 |
+| `GET` | `/api/plugins/market/catalog/:name` | 获取单个市场条目 |
+| `POST` | `/api/plugins/market/:name/install` | 从市场安装插件 |
+| `POST` | `/api/plugins/market/:name/update` | 从市场更新插件 |
+| `DELETE` | `/api/plugins/market/:name` | 卸载市场插件（保留 plugin-data） |
+
+市场条目包含 `name`、`latestVersion`、`minHostVersion`、`artifactUrl`、`sha256`、`size`、`channel`（`stable`/`nightly`）、`categories`、`keywords` 等字段。
 
 ---
 
 ## 5. 编写你的第一个插件
 
 ### 5.1 最简工具插件（JS）
-
-适合快速验证想法，无需编译步骤：
 
 ```js
 // {pluginDir}/snr-guard/plugin.js
@@ -1695,7 +1134,7 @@ export default {
 };
 ```
 
-将其放入当前插件目录下的 `snr-guard/` 子目录后，在前端「设置 → 插件」中重载即可生效，无需重编译。
+放入插件目录后，在前端「设置 → 插件」中重载即可生效。
 
 ### 5.2 TypeScript 完整项目
 
@@ -1727,8 +1166,6 @@ my-plugin/
   }
 }
 ```
-
-这里的输出目录应当指向你本机当前 TX-5DR 运行时实际使用的插件目录；在开发环境下，默认也是系统用户数据目录下的 `TX-5DR/plugins`。如需切换基础目录，可通过 `TX5DR_DATA_DIR` 调整。
 
 **tsconfig.json**
 
@@ -1788,21 +1225,7 @@ const plugin: PluginDefinition = {
 export default plugin;
 ```
 
-**开发工作流**
-
-```bash
-# 终端 1：插件项目，直接编译到 TX-5DR 的插件目录
-npm run dev
-
-# 终端 2：TX-5DR，启动应用
-yarn dev
-
-# 修改插件代码 → tsc 自动编译 → 在 TX-5DR 界面点「重载插件」
-```
-
 ### 5.3 策略插件示例
-
-策略插件需要实现 `createStrategyRuntime(ctx)`，直接返回一个显式运行时对象，完整控制 QSO 流程：
 
 ```typescript
 import type { PluginDefinition, StrategyRuntime, ParsedFT8Message } from '@tx5dr/plugin-api';
@@ -1827,33 +1250,22 @@ const plugin: PluginDefinition = {
           attempts = 0;
         } else if (target) {
           attempts++;
-          if (attempts > 5) {
-            target = undefined;
-          }
+          if (attempts > 5) target = undefined;
         }
 
         return { stop: false };
       },
 
       getTransmitText() {
-        if (!target) {
-          return `CQ ${ctx.operator.callsign} ${ctx.operator.grid}`;
-        }
+        if (!target) return `CQ ${ctx.operator.callsign} ${ctx.operator.grid}`;
         return `${target} ${ctx.operator.callsign} -01`;
       },
 
-      requestCall(callsign) {
-        target = callsign;
-        attempts = 0;
-      },
-
+      requestCall(callsign) { target = callsign; attempts = 0; },
       patchContext() {},
       setState() {},
       setSlotContent() {},
-      reset() {
-        target = undefined;
-        attempts = 0;
-      },
+      reset() { target = undefined; attempts = 0; },
       getSnapshot() {
         return {
           currentState: target ? 'TX2' : 'TX6',
@@ -1872,260 +1284,91 @@ export default plugin;
 
 ## 6. 内置插件参考
 
-### 6.1 standard-qso（内置策略）
+内置插件位于 `packages/builtin-plugins/src/`，共 12 个。均为 `@tx5dr/builtin-plugins` 包的一部分，由 `PluginManager` 在启动时自动加载。
 
-**位置**：`packages/server/src/plugin/builtins/standard-qso/`
+### standard-qso
 
-这是系统内置的标准 FT8/FT4 QSO 策略，实现了完整的 TX1-TX6 状态机。所有操作员默认使用此策略。
+内置标准 FT8/FT4 QSO 策略。所有操作员默认使用此策略。
 
-#### Settings（均为 operator scope）
-
-| Key | 类型 | 默认值 | 说明 |
-|-----|------|--------|------|
-| `strategyOverview` | info | `''` | 纯说明节点，介绍该策略插件负责的标准通联流程 |
-| `autoReplyToCQ` | boolean | false | 自动回复 CQ 呼叫 |
-| `autoResumeCQAfterFail` | boolean | false | QSO 失败后自动恢复 CQ |
-| `autoResumeCQAfterSuccess` | boolean | false | QSO 成功后自动恢复 CQ |
-| `replyToWorkedStations` | boolean | false | 允许回复已通联过的电台 |
-| `targetSelectionPriorityMode` | string | `'dxcc_first'` | 目标优先级：`dxcc_first` / `new_callsign_first` / `balanced` |
-| `maxQSOTimeoutCycles` | number | 6 | QSO 超时的最大周期数 |
-| `maxCallAttempts` | number | 5 | TX1 状态最大呼叫次数 |
-
-补充说明：
-
-- `autoReplyToCQ` 不再是“看到任何 CQ 就回复”
-- 宿主会先基于自己的呼号归属（continent / DXCC / 前缀实体）和 CQ modifier 语义，判断这条 CQ 是否属于“允许自动回复的目标”
-- 因此 `CQ EU ...` / `CQ DX ...` / `CQ JA ...` / `CQ 290 ...` / `CQ POTA ...` 这类消息，都会先过统一资格过滤，再进入 `standard-qso` 的正常目标选择流程
-
-#### QuickActions
-
-以下开关出现在右上角自动化下拉面板中（均为 toggle 类型）：
-
-- `autoReplyToCQ`
-- `autoResumeCQAfterFail`
-- `autoResumeCQAfterSuccess`
-- `replyToWorkedStations`
-
-#### 架构说明
-
-`standard-qso` 插件在插件目录内直接维护自己的 `StandardQSOPluginRuntime`。它通过插件上下文直接读取和驱动运行时，不再依赖 core 中的旧策略类、桥接层或适配器：
-
-- `ctx.operator.callsign/grid/frequency/mode` → 组装为运行时 `OperatorConfig`
-- `ctx.config.autoReplyToCQ` 等 → 组装为运行时 `OperatorConfig`（**来自 plugin settings，不再来自 RadioOperatorConfig**）
-- `ctx.operator.hasWorkedCallsign()` → `runtime.hasWorkedCallsign()`
-- `ctx.operator.recordQSO()` → `runtime.recordQSOLog()`
-
-### 6.2 snr-filter（内置示例工具）
-
-**位置**：`packages/server/src/plugin/builtins/snr-filter/`
-
-最简工具插件示例，展示 `onFilterCandidates` 的用法。**默认未启用**，需在设置面板手动启用。
-
-#### Settings（global scope）
+**Settings**（均为 operator scope）：
 
 | Key | 类型 | 默认值 | 说明 |
 |-----|------|--------|------|
-| `filterOverview` | info | `''` | 纯说明节点，介绍该工具插件会在主策略前先做 SNR 过滤 |
-| `minSNR` | number | -15 | 最低信噪比（dB），低于此值的候选被过滤 |
+| `strategyOverview` | info | `''` | 策略说明节点 |
+| `autoReplyToCQ` | boolean | false | 自动回复 CQ |
+| `autoResumeCQAfterFail` | boolean | false | 失败后自动恢复 CQ |
+| `autoResumeCQAfterSuccess` | boolean | false | 成功后自动恢复 CQ |
+| `replyToWorkedStations` | boolean | false | 回复已通联电台 |
+| `targetSelectionPriorityMode` | string | `'dxcc_first'` | 优先级：`dxcc_first` / `new_callsign_first` / `balanced` |
+| `maxQSOTimeoutCycles` | number | 6 | 超时周期数 |
+| `maxCallAttempts` | number | 5 | TX1 最大呼叫次数 |
 
-### 6.3 callsign-prefix-filter（字符串数组过滤示例）
+**QuickSettings**：`autoReplyToCQ`、`autoResumeCQAfterFail`、`autoResumeCQAfterSuccess`、`replyToWorkedStations`
 
-**位置**：`packages/server/src/plugin/builtins/callsign-prefix-filter/`
+### snr-filter
 
-展示 `string[]` 设置和 global-scope utility 配置的最小示例。它按前缀或精确名单过滤候选呼号，适合验证：
+展示 `onFilterCandidates` 的最简工具插件。默认未启用。
 
-- `string[]` 类型设置
-- global-scope utility settings
-- `onFilterCandidates` 与其他过滤插件的叠加执行
+| Key（global） | 类型 | 默认值 |
+|------|------|--------|
+| `minSNR` | number | -15 |
 
-### 6.4 worked-station-bias（评分示例）
+### no-reply-memory-filter
 
-**位置**：`packages/server/src/plugin/builtins/worked-station-bias/`
+无回复记忆过滤插件。默认未启用。跟踪哪些呼号在过去一段时间内未回复自己的呼叫，在下一次决策时过滤。
 
-展示 `onScoreCandidates` 和日志本查询的示例。该插件不会过滤任何候选，只会：
+### callsign-filter
 
-- 对未通联过的呼号加分
-- 对已通联过的呼号减分
-- 通过标准评分 hook 影响 Host 的候选排序，而不是直接调用任何起呼控制
+展示 `string[]` 设置和 `onFilterCandidates` 的过滤插件。默认未启用。
 
-它适合和 `snr-filter`、`callsign-prefix-filter` 同时启用，用于验证 filter → score 的组合链路。
+### worked-station-bias
 
-### 6.5 qso-session-inspector（广播 Hook + 面板示例）
+展示 `onScoreCandidates` 和日志本查询的评分插件。对未通联过的呼号加分，对已通联过的减分，影响候选排序但不直接控制起呼。
 
-**位置**：`packages/server/src/plugin/builtins/qso-session-inspector/`
+### watched-callsign-autocall
 
-这是一个纯观察型插件，用来验证广播 Hook、operator-scope 存储和面板推送：
+守候指定呼号列表自动起呼。支持精确匹配和正则语法，`#` 开头行为注释。
 
-- `onSlotStart`
-- `onDecode`
-- `onQSOStart`
-- `onQSOComplete`
-- `onQSOFail`
-- `ctx.store.operator`
-- `ctx.ui.send(...)`
+| Key（operator scope） | 类型 | 默认值 |
+|------|------|--------|
+| `watchList` | string[] | `[]` |
+| `triggerMode` | string | `'cq'` |
+| `autocallPriority` | number | `100` |
 
-它会在操作员卡片下方提供两个面板：统计面板和最近事件日志。
+### watched-novelty-autocall
 
-### 6.6 watched-callsign-autocall（待机守候自动起呼）
+守候新 DXCC / 新网格 / 新呼号自动起呼。依赖 `ParsedFT8Message.logbookAnalysis`。
 
-**位置**：`packages/server/src/plugin/builtins/watched-callsign-autocall/`
+| Key（operator scope） | 类型 | 默认值 |
+|------|------|--------|
+| `watchNewDxcc` | boolean | `false` |
+| `watchNewGrid` | boolean | `false` |
+| `watchNewCallsign` | boolean | `false` |
+| `autocallPriority` | number | `80` |
 
-该插件用于验证“operator-scope 配置驱动的 utility 插件”这一真实场景：
+### autocall-idle-frequency
 
-- 插件默认不启用；启用后也没有额外的 operator 开关
-- `watchList` 为空即表示当前操作者不启用
-- 仅在操作者处于纯待机（未发射、策略处于待机且没有锁定目标）时生效
-- 命中后复用现有 `requestCall(...)` 流程自动设定目标并开始发射
-- `watchList` 纯文本默认按完整呼号精确匹配；只要写入正则语法，就按正则规则匹配，例如 `^JA` 可实现前缀守候
-- `watchList` 允许保留以 `#` 开头的注释行，便于维护大名单
-- 所有触发模式都会额外包含“直接对我呼叫”的情况
-- 当触发源是 CQ 时，命中后仍要通过宿主统一的自动目标资格过滤；例如 `CQ EU ...`、`CQ DX ...`、`CQ POTA ...` 不会因为进入 watch list 就被无条件自动呼叫
+自动起呼执行层插件：在自动起呼前挑选更空闲的发射音频频率。通过 `onConfigureAutoCallExecution` 实现。默认启用。
 
-#### Settings（均为 operator scope）
+| Key（operator scope） | 类型 | 默认值 |
+|------|------|--------|
+| `autoSelectIdleFrequency` | boolean | `false` |
 
-| Key | 类型 | 默认值 | 说明 |
-|-----|------|--------|------|
-| `watchOverview` | info | `''` | 场景说明：适合守候 DX、朋友台、稀有实体或 sked |
-| `watchList` | string[] | `[]` | 守候规则列表，按顺序决定优先级；纯文本为精确匹配，正则语法可直接使用，`#` 开头行为注释 |
-| `triggerMode` | string | `'cq'` | 触发条件：`cq` / `cq-or-signoff` / `any` |
-| `autocallPriority` | number | `100` | 自动起呼优先级；多个自动起呼插件同槽命中时，值越大越优先 |
+### lotw-sync
 
-### 6.7 watched-novelty-autocall（守候新类型自动起呼）
+ARRL Logbook of The World 日志同步插件。展示完整 Provider 实现：证书管理、TQ8 上传、ADIF 下载。默认启用。`instanceScope: 'global'`。
 
-**位置**：`packages/server/src/plugin/builtins/watched-novelty-autocall/`
+### qrz-sync
 
-该插件展示如何基于 operator 自己的日志本分析结果，在纯待机时自动守候“新类型”目标：
+QRZ.com 日志同步插件。最简 Provider 实现。默认启用。`instanceScope: 'global'`。
 
-- 只要启用了任一守候项（新 DXCC / 新网格 / 新呼号），命中任意一个已启用类型就会提议自动起呼
-- 仅在操作者处于纯待机（未发射、策略处于待机且没有锁定目标）时生效
-- 依赖 Host 在插件运行时为 `ParsedFT8Message.logbookAnalysis` 注入当前 operator 视角的日志本分析结果
-- `watchNewDxcc` 会忽略 `dxccStatus='deleted'` 的实体
-- 与其他自动起呼插件通过 `autocallPriority` 做确定性仲裁，而不是靠广播 Hook 的竞态先后
-- 当触发源是 CQ 时，同样受宿主统一的 directed CQ / modifier 过滤约束；“新 DXCC”并不会绕过 `CQ EU` / `CQ DX` / `CQ POTA` 这类资格判断
+### wavelog-sync
 
-#### Settings（均为 operator scope）
+WaveLog 自托管日志服务同步插件。支持多步配置和站台选择。默认启用。`instanceScope: 'global'`。
 
-| Key | 类型 | 默认值 | 说明 |
-|-----|------|--------|------|
-| `noveltyOverview` | info | `''` | 场景说明：适合在待机时追逐新的实体、网格或呼号 |
-| `watchNewDxcc` | boolean | `false` | 命中新 DXCC 时提议自动起呼 |
-| `watchNewGrid` | boolean | `false` | 命中新网格时提议自动起呼 |
-| `watchNewCallsign` | boolean | `false` | 命中新呼号时提议自动起呼 |
-| `triggerMode` | string | `'cq'` | 触发条件：`cq` / `cq-or-signoff` / `any` |
-| `autocallPriority` | number | `80` | 自动起呼优先级；默认低于守候呼号插件 |
+### qso-udp-broadcast
 
-### 6.8 autocall-idle-frequency（自动起呼自动择频）
-
-**位置**：`packages/server/src/plugin/builtins/autocall-idle-frequency/`
-
-这是一个“自动起呼执行层”插件：它不负责发现目标，也不直接参与 proposal 仲裁，而是通过 `onConfigureAutoCallExecution(...)` 只做一件事：**在自动起呼真正开始前，为当前 operator 自动挑选更空闲的发射音频频率**。
-
-当前实现要点：
-
-- 仅当 `autoSelectIdleFrequency=true` 时生效
-- 使用 `request.sourceSlotInfo` 对应的**来源接收时隙**调用 `ctx.band.findIdleTransmitFrequency(...)`
-- 如果 proposal 没有来源时隙，或宿主在该来源时隙中找不到合适空隙，则明确跳过，不做隐式兜底
-
-这样做的好处是：
-
-- 不需要在 `watched-callsign-autocall` 和 `watched-novelty-autocall` 里各放一个重复开关
-- 后续如果增加更多 proposal 型自动起呼插件，也能自动复用这套行为
-- “谁负责发现目标”和“命中后如何执行”被清晰拆成两层，兼容性更好
-
-#### Settings（均为 operator scope）
-
-| Key | 类型 | 默认值 | 说明 |
-|-----|------|--------|------|
-| `autoSelectIdleFrequency` | boolean | `false` | 自动起呼命中后，先基于触发该 proposal 的接收时隙，为当前 operator 挑选更空闲的发射音频频率，再开始起呼 |
-
-### 6.9 heartbeat-demo（timer + button quickAction 示例）
-
-**位置**：`packages/server/src/plugin/builtins/heartbeat-demo/`
-
-该插件用于验证插件生命周期独立于引擎、电台是否连接，以及 button 型 quickAction：
-
-- `onLoad` / `onUnload`
-- `ctx.timers.set(...)`
-- `hooks.onTimer`
-- `ctx.store.global`
-- `quickActions[type='button']`
-
-它会周期性推送一个心跳状态面板，并提供一个”重置心跳计数”的按钮动作。
-
-### 6.10 lotw-sync（LoTW 日志同步）
-
-**位置**：`packages/server/src/plugin/builtins/lotw-sync/`
-
-ARRL Logbook of The World 日志同步插件。展示了完整的日志同步 Provider 实现，包括证书管理和复杂的上传/下载流程。
-
-#### 功能
-- .p12 证书导入、管理和删除（通过 `ctx.files` 持久化）
-- TQ8 格式上传（RSA-SHA1 签名）
-- ADIF 格式确认下载
-- 按呼号独立配置
-- 自动上传支持
-
-#### UI 页面
-- `settings`：证书管理 + API 配置
-- `download-wizard`：下载时间范围选择向导
-
-#### 自定义 SyncAction
-使用 `pageId` 模式让用户在下载前选择时间范围，而非直接执行下载。
-
-### 6.11 qrz-sync（QRZ 日志同步）
-
-**位置**：`packages/server/src/plugin/builtins/qrz-sync/`
-
-QRZ.com 日志同步插件。是最简单的日志同步 Provider 实现，适合作为入门参考。
-
-#### 功能
-- API Key 配置
-- QSO 上传/下载
-- 按呼号独立配置
-- 自动上传支持
-
-#### UI 页面
-- `settings`：API Key 配置 + 连接测试
-
-### 6.12 wavelog-sync（WaveLog 日志同步）
-
-**位置**：`packages/server/src/plugin/builtins/wavelog-sync/`
-
-WaveLog 自托管日志服务同步插件。展示了需要多步配置（服务器地址 → 获取站台列表 → 选择站台）的 Provider 实现。
-
-#### 功能
-- WaveLog 实例连接配置
-- 站台列表动态获取和选择
-- QSO 上传/下载
-- 自动上传支持
-
-#### UI 页面
-- `settings`：服务器 URL + API Key + 站台选择
-
-### 6.13 iframe-panel-demo（iframe 面板示例）
-
-**位置**：`packages/server/src/plugin/builtins/iframe-panel-demo/`
-
-展示 iframe 面板在操作员卡片和自动化 Popover 两个位置的自定义 UI 能力。**默认未启用**。
-
-#### Panels
-
-| ID | 组件 | slot | width | 说明 |
-|----|------|------|-------|------|
-| `live-monitor` | iframe | operator | `full` | 实时信号强度、计数器、日志 |
-| `quick-controls` | iframe | automation | `half` | 交互按钮、输入框 |
-| `stats-kv` | key-value | automation | `half` | 结构化统计数据 |
-
-#### 展示的核心能力
-
-| 能力 | 机制 |
-|------|------|
-| 服务端实时推送 | `ctx.ui.pushToPage()` → `tx5dr.onPush()` |
-| 前端交互调用 | `tx5dr.invoke()` → `registerPageHandler` |
-| 跨页面同步 | quick-controls invoke → 服务端处理 → pushToPage 到 live-monitor |
-| 结构化面板对比 | `ctx.ui.send()` 推送 key-value 数据 |
-| 主题自适应 | CSS Design Tokens |
-| 高度自适应 | ResizeObserver + `tx5dr.resize()` |
+QSO 完成时通过 UDP 广播通联记录。服务端插件，无前端 UI。默认启用。
 
 ---
 
@@ -2136,7 +1379,7 @@ WaveLog 自托管日志服务同步插件。展示了需要多步配置（服务
 ```
 应用启动 / 插件子系统启动（独立于引擎是否成功启动）
   └─ PluginManager.start()
-       ├─ 注册所有内置插件（BUILTIN_PLUGINS 数组）
+       ├─ 注册所有内置插件（@tx5dr/builtin-plugins 中的 BUILTIN_PLUGINS 数组）
        ├─ 扫描 {dataDir}/plugins/ 加载用户插件
        ├─ 为当前所有操作员调用 initInstancesForOperator()
        └─ 广播插件系统快照
@@ -2153,7 +1396,7 @@ WaveLog 自托管日志服务同步插件。展示了需要多步配置（服务
 
 插件重载 / 重扫
   └─ reloadPlugins() / reloadPlugin(name) / rescanPlugins()
-       ├─ 先把插件系统状态切到 reloading 并广播快照
+       ├─ 把插件系统状态切到 reloading 并广播快照
        ├─ 卸载受影响实例（onUnload）
        ├─ 重新加载插件定义
        ├─ 为相关操作员重新创建实例（onLoad）
@@ -2166,11 +1409,9 @@ WaveLog 自托管日志服务同步插件。展示了需要多步配置（服务
             └─ flush 持久化存储
 ```
 
-插件子系统与引擎运行状态解耦：电台未连接、引擎未成功进入解码状态，或引擎被停止，都不应影响插件的加载、重载、设置管理和客户端同步。
+插件子系统与引擎运行状态解耦：电台未连接、引擎未成功启动，都不影响插件的加载、重载、设置管理和客户端同步。
 
 ### 7.2 Hook 分发机制
-
-`PluginHookDispatcher` 负责 Pipeline/Broadcast hooks；策略插件的核心决策则直接走显式 runtime：
 
 ```
 onFilterCandidates（Pipeline）：
@@ -2179,19 +1420,18 @@ onFilterCandidates（Pipeline）：
 
 strategy runtime：
   仅活跃策略插件 → runtime.decide() / runtime.getTransmitText()
-  用户编辑上下文 / 状态 / 槽位 → 直接调用 runtime.patchContext() / setState() / setSlotContent()
-  用户切换发射周期 → 走核心 typed command，而不是插件消息桥
+  用户编辑上下文 / 状态 / 槽位 → 直接调用 runtime
 
 onQSOComplete（Broadcast）：
   utility-A, utility-B, strategy 并发执行（Promise.allSettled）
   单个出错不影响其他
 ```
 
-所有 hook 调用都有 **200ms 超时**（`Promise.race`）。显式 strategy runtime 方法不走 `PluginHookDispatcher`，因此不受这个 hook 超时封装约束。
+所有 hook 调用都有 **200ms 超时**。显式 strategy runtime 方法不受此超时约束。
 
 ### 7.3 策略运行时实现
 
-策略插件应当在插件目录内直接实现自己的运行时，不再通过 bridge / adapter 复用旧策略系统：
+策略插件在插件目录内直接实现自己的运行时，不再通过 bridge / adapter 复用旧策略系统：
 
 ```
 PluginContext.operator (OperatorControl)
@@ -2202,24 +1442,20 @@ standard-qso/StandardQSOPluginRuntime.ts
     │    直接维护状态机、槽位文本与 QSO 生命周期
     │
     ▼
-Strategy runtime methods（decide / getTransmitText / patchContext / setState ...）
+StrategyRuntime methods（decide / getTransmitText / patchContext / setState ...）
 ```
 
-这样可以确保迁移是彻底的：标准策略的实现、配置和行为都以内置插件为唯一真相源。
-
-当前系统内部与策略运行时相关的核心控制链路已经是强类型直连：
+当前系统内部的核心控制链路：
 
 - WebSocket：`setOperatorRuntimeState` / `setOperatorRuntimeSlotContent` / `setOperatorTransmitCycles`
 - Server：`PluginManager.patchOperatorRuntimeContext()` / `setOperatorRuntimeState()` / `setOperatorRuntimeSlotContent()`
 - Runtime：`patchContext()` / `setState()` / `setSlotContent()` / `getSnapshot()`
 
-而 `pluginUserAction` 仅保留给插件自定义前后端交互，不再承担系统内部控制职责。
-
 ### 7.4 错误隔离
 
 ```
 单次 hook 执行
-  ├─ 200ms 超时 → 超时报错，记录错误
+  ├─ 200ms 超时 → 超时报错
   ├─ 抛出异常 → 捕获，记录错误
   └─ 正常返回
 
@@ -2229,18 +1465,18 @@ Strategy runtime methods（decide / getTransmitText / patchContext / setState ..
   └─ 广播 pluginStatusChanged 事件通知前端
 
 Pipeline 额外安全网
-  └─ onFilterCandidates 返回空数组（输入非空）→ 跳过该插件，保留上一步结果
+  └─ onFilterCandidates 返回空数组（输入非空）→ 跳过该插件
 ```
 
 ### 7.5 多插件冲突处理
 
 | 情景 | 处理方式 |
 |------|---------|
-| 两个工具插件同时定义 `onFilterCandidates` | Pipeline 链式执行，A 的输出是 B 的输入 |
-| 两个工具插件同时定义 `onQSOComplete` | 并发 fire-and-forget，互不干扰 |
-| 两个自动起呼工具插件同时定义 `onAutoCallCandidate` | Host 统一收集提议后仲裁：优先级高者胜，再按命中顺序和插件名稳定排序 |
-| 两个策略插件（理论上不可能）| 每个操作员只能选择一个策略，UI 层为单选 |
-| 工具插件过滤器把候选清空 | 安全网保留上一步结果，跳过该插件 |
+| 两个工具插件同时定义 `onFilterCandidates` | Pipeline 链式执行 |
+| 两个工具插件同时定义 `onQSOComplete` | 并发 fire-and-forget |
+| 两个自动起呼工具插件同时定义 `onAutoCallCandidate` | Host 统一收集提议后仲裁 |
+| 两个策略插件（理论上不可能）| 每个操作员只能选择一个策略 |
+| 工具插件过滤器把候选清空 | 安全网保留上一步结果 |
 
 ---
 
@@ -2248,103 +1484,95 @@ Pipeline 额外安全网
 
 ### REST API
 
-当前插件管理接口统一挂载在 `/api/plugins`：
+所有接口挂载在 `/api/plugins`：
 
 | Method | Path | 说明 |
 |--------|------|------|
-| `GET` | `/api/plugins` | 获取插件系统完整快照（state / generation / plugins / lastError） |
+| `GET` | `/api/plugins` | 获取插件系统完整快照 |
+| `GET` | `/api/plugins/runtime-info` | 获取插件宿主目录与运行形态 |
 | `POST` | `/api/plugins/:name/enable` | 启用插件 |
 | `POST` | `/api/plugins/:name/disable` | 禁用插件 |
+| `POST` | `/api/plugins/:name/reload` | 重载单个插件 |
+| `POST` | `/api/plugins/reload` | 重载全部插件 |
+| `POST` | `/api/plugins/rescan` | 重扫插件目录 |
+| `GET` | `/api/plugins/:name/settings` | 获取 global-scope 设置 |
 | `PUT` | `/api/plugins/:name/settings` | 更新 global-scope 设置 |
 | `GET` | `/api/plugins/:name/operator/:id/settings` | 获取 operator-scope 设置 |
 | `PUT` | `/api/plugins/:name/operator/:id/settings` | 更新 operator-scope 设置 |
-| `PUT` | `/api/plugins/operators/:id/strategy` | 设置操作员使用的策略插件 |
-| `POST` | `/api/plugins/reload` | 重载全部插件定义与实例，不重启引擎 |
-| `POST` | `/api/plugins/:name/reload` | 重载单个插件 |
-| `POST` | `/api/plugins/rescan` | 重新扫描插件目录并应用新增/删除/变更 |
-| `GET` | `/api/plugins/:name/ui/:page.html` | 获取插件 iframe 页面（自动注入 Bridge SDK） |
+| `PUT` | `/api/plugins/operators/:id/strategy` | 设置操作员策略插件 |
+| `GET` | `/api/plugins/:name/ui/*` | iframe 静态页面（自动注入 Bridge SDK） |
 | `GET` | `/api/plugins/_bridge/bridge.js` | Bridge SDK 脚本 |
-| `GET` | `/api/plugins/_bridge/tokens.css` | CSS Design Tokens 样式表 |
-| `POST` | `/api/plugins/:name/ui-invoke` | iframe invoke 请求转发 |
-| `POST` | `/api/plugins/:name/ui-store` | iframe `tx5dr.store*()` 桥接接口（宿主按 session 校验并收口作用域） |
-| `POST` | `/api/plugins/:name/ui-files` | iframe `tx5dr.file*()` 桥接接口（宿主按 session 校验并收口作用域） |
-| `POST` | `/api/plugins/:name/ui-session/heartbeat` | 刷新页面 session 存活时间（宿主内部使用） |
-| `GET` | `/api/plugins/sync-providers` | 获取日志同步 Provider 列表 |
-| `GET` | `/api/plugins/sync-providers/configured?callsign=...` | 获取指定呼号的 Provider 配置状态 |
-| `POST` | `/api/plugins/sync-providers/:providerId/test-connection` | 测试同步连接 |
-| `POST` | `/api/plugins/sync-providers/:providerId/upload` | 触发日志上传 |
-| `POST` | `/api/plugins/sync-providers/:providerId/download` | 触发日志下载 |
+| `GET` | `/api/plugins/_bridge/tokens.css` | CSS Design Tokens |
+| `POST` | `/api/plugins/:name/ui-invoke` | iframe invoke 转发 |
+| `POST` | `/api/plugins/:name/ui-store` | iframe KV store 桥接 |
+| `POST` | `/api/plugins/:name/ui-files` | iframe 文件操作桥接 |
+| `POST` | `/api/plugins/:name/ui-session/heartbeat` | 页面 session 心跳 |
+| `GET` | `/api/plugins/sync-providers` | 获取同步 Provider 列表 |
+| `GET` | `/api/plugins/sync-providers/configured` | 获取 Provider 配置状态 |
+| `POST` | `/api/plugins/sync-providers/:id/test-connection` | 测试同步连接 |
+| `POST` | `/api/plugins/sync-providers/:id/upload-preflight` | 上传前检查 |
+| `POST` | `/api/plugins/sync-providers/:id/upload` | 触发上传 |
+| `POST` | `/api/plugins/sync-providers/:id/download` | 触发下载 |
+| `GET` | `/api/plugins/market/catalog` | 获取市场插件索引 |
+| `GET` | `/api/plugins/market/catalog/:name` | 获取单个市场条目 |
+| `POST` | `/api/plugins/market/:name/install` | 从市场安装 |
+| `POST` | `/api/plugins/market/:name/update` | 从市场更新 |
+| `DELETE` | `/api/plugins/market/:name` | 卸载市场插件 |
 
-#### 运行期权限模型
-
-插件宿主路由分为两类：
-
-- **管理类接口**：启用/禁用/重载/修改全局设置等，要求 `admin`
-- **运行期能力接口**：日志同步、operator 页面 iframe、`ui-invoke` 等，可允许 `operator`
-
-是否允许 operator 访问，取决于插件自身声明：
-
-- 日志同步 Provider：看 `provider.accessScope`
-- iframe 页面：看 `ui.pages[].accessScope`
-- 资源级校验：看 `ui.pages[].resourceBinding`
-
-因此“能否访问插件页面/同步能力”不再只由统一 `/api/plugins` 前缀角色控制，而是由宿主按路由和资源粒度判定。
-
-补充约束：
-
-- `ui-store` / `ui-files` / `ui-session/heartbeat` 都不是插件自定义业务路由，而是宿主固定桥接能力
-- 宿主会先校验 `pageId + pageSessionId + accessScope + resourceBinding`，再把请求收口到当前页面 session 的真实实例范围
-- 因此 iframe 页面即使主动篡改 `callsign`、`operatorId` 或伪造其他 session，也无法越过宿主切换到别的插件实例/页面作用域
+管理类接口（启用/禁用/重载/全局设置）要求 `admin` 角色。运行期接口（日志同步、iframe、ui-invoke）可允许 `operator`，取决于插件的 `accessScope` 和 `resourceBinding` 声明。
 
 ### WebSocket 事件
 
 | 事件 | 方向 | 说明 |
 |------|------|------|
-| `pluginList` | Server → Client | 插件系统完整快照（启动、重载、重扫或连接握手后推送） |
-| `pluginStatusChanged` | Server → Client | 单个插件状态变更，载荷包含 `generation` 与最新 `plugin` |
-| `pluginData` | Server → Client | 插件通过 `ctx.ui.send()` 推送的面板数据，载荷包含 `pluginName + operatorId + panelId + data` |
-| `pluginLog` | Server → Client | 插件 `ctx.log.*` 的日志条目（前端显示于 Settings → Plugins 的日志面板） |
-| `pluginPagePush` | Server → Client | 插件通过 `ctx.ui.pushToPage()` 推送到 iframe 页面的消息 |
-| `pluginPanelContributionsChanged` | Server → Client | 插件运行期面板 contribution group 被替换或清空，载荷是合并前的 group 变更 |
-| `pluginUserAction` | Client → Server | 插件自定义用户动作（触发 `hooks.onUserAction`） |
+| `pluginListUpdated` | Server → Client | 插件系统完整快照 |
+| `pluginStatusChanged` | Server → Client | 单个插件状态变更 |
+| `pluginData` | Server → Client | `ctx.ui.send()` 推送的面板数据 |
+| `pluginLog` | Server → Client | `ctx.log.*` 日志条目 |
+| `pluginPagePush` | Server → Client | `ctx.ui.pushToPage()` 推送 |
+| `pluginPanelMeta` | Server → Client | 面板 meta 更新 |
+| `pluginPanelContribution` | Server → Client | 运行期面板贡献变更 |
+| `pluginUserAction` | Client → Server | 自定义用户动作 |
 
-> 补充：操作员 runtime 的核心控制命令不是插件专用事件，它们走系统级 WebSocket 命令：
-> - `setOperatorContext`
-> - `setOperatorRuntimeState`
-> - `setOperatorRuntimeSlotContent`
-> - `setOperatorTransmitCycles`
+操作员 runtime 核心控制命令走系统级 WebSocket 命令：
+- `setOperatorRuntimeState`
+- `setOperatorRuntimeSlotContent`
+- `setOperatorTransmitCycles`
 
-### PluginSystemSnapshot / PluginStatus 数据结构
+### 数据结构
 
 ```typescript
 interface PluginSystemSnapshot {
   state: 'ready' | 'reloading' | 'error';
   generation: number;
   plugins: PluginStatus[];
+  panelMeta: PluginPanelMetaPayload[];
+  panelContributions: PluginUIPanelContributionGroup[];
   lastError?: string;
 }
 
 interface PluginStatus {
   name: string;
   type: 'strategy' | 'utility';
+  instanceScope: 'operator' | 'global';
   version: string;
   description?: string;
   isBuiltIn: boolean;
   loaded: boolean;
   enabled: boolean;
-  autoDisabled: boolean;   // 是否被自动禁用（连续错误）
+  autoDisabled: boolean;
   errorCount: number;
   lastError?: string;
-  assignedOperatorIds?: string[];  // strategy 插件当前分配到的操作员
+  assignedOperatorIds?: string[];
   settings?: Record<string, PluginSettingDescriptor>;
   quickActions?: PluginQuickAction[];
+  quickSettings?: PluginQuickSetting[];
   panels?: PluginPanelDescriptor[];
   permissions?: string[];
-  ui?: {
-    dir?: string;
-    pages?: Array<{ id: string; title: string; entry: string }>;
-  };
-  locales?: Record<string, Record<string, string>>;  // 插件自带翻译
+  capabilities?: string[];
+  ui?: PluginUIConfig;
+  locales?: Record<string, Record<string, string>>;
+  source?: PluginSource;
 }
 ```
 
@@ -2356,35 +1584,33 @@ interface PluginStatus {
 
 | 位置 | 内容 |
 |------|------|
-| 设置 → 插件 Tab | **全局**：utility 插件启用状态草稿 + global-scope 设置草稿，由设置弹窗统一保存 |
-| 设置 → 插件 Tab | **调试**：插件日志面板（当前前端会话态，支持按插件/级别过滤与清空） |
-| 设置 → 操作员配置 | **每操作员**：策略插件选择器 + 当前相关插件的 operator-scope 设置 |
-| 主界面右上角“自动化”入口 | 当前选中操作员的 QuickActions 镜像入口 |
-| 操作员面板右上角 | 当前操作员所有活跃插件注册的 QuickActions（策略插件 + 已启用 utility 插件，立即生效） |
-| 操作员卡片下方 | 当前操作员相关插件声明的 Panels（按 `operatorId` 隔离的实时数据展示；桌面端默认双列，`width: 'full'` 可跨整行） |
-| 日志本 → 同步设置 | 日志同步 Provider 的设置页面（iframe），支持多 provider 并排配置 |
+| 设置 → 插件 Tab | utility 插件启用状态 + global-scope 设置 |
+| 设置 → 插件 Tab | 插件日志面板 |
+| 设置 → 操作员配置 | 策略插件选择器 + operator-scope 设置 |
+| 操作员面板右上角 | QuickActions + QuickSettings |
+| 操作员卡片下方 | 插件声明的 Panels |
+| 日志本 → 同步设置 | 同步 Provider 设置页面（iframe） |
 
 ### 翻译动态注册
 
-前端收到 `pluginList` 快照时，自动调用 `registerPluginLocales(name, locales)` 将插件翻译注册到 `i18next` 的 `plugin:{name}` 命名空间。`PluginSettingField` 组件使用 `resolvePluginLabel(label, pluginName)` 从对应命名空间查找翻译。
+前端收到 `pluginListUpdated` 快照时，自动调用 `registerPluginLocales(name, locales)` 将翻译注册到 `i18next` 的 `plugin:{name}` 命名空间。
 
 ### 设置保存模型
 
-- **插件管理页（全局）**：utility 插件启用状态与 global-scope 设置先进入前端草稿态，再由设置弹窗统一保存
-- **操作员插件设置**：当前仍按插件卡片局部保存
-- **QuickAction toggle**：直接写入对应 operator-scope setting，并立即触发 `onConfigChange`
-- **QuickAction button**：通过 `pluginUserAction(pluginName, actionId, operatorId)` 触发 `hooks.onUserAction`
+- **插件管理页**：utility 启用状态与 global-scope 设置先进入草稿态，统一保存
+- **操作员插件设置**：按插件卡片局部保存
+- **QuickSetting toggle**：直接写入 operator-scope setting → `onConfigChange`
 
 ---
 
 ## 10. 新增内置插件指南
 
-如需将新插件作为内置插件随系统发布（而不是用户手动安装）：
+如需将新插件作为内置插件随系统发布：
 
 **1. 创建插件目录**
 
 ```
-packages/server/src/plugin/builtins/my-new-plugin/
+packages/builtin-plugins/src/my-new-plugin/
 ├── index.ts
 └── locales/
     ├── zh.json
@@ -2398,32 +1624,35 @@ import type { PluginDefinition } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 
+export const BUILTIN_MY_NEW_PLUGIN_NAME = 'my-new-plugin';
+
 export const myNewPlugin: PluginDefinition = {
-  name: 'my-new-plugin',
+  name: BUILTIN_MY_NEW_PLUGIN_NAME,
   // ...
 };
 
 export const myNewPluginLocales = { zh: zhLocale, en: enLocale };
 ```
 
-**3. 在 `builtins/index.ts` 注册**
+**3. 在 `packages/builtin-plugins/src/index.ts` 注册**
 
 ```typescript
-// 添加 export
-export { myNewPlugin, myNewPluginLocales } from './my-new-plugin/index.js';
+// 添加 import
+import {
+  myNewPlugin,
+  myNewPluginLocales,
+  BUILTIN_MY_NEW_PLUGIN_NAME,
+} from './my-new-plugin/index.js';
 
 // 在 BUILTIN_PLUGINS 数组中追加
-export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
-  // ... 已有项
-  {
-    definition: myNewPlugin,
-    locales: myNewPluginLocales,
-    enabledByDefault: false,  // 默认不启用，用户手动开启
-  },
-];
+{
+  definition: myNewPlugin,
+  locales: myNewPluginLocales,
+  enabledByDefault: false,
+},
 ```
 
-`PluginManager` 会自动读取 `BUILTIN_PLUGINS` 数组，无需其他改动。
+如果插件包含 UI 静态文件，还需提供 `dirPath`（通过 `import.meta.url` 计算）。
 
 ---
 
@@ -2433,41 +1662,28 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
 |--------|---------|
 | 插件类型定义（TypeScript 接口）| `packages/plugin-api/src/` |
 | 插件 Schema（Zod 验证）| `packages/contracts/src/schema/plugin.schema.ts` |
-| WebSocket 协议（插件事件 + runtime 控制命令）| `packages/contracts/src/schema/websocket.schema.ts` |
+| WebSocket 协议 | `packages/contracts/src/schema/websocket.schema.ts` |
 | 插件管理器（中央编排）| `packages/server/src/plugin/PluginManager.ts` |
 | 插件加载器 | `packages/server/src/plugin/PluginLoader.ts` |
 | Hook 分发引擎 | `packages/server/src/plugin/PluginHookDispatcher.ts` |
 | PluginContext 工厂 | `packages/server/src/plugin/PluginContextFactory.ts` |
-| standard-qso 运行时 | `packages/server/src/plugin/builtins/standard-qso/StandardQSOPluginRuntime.ts` |
-| 内置插件目录 | `packages/server/src/plugin/builtins/` |
-| standard-qso 完整实现 | `packages/server/src/plugin/builtins/standard-qso/index.ts` |
-| snr-filter 示例 | `packages/server/src/plugin/builtins/snr-filter/index.ts` |
-| callsign-prefix-filter 示例 | `packages/server/src/plugin/builtins/callsign-prefix-filter/index.ts` |
-| worked-station-bias 示例 | `packages/server/src/plugin/builtins/worked-station-bias/index.ts` |
-| qso-session-inspector 示例 | `packages/server/src/plugin/builtins/qso-session-inspector/index.ts` |
-| autocall-idle-frequency 示例 | `packages/server/src/plugin/builtins/autocall-idle-frequency/index.ts` |
-| watched-callsign-autocall 示例 | `packages/server/src/plugin/builtins/watched-callsign-autocall/index.ts` |
-| watched-novelty-autocall 示例 | `packages/server/src/plugin/builtins/watched-novelty-autocall/index.ts` |
-| heartbeat-demo 示例 | `packages/server/src/plugin/builtins/heartbeat-demo/index.ts` |
-| REST API 路由 | `packages/server/src/routes/plugins.ts` |
-| 前端插件组件 | `packages/web/src/components/plugins/` |
-| 操作员插件面板聚合 | `packages/web/src/components/plugins/OperatorPluginPanels.tsx` |
-| 操作员插件设置 | `packages/web/src/components/settings/OperatorPluginSettings.tsx` |
-| 自动化下拉面板 | `packages/web/src/components/radio/automation/AutomationSettingsPanel.tsx` |
-| 插件快照同步 Hook | `packages/web/src/hooks/usePluginSnapshot.ts` |
-| 前端插件辅助 API | `packages/web/src/utils/pluginApi.ts` |
-| 前端 API 方法 | `packages/core/src/api.ts`（`getPlugins`、`updatePluginOperatorSettings` 等） |
-| 日志同步 Host | `packages/server/src/plugin/LogbookSyncHost.ts` |
-| 文件存储 Provider | `packages/server/src/plugin/PluginFileStoreProvider.ts` |
 | UI 桥接 | `packages/server/src/plugin/PluginUIBridge.ts` |
-| UI 路由 + Bridge SDK | `packages/server/src/routes/plugins.ts` |
-| lotw-sync 实现 | `packages/server/src/plugin/builtins/lotw-sync/` |
-| qrz-sync 实现 | `packages/server/src/plugin/builtins/qrz-sync/` |
-| wavelog-sync 实现 | `packages/server/src/plugin/builtins/wavelog-sync/` |
-| iframe-panel-demo 示例 | `packages/server/src/plugin/builtins/iframe-panel-demo/` |
+| 错误追踪 | `packages/server/src/plugin/PluginErrorTracker.ts` |
+| 存储 Provider | `packages/server/src/plugin/PluginStorageProvider.ts` |
+| 文件存储 Provider | `packages/server/src/plugin/PluginFileStoreProvider.ts` |
+| 页面 Session 管理 | `packages/server/src/plugin/PluginPageSessionStore.ts` |
+| 日志同步 Host | `packages/server/src/plugin/LogbookSyncHost.ts` |
+| REST API 路由 | `packages/server/src/routes/plugins.ts` |
+| 内置插件包（全部 12 个）| `packages/builtin-plugins/src/` |
+| standard-qso 运行时 | `packages/builtin-plugins/src/standard-qso/StandardQSOPluginRuntime.ts` |
+| 前端插件组件 | `packages/web/src/components/plugins/` |
 | iframe 宿主组件 | `packages/web/src/components/plugins/PluginIframeHost.tsx` |
 | 面板渲染器 | `packages/web/src/components/plugins/PluginPanelRenderer.tsx` |
-
----
-
-*文档更新于 2026-04，对应插件系统 v1.1（新增自定义 UI、文件存储、日志同步 Provider）。*
+| Slot 宿主布局 | `packages/web/src/components/plugins/PluginSlotHosts.tsx` |
+| 面板可见性逻辑 | `packages/web/src/components/plugins/pluginPanelSlots.ts` |
+| 插件市场 UI | `packages/web/src/components/plugins/PluginMarketplace.tsx` |
+| 插件管理列表 | `packages/web/src/components/plugins/PluginList.tsx` |
+| 操作员插件设置 | `packages/web/src/components/settings/OperatorPluginSettings.tsx` |
+| 前端插件辅助 API | `packages/web/src/utils/pluginApi.ts` |
+| Bridge SDK 类型 | `packages/plugin-api/src/bridge.d.ts` |
+| CSS Design Tokens 参考 | `packages/plugin-api/src/tokens.css` |
