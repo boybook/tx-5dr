@@ -236,6 +236,108 @@ check_disk_space() {
 
 # ── Fix functions ────────────────────────────────────────────────────────────
 
+# ── Opus audio codec support ─────────────────────────────────────────────────
+
+# Check if the system Opus runtime library is installed (libopus0 / opus)
+check_libopus() {
+    detect_os
+    case "$(os_family)" in
+        debian)
+            ldconfig -p 2>/dev/null | grep -q 'libopus\.so\.0\b' && return 0
+            # fallback: check well-known paths
+            for p in /usr/lib/x86_64-linux-gnu/libopus.so.0 \
+                     /usr/lib/aarch64-linux-gnu/libopus.so.0 \
+                     /usr/lib/libopus.so.0; do
+                [[ -f "$p" ]] && return 0
+            done
+            return 1
+            ;;
+        rhel)
+            ldconfig -p 2>/dev/null | grep -q 'libopus\.so\.0\b' && return 0
+            for p in /usr/lib64/libopus.so.0 /usr/lib/libopus.so.0; do
+                [[ -f "$p" ]] && return 0
+            done
+            return 1
+            ;;
+        *)
+            ldconfig -p 2>/dev/null | grep -q 'libopus\.so\.0\b' && return 0
+            return 1
+            ;;
+    esac
+}
+
+# Verify @discordjs/opus native module can be loaded by Node.js at runtime.
+# Only meaningful after the server package is installed.
+check_opus_module() {
+    local server_root="${1:-/usr/share/tx5dr/packages/server}"
+    [[ -d "$server_root/node_modules/@discordjs/opus" ]] || return 1
+    ( cd "$server_root" && node -e "
+        const mod = require('@discordjs/opus');
+        const OpusEncoder = (mod.default || mod).OpusEncoder;
+        new OpusEncoder(48000, 1);
+    " 2>/dev/null )
+}
+
+# Install missing Opus runtime library and patch @discordjs/opus prebuild path.
+fix_opus() {
+    detect_os
+    local server_root="${1:-/usr/share/tx5dr/packages/server}"
+
+    # Step 1: install system Opus library
+    case "$(os_family)" in
+        debian)
+            if ! check_libopus; then
+                log_info "$(msg INSTALLING_OPUS)"
+                apt-get update -qq 2>&1 || true
+                apt-get install -y libopus0 2>&1 || true
+            fi
+            ;;
+        rhel)
+            if ! check_libopus; then
+                log_info "$(msg INSTALLING_OPUS)"
+                dnf install -y opus 2>&1 || yum install -y opus 2>&1 || true
+            fi
+            ;;
+        *)
+            log_warn "$(msg FIX_OPUS)"
+            return 1
+            ;;
+    esac
+
+    # Step 2: patch @discordjs/opus prebuild path for current glibc
+    if [[ -d "$server_root/node_modules/@discordjs/opus" ]]; then
+        log_info "$(msg FIXING_OPUS_PREBUILD)"
+        ( cd "$server_root" && node <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const { find } = require('@discordjs/node-pre-gyp');
+
+const opusRoot = path.resolve('node_modules/@discordjs/opus');
+const packageJson = path.join(opusRoot, 'package.json');
+if (!fs.existsSync(packageJson)) process.exit(0);
+
+const expected = find(packageJson);
+if (!fs.existsSync(expected)) {
+  const prebuildRoot = path.join(opusRoot, 'prebuild');
+  const suffix = `-${process.platform}-${process.arch}-glibc-`;
+  const candidate = fs.readdirSync(prebuildRoot)
+    .filter((name) => name.includes(suffix))
+    .map((name) => path.join(prebuildRoot, name, 'opus.node'))
+    .find((file) => fs.existsSync(file));
+
+  if (candidate) {
+    fs.mkdirSync(path.dirname(expected), { recursive: true });
+    fs.copyFileSync(candidate, expected);
+    console.log('opus prebuild patched:', path.basename(path.dirname(candidate)), '->', path.basename(path.dirname(expected)));
+  }
+}
+NODE
+)
+    fi
+
+    check_libopus
+}
+
 fix_nodejs() {
     log_info "$(msg INSTALLING_NODEJS)"
     detect_os
@@ -617,6 +719,26 @@ run_doctor() {
         fi
     else
         check_line "$(msg CHECK_GLIBC)" "ok" "${glibc_ver}"
+    fi
+
+    # Opus system library
+    if check_libopus; then
+        check_line "$(msg CHECK_OPUS_LIB)" "ok" "libopus found"
+    else
+        check_line "$(msg CHECK_OPUS_LIB)" "fail" "libopus not found"
+        echo -e "      ${_DIM}$(msg FIX_OPUS)${_NC}"
+        issues=$((issues + 1))
+    fi
+
+    # @discordjs/opus native module (only if server installed)
+    if [[ -d /usr/share/tx5dr/packages/server/node_modules/@discordjs/opus ]]; then
+        if check_opus_module; then
+            check_line "$(msg CHECK_OPUS_MODULE)" "ok" "loaded"
+        else
+            check_line "$(msg CHECK_OPUS_MODULE)" "fail" "unavailable (realtime voice will fall back to PCM)"
+            echo -e "      ${_DIM}$(msg FIX_OPUS)${_NC}"
+            issues=$((issues + 1))
+        fi
     fi
 
     # nginx
