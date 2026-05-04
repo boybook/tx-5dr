@@ -1075,27 +1075,27 @@ export class ADIFLogProvider implements ILogProvider {
    */
   private async saveCache(): Promise<void> {
     if (this.needsFullRewrite) {
-      let adifContent = `TX-5DR Log File
+      const parts = [`TX-5DR Log File
 <ADIF_VER:5>3.1.4
 <PROGRAMID:6>TX-5DR
 <PROGRAMVERSION:5>1.0.0
 <EOH>
 
-`;
+`];
       // qsoCache 按升序插入，直接遍历即可保证文件时间升序
       for (const qso of this.qsoCache.values()) {
         const cached = this.foreignRecordLines.get(qso.id);
         if (cached) {
-          adifContent += cached.endsWith('\n') ? cached : cached + '\n';
+          parts.push(cached.endsWith('\n') ? cached : cached + '\n');
         } else {
-          adifContent += this.qsoRecordToADIF(qso);
+          parts.push(this.qsoRecordToADIF(qso));
         }
       }
       for (const line of this.unparseableLines) {
-        adifContent += line.endsWith('\n') ? line : line + '\n';
+        parts.push(line.endsWith('\n') ? line : line + '\n');
       }
 
-      await this.atomicWriteFile(this.logFilePath, adifContent);
+      await this.atomicWriteFile(this.logFilePath, parts.join(''));
       this.needsFullRewrite = false;
       this.pendingAppendIds.clear();
       this.unparseableLines = [];
