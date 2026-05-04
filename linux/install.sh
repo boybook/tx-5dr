@@ -27,8 +27,8 @@ done
 
 detect_os
 load_config
-TOTAL_STEPS=6
-[[ "$MODE" == "check" ]] && TOTAL_STEPS=4
+TOTAL_STEPS=7
+[[ "$MODE" == "check" ]] && TOTAL_STEPS=5
 [[ "$MODE" == "docker" ]] && TOTAL_STEPS=2
 ISSUES=0
 
@@ -86,7 +86,19 @@ if [[ "$MODE" == "docker" ]]; then
     exit $ISSUES
 fi
 
-step_header 4 "nginx"
+step_header 4 "Opus"
+if check_libopus; then
+    log_ok "libopus"
+elif [[ "$MODE" == "check" ]]; then
+    log_fail "libopus not found (realtime voice will fall back to PCM)"
+    echo "      $(msg FIX_OPUS)"
+    ISSUES=$((ISSUES + 1))
+else
+    require_root
+    if fix_opus; then log_ok "Opus audio codec (installed)"; else log_fail "Opus setup failed"; ISSUES=$((ISSUES + 1)); fi
+fi
+
+step_header 5 "nginx"
 if check_nginx_installed; then
     nginx_ver=$($NGINX_BIN -v 2>&1 | grep -oP '[\d.]+' | head -1 || true)
     log_ok "nginx ${nginx_ver}"
@@ -122,7 +134,7 @@ if [[ "$MODE" == "check" ]]; then
     exit $ISSUES
 fi
 
-step_header 5 "Install TX-5DR"
+step_header 6 "Install TX-5DR"
 require_root
 IS_UPGRADE=false
 if [[ -f /usr/share/tx5dr/packages/server/dist/index.js ]]; then IS_UPGRADE=true; fi
@@ -141,7 +153,22 @@ else
     if $IS_UPGRADE; then log_ok "TX-5DR already installed (no package file provided, keeping current version)"; else log_error "No .deb file provided and TX-5DR is not installed."; exit 1; fi
 fi
 
-step_header 6 "Start & Verify"
+# Post-install: verify @discordjs/opus native module loads correctly
+if [[ -d /usr/share/tx5dr/packages/server/node_modules/@discordjs/opus ]]; then
+    if check_opus_module; then
+        log_ok "Opus native module verified (realtime voice codec ready)"
+    else
+        log_warn "Opus native module check failed, attempting prebuild path fix..."
+        fix_opus
+        if check_opus_module; then
+            log_ok "Opus native module fixed"
+        else
+            log_warn "Opus native module still unavailable; realtime voice will fall back to PCM"
+        fi
+    fi
+fi
+
+step_header 7 "Start & Verify"
 systemctl daemon-reload
 systemctl start nginx 2>/dev/null || true
 if $IS_UPGRADE; then systemctl restart tx5dr; else systemctl start tx5dr; fi
