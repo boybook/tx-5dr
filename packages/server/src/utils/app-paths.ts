@@ -29,7 +29,7 @@ export class AppPaths {
    * 获取应用程序配置目录
    * - Windows: %APPDATA%\{AppName}
    * - macOS: ~/Library/Application Support/{AppName}
-   * - Linux: ~/.config/{AppName}
+   * - Linux: /etc/tx5dr/config.env → XDG fallback
    * - Docker: TX5DR_CONFIG_DIR环境变量
    */
   async getConfigDir(): Promise<string> {
@@ -37,7 +37,7 @@ export class AppPaths {
       return this._configDir;
     }
 
-    // Docker环境变量优先
+    // 环境变量优先（Docker / 显式覆盖）
     if (process.env.TX5DR_CONFIG_DIR) {
       this._configDir = process.env.TX5DR_CONFIG_DIR;
       await this.ensureDirectoryExists(this._configDir);
@@ -55,6 +55,14 @@ export class AppPaths {
         configDir = join(homedir(), 'Library', 'Application Support', this.appInfo.name);
         break;
       default: {
+        // Linux：直接从 /etc/tx5dr/config.env 读取，与 CLI 共享同一份权威配置
+        const fromConfigEnv = await this.readConfigDirFromConfigEnv();
+        if (fromConfigEnv) {
+          this._configDir = fromConfigEnv;
+          await this.ensureDirectoryExists(this._configDir);
+          return this._configDir;
+        }
+
         const xdgConfigHome = process.env.XDG_CONFIG_HOME;
         configDir = xdgConfigHome
           ? join(xdgConfigHome, this.appInfo.name)
@@ -66,6 +74,20 @@ export class AppPaths {
     await this.ensureDirectoryExists(configDir);
     this._configDir = configDir;
     return configDir;
+  }
+
+  /**
+   * 从 /etc/tx5dr/config.env 读取 TX5DR_CONFIG_DIR
+   * 与 CLI (common.sh load_config) 使用同一份权威配置文件
+   */
+  private async readConfigDirFromConfigEnv(): Promise<string | null> {
+    try {
+      const content = await fs.readFile('/etc/tx5dr/config.env', 'utf-8');
+      const match = content.match(/^TX5DR_CONFIG_DIR=(.+)$/m);
+      return match ? match[1].trim() : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
