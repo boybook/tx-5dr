@@ -1084,10 +1084,14 @@ export class ADIFLogProvider implements ILogProvider {
       // qsoCache 按升序插入，直接遍历即可保证文件时间升序
       for (const qso of this.qsoCache.values()) {
         const cached = this.foreignRecordLines.get(qso.id);
-        adifContent += cached ?? this.qsoRecordToADIF(qso);
+        if (cached) {
+          adifContent += cached.endsWith('\n') ? cached : cached + '\n';
+        } else {
+          adifContent += this.qsoRecordToADIF(qso);
+        }
       }
       for (const line of this.unparseableLines) {
-        adifContent += line;
+        adifContent += line.endsWith('\n') ? line : line + '\n';
       }
 
       await this.atomicWriteFile(this.logFilePath, adifContent);
@@ -1103,7 +1107,8 @@ export class ADIFLogProvider implements ILogProvider {
       records.sort((a, b) => a.startTime - b.startTime);
       const lines = records.map((r) => {
         const cached = this.foreignRecordLines.get(r.id);
-        return cached ?? this.qsoRecordToADIF(r);
+        if (cached) return cached.endsWith('\n') ? cached : cached + '\n';
+        return this.qsoRecordToADIF(r);
       }).join('');
       await fs.appendFile(this.logFilePath, lines, 'utf-8');
       this.pendingAppendIds.clear();
