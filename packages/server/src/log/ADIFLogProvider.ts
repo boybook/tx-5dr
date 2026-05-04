@@ -409,7 +409,8 @@ export interface ADIFLogProviderOptions {
 
 /**
  * 从 ADIF 原始内容中提取每条记录的原始行。
- * 保留原始 <EOR> 标记的大小写及周围空白，不做任何重新格式化。
+ * 保留原始字段及 <EOR> 标记的大小写、内部空白，仅去除行首的行分隔符。
+ * 写盘时统一追加 \n 作为行分隔。
  * 大小写不敏感匹配 <EOH> 和 <EOR>（WSJT-X 使用小写，标准 ADIF 使用大写）。
  */
 function extractRawAdifLines(content: string): string[] {
@@ -423,7 +424,7 @@ function extractRawAdifLines(content: string): string[] {
   let match: RegExpExecArray | null;
   while ((match = eorRegex.exec(body)) !== null) {
     const segEnd = match.index + match[0].length;
-    const segment = body.slice(prevEnd, segEnd);
+    const segment = body.slice(prevEnd, segEnd).replace(/^\s+/, '');
     if (segment.trim()) {
       lines.push(segment);
     }
