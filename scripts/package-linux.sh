@@ -430,6 +430,7 @@ build_package() {
         --depends "$pulse_dep" \
         --depends "$hamlib_dep" \
         --depends "$opus_dep" \
+        --depends "unzip" \
         --after-install "$PROJECT_ROOT/linux/postinstall.sh" \
         --before-remove "$PROJECT_ROOT/linux/preremove.sh" \
         --config-files /etc/tx5dr/config.env \
