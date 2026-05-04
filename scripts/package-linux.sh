@@ -376,6 +376,8 @@ cp "$PROJECT_ROOT/linux/tx5dr.service" "$STAGING/lib/systemd/system/tx5dr.servic
 # --- Default config ---
 mkdir -p "$STAGING/etc/tx5dr"
 cp "$PROJECT_ROOT/linux/config.env" "$STAGING/etc/tx5dr/config.env"
+# Also ship a pristine copy as restore template
+cp "$PROJECT_ROOT/linux/config.env" "$APP_ROOT/config.env.default"
 
 # --- Data directory (must exist in staging for RPM --directories to work) ---
 mkdir -p "$STAGING/var/lib/tx5dr"
