@@ -419,6 +419,8 @@ export class ADIFLogProvider implements ILogProvider {
   private operatorIndexMap: Map<string, OperatorIndex> = new Map();
   private saveTimer: NodeJS.Timeout | null = null;
   private saveFailureCount: number = 0;
+  private needsFullRewrite: boolean = false;
+  private pendingAppendIds: Set<string> = new Set();
   
   constructor(options: ADIFLogProviderOptions = {}) {
     this.options = {
@@ -457,7 +459,9 @@ export class ADIFLogProvider implements ILogProvider {
     await this.loadCache();
     // 构建/重建索引
     this.rebuildIndexes();
-    
+
+    this.needsFullRewrite = false;
+    this.pendingAppendIds.clear();
     this.isInitialized = true;
   }
   
@@ -513,6 +517,7 @@ export class ADIFLogProvider implements ILogProvider {
 <PROGRAMID:6>TX-5DR
 <PROGRAMVERSION:5>1.0.0
 <EOH>
+
 `;
     await this.atomicWriteFile(this.logFilePath, header);
   }
@@ -527,28 +532,34 @@ export class ADIFLogProvider implements ILogProvider {
 
       const adif = AdifParser.parseAdi(content);
       logger.debug(`Parsed ${adif.records?.length || 0} records`);
-      
+
       this.qsoCache.clear();
       let normalizedLegacyVoiceModes = false;
-      
+
       if (adif.records) {
+        const parsedQsos: QSORecord[] = [];
         for (const record of adif.records) {
           try {
-            // 直接传递record，而不是record.fields
             const qso = this.adifToQSORecord(record);
-            this.qsoCache.set(qso.id, qso);
+            parsedQsos.push(qso);
             if (['USB', 'LSB'].includes((record.mode || '').trim().toUpperCase())) {
               normalizedLegacyVoiceModes = true;
             }
-            logger.debug(`Loaded QSO: ${qso.id} - ${qso.callsign}`);
+            logger.debug(`Parsed QSO: ${qso.id} - ${qso.callsign}`);
           } catch (err) {
             logger.error('Failed to load record', { err, record });
           }
         }
+        // 按时间升序排列，确保内存缓存和文件顺序一致
+        parsedQsos.sort((a, b) => a.startTime - b.startTime);
+        for (const qso of parsedQsos) {
+          this.qsoCache.set(qso.id, qso);
+        }
       }
-      
+
       logger.debug(`Cache loaded: ${this.qsoCache.size} records`);
       if (normalizedLegacyVoiceModes) {
+        this.needsFullRewrite = true;
         await this.saveCache();
       }
     } catch (error) {
@@ -975,23 +986,39 @@ export class ADIFLogProvider implements ILogProvider {
   }
 
   /**
-   * 保存缓存到文件
+   * 保存缓存到文件。
+   * 全量写入（更新/删除/导入后）时排序后原子写入；
+   * 仅新增记录时，在文件末尾追加写入，避免重写整个文件。
    */
   private async saveCache(): Promise<void> {
-    let adifContent = `TX-5DR Log File
+    if (this.needsFullRewrite) {
+      const sorted = [...this.qsoCache.values()].sort((a, b) => a.startTime - b.startTime);
+      let adifContent = `TX-5DR Log File
 <ADIF_VER:5>3.1.4
 <PROGRAMID:6>TX-5DR
 <PROGRAMVERSION:5>1.0.0
 <EOH>
 
 `;
+      for (const qso of sorted) {
+        adifContent += this.qsoRecordToADIF(qso);
+      }
 
-    for (const qso of this.qsoCache.values()) {
-      // 从ID中提取operatorId（如果存在）
-      adifContent += this.qsoRecordToADIF(qso);
+      await this.atomicWriteFile(this.logFilePath, adifContent);
+      this.needsFullRewrite = false;
+      this.pendingAppendIds.clear();
+    } else if (this.pendingAppendIds.size > 0) {
+      const records: QSORecord[] = [];
+      for (const id of this.pendingAppendIds) {
+        const qso = this.qsoCache.get(id);
+        if (qso) records.push(qso);
+      }
+      records.sort((a, b) => a.startTime - b.startTime);
+      const lines = records.map((r) => this.qsoRecordToADIF(r)).join('');
+      await fs.appendFile(this.logFilePath, lines, 'utf-8');
+      this.pendingAppendIds.clear();
     }
 
-    await this.atomicWriteFile(this.logFilePath, adifContent);
     if (this.saveFailureCount > 0) {
       logger.info('ADIF cache save recovered after failures', { previousFailures: this.saveFailureCount });
       this.saveFailureCount = 0;
@@ -1015,17 +1042,18 @@ export class ADIFLogProvider implements ILogProvider {
     // 增量更新 ALL 索引
     const allIdx = this.operatorIndexMap.get(ADIFLogProvider.ALL_KEY);
     if (allIdx) addQSOToIndex(allIdx, record);
+    this.pendingAppendIds.add(record.id);
     this.scheduleSave();
   }
-  
+
   async updateQSO(id: string, updates: Partial<QSORecord>): Promise<void> {
     this.ensureInitialized();
-    
+
     const existing = this.qsoCache.get(id);
     if (!existing) {
       throw new Error(`QSO with id ${id} not found`);
     }
-    
+
     const nextSubmode = updates.mode !== undefined && updates.submode === undefined
       ? undefined
       : updates.submode ?? existing.submode;
@@ -1038,28 +1066,34 @@ export class ADIFLogProvider implements ILogProvider {
       comment: updates.comment ?? existing.comment ?? buildCommentFromMessageHistory(updates.messageHistory ?? existing.messageHistory),
     });
     this.qsoCache.set(id, enrichQSOWithDXCC(updated));
+    // 更新后需要全量重写文件
+    this.needsFullRewrite = true;
+    this.pendingAppendIds.clear();
     // 简化处理：更新后重建索引（更新频率低，成本可接受）
     this.rebuildIndexes();
     this.scheduleSave();
   }
-  
+
   async deleteQSO(id: string): Promise<void> {
     this.ensureInitialized();
-    
+
     if (!this.qsoCache.delete(id)) {
       throw new Error(`QSO with id ${id} not found`);
     }
-    
+
+    // 删除后需要全量重写文件
+    this.needsFullRewrite = true;
+    this.pendingAppendIds.clear();
     // 删除后重建索引
     this.rebuildIndexes();
     this.scheduleSave();
   }
-  
+
   async getQSO(id: string): Promise<QSORecord | null> {
     this.ensureInitialized();
     return this.qsoCache.get(id) || null;
   }
-  
+
   async queryQSOs(options?: LogQueryOptions): Promise<QSORecord[]> {
     this.ensureInitialized();
     
@@ -1155,7 +1189,7 @@ export class ADIFLogProvider implements ILogProvider {
 
       // 排序
       const orderBy = options.orderBy || 'time';
-      const orderDir = options.orderDirection || 'desc';
+      const orderDir = options.orderDirection || 'asc';
       
       results.sort((a, b) => {
         let comparison = 0;
@@ -1683,6 +1717,8 @@ export class ADIFLogProvider implements ILogProvider {
     }
 
     if (didMutate) {
+      this.needsFullRewrite = true;
+      this.pendingAppendIds.clear();
       this.rebuildIndexes();
       this.scheduleSave();
     }
