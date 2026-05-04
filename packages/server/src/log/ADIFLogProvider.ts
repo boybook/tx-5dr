@@ -409,15 +409,15 @@ export interface ADIFLogProviderOptions {
 
 /**
  * 从 ADIF 原始内容中提取每条记录的原始行。
- * 找到 <EOH> 标记后，按 <EOR> 切分 body，每段补回 <EOR>\n。
+ * 大小写不敏感匹配 <EOH> 和 <EOR>（WSJT-X 使用小写，标准 ADIF 使用大写）。
  */
 function extractRawAdifLines(content: string): string[] {
-  const eohIdx = content.indexOf('<EOH>');
-  if (eohIdx === -1) return [];
-  const body = content.slice(eohIdx + 5);
-  const segments = body.split('<EOR>');
+  const eohMatch = content.match(/<EOH>/i);
+  if (!eohMatch) return [];
+  const body = content.slice(content.indexOf(eohMatch[0]) + eohMatch[0].length);
+  const segments = body.split(/<EOR>/i);
   const lines: string[] = [];
-  for (let i = 0; i < segments.length; i++) {
+  for (let i = 0; i < segments.length - 1; i++) {
     const trimmed = segments[i].trim();
     if (!trimmed) continue;
     lines.push(trimmed + '<EOR>\n');
