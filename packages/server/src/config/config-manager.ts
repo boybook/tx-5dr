@@ -898,6 +898,14 @@ export class ConfigManager {
   }
 
   /**
+   * 清除最后选择的语音频率
+   */
+  async clearLastVoiceFrequency(): Promise<void> {
+    this.config.lastVoiceFrequency = null;
+    await this.saveConfig();
+  }
+
+  /**
    * 获取最后设置的音量增益
    */
   getLastVolumeGain(): AppConfig['lastVolumeGain'] {
