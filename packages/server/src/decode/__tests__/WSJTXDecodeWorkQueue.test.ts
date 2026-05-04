@@ -20,19 +20,15 @@ vi.mock('wsjtx-lib', () => {
       return new Int16Array(audioData.length);
     }
 
-    async decode(mode: number, audioData: Int16Array, frequency: number): Promise<{ success: boolean }> {
-      decodeCalls.push({ mode, frequency, samples: audioData.length });
+    async decode(mode: number, audioData: Int16Array, options: { frequency: number; threads?: number }): Promise<{ success: boolean; messages: Array<{ text: string; snr: number; deltaTime: number; deltaFrequency: number }> }> {
+      decodeCalls.push({ mode, frequency: options.frequency, samples: audioData.length });
       pendingMessages.push({
         text: mode === WSJTXMode.FT4 ? 'CQ DX BH1ABC OM88' : 'CQ DX FT8TEST OM88',
         snr: 10,
         deltaTime: 0.1,
         deltaFrequency: 1000,
       });
-      return { success: true };
-    }
-
-    pullMessages() {
-      return pendingMessages.splice(0);
+      return { success: true, messages: [...pendingMessages] };
     }
   }
 
