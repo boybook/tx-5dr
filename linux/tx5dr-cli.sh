@@ -246,6 +246,7 @@ cmd_doctor_fix_internal() {
     load_config
     detect_os
     check_nodejs || fix_nodejs || true
+    check_unzip || fix_unzip || true
     check_glibcxx || fix_glibcxx || true
     check_nginx_installed || fix_nginx || true
     check_nginx_realtime_proxy_config || fix_nginx_realtime_proxy_config || true

@@ -278,6 +278,24 @@ check_opus_module() {
     " 2>/dev/null )
 }
 
+# Plugin system needs unzip for marketplace archive extraction.
+check_unzip() {
+    command -v unzip &>/dev/null
+}
+
+fix_unzip() {
+    detect_os
+    case "$(os_family)" in
+        debian)
+            apt-get update -qq 2>&1 || true
+            apt-get install -y unzip 2>&1 || true
+            ;;
+        rhel)
+            dnf install -y unzip 2>&1 || yum install -y unzip 2>&1 || true
+            ;;
+    esac
+}
+
 # Install missing Opus runtime library and patch @discordjs/opus prebuild path.
 fix_opus() {
     detect_os
@@ -727,6 +745,15 @@ run_doctor() {
     else
         check_line "$(msg CHECK_OPUS_LIB)" "fail" "libopus not found"
         echo -e "      ${_DIM}$(msg FIX_OPUS)${_NC}"
+        issues=$((issues + 1))
+    fi
+
+    # unzip (plugin marketplace)
+    if check_unzip; then
+        check_line "$(msg CHECK_UNZIP)" "ok" "found"
+    else
+        check_line "$(msg CHECK_UNZIP)" "fail" "not found"
+        echo -e "      ${_DIM}$(msg FIX_UNZIP)${_NC}"
         issues=$((issues + 1))
     fi
 

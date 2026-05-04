@@ -126,6 +126,13 @@ MSG_EN_FIX_OPUS="Install Opus runtime: sudo tx5dr doctor --fix"
 MSG_ZH_FIX_OPUS="安装 Opus 运行时依赖: sudo tx5dr doctor --fix"
 MSG_EN_INSTALLING_OPUS="Installing Opus audio codec dependencies..."
 MSG_ZH_INSTALLING_OPUS="正在安装 Opus 音频编解码依赖..."
+
+MSG_EN_INSTALLING_UNZIP="Installing unzip..."
+MSG_ZH_INSTALLING_UNZIP="正在安装 unzip..."
+MSG_EN_CHECK_UNZIP="Unzip"
+MSG_ZH_CHECK_UNZIP="unzip 解压工具"
+MSG_EN_FIX_UNZIP="Install unzip: sudo tx5dr doctor --fix"
+MSG_ZH_FIX_UNZIP="安装 unzip: sudo tx5dr doctor --fix"
 MSG_EN_FIXING_OPUS_PREBUILD="Patching @discordjs/opus prebuild path for current glibc..."
 MSG_ZH_FIXING_OPUS_PREBUILD="正在为当前 glibc 修补 @discordjs/opus 预编译路径..."
 
