@@ -51,7 +51,7 @@
     "rubato-fft-node": "^0.1.0",
     "serialport": "^13.0.0",
     "wav": "^1.0.2",
-    "wsjtx-lib": "1.2.5",
+    "wsjtx-lib": "portal:../../../wsjtx_lib_nodejs",
     "xstate": "^5.23.0",
     "zod": "^3.25.30",
     "zod-to-json-schema": "^3.24.5"

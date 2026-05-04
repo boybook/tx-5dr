@@ -41,7 +41,7 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
   constructor(maxConcurrency: number = 2) {
     super();
     this.maxConcurrency = maxConcurrency;
-    this.lib = new WSJTXLib();
+    this.lib = new WSJTXLib({ maxThreads: 4 });
     logger.info('encode work queue initialized', { maxConcurrency });
   }
   
