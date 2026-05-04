@@ -408,6 +408,37 @@ export interface ADIFLogProviderOptions {
 }
 
 /**
+ * 从 ADIF 原始内容中提取每条记录的原始行。
+ * 找到 <EOH> 标记后，按 <EOR> 切分 body，每段补回 <EOR>\n。
+ */
+function extractRawAdifLines(content: string): string[] {
+  const eohIdx = content.indexOf('<EOH>');
+  if (eohIdx === -1) return [];
+  const body = content.slice(eohIdx + 5);
+  const segments = body.split('<EOR>');
+  const lines: string[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    const trimmed = segments[i].trim();
+    if (!trimmed) continue;
+    lines.push(trimmed + '<EOR>\n');
+  }
+  return lines;
+}
+
+/**
+ * 从原始 ADIF 行中提取 (callsign, qsoDate) 作为匹配键。
+ * 用于将原始行与解析后的 QSO 记录关联。
+ */
+function extractAdifLineKey(line: string): string | null {
+  const callMatch = line.match(/<CALL:(\d+)>([^<]+)/i);
+  const dateMatch = line.match(/<QSO_DATE:(\d+)>([^<]+)/i);
+  if (!callMatch || !dateMatch) return null;
+  const callsign = callMatch[2].trim().toUpperCase();
+  const qsoDate = dateMatch[2].trim();
+  return `${callsign}_${qsoDate}`;
+}
+
+/**
  * ADIF格式的日志Provider实现
  */
 export class ADIFLogProvider implements ILogProvider {
@@ -422,7 +453,8 @@ export class ADIFLogProvider implements ILogProvider {
   private needsFullRewrite: boolean = false;
   private pendingAppendIds: Set<string> = new Set();
   private foreignRecordLines: Map<string, string> = new Map();
-  
+  private unparseableLines: string[] = [];
+
   constructor(options: ADIFLogProviderOptions = {}) {
     this.options = {
       autoCreateFile: true,
@@ -464,6 +496,7 @@ export class ADIFLogProvider implements ILogProvider {
     this.needsFullRewrite = false;
     this.pendingAppendIds.clear();
     this.foreignRecordLines.clear();
+    this.unparseableLines = [];
     this.isInitialized = true;
   }
   
@@ -535,7 +568,17 @@ export class ADIFLogProvider implements ILogProvider {
       const adif = AdifParser.parseAdi(content);
       logger.debug(`Parsed ${adif.records?.length || 0} records`);
 
+      // 从原始内容提取原始 ADIF 行并建立 key→line 索引
+      const rawLines = extractRawAdifLines(content);
+      const rawLineByKey = new Map<string, string>();
+      const rawLineKeys = rawLines.map((line) => extractAdifLineKey(line));
+      for (let i = 0; i < rawLines.length; i++) {
+        const key = rawLineKeys[i];
+        if (key) rawLineByKey.set(key, rawLines[i]);
+      }
+
       this.qsoCache.clear();
+      this.unparseableLines = [];
       let normalizedLegacyVoiceModes = false;
 
       if (adif.records) {
@@ -547,7 +590,7 @@ export class ADIFLogProvider implements ILogProvider {
             if (['USB', 'LSB'].includes((record.mode || '').trim().toUpperCase())) {
               normalizedLegacyVoiceModes = true;
             }
-            // 外来记录：缓存其原始 ADIF 行，写盘时原样输出，不混入 APP_TX5DR_* 字段
+            // 外来记录：从原始内容中提取原始行缓存，写盘时原样输出
             const hasTx5drEnrichment =
               record.app_tx5dr_dxcc_status !== undefined ||
               record.app_tx5dr_dxcc_source !== undefined ||
@@ -555,7 +598,11 @@ export class ADIFLogProvider implements ILogProvider {
               record.app_tx5dr_dxcc_needs_review !== undefined ||
               record.app_tx5dr_station_location_id !== undefined;
             if (!hasTx5drEnrichment) {
-              this.foreignRecordLines.set(qso.id, this.qsoRecordToADIF(qso));
+              const lookupKey = `${qso.callsign.toUpperCase()}_${formatADIFDateOnly(qso.startTime)}`;
+              const rawLine = rawLineByKey.get(lookupKey);
+              if (rawLine) {
+                this.foreignRecordLines.set(qso.id, rawLine);
+              }
             }
             logger.debug(`Parsed QSO: ${qso.id} - ${qso.callsign}`);
           } catch (err) {
@@ -569,7 +616,23 @@ export class ADIFLogProvider implements ILogProvider {
         }
       }
 
-      logger.debug(`Cache loaded: ${this.qsoCache.size} records`);
+      // 未能匹配到解析记录的原始行 → 保留在 unparseableLines，写回时不丢失
+      const matchedKeys = new Set<string>();
+      for (const qso of adif.records || []) {
+        try {
+          const callsign = qso.call?.trim().toUpperCase();
+          const qsoDate = qso.qso_date?.trim();
+          if (callsign && qsoDate) matchedKeys.add(`${callsign}_${qsoDate}`);
+        } catch { /* skip */ }
+      }
+      for (let i = 0; i < rawLines.length; i++) {
+        const key = rawLineKeys[i];
+        if (key && !matchedKeys.has(key)) {
+          this.unparseableLines.push(rawLines[i]);
+        }
+      }
+
+      logger.debug(`Cache loaded: ${this.qsoCache.size} records, ${this.foreignRecordLines.size} foreign, ${this.unparseableLines.length} unparseable`);
       if (normalizedLegacyVoiceModes) {
         this.needsFullRewrite = true;
         await this.saveCache();
@@ -1004,7 +1067,6 @@ export class ADIFLogProvider implements ILogProvider {
    */
   private async saveCache(): Promise<void> {
     if (this.needsFullRewrite) {
-      const sorted = [...this.qsoCache.values()].sort((a, b) => a.startTime - b.startTime);
       let adifContent = `TX-5DR Log File
 <ADIF_VER:5>3.1.4
 <PROGRAMID:6>TX-5DR
@@ -1012,14 +1074,19 @@ export class ADIFLogProvider implements ILogProvider {
 <EOH>
 
 `;
-      for (const qso of sorted) {
+      // qsoCache 按升序插入，直接遍历即可保证文件时间升序
+      for (const qso of this.qsoCache.values()) {
         const cached = this.foreignRecordLines.get(qso.id);
         adifContent += cached ?? this.qsoRecordToADIF(qso);
+      }
+      for (const line of this.unparseableLines) {
+        adifContent += line;
       }
 
       await this.atomicWriteFile(this.logFilePath, adifContent);
       this.needsFullRewrite = false;
       this.pendingAppendIds.clear();
+      this.unparseableLines = [];
     } else if (this.pendingAppendIds.size > 0) {
       const records: QSORecord[] = [];
       for (const id of this.pendingAppendIds) {
@@ -1677,7 +1744,8 @@ export class ADIFLogProvider implements ILogProvider {
     records: QSORecord[],
     detectedFormat: LogBookImportResult['detectedFormat'],
     totalRead: number,
-    initialSkipped: number
+    initialSkipped: number,
+    rawLines?: string[],
   ): Promise<LogBookImportResult> {
     this.ensureInitialized();
 
@@ -1689,6 +1757,14 @@ export class ADIFLogProvider implements ILogProvider {
       skipped: initialSkipped,
     };
     const fingerprintIndex = this.buildFingerprintIndex();
+    // ADIF 导入时，建立原始行 key→line 索引用于匹配
+    const rawLineByKey = new Map<string, string>();
+    if (rawLines) {
+      for (const line of rawLines) {
+        const key = extractAdifLineKey(line);
+        if (key) rawLineByKey.set(key, line);
+      }
+    }
     let didMutate = false;
 
     for (const rawRecord of records) {
@@ -1703,14 +1779,16 @@ export class ADIFLogProvider implements ILogProvider {
         const existingId = fingerprintIndex.get(fingerprint);
 
         if (!existingId) {
-          const rawRecord = {
+          const id = this.buildImportId(record);
+          const insertedRecord = enrichQSOWithDXCC({
             ...record,
-            id: this.buildImportId(record),
-          };
-          const cleanLine = this.qsoRecordToADIF(rawRecord);
-          const insertedRecord = enrichQSOWithDXCC(rawRecord);
+            id,
+          });
           this.qsoCache.set(insertedRecord.id, insertedRecord);
-          this.foreignRecordLines.set(insertedRecord.id, cleanLine);
+          // 尝试从原始 ADIF 行匹配原始行，匹配不到则退化为重新编码
+          const lookupKey = `${record.callsign.trim().toUpperCase()}_${formatADIFDateOnly(record.startTime)}`;
+          const rawLine = rawLineByKey.get(lookupKey);
+          this.foreignRecordLines.set(insertedRecord.id, rawLine ?? this.qsoRecordToADIF({ ...record, id }));
           fingerprintIndex.set(fingerprint, insertedRecord.id);
           result.imported += 1;
           didMutate = true;
@@ -1767,7 +1845,8 @@ export class ADIFLogProvider implements ILogProvider {
       }
     }
 
-    return this.importRecords(records, 'adif', totalRead, skipped);
+    const rawLines = extractRawAdifLines(adifContent);
+    return this.importRecords(records, 'adif', totalRead, skipped, rawLines);
   }
 
   async importCSV(csvContent: string): Promise<LogBookImportResult> {
