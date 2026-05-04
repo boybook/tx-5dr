@@ -7014,7 +7014,7 @@ __metadata:
     typescript: "npm:^5.0.0"
     vitest: "npm:^1.0.0"
     wav: "npm:^1.0.2"
-    wsjtx-lib: "npm:1.2.5"
+    wsjtx-lib: "portal:../../../wsjtx_lib_nodejs"
     xstate: "npm:^5.23.0"
     zod: "npm:^3.25.30"
     zod-to-json-schema: "npm:^3.24.5"
@@ -21096,16 +21096,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"wsjtx-lib@npm:1.2.5":
-  version: 1.2.5
-  resolution: "wsjtx-lib@npm:1.2.5"
+"wsjtx-lib@portal:../../../wsjtx_lib_nodejs::locator=%40tx5dr%2Fserver%40workspace%3Apackages%2Fserver":
+  version: 0.0.0-use.local
+  resolution: "wsjtx-lib@portal:../../../wsjtx_lib_nodejs::locator=%40tx5dr%2Fserver%40workspace%3Apackages%2Fserver"
   dependencies:
     node-addon-api: "npm:^8.3.1"
     node-gyp-build: "npm:^4.8.0"
-  checksum: 10c0/11ae0259ee0d53dc9671fa6ca2af89898e8d1bc8e45a08fe58ca54f5741cc73ab9d7d4b97df48802cd12edef5a2fc13f5dbf55a65f0fe4b99faea95db04e413c
   conditions: (os=darwin | os=linux | os=win32) & (cpu=x64 | cpu=arm64)
   languageName: node
-  linkType: hard
+  linkType: soft
 
 "xdg-basedir@npm:^4.0.0":
   version: 4.0.0
