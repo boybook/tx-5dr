@@ -164,6 +164,20 @@ for legacy_file in "$legacy_credential" "$legacy_config"; do
 done
 rm -f "$legacy_service_file" 2>/dev/null || true
 
+# Ensure /etc/tx5dr/config.env exists before starting the service
+CONFIG_ENV_TEMPLATE="/usr/share/tx5dr/config.env.default"
+if [[ ! -f "$CONFIG_ENV" ]]; then
+    if [[ -f "$CONFIG_ENV_TEMPLATE" ]]; then
+        cp "$CONFIG_ENV_TEMPLATE" "$CONFIG_ENV"
+        chmod 644 "$CONFIG_ENV"
+        _msg "config.env was missing, restored from default template." \
+             "config.env 缺失，已从默认模板恢复。"
+    else
+        _msg "WARNING: config.env and its template are both missing. The server may use incorrect paths." \
+             "警告：config.env 及其模板均缺失，服务器可能使用错误的配置路径。"
+    fi
+fi
+
 systemctl daemon-reload 2>/dev/null || true
 systemctl enable tx5dr 2>/dev/null || true
 
