@@ -36,6 +36,7 @@ export interface ElectronMessages {
     openMainWindow: string;
     logViewer: string;
     openInBrowser: string;
+    about: string;
     quit: string;
   };
 }
@@ -73,6 +74,7 @@ const ZH: ElectronMessages = {
     openMainWindow: '打开主窗口',
     logViewer: '日志查看器',
     openInBrowser: '在浏览器中打开',
+    about: '关于 TX-5DR',
     quit: '退出',
   },
 };
@@ -110,6 +112,7 @@ const EN: ElectronMessages = {
     openMainWindow: 'Open Main Window',
     logViewer: 'Log Viewer',
     openInBrowser: 'Open in Browser',
+    about: 'About TX-5DR',
     quit: 'Quit',
   },
 };

@@ -66,6 +66,20 @@ body.logbook-page {
   overflow-x: hidden;
 }
 
+html.about-page,
+body.about-page {
+  height: auto;
+  min-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+html.about-page,
+body.about-page,
+body.about-page.text-foreground.bg-background {
+  background-color: hsl(var(--heroui-default-100)) !important;
+}
+
 html.logbook-page.logbook-globe-dominant {
   background-color: #020617 !important;
 }
@@ -96,6 +110,11 @@ body.text-foreground.bg-background {
 }
 
 html.logbook-page #root {
+  height: auto;
+  min-height: 100%;
+}
+
+html.about-page #root {
   height: auto;
   min-height: 100%;
 }

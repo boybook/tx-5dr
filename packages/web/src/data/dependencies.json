@@ -1,0 +1,212 @@
+[
+  {
+    "name": "react",
+    "version": "18.x",
+    "license": "MIT",
+    "url": "https://react.dev",
+    "category": "frontend"
+  },
+  {
+    "name": "@heroui/react",
+    "version": "2.7.x",
+    "license": "MIT",
+    "url": "https://heroui.com",
+    "category": "frontend"
+  },
+  {
+    "name": "@heroicons/react",
+    "version": "2.x",
+    "license": "MIT",
+    "url": "https://heroicons.com",
+    "category": "frontend"
+  },
+  {
+    "name": "@fortawesome/react-fontawesome",
+    "version": "0.2.x",
+    "license": "MIT",
+    "url": "https://fontawesome.com",
+    "category": "frontend"
+  },
+  {
+    "name": "framer-motion",
+    "version": "12.x",
+    "license": "MIT",
+    "url": "https://www.framer.com/motion/",
+    "category": "frontend"
+  },
+  {
+    "name": "tailwindcss",
+    "version": "3.x",
+    "license": "MIT",
+    "url": "https://tailwindcss.com",
+    "category": "frontend"
+  },
+  {
+    "name": "i18next",
+    "version": "23.x",
+    "license": "MIT",
+    "url": "https://www.i18next.com",
+    "category": "frontend"
+  },
+  {
+    "name": "react-i18next",
+    "version": "14.x",
+    "license": "MIT",
+    "url": "https://react.i18next.com",
+    "category": "frontend"
+  },
+  {
+    "name": "three",
+    "version": "0.180.x",
+    "license": "MIT",
+    "url": "https://threejs.org",
+    "category": "frontend"
+  },
+  {
+    "name": "react-globe.gl",
+    "version": "2.x",
+    "license": "MIT",
+    "url": "https://github.com/vasturiano/react-globe.gl",
+    "category": "frontend"
+  },
+  {
+    "name": "react-markdown",
+    "version": "10.x",
+    "license": "MIT",
+    "url": "https://github.com/remarkjs/react-markdown",
+    "category": "frontend"
+  },
+  {
+    "name": "fastify",
+    "version": "5.x",
+    "license": "MIT",
+    "url": "https://fastify.dev",
+    "category": "backend"
+  },
+  {
+    "name": "@fastify/websocket",
+    "version": "11.x",
+    "license": "MIT",
+    "url": "https://github.com/fastify/fastify-websocket",
+    "category": "backend"
+  },
+  {
+    "name": "audify",
+    "version": "1.10.1",
+    "license": "MIT",
+    "url": "https://github.com/almoghamdani/audify",
+    "category": "backend"
+  },
+  {
+    "name": "wsjtx-lib",
+    "version": "2.0.0",
+    "license": "GPL-3.0",
+    "url": "https://github.com/boybook/wsjtx-lib",
+    "category": "backend"
+  },
+  {
+    "name": "hamlib",
+    "version": "0.6.1",
+    "license": "LGPL-2.1",
+    "url": "https://hamlib.github.io",
+    "category": "backend"
+  },
+  {
+    "name": "icom-wlan-node",
+    "version": "0.5.1",
+    "license": "MIT",
+    "url": "https://github.com/boybook/icom-wlan-node",
+    "category": "backend"
+  },
+  {
+    "name": "fast-jwt",
+    "version": "4.x",
+    "license": "MIT",
+    "url": "https://github.com/nearform/fast-jwt",
+    "category": "backend"
+  },
+  {
+    "name": "xstate",
+    "version": "5.x",
+    "license": "MIT",
+    "url": "https://stately.ai/docs/xstate",
+    "category": "backend"
+  },
+  {
+    "name": "zod",
+    "version": "3.x",
+    "license": "MIT",
+    "url": "https://zod.dev",
+    "category": "backend"
+  },
+  {
+    "name": "electron",
+    "version": "36.x",
+    "license": "MIT",
+    "url": "https://www.electronjs.org",
+    "category": "electron"
+  },
+  {
+    "name": "electron-log",
+    "version": "5.x",
+    "license": "MIT",
+    "url": "https://github.com/megahertz/electron-log",
+    "category": "electron"
+  },
+  {
+    "name": "@electron-forge/cli",
+    "version": "7.x",
+    "license": "MIT",
+    "url": "https://www.electronforge.io",
+    "category": "electron"
+  },
+  {
+    "name": "WSJT-X",
+    "version": "—",
+    "license": "GPL-3.0",
+    "url": "https://wsjt.sourceforge.io/wsjtx.html",
+    "category": "protocol"
+  },
+  {
+    "name": "rubato-fft-node",
+    "version": "0.1.x",
+    "license": "MIT",
+    "url": "https://github.com/boybook/rubato-fft-node",
+    "category": "protocol"
+  },
+  {
+    "name": "@openwebrx-js/api",
+    "version": "0.1.x",
+    "license": "MIT",
+    "url": "https://github.com/openwebrx-js",
+    "category": "protocol"
+  },
+  {
+    "name": "adif-parser-ts",
+    "version": "0.6.x",
+    "license": "MIT",
+    "url": "https://github.com/EthanRBrown/adif-parser-ts",
+    "category": "protocol"
+  },
+  {
+    "name": "typescript",
+    "version": "5.x",
+    "license": "Apache-2.0",
+    "url": "https://www.typescriptlang.org",
+    "category": "tools"
+  },
+  {
+    "name": "turbo",
+    "version": "latest",
+    "license": "MIT",
+    "url": "https://turbo.build",
+    "category": "tools"
+  },
+  {
+    "name": "vite",
+    "version": "5.x",
+    "license": "MIT",
+    "url": "https://vitejs.dev",
+    "category": "tools"
+  }
+]

@@ -62,6 +62,15 @@ interface DesktopUpdateRecentCommit {
   publishedAt: string | null;
 }
 
+interface BuildInfo {
+  channel: 'release' | 'nightly';
+  version: string;
+  commit: string;
+  commitShort: string;
+  tag: string;
+  buildTimestamp: string;
+}
+
 interface DesktopUpdateStatus {
   channel: 'release' | 'nightly';
   currentVersion: string;
@@ -166,7 +175,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * 获取应用版本
      */
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
-    
+
+    /**
+     * 获取构建信息（channel/commit/tag/buildTimestamp）
+     */
+    getBuildInfo: (): Promise<BuildInfo> => ipcRenderer.invoke('app:getBuildInfo'),
+
     /**
      * 退出应用
      */
@@ -196,6 +210,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 窗口管理
   window: {
+    /**
+     * 打开"关于"窗口
+     */
+    openAbout: () => ipcRenderer.invoke('window:openAbout'),
+
     /**
      * 打开通联日志窗口
      */
@@ -330,6 +349,7 @@ declare global {
       };
       app: {
         getVersion(): Promise<string>;
+        getBuildInfo(): Promise<BuildInfo>;
         quit(): Promise<void>;
         restart(): Promise<void>;
         minimize(): Promise<void>;
@@ -341,6 +361,7 @@ declare global {
         openDownload(url?: string): Promise<void>;
       };
       window: {
+        openAbout(): Promise<void>;
         openLogbookWindow(queryString: string): Promise<void>;
         openSpectrumWindow(): Promise<void>;
         onSpectrumWindowClosed(callback: () => void): void;

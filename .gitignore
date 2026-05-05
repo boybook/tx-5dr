@@ -16,6 +16,7 @@ dist/
 build/
 !build/entitlements.mac.plist
 data/
+!packages/web/src/data/
 
 # Environment variables
 .env

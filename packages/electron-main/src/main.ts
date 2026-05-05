@@ -10,6 +10,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import type { DesktopHttpsStatus } from '@tx5dr/contracts';
 import { DesktopUpdateService } from './desktopUpdate.js';
+import { BUILD_INFO } from './generated/buildInfo.js';
 import { createLogger } from './utils/logger.js';
 import { getMessages } from './i18n.js';
 import {
@@ -49,6 +50,7 @@ let hasStartupError: boolean = false; // 是否发生启动错误
 let crashedProcessName: string = ''; // 崩溃的子进程名
 let mainWindowInstance: BrowserWindow | null = null; // 主窗口实例
 let trayInstance: Tray | null = null; // 系统托盘实例（Windows/Linux）
+let aboutWindow: BrowserWindow | null = null; // “关于”窗口实例（单例）
 let isQuitting: boolean = false; // 主动退出标志，防止子进程被杀时弹崩溃错误
 const intentionalChildShutdowns = new WeakSet<import('node:child_process').ChildProcess>();
 let startupErrorDialogShown = false;
@@ -1593,6 +1595,8 @@ async function waitForWebGatewayReady(
 function buildContextMenu(includQuit: boolean): Menu {
   const msgs = getMessages(app.getLocale());
   const template: Parameters<typeof Menu.buildFromTemplate>[0] = [
+    { label: msgs.menu.about, click: () => { void openAboutWindow(); } },
+    { type: 'separator' },
     { label: msgs.menu.openMainWindow, click: () => showMainWindow() },
     { label: msgs.menu.logViewer, click: () => openLogInTerminal() },
     { type: 'separator' },
@@ -1651,6 +1655,105 @@ function createDockMenu() {
   // Dock 菜单不含"退出"（macOS 有标准退出方式 Cmd+Q）
   app.dock.setMenu(buildContextMenu(false));
   logger.info('dock menu created');
+}
+
+/**
+ * 打开/聚焦"关于"窗口（单例）
+ */
+async function openAboutWindow(): Promise<void> {
+  if (aboutWindow && !aboutWindow.isDestroyed()) {
+    if (aboutWindow.isMinimized()) aboutWindow.restore();
+    aboutWindow.focus();
+    return;
+  }
+
+  try {
+    aboutWindow = new BrowserWindow({
+      width: 720,
+      height: 760,
+      minWidth: 600,
+      minHeight: 500,
+      resizable: true,
+      maximizable: false,
+      minimizable: true,
+      show: true,
+      titleBarStyle: 'hiddenInset',
+      titleBarOverlay: process.platform === 'win32' ? {
+        color: '#ffffff',
+        symbolColor: '#000000',
+      } : false,
+      frame: process.platform !== 'darwin',
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        webSecurity: false,
+        allowRunningInsecureContent: true,
+        backgroundThrottling: false,
+        preload: app.isPackaged
+          ? join(process.resourcesPath, 'app', 'packages', 'electron-preload', 'dist', 'preload.js')
+          : join(__dirname, '../../electron-preload/dist/preload.js'),
+      },
+    });
+
+    if (process.platform === 'win32' || process.platform === 'linux') {
+      aboutWindow.setMenuBarVisibility(false);
+    }
+
+    const aboutUrl = `${getWebUrl()}/about.html`;
+    logger.info(`opening about window at ${aboutUrl}`);
+    await aboutWindow.loadURL(aboutUrl);
+
+    if (process.env.NODE_ENV === 'development' && !app.isPackaged && shouldOpenDevTools()) {
+      aboutWindow.webContents.openDevTools();
+    }
+
+    aboutWindow.focus();
+
+    aboutWindow.on('closed', () => {
+      aboutWindow = null;
+    });
+  } catch (error) {
+    logger.error('failed to open about window', error);
+    aboutWindow = null;
+  }
+}
+
+/**
+ * 创建 macOS 应用顶部菜单（Cmd+Q/W/C/V 等需要保留 role 项）
+ */
+function createApplicationMenu() {
+  if (process.platform !== 'darwin') return;
+  const msgs = getMessages(app.getLocale());
+  const template: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: app.name,
+      submenu: [
+        { label: msgs.menu.about, click: () => { void openAboutWindow(); } },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    { role: 'windowMenu' },
+    {
+      role: 'help',
+      submenu: [
+        {
+          label: 'GitHub',
+          click: () => { void shell.openExternal('https://github.com/boybook/tx-5dr'); },
+        },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  logger.info('application menu created (macOS)');
 }
 
 /**
@@ -2545,6 +2648,7 @@ const startApp = async () => {
   // 创建系统托盘（Windows/Linux）或 Dock 菜单（macOS）
   createTray();
   createDockMenu();
+  createApplicationMenu();
   setupIpcHandlers();
   applyGlobalShortcutConfig(loadElectronSettings().shortcuts);
 
@@ -2667,6 +2771,12 @@ function setupIpcHandlers() {
     return;
   }
   ipcHandlersConfigured = true;
+
+  // 处理打开"关于"窗口的请求
+  ipcMain.handle('window:openAbout', async () => {
+    logger.info('IPC window:openAbout');
+    await openAboutWindow();
+  });
 
   // 处理打开通联日志窗口的请求
   ipcMain.handle('window:openLogbook', async (_event, queryString: string) => {
@@ -2846,6 +2956,7 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
+  ipcMain.handle('app:getBuildInfo', () => BUILD_INFO);
   ipcMain.handle('app:quit', async () => {
     await cleanupAndQuit('renderer');
   });

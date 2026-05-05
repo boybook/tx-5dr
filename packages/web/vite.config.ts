@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
+import { readFileSync } from 'fs';
 import type { ProxyOptions } from 'vite';
 
 // Keep CI/local builds quiet until we intentionally refresh the browserslist DB.
@@ -8,6 +9,15 @@ process.env.BROWSERSLIST_IGNORE_OLD_DATA = 'true';
 const DEFAULT_WEB_PORT = 8076;
 const configuredWebPort = Number(process.env.WEB_PORT || process.env.TX5DR_WEB_DEV_PORT || DEFAULT_WEB_PORT);
 const backendTarget = process.env.TX5DR_BACKEND_TARGET || `http://localhost:${process.env.PORT || 4000}`;
+
+const rootPkgVersion = (() => {
+  try {
+    const raw = readFileSync(resolve(__dirname, '../../package.json'), 'utf8');
+    return JSON.parse(raw).version as string;
+  } catch {
+    return 'unknown';
+  }
+})();
 
 function createProxyOptions(target: string, options?: { rewrite?: (path: string) => string }): ProxyOptions {
   return {
@@ -65,11 +75,13 @@ export default defineConfig({
         main: resolve(__dirname, 'index.html'),
         logbook: resolve(__dirname, 'logbook.html'),
         spectrum: resolve(__dirname, 'spectrum.html'),
+        about: resolve(__dirname, 'about.html'),
       },
     },
   },
   define: {
     global: 'globalThis',
+    'import.meta.env.PACKAGE_VERSION': JSON.stringify(rootPkgVersion),
   },
   resolve: {
     alias: {

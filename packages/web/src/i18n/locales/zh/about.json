@@ -1,0 +1,49 @@
+{
+  "title": "关于 TX-5DR",
+  "appName": "TX-5DR",
+  "tagline": "业余无线电数字模式软件",
+  "version": "版本",
+  "versionUnknown": "未知",
+  "channel": {
+    "release": "正式版",
+    "nightly": "Nightly"
+  },
+  "commit": "构建",
+  "buildTime": "构建时间",
+  "author": "作者",
+  "authorCallsign": "BG5DRB",
+  "license": "开源协议",
+  "licenseNote": "本项目主仓库整体采用 GPL-3.0 协议；插件相关子包（@tx5dr/plugin-api、create-tx5dr-plugin、@tx5dr/rigctld-server）单独以 MIT 协议发布以便二次开发。",
+  "viewLicense": "查看 LICENSE",
+  "repository": "GitHub 仓库",
+  "issues": "提交问题",
+  "openExternal": "打开链接",
+  "loading": "加载中…",
+  "loadFailed": "加载失败",
+  "dependencies": {
+    "title": "第三方依赖",
+    "subtitle": "感谢以下开源项目的支持",
+    "licenseLabel": "协议",
+    "category": {
+      "frontend": "前端",
+      "backend": "后端",
+      "electron": "Electron",
+      "protocol": "协议与 DSP",
+      "tools": "构建工具"
+    }
+  },
+  "sponsors": {
+    "title": "赞助者",
+    "subtitle": "感谢每一位支持者",
+    "empty": "期待你的支持",
+    "becomeSponsor": "成为赞助者",
+    "since": "自 {{date}}",
+    "message": "留言",
+    "tier": {
+      "gold": "金牌赞助",
+      "silver": "银牌赞助",
+      "bronze": "铜牌赞助",
+      "individual": "个人赞助"
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "title": "About TX-5DR",
+  "appName": "TX-5DR",
+  "tagline": "Amateur Radio Digital Mode Software",
+  "version": "Version",
+  "versionUnknown": "Unknown",
+  "channel": {
+    "release": "Stable",
+    "nightly": "Nightly"
+  },
+  "commit": "Build",
+  "buildTime": "Built",
+  "author": "Author",
+  "authorCallsign": "BG5DRB",
+  "license": "License",
+  "licenseNote": "This project's main repository is licensed under GPL-3.0. The plugin-related sub-packages (@tx5dr/plugin-api, create-tx5dr-plugin, @tx5dr/rigctld-server) are released separately under the MIT license to facilitate third-party development.",
+  "viewLicense": "View LICENSE",
+  "repository": "GitHub Repository",
+  "issues": "Report Issue",
+  "openExternal": "Open Link",
+  "loading": "Loading…",
+  "loadFailed": "Failed to load",
+  "dependencies": {
+    "title": "Third-party Dependencies",
+    "subtitle": "Thanks to these open-source projects",
+    "licenseLabel": "License",
+    "category": {
+      "frontend": "Frontend",
+      "backend": "Backend",
+      "electron": "Electron",
+      "protocol": "Protocol & DSP",
+      "tools": "Build Tools"
+    }
+  },
+  "sponsors": {
+    "title": "Sponsors",
+    "subtitle": "Thanks to every supporter",
+    "empty": "Be the first to support us",
+    "becomeSponsor": "Become a Sponsor",
+    "since": "since {{date}}",
+    "message": "Message",
+    "tier": {
+      "gold": "Gold Sponsor",
+      "silver": "Silver Sponsor",
+      "bronze": "Bronze Sponsor",
+      "individual": "Individual Sponsor"
+    }
+  }
+}
