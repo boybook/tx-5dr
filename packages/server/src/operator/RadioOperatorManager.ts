@@ -571,9 +571,15 @@ export class RadioOperatorManager {
       const runtimeState = this._pluginManager?.getOperatorRuntimeStatus(id);
       const currentSlot = runtimeState?.currentSlot ?? 'TX6';
       const slots = runtimeState?.slots;
+      let targetGrid = String(runtimeState?.context?.targetGrid ?? '');
+      const targetCall = String(runtimeState?.context?.targetCallsign ?? '');
+      if (!targetGrid && targetCall && this.callsignTracker) {
+        targetGrid = this.callsignTracker.getGrid(targetCall) ?? '';
+      }
+
       const targetContext = {
-        targetCall: String(runtimeState?.context?.targetCallsign ?? ''),
-        targetGrid: String(runtimeState?.context?.targetGrid ?? ''),
+        targetCall,
+        targetGrid,
         reportSent: Number(runtimeState?.context?.reportSent ?? 0),
         reportReceived: Number(runtimeState?.context?.reportReceived ?? 0),
       };

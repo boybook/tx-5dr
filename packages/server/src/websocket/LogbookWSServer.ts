@@ -3,6 +3,7 @@
 
 import { WSMessageHandler } from '@tx5dr/core';
 import { WSMessageType } from '@tx5dr/contracts';
+import type { OperatorStatus } from '@tx5dr/contracts';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 
 interface LogbookConnection {
@@ -36,6 +37,13 @@ export class LogbookWSServer {
     });
     this.engine.on('logbookUpdated' as any, (data: { logBookId: string; operatorId?: string }) => {
       this.broadcastChangeNotice({ logBookId: data.logBookId, operatorId: data.operatorId });
+    });
+    // 推送操作员状态更新（用于通联日志页面的实时虚线渲染）
+    this.engine.on('operatorStatusUpdate' as any, (status: OperatorStatus) => {
+      this.broadcastOperatorStatusUpdate(status);
+    });
+    this.engine.on('operatorsList' as any, (data: { operators: OperatorStatus[] }) => {
+      this.broadcastOperatorsList(data.operators);
     });
   }
 
@@ -95,6 +103,26 @@ export class LogbookWSServer {
     for (const conn of this.connections.values()) {
       if (this.match(conn, payload)) {
         this.send(conn, WSMessageType.LOGBOOK_CHANGE_NOTICE, payload);
+      }
+    }
+  }
+
+  broadcastOperatorStatusUpdate(status: OperatorStatus) {
+    for (const conn of this.connections.values()) {
+      if (conn.operatorId && conn.operatorId !== status.id) {
+        continue;
+      }
+      this.send(conn, WSMessageType.OPERATOR_STATUS_UPDATE, status);
+    }
+  }
+
+  broadcastOperatorsList(operators: OperatorStatus[]) {
+    for (const conn of this.connections.values()) {
+      if (conn.operatorId) {
+        const filtered = operators.filter((op) => op.id === conn.operatorId);
+        this.send(conn, WSMessageType.OPERATORS_LIST, { operators: filtered });
+      } else {
+        this.send(conn, WSMessageType.OPERATORS_LIST, { operators });
       }
     }
   }

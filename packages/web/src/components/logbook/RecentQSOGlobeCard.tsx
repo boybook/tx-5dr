@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Select, SelectItem, Spinner } from '@heroui/react';
-import { getGridBounds, type LogBookWorkedGridItem, type QSORecord, type StationInfo } from '@tx5dr/contracts';
+import { getGridBounds, type LogBookWorkedGridItem, type OperatorStatus, type QSORecord, type StationInfo } from '@tx5dr/contracts';
 import { api } from '@tx5dr/core';
 import Globe, { type GlobeMethods } from 'react-globe.gl';
 import * as THREE from 'three';
@@ -10,10 +10,12 @@ import landTopology from 'world-atlas/land-110m.json';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
 import { isElectron, isMacOS } from '../../utils/config';
+import { OperatorsContext } from '../../store/radio/contexts';
 import { useViewportHeightValue } from '../../hooks/useViewportHeight';
 import {
   buildWorkedGridGlobeModel,
   buildPagedQSOGlobeModel,
+  buildInProgressQSOGlobeModel,
   getMaidenheadGridLines,
   type GlobeArc,
   type GlobeStationPoint,
@@ -115,6 +117,7 @@ interface RecentQSOGlobeCardProps {
   onPageSizeChange: (pageSize: number) => void;
   desktopLeftOverlay?: React.ReactNode;
   desktopRightOverlay?: React.ReactNode;
+  operators?: OperatorStatus[];
 }
 
 function toRadians(value: number): number {
@@ -166,6 +169,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   onPageSizeChange,
   desktopLeftOverlay,
   desktopRightOverlay,
+  operators: operatorsProp,
 }) => {
   const { t } = useTranslation('logbook');
   const [stationInfo, setStationInfo] = useState<StationInfo | null>(null);
@@ -223,6 +227,12 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   }, []);
 
   const globeModel = useMemo(() => buildPagedQSOGlobeModel(qsos, stationInfo), [qsos, stationInfo]);
+  const operatorsCtx = useContext(OperatorsContext);
+  const operators = operatorsProp ?? operatorsCtx?.operators ?? [];
+  const inProgressModel = useMemo(
+    () => buildInProgressQSOGlobeModel(operators, stationInfo),
+    [operators, stationInfo],
+  );
   const workedGridModel = useMemo(() => buildWorkedGridGlobeModel(workedGridItems), [workedGridItems]);
   const defaultGlobeHeight = useMemo(() => {
     const effectiveWidth = globeWidth || GLOBE_WIDTH_FALLBACK;
@@ -316,6 +326,19 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
       droppedInvalidGrid: globeModel.summary.droppedInvalidGrid,
     });
   }, [globeModel]);
+
+  useEffect(() => {
+    const activeOperators = operators.filter((op) => op.currentSlot !== 'TX6');
+    logger.info('Page globe in-progress model prepared', {
+      operatorCount: operators.length,
+      activeOperatorCount: activeOperators.length,
+      inProgressArcCount: inProgressModel.arcs.length,
+      inProgressRingCount: inProgressModel.rings.length,
+      firstActiveSlot: activeOperators[0]?.currentSlot,
+      firstActiveTargetCall: activeOperators[0]?.context?.targetCall,
+      firstActiveTargetGrid: activeOperators[0]?.context?.targetGrid,
+    });
+  }, [inProgressModel, operators]);
 
   useEffect(() => {
     if (!showWorkedGrids) {
@@ -485,8 +508,12 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     : globeModel.homePoint
       ? [globeModel.homePoint, ...globeModel.remotePoints]
       : globeModel.remotePoints;
-  const visibleArcs = loading || !hasRenderableData ? [] : globeModel.arcs;
-  const visibleRings = loading || !hasRenderableData ? [] : globeModel.rings;
+  const visibleArcs = loading || !hasRenderableData
+    ? inProgressModel.arcs
+    : [...globeModel.arcs, ...inProgressModel.arcs];
+  const visibleRings = loading || !hasRenderableData
+    ? inProgressModel.rings
+    : [...globeModel.rings, ...inProgressModel.rings];
   const useFourCharacterWorkedGrid = globeAltitude <= WORKED_GRID_SWITCH_ALTITUDE;
   const activeWorkedGridPolygons = showWorkedGrids
     ? (useFourCharacterWorkedGrid ? workedGridModel.precision4.polygons : workedGridModel.precision2.polygons)
@@ -763,6 +790,9 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         arcStroke="stroke"
         arcCurveResolution={48}
         arcCircularResolution={6}
+        arcDashLength="dashLength"
+        arcDashGap="dashGap"
+        arcDashAnimateTime="dashAnimateTime"
         arcLabel={(arc) => {
           const globeArc = arc as GlobeArc;
           return `${globeArc.callsign} · ${globeArc.grid}<br/>${globeArc.mode} · ${(globeArc.frequency / 1_000_000).toFixed(3)} MHz<br/>${formatUtcTime(globeArc.startTime)} UTC`;

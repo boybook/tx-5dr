@@ -1,6 +1,7 @@
 import type {
   LogBookRecentGlobeResponse,
   LogBookWorkedGridItem,
+  OperatorStatus,
   QSORecord,
   StationInfo,
 } from '@tx5dr/contracts';
@@ -44,6 +45,9 @@ export interface GlobeArc {
   startTime: number;
   mode: string;
   frequency: number;
+  dashLength?: number;
+  dashGap?: number;
+  dashAnimateTime?: number;
 }
 
 export interface GlobeRing {
@@ -595,6 +599,68 @@ export function buildPagedQSOGlobeModel(qsos: QSORecord[], stationInfo?: Station
       limited: false,
     },
   };
+}
+
+export function buildInProgressQSOGlobeModel(
+  operators: OperatorStatus[],
+  stationInfo?: StationInfo | null,
+): { arcs: GlobeArc[]; rings: GlobeRing[] } {
+  const fallbackStationCoords = stationInfo?.qth?.latitude != null && stationInfo?.qth?.longitude != null
+    ? { lat: stationInfo.qth.latitude, lon: stationInfo.qth.longitude }
+    : null;
+  const fallbackStationGridCoords = stationInfo?.qth?.grid ? gridToCoordinates(stationInfo.qth.grid) : null;
+
+  // 当 stationInfo 未配置时，尝试从 operators 的 myGrid 推导 home point
+  const operatorWithMyGrid = operators.find((op) => op.context?.myGrid && gridToCoordinates(op.context.myGrid));
+  const operatorGridCoords = operatorWithMyGrid?.context?.myGrid
+    ? gridToCoordinates(operatorWithMyGrid.context.myGrid)
+    : null;
+
+  const homePoint = fallbackStationCoords
+    ? { lat: fallbackStationCoords.lat, lng: fallbackStationCoords.lon }
+    : fallbackStationGridCoords
+      ? { lat: fallbackStationGridCoords.lat, lng: fallbackStationGridCoords.lon }
+      : operatorGridCoords
+        ? { lat: operatorGridCoords.lat, lng: operatorGridCoords.lon }
+        : null;
+
+  if (!homePoint) {
+    return { arcs: [], rings: [] };
+  }
+
+  const arcs: GlobeArc[] = [];
+  const rings: GlobeRing[] = [];
+
+  for (const op of operators) {
+    if (op.currentSlot === 'TX6') continue;
+    if (!op.context.targetCall || !op.context.targetGrid) continue;
+
+    const coords = gridToCoordinates(op.context.targetGrid);
+    if (!coords) continue;
+
+    const distanceKm = haversineDistanceKm(homePoint.lat, homePoint.lng, coords.lat, coords.lon);
+    arcs.push({
+      startLat: homePoint.lat,
+      startLng: homePoint.lng,
+      endLat: coords.lat,
+      endLng: coords.lon,
+      color: `rgba(${HIGHLIGHT_ARC_COLOR}, 0.85)`,
+      altitude: getRenderedArcAltitude(distanceKm, true),
+      stroke: distanceKm > 8000 ? 1.1 : 0.9,
+      dashLength: 0.1,
+      dashGap: 0.05,
+      dashAnimateTime: 2500,
+      grid: op.context.targetGrid,
+      callsign: op.context.targetCall,
+      startTime: Date.now(),
+      mode: op.strategy?.state ?? '',
+      frequency: op.context.frequency ?? 0,
+    });
+
+    rings.push(buildHighlightedRemoteRing(coords.lat, coords.lon));
+  }
+
+  return { arcs, rings };
 }
 
 export function buildWorkedGridGlobeModel(items: LogBookWorkedGridItem[]): WorkedGridGlobeModel {

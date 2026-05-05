@@ -32,7 +32,7 @@ import QSOFormModal from './QSOFormModal';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen, faCog, faPlus, faTableCells } from '@fortawesome/free-solid-svg-icons';
-import type { QSORecord, LogBookStatistics, CreateQSORequest, LogBookImportResult, LogBookExportOptions } from '@tx5dr/contracts';
+import type { QSORecord, LogBookStatistics, CreateQSORequest, LogBookImportResult, LogBookExportOptions, OperatorStatus } from '@tx5dr/contracts';
 import { api, WSClient, ApiError, getDisplayMode } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../../utils/config';
 import { isElectron } from '../../utils/config';
@@ -136,6 +136,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const [addFormData, setAddFormData] = useState<Partial<QSORecord>>(createDefaultAddQSOFormData);
   const [isAddSaving, setIsAddSaving] = useState(false);
 
+  // 实时操作员状态（用于地球虚线渲染）
+  const [operators, setOperators] = useState<OperatorStatus[]>([]);
+
   // 获取操作员连接的日志本
   // 日志本ID就是呼号，如果没有指定则使用操作员ID作为后备
   const effectiveLogBookId = logBookId || operatorId;
@@ -163,8 +166,33 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       }
     };
 
+    const handleOperatorStatusUpdate = (status: unknown) => {
+      const op = status as OperatorStatus;
+      if (!op?.id) return;
+      setOperators(prev => {
+        const exists = prev.findIndex(item => item.id === op.id);
+        if (exists >= 0) {
+          const next = [...prev];
+          next[exists] = op;
+          return next;
+        }
+        return [...prev, op];
+      });
+    };
+
+    const handleOperatorsList = (payload: unknown) => {
+      const data = payload as { operators?: OperatorStatus[] };
+      if (Array.isArray(data?.operators)) {
+        setOperators(data.operators);
+      }
+    };
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     client.onWSEvent('logbookChangeNotice' as any, handleLogbookChange);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client.onWSEvent('operatorStatusUpdate' as any, handleOperatorStatusUpdate);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client.onWSEvent('operatorsList' as any, handleOperatorsList);
     client.connect().catch(() => {});
 
     return () => {
@@ -1941,6 +1969,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         onPageSizeChange={handleItemsPerPageChange}
         desktopLeftOverlay={desktopGlobeTitleOverlay}
         desktopRightOverlay={desktopDxccOverlay}
+        operators={operators}
       />
 
       <div className="p-2 md:p-4 lg:p-6 max-w-7xl mx-auto">
