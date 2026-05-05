@@ -110,6 +110,7 @@ export function validatePluginDefinition(def: PluginDefinition): void {
       'onSlotStart',
       'onSlotActivity',
       'onDecode',
+      'onFrequencyChange',
       'onQSOStart',
       'onQSOComplete',
       'onQSOFail',

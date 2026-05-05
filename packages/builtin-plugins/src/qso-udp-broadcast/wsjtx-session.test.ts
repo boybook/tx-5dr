@@ -183,6 +183,78 @@ describe('WSJT-X UDP session', () => {
     });
   });
 
+  it('sends Clear then Status with the new dial frequency on frequency changes', async () => {
+    const network = createMockNetworkControl();
+    const ctx = createMockContext({
+      network,
+      radio: { frequency: 14_074_000 },
+    });
+    const session = new WsjtUdpSession(ctx, settings());
+    await session.start();
+    network._sockets[0]._sent.length = 0;
+
+    await session.onFrequencyChange({
+      frequency: 7_074_000,
+      mode: 'FT8',
+      band: '40m',
+      description: '40m FT8',
+      radioConnected: true,
+      source: 'program',
+    });
+
+    const clear = decodeWsjtMessage(sentBuffer(network, 0));
+    const status = decodeWsjtMessage(sentBuffer(network, 1));
+    expect(clear.kind).toBe('clear');
+    expect(status.kind).toBe('status');
+    if (status.kind === 'status') {
+      expect(status.dialFrequency).toBe(7_074_000);
+      expect(status.mode).toBe('FT8');
+      expect(status.txMode).toBe('FT8');
+    }
+  });
+
+  it('clears old decode history and deduplicates repeated frequency changes', async () => {
+    const network = createMockNetworkControl();
+    const ctx = createMockContext({ network });
+    const session = new WsjtUdpSession(ctx, settings());
+    await session.start();
+    network._sockets[0]._sent.length = 0;
+
+    await session.onSlotActivity({
+      slotInfo: createMockSlotInfo({ startMs: 30_000 }),
+      slotPack: null,
+      frames: [{ snr: -12, dt: 0.2, freq: 1400, message: 'CQ TEST W1AW FN31', confidence: 0.9 }],
+      messages: [createMockParsedMessage({ snr: -12, dt: 0.2, df: 1400, rawMessage: 'CQ TEST W1AW FN31' })],
+      source: 'live',
+    });
+
+    await session.onFrequencyChange({
+      frequency: 7_074_000,
+      mode: 'FT8',
+      band: '40m',
+      description: '40m FT8',
+      radioConnected: true,
+      source: 'program',
+    });
+    const sendCountAfterFirstChange = network._sockets[0]._sent.length;
+
+    await session.onFrequencyChange({
+      frequency: 7_074_000,
+      mode: 'FT8',
+      band: '40m',
+      description: '40m FT8',
+      radioConnected: true,
+      source: 'program',
+    });
+    expect(network._sockets[0]._sent).toHaveLength(sendCountAfterFirstChange);
+
+    network._sockets[0]._sent.length = 0;
+    await network._sockets[0]._emitMessage(encodeWsjtMessage(WsjtMessageType.Replay, 'server'), { address: '127.0.0.1', port: 2237 });
+
+    expect(network._sockets[0]._sent).toHaveLength(1);
+    expect(decodeWsjtMessage(sentBuffer(network, 0)).kind).toBe('status');
+  });
+
   it('sends Type 5, Type 12 and legacy raw ADIF on QSO completion', async () => {
     const network = createMockNetworkControl();
     const ctx = createMockContext({ network });

@@ -119,6 +119,35 @@ describe('PluginLoader runtime logs', () => {
     expect(errorLog?.message).toContain('Plugin definition validation failed');
   });
 
+  it('rejects global plugins that implement the frequency-change hook', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'invalid-global-frequency-hook');
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        name: 'invalid-global-frequency-hook',
+        version: '1.0.0',
+        type: 'utility',
+        instanceScope: 'global',
+        hooks: {
+          onFrequencyChange() {},
+        },
+      };
+    `, 'utf8');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loader = new PluginLoader((entry) => runtimeLogs.push(entry));
+    const loaded = await loader.scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(0);
+    const errorLog = runtimeLogs.find((entry) =>
+      entry.stage === 'validate'
+      && entry.level === 'error'
+      && entry.directoryName === 'invalid-global-frequency-hook');
+    expect(errorLog).toBeDefined();
+    expect(errorLog?.message).toContain('Global plugin instances must not implement hook "onFrequencyChange"');
+  });
+
   it('emits validate-stage error when iframe panel references unknown ui page', async () => {
     const pluginRoot = await createPluginRoot();
     const pluginDir = join(pluginRoot, 'invalid-ui-page-ref');

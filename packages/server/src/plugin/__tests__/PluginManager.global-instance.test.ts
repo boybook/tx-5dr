@@ -184,4 +184,103 @@ describe('PluginManager global instance scope', () => {
 
     await pluginManager.shutdown();
   });
+
+  it('dispatches frequency changes to active operator plugin instances', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-frequency-hook-'));
+    tempDirs.push(dataDir);
+
+    await writeUserPlugin(dataDir, 'frequency-hook-test', `
+      export default {
+        name: 'frequency-hook-test',
+        version: '1.0.0',
+        type: 'utility',
+        hooks: {
+          onFrequencyChange(state, ctx) {
+            ctx.log.info('frequency-hook-fired', {
+              frequency: state.frequency,
+              mode: state.mode,
+              band: state.band,
+            });
+          },
+        },
+      };
+    `);
+
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string }) => {
+      eventEmitter.emit('hasWorkedCallsignResponse' as any, {
+        requestId: data.requestId,
+        hasWorked: false,
+      });
+    });
+    const pluginLogs: Array<{ pluginName: string; message: string; data?: unknown }> = [];
+    eventEmitter.on('pluginLog' as any, (entry: { pluginName: string; message: string; data?: unknown }) => pluginLogs.push(entry));
+
+    const operator = createOperator('operator-1', 'BG4IAJ');
+    let pluginManager!: PluginManager;
+    pluginManager = new PluginManager({
+      eventEmitter,
+      getOperators: () => [operator],
+      getOperatorById: (id) => (id === operator.config.id ? operator : undefined),
+      getCurrentMode: () => operator.config.mode,
+      getOperatorAutomationSnapshot: (id) => pluginManager.getOperatorAutomationSnapshot(id),
+      requestOperatorCall: (operatorId, callsign, lastMessage) => {
+        pluginManager.requestCall(operatorId, callsign, lastMessage);
+      },
+      getRadioFrequency: async () => operator.config.frequency,
+      setRadioFrequency: () => {},
+      getRadioBand: () => '40m',
+      getRadioConnected: () => true,
+      getLatestSlotPack: () => null,
+      interruptOperatorTransmission: async () => {},
+      hasWorkedCallsign: async () => false,
+      resetOperatorRuntime: () => {},
+      dataDir,
+    });
+
+    pluginManager.loadConfig({
+      configs: {
+        'frequency-hook-test': { enabled: true, settings: {} },
+      },
+      operatorStrategies: {
+        [operator.config.id]: 'standard-qso',
+      },
+      operatorSettings: {
+        [operator.config.id]: {
+          'standard-qso': {
+            autoReplyToCQ: false,
+            autoResumeCQAfterFail: false,
+            autoResumeCQAfterSuccess: false,
+            replyToWorkedStations: false,
+            targetSelectionPriorityMode: 'dxcc_first',
+            maxQSOTimeoutCycles: 6,
+            maxCallAttempts: 5,
+          },
+        },
+      },
+    });
+
+    await pluginManager.start();
+    eventEmitter.emit('frequencyChanged', {
+      frequency: 7_074_000,
+      mode: 'FT8',
+      band: '40m',
+      description: '40m FT8',
+      radioConnected: true,
+      source: 'program',
+    });
+    await flushAsyncWork();
+
+    expect(pluginLogs).toContainEqual(expect.objectContaining({
+      pluginName: 'frequency-hook-test',
+      message: 'frequency-hook-fired',
+      data: expect.objectContaining({
+        frequency: 7_074_000,
+        mode: 'FT8',
+        band: '40m',
+      }),
+    }));
+
+    await pluginManager.shutdown();
+  });
 });

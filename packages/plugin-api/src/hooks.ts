@@ -1,4 +1,4 @@
-import type { ParsedFT8Message, SlotInfo, SlotPack, QSORecord, FrameMessage } from '@tx5dr/contracts';
+import type { ParsedFT8Message, SlotInfo, SlotPack, QSORecord, FrameMessage, FrequencyState } from '@tx5dr/contracts';
 import type { PluginContext } from './context.js';
 
 /**
@@ -143,6 +143,11 @@ export interface SlotActivityEvent {
 }
 
 /**
+ * Protocol-neutral radio frequency/band change event.
+ */
+export type FrequencyChangeState = FrequencyState;
+
+/**
  * Hook collection implemented by a plugin.
  *
  * Hooks fall into three broad categories:
@@ -225,6 +230,11 @@ export interface PluginHooks {
    * monitoring, trigger detection and passive analytics.
    */
   onDecode?(messages: ParsedFT8Message[], ctx: PluginContext): void;
+
+  /**
+   * Broadcast when the host operating frequency or band changes.
+   */
+  onFrequencyChange?(state: FrequencyChangeState, ctx: PluginContext): void | Promise<void>;
 
   /**
    * Broadcast when the host locks onto a target and a QSO officially starts.

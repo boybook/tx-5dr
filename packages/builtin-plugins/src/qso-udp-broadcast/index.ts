@@ -248,6 +248,11 @@ export const qsoUdpBroadcastPlugin: PluginDefinition = {
         .then((session) => session.onSlotActivity(event))
         .catch((error) => ctx.log.error('WSJT-X UDP decode broadcast failed', error));
     },
+    onFrequencyChange(state, ctx) {
+      void getOrStartSession(ctx)
+        .then((session) => session.onFrequencyChange(state))
+        .catch((error) => ctx.log.error('WSJT-X UDP frequency status broadcast failed', error));
+    },
     onQSOComplete(record, ctx) {
       void getOrStartSession(ctx)
         .then((session) => session.onQSOComplete(record))

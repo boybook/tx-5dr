@@ -1485,11 +1485,21 @@ export class PluginManager {
     const onEncodeStart = (slotInfo: SlotInfo) => {
       this.orchestrator.handleEncodeStart(slotInfo);
     };
+    const onFrequencyChanged = (state: import('@tx5dr/contracts').FrequencyState) => {
+      void Promise.allSettled(this.deps.getOperators().map((operator) => this.dispatcher.dispatchBroadcast(
+        operator.config.id,
+        'onFrequencyChange',
+        (hook, ctx) => hook(state, ctx),
+        (instance) => this.getCtxForInstance(instance),
+      )));
+    };
 
     eventEmitter.on('slotStart', onSlotStart);
     eventEmitter.on('encodeStart', onEncodeStart);
+    eventEmitter.on('frequencyChanged', onFrequencyChanged);
     this.unsubscribeFns.push(() => eventEmitter.off('slotStart', onSlotStart));
     this.unsubscribeFns.push(() => eventEmitter.off('encodeStart', onEncodeStart));
+    this.unsubscribeFns.push(() => eventEmitter.off('frequencyChanged', onFrequencyChanged));
   }
 
   /** @internal Exposed for integration tests that call via `(pm as any).handleSlotStart(...)` */

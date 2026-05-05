@@ -1,4 +1,4 @@
-import type { ParsedFT8Message, PluginContext, SlotActivityEvent, SlotInfo, QSORecord } from '@tx5dr/plugin-api';
+import type { FrequencyChangeState, ParsedFT8Message, PluginContext, SlotActivityEvent, SlotInfo, QSORecord } from '@tx5dr/plugin-api';
 import { FT8MessageType } from '@tx5dr/plugin-api';
 import {
   buildAdifFile,
@@ -42,6 +42,7 @@ export class WsjtUdpSession {
   private negotiatedSchemas = new Map<string, number>();
   private decodeHistory: DecodeHistoryEntry[] = [];
   private highlightRules = new Map<string, unknown>();
+  private lastFrequencyChangeKey: string | null = null;
 
   constructor(private readonly ctx: PluginContext, settings: WsjtUdpSettings) {
     this.settings = settings;
@@ -109,6 +110,20 @@ export class WsjtUdpSession {
       return frame ? ({ ...message, confidence: frame.confidence } as ParsedFT8Message & { confidence: number }) : message;
     });
     await this.onSlotStart(sourceSlotInfo, messages);
+  }
+
+  async onFrequencyChange(state: FrequencyChangeState): Promise<void> {
+    const key = `${state.frequency}|${state.mode}|${state.band}`;
+    if (key === this.lastFrequencyChangeKey) return;
+    this.lastFrequencyChangeKey = key;
+    this.decodeHistory = [];
+    const mode = state.mode || this.ctx.operator.mode?.name || 'FT8';
+    await this.sendWsjtMessageToTargets(WsjtMessageType.Clear);
+    await this.sendStatus({
+      dialFrequency: state.frequency,
+      mode,
+      txMode: mode,
+    });
   }
 
   async onQSOComplete(record: QSORecord): Promise<void> {
