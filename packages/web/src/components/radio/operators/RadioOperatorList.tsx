@@ -1,12 +1,11 @@
 import * as React from 'react';
 import { Alert, Button } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faPlus, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
+import { faPlus } from '@fortawesome/free-solid-svg-icons';
 import { useOperators, useConnection } from '../../../store/radioStore';
 import { useRadioModeState } from '../../../store/radio/hooks';
 import { useAuth } from '../../../store/authStore';
 import { RadioOperator } from './RadioOperator';
-import { hasHiddenOperators } from '../../../utils/operatorPreferences';
 import { useTranslation } from 'react-i18next';
 import {
   deriveSameCallsignStandardFrequencyWarning,
@@ -66,8 +65,8 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
               <div className="cursor-default select-none">
                 <div className="text-xs text-default-400">{t('operator.viewOnly')}</div>
               </div>
-            ) : authState.operatorIds.length === 0 && (authState.role === 'admin' || authState.role === 'operator') ? (
-              // 有操作权限但无操作员，显示创建按钮
+            ) : authState.role === 'admin' || authState.role === 'operator' ? (
+              // 有操作权限，显示创建按钮
               <Button
                 onPress={onCreateOperator}
                 variant="bordered"
@@ -77,14 +76,6 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
                 <FontAwesomeIcon icon={faPlus} className="mr-2" />
                 {t('operator.createFirst')}
               </Button>
-            ) : hasHiddenOperators() ? (
-              // 有操作权限的用户，客户端偏好设置隐藏了所有操作员
-              <div className="cursor-default select-none space-y-3">
-                <div className="text-xs text-default-400">
-                  <FontAwesomeIcon icon={faEyeSlash} className="mr-2" />
-                  <span>{t('operator.allHidden')}</span>
-                </div>
-              </div>
             ) : (
               // 其他情况（不应发生）
               <div className="cursor-default select-none">
