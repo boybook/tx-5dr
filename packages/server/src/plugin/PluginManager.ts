@@ -1469,6 +1469,7 @@ export class PluginManager {
     this.clearRuntimePanelContributionsForInstance(instance);
     this._logbookSyncHost.unregisterByPlugin(instance.plugin.definition.name);
     instance.ctx.timers.clearAll();
+    await instance.ctx.network?.udp.closeAll().catch(() => {});
     // PluginContextFactory 总是创建 PluginStorageProvider 实例（实现 FlushableKVStore）
     const globalStore = instance.ctx.store.global as FlushableKVStore;
     const operatorStore = instance.ctx.store.operator as FlushableKVStore;

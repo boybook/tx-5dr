@@ -19,6 +19,9 @@ import type {
   BandAccess,
   UIBridge,
   PluginFileStore,
+  PluginNetworkControl,
+  PluginUdpRemoteInfo,
+  PluginUdpSocket,
 } from '../helpers.js';
 import type {
   HostFT8Settings,
@@ -73,6 +76,19 @@ export interface MockPluginContext extends PluginContext {
   readonly timers: MockTimers;
   readonly ui: MockUIBridge;
   readonly settings: HostSettingsControl;
+  readonly network: PluginNetworkControl;
+}
+
+export interface MockUdpSocket extends PluginUdpSocket {
+  readonly _sent: Array<{ data: Uint8Array | string; port: number; host: string }>;
+  readonly _binds: Array<{ host?: string; port?: number } | undefined>;
+  readonly _closed: () => boolean;
+  _emitMessage(data: Uint8Array | string, remote?: Partial<PluginUdpRemoteInfo>): Promise<void>;
+  _emitError(error: Error): void;
+}
+
+export interface MockNetworkControl extends PluginNetworkControl {
+  readonly _sockets: MockUdpSocket[];
 }
 
 // ===== Factory: KVStore =====
@@ -164,7 +180,14 @@ export function createMockOperatorControl(
     startTransmitting(): void {},
     stopTransmitting(): void {},
     call(): void {},
+    replyToDecode(): void {},
     setTransmitCycles(): void {},
+    clearDecodes(): void {},
+    haltTransmission(): void {},
+    setFreeText(): void {},
+    sendFreeText(): void {},
+    setTemporaryLocation(): void {},
+    highlightCallsign(): void {},
     hasWorkedCallsign: async () => false,
     isTargetBeingWorkedByOthers: () => false,
     recordQSO(): void {},
@@ -308,6 +331,62 @@ export function createMockFileStore(): PluginFileStore {
   };
 }
 
+// ===== Factory: NetworkControl =====
+
+export function createMockNetworkControl(): MockNetworkControl {
+  const sockets: MockUdpSocket[] = [];
+  return {
+    _sockets: sockets,
+    udp: {
+      createSocket() {
+        let messageHandler: Parameters<ReturnType<PluginNetworkControl['udp']['createSocket']>['onMessage']>[0] | undefined;
+        let errorHandler: Parameters<ReturnType<PluginNetworkControl['udp']['createSocket']>['onError']>[0] | undefined;
+        let closed = false;
+        const sent: MockUdpSocket['_sent'] = [];
+        const binds: MockUdpSocket['_binds'] = [];
+        const socket: MockUdpSocket = {
+          _sent: sent,
+          _binds: binds,
+          _closed: () => closed,
+          async _emitMessage(data, remote) {
+            if (!messageHandler) return;
+            const payload = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
+            await messageHandler(payload, {
+              address: remote?.address ?? '127.0.0.1',
+              port: remote?.port ?? 2237,
+              family: remote?.family ?? 'IPv4',
+              size: remote?.size ?? payload.byteLength,
+            });
+          },
+          _emitError(error) {
+            errorHandler?.(error);
+          },
+          async bind(options) {
+            binds.push(options);
+          },
+          async send(data, port, host) {
+            sent.push({ data, port, host });
+          },
+          onMessage(handler) {
+            messageHandler = handler;
+          },
+          onError(handler) {
+            errorHandler = handler;
+          },
+          async close() {
+            closed = true;
+          },
+        };
+        sockets.push(socket);
+        return socket;
+      },
+      async closeAll() {
+        await Promise.all(sockets.map((socket) => socket.close()));
+      },
+    },
+  };
+}
+
 // ===== Factory: HostSettingsControl =====
 
 export function createMockHostSettingsControl(overrides?: Partial<HostSettingsControl>): HostSettingsControl {
@@ -392,6 +471,8 @@ export interface MockPluginContextOptions {
   mode?: Partial<ModeDescriptor>;
   /** Additional operator control overrides. */
   operator?: Partial<OperatorControl>;
+  /** Network control override. */
+  network?: PluginNetworkControl;
   /** Radio control overrides. */
   radio?: Partial<RadioControl>;
   /** Logbook access overrides. */
@@ -431,6 +512,7 @@ export function createMockContext(options?: MockPluginContextOptions): MockPlugi
 
   const settings = createMockHostSettingsControl(opts.settings);
   const files = createMockFileStore();
+  const network = opts.network ?? createMockNetworkControl();
   const logbookSync = { register() { /* no-op in mock */ } };
 
   return {
@@ -448,6 +530,7 @@ export function createMockContext(options?: MockPluginContextOptions): MockPlugi
     ui,
     settings,
     files,
+    network,
     logbookSync,
   };
 }

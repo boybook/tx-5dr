@@ -93,6 +93,46 @@ export interface PluginTimers {
   clearAll(): void;
 }
 
+
+/**
+ * Remote UDP endpoint metadata for datagrams received by plugin-owned sockets.
+ */
+export interface PluginUdpRemoteInfo {
+  address: string;
+  port: number;
+  family: string;
+  size: number;
+}
+
+export interface PluginUdpBindOptions {
+  host?: string;
+  port?: number;
+}
+
+export interface PluginUdpSocketOptions {
+  type?: 'udp4' | 'udp6';
+  reuseAddr?: boolean;
+  broadcast?: boolean;
+  multicastTtl?: number;
+}
+
+export interface PluginUdpSocket {
+  bind(options?: PluginUdpBindOptions): Promise<void>;
+  send(data: Uint8Array | string, port: number, host: string): Promise<void>;
+  onMessage(handler: (data: Uint8Array, remote: PluginUdpRemoteInfo) => void | Promise<void>): void;
+  onError(handler: (error: Error) => void): void;
+  close(): Promise<void>;
+}
+
+export interface PluginUdpControl {
+  createSocket(options?: PluginUdpSocketOptions): PluginUdpSocket;
+  closeAll(): Promise<void>;
+}
+
+export interface PluginNetworkControl {
+  readonly udp: PluginUdpControl;
+}
+
 /**
  * Control surface for the active operator instance.
  *
@@ -131,6 +171,14 @@ export interface OperatorControl {
   call(callsign: string, lastMessage?: { message: FrameMessage; slotInfo: SlotInfo }): void;
 
   /**
+   * Requests host-managed reply behavior for a decoded message.
+   *
+   * This is equivalent to an operator selecting a decode in the RX view while
+   * keeping the API independent from any specific UDP/control protocol.
+   */
+  replyToDecode(decode: { callsign: string; lastMessage: { message: FrameMessage; slotInfo: SlotInfo }; modifiers?: number }): void;
+
+  /**
    * Updates the operator's transmit cycle preference.
    *
    * Pass a single value or an array to support alternating or multi-cycle modes.
@@ -147,6 +195,24 @@ export interface OperatorControl {
    * working the target callsign.
    */
   isTargetBeingWorkedByOthers(targetCallsign: string): boolean;
+
+  /** Clears host-managed decoded-message views when available. */
+  clearDecodes(window?: number): void;
+
+  /** Stops current transmission/automation. */
+  haltTransmission(options?: { autoOnly?: boolean }): void;
+
+  /** Stores the current free-text message without necessarily transmitting it. */
+  setFreeText(text: string): void;
+
+  /** Requests transmission of free text. If text is provided it is stored first. */
+  sendFreeText(text?: string): void;
+
+  /** Applies a temporary session grid/location override when the host supports it. */
+  setTemporaryLocation(location: string): void;
+
+  /** Requests callsign highlighting in host decode views when available. */
+  highlightCallsign(rule: { callsign: string; background?: string | null; foreground?: string | null; lastOnly?: boolean }): void;
 
   /**
    * Records a completed QSO through the host logbook pipeline.

@@ -108,6 +108,7 @@ export function validatePluginDefinition(def: PluginDefinition): void {
       'onFilterCandidates',
       'onScoreCandidates',
       'onSlotStart',
+      'onSlotActivity',
       'onDecode',
       'onQSOStart',
       'onQSOComplete',

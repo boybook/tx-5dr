@@ -1,4 +1,6 @@
 import path from 'path';
+import { createSocket } from 'node:dgram';
+import type { RemoteInfo, Socket, SocketType } from 'node:dgram';
 import type {
   HostSettingsControl,
   LogbookSyncProvider,
@@ -86,6 +88,7 @@ export class PluginContextFactory {
     const fileStore = new PluginFileStoreProvider(
       path.join(pluginStorageDir, 'files'),
     );
+    const networkControl = this.createNetworkControl(plugin);
 
     const ctx: PluginContext = {
       get config() {
@@ -110,6 +113,7 @@ export class PluginContextFactory {
       ui: uiBridge,
       files: fileStore,
       settings: settingsControl,
+      network: networkControl,
       logbookSync: {
         register: (provider) => {
           this.validateLogbookSyncProvider(plugin, provider);
@@ -122,6 +126,121 @@ export class PluginContextFactory {
     };
 
     return ctx;
+  }
+
+
+  private createNetworkControl(plugin: LoadedPlugin) {
+    const sockets = new Set<Socket>();
+    const assertNetworkPermission = () => {
+      if (!plugin.definition.permissions?.includes('network')) {
+        throw new Error(`Plugin '${plugin.definition.name}' requires permission 'network' to use UDP sockets`);
+      }
+    };
+
+    const toError = (error: unknown): Error => error instanceof Error ? error : new Error(String(error));
+
+    return {
+      udp: {
+        createSocket: (options?: import('@tx5dr/plugin-api').PluginUdpSocketOptions) => {
+          assertNetworkPermission();
+          const socket = createSocket({
+            type: (options?.type ?? 'udp4') as SocketType,
+            reuseAddr: options?.reuseAddr ?? false,
+          });
+          sockets.add(socket);
+          let bound = false;
+          let closed = false;
+          let messageHandler: ((data: Uint8Array, remote: import('@tx5dr/plugin-api').PluginUdpRemoteInfo) => void | Promise<void>) | undefined;
+          let errorHandler: ((error: Error) => void) | undefined;
+
+          socket.on('message', (message: Buffer, remote: RemoteInfo) => {
+            if (!messageHandler) return;
+            Promise.resolve(messageHandler(new Uint8Array(message), {
+              address: remote.address,
+              port: remote.port,
+              family: remote.family,
+              size: remote.size,
+            })).catch((error) => errorHandler?.(toError(error)));
+          });
+          socket.on('error', (error) => {
+            errorHandler?.(error);
+          });
+          socket.on('close', () => {
+            closed = true;
+            sockets.delete(socket);
+          });
+
+          return {
+            async bind(bindOptions?: import('@tx5dr/plugin-api').PluginUdpBindOptions) {
+              if (closed) throw new Error('UDP socket is closed');
+              if (bound) return;
+              await new Promise<void>((resolve, reject) => {
+                const onError = (error: Error) => {
+                  socket.off('listening', onListening);
+                  reject(error);
+                };
+                const onListening = () => {
+                  socket.off('error', onError);
+                  bound = true;
+                  if (typeof options?.broadcast === 'boolean') {
+                    socket.setBroadcast(options.broadcast);
+                  }
+                  if (typeof options?.multicastTtl === 'number') {
+                    socket.setMulticastTTL(options.multicastTtl);
+                  }
+                  resolve();
+                };
+                socket.once('error', onError);
+                socket.once('listening', onListening);
+                socket.bind(bindOptions?.port ?? 0, bindOptions?.host);
+              });
+            },
+            async send(data: Uint8Array | string, port: number, host: string) {
+              if (closed) throw new Error('UDP socket is closed');
+              if (!Number.isInteger(port) || port < 1 || port > 65535) {
+                throw new Error('UDP port must be an integer from 1 to 65535');
+              }
+              const payload = typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data);
+              await new Promise<void>((resolve, reject) => {
+                socket.send(payload, port, host, (error) => error ? reject(error) : resolve());
+              });
+            },
+            onMessage(handler: (data: Uint8Array, remote: import('@tx5dr/plugin-api').PluginUdpRemoteInfo) => void | Promise<void>) {
+              messageHandler = handler;
+            },
+            onError(handler: (error: Error) => void) {
+              errorHandler = handler;
+            },
+            async close() {
+              if (closed) return;
+              await new Promise<void>((resolve) => {
+                socket.once('close', resolve);
+                try {
+                  socket.close();
+                } catch {
+                  socket.off('close', resolve);
+                  closed = true;
+                  sockets.delete(socket);
+                  resolve();
+                }
+              });
+            },
+          };
+        },
+        async closeAll() {
+          await Promise.all(Array.from(sockets).map((socket) => new Promise<void>((resolve) => {
+            socket.once('close', resolve);
+            try {
+              socket.close();
+            } catch {
+              socket.off('close', resolve);
+              sockets.delete(socket);
+              resolve();
+            }
+          }).catch(() => undefined)));
+        },
+      },
+    };
   }
 
 
@@ -298,7 +417,14 @@ export class PluginContextFactory {
         startTransmitting() {},
         stopTransmitting() {},
         call(_callsign: string, _lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }) {},
+        replyToDecode(_decode: { callsign: string; lastMessage: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }; modifiers?: number }) {},
         setTransmitCycles(_cycles: number | number[]) {},
+        clearDecodes(_window?: number) {},
+        haltTransmission(_options?: { autoOnly?: boolean }) {},
+        setFreeText(_text: string) {},
+        sendFreeText(_text?: string) {},
+        setTemporaryLocation(_location: string) {},
+        highlightCallsign(_rule: { callsign: string; background?: string | null; foreground?: string | null; lastOnly?: boolean }) {},
         async hasWorkedCallsign(_callsign: string) { return false; },
         isTargetBeingWorkedByOthers(_targetCallsign: string) { return false; },
         recordQSO(_record: import('@tx5dr/contracts').QSORecord) {},
@@ -339,8 +465,39 @@ export class PluginContextFactory {
       call(callsign: string, lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }) {
         deps.requestOperatorCall(operatorId, callsign, lastMessage);
       },
+      replyToDecode(decode: { callsign: string; lastMessage: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }; modifiers?: number }) {
+        deps.eventEmitter.emit('pluginRemoteReplyToDecode' as any, { operatorId, callsign: decode.callsign, modifiers: decode.modifiers });
+        deps.requestOperatorCall(operatorId, decode.callsign, decode.lastMessage);
+      },
       setTransmitCycles(cycles: number | number[]) {
         deps.getOperatorById(operatorId)?.setTransmitCycles(cycles);
+      },
+      clearDecodes(window?: number) {
+        deps.eventEmitter.emit('pluginRemoteClearDecodes' as any, { operatorId, window });
+      },
+      haltTransmission(options?: { autoOnly?: boolean }) {
+        if (options?.autoOnly) {
+          deps.getOperatorById(operatorId)?.stop();
+        } else {
+          void deps.interruptOperatorTransmission(operatorId).catch(() => {
+            deps.getOperatorById(operatorId)?.stop();
+          });
+        }
+      },
+      setFreeText(text: string) {
+        deps.eventEmitter.emit('pluginRemoteFreeText' as any, { operatorId, text, send: false });
+      },
+      sendFreeText(text?: string) {
+        deps.eventEmitter.emit('pluginRemoteFreeText' as any, { operatorId, text, send: true });
+        if (text && text.trim()) {
+          deps.eventEmitter.emit('requestTransmit', { operatorId, transmission: text });
+        }
+      },
+      setTemporaryLocation(location: string) {
+        deps.eventEmitter.emit('pluginRemoteLocation' as any, { operatorId, location });
+      },
+      highlightCallsign(rule: { callsign: string; background?: string | null; foreground?: string | null; lastOnly?: boolean }) {
+        deps.eventEmitter.emit('pluginRemoteHighlightCallsign' as any, { operatorId, ...rule });
       },
       async hasWorkedCallsign(callsign: string) {
         return deps.hasWorkedCallsign(operatorId, callsign);

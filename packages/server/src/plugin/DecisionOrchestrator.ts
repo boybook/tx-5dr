@@ -70,6 +70,19 @@ export class DecisionOrchestrator {
 
       await this.deps.dispatcher.dispatchBroadcast(
         operator.config.id,
+        'onSlotActivity',
+        (hook, ctx) => hook({
+          slotInfo,
+          slotPack,
+          frames: slotPack?.frames ?? [],
+          messages: parsedMessages,
+          source: 'live',
+        }, ctx),
+        (instance) => this.deps.getCtxForInstance(instance),
+      );
+
+      await this.deps.dispatcher.dispatchBroadcast(
+        operator.config.id,
         'onSlotStart',
         (hook, ctx) => hook(slotInfo, parsedMessages, ctx),
         (instance) => this.deps.getCtxForInstance(instance),

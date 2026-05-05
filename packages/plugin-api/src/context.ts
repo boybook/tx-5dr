@@ -8,6 +8,7 @@ import type {
   BandAccess,
   UIBridge,
   PluginFileStore,
+  PluginNetworkControl,
 } from './helpers.js';
 import type { LogbookSyncRegistrar } from './sync.js';
 import type { HostSettingsControl } from './settings.js';
@@ -136,6 +137,15 @@ export interface PluginContext {
    * Each namespace requires the matching `settings:*` manifest permission.
    */
   readonly settings: HostSettingsControl;
+
+  /**
+   * Permission-gated network capabilities.
+   *
+   * UDP sockets are host-managed and automatically closed when the plugin
+   * instance unloads. This is intentionally protocol-agnostic; protocol codecs
+   * such as WSJT-X UDP belong inside plugins.
+   */
+  readonly network?: PluginNetworkControl;
 
   /**
    * Permission-gated HTTP client.

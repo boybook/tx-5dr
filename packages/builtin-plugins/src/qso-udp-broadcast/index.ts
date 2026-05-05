@@ -1,26 +1,12 @@
-import { createSocket } from 'node:dgram';
-import { isIP } from 'node:net';
-import type { PluginContext, PluginDefinition, QSORecord } from '@tx5dr/plugin-api';
+import type { PluginContext, PluginDefinition } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
-import { buildAdifFile, buildLoggedAdifDatagram, buildRawAdifRecord } from './encoder.js';
+import { WsjtUdpSession, type UdpTarget, type WsjtUdpSettings } from './wsjtx-session.js';
 
 export const BUILTIN_QSO_UDP_BROADCAST_PLUGIN_NAME = 'qso-udp-broadcast';
 
-interface UdpTarget {
-  host: string;
-  port: number;
-}
-
-interface PluginSettings {
-  enableType12: boolean;
-  type12Host: string;
-  type12Port: number;
-  enableRawAdif: boolean;
-  rawAdifHost: string;
-  rawAdifPort: number;
-  udpClientId: string;
-}
+const DEFAULT_TARGETS: UdpTarget[] = [{ host: '127.0.0.1', port: 2237 }];
+const sessions = new WeakMap<PluginContext, WsjtUdpSession>();
 
 function readBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
@@ -30,140 +16,123 @@ function readString(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
 }
 
-function readPort(value: unknown, fallback: number): number {
+function readOptionalPort(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
   const port = typeof value === 'number' ? value : Number(value);
-  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : fallback;
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : undefined;
 }
 
-function readSettings(ctx: PluginContext): PluginSettings {
+function readPort(value: unknown, fallback: number): number {
+  return readOptionalPort(value) ?? fallback;
+}
+
+function readNumber(value: unknown, fallback: number): number {
+  const numberValue = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
+}
+
+function readTargets(config: Readonly<Record<string, unknown>>): UdpTarget[] {
+  const configured = config.targets;
+  if (Array.isArray(configured)) {
+    const targets = configured
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const candidate = item as Record<string, unknown>;
+        const host = readString(candidate.host, '');
+        const port = readPort(candidate.port, 0);
+        return host && port ? { host, port } : null;
+      })
+      .filter((target): target is UdpTarget => Boolean(target));
+    if (targets.length > 0) return targets;
+  }
+
+  // Legacy settings migration path: old type12Host/type12Port remain accepted.
+  return [{
+    host: readString(config.type12Host, DEFAULT_TARGETS[0].host),
+    port: readPort(config.type12Port, DEFAULT_TARGETS[0].port),
+  }];
+}
+
+function readSettings(ctx: PluginContext): WsjtUdpSettings {
+  const config = ctx.config;
   return {
-    enableType12: readBoolean(ctx.config.enableType12, true),
-    type12Host: readString(ctx.config.type12Host, '127.0.0.1'),
-    type12Port: readPort(ctx.config.type12Port, 2237),
-    enableRawAdif: readBoolean(ctx.config.enableRawAdif, true),
-    rawAdifHost: readString(ctx.config.rawAdifHost, '127.0.0.1'),
-    rawAdifPort: readPort(ctx.config.rawAdifPort, 2333),
-    udpClientId: readString(ctx.config.udpClientId, 'TX-5DR'),
+    targets: readTargets(config),
+    localPort: readOptionalPort(config.localPort),
+    clientId: readString(config.clientId ?? config.udpClientId, 'TX-5DR'),
+    enableType5QsoLogged: readBoolean(config.enableType5QsoLogged, true),
+    enableType12LoggedAdif: readBoolean(config.enableType12LoggedAdif ?? config.enableType12, true),
+    enableRawAdif: readBoolean(config.enableRawAdif, true),
+    rawAdifHost: readString(config.rawAdifHost, '127.0.0.1'),
+    rawAdifPort: readPort(config.rawAdifPort, 2333),
+    lowConfidenceThreshold: readNumber(config.lowConfidenceThreshold, 0.8),
+    maxHighlightRules: Math.max(1, Math.trunc(readNumber(config.maxHighlightRules, 100))),
+    allowReplyRequests: readBoolean(config.allowReplyRequests, false),
+    allowHaltTxRequests: readBoolean(config.allowHaltTxRequests, false),
+    allowFreeTextRequests: readBoolean(config.allowFreeTextRequests, false),
+    allowLocationRequests: readBoolean(config.allowLocationRequests, false),
+    allowConfigureRequests: readBoolean(config.allowConfigureRequests, false),
+    allowCloseRequests: readBoolean(config.allowCloseRequests, false),
+    allowSwitchConfigurationRequests: readBoolean(config.allowSwitchConfigurationRequests, false),
   };
 }
 
-function validateTarget(target: UdpTarget): string | null {
-  if (!target.host || /[\u0000-\u001f\u007f\s]/.test(target.host)) {
-    return 'host must be non-empty and must not contain whitespace or control characters';
-  }
-  if (target.host.length > 255) {
-    return 'host must be 255 characters or shorter';
-  }
-  if (!Number.isInteger(target.port) || target.port < 1 || target.port > 65535) {
-    return 'port must be an integer from 1 to 65535';
-  }
-  return null;
-}
-
-async function sendUdpDatagram(target: UdpTarget, payload: Buffer | string): Promise<void> {
-  const family = isIP(target.host) === 6 ? 'udp6' : 'udp4';
-  const socket = createSocket(family);
-  const message = typeof payload === 'string' ? Buffer.from(payload, 'utf8') : payload;
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      socket.send(message, target.port, target.host, (error) => {
-        if (error) reject(error);
-        else resolve();
-      });
-    });
-  } finally {
-    socket.close();
-  }
-}
-
-async function sendIfEnabled(
-  ctx: PluginContext,
-  label: string,
-  enabled: boolean,
-  target: UdpTarget,
-  payload: Buffer | string,
-): Promise<boolean> {
-  if (!enabled) return false;
-
-  const invalidReason = validateTarget(target);
-  if (invalidReason) {
-    ctx.log.warn(`${label} UDP target skipped: ${invalidReason}`, { ...target });
-    return false;
-  }
-
-  try {
-    await sendUdpDatagram(target, payload);
-    return true;
-  } catch (error) {
-    ctx.log.error(`${label} UDP send failed`, {
-      target,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return false;
-  }
-}
-
-async function broadcastQSO(record: QSORecord, ctx: PluginContext): Promise<void> {
-  const settings = readSettings(ctx);
-  const adifFile = buildAdifFile(record);
-  const rawAdif = buildRawAdifRecord(record);
-  const type12Datagram = buildLoggedAdifDatagram(settings.udpClientId, adifFile);
-
-  const [type12Sent, rawSent] = await Promise.all([
-    sendIfEnabled(
-      ctx,
-      'LoggedADIF Type12',
-      settings.enableType12,
-      { host: settings.type12Host, port: settings.type12Port },
-      type12Datagram,
-    ),
-    sendIfEnabled(
-      ctx,
-      'Raw ADIF',
-      settings.enableRawAdif,
-      { host: settings.rawAdifHost, port: settings.rawAdifPort },
-      rawAdif,
-    ),
-  ]);
-
-  ctx.log.info('QSO UDP broadcast processed', {
-    callsign: record.callsign,
-    type12Sent,
-    rawSent,
-  });
+async function getOrStartSession(ctx: PluginContext): Promise<WsjtUdpSession> {
+  const existing = sessions.get(ctx);
+  if (existing) return existing;
+  const session = new WsjtUdpSession(ctx, readSettings(ctx));
+  sessions.set(ctx, session);
+  await session.start();
+  return session;
 }
 
 export const qsoUdpBroadcastPlugin: PluginDefinition = {
   name: BUILTIN_QSO_UDP_BROADCAST_PLUGIN_NAME,
-  version: '1.0.0',
+  version: '2.0.0',
   type: 'utility',
   description: 'pluginDescription',
   permissions: ['network'],
 
   settings: {
-    enableType12: {
+    targets: {
+      type: 'object[]',
+      default: DEFAULT_TARGETS,
+      label: 'targets',
+      description: 'targetsDesc',
+      scope: 'operator',
+      itemFields: [
+        { key: 'host', type: 'string', label: 'targetHost', required: true },
+        { key: 'port', type: 'number', label: 'targetPort', required: true },
+      ],
+    },
+    localPort: {
+      type: 'number',
+      default: 0,
+      label: 'localPort',
+      description: 'localPortDesc',
+      scope: 'operator',
+      min: 0,
+      max: 65535,
+    },
+    clientId: {
+      type: 'string',
+      default: 'TX-5DR',
+      label: 'clientId',
+      description: 'clientIdDesc',
+      scope: 'operator',
+    },
+    enableType5QsoLogged: {
       type: 'boolean',
       default: true,
-      label: 'enableType12',
-      description: 'enableType12Desc',
+      label: 'enableType5QsoLogged',
+      description: 'enableType5QsoLoggedDesc',
       scope: 'operator',
     },
-    type12Host: {
-      type: 'string',
-      default: '127.0.0.1',
-      label: 'type12Host',
-      description: 'type12HostDesc',
+    enableType12LoggedAdif: {
+      type: 'boolean',
+      default: true,
+      label: 'enableType12LoggedAdif',
+      description: 'enableType12LoggedAdifDesc',
       scope: 'operator',
-    },
-    type12Port: {
-      type: 'number',
-      default: 2237,
-      label: 'type12Port',
-      description: 'type12PortDesc',
-      scope: 'operator',
-      min: 1,
-      max: 65535,
     },
     enableRawAdif: {
       type: 'boolean',
@@ -188,20 +157,101 @@ export const qsoUdpBroadcastPlugin: PluginDefinition = {
       min: 1,
       max: 65535,
     },
-    udpClientId: {
-      type: 'string',
-      default: 'TX-5DR',
-      label: 'udpClientId',
-      description: 'udpClientIdDesc',
+    allowReplyRequests: {
+      type: 'boolean',
+      default: false,
+      label: 'allowReplyRequests',
+      description: 'allowReplyRequestsDesc',
       scope: 'operator',
+    },
+    allowHaltTxRequests: {
+      type: 'boolean',
+      default: false,
+      label: 'allowHaltTxRequests',
+      description: 'allowHaltTxRequestsDesc',
+      scope: 'operator',
+    },
+    allowFreeTextRequests: {
+      type: 'boolean',
+      default: false,
+      label: 'allowFreeTextRequests',
+      description: 'allowFreeTextRequestsDesc',
+      scope: 'operator',
+    },
+    allowLocationRequests: {
+      type: 'boolean',
+      default: false,
+      label: 'allowLocationRequests',
+      description: 'allowLocationRequestsDesc',
+      scope: 'operator',
+    },
+    allowConfigureRequests: {
+      type: 'boolean',
+      default: false,
+      label: 'allowConfigureRequests',
+      description: 'allowConfigureRequestsDesc',
+      scope: 'operator',
+    },
+    allowCloseRequests: {
+      type: 'boolean',
+      default: false,
+      label: 'allowCloseRequests',
+      description: 'allowCloseRequestsDesc',
+      scope: 'operator',
+    },
+    allowSwitchConfigurationRequests: {
+      type: 'boolean',
+      default: false,
+      label: 'allowSwitchConfigurationRequests',
+      description: 'allowSwitchConfigurationRequestsDesc',
+      scope: 'operator',
+    },
+    lowConfidenceThreshold: {
+      type: 'number',
+      default: 0.8,
+      label: 'lowConfidenceThreshold',
+      description: 'lowConfidenceThresholdDesc',
+      scope: 'operator',
+      min: 0,
+      max: 1,
+    },
+    maxHighlightRules: {
+      type: 'number',
+      default: 100,
+      label: 'maxHighlightRules',
+      description: 'maxHighlightRulesDesc',
+      scope: 'operator',
+      min: 1,
+      max: 1000,
     },
   },
 
+  async onLoad(ctx) {
+    await getOrStartSession(ctx);
+  },
+
+  async onUnload(ctx) {
+    const session = sessions.get(ctx);
+    sessions.delete(ctx);
+    await session?.stop();
+  },
+
   hooks: {
+    onConfigChange(_changes, ctx) {
+      sessions.get(ctx)?.updateSettings(readSettings(ctx));
+    },
+    onTimer(timerId, ctx) {
+      void sessions.get(ctx)?.onTimer(timerId);
+    },
+    onSlotActivity(event, ctx) {
+      void getOrStartSession(ctx)
+        .then((session) => session.onSlotActivity(event))
+        .catch((error) => ctx.log.error('WSJT-X UDP decode broadcast failed', error));
+    },
     onQSOComplete(record, ctx) {
-      void broadcastQSO(record, ctx).catch((error) => {
-        ctx.log.error('QSO UDP broadcast failed', error);
-      });
+      void getOrStartSession(ctx)
+        .then((session) => session.onQSOComplete(record))
+        .catch((error) => ctx.log.error('WSJT-X UDP QSO broadcast failed', error));
     },
   },
 };

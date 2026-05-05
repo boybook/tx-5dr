@@ -1,4 +1,4 @@
-import type { ParsedFT8Message, SlotInfo, QSORecord, FrameMessage } from '@tx5dr/contracts';
+import type { ParsedFT8Message, SlotInfo, SlotPack, QSORecord, FrameMessage } from '@tx5dr/contracts';
 import type { PluginContext } from './context.js';
 
 /**
@@ -128,6 +128,21 @@ export interface AutoCallExecutionPlan {
 }
 
 /**
+ * Raw and parsed decode activity for one slot.
+ *
+ * This is intentionally protocol-neutral: plugins can consume the original
+ * `SlotPack.frames` when they need decoder metadata such as confidence while
+ * still receiving the host-parsed messages used by normal decision hooks.
+ */
+export interface SlotActivityEvent {
+  slotInfo: SlotInfo;
+  slotPack: SlotPack | null;
+  frames: FrameMessage[];
+  messages: ParsedFT8Message[];
+  source: 'live' | 'replay' | 'reset';
+}
+
+/**
  * Hook collection implemented by a plugin.
  *
  * Hooks fall into three broad categories:
@@ -194,6 +209,14 @@ export interface PluginHooks {
    * messages already associated with that slot.
    */
   onSlotStart?(slotInfo: SlotInfo, messages: ParsedFT8Message[], ctx: PluginContext): void;
+
+  /**
+   * Broadcast with raw slot/frame context plus parsed messages.
+   *
+   * Prefer this hook when a plugin needs full decoder metadata or wants to
+   * preserve a cache suitable for replay/status integrations.
+   */
+  onSlotActivity?(event: SlotActivityEvent, ctx: PluginContext): void;
 
   /**
    * Broadcast whenever decoded messages become available.

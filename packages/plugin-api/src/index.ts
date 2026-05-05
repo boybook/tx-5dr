@@ -28,6 +28,7 @@ export type {
   AutoCallProposal,
   AutoCallExecutionRequest,
   AutoCallExecutionPlan,
+  SlotActivityEvent,
   ScoredCandidate,
   StrategyDecision,
   StrategyDecisionMeta,
@@ -79,6 +80,12 @@ export type {
   PluginUIPageSessionInfo,
   PluginUIPageContext,
   PluginFileStore,
+  PluginNetworkControl,
+  PluginUdpControl,
+  PluginUdpSocket,
+  PluginUdpSocketOptions,
+  PluginUdpBindOptions,
+  PluginUdpRemoteInfo,
 } from './helpers.js';
 
 /** Common radio/message/settings types re-exported for plugin author convenience. */
