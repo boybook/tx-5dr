@@ -1,5 +1,7 @@
 import type {
   DigitalRadioEngineEvents,
+  PluginLogEntry,
+  PluginLogHistoryEntry,
   PluginPanelDescriptor,
   PluginPanelMetaPayload,
   PluginRuntimeLogEntry,
@@ -81,7 +83,10 @@ export class PluginManager {
   private readonly pageSessions = new PluginPageSessionStore();
   private readonly panelMetaState = new Map<string, PluginPanelMetaPayload>();
   private readonly runtimePanelContributions = new Map<string, PluginUIPanelContributionGroup>();
-  private pluginRuntimeLogHistory: PluginRuntimeLogEntry[] = [];
+  private pluginRuntimeLogHistory: PluginLogHistoryEntry[] = [];
+  private readonly recordPluginLogHistory = (entry: PluginLogEntry) => {
+    this.appendPluginLogHistory({ ...entry });
+  };
 
   private systemState: PluginSystemRuntimeState = {
     state: 'ready',
@@ -105,6 +110,7 @@ export class PluginManager {
     };
     deps.listPluginPageSessions = (pluginName, instanceTarget, pageId) =>
       this.pageSessions.listByPluginInstance(pluginName, instanceTarget, pageId);
+    deps.eventEmitter.on('pluginLog', this.recordPluginLogHistory);
     this.contextFactory = new PluginContextFactory(
       deps,
       (payload) => this.recordPanelMeta(payload),
@@ -184,6 +190,7 @@ export class PluginManager {
     this.devWatcher?.stop();
     this.devWatcher = null;
     await this.teardownAllInstances();
+    this.eventEmitter.off('pluginLog', this.recordPluginLogHistory);
     this.unregisterEngineListeners();
     this.running = false;
     logger.info('Plugin manager stopped');
@@ -559,7 +566,7 @@ export class PluginManager {
     );
   }
 
-  getRuntimeLogHistory(limit = 500): PluginRuntimeLogEntry[] {
+  getRuntimeLogHistory(limit = 500): PluginLogHistoryEntry[] {
     const normalizedLimit = Number.isFinite(limit)
       ? Math.min(Math.max(Math.trunc(limit), 1), PLUGIN_RUNTIME_LOG_HISTORY_LIMIT)
       : 500;
@@ -567,6 +574,11 @@ export class PluginManager {
     return this.pluginRuntimeLogHistory
       .slice(startIndex)
       .map((entry) => ({ ...entry }));
+  }
+
+  private appendPluginLogHistory(entry: PluginLogHistoryEntry): void {
+    this.pluginRuntimeLogHistory = [...this.pluginRuntimeLogHistory, entry]
+      .slice(-PLUGIN_RUNTIME_LOG_HISTORY_LIMIT);
   }
 
   setPluginEnabled(name: string, enabled: boolean): void {
@@ -1534,8 +1546,7 @@ export class PluginManager {
       directoryName: event.directoryName,
       details: event.details,
     };
-    this.pluginRuntimeLogHistory = [...this.pluginRuntimeLogHistory, entry]
-      .slice(-PLUGIN_RUNTIME_LOG_HISTORY_LIMIT);
+    this.appendPluginLogHistory(entry);
     this.eventEmitter.emit('pluginRuntimeLog', entry);
   }
 }

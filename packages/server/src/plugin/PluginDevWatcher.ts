@@ -79,8 +79,8 @@ export class PluginDevWatcher {
     const hotreloadDirs = new Set<string>();
 
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
       const dirPath = path.join(this.pluginsDir, entry.name);
+      if (!await this.isPluginDirectoryEntry(entry, dirPath)) continue;
       const markerPath = path.join(dirPath, '.hotreload');
       if (fs.existsSync(markerPath)) {
         hotreloadDirs.add(entry.name);
@@ -107,6 +107,26 @@ export class PluginDevWatcher {
         }
         logger.debug('Stopped watching removed plugin', { name });
       }
+    }
+  }
+
+  private async isPluginDirectoryEntry(entry: fs.Dirent, dirPath: string): Promise<boolean> {
+    if (entry.isDirectory()) {
+      return true;
+    }
+    if (!entry.isSymbolicLink()) {
+      return false;
+    }
+
+    try {
+      const stat = await fs.promises.stat(dirPath);
+      return stat.isDirectory();
+    } catch (err) {
+      logger.warn('Failed to resolve plugin symlink for dev watcher', {
+        dirPath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
     }
   }
 

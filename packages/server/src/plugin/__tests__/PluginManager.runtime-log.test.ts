@@ -3,7 +3,12 @@ import { EventEmitter } from 'eventemitter3';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { DigitalRadioEngineEvents, PluginRuntimeLogEntry } from '@tx5dr/contracts';
+import type {
+  DigitalRadioEngineEvents,
+  PluginLogEntry,
+  PluginLogHistoryEntry,
+  PluginRuntimeLogEntry,
+} from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { RadioOperator } from '@tx5dr/core';
 import { PluginManager } from '../PluginManager.js';
@@ -97,6 +102,14 @@ function createPluginManager(
   return pluginManager;
 }
 
+function isRuntimeLogEntry(entry: PluginLogHistoryEntry): entry is PluginRuntimeLogEntry {
+  return 'source' in entry && entry.source === 'system';
+}
+
+function isPluginLogEntry(entry: PluginLogHistoryEntry): entry is PluginLogEntry {
+  return !isRuntimeLogEntry(entry);
+}
+
 describe('PluginManager runtime logs', () => {
   it('stores runtime logs in backend history and supports limit queries', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-runtime-log-'));
@@ -114,11 +127,53 @@ describe('PluginManager runtime logs', () => {
 
     expect(allEntries.length).toBeGreaterThan(0);
     expect(allEntries.some((entry) =>
+      isRuntimeLogEntry(entry)
+      &&
       entry.stage === 'reload'
       && entry.level === 'info'
       && entry.message.includes('completed'))).toBe(true);
     expect(latestThree.length).toBeLessThanOrEqual(3);
     expect(latestThree).toEqual(allEntries.slice(-latestThree.length));
+
+    await pluginManager.shutdown();
+  });
+
+  it('stores plugin ctx.log entries in backend history', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-runtime-log-'));
+    tempDirs.push(dataDir);
+
+    await writeUserPlugin(dataDir, 'history-plugin', `
+      export default {
+        name: 'history-plugin',
+        version: '1.0.0',
+        type: 'utility',
+        instanceScope: 'global',
+        onLoad(ctx) {
+          ctx.log.info('history plugin started');
+        },
+      };
+    `);
+
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const operator = createOperator(eventEmitter);
+    const pluginManager = createPluginManager(dataDir, eventEmitter, operator);
+    pluginManager.loadConfig({
+      configs: {
+        'history-plugin': { enabled: true, settings: {} },
+      },
+      operatorStrategies: {
+        [operator.config.id]: 'standard-qso',
+      },
+      operatorSettings: {},
+    });
+
+    await pluginManager.start();
+
+    const history = pluginManager.getRuntimeLogHistory();
+    expect(history.some((entry) =>
+      isPluginLogEntry(entry)
+      && entry.pluginName === 'history-plugin'
+      && entry.message === 'history plugin started')).toBe(true);
 
     await pluginManager.shutdown();
   });

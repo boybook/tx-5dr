@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
+  PluginLogHistoryEntry,
   PluginLogEntry,
   PluginRuntimeLogEntry,
   PluginRuntimeLogHistoryPayload,
@@ -35,6 +36,12 @@ export function toPluginRuntimeLogViewEntry(entry: PluginRuntimeLogEntry): Plugi
     details: entry.details,
     timestamp: entry.timestamp,
   };
+}
+
+export function toPluginLogHistoryViewEntry(entry: PluginLogHistoryEntry): PluginLogViewEntry {
+  return 'source' in entry && entry.source === 'system'
+    ? toPluginRuntimeLogViewEntry(entry)
+    : toPluginLogViewEntry(entry);
 }
 
 function stringifyPluginLogDetails(details: unknown): string {
@@ -157,7 +164,7 @@ export const PluginLogPanel: React.FC = () => {
   });
 
   useWSEvent(connection.state.radioService, 'pluginRuntimeLogHistory', (payload: PluginRuntimeLogHistoryPayload) => {
-    const normalizedEntries = payload.entries.map((entry) => toPluginRuntimeLogViewEntry(entry));
+    const normalizedEntries = payload.entries.map((entry) => toPluginLogHistoryViewEntry(entry));
     setEntries((prev) => mergePluginLogEntries(prev, normalizedEntries));
   });
 

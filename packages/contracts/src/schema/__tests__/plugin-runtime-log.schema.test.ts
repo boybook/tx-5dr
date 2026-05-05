@@ -67,11 +67,23 @@ describe('plugin runtime log schema', () => {
           level: 'error',
           message: 'No entry file found',
           timestamp: Date.now(),
+          pluginName: 'broken-plugin',
           directoryName: 'broken-plugin',
+        },
+        {
+          pluginName: 'websdr.bd8ftc.de FRP穿透服务',
+          level: 'info',
+          message: '启动成功',
+          timestamp: Date.now(),
         },
       ],
     });
-    expect(payload.entries).toHaveLength(2);
+    expect(payload.entries).toHaveLength(3);
+    expect(payload.entries[1]).toMatchObject({
+      source: 'system',
+      stage: 'load',
+      pluginName: 'broken-plugin',
+    });
 
     const requestMessage = WSMessageSchema.parse({
       type: WSMessageType.GET_PLUGIN_RUNTIME_LOG_HISTORY,

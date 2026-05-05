@@ -643,11 +643,17 @@ export const PluginRuntimeLogEntrySchema = z.object({
 });
 export type PluginRuntimeLogEntry = z.infer<typeof PluginRuntimeLogEntrySchema>;
 
+export const PluginLogHistoryEntrySchema = z.union([
+  PluginRuntimeLogEntrySchema,
+  PluginLogEntrySchema,
+]);
+export type PluginLogHistoryEntry = z.infer<typeof PluginLogHistoryEntrySchema>;
+
 /**
  * 宿主级插件运行日志历史响应载荷
  */
 export const PluginRuntimeLogHistoryPayloadSchema = z.object({
-  entries: z.array(PluginRuntimeLogEntrySchema),
+  entries: z.array(PluginLogHistoryEntrySchema),
 });
 export type PluginRuntimeLogHistoryPayload = z.infer<typeof PluginRuntimeLogHistoryPayloadSchema>;
 

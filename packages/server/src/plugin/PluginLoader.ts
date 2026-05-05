@@ -2,6 +2,7 @@ import type { PluginDefinition } from '@tx5dr/plugin-api';
 import type { PluginRuntimeLogEntry } from '@tx5dr/contracts';
 import { PluginManifestSchema } from '@tx5dr/contracts';
 import type { LoadedPlugin } from './types.js';
+import type { Dirent } from 'fs';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
@@ -140,7 +141,12 @@ export class PluginLoader {
     let entries: string[];
     try {
       const dirents = await fs.readdir(pluginDir, { withFileTypes: true });
-      entries = dirents.filter(d => d.isDirectory()).map(d => d.name);
+      entries = [];
+      for (const dirent of dirents) {
+        if (await this.isPluginDirectoryEntry(pluginDir, dirent)) {
+          entries.push(dirent.name);
+        }
+      }
     } catch (err) {
       this.emitRuntimeLog?.({
         stage: 'scan',
@@ -193,6 +199,23 @@ export class PluginLoader {
       }
     }
     return results;
+  }
+
+  private async isPluginDirectoryEntry(pluginDir: string, dirent: Dirent): Promise<boolean> {
+    if (dirent.isDirectory()) {
+      return true;
+    }
+    if (!dirent.isSymbolicLink()) {
+      return false;
+    }
+
+    try {
+      const stat = await fs.stat(path.join(pluginDir, dirent.name));
+      return stat.isDirectory();
+    } catch (err) {
+      logger.warn(`Failed to resolve plugin symlink: ${path.join(pluginDir, dirent.name)}`, err);
+      return false;
+    }
   }
 
   private async loadPlugin(dirPath: string, directoryName: string): Promise<LoadedPlugin> {

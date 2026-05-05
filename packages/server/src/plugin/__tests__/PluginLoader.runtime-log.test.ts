@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PluginLoader, type PluginLoaderRuntimeLogEvent } from '../PluginLoader.js';
@@ -47,6 +47,31 @@ describe('PluginLoader runtime logs', () => {
       entry.stage === 'load'
       && entry.level === 'info'
       && entry.pluginName === 'hello-plugin'
+      && entry.message.includes('Plugin loaded'))).toBe(true);
+  });
+
+  it('loads a plugin when the top-level plugin directory is a symlink', async () => {
+    const pluginRoot = await createPluginRoot();
+    const linkedTarget = await createPluginRoot();
+    await writeFile(join(linkedTarget, 'index.mjs'), `
+      export default {
+        name: 'symlink-plugin',
+        version: '1.0.0',
+        type: 'utility',
+      };
+    `, 'utf8');
+    await symlink(linkedTarget, join(pluginRoot, 'symlink-plugin'), 'dir');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loader = new PluginLoader((entry) => runtimeLogs.push(entry));
+    const loaded = await loader.scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]?.definition.name).toBe('symlink-plugin');
+    expect(runtimeLogs.some((entry) =>
+      entry.stage === 'load'
+      && entry.level === 'info'
+      && entry.directoryName === 'symlink-plugin'
       && entry.message.includes('Plugin loaded'))).toBe(true);
   });
 

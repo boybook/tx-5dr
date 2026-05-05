@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatPluginLogLine,
   mergePluginLogEntries,
+  toPluginLogHistoryViewEntry,
   toPluginLogViewEntry,
   toPluginRuntimeLogViewEntry,
 } from '../PluginLogPanel';
@@ -114,5 +115,27 @@ describe('PluginLogPanel logic helpers', () => {
     expect(merged).toHaveLength(2);
     expect(merged[0]?.message).toBe('Scanning plugin directory');
     expect(merged[1]?.message).toBe('Plugin reload completed: all plugins');
+  });
+
+  it('normalizes mixed history entries from backend replay', () => {
+    const systemView = toPluginLogHistoryViewEntry({
+      source: 'system',
+      stage: 'activate',
+      level: 'info',
+      pluginName: 'websdr.bd8ftc.de FRP穿透服务',
+      message: 'Plugin loaded',
+      timestamp: 1713744000000,
+    });
+    const pluginView = toPluginLogHistoryViewEntry({
+      pluginName: 'websdr.bd8ftc.de FRP穿透服务',
+      level: 'info',
+      message: 'FRPC 已启动',
+      timestamp: 1713744001000,
+    });
+
+    expect(systemView.source).toBe('system');
+    expect(systemView.stage).toBe('activate');
+    expect(pluginView.source).toBe('plugin');
+    expect(pluginView.message).toBe('FRPC 已启动');
   });
 });
