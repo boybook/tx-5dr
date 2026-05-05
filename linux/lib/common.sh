@@ -371,13 +371,27 @@ get_github_release_asset_url() {
 }
 
 fetch_server_manifest() {
-    local manifest_url
-    manifest_url=$(get_server_manifest_url) || return 1
-    curl -fsSL "$manifest_url" || curl -fsSL "$(get_server_legacy_manifest_url)"
+    fetch_server_manifest_from_source "oss" || fetch_server_manifest_from_source "github"
 }
 
 fetch_server_manifest_from_source() {
-    fetch_server_manifest
+    local source="${1:-oss}"
+    local manifest_url legacy_url
+
+    case "$source" in
+        github)
+            manifest_url=$(get_server_github_manifest_url) || return 1
+            curl -fsSL "$manifest_url"
+            ;;
+        oss|aliyun|"")
+            manifest_url=$(get_server_manifest_url) || return 1
+            legacy_url=$(get_server_legacy_manifest_url) || legacy_url=""
+            curl -fsSL "$manifest_url" || { [[ -n "$legacy_url" ]] && curl -fsSL "$legacy_url"; }
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 normalize_country_code() {

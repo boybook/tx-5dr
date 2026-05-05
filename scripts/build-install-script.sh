@@ -52,82 +52,130 @@ install_src = re.sub(
     flags=re.DOTALL
 )
 
-# Replace the "No .deb file provided" error block with auto-download logic
-download_block = f'''    # Auto-download latest nightly from OSS metadata (fallback to GitHub)
-        log_info "Resolving latest nightly package..."
-        _dl_family=$(os_family)
-        _fallback_tag="nightly-server"
-        if [[ "$_dl_family" == "rhel" ]]; then
-            _asset_name="TX-5DR-nightly-server-linux-${{ARCH}}.rpm"
-        else
-            _asset_name="TX-5DR-nightly-server-linux-${{ARCH}}.deb"
+# The online installer is made reliable by using an explicit hook in install.sh
+# instead of replacing a fragile formatted error block.
+online_hook = '''
+# Auto-download latest nightly package when no local .deb/.rpm was provided.
+tx5dr_online_install_missing_package() {
+    local _dl_family _fallback_tag _asset_name _pkg_ext _fallback_url
+    local _tmp_dir PKG_FILE _resolved_url _resolved_sha _preferred_source
+    local _source _manifest_json _install_ok
+    local -a _sources
+
+    log_info "Resolving latest nightly package..."
+    _dl_family=$(os_family)
+    _fallback_tag="nightly-server"
+    if [[ "$_dl_family" == "rhel" ]]; then
+        _asset_name="TX-5DR-nightly-server-linux-${ARCH}.rpm"
+    else
+        _asset_name="TX-5DR-nightly-server-linux-${ARCH}.deb"
+    fi
+    _pkg_ext="${_asset_name##*.}"
+    _fallback_url="$(get_github_release_asset_url "$_fallback_tag" "$_asset_name")"
+    _resolved_url=""
+    _resolved_sha=""
+    _preferred_source="github"
+
+    if should_prefer_oss_download; then
+        _preferred_source="oss"
+        log_info "Detected mainland China or OSS override. Preferring OSS mirror."
+    fi
+
+    if [[ "$_preferred_source" == "oss" ]]; then
+        _sources=(oss github)
+    else
+        _sources=(github oss)
+    fi
+
+    for _source in "${_sources[@]}"; do
+        if _manifest_json=$(fetch_server_manifest_from_source "$_source" 2>/dev/null); then
+            _resolved_url=$(get_server_manifest_package_url_for_source "$_manifest_json" "${ARCH}" "$_pkg_ext" "$_source" 2>/dev/null || true)
+            _resolved_sha=$(get_server_manifest_package_sha256 "$_manifest_json" "${ARCH}" "$_pkg_ext" 2>/dev/null || true)
+            if [[ -n "$_resolved_url" ]]; then
+                break
+            fi
         fi
-        _fallback_url="$(get_github_release_asset_url "$_fallback_tag" "$_asset_name")"
-        PKG_FILE="/tmp/${{_asset_name}}"
-        _resolved_url=""
-        _resolved_sha=""
-        _preferred_source="github"
-        if should_prefer_oss_download; then
-            _preferred_source="oss"
-            log_info "Detected mainland China or OSS override. Preferring OSS mirror."
-        fi
-        if _manifest_json=$(fetch_server_manifest_from_source "oss" 2>/dev/null); then
-            _resolved_url=$(get_server_manifest_package_url_for_source "$_manifest_json" "${{ARCH}}" "${{_asset_name##*.}}" "$_preferred_source" 2>/dev/null || true)
-            _resolved_sha=$(get_server_manifest_package_sha256 "$_manifest_json" "${{ARCH}}" "${{_asset_name##*.}}" 2>/dev/null || true)
-            if [[ -z "$_resolved_url" ]]; then
-                if [[ "$_preferred_source" == "oss" ]]; then
-                    _resolved_url=$(get_server_manifest_package_url_for_source "$_manifest_json" "${{ARCH}}" "${{_asset_name##*.}}" "github" 2>/dev/null || true)
-                else
-                    _resolved_url=$(get_server_manifest_package_url_for_source "$_manifest_json" "${{ARCH}}" "${{_asset_name##*.}}" "oss" 2>/dev/null || true)
-                fi
-            fi
-        else
-            log_warn "OSS manifest unavailable, falling back to GitHub release asset..."
-        fi
-        [[ -n "$_resolved_url" ]] || _resolved_url="$_fallback_url"
-        if curl -fSL --progress-bar -o "$PKG_FILE" "$_resolved_url"; then
-            if [[ -n "$_resolved_sha" ]] && command -v sha256sum &>/dev/null; then
-                if ! printf "%s  %s\\n" "$_resolved_sha" "$PKG_FILE" | sha256sum -c - >/dev/null 2>&1; then
-                    log_warn "OSS package checksum mismatch, falling back to GitHub..."
-                    rm -f "$PKG_FILE"
-                    curl -fSL --progress-bar -o "$PKG_FILE" "$_fallback_url"
-                fi
-            fi
-            log_ok "Downloaded: $PKG_FILE"
-            if $IS_UPGRADE; then
-                systemctl stop tx5dr 2>/dev/null || true
-            fi
-            if [[ "$_dl_family" == "rhel" ]]; then
-                # Use reinstall when the same version is already installed (e.g. nightly always 1.0.0)
-                # so that postinstall scripts run and files are updated.
-                if rpm -q tx5dr &>/dev/null; then
-                    dnf reinstall -y "$PKG_FILE" 2>&1 || rpm -Uvh --force "$PKG_FILE" 2>&1 || true
-                else
-                    dnf install -y "$PKG_FILE" 2>&1 || rpm -ivh --force "$PKG_FILE" 2>&1 || true
-                fi
-            else
-                dpkg -i --force-depends "$PKG_FILE" 2>&1 || true
-                apt-get install -f -y 2>&1 || true
-            fi
-            rm -f "$PKG_FILE"
+        log_warn "${_source} manifest unavailable or missing ${ARCH}/${_pkg_ext}; trying next source..."
+    done
+    [[ -n "$_resolved_url" ]] || _resolved_url="$_fallback_url"
+
+    _tmp_dir=$(mktemp -d)
+    trap 'rm -rf "$_tmp_dir"' RETURN
+    PKG_FILE="$_tmp_dir/$_asset_name"
+
+    if ! tx5dr_download_package "$_resolved_url" "$_resolved_sha" "$PKG_FILE"; then
+        if [[ "$_resolved_url" != "$_fallback_url" ]]; then
+            log_warn "Primary download failed; falling back to GitHub release asset..."
+            tx5dr_download_package "$_fallback_url" "" "$PKG_FILE" || {
+                log_error "Download failed: $_fallback_url"
+                log_error "You can manually download and pass the package path as argument."
+                exit 1
+            }
         else
             log_error "Download failed: $_resolved_url"
             log_error "You can manually download and pass the package path as argument."
             exit 1
-        fi'''
+        fi
+    fi
 
-install_src = install_src.replace(
-    '''    log_error "No .deb file provided and TX-5DR is not installed."
-        log_error "Usage: sudo bash install.sh path/to/tx5dr.deb"
-        exit 1''',
-    download_block
-)
+    log_ok "Downloaded: $PKG_FILE"
+    $IS_UPGRADE && systemctl stop tx5dr 2>/dev/null || true
 
-# Also replace the upgrade "no package file" block
-install_src = install_src.replace(
-    '        log_ok "TX-5DR already installed (no package file provided, keeping current version)"',
-    download_block.replace('log_info "Downloading latest', 'log_info "Downloading latest update from GitHub...\n        # Downloading')
-)
+    _install_ok=false
+    if [[ "$_dl_family" == "rhel" ]]; then
+        if rpm -q tx5dr &>/dev/null; then
+            if ! (dnf upgrade -y "$PKG_FILE" || dnf install -y "$PKG_FILE" || rpm -Uvh "$PKG_FILE") 2>&1 | tail -20; then
+                log_warn "RPM package manager reported an install failure; verifying package state..."
+            fi
+        else
+            if ! (dnf install -y "$PKG_FILE" || rpm -ivh "$PKG_FILE") 2>&1 | tail -20; then
+                log_warn "RPM package manager reported an install failure; verifying package state..."
+            fi
+        fi
+        rpm -q tx5dr &>/dev/null && _install_ok=true
+    else
+        if ! dpkg -i --force-depends "$PKG_FILE" 2>&1 | tail -20; then
+            log_warn "dpkg reported an install issue; attempting dependency repair..."
+        fi
+        if ! apt-get install -f -y 2>&1 | tail -20; then
+            log_warn "apt-get dependency repair reported an issue; verifying package state..."
+        fi
+        dpkg-query -W -f='${Status}' tx5dr 2>/dev/null | grep -q "install ok installed" && _install_ok=true
+    fi
+
+    if ! $_install_ok; then
+        log_error "Package installation failed."
+        exit 1
+    fi
+
+    rm -rf "$_tmp_dir"
+    trap - RETURN
+}
+
+tx5dr_download_package() {
+    local url="$1" expected_sha="$2" output="$3"
+
+    rm -f "$output"
+    if ! curl -fSL --progress-bar -o "$output" "$url"; then
+        rm -f "$output"
+        return 1
+    fi
+
+    if [[ -n "$expected_sha" ]] && command -v sha256sum &>/dev/null; then
+        if ! printf "%s  %s\n" "$expected_sha" "$output" | sha256sum -c - >/dev/null 2>&1; then
+            log_warn "Package checksum mismatch: $url"
+            rm -f "$output"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+'''
+
+if 'tx5dr_online_install_missing_package' not in install_src:
+    print('ERROR: linux/install.sh no longer calls tx5dr_online_install_missing_package hook', file=sys.stderr)
+    sys.exit(1)
 
 download_base_assignment = ''
 if download_base_url:
@@ -153,6 +201,8 @@ with open(output_path, 'w') as f:
     f.write(common)
     f.write('\n# ── lib/checks.sh (inlined) ──────────────────────────────────────\n')
     f.write(checks)
+    f.write('\n# ── online install hook ──────────────────────────────────────────\n')
+    f.write(online_hook)
     f.write('\n# ── install.sh (inlined) ─────────────────────────────────────────\n')
     f.write(install_src)
 
@@ -160,6 +210,15 @@ print(f"Generated: {output_path}")
 PYEOF
 
 chmod +x "$OUTPUT"
+if ! grep -q '^tx5dr_online_install_missing_package()' "$OUTPUT"; then
+    echo "ERROR: generated installer is missing online download hook" >&2
+    exit 1
+fi
+if ! grep -q 'Resolving latest nightly package' "$OUTPUT"; then
+    echo "ERROR: generated installer is missing nightly package resolver" >&2
+    exit 1
+fi
+bash -n "$OUTPUT"
 LINES=$(wc -l < "$OUTPUT")
 SIZE=$(du -h "$OUTPUT" | cut -f1)
 echo "  $LINES lines, $SIZE"

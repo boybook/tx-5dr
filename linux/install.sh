@@ -38,6 +38,20 @@ step_header() {
     log_step "$(msg STEP "$n" "$TOTAL_STEPS")  $label"
 }
 
+install_missing_package() {
+    if declare -F tx5dr_online_install_missing_package >/dev/null; then
+        tx5dr_online_install_missing_package
+        return
+    fi
+
+    if $IS_UPGRADE; then
+        log_ok "TX-5DR already installed (no package file provided, keeping current version)"
+    else
+        log_error "No .deb file provided and TX-5DR is not installed."
+        exit 1
+    fi
+}
+
 echo ""
 echo -e "${_BOLD}TX-5DR Server Install${_NC}"
 echo "═══════════════════════════════════════"
@@ -154,7 +168,7 @@ if [[ -n "$DEB_FILE" && -f "$DEB_FILE" ]]; then
 elif [[ -n "$DEB_FILE" ]]; then
     log_error "File not found: $DEB_FILE"; exit 1
 else
-    if $IS_UPGRADE; then log_ok "TX-5DR already installed (no package file provided, keeping current version)"; else log_error "No .deb file provided and TX-5DR is not installed."; exit 1; fi
+    install_missing_package
 fi
 
 # Post-install: verify @discordjs/opus native module loads correctly
