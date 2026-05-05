@@ -53,6 +53,7 @@ check_glibc_execstack() {
 }
 
 NGINX_BIN=""
+TX5DR_NGINX_CLIENT_MAX_BODY_SIZE="${TX5DR_NGINX_CLIENT_MAX_BODY_SIZE:-128M}"
 _find_nginx() {
     if [[ -n "$NGINX_BIN" ]]; then return; fi
     NGINX_BIN=$(command -v nginx 2>/dev/null || true)
@@ -83,7 +84,7 @@ check_nginx() {
 }
 
 get_tx5dr_nginx_conf_path() {
-    printf "%s" "/etc/nginx/conf.d/tx5dr.conf"
+    printf "%s" "${TX5DR_NGINX_CONF_PATH:-/etc/nginx/conf.d/tx5dr.conf}"
 }
 
 check_nginx_realtime_proxy_config() {
@@ -108,6 +109,276 @@ check_nginx_realtime_proxy_config() {
     printf "%s\n" "$content" | grep -Fq 'proxy_set_header Host $http_host;' || return 1
     printf "%s\n" "$content" | grep -Fq 'proxy_set_header X-Forwarded-Host $http_host;' || return 1
     printf "%s\n" "$content" | grep -Fq 'proxy_set_header X-Forwarded-Port $http_x_forwarded_port;' || return 1
+}
+
+find_tx5dr_nginx_config_files() {
+    local primary
+    primary=$(get_tx5dr_nginx_conf_path)
+    if [[ -f "$primary" ]]; then
+        printf "%s\n" "$primary"
+    fi
+
+    local api_port="${API_PORT:-4000}"
+    local path content
+    for path in /etc/nginx/conf.d/*.conf /etc/nginx/default.d/*.conf /etc/nginx/nginx.conf; do
+        [[ -f "$path" ]] || continue
+        [[ "$path" == "$primary" ]] && continue
+        content=$(read_file_maybe_sudo "$path" 2>/dev/null || true)
+        [[ -n "$content" ]] || continue
+        printf "%s\n" "$content" | grep -Fq '/usr/share/tx5dr/web' || continue
+        printf "%s\n" "$content" | grep -Fq "127.0.0.1:${api_port}" || continue
+        printf "%s\n" "$path"
+    done
+}
+
+_check_nginx_upload_body_size_file() {
+    local conf="$1"
+    [[ -f "$conf" ]] || return 1
+
+    read_file_maybe_sudo "$conf" 2>/dev/null | awk -v target_text="$TX5DR_NGINX_CLIENT_MAX_BODY_SIZE" -v api_port="${API_PORT:-4000}" '
+        function size_to_bytes(value,    v, unit, number) {
+            v = value
+            gsub(/^[[:space:]]+|[[:space:];]+$/, "", v)
+            if (v !~ /^[0-9]+([kKmMgG])?$/) return -1
+            unit = substr(v, length(v), 1)
+            if (unit ~ /[kKmMgG]/) {
+                number = substr(v, 1, length(v) - 1) + 0
+                if (unit ~ /[kK]/) return number * 1024
+                if (unit ~ /[mM]/) return number * 1024 * 1024
+                if (unit ~ /[gG]/) return number * 1024 * 1024 * 1024
+            }
+            return v + 0
+        }
+        function brace_delta(line,    i, c, delta) {
+            delta = 0
+            for (i = 1; i <= length(line); i++) {
+                c = substr(line, i, 1)
+                if (c == "{") delta++
+                if (c == "}") delta--
+            }
+            return delta
+        }
+        function inspect_line(line,    value) {
+            if (line ~ /root[[:space:]]+\/usr\/share\/tx5dr\/web[[:space:]]*;/) has_tx = 1
+            if (index(line, "proxy_pass http://127.0.0.1:" api_port) > 0) has_tx = 1
+            if (line ~ /^[[:space:]]*client_max_body_size[[:space:]]+[^;]+;/) {
+                value = line
+                sub(/^[[:space:]]*client_max_body_size[[:space:]]+/, "", value)
+                sub(/;.*/, "", value)
+                if (size_to_bytes(value) >= target_bytes) has_good = 1
+            }
+        }
+        BEGIN {
+            target_bytes = size_to_bytes(target_text)
+            if (target_bytes <= 0) exit 2
+            in_server = 0
+            found_tx = 0
+            bad_tx = 0
+        }
+        {
+            if (!in_server && $0 ~ /^[[:space:]]*server[[:space:]]*\{/) {
+                in_server = 1
+                depth = 0
+                has_tx = 0
+                has_good = 0
+            }
+            if (in_server) {
+                inspect_line($0)
+                depth += brace_delta($0)
+                if (depth <= 0) {
+                    if (has_tx) {
+                        found_tx = 1
+                        if (!has_good) bad_tx = 1
+                    }
+                    in_server = 0
+                }
+            }
+        }
+        END {
+            exit (found_tx && !bad_tx) ? 0 : 1
+        }
+    '
+}
+
+check_nginx_upload_body_size_config() {
+    local any=0
+    local conf
+    if [[ $# -gt 0 ]]; then
+        for conf in "$@"; do
+            any=1
+            _check_nginx_upload_body_size_file "$conf" || return 1
+        done
+    else
+        while IFS= read -r conf; do
+            [[ -n "$conf" ]] || continue
+            any=1
+            _check_nginx_upload_body_size_file "$conf" || return 1
+        done < <(find_tx5dr_nginx_config_files)
+    fi
+    [[ "$any" -eq 1 ]]
+}
+
+_patch_nginx_upload_body_size_file() {
+    local conf="$1"
+    [[ -f "$conf" ]] || return 1
+
+    local tmp_file backup_file
+    tmp_file=$(mktemp)
+    backup_file="${conf}.bak.upload-body-size.$(date +%Y%m%d%H%M%S)"
+
+    awk -v target_text="$TX5DR_NGINX_CLIENT_MAX_BODY_SIZE" -v api_port="${API_PORT:-4000}" '
+        function size_to_bytes(value,    v, unit, number) {
+            v = value
+            gsub(/^[[:space:]]+|[[:space:];]+$/, "", v)
+            if (v !~ /^[0-9]+([kKmMgG])?$/) return -1
+            unit = substr(v, length(v), 1)
+            if (unit ~ /[kKmMgG]/) {
+                number = substr(v, 1, length(v) - 1) + 0
+                if (unit ~ /[kK]/) return number * 1024
+                if (unit ~ /[mM]/) return number * 1024 * 1024
+                if (unit ~ /[gG]/) return number * 1024 * 1024 * 1024
+            }
+            return v + 0
+        }
+        function brace_delta(line,    i, c, delta) {
+            delta = 0
+            for (i = 1; i <= length(line); i++) {
+                c = substr(line, i, 1)
+                if (c == "{") delta++
+                if (c == "}") delta--
+            }
+            return delta
+        }
+        function scan_line(line,    value) {
+            if (line ~ /root[[:space:]]+\/usr\/share\/tx5dr\/web[[:space:]]*;/) block_has_tx = 1
+            if (index(line, "proxy_pass http://127.0.0.1:" api_port) > 0) block_has_tx = 1
+            if (line ~ /^[[:space:]]*client_max_body_size[[:space:]]+[^;]+;/) {
+                block_has_directive = 1
+                value = line
+                sub(/^[[:space:]]*client_max_body_size[[:space:]]+/, "", value)
+                sub(/;.*/, "", value)
+                if (size_to_bytes(value) >= target_bytes) block_has_good_directive = 1
+            }
+        }
+        function line_indent(line,    indent) {
+            indent = line
+            sub(/[^[:space:]].*$/, "", indent)
+            return indent
+        }
+        function process_server_block(    i, line, indent, inserted, value) {
+            if (!block_has_tx) {
+                for (i = 1; i <= block_count; i++) print block[i]
+                return
+            }
+
+            inserted = 0
+            for (i = 1; i <= block_count; i++) {
+                line = block[i]
+                if (line ~ /^[[:space:]]*client_max_body_size[[:space:]]+[^;]+;/) {
+                    indent = line_indent(line)
+                    value = line
+                    sub(/^[[:space:]]*client_max_body_size[[:space:]]+/, "", value)
+                    sub(/;.*/, "", value)
+                    if (size_to_bytes(value) < target_bytes) {
+                        line = indent "client_max_body_size " target_text ";"
+                    }
+                }
+                print line
+                if (!block_has_directive && !inserted && line ~ /^[[:space:]]*server_name[[:space:]]+.*;/) {
+                    indent = line_indent(line)
+                    print indent "client_max_body_size " target_text ";"
+                    inserted = 1
+                }
+            }
+
+            if (!block_has_directive && !inserted) {
+                # This should be rare, but keep the config valid if a custom block omits server_name.
+                print "    client_max_body_size " target_text ";"
+            }
+        }
+        BEGIN {
+            target_bytes = size_to_bytes(target_text)
+            in_server = 0
+        }
+        {
+            if (!in_server && $0 ~ /^[[:space:]]*server[[:space:]]*\{/) {
+                in_server = 1
+                depth = 0
+                block_count = 0
+                block_has_tx = 0
+                block_has_directive = 0
+                block_has_good_directive = 0
+            }
+
+            if (in_server) {
+                block[++block_count] = $0
+                scan_line($0)
+                depth += brace_delta($0)
+                if (depth <= 0) {
+                    process_server_block()
+                    in_server = 0
+                }
+                next
+            }
+
+            print
+        }
+        END {
+            if (in_server) {
+                for (i = 1; i <= block_count; i++) print block[i]
+            }
+        }
+    ' "$conf" > "$tmp_file" || {
+        rm -f "$tmp_file"
+        return 1
+    }
+
+    if cmp -s "$conf" "$tmp_file"; then
+        rm -f "$tmp_file"
+        return 0
+    fi
+
+    cp -p "$conf" "$backup_file" || {
+        rm -f "$tmp_file"
+        return 1
+    }
+    cat "$tmp_file" > "$conf"
+    rm -f "$tmp_file"
+
+    if check_nginx_config; then
+        systemctl reload nginx 2>/dev/null || true
+        return 0
+    fi
+
+    cp -p "$backup_file" "$conf" 2>/dev/null || true
+    systemctl reload nginx 2>/dev/null || true
+    return 1
+}
+
+fix_nginx_upload_body_size_config() {
+    local any=0
+    local failed=0
+    local conf
+
+    if [[ $# -gt 0 ]]; then
+        for conf in "$@"; do
+            any=1
+            if ! _check_nginx_upload_body_size_file "$conf"; then
+                _patch_nginx_upload_body_size_file "$conf" || failed=1
+            fi
+        done
+    else
+        while IFS= read -r conf; do
+            [[ -n "$conf" ]] || continue
+            any=1
+            if ! _check_nginx_upload_body_size_file "$conf"; then
+                _patch_nginx_upload_body_size_file "$conf" || failed=1
+            fi
+        done < <(find_tx5dr_nginx_config_files)
+    fi
+
+    [[ "$any" -eq 1 && "$failed" -eq 0 ]] || return 1
+    check_nginx_upload_body_size_config "$@"
 }
 
 check_tx5dr_service() {
@@ -799,6 +1070,14 @@ run_doctor() {
         else
             check_line "$(msg CHECK_NGINX_REALTIME_PROXY)" "fail" "missing realtime upgrade route or forwarded port preservation"
             echo -e "      ${_DIM}$(msg FIX_NGINX_REALTIME_PROXY)${_NC}"
+            issues=$((issues + 1))
+        fi
+
+        if check_nginx_upload_body_size_config; then
+            check_line "$(msg CHECK_NGINX_UPLOAD_LIMIT)" "ok" "${TX5DR_NGINX_CLIENT_MAX_BODY_SIZE}"
+        else
+            check_line "$(msg CHECK_NGINX_UPLOAD_LIMIT)" "fail" "missing or below ${TX5DR_NGINX_CLIENT_MAX_BODY_SIZE}"
+            echo -e "      ${_DIM}$(msg FIX_NGINX_UPLOAD_LIMIT)${_NC}"
             issues=$((issues + 1))
         fi
     fi

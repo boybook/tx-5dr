@@ -250,6 +250,7 @@ cmd_doctor_fix_internal() {
     check_glibcxx || fix_glibcxx || true
     check_nginx_installed || fix_nginx || true
     check_nginx_realtime_proxy_config || fix_nginx_realtime_proxy_config || true
+    check_nginx_upload_body_size_config || fix_nginx_upload_body_size_config || true
     check_rtc_data_audio_udp_config || true
     fix_rtc_data_audio_firewall || true
     check_tx5dr_user || fix_tx5dr_user_groups || true

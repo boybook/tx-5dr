@@ -83,6 +83,15 @@ if [[ -f "$NGINX_TEMPLATE" ]]; then
                      "警告: 补齐保留 nginx 配置中的实时语音反向代理失败。"
             fi
         fi
+        if [[ "$SHARED_LIB_READY" == "1" ]] && ! check_nginx_upload_body_size_config; then
+            if fix_nginx_upload_body_size_config; then
+                _msg "Patched preserved nginx config with upload size limit." \
+                     "已为保留的 nginx 配置补齐上传大小限制。"
+            else
+                _msg "WARNING: failed to patch the preserved nginx upload size limit." \
+                     "警告: 补齐保留 nginx 配置中的上传大小限制失败。"
+            fi
+        fi
     else
         mkdir -p "$(dirname "$NGINX_CONF")"
         sed -e "s|%%LISTEN_PORT%%|${LISTEN_PORT}|g" \
