@@ -142,7 +142,11 @@ if [[ -f /usr/share/tx5dr/packages/server/dist/index.js ]]; then IS_UPGRADE=true
 if [[ -n "$DEB_FILE" && -f "$DEB_FILE" ]]; then
     $IS_UPGRADE && systemctl stop tx5dr 2>/dev/null || true
     if [[ "$DEB_FILE" == *.rpm ]]; then
-        if rpm -q tx5dr &>/dev/null; then dnf reinstall -y "$DEB_FILE" 2>&1 | tail -3 || rpm -Uvh --force "$DEB_FILE" 2>&1 | tail -3 || true; else dnf install -y "$DEB_FILE" 2>&1 | tail -3 || rpm -ivh --force "$DEB_FILE" 2>&1 | tail -3 || true; fi
+        if rpm -q tx5dr &>/dev/null; then
+            (dnf upgrade -y "$DEB_FILE" || dnf install -y "$DEB_FILE" || rpm -Uvh "$DEB_FILE") 2>&1 | tail -3
+        else
+            (dnf install -y "$DEB_FILE" || rpm -ivh "$DEB_FILE") 2>&1 | tail -3
+        fi
     else
         dpkg -i --force-depends "$DEB_FILE" 2>&1 | tail -3
         apt-get install -f -y >/dev/null 2>&1 || true
