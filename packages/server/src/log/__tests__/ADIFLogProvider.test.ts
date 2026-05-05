@@ -80,6 +80,92 @@ describe('ADIFLogProvider import', () => {
     await provider.close();
   });
 
+  it('exports untouched external ADIF records using the original record text', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    const rawRecord = '<call:5>BG2AA  <qso_date:8>20260101 <time_on:6>120000  <freq:9>14.074000 <mode:3>FT8 <gridsquare:6>PM01AA<eor>';
+
+    await provider.importADIF(buildAdif([rawRecord]));
+    const exported = await provider.exportADIF(undefined, { fallbackGrid: 'PM00AA' });
+
+    expect(exported).toContain(`${rawRecord}\n`);
+    expect(exported).not.toContain('<CALL:5>BG2AA<QSO_DATE:8>20260101');
+    expect(exported).not.toContain('<BAND:3>20m');
+    expect(exported).not.toContain('<MY_GRIDSQUARE:6>PM00AA');
+
+    await provider.close();
+  });
+
+  it('keeps original external ADIF records after provider reload', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    const rawRecord = '<call:5>BG2BB <qso_date:8>20260102<time_on:6>130000<mode:3>FT8<freq:9>14.074000<eor>';
+
+    await provider.importADIF(buildAdif([rawRecord]));
+    await provider.close();
+
+    const reloaded = new ADIFLogProvider({
+      logFilePath: join(tempDir, 'logbook.adi'),
+      autoCreateFile: false,
+      logFileName: 'logbook.adi',
+    });
+    await reloaded.initialize();
+
+    const exported = await reloaded.exportADIF();
+
+    expect(exported).toContain(`${rawRecord}\n`);
+    expect(exported).not.toContain('<CALL:5>BG2BB');
+    expect(exported).not.toContain('<BAND:3>20m');
+
+    await reloaded.close();
+  });
+
+  it('exports edited external ADIF records using the TX-5DR format', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    const rawRecord = '<call:5>BG2CC <qso_date:8>20260103<time_on:6>140000<mode:3>FT8<freq:9>14.074000<eor>';
+
+    await provider.importADIF(buildAdif([rawRecord]));
+    const qsos = await provider.queryQSOs();
+    expect(qsos).toHaveLength(1);
+
+    await provider.updateQSO(qsos[0].id, { notes: 'edited' });
+    const exported = await provider.exportADIF();
+
+    expect(exported).not.toContain(rawRecord);
+    expect(exported).toContain('<CALL:5>BG2CC');
+    expect(exported).toContain('<NOTES:6>edited');
+    expect(exported).toContain('<BAND:3>20m');
+
+    await provider.close();
+  });
+
+  it('exports manually created records using the TX-5DR format', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'manual-export-format',
+      callsign: 'BG2DD',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-04T15:00:00Z'),
+      messageHistory: [],
+    }, 'op1');
+
+    const exported = await provider.exportADIF(undefined, { fallbackGrid: 'PM00AA' });
+
+    expect(exported).toContain('<CALL:5>BG2DD');
+    expect(exported).toContain('<QSO_DATE:8>20260104');
+    expect(exported).toContain('<BAND:3>20m');
+    expect(exported).toContain('<MY_GRIDSQUARE:6>PM00AA');
+
+    await provider.close();
+  });
+
   it('exports standard ADIF COMMENT/NOTES fields for my location, operator, and FT4 submode', async () => {
     const { provider, tempDir } = await createProvider();
     tempDirs.push(tempDir);

@@ -503,8 +503,6 @@ export class ADIFLogProvider implements ILogProvider {
 
     this.needsFullRewrite = false;
     this.pendingAppendIds.clear();
-    this.foreignRecordLines.clear();
-    this.unparseableLines = [];
     this.isInitialized = true;
   }
   
@@ -595,7 +593,8 @@ export class ADIFLogProvider implements ILogProvider {
           try {
             const qso = this.adifToQSORecord(record);
             parsedQsos.push(qso);
-            if (['USB', 'LSB'].includes((record.mode || '').trim().toUpperCase())) {
+            const isLegacyVoiceMode = ['USB', 'LSB'].includes((record.mode || '').trim().toUpperCase());
+            if (isLegacyVoiceMode) {
               normalizedLegacyVoiceModes = true;
             }
             // 外来记录：从原始内容中提取原始行缓存，写盘时原样输出
@@ -605,7 +604,7 @@ export class ADIFLogProvider implements ILogProvider {
               record.app_tx5dr_dxcc_confidence !== undefined ||
               record.app_tx5dr_dxcc_needs_review !== undefined ||
               record.app_tx5dr_station_location_id !== undefined;
-            if (!hasTx5drEnrichment) {
+            if (!hasTx5drEnrichment && !isLegacyVoiceMode) {
               const lookupKey = `${qso.callsign.toUpperCase()}_${formatADIFDateOnly(qso.startTime)}`;
               const rawLine = rawLineByKey.get(lookupKey);
               if (rawLine) {
@@ -1589,6 +1588,12 @@ export class ADIFLogProvider implements ILogProvider {
 `;
 
     for (const qso of qsos) {
+      const foreignLine = this.foreignRecordLines.get(qso.id);
+      if (foreignLine) {
+        adifContent += foreignLine.endsWith('\n') ? foreignLine : `${foreignLine}\n`;
+        continue;
+      }
+
       const effectiveMyGrid = qso.myGrid || exportOptions?.fallbackGrid;
       adifContent += this.qsoRecordToADIF(qso, effectiveMyGrid);
     }
@@ -1798,10 +1803,12 @@ export class ADIFLogProvider implements ILogProvider {
             id,
           });
           this.qsoCache.set(insertedRecord.id, insertedRecord);
-          // 尝试从原始 ADIF 行匹配原始行，匹配不到则退化为重新编码
+          // 仅 ADIF 导入且能匹配原始行时，导出才保持外部原文。
           const lookupKey = `${record.callsign.trim().toUpperCase()}_${formatADIFDateOnly(record.startTime)}`;
           const rawLine = rawLineByKey.get(lookupKey);
-          this.foreignRecordLines.set(insertedRecord.id, rawLine ?? this.qsoRecordToADIF({ ...record, id }));
+          if (rawLine) {
+            this.foreignRecordLines.set(insertedRecord.id, rawLine);
+          }
           fingerprintIndex.set(fingerprint, insertedRecord.id);
           result.imported += 1;
           didMutate = true;
