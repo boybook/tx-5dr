@@ -556,10 +556,13 @@ export class RadioOperatorManager {
   /**
    * 查询某操作员是否已与某呼号通联（供 PluginManager 使用）
    */
-  async hasWorkedCallsign(operatorId: string, callsign: string): Promise<boolean> {
+  async hasWorkedCallsign(operatorId: string, callsign: string, options?: { anyBand?: boolean }): Promise<boolean> {
     try {
       const logBook = await this.logManager.getOperatorLogBook(operatorId);
       if (!logBook) return false;
+      if (options?.anyBand) {
+        return logBook.provider.hasWorkedCallsign(callsign, {});
+      }
       const band = this.resolveCurrentBandForWorkedCheck();
       if (band === 'Unknown') return false;
       return logBook.provider.hasWorkedCallsign(callsign, { band });

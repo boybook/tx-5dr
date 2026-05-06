@@ -188,7 +188,7 @@ export interface OperatorControl {
   /**
    * Checks whether this operator has previously worked the given callsign.
    */
-  hasWorkedCallsign(callsign: string): Promise<boolean>;
+  hasWorkedCallsign(callsign: string, options?: { anyBand?: boolean }): Promise<boolean>;
 
   /**
    * Checks whether another operator with the same station identity is already
@@ -365,7 +365,7 @@ export interface LogbookAccess {
   // === Read-only helpers (original) ===
 
   /** Checks whether the callsign has already been worked. */
-  hasWorked(callsign: string): Promise<boolean>;
+  hasWorked(callsign: string, options?: { anyBand?: boolean }): Promise<boolean>;
   /** Checks whether the DXCC entity has already been worked. */
   hasWorkedDXCC(dxccEntity: string): Promise<boolean>;
   /** Checks whether the Maidenhead grid has already been worked. */

@@ -30,6 +30,7 @@ export const STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING = 'tx6MessageOverride';
 
 export type StandardQSOOperatorConfig = OperatorConfig & {
     skipTx1?: boolean;
+    distinguishWorkedStationsByBand?: boolean;
     tx6MessageOverride?: string;
 };
 
@@ -84,7 +85,7 @@ interface StateHandleResult {
 
 export interface StandardQSOPluginOperator {
     readonly config: StandardQSOOperatorConfig;
-    hasWorkedCallsign(callsign: string): Promise<boolean>;
+    hasWorkedCallsign(callsign: string, options?: { anyBand?: boolean }): Promise<boolean>;
     isTargetBeingWorkedByOthers(targetCallsign: string): boolean;
     recordQSOLog(qsoRecord: QSORecord): void;
     notifySlotsUpdated?(slots: OperatorSlots): void;

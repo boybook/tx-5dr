@@ -425,7 +425,7 @@ export class PluginContextFactory {
         sendFreeText(_text?: string) {},
         setTemporaryLocation(_location: string) {},
         highlightCallsign(_rule: { callsign: string; background?: string | null; foreground?: string | null; lastOnly?: boolean }) {},
-        async hasWorkedCallsign(_callsign: string) { return false; },
+        async hasWorkedCallsign(_callsign: string, _options?: { anyBand?: boolean }) { return false; },
         isTargetBeingWorkedByOthers(_targetCallsign: string) { return false; },
         recordQSO(_record: import('@tx5dr/contracts').QSORecord) {},
         notifySlotsUpdated(_slots: import('@tx5dr/contracts').OperatorSlots) {},
@@ -499,8 +499,8 @@ export class PluginContextFactory {
       highlightCallsign(rule: { callsign: string; background?: string | null; foreground?: string | null; lastOnly?: boolean }) {
         deps.eventEmitter.emit('pluginRemoteHighlightCallsign' as any, { operatorId, ...rule });
       },
-      async hasWorkedCallsign(callsign: string) {
-        return deps.hasWorkedCallsign(operatorId, callsign);
+      async hasWorkedCallsign(callsign: string, options?: { anyBand?: boolean }) {
+        return deps.hasWorkedCallsign(operatorId, callsign, options);
       },
       isTargetBeingWorkedByOthers(targetCallsign: string) {
         return deps.getOperatorById(operatorId)?.isTargetBeingWorkedByOthers(targetCallsign) ?? false;
@@ -714,11 +714,11 @@ export class PluginContextFactory {
     return {
       // === Original read-only helpers ===
 
-      async hasWorked(callsign: string) {
+      async hasWorked(callsign: string, options?: { anyBand?: boolean }) {
         if (!operatorId) {
           return false;
         }
-        return deps.hasWorkedCallsign(operatorId, callsign);
+        return deps.hasWorkedCallsign(operatorId, callsign, options);
       },
       async hasWorkedDXCC(dxccEntity: string) {
         if (!deps.hasWorkedDXCC || !operatorId) {

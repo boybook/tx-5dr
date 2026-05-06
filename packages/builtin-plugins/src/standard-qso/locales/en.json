@@ -11,6 +11,8 @@
   "autoResumeCQAfterSuccessDesc": "After the 73 is sent, go back to CQ automatically. Good for running; turn it off if you want to review the log or retune after each QSO.",
   "replyToWorkedStations": "Reply to stations worked on this band",
   "replyToWorkedStationsDesc": "Answer direct callers even if this callsign is already logged on the current band. Useful for repeats or log fixes; keep it off for duplicate avoidance.",
+  "distinguishWorkedStationsByBand": "Distinguish worked stations by band",
+  "distinguishWorkedStationsByBandDesc": "When enabled, only callsigns worked on the current band count as worked. When disabled, a callsign worked on any band counts as worked, including CQ auto replies.",
   "skipTx1": "Skip TX1",
   "skipTx1Desc": "When you initiate a call to a CQ station, send the signal report first instead of your grid. Similar to JTDX Skip TX1; saves one cycle but the other station may not see your grid.",
   "targetSelectionPriorityMode": "Target priority mode",

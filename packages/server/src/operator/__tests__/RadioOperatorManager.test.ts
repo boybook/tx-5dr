@@ -933,6 +933,22 @@ describe('RadioOperatorManager has-worked checks', () => {
     expect(getRadioFrequency).not.toHaveBeenCalled();
   });
 
+  it('can check any band when requested by a plugin', async () => {
+    const getRadioFrequency = vi.fn(async () => 14_074_000);
+    const provider = {
+      hasWorkedCallsign: vi.fn(async (_callsign: string, options?: { band?: string }) => !options?.band),
+    };
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      getKnownRadioFrequency: () => 14_074_000,
+      getRadioFrequency,
+    });
+
+    await expect(manager.hasWorkedCallsign('op1', 'BG7OO', { anyBand: true })).resolves.toBe(true);
+    expect(provider.hasWorkedCallsign).toHaveBeenLastCalledWith('BG7OO', {});
+    expect(getRadioFrequency).not.toHaveBeenCalled();
+  });
+
   it('treats unknown current band as not worked', async () => {
     vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
       getLastSelectedFrequency: () => ({ frequency: 999_000 }),

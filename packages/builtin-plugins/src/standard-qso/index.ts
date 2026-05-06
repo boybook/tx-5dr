@@ -62,6 +62,7 @@ function getStandardQSOConfig(ctx: {
   return {
     ...baseConfig,
     skipTx1: c.skipTx1 === true,
+    distinguishWorkedStationsByBand: (c.distinguishWorkedStationsByBand as boolean | undefined) ?? true,
     tx6MessageOverride: normalizeStandardQSOTx6MessageOverride(
       c[STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING],
       defaultTx6Message,
@@ -109,6 +110,13 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
       default: false,
       label: 'replyToWorkedStations',
       description: 'replyToWorkedStationsDesc',
+      scope: 'operator',
+    },
+    distinguishWorkedStationsByBand: {
+      type: 'boolean',
+      default: true,
+      label: 'distinguishWorkedStationsByBand',
+      description: 'distinguishWorkedStationsByBandDesc',
       scope: 'operator',
     },
     skipTx1: {
@@ -162,6 +170,7 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
     { settingKey: 'autoResumeCQAfterFail' },
     { settingKey: 'autoResumeCQAfterSuccess' },
     { settingKey: 'replyToWorkedStations' },
+    { settingKey: 'distinguishWorkedStationsByBand' },
     { settingKey: 'skipTx1' },
   ],
 
@@ -172,7 +181,10 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
         return getStandardQSOConfig(ctx);
       },
       async hasWorkedCallsign(callsign: string): Promise<boolean> {
-        return ctx.operator.hasWorkedCallsign(callsign);
+        const config = getStandardQSOConfig(ctx);
+        return ctx.operator.hasWorkedCallsign(callsign, {
+          anyBand: config.distinguishWorkedStationsByBand === false,
+        });
       },
       isTargetBeingWorkedByOthers(targetCallsign: string): boolean {
         return ctx.operator.isTargetBeingWorkedByOthers(targetCallsign);

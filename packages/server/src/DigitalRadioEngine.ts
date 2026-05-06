@@ -228,8 +228,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       interruptOperatorTransmission: async (operatorId) => {
         await this.removeOperatorFromTransmission(operatorId);
       },
-      hasWorkedCallsign: async (operatorId, callsign) => {
-        return this._operatorManager.hasWorkedCallsign(operatorId, callsign);
+      hasWorkedCallsign: async (operatorId, callsign, options) => {
+        return this._operatorManager.hasWorkedCallsign(operatorId, callsign, options);
       },
       hasWorkedDXCC: async (operatorId, dxccEntity) => {
         try {

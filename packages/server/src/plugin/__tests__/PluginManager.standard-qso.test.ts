@@ -102,8 +102,9 @@ describe('PluginManager standard-qso late re-decision', () => {
     maxQSOTimeoutCycles?: number;
     maxCallAttempts?: number;
     replyToWorkedStations?: boolean;
+    distinguishWorkedStationsByBand?: boolean;
     skipTx1?: boolean;
-    hasWorkedCallsign?: boolean | ((callsign: string) => boolean | Promise<boolean>);
+    hasWorkedCallsign?: boolean | ((callsign: string, options?: { anyBand?: boolean }) => boolean | Promise<boolean>);
     pluginConfigs?: Record<string, { enabled: boolean; settings: Record<string, unknown> }>;
     operatorPluginSettings?: Record<string, Record<string, unknown>>;
     interruptOperatorTransmission?: (operatorId: string) => Promise<void>;
@@ -111,7 +112,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string; callsign: string }) => {
       const result = typeof options?.hasWorkedCallsign === 'function'
-        ? options.hasWorkedCallsign(data.callsign)
+        ? options.hasWorkedCallsign(data.callsign, (data as { options?: { anyBand?: boolean } }).options)
         : (options?.hasWorkedCallsign ?? false);
       void Promise.resolve(result).then((hasWorked) => {
         eventEmitter.emit('hasWorkedCallsignResponse' as any, {
@@ -159,9 +160,9 @@ describe('PluginManager standard-qso late re-decision', () => {
       getRadioConnected: () => true,
       getLatestSlotPack: () => null,
       interruptOperatorTransmission,
-      hasWorkedCallsign: async (_operatorId, callsign) => {
+      hasWorkedCallsign: async (_operatorId, callsign, hasWorkedOptions) => {
         if (typeof options?.hasWorkedCallsign === 'function') {
-          return options.hasWorkedCallsign(callsign);
+          return options.hasWorkedCallsign(callsign, hasWorkedOptions);
         }
         return options?.hasWorkedCallsign ?? false;
       },
@@ -180,6 +181,7 @@ describe('PluginManager standard-qso late re-decision', () => {
             autoResumeCQAfterFail: operator.config.autoResumeCQAfterFail,
             autoResumeCQAfterSuccess: operator.config.autoResumeCQAfterSuccess,
             replyToWorkedStations: operator.config.replyToWorkedStations,
+            distinguishWorkedStationsByBand: options?.distinguishWorkedStationsByBand ?? true,
             skipTx1: options?.skipTx1 ?? false,
             targetSelectionPriorityMode: operator.config.targetSelectionPriorityMode,
             maxQSOTimeoutCycles: operator.config.maxQSOTimeoutCycles,
@@ -219,12 +221,12 @@ describe('PluginManager standard-qso late re-decision', () => {
     myGrid?: string;
     autoReplyToCQ?: boolean;
     replyToWorkedStations?: boolean;
-    hasWorkedCallsign?: boolean | ((callsign: string) => boolean | Promise<boolean>);
+    hasWorkedCallsign?: boolean | ((callsign: string, options?: { anyBand?: boolean }) => boolean | Promise<boolean>);
   }) {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string; callsign: string }) => {
       const result = typeof options?.hasWorkedCallsign === 'function'
-        ? options.hasWorkedCallsign(data.callsign)
+        ? options.hasWorkedCallsign(data.callsign, (data as { options?: { anyBand?: boolean } }).options)
         : (options?.hasWorkedCallsign ?? false);
       void Promise.resolve(result).then((hasWorked) => {
         eventEmitter.emit('hasWorkedCallsignResponse' as any, {
@@ -289,9 +291,9 @@ describe('PluginManager standard-qso late re-decision', () => {
       getRadioConnected: () => true,
       getLatestSlotPack: () => null,
       interruptOperatorTransmission: async () => undefined,
-      hasWorkedCallsign: async (_operatorId, callsign) => {
+      hasWorkedCallsign: async (_operatorId, callsign, hasWorkedOptions) => {
         if (typeof options?.hasWorkedCallsign === 'function') {
-          return options.hasWorkedCallsign(callsign);
+          return options.hasWorkedCallsign(callsign, hasWorkedOptions);
         }
         return options?.hasWorkedCallsign ?? false;
       },
@@ -395,11 +397,17 @@ describe('PluginManager standard-qso late re-decision', () => {
     expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('CQ TEST BG5DRB OL32');
   });
 
-  it('exposes skipTx1 as an operator quick setting with a disabled default', async () => {
+  it('exposes worked-band and skipTx1 as operator quick settings with defaults', async () => {
     const { pluginManager } = await createRuntimeHarness();
 
     const standardQso = pluginManager.getSnapshot().plugins.find((plugin) => plugin.name === 'standard-qso');
 
+    expect(standardQso?.settings?.distinguishWorkedStationsByBand).toMatchObject({
+      type: 'boolean',
+      default: true,
+      scope: 'operator',
+    });
+    expect(standardQso?.quickSettings?.some((entry) => entry.settingKey === 'distinguishWorkedStationsByBand')).toBe(true);
     expect(standardQso?.settings?.skipTx1).toMatchObject({
       type: 'boolean',
       default: false,
@@ -609,6 +617,34 @@ describe('PluginManager standard-qso late re-decision', () => {
 
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX2');
     expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('BG7OO BG5DRB -06');
+
+    await pluginManager.shutdown();
+  });
+
+  it('treats any-band worked direct callers as worked when band distinction is disabled', async () => {
+    const hasWorkedSpy = vi.fn((_callsign: string, options?: { anyBand?: boolean }) => options?.anyBand === true);
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG5DRB',
+      myGrid: 'PL09',
+      replyToWorkedStations: false,
+      distinguishWorkedStationsByBand: false,
+      hasWorkedCallsign: hasWorkedSpy,
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.CALL,
+        senderCallsign: 'BG7OO',
+        targetCallsign: 'BG5DRB',
+        grid: 'OL63',
+      }),
+      snr: -6,
+      freq: 1395,
+    }]));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('CQ BG5DRB PL09');
+    expect(hasWorkedSpy).toHaveBeenCalledWith('BG7OO', { anyBand: true });
 
     await pluginManager.shutdown();
   });
@@ -1472,6 +1508,57 @@ describe('PluginManager standard-qso late re-decision', () => {
     expect(status.context?.targetCallsign).toBe('JA1AAA');
     expect(status.slots?.TX1).toBe('JA1AAA BG4IAJ OM96');
     expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG4IAJ -05');
+
+    await pluginManager.shutdown();
+  });
+
+  it('auto-replies to CQ when the callsign is only worked on another band by default', async () => {
+    const hasWorkedSpy = vi.fn((_callsign: string, options?: { anyBand?: boolean }) => options?.anyBand === true);
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG5DRB',
+      myGrid: 'PL09',
+      autoReplyToCQ: true,
+      hasWorkedCallsign: hasWorkedSpy,
+    });
+
+    await (pluginManager as any).handleSlotStart(
+      createSlotInfo(15_000),
+      createSlotPack(createSlotInfo(15_000), [{
+        message: 'CQ BG7OO OL63',
+        snr: -5,
+        freq: 1395,
+      }]),
+    );
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX1');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('BG7OO BG5DRB PL09');
+    expect(hasWorkedSpy).toHaveBeenCalledWith('BG7OO', { anyBand: false });
+
+    await pluginManager.shutdown();
+  });
+
+  it('does not auto-reply to CQ worked on another band when band distinction is disabled', async () => {
+    const hasWorkedSpy = vi.fn((_callsign: string, options?: { anyBand?: boolean }) => options?.anyBand === true);
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG5DRB',
+      myGrid: 'PL09',
+      autoReplyToCQ: true,
+      distinguishWorkedStationsByBand: false,
+      hasWorkedCallsign: hasWorkedSpy,
+    });
+
+    await (pluginManager as any).handleSlotStart(
+      createSlotInfo(15_000),
+      createSlotPack(createSlotInfo(15_000), [{
+        message: 'CQ BG7OO OL63',
+        snr: -5,
+        freq: 1395,
+      }]),
+    );
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('CQ BG5DRB PL09');
+    expect(hasWorkedSpy).toHaveBeenCalledWith('BG7OO', { anyBand: true });
 
     await pluginManager.shutdown();
   });

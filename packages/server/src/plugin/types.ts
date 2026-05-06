@@ -157,7 +157,7 @@ export interface PluginManagerDeps {
   ) => number | undefined;
   setOperatorAudioFrequency?: (operatorId: string, frequency: number) => Promise<void>;
   interruptOperatorTransmission: (operatorId: string) => Promise<void>;
-  hasWorkedCallsign: (operatorId: string, callsign: string) => Promise<boolean>;
+  hasWorkedCallsign: (operatorId: string, callsign: string, options?: { anyBand?: boolean }) => Promise<boolean>;
   hasWorkedDXCC?: (operatorId: string, dxccEntity: string) => Promise<boolean>;
   hasWorkedGrid?: (operatorId: string, grid: string) => Promise<boolean>;
   analyzeCallsignForOperator?: (
