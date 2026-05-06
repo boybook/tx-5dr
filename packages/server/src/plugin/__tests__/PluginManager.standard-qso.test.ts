@@ -397,7 +397,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('CQ TEST BG5DRB OL32');
   });
 
-  it('exposes worked-band and skipTx1 as operator quick settings with defaults', async () => {
+  it('exposes worked-band as an operator setting and skipTx1 as a quick setting', async () => {
     const { pluginManager } = await createRuntimeHarness();
 
     const standardQso = pluginManager.getSnapshot().plugins.find((plugin) => plugin.name === 'standard-qso');
@@ -407,7 +407,7 @@ describe('PluginManager standard-qso late re-decision', () => {
       default: true,
       scope: 'operator',
     });
-    expect(standardQso?.quickSettings?.some((entry) => entry.settingKey === 'distinguishWorkedStationsByBand')).toBe(true);
+    expect(standardQso?.quickSettings?.some((entry) => entry.settingKey === 'distinguishWorkedStationsByBand')).toBe(false);
     expect(standardQso?.settings?.skipTx1).toMatchObject({
       type: 'boolean',
       default: false,

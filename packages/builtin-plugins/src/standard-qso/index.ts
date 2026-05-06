@@ -170,7 +170,6 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
     { settingKey: 'autoResumeCQAfterFail' },
     { settingKey: 'autoResumeCQAfterSuccess' },
     { settingKey: 'replyToWorkedStations' },
-    { settingKey: 'distinguishWorkedStationsByBand' },
     { settingKey: 'skipTx1' },
   ],
 
