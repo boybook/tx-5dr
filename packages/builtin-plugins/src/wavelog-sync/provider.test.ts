@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import type { PluginContext } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import { WaveLogSyncProvider } from './provider.js';
 
@@ -44,7 +45,7 @@ function createContext(fetchImpl: (input: string, init?: RequestInit) => Promise
   };
 
   return {
-    ctx: ctx as any,
+    ctx: ctx as unknown as PluginContext,
     store,
     queryQSOs,
     fetch: ctx.fetch,

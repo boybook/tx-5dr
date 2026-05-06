@@ -93,7 +93,7 @@ async function resolveDistribution(): Promise<PluginDistribution> {
   return resolveRuntimeDistribution(dataDir, { hasDockerEnvFile: existsSync('/.dockerenv') });
 }
 
-async function getLocalBuildInfo(distribution: PluginDistribution): Promise<LocalBuildInfo> {
+async function getLocalBuildInfo(_distribution: PluginDistribution): Promise<LocalBuildInfo> {
   const installedVersion = await readInstalledVersionFallback();
   const channel = SERVER_BUILD_INFO.channel === 'release' ? 'release' : 'nightly';
   return {

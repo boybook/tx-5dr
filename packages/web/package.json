@@ -17,6 +17,7 @@
     "@fortawesome/react-fontawesome": "^0.2.2",
     "@heroicons/react": "^2.2.0",
     "@heroui/react": "^2.7.8",
+    "@heroui/system": "2.4.18",
     "@heroui/theme": "^2.4.15",
     "@heroui/toast": "^2.0.12",
     "@tanstack/react-virtual": "^3.13.23",

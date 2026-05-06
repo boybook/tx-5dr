@@ -1544,6 +1544,17 @@ export interface DigitalRadioEngineEvents {
   }) => void;
   pluginPanelMeta: (data: import('./plugin.schema.js').PluginPanelMetaPayload) => void;
   pluginPanelContributionsChanged: (data: import('./plugin.schema.js').PluginUIPanelContributionGroup) => void;
+  pluginRemoteReplyToDecode: (data: { operatorId: string; callsign: string; modifiers?: number }) => void;
+  pluginRemoteClearDecodes: (data: { operatorId: string; window?: number }) => void;
+  pluginRemoteFreeText: (data: { operatorId: string; text?: string; send: boolean }) => void;
+  pluginRemoteLocation: (data: { operatorId: string; location: string }) => void;
+  pluginRemoteHighlightCallsign: (data: {
+    operatorId: string;
+    callsign: string;
+    background?: string | null;
+    foreground?: string | null;
+    lastOnly?: boolean;
+  }) => void;
 
   // 内部子系统间通信事件（不通过 WebSocket 广播，用于 engine emitter 内部编排）
   encodeStart: (slotInfo: z.infer<typeof SlotInfoSchema>) => void;

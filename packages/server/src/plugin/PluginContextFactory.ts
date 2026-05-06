@@ -466,14 +466,14 @@ export class PluginContextFactory {
         deps.requestOperatorCall(operatorId, callsign, lastMessage);
       },
       replyToDecode(decode: { callsign: string; lastMessage: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }; modifiers?: number }) {
-        deps.eventEmitter.emit('pluginRemoteReplyToDecode' as any, { operatorId, callsign: decode.callsign, modifiers: decode.modifiers });
+        deps.eventEmitter.emit('pluginRemoteReplyToDecode', { operatorId, callsign: decode.callsign, modifiers: decode.modifiers });
         deps.requestOperatorCall(operatorId, decode.callsign, decode.lastMessage);
       },
       setTransmitCycles(cycles: number | number[]) {
         deps.getOperatorById(operatorId)?.setTransmitCycles(cycles);
       },
       clearDecodes(window?: number) {
-        deps.eventEmitter.emit('pluginRemoteClearDecodes' as any, { operatorId, window });
+        deps.eventEmitter.emit('pluginRemoteClearDecodes', { operatorId, window });
       },
       haltTransmission(options?: { autoOnly?: boolean }) {
         if (options?.autoOnly) {
@@ -485,19 +485,19 @@ export class PluginContextFactory {
         }
       },
       setFreeText(text: string) {
-        deps.eventEmitter.emit('pluginRemoteFreeText' as any, { operatorId, text, send: false });
+        deps.eventEmitter.emit('pluginRemoteFreeText', { operatorId, text, send: false });
       },
       sendFreeText(text?: string) {
-        deps.eventEmitter.emit('pluginRemoteFreeText' as any, { operatorId, text, send: true });
+        deps.eventEmitter.emit('pluginRemoteFreeText', { operatorId, text, send: true });
         if (text && text.trim()) {
           deps.eventEmitter.emit('requestTransmit', { operatorId, transmission: text });
         }
       },
       setTemporaryLocation(location: string) {
-        deps.eventEmitter.emit('pluginRemoteLocation' as any, { operatorId, location });
+        deps.eventEmitter.emit('pluginRemoteLocation', { operatorId, location });
       },
       highlightCallsign(rule: { callsign: string; background?: string | null; foreground?: string | null; lastOnly?: boolean }) {
-        deps.eventEmitter.emit('pluginRemoteHighlightCallsign' as any, { operatorId, ...rule });
+        deps.eventEmitter.emit('pluginRemoteHighlightCallsign', { operatorId, ...rule });
       },
       async hasWorkedCallsign(callsign: string, options?: { anyBand?: boolean }) {
         return deps.hasWorkedCallsign(operatorId, callsign, options);

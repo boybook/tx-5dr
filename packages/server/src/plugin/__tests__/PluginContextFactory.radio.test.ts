@@ -102,7 +102,7 @@ describe('PluginContextFactory radio access', () => {
       supportedStates: ['off' as const],
     }));
     const getRadioPowerState = vi.fn(() => ({ profileId: 'active-profile', state: 'awake' as const, stage: 'idle' as const }));
-    const setRadioPower = vi.fn(async (state, options) => ({ success: true, target: state, state: 'awake' as const }));
+    const setRadioPower = vi.fn(async (state, _options) => ({ success: true, target: state, state: 'awake' as const }));
     const ctx = await createContext(
       createPlugin(['radio:read', 'radio:power']),
       createDeps({ getRadioPowerSupport, getRadioPowerState, setRadioPower }),

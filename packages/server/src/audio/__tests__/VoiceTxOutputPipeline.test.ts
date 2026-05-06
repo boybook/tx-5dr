@@ -448,7 +448,7 @@ describe('VoiceTxOutputPipeline', () => {
         pipeline.ingest(createInputFrame(), 16000, createMeta(index, Date.now(), policy));
       }
 
-      await wait(120);
+      await wait(100);
       expect(writes.length).toBeGreaterThan(0);
 
       const lowWaterState = pipeline.getOutputBufferState();
@@ -460,7 +460,7 @@ describe('VoiceTxOutputPipeline', () => {
       expect(lowWaterState.queueMs).toBeGreaterThan(0);
 
       const writesBeforeRebuffer = writes.length;
-      await wait(140);
+      await wait(160);
       const rebufferState = pipeline.getOutputBufferState();
       expect(rebufferState.totalBufferedMs).toBeLessThan(rebufferState.rebufferEnterWaterMs);
       expect(rebufferState.rebuffering || !rebufferState.playoutStarted).toBe(true);

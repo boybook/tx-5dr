@@ -1,8 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
 import { constants, createHash, generateKeyPairSync, publicDecrypt } from 'crypto';
 
+import type { PluginContext } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import { LoTWSyncProvider } from './provider.js';
+
+type MockLoTWContext = PluginContext & {
+  fetch: ReturnType<typeof vi.fn>;
+  files: {
+    delete: ReturnType<typeof vi.fn>;
+  };
+};
+
+type LoTWProviderInternals = {
+  signLog(privateKeyPem: string, signData: string): string;
+  prepareUpload(...args: unknown[]): Promise<unknown>;
+  resolveUploadLocation(...args: unknown[]): unknown;
+  uploadBatch(...args: unknown[]): Promise<void>;
+  buildTq8Content(...args: unknown[]): string;
+};
 
 function createQso(id: string, overrides: Partial<QSORecord> = {}): QSORecord {
   return {
@@ -27,43 +43,45 @@ function createContext() {
   const addQSO = vi.fn(async () => undefined);
   const notifyUpdated = vi.fn(async () => undefined);
 
+  const ctx = {
+    store: {
+      global: {
+        get: vi.fn((key: string) => store.get(key)),
+        set: vi.fn((key: string, value: unknown) => {
+          store.set(key, value);
+        }),
+      },
+    },
+    logbook: {
+      forCallsign: vi.fn(() => ({
+        queryQSOs,
+        updateQSO,
+        addQSO,
+        notifyUpdated,
+      })),
+    },
+    files: {
+      read: vi.fn(async (path: string) => files.get(path) ?? null),
+      write: vi.fn(async (path: string, data: Buffer) => {
+        files.set(path, data);
+      }),
+      list: vi.fn(async (prefix?: string) => {
+        const paths = Array.from(files.keys());
+        return prefix ? paths.filter((path) => path.startsWith(prefix)) : paths;
+      }),
+      delete: vi.fn(async (path: string) => files.delete(path)),
+    },
+    log: {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    },
+    fetch: vi.fn(),
+  };
+
   return {
-    ctx: {
-      store: {
-        global: {
-          get: vi.fn((key: string) => store.get(key)),
-          set: vi.fn((key: string, value: unknown) => {
-            store.set(key, value);
-          }),
-        },
-      },
-      logbook: {
-        forCallsign: vi.fn(() => ({
-          queryQSOs,
-          updateQSO,
-          addQSO,
-          notifyUpdated,
-        })),
-      },
-      files: {
-        read: vi.fn(async (path: string) => files.get(path) ?? null),
-        write: vi.fn(async (path: string, data: Buffer) => {
-          files.set(path, data);
-        }),
-        list: vi.fn(async (prefix?: string) => {
-          const paths = Array.from(files.keys());
-          return prefix ? paths.filter((path) => path.startsWith(prefix)) : paths;
-        }),
-        delete: vi.fn(async (path: string) => files.delete(path)),
-      },
-      log: {
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      },
-      fetch: vi.fn(),
-    } as any,
+    ctx: ctx as unknown as MockLoTWContext,
     files,
     queryQSOs,
     updateQSO,
@@ -115,11 +133,12 @@ describe('LoTWSyncProvider', () => {
   it('signs LoTW payloads without relying on OpenSSL SHA1 digest providers', () => {
     const { ctx } = createContext();
     const provider = new LoTWSyncProvider(ctx);
+    const internals = provider as unknown as LoTWProviderInternals;
     const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 1024 });
     const signData = '20MN0CALL14.074FT82026-04-1712:00:00Z';
 
     const signature = Buffer.from(
-      (provider as any).signLog(
+      internals.signLog(
         privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
         signData,
       ),
@@ -265,7 +284,8 @@ describe('LoTWSyncProvider', () => {
     });
 
     const qso = createQso('qso-1');
-    const prepareUpload = vi.spyOn(provider as any, 'prepareUpload').mockResolvedValue({
+    const internals = provider as unknown as LoTWProviderInternals;
+    const prepareUpload = vi.spyOn(internals, 'prepareUpload').mockResolvedValue({
       issues: [],
       blockedCount: 0,
       batches: [
@@ -275,8 +295,8 @@ describe('LoTWSyncProvider', () => {
         },
       ],
     });
-    vi.spyOn(provider as any, 'resolveUploadLocation').mockReturnValue({ callsign: 'BG5DRB' });
-    const uploadBatch = vi.spyOn(provider as any, 'uploadBatch').mockResolvedValue(undefined);
+    vi.spyOn(internals, 'resolveUploadLocation').mockReturnValue({ callsign: 'BG5DRB' });
+    const uploadBatch = vi.spyOn(internals, 'uploadBatch').mockResolvedValue(undefined);
 
     const result = await provider.upload('BG5DRB', {
       trigger: 'auto',
@@ -313,7 +333,8 @@ describe('LoTWSyncProvider', () => {
 
     const qso = createQso('qso-1');
     queryQSOs.mockResolvedValue([qso]);
-    const prepareUpload = vi.spyOn(provider as any, 'prepareUpload').mockResolvedValue({
+    const internals = provider as unknown as LoTWProviderInternals;
+    const prepareUpload = vi.spyOn(internals, 'prepareUpload').mockResolvedValue({
       issues: [],
       blockedCount: 0,
       batches: [
@@ -323,8 +344,8 @@ describe('LoTWSyncProvider', () => {
         },
       ],
     });
-    vi.spyOn(provider as any, 'resolveUploadLocation').mockReturnValue({ callsign: 'BG5DRB' });
-    vi.spyOn(provider as any, 'uploadBatch').mockResolvedValue(undefined);
+    vi.spyOn(internals, 'resolveUploadLocation').mockReturnValue({ callsign: 'BG5DRB' });
+    vi.spyOn(internals, 'uploadBatch').mockResolvedValue(undefined);
 
     const result = await provider.upload('BG5DRB');
 
@@ -337,9 +358,10 @@ describe('LoTWSyncProvider', () => {
   it('projects SSB sideband records to LoTW contact mode SSB', () => {
     const { ctx } = createContext();
     const provider = new LoTWSyncProvider(ctx);
-    vi.spyOn(provider as any, 'signLog').mockReturnValue('A'.repeat(88));
+    const internals = provider as unknown as LoTWProviderInternals;
+    vi.spyOn(internals, 'signLog').mockReturnValue('A'.repeat(88));
 
-    const tq8 = (provider as any).buildTq8Content(
+    const tq8 = internals.buildTq8Content(
       [createQso('voice-usb', {
         frequency: 14_270_000,
         mode: 'SSB',
@@ -361,7 +383,7 @@ describe('LoTWSyncProvider', () => {
         state: '',
         county: '',
       },
-    ) as string;
+    );
 
     expect(tq8).toContain('<MODE:3>SSB');
     expect(tq8).toContain('<SIGNDATA:');
@@ -373,9 +395,10 @@ describe('LoTWSyncProvider', () => {
   it('projects legacy USB records to LoTW contact mode SSB', () => {
     const { ctx } = createContext();
     const provider = new LoTWSyncProvider(ctx);
-    vi.spyOn(provider as any, 'signLog').mockReturnValue('A'.repeat(88));
+    const internals = provider as unknown as LoTWProviderInternals;
+    vi.spyOn(internals, 'signLog').mockReturnValue('A'.repeat(88));
 
-    const tq8 = (provider as any).buildTq8Content(
+    const tq8 = internals.buildTq8Content(
       [createQso('legacy-usb', { frequency: 14_270_000, mode: 'USB' })],
       createStoredCertificate({
         certPem: '-----BEGIN CERTIFICATE-----\\nCERTDATA\\n-----END CERTIFICATE-----',
@@ -391,7 +414,7 @@ describe('LoTWSyncProvider', () => {
         state: '',
         county: '',
       },
-    ) as string;
+    );
 
     expect(tq8).toContain('<MODE:3>SSB');
     expect(tq8).toContain('20MN0CALL14.27SSB2026-04-1712:00:00Z');

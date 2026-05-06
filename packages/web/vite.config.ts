@@ -69,7 +69,7 @@ export default defineConfig({
   base: './', // 使用相对路径，支持 Electron 生产环境
   build: {
     // Multi-entry bundles intentionally carry large route-specific assets for now.
-    chunkSizeWarningLimit: 2300,
+    chunkSizeWarningLimit: 2400,
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),

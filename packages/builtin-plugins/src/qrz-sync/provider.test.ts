@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import type { PluginContext } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import { QRZSyncProvider } from './provider.js';
 
@@ -24,31 +25,33 @@ function createContext(fetchImpl: (input: string, init?: RequestInit) => Promise
   const updateQSO = vi.fn(async () => undefined);
   const notifyUpdated = vi.fn(async () => undefined);
 
+  const ctx = {
+    store: {
+      global: {
+        get: vi.fn((key: string) => store.get(key)),
+        set: vi.fn((key: string, value: unknown) => {
+          store.set(key, value);
+        }),
+      },
+    },
+    logbook: {
+      forCallsign: vi.fn(() => ({
+        queryQSOs,
+        updateQSO,
+        notifyUpdated,
+      })),
+    },
+    log: {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    },
+    fetch: vi.fn(fetchImpl),
+  };
+
   return {
-    ctx: {
-      store: {
-        global: {
-          get: vi.fn((key: string) => store.get(key)),
-          set: vi.fn((key: string, value: unknown) => {
-            store.set(key, value);
-          }),
-        },
-      },
-      logbook: {
-        forCallsign: vi.fn(() => ({
-          queryQSOs,
-          updateQSO,
-          notifyUpdated,
-        })),
-      },
-      log: {
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      },
-      fetch: vi.fn(fetchImpl),
-    } as any,
+    ctx: ctx as unknown as PluginContext,
     queryQSOs,
     updateQSO,
     notifyUpdated,
