@@ -24,9 +24,9 @@ import { useWSEvent } from '../../../hooks/useWSEvent';
 import { createLogger } from '../../../utils/logger';
 import { TxVolumeGainControl } from './TxVolumeGainControl';
 import {
+  canWriteRadioFrequency,
   deriveMonitorActivationCtaState,
   filterDigitalFrequencyOptions,
-  isCoreCapabilityAvailable,
   shouldShowAntennaTuneEntry,
   shouldShowRadioControlEntry,
 } from '../../../utils/radioControl';
@@ -537,7 +537,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const canSwitchMode = useCan('execute', 'ModeSwitch');
   const canStartStopEngine = useCan('execute', 'Engine');
   const canControlRadio = useCan('execute', 'RadioControl');
-  const canWriteFrequency = isCoreCapabilityAvailable(radioConnection.coreCapabilities, 'writeFrequency');
+  const canWriteFrequency = canWriteRadioFrequency(canSetFrequency, radioConnection.coreCapabilities);
   const canOpenRadioControl = shouldShowRadioControlEntry(
     radioConnection.radioConnected,
     canControlRadio,
@@ -971,8 +971,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
           if (matchingFreq && (!radioMode.currentMode || radioMode.currentMode.name === lastFreq.mode)) {
             logger.debug(`Restoring last frequency: ${matchingFreq.label}`);
             setCurrentFrequency(matchingFreq.key);
-            // 自动设置频率到电台
-            await autoSetFrequency(matchingFreq);
+            if (canWriteFrequency) {
+              // 自动设置频率到电台
+              await autoSetFrequency(matchingFreq);
+            }
           }
         }
       } catch (error) {
@@ -988,7 +990,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       }, 500);
       return () => window.clearTimeout(timeoutId);
     }
-  }, [availableFrequencies, radioMode.currentMode, connection.state.isConnected]);
+  }, [availableFrequencies, radioMode.currentMode, connection.state.isConnected, canWriteFrequency]);
 
 
 
@@ -1302,6 +1304,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   // 处理自定义频率确认
   const handleCustomFrequencyConfirm = async () => {
+    if (!canWriteFrequency) return;
+
     const result = parseFrequencyInput(customFrequencyInput);
     if (!result || result.error) {
       setCustomFrequencyError(result?.error || t('frequency.invalidInput'));
@@ -1449,7 +1453,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   // 自动设置频率到后端（避免递归调用）
   const autoSetFrequency = async (frequency: FrequencyOption) => {
-    if (!isRadioConnectedRef.current) return;
+    if (!isRadioConnectedRef.current || !canWriteFrequency) return;
 
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1487,16 +1491,21 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
         logger.debug(`Mode changed, auto-selecting first frequency: ${firstFreq.label}`);
         setCurrentFrequency(firstFreq.key);
         setCustomFrequencyOption(null);
-        // 自动设置频率到后端
-        autoSetFrequency(firstFreq);
+        if (canWriteFrequency) {
+          // 自动设置频率到后端
+          autoSetFrequency(firstFreq);
+        }
       }
     }
-  }, [filteredFrequencies, radioMode.engineMode, selectedFrequencyKey]);
+  }, [filteredFrequencies, radioMode.engineMode, selectedFrequencyKey, canWriteFrequency]);
 
   // 处理频率切换
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleFrequencyChange = async (keys: any) => {
     if (!connection.state.isConnected) {
+      return;
+    }
+    if (!canWriteFrequency) {
       return;
     }
 
@@ -1532,6 +1541,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const executeFrequencySwitch = async (selectedFrequencyKey: string, selectedFrequency: any) => {
+    if (!canWriteFrequency) return;
+
     try {
       // 设置频率和电台调制模式
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

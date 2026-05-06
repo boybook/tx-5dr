@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canWriteRadioFrequency,
   deriveMonitorActivationCtaState,
   filterDigitalFrequencyOptions,
   isCoreCapabilityAvailable,
@@ -50,6 +51,17 @@ describe('radioControl utils', () => {
       readRadioMode: true,
       writeRadioMode: true,
     }, 'writeFrequency')).toBe(false);
+  });
+
+  it('requires both CASL permission and radio write capability before writing frequency', () => {
+    expect(canWriteRadioFrequency(false, null)).toBe(false);
+    expect(canWriteRadioFrequency(true, null)).toBe(true);
+    expect(canWriteRadioFrequency(true, {
+      readFrequency: true,
+      writeFrequency: false,
+      readRadioMode: true,
+      writeRadioMode: true,
+    })).toBe(false);
   });
 
   it('shows auto tuner shortcut only when connected, permitted, and supported', () => {

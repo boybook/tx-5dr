@@ -17,6 +17,13 @@ export function isCoreCapabilityAvailable(
   return coreCapabilities?.[capability] !== false;
 }
 
+export function canWriteRadioFrequency(
+  canSetFrequency: boolean,
+  coreCapabilities: CoreRadioCapabilities | null | undefined,
+): boolean {
+  return canSetFrequency && isCoreCapabilityAvailable(coreCapabilities, 'writeFrequency');
+}
+
 export function shouldShowAutoTunerShortcut(
   radioConnected: boolean,
   canControlRadio: boolean,

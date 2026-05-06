@@ -4,7 +4,8 @@ import { ArrowsPointingOutIcon, ChevronDownIcon, ChevronUpIcon, Cog6ToothIcon, M
 import { useTranslation } from 'react-i18next';
 import type { SpectrumFrame, SpectrumKind } from '@tx5dr/contracts';
 import { api } from '@tx5dr/core';
-import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioModeState, useSpectrum } from '../../../store/radioStore';
+import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useSpectrum } from '../../../store/radioStore';
+import { useCan } from '../../../store/authStore';
 import { createLogger } from '../../../utils/logger';
 import { setPreferredSpectrumKind } from '../../../utils/spectrumPreferences';
 import { useTargetRxFrequencies, type RxFrequency } from '../../../hooks/useTargetRxFrequencies';
@@ -14,6 +15,7 @@ import type { AutoRangeConfig, PresetMarker, TxBandOverlay } from './WebGLWaterf
 import { SpectrumStreamController } from '../../../spectrum/SpectrumStreamController';
 import { readSpectrumSubscriptionPaused, setSpectrumSubscriptionPaused } from '../../../utils/spectrumSubscriptionPause';
 import { resetOperatorsForOperatingStateChange } from '../../../utils/operatorReset';
+import { canWriteRadioFrequency } from '../../../utils/radioControl';
 import {
   DEFAULT_SPECTRUM_THEME_ID,
   getSpectrumTheme,
@@ -528,8 +530,11 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const connection = useConnection();
   const { operators } = useOperators();
   const { activeProfileId } = useProfiles();
+  const radioConnection = useRadioConnectionState();
   const { currentMode, currentRadioMode, currentRadioFrequency, engineMode } = useRadioModeState();
   const { pttStatus } = usePTTState();
+  const canSetFrequency = useCan('execute', 'RadioFrequency');
+  const canWriteFrequency = canWriteRadioFrequency(canSetFrequency, radioConnection.coreCapabilities);
   const { capabilities, selectedKind, sessionState, setSelectedKind, setSubscribedKind } = useSpectrum();
   const controllerRef = useRef<SpectrumStreamController | null>(null);
   if (!controllerRef.current) {
@@ -719,7 +724,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   }, [currentOperatorId, handleTxFrequencyChange]);
 
   const handleVoiceFrequencyChange = useCallback(async (frequency: number) => {
-    if (!connection.state.isConnected) {
+    if (!connection.state.isConnected || !canWriteFrequency || frequencyGestureTarget !== 'radio-frequency') {
       return;
     }
 
@@ -740,11 +745,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     } catch (error) {
       logger.error('Failed to set voice frequency from SDR overlay', error);
     }
-  }, [connection.state.isConnected, currentRadioMode, frequencyGestureStepHz, resetOperatorsAfterOperatingStateChange, sessionState?.voice.radioMode]);
+  }, [canWriteFrequency, connection.state.isConnected, currentRadioMode, frequencyGestureStepHz, frequencyGestureTarget, resetOperatorsAfterOperatingStateChange, sessionState?.voice.radioMode]);
 
   const handleRadioFrequencyGesture = useCallback((frequency: number) => {
+    if (!canWriteFrequency || frequencyGestureTarget !== 'radio-frequency') {
+      return;
+    }
     void handleVoiceFrequencyChange(frequency);
-  }, [handleVoiceFrequencyChange]);
+  }, [canWriteFrequency, frequencyGestureTarget, handleVoiceFrequencyChange]);
 
   const handleCollapseSpectrum = useCallback(() => {
     const radioService = connection.state.radioService;
@@ -881,7 +889,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const shouldShowSourceTabs = availableSources.length > 1;
   const sourceTabOrder: SpectrumKind[] = [OPENWEBRX_SDR_SOURCE, RADIO_SDR_SOURCE, AUDIO_SOURCE];
   const visibleSourceTabs = sourceTabOrder.filter(kind => availableSources.some(source => source.kind === kind));
-  const voiceOverlayIsInteractive = Boolean(sessionState?.interaction.canDragVoiceOverlay);
+  const voiceOverlayIsInteractive = canWriteFrequency && Boolean(sessionState?.interaction.canDragVoiceOverlay);
   const displaySpectrumMarkers = React.useMemo(() => resolveSpectrumMarkerFrequencies({
     isOpenWebRXSdrSelected,
     isOpenWebRXDetailMode,
@@ -1371,16 +1379,16 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         txFrequencies={displaySpectrumMarkers.txFrequencies}
         onTxFrequencyChange={displayTxFrequencyChange}
         onTxBandOverlayFrequencyChange={voiceOverlayIsInteractive ? (_id, frequency) => void handleVoiceFrequencyChange(frequency) : undefined}
-        onPresetMarkerClick={presetMarkers.length > 0 ? handleRadioFrequencyGesture : undefined}
+        onPresetMarkerClick={presetMarkers.length > 0 && canWriteFrequency && frequencyGestureTarget === 'radio-frequency' ? handleRadioFrequencyGesture : undefined}
         // Voice-mode whole-spectrum drag tuning is intentionally disabled.
         // The follow/center viewport recenters during tuning, which currently makes drag interaction feel unstable.
         onDragFrequencyChange={
-          frequencyGestureTarget === 'radio-frequency' && canDragFrequency
+          frequencyGestureTarget === 'radio-frequency' && canDragFrequency && canWriteFrequency
             ? handleRadioFrequencyGesture
             : undefined
         }
         onDoubleClickSetFrequency={
-          frequencyGestureTarget === 'radio-frequency' && canDoubleClickSetFrequency
+          frequencyGestureTarget === 'radio-frequency' && canDoubleClickSetFrequency && canWriteFrequency
             ? handleRadioFrequencyGesture
             : undefined
         }
@@ -1388,7 +1396,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
           isOpenWebRXSdrSelected
             ? (isOpenWebRXDetailMode ? handleRightClickSetFrequency : undefined)
             : frequencyGestureTarget === 'radio-frequency'
-            ? (canRightClickSetFrequency ? handleRadioFrequencyGesture : undefined)
+            ? (canRightClickSetFrequency && canWriteFrequency ? handleRadioFrequencyGesture : undefined)
             : (showMarkers && canRightClickSetFrequency ? handleRightClickSetFrequency : undefined)
         }
         onActualRangeChange={setActualRange}

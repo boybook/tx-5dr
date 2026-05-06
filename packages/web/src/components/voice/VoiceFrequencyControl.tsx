@@ -18,7 +18,7 @@ import { subject as caslSubject } from '@casl/ability';
 import { showErrorToast } from '../../utils/errorToast';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
-import { isCoreCapabilityAvailable } from '../../utils/radioControl';
+import { canWriteRadioFrequency, isCoreCapabilityAvailable } from '../../utils/radioControl';
 import { resetOperatorsForOperatingStateChange } from '../../utils/operatorReset';
 import { FrequencyPresetAddModal } from '../settings/FrequencyPresetAddModal';
 
@@ -181,7 +181,7 @@ export const VoiceFrequencyControl: React.FC = () => {
   const canSetFrequency = useCan('execute', 'RadioFrequency');
   const canManageFrequencyPresets = useCan('update', 'SettingsFrequencyPresets');
   const ability = useAbility();
-  const canWriteFrequency = canSetFrequency && isCoreCapabilityAvailable(radioConnection.coreCapabilities, 'writeFrequency');
+  const canWriteFrequency = canWriteRadioFrequency(canSetFrequency, radioConnection.coreCapabilities);
   const canWriteRadioMode = canSetFrequency && isCoreCapabilityAvailable(radioConnection.coreCapabilities, 'writeRadioMode');
 
   const [presets, setPresets] = useState<FrequencyPreset[]>([]);
@@ -235,6 +235,12 @@ export const VoiceFrequencyControl: React.FC = () => {
   ) => {
     const pending = pendingFreqRef.current;
     if (!pending) return;
+
+    if (!canWriteFrequency || !connection.state.isConnected) {
+      pendingFreqRef.current = null;
+      return;
+    }
+
     const freq = pending.intendedFrequency;
     pendingFreqRef.current = { intendedFrequency: freq, sentAt: Date.now() };
     try {
@@ -251,11 +257,16 @@ export const VoiceFrequencyControl: React.FC = () => {
     } catch (error) {
       logger.error('Failed to set frequency:', error);
     }
-  }, [resetOperatorsAfterOperatingStateChange]);
+  }, [canWriteFrequency, connection.state.isConnected, resetOperatorsAfterOperatingStateChange]);
 
   // Apply a new frequency from digit edits. Updates UI immediately, marks pending,
   // and coalesces rapid consecutive edits via a 50ms trailing debounce.
   const applyFrequency = useCallback((newFreq: number) => {
+    if (!canWriteFrequency || !connection.state.isConnected) {
+      pendingFreqRef.current = null;
+      return;
+    }
+
     setCurrentFrequency(newFreq);
     pendingFreqRef.current = { intendedFrequency: newFreq, sentAt: Date.now() };
     if (freqDebounceTimerRef.current) {
@@ -265,7 +276,7 @@ export const VoiceFrequencyControl: React.FC = () => {
       freqDebounceTimerRef.current = null;
       void flushPendingFrequency();
     }, FREQ_DEBOUNCE_MS);
-  }, [flushPendingFrequency]);
+  }, [canWriteFrequency, connection.state.isConnected, flushPendingFrequency]);
 
   // Cleanup debounce timer on unmount
   useEffect(() => () => {
