@@ -49,6 +49,7 @@ function createManager(options: {
   storedRecords?: Array<{ slotPack: SlotPack }>;
   clockNow?: number;
   encodeQueue?: { push: ReturnType<typeof vi.fn> };
+  getRadioFrequency?: () => Promise<number | null>;
 }) {
   const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
   const slotPackManager = {
@@ -78,6 +79,7 @@ function createManager(options: {
     getCurrentMode: () => MODES.FT8,
     setRadioFrequency: vi.fn(),
     slotPackManager: slotPackManager as any,
+    getRadioFrequency: options.getRadioFrequency,
   });
 
   return {
@@ -850,6 +852,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       clockSource: { now: vi.fn(() => 0) } as any,
       getCurrentMode: () => MODES.FT8,
       setRadioFrequency: vi.fn(),
+      getRadioFrequency: vi.fn(async () => 7_074_000),
       slotPackManager: {
         getActiveSlotPacks: vi.fn(() => []),
         readStoredRecords: vi.fn(async () => []),
@@ -875,6 +878,65 @@ describe('RadioOperatorManager automatic QSO logging', () => {
 
     expect(await manager.hasWorkedCallsign('op1', 'BG5DRB')).toBe(true);
     expect(fakeLogManager.registerOperatorCallsign).toHaveBeenLastCalledWith('op1', 'BG7XTV');
+  });
+});
+
+describe('RadioOperatorManager has-worked checks', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('scopes hasWorkedCallsign to the current RF band', async () => {
+    let currentFrequency = 14_074_000;
+    const provider = {
+      hasWorkedCallsign: vi.fn(async (_callsign: string, options?: { band?: string }) => {
+        return options?.band === '6m';
+      }),
+    };
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      getRadioFrequency: async () => currentFrequency,
+    });
+
+    await expect(manager.hasWorkedCallsign('op1', 'BG7OO')).resolves.toBe(false);
+    expect(provider.hasWorkedCallsign).toHaveBeenLastCalledWith('BG7OO', { band: '20m' });
+
+    currentFrequency = 50_313_000;
+
+    await expect(manager.hasWorkedCallsign('op1', 'BG7OO')).resolves.toBe(true);
+    expect(provider.hasWorkedCallsign).toHaveBeenLastCalledWith('BG7OO', { band: '6m' });
+  });
+
+  it('falls back to the last selected frequency when current RF is unavailable', async () => {
+    vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+      getLastSelectedFrequency: () => ({ frequency: 14_074_000 }),
+    } as any);
+    const provider = {
+      hasWorkedCallsign: vi.fn(async (_callsign: string, options?: { band?: string }) => options?.band === '20m'),
+    };
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      getRadioFrequency: async () => null,
+    });
+
+    await expect(manager.hasWorkedCallsign('op1', 'BG7OO')).resolves.toBe(true);
+    expect(provider.hasWorkedCallsign).toHaveBeenLastCalledWith('BG7OO', { band: '20m' });
+  });
+
+  it('treats unknown current band as not worked', async () => {
+    vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+      getLastSelectedFrequency: () => ({ frequency: 999_000 }),
+    } as any);
+    const provider = {
+      hasWorkedCallsign: vi.fn(async () => true),
+    };
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      getRadioFrequency: async () => 0,
+    });
+
+    await expect(manager.hasWorkedCallsign('op1', 'BG7OO')).resolves.toBe(false);
+    expect(provider.hasWorkedCallsign).not.toHaveBeenCalled();
   });
 });
 

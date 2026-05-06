@@ -588,6 +588,31 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('replies to direct calls when the callsign is only worked on another band', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG5DRB',
+      myGrid: 'PL09',
+      replyToWorkedStations: false,
+      hasWorkedCallsign: false,
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.CALL,
+        senderCallsign: 'BG7OO',
+        targetCallsign: 'BG5DRB',
+        grid: 'OL63',
+      }),
+      snr: -6,
+      freq: 1395,
+    }]));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX2');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('BG7OO BG5DRB -06');
+
+    await pluginManager.shutdown();
+  });
+
   it('replies to direct calls from worked stations when replyToWorkedStations is enabled', async () => {
     const { operator, pluginManager } = await createRuntimeHarness({
       myCallsign: 'BG7XTV',

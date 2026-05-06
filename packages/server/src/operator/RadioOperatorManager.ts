@@ -88,6 +88,29 @@ export class RadioOperatorManager {
     );
   }
 
+  private async resolveCurrentBandForWorkedCheck(): Promise<string> {
+    let baseFreq = 0;
+
+    if (this.getRadioFrequency) {
+      try {
+        const rf = await this.getRadioFrequency();
+        if (rf && rf > 1_000_000) baseFreq = rf;
+      } catch {}
+    }
+
+    if (!(baseFreq > 1_000_000)) {
+      try {
+        const cfg = ConfigManager.getInstance();
+        const last = cfg.getLastSelectedFrequency();
+        if (last && last.frequency && last.frequency > 1_000_000) {
+          baseFreq = last.frequency;
+        }
+      } catch {}
+    }
+
+    return baseFreq > 1_000_000 ? getBandFromFrequency(baseFreq) : 'Unknown';
+  }
+
   // 每个操作员的最新编码请求ID，用于丢弃过期编码结果
   private latestEncodeRequestIds: Map<string, string> = new Map();
 
@@ -234,25 +257,7 @@ export class RadioOperatorManager {
         // 获取操作员对应的日志本
         const logBook = await this.logManager.getOperatorLogBook(data.operatorId);
         let hasWorked = false;
-        // 计算当前工作频段（用于按频段判重）：
-        // 优先从物理电台读频率；否则退回到"最后选择的频率"配置
-        let baseFreq = 0;
-        if (this.getRadioFrequency) {
-          try {
-            const rf = await this.getRadioFrequency();
-            if (rf && rf > 1_000_000) baseFreq = rf;
-          } catch {}
-        }
-        if (!(baseFreq > 1_000_000)) {
-          try {
-            const cfg = ConfigManager.getInstance();
-            const last = cfg.getLastSelectedFrequency();
-            if (last && last.frequency && last.frequency > 1_000_000) {
-              baseFreq = last.frequency;
-            }
-          } catch {}
-        }
-        const band = baseFreq > 1_000_000 ? getBandFromFrequency(baseFreq) : 'Unknown';
+        const band = await this.resolveCurrentBandForWorkedCheck();
 
         if (!logBook) {
           const callsign = this.logManager.getOperatorCallsign(data.operatorId);
@@ -263,6 +268,8 @@ export class RadioOperatorManager {
             logger.warn(`Check has-worked: logbook not found for operator ${data.operatorId} (callsign: ${callsign}), returning false`);
             hasWorked = false;
           }
+        } else if (band === 'Unknown') {
+          hasWorked = false;
         } else {
           hasWorked = await logBook.provider.hasWorkedCallsign(data.callsign, { band });
         }
@@ -549,7 +556,9 @@ export class RadioOperatorManager {
     try {
       const logBook = await this.logManager.getOperatorLogBook(operatorId);
       if (!logBook) return false;
-      return logBook.provider.hasWorkedCallsign(callsign, {});
+      const band = await this.resolveCurrentBandForWorkedCheck();
+      if (band === 'Unknown') return false;
+      return logBook.provider.hasWorkedCallsign(callsign, { band });
     } catch {
       return false;
     }
