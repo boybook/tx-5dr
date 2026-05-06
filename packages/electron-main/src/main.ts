@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog, nativeTheme, powerSaveBlocker, session, globalShortcut } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog, nativeTheme, powerSaveBlocker, session, globalShortcut, type WebContents } from 'electron';
 import log from 'electron-log/main';
 import { homedir, hostname as getHostname, networkInterfaces } from 'node:os';
 import net from 'node:net';
@@ -60,6 +60,8 @@ let devProcessMemoryLogInterval: NodeJS.Timeout | null = null;
 let mainAppReadyForWindow = false;
 let shortcutRecordingWebContentsId: number | null = null;
 let shortcutRecordingActionId: ShortcutActionId | null = null;
+let startupLogsInterval: NodeJS.Timeout | null = null;
+let startupLogsSequence = 0;
 
 type QuitSource = 'tray-menu' | 'window-close' | 'renderer' | 'before-quit' | 'will-quit' | 'unknown';
 
@@ -75,10 +77,62 @@ interface ChildShutdownResult {
   skipped: boolean;
 }
 
+type StartupLogSourceId = 'electron-main' | 'server' | 'client-tools';
+
+interface StartupLogSourceSpec {
+  id: StartupLogSourceId;
+  label: string;
+  fileName: string;
+}
+
+interface StartupLogLine {
+  id: number;
+  source: StartupLogSourceId;
+  text: string;
+  time: string;
+}
+
+interface StartupLogSourceStatus {
+  source: StartupLogSourceId;
+  label: string;
+  path: string;
+  exists: boolean;
+  size: number;
+  error: string | null;
+}
+
+interface StartupLogsPayload {
+  snapshot: boolean;
+  sources: StartupLogSourceStatus[];
+  lines: StartupLogLine[];
+}
+
+interface StartupLogFileState {
+  spec: StartupLogSourceSpec;
+  path: string;
+  offset: number;
+  exists: boolean;
+  size: number;
+  error: string | null;
+}
+
 const CHILD_SHUTDOWN_OPTIONS: Record<'web' | 'server', ChildShutdownOptions> = {
   web: { softTimeoutMs: 1000, forceTimeoutMs: 400 },
   server: { softTimeoutMs: 1800, forceTimeoutMs: 500 },
 };
+const STARTUP_LOG_SOURCES: StartupLogSourceSpec[] = [
+  { id: 'electron-main', label: 'Electron', fileName: 'electron-main.log' },
+  { id: 'server', label: 'Server', fileName: 'tx5dr-server.log' },
+  { id: 'client-tools', label: 'Web', fileName: 'client-tools.log' },
+];
+const STARTUP_LOG_INITIAL_LINES = 200;
+const STARTUP_LOG_MAX_LINES = 300;
+const STARTUP_LOG_POLL_INTERVAL_MS = 200;
+const STARTUP_LOG_TAIL_BYTES = 96 * 1024;
+const STARTUP_LOG_MAX_READ_BYTES = 256 * 1024;
+const startupLogSubscribers = new Map<number, WebContents>();
+let startupLogFileStates: StartupLogFileState[] | null = null;
+let startupLogLines: StartupLogLine[] = [];
 
 // ===== Electron 本地设置 =====
 const ELECTRON_SETTINGS_FILE = 'electron-settings.json';
@@ -759,6 +813,217 @@ function getClientToolsLogPath(): string {
 
 function getClientToolsReadyPath(): string {
   return path.join(getAppLogsDir(), 'client-tools-ready.json');
+}
+
+function getStartupLogPath(fileName: string): string {
+  return path.join(getAppLogsDir(), fileName);
+}
+
+function sanitizeStartupLogLine(value: string): string {
+  return value.replace(/([?&]auth_token=)[^&\s]*/g, '$1<redacted>');
+}
+
+function extractStartupLogTime(line: string, fallback: string): string {
+  const match = line.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z/);
+  return match?.[0] ?? fallback;
+}
+
+function appendStartupLogLines(lines: StartupLogLine[]): void {
+  if (lines.length === 0) return;
+  startupLogLines.push(...lines);
+  if (startupLogLines.length > STARTUP_LOG_MAX_LINES) {
+    startupLogLines = startupLogLines.slice(-STARTUP_LOG_MAX_LINES);
+  }
+}
+
+function createStartupLogLine(source: StartupLogSourceId, text: string, fallbackTime = new Date().toISOString()): StartupLogLine {
+  const sanitized = sanitizeStartupLogLine(text);
+  return {
+    id: ++startupLogsSequence,
+    source,
+    text: sanitized,
+    time: extractStartupLogTime(sanitized, fallbackTime),
+  };
+}
+
+function splitLogLines(content: string): string[] {
+  return content
+    .split(/\r?\n/)
+    .map(line => line.trimEnd())
+    .filter(line => line.length > 0);
+}
+
+function readLastLines(filePath: string, maxLines: number): { lines: string[]; size: number; error: string | null } {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) {
+      return { lines: [], size: 0, error: 'not_a_file' };
+    }
+
+    const size = stat.size;
+    const start = Math.max(0, size - STARTUP_LOG_TAIL_BYTES);
+    const length = size - start;
+    if (length <= 0) {
+      return { lines: [], size, error: null };
+    }
+
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const buffer = Buffer.alloc(length);
+      fs.readSync(fd, buffer, 0, length, start);
+      const text = buffer.toString('utf8');
+      return { lines: splitLogLines(text).slice(-maxLines), size, error: null };
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { lines: [], size: 0, error: null };
+    }
+    return {
+      lines: [],
+      size: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function initializeStartupLogTailerState(): void {
+  if (startupLogFileStates) return;
+
+  const now = new Date().toISOString();
+  startupLogLines = [];
+  startupLogFileStates = STARTUP_LOG_SOURCES.map((spec) => {
+    const filePath = getStartupLogPath(spec.fileName);
+    const result = readLastLines(filePath, STARTUP_LOG_INITIAL_LINES);
+    const exists = fs.existsSync(filePath);
+    appendStartupLogLines(result.lines.map(line => createStartupLogLine(spec.id, line, now)));
+    return {
+      spec,
+      path: filePath,
+      offset: result.size,
+      exists,
+      size: result.size,
+      error: result.error,
+    };
+  });
+  startupLogLines.sort((a, b) => {
+    const left = Date.parse(a.time);
+    const right = Date.parse(b.time);
+    if (Number.isFinite(left) && Number.isFinite(right) && left !== right) {
+      return left - right;
+    }
+    return a.id - b.id;
+  });
+  if (startupLogLines.length > STARTUP_LOG_INITIAL_LINES) {
+    startupLogLines = startupLogLines.slice(-STARTUP_LOG_INITIAL_LINES);
+  }
+}
+
+function readStartupLogAppend(state: StartupLogFileState): StartupLogLine[] {
+  const now = new Date().toISOString();
+  try {
+    const stat = fs.statSync(state.path);
+    if (!stat.isFile()) {
+      state.exists = false;
+      state.size = 0;
+      state.offset = 0;
+      state.error = 'not_a_file';
+      return [];
+    }
+
+    if (!state.exists) {
+      state.exists = true;
+    } else if (stat.size < state.offset) {
+      state.offset = 0;
+    }
+
+    state.error = null;
+    state.size = stat.size;
+    const lines: StartupLogLine[] = [];
+    if (stat.size <= state.offset) {
+      return lines;
+    }
+
+    let readStart = state.offset;
+    if (stat.size - state.offset > STARTUP_LOG_MAX_READ_BYTES) {
+      readStart = Math.max(0, stat.size - STARTUP_LOG_MAX_READ_BYTES);
+    }
+
+    const length = stat.size - readStart;
+    const fd = fs.openSync(state.path, 'r');
+    try {
+      const buffer = Buffer.alloc(length);
+      fs.readSync(fd, buffer, 0, length, readStart);
+      for (const line of splitLogLines(buffer.toString('utf8'))) {
+        lines.push(createStartupLogLine(state.spec.id, line, now));
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    state.offset = stat.size;
+    return lines;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      state.exists = false;
+      state.size = 0;
+      state.offset = 0;
+      state.error = null;
+      return [];
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    state.error = message;
+    return [];
+  }
+}
+
+function createStartupLogsPayload(snapshot: boolean, lines?: StartupLogLine[]): StartupLogsPayload {
+  initializeStartupLogTailerState();
+  return {
+    snapshot,
+    sources: (startupLogFileStates ?? []).map(state => ({
+      source: state.spec.id,
+      label: state.spec.label,
+      path: state.path,
+      exists: state.exists,
+      size: state.size,
+      error: state.error,
+    })),
+    lines: lines ?? startupLogLines,
+  };
+}
+
+function broadcastStartupLogPayload(payload: StartupLogsPayload): void {
+  for (const [id, contents] of startupLogSubscribers) {
+    if (contents.isDestroyed()) {
+      startupLogSubscribers.delete(id);
+      continue;
+    }
+    contents.send('startupLogs:update', payload);
+  }
+}
+
+function pollStartupLogs(): void {
+  if (!startupLogFileStates) return;
+  const newLines = startupLogFileStates.flatMap(state => readStartupLogAppend(state));
+  if (newLines.length === 0) return;
+  appendStartupLogLines(newLines);
+  broadcastStartupLogPayload(createStartupLogsPayload(false, newLines));
+}
+
+function ensureStartupLogsPolling(): void {
+  initializeStartupLogTailerState();
+  if (startupLogsInterval) return;
+  startupLogsInterval = setInterval(pollStartupLogs, STARTUP_LOG_POLL_INTERVAL_MS);
+}
+
+function removeStartupLogSubscriber(webContentsId: number): void {
+  startupLogSubscribers.delete(webContentsId);
+  if (startupLogSubscribers.size === 0 && startupLogsInterval) {
+    clearInterval(startupLogsInterval);
+    startupLogsInterval = null;
+  }
 }
 
 function getServerReadyPath(): string {
@@ -2257,6 +2522,11 @@ async function cleanupChildProcesses(isDevelopment: boolean): Promise<ChildShutd
 async function cleanup(): Promise<ChildShutdownResult[]> {
   const isDevelopment = process.env.NODE_ENV === 'development' && !app.isPackaged;
   stopDevProcessMemoryLogger();
+  startupLogSubscribers.clear();
+  if (startupLogsInterval) {
+    clearInterval(startupLogsInterval);
+    startupLogsInterval = null;
+  }
   const childResults = await cleanupChildProcesses(isDevelopment);
 
   selectedServerPort = null;
@@ -2962,6 +3232,20 @@ function setupIpcHandlers() {
   });
   ipcMain.handle('app:restart', async () => {
     await cleanupAndQuit('renderer', { relaunch: true });
+  });
+
+  ipcMain.handle('startupLogs:subscribe', (event) => {
+    ensureStartupLogsPolling();
+    const webContentsId = event.sender.id;
+    startupLogSubscribers.set(webContentsId, event.sender);
+    const cleanupSubscriber = () => removeStartupLogSubscriber(webContentsId);
+    event.sender.once('destroyed', cleanupSubscriber);
+    event.sender.once('did-navigate', cleanupSubscriber);
+    return createStartupLogsPayload(true);
+  });
+
+  ipcMain.handle('startupLogs:unsubscribe', (event) => {
+    removeStartupLogSubscriber(event.sender.id);
   });
 
   ipcMain.handle('updater:getStatus', () => {

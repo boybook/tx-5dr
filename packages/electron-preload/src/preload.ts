@@ -102,6 +102,30 @@ interface DesktopUpdateStatus {
   websiteUrl: string;
 }
 
+type StartupLogSourceId = 'electron-main' | 'server' | 'client-tools';
+
+interface StartupLogLine {
+  id: number;
+  source: StartupLogSourceId;
+  text: string;
+  time: string;
+}
+
+interface StartupLogSourceStatus {
+  source: StartupLogSourceId;
+  label: string;
+  path: string;
+  exists: boolean;
+  size: number;
+  error: string | null;
+}
+
+interface StartupLogsPayload {
+  snapshot: boolean;
+  sources: StartupLogSourceStatus[];
+  lines: StartupLogLine[];
+}
+
 const { contextBridge, ipcRenderer } = require('electron');
 
 const shortcutCommandListeners = new WeakMap<
@@ -206,6 +230,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getStatus: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:getStatus'),
     check: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:check'),
     openDownload: (url?: string): Promise<void> => ipcRenderer.invoke('updater:openDownload', url),
+  },
+
+  startupLogs: {
+    subscribe: async (callback: (payload: StartupLogsPayload) => void): Promise<() => Promise<void>> => {
+      const listener = (_event: unknown, payload: StartupLogsPayload) => callback(payload);
+      ipcRenderer.on('startupLogs:update', listener);
+      try {
+        const snapshot = await ipcRenderer.invoke('startupLogs:subscribe') as StartupLogsPayload;
+        callback(snapshot);
+      } catch (error) {
+        ipcRenderer.removeListener('startupLogs:update', listener);
+        throw error;
+      }
+
+      return async () => {
+        ipcRenderer.removeListener('startupLogs:update', listener);
+        await ipcRenderer.invoke('startupLogs:unsubscribe');
+      };
+    },
   },
 
   // 窗口管理
@@ -359,6 +402,9 @@ declare global {
         getStatus(): Promise<DesktopUpdateStatus>;
         check(): Promise<DesktopUpdateStatus>;
         openDownload(url?: string): Promise<void>;
+      };
+      startupLogs: {
+        subscribe(callback: (payload: StartupLogsPayload) => void): Promise<() => Promise<void>>;
       };
       window: {
         openAbout(): Promise<void>;

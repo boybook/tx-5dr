@@ -63,6 +63,30 @@ interface DesktopUpdateStatus {
   websiteUrl: string;
 }
 
+type StartupLogSourceId = 'electron-main' | 'server' | 'client-tools';
+
+interface StartupLogLine {
+  id: number;
+  source: StartupLogSourceId;
+  text: string;
+  time: string;
+}
+
+interface StartupLogSourceStatus {
+  source: StartupLogSourceId;
+  label: string;
+  path: string;
+  exists: boolean;
+  size: number;
+  error: string | null;
+}
+
+interface StartupLogsPayload {
+  snapshot: boolean;
+  sources: StartupLogSourceStatus[];
+  lines: StartupLogLine[];
+}
+
 interface ElectronAPI {
   getApiBase(): string;
   isEmbedded(): boolean;
@@ -86,6 +110,9 @@ interface ElectronAPI {
     getStatus(): Promise<DesktopUpdateStatus>;
     check(): Promise<DesktopUpdateStatus>;
     openDownload(url?: string): Promise<void>;
+  };
+  startupLogs?: {
+    subscribe(callback: (payload: StartupLogsPayload) => void): Promise<() => Promise<void>>;
   };
   window?: {
     openLogbookWindow(queryString: string): Promise<void>;
