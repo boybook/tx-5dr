@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { FrameMessage, SlotPack } from '@tx5dr/contracts';
+import type { FrameMessage, SlotPack, SlotPackFrequencyContext } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
 import {
@@ -10,7 +10,7 @@ import {
 
 const mode = MODES.FT8;
 
-function createSlotPack(startMs: number, frames: FrameMessage[]): SlotPack {
+function createSlotPack(startMs: number, frames: FrameMessage[], frequencyContext?: SlotPackFrequencyContext): SlotPack {
   return {
     slotId: `slot-${startMs}`,
     startMs,
@@ -25,6 +25,7 @@ function createSlotPack(startMs: number, frames: FrameMessage[]): SlotPack {
       updateSeq: 1,
     },
     decodeHistory: [],
+    ...(frequencyContext && { frequencyContext }),
   };
 }
 
@@ -51,7 +52,6 @@ function createTxLog(operatorId: string, slotStartMs: number, message: string, f
 }
 
 function buildGroups(slotPacks: SlotPack[], logs: TransmissionLog[], startMs: number) {
-  const currentGroupKey = CycleUtils.generateSlotGroupKey(startMs, mode.slotMs);
   return buildMyRelatedFrameGroups({
     slotPacks,
     transmissionLogs: logs,
@@ -63,8 +63,6 @@ function buildGroups(slotPacks: SlotPack[], logs: TransmissionLog[], startMs: nu
     targetCallsigns: ['R9WXK', 'R8KBM', 'R4CDO'],
     myTransmitCycles: [CycleUtils.calculateCycleNumberFromMs(startMs, mode.slotMs)],
     currentMode: mode,
-    currentGroupKey,
-    recentSlotGroupKeys: [],
   });
 }
 
@@ -134,5 +132,41 @@ describe('MyRelatedFramesTableModel', () => {
       'R8KBM BG5DRB PM00',
       'R9WXK BG5BNW PM00',
     ]);
+  });
+
+  it('preserves per-slot frequency context across band changes', () => {
+    const firstStart = Date.UTC(2026, 0, 1, 15, 45, 0);
+    const secondStart = firstStart + mode.slotMs;
+    const groups = buildGroups(
+      [
+        createSlotPack(firstStart, [
+          { snr: -8, dt: 0.1, freq: 1200, message: 'R9WXK BG5BNW -10', confidence: 1 },
+        ], { frequency: 14_074_000, band: '20m', mode: 'FT8', description: '14.074 MHz' }),
+        createSlotPack(secondStart, [
+          { snr: -9, dt: 0.2, freq: 1300, message: 'R8KBM BG5DRB -12', confidence: 1 },
+        ], { frequency: 7_074_000, band: '40m', mode: 'FT8', description: '7.074 MHz' }),
+      ],
+      [],
+      secondStart,
+    );
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.frequencyContext).toMatchObject({ frequency: 14_074_000, band: '20m' });
+    expect(groups[1]?.frequencyContext).toMatchObject({ frequency: 7_074_000, band: '40m' });
+  });
+
+  it('keeps replacement transmission log frequency context', () => {
+    const startMs = 60_000;
+    const first = createTxLog('op-1', startMs, 'CQ BG5BNW PM00', 2550);
+    first.frequencyContext = { frequency: 14_074_000, band: '20m', mode: 'FT8' };
+    const replacement = createTxLog('op-1', startMs, 'R9WXK BG5BNW PM00', 2550);
+    replacement.frequencyContext = { frequency: 7_074_000, band: '40m', mode: 'FT8' };
+
+    const groups = buildGroups([], [first, replacement], startMs);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.messages).toHaveLength(1);
+    expect(groups[0]?.messages[0]?.message).toBe('R9WXK BG5BNW PM00');
+    expect(groups[0]?.frequencyContext).toMatchObject({ frequency: 7_074_000, band: '40m' });
   });
 });

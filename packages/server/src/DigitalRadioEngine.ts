@@ -148,6 +148,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.realDecodeQueue = new WSJTXDecodeWorkQueue(1);
     this.realEncodeQueue = new WSJTXEncodeWorkQueue(1);
     this.slotPackManager = new SlotPackManager();
+    const initialFrequency = ConfigManager.getInstance().getLastSelectedFrequency();
+    this.slotPackManager.setFrequencyContext(initialFrequency);
+    this.on('frequencyChanged', (data) => {
+      this.slotPackManager.setFrequencyContext(data);
+    });
     this.audioMixer = new AudioMixer(100);
     this.radioManager = new PhysicalRadioManager();
     this.frequencyManager = new FrequencyManager(ConfigManager.getInstance().getCustomFrequencyPresets());

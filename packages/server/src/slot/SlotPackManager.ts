@@ -2,7 +2,7 @@
 // SlotPackManager - 事件处理需要使用any
 
 import { EventEmitter } from 'eventemitter3';
-import type { SlotPack, DecodeResult, FrameMessage, ModeDescriptor, SlotInfo } from '@tx5dr/contracts';
+import type { SlotPack, DecodeResult, FrameMessage, ModeDescriptor, SlotInfo, SlotPackFrequencyContext } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
 import { SlotPackPersistence } from './SlotPackPersistence.js';
@@ -31,6 +31,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   private currentMode: ModeDescriptor = MODES.FT8;
   private persistence: SlotPackPersistence;
   private persistenceEnabled: boolean = true;
+  private currentFrequencyContext: SlotPackFrequencyContext | undefined;
   /** 上一次 clearInMemory() 的时间戳，用于过滤过时的解码结果 */
   private lastClearTimestamp = 0;
 
@@ -153,6 +154,25 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     this.currentMode = mode;
     logger.info(`Mode switched to: ${mode.name}, slotMs=${mode.slotMs}ms`);
   }
+
+  setFrequencyContext(context: SlotPackFrequencyContext | null | undefined): void {
+    if (!context || typeof context.frequency !== 'number' || !Number.isFinite(context.frequency)) {
+      this.currentFrequencyContext = undefined;
+      return;
+    }
+
+    this.currentFrequencyContext = {
+      frequency: context.frequency,
+      ...(context.mode && { mode: context.mode }),
+      ...(context.band && { band: context.band }),
+      ...(context.radioMode && { radioMode: context.radioMode }),
+      ...(context.description && { description: context.description }),
+    };
+  }
+
+  getFrequencyContext(): SlotPackFrequencyContext | undefined {
+    return this.currentFrequencyContext ? { ...this.currentFrequencyContext } : undefined;
+  }
   
   /**
    * 处理解码结果，更新对应的 SlotPack
@@ -259,7 +279,8 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
         lastUpdated: timestamp,
         updateSeq: 0
       },
-      decodeHistory: []
+      decodeHistory: [],
+      ...(this.currentFrequencyContext && { frequencyContext: { ...this.currentFrequencyContext } }),
     };
     
     return slotPack;
@@ -275,6 +296,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       frames: slotPack.frames.map(frame => ({ ...frame })),
       stats: { ...slotPack.stats },
       decodeHistory: slotPack.decodeHistory.map(entry => ({ ...entry })),
+      ...(slotPack.frequencyContext && { frequencyContext: { ...slotPack.frequencyContext } }),
     };
   }
   
@@ -413,7 +435,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    * 获取当前所有活跃的时隙包
    */
   getActiveSlotPacks(): SlotPack[] {
-    return Array.from(this.slotPacks.values()).map(pack => ({ ...pack }));
+    return Array.from(this.slotPacks.values()).map(pack => this.snapshotSlotPack(pack));
   }
   
   /**
@@ -421,7 +443,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    */
   getSlotPack(slotId: string): SlotPack | null {
     const pack = this.slotPacks.get(slotId);
-    return pack ? { ...pack } : null;
+    return pack ? this.snapshotSlotPack(pack) : null;
   }
 
   /**
@@ -444,7 +466,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   getLatestSlotPack(): SlotPack | null {
     // 如果有缓存的最新 SlotPack，直接返回副本
     if (this.lastSlotPack) {
-      return { ...this.lastSlotPack };
+      return this.snapshotSlotPack(this.lastSlotPack);
     }
     return null;
   }

@@ -1,20 +1,53 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createLogger } from '../../../utils/logger';
 
 const logger = createLogger('MyRelatedFramesTable');
 import { FramesTable, FrameGroup, FrameDisplayMessage } from './FramesTable';
-import { useSlotPacks, useOperators, useRadioModeState, useConnection, useCurrentOperatorId } from '../../../store/radioStore';
-import type { WSSelectedFrame } from '@tx5dr/contracts';
-import { CycleUtils } from '@tx5dr/core';
+import { useSlotPacks, useOperators, useRadioModeState, useConnection, useCurrentOperatorId, useRadioState } from '../../../store/radioStore';
+import type { SlotPackFrequencyContext, WSSelectedFrame } from '@tx5dr/contracts';
+import { CycleUtils, getBandFromFrequency } from '@tx5dr/core';
 import { useTranslation } from 'react-i18next';
 import {
   buildMyRelatedFrameGroups,
   type TransmissionLog,
   upsertTransmissionLog,
 } from './MyRelatedFramesTableModel';
+import { CLEAR_MY_RELATED_FRAMES_EVENT } from '../../../utils/frameClearEvents';
 
 interface MyRelatedFT8TableProps {
   className?: string;
+}
+
+function mergeFrameGroups(groups: FrameGroup[]): FrameGroup[] {
+  const byKey = new Map<string, FrameGroup>();
+  for (const group of groups) {
+    const context = group.frequencyContext;
+    const key = [
+      group.startMs,
+      context?.frequency ?? '',
+      context?.mode ?? '',
+      context?.band ?? '',
+    ].join(':');
+    byKey.set(key, group);
+  }
+
+  return Array.from(byKey.values())
+    .sort((a, b) => a.startMs - b.startMs)
+    .slice(-100);
+}
+
+function getFrequencySegmentKey(group: FrameGroup): string {
+  const context = group.frequencyContext;
+  return [
+    context?.band || context?.frequency || '',
+    context?.mode || '',
+    context?.radioMode || '',
+  ].join(':');
+}
+
+function shouldShowFrequencySegmentHeader(group: FrameGroup, index: number, groups: FrameGroup[]): boolean {
+  if (index <= 0) return true;
+  return getFrequencySegmentKey(group) !== getFrequencySegmentKey(groups[index - 1]!);
 }
 
 export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ className = '' }) => {
@@ -22,10 +55,31 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
   const slotPacks = useSlotPacks();
   const { operators } = useOperators();
   const { currentMode } = useRadioModeState();
+  const radio = useRadioState();
   const connection = useConnection();
   const { currentOperatorId } = useCurrentOperatorId();
   const [myFrameGroups, setMyFrameGroups] = useState<FrameGroup[]>([]);
   const [transmissionLogs, setTransmissionLogs] = useState<TransmissionLog[]>([]);
+  const [currentFrequencyContext, setCurrentFrequencyContext] = useState<SlotPackFrequencyContext | undefined>();
+  const myFrameGroupsRef = useRef<FrameGroup[]>([]);
+
+  useEffect(() => {
+    myFrameGroupsRef.current = myFrameGroups;
+  }, [myFrameGroups]);
+
+  useEffect(() => {
+    const handleClear = () => {
+      setMyFrameGroups([]);
+      setTransmissionLogs([]);
+      setFrozenFrameGroups([]);
+      setRecentSlotGroupKeys([]);
+    };
+
+    window.addEventListener(CLEAR_MY_RELATED_FRAMES_EVENT, handleClear);
+    return () => {
+      window.removeEventListener(CLEAR_MY_RELATED_FRAMES_EVENT, handleClear);
+    };
+  }, []);
 
   // 数据固化相关状态
   const [frozenFrameGroups, setFrozenFrameGroups] = useState<FrameGroup[]>([]);
@@ -49,9 +103,13 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
       frequency: number;
       slotStartMs: number;
       replaceExisting?: boolean;
+      frequencyContext?: SlotPackFrequencyContext;
     }) => {
       setTransmissionLogs(prev => {
-        return upsertTransmissionLog(prev, data);
+        return upsertTransmissionLog(prev, {
+          ...data,
+          frequencyContext: data.frequencyContext ?? currentFrequencyContext,
+        });
       });
     };
 
@@ -60,9 +118,9 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
     return () => {
       wsClient.offWSEvent('transmissionLog', handleTransmissionLog);
     };
-  }, [connection.state.radioService]);
+  }, [connection.state.radioService, currentFrequencyContext]);
 
-  // 频率变化时清空本地缓存，避免跨频率混杂
+  // 频率变化时保留右侧历史，仅更新后续消息使用的频率上下文。
   useEffect(() => {
     const radioService = connection.state.radioService;
     if (!radioService) return;
@@ -70,10 +128,9 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
     // 直接订阅 WSClient 事件
     const wsClient = radioService.wsClientInstance;
 
-    const handleFrequencyChanged = () => {
-      setMyFrameGroups([]);
-      setTransmissionLogs([]);
-      setFrozenFrameGroups([]);
+    const handleFrequencyChanged = (data: SlotPackFrequencyContext) => {
+      setCurrentFrequencyContext(data);
+      setFrozenFrameGroups(prev => mergeFrameGroups([...prev, ...myFrameGroupsRef.current]));
       setRecentSlotGroupKeys([]);
     };
 
@@ -84,6 +141,21 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
       wsClient.offWSEvent('frequencyChanged' as any, handleFrequencyChanged);
     };
   }, [connection.state.radioService]);
+
+  useEffect(() => {
+    if (currentFrequencyContext || !radio.state.currentRadioFrequency || !currentMode) {
+      return;
+    }
+
+    const frequency = radio.state.currentRadioFrequency;
+    const band = getBandFromFrequency(frequency);
+    setCurrentFrequencyContext({
+      frequency,
+      mode: currentMode.name,
+      ...(band && band !== 'Unknown' && { band }),
+      description: `${(frequency / 1_000_000).toFixed(3)} MHz`,
+    });
+  }, [currentFrequencyContext, radio.state.currentRadioFrequency, currentMode]);
 
   // 获取所有启用的操作员信息
   const getEnabledOperators = () => {
@@ -205,24 +277,14 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
       targetCallsigns,
       myTransmitCycles,
       currentMode,
-      currentGroupKey,
-      recentSlotGroupKeys,
+      currentFrequencyContext,
     });
 
     // 合并固化数据和当前时隙数据
-    const allGroups: FrameGroup[] = [...frozenFrameGroups, ...currentSlotGroups]
-      .sort((a, b) => a.startMs - b.startMs);
+    const allGroups = mergeFrameGroups([...frozenFrameGroups, ...currentSlotGroups]);
 
     setMyFrameGroups(allGroups);
-  }, [slotPacks.state.slotPacks, transmissionLogs, operators, currentMode, frozenFrameGroups, recentSlotGroupKeys]);
-
-  // 清空我的通联数据
-  const _handleClearMyData = () => {
-    setMyFrameGroups([]);
-    setTransmissionLogs([]);
-    setFrozenFrameGroups([]);
-    setRecentSlotGroupKeys([]);
-  };
+  }, [slotPacks.state.slotPacks, transmissionLogs, operators, currentMode, currentFrequencyContext, frozenFrameGroups, recentSlotGroupKeys]);
 
   const buildSelectedFrame = (message: FrameDisplayMessage, group: FrameGroup): WSSelectedFrame | undefined => {
     if (typeof message.db !== 'number' || typeof message.dt !== 'number') {
@@ -263,6 +325,8 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
           targetCallsign={getCurrentOperatorTargetCallsign()}
           showLogbookAnalysisVisuals={false}
           onRowDoubleClick={handleRowDoubleClick}
+          showGroupHeader
+          shouldShowGroupHeader={shouldShowFrequencySegmentHeader}
         />
       )}
     </div>

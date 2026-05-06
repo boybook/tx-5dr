@@ -96,6 +96,39 @@ describe('SlotPackManager event routing', () => {
     expect(txFrames.map(frame => frame.operatorId).sort()).toEqual(['op-1', 'op-2']);
   });
 
+  it('stamps new slot packs with the active frequency context', () => {
+    const manager = new SlotPackManager();
+    manager.setPersistenceEnabled(false);
+    manager.setFrequencyContext({
+      frequency: 14_074_000,
+      band: '20m',
+      mode: 'FT8',
+      description: '14.074 MHz',
+    });
+
+    manager.processDecodeResult(buildDecodeResult(45_000, [{ message: 'CQ BG5DRB PM00', snr: -5 }]));
+
+    expect(manager.getSlotPack('slot-45000')?.frequencyContext).toMatchObject({
+      frequency: 14_074_000,
+      band: '20m',
+      mode: 'FT8',
+    });
+  });
+
+  it('uses the current frequency context when adding a transmission frame to a new slot', () => {
+    const manager = new SlotPackManager();
+    manager.setPersistenceEnabled(false);
+    manager.setFrequencyContext({ frequency: 7_074_000, band: '40m', mode: 'FT8' });
+
+    manager.addTransmissionFrame('slot-60000', 'op-1', 'R9WXK BG5BNW PM00', 2550, 60_000);
+
+    expect(manager.getSlotPack('slot-60000')?.frequencyContext).toMatchObject({
+      frequency: 7_074_000,
+      band: '40m',
+      mode: 'FT8',
+    });
+  });
+
   it('emits immutable snapshots with increasing updateSeq values', () => {
     const manager = new SlotPackManager();
     manager.setPersistenceEnabled(false);

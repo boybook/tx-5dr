@@ -958,6 +958,7 @@ export class RadioOperatorManager {
         frequency: frequency,
         slotStartMs: slotStartMs,
         replaceExisting: request.replaceExisting,
+        frequencyContext: this.slotPackManager.getFrequencyContext(),
       });
 
       // 启动传输跟踪

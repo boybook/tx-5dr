@@ -195,7 +195,11 @@ export class ClockCoordinator {
       frequency: number;
       slotStartMs: number;
       replaceExisting?: boolean;
+      frequencyContext?: import('@tx5dr/contracts').SlotPackFrequencyContext;
     }) => {
+      if (data.frequencyContext) {
+        slotPackManager.setFrequencyContext(data.frequencyContext);
+      }
       const slotId = `slot-${data.slotStartMs}`;
       slotPackManager.addTransmissionFrame(
         slotId,

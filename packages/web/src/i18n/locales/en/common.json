@@ -16,7 +16,10 @@
     "refreshStatus": "Refresh Status",
     "retry": "Retry",
     "openSettings": "Open Settings",
-    "clearData": "Clear Data"
+    "clearData": "Clear Data",
+    "clearAllData": "Clear All",
+    "clearLeftData": "Clear Left",
+    "clearRightData": "Clear Right"
   },
   "qsoNotifications": {
     "enable": "Enable QSO system notifications",
@@ -118,7 +121,8 @@
     "freq": "Freq",
     "message": "Message",
     "location": "Location",
-    "scrollToBottom": "Scroll to bottom"
+    "scrollToBottom": "Scroll to bottom",
+    "startedAt": "Started at {{context}}"
   },
   "callsignPopover": {
     "grid": "Grid",

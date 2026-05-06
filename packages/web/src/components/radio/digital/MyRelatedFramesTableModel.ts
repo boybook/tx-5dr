@@ -1,4 +1,4 @@
-import type { FrameMessage, ModeDescriptor, SlotPack } from '@tx5dr/contracts';
+import type { FrameMessage, ModeDescriptor, SlotPack, SlotPackFrequencyContext } from '@tx5dr/contracts';
 import { CycleUtils, parseFT8LocationInfo } from '@tx5dr/core';
 import type { FrameDisplayMessage, FrameGroup } from './FramesTable';
 
@@ -9,6 +9,7 @@ export interface TransmissionLog {
   operatorId: string;
   slotStartMs: number;
   replaceExisting?: boolean;
+  frequencyContext?: SlotPackFrequencyContext;
 }
 
 export interface MyRelatedOperatorInfo {
@@ -20,6 +21,7 @@ interface GroupAccumulator {
   cycle: 'even' | 'odd';
   hasTransmission: boolean;
   alignedMs: number;
+  frequencyContext?: SlotPackFrequencyContext;
 }
 
 interface BuildMyRelatedFrameGroupsParams {
@@ -29,8 +31,7 @@ interface BuildMyRelatedFrameGroupsParams {
   targetCallsigns: string[];
   myTransmitCycles: number[];
   currentMode: ModeDescriptor;
-  currentGroupKey: string;
-  recentSlotGroupKeys: string[];
+  currentFrequencyContext?: SlotPackFrequencyContext;
 }
 
 export function getTransmissionIdentity(operatorId: string, slotStartMs: number): string {
@@ -46,7 +47,8 @@ export function upsertTransmissionLog(prev: TransmissionLog[], data: Transmissio
       prev[idx]?.message === data.message &&
       prev[idx]?.frequency === data.frequency &&
       prev[idx]?.time === data.time &&
-      prev[idx]?.replaceExisting === data.replaceExisting
+      prev[idx]?.replaceExisting === data.replaceExisting &&
+      areFrequencyContextsEqual(prev[idx]?.frequencyContext, data.frequencyContext)
     ) {
       return prev;
     }
@@ -66,10 +68,8 @@ export function buildMyRelatedFrameGroups({
   targetCallsigns,
   myTransmitCycles,
   currentMode,
-  currentGroupKey,
-  recentSlotGroupKeys,
+  currentFrequencyContext,
 }: BuildMyRelatedFrameGroupsParams): FrameGroup[] {
-  const visibleGroupKeys = new Set([currentGroupKey, ...recentSlotGroupKeys]);
   const groupsMap = new Map<string, GroupAccumulator>();
   const txLogsByIdentity = new Map<string, TransmissionLog>();
   const emittedTxFrameIdentities = new Set<string>();
@@ -79,11 +79,6 @@ export function buildMyRelatedFrameGroups({
   }
 
   for (const slotPack of slotPacks) {
-    const slotGroupKey = CycleUtils.generateSlotGroupKey(slotPack.startMs, currentMode.slotMs);
-    if (!visibleGroupKeys.has(slotGroupKey)) {
-      continue;
-    }
-
     for (const frame of slotPack.frames) {
       const txIdentity = getFrameTransmissionIdentity(frame, slotPack.startMs);
       if (txIdentity) {
@@ -98,7 +93,12 @@ export function buildMyRelatedFrameGroups({
       }
 
       const cycleNumber = CycleUtils.calculateCycleNumberFromMs(slotPack.startMs, currentMode.slotMs);
-      const group = getOrCreateGroup(groupsMap, slotPack.startMs, currentMode.slotMs);
+      const group = getOrCreateGroup(
+        groupsMap,
+        slotPack.startMs,
+        currentMode.slotMs,
+        slotPack.frequencyContext ?? currentFrequencyContext,
+      );
       group.messages.push(frameToDisplayMessage(frame, slotPack.startMs));
 
       if (myTransmitCycles.includes(cycleNumber)) {
@@ -108,23 +108,24 @@ export function buildMyRelatedFrameGroups({
   }
 
   for (const log of txLogsByIdentity.values()) {
-    const logGroupKey = CycleUtils.generateSlotGroupKey(log.slotStartMs, currentMode.slotMs);
-    if (!visibleGroupKeys.has(logGroupKey)) {
-      continue;
-    }
-
-    const group = getOrCreateGroup(groupsMap, log.slotStartMs, currentMode.slotMs);
+    const group = getOrCreateGroup(
+      groupsMap,
+      log.slotStartMs,
+      currentMode.slotMs,
+      log.frequencyContext ?? currentFrequencyContext,
+    );
     group.hasTransmission = true;
     group.messages.push(transmissionLogToDisplayMessage(log));
   }
 
   return Array.from(groupsMap.entries())
-    .map(([time, { messages, cycle, hasTransmission, alignedMs }]) => ({
+    .map(([time, { messages, cycle, hasTransmission, alignedMs, frequencyContext }]) => ({
       time,
       startMs: alignedMs,
       messages: messages.sort((a, b) => a.utc.localeCompare(b.utc)),
       type: hasTransmission ? 'transmit' as const : 'receive' as const,
       cycle,
+      ...(frequencyContext && { frequencyContext }),
     }))
     .sort((a, b) => a.startMs - b.startMs);
 }
@@ -156,6 +157,7 @@ function getOrCreateGroup(
   groupsMap: Map<string, GroupAccumulator>,
   startMs: number,
   slotMs: number,
+  frequencyContext?: SlotPackFrequencyContext,
 ): GroupAccumulator {
   const groupKey = CycleUtils.generateSlotGroupKey(startMs, slotMs);
   const existingGroup = groupsMap.get(groupKey);
@@ -170,9 +172,23 @@ function getOrCreateGroup(
     cycle: CycleUtils.isEvenCycle(cycleNumber) ? 'even' : 'odd',
     hasTransmission: false,
     alignedMs,
+    ...(frequencyContext && { frequencyContext }),
   };
   groupsMap.set(groupKey, group);
   return group;
+}
+
+function areFrequencyContextsEqual(
+  left?: SlotPackFrequencyContext,
+  right?: SlotPackFrequencyContext,
+): boolean {
+  if (!left && !right) return true;
+  if (!left || !right) return false;
+  return left.frequency === right.frequency &&
+    left.mode === right.mode &&
+    left.band === right.band &&
+    left.radioMode === right.radioMode &&
+    left.description === right.description;
 }
 
 function frameToDisplayMessage(frame: FrameMessage, slotStartMs: number): FrameDisplayMessage {

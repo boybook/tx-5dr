@@ -52,6 +52,13 @@ export interface FrameGroup {
   messages: FrameDisplayMessage[];
   type: 'receive' | 'transmit';
   cycle: 'even' | 'odd'; // 偶数或奇数周期
+  frequencyContext?: {
+    frequency?: number;
+    band?: string;
+    mode?: string;
+    radioMode?: string;
+    description?: string;
+  };
 }
 
 interface FramesTableProps {
@@ -65,6 +72,7 @@ interface FramesTableProps {
   enableCallsignPopover?: boolean; // 是否启用呼号信息浮层（hover国旗区域弹出）
   scrollToBottomTrigger?: number; // 外部触发滚动到底部（递增时触发）
   showGroupHeader?: boolean; // 是否在周期组前显示轻量上下文标题
+  shouldShowGroupHeader?: (group: FrameGroup, index: number, groups: FrameGroup[]) => boolean;
   groupHeaderBand?: string | null; // 当前波段，用于截图上下文
   groupHeaderMode?: string | null; // 当前模式名，如 "FT8"
 }
@@ -123,8 +131,24 @@ const formatGroupHeaderTime = (startMs: number): string => {
   return `${iso.slice(0, 10)} ${iso.slice(11, 19)} UTC`;
 };
 
-const formatGroupHeaderLabel = (group: FrameGroup, band?: string | null, mode?: string | null): string => {
+const formatGroupHeaderLabel = (
+  group: FrameGroup,
+  t: (key: string, options?: Record<string, string>) => string,
+  band?: string | null,
+  mode?: string | null,
+): string => {
   const timeLabel = formatGroupHeaderTime(group.startMs);
+  const context = group.frequencyContext;
+  if (context) {
+    const frequencyLabel = typeof context.frequency === 'number' && Number.isFinite(context.frequency)
+      ? `${(context.frequency / 1_000_000).toFixed(3)} MHz`
+      : context.description;
+    const parts = [frequencyLabel, context.band, context.mode, timeLabel].filter(Boolean);
+    return parts.length > 0
+      ? t('common:framesTable.startedAt', { context: parts.join(' · ') })
+      : timeLabel;
+  }
+
   const parts = [timeLabel, band, mode].filter(Boolean);
   return parts.join(' · ');
 };
@@ -327,7 +351,7 @@ MessageRow.displayName = 'MessageRow';
 
 // ─── 主组件 ─────────────────────────────────
 
-export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger, showGroupHeader = false, groupHeaderBand = null, groupHeaderMode = null }) => {
+export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger, showGroupHeader = false, shouldShowGroupHeader: shouldShowGroupHeaderPredicate, groupHeaderBand = null, groupHeaderMode = null }) => {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language === 'zh';
   const highlightTypeLabels = useMemo(() => getHighlightTypeLabels(t), [t]);
@@ -574,9 +598,9 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                 >
                   {/* 组间距（对应原始的 space-y-1 pt-1） */}
                   <div className="pt-1">
-                    {shouldShowGroupHeader && (
+                    {shouldShowGroupHeader && (!shouldShowGroupHeaderPredicate || shouldShowGroupHeaderPredicate(group, vItem.index, groups)) && (
                       <div className={`ml-1 truncate ${isNarrow ? 'px-2' : 'px-3'} pb-0.5 text-[10px] font-mono leading-4 tracking-[0.08em] text-default-400/80`}>
-                        {formatGroupHeaderLabel(group, groupHeaderBand, groupHeaderMode)}
+                        {formatGroupHeaderLabel(group, t, groupHeaderBand, groupHeaderMode)}
                       </div>
                     )}
 

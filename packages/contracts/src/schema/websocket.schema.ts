@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { FT8DecodeSchema } from './ft8.schema.js';
-import { SlotPackSchema, SlotInfoSchema } from './slot-info.schema.js';
+import { SlotPackSchema, SlotInfoSchema, SlotPackFrequencyContextSchema } from './slot-info.schema.js';
 import {
   PluginDataPayloadSchema,
   PluginLogEntrySchema,
@@ -779,7 +779,9 @@ export const WSTransmissionLogMessageSchema = WSBaseMessageSchema.extend({
     time: z.string(),
     message: z.string(),
     frequency: z.number(),
-    slotStartMs: z.number()
+    slotStartMs: z.number(),
+    replaceExisting: z.boolean().optional(),
+    frequencyContext: SlotPackFrequencyContextSchema.optional(),
   }),
 });
 
@@ -1443,6 +1445,7 @@ export interface DigitalRadioEngineEvents {
     frequency: number;
     slotStartMs: number;
     replaceExisting?: boolean;
+    frequencyContext?: z.infer<typeof SlotPackFrequencyContextSchema>;
   }) => void;
   
   // 操作员事件

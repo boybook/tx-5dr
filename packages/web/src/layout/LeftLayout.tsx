@@ -1,7 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { Button } from '@heroui/react';
+import {
+  Button,
+  Dropdown,
+  DropdownItem,
+  DropdownMenu,
+  DropdownTrigger,
+} from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTrashCan } from '@fortawesome/free-solid-svg-icons';
+import {
+  faChevronDown,
+  faGripLinesVertical,
+  faRectangleList,
+  faTableColumns,
+  faTrashCan,
+} from '@fortawesome/free-solid-svg-icons';
 import { faGithub } from '@fortawesome/free-brands-svg-icons';
 import { SpectrumDisplay } from '../components/radio/spectrum/SpectrumDisplay';
 import { SlotPacksMessageDisplay } from '../components/radio/digital/SlotPacksMessageDisplay';
@@ -15,6 +27,7 @@ import { UserRole } from '@tx5dr/contracts';
 import { isElectron, isMacOS } from '../utils/config';
 import { EMPTY_METER_DATA, shouldShowRadioMetersPanel } from '../utils/radioMeters';
 import { useTranslation } from 'react-i18next';
+import { clearMyRelatedFrames } from '../utils/frameClearEvents';
 
 export const LeftLayout: React.FC = () => {
   const { t } = useTranslation('common');
@@ -86,9 +99,27 @@ export const LeftLayout: React.FC = () => {
     };
   }, [connection.state.radioService]);
 
-  // 清空数据
-  const handleClearData = () => {
+  const handleClearLeft = () => {
     slotPacks.dispatch({ type: 'CLEAR_DATA' });
+  };
+
+  const handleClearRight = () => {
+    clearMyRelatedFrames();
+  };
+
+  const handleClearAll = () => {
+    handleClearLeft();
+    handleClearRight();
+  };
+
+  const handleClearMenuAction = (key: React.Key) => {
+    if (key === 'left') {
+      handleClearLeft();
+    } else if (key === 'right') {
+      handleClearRight();
+    } else {
+      handleClearAll();
+    }
   };
 
   return (
@@ -125,16 +156,46 @@ export const LeftLayout: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}>
-          <Button
-            onPress={handleClearData}
-            isIconOnly
-            variant="light"
-            size="sm"
-            title={t('action.clearData')}
-            aria-label={t('action.clearData')}
+          <Dropdown
+            placement="bottom-end"
+            classNames={{
+              content: 'min-w-0 w-auto p-0',
+            }}
           >
-            <FontAwesomeIcon icon={faTrashCan} className="text-default-400" />
-          </Button>
+            <DropdownTrigger>
+              <Button
+                title={t('action.clearData')}
+                aria-label={t('action.clearData')}
+                variant="light"
+                size="sm"
+                className="min-w-0 px-2"
+                startContent={<FontAwesomeIcon icon={faTrashCan} className="text-default-400" />}
+                endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-[10px]" />}
+              />
+            </DropdownTrigger>
+            <DropdownMenu
+              aria-label={t('action.clearData')}
+              onAction={handleClearMenuAction}
+              classNames={{
+                base: 'w-[120px]',
+                list: 'p-1',
+              }}
+              itemClasses={{
+                base: 'px-2 py-1.5 min-h-0 gap-2',
+                title: 'text-sm',
+              }}
+            >
+              <DropdownItem key="all" startContent={<FontAwesomeIcon icon={faTrashCan} className="w-4 text-center text-default-400" />}>
+                {t('action.clearAllData')}
+              </DropdownItem>
+              <DropdownItem key="left" startContent={<FontAwesomeIcon icon={faRectangleList} className="w-4 text-center text-default-400" />}>
+                {t('action.clearLeftData')}
+              </DropdownItem>
+              <DropdownItem key="right" startContent={<FontAwesomeIcon icon={faTableColumns} className="w-4 text-center text-default-400" />}>
+                {t('action.clearRightData')}
+              </DropdownItem>
+            </DropdownMenu>
+          </Dropdown>
           {/* 网络访问入口（Admin 可点击查看远程访问信息） */}
           {isAdmin && (
             <RemoteAccessPopover clientCount={clientCount} />

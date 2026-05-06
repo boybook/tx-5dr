@@ -2,6 +2,20 @@ import { z } from 'zod';
 import { DxccStatusSchema, SubdivisionConfidenceSchema } from './qso.schema.js';
 
 /**
+ * Frequency context captured when a slot pack is created.
+ * Fields are optional so older persisted slot packs remain valid.
+ */
+export const SlotPackFrequencyContextSchema = z.object({
+  frequency: z.number().optional(),
+  mode: z.string().optional(),
+  band: z.string().optional(),
+  radioMode: z.string().optional(),
+  description: z.string().optional(),
+});
+
+export type SlotPackFrequencyContext = z.infer<typeof SlotPackFrequencyContextSchema>;
+
+/**
  * 时隙周期（偶数奇数）
  */
 
@@ -160,7 +174,9 @@ export const SlotPackSchema = z.object({
     timestamp: z.number(),
     frameCount: z.number(),
     processingTimeMs: z.number()
-  })).default([])
+  })).default([]),
+  /** Dial/band context active when this slot was created. */
+  frequencyContext: SlotPackFrequencyContextSchema.optional()
 });
 
 export type SlotPack = z.infer<typeof SlotPackSchema>;

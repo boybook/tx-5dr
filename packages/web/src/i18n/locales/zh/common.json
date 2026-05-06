@@ -16,7 +16,10 @@
     "refreshStatus": "刷新状态",
     "retry": "重试",
     "openSettings": "打开设置",
-    "clearData": "清空数据"
+    "clearData": "清空数据",
+    "clearAllData": "全部清空",
+    "clearLeftData": "清空左侧",
+    "clearRightData": "清空右侧"
   },
   "qsoNotifications": {
     "enable": "启用 QSO 系统提醒",
@@ -118,7 +121,8 @@
     "freq": "频率",
     "message": "信息",
     "location": "位置",
-    "scrollToBottom": "点击滚动到底部"
+    "scrollToBottom": "点击滚动到底部",
+    "startedAt": "开始于 {{context}}"
   },
   "callsignPopover": {
     "grid": "网格",
