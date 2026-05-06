@@ -5,6 +5,10 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('EncodeWorkQueue');
 
+function normalizeMessageForEncodeCheck(message: string): string {
+  return message.trim().toUpperCase().replace(/\s+/g, ' ');
+}
+
 export interface EncodeRequest {
   message: string;
   frequency: number;
@@ -67,11 +71,20 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
       const mode = request.mode === 'FT4' ? WSJTXMode.FT4 : WSJTXMode.FT8;
 
       // 调用原生库编码
-      const { audioData: audioFloat32, messageSent: _messageSent } = await this.lib.encode(
+      const { audioData: audioFloat32, messageSent } = await this.lib.encode(
         mode,
         request.message,
         request.frequency
       );
+
+      const normalizedRequestedMessage = normalizeMessageForEncodeCheck(request.message);
+      const normalizedSentMessage = normalizeMessageForEncodeCheck(messageSent ?? '');
+      if (normalizedSentMessage !== normalizedRequestedMessage) {
+        throw new Error(
+          `encoder changed message text: requested="${normalizedRequestedMessage}", sent="${normalizedSentMessage}". `
+          + 'Free text messages are limited to 13 characters by WSJT-X.',
+        );
+      }
 
       if (!audioFloat32 || audioFloat32.length === 0) {
         throw new Error('encode returned empty audio data');

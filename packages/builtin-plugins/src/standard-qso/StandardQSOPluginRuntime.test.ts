@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MODES, type OperatorConfig } from '@tx5dr/contracts';
+import { MODES, type FrameMessage, type OperatorConfig, type SlotInfo } from '@tx5dr/contracts';
 import {
   StandardQSOPluginRuntime,
   type StandardQSOPluginOperator,
@@ -68,5 +68,52 @@ describe('StandardQSOPluginRuntime TX6 override', () => {
     runtime.updateSlots();
 
     expect(runtime.getSnapshot().slots?.TX6).toBe('CQ BG5DRB OL32');
+  });
+});
+
+
+describe('StandardQSOPluginRuntime nonstandard callsign slots', () => {
+  it('keeps 23-character RR73 and R-report messages for compound callsigns', () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator());
+
+    runtime.patchContext({
+      targetCallsign: 'VA7CD/DU7',
+      reportSent: -9,
+    });
+    runtime.updateSlots();
+
+    expect(runtime.getSnapshot().slots).toMatchObject({
+      TX1: '<VA7CD/DU7> BG5DRB -09',
+      TX2: '<VA7CD/DU7> BG5DRB -09',
+      TX3: '<VA7CD/DU7> BG5DRB R-09',
+      TX4: '<VA7CD/DU7> BG5DRB RR73',
+      TX5: '<VA7CD/DU7> BG5DRB 73',
+    });
+  });
+
+  it('responds to a compound-callsign R-report with RR73 instead of RRR', () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator());
+    const message: FrameMessage = {
+      snr: -9,
+      freq: 1150,
+      dt: 0,
+      message: 'BG5DRB <VA7CD/DU7> R-17',
+      confidence: 1,
+    };
+    const slotInfo: SlotInfo = {
+      id: 'slot-1',
+      startMs: 0,
+      phaseMs: 0,
+      driftMs: 0,
+      cycleNumber: 0,
+      utcSeconds: 0,
+      mode: 'FT8',
+    };
+
+    runtime.requestCall('VA7CD/DU7', { message, slotInfo });
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.currentState).toBe('TX4');
+    expect(snapshot.slots?.TX4).toBe('<VA7CD/DU7> BG5DRB RR73');
   });
 });

@@ -1517,47 +1517,6 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         return this.state;
     }
 
-    private static readonly MAX_FT8_MESSAGE_CHARS = 22;
-
-    private getBoundedSlotText(
-        slot: SlotsIndex,
-        primaryText: string,
-        fallbackText?: string,
-    ): string {
-        if (primaryText.length <= StandardQSOPluginRuntime.MAX_FT8_MESSAGE_CHARS) {
-            return primaryText;
-        }
-
-        if (fallbackText) {
-            if (fallbackText.length <= StandardQSOPluginRuntime.MAX_FT8_MESSAGE_CHARS) {
-                this.logger.warn(`slot ${slot} message too long, using fallback`, {
-                    targetCallsign: this.context.targetCallsign,
-                    primaryText,
-                    fallbackText,
-                });
-                return fallbackText;
-            }
-        }
-
-        this.logger.warn(`slot ${slot} message too long, suppressing transmission`, {
-            targetCallsign: this.context.targetCallsign,
-            primaryText,
-        });
-        return '';
-    }
-
-    private generateBoundedMessage(
-        slot: SlotsIndex,
-        primary: Parameters<typeof FT8MessageParser.generateMessage>[0],
-        fallback?: Parameters<typeof FT8MessageParser.generateMessage>[0],
-    ): string {
-        return this.getBoundedSlotText(
-            slot,
-            FT8MessageParser.generateMessage(primary),
-            fallback ? FT8MessageParser.generateMessage(fallback) : undefined,
-        );
-    }
-
     private updateTargetSlotsForSpecialCallsign(targetCallsign: string): void {
         const report = this.context.reportSent || 0;
         const wrappedTarget = `<${targetCallsign}>`;
@@ -1570,15 +1529,11 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             report,
         } as const;
 
-        this.slots.TX1 = this.generateBoundedMessage('TX1', signalReport);
-        this.slots.TX2 = this.generateBoundedMessage('TX2', signalReport);
-        this.slots.TX3 = this.getBoundedSlotText(
-            'TX3',
-            `${wrappedTarget} ${myCallsign} R${reportText}`,
-            `${wrappedTarget} ${myCallsign} RRR`,
-        );
-        this.slots.TX4 = this.getBoundedSlotText('TX4', `${wrappedTarget} ${myCallsign} RRR`);
-        this.slots.TX5 = this.getBoundedSlotText('TX5', `${wrappedTarget} ${myCallsign} 73`);
+        this.slots.TX1 = FT8MessageParser.generateMessage(signalReport);
+        this.slots.TX2 = FT8MessageParser.generateMessage(signalReport);
+        this.slots.TX3 = `${wrappedTarget} ${myCallsign} R${reportText}`;
+        this.slots.TX4 = `${wrappedTarget} ${myCallsign} RR73`;
+        this.slots.TX5 = `${wrappedTarget} ${myCallsign} 73`;
     }
     
     updateSlots() {
