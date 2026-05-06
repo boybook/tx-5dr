@@ -64,6 +64,14 @@ interface DesktopUpdateStatus {
 }
 
 type StartupLogSourceId = 'electron-main' | 'server' | 'client-tools';
+type StartupErrorKind =
+  | 'server_timeout'
+  | 'web_timeout'
+  | 'port_conflict'
+  | 'native_module'
+  | 'child_crash'
+  | 'child_start_failed'
+  | 'unknown';
 
 interface StartupLogLine {
   id: number;
@@ -85,6 +93,15 @@ interface StartupLogsPayload {
   snapshot: boolean;
   sources: StartupLogSourceStatus[];
   lines: StartupLogLine[];
+  startupError: StartupErrorPayload | null;
+}
+
+interface StartupErrorPayload {
+  kind: StartupErrorKind;
+  title: string;
+  message: string;
+  detail?: string;
+  processName?: string;
 }
 
 interface ElectronAPI {
@@ -112,6 +129,7 @@ interface ElectronAPI {
     openDownload(url?: string): Promise<void>;
   };
   startupLogs?: {
+    openFolder(): Promise<void>;
     subscribe(callback: (payload: StartupLogsPayload) => void): Promise<() => Promise<void>>;
   };
   window?: {

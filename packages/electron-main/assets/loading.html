@@ -52,10 +52,107 @@
     text-align: center;
   }
 
+  .startup-error {
+    position: relative;
+    display: none;
+    width: min(560px, 100%);
+    padding: 14px 16px;
+    overflow: hidden;
+    border-radius: 10px;
+    background: rgba(220, 38, 38, 0.075);
+    color: #991b1b;
+    text-align: left;
+    -webkit-app-region: no-drag;
+  }
+
+  .startup-mark.has-error .spinner,
+  .startup-mark.has-error .text {
+    display: none;
+  }
+
+  .startup-mark.has-error .startup-error {
+    display: block;
+  }
+
+  .startup-error-icon {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 76px;
+    height: 76px;
+    color: #dc2626;
+    opacity: 0.13;
+    pointer-events: none;
+  }
+
+  .startup-error-title {
+    position: relative;
+    font-size: 15px;
+    line-height: 1.35;
+    font-weight: 600;
+    padding-right: 72px;
+  }
+
+  .startup-error-message {
+    position: relative;
+    margin-top: 6px;
+    padding-right: 72px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: rgba(153, 27, 27, 0.78);
+  }
+
+  .startup-error-detail {
+    margin-top: 8px;
+    font-size: 11px;
+    line-height: 1.45;
+    color: rgba(153, 27, 27, 0.64);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .startup-error-detail:empty {
+    display: none;
+  }
+
+  .log-wrap {
+    position: relative;
+    width: 100%;
+  }
+
+  .open-logs-button {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 1;
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: rgba(17, 24, 39, 0.06);
+    color: rgba(55, 65, 81, 0.58);
+    cursor: default;
+    -webkit-app-region: no-drag;
+  }
+
+  .open-logs-button svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .open-logs-button:hover {
+    background: rgba(17, 24, 39, 0.09);
+    color: rgba(55, 65, 81, 0.72);
+  }
+
   .log-card {
     width: 100%;
     height: min(42vh, 320px);
-    padding: 10px 12px;
+    padding: 28px 12px 10px;
     overflow: auto;
     border: 0;
     border-radius: 8px;
@@ -78,6 +175,19 @@
     font-size: 11px;
   }
 
+  .log-line {
+    display: block;
+    min-height: 1.4em;
+  }
+
+  .log-line.child-lifecycle {
+    margin: 0 -4px;
+    padding: 0 4px;
+    border-radius: 4px;
+    background: rgba(220, 38, 38, 0.07);
+    color: rgba(153, 27, 27, 0.78);
+  }
+
   @media (prefers-color-scheme: dark) {
     body {
       background: #000000;
@@ -89,13 +199,46 @@
       border-top-color: #3b82f6;
     }
 
+    .startup-error {
+      background: rgba(248, 113, 113, 0.11);
+      color: #fca5a5;
+    }
+
+    .startup-error-icon {
+      color: #f87171;
+      opacity: 0.14;
+    }
+
+    .startup-error-message {
+      color: rgba(254, 202, 202, 0.8);
+    }
+
+    .startup-error-detail {
+      color: rgba(254, 202, 202, 0.62);
+    }
+
     .log-card {
       background: rgba(255, 255, 255, 0.055);
       color: rgba(212, 212, 216, 0.66);
     }
 
+    .open-logs-button {
+      background: rgba(255, 255, 255, 0.075);
+      color: rgba(212, 212, 216, 0.54);
+    }
+
+    .open-logs-button:hover {
+      background: rgba(255, 255, 255, 0.11);
+      color: rgba(212, 212, 216, 0.72);
+    }
+
     .log-card.empty {
       color: #71717a;
+    }
+
+    .log-line.child-lifecycle {
+      background: rgba(248, 113, 113, 0.1);
+      color: rgba(254, 202, 202, 0.82);
     }
   }
 
@@ -121,8 +264,25 @@
     <div class="startup-mark">
       <div class="spinner"></div>
       <div class="text" id="loading-text">Starting...</div>
+      <div class="startup-error" id="startup-error" role="alert">
+        <svg class="startup-error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 3 2.8 19h18.4L12 3z"></path>
+          <path d="M12 9v4"></path>
+          <path d="M12 17h.01"></path>
+        </svg>
+        <div class="startup-error-title" id="startup-error-title"></div>
+        <div class="startup-error-message" id="startup-error-message"></div>
+        <div class="startup-error-detail" id="startup-error-detail"></div>
+      </div>
     </div>
-    <pre class="log-card empty" id="log-card">Waiting for log output...</pre>
+    <div class="log-wrap">
+      <button class="open-logs-button" id="open-logs-button" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h4l2 2h7A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"></path>
+        </svg>
+      </button>
+      <pre class="log-card empty" id="log-card">Waiting for log output...</pre>
+    </div>
   </div>
   <script>
     const zh = (navigator.language || '').toLowerCase().startsWith('zh');
@@ -130,16 +290,25 @@
       loading: zh ? '正在启动...' : 'Starting...',
       waiting: zh ? '等待日志输出...' : 'Waiting for log output...',
       unavailable: zh ? '日志接口不可用' : 'Startup log API unavailable',
+      openLogs: zh ? '打开日志目录' : 'Open log folder',
     };
     document.getElementById('loading-text').textContent = text.loading;
 
+    const startupMark = document.querySelector('.startup-mark');
+    const startupErrorTitle = document.getElementById('startup-error-title');
+    const startupErrorMessage = document.getElementById('startup-error-message');
+    const startupErrorDetail = document.getElementById('startup-error-detail');
     const logCard = document.getElementById('log-card');
+    const openLogsButton = document.getElementById('open-logs-button');
+    openLogsButton.setAttribute('aria-label', text.openLogs);
+    openLogsButton.setAttribute('title', text.openLogs);
     const MAX_RENDERED_LINES = 300;
     let lines = [];
     let unsubscribe = null;
 
     function renderLines() {
       const shouldStick = logCard.scrollHeight - logCard.scrollTop - logCard.clientHeight < 32;
+      logCard.textContent = '';
       if (lines.length === 0) {
         logCard.classList.add('empty');
         logCard.textContent = text.waiting;
@@ -147,14 +316,40 @@
       }
 
       logCard.classList.remove('empty');
-      logCard.textContent = lines.map(line => line.text).join('\n');
+      for (const line of lines) {
+        const node = document.createElement('span');
+        node.className = isChildLifecycleLine(line.text) ? 'log-line child-lifecycle' : 'log-line';
+        node.textContent = line.text;
+        logCard.appendChild(node);
+      }
 
       if (shouldStick) {
         logCard.scrollTop = logCard.scrollHeight;
       }
     }
 
+    function isChildLifecycleLine(value) {
+      return /\[child:[^\]]+\].*(starting|started|stopping|stopped|exited|signal=|code=|failed to start|node binary not found|entry not found|stop timeout|force kill)/i.test(value);
+    }
+
+    function renderStartupError(error) {
+      if (!error) {
+        startupMark.classList.remove('has-error');
+        startupErrorTitle.textContent = '';
+        startupErrorMessage.textContent = '';
+        startupErrorDetail.textContent = '';
+        return;
+      }
+
+      startupMark.classList.add('has-error');
+      startupErrorTitle.textContent = error.title || '';
+      startupErrorMessage.textContent = error.message || '';
+      startupErrorDetail.textContent = error.detail || '';
+    }
+
     function applyPayload(payload) {
+      renderStartupError(payload.startupError);
+
       if (payload.snapshot) {
         lines = payload.lines || [];
       } else if (payload.lines && payload.lines.length > 0) {
@@ -188,6 +383,20 @@
       if (unsubscribe) {
         void unsubscribe();
         unsubscribe = null;
+      }
+    });
+
+    openLogsButton.addEventListener('click', async () => {
+      const api = window.electronAPI && window.electronAPI.startupLogs;
+      if (!api || typeof api.openFolder !== 'function') {
+        console.warn('Startup log folder API unavailable');
+        return;
+      }
+
+      try {
+        await api.openFolder();
+      } catch (error) {
+        console.warn('Failed to open startup log folder', error);
       }
     });
 

@@ -35,6 +35,7 @@ const DEFAULT_PORT_SCAN_STEPS = 50;
 const DEV_FRONTEND_READY_TIMEOUT_MS = 60_000;
 const DEV_BACKEND_READY_TIMEOUT_MS = 60_000;
 const DEV_PROCESS_MEMORY_LOG_INTERVAL_MS = 30_000;
+const FORCE_STARTUP_ERROR_CARD_TEST = false;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let serverCheckInterval: any = null;
@@ -78,6 +79,14 @@ interface ChildShutdownResult {
 }
 
 type StartupLogSourceId = 'electron-main' | 'server' | 'client-tools';
+type StartupErrorKind =
+  | 'server_timeout'
+  | 'web_timeout'
+  | 'port_conflict'
+  | 'native_module'
+  | 'child_crash'
+  | 'child_start_failed'
+  | 'unknown';
 
 interface StartupLogSourceSpec {
   id: StartupLogSourceId;
@@ -105,6 +114,22 @@ interface StartupLogsPayload {
   snapshot: boolean;
   sources: StartupLogSourceStatus[];
   lines: StartupLogLine[];
+  startupError: StartupErrorPayload | null;
+}
+
+interface StartupErrorPayload {
+  kind: StartupErrorKind;
+  title: string;
+  message: string;
+  detail?: string;
+  processName?: string;
+}
+
+interface StartupErrorOptions {
+  processName?: string;
+  detail?: string | null;
+  error?: unknown;
+  errorType?: string;
 }
 
 interface StartupLogFileState {
@@ -133,6 +158,7 @@ const STARTUP_LOG_MAX_READ_BYTES = 256 * 1024;
 const startupLogSubscribers = new Map<number, WebContents>();
 let startupLogFileStates: StartupLogFileState[] | null = null;
 let startupLogLines: StartupLogLine[] = [];
+let startupErrorState: StartupErrorPayload | null = null;
 
 // ===== Electron 本地设置 =====
 const ELECTRON_SETTINGS_FILE = 'electron-settings.json';
@@ -991,6 +1017,7 @@ function createStartupLogsPayload(snapshot: boolean, lines?: StartupLogLine[]): 
       error: state.error,
     })),
     lines: lines ?? startupLogLines,
+    startupError: startupErrorState,
   };
 }
 
@@ -1282,7 +1309,7 @@ function killProcess(
       return;
     }
 
-    logger.info(`stopping child process: ${name} (PID: ${proc.pid})`);
+    logger.info(`[child:${name}] stopping pid=${proc.pid ?? 'unknown'} signal=SIGTERM`);
     intentionalChildShutdowns.add(proc);
 
     let forced = false;
@@ -1311,7 +1338,7 @@ function killProcess(
     };
 
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      logger.info(`child process ${name} exited (code: ${code}, signal: ${signal})`);
+      logger.info(`[child:${name}] stopped pid=${proc.pid ?? 'unknown'} code=${code ?? 'null'} signal=${signal ?? 'null'}`);
       finish();
     };
 
@@ -1322,12 +1349,12 @@ function killProcess(
       }
 
       forced = true;
-      logger.warn(`child process ${name} exceeded soft timeout, force killing`);
+      logger.warn(`[child:${name}] stop timeout pid=${proc.pid ?? 'unknown'} forceSignal=SIGKILL`);
       forceKillChild(proc, name);
 
       forceTimer = setTimeout(() => {
         if (!hasChildExited(proc)) {
-          logger.warn(`child process ${name} did not exit after force kill request`);
+          logger.warn(`[child:${name}] did not exit after force kill pid=${proc.pid ?? 'unknown'}`);
         }
         finish();
       }, forceTimeoutMs);
@@ -1385,32 +1412,105 @@ function buildLogPathsHint(name: string): string {
   return `Log files:\n  - ${logPath}\n  - ${serverLogPath}\n  - ${clientToolsLogPath}`;
 }
 
-async function showWindowsServerStartupCrashDialog(detail: string): Promise<void> {
+function legacyStartupErrorType(kind: StartupErrorKind): string {
+  switch (kind) {
+    case 'server_timeout':
+    case 'web_timeout':
+      return 'TIMEOUT';
+    case 'port_conflict':
+      return 'PORT_CONFLICT';
+    case 'native_module':
+      return 'NATIVE_MODULE';
+    case 'child_crash':
+      return 'CRASH';
+    case 'child_start_failed':
+      return 'START_FAILED';
+    case 'unknown':
+    default:
+      return 'UNKNOWN';
+  }
+}
+
+function sanitizeStartupErrorDetail(value: string): string {
+  const knownPaths = [
+    getAppLogsDir(),
+    getServerReadyPath(),
+    getClientToolsReadyPath(),
+    log.transports.file.getFile().path,
+  ];
+  let result = value;
+  for (const knownPath of knownPaths) {
+    if (knownPath) {
+      result = result.split(knownPath).join('[path omitted]');
+    }
+  }
+  return result
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .join('\n')
+    .trim();
+}
+
+function hasLoadingErrorSurface(): boolean {
+  if (mainWindowInstance && !mainWindowInstance.isDestroyed() && !mainAppReadyForWindow) {
+    return true;
+  }
+
+  for (const [id, contents] of startupLogSubscribers) {
+    if (contents.isDestroyed()) {
+      startupLogSubscribers.delete(id);
+      continue;
+    }
+    return true;
+  }
+
+  return false;
+}
+
+function showStartupError(kind: StartupErrorKind, options: StartupErrorOptions = {}): void {
   if (startupErrorDialogShown) {
     return;
   }
-  startupErrorDialogShown = true;
 
-  const msgs = getMessages(app.getLocale());
-  const dialogMsgs = msgs.serverStartupCrash;
-  const downloadPageUrl = getLocalizedVCRuntimeDownloadPageUrl();
-  const response = await dialog.showMessageBox({
-    type: 'error',
-    title: dialogMsgs.title,
-    message: dialogMsgs.message,
-    detail: `${dialogMsgs.runtimeHint}\n\n${detail}\n\n${downloadPageUrl}`,
-    buttons: dialogMsgs.buttons,
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
+  startupErrorDialogShown = true;
+  hasStartupError = true;
+  errorType = options.errorType || legacyStartupErrorType(kind);
+  if (options.processName && !crashedProcessName) {
+    crashedProcessName = options.processName;
+  }
+
+  const msgs = getMessages(app.getLocale()).startupErrors;
+  const template = msgs[kind];
+  const detailParts = [
+    template.detail,
+    options.detail ? sanitizeStartupErrorDetail(options.detail) : null,
+    msgs.logHint,
+  ].filter((part): part is string => Boolean(part));
+
+  startupErrorState = {
+    kind,
+    title: template.title,
+    message: template.message,
+    detail: detailParts.join('\n'),
+    processName: options.processName,
+  };
+
+  logger.error('startup error state updated', {
+    kind,
+    processName: options.processName ?? null,
+    errorType,
+    detail: startupErrorState.detail,
+    error: options.error,
   });
 
-  if (response.response === 0) {
-    try {
-      await shell.openExternal(downloadPageUrl);
-    } catch (error) {
-      logger.error('failed to open VC runtime download page', error);
-    }
+  broadcastStartupLogPayload(createStartupLogsPayload(false, []));
+
+  if (!hasLoadingErrorSurface()) {
+    dialog.showErrorBox(
+      startupErrorState.title,
+      `${startupErrorState.message}\n\n${startupErrorState.detail ?? ''}`,
+    );
   }
 }
 
@@ -1434,7 +1534,7 @@ function wireChildProcess(name: string, child: import('node:child_process').Chil
   });
 
   child.on('exit', (code, signal) => {
-    logger.info(`[child:${name}] exited with code ${code}, signal ${signal}`);
+    logger.info(`[child:${name}] exited pid=${child.pid ?? 'unknown'} code=${code ?? 'null'} signal=${signal ?? 'null'}`);
 
     if (isQuitting) return;
 
@@ -1456,8 +1556,13 @@ function wireChildProcess(name: string, child: import('node:child_process').Chil
         ? `\n\nRecent stderr:\n${recentStderr.join('\n')}`
         : '';
       const detail = `${name} process ${reason}\n\n${buildLogPathsHint(name)}${stderrHint}`;
-      if (process.platform === 'win32' && name === 'server' && !mainAppReadyForWindow) {
-        void showWindowsServerStartupCrashDialog(detail);
+      if (!mainAppReadyForWindow) {
+        showStartupError('child_crash', {
+          processName: name,
+          detail: recentStderr.length > 0
+            ? `${name} process ${reason}. Recent stderr: ${recentStderr.slice(-3).join(' | ')}`
+            : `${name} process ${reason}.`,
+        });
         return;
       }
       dialog.showErrorBox('TX-5DR - Startup Failed',
@@ -1471,6 +1576,14 @@ function wireChildProcess(name: string, child: import('node:child_process').Chil
       crashedProcessName = name;
     }
     hasStartupError = true;
+    if (!mainAppReadyForWindow) {
+      showStartupError('child_start_failed', {
+        processName: name,
+        detail: err.message,
+        error: err,
+      });
+      return;
+    }
     dialog.showErrorBox('TX-5DR - Startup Failed',
       `${name} process failed to start: ${err.message}\n\n${buildLogPathsHint(name)}`);
   });
@@ -1485,11 +1598,13 @@ function runChild(name: string, entryAbs: string, extraEnv: Record<string, strin
     logger.error(`[child:${name}] entry not found: ${entryAbs}`);
   }
 
+  logger.info(`[child:${name}] starting entry=${entryAbs} cwd=${path.dirname(entryAbs)} node=${NODE}`);
   const child = spawn(NODE, [entryAbs], {
     cwd: path.dirname(entryAbs),
     env: createChildEnv(extraEnv),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  logger.info(`[child:${name}] started pid=${child.pid ?? 'unknown'}`);
   wireChildProcess(name, child);
   return child;
 }
@@ -2564,11 +2679,20 @@ async function createWindow() {
   hasStartupError = false;
   errorType = '';
   startupErrorDialogShown = false;
+  startupErrorState = null;
 
   const isDevelopment = process.env.NODE_ENV === 'development' && !app.isPackaged;
+  const startupErrorMsgs = getMessages(app.getLocale()).startupErrors;
   logger.info(`isDevelopment: ${isDevelopment}`);
 
   const startupWindow = await createMainWindowOnly();
+  if (FORCE_STARTUP_ERROR_CARD_TEST) {
+    logger.warn('forcing startup error card for loading page test');
+    showStartupError('unknown', {
+      detail: startupErrorMsgs.testHint,
+    });
+    return startupWindow;
+  }
 
   // Admin Token 将从 Server 生成的 .admin-token 文件中读取
   // 在 server 就绪后轮询获取
@@ -2591,21 +2715,20 @@ async function createWindow() {
       serverReady = await waitForServerReady(DEV_BACKEND_READY_TIMEOUT_MS, 300);
     } catch (error) {
       logger.error('cannot confirm backend server readiness', error);
-      errorType = 'TIMEOUT';
-      hasStartupError = true;
-      dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Cannot confirm backend server readiness\n\n${error instanceof Error ? `${error.message}\n\n` : ''}` +
-        `Ready file: ${getServerReadyPath()}\n` +
-        `Please run yarn dev:electron so the backend can publish its negotiated port.\n\n${buildLogPathsHint('server')}`);
+      showStartupError('server_timeout', {
+        processName: 'server',
+        detail: startupErrorMsgs.devBackendHint,
+        error,
+      });
       return;
     }
 
     if (!isValidPort(serverReady.httpPort)) {
       logger.error('backend server ready file did not include a valid port', serverReady);
-      errorType = 'TIMEOUT';
-      hasStartupError = true;
-      dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Backend server ready file did not include a valid port\n\nReady file: ${getServerReadyPath()}\n\n${buildLogPathsHint('server')}`);
+      showStartupError('server_timeout', {
+        processName: 'server',
+        detail: startupErrorMsgs.devBackendHint,
+      });
       return;
     }
 
@@ -2624,10 +2747,10 @@ async function createWindow() {
 
     if (!webReady) {
       logger.error(`cannot connect to frontend server (${devWebUrl})`);
-      errorType = 'TIMEOUT';
-      hasStartupError = true;
-      dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Cannot connect to dev server (${devWebUrl})\nPlease run yarn dev or yarn dev:electron\n\n${buildLogPathsHint('client-tools')}`);
+      showStartupError('web_timeout', {
+        processName: 'client-tools',
+        detail: startupErrorMsgs.devFrontendHint,
+      });
       return;
     }
 
@@ -2637,10 +2760,10 @@ async function createWindow() {
       selectedWebPort = await findFreePort(devWebPort + 1, DEFAULT_PORT_SCAN_STEPS, selectedServerPort, '0.0.0.0', { fallbackToRandom: false });
     } catch (error) {
       logger.error('development browser gateway port range exhausted', error);
-      errorType = 'PORT_CONFLICT';
-      hasStartupError = true;
-      dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Development browser gateway port range exhausted\n\n${error instanceof Error ? `${error.message}\n\n` : ''}${buildLogPathsHint('client-tools')}`);
+      showStartupError('port_conflict', {
+        processName: 'client-tools',
+        error,
+      });
       return;
     }
 
@@ -2660,10 +2783,10 @@ async function createWindow() {
         webProcess = null;
       }
       logger.error('development browser gateway startup timeout', error);
-      errorType = 'TIMEOUT';
-      hasStartupError = true;
-      dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Development browser gateway startup timeout\n\n${error instanceof Error ? `${error.message}\n\n` : ''}${buildLogPathsHint('client-tools')}`);
+      showStartupError('web_timeout', {
+        processName: 'client-tools',
+        error,
+      });
       return;
     }
   } else {
@@ -2681,15 +2804,10 @@ async function createWindow() {
       webPort = await findFreePort(DEFAULT_WEB_HTTP_PORT, DEFAULT_PORT_SCAN_STEPS, serverPort, '0.0.0.0', { fallbackToRandom: false });
     } catch (error) {
       logger.error('web gateway port range exhausted', error);
-      errorType = 'PORT_CONFLICT';
-      crashedProcessName = 'client-tools';
-      hasStartupError = true;
-      dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Web gateway port range exhausted
-
-${error instanceof Error ? `${error.message}
-
-` : ''}${buildLogPathsHint('client-tools')}`);
+      showStartupError('port_conflict', {
+        processName: 'client-tools',
+        error,
+      });
       return;
     }
     selectedServerPort = serverPort;
@@ -2738,15 +2856,10 @@ Successfully loaded: ${okModules.join(', ')}`
 Failed to load: ${failedModules.map(m => m.name).join(', ')}`
           : '';
 
-        hasStartupError = true;
-        errorType = 'NATIVE_MODULE';
-        dialog.showErrorBox('TX-5DR - Startup Failed',
-          `Native module compatibility check failed.
-${detail}${okHint}${failHint}
-
-        ` +
-          'This usually means the native binary is incompatible with the current system.\n\n' +
-          buildLogPathsHint('server'));
+        showStartupError('native_module', {
+          processName: 'server',
+          detail: `${detail}${okHint}${failHint}`,
+        });
         return;
       }
     }
@@ -2773,38 +2886,19 @@ ${detail}${okHint}${failHint}
       serverReady = await waitForServerReady(15000, 200, serverLaunchStartedAt);
     } catch (error) {
       logger.error('backend server startup timeout', error);
-      errorType = 'TIMEOUT';
-      crashedProcessName = crashedProcessName || 'server';
-      hasStartupError = true;
-      if (startupErrorDialogShown) {
-        return;
-      }
-      startupErrorDialogShown = true;
-      dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Backend server startup timeout
-
-` +
-        `Requested backend port: ${serverPort}
-` +
-        `Ready file: ${getServerReadyPath()}
-` +
-        `rtc-data-audio UDP port: ${process.env.RTC_DATA_AUDIO_UDP_PORT || '50110'}
-` +
-        `${error instanceof Error ? `${error.message}\n` : ''}` +
-        `${buildLogPathsHint('server')}
-
-` +
-        'Please inspect the backend logs. If node-datachannel is unavailable, realtime audio can still fall back to ws-compat.');
+      showStartupError('server_timeout', {
+        processName: 'server',
+        detail: `Requested backend port: ${serverPort}. rtc-data-audio UDP port: ${process.env.RTC_DATA_AUDIO_UDP_PORT || '50110'}. ${startupErrorMsgs.realtimeFallbackHint}`,
+        error,
+      });
       return;
     }
 
     if (!isValidPort(serverReady.httpPort)) {
       logger.error('backend server ready file did not include a valid port', serverReady);
-      errorType = 'TIMEOUT';
-      crashedProcessName = crashedProcessName || 'server';
-      hasStartupError = true;
-      dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Backend server ready file did not include a valid port\n\nReady file: ${getServerReadyPath()}\n\n${buildLogPathsHint('server')}`);
+      showStartupError('server_timeout', {
+        processName: 'server',
+      });
       return;
     }
 
@@ -2827,15 +2921,10 @@ ${detail}${okHint}${failHint}
         webProcess = null;
       }
       logger.error('web service startup timeout');
-      errorType = 'TIMEOUT';
-      crashedProcessName = crashedProcessName || 'client-tools';
-      hasStartupError = true;
-      dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Web service startup timeout
-
-${error instanceof Error ? `${error.message}
-
-` : ''}${buildLogPathsHint('client-tools')}`);
+      showStartupError('web_timeout', {
+        processName: 'client-tools',
+        error,
+      });
       return;
     }
     logger.info('web service ready');
@@ -2847,10 +2936,10 @@ ${error instanceof Error ? `${error.message}
     if (startupErrorDialogShown) {
       return;
     }
-    startupErrorDialogShown = true;
-    const processHint = crashedProcessName ? ` [${crashedProcessName}]` : '';
-    dialog.showErrorBox('TX-5DR - Startup Failed',
-      `Error detected during startup (${errorType}${processHint})\n\n${buildLogPathsHint(crashedProcessName || 'server')}`);
+    showStartupError('unknown', {
+      processName: crashedProcessName || undefined,
+      detail: errorType ? `Error type: ${errorType}` : null,
+    });
     return;
   }
 
@@ -3246,6 +3335,24 @@ function setupIpcHandlers() {
 
   ipcMain.handle('startupLogs:unsubscribe', (event) => {
     removeStartupLogSubscriber(event.sender.id);
+  });
+
+  ipcMain.handle('startupLogs:openFolder', async () => {
+    const logsDir = getAppLogsDir();
+    logger.info(`IPC startupLogs:openFolder: ${logsDir}`);
+
+    try {
+      fs.mkdirSync(logsDir, { recursive: true });
+      const result = await shell.openPath(logsDir);
+      if (result) {
+        logger.error(`IPC startupLogs:openFolder failed: ${result}`);
+        throw new Error(result);
+      }
+      logger.info('IPC startupLogs:openFolder success');
+    } catch (error) {
+      logger.error('IPC startupLogs:openFolder failed', error);
+      throw error;
+    }
   });
 
   ipcMain.handle('updater:getStatus', () => {
