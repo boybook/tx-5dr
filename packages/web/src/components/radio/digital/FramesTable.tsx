@@ -21,6 +21,8 @@ export interface FrameDisplayMessage {
   dt: number | '-';
   freq: number;
   message: string;
+  operatorId?: string;
+  emphasisCallsigns?: string[];
   country?: string;
   countryZh?: string;
   countryEn?: string;
@@ -52,6 +54,7 @@ export interface FrameGroup {
   messages: FrameDisplayMessage[];
   type: 'receive' | 'transmit';
   cycle: 'even' | 'odd'; // 偶数或奇数周期
+  headerContextKey?: string;
   frequencyContext?: {
     frequency?: number;
     band?: string;
@@ -180,10 +183,19 @@ const MessageRow = React.memo<MessageRowProps>(({
   getHighestPriorityHighlight, getHighlightColor,
   onDoubleClick, onMouseEnter, onMouseLeave,
 }) => {
-  const hasMyCallsign = message.db !== 'TX' && containsMyCallsign(message.message, myCallsigns);
+  const emphasisCallsigns = useMemo(
+    () => Array.from(new Set([...(myCallsigns ?? []), ...(message.emphasisCallsigns ?? [])])),
+    [message.emphasisCallsigns, myCallsigns],
+  );
+  const hasMyCallsign = containsMyCallsign(message.message, emphasisCallsigns);
   const isWorkedCallsign = showLogbookAnalysisVisuals && message.logbookAnalysis?.isNewCallsign === false;
   const isTarget = isTargetRelated(message, targetCallsign);
   const showChips = showLogbookAnalysisVisuals && message.db !== 'TX' && message.logbookAnalysis && isSpecialMessageType(message.message);
+  const messageTextStyle = useMemo(() => (
+    message.db === 'TX' && hasMyCallsign
+      ? { color: 'var(--ft8-tx-emphasis-text)' }
+      : undefined
+  ), [hasMyCallsign, message.db]);
 
   // Hover style
   const hoverStyle = useMemo(() => {
@@ -203,7 +215,7 @@ const MessageRow = React.memo<MessageRowProps>(({
 
   // Logbook analysis background style
   const logbookStyle = useMemo(() => {
-    if (!showLogbookAnalysisVisuals || group.type === 'transmit' || message.db === 'TX' || !message.logbookAnalysis || !isSpecialMessageType(message.message)) {
+    if (!showLogbookAnalysisVisuals || message.db === 'TX' || !message.logbookAnalysis || !isSpecialMessageType(message.message)) {
       return {};
     }
     const ht = getHighestPriorityHighlight(message.logbookAnalysis);
@@ -211,15 +223,15 @@ const MessageRow = React.memo<MessageRowProps>(({
     const color = getHighlightColor(ht);
     const opacity = group.cycle === 'even' ? 0.15 : 0.2;
     return { backgroundColor: hexToRgba(color, opacity) } as React.CSSProperties;
-  }, [showLogbookAnalysisVisuals, group.type, group.cycle, message.db, message.logbookAnalysis, message.message, getHighestPriorityHighlight, getHighlightColor]);
+  }, [showLogbookAnalysisVisuals, group.cycle, message.db, message.logbookAnalysis, message.message, getHighestPriorityHighlight, getHighlightColor]);
 
   // Right border color
   const rightBorderColor = useMemo(() => {
-    if (group.type === 'transmit' || message.db === 'TX' || !message.logbookAnalysis) return null;
+    if (message.db === 'TX' || !message.logbookAnalysis) return null;
     const ht = getHighestPriorityHighlight(message.logbookAnalysis);
     if (!ht) return null;
     return getHighlightColor(ht);
-  }, [group.type, message.db, message.logbookAnalysis, getHighestPriorityHighlight, getHighlightColor]);
+  }, [message.db, message.logbookAnalysis, getHighestPriorityHighlight, getHighlightColor]);
 
   const formattedUtc = isNarrow ? message.utc.replace(/:/g, '') : message.utc;
 
@@ -335,7 +347,10 @@ const MessageRow = React.memo<MessageRowProps>(({
               }}
             />
           )}
-          <span className={`${hasMyCallsign ? 'text-danger font-semibold' : ''} ${isWorkedCallsign ? 'line-through opacity-70' : ''}`}>
+          <span
+            className={`${hasMyCallsign ? 'font-semibold' : ''} ${message.db !== 'TX' && hasMyCallsign ? 'text-danger' : ''} ${isWorkedCallsign ? 'line-through opacity-70' : ''}`}
+            style={messageTextStyle}
+          >
             {message.message}
           </span>
           {chipNode}

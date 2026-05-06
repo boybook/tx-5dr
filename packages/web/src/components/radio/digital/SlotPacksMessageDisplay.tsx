@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { FramesTable, FrameGroup, FrameDisplayMessage } from './FramesTable';
 import { parseFT8LocationInfo, FT8MessageParser, evaluateCallsignFilter, getBandFromFrequency, CycleUtils } from '@tx5dr/core';
-import { useConnection, useCurrentOperatorId, useRadioState, useSlotPacks } from '../../../store/radioStore';
+import { useConnection, useCurrentOperatorId, useMyRelatedTimeline, useRadioState, useSlotPacks } from '../../../store/radioStore';
 import type { FrameMessage, WSSelectedFrame } from '@tx5dr/contracts';
 import { useSplitLayoutActions } from '../../common/SplitLayout';
 import { useTranslation } from 'react-i18next';
@@ -17,6 +17,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
   const connection = useConnection();
   const radio = useRadioState();
   const slotPacks = useSlotPacks();
+  const myRelatedTimeline = useMyRelatedTimeline();
   const [frameGroups, setFrameGroups] = useState<FrameGroup[]>([]);
   const {currentOperatorId} = useCurrentOperatorId();
   const splitLayoutActions = useSplitLayoutActions();
@@ -167,6 +168,11 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
   const handleRowDoubleClick = (message: FrameDisplayMessage, _group: FrameGroup) => {
     const callsign = message.logbookAnalysis?.callsign;
     if (currentOperatorId && callsign && !getMyCallsigns().includes(callsign)) {
+      myRelatedTimeline.seedSelectedRx({
+        targetCallsign: callsign,
+        message,
+        group: _group,
+      });
       if (connection.state.radioService) {
         connection.state.radioService.sendRequestCall(currentOperatorId, callsign, buildSelectedFrame(message, _group));
         // 在移动端双击后自动切换到"呼叫"tab

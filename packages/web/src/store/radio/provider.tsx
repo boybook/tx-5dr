@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 import type { ReactNode } from 'react';
-import type { SpectrumCapabilities } from '@tx5dr/contracts';
+import type { SpectrumCapabilities, SlotPackFrequencyContext } from '@tx5dr/contracts';
+import { getBandFromFrequency } from '@tx5dr/core';
 import { createLogger } from '../../utils/logger';
 import { getWebSocketClientInstanceId } from '../../utils/wsClientInstance';
 import { type RadioService, getOrCreateRadioService } from '../../services/radioService';
@@ -11,6 +12,7 @@ import {
   CapabilityStatesContext,
   ConnectionContext,
   LogbookContext,
+  MyRelatedTimelineContext,
   OperatorsContext,
   ProfilesContext,
   PTTContext,
@@ -33,16 +35,125 @@ import {
   radioReducer,
   slotPacksReducer,
 } from './reducers';
+import {
+  buildMyRelatedTimelineGroups,
+  initialMyRelatedTimelineState,
+  myRelatedTimelineReducer,
+  type MyRelatedTimelineActiveSession,
+  type MyRelatedTimelineOperatorContext,
+  type MyRelatedTransmissionLog,
+} from './myRelatedTimeline';
 import { getRadioServiceBootstrapAction } from './bootstrap';
 import { createSpectrumNegotiator } from './spectrumNegotiation';
+import type { FrameDisplayMessage, FrameGroup } from '../../components/radio/digital/FramesTable';
+import type { RadioState } from './types';
 
 const logger = createLogger('RadioStore');
+
+function buildFrequencyContext(
+  currentMode: string | null,
+  currentRadioMode: string | null,
+  currentRadioFrequency: number | null,
+): SlotPackFrequencyContext | undefined {
+  if (!currentRadioFrequency || currentRadioFrequency <= 0) {
+    return undefined;
+  }
+
+  const band = getBandFromFrequency(currentRadioFrequency);
+  return {
+    frequency: currentRadioFrequency,
+    ...(currentMode ? { mode: currentMode } : {}),
+    ...(currentRadioMode ? { radioMode: currentRadioMode } : {}),
+    ...(band && band !== 'Unknown' ? { band } : {}),
+    description: `${(currentRadioFrequency / 1_000_000).toFixed(3)} MHz`,
+  };
+}
+
+function buildOperatorTimelineContext(
+  radioState: RadioState,
+  operatorId: string | null,
+): MyRelatedTimelineOperatorContext | null {
+  if (!operatorId) {
+    return null;
+  }
+
+  const operator = radioState.operators.find(item => item.id === operatorId);
+  const myCallsign = operator?.context?.myCall?.trim() || '';
+  if (!myCallsign) {
+    return null;
+  }
+
+  const slotMs = radioState.currentMode?.slotMs;
+  const now = Date.now();
+  const startedAtMs = slotMs ? Math.floor(now / slotMs) * slotMs : now;
+  const frequencyContext = buildFrequencyContext(
+    radioState.currentMode?.name ?? null,
+    radioState.currentRadioMode,
+    radioState.currentRadioFrequency,
+  );
+
+  return {
+    operatorId,
+    myCallsign,
+    targetCallsign: operator?.context?.targetCall?.trim() || '',
+    headerContextKey: buildHeaderContextKey(frequencyContext),
+    frequencyContext,
+    startedAtMs,
+  };
+}
+
+function buildFrequencyKey(frequencyContext?: SlotPackFrequencyContext): string {
+  return frequencyContext
+    ? [
+        frequencyContext.frequency ?? '',
+        frequencyContext.band ?? '',
+        frequencyContext.mode ?? '',
+        frequencyContext.radioMode ?? '',
+      ].join(':')
+    : '';
+}
+
+function buildHeaderContextKey(frequencyContext?: SlotPackFrequencyContext): string {
+  return frequencyContext
+    ? [
+        frequencyContext.frequency ?? '',
+        frequencyContext.band ?? '',
+        frequencyContext.mode ?? '',
+      ].join(':')
+    : 'no-frequency';
+}
+
+function sessionMatchesContext(
+  session: MyRelatedTimelineActiveSession | null,
+  context: MyRelatedTimelineOperatorContext | null,
+): boolean {
+  if (!session || !context) {
+    return session === null && context === null;
+  }
+
+  return session.operatorId === context.operatorId &&
+    session.myCallsign === context.myCallsign &&
+    session.targetCallsign === context.targetCallsign &&
+    buildFrequencyKey(session.frequencyContext) === buildFrequencyKey(context.frequencyContext);
+}
+
+function buildOperatorCallsignsById(radioState: RadioState): Record<string, string> {
+  return Object.fromEntries(
+    radioState.operators
+      .map(operator => [operator.id, operator.context?.myCall?.trim() || ''])
+      .filter(([, myCallsign]) => myCallsign.length > 0),
+  );
+}
 
 export const RadioProvider = ({ children }: { children: ReactNode }) => {
   const [connectionState, connectionDispatch] = useReducer(connectionReducer, initialConnectionState);
   const [radioState, radioDispatch] = useReducer(radioReducer, initialRadioState);
   const [slotPacksState, slotPacksDispatch] = useReducer(slotPacksReducer, initialSlotPacksState);
   const [logbookState, logbookDispatch] = useReducer(logbookReducer, initialLogbookState);
+  const [myRelatedTimelineState, myRelatedTimelineDispatch] = useReducer(
+    myRelatedTimelineReducer,
+    initialMyRelatedTimelineState,
+  );
 
   const { state: authState } = useAuth();
   const authStateRef = useRef(authState);
@@ -56,6 +167,14 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
   const activeProfileIdRef = useRef<string | null>(radioState.activeProfileId);
   const spectrumAutoPriorityPendingRef = useRef(true);
   const connectionStateRef = useRef(connectionState);
+  const myRelatedTimelineStateRef = useRef(myRelatedTimelineState);
+  const previousTimelineContextRef = useRef<{
+    operatorId: string | null;
+    myCallsign: string;
+    targetCallsign: string;
+    frequencyKey: string;
+  } | null>(null);
+  const previousSlotSyncingRef = useRef(slotPacksState.isSyncing);
 
   useEffect(() => {
     connectionStateRef.current = connectionState;
@@ -66,6 +185,10 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
     radioStateRef.current = radioState;
     activeProfileIdRef.current = radioState.activeProfileId;
   }, [radioState]);
+
+  useEffect(() => {
+    myRelatedTimelineStateRef.current = myRelatedTimelineState;
+  }, [myRelatedTimelineState]);
 
   useEffect(() => {
     if (radioServiceRef.current) {
@@ -163,6 +286,55 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
 
   const clearRadioErrors = useCallback(() => {
     radioDispatch({ type: 'clearRadioErrors' });
+  }, []);
+
+  const clearMyRelatedTimeline = useCallback(() => {
+    myRelatedTimelineDispatch({
+      type: 'clearTimeline',
+      payload: {
+        nextContext: buildOperatorTimelineContext(radioStateRef.current, radioStateRef.current.currentOperatorId),
+      },
+    });
+  }, []);
+
+  const replaceMyRelatedSessionContext = useCallback((
+    nextContext: MyRelatedTimelineOperatorContext | null,
+    options?: { forceRestart?: boolean },
+  ) => {
+    myRelatedTimelineDispatch({
+      type: 'replaceSessionContext',
+      payload: {
+        nextContext,
+        forceRestart: options?.forceRestart,
+      },
+    });
+  }, []);
+
+  const seedSelectedRx = useCallback((payload: {
+    targetCallsign: string;
+    message: FrameDisplayMessage;
+    group: FrameGroup;
+  }) => {
+    const currentOperatorId = radioStateRef.current.currentOperatorId;
+    const context = buildOperatorTimelineContext(radioStateRef.current, currentOperatorId);
+    const currentMode = radioStateRef.current.currentMode;
+    if (!context || !currentMode) {
+      return;
+    }
+
+    myRelatedTimelineDispatch({
+      type: 'seedSelectedRx',
+      payload: {
+        context: {
+          ...context,
+          targetCallsign: payload.targetCallsign,
+        },
+        currentMode,
+        message: payload.message,
+        slotStartMs: payload.group.startMs,
+        frequencyContext: payload.group.frequencyContext ?? context.frequencyContext,
+      },
+    });
   }, []);
 
   const connectionContextValue = useMemo(
@@ -273,6 +445,169 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
     [radioState.capabilityStates],
   );
 
+  const myRelatedTimelineGroups = useMemo(
+    () => buildMyRelatedTimelineGroups(myRelatedTimelineState),
+    [myRelatedTimelineState],
+  );
+
+  const myRelatedTimelineContextValue = useMemo(
+    () => ({
+      groups: myRelatedTimelineGroups,
+      clearTimeline: clearMyRelatedTimeline,
+      seedSelectedRx,
+    }),
+    [myRelatedTimelineGroups, clearMyRelatedTimeline, seedSelectedRx],
+  );
+
+  useEffect(() => {
+    const radioService = connectionState.radioService;
+    if (!radioService) {
+      return;
+    }
+
+    const wsClient = radioService.wsClientInstance;
+    const handleTransmissionLog = (data: MyRelatedTransmissionLog) => {
+      const currentMode = radioStateRef.current.currentMode;
+      if (!currentMode) {
+        return;
+      }
+
+      const frequencyContext = data.frequencyContext ?? buildFrequencyContext(
+        radioStateRef.current.currentMode?.name ?? null,
+        radioStateRef.current.currentRadioMode,
+        radioStateRef.current.currentRadioFrequency,
+      );
+
+      myRelatedTimelineDispatch({
+        type: 'ingestTransmissionLog',
+        payload: {
+          log: {
+            ...data,
+            myCallsign: radioStateRef.current.operators.find(operator => operator.id === data.operatorId)?.context?.myCall?.trim() || undefined,
+            headerContextKey: buildHeaderContextKey(frequencyContext),
+            frequencyContext,
+          },
+          currentMode,
+        },
+      });
+    };
+
+    const handleQsoRecorded = (data: { operatorId: string }) => {
+      const activeSession = myRelatedTimelineStateRef.current.activeSession;
+      if (activeSession?.operatorId !== data.operatorId) {
+        return;
+      }
+      myRelatedTimelineDispatch({ type: 'freezeActiveSession' });
+    };
+
+    wsClient.onWSEvent('transmissionLog', handleTransmissionLog);
+    wsClient.onWSEvent('qsoRecordAdded', handleQsoRecorded as never);
+    wsClient.onWSEvent('qsoRecordUpdated', handleQsoRecorded as never);
+
+    return () => {
+      wsClient.offWSEvent('transmissionLog', handleTransmissionLog);
+      wsClient.offWSEvent('qsoRecordAdded', handleQsoRecorded as never);
+      wsClient.offWSEvent('qsoRecordUpdated', handleQsoRecorded as never);
+    };
+  }, [connectionState.radioService]);
+
+  useEffect(() => {
+    const previousSyncing = previousSlotSyncingRef.current;
+    const currentSyncing = slotPacksState.isSyncing;
+    previousSlotSyncingRef.current = currentSyncing;
+
+    if (!previousSyncing && currentSyncing) {
+      myRelatedTimelineDispatch({ type: 'beginRestore' });
+      return;
+    }
+
+    if (previousSyncing && !currentSyncing) {
+      const currentMode = radioState.currentMode;
+      if (!currentMode) {
+        return;
+      }
+
+      myRelatedTimelineDispatch({
+        type: 'finalizeRestore',
+        payload: {
+          slotPacks: slotPacksState.slotPacks,
+          currentMode,
+          context: buildOperatorTimelineContext(radioState, radioState.currentOperatorId),
+          operatorCallsignsById: buildOperatorCallsignsById(radioState),
+        },
+      });
+    }
+  }, [slotPacksState.isSyncing, slotPacksState.slotPacks, radioState]);
+
+  useEffect(() => {
+    if (slotPacksState.isSyncing || !radioState.currentMode) {
+      return;
+    }
+
+    for (const slotPack of slotPacksState.slotPacks) {
+      const processedSeq = myRelatedTimelineStateRef.current.lastProcessedSlotPackSeq.get(slotPack.slotId) ?? -1;
+      const incomingSeq = slotPack.stats?.updateSeq ?? 0;
+      if (incomingSeq <= processedSeq) {
+        continue;
+      }
+
+      myRelatedTimelineDispatch({
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack,
+          currentMode: radioState.currentMode,
+        },
+      });
+    }
+  }, [slotPacksState.slotPacks, slotPacksState.isSyncing, radioState.currentMode]);
+
+  useEffect(() => {
+    const currentContext = buildOperatorTimelineContext(radioState, radioState.currentOperatorId);
+    const frequencyKey = buildFrequencyKey(currentContext?.frequencyContext);
+
+    const nextSnapshot = {
+      operatorId: currentContext?.operatorId ?? null,
+      myCallsign: currentContext?.myCallsign ?? '',
+      targetCallsign: currentContext?.targetCallsign ?? '',
+      frequencyKey,
+    };
+    const previousSnapshot = previousTimelineContextRef.current;
+    previousTimelineContextRef.current = nextSnapshot;
+
+    if (!previousSnapshot) {
+      replaceMyRelatedSessionContext(currentContext, { forceRestart: false });
+      return;
+    }
+
+    const operatorChanged = previousSnapshot.operatorId !== nextSnapshot.operatorId;
+    const myCallChanged = previousSnapshot.myCallsign !== nextSnapshot.myCallsign;
+    const targetChanged = previousSnapshot.targetCallsign !== nextSnapshot.targetCallsign;
+    const frequencyChanged = previousSnapshot.frequencyKey !== nextSnapshot.frequencyKey;
+
+    if (!operatorChanged && !myCallChanged && !targetChanged && !frequencyChanged) {
+      return;
+    }
+
+    if (sessionMatchesContext(myRelatedTimelineStateRef.current.activeSession, currentContext)) {
+      return;
+    }
+
+    const activeSession = myRelatedTimelineStateRef.current.activeSession;
+    const isSessionTargetPromotion = !!(
+      activeSession &&
+      currentContext &&
+      activeSession.operatorId === currentContext.operatorId &&
+      activeSession.myCallsign === currentContext.myCallsign &&
+      !activeSession.targetCallsign.trim() &&
+      !!currentContext.targetCallsign.trim() &&
+      buildFrequencyKey(activeSession.frequencyContext) === buildFrequencyKey(currentContext.frequencyContext)
+    );
+
+    replaceMyRelatedSessionContext(currentContext, {
+      forceRestart: !isSessionTargetPromotion,
+    });
+  }, [radioState, replaceMyRelatedSessionContext]);
+
   return (
     <ConnectionContext.Provider value={connectionContextValue}>
       <RadioStateContext.Provider value={radioStateContextValue}>
@@ -287,9 +622,11 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
                         <RadioErrorsContext.Provider value={radioErrorsContextValue}>
                           <CapabilityDescriptorsContext.Provider value={capabilityDescriptorsContextValue}>
                             <CapabilityStatesContext.Provider value={capabilityStatesContextValue}>
-                              <AudioSidecarContext.Provider value={radioState.audioSidecar}>
-                                {children}
-                              </AudioSidecarContext.Provider>
+                              <MyRelatedTimelineContext.Provider value={myRelatedTimelineContextValue}>
+                                <AudioSidecarContext.Provider value={radioState.audioSidecar}>
+                                  {children}
+                                </AudioSidecarContext.Provider>
+                              </MyRelatedTimelineContext.Provider>
                             </CapabilityStatesContext.Provider>
                           </CapabilityDescriptorsContext.Provider>
                         </RadioErrorsContext.Provider>

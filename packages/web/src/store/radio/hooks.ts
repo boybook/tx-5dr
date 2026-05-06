@@ -11,6 +11,7 @@ import {
   CapabilityStatesContext,
   ConnectionContext,
   LogbookContext,
+  MyRelatedTimelineContext,
   OperatorsContext,
   ProfilesContext,
   PTTContext,
@@ -186,5 +187,11 @@ export const useCapabilityDescriptors = (): Map<string, CapabilityDescriptor> =>
 export const useCapabilityStates = (): Map<string, CapabilityState> => {
   const context = useContext(CapabilityStatesContext);
   if (!context) throw new Error('useCapabilityStates must be used within RadioProvider');
+  return context;
+};
+
+export const useMyRelatedTimeline = () => {
+  const context = useContext(MyRelatedTimelineContext);
+  if (!context) throw new Error('useMyRelatedTimeline must be used within RadioProvider');
   return context;
 };

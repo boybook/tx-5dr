@@ -9,7 +9,6 @@ import {
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
   faChevronDown,
-  faGripLinesVertical,
   faRectangleList,
   faTableColumns,
   faTrashCan,
@@ -21,13 +20,12 @@ import { RadioMetersDisplay } from '../components/radio/control/RadioMetersDispl
 import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
 import { ClockDisplay } from '../components/system/ClockDisplay';
 import { StationInfoPopover } from '../components/station/StationInfoPopover';
-import { useSlotPacks, useRadioState, useConnection, useStationInfo } from '../store/radioStore';
+import { useSlotPacks, useRadioState, useConnection, useStationInfo, useMyRelatedTimeline } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { isElectron, isMacOS } from '../utils/config';
 import { EMPTY_METER_DATA, shouldShowRadioMetersPanel } from '../utils/radioMeters';
 import { useTranslation } from 'react-i18next';
-import { clearMyRelatedFrames } from '../utils/frameClearEvents';
 
 export const LeftLayout: React.FC = () => {
   const { t } = useTranslation('common');
@@ -35,6 +33,7 @@ export const LeftLayout: React.FC = () => {
   const slotPacks = useSlotPacks();
   const radio = useRadioState();
   const connection = useConnection();
+  const myRelatedTimeline = useMyRelatedTimeline();
   const stationInfo = useStationInfo();
   const hasStationContent = !!(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
   const [isMobile, setIsMobile] = useState(false);
@@ -104,7 +103,7 @@ export const LeftLayout: React.FC = () => {
   };
 
   const handleClearRight = () => {
-    clearMyRelatedFrames();
+    myRelatedTimeline.clearTimeline();
   };
 
   const handleClearAll = () => {

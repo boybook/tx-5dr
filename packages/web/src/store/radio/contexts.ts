@@ -30,6 +30,7 @@ import type {
   SlotPacksAction,
   SlotPacksState,
 } from './types';
+import type { FrameDisplayMessage, FrameGroup } from '../../components/radio/digital/FramesTable';
 
 export const ConnectionContext = createContext<{
   state: ConnectionState;
@@ -106,4 +107,14 @@ export const AudioSidecarContext = createContext<AudioSidecarStatusPayload | nul
 export const SpectrumContext = createContext<{
   selectedKind: SpectrumKind | null;
   subscribedKind: SpectrumKind | null;
+} | undefined>(undefined);
+
+export const MyRelatedTimelineContext = createContext<{
+  groups: FrameGroup[];
+  clearTimeline: () => void;
+  seedSelectedRx: (payload: {
+    targetCallsign: string;
+    message: FrameDisplayMessage;
+    group: FrameGroup;
+  }) => void;
 } | undefined>(undefined);
