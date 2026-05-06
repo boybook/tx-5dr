@@ -48,6 +48,8 @@ export interface RadioOperatorManagerOptions {
   transmissionTracker?: any; // TransmissionTracker实例
   // 获取物理电台当前基频（Hz）；若无法获取，返回null
   getRadioFrequency?: () => Promise<number | null>;
+  // 获取最近已知电台基频（Hz）；自动决策热路径使用它避免等待硬件I/O
+  getKnownRadioFrequency?: () => number | null;
   callsignTracker?: CallsignContextTracker;
 }
 
@@ -67,6 +69,7 @@ export class RadioOperatorManager {
   private logManager: LogManager;
   private transmissionTracker: any; // TransmissionTracker实例
   private getRadioFrequency?: () => Promise<number | null>;
+  private getKnownRadioFrequency?: () => number | null;
   private callsignTracker?: CallsignContextTracker;
   // 插件管理器引用（延迟注入，引擎初始化完成后设置）
   private _pluginManager?: import('../plugin/PluginManager.js').PluginManager;
@@ -88,12 +91,12 @@ export class RadioOperatorManager {
     );
   }
 
-  private async resolveCurrentBandForWorkedCheck(): Promise<string> {
+  private resolveCurrentBandForWorkedCheck(): string {
     let baseFreq = 0;
 
-    if (this.getRadioFrequency) {
+    if (this.getKnownRadioFrequency) {
       try {
-        const rf = await this.getRadioFrequency();
+        const rf = this.getKnownRadioFrequency();
         if (rf && rf > 1_000_000) baseFreq = rf;
       } catch {}
     }
@@ -133,6 +136,7 @@ export class RadioOperatorManager {
     this.logManager = LogManager.getInstance();
     this.transmissionTracker = options.transmissionTracker;
     this.getRadioFrequency = options.getRadioFrequency;
+    this.getKnownRadioFrequency = options.getKnownRadioFrequency;
     this.callsignTracker = options.callsignTracker;
 
     // 监听发射请求
@@ -257,7 +261,7 @@ export class RadioOperatorManager {
         // 获取操作员对应的日志本
         const logBook = await this.logManager.getOperatorLogBook(data.operatorId);
         let hasWorked = false;
-        const band = await this.resolveCurrentBandForWorkedCheck();
+        const band = this.resolveCurrentBandForWorkedCheck();
 
         if (!logBook) {
           const callsign = this.logManager.getOperatorCallsign(data.operatorId);
@@ -556,7 +560,7 @@ export class RadioOperatorManager {
     try {
       const logBook = await this.logManager.getOperatorLogBook(operatorId);
       if (!logBook) return false;
-      const band = await this.resolveCurrentBandForWorkedCheck();
+      const band = this.resolveCurrentBandForWorkedCheck();
       if (band === 'Unknown') return false;
       return logBook.provider.hasWorkedCallsign(callsign, { band });
     } catch {

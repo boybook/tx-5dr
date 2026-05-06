@@ -1625,6 +1625,7 @@ describe('PluginManager standard-qso late re-decision', () => {
   });
 
   it('biases candidate scores using worked-station-bias', async () => {
+    const hasWorkedSpy = vi.fn((callsign: string) => callsign === 'BG5DRB' || callsign === 'K1AAA');
     const { operator, pluginManager } = await createRuntimeHarness({
       pluginConfigs: {
         'worked-station-bias': {
@@ -1635,12 +1636,14 @@ describe('PluginManager standard-qso late re-decision', () => {
           },
         },
       },
-      hasWorkedCallsign: (callsign) => callsign === 'BG5DRB',
+      hasWorkedCallsign: hasWorkedSpy,
     });
 
     const candidates: ScoredCandidate[] = [
       { ...createParsedMessage('CQ BG5DRB OL32', -4, 1200), score: 0 },
       { ...createParsedMessage('CQ JA1AAA PM95', -6, 1400), score: 0 },
+      { ...createParsedMessage('CQ K1AAA FN42', -7, 1500), score: 0 },
+      { ...createParsedMessage('CQ VK2XYZ QF56', -8, 1600), score: 0 },
     ];
 
     const scored = await pluginManager.getHookDispatcher().dispatchScoreCandidates(
@@ -1655,6 +1658,9 @@ describe('PluginManager standard-qso late re-decision', () => {
     ]));
     expect(byCallsign.BG5DRB).toBe(-8);
     expect(byCallsign.JA1AAA).toBe(15);
+    expect(byCallsign.K1AAA).toBe(-8);
+    expect(byCallsign.VK2XYZ).toBe(15);
+    expect(hasWorkedSpy).toHaveBeenCalledTimes(candidates.length);
 
     await pluginManager.shutdown();
   });

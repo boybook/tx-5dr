@@ -178,6 +178,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           return null;
         }
       },
+      getKnownRadioFrequency: () => this.radioManager.getKnownFrequency(),
       transmissionTracker: this.transmissionTracker,
       callsignTracker: this._callsignTracker,
     });

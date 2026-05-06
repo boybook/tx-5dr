@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { performance } from 'perf_hooks';
 
 import { ADIFLogProvider } from '../ADIFLogProvider.js';
 
@@ -23,6 +24,10 @@ function buildAdif(records: string[]): string {
 
 ${records.join('\n')}
 `;
+}
+
+function adifField(name: string, value: string): string {
+  return `<${name}:${value.length}>${value}`;
 }
 
 describe('ADIFLogProvider import', () => {
@@ -686,6 +691,51 @@ describe('ADIFLogProvider import', () => {
 
     await reloaded.close();
   });
+
+  it('keeps band-scoped has-worked checks fast after loading a large logbook', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-large-logbook-'));
+    tempDirs.push(tempDir);
+    const logFilePath = join(tempDir, 'large.adi');
+    const totalRecords = 30_000;
+    const records: string[] = [];
+
+    for (let index = 0; index < totalRecords; index += 1) {
+      const callsign = index === 12_345 ? 'BG7OO' : `K${index % 10}ABC${index}`;
+      const seconds = String(index % 60).padStart(2, '0');
+      const minutes = String(Math.floor(index / 60) % 60).padStart(2, '0');
+      const hours = String(Math.floor(index / 3600) % 24).padStart(2, '0');
+      const frequency = index === 12_345 ? '50.313000' : (index % 2 === 0 ? '7.074000' : '14.074000');
+      records.push([
+        adifField('CALL', callsign),
+        adifField('QSO_DATE', '20260101'),
+        adifField('TIME_ON', `${hours}${minutes}${seconds}`),
+        adifField('MODE', 'FT8'),
+        adifField('FREQ', frequency),
+        '<EOR>',
+      ].join(''));
+    }
+
+    await writeFile(logFilePath, buildAdif(records), 'utf8');
+    const provider = new ADIFLogProvider({
+      logFilePath,
+      autoCreateFile: false,
+      logFileName: 'large.adi',
+    });
+    await provider.initialize();
+
+    expect(await provider.hasWorkedCallsign('BG7OO', { band: '6m' })).toBe(true);
+    expect(await provider.hasWorkedCallsign('BG7OO', { band: '20m' })).toBe(false);
+
+    const startedAt = performance.now();
+    for (let index = 0; index < 5_000; index += 1) {
+      await provider.hasWorkedCallsign(index % 2 === 0 ? 'BG7OO' : 'W1AW', { band: index % 2 === 0 ? '6m' : '20m' });
+    }
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(elapsedMs).toBeLessThan(1_000);
+
+    await provider.close();
+  }, 30_000);
 
   it('does not mark a worked DXCC as new for 73-style analyses without grid', async () => {
     const { provider, tempDir } = await createProvider();
