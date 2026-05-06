@@ -115,6 +115,33 @@
     display: none;
   }
 
+  .startup-error-actions {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .startup-error-actions:empty {
+    display: none;
+  }
+
+  .startup-error-action {
+    padding: 5px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: rgba(220, 38, 38, 0.16);
+    color: #991b1b;
+    font: 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    cursor: default;
+    -webkit-app-region: no-drag;
+  }
+
+  .startup-error-action:hover {
+    background: rgba(220, 38, 38, 0.22);
+  }
+
   .log-wrap {
     position: relative;
     width: 100%;
@@ -217,6 +244,15 @@
       color: rgba(254, 202, 202, 0.62);
     }
 
+    .startup-error-action {
+      background: rgba(248, 113, 113, 0.16);
+      color: #fecaca;
+    }
+
+    .startup-error-action:hover {
+      background: rgba(248, 113, 113, 0.23);
+    }
+
     .log-card {
       background: rgba(255, 255, 255, 0.055);
       color: rgba(212, 212, 216, 0.66);
@@ -273,6 +309,7 @@
         <div class="startup-error-title" id="startup-error-title"></div>
         <div class="startup-error-message" id="startup-error-message"></div>
         <div class="startup-error-detail" id="startup-error-detail"></div>
+        <div class="startup-error-actions" id="startup-error-actions"></div>
       </div>
     </div>
     <div class="log-wrap">
@@ -298,6 +335,7 @@
     const startupErrorTitle = document.getElementById('startup-error-title');
     const startupErrorMessage = document.getElementById('startup-error-message');
     const startupErrorDetail = document.getElementById('startup-error-detail');
+    const startupErrorActions = document.getElementById('startup-error-actions');
     const logCard = document.getElementById('log-card');
     const openLogsButton = document.getElementById('open-logs-button');
     openLogsButton.setAttribute('aria-label', text.openLogs);
@@ -338,6 +376,7 @@
         startupErrorTitle.textContent = '';
         startupErrorMessage.textContent = '';
         startupErrorDetail.textContent = '';
+        startupErrorActions.textContent = '';
         return;
       }
 
@@ -345,6 +384,30 @@
       startupErrorTitle.textContent = error.title || '';
       startupErrorMessage.textContent = error.message || '';
       startupErrorDetail.textContent = error.detail || '';
+      startupErrorActions.textContent = '';
+
+      for (const action of error.actions || []) {
+        const button = document.createElement('button');
+        button.className = 'startup-error-action';
+        button.type = 'button';
+        button.textContent = action.label || action.id;
+        button.addEventListener('click', () => runStartupErrorAction(action.id));
+        startupErrorActions.appendChild(button);
+      }
+    }
+
+    async function runStartupErrorAction(actionId) {
+      const api = window.electronAPI && window.electronAPI.startupLogs;
+      if (!api || typeof api.runAction !== 'function') {
+        console.warn('Startup error action API unavailable');
+        return;
+      }
+
+      try {
+        await api.runAction(actionId);
+      } catch (error) {
+        console.warn('Failed to run startup error action', actionId, error);
+      }
     }
 
     function applyPayload(payload) {

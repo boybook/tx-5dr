@@ -104,6 +104,7 @@ interface DesktopUpdateStatus {
 
 type StartupLogSourceId = 'electron-main' | 'server' | 'client-tools';
 type StartupErrorKind =
+  | 'vc_runtime'
   | 'server_timeout'
   | 'web_timeout'
   | 'port_conflict'
@@ -111,6 +112,7 @@ type StartupErrorKind =
   | 'child_crash'
   | 'child_start_failed'
   | 'unknown';
+type StartupErrorActionId = 'open-vc-runtime-download';
 
 interface StartupLogLine {
   id: number;
@@ -141,6 +143,13 @@ interface StartupErrorPayload {
   message: string;
   detail?: string;
   processName?: string;
+  actions?: StartupErrorAction[];
+}
+
+interface StartupErrorAction {
+  id: StartupErrorActionId;
+  label: string;
+  style: 'primary';
 }
 
 const { contextBridge, ipcRenderer } = require('electron');
@@ -251,6 +260,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   startupLogs: {
     openFolder: (): Promise<void> => ipcRenderer.invoke('startupLogs:openFolder'),
+    runAction: (actionId: StartupErrorActionId): Promise<void> => ipcRenderer.invoke('startupLogs:runAction', actionId),
     subscribe: async (callback: (payload: StartupLogsPayload) => void): Promise<() => Promise<void>> => {
       const listener = (_event: unknown, payload: StartupLogsPayload) => callback(payload);
       ipcRenderer.on('startupLogs:update', listener);
@@ -423,6 +433,7 @@ declare global {
       };
       startupLogs: {
         openFolder(): Promise<void>;
+        runAction(actionId: StartupErrorActionId): Promise<void>;
         subscribe(callback: (payload: StartupLogsPayload) => void): Promise<() => Promise<void>>;
       };
       window: {

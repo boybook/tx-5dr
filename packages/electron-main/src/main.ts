@@ -80,6 +80,7 @@ interface ChildShutdownResult {
 
 type StartupLogSourceId = 'electron-main' | 'server' | 'client-tools';
 type StartupErrorKind =
+  | 'vc_runtime'
   | 'server_timeout'
   | 'web_timeout'
   | 'port_conflict'
@@ -87,6 +88,7 @@ type StartupErrorKind =
   | 'child_crash'
   | 'child_start_failed'
   | 'unknown';
+type StartupErrorActionId = 'open-vc-runtime-download';
 
 interface StartupLogSourceSpec {
   id: StartupLogSourceId;
@@ -123,6 +125,13 @@ interface StartupErrorPayload {
   message: string;
   detail?: string;
   processName?: string;
+  actions?: StartupErrorAction[];
+}
+
+interface StartupErrorAction {
+  id: StartupErrorActionId;
+  label: string;
+  style: 'primary';
 }
 
 interface StartupErrorOptions {
@@ -130,6 +139,11 @@ interface StartupErrorOptions {
   detail?: string | null;
   error?: unknown;
   errorType?: string;
+  actions?: StartupErrorActionId[];
+}
+
+interface CreateMainWindowOptions {
+  startHealthCheck?: boolean;
 }
 
 interface StartupLogFileState {
@@ -1243,28 +1257,14 @@ async function ensureWindowsVCRuntimeInstalled(): Promise<boolean> {
   }
 
   const dialogMsgs = isOutdated ? msgs.vcRuntimeOutdated : msgs.vcRuntimeMissing;
-  const response = await dialog.showMessageBox({
-    type: isOutdated ? 'warning' : 'error',
-    title: dialogMsgs.title,
-    message: dialogMsgs.message,
-    detail: `${dialogMsgs.detail}\n${VC_REDIST_X64_URL}`,
-    buttons: dialogMsgs.buttons,
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
+  await createMainWindowOnly({ startHealthCheck: false });
+  showStartupError('vc_runtime', {
+    detail: `${dialogMsgs.message}\n${dialogMsgs.detail}`,
+    actions: ['open-vc-runtime-download'],
+    errorType: isOutdated ? 'VC_RUNTIME_OUTDATED' : 'VC_RUNTIME_MISSING',
   });
 
-  if (response.response === 0) {
-    try {
-      await shell.openExternal(VC_REDIST_X64_URL);
-    } catch (error) {
-      logger.error('failed to open VC runtime download link', error);
-    }
-    app.quit();
-    return false;
-  }
-
-  return true;
+  return false;
 }
 
 // no quarantine/permission fallbacks; we assume portable node file is valid
@@ -1414,6 +1414,8 @@ function buildLogPathsHint(name: string): string {
 
 function legacyStartupErrorType(kind: StartupErrorKind): string {
   switch (kind) {
+    case 'vc_runtime':
+      return 'VC_RUNTIME';
     case 'server_timeout':
     case 'web_timeout':
       return 'TIMEOUT';
@@ -1482,6 +1484,11 @@ function showStartupError(kind: StartupErrorKind, options: StartupErrorOptions =
 
   const msgs = getMessages(app.getLocale()).startupErrors;
   const template = msgs[kind];
+  const actions = (options.actions ?? []).map((id): StartupErrorAction => ({
+    id,
+    label: msgs.actions[id],
+    style: 'primary',
+  }));
   const detailParts = [
     template.detail,
     options.detail ? sanitizeStartupErrorDetail(options.detail) : null,
@@ -1494,6 +1501,7 @@ function showStartupError(kind: StartupErrorKind, options: StartupErrorOptions =
     message: template.message,
     detail: detailParts.join('\n'),
     processName: options.processName,
+    actions,
   };
 
   logger.error('startup error state updated', {
@@ -1562,6 +1570,7 @@ function wireChildProcess(name: string, child: import('node:child_process').Chil
           detail: recentStderr.length > 0
             ? `${name} process ${reason}. Recent stderr: ${recentStderr.slice(-3).join(' | ')}`
             : `${name} process ${reason}.`,
+          actions: process.platform === 'win32' && name === 'server' ? ['open-vc-runtime-download'] : undefined,
         });
         return;
       }
@@ -2175,7 +2184,7 @@ function closeMainWindowToBackground(windowInstance: BrowserWindow, reason: stri
 /**
  * 仅创建主窗口（不启动子进程），用于托盘/Dock恢复窗口
  */
-async function createMainWindowOnly(): Promise<BrowserWindow> {
+async function createMainWindowOnly(options: CreateMainWindowOptions = {}): Promise<BrowserWindow> {
   configureNotificationPermissionHandlers();
 
   // 检查主窗口是否已存在且有效
@@ -2349,16 +2358,18 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
   }
 
   // 定期检查服务器健康状态
-  serverCheckInterval = setInterval(async () => {
-    const isHealthy = await checkServerHealth();
-    if (!isHealthy) {
-      if (isDevelopment) {
-        logger.debug('external server connection lost (development mode)');
-      } else {
-        logger.debug('embedded server connection lost');
+  if (options.startHealthCheck !== false) {
+    serverCheckInterval = setInterval(async () => {
+      const isHealthy = await checkServerHealth();
+      if (!isHealthy) {
+        if (isDevelopment) {
+          logger.debug('external server connection lost (development mode)');
+        } else {
+          logger.debug('embedded server connection lost');
+        }
       }
-    }
-  }, 10000);
+    }, 10000);
+  }
 
   // 先加载本地 loading 页面，避免白屏；主前端在服务就绪后单独切换。
   await mainWindow.loadFile(getLoadingPagePath());
@@ -2687,9 +2698,11 @@ async function createWindow() {
 
   const startupWindow = await createMainWindowOnly();
   if (FORCE_STARTUP_ERROR_CARD_TEST) {
-    logger.warn('forcing startup error card for loading page test');
-    showStartupError('unknown', {
+    logger.warn('forcing VC runtime startup error card for loading page test');
+    showStartupError('vc_runtime', {
       detail: startupErrorMsgs.testHint,
+      actions: ['open-vc-runtime-download'],
+      errorType: 'VC_RUNTIME_TEST',
     });
     return startupWindow;
   }
@@ -2859,6 +2872,7 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
         showStartupError('native_module', {
           processName: 'server',
           detail: `${detail}${okHint}${failHint}`,
+          actions: process.platform === 'win32' ? ['open-vc-runtime-download'] : undefined,
         });
         return;
       }
@@ -2993,9 +3007,6 @@ const startApp = async () => {
   Object.assign(console, log.functions);
   log.errorHandler.startCatching();
 
-  const vcRuntimeOk = await ensureWindowsVCRuntimeInstalled();
-  if (!vcRuntimeOk) return;
-
   // 阻止 macOS App Nap 挂起进程（不阻止屏保，仅保证进程调度持续）
   powerSaveBlocker.start('prevent-app-suspension');
 
@@ -3010,6 +3021,9 @@ const startApp = async () => {
   createApplicationMenu();
   setupIpcHandlers();
   applyGlobalShortcutConfig(loadElectronSettings().shortcuts);
+
+  const vcRuntimeOk = await ensureWindowsVCRuntimeInstalled();
+  if (!vcRuntimeOk) return;
 
   logger.info('calling createWindow');
   await createWindow();
@@ -3351,6 +3365,22 @@ function setupIpcHandlers() {
       logger.info('IPC startupLogs:openFolder success');
     } catch (error) {
       logger.error('IPC startupLogs:openFolder failed', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('startupLogs:runAction', async (_event, actionId: StartupErrorActionId) => {
+    logger.info(`IPC startupLogs:runAction: ${actionId}`);
+
+    if (actionId !== 'open-vc-runtime-download') {
+      throw new Error(`unsupported startup action: ${String(actionId)}`);
+    }
+
+    try {
+      await shell.openExternal(VC_REDIST_X64_URL);
+      logger.info('IPC startupLogs:runAction open-vc-runtime-download success');
+    } catch (error) {
+      logger.error('IPC startupLogs:runAction failed', error);
       throw error;
     }
   });

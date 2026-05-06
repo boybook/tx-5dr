@@ -65,6 +65,7 @@ interface DesktopUpdateStatus {
 
 type StartupLogSourceId = 'electron-main' | 'server' | 'client-tools';
 type StartupErrorKind =
+  | 'vc_runtime'
   | 'server_timeout'
   | 'web_timeout'
   | 'port_conflict'
@@ -72,6 +73,7 @@ type StartupErrorKind =
   | 'child_crash'
   | 'child_start_failed'
   | 'unknown';
+type StartupErrorActionId = 'open-vc-runtime-download';
 
 interface StartupLogLine {
   id: number;
@@ -102,6 +104,13 @@ interface StartupErrorPayload {
   message: string;
   detail?: string;
   processName?: string;
+  actions?: StartupErrorAction[];
+}
+
+interface StartupErrorAction {
+  id: StartupErrorActionId;
+  label: string;
+  style: 'primary';
 }
 
 interface ElectronAPI {
@@ -130,6 +139,7 @@ interface ElectronAPI {
   };
   startupLogs?: {
     openFolder(): Promise<void>;
+    runAction(actionId: StartupErrorActionId): Promise<void>;
     subscribe(callback: (payload: StartupLogsPayload) => void): Promise<() => Promise<void>>;
   };
   window?: {

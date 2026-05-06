@@ -30,6 +30,14 @@ export interface ElectronMessages {
   };
   startupErrors: {
     logHint: string;
+    actions: {
+      'open-vc-runtime-download': string;
+    };
+    vc_runtime: {
+      title: string;
+      message: string;
+      detail: string;
+    };
     server_timeout: {
       title: string;
       message: string;
@@ -110,6 +118,14 @@ const ZH: ElectronMessages = {
   },
   startupErrors: {
     logHint: '你可以查看下方实时日志，或点击日志区域右上角的文件夹图标打开日志目录。',
+    actions: {
+      'open-vc-runtime-download': '下载 VC++ 运行库',
+    },
+    vc_runtime: {
+      title: '需要安装 VC++ 运行库',
+      message: 'TX-5DR 需要 Microsoft Visual C++ Redistributable (x64) 才能完整启动。',
+      detail: '请点击下方按钮下载并安装运行库，安装完成后重新启动 TX-5DR。',
+    },
     server_timeout: {
       title: '后端服务未能启动',
       message: 'TX-5DR 已启动窗口，但后端服务没有在预期时间内准备完成。',
@@ -190,6 +206,14 @@ const EN: ElectronMessages = {
   },
   startupErrors: {
     logHint: 'You can check the live logs below, or click the folder icon in the top-right of the log area to open the log folder.',
+    actions: {
+      'open-vc-runtime-download': 'Download VC++ Runtime',
+    },
+    vc_runtime: {
+      title: 'VC++ Runtime Required',
+      message: 'TX-5DR needs Microsoft Visual C++ Redistributable (x64) to start correctly.',
+      detail: 'Click the button below to download and install the runtime, then restart TX-5DR.',
+    },
     server_timeout: {
       title: 'Backend Service Did Not Start',
       message: 'TX-5DR opened the window, but the backend service was not ready in time.',
