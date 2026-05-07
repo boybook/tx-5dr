@@ -1,4 +1,7 @@
 import { createRtAudioInstance, type RtAudioInstance } from './rtaudio-api.js';
+import * as nodeWav from 'node-wav';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 import type { AudioClock } from './ringBuffer.js';
 import { EventEmitter } from 'eventemitter3';
@@ -11,6 +14,7 @@ import type { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.j
 import { createLogger } from '../utils/logger.js';
 import type { VoiceTxFrameMeta, VoiceTxProcessedFrameStats } from '../voice/VoiceTxDiagnostics.js';
 import { VoiceTxOutputPipeline, type VoiceTxOutputSinkState } from './VoiceTxOutputPipeline.js';
+import { tx5drPaths } from '../utils/app-paths.js';
 
 const logger = createLogger('AudioStreamManager');
 // RtAudioFormat 是 const enum，isolatedModules 下无法直接导入，使用数值常量
@@ -28,6 +32,7 @@ const RTAUDIO_TX_CONSUME_WATCHDOG_MS = 750;
 const RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS = 1000;
 const RTAUDIO_TX_WATCHDOG_MIN_SUBMITTED_CHUNKS = 3;
 const RTAUDIO_OUTPUT_WARNING_LOG_WINDOW_MS = 5000;
+const TX_OUTPUT_CAPTURE_DIR = 'tx-output-captures';
 
 export type NativeAudioInputSourceKind = 'audio-device' | 'icom-wlan' | 'openwebrx';
 
@@ -1298,6 +1303,100 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     return error instanceof Error ? error.message : String(error);
   }
 
+  private sanitizeCaptureFilePart(value: unknown, fallback: string): string {
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      return fallback;
+    }
+    return value.trim().replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || fallback;
+  }
+
+  private flattenCapturedOutputChunks(chunks: Float32Array[]): Float32Array {
+    const totalSamples = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const flattened = new Float32Array(totalSamples);
+    let offset = 0;
+    for (const chunk of chunks) {
+      flattened.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return flattened;
+  }
+
+  private splitInterleavedChannels(samples: Float32Array, channels: number): Float32Array[] {
+    if (channels <= 1) {
+      return [samples];
+    }
+
+    const frames = Math.floor(samples.length / channels);
+    const channelData = Array.from({ length: channels }, () => new Float32Array(frames));
+    for (let frame = 0; frame < frames; frame++) {
+      for (let channel = 0; channel < channels; channel++) {
+        channelData[channel]![frame] = samples[frame * channels + channel] ?? 0;
+      }
+    }
+    return channelData;
+  }
+
+  private async saveRtAudioOutputCapture(params: {
+    playbackId: number;
+    playbackKind: PlaybackKind;
+    diagnosticContext: Record<string, unknown>;
+    chunks: Float32Array[];
+    sampleRate: number;
+    channels: number;
+    submittedChunks: number;
+    submittedSamples: number;
+    totalChunks: number;
+    totalSamples: number;
+  }): Promise<void> {
+    if (params.chunks.length === 0) {
+      return;
+    }
+
+    try {
+      const dataDir = await tx5drPaths.getDataDir();
+      const captureDir = join(dataDir, TX_OUTPUT_CAPTURE_DIR);
+      await mkdir(captureDir, { recursive: true });
+
+      const txId = this.sanitizeCaptureFilePart(params.diagnosticContext.txId, `playback-${params.playbackId}`);
+      const slotStartMs = typeof params.diagnosticContext.slotStartMs === 'number'
+        ? params.diagnosticContext.slotStartMs
+        : Date.now();
+      const timestamp = new Date(slotStartMs).toISOString().replace(/[:.]/g, '-');
+      const filename = `${timestamp}_${txId}_rtaudio-output.wav`;
+      const filepath = join(captureDir, filename);
+
+      const capturedSamples = this.flattenCapturedOutputChunks(params.chunks);
+      const wavBuffer = nodeWav.encode(
+        this.splitInterleavedChannels(capturedSamples, params.channels),
+        {
+          sampleRate: params.sampleRate,
+          float: true,
+          bitDepth: 32,
+        },
+      );
+      await writeFile(filepath, wavBuffer);
+
+      logger.info('RtAudio TX output capture saved', {
+        playbackId: params.playbackId,
+        txId,
+        filepath,
+        sampleRate: params.sampleRate,
+        channels: params.channels,
+        capturedSamples: capturedSamples.length,
+        submittedChunks: params.submittedChunks,
+        submittedSamples: params.submittedSamples,
+        totalChunks: params.totalChunks,
+        totalSamples: params.totalSamples,
+        format: 'wav-float32',
+      });
+    } catch (error) {
+      logger.warn('failed to save RtAudio TX output capture', {
+        playbackId: params.playbackId,
+        error: this.describeError(error),
+      });
+    }
+  }
+
   private shouldRunRtAudioConsumeDiagnostics(): boolean {
     return process.env.TX5DR_RTAUDIO_CONSUME_DIAGNOSTICS === '1'
       || process.env.TX5DR_FORCE_WINDOWS_AUDIO_WATCHDOG === '1';
@@ -1577,6 +1676,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       const totalSamples = playbackData.length;
       const expectedDurationMs = Math.round((totalSamples / this.outputSampleRate) * 1000);
       logger.debug(`chunked playback: ${totalChunks} chunks, chunkSize=${chunkSize}, prebuffer~${prebufferMs}ms, tick=${TICK_MS}ms, totalSamples=${totalSamples}, expectedDuration=${expectedDurationMs}ms`);
+      const captureRtAudioWrites = playbackKind === 'digital';
+      const rtAudioOutputCaptureChunks: Float32Array[] = [];
 
       const chunkStartTime = Date.now();
       this.resetOutputConsumeDiagnostics();
@@ -1657,6 +1758,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             // RtAudio requires exactly chunkSize frames per write; pad short last chunk with silence
             const bufferSamples = chunkSize;
             const buffer = Buffer.allocUnsafe(bufferSamples * 4);
+            const captureChunk = captureRtAudioWrites ? new Float32Array(bufferSamples) : null;
             const monitorChunk = options.injectIntoMonitor ? new Float32Array(chunk.length) : null;
             let chunkPeak = 0;
             let chunkSumSquares = 0;
@@ -1664,6 +1766,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               const s = chunk[j] * gain;
               const clamped = s > 1 ? 1 : (s < -1 ? -1 : s);
               buffer.writeFloatLE(clamped, j * 4);
+              if (captureChunk) {
+                captureChunk[j] = clamped;
+              }
               const abs = Math.abs(clamped);
               if (abs > chunkPeak) {
                 chunkPeak = abs;
@@ -1678,6 +1783,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               buffer.writeFloatLE(0, j * 4);
             }
             this.rtAudioOutput.write(buffer);
+            if (captureChunk) {
+              rtAudioOutputCaptureChunks.push(captureChunk);
+            }
             if (monitorChunk && monitorChunk.length > 0) {
               this.emit('txMonitorAudioData', { samples: monitorChunk, sampleRate: this.outputSampleRate });
             }
@@ -1876,6 +1984,21 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
       } else {
         stopWatchdog();
+      }
+
+      if (captureRtAudioWrites) {
+        void this.saveRtAudioOutputCapture({
+          playbackId,
+          playbackKind,
+          diagnosticContext,
+          chunks: rtAudioOutputCaptureChunks,
+          sampleRate: this.outputSampleRate,
+          channels: this.channels,
+          submittedChunks,
+          submittedSamples,
+          totalChunks,
+          totalSamples,
+        });
       }
 
       } catch (error) {
