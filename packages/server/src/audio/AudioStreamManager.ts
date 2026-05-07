@@ -7,6 +7,8 @@ const RTAUDIO_FLOAT32 = 0x10;
 const RTAUDIO_API_UNSPECIFIED = 0;
 const RTAUDIO_API_WINDOWS_WASAPI = 7;
 const RTAUDIO_STREAM_FLAGS_NONE = 0 as unknown as Parameters<RtAudioInstance['openStream']>[8];
+const RTAUDIO_ERROR_WARNING = 0;
+const RTAUDIO_ERROR_DEBUG_WARNING = 1;
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 import { EventEmitter } from 'eventemitter3';
 import { clearResamplerCache, resampleAudioProfessional } from '../utils/audioUtils.js';
@@ -83,6 +85,7 @@ interface ResolvedStreamDevice {
 
 interface OutputBackendSnapshot {
   api?: string;
+  streamOpen?: boolean;
   streamRunning?: boolean;
   streamLatencyFrames?: number;
   streamSampleRate?: number;
@@ -98,6 +101,14 @@ interface AudioSegmentStats extends AudioStats {
   index: number;
   startMs: number;
   endMs: number;
+}
+
+interface RtAudioIssue {
+  type: number;
+  typeName: string;
+  message: string;
+  at: number;
+  fatal: boolean;
 }
 
 export interface PlayAudioOptions {
@@ -162,7 +173,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private outputFramesConsumed = 0;
   private outputFirstFrameConsumedAt: number | null = null;
   private outputLastFrameConsumedAt: number | null = null;
-  private outputRtAudioErrors: Array<{ type: number; message: string; at: number }> = [];
+  private outputRtAudioErrors: RtAudioIssue[] = [];
   private outputWatchdogGeneration = 0;
   private playbackSequence = 0;
 
@@ -372,12 +383,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       logger.error('failed to start audio stream', error);
       // 清理失败的输入流
       if (this.rtAudioInput) {
-        try {
-          this.rtAudioInput.stop();
-          this.rtAudioInput.closeStream();
-        } catch (cleanupError) {
-          logger.error('failed to cleanup audio input stream', cleanupError);
-        }
+        this.cleanupRtAudioStream('input', this.rtAudioInput, 'start-failed');
         this.rtAudioInput = null;
       }
       this.isStreaming = false;
@@ -418,12 +424,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
       // 停止传统声卡输入
       if (this.rtAudioInput) {
-        try {
-          this.rtAudioInput.stop();
-          this.rtAudioInput.closeStream();
-        } catch (e) {
-          logger.error('failed to cleanup audio input stream', e);
-        }
+        this.cleanupRtAudioStream('input', this.rtAudioInput, 'stop-request');
         this.rtAudioInput = null;
       }
 
@@ -627,12 +628,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       logger.error('failed to start audio output', error);
       // 清理失败的输出流
       if (this.rtAudioOutput) {
-        try {
-          this.rtAudioOutput.stop();
-          this.rtAudioOutput.closeStream();
-        } catch (cleanupError) {
-          logger.error('failed to cleanup audio output stream', cleanupError);
-        }
+        this.cleanupRtAudioStream('output', this.rtAudioOutput, 'start-failed');
         this.rtAudioOutput = null;
       }
       this.isOutputting = false;
@@ -817,12 +813,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
       // 停止传统声卡输出
       if (this.rtAudioOutput) {
-        try {
-          this.rtAudioOutput.stop();
-          this.rtAudioOutput.closeStream();
-        } catch (e) {
-          logger.error('failed to cleanup audio output stream', e);
-        }
+        this.cleanupRtAudioStream('output', this.rtAudioOutput, 'stop-request');
         this.rtAudioOutput = null;
       }
 
@@ -1087,7 +1078,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       null,
       () => this.recordOutputFrameConsumed(),
       RTAUDIO_STREAM_FLAGS_NONE,
-      (type: number, message: string) => this.recordOutputRtAudioError(type, message)
+      (type: number, message: string) => this.recordOutputRtAudioIssue(type, message)
     );
   }
 
@@ -1108,14 +1099,59 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.outputLastFrameConsumedAt = now;
   }
 
-  private recordOutputRtAudioError(type: number, message: string): void {
-    const error = { type, message, at: Date.now() };
-    this.outputRtAudioErrors.push(error);
+  private recordOutputRtAudioIssue(type: number, message: string): void {
+    const issue = {
+      type,
+      typeName: this.describeRtAudioErrorType(type),
+      message,
+      at: Date.now(),
+      fatal: this.isFatalRtAudioErrorType(type),
+    };
+    this.outputRtAudioErrors.push(issue);
     if (this.outputRtAudioErrors.length > 10) {
       this.outputRtAudioErrors.shift();
     }
-    logger.error('RtAudio output runtime error', error);
+
+    if (!issue.fatal) {
+      logger.warn('RtAudio output callback warning', issue);
+      return;
+    }
+
+    logger.error('RtAudio output runtime error', issue);
     this.emit('error', new Error(`RtAudio output runtime error (${type}): ${message}`));
+  }
+
+  private isFatalRtAudioErrorType(type: number): boolean {
+    return type !== RTAUDIO_ERROR_WARNING && type !== RTAUDIO_ERROR_DEBUG_WARNING;
+  }
+
+  private describeRtAudioErrorType(type: number): string {
+    switch (type) {
+      case 0:
+        return 'WARNING';
+      case 1:
+        return 'DEBUG_WARNING';
+      case 2:
+        return 'UNSPECIFIED';
+      case 3:
+        return 'NO_DEVICES_FOUND';
+      case 4:
+        return 'INVALID_DEVICE';
+      case 5:
+        return 'MEMORY_ERROR';
+      case 6:
+        return 'INVALID_PARAMETER';
+      case 7:
+        return 'INVALID_USE';
+      case 8:
+        return 'DRIVER_ERROR';
+      case 9:
+        return 'SYSTEM_ERROR';
+      case 10:
+        return 'THREAD_ERROR';
+      default:
+        return `UNKNOWN_${type}`;
+    }
   }
 
   /**
@@ -1234,36 +1270,78 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   }
 
   private getOutputBackendSnapshot(): OutputBackendSnapshot {
-    if (!this.rtAudioOutput) {
-      return { error: 'rtAudioOutput unavailable' };
-    }
+    return this.getRtAudioBackendSnapshot(this.rtAudioOutput);
+  }
 
+  private getRtAudioBackendSnapshot(stream: RtAudioInstance | null): OutputBackendSnapshot {
+    if (!stream) {
+      return { error: 'RtAudio stream unavailable' };
+    }
     const snapshot: OutputBackendSnapshot = {};
     try {
-      snapshot.api = this.rtAudioOutput.getApi();
+      snapshot.api = stream.getApi();
     } catch (error) {
       snapshot.error = `getApi failed: ${this.describeError(error)}`;
     }
 
     try {
-      snapshot.streamRunning = this.rtAudioOutput.isStreamRunning();
+      snapshot.streamOpen = stream.isStreamOpen();
+    } catch (error) {
+      snapshot.error = this.appendSnapshotError(snapshot.error, `isStreamOpen failed: ${this.describeError(error)}`);
+    }
+
+    try {
+      snapshot.streamRunning = stream.isStreamRunning();
     } catch (error) {
       snapshot.error = this.appendSnapshotError(snapshot.error, `isStreamRunning failed: ${this.describeError(error)}`);
     }
 
     try {
-      snapshot.streamLatencyFrames = this.rtAudioOutput.getStreamLatency();
+      snapshot.streamLatencyFrames = stream.getStreamLatency();
     } catch (error) {
       snapshot.error = this.appendSnapshotError(snapshot.error, `getStreamLatency failed: ${this.describeError(error)}`);
     }
 
     try {
-      snapshot.streamSampleRate = this.rtAudioOutput.getStreamSampleRate();
+      snapshot.streamSampleRate = stream.getStreamSampleRate();
     } catch (error) {
       snapshot.error = this.appendSnapshotError(snapshot.error, `getStreamSampleRate failed: ${this.describeError(error)}`);
     }
 
     return snapshot;
+  }
+
+  private cleanupRtAudioStream(kind: 'input' | 'output', stream: RtAudioInstance, reason: string): void {
+    const before = this.getRtAudioBackendSnapshot(stream);
+    logger.info(`audio ${kind} stream cleanup starting`, { reason, before });
+
+    if (before.streamOpen !== false && before.streamRunning !== false) {
+      try {
+        stream.stop();
+      } catch (error) {
+        logger.error(`failed to stop audio ${kind} stream`, { reason, error: this.describeError(error), before });
+      }
+    } else {
+      logger.debug(`skip stopping audio ${kind} stream`, { reason, before });
+    }
+
+    const afterStop = this.getRtAudioBackendSnapshot(stream);
+    if (afterStop.streamOpen !== false) {
+      try {
+        stream.closeStream();
+      } catch (error) {
+        logger.error(`failed to close audio ${kind} stream`, { reason, error: this.describeError(error), afterStop });
+      }
+    } else {
+      logger.debug(`skip closing audio ${kind} stream; already closed`, { reason, afterStop });
+    }
+
+    logger.info(`audio ${kind} stream cleanup finished`, {
+      reason,
+      before,
+      afterStop,
+      afterClose: this.getRtAudioBackendSnapshot(stream),
+    });
   }
 
   private appendSnapshotError(existing: string | undefined, next: string): string {

@@ -188,6 +188,27 @@ describe('AudioSidecarController', () => {
     expect(sidecar.getStatus()).toBe(AudioSidecarStatus.RETRYING);
   });
 
+  it('deduplicates repeated runtime errors while tearing down audio', async () => {
+    const { engineEmitter, audioStreamManager, audioVolumeController } = makeDeps();
+    const sidecar = new AudioSidecarController({
+      engineEmitter: engineEmitter as any,
+      audioStreamManager: audioStreamManager as any,
+      audioVolumeController: audioVolumeController as any,
+    });
+
+    await sidecar.start();
+    await flushAsync();
+    expect(sidecar.isConnected()).toBe(true);
+
+    audioStreamManager.emit('error', new Error('first device loss'));
+    audioStreamManager.emit('error', new Error('duplicate device loss'));
+    await flushAsync();
+
+    expect(sidecar.getStatus()).toBe(AudioSidecarStatus.RETRYING);
+    expect(audioStreamManager.stopOutput).toHaveBeenCalledTimes(1);
+    expect(audioStreamManager.stopStream).toHaveBeenCalledTimes(1);
+  });
+
   it('recovers runtime loss without creating a buffered monitor side path', async () => {
     const { engineEmitter, audioStreamManager, audioVolumeController } = makeDeps();
 

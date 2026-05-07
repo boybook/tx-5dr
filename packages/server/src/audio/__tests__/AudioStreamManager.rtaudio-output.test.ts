@@ -26,6 +26,7 @@ const { mockConfigManager, mockLogger, mockRtAudioState, MockRtAudio } = vi.hois
   };
 
   class HoistedMockRtAudio {
+    private open = false;
     private running = false;
     private frameOutputCallback: (() => void) | null = null;
     private errorCallback: ((type: number, message: string) => void) | null = null;
@@ -59,6 +60,7 @@ const { mockConfigManager, mockLogger, mockRtAudioState, MockRtAudio } = vi.hois
       _flags?: number,
       errorCallback?: ((type: number, message: string) => void) | null,
     ) {
+      this.open = true;
       this.sampleRate = sampleRate;
       this.frameSize = frameSize;
       this.outputChannels = outputParams?.nChannels ?? 0;
@@ -75,7 +77,12 @@ const { mockConfigManager, mockLogger, mockRtAudioState, MockRtAudio } = vi.hois
     }
 
     closeStream() {
+      this.open = false;
       this.running = false;
+    }
+
+    isStreamOpen() {
+      return this.open;
     }
 
     isStreamRunning() {
@@ -250,8 +257,35 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
       'RtAudio output runtime error',
       expect.objectContaining({
         type: 8,
+        typeName: 'DRIVER_ERROR',
         message: 'WASAPI render client failed',
+        fatal: true,
       }),
+    );
+  });
+
+  it('records RtAudio warning callbacks without treating them as runtime loss', async () => {
+    const manager = new AudioStreamManager();
+    const runtimeErrors: Error[] = [];
+    manager.on('error', (error) => runtimeErrors.push(error));
+    await manager.startOutput();
+
+    const output = (manager as unknown as { rtAudioOutput: { emitRtAudioError: (type: number, message: string) => void } }).rtAudioOutput;
+    output.emitRtAudioError(1, 'RtApiWasapi::closeStream: No open stream to close.');
+
+    expect(runtimeErrors).toHaveLength(0);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      'RtAudio output callback warning',
+      expect.objectContaining({
+        type: 1,
+        typeName: 'DEBUG_WARNING',
+        message: 'RtApiWasapi::closeStream: No open stream to close.',
+        fatal: false,
+      }),
+    );
+    expect(mockLogger.error).not.toHaveBeenCalledWith(
+      'RtAudio output runtime error',
+      expect.anything(),
     );
   });
 
