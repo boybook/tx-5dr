@@ -1938,6 +1938,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         let cursor = 0;
         let samplesWritten = 0;
         let lastProgressSec = -1;
+        let intervalTickCount = 0;
 
         const writeChunk = (idx: number): boolean => {
           if (!this.rtAudioOutput) {
@@ -1988,9 +1989,38 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             }
             postGainSumSquares += chunkSumSquares;
             postGainSampleCount += chunk.length;
+            logger.info('audio playback chunk write submitted', {
+              playbackId,
+              ...diagnosticContext,
+              tick: intervalTickCount,
+              chunk: idx,
+              totalChunks,
+              startSample: start,
+              endSample: end,
+              chunkSamples: chunk.length,
+              bufferSamples,
+              samplesWritten,
+              submittedChunks,
+              submittedSamples,
+              consumedChunks: this.outputFramesConsumed,
+              pendingChunks: submittedChunks - this.outputFramesConsumed,
+              chunkPeak: Number(chunkPeak.toFixed(6)),
+              chunkRms: chunk.length > 0 ? Number(Math.sqrt(chunkSumSquares / chunk.length).toFixed(6)) : 0,
+            });
             return true;
           } catch (error) {
             writeFailCount++;
+            logger.info('audio playback chunk write failed', {
+              playbackId,
+              ...diagnosticContext,
+              tick: intervalTickCount,
+              chunk: idx,
+              totalChunks,
+              writtenSamples: samplesWritten,
+              totalSamples,
+              fails: writeFailCount,
+              error: this.describeError(error),
+            });
             if (writeFailCount <= 3 || writeFailCount % 100 === 0) {
               logger.warn('audio output write failed', {
                 playbackId,
@@ -2009,6 +2039,24 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
         const interval = setInterval(() => {
           try {
+            intervalTickCount++;
+            const elapsedMs = performance.now() - hrStart;
+            logger.info('audio playback interval tick', {
+              playbackId,
+              ...diagnosticContext,
+              tick: intervalTickCount,
+              elapsedMs: Math.round(elapsedMs),
+              cursor,
+              totalChunks,
+              samplesWritten,
+              submittedChunks,
+              submittedSamples,
+              consumedChunks: this.outputFramesConsumed,
+              pendingChunks: submittedChunks - this.outputFramesConsumed,
+              shouldStopPlayback: this.shouldStopPlayback,
+              hasRtAudioOutput: Boolean(this.rtAudioOutput),
+            });
+
             // Check stop signal
             if (this.shouldStopPlayback) {
               clearInterval(interval);
@@ -2046,7 +2094,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             }
 
             // Calculate target: how many samples should have been written by now + prebuffer
-            const elapsedMs = performance.now() - hrStart;
             const targetSamples = Math.floor((elapsedMs / 1000) * this.outputSampleRate) + prebufferSamples;
 
             // Catch-up write: write multiple chunks in one tick if behind schedule
