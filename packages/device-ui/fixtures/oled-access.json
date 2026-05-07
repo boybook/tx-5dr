@@ -1,0 +1,71 @@
+{
+  "meta": {
+    "schemaVersion": 1,
+    "generatedAt": 0,
+    "deviceId": "fixture-device",
+    "profileId": "oled-ssd1306-128x64-1btn"
+  },
+  "screen": "access",
+  "statusBar": {
+    "networkKind": "offline",
+    "networkLabel": "Offline",
+    "server": "connecting",
+    "engine": "unknown",
+    "ptt": false,
+    "warningLevel": "info"
+  },
+  "network": {
+    "primary": "wifi",
+    "ethernet": {
+      "connected": false
+    },
+    "wifi": {
+      "supported": true,
+      "state": "connected",
+      "savedNetworks": [],
+      "ssid": "BG5DRB",
+      "ip": "192.168.1.23"
+    },
+    "hotspot": {
+      "active": false
+    }
+  },
+  "access": {
+    "qrKind": "access-url",
+    "url": "http://192.168.1.23:8076",
+    "pairingCode": "483921"
+  },
+  "tx5dr": {
+    "server": "connecting",
+    "webPort": 8076,
+    "webUrls": [],
+    "browserClientCount": 0,
+    "authMode": "enabled",
+    "engine": {
+      "isRunning": false,
+      "state": "idle",
+      "mode": "FT8"
+    },
+    "radio": {
+      "connected": false,
+      "ptt": false,
+      "operatorIdsInPtt": []
+    },
+    "clock": {
+      "state": "unknown"
+    }
+  },
+  "monitor": {
+    "operators": [],
+    "recentMessages": [],
+    "spectrum": {
+      "available": false,
+      "bins": []
+    },
+    "warnings": []
+  },
+  "ui": {
+    "busy": false,
+    "diagnosticsVisible": false
+  }
+}

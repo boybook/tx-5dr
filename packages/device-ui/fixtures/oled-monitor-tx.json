@@ -1,0 +1,90 @@
+{
+  "meta": {
+    "schemaVersion": 1,
+    "generatedAt": 0,
+    "deviceId": "fixture-device",
+    "profileId": "oled-ssd1306-128x64-1btn"
+  },
+  "screen": "monitor",
+  "statusBar": {
+    "networkKind": "offline",
+    "networkLabel": "Offline",
+    "server": "connecting",
+    "engine": "unknown",
+    "ptt": true,
+    "warningLevel": "info"
+  },
+  "network": {
+    "primary": "offline",
+    "ethernet": {
+      "connected": false
+    },
+    "wifi": {
+      "supported": true,
+      "state": "disconnected",
+      "savedNetworks": []
+    },
+    "hotspot": {
+      "active": false
+    }
+  },
+  "access": {
+    "qrKind": "access-url"
+  },
+  "tx5dr": {
+    "server": "connecting",
+    "webPort": 8076,
+    "webUrls": [],
+    "browserClientCount": 0,
+    "authMode": "enabled",
+    "engine": {
+      "isRunning": false,
+      "state": "idle",
+      "mode": "FT8"
+    },
+    "radio": {
+      "connected": false,
+      "ptt": false,
+      "operatorIdsInPtt": []
+    },
+    "clock": {
+      "state": "unknown"
+    }
+  },
+  "monitor": {
+    "operators": [],
+    "recentMessages": [],
+    "spectrum": {
+      "available": true,
+      "bins": [
+        0,
+        8,
+        16,
+        24,
+        32,
+        40,
+        48,
+        56,
+        48,
+        40,
+        32,
+        24,
+        16,
+        8,
+        4,
+        0
+      ]
+    },
+    "warnings": [],
+    "currentTx": {
+      "operatorId": "op1",
+      "callsign": "BG5DRB",
+      "message": "CQ BG5DRB OL63",
+      "frequencyHz": 7074000
+    }
+  },
+  "ui": {
+    "busy": false,
+    "diagnosticsVisible": false
+  }
+}

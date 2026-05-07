@@ -43,6 +43,10 @@ import { ConsoleLogger } from './utils/console-logger.js';
 import { PersistenceCoordinator } from './utils/persistence/index.js';
 import { areNewMutationsBlocked, blockNewMutations, markProcessShuttingDown } from './utils/process-shutdown.js';
 import { bootstrapCoordinator } from './services/BootstrapCoordinator.js';
+import { DeviceUiProjectionService } from './device-ui/DeviceUiProjectionService.js';
+import { DeviceUiWSServer } from './device-ui/DeviceUiWSServer.js';
+import { deviceUiRoutes } from './device-ui/routes.js';
+import { DeviceServiceJwtPayloadSchema } from '@tx5dr/contracts';
 
 const bootLogger = createLogger('ServerBoot');
 const logger = createLogger('Server');
@@ -301,6 +305,8 @@ export async function createServer() {
   // 初始化WebSocket服务器（集成业务逻辑）
   const wsServer = new WSServer(digitalRadioEngine, processMonitor);
   const logbookWsServer = new LogbookWSServer(digitalRadioEngine);
+  const deviceUiProjection = new DeviceUiProjectionService(digitalRadioEngine, wsServer);
+  const deviceUiWsServer = new DeviceUiWSServer(deviceUiProjection);
   fastify.log.info('WebSocket server initialized');
 
   // Register CORS plugin - 允许所有跨域
@@ -541,6 +547,9 @@ export async function createServer() {
   await fastify.register(pluginRoutes, { prefix: '/api/plugins' });
   fastify.log.info('Plugin routes registered');
 
+  await fastify.register(deviceUiRoutes, { prefix: '/api/device-ui', projection: deviceUiProjection });
+  fastify.log.info('Device UI routes registered');
+
   // 公开路由：认证
   await fastify.register(authRoutes, { prefix: '/api/auth' });
   fastify.log.info('Auth routes registered');
@@ -559,6 +568,26 @@ export async function createServer() {
     
     // 添加连接到WebSocket服务器（业务逻辑已集成在WSServer中）
     wsServer.addConnection(socket);
+  });
+
+  fastify.get('/api/device-ui/ws', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const token = url.searchParams.get('token');
+      if (!token) {
+        socket.close(4001, 'Device token required');
+        return;
+      }
+      const decoded = fastify.jwt.verify(token);
+      const parsed = DeviceServiceJwtPayloadSchema.safeParse(decoded);
+      if (!parsed.success) {
+        socket.close(4001, 'Invalid device token');
+        return;
+      }
+      deviceUiWsServer.addConnection(socket);
+    } catch {
+      socket.close(4001, 'Invalid device token');
+    }
   });
 
   // Logbook 专用 WebSocket endpoint（仅轻量通知）
@@ -641,6 +670,7 @@ export async function createServer() {
     processMonitor.stop();
     wsServer.cleanup();
     logbookWsServer.cleanup();
+    deviceUiWsServer.cleanup();
   });
 
   fastify.get('/api/realtime/ws-compat', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {

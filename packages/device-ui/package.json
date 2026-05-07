@@ -1,0 +1,33 @@
+{
+  "name": "@tx5dr/device-ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "tx5dr-device-ui": "dist/index.js",
+    "tx5dr-device-ui-preview": "dist/fixtures/preview.js",
+    "tx5dr-network-helper": "dist/network/tx5drNetworkHelper.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "dev:fixture": "tsx src/fixtures/preview.ts",
+    "preview": "tsx src/fixtures/preview.ts",
+    "build:ts": "tsc -p tsconfig.json",
+    "build:native": "cmake -S native -B native/build && cmake --build native/build",
+    "build": "yarn build:ts && yarn build:native",
+    "clean": "rm -rf dist native/build",
+    "test": "vitest run --passWithNoTests"
+  },
+  "devDependencies": {
+    "@tx5dr/shared-config": "workspace:*",
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "dependencies": {
+    "@tx5dr/contracts": "workspace:*"
+  }
+}

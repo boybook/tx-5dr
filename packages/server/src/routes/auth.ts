@@ -10,9 +10,12 @@ import {
 } from '@tx5dr/contracts';
 import { AuthManager, AuthManagerError } from '../auth/AuthManager.js';
 import { requireRole } from '../auth/authPlugin.js';
+import { authPairingConsumeRoute } from '../device-ui/routes.js';
 
 export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   const authManager = AuthManager.getInstance();
+
+  await authPairingConsumeRoute(fastify);
 
   // GET /api/auth/status — 公开，返回认证模式信息
   fastify.get('/status', async () => {

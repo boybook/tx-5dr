@@ -1,0 +1,69 @@
+{
+  "meta": {
+    "schemaVersion": 1,
+    "generatedAt": 0,
+    "deviceId": "fixture-device",
+    "profileId": "tft-ili9486-320x480-touch"
+  },
+  "screen": "network-overview",
+  "statusBar": {
+    "networkKind": "offline",
+    "networkLabel": "Offline",
+    "server": "connecting",
+    "engine": "unknown",
+    "ptt": false,
+    "warningLevel": "info"
+  },
+  "network": {
+    "primary": "offline",
+    "ethernet": {
+      "connected": false
+    },
+    "wifi": {
+      "supported": true,
+      "state": "failed",
+      "savedNetworks": [],
+      "ssid": "BG5DRB",
+      "lastError": "Authentication failed"
+    },
+    "hotspot": {
+      "active": false
+    }
+  },
+  "access": {
+    "qrKind": "access-url"
+  },
+  "tx5dr": {
+    "server": "connecting",
+    "webPort": 8076,
+    "webUrls": [],
+    "browserClientCount": 0,
+    "authMode": "enabled",
+    "engine": {
+      "isRunning": false,
+      "state": "idle",
+      "mode": "FT8"
+    },
+    "radio": {
+      "connected": false,
+      "ptt": false,
+      "operatorIdsInPtt": []
+    },
+    "clock": {
+      "state": "unknown"
+    }
+  },
+  "monitor": {
+    "operators": [],
+    "recentMessages": [],
+    "spectrum": {
+      "available": false,
+      "bins": []
+    },
+    "warnings": []
+  },
+  "ui": {
+    "busy": false,
+    "diagnosticsVisible": false
+  }
+}

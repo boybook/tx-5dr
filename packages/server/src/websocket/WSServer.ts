@@ -1631,9 +1631,12 @@ export class WSServer extends WSMessageHandler {
    * 广播客户端连接数量变化
    * 只统计已完成握手的活跃客户端
    */
+  getBrowserClientCount(): number {
+    return this.getActiveConnections().filter(conn => conn.isHandshakeCompleted()).length;
+  }
+
   private broadcastClientCount(): void {
-    const activeConnections = this.getActiveConnections();
-    const handshakeCompletedCount = activeConnections.filter(conn => conn.isHandshakeCompleted()).length;
+    const handshakeCompletedCount = this.getBrowserClientCount();
 
     logger.debug(`broadcasting client count: ${handshakeCompletedCount} connected clients`);
 
