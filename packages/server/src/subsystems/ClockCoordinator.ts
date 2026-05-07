@@ -65,7 +65,6 @@ export class ClockCoordinator {
 
     this.lm.listen(slotClock, 'slotStart', async (slotInfo: SlotInfo) => {
       logger.debug(`slot start id=${slotInfo.id} start=${new Date(slotInfo.startMs).toISOString()} phase=${slotInfo.phaseMs}ms drift=${slotInfo.driftMs}ms`);
-      getTransmissionPipeline().recordClockEvent('slotStart', slotInfo, getCurrentMode());
 
       // 在 await 让出控制权之前同步捕获 SlotPack，防止 encodeStart
       // 处理器在 await 间隙通过 addTransmissionFrame 覆盖 lastSlotPack
@@ -89,7 +88,6 @@ export class ClockCoordinator {
     this.lm.listen(slotClock, 'encodeStart', (slotInfo: SlotInfo) => {
       const mode = getCurrentMode();
       logger.debug(`encode start id=${slotInfo.id} time=${new Date().toISOString()} advance=${mode.encodeAdvance}ms`);
-      getTransmissionPipeline().recordClockEvent('encodeStart', slotInfo, mode);
 
       // 检查前一时隙是否有已完成的解码结果
       // 仅在有操作员需要发射时检查（非发射周期无需解码数据做决策）
@@ -120,7 +118,6 @@ export class ClockCoordinator {
     this.lm.listen(slotClock, 'transmitStart', (slotInfo: SlotInfo) => {
       const mode = getCurrentMode();
       logger.debug(`transmit start id=${slotInfo.id} time=${new Date().toISOString()} timing=${mode.transmitTiming}ms`);
-      getTransmissionPipeline().recordClockEvent('transmitStart', slotInfo, mode);
 
       getTransmissionPipeline().onTransmitStart(slotInfo);
 
