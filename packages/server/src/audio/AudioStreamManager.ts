@@ -30,6 +30,8 @@ const ICOM_WLAN_TX_MAX_WAIT_SLICE_MS = 20;
 const RTAUDIO_TX_CONSUME_WATCHDOG_MS = 750;
 const RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS = 1000;
 const RTAUDIO_TX_WATCHDOG_MIN_SUBMITTED_CHUNKS = 3;
+const RTAUDIO_IDLE_SILENCE_MAX_QUEUED_CHUNKS = 1;
+const RTAUDIO_IDLE_SILENCE_PUMP_POLL_MS = 5;
 
 export type NativeAudioInputSourceKind = 'audio-device' | 'icom-wlan' | 'openwebrx';
 
@@ -111,6 +113,15 @@ interface RtAudioIssue {
   fatal: boolean;
 }
 
+type RtAudioOutputWriteSource = PlaybackKind | 'voice-tx' | 'idle-silence';
+
+interface RtAudioOutputWriteRecord {
+  source: RtAudioOutputWriteSource;
+  playbackId: number | null;
+  samples: number;
+  enqueuedAt: number;
+}
+
 export interface PlayAudioOptions {
   /**
    * Mirrors the audio chunks written to the TX output into the monitor broadcast
@@ -176,6 +187,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private outputRtAudioErrors: RtAudioIssue[] = [];
   private outputWatchdogGeneration = 0;
   private playbackSequence = 0;
+  private outputWriteQueue: RtAudioOutputWriteRecord[] = [];
+  private outputConsumePlaybackId: number | null = null;
+  private idleSilencePumpTimer: NodeJS.Timeout | null = null;
+  private idleSilenceQueuedChunks = 0;
+  private idleSilenceBuffer: Buffer | null = null;
 
   constructor() {
     super();
@@ -622,7 +638,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       await this.createAndStartOutputWithTimeout(actualOutputDeviceId, resolvedOutputDeviceId ?? outputDeviceId, configuredOutputDeviceName);
 
       this.isOutputting = true;
-      logger.info('audio output started', { sampleRate: this.outputSampleRate });
+      logger.info('audio output started', {
+        sampleRate: this.outputSampleRate,
+        idleSilencePumpEnabled: this.shouldUseIdleSilencePump(),
+      });
+      this.startIdleSilencePump('output-started');
 
     } catch (error) {
       logger.error('failed to start audio output', error);
@@ -804,6 +824,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     try {
       logger.info('stopping audio output');
+      this.stopIdleSilencePump('stop-output');
 
       // ICOM WLAN 输出只需要清除标志，不需要额外操作
       if (this.usingIcomWlanOutput) {
@@ -1066,6 +1087,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       throw new Error('audio output instance not initialized');
     }
 
+    this.outputWriteQueue = [];
+    this.idleSilenceQueuedChunks = 0;
     this.resetOutputConsumeDiagnostics();
 
     this.rtAudioOutput.openStream(
@@ -1082,15 +1105,30 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     );
   }
 
-  private resetOutputConsumeDiagnostics(): void {
+  private resetOutputConsumeDiagnostics(playbackId: number | null = null): void {
     this.outputFramesConsumed = 0;
     this.outputFirstFrameConsumedAt = null;
     this.outputLastFrameConsumedAt = null;
     this.outputRtAudioErrors = [];
+    this.outputConsumePlaybackId = playbackId;
     this.outputWatchdogGeneration++;
   }
 
   private recordOutputFrameConsumed(): void {
+    const record = this.outputWriteQueue.shift() ?? null;
+    if (record?.source === 'idle-silence') {
+      this.idleSilenceQueuedChunks = Math.max(0, this.idleSilenceQueuedChunks - 1);
+      return;
+    }
+
+    if (this.outputConsumePlaybackId === null) {
+      return;
+    }
+
+    if (!record || record.playbackId !== this.outputConsumePlaybackId) {
+      return;
+    }
+
     const now = Date.now();
     this.outputFramesConsumed++;
     if (this.outputFirstFrameConsumedAt === null) {
@@ -1342,6 +1380,171 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       afterStop,
       afterClose: this.getRtAudioBackendSnapshot(stream),
     });
+  }
+
+  private shouldUseIdleSilencePump(): boolean {
+    if (process.env.TX5DR_DISABLE_OUTPUT_IDLE_SILENCE_PUMP === '1') {
+      return false;
+    }
+    return true;
+  }
+
+  private startIdleSilencePump(reason: string): void {
+    if (!this.shouldUseIdleSilencePump() || this.usingIcomWlanOutput) {
+      return;
+    }
+    if (this.idleSilencePumpTimer) {
+      return;
+    }
+    logger.info('RtAudio idle silence pump started', {
+      reason,
+      maxQueuedChunks: RTAUDIO_IDLE_SILENCE_MAX_QUEUED_CHUNKS,
+      chunkSamples: this.getRtAudioOutputChunkSamples(),
+    });
+    this.scheduleIdleSilencePump(0);
+  }
+
+  private stopIdleSilencePump(reason: string): void {
+    if (!this.idleSilencePumpTimer) {
+      return;
+    }
+    clearTimeout(this.idleSilencePumpTimer);
+    this.idleSilencePumpTimer = null;
+    logger.debug('RtAudio idle silence pump stopped', { reason });
+  }
+
+  private scheduleIdleSilencePump(delayMs: number): void {
+    if (this.idleSilencePumpTimer || !this.shouldUseIdleSilencePump()) {
+      return;
+    }
+    this.idleSilencePumpTimer = setTimeout(() => {
+      this.idleSilencePumpTimer = null;
+      this.runIdleSilencePump();
+    }, Math.max(0, delayMs));
+    this.idleSilencePumpTimer.unref?.();
+  }
+
+  private runIdleSilencePump(): void {
+    if (!this.shouldUseIdleSilencePump() || !this.isOutputting || this.usingIcomWlanOutput || !this.rtAudioOutput) {
+      return;
+    }
+    if (typeof this.rtAudioOutput.write !== 'function') {
+      logger.debug('RtAudio idle silence pump disabled: output write() unavailable');
+      return;
+    }
+
+    if (this.shouldHoldIdleSilencePump()) {
+      this.scheduleIdleSilencePump(RTAUDIO_IDLE_SILENCE_PUMP_POLL_MS);
+      return;
+    }
+
+    if (this.idleSilenceQueuedChunks < RTAUDIO_IDLE_SILENCE_MAX_QUEUED_CHUNKS) {
+      try {
+        this.writeRtAudioOutputBuffer(this.getIdleSilenceBuffer(), {
+          source: 'idle-silence',
+          playbackId: null,
+          samples: this.getRtAudioOutputChunkSamples(),
+        });
+      } catch (error) {
+        logger.warn('RtAudio idle silence write failed', { error: this.describeError(error) });
+      }
+    }
+
+    this.scheduleIdleSilencePump(RTAUDIO_IDLE_SILENCE_PUMP_POLL_MS);
+  }
+
+  private shouldHoldIdleSilencePump(): boolean {
+    if (this.playing) {
+      return true;
+    }
+    if (this.voiceTxOutputPipeline.getQueueDepthFrames() > 0) {
+      return true;
+    }
+    return this.outputWriteQueue.some((record) => record.source !== 'idle-silence');
+  }
+
+  private getRtAudioOutputChunkSamples(): number {
+    return Math.max(64, this.outputBufferSize || 768) * this.channels;
+  }
+
+  private getIdleSilenceBuffer(): Buffer {
+    const byteLength = this.getRtAudioOutputChunkSamples() * 4;
+    if (!this.idleSilenceBuffer || this.idleSilenceBuffer.length !== byteLength) {
+      this.idleSilenceBuffer = Buffer.alloc(byteLength);
+    }
+    return this.idleSilenceBuffer;
+  }
+
+  private prepareRtAudioQueueForPlayback(playbackId: number, playbackKind: PlaybackKind): void {
+    this.stopIdleSilencePump(`playback-start:${playbackKind}`);
+    this.clearRtAudioOutputQueue(`playback-start:${playbackKind}`);
+    this.resetOutputConsumeDiagnostics(playbackId);
+  }
+
+  private clearQueuedIdleSilenceIfSafe(reason: string): void {
+    if (this.idleSilenceQueuedChunks <= 0) {
+      return;
+    }
+    if (this.outputWriteQueue.some((record) => record.source !== 'idle-silence')) {
+      return;
+    }
+    this.clearRtAudioOutputQueue(reason);
+  }
+
+  private clearRtAudioOutputQueue(reason: string): void {
+    if (!this.rtAudioOutput) {
+      return;
+    }
+    const clearedRecords = this.outputWriteQueue.length;
+    const clearedIdleSilenceChunks = this.idleSilenceQueuedChunks;
+    try {
+      this.rtAudioOutput.clearOutputQueue();
+      logger.info('RtAudio output queue cleared', {
+        reason,
+        clearedRecords,
+        clearedIdleSilenceChunks,
+      });
+    } catch (error) {
+      logger.warn('failed to clear RtAudio output queue', { reason, error: this.describeError(error) });
+    } finally {
+      this.outputWriteQueue = [];
+      this.idleSilenceQueuedChunks = 0;
+    }
+  }
+
+  private writeRtAudioOutputBuffer(
+    buffer: Buffer,
+    record: Omit<RtAudioOutputWriteRecord, 'enqueuedAt'>,
+  ): void {
+    if (!this.rtAudioOutput) {
+      throw new Error('audio output stream not started');
+    }
+
+    if (record.source !== 'idle-silence') {
+      this.clearQueuedIdleSilenceIfSafe(`active-write:${record.source}`);
+    }
+
+    const queuedRecord: RtAudioOutputWriteRecord = {
+      ...record,
+      enqueuedAt: Date.now(),
+    };
+    this.outputWriteQueue.push(queuedRecord);
+    if (queuedRecord.source === 'idle-silence') {
+      this.idleSilenceQueuedChunks++;
+    }
+
+    try {
+      this.rtAudioOutput.write(buffer);
+    } catch (error) {
+      const index = this.outputWriteQueue.indexOf(queuedRecord);
+      if (index >= 0) {
+        this.outputWriteQueue.splice(index, 1);
+      }
+      if (queuedRecord.source === 'idle-silence') {
+        this.idleSilenceQueuedChunks = Math.max(0, this.idleSilenceQueuedChunks - 1);
+      }
+      throw error;
+    }
   }
 
   private appendSnapshotError(existing: string | undefined, next: string): string {
@@ -1632,7 +1835,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       logger.debug(`chunked playback: ${totalChunks} chunks, chunkSize=${chunkSize}, prebuffer~${prebufferMs}ms, tick=${TICK_MS}ms, totalSamples=${totalSamples}, expectedDuration=${expectedDurationMs}ms`);
 
       const chunkStartTime = Date.now();
-      this.resetOutputConsumeDiagnostics();
+      this.prepareRtAudioQueueForPlayback(playbackId, playbackKind);
       const watchdogGeneration = this.outputWatchdogGeneration;
       let submittedChunks = 0;
       let submittedSamples = 0;
@@ -1728,7 +1931,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             for (let j = chunk.length; j < bufferSamples; j++) {
               buffer.writeFloatLE(0, j * 4);
             }
-            this.rtAudioOutput.write(buffer);
+            this.writeRtAudioOutputBuffer(buffer, {
+              source: playbackKind,
+              playbackId,
+              samples: chunk.length,
+            });
             if (monitorChunk && monitorChunk.length > 0) {
               this.emit('txMonitorAudioData', { samples: monitorChunk, sampleRate: this.outputSampleRate });
             }
@@ -1896,6 +2103,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       } finally {
         // Safe if the playback failed before the watchdog was created.
         this.outputWatchdogGeneration++;
+        this.startIdleSilencePump(`playback-finished:${playbackKind}`);
         // 清理播放状态
         if (this.currentPlaybackPromise === playbackPromise) {
           this.playing = false;
@@ -1971,7 +2179,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       for (let index = 0; index < samples.length; index += 1) {
         buffer.writeFloatLE(samples[index] ?? 0, index * 4);
       }
-      this.rtAudioOutput.write(buffer);
+      this.writeRtAudioOutputBuffer(buffer, {
+        source: 'voice-tx',
+        playbackId: null,
+        samples: samples.length,
+      });
       return true;
     } catch (error) {
       logger.debug('Voice audio RtAudio write failed', error);
