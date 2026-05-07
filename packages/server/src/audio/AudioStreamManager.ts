@@ -30,8 +30,10 @@ const ICOM_WLAN_TX_MAX_WAIT_SLICE_MS = 20;
 const RTAUDIO_TX_CONSUME_WATCHDOG_MS = 750;
 const RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS = 1000;
 const RTAUDIO_TX_WATCHDOG_MIN_SUBMITTED_CHUNKS = 3;
-const RTAUDIO_IDLE_SILENCE_MAX_QUEUED_CHUNKS = 1;
-const RTAUDIO_IDLE_SILENCE_PUMP_POLL_MS = 5;
+const RTAUDIO_IDLE_PRIME_MAX_QUEUED_CHUNKS = 1;
+const RTAUDIO_IDLE_PRIME_PUMP_POLL_MS = 5;
+const RTAUDIO_IDLE_PRIME_DEFAULT_TONE_HZ = 1000;
+const RTAUDIO_IDLE_PRIME_DEFAULT_TONE_AMPLITUDE = 0.003;
 
 export type NativeAudioInputSourceKind = 'audio-device' | 'icom-wlan' | 'openwebrx';
 
@@ -113,7 +115,7 @@ interface RtAudioIssue {
   fatal: boolean;
 }
 
-type RtAudioOutputWriteSource = PlaybackKind | 'voice-tx' | 'idle-silence';
+type RtAudioOutputWriteSource = PlaybackKind | 'voice-tx' | 'idle-tone';
 
 interface RtAudioOutputWriteRecord {
   source: RtAudioOutputWriteSource;
@@ -189,9 +191,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private playbackSequence = 0;
   private outputWriteQueue: RtAudioOutputWriteRecord[] = [];
   private outputConsumePlaybackId: number | null = null;
-  private idleSilencePumpTimer: NodeJS.Timeout | null = null;
-  private idleSilenceQueuedChunks = 0;
-  private idleSilenceBuffer: Buffer | null = null;
+  private idlePrimePumpTimer: NodeJS.Timeout | null = null;
+  private idlePrimeQueuedChunks = 0;
+  private idlePrimeTonePhase = 0;
 
   constructor() {
     super();
@@ -640,9 +642,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.isOutputting = true;
       logger.info('audio output started', {
         sampleRate: this.outputSampleRate,
-        idleSilencePumpEnabled: this.shouldUseIdleSilencePump(),
+        idlePrimePumpEnabled: this.shouldUseIdlePrimePump(),
       });
-      this.startIdleSilencePump('output-started');
+      this.startIdlePrimePump('output-started');
 
     } catch (error) {
       logger.error('failed to start audio output', error);
@@ -824,7 +826,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     try {
       logger.info('stopping audio output');
-      this.stopIdleSilencePump('stop-output');
+      this.stopIdlePrimePump('stop-output');
 
       // ICOM WLAN 输出只需要清除标志，不需要额外操作
       if (this.usingIcomWlanOutput) {
@@ -1088,7 +1090,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     }
 
     this.outputWriteQueue = [];
-    this.idleSilenceQueuedChunks = 0;
+    this.idlePrimeQueuedChunks = 0;
     this.resetOutputConsumeDiagnostics();
 
     this.rtAudioOutput.openStream(
@@ -1116,8 +1118,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
   private recordOutputFrameConsumed(): void {
     const record = this.outputWriteQueue.shift() ?? null;
-    if (record?.source === 'idle-silence') {
-      this.idleSilenceQueuedChunks = Math.max(0, this.idleSilenceQueuedChunks - 1);
+    if (record?.source === 'idle-tone') {
+      this.idlePrimeQueuedChunks = Math.max(0, this.idlePrimeQueuedChunks - 1);
       return;
     }
 
@@ -1382,110 +1384,149 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     });
   }
 
-  private shouldUseIdleSilencePump(): boolean {
-    if (process.env.TX5DR_DISABLE_OUTPUT_IDLE_SILENCE_PUMP === '1') {
+  private shouldUseIdlePrimePump(): boolean {
+    if (
+      process.env.TX5DR_DISABLE_OUTPUT_IDLE_PRIME_PUMP === '1' ||
+      process.env.TX5DR_DISABLE_OUTPUT_IDLE_SILENCE_PUMP === '1'
+    ) {
       return false;
     }
     return true;
   }
 
-  private startIdleSilencePump(reason: string): void {
-    if (!this.shouldUseIdleSilencePump() || this.usingIcomWlanOutput) {
+  private startIdlePrimePump(reason: string): void {
+    if (!this.shouldUseIdlePrimePump() || this.usingIcomWlanOutput) {
       return;
     }
-    if (this.idleSilencePumpTimer) {
+    if (this.idlePrimePumpTimer) {
       return;
     }
-    logger.info('RtAudio idle silence pump started', {
+    logger.info('RtAudio idle prime pump started', {
       reason,
-      maxQueuedChunks: RTAUDIO_IDLE_SILENCE_MAX_QUEUED_CHUNKS,
+      maxQueuedChunks: RTAUDIO_IDLE_PRIME_MAX_QUEUED_CHUNKS,
       chunkSamples: this.getRtAudioOutputChunkSamples(),
+      toneHz: this.getIdlePrimeToneHz(),
+      amplitude: this.getIdlePrimeToneAmplitude(),
     });
-    this.scheduleIdleSilencePump(0);
+    this.scheduleIdlePrimePump(0);
   }
 
-  private stopIdleSilencePump(reason: string): void {
-    if (!this.idleSilencePumpTimer) {
+  private stopIdlePrimePump(reason: string): void {
+    if (!this.idlePrimePumpTimer) {
       return;
     }
-    clearTimeout(this.idleSilencePumpTimer);
-    this.idleSilencePumpTimer = null;
-    logger.debug('RtAudio idle silence pump stopped', { reason });
+    clearTimeout(this.idlePrimePumpTimer);
+    this.idlePrimePumpTimer = null;
+    logger.debug('RtAudio idle prime pump stopped', { reason });
   }
 
-  private scheduleIdleSilencePump(delayMs: number): void {
-    if (this.idleSilencePumpTimer || !this.shouldUseIdleSilencePump()) {
+  private scheduleIdlePrimePump(delayMs: number): void {
+    if (this.idlePrimePumpTimer || !this.shouldUseIdlePrimePump()) {
       return;
     }
-    this.idleSilencePumpTimer = setTimeout(() => {
-      this.idleSilencePumpTimer = null;
-      this.runIdleSilencePump();
+    this.idlePrimePumpTimer = setTimeout(() => {
+      this.idlePrimePumpTimer = null;
+      this.runIdlePrimePump();
     }, Math.max(0, delayMs));
-    this.idleSilencePumpTimer.unref?.();
+    this.idlePrimePumpTimer.unref?.();
   }
 
-  private runIdleSilencePump(): void {
-    if (!this.shouldUseIdleSilencePump() || !this.isOutputting || this.usingIcomWlanOutput || !this.rtAudioOutput) {
+  private runIdlePrimePump(): void {
+    if (!this.shouldUseIdlePrimePump() || !this.isOutputting || this.usingIcomWlanOutput || !this.rtAudioOutput) {
       return;
     }
     if (typeof this.rtAudioOutput.write !== 'function') {
-      logger.debug('RtAudio idle silence pump disabled: output write() unavailable');
+      logger.debug('RtAudio idle prime pump disabled: output write() unavailable');
       return;
     }
 
-    if (this.shouldHoldIdleSilencePump()) {
-      this.scheduleIdleSilencePump(RTAUDIO_IDLE_SILENCE_PUMP_POLL_MS);
+    if (this.shouldHoldIdlePrimePump()) {
+      this.scheduleIdlePrimePump(RTAUDIO_IDLE_PRIME_PUMP_POLL_MS);
       return;
     }
 
-    if (this.idleSilenceQueuedChunks < RTAUDIO_IDLE_SILENCE_MAX_QUEUED_CHUNKS) {
+    if (this.idlePrimeQueuedChunks < RTAUDIO_IDLE_PRIME_MAX_QUEUED_CHUNKS) {
       try {
-        this.writeRtAudioOutputBuffer(this.getIdleSilenceBuffer(), {
-          source: 'idle-silence',
+        this.writeRtAudioOutputBuffer(this.getIdlePrimeBuffer(), {
+          source: 'idle-tone',
           playbackId: null,
           samples: this.getRtAudioOutputChunkSamples(),
         });
       } catch (error) {
-        logger.warn('RtAudio idle silence write failed', { error: this.describeError(error) });
+        logger.warn('RtAudio idle prime write failed', { error: this.describeError(error) });
       }
     }
 
-    this.scheduleIdleSilencePump(RTAUDIO_IDLE_SILENCE_PUMP_POLL_MS);
+    this.scheduleIdlePrimePump(RTAUDIO_IDLE_PRIME_PUMP_POLL_MS);
   }
 
-  private shouldHoldIdleSilencePump(): boolean {
+  private shouldHoldIdlePrimePump(): boolean {
     if (this.playing) {
       return true;
     }
     if (this.voiceTxOutputPipeline.getQueueDepthFrames() > 0) {
       return true;
     }
-    return this.outputWriteQueue.some((record) => record.source !== 'idle-silence');
+    return this.outputWriteQueue.some((record) => record.source !== 'idle-tone');
   }
 
   private getRtAudioOutputChunkSamples(): number {
     return Math.max(64, this.outputBufferSize || 768) * this.channels;
   }
 
-  private getIdleSilenceBuffer(): Buffer {
-    const byteLength = this.getRtAudioOutputChunkSamples() * 4;
-    if (!this.idleSilenceBuffer || this.idleSilenceBuffer.length !== byteLength) {
-      this.idleSilenceBuffer = Buffer.alloc(byteLength);
+  private getIdlePrimeBuffer(): Buffer {
+    const sampleCount = this.getRtAudioOutputChunkSamples();
+    const buffer = Buffer.allocUnsafe(sampleCount * 4);
+    const amplitude = this.getIdlePrimeToneAmplitude();
+    const toneHz = this.getIdlePrimeToneHz();
+    const phaseStep = (2 * Math.PI * toneHz) / Math.max(1, this.outputSampleRate);
+
+    for (let index = 0; index < sampleCount; index += 1) {
+      buffer.writeFloatLE(amplitude * Math.sin(this.idlePrimeTonePhase), index * 4);
+      this.idlePrimeTonePhase += phaseStep;
+      if (this.idlePrimeTonePhase >= 2 * Math.PI) {
+        this.idlePrimeTonePhase %= 2 * Math.PI;
+      }
     }
-    return this.idleSilenceBuffer;
+
+    return buffer;
+  }
+
+  private getIdlePrimeToneHz(): number {
+    return this.parseBoundedNumber(
+      process.env.TX5DR_OUTPUT_IDLE_PRIME_TONE_HZ,
+      RTAUDIO_IDLE_PRIME_DEFAULT_TONE_HZ,
+      20,
+      Math.max(20, Math.min(20_000, this.outputSampleRate / 2 - 1)),
+    );
+  }
+
+  private getIdlePrimeToneAmplitude(): number {
+    return this.parseBoundedNumber(
+      process.env.TX5DR_OUTPUT_IDLE_PRIME_TONE_AMPLITUDE,
+      RTAUDIO_IDLE_PRIME_DEFAULT_TONE_AMPLITUDE,
+      0,
+      0.05,
+    );
+  }
+
+  private parseBoundedNumber(value: string | undefined, fallback: number, min: number, max: number): number {
+    const parsed = value === undefined ? Number.NaN : Number.parseFloat(value);
+    const numeric = Number.isFinite(parsed) ? parsed : fallback;
+    return Math.max(min, Math.min(max, numeric));
   }
 
   private prepareRtAudioQueueForPlayback(playbackId: number, playbackKind: PlaybackKind): void {
-    this.stopIdleSilencePump(`playback-start:${playbackKind}`);
+    this.stopIdlePrimePump(`playback-start:${playbackKind}`);
     this.clearRtAudioOutputQueue(`playback-start:${playbackKind}`);
     this.resetOutputConsumeDiagnostics(playbackId);
   }
 
-  private clearQueuedIdleSilenceIfSafe(reason: string): void {
-    if (this.idleSilenceQueuedChunks <= 0) {
+  private clearQueuedIdlePrimeIfSafe(reason: string): void {
+    if (this.idlePrimeQueuedChunks <= 0) {
       return;
     }
-    if (this.outputWriteQueue.some((record) => record.source !== 'idle-silence')) {
+    if (this.outputWriteQueue.some((record) => record.source !== 'idle-tone')) {
       return;
     }
     this.clearRtAudioOutputQueue(reason);
@@ -1496,19 +1537,19 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       return;
     }
     const clearedRecords = this.outputWriteQueue.length;
-    const clearedIdleSilenceChunks = this.idleSilenceQueuedChunks;
+    const clearedIdlePrimeChunks = this.idlePrimeQueuedChunks;
     try {
       this.rtAudioOutput.clearOutputQueue();
       logger.info('RtAudio output queue cleared', {
         reason,
         clearedRecords,
-        clearedIdleSilenceChunks,
+        clearedIdlePrimeChunks,
       });
     } catch (error) {
       logger.warn('failed to clear RtAudio output queue', { reason, error: this.describeError(error) });
     } finally {
       this.outputWriteQueue = [];
-      this.idleSilenceQueuedChunks = 0;
+      this.idlePrimeQueuedChunks = 0;
     }
   }
 
@@ -1520,8 +1561,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       throw new Error('audio output stream not started');
     }
 
-    if (record.source !== 'idle-silence') {
-      this.clearQueuedIdleSilenceIfSafe(`active-write:${record.source}`);
+    if (record.source !== 'idle-tone') {
+      this.clearQueuedIdlePrimeIfSafe(`active-write:${record.source}`);
     }
 
     const queuedRecord: RtAudioOutputWriteRecord = {
@@ -1529,8 +1570,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       enqueuedAt: Date.now(),
     };
     this.outputWriteQueue.push(queuedRecord);
-    if (queuedRecord.source === 'idle-silence') {
-      this.idleSilenceQueuedChunks++;
+    if (queuedRecord.source === 'idle-tone') {
+      this.idlePrimeQueuedChunks++;
     }
 
     try {
@@ -1540,8 +1581,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       if (index >= 0) {
         this.outputWriteQueue.splice(index, 1);
       }
-      if (queuedRecord.source === 'idle-silence') {
-        this.idleSilenceQueuedChunks = Math.max(0, this.idleSilenceQueuedChunks - 1);
+      if (queuedRecord.source === 'idle-tone') {
+        this.idlePrimeQueuedChunks = Math.max(0, this.idlePrimeQueuedChunks - 1);
       }
       throw error;
     }
@@ -2103,7 +2144,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       } finally {
         // Safe if the playback failed before the watchdog was created.
         this.outputWatchdogGeneration++;
-        this.startIdleSilencePump(`playback-finished:${playbackKind}`);
+        this.startIdlePrimePump(`playback-finished:${playbackKind}`);
         // 清理播放状态
         if (this.currentPlaybackPromise === playbackPromise) {
           this.playing = false;

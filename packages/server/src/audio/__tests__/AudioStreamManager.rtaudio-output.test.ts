@@ -162,10 +162,12 @@ import { RingBuffer } from '../ringBuffer.js';
 
 describe('AudioStreamManager RtAudio output diagnostics', () => {
   const originalForceWatchdog = process.env.TX5DR_FORCE_WINDOWS_AUDIO_WATCHDOG;
-  const originalDisableIdleSilencePump = process.env.TX5DR_DISABLE_OUTPUT_IDLE_SILENCE_PUMP;
+  const originalDisableIdlePrimePump = process.env.TX5DR_DISABLE_OUTPUT_IDLE_PRIME_PUMP;
+  const originalIdlePrimeToneHz = process.env.TX5DR_OUTPUT_IDLE_PRIME_TONE_HZ;
+  const originalIdlePrimeToneAmplitude = process.env.TX5DR_OUTPUT_IDLE_PRIME_TONE_AMPLITUDE;
 
   beforeEach(() => {
-    process.env.TX5DR_DISABLE_OUTPUT_IDLE_SILENCE_PUMP = '1';
+    process.env.TX5DR_DISABLE_OUTPUT_IDLE_PRIME_PUMP = '1';
     mockRtAudioState.consumeOnWrite = true;
     mockRtAudioState.throwOnWrite = false;
     mockRtAudioState.writes = [];
@@ -189,10 +191,20 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     } else {
       process.env.TX5DR_FORCE_WINDOWS_AUDIO_WATCHDOG = originalForceWatchdog;
     }
-    if (originalDisableIdleSilencePump === undefined) {
-      delete process.env.TX5DR_DISABLE_OUTPUT_IDLE_SILENCE_PUMP;
+    if (originalDisableIdlePrimePump === undefined) {
+      delete process.env.TX5DR_DISABLE_OUTPUT_IDLE_PRIME_PUMP;
     } else {
-      process.env.TX5DR_DISABLE_OUTPUT_IDLE_SILENCE_PUMP = originalDisableIdleSilencePump;
+      process.env.TX5DR_DISABLE_OUTPUT_IDLE_PRIME_PUMP = originalDisableIdlePrimePump;
+    }
+    if (originalIdlePrimeToneHz === undefined) {
+      delete process.env.TX5DR_OUTPUT_IDLE_PRIME_TONE_HZ;
+    } else {
+      process.env.TX5DR_OUTPUT_IDLE_PRIME_TONE_HZ = originalIdlePrimeToneHz;
+    }
+    if (originalIdlePrimeToneAmplitude === undefined) {
+      delete process.env.TX5DR_OUTPUT_IDLE_PRIME_TONE_AMPLITUDE;
+    } else {
+      process.env.TX5DR_OUTPUT_IDLE_PRIME_TONE_AMPLITUDE = originalIdlePrimeToneAmplitude;
     }
     vi.restoreAllMocks();
   });
@@ -302,8 +314,10 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     );
   });
 
-  it('keeps a tiny idle silence queue and clears it before active playback', async () => {
-    delete process.env.TX5DR_DISABLE_OUTPUT_IDLE_SILENCE_PUMP;
+  it('keeps a tiny idle prime queue and clears it before active playback', async () => {
+    delete process.env.TX5DR_DISABLE_OUTPUT_IDLE_PRIME_PUMP;
+    process.env.TX5DR_OUTPUT_IDLE_PRIME_TONE_HZ = '1000';
+    process.env.TX5DR_OUTPUT_IDLE_PRIME_TONE_AMPLITUDE = '0.003';
     mockRtAudioState.consumeOnWrite = false;
     const manager = new AudioStreamManager();
     await manager.startOutput();
@@ -311,7 +325,13 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     await new Promise((resolve) => setTimeout(resolve, 15));
 
     expect(mockRtAudioState.writes).toHaveLength(1);
-    expect([...mockRtAudioState.writes[0]!]).toEqual(new Array(64 * 4).fill(0));
+    const idleToneSamples = Array.from({ length: 64 }, (_value, index) =>
+      mockRtAudioState.writes[0]!.readFloatLE(index * 4),
+    );
+    expect(Math.max(...idleToneSamples.map(Math.abs))).toBeGreaterThan(0.0025);
+    expect(Math.max(...idleToneSamples.map(Math.abs))).toBeLessThanOrEqual(0.0031);
+    expect(idleToneSamples.some((sample) => sample > 0)).toBe(true);
+    expect(idleToneSamples.some((sample) => sample < 0)).toBe(true);
 
     mockRtAudioState.consumeOnWrite = true;
     await manager.playAudio(new Float32Array(128).fill(0.5), 48000);
