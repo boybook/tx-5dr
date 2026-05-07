@@ -21,10 +21,17 @@ if systemctl is-active --quiet tx5dr 2>/dev/null; then
     systemctl stop tx5dr
     _msg "TX-5DR service stopped." "TX-5DR 服务已停止。"
 fi
+for svc in tx5dr-device-ui tx5dr-network-helper; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        systemctl stop "$svc" 2>/dev/null || true
+        _msg "Stopped service: $svc" "已停止服务: $svc"
+    fi
+done
 
 # --- Only on full remove (not upgrade) ---
 if [[ "$ACTION" == "remove" ]]; then
     systemctl disable tx5dr 2>/dev/null || true
+    systemctl disable tx5dr-device-ui tx5dr-network-helper 2>/dev/null || true
     systemctl daemon-reload 2>/dev/null || true
 
     # Remove nginx config

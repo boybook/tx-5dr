@@ -121,15 +121,6 @@ export class PanelSocketHub extends EventEmitter {
       pending.resolve(message);
       return;
     }
-    if (message.t === 'renderer.applied' && this.#pending.size > 0) {
-      const oldest = this.#pending.values().next().value as PendingAck | undefined;
-      if (oldest) {
-        clearTimeout(oldest.timer);
-        this.#pending.delete(oldest.id);
-        oldest.resolve(message);
-      }
-      return;
-    }
     if (message.t === 'renderer.hello') this.emit('hello', message.payload as RendererHello);
     else if (message.t === 'renderer.ready') this.emit('ready');
     else if (message.t === 'ui.action') this.emit('action', message.payload as UiActionPayload);

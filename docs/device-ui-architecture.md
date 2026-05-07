@@ -1824,18 +1824,15 @@ sequenceDiagram
 ## 19. 配置项固定默认值
 
 ```env
-TX5DR_DEVICE_UI_ENABLED=1
-TX5DR_DEVICE_UI_PROFILE=tft-ili9486-320x480
-TX5DR_DEVICE_UI_RENDERER=/usr/lib/tx5dr/tx5dr-panel-lvgl
-TX5DR_DEVICE_UI_NETWORK_HELPER=/usr/lib/tx5dr/tx5dr-network-helper
+TX5DR_DEVICE_UI_PROFILE=tft-ili9486-320x480-touch
+TX5DR_DEVICE_UI_RENDERER=native
+TX5DR_DEVICE_UI_FB=/dev/fb1
+TX5DR_DEVICE_UI_INPUT=/dev/input/by-path/platform-fe204000.spi-cs-1-event
 TX5DR_DEVICE_UI_SOCKET=/run/tx5dr/device-ui-panel.sock
-TX5DR_DEVICE_UI_FBDEV=/dev/fb1
-TX5DR_DEVICE_UI_INPUT=/dev/input/event0
-TX5DR_DEVICE_UI_ROTATION=0
-TX5DR_DEVICE_UI_AUTO_HOTSPOT=1
-TX5DR_DEVICE_UI_HOTSPOT_SSID_PREFIX=TX5DR
-TX5DR_DEVICE_UI_SERVER_URL=http://127.0.0.1:8076
-TX5DR_DEVICE_UI_DEFAULT_SCREEN=access
+TX5DR_DEVICE_UI_CALIBRATION=/var/lib/tx5dr/device-ui/calibration.json
+TX5DR_NETWORK_HELPER_SOCKET=/run/tx5dr/network-helper.sock
+TX5DR_SERVER_URL=http://127.0.0.1:8076
+TX5DR_CONFIG_DIR=/var/lib/tx5dr/config
 ```
 
 OLED 示例：
@@ -1906,22 +1903,23 @@ MVP 完成时必须满足：
 | Server event mapping | daemon 已支持 server `DeviceUiWSServer` 的 `{ type, data }` 事件和旧 `{ t, payload }` 事件，避免 live WS 增量状态被忽略。 |
 | Network helper | 已实现 `tx5dr-network-helper` 可执行入口、Unix socket JSON 协议、allowlist operation、`nmcli` status/scan/connect/disconnect/forget/hotspot start/stop 调用、热点凭据持久化基础逻辑。 |
 | Display profiles | 已实现 TFT profile 与 SSD1306/SSD1315/SH1106 `128x64` OLED profiles。 |
-| Native build | 已实现 `tx5dr-panel-lvgl` 与 `tx5dr-panel-oled` C/C++ simulator-compatible native binaries，可通过 CMake 在 macOS 编译。 |
+| Native build | 已实现 `tx5dr-panel-lvgl` 与 `tx5dr-panel-oled` C/C++ native binaries，可通过 CMake 在 macOS 与 Linux 编译。 |
 | macOS preview | 已验证 daemon fixture + Unix socket + native PNG renderer，可生成 `320x480` TFT PNG 与 `128x64` OLED PNG。 |
 | Tests | 已新增 contracts/server/device-ui package 单元测试，覆盖 schema、routes、WS、projection、pairing、IPC、server event mapper、network helper parser。 |
+| TFT LVGL | 已替换 skeleton，链接 LVGL v9.5.0 与 yyjson；支持 PNG snapshot、SDL preview、Linux fbdev `/dev/fb1`、evdev touch、长连接 IPC、Access/Network/Monitor/Diagnostics 页面。 |
+| Packaging/systemd | 已新增 device-ui 与 network-helper systemd 示例，并在 Linux package staging 中带上 unit、env 示例和默认校准文件。 |
 
 ### 23.2 当前仍不是完整硬件 MVP 的限制
 
 | 限制 | 当前状态 | 后续落地点 |
 |---|---|---|
-| TFT LVGL | native binary 当前是 simulator skeleton，尚未链接真实 LVGL v9.5.0 widget/page 树，也未接 fbdev/evdev。 | `packages/device-ui/native/tx5dr-panel-lvgl/src/ui/*` 与 `platform/*`。 |
 | OLED U8g2 | native binary 当前是 simulator skeleton，尚未链接真实 U8g2，也未接 I2C/GPIO。 | `packages/device-ui/native/tx5dr-panel-oled/src/ui/*` 与 `platform/*`。 |
-| Native vendor | `vendor/versions.lock` 已记录目标，但 LVGL/U8g2/yyjson source snapshot 尚未真正 vendored。 | 构建阶段必须离线使用 `native/vendor/*`。 |
-| 真实硬件 | 尚未在 Raspberry Pi、ILI9486、XPT2046、SSD1306/SSD1315/SH1106 上验证。 | Phase 5/6 hardware bring-up。 |
-| Pixel UI | 当前 PNG 证明 pipeline 可跑通，但不等价于最终 LVGL/U8g2 像素验收、触摸交互、二维码扫码验收。 | Snapshot tests + 实机扫码。 |
+| Native vendor | LVGL v9.5.0 与 yyjson 已 vendored；U8g2 仍是 planned source snapshot。 | OLED 实机阶段补齐 U8g2。 |
+| 真实硬件 | 已确认 Raspberry Pi 暴露 `/dev/fb1` 与 ADS7846 event；当前仍处 vendor `rotate=90 / 480x320` 桌面模式，尚未切换 `rotate=0` 产品模式。 | 用户确认后修改 boot config、重启并跑 fbdev/touch 实机验收。 |
+| Pixel UI | TFT PNG/LVGL pipeline 可跑通；真实二维码扫码、触摸四角校准、热点 AP+STA 恢复仍需实机验收。 | Snapshot tests + 实机扫码/触摸。 |
 | Server projection | 当前 projection 仍是安全裁剪 MVP 骨架，尚未完整订阅 engine/radio/operator/recent message/spectrum 事件。 | `DeviceUiProjectionService` 深度接入业务事件。 |
 | Network runtime | helper 已有 allowlist nmcli 调用代码，但尚未通过 root systemd、真实 NetworkManager、AP+STA 失败恢复流程验证。 | `tx5dr-network-helper.service` + Raspberry Pi 网络测试。 |
-| Packaging | 尚未新增 systemd unit、udev/polkit/group/package 安装脚本。 | PR 7 packaging/systemd/docs。 |
+| Packaging | package staging 已复制 device-ui 文件；postinstall 只创建用户/组/目录并安装 unit，不默认启用 device-ui，以免非产品主机自动接管网络/小屏。 | 产品镜像安装脚本中 enable `tx5dr-network-helper` 与 `tx5dr-device-ui`。 |
 
 ### 23.3 当前通过的最小验证
 
@@ -1944,3 +1942,23 @@ packages/device-ui/native/build/tx5dr-panel-lvgl/tx5dr-panel-lvgl --backend=png 
 node packages/device-ui/dist/fixtures/preview.js --fixture=oled-monitor-tx --renderer=mock --profile=oled-ssd1306-128x64-1btn --socket=/tmp/tx5dr-oled-smoke.sock --watch
 packages/device-ui/native/build/tx5dr-panel-oled/tx5dr-panel-oled --backend=png --socket=/tmp/tx5dr-oled-smoke.sock --snapshot=/tmp/tx5dr-oled-smoke.png --once-ms=1200
 ```
+
+### 23.4 TFT35A / LCD-show 实机路径更新
+
+记录时间：2026-05-07。`boybook@192.168.31.234` 已运行 vendor `~/coding/LCD-show/LCD35-show` 并确认真实硬件路径：
+
+| 项 | 结果 |
+|---|---|
+| Display | `/dev/fb1`，driver `fb_ili9486`，当前 vendor 桌面模式 `480x320`，`16bpp RGB565`。 |
+| Touch | `/dev/input/event0`，`ADS7846 Touchscreen`，即 XPT2046 兼容触摸。 |
+| SPI | `spi0.0 -> fb_ili9486`，`spi0.1 -> ads7846`。 |
+| Overlay | vendor 使用 `dtoverlay=tft35a:rotate=90` 与 X11/fbturbo/fbcp 展示桌面。 |
+
+TX-5DR product mode 不复用 vendor 桌面镜像路径。产品路径锁定为 device-ui 独占 `/dev/fb1`，使用 `dtoverlay=tft35a:rotate=0` 得到竖屏 `320x480`。如果实测仍为 `480x320`，native renderer 必须拒绝进入 fbdev product mode 并提示修正 overlay/rotation。
+
+落地文件：
+
+- `docs/device-ui-tft35a-bringup.md`：专用 bring-up 与恢复文档。
+- `packages/device-ui/examples/device-ui.env`：产品环境变量示例。
+- `packages/device-ui/examples/calibration.tft35a-rotate0.json`：来自 LCD-show `99-calibration.conf-35-0` 的初始触摸校准。
+- `packages/device-ui/systemd/tx5dr-device-ui.service` 与 `tx5dr-network-helper.service`：systemd 示例。

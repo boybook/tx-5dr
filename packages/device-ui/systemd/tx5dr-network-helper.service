@@ -1,0 +1,19 @@
+[Unit]
+Description=TX-5DR Device UI NetworkManager helper
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+User=root
+Group=tx5dr
+UMask=0007
+EnvironmentFile=-/etc/tx5dr/device-ui.env
+RuntimeDirectory=tx5dr
+RuntimeDirectoryMode=0750
+ExecStart=/usr/bin/env node /opt/tx5dr/packages/device-ui/dist/network/tx5drNetworkHelper.js
+Restart=always
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

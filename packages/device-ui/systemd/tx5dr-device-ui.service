@@ -1,0 +1,22 @@
+[Unit]
+Description=TX-5DR Device UI panel daemon
+After=network-online.target tx5dr-network-helper.service
+Wants=network-online.target tx5dr-network-helper.service
+ConditionPathExists=/dev/fb1
+
+[Service]
+Type=simple
+User=tx5dr
+Group=tx5dr
+SupplementaryGroups=video input
+EnvironmentFile=-/etc/tx5dr/device-ui.env
+RuntimeDirectory=tx5dr
+RuntimeDirectoryMode=0750
+StateDirectory=tx5dr/device-ui
+StateDirectoryMode=0750
+ExecStart=/usr/bin/env node /opt/tx5dr/packages/device-ui/dist/index.js
+Restart=always
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

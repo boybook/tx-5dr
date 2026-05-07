@@ -15,8 +15,8 @@ export class ServerApiClient extends EventEmitter {
     const token = (await readFile(this.options.tokenPath, 'utf8')).trim();
     const response = await fetch(new URL('/api/device-ui/session', this.options.baseUrl), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ deviceToken: token, deviceId: this.options.deviceId }),
+      headers: { 'content-type': 'application/json', 'x-tx5dr-device-token': token },
+      body: JSON.stringify({ deviceId: this.options.deviceId }),
     });
     if (!response.ok) throw new Error(`Device session failed: HTTP ${response.status}`);
     const body = await response.json() as { token?: string; jwt?: string };
