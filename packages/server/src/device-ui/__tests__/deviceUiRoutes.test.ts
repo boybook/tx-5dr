@@ -80,14 +80,16 @@ describe('deviceUiRoutes', () => {
     const rejected = await app.inject({
       method: 'POST',
       url: '/api/device-ui/session',
-      payload: { deviceToken: 'wrong-token-wrong-token', deviceId: 'device-1' },
+      headers: { 'x-tx5dr-device-token': 'wrong-token-wrong-token' },
+      payload: { deviceId: 'device-1' },
     });
     expect(rejected.statusCode).toBe(401);
 
     const accepted = await app.inject({
       method: 'POST',
       url: '/api/device-ui/session',
-      payload: { deviceToken: record.token, deviceId: 'device-1' },
+      headers: { 'x-tx5dr-device-token': record.token },
+      payload: { deviceId: 'device-1' },
     });
     expect(accepted.statusCode).toBe(200);
     const decoded = app.jwt.verify(accepted.json().jwt) as { aud: string; scope: string; deviceId: string; role?: string };

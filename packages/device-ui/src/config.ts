@@ -13,6 +13,9 @@ export interface DeviceUiConfig {
   deviceId: string;
   tokenPath: string;
   helperSocketPath: string;
+  fbPath?: string;
+  inputPath?: string;
+  calibrationPath?: string;
   ackTimeoutMs: number;
 }
 
@@ -29,6 +32,9 @@ export function loadConfig(argv = process.argv.slice(2), env = process.env): Dev
     deviceId: env.TX5DR_DEVICE_ID ?? getDeviceId(configDir),
     tokenPath: env.TX5DR_DEVICE_UI_TOKEN ?? join(configDir, '.device-ui-token'),
     helperSocketPath: env.TX5DR_NETWORK_HELPER_SOCKET ?? '/run/tx5dr/network-helper.sock',
+    fbPath: args.fb ?? env.TX5DR_DEVICE_UI_FB,
+    inputPath: args.input ?? env.TX5DR_DEVICE_UI_INPUT,
+    calibrationPath: args.calibration ?? env.TX5DR_DEVICE_UI_CALIBRATION,
     ackTimeoutMs: Number(args.ackTimeoutMs ?? env.TX5DR_DEVICE_UI_ACK_TIMEOUT_MS ?? 1500),
   };
 }

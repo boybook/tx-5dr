@@ -142,6 +142,20 @@ for pkg in "${SERVER_RUNTIME_WORKSPACES[@]}"; do
     fi
 done
 
+# Device UI is a separate local daemon, not a server dependency, so stage it explicitly.
+if [[ -d "$PROJECT_ROOT/packages/device-ui/dist" ]]; then
+    mkdir -p "$APP_ROOT/packages/device-ui"
+    cp -r "$PROJECT_ROOT/packages/device-ui/dist" "$APP_ROOT/packages/device-ui/"
+    cp "$PROJECT_ROOT/packages/device-ui/package.json" "$APP_ROOT/packages/device-ui/"
+    if [[ -d "$PROJECT_ROOT/packages/device-ui/native/build" ]]; then
+        mkdir -p "$APP_ROOT/packages/device-ui/native"
+        cp -r "$PROJECT_ROOT/packages/device-ui/native/build" "$APP_ROOT/packages/device-ui/native/"
+    else
+        warn "Device UI native build output not found; TFT/OLED renderers will not be packaged."
+    fi
+    cp -r "$PROJECT_ROOT/packages/device-ui/examples" "$APP_ROOT/packages/device-ui/"
+fi
+
 # Root package.json for workspace resolution
 cp "$PROJECT_ROOT/package.json" "$APP_ROOT/"
 
@@ -163,7 +177,7 @@ done
 # of which do not exist in the server package. Replace it with a clean runtime set.
 rm -rf "$APP_ROOT/node_modules/@tx5dr"
 mkdir -p "$APP_ROOT/node_modules/@tx5dr"
-for pkg in "${SERVER_RUNTIME_WORKSPACES[@]}" server; do
+for pkg in "${SERVER_RUNTIME_WORKSPACES[@]}" server device-ui; do
     if [[ -d "$APP_ROOT/packages/$pkg" ]]; then
         ln -sf "../../packages/$pkg" "$APP_ROOT/node_modules/@tx5dr/$pkg"
     fi
@@ -382,15 +396,21 @@ chmod 755 "$STAGING/usr/bin/tx5dr"
 # --- systemd service ---
 mkdir -p "$STAGING/lib/systemd/system"
 cp "$PROJECT_ROOT/linux/tx5dr.service" "$STAGING/lib/systemd/system/tx5dr.service"
+cp "$PROJECT_ROOT/packages/device-ui/systemd/tx5dr-device-ui.service" "$STAGING/lib/systemd/system/tx5dr-device-ui.service"
+cp "$PROJECT_ROOT/packages/device-ui/systemd/tx5dr-network-helper.service" "$STAGING/lib/systemd/system/tx5dr-network-helper.service"
 
 # --- Default config ---
 mkdir -p "$STAGING/etc/tx5dr"
 cp "$PROJECT_ROOT/linux/config.env" "$STAGING/etc/tx5dr/config.env"
+cp "$PROJECT_ROOT/packages/device-ui/examples/device-ui.env" "$STAGING/etc/tx5dr/device-ui.env"
 # Also ship a pristine copy as restore template
 cp "$PROJECT_ROOT/linux/config.env" "$APP_ROOT/config.env.default"
+cp "$PROJECT_ROOT/packages/device-ui/examples/device-ui.env" "$APP_ROOT/device-ui.env.default"
 
 # --- Data directory (must exist in staging for RPM --directories to work) ---
 mkdir -p "$STAGING/var/lib/tx5dr"
+mkdir -p "$STAGING/var/lib/tx5dr/device-ui"
+cp "$PROJECT_ROOT/packages/device-ui/examples/calibration.tft35a-rotate0.json" "$STAGING/var/lib/tx5dr/device-ui/calibration.json"
 
 # --- Calculate size ---
 STAGING_SIZE=$(du -sh "$STAGING" | cut -f1)
@@ -441,8 +461,11 @@ build_package() {
         --after-install "$PROJECT_ROOT/linux/postinstall.sh" \
         --before-remove "$PROJECT_ROOT/linux/preremove.sh" \
         --config-files /etc/tx5dr/config.env \
+        --config-files /etc/tx5dr/device-ui.env \
+        --config-files /var/lib/tx5dr/device-ui/calibration.json \
         "${extra_flags[@]}" \
         --directories /var/lib/tx5dr \
+        --directories /var/lib/tx5dr/device-ui \
         --package "$OUTPUT_DIR/" \
         -C "$STAGING" \
         .

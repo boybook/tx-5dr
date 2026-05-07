@@ -61,13 +61,18 @@ if ! getent passwd "$APP_USER" >/dev/null 2>&1; then
     _msg "Created user: $APP_USER" "已创建用户: $APP_USER"
 fi
 
-usermod -a -G audio,dialout "$APP_USER" 2>/dev/null || true
+usermod -a -G audio,dialout,video,input "$APP_USER" 2>/dev/null || true
 
-for dir in "$DATA_DIR" "$DATA_DIR/config" "$DATA_DIR/logs" "$DATA_DIR/cache" "$DATA_DIR/realtime"; do
+for dir in "$DATA_DIR" "$DATA_DIR/config" "$DATA_DIR/logs" "$DATA_DIR/cache" "$DATA_DIR/realtime" "$DATA_DIR/device-ui"; do
     mkdir -p "$dir"
     chown "$APP_USER:$APP_GROUP" "$dir"
     chmod 755 "$dir"
 done
+
+if [[ -f "$DATA_DIR/device-ui/calibration.json" ]]; then
+    chown "$APP_USER:$APP_GROUP" "$DATA_DIR/device-ui/calibration.json" 2>/dev/null || true
+    chmod 640 "$DATA_DIR/device-ui/calibration.json" 2>/dev/null || true
+fi
 
 if [[ -f "$NGINX_TEMPLATE" ]]; then
     if [[ -f "$NGINX_CONF" ]]; then

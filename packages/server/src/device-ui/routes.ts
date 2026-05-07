@@ -25,7 +25,12 @@ export async function deviceUiRoutes(fastify: FastifyInstance, options: DeviceUi
 
   fastify.post('/session', async (request, reply) => {
     const body = DeviceUiSessionRequestSchema.parse(request.body);
-    const ok = await deviceAuth.verifyToken(body.deviceToken);
+    const headerToken = request.headers['x-tx5dr-device-token'];
+    const deviceToken = typeof headerToken === 'string' ? headerToken : body.deviceToken;
+    if (!deviceToken) {
+      return reply.code(401).send({ success: false, error: { code: 'DEVICE_TOKEN_REQUIRED', message: 'Device token required' } });
+    }
+    const ok = await deviceAuth.verifyToken(deviceToken);
     if (!ok) {
       return reply.code(401).send({ success: false, error: { code: 'INVALID_DEVICE_TOKEN', message: 'Invalid device token' } });
     }

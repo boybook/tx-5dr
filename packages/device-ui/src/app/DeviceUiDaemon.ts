@@ -91,12 +91,47 @@ export class DeviceUiDaemon {
         this.store.patch({ path: 'screen', value: 'wifi-scan' });
         break;
       }
-      case 'network.hotspot.start': await this.network.startHotspot(); await this.refreshNetwork(); break;
+      case 'network.hotspot.start': await this.network.startHotspot(); await this.refreshNetwork(); this.store.patch({ path: 'screen', value: 'hotspot' }); break;
       case 'network.hotspot.stop': await this.network.stopHotspot(); await this.refreshNetwork(); break;
+      case 'network.hotspot.show-credentials': this.store.patch({ path: 'screen', value: 'hotspot' }); break;
+      case 'network.wifi.connect': await this.connectWifi(payload.data); break;
+      case 'network.wifi.forget': await this.forgetWifi(payload.data); break;
       case 'access.refresh-pairing-code': await this.refreshPairingCode(); break;
+      case 'access.toggle-qr-kind': this.toggleQrKind(); break;
+      case 'system.show-diagnostics': this.store.patch({ path: 'screen', value: 'diagnostics' }); break;
       case 'system.restart-renderer': this.renderer.restart(); break;
       default: this.panel.sendToast(`Action queued: ${payload.action}`); break;
     }
+  }
+
+  private async connectWifi(data: unknown): Promise<void> {
+    const input = data as { ssid?: string; password?: string; hidden?: boolean } | undefined;
+    if (!input?.ssid) { this.panel.sendToast('Choose a Wi-Fi network first', 'warn'); return; }
+    this.store.patch({ path: 'ui.busy', value: true, text: `Connecting to ${input.ssid}` });
+    try {
+      await this.network.connectWifi({ ssid: input.ssid, password: input.password, hidden: input.hidden });
+      await this.refreshNetwork();
+      this.store.patch({ path: 'screen', value: 'network-overview' });
+    } catch (error) {
+      const current = this.store.getSnapshot().network;
+      this.store.patch({ path: 'network', value: { ...current, wifi: { ...current.wifi, state: 'failed', lastError: error instanceof Error ? error.message : 'Wi-Fi connect failed' } } });
+      this.panel.sendToast(error instanceof Error ? error.message : 'Wi-Fi connect failed', 'warn');
+    } finally {
+      this.store.patch({ path: 'ui.busy', value: false });
+    }
+  }
+
+  private async forgetWifi(data: unknown): Promise<void> {
+    const ssid = typeof data === 'string' ? data : (data as { ssid?: string } | undefined)?.ssid;
+    if (!ssid) { this.panel.sendToast('Choose a saved Wi-Fi network first', 'warn'); return; }
+    await this.network.forgetWifi(ssid);
+    await this.refreshNetwork();
+  }
+
+  private toggleQrKind(): void {
+    const current = this.store.getSnapshot().access;
+    const next = current.qrKind === 'access-url' && current.pairingUrl ? 'pairing-url' : 'access-url';
+    this.store.patch({ path: 'access', value: { ...current, qrKind: next } });
   }
 
   private async refreshPairingCode(): Promise<void> {

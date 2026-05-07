@@ -112,7 +112,7 @@ export const DeviceServiceJwtPayloadSchema = z.object({
 export type DeviceServiceJwtPayload = z.infer<typeof DeviceServiceJwtPayloadSchema>;
 
 export const DeviceUiSessionRequestSchema = z.object({
-  deviceToken: z.string().min(16),
+  deviceToken: z.string().min(16).optional(),
   deviceId: z.string().optional(),
   profile: z.string().optional(),
 });
