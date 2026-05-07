@@ -9,20 +9,6 @@ export interface MixedAudio {
   sampleRate: number;
   duration: number;
   operatorIds: string[];
-  slotStartMs?: number;
-  targetPlaybackTimeMs?: number;
-  mixScheduledAtMs?: number;
-  mixTriggeredAtMs?: number;
-  mixCompletedAtMs?: number;
-  mixElapsedMs?: number;
-  mixDelayMs?: number;
-}
-
-interface AudioMixTimingContext {
-  targetPlaybackTimeMs?: number;
-  scheduledAtMs?: number;
-  triggeredAtMs?: number;
-  delayMs?: number;
 }
 
 /**
@@ -60,9 +46,6 @@ export class AudioMixer extends EventEmitter {
   // 混音窗口配置
   private mixingTimeout: NodeJS.Timeout | null = null;
   private readonly mixingWindowMs: number;
-  private scheduledMixTargetPlaybackTimeMs: number | null = null;
-  private scheduledMixRequestedAtMs: number | null = null;
-  private scheduledMixDelayMs: number | null = null;
 
   constructor(mixingWindowMs: number = 100) {
     super();
@@ -127,10 +110,10 @@ export class AudioMixer extends EventEmitter {
 
     // 计算混音延迟
     let mixingDelay = this.mixingWindowMs;
-    const scheduledAtMs = Date.now();
 
     if (targetPlaybackTime) {
-      const timeUntilTarget = targetPlaybackTime - scheduledAtMs;
+      const now = Date.now();
+      const timeUntilTarget = targetPlaybackTime - now;
 
       if (timeUntilTarget > this.mixingWindowMs) {
         mixingDelay = Math.max(0, timeUntilTarget - 50); // mix 50ms before target
@@ -143,10 +126,6 @@ export class AudioMixer extends EventEmitter {
         logger.warn(`Target playback time already passed by ${Math.abs(timeUntilTarget)}ms, mixing immediately`);
       }
     }
-
-    this.scheduledMixTargetPlaybackTimeMs = targetPlaybackTime ?? null;
-    this.scheduledMixRequestedAtMs = scheduledAtMs;
-    this.scheduledMixDelayMs = mixingDelay;
 
     // 设置混音定时器
     if (mixingDelay > 0) {
@@ -165,15 +144,7 @@ export class AudioMixer extends EventEmitter {
    * 触发混音并发射事件
    */
   private async triggerMixing(): Promise<void> {
-    const triggeredAtMs = Date.now();
-    const timingContext: AudioMixTimingContext = {
-      targetPlaybackTimeMs: this.scheduledMixTargetPlaybackTimeMs ?? undefined,
-      scheduledAtMs: this.scheduledMixRequestedAtMs ?? undefined,
-      triggeredAtMs,
-      delayMs: this.scheduledMixDelayMs ?? undefined,
-    };
-
-    const mixedAudio = await this.mixAllOperatorAudios(0, timingContext);
+    const mixedAudio = await this.mixAllOperatorAudios(0);
     if (mixedAudio) {
       this.emit('mixedAudioReady', mixedAudio);
     }
@@ -183,10 +154,7 @@ export class AudioMixer extends EventEmitter {
    * 混合所有操作员的音频
    * @param elapsedTimeMs 已播放时间（用于裁剪，0表示从头开始）
    */
-  async mixAllOperatorAudios(
-    elapsedTimeMs: number = 0,
-    timingContext: AudioMixTimingContext = {},
-  ): Promise<MixedAudio | null> {
+  async mixAllOperatorAudios(elapsedTimeMs: number = 0): Promise<MixedAudio | null> {
     const mixStartTime = Date.now();
 
     if (this.slotAudioCache.size === 0) {
@@ -251,20 +219,12 @@ export class AudioMixer extends EventEmitter {
       // 5. 单一音频快速路径
       if (validAudios.length === 1) {
         const single = validAudios[0];
-        const mixEndTime = Date.now();
         logger.debug(`Single track fast path: ${single.operatorId}`);
         return {
           audioData: single.samples,
           sampleRate: targetSampleRate,
           duration: single.samples.length / targetSampleRate,
-          operatorIds: [single.operatorId],
-          slotStartMs: this.currentSlotStartMs || undefined,
-          targetPlaybackTimeMs: timingContext.targetPlaybackTimeMs,
-          mixScheduledAtMs: timingContext.scheduledAtMs,
-          mixTriggeredAtMs: timingContext.triggeredAtMs,
-          mixCompletedAtMs: mixEndTime,
-          mixElapsedMs: mixEndTime - mixStartTime,
-          mixDelayMs: timingContext.delayMs,
+          operatorIds: [single.operatorId]
         };
       }
 
@@ -298,14 +258,7 @@ export class AudioMixer extends EventEmitter {
         audioData: mixedSamples,
         sampleRate: targetSampleRate,
         duration: finalDuration,
-        operatorIds: validAudios.map(a => a.operatorId),
-        slotStartMs: this.currentSlotStartMs || undefined,
-        targetPlaybackTimeMs: timingContext.targetPlaybackTimeMs,
-        mixScheduledAtMs: timingContext.scheduledAtMs,
-        mixTriggeredAtMs: timingContext.triggeredAtMs,
-        mixCompletedAtMs: mixEndTime,
-        mixElapsedMs: mixEndTime - mixStartTime,
-        mixDelayMs: timingContext.delayMs,
+        operatorIds: validAudios.map(a => a.operatorId)
       };
 
     } catch (error) {
@@ -374,9 +327,6 @@ export class AudioMixer extends EventEmitter {
     this.isPlaying = false;
     this.playbackStartTimeMs = 0;
     this.cumulativeOffsetMs = 0;  // 重置累计偏移量
-    this.scheduledMixTargetPlaybackTimeMs = null;
-    this.scheduledMixRequestedAtMs = null;
-    this.scheduledMixDelayMs = null;
 
     if (this.mixingTimeout) {
       clearTimeout(this.mixingTimeout);
