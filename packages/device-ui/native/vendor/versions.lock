@@ -1,0 +1,8 @@
+# Native renderer MVP skeleton dependency lock.
+# LVGL v9.5.0 and U8g2 source snapshots are intentionally not vendored yet in this branch.
+# The CMake targets compile simulator-compatible renderers while preserving the executable and IPC contracts.
+lvgl: planned-v9.5.0
+u8g2: planned-source-snapshot
+yyjson: planned-source-snapshot
+sdl2: optional-system-dependency-for-preview
+zlib: system-dependency-for-png-snapshots

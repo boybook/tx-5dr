@@ -1,0 +1,120 @@
+{
+  "meta": {
+    "schemaVersion": 1,
+    "generatedAt": 0,
+    "deviceId": "fixture-device",
+    "profileId": "tft-ili9486-320x480-touch"
+  },
+  "screen": "monitor",
+  "statusBar": {
+    "networkKind": "offline",
+    "networkLabel": "Offline",
+    "server": "ready",
+    "engine": "running",
+    "ptt": true,
+    "warningLevel": "none",
+    "mode": "FT8",
+    "slotRemainingMs": 4200
+  },
+  "network": {
+    "primary": "offline",
+    "ethernet": {
+      "connected": false
+    },
+    "wifi": {
+      "supported": true,
+      "state": "disconnected",
+      "savedNetworks": []
+    },
+    "hotspot": {
+      "active": false
+    }
+  },
+  "access": {
+    "qrKind": "access-url"
+  },
+  "tx5dr": {
+    "server": "ready",
+    "webPort": 8076,
+    "webUrls": [],
+    "browserClientCount": 0,
+    "authMode": "enabled",
+    "engine": {
+      "isRunning": true,
+      "state": "running",
+      "mode": "FT8",
+      "nextSlotInMs": 4200
+    },
+    "radio": {
+      "connected": true,
+      "ptt": true,
+      "operatorIdsInPtt": [
+        "op1"
+      ],
+      "frequencyHz": 7074000,
+      "frequencyLabel": "7.074 MHz",
+      "band": "40m"
+    },
+    "clock": {
+      "state": "unknown"
+    }
+  },
+  "monitor": {
+    "operators": [
+      {
+        "id": "op1",
+        "callsign": "BG5DRB",
+        "active": true,
+        "transmitting": true,
+        "inActivePtt": true,
+        "txAudioHz": 1500,
+        "currentMessage": "BG5DRB K1ABC -10"
+      }
+    ],
+    "recentMessages": [
+      {
+        "timeMs": 1778079990000,
+        "direction": "rx",
+        "callsign": "K1ABC",
+        "message": "BG5DRB K1ABC -10",
+        "snr": -10,
+        "audioHz": 1500,
+        "related": true
+      }
+    ],
+    "spectrum": {
+      "available": true,
+      "kind": "audio",
+      "bins": [
+        4,
+        7,
+        11,
+        18,
+        35,
+        55,
+        63,
+        48,
+        22,
+        12,
+        8,
+        6,
+        5,
+        4,
+        3,
+        2
+      ]
+    },
+    "warnings": [],
+    "currentTx": {
+      "operatorId": "op1",
+      "callsign": "BG5DRB",
+      "message": "BG5DRB K1ABC -10",
+      "frequencyHz": 7074000,
+      "startedAt": 1778080000000
+    }
+  },
+  "ui": {
+    "busy": false,
+    "diagnosticsVisible": false
+  }
+}

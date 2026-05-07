@@ -5,6 +5,7 @@ import { UserRole, type JWTPayload, type PermissionGrant, type AppAction, type A
 import { AuthManager } from './AuthManager.js';
 import { buildAbility, emptyAbility, cannotWithData, type AppAbility } from './ability.js';
 import { normalizeCallsign } from '../utils/callsign.js';
+import { PairingCodeService } from '../device-ui/PairingCodeService.js';
 
 // 扩展 Fastify Request 类型
 declare module 'fastify' {
@@ -50,7 +51,7 @@ export const authPlugin = fp(async function authPluginInner(fastify: FastifyInst
     }
 
     // 跳过不需认证的路由
-    const skipPaths = ['/api/auth/login', '/api/auth/login-password', '/api/auth/status'];
+    const skipPaths = ['/api/auth/login', '/api/auth/login-password', '/api/auth/status', '/api/auth/pairing/consume'];
     if (skipPaths.includes(request.url) || request.url === '/' || request.url === '/api/hello') {
       return;
     }
@@ -63,6 +64,23 @@ export const authPlugin = fp(async function authPluginInner(fastify: FastifyInst
 
     try {
       const decoded = await request.jwtVerify<JWTPayload>();
+
+      if (decoded.tokenId?.startsWith('pairing-session-')) {
+        const session = PairingCodeService.getInstance().getSession(decoded.tokenId);
+        if (!session) {
+          request.authUser = null;
+          return;
+        }
+        request.authUser = {
+          tokenId: decoded.tokenId,
+          role: UserRole.VIEWER,
+          operatorIds: [],
+          iat: decoded.iat,
+          exp: decoded.exp,
+        };
+        request.ability = buildAbility({ role: UserRole.VIEWER, operatorIds: [] });
+        return;
+      }
 
       // 检查引用的 token 是否仍有效（未被撤销/过期）
       if (!authManager.isTokenStillValid(decoded.tokenId)) {
