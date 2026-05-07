@@ -10,15 +10,15 @@
     "./cpu-profile": "./dist/services/ServerCpuProfileManager.js"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc",
-    "dev": "NODE_ENV=development GLIBC_TUNABLES=\"${GLIBC_TUNABLES:+$GLIBC_TUNABLES:}glibc.rtld.execstack=2\" tsx watch --watch-path=src src/index.ts",
-    "dev:prof": "NODE_ENV=development GLIBC_TUNABLES=\"${GLIBC_TUNABLES:+$GLIBC_TUNABLES:}glibc.rtld.execstack=2\" tsx --prof src/index.ts",
+    "build": "node ../../scripts/clean-paths.mjs dist && tsc",
+    "dev": "node ../../scripts/run-with-env.mjs --node-env=development --glibc-tunables tsx watch --watch-path=src src/index.ts",
+    "dev:prof": "node ../../scripts/run-with-env.mjs --node-env=development --glibc-tunables tsx --prof src/index.ts",
     "clinic:doctor": "yarn build && clinic doctor -- node dist/index.js",
     "clinic:flame": "yarn build && clinic flame -- node dist/index.js",
     "clinic:bubble": "yarn build && clinic bubbleprof -- node dist/index.js",
     "clinic:heap": "yarn build && clinic heapprofiler -- node dist/index.js",
     "dev:check-native": "tsx src/scripts/check-native-modules.ts",
-    "start": "GLIBC_TUNABLES=\"${GLIBC_TUNABLES:+$GLIBC_TUNABLES:}glibc.rtld.execstack=2\" node dist/scripts/server-launcher.js dist/index.js",
+    "start": "node ../../scripts/run-with-env.mjs --glibc-tunables node dist/scripts/server-launcher.js dist/index.js",
     "lint": "eslint src/**/*.ts",
     "test": "vitest run"
   },

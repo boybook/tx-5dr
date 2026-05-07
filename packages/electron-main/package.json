@@ -7,7 +7,7 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
-    "dev": "NODE_ENV=development electron --experimental-specifier-resolution=node --enable-source-maps .",
+    "dev": "node ../../scripts/run-with-env.mjs --node-env=development electron --experimental-specifier-resolution=node --enable-source-maps .",
     "start": "electron --experimental-specifier-resolution=node --enable-source-maps .",
     "lint": "eslint src/**/*.ts"
   },
