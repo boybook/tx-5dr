@@ -11,6 +11,7 @@ import {
   type SlotInfo,
   type SlotPack,
   type DigitalRadioEngineEvents,
+  type DecodeWorkerTelemetrySnapshot,
   type EngineMode,
   type SquelchStatus,
   type RadioPowerResponse,
@@ -145,7 +146,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       },
     );
     this.audioStreamManager = new AudioStreamManager();
-    this.realDecodeQueue = new WSJTXDecodeWorkQueue(1);
+    this.realDecodeQueue = new WSJTXDecodeWorkQueue();
     this.realEncodeQueue = new WSJTXEncodeWorkQueue(1);
     this.slotPackManager = new SlotPackManager();
     const initialFrequency = ConfigManager.getInstance().getLastSelectedFrequency();
@@ -492,6 +493,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public getAudioStreamManager(): AudioStreamManager {
     return this.audioStreamManager;
+  }
+
+  public getDecodeWorkerTelemetrySnapshot(): DecodeWorkerTelemetrySnapshot | undefined {
+    return this.realDecodeQueue.getDecodeWorkerTelemetrySnapshot();
   }
 
   public getAudioSidecar(): AudioSidecarController {

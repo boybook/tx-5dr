@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   calculateCpuPercentages,
   calculateHostCpuUsage,
+  ProcessMonitor,
   resolveCpuCapacityFromValues,
   summarizeHostCpuTimes,
 } from '../ProcessMonitor.js';
@@ -65,5 +66,76 @@ describe('ProcessMonitor CPU helpers', () => {
     ]);
 
     expect(calculateHostCpuUsage(previous, current)).toBeCloseTo(50);
+  });
+
+  it('merges extra decode worker telemetry into process snapshots', async () => {
+    const monitor = ProcessMonitor.getInstance({ intervalMs: 10, maxHistory: 4 });
+    monitor.setExtraSnapshotProvider(() => ({
+      decodeWorkers: {
+        summary: {
+          workerCount: 1,
+          readyCount: 1,
+          busyCount: 1,
+          totalRss: 1024,
+          totalCpu: 250,
+          nativeThreadsPerWorker: 2,
+          pendingJobs: 0,
+          activeJobs: 1,
+        },
+        workers: [
+          {
+            workerId: 1,
+            pid: 123,
+            ready: true,
+            busy: true,
+            nativeThreads: 2,
+            uptimeSeconds: 1,
+            memory: {
+              heapUsed: 1,
+              heapTotal: 2,
+              rss: 1024,
+              external: 0,
+              arrayBuffers: 0,
+            },
+            cpu: {
+              user: 200,
+              system: 50,
+              total: 250,
+            },
+            lastSeenAt: Date.now(),
+          },
+        ],
+      },
+    }));
+
+    const snapshot = await new Promise<ReturnType<typeof monitor.getHistory>[number]>((resolve) => {
+      monitor.setBroadcastCallback((next) => {
+        resolve(next);
+      });
+      monitor.start();
+    });
+    monitor.stop();
+
+    expect(snapshot.decodeWorkers?.summary.totalCpu).toBe(250);
+    expect(snapshot.decodeWorkers?.workers[0].busy).toBe(true);
+  });
+
+  it('continues process snapshots when the extra provider fails', async () => {
+    const monitor = ProcessMonitor.getInstance({ intervalMs: 10, maxHistory: 4 });
+    monitor.setExtraSnapshotProvider(() => {
+      throw new Error('boom');
+    });
+
+    const snapshot = await new Promise<ReturnType<typeof monitor.getHistory>[number]>((resolve) => {
+      monitor.setBroadcastCallback((next) => {
+        resolve(next);
+      });
+      monitor.start();
+    });
+    monitor.stop();
+    monitor.setExtraSnapshotProvider(null);
+
+    expect(snapshot.timestamp).toBeGreaterThan(0);
+    expect(snapshot.decodeWorkers).toBeUndefined();
   });
 });

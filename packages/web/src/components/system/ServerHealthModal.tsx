@@ -438,6 +438,16 @@ function formatOptionalNumber(value: number | null | undefined): string {
   return value.toString();
 }
 
+function formatCpuCores(rawCpuPercent: number | null | undefined): string {
+  if (rawCpuPercent == null || Number.isNaN(rawCpuPercent)) return '—';
+  return `${(rawCpuPercent / 100).toFixed(1)} cores`;
+}
+
+function formatWorkerJob(worker: NonNullable<ProcessSnapshot['decodeWorkers']>['workers'][number]): string {
+  if (!worker.currentJob) return 'idle';
+  return `${worker.currentJob.mode} w${worker.currentJob.windowIdx} · ${(worker.currentJob.elapsedMs / 1000).toFixed(1)}s`;
+}
+
 function CpuDetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-4">
@@ -516,6 +526,107 @@ function CpuLoadValue({ snapshot }: { snapshot: ProcessSnapshot }) {
   );
 }
 
+function DecodeWorkersCard({
+  snapshot,
+  cpuCoreValues,
+  timestamps,
+}: {
+  snapshot: ProcessSnapshot;
+  cpuCoreValues: number[];
+  timestamps: number[];
+}) {
+  const { t } = useTranslation('settings');
+  const telemetry = snapshot.decodeWorkers;
+  if (!telemetry || telemetry.workers.length === 0) {
+    return null;
+  }
+
+  const { summary } = telemetry;
+  const visibleWorkers = telemetry.workers.slice(0, 4);
+  const hiddenCount = Math.max(telemetry.workers.length - visibleWorkers.length, 0);
+
+  return (
+    <div className="bg-content2 rounded-xl p-4 flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-semibold text-default-500 uppercase tracking-wider">
+          {t('serverHealth.decodeWorkers')}
+        </div>
+        <Chip size="sm" color={summary.busyCount > 0 ? 'primary' : 'default'} variant="flat" className="text-xs">
+          {t('serverHealth.decodeWorkersBusy', { busy: summary.busyCount, total: summary.workerCount })}
+        </Chip>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div>
+          <div className="text-xs text-default-400">{t('serverHealth.workers')}</div>
+          <div className="text-lg font-mono font-semibold text-foreground">{summary.workerCount}</div>
+        </div>
+        <div>
+          <div className="text-xs text-default-400">{t('serverHealth.workerRss')}</div>
+          <div className="text-lg font-mono font-semibold text-foreground">{formatBytes(summary.totalRss)}</div>
+        </div>
+        <div>
+          <div className="text-xs text-default-400">{t('serverHealth.workerCpuCores')}</div>
+          <div className="text-lg font-mono font-semibold text-foreground">{formatCpuCores(summary.totalCpu)}</div>
+        </div>
+        <div>
+          <div className="text-xs text-default-400">{t('serverHealth.workerQueue')}</div>
+          <div className="text-lg font-mono font-semibold text-foreground">
+            {summary.pendingJobs}/{summary.activeJobs}
+          </div>
+        </div>
+      </div>
+
+      <Sparkline
+        values={cpuCoreValues.length > 0 ? cpuCoreValues : [0]}
+        height={44}
+        timestamps={timestamps}
+        valueMin={0}
+        formatValue={(v) => `${v.toFixed(1)} cores`}
+      />
+
+      <div className="flex flex-col gap-1.5">
+        {visibleWorkers.map((worker) => {
+          const isStale = snapshot.timestamp - worker.lastSeenAt > 5000;
+          return (
+            <div
+              key={worker.workerId}
+              className="flex items-center justify-between gap-3 rounded-lg bg-content1 px-3 py-2"
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono text-default-700">#{worker.workerId}</span>
+                  <span className="text-xs text-default-400">pid {worker.pid ?? '—'}</span>
+                  <Chip size="sm" color={worker.busy ? 'primary' : 'default'} variant="flat" className="h-5 text-[10px]">
+                    {worker.busy ? t('serverHealth.workerBusy') : t('serverHealth.workerIdle')}
+                  </Chip>
+                  {isStale && (
+                    <Chip size="sm" color="warning" variant="flat" className="h-5 text-[10px]">
+                      {t('serverHealth.workerStale')}
+                    </Chip>
+                  )}
+                </div>
+                <div className="mt-1 truncate text-xs text-default-500">
+                  {formatWorkerJob(worker)}
+                </div>
+              </div>
+              <div className="flex-shrink-0 text-right">
+                <div className="text-xs font-mono text-default-700">{formatCpuCores(worker.cpu.total)}</div>
+                <div className="text-xs font-mono text-default-500">{formatBytes(worker.memory.rss)}</div>
+              </div>
+            </div>
+          );
+        })}
+        {hiddenCount > 0 && (
+          <div className="text-xs text-default-400 px-1">
+            {t('serverHealth.moreWorkers', { count: hiddenCount })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Time range selector ─────────────────────────────────────────────────────
 
 type TimeRange = 5 | 15 | 30;
@@ -577,6 +688,10 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
   );
   const elValues = useMemo(
     () => displaySnapshots.map(s => s.eventLoop.p99 ?? 0),
+    [displaySnapshots]
+  );
+  const decodeWorkerCpuCoreValues = useMemo(
+    () => displaySnapshots.map(s => (s.decodeWorkers?.summary.totalCpu ?? 0) / 100),
     [displaySnapshots]
   );
   const unsupportedCoreCapabilities = useMemo(
@@ -724,6 +839,12 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
                   formatValue={(v) => `${v.toFixed(1)} ms`}
                 />
               </div>
+
+              <DecodeWorkersCard
+                snapshot={latest}
+                cpuCoreValues={decodeWorkerCpuCoreValues}
+                timestamps={timestamps}
+              />
 
               {unsupportedCoreCapabilities.length > 0 && (
                 <div className="bg-content2 rounded-xl p-4 flex flex-col gap-3">

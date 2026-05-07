@@ -155,6 +155,9 @@ export async function createServer() {
 
   // 初始化进程监控（独立于引擎，始终运行）
   const processMonitor = ProcessMonitor.getInstance();
+  processMonitor.setExtraSnapshotProvider(() => ({
+    decodeWorkers: digitalRadioEngine.getDecodeWorkerTelemetrySnapshot(),
+  }));
   processMonitor.start();
 
   // 初始化实时音频路由器（统一音频数据面）
