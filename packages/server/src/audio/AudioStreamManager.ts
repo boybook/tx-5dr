@@ -6,6 +6,7 @@ type RtAudioInstance = InstanceType<typeof RtAudio>;
 const RTAUDIO_FLOAT32 = 0x10;
 const RTAUDIO_API_UNSPECIFIED = 0;
 const RTAUDIO_API_WINDOWS_WASAPI = 7;
+const RTAUDIO_STREAM_FLAGS_NONE = 0 as unknown as Parameters<RtAudioInstance['openStream']>[8];
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 import { EventEmitter } from 'eventemitter3';
 import { clearResamplerCache, resampleAudioProfessional } from '../utils/audioUtils.js';
@@ -24,6 +25,9 @@ const INTERNAL_SAMPLE_RATE = 12000;
 const ICOM_WLAN_TX_CHUNK_SIZE = 1200;
 const ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS = 150;
 const ICOM_WLAN_TX_MAX_WAIT_SLICE_MS = 20;
+const RTAUDIO_TX_CONSUME_WATCHDOG_MS = 750;
+const RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS = 1000;
+const RTAUDIO_TX_WATCHDOG_MIN_SUBMITTED_CHUNKS = 3;
 
 export type NativeAudioInputSourceKind = 'audio-device' | 'icom-wlan' | 'openwebrx';
 
@@ -75,6 +79,19 @@ interface RtAudioDeviceDescriptor {
 interface ResolvedStreamDevice {
   actualDeviceId: number;
   persistedDeviceId: string;
+}
+
+interface OutputBackendSnapshot {
+  api?: string;
+  streamRunning?: boolean;
+  streamLatencyFrames?: number;
+  streamSampleRate?: number;
+  error?: string;
+}
+
+interface AudioStats {
+  peak: number;
+  rms: number;
 }
 
 export interface PlayAudioOptions {
@@ -135,6 +152,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private voiceOutputObserver: VoiceTxOutputObserver | null = null;
   private voiceTxOutputPipeline: VoiceTxOutputPipeline;
   private nativeAudioInputSequence = 0;
+  private outputFramesConsumed = 0;
+  private outputFirstFrameConsumedAt: number | null = null;
+  private outputLastFrameConsumedAt: number | null = null;
+  private outputRtAudioErrors: Array<{ type: number; message: string; at: number }> = [];
+  private outputWatchdogGeneration = 0;
 
   constructor() {
     super();
@@ -149,8 +171,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.outputBufferSize = audioConfig.outputBufferSize ?? audioConfig.bufferSize ?? 768;
     this.currentSampleRate = this.outputSampleRate;
 
-    // 创建音频缓冲区提供者，使用统一的内部采样率（12kHz）
-    this.audioProvider = new RingBufferAudioProvider(INTERNAL_SAMPLE_RATE, INTERNAL_SAMPLE_RATE * 5); // 5秒缓冲
+    // 创建音频缓冲区提供者，使用统一的内部采样率（12kHz），保留 60 秒 RX/input 历史。
+    this.audioProvider = new RingBufferAudioProvider(INTERNAL_SAMPLE_RATE, 60_000);
     this.voiceTxOutputPipeline = new VoiceTxOutputPipeline({
       getSinkState: () => this.getVoiceTxOutputSinkState(),
       getObserver: () => this.voiceOutputObserver,
@@ -1045,6 +1067,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       throw new Error('audio output instance not initialized');
     }
 
+    this.resetOutputConsumeDiagnostics();
+
     this.rtAudioOutput.openStream(
       { deviceId: outputDeviceId, nChannels: this.channels, firstChannel: 0 },
       null,
@@ -1053,8 +1077,37 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.outputBufferSize,
       'TX5DR-Output',
       null,
-      null
+      () => this.recordOutputFrameConsumed(),
+      RTAUDIO_STREAM_FLAGS_NONE,
+      (type: number, message: string) => this.recordOutputRtAudioError(type, message)
     );
+  }
+
+  private resetOutputConsumeDiagnostics(): void {
+    this.outputFramesConsumed = 0;
+    this.outputFirstFrameConsumedAt = null;
+    this.outputLastFrameConsumedAt = null;
+    this.outputRtAudioErrors = [];
+    this.outputWatchdogGeneration++;
+  }
+
+  private recordOutputFrameConsumed(): void {
+    const now = Date.now();
+    this.outputFramesConsumed++;
+    if (this.outputFirstFrameConsumedAt === null) {
+      this.outputFirstFrameConsumedAt = now;
+    }
+    this.outputLastFrameConsumedAt = now;
+  }
+
+  private recordOutputRtAudioError(type: number, message: string): void {
+    const error = { type, message, at: Date.now() };
+    this.outputRtAudioErrors.push(error);
+    if (this.outputRtAudioErrors.length > 10) {
+      this.outputRtAudioErrors.shift();
+    }
+    logger.error('RtAudio output runtime error', error);
+    this.emit('error', new Error(`RtAudio output runtime error (${type}): ${message}`));
   }
 
   /**
@@ -1104,6 +1157,73 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   getVolumeGainDb(): number {
     return this.volumeGainDb;
+  }
+
+  private computeAudioStats(samples: Float32Array): AudioStats {
+    if (samples.length === 0) {
+      return { peak: 0, rms: 0 };
+    }
+
+    let peak = 0;
+    let sumSquares = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const value = samples[i] || 0;
+      const abs = Math.abs(value);
+      if (abs > peak) {
+        peak = abs;
+      }
+      sumSquares += value * value;
+    }
+
+    return {
+      peak,
+      rms: Math.sqrt(sumSquares / samples.length),
+    };
+  }
+
+  private getOutputBackendSnapshot(): OutputBackendSnapshot {
+    if (!this.rtAudioOutput) {
+      return { error: 'rtAudioOutput unavailable' };
+    }
+
+    const snapshot: OutputBackendSnapshot = {};
+    try {
+      snapshot.api = this.rtAudioOutput.getApi();
+    } catch (error) {
+      snapshot.error = `getApi failed: ${this.describeError(error)}`;
+    }
+
+    try {
+      snapshot.streamRunning = this.rtAudioOutput.isStreamRunning();
+    } catch (error) {
+      snapshot.error = this.appendSnapshotError(snapshot.error, `isStreamRunning failed: ${this.describeError(error)}`);
+    }
+
+    try {
+      snapshot.streamLatencyFrames = this.rtAudioOutput.getStreamLatency();
+    } catch (error) {
+      snapshot.error = this.appendSnapshotError(snapshot.error, `getStreamLatency failed: ${this.describeError(error)}`);
+    }
+
+    try {
+      snapshot.streamSampleRate = this.rtAudioOutput.getStreamSampleRate();
+    } catch (error) {
+      snapshot.error = this.appendSnapshotError(snapshot.error, `getStreamSampleRate failed: ${this.describeError(error)}`);
+    }
+
+    return snapshot;
+  }
+
+  private appendSnapshotError(existing: string | undefined, next: string): string {
+    return existing ? `${existing}; ${next}` : next;
+  }
+
+  private describeError(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  private shouldRunRtAudioConsumeWatchdog(): boolean {
+    return process.platform === 'win32' || process.env.TX5DR_FORCE_WINDOWS_AUDIO_WATCHDOG === '1';
   }
 
   setVoiceOutputObserver(observer: VoiceTxOutputObserver | null): void {
@@ -1363,13 +1483,66 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       logger.debug(`chunked playback: ${totalChunks} chunks, chunkSize=${chunkSize}, prebuffer~${prebufferMs}ms, tick=${TICK_MS}ms, totalSamples=${totalSamples}, expectedDuration=${expectedDurationMs}ms`);
 
       const chunkStartTime = Date.now();
+      this.resetOutputConsumeDiagnostics();
+      const watchdogGeneration = this.outputWatchdogGeneration;
+      const sourceStats = this.computeAudioStats(playbackData);
+      let submittedChunks = 0;
+      let submittedSamples = 0;
+      let writeFailCount = 0;
+      let postGainPeak = 0;
+      let postGainSumSquares = 0;
+      let postGainSampleCount = 0;
+      let watchdogTriggered = false;
+      let watchdogTimer: NodeJS.Timeout | null = null;
+      const watchdogStartedAt = Date.now();
+
+      const stopWatchdog = () => {
+        if (watchdogTimer) {
+          clearInterval(watchdogTimer);
+          watchdogTimer = null;
+        }
+      };
+
+      if (this.shouldRunRtAudioConsumeWatchdog()) {
+        watchdogTimer = setInterval(() => {
+          if (watchdogGeneration !== this.outputWatchdogGeneration) {
+            stopWatchdog();
+            return;
+          }
+          if (watchdogTriggered) {
+            return;
+          }
+
+          const consumedChunks = this.outputFramesConsumed;
+          const lastConsumeAt = this.outputLastFrameConsumedAt;
+          const msSinceConsume = Date.now() - (lastConsumeAt ?? watchdogStartedAt);
+          if (
+            submittedChunks >= RTAUDIO_TX_WATCHDOG_MIN_SUBMITTED_CHUNKS &&
+            submittedChunks > consumedChunks + 1 &&
+            msSinceConsume >= RTAUDIO_TX_CONSUME_WATCHDOG_MS
+          ) {
+            watchdogTriggered = true;
+            const error = new Error('Windows RtAudio output submitted audio but no frame consumption was observed');
+            logger.error('Windows RtAudio output consume watchdog fired', {
+              submittedChunks,
+              submittedSamples,
+              consumedChunks,
+              msSinceConsume,
+              totalChunks,
+              backend: this.getOutputBackendSnapshot(),
+              recentRtAudioErrors: this.outputRtAudioErrors,
+            });
+            this.emit('error', error);
+            stopWatchdog();
+          }
+        }, Math.max(50, Math.floor(RTAUDIO_TX_CONSUME_WATCHDOG_MS / 3)));
+      }
 
       // setInterval-based playback loop wrapped in a Promise
       await new Promise<void>((resolve, reject) => {
         const hrStart = performance.now();
         let cursor = 0;
         let samplesWritten = 0;
-        let writeFailCount = 0;
         let lastProgressSec = -1;
 
         const writeChunk = (idx: number): boolean => {
@@ -1386,10 +1559,17 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             const bufferSamples = chunkSize;
             const buffer = Buffer.allocUnsafe(bufferSamples * 4);
             const monitorChunk = options.injectIntoMonitor ? new Float32Array(chunk.length) : null;
+            let chunkPeak = 0;
+            let chunkSumSquares = 0;
             for (let j = 0; j < chunk.length; j++) {
               const s = chunk[j] * gain;
               const clamped = s > 1 ? 1 : (s < -1 ? -1 : s);
               buffer.writeFloatLE(clamped, j * 4);
+              const abs = Math.abs(clamped);
+              if (abs > chunkPeak) {
+                chunkPeak = abs;
+              }
+              chunkSumSquares += clamped * clamped;
               if (monitorChunk) {
                 monitorChunk[j] = clamped;
               }
@@ -1403,11 +1583,25 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               this.emit('txMonitorAudioData', { samples: monitorChunk, sampleRate: this.outputSampleRate });
             }
             samplesWritten += chunk.length;
+            submittedChunks++;
+            submittedSamples += chunk.length;
+            if (chunkPeak > postGainPeak) {
+              postGainPeak = chunkPeak;
+            }
+            postGainSumSquares += chunkSumSquares;
+            postGainSampleCount += chunk.length;
             return true;
-          } catch {
+          } catch (error) {
             writeFailCount++;
             if (writeFailCount <= 3 || writeFailCount % 100 === 0) {
-              logger.debug(`writeChunk failed: chunk=${idx}/${totalChunks}, written=${samplesWritten}/${totalSamples}, fails=${writeFailCount}`);
+              logger.warn('audio output write failed', {
+                chunk: idx,
+                totalChunks,
+                writtenSamples: samplesWritten,
+                totalSamples,
+                fails: writeFailCount,
+                error: this.describeError(error),
+              });
             }
             return false;
           }
@@ -1423,13 +1617,28 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               return;
             }
 
+            if (!this.rtAudioOutput) {
+              clearInterval(interval);
+              reject(new Error('audio output stream unavailable during playback'));
+              return;
+            }
+
             // Check completion
             if (cursor >= totalChunks) {
               clearInterval(interval);
               const chunkDuration = Date.now() - chunkStartTime;
               const playDuration = Date.now() - playStartTime;
               logger.debug(`chunked write complete, duration: ${chunkDuration}ms`);
-              logger.info(`playback complete, duration: ${playDuration}ms, expected: ${expectedDurationMs}ms, overhead: ${playDuration - expectedDurationMs}ms, writeFails: ${writeFailCount}`);
+              logger.info('audio playback submit complete', {
+                durationMs: playDuration,
+                expectedDurationMs,
+                overheadMs: playDuration - expectedDurationMs,
+                submittedChunks,
+                submittedSamples,
+                totalChunks,
+                totalSamples,
+                writeFails: writeFailCount,
+              });
               resolve();
               return;
             }
@@ -1458,6 +1667,51 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }, TICK_MS);
       });
 
+      const drainTimeoutMs = Math.max(RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS, prebufferMs + 500);
+      const drainDeadline = Date.now() + drainTimeoutMs;
+      while (
+        !this.shouldStopPlayback &&
+        this.outputFramesConsumed < submittedChunks &&
+        Date.now() < drainDeadline
+      ) {
+        await new Promise<void>(res => setTimeout(res, 10));
+      }
+      stopWatchdog();
+
+      const consumedChunks = this.outputFramesConsumed;
+      const consumeComplete = consumedChunks >= submittedChunks;
+      const postGainStats = {
+        peak: postGainPeak,
+        rms: postGainSampleCount > 0 ? Math.sqrt(postGainSumSquares / postGainSampleCount) : 0,
+      };
+      const consumeSummary = {
+        submittedChunks,
+        submittedSamples,
+        consumedChunks,
+        consumeComplete,
+        firstConsumedAt: this.outputFirstFrameConsumedAt
+          ? new Date(this.outputFirstFrameConsumedAt).toISOString()
+          : null,
+        lastConsumedAt: this.outputLastFrameConsumedAt
+          ? new Date(this.outputLastFrameConsumedAt).toISOString()
+          : null,
+        sourcePeak: Number(sourceStats.peak.toFixed(6)),
+        sourceRms: Number(sourceStats.rms.toFixed(6)),
+        postGainPeak: Number(postGainStats.peak.toFixed(6)),
+        postGainRms: Number(postGainStats.rms.toFixed(6)),
+        backend: this.getOutputBackendSnapshot(),
+        recentRtAudioErrors: this.outputRtAudioErrors,
+      };
+
+      if (consumeComplete) {
+        logger.info('audio playback consume complete', consumeSummary);
+      } else {
+        const message = this.shouldRunRtAudioConsumeWatchdog()
+          ? 'Windows RtAudio output did not consume all submitted playback chunks before timeout'
+          : 'RtAudio output did not consume all submitted playback chunks before timeout';
+        logger.warn(message, consumeSummary);
+      }
+
       } catch (error) {
         if (error instanceof Error && error.message.includes('playback interrupted')) {
           logger.debug('audio playback interrupted');
@@ -1466,6 +1720,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
         throw error;
       } finally {
+        // Safe if the playback failed before the watchdog was created.
+        this.outputWatchdogGeneration++;
         // 清理播放状态
         if (this.currentPlaybackPromise === playbackPromise) {
           this.playing = false;
