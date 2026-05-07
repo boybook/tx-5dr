@@ -111,9 +111,32 @@ export interface PlayAudioOptions {
   injectIntoMonitor?: boolean;
   playbackKind?: PlaybackKind;
   diagnosticContext?: Record<string, unknown>;
+  onPlaybackComplete?: (summary: AudioPlaybackTimingSummary) => void;
 }
 
 export type PlaybackKind = 'digital' | 'voice-keyer' | 'tune-tone';
+
+export interface AudioPlaybackTimingSummary {
+  playbackId: number;
+  playbackKind: PlaybackKind;
+  playStartTimeMs: number;
+  submitCompleteAtMs: number;
+  playbackCompleteAtMs: number;
+  submittedChunks: number;
+  submittedSamples: number;
+  consumedChunks: number;
+  consumeComplete: boolean;
+  firstConsumedAtMs: number | null;
+  lastConsumedAtMs: number | null;
+  expectedDurationMs: number;
+  postGainPeak: number;
+  postGainRms: number;
+  sourcePeak: number;
+  sourceRms: number;
+  sourceFingerprint: string;
+  writeFails: number;
+  backend: OutputBackendSnapshot;
+}
 
 export interface StopPlaybackOptions {
   kind?: PlaybackKind;
@@ -1568,6 +1591,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       let watchdogTriggered = false;
       let watchdogTimer: NodeJS.Timeout | null = null;
       const watchdogStartedAt = Date.now();
+      let submitCompleteAtMs = 0;
 
       const stopWatchdog = () => {
         if (watchdogTimer) {
@@ -1619,7 +1643,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         let cursor = 0;
         let samplesWritten = 0;
         let lastProgressSec = -1;
-        let intervalTickCount = 0;
 
         const writeChunk = (idx: number): boolean => {
           if (!this.rtAudioOutput) {
@@ -1666,38 +1689,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             }
             postGainSumSquares += chunkSumSquares;
             postGainSampleCount += chunk.length;
-            logger.info('audio playback chunk write submitted', {
-              playbackId,
-              ...diagnosticContext,
-              tick: intervalTickCount,
-              chunk: idx,
-              totalChunks,
-              startSample: start,
-              endSample: end,
-              chunkSamples: chunk.length,
-              bufferSamples,
-              samplesWritten,
-              submittedChunks,
-              submittedSamples,
-              consumedChunks: this.outputFramesConsumed,
-              pendingChunks: submittedChunks - this.outputFramesConsumed,
-              chunkPeak: Number(chunkPeak.toFixed(6)),
-              chunkRms: chunk.length > 0 ? Number(Math.sqrt(chunkSumSquares / chunk.length).toFixed(6)) : 0,
-            });
             return true;
           } catch (error) {
             writeFailCount++;
-            logger.info('audio playback chunk write failed', {
-              playbackId,
-              ...diagnosticContext,
-              tick: intervalTickCount,
-              chunk: idx,
-              totalChunks,
-              writtenSamples: samplesWritten,
-              totalSamples,
-              fails: writeFailCount,
-              error: this.describeError(error),
-            });
             if (writeFailCount <= 3 || writeFailCount % 100 === 0) {
               logger.warn('audio output write failed', {
                 playbackId,
@@ -1716,23 +1710,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
         const interval = setInterval(() => {
           try {
-            intervalTickCount++;
             const elapsedMs = performance.now() - hrStart;
-            logger.info('audio playback interval tick', {
-              playbackId,
-              ...diagnosticContext,
-              tick: intervalTickCount,
-              elapsedMs: Math.round(elapsedMs),
-              cursor,
-              totalChunks,
-              samplesWritten,
-              submittedChunks,
-              submittedSamples,
-              consumedChunks: this.outputFramesConsumed,
-              pendingChunks: submittedChunks - this.outputFramesConsumed,
-              shouldStopPlayback: this.shouldStopPlayback,
-              hasRtAudioOutput: Boolean(this.rtAudioOutput),
-            });
 
             // Check stop signal
             if (this.shouldStopPlayback) {
@@ -1753,6 +1731,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               clearInterval(interval);
               const chunkDuration = Date.now() - chunkStartTime;
               const playDuration = Date.now() - playStartTime;
+              submitCompleteAtMs = Date.now();
               logger.debug(`chunked write complete, duration: ${chunkDuration}ms`);
               logger.info('audio playback submit complete', {
                 playbackId,
@@ -1811,7 +1790,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }, TICK_MS);
       });
 
-      if (consumeDiagnosticsEnabled) {
+      const shouldCollectConsumeSummary = consumeDiagnosticsEnabled || options.onPlaybackComplete !== undefined;
+      if (shouldCollectConsumeSummary) {
         const drainTimeoutMs = Math.max(RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS, prebufferMs + 500);
         const drainDeadline = Date.now() + drainTimeoutMs;
         while (
@@ -1825,10 +1805,17 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
         const consumedChunks = this.outputFramesConsumed;
         const consumeComplete = consumedChunks >= submittedChunks;
+        const playbackCompleteAtMs = Date.now();
         const postGainStats = {
           peak: postGainPeak,
           rms: postGainSampleCount > 0 ? Math.sqrt(postGainSumSquares / postGainSampleCount) : 0,
         };
+        const slotStartMs = typeof diagnosticContext.slotStartMs === 'number' ? diagnosticContext.slotStartMs : null;
+        const targetPlaybackTimeMs = typeof diagnosticContext.targetPlaybackTimeMs === 'number'
+          ? diagnosticContext.targetPlaybackTimeMs
+          : null;
+        const firstConsumedAtMs = this.outputFirstFrameConsumedAt ?? null;
+        const lastConsumedAtMs = this.outputLastFrameConsumedAt ?? null;
         const consumeSummary = {
           playbackId,
           ...diagnosticContext,
@@ -1836,11 +1823,17 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           submittedSamples,
           consumedChunks,
           consumeComplete,
-          firstConsumedAt: this.outputFirstFrameConsumedAt
-            ? new Date(this.outputFirstFrameConsumedAt).toISOString()
+          firstConsumedAt: firstConsumedAtMs
+            ? new Date(firstConsumedAtMs).toISOString()
             : null,
-          lastConsumedAt: this.outputLastFrameConsumedAt
-            ? new Date(this.outputLastFrameConsumedAt).toISOString()
+          firstConsumedSlotPhaseMs: firstConsumedAtMs !== null && slotStartMs !== null
+            ? firstConsumedAtMs - slotStartMs
+            : null,
+          firstConsumedTargetDeltaMs: firstConsumedAtMs !== null && targetPlaybackTimeMs !== null
+            ? firstConsumedAtMs - targetPlaybackTimeMs
+            : null,
+          lastConsumedAt: lastConsumedAtMs
+            ? new Date(lastConsumedAtMs).toISOString()
             : null,
           sourcePeak: Number(sourceStats.peak.toFixed(6)),
           sourceRms: Number(sourceStats.rms.toFixed(6)),
@@ -1852,10 +1845,34 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           recentRtAudioErrors: this.outputRtAudioErrors,
         };
 
-        if (consumeComplete) {
-          logger.info('audio playback consume complete', consumeSummary);
-        } else {
-          logger.warn('RtAudio output did not consume all submitted playback chunks before timeout', consumeSummary);
+        options.onPlaybackComplete?.({
+          playbackId,
+          playbackKind,
+          playStartTimeMs: playStartTime,
+          submitCompleteAtMs,
+          playbackCompleteAtMs,
+          submittedChunks,
+          submittedSamples,
+          consumedChunks,
+          consumeComplete,
+          firstConsumedAtMs,
+          lastConsumedAtMs,
+          expectedDurationMs,
+          postGainPeak: postGainStats.peak,
+          postGainRms: postGainStats.rms,
+          sourcePeak: sourceStats.peak,
+          sourceRms: sourceStats.rms,
+          sourceFingerprint,
+          writeFails: writeFailCount,
+          backend: this.getOutputBackendSnapshot(),
+        });
+
+        if (consumeDiagnosticsEnabled) {
+          if (consumeComplete) {
+            logger.info('audio playback consume complete', consumeSummary);
+          } else {
+            logger.warn('RtAudio output did not consume all submitted playback chunks before timeout', consumeSummary);
+          }
         }
       } else {
         stopWatchdog();

@@ -1,7 +1,7 @@
 import type { EventEmitter } from 'eventemitter3';
-import type { DigitalRadioEngineEvents, ModeDescriptor } from '@tx5dr/contracts';
+import type { DigitalRadioEngineEvents, ModeDescriptor, SlotInfo } from '@tx5dr/contracts';
 import type { ClockSourceSystem } from '@tx5dr/core';
-import type { AudioStreamManager } from '../audio/AudioStreamManager.js';
+import type { AudioPlaybackTimingSummary, AudioStreamManager } from '../audio/AudioStreamManager.js';
 import type { AudioMixer, MixedAudio } from '../audio/AudioMixer.js';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { SpectrumScheduler } from '../audio/SpectrumScheduler.js';
@@ -12,6 +12,43 @@ import { ListenerManager } from './ListenerManager.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('TransmissionPipeline');
+
+type TxClockEventName = 'slotStart' | 'encodeStart' | 'transmitStart';
+
+interface TxEncodeTimingRecord {
+  operatorId: string;
+  requestId?: string;
+  encodedAtMs: number;
+  encodeCompleteSlotPhaseMs: number;
+  requestTimeSinceSlotStartMs: number;
+  currentTimeSinceSlotStartMs: number;
+  audioSamples: number;
+  audioSampleRate: number;
+  audioDurationMs: number;
+  path?: 'scheduled' | 'mid-slot-immediate' | 'remix';
+}
+
+interface TxPttTimingRecord {
+  requestedAtMs: number;
+  startedAtMs: number | null;
+  durationMs: number;
+  skipped: boolean;
+  connected: boolean;
+}
+
+interface TxTimingTrace {
+  slotId: string;
+  slotStartMs: number;
+  modeName?: string;
+  slotMs?: number;
+  transmitTimingMs?: number;
+  encodeAdvanceMs?: number;
+  compensationMs?: number;
+  compensatedTransmitStartMs?: number;
+  targetPlaybackTimeMs?: number;
+  clockEvents: Partial<Record<TxClockEventName, number>>;
+  encodeRecords: TxEncodeTimingRecord[];
+}
 
 export interface TransmissionPipelineDeps {
   engineEmitter: EventEmitter<DigitalRadioEngineEvents>;
@@ -51,11 +88,25 @@ export class TransmissionPipeline {
   private currentSlotCompletedEncodes: number = 0;
   private currentSlotId: string = '';
   private txSequence = 0;
+  private txTimingTraces: Map<number, TxTimingTrace> = new Map();
 
   constructor(private deps: TransmissionPipelineDeps) {}
 
   getIsPTTActive(): boolean {
     return this._isPTTActive;
+  }
+
+  recordClockEvent(eventName: TxClockEventName, slotInfo: SlotInfo, mode: ModeDescriptor): void {
+    const now = Date.now();
+    const trace = this.getOrCreateTimingTrace(slotInfo.startMs, slotInfo.id);
+    trace.modeName = mode.name;
+    trace.slotMs = mode.slotMs;
+    trace.transmitTimingMs = mode.transmitTiming;
+    trace.encodeAdvanceMs = mode.encodeAdvance;
+    trace.compensationMs = this.deps.getCompensationMs();
+    trace.compensatedTransmitStartMs = Math.max(0, (mode.transmitTiming || 0) - trace.compensationMs);
+    trace.clockEvents[eventName] = now;
+    this.trimTimingTraces();
   }
 
   /**
@@ -241,20 +292,59 @@ export class TransmissionPipeline {
 
   // ─── 内部方法 ────────────────────────────────────
 
+  private getOrCreateTimingTrace(slotStartMs: number, slotId?: string): TxTimingTrace {
+    let trace = this.txTimingTraces.get(slotStartMs);
+    if (!trace) {
+      trace = {
+        slotId: slotId || String(slotStartMs),
+        slotStartMs,
+        clockEvents: {},
+        encodeRecords: [],
+      };
+      this.txTimingTraces.set(slotStartMs, trace);
+    } else if (slotId) {
+      trace.slotId = slotId;
+    }
+    return trace;
+  }
+
+  private trimTimingTraces(): void {
+    const maxTraces = 8;
+    if (this.txTimingTraces.size <= maxTraces) return;
+    const ordered = Array.from(this.txTimingTraces.keys()).sort((a, b) => a - b);
+    for (const slotStartMs of ordered.slice(0, this.txTimingTraces.size - maxTraces)) {
+      this.txTimingTraces.delete(slotStartMs);
+    }
+  }
+
+  private formatTs(ms?: number | null): string | null {
+    return typeof ms === 'number' ? new Date(ms).toISOString() : null;
+  }
+
+  private phase(slotStartMs: number, atMs?: number | null): number | null {
+    return typeof atMs === 'number' ? atMs - slotStartMs : null;
+  }
+
   private nextTxId(reason: string): string {
     this.txSequence += 1;
     return `${reason}-${Date.now()}-${this.txSequence}`;
   }
 
-  private async startPTT(operatorIds: string[], txId?: string): Promise<void> {
+  private async startPTT(operatorIds: string[], txId?: string): Promise<TxPttTimingRecord> {
+    const pttStartTime = Date.now();
     if (this._isPTTActive) {
       logger.info('PTT already active, skipping start request', { txId, operatorIds });
-      return;
+      return {
+        requestedAtMs: pttStartTime,
+        startedAtMs: pttStartTime,
+        durationMs: 0,
+        skipped: true,
+        connected: this.deps.radioManager.isConnected(),
+      };
     }
 
     if (this.deps.radioManager.isConnected()) {
       try {
-        const pttStartTime = Date.now();
         logger.info('PTT start requested', {
           txId,
           operatorIds,
@@ -276,12 +366,26 @@ export class TransmissionPipeline {
         this.deps.operatorManager.updateActiveTransmissionOperators(operatorIds);
 
         logger.info('PTT started', { txId, operatorIds, durationMs });
+        return {
+          requestedAtMs: pttStartTime,
+          startedAtMs: Date.now(),
+          durationMs,
+          skipped: false,
+          connected: true,
+        };
       } catch (error) {
         logger.error(`PTT start failed: ${error}`, { txId, operatorIds });
         throw error;
       }
     } else {
       logger.warn('radio not connected, skipping PTT start', { txId, operatorIds });
+      return {
+        requestedAtMs: pttStartTime,
+        startedAtMs: null,
+        durationMs: 0,
+        skipped: true,
+        connected: false,
+      };
     }
   }
 
@@ -411,6 +515,28 @@ export class TransmissionPipeline {
       const transmitStartFromSlotMs = mode.transmitTiming || 0;
       const compensationMs = this.deps.getCompensationMs();
       const compensatedTransmitStart = Math.max(0, transmitStartFromSlotMs - compensationMs);
+      const encodeCompletedAtMs = Date.now();
+      const targetPlaybackTime = currentSlotStartMs + compensatedTransmitStart;
+      const trace = this.getOrCreateTimingTrace(currentSlotStartMs, this.currentSlotId);
+      trace.modeName = mode.name;
+      trace.slotMs = mode.slotMs;
+      trace.transmitTimingMs = transmitStartFromSlotMs;
+      trace.encodeAdvanceMs = mode.encodeAdvance;
+      trace.compensationMs = compensationMs;
+      trace.compensatedTransmitStartMs = compensatedTransmitStart;
+      trace.targetPlaybackTimeMs = targetPlaybackTime;
+      const encodeRecord: TxEncodeTimingRecord = {
+        operatorId: result.operatorId,
+        requestId,
+        encodedAtMs: encodeCompletedAtMs,
+        encodeCompleteSlotPhaseMs: encodeCompletedAtMs - currentSlotStartMs,
+        requestTimeSinceSlotStartMs: timeSinceSlotStartMs,
+        currentTimeSinceSlotStartMs,
+        audioSamples: result.audioData.length,
+        audioSampleRate: result.sampleRate,
+        audioDurationMs: Math.round(result.duration * 1000),
+      };
+      trace.encodeRecords.push(encodeRecord);
 
       if (compensationMs !== 0) {
         logger.debug(`transmit compensation applied: ${compensationMs}ms, target=${compensatedTransmitStart}ms (original=${transmitStartFromSlotMs}ms)`);
@@ -432,6 +558,7 @@ export class TransmissionPipeline {
       const isCurrentlyPlaying = this.isDigitalPlaybackInProgress();
 
       if (isCurrentlyPlaying) {
+        encodeRecord.path = 'remix';
         logger.debug('playback in progress, triggering remix');
         this._isRemixing = true;
         try {
@@ -464,14 +591,20 @@ export class TransmissionPipeline {
           this._isRemixing = false;
         }
       } else if (isMidSlotSwitch && currentTimeSinceSlotStartMs >= compensatedTransmitStart) {
+        encodeRecord.path = 'mid-slot-immediate';
         logger.debug('mid-slot switch, mixing immediately');
         const elapsedFromTransmitStart = currentTimeSinceSlotStartMs - compensatedTransmitStart;
-        const mixedAudio = await this.deps.audioMixer.mixAllOperatorAudios(elapsedFromTransmitStart);
+        const mixedAudio = await this.deps.audioMixer.mixAllOperatorAudios(elapsedFromTransmitStart, {
+          targetPlaybackTimeMs: targetPlaybackTime,
+          scheduledAtMs: encodeCompletedAtMs,
+          triggeredAtMs: Date.now(),
+          delayMs: 0,
+        });
         if (mixedAudio) {
           this.deps.audioMixer.emit('mixedAudioReady', mixedAudio);
         }
       } else {
-        const targetPlaybackTime = currentSlotStartMs + compensatedTransmitStart;
+        encodeRecord.path = 'scheduled';
         this.deps.audioMixer.scheduleMixing(targetPlaybackTime);
       }
     } catch (error) {
@@ -487,6 +620,10 @@ export class TransmissionPipeline {
   private async handleMixedAudioReady(mixedAudio: MixedAudio): Promise<void> {
     try {
       const txId = this.nextTxId('digital-tx');
+      const mode = this.deps.getCurrentMode();
+      const mixedAudioReadyAtMs = Date.now();
+      const slotStartMs = mixedAudio.slotStartMs ?? Math.floor(mixedAudioReadyAtMs / mode.slotMs) * mode.slotMs;
+      const trace = this.getOrCreateTimingTrace(slotStartMs, this.currentSlotId);
       logger.debug('mixed audio ready', {
         txId,
         operators: mixedAudio.operatorIds,
@@ -501,7 +638,7 @@ export class TransmissionPipeline {
       await this.deps.onBeforeStartPTT?.();
 
       const startSequenceAt = Date.now();
-      logger.info('starting PTT and audio playback in parallel', {
+      logger.debug('starting PTT and audio playback in parallel', {
         txId,
         operatorIds: mixedAudio.operatorIds,
         mixedSamples: mixedAudio.audioData.length,
@@ -514,21 +651,34 @@ export class TransmissionPipeline {
         this.deps.transmissionTracker.recordAudioPlaybackStart(operatorId);
       }
 
-      const pttPromise = this.startPTT(mixedAudio.operatorIds, txId).then(() => {
+      const timingState: {
+        ptt: TxPttTimingRecord | null;
+        playback: AudioPlaybackTimingSummary | null;
+      } = { ptt: null, playback: null };
+      const pttPromise = this.startPTT(mixedAudio.operatorIds, txId).then((timing) => {
+        timingState.ptt = timing;
         for (const operatorId of mixedAudio.operatorIds) {
           this.deps.transmissionTracker.recordPTTStart(operatorId);
         }
       });
 
       this.deps.audioMixer.markPlaybackStart();
-      logger.info('audio playback request issued', {
-        txId,
-        operatorIds: mixedAudio.operatorIds,
-        msAfterStartSequence: Date.now() - startSequenceAt,
-      });
+      const audioRequestIssuedAtMs = Date.now();
       const audioPromise = this.deps.audioStreamManager.playAudio(mixedAudio.audioData, mixedAudio.sampleRate, {
         playbackKind: 'digital',
-        diagnosticContext: { txId, operatorIds: mixedAudio.operatorIds },
+        diagnosticContext: {
+          txId,
+          operatorIds: mixedAudio.operatorIds,
+          slotStartMs,
+          targetPlaybackTimeMs: mixedAudio.targetPlaybackTimeMs,
+          mixScheduledAtMs: mixedAudio.mixScheduledAtMs,
+          mixTriggeredAtMs: mixedAudio.mixTriggeredAtMs,
+          mixCompletedAtMs: mixedAudio.mixCompletedAtMs,
+          mixDelayMs: mixedAudio.mixDelayMs,
+        },
+        onPlaybackComplete: (summary) => {
+          timingState.playback = summary;
+        },
       });
 
       logger.debug('PTT timing', {
@@ -542,11 +692,118 @@ export class TransmissionPipeline {
       await Promise.all([pttPromise, audioPromise]);
 
       this.deps.audioMixer.markPlaybackStop();
-      logger.info('audio playback and PTT start promises completed', {
+      const completedAtMs = Date.now();
+      const pttTiming = timingState.ptt;
+      const playbackTiming = timingState.playback;
+      const firstConsumedAtMs = playbackTiming?.firstConsumedAtMs ?? null;
+      const lastConsumedAtMs = playbackTiming?.lastConsumedAtMs ?? null;
+      logger.info('FT8 TX timing summary', {
         txId,
         operatorIds: mixedAudio.operatorIds,
-        elapsedMs: Date.now() - startSequenceAt,
-        pttActive: this._isPTTActive,
+        mode: {
+          name: trace.modeName ?? mode.name,
+          slotMs: trace.slotMs ?? mode.slotMs,
+          transmitTimingMs: trace.transmitTimingMs ?? mode.transmitTiming,
+          encodeAdvanceMs: trace.encodeAdvanceMs ?? mode.encodeAdvance,
+          compensationMs: trace.compensationMs ?? this.deps.getCompensationMs(),
+          compensatedTransmitStartMs: trace.compensatedTransmitStartMs,
+        },
+        slot: {
+          id: trace.slotId,
+          startAt: this.formatTs(slotStartMs),
+          startMs: slotStartMs,
+          targetPlaybackAt: this.formatTs(mixedAudio.targetPlaybackTimeMs),
+          targetPlaybackSlotPhaseMs: this.phase(slotStartMs, mixedAudio.targetPlaybackTimeMs),
+        },
+        clockEvents: {
+          slotStartAt: this.formatTs(trace.clockEvents.slotStart),
+          slotStartPhaseMs: this.phase(slotStartMs, trace.clockEvents.slotStart),
+          encodeStartAt: this.formatTs(trace.clockEvents.encodeStart),
+          encodeStartPhaseMs: this.phase(slotStartMs, trace.clockEvents.encodeStart),
+          transmitStartAt: this.formatTs(trace.clockEvents.transmitStart),
+          transmitStartPhaseMs: this.phase(slotStartMs, trace.clockEvents.transmitStart),
+        },
+        encode: trace.encodeRecords.map(record => ({
+          operatorId: record.operatorId,
+          requestId: record.requestId ?? null,
+          completeAt: this.formatTs(record.encodedAtMs),
+          completeSlotPhaseMs: record.encodeCompleteSlotPhaseMs,
+          requestTimeSinceSlotStartMs: record.requestTimeSinceSlotStartMs,
+          currentTimeSinceSlotStartMs: record.currentTimeSinceSlotStartMs,
+          audioSamples: record.audioSamples,
+          audioSampleRate: record.audioSampleRate,
+          audioDurationMs: record.audioDurationMs,
+          path: record.path ?? null,
+        })),
+        mix: {
+          scheduledAt: this.formatTs(mixedAudio.mixScheduledAtMs),
+          scheduledSlotPhaseMs: this.phase(slotStartMs, mixedAudio.mixScheduledAtMs),
+          delayMs: mixedAudio.mixDelayMs ?? null,
+          triggeredAt: this.formatTs(mixedAudio.mixTriggeredAtMs),
+          triggeredSlotPhaseMs: this.phase(slotStartMs, mixedAudio.mixTriggeredAtMs),
+          completedAt: this.formatTs(mixedAudio.mixCompletedAtMs),
+          completedSlotPhaseMs: this.phase(slotStartMs, mixedAudio.mixCompletedAtMs),
+          elapsedMs: mixedAudio.mixElapsedMs ?? null,
+          mixedAudioReadyAt: this.formatTs(mixedAudioReadyAtMs),
+          mixedAudioReadySlotPhaseMs: this.phase(slotStartMs, mixedAudioReadyAtMs),
+          targetDeltaMs: typeof mixedAudio.mixCompletedAtMs === 'number' && typeof mixedAudio.targetPlaybackTimeMs === 'number'
+            ? mixedAudio.mixCompletedAtMs - mixedAudio.targetPlaybackTimeMs
+            : null,
+        },
+        start: {
+          sequenceAt: this.formatTs(startSequenceAt),
+          sequenceSlotPhaseMs: this.phase(slotStartMs, startSequenceAt),
+          sequenceTargetDeltaMs: typeof mixedAudio.targetPlaybackTimeMs === 'number'
+            ? startSequenceAt - mixedAudio.targetPlaybackTimeMs
+            : null,
+          audioRequestIssuedAt: this.formatTs(audioRequestIssuedAtMs),
+          audioRequestSlotPhaseMs: this.phase(slotStartMs, audioRequestIssuedAtMs),
+          audioRequestTargetDeltaMs: typeof mixedAudio.targetPlaybackTimeMs === 'number'
+            ? audioRequestIssuedAtMs - mixedAudio.targetPlaybackTimeMs
+            : null,
+        },
+        ptt: {
+          requestedAt: this.formatTs(pttTiming?.requestedAtMs),
+          requestedSlotPhaseMs: this.phase(slotStartMs, pttTiming?.requestedAtMs),
+          startedAt: this.formatTs(pttTiming?.startedAtMs),
+          startedSlotPhaseMs: this.phase(slotStartMs, pttTiming?.startedAtMs),
+          startedTargetDeltaMs: typeof pttTiming?.startedAtMs === 'number' && typeof mixedAudio.targetPlaybackTimeMs === 'number'
+            ? pttTiming.startedAtMs - mixedAudio.targetPlaybackTimeMs
+            : null,
+          durationMs: pttTiming?.durationMs ?? null,
+          skipped: pttTiming?.skipped ?? null,
+          connected: pttTiming?.connected ?? null,
+          activeAfterPlayback: this._isPTTActive,
+        },
+        audio: {
+          playbackId: playbackTiming?.playbackId ?? null,
+          playStartAt: this.formatTs(playbackTiming?.playStartTimeMs),
+          playStartSlotPhaseMs: this.phase(slotStartMs, playbackTiming?.playStartTimeMs),
+          playStartTargetDeltaMs: typeof playbackTiming?.playStartTimeMs === 'number' && typeof mixedAudio.targetPlaybackTimeMs === 'number'
+            ? playbackTiming.playStartTimeMs - mixedAudio.targetPlaybackTimeMs
+            : null,
+          firstConsumedAt: this.formatTs(firstConsumedAtMs),
+          firstConsumedSlotPhaseMs: this.phase(slotStartMs, firstConsumedAtMs),
+          firstConsumedTargetDeltaMs: firstConsumedAtMs !== null && typeof mixedAudio.targetPlaybackTimeMs === 'number'
+            ? firstConsumedAtMs - mixedAudio.targetPlaybackTimeMs
+            : null,
+          lastConsumedAt: this.formatTs(lastConsumedAtMs),
+          submitCompleteAt: this.formatTs(playbackTiming?.submitCompleteAtMs),
+          playbackCompleteAt: this.formatTs(playbackTiming?.playbackCompleteAtMs),
+          submittedChunks: playbackTiming?.submittedChunks ?? null,
+          consumedChunks: playbackTiming?.consumedChunks ?? null,
+          consumeComplete: playbackTiming?.consumeComplete ?? null,
+          writeFails: playbackTiming?.writeFails ?? null,
+          expectedDurationMs: playbackTiming?.expectedDurationMs ?? Math.round(mixedAudio.duration * 1000),
+          sourcePeak: playbackTiming?.sourcePeak !== undefined ? Number(playbackTiming.sourcePeak.toFixed(6)) : null,
+          sourceRms: playbackTiming?.sourceRms !== undefined ? Number(playbackTiming.sourceRms.toFixed(6)) : null,
+          postGainPeak: playbackTiming?.postGainPeak !== undefined ? Number(playbackTiming.postGainPeak.toFixed(6)) : null,
+          postGainRms: playbackTiming?.postGainRms !== undefined ? Number(playbackTiming.postGainRms.toFixed(6)) : null,
+          fingerprint: playbackTiming?.sourceFingerprint ?? null,
+          backend: playbackTiming?.backend ?? null,
+        },
+        completedAt: this.formatTs(completedAtMs),
+        elapsedMs: completedAtMs - startSequenceAt,
       });
 
       if (this.shouldReleasePTTImmediatelyAfterAudio()) {
