@@ -1,7 +1,4 @@
 import audify from 'audify';
-import * as nodeWav from 'node-wav';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 const { RtAudio } = audify;
 type RtAudioInstance = InstanceType<typeof RtAudio>;
 
@@ -24,7 +21,6 @@ import { createLogger } from '../utils/logger.js';
 import type { VoiceTxFrameMeta, VoiceTxProcessedFrameStats } from '../voice/VoiceTxDiagnostics.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { VoiceTxOutputPipeline, type VoiceTxOutputSinkState } from './VoiceTxOutputPipeline.js';
-import { tx5drPaths } from '../utils/app-paths.js';
 
 const logger = createLogger('AudioStreamManager');
 const INTERNAL_SAMPLE_RATE = 12000;
@@ -34,11 +30,6 @@ const ICOM_WLAN_TX_MAX_WAIT_SLICE_MS = 20;
 const RTAUDIO_TX_CONSUME_WATCHDOG_MS = 750;
 const RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS = 1000;
 const RTAUDIO_TX_WATCHDOG_MIN_SUBMITTED_CHUNKS = 3;
-const RTAUDIO_IDLE_PRIME_MAX_QUEUED_CHUNKS = 1;
-const RTAUDIO_IDLE_PRIME_PUMP_POLL_MS = 5;
-const RTAUDIO_IDLE_PRIME_DEFAULT_TONE_HZ = 1000;
-const RTAUDIO_IDLE_PRIME_DEFAULT_TONE_AMPLITUDE = 0.003;
-const TX_OUTPUT_CAPTURE_DIR = 'tx-output-captures';
 
 export type NativeAudioInputSourceKind = 'audio-device' | 'icom-wlan' | 'openwebrx';
 
@@ -120,15 +111,6 @@ interface RtAudioIssue {
   fatal: boolean;
 }
 
-type RtAudioOutputWriteSource = PlaybackKind | 'voice-tx' | 'idle-tone';
-
-interface RtAudioOutputWriteRecord {
-  source: RtAudioOutputWriteSource;
-  playbackId: number | null;
-  samples: number;
-  enqueuedAt: number;
-}
-
 export interface PlayAudioOptions {
   /**
    * Mirrors the audio chunks written to the TX output into the monitor broadcast
@@ -138,32 +120,9 @@ export interface PlayAudioOptions {
   injectIntoMonitor?: boolean;
   playbackKind?: PlaybackKind;
   diagnosticContext?: Record<string, unknown>;
-  onPlaybackComplete?: (summary: AudioPlaybackTimingSummary) => void;
 }
 
 export type PlaybackKind = 'digital' | 'voice-keyer' | 'tune-tone';
-
-export interface AudioPlaybackTimingSummary {
-  playbackId: number;
-  playbackKind: PlaybackKind;
-  playStartTimeMs: number;
-  submitCompleteAtMs: number;
-  playbackCompleteAtMs: number;
-  submittedChunks: number;
-  submittedSamples: number;
-  consumedChunks: number;
-  consumeComplete: boolean;
-  firstConsumedAtMs: number | null;
-  lastConsumedAtMs: number | null;
-  expectedDurationMs: number;
-  postGainPeak: number;
-  postGainRms: number;
-  sourcePeak: number;
-  sourceRms: number;
-  sourceFingerprint: string;
-  writeFails: number;
-  backend: OutputBackendSnapshot;
-}
 
 export interface StopPlaybackOptions {
   kind?: PlaybackKind;
@@ -217,11 +176,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private outputRtAudioErrors: RtAudioIssue[] = [];
   private outputWatchdogGeneration = 0;
   private playbackSequence = 0;
-  private outputWriteQueue: RtAudioOutputWriteRecord[] = [];
-  private outputConsumePlaybackId: number | null = null;
-  private idlePrimePumpTimer: NodeJS.Timeout | null = null;
-  private idlePrimeQueuedChunks = 0;
-  private idlePrimeTonePhase = 0;
 
   constructor() {
     super();
@@ -668,11 +622,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       await this.createAndStartOutputWithTimeout(actualOutputDeviceId, resolvedOutputDeviceId ?? outputDeviceId, configuredOutputDeviceName);
 
       this.isOutputting = true;
-      logger.info('audio output started', {
-        sampleRate: this.outputSampleRate,
-        idlePrimePumpEnabled: this.shouldUseIdlePrimePump(),
-      });
-      this.startIdlePrimePump('output-started');
+      logger.info('audio output started', { sampleRate: this.outputSampleRate });
 
     } catch (error) {
       logger.error('failed to start audio output', error);
@@ -854,7 +804,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     try {
       logger.info('stopping audio output');
-      this.stopIdlePrimePump('stop-output');
 
       // ICOM WLAN 输出只需要清除标志，不需要额外操作
       if (this.usingIcomWlanOutput) {
@@ -1117,8 +1066,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       throw new Error('audio output instance not initialized');
     }
 
-    this.outputWriteQueue = [];
-    this.idlePrimeQueuedChunks = 0;
     this.resetOutputConsumeDiagnostics();
 
     this.rtAudioOutput.openStream(
@@ -1135,30 +1082,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     );
   }
 
-  private resetOutputConsumeDiagnostics(playbackId: number | null = null): void {
+  private resetOutputConsumeDiagnostics(): void {
     this.outputFramesConsumed = 0;
     this.outputFirstFrameConsumedAt = null;
     this.outputLastFrameConsumedAt = null;
     this.outputRtAudioErrors = [];
-    this.outputConsumePlaybackId = playbackId;
     this.outputWatchdogGeneration++;
   }
 
   private recordOutputFrameConsumed(): void {
-    const record = this.outputWriteQueue.shift() ?? null;
-    if (record?.source === 'idle-tone') {
-      this.idlePrimeQueuedChunks = Math.max(0, this.idlePrimeQueuedChunks - 1);
-      return;
-    }
-
-    if (this.outputConsumePlaybackId === null) {
-      return;
-    }
-
-    if (!record || record.playbackId !== this.outputConsumePlaybackId) {
-      return;
-    }
-
     const now = Date.now();
     this.outputFramesConsumed++;
     if (this.outputFirstFrameConsumedAt === null) {
@@ -1412,310 +1344,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     });
   }
 
-  private shouldUseIdlePrimePump(): boolean {
-    if (
-      process.env.TX5DR_DISABLE_OUTPUT_IDLE_PRIME_PUMP === '1' ||
-      process.env.TX5DR_DISABLE_OUTPUT_IDLE_SILENCE_PUMP === '1'
-    ) {
-      return false;
-    }
-    return true;
-  }
-
-  private startIdlePrimePump(reason: string): void {
-    if (!this.shouldUseIdlePrimePump() || this.usingIcomWlanOutput) {
-      return;
-    }
-    if (this.idlePrimePumpTimer) {
-      return;
-    }
-    logger.info('RtAudio idle prime pump started', {
-      reason,
-      maxQueuedChunks: RTAUDIO_IDLE_PRIME_MAX_QUEUED_CHUNKS,
-      chunkSamples: this.getRtAudioOutputChunkSamples(),
-      toneHz: this.getIdlePrimeToneHz(),
-      amplitude: this.getIdlePrimeToneAmplitude(),
-    });
-    this.scheduleIdlePrimePump(0);
-  }
-
-  private stopIdlePrimePump(reason: string): void {
-    if (!this.idlePrimePumpTimer) {
-      return;
-    }
-    clearTimeout(this.idlePrimePumpTimer);
-    this.idlePrimePumpTimer = null;
-    logger.debug('RtAudio idle prime pump stopped', { reason });
-  }
-
-  private scheduleIdlePrimePump(delayMs: number): void {
-    if (this.idlePrimePumpTimer || !this.shouldUseIdlePrimePump()) {
-      return;
-    }
-    this.idlePrimePumpTimer = setTimeout(() => {
-      this.idlePrimePumpTimer = null;
-      this.runIdlePrimePump();
-    }, Math.max(0, delayMs));
-    this.idlePrimePumpTimer.unref?.();
-  }
-
-  private runIdlePrimePump(): void {
-    if (!this.shouldUseIdlePrimePump() || !this.isOutputting || this.usingIcomWlanOutput || !this.rtAudioOutput) {
-      return;
-    }
-    if (typeof this.rtAudioOutput.write !== 'function') {
-      logger.debug('RtAudio idle prime pump disabled: output write() unavailable');
-      return;
-    }
-
-    if (this.shouldHoldIdlePrimePump()) {
-      this.scheduleIdlePrimePump(RTAUDIO_IDLE_PRIME_PUMP_POLL_MS);
-      return;
-    }
-
-    if (this.idlePrimeQueuedChunks < RTAUDIO_IDLE_PRIME_MAX_QUEUED_CHUNKS) {
-      try {
-        this.writeRtAudioOutputBuffer(this.getIdlePrimeBuffer(), {
-          source: 'idle-tone',
-          playbackId: null,
-          samples: this.getRtAudioOutputChunkSamples(),
-        });
-      } catch (error) {
-        logger.warn('RtAudio idle prime write failed', { error: this.describeError(error) });
-      }
-    }
-
-    this.scheduleIdlePrimePump(RTAUDIO_IDLE_PRIME_PUMP_POLL_MS);
-  }
-
-  private shouldHoldIdlePrimePump(): boolean {
-    if (this.playing) {
-      return true;
-    }
-    if (this.voiceTxOutputPipeline.getQueueDepthFrames() > 0) {
-      return true;
-    }
-    return this.outputWriteQueue.some((record) => record.source !== 'idle-tone');
-  }
-
-  private getRtAudioOutputChunkSamples(): number {
-    return Math.max(64, this.outputBufferSize || 768) * this.channels;
-  }
-
-  private getIdlePrimeBuffer(): Buffer {
-    const sampleCount = this.getRtAudioOutputChunkSamples();
-    const buffer = Buffer.allocUnsafe(sampleCount * 4);
-    const amplitude = this.getIdlePrimeToneAmplitude();
-    const toneHz = this.getIdlePrimeToneHz();
-    const phaseStep = (2 * Math.PI * toneHz) / Math.max(1, this.outputSampleRate);
-
-    for (let index = 0; index < sampleCount; index += 1) {
-      buffer.writeFloatLE(amplitude * Math.sin(this.idlePrimeTonePhase), index * 4);
-      this.idlePrimeTonePhase += phaseStep;
-      if (this.idlePrimeTonePhase >= 2 * Math.PI) {
-        this.idlePrimeTonePhase %= 2 * Math.PI;
-      }
-    }
-
-    return buffer;
-  }
-
-  private getIdlePrimeToneHz(): number {
-    return this.parseBoundedNumber(
-      process.env.TX5DR_OUTPUT_IDLE_PRIME_TONE_HZ,
-      RTAUDIO_IDLE_PRIME_DEFAULT_TONE_HZ,
-      20,
-      Math.max(20, Math.min(20_000, this.outputSampleRate / 2 - 1)),
-    );
-  }
-
-  private getIdlePrimeToneAmplitude(): number {
-    return this.parseBoundedNumber(
-      process.env.TX5DR_OUTPUT_IDLE_PRIME_TONE_AMPLITUDE,
-      RTAUDIO_IDLE_PRIME_DEFAULT_TONE_AMPLITUDE,
-      0,
-      0.05,
-    );
-  }
-
-  private parseBoundedNumber(value: string | undefined, fallback: number, min: number, max: number): number {
-    const parsed = value === undefined ? Number.NaN : Number.parseFloat(value);
-    const numeric = Number.isFinite(parsed) ? parsed : fallback;
-    return Math.max(min, Math.min(max, numeric));
-  }
-
-  private prepareRtAudioQueueForPlayback(playbackId: number, playbackKind: PlaybackKind): void {
-    this.stopIdlePrimePump(`playback-start:${playbackKind}`);
-    this.clearRtAudioOutputQueue(`playback-start:${playbackKind}`);
-    this.resetOutputConsumeDiagnostics(playbackId);
-  }
-
-  private clearQueuedIdlePrimeIfSafe(reason: string): void {
-    if (this.idlePrimeQueuedChunks <= 0) {
-      return;
-    }
-    if (this.outputWriteQueue.some((record) => record.source !== 'idle-tone')) {
-      return;
-    }
-    this.clearRtAudioOutputQueue(reason);
-  }
-
-  private clearRtAudioOutputQueue(reason: string): void {
-    if (!this.rtAudioOutput) {
-      return;
-    }
-    const clearedRecords = this.outputWriteQueue.length;
-    const clearedIdlePrimeChunks = this.idlePrimeQueuedChunks;
-    try {
-      this.rtAudioOutput.clearOutputQueue();
-      logger.info('RtAudio output queue cleared', {
-        reason,
-        clearedRecords,
-        clearedIdlePrimeChunks,
-      });
-    } catch (error) {
-      logger.warn('failed to clear RtAudio output queue', { reason, error: this.describeError(error) });
-    } finally {
-      this.outputWriteQueue = [];
-      this.idlePrimeQueuedChunks = 0;
-    }
-  }
-
-  private writeRtAudioOutputBuffer(
-    buffer: Buffer,
-    record: Omit<RtAudioOutputWriteRecord, 'enqueuedAt'>,
-  ): void {
-    if (!this.rtAudioOutput) {
-      throw new Error('audio output stream not started');
-    }
-
-    if (record.source !== 'idle-tone') {
-      this.clearQueuedIdlePrimeIfSafe(`active-write:${record.source}`);
-    }
-
-    const queuedRecord: RtAudioOutputWriteRecord = {
-      ...record,
-      enqueuedAt: Date.now(),
-    };
-    this.outputWriteQueue.push(queuedRecord);
-    if (queuedRecord.source === 'idle-tone') {
-      this.idlePrimeQueuedChunks++;
-    }
-
-    try {
-      this.rtAudioOutput.write(buffer);
-    } catch (error) {
-      const index = this.outputWriteQueue.indexOf(queuedRecord);
-      if (index >= 0) {
-        this.outputWriteQueue.splice(index, 1);
-      }
-      if (queuedRecord.source === 'idle-tone') {
-        this.idlePrimeQueuedChunks = Math.max(0, this.idlePrimeQueuedChunks - 1);
-      }
-      throw error;
-    }
-  }
-
   private appendSnapshotError(existing: string | undefined, next: string): string {
     return existing ? `${existing}; ${next}` : next;
   }
 
   private describeError(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
-  }
-
-  private sanitizeCaptureFilePart(value: unknown, fallback: string): string {
-    if (typeof value !== 'string' || value.trim().length === 0) {
-      return fallback;
-    }
-    return value.trim().replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || fallback;
-  }
-
-  private flattenCapturedOutputChunks(chunks: Float32Array[]): Float32Array {
-    const totalSamples = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-    const flattened = new Float32Array(totalSamples);
-    let offset = 0;
-    for (const chunk of chunks) {
-      flattened.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return flattened;
-  }
-
-  private splitInterleavedChannels(samples: Float32Array, channels: number): Float32Array[] {
-    if (channels <= 1) {
-      return [samples];
-    }
-
-    const frames = Math.floor(samples.length / channels);
-    const channelData = Array.from({ length: channels }, () => new Float32Array(frames));
-    for (let frame = 0; frame < frames; frame++) {
-      for (let channel = 0; channel < channels; channel++) {
-        channelData[channel]![frame] = samples[frame * channels + channel] ?? 0;
-      }
-    }
-    return channelData;
-  }
-
-  private async saveRtAudioOutputCapture(params: {
-    playbackId: number;
-    playbackKind: PlaybackKind;
-    diagnosticContext: Record<string, unknown>;
-    chunks: Float32Array[];
-    sampleRate: number;
-    channels: number;
-    submittedChunks: number;
-    submittedSamples: number;
-    totalChunks: number;
-    totalSamples: number;
-  }): Promise<void> {
-    if (params.chunks.length === 0) {
-      return;
-    }
-
-    try {
-      const dataDir = await tx5drPaths.getDataDir();
-      const captureDir = join(dataDir, TX_OUTPUT_CAPTURE_DIR);
-      await mkdir(captureDir, { recursive: true });
-
-      const txId = this.sanitizeCaptureFilePart(params.diagnosticContext.txId, `playback-${params.playbackId}`);
-      const slotStartMs = typeof params.diagnosticContext.slotStartMs === 'number'
-        ? params.diagnosticContext.slotStartMs
-        : Date.now();
-      const timestamp = new Date(slotStartMs).toISOString().replace(/[:.]/g, '-');
-      const filename = `${timestamp}_${txId}_rtaudio-output.wav`;
-      const filepath = join(captureDir, filename);
-
-      const capturedSamples = this.flattenCapturedOutputChunks(params.chunks);
-      const wavBuffer = nodeWav.encode(
-        this.splitInterleavedChannels(capturedSamples, params.channels),
-        {
-          sampleRate: params.sampleRate,
-          float: true,
-          bitDepth: 32,
-        },
-      );
-      await writeFile(filepath, wavBuffer);
-
-      logger.info('RtAudio TX output capture saved', {
-        playbackId: params.playbackId,
-        txId,
-        filepath,
-        sampleRate: params.sampleRate,
-        channels: params.channels,
-        capturedSamples: capturedSamples.length,
-        submittedChunks: params.submittedChunks,
-        submittedSamples: params.submittedSamples,
-        totalChunks: params.totalChunks,
-        totalSamples: params.totalSamples,
-        format: 'wav-float32',
-      });
-    } catch (error) {
-      logger.warn('failed to save RtAudio TX output capture', {
-        playbackId: params.playbackId,
-        error: this.describeError(error),
-      });
-    }
   }
 
   private shouldRunRtAudioConsumeWatchdog(): boolean {
@@ -1996,11 +1630,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       const totalSamples = playbackData.length;
       const expectedDurationMs = Math.round((totalSamples / this.outputSampleRate) * 1000);
       logger.debug(`chunked playback: ${totalChunks} chunks, chunkSize=${chunkSize}, prebuffer~${prebufferMs}ms, tick=${TICK_MS}ms, totalSamples=${totalSamples}, expectedDuration=${expectedDurationMs}ms`);
-      const captureRtAudioWrites = playbackKind === 'digital';
-      const rtAudioOutputCaptureChunks: Float32Array[] = [];
 
       const chunkStartTime = Date.now();
-      this.prepareRtAudioQueueForPlayback(playbackId, playbackKind);
+      this.resetOutputConsumeDiagnostics();
       const watchdogGeneration = this.outputWatchdogGeneration;
       let submittedChunks = 0;
       let submittedSamples = 0;
@@ -2011,7 +1643,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       let watchdogTriggered = false;
       let watchdogTimer: NodeJS.Timeout | null = null;
       const watchdogStartedAt = Date.now();
-      let submitCompleteAtMs = 0;
 
       const stopWatchdog = () => {
         if (watchdogTimer) {
@@ -2077,7 +1708,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             // RtAudio requires exactly chunkSize frames per write; pad short last chunk with silence
             const bufferSamples = chunkSize;
             const buffer = Buffer.allocUnsafe(bufferSamples * 4);
-            const captureChunk = captureRtAudioWrites ? new Float32Array(bufferSamples) : null;
             const monitorChunk = options.injectIntoMonitor ? new Float32Array(chunk.length) : null;
             let chunkPeak = 0;
             let chunkSumSquares = 0;
@@ -2085,9 +1715,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               const s = chunk[j] * gain;
               const clamped = s > 1 ? 1 : (s < -1 ? -1 : s);
               buffer.writeFloatLE(clamped, j * 4);
-              if (captureChunk) {
-                captureChunk[j] = clamped;
-              }
               const abs = Math.abs(clamped);
               if (abs > chunkPeak) {
                 chunkPeak = abs;
@@ -2101,14 +1728,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             for (let j = chunk.length; j < bufferSamples; j++) {
               buffer.writeFloatLE(0, j * 4);
             }
-            this.writeRtAudioOutputBuffer(buffer, {
-              source: playbackKind,
-              playbackId,
-              samples: chunk.length,
-            });
-            if (captureChunk) {
-              rtAudioOutputCaptureChunks.push(captureChunk);
-            }
+            this.rtAudioOutput.write(buffer);
             if (monitorChunk && monitorChunk.length > 0) {
               this.emit('txMonitorAudioData', { samples: monitorChunk, sampleRate: this.outputSampleRate });
             }
@@ -2141,8 +1761,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
         const interval = setInterval(() => {
           try {
-            const elapsedMs = performance.now() - hrStart;
-
             // Check stop signal
             if (this.shouldStopPlayback) {
               clearInterval(interval);
@@ -2162,7 +1780,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               clearInterval(interval);
               const chunkDuration = Date.now() - chunkStartTime;
               const playDuration = Date.now() - playStartTime;
-              submitCompleteAtMs = Date.now();
               logger.debug(`chunked write complete, duration: ${chunkDuration}ms`);
               logger.info('audio playback submit complete', {
                 playbackId,
@@ -2181,6 +1798,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             }
 
             // Calculate target: how many samples should have been written by now + prebuffer
+            const elapsedMs = performance.now() - hrStart;
             const targetSamples = Math.floor((elapsedMs / 1000) * this.outputSampleRate) + prebufferSamples;
 
             // Catch-up write: write multiple chunks in one tick if behind schedule
@@ -2232,17 +1850,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
       const consumedChunks = this.outputFramesConsumed;
       const consumeComplete = consumedChunks >= submittedChunks;
-      const playbackCompleteAtMs = Date.now();
       const postGainStats = {
         peak: postGainPeak,
         rms: postGainSampleCount > 0 ? Math.sqrt(postGainSumSquares / postGainSampleCount) : 0,
       };
-      const slotStartMs = typeof diagnosticContext.slotStartMs === 'number' ? diagnosticContext.slotStartMs : null;
-      const targetPlaybackTimeMs = typeof diagnosticContext.targetPlaybackTimeMs === 'number'
-        ? diagnosticContext.targetPlaybackTimeMs
-        : null;
-      const firstConsumedAtMs = this.outputFirstFrameConsumedAt ?? null;
-      const lastConsumedAtMs = this.outputLastFrameConsumedAt ?? null;
       const consumeSummary = {
         playbackId,
         ...diagnosticContext,
@@ -2250,17 +1861,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         submittedSamples,
         consumedChunks,
         consumeComplete,
-        firstConsumedAt: firstConsumedAtMs
-          ? new Date(firstConsumedAtMs).toISOString()
+        firstConsumedAt: this.outputFirstFrameConsumedAt
+          ? new Date(this.outputFirstFrameConsumedAt).toISOString()
           : null,
-        firstConsumedSlotPhaseMs: firstConsumedAtMs !== null && slotStartMs !== null
-          ? firstConsumedAtMs - slotStartMs
-          : null,
-        firstConsumedTargetDeltaMs: firstConsumedAtMs !== null && targetPlaybackTimeMs !== null
-          ? firstConsumedAtMs - targetPlaybackTimeMs
-          : null,
-        lastConsumedAt: lastConsumedAtMs
-          ? new Date(lastConsumedAtMs).toISOString()
+        lastConsumedAt: this.outputLastFrameConsumedAt
+          ? new Date(this.outputLastFrameConsumedAt).toISOString()
           : null,
         sourcePeak: Number(sourceStats.peak.toFixed(6)),
         sourceRms: Number(sourceStats.rms.toFixed(6)),
@@ -2272,28 +1877,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         recentRtAudioErrors: this.outputRtAudioErrors,
       };
 
-      options.onPlaybackComplete?.({
-        playbackId,
-        playbackKind,
-        playStartTimeMs: playStartTime,
-        submitCompleteAtMs,
-        playbackCompleteAtMs,
-        submittedChunks,
-        submittedSamples,
-        consumedChunks,
-        consumeComplete,
-        firstConsumedAtMs,
-        lastConsumedAtMs,
-        expectedDurationMs,
-        postGainPeak: postGainStats.peak,
-        postGainRms: postGainStats.rms,
-        sourcePeak: sourceStats.peak,
-        sourceRms: sourceStats.rms,
-        sourceFingerprint,
-        writeFails: writeFailCount,
-        backend: this.getOutputBackendSnapshot(),
-      });
-
       if (consumeComplete) {
         logger.info('audio playback consume complete', consumeSummary);
       } else {
@@ -2301,21 +1884,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           ? 'Windows RtAudio output did not consume all submitted playback chunks before timeout'
           : 'RtAudio output did not consume all submitted playback chunks before timeout';
         logger.warn(message, consumeSummary);
-      }
-
-      if (captureRtAudioWrites) {
-        void this.saveRtAudioOutputCapture({
-          playbackId,
-          playbackKind,
-          diagnosticContext,
-          chunks: rtAudioOutputCaptureChunks,
-          sampleRate: this.outputSampleRate,
-          channels: this.channels,
-          submittedChunks,
-          submittedSamples,
-          totalChunks,
-          totalSamples,
-        });
       }
 
       } catch (error) {
@@ -2328,7 +1896,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       } finally {
         // Safe if the playback failed before the watchdog was created.
         this.outputWatchdogGeneration++;
-        this.startIdlePrimePump(`playback-finished:${playbackKind}`);
         // 清理播放状态
         if (this.currentPlaybackPromise === playbackPromise) {
           this.playing = false;
@@ -2404,11 +1971,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       for (let index = 0; index < samples.length; index += 1) {
         buffer.writeFloatLE(samples[index] ?? 0, index * 4);
       }
-      this.writeRtAudioOutputBuffer(buffer, {
-        source: 'voice-tx',
-        playbackId: null,
-        samples: samples.length,
-      });
+      this.rtAudioOutput.write(buffer);
       return true;
     } catch (error) {
       logger.debug('Voice audio RtAudio write failed', error);

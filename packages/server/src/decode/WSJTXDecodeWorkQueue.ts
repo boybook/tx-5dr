@@ -10,6 +10,7 @@ import {
 import { resampleAudioProfessional } from '../utils/audioUtils.js';
 import { WSJTXLib, WSJTXMode } from 'wsjtx-lib';
 import { createLogger } from '../utils/logger.js';
+import { WSJTXNativeGate } from './WSJTXNativeGate.js';
 
 const logger = createLogger('DecodeWorkQueue');
 
@@ -89,15 +90,17 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
       resampledAudioData = originalAudioData;
     }
 
-    // 将 Float32Array 转换为 Int16Array（当前原生解码在 Int16 路径上更稳定）
-    const audioInt16 = await this.lib.convertAudioFormat(resampledAudioData, 'int16') as Int16Array;
-
-    // 调用解码（新API：DecodeOptions + DecodeResult.messages）
     const baseFrequency = 0; // 基频，目前为0
     const decodeMode = request.mode === 'FT4' ? WSJTXMode.FT4 : WSJTXMode.FT8;
-    const rawResult = await this.lib.decode(decodeMode, audioInt16, {
-      frequency: baseFrequency,
-      threads: 1,
+    const rawResult = await WSJTXNativeGate.run(async () => {
+      // 将 Float32Array 转换为 Int16Array（当前原生解码在 Int16 路径上更稳定）
+      const audioInt16 = await this.lib.convertAudioFormat(resampledAudioData, 'int16') as Int16Array;
+
+      // 调用解码（新API：DecodeOptions + DecodeResult.messages）
+      return this.lib.decode(decodeMode, audioInt16, {
+        frequency: baseFrequency,
+        threads: 1,
+      });
     });
 
     // 读取消息并映射到帧
