@@ -6,7 +6,7 @@ import type { AudioMixer, MixedAudio } from '../audio/AudioMixer.js';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { SpectrumScheduler } from '../audio/SpectrumScheduler.js';
 import { TransmissionTracker, TransmissionPhase } from '../transmission/TransmissionTracker.js';
-import type { WSJTXEncodeWorkQueue } from '../decode/WSJTXEncodeWorkQueue.js';
+import type { EncodeAudioSpectrumSummary, WSJTXEncodeWorkQueue } from '../decode/WSJTXEncodeWorkQueue.js';
 import type { RadioOperatorManager } from '../operator/RadioOperatorManager.js';
 import { ListenerManager } from './ListenerManager.js';
 import { createLogger } from '../utils/logger.js';
@@ -22,6 +22,11 @@ interface TxEncodeTimingRecord {
   encodeCompleteSlotPhaseMs: number;
   requestTimeSinceSlotStartMs: number;
   currentTimeSinceSlotStartMs: number;
+  encodeFrequencyHz?: number;
+  requestFrequencyHz?: number;
+  rawEncodeSampleRate?: number;
+  rawEncodeSpectrum?: EncodeAudioSpectrumSummary;
+  resampledSpectrum?: EncodeAudioSpectrumSummary;
   audioSamples: number;
   audioSampleRate: number;
   audioDurationMs: number;
@@ -121,7 +126,11 @@ export class TransmissionPipeline {
       audioData: Float32Array;
       sampleRate: number;
       duration: number;
-      request?: { timeSinceSlotStartMs?: number; requestId?: string };
+      encodeFrequencyHz?: number;
+      rawEncodeSampleRate?: number;
+      rawEncodeSpectrum?: EncodeAudioSpectrumSummary;
+      resampledSpectrum?: EncodeAudioSpectrumSummary;
+      request?: { timeSinceSlotStartMs?: number; requestId?: string; frequency?: number };
     }) => {
       await this.handleEncodeComplete(result);
     });
@@ -478,7 +487,11 @@ export class TransmissionPipeline {
     audioData: Float32Array;
     sampleRate: number;
     duration: number;
-    request?: { timeSinceSlotStartMs?: number; requestId?: string };
+    encodeFrequencyHz?: number;
+    rawEncodeSampleRate?: number;
+    rawEncodeSpectrum?: EncodeAudioSpectrumSummary;
+    resampledSpectrum?: EncodeAudioSpectrumSummary;
+    request?: { timeSinceSlotStartMs?: number; requestId?: string; frequency?: number };
   }): Promise<void> {
     try {
       const request = result.request;
@@ -532,6 +545,11 @@ export class TransmissionPipeline {
         encodeCompleteSlotPhaseMs: encodeCompletedAtMs - currentSlotStartMs,
         requestTimeSinceSlotStartMs: timeSinceSlotStartMs,
         currentTimeSinceSlotStartMs,
+        encodeFrequencyHz: result.encodeFrequencyHz,
+        requestFrequencyHz: request?.frequency,
+        rawEncodeSampleRate: result.rawEncodeSampleRate,
+        rawEncodeSpectrum: result.rawEncodeSpectrum,
+        resampledSpectrum: result.resampledSpectrum,
         audioSamples: result.audioData.length,
         audioSampleRate: result.sampleRate,
         audioDurationMs: Math.round(result.duration * 1000),
@@ -730,6 +748,11 @@ export class TransmissionPipeline {
           completeSlotPhaseMs: record.encodeCompleteSlotPhaseMs,
           requestTimeSinceSlotStartMs: record.requestTimeSinceSlotStartMs,
           currentTimeSinceSlotStartMs: record.currentTimeSinceSlotStartMs,
+          encodeFrequencyHz: record.encodeFrequencyHz ?? null,
+          requestFrequencyHz: record.requestFrequencyHz ?? null,
+          rawEncodeSampleRate: record.rawEncodeSampleRate ?? null,
+          rawEncodeSpectrum: record.rawEncodeSpectrum ?? null,
+          resampledSpectrum: record.resampledSpectrum ?? null,
           audioSamples: record.audioSamples,
           audioSampleRate: record.audioSampleRate,
           audioDurationMs: record.audioDurationMs,
