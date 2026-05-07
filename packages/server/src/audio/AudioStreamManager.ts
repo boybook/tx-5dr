@@ -1518,7 +1518,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
   private prepareRtAudioQueueForPlayback(playbackId: number, playbackKind: PlaybackKind): void {
     this.stopIdlePrimePump(`playback-start:${playbackKind}`);
-    this.clearRtAudioOutputQueue(`playback-start:${playbackKind}`);
+    // Temporarily keep already queued output to test whether TX-start queue clearing
+    // is causing Windows output to fall into a silent gap.
+    // this.clearRtAudioOutputQueue(`playback-start:${playbackKind}`);
     this.resetOutputConsumeDiagnostics(playbackId);
   }
 
