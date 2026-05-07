@@ -94,6 +94,12 @@ interface AudioStats {
   rms: number;
 }
 
+interface AudioSegmentStats extends AudioStats {
+  index: number;
+  startMs: number;
+  endMs: number;
+}
+
 export interface PlayAudioOptions {
   /**
    * Mirrors the audio chunks written to the TX output into the monitor broadcast
@@ -102,6 +108,7 @@ export interface PlayAudioOptions {
    */
   injectIntoMonitor?: boolean;
   playbackKind?: PlaybackKind;
+  diagnosticContext?: Record<string, unknown>;
 }
 
 export type PlaybackKind = 'digital' | 'voice-keyer' | 'tune-tone';
@@ -157,6 +164,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private outputLastFrameConsumedAt: number | null = null;
   private outputRtAudioErrors: Array<{ type: number; message: string; at: number }> = [];
   private outputWatchdogGeneration = 0;
+  private playbackSequence = 0;
 
   constructor() {
     super();
@@ -1181,6 +1189,50 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     };
   }
 
+  private computeAudioSegmentStats(samples: Float32Array, sampleRate: number, segmentCount = 4): AudioSegmentStats[] {
+    if (samples.length === 0 || sampleRate <= 0 || segmentCount <= 0) {
+      return [];
+    }
+
+    const segmentLength = Math.max(1, Math.ceil(samples.length / segmentCount));
+    const segments: AudioSegmentStats[] = [];
+    for (let index = 0; index < segmentCount; index++) {
+      const start = index * segmentLength;
+      if (start >= samples.length) {
+        break;
+      }
+      const end = Math.min(samples.length, start + segmentLength);
+      const stats = this.computeAudioStats(samples.subarray(start, end));
+      segments.push({
+        index,
+        startMs: Math.round((start / sampleRate) * 1000),
+        endMs: Math.round((end / sampleRate) * 1000),
+        peak: Number(stats.peak.toFixed(6)),
+        rms: Number(stats.rms.toFixed(6)),
+      });
+    }
+
+    return segments;
+  }
+
+  private fingerprintAudio(samples: Float32Array): string {
+    let hash = 0x811c9dc5;
+    if (samples.length === 0) {
+      return hash.toString(16);
+    }
+
+    const stride = Math.max(1, Math.floor(samples.length / 4096));
+    for (let i = 0; i < samples.length; i += stride) {
+      const quantized = Math.max(-32768, Math.min(32767, Math.round((samples[i] || 0) * 32767)));
+      hash ^= quantized & 0xff;
+      hash = Math.imul(hash, 0x01000193);
+      hash ^= (quantized >> 8) & 0xff;
+      hash = Math.imul(hash, 0x01000193);
+    }
+
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  }
+
   private getOutputBackendSnapshot(): OutputBackendSnapshot {
     if (!this.rtAudioOutput) {
       return { error: 'rtAudioOutput unavailable' };
@@ -1299,11 +1351,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   async playAudio(audioData: Float32Array, targetSampleRate: number = 48000, options: PlayAudioOptions = {}): Promise<void> {
     const playStartTime = Date.now();
     const playbackKind = options.playbackKind ?? 'digital';
+    const playbackId = ++this.playbackSequence;
+    const diagnosticContext = options.diagnosticContext ?? {};
 
     // 检查是否使用 ICOM WLAN 输出（零重采样优化）
     if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
       const icomWlanAudioAdapter = this.icomWlanAudioAdapter;
       logger.info('playing audio via ICOM WLAN output (zero-resample)', {
+        playbackId,
+        ...diagnosticContext,
         samples: audioData.length,
         sampleRate: targetSampleRate,
         duration: `${(audioData.length / targetSampleRate).toFixed(2)}s`,
@@ -1434,6 +1490,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.shouldStopPlayback = false;
 
     logger.info('starting audio playback', {
+      playbackId,
+      ...diagnosticContext,
       startTime: new Date(playStartTime).toISOString(),
       samples: audioData.length,
       sourceSampleRate: targetSampleRate,
@@ -1466,6 +1524,19 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       // 保存当前播放的音频数据（仅用于调试/查询，不再原地修改）
       this.currentAudioData = playbackData;
       this.currentSampleRate = this.outputSampleRate;
+      const sourceStats = this.computeAudioStats(playbackData);
+      const sourceSegments = this.computeAudioSegmentStats(playbackData, this.outputSampleRate);
+      const sourceFingerprint = this.fingerprintAudio(playbackData);
+      logger.info('audio playback source analysis', {
+        playbackId,
+        ...diagnosticContext,
+        samples: playbackData.length,
+        sampleRate: this.outputSampleRate,
+        fingerprint: sourceFingerprint,
+        peak: Number(sourceStats.peak.toFixed(6)),
+        rms: Number(sourceStats.rms.toFixed(6)),
+        segments: sourceSegments,
+      });
       
       // 分块播放，使用 setInterval 高频轮询 + 追赶写入
       // 相比链式 await setTimeout，setInterval 在事件循环延迟后能立即追赶
@@ -1485,7 +1556,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       const chunkStartTime = Date.now();
       this.resetOutputConsumeDiagnostics();
       const watchdogGeneration = this.outputWatchdogGeneration;
-      const sourceStats = this.computeAudioStats(playbackData);
       let submittedChunks = 0;
       let submittedSamples = 0;
       let writeFailCount = 0;
@@ -1524,6 +1594,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             watchdogTriggered = true;
             const error = new Error('Windows RtAudio output submitted audio but no frame consumption was observed');
             logger.error('Windows RtAudio output consume watchdog fired', {
+              playbackId,
+              ...diagnosticContext,
               submittedChunks,
               submittedSamples,
               consumedChunks,
@@ -1595,6 +1667,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             writeFailCount++;
             if (writeFailCount <= 3 || writeFailCount % 100 === 0) {
               logger.warn('audio output write failed', {
+                playbackId,
+                ...diagnosticContext,
                 chunk: idx,
                 totalChunks,
                 writtenSamples: samplesWritten,
@@ -1630,6 +1704,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               const playDuration = Date.now() - playStartTime;
               logger.debug(`chunked write complete, duration: ${chunkDuration}ms`);
               logger.info('audio playback submit complete', {
+                playbackId,
+                ...diagnosticContext,
                 durationMs: playDuration,
                 expectedDurationMs,
                 overheadMs: playDuration - expectedDurationMs,
@@ -1659,6 +1735,22 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             if (elapsedSec >= 2 && elapsedSec !== lastProgressSec && elapsedSec % 2 === 0) {
               lastProgressSec = elapsedSec;
               logger.debug(`playback progress: ${cursor}/${totalChunks} chunks, ${samplesWritten}/${totalSamples} samples, elapsed=${Math.round(elapsedMs)}ms, target=${targetSamples}, fails=${writeFailCount}`);
+              logger.info('audio playback live diagnostics', {
+                playbackId,
+                ...diagnosticContext,
+                elapsedMs: Math.round(elapsedMs),
+                submittedChunks,
+                consumedChunks: this.outputFramesConsumed,
+                pendingChunks: submittedChunks - this.outputFramesConsumed,
+                submittedSamples,
+                targetSamples,
+                postGainPeakSoFar: Number(postGainPeak.toFixed(6)),
+                postGainRmsSoFar: postGainSampleCount > 0
+                  ? Number(Math.sqrt(postGainSumSquares / postGainSampleCount).toFixed(6))
+                  : 0,
+                writeFails: writeFailCount,
+                backend: this.getOutputBackendSnapshot(),
+              });
             }
           } catch (err) {
             clearInterval(interval);
@@ -1685,6 +1777,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         rms: postGainSampleCount > 0 ? Math.sqrt(postGainSumSquares / postGainSampleCount) : 0,
       };
       const consumeSummary = {
+        playbackId,
+        ...diagnosticContext,
         submittedChunks,
         submittedSamples,
         consumedChunks,
@@ -1697,6 +1791,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           : null,
         sourcePeak: Number(sourceStats.peak.toFixed(6)),
         sourceRms: Number(sourceStats.rms.toFixed(6)),
+        sourceFingerprint,
+        sourceSegments,
         postGainPeak: Number(postGainStats.peak.toFixed(6)),
         postGainRms: Number(postGainStats.rms.toFixed(6)),
         backend: this.getOutputBackendSnapshot(),
