@@ -18,6 +18,7 @@ build/
 .vs/
 .config*
 config.h
+!src/libs/thorvg/config.h
 defconfig
 env/*
 docs-venv
