@@ -77,10 +77,10 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
         if (!result) return;
         setAudioConfig((prev) => ({
           ...prev,
-          inputDeviceName: result.deviceName,
-          outputDeviceName: result.deviceName,
-          inputSampleRate: result.sampleRate,
-          outputSampleRate: result.sampleRate,
+          ...(result.inputDeviceName ? { inputDeviceName: result.inputDeviceName } : {}),
+          ...(result.outputDeviceName ? { outputDeviceName: result.outputDeviceName } : {}),
+          ...(result.inputSampleRate ? { inputSampleRate: result.inputSampleRate } : {}),
+          ...(result.outputSampleRate ? { outputSampleRate: result.outputSampleRate } : {}),
         }));
         autoAudioAppliedRef.current = rigModel;
       })

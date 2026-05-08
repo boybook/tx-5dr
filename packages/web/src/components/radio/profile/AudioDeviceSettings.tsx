@@ -48,10 +48,19 @@ export interface AudioDeviceSettingsRef {
   save: () => Promise<void>;
 }
 
-type Direction = 'input' | 'output';
+export type Direction = 'input' | 'output';
 
 const DEFAULT_SAMPLE_RATE = 48000;
 const DEFAULT_BUFFER_SIZE = 768;
+
+export function makeAudioDeviceSelectKey(direction: Direction, deviceName: string): string {
+  return `${direction}::${deviceName}`;
+}
+
+export function getDeviceNameFromSelectKey(direction: Direction, key: string): string {
+  const prefix = `${direction}::`;
+  return key.startsWith(prefix) ? key.slice(prefix.length) : key;
+}
 
 export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDeviceSettingsProps>(({ onUnsavedChanges, initialConfig, onChange, radioType }, ref) => {
   const { t } = useTranslation('settings');
@@ -278,6 +287,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   }
 
   const renderResolutionItem = (
+    direction: Direction,
     selectedName: string,
     resolution: AudioDeviceResolution | null | undefined,
     devices: AudioDevice[],
@@ -303,7 +313,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
 
     return (
       <SelectItem
-        key={selectedName}
+        key={makeAudioDeviceSelectKey(direction, selectedName)}
         textValue={resolution?.status === 'virtual-selected'
           ? selectedName
           : `${selectedName} (${statusText})`}
@@ -325,9 +335,9 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     );
   };
 
-  const renderDeviceItems = (devices: AudioDevice[]) => devices.map((device) => (
+  const renderDeviceItems = (direction: Direction, devices: AudioDevice[]) => devices.map((device) => (
     <SelectItem
-      key={device.name}
+      key={makeAudioDeviceSelectKey(direction, device.name)}
       textValue={formatDeviceText(t, device)}
     >
       <div className="flex flex-col">
@@ -369,16 +379,16 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
         <Select
           label={isInput ? t('audio.inputDevice') : t('audio.outputDevice')}
           placeholder={isInput ? t('audio.inputDevicePlaceholder') : t('audio.outputDevicePlaceholder')}
-          selectedKeys={selectedName ? [selectedName] : []}
+          selectedKeys={selectedName ? [makeAudioDeviceSelectKey(direction, selectedName)] : []}
           onSelectionChange={(keys) => {
             const selected = Array.from(keys)[0] as string;
-            setSelectedName(selected || '');
+            setSelectedName(selected ? getDeviceNameFromSelectKey(direction, selected) : '');
           }}
           isDisabled={saving}
           aria-label={isInput ? t('audio.selectInput') : t('audio.selectOutput')}
         >
-          {renderResolutionItem(selectedName, resolution, devices) as unknown as React.ReactElement}
-          {renderDeviceItems(devices) as unknown as React.ReactElement}
+          {renderResolutionItem(direction, selectedName, resolution, devices) as unknown as React.ReactElement}
+          {renderDeviceItems(direction, devices) as unknown as React.ReactElement}
         </Select>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

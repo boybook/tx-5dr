@@ -84,8 +84,10 @@ export function selectBestSampleRate(
  * Result of the auto-match logic.
  */
 export interface AudioMatchResult {
-  deviceName: string;
-  sampleRate: number;
+  inputDeviceName?: string;
+  outputDeviceName?: string;
+  inputSampleRate?: number;
+  outputSampleRate?: number;
 }
 
 /**
@@ -105,17 +107,29 @@ export async function matchAudioDeviceForRig(
   if (recommendedRate === null) return null;
 
   const { inputDevices, outputDevices } = await getDevices();
-  const allDevices = [...inputDevices, ...outputDevices];
-  const matchedDevice = matchUsbAudioDevice(allDevices);
-  if (!matchedDevice) return null;
+  const inputDevice = matchUsbAudioDevice(inputDevices);
+  const outputDevice = matchUsbAudioDevice(outputDevices);
 
-  const rate = selectBestSampleRate(
-    recommendedRate,
-    matchedDevice.sampleRates ?? [],
-  );
+  if (!inputDevice && !outputDevice) return null;
 
   return {
-    deviceName: matchedDevice.name,
-    sampleRate: rate,
+    ...(inputDevice
+      ? {
+          inputDeviceName: inputDevice.name,
+          inputSampleRate: selectBestSampleRate(
+            recommendedRate,
+            inputDevice.sampleRates ?? [],
+          ),
+        }
+      : {}),
+    ...(outputDevice
+      ? {
+          outputDeviceName: outputDevice.name,
+          outputSampleRate: selectBestSampleRate(
+            recommendedRate,
+            outputDevice.sampleRates ?? [],
+          ),
+        }
+      : {}),
   };
 }

@@ -177,6 +177,55 @@ describe('audio hotplug recovery', () => {
     expect(resolution.output.status).toBe('selected');
   });
 
+  it('resolves same-named input and output endpoints in their own directions', async () => {
+    mockState.devices = [
+      { id: 129, name: 'USB Audio CODEC', inputChannels: 0, outputChannels: 2, preferredSampleRate: 44100 },
+      { id: 130, name: 'USB Audio CODEC', inputChannels: 1, outputChannels: 0, preferredSampleRate: 48000 },
+    ];
+    const manager = AudioDeviceManager.getInstance();
+
+    await expect(manager.resolveInputDeviceId('USB Audio CODEC')).resolves.toBe('input-130');
+    await expect(manager.resolveOutputDeviceId('USB Audio CODEC')).resolves.toBe('output-129');
+
+    const resolution = await manager.resolveAudioSettings({
+      inputDeviceName: 'USB Audio CODEC',
+      outputDeviceName: 'USB Audio CODEC',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    expect(resolution.input.effectiveDevice?.id).toBe('input-130');
+    expect(resolution.input.effectiveDevice?.type).toBe('input');
+    expect(resolution.output.effectiveDevice?.id).toBe('output-129');
+    expect(resolution.output.effectiveDevice?.type).toBe('output');
+  });
+
+  it('does not resolve an input-only same-named endpoint as an output device', async () => {
+    mockState.devices = [
+      { id: 130, name: 'USB Audio CODEC', inputChannels: 1, outputChannels: 0, preferredSampleRate: 48000 },
+    ];
+    const manager = AudioDeviceManager.getInstance();
+
+    await expect(manager.resolveOutputDeviceId('USB Audio CODEC')).rejects.toMatchObject({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+      context: expect.objectContaining({
+        direction: 'output',
+        deviceName: 'USB Audio CODEC',
+      }),
+    });
+
+    const resolution = await manager.resolveAudioSettings({
+      inputDeviceName: 'USB Audio CODEC',
+      outputDeviceName: 'USB Audio CODEC',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    expect(resolution.input.status).toBe('selected');
+    expect(resolution.output.status).toBe('missing');
+    expect(resolution.output.effectiveDevice).toBeNull();
+  });
+
   it('returns sorted sample rates and backend buffer size options', async () => {
     mockState.devices = [
       {

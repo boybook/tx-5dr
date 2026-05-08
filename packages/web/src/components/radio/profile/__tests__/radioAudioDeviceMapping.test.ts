@@ -2,19 +2,24 @@ import { describe, expect, it } from 'vitest';
 import type { AudioDevice, SupportedRig } from '@tx5dr/contracts';
 import {
   getRecommendedSampleRate,
+  matchAudioDeviceForRig,
   matchUsbAudioDevice,
   resolveRigInfo,
   selectBestSampleRate,
 } from '../radioAudioDeviceMapping';
 
-const makeDevice = (name: string, sampleRates?: number[]): AudioDevice => ({
+const makeDevice = (
+  name: string,
+  sampleRates?: number[],
+  type: AudioDevice['type'] = 'input',
+): AudioDevice => ({
   id: `dev-${name}`,
   name,
   isDefault: false,
-  channels: 1,
+  channels: type === 'input' ? 1 : 2,
   sampleRate: sampleRates?.[0] ?? 48000,
   sampleRates,
-  type: 'input',
+  type,
 });
 
 const RIGS: SupportedRig[] = [
@@ -105,5 +110,41 @@ describe('selectBestSampleRate', () => {
 
   it('picks closest from fallback when recommended missing', () => {
     expect(selectBestSampleRate(44100, [8000, 48000])).toBe(48000);
+  });
+});
+
+describe('matchAudioDeviceForRig', () => {
+  it('matches input and output USB audio devices independently', async () => {
+    const result = await matchAudioDeviceForRig(1035, RIGS, async () => ({
+      inputDevices: [
+        makeDevice('USB Audio CODEC', [48000], 'input'),
+      ],
+      outputDevices: [
+        makeDevice('USB Audio CODEC', [44100], 'output'),
+      ],
+    }));
+
+    expect(result).toEqual({
+      inputDeviceName: 'USB Audio CODEC',
+      inputSampleRate: 48000,
+      outputDeviceName: 'USB Audio CODEC',
+      outputSampleRate: 44100,
+    });
+  });
+
+  it('does not copy an input-only USB match into output settings', async () => {
+    const result = await matchAudioDeviceForRig(1035, RIGS, async () => ({
+      inputDevices: [
+        makeDevice('USB Audio CODEC', [44100], 'input'),
+      ],
+      outputDevices: [
+        makeDevice('Built-in Speaker', [48000], 'output'),
+      ],
+    }));
+
+    expect(result).toEqual({
+      inputDeviceName: 'USB Audio CODEC',
+      inputSampleRate: 44100,
+    });
   });
 });
