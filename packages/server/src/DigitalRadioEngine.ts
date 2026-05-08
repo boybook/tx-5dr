@@ -147,6 +147,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     );
     this.audioStreamManager = new AudioStreamManager();
     this.realDecodeQueue = new WSJTXDecodeWorkQueue();
+    this.realDecodeQueue.on('decodeWorkerUnavailable', (status) => {
+      this.emit('decodeWorkerUnavailable' as any, status);
+    });
+    this.realDecodeQueue.on('decodeWorkerRecovered', (status) => {
+      this.emit('decodeWorkerRecovered' as any, status);
+    });
     this.realEncodeQueue = new WSJTXEncodeWorkQueue(1);
     this.slotPackManager = new SlotPackManager();
     const initialFrequency = ConfigManager.getInstance().getLastSelectedFrequency();

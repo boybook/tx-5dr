@@ -16,9 +16,11 @@ const MAX_CONFIGURED_WORKERS = 4;
 const MAX_NATIVE_THREADS_PER_WORKER = 4;
 const LOW_MEMORY_BYTES = 8 * 1024 * 1024 * 1024;
 const MAX_CONSECUTIVE_FAILURES_BEFORE_DEGRADE = 3;
+const RESPAWN_BACKOFF_MS = [1_000, 2_000, 5_000] as const;
 
 export type DecodeWorkerCountReason = 'explicit' | 'low-memory' | 'low-cpu' | 'default';
 export type DecodeNativeThreadReason = 'explicit' | 'default';
+export type DecodeWorkerPoolStatus = 'starting' | 'ready' | 'degraded' | 'unavailable';
 
 export interface DecodeWorkerCountDecision {
   configuredWorkers: string | undefined;
@@ -74,6 +76,21 @@ export interface WorkerEntryResolution {
   execArgv: string[];
   cwd: string;
   mode: 'development' | 'production';
+}
+
+export interface DecodeWorkerPoolHealthSnapshot {
+  status: DecodeWorkerPoolStatus;
+  desiredWorkers: number;
+  readyWorkers: number;
+  workerProcesses: number;
+  pendingJobs: number;
+  activeJobs: number;
+  nativeThreadsPerWorker: number;
+  lastFailure?: string;
+  lastFailureAt?: number;
+  restartAttempts: number;
+  workerEntry: string;
+  workerMode: WorkerEntryResolution['mode'];
 }
 
 interface PendingJob {
@@ -276,7 +293,7 @@ function roundMs(value: number): number {
   return Number(value.toFixed(1));
 }
 
-export class WSJTXDecodeProcessPool {
+export class WSJTXDecodeProcessPool extends EventEmitter {
   private readonly pending: PendingJob[] = [];
   private readonly workers = new Map<number, WorkerState>();
   private readonly readyTimeoutMs: number;
@@ -287,14 +304,22 @@ export class WSJTXDecodeProcessPool {
   private readonly nativeThreads: number;
   private nextJobId = 1;
   private nextWorkerId = 1;
+  private readonly initialDesiredWorkers: number;
   private desiredWorkers: number;
   private destroyed = false;
   private consecutiveFailures = 0;
+  private restartAttempts = 0;
+  private lastFailure: string | undefined;
+  private lastFailureAt: number | undefined;
+  private healthStatus: DecodeWorkerPoolStatus = 'starting';
+  private respawnTimer: NodeJS.Timeout | null = null;
 
   constructor(options: DecodeProcessPoolOptions = {}) {
+    super();
     const configEnv = options.env ?? process.env;
     const decision = resolveDecodeWorkerCount(configEnv);
     this.desiredWorkers = Math.min(Math.max(options.workerCount ?? decision.resolvedWorkers, 1), MAX_CONFIGURED_WORKERS);
+    this.initialDesiredWorkers = this.desiredWorkers;
     const loggedDecision: DecodeWorkerCountDecision = options.workerCount === undefined
       ? decision
       : {
@@ -335,11 +360,16 @@ export class WSJTXDecodeProcessPool {
     }
 
     this.ensureWorkerCount();
+    this.refreshHealthStatus();
   }
 
   decode(request: DecodeRequest): Promise<DecodeResult> {
     if (this.destroyed) {
       return Promise.reject(new Error('decode worker pool has been destroyed'));
+    }
+    this.refreshHealthStatus();
+    if (this.healthStatus === 'unavailable' && this.getReadyWorkerCount() === 0) {
+      return Promise.reject(new Error(`decode worker unavailable: ${this.lastFailure ?? 'no worker is ready'}`));
     }
 
     return new Promise<DecodeResult>((resolve, reject) => {
@@ -370,6 +400,7 @@ export class WSJTXDecodeProcessPool {
       if (worker.activeJob) active++;
     }
     return {
+      status: this.healthStatus,
       queueSize: this.size(),
       maxConcurrency: this.desiredWorkers,
       activeThreads: active,
@@ -378,22 +409,33 @@ export class WSJTXDecodeProcessPool {
       nativeThreadsPerWorker: this.nativeThreads,
       totalNativeDecodeThreads: this.nativeThreads * this.desiredWorkers,
       utilization: this.desiredWorkers > 0 ? active / this.desiredWorkers : 0,
+      lastFailure: this.lastFailure,
+      lastFailureAt: this.lastFailureAt,
+      restartAttempts: this.restartAttempts,
     };
   }
 
+  getHealthSnapshot(): DecodeWorkerPoolHealthSnapshot {
+    this.refreshHealthStatus();
+    return this.buildHealthSnapshot();
+  }
+
   getTelemetrySnapshot(): DecodeWorkerTelemetrySnapshot | undefined {
+    this.refreshHealthStatus();
     const now = Date.now();
     const workers = [...this.workers.values()]
       .map((worker) => this.buildWorkerTelemetrySnapshot(worker, now))
       .filter((worker): worker is DecodeWorkerTelemetryWorker => worker !== null);
 
-    if (workers.length === 0) {
+    if (workers.length === 0 && this.healthStatus === 'ready') {
       return undefined;
     }
 
     return {
       summary: {
+        status: this.healthStatus,
         workerCount: workers.length,
+        desiredWorkers: this.desiredWorkers,
         readyCount: workers.filter((worker) => worker.ready).length,
         busyCount: workers.filter((worker) => worker.busy).length,
         totalRss: workers.reduce((sum, worker) => sum + worker.memory.rss, 0),
@@ -401,6 +443,11 @@ export class WSJTXDecodeProcessPool {
         nativeThreadsPerWorker: this.nativeThreads,
         pendingJobs: this.pending.length,
         activeJobs: this.getActiveJobCount(),
+        lastError: this.lastFailure,
+        lastFailureAt: this.lastFailureAt,
+        restartAttempts: this.restartAttempts,
+        workerEntry: this.entry.entryPath,
+        workerMode: this.entry.mode,
       },
       workers,
     };
@@ -408,6 +455,10 @@ export class WSJTXDecodeProcessPool {
 
   async destroy(): Promise<void> {
     this.destroyed = true;
+    if (this.respawnTimer) {
+      clearTimeout(this.respawnTimer);
+      this.respawnTimer = null;
+    }
     while (this.pending.length > 0) {
       this.pending.shift()!.reject(new Error('decode worker pool destroyed before job started'));
     }
@@ -419,18 +470,47 @@ export class WSJTXDecodeProcessPool {
 
   private ensureWorkerCount(): void {
     if (this.destroyed) return;
+    if (this.respawnTimer) return;
+    this.purgeKilledIdleWorkers();
     while (this.workers.size < this.desiredWorkers) {
-      this.spawnWorker();
+      if (!this.spawnWorker()) {
+        break;
+      }
+    }
+    this.refreshHealthStatus();
+  }
+
+  private purgeKilledIdleWorkers(): void {
+    for (const worker of this.workers.values()) {
+      if (worker.process.killed && !worker.activeJob) {
+        clearTimeout(worker.startTimer);
+        this.workers.delete(worker.id);
+      }
     }
   }
 
-  private spawnWorker(): void {
+  private spawnWorker(): boolean {
     const workerId = this.nextWorkerId++;
     const env = {
       ...this.env,
       TX5DR_DECODE_WORKER_ID: String(workerId),
     };
-    const child = this.workerFactory(workerId, this.entry, env);
+    let child: DecodeWorkerProcess;
+    try {
+      child = this.workerFactory(workerId, this.entry, env);
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.warn('decode worker spawn failed', {
+        workerId,
+        error: err.message,
+        workerEntry: this.entry.entryPath,
+        workerMode: this.entry.mode,
+      });
+      this.recordWorkerFailure(workerId, err);
+      this.scheduleRespawn();
+      this.refreshHealthStatus();
+      return false;
+    }
     const state: WorkerState = {
       id: workerId,
       process: child,
@@ -443,6 +523,7 @@ export class WSJTXDecodeProcessPool {
         logger.warn('decode worker startup timed out', { workerId, timeoutMs: this.readyTimeoutMs });
         this.handleWorkerFailure(state, new Error('decode worker startup timed out'));
         this.killWorker(state);
+        this.scheduleRespawn();
       }, this.readyTimeoutMs),
     };
 
@@ -454,6 +535,8 @@ export class WSJTXDecodeProcessPool {
     child.once('error', (error) => {
       logger.warn('decode worker process error', { workerId, error: error.message, code: (error as Error & { code?: string }).code });
       this.handleWorkerFailure(state, error);
+      this.killWorker(state);
+      this.scheduleRespawn();
     });
     child.once('exit', (code, signal) => {
       if (state.stopping || this.destroyed) {
@@ -463,6 +546,8 @@ export class WSJTXDecodeProcessPool {
       }
       this.handleWorkerExit(state, code, signal);
     });
+    this.refreshHealthStatus();
+    return true;
   }
 
   private handleWorkerMessage(state: WorkerState, message: unknown): void {
@@ -481,7 +566,11 @@ export class WSJTXDecodeProcessPool {
     if (workerMessage.type === 'ready') {
       clearTimeout(state.startTimer);
       state.ready = true;
+      this.consecutiveFailures = 0;
+      this.lastFailure = undefined;
+      this.lastFailureAt = undefined;
       logger.info('decode worker ready', { workerId: state.id, pid: state.process.pid });
+      this.refreshHealthStatus();
       this.dispatch();
       return;
     }
@@ -586,6 +675,7 @@ export class WSJTXDecodeProcessPool {
         worker.activeJob = null;
         this.handleWorkerFailure(worker, new Error('decode job timed out'));
         this.killWorker(worker);
+        this.scheduleRespawn();
       }, this.jobTimeoutMs);
       worker.activeJob = { ...job, timer, dispatchedAt };
 
@@ -600,6 +690,7 @@ export class WSJTXDecodeProcessPool {
         job.reject(error);
         this.handleWorkerFailure(worker, error);
         this.killWorker(worker);
+        this.scheduleRespawn();
       });
 
       if (ok === false) {
@@ -631,6 +722,55 @@ export class WSJTXDecodeProcessPool {
       if (worker.ready) ready++;
     }
     return ready;
+  }
+
+  private resolveHealthStatus(): DecodeWorkerPoolStatus {
+    const readyWorkers = this.getReadyWorkerCount();
+    if (readyWorkers > 0) {
+      return this.desiredWorkers < this.initialDesiredWorkers || readyWorkers < this.desiredWorkers
+        ? 'degraded'
+        : 'ready';
+    }
+    if (this.lastFailure) {
+      return 'unavailable';
+    }
+    return 'starting';
+  }
+
+  private buildHealthSnapshot(): DecodeWorkerPoolHealthSnapshot {
+    return {
+      status: this.healthStatus,
+      desiredWorkers: this.desiredWorkers,
+      readyWorkers: this.getReadyWorkerCount(),
+      workerProcesses: this.workers.size,
+      pendingJobs: this.pending.length,
+      activeJobs: this.getActiveJobCount(),
+      nativeThreadsPerWorker: this.nativeThreads,
+      lastFailure: this.lastFailure,
+      lastFailureAt: this.lastFailureAt,
+      restartAttempts: this.restartAttempts,
+      workerEntry: this.entry.entryPath,
+      workerMode: this.entry.mode,
+    };
+  }
+
+  private refreshHealthStatus(): void {
+    const nextStatus = this.resolveHealthStatus();
+    if (nextStatus === this.healthStatus) return;
+    const previousStatus = this.healthStatus;
+    this.healthStatus = nextStatus;
+    if (nextStatus === 'unavailable') {
+      this.rejectPendingForUnavailable();
+    }
+    this.emit('healthStatusChanged', this.buildHealthSnapshot(), previousStatus);
+  }
+
+  private rejectPendingForUnavailable(): void {
+    if (this.pending.length === 0) return;
+    const error = new Error(`decode worker unavailable: ${this.lastFailure ?? 'no worker is ready'}`);
+    while (this.pending.length > 0) {
+      this.pending.shift()!.reject(error);
+    }
   }
 
   private buildWorkerTelemetrySnapshot(worker: WorkerState, now: number): DecodeWorkerTelemetryWorker | null {
@@ -671,9 +811,10 @@ export class WSJTXDecodeProcessPool {
 
     if (!this.destroyed && !state.stopping) {
       this.handleWorkerFailure(state, new Error(`decode worker exited (code=${code}, signal=${signal})`));
-      this.ensureWorkerCount();
+      this.scheduleRespawn();
       this.dispatch();
     }
+    this.refreshHealthStatus();
   }
 
   private handleWorkerFailure(state: WorkerState, error: Error): void {
@@ -681,26 +822,54 @@ export class WSJTXDecodeProcessPool {
       return;
     }
     state.failureRecorded = true;
+    this.recordWorkerFailure(state.id, error);
+  }
+
+  private recordWorkerFailure(workerId: number, error: Error): void {
     this.consecutiveFailures++;
+    this.restartAttempts++;
+    this.lastFailure = error.message;
+    this.lastFailureAt = Date.now();
     const code = (error as Error & { code?: string }).code;
     if (this.desiredWorkers > 1 && (code === 'ENOMEM' || this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES_BEFORE_DEGRADE)) {
       this.desiredWorkers = 1;
       logger.warn('decode worker pool degraded to one worker', {
-        workerId: state.id,
+        workerId,
         reason: code === 'ENOMEM' ? 'ENOMEM' : 'consecutive-failures',
         consecutiveFailures: this.consecutiveFailures,
       });
       this.stopExtraIdleWorkers();
     }
+    this.refreshHealthStatus();
+  }
+
+  private scheduleRespawn(): void {
+    if (this.destroyed || this.respawnTimer) return;
+    const index = Math.min(Math.max(this.consecutiveFailures - 1, 0), RESPAWN_BACKOFF_MS.length - 1);
+    const delayMs = RESPAWN_BACKOFF_MS[index];
+    logger.warn('decode worker respawn scheduled', {
+      delayMs,
+      consecutiveFailures: this.consecutiveFailures,
+      desiredWorkers: this.desiredWorkers,
+      lastFailure: this.lastFailure,
+    });
+    this.respawnTimer = setTimeout(() => {
+      this.respawnTimer = null;
+      this.ensureWorkerCount();
+      this.dispatch();
+    }, delayMs);
+    this.respawnTimer.unref();
+    this.refreshHealthStatus();
   }
 
   private stopExtraIdleWorkers(): void {
-    for (const worker of this.workers.values()) {
+    const idleWorkers = [...this.workers.values()]
+      .filter((worker) => !worker.activeJob)
+      .sort((a, b) => Number(a.ready) - Number(b.ready));
+    for (const worker of idleWorkers) {
       if (this.workers.size <= this.desiredWorkers) return;
-      if (!worker.activeJob) {
-        void this.stopWorker(worker);
-        this.workers.delete(worker.id);
-      }
+      void this.stopWorker(worker);
+      this.workers.delete(worker.id);
     }
   }
 

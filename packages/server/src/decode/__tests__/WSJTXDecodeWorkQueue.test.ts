@@ -350,6 +350,32 @@ class NeverRespondingDecodeWorkerProcess extends FakeDecodeWorkerProcess {
   }
 }
 
+class NeverReadyDecodeWorkerProcess extends EventEmitter implements DecodeWorkerProcess {
+  pid: number;
+  killed = false;
+
+  constructor(pid: number) {
+    super();
+    this.pid = pid;
+  }
+
+  send(input: unknown, callback?: (error: Error | null) => void): boolean {
+    const message = input as { type?: string };
+    callback?.(null);
+    if (message.type === 'shutdown') {
+      this.killed = true;
+      setTimeout(() => this.emit('exit', 0, null), 0);
+    }
+    return true;
+  }
+
+  kill(): boolean {
+    this.killed = true;
+    setTimeout(() => this.emit('exit', null, 'SIGTERM'), 0);
+    return true;
+  }
+}
+
 describe('WSJTXDecodeProcessPool scheduling', () => {
   it('dispatches concurrent jobs across workers while keeping each worker serial', async () => {
     const workers: FakeDecodeWorkerProcess[] = [];
@@ -450,7 +476,66 @@ describe('WSJTXDecodeProcessPool scheduling', () => {
     workers[0].kill();
     await new Promise(resolve => setTimeout(resolve, 0));
 
-    expect(pool.getTelemetrySnapshot()).toBeUndefined();
+    expect(pool.getTelemetrySnapshot()).toEqual(expect.objectContaining({
+      summary: expect.objectContaining({
+        status: 'unavailable',
+        workerCount: 0,
+        lastError: expect.stringContaining('exited'),
+      }),
+      workers: [],
+    }));
+    await pool.destroy();
+  });
+
+  it('reports unavailable instead of crashing when workerFactory throws', async () => {
+    const pool = new WSJTXDecodeProcessPool({
+      workerCount: 1,
+      readyTimeoutMs: 1000,
+      jobTimeoutMs: 1000,
+      workerFactory: () => {
+        throw new Error('spawn failed for test');
+      },
+    });
+
+    expect(pool.getStatus()).toEqual(expect.objectContaining({
+      status: 'unavailable',
+      readyWorkers: 0,
+      lastFailure: 'spawn failed for test',
+    }));
+    expect(pool.getTelemetrySnapshot()).toEqual(expect.objectContaining({
+      summary: expect.objectContaining({
+        status: 'unavailable',
+        desiredWorkers: 1,
+        workerCount: 0,
+        lastError: 'spawn failed for test',
+      }),
+      workers: [],
+    }));
+
+    await pool.destroy();
+  });
+
+  it('uses startup backoff instead of respawning immediately after ready timeout', async () => {
+    const workers: NeverReadyDecodeWorkerProcess[] = [];
+    const pool = new WSJTXDecodeProcessPool({
+      workerCount: 1,
+      readyTimeoutMs: 10,
+      jobTimeoutMs: 1000,
+      workerFactory: (workerId) => {
+        const worker = new NeverReadyDecodeWorkerProcess(workerId);
+        workers.push(worker);
+        return worker;
+      },
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 30));
+
+    expect(workers).toHaveLength(1);
+    expect(pool.getStatus()).toEqual(expect.objectContaining({
+      status: 'unavailable',
+      readyWorkers: 0,
+    }));
+
     await pool.destroy();
   });
 

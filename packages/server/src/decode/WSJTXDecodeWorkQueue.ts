@@ -6,7 +6,7 @@ import {
 } from '@tx5dr/core';
 import type { DecodeWorkerTelemetrySnapshot } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
-import { WSJTXDecodeProcessPool } from './WSJTXDecodeProcessPool.js';
+import { WSJTXDecodeProcessPool, type DecodeWorkerPoolHealthSnapshot } from './WSJTXDecodeProcessPool.js';
 
 const logger = createLogger('DecodeWorkQueue');
 
@@ -14,6 +14,8 @@ export interface DecodeWorkQueueEvents {
   'decodeComplete': (result: DecodeResult) => void;
   'decodeError': (error: Error, request: DecodeRequest) => void;
   'queueEmpty': () => void;
+  'decodeWorkerUnavailable': (status: DecodeWorkerPoolHealthSnapshot) => void;
+  'decodeWorkerRecovered': (status: DecodeWorkerPoolHealthSnapshot) => void;
 }
 
 export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> implements IDecodeQueue {
@@ -22,6 +24,13 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
   constructor(maxConcurrency?: number) {
     super();
     this.pool = new WSJTXDecodeProcessPool({ workerCount: maxConcurrency });
+    this.pool.on('healthStatusChanged', (status: DecodeWorkerPoolHealthSnapshot, previousStatus: string) => {
+      if (status.status === 'unavailable') {
+        this.emit('decodeWorkerUnavailable', status);
+      } else if (previousStatus === 'unavailable') {
+        this.emit('decodeWorkerRecovered', status);
+      }
+    });
     logger.info('decode work queue initialized with process pool', this.pool.getStatus());
   }
 

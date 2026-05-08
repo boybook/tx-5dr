@@ -506,6 +506,25 @@ export class WSServer extends WSMessageHandler {
       this.broadcastDecodeError(errorInfo);
     });
 
+    this.digitalRadioEngine.on('decodeWorkerUnavailable' as any, (status: any) => {
+      this.broadcast(WSMessageType.ERROR, {
+        message: status?.lastFailure || 'Decode worker is unavailable',
+        userMessage: 'FT8/FT4 decoding is temporarily unavailable because the decode worker failed to start. Other radio functions can continue running.',
+        code: 'DECODE_WORKER_UNAVAILABLE',
+        severity: 'warning',
+        suggestions: [
+          'Open Server Health to inspect Decode Workers status.',
+          'Check server logs for the native module or worker startup error.',
+        ],
+        timestamp: new Date().toISOString(),
+        context: status,
+      });
+    });
+
+    this.digitalRadioEngine.on('decodeWorkerRecovered' as any, (status: any) => {
+      logger.info('decode worker recovered', status);
+    });
+
     this.digitalRadioEngine.on('systemStatus', (status) => {
       this.broadcastSystemStatus(status);
     });
@@ -1782,6 +1801,23 @@ export class WSServer extends WSMessageHandler {
     this.broadcast(WSMessageType.DECODE_ERROR, errorInfo);
   }
 
+  private sendDecodeWorkerUnavailableHint(connection: WSConnection): void {
+    const decodeWorkers = this.digitalRadioEngine.getDecodeWorkerTelemetrySnapshot();
+    if (decodeWorkers?.summary.status !== 'unavailable') return;
+    connection.send(WSMessageType.ERROR, {
+      message: decodeWorkers.summary.lastError || 'Decode worker is unavailable',
+      userMessage: 'FT8/FT4 decoding is temporarily unavailable because the decode worker failed to start. Other radio functions can continue running.',
+      code: 'DECODE_WORKER_UNAVAILABLE',
+      severity: 'warning',
+      suggestions: [
+        'Open Server Health to inspect Decode Workers status.',
+        'Check server logs for the native module or worker startup error.',
+      ],
+      timestamp: new Date().toISOString(),
+      context: decodeWorkers.summary,
+    });
+  }
+
   /**
    * 广播系统状态事件
    */
@@ -2276,6 +2312,7 @@ export class WSServer extends WSMessageHandler {
       if (this.processMonitor) {
         connection.send(WSMessageType.PROCESS_SNAPSHOT_HISTORY, this.processMonitor.getHistoryPayload());
       }
+      this.sendDecodeWorkerUnavailableHint(connection);
 
       // 4. 如果引擎正在运行，发送额外的状态同步
       const status = this.digitalRadioEngine.getStatus();

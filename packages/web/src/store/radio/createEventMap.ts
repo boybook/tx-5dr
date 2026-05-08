@@ -59,6 +59,9 @@ import type {
   SlotPacksAction,
 } from './types';
 
+let lastDecodeWorkerUnavailableToastAt = 0;
+const DECODE_WORKER_UNAVAILABLE_TOAST_COOLDOWN_MS = 60_000;
+
 interface SpectrumNegotiationBridge {
   applySpectrumSelection: (capabilities: SpectrumCapabilities) => void;
   applyProfileDrivenSpectrumNegotiation: (profileId: string | null, clearSpectrumState: boolean) => void;
@@ -323,6 +326,18 @@ export function createRadioEventMap({
             timeout: 3000,
           });
         });
+      }
+
+      if (code === 'DECODE_WORKER_UNAVAILABLE') {
+        const now = Date.now();
+        if (now - lastDecodeWorkerUnavailableToastAt < DECODE_WORKER_UNAVAILABLE_TOAST_COOLDOWN_MS) {
+          radioDispatch({
+            type: 'error',
+            payload: new Error(localizedUserMessage || message),
+          });
+          return;
+        }
+        lastDecodeWorkerUnavailableToastAt = now;
       }
 
       showErrorToast({

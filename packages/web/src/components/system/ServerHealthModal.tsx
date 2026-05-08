@@ -537,13 +537,21 @@ function DecodeWorkersCard({
 }) {
   const { t } = useTranslation('settings');
   const telemetry = snapshot.decodeWorkers;
-  if (!telemetry || telemetry.workers.length === 0) {
+  if (!telemetry) {
     return null;
   }
 
   const { summary } = telemetry;
+  const status = summary.status ?? (summary.readyCount > 0 ? 'ready' : 'starting');
   const visibleWorkers = telemetry.workers.slice(0, 4);
   const hiddenCount = Math.max(telemetry.workers.length - visibleWorkers.length, 0);
+  const statusColor = status === 'unavailable'
+    ? 'danger'
+    : status === 'degraded'
+    ? 'warning'
+    : status === 'ready'
+    ? 'success'
+    : 'default';
 
   return (
     <div className="bg-content2 rounded-xl p-4 flex flex-col gap-3">
@@ -551,15 +559,30 @@ function DecodeWorkersCard({
         <div className="text-xs font-semibold text-default-500 uppercase tracking-wider">
           {t('serverHealth.decodeWorkers')}
         </div>
-        <Chip size="sm" color={summary.busyCount > 0 ? 'primary' : 'default'} variant="flat" className="text-xs">
-          {t('serverHealth.decodeWorkersBusy', { busy: summary.busyCount, total: summary.workerCount })}
-        </Chip>
+        <div className="flex items-center gap-2">
+          <Chip size="sm" color={statusColor} variant="flat" className="text-xs">
+            {t(`serverHealth.workerPoolStatus.${status}`)}
+          </Chip>
+          <Chip size="sm" color={summary.busyCount > 0 ? 'primary' : 'default'} variant="flat" className="text-xs">
+            {t('serverHealth.decodeWorkersBusy', { busy: summary.busyCount, total: summary.desiredWorkers ?? summary.workerCount })}
+          </Chip>
+        </div>
       </div>
+
+      {summary.lastError && (
+        <div className="rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-xs text-warning-700">
+          <div className="font-medium">{t('serverHealth.workerLastError')}</div>
+          <div className="mt-1 font-mono break-all">{summary.lastError}</div>
+          <div className="mt-1 text-warning-600">{t('serverHealth.workerCheckLogs')}</div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div>
           <div className="text-xs text-default-400">{t('serverHealth.workers')}</div>
-          <div className="text-lg font-mono font-semibold text-foreground">{summary.workerCount}</div>
+          <div className="text-lg font-mono font-semibold text-foreground">
+            {summary.readyCount}/{summary.desiredWorkers ?? summary.workerCount}
+          </div>
         </div>
         <div>
           <div className="text-xs text-default-400">{t('serverHealth.workerRss')}</div>
@@ -586,6 +609,11 @@ function DecodeWorkersCard({
       />
 
       <div className="flex flex-col gap-1.5">
+        {visibleWorkers.length === 0 && (
+          <div className="rounded-lg bg-content1 px-3 py-2 text-xs text-default-500">
+            {t('serverHealth.workerNoTelemetry')}
+          </div>
+        )}
         {visibleWorkers.map((worker) => {
           const isStale = snapshot.timestamp - worker.lastSeenAt > 5000;
           return (

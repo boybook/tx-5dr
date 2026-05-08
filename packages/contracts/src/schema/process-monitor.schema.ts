@@ -52,7 +52,9 @@ export const DecodeWorkerTelemetryWorkerSchema = z.object({
 });
 
 export const DecodeWorkerTelemetrySummarySchema = z.object({
+  status: z.enum(['starting', 'ready', 'degraded', 'unavailable']).optional(),
   workerCount: z.number().int().nonnegative(),
+  desiredWorkers: z.number().int().nonnegative().optional(),
   readyCount: z.number().int().nonnegative(),
   busyCount: z.number().int().nonnegative(),
   totalRss: z.number().nonnegative(),
@@ -60,6 +62,11 @@ export const DecodeWorkerTelemetrySummarySchema = z.object({
   nativeThreadsPerWorker: z.number().int().positive(),
   pendingJobs: z.number().int().nonnegative(),
   activeJobs: z.number().int().nonnegative(),
+  lastError: z.string().optional(),
+  lastFailureAt: z.number().optional(),
+  restartAttempts: z.number().int().nonnegative().optional(),
+  workerEntry: z.string().optional(),
+  workerMode: z.enum(['development', 'production']).optional(),
 });
 
 export const DecodeWorkerTelemetrySnapshotSchema = z.object({

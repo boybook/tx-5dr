@@ -581,6 +581,15 @@
     "workerBusy": "忙碌",
     "workerIdle": "空闲",
     "workerStale": "过期",
+    "workerPoolStatus": {
+      "starting": "启动中",
+      "ready": "正常",
+      "degraded": "降级",
+      "unavailable": "不可用"
+    },
+    "workerLastError": "最后一次 worker 错误",
+    "workerCheckLogs": "请打开 Server Health 或查看 server 日志获取更完整诊断。",
+    "workerNoTelemetry": "暂无 worker 进程遥测，可能仍在启动或正在等待重试。",
     "moreWorkers": "还有 {{count}} 个 worker 未显示",
     "coreCapabilityDiagnosticsTitle": "核心功能不支持诊断",
     "coreCapabilityDiagnosticsEmpty": "当前连接会话中没有核心功能被标记为不支持。",

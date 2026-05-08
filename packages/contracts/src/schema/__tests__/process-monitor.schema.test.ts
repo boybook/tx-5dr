@@ -37,7 +37,9 @@ describe('ProcessSnapshotSchema', () => {
       ...createBaseSnapshot(),
       decodeWorkers: {
         summary: {
+          status: 'ready',
           workerCount: 2,
+          desiredWorkers: 2,
           readyCount: 2,
           busyCount: 1,
           totalRss: 512,
@@ -45,6 +47,9 @@ describe('ProcessSnapshotSchema', () => {
           nativeThreadsPerWorker: 4,
           pendingJobs: 1,
           activeJobs: 1,
+          restartAttempts: 0,
+          workerEntry: '/app/packages/server/dist/decode/decode-worker-entry.js',
+          workerMode: 'production',
         },
         workers: [
           {
@@ -83,5 +88,34 @@ describe('ProcessSnapshotSchema', () => {
 
     expect(parsed.decodeWorkers?.summary.workerCount).toBe(2);
     expect(parsed.decodeWorkers?.workers[0].currentJob?.mode).toBe('FT8');
+  });
+
+  it('accepts decode worker unavailable snapshots without per-worker telemetry', () => {
+    const parsed = ProcessSnapshotSchema.parse({
+      ...createBaseSnapshot(),
+      decodeWorkers: {
+        summary: {
+          status: 'unavailable',
+          workerCount: 0,
+          desiredWorkers: 1,
+          readyCount: 0,
+          busyCount: 0,
+          totalRss: 0,
+          totalCpu: 0,
+          nativeThreadsPerWorker: 1,
+          pendingJobs: 2,
+          activeJobs: 0,
+          lastError: 'decode worker startup timed out',
+          lastFailureAt: 2,
+          restartAttempts: 3,
+          workerEntry: '/app/packages/server/dist/decode/decode-worker-entry.js',
+          workerMode: 'production',
+        },
+        workers: [],
+      },
+    });
+
+    expect(parsed.decodeWorkers?.summary.status).toBe('unavailable');
+    expect(parsed.decodeWorkers?.summary.lastError).toContain('startup');
   });
 });
