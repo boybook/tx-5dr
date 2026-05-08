@@ -27,8 +27,6 @@ import {
 import {
   formatChannelText,
   formatDeviceText,
-  getResolutionDescription,
-  getResolutionTone,
 } from './audioDeviceDisplay';
 
 const logger = createLogger('AudioDeviceSettings');
@@ -282,59 +280,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   function getEffectiveDevice(direction: Direction): AudioDevice | null {
     const selectedName = direction === 'input' ? selectedInputDeviceName : selectedOutputDeviceName;
     const devices = direction === 'input' ? inputDevices : outputDevices;
-    const resolution = direction === 'input' ? deviceResolution?.input : deviceResolution?.output;
-    return devices.find((device) => device.name === selectedName) ?? resolution?.effectiveDevice ?? null;
+    return devices.find((device) => device.name === selectedName) ?? null;
   }
-
-  const renderResolutionItem = (
-    direction: Direction,
-    selectedName: string,
-    resolution: AudioDeviceResolution | null | undefined,
-    devices: AudioDevice[],
-  ) => {
-    if (!selectedName || devices.some((device) => device.name === selectedName)) {
-      return undefined;
-    }
-
-    const device = resolution?.configuredDevice ?? resolution?.effectiveDevice;
-    const tone = getResolutionTone(resolution);
-    const description = getResolutionDescription(t, resolution);
-    const labelClass = tone === 'warning'
-      ? 'text-warning'
-      : tone === 'virtual'
-        ? 'text-primary'
-        : 'text-default-700';
-    const detailClass = tone === 'warning'
-      ? 'text-warning-400'
-      : tone === 'virtual'
-        ? 'text-primary-400'
-        : 'text-default-400';
-    const statusText = t('audio.deviceUnavailableShort');
-    const isUnavailable = tone === 'warning';
-
-    return (
-      <SelectItem
-        key={makeAudioDeviceSelectKey(direction, selectedName)}
-        textValue={resolution?.status === 'virtual-selected' || !isUnavailable
-          ? selectedName
-          : `${selectedName} (${statusText})`}
-        className={isUnavailable ? 'text-warning' : undefined}
-      >
-        <div className="flex flex-col">
-          <span className={labelClass}>
-            {selectedName}
-            {isUnavailable ? ` (${statusText})` : ''}
-          </span>
-          {device && (
-            <span className="text-xs text-default-400">
-              {formatChannelText(t, device.channels)}, {formatHertz(device.sampleRate)}
-            </span>
-          )}
-          {description && <span className={`text-xs ${detailClass}`}>{description}</span>}
-        </div>
-      </SelectItem>
-    );
-  };
 
   const renderDeviceItems = (direction: Direction, devices: AudioDevice[]) => devices.map((device) => (
     <SelectItem
@@ -360,7 +307,6 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     const selectedName = isInput ? selectedInputDeviceName : selectedOutputDeviceName;
     const setSelectedName = isInput ? setSelectedInputDeviceName : setSelectedOutputDeviceName;
     const devices = isInput ? inputDevices : outputDevices;
-    const resolution = isInput ? deviceResolution?.input : deviceResolution?.output;
     const effectiveDevice = isInput ? inputEffectiveDevice : outputEffectiveDevice;
     const sampleRate = isInput ? inputSampleRate : outputSampleRate;
     const setSampleRate = isInput ? setInputSampleRate : setOutputSampleRate;
@@ -388,7 +334,6 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
           isDisabled={saving}
           aria-label={isInput ? t('audio.selectInput') : t('audio.selectOutput')}
         >
-          {renderResolutionItem(direction, selectedName, resolution, devices) as unknown as React.ReactElement}
           {renderDeviceItems(direction, devices) as unknown as React.ReactElement}
         </Select>
 

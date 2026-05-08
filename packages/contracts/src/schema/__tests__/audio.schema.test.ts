@@ -15,6 +15,9 @@ const device = {
   sampleRate: 48000,
   sampleRates: [44100, 48000],
   type: 'input' as const,
+  availability: 'available' as const,
+  isActiveByTx5dr: false,
+  lastSeenAt: 1_700_000_000_000,
 };
 
 describe('audio device resolution schemas', () => {
@@ -70,6 +73,7 @@ describe('audio device resolution schemas', () => {
     });
 
     expect(parsed.inputDevices[0]?.sampleRates).toEqual([44100, 48000]);
+    expect(parsed.inputDevices[0]?.availability).toBe('available');
     expect(parsed.inputBufferSizes).toContain(768);
   });
 
