@@ -166,30 +166,28 @@ describe('resolveDecodeWorkerCount', () => {
 
 
 describe('resolveDecodeNativeThreadCount', () => {
-  it('uses one native thread on small CPU counts', () => {
+  it('defaults to one native thread regardless of CPU count', () => {
     expect(resolveDecodeNativeThreadCount({}, 2, 4)).toEqual(expect.objectContaining({
       resolvedThreads: 1,
-      reason: 'low-cpu',
+      reason: 'default',
     }));
-  });
 
-  it('budgets native threads across decode workers while reserving CPU for the app', () => {
     expect(resolveDecodeNativeThreadCount({}, 2, 6)).toEqual(expect.objectContaining({
-      resolvedThreads: 2,
+      resolvedThreads: 1,
       totalDecodeThreadBudget: 4,
-      reason: 'cpu-budget',
+      reason: 'default',
     }));
 
     expect(resolveDecodeNativeThreadCount({}, 2, 10)).toEqual(expect.objectContaining({
-      resolvedThreads: 4,
+      resolvedThreads: 1,
       totalDecodeThreadBudget: 8,
-      reason: 'cpu-budget',
+      reason: 'default',
     }));
 
     expect(resolveDecodeNativeThreadCount({}, 4, 10)).toEqual(expect.objectContaining({
-      resolvedThreads: 2,
+      resolvedThreads: 1,
       totalDecodeThreadBudget: 8,
-      reason: 'cpu-budget',
+      reason: 'default',
     }));
   });
 
@@ -207,8 +205,8 @@ describe('resolveDecodeNativeThreadCount', () => {
 
   it('falls back to auto native thread policy for invalid values', () => {
     expect(resolveDecodeNativeThreadCount({ TX5DR_DECODE_THREADS: 'many' }, 2, 10)).toEqual(expect.objectContaining({
-      resolvedThreads: 4,
-      reason: 'cpu-budget',
+      resolvedThreads: 1,
+      reason: 'default',
       warning: expect.stringContaining('invalid'),
     }));
   });

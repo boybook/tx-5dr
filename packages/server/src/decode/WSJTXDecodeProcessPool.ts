@@ -18,7 +18,7 @@ const LOW_MEMORY_BYTES = 8 * 1024 * 1024 * 1024;
 const MAX_CONSECUTIVE_FAILURES_BEFORE_DEGRADE = 3;
 
 export type DecodeWorkerCountReason = 'explicit' | 'low-memory' | 'low-cpu' | 'default';
-export type DecodeNativeThreadReason = 'explicit' | 'low-cpu' | 'cpu-budget';
+export type DecodeNativeThreadReason = 'explicit' | 'default';
 
 export interface DecodeWorkerCountDecision {
   configuredWorkers: string | undefined;
@@ -196,28 +196,14 @@ export function resolveDecodeNativeThreadCount(
     }
   }
 
-  if (safeCpuCount <= 4) {
-    return {
-      configuredThreads,
-      resolvedThreads: 1,
-      workerCount: safeWorkerCount,
-      cpuCount: safeCpuCount,
-      reservedCpuCount,
-      totalDecodeThreadBudget,
-      reason: 'low-cpu',
-      warning: normalized && normalized !== 'auto' ? `invalid TX5DR_DECODE_THREADS=${configuredThreads}; using auto policy` : undefined,
-    };
-  }
-
-  const perWorkerBudget = Math.max(1, Math.floor(totalDecodeThreadBudget / safeWorkerCount));
   return {
     configuredThreads,
-    resolvedThreads: Math.min(perWorkerBudget, MAX_NATIVE_THREADS_PER_WORKER),
+    resolvedThreads: 1,
     workerCount: safeWorkerCount,
     cpuCount: safeCpuCount,
     reservedCpuCount,
     totalDecodeThreadBudget,
-    reason: 'cpu-budget',
+    reason: 'default',
     warning: normalized && normalized !== 'auto' ? `invalid TX5DR_DECODE_THREADS=${configuredThreads}; using auto policy` : undefined,
   };
 }
