@@ -96,6 +96,7 @@ interface WorkerState {
   activeJob: ActiveJob | null;
   startTimer: NodeJS.Timeout;
   stopping: boolean;
+  failureRecorded: boolean;
   lastTelemetry: DecodeWorkerTelemetryWorker | null;
 }
 
@@ -105,6 +106,10 @@ type WorkerMessage =
   | { type: 'result'; id: number; result: DecodeResult }
   | { type: 'error'; id: number; error: SerializedWorkerError }
   | { type: 'log'; level: 'debug' | 'info' | 'warn' | 'error'; message: string; meta?: unknown };
+
+function isToolingWatchMessage(message: Record<string, unknown>): boolean {
+  return Object.keys(message).some((key) => key.startsWith('watch:'));
+}
 
 export function resolveDecodeWorkerCount(
   env: NodeJS.ProcessEnv = process.env,
@@ -446,6 +451,7 @@ export class WSJTXDecodeProcessPool {
       ready: false,
       activeJob: null,
       stopping: false,
+      failureRecorded: false,
       lastTelemetry: null,
       startTimer: setTimeout(() => {
         logger.warn('decode worker startup timed out', { workerId, timeoutMs: this.readyTimeoutMs });
@@ -458,7 +464,7 @@ export class WSJTXDecodeProcessPool {
     wireOutput(child.stdout, (line) => logger.debug('decode worker stdout', { workerId, line }));
     wireOutput(child.stderr, (line) => logger.warn('decode worker stderr', { workerId, line }));
 
-    child.on('message', (message) => this.handleWorkerMessage(state, message as WorkerMessage));
+    child.on('message', (message) => this.handleWorkerMessage(state, message));
     child.once('error', (error) => {
       logger.warn('decode worker process error', { workerId, error: error.message, code: (error as Error & { code?: string }).code });
       this.handleWorkerFailure(state, error);
@@ -473,10 +479,20 @@ export class WSJTXDecodeProcessPool {
     });
   }
 
-  private handleWorkerMessage(state: WorkerState, message: WorkerMessage): void {
+  private handleWorkerMessage(state: WorkerState, message: unknown): void {
     if (!message || typeof message !== 'object') return;
+    if (!('type' in message)) {
+      if (isToolingWatchMessage(message as Record<string, unknown>)) {
+        logger.debug('ignored decode worker tooling watch message', { workerId: state.id });
+        return;
+      }
+      logger.warn('decode worker returned unknown message', { workerId: state.id, message });
+      return;
+    }
 
-    if (message.type === 'ready') {
+    const workerMessage = message as WorkerMessage;
+
+    if (workerMessage.type === 'ready') {
       clearTimeout(state.startTimer);
       state.ready = true;
       logger.info('decode worker ready', { workerId: state.id, pid: state.process.pid });
@@ -484,17 +500,17 @@ export class WSJTXDecodeProcessPool {
       return;
     }
 
-    if (message.type === 'log') {
-      const log = logger[message.level] ?? logger.info;
-      log(`worker ${state.id}: ${message.message}`, message.meta);
+    if (workerMessage.type === 'log') {
+      const log = logger[workerMessage.level] ?? logger.info;
+      log(`worker ${state.id}: ${workerMessage.message}`, workerMessage.meta);
       return;
     }
 
-    if (message.type === 'telemetry') {
+    if (workerMessage.type === 'telemetry') {
       state.lastTelemetry = {
-        ...message.metrics,
+        ...workerMessage.metrics,
         workerId: state.id,
-        pid: state.process.pid ?? message.metrics.pid,
+        pid: state.process.pid ?? workerMessage.metrics.pid,
         ready: state.ready,
         busy: Boolean(state.activeJob),
         nativeThreads: this.nativeThreads,
@@ -504,8 +520,8 @@ export class WSJTXDecodeProcessPool {
     }
 
     const activeJob = state.activeJob;
-    if (!activeJob || activeJob.id !== message.id) {
-      logger.warn('decode worker returned unknown job', { workerId: state.id, message });
+    if (!activeJob || activeJob.id !== workerMessage.id) {
+      logger.warn('decode worker returned unknown job', { workerId: state.id, message: workerMessage });
       return;
     }
 
@@ -513,12 +529,12 @@ export class WSJTXDecodeProcessPool {
     state.activeJob = null;
     this.consecutiveFailures = 0;
 
-    if (message.type === 'result') {
+    if (workerMessage.type === 'result') {
       const completedAt = performance.now();
       const queueWaitMs = activeJob.dispatchedAt - activeJob.enqueuedAt;
       const workerElapsedMs = completedAt - activeJob.dispatchedAt;
       const totalElapsedMs = completedAt - activeJob.enqueuedAt;
-      const nativeProcessingTimeMs = message.result.processingTimeMs;
+      const nativeProcessingTimeMs = workerMessage.result.processingTimeMs;
       logger.info('decode worker job completed', {
         workerId: state.id,
         workerPid: state.process.pid,
@@ -526,7 +542,7 @@ export class WSJTXDecodeProcessPool {
         slotId: activeJob.request.slotId,
         windowIdx: activeJob.request.windowIdx,
         mode: activeJob.request.mode,
-        frameCount: message.result.frames.length,
+        frameCount: workerMessage.result.frames.length,
         queueWaitMs: roundMs(queueWaitMs),
         workerElapsedMs: roundMs(workerElapsedMs),
         totalElapsedMs: roundMs(totalElapsedMs),
@@ -542,7 +558,7 @@ export class WSJTXDecodeProcessPool {
         desiredWorkers: this.desiredWorkers,
         nativeThreadsPerWorker: this.nativeThreads,
       });
-      activeJob.resolve(message.result);
+      activeJob.resolve(workerMessage.result);
     } else {
       const failedAt = performance.now();
       logger.warn('decode worker job failed', {
@@ -556,9 +572,9 @@ export class WSJTXDecodeProcessPool {
         workerElapsedMs: roundMs(failedAt - activeJob.dispatchedAt),
         totalElapsedMs: roundMs(failedAt - activeJob.enqueuedAt),
         requestAudioDurationMs: getDecodeRequestAudioDurationMs(activeJob.request),
-        error: message.error,
+        error: workerMessage.error,
       });
-      activeJob.reject(createError(message.error));
+      activeJob.reject(createError(workerMessage.error));
     }
 
     this.dispatch();
@@ -671,6 +687,10 @@ export class WSJTXDecodeProcessPool {
   }
 
   private handleWorkerFailure(state: WorkerState, error: Error): void {
+    if (state.failureRecorded) {
+      return;
+    }
+    state.failureRecorded = true;
     this.consecutiveFailures++;
     const code = (error as Error & { code?: string }).code;
     if (this.desiredWorkers > 1 && (code === 'ENOMEM' || this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES_BEFORE_DEGRADE)) {

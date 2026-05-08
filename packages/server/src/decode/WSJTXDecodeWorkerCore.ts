@@ -4,7 +4,6 @@ import type { DecodeRequest, DecodeResult } from '@tx5dr/core';
 import { WSJTXLib, WSJTXMode } from 'wsjtx-lib';
 import { resampleAudioProfessional } from '../utils/audioUtils.js';
 import { createLogger } from '../utils/logger.js';
-import { WSJTXNativeGate } from './WSJTXNativeGate.js';
 
 const logger = createLogger('DecodeWorkerCore');
 const DEFAULT_NATIVE_THREADS = 1;
@@ -46,12 +45,10 @@ export class WSJTXDecodeWorkerCore {
 
     const baseFrequency = 0;
     const decodeMode = request.mode === 'FT4' ? WSJTXMode.FT4 : WSJTXMode.FT8;
-    const rawResult = await WSJTXNativeGate.run(async () => {
-      const audioInt16 = await this.lib.convertAudioFormat(resampledAudioData, 'int16') as Int16Array;
-      return this.lib.decode(decodeMode, audioInt16, {
-        frequency: baseFrequency,
-        threads: this.nativeThreads,
-      });
+    const audioInt16 = await this.lib.convertAudioFormat(resampledAudioData, 'int16') as Int16Array;
+    const rawResult = await this.lib.decode(decodeMode, audioInt16, {
+      frequency: baseFrequency,
+      threads: this.nativeThreads,
     });
 
     const messages = rawResult.messages as any[];

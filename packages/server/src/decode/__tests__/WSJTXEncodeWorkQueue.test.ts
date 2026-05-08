@@ -84,4 +84,28 @@ describe('WSJTXEncodeWorkQueue messageSent validation', () => {
       expect(result.result.error.message).toContain('Free text messages are limited to 13 characters');
     }
   });
+
+  it('tracks queued work and emits queueEmpty after encode completion', async () => {
+    encodeResponses.length = 0;
+    encodeCalls.length = 0;
+    encodeResponses.push({ messageSent: 'CQ BG5DRB OL32' });
+
+    const queue = new WSJTXEncodeWorkQueue(1);
+    const queueEmpty = vi.fn();
+    queue.on('queueEmpty', queueEmpty);
+
+    const pushPromise = queue.push({
+      operatorId: 'op-1',
+      message: 'CQ BG5DRB OL32',
+      frequency: 1500,
+      mode: 'FT8',
+    });
+
+    expect(queue.size()).toBe(1);
+    await pushPromise;
+
+    expect(queue.size()).toBe(0);
+    expect(queueEmpty).toHaveBeenCalledTimes(1);
+    await queue.destroy();
+  });
 });

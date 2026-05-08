@@ -270,6 +270,24 @@ class FakeDecodeWorkerProcess extends EventEmitter implements DecodeWorkerProces
   }
 }
 
+class NeverRespondingDecodeWorkerProcess extends FakeDecodeWorkerProcess {
+  override send(input: unknown, callback?: (error: Error | null) => void): boolean {
+    const message = input as { type?: string };
+    callback?.(null);
+    if (message.type === 'shutdown') {
+      this.killed = true;
+      setTimeout(() => this.emit('exit', 0, null), 0);
+      return true;
+    }
+    if (message.type === 'decode') {
+      this.decodeCommands++;
+      this.active++;
+      this.maxActive = Math.max(this.maxActive, this.active);
+    }
+    return true;
+  }
+}
+
 describe('WSJTXDecodeProcessPool scheduling', () => {
   it('dispatches concurrent jobs across workers while keeping each worker serial', async () => {
     const workers: FakeDecodeWorkerProcess[] = [];
@@ -371,6 +389,62 @@ describe('WSJTXDecodeProcessPool scheduling', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
 
     expect(pool.getTelemetrySnapshot()).toBeUndefined();
+    await pool.destroy();
+  });
+
+  it('ignores tsx watch IPC messages from development workers', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const workers: FakeDecodeWorkerProcess[] = [];
+    const pool = new WSJTXDecodeProcessPool({
+      workerCount: 1,
+      readyTimeoutMs: 1000,
+      jobTimeoutMs: 1000,
+      workerFactory: (workerId, _entry, env) => {
+        const worker = new FakeDecodeWorkerProcess(workerId, env);
+        workers.push(worker);
+        return worker;
+      },
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    workers[0].emit('message', {
+      'watch:require': [
+        '/tmp/rubato-fft-node-darwin-universal.tsx',
+      ],
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(warnSpy.mock.calls.some((call) => String(call[0]).includes('unknown job'))).toBe(false);
+    expect(warnSpy.mock.calls.some((call) => String(call[0]).includes('unknown message'))).toBe(false);
+    await pool.destroy();
+    warnSpy.mockRestore();
+  });
+
+  it('does not count one timed-out worker twice when deciding degradation', async () => {
+    const pool = new WSJTXDecodeProcessPool({
+      workerCount: 2,
+      readyTimeoutMs: 1000,
+      jobTimeoutMs: 10,
+      workerFactory: (workerId, _entry, env) => new NeverRespondingDecodeWorkerProcess(workerId, env),
+    });
+
+    const request: DecodeRequest = {
+      slotId: 'FT8-timeout',
+      mode: 'FT8',
+      windowIdx: 0,
+      pcm: makePcm(16),
+      sampleRate: 12000,
+      timestamp: 1,
+      windowOffsetMs: 0,
+    };
+
+    await Promise.allSettled([
+      pool.decode(request),
+      pool.decode({ ...request, windowIdx: 1 }),
+    ]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(pool.getStatus().maxConcurrency).toBe(2);
     await pool.destroy();
   });
 });

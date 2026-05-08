@@ -1352,8 +1352,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     return error instanceof Error ? error.message : String(error);
   }
 
-  private shouldRunRtAudioConsumeWatchdog(): boolean {
-    return process.platform === 'win32' || process.env.TX5DR_FORCE_WINDOWS_AUDIO_WATCHDOG === '1';
+  private shouldRunRtAudioConsumeDiagnostics(): boolean {
+    return process.env.TX5DR_RTAUDIO_CONSUME_DIAGNOSTICS === '1'
+      || process.env.TX5DR_FORCE_WINDOWS_AUDIO_WATCHDOG === '1';
   }
 
   setVoiceOutputObserver(observer: VoiceTxOutputObserver | null): void {
@@ -1634,6 +1635,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       const chunkStartTime = Date.now();
       this.resetOutputConsumeDiagnostics();
       const watchdogGeneration = this.outputWatchdogGeneration;
+      const consumeDiagnosticsEnabled = this.shouldRunRtAudioConsumeDiagnostics();
       let submittedChunks = 0;
       let submittedSamples = 0;
       let writeFailCount = 0;
@@ -1651,7 +1653,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
       };
 
-      if (this.shouldRunRtAudioConsumeWatchdog()) {
+      if (consumeDiagnosticsEnabled) {
         watchdogTimer = setInterval(() => {
           if (watchdogGeneration !== this.outputWatchdogGeneration) {
             stopWatchdog();
@@ -1813,22 +1815,24 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             if (elapsedSec >= 2 && elapsedSec !== lastProgressSec && elapsedSec % 2 === 0) {
               lastProgressSec = elapsedSec;
               logger.debug(`playback progress: ${cursor}/${totalChunks} chunks, ${samplesWritten}/${totalSamples} samples, elapsed=${Math.round(elapsedMs)}ms, target=${targetSamples}, fails=${writeFailCount}`);
-              logger.info('audio playback live diagnostics', {
-                playbackId,
-                ...diagnosticContext,
-                elapsedMs: Math.round(elapsedMs),
-                submittedChunks,
-                consumedChunks: this.outputFramesConsumed,
-                pendingChunks: submittedChunks - this.outputFramesConsumed,
-                submittedSamples,
-                targetSamples,
-                postGainPeakSoFar: Number(postGainPeak.toFixed(6)),
-                postGainRmsSoFar: postGainSampleCount > 0
-                  ? Number(Math.sqrt(postGainSumSquares / postGainSampleCount).toFixed(6))
-                  : 0,
-                writeFails: writeFailCount,
-                backend: this.getOutputBackendSnapshot(),
-              });
+              if (consumeDiagnosticsEnabled) {
+                logger.info('audio playback live diagnostics', {
+                  playbackId,
+                  ...diagnosticContext,
+                  elapsedMs: Math.round(elapsedMs),
+                  submittedChunks,
+                  consumedChunks: this.outputFramesConsumed,
+                  pendingChunks: submittedChunks - this.outputFramesConsumed,
+                  submittedSamples,
+                  targetSamples,
+                  postGainPeakSoFar: Number(postGainPeak.toFixed(6)),
+                  postGainRmsSoFar: postGainSampleCount > 0
+                    ? Number(Math.sqrt(postGainSumSquares / postGainSampleCount).toFixed(6))
+                    : 0,
+                  writeFails: writeFailCount,
+                  backend: this.getOutputBackendSnapshot(),
+                });
+              }
             }
           } catch (err) {
             clearInterval(interval);
@@ -1837,53 +1841,54 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }, TICK_MS);
       });
 
-      const drainTimeoutMs = Math.max(RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS, prebufferMs + 500);
-      const drainDeadline = Date.now() + drainTimeoutMs;
-      while (
-        !this.shouldStopPlayback &&
-        this.outputFramesConsumed < submittedChunks &&
-        Date.now() < drainDeadline
-      ) {
-        await new Promise<void>(res => setTimeout(res, 10));
-      }
-      stopWatchdog();
+      if (consumeDiagnosticsEnabled) {
+        const drainTimeoutMs = Math.max(RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS, prebufferMs + 500);
+        const drainDeadline = Date.now() + drainTimeoutMs;
+        while (
+          !this.shouldStopPlayback &&
+          this.outputFramesConsumed < submittedChunks &&
+          Date.now() < drainDeadline
+        ) {
+          await new Promise<void>(res => setTimeout(res, 10));
+        }
+        stopWatchdog();
 
-      const consumedChunks = this.outputFramesConsumed;
-      const consumeComplete = consumedChunks >= submittedChunks;
-      const postGainStats = {
-        peak: postGainPeak,
-        rms: postGainSampleCount > 0 ? Math.sqrt(postGainSumSquares / postGainSampleCount) : 0,
-      };
-      const consumeSummary = {
-        playbackId,
-        ...diagnosticContext,
-        submittedChunks,
-        submittedSamples,
-        consumedChunks,
-        consumeComplete,
-        firstConsumedAt: this.outputFirstFrameConsumedAt
-          ? new Date(this.outputFirstFrameConsumedAt).toISOString()
-          : null,
-        lastConsumedAt: this.outputLastFrameConsumedAt
-          ? new Date(this.outputLastFrameConsumedAt).toISOString()
-          : null,
-        sourcePeak: Number(sourceStats.peak.toFixed(6)),
-        sourceRms: Number(sourceStats.rms.toFixed(6)),
-        sourceFingerprint,
-        sourceSegments,
-        postGainPeak: Number(postGainStats.peak.toFixed(6)),
-        postGainRms: Number(postGainStats.rms.toFixed(6)),
-        backend: this.getOutputBackendSnapshot(),
-        recentRtAudioErrors: this.outputRtAudioErrors,
-      };
+        const consumedChunks = this.outputFramesConsumed;
+        const consumeComplete = consumedChunks >= submittedChunks;
+        const postGainStats = {
+          peak: postGainPeak,
+          rms: postGainSampleCount > 0 ? Math.sqrt(postGainSumSquares / postGainSampleCount) : 0,
+        };
+        const consumeSummary = {
+          playbackId,
+          ...diagnosticContext,
+          submittedChunks,
+          submittedSamples,
+          consumedChunks,
+          consumeComplete,
+          firstConsumedAt: this.outputFirstFrameConsumedAt
+            ? new Date(this.outputFirstFrameConsumedAt).toISOString()
+            : null,
+          lastConsumedAt: this.outputLastFrameConsumedAt
+            ? new Date(this.outputLastFrameConsumedAt).toISOString()
+            : null,
+          sourcePeak: Number(sourceStats.peak.toFixed(6)),
+          sourceRms: Number(sourceStats.rms.toFixed(6)),
+          sourceFingerprint,
+          sourceSegments,
+          postGainPeak: Number(postGainStats.peak.toFixed(6)),
+          postGainRms: Number(postGainStats.rms.toFixed(6)),
+          backend: this.getOutputBackendSnapshot(),
+          recentRtAudioErrors: this.outputRtAudioErrors,
+        };
 
-      if (consumeComplete) {
-        logger.info('audio playback consume complete', consumeSummary);
+        if (consumeComplete) {
+          logger.info('audio playback consume complete', consumeSummary);
+        } else {
+          logger.warn('RtAudio output did not consume all submitted playback chunks before timeout', consumeSummary);
+        }
       } else {
-        const message = this.shouldRunRtAudioConsumeWatchdog()
-          ? 'Windows RtAudio output did not consume all submitted playback chunks before timeout'
-          : 'RtAudio output did not consume all submitted playback chunks before timeout';
-        logger.warn(message, consumeSummary);
+        stopWatchdog();
       }
 
       } catch (error) {

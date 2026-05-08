@@ -157,6 +157,7 @@ import { RingBuffer } from '../ringBuffer.js';
 
 describe('AudioStreamManager RtAudio output diagnostics', () => {
   const originalForceWatchdog = process.env.TX5DR_FORCE_WINDOWS_AUDIO_WATCHDOG;
+  const originalConsumeDiagnostics = process.env.TX5DR_RTAUDIO_CONSUME_DIAGNOSTICS;
 
   beforeEach(() => {
     mockRtAudioState.consumeOnWrite = true;
@@ -181,10 +182,16 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     } else {
       process.env.TX5DR_FORCE_WINDOWS_AUDIO_WATCHDOG = originalForceWatchdog;
     }
+    if (originalConsumeDiagnostics === undefined) {
+      delete process.env.TX5DR_RTAUDIO_CONSUME_DIAGNOSTICS;
+    } else {
+      process.env.TX5DR_RTAUDIO_CONSUME_DIAGNOSTICS = originalConsumeDiagnostics;
+    }
     vi.restoreAllMocks();
   });
 
   it('logs submitted and consumed RtAudio output chunks with playback amplitude stats', async () => {
+    process.env.TX5DR_RTAUDIO_CONSUME_DIAGNOSTICS = '1';
     const manager = new AudioStreamManager();
     await manager.startOutput();
 
@@ -234,7 +241,7 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
       }),
     );
     expect(mockLogger.warn).toHaveBeenCalledWith(
-      'Windows RtAudio output did not consume all submitted playback chunks before timeout',
+      'RtAudio output did not consume all submitted playback chunks before timeout',
       expect.objectContaining({
         submittedChunks: 4,
         consumedChunks: 0,
