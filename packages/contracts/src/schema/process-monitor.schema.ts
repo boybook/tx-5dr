@@ -52,7 +52,7 @@ export const DecodeWorkerTelemetryWorkerSchema = z.object({
 });
 
 export const DecodeWorkerTelemetrySummarySchema = z.object({
-  status: z.enum(['starting', 'ready', 'degraded', 'unavailable']).optional(),
+  status: z.enum(['stopped', 'starting', 'ready', 'degraded', 'unavailable']).optional(),
   workerCount: z.number().int().nonnegative(),
   desiredWorkers: z.number().int().nonnegative().optional(),
   readyCount: z.number().int().nonnegative(),

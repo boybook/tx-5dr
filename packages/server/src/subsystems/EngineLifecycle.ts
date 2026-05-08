@@ -27,6 +27,7 @@ import type { ClockCoordinator } from './ClockCoordinator.js';
 import type { AudioVolumeController } from './AudioVolumeController.js';
 import { RadioError } from '../utils/errors/RadioError.js';
 import { createLogger } from '../utils/logger.js';
+import type { WSJTXDecodeWorkQueue } from '../decode/WSJTXDecodeWorkQueue.js';
 
 const logger = createLogger('EngineLifecycle');
 
@@ -38,6 +39,7 @@ export interface EngineLifecycleDeps {
   audioStreamManager: AudioStreamManager;
   radioManager: PhysicalRadioManager;
   spectrumScheduler: SpectrumScheduler;
+  decodeQueue: WSJTXDecodeWorkQueue;
   operatorManager: RadioOperatorManager;
   audioMixer: AudioMixer;
   clockSource: ClockSourceSystem;
@@ -366,9 +368,23 @@ export class EngineLifecycle {
   }
 
   private buildDigitalModeResourcePlan(): SimplifiedResourceConfig[] {
-    const { slotClock, slotScheduler, spectrumScheduler, operatorManager } = this.deps;
+    const { slotClock, slotScheduler, spectrumScheduler, decodeQueue, operatorManager } = this.deps;
 
     return [
+      {
+        name: 'decodeWorkerPool',
+        start: async () => {
+          await decodeQueue.start('digital-engine-start');
+          logger.debug('Decode worker pool started');
+        },
+        stop: async () => {
+          await decodeQueue.stop('digital-engine-stop');
+          logger.debug('Decode worker pool stopped');
+        },
+        priority: 5,
+        dependencies: [],
+        optional: false,
+      },
       {
         name: 'clock',
         start: async () => {
@@ -386,7 +402,7 @@ export class EngineLifecycle {
           }
         },
         priority: 6,
-        dependencies: [],
+        dependencies: ['decodeWorkerPool'],
         optional: false,
       },
       {
@@ -404,7 +420,7 @@ export class EngineLifecycle {
           }
         },
         priority: 7,
-        dependencies: ['clock'],
+        dependencies: ['decodeWorkerPool', 'clock'],
         optional: false,
       },
       {

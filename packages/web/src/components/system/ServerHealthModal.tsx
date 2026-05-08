@@ -408,9 +408,29 @@ function toCapacityPercent(value: number | null | undefined, capacity: number | 
   return (value / resolvedCapacity) * 100;
 }
 
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value) || Number.isNaN(value)) return 0;
+  return Math.min(Math.max(value, 0), 100);
+}
+
 function normalizedCpuPercent(value: number | null | undefined, capacity: number | null | undefined): number | null {
   if (value == null || Number.isNaN(value)) return null;
   return toCapacityPercent(value, capacity);
+}
+
+function getWholeMachineCpuCapacity(snapshot: ProcessSnapshot): number {
+  const logicalCores = snapshot.hostCpu?.logicalCores;
+  if (logicalCores && logicalCores > 0) {
+    return logicalCores * 100;
+  }
+  return snapshot.cpu.capacity && snapshot.cpu.capacity > 0 ? snapshot.cpu.capacity : 100;
+}
+
+function decodeWorkerMachineCpuPercent(
+  rawCpuPercent: number | null | undefined,
+  snapshot: ProcessSnapshot
+): number {
+  return clampPercent(toCapacityPercent(rawCpuPercent, getWholeMachineCpuCapacity(snapshot)));
 }
 
 function singleCoreNormalizedPercent(capacity: number | null | undefined): number {
@@ -438,9 +458,9 @@ function formatOptionalNumber(value: number | null | undefined): string {
   return value.toString();
 }
 
-function formatCpuCores(rawCpuPercent: number | null | undefined): string {
+function formatDecodeWorkerCpuPercent(rawCpuPercent: number | null | undefined, snapshot: ProcessSnapshot): string {
   if (rawCpuPercent == null || Number.isNaN(rawCpuPercent)) return '—';
-  return `${(rawCpuPercent / 100).toFixed(1)} cores`;
+  return `${decodeWorkerMachineCpuPercent(rawCpuPercent, snapshot).toFixed(1)}%`;
 }
 
 function formatWorkerJob(worker: NonNullable<ProcessSnapshot['decodeWorkers']>['workers'][number]): string {
@@ -528,11 +548,11 @@ function CpuLoadValue({ snapshot }: { snapshot: ProcessSnapshot }) {
 
 function DecodeWorkersCard({
   snapshot,
-  cpuCoreValues,
+  cpuPercentValues,
   timestamps,
 }: {
   snapshot: ProcessSnapshot;
-  cpuCoreValues: number[];
+  cpuPercentValues: number[];
   timestamps: number[];
 }) {
   const { t } = useTranslation('settings');
@@ -589,8 +609,8 @@ function DecodeWorkersCard({
           <div className="text-lg font-mono font-semibold text-foreground">{formatBytes(summary.totalRss)}</div>
         </div>
         <div>
-          <div className="text-xs text-default-400">{t('serverHealth.workerCpuCores')}</div>
-          <div className="text-lg font-mono font-semibold text-foreground">{formatCpuCores(summary.totalCpu)}</div>
+          <div className="text-xs text-default-400">{t('serverHealth.workerCpuPercent')}</div>
+          <div className="text-lg font-mono font-semibold text-foreground">{formatDecodeWorkerCpuPercent(summary.totalCpu, snapshot)}</div>
         </div>
         <div>
           <div className="text-xs text-default-400">{t('serverHealth.workerQueue')}</div>
@@ -601,11 +621,12 @@ function DecodeWorkersCard({
       </div>
 
       <Sparkline
-        values={cpuCoreValues.length > 0 ? cpuCoreValues : [0]}
+        values={cpuPercentValues.length > 0 ? cpuPercentValues : [0]}
         height={44}
         timestamps={timestamps}
         valueMin={0}
-        formatValue={(v) => `${v.toFixed(1)} cores`}
+        valueMaxFloor={100}
+        formatValue={(v) => `${v.toFixed(1)}%`}
       />
 
       <div className="flex flex-col gap-1.5">
@@ -639,7 +660,7 @@ function DecodeWorkersCard({
                 </div>
               </div>
               <div className="flex-shrink-0 text-right">
-                <div className="text-xs font-mono text-default-700">{formatCpuCores(worker.cpu.total)}</div>
+                <div className="text-xs font-mono text-default-700">{formatDecodeWorkerCpuPercent(worker.cpu.total, snapshot)}</div>
                 <div className="text-xs font-mono text-default-500">{formatBytes(worker.memory.rss)}</div>
               </div>
             </div>
@@ -718,8 +739,8 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
     () => displaySnapshots.map(s => s.eventLoop.p99 ?? 0),
     [displaySnapshots]
   );
-  const decodeWorkerCpuCoreValues = useMemo(
-    () => displaySnapshots.map(s => (s.decodeWorkers?.summary.totalCpu ?? 0) / 100),
+  const decodeWorkerCpuPercentValues = useMemo(
+    () => displaySnapshots.map(s => decodeWorkerMachineCpuPercent(s.decodeWorkers?.summary.totalCpu ?? 0, s)),
     [displaySnapshots]
   );
   const unsupportedCoreCapabilities = useMemo(
@@ -870,7 +891,7 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
 
               <DecodeWorkersCard
                 snapshot={latest}
-                cpuCoreValues={decodeWorkerCpuCoreValues}
+                cpuPercentValues={decodeWorkerCpuPercentValues}
                 timestamps={timestamps}
               />
 

@@ -118,4 +118,29 @@ describe('ProcessSnapshotSchema', () => {
     expect(parsed.decodeWorkers?.summary.status).toBe('unavailable');
     expect(parsed.decodeWorkers?.summary.lastError).toContain('startup');
   });
+
+  it('accepts stopped decode worker snapshots without treating them as failures', () => {
+    const parsed = ProcessSnapshotSchema.parse({
+      ...createBaseSnapshot(),
+      decodeWorkers: {
+        summary: {
+          status: 'stopped',
+          workerCount: 0,
+          desiredWorkers: 0,
+          readyCount: 0,
+          busyCount: 0,
+          totalRss: 0,
+          totalCpu: 0,
+          nativeThreadsPerWorker: 1,
+          pendingJobs: 0,
+          activeJobs: 0,
+          restartAttempts: 0,
+        },
+        workers: [],
+      },
+    });
+
+    expect(parsed.decodeWorkers?.summary.status).toBe('stopped');
+    expect(parsed.decodeWorkers?.summary.lastError).toBeUndefined();
+  });
 });

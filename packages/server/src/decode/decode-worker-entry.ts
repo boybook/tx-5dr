@@ -12,6 +12,7 @@ const configuredTelemetryIntervalMs = Number.parseInt(process.env.TX5DR_DECODE_W
 const telemetryIntervalMs = Number.isFinite(configuredTelemetryIntervalMs) && configuredTelemetryIntervalMs > 0
   ? configuredTelemetryIntervalMs
   : 2000;
+const MIN_CPU_SAMPLE_INTERVAL_MS = 250;
 const decoder = new WSJTXDecodeWorkerCore();
 let busy = false;
 let shuttingDown = false;
@@ -39,7 +40,16 @@ function send(message: unknown): void {
 
 function calculateCpuSinceLastSample(now: number): ProcessCpu {
   const currentCpu = process.cpuUsage();
-  const elapsedUs = Math.max((now - lastCpuTime) * 1000, 1);
+  const elapsedMs = now - lastCpuTime;
+  if (elapsedMs < MIN_CPU_SAMPLE_INTERVAL_MS) {
+    return {
+      user: 0,
+      system: 0,
+      total: 0,
+    };
+  }
+
+  const elapsedUs = Math.max(elapsedMs * 1000, 1);
   const userUs = currentCpu.user - lastCpuUsage.user;
   const sysUs = currentCpu.system - lastCpuUsage.system;
   lastCpuUsage = currentCpu;

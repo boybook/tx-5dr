@@ -42,6 +42,7 @@ vi.mock('wsjtx-lib', () => {
 });
 
 import { WSJTXDecodeWorkerCore } from '../WSJTXDecodeWorkerCore.js';
+import { WSJTXDecodeWorkQueue } from '../WSJTXDecodeWorkQueue.js';
 import {
   resolveDecodeWorkerCount,
   resolveDecodeNativeThreadCount,
@@ -593,5 +594,112 @@ describe('WSJTXDecodeProcessPool scheduling', () => {
 
     expect(pool.getStatus().maxConcurrency).toBe(2);
     await pool.destroy();
+  });
+});
+
+describe('WSJTXDecodeWorkQueue lifecycle', () => {
+  function createRequest(overrides: Partial<DecodeRequest> = {}): DecodeRequest {
+    return {
+      slotId: 'FT8-lifecycle',
+      mode: 'FT8',
+      windowIdx: 0,
+      pcm: makePcm(16),
+      sampleRate: 12000,
+      timestamp: 1,
+      windowOffsetMs: 0,
+      ...overrides,
+    };
+  }
+
+  it('does not create a worker pool until started', async () => {
+    const poolFactory = vi.fn(() => new WSJTXDecodeProcessPool({
+      workerCount: 1,
+      workerFactory: (workerId) => new FakeDecodeWorkerProcess(workerId),
+    }));
+    const queue = new WSJTXDecodeWorkQueue({ poolFactory });
+
+    expect(poolFactory).not.toHaveBeenCalled();
+    expect(queue.getStatus()).toEqual(expect.objectContaining({
+      status: 'stopped',
+      lifecycleState: 'stopped',
+      workerProcesses: 0,
+    }));
+    expect(queue.getDecodeWorkerTelemetrySnapshot()).toEqual(expect.objectContaining({
+      summary: expect.objectContaining({
+        status: 'stopped',
+        workerCount: 0,
+      }),
+      workers: [],
+    }));
+
+    await queue.destroy();
+  });
+
+  it('starts and stops workers idempotently', async () => {
+    const workers: FakeDecodeWorkerProcess[] = [];
+    const poolFactory = vi.fn((maxConcurrency?: number) => new WSJTXDecodeProcessPool({
+      workerCount: maxConcurrency,
+      readyTimeoutMs: 1000,
+      jobTimeoutMs: 1000,
+      workerFactory: (workerId, _entry, env) => {
+        const worker = new FakeDecodeWorkerProcess(workerId, env);
+        workers.push(worker);
+        return worker;
+      },
+    }));
+    const queue = new WSJTXDecodeWorkQueue({ maxConcurrency: 1, poolFactory });
+
+    await queue.start('test-start');
+    await queue.start('test-start-again');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(poolFactory).toHaveBeenCalledTimes(1);
+    expect(workers).toHaveLength(1);
+    expect(queue.getStatus()).toEqual(expect.objectContaining({
+      lifecycleState: 'running',
+      workerProcesses: 1,
+    }));
+
+    await queue.stop('test-stop');
+    await queue.stop('test-stop-again');
+
+    expect(workers[0].killed).toBe(true);
+    expect(queue.getDecodeWorkerTelemetrySnapshot().summary.status).toBe('stopped');
+    await queue.destroy();
+  });
+
+  it('rejects decode requests while stopped without emitting worker unavailable', async () => {
+    const queue = new WSJTXDecodeWorkQueue();
+    const unavailable = vi.fn();
+    queue.on('decodeWorkerUnavailable', unavailable);
+
+    await expect(queue.push(createRequest())).rejects.toThrow('decode worker pool is not running');
+
+    expect(unavailable).not.toHaveBeenCalled();
+    await queue.destroy();
+  });
+
+  it('still emits worker unavailable for real worker startup failures', async () => {
+    const queue = new WSJTXDecodeWorkQueue({
+      maxConcurrency: 1,
+      poolFactory: () => new WSJTXDecodeProcessPool({
+        workerCount: 1,
+        readyTimeoutMs: 1000,
+        jobTimeoutMs: 1000,
+        workerFactory: () => {
+          throw new Error('spawn failed for lifecycle test');
+        },
+      }),
+    });
+    const unavailable = vi.fn();
+    queue.on('decodeWorkerUnavailable', unavailable);
+
+    await queue.start('test-start-failure');
+
+    expect(unavailable).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'unavailable',
+      lastFailure: 'spawn failed for lifecycle test',
+    }));
+    await queue.destroy();
   });
 });

@@ -670,6 +670,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       audioStreamManager: this.audioStreamManager,
       radioManager: this.radioManager,
       spectrumScheduler: this.spectrumScheduler,
+      decodeQueue: this.realDecodeQueue,
       operatorManager: this._operatorManager,
       audioMixer: this.audioMixer,
       clockSource: this.clockSource,
