@@ -109,7 +109,6 @@ function buildFrequencyKey(frequencyContext?: SlotPackFrequencyContext): string 
         frequencyContext.frequency ?? '',
         frequencyContext.band ?? '',
         frequencyContext.mode ?? '',
-        frequencyContext.radioMode ?? '',
       ].join(':')
     : '';
 }
@@ -495,10 +494,21 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
 
     const handleQsoRecorded = (data: { operatorId: string }) => {
       const activeSession = myRelatedTimelineStateRef.current.activeSession;
-      if (activeSession?.operatorId !== data.operatorId) {
+      const currentMode = radioStateRef.current.currentMode;
+      if (activeSession?.operatorId !== data.operatorId || !currentMode) {
         return;
       }
-      myRelatedTimelineDispatch({ type: 'freezeActiveSession' });
+
+      const slotStartMs = radioStateRef.current.currentSlotInfo?.startMs
+        ?? Math.floor(Date.now() / currentMode.slotMs) * currentMode.slotMs;
+
+      myRelatedTimelineDispatch({
+        type: 'freezeActiveSession',
+        payload: {
+          reason: 'qso-complete',
+          carryUntilMs: slotStartMs + currentMode.slotMs * 2,
+        },
+      });
     };
 
     wsClient.onWSEvent('transmissionLog', handleTransmissionLog);

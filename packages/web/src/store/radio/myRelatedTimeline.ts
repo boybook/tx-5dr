@@ -23,6 +23,9 @@ export interface MyRelatedTimelineState {
   committedRxGroups: FrameGroup[];
   committedRxMessageKeys: Set<string>;
   activeSession: MyRelatedTimelineActiveSession | null;
+  completedSessionCarryover: (Pick<MyRelatedTimelineOperatorContext, 'operatorId' | 'myCallsign' | 'targetCallsign' | 'headerContextKey' | 'frequencyContext'> & {
+    expiresAtMs: number;
+  }) | null;
   pendingRestore: boolean;
   lastProcessedSlotPackSeq: Map<string, number>;
 }
@@ -47,7 +50,7 @@ export interface MyRelatedTransmissionLog {
 
 export type MyRelatedTimelineAction =
   | { type: 'replaceSessionContext'; payload: { nextContext: MyRelatedTimelineOperatorContext | null; forceRestart?: boolean } }
-  | { type: 'freezeActiveSession' }
+  | { type: 'freezeActiveSession'; payload?: { reason?: 'default' | 'qso-complete'; carryUntilMs?: number } }
   | {
       type: 'seedSelectedRx';
       payload: {
@@ -77,6 +80,7 @@ export const initialMyRelatedTimelineState: MyRelatedTimelineState = {
   committedRxGroups: [],
   committedRxMessageKeys: new Set<string>(),
   activeSession: null,
+  completedSessionCarryover: null,
   pendingRestore: false,
   lastProcessedSlotPackSeq: new Map<string, number>(),
 };
@@ -89,43 +93,62 @@ export function myRelatedTimelineReducer(
     case 'replaceSessionContext': {
       const { nextContext, forceRestart = false } = action.payload;
       if (!nextContext) {
-        return freezeIntoCommitted(state, null);
+        return freezeIntoCommitted(state, {
+          nextActiveSession: null,
+          preserveCarryover: true,
+        });
       }
 
       const activeSession = state.activeSession;
       const sameSessionIdentity = activeSession && sessionIdentityEquals(activeSession, nextContext);
-      const sameFrequencyContext = activeSession && frequencyContextEquals(activeSession.frequencyContext, nextContext.frequencyContext);
+      const sameFrequencyBoundary = activeSession && frequencyBoundaryEquals(activeSession.frequencyContext, nextContext.frequencyContext);
 
       if (activeSession && canPromoteSessionTarget(activeSession, nextContext)) {
         return {
           ...state,
+          completedSessionCarryover: state.completedSessionCarryover,
           activeSession: {
             ...activeSession,
             targetCallsign: nextContext.targetCallsign,
-            frequencyContext: nextContext.frequencyContext ?? activeSession.frequencyContext,
+            frequencyContext: mergeFrequencyContext(activeSession.frequencyContext, nextContext.frequencyContext),
           },
         };
       }
 
-      if (sameSessionIdentity && sameFrequencyContext && !forceRestart) {
-        return state;
+      if (sameSessionIdentity && sameFrequencyBoundary && !forceRestart) {
+        if (!activeSession) {
+          return state;
+        }
+
+        return {
+          ...state,
+          activeSession: {
+            ...activeSession,
+            frequencyContext: mergeFrequencyContext(activeSession.frequencyContext, nextContext.frequencyContext),
+          },
+        };
       }
 
-      return freezeIntoCommitted(
-        state,
-        shouldAutoStartSession(nextContext) ? createActiveSession(nextContext) : null,
-      );
+      return freezeIntoCommitted(state, {
+        nextActiveSession: shouldAutoStartSession(nextContext) ? createActiveSession(nextContext) : null,
+        preserveCarryover: !shouldAutoStartSession(nextContext),
+      });
     }
 
     case 'freezeActiveSession':
-      return freezeIntoCommitted(state, null);
+      return freezeIntoCommitted(state, {
+        nextActiveSession: null,
+        carryover: action.payload?.reason === 'qso-complete' && typeof action.payload.carryUntilMs === 'number'
+          ? buildCompletedSessionCarryover(state.activeSession, action.payload.carryUntilMs)
+          : null,
+      });
 
     case 'seedSelectedRx': {
       const { context, currentMode, message, slotStartMs, frequencyContext } = action.payload;
       const needsRestart = !state.activeSession || !sessionIdentityEquals(state.activeSession, context);
 
       const nextState = needsRestart
-        ? freezeIntoCommitted(state, createActiveSession(context))
+        ? freezeIntoCommitted(state, { nextActiveSession: createActiveSession(context) })
         : state;
 
       if (!nextState.activeSession) {
@@ -157,8 +180,12 @@ export function myRelatedTimelineReducer(
         lastProcessedSlotPackSeq: new Map(state.lastProcessedSlotPackSeq).set(slotPack.slotId, incomingSeq),
       };
 
-      if (nextState.pendingRestore || !nextState.activeSession) {
+      if (nextState.pendingRestore) {
         return nextState;
+      }
+
+      if (!nextState.activeSession) {
+        return appendSlotPackToCompletedCarryover(nextState, slotPack, currentMode);
       }
 
       if (slotPack.startMs < nextState.activeSession.startedAtMs) {
@@ -271,6 +298,7 @@ export function myRelatedTimelineReducer(
         activeSession: action.payload.nextContext && shouldAutoStartSession(action.payload.nextContext)
           ? createActiveSession(action.payload.nextContext)
           : null,
+        completedSessionCarryover: null,
         pendingRestore: false,
         lastProcessedSlotPackSeq: state.lastProcessedSlotPackSeq,
       };
@@ -357,15 +385,42 @@ function cloneActiveSession(session: MyRelatedTimelineActiveSession): MyRelatedT
   };
 }
 
+function buildCompletedSessionCarryover(
+  session: MyRelatedTimelineActiveSession | null,
+  expiresAtMs: number,
+): MyRelatedTimelineState['completedSessionCarryover'] {
+  if (!session || !session.groups.length) {
+    return null;
+  }
+
+  return {
+    operatorId: session.operatorId,
+    myCallsign: session.myCallsign,
+    targetCallsign: session.targetCallsign,
+    headerContextKey: session.headerContextKey,
+    frequencyContext: session.frequencyContext,
+    expiresAtMs,
+  };
+}
+
 function freezeIntoCommitted(
   state: MyRelatedTimelineState,
-  nextActiveSession: MyRelatedTimelineActiveSession | null,
+  options: {
+    nextActiveSession: MyRelatedTimelineActiveSession | null;
+    carryover?: MyRelatedTimelineState['completedSessionCarryover'];
+    preserveCarryover?: boolean;
+  },
 ): MyRelatedTimelineState {
   const activeSession = state.activeSession;
+  const completedSessionCarryover = options.preserveCarryover
+    ? state.completedSessionCarryover
+    : options.carryover ?? null;
+
   if (!activeSession || activeSession.groups.length === 0) {
     return {
       ...state,
-      activeSession: nextActiveSession,
+      activeSession: options.nextActiveSession,
+      completedSessionCarryover,
     };
   }
 
@@ -392,8 +447,59 @@ function freezeIntoCommitted(
     ...state,
     committedRxGroups: trimGroups(committedRxGroups),
     committedRxMessageKeys,
-    activeSession: nextActiveSession,
+    activeSession: options.nextActiveSession,
+    completedSessionCarryover,
   };
+}
+
+function appendSlotPackToCompletedCarryover(
+  state: MyRelatedTimelineState,
+  slotPack: SlotPack,
+  currentMode: ModeDescriptor,
+): MyRelatedTimelineState {
+  const carryover = state.completedSessionCarryover;
+  if (!carryover) {
+    return state;
+  }
+
+  if (slotPack.startMs > carryover.expiresAtMs) {
+    return {
+      ...state,
+      completedSessionCarryover: null,
+    };
+  }
+
+  if (
+    carryover.frequencyContext &&
+    slotPack.frequencyContext &&
+    !frequencyBoundaryEquals(carryover.frequencyContext, slotPack.frequencyContext)
+  ) {
+    return state;
+  }
+
+  let nextState = state;
+  for (const frame of slotPack.frames) {
+    if (frame.snr === -999 || !matchesSession(frame.message, carryover)) {
+      continue;
+    }
+
+    const messageKey = buildFrameMessageKey(frame, slotPack.startMs);
+    if (nextState.committedRxMessageKeys.has(messageKey)) {
+      continue;
+    }
+
+    nextState = appendCommittedRxDisplayMessage(
+      nextState,
+      slotPack.startMs,
+      currentMode,
+      frameToDisplayMessage(frame, slotPack.startMs),
+      messageKey,
+      carryover.headerContextKey,
+      slotPack.frequencyContext ?? carryover.frequencyContext,
+    );
+  }
+
+  return nextState;
 }
 
 function appendCommittedRxDisplayMessage(
@@ -762,15 +868,35 @@ function sessionIdentityEquals(
     left.targetCallsign === right.targetCallsign;
 }
 
-function frequencyContextEquals(
+function frequencyBoundaryEquals(
   left?: SlotPackFrequencyContext,
   right?: SlotPackFrequencyContext,
 ): boolean {
   return (left?.frequency ?? null) === (right?.frequency ?? null) &&
     (left?.band ?? '') === (right?.band ?? '') &&
-    (left?.mode ?? '') === (right?.mode ?? '') &&
-    (left?.radioMode ?? '') === (right?.radioMode ?? '') &&
-    (left?.description ?? '') === (right?.description ?? '');
+    (left?.mode ?? '') === (right?.mode ?? '');
+}
+
+function mergeFrequencyContext(
+  existing?: SlotPackFrequencyContext,
+  incoming?: SlotPackFrequencyContext,
+): SlotPackFrequencyContext | undefined {
+  if (!existing) {
+    return incoming;
+  }
+  if (!incoming) {
+    return existing;
+  }
+
+  return {
+    ...existing,
+    ...incoming,
+    frequency: incoming.frequency ?? existing.frequency,
+    band: incoming.band ?? existing.band,
+    mode: incoming.mode ?? existing.mode,
+    radioMode: incoming.radioMode ?? existing.radioMode,
+    description: incoming.description ?? existing.description,
+  };
 }
 
 function canPromoteSessionTarget(
@@ -781,7 +907,7 @@ function canPromoteSessionTarget(
     session.myCallsign === context.myCallsign &&
     !session.targetCallsign.trim() &&
     !!context.targetCallsign.trim() &&
-    frequencyContextEquals(session.frequencyContext, context.frequencyContext);
+    frequencyBoundaryEquals(session.frequencyContext, context.frequencyContext);
 }
 
 function createProcessedSeqMap(

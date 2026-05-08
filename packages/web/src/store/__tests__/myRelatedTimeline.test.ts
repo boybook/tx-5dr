@@ -540,6 +540,168 @@ describe('myRelatedTimelineReducer', () => {
     expect(state.lastProcessedSlotPackSeq.get(slotPack.slotId)).toBe(3);
   });
 
+  it('keeps a short completion carryover so the peer terminal 73 is still captured after RR73', () => {
+    const firstStart = Date.UTC(2026, 4, 6, 12, 3, 30);
+    const secondStart = firstStart + mode.slotMs;
+    const thirdStart = secondStart + mode.slotMs;
+    const context = createContext({
+      startedAtMs: firstStart,
+      myCallsign: 'BG5DRB',
+      targetCallsign: 'BI4PPP',
+      frequencyContext: {
+        frequency: 21_074_000,
+        band: '15m',
+        mode: 'FT8',
+        description: '21.074 MHz',
+      },
+    });
+    const slotPackFrequencyContext: SlotPackFrequencyContext = {
+      frequency: 21_074_000,
+      band: '15m',
+      mode: 'FT8',
+      radioMode: 'PKTUSB',
+      description: '21.074 MHz 15m',
+    };
+
+    const state = reduce([
+      { type: 'replaceSessionContext', payload: { nextContext: context } },
+      {
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack: createSlotPack(firstStart, [createRxFrame('BG5DRB BI4PPP OM87', 1362, -1, 0.2)], slotPackFrequencyContext),
+          currentMode: mode,
+        },
+      },
+      {
+        type: 'ingestTransmissionLog',
+        payload: {
+          log: createTransmissionLog(secondStart, 'BI4PPP BG5DRB RR73', {
+            operatorId: 'op-1',
+            myCallsign: 'BG5DRB',
+            frequencyContext: context.frequencyContext,
+          }),
+          currentMode: mode,
+        },
+      },
+      {
+        type: 'freezeActiveSession',
+        payload: {
+          reason: 'qso-complete',
+          carryUntilMs: thirdStart + mode.slotMs,
+        },
+      },
+      {
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack: createSlotPack(thirdStart, [createRxFrame('BG5DRB BI4PPP 73', 1362, -6, 0.1)], slotPackFrequencyContext),
+          currentMode: mode,
+        },
+      },
+    ]);
+
+    const groups = buildMyRelatedTimelineGroups(state);
+    const rxMessages = groups.flatMap(group => group.messages.filter(message => message.db !== 'TX'));
+
+    expect(state.activeSession).toBeNull();
+    expect(rxMessages.map(message => message.message)).toEqual([
+      'BG5DRB BI4PPP OM87',
+      'BG5DRB BI4PPP 73',
+    ]);
+  });
+
+  it('drops the completion carryover once a new session starts', () => {
+    const firstStart = Date.UTC(2026, 4, 6, 12, 3, 30);
+    const secondStart = firstStart + mode.slotMs;
+    const thirdStart = secondStart + mode.slotMs;
+    const firstContext = createContext({
+      startedAtMs: firstStart,
+      myCallsign: 'BG5DRB',
+      targetCallsign: 'BI4PPP',
+    });
+    const secondContext = createContext({
+      startedAtMs: secondStart,
+      myCallsign: 'BG5DRB',
+      targetCallsign: 'JA1AAA',
+    });
+
+    const state = reduce([
+      { type: 'replaceSessionContext', payload: { nextContext: firstContext } },
+      {
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack: createSlotPack(firstStart, [createRxFrame('BG5DRB BI4PPP OM87', 1362, -1, 0.2)], firstContext.frequencyContext),
+          currentMode: mode,
+        },
+      },
+      {
+        type: 'freezeActiveSession',
+        payload: {
+          reason: 'qso-complete',
+          carryUntilMs: thirdStart + mode.slotMs,
+        },
+      },
+      { type: 'replaceSessionContext', payload: { nextContext: secondContext, forceRestart: true } },
+      {
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack: createSlotPack(thirdStart, [createRxFrame('BG5DRB BI4PPP 73', 1362, -6, 0.1)], firstContext.frequencyContext),
+          currentMode: mode,
+        },
+      },
+    ]);
+
+    expect(state.activeSession?.targetCallsign).toBe('JA1AAA');
+    expect(state.completedSessionCarryover).toBeNull();
+  });
+
+  it('does not restart the active session when only radioMode or description changes', () => {
+    const startMs = Date.UTC(2026, 4, 6, 12, 3, 30);
+    const initialContext = createContext({
+      startedAtMs: startMs,
+      myCallsign: 'BG5DRB',
+      targetCallsign: 'JQ7CLL',
+      frequencyContext: {
+        frequency: 7_074_000,
+        band: '40m',
+        mode: 'FT8',
+        radioMode: 'USB',
+        description: '7.074 MHz',
+      },
+    });
+    const updatedContext = createContext({
+      ...initialContext,
+      frequencyContext: {
+        frequency: 7_074_000,
+        band: '40m',
+        mode: 'FT8',
+        radioMode: 'PKTUSB',
+        description: '7.074 MHz 40m',
+      },
+    });
+
+    const state = reduce([
+      { type: 'replaceSessionContext', payload: { nextContext: initialContext } },
+      {
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack: createSlotPack(startMs, [createRxFrame('BG5DRB JQ7CLL QM07', 1846, -14, -1.0)], updatedContext.frequencyContext),
+          currentMode: mode,
+        },
+      },
+      { type: 'replaceSessionContext', payload: { nextContext: updatedContext } },
+    ]);
+
+    expect(state.committedRxGroups).toHaveLength(0);
+    expect(state.activeSession?.groups).toHaveLength(1);
+    expect(state.activeSession?.frequencyContext).toMatchObject({
+      frequency: 7_074_000,
+      band: '40m',
+      mode: 'FT8',
+      radioMode: 'PKTUSB',
+      description: '7.074 MHz 40m',
+    });
+  });
+
   it('finds the latest inbound direct-call seed when a target session auto-starts after the decode slot', () => {
     const previousSlotStart = Date.UTC(2026, 4, 6, 6, 28, 30);
     const currentSlotStart = previousSlotStart + mode.slotMs;
