@@ -32,6 +32,11 @@ export interface ITransmissionChecker {
   hasActiveTransmissionsInCurrentCycle(slotInfo: SlotInfo): boolean;
 }
 
+export type DecodeApContextProvider = (
+  slotInfo: SlotInfo,
+  windowIdx: number
+) => DecodeRequest['apContext'] | undefined;
+
 /**
  * 时隙调度器 - 监听时隙事件并生成解码请求
  * 统一使用子窗口处理，支持单窗口和多窗口模式
@@ -42,6 +47,7 @@ export class SlotScheduler {
   private audioBufferProvider: AudioBufferProvider;
   private transmissionChecker?: ITransmissionChecker;
   private shouldDecodeWhileTransmitting?: () => boolean;
+  private decodeApContextProvider?: DecodeApContextProvider;
   private isActive = false;
   private readonly boundHandleSubWindow: (slotInfo: SlotInfo, windowIdx: number) => void;
 
@@ -50,13 +56,15 @@ export class SlotScheduler {
     decodeQueue: IDecodeQueue,
     audioBufferProvider: AudioBufferProvider,
     transmissionChecker?: ITransmissionChecker,
-    shouldDecodeWhileTransmitting?: () => boolean
+    shouldDecodeWhileTransmitting?: () => boolean,
+    decodeApContextProvider?: DecodeApContextProvider
   ) {
     this.slotClock = slotClock;
     this.decodeQueue = decodeQueue;
     this.audioBufferProvider = audioBufferProvider;
     this.transmissionChecker = transmissionChecker;
     this.shouldDecodeWhileTransmitting = shouldDecodeWhileTransmitting;
+    this.decodeApContextProvider = decodeApContextProvider;
     this.boundHandleSubWindow = this.handleSubWindow.bind(this);
   }
   
@@ -127,6 +135,7 @@ export class SlotScheduler {
       const actualSampleRate = this.audioBufferProvider.getSampleRate ? 
         this.audioBufferProvider.getSampleRate() : 48000; // 默认 48kHz
       
+      const apContext = this.decodeApContextProvider?.(slotInfo, windowIdx);
       const decodeRequest: DecodeRequest = {
         slotId: slotInfo.id,
         mode: mode.name === 'FT4' ? 'FT4' : 'FT8',
@@ -134,7 +143,8 @@ export class SlotScheduler {
         pcm: pcmBuffer,
         sampleRate: actualSampleRate, // 使用实际采样率
         timestamp: Date.now(),
-        windowOffsetMs
+        windowOffsetMs,
+        ...(apContext ? { apContext } : {})
       };
       
       const offsetSign = windowOffsetMs >= 0 ? '+' : '';

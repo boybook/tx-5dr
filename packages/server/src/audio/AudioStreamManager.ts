@@ -6,6 +6,9 @@ type RtAudioInstance = InstanceType<typeof RtAudio>;
 const RTAUDIO_FLOAT32 = 0x10;
 const RTAUDIO_API_UNSPECIFIED = 0;
 const RTAUDIO_API_WINDOWS_WASAPI = 7;
+const RTAUDIO_STREAM_FLAGS_NONE = 0 as unknown as Parameters<RtAudioInstance['openStream']>[8];
+const RTAUDIO_ERROR_WARNING = 0;
+const RTAUDIO_ERROR_DEBUG_WARNING = 1;
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 import { EventEmitter } from 'eventemitter3';
 import { clearResamplerCache, resampleAudioProfessional } from '../utils/audioUtils.js';
@@ -24,6 +27,9 @@ const INTERNAL_SAMPLE_RATE = 12000;
 const ICOM_WLAN_TX_CHUNK_SIZE = 1200;
 const ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS = 150;
 const ICOM_WLAN_TX_MAX_WAIT_SLICE_MS = 20;
+const RTAUDIO_TX_CONSUME_WATCHDOG_MS = 750;
+const RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS = 1000;
+const RTAUDIO_TX_WATCHDOG_MIN_SUBMITTED_CHUNKS = 3;
 
 export type NativeAudioInputSourceKind = 'audio-device' | 'icom-wlan' | 'openwebrx';
 
@@ -77,6 +83,34 @@ interface ResolvedStreamDevice {
   persistedDeviceId: string;
 }
 
+interface OutputBackendSnapshot {
+  api?: string;
+  streamOpen?: boolean;
+  streamRunning?: boolean;
+  streamLatencyFrames?: number;
+  streamSampleRate?: number;
+  error?: string;
+}
+
+interface AudioStats {
+  peak: number;
+  rms: number;
+}
+
+interface AudioSegmentStats extends AudioStats {
+  index: number;
+  startMs: number;
+  endMs: number;
+}
+
+interface RtAudioIssue {
+  type: number;
+  typeName: string;
+  message: string;
+  at: number;
+  fatal: boolean;
+}
+
 export interface PlayAudioOptions {
   /**
    * Mirrors the audio chunks written to the TX output into the monitor broadcast
@@ -85,6 +119,7 @@ export interface PlayAudioOptions {
    */
   injectIntoMonitor?: boolean;
   playbackKind?: PlaybackKind;
+  diagnosticContext?: Record<string, unknown>;
 }
 
 export type PlaybackKind = 'digital' | 'voice-keyer' | 'tune-tone';
@@ -135,6 +170,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private voiceOutputObserver: VoiceTxOutputObserver | null = null;
   private voiceTxOutputPipeline: VoiceTxOutputPipeline;
   private nativeAudioInputSequence = 0;
+  private outputFramesConsumed = 0;
+  private outputFirstFrameConsumedAt: number | null = null;
+  private outputLastFrameConsumedAt: number | null = null;
+  private outputRtAudioErrors: RtAudioIssue[] = [];
+  private outputWatchdogGeneration = 0;
+  private playbackSequence = 0;
 
   constructor() {
     super();
@@ -149,8 +190,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.outputBufferSize = audioConfig.outputBufferSize ?? audioConfig.bufferSize ?? 768;
     this.currentSampleRate = this.outputSampleRate;
 
-    // 创建音频缓冲区提供者，使用统一的内部采样率（12kHz）
-    this.audioProvider = new RingBufferAudioProvider(INTERNAL_SAMPLE_RATE, INTERNAL_SAMPLE_RATE * 5); // 5秒缓冲
+    // 创建音频缓冲区提供者，使用统一的内部采样率（12kHz），保留 60 秒 RX/input 历史。
+    this.audioProvider = new RingBufferAudioProvider(INTERNAL_SAMPLE_RATE, 60_000);
     this.voiceTxOutputPipeline = new VoiceTxOutputPipeline({
       getSinkState: () => this.getVoiceTxOutputSinkState(),
       getObserver: () => this.voiceOutputObserver,
@@ -342,12 +383,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       logger.error('failed to start audio stream', error);
       // 清理失败的输入流
       if (this.rtAudioInput) {
-        try {
-          this.rtAudioInput.stop();
-          this.rtAudioInput.closeStream();
-        } catch (cleanupError) {
-          logger.error('failed to cleanup audio input stream', cleanupError);
-        }
+        this.cleanupRtAudioStream('input', this.rtAudioInput, 'start-failed');
         this.rtAudioInput = null;
       }
       this.isStreaming = false;
@@ -388,12 +424,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
       // 停止传统声卡输入
       if (this.rtAudioInput) {
-        try {
-          this.rtAudioInput.stop();
-          this.rtAudioInput.closeStream();
-        } catch (e) {
-          logger.error('failed to cleanup audio input stream', e);
-        }
+        this.cleanupRtAudioStream('input', this.rtAudioInput, 'stop-request');
         this.rtAudioInput = null;
       }
 
@@ -597,12 +628,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       logger.error('failed to start audio output', error);
       // 清理失败的输出流
       if (this.rtAudioOutput) {
-        try {
-          this.rtAudioOutput.stop();
-          this.rtAudioOutput.closeStream();
-        } catch (cleanupError) {
-          logger.error('failed to cleanup audio output stream', cleanupError);
-        }
+        this.cleanupRtAudioStream('output', this.rtAudioOutput, 'start-failed');
         this.rtAudioOutput = null;
       }
       this.isOutputting = false;
@@ -787,12 +813,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
       // 停止传统声卡输出
       if (this.rtAudioOutput) {
-        try {
-          this.rtAudioOutput.stop();
-          this.rtAudioOutput.closeStream();
-        } catch (e) {
-          logger.error('failed to cleanup audio output stream', e);
-        }
+        this.cleanupRtAudioStream('output', this.rtAudioOutput, 'stop-request');
         this.rtAudioOutput = null;
       }
 
@@ -1045,6 +1066,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       throw new Error('audio output instance not initialized');
     }
 
+    this.resetOutputConsumeDiagnostics();
+
     this.rtAudioOutput.openStream(
       { deviceId: outputDeviceId, nChannels: this.channels, firstChannel: 0 },
       null,
@@ -1053,8 +1076,82 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.outputBufferSize,
       'TX5DR-Output',
       null,
-      null
+      () => this.recordOutputFrameConsumed(),
+      RTAUDIO_STREAM_FLAGS_NONE,
+      (type: number, message: string) => this.recordOutputRtAudioIssue(type, message)
     );
+  }
+
+  private resetOutputConsumeDiagnostics(): void {
+    this.outputFramesConsumed = 0;
+    this.outputFirstFrameConsumedAt = null;
+    this.outputLastFrameConsumedAt = null;
+    this.outputRtAudioErrors = [];
+    this.outputWatchdogGeneration++;
+  }
+
+  private recordOutputFrameConsumed(): void {
+    const now = Date.now();
+    this.outputFramesConsumed++;
+    if (this.outputFirstFrameConsumedAt === null) {
+      this.outputFirstFrameConsumedAt = now;
+    }
+    this.outputLastFrameConsumedAt = now;
+  }
+
+  private recordOutputRtAudioIssue(type: number, message: string): void {
+    const issue = {
+      type,
+      typeName: this.describeRtAudioErrorType(type),
+      message,
+      at: Date.now(),
+      fatal: this.isFatalRtAudioErrorType(type),
+    };
+    this.outputRtAudioErrors.push(issue);
+    if (this.outputRtAudioErrors.length > 10) {
+      this.outputRtAudioErrors.shift();
+    }
+
+    if (!issue.fatal) {
+      logger.warn('RtAudio output callback warning', issue);
+      return;
+    }
+
+    logger.error('RtAudio output runtime error', issue);
+    this.emit('error', new Error(`RtAudio output runtime error (${type}): ${message}`));
+  }
+
+  private isFatalRtAudioErrorType(type: number): boolean {
+    return type !== RTAUDIO_ERROR_WARNING && type !== RTAUDIO_ERROR_DEBUG_WARNING;
+  }
+
+  private describeRtAudioErrorType(type: number): string {
+    switch (type) {
+      case 0:
+        return 'WARNING';
+      case 1:
+        return 'DEBUG_WARNING';
+      case 2:
+        return 'UNSPECIFIED';
+      case 3:
+        return 'NO_DEVICES_FOUND';
+      case 4:
+        return 'INVALID_DEVICE';
+      case 5:
+        return 'MEMORY_ERROR';
+      case 6:
+        return 'INVALID_PARAMETER';
+      case 7:
+        return 'INVALID_USE';
+      case 8:
+        return 'DRIVER_ERROR';
+      case 9:
+        return 'SYSTEM_ERROR';
+      case 10:
+        return 'THREAD_ERROR';
+      default:
+        return `UNKNOWN_${type}`;
+    }
   }
 
   /**
@@ -1104,6 +1201,160 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   getVolumeGainDb(): number {
     return this.volumeGainDb;
+  }
+
+  private computeAudioStats(samples: Float32Array): AudioStats {
+    if (samples.length === 0) {
+      return { peak: 0, rms: 0 };
+    }
+
+    let peak = 0;
+    let sumSquares = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const value = samples[i] || 0;
+      const abs = Math.abs(value);
+      if (abs > peak) {
+        peak = abs;
+      }
+      sumSquares += value * value;
+    }
+
+    return {
+      peak,
+      rms: Math.sqrt(sumSquares / samples.length),
+    };
+  }
+
+  private computeAudioSegmentStats(samples: Float32Array, sampleRate: number, segmentCount = 4): AudioSegmentStats[] {
+    if (samples.length === 0 || sampleRate <= 0 || segmentCount <= 0) {
+      return [];
+    }
+
+    const segmentLength = Math.max(1, Math.ceil(samples.length / segmentCount));
+    const segments: AudioSegmentStats[] = [];
+    for (let index = 0; index < segmentCount; index++) {
+      const start = index * segmentLength;
+      if (start >= samples.length) {
+        break;
+      }
+      const end = Math.min(samples.length, start + segmentLength);
+      const stats = this.computeAudioStats(samples.subarray(start, end));
+      segments.push({
+        index,
+        startMs: Math.round((start / sampleRate) * 1000),
+        endMs: Math.round((end / sampleRate) * 1000),
+        peak: Number(stats.peak.toFixed(6)),
+        rms: Number(stats.rms.toFixed(6)),
+      });
+    }
+
+    return segments;
+  }
+
+  private fingerprintAudio(samples: Float32Array): string {
+    let hash = 0x811c9dc5;
+    if (samples.length === 0) {
+      return hash.toString(16);
+    }
+
+    const stride = Math.max(1, Math.floor(samples.length / 4096));
+    for (let i = 0; i < samples.length; i += stride) {
+      const quantized = Math.max(-32768, Math.min(32767, Math.round((samples[i] || 0) * 32767)));
+      hash ^= quantized & 0xff;
+      hash = Math.imul(hash, 0x01000193);
+      hash ^= (quantized >> 8) & 0xff;
+      hash = Math.imul(hash, 0x01000193);
+    }
+
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  }
+
+  private getOutputBackendSnapshot(): OutputBackendSnapshot {
+    return this.getRtAudioBackendSnapshot(this.rtAudioOutput);
+  }
+
+  private getRtAudioBackendSnapshot(stream: RtAudioInstance | null): OutputBackendSnapshot {
+    if (!stream) {
+      return { error: 'RtAudio stream unavailable' };
+    }
+    const snapshot: OutputBackendSnapshot = {};
+    try {
+      snapshot.api = stream.getApi();
+    } catch (error) {
+      snapshot.error = `getApi failed: ${this.describeError(error)}`;
+    }
+
+    try {
+      snapshot.streamOpen = stream.isStreamOpen();
+    } catch (error) {
+      snapshot.error = this.appendSnapshotError(snapshot.error, `isStreamOpen failed: ${this.describeError(error)}`);
+    }
+
+    try {
+      snapshot.streamRunning = stream.isStreamRunning();
+    } catch (error) {
+      snapshot.error = this.appendSnapshotError(snapshot.error, `isStreamRunning failed: ${this.describeError(error)}`);
+    }
+
+    try {
+      snapshot.streamLatencyFrames = stream.getStreamLatency();
+    } catch (error) {
+      snapshot.error = this.appendSnapshotError(snapshot.error, `getStreamLatency failed: ${this.describeError(error)}`);
+    }
+
+    try {
+      snapshot.streamSampleRate = stream.getStreamSampleRate();
+    } catch (error) {
+      snapshot.error = this.appendSnapshotError(snapshot.error, `getStreamSampleRate failed: ${this.describeError(error)}`);
+    }
+
+    return snapshot;
+  }
+
+  private cleanupRtAudioStream(kind: 'input' | 'output', stream: RtAudioInstance, reason: string): void {
+    const before = this.getRtAudioBackendSnapshot(stream);
+    logger.info(`audio ${kind} stream cleanup starting`, { reason, before });
+
+    if (before.streamOpen !== false && before.streamRunning !== false) {
+      try {
+        stream.stop();
+      } catch (error) {
+        logger.error(`failed to stop audio ${kind} stream`, { reason, error: this.describeError(error), before });
+      }
+    } else {
+      logger.debug(`skip stopping audio ${kind} stream`, { reason, before });
+    }
+
+    const afterStop = this.getRtAudioBackendSnapshot(stream);
+    if (afterStop.streamOpen !== false) {
+      try {
+        stream.closeStream();
+      } catch (error) {
+        logger.error(`failed to close audio ${kind} stream`, { reason, error: this.describeError(error), afterStop });
+      }
+    } else {
+      logger.debug(`skip closing audio ${kind} stream; already closed`, { reason, afterStop });
+    }
+
+    logger.info(`audio ${kind} stream cleanup finished`, {
+      reason,
+      before,
+      afterStop,
+      afterClose: this.getRtAudioBackendSnapshot(stream),
+    });
+  }
+
+  private appendSnapshotError(existing: string | undefined, next: string): string {
+    return existing ? `${existing}; ${next}` : next;
+  }
+
+  private describeError(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  private shouldRunRtAudioConsumeDiagnostics(): boolean {
+    return process.env.TX5DR_RTAUDIO_CONSUME_DIAGNOSTICS === '1'
+      || process.env.TX5DR_FORCE_WINDOWS_AUDIO_WATCHDOG === '1';
   }
 
   setVoiceOutputObserver(observer: VoiceTxOutputObserver | null): void {
@@ -1179,11 +1430,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   async playAudio(audioData: Float32Array, targetSampleRate: number = 48000, options: PlayAudioOptions = {}): Promise<void> {
     const playStartTime = Date.now();
     const playbackKind = options.playbackKind ?? 'digital';
+    const playbackId = ++this.playbackSequence;
+    const diagnosticContext = options.diagnosticContext ?? {};
 
     // 检查是否使用 ICOM WLAN 输出（零重采样优化）
     if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
       const icomWlanAudioAdapter = this.icomWlanAudioAdapter;
       logger.info('playing audio via ICOM WLAN output (zero-resample)', {
+        playbackId,
+        ...diagnosticContext,
         samples: audioData.length,
         sampleRate: targetSampleRate,
         duration: `${(audioData.length / targetSampleRate).toFixed(2)}s`,
@@ -1314,6 +1569,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.shouldStopPlayback = false;
 
     logger.info('starting audio playback', {
+      playbackId,
+      ...diagnosticContext,
       startTime: new Date(playStartTime).toISOString(),
       samples: audioData.length,
       sourceSampleRate: targetSampleRate,
@@ -1346,6 +1603,19 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       // 保存当前播放的音频数据（仅用于调试/查询，不再原地修改）
       this.currentAudioData = playbackData;
       this.currentSampleRate = this.outputSampleRate;
+      const sourceStats = this.computeAudioStats(playbackData);
+      const sourceSegments = this.computeAudioSegmentStats(playbackData, this.outputSampleRate);
+      const sourceFingerprint = this.fingerprintAudio(playbackData);
+      logger.info('audio playback source analysis', {
+        playbackId,
+        ...diagnosticContext,
+        samples: playbackData.length,
+        sampleRate: this.outputSampleRate,
+        fingerprint: sourceFingerprint,
+        peak: Number(sourceStats.peak.toFixed(6)),
+        rms: Number(sourceStats.rms.toFixed(6)),
+        segments: sourceSegments,
+      });
       
       // 分块播放，使用 setInterval 高频轮询 + 追赶写入
       // 相比链式 await setTimeout，setInterval 在事件循环延迟后能立即追赶
@@ -1363,13 +1633,68 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       logger.debug(`chunked playback: ${totalChunks} chunks, chunkSize=${chunkSize}, prebuffer~${prebufferMs}ms, tick=${TICK_MS}ms, totalSamples=${totalSamples}, expectedDuration=${expectedDurationMs}ms`);
 
       const chunkStartTime = Date.now();
+      this.resetOutputConsumeDiagnostics();
+      const watchdogGeneration = this.outputWatchdogGeneration;
+      const consumeDiagnosticsEnabled = this.shouldRunRtAudioConsumeDiagnostics();
+      let submittedChunks = 0;
+      let submittedSamples = 0;
+      let writeFailCount = 0;
+      let postGainPeak = 0;
+      let postGainSumSquares = 0;
+      let postGainSampleCount = 0;
+      let watchdogTriggered = false;
+      let watchdogTimer: NodeJS.Timeout | null = null;
+      const watchdogStartedAt = Date.now();
+
+      const stopWatchdog = () => {
+        if (watchdogTimer) {
+          clearInterval(watchdogTimer);
+          watchdogTimer = null;
+        }
+      };
+
+      if (consumeDiagnosticsEnabled) {
+        watchdogTimer = setInterval(() => {
+          if (watchdogGeneration !== this.outputWatchdogGeneration) {
+            stopWatchdog();
+            return;
+          }
+          if (watchdogTriggered) {
+            return;
+          }
+
+          const consumedChunks = this.outputFramesConsumed;
+          const lastConsumeAt = this.outputLastFrameConsumedAt;
+          const msSinceConsume = Date.now() - (lastConsumeAt ?? watchdogStartedAt);
+          if (
+            submittedChunks >= RTAUDIO_TX_WATCHDOG_MIN_SUBMITTED_CHUNKS &&
+            submittedChunks > consumedChunks + 1 &&
+            msSinceConsume >= RTAUDIO_TX_CONSUME_WATCHDOG_MS
+          ) {
+            watchdogTriggered = true;
+            const error = new Error('Windows RtAudio output submitted audio but no frame consumption was observed');
+            logger.error('Windows RtAudio output consume watchdog fired', {
+              playbackId,
+              ...diagnosticContext,
+              submittedChunks,
+              submittedSamples,
+              consumedChunks,
+              msSinceConsume,
+              totalChunks,
+              backend: this.getOutputBackendSnapshot(),
+              recentRtAudioErrors: this.outputRtAudioErrors,
+            });
+            this.emit('error', error);
+            stopWatchdog();
+          }
+        }, Math.max(50, Math.floor(RTAUDIO_TX_CONSUME_WATCHDOG_MS / 3)));
+      }
 
       // setInterval-based playback loop wrapped in a Promise
       await new Promise<void>((resolve, reject) => {
         const hrStart = performance.now();
         let cursor = 0;
         let samplesWritten = 0;
-        let writeFailCount = 0;
         let lastProgressSec = -1;
 
         const writeChunk = (idx: number): boolean => {
@@ -1386,10 +1711,17 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             const bufferSamples = chunkSize;
             const buffer = Buffer.allocUnsafe(bufferSamples * 4);
             const monitorChunk = options.injectIntoMonitor ? new Float32Array(chunk.length) : null;
+            let chunkPeak = 0;
+            let chunkSumSquares = 0;
             for (let j = 0; j < chunk.length; j++) {
               const s = chunk[j] * gain;
               const clamped = s > 1 ? 1 : (s < -1 ? -1 : s);
               buffer.writeFloatLE(clamped, j * 4);
+              const abs = Math.abs(clamped);
+              if (abs > chunkPeak) {
+                chunkPeak = abs;
+              }
+              chunkSumSquares += clamped * clamped;
               if (monitorChunk) {
                 monitorChunk[j] = clamped;
               }
@@ -1403,11 +1735,27 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               this.emit('txMonitorAudioData', { samples: monitorChunk, sampleRate: this.outputSampleRate });
             }
             samplesWritten += chunk.length;
+            submittedChunks++;
+            submittedSamples += chunk.length;
+            if (chunkPeak > postGainPeak) {
+              postGainPeak = chunkPeak;
+            }
+            postGainSumSquares += chunkSumSquares;
+            postGainSampleCount += chunk.length;
             return true;
-          } catch {
+          } catch (error) {
             writeFailCount++;
             if (writeFailCount <= 3 || writeFailCount % 100 === 0) {
-              logger.debug(`writeChunk failed: chunk=${idx}/${totalChunks}, written=${samplesWritten}/${totalSamples}, fails=${writeFailCount}`);
+              logger.warn('audio output write failed', {
+                playbackId,
+                ...diagnosticContext,
+                chunk: idx,
+                totalChunks,
+                writtenSamples: samplesWritten,
+                totalSamples,
+                fails: writeFailCount,
+                error: this.describeError(error),
+              });
             }
             return false;
           }
@@ -1423,13 +1771,30 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               return;
             }
 
+            if (!this.rtAudioOutput) {
+              clearInterval(interval);
+              reject(new Error('audio output stream unavailable during playback'));
+              return;
+            }
+
             // Check completion
             if (cursor >= totalChunks) {
               clearInterval(interval);
               const chunkDuration = Date.now() - chunkStartTime;
               const playDuration = Date.now() - playStartTime;
               logger.debug(`chunked write complete, duration: ${chunkDuration}ms`);
-              logger.info(`playback complete, duration: ${playDuration}ms, expected: ${expectedDurationMs}ms, overhead: ${playDuration - expectedDurationMs}ms, writeFails: ${writeFailCount}`);
+              logger.info('audio playback submit complete', {
+                playbackId,
+                ...diagnosticContext,
+                durationMs: playDuration,
+                expectedDurationMs,
+                overheadMs: playDuration - expectedDurationMs,
+                submittedChunks,
+                submittedSamples,
+                totalChunks,
+                totalSamples,
+                writeFails: writeFailCount,
+              });
               resolve();
               return;
             }
@@ -1450,6 +1815,24 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             if (elapsedSec >= 2 && elapsedSec !== lastProgressSec && elapsedSec % 2 === 0) {
               lastProgressSec = elapsedSec;
               logger.debug(`playback progress: ${cursor}/${totalChunks} chunks, ${samplesWritten}/${totalSamples} samples, elapsed=${Math.round(elapsedMs)}ms, target=${targetSamples}, fails=${writeFailCount}`);
+              if (consumeDiagnosticsEnabled) {
+                logger.info('audio playback live diagnostics', {
+                  playbackId,
+                  ...diagnosticContext,
+                  elapsedMs: Math.round(elapsedMs),
+                  submittedChunks,
+                  consumedChunks: this.outputFramesConsumed,
+                  pendingChunks: submittedChunks - this.outputFramesConsumed,
+                  submittedSamples,
+                  targetSamples,
+                  postGainPeakSoFar: Number(postGainPeak.toFixed(6)),
+                  postGainRmsSoFar: postGainSampleCount > 0
+                    ? Number(Math.sqrt(postGainSumSquares / postGainSampleCount).toFixed(6))
+                    : 0,
+                  writeFails: writeFailCount,
+                  backend: this.getOutputBackendSnapshot(),
+                });
+              }
             }
           } catch (err) {
             clearInterval(interval);
@@ -1457,6 +1840,56 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           }
         }, TICK_MS);
       });
+
+      if (consumeDiagnosticsEnabled) {
+        const drainTimeoutMs = Math.max(RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS, prebufferMs + 500);
+        const drainDeadline = Date.now() + drainTimeoutMs;
+        while (
+          !this.shouldStopPlayback &&
+          this.outputFramesConsumed < submittedChunks &&
+          Date.now() < drainDeadline
+        ) {
+          await new Promise<void>(res => setTimeout(res, 10));
+        }
+        stopWatchdog();
+
+        const consumedChunks = this.outputFramesConsumed;
+        const consumeComplete = consumedChunks >= submittedChunks;
+        const postGainStats = {
+          peak: postGainPeak,
+          rms: postGainSampleCount > 0 ? Math.sqrt(postGainSumSquares / postGainSampleCount) : 0,
+        };
+        const consumeSummary = {
+          playbackId,
+          ...diagnosticContext,
+          submittedChunks,
+          submittedSamples,
+          consumedChunks,
+          consumeComplete,
+          firstConsumedAt: this.outputFirstFrameConsumedAt
+            ? new Date(this.outputFirstFrameConsumedAt).toISOString()
+            : null,
+          lastConsumedAt: this.outputLastFrameConsumedAt
+            ? new Date(this.outputLastFrameConsumedAt).toISOString()
+            : null,
+          sourcePeak: Number(sourceStats.peak.toFixed(6)),
+          sourceRms: Number(sourceStats.rms.toFixed(6)),
+          sourceFingerprint,
+          sourceSegments,
+          postGainPeak: Number(postGainStats.peak.toFixed(6)),
+          postGainRms: Number(postGainStats.rms.toFixed(6)),
+          backend: this.getOutputBackendSnapshot(),
+          recentRtAudioErrors: this.outputRtAudioErrors,
+        };
+
+        if (consumeComplete) {
+          logger.info('audio playback consume complete', consumeSummary);
+        } else {
+          logger.warn('RtAudio output did not consume all submitted playback chunks before timeout', consumeSummary);
+        }
+      } else {
+        stopWatchdog();
+      }
 
       } catch (error) {
         if (error instanceof Error && error.message.includes('playback interrupted')) {
@@ -1466,6 +1899,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
         throw error;
       } finally {
+        // Safe if the playback failed before the watchdog was created.
+        this.outputWatchdogGeneration++;
         // 清理播放状态
         if (this.currentPlaybackPromise === playbackPromise) {
           this.playing = false;

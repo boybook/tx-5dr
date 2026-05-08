@@ -11,6 +11,7 @@ import {
   type SlotInfo,
   type SlotPack,
   type DigitalRadioEngineEvents,
+  type DecodeWorkerTelemetrySnapshot,
   type EngineMode,
   type SquelchStatus,
   type RadioPowerResponse,
@@ -145,7 +146,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       },
     );
     this.audioStreamManager = new AudioStreamManager();
-    this.realDecodeQueue = new WSJTXDecodeWorkQueue(1);
+    this.realDecodeQueue = new WSJTXDecodeWorkQueue();
+    this.realDecodeQueue.on('decodeWorkerUnavailable', (status) => {
+      this.emit('decodeWorkerUnavailable' as any, status);
+    });
+    this.realDecodeQueue.on('decodeWorkerRecovered', (status) => {
+      this.emit('decodeWorkerRecovered' as any, status);
+    });
     this.realEncodeQueue = new WSJTXEncodeWorkQueue(1);
     this.slotPackManager = new SlotPackManager();
     const initialFrequency = ConfigManager.getInstance().getLastSelectedFrequency();
@@ -494,6 +501,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.audioStreamManager;
   }
 
+  public getDecodeWorkerTelemetrySnapshot(): DecodeWorkerTelemetrySnapshot | undefined {
+    return this.realDecodeQueue.getDecodeWorkerTelemetrySnapshot();
+  }
+
   public getAudioSidecar(): AudioSidecarController {
     return this.audioSidecar;
   }
@@ -592,7 +603,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.realDecodeQueue,
       this.audioStreamManager.getAudioProvider(),
       this._operatorManager,
-      () => ConfigManager.getInstance().getFT8Config().decodeWhileTransmitting ?? false
+      () => ConfigManager.getInstance().getFT8Config().decodeWhileTransmitting ?? false,
+      (slotInfo, windowIdx) => this._operatorManager.getDecodeApContext(slotInfo, windowIdx)
     );
 
     await this.spectrumScheduler.initialize(
@@ -658,6 +670,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       audioStreamManager: this.audioStreamManager,
       radioManager: this.radioManager,
       spectrumScheduler: this.spectrumScheduler,
+      decodeQueue: this.realDecodeQueue,
       operatorManager: this._operatorManager,
       audioMixer: this.audioMixer,
       clockSource: this.clockSource,

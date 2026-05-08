@@ -112,6 +112,73 @@ test('SlotScheduler tags FT4 decode requests with FT4 mode', async () => {
   assert.deepStrictEqual(decodeModes, ['FT4']);
 });
 
+test('SlotScheduler attaches AP context only when provider returns one', async () => {
+  class FakeSlotClock extends EventEmitter<{ subWindow: (slotInfo: SlotInfo, windowIdx: number) => void }> {
+    getMode(): ModeDescriptor {
+      return {
+        name: 'FT8',
+        slotMs: 15000,
+        toleranceMs: 50,
+        windowTiming: [0, 0],
+        transmitTiming: 500,
+        encodeAdvance: 0,
+      };
+    }
+  }
+
+  const slotClock = new FakeSlotClock();
+  const decodeRequests: any[] = [];
+  const scheduler = new SlotScheduler(
+    slotClock as unknown as any,
+    {
+      push: async (request) => {
+        decodeRequests.push(request);
+      },
+      size: () => 0,
+    },
+    {
+      getBuffer: async () => new ArrayBuffer(32),
+      getSampleRate: () => 12000,
+    },
+    undefined,
+    undefined,
+    (_slotInfo, windowIdx) => windowIdx === 1 ? {
+      operatorId: 'op1',
+      myCall: 'BG4IAJ',
+      dxCall: 'JA1AAA',
+      frequencyHz: 1500,
+      qsoProgress: 4,
+      currentSlot: 'TX4',
+    } : undefined
+  );
+
+  const slotInfo: SlotInfo = {
+    id: 'FT8-1-15000',
+    startMs: 15000,
+    phaseMs: 0,
+    driftMs: 0,
+    cycleNumber: 1,
+    utcSeconds: 15,
+    mode: 'FT8',
+  };
+
+  scheduler.start();
+  slotClock.emit('subWindow', slotInfo, 0);
+  slotClock.emit('subWindow', slotInfo, 1);
+  await wait(10);
+  scheduler.stop();
+
+  assert.equal(decodeRequests[0].apContext, undefined);
+  assert.deepStrictEqual(decodeRequests[1].apContext, {
+    operatorId: 'op1',
+    myCall: 'BG4IAJ',
+    dxCall: 'JA1AAA',
+    frequencyHz: 1500,
+    qsoProgress: 4,
+    currentSlot: 'TX4',
+  });
+});
+
 test('SlotClock stop clears pending sub-events for the active slot', async () => {
   const mode: ModeDescriptor = {
     name: 'TEST_STOP',

@@ -50,6 +50,7 @@ export class TransmissionPipeline {
   private currentSlotExpectedEncodes: number = 0;
   private currentSlotCompletedEncodes: number = 0;
   private currentSlotId: string = '';
+  private txSequence = 0;
 
   constructor(private deps: TransmissionPipelineDeps) {}
 
@@ -211,16 +212,20 @@ export class TransmissionPipeline {
         audioMixer.markPlaybackStop();
 
         const remixedAudio = await audioMixer.remixAfterUpdate(elapsedTimeMs);
-        if (remixedAudio) {
-          this.deps.engineEmitter.emit('pttStatusChanged', {
-            isTransmitting: true,
-            operatorIds: remixedAudio.operatorIds,
-          });
-          this.deps.operatorManager.updateActiveTransmissionOperators(remixedAudio.operatorIds);
-          audioMixer.markPlaybackStart();
-          await audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate);
-          this.startPTTPoll();
-        } else {
+	        if (remixedAudio) {
+	          const txId = this.nextTxId('digital-remix-remove');
+	          this.deps.engineEmitter.emit('pttStatusChanged', {
+	            isTransmitting: true,
+	            operatorIds: remixedAudio.operatorIds,
+	          });
+	          this.deps.operatorManager.updateActiveTransmissionOperators(remixedAudio.operatorIds);
+	          audioMixer.markPlaybackStart();
+	          await audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate, {
+	            playbackKind: 'digital',
+	            diagnosticContext: { txId, operatorIds: remixedAudio.operatorIds, reason: 'operator-removed-remix' },
+	          });
+	          this.startPTTPoll();
+	        } else {
           logger.info('remix returned null after operator removal, stopping PTT');
           await this.forceStopPTT();
         }
@@ -236,15 +241,25 @@ export class TransmissionPipeline {
 
   // ─── 内部方法 ────────────────────────────────────
 
-  private async startPTT(operatorIds: string[]): Promise<void> {
+  private nextTxId(reason: string): string {
+    this.txSequence += 1;
+    return `${reason}-${Date.now()}-${this.txSequence}`;
+  }
+
+  private async startPTT(operatorIds: string[], txId?: string): Promise<void> {
     if (this._isPTTActive) {
-      logger.debug('PTT already active, skipping');
+      logger.info('PTT already active, skipping start request', { txId, operatorIds });
       return;
     }
 
     if (this.deps.radioManager.isConnected()) {
       try {
         const pttStartTime = Date.now();
+        logger.info('PTT start requested', {
+          txId,
+          operatorIds,
+          requestedAt: new Date(pttStartTime).toISOString(),
+        });
         await this.deps.radioManager.setPTT(true);
         const durationMs = Date.now() - pttStartTime;
 
@@ -260,13 +275,13 @@ export class TransmissionPipeline {
 
         this.deps.operatorManager.updateActiveTransmissionOperators(operatorIds);
 
-        logger.debug('PTT started', { durationMs });
+        logger.info('PTT started', { txId, operatorIds, durationMs });
       } catch (error) {
-        logger.error(`PTT start failed: ${error}`);
+        logger.error(`PTT start failed: ${error}`, { txId, operatorIds });
         throw error;
       }
     } else {
-      logger.debug('radio not connected, skipping PTT start');
+      logger.warn('radio not connected, skipping PTT start', { txId, operatorIds });
     }
   }
 
@@ -424,21 +439,25 @@ export class TransmissionPipeline {
           this.deps.audioMixer.markPlaybackStop();
 
           const remixedAudio = await this.deps.audioMixer.remixAfterUpdate(elapsedTimeMs);
-          if (remixedAudio) {
-            logger.debug('remix complete', {
-              operators: remixedAudio.operatorIds,
-              duration: remixedAudio.duration
+	          if (remixedAudio) {
+	            const txId = this.nextTxId('digital-remix-update');
+	            logger.debug('remix complete', {
+	              operators: remixedAudio.operatorIds,
+	              duration: remixedAudio.duration
             });
             // 重混音后操作者列表可能变化，更新前端
             this.deps.engineEmitter.emit('pttStatusChanged', {
               isTransmitting: true,
               operatorIds: remixedAudio.operatorIds
-            });
-            this.deps.operatorManager.updateActiveTransmissionOperators(remixedAudio.operatorIds);
-            this.deps.audioMixer.markPlaybackStart();
-            await this.deps.audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate);
-            this.startPTTPoll();
-          }
+	            });
+	            this.deps.operatorManager.updateActiveTransmissionOperators(remixedAudio.operatorIds);
+	            this.deps.audioMixer.markPlaybackStart();
+	            await this.deps.audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate, {
+	              playbackKind: 'digital',
+	              diagnosticContext: { txId, operatorIds: remixedAudio.operatorIds, reason: 'encode-update-remix' },
+	            });
+	            this.startPTTPoll();
+	          }
         } catch (remixError) {
           logger.error(`remix failed: ${remixError}`);
         } finally {
@@ -467,7 +486,9 @@ export class TransmissionPipeline {
 
   private async handleMixedAudioReady(mixedAudio: MixedAudio): Promise<void> {
     try {
+      const txId = this.nextTxId('digital-tx');
       logger.debug('mixed audio ready', {
+        txId,
         operators: mixedAudio.operatorIds,
         duration: mixedAudio.duration,
         sampleRate: mixedAudio.sampleRate
@@ -479,22 +500,39 @@ export class TransmissionPipeline {
 
       await this.deps.onBeforeStartPTT?.();
 
-      logger.debug('starting PTT and audio playback in parallel');
+      const startSequenceAt = Date.now();
+      logger.info('starting PTT and audio playback in parallel', {
+        txId,
+        operatorIds: mixedAudio.operatorIds,
+        mixedSamples: mixedAudio.audioData.length,
+        sampleRate: mixedAudio.sampleRate,
+        durationMs: Math.round(mixedAudio.duration * 1000),
+        startSequenceAt: new Date(startSequenceAt).toISOString(),
+      });
 
       for (const operatorId of mixedAudio.operatorIds) {
         this.deps.transmissionTracker.recordAudioPlaybackStart(operatorId);
       }
 
-      const pttPromise = this.startPTT(mixedAudio.operatorIds).then(() => {
+      const pttPromise = this.startPTT(mixedAudio.operatorIds, txId).then(() => {
         for (const operatorId of mixedAudio.operatorIds) {
           this.deps.transmissionTracker.recordPTTStart(operatorId);
         }
       });
 
       this.deps.audioMixer.markPlaybackStart();
-      const audioPromise = this.deps.audioStreamManager.playAudio(mixedAudio.audioData, mixedAudio.sampleRate);
+      logger.info('audio playback request issued', {
+        txId,
+        operatorIds: mixedAudio.operatorIds,
+        msAfterStartSequence: Date.now() - startSequenceAt,
+      });
+      const audioPromise = this.deps.audioStreamManager.playAudio(mixedAudio.audioData, mixedAudio.sampleRate, {
+        playbackKind: 'digital',
+        diagnosticContext: { txId, operatorIds: mixedAudio.operatorIds },
+      });
 
       logger.debug('PTT timing', {
+        txId,
         audioMs: Math.round(mixedAudio.duration * 1000),
         pollIntervalMs: TransmissionPipeline.PTT_POLL_INTERVAL_MS,
         holdMs: TransmissionPipeline.PTT_HOLD_AFTER_AUDIO_MS
@@ -504,6 +542,12 @@ export class TransmissionPipeline {
       await Promise.all([pttPromise, audioPromise]);
 
       this.deps.audioMixer.markPlaybackStop();
+      logger.info('audio playback and PTT start promises completed', {
+        txId,
+        operatorIds: mixedAudio.operatorIds,
+        elapsedMs: Date.now() - startSequenceAt,
+        pttActive: this._isPTTActive,
+      });
 
       if (this.shouldReleasePTTImmediatelyAfterAudio()) {
         logger.debug('ICOM WLAN audio complete, stopping PTT without post-audio hold');

@@ -47,6 +47,7 @@ export class AudioSidecarController {
   private pendingAttempt = 0;
   private audioStreamErrorHandler: ((error: Error) => void) | null = null;
   private isStopping = false;
+  private isHandlingRuntimeLoss = false;
 
   constructor(private deps: AudioSidecarDeps) {}
 
@@ -233,6 +234,10 @@ export class AudioSidecarController {
     if (this.audioStreamErrorHandler) return;
     const handler = (error: Error) => {
       if (this.status !== AudioSidecarStatus.CONNECTED) return;
+      if (this.isHandlingRuntimeLoss) {
+        logger.debug('runtime audio loss already being handled, ignoring duplicate error', { message: error.message });
+        return;
+      }
       logger.warn('audio stream error while connected, triggering re-retry', { message: error.message });
       this.lastError = this.summarizeError(error);
       void this.handleRuntimeLoss();
@@ -249,11 +254,16 @@ export class AudioSidecarController {
 
   private async handleRuntimeLoss(): Promise<void> {
     if (this.isStopping) return;
-    await this.teardownAudio();
-    if (this.isStopping) return;
+    this.isHandlingRuntimeLoss = true;
     this.retryAttempt = 1;
     this.setStatus(AudioSidecarStatus.RETRYING);
-    this.scheduleRetry(this.peekNextDelay(0));
+    try {
+      await this.teardownAudio();
+      if (this.isStopping) return;
+      this.scheduleRetry(this.peekNextDelay(0));
+    } finally {
+      this.isHandlingRuntimeLoss = false;
+    }
   }
 
   private isUnrecoverable(error: unknown): boolean {

@@ -16,6 +16,8 @@ import {
   type QSORecord,
   type SlotPack,
   type FrameMessage,
+  type DecodeApContext,
+  type SlotInfo,
   MODES,
 } from '@tx5dr/contracts';
 import { CycleUtils, getBandFromFrequency } from '@tx5dr/core';
@@ -31,6 +33,22 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('RadioOperatorManager');
 
 const DEFAULT_MAX_SAME_TRANSMISSION_COUNT = 20;
+const AP_DECODE_QSO_PROGRESS: Record<string, number | undefined> = {
+  TX3: 3,
+  TX4: 4,
+};
+
+function normalizeApCallsign(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toUpperCase();
+  if (!normalized || normalized.length < 3) return undefined;
+  return normalized;
+}
+
+function normalizeApGrid(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toUpperCase();
+  if (!normalized || normalized.length < 4) return undefined;
+  return normalized;
+}
 
 interface SameTransmissionGuardState {
   canonicalMessage: string;
@@ -1306,6 +1324,70 @@ export class RadioOperatorManager {
     }
 
     return false;
+  }
+
+  /**
+   * Select a single conservative AP decode context for the slot being decoded.
+   * Only TX3/TX4 active QSO states are enabled because other states can trigger
+   * wide-band AP passes in WSJT-X and undo the decode performance win.
+   */
+  getDecodeApContext(slotInfo: SlotInfo, _windowIdx?: number): DecodeApContext | undefined {
+    if (!this.isRunning || this.getCurrentMode().name !== 'FT8') {
+      return undefined;
+    }
+
+    const currentMode = this.getCurrentMode();
+    const candidates: DecodeApContext[] = [];
+
+    for (const [operatorId, operator] of this.operators) {
+      if (!operator.isTransmitting) {
+        continue;
+      }
+
+      const isTransmitCycle = CycleUtils.isOperatorTransmitCycleFromMs(
+        operator.getTransmitCycles(),
+        slotInfo.startMs,
+        currentMode.slotMs,
+      );
+      if (isTransmitCycle) {
+        continue;
+      }
+
+      const runtimeState = this._pluginManager?.getOperatorRuntimeStatus(operatorId);
+      const currentSlot = runtimeState?.currentSlot ?? 'TX6';
+      const qsoProgress = AP_DECODE_QSO_PROGRESS[currentSlot];
+      if (!qsoProgress) {
+        continue;
+      }
+
+      const myCall = normalizeApCallsign(operator.config.myCallsign);
+      const dxCall = normalizeApCallsign(String(runtimeState?.context?.targetCallsign ?? ''));
+      if (!myCall || !dxCall) {
+        continue;
+      }
+
+      const runtimeGrid = normalizeApGrid(String(runtimeState?.context?.targetGrid ?? ''));
+      const trackerGrid = this.callsignTracker ? normalizeApGrid(this.callsignTracker.getGrid(dxCall) ?? '') : undefined;
+      const myGrid = normalizeApGrid(operator.config.myGrid ?? '');
+
+      candidates.push({
+        operatorId,
+        myCall,
+        ...(myGrid ? { myGrid } : {}),
+        dxCall,
+        ...(runtimeGrid || trackerGrid ? { dxGrid: runtimeGrid ?? trackerGrid } : {}),
+        frequencyHz: Number(operator.config.frequency || 0),
+        qsoProgress,
+        currentSlot,
+      });
+    }
+
+    candidates.sort((a, b) =>
+      b.qsoProgress - a.qsoProgress
+      || a.operatorId.localeCompare(b.operatorId)
+    );
+
+    return candidates[0];
   }
 
   /**

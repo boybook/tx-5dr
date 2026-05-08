@@ -2,6 +2,7 @@ import { EventEmitter } from 'eventemitter3';
 import { WSJTXLib, WSJTXMode } from 'wsjtx-lib';
 import { resampleAudioProfessional } from '../utils/audioUtils.js';
 import { createLogger } from '../utils/logger.js';
+import { WSJTXNativeGate } from './WSJTXNativeGate.js';
 
 const logger = createLogger('EncodeWorkQueue');
 
@@ -38,32 +39,58 @@ export interface EncodeWorkQueueEvents {
  * 使用 wsjtx-lib 进行FT8消息编码
  */
 export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
-  private queueSize = 0;
-  private maxConcurrency: number;
-  private lib: WSJTXLib;
+  private readonly maxConcurrency: number;
+  private readonly lib: WSJTXLib;
+  private activeCount = 0;
+  private readonly pending: Array<{
+    request: EncodeRequest;
+    resolve: () => void;
+  }> = [];
   
   constructor(maxConcurrency: number = 2) {
     super();
-    this.maxConcurrency = maxConcurrency;
+    this.maxConcurrency = Number.isFinite(maxConcurrency)
+      ? Math.max(1, Math.floor(maxConcurrency))
+      : 1;
     this.lib = new WSJTXLib({ maxThreads: 4 });
-    logger.info('encode work queue initialized', { maxConcurrency });
+    logger.info('encode work queue initialized', { maxConcurrency: this.maxConcurrency });
   }
   
   /**
    * 推送编码请求到队列
    */
   async push(request: EncodeRequest): Promise<void> {
-    this.queueSize++;
-    
-    logger.debug('encode request received', {
-      operatorId: request.operatorId,
-      message: request.message,
-      frequency: request.frequency,
-      mode: request.mode || 'FT8',
-      timeSinceSlotStartMs: request.timeSinceSlotStartMs,
-      queueSize: this.queueSize,
+    return new Promise<void>((resolve) => {
+      this.pending.push({ request, resolve });
+      logger.debug('encode request queued', {
+        operatorId: request.operatorId,
+        message: request.message,
+        frequency: request.frequency,
+        mode: request.mode || 'FT8',
+        timeSinceSlotStartMs: request.timeSinceSlotStartMs,
+        queueSize: this.size(),
+      });
+      this.processQueue();
     });
-    
+  }
+
+  private processQueue(): void {
+    while (this.activeCount < this.maxConcurrency && this.pending.length > 0) {
+      const item = this.pending.shift()!;
+      this.activeCount++;
+      void this.processItem(item.request)
+        .finally(() => {
+          this.activeCount--;
+          item.resolve();
+          if (this.size() === 0) {
+            this.emit('queueEmpty');
+          }
+          this.processQueue();
+        });
+    }
+  }
+
+  private async processItem(request: EncodeRequest): Promise<void> {
     try {
       const startTime = performance.now();
 
@@ -71,10 +98,12 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
       const mode = request.mode === 'FT4' ? WSJTXMode.FT4 : WSJTXMode.FT8;
 
       // 调用原生库编码
-      const { audioData: audioFloat32, messageSent } = await this.lib.encode(
-        mode,
-        request.message,
-        request.frequency
+      const { audioData: audioFloat32, messageSent } = await WSJTXNativeGate.run(
+        () => this.lib.encode(
+          mode,
+          request.message,
+          request.frequency
+        )
       );
 
       const normalizedRequestedMessage = normalizeMessageForEncodeCheck(request.message);
@@ -150,14 +179,10 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
       };
 
       this.emit('encodeComplete', encodeResult);
-      if (this.queueSize === 0) this.emit('queueEmpty');
 
     } catch (error) {
       logger.error('encode failed', { operatorId: request.operatorId, error });
       this.emit('encodeError', error as Error, request);
-      if (this.queueSize === 0) this.emit('queueEmpty');
-    } finally {
-      if (this.queueSize > 0) this.queueSize--;
     }
   }
   
@@ -165,7 +190,7 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
    * 获取队列大小
    */
   size(): number {
-    return this.queueSize;
+    return this.pending.length + this.activeCount;
   }
   
   /**
@@ -173,10 +198,10 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
    */
   getStatus() {
     return {
-      queueSize: this.queueSize,
+      queueSize: this.size(),
       maxConcurrency: this.maxConcurrency,
-      activeThreads: 0,
-      utilization: 0
+      activeThreads: this.activeCount,
+      utilization: this.activeCount / this.maxConcurrency,
     };
   }
   
@@ -184,6 +209,9 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
    * 销毁工作池
    */
   async destroy(): Promise<void> {
-    logger.info('encode work queue destroyed (main thread, no worker pool)');
+    this.pending.splice(0).forEach((item) => item.resolve());
+    logger.info('encode work queue destroyed (main thread)', {
+      activeCount: this.activeCount,
+    });
   }
 }

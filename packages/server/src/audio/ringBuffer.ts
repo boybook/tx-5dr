@@ -75,7 +75,8 @@ export class RingBuffer {
       return;
     }
 
-    logger.warn('Buffer overflow', {
+    logger.warn('RX/input ring buffer overflow', {
+      bufferKind: 'rx-input',
       droppedSamples,
       suppressedDroppedSamples: this.suppressedOverflowSamples - droppedSamples,
       availableSamples: this.getAvailableSamples(),
