@@ -18,7 +18,6 @@
   /* TX 行背景色 - 亮色模式 */
   --ft8-tx-row-bg: rgba(243, 18, 96, 0.15);        /* TX发射行背景（danger色） */
   --ft8-tx-group-bg: rgba(243, 18, 96, 0.08);      /* TX分组背景（danger色低透明度） */
-  --ft8-tx-emphasis-text: hsl(339 96% 48%);        /* TX 行内强调文本（亮色模式：高饱和，轻微压暗） */
 }
 
 @supports (height: 100dvh) {
@@ -43,7 +42,6 @@
   /* TX 行背景色 - 暗色模式 */
   --ft8-tx-row-bg: rgba(243, 18, 96, 0.25);        /* TX发射行背景（danger色） */
   --ft8-tx-group-bg: rgba(243, 18, 96, 0.12);      /* TX分组背景（danger色低透明度） */
-  --ft8-tx-emphasis-text: hsl(339 100% 64%);       /* TX 行内强调文本（暗色模式：高饱和，轻微提亮） */
 }
 
 html, body {

@@ -191,11 +191,6 @@ const MessageRow = React.memo<MessageRowProps>(({
   const isWorkedCallsign = showLogbookAnalysisVisuals && message.logbookAnalysis?.isNewCallsign === false;
   const isTarget = isTargetRelated(message, targetCallsign);
   const showChips = showLogbookAnalysisVisuals && message.db !== 'TX' && message.logbookAnalysis && isSpecialMessageType(message.message);
-  const messageTextStyle = useMemo(() => (
-    message.db === 'TX' && hasMyCallsign
-      ? { color: 'var(--ft8-tx-emphasis-text)' }
-      : undefined
-  ), [hasMyCallsign, message.db]);
 
   // Hover style
   const hoverStyle = useMemo(() => {
@@ -349,7 +344,6 @@ const MessageRow = React.memo<MessageRowProps>(({
           )}
           <span
             className={`${hasMyCallsign ? 'font-semibold' : ''} ${message.db !== 'TX' && hasMyCallsign ? 'text-danger' : ''} ${isWorkedCallsign ? 'line-through opacity-70' : ''}`}
-            style={messageTextStyle}
           >
             {message.message}
           </span>

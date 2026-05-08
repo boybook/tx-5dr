@@ -41,13 +41,23 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
   const timeline = useMyRelatedTimeline();
   const groups = timeline.groups;
 
-  const myCallsigns = useMemo(
+  const activeOperatorCallsigns = useMemo(
     () => operators
       .filter(operator => operator.isActive)
       .map(operator => operator.context?.myCall || '')
       .filter(callsign => callsign.trim() !== ''),
     [operators],
   );
+
+  const selectedOperatorCallsigns = useMemo(() => {
+    if (!currentOperatorId) {
+      return [];
+    }
+
+    const operator = operators.find(item => item.id === currentOperatorId);
+    const callsign = operator?.context?.myCall?.trim() || '';
+    return callsign ? [callsign] : [];
+  }, [currentOperatorId, operators]);
 
   const targetCallsign = useMemo(() => {
     if (!currentOperatorId) {
@@ -72,7 +82,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
 
   const handleRowDoubleClick = (message: FrameDisplayMessage, group: FrameGroup) => {
     const callsign = message.logbookAnalysis?.callsign;
-    if (!currentOperatorId || !callsign || myCallsigns.includes(callsign)) {
+    if (!currentOperatorId || !callsign || activeOperatorCallsigns.includes(callsign)) {
       return;
     }
 
@@ -101,7 +111,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
         <FramesTable
           groups={groups}
           className="h-full"
-          myCallsigns={myCallsigns}
+          myCallsigns={selectedOperatorCallsigns}
           targetCallsign={targetCallsign}
           showLogbookAnalysisVisuals={false}
           onRowDoubleClick={handleRowDoubleClick}
