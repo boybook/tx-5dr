@@ -33,6 +33,11 @@ import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
 import { OperatorScopedSlotPackProjectionService } from './OperatorScopedSlotPackProjectionService.js';
 
 const logger = createLogger('WSServer');
+const DECODE_WORKER_UNAVAILABLE_USER_MESSAGE_KEY = 'errors:code.DECODE_WORKER_UNAVAILABLE.userMessage';
+const DECODE_WORKER_UNAVAILABLE_SUGGESTION_KEYS = [
+  'errors:code.DECODE_WORKER_UNAVAILABLE.suggestions.0',
+  'errors:code.DECODE_WORKER_UNAVAILABLE.suggestions.1',
+];
 
 /**
  * WebSocket连接包装器
@@ -510,12 +515,10 @@ export class WSServer extends WSMessageHandler {
       this.broadcast(WSMessageType.ERROR, {
         message: status?.lastFailure || 'Decode worker is unavailable',
         userMessage: 'FT8/FT4 decoding is temporarily unavailable because the decode worker failed to start. Other radio functions can continue running.',
+        userMessageKey: DECODE_WORKER_UNAVAILABLE_USER_MESSAGE_KEY,
         code: 'DECODE_WORKER_UNAVAILABLE',
         severity: 'warning',
-        suggestions: [
-          'Open Server Health to inspect Decode Workers status.',
-          'Check server logs for the native module or worker startup error.',
-        ],
+        suggestions: DECODE_WORKER_UNAVAILABLE_SUGGESTION_KEYS,
         timestamp: new Date().toISOString(),
         context: status,
       });
@@ -1807,12 +1810,10 @@ export class WSServer extends WSMessageHandler {
     connection.send(WSMessageType.ERROR, {
       message: decodeWorkers.summary.lastError || 'Decode worker is unavailable',
       userMessage: 'FT8/FT4 decoding is temporarily unavailable because the decode worker failed to start. Other radio functions can continue running.',
+      userMessageKey: DECODE_WORKER_UNAVAILABLE_USER_MESSAGE_KEY,
       code: 'DECODE_WORKER_UNAVAILABLE',
       severity: 'warning',
-      suggestions: [
-        'Open Server Health to inspect Decode Workers status.',
-        'Check server logs for the native module or worker startup error.',
-      ],
+      suggestions: DECODE_WORKER_UNAVAILABLE_SUGGESTION_KEYS,
       timestamp: new Date().toISOString(),
       context: decodeWorkers.summary,
     });
