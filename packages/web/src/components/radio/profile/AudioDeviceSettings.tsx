@@ -310,19 +310,20 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
         ? 'text-primary-400'
         : 'text-default-400';
     const statusText = t('audio.deviceUnavailableShort');
+    const isUnavailable = tone === 'warning';
 
     return (
       <SelectItem
         key={makeAudioDeviceSelectKey(direction, selectedName)}
-        textValue={resolution?.status === 'virtual-selected'
+        textValue={resolution?.status === 'virtual-selected' || !isUnavailable
           ? selectedName
           : `${selectedName} (${statusText})`}
-        className={tone === 'warning' ? 'text-warning' : undefined}
+        className={isUnavailable ? 'text-warning' : undefined}
       >
         <div className="flex flex-col">
           <span className={labelClass}>
             {selectedName}
-            {tone === 'warning' ? ` (${statusText})` : ''}
+            {isUnavailable ? ` (${statusText})` : ''}
           </span>
           {device && (
             <span className="text-xs text-default-400">

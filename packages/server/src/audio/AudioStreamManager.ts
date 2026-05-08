@@ -1,14 +1,4 @@
-import audify from 'audify';
-const { RtAudio } = audify;
-type RtAudioInstance = InstanceType<typeof RtAudio>;
-
-// RtAudioFormat/RtAudioApi 是 const enum，isolatedModules 下无法直接导入，使用数值常量
-const RTAUDIO_FLOAT32 = 0x10;
-const RTAUDIO_API_UNSPECIFIED = 0;
-const RTAUDIO_API_WINDOWS_WASAPI = 7;
-const RTAUDIO_STREAM_FLAGS_NONE = 0 as unknown as Parameters<RtAudioInstance['openStream']>[8];
-const RTAUDIO_ERROR_WARNING = 0;
-const RTAUDIO_ERROR_DEBUG_WARNING = 1;
+import { createRtAudioInstance, type RtAudioInstance } from './rtaudio-api.js';
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 import { EventEmitter } from 'eventemitter3';
 import { clearResamplerCache, resampleAudioProfessional } from '../utils/audioUtils.js';
@@ -23,6 +13,11 @@ import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/
 import { VoiceTxOutputPipeline, type VoiceTxOutputSinkState } from './VoiceTxOutputPipeline.js';
 
 const logger = createLogger('AudioStreamManager');
+// RtAudioFormat 是 const enum，isolatedModules 下无法直接导入，使用数值常量
+const RTAUDIO_FLOAT32 = 0x10;
+const RTAUDIO_STREAM_FLAGS_NONE = 0 as unknown as Parameters<RtAudioInstance['openStream']>[8];
+const RTAUDIO_ERROR_WARNING = 0;
+const RTAUDIO_ERROR_DEBUG_WARNING = 1;
 const INTERNAL_SAMPLE_RATE = 12000;
 const ICOM_WLAN_TX_CHUNK_SIZE = 1200;
 const ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS = 150;
@@ -658,8 +653,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             try {
             logger.info('creating audio input stream (Audify/RtAudio)');
 
-            const inputApi = process.platform === 'win32' ? RTAUDIO_API_WINDOWS_WASAPI : RTAUDIO_API_UNSPECIFIED;
-            this.rtAudioInput = new RtAudio(inputApi);
+            this.rtAudioInput = createRtAudioInstance({ logger, purpose: 'audio-input-stream' });
             let resolvedDevice = await this.resolveCurrentStreamDevice({
               rtAudio: this.rtAudioInput,
               direction: 'input',
@@ -681,7 +675,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
                 previousDeviceId: resolvedDevice.actualDeviceId,
               });
 
-              this.rtAudioInput = new RtAudio(inputApi);
+              this.rtAudioInput = createRtAudioInstance({ logger, purpose: 'audio-input-stream-rebind' });
               resolvedDevice = await this.resolveCurrentStreamDevice({
                 rtAudio: this.rtAudioInput,
                 direction: 'input',
@@ -736,8 +730,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             try {
             logger.info('creating audio output stream (Audify/RtAudio)');
 
-            const outputApi = process.platform === 'win32' ? RTAUDIO_API_WINDOWS_WASAPI : RTAUDIO_API_UNSPECIFIED;
-            this.rtAudioOutput = new RtAudio(outputApi);
+            this.rtAudioOutput = createRtAudioInstance({ logger, purpose: 'audio-output-stream' });
             let resolvedDevice = await this.resolveCurrentStreamDevice({
               rtAudio: this.rtAudioOutput,
               direction: 'output',
@@ -758,7 +751,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
                 previousDeviceId: resolvedDevice.actualDeviceId,
               });
 
-              this.rtAudioOutput = new RtAudio(outputApi);
+              this.rtAudioOutput = createRtAudioInstance({ logger, purpose: 'audio-output-stream-rebind' });
               resolvedDevice = await this.resolveCurrentStreamDevice({
                 rtAudio: this.rtAudioOutput,
                 direction: 'output',

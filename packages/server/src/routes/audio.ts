@@ -5,12 +5,91 @@ import {
   AudioDeviceSettingsResponseSchema,
   AudioSettingsResolveRequestSchema,
   AudioSettingsResolveResponseSchema,
+  type AudioDevice,
+  type AudioDeviceResolutionSet,
+  type AudioDeviceSettings,
 } from '@tx5dr/contracts';
 import { AudioDeviceManager } from '../audio/audio-device-manager.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
+
+type AudioStreamStatus = ReturnType<ReturnType<ReturnType<typeof DigitalRadioEngine.getInstance>['getAudioStreamManager']>['getStatus']>;
+
+function resolveSettingNumber(
+  settings: AudioDeviceSettings,
+  directionalKey: 'inputSampleRate' | 'outputSampleRate',
+  fallback: number,
+): number {
+  return settings[directionalKey] ?? settings.sampleRate ?? fallback;
+}
+
+function createActiveDevice(params: {
+  direction: 'input' | 'output';
+  deviceName: string;
+  deviceId: string | null;
+  sampleRate: number;
+  channels: number;
+}): AudioDevice {
+  const { direction, deviceName, deviceId, sampleRate, channels } = params;
+  return {
+    id: deviceId || `${direction}-active`,
+    name: deviceName,
+    isDefault: false,
+    channels: Math.max(1, channels || 1),
+    sampleRate,
+    sampleRates: [sampleRate],
+    type: direction,
+  };
+}
+
+function keepActiveDeviceSelected(params: {
+  resolution: AudioDeviceResolutionSet;
+  requestedSettings: AudioDeviceSettings;
+  currentSettings: AudioDeviceSettings;
+  streamStatus: AudioStreamStatus;
+  engineRunning: boolean;
+}): AudioDeviceResolutionSet {
+  const { resolution, requestedSettings, currentSettings, streamStatus, engineRunning } = params;
+  if (!engineRunning) return resolution;
+
+  const next: AudioDeviceResolutionSet = { ...resolution };
+
+  const applyDirection = (direction: 'input' | 'output') => {
+    const key = direction === 'input' ? 'inputDeviceName' : 'outputDeviceName';
+    const sampleRateKey = direction === 'input' ? 'inputSampleRate' : 'outputSampleRate';
+    const isActive = direction === 'input' ? streamStatus.isStreaming : streamStatus.isOutputting;
+    const activeDeviceId = direction === 'input' ? streamStatus.inputDeviceId : streamStatus.outputDeviceId;
+    const activeSampleRate = direction === 'input' ? streamStatus.inputSampleRate : streamStatus.outputSampleRate;
+    const configuredDeviceName = requestedSettings[key] ?? null;
+
+    if (!configuredDeviceName || !isActive) return;
+    if (currentSettings[key] !== configuredDeviceName) return;
+    if (next[direction].status !== 'missing') return;
+
+    const sampleRate = resolveSettingNumber(requestedSettings, sampleRateKey, activeSampleRate || 48000);
+    const activeDevice = createActiveDevice({
+      direction,
+      deviceName: configuredDeviceName,
+      deviceId: activeDeviceId,
+      sampleRate,
+      channels: streamStatus.channels,
+    });
+
+    next[direction] = {
+      configuredDeviceName,
+      configuredDevice: activeDevice,
+      effectiveDevice: activeDevice,
+      status: 'selected',
+      reason: 'active-device-not-enumerated',
+    };
+  };
+
+  applyDirection('input');
+  applyDirection('output');
+  return next;
+}
 
 /**
  * 音频设备管理API路由
@@ -38,7 +117,13 @@ export async function audioRoutes(fastify: FastifyInstance) {
   fastify.get('/settings', async (request, reply) => {
     try {
       const currentSettings = configManager.getAudioConfig();
-      const deviceResolution = await audioManager.resolveAudioSettings(currentSettings);
+      const deviceResolution = keepActiveDeviceSelected({
+        resolution: await audioManager.resolveAudioSettings(currentSettings),
+        requestedSettings: currentSettings,
+        currentSettings,
+        streamStatus: digitalRadioEngine.getAudioStreamManager().getStatus(),
+        engineRunning: digitalRadioEngine.getStatus().isRunning,
+      });
 
       const response = AudioDeviceSettingsResponseSchema.parse({
         success: true,
@@ -60,7 +145,14 @@ export async function audioRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const { audio, radioType } = AudioSettingsResolveRequestSchema.parse(request.body);
-      const deviceResolution = await audioManager.resolveAudioSettings(audio, radioType);
+      const currentSettings = configManager.getAudioConfig();
+      const deviceResolution = keepActiveDeviceSelected({
+        resolution: await audioManager.resolveAudioSettings(audio, radioType),
+        requestedSettings: audio,
+        currentSettings,
+        streamStatus: digitalRadioEngine.getAudioStreamManager().getStatus(),
+        engineRunning: digitalRadioEngine.getStatus().isRunning,
+      });
 
       const response = AudioSettingsResolveResponseSchema.parse({
         success: true,
@@ -103,7 +195,13 @@ export async function audioRoutes(fastify: FastifyInstance) {
       }
 
       const updatedSettings = configManager.getAudioConfig();
-      const deviceResolution = await audioManager.resolveAudioSettings(updatedSettings);
+      const deviceResolution = keepActiveDeviceSelected({
+        resolution: await audioManager.resolveAudioSettings(updatedSettings),
+        requestedSettings: updatedSettings,
+        currentSettings: updatedSettings,
+        streamStatus: digitalRadioEngine.getAudioStreamManager().getStatus(),
+        engineRunning: digitalRadioEngine.getStatus().isRunning,
+      });
 
       const response = AudioDeviceSettingsResponseSchema.parse({
         success: true,
@@ -153,7 +251,13 @@ export async function audioRoutes(fastify: FastifyInstance) {
       }
 
       const resetSettings = configManager.getAudioConfig();
-      const deviceResolution = await audioManager.resolveAudioSettings(resetSettings);
+      const deviceResolution = keepActiveDeviceSelected({
+        resolution: await audioManager.resolveAudioSettings(resetSettings),
+        requestedSettings: resetSettings,
+        currentSettings: resetSettings,
+        streamStatus: digitalRadioEngine.getAudioStreamManager().getStatus(),
+        engineRunning: digitalRadioEngine.getStatus().isRunning,
+      });
 
       const response = AudioDeviceSettingsResponseSchema.parse({
         success: true,
