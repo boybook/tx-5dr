@@ -726,7 +726,7 @@ function prepareWebGatewayLaunch(webEntry: string, env: Record<string, string>):
 }
 
 async function waitAndApplyWebGatewayReady(env: Record<string, string>, requestedPort: number): Promise<WebGatewayReadyState> {
-  const ready = await waitForWebGatewayReady(env, requestedPort, 15000, 200, webProcess?.pid ?? undefined);
+  const ready = await waitForWebGatewayReady(env, requestedPort, 60_000, 200, webProcess?.pid ?? undefined);
   selectedWebPort = ready.httpPort || requestedPort;
   selectedHttpsPort = ready.httpsOk ? ready.httpsPort : null;
   logger.info('web gateway ready', {
@@ -2897,7 +2897,7 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
     });
     let serverReady: ServerReadyState;
     try {
-      serverReady = await waitForServerReady(15000, 200, serverLaunchStartedAt);
+      serverReady = await waitForServerReady(60_000, 200, serverLaunchStartedAt);
     } catch (error) {
       logger.error('backend server startup timeout', error);
       showStartupError('server_timeout', {
