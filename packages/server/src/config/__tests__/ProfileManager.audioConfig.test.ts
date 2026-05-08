@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RadioProfile } from '@tx5dr/contracts';
 
-const { state, mockConfigManager, mockEngine, mockReloadAudioConfig, mockApplySpectrumRuntimeConfig } = vi.hoisted(() => {
+const { state, mockConfigManager, mockEngine, mockReloadAudioConfig } = vi.hoisted(() => {
   const testState = {
     profiles: [] as RadioProfile[],
     activeProfileId: null as string | null,
@@ -51,7 +51,6 @@ const { state, mockConfigManager, mockEngine, mockReloadAudioConfig, mockApplySp
     mockConfigManager: configManager,
     mockEngine: engine,
     mockReloadAudioConfig: reloadAudioConfig,
-    mockApplySpectrumRuntimeConfig: vi.fn(async () => false),
   };
 });
 
@@ -78,10 +77,6 @@ vi.mock('../../DigitalRadioEngine.js', () => ({
   },
 }));
 
-vi.mock('../../spectrum/hamlibSpectrumConfig.js', () => ({
-  applyHamlibSpectrumRuntimeConfig: mockApplySpectrumRuntimeConfig,
-}));
-
 import { ProfileManager } from '../ProfileManager.js';
 
 function makeProfile(overrides: Partial<RadioProfile> = {}): RadioProfile {
@@ -104,7 +99,7 @@ function makeProfile(overrides: Partial<RadioProfile> = {}): RadioProfile {
   };
 }
 
-describe('ProfileManager audio runtime config refresh', () => {
+describe('ProfileManager audio runtime config application', () => {
   beforeEach(() => {
     state.profiles = [makeProfile()];
     state.activeProfileId = 'profile-1';
@@ -113,7 +108,7 @@ describe('ProfileManager audio runtime config refresh', () => {
     (ProfileManager as unknown as { instance?: ProfileManager }).instance = undefined;
   });
 
-  it('refreshes audio config and restarts the engine when active Profile audio changes while running', async () => {
+  it('saves active Profile audio changes without applying them immediately', async () => {
     mockEngine.getStatus.mockReturnValue({ isRunning: true });
     const manager = ProfileManager.getInstance();
 
@@ -128,14 +123,14 @@ describe('ProfileManager audio runtime config refresh', () => {
       },
     });
 
-    expect(mockEngine.stop).toHaveBeenCalledTimes(1);
-    expect(mockReloadAudioConfig).toHaveBeenCalledTimes(1);
-    expect(mockEngine.start).toHaveBeenCalledTimes(1);
+    expect(mockEngine.stop).not.toHaveBeenCalled();
+    expect(mockReloadAudioConfig).not.toHaveBeenCalled();
+    expect(mockEngine.start).not.toHaveBeenCalled();
     expect(state.profiles[0]?.audio.inputSampleRate).toBe(16000);
     expect(state.profiles[0]?.audio.inputBufferSize).toBe(256);
   });
 
-  it('does not refresh or restart when active Profile audio is unchanged', async () => {
+  it('does not apply active Profile changes while saving unchanged audio', async () => {
     mockEngine.getStatus.mockReturnValue({ isRunning: true });
     const manager = ProfileManager.getInstance();
 
@@ -155,7 +150,7 @@ describe('ProfileManager audio runtime config refresh', () => {
     expect(mockEngine.start).not.toHaveBeenCalled();
   });
 
-  it('merges partial active Profile audio updates before saving', async () => {
+  it('merges partial active Profile audio updates before saving without applying them', async () => {
     const manager = ProfileManager.getInstance();
 
     await manager.updateProfile('profile-1', {
@@ -172,7 +167,7 @@ describe('ProfileManager audio runtime config refresh', () => {
       inputBufferSize: 1024,
       outputBufferSize: 1024,
     });
-    expect(mockReloadAudioConfig).toHaveBeenCalledTimes(1);
+    expect(mockReloadAudioConfig).not.toHaveBeenCalled();
   });
 
   it('reloads audio config after activating a Profile before starting the engine', async () => {

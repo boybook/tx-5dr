@@ -3,7 +3,6 @@ import type { AudioDeviceSettings } from '@tx5dr/contracts';
 import { ConfigManager, normalizeAudioDeviceSettings } from './config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { createLogger } from '../utils/logger.js';
-import { applyHamlibSpectrumRuntimeConfig } from '../spectrum/hamlibSpectrumConfig.js';
 
 const logger = createLogger('ProfileManager');
 
@@ -69,9 +68,7 @@ export class ProfileManager {
    */
   async updateProfile(id: string, updates: UpdateProfileRequest): Promise<RadioProfile> {
     const configManager = ConfigManager.getInstance();
-    const isActiveProfile = configManager.getActiveProfileId() === id;
     const existingProfile = configManager.getProfile(id);
-    const audioBefore = existingProfile?.audio ?? null;
 
     // 如果更新了电台类型为 icom-wlan，标记锁定但不强制覆盖用户的音频设备选择
     if (updates.radio?.type === 'icom-wlan') {
@@ -92,30 +89,8 @@ export class ProfileManager {
       updates.audio = normalizeAudioDeviceSettings({ ...existingProfile?.audio, ...updates.audio });
     }
 
-    const activeAudioChanged = isActiveProfile && this.hasAudioChanged(audioBefore, updates.audio);
-    const engine = isActiveProfile ? DigitalRadioEngine.getInstance() : null;
-    const wasRunning = Boolean(activeAudioChanged && engine?.getStatus().isRunning);
-
-    if (wasRunning) {
-      logger.info('Active Profile audio changed, stopping engine to apply new audio config');
-      await engine?.stop();
-    }
-
     const profile = await configManager.updateProfile(id, updates);
-    logger.info(`Profile updated: "${profile.name}" (id: ${id})`);
-
-    if (activeAudioChanged) {
-      engine?.getAudioStreamManager().reloadAudioConfig();
-    }
-
-    if (isActiveProfile && updates.radio && engine) {
-      await applyHamlibSpectrumRuntimeConfig(engine.getRadioManager().getActiveConnection(), profile.radio);
-    }
-
-    if (wasRunning) {
-      logger.info('Restarting engine after active Profile audio update');
-      await engine?.start();
-    }
+    logger.info(`Profile updated: "${profile.name}" (id: ${id}); changes are deferred until Profile activation/reconnect`);
 
     // 广播列表更新事件
     this.broadcastProfileListUpdated();
@@ -255,21 +230,4 @@ export class ProfileManager {
     }
   }
 
-  private hasAudioChanged(before: AudioDeviceSettings | null, after?: AudioDeviceSettings): boolean {
-    if (!after) {
-      return false;
-    }
-
-    const normalizedBefore = normalizeAudioDeviceSettings(before);
-    const normalizedAfter = normalizeAudioDeviceSettings({ ...before, ...after });
-
-    return (
-      (normalizedBefore.inputDeviceName ?? undefined) !== (normalizedAfter.inputDeviceName ?? undefined) ||
-      (normalizedBefore.outputDeviceName ?? undefined) !== (normalizedAfter.outputDeviceName ?? undefined) ||
-      (normalizedBefore.inputSampleRate ?? undefined) !== (normalizedAfter.inputSampleRate ?? undefined) ||
-      (normalizedBefore.outputSampleRate ?? undefined) !== (normalizedAfter.outputSampleRate ?? undefined) ||
-      (normalizedBefore.inputBufferSize ?? undefined) !== (normalizedAfter.inputBufferSize ?? undefined) ||
-      (normalizedBefore.outputBufferSize ?? undefined) !== (normalizedAfter.outputBufferSize ?? undefined)
-    );
-  }
 }
