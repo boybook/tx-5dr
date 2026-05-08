@@ -335,6 +335,21 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     issues?: SyncPreflightIssue[];
     guidance?: string[];
   }
+  interface SyncFailure {
+    code: string;
+    message: string;
+    source?: 'provider' | 'host' | 'remote' | 'network' | 'logbook';
+    operation?: 'upload' | 'download' | 'full_sync' | 'preflight' | 'test_connection';
+    providerId?: string;
+    qsoId?: string;
+    qsoCallsign?: string;
+    httpStatus?: number;
+    retryable?: boolean;
+    detail?: string;
+  }
+  interface SyncFailureResponse {
+    failures?: SyncFailure[];
+  }
   const [syncProviders, setSyncProviders] = useState<SyncProviderInfo[]>([]);
   const [syncConfigured, setSyncConfigured] = useState<Record<string, boolean>>({});
   const [syncingProviders, setSyncingProviders] = useState<Record<string, boolean>>({});
@@ -537,9 +552,26 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       return parts.join(t('sync.provider.resultSeparator'));
     };
 
-    const fmtErrors = (errors?: string[]): string => {
-      if (!errors || errors.length === 0) return '';
-      return '\n' + errors.join('\n');
+    const fmtFailures = (failures?: SyncFailure[], stage?: string): string => {
+      if (!failures || failures.length === 0) return '';
+      const lines = failures.map((failure) => {
+        const parts: string[] = [];
+        if (stage) parts.push(`${stage}:`);
+        if (failure.qsoCallsign) parts.push(`${failure.qsoCallsign}:`);
+        parts.push(failure.message || failure.code);
+        if (failure.httpStatus) parts.push(`(HTTP ${failure.httpStatus})`);
+        if (failure.detail && failure.detail !== failure.message) parts.push(`— ${failure.detail}`);
+        return parts.join(' ');
+      });
+      return '\n' + lines.join('\n');
+    };
+
+    const getFailures = (res: Record<string, unknown> | null | undefined): SyncFailure[] => {
+      return Array.isArray(res?.failures) ? res.failures as SyncFailure[] : [];
+    };
+
+    const hasFailure = (res: Record<string, unknown>): boolean => {
+      return ((res.failed as number | undefined) ?? 0) > 0 || getFailures(res).length > 0;
     };
 
     const fmtPreflight = (result: SyncUploadPreflightResult): string => {
@@ -569,12 +601,11 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           },
           body: JSON.stringify(body),
         });
-        const json = await response.json().catch(() => null) as T | { error?: string } | null;
+        const json = await response.json().catch(() => null) as (T & SyncFailureResponse) | null;
         if (!response.ok) {
-          const message = json && typeof json === 'object' && 'error' in json && typeof json.error === 'string'
-            ? json.error
-            : t('sync.provider.syncError', { name });
-          throw new Error(message);
+          const message = fmtFailures(json?.failures)
+            || `${t('sync.provider.syncError', { name })} (HTTP ${response.status})`;
+          throw new Error(message.trim());
         }
         return json as T;
       };
@@ -593,23 +624,24 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       if (operation === 'full_sync') {
         const dlRes = await doPost<Record<string, unknown>>('download', { callsign });
         const ulRes = await doPost<Record<string, unknown>>('upload', { callsign });
-        const hasFailure = (dlRes.errors as string[] | undefined)?.length || (ulRes.errors as string[] | undefined)?.length || (ulRes.failed as number) > 0;
-        const summary = `↓ ${fmtDownload(dlRes)}  ↑ ${fmtUpload(ulRes)}` + fmtErrors([...(dlRes.errors as string[] ?? []), ...(ulRes.errors as string[] ?? [])]);
+        const resultHasFailure = hasFailure(dlRes) || hasFailure(ulRes);
+        const summary = `↓ ${fmtDownload(dlRes)}  ↑ ${fmtUpload(ulRes)}`
+          + fmtFailures(getFailures(dlRes), t('sync.provider.download'))
+          + fmtFailures(getFailures(ulRes), t('sync.provider.upload'));
         setSyncMessages(prev => ({
           ...prev,
-          [providerId]: { type: hasFailure ? 'error' : 'success', text: summary },
+          [providerId]: { type: resultHasFailure ? 'error' : 'success', text: summary },
         }));
         await refreshLogbookData();
       } else if (operation === 'download') {
         const res = await doPost<Record<string, unknown>>('download', { callsign });
-        const text = fmtDownload(res) + fmtErrors(res.errors as string[] | undefined);
-        setSyncMessages(prev => ({ ...prev, [providerId]: { type: (res.errors as string[])?.length ? 'error' : 'success', text } }));
+        const text = fmtDownload(res) + fmtFailures(getFailures(res));
+        setSyncMessages(prev => ({ ...prev, [providerId]: { type: hasFailure(res) ? 'error' : 'success', text } }));
         await refreshLogbookData();
       } else {
         const res = await doPost<Record<string, unknown>>('upload', { callsign });
-        const hasFailure = (res.failed as number) > 0 || (res.errors as string[] | undefined)?.length;
-        const text = fmtUpload(res) + fmtErrors(res.errors as string[] | undefined);
-        setSyncMessages(prev => ({ ...prev, [providerId]: { type: hasFailure ? 'error' : 'success', text } }));
+        const text = fmtUpload(res) + fmtFailures(getFailures(res));
+        setSyncMessages(prev => ({ ...prev, [providerId]: { type: hasFailure(res) ? 'error' : 'success', text } }));
         await refreshLogbookData();
       }
     } catch (error) {

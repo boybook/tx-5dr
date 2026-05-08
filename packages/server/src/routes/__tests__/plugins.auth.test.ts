@@ -24,13 +24,22 @@ const snapshot: PluginSystemSnapshot = {
 };
 
 const getSnapshot = vi.fn(() => snapshot);
+const logbookSyncHost = {
+  getProviderInfo: vi.fn(),
+  upload: vi.fn(),
+  download: vi.fn(),
+  getUploadPreflight: vi.fn(),
+  testConnection: vi.fn(),
+  getProviders: vi.fn(() => []),
+  getConfiguredStatus: vi.fn(() => ({})),
+};
 
 vi.mock('../../DigitalRadioEngine.js', () => ({
   DigitalRadioEngine: {
     getInstance: () => ({
       pluginManager: {
         getSnapshot,
-        logbookSyncHost: {},
+        logbookSyncHost,
       },
     }),
   },
@@ -62,6 +71,13 @@ describe('pluginRoutes auth', () => {
 
   beforeEach(async () => {
     getSnapshot.mockClear();
+    logbookSyncHost.getProviderInfo.mockReset();
+    logbookSyncHost.upload.mockReset();
+    logbookSyncHost.download.mockReset();
+    logbookSyncHost.getUploadPreflight.mockReset();
+    logbookSyncHost.testConnection.mockReset();
+    logbookSyncHost.getProviders.mockReset().mockReturnValue([]);
+    logbookSyncHost.getConfiguredStatus.mockReset().mockReturnValue({});
     const { pluginRoutes } = await import('../plugins.js');
     fastify = Fastify();
     fastify.decorateRequest('authUser', null);
@@ -105,5 +121,58 @@ describe('pluginRoutes auth', () => {
 
     expect(response.statusCode).toBe(403);
     expect(getSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('returns structured sync failures when a provider upload throws', async () => {
+    logbookSyncHost.getProviderInfo.mockReturnValue({
+      id: 'wavelog',
+      pluginName: 'wavelog-sync',
+      displayName: 'WaveLog',
+      settingsPageId: 'settings',
+      accessScope: 'admin',
+    });
+    logbookSyncHost.upload.mockRejectedValue(new Error('remote server exploded'));
+
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/api/plugins/sync-providers/wavelog/upload',
+      headers: { 'x-role': UserRole.ADMIN },
+      payload: { callsign: 'BG5DRB' },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      failures: [
+        expect.objectContaining({
+          code: 'sync_upload_failed',
+          message: 'remote server exploded',
+          providerId: 'wavelog',
+          operation: 'upload',
+        }),
+      ],
+    });
+  });
+
+  it('returns structured sync failures when a provider is missing', async () => {
+    logbookSyncHost.getProviderInfo.mockReturnValue(null);
+
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/api/plugins/sync-providers/missing/download',
+      headers: { 'x-role': UserRole.ADMIN },
+      payload: { callsign: 'BG5DRB' },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({
+      failures: [
+        expect.objectContaining({
+          code: 'sync_provider_not_found',
+          message: 'provider not found',
+          providerId: 'missing',
+          operation: 'download',
+        }),
+      ],
+    });
   });
 });

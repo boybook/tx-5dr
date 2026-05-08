@@ -14,10 +14,18 @@ import type {
   SyncDownloadResult,
   SyncDownloadOptions,
   SyncUploadOptions,
+  SyncFailure,
 } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import { getBandFromFrequency, toLotwContactMode } from '@tx5dr/core';
-import { getPluginPageScopePath, normalizeCallsign as normalizeCallsignBase } from '@tx5dr/plugin-api';
+import {
+  createSyncFailure,
+  errorToSyncFailure,
+  getPluginPageScopePath,
+  normalizeCallsign as normalizeCallsignBase,
+  parseADIFContent,
+  sanitizeSyncFailureText,
+} from '@tx5dr/plugin-api';
 
 // ===== Types (plugin-internal, formerly in contracts/lotw.schema.ts) =====
 
@@ -73,7 +81,6 @@ function getLoTWLocationRule(dxccId?: number | null): LoTWLocationRule {
   if ([15, 54].includes(dxccId)) return { requiresState: true, requiresCounty: false, stateLabel: 'Oblast', countyLabel: 'County' };
   return defaults;
 }
-import { parseADIFContent } from '@tx5dr/plugin-api';
 
 // ===== OIDs used in LoTW certificates =====
 
@@ -107,6 +114,33 @@ function classifyLotwErrorResponse(responseText: string): 'lotw_auth_failed' | '
   return authFailurePatterns.some(pattern => pattern.test(normalized))
     ? 'lotw_auth_failed'
     : 'lotw_response_invalid';
+}
+
+function summarizeLotwResponse(responseText: string): string {
+  return sanitizeSyncFailureText(
+    responseText
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 500) || 'empty response',
+  );
+}
+
+function describeLotwErrorResponse(responseText: string): Pick<SyncFailure, 'code' | 'message' | 'detail'> {
+  const code = classifyLotwErrorResponse(responseText);
+  const detail = summarizeLotwResponse(responseText);
+  if (code === 'lotw_auth_failed') {
+    return {
+      code,
+      message: detail || 'LoTW authentication failed. Check your username and password.',
+      detail,
+    };
+  }
+  return {
+    code,
+    message: detail || 'LoTW returned a response that was not valid ADIF.',
+    detail,
+  };
 }
 
 // ===== Types =====
@@ -633,7 +667,10 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
   async testConnection(callsign: string, overrideConfig?: LoTWPluginConfig | null): Promise<SyncTestResult> {
     const config = this.getEffectiveConfig(callsign, overrideConfig);
     if (!config?.username || !config?.password) {
-      return { success: false, message: 'Username and password are required' };
+      const failure = this.createFailure('lotw_credentials_missing', 'Username and password are required', {
+        operation: 'test_connection',
+      });
+      return { success: false, message: failure.message, failures: [failure] };
     }
 
     try {
@@ -654,18 +691,33 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
         return { success: true, message: 'lotw_connection_success' };
       }
 
-      return { success: false, message: classifyLotwErrorResponse(responseText) };
+      const described = describeLotwErrorResponse(responseText);
+      const failure = this.createFailure(described.code, described.message, {
+        source: described.code === 'lotw_auth_failed' ? 'provider' : 'remote',
+        operation: 'test_connection',
+        detail: described.detail,
+      });
+      return { success: false, message: failure.message, failures: [failure] };
     } catch (error) {
       this.ctx.log.error('Connection test failed', error);
-      const message = this.handleNetworkError(error);
-      return { success: false, message };
+      const failure = this.errorFailure(error, 'test_connection', 'lotw_connection_failed', config);
+      return { success: false, message: failure.message, failures: [failure] };
     }
   }
 
   async upload(callsign: string, options?: SyncUploadOptions): Promise<SyncUploadResult> {
     const config = this.getConfig(callsign);
     if (!config) {
-      return { uploaded: 0, skipped: 0, failed: 0, errors: ['LoTW not configured'] };
+      return {
+        uploaded: 0,
+        skipped: 0,
+        failed: 0,
+        failures: [
+          this.createFailure('lotw_not_configured', 'LoTW not configured', {
+            operation: 'upload',
+          }),
+        ],
+      };
     }
     const logbook = this.ctx.logbook.forCallsign(callsign);
 
@@ -684,14 +736,18 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
         uploaded: 0,
         skipped: 0,
         failed: pendingQsos.length,
-        errors: preparation.issues.filter((i) => i.severity === 'error').map((i) => i.message),
+        failures: preparation.issues
+          .filter((i) => i.severity === 'error')
+          .map((issue) => this.createFailure(issue.code, issue.message, {
+            operation: 'preflight',
+          })),
       };
     }
 
     const location = this.resolveUploadLocation(config, callsign);
     let uploaded = 0;
     const uploadedQsoIds: string[] = [];
-    const errors: string[] = [];
+    const failures: SyncFailure[] = [];
 
     for (const batch of preparation.batches) {
       try {
@@ -700,7 +756,12 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
         uploadedQsoIds.push(...batch.qsos.map(q => q.id));
       } catch (error) {
         const msg = error instanceof Error ? error.message : 'Upload failed';
-        errors.push(batch.certificate.callsign + ': ' + msg);
+        failures.push(this.createFailure('lotw_upload_failed', msg, {
+          source: this.isNetworkError(error) ? 'network' : 'remote',
+          operation: 'upload',
+          qsoCallsign: batch.certificate.callsign,
+          retryable: this.isNetworkError(error),
+        }));
       }
     }
 
@@ -712,6 +773,11 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
           lotwQslSentDate: Date.now(),
         });
       } catch (err) {
+        failures.push(this.createFailure('lotw_update_qsl_status_failed', err instanceof Error ? err.message : 'Failed to update QSL sent status', {
+          source: 'logbook',
+          operation: 'upload',
+          qsoId,
+        }));
         this.ctx.log.warn('Failed to update QSL sent status', {
           qsoId,
           error: err instanceof Error ? err.message : String(err),
@@ -728,8 +794,10 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     return {
       uploaded,
       skipped: preparation.blockedCount,
-      failed: errors.length > 0 ? pendingQsos.length - uploaded - preparation.blockedCount : 0,
-      errors: errors.length > 0 ? errors : undefined,
+      failed: failures.some((failure) => failure.source !== 'logbook')
+        ? pendingQsos.length - uploaded - preparation.blockedCount
+        : 0,
+      failures: failures.length > 0 ? failures : undefined,
     };
   }
 
@@ -744,7 +812,16 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
   async download(callsign: string, options?: SyncDownloadOptions): Promise<SyncDownloadResult> {
     const config = this.getConfig(callsign);
     if (!config?.username || !config?.password) {
-      return { downloaded: 0, matched: 0, updated: 0, errors: ['LoTW credentials not configured'] };
+      return {
+        downloaded: 0,
+        matched: 0,
+        updated: 0,
+        failures: [
+          this.createFailure('lotw_credentials_missing', 'LoTW credentials not configured', {
+            operation: 'download',
+          }),
+        ],
+      };
     }
     const logbook = this.ctx.logbook.forCallsign(callsign);
 
@@ -769,7 +846,19 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       const responseText = await response.text();
 
       if (!isLotwAdifResponse(responseText)) {
-        return { downloaded: 0, matched: 0, updated: 0, errors: [classifyLotwErrorResponse(responseText)] };
+        const described = describeLotwErrorResponse(responseText);
+        return {
+          downloaded: 0,
+          matched: 0,
+          updated: 0,
+          failures: [
+            this.createFailure(described.code, described.message, {
+              source: described.code === 'lotw_auth_failed' ? 'provider' : 'remote',
+              operation: 'download',
+              detail: described.detail,
+            }),
+          ],
+        };
       }
 
       const remoteRecords = parseADIFContent(responseText, 'lotw');
@@ -777,6 +866,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
 
       let matched = 0;
       let imported = 0;
+      const failures: SyncFailure[] = [];
       const TIME_TOLERANCE_MS = 2 * 60 * 1000; // 2 minutes
 
       for (const remote of remoteRecords) {
@@ -810,6 +900,12 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
             imported++;
           }
         } catch (err) {
+          failures.push(this.createFailure('lotw_download_logbook_failed', err instanceof Error ? err.message : 'Failed to process downloaded LoTW record', {
+            source: 'logbook',
+            operation: 'download',
+            qsoId: remote.id,
+            qsoCallsign: remote.callsign,
+          }));
           this.ctx.log.warn('Failed to process downloaded LoTW record', {
             callsign: remote.callsign,
             error: err instanceof Error ? err.message : String(err),
@@ -827,11 +923,16 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
         downloaded: remoteRecords.length,
         matched,
         updated: imported,
+        failures: failures.length > 0 ? failures : undefined,
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Download failed';
       this.ctx.log.error('Download failed', error);
-      return { downloaded: 0, matched: 0, updated: 0, errors: [message] };
+      return {
+        downloaded: 0,
+        matched: 0,
+        updated: 0,
+        failures: [this.errorFailure(error, 'download', 'lotw_download_failed', config)],
+      };
     }
   }
 
@@ -1025,9 +1126,9 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     const body = await response.text();
 
     if (!/<!--\s*\.UPL\.\s*accepted\s*-->/i.test(body)) {
-      const firstLine = body.split('\n').map((l) => l.trim()).find(Boolean) || 'LoTW server rejected the upload payload';
+      const firstLine = summarizeLotwResponse(body) || 'LoTW server rejected the upload payload';
       this.ctx.log.warn('LoTW server rejected upload', { responseSnippet: firstLine });
-      throw new Error('lotw_upload_rejected');
+      throw new Error(`LoTW server rejected the upload payload: ${firstLine}`);
     }
   }
 
@@ -1210,7 +1311,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       ).toString('base64');
     } catch (error) {
       this.ctx.log.error('Failed to sign LoTW payload', error);
-      throw new Error('lotw_upload_sign_failed');
+      throw new Error(error instanceof Error ? `LoTW upload signing failed: ${error.message}` : 'LoTW upload signing failed');
     }
   }
 
@@ -1283,11 +1384,59 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
   private handleNetworkError(error: unknown): string {
     const e = error as any;
     if (e?.name === 'AbortError' || e?.code === 'ABORT_ERR' || e?.code === 'UND_ERR_CONNECT_TIMEOUT') {
-      return 'lotw_network_timeout';
+      return 'Connection timeout: LoTW server response too slow';
     }
     if (e?.message?.includes('fetch failed')) {
-      return 'lotw_network_failed';
+      return 'Network request failed: check network connection and firewall';
     }
-    return 'lotw_connection_failed';
+    return `LoTW connection failed: ${e?.message ?? 'Unknown error'}`;
+  }
+
+  private createFailure(
+    code: string,
+    message: string,
+    options: Partial<SyncFailure> & { secrets?: Array<string | undefined | null> } = {},
+  ): SyncFailure {
+    return createSyncFailure({
+      code,
+      message,
+      source: options.source ?? 'provider',
+      operation: options.operation,
+      providerId: this.id,
+      qsoId: options.qsoId,
+      qsoCallsign: options.qsoCallsign,
+      httpStatus: options.httpStatus,
+      retryable: options.retryable,
+      detail: options.detail,
+      secrets: options.secrets,
+    });
+  }
+
+  private errorFailure(
+    error: unknown,
+    operation: NonNullable<SyncFailure['operation']>,
+    code: string,
+    config?: LoTWPluginConfig,
+  ): SyncFailure {
+    const message = this.isNetworkError(error)
+      ? this.handleNetworkError(error)
+      : (error instanceof Error ? error.message : 'LoTW sync failed');
+    return errorToSyncFailure(new Error(message), {
+      code,
+      message,
+      source: this.isNetworkError(error) ? 'network' : 'remote',
+      operation,
+      providerId: this.id,
+      retryable: this.isNetworkError(error),
+      secrets: [config?.username, config?.password],
+    });
+  }
+
+  private isNetworkError(error: unknown): boolean {
+    const e = error as any;
+    return e?.name === 'AbortError'
+      || e?.code === 'ABORT_ERR'
+      || e?.code === 'UND_ERR_CONNECT_TIMEOUT'
+      || (typeof e?.message === 'string' && /fetch failed|network|timeout|connection/i.test(e.message));
   }
 }

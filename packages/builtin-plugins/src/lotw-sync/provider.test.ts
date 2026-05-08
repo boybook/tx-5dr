@@ -303,7 +303,7 @@ describe('LoTWSyncProvider', () => {
       records: [qso, createQso('qso-2', { lotwQslSent: 'Y' })],
     });
 
-    expect(result).toEqual({ uploaded: 1, skipped: 0, failed: 0, errors: undefined });
+    expect(result).toEqual({ uploaded: 1, skipped: 0, failed: 0, failures: undefined });
     expect(queryQSOs).not.toHaveBeenCalled();
     expect(prepareUpload).toHaveBeenCalledWith(expect.anything(), [qso], 'BG5DRB');
     expect(uploadBatch).toHaveBeenCalledTimes(1);
@@ -438,7 +438,7 @@ describe('LoTWSyncProvider', () => {
       since: Date.parse('2026-03-27T00:00:00.000Z'),
     });
 
-    expect(result.errors).toBeUndefined();
+    expect(result.failures).toBeUndefined();
     expect(result.downloaded).toBe(1);
     expect(result.updated).toBe(1);
     expect(addQSO).toHaveBeenCalledTimes(1);
@@ -454,10 +454,21 @@ describe('LoTWSyncProvider', () => {
 
     await expect(provider.testConnection('BG5DRB')).resolves.toEqual({
       success: false,
-      message: 'lotw_auth_failed',
+      message: 'Login failed: incorrect password',
+      failures: [
+        expect.objectContaining({
+          code: 'lotw_auth_failed',
+          message: 'Login failed: incorrect password',
+        }),
+      ],
     });
     await expect(provider.download('BG5DRB')).resolves.toMatchObject({
-      errors: ['lotw_auth_failed'],
+      failures: [
+        expect.objectContaining({
+          code: 'lotw_auth_failed',
+          message: expect.stringContaining('incorrect password'),
+        }),
+      ],
     });
   });
 
@@ -470,10 +481,70 @@ describe('LoTWSyncProvider', () => {
 
     await expect(provider.testConnection('BG5DRB')).resolves.toEqual({
       success: false,
-      message: 'lotw_response_invalid',
+      message: 'LoTW service is temporarily unavailable',
+      failures: [
+        expect.objectContaining({
+          code: 'lotw_response_invalid',
+          message: 'LoTW service is temporarily unavailable',
+        }),
+      ],
     });
     await expect(provider.download('BG5DRB')).resolves.toMatchObject({
-      errors: ['lotw_response_invalid'],
+      failures: [
+        expect.objectContaining({
+          code: 'lotw_response_invalid',
+          message: expect.stringContaining('LoTW service is temporarily unavailable'),
+        }),
+      ],
     });
+  });
+
+  it('returns structured failure when LoTW upload is not configured', async () => {
+    const { ctx } = createContext();
+    const provider = new LoTWSyncProvider(ctx);
+
+    const result = await provider.upload('BG5DRB', {
+      trigger: 'auto',
+      records: [createQso('qso-1')],
+    });
+
+    expect(result.failures).toEqual([
+      expect.objectContaining({
+        code: 'lotw_not_configured',
+        message: 'LoTW not configured',
+        providerId: 'lotw',
+      }),
+    ]);
+  });
+
+  it('surfaces LoTW upload rejection details as structured failures', async () => {
+    const { ctx, queryQSOs } = createContext();
+    const provider = new LoTWSyncProvider(ctx);
+    configureProvider(provider);
+    const qso = createQso('qso-1');
+    queryQSOs.mockResolvedValue([qso]);
+    const internals = provider as unknown as LoTWProviderInternals;
+    vi.spyOn(internals, 'prepareUpload').mockResolvedValue({
+      issues: [],
+      blockedCount: 0,
+      batches: [
+        {
+          qsos: [qso],
+          certificate: { callsign: 'BG5DRB' },
+        },
+      ],
+    });
+    vi.spyOn(internals, 'resolveUploadLocation').mockReturnValue({ callsign: 'BG5DRB' });
+    vi.spyOn(internals, 'uploadBatch').mockRejectedValue(new Error('LoTW server rejected the upload payload: invalid signature'));
+
+    const result = await provider.upload('BG5DRB');
+
+    expect(result.failures).toEqual([
+      expect.objectContaining({
+        code: 'lotw_upload_failed',
+        message: expect.stringContaining('invalid signature'),
+        qsoCallsign: 'BG5DRB',
+      }),
+    ]);
   });
 });

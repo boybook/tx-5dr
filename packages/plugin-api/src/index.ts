@@ -161,6 +161,10 @@ export type {
   LogbookSyncProvider,
   LogbookSyncRegistrar,
   SyncAction,
+  SyncFailure,
+  SyncFailureInput,
+  SyncFailureOperation,
+  SyncFailureSource,
   SyncTestResult,
   SyncUploadOptions,
   SyncUploadResult,
@@ -168,6 +172,13 @@ export type {
   SyncUploadPreflightResult,
   SyncDownloadResult,
   SyncDownloadOptions,
+} from './sync.js';
+
+export {
+  createSyncFailure,
+  errorToSyncFailure,
+  failureMessage,
+  sanitizeSyncFailureText,
 } from './sync.js';
 
 /** Stable runtime enum values commonly referenced by plugin implementations. */

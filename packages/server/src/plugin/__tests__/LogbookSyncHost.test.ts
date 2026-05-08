@@ -52,6 +52,30 @@ function createProvider(
 }
 
 describe('LogbookSyncHost', () => {
+  it('returns structured failures when a provider is not registered', async () => {
+    const host = new LogbookSyncHost();
+
+    await expect(host.upload('missing', 'BG5DRB')).resolves.toMatchObject({
+      failures: [
+        expect.objectContaining({
+          code: 'sync_provider_not_found',
+          message: 'Provider not found: missing',
+          providerId: 'missing',
+          operation: 'upload',
+        }),
+      ],
+    });
+    await expect(host.download('missing', 'BG5DRB')).resolves.toMatchObject({
+      failures: [
+        expect.objectContaining({
+          code: 'sync_provider_not_found',
+          providerId: 'missing',
+          operation: 'download',
+        }),
+      ],
+    });
+  });
+
   it('passes only the completed QSO record to auto-upload providers', async () => {
     const host = new LogbookSyncHost();
     const provider = createProvider();

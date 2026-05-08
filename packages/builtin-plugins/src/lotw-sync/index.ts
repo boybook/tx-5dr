@@ -226,7 +226,13 @@ export const lotwSyncPlugin: PluginDefinition = {
             } catch (err) {
               return {
                 downloaded: 0, matched: 0, updated: 0,
-                error: err instanceof Error ? err.message : 'Download failed',
+                failures: [{
+                  code: 'lotw_download_failed',
+                  message: err instanceof Error ? err.message : 'Download failed',
+                  source: 'provider',
+                  operation: 'download',
+                  providerId: 'lotw',
+                }],
               };
             }
           }

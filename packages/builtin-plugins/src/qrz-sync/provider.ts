@@ -10,9 +10,18 @@ import type {
   SyncDownloadResult,
   SyncDownloadOptions,
   SyncUploadOptions,
+  SyncFailure,
 } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
-import { convertQSOToADIF, parseADIFFields, parseADIFRecord, normalizeCallsign } from '@tx5dr/plugin-api';
+import {
+  convertQSOToADIF,
+  createSyncFailure,
+  errorToSyncFailure,
+  parseADIFFields,
+  parseADIFRecord,
+  normalizeCallsign,
+  sanitizeSyncFailureText,
+} from '@tx5dr/plugin-api';
 
 const QRZ_API_URL = 'https://logbook.qrz.com/api';
 const QRZ_USER_AGENT = 'TX5DR-QRZSync/1.0';
@@ -98,7 +107,10 @@ export class QRZSyncProvider implements LogbookSyncProvider {
   async testConnection(callsign: string): Promise<SyncTestResult> {
     const config = this.getConfig(callsign);
     if (!config?.apiKey) {
-      return { success: false, message: 'API key is required' };
+      const failure = this.createFailure('qrz_not_configured', 'API key is required', {
+        operation: 'test_connection',
+      });
+      return { success: false, message: failure.message, failures: [failure] };
     }
 
     try {
@@ -112,16 +124,25 @@ export class QRZSyncProvider implements LogbookSyncProvider {
         },
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Connection failed';
+      const failure = this.errorFailure(err, 'test_connection', 'qrz_connection_failed', config);
       this.ctx.log.error('Connection test failed', err);
-      return { success: false, message };
+      return { success: false, message: failure.message, failures: [failure] };
     }
   }
 
   async upload(callsign: string, options?: SyncUploadOptions): Promise<SyncUploadResult> {
     const config = this.getConfig(callsign);
     if (!config?.apiKey) {
-      return { uploaded: 0, skipped: 0, failed: 0, errors: ['QRZ not configured'] };
+      return {
+        uploaded: 0,
+        skipped: 0,
+        failed: 0,
+        failures: [
+          this.createFailure('qrz_not_configured', 'QRZ not configured', {
+            operation: 'upload',
+          }),
+        ],
+      };
     }
     const logbook = this.ctx.logbook.forCallsign(callsign);
 
@@ -135,7 +156,7 @@ export class QRZSyncProvider implements LogbookSyncProvider {
 
     let uploaded = 0;
     let failed = 0;
-    const errors: string[] = [];
+    const failures: SyncFailure[] = [];
 
     for (const qso of qsos) {
       try {
@@ -149,11 +170,16 @@ export class QRZSyncProvider implements LogbookSyncProvider {
           });
         } else {
           failed++;
-          errors.push(`${qso.callsign}: ${result.message}`);
+          failures.push(this.createQsoFailure(qso, 'qrz_upload_rejected', result.message, config));
         }
       } catch (err) {
         failed++;
-        errors.push(`${qso.callsign}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        failures.push(this.createQsoFailure(
+          qso,
+          'qrz_upload_failed',
+          err instanceof Error ? err.message : 'Unknown error',
+          config,
+        ));
       }
     }
 
@@ -166,7 +192,7 @@ export class QRZSyncProvider implements LogbookSyncProvider {
       uploaded,
       skipped: 0,
       failed,
-      errors: errors.length > 0 ? errors : undefined,
+      failures: failures.length > 0 ? failures : undefined,
     };
   }
 
@@ -181,7 +207,16 @@ export class QRZSyncProvider implements LogbookSyncProvider {
   async download(callsign: string, _options?: SyncDownloadOptions): Promise<SyncDownloadResult> {
     const config = this.getConfig(callsign);
     if (!config?.apiKey) {
-      return { downloaded: 0, matched: 0, updated: 0, errors: ['QRZ not configured'] };
+      return {
+        downloaded: 0,
+        matched: 0,
+        updated: 0,
+        failures: [
+          this.createFailure('qrz_not_configured', 'QRZ not configured', {
+            operation: 'download',
+          }),
+        ],
+      };
     }
     const logbook = this.ctx.logbook.forCallsign(callsign);
 
@@ -189,6 +224,7 @@ export class QRZSyncProvider implements LogbookSyncProvider {
       const records = await this.downloadQSOs(config.apiKey);
       let stored = 0;
       let matched = 0;
+      const failures: SyncFailure[] = [];
 
       for (const remoteQSO of records) {
         try {
@@ -214,6 +250,16 @@ export class QRZSyncProvider implements LogbookSyncProvider {
             stored++;
           }
         } catch (err) {
+          failures.push(createSyncFailure({
+            code: 'qrz_download_logbook_failed',
+            message: err instanceof Error ? err.message : 'Failed to process downloaded QSO',
+            source: 'logbook',
+            operation: 'download',
+            providerId: this.id,
+            qsoId: remoteQSO.id,
+            qsoCallsign: remoteQSO.callsign,
+            secrets: [config.apiKey],
+          }));
           this.ctx.log.warn('Failed to process downloaded QSO', {
             callsign: remoteQSO.callsign,
             error: err instanceof Error ? err.message : String(err),
@@ -229,10 +275,15 @@ export class QRZSyncProvider implements LogbookSyncProvider {
         downloaded: records.length,
         matched,
         updated: stored,
+        failures: failures.length > 0 ? failures : undefined,
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Download failed';
-      return { downloaded: 0, matched: 0, updated: 0, errors: [message] };
+      return {
+        downloaded: 0,
+        matched: 0,
+        updated: 0,
+        failures: [this.errorFailure(err, 'download', 'qrz_download_failed', config)],
+      };
     }
   }
 
@@ -256,7 +307,7 @@ export class QRZSyncProvider implements LogbookSyncProvider {
     }
 
     if (!response.ok) {
-      throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+      throw new Error(await this.extractHttpErrorMessage(response, configSecrets(apiKey)));
     }
 
     const responseText = await response.text();
@@ -270,9 +321,9 @@ export class QRZSyncProvider implements LogbookSyncProvider {
         logbookCount: parsed.COUNT ? parseInt(parsed.COUNT, 10) : undefined,
       };
     } else if (parsed.RESULT === 'AUTH' || parsed.RESULT === 'FAIL') {
-      throw new Error(parsed.REASON || 'Invalid API key or request failed');
+      throw new Error(sanitizeSyncFailureText(parsed.REASON || 'Invalid API key or request failed', [apiKey]));
     } else {
-      throw new Error(`Unknown response: ${responseText}`);
+      throw new Error(`Unknown QRZ response: ${this.sanitizeResponseText(responseText, [apiKey])}`);
     }
   }
 
@@ -301,6 +352,14 @@ export class QRZSyncProvider implements LogbookSyncProvider {
     const responseText = await response.text();
     this.ctx.log.debug('INSERT response', { status: response.status, body: responseText });
 
+    if (!response.ok) {
+      throw new Error(this.messageFromTextResponse(
+        responseText,
+        `HTTP error ${response.status}: ${response.statusText}`,
+        [apiKey],
+      ));
+    }
+
     const parsed = this.parseQRZResponse(responseText);
 
     if (parsed.RESULT === 'OK') {
@@ -308,7 +367,10 @@ export class QRZSyncProvider implements LogbookSyncProvider {
     } else if (parsed.RESULT === 'REPLACE') {
       return { success: true, status: 'replaced', message: 'Existing record replaced' };
     } else {
-      const message = parsed.REASON || `Upload failed: ${responseText}`;
+      const message = sanitizeSyncFailureText(
+        parsed.REASON || `Upload failed: ${this.sanitizeResponseText(responseText, [apiKey])}`,
+        [apiKey],
+      );
       this.ctx.log.warn('QSO upload rejected', { callsign: qso.callsign, message });
       return { success: false, status: 'failed', message };
     }
@@ -340,7 +402,11 @@ export class QRZSyncProvider implements LogbookSyncProvider {
       }
 
       if (!response.ok) {
-        throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+        throw new Error(this.messageFromTextResponse(
+          await response.text(),
+          `HTTP error ${response.status}: ${response.statusText}`,
+          [apiKey],
+        ));
       }
 
       const responseText = await response.text();
@@ -349,11 +415,11 @@ export class QRZSyncProvider implements LogbookSyncProvider {
       const parsed = this.parseQRZResponse(responseText);
 
       if (parsed.RESULT === 'FAIL' || parsed.RESULT === 'AUTH') {
-        throw new Error(parsed.REASON || 'QRZ API request failed');
+        throw new Error(sanitizeSyncFailureText(parsed.REASON || 'QRZ API request failed', [apiKey]));
       }
 
       if (parsed.RESULT !== 'OK') {
-        throw new Error(`Unknown QRZ response: ${responseText}`);
+        throw new Error(`Unknown QRZ response: ${this.sanitizeResponseText(responseText, [apiKey])}`);
       }
 
       const adifData = parsed.ADIF || '';
@@ -514,4 +580,95 @@ export class QRZSyncProvider implements LogbookSyncProvider {
     }
     return new Error(`QRZ connection failed: ${e?.message ?? 'Unknown error'}`);
   }
+
+  private createFailure(
+    code: string,
+    message: string,
+    options: Partial<SyncFailure> & { secrets?: Array<string | undefined | null> } = {},
+  ): SyncFailure {
+    return createSyncFailure({
+      code,
+      message,
+      source: options.source ?? 'provider',
+      operation: options.operation,
+      providerId: this.id,
+      httpStatus: options.httpStatus,
+      retryable: options.retryable,
+      detail: options.detail,
+      secrets: options.secrets,
+    });
+  }
+
+  private errorFailure(
+    err: unknown,
+    operation: NonNullable<SyncFailure['operation']>,
+    code: string,
+    config?: QRZPluginConfig,
+  ): SyncFailure {
+    return errorToSyncFailure(err, {
+      code,
+      message: 'QRZ sync failed',
+      source: this.isNetworkError(err) ? 'network' : 'remote',
+      operation,
+      providerId: this.id,
+      retryable: this.isNetworkError(err),
+      secrets: [config?.apiKey],
+    });
+  }
+
+  private createQsoFailure(
+    qso: QSORecord,
+    code: string,
+    message: string,
+    config: QRZPluginConfig,
+  ): SyncFailure {
+    return createSyncFailure({
+      code,
+      message,
+      source: this.isNetworkMessage(message) ? 'network' : 'remote',
+      operation: 'upload',
+      providerId: this.id,
+      qsoId: qso.id,
+      qsoCallsign: qso.callsign,
+      retryable: this.isNetworkMessage(message),
+      secrets: [config.apiKey],
+    });
+  }
+
+  private async extractHttpErrorMessage(response: Response, secrets: string[]): Promise<string> {
+    const text = await response.text().catch(() => '');
+    return this.messageFromTextResponse(text, `HTTP error ${response.status}: ${response.statusText}`, secrets);
+  }
+
+  private messageFromTextResponse(
+    responseText: string,
+    fallback: string,
+    secrets: Array<string | undefined | null>,
+  ): string {
+    const parsed = this.parseQRZResponse(responseText);
+    const message = parsed.REASON || (responseText ? `${fallback}: ${this.sanitizeResponseText(responseText, secrets)}` : fallback);
+    return sanitizeSyncFailureText(message, secrets);
+  }
+
+  private sanitizeResponseText(text: string, secrets: Array<string | undefined | null> = []): string {
+    return sanitizeSyncFailureText(text.replace(/\s+/g, ' ').trim().slice(0, 500) || 'empty response', secrets);
+  }
+
+  private isNetworkError(err: unknown): boolean {
+    const e = err as any;
+    return e?.name === 'AbortError'
+      || e?.name === 'TimeoutError'
+      || e?.code === 'ABORT_ERR'
+      || e?.code === 'UND_ERR_SOCKET'
+      || this.isNetworkMessage(e?.message);
+  }
+
+  private isNetworkMessage(message: unknown): boolean {
+    return typeof message === 'string'
+      && /network|timeout|connection|dns|fetch failed|refused/i.test(message);
+  }
+}
+
+function configSecrets(apiKey: string): string[] {
+  return [apiKey];
 }

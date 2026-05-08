@@ -7,6 +7,7 @@ import type {
   SyncDownloadResult,
   SyncDownloadOptions,
 } from '@tx5dr/plugin-api';
+import { createSyncFailure } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 
@@ -132,7 +133,14 @@ export class LogbookSyncHost {
   async testConnection(providerId: string, callsign: string): Promise<SyncTestResult> {
     const entry = this.providers.get(providerId);
     if (!entry) {
-      return { success: false, message: `Provider not found: ${providerId}` };
+      const failure = createSyncFailure({
+        code: 'sync_provider_not_found',
+        message: `Provider not found: ${providerId}`,
+        source: 'host',
+        operation: 'test_connection',
+        providerId,
+      });
+      return { success: false, message: failure.message, failures: [failure] };
     }
     return entry.provider.testConnection(callsign);
   }
@@ -149,7 +157,20 @@ export class LogbookSyncHost {
   ): Promise<SyncUploadResult> {
     const entry = this.providers.get(providerId);
     if (!entry) {
-      return { uploaded: 0, skipped: 0, failed: 0, errors: [`Provider not found: ${providerId}`] };
+      return {
+        uploaded: 0,
+        skipped: 0,
+        failed: 0,
+        failures: [
+          createSyncFailure({
+            code: 'sync_provider_not_found',
+            message: `Provider not found: ${providerId}`,
+            source: 'host',
+            operation: 'upload',
+            providerId,
+          }),
+        ],
+      };
     }
 
     const key = LogbookSyncHost.uploadKey(providerId, callsign);
@@ -179,7 +200,20 @@ export class LogbookSyncHost {
   ): Promise<SyncDownloadResult> {
     const entry = this.providers.get(providerId);
     if (!entry) {
-      return { downloaded: 0, matched: 0, updated: 0, errors: [`Provider not found: ${providerId}`] };
+      return {
+        downloaded: 0,
+        matched: 0,
+        updated: 0,
+        failures: [
+          createSyncFailure({
+            code: 'sync_provider_not_found',
+            message: `Provider not found: ${providerId}`,
+            source: 'host',
+            operation: 'download',
+            providerId,
+          }),
+        ],
+      };
     }
     return entry.provider.download(callsign, options);
   }

@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { promises as fs } from 'fs';
 import path from 'path';
 import type { PluginUIInstanceTarget } from '@tx5dr/plugin-api';
+import { createSyncFailure, errorToSyncFailure } from '@tx5dr/plugin-api';
 import type {
   JWTPayload,
   PermissionGrant,
@@ -47,6 +48,47 @@ const FORBIDDEN_RESPONSE = {
 } as const;
 
 type RuntimeAuthUser = NonNullable<FastifyRequest['authUser']>;
+
+function syncRouteFailure(
+  code: string,
+  message: string,
+  options: {
+    providerId?: string;
+    operation?: 'upload' | 'download' | 'preflight' | 'test_connection';
+    source?: 'host' | 'provider' | 'remote' | 'network' | 'logbook';
+  } = {},
+) {
+  return {
+    failures: [
+      createSyncFailure({
+        code,
+        message,
+        source: options.source ?? 'host',
+        operation: options.operation,
+        providerId: options.providerId,
+      }),
+    ],
+  };
+}
+
+function syncRouteException(
+  err: unknown,
+  providerId: string,
+  operation: 'upload' | 'download' | 'preflight' | 'test_connection',
+  fallback: string,
+) {
+  return {
+    failures: [
+      errorToSyncFailure(err, {
+        code: `sync_${operation}_failed`,
+        message: fallback,
+        source: 'provider',
+        operation,
+        providerId,
+      }),
+    ],
+  };
+}
 
 function getQueryToken(request: FastifyRequest): string | null {
   const query = request.query as Record<string, unknown>;
@@ -780,19 +822,30 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     const { providerId } = req.params;
     const { callsign } = req.body ?? {};
     if (!callsign) {
-      return reply.status(400).send({ error: 'callsign is required' });
+      return reply.status(400).send(syncRouteFailure('sync_callsign_required', 'callsign is required', {
+        providerId,
+        operation: 'test_connection',
+      }));
     }
     const provider = engine.pluginManager.logbookSyncHost.getProviderInfo(providerId);
     if (!provider) {
-      return reply.status(404).send({ error: 'provider not found' });
+      return reply.status(404).send(syncRouteFailure('sync_provider_not_found', 'provider not found', {
+        providerId,
+        operation: 'test_connection',
+      }));
     }
     if (!(provider.accessScope === 'operator'
       ? await requireCallsignBindingAccess(fastify, req, reply, callsign)
       : await requireMinimumRole(fastify, req, reply, UserRole.ADMIN))) {
       return;
     }
-    const result = await engine.pluginManager.logbookSyncHost.testConnection(providerId, callsign);
-    return reply.send(result);
+    try {
+      const result = await engine.pluginManager.logbookSyncHost.testConnection(providerId, callsign);
+      return reply.send(result);
+    } catch (err) {
+      logger.error(`Sync test connection failed: provider=${providerId}`, err);
+      return reply.status(500).send(syncRouteException(err, providerId, 'test_connection', 'Test connection failed'));
+    }
   });
 
   fastify.post<{
@@ -802,11 +855,17 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     const { providerId } = req.params;
     const { callsign } = req.body ?? {};
     if (!callsign) {
-      return reply.status(400).send({ error: 'callsign is required' });
+      return reply.status(400).send(syncRouteFailure('sync_callsign_required', 'callsign is required', {
+        providerId,
+        operation: 'preflight',
+      }));
     }
     const provider = engine.pluginManager.logbookSyncHost.getProviderInfo(providerId);
     if (!provider) {
-      return reply.status(404).send({ error: 'provider not found' });
+      return reply.status(404).send(syncRouteFailure('sync_provider_not_found', 'provider not found', {
+        providerId,
+        operation: 'preflight',
+      }));
     }
     if (!(provider.accessScope === 'operator'
       ? await requireCallsignBindingAccess(fastify, req, reply, callsign)
@@ -818,9 +877,8 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
       const result = await engine.pluginManager.logbookSyncHost.getUploadPreflight(providerId, callsign);
       return reply.send(result);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Upload preflight failed';
       logger.error(`Sync upload preflight failed: provider=${providerId}`, err);
-      return reply.status(500).send({ error: message });
+      return reply.status(500).send(syncRouteException(err, providerId, 'preflight', 'Upload preflight failed'));
     }
   });
 
@@ -831,11 +889,17 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     const { providerId } = req.params;
     const { callsign } = req.body ?? {};
     if (!callsign) {
-      return reply.status(400).send({ error: 'callsign is required' });
+      return reply.status(400).send(syncRouteFailure('sync_callsign_required', 'callsign is required', {
+        providerId,
+        operation: 'upload',
+      }));
     }
     const provider = engine.pluginManager.logbookSyncHost.getProviderInfo(providerId);
     if (!provider) {
-      return reply.status(404).send({ error: 'provider not found' });
+      return reply.status(404).send(syncRouteFailure('sync_provider_not_found', 'provider not found', {
+        providerId,
+        operation: 'upload',
+      }));
     }
     if (!(provider.accessScope === 'operator'
       ? await requireCallsignBindingAccess(fastify, req, reply, callsign)
@@ -847,9 +911,8 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
       const result = await engine.pluginManager.logbookSyncHost.upload(providerId, callsign);
       return reply.send(result);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Upload failed';
       logger.error(`Sync upload failed: provider=${providerId}`, err);
-      return reply.status(500).send({ error: message });
+      return reply.status(500).send(syncRouteException(err, providerId, 'upload', 'Upload failed'));
     }
   });
 
@@ -860,11 +923,17 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     const { providerId } = req.params;
     const { callsign, since } = req.body ?? {};
     if (!callsign) {
-      return reply.status(400).send({ error: 'callsign is required' });
+      return reply.status(400).send(syncRouteFailure('sync_callsign_required', 'callsign is required', {
+        providerId,
+        operation: 'download',
+      }));
     }
     const provider = engine.pluginManager.logbookSyncHost.getProviderInfo(providerId);
     if (!provider) {
-      return reply.status(404).send({ error: 'provider not found' });
+      return reply.status(404).send(syncRouteFailure('sync_provider_not_found', 'provider not found', {
+        providerId,
+        operation: 'download',
+      }));
     }
     if (!(provider.accessScope === 'operator'
       ? await requireCallsignBindingAccess(fastify, req, reply, callsign)
@@ -877,9 +946,8 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
       const result = await engine.pluginManager.logbookSyncHost.download(providerId, callsign, options);
       return reply.send(result);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Download failed';
       logger.error(`Sync download failed: provider=${providerId}`, err);
-      return reply.status(500).send({ error: message });
+      return reply.status(500).send(syncRouteException(err, providerId, 'download', 'Download failed'));
     }
   });
 }

@@ -129,19 +129,109 @@ export interface SyncAction {
 
 // ===== Result types =====
 
+export type SyncFailureSource = 'provider' | 'host' | 'remote' | 'network' | 'logbook';
+export type SyncFailureOperation = 'upload' | 'download' | 'full_sync' | 'preflight' | 'test_connection';
+
+export interface SyncFailure {
+  code: string;
+  message: string;
+  source?: SyncFailureSource;
+  operation?: SyncFailureOperation;
+  providerId?: string;
+  qsoId?: string;
+  qsoCallsign?: string;
+  httpStatus?: number;
+  retryable?: boolean;
+  detail?: string;
+}
+
+export type SyncFailureInput = Omit<SyncFailure, 'message' | 'detail'> & {
+  message?: string;
+  detail?: string;
+  secrets?: Array<string | undefined | null>;
+};
+
+const SECRET_QUERY_PARAM_PATTERN = /([?&](?:api[_-]?key|key|password|pass|token|auth|authorization|secret|login)=)([^&#\s]+)/gi;
+const WAVELOG_STATION_INFO_KEY_PATTERN = /(\/station_info\/)([^/?#\s]+)/gi;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function sanitizeSyncFailureText(
+  value: unknown,
+  secrets: Array<string | undefined | null> = [],
+): string {
+  let text = typeof value === 'string' ? value : String(value ?? '');
+
+  for (const secret of secrets) {
+    if (!secret || secret.length < 4) {
+      continue;
+    }
+    text = text.replace(new RegExp(escapeRegExp(secret), 'g'), '[redacted]');
+  }
+
+  return text
+    .replace(SECRET_QUERY_PARAM_PATTERN, '$1[redacted]')
+    .replace(WAVELOG_STATION_INFO_KEY_PATTERN, '$1[redacted]');
+}
+
+export function createSyncFailure(input: SyncFailureInput): SyncFailure {
+  const secrets = input.secrets ?? [];
+  const message = sanitizeSyncFailureText(input.message || input.code || 'Sync failed', secrets);
+  const detail = input.detail ? sanitizeSyncFailureText(input.detail, secrets) : undefined;
+  return {
+    code: input.code,
+    message,
+    source: input.source,
+    operation: input.operation,
+    providerId: input.providerId,
+    qsoId: input.qsoId,
+    qsoCallsign: input.qsoCallsign,
+    httpStatus: input.httpStatus,
+    retryable: input.retryable,
+    detail,
+  };
+}
+
+export function errorToSyncFailure(
+  error: unknown,
+  defaults: SyncFailureInput,
+): SyncFailure {
+  const message = error instanceof Error
+    ? error.message
+    : (typeof error === 'string' ? error : defaults.message);
+  const errorCause = error instanceof Error
+    ? (error as unknown as { cause?: unknown }).cause
+    : undefined;
+  const cause = errorCause instanceof Error ? errorCause.message : undefined;
+  return createSyncFailure({
+    ...defaults,
+    message: message || defaults.message || defaults.code,
+    detail: defaults.detail ?? cause,
+  });
+}
+
+export function failureMessage(failure: SyncFailure): string {
+  const prefix = failure.qsoCallsign ? `${failure.qsoCallsign}: ` : '';
+  const suffix = failure.httpStatus ? ` (HTTP ${failure.httpStatus})` : '';
+  return `${prefix}${failure.message}${suffix}`;
+}
+
 export interface SyncTestResult {
   success: boolean;
   /** Human-readable result description. */
   message?: string;
   /** Additional service-specific details (e.g. account info, logbook count). */
   details?: unknown;
+  failures?: SyncFailure[];
 }
 
 export interface SyncUploadResult {
   uploaded: number;
   skipped: number;
   failed: number;
-  errors?: string[];
+  failures?: SyncFailure[];
 }
 
 export interface SyncUploadOptions {
@@ -178,7 +268,7 @@ export interface SyncDownloadResult {
   matched: number;
   /** Number of local QSOs whose QSL status was updated. */
   updated: number;
-  errors?: string[];
+  failures?: SyncFailure[];
 }
 
 export interface SyncDownloadOptions {

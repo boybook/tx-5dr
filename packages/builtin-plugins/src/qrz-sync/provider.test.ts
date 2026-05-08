@@ -83,7 +83,7 @@ describe('QRZSyncProvider', () => {
       records: [unsentQso, sentQso],
     });
 
-    expect(result).toEqual({ uploaded: 1, skipped: 0, failed: 0, errors: undefined });
+    expect(result).toEqual({ uploaded: 1, skipped: 0, failed: 0, failures: undefined });
     expect(queryQSOs).not.toHaveBeenCalled();
     expect(updateQSO).toHaveBeenCalledTimes(1);
     expect(updateQSO).toHaveBeenCalledWith('qso-1', {
@@ -114,5 +114,64 @@ describe('QRZSyncProvider', () => {
     expect(result.failed).toBe(0);
     expect(queryQSOs).toHaveBeenCalledTimes(1);
     expect(queryQSOs).toHaveBeenCalledWith({});
+  });
+
+  it('returns structured failure when QRZ is not configured', async () => {
+    const { ctx } = createContext(async () => okResponse('RESULT=OK'));
+    const provider = new QRZSyncProvider(ctx);
+
+    const result = await provider.upload('BG5DRB');
+
+    expect(result.failures).toEqual([
+      expect.objectContaining({
+        code: 'qrz_not_configured',
+        message: 'QRZ not configured',
+        providerId: 'qrz',
+      }),
+    ]);
+  });
+
+  it('surfaces QRZ API rejection details as structured failures', async () => {
+    const { ctx } = createContext(async () => okResponse('RESULT=FAIL&REASON=Invalid API key'));
+    const provider = new QRZSyncProvider(ctx);
+    provider.setConfig('BG5DRB', {
+      apiKey: 'api-key',
+      autoUploadQSO: true,
+    });
+
+    const result = await provider.upload('BG5DRB', {
+      trigger: 'auto',
+      records: [createQso('qso-1')],
+    });
+
+    expect(result.failures).toEqual([
+      expect.objectContaining({
+        code: 'qrz_upload_rejected',
+        message: 'Invalid API key',
+        qsoCallsign: 'N0CALL',
+      }),
+    ]);
+  });
+
+  it('surfaces QRZ network errors as retryable structured failures', async () => {
+    const { ctx } = createContext(async () => {
+      throw new Error('fetch failed');
+    });
+    const provider = new QRZSyncProvider(ctx);
+    provider.setConfig('BG5DRB', {
+      apiKey: 'api-key',
+      autoUploadQSO: true,
+    });
+
+    const result = await provider.upload('BG5DRB', {
+      trigger: 'auto',
+      records: [createQso('qso-1')],
+    });
+
+    expect(result.failures?.[0]).toEqual(expect.objectContaining({
+      code: 'qrz_upload_failed',
+      source: 'network',
+      retryable: true,
+    }));
   });
 });

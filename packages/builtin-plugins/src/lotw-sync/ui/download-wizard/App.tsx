@@ -40,8 +40,13 @@ interface DownloadResult {
   downloaded?: number;
   matched?: number;
   updated?: number;
-  errors?: string[];
-  error?: string;
+  failures?: Array<{
+    code: string;
+    message: string;
+    qsoCallsign?: string;
+    httpStatus?: number;
+    detail?: string;
+  }>;
 }
 
 function formatDate(date: Date): string {
@@ -99,8 +104,9 @@ export function App() {
         since,
       }) as DownloadResult;
 
-      if (res.error) {
-        setStatus({ text: `${t('failed')}: ${res.error}`, type: 'error' });
+      if (res.failures?.length) {
+        setStatus({ text: `${t('failed')}: ${res.failures.map(f => f.message || f.code).join('; ')}`, type: 'error' });
+        setResult(res);
         return;
       }
 
@@ -158,15 +164,15 @@ export function App() {
               <span>{t('updated')}</span>
               <span className="stat-value">{result.updated ?? 0}</span>
             </div>
-            {result.errors && result.errors.length > 0 && (
+            {result.failures && result.failures.length > 0 && (
               <>
                 <div className="stat">
                   <span>{t('errors')}</span>
                   <span className="stat-value" style={{ color: 'var(--tx5dr-danger)' }}>
-                    {result.errors.length}
+                    {result.failures.length}
                   </span>
                 </div>
-                {result.errors.map((errMsg, i) => (
+                {result.failures.map((failure, i) => (
                   <div
                     key={i}
                     style={{
@@ -175,7 +181,9 @@ export function App() {
                       marginTop: '4px',
                     }}
                   >
-                    {errMsg}
+                    {failure.qsoCallsign ? `${failure.qsoCallsign}: ` : ''}{failure.message || failure.code}
+                    {failure.httpStatus ? ` (HTTP ${failure.httpStatus})` : ''}
+                    {failure.detail && failure.detail !== failure.message ? ` — ${failure.detail}` : ''}
                   </div>
                 ))}
               </>

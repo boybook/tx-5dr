@@ -77,7 +77,7 @@ describe('WaveLogSyncProvider', () => {
       records: [qso],
     });
 
-    expect(result).toEqual({ uploaded: 1, skipped: 0, failed: 0, errors: undefined });
+    expect(result).toEqual({ uploaded: 1, skipped: 0, failed: 0, failures: undefined });
     expect(queryQSOs).not.toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(provider.getConfig('BG5DRB')?.lastSyncTime).toEqual(expect.any(Number));
@@ -105,7 +105,14 @@ describe('WaveLogSyncProvider', () => {
 
     expect(result.uploaded).toBe(1);
     expect(result.failed).toBe(1);
-    expect(result.errors).toEqual(['N0CALL: Server rejected QSO']);
+    expect(result.failures).toEqual([
+      expect.objectContaining({
+        code: 'wavelog_upload_rejected',
+        message: 'Server rejected QSO',
+        qsoCallsign: 'N0CALL',
+        qsoId: 'qso-2',
+      }),
+    ]);
     expect(provider.getConfig('BG5DRB')?.lastSyncTime).toBeUndefined();
   });
 
@@ -139,5 +146,71 @@ describe('WaveLogSyncProvider', () => {
     expect(queryArg?.timeRange?.end).toEqual(expect.any(Number));
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(provider.getConfig('BG5DRB')?.lastSyncTime).toEqual(expect.any(Number));
+  });
+
+  it('returns structured failure when WaveLog is not configured', async () => {
+    const { ctx } = createContext(async () => okResponse({ status: 'created' }));
+    const provider = new WaveLogSyncProvider(ctx);
+
+    const result = await provider.upload('BG5DRB');
+
+    expect(result.failures).toEqual([
+      expect.objectContaining({
+        code: 'wavelog_not_configured',
+        message: 'WaveLog not configured',
+        providerId: 'wavelog',
+      }),
+    ]);
+  });
+
+  it('surfaces WaveLog HTTP JSON failure details', async () => {
+    const { ctx } = createContext(async () =>
+      okResponse({ status: 'error', message: 'Station profile is invalid' }, 500),
+    );
+    const provider = new WaveLogSyncProvider(ctx);
+    provider.setConfig('BG5DRB', {
+      url: 'https://wavelog.example.com',
+      apiKey: 'api-key',
+      stationId: 'station-1',
+      radioName: 'TX5DR',
+      autoUploadQSO: true,
+    });
+
+    const result = await provider.upload('BG5DRB', {
+      trigger: 'auto',
+      records: [createQso('qso-1')],
+    });
+
+    expect(result.failures).toEqual([
+      expect.objectContaining({
+        code: 'wavelog_upload_rejected',
+        message: 'Station profile is invalid',
+        qsoCallsign: 'N0CALL',
+      }),
+    ]);
+  });
+
+  it('surfaces WaveLog invalid JSON response details', async () => {
+    const { ctx } = createContext(async () =>
+      new Response('upstream exploded', { status: 502 }),
+    );
+    const provider = new WaveLogSyncProvider(ctx);
+    provider.setConfig('BG5DRB', {
+      url: 'https://wavelog.example.com',
+      apiKey: 'api-key',
+      stationId: 'station-1',
+      radioName: 'TX5DR',
+      autoUploadQSO: true,
+    });
+
+    const result = await provider.upload('BG5DRB', {
+      trigger: 'auto',
+      records: [createQso('qso-1')],
+    });
+
+    expect(result.failures?.[0]).toEqual(expect.objectContaining({
+      code: 'wavelog_upload_failed',
+      message: expect.stringContaining('upstream exploded'),
+    }));
   });
 });
