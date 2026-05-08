@@ -19,7 +19,8 @@
     "clearData": "Clear Data",
     "clearAllData": "Clear All",
     "clearLeftData": "Clear Left",
-    "clearRightData": "Clear Right"
+    "clearRightData": "Clear Right",
+    "clear": "Clear"
   },
   "qsoNotifications": {
     "enable": "Enable QSO system notifications",

@@ -27,6 +27,7 @@ import { RadioProfileSchema, ProfileChangedEventSchema } from './radio-profile.s
 import { UserRole } from './auth.schema.js';
 import type { VoicePTTLock } from './voice.schema.js';
 import type { VoiceKeyerStatus } from './voice-keyer.schema.js';
+import type { CWKeyerStatus, CWKeyerConfig } from './cw-keyer.schema.js';
 import { CapabilityListSchema, CapabilityStateSchema, WriteCapabilityPayloadSchema } from './radio-capability.schema.js';
 import { RadioPowerStateEventSchema } from './radio-power.schema.js';
 import { AudioSidecarStatusPayloadSchema } from './audio-sidecar.schema.js';
@@ -175,6 +176,20 @@ export enum WSMessageType {
   VOICE_KEYER_STOP = 'voiceKeyerStop',
   VOICE_KEYER_STATUS_CHANGED = 'voiceKeyerStatusChanged',
 
+  // ===== CW 模式 =====
+  /** CW 键控器状态变化（server → client） */
+  CW_KEYER_STATUS = 'cwKeyerStatus',
+  /** CW 手键动作（client → server） */
+  CW_KEY_ACTION = 'cwKeyAction',
+  /** CW 文字输入（client → server） */
+  CW_TEXT_INPUT = 'cwTextInput',
+  /** CW 播放预设报文（client → server） */
+  CW_PLAY_MESSAGE = 'cwPlayMessage',
+  /** CW 停止播放（client → server） */
+  CW_STOP_MESSAGE = 'cwStopMessage',
+  /** CW 配置变更通知（server → client） */
+  CW_CONFIG_CHANGED = 'cwConfigChanged',
+
   // ===== 进程监控 =====
   PROCESS_SNAPSHOT = 'processSnapshot',
   PROCESS_SNAPSHOT_HISTORY = 'processSnapshotHistory',
@@ -215,8 +230,8 @@ export const SystemStatusSchema = z.object({
   radioConnectionHealth: z.object({
     connectionHealthy: z.boolean(),
   }).optional(),
-  /** 引擎模式：digital（FT8/FT4）或 voice（语音通联） */
-  engineMode: z.enum(['digital', 'voice']).default('digital'),
+  /** 引擎模式：digital（FT8/FT4）、voice（语音通联）或 cw（莫尔斯码） */
+  engineMode: z.enum(['digital', 'voice', 'cw']).default('digital'),
   /** 当前电台调制模式（语音模式下使用，如 USB/LSB/FM/AM） */
   currentRadioMode: z.string().optional(),
   /** 引擎状态机当前状态 */
@@ -1518,6 +1533,10 @@ export interface DigitalRadioEngineEvents {
   voicePttLockChanged: (data: VoicePTTLock) => void;
   voiceRadioModeChanged: (data: { radioMode: string }) => void;
   voiceKeyerStatusChanged: (data: VoiceKeyerStatus) => void;
+
+  // CW 模式事件
+  cwKeyerStatusChanged: (data: CWKeyerStatus) => void;
+  cwConfigChanged: (data: CWKeyerConfig) => void;
 
   // 进程监控事件
   processSnapshot: (data: import('./process-monitor.schema.js').ProcessSnapshot) => void;

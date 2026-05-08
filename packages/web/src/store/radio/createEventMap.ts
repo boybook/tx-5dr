@@ -646,5 +646,11 @@ export function createRadioEventMap({
       logger.debug('Audio sidecar status changed', { status: payload.status, retryAttempt: payload.retryAttempt });
       radioDispatch({ type: 'audioSidecarStatusChanged', payload });
     },
+    cwKeyerStatusChanged: (data: unknown) => {
+      radioDispatch({ type: 'UPDATE_CW_KEYER_STATUS', payload: data as import('@tx5dr/contracts').CWKeyerStatus });
+    },
+    cwConfigChanged: (data: unknown) => {
+      radioDispatch({ type: 'UPDATE_CW_CONFIG', payload: data as import('@tx5dr/contracts').CWKeyerConfig });
+    },
   };
 }

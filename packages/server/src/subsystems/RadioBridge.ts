@@ -299,6 +299,16 @@ export class RadioBridge {
       return;
     }
 
+    if (frequencyInfo.mode === 'CW') {
+      await configManager.updateLastCWFrequency({
+        frequency: frequencyInfo.frequency,
+        radioMode: frequencyInfo.radioMode,
+        band: frequencyInfo.band,
+        description: frequencyInfo.description,
+      });
+      return;
+    }
+
     await configManager.updateLastSelectedFrequency({
       frequency: frequencyInfo.frequency,
       mode: frequencyInfo.mode,

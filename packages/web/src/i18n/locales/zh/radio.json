@@ -652,5 +652,28 @@
         "plus": "正频移"
       }
     }
+  },
+  "cw": {
+    "title": "CW",
+    "wpm": "WPM 速度",
+    "keyMethod": "键控方式",
+    "textInputPlaceholder": "输入 CW 报文，{MYCALL} 将被替换为当前呼号...",
+    "send": "发送",
+    "sending": "发送中",
+    "presetMessages": "预设报文",
+    "play": "播放",
+    "stop": "停止",
+    "repeat": "循环",
+    "editMessage": "编辑报文",
+    "messageLabel": "标签",
+    "messageText": "报文内容",
+    "messageTextPlaceholder": "CQ CQ CQ DE {{callsign}}",
+    "repeatInterval": "间隔 (秒)",
+    "noMessages": "未配置报文",
+    "decreaseSlots": "减少槽位",
+    "increaseSlots": "增加槽位",
+    "operator": "操作员",
+    "sentHistory": "上一条",
+    "lastSent": "上次"
   }
 }

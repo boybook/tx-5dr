@@ -260,7 +260,20 @@
     "modeNone": "No Radio",
     "modeNetwork": "Rigctld Server",
     "modeSerial": "Hamlib Direct Radio",
-    "modeIcomWlan": "ICOM WLAN"
+    "modeIcomWlan": "ICOM WLAN",
+    "cwKeyerSection": "CW Keyer Port",
+    "cwKeyerSectionDesc": "CW keying uses a separate serial port DTR/RTS pin, independent from CAT control",
+    "cwKeyPort": "CW Key Port",
+    "cwKeyPortPlaceholder": "Select or enter serial port path",
+    "cwKeyPortDesc": "Serial port dedicated to CW keying (separate from CAT/PTT)",
+    "cwKeyMethod": "Key Method",
+    "cwKeyMethodDesc": "Which pin to use for keying the radio",
+    "cwKeyPortRequired": "Please configure CW key port first",
+    "testCW": "Test CW",
+    "testingCW": "Testing CW...",
+    "testCWSuccess": "CW keyer test successful! Keyed for 0.5 seconds.",
+    "testCWFailed": "CW keyer test failed",
+    "testCWFailedCheck": "CW keyer test failed, please check port and connection"
   },
   "audio": {
     "loading": "Loading audio devices...",

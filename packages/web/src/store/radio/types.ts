@@ -30,6 +30,8 @@ import type {
   SquelchStatus,
   SlotInfo,
   TuneToneStatus,
+  CWKeyerStatus,
+  CWKeyerConfig,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import type { RadioService } from '../../services/radioService';
@@ -94,6 +96,8 @@ export interface RadioState {
   subscribedSpectrumKind: SpectrumKind | null;
   clockStatus: ClockStatusSummary | null;
   audioSidecar: AudioSidecarStatusPayload | null;
+  cwKeyerStatus: CWKeyerStatus | null;
+  cwConfig: CWKeyerConfig | null;
 }
 
 export interface ErrorEventData {
@@ -173,7 +177,9 @@ export type RadioAction =
   | { type: 'setSelectedSpectrumKind'; payload: SpectrumKind | null }
   | { type: 'setSubscribedSpectrumKind'; payload: SpectrumKind | null }
   | { type: 'clockStatusChanged'; payload: ClockStatusSummary }
-  | { type: 'audioSidecarStatusChanged'; payload: AudioSidecarStatusPayload };
+  | { type: 'audioSidecarStatusChanged'; payload: AudioSidecarStatusPayload }
+  | { type: 'UPDATE_CW_KEYER_STATUS'; payload: CWKeyerStatus }
+  | { type: 'UPDATE_CW_CONFIG'; payload: CWKeyerConfig };
 
 export interface SlotPacksState {
   slotPacks: SlotPack[];

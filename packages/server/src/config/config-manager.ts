@@ -65,6 +65,13 @@ export interface AppConfig {
     band: string;
     description?: string;
   } | null;
+  // 最后选择的 CW 模式频率（独立于数字/语音模式，切换时各自恢复）
+  lastCWFrequency?: {
+    frequency: number;
+    radioMode?: string;
+    band: string;
+    description?: string;
+  } | null;
   // 最后设置的音量增益（旧版全局值，保留用于迁移）
   lastVolumeGain: {
     gain: number; // 线性增益值
@@ -85,7 +92,7 @@ export interface AppConfig {
   /** Custom frequency presets (null/undefined = use built-in defaults, includes all modes: FT8/FT4/VOICE) */
   customFrequencyPresets?: PresetFrequency[] | null;
   /** Last used engine mode ('digital' or 'voice'). Restored on startup. */
-  lastEngineMode?: 'digital' | 'voice';
+  lastEngineMode?: 'digital' | 'voice' | 'cw';
   /** Last used digital sub-mode name ('FT8' or 'FT4'). Restored on startup within digital mode. */
   lastDigitalModeName?: string;
   /** Voice mode operator callsign */
@@ -906,6 +913,35 @@ export class ConfigManager {
   }
 
   /**
+   * 获取最后选择的 CW 频率
+   */
+  getLastCWFrequency(): AppConfig['lastCWFrequency'] {
+    return this.config.lastCWFrequency ? { ...this.config.lastCWFrequency } : null;
+  }
+
+  /**
+   * 更新最后选择的 CW 频率
+   */
+  async updateLastCWFrequency(frequencyConfig: {
+    frequency: number;
+    radioMode?: string;
+    band: string;
+    description?: string;
+  }): Promise<void> {
+    this.config.lastCWFrequency = { ...frequencyConfig };
+    await this.saveConfig();
+    logger.debug(`Last CW frequency saved: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);
+  }
+
+  /**
+   * 清除最后选择的 CW 频率
+   */
+  async clearLastCWFrequency(): Promise<void> {
+    this.config.lastCWFrequency = null;
+    await this.saveConfig();
+  }
+
+  /**
    * 获取最后设置的音量增益
    */
   getLastVolumeGain(): AppConfig['lastVolumeGain'] {
@@ -1137,11 +1173,11 @@ export class ConfigManager {
 
   // ==================== Engine mode persistence ====================
 
-  getLastEngineMode(): 'digital' | 'voice' {
+  getLastEngineMode(): 'digital' | 'voice' | 'cw' {
     return this.config.lastEngineMode ?? 'digital';
   }
 
-  async setLastEngineMode(mode: 'digital' | 'voice'): Promise<void> {
+  async setLastEngineMode(mode: 'digital' | 'voice' | 'cw'): Promise<void> {
     this.config.lastEngineMode = mode;
     await this.saveConfig();
   }

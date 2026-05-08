@@ -164,7 +164,7 @@ export interface IRadioConnectionEvents {
   meterData: (data: MeterData) => void;
 }
 
-export type RadioModeIntent = 'voice' | 'digital';
+export type RadioModeIntent = 'voice' | 'digital' | 'cw';
 export type RadioModeBandwidth = 'narrow' | 'wide' | 'normal' | 'nochange' | number;
 export type RadioModeReadBandwidth = string | number;
 

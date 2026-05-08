@@ -1004,6 +1004,11 @@ export class HamlibConnection
       return [baseMode];
     }
 
+    if (intent === 'cw') {
+      // CW intent uses the CW mode directly (typically 'CW')
+      return ['CW'];
+    }
+
     if (intent === 'digital' && dataMode && dataMode !== baseMode) {
       return Array.from(new Set([dataMode, baseMode]));
     }

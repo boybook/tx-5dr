@@ -63,6 +63,14 @@ export const MODES = {
     transmitTiming: 0,
     encodeAdvance: 0,
   } as ModeDescriptor,
+  CW: {
+    name: 'CW',
+    slotMs: 0,            // CW 模式无时隙概念
+    toleranceMs: 0,
+    windowTiming: [],     // 无解码窗口
+    transmitTiming: 0,
+    encodeAdvance: 0,
+  } as ModeDescriptor,
 } as const;
 
 /**

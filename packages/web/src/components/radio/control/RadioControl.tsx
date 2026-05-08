@@ -638,6 +638,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     if (modeName === 'VOICE') {
       return t('mode.voice');
     }
+    if (modeName === 'CW') {
+      return 'CW';
+    }
     return modeName;
   }, [t]);
 
@@ -1051,6 +1054,18 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       return;
     }
 
+    // Handle CW mode switch via WSClient
+    if (selectedModeName === 'CW') {
+      try {
+        connection.state.radioService?.wsClientInstance.setMode({ name: 'CW' } as ModeDescriptor);
+        resetOperatorsAfterOperatingStateChange();
+        logger.info('Mode switch requested: CW');
+      } catch (error) {
+        logger.error('Failed to switch to CW mode:', error);
+      }
+      return;
+    }
+
     const selectedMode = availableModes.find(mode => mode.name === selectedModeName);
 
     if (!selectedMode) {
@@ -1428,16 +1443,21 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const modeOptions = React.useMemo(() => {
     const modes = (availableModes || []).filter(mode => mode && mode.name);
 
-    if (radioMode.engineMode !== 'voice' || modes.some(mode => mode.name === 'VOICE')) {
-      return modes;
+    const result = [...modes];
+    if (!modes.some(mode => mode.name === 'VOICE')) {
+      result.unshift({ name: 'VOICE' } as ModeDescriptor);
     }
-
-    return [{ name: 'VOICE' } as ModeDescriptor, ...modes];
-  }, [availableModes, radioMode.engineMode]);
+    if (!modes.some(mode => mode.name === 'CW')) {
+      result.unshift({ name: 'CW' } as ModeDescriptor);
+    }
+    return result;
+  }, [availableModes]);
 
   const modeSelectLabel = radioMode.engineMode === 'voice'
     ? getModeDisplayLabel('VOICE')
-    : (radioMode.currentMode?.name ? getModeDisplayLabel(radioMode.currentMode.name) : (modeError || t('mode.placeholder')));
+    : radioMode.engineMode === 'cw'
+      ? getModeDisplayLabel('CW')
+      : (radioMode.currentMode?.name ? getModeDisplayLabel(radioMode.currentMode.name) : (modeError || t('mode.placeholder')));
 
   const { measureRef: frequencyMeasureRef, width: frequencySelectWidth } = useMeasuredSelectWidth(
     frequencySelectLabel,

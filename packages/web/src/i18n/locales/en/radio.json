@@ -652,5 +652,28 @@
         "plus": "Plus"
       }
     }
+  },
+  "cw": {
+    "title": "CW",
+    "wpm": "WPM",
+    "keyMethod": "Key Method",
+    "textInputPlaceholder": "Enter CW text, {MYCALL} will be replaced...",
+    "send": "Send",
+    "sending": "Sending",
+    "presetMessages": "Preset Messages",
+    "play": "Play",
+    "stop": "Stop",
+    "repeat": "Repeat",
+    "editMessage": "Edit Message",
+    "messageLabel": "Label",
+    "messageText": "Text",
+    "messageTextPlaceholder": "CQ CQ CQ DE {{callsign}}",
+    "repeatInterval": "Interval (s)",
+    "noMessages": "No messages configured",
+    "decreaseSlots": "Remove slot",
+    "increaseSlots": "Add slot",
+    "operator": "Operator",
+    "sentHistory": "Previous",
+    "lastSent": "Last"
   }
 }
