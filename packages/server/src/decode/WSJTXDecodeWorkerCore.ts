@@ -43,12 +43,21 @@ export class WSJTXDecodeWorkerCore {
       resampledAudioData = originalAudioData;
     }
 
-    const baseFrequency = 0;
+    const apContext = request.apContext;
+    const baseFrequency = apContext ? apContext.frequencyHz : 0;
     const decodeMode = request.mode === 'FT4' ? WSJTXMode.FT4 : WSJTXMode.FT8;
     const audioInt16 = await this.lib.convertAudioFormat(resampledAudioData, 'int16') as Int16Array;
     const rawResult = await this.lib.decode(decodeMode, audioInt16, {
       frequency: baseFrequency,
+      txFrequency: baseFrequency,
       threads: this.nativeThreads,
+      apDecode: Boolean(apContext),
+      decodeDepth: 1,
+      myCall: apContext?.myCall,
+      myGrid: apContext?.myGrid,
+      dxCall: apContext?.dxCall,
+      dxGrid: apContext?.dxGrid,
+      qsoProgress: apContext?.qsoProgress ?? 0,
     });
 
     const messages = rawResult.messages as any[];
@@ -56,7 +65,7 @@ export class WSJTXDecodeWorkerCore {
       message: msg.text,
       snr: msg.snr,
       dt: msg.deltaTime,
-      freq: (msg.deltaFrequency || 0) + baseFrequency,
+      freq: msg.deltaFrequency || 0,
       confidence: 1.0,
     }));
 
@@ -73,6 +82,10 @@ export class WSJTXDecodeWorkerCore {
     logger.debug('decode complete', {
       slotId: request.slotId,
       windowIdx: request.windowIdx,
+      apDecode: Boolean(apContext),
+      apOperatorId: apContext?.operatorId,
+      apCurrentSlot: apContext?.currentSlot,
+      apQsoProgress: apContext?.qsoProgress,
       signals: decodeResult.frames.length,
       processingTimeMs: Number(processingTimeMs.toFixed(2)),
     });

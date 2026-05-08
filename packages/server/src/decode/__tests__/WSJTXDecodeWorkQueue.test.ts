@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import type { DecodeRequest, DecodeResult } from '@tx5dr/contracts';
 
-const decodeCalls = vi.hoisted((): Array<{ mode: number; frequency: number; samples: number; threads?: number }> => []);
+const decodeCalls = vi.hoisted((): Array<{ mode: number; samples: number; options: Record<string, unknown> }> => []);
 const constructorCalls = vi.hoisted((): Array<{ maxThreads?: number }> => []);
 const pendingMessages = vi.hoisted((): Array<{
   text: string;
@@ -26,8 +26,8 @@ vi.mock('wsjtx-lib', () => {
       return new Int16Array(audioData.length);
     }
 
-    async decode(mode: number, audioData: Int16Array, options: { frequency: number; threads?: number }): Promise<{ success: boolean; messages: Array<{ text: string; snr: number; deltaTime: number; deltaFrequency: number }> }> {
-      decodeCalls.push({ mode, frequency: options.frequency, samples: audioData.length, threads: options.threads });
+    async decode(mode: number, audioData: Int16Array, options: Record<string, unknown>): Promise<{ success: boolean; messages: Array<{ text: string; snr: number; deltaTime: number; deltaFrequency: number }> }> {
+      decodeCalls.push({ mode, samples: audioData.length, options: { ...options } });
       pendingMessages.push({
         text: mode === WSJTXMode.FT4 ? 'CQ DX BH1ABC OM88' : 'CQ DX FT8TEST OM88',
         snr: 10,
@@ -76,7 +76,18 @@ describe('WSJTXDecodeWorkerCore mode selection', () => {
     });
 
     expect(constructorCalls).toEqual([{ maxThreads: 1 }]);
-    expect(decodeCalls).toEqual([{ mode: 1, frequency: 0, samples: 1200, threads: 1 }]);
+    expect(decodeCalls).toEqual([{
+      mode: 1,
+      samples: 1200,
+      options: expect.objectContaining({
+        frequency: 0,
+        txFrequency: 0,
+        threads: 1,
+        apDecode: false,
+        decodeDepth: 1,
+        qsoProgress: 0,
+      }),
+    }]);
     expect(result.frames).toEqual([
       expect.objectContaining({
         message: 'CQ DX BH1ABC OM88',
@@ -99,7 +110,60 @@ describe('WSJTXDecodeWorkerCore mode selection', () => {
       windowOffsetMs: -300,
     });
 
-    expect(decodeCalls).toEqual([{ mode: 0, frequency: 0, samples: 600, threads: 1 }]);
+    expect(decodeCalls).toEqual([{
+      mode: 0,
+      samples: 600,
+      options: expect.objectContaining({
+        frequency: 0,
+        txFrequency: 0,
+        threads: 1,
+        apDecode: false,
+        decodeDepth: 1,
+      }),
+    }]);
+  });
+
+  it('passes conservative AP context to native decode when provided', async () => {
+    decodeCalls.length = 0;
+    pendingMessages.length = 0;
+
+    const result = await decodeOnce({
+      slotId: 'FT8-0-0',
+      mode: 'FT8',
+      windowIdx: 0,
+      pcm: makePcm(600),
+      sampleRate: 12000,
+      timestamp: Date.now(),
+      windowOffsetMs: -300,
+      apContext: {
+        operatorId: 'op1',
+        myCall: 'BG4IAJ',
+        myGrid: 'OM96',
+        dxCall: 'JA1AAA',
+        dxGrid: 'PM95',
+        frequencyHz: 1500,
+        qsoProgress: 4,
+        currentSlot: 'TX4',
+      },
+    });
+
+    expect(decodeCalls).toEqual([{
+      mode: 0,
+      samples: 600,
+      options: expect.objectContaining({
+        frequency: 1500,
+        txFrequency: 1500,
+        threads: 1,
+        apDecode: true,
+        decodeDepth: 1,
+        myCall: 'BG4IAJ',
+        myGrid: 'OM96',
+        dxCall: 'JA1AAA',
+        dxGrid: 'PM95',
+        qsoProgress: 4,
+      }),
+    }]);
+    expect(result.frames[0]?.freq).toBe(1000);
   });
 });
 

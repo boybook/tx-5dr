@@ -597,7 +597,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.realDecodeQueue,
       this.audioStreamManager.getAudioProvider(),
       this._operatorManager,
-      () => ConfigManager.getInstance().getFT8Config().decodeWhileTransmitting ?? false
+      () => ConfigManager.getInstance().getFT8Config().decodeWhileTransmitting ?? false,
+      (slotInfo, windowIdx) => this._operatorManager.getDecodeApContext(slotInfo, windowIdx)
     );
 
     await this.spectrumScheduler.initialize(

@@ -51,11 +51,13 @@ function createManager(options: {
   encodeQueue?: { push: ReturnType<typeof vi.fn> };
   getRadioFrequency?: () => Promise<number | null>;
   getKnownRadioFrequency?: () => number | null;
+  callsignTracker?: { getGrid: (callsign: string) => string | undefined };
 }) {
   const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
   const slotPackManager = {
     getActiveSlotPacks: vi.fn(() => options.activeSlotPacks ?? []),
     readStoredRecords: vi.fn(async () => options.storedRecords ?? []),
+    getFrequencyContext: vi.fn(() => undefined),
   };
   const encodeQueue = options.encodeQueue ?? { push: vi.fn() };
   const clockSource = {
@@ -82,6 +84,7 @@ function createManager(options: {
     slotPackManager: slotPackManager as any,
     getRadioFrequency: options.getRadioFrequency,
     getKnownRadioFrequency: options.getKnownRadioFrequency,
+    callsignTracker: options.callsignTracker as any,
   });
 
   return {
@@ -301,6 +304,104 @@ describe('RadioOperatorManager same transmission guard', () => {
       message: 'CQ BG4IAJ OM96',
     });
     expect(manager.getOperatorById('op1')?.isTransmitting).toBe(false);
+  });
+});
+
+describe('RadioOperatorManager decode AP context selection', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns a TX3/TX4 AP context only for RX-cycle automated operators', async () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+    });
+    await addBasicOperator(manager, 'op1', 'BG4IAJ');
+    manager.setPluginManager({
+      getOperatorRuntimeStatus: vi.fn(() => ({
+        strategyName: 'standard-qso',
+        currentSlot: 'TX3',
+        context: {
+          targetCallsign: 'ja1aaa',
+          targetGrid: 'pm95',
+        },
+      })),
+    } as any);
+    manager.start();
+
+    expect(manager.getDecodeApContext(createSlotInfo(0), 0)).toBeUndefined();
+    expect(manager.getDecodeApContext(createSlotInfo(MODES.FT8.slotMs), 0)).toEqual({
+      operatorId: 'op1',
+      myCall: 'BG4IAJ',
+      myGrid: 'OM96',
+      dxCall: 'JA1AAA',
+      dxGrid: 'PM95',
+      frequencyHz: 1500,
+      qsoProgress: 3,
+      currentSlot: 'TX3',
+    });
+  });
+
+  it('does not enable AP for TX1, TX2, TX5, TX6, or missing targets', async () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+    });
+    await addBasicOperator(manager, 'op1', 'BG4IAJ');
+    const runtime: {
+      strategyName: string;
+      currentSlot: string;
+      context: Record<string, unknown>;
+    } = {
+      strategyName: 'standard-qso',
+      currentSlot: 'TX1',
+      context: { targetCallsign: 'JA1AAA' },
+    };
+    manager.setPluginManager({
+      getOperatorRuntimeStatus: vi.fn(() => runtime),
+    } as any);
+    manager.start();
+
+    for (const slot of ['TX1', 'TX2', 'TX5', 'TX6']) {
+      runtime.currentSlot = slot;
+      expect(manager.getDecodeApContext(createSlotInfo(MODES.FT8.slotMs), 0)).toBeUndefined();
+    }
+
+    runtime.currentSlot = 'TX3';
+    runtime.context = {};
+    expect(manager.getDecodeApContext(createSlotInfo(MODES.FT8.slotMs), 0)).toBeUndefined();
+  });
+
+  it('chooses one stable best AP context and can use tracker grid fallback', async () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsignTracker: { getGrid: vi.fn(() => 'PM64') },
+    });
+    await addBasicOperator(manager, 'op2', 'BG4BBB');
+    await addBasicOperator(manager, 'op1', 'BG4AAA');
+
+    manager.setPluginManager({
+      getOperatorRuntimeStatus: vi.fn((operatorId: string) => operatorId === 'op2'
+        ? {
+            strategyName: 'standard-qso',
+            currentSlot: 'TX3',
+            context: { targetCallsign: 'JA2BBB' },
+          }
+        : {
+            strategyName: 'standard-qso',
+            currentSlot: 'TX4',
+            context: { targetCallsign: 'JA1AAA' },
+          }),
+    } as any);
+    manager.start();
+
+    expect(manager.getDecodeApContext(createSlotInfo(MODES.FT8.slotMs), 0)).toEqual(expect.objectContaining({
+      operatorId: 'op1',
+      myCall: 'BG4AAA',
+      dxCall: 'JA1AAA',
+      dxGrid: 'PM64',
+      qsoProgress: 4,
+      currentSlot: 'TX4',
+    }));
   });
 });
 

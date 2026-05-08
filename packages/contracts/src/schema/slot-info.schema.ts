@@ -97,6 +97,19 @@ export const FrameMessageSchema = z.object({
 
 export type FrameMessage = z.infer<typeof FrameMessageSchema>;
 
+export const DecodeApContextSchema = z.object({
+  operatorId: z.string(),
+  myCall: z.string(),
+  myGrid: z.string().optional(),
+  dxCall: z.string(),
+  dxGrid: z.string().optional(),
+  frequencyHz: z.number(),
+  qsoProgress: z.number(),
+  currentSlot: z.string(),
+});
+
+export type DecodeApContext = z.infer<typeof DecodeApContextSchema>;
+
 /**
  * 解码请求，用于SlotScheduler内部
  */
@@ -114,7 +127,9 @@ export const DecodeRequestSchema = z.object({
   /** 请求时间戳 */
   timestamp: z.number().default(() => Date.now()),
   /** 窗口时间偏移（毫秒） */
-  windowOffsetMs: z.number().default(0)
+  windowOffsetMs: z.number().default(0),
+  /** 可选的单操作员 AP decode 上下文 */
+  apContext: DecodeApContextSchema.optional()
 });
 
 export type DecodeRequest = z.infer<typeof DecodeRequestSchema>;
