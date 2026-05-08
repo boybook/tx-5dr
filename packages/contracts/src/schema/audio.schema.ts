@@ -9,6 +9,9 @@ export const AudioDeviceSchema = z.object({
   sampleRate: z.number(),
   sampleRates: z.array(z.number().int().positive()).optional(),
   type: z.enum(['input', 'output']),
+  availability: z.enum(['available', 'cached', 'active']).optional(),
+  isActiveByTx5dr: z.boolean().optional(),
+  lastSeenAt: z.number().int().positive().optional(),
 });
 
 export const AudioDeviceResolutionStatusSchema = z.enum([

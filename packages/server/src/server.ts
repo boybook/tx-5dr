@@ -9,6 +9,7 @@ import type { WebSocket } from 'ws';
 import type { HelloResponse } from '@tx5dr/contracts';
 import type { FastifyRequest, FastifyReply, FastifyError } from 'fastify';
 import { ConfigManager } from './config/config-manager.js';
+import { AudioDeviceManager } from './audio/audio-device-manager.js';
 import { DigitalRadioEngine } from './DigitalRadioEngine.js';
 import { UserRole } from '@tx5dr/contracts';
 import { AuthManager } from './auth/AuthManager.js';
@@ -131,6 +132,9 @@ export async function createServer() {
   const configManager = ConfigManager.getInstance();
   await configManager.initialize();
   fastify.log.info('Config manager initialized');
+
+  await AudioDeviceManager.getInstance().initializeDeviceRegistry();
+  fastify.log.info('Audio device registry initialized');
 
   // 初始化认证管理器
   const authManager = AuthManager.getInstance();

@@ -173,8 +173,8 @@ const DEFAULT_CONFIG: AppConfig = {
 const DEFAULT_AUDIO: AudioDeviceSettings = {
   inputSampleRate: 48000,
   outputSampleRate: 48000,
-  inputBufferSize: 768,
-  outputBufferSize: 768,
+  inputBufferSize: 1024,
+  outputBufferSize: 1024,
 };
 
 export function normalizeAudioDeviceSettings(audioConfig?: Partial<AudioDeviceSettings> | null): AudioDeviceSettings {
@@ -186,8 +186,8 @@ export function normalizeAudioDeviceSettings(audioConfig?: Partial<AudioDeviceSe
     outputDeviceName: audioConfig?.outputDeviceName,
     inputSampleRate: audioConfig?.inputSampleRate ?? legacySampleRate ?? 48000,
     outputSampleRate: audioConfig?.outputSampleRate ?? legacySampleRate ?? 48000,
-    inputBufferSize: audioConfig?.inputBufferSize ?? legacyBufferSize ?? 768,
-    outputBufferSize: audioConfig?.outputBufferSize ?? legacyBufferSize ?? 768,
+    inputBufferSize: audioConfig?.inputBufferSize ?? legacyBufferSize ?? 1024,
+    outputBufferSize: audioConfig?.outputBufferSize ?? legacyBufferSize ?? 1024,
   };
 }
 

@@ -27,8 +27,6 @@ import {
 import {
   formatChannelText,
   formatDeviceText,
-  getResolutionDescription,
-  getResolutionTone,
 } from './audioDeviceDisplay';
 
 const logger = createLogger('AudioDeviceSettings');
@@ -45,13 +43,14 @@ interface AudioDeviceSettingsProps {
 
 export interface AudioDeviceSettingsRef {
   hasUnsavedChanges: () => boolean;
+  getSettings: () => AudioDeviceSettingsType;
   save: () => Promise<void>;
 }
 
 export type Direction = 'input' | 'output';
 
 const DEFAULT_SAMPLE_RATE = 48000;
-const DEFAULT_BUFFER_SIZE = 768;
+const DEFAULT_BUFFER_SIZE = 1024;
 
 export function makeAudioDeviceSelectKey(direction: Direction, deviceName: string): string {
   return `${direction}::${deviceName}`;
@@ -88,8 +87,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Sync internal state when initialConfig changes externally (e.g. auto-match from parent).
-  // Uses a ref to suppress the onChange effect during sync so the parent doesn't
-  // interpret the programmatic update as a manual user change.
+  // The ref suppresses the echo onChange until local state has caught up with props.
   const initialLoadDoneRef = useRef(false);
   const syncingFromParentRef = useRef(false);
   useEffect(() => {
@@ -131,6 +129,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
 
   useImperativeHandle(ref, () => ({
     hasUnsavedChanges,
+    getSettings: buildSettings,
     save: handleSubmit
   }), [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, currentSettings]);
 
@@ -140,9 +139,15 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
 
   useEffect(() => {
     if (!isControlled || loading) return;
-    if (syncingFromParentRef.current) return;
-    onChange?.(buildSettings());
-  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize]);
+    const settings = buildSettings();
+    if (syncingFromParentRef.current) {
+      if (audioSettingsEqual(settings, initialConfig)) {
+        syncingFromParentRef.current = false;
+      }
+      return;
+    }
+    onChange?.(settings);
+  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, initialConfig]);
 
   useEffect(() => {
     loadAudioData();
@@ -282,59 +287,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   function getEffectiveDevice(direction: Direction): AudioDevice | null {
     const selectedName = direction === 'input' ? selectedInputDeviceName : selectedOutputDeviceName;
     const devices = direction === 'input' ? inputDevices : outputDevices;
-    const resolution = direction === 'input' ? deviceResolution?.input : deviceResolution?.output;
-    return devices.find((device) => device.name === selectedName) ?? resolution?.effectiveDevice ?? null;
+    return devices.find((device) => device.name === selectedName) ?? null;
   }
-
-  const renderResolutionItem = (
-    direction: Direction,
-    selectedName: string,
-    resolution: AudioDeviceResolution | null | undefined,
-    devices: AudioDevice[],
-  ) => {
-    if (!selectedName || devices.some((device) => device.name === selectedName)) {
-      return undefined;
-    }
-
-    const device = resolution?.configuredDevice ?? resolution?.effectiveDevice;
-    const tone = getResolutionTone(resolution);
-    const description = getResolutionDescription(t, resolution);
-    const labelClass = tone === 'warning'
-      ? 'text-warning'
-      : tone === 'virtual'
-        ? 'text-primary'
-        : 'text-default-700';
-    const detailClass = tone === 'warning'
-      ? 'text-warning-400'
-      : tone === 'virtual'
-        ? 'text-primary-400'
-        : 'text-default-400';
-    const statusText = t('audio.deviceUnavailableShort');
-    const isUnavailable = tone === 'warning';
-
-    return (
-      <SelectItem
-        key={makeAudioDeviceSelectKey(direction, selectedName)}
-        textValue={resolution?.status === 'virtual-selected' || !isUnavailable
-          ? selectedName
-          : `${selectedName} (${statusText})`}
-        className={isUnavailable ? 'text-warning' : undefined}
-      >
-        <div className="flex flex-col">
-          <span className={labelClass}>
-            {selectedName}
-            {isUnavailable ? ` (${statusText})` : ''}
-          </span>
-          {device && (
-            <span className="text-xs text-default-400">
-              {formatChannelText(t, device.channels)}, {formatHertz(device.sampleRate)}
-            </span>
-          )}
-          {description && <span className={`text-xs ${detailClass}`}>{description}</span>}
-        </div>
-      </SelectItem>
-    );
-  };
 
   const renderDeviceItems = (direction: Direction, devices: AudioDevice[]) => devices.map((device) => (
     <SelectItem
@@ -360,7 +314,6 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     const selectedName = isInput ? selectedInputDeviceName : selectedOutputDeviceName;
     const setSelectedName = isInput ? setSelectedInputDeviceName : setSelectedOutputDeviceName;
     const devices = isInput ? inputDevices : outputDevices;
-    const resolution = isInput ? deviceResolution?.input : deviceResolution?.output;
     const effectiveDevice = isInput ? inputEffectiveDevice : outputEffectiveDevice;
     const sampleRate = isInput ? inputSampleRate : outputSampleRate;
     const setSampleRate = isInput ? setInputSampleRate : setOutputSampleRate;
@@ -388,7 +341,6 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
           isDisabled={saving}
           aria-label={isInput ? t('audio.selectInput') : t('audio.selectOutput')}
         >
-          {renderResolutionItem(direction, selectedName, resolution, devices) as unknown as React.ReactElement}
           {renderDeviceItems(direction, devices) as unknown as React.ReactElement}
         </Select>
 
@@ -512,6 +464,18 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     </div>
   );
 });
+
+function audioSettingsEqual(
+  a: AudioDeviceSettingsType,
+  b: AudioDeviceSettingsType | undefined,
+): boolean {
+  return (a.inputDeviceName || '') === (b?.inputDeviceName || '')
+    && (a.outputDeviceName || '') === (b?.outputDeviceName || '')
+    && a.inputSampleRate === resolveAudioSettingNumber(b, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE)
+    && a.outputSampleRate === resolveAudioSettingNumber(b, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE)
+    && a.inputBufferSize === resolveAudioSettingNumber(b, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE)
+    && a.outputBufferSize === resolveAudioSettingNumber(b, 'outputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE);
+}
 
 function formatHertz(value: number): string {
   return `${formatNumber(value)} Hz`;
