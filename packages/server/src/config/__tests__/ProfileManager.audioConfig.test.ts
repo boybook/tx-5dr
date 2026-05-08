@@ -66,8 +66,8 @@ vi.mock('../config-manager.js', () => ({
       outputDeviceName: config.outputDeviceName,
       inputSampleRate: config.inputSampleRate ?? config.sampleRate ?? 48000,
       outputSampleRate: config.outputSampleRate ?? config.sampleRate ?? 48000,
-      inputBufferSize: config.inputBufferSize ?? config.bufferSize ?? 768,
-      outputBufferSize: config.outputBufferSize ?? config.bufferSize ?? 768,
+      inputBufferSize: config.inputBufferSize ?? config.bufferSize ?? 1024,
+      outputBufferSize: config.outputBufferSize ?? config.bufferSize ?? 1024,
     };
   },
 }));

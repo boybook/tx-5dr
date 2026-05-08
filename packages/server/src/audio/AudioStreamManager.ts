@@ -170,8 +170,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     this.inputSampleRate = audioConfig.inputSampleRate ?? audioConfig.sampleRate ?? 48000;
     this.outputSampleRate = audioConfig.outputSampleRate ?? audioConfig.sampleRate ?? 48000;
-    this.inputBufferSize = audioConfig.inputBufferSize ?? audioConfig.bufferSize ?? 768;
-    this.outputBufferSize = audioConfig.outputBufferSize ?? audioConfig.bufferSize ?? 768;
+    this.inputBufferSize = audioConfig.inputBufferSize ?? audioConfig.bufferSize ?? 1024;
+    this.outputBufferSize = audioConfig.outputBufferSize ?? audioConfig.bufferSize ?? 1024;
     this.currentSampleRate = this.outputSampleRate;
 
     // 创建音频缓冲区提供者，使用统一的内部采样率（12kHz），保留 60 秒 RX/input 历史。
@@ -441,8 +441,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     this.inputSampleRate = audioConfig.inputSampleRate ?? audioConfig.sampleRate ?? 48000;
     this.outputSampleRate = audioConfig.outputSampleRate ?? audioConfig.sampleRate ?? 48000;
-    this.inputBufferSize = audioConfig.inputBufferSize ?? audioConfig.bufferSize ?? 768;
-    this.outputBufferSize = audioConfig.outputBufferSize ?? audioConfig.bufferSize ?? 768;
+    this.inputBufferSize = audioConfig.inputBufferSize ?? audioConfig.bufferSize ?? 1024;
+    this.outputBufferSize = audioConfig.outputBufferSize ?? audioConfig.bufferSize ?? 1024;
     this.currentSampleRate = this.outputSampleRate;
 
     logger.info('audio config reloaded (restart required)', {
@@ -1403,7 +1403,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       // 分块播放，使用 setInterval 高频轮询 + 追赶写入
       // 相比链式 await setTimeout，setInterval 在事件循环延迟后能立即追赶
       const TICK_MS = 5;
-      const framesPerBuffer = Math.max(64, this.outputBufferSize || 768);
+      const framesPerBuffer = Math.max(64, this.outputBufferSize || 1024);
       const chunkSize = framesPerBuffer * this.channels;
       const totalChunks = Math.ceil(playbackData.length / chunkSize);
 
@@ -1732,7 +1732,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       available: this.isOutputting && Boolean(this.rtAudioOutput),
       kind: 'rtaudio',
       outputSampleRate: this.outputSampleRate,
-      outputBufferSize: Math.max(64, this.outputBufferSize || 768),
+      outputBufferSize: Math.max(64, this.outputBufferSize || 1024),
     };
   }
 

@@ -34,7 +34,7 @@ export class ProfileManager {
 
     // ICOM WLAN 模式下，仅在用户未指定音频设备时默认使用 ICOM WLAN 虚拟设备
     const audioLockedToRadio = data.radio.type === 'icom-wlan';
-    let audio: AudioDeviceSettings = normalizeAudioDeviceSettings(data.audio || { inputSampleRate: 48000, outputSampleRate: 48000, inputBufferSize: 768, outputBufferSize: 768 });
+    let audio: AudioDeviceSettings = normalizeAudioDeviceSettings(data.audio || { inputSampleRate: 48000, outputSampleRate: 48000, inputBufferSize: 1024, outputBufferSize: 1024 });
 
     if (audioLockedToRadio && !audio.inputDeviceName && !audio.outputDeviceName) {
       audio = {

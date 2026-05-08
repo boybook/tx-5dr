@@ -49,7 +49,7 @@ export interface AudioDeviceSettingsRef {
 export type Direction = 'input' | 'output';
 
 const DEFAULT_SAMPLE_RATE = 48000;
-const DEFAULT_BUFFER_SIZE = 768;
+const DEFAULT_BUFFER_SIZE = 1024;
 
 export function makeAudioDeviceSelectKey(direction: Direction, deviceName: string): string {
   return `${direction}::${deviceName}`;
