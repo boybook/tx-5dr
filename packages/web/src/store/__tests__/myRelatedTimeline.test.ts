@@ -4,6 +4,7 @@ import type { FrameMessage, SlotPack, SlotPackFrequencyContext } from '@tx5dr/co
 import { MODES } from '@tx5dr/contracts';
 import {
   buildMyRelatedTimelineGroups,
+  findRecentSessionSeed,
   initialMyRelatedTimelineState,
   myRelatedTimelineReducer,
   type MyRelatedTimelineAction,
@@ -537,5 +538,60 @@ describe('myRelatedTimelineReducer', () => {
     ]);
     expect(rxMessages.map(message => message.message)).toEqual(['R9WXK BG5BNW -08']);
     expect(state.lastProcessedSlotPackSeq.get(slotPack.slotId)).toBe(3);
+  });
+
+  it('finds the latest inbound direct-call seed when a target session auto-starts after the decode slot', () => {
+    const previousSlotStart = Date.UTC(2026, 4, 6, 6, 28, 30);
+    const currentSlotStart = previousSlotStart + mode.slotMs;
+    const context = createContext({
+      startedAtMs: currentSlotStart,
+      myCallsign: 'BG5DRB',
+      targetCallsign: 'UN3QA',
+    });
+
+    const seed = findRecentSessionSeed(
+      [
+        createSlotPack(
+          previousSlotStart,
+          [
+            createRxFrame('CQ UN3QA LO91', 1845, -18, 0.1),
+            createRxFrame('BG5DRB UN3QA -17', 1851, -20, -0.1),
+          ],
+          context.frequencyContext,
+          2,
+        ),
+      ],
+      context,
+      mode,
+    );
+
+    expect(seed?.slotStartMs).toBe(previousSlotStart);
+    expect(seed?.message.message).toBe('BG5DRB UN3QA -17');
+    expect(seed?.message.freq).toBe(1851);
+  });
+
+  it('does not auto-seed stale history outside the recent lookback window', () => {
+    const oldSlotStart = Date.UTC(2026, 4, 6, 6, 28, 30);
+    const currentSlotStart = oldSlotStart + mode.slotMs * 3;
+    const context = createContext({
+      startedAtMs: currentSlotStart,
+      myCallsign: 'BG5DRB',
+      targetCallsign: 'UN3QA',
+    });
+
+    const seed = findRecentSessionSeed(
+      [
+        createSlotPack(
+          oldSlotStart,
+          [createRxFrame('BG5DRB UN3QA -17', 1851, -20, -0.1)],
+          context.frequencyContext,
+          1,
+        ),
+      ],
+      context,
+      mode,
+    );
+
+    expect(seed).toBeNull();
   });
 });

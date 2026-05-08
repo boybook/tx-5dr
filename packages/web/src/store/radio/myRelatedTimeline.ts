@@ -1,5 +1,5 @@
 import type { FrameMessage, ModeDescriptor, SlotPack, SlotPackFrequencyContext } from '@tx5dr/contracts';
-import { CycleUtils, parseFT8LocationInfo } from '@tx5dr/core';
+import { CycleUtils, FT8MessageParser, parseFT8LocationInfo } from '@tx5dr/core';
 import type { FrameDisplayMessage, FrameGroup } from '../../components/radio/digital/FramesTable';
 
 const MAX_GROUPS = 100;
@@ -25,6 +25,12 @@ export interface MyRelatedTimelineState {
   activeSession: MyRelatedTimelineActiveSession | null;
   pendingRestore: boolean;
   lastProcessedSlotPackSeq: Map<string, number>;
+}
+
+export interface MyRelatedTimelineSeedCandidate {
+  slotStartMs: number;
+  frequencyContext?: SlotPackFrequencyContext;
+  message: FrameDisplayMessage;
 }
 
 export interface MyRelatedTransmissionLog {
@@ -280,6 +286,50 @@ export function buildMyRelatedTimelineGroups(state: MyRelatedTimelineState): Fra
     ...state.committedRxGroups,
     ...(state.activeSession?.groups ?? []),
   ]);
+}
+
+export function findRecentSessionSeed(
+  slotPacks: SlotPack[],
+  context: Pick<MyRelatedTimelineOperatorContext, 'myCallsign' | 'targetCallsign' | 'startedAtMs'>,
+  currentMode: ModeDescriptor,
+): MyRelatedTimelineSeedCandidate | null {
+  const maxLookbackMs = currentMode.slotMs * 2;
+  const minStartMs = context.startedAtMs - maxLookbackMs;
+
+  let bestCandidate: MyRelatedTimelineSeedCandidate | null = null;
+  let bestScore = -1;
+
+  for (const slotPack of slotPacks) {
+    if (slotPack.startMs < minStartMs || slotPack.startMs > context.startedAtMs) {
+      continue;
+    }
+
+    for (const frame of slotPack.frames) {
+      if (frame.snr === -999) {
+        continue;
+      }
+
+      const score = scoreSessionSeedFrame(frame, context);
+      if (score < 0) {
+        continue;
+      }
+
+      if (
+        score > bestScore ||
+        (score === bestScore && bestCandidate && slotPack.startMs > bestCandidate.slotStartMs) ||
+        (score === bestScore && bestCandidate && slotPack.startMs === bestCandidate.slotStartMs && Math.round(frame.freq) > bestCandidate.message.freq)
+      ) {
+        bestScore = score;
+        bestCandidate = {
+          slotStartMs: slotPack.startMs,
+          frequencyContext: slotPack.frequencyContext,
+          message: frameToDisplayMessage(frame, slotPack.startMs),
+        };
+      }
+    }
+  }
+
+  return bestCandidate;
 }
 
 function shouldAutoStartSession(context: MyRelatedTimelineOperatorContext): boolean {
@@ -603,6 +653,38 @@ function matchesSession(
   context: Pick<MyRelatedTimelineOperatorContext, 'myCallsign' | 'targetCallsign'>,
 ): boolean {
   return containsCallsign(message, context.myCallsign) || containsCallsign(message, context.targetCallsign);
+}
+
+function scoreSessionSeedFrame(
+  frame: FrameMessage,
+  context: Pick<MyRelatedTimelineOperatorContext, 'myCallsign' | 'targetCallsign'>,
+): number {
+  const myCallsign = context.myCallsign.trim().toUpperCase();
+  const targetCallsign = context.targetCallsign.trim().toUpperCase();
+  if (!myCallsign || !targetCallsign) {
+    return -1;
+  }
+
+  try {
+    const parsed = FT8MessageParser.parseMessage(frame.message);
+    switch (parsed.type) {
+      case 'call':
+      case 'signal_report':
+      case 'roger_report':
+      case 'rrr':
+      case '73': {
+        const sender = parsed.senderCallsign?.toUpperCase();
+        const target = parsed.targetCallsign?.toUpperCase();
+        return sender === targetCallsign && target === myCallsign ? 2 : -1;
+      }
+      case 'cq':
+        return parsed.senderCallsign?.toUpperCase() === targetCallsign ? 1 : -1;
+      default:
+        return -1;
+    }
+  } catch {
+    return -1;
+  }
 }
 
 function containsCallsign(message: string, callsign: string): boolean {

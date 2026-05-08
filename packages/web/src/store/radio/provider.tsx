@@ -37,6 +37,7 @@ import {
 } from './reducers';
 import {
   buildMyRelatedTimelineGroups,
+  findRecentSessionSeed,
   initialMyRelatedTimelineState,
   myRelatedTimelineReducer,
   type MyRelatedTimelineActiveSession,
@@ -607,6 +608,34 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
       forceRestart: !isSessionTargetPromotion,
     });
   }, [radioState, replaceMyRelatedSessionContext]);
+
+  useEffect(() => {
+    const activeSession = myRelatedTimelineState.activeSession;
+    const currentMode = radioState.currentMode;
+    if (slotPacksState.isSyncing || !activeSession || !currentMode) {
+      return;
+    }
+
+    if (!activeSession.targetCallsign.trim() || activeSession.groups.length > 0) {
+      return;
+    }
+
+    const seed = findRecentSessionSeed(slotPacksState.slotPacks, activeSession, currentMode);
+    if (!seed) {
+      return;
+    }
+
+    myRelatedTimelineDispatch({
+      type: 'seedSelectedRx',
+      payload: {
+        context: activeSession,
+        currentMode,
+        message: seed.message,
+        slotStartMs: seed.slotStartMs,
+        frequencyContext: seed.frequencyContext ?? activeSession.frequencyContext,
+      },
+    });
+  }, [myRelatedTimelineState.activeSession, radioState.currentMode, slotPacksState.isSyncing, slotPacksState.slotPacks]);
 
   return (
     <ConnectionContext.Provider value={connectionContextValue}>
