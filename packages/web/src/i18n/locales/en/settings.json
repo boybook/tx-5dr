@@ -591,6 +591,7 @@
     "workerLastError": "Last worker error",
     "workerCheckLogs": "Open Server Health or check server logs for the full diagnostic details.",
     "workerNoTelemetry": "No worker process telemetry yet; the pool may still be starting or waiting to retry.",
+    "workerStoppedNoTelemetry": "Decode workers are stopped because the digital engine is not running.",
     "moreWorkers": "{{count}} more worker(s) hidden",
     "coreCapabilityDiagnosticsTitle": "Core Capability Diagnostics",
     "coreCapabilityDiagnosticsEmpty": "No core capability is marked as unsupported in the current connection session.",

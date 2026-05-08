@@ -632,7 +632,7 @@ function DecodeWorkersCard({
       <div className="flex flex-col gap-1.5">
         {visibleWorkers.length === 0 && (
           <div className="rounded-lg bg-content1 px-3 py-2 text-xs text-default-500">
-            {t('serverHealth.workerNoTelemetry')}
+            {t(status === 'stopped' ? 'serverHealth.workerStoppedNoTelemetry' : 'serverHealth.workerNoTelemetry')}
           </div>
         )}
         {visibleWorkers.map((worker) => {
