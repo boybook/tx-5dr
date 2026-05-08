@@ -112,6 +112,10 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
     if (step === 1) {
       setStep(2);
     } else if (step === 2) {
+      const latestAudioConfig = audioSettingsRef.current?.getSettings();
+      if (latestAudioConfig) {
+        setAudioConfig(latestAudioConfig);
+      }
       setStep(3);
     }
   };
@@ -136,10 +140,11 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
     const name = profileName.trim() || getDefaultName();
     setIsCreating(true);
     try {
+      const audioConfigToSave = audioSettingsRef.current?.getSettings() ?? audioConfig;
       const result = await api.createProfile({
         name,
         radio: radioConfig,
-        audio: audioConfig,
+        audio: audioConfigToSave,
       });
       // 创建后立即激活
       if (!result.profile) throw new Error('Profile creation returned no data');

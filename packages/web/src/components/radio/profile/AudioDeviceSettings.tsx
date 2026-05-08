@@ -43,6 +43,7 @@ interface AudioDeviceSettingsProps {
 
 export interface AudioDeviceSettingsRef {
   hasUnsavedChanges: () => boolean;
+  getSettings: () => AudioDeviceSettingsType;
   save: () => Promise<void>;
 }
 
@@ -86,8 +87,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Sync internal state when initialConfig changes externally (e.g. auto-match from parent).
-  // Uses a ref to suppress the onChange effect during sync so the parent doesn't
-  // interpret the programmatic update as a manual user change.
+  // The ref suppresses the echo onChange until local state has caught up with props.
   const initialLoadDoneRef = useRef(false);
   const syncingFromParentRef = useRef(false);
   useEffect(() => {
@@ -129,6 +129,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
 
   useImperativeHandle(ref, () => ({
     hasUnsavedChanges,
+    getSettings: buildSettings,
     save: handleSubmit
   }), [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, currentSettings]);
 
@@ -138,9 +139,15 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
 
   useEffect(() => {
     if (!isControlled || loading) return;
-    if (syncingFromParentRef.current) return;
-    onChange?.(buildSettings());
-  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize]);
+    const settings = buildSettings();
+    if (syncingFromParentRef.current) {
+      if (audioSettingsEqual(settings, initialConfig)) {
+        syncingFromParentRef.current = false;
+      }
+      return;
+    }
+    onChange?.(settings);
+  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, initialConfig]);
 
   useEffect(() => {
     loadAudioData();
@@ -457,6 +464,18 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     </div>
   );
 });
+
+function audioSettingsEqual(
+  a: AudioDeviceSettingsType,
+  b: AudioDeviceSettingsType | undefined,
+): boolean {
+  return (a.inputDeviceName || '') === (b?.inputDeviceName || '')
+    && (a.outputDeviceName || '') === (b?.outputDeviceName || '')
+    && a.inputSampleRate === resolveAudioSettingNumber(b, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE)
+    && a.outputSampleRate === resolveAudioSettingNumber(b, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE)
+    && a.inputBufferSize === resolveAudioSettingNumber(b, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE)
+    && a.outputBufferSize === resolveAudioSettingNumber(b, 'outputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE);
+}
 
 function formatHertz(value: number): string {
   return `${formatNumber(value)} Hz`;
