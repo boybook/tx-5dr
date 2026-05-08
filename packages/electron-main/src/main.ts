@@ -2840,7 +2840,7 @@ async function createWindow() {
     if (!nativeCheck.success) {
       const okModules = nativeCheck.modules.filter(m => m.ok).map(m => m.name);
       const failedModules = nativeCheck.modules.filter(m => !m.ok);
-      const degradableRealtimeModules = new Set(['node-datachannel', '@discordjs/opus']);
+      const degradableRealtimeModules = new Set(['node-datachannel']);
       const degradedRealtimeOnly = (nativeCheck.crashedModule && degradableRealtimeModules.has(nativeCheck.crashedModule))
         || (failedModules.length > 0 && failedModules.every(m => degradableRealtimeModules.has(m.name)));
 

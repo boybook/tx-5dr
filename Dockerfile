@@ -31,7 +31,6 @@ RUN apt-get update && apt-get install -y \
     libxext-dev \
     libhamlib-dev \
     libhamlib4 \
-    libopus-dev \
     git \
     wget \
     && rm -rf /var/lib/apt/lists/* \
@@ -133,7 +132,6 @@ RUN apt-get update && apt-get install -y \
     libxi6 \
     libxext6 \
     libhamlib4 \
-    libopus0 \
     udev \
     nginx \
     supervisor \
@@ -155,12 +153,8 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/yarn.lock ./yarn.lock
 COPY --from=builder /app/turbo.json ./turbo.json
 
-# The runtime stage may upgrade glibc while fixing GLIBCXX compatibility.
-# @discordjs/opus encodes the detected glibc version into its prebuild path,
-# so patch the bundled Linux addon via the shared fix_opus helper.
-RUN bash -c 'source /tmp/tx5dr-linux/lib/common.sh && source /tmp/tx5dr-linux/lib/checks.sh && fix_opus /app' \
-    && rm -rf /tmp/tx5dr-linux/
-RUN node -e "import('@discordjs/opus').then((m)=>{const r=m.default||m; new r.OpusEncoder(48000,1); console.log('@discordjs/opus runtime ok');})"
+RUN rm -rf /tmp/tx5dr-linux/
+RUN node -e "const a=require('audify'); const e=new a.OpusEncoder(48000,1,a.OpusApplication.OPUS_APPLICATION_RESTRICTED_LOWDELAY); const d=new a.OpusDecoder(48000,1); const p=e.encode(Buffer.alloc(960*2),960); d.decode(p,960); console.log('audify Opus runtime ok');"
 
 # Nginx configuration: shared template + Docker-specific wrapper
 COPY docker/nginx-wrapper.conf /etc/nginx/nginx.conf

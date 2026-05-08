@@ -28,18 +28,22 @@ const REALTIME_AUDIO_FRAME_DURATION_MS = 20;
 const REALTIME_OPUS_RX_BITRATE_BPS = 32_000;
 const REALTIME_OPUS_TX_BITRATE_BPS = 24_000;
 const MAX_OPUS_CHANNELS = 2;
-const OPUS_SET_APPLICATION_REQUEST = 4000;
-const OPUS_APPLICATION_RESTRICTED_LOWDELAY = 2051;
 
-type OpusEncoderConstructor = new (rate: number, channels: number) => {
-  encode(buf: Buffer): Buffer;
-  decode(buf: Buffer): Buffer;
-  setBitrate?: (bitrate: number) => void;
-  applyEncoderCTL?: (ctl: number, value: number) => void;
+type AudifyOpusEncoder = {
+  bitrate: number;
+  encode(buf: Buffer, frameSize: number): Buffer;
 };
 
-type OpusModule = {
-  OpusEncoder: OpusEncoderConstructor;
+type AudifyOpusDecoder = {
+  decode(buf: Buffer, frameSize: number): Buffer;
+};
+
+type AudifyOpusModule = {
+  OpusEncoder: new (rate: number, channels: number, application: number) => AudifyOpusEncoder;
+  OpusDecoder: new (rate: number, channels: number) => AudifyOpusDecoder;
+  OpusApplication: {
+    OPUS_APPLICATION_RESTRICTED_LOWDELAY: number;
+  };
 };
 
 export interface RealtimeCodecPacket {
@@ -85,8 +89,8 @@ export class RealtimeOpusCodecService {
     return RealtimeOpusCodecService.instance;
   }
 
-  private modulePromise: Promise<OpusModule | null> | null = null;
-  private module: OpusModule | null = null;
+  private modulePromise: Promise<AudifyOpusModule | null> | null = null;
+  private module: AudifyOpusModule | null = null;
   private unavailableReason: string | null = null;
 
   async isAvailable(): Promise<boolean> {
@@ -102,24 +106,23 @@ export class RealtimeOpusCodecService {
     return this.unavailableReason;
   }
 
-  createCodec(sampleRate: number, channels: number, bitrateBps?: number): InstanceType<OpusEncoderConstructor> | null {
+  createEncoder(sampleRate: number, channels: number, bitrateBps?: number): AudifyOpusEncoder | null {
     const mod = this.module;
     if (!mod) {
       return null;
     }
     try {
-      const codec = new mod.OpusEncoder(sampleRate, channels);
-      if (bitrateBps && typeof codec.applyEncoderCTL === 'function') {
-        // Keep realtime DataChannel/WS audio on the CELT low-delay path; the
-        // default SILK path can crash in @discordjs/opus on macOS arm64.
-        codec.applyEncoderCTL(OPUS_SET_APPLICATION_REQUEST, OPUS_APPLICATION_RESTRICTED_LOWDELAY);
-      }
-      if (bitrateBps && typeof codec.setBitrate === 'function') {
-        codec.setBitrate(bitrateBps);
+      const codec = new mod.OpusEncoder(
+        sampleRate,
+        channels,
+        mod.OpusApplication.OPUS_APPLICATION_RESTRICTED_LOWDELAY,
+      );
+      if (bitrateBps) {
+        codec.bitrate = bitrateBps;
       }
       return codec;
     } catch (error) {
-      logger.warn('Failed to create Opus codec', {
+      logger.warn('Failed to create Opus encoder', {
         sampleRate,
         channels,
         error: error instanceof Error ? error.message : String(error),
@@ -128,13 +131,30 @@ export class RealtimeOpusCodecService {
     }
   }
 
-  private async loadModule(): Promise<OpusModule | null> {
+  createDecoder(sampleRate: number, channels: number): AudifyOpusDecoder | null {
+    const mod = this.module;
+    if (!mod) {
+      return null;
+    }
+    try {
+      return new mod.OpusDecoder(sampleRate, channels);
+    } catch (error) {
+      logger.warn('Failed to create Opus decoder', {
+        sampleRate,
+        channels,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  private async loadModule(): Promise<AudifyOpusModule | null> {
     if (!this.modulePromise) {
-      this.modulePromise = import('@discordjs/opus')
+      this.modulePromise = import('audify')
         .then((mod) => {
-          const resolved = (mod.default ?? mod) as OpusModule;
-          if (!resolved.OpusEncoder) {
-            throw new Error('OpusEncoder export is missing');
+          const resolved = (mod.default ?? mod) as AudifyOpusModule;
+          if (!resolved.OpusEncoder || !resolved.OpusDecoder || !resolved.OpusApplication) {
+            throw new Error('audify Opus exports are missing');
           }
           this.module = resolved;
           this.unavailableReason = null;
@@ -210,7 +230,7 @@ export function resolveRealtimeAudioCodecPolicy(
 export class RealtimeDownlinkAudioEncoder {
   private sequence = 0;
   private readonly pcmDecimator = new RealtimeTransportAudioDecimator();
-  private opusCodec: InstanceType<OpusEncoderConstructor> | null = null;
+  private opusCodec: AudifyOpusEncoder | null = null;
   private opusKey: string | null = null;
   private resampler: InterleavedStreamingResampler | null = null;
   private fixedFrameBuffer: TimedFixedFrameBuffer | null = null;
@@ -310,7 +330,7 @@ export class RealtimeDownlinkAudioEncoder {
     const packets: RealtimeCodecPacket[] = [];
     for (const opusFrame of opusFrames) {
       const pcm = float32ToInt16Pcm(opusFrame.samples);
-      const encoded = this.opusCodec.encode(bufferFromInt16(pcm));
+      const encoded = this.opusCodec.encode(bufferFromInt16(pcm), opusFrame.samplesPerChannel);
       const serverSentAtMs = Date.now();
       const sequence = this.sequence++;
       const payload = encodeRealtimeEncodedAudioFrame({
@@ -349,7 +369,7 @@ export class RealtimeDownlinkAudioEncoder {
     channels: number,
   ): void {
     this.opusKey = sourceKey;
-    this.opusCodec = RealtimeOpusCodecService.getInstance().createCodec(
+    this.opusCodec = RealtimeOpusCodecService.getInstance().createEncoder(
       codecSampleRate,
       channels,
       this.policy.bitrateBps ?? REALTIME_OPUS_RX_BITRATE_BPS,
@@ -366,11 +386,12 @@ export class RealtimeDownlinkAudioEncoder {
 }
 
 export class RealtimeUplinkAudioDecoder {
-  private opusCodec: InstanceType<OpusEncoderConstructor> | null = null;
+  private opusCodec: AudifyOpusDecoder | null = null;
   private opusKey: string | null = null;
   private lastOpusSequence: number | null = null;
   private lastOpusTimestampMs: number | null = null;
   private lastOpusFrameDurationMs = REALTIME_AUDIO_FRAME_DURATION_MS;
+  private lastOpusSamplesPerChannel: number | null = null;
 
   decode(payload: ArrayBufferLike): DecodedRealtimeAudioPacket[] {
     const frame = decodeRealtimeAudioFrame(payload);
@@ -386,10 +407,11 @@ export class RealtimeUplinkAudioDecoder {
     const key = `${sampleRate}:${channels}`;
     if (this.opusKey !== key) {
       this.opusKey = key;
-      this.opusCodec = RealtimeOpusCodecService.getInstance().createCodec(sampleRate, channels);
+      this.opusCodec = RealtimeOpusCodecService.getInstance().createDecoder(sampleRate, channels);
       this.lastOpusSequence = null;
       this.lastOpusTimestampMs = null;
       this.lastOpusFrameDurationMs = frame.frameDurationMs || REALTIME_AUDIO_FRAME_DURATION_MS;
+      this.lastOpusSamplesPerChannel = null;
     }
     if (!this.opusCodec) {
       return [];
@@ -407,6 +429,7 @@ export class RealtimeUplinkAudioDecoder {
       this.lastOpusSequence = frame.sequence;
       this.lastOpusTimestampMs = frame.timestampMs;
       this.lastOpusFrameDurationMs = frame.frameDurationMs || REALTIME_AUDIO_FRAME_DURATION_MS;
+      this.lastOpusSamplesPerChannel = realPacket.samplesPerChannel;
     }
 
     return packets;
@@ -420,7 +443,14 @@ export class RealtimeUplinkAudioDecoder {
     if (!this.opusCodec) {
       return null;
     }
-    const decoded = this.opusCodec.decode(Buffer.from(frame.payload.buffer, frame.payload.byteOffset, frame.payload.byteLength));
+    const frameSize = normalizeOpusFrameSize(frame.samplesPerChannel);
+    if (frameSize <= 0) {
+      return null;
+    }
+    const decoded = this.opusCodec.decode(
+      Buffer.from(frame.payload.buffer, frame.payload.byteOffset, frame.payload.byteLength),
+      frameSize,
+    );
     const samples = this.decodeOpusPcm(decoded, channels);
     return {
       codec: 'opus',
@@ -442,12 +472,17 @@ export class RealtimeUplinkAudioDecoder {
       !this.opusCodec
       || this.lastOpusSequence === null
       || frame.sequence <= this.lastOpusSequence + 1
+      || this.lastOpusSamplesPerChannel === null
     ) {
       return null;
     }
 
     try {
-      const decoded = this.opusCodec.decode(Buffer.alloc(0));
+      const frameSize = normalizeOpusFrameSize(this.lastOpusSamplesPerChannel);
+      if (frameSize <= 0) {
+        return null;
+      }
+      const decoded = this.opusCodec.decode(Buffer.alloc(0), frameSize);
       const samples = this.decodeOpusPcm(decoded, channels);
       if (samples.length === 0) {
         return null;
@@ -556,6 +591,11 @@ function normalizeSampleRate(sampleRate: number): number {
 
 function normalizeTimestamp(timestamp: number): number {
   return Number.isFinite(timestamp) ? Math.round(timestamp) : Date.now();
+}
+
+function normalizeOpusFrameSize(samplesPerChannel: number): number {
+  const normalized = Math.floor(samplesPerChannel);
+  return Number.isFinite(normalized) && normalized > 0 ? normalized : 0;
 }
 
 function normalizeOpusChannels(channels: number): number {

@@ -52,7 +52,7 @@ Transport publishers are edge components. They do not decide which audio source 
 - For FRP or static NAT, admins may set an external rtc-data-audio public host/IP and UDP port. The server appends those as extra outgoing ICE host candidates and keeps the original local candidates, so LAN/direct clients still work.
 - `ws-compat` sends the same codec-aware frame stream over WebSocket and relies on stale-frame dropping to avoid latency buildup.
 - Both transports share the browser AudioContext/AudioWorklet runtime during fallback; only the network transport is replaced.
-- Codec preference is negotiated per session: `auto` defaults to Opus when both browser WebCodecs and server `@discordjs/opus` are available; otherwise the selected transport uses PCM s16le.
+- Codec preference is negotiated per session: `auto` defaults to Opus when both browser WebCodecs and server audify Opus backend are available; otherwise the selected transport uses PCM s16le.
 - Opus runs over both transports. Codec failure falls back to PCM on the same transport; only RTC ICE/DataChannel failure falls back to `ws-compat`.
 
 Opus is the default low-bandwidth codec path:

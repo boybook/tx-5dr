@@ -28,7 +28,7 @@ The previous external realtime media stack is removed from product features, API
 - `NativeRadioRxSource` is the only radio monitor source for both voice and digital modes.
 - `BufferedPreviewRxSource` remains only for OpenWebRX/buffered preview paths.
 - `rtc-data-audio` reuses the existing browser AudioWorklet playback/capture implementation and swaps only the transport.
-- `@discordjs/opus` is dynamically loaded on the server as a degradable native codec. If unavailable, sessions resolve to PCM and realtime transport availability is unaffected.
+- The server reuses audify's native Opus backend for realtime encode/decode. If unavailable, sessions resolve to PCM and realtime transport availability is unaffected.
 - Browser Opus uses native WebCodecs only; v1 intentionally has no WASM Opus fallback.
 - `node-datachannel` is dynamically loaded and capability-gated. If unavailable on a platform, the server removes `rtc-data-audio` from offers and falls back to `ws-compat`.
 - `ws-compat` keeps stale-frame dropping and no-prefill recovery behavior so TCP fallback does not accumulate unbounded latency.
@@ -70,20 +70,20 @@ The previous external realtime media stack is removed from product features, API
 - [x] Re-run global grep gate.
 - [x] Add low-cost transport-edge PCM decimation to reduce 48 kHz stream bandwidth.
 - [x] Add codec-aware frame protocol for Opus while keeping PCM frame compatibility.
-- [x] Add `@discordjs/opus` as a degradable server optional dependency and native check target.
+- [x] Use audify as the server Opus backend and keep PCM fallback when audify Opus is unavailable.
 - [x] Add browser WebCodecs Opus capability probing, RX decode, and TX encode.
 - [x] Add UI codec preference (`自动 / Opus / PCM`) plus actual codec/sample-rate/bitrate display.
-- [x] Preserve, clean, and sign Opus native binaries in Electron, Docker, and Linux server packaging flows.
+- [x] Preserve and sign audify native binaries and bundled Opus/RtAudio libraries in Electron, Docker, and Linux server packaging flows.
 
 ## Deployment Notes
 
 - Docker compose exposes `8076/tcp`, `8443/tcp`, and `50110/udp` by default.
-- Docker runtime installs `libopus0`; Linux deb/rpm packages declare `libopus0` / `opus`; Electron macOS signs bundled `.node` addons including `@discordjs/opus`.
+- Audify bundles the Opus runtime used by the server; Linux/Docker packages preserve audify `build/Release` native artifacts and Electron macOS signs bundled native addons/libraries.
 - Electron starts the embedded server directly and passes `RTC_DATA_AUDIO_UDP_PORT` / `RTC_DATA_AUDIO_ICE_UDP_MUX` into the server process.
 - Linux server packages install only `tx5dr` and nginx; `tx5dr doctor --fix` can prepare HTTP/HTTPS and the configured UDP firewall rule.
 - For FRP/static NAT, map the chosen public UDP port to the server UDP port, then set the public endpoint in Settings -> Realtime Audio.
 - A failed UDP connection should fail fast into `ws-compat`; it must not recreate the AudioContext, AudioWorklet, or microphone stream.
-- Opus adds no ports and does not change the FRP/UDP deployment model. If `@discordjs/opus` or browser WebCodecs is unavailable, users continue on PCM.
+- Opus adds no ports and does not change the FRP/UDP deployment model. If server audify Opus or browser WebCodecs is unavailable, users continue on PCM.
 
 ## Validation Log
 

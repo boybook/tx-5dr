@@ -18,22 +18,32 @@ vi.mock('../../config/config-manager.js', () => ({
   },
 }));
 
-vi.mock('@discordjs/opus', () => ({
+vi.mock('audify', () => ({
+  OpusApplication: {
+    OPUS_APPLICATION_RESTRICTED_LOWDELAY: 2051,
+  },
   OpusEncoder: class {
-    setBitrate(): void {}
+    bitrate = 0;
     encode(buffer: Buffer): Buffer {
       return Buffer.from(buffer);
     }
+  },
+  OpusDecoder: class {
     decode(buffer: Buffer): Buffer {
       return Buffer.from(buffer);
     }
   },
   default: {
+    OpusApplication: {
+      OPUS_APPLICATION_RESTRICTED_LOWDELAY: 2051,
+    },
     OpusEncoder: class {
-      setBitrate(): void {}
+      bitrate = 0;
       encode(buffer: Buffer): Buffer {
         return Buffer.from(buffer);
       }
+    },
+    OpusDecoder: class {
       decode(buffer: Buffer): Buffer {
         return Buffer.from(buffer);
       }

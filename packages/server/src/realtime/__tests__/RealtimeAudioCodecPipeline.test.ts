@@ -9,35 +9,56 @@ import {
 } from '../RealtimeAudioCodecPipeline.js';
 import type { RealtimeAudioFrame } from '../RealtimeRxAudioSource.js';
 
-const opusCtlCalls = vi.hoisted(() => [] as Array<{ ctl: number; value: number }>);
-const opusDecodeCalls = vi.hoisted(() => [] as number[]);
+const opusEncoderConstructs = vi.hoisted(() => [] as Array<{ rate: number; channels: number; application: number }>);
+const opusBitrateSets = vi.hoisted(() => [] as number[]);
+const opusEncodeCalls = vi.hoisted(() => [] as Array<{ bytes: number; frameSize: number }>);
+const opusDecodeCalls = vi.hoisted(() => [] as Array<{ bytes: number; frameSize: number }>);
 const opusDecodeBehavior = vi.hoisted(() => ({ plcThrows: false, plcEmpty: false }));
 const makeDecodedOpusPcm = vi.hoisted(() => (value: number): Buffer => {
   const pcm = new Int16Array(960);
   pcm.fill(value);
   return Buffer.from(pcm.buffer);
 });
+const OPUS_APPLICATION_RESTRICTED_LOWDELAY = 2051;
 
-vi.mock('@discordjs/opus', () => ({
+vi.mock('audify', () => ({
   default: {
+    OpusApplication: {
+      OPUS_APPLICATION_RESTRICTED_LOWDELAY,
+    },
     OpusEncoder: class {
+      private bitrateValue = 0;
+
+      constructor(
+        public readonly rate: number,
+        public readonly channels: number,
+        public readonly application: number,
+      ) {
+        opusEncoderConstructs.push({ rate, channels, application });
+      }
+
+      set bitrate(value: number) {
+        this.bitrateValue = value;
+        opusBitrateSets.push(value);
+      }
+
+      get bitrate(): number {
+        return this.bitrateValue;
+      }
+
+      encode(buf: Buffer, frameSize: number): Buffer {
+        opusEncodeCalls.push({ bytes: buf.length, frameSize });
+        return Buffer.from([this.rate & 0xff, this.channels & 0xff, buf.length & 0xff]);
+      }
+    },
+    OpusDecoder: class {
       constructor(
         public readonly rate: number,
         public readonly channels: number,
       ) {}
 
-      setBitrate(): void {}
-
-      applyEncoderCTL(ctl: number, value: number): void {
-        opusCtlCalls.push({ ctl, value });
-      }
-
-      encode(buf: Buffer): Buffer {
-        return Buffer.from([this.rate & 0xff, this.channels & 0xff, buf.length & 0xff]);
-      }
-
-      decode(buffer: Buffer): Buffer {
-        opusDecodeCalls.push(buffer.length);
+      decode(buffer: Buffer, frameSize: number): Buffer {
+        opusDecodeCalls.push({ bytes: buffer.length, frameSize });
         if (buffer.length === 0 && opusDecodeBehavior.plcThrows) {
           throw new Error('mock plc failure');
         }
@@ -48,24 +69,42 @@ vi.mock('@discordjs/opus', () => ({
       }
     },
   },
+  OpusApplication: {
+    OPUS_APPLICATION_RESTRICTED_LOWDELAY,
+  },
   OpusEncoder: class {
+    private bitrateValue = 0;
+
+    constructor(
+      public readonly rate: number,
+      public readonly channels: number,
+      public readonly application: number,
+    ) {
+      opusEncoderConstructs.push({ rate, channels, application });
+    }
+
+    set bitrate(value: number) {
+      this.bitrateValue = value;
+      opusBitrateSets.push(value);
+    }
+
+    get bitrate(): number {
+      return this.bitrateValue;
+    }
+
+    encode(buf: Buffer, frameSize: number): Buffer {
+      opusEncodeCalls.push({ bytes: buf.length, frameSize });
+      return Buffer.from([this.rate & 0xff, this.channels & 0xff, buf.length & 0xff]);
+    }
+  },
+  OpusDecoder: class {
     constructor(
       public readonly rate: number,
       public readonly channels: number,
     ) {}
 
-    setBitrate(): void {}
-
-    applyEncoderCTL(ctl: number, value: number): void {
-      opusCtlCalls.push({ ctl, value });
-    }
-
-    encode(buf: Buffer): Buffer {
-      return Buffer.from([this.rate & 0xff, this.channels & 0xff, buf.length & 0xff]);
-    }
-
-    decode(buffer: Buffer): Buffer {
-      opusDecodeCalls.push(buffer.length);
+    decode(buffer: Buffer, frameSize: number): Buffer {
+      opusDecodeCalls.push({ bytes: buffer.length, frameSize });
       if (buffer.length === 0 && opusDecodeBehavior.plcThrows) {
         throw new Error('mock plc failure');
       }
@@ -110,7 +149,9 @@ function makeFrame(overrides: Partial<RealtimeAudioFrame> = {}): RealtimeAudioFr
 
 describe('RealtimeAudioCodecPipeline', () => {
   beforeEach(() => {
-    opusCtlCalls.length = 0;
+    opusEncoderConstructs.length = 0;
+    opusBitrateSets.length = 0;
+    opusEncodeCalls.length = 0;
     opusDecodeCalls.length = 0;
     opusDecodeBehavior.plcThrows = false;
     opusDecodeBehavior.plcEmpty = false;
@@ -136,6 +177,27 @@ describe('RealtimeAudioCodecPipeline', () => {
     });
   });
 
+  it('resolves the lower Opus bitrate for send sessions', () => {
+    const policy = resolveRealtimeAudioCodecPolicy({
+      scope: 'radio',
+      direction: 'send',
+      preference: 'auto',
+      serverOpusAvailable: true,
+      capabilities: {
+        opus: {
+          encode: true,
+          encodeSampleRates: [16_000],
+        },
+      },
+    });
+
+    expect(policy).toMatchObject({
+      resolvedCodec: 'opus',
+      bitrateBps: 24_000,
+      frameDurationMs: 20,
+    });
+  });
+
   it('encodes Opus downlink frames at native 48k without PCM decimation', async () => {
     await expect(RealtimeOpusCodecService.getInstance().isAvailable()).resolves.toBe(true);
 
@@ -150,7 +212,13 @@ describe('RealtimeAudioCodecPipeline', () => {
       samplesPerChannel: 960,
       frameDurationMs: 20,
     });
-    expect(opusCtlCalls).toContainEqual({ ctl: 4000, value: 2051 });
+    expect(opusEncoderConstructs).toContainEqual({
+      rate: 48_000,
+      channels: 1,
+      application: OPUS_APPLICATION_RESTRICTED_LOWDELAY,
+    });
+    expect(opusBitrateSets).toContain(32_000);
+    expect(opusEncodeCalls).toContainEqual({ bytes: 1920, frameSize: 960 });
 
     const decoded = decodeRealtimeAudioFrame(packets[0]!.payload);
     expect(isRealtimeEncodedAudioFrame(decoded)).toBe(true);
@@ -238,7 +306,11 @@ describe('RealtimeAudioCodecPipeline', () => {
       timestampMs: 1040,
     });
     expect(packets[1]?.concealment).toBeUndefined();
-    expect(opusDecodeCalls).toEqual([1, 0, 1]);
+    expect(opusDecodeCalls).toEqual([
+      { bytes: 1, frameSize: 960 },
+      { bytes: 0, frameSize: 960 },
+      { bytes: 1, frameSize: 960 },
+    ]);
   });
 
   it('does not insert Opus PLC when uplink sequences are continuous', () => {
@@ -249,7 +321,10 @@ describe('RealtimeAudioCodecPipeline', () => {
 
     expect(packets).toHaveLength(1);
     expect(packets[0]?.concealment).toBeUndefined();
-    expect(opusDecodeCalls).toEqual([1, 1]);
+    expect(opusDecodeCalls).toEqual([
+      { bytes: 1, frameSize: 960 },
+      { bytes: 1, frameSize: 960 },
+    ]);
   });
 
   it('caps Opus PLC insertion to one packet even when the sequence gap is larger', () => {
