@@ -165,10 +165,10 @@ systemctl start nginx 2>/dev/null || true
 if $IS_UPGRADE; then systemctl restart tx5dr; else systemctl start tx5dr; fi
 
 echo -n "  "
-if wait_for_port "${API_PORT}" 15; then
+if wait_for_port "${API_PORT}" 60; then
     log_ok "$(msg PORT_READY "$API_PORT") (backend)"
 else
-    log_fail "$(msg PORT_FAIL "$API_PORT" "15")"
+    log_fail "$(msg PORT_FAIL "$API_PORT" "60")"
     echo ""
     log_error "$(msg START_FAIL)"
     journalctl -u tx5dr -n 10 --no-pager 2>/dev/null | sed 's/^/    /'

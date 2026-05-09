@@ -16,7 +16,7 @@ cmd_start() {
     echo "$(msg STARTING)"
     sudo systemctl start tx5dr
     echo -n "  "
-    if wait_for_port "${API_PORT}" 15; then log_ok "$(msg PORT_READY "$API_PORT") (backend)"; else log_fail "$(msg PORT_FAIL "$API_PORT" "15")"; sudo journalctl -u tx5dr -n 10 --no-pager 2>/dev/null | sed 's/^/    /'; exit 1; fi
+    if wait_for_port "${API_PORT}" 60; then log_ok "$(msg PORT_READY "$API_PORT") (backend)"; else log_fail "$(msg PORT_FAIL "$API_PORT" "60")"; sudo journalctl -u tx5dr -n 10 --no-pager 2>/dev/null | sed 's/^/    /'; exit 1; fi
     if ! check_nginx_running 2>/dev/null; then sudo systemctl start nginx 2>/dev/null || true; fi
     echo -n "  "
     if wait_for_port "${HTTP_PORT}" 5; then log_ok "$(msg PORT_READY "$HTTP_PORT") (nginx)"; else log_warn "$(msg PORT_FAIL "$HTTP_PORT" "5")"; fi
@@ -39,7 +39,7 @@ cmd_restart() {
     echo "$(msg RESTARTING)"
     sudo systemctl restart tx5dr
     echo -n "  "
-    if wait_for_port "${API_PORT}" 15; then log_ok "$(msg PORT_READY "$API_PORT") (backend)"; else log_fail "$(msg PORT_FAIL "$API_PORT" "15")"; sudo journalctl -u tx5dr -n 10 --no-pager 2>/dev/null | sed 's/^/    /'; exit 1; fi
+    if wait_for_port "${API_PORT}" 60; then log_ok "$(msg PORT_READY "$API_PORT") (backend)"; else log_fail "$(msg PORT_FAIL "$API_PORT" "60")"; sudo journalctl -u tx5dr -n 10 --no-pager 2>/dev/null | sed 's/^/    /'; exit 1; fi
     if ! check_nginx_running 2>/dev/null; then sudo systemctl start nginx 2>/dev/null || true; fi
     echo -n "  "
     if wait_for_port "${HTTP_PORT}" 5; then log_ok "$(msg PORT_READY "$HTTP_PORT") (nginx)"; else log_warn "$(msg PORT_FAIL "$HTTP_PORT" "5")"; fi
