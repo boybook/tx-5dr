@@ -1147,12 +1147,14 @@ export class RadioOperatorManager {
     if (now - currentSlotStartMs > this.getRedecideDeadlineMs()) return;
 
     for (const [operatorId, operator] of this.operators) {
-      if (!operator.isTransmitting) continue;
+      const canWakeStoppedOperator = !operator.isTransmitting
+        && this._pluginManager?.shouldProcessStoppedOperatorReDecision(operatorId, slotPack) === true;
+      if (!operator.isTransmitting && !canWakeStoppedOperator) continue;
 
       const isTransmitCycle = CycleUtils.isOperatorTransmitCycleFromMs(
         operator.getTransmitCycles(), currentSlotStartMs, slotMs
       );
-      if (!isTransmitCycle) continue;
+      if (!isTransmitCycle && !canWakeStoppedOperator) continue;
 
       try {
         const changed = await this._pluginManager?.reDecideOperator(operatorId, slotPack);

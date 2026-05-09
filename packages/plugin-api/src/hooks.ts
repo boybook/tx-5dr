@@ -44,6 +44,17 @@ export interface StrategyDecision {
    * - interrupt the operator's current audio/PTT contribution right away.
    */
   stop?: boolean;
+  /**
+   * Requests that the host keep a short receive-only gate after a successful
+   * QSO stop. This lets a strategy turn off CQ/transmit UI while still
+   * accepting direct protocol calls that arrive in the completion window.
+   */
+  silentListen?: {
+    reason: 'qso-success';
+    acceptDirectedCalls: boolean;
+    graceSlots?: number;
+    excludeCallsigns?: string[];
+  };
   qsoFailure?: QSOFailureInfo;
 }
 

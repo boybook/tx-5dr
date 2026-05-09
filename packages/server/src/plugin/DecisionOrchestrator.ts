@@ -28,6 +28,12 @@ import { FT8MessageParser, CycleUtils } from '@tx5dr/core';
 
 const logger = createLogger('DecisionOrchestrator');
 
+interface SilentDirectedCallGate {
+  expiresAtWallMs: number;
+  expiresAtSlotStartMs: number;
+  excludeCallsigns: Set<string>;
+}
+
 function getParsedMessageSenderCallsign(message: ParsedFT8Message['message']): string | undefined {
   return 'senderCallsign' in message && typeof message.senderCallsign === 'string'
     ? message.senderCallsign.toUpperCase()
@@ -57,6 +63,7 @@ function getScoredCandidateScore(message: ParsedFT8Message | undefined): number 
 
 export class DecisionOrchestrator {
   private decisionStates = new Map<string, OperatorDecisionState>();
+  private silentDirectedCallGates = new Map<string, SilentDirectedCallGate>();
 
   constructor(private deps: DecisionOrchestratorDeps) {}
 
@@ -94,6 +101,11 @@ export class DecisionOrchestrator {
         (hook, ctx) => hook(parsedMessages, ctx),
         (instance) => this.deps.getCtxForInstance(instance),
       );
+
+      if (!operator.isTransmitting
+          && await this.tryWakeFromSilentDirectedCallGate(operator.config.id, parsedMessages, slotInfo, slotPack)) {
+        continue;
+      }
 
       let automaticTargetMessages: ParsedFT8Message[] | undefined;
       if (this.isOperatorPureStandby(operator.config.id)) {
@@ -135,6 +147,7 @@ export class DecisionOrchestrator {
       }
       session.lastDecisionTransmission = this.readCurrentTransmission(operator.config.id);
       await this.notifyQSOFailIfPresent(operator.config.id, decision);
+      this.updateSilentDirectedCallGate(operator.config.id, decision, slotInfo, slotPack);
 
       // 竞态检测：如果 handleEncodeStart 在决策完成前已排队了发射内容，
       // 且决策结果与之不同，触发替换编码以纠正过时的发射
@@ -195,8 +208,14 @@ export class DecisionOrchestrator {
 
   async reDecideOperator(operatorId: string, slotPack: SlotPack): Promise<boolean> {
     const operator = this.deps.getOperatorById(operatorId);
-    if (!operator || !operator.isTransmitting) {
+    if (!operator) {
       return false;
+    }
+
+    if (!operator.isTransmitting) {
+      const slotInfo = this.buildSlotInfoFromSlotPack(slotPack);
+      const parsedMessages = await this.parseSlotPackMessages(slotPack, operatorId);
+      return this.tryWakeFromSilentDirectedCallGate(operatorId, parsedMessages, slotInfo, slotPack);
     }
 
     const session = this.getOrCreateDecisionState(operatorId);
@@ -227,6 +246,7 @@ export class DecisionOrchestrator {
     }
 
     await this.notifyQSOFailIfPresent(operatorId, decision);
+    this.updateSilentDirectedCallGate(operatorId, decision, this.buildSlotInfoFromSlotPack(slotPack), slotPack);
 
     if (decision?.stop) {
       await this.applyStrategyStop(operatorId, { interruptActiveTransmission: true });
@@ -269,10 +289,12 @@ export class DecisionOrchestrator {
 
   removeDecisionState(operatorId: string): void {
     this.decisionStates.delete(operatorId);
+    this.silentDirectedCallGates.delete(operatorId);
   }
 
   clearAllDecisionStates(): void {
     this.decisionStates.clear();
+    this.silentDirectedCallGates.clear();
   }
 
   clearDecisionState(operatorId: string): void {
@@ -281,11 +303,16 @@ export class DecisionOrchestrator {
       lastDecisionTransmission: null,
       lastDecisionMessageSet: null,
     });
+    this.silentDirectedCallGates.delete(operatorId);
   }
 
   invalidateDecisionMessageSet(operatorId: string): void {
     const state = this.getOrCreateDecisionState(operatorId);
     state.lastDecisionMessageSet = null;
+  }
+
+  hasActiveSilentDirectedCallGate(operatorId: string, slotPack?: SlotPack): boolean {
+    return this.getActiveSilentDirectedCallGate(operatorId, slotPack?.startMs) !== undefined;
   }
 
   // ===== Private: Message parsing =====
@@ -423,7 +450,7 @@ export class DecisionOrchestrator {
       if (this.isInboundDirectCallMessage(message, myCallsign)) {
         return true;
       }
-      return Boolean(targetCallsign)
+      return targetCallsign !== undefined
         && currentState !== 'TX6'
         && this.isActiveQsoProtocolMessage(message, targetCallsign, myCallsign);
     });
@@ -509,6 +536,121 @@ export class DecisionOrchestrator {
     } catch (error) {
       logger.warn(`Failed to notify QSO failure for operator ${operatorId}`, error);
     }
+  }
+
+  private updateSilentDirectedCallGate(
+    operatorId: string,
+    decision: StrategyDecision | null | undefined,
+    slotInfo: SlotInfo,
+    slotPack: SlotPack | null,
+  ): void {
+    const silentListen = decision?.silentListen;
+    if (!decision?.stop || !silentListen?.acceptDirectedCalls || silentListen.reason !== 'qso-success') {
+      if (decision && !decision.stop) {
+        this.silentDirectedCallGates.delete(operatorId);
+      }
+      return;
+    }
+
+    const currentMode = this.deps.getCurrentMode();
+    const graceSlots = Math.max(1, Math.trunc(silentListen.graceSlots ?? 2));
+    const sourceSlotStartMs = slotPack?.startMs ?? slotInfo.startMs;
+    const wallTtlMs = Math.max(currentMode.slotMs * (graceSlots + 1), 60_000);
+    const excludeCallsigns = new Set(
+      (silentListen.excludeCallsigns ?? [])
+        .map((callsign) => callsign.trim().toUpperCase())
+        .filter(Boolean),
+    );
+
+    this.silentDirectedCallGates.set(operatorId, {
+      expiresAtWallMs: Date.now() + wallTtlMs,
+      expiresAtSlotStartMs: sourceSlotStartMs + currentMode.slotMs * graceSlots,
+      excludeCallsigns,
+    });
+
+    logger.debug('Armed silent directed-call gate after QSO success', {
+      operatorId,
+      sourceSlotStartMs,
+      graceSlots,
+      excludeCallsigns: Array.from(excludeCallsigns),
+    });
+  }
+
+  private getActiveSilentDirectedCallGate(
+    operatorId: string,
+    messageSlotStartMs?: number,
+  ): SilentDirectedCallGate | undefined {
+    const gate = this.silentDirectedCallGates.get(operatorId);
+    if (!gate) {
+      return undefined;
+    }
+
+    if (Date.now() > gate.expiresAtWallMs
+        || (messageSlotStartMs !== undefined && messageSlotStartMs > gate.expiresAtSlotStartMs)) {
+      this.silentDirectedCallGates.delete(operatorId);
+      return undefined;
+    }
+
+    return gate;
+  }
+
+  private async tryWakeFromSilentDirectedCallGate(
+    operatorId: string,
+    parsedMessages: ParsedFT8Message[],
+    slotInfo: SlotInfo,
+    slotPack: SlotPack | null,
+  ): Promise<boolean> {
+    const operator = this.deps.getOperatorById(operatorId);
+    const gate = this.getActiveSilentDirectedCallGate(operatorId, slotPack?.startMs);
+    if (!operator || operator.isTransmitting || !gate) {
+      return false;
+    }
+
+    const myCallsign = operator.config.myCallsign.trim().toUpperCase();
+    const scoredMessages = await this.getScoredAutomaticTargetMessages(operatorId, parsedMessages);
+    const directedMessages = scoredMessages.filter((message) => {
+      const sender = getParsedMessageSenderCallsign(message.message);
+      return this.isInboundDirectCallMessage(message, myCallsign)
+        && (!sender || !gate.excludeCallsigns.has(sender));
+    });
+    if (directedMessages.length === 0) {
+      return false;
+    }
+
+    const before = this.deps.getOperatorAutomationSnapshot(operatorId);
+    const decision = await this.invokeStrategyDecision(operatorId, directedMessages, { isReDecision: true });
+    await this.notifyQSOFailIfPresent(operatorId, decision);
+    if (decision?.stop) {
+      this.updateSilentDirectedCallGate(operatorId, decision, slotInfo, slotPack);
+      return false;
+    }
+
+    const after = this.deps.getOperatorAutomationSnapshot(operatorId);
+    const beforeState = before?.currentState ?? 'TX6';
+    const afterState = after?.currentState ?? 'TX6';
+    const targetCallsign = after?.context?.targetCallsign?.trim().toUpperCase();
+    if (!targetCallsign || (beforeState === afterState && before?.context?.targetCallsign === after?.context?.targetCallsign)) {
+      return false;
+    }
+
+    const sourceMessage = directedMessages.find((message) =>
+      getParsedMessageSenderCallsign(message.message) === targetCallsign
+    ) ?? directedMessages[0];
+    const sourceSlotInfo = this.buildSourceSlotInfoFromParsedMessage(operatorId, sourceMessage, slotInfo);
+
+    this.silentDirectedCallGates.delete(operatorId);
+    operator.start();
+    operator.setTransmitCycles((sourceSlotInfo.cycleNumber + 1) % 2);
+
+    logger.info('Silent directed-call gate woke stopped operator', {
+      operatorId,
+      targetCallsign,
+      fromState: beforeState,
+      toState: afterState,
+      rawMessage: sourceMessage.rawMessage,
+    });
+
+    return true;
   }
 
   private async applyStrategyStop(
@@ -834,6 +976,20 @@ export class DecisionOrchestrator {
       phaseMs: 0,
       driftMs: 0,
       cycleNumber,
+      mode: currentMode.name,
+    };
+  }
+
+  private buildSlotInfoFromSlotPack(slotPack: SlotPack): SlotInfo {
+    const currentMode = this.deps.getCurrentMode();
+    const startMs = slotPack.startMs;
+    return {
+      id: slotPack.slotId,
+      startMs,
+      utcSeconds: Math.floor(startMs / 1000),
+      phaseMs: 0,
+      driftMs: 0,
+      cycleNumber: CycleUtils.calculateCycleNumberFromMs(startMs, currentMode.slotMs),
       mode: currentMode.name,
     };
   }

@@ -508,6 +508,10 @@ export class PluginManager {
     return this.orchestrator.reDecideOperator(operatorId, slotPack);
   }
 
+  shouldProcessStoppedOperatorReDecision(operatorId: string, slotPack: SlotPack): boolean {
+    return this.orchestrator.hasActiveSilentDirectedCallGate(operatorId, slotPack);
+  }
+
   // ===== 策略管理 =====
 
   getActiveStrategyForOperator(operatorId: string): string {
