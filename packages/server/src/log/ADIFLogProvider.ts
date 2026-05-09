@@ -215,7 +215,7 @@ function enrichQSOWithDXCC(qso: QSORecord): QSORecord {
     ...qso,
     dxccId: info.entityCode,
     dxccEntity: info.name,
-    dxccStatus: info.deleted ? 'deleted' : 'current',
+    dxccStatus: 'current',
     countryCode: info.countryCode,
     cqZone: info.cqZone,
     ituZone: info.ituZone,
@@ -1399,7 +1399,7 @@ export class ADIFLogProvider implements ILogProvider {
     const cqZone = dxccEntity?.cqZone ?? getCQZone(upper);
     const ituZone = dxccEntity?.ituZone ?? getITUZone(upper);
     const dxccId = dxccEntity?.entityCode;
-    const dxccStatus = dxccEntity ? (dxccEntity.deleted ? 'deleted' : 'current') : 'unknown';
+    const dxccStatus = dxccEntity ? 'current' : 'unknown';
 
     let isNewCallsign: boolean;
     if (band && band !== 'Unknown') {

@@ -36,16 +36,16 @@ test('韩国呼号基础国家解析(数字开头)', () => {
   const c = getCallsignInfo('HL1VAU');
 
   assert.ok(a, '6K5SPI 应能解析');
-  assert.equal(a?.country, 'South Korea');
+  assert.equal(a?.country, 'Republic of Korea');
   assert.equal(a?.countryZh, '韩国');
   assert.ok(b, '6L1KZP 应能解析');
-  assert.equal(b?.country, 'South Korea');
+  assert.equal(b?.country, 'Republic of Korea');
   assert.ok(c, 'HL1VAU 应能解析');
-  assert.equal(c?.country, 'South Korea');
+  assert.equal(c?.country, 'Republic of Korea');
 });
 
 test('意大利本土呼号应由通用 I 前缀解析', () => {
-  const testCases = ['IZ8EDI', 'IW4DV', 'IU5BJS', 'IK5PWQ', 'IT9ABC'];
+  const testCases = ['IZ8EDI', 'IW4DV', 'IU5BJS', 'IK5PWQ'];
 
   for (const callsign of testCases) {
     const info = getCallsignInfo(callsign);
@@ -54,37 +54,42 @@ test('意大利本土呼号应由通用 I 前缀解析', () => {
     assert.equal(info?.countryZh, '意大利', `呼号 "${callsign}" 中文应为意大利`);
     assert.equal(info?.entityCode, 248, `呼号 "${callsign}" 实体代码应为 248`);
   }
+
+  const sicily = getCallsignInfo('IT9ABC');
+  assert.equal(sicily?.country, 'Sicily');
+  assert.equal(sicily?.countryZh, '西西里');
+  assert.equal(sicily?.entityCode, 248);
 });
 
-test('意大利通用 I 前缀不应覆盖更具体或历史 DXCC 实体', () => {
+test('意大利通用 I 前缀不应覆盖更具体当前 DXCC 实体', () => {
   const sardinia = getCallsignInfo('IS0ABC');
   const sardiniaIw = getCallsignInfo('IW0UAA');
-  const historicalSomaliland = getCallsignInfo('I5ABC', Date.UTC(1959, 0, 1));
   const currentItaly = getCallsignInfo('IK5ABC', Date.UTC(2026, 3, 19));
 
   assert.equal(sardinia?.country, 'Sardinia');
   assert.equal(sardinia?.entityCode, 225);
   assert.equal(sardiniaIw?.country, 'Sardinia');
   assert.equal(sardiniaIw?.entityCode, 225);
-
-  assert.equal(historicalSomaliland?.country, 'Italian Somaliland');
-  assert.equal(historicalSomaliland?.entityCode, 115);
-  assert.equal(historicalSomaliland?.dxccStatus, 'deleted');
-
   assert.equal(currentItaly?.country, 'Italy');
   assert.equal(currentItaly?.entityCode, 248);
   assert.equal(currentItaly?.dxccStatus, 'current');
 });
 
-test('BigCTY 同一 DXCC code 的多行前缀应合并', () => {
-  const turkeyCases = ['TA6B', 'TB6ABC', 'TC6ABC', 'YM6ABC', 'TA1ABC'];
+test('BigCTY 同一 DXCC code 的多行前缀应按 CTY 原始行解析', () => {
+  const asiaticTurkeyCases = ['TA6B', 'TB6ABC', 'TC6ABC', 'YM6ABC'];
 
-  for (const callsign of turkeyCases) {
+  for (const callsign of asiaticTurkeyCases) {
     const info = getCallsignInfo(callsign);
     assert.ok(info, `呼号 "${callsign}" 应能解析`);
-    assert.equal(info?.country, 'Turkey', `呼号 "${callsign}" 应解析为土耳其`);
+    assert.equal(info?.country, 'Asiatic Turkey', `呼号 "${callsign}" 应解析为亚洲土耳其`);
+    assert.equal(info?.countryZh, '土耳其·亚洲');
     assert.equal(info?.entityCode, 390, `呼号 "${callsign}" 实体代码应为 390`);
   }
+
+  const europeanTurkey = getCallsignInfo('TA1ABC');
+  assert.equal(europeanTurkey?.country, 'European Turkey');
+  assert.equal(europeanTurkey?.countryZh, '土耳其·欧洲');
+  assert.equal(europeanTurkey?.entityCode, 390);
 
   const scotlandGm = getCallsignInfo('GM0ABC');
   const scotlandMm = getCallsignInfo('MM0ABC');
@@ -132,13 +137,13 @@ test('美国特殊实体与州/属地识别', () => {
   assert.equal(usVirginIslands?.state, 'VI');
   assert.equal(usVirginIslands?.stateConfidence, 'high');
 
-  assert.equal(california?.country, 'United States of America');
+  assert.equal(california?.country, 'United States');
   assert.equal(california?.countryZh, '美国·加州');
   assert.equal(california?.countryEn, 'United States·California');
   assert.equal(california?.state, 'CA');
   assert.equal(california?.stateConfidence, 'low');
 
-  assert.equal(californiaAlt?.country, 'United States of America');
+  assert.equal(californiaAlt?.country, 'United States');
   assert.equal(californiaAlt?.countryZh, '美国·加州');
   assert.equal(californiaAlt?.countryEn, 'United States·California');
   assert.equal(californiaAlt?.state, 'CA');
@@ -164,7 +169,7 @@ test('slash 位置指示应优先匹配美国特殊实体', () => {
   assert.equal(w1awGuam?.state, 'GU');
   assert.equal(w1awGuam?.prefix, 'KH2');
 
-  assert.equal(portableCalifornia?.country, 'United States of America');
+  assert.equal(portableCalifornia?.country, 'United States');
   assert.equal(portableCalifornia?.state, 'CA');
   assert.equal(portableCalifornia?.stateConfidence, 'low');
 });
@@ -176,8 +181,7 @@ test('俄罗斯呼号区分 - 欧洲部分', () => {
     'UA3XYZ',  // 区号 3
     'RK7AAA',  // R系列 数字 7
     'R1ABC',   // R系列 数字 1
-    'UA2FAA',  // 特殊后缀 F 开头
-    'UI8XYZ',  // 区号 8 但后缀 X 开头（特例）
+    'UI8XYZ',  // 区号 8 但后缀 X 开头（CTY 特例）
   ];
 
   for (const callsign of testCases) {
@@ -188,6 +192,15 @@ test('俄罗斯呼号区分 - 欧洲部分', () => {
     assert.equal(info?.entityCode, 54, `呼号 "${callsign}" 实体代码应为 54`);
     assert.deepEqual(info?.continent, ['EU'], `呼号 "${callsign}" 应属于欧洲`);
   }
+});
+
+test('俄罗斯 CTY 特例 - 加里宁格勒', () => {
+  const info = getCallsignInfo('UA2FAA');
+
+  assert.equal(info?.country, 'Kaliningrad');
+  assert.equal(info?.countryZh, '加里宁格勒');
+  assert.equal(info?.entityCode, 126);
+  assert.deepEqual(info?.continent, ['EU']);
 });
 
 test('俄罗斯呼号区分 - 亚洲部分', () => {
@@ -349,69 +362,35 @@ test('前缀冲突优先级 - CE0前缀应优先匹配复活节岛', () => {
   }
 });
 
-test('DXCC 解析应根据通联日期选择历史实体', () => {
-  const westGermany = getCallsignInfo('DA1ABC', Date.UTC(1970, 0, 1));
-  const germany = getCallsignInfo('DA1ABC', Date.UTC(1980, 0, 1));
-  const czechoslovakia = getCallsignInfo('OK1ABC', Date.UTC(1992, 5, 1));
-  const czechRepublic = getCallsignInfo('OK1ABC', Date.UTC(1994, 5, 1));
-  const ryukyu = getCallsignInfo('JR6AAA', Date.UTC(1970, 0, 1));
-  const okinotorishima = getCallsignInfo('7J1AAA', Date.UTC(1978, 0, 1));
+test('CTY exact-only 例外不应污染通用前缀', () => {
+  const itu = getCallsignInfo('4U1ITU');
+  const italy = getCallsignInfo('4U1ABC');
+  const guantanamo = getCallsignInfo('W1AW/KG4');
 
-  assert.equal(westGermany?.country, 'West Germany');
-  assert.equal(westGermany?.entityCode, 81);
-  assert.equal(westGermany?.dxccStatus, 'deleted');
-
-  assert.equal(germany?.country, 'Germany');
-  assert.equal(germany?.entityCode, 230);
-  assert.equal(germany?.dxccStatus, 'current');
-
-  assert.equal(czechoslovakia?.country, 'Czechoslovakia');
-  assert.equal(czechoslovakia?.entityCode, 218);
-  assert.equal(czechoslovakia?.dxccStatus, 'deleted');
-
-  assert.equal(czechRepublic?.country, 'Czech Republic');
-  assert.equal(czechRepublic?.entityCode, 503);
-  assert.equal(czechRepublic?.dxccStatus, 'current');
-
-  assert.equal(ryukyu?.country, 'Ryukyu Islands');
-  assert.equal(ryukyu?.entityCode, 193);
-  assert.equal(ryukyu?.dxccStatus, 'deleted');
-
-  assert.equal(okinotorishima?.country, 'Okinotorishima');
-  assert.equal(okinotorishima?.entityCode, 194);
-  assert.equal(okinotorishima?.dxccStatus, 'deleted');
+  assert.equal(itu?.country, 'ITU HQ');
+  assert.equal(itu?.entityCode, 117);
+  assert.equal(itu?.dxccMatchKind, 'exact');
+  assert.equal(italy?.country, 'Italy');
+  assert.equal(italy?.entityCode, 248);
+  assert.equal(guantanamo?.country, 'Guantanamo Bay');
+  assert.equal(guantanamo?.dxccMatchKind, 'exact');
 });
 
-test('DXCC 解析应优先返回当前有效实体而不是更长的失效历史前缀', () => {
-  const currentTs = Date.UTC(2026, 3, 19);
-  const historicalTs = Date.UTC(1968, 5, 30);
-  const afterHistoricalTs = Date.UTC(1968, 6, 1);
-  const current = resolveDXCCEntity('4X1UF', currentTs);
-  const historical = resolveDXCCEntity('4X1XXX', historicalTs);
-  const afterHistorical = resolveDXCCEntity('4X1XXX', afterHistoricalTs);
-  const palestine = resolveDXCCEntity('E4ABC', Date.UTC(2026, 3, 19));
+test('CTY slash 与 /MM /AM 语义应接近 WSJT-X', () => {
+  assert.equal(getCallsignInfo('W1AW/MM'), undefined);
+  assert.equal(getCallsignInfo('W1AW/AM'), undefined);
+  assert.equal(getCallsignInfo('W1AW/QRP')?.country, 'United States');
+  assert.equal(getCallsignInfo('W1AW/LH')?.country, 'United States');
+  assert.equal(getCallsignInfo('KG4ABC')?.country, 'United States');
+  assert.equal(getCallsignInfo('KG4AA')?.country, 'Guantanamo Bay');
+});
 
-  assert.equal(current.entity?.name, 'Israel');
-  assert.equal(current.entity?.entityCode, 336);
-  assert.equal(current.confidence, 'prefix');
-  assert.equal(current.matchKind, 'prefix');
-  assert.equal(current.dataSource, 'local');
-  assert.equal(current.needsReview, false);
+test('WAE-only CTY 行应保留并能解析', () => {
+  const vienna = getCallsignInfo('4U1V');
 
-  assert.equal(historical.entity?.name, 'Palestine');
-  assert.equal(historical.entity?.entityCode, 196);
-  assert.equal(historical.entity?.deleted, true);
-  assert.equal(historical.matchedPrefix, '4X1');
-
-  assert.equal(afterHistorical.entity?.name, 'Israel');
-  assert.equal(afterHistorical.entity?.entityCode, 336);
-  assert.equal(afterHistorical.matchedPrefix, '4X');
-
-  assert.equal(palestine.entity?.name, 'Palestine');
-  assert.equal(palestine.entity?.entityCode, 510);
-  assert.equal(palestine.matchedPrefix, 'E4');
-
-  assert.equal(extractPrefix('4X1UF'), '4X');
+  assert.equal(vienna?.country, 'Vienna Intl Ctr');
+  assert.equal(vienna?.entityCode, 206);
+  assert.equal(vienna?.dxccStatus, 'current');
 });
 
 test('DXCC 解析缓存不应丢失前缀置信度', () => {
