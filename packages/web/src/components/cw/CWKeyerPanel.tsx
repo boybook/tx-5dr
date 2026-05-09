@@ -31,13 +31,23 @@ import {
   faTowerBroadcast,
   faPlus,
   faMinus,
+  faChevronDown,
 } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
 import { useTranslation } from 'react-i18next';
 import { useCWKeyer } from '../../hooks/useCWKeyer';
 import { useOperators, useCurrentOperatorId } from '../../store/radioStore';
 import { CWSidetone } from './CWSidetone';
+import {
+  getCWKeyerShortcutPresetsForCallsign,
+  saveCWKeyerSlotShortcutPreset,
+  matchesCWKeyerShortcut,
+  CW_KEYER_SHORTCUT_PRESETS,
+  CW_KEYER_SHORTCUT_NONE,
+  CW_KEYER_SHORTCUT_CHANGED_EVENT,
+} from '../../utils/cwKeyerShortcutPreferences';
 import type { CWMessagePanel, CWMessageSlot } from '@tx5dr/contracts';
+import type { CWKeyerShortcutPreset, CWKeyerShortcutChangedDetail } from '../../utils/cwKeyerShortcutPreferences';
 
 const WPM_MIN = 5;
 const WPM_MAX = 60;
@@ -59,6 +69,8 @@ export function CWKeyerPanel() {
   const [editRepeatEnabled, setEditRepeatEnabled] = useState(false);
   const [editRepeatInterval, setEditRepeatInterval] = useState(5);
   const { isOpen, onOpen, onClose } = useDisclosure();
+  const [slotShortcuts, setSlotShortcuts] = useState<Record<string, CWKeyerShortcutPreset>>({});
+  const [shortcutMenuSlotId, setShortcutMenuSlotId] = useState<string | null>(null);
 
   // WPM 本地状态，跟随 cwConfig 变化
   const [wpm, setWpm] = useState(cwConfig?.wpm ?? 20);
@@ -98,6 +110,115 @@ export function CWKeyerPanel() {
       loadPanel();
     }
   }, [isCWMode, myCallsign, loadPanel]);
+
+  const visibleSlots = panel?.slots.slice(0, panel.slotCount) ?? [];
+  const canIncreaseSlots = (panel?.slotCount ?? 0) < (panel?.maxSlotCount ?? 12);
+  const canDecreaseSlots = (panel?.slotCount ?? 3) > 3;
+
+  // 加载快捷键预设
+  useEffect(() => {
+    if (!myCallsign || !panel?.slots) return;
+    const presets = getCWKeyerShortcutPresetsForCallsign(myCallsign, panel.slots);
+    setSlotShortcuts(presets);
+  }, [myCallsign, panel?.slots]);
+
+  // 跨组件快捷键变更同步
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<CWKeyerShortcutChangedDetail>).detail;
+      if (!detail || detail.callsign !== myCallsign?.trim().toUpperCase()) return;
+      setSlotShortcuts(prev => ({ ...prev, [detail.slotId]: detail.preset }));
+    };
+    window.addEventListener(CW_KEYER_SHORTCUT_CHANGED_EVENT, handler);
+    return () => window.removeEventListener(CW_KEYER_SHORTCUT_CHANGED_EVENT, handler);
+  }, [myCallsign]);
+
+  // 快捷键菜单关闭（外部点击/Escape）
+  useEffect(() => {
+    if (!shortcutMenuSlotId) return undefined;
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('[data-cw-keyer-shortcut-menu]')) return;
+      setShortcutMenuSlotId(null);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShortcutMenuSlotId(null);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [shortcutMenuSlotId]);
+
+  // 全局键盘监听器（捕获 F 键快捷键）
+  useEffect(() => {
+    const isTypingTarget = (target: EventTarget | null) => {
+      const el = target as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+    };
+
+    const handleGlobalKeyDown = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return;
+
+      if (event.key === 'Escape' && isActive) {
+        event.preventDefault();
+        stopMessage();
+        return;
+      }
+
+      if (!isCWMode || !myCallsign) return;
+
+      const slot = visibleSlots.find(candidate =>
+        matchesCWKeyerShortcut(event.code, slotShortcuts[candidate.id] ?? CW_KEYER_SHORTCUT_NONE),
+      );
+
+      if (!slot || !slot.text || isActive) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      playMessage(myCallsign, slot.id, slot.repeatEnabled);
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown, { capture: true });
+  }, [isActive, isCWMode, myCallsign, playMessage, slotShortcuts, stopMessage, visibleSlots]);
+
+  // 更新快捷键预设
+  const updateSlotShortcut = useCallback((slot: CWMessageSlot, preset: CWKeyerShortcutPreset) => {
+    if (!myCallsign) return;
+    const nextShortcuts = { ...slotShortcuts };
+    const changes: Array<{ slotId: string; preset: CWKeyerShortcutPreset }> = [];
+
+    if (preset !== CW_KEYER_SHORTCUT_NONE) {
+      for (const candidate of panel?.slots ?? []) {
+        if (candidate.id !== slot.id && nextShortcuts[candidate.id] === preset) {
+          nextShortcuts[candidate.id] = CW_KEYER_SHORTCUT_NONE;
+          changes.push({ slotId: candidate.id, preset: CW_KEYER_SHORTCUT_NONE });
+        }
+      }
+    }
+
+    nextShortcuts[slot.id] = preset;
+    changes.push({ slotId: slot.id, preset });
+
+    setSlotShortcuts(nextShortcuts);
+    for (const change of changes) {
+      saveCWKeyerSlotShortcutPreset(myCallsign, change.slotId, change.preset);
+    }
+    setShortcutMenuSlotId(null);
+  }, [myCallsign, panel?.slots, slotShortcuts]);
+
+  const getShortcutLabel = (preset: CWKeyerShortcutPreset): string => {
+    return preset === CW_KEYER_SHORTCUT_NONE ? (t('radio:cw.shortcutNone') || '-') : preset;
+  };
 
   // 发送文本
   const handleSendText = () => {
@@ -204,10 +325,6 @@ export function CWKeyerPanel() {
   };
 
   if (!isCWMode) return null;
-
-  const visibleSlots = panel?.slots.slice(0, panel.slotCount) ?? [];
-  const canIncreaseSlots = (panel?.slotCount ?? 0) < (panel?.maxSlotCount ?? 12);
-  const canDecreaseSlots = (panel?.slotCount ?? 3) > 3;
 
   return (
     <Card className="w-full">
@@ -367,6 +484,9 @@ export function CWKeyerPanel() {
                   <span className="text-xs text-default-500 w-6 text-right shrink-0">
                     {slot.index}
                   </span>
+                  <span className="text-xs font-mono text-default-400 w-8 shrink-0 text-center">
+                    {getShortcutLabel(slotShortcuts[slot.id] ?? CW_KEYER_SHORTCUT_NONE)}
+                  </span>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">{slot.label}</div>
                     <div className="text-xs text-default-400 truncate">
@@ -472,6 +592,44 @@ export function CWKeyerPanel() {
                   size="sm"
                 />
               )}
+            </div>
+            <div className="flex items-center gap-2" data-cw-keyer-shortcut-menu>
+              <span className="text-sm text-default-600">{t('radio:cw.shortcutSelectAria', { slot: editingSlot?.index ?? '' })}:</span>
+              <div className="relative">
+                <Button
+                  size="sm"
+                  variant="flat"
+                  className="min-w-12 h-8 font-mono text-xs"
+                  endContent={<FontAwesomeIcon icon={faChevronDown} className="text-xs" />}
+                  onPress={() => {
+                    if (!editingSlot) return;
+                    setShortcutMenuSlotId(current => current === editingSlot.id ? null : editingSlot.id);
+                  }}
+                >
+                  {getShortcutLabel(editingSlot ? (slotShortcuts[editingSlot.id] ?? CW_KEYER_SHORTCUT_NONE) : CW_KEYER_SHORTCUT_NONE)}
+                </Button>
+                {shortcutMenuSlotId === editingSlot?.id && (
+                  <div className="absolute bottom-full left-0 z-50 mb-1 min-w-16 rounded-md border border-divider bg-content1 p-1 shadow-lg">
+                    {CW_KEYER_SHORTCUT_PRESETS.map((preset) => {
+                      const selected = preset === (editingSlot ? slotShortcuts[editingSlot.id] : CW_KEYER_SHORTCUT_NONE);
+                      return (
+                        <button
+                          key={preset}
+                          type="button"
+                          className={`flex items-center justify-between w-full rounded-md px-2 py-1 text-xs hover:bg-default-100 ${selected ? 'font-semibold text-primary' : ''}`}
+                          onClick={() => {
+                            if (!editingSlot) return;
+                            updateSlotShortcut(editingSlot, preset);
+                          }}
+                        >
+                          <span>{getShortcutLabel(preset)}</span>
+                          {selected && <span className="ml-2 text-primary">✓</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </ModalBody>
           <ModalFooter>
