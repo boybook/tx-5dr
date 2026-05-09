@@ -76,6 +76,28 @@ test('意大利通用 I 前缀不应覆盖更具体或历史 DXCC 实体', () =>
   assert.equal(currentItaly?.dxccStatus, 'current');
 });
 
+test('BigCTY 同一 DXCC code 的多行前缀应合并', () => {
+  const turkeyCases = ['TA6B', 'TB6ABC', 'TC6ABC', 'YM6ABC', 'TA1ABC'];
+
+  for (const callsign of turkeyCases) {
+    const info = getCallsignInfo(callsign);
+    assert.ok(info, `呼号 "${callsign}" 应能解析`);
+    assert.equal(info?.country, 'Turkey', `呼号 "${callsign}" 应解析为土耳其`);
+    assert.equal(info?.entityCode, 390, `呼号 "${callsign}" 实体代码应为 390`);
+  }
+
+  const scotlandGm = getCallsignInfo('GM0ABC');
+  const scotlandMm = getCallsignInfo('MM0ABC');
+  const svalbard = getCallsignInfo('JW5E');
+
+  assert.equal(scotlandGm?.country, 'Scotland');
+  assert.equal(scotlandGm?.entityCode, 279);
+  assert.equal(scotlandMm?.country, 'Scotland');
+  assert.equal(scotlandMm?.entityCode, 279);
+  assert.equal(svalbard?.country, 'Svalbard');
+  assert.equal(svalbard?.entityCode, 259);
+});
+
 test('美国特殊实体与州/属地识别', () => {
   const guam = getCallsignInfo('KH2AA');
   const hawaii = getCallsignInfo('KH6VV');

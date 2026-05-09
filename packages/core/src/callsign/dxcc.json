@@ -1,11 +1,11 @@
 {
-  "version": "2026.04.14-bigcty",
+  "version": "2026.05.08-bigcty",
   "source": {
     "type": "cty-csv-merge",
-    "upstream": "bigcty-dir",
-    "sourceVersion": "2026.04.14-bigcty",
+    "upstream": "cty.csv",
+    "sourceVersion": "2026.05.08-bigcty",
     "generatedBy": "scripts/generate-dxcc-data.mjs",
-    "generatedAt": "2026-04-19T15:23:55.594Z"
+    "generatedAt": "2026-05-08T15:41:12.447Z"
   },
   "dxcc": [
     {
@@ -5056,8 +5056,8 @@
       "name": "Austria",
       "notes": "",
       "outgoingQslService": true,
-      "prefix": "OE",
-      "prefixRegex": "^(OE)[A-Z0-9/]*$",
+      "prefix": "4U1V,OE",
+      "prefixRegex": "^(4U1V|OE)[A-Z0-9/]*$",
       "thirdPartyTraffic": true,
       "validEnd": "",
       "validStart": "",
@@ -6093,7 +6093,8 @@
     },
     {
       "continent": [
-        "EU"
+        "EU",
+        "AF"
       ],
       "countryCode": "IT",
       "cq": [
@@ -6109,8 +6110,8 @@
       "name": "Italy",
       "notes": "",
       "outgoingQslService": true,
-      "prefix": "IT9,IB9,ID9,IE9,IF9,II9,IJ9,IO9,IP9,IQ9,IR9,IU9,IW9,IY9,I",
-      "prefixRegex": "^(IT9|IB9|ID9|IE9|IF9|II9|IJ9|IO9|IP9|IQ9|IR9|IU9|IW9|IY9|I)[A-Z0-9/]*$",
+      "prefix": "I,4U,IG9,IH9,IT9,IB9,ID9,IE9,IF9,II9,IJ9,IO9,IP9,IQ9,IR9,IU9,IW9,IY9",
+      "prefixRegex": "^(IG9|IH9|IT9|IB9|ID9|IE9|IF9|II9|IJ9|IO9|IP9|IQ9|IR9|IU9|IW9|IY9|4U|I)[A-Z0-9/]*$",
       "thirdPartyTraffic": false,
       "validEnd": "",
       "validStart": "",
@@ -6384,8 +6385,8 @@
       "name": "Svalbard",
       "notes": "",
       "outgoingQslService": true,
-      "prefix": "JW/B",
-      "prefixRegex": "^(JW/B)[A-Z0-9/]*$",
+      "prefix": "JW,JW/B",
+      "prefixRegex": "^(JW/B|JW)[A-Z0-9/]*$",
       "thirdPartyTraffic": false,
       "validEnd": "",
       "validStart": "",
@@ -6884,8 +6885,8 @@
       "name": "Scotland",
       "notes": "",
       "outgoingQslService": true,
-      "prefix": "GM/S",
-      "prefixRegex": "^(GM/S)[A-Z0-9/]*$",
+      "prefix": "GM,2A,2M,GS,MA,MM,MS,GM/S",
+      "prefixRegex": "^(GM/S|GM|2A|2M|GS|MA|MM|MS)[A-Z0-9/]*$",
       "thirdPartyTraffic": false,
       "validEnd": "",
       "validStart": "",
@@ -8304,6 +8305,7 @@
     },
     {
       "continent": [
+        "AS",
         "EU"
       ],
       "countryCode": "TR",
@@ -8319,8 +8321,8 @@
       "name": "Turkey",
       "notes": "",
       "outgoingQslService": true,
-      "prefix": "TA1,TB1,TC1,YM1",
-      "prefixRegex": "^(TA1|TB1|TC1|YM1)[A-Z0-9/]*$",
+      "prefix": "TA,TB,TC,YM,TA1,TB1,TC1,YM1",
+      "prefixRegex": "^(TA1|TB1|TC1|YM1|TA|TB|TC|YM)[A-Z0-9/]*$",
       "thirdPartyTraffic": false,
       "validEnd": "",
       "validStart": "",
