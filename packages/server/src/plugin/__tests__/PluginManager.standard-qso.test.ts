@@ -1128,6 +1128,64 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('preserves weak direct TX2 signal reports through snr-filter while in CQ state', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      pluginConfigs: {
+        'snr-filter': {
+          enabled: true,
+          settings: {
+            minSNR: -8,
+          },
+        },
+      },
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(15_000), createSlotPack(createSlotInfo(15_000), [{
+      message: 'BG4IAJ JA1AAA -12',
+      snr: -20,
+      freq: 1200,
+    }]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(status.currentSlot).toBe('TX3');
+    expect(status.context?.targetCallsign).toBe('JA1AAA');
+    expect(status.context?.reportReceived).toBe(-12);
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG4IAJ R-20');
+
+    await pluginManager.shutdown();
+  });
+
+  it('preserves direct TX2 signal reports through callsign-filter rules while in CQ state', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      pluginConfigs: {
+        'callsign-filter': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'callsign-filter': {
+          filterMode: 'blocklist',
+          filterRules: ['JA'],
+        },
+      },
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(15_000), createSlotPack(createSlotInfo(15_000), [{
+      message: 'BG4IAJ JA1AAA -12',
+      snr: -10,
+      freq: 1200,
+    }]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(status.currentSlot).toBe('TX3');
+    expect(status.context?.targetCallsign).toBe('JA1AAA');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG4IAJ R-10');
+
+    await pluginManager.shutdown();
+  });
+
   it('lets snr-filter prioritize a higher-SNR normal CQ over a weak new DXCC CQ', async () => {
     const { operator, pluginManager } = await createRuntimeHarness({
       autoReplyToCQ: true,

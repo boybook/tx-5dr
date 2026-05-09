@@ -352,7 +352,7 @@ export class DecisionOrchestrator {
       automaticTargetMessages,
       (instance) => this.deps.getCtxForInstance(instance),
     );
-    return this.preserveActiveQsoMessages(operatorId, automaticTargetMessages, filteredMessages);
+    return this.preserveDirectedProtocolMessages(operatorId, automaticTargetMessages, filteredMessages);
   }
 
   private async getScoredAutomaticTargetMessages(
@@ -400,7 +400,7 @@ export class DecisionOrchestrator {
     });
   }
 
-  private preserveActiveQsoMessages(
+  private preserveDirectedProtocolMessages(
     operatorId: string,
     sourceMessages: ParsedFT8Message[],
     filteredMessages: ParsedFT8Message[],
@@ -411,28 +411,48 @@ export class DecisionOrchestrator {
     const targetCallsign = automation?.context?.targetCallsign?.trim().toUpperCase();
     const myCallsign = operator?.config.myCallsign.trim().toUpperCase();
 
-    if (!operator || !targetCallsign || !myCallsign || currentState === 'TX6') {
+    if (!operator || !myCallsign) {
       return filteredMessages;
     }
 
     const filteredKeys = new Set(filteredMessages.map(getParsedMessageKey));
-    const activeQsoMessages = sourceMessages.filter((message) => (
-      !filteredKeys.has(getParsedMessageKey(message))
-      && this.isActiveQsoProtocolMessage(message, targetCallsign, myCallsign)
-    ));
+    const preservedMessages = sourceMessages.filter((message) => {
+      if (filteredKeys.has(getParsedMessageKey(message))) {
+        return false;
+      }
+      if (this.isInboundDirectCallMessage(message, myCallsign)) {
+        return true;
+      }
+      return Boolean(targetCallsign)
+        && currentState !== 'TX6'
+        && this.isActiveQsoProtocolMessage(message, targetCallsign, myCallsign);
+    });
 
-    if (activeQsoMessages.length === 0) {
+    if (preservedMessages.length === 0) {
       return filteredMessages;
     }
 
-    logger.debug('Preserved active QSO protocol messages after candidate filters', {
+    logger.debug('Preserved directed protocol messages after candidate filters', {
       operatorId,
-      targetCallsign,
+      targetCallsign: targetCallsign ?? null,
       currentState,
-      preservedMessages: activeQsoMessages.map((message) => message.rawMessage),
+      preservedMessages: preservedMessages.map((message) => message.rawMessage),
     });
 
-    return [...filteredMessages, ...activeQsoMessages];
+    return [...filteredMessages, ...preservedMessages];
+  }
+
+  private isInboundDirectCallMessage(
+    message: ParsedFT8Message,
+    myCallsign: string,
+  ): boolean {
+    const target = getParsedMessageTargetCallsign(message.message);
+    if (target !== myCallsign) {
+      return false;
+    }
+
+    return message.message.type === FT8MessageType.CALL
+      || message.message.type === FT8MessageType.SIGNAL_REPORT;
   }
 
   private isActiveQsoProtocolMessage(
