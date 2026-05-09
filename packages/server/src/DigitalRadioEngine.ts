@@ -20,6 +20,7 @@ import {
   type WriteCapabilityPayload,
   type TuneToneStartPayload,
   type TuneToneStatus,
+  type PresetFrequency,
   resolveWindowTiming,
 } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
@@ -905,6 +906,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       }
 
       logger.info(`Switching mode: ${this.currentMode.name} -> ${digitalMode.name}`);
+      await this.applyNearestPresetForDigitalMode(digitalMode);
+
       this.currentMode = digitalMode;
       this.applyDecodeWindowOverrides();
 
@@ -927,6 +930,114 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     const queuedSwitch = this.modeSwitchTail.then(runSwitch, runSwitch);
     this.modeSwitchTail = queuedSwitch.catch(() => undefined);
     await queuedSwitch;
+  }
+
+  private async applyNearestPresetForDigitalMode(targetMode: ModeDescriptor): Promise<void> {
+    const configManager = ConfigManager.getInstance();
+    const currentFrequency = this.resolveCurrentDigitalFrequency(configManager);
+    if (!currentFrequency) {
+      logger.warn(`Skipping ${targetMode.name} preset frequency switch: current frequency is unknown`);
+      return;
+    }
+
+    const nearestPreset = this.findNearestPresetForMode(targetMode.name, currentFrequency, configManager);
+    if (!nearestPreset) {
+      logger.warn(`Skipping ${targetMode.name} preset frequency switch: no presets found for target mode`);
+      return;
+    }
+
+    await this.applyDigitalPresetFrequency(nearestPreset);
+  }
+
+  private resolveCurrentDigitalFrequency(configManager: ConfigManager): number | null {
+    const knownFrequency = this.radioManager.getKnownFrequency();
+    if (this.isValidFrequency(knownFrequency)) {
+      return Math.round(knownFrequency);
+    }
+
+    const lastFrequency = configManager.getLastSelectedFrequency()?.frequency;
+    if (this.isValidFrequency(lastFrequency)) {
+      return Math.round(lastFrequency);
+    }
+
+    return null;
+  }
+
+  private findNearestPresetForMode(
+    modeName: string,
+    currentFrequency: number,
+    configManager: ConfigManager,
+  ): PresetFrequency | null {
+    const frequencyManager = new FrequencyManager(configManager.getCustomFrequencyPresets());
+    const presets = frequencyManager.getPresetsByMode(modeName)
+      .filter((preset) => this.isValidFrequency(preset.frequency));
+
+    let nearestPreset: PresetFrequency | null = null;
+    let smallestDiff = Infinity;
+
+    for (const preset of presets) {
+      const diff = Math.abs(preset.frequency - currentFrequency);
+      const isTieBreaker = diff === smallestDiff
+        && nearestPreset !== null
+        && preset.frequency < nearestPreset.frequency;
+
+      if (diff < smallestDiff || isTieBreaker) {
+        nearestPreset = preset;
+        smallestDiff = diff;
+      }
+    }
+
+    return nearestPreset;
+  }
+
+  private async applyDigitalPresetFrequency(preset: PresetFrequency): Promise<void> {
+    const configManager = ConfigManager.getInstance();
+    const description = preset.description
+      || `${(preset.frequency / 1000000).toFixed(3)} MHz${preset.band ? ` ${preset.band}` : ''}`;
+    const radioConnected = this.radioManager.isConnected();
+
+    if (radioConnected) {
+      const applyResult = await this.radioManager.applyOperatingState({
+        frequency: preset.frequency,
+        mode: preset.radioMode,
+        bandwidth: preset.radioMode ? 'nochange' : undefined,
+        options: preset.radioMode ? { intent: 'digital' } : undefined,
+        tolerateModeFailure: true,
+      });
+
+      if (!applyResult.frequencyApplied) {
+        throw new Error(`Failed to switch radio frequency to ${description}`);
+      }
+
+      if (applyResult.modeError) {
+        logger.warn(`Switched digital frequency but failed to set radio mode: ${applyResult.modeError.message}`);
+      }
+    } else {
+      logger.debug(`Radio not connected, recording nearest digital preset: ${description}`);
+    }
+
+    await configManager.updateLastSelectedFrequency({
+      frequency: preset.frequency,
+      mode: preset.mode,
+      radioMode: preset.radioMode,
+      band: preset.band,
+      description,
+    });
+
+    this.slotPackManager.clearInMemory();
+    this.emit('frequencyChanged', {
+      frequency: preset.frequency,
+      mode: preset.mode,
+      band: preset.band,
+      radioMode: preset.radioMode,
+      description,
+      radioConnected,
+      source: 'program',
+    });
+  }
+
+  private isValidFrequency(frequency: number | null | undefined): frequency is number {
+    return typeof frequency === 'number' && Number.isFinite(frequency) && frequency > 0;
   }
 
   private async switchEngineMode(targetEngineMode: EngineMode, targetMode: ModeDescriptor): Promise<void> {

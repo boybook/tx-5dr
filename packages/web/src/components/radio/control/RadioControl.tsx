@@ -1479,26 +1479,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     }
   };
 
-  // 当模式改变时，自动选择第一个匹配的频率（仅数字模式）
-  React.useEffect(() => {
-    // Skip in voice mode - VoiceFrequencyControl manages its own frequency
-    if (radioMode.engineMode === 'voice') return;
-
-    if (filteredFrequencies.length > 0) {
-      const currentFreqExists = filteredFrequencies.some(freq => freq.key === selectedFrequencyKey);
-      if (!currentFreqExists) {
-        const firstFreq = filteredFrequencies[0];
-        logger.debug(`Mode changed, auto-selecting first frequency: ${firstFreq.label}`);
-        setCurrentFrequency(firstFreq.key);
-        setCustomFrequencyOption(null);
-        if (canWriteFrequency) {
-          // 自动设置频率到后端
-          autoSetFrequency(firstFreq);
-        }
-      }
-    }
-  }, [filteredFrequencies, radioMode.engineMode, selectedFrequencyKey, canWriteFrequency]);
-
   // 处理频率切换
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleFrequencyChange = async (keys: any) => {
