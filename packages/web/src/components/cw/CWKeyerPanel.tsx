@@ -39,6 +39,7 @@ import {
   type CWKeyerConfig,
   type CWMessagePanel,
   type CWMessageSlot,
+  type CWPlaceholderValues,
 } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
 import { useCWKeyer } from '../../hooks/useCWKeyer';
@@ -53,6 +54,12 @@ import {
   CW_KEYER_SHORTCUT_CHANGED_EVENT,
 } from '../../utils/cwKeyerShortcutPreferences';
 import type { CWKeyerShortcutPreset, CWKeyerShortcutChangedDetail } from '../../utils/cwKeyerShortcutPreferences';
+import { useCWQSODraft } from '../../store/cwQsoDraftStore';
+import {
+  resolveCWMessagePlaceholders,
+  type CWMessageSegment,
+  type CWPlaceholderName,
+} from '../../utils/cwMessagePlaceholders';
 
 const WPM_MIN = 5;
 const WPM_MAX = 60;
@@ -131,6 +138,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const radioState = useRadioState();
   const { operators } = useOperators();
   const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
+  const { hisCallsign } = useCWQSODraft();
 
   const textInputRef = useRef<HTMLDivElement>(null);
   const slotUpdateTimersRef = useRef<Record<string, number>>({});
@@ -163,6 +171,10 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const showCatAlert = backend === 'cat' && Boolean(catUnavailableReason);
 
   const myCallsign = operators.find(o => o.id === currentOperatorId)?.context?.myCall?.trim() || '';
+  const placeholderValues = useMemo<CWPlaceholderValues>(() => ({
+    myCall: myCallsign || undefined,
+    hisCall: hisCallsign || undefined,
+  }), [hisCallsign, myCallsign]);
   const isActive = cwKeyerStatus?.active ?? false;
   const statusMode = cwKeyerStatus?.mode ?? 'idle';
   const activeSlotId = (statusMode === 'playing' || statusMode === 'repeat-waiting')
@@ -231,6 +243,95 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const canIncreaseSlots = (panel?.slotCount ?? 0) < (panel?.maxSlotCount ?? 12);
   const canDecreaseSlots = (panel?.slotCount ?? 3) > 3;
 
+  const getPlaceholderLabel = useCallback((placeholder: CWPlaceholderName): string => (
+    placeholder === 'MYCALL'
+      ? t('radio:cw.placeholderMyCall', 'Current operator callsign')
+      : t('radio:cw.placeholderHisCall', 'QSO log station callsign')
+  ), [t]);
+
+  const getPlaceholderMissingLabel = useCallback((placeholder: CWPlaceholderName): string => (
+    placeholder === 'MYCALL'
+      ? t('radio:cw.placeholderMissingMyCall', 'Operator callsign')
+      : t('radio:cw.placeholderMissingHisCall', 'Station callsign')
+  ), [t]);
+
+  const getMissingPlaceholderText = useCallback((placeholders: CWPlaceholderName[]): string => {
+    const labels = placeholders.map(getPlaceholderLabel).join(', ');
+    return t('radio:cw.placeholderMissingToast', 'Fill in {{placeholders}} before sending this CW message.', { placeholders: labels });
+  }, [getPlaceholderLabel, t]);
+
+  const resolveMessageForSend = useCallback((text: string): string | null => {
+    const resolved = resolveCWMessagePlaceholders(text, placeholderValues);
+    if (resolved.unresolved.length > 0) {
+      addToast({
+        title: t('radio:cw.placeholderMissingTitle', 'Missing CW placeholder value'),
+        description: getMissingPlaceholderText(resolved.unresolved),
+        color: 'warning',
+      });
+      return null;
+    }
+    const trimmed = resolved.text.trim();
+    return trimmed || null;
+  }, [getMissingPlaceholderText, placeholderValues, t]);
+
+  const renderMessageSegments = useCallback((segments: CWMessageSegment[]) => (
+    segments.map((segment, index) => {
+      if (segment.type === 'text') {
+        return <React.Fragment key={`text-${index}`}>{segment.text}</React.Fragment>;
+      }
+
+      const content = segment.resolved
+        ? segment.text
+        : getPlaceholderMissingLabel(segment.placeholder);
+      const tooltip = segment.resolved
+        ? t('radio:cw.placeholderTooltip', '{{source}}: {{label}}', {
+            source: segment.source.toUpperCase(),
+            label: getPlaceholderLabel(segment.placeholder),
+          })
+        : t('radio:cw.placeholderMissingTooltip', '{{source}} needs {{label}}', {
+            source: segment.source.toUpperCase(),
+            label: getPlaceholderLabel(segment.placeholder),
+          });
+
+      return (
+        <Tooltip key={`${segment.source}-${index}`} content={tooltip} delay={250}>
+          <span
+            className={`mx-0.5 inline-flex h-6 items-center rounded-md border px-1.5 font-mono text-xs font-bold leading-none align-middle ${
+              segment.resolved
+                ? 'border-emerald-300 bg-emerald-200 text-emerald-950 dark:border-emerald-300/70 dark:bg-emerald-300 dark:text-emerald-950'
+                : 'border-amber-300 bg-amber-200 text-amber-950 dark:border-amber-300/70 dark:bg-amber-300 dark:text-amber-950'
+            }`}
+          >
+            {content}
+          </span>
+        </Tooltip>
+      );
+    })
+  ), [getPlaceholderLabel, getPlaceholderMissingLabel, t]);
+
+  const renderPlaceholderHint = useCallback(() => (
+    <div className="mb-2 flex flex-wrap items-center gap-1.5 rounded-lg bg-content2 px-2 py-1.5 text-[11px] text-default-500">
+      <span>{t('radio:cw.placeholderHint', 'Placeholders')}</span>
+      {(['MYCALL', 'HISCALL'] as CWPlaceholderName[]).map((placeholder) => (
+        <Tooltip
+          key={placeholder}
+          content={getPlaceholderLabel(placeholder)}
+          delay={250}
+        >
+          <Chip
+            size="sm"
+            variant="flat"
+            color={placeholder === 'MYCALL' ? 'primary' : 'warning'}
+            className="h-5 px-1 font-mono text-[10px] font-semibold"
+          >
+            {`{${placeholder}}`}
+          </Chip>
+        </Tooltip>
+      ))}
+      <span>{t('radio:cw.placeholderHintSuffix', 'are replaced when sending.')}</span>
+    </div>
+  ), [getPlaceholderLabel, t]);
+
   useEffect(() => {
     if (!myCallsign || !panel?.slots) {
       setSlotShortcuts({});
@@ -279,12 +380,13 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      playMessage(myCallsign, slot.id, slot.repeatEnabled);
+      if (!resolveMessageForSend(slot.text)) return;
+      playMessage(myCallsign, slot.id, slot.repeatEnabled, true, placeholderValues);
     };
 
     window.addEventListener('keydown', handleGlobalKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', handleGlobalKeyDown, { capture: true });
-  }, [isActive, isCWMode, myCallsign, panelMode, playMessage, slotShortcuts, stopMessage, visibleSlots]);
+  }, [isActive, isCWMode, myCallsign, panelMode, placeholderValues, playMessage, resolveMessageForSend, slotShortcuts, stopMessage, visibleSlots]);
 
   useEffect(() => () => {
     Object.values(slotUpdateTimersRef.current).forEach(timer => window.clearTimeout(timer));
@@ -356,8 +458,10 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const handleSendText = useCallback((text = textInput) => {
     const trimmed = text.trim();
     if (!trimmed || (isActive && statusMode !== 'idle')) return;
-    sendText(trimmed, myCallsign || undefined);
-    setLastSentText(trimmed);
+    const resolvedText = resolveMessageForSend(trimmed);
+    if (!resolvedText) return;
+    sendText(trimmed, myCallsign || undefined, placeholderValues);
+    setLastSentText(resolvedText);
     if (text === textInput) {
       setTextInput('');
       requestAnimationFrame(() => {
@@ -368,7 +472,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
         }
       });
     }
-  }, [isActive, myCallsign, sendText, statusMode, textInput]);
+  }, [isActive, myCallsign, placeholderValues, resolveMessageForSend, sendText, statusMode, textInput]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -443,11 +547,15 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
       return;
     }
     if (isActive) return;
-    playMessage(myCallsign, slot.id, slot.repeatEnabled);
+    if (!resolveMessageForSend(slot.text)) return;
+    playMessage(myCallsign, slot.id, slot.repeatEnabled, true, placeholderValues);
   };
 
   const handleRepeatToggle = async (slot: CWMessageSlot) => {
     const repeatEnabled = !slot.repeatEnabled;
+    if (repeatEnabled && slot.text && !resolveMessageForSend(slot.text)) {
+      return;
+    }
     updateSlotLocal(slot.id, { repeatEnabled });
     const updatedPanel = await updateSlot(slot.id, { repeatEnabled });
     if (!updatedPanel) {
@@ -455,7 +563,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
       return;
     }
     if (repeatEnabled && slot.text && !isActive) {
-      playMessage(myCallsign, slot.id, true, false);
+      playMessage(myCallsign, slot.id, true, false, placeholderValues);
     } else if (!repeatEnabled && activeSlotId === slot.id) {
       stopMessage();
     }
@@ -723,6 +831,8 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
             )}
           </div>
 
+          {panelMode === 'edit' && renderPlaceholderHint()}
+
           {panelLoading ? (
             <div className="py-4 text-center text-sm text-default-400">
               {t('common:loading', 'Loading...')}
@@ -741,7 +851,8 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
                     const waiting = active && statusMode === 'repeat-waiting';
                     const intervalValue = Math.max(1, Math.min(300, Math.round(Number(slot.repeatIntervalSec) || 1)));
                     const remainingSeconds = waiting ? getRemainingSeconds(cwKeyerStatus?.nextRunAt ?? null, intervalValue) : null;
-                    const durationMs = estimateCWMessageDurationMs(slot.text, wpm);
+                    const resolvedSlot = resolveCWMessagePlaceholders(slot.text, placeholderValues);
+                    const durationMs = estimateCWMessageDurationMs(resolvedSlot.text, wpm);
                     const shortcutPreset = slotShortcuts[slot.id] ?? CW_KEYER_SHORTCUT_NONE;
                     const activeToneClass = waiting
                       ? 'bg-warning-50 dark:bg-warning-950/20'
@@ -780,8 +891,10 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
                             >
                               {getShortcutLabel(shortcutPreset)}
                             </Chip>
-                            <span className="min-w-0 flex-1 truncate font-mono text-xs font-semibold">
-                              {slot.text || t('radio:cw.emptySlotHint', 'Edit this slot first')}
+                            <span className="min-w-0 flex-1 truncate font-mono text-sm font-semibold leading-6">
+                              {slot.text
+                                ? renderMessageSegments(resolvedSlot.segments)
+                                : t('radio:cw.emptySlotHint', 'Edit this slot first')}
                             </span>
                             <span className="max-w-[38%] shrink-0 truncate pr-3 text-right text-[11px] font-semibold opacity-90">
                               {slot.label}

@@ -94,6 +94,18 @@ export const CWKeyActionSchema = z.object({
 export type CWKeyAction = z.infer<typeof CWKeyActionSchema>;
 
 /**
+ * CW 报文占位符值（由前端根据当前 UI 上下文提供）
+ */
+export const CWPlaceholderValuesSchema = z.object({
+  /** 当前操作员呼号，用于 {MYCALL} */
+  myCall: z.string().optional(),
+  /** 当前通联对象呼号，用于 {HISCALL} */
+  hisCall: z.string().optional(),
+});
+
+export type CWPlaceholderValues = z.infer<typeof CWPlaceholderValuesSchema>;
+
+/**
  * CW 文字输入
  */
 export const CWTextInputSchema = z.object({
@@ -101,6 +113,8 @@ export const CWTextInputSchema = z.object({
   text: z.string().min(1).max(500),
   /** 操作员呼号，用于占位符替换（如 {MYCALL}） */
   callsign: z.string().optional(),
+  /** 前端解析出的占位符值 */
+  placeholderValues: CWPlaceholderValuesSchema.optional(),
 });
 
 export type CWTextInput = z.infer<typeof CWTextInputSchema>;
@@ -117,6 +131,8 @@ export const CWPlayMessageSchema = z.object({
   repeat: z.boolean().optional().default(false),
   /** 是否立即发送；false 时仅进入循环等待 */
   startImmediately: z.boolean().optional(),
+  /** 前端解析出的占位符值 */
+  placeholderValues: CWPlaceholderValuesSchema.optional(),
 });
 
 export type CWPlayMessage = z.infer<typeof CWPlayMessageSchema>;

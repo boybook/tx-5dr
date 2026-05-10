@@ -23,6 +23,7 @@ import { useWSEvent } from '../../hooks/useWSEvent';
 import { useCWKeyer } from '../../hooks/useCWKeyer';
 import type { QSORecord } from '@tx5dr/contracts';
 import { openLogbookWindow } from '../../utils/windowManager';
+import { setCWQSOHisCallsign } from '../../store/cwQsoDraftStore';
 
 const logger = createLogger('CWQSOLogCard');
 
@@ -157,6 +158,7 @@ export const CWQSOLogCard: React.FC<CWQSOLogCardProps> = ({
       grid: editingQSO.grid ?? '',
       comment: editingQSO.comment ?? editingQSO.notes ?? '',
     });
+    setCWQSOHisCallsign(editingQSO.callsign);
     setStartTime(editingQSO.startTime);
     setEndTime(editingQSO.endTime ?? null);
     setCurrentFrequency(editingQSO.frequency);
@@ -165,10 +167,14 @@ export const CWQSOLogCard: React.FC<CWQSOLogCardProps> = ({
 
   const updateField = (field: keyof QSOFormData, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+    if (field === 'callsign') {
+      setCWQSOHisCallsign(value);
+    }
   };
 
   const resetForm = () => {
     setFormData(initialFormData);
+    setCWQSOHisCallsign('');
     setStartTime(null);
     setEndTime(null);
   };

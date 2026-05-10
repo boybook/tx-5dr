@@ -1,7 +1,14 @@
 import { promises as fs } from 'fs';
 import { dirname, join } from 'path';
 import { EventEmitter } from 'eventemitter3';
-import type { CWKeyerStatus, CWKeyerConfig, CWMessagePanel, CWMessageSlot, CWKeyerBackend as CWKeyerBackendType } from '@tx5dr/contracts';
+import type {
+  CWKeyerStatus,
+  CWKeyerConfig,
+  CWMessagePanel,
+  CWMessageSlot,
+  CWKeyerBackend as CWKeyerBackendType,
+  CWPlaceholderValues,
+} from '@tx5dr/contracts';
 import { HamlibCatCWKeyerBackend } from './HamlibCatCWKeyerBackend.js';
 import { SerialCWKeyerBackend } from './SerialCWKeyerBackend.js';
 import type { CWKeyerBackend } from './CWKeyerBackend.js';
@@ -16,6 +23,49 @@ const DEFAULT_SLOT_COUNT = 8;
 const MAX_SLOT_COUNT = 12;
 const MIN_SLOT_COUNT = 3;
 const DEFAULT_REPEAT_INTERVAL_SEC = 5;
+
+const DEFAULT_CW_MESSAGE_SLOTS: Array<Pick<CWMessageSlot, 'label' | 'text' | 'repeatIntervalSec'>> = [
+  {
+    label: 'CQ',
+    text: 'CQ CQ DE {MYCALL} {MYCALL} K',
+    repeatIntervalSec: 5,
+  },
+  {
+    label: '呼叫',
+    text: '{HISCALL} DE {MYCALL} {MYCALL} K',
+    repeatIntervalSec: 5,
+  },
+  {
+    label: '报告',
+    text: '{HISCALL} DE {MYCALL} UR 599 599 BK',
+    repeatIntervalSec: 5,
+  },
+  {
+    label: 'TU',
+    text: '{HISCALL} DE {MYCALL} R R TU 73 SK',
+    repeatIntervalSec: 5,
+  },
+  {
+    label: '重发呼号',
+    text: 'DE {MYCALL} {MYCALL} K',
+    repeatIntervalSec: 5,
+  },
+  {
+    label: 'QRZ?',
+    text: 'QRZ? DE {MYCALL} K',
+    repeatIntervalSec: 5,
+  },
+  {
+    label: 'AGN?',
+    text: 'AGN? AGN? DE {MYCALL} K',
+    repeatIntervalSec: 5,
+  },
+  {
+    label: 'SRI',
+    text: 'SRI CALL? DE {MYCALL} K',
+    repeatIntervalSec: 5,
+  },
+];
 
 interface StoredCWManifest {
   version: 1;
@@ -35,6 +85,8 @@ interface ActiveKeying {
   delayResolve: (() => void) | null;
   /** 操作员呼号，用于占位符替换 */
   callsign: string | null;
+  /** 前端发送时提供的占位符值，用于 repeat 时保持同一发送上下文 */
+  placeholderValues: CWPlaceholderValues;
 }
 
 export interface CWKeyerManagerEvents {
@@ -182,6 +234,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
           timer: null,
           delayResolve: null,
           callsign: null,
+          placeholderValues: {},
         };
       }
 
@@ -208,7 +261,13 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
 
   // ========== 文字输入 ==========
 
-  async handleTextInput(clientId: string, label: string, text: string, callsign?: string): Promise<void> {
+  async handleTextInput(
+    clientId: string,
+    label: string,
+    text: string,
+    callsign?: string,
+    placeholderValues?: CWPlaceholderValues,
+  ): Promise<void> {
     await this.ensureConfigLoaded();
     // 如果当前有手键活动，拒绝文字输入
     if (this.active?.mode === 'manual') {
@@ -222,7 +281,8 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     }
 
     // 替换占位符
-    const replaced = this.replacePlaceholders(text, callsign).trim();
+    const values = this.normalizePlaceholderValues(placeholderValues, callsign);
+    const replaced = this.replacePlaceholders(text, values).trim();
     if (!replaced) {
       return;
     }
@@ -237,6 +297,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       timer: null,
       delayResolve: null,
       callsign: callsign ?? null,
+      placeholderValues: values,
     };
     this.active = active;
     this.setStatus(this.statusFor(clientId, label, 'playing', null));
@@ -319,6 +380,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     slotId: string,
     repeat: boolean,
     startImmediately = true,
+    placeholderValues?: CWPlaceholderValues,
   ): Promise<void> {
     await this.ensureConfigLoaded();
     const normalized = this.requireCallsign(callsign);
@@ -332,7 +394,8 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     if (!slot.text) {
       throw new Error('CW message slot has no text');
     }
-    const replaced = this.replacePlaceholders(slot.text, normalized).trim();
+    const values = this.normalizePlaceholderValues(placeholderValues, normalized);
+    const replaced = this.replacePlaceholders(slot.text, values).trim();
     if (!replaced) {
       return;
     }
@@ -347,6 +410,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       timer: null,
       delayResolve: null,
       callsign: normalized,
+      placeholderValues: values,
     };
     this.active = active;
 
@@ -450,7 +514,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       return;
     }
 
-    const replaced = this.replacePlaceholders(latestSlot.text, active.callsign).trim();
+    const replaced = this.replacePlaceholders(latestSlot.text, active.placeholderValues).trim();
     if (!replaced) {
       this.active = null;
       this.setStatus(this.idleStatus());
@@ -497,10 +561,34 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     this.emit('cwKeyerStatusChanged', status);
   }
 
-  /** 替换 CW 报文中的占位符，如 {MYCALL} → 操作员呼号 */
-  private replacePlaceholders(text: string, callsign: string | null | undefined): string {
-    if (!callsign) return text;
-    return text.replace(/\{MYCALL\}/gi, callsign);
+  /** 替换 CW 报文中的占位符，如 {MYCALL} / {HISCALL} */
+  private replacePlaceholders(text: string, values: CWPlaceholderValues): string {
+    const unresolved = new Set<string>();
+    const replaced = text.replace(/\{(MYCALL|HISCALL)\}/gi, (source, name: string) => {
+      const key = name.toUpperCase();
+      const value = key === 'MYCALL' ? values.myCall : values.hisCall;
+      if (!value?.trim()) {
+        unresolved.add(key);
+        return source;
+      }
+      return value.trim().toUpperCase();
+    });
+    if (unresolved.size > 0) {
+      throw new Error(`CW message placeholder value is missing: ${Array.from(unresolved).join(', ')}`);
+    }
+    return replaced;
+  }
+
+  private normalizePlaceholderValues(
+    values: CWPlaceholderValues | undefined,
+    fallbackMyCall?: string | null,
+  ): CWPlaceholderValues {
+    const myCall = typeof values?.myCall === 'string' ? values.myCall : '';
+    const hisCall = typeof values?.hisCall === 'string' ? values.hisCall : '';
+    return {
+      myCall: (myCall || fallbackMyCall || '').trim().toUpperCase() || undefined,
+      hisCall: hisCall.trim().toUpperCase() || undefined,
+    };
   }
 
   private getBackend(): CWKeyerBackend {
@@ -708,14 +796,17 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       version: 1,
       callsign,
       slotCount: DEFAULT_SLOT_COUNT,
-      slots: Array.from({ length: MAX_SLOT_COUNT }, (_, index) => ({
-        id: String(index + 1),
-        index: index + 1,
-        label: `CW${index + 1}`,
-        text: '',
-        repeatEnabled: false,
-        repeatIntervalSec: DEFAULT_REPEAT_INTERVAL_SEC,
-      })),
+      slots: Array.from({ length: MAX_SLOT_COUNT }, (_, index) => {
+        const preset = DEFAULT_CW_MESSAGE_SLOTS[index];
+        return {
+          id: String(index + 1),
+          index: index + 1,
+          label: preset?.label ?? `CW${index + 1}`,
+          text: preset?.text ?? '',
+          repeatEnabled: false,
+          repeatIntervalSec: preset?.repeatIntervalSec ?? DEFAULT_REPEAT_INTERVAL_SEC,
+        };
+      }),
     };
   }
 

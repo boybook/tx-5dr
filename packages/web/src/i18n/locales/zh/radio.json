@@ -657,7 +657,7 @@
     "title": "CW",
     "wpm": "WPM 速度",
     "keyMethod": "键控方式",
-    "textInputPlaceholder": "输入 CW 报文，{MYCALL} 将被替换为当前呼号...",
+    "textInputPlaceholder": "输入 CW 报文，支持 {MYCALL} / {HISCALL}...",
     "send": "发送",
     "sending": "发送中",
     "presetMessages": "预设报文",
@@ -741,6 +741,17 @@
     "emptySlotHint": "请先在编辑中填写",
     "repeatToggle": "循环开关",
     "clearSlot": "清空",
-    "settings": "设置"
+    "settings": "设置",
+    "placeholderMyCall": "当前操作员呼号",
+    "placeholderHisCall": "通联日志中的对方呼号",
+    "placeholderTooltip": "{{source}}：{{label}}",
+    "placeholderMissingTooltip": "{{source}} 需要{{label}}",
+    "placeholderMissingValue": "未设置",
+    "placeholderMissingMyCall": "操作员呼号",
+    "placeholderMissingHisCall": "对方呼号",
+    "placeholderMissingTitle": "缺少 CW 占位符内容",
+    "placeholderMissingToast": "请先填写 {{placeholders}} 后再发送该 CW 报文。",
+    "placeholderHint": "可用占位符",
+    "placeholderHintSuffix": "将在发送时替换。"
   }
 }

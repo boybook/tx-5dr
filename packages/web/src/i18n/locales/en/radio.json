@@ -657,7 +657,7 @@
     "title": "CW",
     "wpm": "WPM",
     "keyMethod": "Key Method",
-    "textInputPlaceholder": "Enter CW text, {MYCALL} will be replaced...",
+    "textInputPlaceholder": "Enter CW text, supports {MYCALL} / {HISCALL}...",
     "send": "Send",
     "sending": "Sending",
     "presetMessages": "Preset Messages",
@@ -741,6 +741,17 @@
     "emptySlotHint": "Edit this slot first",
     "repeatToggle": "Repeat toggle",
     "clearSlot": "Clear",
-    "settings": "Settings"
+    "settings": "Settings",
+    "placeholderMyCall": "current operator callsign",
+    "placeholderHisCall": "station callsign in the QSO log",
+    "placeholderTooltip": "{{source}}: {{label}}",
+    "placeholderMissingTooltip": "{{source}} needs {{label}}",
+    "placeholderMissingValue": "Not set",
+    "placeholderMissingMyCall": "MY CALL",
+    "placeholderMissingHisCall": "DX CALL",
+    "placeholderMissingTitle": "Missing CW placeholder value",
+    "placeholderMissingToast": "Fill in {{placeholders}} before sending this CW message.",
+    "placeholderHint": "Placeholders",
+    "placeholderHintSuffix": "are replaced when sending."
   }
 }

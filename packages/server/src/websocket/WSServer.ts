@@ -1307,7 +1307,7 @@ export class WSServer extends WSMessageHandler {
       if (!text) {
         throw new Error('text is required');
       }
-      await manager.handleTextInput(connectionId, label, text, data?.callsign);
+      await manager.handleTextInput(connectionId, label, text, data?.callsign, data?.placeholderValues);
     } catch (error) {
       this.handleCommandError(error, 'cwTextInput');
     }
@@ -1330,6 +1330,7 @@ export class WSServer extends WSMessageHandler {
         slotId,
         Boolean(data?.repeat),
         data?.startImmediately !== false,
+        data?.placeholderValues,
       );
     } catch (error) {
       this.handleCommandError(error, 'cwPlayMessage');
