@@ -97,6 +97,17 @@ interface ReplayJournalOptions {
   truncateCorruptTail?: boolean;
 }
 
+interface RawAdifLineEntry {
+  line: string;
+  index: number;
+  matchKey: string | null;
+}
+
+interface ImportedRecordInput {
+  record: QSORecord;
+  rawLine?: string;
+}
+
 function createEmptyOperatorIndex(): OperatorIndex {
   return {
     prefixes: new Set<string>(),
@@ -470,17 +481,139 @@ function extractRawAdifLines(content: string): string[] {
   return lines;
 }
 
+function parseAdifFieldsFromLine(line: string): Record<string, string> {
+  const fields: Record<string, string> = {};
+  let cursor = 0;
+
+  while (cursor < line.length) {
+    const openIndex = line.indexOf('<', cursor);
+    if (openIndex < 0) break;
+    const closeIndex = line.indexOf('>', openIndex + 1);
+    if (closeIndex < 0) break;
+
+    const header = line.slice(openIndex + 1, closeIndex).trim();
+    const [rawName, rawLength] = header.split(':');
+    const name = rawName?.trim().toLowerCase();
+    if (!name) {
+      cursor = closeIndex + 1;
+      continue;
+    }
+    if (name === 'eor' || name === 'eoh') {
+      break;
+    }
+
+    const length = Number.parseInt(rawLength || '', 10);
+    if (!Number.isFinite(length) || length < 0) {
+      cursor = closeIndex + 1;
+      continue;
+    }
+
+    const valueStart = closeIndex + 1;
+    const valueEnd = Math.min(line.length, valueStart + length);
+    fields[name] = line.slice(valueStart, valueEnd);
+    cursor = valueEnd;
+  }
+
+  return fields;
+}
+
+function normalizeAdifDate(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const digits = value.trim().replace(/\D/g, '');
+  return digits.length >= 8 ? digits.slice(0, 8) : null;
+}
+
+function normalizeAdifTime(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const digits = value.trim().replace(/\D/g, '');
+  if (digits.length < 4) return null;
+  return digits.slice(0, 6).padEnd(6, '0');
+}
+
+function normalizeAdifFrequencyHz(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const frequencyMHz = Number.parseFloat(value.trim());
+  if (!Number.isFinite(frequencyMHz)) return null;
+  return String(Math.round(frequencyMHz * 1_000_000));
+}
+
 /**
- * 从原始 ADIF 行中提取 (callsign, qsoDate) 作为匹配键。
- * 用于将原始行与解析后的 QSO 记录关联。
+ * 用更强的 ADIF 业务键匹配原始 record 文本，避免同一天同呼号多条 QSO 覆盖。
  */
-function extractAdifLineKey(line: string): string | null {
-  const callMatch = line.match(/<CALL:(\d+)>([^<]+)/i);
-  const dateMatch = line.match(/<QSO_DATE:(\d+)>([^<]+)/i);
-  if (!callMatch || !dateMatch) return null;
-  const callsign = callMatch[2].trim().toUpperCase();
-  const qsoDate = dateMatch[2].trim();
-  return `${callsign}_${qsoDate}`;
+function buildAdifRecordMatchKey(fields: Record<string, unknown>): string | null {
+  const callsign = typeof fields.call === 'string' ? fields.call.trim().toUpperCase() : '';
+  const qsoDate = normalizeAdifDate(fields.qso_date);
+  const timeOn = normalizeAdifTime(fields.time_on);
+  const mode = typeof fields.mode === 'string' ? fields.mode.trim().toUpperCase() : '';
+  const submode = typeof fields.submode === 'string' ? fields.submode.trim().toUpperCase() : '';
+  const frequency = normalizeAdifFrequencyHz(fields.freq);
+
+  if (!callsign || !qsoDate || !timeOn || !mode || !frequency) {
+    return null;
+  }
+
+  return [callsign, qsoDate, timeOn, mode, submode, frequency].join('|');
+}
+
+function parseAdifStartTimeFromFields(fields: Record<string, unknown>): number | undefined {
+  const qsoDate = normalizeAdifDate(fields.qso_date);
+  const timeOn = normalizeAdifTime(fields.time_on);
+  if (!qsoDate || !timeOn) return undefined;
+
+  const year = Number.parseInt(qsoDate.slice(0, 4), 10);
+  const month = Number.parseInt(qsoDate.slice(4, 6), 10) - 1;
+  const day = Number.parseInt(qsoDate.slice(6, 8), 10);
+  const hour = Number.parseInt(timeOn.slice(0, 2), 10);
+  const minute = Number.parseInt(timeOn.slice(2, 4), 10);
+  const second = Number.parseInt(timeOn.slice(4, 6), 10);
+  const timestamp = Date.UTC(year, month, day, hour, minute, second);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function buildRawAdifLineEntries(content: string): RawAdifLineEntry[] {
+  return extractRawAdifLines(content).map((line, index) => {
+    const fields = parseAdifFieldsFromLine(line);
+    return {
+      line,
+      index,
+      matchKey: buildAdifRecordMatchKey(fields),
+    };
+  });
+}
+
+function createRawAdifLineQueues(entries: RawAdifLineEntry[]): Map<string, RawAdifLineEntry[]> {
+  const queues = new Map<string, RawAdifLineEntry[]>();
+  for (const entry of entries) {
+    if (!entry.matchKey) continue;
+    const queue = queues.get(entry.matchKey) || [];
+    queue.push(entry);
+    queues.set(entry.matchKey, queue);
+  }
+  return queues;
+}
+
+function takeRawAdifLineForRecord(
+  fields: Record<string, unknown>,
+  queues: Map<string, RawAdifLineEntry[]>,
+  consumedIndexes: Set<number>,
+  fallbackEntry?: RawAdifLineEntry,
+): RawAdifLineEntry | undefined {
+  const matchKey = buildAdifRecordMatchKey(fields);
+  const queue = matchKey ? queues.get(matchKey) : undefined;
+  while (queue && queue.length > 0) {
+    const entry = queue.shift()!;
+    if (!consumedIndexes.has(entry.index)) {
+      consumedIndexes.add(entry.index);
+      return entry;
+    }
+  }
+
+  if (fallbackEntry && !consumedIndexes.has(fallbackEntry.index)) {
+    consumedIndexes.add(fallbackEntry.index);
+    return fallbackEntry;
+  }
+
+  return undefined;
 }
 
 function logbookSidecarBase(filePath: string): string {
@@ -497,10 +630,7 @@ export class ADIFLogProvider implements ILogProvider {
   private isInitialized: boolean = false;
   private static readonly ALL_KEY = '__ALL__';
   private operatorIndexMap: Map<string, OperatorIndex> = new Map();
-  private saveTimer: NodeJS.Timeout | null = null;
-  private saveFailureCount: number = 0;
   private needsFullRewrite: boolean = false;
-  private pendingAppendIds: Set<string> = new Set();
   private foreignRecordLines: Map<string, string> = new Map();
   private unparseableLines: string[] = [];
   private journalPath: string = '';
@@ -569,7 +699,6 @@ export class ADIFLogProvider implements ILogProvider {
     this.rebuildIndexes();
 
     this.needsFullRewrite = false;
-    this.pendingAppendIds.clear();
     this.isInitialized = true;
     this.unregisterPersistence = PersistenceCoordinator.getInstance().register({
       name: `logbook:${this.logFilePath}`,
@@ -722,23 +851,19 @@ export class ADIFLogProvider implements ILogProvider {
     const adif = AdifParser.parseAdi(content);
     logger.debug(`Parsed ${adif.records?.length || 0} records`);
 
-    const rawLines = extractRawAdifLines(content);
-    const rawLineByKey = new Map<string, string>();
-    const rawLineKeys = rawLines.map((line) => extractAdifLineKey(line));
-    for (let i = 0; i < rawLines.length; i++) {
-      const key = rawLineKeys[i];
-      if (key) rawLineByKey.set(key, rawLines[i]);
-    }
+    const rawEntries = buildRawAdifLineEntries(content);
+    const rawLineQueues = createRawAdifLineQueues(rawEntries);
+    const consumedRawLineIndexes = new Set<number>();
 
     const qsoCache = new Map<string, QSORecord>();
     const foreignRecordLines = new Map<string, string>();
     const unparseableLines: string[] = [];
-    const parsedRawKeys = new Set<string>();
     let normalizedLegacyVoiceModes = false;
 
     if (adif.records) {
       const parsedQsos: QSORecord[] = [];
-      for (const record of adif.records) {
+      for (let recordIndex = 0; recordIndex < adif.records.length; recordIndex += 1) {
+        const record = adif.records[recordIndex];
         try {
           const qso = this.adifToQSORecord(record);
           parsedQsos.push(qso);
@@ -746,8 +871,12 @@ export class ADIFLogProvider implements ILogProvider {
           if (isLegacyVoiceMode) {
             normalizedLegacyVoiceModes = true;
           }
-          const lookupKey = `${qso.callsign.toUpperCase()}_${formatADIFDateOnly(qso.startTime)}`;
-          parsedRawKeys.add(lookupKey);
+          const rawEntry = takeRawAdifLineForRecord(
+            record as Record<string, unknown>,
+            rawLineQueues,
+            consumedRawLineIndexes,
+            rawEntries[recordIndex],
+          );
           const hasTx5drEnrichment =
             record.app_tx5dr_id !== undefined ||
             record.app_tx5dr_dxcc_status !== undefined ||
@@ -756,9 +885,8 @@ export class ADIFLogProvider implements ILogProvider {
             record.app_tx5dr_dxcc_needs_review !== undefined ||
             record.app_tx5dr_station_location_id !== undefined;
           if (!hasTx5drEnrichment && !isLegacyVoiceMode) {
-            const rawLine = rawLineByKey.get(lookupKey);
-            if (rawLine) {
-              foreignRecordLines.set(qso.id, rawLine);
+            if (rawEntry?.line) {
+              foreignRecordLines.set(qso.id, rawEntry.line);
             }
           }
           logger.debug(`Parsed QSO: ${qso.id} - ${qso.callsign}`);
@@ -772,10 +900,9 @@ export class ADIFLogProvider implements ILogProvider {
       }
     }
 
-    for (let i = 0; i < rawLines.length; i++) {
-      const key = rawLineKeys[i];
-      if (key && !parsedRawKeys.has(key)) {
-        unparseableLines.push(rawLines[i]);
+    for (const rawEntry of rawEntries) {
+      if (!consumedRawLineIndexes.has(rawEntry.index)) {
+        unparseableLines.push(rawEntry.line);
       }
     }
 
@@ -1401,6 +1528,8 @@ export class ADIFLogProvider implements ILogProvider {
           } else if (op.type === 'delete' && op.id) {
             this.qsoCache.delete(op.id);
             this.foreignRecordLines.delete(op.id);
+          } else if (op.type === 'raw' && op.rawLine && !this.unparseableLines.includes(op.rawLine)) {
+            this.unparseableLines.push(op.rawLine);
           }
         }
         break;
@@ -1439,34 +1568,77 @@ export class ADIFLogProvider implements ILogProvider {
     await safeWriteFile(this.journalPath, '', { backups: 0 }).catch(() => undefined);
   }
 
-  /**
-   * 延迟保存：300ms 内多次写入只触发一次文件 I/O
-   */
-  private scheduleSave(): void {
-    if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null;
-      this.saveCache().catch((err) => {
-        this.saveFailureCount++;
-        if (this.saveFailureCount <= 3) {
-          logger.error('Failed to save ADIF cache', { attempt: this.saveFailureCount, error: err });
-        } else if (this.saveFailureCount === 4) {
-          logger.error('ADIF cache save failed repeatedly, further failures will be logged every 10 attempts', { totalFailures: this.saveFailureCount });
-        } else if (this.saveFailureCount % 10 === 0) {
-          logger.error('ADIF cache save still failing', { totalFailures: this.saveFailureCount, error: err });
-        }
+  private buildAdifOutputBody(
+    qsos: Iterable<QSORecord>,
+    options: { includeUnparseableLines?: boolean; fallbackGrid?: string } = {},
+  ): string {
+    const entries: Array<{
+      content: string;
+      sortTime: number;
+      stableKey: string;
+      sourceOrder: number;
+    }> = [];
+    let sourceOrder = 0;
+
+    for (const qso of qsos) {
+      const cached = this.foreignRecordLines.get(qso.id);
+      const effectiveMyGrid = qso.myGrid || options.fallbackGrid;
+      entries.push({
+        content: cached
+          ? (cached.endsWith('\n') ? cached : `${cached}\n`)
+          : this.qsoRecordToADIF(qso, effectiveMyGrid),
+        sortTime: Number.isFinite(qso.startTime) ? qso.startTime : Number.NEGATIVE_INFINITY,
+        stableKey: [
+          qso.id || '',
+          qso.callsign || '',
+          String(qso.frequency || 0),
+        ].join('|'),
+        sourceOrder,
       });
-    }, 300);
+      sourceOrder += 1;
+    }
+
+    if (options.includeUnparseableLines) {
+      for (const line of this.unparseableLines) {
+        const fields = parseAdifFieldsFromLine(line);
+        entries.push({
+          content: line.endsWith('\n') ? line : `${line}\n`,
+          sortTime: parseAdifStartTimeFromFields(fields) ?? Number.NEGATIVE_INFINITY,
+          stableKey: `raw|${buildAdifRecordMatchKey(fields) || line}`,
+          sourceOrder,
+        });
+        sourceOrder += 1;
+      }
+    }
+
+    entries.sort((left, right) => {
+      if (left.sortTime !== right.sortTime) return left.sortTime - right.sortTime;
+      const stableComparison = left.stableKey.localeCompare(right.stableKey);
+      if (stableComparison !== 0) return stableComparison;
+      return left.sourceOrder - right.sourceOrder;
+    });
+
+    return entries.map(entry => entry.content).join('');
+  }
+
+  private async writeFullAdifSnapshot(): Promise<void> {
+    const header = `TX-5DR Log File
+<ADIF_VER:5>3.1.4
+<PROGRAMID:6>TX-5DR
+<PROGRAMVERSION:5>1.0.0
+<EOH>
+
+`;
+    await this.atomicWriteFile(
+      this.logFilePath,
+      header + this.buildAdifOutputBody(this.qsoCache.values(), { includeUnparseableLines: true }),
+    );
   }
 
   /**
    * 立即刷盘，等待完成
    */
   async flush(): Promise<void> {
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer);
-      this.saveTimer = null;
-    }
     await this.enqueueWrite(async () => {
       await this.checkpointJournal();
     });
@@ -1474,53 +1646,12 @@ export class ADIFLogProvider implements ILogProvider {
 
   /**
    * 保存缓存到文件。
-   * 全量写入（更新/删除/导入后）时排序后原子写入；
-   * 仅新增记录时，在文件末尾追加写入，避免重写整个文件。
+   * checkpoint/recovery 需要重建快照时，始终按 ADIF 正序原子写入。
    */
   private async saveCache(): Promise<void> {
     if (this.needsFullRewrite) {
-      const parts = [`TX-5DR Log File
-<ADIF_VER:5>3.1.4
-<PROGRAMID:6>TX-5DR
-<PROGRAMVERSION:5>1.0.0
-<EOH>
-
-`];
-      // qsoCache 按升序插入，直接遍历即可保证文件时间升序
-      for (const qso of this.qsoCache.values()) {
-        const cached = this.foreignRecordLines.get(qso.id);
-        if (cached) {
-          parts.push(cached.endsWith('\n') ? cached : cached + '\n');
-        } else {
-          parts.push(this.qsoRecordToADIF(qso));
-        }
-      }
-      for (const line of this.unparseableLines) {
-        parts.push(line.endsWith('\n') ? line : line + '\n');
-      }
-
-      await this.atomicWriteFile(this.logFilePath, parts.join(''));
+      await this.writeFullAdifSnapshot();
       this.needsFullRewrite = false;
-      this.pendingAppendIds.clear();
-    } else if (this.pendingAppendIds.size > 0) {
-      const records: QSORecord[] = [];
-      for (const id of this.pendingAppendIds) {
-        const qso = this.qsoCache.get(id);
-        if (qso) records.push(qso);
-      }
-      records.sort((a, b) => a.startTime - b.startTime);
-      const lines = records.map((r) => {
-        const cached = this.foreignRecordLines.get(r.id);
-        if (cached) return cached.endsWith('\n') ? cached : cached + '\n';
-        return this.qsoRecordToADIF(r);
-      }).join('');
-      await fs.appendFile(this.logFilePath, lines, 'utf-8');
-      this.pendingAppendIds.clear();
-    }
-
-    if (this.saveFailureCount > 0) {
-      logger.info('ADIF cache save recovered after failures', { previousFailures: this.saveFailureCount });
-      this.saveFailureCount = 0;
     }
   }
   
@@ -1987,11 +2118,31 @@ export class ADIFLogProvider implements ILogProvider {
         .sort((left, right) => left.key.localeCompare(right.key)),
     };
   }
+
+  private shouldIncludeUnparseableLinesInAdifExport(options?: LogQueryOptions): boolean {
+    if (!options) return true;
+    return !options.callsign
+      && !options.grid
+      && !options.frequencyRange
+      && !options.timeRange
+      && !options.mode
+      && !options.band
+      && !options.dxccStatus
+      && !options.qslFlow
+      && (!options.excludeModes || options.excludeModes.length === 0)
+      && !options.qslStatus
+      && options.limit === undefined
+      && options.offset === undefined;
+  }
   
   async exportADIF(options?: LogQueryOptions, exportOptions?: { fallbackGrid?: string }): Promise<string> {
     this.ensureInitialized();
 
-    const qsos = await this.queryQSOs(options);
+    const qsos = await this.queryQSOs({
+      ...(options || {}),
+      orderBy: 'time',
+      orderDirection: 'asc',
+    });
 
     let adifContent = `TX-5DR Export
 <ADIF_VER:5>3.1.4
@@ -2001,16 +2152,10 @@ export class ADIFLogProvider implements ILogProvider {
 
 `;
 
-    for (const qso of qsos) {
-      const foreignLine = this.foreignRecordLines.get(qso.id);
-      if (foreignLine) {
-        adifContent += foreignLine.endsWith('\n') ? foreignLine : `${foreignLine}\n`;
-        continue;
-      }
-
-      const effectiveMyGrid = qso.myGrid || exportOptions?.fallbackGrid;
-      adifContent += this.qsoRecordToADIF(qso, effectiveMyGrid);
-    }
+    adifContent += this.buildAdifOutputBody(qsos, {
+      includeUnparseableLines: this.shouldIncludeUnparseableLinesInAdifExport(options),
+      fallbackGrid: exportOptions?.fallbackGrid,
+    });
 
     return adifContent;
   }
@@ -2173,11 +2318,11 @@ export class ADIFLogProvider implements ILogProvider {
   }
 
   private async importRecords(
-    records: QSORecord[],
+    records: ImportedRecordInput[],
     detectedFormat: LogBookImportResult['detectedFormat'],
     totalRead: number,
     initialSkipped: number,
-    rawLines?: string[],
+    unparseableRawLines: string[] = [],
   ): Promise<LogBookImportResult> {
     this.ensureInitialized();
     PersistenceCoordinator.getInstance().assertMutationsAllowed(`logbook:import:${detectedFormat}`);
@@ -2191,22 +2336,15 @@ export class ADIFLogProvider implements ILogProvider {
       skipped: initialSkipped,
     };
     const fingerprintIndex = this.buildFingerprintIndex();
-    // ADIF 导入时，建立原始行 key→line 索引用于匹配
-    const rawLineByKey = new Map<string, string>();
-    if (rawLines) {
-      for (const line of rawLines) {
-        const key = extractAdifLineKey(line);
-        if (key) rawLineByKey.set(key, line);
-      }
-    }
     let didMutate = false;
-    const journalOperations: Array<{ type: 'add' | 'update'; record: QSORecord; rawLine?: string }> = [];
+    const journalOperations: Array<{ type: 'add' | 'update' | 'raw'; record?: QSORecord; rawLine?: string }> = [];
     const beforeCache = new Map(this.qsoCache);
     const beforeForeign = new Map(this.foreignRecordLines);
+    const beforeUnparseable = [...this.unparseableLines];
 
-    for (const rawRecord of records) {
+    for (const input of records) {
       try {
-        const record = normalizeQsoModeForStorage(rawRecord);
+        const record = normalizeQsoModeForStorage(input.record);
         if (!record.callsign || !Number.isFinite(record.startTime) || !record.mode || !Number.isFinite(record.frequency)) {
           result.skipped += 1;
           continue;
@@ -2223,12 +2361,10 @@ export class ADIFLogProvider implements ILogProvider {
           });
           this.qsoCache.set(insertedRecord.id, insertedRecord);
           // 仅 ADIF 导入且能匹配原始行时，导出才保持外部原文。
-          const lookupKey = `${record.callsign.trim().toUpperCase()}_${formatADIFDateOnly(record.startTime)}`;
-          const rawLine = rawLineByKey.get(lookupKey);
-          if (rawLine) {
-            this.foreignRecordLines.set(insertedRecord.id, rawLine);
+          if (input.rawLine) {
+            this.foreignRecordLines.set(insertedRecord.id, input.rawLine);
           }
-          journalOperations.push({ type: 'add', record: insertedRecord, rawLine });
+          journalOperations.push({ type: 'add', record: insertedRecord, rawLine: input.rawLine });
           fingerprintIndex.set(fingerprint, insertedRecord.id);
           result.imported += 1;
           didMutate = true;
@@ -2257,6 +2393,15 @@ export class ADIFLogProvider implements ILogProvider {
       }
     }
 
+    for (const rawLine of unparseableRawLines) {
+      if (this.unparseableLines.includes(rawLine)) {
+        continue;
+      }
+      this.unparseableLines.push(rawLine);
+      journalOperations.push({ type: 'raw', rawLine });
+      didMutate = true;
+    }
+
     if (didMutate) {
       try {
         await this.appendJournal('import', {
@@ -2268,6 +2413,7 @@ export class ADIFLogProvider implements ILogProvider {
       } catch (error) {
         this.qsoCache = beforeCache;
         this.foreignRecordLines = beforeForeign;
+        this.unparseableLines = beforeUnparseable;
         this.rebuildIndexes();
         throw error;
       }
@@ -2281,14 +2427,28 @@ export class ADIFLogProvider implements ILogProvider {
     this.ensureInitialized();
 
     const adif = AdifParser.parseAdi(adifContent);
-    const records: QSORecord[] = [];
+    const rawEntries = buildRawAdifLineEntries(adifContent);
+    const rawLineQueues = createRawAdifLineQueues(rawEntries);
+    const consumedRawLineIndexes = new Set<number>();
+    const records: ImportedRecordInput[] = [];
     let skipped = 0;
-    const totalRead = adif.records?.length || 0;
+    const totalRead = Math.max(adif.records?.length || 0, rawEntries.length);
 
     if (adif.records) {
-      for (const record of adif.records) {
+      for (let recordIndex = 0; recordIndex < adif.records.length; recordIndex += 1) {
+        const record = adif.records[recordIndex];
         try {
-          records.push(this.adifToQSORecord(record));
+          const qsoRecord = this.adifToQSORecord(record);
+          const rawEntry = takeRawAdifLineForRecord(
+            record as Record<string, unknown>,
+            rawLineQueues,
+            consumedRawLineIndexes,
+            rawEntries[recordIndex],
+          );
+          records.push({
+            record: qsoRecord,
+            rawLine: rawEntry?.line,
+          });
         } catch (error) {
           logger.warn('Failed to parse ADIF record during import', { error });
           skipped += 1;
@@ -2296,14 +2456,21 @@ export class ADIFLogProvider implements ILogProvider {
       }
     }
 
-    const rawLines = extractRawAdifLines(adifContent);
-    return this.importRecords(records, 'adif', totalRead, skipped, rawLines);
+    const unparseableRawLines = rawEntries
+      .filter(entry => !consumedRawLineIndexes.has(entry.index))
+      .map(entry => entry.line);
+    return this.importRecords(records, 'adif', totalRead, skipped, unparseableRawLines);
   }
 
   async importCSV(csvContent: string): Promise<LogBookImportResult> {
     this.ensureInitialized();
     const parsed = parseTx5drCsvContent(csvContent);
-    return this.importRecords(parsed.records, 'csv', parsed.totalRead, parsed.skipped);
+    return this.importRecords(
+      parsed.records.map(record => ({ record })),
+      'csv',
+      parsed.totalRead,
+      parsed.skipped,
+    );
   }
   
   async close(): Promise<void> {
@@ -2312,10 +2479,6 @@ export class ADIFLogProvider implements ILogProvider {
     }
     this.unregisterPersistence?.();
     this.unregisterPersistence = null;
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer);
-      this.saveTimer = null;
-    }
     this.qsoCache.clear();
     this.isInitialized = false;
   }

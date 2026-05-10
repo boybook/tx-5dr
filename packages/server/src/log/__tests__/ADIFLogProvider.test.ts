@@ -31,6 +31,16 @@ function adifField(name: string, value: string): string {
   return `<${name}:${value.length}>${value}`;
 }
 
+function expectOrdered(content: string, needles: string[]): void {
+  let previousIndex = -1;
+  for (const needle of needles) {
+    const index = content.indexOf(needle);
+    expect(index).toBeGreaterThanOrEqual(0);
+    expect(index).toBeGreaterThan(previousIndex);
+    previousIndex = index;
+  }
+}
+
 describe('ADIFLogProvider import', () => {
   const tempDirs: string[] = [];
 
@@ -169,6 +179,122 @@ describe('ADIFLogProvider import', () => {
     expect(exported).toContain('<QSO_DATE:8>20260104');
     expect(exported).toContain('<BAND:3>20m');
     expect(exported).toContain('<MY_GRIDSQUARE:6>PM00AA');
+
+    await provider.close();
+  });
+
+  it('exports ADIF oldest-to-newest even when the caller requests descending order', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'adif-order-new',
+      callsign: 'NEW1',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-20T12:20:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    await provider.addQSO({
+      id: 'adif-order-old',
+      callsign: 'OLD1',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-20T12:00:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    await provider.addQSO({
+      id: 'adif-order-mid',
+      callsign: 'MID1',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-20T12:10:00Z'),
+      messageHistory: [],
+    }, 'op1');
+
+    const queryDesc = await provider.queryQSOs({ orderBy: 'time', orderDirection: 'desc' });
+    expect(queryDesc.map(qso => qso.callsign)).toEqual(['NEW1', 'MID1', 'OLD1']);
+
+    const exported = await provider.exportADIF({ orderBy: 'time', orderDirection: 'desc' });
+    expectOrdered(exported, ['<CALL:4>OLD1', '<CALL:4>MID1', '<CALL:4>NEW1']);
+
+    await provider.close();
+  });
+
+  it('writes checkpoint ADIF snapshots oldest-to-newest after reversed external imports', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+    const logFilePath = join(tempDir, 'logbook.adi');
+
+    const newerRaw = '<call:5>BG2N1 <qso_date:8>20260121<time_on:6>121000<freq:9>14.075000<mode:3>FT8<app_other:3>NEW<eor>';
+    const olderRaw = '<call:5>BG2O1 <qso_date:8>20260121<time_on:6>120000<freq:9>14.074000<mode:3>FT8<app_other:3>OLD<eor>';
+    await provider.importADIF(buildAdif([newerRaw, olderRaw]));
+    await provider.addQSO({
+      id: 'checkpoint-order-latest',
+      callsign: 'BG2ZZ',
+      frequency: 14076000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-21T12:20:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    await provider.flush();
+
+    const saved = await readFile(logFilePath, 'utf-8');
+    expectOrdered(saved, [olderRaw, newerRaw, '<CALL:5>BG2ZZ']);
+
+    await provider.close();
+  });
+
+  it('preserves duplicate external raw ADIF records with strong match keys across flush and reload', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    const lateRaw = '<call:5>BG2RX  <qso_date:8>20260115 <time_on:6>121000 <freq:9>14.075000 <mode:3>FT8 <APP_OTHER:3>YES<eor>';
+    const earlyRaw = '<call:5>BG2RX <qso_date:8>20260115<time_on:6>120000<freq:9>14.074000<mode:3>FT8<APP_OTHER:5>HELLO<eor>';
+
+    await provider.importADIF(buildAdif([lateRaw, earlyRaw]));
+    await provider.flush();
+    await provider.close();
+
+    const reloaded = new ADIFLogProvider({
+      logFilePath: join(tempDir, 'logbook.adi'),
+      autoCreateFile: false,
+      logFileName: 'logbook.adi',
+    });
+    await reloaded.initialize();
+
+    const exported = await reloaded.exportADIF();
+    expect(exported).toContain(`${earlyRaw}\n`);
+    expect(exported).toContain(`${lateRaw}\n`);
+    expect(exported).not.toContain('<CALL:5>BG2RX');
+    expectOrdered(exported, [earlyRaw, lateRaw]);
+
+    await reloaded.close();
+  });
+
+  it('preserves unparseable external ADIF records and keeps normal new QSOs at the bottom', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    const rawWithoutTime = '<CALL:5>BADNT<QSO_DATE:8>20260116<MODE:3>FT8<FREQ:9>14.074000<EOR>';
+    const rawWithTime = '<QSO_DATE:8>20260116<TIME_ON:6>120000<MODE:3>FT8<FREQ:9>14.074000<APP_X:3>RAW<EOR>';
+
+    const result = await provider.importADIF(buildAdif([rawWithTime, rawWithoutTime]));
+    expect(result.skipped).toBe(2);
+    await provider.addQSO({
+      id: 'unparseable-order-new',
+      callsign: 'BG2OK',
+      frequency: 14076000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-16T12:10:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    await provider.flush();
+
+    const saved = await readFile(join(tempDir, 'logbook.adi'), 'utf-8');
+    const exported = await provider.exportADIF();
+    expectOrdered(saved, [rawWithoutTime, rawWithTime, '<CALL:5>BG2OK']);
+    expectOrdered(exported, [rawWithoutTime, rawWithTime, '<CALL:5>BG2OK']);
 
     await provider.close();
   });
