@@ -9,7 +9,8 @@
     "build": "tsc",
     "dev": "node ../../scripts/run-with-env.mjs --node-env=development electron --experimental-specifier-resolution=node --enable-source-maps .",
     "start": "electron --experimental-specifier-resolution=node --enable-source-maps .",
-    "lint": "eslint src/**/*.ts"
+    "lint": "eslint src/**/*.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "@tx5dr/server": "workspace:*",
@@ -23,6 +24,7 @@
     "electron": "^36.4.0",
     "eslint": "^8.0.0",
     "typescript": "^5.0.0",
+    "vitest": "^1.0.0",
     "wait-on": "^7.0.0"
   }
 }

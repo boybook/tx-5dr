@@ -17,6 +17,7 @@ import {
   DEFAULT_DESKTOP_HTTPS_CONFIG,
   buildDesktopHttpsStatus,
   disableDesktopHttps,
+  ensureDefaultSelfSignedCertificate,
   generateSelfSignedCertificate,
   importPemCertificate,
   sanitizeDesktopHttpsConfig,
@@ -142,6 +143,15 @@ interface StartupErrorOptions {
   actions?: StartupErrorActionId[];
 }
 
+interface FsSelectFileOptions {
+  title?: string;
+  filters?: Array<{ name: string; extensions: string[] }>;
+}
+
+interface FsSelectDirectoryOptions {
+  title?: string;
+}
+
 interface CreateMainWindowOptions {
   startHealthCheck?: boolean;
 }
@@ -246,8 +256,6 @@ const DEFAULT_ELECTRON_SETTINGS: ElectronSettings = {
   shortcuts: createDefaultShortcutConfig(),
 };
 const VC_REDIST_X64_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
-const VC_REDIST_DOWNLOAD_PAGE_ZH_URL = 'https://learn.microsoft.com/zh-cn/cpp/windows/latest-supported-vc-redist';
-const VC_REDIST_DOWNLOAD_PAGE_EN_URL = 'https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist';
 const VC_REDIST_REGISTRY_KEYS = [
   'HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64',
   'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64',
@@ -656,6 +664,44 @@ async function getDesktopHttpsStatus(): Promise<DesktopHttpsStatus> {
   });
 }
 
+async function ensureDesktopHttpsBeforeGatewayLaunch(context: string): Promise<void> {
+  const settings = loadElectronSettings();
+  try {
+    const result = await ensureDefaultSelfSignedCertificate({
+      configDir: getAppConfigDir(),
+      hostname: getHostname(),
+      lanAddresses: getLanIpv4Addresses(),
+      existingConfig: settings.desktopHttps,
+    });
+
+    if (!result.changed) {
+      logger.info('desktop HTTPS preflight complete', {
+        context,
+        enabled: result.config.enabled,
+        mode: result.config.mode,
+        certPath: result.config.certPath,
+      });
+      return;
+    }
+
+    saveElectronSettings({
+      ...settings,
+      desktopHttps: result.config,
+    });
+    logger.info('desktop HTTPS self-signed certificate generated', {
+      context,
+      reason: result.reason,
+      certPath: result.config.certPath,
+      keyPath: result.config.keyPath,
+    });
+  } catch (error) {
+    logger.error('desktop HTTPS preflight failed; continuing with HTTP gateway fallback', {
+      context,
+      error,
+    });
+  }
+}
+
 function buildWebChildEnv(serverPort: number): Record<string, string> {
   const httpsConfig = getDesktopHttpsConfig();
   const env: Record<string, string> = {
@@ -749,6 +795,7 @@ async function restartWebGateway(): Promise<void> {
   }
 
   const webEntry = webGatewayEntryPath();
+  await ensureDesktopHttpsBeforeGatewayLaunch('restart');
   const env = buildWebChildEnv(selectedServerPort);
   prepareWebGatewayLaunch(webEntry, env);
 
@@ -789,10 +836,26 @@ async function persistDesktopHttpsConfig(
 
 async function applyDesktopHttpsSettings(update: Partial<PersistentDesktopHttpsConfig>): Promise<DesktopHttpsStatus> {
   const current = getDesktopHttpsConfig();
-  const next = sanitizeDesktopHttpsConfig({
+  let next = sanitizeDesktopHttpsConfig({
     ...current,
     ...update,
   });
+
+  if (next.enabled && next.mode === 'self-signed') {
+    const ensured = await ensureDefaultSelfSignedCertificate({
+      configDir: getAppConfigDir(),
+      hostname: getHostname(),
+      lanAddresses: getLanIpv4Addresses(),
+      existingConfig: next,
+    });
+    next = ensured.config;
+    if (ensured.changed) {
+      logger.info('desktop HTTPS self-signed certificate generated before applying settings', {
+        reason: ensured.reason,
+        certPath: next.certPath,
+      });
+    }
+  }
 
   if (next.enabled) {
     const nextStatus = await buildDesktopHttpsStatus({
@@ -1185,10 +1248,6 @@ function isVCRuntimeVersionSufficient(versionStr: string): boolean {
     return parsed.major > VC_REDIST_MIN_VERSION.major;
   }
   return parsed.minor >= VC_REDIST_MIN_VERSION.minor;
-}
-
-function getLocalizedVCRuntimeDownloadPageUrl(locale = app.getLocale()): string {
-  return locale.startsWith('zh') ? VC_REDIST_DOWNLOAD_PAGE_ZH_URL : VC_REDIST_DOWNLOAD_PAGE_EN_URL;
 }
 
 function detectWindowsVCRuntime(): WindowsVCRuntimeStatus {
@@ -2781,6 +2840,7 @@ async function createWindow() {
     }
 
     const webEntry = webGatewayEntryPath();
+    await ensureDesktopHttpsBeforeGatewayLaunch('development-startup');
     const webEnv = buildWebChildEnv(selectedServerPort);
     prepareWebGatewayLaunch(webEntry, webEnv);
 
@@ -2923,6 +2983,7 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
       baseUrl: serverReady.baseUrl,
     });
 
+    await ensureDesktopHttpsBeforeGatewayLaunch('production-startup');
     const webEnv = buildWebChildEnv(selectedServerPort);
     prepareWebGatewayLaunch(webEntry, webEnv);
     webProcess = runChild('client-tools', webEntry, webEnv);
@@ -3135,6 +3196,59 @@ process.on('SIGTERM', () => {
   void cleanupAndQuit('unknown');
 });
 
+function sanitizeDialogTitle(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, 120) : undefined;
+}
+
+function sanitizeFileDialogFilters(value: unknown): Electron.FileFilter[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const filters: Electron.FileFilter[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    if (typeof record.name !== 'string' || !Array.isArray(record.extensions)) continue;
+
+    const extensions = record.extensions
+      .filter((extension): extension is string => typeof extension === 'string')
+      .map(extension => extension.trim().replace(/^\./, '').toLowerCase())
+      .filter(extension => /^[a-z0-9*]+$/i.test(extension))
+      .slice(0, 20);
+
+    if (extensions.length === 0) continue;
+    filters.push({
+      name: record.name.trim().slice(0, 80) || 'Files',
+      extensions,
+    });
+  }
+
+  return filters.length > 0 ? filters.slice(0, 10) : undefined;
+}
+
+function getDialogParentWindow(event: Electron.IpcMainInvokeEvent): BrowserWindow | undefined {
+  const senderWindow = BrowserWindow.fromWebContents(event.sender);
+  if (senderWindow && !senderWindow.isDestroyed()) {
+    return senderWindow;
+  }
+  if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
+    return mainWindowInstance;
+  }
+  return undefined;
+}
+
+function showOpenDialogForEvent(
+  event: Electron.IpcMainInvokeEvent,
+  options: Electron.OpenDialogOptions,
+): Promise<Electron.OpenDialogReturnValue> {
+  const parentWindow = getDialogParentWindow(event);
+  if (parentWindow) {
+    return dialog.showOpenDialog(parentWindow, options);
+  }
+  return dialog.showOpenDialog(options);
+}
+
 /**
  * 设置IPC处理器
  */
@@ -3326,6 +3440,27 @@ function setupIpcHandlers() {
       logger.error('IPC shell:openExternal failed', error);
       throw error;
     }
+  });
+
+  ipcMain.handle('fs:selectFile', async (event, options?: FsSelectFileOptions) => {
+    logger.info('IPC fs:selectFile');
+    const result = await showOpenDialogForEvent(event, {
+      title: sanitizeDialogTitle(options?.title),
+      filters: sanitizeFileDialogFilters(options?.filters),
+      properties: ['openFile'],
+    });
+
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
+
+  ipcMain.handle('fs:selectDirectory', async (event, options?: FsSelectDirectoryOptions) => {
+    logger.info('IPC fs:selectDirectory');
+    const result = await showOpenDialogForEvent(event, {
+      title: sanitizeDialogTitle(options?.title),
+      properties: ['openDirectory', 'createDirectory'],
+    });
+
+    return result.canceled ? null : (result.filePaths[0] ?? null);
   });
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
