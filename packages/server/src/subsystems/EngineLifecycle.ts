@@ -49,6 +49,7 @@ export interface EngineLifecycleDeps {
   };
   getCurrentMode: () => ModeDescriptor;
   getVoiceSessionManager: () => VoiceSessionManager | null;
+  getCWKeyerManager: () => import('../cw/CWKeyerManager.js').CWKeyerManager;
   getAudioVolumeController: () => AudioVolumeController;
   getAudioSidecar: () => AudioSidecarController;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -71,6 +72,8 @@ export interface EngineLifecycleDeps {
 export class EngineLifecycle {
   private isRunning = false;
   private audioStarted = false;
+  /** When true, radio stop handler skips disconnect (used for CW transitions). */
+  preserveRadioConnection = false;
 
   // ICOM WLAN 音频适配器
   private icomWlanAudioAdapter: IcomWlanAudioAdapter | null = null;
@@ -129,12 +132,15 @@ export class EngineLifecycle {
     this.rebuildResourcePlan();
   }
 
-  rebuildResourcePlan(): void {
+  async rebuildResourcePlan(): Promise<void> {
     logger.info('Rebuilding engine resource plan...');
 
-    const resources = this.buildResourcePlan();
     const { resourceManager } = this.deps;
+    // Stop any running resources before clearing (handles CW transitions
+    // where engine stop was skipped to avoid radio disconnect/reconnect).
+    await resourceManager.stopAll();
 
+    const resources = this.buildResourcePlan();
     resourceManager.clear();
     for (const resource of resources) {
       resourceManager.register(resource);
@@ -150,15 +156,18 @@ export class EngineLifecycle {
       ...this.buildCoreResourcePlan(configManager),
       ...(mode.name === 'VOICE'
         ? this.buildVoiceModeResourcePlan()
-        : this.buildDigitalModeResourcePlan()),
+        : mode.name === 'CW'
+          ? this.buildCWModeResourcePlan()
+          : this.buildDigitalModeResourcePlan()),
     ];
 
-    logger.info(`Built ${mode.name === 'VOICE' ? 'voice' : 'digital'} resource plan`);
+    logger.info(`Built ${mode.name === 'VOICE' ? 'voice' : mode.name === 'CW' ? 'cw' : 'digital'} resource plan`);
     return resources;
   }
 
   private buildCoreResourcePlan(configManager: ConfigManager): SimplifiedResourceConfig[] {
     const { radioManager, audioStreamManager } = this.deps;
+    const isCWMode = this.deps.getCurrentMode().name === 'CW';
 
     return [
       {
@@ -176,12 +185,13 @@ export class EngineLifecycle {
           await radioManager.applyConfig(radioConfig);
         },
         stop: async () => {
+          if (this.preserveRadioConnection) return;
           if (radioManager.isConnected()) {
             await radioManager.disconnect('Engine stopped');
           }
         },
         priority: 1,
-        optional: false,
+        optional: isCWMode,
       },
       {
         name: 'icomWlanAudioAdapter',
@@ -363,6 +373,32 @@ export class EngineLifecycle {
         optional: false,
       });
     }
+
+    return resources;
+  }
+
+  private buildCWModeResourcePlan(): SimplifiedResourceConfig[] {
+    const { spectrumScheduler } = this.deps;
+    const resources: SimplifiedResourceConfig[] = [
+      {
+        name: 'spectrumScheduler',
+        start: async () => {
+          if (spectrumScheduler) {
+            spectrumScheduler.start();
+            logger.debug('Spectrum scheduler started (cw mode)');
+          }
+        },
+        stop: async () => {
+          if (spectrumScheduler) {
+            spectrumScheduler.stop();
+            logger.debug('Spectrum scheduler stopped (cw mode)');
+          }
+        },
+        priority: 6,
+        dependencies: [],
+        optional: false,
+      },
+    ];
 
     return resources;
   }

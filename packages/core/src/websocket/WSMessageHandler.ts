@@ -81,6 +81,10 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.VOICE_RADIO_MODE_CHANGED]: 'voiceRadioModeChanged',
   [WSMessageType.VOICE_KEYER_STATUS_CHANGED]: 'voiceKeyerStatusChanged',
 
+  // CW 事件
+  [WSMessageType.CW_KEYER_STATUS]: 'cwKeyerStatusChanged',
+  [WSMessageType.CW_CONFIG_CHANGED]: 'cwConfigChanged',
+
   // 进程监控事件
   [WSMessageType.PROCESS_SNAPSHOT]: 'processSnapshot',
   [WSMessageType.PROCESS_SNAPSHOT_HISTORY]: 'processSnapshotHistory',

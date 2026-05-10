@@ -120,6 +120,8 @@ export const initialRadioState: RadioState = {
   subscribedSpectrumKind: null,
   clockStatus: null,
   audioSidecar: null,
+  cwKeyerStatus: null,
+  cwConfig: null,
 };
 
 export function radioReducer(state: RadioState, action: RadioAction): RadioState {
@@ -297,6 +299,18 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
       return {
         ...state,
         audioSidecar: action.payload,
+      };
+
+    case 'UPDATE_CW_KEYER_STATUS':
+      return {
+        ...state,
+        cwKeyerStatus: action.payload,
+      };
+
+    case 'UPDATE_CW_CONFIG':
+      return {
+        ...state,
+        cwConfig: action.payload,
       };
 
     case 'pttStatusChanged':

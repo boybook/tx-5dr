@@ -19,7 +19,8 @@
     "clearData": "清空数据",
     "clearAllData": "全部清空",
     "clearLeftData": "清空左侧",
-    "clearRightData": "清空右侧"
+    "clearRightData": "清空右侧",
+    "clear": "清空"
   },
   "callsign": {
     "qrzLinkTitle": "在 QRZ.com 查看 {{callsign}}"

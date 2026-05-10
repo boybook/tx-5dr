@@ -252,6 +252,12 @@ export const HamlibConfigSchema = z.object({
   // PTT 独立串口路径（仅当 pttMethod 为 dtr/rts 时有效）
   // 留空则复用 CAT 同一串口
   pttPort: z.string().optional(),
+
+  // CW 键控串口路径（用于 DTR/RTS 引脚驱动电台 CW KEY 输入）
+  cwKeyPort: z.string().optional(),
+
+  // CW 键控引脚类型（dtr 或 rts）
+  cwKeyMethod: z.enum(['dtr', 'rts']).optional(),
 });
 
 /**

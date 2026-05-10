@@ -875,6 +875,17 @@ export const api = {
     );
   },
 
+  async testCWKeyer(config: HamlibConfig, apiBase?: string): Promise<TestResponse> {
+    return apiRequest<TestResponse>(
+      '/radio/test-cw-keyer',
+      {
+        method: 'POST',
+        body: JSON.stringify(config),
+      },
+      apiBase
+    );
+  },
+
   async getRadioStatus(apiBase?: string): Promise<RadioStatusResponse> {
     return apiRequest<RadioStatusResponse>('/radio/status', undefined, apiBase);
   },
@@ -1986,6 +1997,72 @@ export const api = {
     );
   },
 
+  // ===== CW Keyer API =====
+
+  async getCWKeyerConfig(apiBase?: string): Promise<{ success: boolean; config: import('@tx5dr/contracts').CWKeyerConfig | null }> {
+    return apiRequest<{ success: boolean; config: import('@tx5dr/contracts').CWKeyerConfig | null }>(
+      '/cw/config',
+      undefined,
+      apiBase,
+    );
+  },
+
+  async updateCWKeyerConfig(
+    body: { backend?: import('@tx5dr/contracts').CWKeyerBackend; wpm?: number },
+    apiBase?: string,
+  ): Promise<{ success: boolean; config: import('@tx5dr/contracts').CWKeyerConfig }> {
+    return apiRequest<{ success: boolean; config: import('@tx5dr/contracts').CWKeyerConfig }>(
+      '/cw/config',
+      { method: 'PUT', body: JSON.stringify(body) },
+      apiBase,
+    );
+  },
+
+  async getCWMessagePanel(callsign: string, apiBase?: string): Promise<{ success: boolean; panel: import('@tx5dr/contracts').CWMessagePanel }> {
+    return apiRequest<{ success: boolean; panel: import('@tx5dr/contracts').CWMessagePanel }>(
+      `/cw/panel/${encodeURIComponent(callsign)}`,
+      undefined,
+      apiBase,
+    );
+  },
+
+  async updateCWMessagePanel(
+    callsign: string,
+    body: { slotCount: number },
+    apiBase?: string,
+  ): Promise<{ success: boolean; panel: import('@tx5dr/contracts').CWMessagePanel }> {
+    return apiRequest<{ success: boolean; panel: import('@tx5dr/contracts').CWMessagePanel }>(
+      `/cw/panel/${encodeURIComponent(callsign)}`,
+      { method: 'PATCH', body: JSON.stringify(body) },
+      apiBase,
+    );
+  },
+
+  async updateCWMessageSlot(
+    callsign: string,
+    slotId: string,
+    body: { label?: string; text?: string; repeatEnabled?: boolean; repeatIntervalSec?: number },
+    apiBase?: string,
+  ): Promise<{ success: boolean; panel: import('@tx5dr/contracts').CWMessagePanel }> {
+    return apiRequest<{ success: boolean; panel: import('@tx5dr/contracts').CWMessagePanel }>(
+      `/cw/panel/${encodeURIComponent(callsign)}/slots/${encodeURIComponent(slotId)}`,
+      { method: 'PATCH', body: JSON.stringify(body) },
+      apiBase,
+    );
+  },
+
+  async deleteCWMessageSlot(
+    callsign: string,
+    slotId: string,
+    apiBase?: string,
+  ): Promise<{ success: boolean; panel: import('@tx5dr/contracts').CWMessagePanel }> {
+    return apiRequest<{ success: boolean; panel: import('@tx5dr/contracts').CWMessagePanel }>(
+      `/cw/panel/${encodeURIComponent(callsign)}/slots/${encodeURIComponent(slotId)}`,
+      { method: 'DELETE' },
+      apiBase,
+    );
+  },
+
   // ===== 插件系统 API =====
 
   async getPlugins(apiBase?: string): Promise<import('@tx5dr/contracts').PluginSystemSnapshot> {
@@ -2147,6 +2224,7 @@ export const {
   ,getSerialPorts
   ,testRadio
   ,testPTT
+  ,testCWKeyer
   ,getPresetFrequencies
   ,getLastFrequency
   ,setRadioFrequency

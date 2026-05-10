@@ -126,6 +126,12 @@ export const LastFrequencyResponseSchema = z.object({
     ctcssToneTenthsHz: z.number().optional(),
     dcsCode: z.number().optional(),
   }).nullable().optional(),
+  lastCWFrequency: z.object({
+    frequency: z.number(),
+    radioMode: z.string().optional(),
+    band: z.string(),
+    description: z.string().optional(),
+  }).nullable().optional(),
 });
 
 /**

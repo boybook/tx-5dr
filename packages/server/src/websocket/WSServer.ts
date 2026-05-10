@@ -422,6 +422,10 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.VOICE_SET_RADIO_MODE]: (data) => this.handleVoiceSetRadioMode(data),
       [WSMessageType.VOICE_KEYER_PLAY]: (data, id) => this.handleVoiceKeyerPlay(id, data),
       [WSMessageType.VOICE_KEYER_STOP]: () => this.handleVoiceKeyerStop(),
+      [WSMessageType.CW_KEY_ACTION]: (data, id) => this.handleCWKeyAction(id, data),
+      [WSMessageType.CW_TEXT_INPUT]: (data, id) => this.handleCWTextInput(id, data),
+      [WSMessageType.CW_PLAY_MESSAGE]: (data, id) => this.handleCWPlayMessage(id, data),
+      [WSMessageType.CW_STOP_MESSAGE]: () => this.handleCWStopMessage(),
       [WSMessageType.OPENWEBRX_PROFILE_SELECT_RESPONSE]: async (data: any) => {
         const adapter = this.digitalRadioEngine.getOpenWebRXAudioAdapter();
         if (!adapter) {
@@ -725,6 +729,16 @@ export class WSServer extends WSMessageHandler {
       logger.debug('voice keyer status changed', data);
       this.broadcast(WSMessageType.VOICE_KEYER_STATUS_CHANGED, data);
     });
+
+    this.digitalRadioEngine.on('cwKeyerStatusChanged', (data) => {
+      logger.debug('cw keyer status changed', data);
+      this.broadcast(WSMessageType.CW_KEYER_STATUS, data);
+    });
+
+    this.digitalRadioEngine.on('cwConfigChanged', (data) => {
+      logger.debug('cw config changed', data);
+      this.broadcast(WSMessageType.CW_CONFIG_CHANGED, data);
+    });
   }
 
   private shouldBroadcastRadioConnectedToast(connected: boolean): boolean {
@@ -755,6 +769,10 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.VOICE_PTT_REQUEST]: { action: 'manage', subject: 'Transmission' },
     [WSMessageType.VOICE_KEYER_PLAY]: { action: 'manage', subject: 'Transmission' },
     [WSMessageType.VOICE_KEYER_STOP]: { action: 'manage', subject: 'Transmission' },
+    [WSMessageType.CW_KEY_ACTION]: { action: 'manage', subject: 'Transmission' },
+    [WSMessageType.CW_TEXT_INPUT]: { action: 'manage', subject: 'Transmission' },
+    [WSMessageType.CW_PLAY_MESSAGE]: { action: 'manage', subject: 'Transmission' },
+    [WSMessageType.CW_STOP_MESSAGE]: { action: 'manage', subject: 'Transmission' },
     [WSMessageType.VOICE_SET_RADIO_MODE]: { action: 'manage', subject: 'Operator' },
     [WSMessageType.START_OPERATOR]: { action: 'manage', subject: 'Operator' },
     [WSMessageType.STOP_OPERATOR]: { action: 'manage', subject: 'Operator' },
@@ -1265,6 +1283,68 @@ export class WSServer extends WSMessageHandler {
     }
   }
 
+  private async handleCWKeyAction(connectionId: string, data: any): Promise<void> {
+    try {
+      const manager = this.digitalRadioEngine.getCWKeyerManager();
+      const connection = this.getConnection(connectionId);
+      const label = connection?.getAuthLabel() || connectionId;
+      const action = data?.action;
+      if (action !== 'key-down' && action !== 'key-up') {
+        throw new Error('action must be key-down or key-up');
+      }
+      await manager.handleKeyAction(connectionId, label, action);
+    } catch (error) {
+      this.handleCommandError(error, 'cwKeyAction');
+    }
+  }
+
+  private async handleCWTextInput(connectionId: string, data: any): Promise<void> {
+    try {
+      const manager = this.digitalRadioEngine.getCWKeyerManager();
+      const connection = this.getConnection(connectionId);
+      const label = connection?.getAuthLabel() || connectionId;
+      const text = String(data?.text || '');
+      if (!text) {
+        throw new Error('text is required');
+      }
+      await manager.handleTextInput(connectionId, label, text, data?.callsign, data?.placeholderValues);
+    } catch (error) {
+      this.handleCommandError(error, 'cwTextInput');
+    }
+  }
+
+  private async handleCWPlayMessage(connectionId: string, data: any): Promise<void> {
+    try {
+      const manager = this.digitalRadioEngine.getCWKeyerManager();
+      const connection = this.getConnection(connectionId);
+      const label = connection?.getAuthLabel() || connectionId;
+      const callsign = String(data?.callsign || '');
+      const slotId = String(data?.slotId || '');
+      if (!callsign || !slotId) {
+        throw new Error('callsign and slotId are required');
+      }
+      await manager.playMessage(
+        connectionId,
+        label,
+        callsign,
+        slotId,
+        Boolean(data?.repeat),
+        data?.startImmediately !== false,
+        data?.placeholderValues,
+      );
+    } catch (error) {
+      this.handleCommandError(error, 'cwPlayMessage');
+    }
+  }
+
+  private async handleCWStopMessage(): Promise<void> {
+    try {
+      await this.digitalRadioEngine.getCWKeyerManager().stopActive('stopped by client');
+    } catch (error) {
+      this.handleCommandError(error, 'cwStopMessage');
+    }
+  }
+
   private async handleVoiceSetRadioMode(data: any): Promise<void> {
     try {
       const voiceSessionManager = this.digitalRadioEngine.getVoiceSessionManager();
@@ -1425,6 +1505,10 @@ export class WSServer extends WSMessageHandler {
           logger.error('failed to handle voice keyer client disconnect', err);
         });
       }
+      const cwKeyerManager = this.digitalRadioEngine.getCWKeyerManager();
+      cwKeyerManager.handleClientDisconnect(id).catch((err) => {
+        logger.error('failed to handle cw keyer client disconnect', err);
+      });
 
       // 广播客户端数量变化（客户端断开连接）
       this.broadcastClientCount();

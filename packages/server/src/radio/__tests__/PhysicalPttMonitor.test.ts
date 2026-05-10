@@ -57,6 +57,30 @@ describe('PhysicalPttMonitor', () => {
     monitor.stop();
   });
 
+  it('polls outside voice mode while a demand request is active', async () => {
+    const { radioManager, connection } = createRadioManager();
+    connection.getPTT.mockResolvedValueOnce(true).mockResolvedValue(false);
+    const emitStatus = vi.fn();
+    const monitor = new PhysicalPttMonitor({
+      radioManager: radioManager as any,
+      getEngineMode: () => 'cw',
+      isSoftwarePttActive: () => false,
+      emitStatus,
+    });
+
+    const release = monitor.requestPolling('cw-keyer');
+    await vi.waitFor(() => expect(emitStatus).toHaveBeenCalledWith(true));
+
+    release();
+    await vi.advanceTimersByTimeAsync(150);
+    await vi.waitFor(() => expect(emitStatus).toHaveBeenCalledWith(false));
+    const callsAfterIdle = connection.getPTT.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(connection.getPTT).toHaveBeenCalledTimes(callsAfterIdle);
+    monitor.stop();
+  });
+
   it('pauses polling while software PTT is active and performs an immediate read after release', async () => {
     let softwarePttActive = true;
     const { radioManager, connection } = createRadioManager();

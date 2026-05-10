@@ -19,6 +19,7 @@ const { SerialPort } = serialport;
 import { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { RepeaterDuplexApplyResult, RepeaterDuplexConfig, ToneSquelchApplyResult, ToneSquelchConfig } from '../radio/PhysicalRadioManager.js';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
+import { CWKeyerHardware } from '../cw/CWKeyerHardware.js';
 import type { SetRadioModeOptions } from '../radio/connections/IRadioConnection.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
@@ -57,7 +58,7 @@ function describeHardware(config: HamlibConfig): string {
   }
 }
 
-function inferModeOptions(appMode: string | undefined, engineMode: 'digital' | 'voice'): SetRadioModeOptions {
+function inferModeOptions(appMode: string | undefined, engineMode: 'digital' | 'voice' | 'cw'): SetRadioModeOptions {
   const normalizedAppMode = appMode?.trim().toUpperCase();
 
   if (normalizedAppMode === 'VOICE') {
@@ -314,10 +315,12 @@ export async function radioRoutes(fastify: FastifyInstance) {
   fastify.get('/last-frequency', async (_req, reply) => {
     const lastFrequency = configManager.getLastSelectedFrequency();
     const lastVoiceFrequency = configManager.getLastVoiceFrequency();
+    const lastCWFrequency = configManager.getLastCWFrequency();
     return reply.send({
       success: true,
       lastFrequency,
       lastVoiceFrequency,
+      lastCWFrequency,
     });
   });
 
@@ -396,6 +399,13 @@ export async function radioRoutes(fastify: FastifyInstance) {
             toneMode: toneSquelchToApply.toneMode,
             ctcssToneTenthsHz: toneSquelchToApply.ctcssToneTenthsHz,
             dcsCode: toneSquelchToApply.dcsCode,
+          });
+        } else if (mode === 'CW') {
+          await configManager.updateLastCWFrequency({
+            frequency,
+            radioMode,
+            band,
+            description,
           });
         } else {
           await configManager.updateLastSelectedFrequency({
@@ -641,6 +651,39 @@ export async function radioRoutes(fastify: FastifyInstance) {
       } catch (error) {
         logger.warn('Failed to clean up PTT test connection:', error);
       }
+    }
+  });
+
+  // CW 键控端口测试
+  fastify.post('/test-cw-keyer', { schema: { body: zodToJsonSchema(HamlibConfigSchema) } }, async (req, reply) => {
+    const config = normalizeHamlibConfig(HamlibConfigSchema.parse(req.body));
+
+    const cwKeyPort = config.cwKeyPort?.trim();
+    if (!cwKeyPort) {
+      return reply.send({
+        success: false,
+        message: 'CW key port is not configured. Please set cwKeyPort in the profile first.',
+      });
+    }
+
+    const cwKeyMethod = config.cwKeyMethod || 'dtr';
+    logger.debug(`Testing CW keyer on ${cwKeyPort} (${cwKeyMethod})`);
+
+    const hardware = new CWKeyerHardware(cwKeyPort, cwKeyMethod);
+    try {
+      await hardware.open();
+      await hardware.keyDown();
+      await new Promise(resolve => setTimeout(resolve, 500));
+      await hardware.keyUp();
+      logger.info(`CW keyer test successful on ${cwKeyPort}`);
+      return reply.send({ success: true, message: 'CW keyer test successful! Keyed for 0.5 seconds on ' + cwKeyPort + ' (' + cwKeyMethod.toUpperCase() + ').' });
+    } catch (error) {
+      logger.error('CW keyer test failed:', error);
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    } finally {
+      try {
+        await hardware.close();
+      } catch { /* ignore */ }
     }
   });
 

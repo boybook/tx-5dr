@@ -3,6 +3,8 @@ import { LeftLayout } from './layout/LeftLayout';
 import { RightLayout } from './layout/RightLayout';
 import { VoiceLeftLayout } from './layout/VoiceLeftLayout';
 import { VoiceRightLayout } from './layout/VoiceRightLayout';
+import { CWLeftLayout } from './layout/CWLeftLayout';
+import { CWRightLayout } from './layout/CWRightLayout';
 import { SplitLayout } from './components/common/SplitLayout';
 import { MainRightPluginPane } from './components/plugins/MainRightPluginPane';
 import { useVisiblePluginPanelsForSlot } from './components/plugins/pluginPanelSlots';
@@ -52,6 +54,7 @@ function AppContent() {
   const showViewerWelcome = !isAdmin && noProfiles;
 
   const isVoiceMode = engineMode === 'voice';
+  const isCWMode = engineMode === 'cw';
 
   return (
     <div className="App app-viewport-height w-full overflow-hidden relative">
@@ -68,8 +71,8 @@ function AppContent() {
       )}
 
       <SplitLayout
-        leftContent={isVoiceMode ? <VoiceLeftLayout /> : <LeftLayout />}
-        rightContent={isVoiceMode ? <VoiceRightLayout /> : <RightLayout />}
+        leftContent={isVoiceMode ? <VoiceLeftLayout /> : isCWMode ? <CWLeftLayout /> : <LeftLayout />}
+        rightContent={isVoiceMode ? <VoiceRightLayout /> : isCWMode ? <CWRightLayout /> : <RightLayout />}
         extraContent={activeOperatorId ? (
           <MainRightPluginPane
             operatorId={activeOperatorId}

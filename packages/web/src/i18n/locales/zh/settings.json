@@ -260,7 +260,20 @@
     "modeNone": "无电台",
     "modeNetwork": "Rigctld 服务器",
     "modeSerial": "Hamlib 直连电台",
-    "modeIcomWlan": "ICOM WLAN"
+    "modeIcomWlan": "ICOM WLAN",
+    "cwKeyerSection": "CW 键控端口",
+    "cwKeyerSectionDesc": "CW 键控使用独立串口的 DTR/RTS 引脚，与 CAT 控制口分离",
+    "cwKeyPort": "CW 键控端口",
+    "cwKeyPortPlaceholder": "选择或输入串口路径",
+    "cwKeyPortDesc": "专用于 CW 键控的串口（与 CAT/PTT 分离）",
+    "cwKeyMethod": "键控方式",
+    "cwKeyMethodDesc": "使用哪个引脚控制电台发射",
+    "cwKeyPortRequired": "请先配置 CW 键控端口",
+    "testCW": "测试 CW",
+    "testingCW": "测试 CW 中...",
+    "testCWSuccess": "CW 键控测试成功！已键控发射 0.5 秒。",
+    "testCWFailed": "CW 键控测试失败",
+    "testCWFailedCheck": "CW 键控测试失败，请检查端口和连接"
   },
   "audio": {
     "loading": "正在加载音频设备...",

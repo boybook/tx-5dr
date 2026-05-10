@@ -20,6 +20,7 @@ import {
   type WriteCapabilityPayload,
   type TuneToneStartPayload,
   type TuneToneStatus,
+  type CWKeyerStatus,
   type PresetFrequency,
   resolveWindowTiming,
 } from '@tx5dr/contracts';
@@ -59,6 +60,7 @@ import { ClockCoordinator } from './subsystems/ClockCoordinator.js';
 import { EngineLifecycle } from './subsystems/EngineLifecycle.js';
 import { VoiceSessionManager } from './voice/VoiceSessionManager.js';
 import { VoiceKeyerManager } from './voice/VoiceKeyerManager.js';
+import { CWKeyerManager } from './cw/CWKeyerManager.js';
 import { EngineState } from './state-machines/types.js';
 import { PluginManager } from './plugin/PluginManager.js';
 import { tx5drPaths } from './utils/app-paths.js';
@@ -108,6 +110,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private engineMode: EngineMode = 'digital';
   private voiceSessionManager: VoiceSessionManager | null = null;
   private voiceKeyerManager: VoiceKeyerManager | null = null;
+
+  // CW 模式
+  private cwKeyerManager: CWKeyerManager | null = null;
   private modeSwitchTail: Promise<void> = Promise.resolve();
 
   // 子系统
@@ -127,6 +132,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private voiceKeyerPttActive = false;
   private physicalPttActive = false;
   private unifiedVoicePttActive = false;
+  private releaseCwPttPolling: (() => void) | null = null;
   private radioPowerController: RadioPowerController | null = null;
   private tuneToneController: TuneToneController;
   private readonly latestRadioPowerStates = new Map<string, RadioPowerStateEvent>();
@@ -540,6 +546,20 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.voiceKeyerManager;
   }
 
+  public getCWKeyerManager(): CWKeyerManager {
+    if (!this.cwKeyerManager) {
+      this.cwKeyerManager = new CWKeyerManager(() => this.radioManager);
+      this.cwKeyerManager.on('cwKeyerStatusChanged', (status) => {
+        this.handleCWKeyerStatusChanged(status);
+        this.emit('cwKeyerStatusChanged', status);
+      });
+      this.cwKeyerManager.on('cwConfigChanged', (config) => {
+        this.emit('cwConfigChanged', config);
+      });
+    }
+    return this.cwKeyerManager;
+  }
+
   public getNtpCalibrationService(): NtpCalibrationService {
     return this.ntpCalibrationService;
   }
@@ -687,6 +707,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       },
       getCurrentMode: () => this.currentMode,
       getVoiceSessionManager: () => this.voiceSessionManager,
+      getCWKeyerManager: () => this.getCWKeyerManager(),
       getAudioVolumeController: () => this.audioVolumeController,
       getAudioSidecar: () => this.audioSidecar,
       getStatus: () => this.getStatus(),
@@ -723,9 +744,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     const lastEngineMode = configManager.getLastEngineMode();
     const lastDigitalModeName = configManager.getLastDigitalModeName();
 
-    if (lastDigitalModeName && lastDigitalModeName !== this.currentMode.name) {
+    if (lastEngineMode === 'digital' && lastDigitalModeName && lastDigitalModeName !== this.currentMode.name) {
       const targetMode = Object.values(MODES).find(m => m.name === lastDigitalModeName);
-      if (targetMode && targetMode.name !== 'VOICE') {
+      if (targetMode && targetMode.name !== 'VOICE' && targetMode.name !== 'CW') {
         this.currentMode = targetMode;
         this.applyDecodeWindowOverrides();
         this.slotClock?.setMode(this.currentMode);
@@ -738,6 +759,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.engineMode = 'voice';
       this.currentMode = MODES.VOICE;
       logger.info('Restored last engine mode: voice');
+    } else if (lastEngineMode === 'cw') {
+      this.engineMode = 'cw';
+      this.currentMode = MODES.CW;
+      this.slotClock?.setMode(this.currentMode);
+      this.slotPackManager.setMode(this.currentMode);
+      logger.info('Restored last engine mode: cw');
     }
   }
 
@@ -769,6 +796,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
     await this.stop();
     this.squelchStatusMonitor.stop();
+    this.releaseCwPttPolling?.();
+    this.releaseCwPttPolling = null;
     this.physicalPttMonitor.stop();
 
     // rigctld bridge: tear down outside the engine resource pipeline so we
@@ -816,6 +845,14 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.voiceSessionManager.destroy();
       this.voiceSessionManager = null;
       logger.info('Voice session manager destroyed');
+    }
+
+    // 清理 CW 键控器
+    if (this.cwKeyerManager) {
+      await this.cwKeyerManager.stop();
+      this.cwKeyerManager.removeAllListeners();
+      this.cwKeyerManager = null;
+      logger.info('CW keyer manager destroyed');
     }
 
     // 清理操作员管理器
@@ -885,6 +922,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   async setMode(mode: ModeDescriptor | string): Promise<void> {
     const runSwitch = async () => {
       await this.stopTuneTone('mode changed');
+      // Handle CW mode
+      if (typeof mode === 'object' && mode.name === 'CW') {
+        if (this.engineMode === 'cw') {
+          logger.info('Already in CW mode');
+          this.emitStatusSnapshot();
+          return;
+        }
+        await this.switchEngineMode('cw', MODES.CW);
+        return;
+      }
+
       // Handle voice mode (string 'VOICE')
       if (mode === 'VOICE' || (typeof mode === 'object' && mode.name === 'VOICE')) {
         if (this.engineMode === 'voice') {
@@ -900,6 +948,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
       // If switching from voice to digital
       if (this.engineMode === 'voice') {
+        await this.switchEngineMode('digital', digitalMode);
+        return;
+      }
+
+      // If switching from CW to digital
+      if (this.engineMode === 'cw') {
         await this.switchEngineMode('digital', digitalMode);
         return;
       }
@@ -1114,10 +1168,19 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private async switchEngineMode(targetEngineMode: EngineMode, targetMode: ModeDescriptor): Promise<void> {
     let engineState = this.engineLifecycle?.getEngineState() ?? EngineState.IDLE;
     let shouldResumeAfterSwitch = engineState === EngineState.RUNNING || engineState === EngineState.STARTING;
+    // CW uses independent serial port and lazy-initializes CWKeyerManager.
+    // Going TO CW: stop engine but preserve radio connection, rebuild CW plan, don't restart.
+    // Going FROM CW: normal stop/start cycle to restore digital/voice resources.
+    const comingFromCW = this.engineMode === 'cw';
+    const goingToCW = targetEngineMode === 'cw';
     logger.info(`Switching engine mode: ${this.engineMode}/${this.currentMode.name} -> ${targetEngineMode}/${targetMode.name}`);
 
     if (this.engineMode === 'voice' && targetEngineMode !== 'voice') {
       await this.voiceKeyerManager?.stopActive('leaving voice mode');
+    }
+
+    if (comingFromCW) {
+      await this.cwKeyerManager?.stopActive('leaving cw mode');
     }
 
     if (engineState === EngineState.STARTING) {
@@ -1135,13 +1198,23 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
 
     if (engineState === EngineState.RUNNING) {
-      // Prevent RadioBridge from auto-restarting engine after reconnect
       this.radioBridge.wasRunningBeforeDisconnect = false;
-      await this.stop();
+      if (goingToCW && this.engineLifecycle) {
+        // Digital→CW: stop engine but keep radio connected (CW has its own serial port).
+        this.engineLifecycle.preserveRadioConnection = true;
+      }
+      try {
+        await this.stop();
+      } finally {
+        if (this.engineLifecycle) {
+          this.engineLifecycle.preserveRadioConnection = false;
+        }
+      }
     }
 
     this.engineMode = targetEngineMode;
     this.currentMode = targetMode;
+
     if (targetEngineMode === 'digital') {
       this.applyDecodeWindowOverrides();
     }
@@ -1152,7 +1225,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     this.slotPackManager.setMode(this.currentMode);
     this.clockCoordinator?.onModeChanged(this.currentMode);
-    // 同步 operator.config.mode —— 与数字模式内 setMode 同款的理由
     for (const op of this._operatorManager?.getAllOperators() ?? []) {
       op.setMode(this.currentMode);
     }
@@ -1168,12 +1240,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     if (targetEngineMode === 'voice') {
       await this.restoreLastVoiceOperatingState(configManager);
     }
+    if (goingToCW) {
+      await this.restoreLastCWOperatingState(configManager);
+    }
 
     this.resetVoicePttState();
     this.squelchStatusMonitor.reevaluate();
     this.physicalPttMonitor.reevaluate();
 
-    if (shouldResumeAfterSwitch) {
+    // CW target: engine start not needed (CWKeyerManager lazy-inits on first key action).
+    // CW→digital / other: restart if engine was running (or should resume).
+    if (!goingToCW && (shouldResumeAfterSwitch || comingFromCW)) {
       await this.engineLifecycle.startAndWaitForRunning();
       this.emitStatusSnapshot();
     }
@@ -1233,6 +1310,65 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
   }
 
+  private async restoreLastCWOperatingState(configManager: ConfigManager): Promise<void> {
+    if (!this.radioManager.isConnected()) {
+      return;
+    }
+
+    const lastCW = configManager.getLastCWFrequency();
+    let targetFrequency: number;
+    let targetRadioMode: string | undefined;
+
+    if (lastCW?.frequency) {
+      targetFrequency = lastCW.frequency;
+      targetRadioMode = lastCW.radioMode || 'CW';
+    } else {
+      // First time switching to CW: use current radio frequency and force CW mode
+      const currentFreq = await this.radioManager.getFrequency();
+      if (!currentFreq || currentFreq <= 0) {
+        logger.warn('Cannot restore CW operating state: no saved frequency and failed to read current frequency');
+        return;
+      }
+      targetFrequency = currentFreq;
+      targetRadioMode = 'CW';
+      logger.info(`No saved CW frequency, switching radio to CW mode on current frequency: ${(currentFreq / 1000000).toFixed(3)} MHz`);
+    }
+
+    try {
+      const applyResult = await this.radioManager.applyOperatingState({
+        frequency: targetFrequency,
+        mode: targetRadioMode,
+        bandwidth: targetRadioMode ? 'nochange' : undefined,
+        options: targetRadioMode ? { intent: 'cw' } : undefined,
+        tolerateModeFailure: true,
+      });
+
+      if (!applyResult.frequencyApplied) {
+        logger.warn(`Failed to restore CW frequency: ${(targetFrequency / 1000000).toFixed(3)} MHz`);
+        return;
+      }
+
+      if (applyResult.modeError) {
+        logger.warn(`Restored CW frequency but failed to set radio mode: ${applyResult.modeError.message}`);
+      }
+
+      const band = this.resolveBandLabel(targetFrequency);
+      const description = `${(targetFrequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
+      this.emit('frequencyChanged', {
+        frequency: targetFrequency,
+        mode: 'CW',
+        band,
+        description,
+        radioMode: targetRadioMode,
+        radioConnected: true,
+        source: 'program',
+      });
+      logger.info(`Restored CW operating state: ${description}${targetRadioMode ? ` (${targetRadioMode})` : ''}`);
+    } catch (error) {
+      logger.warn(`Failed to restore CW operating state: ${(error as Error).message}`);
+    }
+  }
+
   private resolveBandLabel(frequency: number): string {
     try {
       return getBandFromFrequency(frequency);
@@ -1284,6 +1420,19 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.physicalPttActive = active;
     this.voiceKeyerManager?.setManualPttActive(this.voiceManualPttActive || this.physicalPttActive);
     this.applyUnifiedVoicePttState([]);
+  }
+
+  private handleCWKeyerStatusChanged(status: CWKeyerStatus): void {
+    const shouldPollPhysicalPtt = status.active && (status.mode === 'playing' || status.mode === 'keying');
+    if (shouldPollPhysicalPtt && !this.releaseCwPttPolling) {
+      this.releaseCwPttPolling = this.physicalPttMonitor.requestPolling('cw-keyer');
+      return;
+    }
+
+    if (!shouldPollPhysicalPtt && this.releaseCwPttPolling) {
+      this.releaseCwPttPolling();
+      this.releaseCwPttPolling = null;
+    }
   }
 
   private resetVoicePttState(): void {
@@ -1372,8 +1521,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public getStatus() {
     const isRunning = this.engineLifecycle?.getIsRunning() ?? false;
-    // Voice mode has no slotClock, so isDecoding = isRunning
-    const isActuallyDecoding = this.engineMode === 'voice'
+    // Voice and CW modes have no decode slot loop, so mirror engine running state.
+    const isActuallyDecoding = this.engineMode === 'voice' || this.engineMode === 'cw'
       ? isRunning
       : isRunning && (this.slotClock?.isRunning ?? false);
 

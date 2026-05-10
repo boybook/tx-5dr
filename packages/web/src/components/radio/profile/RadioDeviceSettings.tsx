@@ -145,6 +145,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
   const [_isSaving, setIsSaving] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [isTestingPTT, setIsTestingPTT] = useState(false);
+  const [isTestingCW, setIsTestingCW] = useState(false);
   const [isRefreshingPorts, setIsRefreshingPorts] = useState(false);
   const [isLoadingRigConfigSchema, setIsLoadingRigConfigSchema] = useState(false);
   const [testResult, setTestResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -537,6 +538,33 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     }
   };
 
+  // 测试 CW 键控端口
+  const handleTestCWKeyer = async () => {
+    if (!config.cwKeyPort?.trim()) {
+      setTestResult({ type: 'error', message: t('radio.cwKeyPortRequired') });
+      return;
+    }
+
+    setIsTestingCW(true);
+    setTestResult(null);
+
+    try {
+      const response = await api.testCWKeyer(config);
+      if (response.success) {
+        setTestResult({ type: 'success', message: t('radio.testCWSuccess') });
+      } else {
+        setTestResult({ type: 'error', message: response.message || t('radio.testCWFailed') });
+      }
+    } catch (error) {
+      setTestResult({
+        type: 'error',
+        message: error instanceof Error ? error.message : t('radio.testCWFailedCheck')
+      });
+    } finally {
+      setIsTestingCW(false);
+    }
+  };
+
     // 渲染 PTT 配置区块（仅 serial / network 模式）
     const renderPttConfig = () => {
       const currentMethod = config.pttMethod || 'cat';
@@ -612,6 +640,70 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
       );
     };
 
+    // 渲染 CW 键控端口配置区块（仅 serial / network 模式）
+    const renderCWKeyerPortConfig = () => {
+      const cwKeyMethod = config.cwKeyMethod || 'dtr';
+
+      return (
+        <div className="space-y-3">
+          <h5 className="text-sm font-medium text-default-700">{t('radio.cwKeyerSection')}</h5>
+          <p className="text-xs text-default-500">{t('radio.cwKeyerSectionDesc')}</p>
+
+          <Autocomplete
+            label={t('radio.cwKeyPort')}
+            size="sm"
+            allowsCustomValue
+            inputValue={config.cwKeyPort || ''}
+            selectedKey={config.cwKeyPort || null}
+            onInputChange={value => {
+              updateConfig({ cwKeyPort: value || undefined });
+            }}
+            onSelectionChange={key => {
+              if (key !== null) {
+                updateConfig({ cwKeyPort: String(key) || undefined });
+              }
+            }}
+            variant="flat"
+            placeholder={t('radio.cwKeyPortPlaceholder')}
+            description={t('radio.cwKeyPortDesc')}
+            defaultItems={ports}
+          >
+            {(item: PortInfo) => (
+              <AutocompleteItem key={item.path} textValue={item.path}>
+                {item.path}
+              </AutocompleteItem>
+            )}
+          </Autocomplete>
+
+          <Select
+            label={t('radio.cwKeyMethod')}
+            size="sm"
+            selectedKeys={[cwKeyMethod]}
+            onSelectionChange={keys => {
+              const method = Array.from(keys)[0] as 'dtr' | 'rts';
+              updateConfig({ cwKeyMethod: method });
+            }}
+            variant="flat"
+            description={t('radio.cwKeyMethodDesc')}
+          >
+            <SelectItem key="dtr" textValue="DTR">DTR</SelectItem>
+            <SelectItem key="rts" textValue="RTS">RTS</SelectItem>
+          </Select>
+
+          <Button
+            size="sm"
+            variant="flat"
+            color="secondary"
+            onPress={handleTestCWKeyer}
+            isLoading={isTestingCW}
+            isDisabled={!config.cwKeyPort?.trim() || isTestingConnection || isTestingPTT}
+          >
+            {isTestingCW ? t('radio.testingCW') : t('radio.testCW')}
+          </Button>
+        </div>
+      );
+    };
+
     // 渲染配置内容
     const renderConfigContent = () => {
       switch (config.type) {
@@ -638,6 +730,8 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                   />
                   <Divider />
                   {renderPttConfig()}
+                  <Divider />
+                  {renderCWKeyerPortConfig()}
                   <Divider />
                   <div className="flex gap-2">
                     <Button
@@ -1021,6 +1115,8 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
 
                   <Divider />
                   {renderPttConfig()}
+                  <Divider />
+                  {renderCWKeyerPortConfig()}
                   <Divider />
                   <div className="flex gap-2">
                     <Button

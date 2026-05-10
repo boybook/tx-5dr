@@ -718,6 +718,76 @@ export class HamlibConnection
     }, { critical: true });
   }
 
+  supportsCWMessageKeyer(): boolean {
+    return Boolean(
+      this.rig
+      && typeof (this.rig as unknown as { sendMorse?: unknown }).sendMorse === 'function',
+    );
+  }
+
+  async sendCWMessage(message: string, wpm: number): Promise<void> {
+    await this.runSerializedTask('sendCWMessage', async () => {
+      this.checkConnected();
+      const rig = this.rig as (HamLib & {
+        sendMorse?: (message: string) => Promise<number>;
+        waitMorse?: () => Promise<number>;
+      }) | null;
+      if (!rig || typeof rig.sendMorse !== 'function') {
+        throw new Error('Hamlib connection does not support CAT CW Morse sending');
+      }
+
+      try {
+        if (this.supportedLevels.has('KEYSPD')) {
+          try {
+            await rig.setLevel('KEYSPD', wpm);
+          } catch (error) {
+            logger.warn('Failed to set Hamlib CW key speed before CAT CW send', {
+              error: error instanceof Error ? error.message : String(error),
+              wpm,
+            });
+          }
+        }
+
+        await rig.sendMorse(message);
+        this.lastSuccessfulOperation = Date.now();
+      } catch (error) {
+        throw this.convertError(error, 'sendCWMessage');
+      }
+    }, { critical: true });
+  }
+
+  async waitCWMessage(): Promise<void> {
+    // Hamlib's wait_morse can return before the queued CAT CW text is actually sent.
+    // Keep this low-level wrapper available, but CW keyer status tracking uses local timing.
+    this.checkConnected();
+    const rig = this.rig as (HamLib & { waitMorse?: () => Promise<number> }) | null;
+    if (!rig || typeof rig.waitMorse !== 'function') {
+      return;
+    }
+    try {
+      await rig.waitMorse();
+      this.lastSuccessfulOperation = Date.now();
+    } catch (error) {
+      throw this.convertOptionalOperationError(error, 'waitCWMessage');
+    }
+  }
+
+  async stopCWMessage(): Promise<void> {
+    await this.runSerializedTask('stopCWMessage', async () => {
+      this.checkConnected();
+      const rig = this.rig as (HamLib & { stopMorse?: () => Promise<number> }) | null;
+      if (!rig || typeof rig.stopMorse !== 'function') {
+        throw new Error('Hamlib connection does not support stopping CAT CW Morse');
+      }
+      try {
+        await rig.stopMorse();
+        this.lastSuccessfulOperation = Date.now();
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'stopCWMessage');
+      }
+    }, { critical: true });
+  }
+
   async getPTT(): Promise<boolean> {
     this.checkConnected();
     const result = await this.ioQueue.runLowPriority({ sessionId: this.ioSessionId }, async (activeSessionId) => {
@@ -1002,6 +1072,11 @@ export class HamlibConnection
 
     if (intent === 'voice') {
       return [baseMode];
+    }
+
+    if (intent === 'cw') {
+      // CW intent uses the CW mode directly (typically 'CW')
+      return ['CW'];
     }
 
     if (intent === 'digital' && dataMode && dataMode !== baseMode) {

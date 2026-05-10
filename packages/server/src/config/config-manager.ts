@@ -72,6 +72,13 @@ export interface AppConfig {
     ctcssToneTenthsHz?: number;
     dcsCode?: number;
   } | null;
+  // 最后选择的 CW 模式频率（独立于数字/语音模式，切换时各自恢复）
+  lastCWFrequency?: {
+    frequency: number;
+    radioMode?: string;
+    band: string;
+    description?: string;
+  } | null;
   // 最后设置的音量增益（旧版全局值，保留用于迁移）
   lastVolumeGain: {
     gain: number; // 线性增益值
@@ -92,7 +99,7 @@ export interface AppConfig {
   /** Custom frequency presets (null/undefined = use built-in defaults, includes all modes: FT8/FT4/VOICE) */
   customFrequencyPresets?: PresetFrequency[] | null;
   /** Last used engine mode ('digital' or 'voice'). Restored on startup. */
-  lastEngineMode?: 'digital' | 'voice';
+  lastEngineMode?: 'digital' | 'voice' | 'cw';
   /** Last used digital sub-mode name ('FT8' or 'FT4'). Restored on startup within digital mode. */
   lastDigitalModeName?: string;
   /** Voice mode operator callsign */
@@ -254,14 +261,15 @@ export function validateAppConfigCandidate(value: unknown): Record<string, unkno
   assertOptionalObject(value, 'ntp');
   assertOptionalObjectOrNull(value, 'lastSelectedFrequency');
   assertOptionalObjectOrNull(value, 'lastVoiceFrequency');
+  assertOptionalObjectOrNull(value, 'lastCWFrequency');
   assertOptionalObjectOrNull(value, 'lastVolumeGain');
   assertOptionalObjectOrNull(value, 'volumeGainMap');
 
   if (value.activeProfileId !== undefined && value.activeProfileId !== null && typeof value.activeProfileId !== 'string') {
     throw new Error('config.activeProfileId must be a string or null');
   }
-  if (value.lastEngineMode !== undefined && value.lastEngineMode !== 'digital' && value.lastEngineMode !== 'voice') {
-    throw new Error('config.lastEngineMode must be digital or voice');
+  if (value.lastEngineMode !== undefined && value.lastEngineMode !== 'digital' && value.lastEngineMode !== 'voice' && value.lastEngineMode !== 'cw') {
+    throw new Error('config.lastEngineMode must be digital, voice, or cw');
   }
   if (value.logLevel !== undefined && !['debug', 'info', 'warn', 'error'].includes(String(value.logLevel))) {
     throw new Error('config.logLevel must be debug, info, warn, or error');
@@ -494,6 +502,7 @@ export class ConfigManager {
     return {
       lastSelectedFrequency: config.lastSelectedFrequency,
       lastVoiceFrequency: config.lastVoiceFrequency,
+      lastCWFrequency: config.lastCWFrequency,
       lastVolumeGain: config.lastVolumeGain,
       volumeGainMap: config.volumeGainMap,
       lastEngineMode: config.lastEngineMode,
@@ -1101,6 +1110,35 @@ export class ConfigManager {
   }
 
   /**
+   * 获取最后选择的 CW 频率
+   */
+  getLastCWFrequency(): AppConfig['lastCWFrequency'] {
+    const runtimeValue = this.getRuntimeValue('lastCWFrequency');
+    const value = runtimeValue !== undefined ? runtimeValue : this.config.lastCWFrequency;
+    return value ? { ...value } : null;
+  }
+
+  /**
+   * 更新最后选择的 CW 频率
+   */
+  async updateLastCWFrequency(frequencyConfig: {
+    frequency: number;
+    radioMode?: string;
+    band: string;
+    description?: string;
+  }): Promise<void> {
+    await this.setRuntimeValue('lastCWFrequency', { ...frequencyConfig });
+    logger.debug(`Last CW frequency saved: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);
+  }
+
+  /**
+   * 清除最后选择的 CW 频率
+   */
+  async clearLastCWFrequency(): Promise<void> {
+    await this.setRuntimeValue('lastCWFrequency', null);
+  }
+
+  /**
    * 获取最后设置的音量增益
    */
   getLastVolumeGain(): AppConfig['lastVolumeGain'] {
@@ -1340,11 +1378,11 @@ export class ConfigManager {
 
   // ==================== Engine mode persistence ====================
 
-  getLastEngineMode(): 'digital' | 'voice' {
+  getLastEngineMode(): 'digital' | 'voice' | 'cw' {
     return this.getRuntimeValue('lastEngineMode') ?? this.config.lastEngineMode ?? 'digital';
   }
 
-  async setLastEngineMode(mode: 'digital' | 'voice'): Promise<void> {
+  async setLastEngineMode(mode: 'digital' | 'voice' | 'cw'): Promise<void> {
     await this.setRuntimeValue('lastEngineMode', mode);
   }
 

@@ -25,12 +25,20 @@ export interface LastVoiceFrequencyState {
   dcsCode?: number;
 }
 
+export interface LastCWFrequencyState {
+  frequency: number;
+  radioMode?: string;
+  band: string;
+  description?: string;
+}
+
 export interface RuntimeState {
   lastSelectedFrequency?: LastSelectedFrequencyState | null;
   lastVoiceFrequency?: LastVoiceFrequencyState | null;
+  lastCWFrequency?: LastCWFrequencyState | null;
   lastVolumeGain?: { gain: number; gainDb: number } | null;
   volumeGainMap?: Record<string, { gain: number; gainDb: number }> | null;
-  lastEngineMode?: 'digital' | 'voice';
+  lastEngineMode?: 'digital' | 'voice' | 'cw';
   lastDigitalModeName?: string;
   pskreporterStats?: Partial<PSKReporterStats>;
   authLastUsedAt?: Record<string, number>;

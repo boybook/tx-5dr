@@ -212,7 +212,7 @@ export type PluginCapability = z.infer<typeof PluginCapabilitySchema>;
  * - `voice-left-top`: shown above the voice frequency control card.
  * - `voice-right-top`: shown in the tabbed top area of the voice right panel.
  */
-export const PluginPanelSlotSchema = z.enum(['operator', 'automation', 'main-right', 'voice-left-top', 'voice-right-top']);
+export const PluginPanelSlotSchema = z.enum(['operator', 'automation', 'main-right', 'voice-left-top', 'voice-right-top', 'cw-right-top']);
 
 /**
  * Rendering slot that determines where a panel appears in the UI.
