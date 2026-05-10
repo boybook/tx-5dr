@@ -21,6 +21,9 @@
     "clearLeftData": "清空左侧",
     "clearRightData": "清空右侧"
   },
+  "callsign": {
+    "qrzLinkTitle": "在 QRZ.com 查看 {{callsign}}"
+  },
   "qsoNotifications": {
     "enable": "启用 QSO 系统提醒",
     "disable": "关闭 QSO 系统提醒"

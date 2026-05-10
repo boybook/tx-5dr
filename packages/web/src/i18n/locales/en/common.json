@@ -21,6 +21,9 @@
     "clearLeftData": "Clear Left",
     "clearRightData": "Clear Right"
   },
+  "callsign": {
+    "qrzLinkTitle": "View {{callsign}} on QRZ.com"
+  },
   "qsoNotifications": {
     "enable": "Enable QSO system notifications",
     "disable": "Disable QSO system notifications"

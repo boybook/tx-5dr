@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
 import { api, getDisplayMode } from '@tx5dr/core';
 import type { DigitalRadioEngineEvents, QSORecord } from '@tx5dr/contracts';
+import { QrzCallsignLink } from '../common/QrzCallsignLink';
 
 const logger = createLogger('VoiceRecentQSOList');
 
@@ -190,8 +191,11 @@ export const VoiceRecentQSOList: React.FC<VoiceRecentQSOListProps> = ({
                   {formatTime(qso.startTime)}
                 </span>
                 <span className="flex-1 md:flex-none md:w-20 md:shrink-0 flex flex-col min-w-0">
-                  <span className="font-mono font-semibold text-foreground truncate">
-                    {qso.callsign}
+                  <span className="flex min-w-0 items-center gap-1">
+                    <span className="font-mono font-semibold text-foreground truncate">
+                      {qso.callsign}
+                    </span>
+                    <QrzCallsignLink callsign={qso.callsign} size="sm" className="shrink-0" />
                   </span>
                   {/* QTH as sub-line on mobile only */}
                   {(qso.grid || qso.qth) && (

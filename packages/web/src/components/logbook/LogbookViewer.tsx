@@ -31,7 +31,7 @@ import type { DateRangePickerProps } from '@heroui/react';
 import QSOFormModal from './QSOFormModal';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen, faCog, faPlus, faTableCells } from '@fortawesome/free-solid-svg-icons';
+import { faChevronDown, faSync, faDownload, faUpload, faEdit, faTrash, faFolderOpen, faCog, faPlus, faTableCells } from '@fortawesome/free-solid-svg-icons';
 import type { QSORecord, LogBookStatistics, CreateQSORequest, LogBookImportResult, LogBookExportOptions, OperatorStatus } from '@tx5dr/contracts';
 import { api, WSClient, ApiError, getDisplayMode } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../../utils/config';
@@ -43,6 +43,7 @@ import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
 import RecentQSOGlobeCard from './RecentQSOGlobeCard';
 import { getAuthHeaders, getStoredJwt } from '../../utils/authHeaders';
+import { QrzCallsignLink } from '../common/QrzCallsignLink';
 
 const logger = createLogger('LogbookViewer');
 
@@ -834,23 +835,6 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     }
   };
 
-  // 打开外部链接的函数
-  const openExternalLink = (url: string) => {
-    if (isElectron()) {
-      // Electron环境：尝试使用shell.openExternal
-      if (typeof window !== 'undefined' && window.electronAPI?.shell?.openExternal) {
-        window.electronAPI.shell.openExternal(url);
-      } else {
-        // 如果shell API不可用，回退到window.open
-        logger.warn('Electron shell API unavailable, falling back to window.open');
-        window.open(url, '_blank');
-      }
-    } else {
-      // 浏览器环境：使用window.open
-      window.open(url, '_blank');
-    }
-  };
-
   // 格式化日期显示
   const formatDateTime = (timestamp: number, compact = false) => {
     if (compact) {
@@ -925,16 +909,11 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           <div className="flex flex-col gap-1">
             <div className="font-semibold flex items-center gap-1 md:gap-2">
               <span className="text-sm md:text-base">{qso.callsign}</span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openExternalLink(`https://www.qrz.com/db/${qso.callsign}`);
-                }}
-                className="text-default-400 hover:text-primary transition-colors"
-                title={t('qso.callsignInfo', { callsign: qso.callsign })}
-              >
-                <FontAwesomeIcon icon={faExternalLinkAlt} size="sm" />
-              </button>
+              <QrzCallsignLink
+                callsign={qso.callsign}
+                size="sm"
+                ariaLabel={t('qso.callsignInfo', { callsign: qso.callsign })}
+              />
             </div>
             {(qso.dxccEntity || qso.dxccId) && (
               <div className="flex flex-wrap items-center gap-1 text-xs text-default-500">

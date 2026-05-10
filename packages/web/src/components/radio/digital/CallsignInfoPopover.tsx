@@ -3,6 +3,7 @@ import { Popover, PopoverTrigger, PopoverContent, Divider, Spinner } from '@hero
 import { useTranslation } from 'react-i18next';
 import { api, calculateGridDistance } from '@tx5dr/core';
 import { FlagDisplay } from '../../common/FlagDisplay';
+import { QrzCallsignLink } from '../../common/QrzCallsignLink';
 import { useStationInfo } from '../../../store/radioStore';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -235,7 +236,10 @@ function PopoverBody({ callsign, tracking, logbookAnalysis, country, countryZh, 
     <div className="p-2.5 w-[264px]">
       {/* Header: Callsign + Country */}
       <div className="flex items-center justify-between">
-        <span className="font-mono font-semibold text-sm">{callsign}</span>
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="font-mono font-semibold text-sm truncate">{callsign}</span>
+          <QrzCallsignLink callsign={callsign} size="sm" className="shrink-0" />
+        </span>
         {countryName && (
           <span className="flex items-center gap-1 text-xs text-default-500">
             <FlagDisplay flag={flag} countryCode={countryCode} />
@@ -327,6 +331,10 @@ export const CallsignInfoPopover: React.FC<CallsignInfoPopoverProps> = ({
     closeTimerRef.current = setTimeout(() => setIsOpen(false), 150);
   }, []);
 
+  const stopPopoverPointerEvent = useCallback((event: React.SyntheticEvent) => {
+    event.stopPropagation();
+  }, []);
+
   // Fetch tracking data when popover opens
   useEffect(() => {
     if (!isOpen || fetchedCallsignRef.current === callsign) return;
@@ -375,6 +383,9 @@ export const CallsignInfoPopover: React.FC<CallsignInfoPopoverProps> = ({
       <PopoverContent
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
+        onMouseDown={stopPopoverPointerEvent}
+        onClick={stopPopoverPointerEvent}
+        onDoubleClick={stopPopoverPointerEvent}
       >
         {loading ? (
           <div className="p-3 flex items-center justify-center">
@@ -394,7 +405,10 @@ export const CallsignInfoPopover: React.FC<CallsignInfoPopoverProps> = ({
             stateConfidence={stateConfidence}
           />
         ) : (
-          <div className="p-2 text-xs text-default-400">{callsign}</div>
+          <div className="p-2 text-xs text-default-400 flex items-center gap-1">
+            <span className="font-mono">{callsign}</span>
+            <QrzCallsignLink callsign={callsign} size="sm" />
+          </div>
         )}
       </PopoverContent>
     </Popover>
