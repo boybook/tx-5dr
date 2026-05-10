@@ -33,13 +33,13 @@
   },
   "ptt": {
     "title": "Voice PTT",
-    "idle": "Push to Talk",
-    "requesting": "Requesting...",
-    "transmitting": "Transmitting",
+    "idle": "PTT",
+    "requesting": "Requesting",
+    "transmitting": "Stop transmitting",
     "lockedByOther": "Occupied",
-    "releaseHint": "Release to stop",
-    "shortcutHint": "Hold {{shortcut}} to transmit",
-    "shortcutHintMobile": "Hold to transmit",
+    "releaseHint": "Click again to stop transmitting",
+    "shortcutHint": "Press {{shortcut}}",
+    "shortcutHintMobile": "Tap to toggle transmit",
     "shortcutNameSpace": "Space",
     "shortcutNameBackquote": "~",
     "shortcutNameHome": "Home",
@@ -64,7 +64,11 @@
     "httpsRequiredRoleUnauthenticated": "Unauthenticated user",
     "httpsRequiredBypassHint": "If you have already manually allowed the relevant browser security restrictions for this page, you can remember that choice and close this warning first, then go back to the main PTT button and transmit again.",
     "httpsRequiredCancel": "Cancel",
-    "httpsRequiredDontWarnAgain": "Don't warn again"
+    "httpsRequiredDontWarnAgain": "Don't warn again",
+    "voiceKeyerTransmitting": "Transmitting",
+    "cancelHint": "Click to cancel",
+    "stopHint": "Click/{{shortcut}} stop",
+    "stopHintMobile": "Tap to stop transmit"
   },
   "qso": {
     "title": "Voice QSO Log",

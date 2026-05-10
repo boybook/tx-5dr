@@ -28,12 +28,12 @@ const logger = createLogger('VoicePTTButton');
 
 type PTTState = 'idle' | 'requesting' | 'transmitting' | 'locked-by-other';
 
-function ShortcutChevronIcon({ open }: { open: boolean }): React.ReactElement {
+function ShortcutChevronIcon({ open, className = 'text-white' }: { open: boolean; className?: string }): React.ReactElement {
   return (
     <svg
       aria-hidden="true"
       viewBox="0 0 24 24"
-      className={`h-3 w-3 text-white transition-transform ${open ? 'rotate-180' : ''}`}
+      className={`h-3 w-3 transition-transform ${className} ${open ? 'rotate-180' : ''}`}
       fill="none"
       stroke="currentColor"
       strokeWidth="1.5"
@@ -120,7 +120,10 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   const [shortcutPreset, setShortcutPreset] = useState<VoicePttShortcutPreset>(getVoicePttShortcutPreset);
   const [shortcutMenuOpen, setShortcutMenuOpen] = useState(false);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
-  const isPttDownRef = useRef(false);
+  const manualPttActiveRef = useRef(false);
+  const manualPttOwnsLockRef = useRef(false);
+  const manualPttReleasePendingRef = useRef(false);
+  const previousVoicePttLockedRef = useRef(false);
   const keyboardPressActiveRef = useRef(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const shortcutMenuRef = useRef<HTMLDivElement>(null);
@@ -161,24 +164,6 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
     setHttpsRequiredModalOpen(true);
     return true;
   }, [httpsWarningBypassEnabled]);
-
-  // Derive PTT state from voice lock state
-  useEffect(() => {
-    if (!voicePttLock) {
-      setPttState('idle');
-      return;
-    }
-
-    if (voicePttLock.locked) {
-      if (isPttDownRef.current || isVoiceKeyerLockHolder(voicePttLock.lockedBy)) {
-        setPttState('transmitting');
-      } else {
-        setPttState('locked-by-other');
-      }
-    } else {
-      setPttState('idle');
-    }
-  }, [voicePttLock]);
 
   useEffect(() => {
     logger.debug('Voice capture state changed', {
@@ -234,47 +219,95 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
     }
   }, []);
 
-  const attemptPTTDown = useCallback(async () => {
-    if (!isOperator || !radioService || isPttDownRef.current) return;
+  const getExternalPttState = useCallback((): PTTState => {
+    if (!voicePttLock?.locked || manualPttReleasePendingRef.current) {
+      return 'idle';
+    }
+
+    return (manualPttActiveRef.current || manualPttOwnsLockRef.current || isVoiceKeyerLockHolder(voicePttLock.lockedBy))
+      ? 'transmitting'
+      : 'locked-by-other';
+  }, [voicePttLock]);
+
+  // Derive the visible state from the server lock while keeping manual PTT local.
+  useEffect(() => {
+    const isLocked = voicePttLock?.locked === true;
+    const wasLocked = previousVoicePttLockedRef.current;
+    previousVoicePttLockedRef.current = isLocked;
+
+    if (!isLocked) {
+      manualPttOwnsLockRef.current = false;
+      manualPttReleasePendingRef.current = false;
+      if (wasLocked && manualPttActiveRef.current) {
+        manualPttActiveRef.current = false;
+        pressTrackerRef.current.reset();
+        voiceCaptureController.setPTTActive(false);
+        releaseWakeLock();
+      }
+      if (!manualPttActiveRef.current) {
+        setPttState('idle');
+      }
+      return;
+    }
+
+    if (manualPttReleasePendingRef.current) {
+      setPttState('idle');
+      return;
+    }
+
+    if (manualPttActiveRef.current || manualPttOwnsLockRef.current || isVoiceKeyerLockHolder(voicePttLock.lockedBy)) {
+      if (manualPttActiveRef.current) {
+        manualPttOwnsLockRef.current = true;
+      }
+      setPttState('transmitting');
+    } else {
+      setPttState('locked-by-other');
+    }
+  }, [releaseWakeLock, voiceCaptureController, voicePttLock]);
+
+  const startManualPtt = useCallback(async () => {
+    if (!isOperator || !radioService || manualPttActiveRef.current) return;
     if (pttState === 'locked-by-other') return;
 
     const pressId = pressTrackerRef.current.beginPress();
-    isPttDownRef.current = true;
+    manualPttReleasePendingRef.current = false;
+    manualPttActiveRef.current = true;
     setPttState('requesting');
 
     try {
       const participantIdentity = await voiceCaptureController.startFromGesture();
-      if (!pressTrackerRef.current.isActive(pressId) || !isPttDownRef.current) {
+      if (!pressTrackerRef.current.isActive(pressId) || !manualPttActiveRef.current) {
         pressTrackerRef.current.cancelPress(pressId);
         voiceCaptureController.setPTTActive(false);
-        setPttState('idle');
-        logger.debug('PTT press canceled before voice capture became ready', { pressId });
+        setPttState(getExternalPttState());
+        logger.debug('PTT toggle canceled before voice capture became ready', { pressId });
         return;
       }
 
       if (!participantIdentity) {
         pressTrackerRef.current.cancelPress(pressId);
-        isPttDownRef.current = false;
-        setPttState('idle');
+        manualPttActiveRef.current = false;
+        setPttState(getExternalPttState());
         logger.warn('PTT requested before voice participant identity became available');
         return;
       }
 
       if (!pressTrackerRef.current.markRequestIssued(pressId)) {
         voiceCaptureController.setPTTActive(false);
-        setPttState('idle');
-        logger.debug('PTT press became stale before request was issued', { pressId });
+        setPttState(getExternalPttState());
+        logger.debug('PTT toggle became stale before request was issued', { pressId });
         return;
       }
 
+      manualPttOwnsLockRef.current = true;
       radioService.requestVoicePTT(participantIdentity);
       voiceCaptureController.setPTTActive(true);
     } catch (error) {
       pressTrackerRef.current.cancelPress(pressId);
-      if (isPttDownRef.current) {
-        isPttDownRef.current = false;
+      if (manualPttActiveRef.current) {
+        manualPttActiveRef.current = false;
       }
-      setPttState('idle');
+      setPttState(getExternalPttState());
       logger.error('PTT initialization failed', error);
       return;
     }
@@ -284,36 +317,52 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
       navigator.vibrate(50);
     }
 
-    logger.debug('PTT pressed');
-  }, [acquireWakeLock, isOperator, pttState, radioService, voiceCaptureController]);
+    logger.debug('PTT toggled on');
+  }, [acquireWakeLock, getExternalPttState, isOperator, pttState, radioService, voiceCaptureController]);
 
-  // PTT press handler
-  const handlePTTDown = useCallback(async () => {
-    if (shouldBlockForHttpsWarning()) return;
-    await attemptPTTDown();
-  }, [attemptPTTDown, shouldBlockForHttpsWarning]);
-
-  // PTT release handler
-  const handlePTTUp = useCallback(() => {
+  const stopManualPtt = useCallback(() => {
     const { pressId, shouldRelease } = pressTrackerRef.current.releaseActivePress();
-    if (pressId === null) return;
+    if (pressId === null && !manualPttActiveRef.current) return;
 
-    isPttDownRef.current = false;
+    manualPttActiveRef.current = false;
 
     if (shouldRelease) {
+      manualPttReleasePendingRef.current = true;
       radioService?.releaseVoicePTT();
+    } else {
+      manualPttOwnsLockRef.current = false;
+      manualPttReleasePendingRef.current = false;
     }
     voiceCaptureController.setPTTActive(false);
 
     releaseWakeLock();
-    setPttState('idle');
+    setPttState(shouldRelease ? 'idle' : getExternalPttState());
 
     if (navigator.vibrate) {
       navigator.vibrate(30);
     }
 
-    logger.debug('PTT released');
-  }, [radioService, releaseWakeLock, voiceCaptureController]);
+    logger.debug('PTT toggled off');
+  }, [getExternalPttState, radioService, releaseWakeLock, voiceCaptureController]);
+
+  const toggleManualPtt = useCallback(async () => {
+    if (manualPttActiveRef.current) {
+      stopManualPtt();
+      return;
+    }
+
+    if (!isOperator || !radioService || pttState === 'locked-by-other') return;
+    if (shouldBlockForHttpsWarning()) return;
+
+    await startManualPtt();
+  }, [
+    isOperator,
+    pttState,
+    radioService,
+    shouldBlockForHttpsWarning,
+    startManualPtt,
+    stopManualPtt,
+  ]);
 
   const suppressShortcutEvent = useCallback((event: KeyboardEvent) => {
     event.preventDefault();
@@ -328,46 +377,37 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
       if (e.repeat || keyboardPressActiveRef.current) return;
 
       keyboardPressActiveRef.current = true;
-      void handlePTTDown();
+      void toggleManualPtt();
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       if (!matchesVoicePttShortcut(e.code, shortcutPreset)) return;
       suppressShortcutEvent(e);
-      if (!keyboardPressActiveRef.current) return;
-
       keyboardPressActiveRef.current = false;
-      handlePTTUp();
     };
 
-    const handleForceRelease = () => {
-      if (!isPttDownRef.current) {
-        keyboardPressActiveRef.current = false;
-        return;
-      }
-
+    const resetKeyboardPress = () => {
       keyboardPressActiveRef.current = false;
-      handlePTTUp();
     };
 
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        handleForceRelease();
+        resetKeyboardPress();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown, { capture: true });
     window.addEventListener('keyup', handleKeyUp, { capture: true });
-    window.addEventListener('blur', handleForceRelease);
+    window.addEventListener('blur', resetKeyboardPress);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown, { capture: true });
       window.removeEventListener('keyup', handleKeyUp, { capture: true });
-      window.removeEventListener('blur', handleForceRelease);
+      window.removeEventListener('blur', resetKeyboardPress);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [handlePTTDown, handlePTTUp, shortcutPreset, suppressShortcutEvent]);
+  }, [shortcutPreset, suppressShortcutEvent, toggleManualPtt]);
 
   // Suppress all long-press browser behaviors on the PTT button.
   // React synthetic events are insufficient on Android WebView/WebKit —
@@ -404,7 +444,9 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
         radioService?.releaseVoicePTT();
       }
       keyboardPressActiveRef.current = false;
-      isPttDownRef.current = false;
+      manualPttActiveRef.current = false;
+      manualPttOwnsLockRef.current = false;
+      manualPttReleasePendingRef.current = false;
       pressTrackerRef.current.reset();
       voiceCaptureControllerRef.current.setPTTActive(false);
       releaseWakeLock();
@@ -427,36 +469,39 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   const shortcutLabel = getShortcutOptionLabel(shortcutPreset);
 
   // Button appearance based on state
-  const getButtonStyle = (): { bgClass: string; label: string; subLabel?: string } => {
+  const getButtonStyle = (): { buttonClass: string; label: string; subLabel?: string } => {
     switch (pttState) {
       case 'requesting':
         return {
-          bgClass: 'bg-warning-500 shadow-lg shadow-warning-500/50',
+          buttonClass: 'border-2 border-warning-400 bg-warning-500 text-white shadow-lg shadow-warning-500/50',
           label: t('ptt.idle'),
           subLabel: t('ptt.requesting'),
         };
       case 'transmitting':
         return {
-          bgClass: 'bg-danger-600 shadow-lg shadow-danger-600/50 animate-pulse',
-          label: t('ptt.transmitting'),
-          subLabel: isVoiceKeyerPttLock ? undefined : t('ptt.releaseHint'),
+          buttonClass: 'border-2 border-danger-600 bg-danger-600 text-white shadow-lg shadow-danger-600/50 animate-pulse',
+          label: t('ptt.idle'),
+          subLabel: isVoiceKeyerPttLock ? undefined : t('ptt.stopHint', { shortcut: shortcutLabel }),
         };
       case 'locked-by-other':
         return {
-          bgClass: 'bg-default-300 dark:bg-default-500 cursor-not-allowed',
+          buttonClass: 'border-2 border-default-300 bg-default-300 text-white dark:border-default-500 dark:bg-default-500 cursor-not-allowed',
           label: t('ptt.lockedByOther'),
         };
       case 'idle':
       default:
         return {
-          bgClass: 'bg-danger-500 shadow-lg shadow-danger-500/40 hover:bg-danger-600 active:bg-danger-700',
+          buttonClass: 'border-0 bg-danger-50/20 text-danger-600 ring-4 ring-inset ring-danger-500/70 shadow-sm shadow-danger-500/10 hover:bg-danger-50/80 hover:ring-danger-600/80 active:bg-danger-100/80 dark:bg-danger-950/10 dark:text-danger-300 dark:ring-danger-400/70 dark:hover:bg-danger-950/25 dark:hover:ring-danger-300/80',
           label: t('ptt.idle'),
           subLabel: t('ptt.shortcutHint', { shortcut: shortcutLabel }),
         };
     }
   };
 
-  const { bgClass, label, subLabel } = getButtonStyle();
+  const { buttonClass, label, subLabel } = getButtonStyle();
+  const shortcutToneClass = pttState === 'idle'
+    ? 'text-danger-600/85 dark:text-danger-300/90'
+    : 'text-white';
   const isDisabled = !isOperator || pttState === 'locked-by-other';
   const useDisabledVisual = !isOperator || pttState === 'locked-by-other';
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
@@ -537,7 +582,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
 
   return (
     <>
-      <div className="flex h-20 w-full items-stretch gap-1.5 md:h-full md:w-[9rem] md:self-stretch">
+      <div className="flex h-14 w-full items-stretch gap-1.5 md:h-full md:w-[9rem] md:self-stretch">
         <div className="relative flex-1">
           <button
             ref={buttonRef}
@@ -545,37 +590,29 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
             className={`
               h-full w-full rounded-lg px-2 flex flex-col items-center justify-center
               transition-all duration-150 select-none touch-none
-              text-white font-bold whitespace-nowrap
+              font-bold whitespace-nowrap
               [-webkit-touch-callout:none] [-webkit-user-select:none]
-              ${bgClass}
+              ${buttonClass}
               ${useDisabledVisual ? 'opacity-60 cursor-not-allowed' : isDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}
             `}
-            onMouseDown={(e) => {
+            onClick={(e) => {
               e.preventDefault();
-              handlePTTDown();
+              void toggleManualPtt();
             }}
-            onMouseUp={handlePTTUp}
-            onMouseLeave={() => {
-              if (isPttDownRef.current) handlePTTUp();
-            }}
-            onTouchStart={(e) => {
-              e.preventDefault();
-              handlePTTDown();
-            }}
-            onTouchEnd={(e) => {
-              e.preventDefault();
-              handlePTTUp();
-            }}
-            onTouchCancel={handlePTTUp}
             disabled={isDisabled}
             aria-label={t('ptt.title')}
           >
-            <span className="text-xl leading-tight">{label}</span>
+            <span className="text-lg leading-tight md:text-xl">{label}</span>
             {subLabel && (
-              <span className="mt-1 text-xs font-normal opacity-80">
+              <span className="mt-0.5 text-[11px] font-normal opacity-80 md:mt-1 md:text-xs">
                 {pttState === 'idle' ? (
                   <>
                     <span className="md:hidden">{t('ptt.shortcutHintMobile')}</span>
+                    <span className="hidden md:inline">{subLabel}</span>
+                  </>
+                ) : pttState === 'transmitting' && !isVoiceKeyerPttLock ? (
+                  <>
+                    <span className="md:hidden">{t('ptt.stopHintMobile')}</span>
                     <span className="hidden md:inline">{subLabel}</span>
                   </>
                 ) : subLabel}
@@ -592,15 +629,15 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
             <button
               type="button"
               aria-label={t('ptt.shortcutSelectAria')}
-              className="flex h-5 items-center justify-end gap-0.5 bg-transparent px-0 py-0 text-[10px] font-medium uppercase tracking-wide text-white outline-none transition-opacity hover:opacity-100"
+              className={`flex h-5 items-center justify-end gap-0.5 bg-transparent px-0 py-0 text-[10px] font-medium uppercase tracking-wide outline-none transition-opacity hover:opacity-100 ${shortcutToneClass}`}
               onClick={() => {
                 setShortcutMenuOpen((open) => !open);
               }}
             >
-              <span className="whitespace-nowrap text-white">
+              <span className={`whitespace-nowrap ${shortcutToneClass}`}>
                 {getShortcutOptionLabel(shortcutPreset)}
               </span>
-              <ShortcutChevronIcon open={shortcutMenuOpen} />
+              <ShortcutChevronIcon open={shortcutMenuOpen} className={shortcutToneClass} />
             </button>
             {shortcutMenuOpen && (
               <div className="absolute bottom-full right-0 mb-1.5 min-w-[4.5rem] rounded-md border border-white/15 bg-black/80 p-1 shadow-lg backdrop-blur-sm">
