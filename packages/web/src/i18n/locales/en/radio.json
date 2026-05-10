@@ -740,6 +740,7 @@
     "emptySlot": "Empty",
     "emptySlotHint": "Edit this slot first",
     "repeatToggle": "Repeat toggle",
-    "clearSlot": "Clear"
+    "clearSlot": "Clear",
+    "settings": "Settings"
   }
 }

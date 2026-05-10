@@ -740,6 +740,7 @@
     "emptySlot": "空槽位",
     "emptySlotHint": "请先在编辑中填写",
     "repeatToggle": "循环开关",
-    "clearSlot": "清空"
+    "clearSlot": "清空",
+    "settings": "设置"
   }
 }

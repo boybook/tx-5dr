@@ -4,7 +4,6 @@ import {
   Card,
   Alert,
   Input,
-  Textarea,
   Slider,
   Select,
   SelectItem,
@@ -12,6 +11,9 @@ import {
   Tab,
   Chip,
   Tooltip,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
 } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -26,6 +28,7 @@ import {
   faWaveSquare,
   faTowerBroadcast,
   faPlug,
+  faGear,
   faPlus,
   faMinus,
 } from '@fortawesome/free-solid-svg-icons';
@@ -482,6 +485,74 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
+          <Popover placement="bottom-end">
+            <PopoverTrigger>
+              <Button
+                isIconOnly
+                size="sm"
+                variant="flat"
+                aria-label={t('radio:cw.settings', 'Settings')}
+                className="h-7 min-w-7 rounded-md"
+              >
+                <FontAwesomeIcon icon={faGear} className="text-xs" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-80 gap-3 p-3">
+              <div className="flex w-full flex-col gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="w-20 shrink-0 whitespace-nowrap text-xs text-default-600">{t('radio:cw.wpm', 'WPM')}</span>
+                  <Slider
+                    size="sm"
+                    step={1}
+                    minValue={WPM_MIN}
+                    maxValue={WPM_MAX}
+                    value={wpm}
+                    onChange={handleWpmChange}
+                    onChangeEnd={handleWpmChangeEnd}
+                    className="flex-1"
+                    aria-label={t('radio:cw.wpm', 'WPM')}
+                  />
+                  <span className="w-10 text-right font-mono text-xs text-default-800">{wpm}</span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="w-20 shrink-0 text-xs text-default-600">{t('radio:cw.backendTabs', 'CW backend')}</span>
+                  <Tabs
+                    size="sm"
+                    variant="solid"
+                    selectedKey={backend}
+                    onSelectionChange={handleBackendChange}
+                    aria-label={t('radio:cw.backendTabs', 'CW backend')}
+                    classNames={{
+                      base: 'shrink-0',
+                      tabList: 'h-7 gap-0 rounded-lg p-0.5',
+                      cursor: 'rounded-md',
+                      tab: 'h-6 min-w-7 rounded-md px-2',
+                      tabContent: 'text-xs',
+                    }}
+                  >
+                    <Tab
+                      key="cat"
+                      title={(
+                        <span className="flex items-center gap-1">
+                          <FontAwesomeIcon icon={faTowerBroadcast} className="text-[10px]" />
+                          <span>{t('radio:cw.backendCat', 'Radio keyer')}</span>
+                        </span>
+                      )}
+                    />
+                    <Tab
+                      key="serial"
+                      title={(
+                        <span className="flex items-center gap-1">
+                          <FontAwesomeIcon icon={faPlug} className="text-[10px]" />
+                          <span>{t('radio:cw.backendSerial', 'Key jack')}</span>
+                        </span>
+                      )}
+                    />
+                  </Tabs>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
           <Tabs
             size="sm"
             variant="solid"
@@ -570,7 +641,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
           <Input
             ref={textInputRef}
             value={textInput}
-            onValueChange={setTextInput}
+            onValueChange={(value) => setTextInput(value.toUpperCase())}
             onKeyDown={handleKeyDown}
             placeholder={t('radio:cw.textInputPlaceholder', 'Enter CW text...')}
             className="flex-1"
@@ -618,90 +689,38 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
           </div>
         )}
 
-        <div className="flex flex-col gap-3 rounded-lg border border-default-200 bg-default-50 px-3 py-3">
-          <div className="flex items-center gap-3">
-            <span className="w-20 shrink-0 whitespace-nowrap text-xs text-default-600">{t('radio:cw.wpm', 'WPM')}</span>
-            <Slider
-              size="sm"
-              step={1}
-              minValue={WPM_MIN}
-              maxValue={WPM_MAX}
-              value={wpm}
-              onChange={handleWpmChange}
-              onChangeEnd={handleWpmChangeEnd}
-              className="flex-1"
-              aria-label={t('radio:cw.wpm', 'WPM')}
-            />
-            <span className="w-10 text-right font-mono text-xs text-default-800">{wpm}</span>
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="w-20 shrink-0 text-xs text-default-600">{t('radio:cw.backendTabs', 'CW backend')}</span>
-            <Tabs
-              size="sm"
-              variant="solid"
-              selectedKey={backend}
-              onSelectionChange={handleBackendChange}
-              aria-label={t('radio:cw.backendTabs', 'CW backend')}
-              classNames={{
-                base: 'shrink-0',
-                tabList: 'h-7 gap-0 rounded-lg p-0.5',
-                cursor: 'rounded-md',
-                tab: 'h-6 min-w-7 rounded-md px-2',
-                tabContent: 'text-xs',
-              }}
-            >
-              <Tab
-                key="cat"
-                title={(
-                  <span className="flex items-center gap-1">
-                    <FontAwesomeIcon icon={faTowerBroadcast} className="text-[10px]" />
-                    <span>{t('radio:cw.backendCat', 'Radio keyer')}</span>
-                  </span>
-                )}
-              />
-              <Tab
-                key="serial"
-                title={(
-                  <span className="flex items-center gap-1">
-                    <FontAwesomeIcon icon={faPlug} className="text-[10px]" />
-                    <span>{t('radio:cw.backendSerial', 'Key jack')}</span>
-                  </span>
-                )}
-              />
-            </Tabs>
-          </div>
-        </div>
-
         <div className={embedded ? 'flex flex-1 min-h-0 flex-col' : undefined}>
           <div className="mb-2 flex items-center justify-between">
             <span className="text-sm font-medium text-default-600">
               {t('radio:cw.presetMessages', 'Presets')}
             </span>
-            <div className="flex items-center gap-1">
-              <span className="mr-1 text-xs text-default-400">{panel?.slotCount ?? 0}</span>
-              <Tooltip content={t('radio:cw.decreaseSlots', 'Remove slot')}>
-                <Button
-                  isIconOnly
-                  size="sm"
-                  variant="light"
-                  onPress={() => handleSlotCountChange(-1)}
-                  isDisabled={!canDecreaseSlots}
-                >
-                  <FontAwesomeIcon icon={faMinus} className="text-xs" />
-                </Button>
-              </Tooltip>
-              <Tooltip content={t('radio:cw.increaseSlots', 'Add slot')}>
-                <Button
-                  isIconOnly
-                  size="sm"
-                  variant="light"
-                  onPress={() => handleSlotCountChange(1)}
-                  isDisabled={!canIncreaseSlots}
-                >
-                  <FontAwesomeIcon icon={faPlus} className="text-xs" />
-                </Button>
-              </Tooltip>
-            </div>
+            {panelMode === 'edit' && (
+              <div className="flex items-center gap-1">
+                <span className="mr-1 text-xs text-default-400">{panel?.slotCount ?? 0}</span>
+                <Tooltip content={t('radio:cw.decreaseSlots', 'Remove slot')}>
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="light"
+                    onPress={() => handleSlotCountChange(-1)}
+                    isDisabled={!canDecreaseSlots}
+                  >
+                    <FontAwesomeIcon icon={faMinus} className="text-xs" />
+                  </Button>
+                </Tooltip>
+                <Tooltip content={t('radio:cw.increaseSlots', 'Add slot')}>
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="light"
+                    onPress={() => handleSlotCountChange(1)}
+                    isDisabled={!canIncreaseSlots}
+                  >
+                    <FontAwesomeIcon icon={faPlus} className="text-xs" />
+                  </Button>
+                </Tooltip>
+              </div>
+            )}
           </div>
 
           {panelLoading ? (
@@ -715,7 +734,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
                   {t('radio:cw.noMessages', 'No messages configured')}
                 </div>
               ) : panelMode === 'operate' ? (
-                <div className="grid w-full grid-cols-[repeat(auto-fit,minmax(min(100%,22rem),1fr))] gap-2">
+                <div className="flex w-full flex-col gap-1.5">
                   {visibleSlots.map((slot) => {
                     const active = activeSlotId === slot.id;
                     const transmitting = active && statusMode === 'playing';
@@ -731,11 +750,11 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
                         : 'bg-content2';
 
                     return (
-                      <div key={slot.id} className={`rounded-lg p-2 transition-colors ${activeToneClass}`}>
+                      <div key={slot.id} className={`flex items-center gap-1.5 rounded-lg p-1.5 transition-colors ${activeToneClass}`}>
                         <Button
                           color={transmitting ? 'danger' : active ? 'warning' : 'primary'}
                           variant={transmitting ? 'solid' : active ? 'flat' : 'solid'}
-                          className="relative h-16 w-full overflow-hidden rounded-md px-2 pt-1 pb-1.5"
+                          className="relative h-9 min-w-0 flex-1 overflow-hidden rounded-md px-2"
                           onPress={() => handlePlay(slot)}
                           isDisabled={!slot.text || (isActive && !active)}
                         >
@@ -752,121 +771,126 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
                               intervalSec={intervalValue}
                             />
                           )}
-                          <div className="relative z-10 flex w-full flex-col items-start gap-1 text-left">
-                            <div className="flex w-full items-center justify-between gap-1">
-                              <span className="font-mono text-xs font-semibold">
-                                {getShortcutLabel(shortcutPreset)}
-                              </span>
-                              <span className={`min-w-0 truncate text-right opacity-90 ${waiting ? 'font-mono text-sm font-semibold tabular-nums' : 'text-[11px] font-semibold'}`}>
-                                {waiting
-                                  ? remainingSeconds !== null ? `${remainingSeconds}s` : 'PTT'
-                                  : transmitting ? <FontAwesomeIcon icon={faStop} /> : slot.label}
-                              </span>
-                            </div>
-                            <span className="max-w-full truncate text-sm font-semibold">
+                          <div className="relative z-10 flex w-full min-w-0 items-center gap-2 text-left">
+                            <Chip
+                              size="sm"
+                              variant="flat"
+                              color={active ? (waiting ? 'warning' : 'danger') : 'default'}
+                              className="h-5 shrink-0 px-1 font-mono text-[10px] font-semibold"
+                            >
+                              {getShortcutLabel(shortcutPreset)}
+                            </Chip>
+                            <span className="min-w-0 flex-1 truncate font-mono text-xs font-semibold">
                               {slot.text || t('radio:cw.emptySlotHint', 'Edit this slot first')}
                             </span>
+                            <span className="max-w-[38%] shrink-0 truncate pr-3 text-right text-[11px] font-semibold opacity-90">
+                              {slot.label}
+                            </span>
+                            {active && (
+                              <span className={`shrink-0 opacity-90 ${waiting ? 'font-mono text-xs font-semibold tabular-nums' : 'text-[11px]'}`}>
+                                {waiting
+                                  ? remainingSeconds !== null ? `${remainingSeconds}s` : 'PTT'
+                                  : <FontAwesomeIcon icon={faStop} />}
+                              </span>
+                            )}
                           </div>
                         </Button>
-                        <div className="mt-2 flex items-center gap-1">
-                          <Button
-                            isIconOnly
-                            size="sm"
-                            color={slot.repeatEnabled ? 'warning' : 'default'}
-                            variant={slot.repeatEnabled ? 'solid' : 'flat'}
-                            aria-label={t('radio:cw.repeatToggle', 'Repeat toggle')}
-                            onPress={() => void handleRepeatToggle(slot)}
-                            isDisabled={!slot.text || (isActive && !active)}
-                            className="h-7 min-w-7 rounded-md"
-                          >
-                            <FontAwesomeIcon icon={slot.repeatEnabled ? faRepeat : faClock} className="text-xs" />
-                          </Button>
-                          <Input
-                            type="number"
-                            min={1}
-                            max={300}
-                            size="sm"
-                            variant="flat"
-                            value={String(intervalValue)}
-                            aria-label={t('radio:cw.repeatInterval', 'Interval (s)')}
-                            endContent={<span className="text-[11px] text-default-400">s</span>}
-                            classNames={{ inputWrapper: 'h-7 min-h-7 px-2', input: 'text-xs font-mono' }}
-                            onValueChange={(value) => handleRepeatIntervalChange(slot, value)}
-                            isDisabled={!slot.text || (isActive && !active)}
-                          />
-                        </div>
+                        <Button
+                          isIconOnly
+                          size="sm"
+                          color={slot.repeatEnabled ? 'warning' : 'default'}
+                          variant={slot.repeatEnabled ? 'solid' : 'flat'}
+                          aria-label={t('radio:cw.repeatToggle', 'Repeat toggle')}
+                          onPress={() => void handleRepeatToggle(slot)}
+                          isDisabled={!slot.text || (isActive && !active)}
+                          className="h-8 min-w-8 shrink-0 rounded-md"
+                        >
+                          <FontAwesomeIcon icon={slot.repeatEnabled ? faRepeat : faClock} className="text-xs" />
+                        </Button>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={300}
+                          size="sm"
+                          variant="flat"
+                          value={String(intervalValue)}
+                          aria-label={t('radio:cw.repeatInterval', 'Interval (s)')}
+                          endContent={<span className="text-[11px] text-default-400">s</span>}
+                          className="w-16 shrink-0"
+                          classNames={{ inputWrapper: 'h-8 min-h-8 px-2', input: 'text-xs font-mono' }}
+                          onValueChange={(value) => handleRepeatIntervalChange(slot, value)}
+                          isDisabled={!slot.text || (isActive && !active)}
+                        />
                       </div>
                     );
                   })}
                 </div>
               ) : (
-                <div className="grid w-full grid-cols-[repeat(auto-fit,minmax(min(100%,24rem),1fr))] gap-2">
+                <div className="flex w-full flex-col gap-1.5">
                   {visibleSlots.map((slot) => {
                     const shortcutPreset = slotShortcuts[slot.id] ?? CW_KEYER_SHORTCUT_NONE;
 
                     return (
-                      <div key={slot.id} className="rounded-lg bg-content2 p-2 transition-colors">
-                        <div className="flex items-center justify-between gap-2">
-                          <Select
-                            size="sm"
-                            variant="flat"
-                            aria-label={t('radio:cw.shortcutSelectAria', { slot: slot.index })}
-                            selectedKeys={[shortcutPreset]}
-                            onSelectionChange={(keys) => {
-                              const selected = Array.from(keys)[0] as CWKeyerShortcutPreset | undefined;
-                              if (selected) updateSlotShortcut(slot, selected);
-                            }}
-                            className="w-20"
-                            classNames={{ trigger: 'h-7 min-h-7 px-2', value: 'font-mono text-xs' }}
-                            isDisabled={isActive}
-                          >
-                            {CW_KEYER_SHORTCUT_PRESETS.map((preset) => (
-                              <SelectItem key={preset} textValue={getShortcutLabel(preset)}>
-                                {getShortcutLabel(preset)}
-                              </SelectItem>
-                            ))}
-                          </Select>
-                          <Button
-                            isIconOnly
-                            size="sm"
-                            variant="light"
-                            color="danger"
-                            aria-label={t('radio:cw.clearSlot', 'Clear')}
-                            onPress={() => void handleDeleteSlot(slot)}
-                            isDisabled={!slot.text || isActive}
-                            className="h-7 min-w-7 rounded-md"
-                          >
-                            <FontAwesomeIcon icon={faEraser} className="text-xs" />
-                          </Button>
-                        </div>
-                        <div className="mt-1 flex items-center gap-1">
-                          <FontAwesomeIcon icon={faPen} className="text-[10px] text-default-400" />
-                          <Input
-                            size="sm"
-                            variant="flat"
-                            value={slot.label}
-                            aria-label={t('radio:cw.messageLabel', 'Label')}
-                            maxLength={32}
-                            classNames={{ input: 'text-xs font-medium', inputWrapper: 'h-7 min-h-7 px-2' }}
-                            onValueChange={(value) => updateSlotLocal(slot.id, { label: value })}
-                            onBlur={(event) => void updateSlot(slot.id, { label: event.currentTarget.value })}
-                            isDisabled={isActive}
-                          />
-                        </div>
-                        <Textarea
+                      <div key={slot.id} className="flex items-center gap-1.5 rounded-lg bg-content2 p-1.5 transition-colors">
+                        <Select
+                          size="sm"
+                          variant="flat"
+                          aria-label={t('radio:cw.shortcutSelectAria', { slot: slot.index })}
+                          selectedKeys={[shortcutPreset]}
+                          onSelectionChange={(keys) => {
+                            const selected = Array.from(keys)[0] as CWKeyerShortcutPreset | undefined;
+                            if (selected) updateSlotShortcut(slot, selected);
+                          }}
+                          className="w-20 shrink-0"
+                          classNames={{
+                            trigger: 'h-8 min-h-8 rounded-full px-2 bg-default-100',
+                            value: 'font-mono text-[10px] font-semibold',
+                          }}
+                          isDisabled={isActive}
+                        >
+                          {CW_KEYER_SHORTCUT_PRESETS.map((preset) => (
+                            <SelectItem key={preset} textValue={getShortcutLabel(preset)}>
+                              {getShortcutLabel(preset)}
+                            </SelectItem>
+                          ))}
+                        </Select>
+                        <Input
                           size="sm"
                           variant="flat"
                           value={slot.text}
                           aria-label={t('radio:cw.messageText', 'Text')}
                           maxLength={500}
-                          minRows={2}
-                          className="mt-2"
-                          classNames={{ input: 'font-mono text-xs leading-4' }}
+                          className="min-w-0 flex-1"
+                          classNames={{ input: 'font-mono text-xs font-semibold', inputWrapper: 'h-8 min-h-8 px-2' }}
                           placeholder={t('radio:cw.messageTextPlaceholder', 'CQ CQ CQ DE {{callsign}}', { callsign: myCallsign })}
                           onValueChange={(value) => updateSlotLocal(slot.id, { text: value })}
                           onBlur={(event) => void updateSlot(slot.id, { text: event.currentTarget.value })}
                           isDisabled={isActive}
                         />
+                        <Input
+                          size="sm"
+                          variant="flat"
+                          value={slot.label}
+                          aria-label={t('radio:cw.messageLabel', 'Label')}
+                          maxLength={32}
+                          className="w-28 shrink-0"
+                          classNames={{ input: 'text-xs font-medium text-right', inputWrapper: 'h-8 min-h-8 pl-2 pr-4' }}
+                          onValueChange={(value) => updateSlotLocal(slot.id, { label: value })}
+                          onBlur={(event) => void updateSlot(slot.id, { label: event.currentTarget.value })}
+                          isDisabled={isActive}
+                        />
+                        <Button
+                          isIconOnly
+                          size="sm"
+                          variant="light"
+                          color="danger"
+                          aria-label={t('radio:cw.clearSlot', 'Clear')}
+                          onPress={() => void handleDeleteSlot(slot)}
+                          isDisabled={!slot.text || isActive}
+                          className="h-8 min-w-8 shrink-0 rounded-md"
+                        >
+                          <FontAwesomeIcon icon={faEraser} className="text-xs" />
+                        </Button>
                       </div>
                     );
                   })}
