@@ -315,10 +315,12 @@ export async function radioRoutes(fastify: FastifyInstance) {
   fastify.get('/last-frequency', async (_req, reply) => {
     const lastFrequency = configManager.getLastSelectedFrequency();
     const lastVoiceFrequency = configManager.getLastVoiceFrequency();
+    const lastCWFrequency = configManager.getLastCWFrequency();
     return reply.send({
       success: true,
       lastFrequency,
       lastVoiceFrequency,
+      lastCWFrequency,
     });
   });
 
