@@ -44,6 +44,14 @@
     "sameTransmissionLimit": {
       "title": "Stopped: repeated message",
       "description": "Operator {{operatorId}} was stopped before sending the same message again (attempt {{attemptedCount}}, limit {{maxCount}}) to avoid repeatedly occupying the frequency: {{transmission}}"
+    },
+    "repeaterDuplexUnsupported": {
+      "title": "Repeater DUP not applied",
+      "description": "Switched to {{frequency}} MHz, but this radio does not support repeater DUP control or the DUP setting failed. {{reason}}"
+    },
+    "toneSquelchUnsupported": {
+      "title": "Tone squelch not applied",
+      "description": "Switched to {{frequency}} MHz, but this radio does not support tone squelch control or the tone setting failed. {{reason}}"
     }
   }
 }

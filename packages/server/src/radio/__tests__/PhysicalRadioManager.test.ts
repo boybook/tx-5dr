@@ -724,6 +724,190 @@ describe('PhysicalRadioManager', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('applies repeater offset before repeater shift for DUP presets', async () => {
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+    asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
+    };
+    vi.spyOn(asTestManager(manager).capabilityManager, 'getCapabilitySnapshot').mockReturnValue({
+      descriptors: [
+        { id: 'repeater_offset', writable: true },
+        { id: 'repeater_shift', writable: true },
+      ],
+      capabilities: [
+        { id: 'repeater_offset', supported: true, value: 0, updatedAt: 1 },
+        { id: 'repeater_shift', supported: true, value: 'none', updatedAt: 1 },
+      ],
+    } as any);
+    const writeCapability = vi.spyOn(asTestManager(manager).capabilityManager, 'writeCapability').mockResolvedValue(undefined);
+
+    const result = await manager.applyRepeaterDuplexConfig({
+      repeaterShift: 'plus',
+      repeaterOffsetHz: 600000,
+    });
+
+    expect(result).toMatchObject({ requested: true, applied: true, skipped: false });
+    expect(writeCapability).toHaveBeenNthCalledWith(1, 'repeater_offset', 600000);
+    expect(writeCapability).toHaveBeenNthCalledWith(2, 'repeater_shift', 'plus');
+  });
+
+  it('clears repeater shift for simplex or digital operating states', async () => {
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+    asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
+    };
+    vi.spyOn(asTestManager(manager).capabilityManager, 'getCapabilitySnapshot').mockReturnValue({
+      descriptors: [
+        { id: 'repeater_shift', writable: true },
+      ],
+      capabilities: [
+        { id: 'repeater_shift', supported: true, value: 'plus', updatedAt: 1 },
+      ],
+    } as any);
+    const writeCapability = vi.spyOn(asTestManager(manager).capabilityManager, 'writeCapability').mockResolvedValue(undefined);
+
+    const result = await manager.applyRepeaterDuplexConfig({ repeaterShift: 'none' });
+
+    expect(result).toMatchObject({ requested: false, applied: true, skipped: false });
+    expect(writeCapability).toHaveBeenCalledWith('repeater_shift', 'none');
+  });
+
+  it('reports unsupported DUP without failing the frequency operation', async () => {
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+    asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
+    };
+    vi.spyOn(asTestManager(manager).capabilityManager, 'getCapabilitySnapshot').mockReturnValue({
+      descriptors: [
+        { id: 'repeater_shift', writable: true },
+      ],
+      capabilities: [
+        { id: 'repeater_shift', supported: true, value: 'none', updatedAt: 1 },
+      ],
+    } as any);
+    const writeCapability = vi.spyOn(asTestManager(manager).capabilityManager, 'writeCapability');
+
+    const result = await manager.applyRepeaterDuplexConfig({
+      repeaterShift: 'minus',
+      repeaterOffsetHz: 600000,
+    });
+
+    expect(result).toMatchObject({
+      requested: true,
+      applied: false,
+      skipped: true,
+      warning: 'unsupported',
+    });
+    expect(writeCapability).not.toHaveBeenCalled();
+  });
+
+  it('clears DCS before applying a CTCSS tone preset', async () => {
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+    asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
+    };
+    vi.spyOn(asTestManager(manager).capabilityManager, 'getCapabilitySnapshot').mockReturnValue({
+      descriptors: [
+        { id: 'ctcss_tone', writable: true },
+        { id: 'dcs_code', writable: true },
+      ],
+      capabilities: [
+        { id: 'ctcss_tone', supported: true, value: 0, updatedAt: 1 },
+        { id: 'dcs_code', supported: true, value: 23, updatedAt: 1 },
+      ],
+    } as any);
+    const writeCapability = vi.spyOn(asTestManager(manager).capabilityManager, 'writeCapability').mockResolvedValue(undefined);
+
+    const result = await manager.applyToneSquelchConfig({
+      toneMode: 'ctcss',
+      ctcssToneTenthsHz: 885,
+    });
+
+    expect(result).toMatchObject({ requested: true, applied: true, skipped: false });
+    expect(writeCapability).toHaveBeenNthCalledWith(1, 'dcs_code', 0);
+    expect(writeCapability).toHaveBeenNthCalledWith(2, 'ctcss_tone', 885);
+  });
+
+  it('clears CTCSS before applying a DCS code preset', async () => {
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+    asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
+    };
+    vi.spyOn(asTestManager(manager).capabilityManager, 'getCapabilitySnapshot').mockReturnValue({
+      descriptors: [
+        { id: 'ctcss_tone', writable: true },
+        { id: 'dcs_code', writable: true },
+      ],
+      capabilities: [
+        { id: 'ctcss_tone', supported: true, value: 885, updatedAt: 1 },
+        { id: 'dcs_code', supported: true, value: 0, updatedAt: 1 },
+      ],
+    } as any);
+    const writeCapability = vi.spyOn(asTestManager(manager).capabilityManager, 'writeCapability').mockResolvedValue(undefined);
+
+    const result = await manager.applyToneSquelchConfig({
+      toneMode: 'dcs',
+      dcsCode: 23,
+    });
+
+    expect(result).toMatchObject({ requested: true, applied: true, skipped: false });
+    expect(writeCapability).toHaveBeenNthCalledWith(1, 'ctcss_tone', 0);
+    expect(writeCapability).toHaveBeenNthCalledWith(2, 'dcs_code', 23);
+  });
+
+  it('clears CTCSS and DCS for no-tone operating states', async () => {
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+    asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
+    };
+    vi.spyOn(asTestManager(manager).capabilityManager, 'getCapabilitySnapshot').mockReturnValue({
+      descriptors: [
+        { id: 'ctcss_tone', writable: true },
+        { id: 'dcs_code', writable: true },
+      ],
+      capabilities: [
+        { id: 'ctcss_tone', supported: true, value: 885, updatedAt: 1 },
+        { id: 'dcs_code', supported: true, value: 23, updatedAt: 1 },
+      ],
+    } as any);
+    const writeCapability = vi.spyOn(asTestManager(manager).capabilityManager, 'writeCapability').mockResolvedValue(undefined);
+
+    const result = await manager.applyToneSquelchConfig({ toneMode: 'none' });
+
+    expect(result).toMatchObject({ requested: false, applied: true, skipped: false });
+    expect(writeCapability).toHaveBeenNthCalledWith(1, 'ctcss_tone', 0);
+    expect(writeCapability).toHaveBeenNthCalledWith(2, 'dcs_code', 0);
+  });
+
+  it('reports unsupported tone squelch without failing the frequency operation', async () => {
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+    asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
+    };
+    vi.spyOn(asTestManager(manager).capabilityManager, 'getCapabilitySnapshot').mockReturnValue({
+      descriptors: [
+        { id: 'dcs_code', writable: true },
+      ],
+      capabilities: [
+        { id: 'dcs_code', supported: true, value: 0, updatedAt: 1 },
+      ],
+    } as any);
+    const writeCapability = vi.spyOn(asTestManager(manager).capabilityManager, 'writeCapability');
+
+    const result = await manager.applyToneSquelchConfig({
+      toneMode: 'ctcss',
+      ctcssToneTenthsHz: 885,
+    });
+
+    expect(result).toMatchObject({
+      requested: true,
+      applied: false,
+      skipped: true,
+      warning: 'unsupported',
+    });
+    expect(writeCapability).not.toHaveBeenCalled();
+  });
+
   it('routes tuner action capability writes through the manager tuning flow', async () => {
     asTestManager(manager).connection = {};
     vi.spyOn(manager, 'isConnected').mockReturnValue(true);

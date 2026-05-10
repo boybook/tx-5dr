@@ -902,6 +902,11 @@ export const api = {
       band?: string;
       description?: string;
       radioMode?: string;
+      repeaterShift?: 'none' | 'minus' | 'plus';
+      repeaterOffsetHz?: number;
+      toneMode?: 'none' | 'ctcss' | 'dcs';
+      ctcssToneTenthsHz?: number;
+      dcsCode?: number;
     },
     apiBase?: string
   ): Promise<SetFrequencyResponse> {

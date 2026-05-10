@@ -589,7 +589,30 @@
     "presetCount": "{{count}} presets",
     "loadFailed": "Failed to load frequency presets",
     "saveFailed": "Failed to save frequency presets",
-    "deleteFailed": "Failed to delete frequency preset"
+    "deleteFailed": "Failed to delete frequency preset",
+    "repeaterDuplex": "Repeater DUP",
+    "repeaterShift": "TX Offset Direction",
+    "repeaterOffsetKHz": "TX Offset (kHz)",
+    "repeaterOffsetPlaceholder": "e.g. 600 or 5000",
+    "repeaterOffsetDisabled": "No offset needed when DUP is off",
+    "invalidRepeaterOffset": "Please enter a valid TX offset",
+    "toneSquelch": "Tone Squelch",
+    "ctcssTone": "CTCSS Tone",
+    "ctcssTonePlaceholder": "Select CTCSS tone",
+    "dcsCode": "DCS Code",
+    "dcsCodePlaceholder": "Select DCS code",
+    "invalidCtcssTone": "Please select a valid CTCSS tone",
+    "invalidDcsCode": "Please select a valid DCS code",
+    "repeaterShiftOptions": {
+      "none": "None",
+      "minus": "Minus",
+      "plus": "Plus"
+    },
+    "toneSquelchOptions": {
+      "none": "No tone",
+      "ctcss": "CTCSS Tone",
+      "dcs": "DCS Code"
+    }
   },
   "clock": {
     "title": "Clock Calibration",

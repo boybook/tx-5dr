@@ -589,7 +589,30 @@
     "presetCount": "共 {{count}} 个预设",
     "loadFailed": "加载频率预设失败",
     "saveFailed": "保存频率预设失败",
-    "deleteFailed": "删除频率预设失败"
+    "deleteFailed": "删除频率预设失败",
+    "repeaterDuplex": "中继频偏",
+    "repeaterShift": "发射频偏方向",
+    "repeaterOffsetKHz": "发射频偏频率 (kHz)",
+    "repeaterOffsetPlaceholder": "例如: 600 或 5000",
+    "repeaterOffsetDisabled": "无频偏时无需填写",
+    "invalidRepeaterOffset": "请输入有效的发射频偏频率",
+    "toneSquelch": "哑音",
+    "ctcssTone": "模拟哑音频率",
+    "ctcssTonePlaceholder": "选择 CTCSS 频率",
+    "dcsCode": "数字哑音码",
+    "dcsCodePlaceholder": "选择 DCS 码",
+    "invalidCtcssTone": "请选择有效的模拟哑音频率",
+    "invalidDcsCode": "请选择有效的数字哑音码",
+    "repeaterShiftOptions": {
+      "none": "无",
+      "minus": "负频偏",
+      "plus": "正频偏"
+    },
+    "toneSquelchOptions": {
+      "none": "无哑音",
+      "ctcss": "模拟哑音 CTCSS",
+      "dcs": "数字哑音 DCS"
+    }
   },
   "clock": {
     "title": "时钟校准",

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import {
   Button,
   Chip,
@@ -24,6 +25,7 @@ import type { PresetFrequency } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
 import { createLogger } from '../../utils/logger';
 import { FrequencyPresetAddModal } from './FrequencyPresetAddModal';
+import { formatToneSquelch } from '../../utils/toneSquelch';
 
 const logger = createLogger('FrequencyPresetSettings');
 
@@ -39,6 +41,16 @@ interface FrequencyPresetSettingsProps {
 
 const FILTER_ALL = '__all__';
 const CUSTOM_BAND = 'custom';
+
+function formatRepeaterDuplex(preset: PresetFrequency, t: TFunction): string {
+  const shift = preset.repeaterShift ?? 'none';
+  if (preset.mode !== 'VOICE' || preset.radioMode !== 'FM' || shift === 'none' || !preset.repeaterOffsetHz) {
+    return t('freqPresets.repeaterShiftOptions.none');
+  }
+
+  const sign = shift === 'plus' ? '+' : '-';
+  return `${sign}${preset.repeaterOffsetHz / 1_000} kHz`;
+}
 
 function notifyFrequencyPresetsUpdated(): void {
   window.dispatchEvent(new CustomEvent('frequencyPresetsUpdated'));
@@ -289,6 +301,8 @@ export const FrequencyPresetSettings = forwardRef<
       { key: 'band', label: t('freqPresets.band') },
       ...(modeFilter === FILTER_ALL ? [{ key: 'mode', label: t('freqPresets.mode') }] : []),
       { key: 'frequency', label: t('freqPresets.frequencyMHz') },
+      { key: 'repeaterDuplex', label: t('freqPresets.repeaterDuplex') },
+      { key: 'toneSquelch', label: t('freqPresets.toneSquelch') },
       { key: 'description', label: t('freqPresets.descriptionLabel') },
       { key: 'actions', label: '' },
     ];
@@ -345,6 +359,10 @@ export const FrequencyPresetSettings = forwardRef<
                     );
                   case 'frequency':
                     return <TableCell className="font-mono">{formatFrequency(preset.frequency)}</TableCell>;
+                  case 'repeaterDuplex':
+                    return <TableCell className="font-mono text-xs text-default-500">{formatRepeaterDuplex(preset, t)}</TableCell>;
+                  case 'toneSquelch':
+                    return <TableCell className="font-mono text-xs text-default-500">{preset.mode === 'VOICE' && preset.radioMode === 'FM' ? formatToneSquelch(preset, t) : t('freqPresets.toneSquelchOptions.none')}</TableCell>;
                   case 'description':
                     return <TableCell className="text-default-500">{preset.description || ''}</TableCell>;
                   case 'actions':

@@ -1,4 +1,4 @@
-import type { PSKReporterStats } from '@tx5dr/contracts';
+import type { PSKReporterStats, RepeaterShift, ToneSquelchMode } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 import { JsonFileStore, PersistenceCoordinator } from '../utils/persistence/index.js';
 import { createLogger } from '../utils/logger.js';
@@ -18,6 +18,11 @@ export interface LastVoiceFrequencyState {
   radioMode?: string;
   band: string;
   description?: string;
+  repeaterShift?: RepeaterShift;
+  repeaterOffsetHz?: number;
+  toneMode?: ToneSquelchMode;
+  ctcssToneTenthsHz?: number;
+  dcsCode?: number;
 }
 
 export interface RuntimeState {

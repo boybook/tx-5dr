@@ -115,6 +115,17 @@ export const DisconnectRadioResponseSchema = z.object({
 export const LastFrequencyResponseSchema = z.object({
   success: z.boolean(),
   lastFrequency: PresetFrequencySchema.nullable(),
+  lastVoiceFrequency: z.object({
+    frequency: z.number(),
+    radioMode: z.string().optional(),
+    band: z.string(),
+    description: z.string().optional(),
+    repeaterShift: z.enum(['none', 'minus', 'plus']).optional(),
+    repeaterOffsetHz: z.number().optional(),
+    toneMode: z.enum(['none', 'ctcss', 'dcs']).optional(),
+    ctcssToneTenthsHz: z.number().optional(),
+    dcsCode: z.number().optional(),
+  }).nullable().optional(),
 });
 
 /**
@@ -127,6 +138,11 @@ export const SetFrequencyResponseSchema = z.object({
   mode: z.string().optional(),
   band: z.string().optional(),
   radioMode: z.string().optional(),
+  repeaterShift: z.enum(['none', 'minus', 'plus']).optional(),
+  repeaterOffsetHz: z.number().optional(),
+  toneMode: z.enum(['none', 'ctcss', 'dcs']).optional(),
+  ctcssToneTenthsHz: z.number().optional(),
+  dcsCode: z.number().optional(),
   radioConnected: z.boolean().optional(),
 });
 

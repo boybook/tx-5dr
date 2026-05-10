@@ -13,7 +13,7 @@ import {
   type RigctldBridgeConfig,
   UpdateNtpServerListRequestSchema,
 } from '@tx5dr/contracts';
-import type { RadioProfile, DecodeWindowSettings, PresetFrequency, StationInfo, OpenWebRXStationConfig, PluginsConfig } from '@tx5dr/contracts';
+import type { RadioProfile, DecodeWindowSettings, PresetFrequency, RepeaterShift, ToneSquelchMode, StationInfo, OpenWebRXStationConfig, PluginsConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
@@ -66,6 +66,11 @@ export interface AppConfig {
     radioMode?: string;
     band: string;
     description?: string;
+    repeaterShift?: RepeaterShift;
+    repeaterOffsetHz?: number;
+    toneMode?: ToneSquelchMode;
+    ctcssToneTenthsHz?: number;
+    dcsCode?: number;
   } | null;
   // 最后设置的音量增益（旧版全局值，保留用于迁移）
   lastVolumeGain: {
@@ -294,6 +299,21 @@ export function validateAppConfigCandidate(value: unknown): Record<string, unkno
     if (value.lastVoiceFrequency.band !== undefined && typeof value.lastVoiceFrequency.band !== 'string') {
       throw new Error('config.lastVoiceFrequency.band must be a string');
     }
+    if (
+      value.lastVoiceFrequency.repeaterShift !== undefined
+      && !['none', 'minus', 'plus'].includes(String(value.lastVoiceFrequency.repeaterShift))
+    ) {
+      throw new Error('config.lastVoiceFrequency.repeaterShift must be none, minus, or plus');
+    }
+    assertOptionalFiniteNumber(value.lastVoiceFrequency, 'repeaterOffsetHz');
+    if (
+      value.lastVoiceFrequency.toneMode !== undefined
+      && !['none', 'ctcss', 'dcs'].includes(String(value.lastVoiceFrequency.toneMode))
+    ) {
+      throw new Error('config.lastVoiceFrequency.toneMode must be none, ctcss, or dcs');
+    }
+    assertOptionalFiniteNumber(value.lastVoiceFrequency, 'ctcssToneTenthsHz');
+    assertOptionalFiniteNumber(value.lastVoiceFrequency, 'dcsCode');
   }
   if (isPlainObject(value.lastVolumeGain)) {
     assertOptionalFiniteNumber(value.lastVolumeGain, 'gain');
@@ -1056,6 +1076,11 @@ export class ConfigManager {
     radioMode?: string;
     band: string;
     description?: string;
+    repeaterShift?: RepeaterShift;
+    repeaterOffsetHz?: number;
+    toneMode?: ToneSquelchMode;
+    ctcssToneTenthsHz?: number;
+    dcsCode?: number;
   }): Promise<void> {
     await this.setRuntimeValue('lastVoiceFrequency', { ...frequencyConfig });
     logger.debug(`Last voice frequency saved: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);

@@ -33,7 +33,13 @@ import { SpectrumScheduler } from './audio/SpectrumScheduler.js';
 import { AudioMixer } from './audio/AudioMixer.js';
 import { RadioOperatorManager } from './operator/RadioOperatorManager.js';
 import { printAppPaths } from './utils/debug-paths.js';
-import { PhysicalRadioManager } from './radio/PhysicalRadioManager.js';
+import {
+  PhysicalRadioManager,
+  type RepeaterDuplexApplyResult,
+  type RepeaterDuplexConfig,
+  type ToneSquelchApplyResult,
+  type ToneSquelchConfig,
+} from './radio/PhysicalRadioManager.js';
 import { FrequencyManager } from './radio/FrequencyManager.js';
 import { TransmissionTracker } from './transmission/TransmissionTracker.js';
 import type { OpenWebRXAudioAdapter } from './openwebrx/OpenWebRXAudioAdapter.js';
@@ -1012,6 +1018,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       if (applyResult.modeError) {
         logger.warn(`Switched digital frequency but failed to set radio mode: ${applyResult.modeError.message}`);
       }
+
+      await this.applyRepeaterDuplexConfigWithWarning(
+        { repeaterShift: 'none' },
+        preset.frequency,
+        false,
+      );
+      await this.applyToneSquelchConfigWithWarning(
+        { toneMode: 'none' },
+        preset.frequency,
+        false,
+      );
     } else {
       logger.debug(`Radio not connected, recording nearest digital preset: ${description}`);
     }
@@ -1034,6 +1051,60 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       radioConnected,
       source: 'program',
     });
+  }
+
+  private async applyRepeaterDuplexConfigWithWarning(
+    config: RepeaterDuplexConfig,
+    frequency: number,
+    warnOnFailure: boolean,
+  ): Promise<RepeaterDuplexApplyResult | null> {
+    if (!this.radioManager.isConnected()) {
+      return null;
+    }
+
+    const result = await this.radioManager.applyRepeaterDuplexConfig(config);
+    if (warnOnFailure && result.warning) {
+      this.emit('textMessage', {
+        title: 'Repeater DUP not applied',
+        text: result.message || 'Radio does not support repeater DUP control',
+        color: 'warning',
+        timeout: 5000,
+        key: 'repeaterDuplexUnsupported',
+        params: {
+          frequency: (frequency / 1_000_000).toFixed(3),
+          reason: result.message || '',
+        },
+      });
+    }
+
+    return result;
+  }
+
+  private async applyToneSquelchConfigWithWarning(
+    config: ToneSquelchConfig,
+    frequency: number,
+    warnOnFailure: boolean,
+  ): Promise<ToneSquelchApplyResult | null> {
+    if (!this.radioManager.isConnected()) {
+      return null;
+    }
+
+    const result = await this.radioManager.applyToneSquelchConfig(config);
+    if (warnOnFailure && result.warning) {
+      this.emit('textMessage', {
+        title: 'Tone squelch not applied',
+        text: result.message || 'Radio does not support tone squelch control',
+        color: 'warning',
+        timeout: 5000,
+        key: 'toneSquelchUnsupported',
+        params: {
+          frequency: (frequency / 1_000_000).toFixed(3),
+          reason: result.message || '',
+        },
+      });
+    }
+
+    return result;
   }
 
   private isValidFrequency(frequency: number | null | undefined): frequency is number {
@@ -1133,6 +1204,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       if (applyResult.modeError) {
         logger.warn(`Restored last voice frequency but failed to set radio mode: ${applyResult.modeError.message}`);
       }
+
+      const supportsFmOptions = lastVoice.radioMode?.toUpperCase() === 'FM';
+      await this.applyRepeaterDuplexConfigWithWarning({
+        repeaterShift: supportsFmOptions ? (lastVoice.repeaterShift ?? 'none') : 'none',
+        repeaterOffsetHz: supportsFmOptions ? lastVoice.repeaterOffsetHz : undefined,
+      }, lastVoice.frequency, supportsFmOptions && (lastVoice.repeaterShift === 'minus' || lastVoice.repeaterShift === 'plus'));
+      await this.applyToneSquelchConfigWithWarning({
+        toneMode: supportsFmOptions ? (lastVoice.toneMode ?? 'none') : 'none',
+        ctcssToneTenthsHz: supportsFmOptions ? lastVoice.ctcssToneTenthsHz : undefined,
+        dcsCode: supportsFmOptions ? lastVoice.dcsCode : undefined,
+      }, lastVoice.frequency, supportsFmOptions && (lastVoice.toneMode === 'ctcss' || lastVoice.toneMode === 'dcs'));
 
       const band = lastVoice.band || this.resolveBandLabel(lastVoice.frequency);
       const description = lastVoice.description || `${(lastVoice.frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;

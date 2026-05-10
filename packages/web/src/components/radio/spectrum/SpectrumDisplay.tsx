@@ -738,6 +738,8 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         band: 'Custom',
         description: `${(snappedFrequency / 1_000_000).toFixed(3)} MHz`,
         radioMode: nextRadioMode,
+        repeaterShift: 'none',
+        toneMode: 'none',
       });
       if (response.success) {
         resetOperatorsAfterOperatingStateChange();

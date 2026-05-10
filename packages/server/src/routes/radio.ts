@@ -17,6 +17,7 @@ import type { HamlibConfig } from '@tx5dr/contracts';
 import serialport from 'serialport';
 const { SerialPort } = serialport;
 import { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
+import type { RepeaterDuplexApplyResult, RepeaterDuplexConfig, ToneSquelchApplyResult, ToneSquelchConfig } from '../radio/PhysicalRadioManager.js';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
 import type { SetRadioModeOptions } from '../radio/connections/IRadioConnection.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
@@ -68,6 +69,133 @@ function inferModeOptions(appMode: string | undefined, engineMode: 'digital' | '
   }
 
   return { intent: engineMode === 'voice' ? 'voice' : 'digital' };
+}
+
+function parseRepeaterDuplexConfig(repeaterShift: unknown, repeaterOffsetHz: unknown): RepeaterDuplexConfig {
+  const shift = repeaterShift === undefined || repeaterShift === null || repeaterShift === ''
+    ? 'none'
+    : String(repeaterShift);
+
+  if (shift !== 'none' && shift !== 'minus' && shift !== 'plus') {
+    throw new RadioError({
+      code: RadioErrorCode.INVALID_CONFIG,
+      message: `Invalid repeater shift value: ${shift}`,
+      userMessage: 'Invalid repeater shift value',
+      severity: RadioErrorSeverity.WARNING,
+      suggestions: ['Use none, minus, or plus for repeaterShift'],
+    });
+  }
+
+  if (shift === 'none') {
+    return { repeaterShift: 'none' };
+  }
+
+  const offset = Number(repeaterOffsetHz);
+  if (!Number.isFinite(offset) || offset <= 0) {
+    throw new RadioError({
+      code: RadioErrorCode.INVALID_CONFIG,
+      message: `Invalid repeater offset value: ${repeaterOffsetHz}`,
+      userMessage: 'Invalid repeater offset value',
+      severity: RadioErrorSeverity.WARNING,
+      suggestions: ['Provide repeaterOffsetHz as a positive number in Hz'],
+    });
+  }
+
+  return { repeaterShift: shift, repeaterOffsetHz: Math.round(offset) };
+}
+
+function emitRepeaterDuplexWarning(
+  engine: DigitalRadioEngine,
+  result: RepeaterDuplexApplyResult,
+  frequency: number,
+): void {
+  if (!result.warning) {
+    return;
+  }
+
+  engine.emit('textMessage', {
+    title: 'Repeater DUP not applied',
+    text: result.message || 'Radio does not support repeater DUP control',
+    color: 'warning',
+    timeout: 5000,
+    key: 'repeaterDuplexUnsupported',
+    params: {
+      frequency: (frequency / 1_000_000).toFixed(3),
+      reason: result.message || '',
+    },
+  });
+}
+
+function parseToneSquelchConfig(
+  toneMode: unknown,
+  ctcssToneTenthsHz: unknown,
+  dcsCode: unknown,
+): ToneSquelchConfig {
+  const mode = toneMode === undefined || toneMode === null || toneMode === ''
+    ? 'none'
+    : String(toneMode);
+
+  if (mode !== 'none' && mode !== 'ctcss' && mode !== 'dcs') {
+    throw new RadioError({
+      code: RadioErrorCode.INVALID_CONFIG,
+      message: `Invalid tone mode value: ${mode}`,
+      userMessage: 'Invalid tone squelch mode',
+      severity: RadioErrorSeverity.WARNING,
+      suggestions: ['Use none, ctcss, or dcs for toneMode'],
+    });
+  }
+
+  if (mode === 'none') {
+    return { toneMode: 'none' };
+  }
+
+  if (mode === 'ctcss') {
+    const tone = Number(ctcssToneTenthsHz);
+    if (!Number.isInteger(tone) || tone <= 0) {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_CONFIG,
+        message: `Invalid CTCSS tone value: ${ctcssToneTenthsHz}`,
+        userMessage: 'Invalid CTCSS tone value',
+        severity: RadioErrorSeverity.WARNING,
+        suggestions: ['Select a valid CTCSS tone'],
+      });
+    }
+    return { toneMode: 'ctcss', ctcssToneTenthsHz: tone };
+  }
+
+  const code = Number(dcsCode);
+  if (!Number.isInteger(code) || code <= 0) {
+    throw new RadioError({
+      code: RadioErrorCode.INVALID_CONFIG,
+      message: `Invalid DCS code value: ${dcsCode}`,
+      userMessage: 'Invalid DCS code value',
+      severity: RadioErrorSeverity.WARNING,
+      suggestions: ['Select a valid DCS code'],
+    });
+  }
+  return { toneMode: 'dcs', dcsCode: code };
+}
+
+function emitToneSquelchWarning(
+  engine: DigitalRadioEngine,
+  result: ToneSquelchApplyResult,
+  frequency: number,
+): void {
+  if (!result.warning) {
+    return;
+  }
+
+  engine.emit('textMessage', {
+    title: 'Tone squelch not applied',
+    text: result.message || 'Radio does not support tone squelch control',
+    color: 'warning',
+    timeout: 5000,
+    key: 'toneSquelchUnsupported',
+    params: {
+      frequency: (frequency / 1_000_000).toFixed(3),
+      reason: result.message || '',
+    },
+  });
 }
 
 export async function radioRoutes(fastify: FastifyInstance) {
@@ -196,12 +324,28 @@ export async function radioRoutes(fastify: FastifyInstance) {
   fastify.post('/frequency', {
     preHandler: [requireAbilityFor('execute', 'RadioFrequency', (r) => ({ frequency: (r.body as any).frequency }))],
   }, async (req, reply) => {
-    const { frequency, radioMode, mode, band, description } = req.body as {
+    const {
+      frequency,
+      radioMode,
+      mode,
+      band,
+      description,
+      repeaterShift,
+      repeaterOffsetHz,
+      toneMode,
+      ctcssToneTenthsHz,
+      dcsCode,
+    } = req.body as {
       frequency: number;
       radioMode?: string;
       mode?: string;
       band?: string;
       description?: string;
+      repeaterShift?: string;
+      repeaterOffsetHz?: number;
+      toneMode?: string;
+      ctcssToneTenthsHz?: number;
+      dcsCode?: number;
     };
     if (!frequency || typeof frequency !== 'number') {
       throw new RadioError({
@@ -215,6 +359,15 @@ export async function radioRoutes(fastify: FastifyInstance) {
         ],
       });
     }
+
+    const isVoiceFrequencyRequest = mode === 'VOICE' || (!mode && engine.getEngineMode() === 'voice');
+    const isVoiceFmFrequencyRequest = isVoiceFrequencyRequest && radioMode?.toUpperCase() === 'FM';
+    const repeaterDuplexToApply: RepeaterDuplexConfig = isVoiceFmFrequencyRequest
+      ? parseRepeaterDuplexConfig(repeaterShift, repeaterOffsetHz)
+      : { repeaterShift: 'none' };
+    const toneSquelchToApply: ToneSquelchConfig = isVoiceFmFrequencyRequest
+      ? parseToneSquelchConfig(toneMode, ctcssToneTenthsHz, dcsCode)
+      : { toneMode: 'none' };
 
     // 获取当前频率配置，用于判断是否真正改变
     const lastFrequency = configManager.getLastSelectedFrequency();
@@ -238,6 +391,11 @@ export async function radioRoutes(fastify: FastifyInstance) {
             radioMode,
             band,
             description,
+            repeaterShift: repeaterDuplexToApply.repeaterShift,
+            repeaterOffsetHz: repeaterDuplexToApply.repeaterOffsetHz,
+            toneMode: toneSquelchToApply.toneMode,
+            ctcssToneTenthsHz: toneSquelchToApply.ctcssToneTenthsHz,
+            dcsCode: toneSquelchToApply.dcsCode,
           });
         } else {
           await configManager.updateLastSelectedFrequency({
@@ -277,6 +435,11 @@ export async function radioRoutes(fastify: FastifyInstance) {
         success: true,
         frequency,
         radioMode,
+        repeaterShift: repeaterDuplexToApply.repeaterShift,
+        repeaterOffsetHz: repeaterDuplexToApply.repeaterOffsetHz,
+        toneMode: toneSquelchToApply.toneMode,
+        ctcssToneTenthsHz: toneSquelchToApply.ctcssToneTenthsHz,
+        dcsCode: toneSquelchToApply.dcsCode,
         message: 'Frequency recorded (radio not connected)',
         radioConnected: false
       });
@@ -311,6 +474,16 @@ export async function radioRoutes(fastify: FastifyInstance) {
       // 模式设置失败不影响频率设置的成功
     }
 
+    const repeaterDuplexResult = await radioManager.applyRepeaterDuplexConfig(repeaterDuplexToApply);
+    if (repeaterDuplexToApply.repeaterShift !== 'none') {
+      emitRepeaterDuplexWarning(engine, repeaterDuplexResult, frequency);
+    }
+
+    const toneSquelchResult = await radioManager.applyToneSquelchConfig(toneSquelchToApply);
+    if (toneSquelchToApply.toneMode !== 'none') {
+      emitToneSquelchWarning(engine, toneSquelchResult, frequency);
+    }
+
     // 只有在频率真正改变时才清空缓存和广播
     if (isFrequencyChanged) {
       // 基础动作：立即清空服务端内存中的历史接收缓存
@@ -337,6 +510,11 @@ export async function radioRoutes(fastify: FastifyInstance) {
       success: true,
       frequency,
       radioMode,
+      repeaterShift: repeaterDuplexToApply.repeaterShift,
+      repeaterOffsetHz: repeaterDuplexToApply.repeaterOffsetHz,
+      toneMode: toneSquelchToApply.toneMode,
+      ctcssToneTenthsHz: toneSquelchToApply.ctcssToneTenthsHz,
+      dcsCode: toneSquelchToApply.dcsCode,
       message: radioMode ? `Frequency and mode set successfully (${radioMode})` : 'Frequency set successfully',
       radioConnected: true
     });

@@ -109,15 +109,15 @@ export function buildDiscreteNumberOptions(
 }
 
 export function buildCtcssToneOptions(tones: number[]): CapabilityOption[] {
-  return uniqueSortedNumbers(tones)
+  return [0, ...uniqueSortedNumbers(tones)
     .filter((tone) => tone > 0)
-    .map((tone) => createOption(tone));
+  ].map((tone) => createOption(tone));
 }
 
 export function buildDcsCodeOptions(codes: number[]): CapabilityOption[] {
-  return uniqueSortedNumbers(codes)
+  return [0, ...uniqueSortedNumbers(codes)
     .filter((code) => code > 0)
-    .map((code) => createOption(code));
+  ].map((code) => createOption(code));
 }
 
 export function buildDbValueOptions(values: number[], offLabelI18nKey: string): CapabilityOption[] {

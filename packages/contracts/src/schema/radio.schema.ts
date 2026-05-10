@@ -1,6 +1,16 @@
 import { z } from 'zod';
 
 /**
+ * 中继差频方向
+ */
+export const RepeaterShiftSchema = z.enum(['none', 'minus', 'plus']);
+
+/**
+ * 哑音类型
+ */
+export const ToneSquelchModeSchema = z.enum(['none', 'ctcss', 'dcs']);
+
+/**
  * 预设频率Schema
  */
 export const PresetFrequencySchema = z.object({
@@ -9,6 +19,85 @@ export const PresetFrequencySchema = z.object({
   radioMode: z.string().optional(), // 电台调制模式，如 USB, LSB, AM, FM
   frequency: z.number(),
   description: z.string().optional(),
+  repeaterShift: RepeaterShiftSchema.optional(), // 中继差频方向，默认 none
+  repeaterOffsetHz: z.number().int().positive().optional(), // 中继偏移，单位 Hz
+  toneMode: ToneSquelchModeSchema.optional(), // 哑音类型，默认 none
+  ctcssToneTenthsHz: z.number().int().positive().optional(), // CTCSS，单位 0.1Hz
+  dcsCode: z.number().int().positive().optional(), // DCS 码
+}).superRefine((preset, ctx) => {
+  const isVoiceFmPreset = preset.mode === 'VOICE' && preset.radioMode?.toUpperCase() === 'FM';
+  const hasRepeaterDuplex = preset.repeaterShift === 'minus' || preset.repeaterShift === 'plus';
+
+  if (hasRepeaterDuplex && !isVoiceFmPreset) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['repeaterShift'],
+      message: 'repeater duplex is only supported for VOICE FM presets',
+    });
+  }
+
+  if (
+    hasRepeaterDuplex
+    && preset.repeaterOffsetHz === undefined
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['repeaterOffsetHz'],
+      message: 'repeaterOffsetHz is required when repeaterShift is plus or minus',
+    });
+  }
+
+  if (!isVoiceFmPreset && preset.toneMode && preset.toneMode !== 'none') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['toneMode'],
+      message: 'tone squelch is only supported for VOICE FM presets',
+    });
+  }
+
+  if (preset.toneMode === 'ctcss') {
+    if (preset.ctcssToneTenthsHz === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ctcssToneTenthsHz'],
+        message: 'ctcssToneTenthsHz is required when toneMode is ctcss',
+      });
+    }
+    if (preset.dcsCode !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dcsCode'],
+        message: 'dcsCode cannot be set when toneMode is ctcss',
+      });
+    }
+  }
+
+  if (preset.toneMode === 'dcs') {
+    if (preset.dcsCode === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dcsCode'],
+        message: 'dcsCode is required when toneMode is dcs',
+      });
+    }
+    if (preset.ctcssToneTenthsHz !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ctcssToneTenthsHz'],
+        message: 'ctcssToneTenthsHz cannot be set when toneMode is dcs',
+      });
+    }
+  }
+
+  if ((preset.toneMode === undefined || preset.toneMode === 'none')
+    && (preset.ctcssToneTenthsHz !== undefined || preset.dcsCode !== undefined)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['toneMode'],
+      message: 'toneMode must be ctcss or dcs when tone values are set',
+    });
+  }
 });
 
 /**
@@ -357,6 +446,8 @@ export const CustomFrequencyPresetsSchema = z.object({
 // 导出类型
 export type CustomFrequencyPresets = z.infer<typeof CustomFrequencyPresetsSchema>;
 export type PresetFrequency = z.infer<typeof PresetFrequencySchema>;
+export type RepeaterShift = z.infer<typeof RepeaterShiftSchema>;
+export type ToneSquelchMode = z.infer<typeof ToneSquelchModeSchema>;
 export type FrequencyListResponse = z.infer<typeof FrequencyListResponseSchema>;
 export type SerialConfig = z.infer<typeof SerialConfigSchema>;
 export type HamlibBackendConfig = z.infer<typeof HamlibBackendConfigSchema>;

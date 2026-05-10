@@ -44,6 +44,14 @@
     "sameTransmissionLimit": {
       "title": "已停发：重复消息",
       "description": "操作员 {{operatorId}} 第 {{attemptedCount}} 次尝试发送相同消息时已自动停发（上限 {{maxCount}} 次），避免重复占用频率：{{transmission}}"
+    },
+    "repeaterDuplexUnsupported": {
+      "title": "中继频偏未生效",
+      "description": "已切换到 {{frequency}} MHz，但当前电台不支持或未能设置中继频偏。{{reason}}"
+    },
+    "toneSquelchUnsupported": {
+      "title": "哑音未生效",
+      "description": "已切换到 {{frequency}} MHz，但当前电台不支持或未能设置哑音。{{reason}}"
     }
   }
 }
