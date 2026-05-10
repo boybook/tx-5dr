@@ -422,7 +422,13 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       if (active.repeating && active.mode === 'message') {
         // 循环播放：等待 repeat 间隔后重新播放
         const slot = await this.getActiveSlot(active);
-        const waitMs = (slot?.repeatIntervalSec ?? DEFAULT_REPEAT_INTERVAL_SEC) * 1000;
+        if (!slot?.text || !slot.repeatEnabled) {
+          this.active = null;
+          this.setStatus(this.idleStatus());
+          return;
+        }
+
+        const waitMs = slot.repeatIntervalSec * 1000;
 
         const nextRunAt = Date.now() + waitMs;
         this.setStatus(this.statusFor(active.clientId, active.label, 'repeat-waiting', active.messageId, nextRunAt));
@@ -433,14 +439,25 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
         }
 
         // 重新编码（可能有配置变更）
-        if (slot?.text) {
-          const replaced = this.replacePlaceholders(slot.text, active.callsign);
-          const events = encodeTextToCWEvents(replaced, this.config.wpm);
-          active.events = events;
-          active.eventIndex = 0;
-          this.setStatus(this.statusFor(active.clientId, active.label, 'playing', active.messageId));
-          await this.executeEvents(active);
+        const latestSlot = await this.getActiveSlot(active);
+        if (!latestSlot?.text || !latestSlot.repeatEnabled) {
+          this.active = null;
+          this.setStatus(this.idleStatus());
+          return;
         }
+
+        const replaced = this.replacePlaceholders(latestSlot.text, active.callsign);
+        const events = encodeTextToCWEvents(replaced, this.config.wpm);
+        if (events.length === 0) {
+          this.active = null;
+          this.setStatus(this.idleStatus());
+          return;
+        }
+
+        active.events = events;
+        active.eventIndex = 0;
+        this.setStatus(this.statusFor(active.clientId, active.label, 'playing', active.messageId));
+        await this.executeEvents(active);
       } else {
         // 正常结束
         this.active = null;
@@ -450,10 +467,14 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
   }
 
   private async getActiveSlot(active: ActiveKeying): Promise<CWMessageSlot | null> {
-    if (!active.messageId) return null;
-    // messageId is the slotId; but we need the callsign which we don't store in ActiveKeying
-    // For message mode, we rely on the stored manifest which has the callsign in its path
-    return null; // Simplified: active repeating uses stored repeatInterval
+    if (!active.messageId || !active.callsign) return null;
+    try {
+      const manifest = await this.readManifest(active.callsign);
+      return manifest.slots.find((slot) => slot.id === active.messageId) ?? null;
+    } catch (error) {
+      logger.warn('Failed to read active CW slot', { error: (error as Error).message });
+      return null;
+    }
   }
 
   private delay(ms: number, active: ActiveKeying): Promise<void> {

@@ -741,9 +741,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     const lastEngineMode = configManager.getLastEngineMode();
     const lastDigitalModeName = configManager.getLastDigitalModeName();
 
-    if (lastDigitalModeName && lastDigitalModeName !== this.currentMode.name) {
+    if (lastEngineMode === 'digital' && lastDigitalModeName && lastDigitalModeName !== this.currentMode.name) {
       const targetMode = Object.values(MODES).find(m => m.name === lastDigitalModeName);
-      if (targetMode && targetMode.name !== 'VOICE') {
+      if (targetMode && targetMode.name !== 'VOICE' && targetMode.name !== 'CW') {
         this.currentMode = targetMode;
         this.applyDecodeWindowOverrides();
         this.slotClock?.setMode(this.currentMode);
@@ -756,6 +756,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.engineMode = 'voice';
       this.currentMode = MODES.VOICE;
       logger.info('Restored last engine mode: voice');
+    } else if (lastEngineMode === 'cw') {
+      this.engineMode = 'cw';
+      this.currentMode = MODES.CW;
+      this.slotClock?.setMode(this.currentMode);
+      this.slotPackManager.setMode(this.currentMode);
+      logger.info('Restored last engine mode: cw');
     }
   }
 
@@ -1497,8 +1503,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public getStatus() {
     const isRunning = this.engineLifecycle?.getIsRunning() ?? false;
-    // Voice mode has no slotClock, so isDecoding = isRunning
-    const isActuallyDecoding = this.engineMode === 'voice'
+    // Voice and CW modes have no decode slot loop, so mirror engine running state.
+    const isActuallyDecoding = this.engineMode === 'voice' || this.engineMode === 'cw'
       ? isRunning
       : isRunning && (this.slotClock?.isRunning ?? false);
 

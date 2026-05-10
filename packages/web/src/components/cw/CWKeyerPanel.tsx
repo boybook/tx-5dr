@@ -2,8 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Button,
   Card,
-  CardBody,
-  CardHeader,
   Input,
   Textarea,
   Switch,
@@ -52,7 +50,11 @@ import type { CWKeyerShortcutPreset, CWKeyerShortcutChangedDetail } from '../../
 const WPM_MIN = 5;
 const WPM_MAX = 60;
 
-export function CWKeyerPanel() {
+interface CWKeyerPanelProps {
+  embedded?: boolean;
+}
+
+export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const { t } = useTranslation();
   const { cwKeyerStatus, cwConfig, isCWMode, sendText, playMessage, stopMessage } = useCWKeyer();
   const { operators } = useOperators();
@@ -326,9 +328,9 @@ export function CWKeyerPanel() {
 
   if (!isCWMode) return null;
 
-  return (
-    <Card className="w-full">
-      <CardHeader className="flex gap-2 items-center">
+  const panelContent = (
+    <>
+      <div className={`flex gap-2 items-center ${embedded ? 'px-1 pb-2' : 'px-3 py-3'}`}>
         <FontAwesomeIcon icon={faTowerBroadcast} className="text-primary" />
         <span className="font-semibold">{t('radio:cw.title', 'CW')}</span>
         {operators.length > 1 && (
@@ -356,11 +358,11 @@ export function CWKeyerPanel() {
             {statusMode === 'keying' ? 'KEYING' : statusMode === 'playing' ? 'TX' : statusMode}
           </Chip>
         )}
-      </CardHeader>
+      </div>
 
       <CWSidetone />
 
-      <CardBody className="flex flex-col gap-3">
+      <div className={`flex flex-col gap-3 ${embedded ? 'flex-1 min-h-0 overflow-hidden px-1 pb-1' : 'px-3 pb-3'}`}>
         {/* 文字输入区 */}
         <div className="flex gap-2">
           <Input
@@ -428,7 +430,7 @@ export function CWKeyerPanel() {
         </div>
 
         {/* 预设报文区 */}
-        <div>
+        <div className={embedded ? 'flex flex-1 min-h-0 flex-col' : undefined}>
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm font-medium text-default-600">
               {t('radio:cw.presetMessages', 'Presets')}
@@ -465,7 +467,7 @@ export function CWKeyerPanel() {
               {t('common:loading', 'Loading...')}
             </div>
           ) : (
-            <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto">
+            <div className={`flex flex-col gap-1.5 overflow-y-auto ${embedded ? 'flex-1 min-h-0 pr-1' : 'max-h-64'}`}>
               {visibleSlots.map((slot) => {
                   const isSlotPlaying = playingSlotId === slot.id;
                   const isRepeatWaiting = statusMode === 'repeat-waiting' && cwKeyerStatus?.messageId === slot.id;
@@ -552,7 +554,7 @@ export function CWKeyerPanel() {
             </div>
           )}
         </div>
-      </CardBody>
+      </div>
 
       {/* 编辑对话框 */}
       <Modal isOpen={isOpen} onClose={onClose} size="md">
@@ -642,6 +644,22 @@ export function CWKeyerPanel() {
           </ModalFooter>
         </ModalContent>
       </Modal>
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="h-full min-h-0 w-full overflow-hidden rounded-lg border border-default-200 bg-default-50 px-2 py-2 pt-1.5 transition-colors dark:border-default-100 dark:bg-default-100/50">
+        <div className="flex h-full min-h-0 flex-col">
+          {panelContent}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Card className="w-full">
+      {panelContent}
     </Card>
   );
 }

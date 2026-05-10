@@ -4,6 +4,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faGithub } from '@fortawesome/free-brands-svg-icons';
 import { SpectrumDisplay } from '../components/radio/spectrum/SpectrumDisplay';
 import { RadioMetersDisplay } from '../components/radio/control/RadioMetersDisplay';
+import { CWKeyerPanel } from '../components/cw/CWKeyerPanel';
 import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
 import { ClockDisplay } from '../components/system/ClockDisplay';
 import { StationInfoPopover } from '../components/station/StationInfoPopover';
@@ -116,6 +117,10 @@ export const CWLeftLayout: React.FC = () => {
             />
           </div>
         )}
+
+        <div className="min-h-0 flex-1">
+          <CWKeyerPanel embedded />
+        </div>
       </div>
     </div>
   );

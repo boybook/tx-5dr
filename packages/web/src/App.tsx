@@ -80,9 +80,9 @@ function AppContent() {
           />
         ) : null}
         extraEnabled={mainRightPanels.length > 0}
-        defaultLeftWidth={isVoiceMode || isCWMode ? 30 : 50}
+        defaultLeftWidth={isVoiceMode ? 30 : 50}
         minLeftWidth={25}
-        maxLeftWidth={isVoiceMode || isCWMode ? 50 : 75}
+        maxLeftWidth={isVoiceMode ? 50 : 75}
         defaultExtraWidth={26}
         minExtraWidth={18}
         maxExtraWidth={38}

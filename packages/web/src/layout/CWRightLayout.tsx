@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import type { QSORecord } from '@tx5dr/contracts';
 import {
   Button,
@@ -9,7 +9,6 @@ import {
 import { useAuth } from '../store/authStore';
 import { AuthLoginForm } from '../components/auth/AuthLoginForm';
 import { RadioControl } from '../components/radio/control/RadioControl';
-import { CWKeyerPanel } from '../components/cw/CWKeyerPanel';
 import { CWQSOLogCard } from '../components/cw/CWQSOLogCard';
 import { CWRecentQSOList } from '../components/cw/CWRecentQSOList';
 import { CWRightTopTabs } from '../components/cw/CWRightTopTabs';
@@ -18,7 +17,7 @@ import { QSONotificationToggleButton } from '../components/common/QSONotificatio
 import { ServerHealthButton } from '../components/system/ServerHealthButton';
 import { SettingsButton } from '../components/common/SettingsButton';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faKey, faLock, faRightFromBracket, faUser, faGripLines } from '@fortawesome/free-solid-svg-icons';
+import { faKey, faLock, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import { OPEN_ACCOUNT_SECURITY_MODAL_EVENT } from '../components/app/GlobalModalHost';
 import { useCurrentOperatorId, useOperators } from '../store/radioStore';
@@ -28,9 +27,8 @@ import { useCurrentOperatorId, useOperators } from '../store/radioStore';
  *
  * Right panel layout for CW mode:
  * - Top toolbar (auth, theme, settings) — inside tabs
- * - CWRightTopTabs containing CWRecentQSOList + CWQSOLogCard (resizable top section)
- * - Draggable divider
- * - CWKeyerPanel + RadioControl (resizable bottom section)
+ * - CWRightTopTabs containing CWRecentQSOList + CWQSOLogCard
+ * - RadioControl fixed at the bottom
  */
 export const CWRightLayout: React.FC = () => {
   const { t } = useTranslation('common');
@@ -53,74 +51,6 @@ export const CWRightLayout: React.FC = () => {
   const { operators } = useOperators();
   const activeOperatorId = currentOperatorId || operators[0]?.id || null;
 
-  // Snap points for vertical split
-  const SNAP_POINTS = [0.3, 0.5, 0.7];
-
-  // Vertical split ratio: fraction of total height for top section
-  const [topRatio, setTopRatio] = useState(0.55);
-  const [isDragging, setIsDragging] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const dragStartY = useRef(0);
-  const dragStartRatio = useRef(0);
-
-  const snapToNearest = useCallback((ratio: number) => {
-    return SNAP_POINTS.reduce((prev, curr) =>
-      Math.abs(curr - ratio) < Math.abs(prev - ratio) ? curr : prev,
-    );
-  }, []);
-
-  const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-    dragStartY.current = e.clientY;
-    dragStartRatio.current = topRatio;
-  }, [topRatio]);
-
-  const handleDividerDoubleClick = useCallback(() => {
-    // Toggle between 0.5 (split) and 0.75 (log-focused)
-    setTopRatio(prev => (prev >= 0.6 ? 0.5 : 0.75));
-  }, []);
-
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragging || !containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const deltaY = e.clientY - dragStartY.current;
-      const deltaRatio = deltaY / rect.height;
-      const nextRatio = Math.max(0.15, Math.min(0.85, dragStartRatio.current + deltaRatio));
-      setTopRatio(nextRatio);
-    };
-
-    const handleMouseUp = () => {
-      if (isDragging) {
-        setTopRatio(prev => snapToNearest(prev));
-        setIsDragging(false);
-      }
-    };
-
-    if (isDragging) {
-      document.body.style.cursor = 'row-resize';
-      document.body.style.userSelect = 'none';
-    }
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-  }, [isDragging, snapToNearest]);
-
-  // Cleanup body styles when dragging stops
-  useEffect(() => {
-    if (!isDragging) {
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    }
-  }, [isDragging]);
-
   const handleOpenRadioSettings = () => {
     window.dispatchEvent(new Event('openProfileModal'));
   };
@@ -140,15 +70,9 @@ export const CWRightLayout: React.FC = () => {
   }, []);
 
   return (
-    <div ref={containerRef} className="h-full min-h-0 overflow-hidden flex flex-col">
+    <div className="h-full min-h-0 overflow-hidden flex flex-col">
       {/* Top area: QSO log + recent list */}
-      <div
-        className="min-h-0 overflow-y-auto"
-        style={{
-          height: `${topRatio * 100}%`,
-          transition: isDragging ? 'none' : 'height 200ms ease-out',
-        }}
-      >
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <CWRightTopTabs
           operatorId={activeOperatorId}
           toolbarRight={(
@@ -249,29 +173,9 @@ export const CWRightLayout: React.FC = () => {
         />
       </div>
 
-      {/* Divider handle */}
-      <div
-        className="flex-shrink-0 h-2 cursor-row-resize flex items-center justify-center group hover:bg-primary-200 transition-colors rounded select-none"
-        onMouseDown={handleDividerMouseDown}
-        onDoubleClick={handleDividerDoubleClick}
-      >
-        <FontAwesomeIcon icon={faGripLines} className="text-default-400 text-xs group-hover:text-primary-500" />
-      </div>
-
-      {/* Bottom area: CW Keyer (scrollable) + Radio Control (fixed) */}
-      <div
-        className="min-h-0 flex flex-col"
-        style={{
-          height: `${(1 - topRatio) * 100}%`,
-          transition: isDragging ? 'none' : 'height 200ms ease-out',
-        }}
-      >
-        <div className="flex-1 min-h-0 overflow-y-auto p-2 pt-0 md:px-5 md:pt-0">
-          <CWKeyerPanel />
-        </div>
-        <div className="flex-shrink-0 p-2 pt-0 md:px-5 md:pb-5">
-          <RadioControl onOpenRadioSettings={handleOpenRadioSettings} />
-        </div>
+      {/* Bottom area: Radio Control (fixed) */}
+      <div className="flex-shrink-0 p-2 pt-0 md:px-5 md:pb-5">
+        <RadioControl onOpenRadioSettings={handleOpenRadioSettings} />
       </div>
     </div>
   );
