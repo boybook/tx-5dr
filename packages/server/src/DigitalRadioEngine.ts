@@ -546,7 +546,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public getCWKeyerManager(): CWKeyerManager {
     if (!this.cwKeyerManager) {
-      this.cwKeyerManager = new CWKeyerManager();
+      this.cwKeyerManager = new CWKeyerManager(() => this.radioManager);
       this.cwKeyerManager.on('cwKeyerStatusChanged', (status) => {
         this.emit('cwKeyerStatusChanged', status);
       });

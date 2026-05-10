@@ -3,7 +3,12 @@ import { z } from 'zod';
 /**
  * CW 键控器配置
  */
+export const CWKeyerBackendSchema = z.enum(['cat', 'serial']);
+export type CWKeyerBackend = z.infer<typeof CWKeyerBackendSchema>;
+
 export const CWKeyerConfigSchema = z.object({
+  /** CW 发报后端：cat=Hamlib 整报文，serial=DTR/RTS 时序键控 */
+  backend: CWKeyerBackendSchema.default('cat'),
   /** CW 键控串口路径（用于 DTR/RTS 引脚控制） */
   keyPort: z.string(),
   /** CW 键控引脚类型 */
@@ -32,6 +37,12 @@ export const CWKeyerStatusSchema = z.object({
   nextRunAt: z.number().nullable(),
   /** 错误信息 */
   error: z.string().nullable(),
+  /** 当前 CW 发报后端 */
+  backend: CWKeyerBackendSchema.optional(),
+  /** 当前后端是否具备发报条件 */
+  backendAvailable: z.boolean().optional(),
+  /** 当前后端不可用原因 */
+  backendError: z.string().nullable().optional(),
 });
 
 export type CWKeyerStatus = z.infer<typeof CWKeyerStatusSchema>;

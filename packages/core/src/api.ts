@@ -2008,7 +2008,7 @@ export const api = {
   },
 
   async updateCWKeyerConfig(
-    body: { wpm?: number },
+    body: { backend?: import('@tx5dr/contracts').CWKeyerBackend; wpm?: number },
     apiBase?: string,
   ): Promise<{ success: boolean; config: import('@tx5dr/contracts').CWKeyerConfig }> {
     return apiRequest<{ success: boolean; config: import('@tx5dr/contracts').CWKeyerConfig }>(

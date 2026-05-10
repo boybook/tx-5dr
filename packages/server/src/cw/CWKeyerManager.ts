@@ -1,11 +1,13 @@
 import { promises as fs } from 'fs';
 import { dirname, join } from 'path';
 import { EventEmitter } from 'eventemitter3';
-import type { CWKeyerStatus, CWKeyerConfig, CWMessagePanel, CWMessageSlot } from '@tx5dr/contracts';
-import { CWKeyerHardware } from './CWKeyerHardware.js';
-import { encodeTextToCWEvents, type CWTimingEvent } from './CWTextEncoder.js';
+import type { CWKeyerStatus, CWKeyerConfig, CWMessagePanel, CWMessageSlot, CWKeyerBackend as CWKeyerBackendType } from '@tx5dr/contracts';
+import { HamlibCatCWKeyerBackend } from './HamlibCatCWKeyerBackend.js';
+import { SerialCWKeyerBackend } from './SerialCWKeyerBackend.js';
+import type { CWKeyerBackend } from './CWKeyerBackend.js';
 import { getDataFilePath } from '../utils/app-paths.js';
 import { ConfigManager } from '../config/config-manager.js';
+import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('CWKeyerManager');
@@ -29,8 +31,6 @@ interface ActiveKeying {
   messageId: string | null;
   repeating: boolean;
   stopRequested: boolean;
-  events: CWTimingEvent[] | null;
-  eventIndex: number;
   timer: ReturnType<typeof setTimeout> | null;
   /** 操作员呼号，用于占位符替换 */
   callsign: string | null;
@@ -42,12 +42,15 @@ export interface CWKeyerManagerEvents {
 }
 
 export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
-  private hardware: CWKeyerHardware | null = null;
+  private readonly backends: Record<CWKeyerBackendType, CWKeyerBackend>;
   private active: ActiveKeying | null = null;
   private _started = false;
   private _startingPromise: Promise<void> | null = null;
+  private configLoaded = false;
+  private configLoadPromise: Promise<void> | null = null;
   private rootDir: string | null = null;
   private config: CWKeyerConfig = {
+    backend: 'cat',
     keyPort: '',
     keyMethod: 'dtr',
     wpm: 20,
@@ -60,49 +63,64 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     messageId: null,
     nextRunAt: null,
     error: null,
+    backend: 'cat',
+    backendAvailable: false,
+    backendError: 'CAT CW requires an active Hamlib radio connection',
   };
+
+  constructor(getRadioManager?: () => PhysicalRadioManager) {
+    super();
+    this.backends = {
+      cat: new HamlibCatCWKeyerBackend(() => {
+        const radioManager = getRadioManager?.();
+        if (!radioManager) {
+          throw new Error('Radio manager is not available for CAT CW backend');
+        }
+        return radioManager;
+      }),
+      serial: new SerialCWKeyerBackend(),
+    };
+  }
 
   getStatus(): CWKeyerStatus {
     return { ...this.status };
   }
 
   getConfig(): CWKeyerConfig {
-    return { ...this.config };
+    return this.resolveRuntimeConfig();
+  }
+
+  async getConfigAsync(): Promise<CWKeyerConfig> {
+    await this.ensureConfigLoaded();
+    return this.getConfig();
   }
 
   async updateConfig(update: Partial<CWKeyerConfig>): Promise<void> {
-    this.config = { ...this.config, ...update };
+    await this.ensureConfigLoaded();
+    const next = this.normalizeConfig({ ...this.config, ...this.filterConfigUpdate(update) });
+    const backendChanged = next.backend !== this.config.backend;
+    if (backendChanged && this._started) {
+      await this.stopActive('cw backend changed');
+      await this.stopBackends();
+      this._started = false;
+    }
+    this.config = next;
+    await this.writePersistedConfig();
     logger.info('CW keyer config updated', { config: this.config });
     this.emit('cwConfigChanged', this.getConfig());
+    this.setStatus(this.idleStatus());
   }
 
   /**
    * 初始化 CW 键控器（启动硬件、加载配置）
    */
   async start(config: CWKeyerConfig): Promise<void> {
-    this.config = { ...config };
-
-    if (this.config.keyPort) {
-      // 关闭可能残留的旧硬件实例，避免端口被自身占用
-      if (this.hardware) {
-        await this.hardware.close();
-        this.hardware = null;
-      }
-      this.hardware = new CWKeyerHardware(this.config.keyPort, this.config.keyMethod);
-      try {
-        await this.hardware.open();
-        this._started = true;
-        logger.info('CW keyer hardware started');
-      } catch (error) {
-        logger.error('Failed to open CW keyer hardware', error);
-        this.hardware = null;
-        throw error;
-      }
-    } else {
-      logger.warn('CW keyer started without hardware (no keyPort configured)');
-      this._started = true;
-    }
-
+    await this.ensureConfigLoaded();
+    this.config = this.normalizeConfig({ ...this.config, ...this.filterConfigUpdate(config) });
+    const runtimeConfig = this.resolveRuntimeConfig();
+    await this.getBackend().start(runtimeConfig);
+    this._started = true;
+    logger.info('CW keyer backend started', { backend: runtimeConfig.backend });
     this.setStatus(this.idleStatus());
   }
 
@@ -111,28 +129,19 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
    */
   async stop(): Promise<void> {
     await this.stopActive('cw keyer stopped');
-
-    if (this.hardware) {
-      await this.hardware.close();
-      this.hardware = null;
-    }
-
+    await this.stopBackends();
     this._started = false;
     logger.info('CW keyer stopped');
   }
 
   private async ensureStarted(): Promise<void> {
+    await this.ensureConfigLoaded();
     if (this._started) return;
     if (this._startingPromise) {
       await this._startingPromise;
       return;
     }
-    const radioConfig = ConfigManager.getInstance().getRadioConfig();
-    this._startingPromise = this.start({
-      keyPort: radioConfig.cwKeyPort || this.config.keyPort || '',
-      keyMethod: radioConfig.cwKeyMethod || this.config.keyMethod || 'dtr',
-      wpm: this.config.wpm || 20,
-    });
+    this._startingPromise = this.start(this.resolveRuntimeConfig());
     try {
       await this._startingPromise;
     } finally {
@@ -143,6 +152,12 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
   // ========== 手键操作 ==========
 
   async handleKeyAction(clientId: string, label: string, action: 'key-down' | 'key-up'): Promise<void> {
+    await this.ensureConfigLoaded();
+    const backend = this.getBackend();
+    if (!backend.supportsManualKeying || !backend.keyDown || !backend.keyUp) {
+      throw new Error('CAT backend does not support real-time manual keying');
+    }
+
     // 手键优先抢占正在进行的文字/报文
     if (this.active && this.active.mode !== 'manual' && !this.active.stopRequested) {
       await this.stopActive('preempted by manual key');
@@ -163,8 +178,6 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
           messageId: null,
           repeating: false,
           stopRequested: false,
-          events: null,
-          eventIndex: 0,
           timer: null,
           callsign: null,
         };
@@ -172,9 +185,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
 
       try {
         await this.ensureStarted();
-        if (this.hardware) {
-          await this.hardware.keyDown();
-        }
+        await backend.keyDown();
         this.setStatus(this.statusFor(clientId, label, 'keying', null));
       } catch (error) {
         this.active = null;
@@ -187,9 +198,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       }
 
       await this.ensureStarted();
-      if (this.hardware) {
-        await this.hardware.keyUp();
-      }
+      await backend.keyUp();
       this.active = null;
       this.setStatus(this.idleStatus());
     }
@@ -198,6 +207,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
   // ========== 文字输入 ==========
 
   async handleTextInput(clientId: string, label: string, text: string, callsign?: string): Promise<void> {
+    await this.ensureConfigLoaded();
     // 如果当前有手键活动，拒绝文字输入
     if (this.active?.mode === 'manual') {
       logger.debug('Text input rejected: manual key active');
@@ -210,9 +220,8 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     }
 
     // 替换占位符
-    const replaced = this.replacePlaceholders(text, callsign);
-    const events = encodeTextToCWEvents(replaced, this.config.wpm);
-    if (events.length === 0) {
+    const replaced = this.replacePlaceholders(text, callsign).trim();
+    if (!replaced) {
       return;
     }
 
@@ -223,8 +232,6 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       messageId: null,
       repeating: false,
       stopRequested: false,
-      events,
-      eventIndex: 0,
       timer: null,
       callsign: callsign ?? null,
     };
@@ -233,7 +240,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
 
     try {
       await this.ensureStarted();
-      await this.executeEvents(active);
+      await this.executePlayback(active, replaced);
     } catch (error) {
       this.active = null;
       this.setStatus(this.idleStatus());
@@ -309,6 +316,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     slotId: string,
     repeat: boolean,
   ): Promise<void> {
+    await this.ensureConfigLoaded();
     const normalized = this.requireCallsign(callsign);
 
     if (this.active) {
@@ -321,9 +329,8 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       throw new Error('CW message slot has no text');
     }
 
-    const replaced = this.replacePlaceholders(slot.text, normalized);
-    const events = encodeTextToCWEvents(replaced, this.config.wpm);
-    if (events.length === 0) {
+    const replaced = this.replacePlaceholders(slot.text, normalized).trim();
+    if (!replaced) {
       return;
     }
 
@@ -334,8 +341,6 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       messageId: slotId,
       repeating: repeat,
       stopRequested: false,
-      events,
-      eventIndex: 0,
       timer: null,
       callsign: normalized,
     };
@@ -344,7 +349,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
 
     try {
       await this.ensureStarted();
-      await this.executeEvents(active);
+      await this.executePlayback(active, replaced);
     } catch (error) {
       this.active = null;
       this.setStatus(this.idleStatus());
@@ -365,10 +370,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       active.timer = null;
     }
 
-    // 确保键控释放
-    if (this.hardware?.isKeyDown) {
-      await this.hardware.keyUp();
-    }
+    await this.getBackend().stopActive();
 
     this.active = null;
     logger.info('CW keying stopped', { reason });
@@ -383,38 +385,27 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
 
   // ========== 私有方法 ==========
 
-  private async executeEvents(active: ActiveKeying): Promise<void> {
-    if (!active.events || active.stopRequested) {
+  private async executePlayback(active: ActiveKeying, text: string): Promise<void> {
+    if (active.stopRequested || this.active !== active) {
       return;
     }
 
-    for (let i = active.eventIndex; i < active.events.length; i++) {
-      if (active.stopRequested || this.active !== active) {
-        return;
-      }
-
-      const event = active.events[i];
-      active.eventIndex = i;
-
-      // 等待 afterMs
-      if (event.afterMs > 0) {
-        await this.delay(event.afterMs, active);
-        if (active.stopRequested || this.active !== active) {
-          return;
+    const backend = this.getBackend();
+    await backend.sendText(text, this.config.wpm, {
+      isStopped: () => active.stopRequested || this.active !== active,
+      wait: async (ms) => {
+        await this.delay(ms, active);
+        return !active.stopRequested && this.active === active;
+      },
+      onKeyDown: () => {
+        if (!active.stopRequested && this.active === active) {
+          this.setStatus(this.statusFor(active.clientId, active.label, 'playing', active.messageId));
         }
-      }
+      },
+    });
 
-      // 执行键控
-      if (event.type === 'key-down') {
-        if (this.hardware) {
-          await this.hardware.keyDown();
-        }
-        this.setStatus(this.statusFor(active.clientId, active.label, 'playing', active.messageId));
-      } else {
-        if (this.hardware) {
-          await this.hardware.keyUp();
-        }
-      }
+    if (active.stopRequested || this.active !== active) {
+      return;
     }
 
     // 事件序列完成
@@ -438,7 +429,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
           return;
         }
 
-        // 重新编码（可能有配置变更）
+        // 重新读取报文和配置（可能有配置变更）
         const latestSlot = await this.getActiveSlot(active);
         if (!latestSlot?.text || !latestSlot.repeatEnabled) {
           this.active = null;
@@ -446,18 +437,15 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
           return;
         }
 
-        const replaced = this.replacePlaceholders(latestSlot.text, active.callsign);
-        const events = encodeTextToCWEvents(replaced, this.config.wpm);
-        if (events.length === 0) {
+        const replaced = this.replacePlaceholders(latestSlot.text, active.callsign).trim();
+        if (!replaced) {
           this.active = null;
           this.setStatus(this.idleStatus());
           return;
         }
 
-        active.events = events;
-        active.eventIndex = 0;
         this.setStatus(this.statusFor(active.clientId, active.label, 'playing', active.messageId));
-        await this.executeEvents(active);
+        await this.executePlayback(active, replaced);
       } else {
         // 正常结束
         this.active = null;
@@ -497,6 +485,106 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     return text.replace(/\{MYCALL\}/gi, callsign);
   }
 
+  private getBackend(): CWKeyerBackend {
+    return this.backends[this.config.backend] ?? this.backends.cat;
+  }
+
+  private resolveRuntimeConfig(): CWKeyerConfig {
+    const radioConfig = ConfigManager.getInstance().getRadioConfig();
+    return this.normalizeConfig({
+      ...this.config,
+      keyPort: radioConfig.cwKeyPort || this.config.keyPort || '',
+      keyMethod: radioConfig.cwKeyMethod || this.config.keyMethod || 'dtr',
+    });
+  }
+
+  private filterConfigUpdate(update: Partial<CWKeyerConfig>): Partial<CWKeyerConfig> {
+    const filtered: Partial<CWKeyerConfig> = {};
+    if (update.backend === 'cat' || update.backend === 'serial') {
+      filtered.backend = update.backend;
+    }
+    if (typeof update.keyPort === 'string') {
+      filtered.keyPort = update.keyPort;
+    }
+    if (update.keyMethod === 'dtr' || update.keyMethod === 'rts') {
+      filtered.keyMethod = update.keyMethod;
+    }
+    if (typeof update.wpm === 'number' && Number.isFinite(update.wpm)) {
+      filtered.wpm = update.wpm;
+    }
+    return filtered;
+  }
+
+  private normalizeConfig(config: Partial<CWKeyerConfig>): CWKeyerConfig {
+    return {
+      backend: config.backend === 'serial' ? 'serial' : 'cat',
+      keyPort: typeof config.keyPort === 'string' ? config.keyPort : '',
+      keyMethod: config.keyMethod === 'rts' ? 'rts' : 'dtr',
+      wpm: Math.max(5, Math.min(60, Math.round(Number(config.wpm ?? 20)))),
+    };
+  }
+
+  private async ensureConfigLoaded(): Promise<void> {
+    if (this.configLoaded) return;
+    if (this.configLoadPromise) {
+      await this.configLoadPromise;
+      return;
+    }
+    this.configLoadPromise = (async () => {
+      try {
+        const raw = await fs.readFile(await this.getConfigPath(), 'utf8');
+        this.config = this.normalizeConfig({ ...this.config, ...JSON.parse(raw) });
+      } catch {
+        this.config = this.normalizeConfig(this.config);
+      } finally {
+        this.configLoaded = true;
+        this.configLoadPromise = null;
+      }
+    })();
+    await this.configLoadPromise;
+  }
+
+  private async writePersistedConfig(): Promise<void> {
+    const configPath = await this.getConfigPath();
+    await fs.mkdir(dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ backend: this.config.backend, wpm: this.config.wpm }, null, 2),
+      'utf8',
+    );
+  }
+
+  private async getConfigPath(): Promise<string> {
+    return join(await this.getRootDir(), 'config.json');
+  }
+
+  private async stopBackends(): Promise<void> {
+    await Promise.all(Object.values(this.backends).map((backend) => backend.stop().catch((error) => {
+      logger.warn('Failed to stop CW backend', {
+        backend: backend.type,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    })));
+  }
+
+  private statusBackendFields(): Pick<CWKeyerStatus, 'backend' | 'backendAvailable' | 'backendError'> {
+    const backend = this.getBackend();
+    try {
+      const availability = backend.getAvailability();
+      return {
+        backend: backend.type,
+        backendAvailable: availability.available,
+        backendError: availability.error,
+      };
+    } catch (error) {
+      return {
+        backend: backend.type,
+        backendAvailable: false,
+        backendError: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   private idleStatus(): CWKeyerStatus {
     return {
       active: false,
@@ -506,6 +594,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       messageId: null,
       nextRunAt: null,
       error: null,
+      ...this.statusBackendFields(),
     };
   }
 
@@ -524,6 +613,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       messageId,
       nextRunAt,
       error: null,
+      ...this.statusBackendFields(),
     };
   }
 

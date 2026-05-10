@@ -2,12 +2,15 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Button,
   Card,
+  Alert,
   Input,
   Textarea,
   Switch,
   Slider,
   Select,
   SelectItem,
+  Tabs,
+  Tab,
   Modal,
   ModalContent,
   ModalHeader,
@@ -27,6 +30,7 @@ import {
   faPaperPlane,
   faRepeat,
   faTowerBroadcast,
+  faPlug,
   faPlus,
   faMinus,
   faChevronDown,
@@ -34,7 +38,7 @@ import {
 import { api } from '@tx5dr/core';
 import { useTranslation } from 'react-i18next';
 import { useCWKeyer } from '../../hooks/useCWKeyer';
-import { useOperators, useCurrentOperatorId } from '../../store/radioStore';
+import { useOperators, useCurrentOperatorId, useRadioState } from '../../store/radioStore';
 import { CWSidetone } from './CWSidetone';
 import {
   getCWKeyerShortcutPresetsForCallsign,
@@ -44,11 +48,19 @@ import {
   CW_KEYER_SHORTCUT_NONE,
   CW_KEYER_SHORTCUT_CHANGED_EVENT,
 } from '../../utils/cwKeyerShortcutPreferences';
-import type { CWMessagePanel, CWMessageSlot } from '@tx5dr/contracts';
+import type { CWKeyerBackend, CWKeyerConfig, CWMessagePanel, CWMessageSlot } from '@tx5dr/contracts';
 import type { CWKeyerShortcutPreset, CWKeyerShortcutChangedDetail } from '../../utils/cwKeyerShortcutPreferences';
 
 const WPM_MIN = 5;
 const WPM_MAX = 60;
+const CW_ALERT_CLASS_NAMES = {
+  base: '!flex-none !grow-0 py-2.5 px-3',
+  mainWrapper: '!h-auto !min-h-0 justify-center',
+  title: 'text-sm leading-5',
+  description: 'text-xs leading-4',
+  iconWrapper: 'w-8 h-8',
+  alertIcon: 'w-5',
+} as const;
 
 interface CWKeyerPanelProps {
   embedded?: boolean;
@@ -57,6 +69,7 @@ interface CWKeyerPanelProps {
 export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const { t } = useTranslation();
   const { cwKeyerStatus, cwConfig, isCWMode, sendText, playMessage, stopMessage } = useCWKeyer();
+  const radioState = useRadioState();
   const { operators } = useOperators();
   const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
 
@@ -73,15 +86,47 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [slotShortcuts, setSlotShortcuts] = useState<Record<string, CWKeyerShortcutPreset>>({});
   const [shortcutMenuSlotId, setShortcutMenuSlotId] = useState<string | null>(null);
+  const [loadedConfig, setLoadedConfig] = useState<CWKeyerConfig | null>(null);
 
   // WPM 本地状态，跟随 cwConfig 变化
   const [wpm, setWpm] = useState(cwConfig?.wpm ?? 20);
+  const effectiveConfig = cwConfig ?? loadedConfig;
+  const backend: CWKeyerBackend = effectiveConfig?.backend ?? 'cat';
+  const isSerialBackend = backend === 'serial';
+  const serialKeyPort = effectiveConfig?.keyPort?.trim() ?? '';
+  const showSerialPortAlert = isSerialBackend && !serialKeyPort;
+  const radioConnected = radioState.state.radioConnected;
+  const radioConfigType = radioState.state.radioConfig?.type;
+  const isHamlibRadioConfig = radioConfigType === 'serial' || radioConfigType === 'network';
+  const catUnavailableReason = !radioConnected
+    ? t('radio:cw.catUnavailableDisconnected', 'Connect a Hamlib radio before using CAT CW.')
+    : !isHamlibRadioConfig
+      ? t('radio:cw.catUnavailableHamlibOnly', 'CAT CW currently supports Hamlib serial or network radio connections only.')
+      : cwKeyerStatus?.backend === 'cat' && cwKeyerStatus.backendAvailable === false
+        ? cwKeyerStatus.backendError
+        : null;
+  const showCatAlert = backend === 'cat' && Boolean(catUnavailableReason);
 
   useEffect(() => {
-    if (cwConfig) {
-      setWpm(cwConfig.wpm);
+    if (!isCWMode) return;
+    let cancelled = false;
+    api.getCWKeyerConfig()
+      .then((resp) => {
+        if (!cancelled) setLoadedConfig(resp.config);
+      })
+      .catch(() => {
+        // Keep default CAT mode if the config endpoint is temporarily unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isCWMode]);
+
+  useEffect(() => {
+    if (effectiveConfig) {
+      setWpm(effectiveConfig.wpm);
     }
-  }, [cwConfig]);
+  }, [effectiveConfig]);
 
   const myCallsign = operators.find(o => o.id === currentOperatorId)?.context?.myCall?.trim() || '';
 
@@ -255,7 +300,26 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
 
   const handleWpmChangeEnd = (value: number | number[]) => {
     const v = Array.isArray(value) ? value[0] : value;
-    void api.updateCWKeyerConfig({ wpm: v });
+    void api.updateCWKeyerConfig({ wpm: v }).then((resp) => setLoadedConfig(resp.config));
+  };
+
+  const handleBackendChange = (key: React.Key) => {
+    const nextBackend: CWKeyerBackend = key === 'serial' ? 'serial' : 'cat';
+    setLoadedConfig((prev) => ({
+      backend: nextBackend,
+      keyPort: prev?.keyPort ?? effectiveConfig?.keyPort ?? '',
+      keyMethod: prev?.keyMethod ?? effectiveConfig?.keyMethod ?? 'dtr',
+      wpm: prev?.wpm ?? effectiveConfig?.wpm ?? wpm,
+    }));
+    void api.updateCWKeyerConfig({ backend: nextBackend })
+      .then((resp) => setLoadedConfig(resp.config))
+      .catch((err) => {
+        addToast({
+          title: t('common:error'),
+          description: String(err),
+          color: 'danger',
+        });
+      });
   };
 
   // 调整 Slot 数量
@@ -330,39 +394,102 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
 
   const panelContent = (
     <>
-      <div className={`flex gap-2 items-center ${embedded ? 'px-1 pb-2' : 'px-3 py-3'}`}>
-        <FontAwesomeIcon icon={faTowerBroadcast} className="text-primary" />
-        <span className="font-semibold">{t('radio:cw.title', 'CW')}</span>
-        {operators.length > 1 && (
-          <Select
+      <div className={`flex items-center justify-between gap-2 ${embedded ? 'px-1 pb-2' : 'px-3 py-3'}`}>
+        <div className="flex min-w-0 items-center gap-2">
+          <FontAwesomeIcon icon={faTowerBroadcast} className="text-primary" />
+          <span className="font-semibold">{t('radio:cw.title', 'CW')}</span>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Tabs
             size="sm"
-            variant="flat"
-            aria-label={t('radio:cw.operator', 'Operator')}
-            selectedKeys={currentOperatorId ? [currentOperatorId] : []}
-            onSelectionChange={(keys) => {
-              const selected = Array.from(keys)[0] as string;
-              if (selected) setCurrentOperatorId(selected);
+            variant="solid"
+            selectedKey={backend}
+            onSelectionChange={handleBackendChange}
+            aria-label={t('radio:cw.backendTabs', 'CW backend')}
+            classNames={{
+              base: 'shrink-0',
+              tabList: 'h-7 gap-0 p-0.5',
+              tab: 'h-6 px-2 min-w-7',
+              tabContent: 'text-xs',
             }}
-            className="w-28"
-            classNames={{ trigger: 'h-7 min-h-7 px-2', value: 'font-mono text-xs' }}
           >
-            {operators.map((op) => (
-              <SelectItem key={op.id} textValue={op.context?.myCall || op.id}>
-                {op.context?.myCall || op.id}
-              </SelectItem>
-            ))}
-          </Select>
-        )}
-        {isActive && (
-          <Chip size="sm" variant="flat" color="success">
-            {statusMode === 'keying' ? 'KEYING' : statusMode === 'playing' ? 'TX' : statusMode}
-          </Chip>
-        )}
+            <Tab
+              key="cat"
+              title={(
+                <span className="flex items-center gap-1">
+                  <FontAwesomeIcon icon={faTowerBroadcast} className="text-[10px]" />
+                  <span className="hidden sm:inline">{t('radio:cw.backendCat', 'CAT message')}</span>
+                </span>
+              )}
+            />
+            <Tab
+              key="serial"
+              title={(
+                <span className="flex items-center gap-1">
+                  <FontAwesomeIcon icon={faPlug} className="text-[10px]" />
+                  <span className="hidden sm:inline">{t('radio:cw.backendSerial', 'Serial keyer')}</span>
+                </span>
+              )}
+            />
+          </Tabs>
+          {operators.length > 1 && (
+            <Select
+              size="sm"
+              variant="flat"
+              aria-label={t('radio:cw.operator', 'Operator')}
+              selectedKeys={currentOperatorId ? [currentOperatorId] : []}
+              onSelectionChange={(keys) => {
+                const selected = Array.from(keys)[0] as string;
+                if (selected) setCurrentOperatorId(selected);
+              }}
+              className="w-28"
+              classNames={{ trigger: 'h-7 min-h-7 px-2', value: 'font-mono text-xs' }}
+            >
+              {operators.map((op) => (
+                <SelectItem key={op.id} textValue={op.context?.myCall || op.id}>
+                  {op.context?.myCall || op.id}
+                </SelectItem>
+              ))}
+            </Select>
+          )}
+          {isActive && (
+            <Chip size="sm" variant="flat" color="success">
+              {statusMode === 'keying' ? 'KEYING' : statusMode === 'playing' ? 'TX' : statusMode}
+            </Chip>
+          )}
+        </div>
       </div>
 
       <CWSidetone />
 
       <div className={`flex flex-col gap-3 ${embedded ? 'flex-1 min-h-0 overflow-hidden px-1 pb-1' : 'px-3 pb-3'}`}>
+        {showSerialPortAlert && (
+          <Alert
+            color="warning"
+            variant="flat"
+            title={t('radio:cw.serialPortMissingTitle', 'CW serial port is not configured')}
+            classNames={CW_ALERT_CLASS_NAMES}
+          >
+            <span className="text-xs leading-4">
+              {t('radio:cw.serialPortMissingBody', 'Serial keying is selected, but no CW key port is configured. Set the CW key port in the radio profile before using the serial keyer.')}
+            </span>
+          </Alert>
+        )}
+
+        {showCatAlert && (
+          <Alert
+            color="warning"
+            variant="flat"
+            title={t('radio:cw.catUnavailableTitle', 'CAT CW is not available')}
+            classNames={CW_ALERT_CLASS_NAMES}
+          >
+            <span className="text-xs leading-4">
+              {catUnavailableReason || t('radio:cw.catUnavailableBody', 'Connect a Hamlib radio that supports CAT Morse sending before using this backend.')}
+            </span>
+          </Alert>
+        )}
+
         {/* 文字输入区 */}
         <div className="flex gap-2">
           <Input

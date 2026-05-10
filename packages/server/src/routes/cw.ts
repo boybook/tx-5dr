@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import {
   UserRole,
+  CWKeyerBackendSchema,
   CWMessagePanelUpdateSchema,
   CWMessageSlotUpdateSchema,
 } from '@tx5dr/contracts';
@@ -17,7 +18,7 @@ export async function cwRoutes(fastify: FastifyInstance) {
   // GET /config - return CW keyer config
   fastify.get('/config', async (_req, reply) => {
     const manager = engine.getCWKeyerManager();
-    return reply.send({ success: true, config: manager.getConfig() });
+    return reply.send({ success: true, config: await manager.getConfigAsync() });
   });
 
   // PUT /config - update CW keyer config (wpm, etc.)
@@ -26,9 +27,16 @@ export async function cwRoutes(fastify: FastifyInstance) {
   }, async (req, reply) => {
     try {
       const manager = engine.getCWKeyerManager();
-      const { wpm } = req.body as { wpm?: number };
-      await manager.updateConfig({ wpm });
-      logger.info('CW keyer config updated', { wpm });
+      const body = req.body as { backend?: unknown; wpm?: unknown };
+      const update: { backend?: 'cat' | 'serial'; wpm?: number } = {};
+      if (body.backend !== undefined) {
+        update.backend = CWKeyerBackendSchema.parse(body.backend);
+      }
+      if (body.wpm !== undefined) {
+        update.wpm = Number(body.wpm);
+      }
+      await manager.updateConfig(update);
+      logger.info('CW keyer config updated', update);
       return reply.send({ success: true, config: manager.getConfig() });
     } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
