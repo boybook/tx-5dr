@@ -32,6 +32,7 @@ interface ActiveKeying {
   repeating: boolean;
   stopRequested: boolean;
   timer: ReturnType<typeof setTimeout> | null;
+  delayResolve: (() => void) | null;
   /** 操作员呼号，用于占位符替换 */
   callsign: string | null;
 }
@@ -112,7 +113,8 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
   }
 
   /**
-   * 初始化 CW 键控器（启动硬件、加载配置）
+   * 初始化 CW 键控器（启动硬件、加载配置）。
+   * 状态由调用方的播放/手键流程发布，避免首次 lazy start 覆盖 active 状态。
    */
   async start(config: CWKeyerConfig): Promise<void> {
     await this.ensureConfigLoaded();
@@ -121,7 +123,6 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     await this.getBackend().start(runtimeConfig);
     this._started = true;
     logger.info('CW keyer backend started', { backend: runtimeConfig.backend });
-    this.setStatus(this.idleStatus());
   }
 
   /**
@@ -179,6 +180,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
           repeating: false,
           stopRequested: false,
           timer: null,
+          delayResolve: null,
           callsign: null,
         };
       }
@@ -233,6 +235,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       repeating: false,
       stopRequested: false,
       timer: null,
+      delayResolve: null,
       callsign: callsign ?? null,
     };
     this.active = active;
@@ -328,7 +331,6 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     if (!slot.text) {
       throw new Error('CW message slot has no text');
     }
-
     const replaced = this.replacePlaceholders(slot.text, normalized).trim();
     if (!replaced) {
       return;
@@ -342,6 +344,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       repeating: repeat,
       stopRequested: false,
       timer: null,
+      delayResolve: null,
       callsign: normalized,
     };
     this.active = active;
@@ -365,10 +368,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     }
 
     active.stopRequested = true;
-    if (active.timer) {
-      clearTimeout(active.timer);
-      active.timer = null;
-    }
+    this.clearActiveDelay(active);
 
     await this.getBackend().stopActive();
 
@@ -469,9 +469,20 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     return new Promise<void>((resolve) => {
       active.timer = setTimeout(() => {
         active.timer = null;
+        active.delayResolve = null;
         resolve();
       }, ms);
+      active.delayResolve = resolve;
     });
+  }
+
+  private clearActiveDelay(active: ActiveKeying): void {
+    if (active.timer) {
+      clearTimeout(active.timer);
+      active.timer = null;
+    }
+    active.delayResolve?.();
+    active.delayResolve = null;
   }
 
   private setStatus(status: CWKeyerStatus): void {

@@ -757,6 +757,8 @@ export class HamlibConnection
   }
 
   async waitCWMessage(): Promise<void> {
+    // Hamlib's wait_morse can return before the queued CAT CW text is actually sent.
+    // Keep this low-level wrapper available, but CW keyer status tracking uses local timing.
     this.checkConnected();
     const rig = this.rig as (HamLib & { waitMorse?: () => Promise<number> }) | null;
     if (!rig || typeof rig.waitMorse !== 'function') {

@@ -419,7 +419,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
               title={(
                 <span className="flex items-center gap-1">
                   <FontAwesomeIcon icon={faTowerBroadcast} className="text-[10px]" />
-                  <span className="hidden sm:inline">{t('radio:cw.backendCat', 'CAT message')}</span>
+                  <span className="hidden sm:inline">{t('radio:cw.backendCat', 'Radio keyer')}</span>
                 </span>
               )}
             />
@@ -428,7 +428,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
               title={(
                 <span className="flex items-center gap-1">
                   <FontAwesomeIcon icon={faPlug} className="text-[10px]" />
-                  <span className="hidden sm:inline">{t('radio:cw.backendSerial', 'Serial keyer')}</span>
+                  <span className="hidden sm:inline">{t('radio:cw.backendSerial', 'Key jack')}</span>
                 </span>
               )}
             />

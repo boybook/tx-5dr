@@ -1,10 +1,12 @@
-import type { CWKeyerConfig } from '@tx5dr/contracts';
+import { estimateCWMessageDurationMs, type CWKeyerConfig } from '@tx5dr/contracts';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import { HamlibConnection } from '../radio/connections/HamlibConnection.js';
 import type { CWBackendAvailability, CWBackendPlaybackSignal, CWKeyerBackend } from './CWKeyerBackend.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('HamlibCatCWKeyerBackend');
+const MIN_CAT_STATUS_DURATION_MS = 250;
+const HAMLIB_MORSE_HANDLER_POLL_MS = 100;
 
 export class HamlibCatCWKeyerBackend implements CWKeyerBackend {
   readonly type = 'cat' as const;
@@ -33,7 +35,15 @@ export class HamlibCatCWKeyerBackend implements CWKeyerBackend {
     logger.debug('Sending CW text through Hamlib CAT backend', { length: text.length, wpm });
     await connection.sendCWMessage(text, wpm);
     if (signal.isStopped()) return;
-    await connection.waitCWMessage();
+
+    const messageDurationMs = estimateCWMessageDurationMs(text, wpm);
+    const durationMs = Math.max(
+      messageDurationMs > 0 ? messageDurationMs + HAMLIB_MORSE_HANDLER_POLL_MS : 0,
+      MIN_CAT_STATUS_DURATION_MS,
+    );
+    if (durationMs > 0) {
+      await signal.wait(durationMs);
+    }
   }
 
   async stopActive(): Promise<void> {

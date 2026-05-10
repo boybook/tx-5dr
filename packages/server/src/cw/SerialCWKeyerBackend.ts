@@ -1,6 +1,5 @@
-import type { CWKeyerConfig } from '@tx5dr/contracts';
+import { encodeTextToCWEvents, type CWKeyerConfig } from '@tx5dr/contracts';
 import { CWKeyerHardware } from './CWKeyerHardware.js';
-import { encodeTextToCWEvents } from './CWTextEncoder.js';
 import type { CWBackendAvailability, CWBackendPlaybackSignal, CWKeyerBackend } from './CWKeyerBackend.js';
 import { createLogger } from '../utils/logger.js';
 

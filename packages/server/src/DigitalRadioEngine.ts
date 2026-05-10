@@ -20,6 +20,7 @@ import {
   type WriteCapabilityPayload,
   type TuneToneStartPayload,
   type TuneToneStatus,
+  type CWKeyerStatus,
   type PresetFrequency,
   resolveWindowTiming,
 } from '@tx5dr/contracts';
@@ -131,6 +132,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private voiceKeyerPttActive = false;
   private physicalPttActive = false;
   private unifiedVoicePttActive = false;
+  private releaseCwPttPolling: (() => void) | null = null;
   private radioPowerController: RadioPowerController | null = null;
   private tuneToneController: TuneToneController;
   private readonly latestRadioPowerStates = new Map<string, RadioPowerStateEvent>();
@@ -548,6 +550,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     if (!this.cwKeyerManager) {
       this.cwKeyerManager = new CWKeyerManager(() => this.radioManager);
       this.cwKeyerManager.on('cwKeyerStatusChanged', (status) => {
+        this.handleCWKeyerStatusChanged(status);
         this.emit('cwKeyerStatusChanged', status);
       });
       this.cwKeyerManager.on('cwConfigChanged', (config) => {
@@ -793,6 +796,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
     await this.stop();
     this.squelchStatusMonitor.stop();
+    this.releaseCwPttPolling?.();
+    this.releaseCwPttPolling = null;
     this.physicalPttMonitor.stop();
 
     // rigctld bridge: tear down outside the engine resource pipeline so we
@@ -1415,6 +1420,19 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.physicalPttActive = active;
     this.voiceKeyerManager?.setManualPttActive(this.voiceManualPttActive || this.physicalPttActive);
     this.applyUnifiedVoicePttState([]);
+  }
+
+  private handleCWKeyerStatusChanged(status: CWKeyerStatus): void {
+    const shouldPollPhysicalPtt = status.active && (status.mode === 'playing' || status.mode === 'keying');
+    if (shouldPollPhysicalPtt && !this.releaseCwPttPolling) {
+      this.releaseCwPttPolling = this.physicalPttMonitor.requestPolling('cw-keyer');
+      return;
+    }
+
+    if (!shouldPollPhysicalPtt && this.releaseCwPttPolling) {
+      this.releaseCwPttPolling();
+      this.releaseCwPttPolling = null;
+    }
   }
 
   private resetVoicePttState(): void {

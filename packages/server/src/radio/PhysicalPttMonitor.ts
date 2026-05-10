@@ -3,7 +3,8 @@ import type { PhysicalRadioManager } from './PhysicalRadioManager.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('PhysicalPttMonitor');
-const POLL_INTERVAL_MS = 300;
+const VOICE_POLL_INTERVAL_MS = 300;
+const DEMAND_POLL_INTERVAL_MS = 150;
 
 type PhysicalPttMonitorOptions = {
   radioManager: PhysicalRadioManager;
@@ -18,10 +19,12 @@ export class PhysicalPttMonitor {
   private readonly isSoftwarePttActive: () => boolean;
   private readonly emitStatus: (active: boolean) => void;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private pollIntervalMs = 0;
   private pollInFlight = false;
   private lastActive = false;
   private consecutiveErrors = 0;
   private disabledForConnection: unknown = null;
+  private readonly demandPollReasons = new Set<string>();
 
   constructor(options: PhysicalPttMonitorOptions) {
     this.radioManager = options.radioManager;
@@ -64,30 +67,49 @@ export class PhysicalPttMonitor {
     this.reevaluate();
   }
 
+  requestPolling(reason: string): () => void {
+    this.demandPollReasons.add(reason);
+    this.reevaluate();
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.demandPollReasons.delete(reason);
+      this.reevaluate();
+    };
+  }
+
   stop(): void {
     this.stopPolling();
     this.pollInFlight = false;
     this.consecutiveErrors = 0;
     this.disabledForConnection = null;
+    this.demandPollReasons.clear();
     this.publish(false);
   }
 
   private shouldPoll(connection = this.radioManager.getCurrentConnection()): boolean {
-    if (this.getEngineMode() !== 'voice') return false;
     if (!this.radioManager.isConnected()) return false;
     if (this.isSoftwarePttActive()) return false;
     if (!connection || this.disabledForConnection === connection) return false;
-    return typeof connection.getPTT === 'function';
+    if (typeof connection.getPTT !== 'function') return false;
+    return this.getEngineMode() === 'voice' || this.demandPollReasons.size > 0 || this.lastActive;
   }
 
   private startPolling(): void {
-    if (this.pollTimer) return;
-    logger.debug('Starting physical PTT polling');
+    const intervalMs = this.getPollIntervalMs();
+    if (this.pollTimer && this.pollIntervalMs === intervalMs) return;
+    if (this.pollTimer) {
+      this.stopPolling();
+    }
+    logger.debug('Starting physical PTT polling', { intervalMs, demandReasons: [...this.demandPollReasons] });
     this.consecutiveErrors = 0;
     void this.pollOnce();
+    this.pollIntervalMs = intervalMs;
     this.pollTimer = setInterval(() => {
       void this.pollOnce();
-    }, POLL_INTERVAL_MS);
+    }, intervalMs);
   }
 
   private stopPolling(): void {
@@ -95,16 +117,18 @@ export class PhysicalPttMonitor {
     logger.debug('Stopping physical PTT polling');
     clearInterval(this.pollTimer);
     this.pollTimer = null;
+    this.pollIntervalMs = 0;
   }
 
   private async pollOnce(options: { force?: boolean } = {}): Promise<void> {
     if (this.pollInFlight) return;
     const connection = this.radioManager.getCurrentConnection();
     const canPoll = options.force
-      ? this.getEngineMode() === 'voice'
-        && this.radioManager.isConnected()
+      ? this.radioManager.isConnected()
         && Boolean(connection?.getPTT)
         && this.disabledForConnection !== connection
+        && !this.isSoftwarePttActive()
+        && (this.getEngineMode() === 'voice' || this.demandPollReasons.size > 0 || this.lastActive)
       : this.shouldPoll(connection);
 
     if (!canPoll) {
@@ -116,11 +140,11 @@ export class PhysicalPttMonitor {
     try {
       const active = await connection!.getPTT!();
       if (
-        this.getEngineMode() !== 'voice'
-        || !this.radioManager.isConnected()
+        !this.radioManager.isConnected()
         || this.radioManager.getCurrentConnection() !== connection
         || this.disabledForConnection === connection
         || this.isSoftwarePttActive()
+        || (this.getEngineMode() !== 'voice' && this.demandPollReasons.size === 0 && !this.lastActive)
       ) {
         return;
       }
@@ -128,7 +152,11 @@ export class PhysicalPttMonitor {
       if (this.disabledForConnection === connection) {
         this.disabledForConnection = null;
       }
+      const wasActive = this.lastActive;
       this.publish(active);
+      if (wasActive && !active) {
+        this.reevaluate();
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes('radio I/O is busy')) {
@@ -151,5 +179,9 @@ export class PhysicalPttMonitor {
     if (this.lastActive === active) return;
     this.lastActive = active;
     this.emitStatus(active);
+  }
+
+  private getPollIntervalMs(): number {
+    return this.demandPollReasons.size > 0 ? DEMAND_POLL_INTERVAL_MS : VOICE_POLL_INTERVAL_MS;
   }
 }
