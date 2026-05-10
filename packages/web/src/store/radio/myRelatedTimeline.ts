@@ -1,39 +1,29 @@
 import type { FrameMessage, ModeDescriptor, SlotPack, SlotPackFrequencyContext } from '@tx5dr/contracts';
-import { CycleUtils, FT8MessageParser, parseFT8LocationInfo } from '@tx5dr/core';
+import { CycleUtils, parseFT8LocationInfo } from '@tx5dr/core';
 import type { FrameDisplayMessage, FrameGroup } from '../../components/radio/digital/FramesTable';
 
 const MAX_GROUPS = 100;
 
-export interface MyRelatedTimelineOperatorContext {
-  operatorId: string;
-  myCallsign: string;
-  targetCallsign: string;
+interface MyRelatedTimelineLiveRxEntry {
+  slotStartMs: number;
+  messageKey: string;
+  message: FrameDisplayMessage;
   headerContextKey: string;
   frequencyContext?: SlotPackFrequencyContext;
-  startedAtMs: number;
-}
-
-export interface MyRelatedTimelineActiveSession extends MyRelatedTimelineOperatorContext {
-  groups: FrameGroup[];
-  seenMessageKeys: Set<string>;
+  manualSeed: boolean;
 }
 
 export interface MyRelatedTimelineState {
-  globalTxGroups: FrameGroup[];
-  committedRxGroups: FrameGroup[];
-  committedRxMessageKeys: Set<string>;
-  activeSession: MyRelatedTimelineActiveSession | null;
-  completedSessionCarryover: (Pick<MyRelatedTimelineOperatorContext, 'operatorId' | 'myCallsign' | 'targetCallsign' | 'headerContextKey' | 'frequencyContext'> & {
-    expiresAtMs: number;
-  }) | null;
+  frozenGroups: FrameGroup[];
+  frozenMessageKeys: Set<string>;
+  liveGroups: FrameGroup[];
+  currentLiveSlotStartMs: number | null;
+  liveRxEntries: Map<string, MyRelatedTimelineLiveRxEntry>;
+  liveTxLogs: Map<string, MyRelatedTransmissionLog>;
+  liveVisibleOperatorCallsigns: string[];
+  liveTargetCallsign: string;
   pendingRestore: boolean;
   lastProcessedSlotPackSeq: Map<string, number>;
-}
-
-export interface MyRelatedTimelineSeedCandidate {
-  slotStartMs: number;
-  frequencyContext?: SlotPackFrequencyContext;
-  message: FrameDisplayMessage;
 }
 
 export interface MyRelatedTransmissionLog {
@@ -49,38 +39,66 @@ export interface MyRelatedTransmissionLog {
 }
 
 export type MyRelatedTimelineAction =
-  | { type: 'replaceSessionContext'; payload: { nextContext: MyRelatedTimelineOperatorContext | null; forceRestart?: boolean } }
-  | { type: 'freezeActiveSession'; payload?: { reason?: 'default' | 'qso-complete'; carryUntilMs?: number } }
+  | {
+      type: 'syncLiveContext';
+      payload: {
+        currentMode: ModeDescriptor;
+        liveSlotStartMs: number | null;
+        visibleOperatorCallsigns: string[];
+        targetCallsign: string;
+      };
+    }
   | {
       type: 'seedSelectedRx';
       payload: {
-        context: MyRelatedTimelineOperatorContext;
         currentMode: ModeDescriptor;
         message: FrameDisplayMessage;
         slotStartMs: number;
+        liveSlotStartMs: number | null;
         frequencyContext?: SlotPackFrequencyContext;
       };
     }
-  | { type: 'ingestSlotPack'; payload: { slotPack: SlotPack; currentMode: ModeDescriptor } }
-  | { type: 'ingestTransmissionLog'; payload: { log: MyRelatedTransmissionLog; currentMode: ModeDescriptor } }
+  | {
+      type: 'ingestSlotPack';
+      payload: {
+        slotPack: SlotPack;
+        currentMode: ModeDescriptor;
+        liveSlotStartMs: number | null;
+        visibleOperatorCallsigns: string[];
+        targetCallsign: string;
+      };
+    }
+  | {
+      type: 'ingestTransmissionLog';
+      payload: {
+        log: MyRelatedTransmissionLog;
+        currentMode: ModeDescriptor;
+        liveSlotStartMs: number | null;
+      };
+    }
   | { type: 'beginRestore' }
   | {
       type: 'finalizeRestore';
       payload: {
         slotPacks: SlotPack[];
         currentMode: ModeDescriptor;
-        context: MyRelatedTimelineOperatorContext | null;
+        liveSlotStartMs: number | null;
+        visibleOperatorCallsigns: string[];
+        targetCallsign: string;
         operatorCallsignsById: Record<string, string>;
       };
     }
-  | { type: 'clearTimeline'; payload: { nextContext: MyRelatedTimelineOperatorContext | null } };
+  | { type: 'clearTimeline' };
 
 export const initialMyRelatedTimelineState: MyRelatedTimelineState = {
-  globalTxGroups: [],
-  committedRxGroups: [],
-  committedRxMessageKeys: new Set<string>(),
-  activeSession: null,
-  completedSessionCarryover: null,
+  frozenGroups: [],
+  frozenMessageKeys: new Set<string>(),
+  liveGroups: [],
+  currentLiveSlotStartMs: null,
+  liveRxEntries: new Map<string, MyRelatedTimelineLiveRxEntry>(),
+  liveTxLogs: new Map<string, MyRelatedTransmissionLog>(),
+  liveVisibleOperatorCallsigns: [],
+  liveTargetCallsign: '',
   pendingRestore: false,
   lastProcessedSlotPackSeq: new Map<string, number>(),
 };
@@ -90,133 +108,112 @@ export function myRelatedTimelineReducer(
   action: MyRelatedTimelineAction,
 ): MyRelatedTimelineState {
   switch (action.type) {
-    case 'replaceSessionContext': {
-      const { nextContext, forceRestart = false } = action.payload;
-      if (!nextContext) {
-        return freezeIntoCommitted(state, {
-          nextActiveSession: null,
-          preserveCarryover: true,
-        });
-      }
-
-      const activeSession = state.activeSession;
-      const sameSessionIdentity = activeSession && sessionIdentityEquals(activeSession, nextContext);
-      const sameFrequencyBoundary = activeSession && frequencyBoundaryEquals(activeSession.frequencyContext, nextContext.frequencyContext);
-
-      if (activeSession && canPromoteSessionTarget(activeSession, nextContext)) {
-        return {
-          ...state,
-          completedSessionCarryover: state.completedSessionCarryover,
-          activeSession: {
-            ...activeSession,
-            targetCallsign: nextContext.targetCallsign,
-            frequencyContext: mergeFrequencyContext(activeSession.frequencyContext, nextContext.frequencyContext),
-          },
-        };
-      }
-
-      if (sameSessionIdentity && sameFrequencyBoundary && !forceRestart) {
-        if (!activeSession) {
-          return state;
-        }
-
-        return {
-          ...state,
-          activeSession: {
-            ...activeSession,
-            frequencyContext: mergeFrequencyContext(activeSession.frequencyContext, nextContext.frequencyContext),
-          },
-        };
-      }
-
-      return freezeIntoCommitted(state, {
-        nextActiveSession: shouldAutoStartSession(nextContext) ? createActiveSession(nextContext) : null,
-        preserveCarryover: !shouldAutoStartSession(nextContext),
-      });
+    case 'syncLiveContext': {
+      const { currentMode, liveSlotStartMs, visibleOperatorCallsigns, targetCallsign } = action.payload;
+      const nextState = rolloverLiveCycle(state, currentMode, liveSlotStartMs);
+      return reprojectLiveGroups(nextState, currentMode, visibleOperatorCallsigns, targetCallsign);
     }
 
-    case 'freezeActiveSession':
-      return freezeIntoCommitted(state, {
-        nextActiveSession: null,
-        carryover: action.payload?.reason === 'qso-complete' && typeof action.payload.carryUntilMs === 'number'
-          ? buildCompletedSessionCarryover(state.activeSession, action.payload.carryUntilMs)
-          : null,
+    case 'seedSelectedRx': {
+      const { currentMode, message, slotStartMs, liveSlotStartMs, frequencyContext } = action.payload;
+      const nextState = rolloverLiveCycle(state, currentMode, liveSlotStartMs);
+      const messageKey = buildRxDisplayMessageKey(slotStartMs, message);
+      const liveRxEntries = new Map(nextState.liveRxEntries);
+      const existing = liveRxEntries.get(messageKey);
+      liveRxEntries.set(messageKey, {
+        slotStartMs,
+        messageKey,
+        message,
+        headerContextKey: buildHeaderContextKey(frequencyContext),
+        frequencyContext: frequencyContext ?? existing?.frequencyContext,
+        manualSeed: true,
       });
 
-    case 'seedSelectedRx': {
-      const { context, currentMode, message, slotStartMs, frequencyContext } = action.payload;
-      const needsRestart = !state.activeSession || !sessionIdentityEquals(state.activeSession, context);
-
-      const nextState = needsRestart
-        ? freezeIntoCommitted(state, { nextActiveSession: createActiveSession(context) })
-        : state;
-
-      if (!nextState.activeSession) {
-        return nextState;
-      }
-
-      const messageKey = buildRxDisplayMessageKey(slotStartMs, message);
-      return appendDisplayMessageToActiveSession(
-        nextState,
-        slotStartMs,
+      return reprojectLiveGroups(
+        {
+          ...nextState,
+          liveRxEntries,
+        },
         currentMode,
-        message,
-        messageKey,
-        context.headerContextKey,
-        frequencyContext ?? context.frequencyContext,
+        nextState.liveVisibleOperatorCallsigns,
+        nextState.liveTargetCallsign,
       );
     }
 
     case 'ingestSlotPack': {
-      const { slotPack, currentMode } = action.payload;
+      const { slotPack, currentMode, liveSlotStartMs, visibleOperatorCallsigns, targetCallsign } = action.payload;
       const previousSeq = state.lastProcessedSlotPackSeq.get(slotPack.slotId) ?? -1;
       const incomingSeq = slotPack.stats?.updateSeq ?? 0;
       if (incomingSeq <= previousSeq) {
         return state;
       }
 
-      let nextState: MyRelatedTimelineState = {
-        ...state,
-        lastProcessedSlotPackSeq: new Map(state.lastProcessedSlotPackSeq).set(slotPack.slotId, incomingSeq),
-      };
+      let nextState = rolloverLiveCycle(
+        {
+          ...state,
+          lastProcessedSlotPackSeq: new Map(state.lastProcessedSlotPackSeq).set(slotPack.slotId, incomingSeq),
+        },
+        currentMode,
+        liveSlotStartMs,
+      );
 
       if (nextState.pendingRestore) {
         return nextState;
       }
 
-      if (!nextState.activeSession) {
-        return appendSlotPackToCompletedCarryover(nextState, slotPack, currentMode);
-      }
-
-      if (slotPack.startMs < nextState.activeSession.startedAtMs) {
+      if (nextState.currentLiveSlotStartMs !== null && slotPack.startMs < nextState.currentLiveSlotStartMs) {
         return nextState;
       }
 
+      const liveRxEntries = new Map(nextState.liveRxEntries);
       for (const frame of slotPack.frames) {
         if (frame.snr === -999) {
           continue;
         }
-        if (!matchesSession(frame.message, nextState.activeSession)) {
-          continue;
-        }
 
         const messageKey = buildFrameMessageKey(frame, slotPack.startMs);
-        nextState = appendDisplayMessageToActiveSession(
-          nextState,
-          slotPack.startMs,
-          currentMode,
-          frameToDisplayMessage(frame, slotPack.startMs),
+        const existing = liveRxEntries.get(messageKey);
+        liveRxEntries.set(messageKey, {
+          slotStartMs: slotPack.startMs,
           messageKey,
-          nextState.activeSession.headerContextKey,
-          slotPack.frequencyContext ?? nextState.activeSession.frequencyContext,
-        );
+          message: frameToDisplayMessage(frame, slotPack.startMs),
+          headerContextKey: buildHeaderContextKey(slotPack.frequencyContext),
+          frequencyContext: slotPack.frequencyContext ?? existing?.frequencyContext,
+          manualSeed: existing?.manualSeed ?? false,
+        });
       }
 
-      return nextState;
+      nextState = {
+        ...nextState,
+        liveRxEntries,
+      };
+
+      return reprojectLiveGroups(nextState, currentMode, visibleOperatorCallsigns, targetCallsign);
     }
 
-    case 'ingestTransmissionLog':
-      return upsertGlobalTransmission(state, action.payload.log, action.payload.currentMode);
+    case 'ingestTransmissionLog': {
+      const { log, currentMode, liveSlotStartMs } = action.payload;
+      const nextState = rolloverLiveCycle(state, currentMode, liveSlotStartMs ?? log.slotStartMs);
+
+      if (
+        nextState.currentLiveSlotStartMs !== null &&
+        log.slotStartMs < nextState.currentLiveSlotStartMs
+      ) {
+        return appendFrozenTransmission(nextState, log, currentMode);
+      }
+
+      const liveTxLogs = new Map(nextState.liveTxLogs);
+      liveTxLogs.set(buildLiveTxKey(log.operatorId, log.slotStartMs), log);
+      return reprojectLiveGroups(
+        {
+          ...nextState,
+          liveTxLogs,
+        },
+        currentMode,
+        nextState.liveVisibleOperatorCallsigns,
+        nextState.liveTargetCallsign,
+      );
+    }
 
     case 'beginRestore':
       return {
@@ -225,26 +222,39 @@ export function myRelatedTimelineReducer(
       };
 
     case 'finalizeRestore': {
-      const { slotPacks, currentMode, context, operatorCallsignsById } = action.payload;
+      const {
+        slotPacks,
+        currentMode,
+        liveSlotStartMs,
+        visibleOperatorCallsigns,
+        targetCallsign,
+        operatorCallsignsById,
+      } = action.payload;
       if (!state.pendingRestore) {
         return state;
       }
 
+      const resolvedLiveSlotStartMs = liveSlotStartMs ?? findLatestSlotStartMs(slotPacks);
       let nextState: MyRelatedTimelineState = {
-        ...state,
+        frozenGroups: [],
+        frozenMessageKeys: new Set<string>(),
+        liveGroups: [],
+        currentLiveSlotStartMs: resolvedLiveSlotStartMs,
+        liveRxEntries: new Map<string, MyRelatedTimelineLiveRxEntry>(),
+        liveTxLogs: new Map<string, MyRelatedTransmissionLog>(),
+        liveVisibleOperatorCallsigns: visibleOperatorCallsigns,
+        liveTargetCallsign: targetCallsign,
         pendingRestore: false,
         lastProcessedSlotPackSeq: createProcessedSeqMap(state.lastProcessedSlotPackSeq, slotPacks),
       };
 
-      for (const slotPack of slotPacks) {
-        for (const frame of slotPack.frames) {
-          if (frame.snr !== -999 || !frame.operatorId) {
-            continue;
-          }
+      const sortedSlotPacks = [...slotPacks].sort((left, right) => left.startMs - right.startMs);
+      for (const slotPack of sortedSlotPacks) {
+        const isLiveSlot = resolvedLiveSlotStartMs !== null && slotPack.startMs === resolvedLiveSlotStartMs;
 
-          nextState = upsertGlobalTransmission(
-            nextState,
-            {
+        for (const frame of slotPack.frames) {
+          if (frame.snr === -999 && frame.operatorId) {
+            const log: MyRelatedTransmissionLog = {
               operatorId: frame.operatorId,
               myCallsign: operatorCallsignsById[frame.operatorId] || undefined,
               headerContextKey: buildHeaderContextKey(slotPack.frequencyContext),
@@ -254,53 +264,62 @@ export function myRelatedTimelineReducer(
               slotStartMs: slotPack.startMs,
               replaceExisting: true,
               frequencyContext: slotPack.frequencyContext,
-            },
-            currentMode,
-          );
-        }
-      }
+            };
 
-      if (!context?.myCallsign) {
-        return nextState;
-      }
-
-      for (const slotPack of slotPacks) {
-        for (const frame of slotPack.frames) {
-          if (frame.snr === -999 || !matchesSession(frame.message, context)) {
+            if (isLiveSlot) {
+              nextState.liveTxLogs.set(buildLiveTxKey(log.operatorId, log.slotStartMs), log);
+            } else {
+              nextState = appendFrozenTransmission(nextState, log, currentMode);
+            }
             continue;
           }
 
+          if (frame.snr === -999) {
+            continue;
+          }
+
+          const message = frameToDisplayMessage(frame, slotPack.startMs);
           const messageKey = buildFrameMessageKey(frame, slotPack.startMs);
-          if (nextState.committedRxMessageKeys.has(messageKey)) {
+          if (isLiveSlot) {
+            nextState.liveRxEntries.set(messageKey, {
+              slotStartMs: slotPack.startMs,
+              messageKey,
+              message,
+              headerContextKey: buildHeaderContextKey(slotPack.frequencyContext),
+              frequencyContext: slotPack.frequencyContext,
+              manualSeed: false,
+            });
             continue;
           }
 
-          nextState = appendCommittedRxDisplayMessage(
+          if (!matchesVisibleOperators(frame.message, visibleOperatorCallsigns) && !containsCallsign(frame.message, targetCallsign)) {
+            continue;
+          }
+
+          nextState = appendFrozenDisplayMessage(
             nextState,
             slotPack.startMs,
             currentMode,
-            frameToDisplayMessage(frame, slotPack.startMs),
+            message,
             messageKey,
-            context.headerContextKey,
-            slotPack.frequencyContext ?? context.frequencyContext,
+            buildHeaderContextKey(slotPack.frequencyContext),
+            slotPack.frequencyContext,
           );
         }
       }
 
-      return nextState;
+      return reprojectLiveGroups(nextState, currentMode, visibleOperatorCallsigns, targetCallsign);
     }
 
     case 'clearTimeline':
       return {
-        globalTxGroups: [],
-        committedRxGroups: [],
-        committedRxMessageKeys: new Set<string>(),
-        activeSession: action.payload.nextContext && shouldAutoStartSession(action.payload.nextContext)
-          ? createActiveSession(action.payload.nextContext)
-          : null,
-        completedSessionCarryover: null,
+        ...state,
+        frozenGroups: [],
+        frozenMessageKeys: new Set<string>(),
+        liveGroups: [],
+        liveRxEntries: new Map<string, MyRelatedTimelineLiveRxEntry>(),
+        liveTxLogs: new Map<string, MyRelatedTransmissionLog>(),
         pendingRestore: false,
-        lastProcessedSlotPackSeq: state.lastProcessedSlotPackSeq,
       };
 
     default:
@@ -310,199 +329,112 @@ export function myRelatedTimelineReducer(
 
 export function buildMyRelatedTimelineGroups(state: MyRelatedTimelineState): FrameGroup[] {
   return mergeGroups([
-    ...state.globalTxGroups,
-    ...state.committedRxGroups,
-    ...(state.activeSession?.groups ?? []),
+    ...state.frozenGroups,
+    ...state.liveGroups,
   ]);
 }
 
-export function findRecentSessionSeed(
-  slotPacks: SlotPack[],
-  context: Pick<MyRelatedTimelineOperatorContext, 'myCallsign' | 'targetCallsign' | 'startedAtMs'>,
-  currentMode: ModeDescriptor,
-): MyRelatedTimelineSeedCandidate | null {
-  const maxLookbackMs = currentMode.slotMs * 2;
-  const minStartMs = context.startedAtMs - maxLookbackMs;
-
-  let bestCandidate: MyRelatedTimelineSeedCandidate | null = null;
-  let bestScore = -1;
-
-  for (const slotPack of slotPacks) {
-    if (slotPack.startMs < minStartMs || slotPack.startMs > context.startedAtMs) {
-      continue;
-    }
-
-    for (const frame of slotPack.frames) {
-      if (frame.snr === -999) {
-        continue;
-      }
-
-      const score = scoreSessionSeedFrame(frame, context);
-      if (score < 0) {
-        continue;
-      }
-
-      if (
-        score > bestScore ||
-        (score === bestScore && bestCandidate && slotPack.startMs > bestCandidate.slotStartMs) ||
-        (score === bestScore && bestCandidate && slotPack.startMs === bestCandidate.slotStartMs && Math.round(frame.freq) > bestCandidate.message.freq)
-      ) {
-        bestScore = score;
-        bestCandidate = {
-          slotStartMs: slotPack.startMs,
-          frequencyContext: slotPack.frequencyContext,
-          message: frameToDisplayMessage(frame, slotPack.startMs),
-        };
-      }
-    }
-  }
-
-  return bestCandidate;
-}
-
-function shouldAutoStartSession(context: MyRelatedTimelineOperatorContext): boolean {
-  return context.myCallsign.trim().length > 0 && context.targetCallsign.trim().length > 0;
-}
-
-function createActiveSession(context: MyRelatedTimelineOperatorContext): MyRelatedTimelineActiveSession {
-  return {
-    ...context,
-    groups: [],
-    seenMessageKeys: new Set<string>(),
-  };
-}
-
-function cloneActiveSession(session: MyRelatedTimelineActiveSession): MyRelatedTimelineActiveSession {
-  return {
-    ...session,
-    groups: session.groups.map(group => ({
-      ...group,
-      messages: [...group.messages],
-      ...(group.frequencyContext ? { frequencyContext: { ...group.frequencyContext } } : {}),
-    })),
-    seenMessageKeys: new Set(session.seenMessageKeys),
-    ...(session.frequencyContext ? { frequencyContext: { ...session.frequencyContext } } : {}),
-  };
-}
-
-function buildCompletedSessionCarryover(
-  session: MyRelatedTimelineActiveSession | null,
-  expiresAtMs: number,
-): MyRelatedTimelineState['completedSessionCarryover'] {
-  if (!session || !session.groups.length) {
-    return null;
-  }
-
-  return {
-    operatorId: session.operatorId,
-    myCallsign: session.myCallsign,
-    targetCallsign: session.targetCallsign,
-    headerContextKey: session.headerContextKey,
-    frequencyContext: session.frequencyContext,
-    expiresAtMs,
-  };
-}
-
-function freezeIntoCommitted(
+function rolloverLiveCycle(
   state: MyRelatedTimelineState,
-  options: {
-    nextActiveSession: MyRelatedTimelineActiveSession | null;
-    carryover?: MyRelatedTimelineState['completedSessionCarryover'];
-    preserveCarryover?: boolean;
-  },
+  currentMode: ModeDescriptor,
+  nextLiveSlotStartMs: number | null,
 ): MyRelatedTimelineState {
-  const activeSession = state.activeSession;
-  const completedSessionCarryover = options.preserveCarryover
-    ? state.completedSessionCarryover
-    : options.carryover ?? null;
+  if (nextLiveSlotStartMs === null) {
+    return state;
+  }
 
-  if (!activeSession || activeSession.groups.length === 0) {
+  if (state.currentLiveSlotStartMs === null) {
     return {
       ...state,
-      activeSession: options.nextActiveSession,
-      completedSessionCarryover,
+      currentLiveSlotStartMs: nextLiveSlotStartMs,
     };
   }
 
-  const committedRxMessageKeys = new Set(state.committedRxMessageKeys);
-  let committedRxGroups = state.committedRxGroups;
+  if (nextLiveSlotStartMs <= state.currentLiveSlotStartMs) {
+    return state;
+  }
 
-  for (const group of activeSession.groups) {
-    for (const message of group.messages) {
-      const messageKey = buildRxDisplayMessageKey(group.startMs, message);
-      if (committedRxMessageKeys.has(messageKey)) {
-        continue;
-      }
-      committedRxMessageKeys.add(messageKey);
-      committedRxGroups = appendExistingGroupMessage(
-        committedRxGroups,
-        group,
-        message,
-        group.frequencyContext ?? activeSession.frequencyContext,
-      );
+  const frozenState = freezeLiveGroups(state, currentMode);
+  return {
+    ...frozenState,
+    currentLiveSlotStartMs: nextLiveSlotStartMs,
+    liveGroups: [],
+    liveRxEntries: new Map<string, MyRelatedTimelineLiveRxEntry>(),
+    liveTxLogs: new Map<string, MyRelatedTransmissionLog>(),
+  };
+}
+
+function reprojectLiveGroups(
+  state: MyRelatedTimelineState,
+  currentMode: ModeDescriptor,
+  visibleOperatorCallsigns: string[],
+  targetCallsign: string,
+): MyRelatedTimelineState {
+  let liveGroups: FrameGroup[] = [];
+
+  for (const log of state.liveTxLogs.values()) {
+    liveGroups = upsertTransmissionGroupMessage(liveGroups, log, currentMode, log.frequencyContext);
+  }
+
+  for (const entry of state.liveRxEntries.values()) {
+    if (!entry.manualSeed && !matchesVisibleOperators(entry.message.message, visibleOperatorCallsigns) && !containsCallsign(entry.message.message, targetCallsign)) {
+      continue;
     }
+
+    liveGroups = appendMessageToGroups(
+      liveGroups,
+      entry.slotStartMs,
+      currentMode.slotMs,
+      entry.message,
+      entry.headerContextKey,
+      entry.frequencyContext,
+    );
   }
 
   return {
     ...state,
-    committedRxGroups: trimGroups(committedRxGroups),
-    committedRxMessageKeys,
-    activeSession: options.nextActiveSession,
-    completedSessionCarryover,
+    liveGroups: trimGroups(liveGroups),
+    liveVisibleOperatorCallsigns: [...visibleOperatorCallsigns],
+    liveTargetCallsign: targetCallsign,
   };
 }
 
-function appendSlotPackToCompletedCarryover(
+function freezeLiveGroups(
   state: MyRelatedTimelineState,
-  slotPack: SlotPack,
   currentMode: ModeDescriptor,
 ): MyRelatedTimelineState {
-  const carryover = state.completedSessionCarryover;
-  if (!carryover) {
-    return state;
-  }
-
-  if (slotPack.startMs > carryover.expiresAtMs) {
-    return {
-      ...state,
-      completedSessionCarryover: null,
-    };
-  }
-
-  if (
-    carryover.frequencyContext &&
-    slotPack.frequencyContext &&
-    !frequencyBoundaryEquals(carryover.frequencyContext, slotPack.frequencyContext)
-  ) {
-    return state;
-  }
-
   let nextState = state;
-  for (const frame of slotPack.frames) {
-    if (frame.snr === -999 || !matchesSession(frame.message, carryover)) {
-      continue;
-    }
+  for (const group of state.liveGroups) {
+    for (const message of group.messages) {
+      const messageKey = buildFrozenMessageKey(group.startMs, message);
+      if (nextState.frozenMessageKeys.has(messageKey)) {
+        continue;
+      }
 
-    const messageKey = buildFrameMessageKey(frame, slotPack.startMs);
-    if (nextState.committedRxMessageKeys.has(messageKey)) {
-      continue;
-    }
+      if (message.db === 'TX') {
+        const log = state.liveTxLogs.get(buildLiveTxKey(message.operatorId ?? '', group.startMs));
+        if (log) {
+          nextState = appendFrozenTransmission(nextState, log, currentMode);
+        }
+        continue;
+      }
 
-    nextState = appendCommittedRxDisplayMessage(
-      nextState,
-      slotPack.startMs,
-      currentMode,
-      frameToDisplayMessage(frame, slotPack.startMs),
-      messageKey,
-      carryover.headerContextKey,
-      slotPack.frequencyContext ?? carryover.frequencyContext,
-    );
+      nextState = appendFrozenDisplayMessage(
+        nextState,
+        group.startMs,
+        currentMode,
+        message,
+        messageKey,
+        group.headerContextKey ?? buildHeaderContextKey(group.frequencyContext),
+        group.frequencyContext,
+      );
+    }
   }
 
   return nextState;
 }
 
-function appendCommittedRxDisplayMessage(
+function appendFrozenDisplayMessage(
   state: MyRelatedTimelineState,
   slotStartMs: number,
   currentMode: ModeDescriptor,
@@ -511,13 +443,17 @@ function appendCommittedRxDisplayMessage(
   headerContextKey: string,
   frequencyContext?: SlotPackFrequencyContext,
 ): MyRelatedTimelineState {
-  const committedRxMessageKeys = new Set(state.committedRxMessageKeys);
-  committedRxMessageKeys.add(messageKey);
+  if (state.frozenMessageKeys.has(messageKey)) {
+    return state;
+  }
+
+  const frozenMessageKeys = new Set(state.frozenMessageKeys);
+  frozenMessageKeys.add(messageKey);
   return {
     ...state,
-    committedRxGroups: trimGroups(
+    frozenGroups: trimGroups(
       appendMessageToGroups(
-        state.committedRxGroups,
+        state.frozenGroups,
         slotStartMs,
         currentMode.slotMs,
         message,
@@ -525,75 +461,29 @@ function appendCommittedRxDisplayMessage(
         frequencyContext,
       ),
     ),
-    committedRxMessageKeys,
+    frozenMessageKeys,
   };
 }
 
-function appendExistingGroupMessage(
-  groups: FrameGroup[],
-  sourceGroup: FrameGroup,
-  message: FrameDisplayMessage,
-  frequencyContext?: SlotPackFrequencyContext,
-): FrameGroup[] {
-  const groupKey = getGroupIdentityKey(sourceGroup.startMs, sourceGroup.frequencyContext ?? frequencyContext);
-  const nextGroups = groups.slice();
-  const existingIndex = nextGroups.findIndex(group => getGroupIdentityKey(group.startMs, group.frequencyContext) === groupKey);
-
-  if (existingIndex === -1) {
-    return mergeGroups([
-      ...nextGroups,
-      {
-        ...sourceGroup,
-        messages: [message],
-        ...(frequencyContext && !sourceGroup.frequencyContext ? { frequencyContext } : {}),
-      },
-    ]);
-  }
-
-  const existingGroup = nextGroups[existingIndex]!;
-  nextGroups[existingIndex] = {
-    ...existingGroup,
-    messages: mergeMessages(existingGroup.messages, [message]),
-    type: existingGroup.messages.some(item => item.db === 'TX') || message.db === 'TX' ? 'transmit' : 'receive',
-    headerContextKey: existingGroup.headerContextKey || sourceGroup.headerContextKey,
-    frequencyContext: existingGroup.frequencyContext ?? frequencyContext,
-  };
-
-  return mergeGroups(nextGroups);
-}
-
-function appendDisplayMessageToActiveSession(
+function appendFrozenTransmission(
   state: MyRelatedTimelineState,
-  slotStartMs: number,
+  log: MyRelatedTransmissionLog,
   currentMode: ModeDescriptor,
-  message: FrameDisplayMessage,
-  messageKey: string,
-  headerContextKey: string,
-  frequencyContext?: SlotPackFrequencyContext,
 ): MyRelatedTimelineState {
-  const activeSession = state.activeSession;
-  if (!activeSession) {
-    return state;
-  }
-
-  if (state.committedRxMessageKeys.has(messageKey)) {
-    return state;
-  }
-
-  const nextActiveSession = cloneActiveSession(activeSession);
-  nextActiveSession.seenMessageKeys.add(messageKey);
-  nextActiveSession.groups = appendMessageToGroups(
-    nextActiveSession.groups,
-    slotStartMs,
-    currentMode.slotMs,
-    message,
-    headerContextKey,
-    frequencyContext ?? nextActiveSession.frequencyContext,
-  );
-
+  const messageKey = buildFrozenMessageKey(log.slotStartMs, transmissionLogToDisplayMessage(log));
+  const frozenMessageKeys = new Set(state.frozenMessageKeys);
+  frozenMessageKeys.add(messageKey);
   return {
     ...state,
-    activeSession: nextActiveSession,
+    frozenGroups: trimGroups(
+      upsertTransmissionGroupMessage(
+        state.frozenGroups,
+        log,
+        currentMode,
+        log.frequencyContext,
+      ),
+    ),
+    frozenMessageKeys,
   };
 }
 
@@ -633,28 +523,10 @@ function appendMessageToGroups(
     messages: mergedMessages,
     type: mergedMessages.some(item => item.db === 'TX') ? 'transmit' : 'receive',
     headerContextKey: existingGroup.headerContextKey || headerContextKey,
-    frequencyContext: existingGroup.frequencyContext ?? frequencyContext,
+    frequencyContext: mergeFrequencyContext(existingGroup.frequencyContext, frequencyContext),
   };
 
   return mergeGroups(nextGroups);
-}
-
-function upsertGlobalTransmission(
-  state: MyRelatedTimelineState,
-  log: MyRelatedTransmissionLog,
-  currentMode: ModeDescriptor,
-): MyRelatedTimelineState {
-  return {
-    ...state,
-    globalTxGroups: trimGroups(
-      upsertTransmissionGroupMessage(
-        removeTransmissionMessageFromGroups(state.globalTxGroups, log.operatorId, log.slotStartMs),
-        log,
-        currentMode,
-        log.frequencyContext,
-      ),
-    ),
-  };
 }
 
 function upsertTransmissionGroupMessage(
@@ -693,7 +565,7 @@ function upsertTransmissionGroupMessage(
     messages: nextMessages,
     type: 'transmit',
     headerContextKey: existingGroup.headerContextKey || headerContextKey,
-    frequencyContext: existingGroup.frequencyContext ?? frequencyContext,
+    frequencyContext: mergeFrequencyContext(existingGroup.frequencyContext, frequencyContext),
   };
 
   return mergeGroups(nextGroups);
@@ -723,7 +595,7 @@ function mergeGroups(groups: FrameGroup[]): FrameGroup[] {
       type: mergedMessages.some(message => message.db === 'TX') ? 'transmit' : 'receive',
       messages: mergedMessages,
       headerContextKey: existing.headerContextKey || group.headerContextKey,
-      frequencyContext: existing.frequencyContext ?? group.frequencyContext,
+      frequencyContext: mergeFrequencyContext(existing.frequencyContext, group.frequencyContext),
     });
   }
 
@@ -754,55 +626,21 @@ function buildInlineMessageKey(message: FrameDisplayMessage): string {
   ].join(':');
 }
 
-function matchesSession(
-  message: string,
-  context: Pick<MyRelatedTimelineOperatorContext, 'myCallsign' | 'targetCallsign'>,
-): boolean {
-  return containsCallsign(message, context.myCallsign) || containsCallsign(message, context.targetCallsign);
-}
-
-function scoreSessionSeedFrame(
-  frame: FrameMessage,
-  context: Pick<MyRelatedTimelineOperatorContext, 'myCallsign' | 'targetCallsign'>,
-): number {
-  const myCallsign = context.myCallsign.trim().toUpperCase();
-  const targetCallsign = context.targetCallsign.trim().toUpperCase();
-  if (!myCallsign || !targetCallsign) {
-    return -1;
-  }
-
-  try {
-    const parsed = FT8MessageParser.parseMessage(frame.message);
-    switch (parsed.type) {
-      case 'call':
-      case 'signal_report':
-      case 'roger_report':
-      case 'rrr':
-      case '73': {
-        const sender = parsed.senderCallsign?.toUpperCase();
-        const target = parsed.targetCallsign?.toUpperCase();
-        return sender === targetCallsign && target === myCallsign ? 2 : -1;
-      }
-      case 'cq':
-        return parsed.senderCallsign?.toUpperCase() === targetCallsign ? 1 : -1;
-      default:
-        return -1;
-    }
-  } catch {
-    return -1;
-  }
+function matchesVisibleOperators(message: string, visibleOperatorCallsigns: string[]): boolean {
+  return visibleOperatorCallsigns.some(callsign => containsCallsign(message, callsign));
 }
 
 function containsCallsign(message: string, callsign: string): boolean {
-  const normalizedCallsign = callsign.trim();
+  const normalizedCallsign = callsign.trim().toUpperCase();
   if (!normalizedCallsign) {
     return false;
   }
 
-  return message.includes(normalizedCallsign) ||
-    message.startsWith(`${normalizedCallsign} `) ||
-    message.includes(` ${normalizedCallsign} `) ||
-    message.endsWith(` ${normalizedCallsign}`);
+  const upperMessage = message.toUpperCase();
+  return upperMessage.includes(normalizedCallsign) ||
+    upperMessage.startsWith(`${normalizedCallsign} `) ||
+    upperMessage.includes(` ${normalizedCallsign} `) ||
+    upperMessage.endsWith(` ${normalizedCallsign}`);
 }
 
 function buildFrameMessageKey(frame: FrameMessage, slotStartMs: number): string {
@@ -821,32 +659,16 @@ function buildRxDisplayMessageKey(slotStartMs: number, message: FrameDisplayMess
   ].join(':');
 }
 
-function removeTransmissionMessageFromGroups(
-  groups: FrameGroup[],
-  operatorId: string,
-  slotStartMs: number,
-): FrameGroup[] {
-  const nextGroups: FrameGroup[] = [];
-
-  for (const group of groups) {
-    if (group.startMs !== slotStartMs) {
-      nextGroups.push(group);
-      continue;
-    }
-
-    const nextMessages = group.messages.filter(message => !(message.db === 'TX' && message.operatorId === operatorId));
-    if (nextMessages.length === 0) {
-      continue;
-    }
-
-    nextGroups.push({
-      ...group,
-      messages: mergeMessages([], nextMessages),
-      type: nextMessages.some(message => message.db === 'TX') ? 'transmit' : 'receive',
-    });
+function buildFrozenMessageKey(slotStartMs: number, message: FrameDisplayMessage): string {
+  if (message.db === 'TX') {
+    return `TX:${slotStartMs}:${message.operatorId ?? message.message}`;
   }
 
-  return mergeGroups(nextGroups);
+  return buildRxDisplayMessageKey(slotStartMs, message);
+}
+
+function buildLiveTxKey(operatorId: string, slotStartMs: number): string {
+  return `${operatorId}:${slotStartMs}`;
 }
 
 function getGroupIdentityKey(startMs: number, frequencyContext?: SlotPackFrequencyContext): string {
@@ -855,26 +677,7 @@ function getGroupIdentityKey(startMs: number, frequencyContext?: SlotPackFrequen
     frequencyContext?.frequency ?? '',
     frequencyContext?.band ?? '',
     frequencyContext?.mode ?? '',
-    frequencyContext?.radioMode ?? '',
   ].join(':');
-}
-
-function sessionIdentityEquals(
-  left: Pick<MyRelatedTimelineOperatorContext, 'operatorId' | 'myCallsign' | 'targetCallsign'>,
-  right: Pick<MyRelatedTimelineOperatorContext, 'operatorId' | 'myCallsign' | 'targetCallsign'>,
-): boolean {
-  return left.operatorId === right.operatorId &&
-    left.myCallsign === right.myCallsign &&
-    left.targetCallsign === right.targetCallsign;
-}
-
-function frequencyBoundaryEquals(
-  left?: SlotPackFrequencyContext,
-  right?: SlotPackFrequencyContext,
-): boolean {
-  return (left?.frequency ?? null) === (right?.frequency ?? null) &&
-    (left?.band ?? '') === (right?.band ?? '') &&
-    (left?.mode ?? '') === (right?.mode ?? '');
 }
 
 function mergeFrequencyContext(
@@ -899,15 +702,17 @@ function mergeFrequencyContext(
   };
 }
 
-function canPromoteSessionTarget(
-  session: MyRelatedTimelineActiveSession,
-  context: MyRelatedTimelineOperatorContext,
-): boolean {
-  return session.operatorId === context.operatorId &&
-    session.myCallsign === context.myCallsign &&
-    !session.targetCallsign.trim() &&
-    !!context.targetCallsign.trim() &&
-    frequencyBoundaryEquals(session.frequencyContext, context.frequencyContext);
+function findLatestSlotStartMs(slotPacks: SlotPack[]): number | null {
+  if (slotPacks.length === 0) {
+    return null;
+  }
+
+  return slotPacks.reduce<number | null>((latest, slotPack) => {
+    if (latest === null || slotPack.startMs > latest) {
+      return slotPack.startMs;
+    }
+    return latest;
+  }, null);
 }
 
 function createProcessedSeqMap(

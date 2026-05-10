@@ -113,7 +113,6 @@ export const MyRelatedTimelineContext = createContext<{
   groups: FrameGroup[];
   clearTimeline: () => void;
   seedSelectedRx: (payload: {
-    targetCallsign: string;
     message: FrameDisplayMessage;
     group: FrameGroup;
   }) => void;

@@ -87,7 +87,6 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
     }
 
     timeline.seedSelectedRx({
-      targetCallsign: callsign,
       message,
       group,
     });
