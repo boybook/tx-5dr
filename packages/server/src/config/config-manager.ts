@@ -19,6 +19,8 @@ import { getConfigFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
 import { normalizeHamlibConfig, normalizeSerialConnectionConfig } from '../radio/hamlibConfigUtils.js';
 import { DEFAULT_NTP_SERVERS } from '../services/ntpServers.js';
+import { JsonFileStore, PersistenceCoordinator } from '../utils/persistence/index.js';
+import { RuntimeStateManager, type RuntimeState } from './RuntimeStateManager.js';
 
 const logger = createLogger('ConfigManager');
 
@@ -196,11 +198,119 @@ const DEFAULT_RADIO: HamlibConfig = {
   type: 'none',
 };
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function assertOptionalObject(root: Record<string, unknown>, key: string): void {
+  if (root[key] !== undefined && !isPlainObject(root[key])) {
+    throw new Error(`config.${key} must be an object`);
+  }
+}
+
+function assertOptionalArray(root: Record<string, unknown>, key: string): void {
+  if (root[key] !== undefined && !Array.isArray(root[key])) {
+    throw new Error(`config.${key} must be an array`);
+  }
+}
+
+function assertOptionalArrayOrNull(root: Record<string, unknown>, key: string): void {
+  if (root[key] !== undefined && root[key] !== null && !Array.isArray(root[key])) {
+    throw new Error(`config.${key} must be an array or null`);
+  }
+}
+
+function assertOptionalObjectOrNull(root: Record<string, unknown>, key: string): void {
+  if (root[key] !== undefined && root[key] !== null && !isPlainObject(root[key])) {
+    throw new Error(`config.${key} must be an object or null`);
+  }
+}
+
+function assertOptionalFiniteNumber(root: Record<string, unknown>, key: string): void {
+  if (root[key] !== undefined && !Number.isFinite(root[key])) {
+    throw new Error(`config.${key} must be a finite number`);
+  }
+}
+
+export function validateAppConfigCandidate(value: unknown): Record<string, unknown> {
+  if (!isPlainObject(value)) {
+    throw new Error('config root must be an object');
+  }
+
+  assertOptionalArray(value, 'profiles');
+  assertOptionalArray(value, 'operators');
+  assertOptionalArrayOrNull(value, 'customFrequencyPresets');
+  assertOptionalArray(value, 'openwebrxStations');
+  assertOptionalObject(value, 'ft8');
+  assertOptionalObject(value, 'server');
+  assertOptionalObject(value, 'pskreporter');
+  assertOptionalObject(value, 'plugins');
+  assertOptionalObject(value, 'rigctld');
+  assertOptionalObject(value, 'ntp');
+  assertOptionalObjectOrNull(value, 'lastSelectedFrequency');
+  assertOptionalObjectOrNull(value, 'lastVoiceFrequency');
+  assertOptionalObjectOrNull(value, 'lastVolumeGain');
+  assertOptionalObjectOrNull(value, 'volumeGainMap');
+
+  if (value.activeProfileId !== undefined && value.activeProfileId !== null && typeof value.activeProfileId !== 'string') {
+    throw new Error('config.activeProfileId must be a string or null');
+  }
+  if (value.lastEngineMode !== undefined && value.lastEngineMode !== 'digital' && value.lastEngineMode !== 'voice') {
+    throw new Error('config.lastEngineMode must be digital or voice');
+  }
+  if (value.logLevel !== undefined && !['debug', 'info', 'warn', 'error'].includes(String(value.logLevel))) {
+    throw new Error('config.logLevel must be debug, info, warn, or error');
+  }
+
+  if (isPlainObject(value.ft8)) {
+    assertOptionalFiniteNumber(value.ft8, 'frequency');
+    assertOptionalFiniteNumber(value.ft8, 'transmitPower');
+    assertOptionalFiniteNumber(value.ft8, 'maxQSOTimeout');
+    assertOptionalFiniteNumber(value.ft8, 'maxSameTransmissionCount');
+  }
+  if (isPlainObject(value.server)) {
+    assertOptionalFiniteNumber(value.server, 'port');
+    if (value.server.host !== undefined && typeof value.server.host !== 'string') {
+      throw new Error('config.server.host must be a string');
+    }
+  }
+  if (isPlainObject(value.pskreporter)) {
+    assertOptionalFiniteNumber(value.pskreporter, 'reportIntervalSeconds');
+    if (value.pskreporter.stats !== undefined && !isPlainObject(value.pskreporter.stats)) {
+      throw new Error('config.pskreporter.stats must be an object');
+    }
+  }
+  if (isPlainObject(value.lastSelectedFrequency)) {
+    assertOptionalFiniteNumber(value.lastSelectedFrequency, 'frequency');
+    if (value.lastSelectedFrequency.mode !== undefined && typeof value.lastSelectedFrequency.mode !== 'string') {
+      throw new Error('config.lastSelectedFrequency.mode must be a string');
+    }
+    if (value.lastSelectedFrequency.band !== undefined && typeof value.lastSelectedFrequency.band !== 'string') {
+      throw new Error('config.lastSelectedFrequency.band must be a string');
+    }
+  }
+  if (isPlainObject(value.lastVoiceFrequency)) {
+    assertOptionalFiniteNumber(value.lastVoiceFrequency, 'frequency');
+    if (value.lastVoiceFrequency.band !== undefined && typeof value.lastVoiceFrequency.band !== 'string') {
+      throw new Error('config.lastVoiceFrequency.band must be a string');
+    }
+  }
+  if (isPlainObject(value.lastVolumeGain)) {
+    assertOptionalFiniteNumber(value.lastVolumeGain, 'gain');
+    assertOptionalFiniteNumber(value.lastVolumeGain, 'gainDb');
+  }
+
+  return value;
+}
+
 // 配置管理器
 export class ConfigManager {
   private static instance: ConfigManager;
   private config: AppConfig;
   private configPath: string;
+  private configStore: JsonFileStore<Record<string, unknown>> | null = null;
+  private runtimeState = RuntimeStateManager.getInstance();
+  private unregisterPersistence: (() => void) | null = null;
 
   private constructor() {
     this.config = { ...DEFAULT_CONFIG };
@@ -224,11 +334,16 @@ export class ConfigManager {
       logger.info(`Config file path: ${this.configPath}`);
 
       await this.loadConfig();
+      await this.runtimeState.initialize(this.extractRuntimeSeed(this.config));
+      this.unregisterPersistence?.();
+      this.unregisterPersistence = PersistenceCoordinator.getInstance().register({
+        name: 'config',
+        flush: async () => this.flush(),
+      });
       logger.info('Config file loaded successfully');
     } catch (error) {
-      logger.info('Config file missing or invalid, using defaults');
-      await this.saveConfig();
-      logger.info('Default config file created');
+      logger.error('Config file missing or invalid and could not be recovered', error);
+      throw error;
     }
   }
 
@@ -236,8 +351,14 @@ export class ConfigManager {
    * 加载配置文件
    */
   private async loadConfig(): Promise<void> {
-    const configData = await fs.readFile(this.configPath, 'utf-8');
-    const parsedConfig = JSON.parse(configData);
+    this.configStore = new JsonFileStore<Record<string, unknown>>(this.configPath, {
+      defaultValue: () => ({ ...DEFAULT_CONFIG }),
+      validate: validateAppConfigCandidate,
+      backups: 3,
+    });
+    const parsedConfig = await this.configStore.load() as any;
+    const configData = `${JSON.stringify(parsedConfig, null, 2)}\n`;
+    let migrated = false;
 
     // 检测并迁移旧版 radio 配置格式（扁平 → 嵌套对象）
     if (parsedConfig.radio && this.needsRadioFormatMigration(parsedConfig.radio)) {
@@ -252,7 +373,7 @@ export class ConfigManager {
       parsedConfig.radio = this.migrateRadioConfigFormat(parsedConfig.radio);
 
       // 保存新格式配置
-      await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
+      migrated = true;
       logger.info('Radio config format migration complete');
     }
 
@@ -268,13 +389,13 @@ export class ConfigManager {
       this.migrateToProfiles(parsedConfig);
 
       // 保存迁移后的配置
-      await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
+      migrated = true;
       logger.info('Profile migration complete');
     }
 
     if (this.migrateLegacyStandardQSOSettings(parsedConfig)) {
       logger.info('Legacy standard-qso operator settings migrated to plugin config');
-      await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
+      migrated = true;
     }
 
     // 迁移全局 lastVolumeGain → 按模式+频段的 volumeGainMap
@@ -289,7 +410,7 @@ export class ConfigManager {
       }
       parsedConfig.volumeGainMap = map;
       parsedConfig.lastVolumeGain = null;
-      await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
+      migrated = true;
       logger.info('Volume gain migration complete');
     }
 
@@ -303,14 +424,25 @@ export class ConfigManager {
 
     // 合并默认配置和加载的配置
     this.config = this.mergeConfig(DEFAULT_CONFIG, parsedConfig);
+    if (migrated) {
+      await this.configStore.set(parsedConfig);
+    }
   }
 
   /**
    * 保存配置文件
    */
   private async saveConfig(): Promise<void> {
-    const configData = JSON.stringify(this.config, null, 2);
-    await fs.writeFile(this.configPath, configData, 'utf-8');
+    if (!this.configStore) {
+      throw new Error('ConfigManager not initialized');
+    }
+    PersistenceCoordinator.getInstance().assertMutationsAllowed('config');
+    await this.configStore.set(this.config as unknown as Record<string, unknown>);
+  }
+
+  async flush(): Promise<void> {
+    await this.configStore?.flush();
+    await this.runtimeState.flush();
   }
 
   /**
@@ -336,6 +468,44 @@ export class ConfigManager {
     }
 
     return result;
+  }
+
+  private extractRuntimeSeed(config: AppConfig): Partial<RuntimeState> {
+    return {
+      lastSelectedFrequency: config.lastSelectedFrequency,
+      lastVoiceFrequency: config.lastVoiceFrequency,
+      lastVolumeGain: config.lastVolumeGain,
+      volumeGainMap: config.volumeGainMap,
+      lastEngineMode: config.lastEngineMode,
+      lastDigitalModeName: config.lastDigitalModeName,
+      pskreporterStats: config.pskreporter?.stats,
+    };
+  }
+
+  private getRuntimeValue<K extends keyof RuntimeState>(key: K): RuntimeState[K] | undefined {
+    return this.runtimeState.isInitialized() ? this.runtimeState.get(key) : undefined;
+  }
+
+  private async setRuntimeValue<K extends keyof RuntimeState>(key: K, value: RuntimeState[K]): Promise<void> {
+    PersistenceCoordinator.getInstance().assertMutationsAllowed(`runtime-state:${String(key)}`);
+    if (this.runtimeState.isInitialized()) {
+      await this.runtimeState.set(key, value);
+      return;
+    }
+    if (key === 'pskreporterStats') {
+      this.config.pskreporter = {
+        ...this.config.pskreporter,
+        stats: {
+          ...this.config.pskreporter.stats,
+          ...(value as Partial<PSKReporterConfig['stats']>),
+        },
+      };
+    } else {
+      (this.config as unknown as Record<string, unknown>)[key] = value;
+    }
+    if (this.configStore) {
+      await this.saveConfig();
+    }
   }
 
   private migrateLegacyStandardQSOSettings(parsedConfig: any): boolean {
@@ -850,7 +1020,9 @@ export class ConfigManager {
    * 获取最后选择的频率
    */
   getLastSelectedFrequency(): AppConfig['lastSelectedFrequency'] {
-    return this.config.lastSelectedFrequency ? { ...this.config.lastSelectedFrequency } : null;
+    const runtimeValue = this.getRuntimeValue('lastSelectedFrequency');
+    const value = runtimeValue !== undefined ? runtimeValue : this.config.lastSelectedFrequency;
+    return value ? { ...value } : null;
   }
 
   /**
@@ -863,8 +1035,7 @@ export class ConfigManager {
     band: string;
     description?: string;
   }): Promise<void> {
-    this.config.lastSelectedFrequency = { ...frequencyConfig };
-    await this.saveConfig();
+    await this.setRuntimeValue('lastSelectedFrequency', { ...frequencyConfig });
     logger.debug(`Last selected frequency saved: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);
   }
 
@@ -872,7 +1043,9 @@ export class ConfigManager {
    * 获取最后选择的语音频率
    */
   getLastVoiceFrequency(): AppConfig['lastVoiceFrequency'] {
-    return this.config.lastVoiceFrequency ? { ...this.config.lastVoiceFrequency } : null;
+    const runtimeValue = this.getRuntimeValue('lastVoiceFrequency');
+    const value = runtimeValue !== undefined ? runtimeValue : this.config.lastVoiceFrequency;
+    return value ? { ...value } : null;
   }
 
   /**
@@ -884,8 +1057,7 @@ export class ConfigManager {
     band: string;
     description?: string;
   }): Promise<void> {
-    this.config.lastVoiceFrequency = { ...frequencyConfig };
-    await this.saveConfig();
+    await this.setRuntimeValue('lastVoiceFrequency', { ...frequencyConfig });
     logger.debug(`Last voice frequency saved: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);
   }
 
@@ -893,31 +1065,30 @@ export class ConfigManager {
    * 清除最后选择的频率
    */
   async clearLastSelectedFrequency(): Promise<void> {
-    this.config.lastSelectedFrequency = null;
-    await this.saveConfig();
+    await this.setRuntimeValue('lastSelectedFrequency', null);
   }
 
   /**
    * 清除最后选择的语音频率
    */
   async clearLastVoiceFrequency(): Promise<void> {
-    this.config.lastVoiceFrequency = null;
-    await this.saveConfig();
+    await this.setRuntimeValue('lastVoiceFrequency', null);
   }
 
   /**
    * 获取最后设置的音量增益
    */
   getLastVolumeGain(): AppConfig['lastVolumeGain'] {
-    return this.config.lastVolumeGain ? { ...this.config.lastVolumeGain } : null;
+    const runtimeValue = this.getRuntimeValue('lastVolumeGain');
+    const value = runtimeValue !== undefined ? runtimeValue : this.config.lastVolumeGain;
+    return value ? { ...value } : null;
   }
 
   /**
    * 更新最后设置的音量增益
    */
   async updateLastVolumeGain(gain: number, gainDb: number): Promise<void> {
-    this.config.lastVolumeGain = { gain, gainDb };
-    await this.saveConfig();
+    await this.setRuntimeValue('lastVolumeGain', { gain, gainDb });
     logger.debug(`Last volume gain saved: ${gainDb.toFixed(1)}dB (${gain.toFixed(3)})`);
   }
 
@@ -925,8 +1096,7 @@ export class ConfigManager {
    * 清除最后设置的音量增益
    */
   async clearLastVolumeGain(): Promise<void> {
-    this.config.lastVolumeGain = null;
-    await this.saveConfig();
+    await this.setRuntimeValue('lastVolumeGain', null);
   }
 
   /**
@@ -934,7 +1104,7 @@ export class ConfigManager {
    */
   getVolumeGainForSlot(modeCategory: string, band: string): { gain: number; gainDb: number } | null {
     const key = `${modeCategory}_${band}`;
-    const map = this.config.volumeGainMap;
+    const map = this.getRuntimeValue('volumeGainMap') ?? this.config.volumeGainMap;
     if (!map || !map[key]) return null;
     return { ...map[key] };
   }
@@ -944,11 +1114,9 @@ export class ConfigManager {
    */
   async updateVolumeGainForSlot(modeCategory: string, band: string, gain: number, gainDb: number): Promise<void> {
     const key = `${modeCategory}_${band}`;
-    if (!this.config.volumeGainMap) {
-      this.config.volumeGainMap = {};
-    }
-    this.config.volumeGainMap[key] = { gain, gainDb };
-    await this.saveConfig();
+    const map = { ...(this.getRuntimeValue('volumeGainMap') ?? this.config.volumeGainMap ?? {}) };
+    map[key] = { gain, gainDb };
+    await this.setRuntimeValue('volumeGainMap', map);
     logger.debug(`Volume gain saved for ${key}: ${gainDb.toFixed(1)}dB (${gain.toFixed(3)})`);
   }
 
@@ -956,14 +1124,24 @@ export class ConfigManager {
    * 获取 PSKReporter 配置
    */
   getPSKReporterConfig(): PSKReporterConfig {
-    return { ...this.config.pskreporter };
+    return {
+      ...this.config.pskreporter,
+      stats: {
+        ...this.config.pskreporter.stats,
+        ...(this.getRuntimeValue('pskreporterStats') ?? {}),
+      },
+    };
   }
 
   /**
    * 更新 PSKReporter 配置
    */
   async updatePSKReporterConfig(config: Partial<PSKReporterConfig>): Promise<void> {
-    this.config.pskreporter = { ...this.config.pskreporter, ...config };
+    const { stats, ...rest } = config;
+    this.config.pskreporter = { ...this.config.pskreporter, ...rest };
+    if (stats) {
+      await this.setRuntimeValue('pskreporterStats', { ...this.getPSKReporterConfig().stats, ...stats });
+    }
     await this.saveConfig();
   }
 
@@ -971,8 +1149,7 @@ export class ConfigManager {
    * 更新 PSKReporter 统计信息（不触发完整保存，仅更新统计）
    */
   async updatePSKReporterStats(stats: Partial<PSKReporterConfig['stats']>): Promise<void> {
-    this.config.pskreporter.stats = { ...this.config.pskreporter.stats, ...stats };
-    await this.saveConfig();
+    await this.setRuntimeValue('pskreporterStats', { ...this.getPSKReporterConfig().stats, ...stats });
   }
 
   /**
@@ -980,6 +1157,7 @@ export class ConfigManager {
    */
   async resetPSKReporterConfig(): Promise<void> {
     this.config.pskreporter = { ...DEFAULT_CONFIG.pskreporter };
+    await this.setRuntimeValue('pskreporterStats', { ...DEFAULT_CONFIG.pskreporter.stats });
     await this.saveConfig();
   }
 
@@ -1138,21 +1316,19 @@ export class ConfigManager {
   // ==================== Engine mode persistence ====================
 
   getLastEngineMode(): 'digital' | 'voice' {
-    return this.config.lastEngineMode ?? 'digital';
+    return this.getRuntimeValue('lastEngineMode') ?? this.config.lastEngineMode ?? 'digital';
   }
 
   async setLastEngineMode(mode: 'digital' | 'voice'): Promise<void> {
-    this.config.lastEngineMode = mode;
-    await this.saveConfig();
+    await this.setRuntimeValue('lastEngineMode', mode);
   }
 
   getLastDigitalModeName(): string {
-    return this.config.lastDigitalModeName ?? 'FT8';
+    return this.getRuntimeValue('lastDigitalModeName') ?? this.config.lastDigitalModeName ?? 'FT8';
   }
 
   async setLastDigitalModeName(modeName: string): Promise<void> {
-    this.config.lastDigitalModeName = modeName;
-    await this.saveConfig();
+    await this.setRuntimeValue('lastDigitalModeName', modeName);
   }
 
   // ===== Voice mode config =====

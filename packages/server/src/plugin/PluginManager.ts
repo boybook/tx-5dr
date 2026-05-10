@@ -1491,6 +1491,8 @@ export class PluginManager {
     const operatorStore = instance.ctx.store.operator as FlushableKVStore;
     await globalStore.flush().catch(() => {});
     await operatorStore.flush().catch(() => {});
+    globalStore.dispose?.();
+    operatorStore.dispose?.();
   }
 
   private registerEngineListeners(): void {

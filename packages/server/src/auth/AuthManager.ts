@@ -19,6 +19,8 @@ import {
 } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
+import { JsonFileStore, PersistenceCoordinator, safeWriteFile } from '../utils/persistence/index.js';
+import { RuntimeStateManager } from '../config/RuntimeStateManager.js';
 
 const logger = createLogger('AuthManager');
 
@@ -38,6 +40,9 @@ export class AuthManager {
   private config!: AuthConfig;
   private configPath!: string;
   private jwtSecret!: string;
+  private configStore: JsonFileStore<AuthConfig> | null = null;
+  private runtimeState = RuntimeStateManager.getInstance();
+  private unregisterPersistence: (() => void) | null = null;
 
   private constructor() {}
 
@@ -53,37 +58,50 @@ export class AuthManager {
   async initialize(): Promise<void> {
     this.configPath = await getConfigFilePath('auth.json');
     this.adminTokenFilePath = await getConfigFilePath('.admin-token');
+    if (!this.runtimeState.isInitialized()) {
+      await this.runtimeState.initialize();
+    }
     await this.loadConfig();
-    this.ensureJwtSecret();
+    await this.ensureJwtSecret();
     await this.ensureInitialAdminToken();
+    this.unregisterPersistence?.();
+    this.unregisterPersistence = PersistenceCoordinator.getInstance().register({
+      name: 'auth',
+      flush: async () => this.flush(),
+    });
   }
 
   // ===== 配置持久化 =====
 
   private async loadConfig(): Promise<void> {
-    try {
-      const data = await fs.readFile(this.configPath, 'utf-8');
-      const parsed = JSON.parse(data);
-      this.config = AuthConfigSchema.parse(parsed);
-    } catch {
-      this.config = AuthConfigSchema.parse({});
-      await this.saveConfig();
-      logger.info('Default auth config created');
+    this.configStore = new JsonFileStore<AuthConfig>(this.configPath, {
+      defaultValue: () => AuthConfigSchema.parse({}),
+      validate: (value) => AuthConfigSchema.parse(value),
+      backups: 3,
+    });
+    this.config = await this.configStore.load();
+  }
+
+  private async saveConfig(options: { defer?: boolean; internal?: boolean } = {}): Promise<void> {
+    if (!this.configStore) {
+      throw new Error('AuthManager not initialized');
     }
+    if (!options.internal) {
+      PersistenceCoordinator.getInstance().assertMutationsAllowed('auth');
+    }
+    await this.configStore.set(this.config, options);
   }
 
-  private async saveConfig(): Promise<void> {
-    await fs.writeFile(this.configPath, JSON.stringify(this.config, null, 2), 'utf-8');
-  }
-
-  private ensureJwtSecret(): void {
+  private async ensureJwtSecret(): Promise<void> {
     if (!this.config.jwtSecret) {
       this.config.jwtSecret = randomBytes(64).toString('hex');
-      this.saveConfig().catch(err =>
-        logger.error('Failed to save JWT secret:', err)
-      );
+      await this.saveConfig({ internal: true });
     }
     this.jwtSecret = this.config.jwtSecret;
+  }
+
+  async flush(): Promise<void> {
+    await this.configStore?.flush();
   }
 
   // ===== 初始 Admin Token =====
@@ -122,7 +140,7 @@ export class AuthManager {
           existing.tokenPlain = plainToken;
           changed = true;
         }
-        if (changed) await this.saveConfig();
+        if (changed) await this.saveConfig({ internal: true });
       }
     } else {
       // 没有 .admin-token 文件，生成新 token
@@ -134,7 +152,7 @@ export class AuthManager {
       }, null, undefined, true);
       plainToken = result.token;
       // 写入 .admin-token 文件供 Electron 等外部进程读取
-      await fs.writeFile(this.adminTokenFilePath, plainToken, 'utf-8');
+      await safeWriteFile(this.adminTokenFilePath, plainToken, { backups: 1, mode: 0o600 });
       logger.info('Admin token generated and written to .admin-token file');
     }
 
@@ -278,10 +296,16 @@ export class AuthManager {
 
       const match = await bcrypt.compare(plainToken, token.tokenHash);
       if (match) {
-        // 更新 lastUsedAt
-        token.lastUsedAt = Date.now();
-        this.saveConfig().catch(() => {}); // 不阻塞
-        return token;
+        const lastUsedAt = Date.now();
+        if (PersistenceCoordinator.getInstance().areMutationsBlocked()) {
+          logger.debug('auth lastUsedAt update skipped during shutdown', { tokenId: token.id });
+        } else {
+          this.runtimeState.set('authLastUsedAt', {
+            ...(this.runtimeState.get('authLastUsedAt') ?? {}),
+            [token.id]: lastUsedAt,
+          }, { defer: true }).catch(() => {});
+        }
+        return { ...token, lastUsedAt };
       }
     }
     return null;
@@ -296,9 +320,16 @@ export class AuthManager {
     const match = await bcrypt.compare(password, token.loginCredential.passwordHash);
     if (!match) return null;
 
-    token.lastUsedAt = Date.now();
-    this.saveConfig().catch(() => {});
-    return token;
+    const lastUsedAt = Date.now();
+    if (PersistenceCoordinator.getInstance().areMutationsBlocked()) {
+      logger.debug('auth lastUsedAt update skipped during shutdown', { tokenId: token.id });
+    } else {
+      this.runtimeState.set('authLastUsedAt', {
+        ...(this.runtimeState.get('authLastUsedAt') ?? {}),
+        [token.id]: lastUsedAt,
+      }, { defer: true }).catch(() => {});
+    }
+    return { ...token, lastUsedAt };
   }
 
   private async findTokenByPlainText(plainToken: string): Promise<AuthToken | null> {
@@ -334,7 +365,7 @@ export class AuthManager {
     await this.saveConfig();
 
     // 同步更新 .admin-token 文件
-    await fs.writeFile(this.adminTokenFilePath, newPlainToken, 'utf-8');
+    await safeWriteFile(this.adminTokenFilePath, newPlainToken, { backups: 1, mode: 0o600 });
     logger.info('System token regenerated');
 
     return {
@@ -415,6 +446,7 @@ export class AuthManager {
   }
 
   private toTokenInfo(token: AuthToken): TokenInfo {
+    const runtimeLastUsedAt = this.runtimeState.get('authLastUsedAt')?.[token.id];
     return {
       id: token.id,
       token: token.tokenPlain,
@@ -424,7 +456,7 @@ export class AuthManager {
       createdBy: token.createdBy,
       createdAt: token.createdAt,
       expiresAt: token.expiresAt,
-      lastUsedAt: token.lastUsedAt,
+      lastUsedAt: runtimeLastUsedAt ?? token.lastUsedAt,
       revoked: token.revoked,
       system: token.system,
       maxOperators: token.maxOperators,

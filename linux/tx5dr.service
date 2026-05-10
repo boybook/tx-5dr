@@ -16,6 +16,7 @@ ExecStart=/usr/bin/node /usr/share/tx5dr/packages/server/dist/scripts/server-lau
 WorkingDirectory=/usr/share/tx5dr
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=45s
 StandardOutput=journal
 StandardError=journal
 

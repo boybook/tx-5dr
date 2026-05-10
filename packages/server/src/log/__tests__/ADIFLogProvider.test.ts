@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { appendFile, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { performance } from 'perf_hooks';
 
 import { ADIFLogProvider } from '../ADIFLogProvider.js';
+import { MutationBlockedError, PersistenceCoordinator } from '../../utils/persistence/index.js';
 
 async function createProvider() {
   const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-import-'));
@@ -34,6 +35,7 @@ describe('ADIFLogProvider import', () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
+    PersistenceCoordinator.getInstance().allowNewMutationsForTests();
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
@@ -236,6 +238,332 @@ describe('ADIFLogProvider import', () => {
     expect(saved).toContain('<MODE:3>SSB');
     expect(saved).toContain('<SUBMODE:3>USB');
 
+    await provider.close();
+  });
+
+  it('replays durable journal transactions after add/update/delete without an ADIF checkpoint', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'journal-replay-kept',
+      callsign: 'BG2JR',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-05T12:00:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    await provider.updateQSO('journal-replay-kept', { notes: 'updated from journal' });
+    await provider.addQSO({
+      id: 'journal-replay-deleted',
+      callsign: 'BG2JD',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-05T12:15:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    await provider.deleteQSO('journal-replay-deleted');
+
+    const snapshot = await readFile(join(tempDir, 'logbook.adi'), 'utf-8');
+    expect(snapshot).not.toContain('BG2JR');
+
+    const reloaded = new ADIFLogProvider({
+      logFilePath: join(tempDir, 'logbook.adi'),
+      autoCreateFile: false,
+      logFileName: 'logbook.adi',
+    });
+    await reloaded.initialize();
+
+    const qsos = await reloaded.queryQSOs();
+    expect(qsos.map(qso => qso.id)).toEqual(['journal-replay-kept']);
+    expect(qsos[0].notes).toBe('updated from journal');
+
+    await reloaded.close();
+    await provider.close();
+  });
+
+  it('truncates a partial/corrupt journal tail while preserving valid transactions', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'journal-partial-valid',
+      callsign: 'BG2JP',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-06T12:00:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    const journalPath = join(tempDir, 'logbook.journal.jsonl');
+    await appendFile(journalPath, '{"txId":"BROKEN_TRAILER"', 'utf-8');
+
+    const reloaded = new ADIFLogProvider({
+      logFilePath: join(tempDir, 'logbook.adi'),
+      autoCreateFile: false,
+      logFileName: 'logbook.adi',
+    });
+    await reloaded.initialize();
+
+    expect(await reloaded.getQSO('journal-partial-valid')).not.toBeNull();
+    const journalContent = await readFile(journalPath, 'utf-8');
+    expect(journalContent).not.toContain('BROKEN_TRAILER');
+    expect(journalContent.endsWith('\n')).toBe(true);
+
+    await reloaded.close();
+    await provider.close();
+  });
+
+  it('does not replay a complete-looking journal tail without a durable newline', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'journal-no-newline-tail',
+      callsign: 'BG2JN',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-06T12:30:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    const journalPath = join(tempDir, 'logbook.journal.jsonl');
+    const journalContent = await readFile(journalPath, 'utf-8');
+    await writeFile(journalPath, journalContent.replace(/\n$/, ''), 'utf-8');
+
+    const reloaded = new ADIFLogProvider({
+      logFilePath: join(tempDir, 'logbook.adi'),
+      autoCreateFile: false,
+      logFileName: 'logbook.adi',
+    });
+    await reloaded.initialize();
+
+    expect(await reloaded.getQSO('journal-no-newline-tail')).toBeNull();
+    await expect(readFile(journalPath, 'utf-8')).resolves.toBe('');
+
+    await reloaded.close();
+    await provider.close();
+  });
+
+  it('preserves unparseable external ADIF lines across repeated checkpoints', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-import-'));
+    tempDirs.push(tempDir);
+    const logFilePath = join(tempDir, 'logbook.adi');
+    const rawUnparseable = '<CALL:5>BADXX<QSO_DATE:8>20260108<MODE:3>FT8<FREQ:9>14.074000<EOR>';
+    await writeFile(logFilePath, buildAdif([rawUnparseable]), 'utf-8');
+
+    const provider = new ADIFLogProvider({
+      logFilePath,
+      autoCreateFile: false,
+      logFileName: 'logbook.adi',
+    });
+    await provider.initialize();
+
+    await provider.addQSO({
+      id: 'checkpoint-preserve-1',
+      callsign: 'BG2P1',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-08T12:00:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    await provider.flush();
+
+    await provider.addQSO({
+      id: 'checkpoint-preserve-2',
+      callsign: 'BG2P2',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-08T12:15:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    await provider.flush();
+
+    const saved = await readFile(logFilePath, 'utf-8');
+    expect(saved).toContain(rawUnparseable);
+
+    await provider.close();
+  });
+
+  it('serializes checkpoint with queued journal writes', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    const writes = Array.from({ length: 20 }, (_, index) => provider.addQSO({
+      id: `checkpoint-queued-${index}`,
+      callsign: `B${index}CQ`,
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-07T12:00:00Z') + index * 60_000,
+      messageHistory: [],
+    }, 'op1'));
+
+    await Promise.all([...writes, provider.flush()]);
+
+    const reloaded = new ADIFLogProvider({
+      logFilePath: join(tempDir, 'logbook.adi'),
+      autoCreateFile: false,
+      logFileName: 'logbook.adi',
+    });
+    await reloaded.initialize();
+
+    expect(await reloaded.countQSOs()).toBe(20);
+    await expect(stat(join(tempDir, 'logbook.journal.jsonl'))).resolves.toMatchObject({ size: 0 });
+
+    await reloaded.close();
+    await provider.close();
+  });
+
+  it('recovers a corrupt checkpoint snapshot from backup plus archived journals', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+    const logFilePath = join(tempDir, 'logbook.adi');
+
+    await provider.addQSO({
+      id: 'checkpoint-recovery-a',
+      callsign: 'BG2A',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-09T12:00:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    await provider.flush();
+
+    await provider.addQSO({
+      id: 'checkpoint-recovery-b',
+      callsign: 'BG2B',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-09T12:15:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    await provider.flush();
+
+    const archives = (await readdir(tempDir)).filter(name => /^logbook\.journal\.jsonl\.\d{4}-/.test(name));
+    expect(archives.length).toBeGreaterThanOrEqual(2);
+    await writeFile(logFilePath, 'truncated snapshot without header', 'utf-8');
+
+    const reloaded = new ADIFLogProvider({
+      logFilePath,
+      autoCreateFile: false,
+      logFileName: 'logbook.adi',
+    });
+    await reloaded.initialize();
+
+    const ids = (await reloaded.queryQSOs()).map(qso => qso.id).sort();
+    expect(ids).toEqual(['checkpoint-recovery-a', 'checkpoint-recovery-b']);
+    await expect(readFile(logFilePath, 'utf-8')).resolves.toContain('BG2B');
+
+    await reloaded.close();
+    await provider.close();
+  });
+
+  it('fails closed when the ADIF snapshot is corrupt and no journal can recover it', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-import-'));
+    tempDirs.push(tempDir);
+    const logFilePath = join(tempDir, 'logbook.adi');
+    await writeFile(logFilePath, 'not an adif snapshot', 'utf-8');
+
+    const provider = new ADIFLogProvider({
+      logFilePath,
+      autoCreateFile: false,
+      logFileName: 'logbook.adi',
+    });
+
+    await expect(provider.initialize()).rejects.toThrow(/Unable to recover ADIF log snapshot/);
+    await expect(readFile(logFilePath, 'utf-8')).resolves.toBe('not an adif snapshot');
+  });
+
+  it('replays archived journals only to the last valid transaction and preserves corrupt tails', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+    const logFilePath = join(tempDir, 'logbook.adi');
+
+    await provider.addQSO({
+      id: 'archived-journal-valid',
+      callsign: 'BG2AJ',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-10T12:00:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    await provider.flush();
+
+    const archivedName = (await readdir(tempDir)).find(name => /^logbook\.journal\.jsonl\.\d{4}-/.test(name));
+    expect(archivedName).toBeTruthy();
+    const archivedPath = join(tempDir, archivedName!);
+    await appendFile(archivedPath, '{"txId":"BROKEN_TRAILER"', 'utf-8');
+    await writeFile(logFilePath, 'broken checkpoint snapshot', 'utf-8');
+
+    const reloaded = new ADIFLogProvider({
+      logFilePath,
+      autoCreateFile: false,
+      logFileName: 'logbook.adi',
+    });
+    await reloaded.initialize();
+
+    expect(await reloaded.getQSO('archived-journal-valid')).not.toBeNull();
+    await expect(readFile(archivedPath, 'utf-8')).resolves.not.toContain('BROKEN_TRAILER');
+    const corruptCopies = (await readdir(tempDir)).filter(name => name.startsWith(`${archivedName}.corrupt-`));
+    expect(corruptCopies.length).toBeGreaterThan(0);
+
+    await reloaded.close();
+    await provider.close();
+  });
+
+  it('rejects new logbook mutations after shutdown blocking without appending journal entries', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'blocked-existing',
+      callsign: 'BG2BL',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-11T12:00:00Z'),
+      messageHistory: [],
+    }, 'op1');
+    const journalPath = join(tempDir, 'logbook.journal.jsonl');
+    const before = await readFile(journalPath, 'utf-8');
+
+    PersistenceCoordinator.getInstance().blockNewMutations();
+
+    await expect(provider.addQSO({
+      id: 'blocked-add',
+      callsign: 'BG2BA',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-11T12:15:00Z'),
+      messageHistory: [],
+    }, 'op1')).rejects.toBeInstanceOf(MutationBlockedError);
+    await expect(provider.updateQSO('blocked-existing', { notes: 'blocked' })).rejects.toBeInstanceOf(MutationBlockedError);
+    await expect(provider.deleteQSO('blocked-existing')).rejects.toBeInstanceOf(MutationBlockedError);
+    await expect(provider.importADIF(buildAdif([
+      '<CALL:5>BG2IM<QSO_DATE:8>20260111<TIME_ON:6>123000<MODE:3>FT8<FREQ:9>14.074000<EOR>',
+    ]))).rejects.toBeInstanceOf(MutationBlockedError);
+
+    await expect(readFile(journalPath, 'utf-8')).resolves.toBe(before);
+
+    PersistenceCoordinator.getInstance().allowNewMutationsForTests();
+    await provider.close();
+  });
+
+  it('drains logbook writes that were queued before shutdown blocking', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    const writes = Array.from({ length: 5 }, (_, index) => provider.addQSO({
+      id: `queued-before-block-${index}`,
+      callsign: `BQ${index}DR`,
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-12T12:00:00Z') + index * 60_000,
+      messageHistory: [],
+    }, 'op1'));
+
+    PersistenceCoordinator.getInstance().blockNewMutations();
+    await expect(Promise.all(writes)).resolves.toHaveLength(5);
+    expect(await provider.countQSOs()).toBe(5);
+
+    PersistenceCoordinator.getInstance().allowNewMutationsForTests();
     await provider.close();
   });
 

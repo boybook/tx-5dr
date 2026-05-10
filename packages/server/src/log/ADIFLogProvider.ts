@@ -25,8 +25,10 @@ import { AdifParser } from 'adif-parser-ts';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
+import { createHash } from 'node:crypto';
 import { getDataFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
+import { JsonFileStore, PersistenceCoordinator, SafeFileWriter, fsyncDirectoryBestEffort, safeWriteFile } from '../utils/persistence/index.js';
 import {
   buildImportedQsoFingerprint,
   parseTx5drCsvContent,
@@ -62,6 +64,37 @@ interface OperatorIndex {
   perCallsign: Map<string, PerCallsignInfo>;
   // 每个呼号对应已通联过的频段集合（用于O(1)按频段判重）
   perCallsignBands: Map<string, Set<string>>;
+}
+
+type LogJournalOperation = 'add' | 'update' | 'delete' | 'import';
+
+interface LogJournalEntry {
+  txId: string;
+  timestamp: number;
+  operation: LogJournalOperation;
+  payload: Record<string, unknown>;
+  checksum: string;
+}
+
+interface LogbookMeta {
+  lastCheckpointTxId?: string;
+  checkpointedAt?: number;
+}
+
+interface SnapshotCacheBuildResult {
+  qsoCache: Map<string, QSORecord>;
+  foreignRecordLines: Map<string, string>;
+  unparseableLines: string[];
+  normalizedLegacyVoiceModes: boolean;
+}
+
+interface SnapshotLoadResult {
+  content: string;
+  recoveredFrom?: string;
+}
+
+interface ReplayJournalOptions {
+  truncateCorruptTail?: boolean;
 }
 
 function createEmptyOperatorIndex(): OperatorIndex {
@@ -128,6 +161,10 @@ function normalizeGridSearch(grid?: string): string | undefined {
 
 function normalizeMode(mode?: string): string {
   return (mode || 'UNKNOWN').toUpperCase();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function matchesModeFilter(qso: QSORecord, modeFilter: string): boolean {
@@ -446,6 +483,10 @@ function extractAdifLineKey(line: string): string | null {
   return `${callsign}_${qsoDate}`;
 }
 
+function logbookSidecarBase(filePath: string): string {
+  return filePath.replace(/\.adi$/i, '');
+}
+
 /**
  * ADIF格式的日志Provider实现
  */
@@ -462,6 +503,13 @@ export class ADIFLogProvider implements ILogProvider {
   private pendingAppendIds: Set<string> = new Set();
   private foreignRecordLines: Map<string, string> = new Map();
   private unparseableLines: string[] = [];
+  private journalPath: string = '';
+  private metaPath: string = '';
+  private writerTail: Promise<unknown> = Promise.resolve();
+  private safeWriter = new SafeFileWriter({ backups: 3 });
+  private metaStore: JsonFileStore<LogbookMeta> | null = null;
+  private lastJournalTxId: string | undefined;
+  private unregisterPersistence: (() => void) | null = null;
 
   constructor(options: ADIFLogProviderOptions = {}) {
     this.options = {
@@ -483,6 +531,20 @@ export class ADIFLogProvider implements ILogProvider {
     } else {
       this.logFilePath = await this.findOrCreateLogPath();
     }
+    const sidecarBase = logbookSidecarBase(this.logFilePath);
+    this.journalPath = `${sidecarBase}.journal.jsonl`;
+    this.metaPath = `${sidecarBase}.meta.json`;
+    this.metaStore = new JsonFileStore<LogbookMeta>(this.metaPath, {
+      defaultValue: () => ({}),
+      validate: (value) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          throw new Error('logbook meta root must be an object');
+        }
+        return value as LogbookMeta;
+      },
+      backups: 2,
+    });
+    await this.metaStore.load();
     
     // 如果文件不存在且autoCreateFile为true，创建空文件
     try {
@@ -493,17 +555,26 @@ export class ADIFLogProvider implements ILogProvider {
       }
     }
     
-    // 清理上次崩溃残留的临时文件
-    await fs.unlink(`${this.logFilePath}.tmp`).catch(() => {});
-
     // 加载现有日志到缓存
-    await this.loadCache();
+    const snapshotLoad = await this.loadCache();
+    if (snapshotLoad.recoveredFrom) {
+      await this.replayArchivedJournals();
+    }
+    await this.replayJournal();
+    if (snapshotLoad.recoveredFrom) {
+      this.needsFullRewrite = true;
+      await this.saveCache();
+    }
     // 构建/重建索引
     this.rebuildIndexes();
 
     this.needsFullRewrite = false;
     this.pendingAppendIds.clear();
     this.isInitialized = true;
+    this.unregisterPersistence = PersistenceCoordinator.getInstance().register({
+      name: `logbook:${this.logFilePath}`,
+      flush: async () => this.flush(),
+    });
   }
   
   /**
@@ -564,89 +635,159 @@ export class ADIFLogProvider implements ILogProvider {
   }
   
   /**
-   * 加载日志到缓存
+   * 加载日志到缓存。主 ADIF 损坏时尝试从安全写备份恢复；无法恢复则 fail closed。
    */
-  private async loadCache(): Promise<void> {
-    try {
-      const content = await fs.readFile(this.logFilePath, 'utf-8');
-      logger.debug(`File content length: ${content.length}`);
-
-      const adif = AdifParser.parseAdi(content);
-      logger.debug(`Parsed ${adif.records?.length || 0} records`);
-
-      // 从原始内容提取原始 ADIF 行并建立 key→line 索引
-      const rawLines = extractRawAdifLines(content);
-      const rawLineByKey = new Map<string, string>();
-      const rawLineKeys = rawLines.map((line) => extractAdifLineKey(line));
-      for (let i = 0; i < rawLines.length; i++) {
-        const key = rawLineKeys[i];
-        if (key) rawLineByKey.set(key, rawLines[i]);
-      }
-
-      this.qsoCache.clear();
-      this.unparseableLines = [];
-      let normalizedLegacyVoiceModes = false;
-
-      if (adif.records) {
-        const parsedQsos: QSORecord[] = [];
-        for (const record of adif.records) {
-          try {
-            const qso = this.adifToQSORecord(record);
-            parsedQsos.push(qso);
-            const isLegacyVoiceMode = ['USB', 'LSB'].includes((record.mode || '').trim().toUpperCase());
-            if (isLegacyVoiceMode) {
-              normalizedLegacyVoiceModes = true;
-            }
-            // 外来记录：从原始内容中提取原始行缓存，写盘时原样输出
-            const hasTx5drEnrichment =
-              record.app_tx5dr_dxcc_status !== undefined ||
-              record.app_tx5dr_dxcc_source !== undefined ||
-              record.app_tx5dr_dxcc_confidence !== undefined ||
-              record.app_tx5dr_dxcc_needs_review !== undefined ||
-              record.app_tx5dr_station_location_id !== undefined;
-            if (!hasTx5drEnrichment && !isLegacyVoiceMode) {
-              const lookupKey = `${qso.callsign.toUpperCase()}_${formatADIFDateOnly(qso.startTime)}`;
-              const rawLine = rawLineByKey.get(lookupKey);
-              if (rawLine) {
-                this.foreignRecordLines.set(qso.id, rawLine);
-              }
-            }
-            logger.debug(`Parsed QSO: ${qso.id} - ${qso.callsign}`);
-          } catch (err) {
-            logger.error('Failed to load record', { err, record });
-          }
-        }
-        // 按时间升序排列，确保内存缓存和文件顺序一致
-        parsedQsos.sort((a, b) => a.startTime - b.startTime);
-        for (const qso of parsedQsos) {
-          this.qsoCache.set(qso.id, qso);
-        }
-      }
-
-      // 未能匹配到解析记录的原始行 → 保留在 unparseableLines，写回时不丢失
-      const matchedKeys = new Set<string>();
-      for (const qso of adif.records || []) {
-        try {
-          const callsign = qso.call?.trim().toUpperCase();
-          const qsoDate = qso.qso_date?.trim();
-          if (callsign && qsoDate) matchedKeys.add(`${callsign}_${qsoDate}`);
-        } catch { /* skip */ }
-      }
-      for (let i = 0; i < rawLines.length; i++) {
-        const key = rawLineKeys[i];
-        if (key && !matchedKeys.has(key)) {
-          this.unparseableLines.push(rawLines[i]);
-        }
-      }
-
-      logger.debug(`Cache loaded: ${this.qsoCache.size} records, ${this.foreignRecordLines.size} foreign, ${this.unparseableLines.length} unparseable`);
-      if (normalizedLegacyVoiceModes) {
-        this.needsFullRewrite = true;
+  private async loadCache(): Promise<SnapshotLoadResult> {
+    const loaded = await this.loadSnapshotWithRecovery();
+    if (loaded.content !== null) {
+      this.applySnapshotCache(this.buildCacheFromSnapshotContent(loaded.content));
+      if (this.needsFullRewrite) {
         await this.saveCache();
       }
-    } catch (error) {
-      logger.error('Failed to load ADIF log cache', error);
+      return { content: loaded.content, recoveredFrom: loaded.recoveredFrom };
     }
+
+    if (await this.hasJournalRecoveryCandidates()) {
+      logger.warn('ADIF snapshot unavailable; recovering logbook from journal files only', { logFilePath: this.logFilePath });
+      this.qsoCache.clear();
+      this.foreignRecordLines.clear();
+      this.unparseableLines = [];
+      return { content: '', recoveredFrom: 'journal-only' };
+    }
+
+    throw new Error(`Unable to recover ADIF log snapshot: ${this.logFilePath}`);
+  }
+
+  private async loadSnapshotWithRecovery(): Promise<{ content: string | null; recoveredFrom?: string }> {
+    const failures: string[] = [];
+    const tryCandidate = async (candidatePath: string): Promise<string | null> => {
+      try {
+        const content = await fs.readFile(candidatePath, 'utf-8');
+        this.buildCacheFromSnapshotContent(content);
+        return content;
+      } catch (error) {
+        failures.push(`${candidatePath}: ${(error as Error).message}`);
+        return null;
+      }
+    };
+
+    const mainContent = await tryCandidate(this.logFilePath);
+    if (mainContent !== null) {
+      return { content: mainContent };
+    }
+
+    const candidates = await this.listSnapshotRecoveryCandidates();
+    for (const candidatePath of candidates) {
+      const content = await tryCandidate(candidatePath);
+      if (content === null) continue;
+
+      const corruptPath = `${this.logFilePath}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      await fs.rename(this.logFilePath, corruptPath).catch((error) => {
+        logger.warn('failed to move corrupt ADIF snapshot aside', { filePath: this.logFilePath, corruptPath, error: (error as Error).message });
+      });
+      await this.atomicWriteFile(this.logFilePath, content);
+      logger.warn('ADIF snapshot recovered from backup', { logFilePath: this.logFilePath, recoveredFrom: candidatePath });
+      return { content, recoveredFrom: candidatePath };
+    }
+
+    logger.error('ADIF snapshot recovery failed', { logFilePath: this.logFilePath, failures });
+    return { content: null };
+  }
+
+  private async listSnapshotRecoveryCandidates(): Promise<string[]> {
+    const dir = path.dirname(this.logFilePath);
+    const base = path.basename(this.logFilePath);
+    const candidates = [
+      ...(await fs.readdir(dir, { withFileTypes: true }).then(entries => entries
+        .filter(entry => entry.isFile() && entry.name.startsWith(`${base}.tmp-`))
+        .map(entry => path.join(dir, entry.name))).catch(() => [])),
+      ...[1, 2, 3].map(index => `${this.logFilePath}.bak.${index}`),
+    ];
+    const withStats = await Promise.all(candidates.map(async (candidatePath, order) => {
+      const stat = await fs.stat(candidatePath).catch(() => null);
+      return stat ? { path: candidatePath, mtimeMs: stat.mtimeMs, order } : null;
+    }));
+    return withStats
+      .filter((entry): entry is { path: string; mtimeMs: number; order: number } => Boolean(entry))
+      .sort((a, b) => b.mtimeMs - a.mtimeMs || a.order - b.order)
+      .map(entry => entry.path);
+  }
+
+  private buildCacheFromSnapshotContent(content: string): SnapshotCacheBuildResult {
+    if (!/<EOH>/i.test(content)) {
+      throw new Error('ADIF header <EOH> missing');
+    }
+
+    logger.debug(`File content length: ${content.length}`);
+    const adif = AdifParser.parseAdi(content);
+    logger.debug(`Parsed ${adif.records?.length || 0} records`);
+
+    const rawLines = extractRawAdifLines(content);
+    const rawLineByKey = new Map<string, string>();
+    const rawLineKeys = rawLines.map((line) => extractAdifLineKey(line));
+    for (let i = 0; i < rawLines.length; i++) {
+      const key = rawLineKeys[i];
+      if (key) rawLineByKey.set(key, rawLines[i]);
+    }
+
+    const qsoCache = new Map<string, QSORecord>();
+    const foreignRecordLines = new Map<string, string>();
+    const unparseableLines: string[] = [];
+    const parsedRawKeys = new Set<string>();
+    let normalizedLegacyVoiceModes = false;
+
+    if (adif.records) {
+      const parsedQsos: QSORecord[] = [];
+      for (const record of adif.records) {
+        try {
+          const qso = this.adifToQSORecord(record);
+          parsedQsos.push(qso);
+          const isLegacyVoiceMode = ['USB', 'LSB'].includes((record.mode || '').trim().toUpperCase());
+          if (isLegacyVoiceMode) {
+            normalizedLegacyVoiceModes = true;
+          }
+          const lookupKey = `${qso.callsign.toUpperCase()}_${formatADIFDateOnly(qso.startTime)}`;
+          parsedRawKeys.add(lookupKey);
+          const hasTx5drEnrichment =
+            record.app_tx5dr_id !== undefined ||
+            record.app_tx5dr_dxcc_status !== undefined ||
+            record.app_tx5dr_dxcc_source !== undefined ||
+            record.app_tx5dr_dxcc_confidence !== undefined ||
+            record.app_tx5dr_dxcc_needs_review !== undefined ||
+            record.app_tx5dr_station_location_id !== undefined;
+          if (!hasTx5drEnrichment && !isLegacyVoiceMode) {
+            const rawLine = rawLineByKey.get(lookupKey);
+            if (rawLine) {
+              foreignRecordLines.set(qso.id, rawLine);
+            }
+          }
+          logger.debug(`Parsed QSO: ${qso.id} - ${qso.callsign}`);
+        } catch (err) {
+          logger.error('Failed to load record', { err, record });
+        }
+      }
+      parsedQsos.sort((a, b) => a.startTime - b.startTime);
+      for (const qso of parsedQsos) {
+        qsoCache.set(qso.id, qso);
+      }
+    }
+
+    for (let i = 0; i < rawLines.length; i++) {
+      const key = rawLineKeys[i];
+      if (key && !parsedRawKeys.has(key)) {
+        unparseableLines.push(rawLines[i]);
+      }
+    }
+
+    return { qsoCache, foreignRecordLines, unparseableLines, normalizedLegacyVoiceModes };
+  }
+
+  private applySnapshotCache(result: SnapshotCacheBuildResult): void {
+    this.qsoCache = result.qsoCache;
+    this.foreignRecordLines = result.foreignRecordLines;
+    this.unparseableLines = result.unparseableLines;
+    this.needsFullRewrite = result.normalizedLegacyVoiceModes;
+    logger.debug(`Cache loaded: ${this.qsoCache.size} records, ${this.foreignRecordLines.size} foreign, ${this.unparseableLines.length} unparseable`);
   }
 
   // —— 索引维护 ——
@@ -694,9 +835,11 @@ export class ADIFLogProvider implements ILogProvider {
       throw new Error(`Required fields missing: call=${callsign}, qso_date=${qsoDate}, time_on=${timeOn}`);
     }
     
-    // 生成ID（使用呼号+日期+时间+操作员ID）
-    let id = `${callsign}_${qsoDate}_${timeOn}`;
-    if (fields.operator) {
+    // 生成ID（优先保留 TX-5DR 内部 ID；旧 ADIF 则回退到呼号+日期+时间+操作员）
+    let id = typeof fields.app_tx5dr_id === 'string' && fields.app_tx5dr_id.trim()
+      ? fields.app_tx5dr_id.trim()
+      : `${callsign}_${qsoDate}_${timeOn}`;
+    if (!fields.app_tx5dr_id && fields.operator) {
       id += `_${fields.operator}`;
     }
     
@@ -878,6 +1021,9 @@ export class ADIFLogProvider implements ILogProvider {
     
     // 必需字段
     adifRecord += `<CALL:${qso.callsign.length}>${qso.callsign}`;
+    if (qso.id) {
+      adifRecord += `<APP_TX5DR_ID:${qso.id.length}>${qso.id}`;
+    }
     adifRecord += `<QSO_DATE:8>${dateStr}`;
     adifRecord += `<TIME_ON:${timeOnStr.length}>${timeOnStr}`;
     adifRecord += `<MODE:${adifMode.mode.length}>${adifMode.mode}`;
@@ -1031,9 +1177,266 @@ export class ADIFLogProvider implements ILogProvider {
    * 原子写入文件：先写临时文件再 rename，防止进程崩溃时文件截断
    */
   private async atomicWriteFile(filePath: string, content: string): Promise<void> {
-    const tmpPath = `${filePath}.tmp`;
-    await fs.writeFile(tmpPath, content, 'utf-8');
-    await fs.rename(tmpPath, filePath);
+    await this.safeWriter.writeFile(filePath, content, { backups: 3 });
+  }
+
+  private buildJournalEntry(operation: LogJournalOperation, payload: Record<string, unknown>): LogJournalEntry {
+    const entryWithoutChecksum = {
+      txId: `${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 10)}`,
+      timestamp: Date.now(),
+      operation,
+      payload,
+    };
+    return {
+      ...entryWithoutChecksum,
+      checksum: this.hashJournalPayload(entryWithoutChecksum),
+    };
+  }
+
+  private hashJournalPayload(value: Omit<LogJournalEntry, 'checksum'>): string {
+    return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  }
+
+  private verifyJournalEntry(entry: LogJournalEntry): boolean {
+    if (!entry || typeof entry !== 'object') return false;
+    const { checksum, ...rest } = entry;
+    return typeof checksum === 'string'
+      && checksum === this.hashJournalPayload(rest as Omit<LogJournalEntry, 'checksum'>);
+  }
+
+  private async enqueueWrite<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.writerTail.catch(() => undefined).then(operation);
+    this.writerTail = run.catch(() => undefined);
+    return run;
+  }
+
+  private async appendJournal(operation: LogJournalOperation, payload: Record<string, unknown>): Promise<LogJournalEntry> {
+    const entry = this.buildJournalEntry(operation, payload);
+    const line = `${JSON.stringify(entry)}\n`;
+    const journalExisted = await fs.access(this.journalPath).then(() => true).catch(() => false);
+    await fs.mkdir(path.dirname(this.journalPath), { recursive: true });
+    const handle = await fs.open(this.journalPath, 'a');
+    try {
+      await handle.writeFile(line, 'utf-8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    if (!journalExisted) {
+      await fsyncDirectoryBestEffort(path.dirname(this.journalPath));
+    }
+    this.lastJournalTxId = entry.txId;
+    return entry;
+  }
+
+  private async replayJournal(): Promise<void> {
+    await this.replayJournalFile(this.journalPath, { truncateCorruptTail: true });
+  }
+
+  private async replayArchivedJournals(): Promise<void> {
+    const archivedPaths = await this.listArchivedJournalPaths();
+    for (const archivedPath of archivedPaths) {
+      await this.replayJournalFile(archivedPath, { truncateCorruptTail: true });
+    }
+  }
+
+  private async hasJournalRecoveryCandidates(): Promise<boolean> {
+    const candidates = [
+      ...(await this.listArchivedJournalPaths()),
+      this.journalPath,
+    ];
+    for (const candidatePath of candidates) {
+      if (await this.journalFileHasValidTransaction(candidatePath)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private async listArchivedJournalPaths(): Promise<string[]> {
+    const dir = path.dirname(this.journalPath);
+    const base = path.basename(this.journalPath);
+    const archivePrefix = `${base}.`;
+    const archiveNamePattern = new RegExp(`^${escapeRegExp(archivePrefix)}\\d{4}-\\d{2}-\\d{2}T`);
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const candidates = await Promise.all(entries
+      .filter(entry => entry.isFile() && archiveNamePattern.test(entry.name))
+      .map(async (entry) => {
+        const filePath = path.join(dir, entry.name);
+        const stat = await fs.stat(filePath).catch(() => null);
+        return stat ? { filePath, name: entry.name, mtimeMs: stat.mtimeMs } : null;
+      }));
+    return candidates
+      .filter((entry): entry is { filePath: string; name: string; mtimeMs: number } => Boolean(entry))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.mtimeMs - b.mtimeMs)
+      .map(entry => entry.filePath);
+  }
+
+  private async journalFileHasValidTransaction(journalPath: string): Promise<boolean> {
+    let content: string;
+    try {
+      content = await fs.readFile(journalPath, 'utf-8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
+
+    if (!content.trim()) return false;
+
+    const replayContent = content.endsWith('\n')
+      ? content
+      : content.slice(0, Math.max(0, content.lastIndexOf('\n') + 1));
+    const lines = replayContent.split('\n');
+    for (let index = 0; index < lines.length - 1; index += 1) {
+      const line = lines[index];
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line) as LogJournalEntry;
+        if (this.verifyJournalEntry(entry)) {
+          return true;
+        }
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  private async replayJournalFile(journalPath: string, options: ReplayJournalOptions = {}): Promise<void> {
+    let content: string;
+    try {
+      content = await fs.readFile(journalPath, 'utf-8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+
+    if (!content.trim()) return;
+
+    const hasPartialTail = !content.endsWith('\n');
+    const replayContent = hasPartialTail
+      ? content.slice(0, Math.max(0, content.lastIndexOf('\n') + 1))
+      : content;
+    const lines = replayContent.split('\n');
+    let validBytes = 0;
+    let didTruncate = hasPartialTail;
+    for (let index = 0; index < lines.length - 1; index += 1) {
+      const line = lines[index];
+      if (!line.trim()) {
+        validBytes += Buffer.byteLength(`${line}\n`, 'utf8');
+        continue;
+      }
+
+      try {
+        const entry = JSON.parse(line) as LogJournalEntry;
+        if (!this.verifyJournalEntry(entry)) {
+          throw new Error('journal checksum mismatch');
+        }
+        this.applyJournalEntry(entry);
+        this.lastJournalTxId = entry.txId;
+        validBytes += Buffer.byteLength(`${line}\n`, 'utf8');
+      } catch (error) {
+        logger.error('Corrupt logbook journal entry detected; truncating journal to last valid transaction', {
+          journalPath,
+          line: index + 1,
+          error: (error as Error).message,
+        });
+        didTruncate = true;
+        break;
+      }
+    }
+
+    if (didTruncate && options.truncateCorruptTail !== false) {
+      const corruptPath = `${journalPath}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      await safeWriteFile(corruptPath, content, { backups: 0 }).catch(() => undefined);
+      await fs.truncate(journalPath, validBytes);
+      await fsyncDirectoryBestEffort(path.dirname(journalPath));
+    }
+  }
+
+  private removeSnapshotDuplicateForJournalRecord(record: QSORecord): void {
+    const fingerprint = buildImportedQsoFingerprint(record);
+    for (const [existingId, existingRecord] of this.qsoCache.entries()) {
+      if (existingId === record.id) {
+        continue;
+      }
+      if (buildImportedQsoFingerprint(existingRecord) === fingerprint) {
+        this.qsoCache.delete(existingId);
+        this.foreignRecordLines.delete(existingId);
+      }
+    }
+  }
+
+  private applyJournalEntry(entry: LogJournalEntry): void {
+    switch (entry.operation) {
+      case 'add':
+      case 'update': {
+        const record = entry.payload.record as QSORecord | undefined;
+        if (record?.id) {
+          this.removeSnapshotDuplicateForJournalRecord(record);
+          this.qsoCache.set(record.id, record);
+          this.foreignRecordLines.delete(record.id);
+        }
+        break;
+      }
+      case 'delete': {
+        const id = entry.payload.id;
+        if (typeof id === 'string') {
+          this.qsoCache.delete(id);
+          this.foreignRecordLines.delete(id);
+        }
+        break;
+      }
+      case 'import': {
+        const operations = Array.isArray(entry.payload.operations) ? entry.payload.operations : [];
+        for (const op of operations as Array<{ type: string; record?: QSORecord; id?: string; rawLine?: string }>) {
+          if ((op.type === 'add' || op.type === 'update') && op.record?.id) {
+            this.removeSnapshotDuplicateForJournalRecord(op.record);
+            this.qsoCache.set(op.record.id, op.record);
+            if (op.rawLine) {
+              this.foreignRecordLines.set(op.record.id, op.rawLine);
+            } else {
+              this.foreignRecordLines.delete(op.record.id);
+            }
+          } else if (op.type === 'delete' && op.id) {
+            this.qsoCache.delete(op.id);
+            this.foreignRecordLines.delete(op.id);
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  private async checkpointJournal(): Promise<void> {
+    let stat: Awaited<ReturnType<typeof fs.stat>> | null = null;
+    try {
+      stat = await fs.stat(this.journalPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    if (!stat || stat.size === 0) return;
+
+    this.needsFullRewrite = true;
+    await this.saveCache();
+    await this.metaStore?.set({
+      lastCheckpointTxId: this.lastJournalTxId,
+      checkpointedAt: Date.now(),
+    });
+    await this.metaStore?.flush();
+
+    const archivedPath = `${this.journalPath}.${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    let rotated = false;
+    await fs.rename(this.journalPath, archivedPath).then(() => {
+      rotated = true;
+    }).catch(async (error) => {
+      logger.warn('failed to rotate checkpointed journal; truncating instead', { error: (error as Error).message });
+      await fs.truncate(this.journalPath, 0);
+    });
+    if (rotated) {
+      await fsyncDirectoryBestEffort(path.dirname(this.journalPath));
+    }
+    await safeWriteFile(this.journalPath, '', { backups: 0 }).catch(() => undefined);
   }
 
   /**
@@ -1063,8 +1466,10 @@ export class ADIFLogProvider implements ILogProvider {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
-      await this.saveCache();
     }
+    await this.enqueueWrite(async () => {
+      await this.checkpointJournal();
+    });
   }
 
   /**
@@ -1097,7 +1502,6 @@ export class ADIFLogProvider implements ILogProvider {
       await this.atomicWriteFile(this.logFilePath, parts.join(''));
       this.needsFullRewrite = false;
       this.pendingAppendIds.clear();
-      this.unparseableLines = [];
     } else if (this.pendingAppendIds.size > 0) {
       const records: QSORecord[] = [];
       for (const id of this.pendingAppendIds) {
@@ -1122,68 +1526,78 @@ export class ADIFLogProvider implements ILogProvider {
   
   async addQSO(record: QSORecord, operatorId?: string): Promise<void> {
     this.ensureInitialized();
-    record = enrichQSOWithDXCC(normalizeQsoModeForStorage({
-      ...record,
-      messageHistory: normalizeMessageHistory(record.messageHistory),
-      comment: record.comment ?? buildCommentFromMessageHistory(record.messageHistory),
-    }));
-    
-    // 生成唯一ID
-    if (!record.id || this.qsoCache.has(record.id)) {
-      record.id = `${record.callsign}_${record.startTime}_${Date.now()}_${operatorId || 'unknown'}`;
-    }
-    
-    this.qsoCache.set(record.id, record);
-    // 增量更新 ALL 索引
-    const allIdx = this.operatorIndexMap.get(ADIFLogProvider.ALL_KEY);
-    if (allIdx) addQSOToIndex(allIdx, record);
-    this.foreignRecordLines.delete(record.id);
-    this.pendingAppendIds.add(record.id);
-    this.scheduleSave();
+    PersistenceCoordinator.getInstance().assertMutationsAllowed('logbook:add');
+    await this.enqueueWrite(async () => {
+      const persisted = enrichQSOWithDXCC(normalizeQsoModeForStorage({
+        ...record,
+        messageHistory: normalizeMessageHistory(record.messageHistory),
+        comment: record.comment ?? buildCommentFromMessageHistory(record.messageHistory),
+      }));
+
+      // 生成唯一ID
+      if (!persisted.id || this.qsoCache.has(persisted.id)) {
+        persisted.id = `${persisted.callsign}_${persisted.startTime}_${Date.now()}_${operatorId || 'unknown'}`;
+      }
+
+      await this.appendJournal('add', { record: persisted });
+
+      record.id = persisted.id;
+      this.qsoCache.set(persisted.id, persisted);
+      // 增量更新 ALL 索引
+      const allIdx = this.operatorIndexMap.get(ADIFLogProvider.ALL_KEY);
+      if (allIdx) addQSOToIndex(allIdx, persisted);
+      this.foreignRecordLines.delete(persisted.id);
+    });
   }
 
   async updateQSO(id: string, updates: Partial<QSORecord>): Promise<void> {
     this.ensureInitialized();
+    PersistenceCoordinator.getInstance().assertMutationsAllowed('logbook:update');
+    await this.enqueueWrite(async () => {
+      const existing = this.qsoCache.get(id);
+      if (!existing) {
+        throw new Error(`QSO with id ${id} not found`);
+      }
 
-    const existing = this.qsoCache.get(id);
-    if (!existing) {
-      throw new Error(`QSO with id ${id} not found`);
-    }
-
-    const nextSubmode = updates.mode !== undefined && updates.submode === undefined
-      ? undefined
-      : updates.submode ?? existing.submode;
-    const updated = normalizeQsoModeForStorage({
-      ...existing,
-      ...updates,
-      id,
-      submode: nextSubmode,
-      messageHistory: normalizeMessageHistory(updates.messageHistory ?? existing.messageHistory),
-      comment: updates.comment ?? existing.comment ?? buildCommentFromMessageHistory(updates.messageHistory ?? existing.messageHistory),
+      const nextSubmode = updates.mode !== undefined && updates.submode === undefined
+        ? undefined
+        : updates.submode ?? existing.submode;
+      const updated = normalizeQsoModeForStorage({
+        ...existing,
+        ...updates,
+        id,
+        submode: nextSubmode,
+        messageHistory: normalizeMessageHistory(updates.messageHistory ?? existing.messageHistory),
+        comment: updates.comment ?? existing.comment ?? buildCommentFromMessageHistory(updates.messageHistory ?? existing.messageHistory),
+      });
+      const persisted = enrichQSOWithDXCC(updated);
+      await this.appendJournal('update', {
+        id,
+        updates,
+        record: persisted,
+        afterHash: createHash('sha256').update(JSON.stringify(persisted)).digest('hex'),
+      });
+      this.qsoCache.set(id, persisted);
+      this.foreignRecordLines.delete(id);
+      // 简化处理：更新后重建索引（更新频率低，成本可接受）
+      this.rebuildIndexes();
     });
-    this.qsoCache.set(id, enrichQSOWithDXCC(updated));
-    this.foreignRecordLines.delete(id);
-    // 更新后需要全量重写文件
-    this.needsFullRewrite = true;
-    this.pendingAppendIds.clear();
-    // 简化处理：更新后重建索引（更新频率低，成本可接受）
-    this.rebuildIndexes();
-    this.scheduleSave();
   }
 
   async deleteQSO(id: string): Promise<void> {
     this.ensureInitialized();
+    PersistenceCoordinator.getInstance().assertMutationsAllowed('logbook:delete');
+    await this.enqueueWrite(async () => {
+      if (!this.qsoCache.has(id)) {
+        throw new Error(`QSO with id ${id} not found`);
+      }
 
-    if (!this.qsoCache.delete(id)) {
-      throw new Error(`QSO with id ${id} not found`);
-    }
-
-    // 删除后需要全量重写文件
-    this.needsFullRewrite = true;
-    this.pendingAppendIds.clear();
-    // 删除后重建索引
-    this.rebuildIndexes();
-    this.scheduleSave();
+      await this.appendJournal('delete', { id, tombstone: true });
+      this.qsoCache.delete(id);
+      this.foreignRecordLines.delete(id);
+      // 删除后重建索引
+      this.rebuildIndexes();
+    });
   }
 
   async getQSO(id: string): Promise<QSORecord | null> {
@@ -1766,7 +2180,9 @@ export class ADIFLogProvider implements ILogProvider {
     rawLines?: string[],
   ): Promise<LogBookImportResult> {
     this.ensureInitialized();
+    PersistenceCoordinator.getInstance().assertMutationsAllowed(`logbook:import:${detectedFormat}`);
 
+    return this.enqueueWrite(async () => {
     const result: LogBookImportResult = {
       detectedFormat,
       totalRead,
@@ -1784,6 +2200,9 @@ export class ADIFLogProvider implements ILogProvider {
       }
     }
     let didMutate = false;
+    const journalOperations: Array<{ type: 'add' | 'update'; record: QSORecord; rawLine?: string }> = [];
+    const beforeCache = new Map(this.qsoCache);
+    const beforeForeign = new Map(this.foreignRecordLines);
 
     for (const rawRecord of records) {
       try {
@@ -1809,6 +2228,7 @@ export class ADIFLogProvider implements ILogProvider {
           if (rawLine) {
             this.foreignRecordLines.set(insertedRecord.id, rawLine);
           }
+          journalOperations.push({ type: 'add', record: insertedRecord, rawLine });
           fingerprintIndex.set(fingerprint, insertedRecord.id);
           result.imported += 1;
           didMutate = true;
@@ -1825,6 +2245,7 @@ export class ADIFLogProvider implements ILogProvider {
         if (merged.changed) {
           this.qsoCache.set(existingId, merged.record);
           this.foreignRecordLines.delete(existingId);
+          journalOperations.push({ type: 'update', record: merged.record });
           result.merged += 1;
           didMutate = true;
         } else {
@@ -1837,13 +2258,23 @@ export class ADIFLogProvider implements ILogProvider {
     }
 
     if (didMutate) {
-      this.needsFullRewrite = true;
-      this.pendingAppendIds.clear();
-      this.rebuildIndexes();
-      this.scheduleSave();
+      try {
+        await this.appendJournal('import', {
+          detectedFormat,
+          result,
+          operations: journalOperations,
+        });
+        this.rebuildIndexes();
+      } catch (error) {
+        this.qsoCache = beforeCache;
+        this.foreignRecordLines = beforeForeign;
+        this.rebuildIndexes();
+        throw error;
+      }
     }
 
     return result;
+    });
   }
 
   async importADIF(adifContent: string): Promise<LogBookImportResult> {
@@ -1879,6 +2310,8 @@ export class ADIFLogProvider implements ILogProvider {
     if (this.isInitialized) {
       await this.flush();
     }
+    this.unregisterPersistence?.();
+    this.unregisterPersistence = null;
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;

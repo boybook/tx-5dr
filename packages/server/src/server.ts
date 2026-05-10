@@ -5,6 +5,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import multipart from '@fastify/multipart';
+import { timingSafeEqual } from 'node:crypto';
 import type { WebSocket } from 'ws';
 import type { HelloResponse } from '@tx5dr/contracts';
 import type { FastifyRequest, FastifyReply, FastifyError } from 'fastify';
@@ -38,8 +39,24 @@ import { RealtimeRxAudioRouter } from './realtime/RealtimeRxAudioRouter.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from './utils/errors/RadioError.js';
 import { createLogger } from './utils/logger.js';
 import { ConsoleLogger } from './utils/console-logger.js';
+import { PersistenceCoordinator } from './utils/persistence/index.js';
+import { areNewMutationsBlocked, blockNewMutations, markProcessShuttingDown } from './utils/process-shutdown.js';
 
 const bootLogger = createLogger('ServerBoot');
+const INTERNAL_PREPARE_SHUTDOWN_DEADLINE_MS = 32_000;
+const INTERNAL_ENGINE_STOP_TIMEOUT_MS = 8_000;
+
+function safeTokenEquals(provided: string | undefined, expected: string | undefined): boolean {
+  if (!provided || !expected) return false;
+  const providedBuffer = Buffer.from(provided);
+  const expectedBuffer = Buffer.from(expected);
+  return providedBuffer.length === expectedBuffer.length
+    && timingSafeEqual(providedBuffer, expectedBuffer);
+}
+
+function remainingDeadlineMs(startedAt: number, deadlineMs: number): number {
+  return Math.max(1, deadlineMs - (Date.now() - startedAt));
+}
 
 /**
  * 📊 Day14：将 RadioErrorCode 映射到 HTTP 状态码
@@ -144,6 +161,21 @@ export async function createServer() {
   // 注册认证插件（全局 JWT 验证）
   await fastify.register(authPlugin);
   fastify.log.info('Auth plugin registered');
+
+  fastify.addHook('onRequest', async (request, reply) => {
+    const method = request.method.toUpperCase();
+    const isMutation = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
+    const isInternalShutdown = request.url.startsWith('/api/system/internal/prepare-shutdown');
+    if (isMutation && !isInternalShutdown && areNewMutationsBlocked()) {
+      return reply.code(503).send({
+        success: false,
+        error: {
+          code: 'SERVER_SHUTTING_DOWN',
+          message: 'Server is shutting down; new writes are temporarily blocked',
+        },
+      });
+    }
+  });
 
   // 初始化数字无线电引擎
   bootLogger.info('initializing digital radio engine...');
@@ -289,6 +321,54 @@ export async function createServer() {
   // Hello API route
   fastify.get<{ Reply: HelloResponse }>('/api/hello', async (_request, _reply) => {
     return { message: 'Hello World' };
+  });
+
+  fastify.post('/api/system/internal/prepare-shutdown', async (request, reply) => {
+    const startedAt = Date.now();
+    const expectedToken = process.env.TX5DR_INTERNAL_SHUTDOWN_TOKEN;
+    const providedToken = Array.isArray(request.headers['x-tx5dr-internal-token'])
+      ? request.headers['x-tx5dr-internal-token'][0]
+      : request.headers['x-tx5dr-internal-token'];
+
+    if (!safeTokenEquals(providedToken, expectedToken)) {
+      return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN' } });
+    }
+
+    markProcessShuttingDown();
+    blockNewMutations();
+    PersistenceCoordinator.getInstance().blockNewMutations();
+
+    try {
+      if (digitalRadioEngine.getStatus().isRunning) {
+        await Promise.race([
+          digitalRadioEngine.stop(),
+          new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('engine stop timeout')), Math.min(
+              INTERNAL_ENGINE_STOP_TIMEOUT_MS,
+              remainingDeadlineMs(startedAt, INTERNAL_PREPARE_SHUTDOWN_DEADLINE_MS),
+            ));
+          }),
+        ]);
+      }
+    } catch (error) {
+      fastify.log.warn({ error }, 'engine stop failed during internal prepare-shutdown');
+    }
+
+    try {
+      await digitalRadioEngine.operatorManager.getLogManager().close();
+    } catch (error) {
+      fastify.log.warn({ error }, 'logbook close failed during internal prepare-shutdown');
+    }
+
+    const flushResult = await PersistenceCoordinator.getInstance().flushAll({
+      reason: 'internal-prepare-shutdown',
+      deadlineMs: remainingDeadlineMs(startedAt, INTERNAL_PREPARE_SHUTDOWN_DEADLINE_MS),
+    });
+
+    return reply.code(flushResult.ok ? 200 : 500).send({
+      success: flushResult.ok,
+      errors: flushResult.errors,
+    });
   });
 
   // ===== 路由注册（带权限保护） =====

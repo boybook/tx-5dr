@@ -6,6 +6,7 @@ import { join } from 'path';
 import http from 'http';
 import https from 'https';
 import { spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import type { DesktopHttpsStatus } from '@tx5dr/contracts';
@@ -23,6 +24,7 @@ import {
   sanitizeDesktopHttpsConfig,
   type PersistentDesktopHttpsConfig,
 } from './desktopHttps.js';
+import { isPrepareShutdownSuccess } from './prepareShutdown.js';
 
 // 获取当前模块的目录(ESM中的__dirname替代方案)
 // const __filename = fileURLToPath(import.meta.url);
@@ -45,6 +47,7 @@ let webProcess: import('node:child_process').ChildProcess | null = null;
 let selectedWebPort: number | null = null;
 let selectedServerPort: number | null = null;
 let selectedHttpsPort: number | null = null;
+let internalShutdownToken: string | null = null;
 
 // 启动错误跟踪
 let errorType: string = ''; // 错误类型，空字符串表示无错误
@@ -167,7 +170,7 @@ interface StartupLogFileState {
 
 const CHILD_SHUTDOWN_OPTIONS: Record<'web' | 'server', ChildShutdownOptions> = {
   web: { softTimeoutMs: 1000, forceTimeoutMs: 400 },
-  server: { softTimeoutMs: 1800, forceTimeoutMs: 500 },
+  server: { softTimeoutMs: 45_000, forceTimeoutMs: 2_000 },
 };
 const STARTUP_LOG_SOURCES: StartupLogSourceSpec[] = [
   { id: 'electron-main', label: 'Electron', fileName: 'electron-main.log' },
@@ -265,6 +268,83 @@ const VC_REDIST_MIN_VERSION = { major: 14, minor: 30 } as const; // VS 2022 = 14
 
 function getElectronSettingsPath(): string {
   return path.join(getAppConfigDir(), ELECTRON_SETTINGS_FILE);
+}
+
+function safeWriteFileSync(filePath: string, data: string | Buffer, options: { backups?: number; mode?: number } = {}): void {
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const backups = options.backups ?? 3;
+  fs.mkdirSync(dir, { recursive: true });
+
+  const tmpPath = path.join(dir, `${base}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const fd = fs.openSync(tmpPath, 'w', options.mode ?? 0o600);
+  try {
+    fs.writeFileSync(fd, data);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  if (fs.existsSync(filePath) && backups > 0) {
+    for (let index = backups; index >= 2; index -= 1) {
+      const from = `${filePath}.bak.${index - 1}`;
+      const to = `${filePath}.bak.${index}`;
+      if (fs.existsSync(from)) {
+        try { fs.rmSync(to, { force: true }); } catch (error) { logger.debug('failed to remove old settings backup', error); }
+        try { fs.renameSync(from, to); } catch (error) { logger.warn('failed to rotate settings backup', error); }
+      }
+    }
+    try { fs.copyFileSync(filePath, `${filePath}.bak.1`); } catch (error) { logger.warn('failed to create settings backup', error); }
+  }
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      fs.renameSync(tmpPath, filePath);
+      if (process.platform !== 'win32') {
+        try {
+          const dirFd = fs.openSync(dir, 'r');
+          try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+        } catch (error) {
+          logger.debug('settings directory fsync skipped', error);
+        }
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES') break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1));
+    }
+  }
+
+  try { fs.rmSync(tmpPath, { force: true }); } catch (error) { logger.debug('failed to remove settings temp file', error); }
+  throw lastError;
+}
+
+function readJsonWithBackupsSync<T>(filePath: string, fallback: () => T, normalize: (value: unknown) => T): T {
+  const candidates = [filePath, `${filePath}.bak.1`, `${filePath}.bak.2`, `${filePath}.bak.3`];
+  const errors: string[] = [];
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    try {
+      const raw = fs.readFileSync(candidate, 'utf-8');
+      if (!raw.trim()) throw new Error('empty file');
+      const parsed = normalize(JSON.parse(raw));
+      if (candidate !== filePath) {
+        const corruptPath = `${filePath}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+        try { fs.renameSync(filePath, corruptPath); } catch (error) { logger.debug('failed to move corrupt settings aside', error); }
+        safeWriteFileSync(filePath, `${JSON.stringify(parsed, null, 2)}\n`);
+      }
+      return parsed;
+    } catch (error) {
+      errors.push(`${candidate}: ${(error as Error).message}`);
+    }
+  }
+  if (fs.existsSync(filePath)) {
+    logger.error('failed to load electron settings and no backup could be recovered', { filePath, errors });
+  }
+  return fallback();
 }
 
 function createShortcutBinding(input: Partial<ShortcutBinding> & { code: string }): ShortcutBinding {
@@ -471,28 +551,32 @@ function stopShortcutRecording(options: { restoreGlobalShortcuts?: boolean } = {
 }
 
 function loadElectronSettings(): ElectronSettings {
-  try {
-    const raw = fs.readFileSync(getElectronSettingsPath(), 'utf-8');
-    const parsed = JSON.parse(raw);
-    return {
-      ...DEFAULT_ELECTRON_SETTINGS,
-      ...parsed,
-      desktopHttps: sanitizeDesktopHttpsConfig(parsed?.desktopHttps),
-      shortcuts: normalizeShortcutConfig(parsed?.shortcuts),
-    };
-  } catch {
-    return {
+  return readJsonWithBackupsSync<ElectronSettings>(
+    getElectronSettingsPath(),
+    () => ({
       ...DEFAULT_ELECTRON_SETTINGS,
       shortcuts: createDefaultShortcutConfig(),
-    };
-  }
+    }),
+    (parsed) => {
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('settings root must be an object');
+      }
+      const settings = parsed as Partial<ElectronSettings>;
+      return {
+        ...DEFAULT_ELECTRON_SETTINGS,
+        ...settings,
+        desktopHttps: sanitizeDesktopHttpsConfig(settings.desktopHttps),
+        shortcuts: normalizeShortcutConfig(settings.shortcuts),
+      };
+    },
+  );
 }
 
 function saveElectronSettings(settings: ElectronSettings): void {
   try {
     const dir = getAppConfigDir();
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(getElectronSettingsPath(), JSON.stringify(settings, null, 2), 'utf-8');
+    safeWriteFileSync(getElectronSettingsPath(), `${JSON.stringify(settings, null, 2)}\n`, { backups: 3, mode: 0o600 });
   } catch (err) {
     logger.error('failed to save electron settings', err);
   }
@@ -900,6 +984,16 @@ function getAppConfigDir(): string {
   }
 }
 
+function getAppDataDir(): string {
+  if (process.platform === 'darwin') {
+    return path.join(homedir(), 'Library', 'Application Support', APP_DIR_NAME);
+  } else if (process.platform === 'win32') {
+    return path.join(process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local'), APP_DIR_NAME);
+  } else {
+    return path.join(process.env.XDG_DATA_HOME || path.join(homedir(), '.local', 'share'), APP_DIR_NAME);
+  }
+}
+
 function getAppLogsDir(): string {
   if (process.platform === 'darwin') {
     return path.join(homedir(), 'Library', 'Logs', APP_DIR_NAME);
@@ -907,6 +1001,16 @@ function getAppLogsDir(): string {
     return path.join(process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local'), APP_DIR_NAME, 'logs');
   } else {
     return path.join(process.env.XDG_DATA_HOME || path.join(homedir(), '.local', 'share'), APP_DIR_NAME, 'logs');
+  }
+}
+
+function getAppCacheDir(): string {
+  if (process.platform === 'darwin') {
+    return path.join(homedir(), 'Library', 'Caches', APP_DIR_NAME);
+  } else if (process.platform === 'win32') {
+    return path.join(process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local'), APP_DIR_NAME, 'cache');
+  } else {
+    return path.join(process.env.XDG_CACHE_HOME || path.join(homedir(), '.cache'), APP_DIR_NAME);
   }
 }
 
@@ -2658,6 +2762,55 @@ async function checkServerHealth(): Promise<boolean> {
   return probeTx5drServer(baseUrl);
 }
 
+async function prepareEmbeddedServerShutdown(reason: string): Promise<boolean> {
+  if (!selectedServerPort || !internalShutdownToken) {
+    return false;
+  }
+
+  const port = selectedServerPort;
+  const token = internalShutdownToken;
+  const body = JSON.stringify({ reason });
+  const timeoutMs = 35_000;
+  return new Promise((resolve) => {
+    const req = http.request({
+      host: '127.0.0.1',
+      port,
+      path: '/api/system/internal/prepare-shutdown',
+      method: 'POST',
+      timeout: timeoutMs,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+        'x-tx5dr-internal-token': token,
+      },
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => {
+        const payload = Buffer.concat(chunks).toString('utf8');
+        if (isPrepareShutdownSuccess(res.statusCode, payload)) {
+          logger.info('embedded server prepared for shutdown', { reason, statusCode: res.statusCode, payload });
+          resolve(true);
+        } else {
+          logger.warn('embedded server prepare-shutdown failed', { reason, statusCode: res.statusCode, payload });
+          resolve(false);
+        }
+      });
+    });
+    req.on('timeout', () => {
+      logger.warn('embedded server prepare-shutdown timed out', { reason, timeoutMs });
+      req.destroy();
+      resolve(false);
+    });
+    req.on('error', (error) => {
+      logger.warn('embedded server prepare-shutdown request failed', { reason, error: error.message });
+      resolve(false);
+    });
+    req.write(body);
+    req.end();
+  });
+}
+
 function closeFrontendWindowsImmediately(): number {
   const startedAt = Date.now();
 
@@ -2696,6 +2849,7 @@ async function cleanupChildProcesses(isDevelopment: boolean): Promise<ChildShutd
     const currentServerProcess = serverProcess;
     serverProcess = null;
     if (currentServerProcess) {
+      await prepareEmbeddedServerShutdown('electron-cleanup');
       tasks.push(killProcess(currentServerProcess, 'server', CHILD_SHUTDOWN_OPTIONS.server));
     }
   }
@@ -2717,6 +2871,7 @@ async function cleanup(): Promise<ChildShutdownResult[]> {
   selectedServerPort = null;
   selectedWebPort = null;
   selectedHttpsPort = null;
+  internalShutdownToken = null;
   mainAppReadyForWindow = false;
 
   // 清理系统托盘
@@ -2940,10 +3095,16 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
     logger.warn('native module check complete');
 
     const serverLaunchStartedAt = Date.now();
+    internalShutdownToken = randomBytes(32).toString('hex');
     serverProcess = runChild('server', serverLauncherEntry, {
       PORT: String(serverPort),
       WEB_PORT: String(webPort),
       TX5DR_SERVER_ENTRY: serverEntry,
+      TX5DR_INTERNAL_SHUTDOWN_TOKEN: internalShutdownToken,
+      TX5DR_CONFIG_DIR: getAppConfigDir(),
+      TX5DR_DATA_DIR: getAppDataDir(),
+      TX5DR_LOGS_DIR: getAppLogsDir(),
+      TX5DR_CACHE_DIR: getAppCacheDir(),
       TX5DR_SERVER_PORT_AUTO: '1',
       TX5DR_SERVER_PORT_SCAN_STEPS: String(DEFAULT_PORT_SCAN_STEPS),
       TX5DR_SERVER_READY_FILE: getServerReadyPath(),

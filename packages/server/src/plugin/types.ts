@@ -27,6 +27,7 @@ import type {
  */
 export interface FlushableKVStore extends KVStore {
   flush(): Promise<void>;
+  dispose?(): void;
 }
 
 /**

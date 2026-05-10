@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { createLogger } from '../utils/logger.js';
 import type { PluginFileStore } from '@tx5dr/plugin-api';
+import { PersistenceCoordinator, safeWriteFile } from '../utils/persistence/index.js';
 
 const logger = createLogger('PluginFileStore');
 
@@ -20,9 +21,10 @@ export class PluginFileStoreProvider implements PluginFileStore {
   }
 
   async write(filePath: string, data: Buffer): Promise<void> {
+    PersistenceCoordinator.getInstance().assertMutationsAllowed(`plugin-file-store:${filePath}`);
     const resolved = this.resolve(filePath);
     await fs.mkdir(path.dirname(resolved), { recursive: true });
-    await fs.writeFile(resolved, data);
+    await safeWriteFile(resolved, data, { backups: 1 });
     logger.debug('file written', { path: filePath, size: data.length });
   }
 

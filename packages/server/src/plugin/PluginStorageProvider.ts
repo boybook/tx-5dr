@@ -1,7 +1,6 @@
-import { promises as fs } from 'fs';
-import path from 'path';
 import { createLogger } from '../utils/logger.js';
 import type { FlushableKVStore } from './types.js';
+import { JsonFileStore, PersistenceCoordinator } from '../utils/persistence/index.js';
 
 const logger = createLogger('PluginStorage');
 
@@ -12,8 +11,9 @@ const logger = createLogger('PluginStorage');
 export class PluginStorageProvider implements FlushableKVStore {
   private data: Record<string, unknown> = {};
   private filePath: string;
-  private saveTimer: NodeJS.Timeout | null = null;
+  private store: JsonFileStore<Record<string, unknown>> | null = null;
   private loaded = false;
+  private unregisterPersistence: (() => void) | null = null;
 
   constructor(filePath: string) {
     this.filePath = filePath;
@@ -21,13 +21,22 @@ export class PluginStorageProvider implements FlushableKVStore {
 
   async init(): Promise<void> {
     if (this.loaded) return;
-    try {
-      const raw = await fs.readFile(this.filePath, 'utf-8');
-      this.data = JSON.parse(raw);
-    } catch {
-      // 文件不存在或解析失败，使用空对象
-      this.data = {};
-    }
+    this.store = new JsonFileStore<Record<string, unknown>>(this.filePath, {
+      defaultValue: () => ({}),
+      validate: (value) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          throw new Error('plugin storage root must be an object');
+        }
+        return value as Record<string, unknown>;
+      },
+      backups: 3,
+      debounceMs: 300,
+    });
+    this.data = await this.store.load();
+    this.unregisterPersistence = PersistenceCoordinator.getInstance().register({
+      name: `plugin-storage:${this.filePath}`,
+      flush: async () => this.flush(),
+    });
     this.loaded = true;
   }
 
@@ -37,11 +46,13 @@ export class PluginStorageProvider implements FlushableKVStore {
   }
 
   set(key: string, value: unknown): void {
+    PersistenceCoordinator.getInstance().assertMutationsAllowed(`plugin-storage:${this.filePath}`);
     this.data[key] = value;
     this.scheduleSave();
   }
 
   delete(key: string): void {
+    PersistenceCoordinator.getInstance().assertMutationsAllowed(`plugin-storage:${this.filePath}`);
     delete this.data[key];
     this.scheduleSave();
   }
@@ -51,27 +62,24 @@ export class PluginStorageProvider implements FlushableKVStore {
   }
 
   async flush(): Promise<void> {
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer);
-      this.saveTimer = null;
-    }
-    await this.persist();
+    await this.persist(false);
   }
 
   private scheduleSave(): void {
-    if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null;
-      this.persist().catch(err => logger.error('Failed to persist plugin storage', err));
-    }, 300);
+    this.persist(true).catch(err => logger.error('Failed to persist plugin storage', err));
   }
 
-  private async persist(): Promise<void> {
+  private async persist(defer: boolean): Promise<void> {
     try {
-      await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-      await fs.writeFile(this.filePath, JSON.stringify(this.data, null, 2), 'utf-8');
+      if (!this.store) return;
+      await this.store.set(this.data, { defer });
     } catch (err) {
       logger.error(`Failed to save plugin storage: ${this.filePath}`, err);
     }
+  }
+
+  dispose(): void {
+    this.unregisterPersistence?.();
+    this.unregisterPersistence = null;
   }
 }
