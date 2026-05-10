@@ -44,6 +44,63 @@ describe('SlotPackManager event routing', () => {
     expect(emittedPack.frames.some((f) => f.message === 'CQ BG5DRB PM00')).toBe(true);
   });
 
+  it('drops bare single-callsign decode frames before storing or emitting slot packs', () => {
+    const manager = new SlotPackManager();
+    manager.setPersistenceEnabled(false);
+
+    const slotPackUpdatedSpy = vi.fn();
+    const slotPackDecodeUpdatedSpy = vi.fn();
+    manager.on('slotPackUpdated', slotPackUpdatedSpy as (pack: SlotPack) => void);
+    manager.on('slotPackDecodeUpdated', slotPackDecodeUpdatedSpy as (pack: SlotPack) => void);
+
+    const returnedPack = manager.processDecodeResult(buildDecodeResult(45_000, [
+      { message: 'BG2BFG', snr: -11 },
+      { message: 'BH6AJS', snr: -6 },
+      { message: 'VK9BSA', snr: -3 },
+    ]));
+
+    expect(returnedPack.frames).toEqual([]);
+    expect(returnedPack.stats.totalDecodes).toBe(1);
+    expect(returnedPack.stats.successfulDecodes).toBe(0);
+    expect(returnedPack.stats.totalFramesBeforeDedup).toBe(0);
+    expect(returnedPack.stats.totalFramesAfterDedup).toBe(0);
+    expect(returnedPack.decodeHistory[0]?.frameCount).toBe(0);
+
+    expect(slotPackUpdatedSpy).toHaveBeenCalledTimes(1);
+    expect(slotPackDecodeUpdatedSpy).toHaveBeenCalledTimes(1);
+    expect((slotPackUpdatedSpy.mock.calls[0]?.[0] as SlotPack).frames).toEqual([]);
+    expect((slotPackDecodeUpdatedSpy.mock.calls[0]?.[0] as SlotPack).frames).toEqual([]);
+    expect(manager.getSlotPack('slot-45000')?.frames).toEqual([]);
+  });
+
+  it('keeps protocol messages while dropping only bare callsigns from the same decode result', () => {
+    const manager = new SlotPackManager();
+    manager.setPersistenceEnabled(false);
+
+    const slotPack = manager.processDecodeResult(buildDecodeResult(45_000, [
+      { message: 'BG2BFG', snr: -11 },
+      { message: 'BG2BFG K6QQX RRR', snr: -6 },
+      { message: 'BH6AJS VK9BSA RR73', snr: -3 },
+      { message: 'CQ VK9BSA NH87', snr: -5 },
+      { message: 'VK9BSA BH6AJS +27', snr: 6 },
+      { message: 'VK9BSA BH6AJS R+06', snr: 4 },
+      { message: 'VK9BSA BH6AJS 73', snr: 3 },
+    ]));
+
+    expect(slotPack.frames.map((frame) => frame.message)).toEqual([
+      'BG2BFG K6QQX RRR',
+      'BH6AJS VK9BSA RR73',
+      'CQ VK9BSA NH87',
+      'VK9BSA BH6AJS +27',
+      'VK9BSA BH6AJS R+06',
+      'VK9BSA BH6AJS 73',
+    ]);
+    expect(slotPack.stats.successfulDecodes).toBe(1);
+    expect(slotPack.stats.totalFramesBeforeDedup).toBe(6);
+    expect(slotPack.stats.totalFramesAfterDedup).toBe(6);
+    expect(slotPack.decodeHistory[0]?.frameCount).toBe(6);
+  });
+
   it('addTransmissionFrame only emits slotPackUpdated (NOT slotPackDecodeUpdated)', () => {
     const manager = new SlotPackManager();
     manager.setPersistenceEnabled(false);

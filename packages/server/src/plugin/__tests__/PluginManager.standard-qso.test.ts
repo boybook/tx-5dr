@@ -570,6 +570,34 @@ describe('PluginManager standard-qso late re-decision', () => {
     void requestTransmitSpy;
   });
 
+  it('switches from TX4 to TX5 when an RRR is decoded alongside a bare callsign noise frame', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG2BFG',
+      myGrid: 'PN26',
+      targetCallsign: 'K6QQX',
+    });
+
+    setRuntimeState(pluginManager, operator.config.id, 'TX4');
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), [
+      {
+        message: 'BG2BFG',
+        snr: -11,
+        freq: 671,
+      },
+      {
+        message: 'BG2BFG K6QQX RRR',
+        snr: -7,
+        freq: 671,
+      },
+    ]));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX5');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('K6QQX BG2BFG 73');
+
+    await pluginManager.shutdown();
+  });
+
   it('does not reply to direct calls from worked stations when replyToWorkedStations is disabled', async () => {
     const { operator, pluginManager } = await createRuntimeHarness({
       myCallsign: 'BG7XTV',

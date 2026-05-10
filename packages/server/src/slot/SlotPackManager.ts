@@ -184,6 +184,11 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     }
 
     const { slotId } = result;
+    const filteredFrames = result.frames.filter((frame) => !this.isBareCallsignDecodeFrame(frame));
+    const droppedFrameCount = result.frames.length - filteredFrames.length;
+    if (droppedFrameCount > 0) {
+      logger.debug(`Dropped ${droppedFrameCount} bare callsign decode frame(s): slot=${slotId}`);
+    }
     
     // 获取或创建 SlotPack
     let slotPack = this.slotPacks.get(slotId);
@@ -206,22 +211,22 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     
     // 更新解码统计
     slotPack.stats.totalDecodes++;
-    if (result.frames.length > 0) {
+    if (filteredFrames.length > 0) {
       slotPack.stats.successfulDecodes++;
     }
-    slotPack.stats.totalFramesBeforeDedup += result.frames.length;
+    slotPack.stats.totalFramesBeforeDedup += filteredFrames.length;
     slotPack.stats.lastUpdated = Date.now();
     
     // 添加解码历史
     slotPack.decodeHistory.push({
       windowIdx: result.windowIdx,
       timestamp: result.timestamp,
-      frameCount: result.frames.length,
+      frameCount: filteredFrames.length,
       processingTimeMs: result.processingTimeMs
     });
     
     // 合并和去重帧数据。DT 使用解码器返回的原始值，不根据多窗口 offset 二次修正。
-    const allFrames = [...slotPack.frames, ...result.frames];
+    const allFrames = [...slotPack.frames, ...filteredFrames];
     slotPack.frames = this.deduplicateAndOptimizeFrames(allFrames);
     slotPack.stats.totalFramesAfterDedup = slotPack.frames.length;
     this.bumpUpdateSeq(slotPack);
@@ -247,6 +252,20 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     this.emit('slotPackDecodeUpdated', this.snapshotSlotPack(slotPack));
 
     return snapshot;
+  }
+
+  private isBareCallsignDecodeFrame(frame: FrameMessage): boolean {
+    const token = frame.message.trim().toUpperCase();
+    if (!token || /\s/.test(token)) {
+      return false;
+    }
+
+    const callsign = token.startsWith('<') && token.endsWith('>')
+      ? token.slice(1, -1)
+      : token;
+
+    return FT8MessageParser.isStandardCallsign(callsign)
+      || (/^[A-Z0-9/]{2,12}$/.test(callsign) && /[A-Z]/.test(callsign) && /\d/.test(callsign));
   }
   
   /**
