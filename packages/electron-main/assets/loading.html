@@ -207,7 +207,7 @@
     min-height: 1.4em;
   }
 
-  .log-line.child-lifecycle {
+  .log-line.startup-problem {
     margin: 0 -4px;
     padding: 0 4px;
     border-radius: 4px;
@@ -272,7 +272,7 @@
       color: #71717a;
     }
 
-    .log-line.child-lifecycle {
+    .log-line.startup-problem {
       background: rgba(248, 113, 113, 0.1);
       color: rgba(254, 202, 202, 0.82);
     }
@@ -356,7 +356,7 @@
       logCard.classList.remove('empty');
       for (const line of lines) {
         const node = document.createElement('span');
-        node.className = isChildLifecycleLine(line.text) ? 'log-line child-lifecycle' : 'log-line';
+        node.className = getLogLineClassName(line.text);
         node.textContent = line.text;
         logCard.appendChild(node);
       }
@@ -366,9 +366,35 @@
       }
     }
 
-    function isChildLifecycleLine(value) {
-      return /\[child:[^\]]+\].*(starting|started|stopping|stopped|exited|signal=|code=|failed to start|node binary not found|entry not found|stop timeout|force kill)/i.test(value);
+    // STARTUP_LOG_CLASSIFIER_START
+    function getLogLineClassName(value) {
+      const baseClassName = 'log-line';
+      const problemClassName = `${baseClassName} startup-problem`;
+
+      if (/\[\s*error\s*\]/i.test(value)) {
+        return problemClassName;
+      }
+
+      if (!/\[child:[^\]]+\]/i.test(value)) {
+        return baseClassName;
+      }
+
+      if (/(failed to start|node binary not found|entry not found|stop timeout|force kill)/i.test(value)) {
+        return problemClassName;
+      }
+
+      if (!/\bexited\b/i.test(value)) {
+        return baseClassName;
+      }
+
+      const code = (value.match(/\bcode=([^\s]+)/i)?.[1] || '').replace(/[,\]]+$/, '').toLowerCase();
+      const signal = (value.match(/\bsignal=([^\s]+)/i)?.[1] || '').replace(/[,\]]+$/, '').toLowerCase();
+      const hasBadCode = Boolean(code) && code !== '0' && code !== 'null' && code !== 'undefined';
+      const hasBadSignal = Boolean(signal) && signal !== 'null' && signal !== 'undefined' && signal !== 'none';
+
+      return hasBadCode || hasBadSignal ? problemClassName : baseClassName;
     }
+    // STARTUP_LOG_CLASSIFIER_END
 
     function renderStartupError(error) {
       if (!error) {
