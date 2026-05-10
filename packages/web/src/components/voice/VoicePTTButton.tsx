@@ -12,6 +12,10 @@ import {
   ModalHeader,
 } from '@heroui/react';
 import { createLogger } from '../../utils/logger';
+import {
+  PLUGIN_IFRAME_KEYBOARD_EVENT,
+  type PluginIframeKeyboardEvent,
+} from '../../utils/pluginIframeKeyboardEvents';
 import type { VoiceCaptureController } from '../../hooks/useVoiceCaptureController';
 import {
   type VoicePttShortcutPreset,
@@ -57,6 +61,7 @@ interface VoicePTTButtonProps {
 }
 
 const HTTP_PTT_HTTPS_WARNING_BYPASS_KEY = 'tx5dr.voice.ptt.httpHttpsWarningBypass';
+const SHORTCUT_STALE_KEYDOWN_RECOVERY_MS = 80;
 
 function isLoopbackHostname(hostname: string): boolean {
   return hostname === 'localhost'
@@ -125,9 +130,14 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   const manualPttReleasePendingRef = useRef(false);
   const previousVoicePttLockedRef = useRef(false);
   const keyboardPressActiveRef = useRef(false);
+  const keyboardPressActiveAtRef = useRef<number | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const shortcutMenuRef = useRef<HTMLDivElement>(null);
   const voiceCaptureControllerRef = useRef(voiceCaptureController);
+  const shortcutHandlersRef = useRef({
+    down: (_repeat: boolean) => {},
+    up: () => {},
+  });
   const pressTrackerRef = useRef(new VoicePttPressTracker());
 
   const radioService = connection.state.radioService;
@@ -364,30 +374,70 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
     stopManualPtt,
   ]);
 
-  const suppressShortcutEvent = useCallback((event: KeyboardEvent) => {
+  const suppressShortcutEvent = useCallback((event: Event) => {
     event.preventDefault();
     event.stopPropagation();
   }, []);
+
+  const handleShortcutDown = useCallback((repeat: boolean) => {
+    if (repeat) return;
+
+    const now = Date.now();
+    if (keyboardPressActiveRef.current) {
+      const elapsedMs = keyboardPressActiveAtRef.current === null
+        ? Number.POSITIVE_INFINITY
+        : now - keyboardPressActiveAtRef.current;
+      if (elapsedMs < SHORTCUT_STALE_KEYDOWN_RECOVERY_MS) return;
+      logger.debug('Voice PTT shortcut keyUp was not observed in renderer; recovering debounce', { elapsedMs });
+    }
+
+    keyboardPressActiveRef.current = true;
+    keyboardPressActiveAtRef.current = now;
+    void toggleManualPtt();
+  }, [toggleManualPtt]);
+
+  const handleShortcutUp = useCallback(() => {
+    keyboardPressActiveRef.current = false;
+    keyboardPressActiveAtRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    shortcutHandlersRef.current = {
+      down: handleShortcutDown,
+      up: handleShortcutUp,
+    };
+  }, [handleShortcutDown, handleShortcutUp]);
 
   // Keyboard handler (configurable global shortcut)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!matchesVoicePttShortcut(e.code, shortcutPreset)) return;
       suppressShortcutEvent(e);
-      if (e.repeat || keyboardPressActiveRef.current) return;
-
-      keyboardPressActiveRef.current = true;
-      void toggleManualPtt();
+      shortcutHandlersRef.current.down(e.repeat);
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       if (!matchesVoicePttShortcut(e.code, shortcutPreset)) return;
       suppressShortcutEvent(e);
-      keyboardPressActiveRef.current = false;
+      shortcutHandlersRef.current.up();
+    };
+
+    const handlePluginIframeKeyboard = (event: Event) => {
+      const { type, code, repeat } = (event as PluginIframeKeyboardEvent).detail;
+      if (!matchesVoicePttShortcut(code, shortcutPreset)) return;
+      suppressShortcutEvent(event);
+
+      if (type === 'keyup') {
+        shortcutHandlersRef.current.up();
+        return;
+      }
+
+      shortcutHandlersRef.current.down(repeat);
     };
 
     const resetKeyboardPress = () => {
       keyboardPressActiveRef.current = false;
+      keyboardPressActiveAtRef.current = null;
     };
 
     const handleVisibilityChange = () => {
@@ -398,16 +448,52 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
 
     window.addEventListener('keydown', handleKeyDown, { capture: true });
     window.addEventListener('keyup', handleKeyUp, { capture: true });
+    window.addEventListener(PLUGIN_IFRAME_KEYBOARD_EVENT, handlePluginIframeKeyboard);
     window.addEventListener('blur', resetKeyboardPress);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown, { capture: true });
       window.removeEventListener('keyup', handleKeyUp, { capture: true });
+      window.removeEventListener(PLUGIN_IFRAME_KEYBOARD_EVENT, handlePluginIframeKeyboard);
       window.removeEventListener('blur', resetKeyboardPress);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [shortcutPreset, suppressShortcutEvent, toggleManualPtt]);
+  }, [shortcutPreset, suppressShortcutEvent]);
+
+  useEffect(() => {
+    const electronVoicePttShortcut = window.electronAPI?.voicePttShortcut;
+    if (!electronVoicePttShortcut) {
+      return undefined;
+    }
+
+    const handleCommand = (payload: {
+      type: 'keydown' | 'keyup';
+      code: string;
+      repeat: boolean;
+    }) => {
+      if (!matchesVoicePttShortcut(payload.code, shortcutPreset)) return;
+
+      if (payload.type === 'keyup') {
+        shortcutHandlersRef.current.up();
+        return;
+      }
+
+      shortcutHandlersRef.current.down(payload.repeat);
+    };
+
+    void electronVoicePttShortcut
+      .setConfig({ enabled: true, preset: shortcutPreset })
+      .catch((error: unknown) => logger.warn('Failed to enable Electron Voice PTT shortcut capture', error));
+    electronVoicePttShortcut.onCommand(handleCommand);
+
+    return () => {
+      electronVoicePttShortcut.offCommand(handleCommand);
+      void electronVoicePttShortcut
+        .setConfig({ enabled: false, preset: shortcutPreset })
+        .catch((error: unknown) => logger.warn('Failed to disable Electron Voice PTT shortcut capture', error));
+    };
+  }, [shortcutPreset]);
 
   // Suppress all long-press browser behaviors on the PTT button.
   // React synthetic events are insufficient on Android WebView/WebKit —
@@ -444,6 +530,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
         radioService?.releaseVoicePTT();
       }
       keyboardPressActiveRef.current = false;
+      keyboardPressActiveAtRef.current = null;
       manualPttActiveRef.current = false;
       manualPttOwnsLockRef.current = false;
       manualPttReleasePendingRef.current = false;

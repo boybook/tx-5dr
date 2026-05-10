@@ -68,6 +68,75 @@ let shortcutRecordingActionId: ShortcutActionId | null = null;
 let startupLogsInterval: NodeJS.Timeout | null = null;
 let startupLogsSequence = 0;
 
+const VOICE_PTT_SHORTCUT_PRESETS = [
+  'Backquote',
+  'Space',
+  'Home',
+  'F1',
+  'F2',
+  'F3',
+  'F4',
+  'F5',
+  'F6',
+  'F7',
+  'F8',
+  'F9',
+  'F10',
+  'F11',
+  'F12',
+] as const;
+
+const VOICE_PTT_STALE_KEYDOWN_RECOVERY_MS = 80;
+
+type VoicePttShortcutPreset = typeof VOICE_PTT_SHORTCUT_PRESETS[number];
+type VoicePttShortcutCommandType = 'keydown' | 'keyup';
+
+interface VoicePttShortcutConfigPayload {
+  enabled?: boolean;
+  preset?: unknown;
+}
+
+interface VoicePttShortcutCommandPayload {
+  type: VoicePttShortcutCommandType;
+  code: string;
+  key: string;
+  repeat: boolean;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  location: number;
+  source: 'electron-before-input';
+}
+
+interface VoicePttKeyboardInput {
+  type: string;
+  code: string;
+  key: string;
+  isAutoRepeat: boolean;
+  alt: boolean;
+  control: boolean;
+  meta: boolean;
+  shift: boolean;
+  location: number;
+}
+
+interface VoicePttShortcutCaptureState {
+  enabled: boolean;
+  preset: VoicePttShortcutPreset;
+  webContentsId: number | null;
+  keyDownActive: boolean;
+  lastKeyDownAt: number | null;
+}
+
+const voicePttShortcutCapture: VoicePttShortcutCaptureState = {
+  enabled: false,
+  preset: 'Backquote',
+  webContentsId: null,
+  keyDownActive: false,
+  lastKeyDownAt: null,
+};
+
 type QuitSource = 'tray-menu' | 'window-close' | 'renderer' | 'before-quit' | 'will-quit' | 'unknown';
 
 interface ChildShutdownOptions {
@@ -539,6 +608,116 @@ function createShortcutBindingFromElectronInput(input: {
     metaKey: Boolean(input.meta),
     shiftKey: Boolean(input.shift),
   });
+}
+
+function normalizeVoicePttShortcutPreset(value: unknown): VoicePttShortcutPreset {
+  return typeof value === 'string' && (VOICE_PTT_SHORTCUT_PRESETS as readonly string[]).includes(value)
+    ? value as VoicePttShortcutPreset
+    : 'Backquote';
+}
+
+function updateVoicePttShortcutCapture(
+  webContentsId: number,
+  payload: VoicePttShortcutConfigPayload,
+): VoicePttShortcutCaptureState {
+  const enabled = payload.enabled === true;
+  if (!enabled) {
+    if (voicePttShortcutCapture.webContentsId === null || voicePttShortcutCapture.webContentsId === webContentsId) {
+      voicePttShortcutCapture.enabled = false;
+      voicePttShortcutCapture.webContentsId = null;
+      voicePttShortcutCapture.keyDownActive = false;
+      voicePttShortcutCapture.lastKeyDownAt = null;
+    }
+    return { ...voicePttShortcutCapture };
+  }
+
+  voicePttShortcutCapture.enabled = true;
+  voicePttShortcutCapture.preset = normalizeVoicePttShortcutPreset(payload.preset);
+  voicePttShortcutCapture.webContentsId = webContentsId;
+  voicePttShortcutCapture.keyDownActive = false;
+  voicePttShortcutCapture.lastKeyDownAt = null;
+  return { ...voicePttShortcutCapture };
+}
+
+function inputHasModifier(input: VoicePttKeyboardInput): boolean {
+  return Boolean(input.alt || input.control || input.meta || input.shift);
+}
+
+function sendVoicePttShortcutCommand(
+  webContents: WebContents,
+  input: VoicePttKeyboardInput,
+  type: VoicePttShortcutCommandType,
+): void {
+  webContents.send('voice-ptt-shortcut:command', {
+    type,
+    code: input.code,
+    key: input.key,
+    repeat: input.isAutoRepeat,
+    altKey: input.alt,
+    ctrlKey: input.control,
+    metaKey: input.meta,
+    shiftKey: input.shift,
+    location: input.location,
+    source: 'electron-before-input',
+  } satisfies VoicePttShortcutCommandPayload);
+}
+
+function handleVoicePttShortcutInput(
+  event: Electron.Event,
+  input: VoicePttKeyboardInput,
+  webContents: WebContents,
+): boolean {
+  if (
+    !voicePttShortcutCapture.enabled
+    || voicePttShortcutCapture.webContentsId !== webContents.id
+    || input.code !== voicePttShortcutCapture.preset
+  ) {
+    return false;
+  }
+
+  if (input.type !== 'keyDown' && input.type !== 'keyUp') {
+    return false;
+  }
+
+  // Do not start PTT with modifiers, but always allow the matching keyUp to
+  // release the debounce guard if the key was pressed before modifiers changed.
+  if (inputHasModifier(input) && !(input.type === 'keyUp' && voicePttShortcutCapture.keyDownActive)) {
+    return false;
+  }
+
+  event.preventDefault();
+
+  if (input.type === 'keyUp') {
+    voicePttShortcutCapture.keyDownActive = false;
+    voicePttShortcutCapture.lastKeyDownAt = null;
+    sendVoicePttShortcutCommand(webContents, input, 'keyup');
+    return true;
+  }
+
+  if (input.isAutoRepeat) {
+    return true;
+  }
+
+  const now = Date.now();
+  if (voicePttShortcutCapture.keyDownActive) {
+    const elapsedMs = voicePttShortcutCapture.lastKeyDownAt === null
+      ? Number.POSITIVE_INFINITY
+      : now - voicePttShortcutCapture.lastKeyDownAt;
+
+    if (elapsedMs < VOICE_PTT_STALE_KEYDOWN_RECOVERY_MS) {
+      return true;
+    }
+
+    logger.debug('Voice PTT shortcut keyUp was not observed; recovering debounce on fresh keyDown', {
+      preset: voicePttShortcutCapture.preset,
+      elapsedMs,
+    });
+  }
+
+  voicePttShortcutCapture.keyDownActive = true;
+  voicePttShortcutCapture.lastKeyDownAt = now;
+  sendVoicePttShortcutCommand(webContents, input, 'keydown');
+  return true;
 }
 
 function stopShortcutRecording(options: { restoreGlobalShortcuts?: boolean } = {}): void {
@@ -2442,6 +2621,10 @@ async function createMainWindowOnly(options: CreateMainWindowOptions = {}): Prom
   mainWindow.on('closed', () => {
     logger.info('main window closed');
     mainWindowInstance = null;
+    voicePttShortcutCapture.enabled = false;
+    voicePttShortcutCapture.webContentsId = null;
+    voicePttShortcutCapture.keyDownActive = false;
+    voicePttShortcutCapture.lastKeyDownAt = null;
     if (serverCheckInterval) {
       clearInterval(serverCheckInterval);
       serverCheckInterval = null;
@@ -2487,33 +2670,38 @@ async function createMainWindowOnly(options: CreateMainWindowOptions = {}): Prom
   });
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
-    if (shortcutRecordingWebContentsId !== mainWindow.webContents.id || !shortcutRecordingActionId) {
-      return;
-    }
+    if (shortcutRecordingActionId) {
+      if (shortcutRecordingWebContentsId !== mainWindow.webContents.id) {
+        return;
+      }
 
-    event.preventDefault();
-    if (input.type !== 'keyDown' || input.isAutoRepeat) {
-      return;
-    }
+      event.preventDefault();
+      if (input.type !== 'keyDown' || input.isAutoRepeat) {
+        return;
+      }
 
-    const actionId = shortcutRecordingActionId;
-    if (input.key === 'Escape') {
+      const actionId = shortcutRecordingActionId;
+      if (input.key === 'Escape') {
+        stopShortcutRecording({ restoreGlobalShortcuts: true });
+        mainWindow.webContents.send('shortcut:recording-cancelled', { actionId } satisfies ShortcutRecordingCancelledPayload);
+        return;
+      }
+
+      if (isModifierOnlyShortcutInput(input)) {
+        return;
+      }
+
+      const binding = createShortcutBindingFromElectronInput(input);
+      if (!binding) {
+        return;
+      }
+
       stopShortcutRecording({ restoreGlobalShortcuts: true });
-      mainWindow.webContents.send('shortcut:recording-cancelled', { actionId } satisfies ShortcutRecordingCancelledPayload);
+      mainWindow.webContents.send('shortcut:recorded', { actionId, binding } satisfies ShortcutRecordedPayload);
       return;
     }
 
-    if (isModifierOnlyShortcutInput(input)) {
-      return;
-    }
-
-    const binding = createShortcutBindingFromElectronInput(input);
-    if (!binding) {
-      return;
-    }
-
-    stopShortcutRecording({ restoreGlobalShortcuts: true });
-    mainWindow.webContents.send('shortcut:recorded', { actionId, binding } satisfies ShortcutRecordedPayload);
+    handleVoicePttShortcutInput(event, input, mainWindow.webContents);
   });
 
   if (process.platform === 'win32' || process.platform === 'linux') {
@@ -3782,6 +3970,10 @@ function setupIpcHandlers() {
     if (shortcutRecordingWebContentsId === event.sender.id) {
       stopShortcutRecording({ restoreGlobalShortcuts: true });
     }
+  });
+
+  ipcMain.handle('voicePttShortcut:setConfig', (event, payload: VoicePttShortcutConfigPayload) => {
+    return updateVoicePttShortcutCapture(event.sender.id, payload ?? {});
   });
 
   // 配置管理 IPC
