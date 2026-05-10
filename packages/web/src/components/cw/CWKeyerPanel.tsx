@@ -1,22 +1,15 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   Card,
   Alert,
   Input,
   Textarea,
-  Switch,
   Slider,
   Select,
   SelectItem,
   Tabs,
   Tab,
-  Modal,
-  ModalContent,
-  ModalHeader,
-  ModalBody,
-  ModalFooter,
-  useDisclosure,
   Chip,
   Tooltip,
 } from '@heroui/react';
@@ -26,16 +19,24 @@ import {
   faPlay,
   faStop,
   faPen,
-  faTrash,
+  faEraser,
   faPaperPlane,
   faRepeat,
+  faClock,
+  faWaveSquare,
   faTowerBroadcast,
   faPlug,
   faPlus,
   faMinus,
-  faChevronDown,
 } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
+import {
+  estimateCWMessageDurationMs,
+  type CWKeyerBackend,
+  type CWKeyerConfig,
+  type CWMessagePanel,
+  type CWMessageSlot,
+} from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
 import { useCWKeyer } from '../../hooks/useCWKeyer';
 import { useOperators, useCurrentOperatorId, useRadioState } from '../../store/radioStore';
@@ -48,11 +49,14 @@ import {
   CW_KEYER_SHORTCUT_NONE,
   CW_KEYER_SHORTCUT_CHANGED_EVENT,
 } from '../../utils/cwKeyerShortcutPreferences';
-import type { CWKeyerBackend, CWKeyerConfig, CWMessagePanel, CWMessageSlot } from '@tx5dr/contracts';
 import type { CWKeyerShortcutPreset, CWKeyerShortcutChangedDetail } from '../../utils/cwKeyerShortcutPreferences';
 
 const WPM_MIN = 5;
 const WPM_MAX = 60;
+const TX_PROGRESS_OVERHEAD_MS = 650;
+
+type CWPanelMode = 'operate' | 'edit';
+
 const CW_ALERT_CLASS_NAMES = {
   base: '!flex-none !grow-0 py-2.5 px-3',
   mainWrapper: '!h-auto !min-h-0 justify-center',
@@ -66,6 +70,58 @@ interface CWKeyerPanelProps {
   embedded?: boolean;
 }
 
+function formatDuration(durationMs: number): string {
+  if (!durationMs) return '--';
+  const totalSeconds = Math.round(durationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}:${seconds.toString().padStart(2, '0')}` : `${seconds}s`;
+}
+
+function getTxProgressStyle(durationMs: number): React.CSSProperties {
+  return {
+    animation: `voice-keyer-tx-progress ${Math.max(800, durationMs + TX_PROGRESS_OVERHEAD_MS)}ms linear forwards`,
+  };
+}
+
+function getRemainingSeconds(nextRunAt: number | null, intervalSec: number): number | null {
+  if (!nextRunAt) return null;
+  return Math.min(intervalSec, Math.max(0, Math.ceil((nextRunAt - Date.now()) / 1000)));
+}
+
+function getWaitProgressStyle(nextRunAt: number, intervalSec: number): React.CSSProperties {
+  const totalMs = Math.max(1000, intervalSec * 1000);
+  const remainingMs = Math.min(totalMs, Math.max(0, nextRunAt - Date.now()));
+  const elapsedMs = Math.max(0, totalMs - remainingMs);
+  const startPercent = Math.max(0, Math.min(100, (elapsedMs / totalMs) * 100));
+
+  return {
+    '--voice-keyer-progress-start': `${startPercent}%`,
+    animation: `voice-keyer-wait-progress ${Math.max(1, remainingMs)}ms linear forwards`,
+  } as React.CSSProperties;
+}
+
+const CWWaitProgress = React.memo(function CWWaitProgress({
+  nextRunAt,
+  intervalSec,
+}: {
+  nextRunAt: number;
+  intervalSec: number;
+}) {
+  const style = useMemo(
+    () => getWaitProgressStyle(nextRunAt, intervalSec),
+    [intervalSec, nextRunAt],
+  );
+
+  return (
+    <span
+      key={`${nextRunAt}-${intervalSec}`}
+      className="voice-keyer-wait-progress absolute inset-y-0 left-0 pointer-events-none bg-warning/25"
+      style={style}
+    />
+  );
+});
+
 export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const { t } = useTranslation();
   const { cwKeyerStatus, cwConfig, isCWMode, sendText, playMessage, stopMessage } = useCWKeyer();
@@ -74,22 +130,18 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
 
   const textInputRef = useRef<HTMLDivElement>(null);
+  const slotUpdateTimersRef = useRef<Record<string, number>>({});
   const [textInput, setTextInput] = useState('');
   const [lastSentText, setLastSentText] = useState<string | null>(null);
   const [panel, setPanel] = useState<CWMessagePanel | null>(null);
   const [panelLoading, setPanelLoading] = useState(false);
-  const [editingSlot, setEditingSlot] = useState<CWMessageSlot | null>(null);
-  const [editLabel, setEditLabel] = useState('');
-  const [editText, setEditText] = useState('');
-  const [editRepeatEnabled, setEditRepeatEnabled] = useState(false);
-  const [editRepeatInterval, setEditRepeatInterval] = useState(5);
-  const { isOpen, onOpen, onClose } = useDisclosure();
+  const [panelMode, setPanelMode] = useState<CWPanelMode>('operate');
   const [slotShortcuts, setSlotShortcuts] = useState<Record<string, CWKeyerShortcutPreset>>({});
-  const [shortcutMenuSlotId, setShortcutMenuSlotId] = useState<string | null>(null);
   const [loadedConfig, setLoadedConfig] = useState<CWKeyerConfig | null>(null);
-
-  // WPM 本地状态，跟随 cwConfig 变化
   const [wpm, setWpm] = useState(cwConfig?.wpm ?? 20);
+  const [txProgressRunId, setTxProgressRunId] = useState(0);
+  const [, setCountdownTick] = useState(0);
+
   const effectiveConfig = cwConfig ?? loadedConfig;
   const backend: CWKeyerBackend = effectiveConfig?.backend ?? 'cat';
   const isSerialBackend = backend === 'serial';
@@ -106,6 +158,14 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
         ? cwKeyerStatus.backendError
         : null;
   const showCatAlert = backend === 'cat' && Boolean(catUnavailableReason);
+
+  const myCallsign = operators.find(o => o.id === currentOperatorId)?.context?.myCall?.trim() || '';
+  const isActive = cwKeyerStatus?.active ?? false;
+  const statusMode = cwKeyerStatus?.mode ?? 'idle';
+  const activeSlotId = (statusMode === 'playing' || statusMode === 'repeat-waiting')
+    ? cwKeyerStatus?.messageId ?? null
+    : null;
+  const isManualTextPlaying = isActive && statusMode === 'playing' && !cwKeyerStatus?.messageId;
 
   useEffect(() => {
     if (!isCWMode) return;
@@ -128,48 +188,55 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
     }
   }, [effectiveConfig]);
 
-  const myCallsign = operators.find(o => o.id === currentOperatorId)?.context?.myCall?.trim() || '';
+  useEffect(() => {
+    if (isActive && statusMode === 'playing') {
+      setTxProgressRunId(value => value + 1);
+    }
+  }, [isActive, statusMode, cwKeyerStatus?.messageId]);
 
-  const isActive = cwKeyerStatus?.active ?? false;
-  const statusMode = cwKeyerStatus?.mode ?? 'idle';
-  const playingSlotId = (statusMode === 'playing' || statusMode === 'repeat-waiting')
-    ? cwKeyerStatus?.messageId ?? null
-    : null;
-  // 手动文字发射中（非预设报文）
-  const isManualTextPlaying = isActive && statusMode === 'playing' && !cwKeyerStatus?.messageId;
+  useEffect(() => {
+    if (!(isActive && statusMode === 'repeat-waiting')) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => setCountdownTick(value => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [isActive, statusMode]);
 
-  // 加载报文面板
   const loadPanel = useCallback(async () => {
-    if (!myCallsign) return;
+    if (!myCallsign) {
+      setPanel(null);
+      return;
+    }
     setPanelLoading(true);
     try {
       const resp = await api.getCWMessagePanel(myCallsign);
       setPanel(resp.panel);
     } catch {
-      // 静默处理
+      // Keep the keyer usable even if the preset panel cannot be loaded temporarily.
     } finally {
       setPanelLoading(false);
     }
   }, [myCallsign]);
 
   useEffect(() => {
-    if (isCWMode && myCallsign) {
-      loadPanel();
+    if (isCWMode) {
+      void loadPanel();
     }
-  }, [isCWMode, myCallsign, loadPanel]);
+  }, [isCWMode, loadPanel]);
 
-  const visibleSlots = panel?.slots.slice(0, panel.slotCount) ?? [];
+  const visibleSlots = useMemo(() => panel?.slots.slice(0, panel.slotCount) ?? [], [panel]);
   const canIncreaseSlots = (panel?.slotCount ?? 0) < (panel?.maxSlotCount ?? 12);
   const canDecreaseSlots = (panel?.slotCount ?? 3) > 3;
 
-  // 加载快捷键预设
   useEffect(() => {
-    if (!myCallsign || !panel?.slots) return;
+    if (!myCallsign || !panel?.slots) {
+      setSlotShortcuts({});
+      return;
+    }
     const presets = getCWKeyerShortcutPresetsForCallsign(myCallsign, panel.slots);
     setSlotShortcuts(presets);
   }, [myCallsign, panel?.slots]);
 
-  // 跨组件快捷键变更同步
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handler = (e: Event) => {
@@ -181,28 +248,6 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
     return () => window.removeEventListener(CW_KEYER_SHORTCUT_CHANGED_EVENT, handler);
   }, [myCallsign]);
 
-  // 快捷键菜单关闭（外部点击/Escape）
-  useEffect(() => {
-    if (!shortcutMenuSlotId) return undefined;
-    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest('[data-cw-keyer-shortcut-menu]')) return;
-      setShortcutMenuSlotId(null);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setShortcutMenuSlotId(null);
-    };
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('touchstart', handlePointerDown);
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('touchstart', handlePointerDown);
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [shortcutMenuSlotId]);
-
-  // 全局键盘监听器（捕获 F 键快捷键）
   useEffect(() => {
     const isTypingTarget = (target: EventTarget | null) => {
       const el = target as HTMLElement | null;
@@ -220,7 +265,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
         return;
       }
 
-      if (!isCWMode || !myCallsign) return;
+      if (!isCWMode || !myCallsign || panelMode !== 'operate') return;
 
       const slot = visibleSlots.find(candidate =>
         matchesCWKeyerShortcut(event.code, slotShortcuts[candidate.id] ?? CW_KEYER_SHORTCUT_NONE),
@@ -236,9 +281,48 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
 
     window.addEventListener('keydown', handleGlobalKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', handleGlobalKeyDown, { capture: true });
-  }, [isActive, isCWMode, myCallsign, playMessage, slotShortcuts, stopMessage, visibleSlots]);
+  }, [isActive, isCWMode, myCallsign, panelMode, playMessage, slotShortcuts, stopMessage, visibleSlots]);
 
-  // 更新快捷键预设
+  useEffect(() => () => {
+    Object.values(slotUpdateTimersRef.current).forEach(timer => window.clearTimeout(timer));
+    slotUpdateTimersRef.current = {};
+  }, []);
+
+  const updateSlotLocal = useCallback((slotId: string, update: Partial<Pick<CWMessageSlot, 'label' | 'text' | 'repeatEnabled' | 'repeatIntervalSec'>>) => {
+    setPanel(current => current ? {
+      ...current,
+      slots: current.slots.map(item => item.id === slotId ? { ...item, ...update } : item),
+    } : current);
+  }, []);
+
+  const updateSlot = useCallback(async (
+    slotId: string,
+    update: Partial<Pick<CWMessageSlot, 'label' | 'text' | 'repeatEnabled' | 'repeatIntervalSec'>>,
+  ): Promise<CWMessagePanel | null> => {
+    if (!myCallsign) return null;
+    try {
+      const resp = await api.updateCWMessageSlot(myCallsign, slotId, update);
+      setPanel(resp.panel);
+      return resp.panel;
+    } catch (err) {
+      addToast({
+        title: t('common:error'),
+        description: String(err),
+        color: 'danger',
+      });
+      return null;
+    }
+  }, [myCallsign, t]);
+
+  const queueSlotUpdate = useCallback((slotId: string, update: Partial<Pick<CWMessageSlot, 'repeatEnabled' | 'repeatIntervalSec'>>) => {
+    const timers = slotUpdateTimersRef.current;
+    if (timers[slotId]) window.clearTimeout(timers[slotId]);
+    timers[slotId] = window.setTimeout(() => {
+      delete timers[slotId];
+      void updateSlot(slotId, update);
+    }, 350);
+  }, [updateSlot]);
+
   const updateSlotShortcut = useCallback((slot: CWMessageSlot, preset: CWKeyerShortcutPreset) => {
     if (!myCallsign) return;
     const nextShortcuts = { ...slotShortcuts };
@@ -260,30 +344,29 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
     for (const change of changes) {
       saveCWKeyerSlotShortcutPreset(myCallsign, change.slotId, change.preset);
     }
-    setShortcutMenuSlotId(null);
   }, [myCallsign, panel?.slots, slotShortcuts]);
 
-  const getShortcutLabel = (preset: CWKeyerShortcutPreset): string => {
+  const getShortcutLabel = useCallback((preset: CWKeyerShortcutPreset): string => {
     return preset === CW_KEYER_SHORTCUT_NONE ? (t('radio:cw.shortcutNone') || '-') : preset;
-  };
+  }, [t]);
 
-  // 发送文本
-  const handleSendText = () => {
-    const trimmed = textInput.trim();
+  const handleSendText = useCallback((text = textInput) => {
+    const trimmed = text.trim();
     if (!trimmed || (isActive && statusMode !== 'idle')) return;
     sendText(trimmed, myCallsign || undefined);
     setLastSentText(trimmed);
-    setTextInput('');
-    requestAnimationFrame(() => {
-      const el = textInputRef.current;
-      if (el) {
-        const input = el.tagName === 'INPUT' ? el : el.querySelector('input');
-        (input as HTMLInputElement)?.focus();
-      }
-    });
-  };
+    if (text === textInput) {
+      setTextInput('');
+      requestAnimationFrame(() => {
+        const el = textInputRef.current;
+        if (el) {
+          const input = el.tagName === 'INPUT' ? el : el.querySelector('input');
+          (input as HTMLInputElement)?.focus();
+        }
+      });
+    }
+  }, [isActive, myCallsign, sendText, statusMode, textInput]);
 
-  // 处理回车键
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -292,7 +375,6 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
     }
   };
 
-  // WPM 变更
   const handleWpmChange = (value: number | number[]) => {
     const v = Array.isArray(value) ? value[0] : value;
     setWpm(v);
@@ -322,7 +404,6 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
       });
   };
 
-  // 调整 Slot 数量
   const handleSlotCountChange = async (delta: number) => {
     if (!myCallsign || !panel) return;
     const newCount = panel.slotCount + delta;
@@ -338,38 +419,6 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
     }
   };
 
-  // 打开编辑对话框
-  const openEditSlot = (slot: CWMessageSlot) => {
-    setEditingSlot(slot);
-    setEditLabel(slot.label);
-    setEditText(slot.text);
-    setEditRepeatEnabled(slot.repeatEnabled);
-    setEditRepeatInterval(slot.repeatIntervalSec);
-    onOpen();
-  };
-
-  // 保存报文
-  const handleSaveSlot = async () => {
-    if (!editingSlot || !myCallsign) return;
-    try {
-      const resp = await api.updateCWMessageSlot(myCallsign, editingSlot.id, {
-        label: editLabel,
-        text: editText,
-        repeatEnabled: editRepeatEnabled,
-        repeatIntervalSec: editRepeatInterval,
-      });
-      setPanel(resp.panel);
-      onClose();
-    } catch (err) {
-      addToast({
-        title: t('common:error'),
-        description: String(err),
-        color: 'danger',
-      });
-    }
-  };
-
-  // 删除报文文本
   const handleDeleteSlot = async (slot: CWMessageSlot) => {
     if (!myCallsign) return;
     try {
@@ -384,29 +433,61 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
     }
   };
 
-  // 播放报文
-  const handlePlay = (slot: CWMessageSlot, repeat: boolean) => {
+  const handlePlay = (slot: CWMessageSlot) => {
     if (!myCallsign || !slot.text) return;
-    playMessage(myCallsign, slot.id, repeat);
+    if (activeSlotId === slot.id) {
+      stopMessage();
+      return;
+    }
+    if (isActive) return;
+    playMessage(myCallsign, slot.id, slot.repeatEnabled);
+  };
+
+  const handleRepeatToggle = async (slot: CWMessageSlot) => {
+    const repeatEnabled = !slot.repeatEnabled;
+    updateSlotLocal(slot.id, { repeatEnabled });
+    const updatedPanel = await updateSlot(slot.id, { repeatEnabled });
+    if (!updatedPanel) {
+      updateSlotLocal(slot.id, { repeatEnabled: slot.repeatEnabled });
+      return;
+    }
+    if (repeatEnabled && slot.text && !isActive) {
+      playMessage(myCallsign, slot.id, true, false);
+    } else if (!repeatEnabled && activeSlotId === slot.id) {
+      stopMessage();
+    }
+  };
+
+  const handleRepeatIntervalChange = (slot: CWMessageSlot, value: string) => {
+    const repeatIntervalSec = Math.max(1, Math.min(300, Math.round(Number(value) || 1)));
+    updateSlotLocal(slot.id, { repeatIntervalSec });
+    queueSlotUpdate(slot.id, { repeatIntervalSec });
   };
 
   if (!isCWMode) return null;
 
+  const lastSentDurationMs = estimateCWMessageDurationMs(lastSentText ?? '', wpm);
+
   const panelContent = (
     <>
-      <div className={`flex items-center justify-between gap-2 ${embedded ? 'px-1 pb-2' : 'px-3 py-3'}`}>
+      <div className={`flex items-center justify-between gap-2 ${embedded ? 'px-1 py-3' : 'px-3 py-4'}`}>
         <div className="flex min-w-0 items-center gap-2">
-          <FontAwesomeIcon icon={faTowerBroadcast} className="text-primary" />
+          <FontAwesomeIcon icon={faWaveSquare} className="text-primary" />
           <span className="font-semibold">{t('radio:cw.title', 'CW')}</span>
+          {isActive && (
+            <Chip size="sm" variant="flat" color={statusMode === 'repeat-waiting' ? 'warning' : 'success'}>
+              {statusMode === 'keying' ? 'KEYING' : statusMode === 'playing' ? 'TX' : statusMode}
+            </Chip>
+          )}
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
           <Tabs
             size="sm"
             variant="solid"
-            selectedKey={backend}
-            onSelectionChange={handleBackendChange}
-            aria-label={t('radio:cw.backendTabs', 'CW backend')}
+            selectedKey={panelMode}
+            onSelectionChange={(key) => setPanelMode(key as CWPanelMode)}
+            aria-label={t('radio:cw.modeTabs', 'CW keyer mode')}
             classNames={{
               base: 'shrink-0',
               tabList: 'h-7 gap-0 p-0.5',
@@ -415,25 +496,25 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
             }}
           >
             <Tab
-              key="cat"
+              key="operate"
               title={(
                 <span className="flex items-center gap-1">
                   <FontAwesomeIcon icon={faTowerBroadcast} className="text-[10px]" />
-                  <span className="hidden sm:inline">{t('radio:cw.backendCat', 'Radio keyer')}</span>
+                  <span className="hidden sm:inline">{t('radio:cw.operateMode', 'Transmit')}</span>
                 </span>
               )}
             />
             <Tab
-              key="serial"
+              key="edit"
               title={(
                 <span className="flex items-center gap-1">
-                  <FontAwesomeIcon icon={faPlug} className="text-[10px]" />
-                  <span className="hidden sm:inline">{t('radio:cw.backendSerial', 'Key jack')}</span>
+                  <FontAwesomeIcon icon={faPen} className="text-[10px]" />
+                  <span className="hidden sm:inline">{t('radio:cw.editMode', 'Edit')}</span>
                 </span>
               )}
             />
           </Tabs>
-          {operators.length > 1 && (
+          {operators.length > 0 && (
             <Select
               size="sm"
               variant="flat"
@@ -452,11 +533,6 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
                 </SelectItem>
               ))}
             </Select>
-          )}
-          {isActive && (
-            <Chip size="sm" variant="flat" color="success">
-              {statusMode === 'keying' ? 'KEYING' : statusMode === 'playing' ? 'TX' : statusMode}
-            </Chip>
           )}
         </div>
       </div>
@@ -490,7 +566,6 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
           </Alert>
         )}
 
-        {/* 文字输入区 */}
         <div className="flex gap-2">
           <Input
             ref={textInputRef}
@@ -504,43 +579,48 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
                 isIconOnly
                 size="sm"
                 variant="light"
-                onPress={handleSendText}
+                onPress={() => handleSendText()}
                 isDisabled={!textInput.trim() || (isActive && statusMode !== 'idle')}
+                aria-label={t('radio:cw.send', 'Send')}
               >
                 <FontAwesomeIcon icon={faPaperPlane} />
               </Button>
             }
           />
-          {isActive && (
-            <Button
-              color="danger"
-              variant="flat"
-              isIconOnly
-              onPress={stopMessage}
-            >
-              <FontAwesomeIcon icon={faStop} />
-            </Button>
-          )}
         </div>
 
-        {/* 当前/上次发射文字指示 */}
         {lastSentText && (
-          <div className={`flex items-center gap-2 p-2 rounded-lg border text-sm font-mono ${
-            isManualTextPlaying
-              ? 'border-success bg-success-50 dark:bg-success-100/10'
-              : 'border-default-200 bg-default-50'
-          }`}>
-            <Chip size="sm" color={isManualTextPlaying ? 'success' : 'default'} variant="flat">
-              {isManualTextPlaying ? 'TX' : t('radio:cw.lastSent', 'Last')}
-            </Chip>
-            <span className="truncate flex-1">{lastSentText}</span>
+          <div className={`rounded-lg p-2 transition-colors ${isManualTextPlaying ? 'bg-danger-50 dark:bg-danger-950/20' : 'bg-content2'}`}>
+            <Button
+              color={isManualTextPlaying ? 'danger' : 'default'}
+              variant={isManualTextPlaying ? 'solid' : 'flat'}
+              className={`relative h-12 w-full overflow-hidden rounded-md px-2 transition-colors ${isManualTextPlaying ? '' : 'hover:bg-primary-50 dark:hover:bg-primary-500/10'}`}
+              onPress={() => isManualTextPlaying ? stopMessage() : handleSendText(lastSentText)}
+              isDisabled={isActive && !isManualTextPlaying}
+            >
+              {isManualTextPlaying && (
+                <span
+                  key={`manual-${txProgressRunId}`}
+                  className="voice-keyer-tx-progress absolute inset-y-0 left-0 pointer-events-none bg-white/25"
+                  style={getTxProgressStyle(lastSentDurationMs)}
+                />
+              )}
+              <div className="relative z-10 flex w-full items-center gap-2 text-left">
+                <Chip size="sm" color={isManualTextPlaying ? 'danger' : 'default'} variant="flat" className="shrink-0">
+                  {isManualTextPlaying ? 'TX' : t('radio:cw.lastSent', 'Last')}
+                </Chip>
+                <span className="min-w-0 flex-1 truncate font-mono text-xs">{lastSentText}</span>
+                <span className="shrink-0 text-[11px] opacity-80">
+                  {isManualTextPlaying ? <FontAwesomeIcon icon={faStop} /> : formatDuration(lastSentDurationMs)}
+                </span>
+              </div>
+            </Button>
           </div>
         )}
 
-        {/* 速度与侧音设置 */}
-        <div className="flex flex-col gap-2 p-2 rounded-lg border border-default-200 bg-default-50">
+        <div className="flex flex-col gap-3 rounded-lg border border-default-200 bg-default-50 px-3 py-3">
           <div className="flex items-center gap-3">
-            <span className="text-xs text-default-600 w-10 shrink-0">{t('radio:cw.wpm', 'WPM')}</span>
+            <span className="w-20 shrink-0 whitespace-nowrap text-xs text-default-600">{t('radio:cw.wpm', 'WPM')}</span>
             <Slider
               size="sm"
               step={1}
@@ -552,18 +632,53 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
               className="flex-1"
               aria-label={t('radio:cw.wpm', 'WPM')}
             />
-            <span className="text-xs text-default-800 w-10 text-right font-mono">{wpm}</span>
+            <span className="w-10 text-right font-mono text-xs text-default-800">{wpm}</span>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="w-20 shrink-0 text-xs text-default-600">{t('radio:cw.backendTabs', 'CW backend')}</span>
+            <Tabs
+              size="sm"
+              variant="solid"
+              selectedKey={backend}
+              onSelectionChange={handleBackendChange}
+              aria-label={t('radio:cw.backendTabs', 'CW backend')}
+              classNames={{
+                base: 'shrink-0',
+                tabList: 'h-7 gap-0 rounded-lg p-0.5',
+                cursor: 'rounded-md',
+                tab: 'h-6 min-w-7 rounded-md px-2',
+                tabContent: 'text-xs',
+              }}
+            >
+              <Tab
+                key="cat"
+                title={(
+                  <span className="flex items-center gap-1">
+                    <FontAwesomeIcon icon={faTowerBroadcast} className="text-[10px]" />
+                    <span>{t('radio:cw.backendCat', 'Radio keyer')}</span>
+                  </span>
+                )}
+              />
+              <Tab
+                key="serial"
+                title={(
+                  <span className="flex items-center gap-1">
+                    <FontAwesomeIcon icon={faPlug} className="text-[10px]" />
+                    <span>{t('radio:cw.backendSerial', 'Key jack')}</span>
+                  </span>
+                )}
+              />
+            </Tabs>
           </div>
         </div>
 
-        {/* 预设报文区 */}
         <div className={embedded ? 'flex flex-1 min-h-0 flex-col' : undefined}>
-          <div className="flex items-center justify-between mb-2">
+          <div className="mb-2 flex items-center justify-between">
             <span className="text-sm font-medium text-default-600">
               {t('radio:cw.presetMessages', 'Presets')}
             </span>
             <div className="flex items-center gap-1">
-              <span className="text-xs text-default-400 mr-1">{panel?.slotCount ?? 0}</span>
+              <span className="mr-1 text-xs text-default-400">{panel?.slotCount ?? 0}</span>
               <Tooltip content={t('radio:cw.decreaseSlots', 'Remove slot')}>
                 <Button
                   isIconOnly
@@ -590,193 +705,183 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
           </div>
 
           {panelLoading ? (
-            <div className="text-center text-default-400 text-sm py-4">
+            <div className="py-4 text-center text-sm text-default-400">
               {t('common:loading', 'Loading...')}
             </div>
           ) : (
-            <div className={`flex flex-col gap-1.5 overflow-y-auto ${embedded ? 'flex-1 min-h-0 pr-1' : 'max-h-64'}`}>
-              {visibleSlots.map((slot) => {
-                  const isSlotPlaying = playingSlotId === slot.id;
-                  const isRepeatWaiting = statusMode === 'repeat-waiting' && cwKeyerStatus?.messageId === slot.id;
+            <div className={`overflow-y-auto ${embedded ? 'flex-1 min-h-0 pr-1' : 'max-h-64'}`}>
+              {visibleSlots.length === 0 ? (
+                <div className="py-4 text-center text-sm text-default-400">
+                  {t('radio:cw.noMessages', 'No messages configured')}
+                </div>
+              ) : panelMode === 'operate' ? (
+                <div className="grid w-full grid-cols-[repeat(auto-fit,minmax(min(100%,22rem),1fr))] gap-2">
+                  {visibleSlots.map((slot) => {
+                    const active = activeSlotId === slot.id;
+                    const transmitting = active && statusMode === 'playing';
+                    const waiting = active && statusMode === 'repeat-waiting';
+                    const intervalValue = Math.max(1, Math.min(300, Math.round(Number(slot.repeatIntervalSec) || 1)));
+                    const remainingSeconds = waiting ? getRemainingSeconds(cwKeyerStatus?.nextRunAt ?? null, intervalValue) : null;
+                    const durationMs = estimateCWMessageDurationMs(slot.text, wpm);
+                    const shortcutPreset = slotShortcuts[slot.id] ?? CW_KEYER_SHORTCUT_NONE;
+                    const activeToneClass = waiting
+                      ? 'bg-warning-50 dark:bg-warning-950/20'
+                      : active
+                        ? 'bg-danger-50 dark:bg-danger-950/20'
+                        : 'bg-content2';
 
-                  return (
-                <div
-                  key={slot.id}
-                  className={`flex items-center gap-2 p-2 rounded-lg border transition-colors ${
-                    isSlotPlaying
-                      ? 'border-success bg-success-50 dark:bg-success-100/10'
-                      : isRepeatWaiting
-                        ? 'border-warning bg-warning-50 dark:bg-warning-100/10'
-                        : 'border-default-200 hover:border-primary-200'
-                  }`}
-                >
-                  <span className="text-xs text-default-500 w-6 text-right shrink-0">
-                    {slot.index}
-                  </span>
-                  <span className="text-xs font-mono text-default-400 w-8 shrink-0 text-center">
-                    {getShortcutLabel(slotShortcuts[slot.id] ?? CW_KEYER_SHORTCUT_NONE)}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{slot.label}</div>
-                    <div className="text-xs text-default-400 truncate">
-                      {slot.text || '\u2014'}
-                    </div>
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    {slot.text && (
-                      <>
+                    return (
+                      <div key={slot.id} className={`rounded-lg p-2 transition-colors ${activeToneClass}`}>
                         <Button
-                          isIconOnly
-                          size="sm"
-                          variant="light"
-                          onPress={() => handlePlay(slot, false)}
-                          isDisabled={isActive}
+                          color={transmitting ? 'danger' : active ? 'warning' : 'primary'}
+                          variant={transmitting ? 'solid' : active ? 'flat' : 'solid'}
+                          className="relative h-16 w-full overflow-hidden rounded-md px-2 pt-1 pb-1.5"
+                          onPress={() => handlePlay(slot)}
+                          isDisabled={!slot.text || (isActive && !active)}
                         >
-                          <FontAwesomeIcon icon={faPlay} className="text-sm" />
+                          {transmitting && (
+                            <span
+                              key={`${slot.id}-${txProgressRunId}`}
+                              className="voice-keyer-tx-progress absolute inset-y-0 left-0 pointer-events-none bg-white/25"
+                              style={getTxProgressStyle(durationMs)}
+                            />
+                          )}
+                          {waiting && cwKeyerStatus?.nextRunAt && (
+                            <CWWaitProgress
+                              nextRunAt={cwKeyerStatus.nextRunAt}
+                              intervalSec={intervalValue}
+                            />
+                          )}
+                          <div className="relative z-10 flex w-full flex-col items-start gap-1 text-left">
+                            <div className="flex w-full items-center justify-between gap-1">
+                              <span className="font-mono text-xs font-semibold">
+                                {getShortcutLabel(shortcutPreset)}
+                              </span>
+                              <span className={`min-w-0 truncate text-right opacity-90 ${waiting ? 'font-mono text-sm font-semibold tabular-nums' : 'text-[11px] font-semibold'}`}>
+                                {waiting
+                                  ? remainingSeconds !== null ? `${remainingSeconds}s` : 'PTT'
+                                  : transmitting ? <FontAwesomeIcon icon={faStop} /> : slot.label}
+                              </span>
+                            </div>
+                            <span className="max-w-full truncate text-sm font-semibold">
+                              {slot.text || t('radio:cw.emptySlotHint', 'Edit this slot first')}
+                            </span>
+                          </div>
                         </Button>
-                        {slot.repeatEnabled && (
+                        <div className="mt-2 flex items-center gap-1">
+                          <Button
+                            isIconOnly
+                            size="sm"
+                            color={slot.repeatEnabled ? 'warning' : 'default'}
+                            variant={slot.repeatEnabled ? 'solid' : 'flat'}
+                            aria-label={t('radio:cw.repeatToggle', 'Repeat toggle')}
+                            onPress={() => void handleRepeatToggle(slot)}
+                            isDisabled={!slot.text || (isActive && !active)}
+                            className="h-7 min-w-7 rounded-md"
+                          >
+                            <FontAwesomeIcon icon={slot.repeatEnabled ? faRepeat : faClock} className="text-xs" />
+                          </Button>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={300}
+                            size="sm"
+                            variant="flat"
+                            value={String(intervalValue)}
+                            aria-label={t('radio:cw.repeatInterval', 'Interval (s)')}
+                            endContent={<span className="text-[11px] text-default-400">s</span>}
+                            classNames={{ inputWrapper: 'h-7 min-h-7 px-2', input: 'text-xs font-mono' }}
+                            onValueChange={(value) => handleRepeatIntervalChange(slot, value)}
+                            isDisabled={!slot.text || (isActive && !active)}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="grid w-full grid-cols-[repeat(auto-fit,minmax(min(100%,24rem),1fr))] gap-2">
+                  {visibleSlots.map((slot) => {
+                    const shortcutPreset = slotShortcuts[slot.id] ?? CW_KEYER_SHORTCUT_NONE;
+
+                    return (
+                      <div key={slot.id} className="rounded-lg bg-content2 p-2 transition-colors">
+                        <div className="flex items-center justify-between gap-2">
+                          <Select
+                            size="sm"
+                            variant="flat"
+                            aria-label={t('radio:cw.shortcutSelectAria', { slot: slot.index })}
+                            selectedKeys={[shortcutPreset]}
+                            onSelectionChange={(keys) => {
+                              const selected = Array.from(keys)[0] as CWKeyerShortcutPreset | undefined;
+                              if (selected) updateSlotShortcut(slot, selected);
+                            }}
+                            className="w-20"
+                            classNames={{ trigger: 'h-7 min-h-7 px-2', value: 'font-mono text-xs' }}
+                            isDisabled={isActive}
+                          >
+                            {CW_KEYER_SHORTCUT_PRESETS.map((preset) => (
+                              <SelectItem key={preset} textValue={getShortcutLabel(preset)}>
+                                {getShortcutLabel(preset)}
+                              </SelectItem>
+                            ))}
+                          </Select>
                           <Button
                             isIconOnly
                             size="sm"
                             variant="light"
-                            color="secondary"
-                            onPress={() => handlePlay(slot, true)}
-                            isDisabled={isActive}
+                            color="danger"
+                            aria-label={t('radio:cw.clearSlot', 'Clear')}
+                            onPress={() => void handleDeleteSlot(slot)}
+                            isDisabled={!slot.text || isActive}
+                            className="h-7 min-w-7 rounded-md"
                           >
-                            <FontAwesomeIcon icon={faRepeat} className="text-sm" />
+                            <FontAwesomeIcon icon={faEraser} className="text-xs" />
                           </Button>
-                        )}
-                      </>
-                    )}
-                    <Button
-                      isIconOnly
-                      size="sm"
-                      variant="light"
-                      onPress={() => openEditSlot(slot)}
-                      isDisabled={isActive}
-                    >
-                      <FontAwesomeIcon icon={faPen} className="text-xs" />
-                    </Button>
-                    {slot.text && (
-                      <Button
-                        isIconOnly
-                        size="sm"
-                        variant="light"
-                        color="danger"
-                        onPress={() => handleDeleteSlot(slot)}
-                        isDisabled={isActive}
-                      >
-                        <FontAwesomeIcon icon={faTrash} className="text-xs" />
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-              {visibleSlots.length === 0 && (
-                <div className="text-center text-default-400 text-sm py-4">
-                  {t('radio:cw.noMessages', 'No messages configured')}
+                        </div>
+                        <div className="mt-1 flex items-center gap-1">
+                          <FontAwesomeIcon icon={faPen} className="text-[10px] text-default-400" />
+                          <Input
+                            size="sm"
+                            variant="flat"
+                            value={slot.label}
+                            aria-label={t('radio:cw.messageLabel', 'Label')}
+                            maxLength={32}
+                            classNames={{ input: 'text-xs font-medium', inputWrapper: 'h-7 min-h-7 px-2' }}
+                            onValueChange={(value) => updateSlotLocal(slot.id, { label: value })}
+                            onBlur={(event) => void updateSlot(slot.id, { label: event.currentTarget.value })}
+                            isDisabled={isActive}
+                          />
+                        </div>
+                        <Textarea
+                          size="sm"
+                          variant="flat"
+                          value={slot.text}
+                          aria-label={t('radio:cw.messageText', 'Text')}
+                          maxLength={500}
+                          minRows={2}
+                          className="mt-2"
+                          classNames={{ input: 'font-mono text-xs leading-4' }}
+                          placeholder={t('radio:cw.messageTextPlaceholder', 'CQ CQ CQ DE {{callsign}}', { callsign: myCallsign })}
+                          onValueChange={(value) => updateSlotLocal(slot.id, { text: value })}
+                          onBlur={(event) => void updateSlot(slot.id, { text: event.currentTarget.value })}
+                          isDisabled={isActive}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
           )}
         </div>
       </div>
-
-      {/* 编辑对话框 */}
-      <Modal isOpen={isOpen} onClose={onClose} size="md">
-        <ModalContent>
-          <ModalHeader>
-            {t('radio:cw.editMessage', 'Edit Message')} — {editingSlot?.label}
-          </ModalHeader>
-          <ModalBody className="flex flex-col gap-3">
-            <Input
-              label={t('radio:cw.messageLabel', 'Label')}
-              value={editLabel}
-              onValueChange={setEditLabel}
-              maxLength={32}
-            />
-            <Textarea
-              label={t('radio:cw.messageText', 'Text')}
-              value={editText}
-              onValueChange={setEditText}
-              maxLength={500}
-              minRows={3}
-              placeholder={t('radio:cw.messageTextPlaceholder', 'CQ CQ CQ DE {{callsign}}', { callsign: myCallsign })}
-            />
-            <div className="flex items-center gap-3">
-              <Switch
-                isSelected={editRepeatEnabled}
-                onValueChange={setEditRepeatEnabled}
-              >
-                {t('radio:cw.repeat', 'Repeat')}
-              </Switch>
-              {editRepeatEnabled && (
-                <Input
-                  type="number"
-                  label={t('radio:cw.repeatInterval', 'Interval (s)')}
-                  value={String(editRepeatInterval)}
-                  onValueChange={(v) => setEditRepeatInterval(Math.max(1, Math.min(300, Number(v) || 5)))}
-                  className="w-28"
-                  size="sm"
-                />
-              )}
-            </div>
-            <div className="flex items-center gap-2" data-cw-keyer-shortcut-menu>
-              <span className="text-sm text-default-600">{t('radio:cw.shortcutSelectAria', { slot: editingSlot?.index ?? '' })}:</span>
-              <div className="relative">
-                <Button
-                  size="sm"
-                  variant="flat"
-                  className="min-w-12 h-8 font-mono text-xs"
-                  endContent={<FontAwesomeIcon icon={faChevronDown} className="text-xs" />}
-                  onPress={() => {
-                    if (!editingSlot) return;
-                    setShortcutMenuSlotId(current => current === editingSlot.id ? null : editingSlot.id);
-                  }}
-                >
-                  {getShortcutLabel(editingSlot ? (slotShortcuts[editingSlot.id] ?? CW_KEYER_SHORTCUT_NONE) : CW_KEYER_SHORTCUT_NONE)}
-                </Button>
-                {shortcutMenuSlotId === editingSlot?.id && (
-                  <div className="absolute bottom-full left-0 z-50 mb-1 min-w-16 rounded-md border border-divider bg-content1 p-1 shadow-lg">
-                    {CW_KEYER_SHORTCUT_PRESETS.map((preset) => {
-                      const selected = preset === (editingSlot ? slotShortcuts[editingSlot.id] : CW_KEYER_SHORTCUT_NONE);
-                      return (
-                        <button
-                          key={preset}
-                          type="button"
-                          className={`flex items-center justify-between w-full rounded-md px-2 py-1 text-xs hover:bg-default-100 ${selected ? 'font-semibold text-primary' : ''}`}
-                          onClick={() => {
-                            if (!editingSlot) return;
-                            updateSlotShortcut(editingSlot, preset);
-                          }}
-                        >
-                          <span>{getShortcutLabel(preset)}</span>
-                          {selected && <span className="ml-2 text-primary">✓</span>}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-          </ModalBody>
-          <ModalFooter>
-            <Button variant="light" onPress={onClose}>
-              {t('common:cancel', 'Cancel')}
-            </Button>
-            <Button color="primary" onPress={handleSaveSlot}>
-              {t('common:save', 'Save')}
-            </Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
     </>
   );
 
   if (embedded) {
     return (
-      <div className="h-full min-h-0 w-full overflow-hidden rounded-lg border border-default-200 bg-default-50 px-2 py-2 pt-1.5 transition-colors dark:border-default-100 dark:bg-default-100/50">
+      <div className="h-full min-h-0 w-full overflow-hidden rounded-lg border border-default-200 bg-default-50 px-2 pb-2 pt-0 transition-colors dark:border-default-100 dark:bg-default-100/50">
         <div className="flex h-full min-h-0 flex-col">
           {panelContent}
         </div>

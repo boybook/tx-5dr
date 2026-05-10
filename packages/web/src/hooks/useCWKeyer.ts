@@ -26,9 +26,9 @@ export function useCWKeyer() {
     radioService.wsClientInstance.send(WSMessageType.CW_TEXT_INPUT, { text, callsign });
   }, [radioService]);
 
-  const playMessage = useCallback((callsign: string, slotId: string, repeat: boolean) => {
+  const playMessage = useCallback((callsign: string, slotId: string, repeat: boolean, startImmediately = true) => {
     if (!radioService) return;
-    radioService.wsClientInstance.send(WSMessageType.CW_PLAY_MESSAGE, { callsign, slotId, repeat });
+    radioService.wsClientInstance.send(WSMessageType.CW_PLAY_MESSAGE, { callsign, slotId, repeat, startImmediately });
   }, [radioService]);
 
   const stopMessage = useCallback(() => {

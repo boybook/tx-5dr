@@ -733,6 +733,13 @@
       "rstReceived": "RST↓",
       "today": "Today",
       "yesterday": "Yesterday"
-    }
+    },
+    "modeTabs": "CW keyer mode",
+    "operateMode": "Transmit",
+    "editMode": "Edit",
+    "emptySlot": "Empty",
+    "emptySlotHint": "Edit this slot first",
+    "repeatToggle": "Repeat toggle",
+    "clearSlot": "Clear"
   }
 }

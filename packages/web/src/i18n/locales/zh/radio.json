@@ -733,6 +733,13 @@
       "rstReceived": "RST↓",
       "today": "今天",
       "yesterday": "昨天"
-    }
+    },
+    "modeTabs": "CW 键控模式",
+    "operateMode": "发射",
+    "editMode": "编辑",
+    "emptySlot": "空槽位",
+    "emptySlotHint": "请先在编辑中填写",
+    "repeatToggle": "循环开关",
+    "clearSlot": "清空"
   }
 }

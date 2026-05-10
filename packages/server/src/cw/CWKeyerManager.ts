@@ -318,6 +318,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     callsign: string,
     slotId: string,
     repeat: boolean,
+    startImmediately = true,
   ): Promise<void> {
     await this.ensureConfigLoaded();
     const normalized = this.requireCallsign(callsign);
@@ -348,11 +349,15 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       callsign: normalized,
     };
     this.active = active;
-    this.setStatus(this.statusFor(clientId, label, 'playing', slotId));
 
     try {
       await this.ensureStarted();
-      await this.executePlayback(active, replaced);
+      if (active.repeating && !startImmediately) {
+        await this.continueRepeat(active);
+      } else {
+        this.setStatus(this.statusFor(clientId, label, 'playing', slotId));
+        await this.executePlayback(active, replaced);
+      }
     } catch (error) {
       this.active = null;
       this.setStatus(this.idleStatus());
@@ -411,47 +416,49 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     // 事件序列完成
     if (this.active === active && !active.stopRequested) {
       if (active.repeating && active.mode === 'message') {
-        // 循环播放：等待 repeat 间隔后重新播放
-        const slot = await this.getActiveSlot(active);
-        if (!slot?.text || !slot.repeatEnabled) {
-          this.active = null;
-          this.setStatus(this.idleStatus());
-          return;
-        }
-
-        const waitMs = slot.repeatIntervalSec * 1000;
-
-        const nextRunAt = Date.now() + waitMs;
-        this.setStatus(this.statusFor(active.clientId, active.label, 'repeat-waiting', active.messageId, nextRunAt));
-
-        await this.delay(waitMs, active);
-        if (active.stopRequested || this.active !== active) {
-          return;
-        }
-
-        // 重新读取报文和配置（可能有配置变更）
-        const latestSlot = await this.getActiveSlot(active);
-        if (!latestSlot?.text || !latestSlot.repeatEnabled) {
-          this.active = null;
-          this.setStatus(this.idleStatus());
-          return;
-        }
-
-        const replaced = this.replacePlaceholders(latestSlot.text, active.callsign).trim();
-        if (!replaced) {
-          this.active = null;
-          this.setStatus(this.idleStatus());
-          return;
-        }
-
-        this.setStatus(this.statusFor(active.clientId, active.label, 'playing', active.messageId));
-        await this.executePlayback(active, replaced);
+        await this.continueRepeat(active);
       } else {
         // 正常结束
         this.active = null;
         this.setStatus(this.idleStatus());
       }
     }
+  }
+
+  private async continueRepeat(active: ActiveKeying): Promise<void> {
+    const slot = await this.getActiveSlot(active);
+    if (!slot?.text || !slot.repeatEnabled) {
+      this.active = null;
+      this.setStatus(this.idleStatus());
+      return;
+    }
+
+    const waitMs = slot.repeatIntervalSec * 1000;
+    const nextRunAt = Date.now() + waitMs;
+    this.setStatus(this.statusFor(active.clientId, active.label, 'repeat-waiting', active.messageId, nextRunAt));
+
+    await this.delay(waitMs, active);
+    if (active.stopRequested || this.active !== active) {
+      return;
+    }
+
+    // 重新读取报文和配置（可能有配置变更）
+    const latestSlot = await this.getActiveSlot(active);
+    if (!latestSlot?.text || !latestSlot.repeatEnabled) {
+      this.active = null;
+      this.setStatus(this.idleStatus());
+      return;
+    }
+
+    const replaced = this.replacePlaceholders(latestSlot.text, active.callsign).trim();
+    if (!replaced) {
+      this.active = null;
+      this.setStatus(this.idleStatus());
+      return;
+    }
+
+    this.setStatus(this.statusFor(active.clientId, active.label, 'playing', active.messageId));
+    await this.executePlayback(active, replaced);
   }
 
   private async getActiveSlot(active: ActiveKeying): Promise<CWMessageSlot | null> {

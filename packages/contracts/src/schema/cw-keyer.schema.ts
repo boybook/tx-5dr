@@ -115,6 +115,8 @@ export const CWPlayMessageSchema = z.object({
   slotId: z.string(),
   /** 是否循环播放 */
   repeat: z.boolean().optional().default(false),
+  /** 是否立即发送；false 时仅进入循环等待 */
+  startImmediately: z.boolean().optional(),
 });
 
 export type CWPlayMessage = z.infer<typeof CWPlayMessageSchema>;

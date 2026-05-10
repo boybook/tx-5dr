@@ -71,4 +71,33 @@ describe('CWKeyerManager', () => {
     await playback;
     expect(manager.getStatus()).toMatchObject({ active: false, mode: 'idle' });
   });
+
+  it('can arm repeat playback without transmitting immediately', async () => {
+    const { manager, backend } = await createManager();
+    vi.useFakeTimers();
+    await manager.updateSlot('BG5DRB', '1', {
+      text: 'CQ CQ DE BG5DRB',
+      repeatEnabled: true,
+      repeatIntervalSec: 2,
+    });
+
+    const playback = manager.playMessage('c1', 'Operator', 'BG5DRB', '1', true, false);
+
+    await vi.waitFor(() => expect(manager.getStatus()).toMatchObject({
+      active: true,
+      mode: 'repeat-waiting',
+      messageId: '1',
+    }));
+    expect(backend.sendText).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.waitFor(() => expect(backend.sendText).toHaveBeenCalledWith(
+      'CQ CQ DE BG5DRB',
+      20,
+      expect.any(Object),
+    ));
+
+    await manager.stopActive('test cleanup');
+    await playback;
+  });
 });

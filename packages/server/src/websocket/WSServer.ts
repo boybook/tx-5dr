@@ -1323,7 +1323,14 @@ export class WSServer extends WSMessageHandler {
       if (!callsign || !slotId) {
         throw new Error('callsign and slotId are required');
       }
-      await manager.playMessage(connectionId, label, callsign, slotId, Boolean(data?.repeat));
+      await manager.playMessage(
+        connectionId,
+        label,
+        callsign,
+        slotId,
+        Boolean(data?.repeat),
+        data?.startImmediately !== false,
+      );
     } catch (error) {
       this.handleCommandError(error, 'cwPlayMessage');
     }
