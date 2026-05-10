@@ -276,7 +276,7 @@ export const VoiceRightLayout: React.FC = () => {
         />
       </div>
 
-      <div ref={bottomControlsRef} className="flex-shrink-0 min-h-0 overflow-hidden p-2 pt-0 md:px-5 md:pb-5 md:pt-0">
+      <div ref={bottomControlsRef} className="flex-shrink-0 min-h-0 overflow-visible p-2 pt-0 md:px-5 md:pb-5 md:pt-0">
         <div className="mb-3 md:mb-4">
           <VoiceKeyerCard
             collapsed={collapseState.keyerCollapsed}

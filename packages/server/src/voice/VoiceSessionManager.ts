@@ -3,6 +3,7 @@ import type { VoicePTTLock } from '@tx5dr/contracts';
 import { VoicePTTLockManager } from './VoicePTTLockManager.js';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { AudioStreamManager } from '../audio/AudioStreamManager.js';
+import { ConfigManager } from '../config/config-manager.js';
 import { createLogger } from '../utils/logger.js';
 import {
   VoiceTxDiagnostics,
@@ -157,6 +158,37 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
    */
   async setRadioMode(mode: string): Promise<void> {
     await this.radioManager.setMode(mode, undefined, { intent: 'voice' });
+    if (mode.toUpperCase() !== 'FM') {
+      try {
+        await this.radioManager.applyRepeaterDuplexConfig({ repeaterShift: 'none' });
+        await this.radioManager.applyToneSquelchConfig({ toneMode: 'none' });
+      } catch (error) {
+        logger.warn('Failed to clear FM-only voice settings after radio mode change', error);
+      }
+    }
+
+    const configManager = ConfigManager.getInstance();
+    const lastVoice = configManager.getLastVoiceFrequency();
+    if (lastVoice?.frequency) {
+      await configManager.updateLastVoiceFrequency({
+        frequency: lastVoice.frequency,
+        radioMode: mode,
+        band: lastVoice.band,
+        description: lastVoice.description,
+        ...(mode.toUpperCase() === 'FM'
+          ? {
+            repeaterShift: lastVoice.repeaterShift,
+            repeaterOffsetHz: lastVoice.repeaterOffsetHz,
+            toneMode: lastVoice.toneMode,
+            ctcssToneTenthsHz: lastVoice.ctcssToneTenthsHz,
+            dcsCode: lastVoice.dcsCode,
+          }
+          : {
+            repeaterShift: 'none',
+            toneMode: 'none',
+          }),
+      });
+    }
     this.emit('voiceRadioModeChanged', { radioMode: mode });
     logger.info('Radio mode changed', { mode });
   }

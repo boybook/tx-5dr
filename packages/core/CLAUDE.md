@@ -174,15 +174,14 @@ export class WSEventEmitter extends EventEmitter {
 ## 命令
 - `yarn dev` - 开发构建
 - `yarn build` - 生产构建
-- `yarn generate:dxcc` - 生成/更新 `src/callsign/dxcc.json`
+- `yarn sync:cty` - 下载 BigCTY `cty.csv` 并刷新运行时 CTY 数据
 
 ## DXCC 数据维护
 
-- `src/callsign/dxcc.json` 是运行时 DXCC 基础数据，包含历史 deleted entity 与 resolver version 元信息。
-- 更新 DXCC 数据时，优先使用手动下载的 BigCTY 目录本地生成，例如：
-  `node scripts/generate-dxcc-data.mjs --cty-dir=/Users/you/Downloads/bigcty-YYYYMMDD --arrl=https://www.arrl.org/files/file/DXCC/Current_Deleted.txt`
-- 生成脚本会优先使用 `cty.csv` 做 current entity 的 code 对齐，`cty.dat` 作为名称/前缀补充；历史 deleted entity 仍以仓库基底和 ARRL current/deleted 校验为准。
-- 不要依赖 country-files.com 页面中的旧 zip 直链；网站文章里的下载 URL 可能失效。
+- `src/callsign/cty.csv` 是运行时 DXCC/CTY 基础数据；`src/callsign/cty-data.ts` 只作为 bundler 可直接导入的 raw-data bridge。
+- `src/callsign/dxcc.json` 不再是运行时真源，旧生成脚本仅作过渡参考。
+- 更新 CTY 数据时运行 `node scripts/sync-cty-data.mjs`，脚本会刷新 `cty.csv` / `cty-data.ts` 并执行关键呼号 smoke。
+- 解析语义应跟随 Country Files CTY.DAT 格式与 WSJT-X `AD1CCty` / `Radio::effective_prefix` 行为。
 
 ## 日志规范
 

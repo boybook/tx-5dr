@@ -270,6 +270,48 @@ describe('audio hotplug recovery', () => {
     expect(devices.outputDevices[0]?.sampleRates).toBeUndefined();
   });
 
+  it('keeps previously seen devices as cached when a refresh no longer enumerates them', async () => {
+    mockState.devices = [
+      { id: 3, name: 'IC-705', inputChannels: 1, outputChannels: 1, preferredSampleRate: 48000 },
+      { id: 5, name: 'Built-in Mic', inputChannels: 1, preferredSampleRate: 48000, isDefaultInput: true },
+    ];
+    const manager = AudioDeviceManager.getInstance();
+
+    const first = await manager.getAllDevices();
+    expect(first.inputDevices.find((device) => device.name === 'IC-705')?.availability).toBe('available');
+
+    mockState.devices = [
+      { id: 5, name: 'Built-in Mic', inputChannels: 1, preferredSampleRate: 48000, isDefaultInput: true },
+    ];
+    const second = await manager.getAllDevices();
+
+    const cached = second.inputDevices.find((device) => device.name === 'IC-705');
+    expect(cached?.availability).toBe('cached');
+    expect(cached?.id).toBe('input-3');
+  });
+
+  it('updates matching registry devices and appends newly seen devices during refresh', async () => {
+    mockState.devices = [
+      { id: 3, name: 'IC-705', inputChannels: 1, preferredSampleRate: 48000 },
+    ];
+    const manager = AudioDeviceManager.getInstance();
+    await manager.getAllDevices();
+
+    mockState.devices = [
+      { id: 7, name: 'IC-705', inputChannels: 2, preferredSampleRate: 44100, sampleRates: [44100] },
+      { id: 8, name: 'USB Mic', inputChannels: 1, preferredSampleRate: 48000 },
+    ];
+    const devices = await manager.getAllDevices();
+
+    expect(devices.inputDevices.find((device) => device.name === 'IC-705')).toMatchObject({
+      id: 'input-7',
+      channels: 2,
+      sampleRate: 44100,
+      availability: 'available',
+    });
+    expect(devices.inputDevices.find((device) => device.name === 'USB Mic')?.availability).toBe('available');
+  });
+
   it('reports missing when configured physical devices disappear', async () => {
     mockState.devices = [
       { id: 1, name: 'Built-in Mic', inputChannels: 1, outputChannels: 0, preferredSampleRate: 48000, isDefaultInput: true },
@@ -331,7 +373,7 @@ describe('audio hotplug recovery', () => {
     expect(missing.input.status).toBe('missing');
   });
 
-  it('rebinds stale input device IDs before opening the stream', async () => {
+  it('uses the current live input device ID before opening the stream', async () => {
     mockState.devices = [
       { id: 7, name: 'IC-705', inputChannels: 1, outputChannels: 1, preferredSampleRate: 48000 },
     ];
@@ -413,6 +455,51 @@ describe('audio hotplug recovery', () => {
     }));
   });
 
+  it('keeps a TX-5DR active input device in the registry while live enumeration misses it', async () => {
+    mockState.devices = [
+      { id: 7, name: 'IC-705', inputChannels: 1, preferredSampleRate: 48000 },
+    ];
+    const streamManager = new AudioStreamManager();
+    await streamManager.startStream();
+
+    mockState.devices = [
+      { id: 5, name: 'Built-in Mic', inputChannels: 1, preferredSampleRate: 48000, isDefaultInput: true },
+    ];
+    const devices = await AudioDeviceManager.getInstance().getAllDevices();
+
+    expect(devices.inputDevices.find((device) => device.name === 'IC-705')).toMatchObject({
+      availability: 'active',
+      isActiveByTx5dr: true,
+      id: 'input-7',
+    });
+    expect(mockState.openCalls.filter((call) => call.direction === 'input')).toHaveLength(1);
+
+    await streamManager.startStream();
+    expect(mockState.openCalls.filter((call) => call.direction === 'input')).toHaveLength(1);
+  });
+
+  it('rejects cached configured input devices instead of opening stale IDs or falling back', async () => {
+    mockState.devices = [
+      { id: 7, name: 'IC-705', inputChannels: 1, preferredSampleRate: 48000 },
+    ];
+    const manager = AudioDeviceManager.getInstance();
+    await manager.getAllDevices();
+
+    mockState.devices = [
+      { id: 5, name: 'Built-in Mic', inputChannels: 1, preferredSampleRate: 48000, isDefaultInput: true },
+    ];
+
+    const streamManager = new AudioStreamManager();
+    await expect(streamManager.startStream()).rejects.toMatchObject({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+      context: expect.objectContaining({
+        availability: 'cached',
+        deviceName: 'IC-705',
+      }),
+    });
+    expect(mockState.openCalls).toHaveLength(0);
+  });
+
   it('uses default devices when audio settings leave device names empty', async () => {
     mockState.devices = [
       { id: 5, name: 'Built-in Mic', inputChannels: 1, preferredSampleRate: 48000, isDefaultInput: true },
@@ -469,7 +556,7 @@ describe('audio hotplug recovery', () => {
     }));
   });
 
-  it('rebinds stale output device IDs before opening the stream', async () => {
+  it('uses the current live output device ID before opening the stream', async () => {
     mockState.devices = [
       { id: 9, name: 'IC-705', inputChannels: 1, outputChannels: 1, preferredSampleRate: 48000 },
     ];

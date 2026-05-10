@@ -15,6 +15,7 @@ import {
 } from '@heroui/react';
 import type { QSORecord } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
+import { QrzCallsignLink } from '../common/QrzCallsignLink';
 
 const MODES = ['FT8', 'FT4', 'SSB', 'USB', 'LSB', 'CW', 'AM', 'FM', 'RTTY', 'PSK31', 'JS8', 'MSK144'];
 
@@ -117,6 +118,7 @@ const QSOFormModal: React.FC<QSOFormModalProps> = ({
                 label={t('editQso.callsign')}
                 value={formData.callsign || ''}
                 onChange={e => onChange({ ...formData, callsign: e.target.value })}
+                endContent={<QrzCallsignLink callsign={formData.callsign} size="md" className="mr-1" />}
                 isRequired
               />
               <Input

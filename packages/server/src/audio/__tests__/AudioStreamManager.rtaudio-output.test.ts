@@ -153,6 +153,7 @@ vi.mock('../../utils/logger.js', () => ({
 }));
 
 import { AudioStreamManager } from '../AudioStreamManager.js';
+import { AudioDeviceManager } from '../audio-device-manager.js';
 import { RingBuffer } from '../ringBuffer.js';
 
 describe('AudioStreamManager RtAudio output diagnostics', () => {
@@ -173,6 +174,7 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     });
     mockConfigManager.getRadioConfig.mockReturnValue({ type: 'serial' });
     mockConfigManager.getOpenWebRXStations.mockReturnValue([]);
+    (AudioDeviceManager as unknown as { instance?: AudioDeviceManager }).instance = undefined;
     vi.clearAllMocks();
   });
 

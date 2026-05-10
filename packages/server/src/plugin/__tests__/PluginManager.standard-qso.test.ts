@@ -935,6 +935,211 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('takes over a third-party direct TX2 in the same RX batch after our RR73 is answered with 73', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      targetCallsign: 'BG5DRB',
+      autoResumeCQAfterSuccess: false,
+    });
+
+    setRuntimeState(pluginManager, operator.config.id, 'TX4');
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), [
+      {
+        message: FT8MessageParser.generateMessage({
+          type: FT8MessageType.SEVENTY_THREE,
+          senderCallsign: 'BG5DRB',
+          targetCallsign: 'BG7XTV',
+        }),
+        snr: 5,
+        freq: 1502,
+      },
+      {
+        message: 'BG7XTV JA1AAA -12',
+        snr: -18,
+        freq: 1300,
+      },
+    ]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(status.currentSlot).toBe('TX3');
+    expect(status.context?.targetCallsign).toBe('JA1AAA');
+    expect(status.context?.reportReceived).toBe(-12);
+    expect(operator.isTransmitting).toBe(true);
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG7XTV R-18');
+
+    await pluginManager.shutdown();
+  });
+
+  it('wakes from silent listen for a late direct TX2 after our RR73 is answered with 73', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      targetCallsign: 'BG5DRB',
+      autoResumeCQAfterSuccess: false,
+    });
+
+    setRuntimeState(pluginManager, operator.config.id, 'TX4');
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.SEVENTY_THREE,
+        senderCallsign: 'BG5DRB',
+        targetCallsign: 'BG7XTV',
+      }),
+      snr: 5,
+      freq: 1502,
+    }]));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(operator.isTransmitting).toBe(false);
+
+    const changed = await pluginManager.reDecideOperator(operator.config.id, createSlotPack(createSlotInfo(45_000), [{
+      message: 'BG7XTV JA1AAA -12',
+      snr: -18,
+      freq: 1300,
+    }]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(changed).toBe(true);
+    expect(status.currentSlot).toBe('TX3');
+    expect(status.context?.targetCallsign).toBe('JA1AAA');
+    expect(operator.isTransmitting).toBe(true);
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG7XTV R-18');
+
+    await pluginManager.shutdown();
+  });
+
+  it('wakes from silent listen for a late direct TX2 after queueing our final 73', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      targetCallsign: 'BG5DRB',
+      autoResumeCQAfterSuccess: false,
+    });
+
+    setRuntimeState(pluginManager, operator.config.id, 'TX4');
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.RRR,
+        senderCallsign: 'BG5DRB',
+        targetCallsign: 'BG7XTV',
+      }),
+      snr: 0,
+      freq: 1502,
+    }]));
+    (pluginManager as any).handleEncodeStart(createSlotInfo(60_000));
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(75_000), createSlotPack(createSlotInfo(60_000), [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.SEVENTY_THREE,
+        senderCallsign: 'BG7XTV',
+        targetCallsign: 'BG5DRB',
+      }),
+      snr: -999,
+      freq: 1806,
+      operatorId: operator.config.id,
+    }]));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(operator.isTransmitting).toBe(false);
+
+    const changed = await pluginManager.reDecideOperator(operator.config.id, createSlotPack(createSlotInfo(60_000), [{
+      message: 'BG7XTV JA1AAA -12',
+      snr: -18,
+      freq: 1300,
+    }]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(changed).toBe(true);
+    expect(status.currentSlot).toBe('TX3');
+    expect(status.context?.targetCallsign).toBe('JA1AAA');
+    expect(operator.isTransmitting).toBe(true);
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG7XTV R-18');
+
+    await pluginManager.shutdown();
+  });
+
+  it('does not wake from silent listen after the success window expires', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      targetCallsign: 'BG5DRB',
+      autoResumeCQAfterSuccess: false,
+    });
+
+    setRuntimeState(pluginManager, operator.config.id, 'TX4');
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.SEVENTY_THREE,
+        senderCallsign: 'BG5DRB',
+        targetCallsign: 'BG7XTV',
+      }),
+      snr: 5,
+      freq: 1502,
+    }]));
+
+    expect(operator.isTransmitting).toBe(false);
+
+    const changed = await pluginManager.reDecideOperator(operator.config.id, createSlotPack(createSlotInfo(90_000), [{
+      message: 'BG7XTV JA1AAA -12',
+      snr: -18,
+      freq: 1300,
+    }]));
+
+    expect(changed).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(operator.isTransmitting).toBe(false);
+
+    await pluginManager.shutdown();
+  });
+
+  it('does not wake from a failed-QSO stop without a success silent-listen gate', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      targetCallsign: 'BG5DRB',
+      autoResumeCQAfterFail: false,
+      maxQSOTimeoutCycles: 1,
+    });
+
+    setRuntimeState(pluginManager, operator.config.id, 'TX2');
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), []));
+    expect(operator.isTransmitting).toBe(false);
+
+    const changed = await pluginManager.reDecideOperator(operator.config.id, createSlotPack(createSlotInfo(45_000), [{
+      message: 'BG7XTV JA1AAA -12',
+      snr: -18,
+      freq: 1300,
+    }]));
+
+    expect(changed).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(operator.isTransmitting).toBe(false);
+
+    await pluginManager.shutdown();
+  });
+
+  it('does not wake after a manual stop without a success silent-listen gate', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+    });
+
+    operator.stop();
+
+    const changed = await pluginManager.reDecideOperator(operator.config.id, createSlotPack(createSlotInfo(45_000), [{
+      message: 'BG7XTV JA1AAA -12',
+      snr: -18,
+      freq: 1300,
+    }]));
+
+    expect(changed).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(operator.isTransmitting).toBe(false);
+
+    await pluginManager.shutdown();
+  });
+
   it('immediately interrupts the active transmission when a late re-decision stops the operator', async () => {
     const interruptOperatorTransmission = vi.fn(async () => undefined);
     const { operator, pluginManager } = await createRuntimeHarness({
@@ -1124,6 +1329,64 @@ describe('PluginManager standard-qso late re-decision', () => {
 
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
     expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('CQ BG4IAJ OM96');
+
+    await pluginManager.shutdown();
+  });
+
+  it('preserves weak direct TX2 signal reports through snr-filter while in CQ state', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      pluginConfigs: {
+        'snr-filter': {
+          enabled: true,
+          settings: {
+            minSNR: -8,
+          },
+        },
+      },
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(15_000), createSlotPack(createSlotInfo(15_000), [{
+      message: 'BG4IAJ JA1AAA -12',
+      snr: -20,
+      freq: 1200,
+    }]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(status.currentSlot).toBe('TX3');
+    expect(status.context?.targetCallsign).toBe('JA1AAA');
+    expect(status.context?.reportReceived).toBe(-12);
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG4IAJ R-20');
+
+    await pluginManager.shutdown();
+  });
+
+  it('preserves direct TX2 signal reports through callsign-filter rules while in CQ state', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      pluginConfigs: {
+        'callsign-filter': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'callsign-filter': {
+          filterMode: 'blocklist',
+          filterRules: ['JA'],
+        },
+      },
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(15_000), createSlotPack(createSlotInfo(15_000), [{
+      message: 'BG4IAJ JA1AAA -12',
+      snr: -10,
+      freq: 1200,
+    }]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(status.currentSlot).toBe('TX3');
+    expect(status.context?.targetCallsign).toBe('JA1AAA');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG4IAJ R-10');
 
     await pluginManager.shutdown();
   });

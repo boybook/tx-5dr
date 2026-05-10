@@ -80,6 +80,7 @@ type Slots = {
 interface StateHandleResult {
     stop?: boolean;
     changeState?: SlotsIndex;
+    silentListen?: StrategyDecision['silentListen'];
     qsoFailure?: QSOFailureInfo;
 }
 
@@ -151,6 +152,95 @@ function compareCandidates(strategy: StandardQSOPluginRuntime, left: ParsedFT8Me
         return leftDf - rightDf;
     }
     return right.timestamp - left.timestamp;
+}
+
+function buildSuccessSilentListen(completedCallsign?: string): StrategyDecision['silentListen'] {
+    return {
+        reason: 'qso-success',
+        acceptDirectedCalls: true,
+        graceSlots: 2,
+        excludeCallsigns: completedCallsign ? [completedCallsign] : undefined,
+    };
+}
+
+async function trySwitchToDirectedCall(
+    strategy: StandardQSOPluginRuntime,
+    messages: ParsedFT8Message[],
+    options?: {
+        excludeCallsigns?: Array<string | undefined>;
+        logPrefix?: string;
+        clearPost73Reason?: string;
+    },
+): Promise<StateHandleResult | null> {
+    const excluded = new Set(
+        (options?.excludeCallsigns ?? [])
+            .filter((callsign): callsign is string => typeof callsign === 'string' && callsign.trim().length > 0)
+            .map((callsign) => callsign.trim().toUpperCase()),
+    );
+    const myCallsign = strategy.context.config.myCallsign.toUpperCase();
+    const directCalls = messages
+        .filter((msg) => {
+            const message = msg.message;
+            if (message.type !== FT8MessageType.CALL && message.type !== FT8MessageType.SIGNAL_REPORT) {
+                return false;
+            }
+            return message.targetCallsign.toUpperCase() === myCallsign
+                && !excluded.has(message.senderCallsign.toUpperCase());
+        })
+        .sort((a, b) => compareCandidates(strategy, a, b));
+
+    for (const directCall of directCalls) {
+        const msg = directCall.message;
+        if (msg.type !== FT8MessageType.CALL && msg.type !== FT8MessageType.SIGNAL_REPORT) {
+            continue;
+        }
+        const callsign = msg.senderCallsign;
+        const hasWorked = await strategy.operator.hasWorkedCallsign(callsign);
+        const prefix = options?.logPrefix ?? 'direct call';
+
+        if (hasWorked && !strategy.operator.config.replyToWorkedStations) {
+            strategy.logger.debug(`${prefix}: skipping ${callsign} - already worked and replyToWorkedStations=false (SNR: ${directCall.snr})`);
+            continue;
+        }
+
+        const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(callsign);
+        if (hasConflict) {
+            strategy.logger.debug(`${prefix}: skipping ${callsign} - other operator conflict (SNR: ${directCall.snr})`);
+            continue;
+        }
+
+        if (options?.clearPost73Reason) {
+            strategy.clearPost73RetryContext(options.clearPost73Reason);
+        }
+        strategy.clearQSOContext();
+        strategy.context.targetCallsign = callsign;
+
+        if (msg.type === FT8MessageType.CALL) {
+            strategy.logger.debug(`${prefix}: switching to direct call ${callsign} (SNR: ${directCall.snr})`);
+            if (!strategy.restoreContext(callsign)) {
+                strategy.context.reportSent = directCall.snr;
+                strategy.context.targetGrid = (msg as FT8MessageCall).grid;
+                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                    strategy.context.actualFrequency = strategy.context.config.frequency + directCall.df;
+                }
+            }
+            strategy.updateSlots();
+            return { changeState: 'TX2' };
+        }
+
+        strategy.logger.debug(`${prefix}: switching to direct signal report ${callsign} (SNR: ${directCall.snr})`);
+        if (!strategy.restoreContext(callsign)) {
+            strategy.context.reportReceived = (msg as FT8MessageSignalReport).report;
+            strategy.context.reportSent = directCall.snr;
+            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                strategy.context.actualFrequency = strategy.context.config.frequency + directCall.df;
+            }
+        }
+        strategy.updateSlots();
+        return { changeState: 'TX3' };
+    }
+
+    return null;
 }
 
 const states: { [key in SlotsIndex]: StandardState } = {
@@ -624,98 +714,13 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 // 对方发送了73，QSO已完成
                 strategy.logger.debug('TX4: received 73, QSO complete');
 
-                // 【修复】在转到TX6之前，先检查是否有新的直接呼叫
-                const directCalls = messages
-                    .filter((msg) =>
-                        (msg.message.type === FT8MessageType.CALL ||
-                         msg.message.type === FT8MessageType.SIGNAL_REPORT) &&
-                        msg.message.targetCallsign === strategy.context.config.myCallsign &&
-                        msg.message.senderCallsign !== strategy.context.targetCallsign) // 排除刚完成的QSO对象
-                    .sort((a, b) => compareCandidates(strategy, a, b));
-
-                if (directCalls.length > 0) {
-                    const newCall = directCalls[0];
-                    const msg = newCall.message;
-
-                    if (msg.type === FT8MessageType.CALL) {
-                        const callMsg = msg as FT8MessageCall;
-                        const newCallsign = callMsg.senderCallsign;
-
-                        // 检查是否已经通联过
-                        const hasWorked = await strategy.operator.hasWorkedCallsign(newCallsign);
-
-                        // 根据配置决定是否切换到新呼叫
-                        if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
-                            // 检查是否有其他同呼号操作者正在通联该目标
-                            const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(newCallsign);
-
-                            if (hasConflict) {
-                                strategy.logger.debug(`TX4: QSO done, new call ${newCallsign} conflicts with other operator`);
-                            } else {
-                                strategy.logger.debug(`TX4: QSO done, switching to new direct call ${newCallsign} (SNR: ${newCall.snr}dB)`);
-
-                                // 清空旧QSO上下文（自动保存到缓存）
-                                strategy.clearQSOContext();
-
-                                // 切换到新呼号
-                                strategy.context.targetCallsign = newCallsign;
-
-                                // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
-                                if (!strategy.restoreContext(newCallsign)) {
-                                    strategy.context.reportSent = newCall.snr;
-                                    strategy.context.targetGrid = callMsg.grid;
-                                    // 记录实际通联频率
-                                    if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                        strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
-                                    }
-                                }
-
-                                strategy.updateSlots();
-                                return { changeState: 'TX2' };
-                            }
-                        } else {
-                            strategy.logger.debug(`TX4: QSO done, new call ${newCallsign} already worked and replyToWorkedStations=false`);
-                        }
-                    } else if (msg.type === FT8MessageType.SIGNAL_REPORT) {
-                        const reportMsg = msg as FT8MessageSignalReport;
-                        const newCallsign = reportMsg.senderCallsign;
-
-                        // 检查是否已经通联过
-                        const hasWorked = await strategy.operator.hasWorkedCallsign(newCallsign);
-
-                        // 根据配置决定是否切换到新呼叫
-                        if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
-                            // 检查是否有其他同呼号操作者正在通联该目标
-                            const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(newCallsign);
-
-                            if (hasConflict) {
-                                strategy.logger.debug(`TX4: QSO done, new signal report ${newCallsign} conflicts with other operator`);
-                            } else {
-                                strategy.logger.debug(`TX4: QSO done, switching to new direct signal report ${newCallsign} (SNR: ${newCall.snr}dB)`);
-
-                                // 清空旧QSO上下文（自动保存到缓存）
-                                strategy.clearQSOContext();
-
-                                // 切换到新呼号
-                                strategy.context.targetCallsign = newCallsign;
-
-                                // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
-                                if (!strategy.restoreContext(newCallsign)) {
-                                    strategy.context.reportReceived = reportMsg.report;
-                                    strategy.context.reportSent = newCall.snr;
-                                    // 记录实际通联频率
-                                    if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                        strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
-                                    }
-                                }
-
-                                strategy.updateSlots();
-                                return { changeState: 'TX3' };
-                            }
-                        } else {
-                            strategy.logger.debug(`TX4: QSO done, new signal report ${newCallsign} already worked and replyToWorkedStations=false`);
-                        }
-                    }
+                const completedCallsign = strategy.context.targetCallsign;
+                const handoff = await trySwitchToDirectedCall(strategy, messages, {
+                    excludeCallsigns: [completedCallsign],
+                    logPrefix: 'TX4: QSO done',
+                });
+                if (handoff) {
+                    return handoff;
                 }
 
                 // 没有新的直接呼叫，转到TX6
@@ -724,7 +729,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 if (strategy.operator.config.autoResumeCQAfterSuccess) {
                     return { changeState: 'TX6' };
                 }
-                return { changeState: 'TX6', stop: true };
+                return {
+                    changeState: 'TX6',
+                    stop: true,
+                    silentListen: buildSuccessSilentListen(completedCallsign),
+                };
             }
 
             // 其次检查是否收到对方的 RRR/RR73
@@ -818,86 +827,15 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 return {};
             }
 
-            // 发送1次73后，检查是否有新的直接呼叫
-            // 如果有直接呼叫，优先处理；否则转到TX6
-            const directCalls = messages
-                .filter((msg) =>
-                    (msg.message.type === FT8MessageType.CALL ||
-                     msg.message.type === FT8MessageType.SIGNAL_REPORT) &&
-                    msg.message.targetCallsign === strategy.context.config.myCallsign &&
-                    msg.message.senderCallsign !== strategy.context.targetCallsign) // 排除刚完成的QSO对象
-                .sort((a, b) => compareCandidates(strategy, a, b));
-
-            if (directCalls.length > 0) {
-                const msg = directCalls[0].message;
-
-                if (msg.type === FT8MessageType.CALL) {
-                    const callsign = msg.senderCallsign;
-                    const hasWorked = await strategy.operator.hasWorkedCallsign(callsign);
-
-                    if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
-                        // 检查是否有其他同呼号操作者正在通联该目标
-                        const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(callsign);
-
-                        if (hasConflict) {
-                            strategy.logger.debug(`TX5: new call ${callsign} conflicts with other operator`);
-                        } else {
-                            strategy.logger.debug(`TX5: switching to new direct call ${callsign}`);
-                            strategy.clearPost73RetryContext('switching to new direct call from TX5');
-
-                            // 清空旧QSO上下文（自动保存到缓存）
-                            strategy.clearQSOContext();
-
-                            // 切换到新呼号
-                            strategy.context.targetCallsign = callsign;
-
-                            // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
-                            if (!strategy.restoreContext(callsign)) {
-                                strategy.context.reportSent = directCalls[0].snr;
-                                strategy.context.targetGrid = (msg as FT8MessageCall).grid;
-                                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                    strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
-                                }
-                            }
-
-                            strategy.updateSlots();
-                            return { changeState: 'TX2' };
-                        }
-                    }
-                } else if (msg.type === FT8MessageType.SIGNAL_REPORT) {
-                    const callsign = msg.senderCallsign;
-                    const hasWorked = await strategy.operator.hasWorkedCallsign(callsign);
-
-                    if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
-                        // 检查是否有其他同呼号操作者正在通联该目标
-                        const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(callsign);
-
-                        if (hasConflict) {
-                            strategy.logger.debug(`TX5: new signal report ${callsign} conflicts with other operator`);
-                        } else {
-                            strategy.logger.debug(`TX5: switching to new direct signal report ${callsign}`);
-                            strategy.clearPost73RetryContext('switching to new direct signal report from TX5');
-
-                            // 清空旧QSO上下文（自动保存到缓存）
-                            strategy.clearQSOContext();
-
-                            // 切换到新呼号
-                            strategy.context.targetCallsign = callsign;
-
-                            // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
-                            if (!strategy.restoreContext(callsign)) {
-                                strategy.context.reportReceived = (msg as FT8MessageSignalReport).report;
-                                strategy.context.reportSent = directCalls[0].snr;
-                                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                    strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
-                                }
-                            }
-
-                            strategy.updateSlots();
-                            return { changeState: 'TX3' };
-                        }
-                    }
-                }
+            // 发送1次73后，检查是否有新的直接呼叫；否则转到TX6或静默停止。
+            const completedCallsign = strategy.context.targetCallsign;
+            const handoff = await trySwitchToDirectedCall(strategy, messages, {
+                excludeCallsigns: [completedCallsign],
+                logPrefix: 'TX5',
+                clearPost73Reason: 'switching to new direct call from TX5',
+            });
+            if (handoff) {
+                return handoff;
             }
 
             // 没有新的直接呼叫，按配置决定是否恢复到CQ或停止
@@ -910,7 +848,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
             if (strategy.operator.config.autoResumeCQAfterSuccess) {
                 return { changeState: 'TX6' };
             }
-            return { changeState: 'TX6', stop: true };
+            return {
+                changeState: 'TX6',
+                stop: true,
+                silentListen: buildSuccessSilentListen(completedCallsign),
+            };
         },
         onTimeout(strategy: StandardQSOPluginRuntime): StateHandleResult {
             strategy.logger.debug(`TX5 timeout: target=${strategy.context.targetCallsign}, autoResumeCQAfterSuccess=${strategy.operator.config.autoResumeCQAfterSuccess}`);
@@ -919,6 +861,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 strategy.logger.debug('TX5 timeout: 73 has not been queued yet, staying in TX5');
                 return {};
             }
+
+            const completedCallsign = strategy.context.targetCallsign;
 
             // 清理QSO上下文
             if (strategy.operator.config.autoResumeCQAfterSuccess) {
@@ -936,7 +880,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
             }
 
             strategy.logger.debug('TX5 timeout: autoResumeCQAfterSuccess=false, stopping');
-            return { changeState: 'TX6', stop: true };
+            return {
+                changeState: 'TX6',
+                stop: true,
+                silentListen: buildSuccessSilentListen(completedCallsign),
+            };
         }
     },
     TX6: {
@@ -959,14 +907,6 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 }
             }
 
-            // 收集所有TX1和TX2形式的消息
-            const directCalls = messages
-                .filter((msg) =>
-                    (msg.message.type === FT8MessageType.CALL ||
-                     msg.message.type === FT8MessageType.SIGNAL_REPORT) &&
-                    msg.message.targetCallsign === strategy.context.config.myCallsign)
-                .sort((a, b) => compareCandidates(strategy, a, b));
-
             // 收集所有CQ消息
             const cqCalls = messages
                 .filter((msg) => 
@@ -975,80 +915,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 .sort((a, b) => a.snr - b.snr);
 
             // 优先处理直接呼叫 - 遍历所有直接呼叫，找到第一个没有冲突的
-            for (const directCall of directCalls) {
-                const msg = directCall.message;
-
-                if (msg.type === FT8MessageType.CALL) {
-                    const callsign = msg.senderCallsign;
-
-                    // 检查是否已经通联过
-                    const hasWorked = await strategy.operator.hasWorkedCallsign(callsign);
-
-                    // 根据配置决定是否回复已通联过的直接呼叫
-                    if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
-                        // 检查是否有其他同呼号操作者正在通联该目标
-                        const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(callsign);
-
-                        if (hasConflict) {
-                            strategy.logger.debug(`TX6: skipping direct call ${callsign} - other operator conflict (SNR: ${directCall.snr})`);
-                            continue; // 跳过这个，检查下一个直接呼叫
-                        }
-
-                        strategy.logger.debug(`TX6: replying to direct call ${callsign} (worked=${hasWorked}, SNR: ${directCall.snr})`);
-                        strategy.context.targetCallsign = callsign;
-
-                        // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
-                        if (!strategy.restoreContext(callsign)) {
-                            strategy.context.reportSent = directCall.snr;
-                            strategy.context.targetGrid = (msg as FT8MessageCall).grid;
-                            // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
-                            // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
-                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                strategy.context.actualFrequency = strategy.context.config.frequency + directCall.df;
-                            }
-                        }
-
-                        strategy.updateSlots();
-                        return { changeState: 'TX2' };
-                    } else {
-                        strategy.logger.debug(`TX6: skipping direct call ${callsign} - already worked and replyToWorkedStations=false (SNR: ${directCall.snr})`);
-                    }
-                } else if (msg.type === FT8MessageType.SIGNAL_REPORT) {
-                    const callsign = msg.senderCallsign;
-
-                    // 检查是否已经通联过
-                    const hasWorked = await strategy.operator.hasWorkedCallsign(callsign);
-
-                    // 根据配置决定是否回复已通联过的直接呼叫
-                    if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
-                        // 检查是否有其他同呼号操作者正在通联该目标
-                        const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(callsign);
-
-                        if (hasConflict) {
-                            strategy.logger.debug(`TX6: skipping direct signal report ${callsign} - other operator conflict (SNR: ${directCall.snr})`);
-                            continue; // 跳过这个，检查下一个直接呼叫
-                        }
-
-                        strategy.logger.debug(`TX6: replying to direct signal report ${callsign} (worked=${hasWorked}, SNR: ${directCall.snr})`);
-                        strategy.context.targetCallsign = callsign;
-
-                        // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
-                        if (!strategy.restoreContext(callsign)) {
-                            strategy.context.reportReceived = (msg as FT8MessageSignalReport).report;
-                            strategy.context.reportSent = directCall.snr;
-                            // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
-                            // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
-                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                strategy.context.actualFrequency = strategy.context.config.frequency + directCall.df;
-                            }
-                        }
-
-                        strategy.updateSlots();
-                        return { changeState: 'TX3' };
-                    } else {
-                        strategy.logger.debug(`TX6: skipping direct signal report ${callsign} - already worked and replyToWorkedStations=false (SNR: ${directCall.snr})`);
-                    }
-                }
+            const directHandoff = await trySwitchToDirectedCall(strategy, messages, {
+                logPrefix: 'TX6',
+            });
+            if (directHandoff) {
+                return directHandoff;
             }
 
             // 其次处理CQ呼叫
@@ -1277,6 +1148,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
                         this.logger.debug('Stopping operator after timeout');
                         return {
                             stop: true,
+                            silentListen: timeoutResult.silentListen,
                             qsoFailure: timeoutResult.qsoFailure,
                         };
                     }
@@ -1291,6 +1163,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
 
         return {
             stop: result.stop,
+            silentListen: result.silentListen,
             qsoFailure: result.qsoFailure,
         };
     }
@@ -1531,8 +1404,13 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
 
         this.slots.TX1 = FT8MessageParser.generateMessage(signalReport);
         this.slots.TX2 = FT8MessageParser.generateMessage(signalReport);
-        this.slots.TX3 = `${wrappedTarget} ${myCallsign} R${reportText}`;
-        this.slots.TX4 = `${wrappedTarget} ${myCallsign} RR73`;
+        if (targetCallsign.includes('/')) {
+            this.slots.TX3 = `${wrappedTarget} ${myCallsign} R${reportText}`;
+            this.slots.TX4 = `${wrappedTarget} ${myCallsign} RR73`;
+        } else {
+            this.slots.TX3 = `${wrappedTarget} ${myCallsign} RRR`;
+            this.slots.TX4 = `${wrappedTarget} ${myCallsign} RRR`;
+        }
         this.slots.TX5 = `${wrappedTarget} ${myCallsign} 73`;
     }
     

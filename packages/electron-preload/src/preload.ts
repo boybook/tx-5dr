@@ -55,6 +55,41 @@ interface ShortcutRecordingCancelledPayload {
   actionId: ShortcutActionId;
 }
 
+type VoicePttShortcutPreset =
+  | 'Backquote'
+  | 'Space'
+  | 'Home'
+  | 'F1'
+  | 'F2'
+  | 'F3'
+  | 'F4'
+  | 'F5'
+  | 'F6'
+  | 'F7'
+  | 'F8'
+  | 'F9'
+  | 'F10'
+  | 'F11'
+  | 'F12';
+
+interface VoicePttShortcutConfigPayload {
+  enabled: boolean;
+  preset: VoicePttShortcutPreset;
+}
+
+interface VoicePttShortcutCommandPayload {
+  type: 'keydown' | 'keyup';
+  code: string;
+  key: string;
+  repeat: boolean;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  location: number;
+  source: 'electron-before-input';
+}
+
 interface DesktopUpdateRecentCommit {
   id: string;
   shortId: string;
@@ -165,6 +200,10 @@ const shortcutRecordedListeners = new WeakMap<
 const shortcutRecordingCancelledListeners = new WeakMap<
   (payload: ShortcutRecordingCancelledPayload) => void,
   (_event: unknown, payload: ShortcutRecordingCancelledPayload) => void
+>();
+const voicePttShortcutCommandListeners = new WeakMap<
+  (payload: VoicePttShortcutCommandPayload) => void,
+  (_event: unknown, payload: VoicePttShortcutCommandPayload) => void
 >();
 
 /**
@@ -387,6 +426,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
 
+  voicePttShortcut: {
+    setConfig: (config: VoicePttShortcutConfigPayload): Promise<void> =>
+      ipcRenderer.invoke('voicePttShortcut:setConfig', config),
+    onCommand: (callback: (payload: VoicePttShortcutCommandPayload) => void) => {
+      if (voicePttShortcutCommandListeners.has(callback)) return;
+      const listener = (_event: unknown, payload: VoicePttShortcutCommandPayload) => callback(payload);
+      voicePttShortcutCommandListeners.set(callback, listener);
+      ipcRenderer.on('voice-ptt-shortcut:command', listener);
+    },
+    offCommand: (callback: (payload: VoicePttShortcutCommandPayload) => void) => {
+      const listener = voicePttShortcutCommandListeners.get(callback);
+      if (!listener) return;
+      ipcRenderer.removeListener('voice-ptt-shortcut:command', listener);
+      voicePttShortcutCommandListeners.delete(callback);
+    },
+  },
+
   https: {
     getStatus: (): Promise<DesktopHttpsStatus> => ipcRenderer.invoke('https:getStatus'),
     getShareUrls: (): Promise<string[]> => ipcRenderer.invoke('https:getShareUrls'),
@@ -467,6 +523,11 @@ declare global {
         offRecorded(callback: (payload: ShortcutRecordedPayload) => void): void;
         onRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): void;
         offRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): void;
+      };
+      voicePttShortcut: {
+        setConfig(config: VoicePttShortcutConfigPayload): Promise<void>;
+        onCommand(callback: (payload: VoicePttShortcutCommandPayload) => void): void;
+        offCommand(callback: (payload: VoicePttShortcutCommandPayload) => void): void;
       };
       https: {
         getStatus(): Promise<DesktopHttpsStatus>;

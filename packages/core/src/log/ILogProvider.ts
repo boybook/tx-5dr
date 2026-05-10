@@ -236,7 +236,7 @@ export interface CallsignAnalysis {
   /**
    * DXCC 解析命中类型
    */
-  dxccMatchKind?: 'prefix' | 'regex' | 'heuristic' | 'unknown';
+  dxccMatchKind?: 'prefix' | 'exact' | 'heuristic' | 'unknown';
 
   /**
    * DXCC 解析数据源

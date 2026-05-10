@@ -219,11 +219,17 @@ export class RadioBridge {
     band: string;
     radioMode?: string;
     description: string;
+    repeaterShift?: PresetFrequency['repeaterShift'];
+    repeaterOffsetHz?: number;
+    toneMode?: PresetFrequency['toneMode'];
+    ctcssToneTenthsHz?: number;
+    dcsCode?: number;
   } {
     const engineMode = this.deps.getEngineMode();
     const preset = this.findPresetForEngineMode(frequencyManager.getPresets(), frequency, engineMode);
 
     if (preset) {
+      const supportsFmOptions = preset.radioMode?.toUpperCase() === 'FM';
       logger.debug(`Matched ${engineMode} preset frequency: ${preset.description}`);
       return {
         frequency: preset.frequency,
@@ -231,6 +237,11 @@ export class RadioBridge {
         band: preset.band,
         radioMode: preset.radioMode,
         description: preset.description || `${(preset.frequency / 1000000).toFixed(3)} MHz`,
+        repeaterShift: supportsFmOptions ? preset.repeaterShift : undefined,
+        repeaterOffsetHz: supportsFmOptions ? preset.repeaterOffsetHz : undefined,
+        toneMode: supportsFmOptions ? preset.toneMode : undefined,
+        ctcssToneTenthsHz: supportsFmOptions ? preset.ctcssToneTenthsHz : undefined,
+        dcsCode: supportsFmOptions ? preset.dcsCode : undefined,
       };
     }
 
@@ -238,6 +249,7 @@ export class RadioBridge {
     const band = this.resolveBandLabel(frequency);
     const isVoiceMode = engineMode === 'voice';
     const lastVoiceFrequency = isVoiceMode ? ConfigManager.getInstance().getLastVoiceFrequency() : null;
+    const supportsFmOptions = lastVoiceFrequency?.radioMode?.toUpperCase() === 'FM';
 
     return {
       frequency,
@@ -245,6 +257,11 @@ export class RadioBridge {
       band,
       radioMode: isVoiceMode ? lastVoiceFrequency?.radioMode : undefined,
       description: `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`,
+      repeaterShift: supportsFmOptions ? lastVoiceFrequency?.repeaterShift : undefined,
+      repeaterOffsetHz: supportsFmOptions ? lastVoiceFrequency?.repeaterOffsetHz : undefined,
+      toneMode: supportsFmOptions ? lastVoiceFrequency?.toneMode : undefined,
+      ctcssToneTenthsHz: supportsFmOptions ? lastVoiceFrequency?.ctcssToneTenthsHz : undefined,
+      dcsCode: supportsFmOptions ? lastVoiceFrequency?.dcsCode : undefined,
     };
   }
 
@@ -287,6 +304,11 @@ export class RadioBridge {
     band: string;
     radioMode?: string;
     description: string;
+    repeaterShift?: PresetFrequency['repeaterShift'];
+    repeaterOffsetHz?: number;
+    toneMode?: PresetFrequency['toneMode'];
+    ctcssToneTenthsHz?: number;
+    dcsCode?: number;
   }): Promise<void> {
     const configManager = ConfigManager.getInstance();
     if (frequencyInfo.mode === 'VOICE') {
@@ -295,6 +317,11 @@ export class RadioBridge {
         radioMode: frequencyInfo.radioMode,
         band: frequencyInfo.band,
         description: frequencyInfo.description,
+        repeaterShift: frequencyInfo.repeaterShift,
+        repeaterOffsetHz: frequencyInfo.repeaterOffsetHz,
+        toneMode: frequencyInfo.toneMode,
+        ctcssToneTenthsHz: frequencyInfo.ctcssToneTenthsHz,
+        dcsCode: frequencyInfo.dcsCode,
       });
       return;
     }

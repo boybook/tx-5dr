@@ -6,6 +6,7 @@ import { join } from 'path';
 import http from 'http';
 import https from 'https';
 import { spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import type { DesktopHttpsStatus } from '@tx5dr/contracts';
@@ -17,11 +18,13 @@ import {
   DEFAULT_DESKTOP_HTTPS_CONFIG,
   buildDesktopHttpsStatus,
   disableDesktopHttps,
+  ensureDefaultSelfSignedCertificate,
   generateSelfSignedCertificate,
   importPemCertificate,
   sanitizeDesktopHttpsConfig,
   type PersistentDesktopHttpsConfig,
 } from './desktopHttps.js';
+import { isPrepareShutdownSuccess } from './prepareShutdown.js';
 
 // 获取当前模块的目录(ESM中的__dirname替代方案)
 // const __filename = fileURLToPath(import.meta.url);
@@ -44,6 +47,7 @@ let webProcess: import('node:child_process').ChildProcess | null = null;
 let selectedWebPort: number | null = null;
 let selectedServerPort: number | null = null;
 let selectedHttpsPort: number | null = null;
+let internalShutdownToken: string | null = null;
 
 // 启动错误跟踪
 let errorType: string = ''; // 错误类型，空字符串表示无错误
@@ -63,6 +67,75 @@ let shortcutRecordingWebContentsId: number | null = null;
 let shortcutRecordingActionId: ShortcutActionId | null = null;
 let startupLogsInterval: NodeJS.Timeout | null = null;
 let startupLogsSequence = 0;
+
+const VOICE_PTT_SHORTCUT_PRESETS = [
+  'Backquote',
+  'Space',
+  'Home',
+  'F1',
+  'F2',
+  'F3',
+  'F4',
+  'F5',
+  'F6',
+  'F7',
+  'F8',
+  'F9',
+  'F10',
+  'F11',
+  'F12',
+] as const;
+
+const VOICE_PTT_STALE_KEYDOWN_RECOVERY_MS = 80;
+
+type VoicePttShortcutPreset = typeof VOICE_PTT_SHORTCUT_PRESETS[number];
+type VoicePttShortcutCommandType = 'keydown' | 'keyup';
+
+interface VoicePttShortcutConfigPayload {
+  enabled?: boolean;
+  preset?: unknown;
+}
+
+interface VoicePttShortcutCommandPayload {
+  type: VoicePttShortcutCommandType;
+  code: string;
+  key: string;
+  repeat: boolean;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  location: number;
+  source: 'electron-before-input';
+}
+
+interface VoicePttKeyboardInput {
+  type: string;
+  code: string;
+  key: string;
+  isAutoRepeat: boolean;
+  alt: boolean;
+  control: boolean;
+  meta: boolean;
+  shift: boolean;
+  location: number;
+}
+
+interface VoicePttShortcutCaptureState {
+  enabled: boolean;
+  preset: VoicePttShortcutPreset;
+  webContentsId: number | null;
+  keyDownActive: boolean;
+  lastKeyDownAt: number | null;
+}
+
+const voicePttShortcutCapture: VoicePttShortcutCaptureState = {
+  enabled: false,
+  preset: 'Backquote',
+  webContentsId: null,
+  keyDownActive: false,
+  lastKeyDownAt: null,
+};
 
 type QuitSource = 'tray-menu' | 'window-close' | 'renderer' | 'before-quit' | 'will-quit' | 'unknown';
 
@@ -142,6 +215,15 @@ interface StartupErrorOptions {
   actions?: StartupErrorActionId[];
 }
 
+interface FsSelectFileOptions {
+  title?: string;
+  filters?: Array<{ name: string; extensions: string[] }>;
+}
+
+interface FsSelectDirectoryOptions {
+  title?: string;
+}
+
 interface CreateMainWindowOptions {
   startHealthCheck?: boolean;
 }
@@ -157,7 +239,7 @@ interface StartupLogFileState {
 
 const CHILD_SHUTDOWN_OPTIONS: Record<'web' | 'server', ChildShutdownOptions> = {
   web: { softTimeoutMs: 1000, forceTimeoutMs: 400 },
-  server: { softTimeoutMs: 1800, forceTimeoutMs: 500 },
+  server: { softTimeoutMs: 45_000, forceTimeoutMs: 2_000 },
 };
 const STARTUP_LOG_SOURCES: StartupLogSourceSpec[] = [
   { id: 'electron-main', label: 'Electron', fileName: 'electron-main.log' },
@@ -246,8 +328,6 @@ const DEFAULT_ELECTRON_SETTINGS: ElectronSettings = {
   shortcuts: createDefaultShortcutConfig(),
 };
 const VC_REDIST_X64_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
-const VC_REDIST_DOWNLOAD_PAGE_ZH_URL = 'https://learn.microsoft.com/zh-cn/cpp/windows/latest-supported-vc-redist';
-const VC_REDIST_DOWNLOAD_PAGE_EN_URL = 'https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist';
 const VC_REDIST_REGISTRY_KEYS = [
   'HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64',
   'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64',
@@ -257,6 +337,83 @@ const VC_REDIST_MIN_VERSION = { major: 14, minor: 30 } as const; // VS 2022 = 14
 
 function getElectronSettingsPath(): string {
   return path.join(getAppConfigDir(), ELECTRON_SETTINGS_FILE);
+}
+
+function safeWriteFileSync(filePath: string, data: string | Buffer, options: { backups?: number; mode?: number } = {}): void {
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const backups = options.backups ?? 3;
+  fs.mkdirSync(dir, { recursive: true });
+
+  const tmpPath = path.join(dir, `${base}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const fd = fs.openSync(tmpPath, 'w', options.mode ?? 0o600);
+  try {
+    fs.writeFileSync(fd, data);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  if (fs.existsSync(filePath) && backups > 0) {
+    for (let index = backups; index >= 2; index -= 1) {
+      const from = `${filePath}.bak.${index - 1}`;
+      const to = `${filePath}.bak.${index}`;
+      if (fs.existsSync(from)) {
+        try { fs.rmSync(to, { force: true }); } catch (error) { logger.debug('failed to remove old settings backup', error); }
+        try { fs.renameSync(from, to); } catch (error) { logger.warn('failed to rotate settings backup', error); }
+      }
+    }
+    try { fs.copyFileSync(filePath, `${filePath}.bak.1`); } catch (error) { logger.warn('failed to create settings backup', error); }
+  }
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      fs.renameSync(tmpPath, filePath);
+      if (process.platform !== 'win32') {
+        try {
+          const dirFd = fs.openSync(dir, 'r');
+          try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+        } catch (error) {
+          logger.debug('settings directory fsync skipped', error);
+        }
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES') break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1));
+    }
+  }
+
+  try { fs.rmSync(tmpPath, { force: true }); } catch (error) { logger.debug('failed to remove settings temp file', error); }
+  throw lastError;
+}
+
+function readJsonWithBackupsSync<T>(filePath: string, fallback: () => T, normalize: (value: unknown) => T): T {
+  const candidates = [filePath, `${filePath}.bak.1`, `${filePath}.bak.2`, `${filePath}.bak.3`];
+  const errors: string[] = [];
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    try {
+      const raw = fs.readFileSync(candidate, 'utf-8');
+      if (!raw.trim()) throw new Error('empty file');
+      const parsed = normalize(JSON.parse(raw));
+      if (candidate !== filePath) {
+        const corruptPath = `${filePath}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+        try { fs.renameSync(filePath, corruptPath); } catch (error) { logger.debug('failed to move corrupt settings aside', error); }
+        safeWriteFileSync(filePath, `${JSON.stringify(parsed, null, 2)}\n`);
+      }
+      return parsed;
+    } catch (error) {
+      errors.push(`${candidate}: ${(error as Error).message}`);
+    }
+  }
+  if (fs.existsSync(filePath)) {
+    logger.error('failed to load electron settings and no backup could be recovered', { filePath, errors });
+  }
+  return fallback();
 }
 
 function createShortcutBinding(input: Partial<ShortcutBinding> & { code: string }): ShortcutBinding {
@@ -453,6 +610,116 @@ function createShortcutBindingFromElectronInput(input: {
   });
 }
 
+function normalizeVoicePttShortcutPreset(value: unknown): VoicePttShortcutPreset {
+  return typeof value === 'string' && (VOICE_PTT_SHORTCUT_PRESETS as readonly string[]).includes(value)
+    ? value as VoicePttShortcutPreset
+    : 'Backquote';
+}
+
+function updateVoicePttShortcutCapture(
+  webContentsId: number,
+  payload: VoicePttShortcutConfigPayload,
+): VoicePttShortcutCaptureState {
+  const enabled = payload.enabled === true;
+  if (!enabled) {
+    if (voicePttShortcutCapture.webContentsId === null || voicePttShortcutCapture.webContentsId === webContentsId) {
+      voicePttShortcutCapture.enabled = false;
+      voicePttShortcutCapture.webContentsId = null;
+      voicePttShortcutCapture.keyDownActive = false;
+      voicePttShortcutCapture.lastKeyDownAt = null;
+    }
+    return { ...voicePttShortcutCapture };
+  }
+
+  voicePttShortcutCapture.enabled = true;
+  voicePttShortcutCapture.preset = normalizeVoicePttShortcutPreset(payload.preset);
+  voicePttShortcutCapture.webContentsId = webContentsId;
+  voicePttShortcutCapture.keyDownActive = false;
+  voicePttShortcutCapture.lastKeyDownAt = null;
+  return { ...voicePttShortcutCapture };
+}
+
+function inputHasModifier(input: VoicePttKeyboardInput): boolean {
+  return Boolean(input.alt || input.control || input.meta || input.shift);
+}
+
+function sendVoicePttShortcutCommand(
+  webContents: WebContents,
+  input: VoicePttKeyboardInput,
+  type: VoicePttShortcutCommandType,
+): void {
+  webContents.send('voice-ptt-shortcut:command', {
+    type,
+    code: input.code,
+    key: input.key,
+    repeat: input.isAutoRepeat,
+    altKey: input.alt,
+    ctrlKey: input.control,
+    metaKey: input.meta,
+    shiftKey: input.shift,
+    location: input.location,
+    source: 'electron-before-input',
+  } satisfies VoicePttShortcutCommandPayload);
+}
+
+function handleVoicePttShortcutInput(
+  event: Electron.Event,
+  input: VoicePttKeyboardInput,
+  webContents: WebContents,
+): boolean {
+  if (
+    !voicePttShortcutCapture.enabled
+    || voicePttShortcutCapture.webContentsId !== webContents.id
+    || input.code !== voicePttShortcutCapture.preset
+  ) {
+    return false;
+  }
+
+  if (input.type !== 'keyDown' && input.type !== 'keyUp') {
+    return false;
+  }
+
+  // Do not start PTT with modifiers, but always allow the matching keyUp to
+  // release the debounce guard if the key was pressed before modifiers changed.
+  if (inputHasModifier(input) && !(input.type === 'keyUp' && voicePttShortcutCapture.keyDownActive)) {
+    return false;
+  }
+
+  event.preventDefault();
+
+  if (input.type === 'keyUp') {
+    voicePttShortcutCapture.keyDownActive = false;
+    voicePttShortcutCapture.lastKeyDownAt = null;
+    sendVoicePttShortcutCommand(webContents, input, 'keyup');
+    return true;
+  }
+
+  if (input.isAutoRepeat) {
+    return true;
+  }
+
+  const now = Date.now();
+  if (voicePttShortcutCapture.keyDownActive) {
+    const elapsedMs = voicePttShortcutCapture.lastKeyDownAt === null
+      ? Number.POSITIVE_INFINITY
+      : now - voicePttShortcutCapture.lastKeyDownAt;
+
+    if (elapsedMs < VOICE_PTT_STALE_KEYDOWN_RECOVERY_MS) {
+      return true;
+    }
+
+    logger.debug('Voice PTT shortcut keyUp was not observed; recovering debounce on fresh keyDown', {
+      preset: voicePttShortcutCapture.preset,
+      elapsedMs,
+    });
+  }
+
+  voicePttShortcutCapture.keyDownActive = true;
+  voicePttShortcutCapture.lastKeyDownAt = now;
+  sendVoicePttShortcutCommand(webContents, input, 'keydown');
+  return true;
+}
+
 function stopShortcutRecording(options: { restoreGlobalShortcuts?: boolean } = {}): void {
   shortcutRecordingWebContentsId = null;
   shortcutRecordingActionId = null;
@@ -463,28 +730,32 @@ function stopShortcutRecording(options: { restoreGlobalShortcuts?: boolean } = {
 }
 
 function loadElectronSettings(): ElectronSettings {
-  try {
-    const raw = fs.readFileSync(getElectronSettingsPath(), 'utf-8');
-    const parsed = JSON.parse(raw);
-    return {
-      ...DEFAULT_ELECTRON_SETTINGS,
-      ...parsed,
-      desktopHttps: sanitizeDesktopHttpsConfig(parsed?.desktopHttps),
-      shortcuts: normalizeShortcutConfig(parsed?.shortcuts),
-    };
-  } catch {
-    return {
+  return readJsonWithBackupsSync<ElectronSettings>(
+    getElectronSettingsPath(),
+    () => ({
       ...DEFAULT_ELECTRON_SETTINGS,
       shortcuts: createDefaultShortcutConfig(),
-    };
-  }
+    }),
+    (parsed) => {
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('settings root must be an object');
+      }
+      const settings = parsed as Partial<ElectronSettings>;
+      return {
+        ...DEFAULT_ELECTRON_SETTINGS,
+        ...settings,
+        desktopHttps: sanitizeDesktopHttpsConfig(settings.desktopHttps),
+        shortcuts: normalizeShortcutConfig(settings.shortcuts),
+      };
+    },
+  );
 }
 
 function saveElectronSettings(settings: ElectronSettings): void {
   try {
     const dir = getAppConfigDir();
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(getElectronSettingsPath(), JSON.stringify(settings, null, 2), 'utf-8');
+    safeWriteFileSync(getElectronSettingsPath(), `${JSON.stringify(settings, null, 2)}\n`, { backups: 3, mode: 0o600 });
   } catch (err) {
     logger.error('failed to save electron settings', err);
   }
@@ -656,6 +927,44 @@ async function getDesktopHttpsStatus(): Promise<DesktopHttpsStatus> {
   });
 }
 
+async function ensureDesktopHttpsBeforeGatewayLaunch(context: string): Promise<void> {
+  const settings = loadElectronSettings();
+  try {
+    const result = await ensureDefaultSelfSignedCertificate({
+      configDir: getAppConfigDir(),
+      hostname: getHostname(),
+      lanAddresses: getLanIpv4Addresses(),
+      existingConfig: settings.desktopHttps,
+    });
+
+    if (!result.changed) {
+      logger.info('desktop HTTPS preflight complete', {
+        context,
+        enabled: result.config.enabled,
+        mode: result.config.mode,
+        certPath: result.config.certPath,
+      });
+      return;
+    }
+
+    saveElectronSettings({
+      ...settings,
+      desktopHttps: result.config,
+    });
+    logger.info('desktop HTTPS self-signed certificate generated', {
+      context,
+      reason: result.reason,
+      certPath: result.config.certPath,
+      keyPath: result.config.keyPath,
+    });
+  } catch (error) {
+    logger.error('desktop HTTPS preflight failed; continuing with HTTP gateway fallback', {
+      context,
+      error,
+    });
+  }
+}
+
 function buildWebChildEnv(serverPort: number): Record<string, string> {
   const httpsConfig = getDesktopHttpsConfig();
   const env: Record<string, string> = {
@@ -749,6 +1058,7 @@ async function restartWebGateway(): Promise<void> {
   }
 
   const webEntry = webGatewayEntryPath();
+  await ensureDesktopHttpsBeforeGatewayLaunch('restart');
   const env = buildWebChildEnv(selectedServerPort);
   prepareWebGatewayLaunch(webEntry, env);
 
@@ -789,10 +1099,26 @@ async function persistDesktopHttpsConfig(
 
 async function applyDesktopHttpsSettings(update: Partial<PersistentDesktopHttpsConfig>): Promise<DesktopHttpsStatus> {
   const current = getDesktopHttpsConfig();
-  const next = sanitizeDesktopHttpsConfig({
+  let next = sanitizeDesktopHttpsConfig({
     ...current,
     ...update,
   });
+
+  if (next.enabled && next.mode === 'self-signed') {
+    const ensured = await ensureDefaultSelfSignedCertificate({
+      configDir: getAppConfigDir(),
+      hostname: getHostname(),
+      lanAddresses: getLanIpv4Addresses(),
+      existingConfig: next,
+    });
+    next = ensured.config;
+    if (ensured.changed) {
+      logger.info('desktop HTTPS self-signed certificate generated before applying settings', {
+        reason: ensured.reason,
+        certPath: next.certPath,
+      });
+    }
+  }
 
   if (next.enabled) {
     const nextStatus = await buildDesktopHttpsStatus({
@@ -837,6 +1163,16 @@ function getAppConfigDir(): string {
   }
 }
 
+function getAppDataDir(): string {
+  if (process.platform === 'darwin') {
+    return path.join(homedir(), 'Library', 'Application Support', APP_DIR_NAME);
+  } else if (process.platform === 'win32') {
+    return path.join(process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local'), APP_DIR_NAME);
+  } else {
+    return path.join(process.env.XDG_DATA_HOME || path.join(homedir(), '.local', 'share'), APP_DIR_NAME);
+  }
+}
+
 function getAppLogsDir(): string {
   if (process.platform === 'darwin') {
     return path.join(homedir(), 'Library', 'Logs', APP_DIR_NAME);
@@ -844,6 +1180,16 @@ function getAppLogsDir(): string {
     return path.join(process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local'), APP_DIR_NAME, 'logs');
   } else {
     return path.join(process.env.XDG_DATA_HOME || path.join(homedir(), '.local', 'share'), APP_DIR_NAME, 'logs');
+  }
+}
+
+function getAppCacheDir(): string {
+  if (process.platform === 'darwin') {
+    return path.join(homedir(), 'Library', 'Caches', APP_DIR_NAME);
+  } else if (process.platform === 'win32') {
+    return path.join(process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local'), APP_DIR_NAME, 'cache');
+  } else {
+    return path.join(process.env.XDG_CACHE_HOME || path.join(homedir(), '.cache'), APP_DIR_NAME);
   }
 }
 
@@ -1185,10 +1531,6 @@ function isVCRuntimeVersionSufficient(versionStr: string): boolean {
     return parsed.major > VC_REDIST_MIN_VERSION.major;
   }
   return parsed.minor >= VC_REDIST_MIN_VERSION.minor;
-}
-
-function getLocalizedVCRuntimeDownloadPageUrl(locale = app.getLocale()): string {
-  return locale.startsWith('zh') ? VC_REDIST_DOWNLOAD_PAGE_ZH_URL : VC_REDIST_DOWNLOAD_PAGE_EN_URL;
 }
 
 function detectWindowsVCRuntime(): WindowsVCRuntimeStatus {
@@ -2279,6 +2621,10 @@ async function createMainWindowOnly(options: CreateMainWindowOptions = {}): Prom
   mainWindow.on('closed', () => {
     logger.info('main window closed');
     mainWindowInstance = null;
+    voicePttShortcutCapture.enabled = false;
+    voicePttShortcutCapture.webContentsId = null;
+    voicePttShortcutCapture.keyDownActive = false;
+    voicePttShortcutCapture.lastKeyDownAt = null;
     if (serverCheckInterval) {
       clearInterval(serverCheckInterval);
       serverCheckInterval = null;
@@ -2324,33 +2670,38 @@ async function createMainWindowOnly(options: CreateMainWindowOptions = {}): Prom
   });
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
-    if (shortcutRecordingWebContentsId !== mainWindow.webContents.id || !shortcutRecordingActionId) {
-      return;
-    }
+    if (shortcutRecordingActionId) {
+      if (shortcutRecordingWebContentsId !== mainWindow.webContents.id) {
+        return;
+      }
 
-    event.preventDefault();
-    if (input.type !== 'keyDown' || input.isAutoRepeat) {
-      return;
-    }
+      event.preventDefault();
+      if (input.type !== 'keyDown' || input.isAutoRepeat) {
+        return;
+      }
 
-    const actionId = shortcutRecordingActionId;
-    if (input.key === 'Escape') {
+      const actionId = shortcutRecordingActionId;
+      if (input.key === 'Escape') {
+        stopShortcutRecording({ restoreGlobalShortcuts: true });
+        mainWindow.webContents.send('shortcut:recording-cancelled', { actionId } satisfies ShortcutRecordingCancelledPayload);
+        return;
+      }
+
+      if (isModifierOnlyShortcutInput(input)) {
+        return;
+      }
+
+      const binding = createShortcutBindingFromElectronInput(input);
+      if (!binding) {
+        return;
+      }
+
       stopShortcutRecording({ restoreGlobalShortcuts: true });
-      mainWindow.webContents.send('shortcut:recording-cancelled', { actionId } satisfies ShortcutRecordingCancelledPayload);
+      mainWindow.webContents.send('shortcut:recorded', { actionId, binding } satisfies ShortcutRecordedPayload);
       return;
     }
 
-    if (isModifierOnlyShortcutInput(input)) {
-      return;
-    }
-
-    const binding = createShortcutBindingFromElectronInput(input);
-    if (!binding) {
-      return;
-    }
-
-    stopShortcutRecording({ restoreGlobalShortcuts: true });
-    mainWindow.webContents.send('shortcut:recorded', { actionId, binding } satisfies ShortcutRecordedPayload);
+    handleVoicePttShortcutInput(event, input, mainWindow.webContents);
   });
 
   if (process.platform === 'win32' || process.platform === 'linux') {
@@ -2599,6 +2950,55 @@ async function checkServerHealth(): Promise<boolean> {
   return probeTx5drServer(baseUrl);
 }
 
+async function prepareEmbeddedServerShutdown(reason: string): Promise<boolean> {
+  if (!selectedServerPort || !internalShutdownToken) {
+    return false;
+  }
+
+  const port = selectedServerPort;
+  const token = internalShutdownToken;
+  const body = JSON.stringify({ reason });
+  const timeoutMs = 35_000;
+  return new Promise((resolve) => {
+    const req = http.request({
+      host: '127.0.0.1',
+      port,
+      path: '/api/system/internal/prepare-shutdown',
+      method: 'POST',
+      timeout: timeoutMs,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+        'x-tx5dr-internal-token': token,
+      },
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => {
+        const payload = Buffer.concat(chunks).toString('utf8');
+        if (isPrepareShutdownSuccess(res.statusCode, payload)) {
+          logger.info('embedded server prepared for shutdown', { reason, statusCode: res.statusCode, payload });
+          resolve(true);
+        } else {
+          logger.warn('embedded server prepare-shutdown failed', { reason, statusCode: res.statusCode, payload });
+          resolve(false);
+        }
+      });
+    });
+    req.on('timeout', () => {
+      logger.warn('embedded server prepare-shutdown timed out', { reason, timeoutMs });
+      req.destroy();
+      resolve(false);
+    });
+    req.on('error', (error) => {
+      logger.warn('embedded server prepare-shutdown request failed', { reason, error: error.message });
+      resolve(false);
+    });
+    req.write(body);
+    req.end();
+  });
+}
+
 function closeFrontendWindowsImmediately(): number {
   const startedAt = Date.now();
 
@@ -2637,6 +3037,7 @@ async function cleanupChildProcesses(isDevelopment: boolean): Promise<ChildShutd
     const currentServerProcess = serverProcess;
     serverProcess = null;
     if (currentServerProcess) {
+      await prepareEmbeddedServerShutdown('electron-cleanup');
       tasks.push(killProcess(currentServerProcess, 'server', CHILD_SHUTDOWN_OPTIONS.server));
     }
   }
@@ -2658,6 +3059,7 @@ async function cleanup(): Promise<ChildShutdownResult[]> {
   selectedServerPort = null;
   selectedWebPort = null;
   selectedHttpsPort = null;
+  internalShutdownToken = null;
   mainAppReadyForWindow = false;
 
   // 清理系统托盘
@@ -2781,6 +3183,7 @@ async function createWindow() {
     }
 
     const webEntry = webGatewayEntryPath();
+    await ensureDesktopHttpsBeforeGatewayLaunch('development-startup');
     const webEnv = buildWebChildEnv(selectedServerPort);
     prepareWebGatewayLaunch(webEntry, webEnv);
 
@@ -2880,10 +3283,16 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
     logger.warn('native module check complete');
 
     const serverLaunchStartedAt = Date.now();
+    internalShutdownToken = randomBytes(32).toString('hex');
     serverProcess = runChild('server', serverLauncherEntry, {
       PORT: String(serverPort),
       WEB_PORT: String(webPort),
       TX5DR_SERVER_ENTRY: serverEntry,
+      TX5DR_INTERNAL_SHUTDOWN_TOKEN: internalShutdownToken,
+      TX5DR_CONFIG_DIR: getAppConfigDir(),
+      TX5DR_DATA_DIR: getAppDataDir(),
+      TX5DR_LOGS_DIR: getAppLogsDir(),
+      TX5DR_CACHE_DIR: getAppCacheDir(),
       TX5DR_SERVER_PORT_AUTO: '1',
       TX5DR_SERVER_PORT_SCAN_STEPS: String(DEFAULT_PORT_SCAN_STEPS),
       TX5DR_SERVER_READY_FILE: getServerReadyPath(),
@@ -2923,6 +3332,7 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
       baseUrl: serverReady.baseUrl,
     });
 
+    await ensureDesktopHttpsBeforeGatewayLaunch('production-startup');
     const webEnv = buildWebChildEnv(selectedServerPort);
     prepareWebGatewayLaunch(webEntry, webEnv);
     webProcess = runChild('client-tools', webEntry, webEnv);
@@ -3135,6 +3545,59 @@ process.on('SIGTERM', () => {
   void cleanupAndQuit('unknown');
 });
 
+function sanitizeDialogTitle(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, 120) : undefined;
+}
+
+function sanitizeFileDialogFilters(value: unknown): Electron.FileFilter[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const filters: Electron.FileFilter[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    if (typeof record.name !== 'string' || !Array.isArray(record.extensions)) continue;
+
+    const extensions = record.extensions
+      .filter((extension): extension is string => typeof extension === 'string')
+      .map(extension => extension.trim().replace(/^\./, '').toLowerCase())
+      .filter(extension => /^[a-z0-9*]+$/i.test(extension))
+      .slice(0, 20);
+
+    if (extensions.length === 0) continue;
+    filters.push({
+      name: record.name.trim().slice(0, 80) || 'Files',
+      extensions,
+    });
+  }
+
+  return filters.length > 0 ? filters.slice(0, 10) : undefined;
+}
+
+function getDialogParentWindow(event: Electron.IpcMainInvokeEvent): BrowserWindow | undefined {
+  const senderWindow = BrowserWindow.fromWebContents(event.sender);
+  if (senderWindow && !senderWindow.isDestroyed()) {
+    return senderWindow;
+  }
+  if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
+    return mainWindowInstance;
+  }
+  return undefined;
+}
+
+function showOpenDialogForEvent(
+  event: Electron.IpcMainInvokeEvent,
+  options: Electron.OpenDialogOptions,
+): Promise<Electron.OpenDialogReturnValue> {
+  const parentWindow = getDialogParentWindow(event);
+  if (parentWindow) {
+    return dialog.showOpenDialog(parentWindow, options);
+  }
+  return dialog.showOpenDialog(options);
+}
+
 /**
  * 设置IPC处理器
  */
@@ -3328,6 +3791,27 @@ function setupIpcHandlers() {
     }
   });
 
+  ipcMain.handle('fs:selectFile', async (event, options?: FsSelectFileOptions) => {
+    logger.info('IPC fs:selectFile');
+    const result = await showOpenDialogForEvent(event, {
+      title: sanitizeDialogTitle(options?.title),
+      filters: sanitizeFileDialogFilters(options?.filters),
+      properties: ['openFile'],
+    });
+
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
+
+  ipcMain.handle('fs:selectDirectory', async (event, options?: FsSelectDirectoryOptions) => {
+    logger.info('IPC fs:selectDirectory');
+    const result = await showOpenDialogForEvent(event, {
+      title: sanitizeDialogTitle(options?.title),
+      properties: ['openDirectory', 'createDirectory'],
+    });
+
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
+
   ipcMain.handle('app:getVersion', () => app.getVersion());
   ipcMain.handle('app:getBuildInfo', () => BUILD_INFO);
   ipcMain.handle('app:quit', async () => {
@@ -3486,6 +3970,10 @@ function setupIpcHandlers() {
     if (shortcutRecordingWebContentsId === event.sender.id) {
       stopShortcutRecording({ restoreGlobalShortcuts: true });
     }
+  });
+
+  ipcMain.handle('voicePttShortcut:setConfig', (event, payload: VoicePttShortcutConfigPayload) => {
+    return updateVoicePttShortcutCapture(event.sender.id, payload ?? {});
   });
 
   // 配置管理 IPC

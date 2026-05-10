@@ -1,6 +1,6 @@
 {
   "name": "@tx5dr/core",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "TX-5DR Core Package",
   "type": "module",
   "main": "dist/index.js",
@@ -13,7 +13,7 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"const fs=require('fs'); fs.mkdirSync('dist/callsign',{recursive:true}); fs.copyFileSync('src/callsign/cty.csv','dist/callsign/cty.csv')\"",
     "dev": "tsc --watch",
     "lint": "eslint src/**/*.ts",
     "test": "tsx --test",

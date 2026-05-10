@@ -7,12 +7,18 @@ import { initializeConsoleLogger, ConsoleLogger } from './utils/console-logger.j
 import { setGlobalInspector } from './state-machines/inspector.js';
 import { createLogger, setLogLevel, getActiveLogLevel } from './utils/logger.js';
 import { ConfigManager } from './config/config-manager.js';
-import { markProcessShuttingDown } from './utils/process-shutdown.js';
+import { blockNewMutations, markProcessShuttingDown } from './utils/process-shutdown.js';
 import { createServerReadyState, resolveServerPortOptions, writeServerReadyFile } from './utils/server-ready.js';
+import { PersistenceCoordinator } from './utils/persistence/index.js';
 
 const logger = createLogger('Server');
 
-const SERVER_SHUTDOWN_TIMEOUT_MS = 1800;
+const SERVER_SHUTDOWN_DEADLINE_MS = 42_000;
+const ENGINE_STOP_TIMEOUT_MS = 10_000;
+
+function remainingShutdownBudgetMs(startedAt: number): number {
+  return Math.max(1, SERVER_SHUTDOWN_DEADLINE_MS - (Date.now() - startedAt));
+}
 
 // ===== 全局错误处理器 =====
 // 防止未捕获的 Promise rejection 导致进程崩溃
@@ -255,6 +261,8 @@ function startLogMaintenanceTasks(consoleLogger: ConsoleLogger): void {
 
       logger.info(`received ${signal} signal, shutting down server`);
       markProcessShuttingDown();
+      blockNewMutations();
+      PersistenceCoordinator.getInstance().blockNewMutations();
 
       try {
         const engine = DigitalRadioEngine.getInstance();
@@ -263,7 +271,7 @@ function startLogMaintenanceTasks(consoleLogger: ConsoleLogger): void {
           await Promise.race([
             engine.stop(),
             new Promise((_, reject) => {
-              setTimeout(() => reject(new Error('server shutdown timeout')), SERVER_SHUTDOWN_TIMEOUT_MS);
+              setTimeout(() => reject(new Error('engine stop timeout')), Math.min(ENGINE_STOP_TIMEOUT_MS, remainingShutdownBudgetMs(shutdownStartedAt)));
             }),
           ]);
           engineStopMs = Date.now() - engineStopStartedAt;
@@ -273,7 +281,7 @@ function startLogMaintenanceTasks(consoleLogger: ConsoleLogger): void {
         engineStopMs = Date.now() - engineStopStartedAt;
         fastShutdownFallback = true;
         logger.warn('digital radio engine stop exceeded shutdown budget, continuing to exit', {
-          timeoutMs: SERVER_SHUTDOWN_TIMEOUT_MS,
+          timeoutMs: ENGINE_STOP_TIMEOUT_MS,
           engineStopMs,
           error,
         });
@@ -285,6 +293,18 @@ function startLogMaintenanceTasks(consoleLogger: ConsoleLogger): void {
         logger.info('logbook providers flushed');
       } catch (error) {
         logger.warn('logbook flush during shutdown failed', { error });
+      }
+
+      try {
+        const result = await PersistenceCoordinator.getInstance().flushAll({
+          deadlineMs: remainingShutdownBudgetMs(shutdownStartedAt),
+          reason: `signal:${signal}`,
+        });
+        if (!result.ok) {
+          logger.warn('persistence flush completed with errors', { errors: result.errors });
+        }
+      } catch (error) {
+        logger.warn('persistence flush during shutdown failed', { error });
       }
 
       try {

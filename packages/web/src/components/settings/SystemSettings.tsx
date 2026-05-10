@@ -435,6 +435,8 @@ export const SystemSettings = forwardRef<
   const [originalDesktopHttpsRedirectExternalHttp, setOriginalDesktopHttpsRedirectExternalHttp] = useState(true);
   const [desktopHttpsBusy, setDesktopHttpsBusy] = useState(false);
   const [desktopHttpsUrlCopied, setDesktopHttpsUrlCopied] = useState(false);
+  const [desktopHttpsPendingCertPath, setDesktopHttpsPendingCertPath] = useState<string | null>(null);
+  const [desktopHttpsPendingKeyPath, setDesktopHttpsPendingKeyPath] = useState<string | null>(null);
   const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateState | null>(null);
   const [desktopUpdateBusy, setDesktopUpdateBusy] = useState(false);
   const [desktopUpdateError, setDesktopUpdateError] = useState('');
@@ -849,57 +851,16 @@ export const SystemSettings = forwardRef<
     }
   }, [desktopHttpsStatus?.browserAccessUrl]);
 
-  const handleGenerateSelfSignedCertificate = useCallback(async () => {
-    if (!window.electronAPI?.https?.generateSelfSigned) return;
+  const importDesktopCertificatePair = useCallback(async (certPath: string, keyPath: string) => {
+    if (!window.electronAPI?.https?.importPemCertificate) return;
     setDesktopHttpsBusy(true);
     setError('');
     try {
-      await window.electronAPI.https.generateSelfSigned();
-
-      const parsedPort = Number.parseInt(desktopHttpsPort, 10);
-      const status = await window.electronAPI.https.applySettings?.({
-        enabled: true,
-        mode: 'self-signed',
-        httpsPort: Number.isFinite(parsedPort) ? parsedPort : 8443,
-        redirectExternalHttp: desktopHttpsRedirectExternalHttp,
-      });
-
-      if (status) {
-        applyDesktopHttpsSnapshot(status);
-      } else {
-        setDesktopHttpsEnabled(true);
-        setDesktopHttpsMode('self-signed');
-      }
-    } catch (err) {
-      logger.error('Failed to generate self-signed certificate:', err);
-      setError(err instanceof Error ? err.message : t('system.saveFailed'));
-    } finally {
-      setDesktopHttpsBusy(false);
-    }
-  }, [applyDesktopHttpsSnapshot, desktopHttpsPort, desktopHttpsRedirectExternalHttp, t]);
-
-  const handleImportDesktopCertificate = useCallback(async () => {
-    if (!window.electronAPI?.fs?.selectFile || !window.electronAPI?.https?.importPemCertificate) return;
-    setDesktopHttpsBusy(true);
-    setError('');
-    try {
-      const certPath = await window.electronAPI.fs.selectFile({
-        title: t('system.desktopHttpsSelectCertTitle'),
-        filters: [{ name: 'PEM Certificate', extensions: ['pem', 'crt', 'cer'] }],
-      });
-      if (!certPath) return;
-
-      const keyPath = await window.electronAPI.fs.selectFile({
-        title: t('system.desktopHttpsSelectKeyTitle'),
-        filters: [{ name: 'PEM Private Key', extensions: ['pem', 'key'] }],
-      });
-      if (!keyPath) return;
-
       await window.electronAPI.https.importPemCertificate(certPath, keyPath);
 
       const parsedPort = Number.parseInt(desktopHttpsPort, 10);
       const status = await window.electronAPI.https.applySettings?.({
-        enabled: true,
+        enabled: desktopHttpsEnabled,
         mode: 'imported-pem',
         httpsPort: Number.isFinite(parsedPort) ? parsedPort : 8443,
         redirectExternalHttp: desktopHttpsRedirectExternalHttp,
@@ -909,15 +870,62 @@ export const SystemSettings = forwardRef<
         applyDesktopHttpsSnapshot(status);
       } else {
         setDesktopHttpsMode('imported-pem');
-        setDesktopHttpsEnabled(true);
       }
+      setDesktopHttpsPendingCertPath(null);
+      setDesktopHttpsPendingKeyPath(null);
     } catch (err) {
       logger.error('Failed to import desktop HTTPS certificate:', err);
       setError(err instanceof Error ? err.message : t('system.saveFailed'));
     } finally {
       setDesktopHttpsBusy(false);
     }
-  }, [applyDesktopHttpsSnapshot, desktopHttpsPort, desktopHttpsRedirectExternalHttp, t]);
+  }, [applyDesktopHttpsSnapshot, desktopHttpsEnabled, desktopHttpsPort, desktopHttpsRedirectExternalHttp, t]);
+
+  const handleSelectDesktopCertificateFile = useCallback(async () => {
+    if (!window.electronAPI?.fs?.selectFile) return;
+    setDesktopHttpsBusy(true);
+    setError('');
+    try {
+      const certPath = await window.electronAPI.fs.selectFile({
+        title: t('system.desktopHttpsSelectCertTitle'),
+        filters: [{ name: 'PEM Certificate', extensions: ['pem', 'crt', 'cer'] }],
+      });
+      if (!certPath) return;
+
+      setDesktopHttpsPendingCertPath(certPath);
+      if (desktopHttpsPendingKeyPath) {
+        await importDesktopCertificatePair(certPath, desktopHttpsPendingKeyPath);
+      }
+    } catch (err) {
+      logger.error('Failed to select desktop HTTPS certificate:', err);
+      setError(err instanceof Error ? err.message : t('system.saveFailed'));
+    } finally {
+      setDesktopHttpsBusy(false);
+    }
+  }, [desktopHttpsPendingKeyPath, importDesktopCertificatePair, t]);
+
+  const handleSelectDesktopCertificateKey = useCallback(async () => {
+    if (!window.electronAPI?.fs?.selectFile) return;
+    setDesktopHttpsBusy(true);
+    setError('');
+    try {
+      const keyPath = await window.electronAPI.fs.selectFile({
+        title: t('system.desktopHttpsSelectKeyTitle'),
+        filters: [{ name: 'PEM Private Key', extensions: ['pem', 'key'] }],
+      });
+      if (!keyPath) return;
+
+      setDesktopHttpsPendingKeyPath(keyPath);
+      if (desktopHttpsPendingCertPath) {
+        await importDesktopCertificatePair(desktopHttpsPendingCertPath, keyPath);
+      }
+    } catch (err) {
+      logger.error('Failed to select desktop HTTPS private key:', err);
+      setError(err instanceof Error ? err.message : t('system.saveFailed'));
+    } finally {
+      setDesktopHttpsBusy(false);
+    }
+  }, [desktopHttpsPendingCertPath, importDesktopCertificatePair, t]);
 
   const applyRealtimeSettingsSnapshot = useCallback((
     data: RealtimeSettingsResponseData,
@@ -1039,6 +1047,30 @@ export const SystemSettings = forwardRef<
 
   const hasNtpServerChanges = () => !areStringArraysEqual(getNtpServerValues(ntpServers), originalNtpServers);
 
+  const hasValidImportedDesktopHttpsCertificate = () => (
+    desktopHttpsStatus?.mode === 'imported-pem' &&
+    desktopHttpsStatus.certificateStatus === 'valid'
+  );
+
+  const hasDesktopHttpsCertificateFile = () => (
+    Boolean(desktopHttpsPendingCertPath) || hasValidImportedDesktopHttpsCertificate()
+  );
+
+  const hasDesktopHttpsPrivateKeyFile = () => (
+    Boolean(desktopHttpsPendingKeyPath) || hasValidImportedDesktopHttpsCertificate()
+  );
+
+  const hasPartialDesktopHttpsImportDraft = () => (
+    Boolean(desktopHttpsPendingCertPath) !== Boolean(desktopHttpsPendingKeyPath)
+  );
+
+  const requiresImportedDesktopHttpsCertificate = () => (
+    isElectron &&
+    desktopHttpsEnabled &&
+    desktopHttpsMode === 'imported-pem' &&
+    !hasValidImportedDesktopHttpsCertificate()
+  );
+
   // 检查是否有未保存的更改
   const hasUnsavedChanges = () => {
     return (
@@ -1083,6 +1115,12 @@ export const SystemSettings = forwardRef<
     setIsSaving(true);
     setError('');
     try {
+      if (requiresImportedDesktopHttpsCertificate()) {
+        const message = t('system.desktopHttpsImportRequired');
+        setError(message);
+        throw new Error(message);
+      }
+
       // 保存 FT8 设置
       const ft8Updates: Parameters<typeof api.updateFT8Settings>[0] = {
         decodeWhileTransmitting,
@@ -1728,6 +1766,11 @@ export const SystemSettings = forwardRef<
                         const value = Array.from(keys)[0] as DesktopHttpsMode | undefined;
                         if (value) {
                           setDesktopHttpsMode(value);
+                          if (value !== 'imported-pem') {
+                            setDesktopHttpsPendingCertPath(null);
+                            setDesktopHttpsPendingKeyPath(null);
+                          }
+                          setError('');
                         }
                       }}
                       isDisabled={isSaving || desktopHttpsBusy}
@@ -1764,28 +1807,59 @@ export const SystemSettings = forwardRef<
                       </p>
                     </div>
 
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        variant={desktopHttpsMode === 'self-signed' ? 'solid' : 'flat'}
-                        color="primary"
-                        isLoading={desktopHttpsBusy}
-                        isDisabled={isSaving || desktopHttpsBusy}
-                        onPress={() => void handleGenerateSelfSignedCertificate()}
-                      >
-                        {t('system.desktopHttpsGenerate')}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={desktopHttpsMode === 'imported-pem' ? 'solid' : 'flat'}
-                        color="secondary"
-                        isLoading={desktopHttpsBusy}
-                        isDisabled={isSaving || desktopHttpsBusy}
-                        onPress={() => void handleImportDesktopCertificate()}
-                      >
-                        {t('system.desktopHttpsImport')}
-                      </Button>
-                    </div>
+                    {desktopHttpsMode === 'self-signed' ? (
+                      <Alert color="primary" variant="flat" className="text-xs">
+                        {t('system.desktopHttpsSelfSignedAuto')}
+                      </Alert>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          <Button
+                            size="sm"
+                            variant={hasDesktopHttpsCertificateFile() ? 'solid' : 'flat'}
+                            color={hasDesktopHttpsCertificateFile() ? 'success' : 'secondary'}
+                            isDisabled={isSaving || desktopHttpsBusy}
+                            startContent={hasDesktopHttpsCertificateFile() ? <FontAwesomeIcon icon={faCheck} /> : undefined}
+                            onPress={() => void handleSelectDesktopCertificateFile()}
+                          >
+                            {hasDesktopHttpsCertificateFile()
+                              ? t('system.desktopHttpsCertSelected')
+                              : t('system.desktopHttpsSelectCertButton')}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={hasDesktopHttpsPrivateKeyFile() ? 'solid' : 'flat'}
+                            color={hasDesktopHttpsPrivateKeyFile() ? 'success' : 'secondary'}
+                            isLoading={desktopHttpsBusy}
+                            isDisabled={isSaving || desktopHttpsBusy}
+                            startContent={hasDesktopHttpsPrivateKeyFile() ? <FontAwesomeIcon icon={faCheck} /> : undefined}
+                            onPress={() => void handleSelectDesktopCertificateKey()}
+                          >
+                            {hasDesktopHttpsPrivateKeyFile()
+                              ? t('system.desktopHttpsKeySelected')
+                              : t('system.desktopHttpsSelectKeyButton')}
+                          </Button>
+                        </div>
+                        <p className={SETTINGS_SUBDESC_CLASS}>
+                          {t('system.desktopHttpsImportSplitHint')}
+                        </p>
+                        {hasValidImportedDesktopHttpsCertificate() && (
+                          <Alert color="success" variant="flat" className="text-xs">
+                            {t('system.desktopHttpsImportVerified')}
+                          </Alert>
+                        )}
+                        {!hasValidImportedDesktopHttpsCertificate() && hasPartialDesktopHttpsImportDraft() && (
+                          <Alert color="warning" variant="flat" className="text-xs">
+                            {t('system.desktopHttpsImportPartial')}
+                          </Alert>
+                        )}
+                        {requiresImportedDesktopHttpsCertificate() && (
+                          <Alert color="warning" variant="flat" className="text-xs">
+                            {t('system.desktopHttpsImportRequired')}
+                          </Alert>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div className="border-t border-divider pt-4">
@@ -1800,17 +1874,12 @@ export const SystemSettings = forwardRef<
                   </div>
                 </div>
 
-                {desktopHttpsStatus?.usingSelfSigned && (
+                {desktopHttpsMode === 'self-signed' && desktopHttpsStatus?.usingSelfSigned && (
                   <Alert color="warning" variant="flat" className="text-xs">
                     {t('system.desktopHttpsSelfSignedLimitations')}
                   </Alert>
                 )}
 
-                {desktopHttpsMode === 'imported-pem' && (
-                  <Alert color="secondary" variant="flat" className="text-xs">
-                    {t('system.desktopHttpsImportedHint')}
-                  </Alert>
-                )}
               </div>
 
               <div className={`${SETTINGS_PANEL_CLASS} space-y-4`}>

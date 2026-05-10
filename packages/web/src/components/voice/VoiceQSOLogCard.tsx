@@ -22,6 +22,7 @@ import { api, getDisplayMode } from '@tx5dr/core';
 import { useWSEvent } from '../../hooks/useWSEvent';
 import type { QSORecord } from '@tx5dr/contracts';
 import { openLogbookWindow } from '../../utils/windowManager';
+import { QrzCallsignLink } from '../common/QrzCallsignLink';
 
 const logger = createLogger('VoiceQSOLogCard');
 
@@ -83,6 +84,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
   const [endTime, setEndTime] = useState<number | null>(null);
   const [currentFrequency, setCurrentFrequency] = useState(14270000);
   const prevTransmitting = useRef(false);
+  const previousEditingQSOIdRef = useRef<string | null>(null);
   const liveFrequency = radioMode.currentRadioFrequency && radioMode.currentRadioFrequency > 0
     ? radioMode.currentRadioFrequency
     : null;
@@ -142,12 +144,16 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
   // When editingQSO changes, pre-fill form and force expand; clear form when deselected
   useEffect(() => {
     if (!editingQSO) {
+      previousEditingQSOIdRef.current = null;
       resetForm();
       if (liveFrequencyRef.current !== null) {
         setCurrentFrequency(liveFrequencyRef.current);
       }
       return;
     }
+    const isNewEditingSelection = previousEditingQSOIdRef.current !== editingQSO.id;
+    previousEditingQSOIdRef.current = editingQSO.id;
+
     setFormData({
       callsign: editingQSO.callsign,
       rstSent: editingQSO.reportSent ?? '59',
@@ -159,7 +165,9 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
     setStartTime(editingQSO.startTime);
     setEndTime(editingQSO.endTime ?? null);
     setCurrentFrequency(editingQSO.frequency);
-    setCollapsed(false);
+    if (isNewEditingSelection) {
+      setCollapsed(false);
+    }
   }, [editingQSO, setCollapsed]);
 
   const updateField = (field: keyof QSOFormData, value: string) => {
@@ -372,6 +380,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
           placeholder={t('qso.callsignPlaceholder')}
           value={formData.callsign}
           onValueChange={(v) => updateField('callsign', v.toUpperCase())}
+          endContent={<QrzCallsignLink callsign={formData.callsign} size="md" className="mr-1" />}
           variant="flat"
           size="lg"
           classNames={{ input: 'font-mono font-bold text-xl uppercase' }}

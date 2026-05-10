@@ -22,6 +22,9 @@
     "clearRightData": "Clear Right",
     "clear": "Clear"
   },
+  "callsign": {
+    "qrzLinkTitle": "View {{callsign}} on QRZ.com"
+  },
   "qsoNotifications": {
     "enable": "Enable QSO system notifications",
     "disable": "Disable QSO system notifications"
@@ -314,6 +317,16 @@
     "desktopHttpsRedirect": "Automatically redirect external HTTP access to HTTPS",
     "desktopHttpsGenerate": "Generate self-signed certificate",
     "desktopHttpsImport": "Import PEM certificate",
+    "desktopHttpsImportReplace": "Replace PEM certificate",
+    "desktopHttpsImportRequired": "After selecting a proper certificate source, import and validate the PEM certificate and private key before saving.",
+    "desktopHttpsSelectCertButton": "Choose .pem/.crt/.cer certificate",
+    "desktopHttpsSelectKeyButton": "Choose .pem/.key private key",
+    "desktopHttpsCertSelected": ".pem/.crt/.cer certificate selected",
+    "desktopHttpsKeySelected": ".pem/.key private key selected",
+    "desktopHttpsImportSplitHint": "Choose the certificate file (.pem/.crt/.cer) and its matching private key file (.pem/.key) separately. The pair is imported and validated automatically after both files are selected.",
+    "desktopHttpsImportPartial": "One file is still missing. Choose the remaining certificate (.pem/.crt/.cer) or private key (.pem/.key) to validate the pair automatically.",
+    "desktopHttpsImportVerified": "The PEM certificate and private key have been imported and validated.",
+    "desktopHttpsSelfSignedAuto": "No manual upload is needed for self-signed mode. Electron automatically generates or refreshes the local self-signed certificate before starting the HTTPS entrypoint.",
     "desktopHttpsCopyUrl": "Copy access URL",
     "desktopHttpsCopied": "Copied",
     "desktopHttpsStatusTitle": "Current effective status",
@@ -333,7 +346,6 @@
     "desktopHttpsPortInactive": "inactive",
     "desktopHttpsLanHint": "Once enabled, both local and LAN access URLs will be shown here.",
     "desktopHttpsSelfSignedLimitations": "Self-signed limitations: browsers will show an \"unsafe\" or \"untrusted certificate\" warning; every device must manually continue on first visit; this is better for personal, internal, or testing use, not for long-term public access.",
-    "desktopHttpsImportedHint": "Proper certificates are recommended for domain-based and public access. In v1, you manually import a PEM certificate and PEM private key; the app does not request Let's Encrypt certificates automatically.",
     "desktopHttpsSelectCertTitle": "Select the PEM certificate file",
     "desktopHttpsSelectKeyTitle": "Select the PEM private key file",
     "decodeWhileTransmitting": "Decode While Transmitting",
@@ -578,7 +590,30 @@
     "presetCount": "{{count}} presets",
     "loadFailed": "Failed to load frequency presets",
     "saveFailed": "Failed to save frequency presets",
-    "deleteFailed": "Failed to delete frequency preset"
+    "deleteFailed": "Failed to delete frequency preset",
+    "repeaterDuplex": "Repeater DUP",
+    "repeaterShift": "TX Offset Direction",
+    "repeaterOffsetKHz": "TX Offset (kHz)",
+    "repeaterOffsetPlaceholder": "e.g. 600 or 5000",
+    "repeaterOffsetDisabled": "No offset needed when DUP is off",
+    "invalidRepeaterOffset": "Please enter a valid TX offset",
+    "toneSquelch": "Tone Squelch",
+    "ctcssTone": "CTCSS Tone",
+    "ctcssTonePlaceholder": "Select CTCSS tone",
+    "dcsCode": "DCS Code",
+    "dcsCodePlaceholder": "Select DCS code",
+    "invalidCtcssTone": "Please select a valid CTCSS tone",
+    "invalidDcsCode": "Please select a valid DCS code",
+    "repeaterShiftOptions": {
+      "none": "None",
+      "minus": "Minus",
+      "plus": "Plus"
+    },
+    "toneSquelchOptions": {
+      "none": "No tone",
+      "ctcss": "CTCSS Tone",
+      "dcs": "DCS Code"
+    }
   },
   "clock": {
     "title": "Clock Calibration",

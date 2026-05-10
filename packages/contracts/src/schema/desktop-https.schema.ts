@@ -23,7 +23,7 @@ export const DesktopHttpsCertificateMetaSchema = z.object({
 export type DesktopHttpsCertificateMeta = z.infer<typeof DesktopHttpsCertificateMetaSchema>;
 
 export const DesktopHttpsSettingsSchema = z.object({
-  enabled: z.boolean().default(false),
+  enabled: z.boolean().default(true),
   mode: DesktopHttpsModeSchema.default('self-signed'),
   httpsPort: z.number().int().min(1).max(65535).default(8443),
   redirectExternalHttp: z.boolean().default(true),

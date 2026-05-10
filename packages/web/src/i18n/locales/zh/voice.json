@@ -34,12 +34,12 @@
   "ptt": {
     "title": "语音发射",
     "idle": "PTT",
-    "requesting": "请求中...",
-    "transmitting": "正在发射",
+    "requesting": "请求中",
+    "transmitting": "停止发射",
     "lockedByOther": "被占用",
-    "releaseHint": "松开停止发射",
-    "shortcutHint": "按住 {{shortcut}} 发射",
-    "shortcutHintMobile": "按住发射",
+    "releaseHint": "再次点击停止发射",
+    "shortcutHint": "按{{shortcut}}发射",
+    "shortcutHintMobile": "点击切换发射",
     "shortcutNameSpace": "空格",
     "shortcutNameBackquote": "~",
     "shortcutNameHome": "Home",
@@ -64,7 +64,11 @@
     "httpsRequiredRoleUnauthenticated": "未登录用户",
     "httpsRequiredBypassHint": "如果你已经在当前浏览器中手动放行了相关安全限制，可以先记住本次选择并关闭提示，随后再回到主 PTT 按钮重新发射。",
     "httpsRequiredCancel": "取消",
-    "httpsRequiredDontWarnAgain": "不再提示"
+    "httpsRequiredDontWarnAgain": "不再提示",
+    "voiceKeyerTransmitting": "正在发射",
+    "cancelHint": "再点取消",
+    "stopHint": "再点/按{{shortcut}}停",
+    "stopHintMobile": "点击停止发射"
   },
   "qso": {
     "title": "语音通联日志",

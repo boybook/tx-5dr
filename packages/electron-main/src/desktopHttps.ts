@@ -16,7 +16,7 @@ export interface PersistentDesktopHttpsConfig extends DesktopHttpsSettings {
 }
 
 export const DEFAULT_DESKTOP_HTTPS_CONFIG: PersistentDesktopHttpsConfig = {
-  enabled: false,
+  enabled: true,
   mode: 'self-signed',
   httpsPort: 8443,
   redirectExternalHttp: true,
@@ -136,6 +136,72 @@ export async function generateSelfSignedCertificate(params: {
   };
 }
 
+export async function ensureDefaultSelfSignedCertificate(params: {
+  configDir: string;
+  hostname: string;
+  lanAddresses: string[];
+  existingConfig?: Partial<PersistentDesktopHttpsConfig> | null;
+}): Promise<{ config: PersistentDesktopHttpsConfig; changed: boolean; reason: string | null }> {
+  const current = sanitizeDesktopHttpsConfig(params.existingConfig);
+
+  if (!current.enabled || current.mode !== 'self-signed') {
+    return { config: current, changed: false, reason: null };
+  }
+
+  const reason = await getSelfSignedCertificateRegenerationReason({
+    config: current,
+    hostname: params.hostname,
+    lanAddresses: params.lanAddresses,
+  });
+
+  if (!reason) {
+    return { config: current, changed: false, reason: null };
+  }
+
+  return {
+    config: await generateSelfSignedCertificate({
+      configDir: params.configDir,
+      hostname: params.hostname,
+      lanAddresses: params.lanAddresses,
+      existingConfig: current,
+    }),
+    changed: true,
+    reason,
+  };
+}
+
+export async function getSelfSignedCertificateRegenerationReason(params: {
+  config: PersistentDesktopHttpsConfig;
+  hostname: string;
+  lanAddresses: string[];
+}): Promise<string | null> {
+  const config = sanitizeDesktopHttpsConfig(params.config);
+
+  if (!config.enabled || config.mode !== 'self-signed') {
+    return null;
+  }
+
+  if (!config.certPath || !config.keyPath) {
+    return 'missing_certificate_path';
+  }
+
+  try {
+    const [certPem, keyPem] = await Promise.all([
+      fs.readFile(config.certPath, 'utf8'),
+      fs.readFile(config.keyPath, 'utf8'),
+    ]);
+    validateCertificatePair(certPem, keyPem);
+
+    if (!certificateHasExpectedSubjectAltNames(certPem, params.hostname, params.lanAddresses)) {
+      return 'subject_alt_name_mismatch';
+    }
+  } catch (error) {
+    return error instanceof Error && error.message ? error.message : 'invalid_certificate';
+  }
+
+  return null;
+}
+
 export async function importPemCertificate(params: {
   configDir: string;
   certPath: string;
@@ -246,6 +312,28 @@ function createSelfSignedCertificatePem(hostname: string, lanAddresses: string[]
     certPem: forge.pki.certificateToPem(cert),
     keyPem: forge.pki.privateKeyToPem(keys.privateKey),
   };
+}
+
+function certificateHasExpectedSubjectAltNames(certPem: string, hostname: string, lanAddresses: string[]): boolean {
+  const cert = new X509Certificate(certPem);
+  const altNames = new Set(parseAltNames(cert.subjectAltName));
+  const expectedNames = new Set(['localhost', '127.0.0.1']);
+
+  if (hostname) {
+    expectedNames.add(hostname);
+  }
+
+  for (const address of lanAddresses) {
+    expectedNames.add(address);
+  }
+
+  for (const expected of expectedNames) {
+    if (!altNames.has(expected)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function validateCertificatePair(certPem: string, keyPem: string): void {

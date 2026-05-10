@@ -293,17 +293,37 @@ function parseCTYCsv(text) {
       continue;
     }
 
+    const existing = entries.get(entityCode);
+    if (existing) {
+      for (const prefix of prefixes) {
+        existing.prefixSet.add(prefix);
+      }
+      if (continent) {
+        existing.continentSet.add(continent);
+      }
+      existing.cqZone ??= Number.isFinite(cqZone) ? cqZone : undefined;
+      existing.ituZone ??= Number.isFinite(ituZone) ? ituZone : undefined;
+      continue;
+    }
+
     entries.set(entityCode, {
       entityCode,
       name,
       cqZone: Number.isFinite(cqZone) ? cqZone : undefined,
       ituZone: Number.isFinite(ituZone) ? ituZone : undefined,
-      continent: continent ? [continent] : undefined,
-      prefixes: [...prefixes],
+      continentSet: new Set(continent ? [continent] : []),
+      prefixSet: prefixes,
     });
   }
 
-  return entries;
+  return new Map(Array.from(entries, ([entityCode, entry]) => [entityCode, {
+    entityCode,
+    name: entry.name,
+    cqZone: entry.cqZone,
+    ituZone: entry.ituZone,
+    continent: [...entry.continentSet],
+    prefixes: [...entry.prefixSet],
+  }]));
 }
 
 function mergeDXCCData(baseData, sources) {

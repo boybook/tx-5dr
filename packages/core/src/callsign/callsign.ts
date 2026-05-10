@@ -4,14 +4,13 @@
  */
 
 import { FT8MessageParser } from '../parser/ft8-message-parser.js';
-import { createLogger } from '../utils/logger.js';
-
-const logger = createLogger('Callsign');
 import { FT8MessageType } from '@tx5dr/contracts';
-import dxccData from './dxcc.json' with { type: 'json' };
+import ctyCsvText from './cty-data.js';
+import { CtyIndex, parseCTYCsv, type CtyLookupRecord } from './cty.js';
+import { CTY_ENTITY_METADATA } from './cty-metadata.js';
 
 // 中文地名映射表
-const COUNTRY_ZH_MAP: Record<string, string> = {
+export const COUNTRY_ZH_MAP: Record<string, string> = {
   'Canada': '加拿大',
   'Asiatic Russia': '俄罗斯·亚洲',
   'European Russia': '俄罗斯·欧洲',
@@ -379,6 +378,82 @@ const COUNTRY_ZH_MAP: Record<string, string> = {
   'Western Sahara': '西撒哈拉',
   'Yemen': '也门',
   'Zambia': '赞比亚',
+  // Current BigCTY/CTY short names and abbreviations not covered by older display-name variants.
+  'Agalega & St. Brandon': '阿加莱加和圣布兰登',
+  'African Italy': '非洲意大利',
+  'Aland Islands': '奥兰群岛',
+  'Amsterdam & St. Paul Is.': '阿姆斯特丹岛和圣保罗岛',
+  'Andaman & Nicobar Is.': '安达曼-尼科巴群岛',
+  'Annobon Island': '安诺邦岛',
+  'Antigua & Barbuda': '安提瓜和巴布达',
+  'Asiatic Turkey': '土耳其·亚洲',
+  'Aves Island': '阿维斯岛',
+  'Baker & Howland Islands': '贝克岛和豪兰岛',
+  'Banaba Island': '巴纳巴岛',
+  'Bear Island': '熊岛',
+  'Bouvet': '布韦岛',
+  'Ceuta & Melilla': '休达和梅利利亚',
+  'Central Kiribati': '中基里巴斯',
+  "Cote d'Ivoire": '科特迪瓦',
+  'Crozet Island': '克罗泽群岛',
+  'Curacao': '库拉索',
+  'Dem. Rep. of the Congo': '刚果民主共和国',
+  'DPR of Korea': '朝鲜',
+  'Eastern Kiribati': '东基里巴斯',
+  'European Turkey': '土耳其·欧洲',
+  'Fed. Rep. of Germany': '德国',
+  'Galapagos Islands': '加拉帕戈斯群岛',
+  'Heard Island': '赫德岛',
+  'ITU HQ': '国际电联总部',
+  'Johnston Island': '约翰斯顿岛',
+  'Juan de Nova & Europa': '胡安德诺瓦和欧罗巴',
+  'Juan Fernandez Islands': '胡安·费尔南德斯群岛',
+  'Kingdom of Eswatini': '斯威士兰',
+  'Kure Island': '库雷岛',
+  'Lakshadweep Islands': '拉克沙群岛',
+  'Madeira Islands': '马德拉群岛',
+  'Market Reef': '梅凯特礁',
+  'Midway Island': '中途岛',
+  'Minami Torishima': '南鸟岛',
+  'N.Z. Subantarctic Is.': '新西兰亚南极群岛',
+  'Ogasawara': '小笠原群岛',
+  'Palmyra & Jarvis Islands': '帕尔米拉和贾维斯群岛',
+  'Peter 1 Island': '彼得一世岛',
+  'Pitcairn Island': '皮特凯恩岛',
+  'Pr. Edward & Marion Is.': '爱德华王子群岛和马里恩岛',
+  'Republic of Kosovo': '科索沃',
+  'Republic of South Sudan': '南苏丹',
+  'Reunion Island': '留尼汪岛',
+  'Revillagigedo': '雷维利亚希赫多群岛',
+  'Rodriguez Island': '罗德里格斯岛',
+  'Saba & St. Eustatius': '萨巴和圣尤斯特歇斯',
+  'San Andres & Providencia': '圣安德烈斯和普罗维登西亚',
+  'San Felix & San Ambrosio': '圣费利克斯和圣安布罗西奥群岛',
+  'Sao Tome & Principe': '圣多美和普林西比',
+  'Scarborough Reef': '黄岩岛',
+  'Shetland Islands': '设得兰群岛',
+  'Sicily': '西西里',
+  'Slovak Republic': '斯洛伐克',
+  'Sov Mil Order of Malta': '马耳他主权军事修会',
+  'St. Barthelemy': '圣巴泰勒米',
+  'St. Kitts & Nevis': '圣基茨和尼维斯',
+  'St. Lucia': '圣卢西亚',
+  'St. Martin': '圣马丁',
+  'St. Peter & St. Paul': '圣彼得和圣保罗岩礁',
+  'St. Pierre & Miquelon': '圣皮埃尔和密克隆',
+  'St. Vincent': '圣文森特',
+  'Timor - Leste': '东帝汶',
+  'Tokelau Islands': '托克劳群岛',
+  'Trindade & Martim Vaz': '特林达德和马丁瓦斯群岛',
+  'Trinidad & Tobago': '特立尼达和多巴哥',
+  'Tristan da Cunha & Gough Islands': '特里斯坦-达库尼亚和戈夫岛',
+  'Turks & Caicos Islands': '特克斯和凯科斯群岛',
+  'UK Base Areas on Cyprus': '塞浦路斯英属基地区',
+  'United Nations HQ': '联合国总部',
+  'Vatican City': '梵蒂冈',
+  'Vienna Intl Ctr': '维也纳国际中心',
+  'Wallis & Futuna Islands': '瓦利斯和富图纳群岛',
+  'Western Kiribati': '西基里巴斯',
   'Zimbabwe': '津巴布韦'
 };
 
@@ -408,39 +483,25 @@ class LRU<K, V> {
   }
 }
 
-// DXCC 实体接口定义
+// DXCC 实体接口定义。英文展示名直接来自 CTY 原始数据。
 interface DXCCEntity {
-  entityCode: number;
+  entityCode?: number;
   name: string;
   prefix?: string;
-  prefixRegex?: string;
   flag?: string;
   countryCode?: string;
   continent?: string[];
-  cq?: number[];
-  itu?: number[];
   cqZone?: number;
   ituZone?: number;
-  deleted?: boolean;
   countryZh?: string;
   countryEn?: string;
-  validStart?: string;
-  validEnd?: string;
+  waeOnly?: boolean;
+  latitude?: number;
+  longitude?: number;
+  utcOffsetHours?: number;
 }
 
-interface DXCCDataFile {
-  version?: string;
-  source?: {
-    type?: string;
-    upstream?: string;
-    sourceVersion?: string;
-    generatedBy?: string;
-    generatedAt?: string;
-  };
-  dxcc: DXCCEntity[];
-}
-
-export type DXCCMatchKind = 'prefix' | 'regex' | 'heuristic' | 'unknown';
+export type DXCCMatchKind = 'prefix' | 'exact' | 'heuristic' | 'unknown';
 export type DXCCDataSource = 'local' | 'hamqth';
 
 export interface DXCCResolutionResult {
@@ -452,19 +513,9 @@ export interface DXCCResolutionResult {
   dataSource: DXCCDataSource;
 }
 
-const DXCC_DATA = dxccData as DXCCDataFile;
+const CTY_PARSE_RESULT = parseCTYCsv(ctyCsvText);
 
-export const DXCC_RESOLVER_VERSION = DXCC_DATA.version || '2026.04.14';
-
-// 前缀Trie结构（字符图）
-interface PrefixTrieNode {
-  c: Map<string, PrefixTrieNode>; // children
-  e?: DXCCEntity | DXCCEntity[]; // entity or entities at terminal (支持单个或多个实体)
-  p?: string; // prefix at terminal
-}
-function createTrieNode(): PrefixTrieNode {
-  return { c: new Map() };
-}
+export const DXCC_RESOLVER_VERSION = CTY_PARSE_RESULT.version || 'bigcty-runtime';
 
 export interface CallsignInfo {
   callsign: string;
@@ -486,101 +537,6 @@ export interface CallsignInfo {
   dxccMatchKind?: DXCCMatchKind;
   dxccDataSource?: DXCCDataSource;
   dxccResolverVersion?: string;
-}
-
-interface DXCCMatchCandidate {
-  entity: DXCCEntity;
-  matchedPrefix?: string;
-  confidence: 'exception' | 'prefix';
-  matchKind: Extract<DXCCMatchKind, 'prefix' | 'regex'>;
-  active: boolean;
-  specificity: number;
-  candidateOrder: number;
-  priorityScore: number;
-}
-
-function normalizeDXCCDateBound(value?: string, endOfDay = false): number | null {
-  if (!value) return null;
-  const suffix = endOfDay ? 'T23:59:59.999Z' : 'T00:00:00.000Z';
-  const parsed = new Date(`${value}${suffix}`).getTime();
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function isEntityActiveAt(entity: DXCCEntity, timestamp: number): boolean {
-  const start = normalizeDXCCDateBound(entity.validStart);
-  const end = normalizeDXCCDateBound(entity.validEnd, true);
-  if (start !== null && timestamp < start) return false;
-  if (end !== null && timestamp > end) return false;
-  return true;
-}
-
-function normalizeDXCCEntity(entity: DXCCEntity): DXCCEntity {
-  return {
-    ...entity,
-    cqZone: entity.cqZone ?? entity.cq?.[0],
-    ituZone: entity.ituZone ?? entity.itu?.[0],
-  };
-}
-
-function findMatchingDeclaredPrefix(entity: DXCCEntity, callsign: string): string | undefined {
-  const prefixes = entity.prefix?.split(',').map((prefix) => prefix.trim()).filter(Boolean) || [];
-  const upperCallsign = callsign.toUpperCase();
-  const matches = prefixes.filter((prefix) => upperCallsign.startsWith(prefix.toUpperCase()));
-  if (matches.length === 0) {
-    return prefixes[0];
-  }
-
-  return matches.sort((left, right) => right.length - left.length)[0];
-}
-
-function createCandidateCallsigns(callsign: string): string[] {
-  const upper = callsign.toUpperCase().trim();
-  if (!upper.includes('/')) {
-    return [upper];
-  }
-
-  const seen = new Set<string>();
-  const candidates: Array<{ value: string; index: number }> = [];
-  const pushCandidate = (value: string) => {
-    if (!value || seen.has(value)) return;
-    seen.add(value);
-    candidates.push({ value, index: candidates.length });
-  };
-
-  const segments = upper.split('/').map((segment) => segment.trim()).filter(Boolean);
-  pushCandidate(upper);
-  for (const segment of segments) {
-    pushCandidate(segment);
-  }
-
-  const longest = segments
-    .filter((segment) => /[A-Z]/.test(segment) && /\d/.test(segment))
-    .sort((left, right) => right.length - left.length)[0];
-  if (longest) {
-    pushCandidate(longest);
-  }
-
-  candidates.sort((left, right) => {
-    const leftPrefixLength = dxccIndex.getLongestPrefix(left.value)?.length ?? 0;
-    const rightPrefixLength = dxccIndex.getLongestPrefix(right.value)?.length ?? 0;
-    if (leftPrefixLength !== rightPrefixLength) {
-      return rightPrefixLength - leftPrefixLength;
-    }
-
-    const leftRegexLike = left.value.includes('/') ? 1 : 0;
-    const rightRegexLike = right.value.includes('/') ? 1 : 0;
-    if (leftRegexLike !== rightRegexLike) {
-      return rightRegexLike - leftRegexLike;
-    }
-
-    if (left.value.length !== right.value.length) {
-      return left.value.length - right.value.length;
-    }
-
-    return left.index - right.index;
-  });
-
-  return candidates.map((candidate) => candidate.value);
 }
 
 export interface FT8LocationInfo {
@@ -870,101 +826,6 @@ class JapanCallsignParser {
   }
 }
 
-// 俄罗斯呼号解析器（区分欧洲俄罗斯和亚洲俄罗斯）
-class RussiaCallsignParser {
-  // 俄罗斯呼号前缀：UA-UI 系列和 R 系列
-  private static readonly RUSSIA_PREFIX_REGEX = /^(U[A-I]|R[A-Z0-9])/;
-
-  /**
-   * 解析俄罗斯呼号，区分欧洲和亚洲部分
-   *
-   * 规则说明:
-   * 欧洲俄罗斯:
-   * - UA1-7, UB1-7, UC1-7, UD1-7, UE1-7, UF1-7, UG1-7, UH1-7, UI1-7
-   * - R0-7, RA0-7, RB0-7, ..., RZ0-7
-   * - 特殊: UA2/UI2 带 F 或 K 后缀 = 加里宁格勒
-   * - 特殊: R8/R9/UA8-9/UI8-9 带 F/G/X 开头的后缀 = 欧洲俄罗斯
-   *
-   * 亚洲俄罗斯:
-   * - UA8-9-0, UB8-9-0, UC8-9-0, ..., UI8-9-0
-   * - R8-9-0 系列（除特殊后缀外）
-   */
-  public static parseRussiaCallsign(callsign: string): { country: string; countryZh: string; countryEn: string; countryCode: string; entityCode: number; continent: string[]; cqZone: number; ituZone: number } | null {
-    if (!callsign) return null;
-    const upper = callsign.toUpperCase();
-
-    // 检查是否为俄罗斯呼号
-    if (!this.RUSSIA_PREFIX_REGEX.test(upper)) return null;
-
-    // 提取数字和后缀
-    const digitMatch = upper.match(/\d/);
-    if (!digitMatch) return null;
-
-    const digit = parseInt(digitMatch[0]);
-    const digitIndex = upper.indexOf(digitMatch[0]);
-    const suffix = digitIndex < upper.length - 1 ? upper.substring(digitIndex + 1) : '';
-
-    // 判断是 UA-UI 系列还是 R 系列
-    const isUASeries = /^U[A-I]/.test(upper);
-    const isRSeries = /^R/.test(upper);
-
-    if (!isUASeries && !isRSeries) return null;
-
-    // 欧洲俄罗斯判定
-    let isEuropean = false;
-
-    if (isUASeries) {
-      // UA-UI 系列
-      if (digit >= 1 && digit <= 7) {
-        isEuropean = true;
-      } else if ((digit === 8 || digit === 9) && suffix.length > 0) {
-        // 检查后缀是否以 F, G, X 开头（欧洲俄罗斯特例）
-        const firstLetter = suffix[0];
-        if (firstLetter === 'F' || firstLetter === 'G' || firstLetter === 'X') {
-          isEuropean = true;
-        }
-      }
-    } else if (isRSeries) {
-      // R 系列（RA-RZ, R0-R9）
-      if (digit >= 0 && digit <= 7) {
-        isEuropean = true;
-      } else if ((digit === 8 || digit === 9) && suffix.length > 0) {
-        // 检查后缀是否以 F, G, X 开头
-        const firstLetter = suffix[0];
-        if (firstLetter === 'F' || firstLetter === 'G' || firstLetter === 'X') {
-          isEuropean = true;
-        }
-      }
-    }
-
-    if (isEuropean) {
-      // 欧洲俄罗斯
-      return {
-        country: 'European Russia',
-        countryZh: '俄罗斯·欧洲',
-        countryEn: 'European Russia',
-        countryCode: 'RU',
-        entityCode: 54,
-        continent: ['EU'],
-        cqZone: 16,
-        ituZone: 29
-      };
-    } else {
-      // 亚洲俄罗斯
-      return {
-        country: 'Asiatic Russia',
-        countryZh: '俄罗斯·亚洲',
-        countryEn: 'Asiatic Russia',
-        countryCode: 'RU',
-        entityCode: 15,
-        continent: ['AS'],
-        cqZone: 18,
-        ituZone: 30
-      };
-    }
-  }
-}
-
 const US_ENTITY_STATE_MAP: Record<string, USStateInfo> = {
   'Alaska': { state: 'AK', confidence: 'high' },
   'American Samoa': { state: 'AS', confidence: 'high' },
@@ -973,6 +834,7 @@ const US_ENTITY_STATE_MAP: Record<string, USStateInfo> = {
   'Mariana Islands': { state: 'MP', confidence: 'high' },
   'Puerto Rico': { state: 'PR', confidence: 'high' },
   'US Virgin Islands': { state: 'VI', confidence: 'high' },
+  'Virgin Islands': { state: 'VI', confidence: 'high' },
 };
 
 const US_SUBDIVISION_EN_MAP: Record<string, string> = {
@@ -1007,7 +869,7 @@ function resolveUSStateInfo(callsign: string, entity: DXCCEntity | null): USStat
     return mappedEntity;
   }
 
-  if (entity.name !== 'United States of America' || entity.countryCode !== 'US') {
+  if (entity.name !== 'United States' || entity.countryCode !== 'US') {
     return null;
   }
 
@@ -1027,305 +889,70 @@ function resolveUSStateInfo(callsign: string, entity: DXCCEntity | null): USStat
   return null;
 }
 
-// DXCC 数据索引
+const CTY_NAME_ZH_OVERRIDES: Record<string, string> = {
+  '390:Asiatic Turkey': '土耳其·亚洲',
+  '390:European Turkey': '土耳其·欧洲',
+  '248:Sicily': '西西里',
+  '291:United States': '美国',
+  '105:Guantanamo Bay': '关塔那摩湾',
+  '517:Kingdom of Eswatini': '斯威士兰',
+  '24:Bouvet': '布韦岛',
+  '192:Ogasawara': '小笠原群岛',
+  '197:Revillagigedo': '雷维利亚希赫多群岛',
+};
+
+const ENTITY_CODE_ZH_FALLBACK: Record<number, string> = {
+  390: '土耳其',
+  291: '美国',
+  318: '中国',
+  339: '日本',
+  248: '意大利',
+  225: '撒丁岛',
+  279: '苏格兰',
+  259: '斯瓦尔巴群岛',
+  15: '俄罗斯·亚洲',
+  54: '俄罗斯·欧洲',
+};
+
+function resolveCtyChineseName(entityCode: number | undefined, ctyName: string): string {
+  const keyed = entityCode === undefined ? undefined : CTY_NAME_ZH_OVERRIDES[`${entityCode}:${ctyName}`];
+  if (keyed) return keyed;
+  const direct = COUNTRY_ZH_MAP[ctyName];
+  if (direct) return direct;
+  if (entityCode !== undefined && ENTITY_CODE_ZH_FALLBACK[entityCode]) {
+    return ENTITY_CODE_ZH_FALLBACK[entityCode];
+  }
+  return ctyName;
+}
+
+function ctyRecordToEntity(record: CtyLookupRecord): DXCCEntity {
+  const metadata = record.entityCode === undefined ? undefined : CTY_ENTITY_METADATA[record.entityCode];
+  return {
+    entityCode: record.entityCode,
+    name: record.entityName,
+    countryZh: resolveCtyChineseName(record.entityCode, record.entityName),
+    countryEn: record.entityName,
+    countryCode: metadata?.countryCode,
+    flag: metadata?.flag,
+    prefix: record.matchedPrefix,
+    continent: record.continent ? [record.continent] : undefined,
+    cqZone: Number.isFinite(record.cqZone) ? record.cqZone : undefined,
+    ituZone: Number.isFinite(record.ituZone) ? record.ituZone : undefined,
+    waeOnly: record.waeOnly,
+    latitude: Number.isFinite(record.latitude) ? record.latitude : undefined,
+    longitude: Number.isFinite(record.longitude) ? record.longitude : undefined,
+    utcOffsetHours: Number.isFinite(record.utcOffsetHours) ? record.utcOffsetHours : undefined,
+  };
+}
+
+// DXCC 数据索引：直接按 BigCTY/CTY 官方 token 语义运行时解析。
 class DXCCIndex {
-  private entityMap: Map<number, DXCCEntity>;
-  private prefixRegexMap: Map<RegExp, DXCCEntity>;
-  private prefixMap: Map<string, DXCCEntity>;
-  private countryNameMap: Map<string, DXCCEntity>;
-  // 基于字符的前缀Trie，用于最长前缀匹配（比遍历更高效）
-  private prefixTrie: PrefixTrieNode;
-  // 结果缓存，减少重复解析成本
-  private prefixLRU: LRU<string, string>;
-  private entityLRU: LRU<string, DXCCResolutionResult>;
-  // 实体优先级评分缓存（用于前缀冲突时的优先级排序）
-  private entityPriorityScores: Map<number, number>;
+  private readonly ctyIndex = new CtyIndex(CTY_PARSE_RESULT, 'bigcty-runtime');
+  private readonly entityLRU = new LRU<string, DXCCResolutionResult>(5000);
 
-  constructor() {
-    this.entityMap = new Map();
-    this.prefixRegexMap = new Map();
-    this.prefixMap = new Map();
-    this.countryNameMap = new Map();
-    this.prefixTrie = createTrieNode();
-    this.prefixLRU = new LRU(5000);
-    this.entityLRU = new LRU(5000);
-    this.entityPriorityScores = new Map();
-
-    // 初始化索引
-    this.initializeIndex();
-  }
-
-  /**
-   * 预计算所有实体的优先级评分
-   * 用于解决前缀冲突时的优先级排序
-   *
-   * 核心原理：前缀越少的实体，每个前缀对它越重要（前缀独占度）
-   *
-   * 评分维度：
-   * 1. 前缀独占度 (60%)：前缀越少 = 该前缀越重要（反向权重）
-   * 2. 正则表达式复杂度 (20%)：越简单/宽松 = 主要使用范围
-   * 3. 实体代码权重 (10%)：代码越小 = 越早分配（参考性）
-   * 4. JSON顺序 (10%)：先出现的实体优先
-   */
-  private calculateEntityPriorities(): void {
-    const entities = DXCC_DATA.dxcc.map(normalizeDXCCEntity);
-
-    // 计算归一化所需的最大最小值
-    const prefixCounts = entities.map((e) =>
-      e.prefix ? e.prefix.split(',').length : 0
-    );
-    const maxPrefixes = Math.max(...prefixCounts);
-
-    const entityCodes = entities.map((e) => e.entityCode);
-    const maxCode = Math.max(...entityCodes);
-    const minCode = Math.min(...entityCodes);
-
-    const regexLengths = entities
-      .map((e) => e.prefixRegex?.length || 0)
-      .filter((l) => l > 0);
-    const maxRegexLength = Math.max(...regexLengths);
-    const minRegexLength = Math.min(...regexLengths);
-
-    // 为每个实体计算优先级评分
-    entities.forEach((entity, index: number) => {
-      const prefixCount = entity.prefix ? entity.prefix.split(',').length : 0;
-
-      // 1. 前缀得分 (0-60)，混合策略
-      // - 主要国家（前缀≥10）：前缀越多得分越高，满分60（Argentina, France等）
-      // - 小实体（前缀<10）：前缀越少得分越高，但上限10，仅用于同级别实体间打破平局
-      let prefixScore = 0;
-      if (prefixCount >= 10) {
-        // 主要国家：正向评分，使用对数尺度，权重最高
-        prefixScore = 60 * Math.log(1 + prefixCount) / Math.log(1 + maxPrefixes);
-      } else if (prefixCount > 0) {
-        // 小实体：反向评分（前缀越少越专一），但限制上限为10分
-        // 确保主要国家的对数得分能够显著超过小实体
-        prefixScore = 10 * (1 - prefixCount / 10);
-      }
-
-      // 2. 正则表达式复杂度得分 (0-20)，长度越短（越简单）得分越高
-      const regexLength = entity.prefixRegex?.length || maxRegexLength;
-      const regexScore = maxRegexLength === minRegexLength ? 20 :
-        20 * (1 - (regexLength - minRegexLength) / (maxRegexLength - minRegexLength));
-
-      // 3. 实体代码得分 (0-10)，代码越小得分越高
-      const codeScore = maxCode === minCode ? 10 :
-        10 * (1 - (entity.entityCode - minCode) / (maxCode - minCode));
-
-      // 4. JSON顺序得分 (0-10)，先出现的得分越高
-      const orderScore = 10 * (1 - index / entities.length);
-
-      // 总分
-      const totalScore = prefixScore + regexScore + codeScore + orderScore;
-      this.entityPriorityScores.set(entity.entityCode, totalScore);
-    });
-  }
-
-  private initializeIndex() {
-    // 第一步：预计算所有实体的优先级评分
-    this.calculateEntityPriorities();
-
-    // 第二步：构建索引和 Trie
-    DXCC_DATA.dxcc.map(normalizeDXCCEntity).forEach(entity => {
-      // 实体代码索引
-      this.entityMap.set(entity.entityCode, entity);
-
-      // 国家名称索引
-      this.countryNameMap.set(entity.name, entity);
-
-      // 前缀正则表达式索引
-      if (entity.prefixRegex) {
-        try {
-          const regex = new RegExp(entity.prefixRegex);
-          this.prefixRegexMap.set(regex, entity);
-        } catch (e) {
-          logger.warn(`Invalid prefix regex for ${entity.name}: ${entity.prefixRegex}`);
-        }
-      }
-
-      // 前缀索引（在初始化阶段完成 split/trim 并构建 Trie）
-      if (entity.prefix) {
-        const prefixes = entity.prefix.split(',').map((p) => p.trim()).filter(Boolean);
-        for (const prefix of prefixes) {
-          this.prefixMap.set(prefix, entity);
-          this.insertIntoTrie(prefix, entity);
-        }
-      }
-    });
-  }
-
-  /**
-   * 向 Trie 中插入前缀和对应的实体
-   * 支持多实体共享同一前缀，使用优先级评分进行排序
-   */
-  private insertIntoTrie(prefix: string, entity: DXCCEntity): void {
-    let node = this.prefixTrie;
-    for (let i = 0; i < prefix.length; i++) {
-      const ch = prefix[i];
-      let next = node.c.get(ch);
-      if (!next) {
-        next = createTrieNode();
-        node.c.set(ch, next);
-      }
-      node = next;
-    }
-
-    // 在终止节点记录命中的实体（支持单实体或多实体数组）
-    if (!node.e) {
-      // 第一个实体，直接赋值
-      node.e = entity;
-    } else if (Array.isArray(node.e)) {
-      // 已经是数组，添加新实体并按优先级排序
-      node.e.push(entity);
-      this.sortEntitiesByPriority(node.e);
-    } else {
-      // 第二个实体，转为数组并排序
-      node.e = [node.e, entity];
-      this.sortEntitiesByPriority(node.e);
-    }
-    node.p = prefix;
-  }
-
-  /**
-   * 按优先级评分对实体数组进行排序（降序）
-   */
-  private sortEntitiesByPriority(entities: DXCCEntity[]): void {
-    entities.sort((a, b) => {
-      const scoreA = this.entityPriorityScores.get(a.entityCode) || 0;
-      const scoreB = this.entityPriorityScores.get(b.entityCode) || 0;
-      return scoreB - scoreA; // 降序排序，得分高的在前
-    });
-  }
-
-  /**
-   * 在 Trie 中进行最长前缀匹配
-   * 如果节点包含多个实体（数组），返回优先级最高的（数组第一个元素）
-   */
-  private longestTrieMatch(callsign: string): { prefix: string | null; entities: DXCCEntity[] } {
-    const upper = callsign.toUpperCase();
-    const clean = upper.trim();
-
-    let node = this.prefixTrie;
-    let lastPrefix: string | null = null;
-    let lastEntities: DXCCEntity[] = [];
-
-    for (let i = 0; i < clean.length; i++) {
-      const ch = clean[i];
-      const next = node.c.get(ch);
-      if (!next) break;
-      node = next;
-      if (node.e) {
-        lastPrefix = node.p || null;
-        lastEntities = Array.isArray(node.e) ? [...node.e] : [node.e];
-      }
-    }
-
-    this.prefixLRU.set(clean, lastPrefix || '');
-    return { prefix: lastPrefix, entities: lastEntities };
-  }
-
-  private collectTrieMatches(callsign: string): Array<{ prefix: string; entities: DXCCEntity[] }> {
-    const clean = callsign.toUpperCase().trim();
-    const matches: Array<{ prefix: string; entities: DXCCEntity[] }> = [];
-
-    let node = this.prefixTrie;
-    for (let i = 0; i < clean.length; i++) {
-      const ch = clean[i];
-      const next = node.c.get(ch);
-      if (!next) break;
-      node = next;
-      if (node.e && node.p) {
-        matches.push({
-          prefix: node.p,
-          entities: Array.isArray(node.e) ? [...node.e] : [node.e],
-        });
-      }
-    }
-
-    return matches;
-  }
-
-  private compareMatchCandidates(left: DXCCMatchCandidate, right: DXCCMatchCandidate): number {
-    if (left.active !== right.active) {
-      return left.active ? -1 : 1;
-    }
-
-    if (left.candidateOrder !== right.candidateOrder) {
-      return left.candidateOrder - right.candidateOrder;
-    }
-
-    if (left.matchKind !== right.matchKind) {
-      return left.matchKind === 'prefix' ? -1 : 1;
-    }
-
-    if (left.confidence !== right.confidence) {
-      return left.confidence === 'prefix' ? -1 : 1;
-    }
-
-    if (left.specificity !== right.specificity) {
-      return right.specificity - left.specificity;
-    }
-
-    if (left.priorityScore !== right.priorityScore) {
-      return right.priorityScore - left.priorityScore;
-    }
-
-    return left.entity.entityCode - right.entity.entityCode;
-  }
-
-  private collectMatchCandidates(callsign: string, timestamp: number, candidateOrder: number): DXCCMatchCandidate[] {
-    const deduped = new Map<number, DXCCMatchCandidate>();
-    const upsert = (match: DXCCMatchCandidate) => {
-      const existing = deduped.get(match.entity.entityCode);
-      if (!existing || this.compareMatchCandidates(match, existing) < 0) {
-        deduped.set(match.entity.entityCode, match);
-      }
-    };
-
-    for (const trieMatch of this.collectTrieMatches(callsign)) {
-      const activeEntities = trieMatch.entities.filter((entity) => isEntityActiveAt(entity, timestamp));
-      const entitiesToConsider = activeEntities.length > 0 ? activeEntities : trieMatch.entities;
-      const confidence = activeEntities.length > 0 ? 'prefix' as const : 'exception' as const;
-
-      for (const entity of entitiesToConsider) {
-        upsert({
-          entity,
-          matchedPrefix: trieMatch.prefix,
-          confidence,
-          matchKind: 'prefix',
-          active: isEntityActiveAt(entity, timestamp),
-          specificity: trieMatch.prefix.length,
-          candidateOrder,
-          priorityScore: this.entityPriorityScores.get(entity.entityCode) || 0,
-        });
-      }
-    }
-
-    for (const [regex, entity] of this.prefixRegexMap) {
-      if (!regex.test(callsign)) continue;
-      const matchedPrefix = findMatchingDeclaredPrefix(entity, callsign);
-      upsert({
-        entity,
-        matchedPrefix,
-        confidence: 'exception',
-        matchKind: 'regex',
-        active: isEntityActiveAt(entity, timestamp),
-        specificity: matchedPrefix?.length || 0,
-        candidateOrder,
-        priorityScore: this.entityPriorityScores.get(entity.entityCode) || 0,
-      });
-    }
-
-    return Array.from(deduped.values());
-  }
-
-  public getLongestPrefix(callsign: string): string | null {
-    const { prefix } = this.longestTrieMatch(callsign);
-    return prefix || null;
-  }
-
-  public resolveCallsign(callsign: string, timestamp: number = Date.now()): DXCCResolutionResult {
-    if (!callsign) {
+  public resolveCallsign(callsign: string, _timestamp: number = Date.now()): DXCCResolutionResult {
+    const upperCallsign = callsign?.toUpperCase().trim();
+    if (!upperCallsign) {
       return {
         entity: null,
         confidence: 'unknown',
@@ -1335,11 +962,7 @@ class DXCCIndex {
       };
     }
 
-    const upperCallsign = callsign.toUpperCase();
-    const cacheKey = `${upperCallsign}|${new Date(timestamp).toISOString().slice(0, 10)}`;
-
-    // LRU 缓存命中
-    const cached = this.entityLRU.get(cacheKey);
+    const cached = this.entityLRU.get(upperCallsign);
     if (cached !== undefined) {
       return {
         entity: cached.entity ? { ...cached.entity } : null,
@@ -1351,101 +974,29 @@ class DXCCIndex {
       };
     }
 
-    // 首先尝试中国呼号解析
-    const chinaInfo = ChinaCallsignParser.parseChinaCallsign(upperCallsign);
-    if (chinaInfo) {
-      const result: DXCCResolutionResult = {
-        entity: {
-          name: chinaInfo.country,
-          countryZh: chinaInfo.countryZh,
-          countryEn: chinaInfo.countryEn,
-          countryCode: chinaInfo.countryCode,
-          flag: '🇨🇳',
-          prefix: upperCallsign.substring(0, 2),
-          entityCode: 318, // 中国的 DXCC 实体代码
-          continent: ['AS'],
-          cqZone: 24,
-          ituZone: 44,
-        },
-        matchedPrefix: upperCallsign.substring(0, 2),
-        confidence: 'heuristic',
+    const record = this.ctyIndex.lookup(upperCallsign);
+    if (!record) {
+      return {
+        entity: null,
+        confidence: 'unknown',
         needsReview: false,
-        matchKind: 'heuristic',
+        matchKind: 'unknown',
         dataSource: 'local',
       };
-      this.entityLRU.set(cacheKey, result);
-      return result;
     }
 
-    // 尝试俄罗斯呼号解析（区分欧洲和亚洲部分）
-    const russiaInfo = RussiaCallsignParser.parseRussiaCallsign(upperCallsign);
-    if (russiaInfo) {
-      const result: DXCCResolutionResult = {
-        entity: {
-          name: russiaInfo.country,
-          countryZh: russiaInfo.countryZh,
-          countryEn: russiaInfo.countryEn,
-          countryCode: russiaInfo.countryCode,
-          flag: '🇷🇺',
-          prefix: upperCallsign.match(/^[A-Z]+/)?.[0],
-          entityCode: russiaInfo.entityCode,
-          continent: russiaInfo.continent,
-          cqZone: russiaInfo.cqZone,
-          ituZone: russiaInfo.ituZone,
-        },
-        matchedPrefix: upperCallsign.match(/^[A-Z]+/)?.[0],
-        confidence: 'heuristic' as const,
-        needsReview: false,
-        matchKind: 'heuristic',
-        dataSource: 'local',
-      };
-      this.entityLRU.set(cacheKey, result);
-      return result;
-    }
-
-    const deduped = new Map<number, DXCCMatchCandidate>();
-    const upsert = (match: DXCCMatchCandidate) => {
-      const existing = deduped.get(match.entity.entityCode);
-      if (!existing || this.compareMatchCandidates(match, existing) < 0) {
-        deduped.set(match.entity.entityCode, match);
-      }
-    };
-
-    createCandidateCallsigns(upperCallsign).forEach((candidate, candidateOrder) => {
-      for (const match of this.collectMatchCandidates(candidate, timestamp, candidateOrder)) {
-        upsert(match);
-      }
-    });
-
-    const matches = Array.from(deduped.values()).sort((left, right) => this.compareMatchCandidates(left, right));
-    if (matches.length > 0) {
-      const chosen = matches[0];
-      const activeEntityCount = new Set(
-        matches.filter((match) => match.active).map((match) => match.entity.entityCode)
-      ).size;
-      const result = {
-        entity: {
-          ...chosen.entity,
-          countryZh: COUNTRY_ZH_MAP[chosen.entity.name] || chosen.entity.name,
-          countryEn: chosen.entity.name,
-        },
-        matchedPrefix: chosen.matchedPrefix,
-        confidence: chosen.confidence,
-        needsReview: activeEntityCount > 1,
-        matchKind: chosen.matchKind,
-        dataSource: 'local' as const,
-      };
-      this.entityLRU.set(cacheKey, result);
-      return result;
-    }
-
-    // 不缓存负结果，避免数据或规则更新后“粘住”未命中
-    return {
-      entity: null,
-      confidence: 'unknown',
-      needsReview: false,
-      matchKind: 'unknown',
+    const result: DXCCResolutionResult = {
+      entity: ctyRecordToEntity(record),
+      matchedPrefix: record.matchedPrefix,
+      confidence: record.matchKind === 'exact' ? 'exception' : 'prefix',
+      needsReview: record.needsReview,
+      matchKind: record.matchKind,
       dataSource: 'local',
+    };
+    this.entityLRU.set(upperCallsign, result);
+    return {
+      ...result,
+      entity: result.entity ? { ...result.entity } : null,
     };
   }
 
@@ -1454,15 +1005,56 @@ class DXCCIndex {
   }
 
   public getEntityByCode(code: number): DXCCEntity | undefined {
-    return this.entityMap.get(code);
+    const row = this.ctyIndex.getAllRows().find((candidate) => candidate.entityCode === code);
+    if (!row) return undefined;
+    const metadata = CTY_ENTITY_METADATA[code];
+    return {
+      entityCode: row.entityCode,
+      name: row.entityName,
+      countryZh: resolveCtyChineseName(row.entityCode, row.entityName),
+      countryEn: row.entityName,
+      countryCode: metadata?.countryCode,
+      flag: metadata?.flag,
+      prefix: row.primaryPrefix,
+      continent: row.continent ? [row.continent] : undefined,
+      cqZone: row.cqZone,
+      ituZone: row.ituZone,
+      waeOnly: row.waeOnly,
+      latitude: row.latitude,
+      longitude: row.longitude,
+      utcOffsetHours: row.utcOffsetHours,
+    };
   }
 
   public getEntityByName(name: string): DXCCEntity | undefined {
-    return this.countryNameMap.get(name);
+    const row = this.ctyIndex.getAllRows().find((candidate) => candidate.entityName === name);
+    if (!row?.entityCode) return undefined;
+    return this.getEntityByCode(row.entityCode);
   }
 
   public getAllEntities(): DXCCEntity[] {
-    return Array.from(this.entityMap.values());
+    const seen = new Set<string>();
+    const entities: DXCCEntity[] = [];
+    for (const row of this.ctyIndex.getAllRows()) {
+      const key = `${row.entityCode ?? 'unknown'}:${row.entityName}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const metadata = row.entityCode === undefined ? undefined : CTY_ENTITY_METADATA[row.entityCode];
+      entities.push({
+        entityCode: row.entityCode,
+        name: row.entityName,
+        countryZh: resolveCtyChineseName(row.entityCode, row.entityName),
+        countryEn: row.entityName,
+        countryCode: metadata?.countryCode,
+        flag: metadata?.flag,
+        prefix: row.primaryPrefix,
+        continent: row.continent ? [row.continent] : undefined,
+        cqZone: row.cqZone,
+        ituZone: row.ituZone,
+        waeOnly: row.waeOnly,
+      });
+    }
+    return entities;
   }
 }
 
@@ -1480,7 +1072,10 @@ export function getCallsignInfo(callsign: string, timestamp: number = Date.now()
   const resolution = dxccIndex.resolveCallsign(callsign, timestamp);
   const entity = resolution.entity;
   if (!entity) return undefined;
-  const japanInfo = entity.entityCode === 339 && !entity.deleted
+  const chinaInfo = entity.entityCode === 318
+    ? ChinaCallsignParser.parseChinaCallsign(callsign.toUpperCase())
+    : null;
+  const japanInfo = entity.entityCode === 339
     ? JapanCallsignParser.parseJapanCallsign(callsign)
     : null;
   const usStateInfo = resolveUSStateInfo(callsign, entity);
@@ -1491,11 +1086,13 @@ export function getCallsignInfo(callsign: string, timestamp: number = Date.now()
   return {
     callsign,
     country: entity.name,
-    countryZh: japanInfo?.countryZh
-      ?? (entity.name === 'United States of America' && usSubdivisionZh ? `美国·${usSubdivisionZh}` : entity.countryZh),
-    countryEn: japanInfo?.countryEn
-      ?? (entity.name === 'United States of America' && usSubdivisionEn ? `United States·${usSubdivisionEn}` : entity.countryEn ?? entity.name),
-    countryCode: entity.countryCode,
+    countryZh: chinaInfo?.countryZh
+      ?? japanInfo?.countryZh
+      ?? (entity.name === 'United States' && usSubdivisionZh ? `美国·${usSubdivisionZh}` : entity.countryZh),
+    countryEn: chinaInfo?.countryEn
+      ?? japanInfo?.countryEn
+      ?? (entity.name === 'United States' && usSubdivisionEn ? `United States·${usSubdivisionEn}` : entity.countryEn ?? entity.name),
+    countryCode: chinaInfo?.countryCode ?? japanInfo?.countryCode ?? entity.countryCode,
     flag: entity.flag,
     prefix,
     state: usStateInfo?.state,
@@ -1504,7 +1101,7 @@ export function getCallsignInfo(callsign: string, timestamp: number = Date.now()
     continent: entity.continent,
     cqZone: entity.cqZone,
     ituZone: entity.ituZone,
-    dxccStatus: entity.deleted ? 'deleted' : 'current',
+    dxccStatus: 'current',
     dxccConfidence: resolution.confidence,
     dxccNeedsReview: resolution.needsReview,
     dxccMatchKind: resolution.matchKind,
@@ -1524,10 +1121,6 @@ export function extractCallsignPrefix(callsign: string): string {
   if (resolution.matchedPrefix) {
     return resolution.matchedPrefix;
   }
-
-  // 使用Trie获取最长DXCC前缀
-  const prefix = dxccIndex.getLongestPrefix(callsign);
-  if (prefix) return prefix;
 
   // 回退：快速推断 1-2 个字符作为前缀（无需 split/match）
   const upper = callsign.toUpperCase();
@@ -1769,7 +1362,7 @@ export function parseCountryFlag(message: string): string | undefined {
  */
 export function getSupportedPrefixes(): string[] {
   return Array.from(dxccIndex.getAllEntities())
-    .filter(entity => !entity.deleted && entity.prefix)
+    .filter(entity => entity.prefix)
     .flatMap(entity => entity.prefix!.split(',').map((p: string) => p.trim()));
 }
 
@@ -1779,7 +1372,6 @@ export function getSupportedPrefixes(): string[] {
  */
 export function getSupportedCountries(): Array<{ country: string; flag: string; prefixes: string[] }> {
   return Array.from(dxccIndex.getAllEntities())
-    .filter(entity => !entity.deleted)
     .map(entity => ({
       country: entity.name,
       flag: entity.flag || '',

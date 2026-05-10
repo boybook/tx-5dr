@@ -26,6 +26,8 @@ import type {
   CoreRadioCapabilities,
   CoreCapabilityDiagnostic,
   CoreCapabilityDiagnostics,
+  RepeaterShift,
+  ToneSquelchMode,
   TunerCapabilities,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
@@ -92,6 +94,33 @@ interface PhysicalRadioManagerEvents {
 type CoreCapabilityKey = keyof CoreRadioCapabilities;
 type CoreCapabilityState = 'unknown' | 'supported' | 'unsupported';
 type CoreCapabilityDiagnosticsMap = Partial<Record<CoreCapabilityKey, CoreCapabilityDiagnostic>>;
+
+export interface RepeaterDuplexConfig {
+  repeaterShift?: RepeaterShift;
+  repeaterOffsetHz?: number;
+}
+
+export interface RepeaterDuplexApplyResult {
+  requested: boolean;
+  applied: boolean;
+  skipped: boolean;
+  warning?: 'unsupported' | 'failed';
+  message?: string;
+}
+
+export interface ToneSquelchConfig {
+  toneMode?: ToneSquelchMode;
+  ctcssToneTenthsHz?: number;
+  dcsCode?: number;
+}
+
+export interface ToneSquelchApplyResult {
+  requested: boolean;
+  applied: boolean;
+  skipped: boolean;
+  warning?: 'unsupported' | 'failed';
+  message?: string;
+}
 
 function createInitialCoreCapabilityStates(): Record<CoreCapabilityKey, CoreCapabilityState> {
   return {
@@ -1229,6 +1258,219 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     return this.capabilityManager.writeCapability(id, value, action);
+  }
+
+  async applyRepeaterDuplexConfig(config?: RepeaterDuplexConfig | null): Promise<RepeaterDuplexApplyResult> {
+    const shift = config?.repeaterShift ?? 'none';
+    const requested = shift === 'minus' || shift === 'plus';
+    const offsetHz = requested ? config?.repeaterOffsetHz : undefined;
+
+    if (!this.connection || !this.isConnected()) {
+      return {
+        requested,
+        applied: false,
+        skipped: true,
+        warning: requested ? 'unsupported' : undefined,
+        message: 'radio not connected',
+      };
+    }
+
+    if (this.shouldBypassCapabilitySystem()) {
+      return {
+        requested,
+        applied: false,
+        skipped: true,
+        warning: requested ? 'unsupported' : undefined,
+        message: 'radio capability system is disabled for ICOM WLAN',
+      };
+    }
+
+    if (!this.isWritableCapabilityAvailable('repeater_shift')) {
+      return {
+        requested,
+        applied: false,
+        skipped: true,
+        warning: requested ? 'unsupported' : undefined,
+        message: 'repeater shift capability is not available',
+      };
+    }
+
+    if (requested) {
+      if (!Number.isFinite(offsetHz) || !offsetHz || offsetHz <= 0) {
+        return {
+          requested,
+          applied: false,
+          skipped: true,
+          warning: 'failed',
+          message: 'repeater offset must be greater than 0 Hz',
+        };
+      }
+
+      if (!this.isWritableCapabilityAvailable('repeater_offset')) {
+        return {
+          requested,
+          applied: false,
+          skipped: true,
+          warning: 'unsupported',
+          message: 'repeater offset capability is not available',
+        };
+      }
+    }
+
+    try {
+      if (requested) {
+        await this.capabilityManager.writeCapability('repeater_offset', offsetHz);
+      }
+
+      await this.capabilityManager.writeCapability('repeater_shift', shift);
+
+      return {
+        requested,
+        applied: true,
+        skipped: false,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`Failed to apply repeater duplex config: ${message}`, { shift, offsetHz });
+      return {
+        requested,
+        applied: false,
+        skipped: false,
+        warning: requested ? 'failed' : undefined,
+        message,
+      };
+    }
+  }
+
+  async applyToneSquelchConfig(config?: ToneSquelchConfig | null): Promise<ToneSquelchApplyResult> {
+    const toneMode = config?.toneMode ?? 'none';
+    const requested = toneMode === 'ctcss' || toneMode === 'dcs';
+
+    if (!this.connection || !this.isConnected()) {
+      return {
+        requested,
+        applied: false,
+        skipped: true,
+        warning: requested ? 'unsupported' : undefined,
+        message: 'radio not connected',
+      };
+    }
+
+    if (this.shouldBypassCapabilitySystem()) {
+      return {
+        requested,
+        applied: false,
+        skipped: true,
+        warning: requested ? 'unsupported' : undefined,
+        message: 'radio capability system is disabled for ICOM WLAN',
+      };
+    }
+
+    const hasCtcss = this.isWritableCapabilityAvailable('ctcss_tone');
+    const hasDcs = this.isWritableCapabilityAvailable('dcs_code');
+
+    if (toneMode === 'ctcss') {
+      if (!Number.isFinite(config?.ctcssToneTenthsHz) || !config?.ctcssToneTenthsHz || config.ctcssToneTenthsHz <= 0) {
+        return {
+          requested,
+          applied: false,
+          skipped: true,
+          warning: 'failed',
+          message: 'CTCSS tone must be greater than 0.0 Hz',
+        };
+      }
+
+      if (!hasCtcss) {
+        return {
+          requested,
+          applied: false,
+          skipped: true,
+          warning: 'unsupported',
+          message: 'CTCSS tone capability is not available',
+        };
+      }
+    }
+
+    if (toneMode === 'dcs') {
+      if (!Number.isFinite(config?.dcsCode) || !config?.dcsCode || config.dcsCode <= 0) {
+        return {
+          requested,
+          applied: false,
+          skipped: true,
+          warning: 'failed',
+          message: 'DCS code must be greater than 0',
+        };
+      }
+
+      if (!hasDcs) {
+        return {
+          requested,
+          applied: false,
+          skipped: true,
+          warning: 'unsupported',
+          message: 'DCS code capability is not available',
+        };
+      }
+    }
+
+    try {
+      if (toneMode === 'ctcss') {
+        if (hasDcs) {
+          await this.capabilityManager.writeCapability('dcs_code', 0);
+        }
+        await this.capabilityManager.writeCapability('ctcss_tone', config!.ctcssToneTenthsHz);
+        return { requested, applied: true, skipped: false };
+      }
+
+      if (toneMode === 'dcs') {
+        if (hasCtcss) {
+          await this.capabilityManager.writeCapability('ctcss_tone', 0);
+        }
+        await this.capabilityManager.writeCapability('dcs_code', config!.dcsCode);
+        return { requested, applied: true, skipped: false };
+      }
+
+      let writeCount = 0;
+      if (hasCtcss) {
+        await this.capabilityManager.writeCapability('ctcss_tone', 0);
+        writeCount += 1;
+      }
+      if (hasDcs) {
+        await this.capabilityManager.writeCapability('dcs_code', 0);
+        writeCount += 1;
+      }
+
+      return {
+        requested,
+        applied: writeCount > 0,
+        skipped: writeCount === 0,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`Failed to apply tone squelch config: ${message}`, { toneMode, config });
+      try {
+        await this.refreshCapabilities();
+      } catch (refreshError) {
+        logger.debug('Failed to refresh capabilities after tone squelch write error', refreshError);
+      }
+      return {
+        requested,
+        applied: false,
+        skipped: false,
+        warning: requested ? 'failed' : undefined,
+        message,
+      };
+    }
+  }
+
+  private isWritableCapabilityAvailable(id: string): boolean {
+    const snapshot = this.capabilityManager.getCapabilitySnapshot();
+    const descriptor = snapshot.descriptors.find((item) => item.id === id);
+    const state = snapshot.capabilities.find((item) => item.id === id);
+
+    return descriptor?.writable === true
+      && state?.supported === true
+      && state.availability !== 'unavailable';
   }
 
   /**

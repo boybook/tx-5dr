@@ -508,6 +508,10 @@ export class PluginManager {
     return this.orchestrator.reDecideOperator(operatorId, slotPack);
   }
 
+  shouldProcessStoppedOperatorReDecision(operatorId: string, slotPack: SlotPack): boolean {
+    return this.orchestrator.hasActiveSilentDirectedCallGate(operatorId, slotPack);
+  }
+
   // ===== 策略管理 =====
 
   getActiveStrategyForOperator(operatorId: string): string {
@@ -1487,6 +1491,8 @@ export class PluginManager {
     const operatorStore = instance.ctx.store.operator as FlushableKVStore;
     await globalStore.flush().catch(() => {});
     await operatorStore.flush().catch(() => {});
+    globalStore.dispose?.();
+    operatorStore.dispose?.();
   }
 
   private registerEngineListeners(): void {

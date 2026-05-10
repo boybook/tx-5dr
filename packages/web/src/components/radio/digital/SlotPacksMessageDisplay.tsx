@@ -169,7 +169,6 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
     const callsign = message.logbookAnalysis?.callsign;
     if (currentOperatorId && callsign && !getMyCallsigns().includes(callsign)) {
       myRelatedTimeline.seedSelectedRx({
-        targetCallsign: callsign,
         message,
         group: _group,
       });

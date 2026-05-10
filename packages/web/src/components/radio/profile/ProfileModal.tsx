@@ -198,11 +198,12 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
 
     setIsSaving(true);
     try {
+      const audioConfigToSave = audioSettingsRef.current?.getSettings() ?? editAudioConfig;
       if (mode === 'create') {
         const result = await api.createProfile({
           name: editName.trim(),
           radio: editRadioConfig,
-          audio: editAudioConfig,
+          audio: audioConfigToSave,
           description: editDescription.trim() || undefined,
         });
         addToast({ title: t('profileModal.created', { name: result.profile?.name ?? editName.trim() }), color: 'success', timeout: 3000 });
@@ -210,7 +211,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
         const result = await api.updateProfile(editingProfileId, {
           name: editName.trim(),
           radio: editRadioConfig,
-          audio: editAudioConfig,
+          audio: audioConfigToSave,
           description: editDescription.trim() || undefined,
         });
         addToast({ title: t('profileModal.updated', { name: result.profile?.name ?? editName.trim() }), color: 'success', timeout: 3000 });

@@ -440,7 +440,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         backdrop="opaque"
         disableAnimation
         classNames={{
-          body: "p-0",
+          body: "p-0 min-h-0 overflow-hidden",
           header: "border-b border-divider px-3 sm:px-6 py-3 sm:py-4",
           footer: "border-t border-divider px-3 sm:px-6 py-3 sm:py-4",
         }}
@@ -455,12 +455,12 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
           
           <ModalBody>
             <div
-              className={`min-h-0 ${isMobile ? 'flex flex-col' : 'flex'}`}
+              className={`min-h-0 ${isMobile ? 'flex flex-1 flex-col' : 'flex'}`}
               style={{
-                height: usesModalFooterSave
-                  ? (isMobile ? 'calc(100vh - 180px)' : 'calc(95vh - 180px)')
-                  : (isMobile ? 'calc(100vh - 116px)' : 'calc(95vh - 116px)'),
-                minHeight: '400px',
+                height: isMobile
+                  ? '100%'
+                  : (usesModalFooterSave ? 'calc(95vh - 180px)' : 'calc(95vh - 116px)'),
+                minHeight: isMobile ? '0' : '400px',
                 maxHeight: isMobile ? 'none' : (usesModalFooterSave ? '600px' : '664px')
               }}
             >
@@ -476,7 +476,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                 className={
                   isMobile
                     ? 'min-w-0 w-full px-3 py-2 border-b border-divider'
-                    : 'p-5 pr-1'
+                    : 'p-5 pr-1 min-h-0 max-h-full overflow-y-auto overflow-x-hidden flex-shrink-0'
                 }
               >
                 <Tabs
@@ -484,11 +484,11 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                   onSelectionChange={handleTabChange}
                   isVertical={!isMobile}
                   size='md'
-                  className={isMobile ? 'w-full' : 'h-full'}
+                  className={isMobile ? 'w-full' : 'h-full min-h-0'}
                   classNames={{
-                    tab: isMobile ? 'h-10 flex-shrink-0' : 'w-full h-10 sm:px-4',
+                    tab: isMobile ? 'h-10 w-auto min-w-max flex-none px-3' : 'w-full h-10 sm:px-4',
                     tabContent: `group-data-[selected=true]:text-primary-600 text-default-500 ${isMobile ? 'text-xl' : ''}`,
-                    tabList: isMobile ? 'w-full overflow-x-auto flex-nowrap scrollbar-hide' : '',
+                    tabList: isMobile ? 'w-full overflow-x-auto flex-nowrap scrollbar-hide' : 'max-h-full overflow-y-auto overflow-x-hidden flex-col',
                   }}
                 >
                   {isOperator && (

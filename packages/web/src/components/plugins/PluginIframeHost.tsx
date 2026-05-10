@@ -5,6 +5,7 @@ import { ConnectionContext } from '../../store/radio/contexts';
 import { useWSEvent } from '../../hooks/useWSEvent';
 import { createLogger } from '../../utils/logger';
 import { getAuthHeaders, getStoredJwt } from '../../utils/authHeaders';
+import { forwardPluginIframeKeyboardEvent } from '../../utils/pluginIframeKeyboardEvents';
 import { PluginIframeRequestGate } from './PluginIframeRequestGate';
 
 const logger = createLogger('PluginIframeHost');
@@ -73,6 +74,7 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
   const radioService = connection?.state.radioService ?? null;
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const requestGateRef = useRef(new PluginIframeRequestGate<DeferredIframeRequest>());
+  const keyboardBridgeCleanupRef = useRef<(() => void) | null>(null);
   const [height, setHeight] = useState(minHeight);
   const [loading, setLoading] = useState(true);
   const [pageSessionId, setPageSessionId] = useState<string | null>(null);
@@ -99,6 +101,46 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
   const postToIframe = useCallback((msg: Record<string, unknown>) => {
     iframeRef.current?.contentWindow?.postMessage(msg, '*');
   }, []);
+
+  const detachIframeKeyboardBridge = useCallback(() => {
+    keyboardBridgeCleanupRef.current?.();
+    keyboardBridgeCleanupRef.current = null;
+  }, []);
+
+  const attachIframeKeyboardBridge = useCallback(() => {
+    detachIframeKeyboardBridge();
+
+    const iframeWindow = iframeRef.current?.contentWindow;
+    if (!iframeWindow) {
+      return;
+    }
+
+    const forwardKeyboardEvent = (event: KeyboardEvent) => {
+      forwardPluginIframeKeyboardEvent(event);
+    };
+    const options: AddEventListenerOptions = { capture: true };
+
+    try {
+      iframeWindow.addEventListener('keydown', forwardKeyboardEvent, options);
+      iframeWindow.addEventListener('keyup', forwardKeyboardEvent, options);
+    } catch (error) {
+      logger.debug('Plugin iframe keyboard bridge unavailable', {
+        pluginName,
+        pageId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    keyboardBridgeCleanupRef.current = () => {
+      try {
+        iframeWindow.removeEventListener('keydown', forwardKeyboardEvent, options);
+        iframeWindow.removeEventListener('keyup', forwardKeyboardEvent, options);
+      } catch {
+        // The iframe may have navigated before React unmounted this host.
+      }
+    };
+  }, [detachIframeKeyboardBridge, pageId, pluginName]);
 
   const respondToIframeError = useCallback((requestId: string, error: string) => {
     postToIframe({
@@ -316,6 +358,7 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
   // Send init message when iframe loads
   const handleIframeLoad = useCallback(() => {
     setLoading(false);
+    attachIframeKeyboardBridge();
     const iframeWindow = iframeRef.current?.contentWindow as (Window & {
       __TX5DR_PAGE_SESSION_ID__?: string;
     }) | null;
@@ -335,7 +378,7 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
       theme: getTheme(),
       locale: i18n.language,
     });
-  }, [postToIframe, params, getTheme, i18n.language, respondToIframeError, setLockedPageSessionId]);
+  }, [attachIframeKeyboardBridge, postToIframe, params, getTheme, i18n.language, respondToIframeError, setLockedPageSessionId]);
 
   // Observe theme changes on <html> element and forward to iframe
   useEffect(() => {
@@ -353,10 +396,17 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
   }, [postToIframe, getTheme]);
 
   useEffect(() => {
+    detachIframeKeyboardBridge();
     setLoading(true);
     requestGateRef.current.dropPending();
     setLockedPageSessionId(null);
-  }, [iframeSrc, setLockedPageSessionId]);
+  }, [detachIframeKeyboardBridge, iframeSrc, setLockedPageSessionId]);
+
+  useEffect(() => {
+    return () => {
+      detachIframeKeyboardBridge();
+    };
+  }, [detachIframeKeyboardBridge]);
 
   useEffect(() => {
     if (!pageSessionId) {

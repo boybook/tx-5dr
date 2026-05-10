@@ -1,5 +1,6 @@
 import type { DesktopHttpsMode, DesktopHttpsStatus } from '@tx5dr/contracts';
 import type { ShortcutConfig, ShortcutActionId } from '../utils/shortcutPreferences';
+import type { VoicePttShortcutPreset } from '../utils/voicePttShortcutPreferences';
 
 type DesktopUpdateSource = 'oss' | 'github';
 
@@ -23,6 +24,24 @@ interface ShortcutRecordedPayload {
 
 interface ShortcutRecordingCancelledPayload {
   actionId: ShortcutActionId;
+}
+
+interface VoicePttShortcutConfigPayload {
+  enabled: boolean;
+  preset: VoicePttShortcutPreset;
+}
+
+interface VoicePttShortcutCommandPayload {
+  type: 'keydown' | 'keyup';
+  code: string;
+  key: string;
+  repeat: boolean;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  location: number;
+  source: 'electron-before-input';
 }
 
 interface DesktopUpdateRecentCommit {
@@ -169,6 +188,11 @@ interface ElectronAPI {
     offRecorded(callback: (payload: ShortcutRecordedPayload) => void): void;
     onRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): void;
     offRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): void;
+  };
+  voicePttShortcut?: {
+    setConfig(config: VoicePttShortcutConfigPayload): Promise<void>;
+    onCommand(callback: (payload: VoicePttShortcutCommandPayload) => void): void;
+    offCommand(callback: (payload: VoicePttShortcutCommandPayload) => void): void;
   };
   https?: {
     getStatus(): Promise<DesktopHttpsStatus>;

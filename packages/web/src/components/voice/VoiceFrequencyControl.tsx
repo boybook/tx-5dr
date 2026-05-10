@@ -21,6 +21,7 @@ import { createLogger } from '../../utils/logger';
 import { canWriteRadioFrequency, isCoreCapabilityAvailable } from '../../utils/radioControl';
 import { resetOperatorsForOperatingStateChange } from '../../utils/operatorReset';
 import { FrequencyPresetAddModal } from '../settings/FrequencyPresetAddModal';
+import { formatToneSquelch } from '../../utils/toneSquelch';
 
 const logger = createLogger('VoiceFrequencyControl');
 const CURRENT_CUSTOM_VOICE_FREQUENCY_KEY = '__current_custom_voice_frequency__';
@@ -163,6 +164,11 @@ interface FrequencyPreset {
   band: string;
   mode: string;
   radioMode?: string;
+  repeaterShift?: 'none' | 'minus' | 'plus';
+  repeaterOffsetHz?: number;
+  toneMode?: 'none' | 'ctcss' | 'dcs';
+  ctcssToneTenthsHz?: number;
+  dcsCode?: number;
 }
 
 /**
@@ -250,6 +256,8 @@ export const VoiceFrequencyControl: React.FC = () => {
         band: overrides?.band ?? 'Custom',
         description: overrides?.description ?? `${(freq / 1000000).toFixed(3)} MHz`,
         radioMode: overrides?.radioMode ?? currentRadioModeRef.current,
+        repeaterShift: 'none',
+        toneMode: 'none',
       });
       if (response.success) {
         resetOperatorsAfterOperatingStateChange();
@@ -294,6 +302,13 @@ export const VoiceFrequencyControl: React.FC = () => {
     }
     return band;
   }, [t]);
+  const formatRepeaterDuplex = useCallback((preset: Pick<FrequencyPreset, 'repeaterShift' | 'repeaterOffsetHz'>) => {
+    const shift = preset.repeaterShift ?? 'none';
+    if (shift === 'none' || !preset.repeaterOffsetHz) {
+      return '';
+    }
+    return `${shift === 'plus' ? '+' : '-'}${preset.repeaterOffsetHz / 1_000} kHz`;
+  }, []);
   const loadVoicePresets = useCallback(async () => {
     if (!connection.state.isConnected) return;
 
@@ -320,6 +335,11 @@ export const VoiceFrequencyControl: React.FC = () => {
             band: p.band,
             mode: p.mode,
             radioMode: p.radioMode,
+            repeaterShift: p.repeaterShift,
+            repeaterOffsetHz: p.repeaterOffsetHz,
+            toneMode: p.toneMode,
+            ctcssToneTenthsHz: p.ctcssToneTenthsHz,
+            dcsCode: p.dcsCode,
           }))
           .sort((a, b) => a.frequency - b.frequency);
         setPresets(voicePresets);
@@ -331,7 +351,15 @@ export const VoiceFrequencyControl: React.FC = () => {
       if (lastVoice && lastVoice.frequency) {
         setCurrentFrequency(lastVoice.frequency);
         if (lastVoice.radioMode) setCurrentRadioMode(lastVoice.radioMode);
-        logger.info('Restored last voice frequency', { frequency: lastVoice.frequency, radioMode: lastVoice.radioMode });
+        logger.info('Restored last voice frequency', {
+          frequency: lastVoice.frequency,
+          radioMode: lastVoice.radioMode,
+          repeaterShift: lastVoice.repeaterShift,
+          repeaterOffsetHz: lastVoice.repeaterOffsetHz,
+          toneMode: lastVoice.toneMode,
+          ctcssToneTenthsHz: lastVoice.ctcssToneTenthsHz,
+          dcsCode: lastVoice.dcsCode,
+        });
       }
     } catch (error) {
       logger.error('Failed to load voice presets:', error);
@@ -419,12 +447,15 @@ export const VoiceFrequencyControl: React.FC = () => {
       band: CUSTOM_BAND,
       mode: 'VOICE',
       radioMode: currentRadioMode,
+      repeaterShift: 'none',
+      toneMode: 'none',
     } satisfies FrequencyPreset;
   }, [currentFrequency, currentRadioMode, formatFrequencyLabel, presets, t]);
 
   const currentPresetForEdit = useMemo<PresetFrequency | null>(() => {
     const preset = presets.find(item => item.frequency === currentFrequency);
     if (!preset) return null;
+    const supportsFmOptions = (preset.radioMode ?? currentRadioMode) === 'FM';
 
     return {
       band: preset.band,
@@ -432,6 +463,15 @@ export const VoiceFrequencyControl: React.FC = () => {
       radioMode: preset.radioMode ?? currentRadioMode,
       frequency: preset.frequency,
       description: preset.label,
+      ...(supportsFmOptions && preset.repeaterShift && preset.repeaterShift !== 'none'
+        ? { repeaterShift: preset.repeaterShift, repeaterOffsetHz: preset.repeaterOffsetHz }
+        : {}),
+      ...(supportsFmOptions && preset.toneMode === 'ctcss'
+        ? { toneMode: 'ctcss' as const, ctcssToneTenthsHz: preset.ctcssToneTenthsHz }
+        : {}),
+      ...(supportsFmOptions && preset.toneMode === 'dcs'
+        ? { toneMode: 'dcs' as const, dcsCode: preset.dcsCode }
+        : {}),
     };
   }, [currentFrequency, currentRadioMode, presets]);
 
@@ -537,12 +577,18 @@ export const VoiceFrequencyControl: React.FC = () => {
     }
 
     try {
+      const supportsFmOptions = preset.radioMode === 'FM';
       const response = await api.setRadioFrequency({
         frequency: preset.frequency,
         mode: 'VOICE',
         band: preset.band,
         description: preset.label,
         radioMode: preset.radioMode,
+        repeaterShift: supportsFmOptions ? (preset.repeaterShift ?? 'none') : 'none',
+        repeaterOffsetHz: supportsFmOptions ? preset.repeaterOffsetHz : undefined,
+        toneMode: supportsFmOptions ? (preset.toneMode ?? 'none') : 'none',
+        ctcssToneTenthsHz: supportsFmOptions ? preset.ctcssToneTenthsHz : undefined,
+        dcsCode: supportsFmOptions ? preset.dcsCode : undefined,
       });
 
       if (response.success) {
@@ -749,7 +795,9 @@ export const VoiceFrequencyControl: React.FC = () => {
                       textValue={preset.label}
                       className="text-sm"
                       endContent={
-                        <span className="text-xs text-default-400">{preset.radioMode}</span>
+                        <span className="text-xs text-default-400 text-right">
+                          {[preset.radioMode, preset.radioMode === 'FM' ? formatRepeaterDuplex(preset) : '', preset.radioMode === 'FM' ? formatToneSquelch(preset as PresetFrequency, t, { showNone: false }) : ''].filter(Boolean).join(' ')}
+                        </span>
                       }
                     >
                       {preset.label}

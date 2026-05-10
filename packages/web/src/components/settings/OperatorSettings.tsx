@@ -28,7 +28,7 @@ import type {
   UpdateRadioOperatorRequest
 } from '@tx5dr/contracts';
 import { SyncConfigModal } from '../logbook/SyncConfigModal';
-import { MODES, getFourCharacterGrid, sanitizeGridInput } from '@tx5dr/contracts';
+import { MODES, getFourCharacterGrid, sanitizeCallsignInput, sanitizeGridInput } from '@tx5dr/contracts';
 import { useConnection, useStationInfo } from '../../store/radioStore';
 import {
   setOperatorEnabled,
@@ -41,6 +41,7 @@ import { getAuthHeaders } from '../../utils/authHeaders';
 
 const logger = createLogger('OperatorSettings');
 type EditableOperatorField = 'myCallsign' | 'myGrid';
+const CALLSIGN_MAX_LENGTH = 10;
 
 export interface OperatorSettingsRef {
   hasUnsavedChanges: () => boolean;
@@ -233,7 +234,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
       const key = getFieldEditKey(operator.id, field);
       const initialValue = field === 'myGrid'
         ? operator.myGrid || ''
-        : operator.myCallsign || '';
+        : sanitizeCallsignInput(operator.myCallsign);
 
       setEditingFields(prev => ({ ...prev, [key]: true }));
       setFieldDrafts(prev => ({ ...prev, [key]: initialValue }));
@@ -261,16 +262,19 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
 
     const updateFieldDraft = (operatorId: string, field: EditableOperatorField, value: string) => {
       const key = getFieldEditKey(operatorId, field);
+      const normalizedValue = field === 'myGrid'
+        ? sanitizeGridInput(value)
+        : sanitizeCallsignInput(value);
       setFieldDrafts(prev => ({
         ...prev,
-        [key]: value
+        [key]: normalizedValue
       }));
     };
 
     const saveFieldEditing = async (operator: RadioOperatorConfig, field: EditableOperatorField) => {
       const key = getFieldEditKey(operator.id, field);
       const rawValue = fieldDrafts[key] ?? '';
-      const normalizedValue = field === 'myGrid' ? sanitizeGridInput(rawValue) : rawValue.trim();
+      const normalizedValue = field === 'myGrid' ? sanitizeGridInput(rawValue) : sanitizeCallsignInput(rawValue);
       const currentValue = field === 'myGrid' ? (operator.myGrid || '') : (operator.myCallsign || '');
 
       if (normalizedValue === currentValue) {
@@ -303,7 +307,10 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     // 创建新操作员
     const createNewOperator = async () => {
       try {
-        const response = await api.createOperator(newOperatorData as CreateRadioOperatorRequest);
+        const response = await api.createOperator({
+          ...newOperatorData,
+          myCallsign: sanitizeCallsignInput(newOperatorData.myCallsign),
+        } as CreateRadioOperatorRequest);
         await loadOperators();
 
         // 新创建的操作员默认显示（不在黑名单中），同步到服务器
@@ -382,13 +389,9 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                       placeholder={options?.placeholder}
                       value={draftValue}
                       description={options?.description}
-                      onValueChange={(nextValue) => {
-                        const normalizedValue = field === 'myGrid'
-                          ? sanitizeGridInput(nextValue)
-                          : nextValue;
-                        updateFieldDraft(operator.id, field, normalizedValue);
-                      }}
+                      onValueChange={(nextValue) => updateFieldDraft(operator.id, field, nextValue)}
                       maxLength={options?.maxLength}
+                      autoCapitalize={field === 'myCallsign' ? 'characters' : undefined}
                     />
                     <Button
                       size="sm"
@@ -432,7 +435,8 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {renderEditableField('myCallsign', t('settings.callsign'), operator.myCallsign, {
-              placeholder: t('settings.callsignPlaceholder')
+              placeholder: t('settings.callsignPlaceholder'),
+              maxLength: CALLSIGN_MAX_LENGTH
             })}
             {renderEditableField('myGrid', t('settings.grid'), operator.myGrid || '', {
               placeholder: t('settings.gridPlaceholder'),
@@ -475,9 +479,11 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
               label={t('settings.callsign')}
               placeholder={t('settings.callsignPlaceholder')}
               value={formData.myCallsign || ''}
-              onChange={(e) => {
-                setNewOperatorData({ ...newOperatorData, myCallsign: e.target.value });
+              onValueChange={(value) => {
+                setNewOperatorData({ ...newOperatorData, myCallsign: sanitizeCallsignInput(value) });
               }}
+              maxLength={CALLSIGN_MAX_LENGTH}
+              autoCapitalize="characters"
               isRequired
             />
 
