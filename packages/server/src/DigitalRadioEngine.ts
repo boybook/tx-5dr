@@ -85,6 +85,47 @@ import { RadioPowerController } from './radio/RadioPowerController.js';
 import { TuneToneController } from './radio/TuneToneController.js';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+export interface DeepCWModelPathConfig {
+  language?: string;
+  modelSize?: 'tiny' | 'small';
+}
+
+export interface DeepCWModelPathOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  moduleDir?: string;
+  exists?: (candidate: string) => boolean;
+}
+
+const DEFAULT_DEEPCW_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+export function resolveDeepCWModelPath(
+  config: DeepCWModelPathConfig,
+  options: DeepCWModelPathOptions = {},
+): string | null {
+  const env = options.env ?? process.env;
+  const configured = env.TX5DR_DEEPCW_MODEL_PATH;
+  if (configured) return configured;
+
+  const language = config.language === 'en' ? 'en' : 'en';
+  const modelSize = config.modelSize === 'small' ? 'small' : 'tiny';
+  const fileName = `${language}_${modelSize}.onnx`;
+  const cwd = options.cwd ?? process.cwd();
+  const moduleDir = options.moduleDir ?? DEFAULT_DEEPCW_MODULE_DIR;
+  const appRootFromModule = path.resolve(moduleDir, '..', '..', '..');
+  const exists = options.exists ?? existsSync;
+  const candidates = [
+    env.APP_RESOURCES ? path.join(env.APP_RESOURCES, 'models', 'deepcw', fileName) : null,
+    path.resolve(appRootFromModule, 'resources', 'models', 'deepcw', fileName),
+    path.resolve(cwd, 'resources', 'models', 'deepcw', fileName),
+    path.resolve(cwd, '..', '..', 'resources', 'models', 'deepcw', fileName),
+    path.resolve(cwd, '..', '..', '..', 'resources', 'models', 'deepcw', fileName),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  return candidates.find((candidate) => exists(candidate)) ?? candidates[0] ?? null;
+}
 
 /**
  * DigitalRadioEngine — 数字电台引擎 Facade
@@ -1702,19 +1743,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   private resolveDeepCWModelPath(config: Pick<ServerCWDecoderConfig, 'language' | 'modelSize'>): string | null {
-    const configured = process.env.TX5DR_DEEPCW_MODEL_PATH;
-    if (configured) return configured;
-
-    const language = config.language === 'en' ? 'en' : 'en';
-    const modelSize = config.modelSize === 'small' ? 'small' : 'tiny';
-    const fileName = `${language}_${modelSize}.onnx`;
-    const candidates = [
-      process.env.APP_RESOURCES ? path.join(process.env.APP_RESOURCES, 'models', 'deepcw', fileName) : null,
-      path.resolve(process.cwd(), 'resources', 'models', 'deepcw', fileName),
-      path.resolve(process.cwd(), '..', '..', 'resources', 'models', 'deepcw', fileName),
-    ].filter((candidate): candidate is string => Boolean(candidate));
-
-    return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0] ?? null;
+    return resolveDeepCWModelPath(config);
   }
 
   private resetVoicePttState(): void {

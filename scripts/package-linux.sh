@@ -340,6 +340,12 @@ fi
 if [[ -f "$PROJECT_ROOT/resources/README.txt" ]]; then
     cp "$PROJECT_ROOT/resources/README.txt" "$APP_ROOT/resources/"
 fi
+for model in en_tiny.onnx en_small.onnx; do
+    if [[ ! -f "$APP_ROOT/resources/models/deepcw/$model" ]]; then
+        err "DeepCW model missing from package resources: resources/models/deepcw/$model"
+        exit 1
+    fi
+done
 
 # --- Copy nginx template (for postinstall) ---
 cp "$PROJECT_ROOT/linux/nginx-site.conf" "$APP_ROOT/nginx-site.conf"
