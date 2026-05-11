@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   Chip,
@@ -28,6 +28,7 @@ import {
 
 const CALLSIGN_RE = /\b(?:[A-Z]{1,2}\d[A-Z0-9]{1,4}|[A-Z0-9]{1,3}\d[A-Z]{1,4})\b/i;
 const DEFAULT_MODEL_SIZES = ['tiny', 'small'] as const;
+const TRANSCRIPT_BOTTOM_THRESHOLD_PX = 8;
 
 interface DecoderSettingsDraft {
   backend: string;
@@ -82,12 +83,17 @@ function makeSettingsDraft(backend: string, modelSize: string, runtimeBackend: s
   return { backend, modelSize, runtimeBackend };
 }
 
+function isNearScrollBottom(element: HTMLElement): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_THRESHOLD_PX;
+}
+
 export function CWDecoderPanel() {
   const { t } = useTranslation('radio');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<DecoderSettingsDraft | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const shouldAutoScrollTranscriptRef = useRef(true);
   const canControlDecoder = useCan('execute', 'CWDecoder');
   const canConfigureDecoder = useCan('update', 'CWDecoderConfig');
   const {
@@ -143,8 +149,15 @@ export function CWDecoderPanel() {
   useEffect(() => {
     const transcript = transcriptRef.current;
     if (!transcript) return;
+    if (!shouldAutoScrollTranscriptRef.current) return;
     transcript.scrollTop = transcript.scrollHeight;
   }, [confirmedText, pendingText, showDecoderDetails]);
+
+  const handleTranscriptScroll = useCallback(() => {
+    const transcript = transcriptRef.current;
+    if (!transcript) return;
+    shouldAutoScrollTranscriptRef.current = isNearScrollBottom(transcript);
+  }, []);
 
   const handleEnabledChange = (enabled: boolean) => {
     if (!canControlDecoder) return;
@@ -302,6 +315,7 @@ export function CWDecoderPanel() {
               </div>
               <div
                 ref={transcriptRef}
+                onScroll={handleTranscriptScroll}
                 spellCheck={false}
                 role="textbox"
                 aria-multiline="true"
