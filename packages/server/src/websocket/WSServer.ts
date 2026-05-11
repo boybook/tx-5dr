@@ -739,6 +739,16 @@ export class WSServer extends WSMessageHandler {
       logger.debug('cw config changed', data);
       this.broadcast(WSMessageType.CW_CONFIG_CHANGED, data);
     });
+
+    this.digitalRadioEngine.on('cwDecoderStatusChanged', (data) => {
+      logger.debug('cw decoder status changed', data);
+      this.broadcastToMinRole(UserRole.VIEWER, WSMessageType.CW_DECODER_STATUS, data);
+    });
+
+    this.digitalRadioEngine.on('cwDecoderEvent', (data) => {
+      logger.debug('cw decoder event', data);
+      this.broadcastToMinRole(UserRole.VIEWER, WSMessageType.CW_DECODER_EVENT, data);
+    });
   }
 
   private shouldBroadcastRadioConnectedToast(connected: boolean): boolean {
@@ -1447,6 +1457,7 @@ export class WSServer extends WSMessageHandler {
     if (!authManager.isAuthEnabled()) {
       // 认证未启用 → 直接作为 Admin（向后兼容）
       connection.setAdminBypass();
+      this.sendCWDecoderStatus(connection);
       logger.info(`connection ${id} basic state sent (auth disabled, Admin mode), waiting for client handshake`);
     } else {
       // 认证已启用 → 发送 AUTH_REQUIRED
@@ -1538,6 +1549,23 @@ export class WSServer extends WSMessageHandler {
     activeConnections.forEach(connection => {
       connection.send(type, data, id);
     });
+  }
+
+  private broadcastToMinRole(minRole: UserRole, type: string, data?: any, id?: string): void {
+    const activeConnections = this.getActiveConnections()
+      .filter(connection => connection.hasMinRole(minRole));
+
+    activeConnections.forEach(connection => {
+      connection.send(type, data, id);
+    });
+  }
+
+  private sendCWDecoderStatus(connection: WSConnection): void {
+    try {
+      connection.send(WSMessageType.CW_DECODER_STATUS, this.digitalRadioEngine.getCWDecoderStatus());
+    } catch (error) {
+      logger.error('failed to send cw decoder status', error);
+    }
   }
 
   private buildInitialFrequencyState(status: SystemStatus): {
@@ -2508,6 +2536,7 @@ export class WSServer extends WSMessageHandler {
         label,
         operatorIds: perms.operatorIds,
       });
+      this.sendCWDecoderStatus(connection);
 
       // 如果是在线升级（之前已经握手完成），重新发送操作员列表
       if (wasAuthenticated || connection.isHandshakeCompleted()) {
@@ -2547,6 +2576,7 @@ export class WSServer extends WSMessageHandler {
       label: 'public viewer',
       operatorIds: [],
     });
+    this.sendCWDecoderStatus(connection);
 
     logger.info(`connection ${connectionId} entered public viewer mode`);
   }

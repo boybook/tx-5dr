@@ -655,6 +655,7 @@
   },
   "cw": {
     "title": "CW",
+    "keyerTitle": "CW 发报",
     "wpm": "WPM 速度",
     "keyMethod": "键控方式",
     "textInputPlaceholder": "输入 CW 报文，支持 {MYCALL} / {HISCALL}...",
@@ -752,6 +753,50 @@
     "placeholderMissingTitle": "缺少 CW 占位符内容",
     "placeholderMissingToast": "请先填写 {{placeholders}} 后再发送该 CW 报文。",
     "placeholderHint": "可用占位符",
-    "placeholderHintSuffix": "将在发送时替换。"
+    "placeholderHintSuffix": "将在发送时替换。",
+    "decoder": {
+      "title": "CW 解码",
+      "enable": "启用 CW 解码",
+      "backend": "后端",
+      "backendUnknown": "后端",
+      "modelUnknown": "默认",
+      "runtimeUnknown": "自动",
+      "unavailable": "不可用",
+      "noBackends": "等待后端列表",
+      "pendingChip": "待确认",
+      "active": "活跃",
+      "empty": "空",
+      "pendingText": "待确认文本",
+      "pendingEmpty": "正在监听已解码的莫尔斯...",
+      "transcript": "转写记录",
+      "transcriptEmpty": "确认后的解码片段会显示在这里。",
+      "clear": "清空",
+      "confidence": "置信度",
+      "useCallsign": "使用呼号 {{callsign}}",
+      "noCallsign": "未找到呼号",
+      "settings": "解码设置",
+      "modelSize": "模型尺寸",
+      "runtimeMode": "运行模式",
+      "cpuMode": "CPU",
+      "gpuMode": "GPU",
+      "modelSizes": {
+        "tiny": "Tiny",
+        "small": "Small",
+        "base": "Base"
+      },
+      "state": {
+        "idle": "空闲",
+        "starting": "启动中",
+        "running": "运行中",
+        "stopping": "停止中",
+        "error": "错误",
+        "unavailable": "不可用"
+      },
+      "controlPermissionRequired": "没有控制 CW 解码的权限",
+      "configPermissionRequired": "没有修改解码设置的权限",
+      "backendSourceLicenseNotice": "{{name}} 是 {{license}} 开源软件。原始项目：",
+      "cancel": "取消",
+      "save": "保存"
+    }
   }
 }

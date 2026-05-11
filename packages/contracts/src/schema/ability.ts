@@ -34,6 +34,8 @@ export type CapabilitySubject =
   | 'RigctldBridge'
   | 'Engine'
   | 'ModeSwitch'
+  | 'CWDecoder'
+  | 'CWDecoderConfig'
   | 'SettingsDecodeWindows'
   | 'SettingsFrequencyPresets'
   | 'StationInfo';
@@ -59,6 +61,8 @@ export enum Permission {
   RIGCTLD_BRIDGE = 'rigctld:bridge',
   ENGINE_START_STOP = 'engine:start_stop',
   MODE_SWITCH = 'mode:switch',
+  CW_DECODER_CONTROL = 'cw:decoder_control',
+  CW_DECODER_CONFIG = 'cw:decoder_config',
   SETTINGS_DECODE_WINDOWS = 'settings:decode_windows',
   SETTINGS_FREQUENCY_PRESETS = 'settings:frequency_presets',
   STATION_UPDATE = 'station:update',
@@ -79,6 +83,8 @@ export const PERMISSION_RULE_MAP: Record<Permission, { action: AppAction; subjec
   [Permission.RIGCTLD_BRIDGE]: { action: 'execute', subject: 'RigctldBridge' },
   [Permission.ENGINE_START_STOP]: { action: 'execute', subject: 'Engine' },
   [Permission.MODE_SWITCH]: { action: 'execute', subject: 'ModeSwitch' },
+  [Permission.CW_DECODER_CONTROL]: { action: 'execute', subject: 'CWDecoder' },
+  [Permission.CW_DECODER_CONFIG]: { action: 'update', subject: 'CWDecoderConfig' },
   [Permission.SETTINGS_DECODE_WINDOWS]: { action: 'update', subject: 'SettingsDecodeWindows' },
   [Permission.SETTINGS_FREQUENCY_PRESETS]: { action: 'update', subject: 'SettingsFrequencyPresets' },
   [Permission.STATION_UPDATE]: { action: 'update', subject: 'StationInfo' },
@@ -181,6 +187,13 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
   },
   { key: 'engine', permissions: [Permission.ENGINE_START_STOP] },
   { key: 'mode', permissions: [Permission.MODE_SWITCH] },
+  {
+    key: 'cw',
+    permissions: [
+      Permission.CW_DECODER_CONTROL,
+      Permission.CW_DECODER_CONFIG,
+    ],
+  },
   {
     key: 'settings',
     permissions: [

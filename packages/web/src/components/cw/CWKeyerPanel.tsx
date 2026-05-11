@@ -581,12 +581,14 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
 
   const panelContent = (
     <>
-      <div className={`flex items-center justify-between gap-2 ${embedded ? 'px-1 py-3' : 'px-3 py-4'}`}>
+      <div className={`flex items-center justify-between gap-2 ${embedded ? 'pb-3' : 'px-3 py-4'}`}>
         <div className="flex min-w-0 items-center gap-2">
-          <FontAwesomeIcon icon={faWaveSquare} className="text-primary" />
-          <span className="font-semibold">{t('radio:cw.title', 'CW')}</span>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <FontAwesomeIcon icon={faWaveSquare} />
+          </span>
+          <span className="truncate text-sm font-semibold text-foreground">{t('radio:cw.keyerTitle', 'CW Keyer')}</span>
           {isActive && (
-            <Chip size="sm" variant="flat" color={statusMode === 'repeat-waiting' ? 'warning' : 'success'}>
+            <Chip size="sm" variant="flat" color={statusMode === 'repeat-waiting' ? 'warning' : 'success'} className="h-5 text-[10px]">
               {statusMode === 'keying' ? 'KEYING' : statusMode === 'playing' ? 'TX' : statusMode}
             </Chip>
           )}
@@ -718,7 +720,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
 
       <CWSidetone />
 
-      <div className={`flex flex-col gap-3 ${embedded ? 'flex-1 min-h-0 overflow-hidden px-1 pb-1' : 'px-3 pb-3'}`}>
+      <div className={`flex flex-col gap-3 ${embedded ? 'flex-1 min-h-0 overflow-hidden' : 'px-3 pb-3'}`}>
         {showSerialPortAlert && (
           <Alert
             color="warning"
@@ -1018,7 +1020,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
 
   if (embedded) {
     return (
-      <div className="h-full min-h-0 w-full overflow-hidden rounded-lg border border-default-200 bg-default-50 px-2 pb-2 pt-0 transition-colors dark:border-default-100 dark:bg-default-100/50">
+      <div className="h-full min-h-0 w-full overflow-hidden rounded-xl bg-content1/80 p-3 shadow-sm ring-1 ring-default-200/60">
         <div className="flex h-full min-h-0 flex-col">
           {panelContent}
         </div>

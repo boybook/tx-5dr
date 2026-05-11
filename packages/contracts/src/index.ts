@@ -120,6 +120,7 @@ export * from './schema/voice-keyer.schema.js';
 
 // CW Keyer Schema
 export * from './schema/cw-keyer.schema.js';
+export * from './schema/cw-decoder.schema.js';
 
 // Station Info Schema
 export * from './schema/station-info.schema.js';

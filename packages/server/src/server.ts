@@ -194,6 +194,7 @@ export async function createServer() {
   const processMonitor = ProcessMonitor.getInstance();
   processMonitor.setExtraSnapshotProvider(() => ({
     decodeWorkers: digitalRadioEngine.getDecodeWorkerTelemetrySnapshot(),
+    workerPools: digitalRadioEngine.getWorkerPoolTelemetrySnapshots(),
   }));
   processMonitor.start();
 

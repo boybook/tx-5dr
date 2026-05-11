@@ -149,6 +149,9 @@ WORKDIR /app
 # 从构建阶段复制构建产物和必要文件
 COPY --from=builder /app/packages ./packages/
 COPY --from=builder /app/node_modules ./node_modules/
+COPY --from=builder /app/resources/models ./resources/models/
+COPY --from=builder /app/resources/licenses ./resources/licenses/
+COPY --from=builder /app/resources/README.txt ./resources/README.txt
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/yarn.lock ./yarn.lock
 COPY --from=builder /app/turbo.json ./turbo.json

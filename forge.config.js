@@ -141,6 +141,7 @@ module.exports = {
     extraResource: [
       join(__dirname, 'resources', 'bin'),
       join(__dirname, 'resources', 'licenses'),
+      join(__dirname, 'resources', 'models'),
       join(__dirname, 'resources', 'README.txt'),
       join(__dirname, 'packages', 'electron-main', 'assets'),
       // macOS 26+ Assets.car 和 AppIcon.icns 必须在 Resources 根目录
@@ -150,7 +151,7 @@ module.exports = {
     // 动态设置架构（用于CI/CD环境）
     arch: process.env.ARCH || undefined,
     platform: process.env.PLATFORM || undefined,
-    // 精简打包产物：忽略开发产物、缓存、临时 Node 下载包，以及 app 内重复的 resources/bin
+    // 精简打包产物：忽略开发产物、缓存、临时 Node 下载包，以及 app 内重复的外置 resources
     ignore: [
       /^\/\.git/,
       /^\/\.turbo/,
@@ -166,8 +167,12 @@ module.exports = {
       // 忽略临时下载/解压的 Node 包（例如 node-v22.15.1-darwin-arm64 及其 .tar.xz/.zip 文件）
       /^\/node-v[0-9]+\.[0-9]+\.[0-9]+[\w.-]*$/,                                // 解压目录
       /^\/node-v[0-9]+\.[0-9]+\.[0-9]+[\w.-]*\.(?:tar\.xz|tar\.gz|zip)$/,   // 压缩包
-      // 避免把 resources/bin 作为应用源码打进 Contents/Resources/app/resources/bin
+      // 避免把外置 resources 同时作为应用源码打进 Contents/Resources/app/resources/*
+      // 这些文件已通过 extraResource 放到 Contents/Resources 根目录，运行时通过 APP_RESOURCES 读取。
       /^\/resources\/bin(\/|$)/,
+      /^\/resources\/licenses(\/|$)/,
+      /^\/resources\/models(\/|$)/,
+      /^\/resources\/README\.txt$/,
       // 文档和开发相关文件
       /^\/docker(\/|$)/,            // Docker 相关目录
       /^\/docs(\/|$)/,              // 文档目录

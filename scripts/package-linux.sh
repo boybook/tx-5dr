@@ -311,6 +311,20 @@ fi
 mkdir -p "$APP_ROOT/web"
 cp -r "$PROJECT_ROOT/packages/web/dist/." "$APP_ROOT/web/"
 
+# --- Copy packaged resources used by the server runtime ---
+# CW decoding resolves bundled DeepCW models relative to the app root
+# (/usr/share/tx5dr/resources/...) when running as a Linux service.
+mkdir -p "$APP_ROOT/resources"
+if [[ -d "$PROJECT_ROOT/resources/models" ]]; then
+    cp -r "$PROJECT_ROOT/resources/models" "$APP_ROOT/resources/"
+fi
+if [[ -d "$PROJECT_ROOT/resources/licenses" ]]; then
+    cp -r "$PROJECT_ROOT/resources/licenses" "$APP_ROOT/resources/"
+fi
+if [[ -f "$PROJECT_ROOT/resources/README.txt" ]]; then
+    cp "$PROJECT_ROOT/resources/README.txt" "$APP_ROOT/resources/"
+fi
+
 # --- Copy nginx template (for postinstall) ---
 cp "$PROJECT_ROOT/linux/nginx-site.conf" "$APP_ROOT/nginx-site.conf"
 # --- Shared library and install script ---

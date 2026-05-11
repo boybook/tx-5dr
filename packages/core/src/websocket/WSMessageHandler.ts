@@ -84,6 +84,8 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   // CW 事件
   [WSMessageType.CW_KEYER_STATUS]: 'cwKeyerStatusChanged',
   [WSMessageType.CW_CONFIG_CHANGED]: 'cwConfigChanged',
+  [WSMessageType.CW_DECODER_STATUS]: 'cwDecoderStatusChanged',
+  [WSMessageType.CW_DECODER_EVENT]: 'cwDecoderEvent',
 
   // 进程监控事件
   [WSMessageType.PROCESS_SNAPSHOT]: 'processSnapshot',

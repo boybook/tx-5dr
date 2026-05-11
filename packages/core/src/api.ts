@@ -1997,6 +1997,62 @@ export const api = {
     );
   },
 
+  // ===== CW Decoder API =====
+
+  async getCWDecoderBackends(apiBase?: string): Promise<{ success: boolean; backends: import('@tx5dr/contracts').CWDecoderBackendDescriptor[] }> {
+    return apiRequest<{ success: boolean; backends: import('@tx5dr/contracts').CWDecoderBackendDescriptor[] }>(
+      '/cw/decoder/backends',
+      undefined,
+      apiBase,
+    );
+  },
+
+  async getCWDecoderConfig(apiBase?: string): Promise<{ success: boolean; config: import('@tx5dr/contracts').CWDecoderConfig; status: import('@tx5dr/contracts').CWDecoderStatus }> {
+    return apiRequest<{ success: boolean; config: import('@tx5dr/contracts').CWDecoderConfig; status: import('@tx5dr/contracts').CWDecoderStatus }>(
+      '/cw/decoder/config',
+      undefined,
+      apiBase,
+    );
+  },
+
+  async updateCWDecoderConfig(
+    body: Partial<import('@tx5dr/contracts').CWDecoderConfig>,
+    apiBase?: string,
+  ): Promise<{ success: boolean; config: import('@tx5dr/contracts').CWDecoderConfig; status: import('@tx5dr/contracts').CWDecoderStatus }> {
+    return apiRequest<{ success: boolean; config: import('@tx5dr/contracts').CWDecoderConfig; status: import('@tx5dr/contracts').CWDecoderStatus }>(
+      '/cw/decoder/config',
+      { method: 'PUT', body: JSON.stringify(body) },
+      apiBase,
+    );
+  },
+
+  async startCWDecoder(
+    body: Partial<import('@tx5dr/contracts').CWDecoderConfig> = {},
+    apiBase?: string,
+  ): Promise<{ success: boolean; config: import('@tx5dr/contracts').CWDecoderConfig; status: import('@tx5dr/contracts').CWDecoderStatus }> {
+    return apiRequest<{ success: boolean; config: import('@tx5dr/contracts').CWDecoderConfig; status: import('@tx5dr/contracts').CWDecoderStatus }>(
+      '/cw/decoder/start',
+      { method: 'POST', body: JSON.stringify(body) },
+      apiBase,
+    );
+  },
+
+  async stopCWDecoder(apiBase?: string): Promise<{ success: boolean; config: import('@tx5dr/contracts').CWDecoderConfig; status: import('@tx5dr/contracts').CWDecoderStatus }> {
+    return apiRequest<{ success: boolean; config: import('@tx5dr/contracts').CWDecoderConfig; status: import('@tx5dr/contracts').CWDecoderStatus }>(
+      '/cw/decoder/stop',
+      { method: 'POST' },
+      apiBase,
+    );
+  },
+
+  async clearCWDecoderTranscript(apiBase?: string): Promise<{ success: boolean; config: import('@tx5dr/contracts').CWDecoderConfig; status: import('@tx5dr/contracts').CWDecoderStatus }> {
+    return apiRequest<{ success: boolean; config: import('@tx5dr/contracts').CWDecoderConfig; status: import('@tx5dr/contracts').CWDecoderStatus }>(
+      '/cw/decoder/clear',
+      { method: 'POST' },
+      apiBase,
+    );
+  },
+
   // ===== CW Keyer API =====
 
   async getCWKeyerConfig(apiBase?: string): Promise<{ success: boolean; config: import('@tx5dr/contracts').CWKeyerConfig | null }> {
@@ -2265,6 +2321,12 @@ export const {
   ,getRealtimeSession
   ,getRealtimeStats
   ,getRealtimeVoiceTxStats
+  ,getCWDecoderBackends
+  ,getCWDecoderConfig
+  ,updateCWDecoderConfig
+  ,startCWDecoder
+  ,stopCWDecoder
+  ,clearCWDecoderTranscript
   // 插件系统函数
   ,getPlugins
   ,getPluginRuntimeInfo

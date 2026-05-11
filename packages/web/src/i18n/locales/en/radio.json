@@ -655,6 +655,7 @@
   },
   "cw": {
     "title": "CW",
+    "keyerTitle": "CW Keyer",
     "wpm": "WPM",
     "keyMethod": "Key Method",
     "textInputPlaceholder": "Enter CW text, supports {MYCALL} / {HISCALL}...",
@@ -752,6 +753,50 @@
     "placeholderMissingTitle": "Missing CW placeholder value",
     "placeholderMissingToast": "Fill in {{placeholders}} before sending this CW message.",
     "placeholderHint": "Placeholders",
-    "placeholderHintSuffix": "are replaced when sending."
+    "placeholderHintSuffix": "are replaced when sending.",
+    "decoder": {
+      "title": "CW Decoder",
+      "enable": "Enable CW decoder",
+      "backend": "Backend",
+      "backendUnknown": "backend",
+      "modelUnknown": "default",
+      "runtimeUnknown": "auto",
+      "unavailable": "Unavailable",
+      "noBackends": "Waiting for backend list",
+      "pendingChip": "Pending",
+      "active": "active",
+      "empty": "empty",
+      "pendingText": "Pending text",
+      "pendingEmpty": "Listening for decoded Morse...",
+      "transcript": "Transcript",
+      "transcriptEmpty": "Confirmed decoded segments will appear here.",
+      "clear": "Clear",
+      "confidence": "Confidence",
+      "useCallsign": "Use callsign {{callsign}}",
+      "noCallsign": "No callsign found",
+      "settings": "Decoder settings",
+      "modelSize": "Model size",
+      "runtimeMode": "Runtime mode",
+      "cpuMode": "CPU",
+      "gpuMode": "GPU",
+      "modelSizes": {
+        "tiny": "Tiny",
+        "small": "Small",
+        "base": "Base"
+      },
+      "state": {
+        "idle": "Idle",
+        "starting": "Starting",
+        "running": "Running",
+        "stopping": "Stopping",
+        "error": "Error",
+        "unavailable": "Unavailable"
+      },
+      "controlPermissionRequired": "No permission to control CW decoder",
+      "configPermissionRequired": "No permission to change decoder settings",
+      "backendSourceLicenseNotice": "{{name}} is {{license}} open-source software. Original project:",
+      "cancel": "Cancel",
+      "save": "Save"
+    }
   }
 }

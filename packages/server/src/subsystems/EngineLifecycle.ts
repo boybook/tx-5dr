@@ -50,6 +50,7 @@ export interface EngineLifecycleDeps {
   getCurrentMode: () => ModeDescriptor;
   getVoiceSessionManager: () => VoiceSessionManager | null;
   getCWKeyerManager: () => import('../cw/CWKeyerManager.js').CWKeyerManager;
+  getCWDecoderManager: () => import('../cw-decoder/index.js').CWDecoderManager;
   getAudioVolumeController: () => AudioVolumeController;
   getAudioSidecar: () => AudioSidecarController;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -399,6 +400,37 @@ export class EngineLifecycle {
         optional: false,
       },
     ];
+
+    const cwDecoderConfig = ConfigManager.getInstance().getCWDecoderConfig();
+    if (cwDecoderConfig.enabled) {
+      resources.push({
+        name: 'cwDecoderManager',
+        start: async () => {
+          const config = ConfigManager.getInstance().getCWDecoderConfig();
+          if (!config.enabled) {
+            logger.debug('CW decoder disabled, skipping decoder manager start');
+            return;
+          }
+          const cwDecoderManager = this.deps.getCWDecoderManager();
+          await cwDecoderManager.start({
+            ...cwDecoderManager.getConfig(),
+            ...config,
+            enabled: true,
+          } as never);
+          logger.debug('CW decoder manager started');
+        },
+        stop: async () => {
+          const cwDecoderManager = this.deps.getCWDecoderManager();
+          await cwDecoderManager.stop('cw-mode-resource-stop');
+          logger.debug('CW decoder manager stopped');
+        },
+        priority: 7,
+        dependencies: [],
+        optional: true,
+      });
+    } else {
+      logger.debug('CW decoder disabled, not registering decoder manager resource');
+    }
 
     return resources;
   }

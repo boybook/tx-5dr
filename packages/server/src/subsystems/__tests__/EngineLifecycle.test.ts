@@ -52,6 +52,7 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' = 'FT8') {
     getCurrentMode: () => ({ name: currentModeName } as any),
     getVoiceSessionManager: () => voiceSessionManager as any,
     getCWKeyerManager: () => ({ start: vi.fn(), stop: vi.fn() } as any),
+    getCWDecoderManager: () => ({ start: vi.fn(), stop: vi.fn(), getConfig: () => ({}) } as any),
     getAudioVolumeController: () => ({ restoreGainForCurrentSlot: vi.fn() } as any),
     getAudioSidecar: () => audioSidecar as any,
     getStatus: () => ({}),

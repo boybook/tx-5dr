@@ -623,7 +623,8 @@
     "timeRange5m": "5 min",
     "timeRange15m": "15 min",
     "timeRange30m": "30 min",
-    "noData": "Waiting for data..."
+    "noData": "Waiting for data...",
+    "workerPools": "Worker Pools"
   },
   "openwebrx": {
     "tabTitle": "WebSDR",

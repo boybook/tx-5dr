@@ -5,6 +5,7 @@ import { faGithub } from '@fortawesome/free-brands-svg-icons';
 import { SpectrumDisplay } from '../components/radio/spectrum/SpectrumDisplay';
 import { RadioMetersDisplay } from '../components/radio/control/RadioMetersDisplay';
 import { CWKeyerPanel } from '../components/cw/CWKeyerPanel';
+import { CWDecoderPanel } from '../components/cw/CWDecoderPanel';
 import { CWFrequencyControl } from '../components/cw/CWFrequencyControl';
 import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
 import { ClockDisplay } from '../components/system/ClockDisplay';
@@ -98,7 +99,7 @@ export const CWLeftLayout: React.FC = () => {
       </div>
 
       {/* Main content */}
-      <div className="flex-1 px-2 pb-2 md:px-5 md:pb-5 min-h-0 flex flex-col gap-2 md:gap-4">
+      <div className="flex-1 px-2 pb-2 md:px-5 md:pb-5 min-h-0 flex flex-col gap-2 md:gap-3">
         <CWFrequencyControl />
 
         {/* Spectrum Display (no frequency markers for CW mode) */}
@@ -120,6 +121,8 @@ export const CWLeftLayout: React.FC = () => {
             />
           </div>
         )}
+
+        <CWDecoderPanel />
 
         <div className="min-h-0 flex-1">
           <CWKeyerPanel embedded />

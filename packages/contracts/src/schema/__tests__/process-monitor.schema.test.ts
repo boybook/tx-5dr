@@ -143,4 +143,79 @@ describe('ProcessSnapshotSchema', () => {
     expect(parsed.decodeWorkers?.summary.status).toBe('stopped');
     expect(parsed.decodeWorkers?.summary.lastError).toBeUndefined();
   });
+
+  it('accepts generic worker pool telemetry while preserving decodeWorkers compatibility', () => {
+    const decodeWorkerTelemetry = {
+      summary: {
+        status: 'ready' as const,
+        workerCount: 1,
+        desiredWorkers: 1,
+        readyCount: 1,
+        busyCount: 0,
+        totalRss: 256,
+        totalCpu: 12,
+        nativeThreadsPerWorker: 2,
+        pendingJobs: 0,
+        activeJobs: 0,
+      },
+      workers: [
+        {
+          workerId: 1,
+          pid: 1234,
+          ready: true,
+          busy: false,
+          nativeThreads: 2,
+          uptimeSeconds: 30,
+          memory: {
+            heapUsed: 100,
+            heapTotal: 200,
+            rss: 256,
+            external: 20,
+            arrayBuffers: 10,
+          },
+          cpu: {
+            user: 10,
+            system: 2,
+            total: 12,
+          },
+          lastSeenAt: 2,
+        },
+      ],
+    };
+
+    const parsed = ProcessSnapshotSchema.parse({
+      ...createBaseSnapshot(),
+      decodeWorkers: decodeWorkerTelemetry,
+      workerPools: [
+        {
+          id: 'ft8-decode',
+          name: 'FT8 Decode Workers',
+          kind: 'decode',
+          ...decodeWorkerTelemetry,
+        },
+        {
+          id: 'cw-decoder',
+          name: 'CW Decoder Workers',
+          kind: 'cw-decoder',
+          summary: {
+            status: 'stopped',
+            workerCount: 0,
+            desiredWorkers: 0,
+            readyCount: 0,
+            busyCount: 0,
+            totalRss: 0,
+            totalCpu: 0,
+            nativeThreadsPerWorker: 1,
+            pendingJobs: 0,
+            activeJobs: 0,
+          },
+          workers: [],
+        },
+      ],
+    });
+
+    expect(parsed.decodeWorkers?.summary.workerCount).toBe(1);
+    expect(parsed.workerPools?.map((pool) => pool.id)).toEqual(['ft8-decode', 'cw-decoder']);
+    expect(parsed.workerPools?.[0].workers[0].workerId).toBe(1);
+  });
 });

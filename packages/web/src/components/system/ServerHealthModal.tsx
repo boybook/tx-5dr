@@ -468,6 +468,84 @@ function formatWorkerJob(worker: NonNullable<ProcessSnapshot['decodeWorkers']>['
   return `${worker.currentJob.mode} w${worker.currentJob.windowIdx} · ${(worker.currentJob.elapsedMs / 1000).toFixed(1)}s`;
 }
 
+
+type GenericWorkerPoolWorker = {
+  workerId?: string | number;
+  id?: string | number;
+  pid?: number | string | null;
+  busy?: boolean;
+  lastSeenAt?: number;
+  currentJob?: { mode?: string; windowIdx?: number | string; elapsedMs?: number; [key: string]: unknown } | null;
+  cpu?: { total?: number | null };
+  memory?: { rss?: number | null };
+  [key: string]: unknown;
+};
+
+type GenericWorkerPoolTelemetry = {
+  id: string;
+  summary: {
+    status?: string;
+    readyCount?: number;
+    desiredWorkers?: number;
+    workerCount?: number;
+    busyCount?: number;
+    totalCpu?: number | null;
+    totalRss?: number | null;
+    pendingJobs?: number;
+    activeJobs?: number;
+    lastError?: string | null;
+    [key: string]: unknown;
+  };
+  workers: GenericWorkerPoolWorker[];
+};
+
+type ProcessSnapshotWithWorkerPools = Omit<ProcessSnapshot, 'workerPools'> & {
+  workerPools?: Record<string, Omit<GenericWorkerPoolTelemetry, 'id'> | GenericWorkerPoolTelemetry> | GenericWorkerPoolTelemetry[];
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object';
+}
+
+function getWorkerPools(snapshot: ProcessSnapshot): GenericWorkerPoolTelemetry[] {
+  const workerPools = (snapshot as ProcessSnapshotWithWorkerPools).workerPools;
+  if (!workerPools) return [];
+
+  if (Array.isArray(workerPools)) {
+    return workerPools.map((pool, index) => ({
+      ...pool,
+      id: pool.id ?? `pool-${index + 1}`,
+      summary: pool.summary ?? {},
+      workers: pool.workers ?? [],
+    }));
+  }
+
+  const workerPoolRecord = workerPools as Record<string, Omit<GenericWorkerPoolTelemetry, 'id'> | GenericWorkerPoolTelemetry>;
+  return Object.entries(workerPoolRecord).map(([id, pool]) => {
+    const poolRecord: Record<string, unknown> = isRecord(pool) ? pool : {};
+    return {
+      ...poolRecord,
+      id: typeof poolRecord.id === 'string' ? poolRecord.id : id,
+      summary: isRecord(poolRecord.summary) ? poolRecord.summary as GenericWorkerPoolTelemetry['summary'] : {},
+      workers: Array.isArray(poolRecord.workers) ? poolRecord.workers as GenericWorkerPoolWorker[] : [],
+    };
+  });
+}
+
+function workerPoolMachineCpuPercent(snapshot: ProcessSnapshot): number {
+  const pools = getWorkerPools(snapshot);
+  const totalCpu = pools.reduce((sum, pool) => sum + (pool.summary.totalCpu ?? 0), 0);
+  return decodeWorkerMachineCpuPercent(totalCpu, snapshot);
+}
+
+function formatGenericWorkerJob(worker: GenericWorkerPoolWorker): string {
+  if (!worker.currentJob) return 'idle';
+  const job = worker.currentJob;
+  const elapsed = typeof job.elapsedMs === 'number' ? ` · ${(job.elapsedMs / 1000).toFixed(1)}s` : '';
+  const windowLabel = job.windowIdx != null ? ` w${job.windowIdx}` : '';
+  return `${job.mode ?? 'job'}${windowLabel}${elapsed}`;
+}
+
 function CpuDetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-4">
@@ -543,6 +621,150 @@ function CpuLoadValue({ snapshot }: { snapshot: ProcessSnapshot }) {
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+function WorkerPoolsCard({
+  snapshot,
+  cpuPercentValues,
+  timestamps,
+}: {
+  snapshot: ProcessSnapshot;
+  cpuPercentValues: number[];
+  timestamps: number[];
+}) {
+  const { t } = useTranslation('settings');
+  const pools = getWorkerPools(snapshot);
+  if (pools.length === 0) return null;
+
+  const totalReady = pools.reduce((sum, pool) => sum + (pool.summary.readyCount ?? 0), 0);
+  const totalDesired = pools.reduce((sum, pool) => sum + (pool.summary.desiredWorkers ?? pool.summary.workerCount ?? pool.workers.length), 0);
+  const totalBusy = pools.reduce((sum, pool) => sum + (pool.summary.busyCount ?? pool.workers.filter(worker => worker.busy).length), 0);
+  const totalRss = pools.reduce((sum, pool) => sum + (pool.summary.totalRss ?? 0), 0);
+  const totalPending = pools.reduce((sum, pool) => sum + (pool.summary.pendingJobs ?? 0), 0);
+  const totalActive = pools.reduce((sum, pool) => sum + (pool.summary.activeJobs ?? 0), 0);
+  const poolStatus = pools.some(pool => pool.summary.status === 'unavailable')
+    ? 'unavailable'
+    : pools.some(pool => pool.summary.status === 'degraded')
+      ? 'degraded'
+      : pools.some(pool => pool.summary.status === 'starting')
+        ? 'starting'
+        : 'ready';
+  const statusColor = poolStatus === 'unavailable'
+    ? 'danger'
+    : poolStatus === 'degraded'
+      ? 'warning'
+      : poolStatus === 'ready'
+        ? 'success'
+        : 'default';
+
+  return (
+    <div className="bg-content2 rounded-xl p-4 flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-semibold text-default-500 uppercase tracking-wider">
+          {t('serverHealth.workerPools')}
+        </div>
+        <div className="flex items-center gap-2">
+          <Chip size="sm" color={statusColor} variant="flat" className="text-xs">
+            {t(`serverHealth.workerPoolStatus.${poolStatus}`)}
+          </Chip>
+          <Chip size="sm" color={totalBusy > 0 ? 'primary' : 'default'} variant="flat" className="text-xs">
+            {t('serverHealth.decodeWorkersBusy', { busy: totalBusy, total: totalDesired })}
+          </Chip>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div>
+          <div className="text-xs text-default-400">{t('serverHealth.workers')}</div>
+          <div className="text-lg font-mono font-semibold text-foreground">{totalReady}/{totalDesired}</div>
+        </div>
+        <div>
+          <div className="text-xs text-default-400">{t('serverHealth.workerRss')}</div>
+          <div className="text-lg font-mono font-semibold text-foreground">{formatBytes(totalRss)}</div>
+        </div>
+        <div>
+          <div className="text-xs text-default-400">{t('serverHealth.workerCpuPercent')}</div>
+          <div className="text-lg font-mono font-semibold text-foreground">{workerPoolMachineCpuPercent(snapshot).toFixed(1)}%</div>
+        </div>
+        <div>
+          <div className="text-xs text-default-400">{t('serverHealth.workerQueue')}</div>
+          <div className="text-lg font-mono font-semibold text-foreground">{totalPending}/{totalActive}</div>
+        </div>
+      </div>
+
+      <Sparkline
+        values={cpuPercentValues.length > 0 ? cpuPercentValues : [0]}
+        height={44}
+        timestamps={timestamps}
+        valueMin={0}
+        valueMaxFloor={100}
+        formatValue={(v) => `${v.toFixed(1)}%`}
+      />
+
+      <div className="flex flex-col gap-2">
+        {pools.map((pool) => {
+          const status = pool.summary.status ?? (pool.summary.readyCount ? 'ready' : 'starting');
+          const visibleWorkers = pool.workers.slice(0, 3);
+          const hiddenCount = Math.max(pool.workers.length - visibleWorkers.length, 0);
+          return (
+            <div key={pool.id} className="rounded-lg bg-content1 px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 truncate text-xs font-semibold text-default-700">{pool.id}</div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Chip size="sm" color={status === 'ready' ? 'success' : status === 'degraded' ? 'warning' : status === 'unavailable' ? 'danger' : 'default'} variant="flat" className="h-5 text-[10px]">
+                    {t(`serverHealth.workerPoolStatus.${status}`)}
+                  </Chip>
+                  <span className="text-xs font-mono text-default-500">
+                    {(pool.summary.readyCount ?? 0)}/{pool.summary.desiredWorkers ?? pool.summary.workerCount ?? pool.workers.length}
+                  </span>
+                </div>
+              </div>
+              {pool.summary.lastError && (
+                <div className="mt-2 rounded-md border border-warning-200 bg-warning-50 px-2 py-1.5 text-xs text-warning-700">
+                  <span className="font-medium">{t('serverHealth.workerLastError')}</span>
+                  <span className="ml-1 font-mono break-all">{pool.summary.lastError}</span>
+                </div>
+              )}
+              <div className="mt-2 flex flex-col gap-1.5">
+                {visibleWorkers.length === 0 ? (
+                  <div className="text-xs text-default-500">{t('serverHealth.workerNoTelemetry')}</div>
+                ) : visibleWorkers.map((worker, index) => {
+                  const workerId = worker.workerId ?? worker.id ?? index + 1;
+                  const isStale = typeof worker.lastSeenAt === 'number' && snapshot.timestamp - worker.lastSeenAt > 5000;
+                  return (
+                    <div key={String(workerId)} className="flex items-center justify-between gap-3 rounded-md bg-content2 px-2 py-1.5">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-mono text-default-700">#{workerId}</span>
+                          <span className="text-xs text-default-400">pid {worker.pid ?? '—'}</span>
+                          <Chip size="sm" color={worker.busy ? 'primary' : 'default'} variant="flat" className="h-5 text-[10px]">
+                            {worker.busy ? t('serverHealth.workerBusy') : t('serverHealth.workerIdle')}
+                          </Chip>
+                          {isStale && (
+                            <Chip size="sm" color="warning" variant="flat" className="h-5 text-[10px]">
+                              {t('serverHealth.workerStale')}
+                            </Chip>
+                          )}
+                        </div>
+                        <div className="mt-1 truncate text-xs text-default-500">{formatGenericWorkerJob(worker)}</div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <div className="text-xs font-mono text-default-700">{formatDecodeWorkerCpuPercent(worker.cpu?.total, snapshot)}</div>
+                        <div className="text-xs font-mono text-default-500">{formatBytes(worker.memory?.rss ?? 0)}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {hiddenCount > 0 && (
+                  <div className="text-xs text-default-400 px-1">{t('serverHealth.moreWorkers', { count: hiddenCount })}</div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -743,6 +965,10 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
     () => displaySnapshots.map(s => decodeWorkerMachineCpuPercent(s.decodeWorkers?.summary.totalCpu ?? 0, s)),
     [displaySnapshots]
   );
+  const workerPoolCpuPercentValues = useMemo(
+    () => displaySnapshots.map(s => workerPoolMachineCpuPercent(s)),
+    [displaySnapshots]
+  );
   const unsupportedCoreCapabilities = useMemo(
     () => getActiveCoreCapabilityDiagnostics(coreCapabilities, coreCapabilityDiagnostics),
     [coreCapabilities, coreCapabilityDiagnostics]
@@ -889,11 +1115,19 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
                 />
               </div>
 
-              <DecodeWorkersCard
-                snapshot={latest}
-                cpuPercentValues={decodeWorkerCpuPercentValues}
-                timestamps={timestamps}
-              />
+              {getWorkerPools(latest).length > 0 ? (
+                <WorkerPoolsCard
+                  snapshot={latest}
+                  cpuPercentValues={workerPoolCpuPercentValues}
+                  timestamps={timestamps}
+                />
+              ) : (
+                <DecodeWorkersCard
+                  snapshot={latest}
+                  cpuPercentValues={decodeWorkerCpuPercentValues}
+                  timestamps={timestamps}
+                />
+              )}
 
               {unsupportedCoreCapabilities.length > 0 && (
                 <div className="bg-content2 rounded-xl p-4 flex flex-col gap-3">

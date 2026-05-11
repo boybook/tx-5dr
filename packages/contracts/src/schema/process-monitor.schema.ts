@@ -74,6 +74,19 @@ export const DecodeWorkerTelemetrySnapshotSchema = z.object({
   workers: z.array(DecodeWorkerTelemetryWorkerSchema),
 });
 
+export const WorkerPoolTelemetryWorkerSchema = DecodeWorkerTelemetryWorkerSchema;
+export const WorkerPoolTelemetrySummarySchema = DecodeWorkerTelemetrySummarySchema;
+
+export const WorkerPoolTelemetrySnapshotSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  kind: z.string().min(1),
+  summary: WorkerPoolTelemetrySummarySchema,
+  workers: z.array(WorkerPoolTelemetryWorkerSchema),
+});
+
+export const WorkerPoolTelemetryListSchema = z.array(WorkerPoolTelemetrySnapshotSchema);
+
 export const ProcessSnapshotSchema = z.object({
   timestamp: z.number(),
   uptimeSeconds: z.number(),
@@ -82,6 +95,7 @@ export const ProcessSnapshotSchema = z.object({
   hostCpu: HostCpuSchema.optional(),
   eventLoop: EventLoopDelaySchema,
   decodeWorkers: DecodeWorkerTelemetrySnapshotSchema.optional(),
+  workerPools: WorkerPoolTelemetryListSchema.optional(),
 });
 
 export const ProcessSnapshotHistorySchema = z.object({
@@ -98,5 +112,9 @@ export type DecodeWorkerCurrentJob = z.infer<typeof DecodeWorkerCurrentJobSchema
 export type DecodeWorkerTelemetryWorker = z.infer<typeof DecodeWorkerTelemetryWorkerSchema>;
 export type DecodeWorkerTelemetrySummary = z.infer<typeof DecodeWorkerTelemetrySummarySchema>;
 export type DecodeWorkerTelemetrySnapshot = z.infer<typeof DecodeWorkerTelemetrySnapshotSchema>;
+export type WorkerPoolTelemetryWorker = z.infer<typeof WorkerPoolTelemetryWorkerSchema>;
+export type WorkerPoolTelemetrySummary = z.infer<typeof WorkerPoolTelemetrySummarySchema>;
+export type WorkerPoolTelemetrySnapshot = z.infer<typeof WorkerPoolTelemetrySnapshotSchema>;
+export type WorkerPoolTelemetryList = z.infer<typeof WorkerPoolTelemetryListSchema>;
 export type ProcessSnapshot = z.infer<typeof ProcessSnapshotSchema>;
 export type ProcessSnapshotHistory = z.infer<typeof ProcessSnapshotHistorySchema>;

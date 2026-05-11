@@ -28,6 +28,7 @@ import { UserRole } from './auth.schema.js';
 import type { VoicePTTLock } from './voice.schema.js';
 import type { VoiceKeyerStatus } from './voice-keyer.schema.js';
 import type { CWKeyerStatus, CWKeyerConfig } from './cw-keyer.schema.js';
+import { CWDecoderEventSchema, CWDecoderStatusSchema, type CWDecoderEvent, type CWDecoderStatus } from './cw-decoder.schema.js';
 import { CapabilityListSchema, CapabilityStateSchema, WriteCapabilityPayloadSchema } from './radio-capability.schema.js';
 import { RadioPowerStateEventSchema } from './radio-power.schema.js';
 import { AudioSidecarStatusPayloadSchema } from './audio-sidecar.schema.js';
@@ -189,6 +190,10 @@ export enum WSMessageType {
   CW_STOP_MESSAGE = 'cwStopMessage',
   /** CW 配置变更通知（server → client） */
   CW_CONFIG_CHANGED = 'cwConfigChanged',
+  /** CW 解码器状态快照（server → client） */
+  CW_DECODER_STATUS = 'cwDecoderStatus',
+  /** CW 解码器增量事件（server → client） */
+  CW_DECODER_EVENT = 'cwDecoderEvent',
 
   // ===== 进程监控 =====
   PROCESS_SNAPSHOT = 'processSnapshot',
@@ -1124,6 +1129,20 @@ export const WSTextMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSTextMessage = z.infer<typeof WSTextMessageSchema>;
 
+export const WSCWDecoderStatusMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.CW_DECODER_STATUS),
+  data: CWDecoderStatusSchema,
+});
+
+export type WSCWDecoderStatusMessage = z.infer<typeof WSCWDecoderStatusMessageSchema>;
+
+export const WSCWDecoderEventMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.CW_DECODER_EVENT),
+  data: CWDecoderEventSchema,
+});
+
+export type WSCWDecoderEventMessage = z.infer<typeof WSCWDecoderEventMessageSchema>;
+
 // ===== 统一电台控制能力消息 =====
 
 /**
@@ -1362,6 +1381,10 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   // 文本消息（Toast通知）
   WSTextMessageSchema,
 
+  // CW 解码器消息
+  WSCWDecoderStatusMessageSchema,
+  WSCWDecoderEventMessageSchema,
+
   // 认证消息
   WSAuthRequiredMessageSchema,
   WSAuthTokenMessageSchema,
@@ -1537,6 +1560,8 @@ export interface DigitalRadioEngineEvents {
   // CW 模式事件
   cwKeyerStatusChanged: (data: CWKeyerStatus) => void;
   cwConfigChanged: (data: CWKeyerConfig) => void;
+  cwDecoderStatusChanged: (data: CWDecoderStatus) => void;
+  cwDecoderEvent: (data: CWDecoderEvent) => void;
 
   // 进程监控事件
   processSnapshot: (data: import('./process-monitor.schema.js').ProcessSnapshot) => void;

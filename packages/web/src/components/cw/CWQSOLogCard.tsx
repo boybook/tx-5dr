@@ -23,7 +23,7 @@ import { useWSEvent } from '../../hooks/useWSEvent';
 import { useCWKeyer } from '../../hooks/useCWKeyer';
 import type { QSORecord } from '@tx5dr/contracts';
 import { openLogbookWindow } from '../../utils/windowManager';
-import { setCWQSOHisCallsign } from '../../store/cwQsoDraftStore';
+import { setCWQSOHisCallsign, useCWQSODraft } from '../../store/cwQsoDraftStore';
 
 const logger = createLogger('CWQSOLogCard');
 
@@ -76,6 +76,7 @@ export const CWQSOLogCard: React.FC<CWQSOLogCardProps> = ({
   const connection = useConnection();
   const { operators } = useOperators();
   const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
+  const { hisCallsign } = useCWQSODraft();
 
   const [internalCollapsed, setInternalCollapsed] = useState(false);
   const [formData, setFormData] = useState<QSOFormData>(initialFormData);
@@ -178,6 +179,16 @@ export const CWQSOLogCard: React.FC<CWQSOLogCardProps> = ({
     setStartTime(null);
     setEndTime(null);
   };
+
+  // Keep the QSO log callsign in sync with shared CW draft updates,
+  // including the decoder "use callsign" action from the left panel.
+  useEffect(() => {
+    if (editingQSO) return;
+    setFormData(prev => {
+      if (prev.callsign.trim().toUpperCase() === hisCallsign) return prev;
+      return { ...prev, callsign: hisCallsign };
+    });
+  }, [editingQSO, hisCallsign]);
 
   const handleLogQSO = async () => {
     if (!formData.callsign.trim() || !hasOperator) return;

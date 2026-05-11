@@ -2,7 +2,7 @@ import { monitorEventLoopDelay } from 'node:perf_hooks';
 import type { IntervalHistogram } from 'node:perf_hooks';
 import os from 'node:os';
 import type { CpuInfo } from 'node:os';
-import type { DecodeWorkerTelemetrySnapshot, ProcessSnapshot, ProcessSnapshotHistory } from '@tx5dr/contracts';
+import type { DecodeWorkerTelemetrySnapshot, WorkerPoolTelemetrySnapshot, ProcessSnapshot, ProcessSnapshotHistory } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('ProcessMonitor');
@@ -133,7 +133,7 @@ export class ProcessMonitor {
   private lastCpuTime = Date.now();
   private lastHostCpuTimes = readHostCpuTimes();
   private broadcastCallback: ((snapshot: ProcessSnapshot) => void) | null = null;
-  private extraSnapshotProvider: (() => { decodeWorkers?: DecodeWorkerTelemetrySnapshot } | undefined) | null = null;
+  private extraSnapshotProvider: (() => { decodeWorkers?: DecodeWorkerTelemetrySnapshot; workerPools?: WorkerPoolTelemetrySnapshot[] } | undefined) | null = null;
 
   private constructor(config: Partial<ProcessMonitorConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -151,7 +151,7 @@ export class ProcessMonitor {
     this.broadcastCallback = cb;
   }
 
-  setExtraSnapshotProvider(provider: (() => { decodeWorkers?: DecodeWorkerTelemetrySnapshot } | undefined) | null): void {
+  setExtraSnapshotProvider(provider: (() => { decodeWorkers?: DecodeWorkerTelemetrySnapshot; workerPools?: WorkerPoolTelemetrySnapshot[] } | undefined) | null): void {
     this.extraSnapshotProvider = provider;
   }
 
@@ -245,6 +245,9 @@ export class ProcessMonitor {
         const extra = this.extraSnapshotProvider();
         if (extra?.decodeWorkers) {
           snapshot.decodeWorkers = extra.decodeWorkers;
+        }
+        if (extra?.workerPools) {
+          snapshot.workerPools = extra.workerPools;
         }
       } catch (error) {
         logger.warn('process monitor extra snapshot provider failed', {

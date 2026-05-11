@@ -9,8 +9,10 @@ import {
   PSKReporterConfig,
   DEFAULT_DECODE_WINDOW_SETTINGS,
   DEFAULT_RIGCTLD_BRIDGE_CONFIG,
+  CWDecoderConfigSchema,
   type RealtimeTransportPolicy,
   type RigctldBridgeConfig,
+  type CWDecoderConfig,
   UpdateNtpServerListRequestSchema,
 } from '@tx5dr/contracts';
 import type { RadioProfile, DecodeWindowSettings, PresetFrequency, RepeaterShift, ToneSquelchMode, StationInfo, OpenWebRXStationConfig, PluginsConfig } from '@tx5dr/contracts';
@@ -120,6 +122,8 @@ export interface AppConfig {
   plugins?: PluginsConfig;
   /** rigctld-compatible TCP bridge (lets N1MM / WSJT-X / JTDX connect to this tx5dr instance). */
   rigctld?: RigctldBridgeConfig;
+  /** CW receive-side decoder configuration. */
+  cwDecoder?: CWDecoderConfig;
   /** Persisted NTP server order. When absent, built-in defaults are used. */
   ntp?: {
     servers?: string[];
@@ -181,6 +185,7 @@ const DEFAULT_CONFIG: AppConfig = {
   rtcDataAudioPublicHost: null,
   rtcDataAudioPublicUdpPort: null,
   rigctld: { ...DEFAULT_RIGCTLD_BRIDGE_CONFIG },
+  cwDecoder: CWDecoderConfigSchema.parse({}),
 };
 
 // 默认音频配置（无 Profile 时的兜底值）
@@ -258,6 +263,7 @@ export function validateAppConfigCandidate(value: unknown): Record<string, unkno
   assertOptionalObject(value, 'pskreporter');
   assertOptionalObject(value, 'plugins');
   assertOptionalObject(value, 'rigctld');
+  assertOptionalObject(value, 'cwDecoder');
   assertOptionalObject(value, 'ntp');
   assertOptionalObjectOrNull(value, 'lastSelectedFrequency');
   assertOptionalObjectOrNull(value, 'lastVoiceFrequency');
@@ -862,6 +868,26 @@ export class ConfigManager {
     }
     this.config.ft8 = { ...this.config.ft8, ...updates };
     await this.saveConfig();
+  }
+
+  getCWDecoderConfig(): CWDecoderConfig {
+    // Decoder enablement is intentionally runtime-only. Persist model/backend
+    // preferences, but every server/UI session starts with CW decoding off.
+    return { ...CWDecoderConfigSchema.parse(this.config.cwDecoder ?? {}), enabled: false };
+  }
+
+  async updateCWDecoderConfig(update: Partial<CWDecoderConfig>): Promise<CWDecoderConfig> {
+    const { enabled: _runtimeOnly, ...persistentUpdate } = update;
+    const next = {
+      ...CWDecoderConfigSchema.parse({
+        ...(this.config.cwDecoder ?? {}),
+        ...persistentUpdate,
+      }),
+      enabled: false,
+    };
+    this.config.cwDecoder = next;
+    await this.saveConfig();
+    return next;
   }
 
   private normalizeMaxSameTransmissionCount(value: unknown): number {

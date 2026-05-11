@@ -12,6 +12,9 @@ import {
   type SlotPack,
   type DigitalRadioEngineEvents,
   type DecodeWorkerTelemetrySnapshot,
+  type WorkerPoolTelemetrySnapshot,
+  type CWDecoderConfig,
+  type CWDecoderStatus,
   type EngineMode,
   type SquelchStatus,
   type RadioPowerResponse,
@@ -61,6 +64,7 @@ import { EngineLifecycle } from './subsystems/EngineLifecycle.js';
 import { VoiceSessionManager } from './voice/VoiceSessionManager.js';
 import { VoiceKeyerManager } from './voice/VoiceKeyerManager.js';
 import { CWKeyerManager } from './cw/CWKeyerManager.js';
+import { CWDecoderManager, DEFAULT_CW_DECODER_CONFIG, type CWDecoderStatus as ServerCWDecoderStatus, type CWDecoderConfig as ServerCWDecoderConfig } from './cw-decoder/index.js';
 import { EngineState } from './state-machines/types.js';
 import { PluginManager } from './plugin/PluginManager.js';
 import { tx5drPaths } from './utils/app-paths.js';
@@ -72,6 +76,8 @@ import { PhysicalPttMonitor } from './radio/PhysicalPttMonitor.js';
 import type { RigctldBridgeConfig, RigctldStatus } from '@tx5dr/contracts';
 import { RadioPowerController } from './radio/RadioPowerController.js';
 import { TuneToneController } from './radio/TuneToneController.js';
+import path from 'node:path';
+import { existsSync } from 'node:fs';
 
 /**
  * DigitalRadioEngine — 数字电台引擎 Facade
@@ -113,6 +119,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   // CW 模式
   private cwKeyerManager: CWKeyerManager | null = null;
+  private cwDecoderManager: CWDecoderManager | null = null;
+  private cwDecoderStartedEngine = false;
   private modeSwitchTail: Promise<void> = Promise.resolve();
 
   // 子系统
@@ -518,6 +526,50 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.realDecodeQueue.getDecodeWorkerTelemetrySnapshot();
   }
 
+  public getWorkerPoolTelemetrySnapshots(): WorkerPoolTelemetrySnapshot[] {
+    const pools: WorkerPoolTelemetrySnapshot[] = [];
+    const ft8 = this.realDecodeQueue.getDecodeWorkerTelemetrySnapshot();
+    if (ft8) {
+      pools.push({
+        id: 'wsjtx-decode',
+        name: 'FT8/FT4 Decode Workers',
+        kind: 'decode',
+        summary: ft8.summary,
+        workers: ft8.workers,
+      });
+    }
+
+    const cwTelemetry = this.cwDecoderManager?.getWorkerPoolTelemetrySnapshot();
+    if (cwTelemetry) {
+      const status = cwTelemetry.status === 'running'
+        ? 'ready'
+        : cwTelemetry.status === 'error'
+          ? 'unavailable'
+          : cwTelemetry.status;
+      pools.push({
+        id: 'cw-decode',
+        name: 'CW Decode Workers',
+        kind: 'cw-decode',
+        summary: {
+          status,
+          workerCount: cwTelemetry.workerCount,
+          desiredWorkers: cwTelemetry.workerCount,
+          readyCount: status === 'ready' ? cwTelemetry.workerCount : 0,
+          busyCount: cwTelemetry.inFlight,
+          totalRss: 0,
+          totalCpu: 0,
+          nativeThreadsPerWorker: 1,
+          pendingJobs: cwTelemetry.pendingJobs ?? 0,
+          activeJobs: cwTelemetry.inFlight,
+          lastError: cwTelemetry.lastError ?? undefined,
+        },
+        workers: cwTelemetry.workers ?? [],
+      });
+    }
+
+    return pools;
+  }
+
   public getAudioSidecar(): AudioSidecarController {
     return this.audioSidecar;
   }
@@ -558,6 +610,132 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       });
     }
     return this.cwKeyerManager;
+  }
+
+  public getCWDecoderManager(): CWDecoderManager {
+    if (!this.cwDecoderManager) {
+      this.cwDecoderManager = new CWDecoderManager({
+        initialConfig: this.toServerCWDecoderConfig(ConfigManager.getInstance().getCWDecoderConfig()),
+      });
+      this.cwDecoderManager.attachAudioStream(this.audioStreamManager as unknown as import('./cw-decoder/index.js').CWDecoderAudioStream);
+      this.cwDecoderManager.on('cwDecoderStatusChanged', (status) => {
+        this.emit('cwDecoderStatusChanged', this.toContractCWDecoderStatus(status));
+      });
+      this.cwDecoderManager.on('cwDecoderPending', (event) => {
+        this.emit('cwDecoderEvent', {
+          kind: 'pending',
+          text: event.text,
+          confidence: event.confidence,
+          timestamp: event.timestamp,
+        });
+      });
+      this.cwDecoderManager.on('cwDecoderCommit', (event) => {
+        this.emit('cwDecoderEvent', {
+          kind: 'commit',
+          segment: {
+            id: event.id,
+            text: event.text,
+            confidence: event.confidence,
+            startedAt: event.timestamp,
+            updatedAt: event.timestamp,
+            endedAt: event.timestamp,
+            finalized: true,
+            characterSpans: event.characterSpans,
+            wordSpaceSpans: event.wordSpaceSpans,
+          },
+          text: event.text,
+          confidence: event.confidence,
+          timestamp: event.timestamp,
+        });
+      });
+      this.cwDecoderManager.on('cwDecoderError', (event) => {
+        this.emit('cwDecoderEvent', {
+          kind: 'error',
+          message: event.error,
+          recoverable: event.recoverable,
+          timestamp: event.timestamp,
+        });
+      });
+    }
+    return this.cwDecoderManager;
+  }
+
+  public getCWDecoderConfig(): CWDecoderConfig {
+    return ConfigManager.getInstance().getCWDecoderConfig();
+  }
+
+  public getCWDecoderBackends() {
+    return this.getCWDecoderManager().getBackends().map((backend) => ({
+      id: backend.id,
+      name: 'DeepCW ONNX',
+      label: 'DeepCW ONNX',
+      available: backend.available,
+      error: backend.error,
+      reason: backend.error ?? undefined,
+      runtimeBackends: ['cpu'],
+      modelSizes: ['tiny', 'small'],
+      languages: ['en'],
+      modes: ['streaming'],
+      model: 'en_tiny/en_small',
+      runtime: 'cpu',
+      attributionName: 'DeepCW / web-deep-cw-decoder',
+      sourceUrl: 'https://github.com/e04/web-deep-cw-decoder',
+      license: 'GPL-3.0',
+    }));
+  }
+
+  public getCWDecoderStatus() {
+    return this.toContractCWDecoderStatus(this.getCWDecoderManager().getStatus());
+  }
+
+  public async updateCWDecoderConfig(update: Partial<CWDecoderConfig>) {
+    const saved = await ConfigManager.getInstance().updateCWDecoderConfig(update);
+    const runtimeEnabled = this.cwDecoderManager?.getStatus().enabled ?? false;
+    await this.getCWDecoderManager().updateConfig(this.toServerCWDecoderConfig({ ...saved, enabled: runtimeEnabled }));
+    return saved;
+  }
+
+  public async startCWDecoder(update: Partial<CWDecoderConfig> = {}) {
+    const { enabled: _runtimeOnly, ...persistentUpdate } = update;
+    const saved = await this.updateCWDecoderConfig(persistentUpdate);
+    const runtimeConfig = { ...saved, enabled: true };
+    const wasRunning = this.engineLifecycle?.getIsRunning() ?? false;
+    if (this.engineMode !== 'cw') {
+      await this.setMode(MODES.CW);
+    }
+    if (!this.engineLifecycle?.getIsRunning()) {
+      this.cwDecoderStartedEngine = true;
+      await this.engineLifecycle.startAndWaitForRunning();
+    } else {
+      this.cwDecoderStartedEngine = !wasRunning;
+    }
+    await this.getCWDecoderManager().start(this.toServerCWDecoderConfig(runtimeConfig));
+    this.emitStatusSnapshot();
+    return this.getCWDecoderStatus();
+  }
+
+  public async stopCWDecoder() {
+    const saved = await ConfigManager.getInstance().updateCWDecoderConfig({ enabled: false });
+    await this.getCWDecoderManager().stop('user-disabled');
+    if (this.cwDecoderStartedEngine && this.engineMode === 'cw') {
+      this.cwDecoderStartedEngine = false;
+      await this.engineLifecycle.stop();
+    }
+    this.emitStatusSnapshot();
+    return this.toContractCWDecoderStatus(this.getCWDecoderManager().getStatus(), saved);
+  }
+
+  public clearCWDecoderTranscript() {
+    const status = this.getCWDecoderManager().clearTranscript();
+    const contractStatus = this.toContractCWDecoderStatus(status);
+    this.emit('cwDecoderEvent', {
+      kind: 'pending',
+      text: '',
+      confidence: 0,
+      timestamp: Date.now(),
+    });
+    this.emit('cwDecoderStatusChanged', contractStatus);
+    return contractStatus;
   }
 
   public getNtpCalibrationService(): NtpCalibrationService {
@@ -708,6 +886,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getCurrentMode: () => this.currentMode,
       getVoiceSessionManager: () => this.voiceSessionManager,
       getCWKeyerManager: () => this.getCWKeyerManager(),
+      getCWDecoderManager: () => this.getCWDecoderManager(),
       getAudioVolumeController: () => this.audioVolumeController,
       getAudioSidecar: () => this.audioSidecar,
       getStatus: () => this.getStatus(),
@@ -853,6 +1032,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.cwKeyerManager.removeAllListeners();
       this.cwKeyerManager = null;
       logger.info('CW keyer manager destroyed');
+    }
+    if (this.cwDecoderManager) {
+      this.cwDecoderManager.detachAudioStream();
+      await this.cwDecoderManager.stop('engine-destroy');
+      this.cwDecoderManager.removeAllListeners();
+      this.cwDecoderManager = null;
+      logger.info('CW decoder manager destroyed');
     }
 
     // 清理操作员管理器
@@ -1424,6 +1610,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   private handleCWKeyerStatusChanged(status: CWKeyerStatus): void {
     const shouldPollPhysicalPtt = status.active && (status.mode === 'playing' || status.mode === 'keying');
+    if (this.cwDecoderManager || ConfigManager.getInstance().getCWDecoderConfig().enabled) {
+      this.getCWDecoderManager().setTransmitMuted?.(shouldPollPhysicalPtt);
+    }
     if (shouldPollPhysicalPtt && !this.releaseCwPttPolling) {
       this.releaseCwPttPolling = this.physicalPttMonitor.requestPolling('cw-keyer');
       return;
@@ -1433,6 +1622,80 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.releaseCwPttPolling();
       this.releaseCwPttPolling = null;
     }
+  }
+
+  private toServerCWDecoderConfig(config: Partial<CWDecoderConfig>): ServerCWDecoderConfig {
+    const merged = {
+      ...DEFAULT_CW_DECODER_CONFIG,
+      ...config,
+      backend: 'deepcw-onnx' as const,
+      inputSampleRate: DEFAULT_CW_DECODER_CONFIG.inputSampleRate,
+      decodeSampleRate: DEFAULT_CW_DECODER_CONFIG.decodeSampleRate,
+    };
+    return {
+      ...merged,
+      modelPath: this.resolveDeepCWModelPath(merged),
+    };
+  }
+
+  private toContractCWDecoderStatus(status: ServerCWDecoderStatus, config: CWDecoderConfig = ConfigManager.getInstance().getCWDecoderConfig()): CWDecoderStatus {
+    const enabled = status.enabled || status.state === 'running' || status.state === 'starting';
+    const contractConfig = { ...config, enabled };
+    const state = status.muted
+      ? 'muted'
+      : status.state === 'running'
+      ? 'listening'
+      : status.state === 'stopped'
+        ? (enabled ? 'starting' : 'disabled')
+        : status.state === 'stopping'
+          ? 'starting'
+        : status.state === 'unavailable'
+          ? 'error'
+          : status.state;
+    return {
+      enabled,
+      state,
+      config: contractConfig,
+      active: status.state === 'running' && !status.muted,
+      muted: status.muted,
+      backend: {
+        id: 'deepcw-onnx',
+        name: 'DeepCW ONNX',
+        available: status.backendAvailable,
+        runtimeBackends: ['cpu'],
+        modelSizes: ['tiny', 'small'],
+        languages: ['en'],
+        modes: ['streaming'],
+        attributionName: 'DeepCW / web-deep-cw-decoder',
+        sourceUrl: 'https://github.com/e04/web-deep-cw-decoder',
+        license: 'GPL-3.0',
+        error: status.backendError,
+      },
+      lastDecodeAt: status.lastDecodeAt ?? undefined,
+      lastError: enabled ? status.backendError : null,
+      updatedAt: Date.now(),
+      running: status.state === 'running',
+      backendId: status.backend,
+      pendingText: status.lastPendingText,
+      committedText: status.lastCommittedText,
+      queuedSamples: status.queuedSamples,
+    };
+  }
+
+  private resolveDeepCWModelPath(config: Pick<ServerCWDecoderConfig, 'language' | 'modelSize'>): string | null {
+    const configured = process.env.TX5DR_DEEPCW_MODEL_PATH;
+    if (configured) return configured;
+
+    const language = config.language === 'en' ? 'en' : 'en';
+    const modelSize = config.modelSize === 'small' ? 'small' : 'tiny';
+    const fileName = `${language}_${modelSize}.onnx`;
+    const candidates = [
+      process.env.APP_RESOURCES ? path.join(process.env.APP_RESOURCES, 'models', 'deepcw', fileName) : null,
+      path.resolve(process.cwd(), 'resources', 'models', 'deepcw', fileName),
+      path.resolve(process.cwd(), '..', '..', 'resources', 'models', 'deepcw', fileName),
+    ].filter((candidate): candidate is string => Boolean(candidate));
+
+    return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0] ?? null;
   }
 
   private resetVoicePttState(): void {
