@@ -779,6 +779,24 @@
       "runtimeMode": "运行模式",
       "cpuMode": "CPU",
       "gpuMode": "GPU",
+      "runtimeBackends": {
+        "cpu": {
+          "label": "CPU",
+          "description": "通用 CPU 执行后端。"
+        },
+        "coreml": {
+          "label": "CoreML",
+          "description": "适用于受支持 Apple 设备的 macOS CoreML 加速。"
+        },
+        "cuda": {
+          "label": "CUDA",
+          "description": "Linux x64 NVIDIA GPU；需要外部安装 CUDA v12 运行时。"
+        },
+        "webgpu": {
+          "label": "WebGPU",
+          "description": "实验性的 ONNX Runtime WebGPU 执行后端。"
+        }
+      },
       "modelSizes": {
         "tiny": "Tiny",
         "small": "Small",

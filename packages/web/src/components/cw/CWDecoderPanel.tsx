@@ -19,10 +19,15 @@ import { useCWDecoder } from '../../hooks/useCWDecoder';
 import { setCWQSOHisCallsign } from '../../store/cwQsoDraftStore';
 import { useCan } from '../../store/authStore';
 import { openExternal } from '../../utils/openExternal';
+import {
+  getCWDecoderRuntimeDescription,
+  getCWDecoderRuntimeLabel,
+  normalizeCWDecoderRuntimeBackends,
+  normalizeSelectedCWDecoderRuntimeBackend,
+} from '../../utils/cwDecoderRuntimeOptions';
 
 const CALLSIGN_RE = /\b(?:[A-Z]{1,2}\d[A-Z0-9]{1,4}|[A-Z0-9]{1,3}\d[A-Z]{1,4})\b/i;
 const DEFAULT_MODEL_SIZES = ['tiny', 'small'] as const;
-const GPU_RUNTIME_BACKEND = 'coreml';
 
 interface DecoderSettingsDraft {
   backend: string;
@@ -105,7 +110,7 @@ export function CWDecoderPanel() {
   const modelSize = String(config?.modelSize ?? config?.model ?? status.model ?? effectiveBackend?.model ?? 'tiny');
   const runtimeBackend = String(config?.runtimeBackend ?? config?.runtime ?? status.runtime ?? effectiveBackend?.runtime ?? 'cpu');
   const model = (status.model ?? modelSize) || t('cw.decoder.modelUnknown', 'default');
-  const runtime = (status.runtime ?? runtimeBackend) || t('cw.decoder.runtimeUnknown', 'auto');
+  const runtime = getCWDecoderRuntimeLabel((status.runtime ?? runtimeBackend) || t('cw.decoder.runtimeUnknown', 'auto'));
   const isEnabled = status.enabled || status.running || status.state === 'starting';
   const showDecoderDetails = isEnabled || status.state === 'stopping';
   const statusColor = status.state === 'error'
@@ -124,10 +129,11 @@ export function CWDecoderPanel() {
   const draftAttribution = getBackendAttribution(draft.backend, draftBackend);
   const modelSizeOptions = stringList(draftBackend?.modelSizes, DEFAULT_MODEL_SIZES);
   const normalizedDraftModelSize = modelSizeOptions.includes(draft.modelSize) ? draft.modelSize : modelSizeOptions[0] ?? draft.modelSize;
-  const isGpuRuntime = draft.runtimeBackend !== 'cpu';
+  const runtimeBackendOptions = normalizeCWDecoderRuntimeBackends(draftBackend?.runtimeBackends);
+  const normalizedDraftRuntimeBackend = normalizeSelectedCWDecoderRuntimeBackend(draft.runtimeBackend, runtimeBackendOptions);
   const settingsChanged = draft.backend !== backendId
     || normalizedDraftModelSize !== modelSize
-    || draft.runtimeBackend !== runtimeBackend;
+    || normalizedDraftRuntimeBackend !== runtimeBackend;
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -172,11 +178,11 @@ export function CWDecoderPanel() {
     }));
   };
 
-  const handleGpuModeChange = (enabled: boolean) => {
+  const handleRuntimeBackendChange = (key: React.Key) => {
     if (!canConfigureDecoder) return;
     setSettingsDraft(prev => ({
       ...(prev ?? makeSettingsDraft(backendId, modelSize, runtimeBackend)),
-      runtimeBackend: enabled ? GPU_RUNTIME_BACKEND : 'cpu',
+      runtimeBackend: String(key),
     }));
   };
 
@@ -199,7 +205,7 @@ export function CWDecoderPanel() {
       await updateConfig({
         backend: draft.backend,
         modelSize: normalizedDraftModelSize,
-        runtimeBackend: draft.runtimeBackend,
+        runtimeBackend: normalizedDraftRuntimeBackend,
       });
       closeSettings();
     } finally {
@@ -321,7 +327,7 @@ export function CWDecoderPanel() {
           <ModalHeader className="flex flex-col gap-1">
             <span>{t('cw.decoder.settings', 'Decoder settings')}</span>
             <span className="text-xs font-normal text-default-500">
-              {draftBackendLabel} · {normalizedDraftModelSize} · {draft.runtimeBackend}
+              {draftBackendLabel} · {normalizedDraftModelSize} · {getCWDecoderRuntimeLabel(normalizedDraftRuntimeBackend)}
             </span>
           </ModalHeader>
           <ModalBody className="gap-4">
@@ -382,23 +388,33 @@ export function CWDecoderPanel() {
               ))}
             </Select>
 
-            <div className="rounded-lg bg-content2 px-3 py-2">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-medium text-foreground">{t('cw.decoder.runtimeMode', 'Runtime mode')}</div>
-                  <div className="text-xs text-default-500">
-                    {isGpuRuntime ? t('cw.decoder.gpuMode', 'GPU') : t('cw.decoder.cpuMode', 'CPU')}
-                  </div>
-                </div>
-                <Switch
-                  size="sm"
-                  isSelected={isGpuRuntime}
-                  isDisabled={!canConfigureDecoder || savingSettings}
-                  onValueChange={handleGpuModeChange}
-                  aria-label={t('cw.decoder.runtimeMode', 'Runtime mode')}
-                />
-              </div>
-            </div>
+            <Select
+              size="sm"
+              label={t('cw.decoder.runtimeMode', 'Runtime mode')}
+              selectedKeys={normalizedDraftRuntimeBackend ? [normalizedDraftRuntimeBackend] : []}
+              isDisabled={!canConfigureDecoder || savingSettings}
+              onSelectionChange={(keys) => {
+                if (keys === 'all') return;
+                const key = Array.from(keys)[0];
+                if (key) handleRuntimeBackendChange(key);
+              }}
+            >
+              {runtimeBackendOptions.map(runtimeOption => {
+                const description = getCWDecoderRuntimeDescription(runtimeOption);
+                return (
+                  <SelectItem key={runtimeOption} textValue={getCWDecoderRuntimeLabel(runtimeOption)}>
+                    <div className="flex flex-col gap-0.5">
+                      <span>{t(`cw.decoder.runtimeBackends.${runtimeOption}.label`, getCWDecoderRuntimeLabel(runtimeOption))}</span>
+                      {description && (
+                        <span className="text-[11px] leading-4 text-default-400">
+                          {t(`cw.decoder.runtimeBackends.${runtimeOption}.description`, description)}
+                        </span>
+                      )}
+                    </div>
+                  </SelectItem>
+                );
+              })}
+            </Select>
           </ModalBody>
           <ModalFooter>
             <Button variant="flat" onPress={closeSettings} isDisabled={savingSettings}>

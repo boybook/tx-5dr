@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { decodeDeepCWOutput } from '../CWDecoderWorkerCore.js';
+import {
+  decodeDeepCWOutput,
+  describeDeepCWRuntimeInitializationFailure,
+  getDeepCWExecutionProviders,
+} from '../CWDecoderWorkerCore.js';
 
 const EN_CLASSES = 42;
 const A = 14;
@@ -28,5 +32,23 @@ describe('decodeDeepCWOutput', () => {
       { char: 'B', startFrame: 5, endFrame: 6 },
     ]);
     expect(decoded.confidence).toBe(1);
+  });
+});
+
+describe('DeepCW runtime provider selection', () => {
+  it('uses only the selected provider to avoid silent GPU-to-CPU fallback', () => {
+    expect(getDeepCWExecutionProviders('cpu')).toEqual(['cpu']);
+    expect(getDeepCWExecutionProviders('cuda')).toEqual(['cuda']);
+    expect(getDeepCWExecutionProviders('webgpu')).toEqual(['webgpu']);
+    expect(getDeepCWExecutionProviders('coreml')).toEqual(['coreml']);
+    expect(getDeepCWExecutionProviders('directml')).toEqual(['dml']);
+  });
+
+  it('adds dependency guidance when CUDA provider initialization fails', () => {
+    const message = describeDeepCWRuntimeInitializationFailure('cuda', new Error('provider not found'));
+
+    expect(message).toContain('CUDA v12');
+    expect(message).toContain('switch the CW decoder runtime to CPU');
+    expect(message).toContain('provider not found');
   });
 });

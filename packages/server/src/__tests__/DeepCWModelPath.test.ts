@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { resolveDeepCWModelPath } from '../DigitalRadioEngine.js';
+import {
+  makeDeepCWBackendDescriptor,
+  resolveDeepCWModelPath,
+  resolveDeepCWRuntimeBackends,
+} from '../DigitalRadioEngine.js';
 
 describe('resolveDeepCWModelPath', () => {
   it('resolves Linux service models from the app root when cwd is server dist', () => {
@@ -65,5 +69,29 @@ describe('resolveDeepCWModelPath', () => {
     );
 
     expect(resolved).toBe(expected);
+  });
+});
+
+describe('resolveDeepCWRuntimeBackends', () => {
+  it('exposes CoreML on macOS', () => {
+    expect(resolveDeepCWRuntimeBackends({ platform: 'darwin', arch: 'arm64' })).toEqual(['cpu', 'coreml']);
+  });
+
+  it('exposes CUDA and WebGPU on Linux x64', () => {
+    expect(resolveDeepCWRuntimeBackends({ platform: 'linux', arch: 'x64' })).toEqual(['cpu', 'cuda', 'webgpu']);
+  });
+
+  it('keeps CPU as the portable fallback on unknown platforms', () => {
+    expect(resolveDeepCWRuntimeBackends({ platform: 'freebsd', arch: 'x64' })).toEqual(['cpu']);
+  });
+
+  it('uses the same runtime backend list for DeepCW descriptors', () => {
+    const descriptor = makeDeepCWBackendDescriptor({
+      available: true,
+      runtimeBackend: 'cuda',
+    });
+
+    expect(descriptor.runtimeBackends).toEqual(resolveDeepCWRuntimeBackends());
+    expect(descriptor.runtime).toBe('cuda');
   });
 });

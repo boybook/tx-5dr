@@ -123,15 +123,42 @@ async function getSession(ort: {
   if (cachedSession && cachedSessionKey === key) {
     return cachedSession as Awaited<ReturnType<typeof ort.InferenceSession.create>>;
   }
-  const providers = backend === 'cpu' ? ['cpu'] : [normalizeExecutionProvider(backend), 'cpu'];
-  cachedSession = await ort.InferenceSession.create(modelPath, {
-    executionProviders: providers,
-    graphOptimizationLevel: 'all',
-    intraOpNumThreads: 1,
-    interOpNumThreads: 1,
-  });
+  const providers = getDeepCWExecutionProviders(backend);
+  try {
+    cachedSession = await ort.InferenceSession.create(modelPath, {
+      executionProviders: providers,
+      graphOptimizationLevel: 'all',
+      intraOpNumThreads: 1,
+      interOpNumThreads: 1,
+    });
+  } catch (error) {
+    throw new Error(describeDeepCWRuntimeInitializationFailure(backend, error));
+  }
   cachedSessionKey = key;
   return cachedSession as Awaited<ReturnType<typeof ort.InferenceSession.create>>;
+}
+
+export function getDeepCWExecutionProviders(
+  backend: NonNullable<CWDecoderWorkerRequest['runtimeBackend']> = 'cpu',
+): string[] {
+  return [normalizeExecutionProvider(backend)];
+}
+
+export function describeDeepCWRuntimeInitializationFailure(
+  backend: NonNullable<CWDecoderWorkerRequest['runtimeBackend']>,
+  error: unknown,
+): string {
+  const original = error instanceof Error ? error.message : String(error);
+  if (backend === 'cuda') {
+    return `Selected DeepCW runtime "cuda" failed to initialize. Install and configure the NVIDIA driver and CUDA v12 runtime required by onnxruntime-node, or switch the CW decoder runtime to CPU. Original error: ${original}`;
+  }
+  if (backend === 'webgpu') {
+    return `Selected DeepCW runtime "webgpu" failed to initialize. WebGPU support is experimental in onnxruntime-node; configure the platform GPU stack or switch the CW decoder runtime to CPU. Original error: ${original}`;
+  }
+  if (backend === 'coreml') {
+    return `Selected DeepCW runtime "coreml" failed to initialize. CoreML is only available on supported macOS systems; switch the CW decoder runtime to CPU if this device cannot run CoreML. Original error: ${original}`;
+  }
+  return `Selected DeepCW runtime "${backend}" failed to initialize. Switch the CW decoder runtime to CPU or check the ONNX Runtime installation. Original error: ${original}`;
 }
 
 function normalizeExecutionProvider(backend: NonNullable<CWDecoderWorkerRequest['runtimeBackend']>): string {

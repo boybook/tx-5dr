@@ -779,6 +779,24 @@
       "runtimeMode": "Runtime mode",
       "cpuMode": "CPU",
       "gpuMode": "GPU",
+      "runtimeBackends": {
+        "cpu": {
+          "label": "CPU",
+          "description": "Portable CPU execution provider."
+        },
+        "coreml": {
+          "label": "CoreML",
+          "description": "macOS CoreML acceleration on supported Apple devices."
+        },
+        "cuda": {
+          "label": "CUDA",
+          "description": "Linux x64 NVIDIA GPU; requires externally installed CUDA v12 runtime."
+        },
+        "webgpu": {
+          "label": "WebGPU",
+          "description": "Experimental ONNX Runtime WebGPU execution provider."
+        }
+      },
       "modelSizes": {
         "tiny": "Tiny",
         "small": "Small",

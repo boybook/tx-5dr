@@ -24,6 +24,8 @@ import {
   type TuneToneStartPayload,
   type TuneToneStatus,
   type CWKeyerStatus,
+  type CWDecoderBackendDescriptor,
+  type CWDecoderRuntimeBackend,
   type PresetFrequency,
   resolveWindowTiming,
 } from '@tx5dr/contracts';
@@ -125,6 +127,52 @@ export function resolveDeepCWModelPath(
   ].filter((candidate): candidate is string => Boolean(candidate));
 
   return candidates.find((candidate) => exists(candidate)) ?? candidates[0] ?? null;
+}
+
+export interface DeepCWRuntimeBackendOptions {
+  platform?: NodeJS.Platform | string;
+  arch?: NodeJS.Architecture | string;
+}
+
+export function resolveDeepCWRuntimeBackends(options: DeepCWRuntimeBackendOptions = {}): CWDecoderRuntimeBackend[] {
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  const backends: CWDecoderRuntimeBackend[] = ['cpu'];
+
+  if (platform === 'darwin') {
+    backends.push('coreml');
+  } else if (platform === 'linux' && arch === 'x64') {
+    backends.push('cuda', 'webgpu');
+  }
+
+  return backends;
+}
+
+export interface DeepCWBackendDescriptorOptions {
+  available: boolean;
+  error?: string | null;
+  runtimeBackend?: CWDecoderRuntimeBackend;
+}
+
+export function makeDeepCWBackendDescriptor(options: DeepCWBackendDescriptorOptions): CWDecoderBackendDescriptor {
+  const runtimeBackends = resolveDeepCWRuntimeBackends();
+  return {
+    id: 'deepcw-onnx' as const,
+    name: 'DeepCW ONNX',
+    label: 'DeepCW ONNX',
+    available: options.available,
+    error: options.error ?? null,
+    reason: options.error ?? undefined,
+    runtimeBackends,
+    modelSizes: ['tiny', 'small'],
+    languages: ['en'],
+    modes: ['streaming'],
+    model: 'en_tiny/en_small',
+    runtime: options.runtimeBackend ?? 'cpu',
+    attributionName: 'DeepCW / web-deep-cw-decoder',
+    sourceUrl: 'https://github.com/e04/web-deep-cw-decoder',
+    license: 'GPL-3.0',
+  };
 }
 
 /**
@@ -714,22 +762,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   public getCWDecoderBackends() {
-    return this.getCWDecoderManager().getBackends().map((backend) => ({
-      id: backend.id,
-      name: 'DeepCW ONNX',
-      label: 'DeepCW ONNX',
+    const config = ConfigManager.getInstance().getCWDecoderConfig();
+    return this.getCWDecoderManager().getBackends().map((backend) => makeDeepCWBackendDescriptor({
       available: backend.available,
       error: backend.error,
-      reason: backend.error ?? undefined,
-      runtimeBackends: ['cpu'],
-      modelSizes: ['tiny', 'small'],
-      languages: ['en'],
-      modes: ['streaming'],
-      model: 'en_tiny/en_small',
-      runtime: 'cpu',
-      attributionName: 'DeepCW / web-deep-cw-decoder',
-      sourceUrl: 'https://github.com/e04/web-deep-cw-decoder',
-      license: 'GPL-3.0',
+      runtimeBackend: config.runtimeBackend,
     }));
   }
 
@@ -1718,19 +1755,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       config: contractConfig,
       active: status.state === 'running' && !status.muted,
       muted: status.muted,
-      backend: {
-        id: 'deepcw-onnx',
-        name: 'DeepCW ONNX',
+      backend: makeDeepCWBackendDescriptor({
         available: status.backendAvailable,
-        runtimeBackends: ['cpu'],
-        modelSizes: ['tiny', 'small'],
-        languages: ['en'],
-        modes: ['streaming'],
-        attributionName: 'DeepCW / web-deep-cw-decoder',
-        sourceUrl: 'https://github.com/e04/web-deep-cw-decoder',
-        license: 'GPL-3.0',
         error: status.backendError,
-      },
+        runtimeBackend: contractConfig.runtimeBackend,
+      }),
       lastDecodeAt: status.lastDecodeAt ?? undefined,
       lastError: enabled ? status.backendError : null,
       updatedAt: Date.now(),
