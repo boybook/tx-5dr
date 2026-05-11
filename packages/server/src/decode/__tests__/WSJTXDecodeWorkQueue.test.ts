@@ -377,6 +377,83 @@ class NeverReadyDecodeWorkerProcess extends EventEmitter implements DecodeWorker
   }
 }
 
+class TimedDecodeWorkerProcess extends EventEmitter implements DecodeWorkerProcess {
+  pid: number;
+  killed = false;
+  receivedRequests: DecodeRequest[] = [];
+  private readonly elapsedByCommand: number[];
+  private readonly nowRef: { value: number };
+
+  constructor(pid: number, nowRef: { value: number }, elapsedByCommand: number[]) {
+    super();
+    this.pid = pid;
+    this.nowRef = nowRef;
+    this.elapsedByCommand = elapsedByCommand;
+    setTimeout(() => this.emit('message', { type: 'ready', workerId: String(pid) }), 0);
+  }
+
+  send(input: unknown, callback?: (error: Error | null) => void): boolean {
+    const message = input as { type?: string; id?: number; request?: DecodeRequest };
+    callback?.(null);
+    if (message.type === 'shutdown') {
+      this.killed = true;
+      setTimeout(() => this.emit('exit', 0, null), 0);
+      return true;
+    }
+
+    if (message.type === 'decode' && typeof message.id === 'number' && message.request) {
+      const request = message.request;
+      this.receivedRequests.push(request);
+      this.nowRef.value += this.elapsedByCommand.shift() ?? 0;
+      this.emit('message', {
+        type: 'result',
+        id: message.id,
+        result: {
+          slotId: request.slotId,
+          windowIdx: request.windowIdx,
+          frames: [],
+          timestamp: request.timestamp,
+          processingTimeMs: 1,
+          windowOffsetMs: request.windowOffsetMs,
+        },
+      });
+    }
+    return true;
+  }
+
+  kill(): boolean {
+    this.killed = true;
+    setTimeout(() => this.emit('exit', null, 'SIGTERM'), 0);
+    return true;
+  }
+}
+
+function createPoolRequest(overrides: Partial<DecodeRequest> = {}): DecodeRequest {
+  return {
+    slotId: 'FT8-guard',
+    mode: 'FT8',
+    windowIdx: 0,
+    pcm: makePcm(16),
+    sampleRate: 12000,
+    timestamp: 1,
+    windowOffsetMs: 0,
+    ...overrides,
+  };
+}
+
+function createApContext(): NonNullable<DecodeRequest['apContext']> {
+  return {
+    operatorId: 'op1',
+    myCall: 'BG4IAJ',
+    myGrid: 'OM96',
+    dxCall: 'JA1AAA',
+    dxGrid: 'PM95',
+    frequencyHz: 1500,
+    qsoProgress: 4,
+    currentSlot: 'TX4',
+  };
+}
+
 describe('WSJTXDecodeProcessPool scheduling', () => {
   it('dispatches concurrent jobs across workers while keeping each worker serial', async () => {
     const workers: FakeDecodeWorkerProcess[] = [];
@@ -420,6 +497,136 @@ describe('WSJTXDecodeProcessPool scheduling', () => {
     expect(workers.every((worker) => worker.env?.TX5DR_DECODE_NATIVE_THREADS === '3')).toBe(true);
     expect(workers.every((worker) => worker.maxActive <= 1)).toBe(true);
     expect(pool.size()).toBe(0);
+
+    await pool.destroy();
+  });
+
+  it('suppresses AP decode for three FT8 cycles after a slow non-AP decode', async () => {
+    const now = { value: 0 };
+    const workers: TimedDecodeWorkerProcess[] = [];
+    const pool = new WSJTXDecodeProcessPool({
+      workerCount: 1,
+      readyTimeoutMs: 1000,
+      jobTimeoutMs: 1000,
+      performanceNow: () => now.value,
+      workerFactory: (workerId) => {
+        const worker = new TimedDecodeWorkerProcess(workerId, now, [1001, 0]);
+        workers.push(worker);
+        return worker;
+      },
+    });
+
+    await pool.decode(createPoolRequest({ slotId: 'FT8-slow' }));
+    await pool.decode(createPoolRequest({
+      slotId: 'FT8-ap-suppressed',
+      apContext: createApContext(),
+    }));
+
+    expect(workers[0].receivedRequests).toHaveLength(2);
+    expect(workers[0].receivedRequests[0].apContext).toBeUndefined();
+    expect(workers[0].receivedRequests[1].apContext).toBeUndefined();
+
+    await pool.destroy();
+  });
+
+  it('does not suppress AP decode when non-AP elapsed time is exactly the threshold', async () => {
+    const now = { value: 0 };
+    const workers: TimedDecodeWorkerProcess[] = [];
+    const pool = new WSJTXDecodeProcessPool({
+      workerCount: 1,
+      readyTimeoutMs: 1000,
+      jobTimeoutMs: 1000,
+      performanceNow: () => now.value,
+      workerFactory: (workerId) => {
+        const worker = new TimedDecodeWorkerProcess(workerId, now, [1000, 0]);
+        workers.push(worker);
+        return worker;
+      },
+    });
+
+    const apContext = createApContext();
+    await pool.decode(createPoolRequest({ slotId: 'FT8-threshold' }));
+    await pool.decode(createPoolRequest({
+      slotId: 'FT8-ap-allowed',
+      apContext,
+    }));
+
+    expect(workers[0].receivedRequests).toHaveLength(2);
+    expect(workers[0].receivedRequests[1].apContext).toEqual(apContext);
+
+    await pool.destroy();
+  });
+
+  it('does not let a slow AP decode trigger AP suppression', async () => {
+    const now = { value: 0 };
+    const workers: TimedDecodeWorkerProcess[] = [];
+    const pool = new WSJTXDecodeProcessPool({
+      workerCount: 1,
+      readyTimeoutMs: 1000,
+      jobTimeoutMs: 1000,
+      performanceNow: () => now.value,
+      workerFactory: (workerId) => {
+        const worker = new TimedDecodeWorkerProcess(workerId, now, [5000, 0]);
+        workers.push(worker);
+        return worker;
+      },
+    });
+
+    const apContext = createApContext();
+    await pool.decode(createPoolRequest({
+      slotId: 'FT8-slow-ap',
+      apContext,
+    }));
+    await pool.decode(createPoolRequest({
+      slotId: 'FT8-next-ap',
+      apContext,
+    }));
+
+    expect(workers[0].receivedRequests).toHaveLength(2);
+    expect(workers[0].receivedRequests[0].apContext).toEqual(apContext);
+    expect(workers[0].receivedRequests[1].apContext).toEqual(apContext);
+
+    await pool.destroy();
+  });
+
+  it('keeps AP suppressed for three FT8 cycles and restores it after expiry', async () => {
+    const now = { value: 0 };
+    const workers: TimedDecodeWorkerProcess[] = [];
+    const pool = new WSJTXDecodeProcessPool({
+      workerCount: 1,
+      readyTimeoutMs: 1000,
+      jobTimeoutMs: 1000,
+      performanceNow: () => now.value,
+      workerFactory: (workerId) => {
+        const worker = new TimedDecodeWorkerProcess(workerId, now, [1001, 0, 0, 0]);
+        workers.push(worker);
+        return worker;
+      },
+    });
+
+    const apContext = createApContext();
+    await pool.decode(createPoolRequest({ slotId: 'FT8-slow' }));
+    await pool.decode(createPoolRequest({
+      slotId: 'FT8-ap-suppressed-immediate',
+      apContext,
+    }));
+
+    now.value = 46_000;
+    await pool.decode(createPoolRequest({
+      slotId: 'FT8-ap-suppressed-before-expiry',
+      apContext,
+    }));
+
+    now.value = 46_001;
+    await pool.decode(createPoolRequest({
+      slotId: 'FT8-ap-restored',
+      apContext,
+    }));
+
+    expect(workers[0].receivedRequests).toHaveLength(4);
+    expect(workers[0].receivedRequests[1].apContext).toBeUndefined();
+    expect(workers[0].receivedRequests[2].apContext).toBeUndefined();
+    expect(workers[0].receivedRequests[3].apContext).toEqual(apContext);
 
     await pool.destroy();
   });

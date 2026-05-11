@@ -17,6 +17,12 @@ const MAX_NATIVE_THREADS_PER_WORKER = 4;
 const LOW_MEMORY_BYTES = 8 * 1024 * 1024 * 1024;
 const MAX_CONSECUTIVE_FAILURES_BEFORE_DEGRADE = 3;
 const RESPAWN_BACKOFF_MS = [1_000, 2_000, 5_000] as const;
+const SLOW_NON_AP_DECODE_THRESHOLD_MS = 1_000;
+const AP_DECODE_SUPPRESSION_CYCLES = 3;
+const MODE_SLOT_MS: Record<DecodeRequest['mode'], number> = {
+  FT8: 15_000,
+  FT4: 7_500,
+};
 
 export type DecodeWorkerCountReason = 'explicit' | 'low-memory' | 'low-cpu' | 'default';
 export type DecodeNativeThreadReason = 'explicit' | 'default';
@@ -68,6 +74,7 @@ export interface DecodeProcessPoolOptions {
   readyTimeoutMs?: number;
   jobTimeoutMs?: number;
   env?: NodeJS.ProcessEnv;
+  performanceNow?: () => number;
   workerFactory?: (workerId: number, entry: WorkerEntryResolution, env: NodeJS.ProcessEnv) => DecodeWorkerProcess;
 }
 
@@ -302,6 +309,8 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
   private readonly entry: WorkerEntryResolution;
   private readonly env: NodeJS.ProcessEnv;
   private readonly nativeThreads: number;
+  private readonly performanceNow: () => number;
+  private readonly apDecodeSuppressedUntilMs = new Map<DecodeRequest['mode'], number>();
   private nextJobId = 1;
   private nextWorkerId = 1;
   private readonly initialDesiredWorkers: number;
@@ -338,6 +347,7 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
     this.readyTimeoutMs = options.readyTimeoutMs ?? parsePositiveInteger(configEnv.TX5DR_DECODE_WORKER_START_TIMEOUT_MS, DEFAULT_READY_TIMEOUT_MS);
     this.jobTimeoutMs = options.jobTimeoutMs ?? parsePositiveInteger(configEnv.TX5DR_DECODE_JOB_TIMEOUT_MS, DEFAULT_JOB_TIMEOUT_MS);
     this.workerFactory = options.workerFactory ?? defaultWorkerFactory;
+    this.performanceNow = options.performanceNow ?? (() => performance.now());
     this.entry = resolveDecodeWorkerEntry();
     this.env = {
       ...configEnv,
@@ -376,7 +386,7 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
       this.pending.push({
         id: this.nextJobId++,
         request,
-        enqueuedAt: performance.now(),
+        enqueuedAt: this.performanceNow(),
         resolve,
         reject,
       });
@@ -605,11 +615,12 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
     this.consecutiveFailures = 0;
 
     if (workerMessage.type === 'result') {
-      const completedAt = performance.now();
+      const completedAt = this.performanceNow();
       const queueWaitMs = activeJob.dispatchedAt - activeJob.enqueuedAt;
       const workerElapsedMs = completedAt - activeJob.dispatchedAt;
       const totalElapsedMs = completedAt - activeJob.enqueuedAt;
       const nativeProcessingTimeMs = workerMessage.result.processingTimeMs;
+      this.maybeSuppressApDecode(activeJob.request, workerElapsedMs, completedAt);
       logger.info('decode worker job completed', {
         workerId: state.id,
         workerPid: state.process.pid,
@@ -639,7 +650,7 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
       });
       activeJob.resolve(workerMessage.result);
     } else {
-      const failedAt = performance.now();
+      const failedAt = this.performanceNow();
       logger.warn('decode worker job failed', {
         workerId: state.id,
         workerPid: state.process.pid,
@@ -668,7 +679,8 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
       if (!worker.ready || worker.activeJob) continue;
 
       const job = this.pending.shift()!;
-      const dispatchedAt = performance.now();
+      const dispatchedAt = this.performanceNow();
+      const dispatchRequest = this.applyApDecodeSuppression(job.request, dispatchedAt);
       const timer = setTimeout(() => {
         logger.warn('decode job timed out', { workerId: worker.id, jobId: job.id, timeoutMs: this.jobTimeoutMs });
         job.reject(new Error('decode job timed out'));
@@ -677,12 +689,12 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
         this.killWorker(worker);
         this.scheduleRespawn();
       }, this.jobTimeoutMs);
-      worker.activeJob = { ...job, timer, dispatchedAt };
+      worker.activeJob = { ...job, request: dispatchRequest, timer, dispatchedAt };
 
       const ok = worker.process.send?.({
         type: 'decode',
         id: job.id,
-        request: job.request,
+        request: dispatchRequest,
       }, (error) => {
         if (!error) return;
         clearTimeout(timer);
@@ -696,16 +708,61 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
       if (ok === false) {
         logger.warn(
           `decode worker IPC backpressure workerId=${worker.id} workerPid=${worker.process.pid ?? 'unknown'} `
-          + `jobId=${job.id} slotId=${job.request.slotId} windowIdx=${job.request.windowIdx} mode=${job.request.mode} `
-          + `requestAudioDurationMs=${getDecodeRequestAudioDurationMs(job.request) ?? 'unknown'} `
-          + `queueWaitMs=${roundMs(dispatchedAt - job.enqueuedAt)} dispatchElapsedMs=${roundMs(performance.now() - dispatchedAt)} `
-          + `pcmBytes=${job.request.pcm.byteLength} sampleRate=${job.request.sampleRate} `
+          + `jobId=${job.id} slotId=${dispatchRequest.slotId} windowIdx=${dispatchRequest.windowIdx} mode=${dispatchRequest.mode} `
+          + `requestAudioDurationMs=${getDecodeRequestAudioDurationMs(dispatchRequest) ?? 'unknown'} `
+          + `queueWaitMs=${roundMs(dispatchedAt - job.enqueuedAt)} dispatchElapsedMs=${roundMs(this.performanceNow() - dispatchedAt)} `
+          + `pcmBytes=${dispatchRequest.pcm.byteLength} sampleRate=${dispatchRequest.sampleRate} `
           + `pendingJobs=${this.pending.length} activeJobs=${this.getActiveJobCount()} readyWorkers=${this.getReadyWorkerCount()} `
           + `workerProcesses=${this.workers.size} desiredWorkers=${this.desiredWorkers} nativeThreadsPerWorker=${this.nativeThreads} `
           + `jobTimeoutMs=${this.jobTimeoutMs} readyTimeoutMs=${this.readyTimeoutMs} ipcSendReturned=false`,
         );
       }
     }
+  }
+
+  private applyApDecodeSuppression(request: DecodeRequest, nowMs: number): DecodeRequest {
+    if (!request.apContext) {
+      return request;
+    }
+
+    const suppressedUntilMs = this.apDecodeSuppressedUntilMs.get(request.mode) ?? 0;
+    if (nowMs >= suppressedUntilMs) {
+      return request;
+    }
+
+    const { apContext: suppressedApContext, ...requestWithoutApContext } = request;
+    logger.info('AP decode suppressed after slow non-AP decode', {
+      slotId: request.slotId,
+      windowIdx: request.windowIdx,
+      mode: request.mode,
+      apOperatorId: suppressedApContext.operatorId,
+      apCurrentSlot: suppressedApContext.currentSlot,
+      apQsoProgress: suppressedApContext.qsoProgress,
+      suppressedUntilMs: roundMs(suppressedUntilMs),
+      remainingMs: roundMs(suppressedUntilMs - nowMs),
+    });
+    return requestWithoutApContext;
+  }
+
+  private maybeSuppressApDecode(request: DecodeRequest, workerElapsedMs: number, completedAtMs: number): void {
+    if (request.apContext || workerElapsedMs <= SLOW_NON_AP_DECODE_THRESHOLD_MS) {
+      return;
+    }
+
+    const suppressionDurationMs = MODE_SLOT_MS[request.mode] * AP_DECODE_SUPPRESSION_CYCLES;
+    const suppressedUntilMs = completedAtMs + suppressionDurationMs;
+    const previousSuppressedUntilMs = this.apDecodeSuppressedUntilMs.get(request.mode) ?? 0;
+    this.apDecodeSuppressedUntilMs.set(request.mode, Math.max(previousSuppressedUntilMs, suppressedUntilMs));
+    logger.warn('slow non-AP decode detected; suppressing AP decode', {
+      slotId: request.slotId,
+      windowIdx: request.windowIdx,
+      mode: request.mode,
+      workerElapsedMs: roundMs(workerElapsedMs),
+      thresholdMs: SLOW_NON_AP_DECODE_THRESHOLD_MS,
+      suppressionCycles: AP_DECODE_SUPPRESSION_CYCLES,
+      suppressionDurationMs,
+      suppressedUntilMs: roundMs(Math.max(previousSuppressedUntilMs, suppressedUntilMs)),
+    });
   }
 
   private getActiveJobCount(): number {
@@ -792,8 +849,8 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
             slotId: activeJob.request.slotId,
             windowIdx: activeJob.request.windowIdx,
             mode: activeJob.request.mode,
-            startedAt: now - (performance.now() - activeJob.dispatchedAt),
-            elapsedMs: performance.now() - activeJob.dispatchedAt,
+            startedAt: now - (this.performanceNow() - activeJob.dispatchedAt),
+            elapsedMs: this.performanceNow() - activeJob.dispatchedAt,
             requestAudioDurationMs: getDecodeRequestAudioDurationMs(activeJob.request),
           }
         : undefined,
