@@ -56,10 +56,10 @@ import { bootstrapCoordinator } from './services/BootstrapCoordinator.js';
 
 const logger = createLogger('DigitalRadioEngine');
 
-interface DigitalRadioEngineInternalEvents extends DigitalRadioEngineEvents {
+type DecodeWorkerEngineEmitter = EventEmitter<{
   decodeWorkerUnavailable: (status: DecodeWorkerPoolHealthSnapshot) => void;
   decodeWorkerRecovered: (status: DecodeWorkerPoolHealthSnapshot) => void;
-}
+}>;
 
 // 子系统
 import { AudioVolumeController } from './subsystems/AudioVolumeController.js';
@@ -99,7 +99,7 @@ import { existsSync } from 'node:fs';
  * - 电台连接 bootstrap（由 PhysicalRadioManager 负责）
  * - 电台事件投影（由 RadioBridge 负责）
  */
-export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineInternalEvents> {
+export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private static instance: DigitalRadioEngine | null = null;
 
   // 底层组件
@@ -175,11 +175,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineInternalE
     );
     this.audioStreamManager = new AudioStreamManager();
     this.realDecodeQueue = new WSJTXDecodeWorkQueue();
+    const decodeWorkerEvents = this as unknown as DecodeWorkerEngineEmitter;
     this.realDecodeQueue.on('decodeWorkerUnavailable', (status) => {
-      this.emit('decodeWorkerUnavailable', status);
+      decodeWorkerEvents.emit('decodeWorkerUnavailable', status);
     });
     this.realDecodeQueue.on('decodeWorkerRecovered', (status) => {
-      this.emit('decodeWorkerRecovered', status);
+      decodeWorkerEvents.emit('decodeWorkerRecovered', status);
     });
     this.realEncodeQueue = new WSJTXEncodeWorkQueue(1);
     this.slotPackManager = new SlotPackManager();
