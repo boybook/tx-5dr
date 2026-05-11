@@ -1,99 +1,157 @@
-import { useEffect, useRef } from 'react';
-import { useCWKeyer } from '../../hooks/useCWKeyer';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
+import { encodeMorseSchedule } from '../../utils/morseEncoder';
+
+const RAMP_MS = 3; // envelope ramp duration to eliminate clicks
+
+export interface CWSidetoneHandle {
+  play(text: string): void;
+  stop(): void;
+}
+
+interface CWSidetoneProps {
+  wpm: number;
+  frequency: number;
+  enabled: boolean;
+  volume?: number;
+}
 
 /**
- * CW 侧音组件 — 使用 Web Audio API 生成莫尔斯码侧音
+ * Client-side CW sidetone generator.
  *
- * 当键控器处于 keying 状态时发出正弦波侧音。
- * 通过 cwKeyerStatus 事件驱动：mode === 'keying' 时发声。
+ * Encodes plain text into a Morse timing schedule and plays it
+ * through a Web Audio API sine oscillator — zero server dependency.
+ * Supports configurable frequency and WPM-matched speed.
  */
-export function CWSidetone() {
-  const { cwKeyerStatus } = useCWKeyer();
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const oscillatorRef = useRef<OscillatorNode | null>(null);
-  const gainNodeRef = useRef<GainNode | null>(null);
-  const isSoundingRef = useRef(false);
+export const CWSidetone = forwardRef<CWSidetoneHandle, CWSidetoneProps>(
+  function CWSidetone({ wpm, frequency, enabled, volume = 0.3 }, ref) {
+    const audioCtxRef = useRef<AudioContext | null>(null);
+    const stopTokenRef = useRef<symbol | null>(null);
+    const activeNodesRef = useRef<{ osc: OscillatorNode; gain: GainNode } | null>(null);
 
-  useEffect(() => {
-    return () => {
-      if (audioCtxRef.current) {
-        audioCtxRef.current.close().catch(() => {});
-        audioCtxRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!cwKeyerStatus) return;
-
-    const shouldSound = cwKeyerStatus.active && cwKeyerStatus.mode === 'keying';
-
-    if (shouldSound && !isSoundingRef.current) {
-      startTone();
-    } else if (!shouldSound && isSoundingRef.current) {
-      stopTone();
-    }
-  }, [cwKeyerStatus]);
-
-  const startTone = () => {
-    try {
-      if (!audioCtxRef.current) {
+    const getCtx = useCallback((): AudioContext => {
+      if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
         audioCtxRef.current = new AudioContext();
       }
       const ctx = audioCtxRef.current;
       if (ctx.state === 'suspended') {
         ctx.resume();
       }
+      return ctx;
+    }, []);
 
-      const oscillator = ctx.createOscillator();
-      const gainNode = ctx.createGain();
-
-      oscillator.type = 'sine';
-      oscillator.frequency.value = 700;
-
-      // 柔和包络避免咔嗒声
-      gainNode.gain.setValueAtTime(0, ctx.currentTime);
-      gainNode.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 0.005);
-
-      oscillator.connect(gainNode);
-      gainNode.connect(ctx.destination);
-      oscillator.start();
-
-      oscillatorRef.current = oscillator;
-      gainNodeRef.current = gainNode;
-      isSoundingRef.current = true;
-    } catch {
-      // 音频不可用时静默
-    }
-  };
-
-  const stopTone = () => {
-    try {
-      const ctx = audioCtxRef.current;
-      const gainNode = gainNodeRef.current;
-      const oscillator = oscillatorRef.current;
-
-      if (gainNode && ctx) {
-        gainNode.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.005);
+    const stop = useCallback(() => {
+      stopTokenRef.current = null;
+      const nodes = activeNodesRef.current;
+      if (nodes) {
+        activeNodesRef.current = null;
+        try { nodes.osc.stop(); } catch { /* already stopped */ }
+        try { nodes.osc.disconnect(); } catch { /* ok */ }
+        try { nodes.gain.disconnect(); } catch { /* ok */ }
       }
+    }, []);
 
-      // 延迟停止以允许释放包络
-      setTimeout(() => {
-        try {
-          oscillator?.stop();
-          oscillator?.disconnect();
-          gainNode?.disconnect();
-        } catch { /* already stopped */ }
-      }, 10);
+    const play = useCallback((text: string) => {
+      if (!enabled || !text.trim()) return;
 
-      oscillatorRef.current = null;
-      gainNodeRef.current = null;
-      isSoundingRef.current = false;
-    } catch {
-      // 静默处理
-    }
-  };
+      const schedule = encodeMorseSchedule(text.trim(), wpm);
+      if (schedule.length === 0) return;
 
-  // 不可见组件
-  return null;
-}
+      // Stop any previous playback (token + active oscillator)
+      stop();
+
+      const token = Symbol('sidetone');
+      stopTokenRef.current = token;
+
+      try {
+        const ctx = getCtx();
+        const now = ctx.currentTime;
+
+        const oscillator = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+
+        oscillator.type = 'sine';
+        oscillator.frequency.value = Math.max(200, Math.min(2000, Math.round(frequency)));
+        gainNode.gain.value = 0;
+
+        oscillator.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        // Track active nodes for immediate stop
+        activeNodesRef.current = { osc: oscillator, gain: gainNode };
+
+        let t = now + 0.005; // tiny offset to avoid initial click
+
+        for (const event of schedule) {
+          // Check stop token at each event boundary
+          if (stopTokenRef.current !== token) break;
+
+          const durationSec = event.durationMs / 1000;
+          if (event.tone && durationSec > 0) {
+            // Key-down: ramp up, hold, ramp down
+            const ramp = Math.min(RAMP_MS / 1000, durationSec / 3);
+            gainNode.gain.setValueAtTime(0, t);
+            gainNode.gain.linearRampToValueAtTime(volume, t + ramp);
+            const releaseStart = t + durationSec - ramp;
+            if (releaseStart > t + ramp) {
+              gainNode.gain.setValueAtTime(volume, releaseStart);
+            }
+            gainNode.gain.linearRampToValueAtTime(0, t + durationSec);
+          }
+          // For silence events, gain stays at 0 — just advance time
+          t += durationSec;
+        }
+
+        oscillator.start(now);
+        oscillator.stop(t + 0.05);
+
+        // Clean up when playback finishes
+        const timeoutMs = (t - now) * 1000 + 100;
+        const timer = setTimeout(() => {
+          if (stopTokenRef.current === token) {
+            stopTokenRef.current = null;
+          }
+          if (activeNodesRef.current?.osc === oscillator) {
+            activeNodesRef.current = null;
+          }
+          try {
+            oscillator.disconnect();
+            gainNode.disconnect();
+          } catch { /* already disconnected */ }
+        }, timeoutMs);
+
+        // If stopped early, clean up immediately
+        const checkStop = () => {
+          if (stopTokenRef.current !== token) {
+            clearTimeout(timer);
+            try { oscillator.stop(); } catch { /* ok */ }
+            try { oscillator.disconnect(); } catch { /* ok */ }
+            try { gainNode.disconnect(); } catch { /* ok */ }
+            if (activeNodesRef.current?.osc === oscillator) {
+              activeNodesRef.current = null;
+            }
+          }
+        };
+        // Schedule a check right after the last event
+        setTimeout(checkStop, (t - now) * 1000 + 10);
+      } catch {
+        // Audio unavailable — silent
+      }
+    }, [enabled, wpm, frequency, volume, getCtx]);
+
+    useImperativeHandle(ref, () => ({ play, stop }), [play, stop]);
+
+    // Clean up audio context on unmount
+    useEffect(() => {
+      return () => {
+        stop();
+        if (audioCtxRef.current) {
+          audioCtxRef.current.close().catch(() => {});
+          audioCtxRef.current = null;
+        }
+      };
+    }, [stop]);
+
+    // Invisible component
+    return null;
+  },
+);
