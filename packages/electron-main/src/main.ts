@@ -1715,10 +1715,30 @@ function killProcess(
   });
 }
 
+const LINUX_GLIBC_EXECSTACK_TUNABLE = 'glibc.rtld.execstack=2';
+
+function appendLinuxGlibcExecstackTunable(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (process.platform !== 'linux') {
+    return env;
+  }
+
+  const existing = env.GLIBC_TUNABLES || '';
+  if (existing.split(':').includes(LINUX_GLIBC_EXECSTACK_TUNABLE)) {
+    return env;
+  }
+
+  return {
+    ...env,
+    GLIBC_TUNABLES: existing
+      ? `${existing}:${LINUX_GLIBC_EXECSTACK_TUNABLE}`
+      : LINUX_GLIBC_EXECSTACK_TUNABLE,
+  };
+}
+
 function createChildEnv(extraEnv: Record<string, string> = {}) {
   const res = resourcesRoot();
   const wsjtxPrebuildDir = path.join(res, 'app', 'node_modules', 'wsjtx-lib', 'prebuilds', triplet());
-  return {
+  const childEnv = {
     ...process.env,
     NODE_ENV: 'production',
     APP_RESOURCES: res,
@@ -1739,6 +1759,8 @@ function createChildEnv(extraEnv: Record<string, string> = {}) {
         }),
     ...extraEnv,
   } as NodeJS.ProcessEnv;
+
+  return appendLinuxGlibcExecstackTunable(childEnv);
 }
 
 function buildLogPathsHint(name: string): string {
