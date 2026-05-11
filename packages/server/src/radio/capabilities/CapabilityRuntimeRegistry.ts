@@ -11,6 +11,8 @@ import { CAPABILITY_DEFINITION_MAP, CAPABILITY_DEFINITIONS } from './definitions
 import type { CapabilityRuntimeEvents, CapabilitySupportSource, ProbeSupportResult } from './types.js';
 
 const logger = createLogger('CapabilityRuntimeRegistry');
+const RADIO_IO_BACKPRESSURE_WARN_MS = 30_000;
+const RADIO_IO_BACKPRESSURE_WARN_COOLDOWN_MS = 10_000;
 
 function shouldEnforceDiscreteNumberOptions(descriptor: CapabilityDescriptor): boolean {
   // rf_power keeps Hamlib discrete metadata for the optional step slider, but
@@ -30,6 +32,8 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
   private _isPTTActive = false;
   private _isPTTCooldown = false;
   private _pttCooldownTimer: ReturnType<typeof setTimeout> | null = null;
+  private radioIoBackpressureStartedAt: number | null = null;
+  private lastRadioIoBackpressureWarnAt = 0;
 
   setPTTActive(active: boolean): void {
     if (active) {
@@ -353,6 +357,8 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
   private clearPTTState(): void {
     this._isPTTActive = false;
     this._isPTTCooldown = false;
+    this.radioIoBackpressureStartedAt = null;
+    this.lastRadioIoBackpressureWarnAt = 0;
     if (this._pttCooldownTimer) {
       clearTimeout(this._pttCooldownTimer);
       this._pttCooldownTimer = null;
@@ -363,6 +369,10 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     if (!this.connection) return;
 
     if (this._isPTTActive || this._isPTTCooldown) {
+      return;
+    }
+
+    if (this.shouldSkipForRadioIoBackpressure(id)) {
       return;
     }
 
@@ -418,6 +428,38 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
 
       logger.debug(`Failed to poll capability ${id}`, error);
     }
+  }
+
+  private shouldSkipForRadioIoBackpressure(id: string): boolean {
+    const snapshot = this.connection?.getRadioIoQueueSnapshot?.();
+    if (!snapshot?.busy) {
+      this.radioIoBackpressureStartedAt = null;
+      return false;
+    }
+
+    const now = Date.now();
+    if (this.radioIoBackpressureStartedAt === null) {
+      this.radioIoBackpressureStartedAt = now;
+    }
+
+    const pauseDurationMs = now - this.radioIoBackpressureStartedAt;
+    const context = {
+      reason: 'capability-polling',
+      capabilityId: id,
+      pauseDurationMs,
+      ...snapshot,
+    };
+    logger.debug('Skipping capability poll while radio I/O queue is busy', context);
+
+    if (
+      pauseDurationMs >= RADIO_IO_BACKPRESSURE_WARN_MS
+      && now - this.lastRadioIoBackpressureWarnAt >= RADIO_IO_BACKPRESSURE_WARN_COOLDOWN_MS
+    ) {
+      this.lastRadioIoBackpressureWarnAt = now;
+      logger.warn('串口 CAT 队列持续繁忙，已暂停低优先级轮询', context);
+    }
+
+    return true;
   }
 
   private async refreshDescriptorIfNeeded(id: string, definition = CAPABILITY_DEFINITION_MAP.get(id)): Promise<void> {

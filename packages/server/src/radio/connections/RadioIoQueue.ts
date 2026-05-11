@@ -1,9 +1,13 @@
-type RadioIoTaskOptions = {
+export type RadioIoTaskContext = Record<string, unknown>;
+
+export type RadioIoTaskOptions = {
   sessionId: number;
   id?: string;
   name?: string;
   critical?: boolean;
   lowPriority?: boolean;
+  timeoutMs?: number;
+  context?: RadioIoTaskContext;
 };
 
 export const RADIO_IO_SKIPPED = Symbol('radio-io-skipped');
@@ -12,14 +16,62 @@ export interface RadioIoQueueCongestionSnapshot {
   label?: string;
   sessionId: number;
   activeCount: number;
+  activeTask: string | null;
+  activeRunMs: number | null;
+  activeTimeoutMs: number | null;
   pendingCount: number;
   criticalPendingCount: number;
   normalPendingCount: number;
   pendingThreshold: number;
-  oldestPendingTask: string;
-  oldestPendingWaitMs: number;
+  oldestPendingTask: string | null;
+  oldestPendingWaitMs: number | null;
   latestTask: string;
   latestTaskCritical: boolean;
+  dedupedTaskCount: number;
+  context?: RadioIoTaskContext;
+}
+
+export interface RadioIoQueueTimeoutSnapshot {
+  label?: string;
+  sessionId: number;
+  task: string;
+  taskId?: string;
+  critical: boolean;
+  runMs: number;
+  timeoutMs: number;
+  pendingCount: number;
+  oldestPendingTask: string | null;
+  oldestPendingWaitMs: number | null;
+  action: 'skip-and-continue';
+  context?: RadioIoTaskContext;
+}
+
+export interface RadioIoQueueLateResultSnapshot {
+  label?: string;
+  sessionId: number;
+  task: string;
+  taskId?: string;
+  critical: boolean;
+  runMs: number;
+  timeoutMs: number | null;
+  outcome: 'resolved' | 'rejected';
+  error?: string;
+  context?: RadioIoTaskContext;
+}
+
+export interface RadioIoQueueSnapshot {
+  label?: string;
+  busy: boolean;
+  criticalActive: boolean;
+  activeCount: number;
+  activeTask: string | null;
+  activeRunMs: number | null;
+  activeTimeoutMs: number | null;
+  pendingCount: number;
+  criticalPendingCount: number;
+  normalPendingCount: number;
+  oldestPendingTask: string | null;
+  oldestPendingWaitMs: number | null;
   dedupedTaskCount: number;
 }
 
@@ -29,6 +81,8 @@ export interface RadioIoQueueOptions {
   congestionWarnCooldownMs?: number;
   now?: () => number;
   onCongestionWarning?: (snapshot: RadioIoQueueCongestionSnapshot) => void;
+  onTaskTimeoutWarning?: (snapshot: RadioIoQueueTimeoutSnapshot) => void;
+  onLateTaskResult?: (snapshot: RadioIoQueueLateResultSnapshot) => void;
 }
 
 type QueuedRadioIoTask<T> = {
@@ -39,6 +93,7 @@ type QueuedRadioIoTask<T> = {
   resolve: (value: T) => void;
   reject: (reason?: unknown) => void;
   enqueuedAt: number;
+  startedAt: number | null;
 };
 
 const DEFAULT_CONGESTION_PENDING_THRESHOLD = 5;
@@ -48,6 +103,7 @@ export class RadioIoQueue {
   private queue: QueuedRadioIoTask<unknown>[] = [];
   private activeCount = 0;
   private criticalCount = 0;
+  private activeTask: QueuedRadioIoTask<unknown> | null = null;
   private pumpScheduled = false;
   private readonly dedupedTasks = new Map<string, Promise<unknown>>();
   private lastCongestionWarningAt = Number.NEGATIVE_INFINITY;
@@ -60,6 +116,30 @@ export class RadioIoQueue {
 
   isBusy(): boolean {
     return this.activeCount > 0 || this.queue.length > 0;
+  }
+
+  getSnapshot(): RadioIoQueueSnapshot {
+    const now = this.now();
+    const oldestPendingTask = this.getOldestPendingTask();
+    const criticalPendingCount = this.countCriticalPending();
+
+    return {
+      label: this.options.label,
+      busy: this.isBusy(),
+      criticalActive: this.isCriticalActive(),
+      activeCount: this.activeCount,
+      activeTask: this.activeTask ? this.describeTask(this.activeTask) : null,
+      activeRunMs: this.activeTask?.startedAt !== null && this.activeTask?.startedAt !== undefined
+        ? Math.max(0, now - this.activeTask.startedAt)
+        : null,
+      activeTimeoutMs: this.activeTask?.options.timeoutMs ?? null,
+      pendingCount: this.queue.length,
+      criticalPendingCount,
+      normalPendingCount: this.queue.length - criticalPendingCount,
+      oldestPendingTask: oldestPendingTask ? this.describeTask(oldestPendingTask) : null,
+      oldestPendingWaitMs: oldestPendingTask ? Math.max(0, now - oldestPendingTask.enqueuedAt) : null,
+      dedupedTaskCount: this.dedupedTasks.size,
+    };
   }
 
   async runLowPriority<T>(
@@ -99,6 +179,7 @@ export class RadioIoQueue {
       resolve: resolveTask,
       reject: rejectTask,
       enqueuedAt: this.now(),
+      startedAt: null,
     };
 
     if (dedupeKey) {
@@ -156,25 +237,28 @@ export class RadioIoQueue {
     }
 
     this.lastCongestionWarningAt = now;
-    const oldestPendingTask = this.queue.reduce((oldest, item) =>
-      item.enqueuedAt < oldest.enqueuedAt ? item : oldest
-    );
-    const criticalPendingCount = this.queue.filter((item) => item.options.critical).length;
+    const oldestPendingTask = this.getOldestPendingTask();
+    const criticalPendingCount = this.countCriticalPending();
+    const activeSnapshot = this.getSnapshot();
 
     try {
       this.options.onCongestionWarning({
         label: this.options.label,
         sessionId: triggerTask.options.sessionId,
         activeCount: this.activeCount,
+        activeTask: activeSnapshot.activeTask,
+        activeRunMs: activeSnapshot.activeRunMs,
+        activeTimeoutMs: activeSnapshot.activeTimeoutMs,
         pendingCount: this.queue.length,
         criticalPendingCount,
         normalPendingCount: this.queue.length - criticalPendingCount,
         pendingThreshold,
-        oldestPendingTask: this.describeTask(oldestPendingTask),
-        oldestPendingWaitMs: Math.max(0, now - oldestPendingTask.enqueuedAt),
+        oldestPendingTask: oldestPendingTask ? this.describeTask(oldestPendingTask) : null,
+        oldestPendingWaitMs: oldestPendingTask ? Math.max(0, now - oldestPendingTask.enqueuedAt) : null,
         latestTask: this.describeTask(triggerTask),
         latestTaskCritical: Boolean(triggerTask.options.critical),
         dedupedTaskCount: this.dedupedTasks.size,
+        context: triggerTask.options.context,
       });
     } catch {
       // Warning hooks must not break radio I/O.
@@ -187,6 +271,20 @@ export class RadioIoQueue {
 
   private now(): number {
     return this.options.now?.() ?? Date.now();
+  }
+
+  private getOldestPendingTask(): QueuedRadioIoTask<unknown> | null {
+    if (this.queue.length === 0) {
+      return null;
+    }
+
+    return this.queue.reduce((oldest, item) =>
+      item.enqueuedAt < oldest.enqueuedAt ? item : oldest
+    );
+  }
+
+  private countCriticalPending(): number {
+    return this.queue.filter((item) => item.options.critical).length;
   }
 
   private schedulePump(): void {
@@ -212,26 +310,124 @@ export class RadioIoQueue {
     }
 
     this.activeCount += 1;
+    this.activeTask = queuedTask;
+    queuedTask.startedAt = this.now();
     if (queuedTask.options.critical) {
       this.criticalCount += 1;
     }
 
     void (async () => {
-      try {
-        const result = await queuedTask.task(queuedTask.options.sessionId);
-        queuedTask.resolve(result);
-      } catch (error) {
-        queuedTask.reject(error);
-      } finally {
+      let settled = false;
+      let timedOut = false;
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+      const timeoutMs = queuedTask.options.timeoutMs;
+
+      const finishTask = () => {
+        if (timeout) {
+          clearTimeout(timeout);
+          timeout = null;
+        }
         if (queuedTask.options.critical) {
           this.criticalCount -= 1;
         }
         if (queuedTask.dedupeKey && this.dedupedTasks.get(queuedTask.dedupeKey) === queuedTask.promise) {
           this.dedupedTasks.delete(queuedTask.dedupeKey);
         }
+        if (this.activeTask === queuedTask) {
+          this.activeTask = null;
+        }
         this.activeCount -= 1;
         this.schedulePump();
+      };
+
+      if (typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        timeout = setTimeout(() => {
+          if (settled) {
+            return;
+          }
+
+          settled = true;
+          timedOut = true;
+          const snapshot = this.buildTimeoutSnapshot(queuedTask, timeoutMs);
+          try {
+            this.options.onTaskTimeoutWarning?.(snapshot);
+          } catch {
+            // Warning hooks must not break radio I/O.
+          }
+          queuedTask.reject(new Error(`${this.describeTask(queuedTask)} timed out after ${timeoutMs}ms`));
+          finishTask();
+        }, timeoutMs);
+      }
+
+      try {
+        const result = await queuedTask.task(queuedTask.options.sessionId);
+        if (settled) {
+          if (timedOut) {
+            this.notifyLateTaskResult(queuedTask, 'resolved');
+          }
+          return;
+        }
+        settled = true;
+        queuedTask.resolve(result);
+      } catch (error) {
+        if (settled) {
+          if (timedOut) {
+            this.notifyLateTaskResult(queuedTask, 'rejected', error);
+          }
+          return;
+        }
+        settled = true;
+        queuedTask.reject(error);
+      } finally {
+        if (!timedOut) {
+          finishTask();
+        }
       }
     })();
+  }
+
+  private buildTimeoutSnapshot(
+    queuedTask: QueuedRadioIoTask<unknown>,
+    timeoutMs: number,
+  ): RadioIoQueueTimeoutSnapshot {
+    const now = this.now();
+    const oldestPendingTask = this.getOldestPendingTask();
+    return {
+      label: this.options.label,
+      sessionId: queuedTask.options.sessionId,
+      task: this.describeTask(queuedTask),
+      taskId: queuedTask.options.id,
+      critical: Boolean(queuedTask.options.critical),
+      runMs: queuedTask.startedAt !== null ? Math.max(0, now - queuedTask.startedAt) : timeoutMs,
+      timeoutMs,
+      pendingCount: this.queue.length,
+      oldestPendingTask: oldestPendingTask ? this.describeTask(oldestPendingTask) : null,
+      oldestPendingWaitMs: oldestPendingTask ? Math.max(0, now - oldestPendingTask.enqueuedAt) : null,
+      action: 'skip-and-continue',
+      context: queuedTask.options.context,
+    };
+  }
+
+  private notifyLateTaskResult(
+    queuedTask: QueuedRadioIoTask<unknown>,
+    outcome: 'resolved' | 'rejected',
+    error?: unknown,
+  ): void {
+    try {
+      this.options.onLateTaskResult?.({
+        label: this.options.label,
+        sessionId: queuedTask.options.sessionId,
+        task: this.describeTask(queuedTask),
+        taskId: queuedTask.options.id,
+        critical: Boolean(queuedTask.options.critical),
+        runMs: queuedTask.startedAt !== null ? Math.max(0, this.now() - queuedTask.startedAt) : 0,
+        timeoutMs: queuedTask.options.timeoutMs ?? null,
+        outcome,
+        error: error instanceof Error ? error.message : error === undefined ? undefined : String(error),
+        context: queuedTask.options.context,
+      });
+    } catch {
+      // Debug hooks must not break radio I/O.
+    }
   }
 }

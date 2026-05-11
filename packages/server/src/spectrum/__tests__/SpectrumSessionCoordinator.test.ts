@@ -102,4 +102,37 @@ describe('SpectrumSessionCoordinator', () => {
     expect(connection.getSpectrumDisplayState).not.toHaveBeenCalled();
     expect(engine.radioManager.getMode).not.toHaveBeenCalled();
   });
+
+  it('does not issue CAT-backed spectrum reads while the radio I/O queue is busy', async () => {
+    const engine = new MockEngine();
+    const spectrumCoordinator = new EventEmitter();
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    const connection = {
+      configureSpectrumDisplay: vi.fn(),
+      getSpectrumDisplayState: vi.fn().mockRejectedValue(new Error('must not read spectrum state')),
+      getRadioIoQueueSnapshot: vi.fn(() => ({
+        busy: true,
+        criticalActive: false,
+        activeCount: 1,
+        activeTask: 'startManagedSpectrum',
+        activeRunMs: 6000,
+        activeTimeoutMs: 5000,
+        pendingCount: 3,
+        criticalPendingCount: 0,
+        normalPendingCount: 3,
+        oldestPendingTask: 'getSpectrumDisplayState',
+        oldestPendingWaitMs: 2000,
+        dedupedTaskCount: 1,
+      })),
+    };
+
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getActiveConnection.mockReturnValue(connection);
+
+    const state = await coordinator.refresh('radio-sdr');
+
+    expect(state.kind).toBe('radio-sdr');
+    expect(connection.getSpectrumDisplayState).not.toHaveBeenCalled();
+    expect(engine.radioManager.getMode).not.toHaveBeenCalled();
+  });
 });

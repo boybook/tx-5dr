@@ -7,6 +7,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import type { HamlibConfig, LevelMeterReading, MeterCapabilities, TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
+import type { RadioIoQueueSnapshot } from './RadioIoQueue.js';
 
 /**
  * 电台连接类型
@@ -264,6 +265,14 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * 供低优先级轮询决定是否跳过本次访问，避免和关键 CAT 写入抢占同一连接。
    */
   isCriticalOperationActive(): boolean;
+
+  /**
+   * 当前底层 CAT/CI-V I/O 队列的只读状态。
+   *
+   * 供低优先级 UI/能力/频谱轮询在队列繁忙或疑似卡住时退避，
+   * 避免继续堆积不关键的读请求。
+   */
+  getRadioIoQueueSnapshot?(): RadioIoQueueSnapshot;
 
   /**
    * 设置电台频率

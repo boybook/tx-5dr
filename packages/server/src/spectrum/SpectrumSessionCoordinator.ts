@@ -26,6 +26,8 @@ const DISPLAY_STATE_POLL_INTERVAL_MS = 2000;
 const ICOM_WLAN_DISPLAY_STATE_POLL_INTERVAL_MS = 5000;
 const VOICE_STATE_POLL_INTERVAL_MS = 2000;
 const DISPLAY_STATE_RETRY_MS = 30_000;
+const RADIO_IO_BACKPRESSURE_WARN_MS = 30_000;
+const RADIO_IO_BACKPRESSURE_WARN_COOLDOWN_MS = 10_000;
 const RADIO_FRAME_SESSION_STATE_MIN_INTERVAL_MS = 2000;
 const ZOOM_CONFIRM_TIMEOUT_MS = 2000;
 const STANDARD_FREQUENCY_TOLERANCE_HZ = 1500;
@@ -118,6 +120,8 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   private pendingZoomTimer: NodeJS.Timeout | null = null;
   private pendingDigitalTransition: PendingDigitalTransition | null = null;
   private voiceFollowSyncPromise: Promise<void> | null = null;
+  private radioIoBackpressureStartedAt: number | null = null;
+  private lastRadioIoBackpressureWarnAt = 0;
 
   constructor(
     private readonly engine: DigitalRadioEngine,
@@ -1394,12 +1398,44 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     const radioManager = this.engine.getRadioManager() as {
       isCriticalRadioOperationActive?: () => boolean;
       isSessionMutationInProgress?: () => boolean;
+      getActiveConnection?: () => IRadioConnection | null;
     };
-
-    return Boolean(
+    const criticalOrMutation = Boolean(
       radioManager.isCriticalRadioOperationActive?.()
       || radioManager.isSessionMutationInProgress?.(),
     );
+    if (criticalOrMutation) {
+      return true;
+    }
+
+    const snapshot = radioManager.getActiveConnection?.()?.getRadioIoQueueSnapshot?.();
+    if (!snapshot?.busy) {
+      this.radioIoBackpressureStartedAt = null;
+      return false;
+    }
+
+    const now = Date.now();
+    if (this.radioIoBackpressureStartedAt === null) {
+      this.radioIoBackpressureStartedAt = now;
+    }
+
+    const pauseDurationMs = now - this.radioIoBackpressureStartedAt;
+    const context = {
+      reason: 'spectrum-session-polling',
+      pauseDurationMs,
+      ...snapshot,
+    };
+    logger.debug('Skipping spectrum CAT reads while radio I/O queue is busy', context);
+
+    if (
+      pauseDurationMs >= RADIO_IO_BACKPRESSURE_WARN_MS
+      && now - this.lastRadioIoBackpressureWarnAt >= RADIO_IO_BACKPRESSURE_WARN_COOLDOWN_MS
+    ) {
+      this.lastRadioIoBackpressureWarnAt = now;
+      logger.warn('串口 CAT 队列持续繁忙，已暂停低优先级轮询', context);
+    }
+
+    return true;
   }
 
   private normalizeBandwidthProfile(bandwidthLabel: string | number | null): 'narrow' | 'normal' | 'wide' {

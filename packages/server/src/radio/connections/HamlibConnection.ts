@@ -27,7 +27,7 @@ import { createLogger } from '../../utils/logger.js';
 import { isProcessShuttingDown } from '../../utils/process-shutdown.js';
 import { isRecoverableOptionalRadioError } from '../optionalRadioError.js';
 import { buildBackendConfig } from '../hamlibConfigUtils.js';
-import { RADIO_IO_SKIPPED, RadioIoQueue } from './RadioIoQueue.js';
+import { RADIO_IO_SKIPPED, RadioIoQueue, type RadioIoTaskContext, type RadioIoTaskOptions } from './RadioIoQueue.js';
 import {
   type ApplyOperatingStateRequest,
   type ApplyOperatingStateResult,
@@ -46,6 +46,7 @@ import {
 } from './IRadioConnection.js';
 
 const logger = createLogger('HamlibConnection');
+const HAMLIB_SERIAL_CAT_TASK_TIMEOUT_MS = 5000;
 
 // RigMetadata is imported from meter/types.ts
 
@@ -241,12 +242,21 @@ export class HamlibConnection
   private readonly ioQueue = new RadioIoQueue({
     label: 'Hamlib CAT',
     onCongestionWarning: (snapshot) => {
-      const connectionType = this.currentConfig?.type ?? 'unknown';
-      logger.warn(connectionType === 'serial' ? '串口请求队列拥堵' : '电台 CAT 请求队列拥堵', {
-        ...snapshot,
-        connectionType,
-        serialPath: this.currentConfig?.type === 'serial' ? this.currentConfig.serial?.path : undefined,
-      });
+      const logContext = this.flattenRadioIoSnapshotContext(snapshot);
+      logger.warn(
+        logContext.connectionType === 'serial' ? '串口 CAT 请求队列拥堵' : '电台 CAT 请求队列拥堵',
+        logContext,
+      );
+    },
+    onTaskTimeoutWarning: (snapshot) => {
+      const logContext = this.flattenRadioIoSnapshotContext(snapshot);
+      logger.warn(
+        logContext.connectionType === 'serial' ? '串口 CAT 请求执行超时，已跳过' : '电台 CAT 请求执行超时，已跳过',
+        logContext,
+      );
+    },
+    onLateTaskResult: (snapshot) => {
+      logger.debug('忽略已超时 CAT 请求的迟到结果', this.flattenRadioIoSnapshotContext(snapshot));
     },
   });
   private ioSessionId = 0;
@@ -390,6 +400,10 @@ export class HamlibConnection
 
   isCriticalOperationActive(): boolean {
     return this.ioQueue.isCriticalActive();
+  }
+
+  getRadioIoQueueSnapshot() {
+    return this.ioQueue.getSnapshot();
   }
 
   /**
@@ -800,7 +814,7 @@ export class HamlibConnection
 
   async getPTT(): Promise<boolean> {
     this.checkConnected();
-    const result = await this.ioQueue.runLowPriority({ sessionId: this.ioSessionId }, async (activeSessionId) => {
+    const result = await this.ioQueue.runLowPriority(this.createRadioIoTaskOptions('getPTT'), async (activeSessionId) => {
       this.ensureSession(activeSessionId);
       try {
         const value = (await Promise.race([
@@ -1297,7 +1311,7 @@ export class HamlibConnection
       controller.on('spectrumLine', this.onRigSpectrumLine);
 
       try {
-        await controller.startManagedSpectrum(config);
+        await controller.startManagedSpectrum({ ...config, pumpIntervalMs: 0 });
       } catch (error) {
         controller.off('spectrumLine', this.onRigSpectrumLine);
         this.spectrumListener = null;
@@ -1321,7 +1335,7 @@ export class HamlibConnection
       } finally {
         this.spectrumListener = null;
       }
-    });
+    }, { id: 'stopManagedSpectrum', critical: true });
   }
 
   // ===== 天线调谐器控制 =====
@@ -1716,7 +1730,7 @@ export class HamlibConnection
    */
   async getDCD(): Promise<boolean> {
     this.checkConnected();
-    const result = await this.ioQueue.runLowPriority({ sessionId: this.ioSessionId }, async (activeSessionId) => {
+    const result = await this.ioQueue.runLowPriority(this.createRadioIoTaskOptions('getDCD'), async (activeSessionId) => {
       this.ensureSession(activeSessionId);
       try {
         const value = (await Promise.race([
@@ -2763,13 +2777,49 @@ export class HamlibConnection
     }
   }
 
+  private createRadioIoTaskOptions(
+    taskName: string,
+    options?: { critical?: boolean; id?: string; timeoutMs?: number },
+  ): RadioIoTaskOptions {
+    const context = this.createRadioIoLogContext();
+    const timeoutMs = options?.timeoutMs
+      ?? (context.connectionType === 'serial' ? HAMLIB_SERIAL_CAT_TASK_TIMEOUT_MS : undefined);
+
+    return {
+      sessionId: this.ioSessionId,
+      critical: options?.critical,
+      id: options?.id,
+      name: taskName,
+      timeoutMs,
+      context,
+    };
+  }
+
+  private createRadioIoLogContext(): RadioIoTaskContext {
+    const connectionType = this.currentConfig?.type ?? 'unknown';
+    return {
+      connectionType,
+      serialPath: this.currentConfig?.type === 'serial' ? this.currentConfig.serial?.path : undefined,
+    };
+  }
+
+  private flattenRadioIoSnapshotContext<T extends { context?: RadioIoTaskContext }>(
+    snapshot: T,
+  ): Omit<T, 'context'> & RadioIoTaskContext {
+    const { context, ...rest } = snapshot;
+    return {
+      ...rest,
+      connectionType: context?.connectionType ?? this.currentConfig?.type ?? 'unknown',
+      serialPath: context?.serialPath ?? (this.currentConfig?.type === 'serial' ? this.currentConfig.serial?.path : undefined),
+    } as Omit<T, 'context'> & RadioIoTaskContext;
+  }
+
   private async runSerializedTask<T>(
     taskName: string,
     task: () => Promise<T>,
-    options?: { critical?: boolean; id?: string },
+    options?: { critical?: boolean; id?: string; timeoutMs?: number },
   ): Promise<T> {
-    const sessionId = this.ioSessionId;
-    return this.ioQueue.run({ sessionId, critical: options?.critical, id: options?.id, name: taskName }, async (activeSessionId) => {
+    return this.ioQueue.run(this.createRadioIoTaskOptions(taskName, options), async (activeSessionId) => {
       this.ensureSession(activeSessionId);
       const result = await task();
       this.ensureSession(activeSessionId);
@@ -3047,7 +3097,7 @@ export class HamlibConnection
    */
   private async pollMeters(): Promise<void> {
     try {
-      const result = await this.ioQueue.runLowPriority({ sessionId: this.ioSessionId }, async (activeSessionId) => {
+      const result = await this.ioQueue.runLowPriority(this.createRadioIoTaskOptions('pollMeters'), async (activeSessionId) => {
         this.ensureSession(activeSessionId);
         if (!this.rig || !this.meterReader) {
           return;

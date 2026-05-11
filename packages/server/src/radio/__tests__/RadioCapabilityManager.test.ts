@@ -160,6 +160,39 @@ describe('RadioCapabilityManager', () => {
     manager.onDisconnected();
   });
 
+  it('skips capability reads while the radio I/O queue is busy and resumes afterward', async () => {
+    const manager = new RadioCapabilityManager();
+    let busy = true;
+    const getSQL = vi.fn().mockResolvedValue(0.25);
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      isSupportedLevel: vi.fn((level: string) => level === 'SQL'),
+      getSQL,
+      getRadioIoQueueSnapshot: vi.fn(() => ({
+        busy,
+        criticalActive: false,
+        activeCount: busy ? 1 : 0,
+        activeTask: busy ? 'startManagedSpectrum' : null,
+        activeRunMs: busy ? 5000 : null,
+        activeTimeoutMs: busy ? 5000 : null,
+        pendingCount: busy ? 2 : 0,
+        criticalPendingCount: 0,
+        normalPendingCount: busy ? 2 : 0,
+        oldestPendingTask: busy ? 'getLockMode' : null,
+        oldestPendingWaitMs: busy ? 1000 : null,
+        dedupedTaskCount: 0,
+      })),
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+    expect(getSQL).not.toHaveBeenCalled();
+
+    busy = false;
+    await expect(manager.refreshAll()).resolves.toBeUndefined();
+    expect(getSQL).toHaveBeenCalledTimes(1);
+
+    manager.onDisconnected();
+  });
+
   it('rejects writes to a supported capability while it is currently unavailable', async () => {
     const manager = new RadioCapabilityManager();
     const setSQL = vi.fn().mockResolvedValue(undefined);

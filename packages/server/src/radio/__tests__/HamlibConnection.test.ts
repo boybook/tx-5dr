@@ -30,8 +30,13 @@ type MockRig = {
 };
 
 type MockSpectrumController = {
-  configureSpectrum: ReturnType<typeof vi.fn>;
-  getSpectrumSupportSummary: ReturnType<typeof vi.fn>;
+  configureSpectrum?: ReturnType<typeof vi.fn>;
+  getSpectrumSupportSummary?: ReturnType<typeof vi.fn>;
+  getSpectrumDisplayState?: ReturnType<typeof vi.fn>;
+  startManagedSpectrum?: ReturnType<typeof vi.fn>;
+  stopManagedSpectrum?: ReturnType<typeof vi.fn>;
+  on?: ReturnType<typeof vi.fn>;
+  off?: ReturnType<typeof vi.fn>;
 };
 
 type TestFrequencyRange = {
@@ -60,6 +65,7 @@ type HamlibConnectionTestAccessor = {
   currentFrequencyHz?: number;
   currentRadioMode?: string;
   spectrumController?: MockSpectrumController;
+  currentConfig?: unknown;
   resolveCurrentTxPowerMaxWatts: () => number | null;
 };
 
@@ -646,6 +652,105 @@ describe('HamlibConnection', () => {
     await expect(connection.applySpectrumRuntimeConfig?.({ speed: 10 })).resolves.toBeUndefined();
 
     expect(configureSpectrum).not.toHaveBeenCalled();
+  });
+
+  it('passes pumpIntervalMs=0 when starting Hamlib managed spectrum and does not time out network CAT tasks', async () => {
+    vi.useFakeTimers();
+    try {
+      const { connection } = createConnectedConnection();
+      const start = createDeferred<boolean>();
+      const startManagedSpectrum = vi.fn().mockReturnValue(start.promise);
+      const settled = vi.fn();
+
+      asTestConnection(connection).currentConfig = {
+        type: 'network',
+        network: { host: '127.0.0.1', port: 4532 },
+      };
+      asTestConnection(connection).spectrumController = {
+        startManagedSpectrum,
+        stopManagedSpectrum: vi.fn().mockResolvedValue(true),
+        on: vi.fn(),
+        off: vi.fn(),
+      };
+
+      const promise = connection.startManagedSpectrum(() => {}, { speed: 10 });
+      promise.then(settled, settled);
+      await Promise.resolve();
+
+      expect(startManagedSpectrum).toHaveBeenCalledWith({ speed: 10, pumpIntervalMs: 0 });
+
+      await vi.advanceTimersByTimeAsync(6_000);
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+
+      start.resolve(true);
+      await expect(promise).resolves.toBeUndefined();
+      expect(settled).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('dedupes repeated managed spectrum stop requests', async () => {
+    const { connection } = createConnectedConnection();
+    const stop = createDeferred<boolean>();
+    const stopManagedSpectrum = vi.fn().mockReturnValue(stop.promise);
+
+    asTestConnection(connection).spectrumController = {
+      stopManagedSpectrum,
+      off: vi.fn(),
+    };
+
+    const first = connection.stopManagedSpectrum();
+    await Promise.resolve();
+    const second = connection.stopManagedSpectrum();
+    await Promise.resolve();
+
+    expect(stopManagedSpectrum).toHaveBeenCalledTimes(1);
+    stop.resolve(true);
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+  });
+
+  it('times out serial CAT tasks with a warning and continues the queue', async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const read = createDeferred<number>();
+      const { connection, rig } = createConnectedConnection({
+        getFrequency: vi.fn().mockReturnValue(read.promise),
+      });
+
+      asTestConnection(connection).currentConfig = {
+        type: 'serial',
+        serial: { path: '/dev/ttyUSB0', rigModel: 1234 },
+      };
+
+      const first = connection.getFrequency().catch((error: Error) => error);
+      await Promise.resolve();
+      const second = connection.setFrequency(7200000);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await Promise.resolve();
+
+      await expect(first).resolves.toMatchObject({
+        message: 'getFrequency timed out after 5000ms',
+      });
+      await expect(second).resolves.toBeUndefined();
+      expect(rig.setFrequency).toHaveBeenCalledWith(7200000);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('串口 CAT 请求执行超时，已跳过'),
+        expect.objectContaining({
+          task: 'getFrequency',
+          timeoutMs: 5000,
+          action: 'skip-and-continue',
+          connectionType: 'serial',
+          serialPath: '/dev/ttyUSB0',
+        }),
+      );
+    } finally {
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('maps Hamlib AGC codes to normalized mode names and writes them back as numeric levels', async () => {
