@@ -742,6 +742,142 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     }
   });
 
+  it('keeps late decode re-decision active after the old 4s FT8 cutoff and still replaces current TX', async () => {
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: {
+        id: 'log-1',
+        name: 'Test Log',
+        provider: {
+          addQSO: vi.fn().mockResolvedValue(undefined),
+          updateQSO: vi.fn(),
+          getQSO: vi.fn(),
+          getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+          getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 0 }),
+          hasWorkedCallsign: vi.fn().mockResolvedValue(false),
+        },
+      },
+      callsign: 'BG4IAJ',
+      clockNow: 64_500, // current slot 60_000, elapsed 4.5s: beyond old 4s cutoff
+      encodeQueue,
+    });
+    const transmissionLogSpy = vi.fn();
+    eventEmitter.on('transmissionLog' as any, transmissionLogSpy);
+
+    await manager.addOperator({
+      id: 'op1',
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      frequency: 7_074_000,
+      transmitCycles: [0],
+      mode: MODES.FT8,
+    });
+
+    const reDecideOperator = vi.fn().mockResolvedValue(true);
+    manager.setPluginManager({
+      reDecideOperator,
+      shouldProcessStoppedOperatorReDecision: vi.fn(() => false),
+      getCurrentTransmission: vi.fn(() => 'BG5DRB BG4IAJ RR73'),
+      getOperatorRuntimeStatus: vi.fn(() => null),
+      notifyTransmissionQueued: vi.fn(),
+    } as any);
+
+    try {
+      manager.start();
+      manager.getOperatorById('op1')!.start();
+
+      const lateDecodePack = buildSlotPack('slot-45000', 45_000, [{
+        message: FT8MessageParser.generateMessage({
+          type: FT8MessageType.ROGER_REPORT,
+          senderCallsign: 'BG5DRB',
+          targetCallsign: 'BG4IAJ',
+          report: -5,
+        }),
+        snr: -4,
+        dt: 0,
+        freq: 1531,
+        confidence: 0.95,
+      }]);
+
+      manager.reDecideOnLateDecodes(lateDecodePack);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(reDecideOperator).toHaveBeenCalledWith('op1', lateDecodePack);
+      expect(encodeQueue.push).toHaveBeenCalledTimes(1);
+      expect(encodeQueue.push.mock.calls[0]?.[0]).toMatchObject({
+        operatorId: 'op1',
+        message: 'BG5DRB BG4IAJ RR73',
+        slotStartMs: 60_000,
+        timeSinceSlotStartMs: 4_500,
+      });
+      expect(transmissionLogSpy.mock.calls[0]?.[0]).toMatchObject({
+        operatorId: 'op1',
+        message: 'BG5DRB BG4IAJ RR73',
+        replaceExisting: true,
+      });
+    } finally {
+      manager.stop();
+    }
+  });
+
+  it('rejects late decode re-decision inside the final FT8 slot guard window', async () => {
+    const encodeQueue = { push: vi.fn() };
+    const { manager } = createManager({
+      logBook: {
+        id: 'log-1',
+        name: 'Test Log',
+        provider: {
+          addQSO: vi.fn().mockResolvedValue(undefined),
+          updateQSO: vi.fn(),
+          getQSO: vi.fn(),
+          getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+          getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 0 }),
+          hasWorkedCallsign: vi.fn().mockResolvedValue(false),
+        },
+      },
+      callsign: 'BG4IAJ',
+      clockNow: 74_501, // current slot 60_000, elapsed 14.501s: inside 500ms guard
+      encodeQueue,
+    });
+
+    await manager.addOperator({
+      id: 'op1',
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      frequency: 7_074_000,
+      transmitCycles: [0],
+      mode: MODES.FT8,
+    });
+
+    const reDecideOperator = vi.fn().mockResolvedValue(true);
+    manager.setPluginManager({
+      reDecideOperator,
+      shouldProcessStoppedOperatorReDecision: vi.fn(() => false),
+      getCurrentTransmission: vi.fn(() => 'BG5DRB BG4IAJ RR73'),
+      getOperatorRuntimeStatus: vi.fn(() => null),
+      notifyTransmissionQueued: vi.fn(),
+    } as any);
+
+    try {
+      manager.start();
+      manager.getOperatorById('op1')!.start();
+
+      manager.reDecideOnLateDecodes(buildSlotPack('slot-45000', 45_000, [{
+        message: 'BG5DRB BG4IAJ R-05',
+        snr: -4,
+        dt: 0,
+        freq: 1531,
+        confidence: 0.95,
+      }]));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(reDecideOperator).not.toHaveBeenCalled();
+      expect(encodeQueue.push).not.toHaveBeenCalled();
+    } finally {
+      manager.stop();
+    }
+  });
+
   it('uses the double-click request target before changing transmit cycle and refreshing the panel status', async () => {
     const encodeQueue = { push: vi.fn() };
     const { manager, eventEmitter } = createManager({

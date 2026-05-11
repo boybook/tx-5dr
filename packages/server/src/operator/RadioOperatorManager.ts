@@ -95,18 +95,13 @@ export class RadioOperatorManager {
   // 记录所有事件监听器,用于清理
   private eventListeners: Map<string, (...args: any[]) => void> = new Map();
 
-  // 晚到解码重决策相关状态
-  // 上限 4000ms（FT8 经验值），按当前模式时隙缩放（slotMs * 0.3）
-  // FT8 (15s) → 4000ms；FT4 (7.5s) → 2250ms
-  private static readonly REDECIDE_DEADLINE_CAP_MS = 4000;
-  private static readonly REDECIDE_DEADLINE_RATIO = 0.3;
+  // 晚到解码重决策窗口：保留槽尾 500ms，避免贴近下个 slotStart 时与下一轮事件竞态。
+  // FT8 (15s) → 14500ms；FT4 (7.5s) → 7000ms
+  private static readonly REDECIDE_DEADLINE_SLOT_END_GUARD_MS = 500;
 
   private getRedecideDeadlineMs(): number {
     const slotMs = this.getCurrentMode().slotMs;
-    return Math.min(
-      RadioOperatorManager.REDECIDE_DEADLINE_CAP_MS,
-      Math.floor(slotMs * RadioOperatorManager.REDECIDE_DEADLINE_RATIO),
-    );
+    return Math.max(0, slotMs - RadioOperatorManager.REDECIDE_DEADLINE_SLOT_END_GUARD_MS);
   }
 
   private resolveCurrentBandForWorkedCheck(): string {
