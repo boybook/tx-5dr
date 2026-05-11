@@ -273,6 +273,52 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     );
   });
 
+  it('treats ALSA output device-loss warnings as a single recoverable runtime loss', async () => {
+    const manager = new AudioStreamManager();
+    const runtimeErrors: Error[] = [];
+    manager.on('error', (error) => runtimeErrors.push(error));
+    await manager.startOutput();
+    vi.clearAllMocks();
+
+    const nowSpy = vi.spyOn(Date, 'now');
+    const output = (manager as unknown as { rtAudioOutput: { emitRtAudioError: (type: number, message: string) => void } }).rtAudioOutput;
+    const message = 'RtApiAlsa::callbackEvent: audio write error, No such device.';
+
+    nowSpy.mockReturnValue(1_000);
+    output.emitRtAudioError(1, message);
+    nowSpy.mockReturnValue(1_001);
+    output.emitRtAudioError(1, message);
+    nowSpy.mockReturnValue(1_002);
+    output.emitRtAudioError(1, message);
+
+    expect(runtimeErrors).toHaveLength(1);
+    expect(runtimeErrors[0]?.message).toContain('RtAudio output runtime error (1)');
+    expect(mockLogger.error).toHaveBeenCalledTimes(1);
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      'RtAudio output runtime error',
+      expect.objectContaining({
+        type: 1,
+        typeName: 'DEBUG_WARNING',
+        message,
+        fatal: true,
+      }),
+    );
+    expect(mockLogger.warn).not.toHaveBeenCalled();
+
+    nowSpy.mockReturnValue(7_000);
+    output.emitRtAudioError(1, message);
+
+    expect(runtimeErrors).toHaveLength(1);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      'RtAudio output runtime error suppressed',
+      expect.objectContaining({
+        type: 1,
+        suppressedCount: 2,
+        suppressWindowMs: 5000,
+      }),
+    );
+  });
+
   it('records RtAudio warning callbacks without treating them as runtime loss', async () => {
     const manager = new AudioStreamManager();
     const runtimeErrors: Error[] = [];
@@ -296,6 +342,50 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
       'RtAudio output runtime error',
       expect.anything(),
     );
+  });
+
+  it('rate-limits repeated non-fatal RtAudio output warnings', async () => {
+    const manager = new AudioStreamManager();
+    await manager.startOutput();
+    vi.clearAllMocks();
+
+    const nowSpy = vi.spyOn(Date, 'now');
+    const output = (manager as unknown as { rtAudioOutput: { emitRtAudioError: (type: number, message: string) => void } }).rtAudioOutput;
+    const message = 'RtApiWasapi::closeStream: No open stream to close.';
+
+    nowSpy.mockReturnValue(2_000);
+    output.emitRtAudioError(1, message);
+    nowSpy.mockReturnValue(2_001);
+    output.emitRtAudioError(1, message);
+    nowSpy.mockReturnValue(8_000);
+    output.emitRtAudioError(1, message);
+
+    const warningCalls = mockLogger.warn.mock.calls.filter(([logMessage]) => logMessage === 'RtAudio output callback warning');
+    expect(warningCalls).toHaveLength(2);
+    expect(warningCalls[0]?.[1]).toMatchObject({
+      type: 1,
+      message,
+      fatal: false,
+    });
+    expect(warningCalls[1]?.[1]).toMatchObject({
+      type: 1,
+      message,
+      fatal: false,
+      suppressedCount: 1,
+      suppressWindowMs: 5000,
+    });
+  });
+
+  it('closes an existing RtAudio output stream even when outputting state was already cleared', async () => {
+    const manager = new AudioStreamManager();
+    await manager.startOutput();
+    const output = (manager as unknown as { rtAudioOutput: { isStreamOpen: () => boolean } }).rtAudioOutput;
+
+    (manager as unknown as { isOutputting: boolean }).isOutputting = false;
+
+    await manager.stopOutput();
+
+    expect(output.isStreamOpen()).toBe(false);
   });
 
   it('logs RtAudio write exception details instead of only incrementing writeFails', async () => {

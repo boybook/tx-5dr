@@ -24,6 +24,7 @@ const ICOM_WLAN_TX_MAX_WAIT_SLICE_MS = 20;
 const RTAUDIO_TX_CONSUME_WATCHDOG_MS = 750;
 const RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS = 1000;
 const RTAUDIO_TX_WATCHDOG_MIN_SUBMITTED_CHUNKS = 3;
+const RTAUDIO_OUTPUT_WARNING_LOG_WINDOW_MS = 5000;
 
 export type NativeAudioInputSourceKind = 'audio-device' | 'icom-wlan' | 'openwebrx';
 
@@ -93,6 +94,11 @@ interface RtAudioIssue {
   fatal: boolean;
 }
 
+interface RtAudioIssueLogState {
+  lastLoggedAt: number;
+  suppressedCount: number;
+}
+
 export interface PlayAudioOptions {
   /**
    * Mirrors the audio chunks written to the TX output into the monitor broadcast
@@ -158,6 +164,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private outputFirstFrameConsumedAt: number | null = null;
   private outputLastFrameConsumedAt: number | null = null;
   private outputRtAudioErrors: RtAudioIssue[] = [];
+  private outputRtAudioIssueLogState = new Map<string, RtAudioIssueLogState>();
+  private outputRuntimeLossEmitted = false;
   private outputWatchdogGeneration = 0;
   private playbackSequence = 0;
 
@@ -710,13 +718,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    * 停止音频输出流
    */
   async stopOutput(): Promise<void> {
-    if (!this.isOutputting) {
+    if (!this.isOutputting && !this.rtAudioOutput && !this.usingIcomWlanOutput) {
       logger.warn('audio output is not running');
       return;
     }
 
     try {
       logger.info('stopping audio output');
+      await this.stopCurrentPlayback();
+      this.clearVoicePlaybackQueue();
 
       // ICOM WLAN 输出只需要清除标志，不需要额外操作
       if (this.usingIcomWlanOutput) {
@@ -734,7 +744,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.isOutputting = false;
       this.outputDeviceId = null;
       this.activeOutputDeviceName = null;
-      this.clearVoicePlaybackQueue();
+      this.outputRuntimeLossEmitted = false;
+      this.outputRtAudioIssueLogState.clear();
 
       logger.info('audio output stopped');
 
@@ -870,6 +881,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.outputFirstFrameConsumedAt = null;
     this.outputLastFrameConsumedAt = null;
     this.outputRtAudioErrors = [];
+    this.outputRuntimeLossEmitted = false;
+    this.outputRtAudioIssueLogState.clear();
     this.outputWatchdogGeneration++;
   }
 
@@ -883,12 +896,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   }
 
   private recordOutputRtAudioIssue(type: number, message: string): void {
+    const runtimeLoss = this.isOutputRtAudioRuntimeLoss(type, message);
     const issue = {
       type,
       typeName: this.describeRtAudioErrorType(type),
       message,
       at: Date.now(),
-      fatal: this.isFatalRtAudioErrorType(type),
+      fatal: runtimeLoss || this.isFatalRtAudioErrorType(type),
     };
     this.outputRtAudioErrors.push(issue);
     if (this.outputRtAudioErrors.length > 10) {
@@ -896,12 +910,68 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     }
 
     if (!issue.fatal) {
-      logger.warn('RtAudio output callback warning', issue);
+      this.logOutputRtAudioIssueRateLimited('RtAudio output callback warning', issue);
       return;
+    }
+
+    if (runtimeLoss && this.outputRuntimeLossEmitted) {
+      this.logOutputRtAudioIssueRateLimited('RtAudio output runtime error suppressed', issue, false);
+      return;
+    }
+
+    if (runtimeLoss) {
+      this.outputRuntimeLossEmitted = true;
     }
 
     logger.error('RtAudio output runtime error', issue);
     this.emit('error', new Error(`RtAudio output runtime error (${type}): ${message}`));
+  }
+
+  private logOutputRtAudioIssueRateLimited(message: string, issue: RtAudioIssue, logFirst = true): void {
+    const key = `${message}:${issue.type}:${issue.message}`;
+    const state = this.outputRtAudioIssueLogState.get(key);
+
+    if (!state) {
+      this.outputRtAudioIssueLogState.set(key, {
+        lastLoggedAt: issue.at,
+        suppressedCount: logFirst ? 0 : 1,
+      });
+      if (logFirst) {
+        logger.warn(message, issue);
+      }
+      return;
+    }
+
+    const elapsedMs = issue.at - state.lastLoggedAt;
+    if (elapsedMs < RTAUDIO_OUTPUT_WARNING_LOG_WINDOW_MS) {
+      state.suppressedCount++;
+      return;
+    }
+
+    const suppressedCount = state.suppressedCount;
+    state.lastLoggedAt = issue.at;
+    state.suppressedCount = 0;
+    logger.warn(message, {
+      ...issue,
+      suppressedCount,
+      suppressWindowMs: RTAUDIO_OUTPUT_WARNING_LOG_WINDOW_MS,
+    });
+  }
+
+  private isOutputRtAudioRuntimeLoss(type: number, message: string): boolean {
+    if (this.isFatalRtAudioErrorType(type)) {
+      return false;
+    }
+
+    const normalized = message.toLowerCase();
+    if (normalized.includes('no open stream to close')) {
+      return false;
+    }
+
+    return normalized.includes('no such device')
+      || normalized.includes('audio write error')
+      || normalized.includes('device unavailable')
+      || normalized.includes('invalid device');
   }
 
   private isFatalRtAudioErrorType(type: number): boolean {
