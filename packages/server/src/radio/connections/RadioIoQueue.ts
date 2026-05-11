@@ -1,11 +1,35 @@
 type RadioIoTaskOptions = {
   sessionId: number;
   id?: string;
+  name?: string;
   critical?: boolean;
   lowPriority?: boolean;
 };
 
 export const RADIO_IO_SKIPPED = Symbol('radio-io-skipped');
+
+export interface RadioIoQueueCongestionSnapshot {
+  label?: string;
+  sessionId: number;
+  activeCount: number;
+  pendingCount: number;
+  criticalPendingCount: number;
+  normalPendingCount: number;
+  pendingThreshold: number;
+  oldestPendingTask: string;
+  oldestPendingWaitMs: number;
+  latestTask: string;
+  latestTaskCritical: boolean;
+  dedupedTaskCount: number;
+}
+
+export interface RadioIoQueueOptions {
+  label?: string;
+  congestionPendingThreshold?: number;
+  congestionWarnCooldownMs?: number;
+  now?: () => number;
+  onCongestionWarning?: (snapshot: RadioIoQueueCongestionSnapshot) => void;
+}
 
 type QueuedRadioIoTask<T> = {
   options: RadioIoTaskOptions;
@@ -14,7 +38,11 @@ type QueuedRadioIoTask<T> = {
   task: (sessionId: number) => Promise<T>;
   resolve: (value: T) => void;
   reject: (reason?: unknown) => void;
+  enqueuedAt: number;
 };
+
+const DEFAULT_CONGESTION_PENDING_THRESHOLD = 5;
+const DEFAULT_CONGESTION_WARN_COOLDOWN_MS = 10_000;
 
 export class RadioIoQueue {
   private queue: QueuedRadioIoTask<unknown>[] = [];
@@ -22,6 +50,9 @@ export class RadioIoQueue {
   private criticalCount = 0;
   private pumpScheduled = false;
   private readonly dedupedTasks = new Map<string, Promise<unknown>>();
+  private lastCongestionWarningAt = Number.NEGATIVE_INFINITY;
+
+  constructor(private readonly options: RadioIoQueueOptions = {}) {}
 
   isCriticalActive(): boolean {
     return this.criticalCount > 0;
@@ -67,6 +98,7 @@ export class RadioIoQueue {
       task,
       resolve: resolveTask,
       reject: rejectTask,
+      enqueuedAt: this.now(),
     };
 
     if (dedupeKey) {
@@ -74,6 +106,7 @@ export class RadioIoQueue {
     }
 
     this.enqueue(queuedTask as QueuedRadioIoTask<unknown>);
+    this.maybeWarnCongestion(queuedTask as QueuedRadioIoTask<unknown>);
     this.schedulePump();
 
     return promise;
@@ -98,6 +131,62 @@ export class RadioIoQueue {
     }
 
     return `${options.sessionId}:${options.id}`;
+  }
+
+  private maybeWarnCongestion(triggerTask: QueuedRadioIoTask<unknown>): void {
+    if (!this.options.onCongestionWarning) {
+      return;
+    }
+
+    const pendingThreshold = Math.max(
+      1,
+      this.options.congestionPendingThreshold ?? DEFAULT_CONGESTION_PENDING_THRESHOLD,
+    );
+    if (this.queue.length < pendingThreshold) {
+      return;
+    }
+
+    const now = this.now();
+    const cooldownMs = Math.max(
+      0,
+      this.options.congestionWarnCooldownMs ?? DEFAULT_CONGESTION_WARN_COOLDOWN_MS,
+    );
+    if (cooldownMs > 0 && now - this.lastCongestionWarningAt < cooldownMs) {
+      return;
+    }
+
+    this.lastCongestionWarningAt = now;
+    const oldestPendingTask = this.queue.reduce((oldest, item) =>
+      item.enqueuedAt < oldest.enqueuedAt ? item : oldest
+    );
+    const criticalPendingCount = this.queue.filter((item) => item.options.critical).length;
+
+    try {
+      this.options.onCongestionWarning({
+        label: this.options.label,
+        sessionId: triggerTask.options.sessionId,
+        activeCount: this.activeCount,
+        pendingCount: this.queue.length,
+        criticalPendingCount,
+        normalPendingCount: this.queue.length - criticalPendingCount,
+        pendingThreshold,
+        oldestPendingTask: this.describeTask(oldestPendingTask),
+        oldestPendingWaitMs: Math.max(0, now - oldestPendingTask.enqueuedAt),
+        latestTask: this.describeTask(triggerTask),
+        latestTaskCritical: Boolean(triggerTask.options.critical),
+        dedupedTaskCount: this.dedupedTasks.size,
+      });
+    } catch {
+      // Warning hooks must not break radio I/O.
+    }
+  }
+
+  private describeTask(queuedTask: QueuedRadioIoTask<unknown>): string {
+    return queuedTask.options.name ?? queuedTask.options.id ?? 'anonymous';
+  }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
   }
 
   private schedulePump(): void {

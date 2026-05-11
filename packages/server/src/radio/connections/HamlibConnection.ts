@@ -238,7 +238,17 @@ export class HamlibConnection
   extends EventEmitter<IRadioConnectionEvents>
   implements IRadioConnection
 {
-  private readonly ioQueue = new RadioIoQueue();
+  private readonly ioQueue = new RadioIoQueue({
+    label: 'Hamlib CAT',
+    onCongestionWarning: (snapshot) => {
+      const connectionType = this.currentConfig?.type ?? 'unknown';
+      logger.warn(connectionType === 'serial' ? '串口请求队列拥堵' : '电台 CAT 请求队列拥堵', {
+        ...snapshot,
+        connectionType,
+        serialPath: this.currentConfig?.type === 'serial' ? this.currentConfig.serial?.path : undefined,
+      });
+    },
+  });
   private ioSessionId = 0;
   private backgroundTasksStarted = false;
   private spectrumListener: ((line: SpectrumLine) => void) | null = null;
@@ -2759,7 +2769,7 @@ export class HamlibConnection
     options?: { critical?: boolean; id?: string },
   ): Promise<T> {
     const sessionId = this.ioSessionId;
-    return this.ioQueue.run({ sessionId, critical: options?.critical, id: options?.id }, async (activeSessionId) => {
+    return this.ioQueue.run({ sessionId, critical: options?.critical, id: options?.id, name: taskName }, async (activeSessionId) => {
       this.ensureSession(activeSessionId);
       const result = await task();
       this.ensureSession(activeSessionId);

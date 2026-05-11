@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { RADIO_IO_SKIPPED, RadioIoQueue } from '../connections/RadioIoQueue.js';
+import { RADIO_IO_SKIPPED, RadioIoQueue, type RadioIoQueueCongestionSnapshot } from '../connections/RadioIoQueue.js';
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -185,5 +185,66 @@ describe('RadioIoQueue', () => {
     await Promise.all([normalA, criticalB]);
 
     expect(events).toEqual(['A-start', 'A-end', 'B']);
+  });
+
+  it('emits rate-limited congestion warnings when queued work exceeds the pending threshold', async () => {
+    let now = 1_000;
+    const warnings: RadioIoQueueCongestionSnapshot[] = [];
+    const queue = new RadioIoQueue({
+      label: 'test CAT',
+      congestionPendingThreshold: 2,
+      congestionWarnCooldownMs: 1_000,
+      now: () => now,
+      onCongestionWarning: (snapshot) => warnings.push(snapshot),
+    });
+    const releaseActive = createDeferred<void>();
+
+    const active = queue.run({ sessionId: 1, name: 'active' }, async () => {
+      await releaseActive.promise;
+    });
+
+    await vi.waitFor(() => {
+      expect(queue.isBusy()).toBe(true);
+    });
+
+    const pendingA = queue.run({ sessionId: 1, name: 'pending-a' }, async () => 'a');
+    now += 50;
+    const pendingB = queue.run({ sessionId: 1, name: 'pending-b', critical: true }, async () => 'b');
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({
+      label: 'test CAT',
+      sessionId: 1,
+      activeCount: 1,
+      pendingCount: 2,
+      criticalPendingCount: 1,
+      normalPendingCount: 1,
+      pendingThreshold: 2,
+      oldestPendingTask: 'pending-a',
+      oldestPendingWaitMs: 50,
+      latestTask: 'pending-b',
+      latestTaskCritical: true,
+    });
+
+    const pendingC = queue.run({ sessionId: 1, name: 'pending-c' }, async () => 'c');
+    expect(warnings).toHaveLength(1);
+
+    now += 1_000;
+    const pendingD = queue.run({ sessionId: 1, name: 'pending-d' }, async () => 'd');
+    expect(warnings).toHaveLength(2);
+    expect(warnings[1]).toMatchObject({
+      pendingCount: 4,
+      oldestPendingTask: 'pending-a',
+      latestTask: 'pending-d',
+    });
+
+    releaseActive.resolve(undefined);
+    await expect(Promise.all([active, pendingA, pendingB, pendingC, pendingD])).resolves.toEqual([
+      undefined,
+      'a',
+      'b',
+      'c',
+      'd',
+    ]);
   });
 });
