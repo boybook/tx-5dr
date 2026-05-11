@@ -212,20 +212,20 @@ export class TransmissionPipeline {
         audioMixer.markPlaybackStop();
 
         const remixedAudio = await audioMixer.remixAfterUpdate(elapsedTimeMs);
-	        if (remixedAudio) {
-	          const txId = this.nextTxId('digital-remix-remove');
-	          this.deps.engineEmitter.emit('pttStatusChanged', {
-	            isTransmitting: true,
-	            operatorIds: remixedAudio.operatorIds,
-	          });
-	          this.deps.operatorManager.updateActiveTransmissionOperators(remixedAudio.operatorIds);
-	          audioMixer.markPlaybackStart();
-	          await audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate, {
-	            playbackKind: 'digital',
-	            diagnosticContext: { txId, operatorIds: remixedAudio.operatorIds, reason: 'operator-removed-remix' },
-	          });
-	          this.startPTTPoll();
-	        } else {
+        if (remixedAudio) {
+          const txId = this.nextTxId('digital-remix-remove');
+          this.deps.engineEmitter.emit('pttStatusChanged', {
+            isTransmitting: true,
+            operatorIds: remixedAudio.operatorIds,
+          });
+          this.deps.operatorManager.updateActiveTransmissionOperators(remixedAudio.operatorIds);
+          audioMixer.markPlaybackStart();
+          await audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate, {
+            playbackKind: 'digital',
+            diagnosticContext: { txId, operatorIds: remixedAudio.operatorIds, reason: 'operator-removed-remix' },
+          });
+          this.startPTTPoll();
+        } else {
           logger.info('remix returned null after operator removal, stopping PTT');
           await this.forceStopPTT();
         }
@@ -439,25 +439,25 @@ export class TransmissionPipeline {
           this.deps.audioMixer.markPlaybackStop();
 
           const remixedAudio = await this.deps.audioMixer.remixAfterUpdate(elapsedTimeMs);
-	          if (remixedAudio) {
-	            const txId = this.nextTxId('digital-remix-update');
-	            logger.debug('remix complete', {
-	              operators: remixedAudio.operatorIds,
-	              duration: remixedAudio.duration
+          if (remixedAudio) {
+            const txId = this.nextTxId('digital-remix-update');
+            logger.debug('remix complete', {
+              operators: remixedAudio.operatorIds,
+              duration: remixedAudio.duration
             });
             // 重混音后操作者列表可能变化，更新前端
             this.deps.engineEmitter.emit('pttStatusChanged', {
               isTransmitting: true,
               operatorIds: remixedAudio.operatorIds
-	            });
-	            this.deps.operatorManager.updateActiveTransmissionOperators(remixedAudio.operatorIds);
-	            this.deps.audioMixer.markPlaybackStart();
-	            await this.deps.audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate, {
-	              playbackKind: 'digital',
-	              diagnosticContext: { txId, operatorIds: remixedAudio.operatorIds, reason: 'encode-update-remix' },
-	            });
-	            this.startPTTPoll();
-	          }
+            });
+            this.deps.operatorManager.updateActiveTransmissionOperators(remixedAudio.operatorIds);
+            this.deps.audioMixer.markPlaybackStart();
+            await this.deps.audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate, {
+              playbackKind: 'digital',
+              diagnosticContext: { txId, operatorIds: remixedAudio.operatorIds, reason: 'encode-update-remix' },
+            });
+            this.startPTTPoll();
+          }
         } catch (remixError) {
           logger.error(`remix failed: ${remixError}`);
         } finally {

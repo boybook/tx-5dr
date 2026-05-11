@@ -30,6 +30,7 @@ import {
 import { EventEmitter } from 'eventemitter3';
 import { AudioStreamManager } from './audio/AudioStreamManager.js';
 import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue.js';
+import type { DecodeWorkerPoolHealthSnapshot } from './decode/WSJTXDecodeProcessPool.js';
 import { WSJTXEncodeWorkQueue } from './decode/WSJTXEncodeWorkQueue.js';
 import { SlotPackManager } from './slot/SlotPackManager.js';
 import { ConfigManager } from './config/config-manager.js';
@@ -54,6 +55,11 @@ import { createLogger } from './utils/logger.js';
 import { bootstrapCoordinator } from './services/BootstrapCoordinator.js';
 
 const logger = createLogger('DigitalRadioEngine');
+
+interface DigitalRadioEngineInternalEvents extends DigitalRadioEngineEvents {
+  decodeWorkerUnavailable: (status: DecodeWorkerPoolHealthSnapshot) => void;
+  decodeWorkerRecovered: (status: DecodeWorkerPoolHealthSnapshot) => void;
+}
 
 // 子系统
 import { AudioVolumeController } from './subsystems/AudioVolumeController.js';
@@ -93,7 +99,7 @@ import { existsSync } from 'node:fs';
  * - 电台连接 bootstrap（由 PhysicalRadioManager 负责）
  * - 电台事件投影（由 RadioBridge 负责）
  */
-export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
+export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineInternalEvents> {
   private static instance: DigitalRadioEngine | null = null;
 
   // 底层组件
@@ -170,10 +176,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.audioStreamManager = new AudioStreamManager();
     this.realDecodeQueue = new WSJTXDecodeWorkQueue();
     this.realDecodeQueue.on('decodeWorkerUnavailable', (status) => {
-      this.emit('decodeWorkerUnavailable' as any, status);
+      this.emit('decodeWorkerUnavailable', status);
     });
     this.realDecodeQueue.on('decodeWorkerRecovered', (status) => {
-      this.emit('decodeWorkerRecovered' as any, status);
+      this.emit('decodeWorkerRecovered', status);
     });
     this.realEncodeQueue = new WSJTXEncodeWorkQueue(1);
     this.slotPackManager = new SlotPackManager();
