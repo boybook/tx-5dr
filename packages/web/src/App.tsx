@@ -24,6 +24,7 @@ import { QSONotificationBridge } from './components/app/QSONotificationBridge';
 import { useViewportHeightCssVar } from './hooks/useViewportHeight';
 import { GlobalShortcutBridge } from './components/app/GlobalShortcutBridge';
 import { UpdateNotificationProvider } from './components/app/UpdateNotificationProvider';
+import { BootstrapStatusChip } from './components/app/BootstrapStatusChip';
 
 function AppContent() {
   const { state } = useRadioState();
@@ -87,6 +88,8 @@ function AppContent() {
         minExtraWidth={18}
         maxExtraWidth={38}
       />
+
+      <BootstrapStatusChip />
 
       {/* 服务器断连蒙层：仅在曾经连接成功后断线时显示，避免首次加载闪烁 */}
       {connectionState.wasEverConnected && (

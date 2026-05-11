@@ -27,6 +27,7 @@ import { AuthManager } from '../auth/AuthManager.js';
 import { buildAbility, emptyAbility, canWithData, type AppAbility } from '../auth/ability.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { createLogger } from '../utils/logger.js';
+import { bootstrapCoordinator } from '../services/BootstrapCoordinator.js';
 import { SpectrumCoordinator } from '../spectrum/SpectrumCoordinator.js';
 import { SpectrumSessionCoordinator } from '../spectrum/SpectrumSessionCoordinator.js';
 import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
@@ -534,6 +535,10 @@ export class WSServer extends WSMessageHandler {
 
     this.digitalRadioEngine.on('systemStatus', (status) => {
       this.broadcastSystemStatus(status);
+    });
+
+    bootstrapCoordinator.on('statusChanged', (status) => {
+      this.broadcast(WSMessageType.BOOTSTRAP_STATUS_CHANGED, status);
     });
 
     this.digitalRadioEngine.getNtpCalibrationService().on('statusChanged', (status) => {
@@ -1398,6 +1403,7 @@ export class WSServer extends WSMessageHandler {
     // 1. 发送当前系统状态
     const status = this.digitalRadioEngine.getStatus();
     connection.send(WSMessageType.SYSTEM_STATUS, status);
+    connection.send(WSMessageType.BOOTSTRAP_STATUS_CHANGED, bootstrapCoordinator.getStatus());
     connection.send(
       WSMessageType.CLOCK_STATUS_CHANGED,
       this.digitalRadioEngine.getNtpCalibrationService().getBroadcastStatus(),

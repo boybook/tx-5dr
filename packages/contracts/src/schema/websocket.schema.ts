@@ -63,6 +63,7 @@ export enum WSMessageType {
   INVOKE_SPECTRUM_CONTROL = 'invokeSpectrumControl',
   DECODE_ERROR = 'decodeError',
   SYSTEM_STATUS = 'systemStatus',
+  BOOTSTRAP_STATUS_CHANGED = 'bootstrapStatusChanged',
   CLIENT_COUNT_CHANGED = 'clientCountChanged',
   CLOCK_STATUS_CHANGED = 'clockStatusChanged',
   RIGCTLD_STATUS = 'rigctldStatus',
@@ -249,6 +250,62 @@ export const SystemStatusSchema = z.object({
   }).nullable().optional(),
 });
 
+export const BootstrapLifecycleSchema = z.enum(['booting', 'completed', 'degraded', 'failed', 'dismissed']);
+export const BootstrapPhaseStateSchema = z.enum([
+  'pending',
+  'running',
+  'ready',
+  'skipped',
+  'warning',
+  'failed',
+  'timed_out',
+]);
+export const BootstrapPhaseIdSchema = z.enum([
+  'config-auth',
+  'core-http',
+  'engine-bootstrap',
+  'audio-device-discovery',
+  'logbook-prewarm',
+  'plugin-bootstrap',
+  'ntp-initial-check',
+  'active-profile-autostart',
+]);
+
+export const BootstrapPhaseStatusSchema = z.object({
+  id: BootstrapPhaseIdSchema,
+  label: z.string(),
+  description: z.string().optional(),
+  state: BootstrapPhaseStateSchema,
+  startedAt: z.number().optional(),
+  completedAt: z.number().optional(),
+  updatedAt: z.number(),
+  durationMs: z.number().optional(),
+  message: z.string().optional(),
+  retryable: z.boolean().optional(),
+  userVisible: z.boolean().optional(),
+});
+
+export const BootstrapStatusSchema = z.object({
+  bootSessionId: z.string(),
+  lifecycle: BootstrapLifecycleSchema,
+  startedAt: z.number(),
+  updatedAt: z.number(),
+  completedAt: z.number().optional(),
+  durationMs: z.number().optional(),
+  blockingReady: z.boolean().default(false),
+  phases: z.array(BootstrapPhaseStatusSchema),
+  summary: z.object({
+    total: z.number(),
+    pending: z.number(),
+    running: z.number(),
+    ready: z.number(),
+    skipped: z.number(),
+    warning: z.number(),
+    failed: z.number(),
+    timedOut: z.number(),
+  }),
+});
+
 // 子窗口信息数据结构
 export const SubWindowInfoSchema = z.object({
   slotInfo: SlotInfoSchema,
@@ -407,6 +464,11 @@ export const MeterDataSchema = z.object({
 
 // ===== 导出共享类型 =====
 export type SystemStatus = z.infer<typeof SystemStatusSchema>;
+export type BootstrapLifecycle = z.infer<typeof BootstrapLifecycleSchema>;
+export type BootstrapPhaseState = z.infer<typeof BootstrapPhaseStateSchema>;
+export type BootstrapPhaseId = z.infer<typeof BootstrapPhaseIdSchema>;
+export type BootstrapPhaseStatus = z.infer<typeof BootstrapPhaseStatusSchema>;
+export type BootstrapStatus = z.infer<typeof BootstrapStatusSchema>;
 export type SubWindowInfo = z.infer<typeof SubWindowInfoSchema>;
 export type DecodeErrorInfo = z.infer<typeof DecodeErrorInfoSchema>;
 export type FrequencyState = z.infer<typeof FrequencyStateSchema>;
@@ -491,6 +553,11 @@ export const WSDecodeErrorMessageSchema = WSBaseMessageSchema.extend({
 export const WSSystemStatusMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.SYSTEM_STATUS),
   data: SystemStatusSchema,
+});
+
+export const WSBootstrapStatusChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.BOOTSTRAP_STATUS_CHANGED),
+  data: BootstrapStatusSchema,
 });
 
 export const WSClientCountChangedMessageSchema = WSBaseMessageSchema.extend({
@@ -1309,6 +1376,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSInvokeSpectrumControlMessageSchema,
   WSDecodeErrorMessageSchema,
   WSSystemStatusMessageSchema,
+  WSBootstrapStatusChangedMessageSchema,
   WSClientCountChangedMessageSchema,
   WSClockStatusChangedMessageSchema,
   WSErrorMessageSchema,
@@ -1421,6 +1489,7 @@ export type WSSpectrumSessionStateChangedMessage = z.infer<typeof WSSpectrumSess
 export type WSInvokeSpectrumControlMessage = z.infer<typeof WSInvokeSpectrumControlMessageSchema>;
 export type WSDecodeErrorMessage = z.infer<typeof WSDecodeErrorMessageSchema>;
 export type WSSystemStatusMessage = z.infer<typeof WSSystemStatusMessageSchema>;
+export type WSBootstrapStatusChangedMessage = z.infer<typeof WSBootstrapStatusChangedMessageSchema>;
 export type WSClientCountChangedMessage = z.infer<typeof WSClientCountChangedMessageSchema>;
 export type WSClockStatusChangedMessage = z.infer<typeof WSClockStatusChangedMessageSchema>;
 export type WSErrorMessage = z.infer<typeof WSErrorMessageSchema>;
@@ -1493,6 +1562,7 @@ export interface DigitalRadioEngineEvents {
   // 错误和状态事件
   decodeError: (errorInfo: DecodeErrorInfo) => void;
   systemStatus: (status: SystemStatus) => void;
+  bootstrapStatusChanged: (status: BootstrapStatus) => void;
   clientCountChanged: (data: { count: number; timestamp: number }) => void;
   clockStatusChanged: (data: import('./system.schema.js').ClockStatusSummary) => void;
 

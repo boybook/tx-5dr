@@ -28,6 +28,7 @@ import type {
   ReconnectProgress,
   ClockStatusSummary,
   AudioSidecarStatusPayload,
+  BootstrapStatus,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import type { RadioService } from '../../services/radioService';
@@ -228,6 +229,9 @@ export function createRadioEventMap({
     systemStatus: (data: unknown) => {
       const status = data as SystemStatus;
       radioDispatch({ type: 'systemStatus', payload: status });
+    },
+    bootstrapStatusChanged: (data: unknown) => {
+      radioDispatch({ type: 'bootstrapStatusChanged', payload: data as BootstrapStatus });
     },
     clockStatusChanged: (data: unknown) => {
       radioDispatch({ type: 'clockStatusChanged', payload: data as ClockStatusSummary });

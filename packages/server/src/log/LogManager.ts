@@ -4,6 +4,7 @@ import { ADIFLogProvider } from './ADIFLogProvider.js';
 import { getDataFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
 import { normalizeCallsign } from '../utils/callsign.js';
+import { bootstrapCoordinator } from '../services/BootstrapCoordinator.js';
 
 const logger = createLogger('LogManager');
 
@@ -42,6 +43,8 @@ export class LogManager {
   private logBooks: Map<string, LogBookInstance> = new Map();
   private callsignLogBookMap: Map<string, string> = new Map(); // callsign -> logBookId
   private callsignLogBookInFlight: Map<string, Promise<LogBookInstance>> = new Map();
+  private bootstrapPrewarmCallsigns: Set<string> = new Set();
+  private bootstrapPrewarmSettled: Set<string> = new Set();
   private operatorCallsignMap: Map<string, string> = new Map(); // operatorId -> callsign
   private isInitialized: boolean = false;
   // 已移除默认日志本概念，只有基于呼号的日志本
@@ -258,8 +261,14 @@ export class LogManager {
    */
   prewarmLogBookByCallsign(callsign: string, timeoutMs: number = 15_000): void {
     const normalizedCallsign = normalizeCallsign(callsign);
+    if (!this.bootstrapPrewarmCallsigns.has(normalizedCallsign)) {
+      this.bootstrapPrewarmCallsigns.add(normalizedCallsign);
+      bootstrapCoordinator.startPhase('logbook-prewarm', '正在准备日志本');
+    }
+
     const existingLogBookId = this.callsignLogBookMap.get(normalizedCallsign);
     if (existingLogBookId && this.logBooks.has(existingLogBookId)) {
+      this.markBootstrapPrewarmSettled(normalizedCallsign);
       return;
     }
 
@@ -283,6 +292,7 @@ export class LogManager {
           logBookId: logBook.id,
           durationMs: Date.now() - startedAt,
         });
+        this.markBootstrapPrewarmSettled(normalizedCallsign);
       })
       .catch((error) => {
         if (timeoutHandle) clearTimeout(timeoutHandle);
@@ -292,11 +302,47 @@ export class LogManager {
           error: (error as Error).message,
         };
         if (timedOut) {
+          bootstrapCoordinator.timeoutPhase('logbook-prewarm', '日志本准备时间较长，正在后台继续');
           logger.warn('Background logbook prewarm timed out; startup will continue', payload);
         } else {
+          bootstrapCoordinator.failPhase('logbook-prewarm', '日志本准备失败，可稍后重试');
           logger.error('Background logbook prewarm failed', payload);
         }
       });
+
+    creation
+      .then(() => {
+        if (timedOut) {
+          this.markBootstrapPrewarmSettled(normalizedCallsign);
+        }
+      })
+      .catch(() => undefined);
+  }
+
+  skipBootstrapPrewarm(message: string): void {
+    bootstrapCoordinator.skipPhase('logbook-prewarm', message);
+  }
+
+  retryBootstrapPrewarm(timeoutMs: number = 15_000): void {
+    const callsigns = [...new Set(this.operatorCallsignMap.values())];
+    this.bootstrapPrewarmCallsigns.clear();
+    this.bootstrapPrewarmSettled.clear();
+
+    if (callsigns.length === 0) {
+      this.skipBootstrapPrewarm('没有可预热的操作员日志本');
+      return;
+    }
+
+    for (const callsign of callsigns) {
+      this.prewarmLogBookByCallsign(callsign, timeoutMs);
+    }
+  }
+
+  private markBootstrapPrewarmSettled(callsign: string): void {
+    this.bootstrapPrewarmSettled.add(callsign);
+    if (this.bootstrapPrewarmSettled.size >= this.bootstrapPrewarmCallsigns.size) {
+      bootstrapCoordinator.completePhase('logbook-prewarm', '日志本准备完成');
+    }
   }
   
   /**
@@ -444,6 +490,8 @@ export class LogManager {
     this.logBooks.clear();
     this.callsignLogBookMap.clear();
     this.callsignLogBookInFlight.clear();
+    this.bootstrapPrewarmCallsigns.clear();
+    this.bootstrapPrewarmSettled.clear();
     this.operatorCallsignMap.clear();
     this.isInitialized = false;
   }

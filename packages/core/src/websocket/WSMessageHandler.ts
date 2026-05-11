@@ -19,6 +19,7 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.SPECTRUM_SESSION_STATE_CHANGED]: 'spectrumSessionStateChanged',
   [WSMessageType.DECODE_ERROR]: 'decodeError',
   [WSMessageType.SYSTEM_STATUS]: 'systemStatus',
+  [WSMessageType.BOOTSTRAP_STATUS_CHANGED]: 'bootstrapStatusChanged',
   [WSMessageType.CLIENT_COUNT_CHANGED]: 'clientCountChanged',
   [WSMessageType.CLOCK_STATUS_CHANGED]: 'clockStatusChanged',
   [WSMessageType.RIGCTLD_STATUS]: 'rigctldStatus',

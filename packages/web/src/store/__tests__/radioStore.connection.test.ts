@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getRadioServiceBootstrapAction } from '../radio/bootstrap';
-import { connectionReducer, initialConnectionState } from '../radioStore';
+import { connectionReducer, initialConnectionState, initialRadioState, radioReducer } from '../radioStore';
+import type { BootstrapStatus, SystemStatus } from '@tx5dr/contracts';
 
 describe('radioStore connection reducer', () => {
   it('enters reconnecting state without clearing prior successful connection history', () => {
@@ -34,5 +35,48 @@ describe('radioStore connection reducer', () => {
 
   it('connects when bootstrapping an idle singleton service', () => {
     expect(getRadioServiceBootstrapAction({ isConnected: false, isConnecting: false })).toBe('connect');
+  });
+
+  it('keeps completed bootstrap hidden when runtime engine state later becomes idle', () => {
+    const completedBootstrap: BootstrapStatus = {
+      bootSessionId: 'boot-test',
+      lifecycle: 'completed',
+      startedAt: 1,
+      updatedAt: 2,
+      completedAt: 2,
+      durationMs: 1,
+      blockingReady: false,
+      phases: [],
+      summary: {
+        total: 0,
+        pending: 0,
+        running: 0,
+        ready: 0,
+        skipped: 0,
+        warning: 0,
+        failed: 0,
+        timedOut: 0,
+      },
+    };
+    const withBootstrap = radioReducer(initialRadioState, {
+      type: 'bootstrapStatusChanged',
+      payload: completedBootstrap,
+    });
+
+    const afterRuntimeIdle = radioReducer(withBootstrap, {
+      type: 'systemStatus',
+      payload: {
+        isRunning: false,
+        isDecoding: false,
+        currentMode: null,
+        currentTime: 0,
+        nextSlotIn: 0,
+        audioStarted: false,
+        engineMode: 'digital',
+        engineState: 'idle',
+      } as unknown as SystemStatus,
+    });
+
+    expect(afterRuntimeIdle.bootstrapStatus?.lifecycle).toBe('completed');
   });
 });

@@ -160,10 +160,19 @@ export class PluginManager {
 
     logger.info('Starting plugin manager');
     this.running = true;
-    await this.loadPluginsIntoMemory();
-    this.registerEngineListeners();
-    this.bumpGeneration();
-    this.broadcastPluginList();
+    try {
+      await this.loadPluginsIntoMemory();
+      this.registerEngineListeners();
+      this.bumpGeneration();
+      this.broadcastPluginList();
+    } catch (error) {
+      this.devWatcher?.stop();
+      this.devWatcher = null;
+      this.unregisterEngineListeners();
+      await this.teardownAllInstances().catch(() => {});
+      this.running = false;
+      throw error;
+    }
 
     logger.info(`Plugin manager started (${this.loadedPlugins.size} plugins)`);
 

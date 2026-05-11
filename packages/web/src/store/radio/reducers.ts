@@ -71,6 +71,7 @@ export const initialRadioState: RadioState = {
   currentMode: null,
   currentSlotInfo: null,
   systemStatus: null,
+  bootstrapStatus: null,
   operators: [],
   currentOperatorId: null,
   radioConnected: false,
@@ -141,6 +142,12 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
         // Extract engineMode from systemStatus (defaults to 'digital')
         engineMode: (action.payload as SystemStatus & { engineMode?: EngineMode })?.engineMode || state.engineMode,
         currentRadioMode: (action.payload as SystemStatus & { currentRadioMode?: string })?.currentRadioMode ?? state.currentRadioMode
+      };
+
+    case 'bootstrapStatusChanged':
+      return {
+        ...state,
+        bootstrapStatus: action.payload,
       };
 
     case 'setCurrentRadioFrequency':

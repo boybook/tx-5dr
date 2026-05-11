@@ -10,6 +10,7 @@ import { ConfigManager } from './config/config-manager.js';
 import { blockNewMutations, markProcessShuttingDown } from './utils/process-shutdown.js';
 import { createServerReadyState, resolveServerPortOptions, writeServerReadyFile } from './utils/server-ready.js';
 import { PersistenceCoordinator } from './utils/persistence/index.js';
+import { bootstrapCoordinator } from './services/BootstrapCoordinator.js';
 
 const logger = createLogger('Server');
 
@@ -184,12 +185,14 @@ async function start() {
     }
 
     const portOptions = resolveServerPortOptions();
+    bootstrapCoordinator.startPhase('core-http', '正在启动本地服务');
     const actualPort = await listenWithPortNegotiation(server, portOptions);
     await writeServerReadyFile(createServerReadyState({
       requestedPort: portOptions.requestedPort,
       httpPort: actualPort,
       autoPort: portOptions.autoPort,
     }));
+    bootstrapCoordinator.completePhase('core-http');
     logger.info(`TX-5DR server running on http://localhost:${actualPort}`);
 
     // 启动引擎（仅在有激活的 Profile 时）
@@ -197,10 +200,27 @@ async function start() {
     const hasActiveProfile = ConfigManager.getInstance().getActiveProfileId() !== null;
     if (hasActiveProfile) {
       logger.info('starting engine');
-      await clockManager.start();
+      try {
+        await bootstrapCoordinator.runPhase(
+          'active-profile-autostart',
+          () => clockManager.start(),
+          {
+            timeoutMs: 15_000,
+            pendingMessage: '正在按上次配置启动电台',
+            successMessage: '电台自动启动完成',
+            failureMessage: '电台自动启动失败，可稍后重试',
+          },
+        );
+      } catch (error) {
+        logger.warn('active profile auto-start failed; server remains available', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     } else {
+      bootstrapCoordinator.skipPhase('active-profile-autostart', '没有已启用的 Profile，跳过自动启动');
       logger.info('no active profile, engine startup deferred until profile is configured');
     }
+    bootstrapCoordinator.finalizeIfSettled();
     logger.info('server startup complete');
 
     // 启动日志管理定时任务

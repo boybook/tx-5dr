@@ -67,6 +67,11 @@ export class NtpCalibrationService extends EventEmitter<NtpCalibrationServiceEve
   }
 
   async start(): Promise<void> {
+    if (this.intervalTimer) {
+      logger.debug('NTP calibration service already started');
+      return;
+    }
+
     logger.info('Starting NTP calibration service');
 
     // Perform initial measurement in background.

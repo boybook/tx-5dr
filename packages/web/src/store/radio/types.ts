@@ -27,6 +27,7 @@ import type {
   CoreCapabilityDiagnostics,
   ClockStatusSummary,
   AudioSidecarStatusPayload,
+  BootstrapStatus,
   SquelchStatus,
   SlotInfo,
   TuneToneStatus,
@@ -56,6 +57,7 @@ export interface RadioState {
   currentMode: ModeDescriptor | null;
   currentSlotInfo: SlotInfo | null;
   systemStatus: SystemStatus | null;
+  bootstrapStatus: BootstrapStatus | null;
   operators: OperatorStatus[];
   currentOperatorId: string | null;
   radioConnected: boolean;
@@ -149,6 +151,7 @@ export interface ConnectionHealthInfo {
 export type RadioAction =
   | { type: 'modeChanged'; payload: ModeDescriptor }
   | { type: 'systemStatus'; payload: SystemStatus }
+  | { type: 'bootstrapStatusChanged'; payload: BootstrapStatus }
   | { type: 'decodeError'; payload: DecodeErrorData }
   | { type: 'error'; payload: Error }
   | { type: 'operatorsList'; payload: OperatorStatus[] }

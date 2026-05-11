@@ -51,6 +51,7 @@ import { MemoryLeakDetector } from './utils/MemoryLeakDetector.js';
 import { ResourceManager } from './utils/ResourceManager.js';
 import { initializePSKReporterService } from './services/PSKReporterService.js';
 import { createLogger } from './utils/logger.js';
+import { bootstrapCoordinator } from './services/BootstrapCoordinator.js';
 
 const logger = createLogger('DigitalRadioEngine');
 
@@ -783,7 +784,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     await printAppPaths();
 
     // Start NTP calibration (non-blocking, does not delay engine startup)
+    bootstrapCoordinator.startPhase('ntp-initial-check', '正在启动时间校准');
     await this.ntpCalibrationService.start();
+    bootstrapCoordinator.completePhase('ntp-initial-check');
 
     // 更新插件管理器的数据目录（在 initialize 阶段异步获取）
     const dataDir = await tx5drPaths.getDataDir();
@@ -823,7 +826,16 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     logger.info('Initialization phase: domain-services');
 
     await this.operatorManager.initialize();
-    await this._pluginManager.start();
+    bootstrapCoordinator.startPhase('plugin-bootstrap', '正在加载插件');
+    try {
+      await this._pluginManager.start();
+      bootstrapCoordinator.completePhase('plugin-bootstrap');
+    } catch (error) {
+      bootstrapCoordinator.failPhase('plugin-bootstrap', '插件加载失败，可稍后重试');
+      logger.error('Plugin manager startup failed; continuing without plugins', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     try {
       const pskreporterService = await initializePSKReporterService();

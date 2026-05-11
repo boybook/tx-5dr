@@ -7,14 +7,14 @@ import websocket from '@fastify/websocket';
 import multipart from '@fastify/multipart';
 import { timingSafeEqual } from 'node:crypto';
 import type { WebSocket } from 'ws';
-import type { HelloResponse } from '@tx5dr/contracts';
+import type { BootstrapPhaseId, HelloResponse } from '@tx5dr/contracts';
 import type { FastifyRequest, FastifyReply, FastifyError } from 'fastify';
 import { ConfigManager } from './config/config-manager.js';
 import { AudioDeviceManager } from './audio/audio-device-manager.js';
 import { DigitalRadioEngine } from './DigitalRadioEngine.js';
 import { UserRole } from '@tx5dr/contracts';
 import { AuthManager } from './auth/AuthManager.js';
-import { authPlugin, withRole } from './auth/authPlugin.js';
+import { authPlugin, requireRole, withRole } from './auth/authPlugin.js';
 import { authRoutes } from './routes/auth.js';
 import { audioRoutes } from './routes/audio.js';
 import { slotpackRoutes } from './routes/slotpack.js';
@@ -42,10 +42,19 @@ import { createLogger } from './utils/logger.js';
 import { ConsoleLogger } from './utils/console-logger.js';
 import { PersistenceCoordinator } from './utils/persistence/index.js';
 import { areNewMutationsBlocked, blockNewMutations, markProcessShuttingDown } from './utils/process-shutdown.js';
+import { bootstrapCoordinator } from './services/BootstrapCoordinator.js';
 
 const bootLogger = createLogger('ServerBoot');
+const logger = createLogger('Server');
 const INTERNAL_PREPARE_SHUTDOWN_DEADLINE_MS = 32_000;
 const INTERNAL_ENGINE_STOP_TIMEOUT_MS = 8_000;
+const RETRYABLE_BOOTSTRAP_PHASES = new Set<BootstrapPhaseId>([
+  'audio-device-discovery',
+  'logbook-prewarm',
+  'plugin-bootstrap',
+  'ntp-initial-check',
+  'active-profile-autostart',
+]);
 
 function safeTokenEquals(provided: string | undefined, expected: string | undefined): boolean {
   if (!provided || !expected) return false;
@@ -57,6 +66,77 @@ function safeTokenEquals(provided: string | undefined, expected: string | undefi
 
 function remainingDeadlineMs(startedAt: number, deadlineMs: number): number {
   return Math.max(1, deadlineMs - (Date.now() - startedAt));
+}
+
+function retryBootstrapPhase(phaseId: BootstrapPhaseId, digitalRadioEngine: DigitalRadioEngine): void {
+  const run = async () => {
+    switch (phaseId) {
+      case 'audio-device-discovery':
+        await bootstrapCoordinator.runPhase(
+          phaseId,
+          () => AudioDeviceManager.getInstance().initializeDeviceRegistry(),
+          {
+            timeoutMs: 15_000,
+            pendingMessage: '正在重新发现音频设备',
+            successMessage: '音频设备发现完成',
+            failureMessage: '音频设备发现失败，可稍后重试',
+          },
+        );
+        return;
+      case 'logbook-prewarm':
+        digitalRadioEngine.operatorManager.getLogManager().retryBootstrapPrewarm?.();
+        return;
+      case 'plugin-bootstrap':
+        await bootstrapCoordinator.runPhase(
+          phaseId,
+          () => digitalRadioEngine.pluginManager.start(),
+          {
+            timeoutMs: 15_000,
+            pendingMessage: '正在重新加载插件',
+            successMessage: '插件加载完成',
+            failureMessage: '插件加载失败，可稍后重试',
+          },
+        );
+        return;
+      case 'ntp-initial-check':
+        await bootstrapCoordinator.runPhase(
+          phaseId,
+          () => digitalRadioEngine.getNtpCalibrationService().start(),
+          {
+            timeoutMs: 10_000,
+            pendingMessage: '正在重新启动时间校准',
+            successMessage: '时间校准服务已启动',
+            failureMessage: '时间校准服务启动失败，可稍后重试',
+          },
+        );
+        return;
+      case 'active-profile-autostart':
+        if (ConfigManager.getInstance().getActiveProfileId() === null) {
+          bootstrapCoordinator.skipPhase(phaseId, '没有已启用的 Profile，跳过自动启动');
+          return;
+        }
+        await bootstrapCoordinator.runPhase(
+          phaseId,
+          () => digitalRadioEngine.start(),
+          {
+            timeoutMs: 15_000,
+            pendingMessage: '正在重试自动启动电台',
+            successMessage: '电台自动启动完成',
+            failureMessage: '电台自动启动失败，可稍后重试',
+          },
+        );
+        return;
+      default:
+        logger.warn('Unsupported bootstrap retry phase ignored', { phaseId });
+    }
+  };
+
+  void run().catch((error) => {
+    logger.warn('Bootstrap phase retry failed', {
+      phaseId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 }
 
 /**
@@ -148,15 +228,19 @@ export async function createServer() {
 
   // 初始化配置管理器
   const configManager = ConfigManager.getInstance();
+  bootstrapCoordinator.startPhase('config-auth', '正在读取基础配置');
   await configManager.initialize();
   fastify.log.info('Config manager initialized');
 
+  bootstrapCoordinator.startPhase('audio-device-discovery', '正在发现音频设备');
   await AudioDeviceManager.getInstance().initializeDeviceRegistry();
+  bootstrapCoordinator.completePhase('audio-device-discovery');
   fastify.log.info('Audio device registry initialized');
 
   // 初始化认证管理器
   const authManager = AuthManager.getInstance();
   await authManager.initialize();
+  bootstrapCoordinator.completePhase('config-auth');
   fastify.log.info('Auth manager initialized');
 
   // 注册认证插件（全局 JWT 验证）
@@ -182,7 +266,9 @@ export async function createServer() {
   bootLogger.info('initializing digital radio engine...');
   ConsoleLogger.getInstance().flushSync();
   const digitalRadioEngine = DigitalRadioEngine.getInstance();
+  bootstrapCoordinator.startPhase('engine-bootstrap', '正在装配电台引擎');
   await digitalRadioEngine.initialize();
+  bootstrapCoordinator.completePhase('engine-bootstrap');
   bootLogger.info('digital radio engine initialized');
   ConsoleLogger.getInstance().flushSync();
 
@@ -324,6 +410,42 @@ export async function createServer() {
   fastify.get<{ Reply: HelloResponse }>('/api/hello', async (_request, _reply) => {
     return { message: 'Hello World' };
   });
+
+  fastify.get('/api/system/bootstrap-status', async (_request, reply) => {
+    return reply.send(bootstrapCoordinator.getStatus());
+  });
+
+  fastify.post<{ Body: { phaseId?: BootstrapPhaseId } }>(
+    '/api/system/bootstrap-status/retry',
+    { preHandler: [requireRole(UserRole.ADMIN)] },
+    async (request, reply) => {
+      const status = bootstrapCoordinator.getStatus();
+      if (status.lifecycle === 'completed' || status.lifecycle === 'dismissed') {
+        return reply.send(status);
+      }
+
+      const requestedPhaseId = request.body?.phaseId;
+      const phaseIds = requestedPhaseId
+        ? [requestedPhaseId]
+        : status.phases
+          .filter(phase => phase.retryable && ['failed', 'timed_out', 'warning'].includes(phase.state))
+          .map(phase => phase.id);
+
+      const unsupported = phaseIds.find(phaseId => !RETRYABLE_BOOTSTRAP_PHASES.has(phaseId));
+      if (unsupported) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: 'UNSUPPORTED_BOOTSTRAP_RETRY', message: `Bootstrap phase ${unsupported} cannot be retried` },
+        });
+      }
+
+      for (const phaseId of phaseIds) {
+        retryBootstrapPhase(phaseId, digitalRadioEngine);
+      }
+
+      return reply.code(202).send(bootstrapCoordinator.getStatus());
+    },
+  );
 
   fastify.post('/api/system/internal/prepare-shutdown', async (request, reply) => {
     const startedAt = Date.now();

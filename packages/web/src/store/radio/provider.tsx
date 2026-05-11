@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 import type { ReactNode } from 'react';
 import type { SpectrumCapabilities, SlotPackFrequencyContext } from '@tx5dr/contracts';
-import { getBandFromFrequency } from '@tx5dr/core';
+import { api, getBandFromFrequency } from '@tx5dr/core';
 import { createLogger } from '../../utils/logger';
 import { getWebSocketClientInstanceId } from '../../utils/wsClientInstance';
 import { type RadioService, getOrCreateRadioService } from '../../services/radioService';
@@ -235,6 +235,23 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
       logger.warn('forceReconnect after auth change failed', err);
     });
   }, [authState.jwt]);
+
+  useEffect(() => {
+    if (!connectionState.isConnected) return;
+    let cancelled = false;
+    api.getBootstrapStatus()
+      .then((status) => {
+        if (!cancelled) {
+          radioDispatch({ type: 'bootstrapStatusChanged', payload: status });
+        }
+      })
+      .catch((err) => {
+        logger.debug('Failed to fetch bootstrap status snapshot', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionState.isConnected]);
 
   const markSpectrumSelectionManual = useCallback(() => {
     spectrumAutoPriorityPendingRef.current = false;

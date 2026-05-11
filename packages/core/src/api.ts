@@ -95,6 +95,8 @@ import type {
   PluginMarketInstallResult,
   PluginRuntimeInfo,
   SystemUpdateStatus,
+  BootstrapStatus,
+  BootstrapPhaseId,
 } from '@tx5dr/contracts';
 
 // ========== 错误处理 ==========
@@ -1119,6 +1121,17 @@ export const api = {
 
   async getServerCpuProfileStatus(apiBase?: string): Promise<ServerCpuProfileStatus> {
     return apiRequest('/system/cpu-profile', undefined, apiBase);
+  },
+
+  async getBootstrapStatus(apiBase?: string): Promise<BootstrapStatus> {
+    return apiRequest('/system/bootstrap-status', undefined, apiBase);
+  },
+
+  async retryBootstrapStatus(phaseId?: BootstrapPhaseId, apiBase?: string): Promise<BootstrapStatus> {
+    return apiRequest('/system/bootstrap-status/retry', {
+      method: 'POST',
+      body: phaseId ? JSON.stringify({ phaseId }) : JSON.stringify({}),
+    }, apiBase);
   },
 
   async armServerCpuProfile(apiBase?: string): Promise<ServerCpuProfileStatus> {
@@ -2236,6 +2249,8 @@ export const {
   revokeToken,
   regenerateToken,
   getHello,
+  getBootstrapStatus,
+  retryBootstrapStatus,
   getAudioDevices,
   getAudioSettings,
   updateAudioSettings,
