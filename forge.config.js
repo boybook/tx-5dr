@@ -518,12 +518,14 @@ module.exports = {
       const wsjtxPrebuilds = join(nm, 'wsjtx-lib', 'prebuilds');
       const hamlibPrebuilds = join(nm, 'hamlib', 'prebuilds');
       const serialportPrebuilds = join(nm, '@serialport', 'bindings-cpp', 'prebuilds');
+      const onnxruntimePrebuilds = join(nm, 'onnxruntime-node', 'bin', 'napi-v6');
 
       if (platform === 'linux') {
         try {
           console.log('🧹 [Linux] 清理跨架构与非Linux二进制文件...');
           const keepArch = arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
           const removeArch = arch === 'arm64' ? 'linux-x64' : 'linux-arm64';
+          const onnxKeepArch = arch === 'arm64' ? 'arm64' : 'x64';
 
           // wsjtx-lib: 仅保留本平台
           rmGlob(wsjtxPrebuilds, 'win32-');
@@ -541,6 +543,16 @@ module.exports = {
           rmGlob(serialportPrebuilds, 'android-');
           rmrf(join(serialportPrebuilds, removeArch));
 
+          // onnxruntime-node: 仅保留当前 Linux 架构，避免 RPM strip 其他架构 .node 失败
+          rmrf(join(onnxruntimePrebuilds, 'darwin'));
+          rmrf(join(onnxruntimePrebuilds, 'win32'));
+          if (fs.existsSync(join(onnxruntimePrebuilds, 'linux'))) {
+            for (const entry of fs.readdirSync(join(onnxruntimePrebuilds, 'linux'))) {
+              if (entry !== onnxKeepArch) {
+                rmrf(join(onnxruntimePrebuilds, 'linux', entry));
+              }
+            }
+          }
 
           console.log('✅ [Linux] 清理完成');
         } catch (error) {
@@ -552,6 +564,7 @@ module.exports = {
         try {
           console.log(`🧹 [macOS] 清理非本平台预构建（保留 darwin-${arch}）...`);
           const removeArch = arch === 'arm64' ? 'darwin-x64' : 'darwin-arm64';
+          const onnxKeepArch = arch === 'arm64' ? 'arm64' : 'x64';
 
           // wsjtx-lib: 清理其他平台和架构
           rmGlob(wsjtxPrebuilds, 'linux-');
@@ -568,6 +581,16 @@ module.exports = {
           rmGlob(serialportPrebuilds, 'win32-');
           rmGlob(serialportPrebuilds, 'android-');
 
+          // onnxruntime-node: 仅保留当前 macOS 架构
+          rmrf(join(onnxruntimePrebuilds, 'linux'));
+          rmrf(join(onnxruntimePrebuilds, 'win32'));
+          if (fs.existsSync(join(onnxruntimePrebuilds, 'darwin'))) {
+            for (const entry of fs.readdirSync(join(onnxruntimePrebuilds, 'darwin'))) {
+              if (entry !== onnxKeepArch) {
+                rmrf(join(onnxruntimePrebuilds, 'darwin', entry));
+              }
+            }
+          }
 
           console.log('✅ [macOS] 清理完成');
         } catch (error) {
@@ -578,6 +601,7 @@ module.exports = {
       if (platform === 'win32') {
         try {
           console.log(`🧹 [Windows] 清理非本平台预构建（保留 win32-${arch}）...`);
+          const onnxKeepArch = arch === 'arm64' ? 'arm64' : 'x64';
 
           // wsjtx-lib: 清理其他平台
           rmGlob(wsjtxPrebuilds, 'linux-');
@@ -592,6 +616,16 @@ module.exports = {
           rmGlob(serialportPrebuilds, 'darwin-');
           rmGlob(serialportPrebuilds, 'android-');
 
+          // onnxruntime-node: 仅保留当前 Windows 架构
+          rmrf(join(onnxruntimePrebuilds, 'linux'));
+          rmrf(join(onnxruntimePrebuilds, 'darwin'));
+          if (fs.existsSync(join(onnxruntimePrebuilds, 'win32'))) {
+            for (const entry of fs.readdirSync(join(onnxruntimePrebuilds, 'win32'))) {
+              if (entry !== onnxKeepArch) {
+                rmrf(join(onnxruntimePrebuilds, 'win32', entry));
+              }
+            }
+          }
 
           console.log('✅ [Windows] 清理完成');
         } catch (error) {

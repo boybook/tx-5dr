@@ -307,6 +307,22 @@ if [[ "$ARCH" == "amd64" ]]; then
 elif [[ "$ARCH" == "arm64" ]]; then
     find "$NM" -path "*/prebuilds/linux-x64" -type d -exec rm -rf {} + 2>/dev/null || true
 fi
+
+# onnxruntime-node stores native binaries as bin/napi-v6/<platform>/<arch>.
+# Keep only the current Linux architecture to avoid packaging foreign .node files
+# and to keep server packages smaller.
+ONNX_NAPI_DIR="$NM/onnxruntime-node/bin/napi-v6"
+if [[ -d "$ONNX_NAPI_DIR" ]]; then
+    rm -rf "$ONNX_NAPI_DIR/darwin" "$ONNX_NAPI_DIR/win32" 2>/dev/null || true
+    case "$ARCH" in
+        amd64)
+            rm -rf "$ONNX_NAPI_DIR/linux/arm64" 2>/dev/null || true
+            ;;
+        arm64)
+            rm -rf "$ONNX_NAPI_DIR/linux/x64" 2>/dev/null || true
+            ;;
+    esac
+fi
 # --- Copy web static files ---
 mkdir -p "$APP_ROOT/web"
 cp -r "$PROJECT_ROOT/packages/web/dist/." "$APP_ROOT/web/"
