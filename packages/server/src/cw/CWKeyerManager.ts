@@ -371,6 +371,30 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     return this.toPanel(manifest);
   }
 
+  async swapSlots(callsign: string, slotIdA: string, slotIdB: string): Promise<CWMessagePanel> {
+    const normalized = this.requireCallsign(callsign);
+    const manifest = await this.readManifest(normalized);
+    const slotA = this.requireSlot(manifest, slotIdA);
+    const slotB = this.requireSlot(manifest, slotIdB);
+
+    // Swap content fields
+    const tmpLabel = slotA.label;
+    const tmpText = slotA.text;
+    const tmpRepeatEnabled = slotA.repeatEnabled;
+    const tmpRepeatIntervalSec = slotA.repeatIntervalSec;
+    slotA.label = slotB.label;
+    slotA.text = slotB.text;
+    slotA.repeatEnabled = slotB.repeatEnabled;
+    slotA.repeatIntervalSec = slotB.repeatIntervalSec;
+    slotB.label = tmpLabel;
+    slotB.text = tmpText;
+    slotB.repeatEnabled = tmpRepeatEnabled;
+    slotB.repeatIntervalSec = tmpRepeatIntervalSec;
+
+    await this.writeManifest(manifest);
+    return this.toPanel(manifest);
+  }
+
   // ========== 预设报文播放 ==========
 
   async playMessage(

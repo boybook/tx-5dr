@@ -5,6 +5,7 @@ import {
   CWDecoderConfigSchema,
   CWMessagePanelUpdateSchema,
   CWMessageSlotUpdateSchema,
+  CWMessageSlotSwapSchema,
 } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { requireAbility, requireRole } from '../auth/authPlugin.js';
@@ -168,6 +169,17 @@ export async function cwRoutes(fastify: FastifyInstance) {
     const { callsign, slotId } = req.params as { callsign: string; slotId: string };
     const manager = engine.getCWKeyerManager();
     const panel = await manager.deleteSlotText(callsign, slotId);
+    return reply.send({ success: true, panel });
+  });
+
+  // POST /panel/:callsign/slots/swap - swap two slots
+  fastify.post('/panel/:callsign/slots/swap', {
+    preHandler: [requireRole(UserRole.OPERATOR)],
+  }, async (req, reply) => {
+    const { callsign } = req.params as { callsign: string };
+    const body = CWMessageSlotSwapSchema.parse(req.body);
+    const manager = engine.getCWKeyerManager();
+    const panel = await manager.swapSlots(callsign, body.slotIdA, body.slotIdB);
     return reply.send({ success: true, panel });
   });
 }

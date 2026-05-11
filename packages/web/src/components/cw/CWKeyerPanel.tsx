@@ -31,6 +31,7 @@ import {
   faGear,
   faPlus,
   faMinus,
+  faGripVertical,
 } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
 import {
@@ -152,6 +153,8 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const [wpm, setWpm] = useState(cwConfig?.wpm ?? 20);
   const [txProgressRunId, setTxProgressRunId] = useState(0);
   const [, setCountdownTick] = useState(0);
+  const [dragSlotId, setDragSlotId] = useState<string | null>(null);
+  const [dragOverSlotId, setDragOverSlotId] = useState<string | null>(null);
 
   const effectiveConfig = cwConfig ?? loadedConfig;
   const backend: CWKeyerBackend = effectiveConfig?.backend ?? 'cat';
@@ -361,7 +364,8 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
     };
 
     const handleGlobalKeyDown = (event: KeyboardEvent) => {
-      if (isTypingTarget(event.target)) return;
+      const isFKey = /^F(?:[1-9]|1[0-2])$/.test(event.code);
+      if (isTypingTarget(event.target) && !isFKey && event.key !== 'Escape') return;
 
       if (event.key === 'Escape' && isActive) {
         event.preventDefault();
@@ -539,6 +543,86 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
       });
     }
   };
+
+  const handleDragStart = useCallback((e: React.DragEvent, slotId: string) => {
+    setDragSlotId(slotId);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', slotId);
+  }, []);
+
+  const handleDragEnd = useCallback(() => {
+    setDragSlotId(null);
+    setDragOverSlotId(null);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, slotId: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverSlotId(prev => prev === slotId ? prev : slotId);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent, slotId: string) => {
+    // Only clear if leaving to a child element (not leaving the slot entirely)
+    const relatedTarget = e.relatedTarget as HTMLElement | null;
+    if (relatedTarget && (e.currentTarget as HTMLElement).contains(relatedTarget)) return;
+    setDragOverSlotId(prev => prev === slotId ? null : prev);
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent, targetSlotId: string) => {
+    e.preventDefault();
+    setDragOverSlotId(null);
+    const sourceSlotId = dragSlotId;
+    if (!sourceSlotId || sourceSlotId === targetSlotId || !myCallsign) return;
+
+    // Optimistic local swap
+    setPanel(current => {
+      if (!current) return current;
+      const sourceSlot = current.slots.find(s => s.id === sourceSlotId);
+      const targetSlot = current.slots.find(s => s.id === targetSlotId);
+      if (!sourceSlot || !targetSlot) return current;
+      const swapFields = ['label', 'text', 'repeatEnabled', 'repeatIntervalSec'] as const;
+      return {
+        ...current,
+        slots: current.slots.map(slot => {
+          if (slot.id === sourceSlotId) {
+            const merged = { ...slot };
+            for (const f of swapFields) merged[f] = targetSlot[f] as never;
+            return merged;
+          }
+          if (slot.id === targetSlotId) {
+            const merged = { ...slot };
+            for (const f of swapFields) merged[f] = sourceSlot[f] as never;
+            return merged;
+          }
+          return slot;
+        }),
+      };
+    });
+
+    // Swap F-key shortcuts
+    const shortcutA = slotShortcuts[sourceSlotId] ?? CW_KEYER_SHORTCUT_NONE;
+    const shortcutB = slotShortcuts[targetSlotId] ?? CW_KEYER_SHORTCUT_NONE;
+    setSlotShortcuts(prev => ({
+      ...prev,
+      [sourceSlotId]: shortcutB,
+      [targetSlotId]: shortcutA,
+    }));
+    saveCWKeyerSlotShortcutPreset(myCallsign, sourceSlotId, shortcutB);
+    saveCWKeyerSlotShortcutPreset(myCallsign, targetSlotId, shortcutA);
+
+    // Persist to server
+    try {
+      const resp = await api.swapCWMessageSlots(myCallsign, sourceSlotId, targetSlotId);
+      setPanel(resp.panel);
+    } catch (err) {
+      addToast({
+        title: t('common:error'),
+        description: String(err),
+        color: 'danger',
+      });
+      void loadPanel();
+    }
+  }, [dragSlotId, myCallsign, slotShortcuts, t, loadPanel]);
 
   const handlePlay = (slot: CWMessageSlot) => {
     if (!myCallsign || !slot.text) return;
@@ -945,8 +1029,29 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
                   {visibleSlots.map((slot) => {
                     const shortcutPreset = slotShortcuts[slot.id] ?? CW_KEYER_SHORTCUT_NONE;
 
+                    const isDragging = dragSlotId === slot.id;
+                    const isDragOver = dragOverSlotId === slot.id && dragSlotId !== slot.id;
+
                     return (
-                      <div key={slot.id} className="flex items-center gap-1.5 rounded-lg bg-content2 p-1.5 transition-colors">
+                      <div
+                        key={slot.id}
+                        draggable={!isActive}
+                        onDragStart={(e) => handleDragStart(e, slot.id)}
+                        onDragEnd={handleDragEnd}
+                        onDragOver={(e) => handleDragOver(e, slot.id)}
+                        onDragLeave={(e) => handleDragLeave(e, slot.id)}
+                        onDrop={(e) => handleDrop(e, slot.id)}
+                        className={`flex items-center gap-1.5 rounded-lg p-1.5 transition-all duration-200 ${
+                          isDragging
+                            ? 'opacity-40 scale-95 bg-primary-100 dark:bg-primary-900/20 ring-2 ring-primary-400'
+                            : isDragOver
+                              ? 'bg-content3 ring-2 ring-primary-300 shadow-md -translate-y-px'
+                              : 'bg-content2'
+                        }`}
+                      >
+                        <span className="flex items-center justify-center w-6 h-8 shrink-0 cursor-grab active:cursor-grabbing text-default-300 hover:text-default-500">
+                          <FontAwesomeIcon icon={faGripVertical} className="text-xs" />
+                        </span>
                         <Select
                           size="sm"
                           variant="flat"
