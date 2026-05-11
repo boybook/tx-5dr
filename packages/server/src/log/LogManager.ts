@@ -41,6 +41,7 @@ export class LogManager {
   private static instance: LogManager | null = null;
   private logBooks: Map<string, LogBookInstance> = new Map();
   private callsignLogBookMap: Map<string, string> = new Map(); // callsign -> logBookId
+  private callsignLogBookInFlight: Map<string, Promise<LogBookInstance>> = new Map();
   private operatorCallsignMap: Map<string, string> = new Map(); // operatorId -> callsign
   private isInitialized: boolean = false;
   // 已移除默认日志本概念，只有基于呼号的日志本
@@ -100,15 +101,10 @@ export class LogManager {
     const uniqueCallsigns = [...new Set(callsigns)]; // 去重
     
     for (const callsign of uniqueCallsigns) {
-      try {
-        await this.getOrCreateLogBookByCallsign(callsign);
-        logger.info(`Logbook initialized for callsign ${callsign}`);
-      } catch (error) {
-        logger.error(`Failed to initialize logbook for callsign ${callsign}`, error);
-      }
+      this.prewarmLogBookByCallsign(callsign);
     }
-    
-    logger.info(`Completed logbook initialization for ${uniqueCallsigns.length} callsigns`);
+
+    logger.info(`Scheduled background logbook initialization for ${uniqueCallsigns.length} callsigns`);
   }
   
   /**
@@ -216,22 +212,35 @@ export class LogManager {
     let logBookId = this.callsignLogBookMap.get(normalizedCallsign);
     
     if (!logBookId) {
+      const inFlight = this.callsignLogBookInFlight.get(normalizedCallsign);
+      if (inFlight) {
+        logger.debug(`Reusing in-flight logbook creation for callsign ${normalizedCallsign}`);
+        return inFlight;
+      }
+
       // 为该呼号创建新的日志本 - 存储在logbook子目录
       logBookId = `logbook-${normalizedCallsign}`;
       const logFileName = `logbook/${normalizedCallsign}.adi`;
       
       logger.info(`Creating logbook for callsign ${normalizedCallsign}`);
       
-      const logBook = await this.createLogBook({
-        id: logBookId,
-        name: `${normalizedCallsign} QSO Log`,
-        description: `QSO records for ${normalizedCallsign}`,
-        logFileName: logFileName,
-        autoCreateFile: true
-      });
-      
-      this.callsignLogBookMap.set(normalizedCallsign, logBookId);
-      return logBook;
+      const creation = this.createLogBook({
+          id: logBookId,
+          name: `${normalizedCallsign} QSO Log`,
+          description: `QSO records for ${normalizedCallsign}`,
+          logFileName: logFileName,
+          autoCreateFile: true
+        })
+        .then((logBook) => {
+          this.callsignLogBookMap.set(normalizedCallsign, logBookId!);
+          return logBook;
+        })
+        .finally(() => {
+          this.callsignLogBookInFlight.delete(normalizedCallsign);
+        });
+
+      this.callsignLogBookInFlight.set(normalizedCallsign, creation);
+      return creation;
     }
     
     const logBook = this.logBooks.get(logBookId);
@@ -241,6 +250,53 @@ export class LogManager {
     
     logBook.lastUsed = Date.now();
     return logBook;
+  }
+
+  /**
+   * 后台预热指定呼号的日志本。超时只记录告警，不阻塞 server ready；
+   * 实际创建 Promise 会继续执行，后续同步访问会复用同一个 in-flight 任务。
+   */
+  prewarmLogBookByCallsign(callsign: string, timeoutMs: number = 15_000): void {
+    const normalizedCallsign = normalizeCallsign(callsign);
+    const existingLogBookId = this.callsignLogBookMap.get(normalizedCallsign);
+    if (existingLogBookId && this.logBooks.has(existingLogBookId)) {
+      return;
+    }
+
+    const startedAt = Date.now();
+    const creation = this.getOrCreateLogBookByCallsign(normalizedCallsign);
+    let timedOut = false;
+    let timeoutHandle: NodeJS.Timeout | null = null;
+
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        reject(new Error(`logbook prewarm timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+
+    Promise.race([creation, timeout])
+      .then((logBook) => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        logger.info('Background logbook prewarm complete', {
+          callsign: normalizedCallsign,
+          logBookId: logBook.id,
+          durationMs: Date.now() - startedAt,
+        });
+      })
+      .catch((error) => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        const payload = {
+          callsign: normalizedCallsign,
+          durationMs: Date.now() - startedAt,
+          error: (error as Error).message,
+        };
+        if (timedOut) {
+          logger.warn('Background logbook prewarm timed out; startup will continue', payload);
+        } else {
+          logger.error('Background logbook prewarm failed', payload);
+        }
+      });
   }
   
   /**
@@ -387,6 +443,7 @@ export class LogManager {
     
     this.logBooks.clear();
     this.callsignLogBookMap.clear();
+    this.callsignLogBookInFlight.clear();
     this.operatorCallsignMap.clear();
     this.isInitialized = false;
   }
@@ -399,4 +456,4 @@ export class LogManager {
       throw new Error('LogManager not initialized. Call initialize() first.');
     }
   }
-} 
+}

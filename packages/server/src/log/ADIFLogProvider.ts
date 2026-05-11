@@ -654,13 +654,33 @@ export class ADIFLogProvider implements ILogProvider {
    */
   async initialize(_options?: Record<string, unknown>): Promise<void> {
     if (this.isInitialized) return;
+    const startedAt = Date.now();
+    logger.info('Initializing ADIF log provider');
+
+    const timed = async <T>(phase: string, operation: () => Promise<T>): Promise<T> => {
+      const phaseStartedAt = Date.now();
+      try {
+        const result = await operation();
+        logger.info(`ADIF log provider phase complete: ${phase}`, { durationMs: Date.now() - phaseStartedAt });
+        return result;
+      } catch (error) {
+        logger.error(`ADIF log provider phase failed: ${phase}`, {
+          durationMs: Date.now() - phaseStartedAt,
+          error: (error as Error).message,
+        });
+        throw error;
+      }
+    };
     
     // 确定日志文件路径
-    if (this.options.logFilePath) {
-      this.logFilePath = this.options.logFilePath;
-    } else {
-      this.logFilePath = await this.findOrCreateLogPath();
-    }
+    await timed('resolve-path', async () => {
+      if (this.options.logFilePath) {
+        this.logFilePath = this.options.logFilePath;
+      } else {
+        this.logFilePath = await this.findOrCreateLogPath();
+      }
+      logger.info('ADIF log provider path resolved', { logFilePath: this.logFilePath });
+    });
     const sidecarBase = logbookSidecarBase(this.logFilePath);
     this.journalPath = `${sidecarBase}.journal.jsonl`;
     this.metaPath = `${sidecarBase}.meta.json`;
@@ -673,36 +693,48 @@ export class ADIFLogProvider implements ILogProvider {
         return value as LogbookMeta;
       },
       backups: 2,
+      createIfMissing: false,
     });
-    await this.metaStore.load();
+    await timed('meta-load', async () => {
+      await this.metaStore!.load();
+    });
     
     // 如果文件不存在且autoCreateFile为true，创建空文件
-    try {
-      await fs.access(this.logFilePath);
-    } catch {
-      if (this.options.autoCreateFile) {
-        await this.createEmptyLogFile();
+    await timed('empty-file-create', async () => {
+      try {
+        await fs.access(this.logFilePath);
+      } catch {
+        if (this.options.autoCreateFile) {
+          await this.createEmptyLogFile();
+        }
       }
-    }
+    });
     
     // 加载现有日志到缓存
-    const snapshotLoad = await this.loadCache();
+    const snapshotLoad = await timed('snapshot-load', async () => this.loadCache());
     if (snapshotLoad.recoveredFrom) {
-      await this.replayArchivedJournals();
+      await timed('archived-journal-replay', async () => this.replayArchivedJournals());
     }
-    await this.replayJournal();
+    await timed('journal-replay', async () => this.replayJournal());
     if (snapshotLoad.recoveredFrom) {
       this.needsFullRewrite = true;
-      await this.saveCache();
+      await timed('snapshot-rewrite', async () => this.saveCache());
     }
     // 构建/重建索引
-    this.rebuildIndexes();
+    await timed('index-rebuild', async () => {
+      this.rebuildIndexes();
+    });
 
     this.needsFullRewrite = false;
     this.isInitialized = true;
     this.unregisterPersistence = PersistenceCoordinator.getInstance().register({
       name: `logbook:${this.logFilePath}`,
       flush: async () => this.flush(),
+    });
+    logger.info('ADIF log provider initialized', {
+      logFilePath: this.logFilePath,
+      qsoCount: this.qsoCache.size,
+      durationMs: Date.now() - startedAt,
     });
   }
   
@@ -760,7 +792,7 @@ export class ADIFLogProvider implements ILogProvider {
 <EOH>
 
 `;
-    await this.atomicWriteFile(this.logFilePath, header);
+    await this.atomicWriteFile(this.logFilePath, header, { fsync: false });
   }
   
   /**
@@ -1303,8 +1335,8 @@ export class ADIFLogProvider implements ILogProvider {
   /**
    * 原子写入文件：先写临时文件再 rename，防止进程崩溃时文件截断
    */
-  private async atomicWriteFile(filePath: string, content: string): Promise<void> {
-    await this.safeWriter.writeFile(filePath, content, { backups: 3 });
+  private async atomicWriteFile(filePath: string, content: string, options: { fsync?: boolean } = {}): Promise<void> {
+    await this.safeWriter.writeFile(filePath, content, { backups: 3, fsync: options.fsync });
   }
 
   private buildJournalEntry(operation: LogJournalOperation, payload: Record<string, unknown>): LogJournalEntry {

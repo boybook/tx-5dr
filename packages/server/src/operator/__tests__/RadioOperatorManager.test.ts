@@ -65,10 +65,13 @@ function createManager(options: {
   };
 
   const fakeLogManager = {
+    initialize: vi.fn().mockResolvedValue(undefined),
     getOperatorLogBook: vi.fn().mockResolvedValue(options.logBook),
     getOperatorCallsign: vi.fn().mockReturnValue(options.callsign ?? null),
     getOrCreateLogBookByCallsign: vi.fn().mockResolvedValue(options.logBook),
+    prewarmLogBookByCallsign: vi.fn(),
     registerOperatorCallsign: vi.fn(),
+    connectOperatorToLogBook: vi.fn().mockResolvedValue(undefined),
     disconnectOperatorFromLogBook: vi.fn(),
     close: vi.fn().mockResolvedValue(undefined),
   };
@@ -135,6 +138,61 @@ async function addBasicOperator(manager: RadioOperatorManager, id: string, calls
   operator!.start();
   return operator!;
 }
+
+describe('RadioOperatorManager logbook startup binding', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does not wait for callsign logbook creation while initializing configured operators', async () => {
+    const logBook = {
+      id: 'log-1',
+      name: 'Test Log',
+      provider: {},
+    };
+    const { manager, fakeLogManager } = createManager({ logBook, callsign: 'BG4IAJ' });
+    const operatorConfig: RadioOperatorConfig = {
+      id: 'op1',
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      frequency: 14_074_000,
+      transmitCycles: [0],
+      mode: MODES.FT8,
+    };
+    vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+      getOperatorsConfig: () => [operatorConfig],
+    } as any);
+
+    await manager.initialize();
+
+    expect(manager.getOperatorById('op1')).toBeDefined();
+    expect(fakeLogManager.registerOperatorCallsign).toHaveBeenCalledWith('op1', 'BG4IAJ');
+    expect(fakeLogManager.prewarmLogBookByCallsign).toHaveBeenCalledWith('BG4IAJ');
+    expect(fakeLogManager.getOrCreateLogBookByCallsign).not.toHaveBeenCalled();
+  });
+
+  it('connects an explicit logbook id after the operator is registered', async () => {
+    const logBook = {
+      id: 'log-1',
+      name: 'Test Log',
+      provider: {},
+    };
+    const { manager, fakeLogManager } = createManager({ logBook, callsign: 'BG4IAJ' });
+
+    await manager.addOperator({
+      id: 'op1',
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      frequency: 14_074_000,
+      transmitCycles: [0],
+      mode: MODES.FT8,
+      logBookId: 'log-1',
+    });
+
+    expect(manager.getOperatorById('op1')).toBeDefined();
+    expect(fakeLogManager.connectOperatorToLogBook).toHaveBeenCalledWith('op1', 'log-1');
+  });
+});
 
 describe('RadioOperatorManager same transmission guard', () => {
   afterEach(() => {

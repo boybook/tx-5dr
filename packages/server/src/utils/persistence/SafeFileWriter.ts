@@ -10,6 +10,7 @@ export interface SafeWriteOptions {
   mode?: number;
   retryCount?: number;
   retryDelayMs?: number;
+  fsync?: boolean;
 }
 
 export class JsonRecoveryError extends Error {
@@ -103,7 +104,9 @@ export class SafeFileWriter {
     try {
       handle = await fs.open(tmpPath, 'w', options.mode ?? 0o600);
       await handle.writeFile(data);
-      await handle.sync();
+      if (options.fsync !== false) {
+        await handle.sync();
+      }
       await handle.close();
       handle = null;
 

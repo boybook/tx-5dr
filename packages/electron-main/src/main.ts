@@ -25,6 +25,7 @@ import {
   type PersistentDesktopHttpsConfig,
 } from './desktopHttps.js';
 import { isPrepareShutdownSuccess } from './prepareShutdown.js';
+import { awaitServerReadyWithCleanup } from './serverStartupCleanup.js';
 
 // 获取当前模块的目录(ESM中的__dirname替代方案)
 // const __filename = fileURLToPath(import.meta.url);
@@ -3024,6 +3025,21 @@ function closeFrontendWindowsImmediately(): number {
   return Date.now() - startedAt;
 }
 
+async function stopServerAfterStartupFailure(reason: string): Promise<void> {
+  const currentServerProcess = serverProcess;
+  if (!currentServerProcess) {
+    return;
+  }
+
+  logger.warn('stopping server after startup failure', { reason, pid: currentServerProcess.pid ?? null });
+  await killProcess(currentServerProcess, 'server', CHILD_SHUTDOWN_OPTIONS.server).catch((error) => {
+    logger.warn('failed to stop server after startup failure', { reason, error: (error as Error).message });
+  });
+  if (serverProcess === currentServerProcess) {
+    serverProcess = null;
+  }
+}
+
 async function cleanupChildProcesses(isDevelopment: boolean): Promise<ChildShutdownResult[]> {
   const tasks: Array<Promise<ChildShutdownResult>> = [];
 
@@ -3306,7 +3322,14 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
     });
     let serverReady: ServerReadyState;
     try {
-      serverReady = await waitForServerReady(60_000, 200, serverLaunchStartedAt);
+      serverReady = await awaitServerReadyWithCleanup({
+        waitForServerReady: () => waitForServerReady(60_000, 200, serverLaunchStartedAt),
+        getServerProcess: () => serverProcess,
+        setServerProcess: (next) => {
+          serverProcess = next;
+        },
+        killProcess: (processToStop, name) => killProcess(processToStop, name, CHILD_SHUTDOWN_OPTIONS.server),
+      });
     } catch (error) {
       logger.error('backend server startup timeout', error);
       showStartupError('server_timeout', {
@@ -3319,6 +3342,7 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
 
     if (!isValidPort(serverReady.httpPort)) {
       logger.error('backend server ready file did not include a valid port', serverReady);
+      await stopServerAfterStartupFailure('invalid-server-ready-file');
       showStartupError('server_timeout', {
         processName: 'server',
       });

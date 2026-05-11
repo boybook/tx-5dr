@@ -74,6 +74,41 @@ describe('ADIFLogProvider import', () => {
     await provider.close();
   });
 
+  it('does not create the metadata sidecar during initial load when it is missing', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-meta-lazy-'));
+    tempDirs.push(tempDir);
+    const provider = new ADIFLogProvider({
+      logFilePath: join(tempDir, 'logbook.adi'),
+      autoCreateFile: true,
+      logFileName: 'logbook.adi',
+    });
+
+    await provider.initialize();
+
+    const entries = await readdir(tempDir);
+    expect(entries).toContain('logbook.adi');
+    expect(entries).not.toContain('logbook.meta.json');
+
+    await provider.close();
+  });
+
+  it('recreates a missing nested logbook directory during initial load', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-dir-recreate-'));
+    tempDirs.push(tempDir);
+    const provider = new ADIFLogProvider({
+      logFilePath: join(tempDir, 'logbook', 'BG4IAJ.adi'),
+      autoCreateFile: true,
+      logFileName: 'logbook/BG4IAJ.adi',
+    });
+
+    await provider.initialize();
+
+    const content = await readFile(join(tempDir, 'logbook', 'BG4IAJ.adi'), 'utf-8');
+    expect(content).toContain('<EOH>');
+
+    await provider.close();
+  });
+
   it('imports TX-5DR CSV exports', async () => {
     const { provider, tempDir } = await createProvider();
     tempDirs.push(tempDir);

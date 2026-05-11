@@ -460,9 +460,6 @@ export class RadioOperatorManager {
       (myCallsign, targetCallsign, operatorId) =>
         this.isTargetBeingWorkedByOtherOperators(myCallsign, targetCallsign, operatorId)
     );
-    
-    await this.syncOperatorLogbookBinding(config.id, config.myCallsign, config.logBookId);
-    
     // 监听操作员的slots更新事件
     operator.addSlotsUpdateListener((data: any) => {
       logger.debug(`Operator ${data.operatorId} slots updated`);
@@ -476,6 +473,7 @@ export class RadioOperatorManager {
     });
 
     this.operators.set(config.id, operator);
+    await this.syncOperatorLogbookBinding(config.id, config.myCallsign, config.logBookId);
     if (this._pluginManager?.isRunning()) {
       await this._pluginManager.initInstancesForOperator(config.id);
     }
@@ -1460,14 +1458,7 @@ export class RadioOperatorManager {
     logBookId?: string,
   ): Promise<void> {
     this.logManager.registerOperatorCallsign(operatorId, callsign);
-
-    try {
-      await this.logManager.getOrCreateLogBookByCallsign(callsign);
-      logger.info(`Created logbook for operator ${operatorId} (callsign: ${callsign})`);
-    } catch (error) {
-      logger.error(`Failed to create logbook for operator ${operatorId} (callsign: ${callsign}):`, error);
-      return;
-    }
+    this.logManager.prewarmLogBookByCallsign?.(callsign);
 
     if (logBookId) {
       try {
