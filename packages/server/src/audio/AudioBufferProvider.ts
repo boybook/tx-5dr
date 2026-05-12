@@ -1,5 +1,8 @@
 import type { AudioBufferProvider } from '@tx5dr/core';
-import { RingBuffer } from './ringBuffer.js';
+import { RingBuffer, type AudioClock } from './ringBuffer.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('AudioBufferProvider');
 
 /**
  * 基于环形缓冲区的音频缓冲区提供者实现
@@ -9,12 +12,14 @@ export class RingBufferAudioProvider implements AudioBufferProvider {
   private startTime: number;
   private sampleRate: number;
   private maxDurationMs: number;
+  private readonly now: AudioClock;
 
-  constructor(sampleRate: number = 12000, maxDurationMs: number = 60000) {
+  constructor(sampleRate: number = 12000, maxDurationMs: number = 60000, now: AudioClock = Date.now) {
     this.sampleRate = sampleRate;
     this.maxDurationMs = maxDurationMs;
-    this.ringBuffer = new RingBuffer(sampleRate, maxDurationMs);
-    this.startTime = Date.now();
+    this.now = now;
+    this.ringBuffer = new RingBuffer(sampleRate, maxDurationMs, this.now);
+    this.startTime = this.now();
   }
   
   /**
@@ -34,8 +39,8 @@ export class RingBufferAudioProvider implements AudioBufferProvider {
     }
     this.sampleRate = sampleRate;
     this.maxDurationMs = maxDurationMs;
-    this.ringBuffer = new RingBuffer(sampleRate, maxDurationMs);
-    this.startTime = Date.now();
+    this.ringBuffer = new RingBuffer(sampleRate, maxDurationMs, this.now);
+    this.startTime = this.now();
   }
   
   /**
@@ -43,20 +48,28 @@ export class RingBufferAudioProvider implements AudioBufferProvider {
    */
   async getBuffer(startMs: number, durationMs: number): Promise<ArrayBuffer> {
     // 计算从时隙开始时间到现在的时间差
-    const currentTime = Date.now();
+    const currentTime = this.now();
     const timeSinceSlotStart = currentTime - startMs;
+    if (timeSinceSlotStart < 0) {
+      logger.warn('requested audio buffer starts in the future', {
+        startMs,
+        currentTime,
+        earlyByMs: Math.abs(timeSinceSlotStart),
+        durationMs,
+      });
+    }
     
     // 对于完整时隙请求，确保有足够的时间已经过去
     if (durationMs >= 10000) { // 如果请求的是长时间数据（如完整时隙）
       if (timeSinceSlotStart < durationMs) {
         // 对于完整时隙，我们需要等待足够的时间
-        const actualDurationMs = Math.min(durationMs, timeSinceSlotStart);
+        const actualDurationMs = Math.max(0, Math.min(durationMs, timeSinceSlotStart));
         return this.ringBuffer.readFromSlotStart(startMs, actualDurationMs);
       }
     }
     
     // 确保不会读取超过实际可用的数据
-    const actualDurationMs = Math.min(durationMs, timeSinceSlotStart);
+    const actualDurationMs = Math.max(0, Math.min(durationMs, timeSinceSlotStart));
 
     return this.ringBuffer.readFromSlotStart(startMs, actualDurationMs);
   }
@@ -75,7 +88,7 @@ export class RingBufferAudioProvider implements AudioBufferProvider {
     return {
       ...this.ringBuffer.getStatus(),
       startTime: this.startTime,
-      uptime: Date.now() - this.startTime,
+      uptime: this.now() - this.startTime,
       sampleRate: this.sampleRate
     };
   }
@@ -112,6 +125,6 @@ export class RingBufferAudioProvider implements AudioBufferProvider {
    */
   clear(): void {
     this.ringBuffer.clear();
-    this.startTime = Date.now();
+    this.startTime = this.now();
   }
 }

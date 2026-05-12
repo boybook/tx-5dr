@@ -1,5 +1,6 @@
 import { createRtAudioInstance, type RtAudioInstance } from './rtaudio-api.js';
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
+import type { AudioClock } from './ringBuffer.js';
 import { EventEmitter } from 'eventemitter3';
 import { clearResamplerCache, resampleAudioProfessional } from '../utils/audioUtils.js';
 import { ConfigManager } from '../config/config-manager.js';
@@ -118,6 +119,10 @@ export interface StopPlaybackOptions {
   kind?: PlaybackKind;
 }
 
+export interface AudioStreamManagerOptions {
+  now?: AudioClock;
+}
+
 /**
  * 音频流管理器 - 负责从音频设备捕获实时音频数据
  * 支持传统声卡（Audify/RtAudio）和 ICOM WLAN 虚拟设备
@@ -171,9 +176,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private outputRuntimeLossEmitted = false;
   private outputWatchdogGeneration = 0;
   private playbackSequence = 0;
+  private readonly now: AudioClock;
 
-  constructor() {
+  constructor(options: AudioStreamManagerOptions = {}) {
     super();
+    this.now = options.now ?? Date.now;
 
     // 从配置管理器获取音频设置
     const configManager = ConfigManager.getInstance();
@@ -186,7 +193,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.currentSampleRate = this.outputSampleRate;
 
     // 创建音频缓冲区提供者，使用统一的内部处理采样率，保留 60 秒 RX/input 历史。
-    this.audioProvider = new RingBufferAudioProvider(this.inputProcessingSampleRate, INPUT_RING_BUFFER_DURATION_MS);
+    this.audioProvider = new RingBufferAudioProvider(this.inputProcessingSampleRate, INPUT_RING_BUFFER_DURATION_MS, this.now);
     this.voiceTxOutputPipeline = new VoiceTxOutputPipeline({
       getSinkState: () => this.getVoiceTxOutputSinkState(),
       getObserver: () => this.voiceOutputObserver,

@@ -2,6 +2,7 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('RingBuffer');
 const OVERFLOW_LOG_INTERVAL_MS = 5000;
+export type AudioClock = () => number;
 
 /**
  * 环形缓冲区 - 用于存储连续的 PCM 音频数据
@@ -19,13 +20,15 @@ export class RingBuffer {
   private lastWriteTimestamp: number; // 最后写入时间戳
   private lastOverflowLogAt = 0;
   private suppressedOverflowSamples = 0;
+  private readonly now: AudioClock;
   
-  constructor(sampleRate: number, maxDurationMs: number = 60000) {
+  constructor(sampleRate: number, maxDurationMs: number = 60000, now: AudioClock = Date.now) {
     this.sampleRate = sampleRate;
     this.maxDurationMs = maxDurationMs;
+    this.now = now;
     this.size = Math.floor((sampleRate * maxDurationMs) / 1000);
     this.buffer = new Float32Array(this.size);
-    this.startTimestamp = Date.now();
+    this.startTimestamp = this.now();
     this.lastWriteTimestamp = this.startTimestamp;
   }
   
@@ -34,7 +37,7 @@ export class RingBuffer {
    * @param samples PCM 样本数据
    */
   write(samples: Float32Array): void {
-    const writeTimestamp = Date.now();
+    const writeTimestamp = this.now();
 
     // 在写入前一次性检查可用空间
     const available = this.getAvailableSamples();
@@ -94,7 +97,7 @@ export class RingBuffer {
    * @returns PCM 音频数据
    */
   read(startMs: number, durationMs: number): ArrayBuffer {
-    const sampleCount = Math.floor((this.sampleRate * durationMs) / 1000);
+    const sampleCount = Math.floor((this.sampleRate * Math.max(0, durationMs)) / 1000);
     const result = new Float32Array(sampleCount);
     
     // 计算从当前写入位置向前回溯的样本数
@@ -117,11 +120,11 @@ export class RingBuffer {
    * @returns PCM 音频数据
    */
   readFromSlotStart(slotStartMs: number, durationMs: number): ArrayBuffer {
-    const sampleCount = Math.floor((this.sampleRate * durationMs) / 1000);
+    const sampleCount = Math.floor((this.sampleRate * Math.max(0, durationMs)) / 1000);
     const result = new Float32Array(sampleCount);
     
     // 计算当前时间相对于缓冲区开始的总样本数
-    const currentTime = Date.now();
+    const currentTime = this.now();
     const totalTimeMs = currentTime - this.startTimestamp;
     const totalSamplesFromStart = Math.floor((this.sampleRate * totalTimeMs) / 1000);
     

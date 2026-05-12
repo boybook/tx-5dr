@@ -266,7 +266,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         isDigitalClockRunning: () => this.slotClock?.isRunning ?? false,
       },
     );
-    this.audioStreamManager = new AudioStreamManager();
+    this.audioStreamManager = new AudioStreamManager({ now: () => this.clockSource.now() });
     this.realDecodeQueue = new WSJTXDecodeWorkQueue();
     const decodeWorkerEvents = this as unknown as DecodeWorkerEngineEmitter;
     this.realDecodeQueue.on('decodeWorkerUnavailable', (status) => {
