@@ -79,6 +79,13 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
    * 初始化调度器
    */
   async initialize(audioProvider: AudioBufferProvider, sampleRate: number): Promise<void> {
+    this.setAudioSource(audioProvider, sampleRate);
+  }
+
+  /**
+   * Updates the RX audio provider/sample rate without changing subscription state.
+   */
+  setAudioSource(audioProvider: AudioBufferProvider, sampleRate: number): void {
     this.audioProvider = audioProvider;
     this.sampleRate = sampleRate;
 
@@ -96,6 +103,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     });
 
     logger.info(`spectrum analyzer started: interval=${this.config.analysisInterval}ms fftSize=${this.config.fftSize} window=${this.config.windowFunction} sampleRate=${this.sampleRate}Hz`);
+    this.updateTimerState();
   }
 
   /**

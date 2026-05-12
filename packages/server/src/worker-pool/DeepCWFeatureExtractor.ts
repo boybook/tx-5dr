@@ -1,9 +1,16 @@
-const FFT_LENGTH = 768;
-const HOP_LENGTH = 192;
-const SAMPLE_RATE = 9_600;
-const BIN_RESOLUTION = SAMPLE_RATE / FFT_LENGTH;
-const DECODABLE_MIN_FREQ_HZ = 400;
-const DECODABLE_MAX_FREQ_HZ = 1_200;
+export const DEEP_CW_FFT_LENGTH = 768;
+export const DEEP_CW_HOP_LENGTH = 192;
+export const DEEP_CW_SAMPLE_RATE = 9_600;
+export const DEEP_CW_BIN_RESOLUTION = DEEP_CW_SAMPLE_RATE / DEEP_CW_FFT_LENGTH;
+export const DEEP_CW_DECODABLE_MIN_FREQ_HZ = 400;
+export const DEEP_CW_DECODABLE_MAX_FREQ_HZ = 1_200;
+
+const FFT_LENGTH = DEEP_CW_FFT_LENGTH;
+const HOP_LENGTH = DEEP_CW_HOP_LENGTH;
+const SAMPLE_RATE = DEEP_CW_SAMPLE_RATE;
+const BIN_RESOLUTION = DEEP_CW_BIN_RESOLUTION;
+const DECODABLE_MIN_FREQ_HZ = DEEP_CW_DECODABLE_MIN_FREQ_HZ;
+const DECODABLE_MAX_FREQ_HZ = DEEP_CW_DECODABLE_MAX_FREQ_HZ;
 const TOTAL_BINS = FFT_LENGTH / 2 + 1;
 const START_BIN = Math.round(DECODABLE_MIN_FREQ_HZ / BIN_RESOLUTION);
 const END_BIN = Math.round(DECODABLE_MAX_FREQ_HZ / BIN_RESOLUTION) + 1;
@@ -16,6 +23,39 @@ export interface DeepCWSpectrogramTensor {
   data: Float32Array | Uint16Array;
   dims: [number, 1, number, number];
   type: DeepCWInputType;
+}
+
+export interface DeepCWBandMapping {
+  targetBin: number;
+  halfWidthBins: number;
+  sourceStartBin: number;
+  sourceEndBin: number;
+  destStartIndex: number;
+  destEndIndex: number;
+  effectiveMinFreqHz: number;
+  effectiveMaxFreqHz: number;
+  croppedBins: number;
+}
+
+export type DeepCWSignalClassification = 'silence' | 'noise' | 'off_target' | 'target_tone' | 'unknown';
+
+export interface DeepCWSignalAnalysis {
+  sampleRate: number;
+  durationMs: number;
+  targetFreqHz: number;
+  filterWidthHz: number;
+  effectiveBandMinHz: number;
+  effectiveBandMaxHz: number;
+  rmsDbfs: number;
+  peakFreqHz: number;
+  peakPowerDb: number;
+  bandPowerDb: number;
+  noiseFloorDb: number;
+  snrDb: number;
+  inBandPeakOffsetHz: number;
+  activeFrameRatio: number;
+  classification: DeepCWSignalClassification;
+  updatedAt: number;
 }
 
 class FFT {
@@ -224,6 +264,146 @@ if (CROPPED_BINS !== 65 || END_BIN > TOTAL_BINS) {
   throw new Error(`Invalid DeepCW spectrogram configuration: bins=${CROPPED_BINS}`);
 }
 
+export const DEEP_CW_CROPPED_BINS = CROPPED_BINS;
+
+export function getDeepCWBandMapping(targetFreqHz: number, filterWidthHz: number): DeepCWBandMapping {
+  const targetBin = Math.round(targetFreqHz / BIN_RESOLUTION);
+  const halfWidthBins = Math.ceil(filterWidthHz / 2 / BIN_RESOLUTION);
+  const sourceStartBin = targetBin - halfWidthBins;
+  const sourceEndBin = targetBin + halfWidthBins;
+  const destCenterIdx = NORMAL_CENTER_BIN - START_BIN;
+  return {
+    targetBin,
+    halfWidthBins,
+    sourceStartBin,
+    sourceEndBin,
+    destStartIndex: destCenterIdx - halfWidthBins,
+    destEndIndex: destCenterIdx + halfWidthBins,
+    effectiveMinFreqHz: sourceStartBin * BIN_RESOLUTION,
+    effectiveMaxFreqHz: sourceEndBin * BIN_RESOLUTION,
+    croppedBins: CROPPED_BINS,
+  };
+}
+
+const SIGNAL_ANALYSIS_MIN_FREQ_HZ = 100;
+const SIGNAL_ANALYSIS_MAX_FREQ_HZ = 1_500;
+const SILENCE_RMS_DBFS = -70;
+const TARGET_TONE_MIN_SNR_DB = 8;
+const ACTIVE_FRAME_MIN_SNR_DB = 6;
+const POWER_FLOOR = 1e-12;
+
+export function analyzeDeepCWSignal(
+  audio: Float32Array,
+  sampleRate: number,
+  targetFreqHz: number,
+  filterWidthHz: number,
+  updatedAt = Date.now(),
+): DeepCWSignalAnalysis {
+  const safeSampleRate = Number.isFinite(sampleRate) && sampleRate > 0 ? Math.floor(sampleRate) : SAMPLE_RATE;
+  const durationMs = (audio.length / safeSampleRate) * 1000;
+  const mapping = getDeepCWBandMapping(targetFreqHz, filterWidthHz);
+  const effectiveBandMinHz = Math.max(0, mapping.sourceStartBin * BIN_RESOLUTION);
+  const effectiveBandMaxHz = Math.min(SAMPLE_RATE / 2, mapping.sourceEndBin * BIN_RESOLUTION);
+  const rmsDbfs = amplitudeToDbfs(rootMeanSquare(audio));
+  const frameCount = stft.getFrameCount(audio.length);
+
+  if (frameCount === 0 || rmsDbfs <= SILENCE_RMS_DBFS) {
+    const classification: DeepCWSignalClassification = rmsDbfs <= SILENCE_RMS_DBFS ? 'silence' : 'unknown';
+    return {
+      sampleRate: safeSampleRate,
+      durationMs,
+      targetFreqHz,
+      filterWidthHz,
+      effectiveBandMinHz,
+      effectiveBandMaxHz,
+      rmsDbfs,
+      peakFreqHz: targetFreqHz,
+      peakPowerDb: powerToDb(0),
+      bandPowerDb: powerToDb(0),
+      noiseFloorDb: powerToDb(0),
+      snrDb: 0,
+      inBandPeakOffsetHz: 0,
+      activeFrameRatio: 0,
+      classification,
+      updatedAt,
+    };
+  }
+
+  const searchStartBin = Math.max(1, Math.round(SIGNAL_ANALYSIS_MIN_FREQ_HZ / BIN_RESOLUTION));
+  const searchEndBin = Math.min(TOTAL_BINS - 1, Math.round(SIGNAL_ANALYSIS_MAX_FREQ_HZ / BIN_RESOLUTION));
+  const bandStartBin = Math.max(searchStartBin, mapping.sourceStartBin);
+  const bandEndBin = Math.min(searchEndBin, mapping.sourceEndBin);
+  const binPowers = new Float64Array(TOTAL_BINS);
+  const bandFramePeakPowers: number[] = [];
+  let bandPowerSum = 0;
+  let bandPowerCount = 0;
+
+  stft.forEachSpectrum(audio, (complexFrame) => {
+    let frameBandPeakPower = 0;
+    for (let bin = searchStartBin; bin <= searchEndBin; bin += 1) {
+      const real = complexFrame[bin * 2]!;
+      const imag = complexFrame[bin * 2 + 1]!;
+      const power = real * real + imag * imag;
+      binPowers[bin] += power;
+      if (bin >= bandStartBin && bin <= bandEndBin) {
+        bandPowerSum += power;
+        bandPowerCount += 1;
+        if (power > frameBandPeakPower) frameBandPeakPower = power;
+      }
+    }
+    bandFramePeakPowers.push(frameBandPeakPower);
+  });
+
+  let peakBin = searchStartBin;
+  let peakPower = 0;
+  const noisePowers: number[] = [];
+  for (let bin = searchStartBin; bin <= searchEndBin; bin += 1) {
+    const averagePower = binPowers[bin]! / frameCount;
+    if (averagePower > peakPower) {
+      peakPower = averagePower;
+      peakBin = bin;
+    }
+    if (bin < bandStartBin || bin > bandEndBin) {
+      noisePowers.push(averagePower);
+    }
+  }
+
+  const peakFreqHz = peakBin * BIN_RESOLUTION;
+  const peakPowerDb = powerToDb(peakPower);
+  const bandPowerDb = powerToDb(bandPowerCount > 0 ? bandPowerSum / bandPowerCount : 0);
+  const noiseFloorDb = powerToDb(median(noisePowers));
+  const snrDb = Math.max(0, peakPowerDb - noiseFloorDb);
+  const isPeakInBand = peakBin >= bandStartBin && peakBin <= bandEndBin;
+  const activeFrameThresholdDb = noiseFloorDb + ACTIVE_FRAME_MIN_SNR_DB;
+  const activeFrames = bandFramePeakPowers.filter(power => powerToDb(power) >= activeFrameThresholdDb).length;
+  const activeFrameRatio = bandFramePeakPowers.length > 0 ? activeFrames / bandFramePeakPowers.length : 0;
+
+  const classification: DeepCWSignalClassification = snrDb < TARGET_TONE_MIN_SNR_DB
+    ? 'noise'
+    : isPeakInBand
+      ? 'target_tone'
+      : 'off_target';
+
+  return {
+    sampleRate: safeSampleRate,
+    durationMs,
+    targetFreqHz,
+    filterWidthHz,
+    effectiveBandMinHz,
+    effectiveBandMaxHz,
+    rmsDbfs,
+    peakFreqHz,
+    peakPowerDb,
+    bandPowerDb,
+    noiseFloorDb,
+    snrDb,
+    inBandPeakOffsetHz: peakFreqHz - targetFreqHz,
+    activeFrameRatio,
+    classification,
+    updatedAt,
+  };
+}
+
 export function audioToDeepCWSpectrogramTensor(
   audio: Float32Array,
   inputType: DeepCWInputType,
@@ -260,8 +440,7 @@ function fillWideSpectrogram(audio: Float32Array, output: Float32Array): void {
 }
 
 function fillShiftedSpectrogram(audio: Float32Array, output: Float32Array, targetFreqHz: number, filterWidthHz: number): void {
-  const targetBin = Math.round(targetFreqHz / BIN_RESOLUTION);
-  const halfWidthBins = Math.ceil(filterWidthHz / 2 / BIN_RESOLUTION);
+  const { targetBin, halfWidthBins } = getDeepCWBandMapping(targetFreqHz, filterWidthHz);
   const destCenterIdx = NORMAL_CENTER_BIN - START_BIN;
   stft.forEachSpectrum(audio, (complexFrame, frameIndex) => {
     const offset = frameIndex * CROPPED_BINS;
@@ -287,6 +466,32 @@ function normalizeCmvn(values: Float32Array): void {
   }
   const std = Math.max(Math.sqrt(variance / Math.max(values.length, 1)), 1e-5);
   for (let i = 0; i < values.length; i += 1) values[i] = (values[i]! - mean) / std;
+}
+
+function rootMeanSquare(values: Float32Array): number {
+  if (values.length === 0) return 0;
+  let sumSquares = 0;
+  for (let i = 0; i < values.length; i += 1) {
+    const value = values[i]!;
+    sumSquares += value * value;
+  }
+  return Math.sqrt(sumSquares / values.length);
+}
+
+function amplitudeToDbfs(value: number): number {
+  return 20 * Math.log10(Math.max(value, 1e-12));
+}
+
+function powerToDb(power: number): number {
+  return 10 * Math.log10(Math.max(power, POWER_FLOOR));
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[middle]!;
+  return (sorted[middle - 1]! + sorted[middle]!) / 2;
 }
 
 function float32ToFloat16Array(values: Float32Array): Uint16Array {

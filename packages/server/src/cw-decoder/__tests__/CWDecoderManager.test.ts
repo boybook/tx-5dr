@@ -7,7 +7,10 @@ class MockBackend extends EventEmitter<CWDecoderBackendEvents> implements CWDeco
   readonly id = 'deepcw-onnx' as const;
   startCalls = 0;
   stopCalls = 0;
+  updateConfigCalls = 0;
+  tuningUpdates: Array<{ targetFreqHz: number; filterWidthHz: number }> = [];
   pushedChunks = 0;
+  sampleRates: number[] = [];
   private status: CWDecoderStatus = {
     enabled: true,
     backend: 'deepcw-onnx',
@@ -34,7 +37,14 @@ class MockBackend extends EventEmitter<CWDecoderBackendEvents> implements CWDeco
   }
 
   async updateConfig(config: CWDecoderConfig): Promise<void> {
+    this.updateConfigCalls += 1;
     await this.start(config);
+  }
+
+  updateTuning(tuning: Pick<CWDecoderConfig, 'targetFreqHz' | 'filterWidthHz'>): void {
+    this.tuningUpdates.push(tuning);
+    this.status = { ...this.status, lastPendingText: '', queuedSamples: 0 };
+    this.emit('status', this.getStatus());
   }
 
   clearTranscript(): void {
@@ -42,8 +52,9 @@ class MockBackend extends EventEmitter<CWDecoderBackendEvents> implements CWDeco
     this.emit('status', this.getStatus());
   }
 
-  pushAudio(): void {
+  pushAudio(_chunk: Float32Array, sampleRate: number): void {
     this.pushedChunks += 1;
+    this.sampleRates.push(sampleRate);
   }
 
   getStatus(): CWDecoderStatus {
@@ -115,7 +126,7 @@ describe('CWDecoderManager', () => {
     expect(status).toMatchObject({ lastPendingText: '', lastCommittedText: '', queuedSamples: 0 });
   });
 
-  it('subscribes to the normalized 12 kHz audio stream only', async () => {
+  it('consumes only the unified audioData stream with its processing sample rate', async () => {
     const backend = new MockBackend();
     const manager = new CWDecoderManager({ initialConfig: { enabled: true }, backends: { 'deepcw-onnx': backend } });
     const stream = new EventEmitter();
@@ -130,8 +141,57 @@ describe('CWDecoderManager', () => {
       sequence: 1,
       sourceKind: 'audio-device',
     });
-    stream.emit('audioData', new Float32Array([0.1, 0.2]));
+    stream.emit('audioData', new Float32Array([0.1, 0.2]), 9_600);
 
     expect(backend.pushedChunks).toBe(1);
+    expect(backend.sampleRates).toEqual([9_600]);
+  });
+
+  it('updates runtime tuning without restarting the backend', async () => {
+    const backend = new MockBackend();
+    const manager = new CWDecoderManager({
+      initialConfig: { enabled: true, targetFreqHz: 800, filterWidthHz: 800 },
+      backends: { 'deepcw-onnx': backend },
+    });
+
+    await manager.start();
+    await manager.updateRuntimeTuning({ targetFreqHz: 650, filterWidthHz: 250 });
+
+    expect(backend.startCalls).toBe(1);
+    expect(backend.stopCalls).toBe(0);
+    expect(backend.updateConfigCalls).toBe(0);
+    expect(backend.tuningUpdates).toEqual([{ targetFreqHz: 650, filterWidthHz: 250 }]);
+    expect(manager.getConfig()).toMatchObject({ targetFreqHz: 650, filterWidthHz: 250 });
+  });
+
+  it('persists tuning-only config changes without restarting the backend', async () => {
+    const backend = new MockBackend();
+    const manager = new CWDecoderManager({
+      initialConfig: { enabled: true, targetFreqHz: 800, filterWidthHz: 800 },
+      backends: { 'deepcw-onnx': backend },
+    });
+
+    await manager.start();
+    await manager.updateConfig({ targetFreqHz: 700, filterWidthHz: 500 });
+
+    expect(backend.startCalls).toBe(1);
+    expect(backend.updateConfigCalls).toBe(0);
+    expect(backend.tuningUpdates).toEqual([{ targetFreqHz: 700, filterWidthHz: 500 }]);
+  });
+
+  it('persists already-applied runtime tuning without restarting the backend', async () => {
+    const backend = new MockBackend();
+    const manager = new CWDecoderManager({
+      initialConfig: { enabled: true, targetFreqHz: 800, filterWidthHz: 800 },
+      backends: { 'deepcw-onnx': backend },
+    });
+
+    await manager.start();
+    await manager.updateRuntimeTuning({ targetFreqHz: 700, filterWidthHz: 500 });
+    await manager.updateConfig({ targetFreqHz: 700, filterWidthHz: 500 });
+
+    expect(backend.startCalls).toBe(1);
+    expect(backend.updateConfigCalls).toBe(0);
+    expect(backend.tuningUpdates).toEqual([{ targetFreqHz: 700, filterWidthHz: 500 }]);
   });
 });

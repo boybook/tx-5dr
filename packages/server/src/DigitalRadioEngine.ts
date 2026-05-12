@@ -30,7 +30,11 @@ import {
   resolveWindowTiming,
 } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
-import { AudioStreamManager } from './audio/AudioStreamManager.js';
+import {
+  AudioStreamManager,
+  CW_INPUT_PROCESSING_SAMPLE_RATE,
+  DEFAULT_INPUT_PROCESSING_SAMPLE_RATE,
+} from './audio/AudioStreamManager.js';
 import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue.js';
 import type { DecodeWorkerPoolHealthSnapshot } from './decode/WSJTXDecodeProcessPool.js';
 import { WSJTXEncodeWorkQueue } from './decode/WSJTXEncodeWorkQueue.js';
@@ -638,6 +642,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     const cwTelemetry = this.cwDecoderManager?.getWorkerPoolTelemetrySnapshot();
     if (cwTelemetry) {
+      const workers = cwTelemetry.workers ?? [];
+      const readyCount = workers.filter((worker) => worker.ready).length;
+      const busyCount = workers.filter((worker) => worker.busy).length;
       const status = cwTelemetry.status === 'running'
         ? 'ready'
         : cwTelemetry.status === 'error'
@@ -649,18 +656,18 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         kind: 'cw-decode',
         summary: {
           status,
-          workerCount: cwTelemetry.workerCount,
+          workerCount: workers.length,
           desiredWorkers: cwTelemetry.workerCount,
-          readyCount: status === 'ready' ? cwTelemetry.workerCount : 0,
-          busyCount: cwTelemetry.inFlight,
-          totalRss: 0,
-          totalCpu: 0,
+          readyCount,
+          busyCount,
+          totalRss: workers.reduce((sum, worker) => sum + worker.memory.rss, 0),
+          totalCpu: workers.reduce((sum, worker) => sum + worker.cpu.total, 0),
           nativeThreadsPerWorker: 1,
           pendingJobs: cwTelemetry.pendingJobs ?? 0,
           activeJobs: cwTelemetry.inFlight,
           lastError: cwTelemetry.lastError ?? undefined,
         },
-        workers: cwTelemetry.workers ?? [],
+        workers,
       });
     }
 
@@ -716,7 +723,14 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       });
       this.cwDecoderManager.attachAudioStream(this.audioStreamManager as unknown as import('./cw-decoder/index.js').CWDecoderAudioStream);
       this.cwDecoderManager.on('cwDecoderStatusChanged', (status) => {
-        this.emit('cwDecoderStatusChanged', this.toContractCWDecoderStatus(status));
+        this.emit('cwDecoderStatusChanged', this.toContractCWDecoderStatus(status, this.getEffectiveCWDecoderStatusConfig()));
+      });
+      this.cwDecoderManager.on('cwDecoderTranscriptReset', (event) => {
+        this.emit('cwDecoderEvent', {
+          kind: 'transcript_reset',
+          sessionId: event.sessionId,
+          timestamp: event.timestamp,
+        });
       });
       this.cwDecoderManager.on('cwDecoderPending', (event) => {
         this.emit('cwDecoderEvent', {
@@ -725,23 +739,54 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           confidence: event.confidence,
           timestamp: event.timestamp,
         });
+        if (event.sessionId && event.version != null) {
+          this.emit('cwDecoderEvent', {
+            kind: 'transcript_pending',
+            pending: event.text ? {
+              sessionId: event.sessionId,
+              version: event.version,
+              text: event.text,
+              plainText: event.plainText,
+              finalized: false,
+              confidence: event.confidence,
+              targetFreqHz: event.targetFreqHz,
+              filterWidthHz: event.filterWidthHz,
+              characterSpans: event.characterSpans,
+              wordSpaceSpans: event.wordSpaceSpans,
+              updatedAt: event.timestamp,
+            } : null,
+            timestamp: event.timestamp,
+          });
+        }
       });
       this.cwDecoderManager.on('cwDecoderCommit', (event) => {
+        const segment = {
+          id: event.id,
+          sessionId: event.sessionId ?? 'legacy',
+          sequence: event.sequence ?? 0,
+          text: event.text,
+          plainText: event.plainText,
+          confidence: event.confidence,
+          targetFreqHz: event.targetFreqHz,
+          filterWidthHz: event.filterWidthHz,
+          startedAt: event.startedAt ?? event.timestamp,
+          updatedAt: event.updatedAt ?? event.timestamp,
+          endedAt: event.endedAt ?? event.timestamp,
+          finalized: true as const,
+          prependSpace: event.prependSpace ?? true,
+          characterSpans: event.characterSpans,
+          wordSpaceSpans: event.wordSpaceSpans,
+        };
         this.emit('cwDecoderEvent', {
           kind: 'commit',
-          segment: {
-            id: event.id,
-            text: event.text,
-            confidence: event.confidence,
-            startedAt: event.timestamp,
-            updatedAt: event.timestamp,
-            endedAt: event.timestamp,
-            finalized: true,
-            characterSpans: event.characterSpans,
-            wordSpaceSpans: event.wordSpaceSpans,
-          },
+          segment,
           text: event.text,
           confidence: event.confidence,
+          timestamp: event.timestamp,
+        });
+        this.emit('cwDecoderEvent', {
+          kind: 'transcript_commit',
+          segment,
           timestamp: event.timestamp,
         });
       });
@@ -771,7 +816,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   public getCWDecoderStatus() {
-    return this.toContractCWDecoderStatus(this.getCWDecoderManager().getStatus());
+    return this.toContractCWDecoderStatus(this.getCWDecoderManager().getStatus(), this.getEffectiveCWDecoderStatusConfig());
   }
 
   public async updateCWDecoderConfig(update: Partial<CWDecoderConfig>) {
@@ -779,6 +824,16 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     const runtimeEnabled = this.cwDecoderManager?.getStatus().enabled ?? false;
     await this.getCWDecoderManager().updateConfig(this.toServerCWDecoderConfig({ ...saved, enabled: runtimeEnabled }));
     return saved;
+  }
+
+  public async updateCWDecoderTuning(update: Pick<Partial<CWDecoderConfig>, 'targetFreqHz' | 'filterWidthHz'>) {
+    await this.getCWDecoderManager().updateRuntimeTuning(update);
+    const status = this.toContractCWDecoderStatus(
+      this.getCWDecoderManager().getStatus(),
+      this.getEffectiveCWDecoderStatusConfig(),
+    );
+    this.emit('cwDecoderStatusChanged', status);
+    return status;
   }
 
   public async startCWDecoder(update: Partial<CWDecoderConfig> = {}) {
@@ -789,6 +844,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     if (this.engineMode !== 'cw') {
       await this.setMode(MODES.CW);
     }
+    this.configureAudioProcessingForCurrentMode('cw-decoder-start');
     if (!this.engineLifecycle?.getIsRunning()) {
       this.cwDecoderStartedEngine = true;
       await this.engineLifecycle.startAndWaitForRunning();
@@ -813,13 +869,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public clearCWDecoderTranscript() {
     const status = this.getCWDecoderManager().clearTranscript();
-    const contractStatus = this.toContractCWDecoderStatus(status);
-    this.emit('cwDecoderEvent', {
-      kind: 'pending',
-      text: '',
-      confidence: 0,
-      timestamp: Date.now(),
-    });
+    const contractStatus = this.toContractCWDecoderStatus(status, this.getEffectiveCWDecoderStatusConfig());
     this.emit('cwDecoderStatusChanged', contractStatus);
     return contractStatus;
   }
@@ -1042,6 +1092,34 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.slotPackManager.setMode(this.currentMode);
       logger.info('Restored last engine mode: cw');
     }
+
+    this.configureAudioProcessingForCurrentMode('restore-mode');
+  }
+
+  private configureAudioProcessingForCurrentMode(reason: string): void {
+    const audioStreamManager = this.audioStreamManager as AudioStreamManager | undefined;
+    if (!audioStreamManager?.setInputProcessingSampleRate) {
+      return;
+    }
+
+    const targetSampleRate = this.currentMode.name === 'CW'
+      ? CW_INPUT_PROCESSING_SAMPLE_RATE
+      : DEFAULT_INPUT_PROCESSING_SAMPLE_RATE;
+
+    const changed = audioStreamManager.setInputProcessingSampleRate(targetSampleRate, reason);
+    this.spectrumScheduler?.setAudioSource?.(
+      audioStreamManager.getAudioProvider(),
+      audioStreamManager.getInternalSampleRate(),
+    );
+
+    if (changed) {
+      logger.info('audio processing sample rate aligned to engine mode', {
+        mode: this.currentMode.name,
+        engineMode: this.engineMode,
+        targetSampleRate,
+        reason,
+      });
+    }
   }
 
   private finalizeLifecyclePhase(): void {
@@ -1054,6 +1132,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   // ─── 委托方法 ────────────────────────────────────
 
   async start(): Promise<void> {
+    this.configureAudioProcessingForCurrentMode('engine-start');
     return this.engineLifecycle.start();
   }
 
@@ -1497,6 +1576,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     this.engineMode = targetEngineMode;
     this.currentMode = targetMode;
+    this.configureAudioProcessingForCurrentMode?.('mode-switch');
 
     if (targetEngineMode === 'digital') {
       this.applyDecodeWindowOverrides();
@@ -1726,7 +1806,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       ...DEFAULT_CW_DECODER_CONFIG,
       ...config,
       backend: 'deepcw-onnx' as const,
-      inputSampleRate: DEFAULT_CW_DECODER_CONFIG.inputSampleRate,
+      inputSampleRate: this.audioStreamManager?.getInternalSampleRate?.() ?? DEFAULT_CW_DECODER_CONFIG.decodeSampleRate,
       decodeSampleRate: DEFAULT_CW_DECODER_CONFIG.decodeSampleRate,
     };
     return {
@@ -1735,9 +1815,22 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     };
   }
 
-  private toContractCWDecoderStatus(status: ServerCWDecoderStatus, config: CWDecoderConfig = ConfigManager.getInstance().getCWDecoderConfig()): CWDecoderStatus {
+  private getEffectiveCWDecoderStatusConfig(): Partial<CWDecoderConfig> {
+    const runtimeConfig = this.cwDecoderManager?.getConfig();
+    if (!runtimeConfig) {
+      return ConfigManager.getInstance().getCWDecoderConfig();
+    }
+    const { modelPath: _modelPath, ...contractConfig } = runtimeConfig;
+    return contractConfig as unknown as Partial<CWDecoderConfig>;
+  }
+
+  private toContractCWDecoderStatus(status: ServerCWDecoderStatus, config: Partial<CWDecoderConfig> = ConfigManager.getInstance().getCWDecoderConfig()): CWDecoderStatus {
     const enabled = status.enabled || status.state === 'running' || status.state === 'starting';
-    const contractConfig = { ...config, enabled };
+    const contractConfig = {
+      ...ConfigManager.getInstance().getCWDecoderConfig(),
+      ...config,
+      enabled,
+    } as CWDecoderConfig;
     const state = status.muted
       ? 'muted'
       : status.state === 'running'

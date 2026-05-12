@@ -4,10 +4,14 @@ import { SpectrumSessionCoordinator } from '../SpectrumSessionCoordinator.js';
 import { IcomWlanConnection } from '../../radio/connections/IcomWlanConnection.js';
 
 class MockEngine extends EventEmitter<Record<string, never>> {
+  engineMode: 'digital' | 'voice' | 'cw' = 'digital';
+  currentModeName: 'FT8' | 'FT4' | 'VOICE' | 'CW' = 'FT8';
+
   readonly radioManager = {
     getActiveConnection: vi.fn((): any => null),
     getConfig: vi.fn(() => ({ type: 'icom-wlan' })),
     getCoreCapabilities: vi.fn(() => ({ readRadioMode: true })),
+    getFrequency: vi.fn(),
     getIcomWlanManager: vi.fn((): any => null),
     getMode: vi.fn(),
     isConnected: vi.fn(() => false),
@@ -20,12 +24,31 @@ class MockEngine extends EventEmitter<Record<string, never>> {
   }
 
   getEngineMode() {
-    return 'digital';
+    return this.engineMode;
   }
 
   getStatus() {
-    return { currentMode: { name: 'FT8' } };
+    return { currentMode: { name: this.currentModeName } };
   }
+}
+
+function seedRadioSdrFrame(coordinator: SpectrumSessionCoordinator, frequency = 14_050_000) {
+  (coordinator as any).lastKnownRadioFrequency = frequency;
+  (coordinator as any).lastRadioFrame = {
+    timestamp: Date.now(),
+    kind: 'radio-sdr',
+    frequencyRange: { min: frequency - 5_000, max: frequency + 5_000 },
+    binaryData: {
+      data: '',
+      format: { type: 'int16', length: 1 },
+    },
+    meta: {
+      sourceBinCount: 1,
+      displayBinCount: 1,
+      centerFrequency: frequency,
+      spanHz: 10_000,
+    },
+  };
 }
 
 describe('SpectrumSessionCoordinator', () => {
@@ -134,5 +157,75 @@ describe('SpectrumSessionCoordinator', () => {
     expect(state.kind).toBe('radio-sdr');
     expect(connection.getSpectrumDisplayState).not.toHaveBeenCalled();
     expect(engine.radioManager.getMode).not.toHaveBeenCalled();
+  });
+
+  it('enables CW radio SDR RF gestures without digital operator markers', async () => {
+    const engine = new MockEngine();
+    engine.engineMode = 'cw';
+    engine.currentModeName = 'CW';
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getMode.mockResolvedValue({ mode: 'CW', bandwidth: 500 });
+    const spectrumCoordinator = new EventEmitter();
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    seedRadioSdrFrame(coordinator);
+
+    const state = await coordinator.refresh('radio-sdr');
+
+    expect(state.kind).toBe('radio-sdr');
+    expect(state.interaction).toMatchObject({
+      showTxMarkers: false,
+      showRxMarkers: false,
+      canDragTx: false,
+      canRightClickSetFrequency: true,
+      canDoubleClickSetFrequency: true,
+      frequencyGestureTarget: 'radio-frequency',
+      frequencyStepHz: 10,
+    });
+  });
+
+  it('keeps digital radio SDR operator marker semantics unchanged', async () => {
+    const engine = new MockEngine();
+    engine.engineMode = 'digital';
+    engine.currentModeName = 'FT8';
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getMode.mockResolvedValue({ mode: 'USB', bandwidth: 3000 });
+    const spectrumCoordinator = new EventEmitter();
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    seedRadioSdrFrame(coordinator);
+
+    const state = await coordinator.refresh('radio-sdr');
+
+    expect(state.interaction).toMatchObject({
+      showTxMarkers: true,
+      showRxMarkers: true,
+      canDragTx: true,
+      canRightClickSetFrequency: true,
+      canDoubleClickSetFrequency: false,
+      frequencyGestureTarget: 'operator-tx',
+      frequencyStepHz: 1,
+    });
+  });
+
+  it('keeps voice radio SDR RF gestures and coarse step unchanged', async () => {
+    const engine = new MockEngine();
+    engine.engineMode = 'voice';
+    engine.currentModeName = 'VOICE';
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getMode.mockResolvedValue({ mode: 'USB', bandwidth: 2400 });
+    const spectrumCoordinator = new EventEmitter();
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    seedRadioSdrFrame(coordinator);
+
+    const state = await coordinator.refresh('radio-sdr');
+
+    expect(state.interaction).toMatchObject({
+      showTxMarkers: false,
+      showRxMarkers: false,
+      canDragTx: false,
+      canRightClickSetFrequency: true,
+      canDoubleClickSetFrequency: true,
+      frequencyGestureTarget: 'radio-frequency',
+      frequencyStepHz: 1000,
+    });
   });
 });

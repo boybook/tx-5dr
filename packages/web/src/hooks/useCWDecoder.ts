@@ -1,6 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useReducer, useState, type ReactNode } from 'react';
 import { api } from '@tx5dr/core';
 import { useConnection } from '../store/radioStore';
+import {
+  EMPTY_CW_DECODER_TRANSCRIPT,
+  cwDecoderTranscriptReducer,
+  deriveCWDecoderConfirmedText,
+  type CWDecoderPendingSegment,
+  type CWDecoderTranscriptSegment,
+} from './cwDecoderTranscript';
 
 type CWDecoderRunState = 'idle' | 'starting' | 'running' | 'stopping' | 'error' | 'unavailable';
 
@@ -9,6 +16,8 @@ export interface CWDecoderConfig {
   backend?: string;
   model?: string;
   runtime?: string;
+  targetFreqHz?: number;
+  filterWidthHz?: number;
   [key: string]: unknown;
 }
 
@@ -34,14 +43,6 @@ export interface CWDecoderStatus {
   [key: string]: unknown;
 }
 
-export interface CWDecoderSegment {
-  id: string;
-  text: string;
-  confidence?: number;
-  timestamp: number;
-  raw?: unknown;
-}
-
 type CWDecoderApi = {
   getCWDecoderConfig?: () => Promise<{ config?: CWDecoderConfig } | CWDecoderConfig>;
   getCWDecoderBackends?: () => Promise<{ backends?: CWDecoderBackendInfo[] } | CWDecoderBackendInfo[]>;
@@ -49,6 +50,7 @@ type CWDecoderApi = {
   stopCWDecoder?: () => Promise<{ status?: Partial<CWDecoderStatus> } | Partial<CWDecoderStatus> | void>;
   clearCWDecoderTranscript?: () => Promise<{ status?: Partial<CWDecoderStatus> } | Partial<CWDecoderStatus> | void>;
   updateCWDecoderConfig?: (config: Partial<CWDecoderConfig>) => Promise<{ config?: CWDecoderConfig; status?: Partial<CWDecoderStatus> } | CWDecoderConfig>;
+  updateCWDecoderTuning?: (config: Pick<Partial<CWDecoderConfig>, 'targetFreqHz' | 'filterWidthHz'>) => Promise<{ status?: Partial<CWDecoderStatus> } | Partial<CWDecoderStatus> | void>;
 };
 
 type CWDecoderStatusPayload = Omit<Partial<CWDecoderStatus>, 'backend'> & {
@@ -67,7 +69,8 @@ type CWDecoderEventPayload = {
   text?: string;
   pendingText?: string;
   partial?: string;
-  segment?: { id?: string; text?: string; confidence?: number; timestamp?: number; startedAt?: number; updatedAt?: number; finalized?: boolean };
+  pending?: Record<string, unknown> | null;
+  segment?: Record<string, unknown>;
   confidence?: number;
   timestamp?: number;
   id?: string;
@@ -80,8 +83,6 @@ const DEFAULT_STATUS: CWDecoderStatus = {
   state: 'idle',
   lastError: null,
 };
-
-const MAX_CONFIRMED_SEGMENTS = 1000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object';
@@ -145,29 +146,68 @@ function normalizeStatus(payload: CWDecoderStatusPayload, previous: CWDecoderSta
   };
 }
 
-function normalizeSegment(payload: CWDecoderEventPayload, text: string): CWDecoderSegment {
-  const segment = payload.segment;
+function numberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeStructuredPending(value: unknown): CWDecoderPendingSegment | null {
+  if (!isRecord(value)) return null;
+  const sessionId = stringValue(value.sessionId);
+  const version = numberValue(value.version);
+  const text = stringValue(value.text);
+  if (!sessionId || version == null || text == null) return null;
   return {
-    id: segment?.id ?? payload.id ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    sessionId,
+    version,
     text,
-    confidence: segment?.confidence ?? payload.confidence,
-    timestamp: segment?.timestamp ?? segment?.startedAt ?? segment?.updatedAt ?? payload.timestamp ?? Date.now(),
-    raw: payload,
+    plainText: stringValue(value.plainText),
+    finalized: false,
+    confidence: numberValue(value.confidence),
+    targetFreqHz: numberValue(value.targetFreqHz),
+    filterWidthHz: numberValue(value.filterWidthHz),
+    characterSpans: Array.isArray(value.characterSpans) ? value.characterSpans : undefined,
+    wordSpaceSpans: Array.isArray(value.wordSpaceSpans) ? value.wordSpaceSpans : undefined,
+    updatedAt: numberValue(value.updatedAt) ?? Date.now(),
+    raw: value,
   };
 }
 
-export function useCWDecoder() {
+function normalizeStructuredSegment(value: unknown, fallback: CWDecoderEventPayload): CWDecoderTranscriptSegment | null {
+  if (!isRecord(value)) return null;
+  const sessionId = stringValue(value.sessionId);
+  const text = stringValue(value.text);
+  if (!sessionId || text == null) return null;
+  const timestamp = numberValue(value.updatedAt) ?? numberValue(fallback.timestamp) ?? Date.now();
+  return {
+    id: stringValue(value.id) ?? `${sessionId}-${timestamp}`,
+    sessionId,
+    sequence: numberValue(value.sequence) ?? 0,
+    text,
+    plainText: stringValue(value.plainText),
+    finalized: true,
+    prependSpace: typeof value.prependSpace === 'boolean' ? value.prependSpace : true,
+    confidence: numberValue(value.confidence) ?? numberValue(fallback.confidence),
+    targetFreqHz: numberValue(value.targetFreqHz),
+    filterWidthHz: numberValue(value.filterWidthHz),
+    characterSpans: Array.isArray(value.characterSpans) ? value.characterSpans : undefined,
+    wordSpaceSpans: Array.isArray(value.wordSpaceSpans) ? value.wordSpaceSpans : undefined,
+    startedAt: numberValue(value.startedAt),
+    endedAt: numberValue(value.endedAt),
+    updatedAt: timestamp,
+    raw: fallback,
+  };
+}
+
+function useCWDecoderController() {
   const connection = useConnection();
   const radioService = connection.state.radioService;
   const decoderApi = api as unknown as CWDecoderApi;
   const [config, setConfig] = useState<CWDecoderConfig | null>(null);
   const [backends, setBackends] = useState<CWDecoderBackendInfo[]>([]);
   const [status, setStatus] = useState<CWDecoderStatus>(DEFAULT_STATUS);
-  const [pendingText, setPendingText] = useState('');
-  const [confirmedSegments, setConfirmedSegments] = useState<CWDecoderSegment[]>([]);
+  const [transcript, dispatchTranscript] = useReducer(cwDecoderTranscriptReducer, EMPTY_CW_DECODER_TRANSCRIPT);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const suppressCommittedStatusRef = useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -206,18 +246,13 @@ export function useCWDecoder() {
     const wsClient = radioService.wsClientInstance;
     const handleStatus = (payload: CWDecoderStatusPayload) => {
       setStatus(prev => normalizeStatus(payload, prev));
-      if (typeof payload.pendingText === 'string') {
-        setPendingText(payload.pendingText);
-      }
-      if (typeof payload.committedText === 'string') {
-        const committedText = payload.committedText.trim();
-        if (!committedText) {
-          setConfirmedSegments([]);
-        } else if (!suppressCommittedStatusRef.current) {
-          setConfirmedSegments(prev => (
-            prev.length > 0 ? prev : [normalizeSegment({ kind: 'status', text: committedText }, committedText)]
-          ));
-        }
+      if (typeof payload.pendingText === 'string' || typeof payload.committedText === 'string') {
+        dispatchTranscript({
+          type: 'status_text',
+          pendingText: payload.pendingText,
+          committedText: payload.committedText,
+          timestamp: typeof payload.updatedAt === 'number' ? payload.updatedAt : Date.now(),
+        });
       }
       const backendId = readBackendId(payload.backend);
       const payloadConfig = isRecord(payload.config) ? payload.config as CWDecoderConfig : {};
@@ -232,18 +267,56 @@ export function useCWDecoder() {
     };
     const handleEvent = (payload: CWDecoderEventPayload) => {
       const kind = payload.type ?? String(payload.kind ?? 'partial');
-      const text = payload.segment?.text ?? payload.text ?? payload.pendingText ?? payload.partial ?? '';
-      if (kind === 'partial' || kind === 'pending') {
-        setPendingText(text);
+      if (kind === 'transcript_reset') {
+        const sessionId = stringValue(payload.sessionId);
+        if (sessionId) {
+          dispatchTranscript({ type: 'reset', sessionId, timestamp: payload.timestamp });
+        }
         return;
       }
-      if (kind === 'segment' || kind === 'confirmed' || kind === 'final' || kind === 'commit' || (kind === 'transcript' && payload.segment?.finalized)) {
+      if (kind === 'transcript_pending') {
+        dispatchTranscript({
+          type: 'pending',
+          pending: payload.pending == null ? null : normalizeStructuredPending(payload.pending),
+          timestamp: payload.timestamp,
+        });
+        return;
+      }
+      if (kind === 'transcript_commit' || kind === 'transcript') {
+        const segment = normalizeStructuredSegment(payload.segment, payload);
+        if (segment) {
+          dispatchTranscript({ type: 'commit', segment, timestamp: payload.timestamp });
+        }
+        return;
+      }
+
+      const text = stringValue(payload.text)
+        ?? stringValue(payload.pendingText)
+        ?? stringValue(payload.partial)
+        ?? (isRecord(payload.segment) ? stringValue(payload.segment.text) : undefined)
+        ?? '';
+      if (kind === 'partial' || kind === 'pending') {
+        dispatchTranscript({
+          type: 'legacy_pending',
+          text,
+          confidence: payload.confidence,
+          timestamp: payload.timestamp,
+          raw: payload,
+        });
+        return;
+      }
+      if (kind === 'segment' || kind === 'confirmed' || kind === 'final' || kind === 'commit') {
         const trimmed = text.trim();
         if (trimmed) {
-          suppressCommittedStatusRef.current = false;
-          setConfirmedSegments(prev => [...prev, normalizeSegment(payload, trimmed)].slice(-MAX_CONFIRMED_SEGMENTS));
+          dispatchTranscript({
+            type: 'legacy_commit',
+            segment: normalizeStructuredSegment(payload.segment, payload) ?? undefined,
+            text: trimmed,
+            confidence: payload.confidence,
+            timestamp: payload.timestamp,
+            raw: payload,
+          });
         }
-        setPendingText('');
       }
     };
 
@@ -310,10 +383,28 @@ export function useCWDecoder() {
     }
   }, [decoderApi, radioService]);
 
+  const tuneRuntime = useCallback(async (patch: Pick<Partial<CWDecoderConfig>, 'targetFreqHz' | 'filterWidthHz'>) => {
+    setError(null);
+    setConfig(prev => ({ ...(prev ?? {}), ...patch }));
+    try {
+      const response = await decoderApi.updateCWDecoderTuning?.(patch);
+      const nextStatus = unwrapStatus(response);
+      if (nextStatus) {
+        setStatus(prev => normalizeStatus(nextStatus, prev));
+        const statusConfig = isRecord((nextStatus as CWDecoderStatusPayload).config)
+          ? (nextStatus as CWDecoderStatusPayload).config as CWDecoderConfig
+          : null;
+        if (statusConfig) {
+          setConfig(prev => ({ ...(prev ?? {}), ...statusConfig }));
+        }
+      }
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [decoderApi]);
+
   const clearTranscript = useCallback(async () => {
-    suppressCommittedStatusRef.current = true;
-    setPendingText('');
-    setConfirmedSegments([]);
+    dispatchTranscript({ type: 'clear', timestamp: Date.now() });
     setError(null);
     try {
       const response = await decoderApi.clearCWDecoderTranscript?.();
@@ -333,13 +424,9 @@ export function useCWDecoder() {
   }, [backends, config?.backend, status.backend]);
 
   const confirmedText = useMemo(() => (
-    confirmedSegments
-      .map(segment => segment.text.trim())
-      .filter(Boolean)
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-  ), [confirmedSegments]);
+    deriveCWDecoderConfirmedText(transcript.segments)
+  ), [transcript.segments]);
+  const pendingText = transcript.pending?.text ?? '';
 
   return {
     config,
@@ -348,13 +435,31 @@ export function useCWDecoder() {
     status,
     pendingText,
     confirmedText,
-    confirmedSegments,
+    confirmedSegments: transcript.segments,
     loading,
     error,
     reload: load,
     start,
     stop,
     updateConfig,
+    tuneRuntime,
     clearTranscript,
   };
+}
+
+export type CWDecoderContextValue = ReturnType<typeof useCWDecoderController>;
+
+const CWDecoderContext = createContext<CWDecoderContextValue | null>(null);
+
+export function CWDecoderProvider({ children }: { children: ReactNode }) {
+  const value = useCWDecoderController();
+  return createElement(CWDecoderContext.Provider, { value }, children);
+}
+
+export function useCWDecoder(): CWDecoderContextValue {
+  const context = useContext(CWDecoderContext);
+  if (!context) {
+    throw new Error('useCWDecoder must be used within CWDecoderProvider');
+  }
+  return context;
 }

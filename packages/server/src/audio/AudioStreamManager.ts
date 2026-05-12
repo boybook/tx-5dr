@@ -17,7 +17,9 @@ const RTAUDIO_FLOAT32 = 0x10;
 const RTAUDIO_STREAM_FLAGS_NONE = 0 as unknown as Parameters<RtAudioInstance['openStream']>[8];
 const RTAUDIO_ERROR_WARNING = 0;
 const RTAUDIO_ERROR_DEBUG_WARNING = 1;
-const INTERNAL_SAMPLE_RATE = 12000;
+export const DEFAULT_INPUT_PROCESSING_SAMPLE_RATE = 12_000;
+export const CW_INPUT_PROCESSING_SAMPLE_RATE = 9_600;
+const INPUT_RING_BUFFER_DURATION_MS = 60_000;
 const ICOM_WLAN_TX_CHUNK_SIZE = 1200;
 const ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS = 150;
 const ICOM_WLAN_TX_MAX_WAIT_SLICE_MS = 20;
@@ -38,7 +40,7 @@ export interface NativeAudioInputFrame {
 }
 
 export interface AudioStreamEvents {
-  'audioData': (samples: Float32Array) => void;
+  'audioData': (samples: Float32Array, sampleRate: number) => void;
   'nativeAudioInputData': (frame: NativeAudioInputFrame) => void;
   'txMonitorAudioData': (data: { samples: Float32Array; sampleRate: number }) => void;
   'error': (error: Error) => void;
@@ -131,6 +133,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private activeInputDeviceName: string | null = null;
   private activeOutputDeviceName: string | null = null;
   private inputSampleRate: number;
+  private inputProcessingSampleRate = DEFAULT_INPUT_PROCESSING_SAMPLE_RATE;
   private outputSampleRate: number;
   private inputBufferSize: number;
   private outputBufferSize: number;
@@ -182,8 +185,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.outputBufferSize = audioConfig.outputBufferSize ?? audioConfig.bufferSize ?? 1024;
     this.currentSampleRate = this.outputSampleRate;
 
-    // 创建音频缓冲区提供者，使用统一的内部采样率（12kHz），保留 60 秒 RX/input 历史。
-    this.audioProvider = new RingBufferAudioProvider(INTERNAL_SAMPLE_RATE, 60_000);
+    // 创建音频缓冲区提供者，使用统一的内部处理采样率，保留 60 秒 RX/input 历史。
+    this.audioProvider = new RingBufferAudioProvider(this.inputProcessingSampleRate, INPUT_RING_BUFFER_DURATION_MS);
     this.voiceTxOutputPipeline = new VoiceTxOutputPipeline({
       getSinkState: () => this.getVoiceTxOutputSinkState(),
       getObserver: () => this.voiceOutputObserver,
@@ -195,7 +198,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       outputSampleRate: this.outputSampleRate,
       inputBufferSize: this.inputBufferSize,
       outputBufferSize: this.outputBufferSize,
-      internalSampleRate: INTERNAL_SAMPLE_RATE,
+      internalSampleRate: this.inputProcessingSampleRate,
     });
   }
 
@@ -226,11 +229,36 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   }
 
   /**
-   * 获取内部处理采样率（固定12kHz）
-   * 用于频谱分析等内部处理模块
+   * 获取内部处理采样率，用于 RX ring buffer、频谱分析和解码链路。
    */
   getInternalSampleRate(): number {
-    return 12000;
+    return this.inputProcessingSampleRate;
+  }
+
+  /**
+   * 设置统一 RX/audioData 处理采样率。采样率变化时重建 ring buffer，
+   * 避免同一缓冲区内混入不同采样率的样本。
+   */
+  setInputProcessingSampleRate(sampleRate: number, reason = 'manual'): boolean {
+    if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+      throw new Error(`invalid input processing sample rate: ${sampleRate}`);
+    }
+    const nextSampleRate = Math.floor(sampleRate);
+    if (nextSampleRate === this.inputProcessingSampleRate) {
+      return false;
+    }
+
+    const previousSampleRate = this.inputProcessingSampleRate;
+    this.inputProcessingSampleRate = nextSampleRate;
+    this.audioProvider.setSampleRate(nextSampleRate, INPUT_RING_BUFFER_DURATION_MS);
+    clearResamplerCache();
+    logger.info('audio input processing sample rate changed', {
+      previousSampleRate,
+      nextSampleRate,
+      reason,
+      streaming: this.isStreaming,
+    });
+    return true;
   }
   
   /**
@@ -272,9 +300,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
         // 订阅音频数据
         this.icomWlanAudioAdapter.on('audioData', (samples: Float32Array) => {
-          this.emitNativeAudioInputData(samples, this.icomWlanAudioAdapter?.getSampleRate() ?? INTERNAL_SAMPLE_RATE, 'icom-wlan');
-          this.audioProvider.writeAudio(samples);
-          this.emit('audioData', samples);
+          void this.ingestInputSamples(
+            samples,
+            this.icomWlanAudioAdapter?.getSampleRate() ?? DEFAULT_INPUT_PROCESSING_SAMPLE_RATE,
+            'icom-wlan',
+          );
         });
 
         this.icomWlanAudioAdapter.on('error', (error: Error) => {
@@ -285,7 +315,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.deviceId = 'icom-wlan-input';
         this.activeInputDeviceName = 'ICOM WLAN';
         this.isStreaming = true;
-        logger.info('ICOM WLAN audio input started (native 12kHz)');
+        logger.info('ICOM WLAN audio input started', {
+          sourceSampleRate: this.icomWlanAudioAdapter.getSampleRate(),
+          processingSampleRate: this.inputProcessingSampleRate,
+        });
         this.emit('started');
         return;
       }
@@ -311,13 +344,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
         // Subscribe to audio data
         this.openwebrxAudioDataHandler = (samples: Float32Array) => {
-          this.emitNativeAudioInputData(
+          void this.ingestInputSamples(
             samples,
             openwebrxAdapter.getSampleRate(),
             'openwebrx',
           );
-          this.audioProvider.writeAudio(samples);
-          this.emit('audioData', samples);
         };
 
         this.openwebrxErrorHandler = (error: Error) => {
@@ -331,7 +362,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.deviceId = deviceId || 'openwebrx-unknown';
         this.activeInputDeviceName = audioConfig.inputDeviceName ?? null;
         this.isStreaming = true;
-        logger.info('OpenWebRX audio input started (12kHz, zero resample)');
+        logger.info('OpenWebRX audio input started', {
+          sourceSampleRate: openwebrxAdapter.getSampleRate(),
+          processingSampleRate: this.inputProcessingSampleRate,
+        });
         this.emit('started');
         return;
       }
@@ -362,7 +396,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.deviceId = null;
       AudioDeviceManager.getInstance().clearActiveDevice('input', this.activeInputDeviceName);
       this.activeInputDeviceName = null;
-      this.emit('error', error as Error);
+      this.emit('error', error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
   }
@@ -415,7 +449,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     } catch (error) {
       logger.error('failed to stop audio stream', error);
-      this.emit('error', error as Error);
+      this.emit('error', error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
   }
@@ -472,6 +506,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       outputDeviceId: this.outputDeviceId,
       sampleRate: this.inputSampleRate,
       inputSampleRate: this.inputSampleRate,
+      internalSampleRate: this.inputProcessingSampleRate,
       outputSampleRate: this.outputSampleRate,
       inputBufferSize: this.inputBufferSize,
       outputBufferSize: this.outputBufferSize,
@@ -587,7 +622,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.outputDeviceId = null;
       AudioDeviceManager.getInstance().clearActiveDevice('output', this.activeOutputDeviceName);
       this.activeOutputDeviceName = null;
-      this.emit('error', error as Error);
+      this.emit('error', error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
   }
@@ -796,25 +831,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
           const samples = this.convertBufferToFloat32(pcm);
           if (samples.length === 0) return;
-          this.emitNativeAudioInputData(samples, this.inputSampleRate, 'audio-device');
-
-          if (this.inputSampleRate !== INTERNAL_SAMPLE_RATE) {
-            resampleAudioProfessional(
-              samples,
-              this.inputSampleRate,
-              INTERNAL_SAMPLE_RATE,
-              1
-            ).then((resampled) => {
-              this.audioProvider.writeAudio(resampled);
-              this.emit('audioData', resampled);
-            }).catch((error) => {
-              logger.error('audio resample error', error);
-              this.emit('error', error as Error);
-            });
-          } else {
-            this.audioProvider.writeAudio(samples);
-            this.emit('audioData', samples);
-          }
+          void this.ingestInputSamples(samples, this.inputSampleRate, 'audio-device');
         } catch (error) {
           logger.error('audio data processing error', error);
           this.emit('error', error as Error);
@@ -822,6 +839,52 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       },
       null
     );
+  }
+
+  private async ingestInputSamples(
+    samples: Float32Array,
+    sampleRate: number,
+    sourceKind: NativeAudioInputSourceKind,
+  ): Promise<void> {
+    if (samples.length === 0) return;
+
+    const sourceSampleRate = Number.isFinite(sampleRate) && sampleRate > 0
+      ? Math.floor(sampleRate)
+      : this.inputProcessingSampleRate;
+    this.emitNativeAudioInputData(samples, sourceSampleRate, sourceKind);
+
+    const targetSampleRate = this.inputProcessingSampleRate;
+    if (sourceSampleRate === targetSampleRate) {
+      this.writeProcessedInputAudio(samples, targetSampleRate);
+      return;
+    }
+
+    try {
+      const resampled = await resampleAudioProfessional(samples, sourceSampleRate, targetSampleRate, 1);
+      if (this.inputProcessingSampleRate !== targetSampleRate) {
+        logger.debug('dropping stale input resample result after processing rate change', {
+          sourceSampleRate,
+          staleTargetSampleRate: targetSampleRate,
+          currentTargetSampleRate: this.inputProcessingSampleRate,
+          sourceKind,
+        });
+        return;
+      }
+      this.writeProcessedInputAudio(resampled, targetSampleRate);
+    } catch (error) {
+      logger.error('audio input resample error', {
+        sourceSampleRate,
+        targetSampleRate,
+        sourceKind,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.emit('error', error as Error);
+    }
+  }
+
+  private writeProcessedInputAudio(samples: Float32Array, sampleRate: number): void {
+    this.audioProvider.writeAudio(samples);
+    this.emit('audioData', samples, sampleRate);
   }
 
   private emitNativeAudioInputData(
