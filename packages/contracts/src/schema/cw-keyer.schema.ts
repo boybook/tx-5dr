@@ -157,3 +157,13 @@ export const CWMessagePanelUpdateSchema = z.object({
 });
 
 export type CWMessagePanelUpdate = z.infer<typeof CWMessagePanelUpdateSchema>;
+
+/**
+ * CW 报文槽位交换请求
+ */
+export const CWMessageSlotSwapSchema = z.object({
+  slotIdA: z.string(),
+  slotIdB: z.string(),
+});
+
+export type CWMessageSlotSwap = z.infer<typeof CWMessageSlotSwapSchema>;

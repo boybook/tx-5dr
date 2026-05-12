@@ -2143,6 +2143,19 @@ export const api = {
     );
   },
 
+  async swapCWMessageSlots(
+    callsign: string,
+    slotIdA: string,
+    slotIdB: string,
+    apiBase?: string,
+  ): Promise<{ success: boolean; panel: import('@tx5dr/contracts').CWMessagePanel }> {
+    return apiRequest<{ success: boolean; panel: import('@tx5dr/contracts').CWMessagePanel }>(
+      `/cw/panel/${encodeURIComponent(callsign)}/slots/swap`,
+      { method: 'POST', body: JSON.stringify({ slotIdA, slotIdB }) },
+      apiBase,
+    );
+  },
+
   // ===== 插件系统 API =====
 
   async getPlugins(apiBase?: string): Promise<import('@tx5dr/contracts').PluginSystemSnapshot> {

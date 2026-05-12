@@ -18,7 +18,6 @@ import {
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
-  faPlay,
   faStop,
   faPen,
   faEraser,
@@ -31,6 +30,7 @@ import {
   faGear,
   faPlus,
   faMinus,
+  faGripVertical,
 } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
 import {
@@ -44,7 +44,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { useCWKeyer } from '../../hooks/useCWKeyer';
 import { useOperators, useCurrentOperatorId, useRadioState } from '../../store/radioStore';
-import { CWSidetone } from './CWSidetone';
+import { CWSidetone, type CWSidetoneHandle } from './CWSidetone';
 import {
   getCWKeyerShortcutPresetsForCallsign,
   saveCWKeyerSlotShortcutPreset,
@@ -152,6 +152,26 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const [wpm, setWpm] = useState(cwConfig?.wpm ?? 20);
   const [txProgressRunId, setTxProgressRunId] = useState(0);
   const [, setCountdownTick] = useState(0);
+  const [dragSlotId, setDragSlotId] = useState<string | null>(null);
+  const [dragOverSlotId, setDragOverSlotId] = useState<string | null>(null);
+  const [sidetoneEnabled, setSidetoneEnabled] = useState(() => {
+    try {
+      return localStorage.getItem('tx5dr_cw_sidetone_enabled') !== 'false';
+    } catch { return true; }
+  });
+  const [sidetoneFrequency, setSidetoneFrequency] = useState(() => {
+    try {
+      const saved = localStorage.getItem('tx5dr_cw_sidetone_frequency');
+      return saved ? Math.max(300, Math.min(1200, Number(saved))) : 700;
+    } catch { return 700; }
+  });
+  const [sidetoneVolume, setSidetoneVolume] = useState(() => {
+    try {
+      const saved = localStorage.getItem('tx5dr_cw_sidetone_volume');
+      return saved ? Math.max(0.05, Math.min(1, Number(saved))) : 0.3;
+    } catch { return 0.3; }
+  });
+  const sidetoneRef = useRef<CWSidetoneHandle>(null);
 
   const effectiveConfig = cwConfig ?? loadedConfig;
   const backend: CWKeyerBackend = effectiveConfig?.backend ?? 'cat';
@@ -217,6 +237,27 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
     return () => window.clearInterval(timer);
   }, [isActive, statusMode]);
 
+  const visibleSlots = useMemo(() => panel?.slots.slice(0, panel.slotCount) ?? [], [panel]);
+
+  // Trigger sidetone on repeat transitions (repeat-waiting → playing)
+  const prevStatusModeRef = useRef(cwKeyerStatus?.mode ?? 'idle');
+  useEffect(() => {
+    if (!sidetoneEnabled) return;
+    const currentMode = cwKeyerStatus?.mode ?? 'idle';
+    const prevMode = prevStatusModeRef.current;
+    prevStatusModeRef.current = currentMode;
+
+    if (prevMode === 'repeat-waiting' && currentMode === 'playing' && cwKeyerStatus?.messageId) {
+      const slot = visibleSlots.find(s => s.id === cwKeyerStatus.messageId);
+      if (slot?.text) {
+        const resolved = resolveCWMessagePlaceholders(slot.text, placeholderValues);
+        if (resolved.text.trim()) {
+          sidetoneRef.current?.play(resolved.text.trim());
+        }
+      }
+    }
+  }, [cwKeyerStatus?.mode, cwKeyerStatus?.messageId, sidetoneEnabled, visibleSlots, placeholderValues]);
+
   const loadPanel = useCallback(async () => {
     if (!myCallsign) {
       setPanel(null);
@@ -238,8 +279,6 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
       void loadPanel();
     }
   }, [isCWMode, loadPanel]);
-
-  const visibleSlots = useMemo(() => panel?.slots.slice(0, panel.slotCount) ?? [], [panel]);
   const canIncreaseSlots = (panel?.slotCount ?? 0) < (panel?.maxSlotCount ?? 12);
   const canDecreaseSlots = (panel?.slotCount ?? 3) > 3;
 
@@ -361,11 +400,13 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
     };
 
     const handleGlobalKeyDown = (event: KeyboardEvent) => {
-      if (isTypingTarget(event.target)) return;
+      const isFKey = /^F(?:[1-9]|1[0-2])$/.test(event.code);
+      if (isTypingTarget(event.target) && !isFKey && event.key !== 'Escape') return;
 
       if (event.key === 'Escape' && isActive) {
         event.preventDefault();
         stopMessage();
+        sidetoneRef.current?.stop();
         return;
       }
 
@@ -380,7 +421,9 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      if (!resolveMessageForSend(slot.text)) return;
+      const resolvedFKey = resolveMessageForSend(slot.text);
+      if (!resolvedFKey) return;
+      sidetoneRef.current?.play(resolvedFKey);
       playMessage(myCallsign, slot.id, slot.repeatEnabled, true, placeholderValues);
     };
 
@@ -460,6 +503,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
     if (!trimmed || (isActive && statusMode !== 'idle')) return;
     const resolvedText = resolveMessageForSend(trimmed);
     if (!resolvedText) return;
+    sidetoneRef.current?.play(resolvedText);
     sendText(trimmed, myCallsign || undefined, placeholderValues);
     setLastSentText(resolvedText);
     if (text === textInput) {
@@ -490,6 +534,26 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const handleWpmChangeEnd = (value: number | number[]) => {
     const v = Array.isArray(value) ? value[0] : value;
     void api.updateCWKeyerConfig({ wpm: v }).then((resp) => setLoadedConfig(resp.config));
+  };
+
+  const handleSidetoneEnabledChange = (enabled: boolean) => {
+    setSidetoneEnabled(enabled);
+    try { localStorage.setItem('tx5dr_cw_sidetone_enabled', String(enabled)); } catch {}
+    if (!enabled) {
+      sidetoneRef.current?.stop();
+    }
+  };
+
+  const handleSidetoneFrequencyChange = (value: number | number[]) => {
+    const v = Array.isArray(value) ? value[0] : Math.round(value);
+    setSidetoneFrequency(v);
+    try { localStorage.setItem('tx5dr_cw_sidetone_frequency', String(v)); } catch {}
+  };
+
+  const handleSidetoneVolumeChange = (value: number | number[]) => {
+    const v = Array.isArray(value) ? value[0] : value;
+    setSidetoneVolume(v);
+    try { localStorage.setItem('tx5dr_cw_sidetone_volume', String(v)); } catch {}
   };
 
   const handleBackendChange = (key: React.Key) => {
@@ -540,20 +604,104 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
     }
   };
 
+  const handleDragStart = useCallback((e: React.DragEvent, slotId: string) => {
+    setDragSlotId(slotId);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', slotId);
+  }, []);
+
+  const handleDragEnd = useCallback(() => {
+    setDragSlotId(null);
+    setDragOverSlotId(null);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, slotId: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverSlotId(prev => prev === slotId ? prev : slotId);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent, slotId: string) => {
+    // Only clear if leaving to a child element (not leaving the slot entirely)
+    const relatedTarget = e.relatedTarget as HTMLElement | null;
+    if (relatedTarget && (e.currentTarget as HTMLElement).contains(relatedTarget)) return;
+    setDragOverSlotId(prev => prev === slotId ? null : prev);
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent, targetSlotId: string) => {
+    e.preventDefault();
+    setDragOverSlotId(null);
+    const sourceSlotId = dragSlotId;
+    if (!sourceSlotId || sourceSlotId === targetSlotId || !myCallsign) return;
+
+    // Optimistic local swap
+    setPanel(current => {
+      if (!current) return current;
+      const sourceSlot = current.slots.find(s => s.id === sourceSlotId);
+      const targetSlot = current.slots.find(s => s.id === targetSlotId);
+      if (!sourceSlot || !targetSlot) return current;
+      const swapFields = ['label', 'text', 'repeatEnabled', 'repeatIntervalSec'] as const;
+      return {
+        ...current,
+        slots: current.slots.map(slot => {
+          if (slot.id === sourceSlotId) {
+            const merged = { ...slot };
+            for (const f of swapFields) merged[f] = targetSlot[f] as never;
+            return merged;
+          }
+          if (slot.id === targetSlotId) {
+            const merged = { ...slot };
+            for (const f of swapFields) merged[f] = sourceSlot[f] as never;
+            return merged;
+          }
+          return slot;
+        }),
+      };
+    });
+
+    // Swap F-key shortcuts
+    const shortcutA = slotShortcuts[sourceSlotId] ?? CW_KEYER_SHORTCUT_NONE;
+    const shortcutB = slotShortcuts[targetSlotId] ?? CW_KEYER_SHORTCUT_NONE;
+    setSlotShortcuts(prev => ({
+      ...prev,
+      [sourceSlotId]: shortcutB,
+      [targetSlotId]: shortcutA,
+    }));
+    saveCWKeyerSlotShortcutPreset(myCallsign, sourceSlotId, shortcutB);
+    saveCWKeyerSlotShortcutPreset(myCallsign, targetSlotId, shortcutA);
+
+    // Persist to server
+    try {
+      const resp = await api.swapCWMessageSlots(myCallsign, sourceSlotId, targetSlotId);
+      setPanel(resp.panel);
+    } catch (err) {
+      addToast({
+        title: t('common:error'),
+        description: String(err),
+        color: 'danger',
+      });
+      void loadPanel();
+    }
+  }, [dragSlotId, myCallsign, slotShortcuts, t, loadPanel]);
+
   const handlePlay = (slot: CWMessageSlot) => {
     if (!myCallsign || !slot.text) return;
     if (activeSlotId === slot.id) {
       stopMessage();
+      sidetoneRef.current?.stop();
       return;
     }
     if (isActive) return;
-    if (!resolveMessageForSend(slot.text)) return;
+    const resolvedText = resolveMessageForSend(slot.text);
+    if (!resolvedText) return;
+    sidetoneRef.current?.play(resolvedText);
     playMessage(myCallsign, slot.id, slot.repeatEnabled, true, placeholderValues);
   };
 
   const handleRepeatToggle = async (slot: CWMessageSlot) => {
     const repeatEnabled = !slot.repeatEnabled;
-    if (repeatEnabled && slot.text && !resolveMessageForSend(slot.text)) {
+    const resolvedRepeatText = slot.text ? resolveMessageForSend(slot.text) : null;
+    if (repeatEnabled && slot.text && !resolvedRepeatText) {
       return;
     }
     updateSlotLocal(slot.id, { repeatEnabled });
@@ -562,10 +710,12 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
       updateSlotLocal(slot.id, { repeatEnabled: slot.repeatEnabled });
       return;
     }
-    if (repeatEnabled && slot.text && !isActive) {
+    if (repeatEnabled && resolvedRepeatText && !isActive) {
+      sidetoneRef.current?.play(resolvedRepeatText);
       playMessage(myCallsign, slot.id, true, false, placeholderValues);
     } else if (!repeatEnabled && activeSlotId === slot.id) {
       stopMessage();
+      sidetoneRef.current?.stop();
     }
   };
 
@@ -609,21 +759,6 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
             </PopoverTrigger>
             <PopoverContent className="w-80 gap-3 p-3">
               <div className="flex w-full flex-col gap-3">
-                <div className="flex items-center gap-3">
-                  <span className="w-20 shrink-0 whitespace-nowrap text-xs text-default-600">{t('radio:cw.wpm', 'WPM')}</span>
-                  <Slider
-                    size="sm"
-                    step={1}
-                    minValue={WPM_MIN}
-                    maxValue={WPM_MAX}
-                    value={wpm}
-                    onChange={handleWpmChange}
-                    onChangeEnd={handleWpmChangeEnd}
-                    className="flex-1"
-                    aria-label={t('radio:cw.wpm', 'WPM')}
-                  />
-                  <span className="w-10 text-right font-mono text-xs text-default-800">{wpm}</span>
-                </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="w-20 shrink-0 text-xs text-default-600">{t('radio:cw.backendTabs', 'CW backend')}</span>
                   <Tabs
@@ -659,6 +794,67 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
                       )}
                     />
                   </Tabs>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="w-20 shrink-0 whitespace-nowrap text-xs text-default-600">{t('radio:cw.wpm', 'WPM')}</span>
+                  <Slider
+                    size="sm"
+                    step={1}
+                    minValue={WPM_MIN}
+                    maxValue={WPM_MAX}
+                    value={wpm}
+                    onChange={handleWpmChange}
+                    onChangeEnd={handleWpmChangeEnd}
+                    className="flex-1"
+                    aria-label={t('radio:cw.wpm', 'WPM')}
+                  />
+                  <span className="w-10 text-right font-mono text-xs text-default-800">{wpm}</span>
+                </div>
+                <div className="border-t border-default-200 pt-2">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-default-700">{t('radio:cw.sidetone', 'Sidetone')}</span>
+                    <Button
+                      size="sm"
+                      variant={sidetoneEnabled ? 'solid' : 'flat'}
+                      color={sidetoneEnabled ? 'primary' : 'default'}
+                      onPress={() => handleSidetoneEnabledChange(!sidetoneEnabled)}
+                      className="h-6 min-w-0 rounded-full px-3 text-[10px]"
+                    >
+                      {sidetoneEnabled ? 'ON' : 'OFF'}
+                    </Button>
+                  </div>
+                  {sidetoneEnabled && (
+                    <>
+                      <div className="flex items-center gap-3 mb-1.5">
+                        <span className="w-20 shrink-0 text-xs text-default-500">{t('radio:cw.sidetoneFrequency', 'Pitch')}</span>
+                        <Slider
+                          size="sm"
+                          step={10}
+                          minValue={300}
+                          maxValue={1200}
+                          value={sidetoneFrequency}
+                          onChange={handleSidetoneFrequencyChange}
+                          className="flex-1"
+                          aria-label={t('radio:cw.sidetoneFrequency', 'Sidetone pitch')}
+                        />
+                        <span className="w-12 text-right font-mono text-xs text-default-800">{sidetoneFrequency}Hz</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="w-20 shrink-0 text-xs text-default-500">{t('radio:cw.sidetoneVolume', 'Volume')}</span>
+                        <Slider
+                          size="sm"
+                          step={0.05}
+                          minValue={0.05}
+                          maxValue={1}
+                          value={sidetoneVolume}
+                          onChange={handleSidetoneVolumeChange}
+                          className="flex-1"
+                          aria-label={t('radio:cw.sidetoneVolume', 'Sidetone volume')}
+                        />
+                        <span className="w-12 text-right font-mono text-xs text-default-800">{Math.round(sidetoneVolume * 100)}%</span>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             </PopoverContent>
@@ -718,7 +914,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
         </div>
       </div>
 
-      <CWSidetone />
+      <CWSidetone ref={sidetoneRef} wpm={wpm} frequency={sidetoneFrequency} enabled={sidetoneEnabled} volume={sidetoneVolume} />
 
       <div className={`flex flex-col gap-3 ${embedded ? 'flex-1 min-h-0 overflow-hidden' : 'px-3 pb-3'}`}>
         {showSerialPortAlert && (
@@ -945,8 +1141,29 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
                   {visibleSlots.map((slot) => {
                     const shortcutPreset = slotShortcuts[slot.id] ?? CW_KEYER_SHORTCUT_NONE;
 
+                    const isDragging = dragSlotId === slot.id;
+                    const isDragOver = dragOverSlotId === slot.id && dragSlotId !== slot.id;
+
                     return (
-                      <div key={slot.id} className="flex items-center gap-1.5 rounded-lg bg-content2 p-1.5 transition-colors">
+                      <div
+                        key={slot.id}
+                        draggable={!isActive}
+                        onDragStart={(e) => handleDragStart(e, slot.id)}
+                        onDragEnd={handleDragEnd}
+                        onDragOver={(e) => handleDragOver(e, slot.id)}
+                        onDragLeave={(e) => handleDragLeave(e, slot.id)}
+                        onDrop={(e) => handleDrop(e, slot.id)}
+                        className={`flex items-center gap-1.5 rounded-lg p-1.5 transition-all duration-200 ${
+                          isDragging
+                            ? 'opacity-40 scale-95 bg-primary-100 dark:bg-primary-900/20 ring-2 ring-primary-400'
+                            : isDragOver
+                              ? 'bg-content3 ring-2 ring-primary-300 shadow-md -translate-y-px'
+                              : 'bg-content2'
+                        }`}
+                      >
+                        <span className="flex items-center justify-center w-6 h-8 shrink-0 cursor-grab active:cursor-grabbing text-default-300 hover:text-default-500">
+                          <FontAwesomeIcon icon={faGripVertical} className="text-xs" />
+                        </span>
                         <Select
                           size="sm"
                           variant="flat"
