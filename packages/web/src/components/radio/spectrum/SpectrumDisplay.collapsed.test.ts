@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildRadioSdrFrequencyRequest,
+  buildRadioSdrTxBandOverlays,
   clampCollapsedSpectrumFrequency,
   getCollapsedSpectrumPosition,
   resolveCollapsedSpectrumMarkerFrequencies,
@@ -115,6 +117,120 @@ describe('collapsed spectrum positioning', () => {
     })).toEqual({
       rxFrequencies: [],
       txFrequencies: [],
+    });
+  });
+
+  it('does not render digital operator markers in CW mode', () => {
+    const rxFrequencies = [
+      { operatorId: 'op-1', callsign: 'K1ABC', frequency: 1234 },
+    ];
+    const txFrequencies = [
+      { operatorId: 'op-1', callsign: 'N0CALL', frequency: 1500 },
+    ];
+
+    expect(resolveSpectrumMarkerFrequencies({
+      isOpenWebRXSdrSelected: false,
+      isOpenWebRXDetailMode: false,
+      showMarkers: true,
+      showRxMarkers: true,
+      showTxMarkers: true,
+      isVoiceMode: false,
+      isCwMode: true,
+      rxFrequencies,
+      txFrequencies,
+    })).toEqual({
+      rxFrequencies: [],
+      txFrequencies: [],
+    });
+
+    expect(resolveCollapsedSpectrumMarkerFrequencies({
+      showMarkers: true,
+      isVoiceMode: false,
+      isCwMode: true,
+      rxFrequencies,
+      txFrequencies,
+    })).toEqual({
+      rxFrequencies: [],
+      txFrequencies: [],
+    });
+  });
+
+  it('builds a current RF TX overlay for CW radio SDR only', () => {
+    expect(buildRadioSdrTxBandOverlays({
+      engineMode: 'cw',
+      isRadioSdrSelected: true,
+      currentRadioFrequency: 14_050_000,
+      voice: null,
+      voiceOverlayIsInteractive: false,
+    })).toEqual([{
+      id: 'cw-current-tx',
+      label: 'TX',
+      lineFrequency: 14_050_000,
+      rangeStartFrequency: 14_050_000,
+      rangeEndFrequency: 14_050_000,
+      draggable: false,
+    }]);
+
+    expect(buildRadioSdrTxBandOverlays({
+      engineMode: 'cw',
+      isRadioSdrSelected: false,
+      currentRadioFrequency: 14_050_000,
+      voice: null,
+      voiceOverlayIsInteractive: false,
+    })).toEqual([]);
+  });
+
+  it('keeps the existing voice SDR occupied-band TX overlay shape', () => {
+    expect(buildRadioSdrTxBandOverlays({
+      engineMode: 'voice',
+      isRadioSdrSelected: true,
+      currentRadioFrequency: 14_200_000,
+      voice: {
+        radioMode: 'USB',
+        bandwidthLabel: '2400 Hz',
+        occupiedBandwidthHz: 2400,
+        offsetModel: 'upper',
+      },
+      voiceOverlayIsInteractive: true,
+    })).toEqual([{
+      id: 'voice-current-tx',
+      label: 'TX',
+      lineFrequency: 14_200_000,
+      rangeStartFrequency: 14_200_000,
+      rangeEndFrequency: 14_202_400,
+      draggable: true,
+    }]);
+  });
+
+  it('builds CW SDR frequency requests with CW mode and 10 Hz snapping', () => {
+    expect(buildRadioSdrFrequencyRequest({
+      engineMode: 'cw',
+      frequency: 14_050_004,
+      stepHz: 10,
+    })).toEqual({
+      frequency: 14_050_000,
+      mode: 'CW',
+      radioMode: 'CW',
+      band: '20m',
+      description: '14.050 MHz',
+    });
+  });
+
+  it('keeps voice SDR frequency requests in VOICE mode', () => {
+    expect(buildRadioSdrFrequencyRequest({
+      engineMode: 'voice',
+      frequency: 14_200_499,
+      stepHz: 1000,
+      voiceRadioMode: 'USB',
+      currentRadioMode: 'LSB',
+    })).toEqual({
+      frequency: 14_200_000,
+      mode: 'VOICE',
+      band: 'Custom',
+      description: '14.200 MHz',
+      radioMode: 'USB',
+      repeaterShift: 'none',
+      toneMode: 'none',
     });
   });
 });

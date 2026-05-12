@@ -2020,7 +2020,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
               {canResize && (
                 <>
                   <div
-                    className="absolute top-0 z-20 h-full w-6 -translate-x-1/2 cursor-ew-resize bg-transparent pointer-events-auto"
+                    className="absolute top-0 z-20 h-full w-4 -translate-x-full cursor-ew-resize bg-transparent pointer-events-auto"
                     style={{ left: `${startPosition}%` }}
                     data-waterfall-marker-interactive="true"
                     title={label}
@@ -2028,10 +2028,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
                     onMouseLeave={() => setHoveredFrequencyBandEdgeId(current => (current === overlay.id ? null : current))}
                     onMouseDown={(event) => handleFrequencyBandOverlayMouseDown(event, overlay, 'start')}
                   >
-                    <div className={`mx-auto h-full w-px bg-cyan-100/80 transition-opacity ${edgeHighlighted ? 'opacity-100' : 'opacity-0'}`} />
+                    <div className={`ml-auto h-full w-px bg-cyan-100/80 transition-opacity ${edgeHighlighted ? 'opacity-100' : 'opacity-0'}`} />
                   </div>
                   <div
-                    className="absolute top-0 z-20 h-full w-6 -translate-x-1/2 cursor-ew-resize bg-transparent pointer-events-auto"
+                    className="absolute top-0 z-20 h-full w-4 cursor-ew-resize bg-transparent pointer-events-auto"
                     style={{ left: `${endPosition}%` }}
                     data-waterfall-marker-interactive="true"
                     title={label}
@@ -2039,12 +2039,12 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
                     onMouseLeave={() => setHoveredFrequencyBandEdgeId(current => (current === overlay.id ? null : current))}
                     onMouseDown={(event) => handleFrequencyBandOverlayMouseDown(event, overlay, 'end')}
                   >
-                    <div className={`mx-auto h-full w-px bg-cyan-100/80 transition-opacity ${edgeHighlighted ? 'opacity-100' : 'opacity-0'}`} />
+                    <div className={`h-full w-px bg-cyan-100/80 transition-opacity ${edgeHighlighted ? 'opacity-100' : 'opacity-0'}`} />
                   </div>
                 </>
               )}
               <div
-                className={`group absolute top-0 z-10 h-full w-12 -translate-x-1/2 pointer-events-auto ${canDragCenter ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-default'}`}
+                className={`group absolute top-0 z-10 h-full w-16 -translate-x-1/2 pointer-events-auto ${canDragCenter ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-default'}`}
                 style={{ left: `${centerPosition}%` }}
                 data-waterfall-marker-interactive="true"
                 title={label}

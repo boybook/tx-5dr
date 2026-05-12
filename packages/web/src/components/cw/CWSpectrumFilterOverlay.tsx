@@ -37,7 +37,7 @@ function normalizeChange(change: FrequencyBandOverlayChange): TuningPatch {
 
 export const CWSpectrumFilterOverlay: React.FC<CWSpectrumFilterOverlayProps> = ({
   height,
-  showMarkers = false,
+  showMarkers = true,
 }) => {
   const { t } = useTranslation('radio');
   const { config, status, tuneRuntime, updateConfig } = useCWDecoder();

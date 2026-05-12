@@ -104,11 +104,10 @@ export const CWLeftLayout: React.FC = () => {
         <div className="flex-1 px-2 pb-2 md:px-5 md:pb-5 min-h-0 flex flex-col gap-2 md:gap-3">
           <CWFrequencyControl />
 
-          {/* Spectrum Display (no frequency markers for CW mode) */}
+          {/* Spectrum Display (CW filter on audio, RF TX marker on radio SDR) */}
           <div className="flex-shrink-0 bg-content2 rounded-lg shadow-sm overflow-hidden">
             <CWSpectrumFilterOverlay
               height={isMobile ? 80 : 128}
-              showMarkers={false}
             />
           </div>
 

@@ -438,13 +438,19 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     const display = await this.resolveRadioDisplayState(currentRadioFrequency);
     const zoom = await this.buildZoomState(display);
     const digitalWindow = await this.buildDigitalWindowState(display, standardFrequencyHz);
-    const isVoiceMode = this.engine.getEngineMode() === 'voice';
+    const engineMode = this.engine.getEngineMode();
+    const isVoiceMode = engineMode === 'voice';
+    const isCwMode = engineMode === 'cw';
     const sourceMode = this.mapRadioDisplayModeToSourceMode(display.mode);
     const isFixed = sourceMode === 'fixed' || sourceMode === 'scroll-fixed';
-    const isDigital = this.engine.getEngineMode() === 'digital';
+    const isDigital = engineMode === 'digital';
     const canVoiceSetFrequency = isVoiceMode
       && currentRadioFrequency !== null
       && display.displayRange !== null;
+    const canCwSetFrequency = isCwMode
+      && currentRadioFrequency !== null
+      && display.displayRange !== null;
+    const canSetRadioFrequency = canVoiceSetFrequency || canCwSetFrequency;
     const presetMarkers = isVoiceMode && display.displayRange
       ? this.resolveVoicePresetMarkers(display.displayRange.min, display.displayRange.max, canVoiceSetFrequency)
       : [];
@@ -499,14 +505,14 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
         showTxMarkers: isDigital,
         showRxMarkers: isDigital,
         canDragTx: isDigital,
-        canRightClickSetFrequency: isDigital || canVoiceSetFrequency,
-        canDoubleClickSetFrequency: canVoiceSetFrequency,
+        canRightClickSetFrequency: isDigital || canSetRadioFrequency,
+        canDoubleClickSetFrequency: canSetRadioFrequency,
         // Voice-mode drag tuning is intentionally disabled for now.
         // In follow/center mode the SDR viewport recenters while dragging, which makes
         // whole-spectrum drag interaction feel jumpy and harder to control precisely.
         canDragFrequency: false,
-        frequencyGestureTarget: isDigital ? 'operator-tx' : (canVoiceSetFrequency ? 'radio-frequency' : null),
-        frequencyStepHz: isDigital ? 1 : (canVoiceSetFrequency ? VOICE_FREQUENCY_GESTURE_STEP_HZ : null),
+        frequencyGestureTarget: isDigital ? 'operator-tx' : (canSetRadioFrequency ? 'radio-frequency' : null),
+        frequencyStepHz: isDigital ? 1 : (canVoiceSetFrequency ? VOICE_FREQUENCY_GESTURE_STEP_HZ : (canCwSetFrequency ? 10 : null)),
         // Voice preset markers are negotiated here so SDR preset rendering stays on the
         // same capability/session-state channel as the rest of the spectrum interactions.
         presetMarkers,

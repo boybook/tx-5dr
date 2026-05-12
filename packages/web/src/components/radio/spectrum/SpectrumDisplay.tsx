@@ -2,8 +2,8 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSy
 import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Switch, Tab, Tabs, Tooltip } from '@heroui/react';
 import { ArrowsPointingOutIcon, ChevronDownIcon, ChevronUpIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
-import type { SpectrumFrame, SpectrumKind } from '@tx5dr/contracts';
-import { api } from '@tx5dr/core';
+import type { EngineMode, SpectrumFrame, SpectrumKind, SpectrumSessionVoiceState } from '@tx5dr/contracts';
+import { api, getBandFromFrequency } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useSpectrum } from '../../../store/radioStore';
 import { useCan } from '../../../store/authStore';
 import { createLogger } from '../../../utils/logger';
@@ -167,6 +167,111 @@ const DEFAULT_PERSISTED_RANGE_SETTINGS: PersistedRangeSettings = {
 function snapFrequencyToStep(frequency: number, stepHz: number | null | undefined): number {
   const step = typeof stepHz === 'number' && Number.isFinite(stepHz) && stepHz > 0 ? stepHz : 1;
   return Math.round(frequency / step) * step;
+}
+
+type SetRadioFrequencyParams = Parameters<typeof api.setRadioFrequency>[0];
+
+export function buildRadioSdrFrequencyRequest({
+  engineMode,
+  frequency,
+  stepHz,
+  voiceRadioMode,
+  currentRadioMode,
+}: {
+  engineMode: EngineMode;
+  frequency: number;
+  stepHz: number | null | undefined;
+  voiceRadioMode?: string | null;
+  currentRadioMode?: string | null;
+}): SetRadioFrequencyParams | null {
+  const snappedFrequency = snapFrequencyToStep(frequency, stepHz);
+  const roundedFrequency = Math.round(snappedFrequency);
+  const description = `${(snappedFrequency / 1_000_000).toFixed(3)} MHz`;
+
+  if (engineMode === 'voice') {
+    return {
+      frequency: roundedFrequency,
+      mode: 'VOICE',
+      band: 'Custom',
+      description,
+      radioMode: voiceRadioMode ?? currentRadioMode ?? 'USB',
+      repeaterShift: 'none',
+      toneMode: 'none',
+    };
+  }
+
+  if (engineMode === 'cw') {
+    return {
+      frequency: roundedFrequency,
+      mode: 'CW',
+      radioMode: 'CW',
+      band: getBandFromFrequency(roundedFrequency),
+      description,
+    };
+  }
+
+  return null;
+}
+
+export function buildRadioSdrTxBandOverlays({
+  engineMode,
+  isRadioSdrSelected,
+  currentRadioFrequency,
+  voice,
+  voiceOverlayIsInteractive,
+}: {
+  engineMode: EngineMode;
+  isRadioSdrSelected: boolean;
+  currentRadioFrequency: number | null | undefined;
+  voice: SpectrumSessionVoiceState | null | undefined;
+  voiceOverlayIsInteractive: boolean;
+}): TxBandOverlay[] {
+  if (!isRadioSdrSelected || typeof currentRadioFrequency !== 'number' || !Number.isFinite(currentRadioFrequency)) {
+    return [];
+  }
+
+  if (engineMode === 'cw') {
+    return [{
+      id: 'cw-current-tx',
+      label: 'TX',
+      lineFrequency: currentRadioFrequency,
+      rangeStartFrequency: currentRadioFrequency,
+      rangeEndFrequency: currentRadioFrequency,
+      draggable: false,
+    }];
+  }
+
+  if (engineMode !== 'voice' || !voice?.offsetModel || !voice.occupiedBandwidthHz) {
+    return [];
+  }
+
+  const bandwidthHz = voice.occupiedBandwidthHz;
+  let rangeStartFrequency = currentRadioFrequency;
+  let rangeEndFrequency = currentRadioFrequency;
+
+  switch (voice.offsetModel) {
+    case 'upper':
+      rangeStartFrequency = currentRadioFrequency;
+      rangeEndFrequency = currentRadioFrequency + bandwidthHz;
+      break;
+    case 'lower':
+      rangeStartFrequency = currentRadioFrequency - bandwidthHz;
+      rangeEndFrequency = currentRadioFrequency;
+      break;
+    case 'symmetric':
+      rangeStartFrequency = currentRadioFrequency - bandwidthHz / 2;
+      rangeEndFrequency = currentRadioFrequency + bandwidthHz / 2;
+      break;
+  }
+
+  return [{
+    id: 'voice-current-tx',
+    label: 'TX',
+    lineFrequency: currentRadioFrequency,
+    rangeStartFrequency,
+    rangeEndFrequency,
+    draggable: voiceOverlayIsInteractive,
+  }];
 }
 
 function cloneManualRangeSettings(settings: ManualRangeSettings): ManualRangeSettings {
@@ -410,6 +515,7 @@ interface SpectrumMarkerResolutionInput {
   showRxMarkers: boolean;
   showTxMarkers: boolean;
   isVoiceMode: boolean;
+  isCwMode?: boolean;
   rxFrequencies: RxFrequency[];
   txFrequencies: TxFrequency[];
 }
@@ -421,10 +527,11 @@ export function resolveSpectrumMarkerFrequencies({
   showRxMarkers,
   showTxMarkers,
   isVoiceMode,
+  isCwMode = false,
   rxFrequencies,
   txFrequencies,
 }: SpectrumMarkerResolutionInput): { rxFrequencies: RxFrequency[]; txFrequencies: TxFrequency[] } {
-  if (!showMarkers || isVoiceMode) {
+  if (!showMarkers || isVoiceMode || isCwMode) {
     return { rxFrequencies: [], txFrequencies: [] };
   }
 
@@ -441,13 +548,14 @@ export function resolveSpectrumMarkerFrequencies({
 export function resolveCollapsedSpectrumMarkerFrequencies({
   showMarkers,
   isVoiceMode,
+  isCwMode,
   rxFrequencies,
   txFrequencies,
-}: Pick<SpectrumMarkerResolutionInput, 'showMarkers' | 'isVoiceMode' | 'rxFrequencies' | 'txFrequencies'>): {
+}: Pick<SpectrumMarkerResolutionInput, 'showMarkers' | 'isVoiceMode' | 'isCwMode' | 'rxFrequencies' | 'txFrequencies'>): {
   rxFrequencies: RxFrequency[];
   txFrequencies: TxFrequency[];
 } {
-  if (!showMarkers || isVoiceMode) {
+  if (!showMarkers || isVoiceMode || isCwMode) {
     return { rxFrequencies: [], txFrequencies: [] };
   }
 
@@ -577,6 +685,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const isRadioSdrSelected = effectiveSelectedKind === RADIO_SDR_SOURCE;
   const isOpenWebRXSdrSelected = effectiveSelectedKind === OPENWEBRX_SDR_SOURCE;
   const isVoiceMode = engineMode === 'voice';
+  const isCwMode = engineMode === 'cw';
   const sourceMode = sessionState?.sourceMode ?? 'unknown';
   const isFixedSpectrumMode = sourceMode === 'fixed' || sourceMode === 'scroll-fixed';
   const isOpenWebRXDetailMode = isOpenWebRXSdrSelected && sourceMode === 'detail';
@@ -730,38 +839,36 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     }
   }, [currentOperatorId, handleTxFrequencyChange]);
 
-  const handleVoiceFrequencyChange = useCallback(async (frequency: number) => {
+  const handleRadioSdrFrequencyGesture = useCallback(async (frequency: number) => {
     if (!connection.state.isConnected || !canWriteFrequency || frequencyGestureTarget !== 'radio-frequency') {
       return;
     }
 
-    const snappedFrequency = snapFrequencyToStep(frequency, frequencyGestureStepHz);
-    const nextRadioMode = sessionState?.voice.radioMode ?? currentRadioMode ?? 'USB';
+    const request = buildRadioSdrFrequencyRequest({
+      engineMode,
+      frequency,
+      stepHz: frequencyGestureStepHz,
+      voiceRadioMode: sessionState?.voice.radioMode,
+      currentRadioMode,
+    });
+    if (!request) return;
 
     try {
-      const response = await api.setRadioFrequency({
-        frequency: Math.round(snappedFrequency),
-        mode: 'VOICE',
-        band: 'Custom',
-        description: `${(snappedFrequency / 1_000_000).toFixed(3)} MHz`,
-        radioMode: nextRadioMode,
-        repeaterShift: 'none',
-        toneMode: 'none',
-      });
+      const response = await api.setRadioFrequency(request);
       if (response.success) {
         resetOperatorsAfterOperatingStateChange();
       }
     } catch (error) {
-      logger.error('Failed to set voice frequency from SDR overlay', error);
+      logger.error('Failed to set radio frequency from SDR overlay', error);
     }
-  }, [canWriteFrequency, connection.state.isConnected, currentRadioMode, frequencyGestureStepHz, frequencyGestureTarget, resetOperatorsAfterOperatingStateChange, sessionState?.voice.radioMode]);
+  }, [canWriteFrequency, connection.state.isConnected, currentRadioMode, engineMode, frequencyGestureStepHz, frequencyGestureTarget, resetOperatorsAfterOperatingStateChange, sessionState?.voice.radioMode]);
 
   const handleRadioFrequencyGesture = useCallback((frequency: number) => {
     if (!canWriteFrequency || frequencyGestureTarget !== 'radio-frequency') {
       return;
     }
-    void handleVoiceFrequencyChange(frequency);
-  }, [canWriteFrequency, frequencyGestureTarget, handleVoiceFrequencyChange]);
+    void handleRadioSdrFrequencyGesture(frequency);
+  }, [canWriteFrequency, frequencyGestureTarget, handleRadioSdrFrequencyGesture]);
 
   const handleCollapseSpectrum = useCallback(() => {
     const radioService = connection.state.radioService;
@@ -906,9 +1013,11 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     showRxMarkers,
     showTxMarkers,
     isVoiceMode,
+    isCwMode,
     rxFrequencies,
     txFrequencies,
   }), [
+    isCwMode,
     isOpenWebRXDetailMode,
     isOpenWebRXSdrSelected,
     isVoiceMode,
@@ -921,9 +1030,11 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const collapsedSpectrumMarkers = React.useMemo(() => resolveCollapsedSpectrumMarkerFrequencies({
     showMarkers,
     isVoiceMode,
+    isCwMode,
     rxFrequencies,
     txFrequencies,
   }), [
+    isCwMode,
     isVoiceMode,
     rxFrequencies,
     showMarkers,
@@ -931,45 +1042,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   ]);
   const effectiveHoverFrequency = hoverFrequency;
   const openWebRXFullRange = isOpenWebRXSdrSelected ? (streamStatus.fullRange ?? openWebRXStreamRange) : null;
-  const voiceBandOverlay: TxBandOverlay[] = React.useMemo(() => {
-    if (
-      !isVoiceMode
-      || !isRadioSdrSelected
-      || !sessionState?.currentRadioFrequency
-      || !sessionState.voice.offsetModel
-      || !sessionState.voice.occupiedBandwidthHz
-    ) {
-      return [];
-    }
-    const lineFrequency = sessionState.currentRadioFrequency;
-    const bandwidthHz = sessionState.voice.occupiedBandwidthHz;
-    let rangeStartFrequency = lineFrequency;
-    let rangeEndFrequency = lineFrequency;
-
-    switch (sessionState.voice.offsetModel) {
-      case 'upper':
-        rangeStartFrequency = lineFrequency;
-        rangeEndFrequency = lineFrequency + bandwidthHz;
-        break;
-      case 'lower':
-        rangeStartFrequency = lineFrequency - bandwidthHz;
-        rangeEndFrequency = lineFrequency;
-        break;
-      case 'symmetric':
-        rangeStartFrequency = lineFrequency - bandwidthHz / 2;
-        rangeEndFrequency = lineFrequency + bandwidthHz / 2;
-        break;
-    }
-
-    return [{
-      id: 'voice-current-tx',
-      label: 'TX',
-      lineFrequency,
-      rangeStartFrequency,
-      rangeEndFrequency,
-      draggable: voiceOverlayIsInteractive,
-    }];
-  }, [isRadioSdrSelected, isVoiceMode, sessionState, voiceOverlayIsInteractive]);
+  const radioSdrTxBandOverlays = React.useMemo(() => buildRadioSdrTxBandOverlays({
+    engineMode,
+    isRadioSdrSelected,
+    currentRadioFrequency: sessionState?.currentRadioFrequency,
+    voice: sessionState?.voice,
+    voiceOverlayIsInteractive,
+  }), [engineMode, isRadioSdrSelected, sessionState?.currentRadioFrequency, sessionState?.voice, voiceOverlayIsInteractive]);
   const presetMarkers: PresetMarker[] = React.useMemo(() => {
     if (!isVoiceMode) {
       return [];
@@ -1382,13 +1461,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
             : 'baseband'
         }
         interactionFrequencyStepHz={frequencyGestureStepHz}
-        txBandOverlays={voiceBandOverlay}
+        txBandOverlays={radioSdrTxBandOverlays}
         frequencyBandOverlays={isAudioSpectrumSelected ? frequencyBandOverlays : []}
         presetMarkers={presetMarkers}
         rxFrequencies={displaySpectrumMarkers.rxFrequencies}
         txFrequencies={displaySpectrumMarkers.txFrequencies}
         onTxFrequencyChange={displayTxFrequencyChange}
-        onTxBandOverlayFrequencyChange={voiceOverlayIsInteractive ? (_id, frequency) => void handleVoiceFrequencyChange(frequency) : undefined}
+        onTxBandOverlayFrequencyChange={voiceOverlayIsInteractive ? (_id, frequency) => void handleRadioSdrFrequencyGesture(frequency) : undefined}
         onFrequencyBandOverlayPreviewChange={isAudioSpectrumSelected ? onFrequencyBandOverlayPreviewChange : undefined}
         onFrequencyBandOverlayCommit={isAudioSpectrumSelected ? onFrequencyBandOverlayCommit : undefined}
         onPresetMarkerClick={presetMarkers.length > 0 && canWriteFrequency && frequencyGestureTarget === 'radio-frequency' ? handleRadioFrequencyGesture : undefined}
