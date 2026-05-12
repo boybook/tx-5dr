@@ -101,6 +101,10 @@ export const CWPlaceholderValuesSchema = z.object({
   myCall: z.string().optional(),
   /** 当前通联对象呼号，用于 {HISCALL} */
   hisCall: z.string().optional(),
+  /** 发送的 RST 信号报告，用于 {TRST} */
+  trst: z.string().optional(),
+  /** 接收的 RST 信号报告，用于 {RRST} */
+  rrst: z.string().optional(),
 });
 
 export type CWPlaceholderValues = z.infer<typeof CWPlaceholderValuesSchema>;

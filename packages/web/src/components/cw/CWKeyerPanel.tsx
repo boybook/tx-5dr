@@ -138,7 +138,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const radioState = useRadioState();
   const { operators } = useOperators();
   const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
-  const { hisCallsign } = useCWQSODraft();
+  const { hisCallsign, trst, rrst } = useCWQSODraft();
 
   const textInputRef = useRef<HTMLDivElement>(null);
   const slotUpdateTimersRef = useRef<Record<string, number>>({});
@@ -194,7 +194,9 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const placeholderValues = useMemo<CWPlaceholderValues>(() => ({
     myCall: myCallsign || undefined,
     hisCall: hisCallsign || undefined,
-  }), [hisCallsign, myCallsign]);
+    trst: trst || undefined,
+    rrst: rrst || undefined,
+  }), [hisCallsign, myCallsign, trst, rrst]);
   const isActive = cwKeyerStatus?.active ?? false;
   const statusMode = cwKeyerStatus?.mode ?? 'idle';
   const activeSlotId = (statusMode === 'playing' || statusMode === 'repeat-waiting')
@@ -282,17 +284,35 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const canIncreaseSlots = (panel?.slotCount ?? 0) < (panel?.maxSlotCount ?? 12);
   const canDecreaseSlots = (panel?.slotCount ?? 3) > 3;
 
-  const getPlaceholderLabel = useCallback((placeholder: CWPlaceholderName): string => (
-    placeholder === 'MYCALL'
-      ? t('radio:cw.placeholderMyCall', 'Current operator callsign')
-      : t('radio:cw.placeholderHisCall', 'QSO log station callsign')
-  ), [t]);
+  const getPlaceholderLabel = useCallback((placeholder: CWPlaceholderName): string => {
+    switch (placeholder) {
+      case 'MYCALL':
+        return t('radio:cw.placeholderMyCall', 'Current operator callsign');
+      case 'HISCALL':
+        return t('radio:cw.placeholderHisCall', 'QSO log station callsign');
+      case 'TRST':
+        return t('radio:cw.placeholderTrst', 'Sent signal report');
+      case 'RRST':
+        return t('radio:cw.placeholderRrst', 'Received signal report');
+      default:
+        return '';
+    }
+  }, [t]);
 
-  const getPlaceholderMissingLabel = useCallback((placeholder: CWPlaceholderName): string => (
-    placeholder === 'MYCALL'
-      ? t('radio:cw.placeholderMissingMyCall', 'Operator callsign')
-      : t('radio:cw.placeholderMissingHisCall', 'Station callsign')
-  ), [t]);
+  const getPlaceholderMissingLabel = useCallback((placeholder: CWPlaceholderName): string => {
+    switch (placeholder) {
+      case 'MYCALL':
+        return t('radio:cw.placeholderMissingMyCall', 'Operator callsign');
+      case 'HISCALL':
+        return t('radio:cw.placeholderMissingHisCall', 'Station callsign');
+      case 'TRST':
+        return t('radio:cw.placeholderMissingTrst', 'Sent RST');
+      case 'RRST':
+        return t('radio:cw.placeholderMissingRrst', 'Received RST');
+      default:
+        return '';
+    }
+  }, [t]);
 
   const getMissingPlaceholderText = useCallback((placeholders: CWPlaceholderName[]): string => {
     const labels = placeholders.map(getPlaceholderLabel).join(', ');
@@ -351,7 +371,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const renderPlaceholderHint = useCallback(() => (
     <div className="mb-2 flex flex-wrap items-center gap-1.5 rounded-lg bg-content2 px-2 py-1.5 text-[11px] text-default-500">
       <span>{t('radio:cw.placeholderHint', 'Placeholders')}</span>
-      {(['MYCALL', 'HISCALL'] as CWPlaceholderName[]).map((placeholder) => (
+      {(['MYCALL', 'HISCALL', 'TRST', 'RRST'] as CWPlaceholderName[]).map((placeholder) => (
         <Tooltip
           key={placeholder}
           content={getPlaceholderLabel(placeholder)}
@@ -360,7 +380,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
           <Chip
             size="sm"
             variant="flat"
-            color={placeholder === 'MYCALL' ? 'primary' : 'warning'}
+            color={placeholder === 'MYCALL' ? 'primary' : placeholder === 'HISCALL' ? 'warning' : 'secondary'}
             className="h-5 px-1 font-mono text-[10px] font-semibold"
           >
             {`{${placeholder}}`}

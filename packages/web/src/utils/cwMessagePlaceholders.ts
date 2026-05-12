@@ -1,8 +1,10 @@
-export type CWPlaceholderName = 'MYCALL' | 'HISCALL';
+export type CWPlaceholderName = 'MYCALL' | 'HISCALL' | 'TRST' | 'RRST';
 
 export interface CWPlaceholderValues {
   myCall?: string;
   hisCall?: string;
+  trst?: string;
+  rrst?: string;
 }
 
 export type CWMessageSegment =
@@ -21,16 +23,29 @@ export interface ResolvedCWMessage {
   unresolved: CWPlaceholderName[];
 }
 
-const PLACEHOLDER_PATTERN = /\{(MYCALL|HISCALL)\}/gi;
+const PLACEHOLDER_PATTERN = /\{(MYCALL|HISCALL|TRST|RRST)\}/gi;
 
 function normalizeCallsign(value: string | undefined): string {
   return value?.trim().toUpperCase() ?? '';
 }
 
+function normalizeRst(value: string | undefined): string {
+  return value?.trim().toUpperCase() ?? '';
+}
+
 function resolvePlaceholder(name: CWPlaceholderName, values: CWPlaceholderValues): string {
-  return name === 'MYCALL'
-    ? normalizeCallsign(values.myCall)
-    : normalizeCallsign(values.hisCall);
+  switch (name) {
+    case 'MYCALL':
+      return normalizeCallsign(values.myCall);
+    case 'HISCALL':
+      return normalizeCallsign(values.hisCall);
+    case 'TRST':
+      return normalizeRst(values.trst);
+    case 'RRST':
+      return normalizeRst(values.rrst);
+    default:
+      return '';
+  }
 }
 
 export function resolveCWMessagePlaceholders(

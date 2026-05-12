@@ -2,10 +2,14 @@ import { useSyncExternalStore } from 'react';
 
 interface CWQSODraftState {
   hisCallsign: string;
+  trst: string;
+  rrst: string;
 }
 
 let state: CWQSODraftState = {
   hisCallsign: '',
+  trst: '5NN',
+  rrst: '5NN',
 };
 
 const listeners = new Set<() => void>();
@@ -31,6 +35,24 @@ export function setCWQSOHisCallsign(hisCallsign: string): void {
     return;
   }
   state = { ...state, hisCallsign: normalized };
+  emit();
+}
+
+export function setCWQSOTrst(trst: string): void {
+  const normalized = trst.trim().toUpperCase();
+  if (state.trst === normalized) {
+    return;
+  }
+  state = { ...state, trst: normalized };
+  emit();
+}
+
+export function setCWQSORrst(rrst: string): void {
+  const normalized = rrst.trim().toUpperCase();
+  if (state.rrst === normalized) {
+    return;
+  }
+  state = { ...state, rrst: normalized };
   emit();
 }
 
