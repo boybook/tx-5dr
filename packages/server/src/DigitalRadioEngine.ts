@@ -887,7 +887,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     const pskreporterService = await this.initializeDomainServicesPhase();
     await this.initializeSubsystemAssemblyPhase(pskreporterService);
     this.restorePersistedModePhase();
-    this.finalizeLifecyclePhase();
+    await this.finalizeLifecyclePhase();
 
     // rigctld bridge: lifetime-independent of the engine. Start early so
     // external clients can poll while the radio spins up.
@@ -1122,10 +1122,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
   }
 
-  private finalizeLifecyclePhase(): void {
+  private async finalizeLifecyclePhase(): Promise<void> {
     logger.info('Initialization phase: lifecycle');
 
-    this.engineLifecycle.rebuildResourcePlan();
+    await this.engineLifecycle.rebuildResourcePlan();
     this.engineLifecycle.initializeStateMachine();
   }
 
@@ -1530,9 +1530,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private async switchEngineMode(targetEngineMode: EngineMode, targetMode: ModeDescriptor): Promise<void> {
     let engineState = this.engineLifecycle?.getEngineState() ?? EngineState.IDLE;
     let shouldResumeAfterSwitch = engineState === EngineState.RUNNING || engineState === EngineState.STARTING;
-    // CW uses independent serial port and lazy-initializes CWKeyerManager.
-    // Going TO CW: stop engine but preserve radio connection, rebuild CW plan, don't restart.
-    // Going FROM CW: normal stop/start cycle to restore digital/voice resources.
+    // CW keying can lazy-init its own manager, but RX monitor/decoder still
+    // need the engine audio chain. Preserve the user's running/idle intent.
     const comingFromCW = this.engineMode === 'cw';
     const goingToCW = targetEngineMode === 'cw';
     logger.info(`Switching engine mode: ${this.engineMode}/${this.currentMode.name} -> ${targetEngineMode}/${targetMode.name}`);
@@ -1591,7 +1590,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     for (const op of this._operatorManager?.getAllOperators() ?? []) {
       op.setMode(this.currentMode);
     }
-    this.engineLifecycle.rebuildResourcePlan();
+    await this.engineLifecycle.rebuildResourcePlan();
 
     const configManager = ConfigManager.getInstance();
     await configManager.setLastEngineMode(targetEngineMode);
@@ -1611,9 +1610,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.squelchStatusMonitor.reevaluate();
     this.physicalPttMonitor.reevaluate();
 
-    // CW target: engine start not needed (CWKeyerManager lazy-inits on first key action).
-    // CW→digital / other: restart if engine was running (or should resume).
-    if (!goingToCW && (shouldResumeAfterSwitch || comingFromCW)) {
+    // Keep the engine running across mode switches only if it was running before.
+    if (shouldResumeAfterSwitch) {
       await this.engineLifecycle.startAndWaitForRunning();
       this.emitStatusSnapshot();
     }

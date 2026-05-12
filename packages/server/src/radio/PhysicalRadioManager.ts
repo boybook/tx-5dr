@@ -60,6 +60,7 @@ const logger = createLogger('PhysicalRadioManager');
 const NORMAL_FREQUENCY_POLL_MS = 2000;
 const FAST_FREQUENCY_POLL_MS = 500;
 const FAST_FREQUENCY_POLL_WINDOW_MS = 5000;
+const HAMLIB_RIG_SCHEMA_TIMEOUT_MS = 3000;
 
 /** Hamlib valid frequency range: 1 kHz to 10 GHz */
 const HAMLIB_MIN_FREQUENCY_HZ = 1000;
@@ -70,6 +71,23 @@ function isFrequencyInHamlibRange(freq: unknown): freq is number {
     && Number.isFinite(freq)
     && freq >= HAMLIB_MIN_FREQUENCY_HZ
     && freq <= HAMLIB_MAX_FREQUENCY_HZ;
+}
+
+function withHamlibSchemaTimeout<T>(
+  operation: string,
+  promise: Promise<T>,
+  timeoutMs = HAMLIB_RIG_SCHEMA_TIMEOUT_MS,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(`${operation} operation timeout`)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
 }
 
 /**
@@ -201,6 +219,12 @@ type RigConfigFieldSchema = {
   type: string;
   numeric?: { min: number; max: number; step: number };
   options?: string[];
+};
+
+type TemporaryHamlibRig = {
+  getConfigSchema?: () => Promise<unknown[]>;
+  getPortCaps?: () => Promise<HamlibPortCaps>;
+  destroy?: () => Promise<unknown>;
 };
 
 function deriveRigEndpointKind(portType?: string): RigEndpointKind {
@@ -1766,13 +1790,17 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     endpointKind: RigEndpointKind;
     fields: RigConfigFieldSchema[];
   }> {
+    let rig: TemporaryHamlibRig | null = null;
     try {
       const hamlibModule = await import('hamlib');
       const { HamLib } = hamlibModule;
-      const rig = new HamLib(rigModel) as any;
-      const fields = typeof rig.getConfigSchema === 'function' ? rig.getConfigSchema() : [];
-      const portCaps = typeof rig.getPortCaps === 'function' ? rig.getPortCaps() as HamlibPortCaps : undefined;
-      await rig.destroy().catch(() => {});
+      rig = new HamLib(rigModel) as unknown as TemporaryHamlibRig;
+      const fields = typeof rig?.getConfigSchema === 'function'
+        ? await withHamlibSchemaTimeout('getRigConfigSchema.getConfigSchema', rig.getConfigSchema())
+        : [];
+      const portCaps = typeof rig?.getPortCaps === 'function'
+        ? await withHamlibSchemaTimeout('getRigConfigSchema.getPortCaps', rig.getPortCaps())
+        : undefined;
 
       const portType = typeof portCaps?.portType === 'string' ? portCaps.portType : 'other';
       return {
@@ -1789,6 +1817,14 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         endpointKind: 'device-path',
         fields: [],
       };
+    } finally {
+      if (typeof rig?.destroy === 'function') {
+        try {
+          await rig.destroy();
+        } catch {
+          // Temporary rig cleanup is best-effort; schema probing already falls back safely.
+        }
+      }
     }
   }
 

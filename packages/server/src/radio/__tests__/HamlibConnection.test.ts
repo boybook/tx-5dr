@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HamlibConnection } from '../connections/HamlibConnection.js';
 import { RadioConnectionState } from '../connections/IRadioConnection.js';
+import type { MeterReadContext } from '../connections/meter/types.js';
 import { HamlibMeterReader } from '../connections/meter/HamlibMeterReader.js';
 import { defaultHamlibProfile } from '../connections/meter/profiles/index.js';
+import { RadioErrorCode } from '../../utils/errors/RadioError.js';
 
 type MockRig = {
   setFrequency: ReturnType<typeof vi.fn>;
@@ -103,18 +105,18 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
     getDcd: vi.fn().mockResolvedValue(false),
     getFunction: vi.fn().mockResolvedValue(false),
     setFunction: vi.fn().mockResolvedValue(0),
-    getPreampValues: vi.fn().mockReturnValue([]),
-    getAttenuatorValues: vi.fn().mockReturnValue([]),
-    getAgcLevels: vi.fn().mockReturnValue([]),
-    getFilterList: vi.fn().mockReturnValue([
+    getPreampValues: vi.fn().mockResolvedValue([]),
+    getAttenuatorValues: vi.fn().mockResolvedValue([]),
+    getAgcLevels: vi.fn().mockResolvedValue([]),
+    getFilterList: vi.fn().mockResolvedValue([
       { modes: ['USB', 'LSB'], width: 1800 },
       { modes: ['USB', 'LSB'], width: 2400 },
       { modes: ['USB', 'LSB'], width: 3000 },
     ]),
-    getRfPowerStepTable: vi.fn().mockReturnValue(null),
-    getPassbandNarrow: vi.fn().mockReturnValue(1800),
-    getPassbandNormal: vi.fn().mockReturnValue(2400),
-    getPassbandWide: vi.fn().mockReturnValue(3000),
+    getRfPowerStepTable: vi.fn().mockResolvedValue(null),
+    getPassbandNarrow: vi.fn().mockResolvedValue(1800),
+    getPassbandNormal: vi.fn().mockResolvedValue(2400),
+    getPassbandWide: vi.fn().mockResolvedValue(3000),
     ...rigOverrides,
   };
   const testConnection = asTestConnection(connection);
@@ -317,7 +319,7 @@ describe('HamlibConnection', () => {
 
   it('uses Hamlib-provided watt labels for discrete RF power steps without local correction', async () => {
     const { connection } = createConnectedConnection({
-      getRfPowerStepTable: vi.fn().mockReturnValue([
+      getRfPowerStepTable: vi.fn().mockResolvedValue([
         { normalized: 0.1, milliwatts: 10000, watts: 10 },
         { normalized: 0.5, milliwatts: 50000, watts: 50 },
         { normalized: 1, milliwatts: 100000, watts: 100 },
@@ -336,7 +338,7 @@ describe('HamlibConnection', () => {
 
   it('falls back to unlabeled discrete RF power steps when Hamlib does not provide raw power values', async () => {
     const { connection } = createConnectedConnection({
-      getRfPowerStepTable: vi.fn().mockReturnValue([
+      getRfPowerStepTable: vi.fn().mockResolvedValue([
         { normalized: 0.1, milliwatts: 0, watts: 0 },
         { normalized: 1, milliwatts: 0, watts: 0 },
       ]),
@@ -406,7 +408,7 @@ describe('HamlibConnection', () => {
 
   it('derives supported mode bandwidth options from hamlib filter list', async () => {
     const { connection } = createConnectedConnection({
-      getFilterList: vi.fn().mockReturnValue([
+      getFilterList: vi.fn().mockResolvedValue([
         { modes: ['USB', 'LSB'], width: 3000 },
         { modes: ['USB'], width: 2400 },
         { modes: ['USB'], width: 1800 },
@@ -416,6 +418,28 @@ describe('HamlibConnection', () => {
     });
 
     await expect(connection.getSupportedModeBandwidths()).resolves.toEqual([1800, 2400, 3000]);
+  });
+
+  it('reads passband fallback widths sequentially when the filter list has no matches', async () => {
+    const narrow = createDeferred<number>();
+    const { connection, rig } = createConnectedConnection({
+      getFilterList: vi.fn().mockResolvedValue([]),
+      getPassbandNarrow: vi.fn().mockReturnValue(narrow.promise),
+      getPassbandNormal: vi.fn().mockResolvedValue(2400),
+      getPassbandWide: vi.fn().mockResolvedValue(3000),
+    });
+
+    const promise = connection.getSupportedModeBandwidths();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(rig.getPassbandNarrow).toHaveBeenCalledTimes(1);
+    expect(rig.getPassbandNormal).not.toHaveBeenCalled();
+    expect(rig.getPassbandWide).not.toHaveBeenCalled();
+
+    narrow.resolve(1800);
+    await expect(promise).resolves.toEqual([1800, 2400, 3000]);
+    expect(rig.getPassbandNormal).toHaveBeenCalledTimes(1);
+    expect(rig.getPassbandWide).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the current mode when writing mode bandwidth', async () => {
@@ -654,13 +678,11 @@ describe('HamlibConnection', () => {
     expect(configureSpectrum).not.toHaveBeenCalled();
   });
 
-  it('passes pumpIntervalMs=0 when starting Hamlib managed spectrum and does not time out network CAT tasks', async () => {
+  it('times out stuck Hamlib managed spectrum start while still disabling the helper pump', async () => {
     vi.useFakeTimers();
     try {
       const { connection } = createConnectedConnection();
-      const start = createDeferred<boolean>();
-      const startManagedSpectrum = vi.fn().mockReturnValue(start.promise);
-      const settled = vi.fn();
+      const startManagedSpectrum = vi.fn().mockReturnValue(new Promise<boolean>(() => {}));
 
       asTestConnection(connection).currentConfig = {
         type: 'network',
@@ -674,18 +696,51 @@ describe('HamlibConnection', () => {
       };
 
       const promise = connection.startManagedSpectrum(() => {}, { speed: 10 });
-      promise.then(settled, settled);
+      const assertion = expect(promise).rejects.toMatchObject({
+        code: RadioErrorCode.OPERATION_TIMEOUT,
+        context: expect.objectContaining({
+          operation: 'startManagedSpectrum',
+        }),
+      });
       await Promise.resolve();
 
       expect(startManagedSpectrum).toHaveBeenCalledWith({ speed: 10, pumpIntervalMs: 0 });
 
-      await vi.advanceTimersByTimeAsync(6_000);
-      await Promise.resolve();
-      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-      start.resolve(true);
-      await expect(promise).resolves.toBeUndefined();
-      expect(settled).toHaveBeenCalledTimes(1);
+  it('times out stuck Hamlib spectrum support and stop calls', async () => {
+    vi.useFakeTimers();
+    try {
+      const { connection } = createConnectedConnection();
+      const getSpectrumSupportSummary = vi.fn().mockReturnValue(new Promise(() => {}));
+      const stopManagedSpectrum = vi.fn().mockReturnValue(new Promise(() => {}));
+
+      asTestConnection(connection).spectrumController = {
+        getSpectrumSupportSummary,
+        stopManagedSpectrum,
+        off: vi.fn(),
+      };
+
+      const supportPromise = connection.getSpectrumSupportSummary();
+      const supportAssertion = expect(supportPromise).rejects.toMatchObject({
+        code: RadioErrorCode.OPERATION_TIMEOUT,
+        context: expect.objectContaining({ operation: 'getSpectrumSupportSummary' }),
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await supportAssertion;
+
+      const stopPromise = connection.stopManagedSpectrum();
+      const stopAssertion = expect(stopPromise).rejects.toMatchObject({
+        code: RadioErrorCode.OPERATION_TIMEOUT,
+        context: expect.objectContaining({ operation: 'stopManagedSpectrum' }),
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await stopAssertion;
     } finally {
       vi.useRealTimers();
     }
@@ -711,52 +766,88 @@ describe('HamlibConnection', () => {
     await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
   });
 
-  it('times out serial CAT tasks with a warning and continues the queue', async () => {
-    vi.useFakeTimers();
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const read = createDeferred<number>();
-      const { connection, rig } = createConnectedConnection({
-        getFrequency: vi.fn().mockReturnValue(read.promise),
-      });
+  it('converts native Hamlib global-lock timeout rejections to operation timeouts', async () => {
+    const nativeError = new Error('HAMLIB_GLOBAL_LOCK_TIMEOUT: timed out waiting for Hamlib global lock operation=GetFrequency timeoutMs=5000') as Error & { code?: string };
+    nativeError.code = 'HAMLIB_GLOBAL_LOCK_TIMEOUT';
+    const { connection } = createConnectedConnection({
+      getFrequency: vi.fn().mockRejectedValue(nativeError),
+    });
 
-      asTestConnection(connection).currentConfig = {
-        type: 'serial',
-        serial: { path: '/dev/ttyUSB0', rigModel: 1234 },
+    asTestConnection(connection).currentConfig = {
+      type: 'serial',
+      serial: { path: '/dev/ttyUSB0', rigModel: 1234 },
+    };
+
+    await expect(connection.getFrequency()).rejects.toMatchObject({
+      code: RadioErrorCode.OPERATION_TIMEOUT,
+      context: expect.objectContaining({
+        operation: 'getFrequency',
+        nativeCode: 'HAMLIB_GLOBAL_LOCK_TIMEOUT',
+        devicePath: '/dev/ttyUSB0',
+      }),
+    });
+  });
+
+  it('times out the extra Yaesu meter diagnostic strength read so polling can finish', async () => {
+    vi.useFakeTimers();
+    try {
+      const { connection, rig } = createConnectedConnection({
+        getLevel: vi.fn().mockImplementation((level: string) => {
+          if (level === 'RAWSTR') {
+            return Promise.resolve(150);
+          }
+          if (level === 'STRENGTH') {
+            return new Promise<number>(() => {});
+          }
+          return Promise.resolve(0);
+        }),
+      });
+      const testConnection = asTestConnection(connection);
+      testConnection.supportedLevels = new Set(['RAWSTR', 'STRENGTH']);
+      testConnection.meterDecodeStrategy = {
+        name: 'yaesu',
+        sourceLevel: 'RAWSTR',
+        displayStyle: 's-meter',
+        label: 'yaesu-rawstr',
+      };
+      testConnection.meterReader = {
+        readAll: vi.fn(async (ctx: MeterReadContext) => {
+          const raw = await ctx.getLevel('RAWSTR');
+          return {
+            alc: null,
+            swr: null,
+            power: null,
+            level: raw === null ? null : { raw, value: raw, formatted: 'S9', displayStyle: 's-meter' },
+          };
+        }),
       };
 
-      const first = connection.getFrequency().catch((error: Error) => error);
-      await Promise.resolve();
-      const second = connection.setFrequency(7200000);
-
+      const pollPromise = (connection as unknown as { pollMeters: () => Promise<void> }).pollMeters();
       await vi.advanceTimersByTimeAsync(5_000);
-      await Promise.resolve();
 
-      await expect(first).resolves.toMatchObject({
-        message: 'getFrequency timed out after 5000ms',
-      });
-      await expect(second).resolves.toBeUndefined();
-      expect(rig.setFrequency).toHaveBeenCalledWith(7200000);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('串口 CAT 请求执行超时，已跳过'),
-        expect.objectContaining({
-          task: 'getFrequency',
-          timeoutMs: 5000,
-          action: 'skip-and-continue',
-          connectionType: 'serial',
-          serialPath: '/dev/ttyUSB0',
-        }),
-      );
+      await expect(pollPromise).resolves.toBeUndefined();
+      await expect(connection.getFrequency()).resolves.toBe(7100000);
+      expect(rig.getLevel).toHaveBeenCalledWith('RAWSTR');
+      expect(rig.getLevel).toHaveBeenCalledWith('STRENGTH');
     } finally {
-      warnSpy.mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  it('runs waitCWMessage through the CAT queue', async () => {
+    const { connection, rig } = createConnectedConnection();
+    const waitMorse = vi.fn().mockResolvedValue(0);
+    (rig as unknown as { waitMorse: typeof waitMorse }).waitMorse = waitMorse;
+
+    await expect(connection.waitCWMessage()).resolves.toBeUndefined();
+
+    expect(waitMorse).toHaveBeenCalledTimes(1);
   });
 
   it('maps Hamlib AGC codes to normalized mode names and writes them back as numeric levels', async () => {
     const { connection, rig } = createConnectedConnection({
       getLevel: vi.fn().mockResolvedValue(2),
-      getAgcLevels: vi.fn().mockReturnValue([0, 2, 6]),
+      getAgcLevels: vi.fn().mockResolvedValue([0, 2, 6]),
     });
     const testConnection = asTestConnection(connection);
     testConnection.supportedLevels = new Set(['AGC']);
@@ -774,8 +865,8 @@ describe('HamlibConnection', () => {
       getLevel: vi.fn()
         .mockResolvedValueOnce(10)
         .mockResolvedValueOnce(6),
-      getPreampValues: vi.fn().mockReturnValue([20, 10, 20, 0]),
-      getAttenuatorValues: vi.fn().mockReturnValue([12, 6, 12, 0]),
+      getPreampValues: vi.fn().mockResolvedValue([20, 10, 20, 0]),
+      getAttenuatorValues: vi.fn().mockResolvedValue([12, 6, 12, 0]),
     });
     const testConnection = asTestConnection(connection);
     testConnection.supportedLevels = new Set(['PREAMP', 'ATT']);

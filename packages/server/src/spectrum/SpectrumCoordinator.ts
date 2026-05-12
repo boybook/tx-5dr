@@ -43,6 +43,11 @@ interface OpenWebRXSpectrumCapableAdapter extends Pick<OpenWebRXAudioAdapter,
 
 export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents> {
   private readonly subscriptions = new Map<string, SpectrumKind | null>();
+  private cachedRadioSourceAvailability: {
+    connection: IRadioConnection;
+    rigModel?: number;
+    source: SpectrumSourceAvailability;
+  } | null = null;
   private radioStopTimer: NodeJS.Timeout | null = null;
   private currentScopeConnection: ScopeCapableConnection | null = null;
   private currentHamlibScopeConnection: OfficialSpectrumCapableHamlibConnection | null = null;
@@ -353,19 +358,31 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
         };
       }
 
+      if (activeConnection.getRadioIoQueueSnapshot?.().busy) {
+        const cached = this.getCachedRadioSourceAvailability(activeConnection, config.serial?.rigModel);
+        if (cached) {
+          return cached;
+        }
+
+        return this.createRadioSourceAvailability({
+          supported: true,
+          available: true,
+        });
+      }
+
       try {
         const summary = await activeConnection.getSpectrumSupportSummary();
-        return {
-          kind: 'radio-sdr',
+        const source = this.createRadioSourceAvailability({
           supported: summary.supported,
           available: summary.supported,
-          defaultSelected: false,
           reason: summary.supported ? undefined : 'hamlib_official_spectrum_not_supported',
-          sourceBinCount: null,
-          displayBinCount: SPECTRUM_DISPLAY_BIN_COUNT,
-          supportsWaterfall: true,
-          frequencyRangeMode: 'absolute',
+        });
+        this.cachedRadioSourceAvailability = {
+          connection: activeConnection,
+          rigModel: config.serial?.rigModel,
+          source,
         };
+        return source;
       } catch {
         return {
           kind: 'radio-sdr',
@@ -393,6 +410,42 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
       displayBinCount: SPECTRUM_DISPLAY_BIN_COUNT,
       supportsWaterfall: true,
       frequencyRangeMode: 'absolute',
+    };
+  }
+
+  private createRadioSourceAvailability(options: {
+    supported: boolean;
+    available: boolean;
+    reason?: string;
+  }): SpectrumSourceAvailability {
+    return {
+      kind: 'radio-sdr',
+      supported: options.supported,
+      available: options.available,
+      defaultSelected: false,
+      reason: options.reason,
+      sourceBinCount: null,
+      displayBinCount: SPECTRUM_DISPLAY_BIN_COUNT,
+      supportsWaterfall: true,
+      frequencyRangeMode: 'absolute',
+    };
+  }
+
+  private getCachedRadioSourceAvailability(
+    connection: IRadioConnection,
+    rigModel?: number,
+  ): SpectrumSourceAvailability | null {
+    if (
+      !this.cachedRadioSourceAvailability
+      || this.cachedRadioSourceAvailability.connection !== connection
+      || this.cachedRadioSourceAvailability.rigModel !== rigModel
+    ) {
+      return null;
+    }
+
+    return {
+      ...this.cachedRadioSourceAvailability.source,
+      defaultSelected: false,
     };
   }
 

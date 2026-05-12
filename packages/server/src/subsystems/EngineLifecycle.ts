@@ -129,8 +129,8 @@ export class EngineLifecycle {
   /**
    * 注册所有资源到 ResourceManager
    */
-  registerResources(): void {
-    this.rebuildResourcePlan();
+  registerResources(): Promise<void> {
+    return this.rebuildResourcePlan();
   }
 
   async rebuildResourcePlan(): Promise<void> {

@@ -1343,4 +1343,29 @@ describe('PhysicalRadioManager', () => {
       status: 'idle',
     }));
   });
+
+  it('destroys temporary HamLib rigs when dynamic config schema probing fails', async () => {
+    const destroy = vi.fn().mockResolvedValue(undefined);
+
+    vi.doMock('hamlib', () => ({
+      HamLib: vi.fn().mockImplementation(() => ({
+        getConfigSchema: vi.fn().mockRejectedValue(new Error('schema probe failed')),
+        getPortCaps: vi.fn().mockResolvedValue({ portType: 'serial' }),
+        destroy,
+      })),
+    }));
+
+    try {
+      await expect(PhysicalRadioManager.getRigConfigSchema(1234)).resolves.toMatchObject({
+        rigModel: 1234,
+        portType: 'other',
+        endpointKind: 'device-path',
+        fields: [],
+      });
+      expect(destroy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock('hamlib');
+      vi.resetModules();
+    }
+  });
 });

@@ -2,6 +2,7 @@ import { EventEmitter } from 'eventemitter3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SpectrumCoordinator } from '../SpectrumCoordinator.js';
 import type { IcomScopeFrame } from 'icom-wlan-node';
+import { PhysicalRadioManager } from '../../radio/PhysicalRadioManager.js';
 
 class MockEngine extends EventEmitter {
   readonly spectrumScheduler = new EventEmitter() as EventEmitter & {
@@ -65,5 +66,90 @@ describe('SpectrumCoordinator', () => {
     (coordinator as any).onScopeFrame(createScopeFrame());
 
     expect(frames).toHaveLength(2);
+  });
+
+  it('keeps radio SDR available and skips Hamlib support probing while the CAT queue is busy', async () => {
+    vi.spyOn(PhysicalRadioManager, 'listSupportedRigs').mockResolvedValue([
+      { rigModel: 3073, mfgName: 'Icom', modelName: 'IC-7300' },
+    ] as any);
+    const engine = new MockEngine();
+    const getSpectrumSupportSummary = vi.fn().mockResolvedValue({ supported: true });
+    (engine.radioManager.getConfig as any).mockReturnValue({ type: 'serial', serial: { rigModel: 3073 } });
+    engine.radioManager.isConnected.mockReturnValue(true);
+    (engine.radioManager.getActiveConnection as any).mockReturnValue({
+      type: 'hamlib',
+      getConnectionInfo: () => ({ connectionType: 'serial' }),
+      getSpectrumSupportSummary,
+      getRadioIoQueueSnapshot: () => ({
+        busy: true,
+        criticalActive: false,
+        activeCount: 1,
+        activeTask: 'getFrequency',
+        activeRunMs: 6000,
+        pendingCount: 2,
+        criticalPendingCount: 0,
+        normalPendingCount: 2,
+        oldestPendingTask: 'getLockMode',
+        oldestPendingWaitMs: 1000,
+        dedupedTaskCount: 0,
+      }),
+    });
+
+    const coordinator = new SpectrumCoordinator(engine as any);
+    vi.spyOn(coordinator as any, 'isHamlibSerialScopeConnection').mockReturnValue(true);
+
+    const capabilities = await coordinator.getCapabilities();
+    const radioSource = capabilities.sources.find((source) => source.kind === 'radio-sdr');
+
+    expect(radioSource).toMatchObject({
+      supported: true,
+      available: true,
+    });
+    expect(radioSource?.reason).toBeUndefined();
+    expect(getSpectrumSupportSummary).not.toHaveBeenCalled();
+  });
+
+  it('reuses cached Hamlib radio SDR availability while the CAT queue is busy', async () => {
+    vi.spyOn(PhysicalRadioManager, 'listSupportedRigs').mockResolvedValue([
+      { rigModel: 3073, mfgName: 'Icom', modelName: 'IC-7300' },
+    ] as any);
+    const engine = new MockEngine();
+    let busy = false;
+    const getSpectrumSupportSummary = vi.fn().mockResolvedValue({ supported: true });
+    const connection = {
+      type: 'hamlib',
+      getConnectionInfo: () => ({ connectionType: 'serial' }),
+      getSpectrumSupportSummary,
+      getRadioIoQueueSnapshot: () => ({
+        busy,
+        criticalActive: false,
+        activeCount: busy ? 1 : 0,
+        activeTask: busy ? 'getFrequency' : null,
+        activeRunMs: busy ? 6000 : null,
+        pendingCount: 0,
+        criticalPendingCount: 0,
+        normalPendingCount: 0,
+        oldestPendingTask: null,
+        oldestPendingWaitMs: null,
+        dedupedTaskCount: 0,
+      }),
+    };
+    (engine.radioManager.getConfig as any).mockReturnValue({ type: 'serial', serial: { rigModel: 3073 } });
+    engine.radioManager.isConnected.mockReturnValue(true);
+    (engine.radioManager.getActiveConnection as any).mockReturnValue(connection);
+
+    const coordinator = new SpectrumCoordinator(engine as any);
+    vi.spyOn(coordinator as any, 'isHamlibSerialScopeConnection').mockReturnValue(true);
+
+    const first = await coordinator.getCapabilities();
+    busy = true;
+    const second = await coordinator.getCapabilities();
+    const firstRadioSource = first.sources.find((source) => source.kind === 'radio-sdr');
+    const secondRadioSource = second.sources.find((source) => source.kind === 'radio-sdr');
+
+    expect(getSpectrumSupportSummary).toHaveBeenCalledTimes(1);
+    expect(firstRadioSource).toMatchObject({ supported: true, available: true });
+    expect(secondRadioSource).toMatchObject({ supported: true, available: true });
+    expect(secondRadioSource?.reason).toBeUndefined();
   });
 });

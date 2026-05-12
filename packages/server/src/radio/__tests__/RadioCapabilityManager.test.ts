@@ -173,7 +173,6 @@ describe('RadioCapabilityManager', () => {
         activeCount: busy ? 1 : 0,
         activeTask: busy ? 'startManagedSpectrum' : null,
         activeRunMs: busy ? 5000 : null,
-        activeTimeoutMs: busy ? 5000 : null,
         pendingCount: busy ? 2 : 0,
         criticalPendingCount: 0,
         normalPendingCount: busy ? 2 : 0,

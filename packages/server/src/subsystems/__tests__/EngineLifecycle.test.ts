@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'eventemitter3';
 import { EngineLifecycle } from '../EngineLifecycle.js';
+import { ConfigManager } from '../../config/config-manager.js';
 
-function createLifecycle(initialModeName: 'FT8' | 'VOICE' = 'FT8') {
+function createLifecycle(initialModeName: 'FT8' | 'VOICE' | 'CW' = 'FT8') {
   let currentModeName = initialModeName;
   const resourceManager = {
+    stopAll: vi.fn(async () => undefined),
     clear: vi.fn(),
     register: vi.fn(),
   };
@@ -32,6 +34,10 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' = 'FT8') {
       deviceName: null,
     }),
   };
+
+  vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+    getCWDecoderConfig: vi.fn(() => ({ enabled: false })),
+  } as unknown as ConfigManager);
 
   const lifecycle = new EngineLifecycle({
     engineEmitter: new EventEmitter(),
@@ -62,18 +68,23 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' = 'FT8') {
     lifecycle,
     resourceManager,
     decodeQueue,
-    setModeName: (modeName: 'FT8' | 'VOICE') => {
+    setModeName: (modeName: 'FT8' | 'VOICE' | 'CW') => {
       currentModeName = modeName;
     },
   };
 }
 
 describe('EngineLifecycle', () => {
-  it('rebuilds the digital resource plan from a single lifecycle entrypoint', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('rebuilds the digital resource plan from a single lifecycle entrypoint', async () => {
     const { lifecycle, resourceManager } = createLifecycle('FT8');
 
-    lifecycle.rebuildResourcePlan();
+    await lifecycle.rebuildResourcePlan();
 
+    expect(resourceManager.stopAll).toHaveBeenCalledTimes(1);
     expect(resourceManager.clear).toHaveBeenCalledTimes(1);
     expect(resourceManager.register.mock.calls.map(([config]) => config.name)).toEqual([
       'radio',
@@ -87,13 +98,14 @@ describe('EngineLifecycle', () => {
     ]);
   });
 
-  it('reuses the same rebuild path when switching to the voice resource plan', () => {
+  it('reuses the same rebuild path when switching to the voice resource plan', async () => {
     const { lifecycle, resourceManager, setModeName } = createLifecycle('FT8');
 
-    lifecycle.rebuildResourcePlan();
+    await lifecycle.rebuildResourcePlan();
     setModeName('VOICE');
-    lifecycle.rebuildResourcePlan();
+    await lifecycle.rebuildResourcePlan();
 
+    expect(resourceManager.stopAll).toHaveBeenCalledTimes(2);
     expect(resourceManager.clear).toHaveBeenCalledTimes(2);
     const firstPlanCount = 8; // radio + icom + openwebrx + decodeWorkerPool + clock + slotScheduler + spectrumScheduler + operatorManager
     const secondPlanNames = resourceManager.register.mock.calls
@@ -112,7 +124,7 @@ describe('EngineLifecycle', () => {
   it('starts and stops decode workers through the digital resource plan', async () => {
     const { lifecycle, resourceManager, decodeQueue } = createLifecycle('FT8');
 
-    lifecycle.rebuildResourcePlan();
+    await lifecycle.rebuildResourcePlan();
     const decodeResource = resourceManager.register.mock.calls
       .map(([config]) => config)
       .find((config) => config.name === 'decodeWorkerPool');
@@ -135,10 +147,10 @@ describe('EngineLifecycle', () => {
     expect(decodeQueue.stop).toHaveBeenCalledWith('digital-engine-stop');
   });
 
-  it('does not include decode workers in the voice resource plan', () => {
+  it('does not include decode workers in the voice resource plan', async () => {
     const { lifecycle, resourceManager } = createLifecycle('VOICE');
 
-    lifecycle.rebuildResourcePlan();
+    await lifecycle.rebuildResourcePlan();
 
     const names = resourceManager.register.mock.calls.map(([config]) => config.name);
     expect(names).not.toContain('decodeWorkerPool');
@@ -149,5 +161,23 @@ describe('EngineLifecycle', () => {
       'spectrumScheduler',
       'voiceSessionManager',
     ]);
+  });
+
+  it('uses the CW resource plan without digital decode, slot, or operator resources', async () => {
+    const { lifecycle, resourceManager } = createLifecycle('CW');
+
+    await lifecycle.rebuildResourcePlan();
+
+    const names = resourceManager.register.mock.calls.map(([config]) => config.name);
+    expect(names).toEqual([
+      'radio',
+      'icomWlanAudioAdapter',
+      'openwebrxAudioAdapter',
+      'spectrumScheduler',
+    ]);
+    expect(names).not.toContain('decodeWorkerPool');
+    expect(names).not.toContain('clock');
+    expect(names).not.toContain('slotScheduler');
+    expect(names).not.toContain('operatorManager');
   });
 });

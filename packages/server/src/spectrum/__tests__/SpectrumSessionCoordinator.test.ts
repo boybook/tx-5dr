@@ -51,6 +51,22 @@ function seedRadioSdrFrame(coordinator: SpectrumSessionCoordinator, frequency = 
   };
 }
 
+function createBusySnapshot(busy: boolean) {
+  return {
+    busy,
+    criticalActive: false,
+    activeCount: busy ? 1 : 0,
+    activeTask: busy ? 'getFrequency' : null,
+    activeRunMs: busy ? 6000 : null,
+    pendingCount: busy ? 2 : 0,
+    criticalPendingCount: 0,
+    normalPendingCount: busy ? 2 : 0,
+    oldestPendingTask: busy ? 'getLockMode' : null,
+    oldestPendingWaitMs: busy ? 1000 : null,
+    dedupedTaskCount: 0,
+  };
+}
+
 describe('SpectrumSessionCoordinator', () => {
   it('prefers numeric mode bandwidth for the voice overlay and keeps it cached across transient read failures', async () => {
     const engine = new MockEngine();
@@ -139,7 +155,6 @@ describe('SpectrumSessionCoordinator', () => {
         activeCount: 1,
         activeTask: 'startManagedSpectrum',
         activeRunMs: 6000,
-        activeTimeoutMs: 5000,
         pendingCount: 3,
         criticalPendingCount: 0,
         normalPendingCount: 3,
@@ -157,6 +172,127 @@ describe('SpectrumSessionCoordinator', () => {
     expect(state.kind).toBe('radio-sdr');
     expect(connection.getSpectrumDisplayState).not.toHaveBeenCalled();
     expect(engine.radioManager.getMode).not.toHaveBeenCalled();
+  });
+
+  it('reuses cached digital window controls while the radio I/O queue is busy', async () => {
+    const engine = new MockEngine();
+    const spectrumCoordinator = new EventEmitter();
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    const frequency = 14_074_000;
+    let busy = false;
+    const connection = {
+      configureSpectrumDisplay: vi.fn(),
+      getSpectrumDisplayState: vi.fn().mockResolvedValue({
+        mode: 'fixed',
+        edgeLowHz: frequency - 1000,
+        edgeHighHz: frequency + 4000,
+        spanHz: 5000,
+        supportsFixedEdges: true,
+        supportedSpans: [5000, 10_000],
+      }),
+      getRadioIoQueueSnapshot: vi.fn(() => createBusySnapshot(busy)),
+    };
+
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getActiveConnection.mockReturnValue(connection);
+    seedRadioSdrFrame(coordinator, frequency);
+    (coordinator as any).lastRadioFrame.frequencyRange = {
+      min: frequency - 1000,
+      max: frequency + 4000,
+    };
+    (coordinator as any).lastRadioFrame.meta.spanHz = 5000;
+
+    const first = await coordinator.refresh('radio-sdr');
+    const firstDigitalControl = first.controls.find(control => control.id === 'digital-window-toggle');
+    expect(firstDigitalControl).toMatchObject({
+      visible: true,
+      enabled: true,
+      active: true,
+    });
+
+    busy = true;
+    connection.getSpectrumDisplayState.mockClear();
+    (coordinator as any).markDirty();
+    const second = await coordinator.refresh('radio-sdr');
+    const secondDigitalControl = second.controls.find(control => control.id === 'digital-window-toggle');
+
+    expect(connection.getSpectrumDisplayState).not.toHaveBeenCalled();
+    expect(secondDigitalControl).toEqual(firstDigitalControl);
+  });
+
+  it('reuses cached zoom controls while the radio I/O queue is busy', async () => {
+    const engine = new MockEngine();
+    const spectrumCoordinator = new EventEmitter();
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    let busy = false;
+    const activeConnection = {
+      getSpectrumDisplayState: vi.fn().mockResolvedValue({
+        mode: 'center',
+        spanHz: 10_000,
+        supportsFixedEdges: true,
+        supportedSpans: [5000, 10_000, 20_000],
+      }),
+      getRadioIoQueueSnapshot: vi.fn(() => createBusySnapshot(busy)),
+    };
+    const zoomConnection = {
+      getSpectrumSpans: vi.fn().mockResolvedValue([20_000, 10_000, 5000]),
+      getCurrentSpectrumSpan: vi.fn().mockResolvedValue(10_000),
+    };
+
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getActiveConnection.mockReturnValue(activeConnection);
+    vi.spyOn(coordinator as any, 'getZoomCapableConnection').mockReturnValue(zoomConnection);
+    seedRadioSdrFrame(coordinator);
+
+    const first = await coordinator.refresh('radio-sdr');
+    const firstZoomControls = first.controls.filter(control => control.id === 'zoom-step');
+    expect(firstZoomControls).toHaveLength(2);
+    expect(firstZoomControls.every(control => control.visible && control.enabled)).toBe(true);
+
+    busy = true;
+    activeConnection.getSpectrumDisplayState.mockClear();
+    zoomConnection.getSpectrumSpans.mockClear();
+    zoomConnection.getCurrentSpectrumSpan.mockClear();
+    (coordinator as any).markDirty();
+    const second = await coordinator.refresh('radio-sdr');
+    const secondZoomControls = second.controls.filter(control => control.id === 'zoom-step');
+
+    expect(activeConnection.getSpectrumDisplayState).not.toHaveBeenCalled();
+    expect(zoomConnection.getSpectrumSpans).not.toHaveBeenCalled();
+    expect(zoomConnection.getCurrentSpectrumSpan).not.toHaveBeenCalled();
+    expect(secondZoomControls).toEqual(firstZoomControls);
+  });
+
+  it('clears cached digital-only controls after leaving digital mode', async () => {
+    const engine = new MockEngine();
+    const spectrumCoordinator = new EventEmitter();
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    const connection = {
+      configureSpectrumDisplay: vi.fn(),
+      getSpectrumDisplayState: vi.fn().mockResolvedValue({
+        mode: 'fixed',
+        edgeLowHz: 14_073_000,
+        edgeHighHz: 14_078_000,
+        spanHz: 5000,
+        supportsFixedEdges: true,
+        supportedSpans: [5000, 10_000],
+      }),
+      getRadioIoQueueSnapshot: vi.fn(() => createBusySnapshot(false)),
+    };
+
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getActiveConnection.mockReturnValue(connection);
+    seedRadioSdrFrame(coordinator, 14_074_000);
+
+    const digitalState = await coordinator.refresh('radio-sdr');
+    expect(digitalState.controls.some(control => control.id === 'digital-window-toggle')).toBe(true);
+
+    engine.engineMode = 'voice';
+    engine.currentModeName = 'VOICE';
+    (coordinator as any).markDirty();
+    const voiceState = await coordinator.refresh('radio-sdr');
+
+    expect(voiceState.controls.some(control => control.id === 'digital-window-toggle')).toBe(false);
   });
 
   it('enables CW radio SDR RF gestures without digital operator markers', async () => {

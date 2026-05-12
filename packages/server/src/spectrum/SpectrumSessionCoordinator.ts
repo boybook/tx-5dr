@@ -78,6 +78,17 @@ interface DigitalWindowState {
   highHz: number | null;
 }
 
+interface ResolvedRadioDisplayState {
+  mode: SpectrumDisplayMode | 'unknown';
+  displayRange: SpectrumSessionState['displayRange'];
+  centerFrequency: number | null;
+  edgeLowHz: number | null;
+  edgeHighHz: number | null;
+  spanHz: number | null;
+  supportsFixedEdges: boolean;
+  supportsSpanControl: boolean;
+}
+
 interface PendingDigitalTransition {
   mode: 'activate' | 'deactivate';
   lowHz: number | null;
@@ -119,6 +130,9 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   private pendingConnectionType: 'hamlib' | 'icom-wlan' | null = null;
   private pendingZoomTimer: NodeJS.Timeout | null = null;
   private pendingDigitalTransition: PendingDigitalTransition | null = null;
+  private cachedRadioDisplayState: ResolvedRadioDisplayState | null = null;
+  private cachedRadioZoomState: ZoomState | null = null;
+  private cachedDigitalWindowState: DigitalWindowState | null = null;
   private voiceFollowSyncPromise: Promise<void> | null = null;
   private radioIoBackpressureStartedAt: number | null = null;
   private lastRadioIoBackpressureWarnAt = 0;
@@ -135,6 +149,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       if (!this.engine.getRadioManager().isConnected()) {
         this.lastKnownRadioFrequency = null;
         this.cachedVoiceState = EMPTY_VOICE_STATE;
+        this.clearRadioSdrUiStateCache();
         this.clearPendingZoom();
         this.clearPendingDigitalTransition();
       }
@@ -146,6 +161,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     this.engine.on('profileChanged', () => {
       this.displayStateFailedAt = null;
       this.clearSpectrumDisplayStateCache();
+      this.clearRadioSdrUiStateCache();
       this.clearPendingZoom();
       this.clearPendingDigitalTransition();
       void this.ensureVoiceRadioFollowMode();
@@ -253,6 +269,12 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
 
   private clearSpectrumDisplayStateCache(): void {
     this.spectrumDisplayStateCache = null;
+  }
+
+  private clearRadioSdrUiStateCache(): void {
+    this.cachedRadioDisplayState = null;
+    this.cachedRadioZoomState = null;
+    this.cachedDigitalWindowState = null;
   }
 
   private updatePollingState(): void {
@@ -675,20 +697,15 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
 
   private async resolveRadioDisplayState(
     currentRadioFrequencyOverride?: number | null,
-  ): Promise<{
-    mode: SpectrumDisplayMode | 'unknown';
-    displayRange: SpectrumSessionState['displayRange'];
-    centerFrequency: number | null;
-    edgeLowHz: number | null;
-    edgeHighHz: number | null;
-    spanHz: number | null;
-    supportsFixedEdges: boolean;
-    supportsSpanControl: boolean;
-  }> {
+  ): Promise<ResolvedRadioDisplayState> {
     const currentRadioFrequency = normalizeRadioFrequency(currentRadioFrequencyOverride) ?? this.lastKnownRadioFrequency;
     const activeConnection = this.engine.getRadioManager().getActiveConnection();
     const now = Date.now();
     const deferCatReads = this.shouldDeferRadioCatReads();
+    if (deferCatReads && this.cachedRadioDisplayState) {
+      return this.cachedRadioDisplayState;
+    }
+
     const canTryDisplayState = Boolean(activeConnection?.getSpectrumDisplayState)
       && !deferCatReads
       && (this.displayStateFailedAt === null || now - this.displayStateFailedAt >= DISPLAY_STATE_RETRY_MS);
@@ -743,7 +760,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     const centerFrequency = this.resolveCenterFrequency(displayRange, currentRadioFrequency);
     const spanHz = this.resolveSpanHz(displayRange, configured?.spanHz ?? null);
 
-    return {
+    const resolved: ResolvedRadioDisplayState = {
       mode,
       displayRange,
       centerFrequency,
@@ -756,6 +773,10 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       ),
       supportsSpanControl: (configured?.supportedSpans?.length ?? 0) > 0,
     };
+    if (!deferCatReads) {
+      this.cachedRadioDisplayState = resolved;
+    }
+    return resolved;
   }
 
   private resolveDisplayMode(
@@ -849,40 +870,30 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     return null;
   }
 
-  private async buildZoomState(display: Awaited<ReturnType<SpectrumSessionCoordinator['resolveRadioDisplayState']>>): Promise<ZoomState> {
+  private async buildZoomState(display: ResolvedRadioDisplayState): Promise<ZoomState> {
+    if (this.shouldDeferRadioCatReads()) {
+      return this.cachedRadioZoomState ?? this.createEmptyZoomState();
+    }
+
     const connection = this.getZoomCapableConnection();
     const isCenterMode = display.mode === 'center' || display.mode === 'scroll-center';
-    if (!connection || !this.engine.getRadioManager().isConnected() || !isCenterMode || this.shouldDeferRadioCatReads()) {
-      return {
-        levels: [],
-        currentLevelId: null,
-        currentSpanHz: null,
-        canZoomIn: false,
-        canZoomOut: false,
-        visible: false,
-        enabled: false,
-        pending: false,
-      };
+    if (!connection || !this.engine.getRadioManager().isConnected() || !isCenterMode) {
+      const empty = this.createEmptyZoomState();
+      this.cachedRadioZoomState = empty;
+      return empty;
     }
 
     const levels = await this.getZoomLevels(connection);
     if (levels.length === 0) {
-      return {
-        levels: [],
-        currentLevelId: null,
-        currentSpanHz: null,
-        canZoomIn: false,
-        canZoomOut: false,
-        visible: false,
-        enabled: false,
-        pending: false,
-      };
+      const empty = this.createEmptyZoomState();
+      this.cachedRadioZoomState = empty;
+      return empty;
     }
 
     const currentSpanHz = await this.resolveCurrentSpan(connection, display.spanHz);
     const currentLevel = this.resolveCurrentLevel(levels, currentSpanHz);
     const currentIndex = currentLevel ? levels.findIndex(level => level.id === currentLevel.id) : -1;
-    return {
+    const zoom: ZoomState = {
       levels,
       currentLevelId: currentLevel?.id ?? null,
       currentSpanHz,
@@ -891,6 +902,21 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       visible: true,
       enabled: true,
       pending: this.pendingTargetSpanHz !== null,
+    };
+    this.cachedRadioZoomState = zoom;
+    return zoom;
+  }
+
+  private createEmptyZoomState(): ZoomState {
+    return {
+      levels: [],
+      currentLevelId: null,
+      currentSpanHz: null,
+      canZoomIn: false,
+      canZoomOut: false,
+      visible: false,
+      enabled: false,
+      pending: false,
     };
   }
 
@@ -1045,35 +1071,43 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   }
 
   private async buildDigitalWindowState(
-    display: Awaited<ReturnType<SpectrumSessionCoordinator['resolveRadioDisplayState']>>,
+    display: ResolvedRadioDisplayState,
     standardFrequencyHint?: number | null,
   ): Promise<DigitalWindowState> {
-    if (
-      !this.engine.getRadioManager().isConnected()
-      || this.engine.getEngineMode() !== 'digital'
-      || this.shouldDeferRadioCatReads()
-    ) {
+    if (!this.engine.getRadioManager().isConnected() || this.engine.getEngineMode() !== 'digital') {
       this.clearPendingDigitalTransition();
-      return this.createEmptyDigitalWindowState();
+      const empty = this.createEmptyDigitalWindowState();
+      this.cachedDigitalWindowState = empty;
+      return empty;
     }
 
     const currentModeName = this.engine.getStatus().currentMode.name;
     if (currentModeName !== 'FT8' && currentModeName !== 'FT4') {
       this.clearPendingDigitalTransition();
-      return this.createEmptyDigitalWindowState();
+      const empty = this.createEmptyDigitalWindowState();
+      this.cachedDigitalWindowState = empty;
+      return empty;
+    }
+
+    if (this.shouldDeferRadioCatReads()) {
+      return this.cachedDigitalWindowState ?? this.createEmptyDigitalWindowState();
     }
 
     const connection = this.getDisplayConfigurableConnection();
     const supported = Boolean(connection?.configureSpectrumDisplay && connection?.getSpectrumDisplayState);
     if (!supported) {
       this.clearPendingDigitalTransition();
-      return this.createEmptyDigitalWindowState();
+      const empty = this.createEmptyDigitalWindowState();
+      this.cachedDigitalWindowState = empty;
+      return empty;
     }
 
     const standardFrequencyHz = standardFrequencyHint ?? await this.resolveStandardFrequency(currentModeName, this.lastKnownRadioFrequency);
     if (standardFrequencyHz === null) {
       this.clearPendingDigitalTransition();
-      return this.createEmptyDigitalWindowState();
+      const empty = this.createEmptyDigitalWindowState();
+      this.cachedDigitalWindowState = empty;
+      return empty;
     }
 
     const lowHz = standardFrequencyHz + DIGITAL_WINDOW_LOW_OFFSET_HZ;
@@ -1084,7 +1118,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       && this.isWithinTolerance(display.edgeHighHz, highHz, ACTIVE_WINDOW_TOLERANCE_HZ);
     const pending = this.resolvePendingDigitalState(display, lowHz, highHz);
 
-    return {
+    const digitalWindow: DigitalWindowState = {
       supported: true,
       active,
       pending,
@@ -1093,6 +1127,8 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       lowHz,
       highHz,
     };
+    this.cachedDigitalWindowState = digitalWindow;
+    return digitalWindow;
   }
 
   private createEmptyDigitalWindowState(): DigitalWindowState {
@@ -1292,7 +1328,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   }
 
   private resolvePendingDigitalState(
-    display: Awaited<ReturnType<SpectrumSessionCoordinator['resolveRadioDisplayState']>>,
+    display: ResolvedRadioDisplayState,
     targetLowHz: number,
     targetHighHz: number,
   ): boolean {

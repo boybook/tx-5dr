@@ -48,6 +48,8 @@ describe('DigitalRadioEngine mode switching', () => {
         getKnownFrequency: vi.fn(() => options.knownFrequency ?? null),
         isConnected: vi.fn(() => options.radioConnected ?? true),
         applyOperatingState,
+        applyRepeaterDuplexConfig: vi.fn(async () => ({ warning: false })),
+        applyToneSquelchConfig: vi.fn(async () => ({ warning: false })),
       },
       applyDecodeWindowOverrides: vi.fn(() => undefined),
       slotClock: {
@@ -221,6 +223,167 @@ describe('DigitalRadioEngine mode switching', () => {
     expect(fakeEngine.engineLifecycle.rebuildResourcePlan).toHaveBeenCalledOnce();
   });
 
+
+  function createEngineModeSwitchHarness(options: {
+    initialEngineMode: 'digital' | 'voice' | 'cw';
+    initialMode: typeof MODES.FT8 | typeof MODES.FT4 | typeof MODES.VOICE | typeof MODES.CW;
+    engineState: EngineState;
+  }) {
+    let engineState = options.engineState;
+    const sequence: string[] = [];
+    const setLastEngineMode = vi.fn(async () => undefined);
+    const setLastDigitalModeName = vi.fn(async () => undefined);
+
+    vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+      setLastEngineMode,
+      setLastDigitalModeName,
+    } as unknown as ConfigManager);
+
+    const fakeEngine = {
+      engineMode: options.initialEngineMode,
+      currentMode: options.initialMode,
+      radioBridge: { wasRunningBeforeDisconnect: true },
+      engineLifecycle: {
+        preserveRadioConnection: false,
+        getEngineState: vi.fn(() => engineState),
+        waitForStartupToSettle: vi.fn(async () => engineState),
+        stop: vi.fn(async () => undefined),
+        rebuildResourcePlan: vi.fn(async () => {
+          sequence.push('rebuildResourcePlan');
+        }),
+        startAndWaitForRunning: vi.fn(async () => {
+          sequence.push('startAndWaitForRunning');
+          engineState = EngineState.RUNNING;
+        }),
+      },
+      stop: vi.fn(async () => {
+        sequence.push('stop');
+        engineState = EngineState.IDLE;
+      }),
+      applyDecodeWindowOverrides: vi.fn(() => undefined),
+      slotClock: {
+        setMode: vi.fn(() => undefined),
+      },
+      slotPackManager: {
+        setMode: vi.fn(() => undefined),
+      },
+      clockCoordinator: {
+        onModeChanged: vi.fn(() => undefined),
+      },
+      _operatorManager: {
+        getAllOperators: vi.fn(() => []),
+      },
+      emitModeAndStatusSnapshot: vi.fn(() => undefined),
+      emitStatusSnapshot: vi.fn(() => undefined),
+      restoreLastVoiceOperatingState: vi.fn(async () => undefined),
+      restoreLastCWOperatingState: vi.fn(async () => undefined),
+      resetVoicePttState: vi.fn(() => undefined),
+      squelchStatusMonitor: {
+        reevaluate: vi.fn(() => undefined),
+      },
+      physicalPttMonitor: {
+        reevaluate: vi.fn(() => undefined),
+      },
+    };
+
+    return { fakeEngine, sequence, setLastEngineMode, setLastDigitalModeName };
+  }
+
+  it('keeps the engine running when switching from running FT8 to CW', async () => {
+    const { fakeEngine, sequence, setLastEngineMode } = createEngineModeSwitchHarness({
+      initialEngineMode: 'digital',
+      initialMode: MODES.FT8,
+      engineState: EngineState.RUNNING,
+    });
+
+    await (DigitalRadioEngine.prototype as unknown as {
+      switchEngineMode: (targetEngineMode: 'cw', targetMode: typeof MODES.CW) => Promise<void>;
+    }).switchEngineMode.call(fakeEngine, 'cw', MODES.CW);
+
+    expect(fakeEngine.stop).toHaveBeenCalledOnce();
+    expect(fakeEngine.engineLifecycle.rebuildResourcePlan).toHaveBeenCalledOnce();
+    expect(fakeEngine.engineLifecycle.startAndWaitForRunning).toHaveBeenCalledOnce();
+    expect(fakeEngine.emitStatusSnapshot).toHaveBeenCalledOnce();
+    expect(fakeEngine.restoreLastCWOperatingState).toHaveBeenCalledOnce();
+    expect(setLastEngineMode).toHaveBeenCalledWith('cw');
+    expect(sequence).toEqual(['stop', 'rebuildResourcePlan', 'startAndWaitForRunning']);
+  });
+
+  it('does not start the engine when switching from idle FT8 to CW', async () => {
+    const { fakeEngine } = createEngineModeSwitchHarness({
+      initialEngineMode: 'digital',
+      initialMode: MODES.FT8,
+      engineState: EngineState.IDLE,
+    });
+
+    await (DigitalRadioEngine.prototype as unknown as {
+      switchEngineMode: (targetEngineMode: 'cw', targetMode: typeof MODES.CW) => Promise<void>;
+    }).switchEngineMode.call(fakeEngine, 'cw', MODES.CW);
+
+    expect(fakeEngine.stop).not.toHaveBeenCalled();
+    expect(fakeEngine.engineLifecycle.rebuildResourcePlan).toHaveBeenCalledOnce();
+    expect(fakeEngine.engineLifecycle.startAndWaitForRunning).not.toHaveBeenCalled();
+    expect(fakeEngine.emitStatusSnapshot).not.toHaveBeenCalled();
+    expect(fakeEngine.restoreLastCWOperatingState).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the engine running when switching from running CW to FT8', async () => {
+    const { fakeEngine, setLastDigitalModeName } = createEngineModeSwitchHarness({
+      initialEngineMode: 'cw',
+      initialMode: MODES.CW,
+      engineState: EngineState.RUNNING,
+    });
+
+    await (DigitalRadioEngine.prototype as unknown as {
+      switchEngineMode: (targetEngineMode: 'digital', targetMode: typeof MODES.FT8) => Promise<void>;
+    }).switchEngineMode.call(fakeEngine, 'digital', MODES.FT8);
+
+    expect(fakeEngine.stop).toHaveBeenCalledOnce();
+    expect(fakeEngine.applyDecodeWindowOverrides).toHaveBeenCalledOnce();
+    expect(fakeEngine.engineLifecycle.rebuildResourcePlan).toHaveBeenCalledOnce();
+    expect(fakeEngine.engineLifecycle.startAndWaitForRunning).toHaveBeenCalledOnce();
+    expect(setLastDigitalModeName).toHaveBeenCalledWith('FT8');
+  });
+
+  it('keeps the engine running when switching from running CW to voice', async () => {
+    const { fakeEngine } = createEngineModeSwitchHarness({
+      initialEngineMode: 'cw',
+      initialMode: MODES.CW,
+      engineState: EngineState.RUNNING,
+    });
+
+    await (DigitalRadioEngine.prototype as unknown as {
+      switchEngineMode: (targetEngineMode: 'voice', targetMode: typeof MODES.VOICE) => Promise<void>;
+    }).switchEngineMode.call(fakeEngine, 'voice', MODES.VOICE);
+
+    expect(fakeEngine.stop).toHaveBeenCalledOnce();
+    expect(fakeEngine.engineLifecycle.rebuildResourcePlan).toHaveBeenCalledOnce();
+    expect(fakeEngine.engineLifecycle.startAndWaitForRunning).toHaveBeenCalledOnce();
+    expect(fakeEngine.restoreLastVoiceOperatingState).toHaveBeenCalledOnce();
+  });
+
+  it('does not start the engine when switching from idle CW to FT8 or voice', async () => {
+    for (const target of [
+      { engineMode: 'digital' as const, mode: MODES.FT8 },
+      { engineMode: 'voice' as const, mode: MODES.VOICE },
+    ]) {
+      vi.restoreAllMocks();
+      const { fakeEngine } = createEngineModeSwitchHarness({
+        initialEngineMode: 'cw',
+        initialMode: MODES.CW,
+        engineState: EngineState.IDLE,
+      });
+
+      await (DigitalRadioEngine.prototype as unknown as {
+        switchEngineMode: (targetEngineMode: 'digital' | 'voice', targetMode: typeof MODES.FT8 | typeof MODES.VOICE) => Promise<void>;
+      }).switchEngineMode.call(fakeEngine, target.engineMode, target.mode);
+
+      expect(fakeEngine.stop).not.toHaveBeenCalled();
+      expect(fakeEngine.engineLifecycle.rebuildResourcePlan).toHaveBeenCalledOnce();
+      expect(fakeEngine.engineLifecycle.startAndWaitForRunning).not.toHaveBeenCalled();
+    }
+  });
+
   it('restores voice frequency and radio mode when entering voice mode', async () => {
     const applyOperatingState = vi.fn(async () => ({
       frequencyApplied: true,
@@ -239,6 +402,8 @@ describe('DigitalRadioEngine mode switching', () => {
       radioManager: {
         isConnected: vi.fn(() => true),
         applyOperatingState,
+        applyRepeaterDuplexConfig: vi.fn(async () => ({ warning: false })),
+        applyToneSquelchConfig: vi.fn(async () => ({ warning: false })),
       },
       emit,
     });

@@ -6,7 +6,6 @@ export type RadioIoTaskOptions = {
   name?: string;
   critical?: boolean;
   lowPriority?: boolean;
-  timeoutMs?: number;
   context?: RadioIoTaskContext;
 };
 
@@ -18,7 +17,6 @@ export interface RadioIoQueueCongestionSnapshot {
   activeCount: number;
   activeTask: string | null;
   activeRunMs: number | null;
-  activeTimeoutMs: number | null;
   pendingCount: number;
   criticalPendingCount: number;
   normalPendingCount: number;
@@ -31,34 +29,6 @@ export interface RadioIoQueueCongestionSnapshot {
   context?: RadioIoTaskContext;
 }
 
-export interface RadioIoQueueTimeoutSnapshot {
-  label?: string;
-  sessionId: number;
-  task: string;
-  taskId?: string;
-  critical: boolean;
-  runMs: number;
-  timeoutMs: number;
-  pendingCount: number;
-  oldestPendingTask: string | null;
-  oldestPendingWaitMs: number | null;
-  action: 'skip-and-continue';
-  context?: RadioIoTaskContext;
-}
-
-export interface RadioIoQueueLateResultSnapshot {
-  label?: string;
-  sessionId: number;
-  task: string;
-  taskId?: string;
-  critical: boolean;
-  runMs: number;
-  timeoutMs: number | null;
-  outcome: 'resolved' | 'rejected';
-  error?: string;
-  context?: RadioIoTaskContext;
-}
-
 export interface RadioIoQueueSnapshot {
   label?: string;
   busy: boolean;
@@ -66,7 +36,6 @@ export interface RadioIoQueueSnapshot {
   activeCount: number;
   activeTask: string | null;
   activeRunMs: number | null;
-  activeTimeoutMs: number | null;
   pendingCount: number;
   criticalPendingCount: number;
   normalPendingCount: number;
@@ -81,8 +50,6 @@ export interface RadioIoQueueOptions {
   congestionWarnCooldownMs?: number;
   now?: () => number;
   onCongestionWarning?: (snapshot: RadioIoQueueCongestionSnapshot) => void;
-  onTaskTimeoutWarning?: (snapshot: RadioIoQueueTimeoutSnapshot) => void;
-  onLateTaskResult?: (snapshot: RadioIoQueueLateResultSnapshot) => void;
 }
 
 type QueuedRadioIoTask<T> = {
@@ -132,7 +99,6 @@ export class RadioIoQueue {
       activeRunMs: this.activeTask?.startedAt !== null && this.activeTask?.startedAt !== undefined
         ? Math.max(0, now - this.activeTask.startedAt)
         : null,
-      activeTimeoutMs: this.activeTask?.options.timeoutMs ?? null,
       pendingCount: this.queue.length,
       criticalPendingCount,
       normalPendingCount: this.queue.length - criticalPendingCount,
@@ -248,7 +214,6 @@ export class RadioIoQueue {
         activeCount: this.activeCount,
         activeTask: activeSnapshot.activeTask,
         activeRunMs: activeSnapshot.activeRunMs,
-        activeTimeoutMs: activeSnapshot.activeTimeoutMs,
         pendingCount: this.queue.length,
         criticalPendingCount,
         normalPendingCount: this.queue.length - criticalPendingCount,
@@ -317,16 +282,7 @@ export class RadioIoQueue {
     }
 
     void (async () => {
-      let settled = false;
-      let timedOut = false;
-      let timeout: ReturnType<typeof setTimeout> | null = null;
-      const timeoutMs = queuedTask.options.timeoutMs;
-
       const finishTask = () => {
-        if (timeout) {
-          clearTimeout(timeout);
-          timeout = null;
-        }
         if (queuedTask.options.critical) {
           this.criticalCount -= 1;
         }
@@ -340,94 +296,14 @@ export class RadioIoQueue {
         this.schedulePump();
       };
 
-      if (typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0) {
-        timeout = setTimeout(() => {
-          if (settled) {
-            return;
-          }
-
-          settled = true;
-          timedOut = true;
-          const snapshot = this.buildTimeoutSnapshot(queuedTask, timeoutMs);
-          try {
-            this.options.onTaskTimeoutWarning?.(snapshot);
-          } catch {
-            // Warning hooks must not break radio I/O.
-          }
-          queuedTask.reject(new Error(`${this.describeTask(queuedTask)} timed out after ${timeoutMs}ms`));
-          finishTask();
-        }, timeoutMs);
-      }
-
       try {
         const result = await queuedTask.task(queuedTask.options.sessionId);
-        if (settled) {
-          if (timedOut) {
-            this.notifyLateTaskResult(queuedTask, 'resolved');
-          }
-          return;
-        }
-        settled = true;
         queuedTask.resolve(result);
       } catch (error) {
-        if (settled) {
-          if (timedOut) {
-            this.notifyLateTaskResult(queuedTask, 'rejected', error);
-          }
-          return;
-        }
-        settled = true;
         queuedTask.reject(error);
       } finally {
-        if (!timedOut) {
-          finishTask();
-        }
+        finishTask();
       }
     })();
-  }
-
-  private buildTimeoutSnapshot(
-    queuedTask: QueuedRadioIoTask<unknown>,
-    timeoutMs: number,
-  ): RadioIoQueueTimeoutSnapshot {
-    const now = this.now();
-    const oldestPendingTask = this.getOldestPendingTask();
-    return {
-      label: this.options.label,
-      sessionId: queuedTask.options.sessionId,
-      task: this.describeTask(queuedTask),
-      taskId: queuedTask.options.id,
-      critical: Boolean(queuedTask.options.critical),
-      runMs: queuedTask.startedAt !== null ? Math.max(0, now - queuedTask.startedAt) : timeoutMs,
-      timeoutMs,
-      pendingCount: this.queue.length,
-      oldestPendingTask: oldestPendingTask ? this.describeTask(oldestPendingTask) : null,
-      oldestPendingWaitMs: oldestPendingTask ? Math.max(0, now - oldestPendingTask.enqueuedAt) : null,
-      action: 'skip-and-continue',
-      context: queuedTask.options.context,
-    };
-  }
-
-  private notifyLateTaskResult(
-    queuedTask: QueuedRadioIoTask<unknown>,
-    outcome: 'resolved' | 'rejected',
-    error?: unknown,
-  ): void {
-    try {
-      this.options.onLateTaskResult?.({
-        label: this.options.label,
-        sessionId: queuedTask.options.sessionId,
-        task: this.describeTask(queuedTask),
-        taskId: queuedTask.options.id,
-        critical: Boolean(queuedTask.options.critical),
-        runMs: queuedTask.startedAt !== null ? Math.max(0, this.now() - queuedTask.startedAt) : 0,
-        timeoutMs: queuedTask.options.timeoutMs ?? null,
-        outcome,
-        error: error instanceof Error ? error.message : error === undefined ? undefined : String(error),
-        context: queuedTask.options.context,
-      });
-    } catch {
-      // Debug hooks must not break radio I/O.
-    }
   }
 }

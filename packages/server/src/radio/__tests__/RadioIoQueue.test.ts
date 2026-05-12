@@ -3,8 +3,6 @@ import {
   RADIO_IO_SKIPPED,
   RadioIoQueue,
   type RadioIoQueueCongestionSnapshot,
-  type RadioIoQueueLateResultSnapshot,
-  type RadioIoQueueTimeoutSnapshot,
 } from '../connections/RadioIoQueue.js';
 
 function createDeferred<T>() {
@@ -257,97 +255,4 @@ describe('RadioIoQueue', () => {
     ]);
   });
 
-  it('times out a hung active task, warns, and continues with queued work', async () => {
-    vi.useFakeTimers();
-    try {
-      let now = 1_000;
-      const timeoutWarnings: RadioIoQueueTimeoutSnapshot[] = [];
-      const queue = new RadioIoQueue({
-        label: 'test CAT',
-        now: () => now,
-        onTaskTimeoutWarning: (snapshot) => timeoutWarnings.push(snapshot),
-      });
-      const hungTask = createDeferred<string>();
-
-      const first = queue.run(
-        { sessionId: 1, name: 'hung-task', id: 'hung', timeoutMs: 5_000, context: { connectionType: 'serial' } },
-        async () => hungTask.promise,
-      ).catch((error: Error) => error);
-
-      await Promise.resolve();
-      const second = queue.run({ sessionId: 1, name: 'next-task' }, async () => 'next');
-      now += 5_000;
-      await vi.advanceTimersByTimeAsync(5_000);
-      await Promise.resolve();
-
-      await expect(first).resolves.toMatchObject({
-        message: 'hung-task timed out after 5000ms',
-      });
-      await expect(second).resolves.toBe('next');
-      expect(timeoutWarnings).toHaveLength(1);
-      expect(timeoutWarnings[0]).toMatchObject({
-        label: 'test CAT',
-        sessionId: 1,
-        task: 'hung-task',
-        taskId: 'hung',
-        critical: false,
-        runMs: 5_000,
-        timeoutMs: 5_000,
-        pendingCount: 1,
-        oldestPendingTask: 'next-task',
-        oldestPendingWaitMs: 5_000,
-        action: 'skip-and-continue',
-        context: { connectionType: 'serial' },
-      });
-      expect(queue.getSnapshot()).toMatchObject({
-        busy: false,
-        activeTask: null,
-        pendingCount: 0,
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('ignores late results from timed-out tasks without corrupting queue state', async () => {
-    vi.useFakeTimers();
-    try {
-      let now = 10_000;
-      const lateResults: RadioIoQueueLateResultSnapshot[] = [];
-      const queue = new RadioIoQueue({
-        now: () => now,
-        onLateTaskResult: (snapshot) => lateResults.push(snapshot),
-      });
-      const releaseHungTask = createDeferred<string>();
-
-      const first = queue.run(
-        { sessionId: 1, name: 'late-task', timeoutMs: 100 },
-        async () => releaseHungTask.promise,
-      ).catch((error: Error) => error);
-      await Promise.resolve();
-
-      now += 100;
-      await vi.advanceTimersByTimeAsync(100);
-      await expect(first).resolves.toMatchObject({
-        message: 'late-task timed out after 100ms',
-      });
-
-      releaseHungTask.resolve('late-ok');
-      now += 25;
-      await Promise.resolve();
-      await Promise.resolve();
-
-      expect(lateResults).toHaveLength(1);
-      expect(lateResults[0]).toMatchObject({
-        task: 'late-task',
-        outcome: 'resolved',
-        runMs: 125,
-        timeoutMs: 100,
-      });
-      await expect(queue.run({ sessionId: 1, name: 'after-late' }, async () => 'ok')).resolves.toBe('ok');
-      expect(queue.getSnapshot().busy).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 });

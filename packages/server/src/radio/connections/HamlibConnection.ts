@@ -46,7 +46,7 @@ import {
 } from './IRadioConnection.js';
 
 const logger = createLogger('HamlibConnection');
-const HAMLIB_SERIAL_CAT_TASK_TIMEOUT_MS = 5000;
+const HAMLIB_POLLING_OPERATION_TIMEOUT_MS = 5000;
 
 // RigMetadata is imported from meter/types.ts
 
@@ -73,7 +73,7 @@ interface SpectrumControllerLike {
 }
 
 type SplitSupportState = 'unknown' | 'supported' | 'unsupported';
-type TxFrequencyRange = ReturnType<HamLib['getFrequencyRanges']>['tx'][number];
+type TxFrequencyRange = Awaited<ReturnType<HamLib['getFrequencyRanges']>>['tx'][number];
 type RfPowerStepTableEntry = {
   normalized: number;
   milliwatts: number;
@@ -247,16 +247,6 @@ export class HamlibConnection
         logContext.connectionType === 'serial' ? '串口 CAT 请求队列拥堵' : '电台 CAT 请求队列拥堵',
         logContext,
       );
-    },
-    onTaskTimeoutWarning: (snapshot) => {
-      const logContext = this.flattenRadioIoSnapshotContext(snapshot);
-      logger.warn(
-        logContext.connectionType === 'serial' ? '串口 CAT 请求执行超时，已跳过' : '电台 CAT 请求执行超时，已跳过',
-        logContext,
-      );
-    },
-    onLateTaskResult: (snapshot) => {
-      logger.debug('忽略已超时 CAT 请求的迟到结果', this.flattenRadioIoSnapshotContext(snapshot));
     },
   });
   private ioSessionId = 0;
@@ -639,7 +629,7 @@ export class HamlibConnection
 
     // 检测数值表能力
     try {
-      const levels = this.rig!.getSupportedLevels();
+      const levels = await this.withHamlibOperationTimeout('detectSupportedLevels', this.rig!.getSupportedLevels());
       this.supportedLevels = new Set(levels);
       logger.info('Supported meter levels detected', { levels: Array.from(this.supportedLevels) });
     } catch (error) {
@@ -650,10 +640,10 @@ export class HamlibConnection
     await this.initializeMeterDecodeStrategy();
 
     await this.detectSupportedModes();
-    this.detectSupportedFunctions();
-    this.detectSupportedParms();
-    this.detectSupportedVfoOps();
-    this.detectTxFrequencyRanges();
+    await this.detectSupportedFunctions();
+    await this.detectSupportedParms();
+    await this.detectSupportedVfoOps();
+    await this.detectTxFrequencyRanges();
     await this.initializeRigStateSnapshot();
 
     // 触发连接成功事件
@@ -783,17 +773,19 @@ export class HamlibConnection
   async waitCWMessage(): Promise<void> {
     // Hamlib's wait_morse can return before the queued CAT CW text is actually sent.
     // Keep this low-level wrapper available, but CW keyer status tracking uses local timing.
-    this.checkConnected();
-    const rig = this.rig as (HamLib & { waitMorse?: () => Promise<number> }) | null;
-    if (!rig || typeof rig.waitMorse !== 'function') {
-      return;
-    }
-    try {
-      await rig.waitMorse();
-      this.lastSuccessfulOperation = Date.now();
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'waitCWMessage');
-    }
+    await this.runSerializedTask('waitCWMessage', async () => {
+      this.checkConnected();
+      const rig = this.rig as (HamLib & { waitMorse?: () => Promise<number> }) | null;
+      if (!rig || typeof rig.waitMorse !== 'function') {
+        return;
+      }
+      try {
+        await rig.waitMorse();
+        this.lastSuccessfulOperation = Date.now();
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'waitCWMessage');
+      }
+    });
   }
 
   async stopCWMessage(): Promise<void> {
@@ -911,7 +903,10 @@ export class HamlibConnection
       const candidates = this.getRangeMatchModeCandidates(modeInfo.mode);
 
       try {
-        const widths = this.rig!.getFilterList()
+        const widths = (await this.withHamlibOperationTimeout(
+          'getSupportedModeBandwidths.getFilterList',
+          this.rig!.getFilterList(),
+        ))
           .filter((item) => item.modes.some((mode) => candidates.includes(normalizeModeName(mode))))
           .map((item) => item.width)
           .filter((width) => Number.isFinite(width) && width > 0);
@@ -923,13 +918,22 @@ export class HamlibConnection
         logger.debug('Failed to read Hamlib filter list for mode bandwidth options', error);
       }
 
-      const fallbackWidths = [
+      const fallbackWidths = [];
+      fallbackWidths.push(await this.withHamlibOperationTimeout(
+        'getSupportedModeBandwidths.getPassbandNarrow',
         this.rig!.getPassbandNarrow(modeInfo.mode as any),
+      ));
+      fallbackWidths.push(await this.withHamlibOperationTimeout(
+        'getSupportedModeBandwidths.getPassbandNormal',
         this.rig!.getPassbandNormal(modeInfo.mode as any),
+      ));
+      fallbackWidths.push(await this.withHamlibOperationTimeout(
+        'getSupportedModeBandwidths.getPassbandWide',
         this.rig!.getPassbandWide(modeInfo.mode as any),
-      ].filter((width) => Number.isFinite(width) && width > 0);
+      ));
 
-      return Array.from(new Set(fallbackWidths)).sort((a, b) => a - b);
+      return Array.from(new Set(fallbackWidths.filter((width) => Number.isFinite(width) && width > 0)))
+        .sort((a, b) => a - b);
     });
   }
 
@@ -960,7 +964,10 @@ export class HamlibConnection
     }
 
     try {
-      const modes = ((this.rig as any).getSupportedModes() as unknown[])
+      const modes = ((await this.withHamlibOperationTimeout(
+        'detectSupportedModes',
+        (this.rig as any).getSupportedModes(),
+      )) as unknown[])
         .filter((mode): mode is string => typeof mode === 'string')
         .map((mode) => normalizeModeName(mode))
         .filter((mode) => mode.length > 0);
@@ -972,7 +979,7 @@ export class HamlibConnection
     }
   }
 
-  private detectSupportedFunctions(): void {
+  private async detectSupportedFunctions(): Promise<void> {
     if (!this.rig || typeof this.rig.getSupportedFunctions !== 'function') {
       this.supportedFunctions.clear();
       logger.warn('Hamlib function detection is not available on this build');
@@ -980,7 +987,10 @@ export class HamlibConnection
     }
 
     try {
-      const functions = this.rig.getSupportedFunctions()
+      const functions = (await this.withHamlibOperationTimeout(
+        'detectSupportedFunctions',
+        this.rig.getSupportedFunctions(),
+      ))
         .filter((func): func is string => typeof func === 'string')
         .map((func) => func.trim().toUpperCase())
         .filter((func) => func.length > 0);
@@ -992,7 +1002,7 @@ export class HamlibConnection
     }
   }
 
-  private detectSupportedParms(): void {
+  private async detectSupportedParms(): Promise<void> {
     if (!this.rig || typeof this.rig.getSupportedParms !== 'function') {
       this.supportedParms.clear();
       logger.warn('Hamlib parameter detection is not available on this build');
@@ -1000,7 +1010,10 @@ export class HamlibConnection
     }
 
     try {
-      const parms = this.rig.getSupportedParms()
+      const parms = (await this.withHamlibOperationTimeout(
+        'detectSupportedParms',
+        this.rig.getSupportedParms(),
+      ))
         .filter((parm): parm is string => typeof parm === 'string')
         .map((parm) => parm.trim().toUpperCase())
         .filter((parm) => parm.length > 0);
@@ -1012,7 +1025,7 @@ export class HamlibConnection
     }
   }
 
-  private detectSupportedVfoOps(): void {
+  private async detectSupportedVfoOps(): Promise<void> {
     if (!this.rig || typeof (this.rig as any).getSupportedVfoOps !== 'function') {
       this.supportedVfoOps.clear();
       logger.warn('Hamlib VFO operation detection is not available on this build');
@@ -1020,7 +1033,10 @@ export class HamlibConnection
     }
 
     try {
-      const ops = ((this.rig as any).getSupportedVfoOps() as unknown[])
+      const ops = ((await this.withHamlibOperationTimeout(
+        'detectSupportedVfoOps',
+        (this.rig as any).getSupportedVfoOps(),
+      )) as unknown[])
         .filter((op): op is string => typeof op === 'string')
         .map((op) => op.trim().toUpperCase())
         .filter((op) => op.length > 0);
@@ -1033,7 +1049,7 @@ export class HamlibConnection
   }
 
 
-  private detectTxFrequencyRanges(): void {
+  private async detectTxFrequencyRanges(): Promise<void> {
     if (!this.rig || typeof this.rig.getFrequencyRanges !== 'function') {
       this.txFrequencyRanges = [];
       logger.warn('Hamlib TX frequency range detection is not available on this build');
@@ -1041,7 +1057,10 @@ export class HamlibConnection
     }
 
     try {
-      const { tx } = this.rig.getFrequencyRanges();
+      const { tx } = await this.withHamlibOperationTimeout(
+        'detectTxFrequencyRanges',
+        this.rig.getFrequencyRanges(),
+      );
       this.txFrequencyRanges = Array.isArray(tx) ? tx : [];
       logger.info('TX frequency ranges detected', { count: this.txFrequencyRanges.length });
     } catch (error) {
@@ -1056,8 +1075,14 @@ export class HamlibConnection
     }
 
     try {
-      const frequency = await this.rig.getFrequency().catch(() => null);
-      const modeInfo = await this.rig.getMode().catch(() => null);
+      const frequency = await this.withHamlibOperationTimeout(
+        'initializeRigStateSnapshot.getFrequency',
+        this.rig.getFrequency(),
+      ).catch(() => null);
+      const modeInfo = await this.withHamlibOperationTimeout(
+        'initializeRigStateSnapshot.getMode',
+        this.rig.getMode(),
+      ).catch(() => null);
 
       if (typeof frequency === 'number' && frequency > 0) {
         this.currentFrequencyHz = frequency;
@@ -1193,7 +1218,10 @@ export class HamlibConnection
     return this.runSerializedTask('getSpectrumSupportSummary', async () => {
       this.checkConnected();
       try {
-        return await this.getSpectrumController().getSpectrumSupportSummary();
+        return await this.withHamlibOperationTimeout(
+          'getSpectrumSupportSummary',
+          this.getSpectrumController().getSpectrumSupportSummary(),
+        );
       } catch (error) {
         throw this.convertError(error, 'getSpectrumSupportSummary');
       }
@@ -1204,7 +1232,10 @@ export class HamlibConnection
     return this.runSerializedTask('getSpectrumSpans', async () => {
       this.checkConnected();
       try {
-        const summary = await this.getSpectrumController().getSpectrumSupportSummary();
+        const summary = await this.withHamlibOperationTimeout(
+          'getSpectrumSpans.getSpectrumSupportSummary',
+          this.getSpectrumController().getSpectrumSupportSummary(),
+        );
         return Array.from(new Set((summary.spans ?? []).filter((span): span is number => Number.isFinite(span) && span > 0)))
           .sort((left, right) => right - left);
       } catch (error) {
@@ -1217,7 +1248,10 @@ export class HamlibConnection
     return this.runSerializedTask('getCurrentSpectrumSpan', async () => {
       this.checkConnected();
       try {
-        const currentSpan = await this.getSpectrumRig().getLevel('SPECTRUM_SPAN');
+        const currentSpan = await this.withHamlibOperationTimeout(
+          'getCurrentSpectrumSpan',
+          this.getSpectrumRig().getLevel('SPECTRUM_SPAN'),
+        );
         return typeof currentSpan === 'number' && Number.isFinite(currentSpan) && currentSpan > 0 ? currentSpan : null;
       } catch (error) {
         throw this.convertError(error, 'getCurrentSpectrumSpan');
@@ -1240,7 +1274,10 @@ export class HamlibConnection
     return this.runSerializedTask('getSpectrumDisplayState', async () => {
       this.checkConnected();
       try {
-        const state = await this.getSpectrumController().getSpectrumDisplayState();
+        const state = await this.withHamlibOperationTimeout(
+          'getSpectrumDisplayState',
+          this.getSpectrumController().getSpectrumDisplayState(),
+        );
         return {
           mode: state?.mode ?? null,
           spanHz: typeof state?.spanHz === 'number' && Number.isFinite(state.spanHz) && state.spanHz > 0 ? state.spanHz : null,
@@ -1269,7 +1306,10 @@ export class HamlibConnection
     await this.runSerializedTask('configureSpectrumDisplay', async () => {
       this.checkConnected();
       try {
-        await this.getSpectrumController().configureSpectrumDisplay(config);
+        await this.withHamlibOperationTimeout(
+          'configureSpectrumDisplay',
+          this.getSpectrumController().configureSpectrumDisplay(config),
+        );
       } catch (error) {
         throw this.convertError(error, 'configureSpectrumDisplay');
       }
@@ -1281,16 +1321,22 @@ export class HamlibConnection
       this.checkConnected();
 
       const controller = this.getSpectrumController();
-      const summary = await controller.getSpectrumSupportSummary();
-      if (!summary.configurableLevels.includes('SPECTRUM_SPEED')) {
-        logger.debug('Ignoring Hamlib spectrum runtime speed update because backend does not support SPECTRUM_SPEED', {
-          speed: config.speed,
-        });
-        return;
-      }
-
       try {
-        await controller.configureSpectrum({ speed: config.speed });
+        const summary = await this.withHamlibOperationTimeout(
+          'applySpectrumRuntimeConfig.getSpectrumSupportSummary',
+          controller.getSpectrumSupportSummary(),
+        );
+        if (!summary.configurableLevels.includes('SPECTRUM_SPEED')) {
+          logger.debug('Ignoring Hamlib spectrum runtime speed update because backend does not support SPECTRUM_SPEED', {
+            speed: config.speed,
+          });
+          return;
+        }
+
+        await this.withHamlibOperationTimeout(
+          'applySpectrumRuntimeConfig.configureSpectrum',
+          controller.configureSpectrum({ speed: config.speed }),
+        );
         logger.info('Applied Hamlib spectrum runtime speed', { speed: config.speed });
       } catch (error) {
         throw this.convertError(error, 'applySpectrumRuntimeConfig');
@@ -1311,7 +1357,10 @@ export class HamlibConnection
       controller.on('spectrumLine', this.onRigSpectrumLine);
 
       try {
-        await controller.startManagedSpectrum({ ...config, pumpIntervalMs: 0 });
+        await this.withHamlibOperationTimeout(
+          'startManagedSpectrum',
+          controller.startManagedSpectrum({ ...config, pumpIntervalMs: 0 }),
+        );
       } catch (error) {
         controller.off('spectrumLine', this.onRigSpectrumLine);
         this.spectrumListener = null;
@@ -1329,7 +1378,10 @@ export class HamlibConnection
       }
       try {
         controller.off('spectrumLine', this.onRigSpectrumLine);
-        await controller.stopManagedSpectrum();
+        await this.withHamlibOperationTimeout(
+          'stopManagedSpectrum',
+          controller.stopManagedSpectrum(),
+        );
       } catch (error) {
         throw this.convertError(error, 'stopManagedSpectrum');
       } finally {
@@ -1609,7 +1661,7 @@ export class HamlibConnection
       }
 
       const rigWithRfPowerSteps = this.rig as HamLib & {
-        getRfPowerStepTable?: (frequency: number, mode: string) => RfPowerStepTableEntry[] | null;
+        getRfPowerStepTable?: (frequency: number, mode: string) => Promise<RfPowerStepTableEntry[] | null>;
       };
 
       if (typeof rigWithRfPowerSteps.getRfPowerStepTable !== 'function') {
@@ -1617,7 +1669,10 @@ export class HamlibConnection
       }
 
       try {
-        const table = rigWithRfPowerSteps.getRfPowerStepTable(this.currentFrequencyHz, this.currentRadioMode) ?? [];
+        const table = (await this.withHamlibOperationTimeout(
+          'getSupportedRFPowerSteps.getRfPowerStepTable',
+          rigWithRfPowerSteps.getRfPowerStepTable(this.currentFrequencyHz, this.currentRadioMode),
+        )) ?? [];
         const options = table
           .filter((entry) => Number.isFinite(entry.normalized) && entry.normalized >= 0 && entry.normalized <= 1)
           .map((entry) => ({
@@ -2133,7 +2188,10 @@ export class HamlibConnection
     return this.runSerializedTask('getSupportedAgcModes', async () => {
       this.checkConnected();
       try {
-        const levels = this.rig!.getAgcLevels();
+        const levels = await this.withHamlibOperationTimeout(
+          'getSupportedAgcModes.getAgcLevels',
+          this.rig!.getAgcLevels(),
+        );
         const modes = levels
           .map((value) => normalizeAgcModeCode(value))
           .filter((mode) => mode !== 'none');
@@ -2187,7 +2245,10 @@ export class HamlibConnection
     return this.runSerializedTask('getSupportedPreampLevels', async () => {
       this.checkConnected();
       try {
-        return Array.from(new Set(this.rig!.getPreampValues()
+        return Array.from(new Set((await this.withHamlibOperationTimeout(
+          'getSupportedPreampLevels.getPreampValues',
+          this.rig!.getPreampValues(),
+        ))
           .filter((value) => Number.isFinite(value) && value > 0)
           .map((value) => Math.round(value))))
           .sort((left, right) => left - right);
@@ -2240,7 +2301,10 @@ export class HamlibConnection
     return this.runSerializedTask('getSupportedAttenuatorLevels', async () => {
       this.checkConnected();
       try {
-        return Array.from(new Set(this.rig!.getAttenuatorValues()
+        return Array.from(new Set((await this.withHamlibOperationTimeout(
+          'getSupportedAttenuatorLevels.getAttenuatorValues',
+          this.rig!.getAttenuatorValues(),
+        ))
           .filter((value) => Number.isFinite(value) && value > 0)
           .map((value) => Math.round(value))))
           .sort((left, right) => left - right);
@@ -2362,7 +2426,10 @@ export class HamlibConnection
     return this.runSerializedTask('getSupportedTuningSteps', async () => {
       this.checkConnected();
       try {
-        const steps = this.rig!.getTuningSteps()
+        const steps = (await this.withHamlibOperationTimeout(
+          'getSupportedTuningSteps.getTuningSteps',
+          this.rig!.getTuningSteps(),
+        ))
           .map((item) => item.stepHz)
           .filter((step) => Number.isFinite(step) && step > 0);
         return Array.from(new Set(steps)).sort((a, b) => a - b);
@@ -2546,7 +2613,10 @@ export class HamlibConnection
     return this.runSerializedTask('getAvailableCtcssTones', async () => {
       this.checkConnected();
       try {
-        const tones = this.rig!.getAvailableCtcssTones()
+        const tones = (await this.withHamlibOperationTimeout(
+          'getAvailableCtcssTones.getAvailableCtcssTones',
+          this.rig!.getAvailableCtcssTones(),
+        ))
           .filter((tone) => Number.isFinite(tone) && tone > 0);
         return Array.from(new Set(tones)).sort((a, b) => a - b);
       } catch (error) {
@@ -2595,7 +2665,10 @@ export class HamlibConnection
     return this.runSerializedTask('getAvailableDcsCodes', async () => {
       this.checkConnected();
       try {
-        const codes = this.rig!.getAvailableDcsCodes()
+        const codes = (await this.withHamlibOperationTimeout(
+          'getAvailableDcsCodes.getAvailableDcsCodes',
+          this.rig!.getAvailableDcsCodes(),
+        ))
           .filter((code) => Number.isFinite(code) && code > 0);
         return Array.from(new Set(codes)).sort((a, b) => a - b);
       } catch (error) {
@@ -2608,7 +2681,7 @@ export class HamlibConnection
     return this.runSerializedTask('getMaxRit', async () => {
       this.checkConnected();
       try {
-        return this.rig!.getMaxRit();
+        return await this.withHamlibOperationTimeout('getMaxRit.getMaxRit', this.rig!.getMaxRit());
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'getMaxRit');
       }
@@ -2619,7 +2692,7 @@ export class HamlibConnection
     return this.runSerializedTask('getMaxXit', async () => {
       this.checkConnected();
       try {
-        return this.rig!.getMaxXit();
+        return await this.withHamlibOperationTimeout('getMaxXit.getMaxXit', this.rig!.getMaxXit());
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'getMaxXit');
       }
@@ -2779,18 +2852,15 @@ export class HamlibConnection
 
   private createRadioIoTaskOptions(
     taskName: string,
-    options?: { critical?: boolean; id?: string; timeoutMs?: number },
+    options?: { critical?: boolean; id?: string },
   ): RadioIoTaskOptions {
     const context = this.createRadioIoLogContext();
-    const timeoutMs = options?.timeoutMs
-      ?? (context.connectionType === 'serial' ? HAMLIB_SERIAL_CAT_TASK_TIMEOUT_MS : undefined);
 
     return {
       sessionId: this.ioSessionId,
       critical: options?.critical,
       id: options?.id,
       name: taskName,
-      timeoutMs,
       context,
     };
   }
@@ -2817,7 +2887,7 @@ export class HamlibConnection
   private async runSerializedTask<T>(
     taskName: string,
     task: () => Promise<T>,
-    options?: { critical?: boolean; id?: string; timeoutMs?: number },
+    options?: { critical?: boolean; id?: string },
   ): Promise<T> {
     return this.ioQueue.run(this.createRadioIoTaskOptions(taskName, options), async (activeSessionId) => {
       this.ensureSession(activeSessionId);
@@ -3092,6 +3162,23 @@ export class HamlibConnection
     }
   }
 
+  private withHamlibOperationTimeout<T>(
+    operation: string,
+    promise: Promise<T>,
+    timeoutMs = HAMLIB_POLLING_OPERATION_TIMEOUT_MS,
+  ): Promise<T> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(`${operation} operation timeout`)), timeoutMs);
+    });
+
+    return Promise.race([promise, timeoutPromise]).finally(() => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    });
+  }
+
   /**
    * 轮询数值表数据 — 委托给 HamlibMeterReader。
    */
@@ -3179,7 +3266,10 @@ export class HamlibConnection
 
     let fallbackStrength: number | null = null;
     try {
-      fallbackStrength = await this.rig.getLevel('STRENGTH' as any);
+      fallbackStrength = await this.withHamlibOperationTimeout(
+        'maybeLogMeterStrategySample.getStrength',
+        this.rig.getLevel('STRENGTH' as any),
+      );
     } catch {
       return;
     }
@@ -3218,6 +3308,11 @@ export class HamlibConnection
       operation: context,
       rawHamlibTrace: errorMessage,
     };
+    const nativeCode = (error as { code?: unknown })?.code
+      ?? (lower.includes('hamlib_global_lock_timeout') ? 'HAMLIB_GLOBAL_LOCK_TIMEOUT' : undefined);
+    if (nativeCode !== undefined) {
+      baseContext.nativeCode = nativeCode;
+    }
     if (devicePath) baseContext.devicePath = devicePath;
 
     // 串口设备不存在（ENOENT / No such file or directory / No such device）
@@ -3333,9 +3428,10 @@ export class HamlibConnection
     // 超时（连接/操作）
     if (
       lower.includes('timeout') ||
+      lower.includes('hamlib_global_lock_timeout') ||
       lower.includes('etimedout')
     ) {
-      const isOperationTimeout = lower.includes('operation') && lower.includes('timeout');
+      const isOperationTimeout = lower.includes('operation') || lower.includes('hamlib_global_lock_timeout');
       return new RadioError({
         code: isOperationTimeout
           ? RadioErrorCode.OPERATION_TIMEOUT
