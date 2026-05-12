@@ -188,4 +188,28 @@ describe('CWDecoderWorkerPool telemetry', () => {
     expect(internals.buildWorkerTelemetry(state, 1_100).cpu).toEqual(cpu);
     expect(internals.buildWorkerTelemetry(state, 6_001).cpu.total).toBe(0);
   });
+
+  it('uses the latest tuning values when building decode requests', async () => {
+    const requests: Array<{ targetFreqHz?: number; filterWidthHz?: number }> = [];
+    const pool = new CWDecoderWorkerPool({
+      workerCount: 1,
+      targetFreqHz: 800,
+      filterWidthHz: 800,
+      runtimeProbe: () => ({ available: true, error: null }),
+      decode: async (request) => {
+        requests.push({ targetFreqHz: request.targetFreqHz, filterWidthHz: request.filterWidthHz });
+        return { id: request.id, text: '', confidence: 0 };
+      },
+    });
+
+    await pool.start();
+    await pool.decode(new Float32Array(9_600), 9_600);
+    pool.updateTuning({ targetFreqHz: 650, filterWidthHz: 250 });
+    await pool.decode(new Float32Array(9_600), 9_600);
+
+    expect(requests).toEqual([
+      { targetFreqHz: 800, filterWidthHz: 800 },
+      { targetFreqHz: 650, filterWidthHz: 250 },
+    ]);
+  });
 });

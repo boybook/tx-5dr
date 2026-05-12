@@ -136,7 +136,9 @@ export class CWDecoderManager extends EventEmitter<CWDecoderManagerEvents> {
 
   async updateConfig(update: Partial<CWDecoderConfig>): Promise<void> {
     const previousBackend = this.config.backend;
+    const previousConfig = this.config;
     const next = this.normalizeConfig({ ...this.config, ...update });
+    const changeKind = getConfigChangeKind(previousConfig, next);
     this.config = next;
     this.emit('cwDecoderConfigChanged', this.getConfig());
 
@@ -156,8 +158,30 @@ export class CWDecoderManager extends EventEmitter<CWDecoderManagerEvents> {
       return;
     }
 
+    if (changeKind === 'none') {
+      this.setStatus(this.getBackend().getStatus());
+      return;
+    }
+
+    if (changeKind === 'tuning') {
+      await this.applyRuntimeTuning();
+      return;
+    }
+
     await this.getBackend().updateConfig(this.config);
     this.setStatus(this.getBackend().getStatus());
+  }
+
+  async updateRuntimeTuning(update: Partial<Pick<CWDecoderConfig, 'targetFreqHz' | 'filterWidthHz'>>): Promise<void> {
+    this.config = this.normalizeConfig({ ...this.config, ...update });
+    this.emit('cwDecoderConfigChanged', this.getConfig());
+
+    if (!this.started || !this.config.enabled) {
+      this.setStatus(this.config.enabled ? this.status : this.disabledStatus());
+      return;
+    }
+
+    await this.applyRuntimeTuning();
   }
 
   attachAudioStream(stream: CWDecoderAudioStream): void {
@@ -227,6 +251,20 @@ export class CWDecoderManager extends EventEmitter<CWDecoderManagerEvents> {
     return this.backends[this.config.backend];
   }
 
+  private async applyRuntimeTuning(): Promise<void> {
+    const tuning = {
+      targetFreqHz: this.config.targetFreqHz,
+      filterWidthHz: this.config.filterWidthHz,
+    };
+    const backend = this.getBackend();
+    if (backend.updateTuning) {
+      await backend.updateTuning(tuning);
+    } else {
+      await backend.updateConfig(this.config);
+    }
+    this.setStatus(backend.getStatus());
+  }
+
   private bindBackend(backend: CWDecoderBackend): void {
     backend.on('status', this.backendStatusListener);
     backend.on('reset', this.backendResetListener);
@@ -283,4 +321,21 @@ export class CWDecoderManager extends EventEmitter<CWDecoderManagerEvents> {
 
 function positiveInteger(value: number | undefined, fallback: number): number {
   return Number.isFinite(value) && (value ?? 0) > 0 ? Math.floor(value as number) : fallback;
+}
+
+function getConfigChangeKind(previous: CWDecoderConfig, next: CWDecoderConfig): 'none' | 'tuning' | 'other' {
+  const previousRecord = previous as unknown as Record<string, unknown>;
+  const nextRecord = next as unknown as Record<string, unknown>;
+  const keys = new Set([...Object.keys(previousRecord), ...Object.keys(nextRecord)]);
+  let tuningChanged = false;
+  for (const key of keys) {
+    if (key === 'targetFreqHz' || key === 'filterWidthHz') {
+      tuningChanged = tuningChanged || previousRecord[key] !== nextRecord[key];
+      continue;
+    }
+    if (previousRecord[key] !== nextRecord[key]) {
+      return 'other';
+    }
+  }
+  return tuningChanged ? 'tuning' : 'none';
 }

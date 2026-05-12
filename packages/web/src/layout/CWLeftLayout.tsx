@@ -2,11 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { Button } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faGithub } from '@fortawesome/free-brands-svg-icons';
-import { SpectrumDisplay } from '../components/radio/spectrum/SpectrumDisplay';
 import { RadioMetersDisplay } from '../components/radio/control/RadioMetersDisplay';
 import { CWKeyerPanel } from '../components/cw/CWKeyerPanel';
 import { CWDecoderPanel } from '../components/cw/CWDecoderPanel';
 import { CWFrequencyControl } from '../components/cw/CWFrequencyControl';
+import { CWSpectrumFilterOverlay } from '../components/cw/CWSpectrumFilterOverlay';
+import { CWDecoderProvider } from '../hooks/useCWDecoder';
 import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
 import { ClockDisplay } from '../components/system/ClockDisplay';
 import { StationInfoPopover } from '../components/station/StationInfoPopover';
@@ -99,35 +100,37 @@ export const CWLeftLayout: React.FC = () => {
       </div>
 
       {/* Main content */}
-      <div className="flex-1 px-2 pb-2 md:px-5 md:pb-5 min-h-0 flex flex-col gap-2 md:gap-3">
-        <CWFrequencyControl />
+      <CWDecoderProvider>
+        <div className="flex-1 px-2 pb-2 md:px-5 md:pb-5 min-h-0 flex flex-col gap-2 md:gap-3">
+          <CWFrequencyControl />
 
-        {/* Spectrum Display (no frequency markers for CW mode) */}
-        <div className="flex-shrink-0 bg-content2 rounded-lg shadow-sm overflow-hidden">
-          <SpectrumDisplay
-            height={isMobile ? 80 : 128}
-            showMarkers={false}
-          />
-        </div>
-
-        {/* Radio Meters */}
-        {showRadioMeters && (
-          <div className="flex-shrink-0">
-            <RadioMetersDisplay
-              meterData={radio.state.meterData || EMPTY_METER_DATA}
-              isPttActive={radio.state.pttStatus.isTransmitting}
-              meterCapabilities={radio.state.meterCapabilities}
-              enableAlcOverLimitPrompt={false}
+          {/* Spectrum Display (no frequency markers for CW mode) */}
+          <div className="flex-shrink-0 bg-content2 rounded-lg shadow-sm overflow-hidden">
+            <CWSpectrumFilterOverlay
+              height={isMobile ? 80 : 128}
+              showMarkers={false}
             />
           </div>
-        )}
 
-        <CWDecoderPanel />
+          {/* Radio Meters */}
+          {showRadioMeters && (
+            <div className="flex-shrink-0">
+              <RadioMetersDisplay
+                meterData={radio.state.meterData || EMPTY_METER_DATA}
+                isPttActive={radio.state.pttStatus.isTransmitting}
+                meterCapabilities={radio.state.meterCapabilities}
+                enableAlcOverLimitPrompt={false}
+              />
+            </div>
+          )}
 
-        <div className="min-h-0 flex-1">
-          <CWKeyerPanel embedded />
+          <CWDecoderPanel />
+
+          <div className="min-h-0 flex-1">
+            <CWKeyerPanel embedded />
+          </div>
         </div>
-      </div>
+      </CWDecoderProvider>
     </div>
   );
 };

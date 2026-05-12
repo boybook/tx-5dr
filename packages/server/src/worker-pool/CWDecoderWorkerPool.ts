@@ -78,8 +78,8 @@ export class CWDecoderWorkerPool {
   private readonly runtimeBackend?: CWDecoderWorkerRequest['runtimeBackend'];
   private readonly modelSize?: CWDecoderWorkerRequest['modelSize'];
   private readonly language?: string;
-  private readonly targetFreqHz?: number;
-  private readonly filterWidthHz?: number;
+  private targetFreqHz?: number;
+  private filterWidthHz?: number;
   private readonly runtimeProbe: typeof probeDeepCWRuntime;
   private readonly decodeImpl?: (request: CWDecoderWorkerRequest) => Promise<CWDecoderWorkerResult>;
   private readonly pending: PendingJob[] = [];
@@ -153,6 +153,15 @@ export class CWDecoderWorkerPool {
       this.pending.push({ id: jobId, audio, sampleRate, resolve, reject });
       this.dispatch();
     });
+  }
+
+  updateTuning(tuning: { targetFreqHz?: number; filterWidthHz?: number }): void {
+    if (typeof tuning.targetFreqHz === 'number') {
+      this.targetFreqHz = tuning.targetFreqHz;
+    }
+    if (typeof tuning.filterWidthHz === 'number') {
+      this.filterWidthHz = tuning.filterWidthHz;
+    }
   }
 
   getTelemetrySnapshot(): CWDecoderWorkerTelemetrySnapshot {

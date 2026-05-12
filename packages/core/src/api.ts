@@ -2039,6 +2039,17 @@ export const api = {
     );
   },
 
+  async updateCWDecoderTuning(
+    body: import('@tx5dr/contracts').CWDecoderTuningUpdate,
+    apiBase?: string,
+  ): Promise<{ success: boolean; status: import('@tx5dr/contracts').CWDecoderStatus }> {
+    return apiRequest<{ success: boolean; status: import('@tx5dr/contracts').CWDecoderStatus }>(
+      '/cw/decoder/tuning',
+      { method: 'PATCH', body: JSON.stringify(body) },
+      apiBase,
+    );
+  },
+
   async startCWDecoder(
     body: Partial<import('@tx5dr/contracts').CWDecoderConfig> = {},
     apiBase?: string,
@@ -2339,6 +2350,7 @@ export const {
   ,getCWDecoderBackends
   ,getCWDecoderConfig
   ,updateCWDecoderConfig
+  ,updateCWDecoderTuning
   ,startCWDecoder
   ,stopCWDecoder
   ,clearCWDecoderTranscript

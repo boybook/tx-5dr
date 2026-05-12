@@ -171,6 +171,21 @@ describe('SpectrumAnalyzer', () => {
       expect(getPeakInfo(spectrum).peakFrequency).toBeGreaterThan(900);
       expect(getPeakInfo(spectrum).peakFrequency).toBeLessThan(1100);
     });
+
+    it('keeps CW 9600 Hz audio spectrum calibrated in Hz after display downsampling', async () => {
+      const analyzer = new SpectrumAnalyzer({
+        sampleRate: 9600,
+        fftSize: 8192,
+        targetSampleRate: 6000,
+      });
+      const audio = generateSineWave(800, 9600, 2.0);
+      const spectrum = await analyzer.analyze(audio);
+      const peakInfo = getPeakInfo(spectrum);
+
+      expect(spectrum.frequencyRange.max).toBeLessThanOrEqual(3000);
+      expect(peakInfo.peakFrequency).toBeGreaterThan(780);
+      expect(peakInfo.peakFrequency).toBeLessThan(820);
+    });
   });
 
   describe('analyze - window function', () => {

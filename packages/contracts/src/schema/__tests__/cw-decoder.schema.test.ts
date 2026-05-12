@@ -3,6 +3,7 @@ import {
   CWDecoderConfigSchema,
   CWDecoderEventSchema,
   CWDecoderStatusSchema,
+  CWDecoderTuningUpdateSchema,
 } from '../cw-decoder.schema.js';
 
 describe('CW decoder contracts', () => {
@@ -102,6 +103,14 @@ describe('CW decoder contracts', () => {
 
   it('rejects model sizes that are not packaged in v1', () => {
     expect(() => CWDecoderConfigSchema.parse({ modelSize: 'base' })).toThrow();
+  });
+
+  it('validates runtime tuning updates', () => {
+    expect(CWDecoderTuningUpdateSchema.parse({ targetFreqHz: 650 })).toEqual({ targetFreqHz: 650 });
+    expect(CWDecoderTuningUpdateSchema.parse({ filterWidthHz: 250 })).toEqual({ filterWidthHz: 250 });
+    expect(() => CWDecoderTuningUpdateSchema.parse({})).toThrow();
+    expect(() => CWDecoderTuningUpdateSchema.parse({ targetFreqHz: 50 })).toThrow();
+    expect(() => CWDecoderTuningUpdateSchema.parse({ filterWidthHz: 900 })).toThrow();
   });
 
   it('represents muted listening state', () => {

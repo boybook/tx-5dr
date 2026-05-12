@@ -38,6 +38,14 @@ export const CWDecoderConfigSchema = z.object({
 });
 export type CWDecoderConfig = z.infer<typeof CWDecoderConfigSchema>;
 
+export const CWDecoderTuningUpdateSchema = z.object({
+  targetFreqHz: z.number().int().min(100).max(1500).optional(),
+  filterWidthHz: z.number().int().min(100).max(800).optional(),
+}).refine(value => value.targetFreqHz !== undefined || value.filterWidthHz !== undefined, {
+  message: 'At least one CW decoder tuning field is required',
+});
+export type CWDecoderTuningUpdate = z.infer<typeof CWDecoderTuningUpdateSchema>;
+
 export const CWDecoderBackendDescriptorSchema = z.object({
   id: CWDecoderBackendSchema,
   name: z.string(),

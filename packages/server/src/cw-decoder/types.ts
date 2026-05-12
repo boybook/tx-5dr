@@ -115,6 +115,7 @@ export interface CWDecoderBackend extends EventEmitter<CWDecoderBackendEvents> {
   start(config: CWDecoderConfig): Promise<void>;
   stop(reason?: string): Promise<void>;
   updateConfig(config: CWDecoderConfig): Promise<void>;
+  updateTuning?(tuning: Pick<CWDecoderConfig, 'targetFreqHz' | 'filterWidthHz'>): Promise<void> | void;
   clearTranscript?(): void;
   pushAudio(chunk: Float32Array, sampleRate: number, timestamp?: number): void;
   getStatus(): CWDecoderStatus;

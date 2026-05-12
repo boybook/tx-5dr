@@ -2,6 +2,7 @@ import { EventEmitter } from 'eventemitter3';
 import { createLogger } from '../utils/logger.js';
 import { CWDecoderWorkerPool } from '../worker-pool/CWDecoderWorkerPool.js';
 import { probeDeepCWRuntime } from '../worker-pool/CWDecoderWorkerCore.js';
+import { analyzeDeepCWSignal } from '../worker-pool/DeepCWFeatureExtractor.js';
 import { StreamingCommitHelper } from './StreamingCommitHelper.js';
 import {
   DEFAULT_CW_DECODER_CONFIG,
@@ -22,6 +23,7 @@ const STREAMING_OVERLAP_RETENTION_SECONDS = 1.25;
 const STREAMING_MAX_SEGMENT_SECONDS = 30;
 const STREAMING_STABLE_MIN_NON_WHITESPACE_CHARS = 5;
 const STREAMING_STABLE_REPEAT_COUNT = 3;
+const SIGNAL_ANALYSIS_LOG_INTERVAL_MS = 10_000;
 
 export interface DeepCWDecoderBackendOptions {
   poolFactory?: (config: CWDecoderConfig) => CWDecoderWorkerPool;
@@ -53,6 +55,7 @@ export class DeepCWDecoderBackend extends EventEmitter<CWDecoderBackendEvents> i
   private sessionId = createTranscriptSessionId();
   private commitSequence = 0;
   private pendingVersion = 0;
+  private lastSignalAnalysisLogAt = 0;
 
   constructor(options: DeepCWDecoderBackendOptions = {}) {
     super();
@@ -70,6 +73,7 @@ export class DeepCWDecoderBackend extends EventEmitter<CWDecoderBackendEvents> i
   async start(config: CWDecoderConfig): Promise<void> {
     await this.stop('restart');
     this.config = this.normalizeConfig(config);
+    this.lastSignalAnalysisLogAt = 0;
     this.configureBuffers();
     this.beginTranscriptSession();
     this.setStatus(this.makeStatus('starting', false, null));
@@ -109,6 +113,7 @@ export class DeepCWDecoderBackend extends EventEmitter<CWDecoderBackendEvents> i
     }
     this.decodeInFlight = false;
     this.resetStreamingState();
+    this.lastSignalAnalysisLogAt = 0;
     this.status = { ...this.status, lastPendingText: '', lastCommittedText: '', lastDecodeAt: null, queuedSamples: 0 };
     this.setStatus(this.makeStatus('stopped', false, null));
     logger.debug('DeepCW backend stopped', { reason });
@@ -138,6 +143,36 @@ export class DeepCWDecoderBackend extends EventEmitter<CWDecoderBackendEvents> i
       return;
     }
     await this.start(config);
+  }
+
+  updateTuning(tuning: Pick<CWDecoderConfig, 'targetFreqHz' | 'filterWidthHz'>): void {
+    const nextConfig = this.normalizeConfig({
+      ...this.config,
+      targetFreqHz: tuning.targetFreqHz,
+      filterWidthHz: tuning.filterWidthHz,
+    });
+    const changed = nextConfig.targetFreqHz !== this.config.targetFreqHz
+      || nextConfig.filterWidthHz !== this.config.filterWidthHz;
+    this.config = nextConfig;
+    this.pool?.updateTuning({
+      targetFreqHz: nextConfig.targetFreqHz,
+      filterWidthHz: nextConfig.filterWidthHz,
+    });
+    if (!changed) {
+      this.emit('status', this.getStatus());
+      return;
+    }
+
+    const timestamp = Date.now();
+    this.resetPendingAudioState();
+    this.lastSignalAnalysisLogAt = 0;
+    this.status = {
+      ...this.status,
+      lastPendingText: '',
+      queuedSamples: 0,
+    };
+    this.emitPendingClear(timestamp);
+    this.emit('status', this.getStatus());
   }
 
   pushAudio(chunk: Float32Array, sampleRate: number): void {
@@ -189,6 +224,8 @@ export class DeepCWDecoderBackend extends EventEmitter<CWDecoderBackendEvents> i
     try {
       const analysisLength = Math.min(this.pendingAudio.length, this.commitHelper.maxSegmentSamples);
       const analysisAudio = this.pendingAudio.slice(0, analysisLength);
+      const timestamp = Date.now();
+      this.logSignalAnalysis(analysisAudio, timestamp);
       if (!hasNonZeroSamples(analysisAudio)) {
         this.resetPendingAudioState();
         this.status = {
@@ -204,7 +241,6 @@ export class DeepCWDecoderBackend extends EventEmitter<CWDecoderBackendEvents> i
       if (generation !== this.resetGeneration) {
         return;
       }
-      const timestamp = Date.now();
       const evaluation = this.commitHelper.evaluateDecode(result, analysisLength, this.pendingAudio.length);
       const pending = this.commitHelper.buildPendingEvent(evaluation.pendingLane, timestamp, {
         sessionId: this.sessionId,
@@ -328,6 +364,31 @@ export class DeepCWDecoderBackend extends EventEmitter<CWDecoderBackendEvents> i
     });
   }
 
+  private logSignalAnalysis(audio: Float32Array, updatedAt = Date.now()): void {
+    if (updatedAt - this.lastSignalAnalysisLogAt < SIGNAL_ANALYSIS_LOG_INTERVAL_MS) {
+      return;
+    }
+    this.lastSignalAnalysisLogAt = updatedAt;
+    const analysis = analyzeDeepCWSignal(
+      audio,
+      this.config.decodeSampleRate,
+      this.config.targetFreqHz,
+      this.config.filterWidthHz,
+      updatedAt,
+    );
+    logger.info('DeepCW input signal analysis', {
+      classification: analysis.classification,
+      targetFreqHz: Math.round(analysis.targetFreqHz),
+      filterWidthHz: Math.round(analysis.filterWidthHz),
+      effectiveBandHz: `${Math.round(analysis.effectiveBandMinHz)}-${Math.round(analysis.effectiveBandMaxHz)}`,
+      peakFreqHz: Math.round(analysis.peakFreqHz),
+      snrDb: roundMetric(analysis.snrDb, 1),
+      rmsDbfs: roundMetric(analysis.rmsDbfs, 1),
+      activeFrameRatio: roundMetric(analysis.activeFrameRatio, 2),
+      durationMs: Math.round(analysis.durationMs),
+    });
+  }
+
   private isInputSampleRateMismatchError(error: string | null): boolean {
     return !!error && error.includes(`expects ${this.config.decodeSampleRate} Hz audioData`);
   }
@@ -427,6 +488,11 @@ function hasNonZeroSamples(samples: Float32Array): boolean {
     if (Math.abs(samples[index] ?? 0) > 1e-8) return true;
   }
   return false;
+}
+
+function roundMetric(value: number, digits: number): number {
+  const scale = 10 ** digits;
+  return Math.round(value * scale) / scale;
 }
 
 function createTranscriptSessionId(): string {

@@ -3,6 +3,7 @@ import {
   UserRole,
   CWKeyerBackendSchema,
   CWDecoderConfigSchema,
+  CWDecoderTuningUpdateSchema,
   CWMessagePanelUpdateSchema,
   CWMessageSlotUpdateSchema,
 } from '@tx5dr/contracts';
@@ -62,6 +63,18 @@ export async function cwRoutes(fastify: FastifyInstance) {
       const patch = CWDecoderConfigSchema.partial().parse(req.body);
       const config = await engine.updateCWDecoderConfig(patch);
       return reply.send({ success: true, config, status: engine.getCWDecoderStatus() });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
+    }
+  });
+
+  fastify.patch('/decoder/tuning', {
+    preHandler: [requireAbility('update', 'CWDecoderConfig')],
+  }, async (req, reply) => {
+    try {
+      const patch = CWDecoderTuningUpdateSchema.parse(req.body);
+      const status = await engine.updateCWDecoderTuning(patch);
+      return reply.send({ success: true, status });
     } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
     }

@@ -25,6 +25,11 @@ import {
   normalizeCWDecoderRuntimeBackends,
   normalizeSelectedCWDecoderRuntimeBackend,
 } from '../../utils/cwDecoderRuntimeOptions';
+import {
+  CW_DECODER_FILTER_WIDTH_OPTIONS,
+  clampCWDecoderFilterWidth,
+  clampCWDecoderTargetFreq,
+} from '../../utils/cwDecoderTuning';
 
 const CALLSIGN_RE = /\b(?:[A-Z]{1,2}\d[A-Z0-9]{1,4}|[A-Z0-9]{1,3}\d[A-Z]{1,4})\b/i;
 const DEFAULT_MODEL_SIZES = ['tiny', 'small'] as const;
@@ -92,6 +97,7 @@ export function CWDecoderPanel() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<DecoderSettingsDraft | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [savingFilterWidth, setSavingFilterWidth] = useState<number | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoScrollTranscriptRef = useRef(true);
   const canControlDecoder = useCan('execute', 'CWDecoder');
@@ -109,12 +115,15 @@ export function CWDecoderPanel() {
     start,
     stop,
     updateConfig,
+    tuneRuntime,
     clearTranscript,
   } = useCWDecoder();
 
   const backendId = status.backend ?? config?.backend ?? effectiveBackend?.id ?? '';
   const modelSize = String(config?.modelSize ?? config?.model ?? status.model ?? effectiveBackend?.model ?? 'tiny');
   const runtimeBackend = String(config?.runtimeBackend ?? config?.runtime ?? status.runtime ?? effectiveBackend?.runtime ?? 'cpu');
+  const targetFreqHz = clampCWDecoderTargetFreq(typeof config?.targetFreqHz === 'number' ? config.targetFreqHz : 800);
+  const filterWidthHz = clampCWDecoderFilterWidth(typeof config?.filterWidthHz === 'number' ? config.filterWidthHz : 800);
   const model = (status.model ?? modelSize) || t('cw.decoder.modelUnknown', 'default');
   const runtime = getCWDecoderRuntimeLabel((status.runtime ?? runtimeBackend) || t('cw.decoder.runtimeUnknown', 'auto'));
   const isEnabled = status.enabled || status.running || status.state === 'starting';
@@ -137,6 +146,9 @@ export function CWDecoderPanel() {
   const normalizedDraftModelSize = modelSizeOptions.includes(draft.modelSize) ? draft.modelSize : modelSizeOptions[0] ?? draft.modelSize;
   const runtimeBackendOptions = normalizeCWDecoderRuntimeBackends(draftBackend?.runtimeBackends);
   const normalizedDraftRuntimeBackend = normalizeSelectedCWDecoderRuntimeBackend(draft.runtimeBackend, runtimeBackendOptions);
+  const filterWidthOptions = useMemo(() => (
+    Array.from(new Set<number>([...CW_DECODER_FILTER_WIDTH_OPTIONS, filterWidthHz])).sort((left, right) => left - right)
+  ), [filterWidthHz]);
   const settingsChanged = draft.backend !== backendId
     || normalizedDraftModelSize !== modelSize
     || normalizedDraftRuntimeBackend !== runtimeBackend;
@@ -197,6 +209,18 @@ export function CWDecoderPanel() {
       ...(prev ?? makeSettingsDraft(backendId, modelSize, runtimeBackend)),
       runtimeBackend: String(key),
     }));
+  };
+
+  const handleFilterWidthChange = async (width: number) => {
+    if (!canConfigureDecoder || savingFilterWidth !== null || width === filterWidthHz) return;
+    const nextWidth = clampCWDecoderFilterWidth(width);
+    setSavingFilterWidth(nextWidth);
+    try {
+      await tuneRuntime({ targetFreqHz, filterWidthHz: nextWidth });
+      await updateConfig({ targetFreqHz, filterWidthHz: nextWidth });
+    } finally {
+      setSavingFilterWidth(null);
+    }
   };
 
   const openSettings = () => {
@@ -261,6 +285,37 @@ export function CWDecoderPanel() {
                     <FontAwesomeIcon icon={faGear} className="text-[10px]" />
                   </Button>
                 </Tooltip>
+                <Select
+                  size="sm"
+                  aria-label={t('cw.decoder.filter', 'Audio filter')}
+                  title={t('cw.decoder.filterSummary', '{{target}} Hz tone · {{width}} Hz width', {
+                    target: targetFreqHz,
+                    width: filterWidthHz,
+                  })}
+                  selectedKeys={[String(filterWidthHz)]}
+                  isDisabled={!canConfigureDecoder || savingFilterWidth !== null}
+                  disallowEmptySelection
+                  classNames={{
+                    base: 'w-[76px] shrink-0',
+                    trigger: 'h-5 min-h-5 rounded-md bg-content2 px-1.5',
+                    value: 'text-[10px] text-default-500',
+                    selectorIcon: 'h-3 w-3 text-default-400',
+                  }}
+                  onSelectionChange={(keys) => {
+                    if (keys === 'all') return;
+                    const key = Array.from(keys)[0];
+                    const width = Number(key);
+                    if (Number.isFinite(width)) {
+                      void handleFilterWidthChange(width);
+                    }
+                  }}
+                >
+                  {filterWidthOptions.map(width => (
+                    <SelectItem key={String(width)} textValue={`${width} Hz`}>
+                      {width} Hz
+                    </SelectItem>
+                  ))}
+                </Select>
               </div>
             </div>
           </div>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useState } from 'react';
+import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useReducer, useState, type ReactNode } from 'react';
 import { api } from '@tx5dr/core';
 import { useConnection } from '../store/radioStore';
 import {
@@ -16,6 +16,8 @@ export interface CWDecoderConfig {
   backend?: string;
   model?: string;
   runtime?: string;
+  targetFreqHz?: number;
+  filterWidthHz?: number;
   [key: string]: unknown;
 }
 
@@ -48,6 +50,7 @@ type CWDecoderApi = {
   stopCWDecoder?: () => Promise<{ status?: Partial<CWDecoderStatus> } | Partial<CWDecoderStatus> | void>;
   clearCWDecoderTranscript?: () => Promise<{ status?: Partial<CWDecoderStatus> } | Partial<CWDecoderStatus> | void>;
   updateCWDecoderConfig?: (config: Partial<CWDecoderConfig>) => Promise<{ config?: CWDecoderConfig; status?: Partial<CWDecoderStatus> } | CWDecoderConfig>;
+  updateCWDecoderTuning?: (config: Pick<Partial<CWDecoderConfig>, 'targetFreqHz' | 'filterWidthHz'>) => Promise<{ status?: Partial<CWDecoderStatus> } | Partial<CWDecoderStatus> | void>;
 };
 
 type CWDecoderStatusPayload = Omit<Partial<CWDecoderStatus>, 'backend'> & {
@@ -195,7 +198,7 @@ function normalizeStructuredSegment(value: unknown, fallback: CWDecoderEventPayl
   };
 }
 
-export function useCWDecoder() {
+function useCWDecoderController() {
   const connection = useConnection();
   const radioService = connection.state.radioService;
   const decoderApi = api as unknown as CWDecoderApi;
@@ -380,6 +383,26 @@ export function useCWDecoder() {
     }
   }, [decoderApi, radioService]);
 
+  const tuneRuntime = useCallback(async (patch: Pick<Partial<CWDecoderConfig>, 'targetFreqHz' | 'filterWidthHz'>) => {
+    setError(null);
+    setConfig(prev => ({ ...(prev ?? {}), ...patch }));
+    try {
+      const response = await decoderApi.updateCWDecoderTuning?.(patch);
+      const nextStatus = unwrapStatus(response);
+      if (nextStatus) {
+        setStatus(prev => normalizeStatus(nextStatus, prev));
+        const statusConfig = isRecord((nextStatus as CWDecoderStatusPayload).config)
+          ? (nextStatus as CWDecoderStatusPayload).config as CWDecoderConfig
+          : null;
+        if (statusConfig) {
+          setConfig(prev => ({ ...(prev ?? {}), ...statusConfig }));
+        }
+      }
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [decoderApi]);
+
   const clearTranscript = useCallback(async () => {
     dispatchTranscript({ type: 'clear', timestamp: Date.now() });
     setError(null);
@@ -419,6 +442,24 @@ export function useCWDecoder() {
     start,
     stop,
     updateConfig,
+    tuneRuntime,
     clearTranscript,
   };
+}
+
+export type CWDecoderContextValue = ReturnType<typeof useCWDecoderController>;
+
+const CWDecoderContext = createContext<CWDecoderContextValue | null>(null);
+
+export function CWDecoderProvider({ children }: { children: ReactNode }) {
+  const value = useCWDecoderController();
+  return createElement(CWDecoderContext.Provider, { value }, children);
+}
+
+export function useCWDecoder(): CWDecoderContextValue {
+  const context = useContext(CWDecoderContext);
+  if (!context) {
+    throw new Error('useCWDecoder must be used within CWDecoderProvider');
+  }
+  return context;
 }

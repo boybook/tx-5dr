@@ -5,10 +5,17 @@ import type { CWDecoderWorkerResult } from '../../worker-pool/CWDecoderWorkerCor
 
 class MockPool {
   calls: number[] = [];
+  tuningUpdates: Array<{ targetFreqHz?: number; filterWidthHz?: number }> = [];
+  stopCalls = 0;
   constructor(private readonly results: CWDecoderWorkerResult[]) {}
 
   async start(): Promise<void> {}
-  async stop(): Promise<void> {}
+  async stop(): Promise<void> {
+    this.stopCalls += 1;
+  }
+  updateTuning(tuning: { targetFreqHz?: number; filterWidthHz?: number }): void {
+    this.tuningUpdates.push(tuning);
+  }
   getTelemetrySnapshot() {
     return {
       status: 'running' as const,
@@ -153,6 +160,24 @@ describe('DeepCWDecoderBackend', () => {
       backendError: expect.stringContaining('expects 9600 Hz audioData'),
     });
     expect(pool.calls).toEqual([]);
+    await backend.stop('test');
+  });
+
+  it('updates target and filter width without restarting the worker pool', async () => {
+    const pool = new MockPool([decodeResult()]);
+    const backend = new DeepCWDecoderBackend({ poolFactory: () => pool as never });
+    const pending: string[] = [];
+    backend.on('pending', (event) => pending.push(event.text));
+
+    await backend.start({ ...DEFAULT_CW_DECODER_CONFIG, enabled: true, targetFreqHz: 800, filterWidthHz: 800 });
+    backend.pushAudio(audio(3), DEFAULT_CW_DECODER_CONFIG.decodeSampleRate);
+
+    backend.updateTuning({ targetFreqHz: 650, filterWidthHz: 250 });
+
+    expect(pool.stopCalls).toBe(0);
+    expect(pool.tuningUpdates.at(-1)).toEqual({ targetFreqHz: 650, filterWidthHz: 250 });
+    expect(pending.at(-1)).toBe('');
+    expect(backend.getStatus()).toMatchObject({ state: 'running', lastPendingText: '', queuedSamples: 0 });
     await backend.stop('test');
   });
 });

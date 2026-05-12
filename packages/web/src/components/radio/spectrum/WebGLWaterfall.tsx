@@ -50,6 +50,31 @@ export interface TxBandOverlay {
   draggable?: boolean;
 }
 
+export interface FrequencyBandOverlay {
+  id: string;
+  label: string;
+  centerFrequency: number;
+  rangeStartFrequency: number;
+  rangeEndFrequency: number;
+  draggable?: boolean;
+  resizable?: boolean;
+  minCenterFrequency?: number;
+  maxCenterFrequency?: number;
+  minWidthHz?: number;
+  maxWidthHz?: number;
+  stepHz?: number;
+  centerStepHz?: number;
+  widthStepHz?: number;
+  description?: string;
+}
+
+export interface FrequencyBandOverlayChange {
+  centerFrequency: number;
+  rangeStartFrequency: number;
+  rangeEndFrequency: number;
+  widthHz: number;
+}
+
 export interface PresetMarker {
   id: string;
   frequency: number;
@@ -69,6 +94,7 @@ interface WebGLWaterfallProps {
   rxFrequencies?: RxFrequency[];
   txFrequencies?: TxFrequency[];
   txBandOverlays?: TxBandOverlay[];
+  frequencyBandOverlays?: FrequencyBandOverlay[];
   presetMarkers?: PresetMarker[];
   frequencyRangeMode?: 'baseband' | 'absolute-center' | 'absolute-fixed' | 'absolute-windowed';
   referenceFrequencyHz?: number | null;
@@ -78,6 +104,8 @@ interface WebGLWaterfallProps {
   interactionFrequencyStepHz?: number | null;
   onTxFrequencyChange?: (operatorId: string, frequency: number) => void;
   onTxBandOverlayFrequencyChange?: (id: string, frequency: number) => void;
+  onFrequencyBandOverlayPreviewChange?: (id: string, change: FrequencyBandOverlayChange) => void;
+  onFrequencyBandOverlayCommit?: (id: string, change: FrequencyBandOverlayChange) => void;
   onPresetMarkerClick?: (frequency: number) => void;
   onDragFrequencyChange?: (frequency: number) => void;
   onDoubleClickSetFrequency?: (frequency: number) => void;
@@ -99,6 +127,16 @@ interface WebGLWaterfallProps {
 }
 
 const FREQUENCY_GESTURE_DRAG_THRESHOLD_PX = 4;
+export const WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ = 15;
+
+export function getWaterfallFrequencyPositionPercent(
+  displayFrequency: number,
+  minFrequency: number,
+  maxFrequency: number,
+  visualOffsetHz = WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ,
+): number {
+  return ((displayFrequency + visualOffsetHz - minFrequency) / (maxFrequency - minFrequency)) * 100;
+}
 
 function areAxesEqual(left: SpectrumAxis | null, right: SpectrumAxis | null): boolean {
   return Boolean(
@@ -199,6 +237,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   rxFrequencies = [],
   txFrequencies = [],
   txBandOverlays = [],
+  frequencyBandOverlays = [],
   presetMarkers = [],
   frequencyRangeMode = 'baseband',
   referenceFrequencyHz = null,
@@ -208,6 +247,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   interactionFrequencyStepHz = null,
   onTxFrequencyChange,
   onTxBandOverlayFrequencyChange,
+  onFrequencyBandOverlayPreviewChange,
+  onFrequencyBandOverlayCommit,
   onPresetMarkerClick,
   onDragFrequencyChange,
   onDoubleClickSetFrequency,
@@ -253,6 +294,18 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     React.useState<{ id: string; frequency: number } | null>(null);
   const [cooldownBandOverlayId, setCooldownBandOverlayId] = React.useState<string | null>(null);
   const latestBandOverlayFrequencyRef = useRef<{ id: string; frequency: number } | null>(null);
+  const [draggingFrequencyBandOverlay, setDraggingFrequencyBandOverlay] = React.useState<{
+    id: string;
+    dragTarget: 'center' | 'start' | 'end';
+    startX: number;
+    startCenterFrequency: number;
+    startWidthHz: number;
+    hzPerPixel: number;
+  } | null>(null);
+  const [localFrequencyBandOverride, setLocalFrequencyBandOverride] =
+    React.useState<{ id: string } & FrequencyBandOverlayChange | null>(null);
+  const [hoveredFrequencyBandEdgeId, setHoveredFrequencyBandEdgeId] = React.useState<string | null>(null);
+  const latestFrequencyBandChangeRef = useRef<{ id: string } & FrequencyBandOverlayChange | null>(null);
   const [frequencyGestureDragState, setFrequencyGestureDragState] = React.useState<{
     startX: number;
     startFrequency: number;
@@ -1427,7 +1480,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     );
   }
 
-  const FREQ_POSITION_OFFSET = 15;
+  const FREQ_POSITION_OFFSET = WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ;
   const isAbsoluteDisplayMode = frequencyRangeMode === 'absolute-center' || frequencyRangeMode === 'absolute-fixed';
   const isAbsoluteWindowedMode = frequencyRangeMode === 'absolute-windowed';
   const minFrequency = axis?.minHz ?? 0;
@@ -1468,9 +1521,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   }, [hasAxis, isAbsoluteDisplayMode, isAbsoluteWindowedMode, referenceFrequencyHz]);
 
   // 计算频率到位置的百分比
-  const getFrequencyPosition = useCallback((displayFrequency: number) => {
+  const getFrequencyPosition = useCallback((displayFrequency: number, visualOffsetHz = FREQ_POSITION_OFFSET) => {
     if (!hasAxis) return 0;
-    return ((displayFrequency + FREQ_POSITION_OFFSET - minFrequency) / (maxFrequency - minFrequency)) * 100;
+    return getWaterfallFrequencyPositionPercent(displayFrequency, minFrequency, maxFrequency, visualOffsetHz);
   }, [hasAxis, maxFrequency, minFrequency]);
 
   const getMarkerPosition = useCallback((basebandFrequency: number) => {
@@ -1486,7 +1539,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   }, [getDisplayFrequency, getFrequencyPosition]);
 
   // 从鼠标位置计算频率
-  const getFrequencyFromMousePosition = useCallback((clientX: number) => {
+  const getFrequencyFromMousePosition = useCallback((clientX: number, visualOffsetHz = FREQ_POSITION_OFFSET) => {
     const container = containerRef.current;
     if (!container || !hasAxis) return 0;
 
@@ -1494,7 +1547,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const relativeX = clientX - containerRect.left;
     const percentage = Math.max(0, Math.min(1, relativeX / containerRect.width));
 
-    const displayFrequency = minFrequency + percentage * (maxFrequency - minFrequency) - FREQ_POSITION_OFFSET;
+    const displayFrequency = minFrequency + percentage * (maxFrequency - minFrequency) - visualOffsetHz;
     const basebandFrequency = isAbsoluteDisplayMode
       ? displayFrequency - (referenceFrequencyHz ?? minFrequency)
       : displayFrequency;
@@ -1502,21 +1555,71 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     return clampBasebandFrequency(basebandFrequency);
   }, [clampBasebandFrequency, hasAxis, isAbsoluteDisplayMode, maxFrequency, minFrequency, referenceFrequencyHz]);
 
-  const getInteractionFrequencyFromMousePosition = useCallback((clientX: number) => {
+  const getInteractionFrequencyFromMousePosition = useCallback((clientX: number, visualOffsetHz = FREQ_POSITION_OFFSET) => {
     const container = containerRef.current;
     if (!container || !hasAxis) return 0;
 
     const containerRect = container.getBoundingClientRect();
     const relativeX = clientX - containerRect.left;
     const percentage = Math.max(0, Math.min(1, relativeX / containerRect.width));
-    const displayFrequency = minFrequency + percentage * (maxFrequency - minFrequency) - FREQ_POSITION_OFFSET;
+    const displayFrequency = minFrequency + percentage * (maxFrequency - minFrequency) - visualOffsetHz;
 
     if (interactionFrequencyMode === 'absolute') {
       return clampInteractionFrequency(displayFrequency);
     }
 
-    return getFrequencyFromMousePosition(clientX);
+    return getFrequencyFromMousePosition(clientX, visualOffsetHz);
   }, [clampInteractionFrequency, getFrequencyFromMousePosition, hasAxis, interactionFrequencyMode, maxFrequency, minFrequency]);
+
+  const getInteractionFrequencyPosition = useCallback((frequency: number, visualOffsetHz = FREQ_POSITION_OFFSET) => {
+    if (interactionFrequencyMode === 'absolute') {
+      const position = getFrequencyPosition(frequency, visualOffsetHz);
+      return Number.isFinite(position) ? position : null;
+    }
+    const displayFrequency = getDisplayFrequency(frequency);
+    if (displayFrequency === null) return null;
+    const position = getFrequencyPosition(displayFrequency, visualOffsetHz);
+    return Number.isFinite(position) ? position : null;
+  }, [getDisplayFrequency, getFrequencyPosition, interactionFrequencyMode]);
+
+  const snapBandValue = useCallback((value: number, stepHz: number | null | undefined) => {
+    const step = typeof stepHz === 'number' && Number.isFinite(stepHz) && stepHz > 0 ? stepHz : 1;
+    return Math.round(value / step) * step;
+  }, []);
+
+  const buildFrequencyBandChange = useCallback((
+    overlay: FrequencyBandOverlay,
+    dragState: NonNullable<typeof draggingFrequencyBandOverlay>,
+    clientX: number,
+  ): FrequencyBandOverlayChange => {
+    const minWidthHz = typeof overlay.minWidthHz === 'number' ? overlay.minWidthHz : 1;
+    const maxWidthHz = typeof overlay.maxWidthHz === 'number' ? overlay.maxWidthHz : Number.POSITIVE_INFINITY;
+    const minCenter = typeof overlay.minCenterFrequency === 'number' ? overlay.minCenterFrequency : Number.NEGATIVE_INFINITY;
+    const maxCenter = typeof overlay.maxCenterFrequency === 'number' ? overlay.maxCenterFrequency : Number.POSITIVE_INFINITY;
+    const startWidth = Math.max(1, dragState.startWidthHz);
+
+    let centerFrequency = dragState.startCenterFrequency;
+    let widthHz = startWidth;
+
+    if (dragState.dragTarget === 'center') {
+      const deltaHz = (clientX - dragState.startX) * dragState.hzPerPixel;
+      centerFrequency = Math.max(minCenter, Math.min(maxCenter, snapBandValue(
+        dragState.startCenterFrequency + deltaHz,
+        overlay.centerStepHz ?? overlay.stepHz,
+      )));
+    } else {
+      const edgeFrequency = getInteractionFrequencyFromMousePosition(clientX, 0);
+      widthHz = Math.abs(edgeFrequency - dragState.startCenterFrequency) * 2;
+      widthHz = Math.max(minWidthHz, Math.min(maxWidthHz, snapBandValue(widthHz, overlay.widthStepHz ?? overlay.stepHz)));
+    }
+
+    return {
+      centerFrequency,
+      rangeStartFrequency: centerFrequency - widthHz / 2,
+      rangeEndFrequency: centerFrequency + widthHz / 2,
+      widthHz,
+    };
+  }, [getInteractionFrequencyFromMousePosition, snapBandValue]);
 
   const handleGenericFrequencyDragMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (!onDragFrequencyChange || event.button !== 0 || !hasAxis) {
@@ -1600,6 +1703,42 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }, 200);
   }, [draggingBandOverlayId, getInteractionFrequencyFromMousePosition, onTxBandOverlayFrequencyChange]);
 
+  const handleFrequencyBandOverlayMouseDown = useCallback((
+    event: React.MouseEvent<HTMLDivElement>,
+    overlay: FrequencyBandOverlay,
+    dragTarget: 'center' | 'start' | 'end',
+  ) => {
+    if (event.button !== 0 || !hasAxis || (!overlay.draggable && dragTarget === 'center') || (!overlay.resizable && dragTarget !== 'center')) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+    const rect = container.getBoundingClientRect();
+    const hzPerPixel = rect.width > 0 ? (maxFrequency - minFrequency) / rect.width : 0;
+    const widthHz = Math.abs(overlay.rangeEndFrequency - overlay.rangeStartFrequency);
+    const change = {
+      id: overlay.id,
+      centerFrequency: overlay.centerFrequency,
+      rangeStartFrequency: overlay.rangeStartFrequency,
+      rangeEndFrequency: overlay.rangeEndFrequency,
+      widthHz,
+    };
+    latestFrequencyBandChangeRef.current = change;
+    setLocalFrequencyBandOverride(change);
+    setDraggingFrequencyBandOverlay({
+      id: overlay.id,
+      dragTarget,
+      startX: event.clientX,
+      startCenterFrequency: overlay.centerFrequency,
+      startWidthHz: widthHz,
+      hzPerPixel,
+    });
+  }, [hasAxis, maxFrequency, minFrequency]);
+
   const handleMouseUp = useCallback(() => {
     if (!draggingOperatorId) return;
 
@@ -1673,6 +1812,48 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       };
     }
   }, [draggingBandOverlayId, handleBandOverlayMouseMove, handleBandOverlayMouseUp]);
+
+  useEffect(() => {
+    if (!draggingFrequencyBandOverlay) {
+      return;
+    }
+
+    const handleFrequencyBandMouseMove = (event: MouseEvent) => {
+      const overlay = frequencyBandOverlays.find(item => item.id === draggingFrequencyBandOverlay.id);
+      if (!overlay) {
+        return;
+      }
+      const change = buildFrequencyBandChange(overlay, draggingFrequencyBandOverlay, event.clientX);
+      const next = { id: overlay.id, ...change };
+      latestFrequencyBandChangeRef.current = next;
+      setLocalFrequencyBandOverride(next);
+      onFrequencyBandOverlayPreviewChange?.(overlay.id, change);
+    };
+
+    const handleFrequencyBandMouseUp = () => {
+      const latest = latestFrequencyBandChangeRef.current;
+      if (latest) {
+        const { id, ...change } = latest;
+        onFrequencyBandOverlayCommit?.(id, change);
+      }
+      setDraggingFrequencyBandOverlay(null);
+      setLocalFrequencyBandOverride(null);
+      latestFrequencyBandChangeRef.current = null;
+    };
+
+    document.addEventListener('mousemove', handleFrequencyBandMouseMove);
+    document.addEventListener('mouseup', handleFrequencyBandMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleFrequencyBandMouseMove);
+      document.removeEventListener('mouseup', handleFrequencyBandMouseUp);
+    };
+  }, [
+    buildFrequencyBandChange,
+    draggingFrequencyBandOverlay,
+    frequencyBandOverlays,
+    onFrequencyBandOverlayCommit,
+    onFrequencyBandOverlayPreviewChange,
+  ]);
 
   useEffect(() => {
     if (!frequencyGestureDragState || !onDragFrequencyChange) {
@@ -1802,6 +1983,82 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
       {/* 频率标记层 */}
       <div className="pointer-events-none absolute inset-0 z-30">
+        {frequencyBandOverlays.map((overlay) => {
+          const override = localFrequencyBandOverride?.id === overlay.id ? localFrequencyBandOverride : null;
+          const centerFrequency = override?.centerFrequency ?? overlay.centerFrequency;
+          const rangeStartFrequency = override?.rangeStartFrequency ?? overlay.rangeStartFrequency;
+          const rangeEndFrequency = override?.rangeEndFrequency ?? overlay.rangeEndFrequency;
+          const startPosition = getInteractionFrequencyPosition(Math.min(rangeStartFrequency, rangeEndFrequency), 0);
+          const endPosition = getInteractionFrequencyPosition(Math.max(rangeStartFrequency, rangeEndFrequency), 0);
+          const centerPosition = getInteractionFrequencyPosition(centerFrequency, 0);
+          if (startPosition === null || endPosition === null || centerPosition === null) {
+            return null;
+          }
+          if (endPosition < 0 || startPosition > 100) {
+            return null;
+          }
+
+          const clippedLeft = Math.max(0, startPosition);
+          const clippedRight = Math.min(100, endPosition);
+          const width = Math.max(0, clippedRight - clippedLeft);
+          const isDragging = draggingFrequencyBandOverlay?.id === overlay.id;
+          const canDragCenter = Boolean(overlay.draggable && onFrequencyBandOverlayCommit);
+          const canResize = Boolean(overlay.resizable && onFrequencyBandOverlayCommit);
+          const widthHz = Math.round(Math.abs(rangeEndFrequency - rangeStartFrequency));
+          const label = overlay.description ?? `${Math.round(centerFrequency)} Hz · ${widthHz} Hz`;
+          const edgeHighlighted = hoveredFrequencyBandEdgeId === overlay.id
+            || (draggingFrequencyBandOverlay?.id === overlay.id && draggingFrequencyBandOverlay.dragTarget !== 'center');
+
+          return (
+            <div key={`frequency-band-${overlay.id}`} className="absolute inset-0 h-full pointer-events-none">
+              {width > 0 && (
+                <div
+                  className={`absolute top-0 h-full bg-cyan-400/20 shadow-[inset_0_0_22px_rgba(34,211,238,0.22)] ${isDragging ? 'bg-cyan-300/25 ring-1 ring-cyan-100/25' : ''}`}
+                  style={{ left: `${clippedLeft}%`, width: `${width}%` }}
+                />
+              )}
+              {canResize && (
+                <>
+                  <div
+                    className="absolute top-0 z-20 h-full w-6 -translate-x-1/2 cursor-ew-resize bg-transparent pointer-events-auto"
+                    style={{ left: `${startPosition}%` }}
+                    data-waterfall-marker-interactive="true"
+                    title={label}
+                    onMouseEnter={() => setHoveredFrequencyBandEdgeId(overlay.id)}
+                    onMouseLeave={() => setHoveredFrequencyBandEdgeId(current => (current === overlay.id ? null : current))}
+                    onMouseDown={(event) => handleFrequencyBandOverlayMouseDown(event, overlay, 'start')}
+                  >
+                    <div className={`mx-auto h-full w-px bg-cyan-100/80 transition-opacity ${edgeHighlighted ? 'opacity-100' : 'opacity-0'}`} />
+                  </div>
+                  <div
+                    className="absolute top-0 z-20 h-full w-6 -translate-x-1/2 cursor-ew-resize bg-transparent pointer-events-auto"
+                    style={{ left: `${endPosition}%` }}
+                    data-waterfall-marker-interactive="true"
+                    title={label}
+                    onMouseEnter={() => setHoveredFrequencyBandEdgeId(overlay.id)}
+                    onMouseLeave={() => setHoveredFrequencyBandEdgeId(current => (current === overlay.id ? null : current))}
+                    onMouseDown={(event) => handleFrequencyBandOverlayMouseDown(event, overlay, 'end')}
+                  >
+                    <div className={`mx-auto h-full w-px bg-cyan-100/80 transition-opacity ${edgeHighlighted ? 'opacity-100' : 'opacity-0'}`} />
+                  </div>
+                </>
+              )}
+              <div
+                className={`group absolute top-0 z-10 h-full w-12 -translate-x-1/2 pointer-events-auto ${canDragCenter ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-default'}`}
+                style={{ left: `${centerPosition}%` }}
+                data-waterfall-marker-interactive="true"
+                title={label}
+                onMouseDown={canDragCenter ? (event) => handleFrequencyBandOverlayMouseDown(event, overlay, 'center') : undefined}
+              >
+                <div className={`mx-auto h-full w-px bg-cyan-100 transition-opacity ${isDragging ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`} />
+                <div className="absolute bottom-1 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-100 shadow-sm select-none">
+                  {label}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
         {/* TX标记 - 红色 */}
         {txBandOverlays.map((overlay) => {
           const isOverridden = localBandOverlayOverride?.id === overlay.id

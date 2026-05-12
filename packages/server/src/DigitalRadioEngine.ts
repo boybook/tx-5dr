@@ -723,7 +723,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       });
       this.cwDecoderManager.attachAudioStream(this.audioStreamManager as unknown as import('./cw-decoder/index.js').CWDecoderAudioStream);
       this.cwDecoderManager.on('cwDecoderStatusChanged', (status) => {
-        this.emit('cwDecoderStatusChanged', this.toContractCWDecoderStatus(status));
+        this.emit('cwDecoderStatusChanged', this.toContractCWDecoderStatus(status, this.getEffectiveCWDecoderStatusConfig()));
       });
       this.cwDecoderManager.on('cwDecoderTranscriptReset', (event) => {
         this.emit('cwDecoderEvent', {
@@ -816,7 +816,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   public getCWDecoderStatus() {
-    return this.toContractCWDecoderStatus(this.getCWDecoderManager().getStatus());
+    return this.toContractCWDecoderStatus(this.getCWDecoderManager().getStatus(), this.getEffectiveCWDecoderStatusConfig());
   }
 
   public async updateCWDecoderConfig(update: Partial<CWDecoderConfig>) {
@@ -824,6 +824,16 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     const runtimeEnabled = this.cwDecoderManager?.getStatus().enabled ?? false;
     await this.getCWDecoderManager().updateConfig(this.toServerCWDecoderConfig({ ...saved, enabled: runtimeEnabled }));
     return saved;
+  }
+
+  public async updateCWDecoderTuning(update: Pick<Partial<CWDecoderConfig>, 'targetFreqHz' | 'filterWidthHz'>) {
+    await this.getCWDecoderManager().updateRuntimeTuning(update);
+    const status = this.toContractCWDecoderStatus(
+      this.getCWDecoderManager().getStatus(),
+      this.getEffectiveCWDecoderStatusConfig(),
+    );
+    this.emit('cwDecoderStatusChanged', status);
+    return status;
   }
 
   public async startCWDecoder(update: Partial<CWDecoderConfig> = {}) {
@@ -859,7 +869,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public clearCWDecoderTranscript() {
     const status = this.getCWDecoderManager().clearTranscript();
-    const contractStatus = this.toContractCWDecoderStatus(status);
+    const contractStatus = this.toContractCWDecoderStatus(status, this.getEffectiveCWDecoderStatusConfig());
     this.emit('cwDecoderStatusChanged', contractStatus);
     return contractStatus;
   }
@@ -1805,9 +1815,22 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     };
   }
 
-  private toContractCWDecoderStatus(status: ServerCWDecoderStatus, config: CWDecoderConfig = ConfigManager.getInstance().getCWDecoderConfig()): CWDecoderStatus {
+  private getEffectiveCWDecoderStatusConfig(): Partial<CWDecoderConfig> {
+    const runtimeConfig = this.cwDecoderManager?.getConfig();
+    if (!runtimeConfig) {
+      return ConfigManager.getInstance().getCWDecoderConfig();
+    }
+    const { modelPath: _modelPath, ...contractConfig } = runtimeConfig;
+    return contractConfig as unknown as Partial<CWDecoderConfig>;
+  }
+
+  private toContractCWDecoderStatus(status: ServerCWDecoderStatus, config: Partial<CWDecoderConfig> = ConfigManager.getInstance().getCWDecoderConfig()): CWDecoderStatus {
     const enabled = status.enabled || status.state === 'running' || status.state === 'starting';
-    const contractConfig = { ...config, enabled };
+    const contractConfig = {
+      ...ConfigManager.getInstance().getCWDecoderConfig(),
+      ...config,
+      enabled,
+    } as CWDecoderConfig;
     const state = status.muted
       ? 'muted'
       : status.state === 'running'

@@ -11,7 +11,7 @@ import { setPreferredSpectrumKind } from '../../../utils/spectrumPreferences';
 import { useTargetRxFrequencies, type RxFrequency } from '../../../hooks/useTargetRxFrequencies';
 import { useTxFrequencies, type TxFrequency } from '../../../hooks/useTxFrequencies';
 import { WebGLWaterfall } from './WebGLWaterfall';
-import type { AutoRangeConfig, PresetMarker, TxBandOverlay } from './WebGLWaterfall';
+import type { AutoRangeConfig, FrequencyBandOverlay, FrequencyBandOverlayChange, PresetMarker, TxBandOverlay } from './WebGLWaterfall';
 import { SpectrumStreamController } from '../../../spectrum/SpectrumStreamController';
 import { readSpectrumSubscriptionPaused, setSpectrumSubscriptionPaused } from '../../../utils/spectrumSubscriptionPause';
 import { resetOperatorsForOperatingStateChange } from '../../../utils/operatorReset';
@@ -63,6 +63,9 @@ interface SpectrumDisplayProps {
   className?: string;
   height?: number;
   hoverFrequency?: number | null;
+  frequencyBandOverlays?: FrequencyBandOverlay[];
+  onFrequencyBandOverlayPreviewChange?: (id: string, change: FrequencyBandOverlayChange) => void;
+  onFrequencyBandOverlayCommit?: (id: string, change: FrequencyBandOverlayChange) => void;
   showPopOut?: boolean;
   onPopOutChange?: (isPopedOut: boolean) => void;
   showMarkers?: boolean;
@@ -521,6 +524,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   className = '',
   height = 200,
   hoverFrequency,
+  frequencyBandOverlays = [],
+  onFrequencyBandOverlayPreviewChange,
+  onFrequencyBandOverlayCommit,
   showPopOut = true,
   onPopOutChange,
   showMarkers = true,
@@ -567,6 +573,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const txFrequencies = useTxFrequencies();
   const { currentOperatorId } = useCurrentOperatorId();
   const effectiveSelectedKind = selectedKind ?? capabilities?.defaultKind ?? AUDIO_SOURCE;
+  const isAudioSpectrumSelected = effectiveSelectedKind === AUDIO_SOURCE;
   const isRadioSdrSelected = effectiveSelectedKind === RADIO_SDR_SOURCE;
   const isOpenWebRXSdrSelected = effectiveSelectedKind === OPENWEBRX_SDR_SOURCE;
   const isVoiceMode = engineMode === 'voice';
@@ -1376,11 +1383,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         }
         interactionFrequencyStepHz={frequencyGestureStepHz}
         txBandOverlays={voiceBandOverlay}
+        frequencyBandOverlays={isAudioSpectrumSelected ? frequencyBandOverlays : []}
         presetMarkers={presetMarkers}
         rxFrequencies={displaySpectrumMarkers.rxFrequencies}
         txFrequencies={displaySpectrumMarkers.txFrequencies}
         onTxFrequencyChange={displayTxFrequencyChange}
         onTxBandOverlayFrequencyChange={voiceOverlayIsInteractive ? (_id, frequency) => void handleVoiceFrequencyChange(frequency) : undefined}
+        onFrequencyBandOverlayPreviewChange={isAudioSpectrumSelected ? onFrequencyBandOverlayPreviewChange : undefined}
+        onFrequencyBandOverlayCommit={isAudioSpectrumSelected ? onFrequencyBandOverlayCommit : undefined}
         onPresetMarkerClick={presetMarkers.length > 0 && canWriteFrequency && frequencyGestureTarget === 'radio-frequency' ? handleRadioFrequencyGesture : undefined}
         // Voice-mode whole-spectrum drag tuning is intentionally disabled.
         // The follow/center viewport recenters during tuning, which currently makes drag interaction feel unstable.
