@@ -198,18 +198,40 @@ describe('ProcessSnapshotSchema', () => {
           name: 'CW Decoder Workers',
           kind: 'cw-decoder',
           summary: {
-            status: 'stopped',
-            workerCount: 0,
-            desiredWorkers: 0,
-            readyCount: 0,
+            status: 'ready',
+            workerCount: 1,
+            desiredWorkers: 1,
+            readyCount: 1,
             busyCount: 0,
-            totalRss: 0,
-            totalCpu: 0,
+            totalRss: 512,
+            totalCpu: 4,
             nativeThreadsPerWorker: 1,
             pendingJobs: 0,
             activeJobs: 0,
           },
-          workers: [],
+          workers: [
+            {
+              workerId: 1,
+              pid: 5678,
+              ready: true,
+              busy: false,
+              nativeThreads: 1,
+              uptimeSeconds: 8,
+              memory: {
+                heapUsed: 120,
+                heapTotal: 220,
+                rss: 512,
+                external: 30,
+                arrayBuffers: 15,
+              },
+              cpu: {
+                user: 3,
+                system: 1,
+                total: 4,
+              },
+              lastSeenAt: 3,
+            },
+          ],
         },
       ],
     });
@@ -217,5 +239,7 @@ describe('ProcessSnapshotSchema', () => {
     expect(parsed.decodeWorkers?.summary.workerCount).toBe(1);
     expect(parsed.workerPools?.map((pool) => pool.id)).toEqual(['ft8-decode', 'cw-decoder']);
     expect(parsed.workerPools?.[0].workers[0].workerId).toBe(1);
+    expect(parsed.workerPools?.[1].summary.totalRss).toBe(512);
+    expect(parsed.workerPools?.[1].workers[0].pid).toBe(5678);
   });
 });

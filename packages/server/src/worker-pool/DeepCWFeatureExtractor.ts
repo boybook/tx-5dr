@@ -1,9 +1,16 @@
-const FFT_LENGTH = 768;
-const HOP_LENGTH = 192;
-const SAMPLE_RATE = 9_600;
-const BIN_RESOLUTION = SAMPLE_RATE / FFT_LENGTH;
-const DECODABLE_MIN_FREQ_HZ = 400;
-const DECODABLE_MAX_FREQ_HZ = 1_200;
+export const DEEP_CW_FFT_LENGTH = 768;
+export const DEEP_CW_HOP_LENGTH = 192;
+export const DEEP_CW_SAMPLE_RATE = 9_600;
+export const DEEP_CW_BIN_RESOLUTION = DEEP_CW_SAMPLE_RATE / DEEP_CW_FFT_LENGTH;
+export const DEEP_CW_DECODABLE_MIN_FREQ_HZ = 400;
+export const DEEP_CW_DECODABLE_MAX_FREQ_HZ = 1_200;
+
+const FFT_LENGTH = DEEP_CW_FFT_LENGTH;
+const HOP_LENGTH = DEEP_CW_HOP_LENGTH;
+const SAMPLE_RATE = DEEP_CW_SAMPLE_RATE;
+const BIN_RESOLUTION = DEEP_CW_BIN_RESOLUTION;
+const DECODABLE_MIN_FREQ_HZ = DEEP_CW_DECODABLE_MIN_FREQ_HZ;
+const DECODABLE_MAX_FREQ_HZ = DEEP_CW_DECODABLE_MAX_FREQ_HZ;
 const TOTAL_BINS = FFT_LENGTH / 2 + 1;
 const START_BIN = Math.round(DECODABLE_MIN_FREQ_HZ / BIN_RESOLUTION);
 const END_BIN = Math.round(DECODABLE_MAX_FREQ_HZ / BIN_RESOLUTION) + 1;
@@ -16,6 +23,18 @@ export interface DeepCWSpectrogramTensor {
   data: Float32Array | Uint16Array;
   dims: [number, 1, number, number];
   type: DeepCWInputType;
+}
+
+export interface DeepCWBandMapping {
+  targetBin: number;
+  halfWidthBins: number;
+  sourceStartBin: number;
+  sourceEndBin: number;
+  destStartIndex: number;
+  destEndIndex: number;
+  effectiveMinFreqHz: number;
+  effectiveMaxFreqHz: number;
+  croppedBins: number;
 }
 
 class FFT {
@@ -224,6 +243,27 @@ if (CROPPED_BINS !== 65 || END_BIN > TOTAL_BINS) {
   throw new Error(`Invalid DeepCW spectrogram configuration: bins=${CROPPED_BINS}`);
 }
 
+export const DEEP_CW_CROPPED_BINS = CROPPED_BINS;
+
+export function getDeepCWBandMapping(targetFreqHz: number, filterWidthHz: number): DeepCWBandMapping {
+  const targetBin = Math.round(targetFreqHz / BIN_RESOLUTION);
+  const halfWidthBins = Math.ceil(filterWidthHz / 2 / BIN_RESOLUTION);
+  const sourceStartBin = targetBin - halfWidthBins;
+  const sourceEndBin = targetBin + halfWidthBins;
+  const destCenterIdx = NORMAL_CENTER_BIN - START_BIN;
+  return {
+    targetBin,
+    halfWidthBins,
+    sourceStartBin,
+    sourceEndBin,
+    destStartIndex: destCenterIdx - halfWidthBins,
+    destEndIndex: destCenterIdx + halfWidthBins,
+    effectiveMinFreqHz: sourceStartBin * BIN_RESOLUTION,
+    effectiveMaxFreqHz: sourceEndBin * BIN_RESOLUTION,
+    croppedBins: CROPPED_BINS,
+  };
+}
+
 export function audioToDeepCWSpectrogramTensor(
   audio: Float32Array,
   inputType: DeepCWInputType,
@@ -260,8 +300,7 @@ function fillWideSpectrogram(audio: Float32Array, output: Float32Array): void {
 }
 
 function fillShiftedSpectrogram(audio: Float32Array, output: Float32Array, targetFreqHz: number, filterWidthHz: number): void {
-  const targetBin = Math.round(targetFreqHz / BIN_RESOLUTION);
-  const halfWidthBins = Math.ceil(filterWidthHz / 2 / BIN_RESOLUTION);
+  const { targetBin, halfWidthBins } = getDeepCWBandMapping(targetFreqHz, filterWidthHz);
   const destCenterIdx = NORMAL_CENTER_BIN - START_BIN;
   stft.forEachSpectrum(audio, (complexFrame, frameIndex) => {
     const offset = frameIndex * CROPPED_BINS;

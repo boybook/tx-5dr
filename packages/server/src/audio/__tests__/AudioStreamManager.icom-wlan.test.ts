@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'eventemitter3';
 
-const { mockConfigManager, MockRtAudio } = vi.hoisted(() => {
+const { mockConfigManager, mockResampleAudioProfessional, MockRtAudio } = vi.hoisted(() => {
   class HoistedMockRtAudio {
     constructor(_api: number) {}
     getDevices() { return []; }
@@ -19,6 +19,7 @@ const { mockConfigManager, MockRtAudio } = vi.hoisted(() => {
       getOpenWebRXStations: vi.fn((): Array<{ id: string; name: string; url: string }> => []),
       getRadioConfig: vi.fn(() => ({ type: 'icom-wlan' })),
     },
+    mockResampleAudioProfessional: vi.fn(),
     MockRtAudio: HoistedMockRtAudio,
   };
 });
@@ -37,7 +38,7 @@ vi.mock('../../config/config-manager.js', () => ({
 
 vi.mock('../../utils/audioUtils.js', () => ({
   clearResamplerCache: vi.fn(),
-  resampleAudioProfessional: vi.fn(),
+  resampleAudioProfessional: mockResampleAudioProfessional,
 }));
 
 import { AudioStreamManager } from '../AudioStreamManager.js';
@@ -67,6 +68,7 @@ function createIcomManager(adapter: MockIcomAdapter): AudioStreamManager {
 
 describe('AudioStreamManager ICOM WLAN output pacing', () => {
   beforeEach(() => {
+    mockResampleAudioProfessional.mockImplementation(async (samples: Float32Array) => samples);
     mockConfigManager.getAudioConfig.mockReturnValue({
       inputDeviceName: 'ICOM WLAN',
       outputDeviceName: 'ICOM WLAN',
@@ -78,6 +80,7 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
   });
 
   afterEach(() => {
+    vi.clearAllMocks();
     vi.restoreAllMocks();
   });
 
@@ -146,6 +149,39 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
     expect(nativeFrames[0]?.sequence).toBe(0);
     expect(nativeFrames[0]?.samples[0]).toBeCloseTo(0.1);
     expect(nativeFrames[0]?.samples[3]).toBeCloseTo(0.4);
+    expect(manager.getAudioProvider().getAvailableMs()).toBeGreaterThan(0);
+
+    await manager.stopStream();
+  });
+
+  it('resamples ICOM input through the unified audioData pipeline when CW processing rate is 9600 Hz', async () => {
+    const adapter = Object.assign(new EventEmitter(), {
+      sendAudio: vi.fn().mockResolvedValue(undefined),
+      getSampleRate: vi.fn().mockReturnValue(12000),
+      startReceiving: vi.fn(),
+      stopReceiving: vi.fn(),
+    });
+    const manager = new AudioStreamManager();
+    manager.setInputProcessingSampleRate(9600, 'test-cw');
+    manager.setIcomWlanAudioAdapter(adapter as never);
+    const processedFrames: Array<{ samples: Float32Array; sampleRate: number }> = [];
+    const processed = new Float32Array([0.7, 0.8]);
+    mockResampleAudioProfessional.mockResolvedValueOnce(processed);
+    manager.on('audioData', (samples, sampleRate) => processedFrames.push({ samples, sampleRate }));
+
+    await manager.startStream();
+    adapter.emit('audioData', new Float32Array([0.1, 0.2, 0.3]));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockResampleAudioProfessional).toHaveBeenCalledWith(
+      expect.any(Float32Array),
+      12000,
+      9600,
+      1,
+    );
+    expect(manager.getInternalSampleRate()).toBe(9600);
+    expect(manager.getAudioProvider().getSampleRate()).toBe(9600);
+    expect(processedFrames).toEqual([{ samples: processed, sampleRate: 9600 }]);
     expect(manager.getAudioProvider().getAvailableMs()).toBeGreaterThan(0);
 
     await manager.stopStream();

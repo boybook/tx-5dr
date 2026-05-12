@@ -9,6 +9,8 @@ import { probeDeepCWRuntime, runDeepCWDecode, type CWDecoderWorkerRequest, type 
 const logger = createLogger('CWDecoderWorkerPool');
 const READY_TIMEOUT_MS = 10_000;
 const JOB_TIMEOUT_MS = 20_000;
+const RECENT_ACTIVITY_VISIBLE_MS = 5_000;
+const CPU_ACTIVITY_EPSILON = 0.01;
 
 export interface CWDecoderWorkerPoolOptions {
   workerCount: number;
@@ -27,9 +29,11 @@ type CWWorkerPoolStatus = CWDecoderWorkerTelemetrySnapshot['status'];
 type WorkerMessage =
   | { type: 'ready'; telemetry?: WorkerTelemetryPayload }
   | { type: 'result'; id: number; result: CWDecoderWorkerResult; telemetry?: WorkerTelemetryPayload }
-  | { type: 'error'; id?: number; error: string; telemetry?: WorkerTelemetryPayload };
+  | { type: 'error'; id?: number; error: string; telemetry?: WorkerTelemetryPayload }
+  | { type: 'telemetry'; telemetry?: WorkerTelemetryPayload };
 
 interface WorkerTelemetryPayload {
+  pid?: number;
   uptimeSeconds?: number;
   memory?: DecodeWorkerTelemetryWorker['memory'];
   cpu?: DecodeWorkerTelemetryWorker['cpu'];
@@ -55,6 +59,10 @@ interface WorkerState {
   ready: boolean;
   activeJob: ActiveJob | null;
   lastTelemetry: DecodeWorkerTelemetryWorker | null;
+  lastCompletedJob: DecodeWorkerTelemetryWorker['currentJob'] | undefined;
+  recentlyActiveUntil: number;
+  lastNonZeroCpu: DecodeWorkerTelemetryWorker['cpu'] | null;
+  lastNonZeroCpuAt: number;
 }
 
 export class CWDecoderWorkerPool {
@@ -203,6 +211,10 @@ export class CWDecoderWorkerPool {
         ready: false,
         activeJob: null,
         lastTelemetry: null,
+        lastCompletedJob: undefined,
+        recentlyActiveUntil: 0,
+        lastNonZeroCpu: null,
+        lastNonZeroCpuAt: 0,
       };
       this.workers.set(workerId, state);
       wireOutput(worker.stdout, (line) => logger.debug('CW decoder worker stdout', { workerId, line }));
@@ -240,6 +252,9 @@ export class CWDecoderWorkerPool {
 
   private handleWorkerMessage(state: WorkerState, message: WorkerMessage): void {
     this.updateTelemetry(state, message.telemetry);
+    if (message.type === 'telemetry') {
+      return;
+    }
     if (message.type === 'ready') {
       state.ready = true;
       this.dispatch();
@@ -255,6 +270,7 @@ export class CWDecoderWorkerPool {
       return;
     }
     clearTimeout(activeJob.timer);
+    this.markJobRecentlyActive(state, activeJob);
     state.activeJob = null;
     this.inFlight = Math.max(0, this.inFlight - 1);
 
@@ -280,6 +296,7 @@ export class CWDecoderWorkerPool {
       const startedAt = Date.now();
       const timer = setTimeout(() => {
         if (state.activeJob?.id !== job.id) return;
+        this.markJobRecentlyActive(state, state.activeJob);
         state.activeJob = null;
         this.inFlight = Math.max(0, this.inFlight - 1);
         this.jobsFailed += 1;
@@ -291,7 +308,10 @@ export class CWDecoderWorkerPool {
       const sent = state.worker.send?.(this.buildRequest(job.id, job.audio, job.sampleRate), (error) => {
         if (!error) return;
         clearTimeout(timer);
-        if (state.activeJob?.id === job.id) state.activeJob = null;
+        if (state.activeJob?.id === job.id) {
+          this.markJobRecentlyActive(state, state.activeJob);
+          state.activeJob = null;
+        }
         this.inFlight = Math.max(0, this.inFlight - 1);
         this.jobsFailed += 1;
         this.lastError = error.message;
@@ -319,40 +339,69 @@ export class CWDecoderWorkerPool {
 
   private updateTelemetry(state: WorkerState, telemetry?: WorkerTelemetryPayload): void {
     if (!telemetry) return;
+    const now = Date.now();
+    const cpu = telemetry.cpu ?? { user: 0, system: 0, total: 0 };
+    const telemetryAt = telemetry.lastSeenAt ?? now;
+    if (cpu.total > CPU_ACTIVITY_EPSILON) {
+      state.lastNonZeroCpu = cpu;
+      state.lastNonZeroCpuAt = telemetryAt;
+      state.recentlyActiveUntil = Math.max(state.recentlyActiveUntil, telemetryAt + RECENT_ACTIVITY_VISIBLE_MS);
+    }
     state.lastTelemetry = {
       workerId: state.id,
+      pid: telemetry.pid ?? state.worker.pid,
       ready: state.ready,
       busy: Boolean(state.activeJob),
       nativeThreads: 1,
       uptimeSeconds: telemetry.uptimeSeconds ?? 0,
       memory: telemetry.memory ?? { heapUsed: 0, heapTotal: 0, rss: 0, external: 0, arrayBuffers: 0 },
-      cpu: telemetry.cpu ?? { user: 0, system: 0, total: 0 },
-      lastSeenAt: telemetry.lastSeenAt ?? Date.now(),
+      cpu,
+      lastSeenAt: telemetryAt,
     };
   }
 
-  private buildWorkerTelemetry(state: WorkerState): DecodeWorkerTelemetryWorker {
+  private buildWorkerTelemetry(state: WorkerState, now = Date.now()): DecodeWorkerTelemetryWorker {
     const activeJob = state.activeJob;
+    const recentlyActive = !activeJob && state.recentlyActiveUntil > now;
     return {
       workerId: state.id,
+      pid: state.lastTelemetry?.pid ?? state.worker.pid,
       ready: state.ready,
-      busy: Boolean(activeJob),
+      busy: Boolean(activeJob) || recentlyActive,
       nativeThreads: 1,
       uptimeSeconds: state.lastTelemetry?.uptimeSeconds ?? 0,
       memory: state.lastTelemetry?.memory ?? { heapUsed: 0, heapTotal: 0, rss: 0, external: 0, arrayBuffers: 0 },
-      cpu: state.lastTelemetry?.cpu ?? { user: 0, system: 0, total: 0 },
-      currentJob: activeJob
-        ? {
-            jobId: activeJob.id,
-            slotId: 'cw-stream',
-            windowIdx: activeJob.id,
-            mode: 'cw',
-            startedAt: activeJob.startedAt,
-            elapsedMs: Date.now() - activeJob.startedAt,
-            requestAudioDurationMs: activeJob.sampleRate > 0 ? (activeJob.audio.length / activeJob.sampleRate) * 1000 : undefined,
-          }
-        : undefined,
-      lastSeenAt: state.lastTelemetry?.lastSeenAt ?? Date.now(),
+      cpu: this.resolveWorkerCpu(state, now),
+      currentJob: activeJob ? this.buildCurrentJob(activeJob, now) : recentlyActive ? state.lastCompletedJob : undefined,
+      lastSeenAt: state.lastTelemetry?.lastSeenAt ?? now,
+    };
+  }
+
+  private resolveWorkerCpu(state: WorkerState, now: number): DecodeWorkerTelemetryWorker['cpu'] {
+    const latestCpu = state.lastTelemetry?.cpu ?? { user: 0, system: 0, total: 0 };
+    if (latestCpu.total > CPU_ACTIVITY_EPSILON) {
+      return latestCpu;
+    }
+    if (state.lastNonZeroCpu && now - state.lastNonZeroCpuAt <= RECENT_ACTIVITY_VISIBLE_MS) {
+      return state.lastNonZeroCpu;
+    }
+    return latestCpu;
+  }
+
+  private markJobRecentlyActive(state: WorkerState, job: ActiveJob, now = Date.now()): void {
+    state.lastCompletedJob = this.buildCurrentJob(job, now);
+    state.recentlyActiveUntil = Math.max(state.recentlyActiveUntil, now + RECENT_ACTIVITY_VISIBLE_MS);
+  }
+
+  private buildCurrentJob(job: ActiveJob, now: number): NonNullable<DecodeWorkerTelemetryWorker['currentJob']> {
+    return {
+      jobId: job.id,
+      slotId: 'cw-stream',
+      windowIdx: job.id,
+      mode: 'cw',
+      startedAt: job.startedAt,
+      elapsedMs: now - job.startedAt,
+      requestAudioDurationMs: job.sampleRate > 0 ? (job.audio.length / job.sampleRate) * 1000 : undefined,
     };
   }
 

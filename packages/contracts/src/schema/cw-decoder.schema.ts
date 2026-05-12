@@ -86,27 +86,53 @@ export const CWDecoderStatusSchema = z.object({
 });
 export type CWDecoderStatus = z.infer<typeof CWDecoderStatusSchema>;
 
+export const CWDecoderWordSpaceSpanSchema = z.object({
+  startFrame: z.number().int().nonnegative(),
+  endFrame: z.number().int().nonnegative(),
+});
+export type CWDecoderWordSpaceSpan = z.infer<typeof CWDecoderWordSpaceSpanSchema>;
+
+export const CWDecoderCharacterSpanSchema = z.object({
+  char: z.string(),
+  startFrame: z.number().int().nonnegative(),
+  endFrame: z.number().int().nonnegative(),
+});
+export type CWDecoderCharacterSpan = z.infer<typeof CWDecoderCharacterSpanSchema>;
+
 export const CWDecoderTranscriptSegmentSchema = z.object({
   id: z.string(),
+  sessionId: z.string(),
+  sequence: z.number().int().nonnegative(),
   text: z.string(),
-  startedAt: z.number(),
-  updatedAt: z.number(),
-  endedAt: z.number().nullable().optional(),
+  plainText: z.string().optional(),
+  finalized: z.literal(true).default(true),
+  prependSpace: z.boolean().default(true),
   confidence: z.number().min(0).max(1).optional(),
-  wpm: z.number().positive().optional(),
   targetFreqHz: z.number().positive().optional(),
-  finalized: z.boolean().default(false),
-  wordSpaceSpans: z.array(z.object({
-    startFrame: z.number().int().nonnegative(),
-    endFrame: z.number().int().nonnegative(),
-  })).optional(),
-  characterSpans: z.array(z.object({
-    char: z.string(),
-    startFrame: z.number().int().nonnegative(),
-    endFrame: z.number().int().nonnegative(),
-  })).optional(),
+  filterWidthHz: z.number().positive().optional(),
+  characterSpans: z.array(CWDecoderCharacterSpanSchema).optional(),
+  wordSpaceSpans: z.array(CWDecoderWordSpaceSpanSchema).optional(),
+  startedAt: z.number().optional(),
+  endedAt: z.number().nullable().optional(),
+  updatedAt: z.number(),
+  wpm: z.number().positive().optional(),
 });
 export type CWDecoderTranscriptSegment = z.infer<typeof CWDecoderTranscriptSegmentSchema>;
+
+export const CWDecoderPendingSegmentSchema = z.object({
+  sessionId: z.string(),
+  version: z.number().int().nonnegative(),
+  text: z.string(),
+  plainText: z.string().optional(),
+  finalized: z.literal(false).default(false),
+  confidence: z.number().min(0).max(1).optional(),
+  targetFreqHz: z.number().positive().optional(),
+  filterWidthHz: z.number().positive().optional(),
+  characterSpans: z.array(CWDecoderCharacterSpanSchema).optional(),
+  wordSpaceSpans: z.array(CWDecoderWordSpaceSpanSchema).optional(),
+  updatedAt: z.number(),
+});
+export type CWDecoderPendingSegment = z.infer<typeof CWDecoderPendingSegmentSchema>;
 
 export const CWDecoderStatusEventSchema = z.object({
   kind: z.literal('status'),
@@ -116,6 +142,24 @@ export const CWDecoderStatusEventSchema = z.object({
 export const CWDecoderTranscriptEventSchema = z.object({
   kind: z.literal('transcript'),
   segment: CWDecoderTranscriptSegmentSchema,
+});
+
+export const CWDecoderTranscriptResetEventSchema = z.object({
+  kind: z.literal('transcript_reset'),
+  sessionId: z.string(),
+  timestamp: z.number(),
+});
+
+export const CWDecoderTranscriptPendingEventSchema = z.object({
+  kind: z.literal('transcript_pending'),
+  pending: CWDecoderPendingSegmentSchema.nullable(),
+  timestamp: z.number(),
+});
+
+export const CWDecoderTranscriptCommitEventSchema = z.object({
+  kind: z.literal('transcript_commit'),
+  segment: CWDecoderTranscriptSegmentSchema,
+  timestamp: z.number(),
 });
 
 export const CWDecoderPendingEventSchema = z.object({
@@ -169,6 +213,9 @@ export const CWDecoderAudioBufferEventSchema = z.object({
 export const CWDecoderEventSchema = z.discriminatedUnion('kind', [
   CWDecoderStatusEventSchema,
   CWDecoderTranscriptEventSchema,
+  CWDecoderTranscriptResetEventSchema,
+  CWDecoderTranscriptPendingEventSchema,
+  CWDecoderTranscriptCommitEventSchema,
   CWDecoderPendingEventSchema,
   CWDecoderCommitEventSchema,
   CWDecoderPartialEventSchema,

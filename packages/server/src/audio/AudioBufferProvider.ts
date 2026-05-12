@@ -8,9 +8,11 @@ export class RingBufferAudioProvider implements AudioBufferProvider {
   private ringBuffer: RingBuffer;
   private startTime: number;
   private sampleRate: number;
+  private maxDurationMs: number;
 
   constructor(sampleRate: number = 12000, maxDurationMs: number = 60000) {
     this.sampleRate = sampleRate;
+    this.maxDurationMs = maxDurationMs;
     this.ringBuffer = new RingBuffer(sampleRate, maxDurationMs);
     this.startTime = Date.now();
   }
@@ -20,6 +22,20 @@ export class RingBufferAudioProvider implements AudioBufferProvider {
    */
   getSampleRate(): number {
     return this.sampleRate;
+  }
+
+  /**
+   * Rebuilds the backing ring buffer when the unified RX processing rate changes.
+   * Existing samples are intentionally dropped so consumers never mix rates.
+   */
+  setSampleRate(sampleRate: number, maxDurationMs = this.maxDurationMs): void {
+    if (this.sampleRate === sampleRate && this.maxDurationMs === maxDurationMs) {
+      return;
+    }
+    this.sampleRate = sampleRate;
+    this.maxDurationMs = maxDurationMs;
+    this.ringBuffer = new RingBuffer(sampleRate, maxDurationMs);
+    this.startTime = Date.now();
   }
   
   /**
@@ -98,4 +114,4 @@ export class RingBufferAudioProvider implements AudioBufferProvider {
     this.ringBuffer.clear();
     this.startTime = Date.now();
   }
-} 
+}

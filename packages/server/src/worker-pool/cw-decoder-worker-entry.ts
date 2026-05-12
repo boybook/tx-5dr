@@ -1,10 +1,25 @@
 import { probeDeepCWRuntime, runDeepCWDecode, type CWDecoderWorkerRequest } from './CWDecoderWorkerCore.js';
 
 const initData = readInitData();
+const TELEMETRY_INTERVAL_MS = 2_000;
+const CPU_ROLLING_WINDOW_MS = 5_000;
+const MIN_CPU_SAMPLE_INTERVAL_MS = 25;
+const initialCpuSample = {
+  timestamp: Date.now(),
+  usage: process.cpuUsage(),
+};
+let cpuSamples = [initialCpuSample];
+
 void initialize();
+
+const telemetryTimer = setInterval(() => {
+  sendMessage({ type: 'telemetry', telemetry: buildTelemetry() });
+}, TELEMETRY_INTERVAL_MS);
+telemetryTimer.unref();
 
 process.on('message', async (message: unknown) => {
   if (isShutdownMessage(message)) {
+    clearInterval(telemetryTimer);
     process.exit(0);
   }
   const request = message as CWDecoderWorkerRequest;
@@ -58,10 +73,43 @@ function sendMessage(message: unknown): void {
   process.send?.(message);
 }
 
-function buildTelemetry() {
-  const memory = process.memoryUsage();
-  const cpu = process.cpuUsage();
+function calculateCpuSinceRecentWindow(now: number, currentCpu: NodeJS.CpuUsage) {
+  cpuSamples.push({ timestamp: now, usage: currentCpu });
+
+  const cutoff = now - CPU_ROLLING_WINDOW_MS;
+  while (cpuSamples.length > 2 && (cpuSamples[1]?.timestamp ?? now) <= cutoff) {
+    cpuSamples.shift();
+  }
+
+  const baseline = cpuSamples[0] ?? { timestamp: now, usage: currentCpu };
+  const elapsedMs = now - baseline.timestamp;
+  if (elapsedMs < MIN_CPU_SAMPLE_INTERVAL_MS) {
+    return {
+      user: 0,
+      system: 0,
+      total: 0,
+    };
+  }
+
+  const elapsedUs = Math.max(elapsedMs * 1000, 1);
+  const userUs = currentCpu.user - baseline.usage.user;
+  const sysUs = currentCpu.system - baseline.usage.system;
+
+  const user = (userUs / elapsedUs) * 100;
+  const system = (sysUs / elapsedUs) * 100;
   return {
+    user,
+    system,
+    total: user + system,
+  };
+}
+
+function buildTelemetry() {
+  const now = Date.now();
+  const memory = process.memoryUsage();
+  const cpuUsage = process.cpuUsage();
+  return {
+    pid: process.pid,
     uptimeSeconds: process.uptime(),
     memory: {
       heapUsed: memory.heapUsed,
@@ -70,11 +118,8 @@ function buildTelemetry() {
       external: memory.external,
       arrayBuffers: memory.arrayBuffers,
     },
-    cpu: {
-      user: cpu.user / 1000,
-      system: cpu.system / 1000,
-      total: (cpu.user + cpu.system) / 1000,
-    },
-    lastSeenAt: Date.now(),
+    cpu: calculateCpuSinceRecentWindow(now, cpuUsage),
+    cpuUsage,
+    lastSeenAt: now,
   };
 }

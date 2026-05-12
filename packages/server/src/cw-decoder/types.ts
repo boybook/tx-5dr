@@ -41,8 +41,16 @@ export interface CWDecoderStatus {
 export interface CWDecoderPendingEvent {
   type: 'pending';
   backend: CWDecoderBackendId;
+  sessionId?: string;
+  version?: number;
   text: string;
+  plainText?: string;
+  finalized?: false;
   confidence: number;
+  targetFreqHz?: number;
+  filterWidthHz?: number;
+  characterSpans?: CWDecoderCharacterSpan[];
+  wordSpaceSpans?: CWDecoderWordSpaceSpan[];
   timestamp: number;
 }
 
@@ -50,11 +58,28 @@ export interface CWDecoderCommitEvent {
   type: 'commit';
   id: string;
   backend: CWDecoderBackendId;
+  sessionId?: string;
+  sequence?: number;
   text: string;
+  plainText?: string;
+  finalized?: true;
+  prependSpace?: boolean;
   confidence: number;
   timestamp: number;
+  targetFreqHz?: number;
+  filterWidthHz?: number;
   characterSpans?: CWDecoderCharacterSpan[];
   wordSpaceSpans?: CWDecoderWordSpaceSpan[];
+  startedAt?: number;
+  endedAt?: number;
+  updatedAt?: number;
+}
+
+export interface CWDecoderTranscriptResetEvent {
+  type: 'transcript_reset';
+  backend: CWDecoderBackendId;
+  sessionId: string;
+  timestamp: number;
 }
 
 export interface CWDecoderErrorEvent {
@@ -79,6 +104,7 @@ export interface CWDecoderWorkerTelemetrySnapshot {
 
 export interface CWDecoderBackendEvents {
   status: (status: CWDecoderStatus) => void;
+  reset: (event: CWDecoderTranscriptResetEvent) => void;
   pending: (event: CWDecoderPendingEvent) => void;
   commit: (event: CWDecoderCommitEvent) => void;
   error: (event: CWDecoderErrorEvent) => void;
@@ -96,9 +122,9 @@ export interface CWDecoderBackend extends EventEmitter<CWDecoderBackendEvents> {
 }
 
 export interface CWDecoderAudioStream {
-  on?(event: 'audioData' | 'nativeAudioInputData' | 'audio' | 'data' | string, listener: (...args: unknown[]) => void): unknown;
-  off?(event: 'audioData' | 'nativeAudioInputData' | 'audio' | 'data' | string, listener: (...args: unknown[]) => void): unknown;
-  removeListener?(event: 'audioData' | 'nativeAudioInputData' | 'audio' | 'data' | string, listener: (...args: unknown[]) => void): unknown;
+  on?(event: 'audioData' | 'audio' | 'data' | string, listener: (...args: unknown[]) => void): unknown;
+  off?(event: 'audioData' | 'audio' | 'data' | string, listener: (...args: unknown[]) => void): unknown;
+  removeListener?(event: 'audioData' | 'audio' | 'data' | string, listener: (...args: unknown[]) => void): unknown;
   subscribe?(listener: (...args: unknown[]) => void): (() => void) | { unsubscribe?: () => void } | void;
 }
 
@@ -116,7 +142,7 @@ export interface CWDecoderCharacterSpan {
 export const DEFAULT_CW_DECODER_CONFIG: CWDecoderConfig = {
   enabled: false,
   backend: 'deepcw-onnx',
-  inputSampleRate: 12_000,
+  inputSampleRate: 9_600,
   decodeSampleRate: 9_600,
   runtimeBackend: 'cpu',
   modelSize: 'tiny',

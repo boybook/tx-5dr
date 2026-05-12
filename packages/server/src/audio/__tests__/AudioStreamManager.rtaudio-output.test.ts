@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockConfigManager, mockLogger, mockRtAudioState, MockRtAudio } = vi.hoisted(() => {
+const { mockConfigManager, mockLogger, mockResampleAudioProfessional, mockRtAudioState, MockRtAudio } = vi.hoisted(() => {
   const logger = {
     debug: vi.fn(),
     info: vi.fn(),
@@ -12,6 +12,7 @@ const { mockConfigManager, mockLogger, mockRtAudioState, MockRtAudio } = vi.hois
     consumeOnWrite: true,
     throwOnWrite: false,
     writes: [] as Buffer[],
+    inputCallback: null as ((inputData: Buffer) => void) | null,
     devices: [
       {
         id: 11,
@@ -55,7 +56,7 @@ const { mockConfigManager, mockLogger, mockRtAudioState, MockRtAudio } = vi.hois
       sampleRate: number,
       frameSize: number,
       _streamName: string,
-      _inputCallback: ((inputData: Buffer) => void) | null,
+      inputCallback: ((inputData: Buffer) => void) | null,
       frameOutputCallback: (() => void) | null,
       _flags?: number,
       errorCallback?: ((type: number, message: string) => void) | null,
@@ -64,6 +65,7 @@ const { mockConfigManager, mockLogger, mockRtAudioState, MockRtAudio } = vi.hois
       this.sampleRate = sampleRate;
       this.frameSize = frameSize;
       this.outputChannels = outputParams?.nChannels ?? 0;
+      state.inputCallback = inputCallback;
       this.frameOutputCallback = frameOutputCallback;
       this.errorCallback = errorCallback ?? null;
     }
@@ -126,6 +128,7 @@ const { mockConfigManager, mockLogger, mockRtAudioState, MockRtAudio } = vi.hois
       getRadioConfig: vi.fn(() => ({ type: 'serial' })),
     },
     mockLogger: logger,
+    mockResampleAudioProfessional: vi.fn(async (samples: Float32Array) => samples),
     mockRtAudioState: state,
     MockRtAudio: HoistedMockRtAudio,
   };
@@ -145,7 +148,7 @@ vi.mock('../../config/config-manager.js', () => ({
 
 vi.mock('../../utils/audioUtils.js', () => ({
   clearResamplerCache: vi.fn(),
-  resampleAudioProfessional: vi.fn(async (samples: Float32Array) => samples),
+  resampleAudioProfessional: mockResampleAudioProfessional,
 }));
 
 vi.mock('../../utils/logger.js', () => ({
@@ -164,6 +167,8 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     mockRtAudioState.consumeOnWrite = true;
     mockRtAudioState.throwOnWrite = false;
     mockRtAudioState.writes = [];
+    mockRtAudioState.inputCallback = null;
+    mockResampleAudioProfessional.mockImplementation(async (samples: Float32Array) => samples);
     mockConfigManager.getAudioConfig.mockReturnValue({
       inputDeviceName: 'USB Audio',
       outputDeviceName: 'USB Audio',
@@ -190,6 +195,34 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
       process.env.TX5DR_RTAUDIO_CONSUME_DIAGNOSTICS = originalConsumeDiagnostics;
     }
     vi.restoreAllMocks();
+  });
+
+  it('resamples audio device input once into the configured RX processing rate', async () => {
+    const manager = new AudioStreamManager();
+    manager.setInputProcessingSampleRate(9600, 'test-cw');
+    const processed = new Float32Array([0.25, 0.5]);
+    const processedFrames: Array<{ samples: Float32Array; sampleRate: number }> = [];
+    mockResampleAudioProfessional.mockResolvedValueOnce(processed);
+    manager.on('audioData', (samples, sampleRate) => processedFrames.push({ samples, sampleRate }));
+
+    await manager.startStream();
+
+    const input = Buffer.alloc(3 * Float32Array.BYTES_PER_ELEMENT);
+    new Float32Array(input.buffer, input.byteOffset, 3).set([0.1, 0.2, 0.3]);
+    mockRtAudioState.inputCallback?.(input);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockResampleAudioProfessional).toHaveBeenCalledWith(
+      expect.any(Float32Array),
+      48000,
+      9600,
+      1,
+    );
+    expect(manager.getInternalSampleRate()).toBe(9600);
+    expect(manager.getAudioProvider().getSampleRate()).toBe(9600);
+    expect(processedFrames).toEqual([{ samples: processed, sampleRate: 9600 }]);
+
+    await manager.stopStream();
   });
 
   it('logs submitted and consumed RtAudio output chunks with playback amplitude stats', async () => {

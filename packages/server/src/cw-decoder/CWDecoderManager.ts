@@ -12,6 +12,7 @@ import {
   type CWDecoderErrorEvent,
   type CWDecoderPendingEvent,
   type CWDecoderStatus,
+  type CWDecoderTranscriptResetEvent,
   type CWDecoderWorkerTelemetrySnapshot,
 } from './types.js';
 
@@ -20,6 +21,7 @@ const logger = createLogger('CWDecoderManager');
 export interface CWDecoderManagerEvents {
   cwDecoderStatusChanged: (status: CWDecoderStatus) => void;
   cwDecoderConfigChanged: (config: CWDecoderConfig) => void;
+  cwDecoderTranscriptReset: (event: CWDecoderTranscriptResetEvent) => void;
   cwDecoderPending: (event: CWDecoderPendingEvent) => void;
   cwDecoderCommit: (event: CWDecoderCommitEvent) => void;
   cwDecoderError: (event: CWDecoderErrorEvent) => void;
@@ -45,6 +47,7 @@ export class CWDecoderManager extends EventEmitter<CWDecoderManagerEvents> {
   private transmitMuted = false;
 
   private readonly backendStatusListener = (status: CWDecoderStatus) => this.setStatus(status);
+  private readonly backendResetListener = (event: CWDecoderTranscriptResetEvent) => this.emit('cwDecoderTranscriptReset', event);
   private readonly backendPendingListener = (event: CWDecoderPendingEvent) => this.emit('cwDecoderPending', event);
   private readonly backendCommitListener = (event: CWDecoderCommitEvent) => this.emit('cwDecoderCommit', event);
   private readonly backendErrorListener = (event: CWDecoderErrorEvent) => {
@@ -226,6 +229,7 @@ export class CWDecoderManager extends EventEmitter<CWDecoderManagerEvents> {
 
   private bindBackend(backend: CWDecoderBackend): void {
     backend.on('status', this.backendStatusListener);
+    backend.on('reset', this.backendResetListener);
     backend.on('pending', this.backendPendingListener);
     backend.on('commit', this.backendCommitListener);
     backend.on('error', this.backendErrorListener);
@@ -233,6 +237,7 @@ export class CWDecoderManager extends EventEmitter<CWDecoderManagerEvents> {
 
   private unbindBackend(backend: CWDecoderBackend): void {
     backend.off('status', this.backendStatusListener);
+    backend.off('reset', this.backendResetListener);
     backend.off('pending', this.backendPendingListener);
     backend.off('commit', this.backendCommitListener);
     backend.off('error', this.backendErrorListener);

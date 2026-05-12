@@ -8,6 +8,7 @@ class MockBackend extends EventEmitter<CWDecoderBackendEvents> implements CWDeco
   startCalls = 0;
   stopCalls = 0;
   pushedChunks = 0;
+  sampleRates: number[] = [];
   private status: CWDecoderStatus = {
     enabled: true,
     backend: 'deepcw-onnx',
@@ -42,8 +43,9 @@ class MockBackend extends EventEmitter<CWDecoderBackendEvents> implements CWDeco
     this.emit('status', this.getStatus());
   }
 
-  pushAudio(): void {
+  pushAudio(_chunk: Float32Array, sampleRate: number): void {
     this.pushedChunks += 1;
+    this.sampleRates.push(sampleRate);
   }
 
   getStatus(): CWDecoderStatus {
@@ -115,7 +117,7 @@ describe('CWDecoderManager', () => {
     expect(status).toMatchObject({ lastPendingText: '', lastCommittedText: '', queuedSamples: 0 });
   });
 
-  it('subscribes to the normalized 12 kHz audio stream only', async () => {
+  it('consumes only the unified audioData stream with its processing sample rate', async () => {
     const backend = new MockBackend();
     const manager = new CWDecoderManager({ initialConfig: { enabled: true }, backends: { 'deepcw-onnx': backend } });
     const stream = new EventEmitter();
@@ -130,8 +132,9 @@ describe('CWDecoderManager', () => {
       sequence: 1,
       sourceKind: 'audio-device',
     });
-    stream.emit('audioData', new Float32Array([0.1, 0.2]));
+    stream.emit('audioData', new Float32Array([0.1, 0.2]), 9_600);
 
     expect(backend.pushedChunks).toBe(1);
+    expect(backend.sampleRates).toEqual([9_600]);
   });
 });
