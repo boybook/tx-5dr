@@ -18,7 +18,6 @@ import {
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
-  faPlay,
   faStop,
   faPen,
   faEraser,
@@ -760,6 +759,42 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
             </PopoverTrigger>
             <PopoverContent className="w-80 gap-3 p-3">
               <div className="flex w-full flex-col gap-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="w-20 shrink-0 text-xs text-default-600">{t('radio:cw.backendTabs', 'CW backend')}</span>
+                  <Tabs
+                    size="sm"
+                    variant="solid"
+                    selectedKey={backend}
+                    onSelectionChange={handleBackendChange}
+                    aria-label={t('radio:cw.backendTabs', 'CW backend')}
+                    classNames={{
+                      base: 'shrink-0',
+                      tabList: 'h-7 gap-0 rounded-lg p-0.5',
+                      cursor: 'rounded-md',
+                      tab: 'h-6 min-w-7 rounded-md px-2',
+                      tabContent: 'text-xs',
+                    }}
+                  >
+                    <Tab
+                      key="cat"
+                      title={(
+                        <span className="flex items-center gap-1">
+                          <FontAwesomeIcon icon={faTowerBroadcast} className="text-[10px]" />
+                          <span>{t('radio:cw.backendCat', 'Radio keyer')}</span>
+                        </span>
+                      )}
+                    />
+                    <Tab
+                      key="serial"
+                      title={(
+                        <span className="flex items-center gap-1">
+                          <FontAwesomeIcon icon={faPlug} className="text-[10px]" />
+                          <span>{t('radio:cw.backendSerial', 'Key jack')}</span>
+                        </span>
+                      )}
+                    />
+                  </Tabs>
+                </div>
                 <div className="flex items-center gap-3">
                   <span className="w-20 shrink-0 whitespace-nowrap text-xs text-default-600">{t('radio:cw.wpm', 'WPM')}</span>
                   <Slider
@@ -820,42 +855,6 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
                       </div>
                     </>
                   )}
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="w-20 shrink-0 text-xs text-default-600">{t('radio:cw.backendTabs', 'CW backend')}</span>
-                  <Tabs
-                    size="sm"
-                    variant="solid"
-                    selectedKey={backend}
-                    onSelectionChange={handleBackendChange}
-                    aria-label={t('radio:cw.backendTabs', 'CW backend')}
-                    classNames={{
-                      base: 'shrink-0',
-                      tabList: 'h-7 gap-0 rounded-lg p-0.5',
-                      cursor: 'rounded-md',
-                      tab: 'h-6 min-w-7 rounded-md px-2',
-                      tabContent: 'text-xs',
-                    }}
-                  >
-                    <Tab
-                      key="cat"
-                      title={(
-                        <span className="flex items-center gap-1">
-                          <FontAwesomeIcon icon={faTowerBroadcast} className="text-[10px]" />
-                          <span>{t('radio:cw.backendCat', 'Radio keyer')}</span>
-                        </span>
-                      )}
-                    />
-                    <Tab
-                      key="serial"
-                      title={(
-                        <span className="flex items-center gap-1">
-                          <FontAwesomeIcon icon={faPlug} className="text-[10px]" />
-                          <span>{t('radio:cw.backendSerial', 'Key jack')}</span>
-                        </span>
-                      )}
-                    />
-                  </Tabs>
                 </div>
               </div>
             </PopoverContent>
