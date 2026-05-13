@@ -1,4 +1,4 @@
-import { encodeTextToCWEvents, type CWKeyerConfig } from '@tx5dr/contracts';
+import { encodeTextToCWKeyStateSegments, type CWKeyerConfig } from '@tx5dr/contracts';
 import { CWKeyerHardware } from './CWKeyerHardware.js';
 import type { CWBackendAvailability, CWBackendPlaybackSignal, CWKeyerBackend } from './CWKeyerBackend.js';
 import { createLogger } from '../utils/logger.js';
@@ -46,20 +46,41 @@ export class SerialCWKeyerBackend implements CWKeyerBackend {
   }
 
   async sendText(text: string, wpm: number, signal: CWBackendPlaybackSignal): Promise<void> {
-    const events = encodeTextToCWEvents(text, wpm);
-    for (const event of events) {
-      if (signal.isStopped()) return;
-      if (event.afterMs > 0) {
-        const shouldContinue = await signal.wait(event.afterMs);
-        if (!shouldContinue || signal.isStopped()) return;
+    const segments = encodeTextToCWKeyStateSegments(text, wpm);
+    if (segments.length === 0) {
+      return;
+    }
+
+    let keyDown = false;
+    let nextBoundaryAt = Date.now();
+
+    for (const segment of segments) {
+      if (signal.isStopped()) {
+        break;
       }
 
-      if (event.type === 'key-down') {
-        await this.keyDown();
-        signal.onKeyDown?.();
-      } else {
-        await this.keyUp();
+      if (segment.keyDown !== keyDown) {
+        if (segment.keyDown) {
+          await this.keyDown();
+          signal.onKeyDown?.();
+        } else {
+          await this.keyUp();
+        }
+        keyDown = segment.keyDown;
       }
+
+      nextBoundaryAt += segment.durationMs;
+      const waitMs = Math.max(0, Math.round(nextBoundaryAt - Date.now()));
+      if (waitMs > 0) {
+        const shouldContinue = await signal.wait(waitMs);
+        if (!shouldContinue || signal.isStopped()) {
+          break;
+        }
+      }
+    }
+
+    if (keyDown) {
+      await this.keyUp();
     }
   }
 
