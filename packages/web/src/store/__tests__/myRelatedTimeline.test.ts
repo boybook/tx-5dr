@@ -256,6 +256,166 @@ describe('myRelatedTimelineReducer', () => {
     expect(buildMyRelatedTimelineGroups(state)[0]?.messages[0]?.message).toBe('R9WXK BG5BNW -08');
   });
 
+  it('freezes a late related RX update after the live slot has advanced', () => {
+    const rr73Start = Date.UTC(2026, 4, 6, 10, 18, 45);
+    const nextStart = rr73Start + mode.slotMs;
+    const state = reduce([
+      {
+        type: 'syncLiveContext',
+        payload: {
+          currentMode: mode,
+          liveSlotStartMs: rr73Start,
+          visibleOperatorCallsigns: ['BG5DRB'],
+          targetCallsign: 'JA2UCL',
+        },
+      },
+      {
+        type: 'syncLiveContext',
+        payload: {
+          currentMode: mode,
+          liveSlotStartMs: nextStart,
+          visibleOperatorCallsigns: ['BG5DRB'],
+          targetCallsign: 'JA2UCL',
+        },
+      },
+      {
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack: createSlotPack(rr73Start, [
+            createRxFrame('BG5DRB JA2UCL RR73', 908, -14, 0),
+            createRxFrame('CQ JA1ABC PM95', 1600),
+          ], createFrequencyContext(), 2),
+          currentMode: mode,
+          liveSlotStartMs: nextStart,
+          visibleOperatorCallsigns: ['BG5DRB'],
+          targetCallsign: 'JA2UCL',
+        },
+      },
+    ]);
+
+    const rxMessages = buildMyRelatedTimelineGroups(state)
+      .flatMap(group => group.messages.filter(message => message.db !== 'TX'));
+
+    expect(state.frozenGroups).toHaveLength(1);
+    expect(state.liveGroups).toHaveLength(0);
+    expect(rxMessages.map(message => message.message)).toEqual(['BG5DRB JA2UCL RR73']);
+  });
+
+  it('ignores a late old-slot RX update when it is not related', () => {
+    const oldStart = Date.UTC(2026, 4, 6, 10, 18, 45);
+    const nextStart = oldStart + mode.slotMs;
+    const state = reduce([
+      {
+        type: 'syncLiveContext',
+        payload: {
+          currentMode: mode,
+          liveSlotStartMs: nextStart,
+          visibleOperatorCallsigns: ['BG5DRB'],
+          targetCallsign: 'JA2UCL',
+        },
+      },
+      {
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack: createSlotPack(oldStart, [
+            createRxFrame('JA1AAA JA2BBB RR73', 908, -14, 0),
+            createTxFrame('op-1', 'JA2UCL BG5DRB 73', 2397),
+          ], createFrequencyContext(), 2),
+          currentMode: mode,
+          liveSlotStartMs: nextStart,
+          visibleOperatorCallsigns: ['BG5DRB'],
+          targetCallsign: 'JA2UCL',
+        },
+      },
+    ]);
+
+    expect(buildMyRelatedTimelineGroups(state)).toEqual([]);
+    expect(state.lastProcessedSlotPackSeq.get(`slot-${oldStart}`)).toBe(2);
+  });
+
+  it('appends newly decoded related frames from later old-slot updateSeq values without duplicating existing ones', () => {
+    const oldStart = Date.UTC(2026, 4, 6, 10, 18, 45);
+    const nextStart = oldStart + mode.slotMs;
+    const state = reduce([
+      {
+        type: 'syncLiveContext',
+        payload: {
+          currentMode: mode,
+          liveSlotStartMs: nextStart,
+          visibleOperatorCallsigns: ['BG5DRB'],
+          targetCallsign: 'JA2UCL',
+        },
+      },
+      {
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack: createSlotPack(oldStart, [
+            createRxFrame('BG5DRB JA2UCL -11', 908, -6, 0.1),
+          ], createFrequencyContext(), 1),
+          currentMode: mode,
+          liveSlotStartMs: nextStart,
+          visibleOperatorCallsigns: ['BG5DRB'],
+          targetCallsign: 'JA2UCL',
+        },
+      },
+      {
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack: createSlotPack(oldStart, [
+            createRxFrame('BG5DRB JA2UCL -11', 908, -6, 0.1),
+            createRxFrame('BG5DRB JA2UCL RR73', 908, -14, 0),
+          ], createFrequencyContext(), 2),
+          currentMode: mode,
+          liveSlotStartMs: nextStart,
+          visibleOperatorCallsigns: ['BG5DRB'],
+          targetCallsign: 'JA2UCL',
+        },
+      },
+      {
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack: createSlotPack(oldStart, [
+            createRxFrame('BG5DRB JA2UCL -11', 908, -6, 0.1),
+            createRxFrame('BG5DRB JA2UCL RR73', 908, -14, 0),
+            createRxFrame('BG5DRB JA2UCL 73', 908, -15, 0),
+            createTxFrame('op-1', 'JA2UCL BG5DRB 73', 2397),
+          ], createFrequencyContext(), 3),
+          currentMode: mode,
+          liveSlotStartMs: nextStart,
+          visibleOperatorCallsigns: ['BG5DRB'],
+          targetCallsign: 'JA2UCL',
+        },
+      },
+      {
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack: createSlotPack(oldStart, [
+            createRxFrame('BG5DRB JA2UCL -11', 908, -6, 0.1),
+            createRxFrame('BG5DRB JA2UCL RR73', 908, -14, 0),
+            createRxFrame('BG5DRB JA2UCL 73', 908, -15, 0),
+            createRxFrame('BG5DRB JA2UCL RRR', 908, -15, 0),
+          ], createFrequencyContext(), 3),
+          currentMode: mode,
+          liveSlotStartMs: nextStart,
+          visibleOperatorCallsigns: ['BG5DRB'],
+          targetCallsign: 'JA2UCL',
+        },
+      },
+    ]);
+
+    const messages = buildMyRelatedTimelineGroups(state)
+      .flatMap(group => group.messages.map(message => message.message));
+
+    expect(messages).toEqual([
+      'BG5DRB JA2UCL -11',
+      'BG5DRB JA2UCL RR73',
+      'BG5DRB JA2UCL 73',
+    ]);
+    expect(messages).not.toContain('JA2UCL BG5DRB 73');
+    expect(messages).not.toContain('BG5DRB JA2UCL RRR');
+    expect(state.lastProcessedSlotPackSeq.get(`slot-${oldStart}`)).toBe(3);
+  });
+
   it('keeps TX globally visible across live and frozen layers', () => {
     const firstStart = Date.UTC(2026, 4, 6, 6, 28, 30);
     const secondStart = firstStart + mode.slotMs;

@@ -161,10 +161,6 @@ export function myRelatedTimelineReducer(
         return nextState;
       }
 
-      if (nextState.currentLiveSlotStartMs !== null && slotPack.startMs < nextState.currentLiveSlotStartMs) {
-        return nextState;
-      }
-
       const liveRxEntries = new Map(nextState.liveRxEntries);
       for (const frame of slotPack.frames) {
         if (frame.snr === -999) {
@@ -172,11 +168,30 @@ export function myRelatedTimelineReducer(
         }
 
         const messageKey = buildFrameMessageKey(frame, slotPack.startMs);
+        const message = frameToDisplayMessage(frame, slotPack.startMs);
+
+        if (nextState.currentLiveSlotStartMs !== null && slotPack.startMs < nextState.currentLiveSlotStartMs) {
+          if (!matchesVisibleOperators(frame.message, visibleOperatorCallsigns) && !containsCallsign(frame.message, targetCallsign)) {
+            continue;
+          }
+
+          nextState = appendFrozenDisplayMessage(
+            nextState,
+            slotPack.startMs,
+            currentMode,
+            message,
+            messageKey,
+            buildHeaderContextKey(slotPack.frequencyContext),
+            slotPack.frequencyContext,
+          );
+          continue;
+        }
+
         const existing = liveRxEntries.get(messageKey);
         liveRxEntries.set(messageKey, {
           slotStartMs: slotPack.startMs,
           messageKey,
-          message: frameToDisplayMessage(frame, slotPack.startMs),
+          message,
           headerContextKey: buildHeaderContextKey(slotPack.frequencyContext),
           frequencyContext: slotPack.frequencyContext ?? existing?.frequencyContext,
           manualSeed: existing?.manualSeed ?? false,
