@@ -23,7 +23,7 @@ import { useWSEvent } from '../../hooks/useWSEvent';
 import { useCWKeyer } from '../../hooks/useCWKeyer';
 import type { QSORecord } from '@tx5dr/contracts';
 import { openLogbookWindow } from '../../utils/windowManager';
-import { setCWQSOHisCallsign, useCWQSODraft } from '../../store/cwQsoDraftStore';
+import { setCWQSOHisCallsign, setCWQSOTrst, setCWQSORrst, useCWQSODraft } from '../../store/cwQsoDraftStore';
 
 const logger = createLogger('CWQSOLogCard');
 
@@ -170,12 +170,18 @@ export const CWQSOLogCard: React.FC<CWQSOLogCardProps> = ({
     setFormData(prev => ({ ...prev, [field]: value }));
     if (field === 'callsign') {
       setCWQSOHisCallsign(value);
+    } else if (field === 'rstSent') {
+      setCWQSOTrst(value);
+    } else if (field === 'rstReceived') {
+      setCWQSORrst(value);
     }
   };
 
   const resetForm = () => {
     setFormData(initialFormData);
     setCWQSOHisCallsign('');
+    setCWQSOTrst(initialFormData.rstSent);
+    setCWQSORrst(initialFormData.rstReceived);
     setStartTime(null);
     setEndTime(null);
   };
@@ -398,19 +404,21 @@ export const CWQSOLogCard: React.FC<CWQSOLogCardProps> = ({
           <Input
             label={t('radio:cw.qso.rstSent')}
             value={formData.rstSent}
-            onValueChange={(v) => updateField('rstSent', v)}
+            onValueChange={(v) => updateField('rstSent', v.slice(0, 3).toUpperCase())}
             variant="flat"
             size="sm"
             className="w-1/2"
             classNames={{ input: 'font-mono' }}
+            maxLength={3}
           />
           <Input
             label={t('radio:cw.qso.rstReceived')}
             value={formData.rstReceived}
-            onValueChange={(v) => updateField('rstReceived', v)}
+            onValueChange={(v) => updateField('rstReceived', v.slice(0, 3).toUpperCase())}
             variant="flat"
             size="sm"
             className="w-1/2"
+            maxLength={3}
             classNames={{ input: 'font-mono' }}
           />
         </div>

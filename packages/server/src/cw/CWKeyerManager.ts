@@ -585,12 +585,26 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     this.emit('cwKeyerStatusChanged', status);
   }
 
-  /** 替换 CW 报文中的占位符，如 {MYCALL} / {HISCALL} */
+  /** 替换 CW 报文中的占位符，如 {MYCALL} / {HISCALL} / {TRST} / {RRST} */
   private replacePlaceholders(text: string, values: CWPlaceholderValues): string {
     const unresolved = new Set<string>();
-    const replaced = text.replace(/\{(MYCALL|HISCALL)\}/gi, (source, name: string) => {
+    const replaced = text.replace(/\{(MYCALL|HISCALL|TRST|RRST)\}/gi, (source, name: string) => {
       const key = name.toUpperCase();
-      const value = key === 'MYCALL' ? values.myCall : values.hisCall;
+      let value: string | undefined;
+      switch (key) {
+        case 'MYCALL':
+          value = values.myCall;
+          break;
+        case 'HISCALL':
+          value = values.hisCall;
+          break;
+        case 'TRST':
+          value = values.trst;
+          break;
+        case 'RRST':
+          value = values.rrst;
+          break;
+      }
       if (!value?.trim()) {
         unresolved.add(key);
         return source;
@@ -609,9 +623,13 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
   ): CWPlaceholderValues {
     const myCall = typeof values?.myCall === 'string' ? values.myCall : '';
     const hisCall = typeof values?.hisCall === 'string' ? values.hisCall : '';
+    const trst = typeof values?.trst === 'string' ? values.trst : '';
+    const rrst = typeof values?.rrst === 'string' ? values.rrst : '';
     return {
       myCall: (myCall || fallbackMyCall || '').trim().toUpperCase() || undefined,
       hisCall: hisCall.trim().toUpperCase() || undefined,
+      trst: trst.trim().toUpperCase() || undefined,
+      rrst: rrst.trim().toUpperCase() || undefined,
     };
   }
 
