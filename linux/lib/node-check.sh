@@ -1,5 +1,5 @@
 #!/bin/bash
-# systemd ExecStartPre guard for the TX-5DR Linux server runtime.
+# systemd startup guard for the TX-5DR Linux server runtime.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
