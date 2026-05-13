@@ -524,6 +524,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.on('radioStatusChanged', () => {
       this.squelchStatusMonitor.reevaluate();
       this.physicalPttMonitor.reevaluate();
+      this.cwKeyerManager?.refreshRuntimeState();
     });
     this.on('radioStatusChanged', (data) => {
       if (!data.connected) {

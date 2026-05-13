@@ -733,10 +733,7 @@ export class HamlibConnection
   }
 
   supportsCWMessageKeyer(): boolean {
-    return Boolean(
-      this.rig
-      && typeof (this.rig as unknown as { sendMorse?: unknown }).sendMorse === 'function',
-    );
+    return this.supportedFunctions.has('SEND_MORSE');
   }
 
   async sendCWMessage(message: string, wpm: number): Promise<void> {
@@ -746,7 +743,7 @@ export class HamlibConnection
         sendMorse?: (message: string) => Promise<number>;
         waitMorse?: () => Promise<number>;
       }) | null;
-      if (!rig || typeof rig.sendMorse !== 'function') {
+      if (!this.supportsCWMessageKeyer() || !rig || typeof rig.sendMorse !== 'function') {
         throw new Error('Hamlib connection does not support CAT CW Morse sending');
       }
 

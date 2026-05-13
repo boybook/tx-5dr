@@ -690,6 +690,7 @@
     "catUnavailableBody": "Connect a Hamlib radio that supports CAT Morse sending before using this backend.",
     "catUnavailableDisconnected": "Connect a Hamlib radio before using CAT CW.",
     "catUnavailableHamlibOnly": "CAT CW currently supports Hamlib serial or network radio connections only.",
+    "catUnsupportedSendMorse": "The radio does not report CAT CW sending support (Hamlib SEND_MORSE). Use Key jack instead, or verify the rig/Hamlib backend supports it.",
     "qsoTab": "QSOs",
     "qso": {
       "title": "CW QSO Log",

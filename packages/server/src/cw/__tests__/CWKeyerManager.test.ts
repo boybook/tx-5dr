@@ -7,7 +7,7 @@ import type { CWKeyerBackend } from '../CWKeyerBackend.js';
 
 const tempDirs: string[] = [];
 
-async function createManager() {
+async function createManager(options: { catAvailable?: boolean; catError?: string | null; keyPort?: string } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'tx5dr-cw-keyer-'));
   tempDirs.push(root);
 
@@ -18,14 +18,33 @@ async function createManager() {
     stop: vi.fn().mockResolvedValue(undefined),
     sendText: vi.fn().mockResolvedValue(undefined),
     stopActive: vi.fn().mockResolvedValue(undefined),
-    getAvailability: vi.fn().mockReturnValue({ available: true, error: null }),
+    getAvailability: vi.fn().mockReturnValue({
+      available: options.catAvailable ?? true,
+      error: options.catError ?? null,
+    }),
+  };
+  const serialBackend: CWKeyerBackend = {
+    type: 'serial',
+    supportsManualKeying: true,
+    start: vi.fn().mockResolvedValue(undefined),
+    stop: vi.fn().mockResolvedValue(undefined),
+    sendText: vi.fn().mockResolvedValue(undefined),
+    stopActive: vi.fn().mockResolvedValue(undefined),
+    getAvailability: vi.fn().mockReturnValue({ available: Boolean(options.keyPort), error: options.keyPort ? null : 'CW serial key port is not configured' }),
+    keyDown: vi.fn().mockResolvedValue(undefined),
+    keyUp: vi.fn().mockResolvedValue(undefined),
   };
 
   const manager = new CWKeyerManager();
   (manager as unknown as { rootDir: string }).rootDir = root;
-  (manager as unknown as { backends: Record<string, CWKeyerBackend> }).backends.cat = backend;
+  const managerBackends = (manager as unknown as { backends: Record<string, CWKeyerBackend> }).backends;
+  managerBackends.cat = backend;
+  managerBackends.serial = serialBackend;
+  if (options.keyPort) {
+    (manager as unknown as { config: { keyPort: string } }).config.keyPort = options.keyPort;
+  }
 
-  return { manager, backend };
+  return { manager, backend, serialBackend };
 }
 
 afterEach(async () => {
@@ -37,6 +56,44 @@ afterEach(async () => {
 });
 
 describe('CWKeyerManager', () => {
+  it('defaults to CAT when Hamlib reports CAT CW support', async () => {
+    const { manager } = await createManager({ catAvailable: true, keyPort: '/dev/cw' });
+
+    expect(manager.getConfig()).toMatchObject({ backend: 'cat' });
+    expect(manager.getStatus()).toMatchObject({ backend: 'cat', backendAvailable: false });
+    manager.refreshRuntimeState();
+    expect(manager.getStatus()).toMatchObject({ backend: 'cat', backendAvailable: true });
+  });
+
+  it('defaults to serial when CAT CW is unsupported and a key port is configured', async () => {
+    const { manager } = await createManager({
+      catAvailable: false,
+      catError: 'Active Hamlib radio does not report CAT CW sending support (SEND_MORSE)',
+      keyPort: '/dev/cw',
+    });
+
+    expect(manager.getConfig()).toMatchObject({ backend: 'serial', keyPort: '/dev/cw' });
+    manager.refreshRuntimeState();
+    expect(manager.getStatus()).toMatchObject({ backend: 'serial', backendAvailable: true });
+  });
+
+  it('keeps explicit CAT selection and reports unavailable when CAT CW is unsupported', async () => {
+    const { manager } = await createManager({
+      catAvailable: false,
+      catError: 'Active Hamlib radio does not report CAT CW sending support (SEND_MORSE)',
+      keyPort: '/dev/cw',
+    });
+
+    await manager.updateConfig({ backend: 'cat' });
+
+    expect(manager.getConfig()).toMatchObject({ backend: 'cat' });
+    expect(manager.getStatus()).toMatchObject({
+      backend: 'cat',
+      backendAvailable: false,
+      backendError: 'Active Hamlib radio does not report CAT CW sending support (SEND_MORSE)',
+    });
+  });
+
   it('creates and persists practical default preset messages for a new callsign', async () => {
     const { manager } = await createManager();
 

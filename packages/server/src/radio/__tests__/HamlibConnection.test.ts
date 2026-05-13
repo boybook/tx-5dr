@@ -56,6 +56,7 @@ type HamlibConnectionTestAccessor = {
   state: RadioConnectionState;
   supportedModes?: Set<string>;
   supportedLevels?: Set<string>;
+  supportedFunctions?: Set<string>;
   meterDecodeStrategy?: {
     name: 'icom' | 'yaesu' | 'generic';
     sourceLevel: 'STRENGTH' | 'RAWSTR' | null;
@@ -146,6 +147,17 @@ describe('HamlibConnection', () => {
 
     await expect(connection.getDCD()).resolves.toBe(true);
     expect(rig.getDcd).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports CAT CW support only when Hamlib exposes SEND_MORSE', () => {
+    const { connection } = createConnectedConnection();
+    const testConnection = asTestConnection(connection);
+
+    testConnection.supportedFunctions = new Set(['SEND_MORSE']);
+    expect(connection.supportsCWMessageKeyer()).toBe(true);
+
+    testConnection.supportedFunctions = new Set(['SPECTRUM']);
+    expect(connection.supportsCWMessageKeyer()).toBe(false);
   });
 
   it('reads PTT state via low-priority Hamlib polling', async () => {

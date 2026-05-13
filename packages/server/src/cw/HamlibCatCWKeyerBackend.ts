@@ -7,6 +7,7 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('HamlibCatCWKeyerBackend');
 const MIN_CAT_STATUS_DURATION_MS = 250;
 const HAMLIB_MORSE_HANDLER_POLL_MS = 100;
+const CAT_CW_UNSUPPORTED_ERROR = 'Active Hamlib radio does not report CAT CW sending support (SEND_MORSE)';
 
 export class HamlibCatCWKeyerBackend implements CWKeyerBackend {
   readonly type = 'cat' as const;
@@ -28,7 +29,7 @@ export class HamlibCatCWKeyerBackend implements CWKeyerBackend {
       throw new Error('CAT CW backend requires an active Hamlib radio connection');
     }
     if (!connection.supportsCWMessageKeyer()) {
-      throw new Error('Active Hamlib connection does not support CAT CW Morse sending');
+      throw new Error(CAT_CW_UNSUPPORTED_ERROR);
     }
     if (signal.isStopped()) return;
 
@@ -71,7 +72,7 @@ export class HamlibCatCWKeyerBackend implements CWKeyerBackend {
     if (!connection.supportsCWMessageKeyer()) {
       return {
         available: false,
-        error: 'Active Hamlib connection does not support CAT CW Morse sending',
+        error: CAT_CW_UNSUPPORTED_ERROR,
       };
     }
     return { available: true, error: null };

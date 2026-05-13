@@ -108,6 +108,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     keyMethod: 'dtr',
     wpm: 20,
   };
+  private backendExplicit = false;
   private status: CWKeyerStatus = {
     active: false,
     mode: 'idle',
@@ -150,8 +151,13 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
 
   async updateConfig(update: Partial<CWKeyerConfig>): Promise<void> {
     await this.ensureConfigLoaded();
-    const next = this.normalizeConfig({ ...this.config, ...this.filterConfigUpdate(update) });
-    const backendChanged = next.backend !== this.config.backend;
+    const filtered = this.filterConfigUpdate(update);
+    const previousBackend = this.resolveRuntimeConfig().backend;
+    if (filtered.backend) {
+      this.backendExplicit = true;
+    }
+    const next = this.normalizeConfig({ ...this.config, ...filtered });
+    const backendChanged = this.resolveRuntimeConfig(next).backend !== previousBackend;
     if (backendChanged && this._started) {
       await this.stopActive('cw backend changed');
       await this.stopBackends();
@@ -170,7 +176,11 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
    */
   async start(config: CWKeyerConfig): Promise<void> {
     await this.ensureConfigLoaded();
-    this.config = this.normalizeConfig({ ...this.config, ...this.filterConfigUpdate(config) });
+    const filtered = this.filterConfigUpdate(config);
+    if (!this.backendExplicit) {
+      delete filtered.backend;
+    }
+    this.config = this.normalizeConfig({ ...this.config, ...filtered });
     const runtimeConfig = this.resolveRuntimeConfig();
     await this.getBackend().start(runtimeConfig);
     this._started = true;
@@ -634,16 +644,47 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
   }
 
   private getBackend(): CWKeyerBackend {
-    return this.backends[this.config.backend] ?? this.backends.cat;
+    const runtimeConfig = this.resolveRuntimeConfig();
+    return this.backends[runtimeConfig.backend] ?? this.backends.cat;
   }
 
-  private resolveRuntimeConfig(): CWKeyerConfig {
+  refreshRuntimeState(): void {
+    const config = this.getConfig();
+    this.emit('cwConfigChanged', config);
+    if (!this.active) {
+      this.setStatus(this.idleStatus());
+    }
+  }
+
+  private resolveRuntimeConfig(config: CWKeyerConfig = this.config): CWKeyerConfig {
     const radioConfig = ConfigManager.getInstance().getRadioConfig();
-    return this.normalizeConfig({
-      ...this.config,
-      keyPort: radioConfig.cwKeyPort || this.config.keyPort || '',
-      keyMethod: radioConfig.cwKeyMethod || this.config.keyMethod || 'dtr',
+    const runtimeConfig = this.normalizeConfig({
+      ...config,
+      keyPort: radioConfig.cwKeyPort || config.keyPort || '',
+      keyMethod: radioConfig.cwKeyMethod || config.keyMethod || 'dtr',
     });
+    return {
+      ...runtimeConfig,
+      backend: this.resolveEffectiveBackend(runtimeConfig),
+    };
+  }
+
+  private resolveEffectiveBackend(config: CWKeyerConfig): CWKeyerBackendType {
+    if (this.backendExplicit) {
+      return config.backend;
+    }
+    try {
+      const catAvailability = this.backends.cat.getAvailability();
+      if (catAvailability.available) {
+        return 'cat';
+      }
+    } catch {
+      // If CAT availability cannot be evaluated yet, fall through to serial when configured.
+    }
+    if (config.keyPort.trim()) {
+      return 'serial';
+    }
+    return 'cat';
   }
 
   private filterConfigUpdate(update: Partial<CWKeyerConfig>): Partial<CWKeyerConfig> {
@@ -681,8 +722,11 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     this.configLoadPromise = (async () => {
       try {
         const raw = await fs.readFile(await this.getConfigPath(), 'utf8');
-        this.config = this.normalizeConfig({ ...this.config, ...JSON.parse(raw) });
+        const parsed = JSON.parse(raw) as Partial<CWKeyerConfig>;
+        this.backendExplicit = Object.prototype.hasOwnProperty.call(parsed, 'backend');
+        this.config = this.normalizeConfig({ ...this.config, ...parsed });
       } catch {
+        this.backendExplicit = false;
         this.config = this.normalizeConfig(this.config);
       } finally {
         this.configLoaded = true;
@@ -695,9 +739,13 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
   private async writePersistedConfig(): Promise<void> {
     const configPath = await this.getConfigPath();
     await fs.mkdir(dirname(configPath), { recursive: true });
+    const persisted: { backend?: CWKeyerBackendType; wpm: number } = { wpm: this.config.wpm };
+    if (this.backendExplicit) {
+      persisted.backend = this.config.backend;
+    }
     await fs.writeFile(
       configPath,
-      JSON.stringify({ backend: this.config.backend, wpm: this.config.wpm }, null, 2),
+      JSON.stringify(persisted, null, 2),
       'utf8',
     );
   }
@@ -716,7 +764,16 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
   }
 
   private statusBackendFields(): Pick<CWKeyerStatus, 'backend' | 'backendAvailable' | 'backendError'> {
-    const backend = this.getBackend();
+    const runtimeConfig = this.resolveRuntimeConfig();
+    const backend = this.backends[runtimeConfig.backend] ?? this.backends.cat;
+    if (backend.type === 'serial') {
+      const available = Boolean(runtimeConfig.keyPort.trim());
+      return {
+        backend: backend.type,
+        backendAvailable: available,
+        backendError: available ? null : 'CW serial key port is not configured',
+      };
+    }
     try {
       const availability = backend.getAvailability();
       return {

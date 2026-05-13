@@ -181,13 +181,17 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const radioConnected = radioState.state.radioConnected;
   const radioConfigType = radioState.state.radioConfig?.type;
   const isHamlibRadioConfig = radioConfigType === 'serial' || radioConfigType === 'network';
+  const catBackendError = cwKeyerStatus?.backend === 'cat' && cwKeyerStatus.backendAvailable === false
+    ? cwKeyerStatus.backendError
+    : null;
+  const catUnsupportedSendMorse = catBackendError?.includes('SEND_MORSE') === true;
   const catUnavailableReason = !radioConnected
     ? t('radio:cw.catUnavailableDisconnected', 'Connect a Hamlib radio before using CAT CW.')
     : !isHamlibRadioConfig
       ? t('radio:cw.catUnavailableHamlibOnly', 'CAT CW currently supports Hamlib serial or network radio connections only.')
-      : cwKeyerStatus?.backend === 'cat' && cwKeyerStatus.backendAvailable === false
-        ? cwKeyerStatus.backendError
-        : null;
+      : catUnsupportedSendMorse
+        ? t('radio:cw.catUnsupportedSendMorse', 'The radio does not report CAT CW sending support (Hamlib SEND_MORSE). Use Key jack instead, or verify the rig/Hamlib backend supports it.')
+        : catBackendError;
   const showCatAlert = backend === 'cat' && Boolean(catUnavailableReason);
 
   const myCallsign = operators.find(o => o.id === currentOperatorId)?.context?.myCall?.trim() || '';
