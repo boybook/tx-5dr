@@ -1676,6 +1676,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       const totalSamples = playbackData.length;
       const expectedDurationMs = Math.round((totalSamples / this.outputSampleRate) * 1000);
       logger.debug(`chunked playback: ${totalChunks} chunks, chunkSize=${chunkSize}, prebuffer~${prebufferMs}ms, tick=${TICK_MS}ms, totalSamples=${totalSamples}, expectedDuration=${expectedDurationMs}ms`);
+      const captureRtAudioWrites = playbackKind === 'digital';
+      const rtAudioOutputCaptureChunks: Float32Array[] = [];
 
       const chunkStartTime = Date.now();
       this.resetOutputConsumeDiagnostics();
@@ -1690,6 +1692,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       let watchdogTriggered = false;
       let watchdogTimer: NodeJS.Timeout | null = null;
       const watchdogStartedAt = Date.now();
+      let submitCompleteAtMs = 0;
 
       const stopWatchdog = () => {
         if (watchdogTimer) {
@@ -1755,6 +1758,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             // RtAudio requires exactly chunkSize frames per write; pad short last chunk with silence
             const bufferSamples = chunkSize;
             const buffer = Buffer.allocUnsafe(bufferSamples * 4);
+            const captureChunk = captureRtAudioWrites ? new Float32Array(bufferSamples) : null;
             const monitorChunk = options.injectIntoMonitor ? new Float32Array(chunk.length) : null;
             let chunkPeak = 0;
             let chunkSumSquares = 0;
@@ -1762,6 +1766,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               const s = chunk[j] * gain;
               const clamped = s > 1 ? 1 : (s < -1 ? -1 : s);
               buffer.writeFloatLE(clamped, j * 4);
+              if (captureChunk) {
+                captureChunk[j] = clamped;
+              }
               const abs = Math.abs(clamped);
               if (abs > chunkPeak) {
                 chunkPeak = abs;
@@ -1830,6 +1837,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               clearInterval(interval);
               const chunkDuration = Date.now() - chunkStartTime;
               const playDuration = Date.now() - playStartTime;
+              submitCompleteAtMs = Date.now();
               logger.debug(`chunked write complete, duration: ${chunkDuration}ms`);
               logger.info('audio playback submit complete', {
                 playbackId,
