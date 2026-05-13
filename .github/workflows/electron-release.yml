@@ -19,6 +19,7 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -399,6 +400,11 @@ jobs:
           package_with_retry() {
             local attempt=1
             local max_attempts=2
+            if [ "${{ matrix.platform }}" = "darwin" ]; then
+              # Apple timestamp/notary services occasionally return transient failures.
+              # Retry macOS packaging more aggressively so one short outage does not fail the release.
+              max_attempts=4
+            fi
 
             while [ "$attempt" -le "$max_attempts" ]; do
               echo "📦 打包尝试 ${attempt}/${max_attempts}..."
@@ -411,11 +417,14 @@ jobs:
                 return 1
               fi
 
-              echo "⚠️ 打包失败，清理临时 DMG 挂载后重试..."
+              echo "⚠️ 打包失败，清理临时打包产物后重试..."
               cleanup_macos_dmg_volume
-              rm -rf out/make
+              rm -rf out/make "out/TX-5DR-${{ matrix.platform }}-${{ matrix.arch }}"
+              if [ "${{ matrix.platform }}" = "darwin" ]; then
+                rm -rf "${TMPDIR:-/tmp}"/electron-packager
+              fi
               attempt=$((attempt + 1))
-              sleep 5
+              sleep $((attempt * 10))
             done
           }
 
