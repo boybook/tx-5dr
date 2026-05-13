@@ -506,13 +506,18 @@ jobs:
           DUMPBIN="${DUMPBIN_CANDIDATES[$((${#DUMPBIN_CANDIDATES[@]} - 1))]}"
           echo "Using dumpbin: ${DUMPBIN}"
 
+          DEPS_WITH_SOURCE_FILE=$(mktemp)
           DEPS_FILE=$(mktemp)
           while IFS= read -r binary; do
             "${DUMPBIN}" //DEPENDENTS "${binary}" 2>/dev/null \
-              | grep -Eio '(MSVCP140[^[:space:]]*\.dll|VCRUNTIME140[^[:space:]]*\.dll)' || true
+              | grep -Eio '(MSVCP140[^[:space:]]*\.dll|VCRUNTIME140[^[:space:]]*\.dll)' \
+              | while IFS= read -r dll; do
+                  printf '%s\t%s\n' "${dll}" "${binary}"
+                done || true
           done < <(find "${APP_DIR}" -type f \( -iname "*.exe" -o -iname "*.dll" -o -iname "*.node" \)) \
             | tr '[:upper:]' '[:lower:]' \
-            | sort -u > "${DEPS_FILE}"
+            | sort -u > "${DEPS_WITH_SOURCE_FILE}"
+          cut -f1 "${DEPS_WITH_SOURCE_FILE}" | sort -u > "${DEPS_FILE}"
 
           echo "Detected MSVC runtime dependencies:"
           cat "${DEPS_FILE}"
@@ -520,6 +525,8 @@ jobs:
             [ -z "${dll}" ] && continue
             if [ ! -f "${RUNTIME_DIR}/${dll}" ]; then
               echo "Detected VC dependency is not bundled app-locally: ${dll}" >&2
+              echo "Binaries requiring ${dll}:" >&2
+              grep -F "${dll}" "${DEPS_WITH_SOURCE_FILE}" | cut -f2- >&2 || true
               exit 1
             fi
           done < "${DEPS_FILE}"
@@ -604,12 +611,49 @@ jobs:
           echo "=== 产物准备完成 ==="
           ls -lh release-artifacts/
 
-      - name: Upload artifacts
+      - name: Upload artifacts (attempt 1)
+        id: upload_artifacts_attempt_1
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: release-artifacts/*
           retention-days: 30
+          overwrite: true
+
+      - name: Wait before artifact upload retry
+        if: steps.upload_artifacts_attempt_1.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "Artifact upload failed, retrying after transient backoff..."
+          sleep 20
+
+      - name: Upload artifacts (attempt 2)
+        if: steps.upload_artifacts_attempt_1.outcome == 'failure'
+        id: upload_artifacts_attempt_2
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: release-artifacts/*
+          retention-days: 30
+          overwrite: true
+
+      - name: Wait before final artifact upload retry
+        if: steps.upload_artifacts_attempt_1.outcome == 'failure' && steps.upload_artifacts_attempt_2.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "Artifact upload failed twice, retrying one final time..."
+          sleep 60
+
+      - name: Upload artifacts (final attempt)
+        if: steps.upload_artifacts_attempt_1.outcome == 'failure' && steps.upload_artifacts_attempt_2.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: release-artifacts/*
+          retention-days: 30
+          overwrite: true
 
   create-release:
     needs: [build]

@@ -446,6 +446,9 @@ module.exports = {
         rmrf(join(nm, 'node-datachannel', 'CMakeLists.txt'));
         rmrf(join(nm, 'node-datachannel', 'BULDING.md'));
         rmrf(join(nm, 'node-datachannel', 'rollup.config.mjs'));
+        // Drop partial/debug node-gyp outputs. Debug CRT DLLs are not redistributable
+        // and must never be required by production Windows packages.
+        findAndRemoveDirs(nm, 'Debug');
         console.log('✅ native 模块编译源码清理完成');
       } catch (err) {
         console.warn('⚠️ 清理 native 模块编译源码遇到问题：', (err && err.message) || err);
