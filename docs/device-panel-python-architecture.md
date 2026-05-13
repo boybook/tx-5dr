@@ -579,23 +579,52 @@ Authorization: Bearer <device-jwt>
 ```json
 {
   "server": {
-    "status": "ready",
+    "status": "ok",
     "version": "...",
     "webPort": 8076
   },
+  "engine": {
+    "running": true,
+    "mode": "digital",
+    "currentMode": { "name": "FT8", "slotMs": 15000 },
+    "state": "running"
+  },
   "radio": {
     "connected": true,
-    "frequencyHz": 7074000,
-    "mode": "FT8",
+    "frequency": 7074000,
+    "radioMode": "USB-D",
     "ptt": false,
-    "txActive": false
+    "tx": false
   },
-  "operator": {
-    "callsign": "..."
+  "ft8": {
+    "slot": null,
+    "utc": null,
+    "cycle": null,
+    "periodMs": 15000,
+    "recentDecodeRawMessages": [],
+    "lastDecodeRawMessage": null,
+    "recentFrames": [],
+    "currentTx": {
+      "active": false,
+      "operatorIds": [],
+      "messages": [],
+      "lastMessage": null,
+      "slotStartMs": null
+    }
+  },
+  "voice": {
+    "active": false,
+    "radioMode": null,
+    "pttLocked": false,
+    "pttLockedByLabel": null,
+    "keyerActive": false,
+    "keyerMode": null,
+    "keyerSlotId": null
   },
   "access": {
     "localUrl": "http://192.168.1.10:8076"
-  }
+  },
+  "updatedAt": 1778697600000
 }
 ```
 
@@ -618,17 +647,10 @@ Authorization: Bearer <device-jwt>
 - 不改变普通 `clientCountChanged.count`。
 - 只推送小屏需要的裁剪事件。
 
-事件类型：
+MVP 事件类型只使用 snapshot。后续如需要增量事件，必须先更新 contracts 和本文档。
 
 ```json
 { "type": "snapshot", "payload": { } }
-{ "type": "server.status", "payload": { } }
-{ "type": "radio.status", "payload": { } }
-{ "type": "radio.tx", "payload": { } }
-{ "type": "operator.status", "payload": { } }
-{ "type": "ft8.decode", "payload": { } }
-{ "type": "message.recent", "payload": { } }
-{ "type": "spectrum.summary", "payload": { } }
 ```
 
 ## 12. 网络能力边界
