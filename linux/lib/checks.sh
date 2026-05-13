@@ -4,16 +4,50 @@
 
 # ── Check functions (return 0=pass, 1=fail) ──────────────────────────────────
 
-check_nodejs() {
+TX5DR_MIN_NODE_MAJOR="${TX5DR_MIN_NODE_MAJOR:-22}"
+
+get_nodejs_version() {
+    command -v node &>/dev/null || return 1
+    node --version 2>/dev/null || return 1
+}
+
+get_nodejs_major() {
+    local ver="${1#v}"
+    [[ "$ver" =~ ^([0-9]+)(\.|$) ]] || return 1
+    printf "%s" "${BASH_REMATCH[1]}"
+}
+
+nodejs_requirement_detail() {
+    local ver major
     if ! command -v node &>/dev/null; then
-        return 1
+        printf "not found; requires Node.js >= %s" "$TX5DR_MIN_NODE_MAJOR"
+        return
     fi
-    local ver
-    ver=$(node --version 2>/dev/null | sed 's/^v//')
-    local major
-    major=$(echo "$ver" | cut -d. -f1)
-    [[ -n "$major" && "$major" -ge 20 ]] && return 0
-    return 1
+
+    ver=$(node --version 2>&1 || true)
+    if [[ -z "$ver" ]]; then
+        printf "version unavailable; requires Node.js >= %s" "$TX5DR_MIN_NODE_MAJOR"
+        return
+    fi
+
+    if ! major=$(get_nodejs_major "$ver"); then
+        printf "found %s; requires Node.js >= %s" "$ver" "$TX5DR_MIN_NODE_MAJOR"
+        return
+    fi
+
+    if [[ "$major" -lt "$TX5DR_MIN_NODE_MAJOR" ]]; then
+        printf "found %s; requires Node.js >= %s" "$ver" "$TX5DR_MIN_NODE_MAJOR"
+        return
+    fi
+
+    printf "%s" "$ver"
+}
+
+check_nodejs() {
+    local ver major
+    ver=$(get_nodejs_version) || return 1
+    major=$(get_nodejs_major "$ver") || return 1
+    [[ "$major" -ge "$TX5DR_MIN_NODE_MAJOR" ]]
 }
 
 check_glibcxx() {
@@ -876,10 +910,11 @@ run_doctor() {
 
     # Node.js
     if check_nodejs; then
-        check_line "$(msg CHECK_NODEJS)" "ok" "$(node --version 2>/dev/null)"
+        check_line "$(msg CHECK_NODEJS)" "ok" "$(nodejs_requirement_detail)"
     else
-        check_line "$(msg CHECK_NODEJS)" "fail" "not found or < 20"
+        check_line "$(msg CHECK_NODEJS)" "fail" "$(nodejs_requirement_detail)"
         echo -e "      ${_DIM}$(msg FIX_NODEJS)${_NC}"
+        echo -e "      ${_DIM}Run: sudo tx5dr doctor --fix${_NC}"
         issues=$((issues + 1))
     fi
 

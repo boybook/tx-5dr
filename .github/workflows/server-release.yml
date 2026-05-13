@@ -345,7 +345,7 @@ jobs:
 
             ### 🔧 System Requirements 系统要求
             - Debian 12+ / Ubuntu 22.04+ (Debian 12 recommended / 推荐 Debian 12)
-            - Node.js 20+ (auto-installed via `install.sh` / 通过安装脚本自动安装)
+            - Node.js 22+ (auto-installed via `install.sh` / 通过安装脚本自动安装)
             - nginx (auto-installed / 自动安装)
 
             > Looking for the **Desktop App** (Windows/macOS/Linux with GUI)? See [nightly-app](https://github.com/${{ github.repository }}/releases/tag/nightly-app).
@@ -419,7 +419,7 @@ jobs:
             Linux 服务器版并不是单个独立进程。安装脚本会自动安装并编排 `tx5dr`（后端，内置 UDP 50110 上的 rtc-data-audio）以及 `nginx`（对外反向代理 / HTTPS）。
 
             ### 🔧 System Requirements 系统要求
-            - Debian 12+ / Ubuntu 22.04+, Node.js 20+, nginx
+            - Debian 12+ / Ubuntu 22.04+, Node.js 22+, nginx
 
             ---
             Built at （构建于）: ${{ steps.release_info.outputs.timestamp }}

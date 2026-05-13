@@ -12,8 +12,18 @@ source "$LIB_DIR/common.sh"
 source "$LIB_DIR/checks.sh"
 load_config
 
+ensure_nodejs_ready() {
+    if check_nodejs; then
+        return 0
+    fi
+    log_fail "Node.js $(nodejs_requirement_detail)"
+    echo -e "  ${_DIM}Run: sudo tx5dr doctor --fix${_NC}"
+    return 1
+}
+
 cmd_start() {
     echo "$(msg STARTING)"
+    ensure_nodejs_ready || exit 1
     sudo systemctl start tx5dr
     echo -n "  "
     if wait_for_port "${API_PORT}" 60; then log_ok "$(msg PORT_READY "$API_PORT") (backend)"; else log_fail "$(msg PORT_FAIL "$API_PORT" "60")"; sudo journalctl -u tx5dr -n 10 --no-pager 2>/dev/null | sed 's/^/    /'; exit 1; fi
@@ -37,6 +47,7 @@ cmd_stop() {
 
 cmd_restart() {
     echo "$(msg RESTARTING)"
+    ensure_nodejs_ready || exit 1
     sudo systemctl restart tx5dr
     echo -n "  "
     if wait_for_port "${API_PORT}" 60; then log_ok "$(msg PORT_READY "$API_PORT") (backend)"; else log_fail "$(msg PORT_FAIL "$API_PORT" "60")"; sudo journalctl -u tx5dr -n 10 --no-pager 2>/dev/null | sed 's/^/    /'; exit 1; fi
@@ -70,7 +81,11 @@ cmd_status() {
         echo -e "  HTTPS:      ${_YELLOW}not configured${_NC} ${_DIM}(run: sudo tx5dr doctor --fix)${_NC}"
     fi
     echo -e "  Realtime:   rtc-data-audio UDP ${RTC_DATA_AUDIO_UDP_PORT:-50110}, fallback ws-compat"
-    echo -e "  Node.js:    $(command -v node >/dev/null 2>&1 && node --version || echo not found)"
+    if check_nodejs; then
+        echo -e "  Node.js:    $(nodejs_requirement_detail)"
+    else
+        echo -e "  Node.js:    ${_YELLOW}$(nodejs_requirement_detail)${_NC} ${_DIM}(run: sudo tx5dr doctor --fix)${_NC}"
+    fi
     echo -e "  Version:    ${version}"
     echo -e "  Data Dir:   ${DATA_DIR}"
     echo -e "  Plugins:    ${PLUGIN_DIR}"

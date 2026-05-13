@@ -61,16 +61,16 @@ log_info "OS: ${OS_ID} ${OS_VERSION_ID} (${OS_CODENAME}), Arch: ${ARCH}"
 log_info "rtc-data-audio UDP port: ${RTC_DATA_AUDIO_UDP_PORT:-50110}"
 
 if [[ "$MODE" != "docker" ]]; then
-    step_header 2 "Node.js >= 20"
+    step_header 2 "Node.js >= ${TX5DR_MIN_NODE_MAJOR}"
     if check_nodejs; then
-        log_ok "Node.js $(node --version 2>/dev/null)"
+        log_ok "Node.js $(nodejs_requirement_detail)"
     elif [[ "$MODE" == "check" ]]; then
-        log_fail "Node.js not found or < 20"
+        log_fail "Node.js $(nodejs_requirement_detail)"
         echo "      $(msg FIX_NODEJS)"
         ISSUES=$((ISSUES + 1))
     else
         require_root
-        if fix_nodejs; then log_ok "Node.js $(node --version 2>/dev/null) (installed)"; else log_fail "Node.js (fix failed)"; ISSUES=$((ISSUES + 1)); fi
+        if fix_nodejs; then log_ok "Node.js $(nodejs_requirement_detail) (installed)"; else log_fail "Node.js (fix failed: $(nodejs_requirement_detail))"; ISSUES=$((ISSUES + 1)); fi
     fi
 fi
 

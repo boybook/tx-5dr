@@ -213,6 +213,8 @@ if [[ "$SHARED_LIB_READY" == "1" ]]; then
     ISSUES=0
     echo ""
     if ! check_nodejs; then
+        log_warn "Node.js $(nodejs_requirement_detail)"
+        log_warn "Run: sudo tx5dr doctor --fix"
         log_warn "$(msg FIX_NODEJS)"
         ISSUES=$((ISSUES + 1))
     fi

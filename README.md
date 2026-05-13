@@ -116,7 +116,7 @@ Linux Server is not a single standalone process. The installer sets up and wires
 ### System Requirements
 
 - **Debian 12+** (recommended) or **Ubuntu 22.04+**
-- **Node.js 20+** (auto-installed by `install.sh`)
+- **Node.js 22+** (auto-installed by `install.sh`)
 - **nginx** (auto-installed)
 - **Realtime voice UDP**: allow `50110/udp` by default, or set `RTC_DATA_AUDIO_UDP_PORT` in `/etc/tx5dr/config.env`
 - For voice features: **HTTPS** (configure SSL in `/etc/nginx/conf.d/tx5dr.conf`)

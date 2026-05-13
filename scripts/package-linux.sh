@@ -4,7 +4,7 @@
 #
 # Prerequisites:
 #   - fpm: gem install fpm (or: apt install ruby-dev && gem install fpm)
-#   - Node.js 20+, yarn
+#   - Node.js 22+, yarn
 #
 # Usage:
 #   scripts/package-linux.sh [deb|rpm|both]        # default: both
@@ -432,7 +432,7 @@ build_package() {
         --url "https://tx5dr.com" \
         --license "MIT" \
         --category "hamradio" \
-        --depends "nodejs >= 20" \
+        --depends "nodejs >= 22" \
         --depends "nginx" \
         --depends "$alsa_dep" \
         --depends "$pulse_dep" \
