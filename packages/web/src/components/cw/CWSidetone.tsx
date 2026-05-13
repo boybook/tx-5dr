@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
-import { encodeMorseSchedule } from '../../utils/morseEncoder';
+import { encodeTextToCWKeyStateSegments } from '@tx5dr/contracts';
 
 const RAMP_MS = 3; // envelope ramp duration to eliminate clicks
 
@@ -53,7 +53,7 @@ export const CWSidetone = forwardRef<CWSidetoneHandle, CWSidetoneProps>(
     const play = useCallback((text: string) => {
       if (!enabled || !text.trim()) return;
 
-      const schedule = encodeMorseSchedule(text.trim(), wpm);
+      const schedule = encodeTextToCWKeyStateSegments(text.trim(), wpm);
       if (schedule.length === 0) return;
 
       // Stop any previous playback (token + active oscillator)
@@ -86,7 +86,7 @@ export const CWSidetone = forwardRef<CWSidetoneHandle, CWSidetoneProps>(
           if (stopTokenRef.current !== token) break;
 
           const durationSec = event.durationMs / 1000;
-          if (event.tone && durationSec > 0) {
+          if (event.keyDown && durationSec > 0) {
             // Key-down: ramp up, hold, ramp down
             const ramp = Math.min(RAMP_MS / 1000, durationSec / 3);
             gainNode.gain.setValueAtTime(0, t);
