@@ -143,6 +143,7 @@
       "VI": "U.S. Virgin Islands"
     },
     "distance": "Distance",
+    "bearing": "Bearing",
     "signal": "Signal",
     "avg": "Avg",
     "last": "Last",

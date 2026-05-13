@@ -556,6 +556,13 @@ export interface GridCoordinates {
   lon: number;
 }
 
+export interface GridPath {
+  /** Great-circle distance in kilometers. */
+  distanceKm: number;
+  /** Initial true bearing clockwise from north, in degrees (0-359). */
+  bearingDegrees: number;
+}
+
 // 中国呼号分区信息
 interface ChinaRegionInfo {
   regionCode: number;
@@ -1216,7 +1223,7 @@ export function gridToCoordinates(grid: string): GridCoordinates | null {
   const lon2 = parseInt(upperGrid[2]);
   const lat2 = parseInt(upperGrid[3]);
   
-  if (isNaN(lon2) || isNaN(lat2)) return null;
+  if (lon1 < 0 || lon1 > 17 || lat1 < 0 || lat1 > 17 || isNaN(lon2) || isNaN(lat2)) return null;
   
   // 计算经纬度
   let lon = (lon1 * 20 + lon2 * 2) - 180 + 1;
@@ -1226,6 +1233,7 @@ export function gridToCoordinates(grid: string): GridCoordinates | null {
   if (grid.length >= 6) {
     const lon3 = upperGrid.charCodeAt(4) - 65;
     const lat3 = upperGrid.charCodeAt(5) - 65;
+    if (lon3 < 0 || lon3 > 23 || lat3 < 0 || lat3 > 23) return null;
     lon += lon3 * 5 / 60;
     lat += lat3 * 2.5 / 60;
   }
@@ -1246,6 +1254,39 @@ export function calculateGridDistance(grid1: string, grid2: string): number | nu
   if (!coord1 || !coord2) return null;
   
   return haversineDistance(coord1, coord2);
+}
+
+/**
+ * 计算从一个网格指向另一个网格的初始真方位角（度，0-359）
+ * @param fromGrid 起点网格
+ * @param toGrid 目标网格
+ * @returns 真北顺时针方位角
+ */
+export function calculateGridBearing(fromGrid: string, toGrid: string): number | null {
+  const from = gridToCoordinates(fromGrid);
+  const to = gridToCoordinates(toGrid);
+
+  if (!from || !to) return null;
+
+  return initialBearing(from, to);
+}
+
+/**
+ * 一次性计算两个网格之间的距离和初始真方位角
+ * @param fromGrid 起点网格
+ * @param toGrid 目标网格
+ * @returns 距离（公里）和方位角（度）
+ */
+export function calculateGridPath(fromGrid: string, toGrid: string): GridPath | null {
+  const from = gridToCoordinates(fromGrid);
+  const to = gridToCoordinates(toGrid);
+
+  if (!from || !to) return null;
+
+  return {
+    distanceKm: haversineDistance(from, to),
+    bearingDegrees: initialBearing(from, to),
+  };
 }
 
 /**
@@ -1270,6 +1311,25 @@ function haversineDistance(
   return R * c;
 }
 
+function initialBearing(
+  from: GridCoordinates,
+  to: GridCoordinates
+): number {
+  const lat1 = toRadians(from.lat);
+  const lat2 = toRadians(to.lat);
+  const dLon = toRadians(to.lon - from.lon);
+
+  const y = Math.sin(dLon) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) -
+            Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+
+  return normalizeDegrees(toDegrees(Math.atan2(y, x)));
+}
+
+function normalizeDegrees(degrees: number): number {
+  return (degrees + 360) % 360;
+}
+
 /**
  * 角度转弧度
  * @param degrees 角度
@@ -1277,6 +1337,10 @@ function haversineDistance(
  */
 function toRadians(degrees: number): number {
   return degrees * (Math.PI / 180);
+}
+
+function toDegrees(radians: number): number {
+  return radians * (180 / Math.PI);
 }
 
 // 网格定位正则表达式（从 ft8-message-parser 导入）

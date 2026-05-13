@@ -1,10 +1,10 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { Popover, PopoverTrigger, PopoverContent, Divider, Spinner } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
-import { api, calculateGridDistance } from '@tx5dr/core';
+import { api, calculateGridPath } from '@tx5dr/core';
 import { FlagDisplay } from '../../common/FlagDisplay';
 import { QrzCallsignLink } from '../../common/QrzCallsignLink';
-import { useStationInfo } from '../../../store/radioStore';
+import { useCurrentOperatorId, useOperators, useStationInfo } from '../../../store/radioStore';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -197,15 +197,26 @@ function PopoverBody({ callsign, tracking, logbookAnalysis, country, countryZh, 
   const { t, i18n } = useTranslation('common');
   const isZh = i18n.language === 'zh';
   const stationInfo = useStationInfo();
-  const myGrid = stationInfo?.qth?.grid;
+  const { operators } = useOperators();
+  const { currentOperatorId } = useCurrentOperatorId();
+  const currentOperator = useMemo(
+    () => operators.find(operator => operator.id === currentOperatorId),
+    [currentOperatorId, operators],
+  );
+  const operatorGrid = currentOperator?.context?.myGrid?.trim();
+  const stationGrid = stationInfo?.qth?.grid?.trim();
+  const myGrid = operatorGrid || stationGrid;
 
   const grid = tracking.grid || logbookAnalysis?.grid;
 
-  const distance = useMemo(() => {
+  const gridPath = useMemo(() => {
     if (!myGrid || !grid) return null;
-    const d = calculateGridDistance(myGrid, grid);
-    if (d === null) return null;
-    return Math.round(d);
+    const path = calculateGridPath(myGrid, grid);
+    if (path === null) return null;
+    return {
+      distanceKm: Math.round(path.distanceKm),
+      bearingDegrees: Math.round(path.bearingDegrees) % 360,
+    };
   }, [myGrid, grid]);
 
   const countryName = isZh
@@ -248,15 +259,18 @@ function PopoverBody({ callsign, tracking, logbookAnalysis, country, countryZh, 
         )}
       </div>
 
-      {/* Grid + DXCC + Distance */}
+      {/* Grid + DXCC + Distance/Bearing */}
       <div className="flex items-center justify-between mt-1.5 text-xs text-default-500">
         <span>
           {t('callsignPopover.grid')}: {grid || t('callsignPopover.noGrid')}
           {dxccEntity && <span className="ml-1.5 text-default-400">{dxccEntity}</span>}
         </span>
-        {distance !== null && (
-          <span className="text-default-400">
-            {distance.toLocaleString()} km
+        {gridPath !== null && (
+          <span
+            className="text-default-400"
+            title={`${t('callsignPopover.distance')}: ${gridPath.distanceKm.toLocaleString()} km · ${t('callsignPopover.bearing')}: ${gridPath.bearingDegrees}°`}
+          >
+            {gridPath.distanceKm.toLocaleString()} km · {gridPath.bearingDegrees}°
           </span>
         )}
       </div>
