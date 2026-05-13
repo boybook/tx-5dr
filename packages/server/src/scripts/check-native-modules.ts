@@ -1,3 +1,5 @@
+import { pathToFileURL } from 'node:url';
+
 /**
  * Native module diagnostic script — runs as an isolated child process.
  *
@@ -15,7 +17,7 @@
  * module X caused a fatal crash (e.g. native binding segfault).
  */
 
-const NATIVE_MODULES = [
+export const NATIVE_MODULES = [
   'audify',
   'serialport',
   'bcrypt',
@@ -24,6 +26,7 @@ const NATIVE_MODULES = [
   'hamlib',
   'icom-wlan-node',
   'node-wav',
+  'onnxruntime-node',
   'wsjtx-lib',
 ];
 
@@ -31,7 +34,7 @@ function writeLine(line: string): void {
   process.stdout.write(line + '\n');
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   for (const mod of NATIVE_MODULES) {
     writeLine(`CHECKING:${mod}`);
     try {
@@ -46,7 +49,11 @@ async function main(): Promise<void> {
   writeLine('DONE');
 }
 
-main().catch((err) => {
-  writeLine(`ERROR:${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
-});
+const isDirectRun = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
+
+if (isDirectRun) {
+  main().catch((err) => {
+    writeLine(`ERROR:${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  });
+}

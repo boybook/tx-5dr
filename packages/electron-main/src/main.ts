@@ -26,6 +26,12 @@ import {
 } from './desktopHttps.js';
 import { isPrepareShutdownSuccess } from './prepareShutdown.js';
 import { awaitServerReadyWithCleanup } from './serverStartupCleanup.js';
+import {
+  VC_REDIST_MIN_VERSION,
+  VC_REDIST_X64_URL,
+  buildWindowsChildPath,
+  detectWindowsVCRuntime,
+} from './vcRuntime.js';
 
 // 获取当前模块的目录(ESM中的__dirname替代方案)
 // const __filename = fileURLToPath(import.meta.url);
@@ -315,26 +321,11 @@ interface ShortcutRecordingCancelledPayload {
   actionId: ShortcutActionId;
 }
 
-interface WindowsVCRuntimeStatus {
-  installed: boolean;
-  versionOk: boolean;
-  version: string | null;
-  source: 'registry' | 'filesystem' | 'missing';
-  detail: string;
-}
-
 const DEFAULT_ELECTRON_SETTINGS: ElectronSettings = {
   closeBehavior: 'ask',
   desktopHttps: DEFAULT_DESKTOP_HTTPS_CONFIG,
   shortcuts: createDefaultShortcutConfig(),
 };
-const VC_REDIST_X64_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
-const VC_REDIST_REGISTRY_KEYS = [
-  'HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64',
-  'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64',
-] as const;
-const VC_REDIST_REQUIRED_DLLS = ['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll'] as const;
-const VC_REDIST_MIN_VERSION = { major: 14, minor: 30 } as const; // VS 2022 = 14.3x series
 
 function getElectronSettingsPath(): string {
   return path.join(getAppConfigDir(), ELECTRON_SETTINGS_FILE);
@@ -1505,83 +1496,15 @@ function nodePath() {
   return path.join(res, 'bin', triplet(), exe);
 }
 
-function queryWindowsRegistryValue(key: string, valueName: string): string | null {
-  const probe = spawnSync('reg', ['query', key, '/v', valueName], {
-    encoding: 'utf8',
-    windowsHide: true,
-  });
-  if (probe.status !== 0) {
-    return null;
-  }
-
-  const pattern = new RegExp(`^\\s*${valueName}\\s+REG_\\w+\\s+(.+)$`, 'im');
-  const match = probe.stdout.match(pattern);
-  return match?.[1]?.trim() || null;
-}
-
-function parseVCRuntimeVersion(versionStr: string): { major: number; minor: number } | null {
-  const match = versionStr.match(/^v?(\d+)\.(\d+)/);
-  if (!match) return null;
-  return { major: parseInt(match[1], 10), minor: parseInt(match[2], 10) };
-}
-
-function isVCRuntimeVersionSufficient(versionStr: string): boolean {
-  const parsed = parseVCRuntimeVersion(versionStr);
-  if (!parsed) return false;
-  if (parsed.major !== VC_REDIST_MIN_VERSION.major) {
-    return parsed.major > VC_REDIST_MIN_VERSION.major;
-  }
-  return parsed.minor >= VC_REDIST_MIN_VERSION.minor;
-}
-
-function detectWindowsVCRuntime(): WindowsVCRuntimeStatus {
-  if (process.platform !== 'win32') {
-    return { installed: true, versionOk: true, version: null, source: 'registry', detail: 'not-applicable' };
-  }
-
-  for (const key of VC_REDIST_REGISTRY_KEYS) {
-    const installed = queryWindowsRegistryValue(key, 'Installed');
-    if (installed === '0x1' || installed === '1') {
-      const version = queryWindowsRegistryValue(key, 'Version') || 'unknown';
-      const versionOk = version !== 'unknown' && isVCRuntimeVersionSufficient(version);
-      return {
-        installed: true,
-        versionOk,
-        version,
-        source: 'registry',
-        detail: `${key} (Version=${version})`,
-      };
-    }
-  }
-
-  const systemRoot = process.env.SystemRoot || 'C:\\Windows';
-  const system32 = path.join(systemRoot, 'System32');
-  const missingDlls = VC_REDIST_REQUIRED_DLLS.filter((dllName) => !fs.existsSync(path.join(system32, dllName)));
-  if (missingDlls.length === 0) {
-    return {
-      installed: true,
-      versionOk: true,
-      version: null,
-      source: 'filesystem',
-      detail: system32,
-    };
-  }
-
-  return {
-    installed: false,
-    versionOk: false,
-    version: null,
-    source: 'missing',
-    detail: `missing DLLs: ${missingDlls.join(', ')}`,
-  };
-}
-
 async function ensureWindowsVCRuntimeInstalled(): Promise<boolean> {
   if (process.platform !== 'win32') {
     return true;
   }
 
-  const runtimeStatus = detectWindowsVCRuntime();
+  const runtimeStatus = detectWindowsVCRuntime({
+    resourcesRoot: resourcesRoot(),
+    triplet: triplet(),
+  });
 
   if (runtimeStatus.installed && runtimeStatus.versionOk) {
     logger.info(`windows VC runtime detected via ${runtimeStatus.source}: ${runtimeStatus.detail}`);
@@ -1746,7 +1669,7 @@ function createChildEnv(extraEnv: Record<string, string> = {}) {
     NODE_PATH: path.join(res, 'app', 'node_modules'),
     ...(process.platform === 'win32'
       ? {
-          PATH: `${process.env.PATH};${path.join(res, 'native')}`,
+          PATH: buildWindowsChildPath(res, triplet(), process.env.PATH || ''),
         }
       : process.platform === 'darwin'
       ? {
