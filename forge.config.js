@@ -449,6 +449,8 @@ module.exports = {
         // Drop partial/debug node-gyp outputs. Debug CRT DLLs are not redistributable
         // and must never be required by production Windows packages.
         findAndRemoveDirs(nm, 'Debug');
+        // Drop CMake compiler probe executables; audify's probes can depend on debug CRT.
+        findAndRemoveDirs(nm, 'CMakeFiles');
         console.log('✅ native 模块编译源码清理完成');
       } catch (err) {
         console.warn('⚠️ 清理 native 模块编译源码遇到问题：', (err && err.message) || err);
