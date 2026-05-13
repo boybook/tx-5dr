@@ -14,6 +14,7 @@ import { AudioDeviceManager } from './audio/audio-device-manager.js';
 import { DigitalRadioEngine } from './DigitalRadioEngine.js';
 import { UserRole } from '@tx5dr/contracts';
 import { AuthManager } from './auth/AuthManager.js';
+import { DeviceServiceAuthManager } from './auth/DeviceServiceAuthManager.js';
 import { authPlugin, requireRole, withRole } from './auth/authPlugin.js';
 import { authRoutes } from './routes/auth.js';
 import { audioRoutes } from './routes/audio.js';
@@ -29,6 +30,8 @@ import { systemRoutes } from './routes/system.js';
 import { WSServer } from './websocket/WSServer.js';
 import { ProcessMonitor } from './services/ProcessMonitor.js';
 import { LogbookWSServer } from './websocket/LogbookWSServer.js';
+import { DeviceUiWSServer } from './device-ui/DeviceUiWSServer.js';
+import { deviceUiRoutes } from './device-ui/routes.js';
 import { voiceRoutes } from './routes/voice.js';
 import { cwRoutes } from './routes/cw.js';
 import { stationRoutes } from './routes/station.js';
@@ -240,6 +243,8 @@ export async function createServer() {
   // 初始化认证管理器
   const authManager = AuthManager.getInstance();
   await authManager.initialize();
+  const deviceServiceAuthManager = DeviceServiceAuthManager.getInstance();
+  await deviceServiceAuthManager.initialize();
   bootstrapCoordinator.completePhase('config-auth');
   fastify.log.info('Auth manager initialized');
 
@@ -301,6 +306,7 @@ export async function createServer() {
   // 初始化WebSocket服务器（集成业务逻辑）
   const wsServer = new WSServer(digitalRadioEngine, processMonitor);
   const logbookWsServer = new LogbookWSServer(digitalRadioEngine);
+  const deviceUiWsServer = new DeviceUiWSServer(digitalRadioEngine, deviceServiceAuthManager);
   fastify.log.info('WebSocket server initialized');
 
   // Register CORS plugin - 允许所有跨域
@@ -545,6 +551,14 @@ export async function createServer() {
   await fastify.register(authRoutes, { prefix: '/api/auth' });
   fastify.log.info('Auth routes registered');
 
+  // Device UI 路由：health/session/bootstrap 自行处理 device JWT，不进入普通用户角色保护。
+  await fastify.register(deviceUiRoutes, {
+    prefix: '/api/device-ui',
+    projectionService: deviceUiWsServer.getProjectionService(),
+    authManager: deviceServiceAuthManager,
+  });
+  fastify.log.info('Device UI routes registered');
+
   // 实时音频会话
   await fastify.register(realtimeRoutes, { prefix: '/api/realtime' });
   fastify.log.info('Realtime routes registered');
@@ -636,11 +650,17 @@ export async function createServer() {
     }
   });
 
+  // Device UI 专用 WebSocket：使用 device JWT，独立于普通浏览器 WSServer/clientHandshake。
+  fastify.get('/api/device-ui/ws', { websocket: true }, async (socket: WebSocket, req: FastifyRequest) => {
+    await deviceUiWsServer.acceptConnection(socket, req);
+  });
+
   // 服务器关闭时清理WebSocket连接
   fastify.addHook('onClose', async () => {
     processMonitor.stop();
     wsServer.cleanup();
     logbookWsServer.cleanup();
+    deviceUiWsServer.cleanup();
   });
 
   fastify.get('/api/realtime/ws-compat', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {

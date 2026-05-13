@@ -158,6 +158,9 @@ export * from './schema/realtime.schema.js';
 // Desktop HTTPS Schema
 export * from './schema/desktop-https.schema.js';
 
+// Device UI Schema
+export * from './schema/device-ui.schema.js';
+
 // Plugin Schema
 export * from './schema/plugin.schema.js';
 export * from './schema/update.schema.js';
