@@ -703,7 +703,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
-  it('uses bounded report-first slots when manually calling a special event long callsign', async () => {
+  it('uses WSJT-X structured slots when manually calling a special event long callsign', async () => {
     const { operator, pluginManager } = await createRuntimeHarness({
       myCallsign: 'BG5DRB',
       myGrid: 'PM01',
@@ -724,15 +724,11 @@ describe('PluginManager standard-qso late re-decision', () => {
     const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
     expect(status.currentSlot).toBe('TX1');
     expect(status.context?.targetCallsign).toBe('SX100PAOK');
-    expect(status.slots?.TX1).toBe('<SX100PAOK> BG5DRB -10');
-    expect(status.slots?.TX1).not.toContain('PM01');
+    expect(status.slots?.TX1).toBe('<SX100PAOK> BG5DRB PM01');
     expect(status.slots?.TX2).toBe('<SX100PAOK> BG5DRB -10');
-    expect(status.slots?.TX3).toBe('<SX100PAOK> BG5DRB RRR');
-    expect(status.slots?.TX4).toBe('<SX100PAOK> BG5DRB RRR');
+    expect(status.slots?.TX3).toBe('<SX100PAOK> BG5DRB R-10');
+    expect(status.slots?.TX4).toBe('<SX100PAOK> BG5DRB RR73');
     expect(status.slots?.TX5).toBe('<SX100PAOK> BG5DRB 73');
-    for (const slot of ['TX1', 'TX2', 'TX3', 'TX4', 'TX5'] as const) {
-      expect(status.slots?.[slot]?.length).toBeLessThanOrEqual(22);
-    }
 
     await pluginManager.shutdown();
   });
@@ -756,7 +752,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     expect(status.context?.targetCallsign).toBe('SX100PAOK');
     expect(status.context?.reportReceived).toBe(-10);
     expect(status.context?.reportSent).toBe(-7);
-    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('<SX100PAOK> BG5DRB RRR');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('<SX100PAOK> BG5DRB RR73');
 
     await pluginManager.shutdown();
   });

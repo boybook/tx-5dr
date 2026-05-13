@@ -73,6 +73,42 @@ describe('StandardQSOPluginRuntime TX6 override', () => {
 
 
 describe('StandardQSOPluginRuntime nonstandard callsign slots', () => {
+  it('uses RR73 for special event callsigns when the structured reply fits FT8 text length', () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator({ myCallsign: 'BG7WJH' }));
+
+    runtime.patchContext({
+      targetCallsign: 'LZ370TL',
+      reportSent: -9,
+    });
+    runtime.updateSlots();
+
+    expect(runtime.getSnapshot().slots).toMatchObject({
+      TX1: '<LZ370TL> BG7WJH OL32',
+      TX2: '<LZ370TL> BG7WJH -09',
+      TX3: '<LZ370TL> BG7WJH R-09',
+      TX4: '<LZ370TL> BG7WJH RR73',
+      TX5: '<LZ370TL> BG7WJH 73',
+    });
+  });
+
+  it('keeps RR73 for special event callsigns that exceed the old 22-character guard', () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator());
+
+    runtime.patchContext({
+      targetCallsign: 'SX100PAOK',
+      reportSent: -9,
+    });
+    runtime.updateSlots();
+
+    expect(runtime.getSnapshot().slots).toMatchObject({
+      TX1: '<SX100PAOK> BG5DRB OL32',
+      TX2: '<SX100PAOK> BG5DRB -09',
+      TX3: '<SX100PAOK> BG5DRB R-09',
+      TX4: '<SX100PAOK> BG5DRB RR73',
+      TX5: '<SX100PAOK> BG5DRB 73',
+    });
+  });
+
   it('keeps 23-character RR73 and R-report messages for compound callsigns', () => {
     const runtime = new StandardQSOPluginRuntime(createOperator());
 
@@ -83,7 +119,7 @@ describe('StandardQSOPluginRuntime nonstandard callsign slots', () => {
     runtime.updateSlots();
 
     expect(runtime.getSnapshot().slots).toMatchObject({
-      TX1: '<VA7CD/DU7> BG5DRB -09',
+      TX1: '<VA7CD/DU7> BG5DRB OL32',
       TX2: '<VA7CD/DU7> BG5DRB -09',
       TX3: '<VA7CD/DU7> BG5DRB R-09',
       TX4: '<VA7CD/DU7> BG5DRB RR73',

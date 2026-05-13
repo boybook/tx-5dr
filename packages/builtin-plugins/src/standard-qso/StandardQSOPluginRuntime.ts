@@ -1395,6 +1395,12 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         const wrappedTarget = `<${targetCallsign}>`;
         const myCallsign = this.operator.config.myCallsign;
         const reportText = FT8MessageParser.generateSignalReport(report);
+        const gridCall = {
+            type: FT8MessageType.CALL,
+            senderCallsign: myCallsign,
+            targetCallsign,
+            grid: this.context.config.myGrid,
+        } as const;
         const signalReport = {
             type: FT8MessageType.SIGNAL_REPORT,
             senderCallsign: myCallsign,
@@ -1402,15 +1408,11 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             report,
         } as const;
 
-        this.slots.TX1 = FT8MessageParser.generateMessage(signalReport);
+        this.slots.TX1 = FT8MessageParser.generateMessage(gridCall);
         this.slots.TX2 = FT8MessageParser.generateMessage(signalReport);
-        if (targetCallsign.includes('/')) {
-            this.slots.TX3 = `${wrappedTarget} ${myCallsign} R${reportText}`;
-            this.slots.TX4 = `${wrappedTarget} ${myCallsign} RR73`;
-        } else {
-            this.slots.TX3 = `${wrappedTarget} ${myCallsign} RRR`;
-            this.slots.TX4 = `${wrappedTarget} ${myCallsign} RRR`;
-        }
+        // WSJT-X pack77 accepts hashed nonstandard-call structured replies, including RR73.
+        this.slots.TX3 = `${wrappedTarget} ${myCallsign} R${reportText}`;
+        this.slots.TX4 = `${wrappedTarget} ${myCallsign} RR73`;
         this.slots.TX5 = `${wrappedTarget} ${myCallsign} 73`;
     }
     
