@@ -1,4 +1,5 @@
 import { EventEmitter } from 'eventemitter3';
+import { parseFT8LocationInfo } from '@tx5dr/core';
 import type {
   FrequencyState,
   OperatorStatus,
@@ -13,11 +14,17 @@ import { ConfigManager } from '../config/config-manager.js';
 import { SERVER_BUILD_INFO } from '../generated/buildInfo.js';
 
 export interface DeviceUiFrameSnapshot {
+  slotId?: string | null;
+  slotStartMs?: number | null;
   snr: number | null;
   freq: number | null;
   dt: number | null;
   message: string;
   operatorId: string | null;
+  country?: string | null;
+  countryZh?: string | null;
+  countryEn?: string | null;
+  countryCode?: string | null;
 }
 
 export interface DeviceUiCurrentTxSnapshot {
@@ -72,6 +79,8 @@ export interface DeviceUiSnapshot {
     periodMs: number | null;
     recentDecodeRawMessages: string[];
     lastDecodeRawMessage: string | null;
+    recentFramesSlotId: string | null;
+    recentFramesSlotStartMs: number | null;
     recentFrames: DeviceUiFrameSnapshot[];
     currentTx: DeviceUiCurrentTxSnapshot;
   };
@@ -344,7 +353,9 @@ export class DeviceUiProjectionService {
     if (!slotPack) return;
     this.snapshot.radio.frequency = numberOrNull(slotPack.frequencyContext?.frequency) ?? this.snapshot.radio.frequency;
     this.snapshot.radio.radioMode = stringOrNull(slotPack.frequencyContext?.radioMode ?? slotPack.frequencyContext?.mode) ?? this.snapshot.radio.radioMode;
-    this.snapshot.ft8.recentFrames = (slotPack.frames ?? []).map(toFrameSnapshot);
+    this.snapshot.ft8.recentFramesSlotId = stringOrNull(slotPack.slotId);
+    this.snapshot.ft8.recentFramesSlotStartMs = numberOrNull(slotPack.startMs);
+    this.snapshot.ft8.recentFrames = (slotPack.frames ?? []).map((frame) => toFrameSnapshot(frame, slotPack));
     const messages = (slotPack.frames ?? []).map((frame) => stringOrNull(frame.message)).filter((message): message is string => Boolean(message));
     for (const message of messages) {
       this.snapshot.ft8.recentDecodeRawMessages = mergeRecentStrings(this.snapshot.ft8.recentDecodeRawMessages, message, this.maxRecentDecodes);
@@ -430,6 +441,8 @@ export class DeviceUiProjectionService {
         periodMs: null,
         recentDecodeRawMessages: [],
         lastDecodeRawMessage: null,
+        recentFramesSlotId: null,
+        recentFramesSlotStartMs: null,
         recentFrames: [],
         currentTx: { ...NULL_TX },
       },
@@ -480,13 +493,21 @@ function currentOperatorMessage(status: OperatorStatus | undefined): string | nu
   return null;
 }
 
-function toFrameSnapshot(frame: SlotPack['frames'][number]): DeviceUiFrameSnapshot {
+function toFrameSnapshot(frame: SlotPack['frames'][number], slotPack: SlotPack): DeviceUiFrameSnapshot {
+  const message = stringOrNull(frame?.message) ?? '';
+  const locationInfo = message ? parseFT8LocationInfo(message) : {};
   return {
+    slotId: stringOrNull(slotPack.slotId),
+    slotStartMs: numberOrNull(slotPack.startMs),
     snr: numberOrNull(frame?.snr),
     freq: numberOrNull(frame?.freq),
     dt: numberOrNull(frame?.dt),
-    message: stringOrNull(frame?.message) ?? '',
+    message,
     operatorId: stringOrNull(frame?.operatorId),
+    country: stringOrNull(locationInfo.country),
+    countryZh: stringOrNull(locationInfo.countryZh),
+    countryEn: stringOrNull(locationInfo.countryEn),
+    countryCode: stringOrNull(locationInfo.countryCode),
   };
 }
 
