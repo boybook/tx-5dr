@@ -43,6 +43,10 @@ export const CWKeyerStatusSchema = z.object({
   backendAvailable: z.boolean().optional(),
   /** 当前后端不可用原因 */
   backendError: z.string().nullable().optional(),
+  /** 当前正在发送的文本（只读状态字段） */
+  currentText: z.string().nullable().optional(),
+  /** 最近一次发送的文本（只读状态字段） */
+  lastText: z.string().nullable().optional(),
 });
 
 export type CWKeyerStatus = z.infer<typeof CWKeyerStatusSchema>;
