@@ -74,6 +74,14 @@ export const DeviceUiCurrentTxSnapshotSchema = z.object({
   slotStartMs: NullableNumberSchema,
 });
 
+export const DeviceUiOperatorSnapshotSchema = z.object({
+  id: z.string(),
+  callsign: z.string(),
+  active: z.boolean(),
+  transmitting: z.boolean(),
+  ptt: z.boolean(),
+});
+
 export const DeviceUiCwSnapshotSchema = z.object({
   decoder: z.object({
     enabled: z.boolean(),
@@ -107,7 +115,9 @@ export const DeviceUiBootstrapSnapshotSchema = z.object({
   }),
   station: z.object({
     callsign: NullableStringSchema,
+    callsigns: z.array(z.string()).default([]),
   }),
+  operators: z.array(DeviceUiOperatorSnapshotSchema).default([]),
   engine: z.object({
     running: z.boolean(),
     mode: NullableStringSchema,

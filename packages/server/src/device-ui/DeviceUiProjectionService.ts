@@ -6,6 +6,7 @@ import type {
   CWDecoderStatus,
   CWKeyerStatus,
   OperatorStatus,
+  RadioOperatorConfig,
   PTTStatus,
   SlotInfo,
   SlotPack,
@@ -39,6 +40,14 @@ export interface DeviceUiCurrentTxSnapshot {
   slotStartMs: number | null;
 }
 
+export interface DeviceUiOperatorSnapshot {
+  id: string;
+  callsign: string;
+  active: boolean;
+  transmitting: boolean;
+  ptt: boolean;
+}
+
 export interface DeviceUiModeSnapshot {
   name: string;
   slotMs?: number;
@@ -62,7 +71,9 @@ export interface DeviceUiSnapshot {
   };
   station: {
     callsign: string | null;
+    callsigns: string[];
   };
+  operators: DeviceUiOperatorSnapshot[];
   engine: {
     running: boolean;
     mode: string | null;
@@ -256,12 +267,14 @@ export class DeviceUiProjectionService {
     this.listen('operatorsList', (data: { operators?: OperatorStatus[] }) => {
       this.operatorStatuses = new Map((data?.operators ?? []).map((operator) => [operator.id, operator]));
       this.rebuildCurrentTx();
+      this.rebuildOperatorSummary();
       this.publish();
     });
     this.listen('operatorStatusUpdate', (status: OperatorStatus) => {
       if (status?.id) {
         this.operatorStatuses.set(status.id, status);
         this.rebuildCurrentTx();
+        this.rebuildOperatorSummary();
         this.publish();
       }
     });
@@ -335,6 +348,7 @@ export class DeviceUiProjectionService {
     if (Array.isArray(operatorStatuses)) {
       this.operatorStatuses = new Map(operatorStatuses.map((operator) => [operator.id, operator]));
       this.rebuildCurrentTx();
+      this.rebuildOperatorSummary();
     }
 
     const radioManager = this.safeCall(() => this.engine.getRadioManager?.()) ?? null;
@@ -388,6 +402,7 @@ export class DeviceUiProjectionService {
     this.snapshot.radio.ptt = this.pttStatus.isTransmitting;
     this.snapshot.radio.tx = this.pttStatus.isTransmitting;
     this.rebuildCurrentTx();
+    this.rebuildOperatorSummary();
     this.markUpdated();
   }
 
@@ -432,6 +447,55 @@ export class DeviceUiProjectionService {
       lastMessage: messages[messages.length - 1] ?? this.snapshot.ft8.currentTx.lastMessage ?? null,
       slotStartMs: this.snapshot.ft8.currentTx.slotStartMs,
     };
+  }
+
+  private rebuildOperatorSummary(): void {
+    const configuredOperators = this.readConfiguredOperators();
+    const summaries = new Map<string, DeviceUiOperatorSnapshot>();
+
+    for (const operator of configuredOperators) {
+      const callsign = normalizeCallsign(operator.myCallsign);
+      if (!callsign) continue;
+      const status = this.operatorStatuses.get(operator.id);
+      summaries.set(operator.id, {
+        id: operator.id,
+        callsign,
+        active: booleanOrDefault(status?.isActive, false),
+        transmitting: booleanOrDefault(status?.isTransmitting, false),
+        ptt: booleanOrDefault(status?.isInActivePTT, false) || this.pttStatus.operatorIds.includes(operator.id),
+      });
+    }
+
+    for (const status of this.operatorStatuses.values()) {
+      const callsign = normalizeCallsign(status.context?.myCall);
+      if (!callsign) continue;
+      const existing = summaries.get(status.id);
+      summaries.set(status.id, {
+        id: status.id,
+        callsign: existing?.callsign ?? callsign,
+        active: booleanOrDefault(status.isActive, existing?.active ?? false),
+        transmitting: booleanOrDefault(status.isTransmitting, existing?.transmitting ?? false),
+        ptt: booleanOrDefault(status.isInActivePTT, existing?.ptt ?? false) || this.pttStatus.operatorIds.includes(status.id),
+      });
+    }
+
+    const operators = Array.from(summaries.values()).sort((a, b) => {
+      const aPriority = (a.ptt || a.transmitting) ? 0 : 1;
+      const bPriority = (b.ptt || b.transmitting) ? 0 : 1;
+      return aPriority - bPriority;
+    });
+    const priorityIds = [
+      ...this.pttStatus.operatorIds,
+      ...operators.filter((operator) => operator.ptt || operator.transmitting).map((operator) => operator.id),
+    ];
+    const byId = new Map(operators.map((operator) => [operator.id, operator]));
+    const callsigns: string[] = [];
+    for (const id of priorityIds) addUnique(callsigns, byId.get(id)?.callsign);
+    for (const operator of operators) addUnique(callsigns, operator.callsign);
+    addUnique(callsigns, this.snapshot.station.callsign);
+
+    this.snapshot.operators = operators;
+    this.snapshot.station.callsigns = callsigns;
   }
 
   private applyVoiceSummary(): void {
@@ -567,8 +631,10 @@ export class DeviceUiProjectionService {
         webPort: networkAccess.webPort,
       },
       station: {
-        callsign: stringOrNull(options.stationCallsign) ?? this.readStationCallsign(),
+        callsign: normalizeCallsign(options.stationCallsign) ?? this.readStationCallsign(),
+        callsigns: [],
       },
+      operators: [],
       engine: {
         running: false,
         mode: null,
@@ -640,7 +706,11 @@ export class DeviceUiProjectionService {
   }
 
   private readStationCallsign(): string | null {
-    return stringOrNull(this.safeCall(() => ConfigManager.getInstance().getStationInfo().callsign))?.toUpperCase() ?? null;
+    return normalizeCallsign(this.safeCall(() => ConfigManager.getInstance().getStationInfo().callsign));
+  }
+
+  private readConfiguredOperators(): RadioOperatorConfig[] {
+    return this.safeCall(() => ConfigManager.getInstance().getOperatorsConfig()) ?? [];
   }
 
   private safeCall<T>(call: () => T): T | null {
@@ -691,6 +761,16 @@ function toModeSnapshot(mode: unknown): DeviceUiModeSnapshot | null {
   if (!name) return null;
   const slotMs = numberOrNull(value.slotMs);
   return slotMs == null ? { name } : { name, slotMs };
+}
+
+function normalizeCallsign(value: unknown): string | null {
+  const callsign = stringOrNull(value)?.toUpperCase();
+  return callsign && callsign.trim() ? callsign.trim() : null;
+}
+
+function addUnique(values: string[], value: unknown): void {
+  const normalized = normalizeCallsign(value);
+  if (normalized && !values.includes(normalized)) values.push(normalized);
 }
 
 function toSlotSnapshot(slotInfo: SlotInfo | null | undefined): DeviceUiSlotSnapshot | null {

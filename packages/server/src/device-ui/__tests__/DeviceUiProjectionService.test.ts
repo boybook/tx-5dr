@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'eventemitter3';
 import { DeviceUiProjectionService } from '../DeviceUiProjectionService.js';
+import { ConfigManager } from '../../config/config-manager.js';
 
 const ft8Mode = { name: 'FT8', slotMs: 15_000, transmitTiming: 500 } as any;
 const lanAccess = { webPort: 8076, hostname: 'tx5dr', networkInterfaces: { eth0: [{ family: 'IPv4', internal: false, address: '192.168.1.10' }] as any[] } };
@@ -36,7 +37,8 @@ describe('DeviceUiProjectionService', () => {
 
     expect(service.getSnapshot()).toMatchObject({
       server: { status: 'ok', version: 'test-version', webPort: 8076 },
-      station: { callsign: 'BG5DRB' },
+      station: { callsign: 'BG5DRB', callsigns: ['BG5DRB'] },
+      operators: [],
       engine: { running: true, mode: 'digital', currentMode: { name: 'FT8', slotMs: 15_000 }, state: 'running' },
       radio: { connected: true, frequency: 14_074_000, radioMode: 'USB-D', ptt: false, tx: false },
       ft8: { slot: null, utc: null, cycle: null, periodMs: 15_000, recentDecodeRawMessages: [] },
@@ -66,6 +68,49 @@ describe('DeviceUiProjectionService', () => {
       access: { localUrl: 'http://192.168.1.10:8076', localUrls: ['http://192.168.1.10:8076'] },
       updatedAt: 123,
     });
+  });
+
+  it('projects configured operator callsigns and prioritizes current PTT operators', () => {
+    const configSpy = vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+      getStationInfo: () => ({ callsign: 'BG5DRB' }),
+      getOperatorsConfig: () => [
+        { id: 'op1', myCallsign: 'BG5AAA' },
+        { id: 'op2', myCallsign: 'bg5bbb' },
+        { id: 'op3', myCallsign: 'BG5CCC' },
+      ],
+    } as any);
+    const engine = createEngine();
+    const service = new DeviceUiProjectionService(engine, { now: () => 100 });
+
+    engine.emit('operatorStatusUpdate', {
+      id: 'op2',
+      isActive: true,
+      isTransmitting: true,
+      isInActivePTT: true,
+      currentSlot: 'TX1',
+      context: { myCall: 'BG5BBB', myGrid: 'OM88', targetCall: 'K1ABC' },
+      strategy: { name: 'manual', state: 'tx', availableSlots: ['TX1'] },
+      slots: { TX1: 'K1ABC BG5BBB -10' },
+    });
+    engine.emit('pttStatusChanged', { isTransmitting: true, operatorIds: ['op2'] });
+
+    expect(service.getSnapshot()).toMatchObject({
+      station: { callsign: 'BG5DRB', callsigns: ['BG5BBB', 'BG5AAA', 'BG5CCC', 'BG5DRB'] },
+      operators: [
+        { id: 'op2', callsign: 'BG5BBB', active: true, transmitting: true, ptt: true },
+        { id: 'op1', callsign: 'BG5AAA', active: false, transmitting: false, ptt: false },
+        { id: 'op3', callsign: 'BG5CCC', active: false, transmitting: false, ptt: false },
+      ],
+      ft8: {
+        currentTx: {
+          active: true,
+          operatorIds: ['op2'],
+          messages: ['K1ABC BG5BBB -10'],
+          lastMessage: 'K1ABC BG5BBB -10',
+        },
+      },
+    });
+    configSpy.mockRestore();
   });
 
   it('keeps safe defaults when engine getters throw or return incomplete data', () => {

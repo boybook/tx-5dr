@@ -42,7 +42,8 @@ describe('device UI schemas', () => {
   it('describes the mode-aware bootstrap snapshot and WS event', () => {
     const snapshot = DeviceUiBootstrapSnapshotSchema.parse({
       server: { status: 'ok', version: 'test', webPort: 8076 },
-      station: { callsign: 'BG5DRB' },
+      station: { callsign: 'BG5DRB', callsigns: ['BG5DRB', 'BG5AAA'] },
+      operators: [{ id: 'op1', callsign: 'BG5AAA', active: true, transmitting: false, ptt: false }],
       engine: { running: true, mode: 'digital', currentMode: { name: 'FT8', slotMs: 15000 }, state: 'running' },
       radio: { connected: true, frequency: 7074000, radioMode: 'USB-D', ptt: false, tx: false },
       ft8: {
@@ -105,6 +106,8 @@ describe('device UI schemas', () => {
     });
 
     expect(snapshot.station.callsign).toBe('BG5DRB');
+    expect(snapshot.station.callsigns).toEqual(['BG5DRB', 'BG5AAA']);
+    expect(snapshot.operators[0]?.callsign).toBe('BG5AAA');
     expect(snapshot.ft8.recentFramesSlotId).toBe('FT8-1');
     expect(snapshot.ft8.recentFrames[0]?.slotId).toBe('FT8-1');
     expect(snapshot.ft8.recentFrames[0]?.countryZh).toBe('测试地区');
