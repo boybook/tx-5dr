@@ -5,7 +5,6 @@ import type { WebSocket } from 'ws';
 import { WSMessageHandler } from '@tx5dr/core';
 import { DeviceUiBootstrapSnapshotSchema, DeviceUiWsEventSchema } from '@tx5dr/contracts';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
-import { ConfigManager } from '../config/config-manager.js';
 import { DeviceServiceAuthManager } from '../auth/DeviceServiceAuthManager.js';
 import { createLogger } from '../utils/logger.js';
 import { DeviceUiProjectionService, type DeviceUiSnapshot } from './DeviceUiProjectionService.js';
@@ -34,9 +33,7 @@ export class DeviceUiWSServer {
     private readonly authManager: DeviceServiceAuthManager,
     projectionService?: DeviceUiProjectionService,
   ) {
-    this.projectionService = projectionService ?? new DeviceUiProjectionService(engine as any, {
-      webPort: ConfigManager.getInstance().getConfig().server.port,
-    });
+    this.projectionService = projectionService ?? new DeviceUiProjectionService(engine as any);
   }
 
   getProjectionService(): DeviceUiProjectionService {

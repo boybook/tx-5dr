@@ -130,6 +130,7 @@ export const DeviceUiBootstrapSnapshotSchema = z.object({
   }),
   access: z.object({
     localUrl: NullableStringSchema,
+    localUrls: z.array(z.string()),
   }),
   updatedAt: z.number().int().nonnegative(),
 });

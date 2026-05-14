@@ -30,7 +30,7 @@ function createProjection() {
         keyerMode: null,
         keyerSlotId: null,
       },
-      access: { localUrl: 'http://localhost:8076' },
+      access: { localUrl: 'http://192.168.1.10:8076', localUrls: ['http://192.168.1.10:8076'] },
       updatedAt: 1,
     })),
   };
@@ -114,7 +114,7 @@ describe('deviceUiRoutes', () => {
     expect(missing.statusCode).toBe(401);
     expect(normalJwt.statusCode).toBe(401);
     expect(deviceJwt.statusCode).toBe(200);
-    expect(deviceJwt.json()).toMatchObject({ server: { status: 'ok' }, access: { localUrl: 'http://localhost:8076' } });
+    expect(deviceJwt.json()).toMatchObject({ server: { status: 'ok' }, access: { localUrl: 'http://192.168.1.10:8076', localUrls: ['http://192.168.1.10:8076'] } });
     expect(projection.getSnapshot).toHaveBeenCalledTimes(1);
     await app.close();
   });

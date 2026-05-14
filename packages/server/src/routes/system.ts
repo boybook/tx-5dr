@@ -2,7 +2,6 @@ import { createReadStream } from 'node:fs';
 import { access } from 'node:fs/promises';
 import path from 'node:path';
 import { FastifyInstance } from 'fastify';
-import os from 'node:os';
 import {
   NtpServerListSettingsSchema,
   ServerCpuProfileStatusSchema,
@@ -16,6 +15,7 @@ import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { ServerCpuProfileManager } from '../services/ServerCpuProfileManager.js';
 import { getSystemUpdateStatus } from '../services/UpdateStatusService.js';
+import { getNetworkAccessInfo } from '../utils/network-access.js';
 
 /**
  * 系统信息路由
@@ -36,32 +36,9 @@ export async function systemRoutes(fastify: FastifyInstance) {
 
   // 获取网络访问地址
   fastify.get('/network-info', async (request, reply) => {
-    const forwardedPort = Array.isArray(request.headers['x-forwarded-port'])
-      ? request.headers['x-forwarded-port'][0]
-      : request.headers['x-forwarded-port'];
-    const parsedWebPort = parseInt(String(forwardedPort || process.env.WEB_PORT || '8076'), 10);
-    const webPort = Number.isFinite(parsedWebPort) ? parsedWebPort : 8076;
-    const interfaces = os.networkInterfaces();
-    const addresses: { ip: string; url: string }[] = [];
-
-    for (const [, nets] of Object.entries(interfaces)) {
-      if (!nets) continue;
-      for (const net of nets) {
-        // 仅 IPv4、非 internal、非 link-local
-        if (net.family === 'IPv4' && !net.internal && !net.address.startsWith('169.254.')) {
-          addresses.push({
-            ip: net.address,
-            url: `http://${net.address}:${webPort}`,
-          });
-        }
-      }
-    }
-
-    return reply.send({
-      addresses,
-      hostname: os.hostname(),
-      webPort,
-    });
+    return reply.send(getNetworkAccessInfo({
+      forwardedPort: request.headers['x-forwarded-port'],
+    }));
   });
 
   fastify.get('/clock', {

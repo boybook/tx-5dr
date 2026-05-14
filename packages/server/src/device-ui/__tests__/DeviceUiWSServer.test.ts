@@ -53,7 +53,7 @@ function createProjection() {
       keyerMode: null,
       keyerSlotId: null,
     },
-    access: { localUrl: 'http://localhost:8076' },
+    access: { localUrl: 'http://192.168.1.10:8076', localUrls: ['http://192.168.1.10:8076'] },
     updatedAt: 1,
   };
   return {
@@ -98,7 +98,7 @@ describe('DeviceUiWSServer', () => {
     expect(projection.listenerCount()).toBe(1);
     expect(JSON.parse(ws.sent[0])).toMatchObject({
       type: 'snapshot',
-      payload: { server: { status: 'ok' }, access: { localUrl: 'http://localhost:8076' } },
+      payload: { server: { status: 'ok' }, access: { localUrl: 'http://192.168.1.10:8076', localUrls: ['http://192.168.1.10:8076'] } },
     });
 
     projection.emitSnapshot();
