@@ -74,6 +74,31 @@ export const DeviceUiCurrentTxSnapshotSchema = z.object({
   slotStartMs: NullableNumberSchema,
 });
 
+export const DeviceUiCwSnapshotSchema = z.object({
+  decoder: z.object({
+    enabled: z.boolean(),
+    active: z.boolean(),
+    state: z.string(),
+    muted: z.boolean(),
+    pendingText: z.string(),
+    committedText: z.string(),
+    lastDecodeAt: NullableNumberSchema,
+    updatedAt: z.number().int().nonnegative(),
+  }),
+  keyer: z.object({
+    active: z.boolean(),
+    mode: NullableStringSchema,
+    messageId: NullableStringSchema,
+    currentText: NullableStringSchema,
+    lastText: NullableStringSchema,
+  }),
+  currentTx: z.object({
+    active: z.boolean(),
+    messages: z.array(z.string()),
+    lastMessage: NullableStringSchema,
+  }),
+});
+
 export const DeviceUiBootstrapSnapshotSchema = z.object({
   server: z.object({
     status: z.literal('ok'),
@@ -128,6 +153,7 @@ export const DeviceUiBootstrapSnapshotSchema = z.object({
     keyerMode: NullableStringSchema,
     keyerSlotId: NullableStringSchema,
   }),
+  cw: DeviceUiCwSnapshotSchema,
   access: z.object({
     localUrl: NullableStringSchema,
     localUrls: z.array(z.string()),

@@ -87,6 +87,8 @@ interface ActiveKeying {
   callsign: string | null;
   /** 前端发送时提供的占位符值，用于 repeat 时保持同一发送上下文 */
   placeholderValues: CWPlaceholderValues;
+  /** 当前已解析并发送给后端的明文报文 */
+  currentText: string | null;
 }
 
 export interface CWKeyerManagerEvents {
@@ -97,6 +99,7 @@ export interface CWKeyerManagerEvents {
 export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
   private readonly backends: Record<CWKeyerBackendType, CWKeyerBackend>;
   private active: ActiveKeying | null = null;
+  private lastText: string | null = null;
   private _started = false;
   private _startingPromise: Promise<void> | null = null;
   private configLoaded = false;
@@ -120,6 +123,8 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     backend: 'cat',
     backendAvailable: false,
     backendError: 'CAT CW requires an active Hamlib radio connection',
+    currentText: null,
+    lastText: null,
   };
 
   constructor(getRadioManager?: () => PhysicalRadioManager) {
@@ -245,6 +250,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
           delayResolve: null,
           callsign: null,
           placeholderValues: {},
+          currentText: null,
         };
       }
 
@@ -308,9 +314,11 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       delayResolve: null,
       callsign: callsign ?? null,
       placeholderValues: values,
+      currentText: replaced,
     };
     this.active = active;
-    this.setStatus(this.statusFor(clientId, label, 'playing', null));
+    this.lastText = replaced;
+    this.setStatus(this.statusFor(clientId, label, 'playing', null, null, replaced));
 
     try {
       await this.ensureStarted();
@@ -445,15 +453,17 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       delayResolve: null,
       callsign: normalized,
       placeholderValues: values,
+      currentText: replaced,
     };
     this.active = active;
+    this.lastText = replaced;
 
     try {
       await this.ensureStarted();
       if (active.repeating && !startImmediately) {
         await this.continueRepeat(active);
       } else {
-        this.setStatus(this.statusFor(clientId, label, 'playing', slotId));
+        this.setStatus(this.statusFor(clientId, label, 'playing', slotId, null, replaced));
         await this.executePlayback(active, replaced);
       }
     } catch (error) {
@@ -502,7 +512,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       },
       onKeyDown: () => {
         if (!active.stopRequested && this.active === active) {
-          this.setStatus(this.statusFor(active.clientId, active.label, 'playing', active.messageId));
+          this.setStatus(this.statusFor(active.clientId, active.label, 'playing', active.messageId, null, active.currentText));
         }
       },
     });
@@ -533,7 +543,8 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
 
     const waitMs = slot.repeatIntervalSec * 1000;
     const nextRunAt = Date.now() + waitMs;
-    this.setStatus(this.statusFor(active.clientId, active.label, 'repeat-waiting', active.messageId, nextRunAt));
+    active.currentText = null;
+    this.setStatus(this.statusFor(active.clientId, active.label, 'repeat-waiting', active.messageId, nextRunAt, null));
 
     await this.delay(waitMs, active);
     if (active.stopRequested || this.active !== active) {
@@ -555,7 +566,9 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       return;
     }
 
-    this.setStatus(this.statusFor(active.clientId, active.label, 'playing', active.messageId));
+    active.currentText = replaced;
+    this.lastText = replaced;
+    this.setStatus(this.statusFor(active.clientId, active.label, 'playing', active.messageId, null, replaced));
     await this.executePlayback(active, replaced);
   }
 
@@ -799,6 +812,8 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       messageId: null,
       nextRunAt: null,
       error: null,
+      currentText: null,
+      lastText: this.lastText,
       ...this.statusBackendFields(),
     };
   }
@@ -809,6 +824,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     mode: CWKeyerStatus['mode'],
     messageId: string | null = null,
     nextRunAt: number | null = null,
+    currentText: string | null = null,
   ): CWKeyerStatus {
     return {
       active: true,
@@ -818,6 +834,8 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       messageId,
       nextRunAt,
       error: null,
+      currentText,
+      lastText: currentText ?? this.lastText,
       ...this.statusBackendFields(),
     };
   }

@@ -2,6 +2,9 @@ import { EventEmitter } from 'eventemitter3';
 import { parseFT8LocationInfo } from '@tx5dr/core';
 import type {
   FrequencyState,
+  CWDecoderEvent,
+  CWDecoderStatus,
+  CWKeyerStatus,
   OperatorStatus,
   PTTStatus,
   SlotInfo,
@@ -94,6 +97,30 @@ export interface DeviceUiSnapshot {
     keyerMode: string | null;
     keyerSlotId: string | null;
   };
+  cw: {
+    decoder: {
+      enabled: boolean;
+      active: boolean;
+      state: string;
+      muted: boolean;
+      pendingText: string;
+      committedText: string;
+      lastDecodeAt: number | null;
+      updatedAt: number;
+    };
+    keyer: {
+      active: boolean;
+      mode: string | null;
+      messageId: string | null;
+      currentText: string | null;
+      lastText: string | null;
+    };
+    currentTx: {
+      active: boolean;
+      messages: string[];
+      lastMessage: string | null;
+    };
+  };
   access: {
     localUrl: string | null;
     localUrls: string[];
@@ -124,6 +151,8 @@ type EngineLike = {
   getActiveSlotPacks?: () => SlotPack[];
   getVoiceKeyerManager?: () => { getStatus?: () => VoiceKeyerStatus } | null;
   getVoiceSessionManager?: () => { getPTTLockState?: () => VoicePTTLock; getLockState?: () => VoicePTTLock } | null;
+  getCWDecoderStatus?: () => CWDecoderStatus;
+  getCWKeyerManager?: () => { getStatus?: () => CWKeyerStatus } | null;
   operatorManager?: { getOperatorsStatus?: () => OperatorStatus[] };
   getRadioManager?: () => {
     isConnected?: () => boolean;
@@ -152,6 +181,7 @@ export class DeviceUiProjectionService {
   private pttStatus: PTTStatus = { isTransmitting: false, operatorIds: [] };
   private voicePttLock: VoicePTTLock | null = null;
   private voiceKeyerStatus: VoiceKeyerStatus | null = null;
+  private readonly cwDecoderCommitKeys: string[] = [];
 
   constructor(private readonly engine: EngineLike, options: DeviceUiProjectionOptions = {}) {
     this.now = options.now ?? (() => Date.now());
@@ -260,6 +290,18 @@ export class DeviceUiProjectionService {
       this.applyVoiceSummary();
       this.publish();
     });
+    this.listen('cwDecoderStatusChanged', (data: CWDecoderStatus) => {
+      this.applyCwDecoderStatus(data);
+      this.publish();
+    });
+    this.listen('cwDecoderEvent', (data: CWDecoderEvent) => {
+      this.applyCwDecoderEvent(data);
+      this.publish();
+    });
+    this.listen('cwKeyerStatusChanged', (data: CWKeyerStatus) => {
+      this.applyCwKeyerStatus(data);
+      this.publish();
+    });
     this.listen('connected', () => {
       this.snapshot.radio.connected = true;
       this.publish();
@@ -307,6 +349,11 @@ export class DeviceUiProjectionService {
       ?? this.safeCall(() => voiceSessionManager?.getLockState?.())
       ?? this.voicePttLock;
     this.applyVoiceSummary();
+
+    const cwDecoderStatus = this.safeCall(() => this.engine.getCWDecoderStatus?.()) ?? null;
+    if (cwDecoderStatus) this.applyCwDecoderStatus(cwDecoderStatus);
+    const cwKeyerStatus = this.safeCall(() => this.engine.getCWKeyerManager?.()?.getStatus?.()) ?? null;
+    if (cwKeyerStatus) this.applyCwKeyerStatus(cwKeyerStatus);
 
     if (shouldPublish) this.publish();
   }
@@ -400,6 +447,97 @@ export class DeviceUiProjectionService {
     this.markUpdated();
   }
 
+  private applyCwDecoderStatus(status: Partial<CWDecoderStatus> | null | undefined): void {
+    if (!status) return;
+    const enabled = booleanOrDefault(status.enabled, this.snapshot.cw.decoder.enabled);
+    this.snapshot.cw.decoder = {
+      enabled,
+      active: booleanOrDefault(status.active ?? status.running, this.snapshot.cw.decoder.active),
+      state: stringOrNull(status.state) ?? this.snapshot.cw.decoder.state,
+      muted: booleanOrDefault(status.muted, this.snapshot.cw.decoder.muted),
+      pendingText: enabled ? stringOrEmpty(status.pendingText, this.snapshot.cw.decoder.pendingText) : '',
+      committedText: enabled ? stringOrEmpty(status.committedText, this.snapshot.cw.decoder.committedText) : '',
+      lastDecodeAt: enabled ? numberOrNull(status.lastDecodeAt) ?? this.snapshot.cw.decoder.lastDecodeAt : null,
+      updatedAt: numberOrNull(status.updatedAt) ?? this.now(),
+    };
+    this.markUpdated();
+  }
+
+  private applyCwDecoderEvent(event: CWDecoderEvent | null | undefined): void {
+    if (!event) return;
+    const kind = stringOrNull((event as Record<string, unknown>).kind);
+    if (kind === 'transcript_reset') {
+      this.cwDecoderCommitKeys.length = 0;
+      this.snapshot.cw.decoder.pendingText = '';
+      this.snapshot.cw.decoder.committedText = '';
+      this.snapshot.cw.decoder.updatedAt = numberOrNull((event as Record<string, unknown>).timestamp) ?? this.now();
+      this.markUpdated();
+      return;
+    }
+    if (kind === 'transcript_pending') {
+      const pending = (event as Record<string, unknown>).pending;
+      this.snapshot.cw.decoder.pendingText = pending && typeof pending === 'object'
+        ? stringOrEmpty((pending as Record<string, unknown>).text)
+        : '';
+      this.snapshot.cw.decoder.updatedAt = numberOrNull((event as Record<string, unknown>).timestamp) ?? this.now();
+      this.markUpdated();
+      return;
+    }
+    if (kind === 'pending' || kind === 'partial') {
+      this.snapshot.cw.decoder.pendingText = stringOrEmpty((event as Record<string, unknown>).text);
+      this.snapshot.cw.decoder.updatedAt = numberOrNull((event as Record<string, unknown>).timestamp) ?? this.now();
+      this.markUpdated();
+      return;
+    }
+    if (kind === 'transcript_commit' || kind === 'commit' || kind === 'transcript') {
+      const record = event as Record<string, unknown>;
+      const segment = record.segment && typeof record.segment === 'object' ? record.segment as Record<string, unknown> : null;
+      const text = stringOrNull(segment?.text) ?? stringOrNull(record.text);
+      if (text) {
+        const commitKey = cwCommitKey(segment, record, text);
+        if (commitKey && this.cwDecoderCommitKeys.includes(commitKey)) {
+          this.snapshot.cw.decoder.pendingText = '';
+          this.snapshot.cw.decoder.updatedAt = numberOrNull(record.timestamp) ?? this.now();
+          this.markUpdated();
+          return;
+        }
+        if (commitKey) {
+          this.cwDecoderCommitKeys.push(commitKey);
+          this.cwDecoderCommitKeys.splice(0, Math.max(0, this.cwDecoderCommitKeys.length - 64));
+        }
+        const prependSpace = typeof segment?.prependSpace === 'boolean' ? segment.prependSpace : true;
+        this.snapshot.cw.decoder.committedText = joinTranscriptText(this.snapshot.cw.decoder.committedText, text, prependSpace);
+        this.snapshot.cw.decoder.pendingText = '';
+        this.snapshot.cw.decoder.lastDecodeAt = numberOrNull(record.timestamp) ?? this.now();
+      }
+      this.snapshot.cw.decoder.updatedAt = numberOrNull(record.timestamp) ?? this.now();
+      this.markUpdated();
+    }
+  }
+
+  private applyCwKeyerStatus(status: Partial<CWKeyerStatus> | null | undefined): void {
+    if (!status) return;
+    const hasLastText = Object.prototype.hasOwnProperty.call(status, 'lastText');
+    const currentText = stringOrNull(status.currentText);
+    const lastText = hasLastText
+      ? stringOrNull(status.lastText)
+      : currentText ?? this.snapshot.cw.keyer.lastText;
+    this.snapshot.cw.keyer = {
+      active: booleanOrDefault(status.active, false),
+      mode: stringOrNull(status.mode),
+      messageId: stringOrNull(status.messageId),
+      currentText,
+      lastText,
+    };
+    const messages = [currentText, lastText].filter((message): message is string => Boolean(message));
+    this.snapshot.cw.currentTx = {
+      active: booleanOrDefault(status.active, false),
+      messages,
+      lastMessage: messages[0] ?? null,
+    };
+    this.markUpdated();
+  }
+
   private publish(): void {
     this.markUpdated();
     const snapshot = cloneSnapshot(this.snapshot);
@@ -461,6 +599,30 @@ export class DeviceUiProjectionService {
         keyerActive: false,
         keyerMode: null,
         keyerSlotId: null,
+      },
+      cw: {
+        decoder: {
+          enabled: false,
+          active: false,
+          state: 'disabled',
+          muted: false,
+          pendingText: '',
+          committedText: '',
+          lastDecodeAt: null,
+          updatedAt: this.now(),
+        },
+        keyer: {
+          active: false,
+          mode: null,
+          messageId: null,
+          currentText: null,
+          lastText: null,
+        },
+        currentTx: {
+          active: false,
+          messages: [],
+          lastMessage: null,
+        },
       },
       access: {
         localUrl: localUrls[0] ?? null,
@@ -546,6 +708,23 @@ function mergeRecentStrings(items: string[], next: string | null, limit: number)
   return [...items, next].slice(-limit);
 }
 
+function joinTranscriptText(current: string, next: string, prependSpace: boolean): string {
+  const text = next.trim();
+  if (!text) return current;
+  if (!current) return text;
+  return prependSpace ? `${current} ${text}` : `${current}${text}`;
+}
+
+function cwCommitKey(segment: Record<string, unknown> | null, event: Record<string, unknown>, text: string): string | null {
+  const id = stringOrNull(segment?.id);
+  if (id) return `id:${id}`;
+  const sessionId = stringOrNull(segment?.sessionId);
+  const sequence = numberOrNull(segment?.sequence);
+  if (sessionId && sequence != null) return `seq:${sessionId}:${sequence}`;
+  const timestamp = numberOrNull(event.timestamp);
+  return timestamp != null ? `legacy:${timestamp}:${text}` : null;
+}
+
 function booleanOrDefault(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
 }
@@ -556,6 +735,10 @@ function numberOrNull(value: unknown): number | null {
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function stringOrEmpty(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback;
 }
 
 function cloneSnapshot(snapshot: DeviceUiSnapshot): DeviceUiSnapshot {
