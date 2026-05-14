@@ -3,6 +3,7 @@ import { EventEmitter } from 'eventemitter3';
 import { DeviceUiProjectionService } from '../DeviceUiProjectionService.js';
 
 const ft8Mode = { name: 'FT8', slotMs: 15_000, transmitTiming: 500 } as any;
+const lanAccess = { webPort: 8076, hostname: 'tx5dr', networkInterfaces: { eth0: [{ family: 'IPv4', internal: false, address: '192.168.1.10' }] as any[] } };
 
 function createEngine(overrides: Record<string, unknown> = {}): any {
   const emitter = new EventEmitter<any>();
@@ -31,7 +32,7 @@ function createEngine(overrides: Record<string, unknown> = {}): any {
 
 describe('DeviceUiProjectionService', () => {
   it('builds a safe initial snapshot from available engine status', () => {
-    const service = new DeviceUiProjectionService(createEngine(), { webPort: 8076, version: 'test-version', stationCallsign: 'BG5DRB', now: () => 123 });
+    const service = new DeviceUiProjectionService(createEngine(), { version: 'test-version', stationCallsign: 'BG5DRB', now: () => 123, networkAccess: lanAccess });
 
     expect(service.getSnapshot()).toMatchObject({
       server: { status: 'ok', version: 'test-version', webPort: 8076 },
@@ -39,7 +40,7 @@ describe('DeviceUiProjectionService', () => {
       engine: { running: true, mode: 'digital', currentMode: { name: 'FT8', slotMs: 15_000 }, state: 'running' },
       radio: { connected: true, frequency: 14_074_000, radioMode: 'USB-D', ptt: false, tx: false },
       ft8: { slot: null, utc: null, cycle: null, periodMs: 15_000, recentDecodeRawMessages: [] },
-      access: { localUrl: 'http://localhost:8076' },
+      access: { localUrl: 'http://192.168.1.10:8076', localUrls: ['http://192.168.1.10:8076'] },
       updatedAt: 123,
     });
   });
@@ -54,14 +55,14 @@ describe('DeviceUiProjectionService', () => {
         getKnownFrequency: vi.fn(() => undefined),
       })),
     });
-    const service = new DeviceUiProjectionService(engine, { webPort: null, now: () => 10 });
+    const service = new DeviceUiProjectionService(engine, { now: () => 10, networkAccess: { webPort: 8076, hostname: 'tx5dr', networkInterfaces: {} } });
 
     expect(() => service.getSnapshot()).not.toThrow();
     expect(service.getSnapshot()).toMatchObject({
       engine: { running: false, mode: null, currentMode: null },
       radio: { connected: false, frequency: null, radioMode: null, ptt: false, tx: false },
       ft8: { lastDecodeRawMessage: 'CQ TEST AA00' },
-      access: { localUrl: null },
+      access: { localUrl: null, localUrls: [] },
     });
   });
 

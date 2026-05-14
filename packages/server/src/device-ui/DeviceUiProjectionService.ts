@@ -12,6 +12,7 @@ import type {
 } from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
 import { SERVER_BUILD_INFO } from '../generated/buildInfo.js';
+import { getNetworkAccessInfo, type NetworkAccessInfoOptions } from '../utils/network-access.js';
 
 export interface DeviceUiFrameSnapshot {
   slotId?: string | null;
@@ -95,6 +96,7 @@ export interface DeviceUiSnapshot {
   };
   access: {
     localUrl: string | null;
+    localUrls: string[];
   };
   updatedAt: number;
 }
@@ -109,6 +111,7 @@ export interface DeviceUiProjectionOptions {
   now?: () => number;
   maxRecentDecodes?: number;
   stationCallsign?: string | null;
+  networkAccess?: Pick<NetworkAccessInfoOptions, 'webPort' | 'env' | 'hostname' | 'networkInterfaces'>;
 }
 
 type Listener = (snapshot: DeviceUiSnapshot) => void;
@@ -411,12 +414,16 @@ export class DeviceUiProjectionService {
   }
 
   private createDefaultSnapshot(options: DeviceUiProjectionOptions): DeviceUiSnapshot {
-    const webPort = parsePort(options.webPort ?? process.env.WEB_PORT ?? process.env.PORT ?? null);
+    const networkAccess = getNetworkAccessInfo({
+      ...(options.networkAccess ?? {}),
+      webPort: options.networkAccess?.webPort ?? options.webPort,
+    });
+    const localUrls = networkAccess.addresses.map((address) => address.url);
     return {
       server: {
         status: 'ok',
         version: options.version ?? SERVER_BUILD_INFO.version ?? 'unknown',
-        webPort,
+        webPort: networkAccess.webPort,
       },
       station: {
         callsign: stringOrNull(options.stationCallsign) ?? this.readStationCallsign(),
@@ -456,7 +463,8 @@ export class DeviceUiProjectionService {
         keyerSlotId: null,
       },
       access: {
-        localUrl: webPort == null ? null : `http://localhost:${webPort}`,
+        localUrl: localUrls[0] ?? null,
+        localUrls,
       },
       updatedAt: this.now(),
     };
@@ -548,13 +556,6 @@ function numberOrNull(value: unknown): number | null {
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
-}
-
-function parsePort(value: unknown): number | null {
-  if (typeof value === 'number') return Number.isInteger(value) && value > 0 ? value : null;
-  if (typeof value !== 'string' || value.trim() === '') return null;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function cloneSnapshot(snapshot: DeviceUiSnapshot): DeviceUiSnapshot {

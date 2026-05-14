@@ -76,7 +76,7 @@ describe('device UI schemas', () => {
         keyerMode: null,
         keyerSlotId: null,
       },
-      access: { localUrl: 'http://localhost:8076' },
+      access: { localUrl: 'http://192.168.1.10:8076', localUrls: ['http://192.168.1.10:8076'] },
       updatedAt: 1,
     });
 
