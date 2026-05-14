@@ -53,11 +53,17 @@ const NullableStringSchema = z.string().nullable();
 const NullableNumberSchema = z.number().nullable();
 
 export const DeviceUiFrameSnapshotSchema = z.object({
+  slotId: NullableStringSchema.optional(),
+  slotStartMs: NullableNumberSchema.optional(),
   snr: NullableNumberSchema,
   freq: NullableNumberSchema,
   dt: NullableNumberSchema,
   message: z.string(),
   operatorId: NullableStringSchema,
+  country: NullableStringSchema.optional(),
+  countryZh: NullableStringSchema.optional(),
+  countryEn: NullableStringSchema.optional(),
+  countryCode: NullableStringSchema.optional(),
 });
 
 export const DeviceUiCurrentTxSnapshotSchema = z.object({
@@ -108,6 +114,8 @@ export const DeviceUiBootstrapSnapshotSchema = z.object({
     periodMs: NullableNumberSchema,
     recentDecodeRawMessages: z.array(z.string()),
     lastDecodeRawMessage: NullableStringSchema,
+    recentFramesSlotId: NullableStringSchema,
+    recentFramesSlotStartMs: NullableNumberSchema,
     recentFrames: z.array(DeviceUiFrameSnapshotSchema),
     currentTx: DeviceUiCurrentTxSnapshotSchema,
   }),

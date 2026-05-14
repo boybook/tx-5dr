@@ -115,6 +115,15 @@ describe('DeviceUiProjectionService', () => {
       cycle: 1,
       lastDecodeRawMessage: 'CQ DX BG2AAA OM88',
       recentDecodeRawMessages: ['CQ DX BG2AAA OM88'],
+      recentFramesSlotId: 'FT8-1',
+      recentFramesSlotStartMs: 15_000,
+      recentFrames: [{
+        slotId: 'FT8-1',
+        slotStartMs: 15_000,
+        message: 'CQ DX BG2AAA OM88',
+        countryZh: '中国·黑龙江',
+        countryEn: 'China·Heilongjiang',
+      }],
       currentTx: {
         active: true,
         operatorIds: ['op1'],

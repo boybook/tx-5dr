@@ -16,6 +16,8 @@ function createProjection() {
         periodMs: null,
         recentDecodeRawMessages: [],
         lastDecodeRawMessage: null,
+        recentFramesSlotId: null,
+        recentFramesSlotStartMs: null,
         recentFrames: [],
         currentTx: { active: false, operatorIds: [], messages: [], lastMessage: null, slotStartMs: null },
       },

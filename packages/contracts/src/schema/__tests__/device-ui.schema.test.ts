@@ -52,7 +52,19 @@ describe('device UI schemas', () => {
         periodMs: 15000,
         recentDecodeRawMessages: ['CQ TEST AA00'],
         lastDecodeRawMessage: 'CQ TEST AA00',
-        recentFrames: [{ snr: -10, freq: 1200, dt: 0.1, message: 'CQ TEST AA00', operatorId: null }],
+        recentFramesSlotId: 'FT8-1',
+        recentFramesSlotStartMs: 1_700_000_000_000,
+        recentFrames: [{
+          slotId: 'FT8-1',
+          slotStartMs: 1_700_000_000_000,
+          snr: -10,
+          freq: 1200,
+          dt: 0.1,
+          message: 'CQ TEST AA00',
+          operatorId: null,
+          countryZh: '测试地区',
+          countryEn: 'Test Region',
+        }],
         currentTx: { active: false, operatorIds: [], messages: [], lastMessage: null, slotStartMs: null },
       },
       voice: {
@@ -69,6 +81,9 @@ describe('device UI schemas', () => {
     });
 
     expect(snapshot.station.callsign).toBe('BG5DRB');
+    expect(snapshot.ft8.recentFramesSlotId).toBe('FT8-1');
+    expect(snapshot.ft8.recentFrames[0]?.slotId).toBe('FT8-1');
+    expect(snapshot.ft8.recentFrames[0]?.countryZh).toBe('测试地区');
     expect(snapshot.ft8.lastDecodeRawMessage).toBe('CQ TEST AA00');
     expect(DeviceUiWsEventSchema.parse({
       type: 'snapshot',
