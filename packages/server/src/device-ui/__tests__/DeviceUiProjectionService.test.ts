@@ -313,6 +313,26 @@ describe('DeviceUiProjectionService', () => {
     });
 
     engine.emit('cwDecoderStatusChanged', {
+      enabled: true,
+      active: false,
+      state: 'disabled',
+      muted: false,
+      pendingText: 'STALE',
+      committedText: 'STALE TEXT',
+      lastDecodeAt: 216,
+      updatedAt: 217,
+    });
+
+    expect(service.getSnapshot().cw.decoder).toMatchObject({
+      enabled: false,
+      active: false,
+      state: 'disabled',
+      pendingText: '',
+      committedText: '',
+      lastDecodeAt: null,
+    });
+
+    engine.emit('cwDecoderStatusChanged', {
       enabled: false,
       active: false,
       state: 'disabled',

@@ -859,6 +859,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public async stopCWDecoder() {
     const saved = await ConfigManager.getInstance().updateCWDecoderConfig({ enabled: false });
+    await this.getCWDecoderManager().updateConfig(this.toServerCWDecoderConfig({ ...saved, enabled: false }));
     await this.getCWDecoderManager().stop('user-disabled');
     if (this.cwDecoderStartedEngine && this.engineMode === 'cw') {
       this.cwDecoderStartedEngine = false;
@@ -1824,7 +1825,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   private toContractCWDecoderStatus(status: ServerCWDecoderStatus, config: Partial<CWDecoderConfig> = ConfigManager.getInstance().getCWDecoderConfig()): CWDecoderStatus {
-    const enabled = status.enabled || status.state === 'running' || status.state === 'starting';
+    const configuredEnabled = typeof config.enabled === 'boolean' ? config.enabled : status.enabled;
+    const enabled = configuredEnabled || status.state === 'running' || status.state === 'starting';
     const contractConfig = {
       ...ConfigManager.getInstance().getCWDecoderConfig(),
       ...config,

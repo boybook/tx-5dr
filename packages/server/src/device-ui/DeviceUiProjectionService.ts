@@ -449,11 +449,14 @@ export class DeviceUiProjectionService {
 
   private applyCwDecoderStatus(status: Partial<CWDecoderStatus> | null | undefined): void {
     if (!status) return;
-    const enabled = booleanOrDefault(status.enabled, this.snapshot.cw.decoder.enabled);
+    const state = stringOrNull(status.state) ?? this.snapshot.cw.decoder.state;
+    const enabled = isCwDecoderOffState(state)
+      ? false
+      : booleanOrDefault(status.enabled, this.snapshot.cw.decoder.enabled);
     this.snapshot.cw.decoder = {
       enabled,
-      active: booleanOrDefault(status.active ?? status.running, this.snapshot.cw.decoder.active),
-      state: stringOrNull(status.state) ?? this.snapshot.cw.decoder.state,
+      active: enabled && booleanOrDefault(status.active ?? status.running, this.snapshot.cw.decoder.active),
+      state,
       muted: booleanOrDefault(status.muted, this.snapshot.cw.decoder.muted),
       pendingText: enabled ? stringOrEmpty(status.pendingText, this.snapshot.cw.decoder.pendingText) : '',
       committedText: enabled ? stringOrEmpty(status.committedText, this.snapshot.cw.decoder.committedText) : '',
@@ -723,6 +726,10 @@ function cwCommitKey(segment: Record<string, unknown> | null, event: Record<stri
   if (sessionId && sequence != null) return `seq:${sessionId}:${sequence}`;
   const timestamp = numberOrNull(event.timestamp);
   return timestamp != null ? `legacy:${timestamp}:${text}` : null;
+}
+
+function isCwDecoderOffState(state: string | null): boolean {
+  return state === 'disabled' || state === 'stopped' || state === 'stopping' || state === 'idle' || state === 'off' || state === 'unavailable';
 }
 
 function booleanOrDefault(value: unknown, fallback: boolean): boolean {
