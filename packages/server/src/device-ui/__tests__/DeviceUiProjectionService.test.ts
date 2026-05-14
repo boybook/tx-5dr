@@ -40,6 +40,29 @@ describe('DeviceUiProjectionService', () => {
       engine: { running: true, mode: 'digital', currentMode: { name: 'FT8', slotMs: 15_000 }, state: 'running' },
       radio: { connected: true, frequency: 14_074_000, radioMode: 'USB-D', ptt: false, tx: false },
       ft8: { slot: null, utc: null, cycle: null, periodMs: 15_000, recentDecodeRawMessages: [] },
+      cw: {
+        decoder: {
+          enabled: false,
+          active: false,
+          state: 'disabled',
+          muted: false,
+          pendingText: '',
+          committedText: '',
+          lastDecodeAt: null,
+        },
+        keyer: {
+          active: false,
+          mode: null,
+          messageId: null,
+          currentText: null,
+          lastText: null,
+        },
+        currentTx: {
+          active: false,
+          messages: [],
+          lastMessage: null,
+        },
+      },
       access: { localUrl: 'http://192.168.1.10:8076', localUrls: ['http://192.168.1.10:8076'] },
       updatedAt: 123,
     });
@@ -169,5 +192,224 @@ describe('DeviceUiProjectionService', () => {
       keyerSlotId: 'cq',
     });
     expect(JSON.stringify(service.getSnapshot())).not.toContain('pair');
+  });
+
+  it('projects CW decoder transcript and keyer TX state', () => {
+    const engine = createEngine({
+      getStatus: vi.fn(() => ({
+        isRunning: true,
+        engineMode: 'cw',
+        currentMode: { name: 'CW' },
+        radioConnected: true,
+        currentRadioMode: 'CW',
+        engineState: 'running',
+      })),
+    });
+    const service = new DeviceUiProjectionService(engine, { now: () => 200 });
+
+    expect(service.getSnapshot().cw.decoder).toMatchObject({
+      enabled: false,
+      active: false,
+      state: 'disabled',
+      pendingText: '',
+      committedText: '',
+    });
+
+    engine.emit('cwDecoderStatusChanged', {
+      enabled: true,
+      active: true,
+      state: 'listening',
+      muted: false,
+      pendingText: 'TES',
+      committedText: 'CQ CQ',
+      lastDecodeAt: 180,
+      updatedAt: 181,
+    });
+    engine.emit('cwDecoderEvent', {
+      kind: 'transcript_pending',
+      pending: {
+        sessionId: 'cw-1',
+        version: 1,
+        text: 'TEST',
+        finalized: false,
+        updatedAt: 190,
+      },
+      timestamp: 190,
+    });
+    engine.emit('cwDecoderEvent', {
+      kind: 'commit',
+      segment: {
+        id: 'seg-1',
+        sessionId: 'cw-1',
+        sequence: 1,
+        text: 'TEST',
+        finalized: true,
+        prependSpace: true,
+        updatedAt: 195,
+      },
+      text: 'TEST',
+      timestamp: 195,
+    });
+    engine.emit('cwDecoderEvent', {
+      kind: 'transcript_commit',
+      segment: {
+        id: 'seg-1',
+        sessionId: 'cw-1',
+        sequence: 1,
+        text: 'TEST',
+        finalized: true,
+        prependSpace: true,
+        updatedAt: 195,
+      },
+      timestamp: 195,
+    });
+    engine.emit('cwKeyerStatusChanged', {
+      active: true,
+      mode: 'playing',
+      startedBy: 'client-1',
+      startedByLabel: 'Operator',
+      messageId: null,
+      nextRunAt: null,
+      error: null,
+      currentText: 'DE BG5DRB K',
+      lastText: 'CQ CQ DE BG5DRB K',
+    });
+
+    expect(service.getSnapshot()).toMatchObject({
+      engine: { mode: 'cw', currentMode: { name: 'CW' } },
+      cw: {
+        decoder: {
+          enabled: true,
+          active: true,
+          state: 'listening',
+          pendingText: '',
+          committedText: 'CQ CQ TEST',
+          lastDecodeAt: 195,
+        },
+        keyer: {
+          active: true,
+          mode: 'playing',
+          messageId: null,
+          currentText: 'DE BG5DRB K',
+          lastText: 'CQ CQ DE BG5DRB K',
+        },
+        currentTx: {
+          active: true,
+          messages: ['DE BG5DRB K', 'CQ CQ DE BG5DRB K'],
+          lastMessage: 'DE BG5DRB K',
+        },
+      },
+    });
+
+    engine.emit('cwDecoderEvent', {
+      kind: 'transcript_reset',
+      sessionId: 'cw-1',
+      timestamp: 210,
+    });
+
+    expect(service.getSnapshot().cw.decoder).toMatchObject({
+      pendingText: '',
+      committedText: '',
+    });
+
+    engine.emit('cwDecoderStatusChanged', {
+      enabled: false,
+      active: false,
+      state: 'disabled',
+      muted: false,
+      pendingText: 'STALE',
+      committedText: 'STALE TEXT',
+      lastDecodeAt: 220,
+      updatedAt: 221,
+    });
+
+    expect(service.getSnapshot().cw.decoder).toMatchObject({
+      enabled: false,
+      active: false,
+      state: 'disabled',
+      pendingText: '',
+      committedText: '',
+      lastDecodeAt: null,
+    });
+  });
+
+  it('hydrates CW snapshot from existing engine status during bootstrap', () => {
+    const engine = createEngine({
+      getStatus: vi.fn(() => ({
+        isRunning: true,
+        engineMode: 'cw',
+        currentMode: { name: 'CW' },
+        radioConnected: true,
+        currentRadioMode: 'CW',
+        engineState: 'running',
+      })),
+      getCWDecoderStatus: vi.fn(() => ({
+        enabled: true,
+        active: true,
+        state: 'decoding',
+        muted: false,
+        pendingText: 'TES',
+        committedText: 'CQ CQ',
+        lastDecodeAt: 300,
+        updatedAt: 301,
+      })),
+      getCWKeyerManager: vi.fn(() => ({
+        getStatus: vi.fn(() => ({
+          active: true,
+          mode: 'playing',
+          startedBy: 'client-1',
+          startedByLabel: 'Operator',
+          messageId: null,
+          nextRunAt: null,
+          error: null,
+          currentText: 'DE BG5DRB K',
+          lastText: 'CQ CQ DE BG5DRB K',
+        })),
+      })),
+    });
+    const service = new DeviceUiProjectionService(engine, { now: () => 400 });
+
+    expect(service.getSnapshot()).toMatchObject({
+      engine: { mode: 'cw', currentMode: { name: 'CW' } },
+      cw: {
+        decoder: {
+          enabled: true,
+          active: true,
+          state: 'decoding',
+          pendingText: 'TES',
+          committedText: 'CQ CQ',
+          lastDecodeAt: 300,
+        },
+        keyer: {
+          active: true,
+          mode: 'playing',
+          currentText: 'DE BG5DRB K',
+          lastText: 'CQ CQ DE BG5DRB K',
+        },
+        currentTx: {
+          active: true,
+          messages: ['DE BG5DRB K', 'CQ CQ DE BG5DRB K'],
+          lastMessage: 'DE BG5DRB K',
+        },
+      },
+    });
+
+    engine.emit('cwKeyerStatusChanged', {
+      active: false,
+      mode: 'idle',
+      startedBy: null,
+      startedByLabel: null,
+      messageId: null,
+      nextRunAt: null,
+      error: null,
+      currentText: null,
+      lastText: null,
+    });
+
+    expect(service.getSnapshot().cw.currentTx).toEqual({
+      active: false,
+      messages: [],
+      lastMessage: null,
+    });
   });
 });

@@ -76,6 +76,30 @@ describe('device UI schemas', () => {
         keyerMode: null,
         keyerSlotId: null,
       },
+      cw: {
+        decoder: {
+          enabled: false,
+          active: false,
+          state: 'disabled',
+          muted: false,
+          pendingText: '',
+          committedText: '',
+          lastDecodeAt: null,
+          updatedAt: 1,
+        },
+        keyer: {
+          active: false,
+          mode: null,
+          messageId: null,
+          currentText: null,
+          lastText: null,
+        },
+        currentTx: {
+          active: false,
+          messages: [],
+          lastMessage: null,
+        },
+      },
       access: { localUrl: 'http://192.168.1.10:8076', localUrls: ['http://192.168.1.10:8076'] },
       updatedAt: 1,
     });
@@ -85,6 +109,7 @@ describe('device UI schemas', () => {
     expect(snapshot.ft8.recentFrames[0]?.slotId).toBe('FT8-1');
     expect(snapshot.ft8.recentFrames[0]?.countryZh).toBe('测试地区');
     expect(snapshot.ft8.lastDecodeRawMessage).toBe('CQ TEST AA00');
+    expect(snapshot.cw.decoder.state).toBe('disabled');
     expect(DeviceUiWsEventSchema.parse({
       type: 'snapshot',
       payload: snapshot,
