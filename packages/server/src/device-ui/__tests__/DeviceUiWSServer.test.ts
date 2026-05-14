@@ -29,6 +29,7 @@ function createProjection() {
   const listeners = new Set<(snapshot: any) => void>();
   const snapshot = {
     server: { status: 'ok', version: 'test', webPort: 8076 },
+    station: { callsign: 'BG5DRB' },
     engine: { running: false, mode: null, currentMode: null, state: null },
     radio: { connected: false, frequency: null, radioMode: null, ptt: false, tx: false },
     ft8: {

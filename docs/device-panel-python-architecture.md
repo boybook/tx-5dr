@@ -583,6 +583,9 @@ Authorization: Bearer <device-jwt>
     "version": "...",
     "webPort": 8076
   },
+  "station": {
+    "callsign": "BG5DRB"
+  },
   "engine": {
     "running": true,
     "mode": "digital",

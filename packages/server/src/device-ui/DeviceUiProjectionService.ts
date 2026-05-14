@@ -9,6 +9,7 @@ import type {
   VoiceKeyerStatus,
   VoicePTTLock,
 } from '@tx5dr/contracts';
+import { ConfigManager } from '../config/config-manager.js';
 import { SERVER_BUILD_INFO } from '../generated/buildInfo.js';
 
 export interface DeviceUiFrameSnapshot {
@@ -47,6 +48,9 @@ export interface DeviceUiSnapshot {
     status: 'ok';
     version: string;
     webPort: number | null;
+  };
+  station: {
+    callsign: string | null;
   };
   engine: {
     running: boolean;
@@ -95,6 +99,7 @@ export interface DeviceUiProjectionOptions {
   version?: string | null;
   now?: () => number;
   maxRecentDecodes?: number;
+  stationCallsign?: string | null;
 }
 
 type Listener = (snapshot: DeviceUiSnapshot) => void;
@@ -402,6 +407,9 @@ export class DeviceUiProjectionService {
         version: options.version ?? SERVER_BUILD_INFO.version ?? 'unknown',
         webPort,
       },
+      station: {
+        callsign: stringOrNull(options.stationCallsign) ?? this.readStationCallsign(),
+      },
       engine: {
         running: false,
         mode: null,
@@ -443,6 +451,10 @@ export class DeviceUiProjectionService {
 
   private markUpdated(): void {
     this.snapshot.updatedAt = this.now();
+  }
+
+  private readStationCallsign(): string | null {
+    return stringOrNull(this.safeCall(() => ConfigManager.getInstance().getStationInfo().callsign))?.toUpperCase() ?? null;
   }
 
   private safeCall<T>(call: () => T): T | null {
