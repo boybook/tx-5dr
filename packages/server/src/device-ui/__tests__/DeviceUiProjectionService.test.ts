@@ -31,10 +31,11 @@ function createEngine(overrides: Record<string, unknown> = {}): any {
 
 describe('DeviceUiProjectionService', () => {
   it('builds a safe initial snapshot from available engine status', () => {
-    const service = new DeviceUiProjectionService(createEngine(), { webPort: 8076, version: 'test-version', now: () => 123 });
+    const service = new DeviceUiProjectionService(createEngine(), { webPort: 8076, version: 'test-version', stationCallsign: 'BG5DRB', now: () => 123 });
 
     expect(service.getSnapshot()).toMatchObject({
       server: { status: 'ok', version: 'test-version', webPort: 8076 },
+      station: { callsign: 'BG5DRB' },
       engine: { running: true, mode: 'digital', currentMode: { name: 'FT8', slotMs: 15_000 }, state: 'running' },
       radio: { connected: true, frequency: 14_074_000, radioMode: 'USB-D', ptt: false, tx: false },
       ft8: { slot: null, utc: null, cycle: null, periodMs: 15_000, recentDecodeRawMessages: [] },

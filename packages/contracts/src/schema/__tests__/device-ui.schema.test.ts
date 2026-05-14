@@ -42,6 +42,7 @@ describe('device UI schemas', () => {
   it('describes the mode-aware bootstrap snapshot and WS event', () => {
     const snapshot = DeviceUiBootstrapSnapshotSchema.parse({
       server: { status: 'ok', version: 'test', webPort: 8076 },
+      station: { callsign: 'BG5DRB' },
       engine: { running: true, mode: 'digital', currentMode: { name: 'FT8', slotMs: 15000 }, state: 'running' },
       radio: { connected: true, frequency: 7074000, radioMode: 'USB-D', ptt: false, tx: false },
       ft8: {
@@ -67,6 +68,7 @@ describe('device UI schemas', () => {
       updatedAt: 1,
     });
 
+    expect(snapshot.station.callsign).toBe('BG5DRB');
     expect(snapshot.ft8.lastDecodeRawMessage).toBe('CQ TEST AA00');
     expect(DeviceUiWsEventSchema.parse({
       type: 'snapshot',

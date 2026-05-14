@@ -74,6 +74,9 @@ export const DeviceUiBootstrapSnapshotSchema = z.object({
     version: z.string(),
     webPort: NullableNumberSchema,
   }),
+  station: z.object({
+    callsign: NullableStringSchema,
+  }),
   engine: z.object({
     running: z.boolean(),
     mode: NullableStringSchema,
