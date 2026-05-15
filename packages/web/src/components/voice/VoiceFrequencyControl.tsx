@@ -704,7 +704,7 @@ export const VoiceFrequencyControl: React.FC = () => {
         <div className="flex-shrink-0 text-center py-2">
           {splitEnabled ? (
             /* Split mode: show RX and TX rows */
-            <div className="flex flex-col md:flex-row md:justify-center md:gap-6 gap-1">
+            <div className="flex flex-col gap-1">
               {/* RX row */}
               <div className="flex items-center justify-center font-mono font-bold text-foreground">
                 <span className="mr-2 text-xs font-semibold text-success-500">{t('frequency.rxLabel')}</span>
