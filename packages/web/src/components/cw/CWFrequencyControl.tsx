@@ -8,6 +8,7 @@ import { createLogger } from '../../utils/logger';
 import { canWriteRadioFrequency } from '../../utils/radioControl';
 import { resetOperatorsForOperatingStateChange } from '../../utils/operatorReset';
 import { showErrorToast } from '../../utils/errorToast';
+import { setRadioFrequencyWithIntent } from '../../utils/radioFrequencyIntent';
 import { FrequencyDigit } from '../radio/frequency/FrequencyDigit';
 
 const logger = createLogger('CWFrequencyControl');
@@ -106,7 +107,7 @@ export const CWFrequencyControl: React.FC = () => {
     pendingFreqRef.current = { intendedFrequency: freq, sentAt: Date.now() };
 
     try {
-      const response = await api.setRadioFrequency({
+      const response = await setRadioFrequencyWithIntent({
         frequency: freq,
         mode: 'CW',
         radioMode: 'CW',

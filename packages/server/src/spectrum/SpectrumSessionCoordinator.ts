@@ -750,7 +750,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       configured?.spanHz ?? null,
     );
 
-    const displayRange = this.resolveDisplayRange(mode, configured?.edgeLowHz ?? null, configured?.edgeHighHz ?? null);
+    const displayRange = this.resolveDisplayRange();
     const edgeLowHz = (mode === 'fixed' || mode === 'scroll-fixed') && displayRange
       ? displayRange.min
       : (typeof configured?.edgeLowHz === 'number' ? configured.edgeLowHz : null);
@@ -809,27 +809,11 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     return 'unknown';
   }
 
-  private resolveDisplayRange(
-    mode: SpectrumDisplayMode | 'unknown',
-    edgeLowHz: number | null,
-    edgeHighHz: number | null,
-  ): SpectrumSessionState['displayRange'] {
+  private resolveDisplayRange(): SpectrumSessionState['displayRange'] {
     if (this.lastRadioFrame) {
       return {
         min: this.lastRadioFrame.frequencyRange.min,
         max: this.lastRadioFrame.frequencyRange.max,
-      };
-    }
-
-    if ((mode === 'fixed' || mode === 'scroll-fixed')
-      && typeof edgeLowHz === 'number'
-      && typeof edgeHighHz === 'number'
-      && Number.isFinite(edgeLowHz)
-      && Number.isFinite(edgeHighHz)
-      && edgeHighHz > edgeLowHz) {
-      return {
-        min: edgeLowHz,
-        max: edgeHighHz,
       };
     }
 

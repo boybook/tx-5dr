@@ -3,7 +3,7 @@ import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Switch,
 import { ArrowsPointingOutIcon, ChevronDownIcon, ChevronUpIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
 import type { EngineMode, SpectrumFrame, SpectrumKind, SpectrumSessionVoiceState } from '@tx5dr/contracts';
-import { api, getBandFromFrequency } from '@tx5dr/core';
+import { getBandFromFrequency } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useSpectrum } from '../../../store/radioStore';
 import { useCan } from '../../../store/authStore';
 import { createLogger } from '../../../utils/logger';
@@ -16,6 +16,18 @@ import { SpectrumStreamController } from '../../../spectrum/SpectrumStreamContro
 import { readSpectrumSubscriptionPaused, setSpectrumSubscriptionPaused } from '../../../utils/spectrumSubscriptionPause';
 import { resetOperatorsForOperatingStateChange } from '../../../utils/operatorReset';
 import { canWriteRadioFrequency } from '../../../utils/radioControl';
+import { setRadioFrequencyWithIntent, subscribeRadioFrequencyIntent, type SetRadioFrequencyParams } from '../../../utils/radioFrequencyIntent';
+import {
+  RADIO_SDR_OPTIMISTIC_DISPLAY_HOLD_TIMEOUT_MS,
+  RADIO_SDR_OPTIMISTIC_DISPLAY_IDLE,
+  RADIO_SDR_OPTIMISTIC_DISPLAY_PENDING_TIMEOUT_MS,
+  chooseRadioSdrOptimisticBaselineFrequencyHz,
+  confirmRadioSdrOptimisticDisplayStateWithFrame,
+  createRadioSdrOptimisticDisplayPendingState,
+  reconcileRadioSdrOptimisticDisplayStateWithRadioFrequency,
+  resolveRadioSdrOptimisticDisplayFrequencyHz,
+  type RadioSdrOptimisticDisplayState,
+} from '../../../utils/radioSdrOptimisticDisplay';
 import {
   DEFAULT_SPECTRUM_THEME_ID,
   getSpectrumTheme,
@@ -168,8 +180,6 @@ function snapFrequencyToStep(frequency: number, stepHz: number | null | undefine
   const step = typeof stepHz === 'number' && Number.isFinite(stepHz) && stepHz > 0 ? stepHz : 1;
   return Math.round(frequency / step) * step;
 }
-
-type SetRadioFrequencyParams = Parameters<typeof api.setRadioFrequency>[0];
 
 export function buildRadioSdrFrequencyRequest({
   engineMode,
@@ -660,14 +670,23 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     streamController.getStatusSnapshot,
     streamController.getStatusSnapshot
   );
-  const radioSdrFullRange = streamController.getFullRange(RADIO_SDR_SOURCE);
   const openWebRXStreamRange = streamController.getFullRange(OPENWEBRX_SDR_SOURCE);
   const isTransmitting = pttStatus.isTransmitting;
   const [actualRange, setActualRange] = useState<{ min: number; max: number } | null>(null);
   const [persistedRangeSettings, setPersistedRangeSettings] = useState<PersistedRangeSettings>(() => loadPersistedRangeSettings());
   const [openWebRXViewport, setOpenWebRXViewport] = useState<OpenWebRXViewport | null>(() => readOpenWebRXViewport(activeProfileId));
   const [isCollapsed, setIsCollapsed] = useState(() => readSpectrumSubscriptionPaused());
+  const [radioSdrOptimisticDisplayState, setRadioSdrOptimisticDisplayState] = useState<RadioSdrOptimisticDisplayState>(RADIO_SDR_OPTIMISTIC_DISPLAY_IDLE);
   const openWebRXPanStateRef = useRef<{ startX: number; startCenterHz: number; width: number } | null>(null);
+  const radioSdrOptimisticContextRef = useRef<{
+    isActive: boolean;
+    baselineFrequencyHz: number | null;
+  }>({
+    isActive: false,
+    baselineFrequencyHz: null,
+  });
+  const radioSdrOptimisticDisplayStateRef = useRef<RadioSdrOptimisticDisplayState>(RADIO_SDR_OPTIMISTIC_DISPLAY_IDLE);
+  const radioSdrOptimisticDisplayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isElectron = typeof window !== 'undefined' && (window as ElectronWindowHelper).electronAPI !== undefined;
   const resetOperatorsAfterOperatingStateChange = useCallback(() => {
@@ -708,8 +727,12 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
           ? 'absolute-fixed'
           : 'absolute-center'
   );
+  const baseRadioSdrFrequency = sessionState?.currentRadioFrequency ?? currentRadioFrequency ?? null;
+  const effectiveRadioSdrFrequency = isRadioSdrSelected && !isFixedSpectrumMode
+    ? resolveRadioSdrOptimisticDisplayFrequencyHz(radioSdrOptimisticDisplayState, baseRadioSdrFrequency)
+    : baseRadioSdrFrequency;
   const spectrumReferenceFrequency = isRadioSdrSelected
-    ? (sessionState?.currentRadioFrequency ?? currentRadioFrequency ?? null)
+    ? effectiveRadioSdrFrequency
     : null;
   const currentManualRangeSettings = isOpenWebRXSdrSelected
     ? (isOpenWebRXDetailMode
@@ -734,6 +757,10 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         left: topLeftOverlayInset.left ?? 4,
       }
     : undefined;
+  radioSdrOptimisticContextRef.current = {
+    isActive: isRadioSdrSelected && !isFixedSpectrumMode && connection.state.isConnected && !isCollapsed,
+    baselineFrequencyHz: sessionState?.currentRadioFrequency ?? currentRadioFrequency ?? null,
+  };
 
   const updateCurrentRangeSettings = useCallback((updater: (current: ManualRangeSettings) => ManualRangeSettings) => {
     setPersistedRangeSettings(prev => {
@@ -854,7 +881,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     if (!request) return;
 
     try {
-      const response = await api.setRadioFrequency(request);
+      const response = await setRadioFrequencyWithIntent(request);
       if (response.success) {
         resetOperatorsAfterOperatingStateChange();
       }
@@ -888,8 +915,37 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     radioService?.subscribeSpectrum(kind);
   }, [capabilities?.defaultKind, connection.state.radioService, selectedKind, setSubscribedKind]);
 
+  const updateRadioSdrOptimisticDisplayState = useCallback((nextState: RadioSdrOptimisticDisplayState) => {
+    if (radioSdrOptimisticDisplayTimerRef.current) {
+      clearTimeout(radioSdrOptimisticDisplayTimerRef.current);
+      radioSdrOptimisticDisplayTimerRef.current = null;
+    }
+
+    radioSdrOptimisticDisplayStateRef.current = nextState;
+    setRadioSdrOptimisticDisplayState(nextState);
+
+    if (nextState.status === 'idle') {
+      return;
+    }
+
+    const delayMs = Math.max(0, nextState.expiresAt - Date.now());
+    radioSdrOptimisticDisplayTimerRef.current = setTimeout(() => {
+      radioSdrOptimisticDisplayTimerRef.current = null;
+      radioSdrOptimisticDisplayStateRef.current = RADIO_SDR_OPTIMISTIC_DISPLAY_IDLE;
+      setRadioSdrOptimisticDisplayState(RADIO_SDR_OPTIMISTIC_DISPLAY_IDLE);
+    }, delayMs);
+  }, []);
+
+  const clearRadioSdrOptimisticDisplayState = useCallback(() => {
+    updateRadioSdrOptimisticDisplayState(RADIO_SDR_OPTIMISTIC_DISPLAY_IDLE);
+  }, [updateRadioSdrOptimisticDisplayState]);
+
   useEffect(() => {
     return () => {
+      if (radioSdrOptimisticDisplayTimerRef.current) {
+        clearTimeout(radioSdrOptimisticDisplayTimerRef.current);
+        radioSdrOptimisticDisplayTimerRef.current = null;
+      }
       streamController.destroy();
     };
   }, [streamController]);
@@ -916,19 +972,30 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       if (isCollapsed) {
         return;
       }
-      streamController.pushFrame(data as SpectrumFrame);
+      const frame = data as SpectrumFrame;
+      streamController.pushFrame(frame);
+      if (frame.kind === RADIO_SDR_SOURCE) {
+        const nextOptimisticState = confirmRadioSdrOptimisticDisplayStateWithFrame(
+          radioSdrOptimisticDisplayStateRef.current,
+          frame.frequencyRange,
+          Date.now(),
+          RADIO_SDR_OPTIMISTIC_DISPLAY_HOLD_TIMEOUT_MS,
+        );
+        if (nextOptimisticState !== radioSdrOptimisticDisplayStateRef.current) {
+          updateRadioSdrOptimisticDisplayState(nextOptimisticState);
+        }
+      }
     };
 
     wsClient.onWSEvent('spectrumFrame', handleSpectrumFrame);
     return () => {
       wsClient.offWSEvent('spectrumFrame', handleSpectrumFrame);
     };
-  }, [connection.state.radioService, isCollapsed, streamController]);
+  }, [connection.state.radioService, isCollapsed, streamController, updateRadioSdrOptimisticDisplayState]);
 
   useLayoutEffect(() => {
     streamController.updateContext({
       selectedKind: effectiveSelectedKind,
-      radioSdrDisplayRange: isRadioSdrSelected ? (sessionState?.displayRange ?? radioSdrFullRange ?? null) : null,
       openWebRXViewport: isOpenWebRXSdrSelected && !isOpenWebRXDetailMode ? openWebRXViewport : null,
       isOpenWebRXDetailMode,
     });
@@ -936,17 +1003,66 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     effectiveSelectedKind,
     isOpenWebRXDetailMode,
     isOpenWebRXSdrSelected,
-    isRadioSdrSelected,
     openWebRXViewport,
-    radioSdrFullRange,
-    sessionState?.displayRange,
     streamController,
   ]);
 
   useEffect(() => {
+    return subscribeRadioFrequencyIntent((intent) => {
+      const context = radioSdrOptimisticContextRef.current;
+      if (!context.isActive) {
+        return;
+      }
+
+      const currentRange = streamController.getFullRange(RADIO_SDR_SOURCE);
+      if (!currentRange) {
+        return;
+      }
+
+      const baselineFrameCenterHz = currentRange.min + (currentRange.max - currentRange.min) / 2;
+      const baselineFrequencyHz = chooseRadioSdrOptimisticBaselineFrequencyHz({
+        frameRange: currentRange,
+        currentRadioFrequencyHz: context.baselineFrequencyHz,
+      });
+      updateRadioSdrOptimisticDisplayState(createRadioSdrOptimisticDisplayPendingState({
+        targetFrequencyHz: intent.frequency,
+        baselineFrequencyHz,
+        baselineFrameCenterHz,
+        sentAt: intent.sentAt,
+        timeoutMs: RADIO_SDR_OPTIMISTIC_DISPLAY_PENDING_TIMEOUT_MS,
+      }));
+      streamController.setRadioSdrOptimisticFrequencyIntent({
+        targetFrequencyHz: intent.frequency,
+        baselineFrequencyHz,
+        baselineFrameCenterHz,
+        sentAt: intent.sentAt,
+      });
+    });
+  }, [streamController, updateRadioSdrOptimisticDisplayState]);
+
+  useEffect(() => {
+    if (!isRadioSdrSelected || isFixedSpectrumMode || !connection.state.isConnected || isCollapsed) {
+      streamController.setRadioSdrOptimisticFrequencyIntent(null);
+      clearRadioSdrOptimisticDisplayState();
+    }
+  }, [clearRadioSdrOptimisticDisplayState, connection.state.isConnected, isCollapsed, isFixedSpectrumMode, isRadioSdrSelected, streamController]);
+
+  useEffect(() => {
+    const nextOptimisticState = reconcileRadioSdrOptimisticDisplayStateWithRadioFrequency(
+      radioSdrOptimisticDisplayStateRef.current,
+      baseRadioSdrFrequency,
+      Date.now(),
+    );
+    if (nextOptimisticState !== radioSdrOptimisticDisplayStateRef.current) {
+      updateRadioSdrOptimisticDisplayState(nextOptimisticState);
+    }
+  }, [baseRadioSdrFrequency, updateRadioSdrOptimisticDisplayState]);
+
+  useEffect(() => {
     setActualRange(null);
     streamController.reset();
-  }, [activeProfileId, streamController]);
+    clearRadioSdrOptimisticDisplayState();
+  }, [activeProfileId, clearRadioSdrOptimisticDisplayState, streamController]);
 
   useEffect(() => {
     const fullRange = isOpenWebRXSdrSelected ? (streamStatus.fullRange ?? openWebRXStreamRange) : null;
@@ -1045,10 +1161,10 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const radioSdrTxBandOverlays = React.useMemo(() => buildRadioSdrTxBandOverlays({
     engineMode,
     isRadioSdrSelected,
-    currentRadioFrequency: sessionState?.currentRadioFrequency,
+    currentRadioFrequency: effectiveRadioSdrFrequency,
     voice: sessionState?.voice,
     voiceOverlayIsInteractive,
-  }), [engineMode, isRadioSdrSelected, sessionState?.currentRadioFrequency, sessionState?.voice, voiceOverlayIsInteractive]);
+  }), [effectiveRadioSdrFrequency, engineMode, isRadioSdrSelected, sessionState?.voice, voiceOverlayIsInteractive]);
   const presetMarkers: PresetMarker[] = React.useMemo(() => {
     if (!isVoiceMode) {
       return [];

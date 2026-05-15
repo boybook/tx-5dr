@@ -14,6 +14,14 @@ export interface OpenWebRXViewport {
   spanHz: number;
 }
 
+export interface RadioSdrOptimisticFrequencyIntent {
+  targetFrequencyHz: number;
+  baselineFrequencyHz: number;
+  baselineFrameCenterHz: number;
+  sentAt?: number;
+  timeoutMs?: number;
+}
+
 export interface SpectrumStreamStatus {
   hasData: boolean;
   selectedKind: SpectrumKind | null;
@@ -54,9 +62,9 @@ interface QueuedSpectrumFrame extends CanonicalSpectrumFrame {
 
 interface StreamContext {
   selectedKind: SpectrumKind | null;
-  radioSdrDisplayRange: { min: number; max: number } | null;
   openWebRXViewport: OpenWebRXViewport | null;
   isOpenWebRXDetailMode: boolean;
+  radioSdrViewRange: { min: number; max: number } | null;
 }
 
 type HistoryMap = Record<SpectrumKind, CanonicalSpectrumFrame[]>;
@@ -70,6 +78,9 @@ const MIN_FRAME_DURATION_MS = 40;
 const MAX_FRAME_DURATION_MS = 140;
 const IDLE_FREEZE_MIN_MS = 300;
 const MAX_BATCH_SIZE = 8;
+const RADIO_SDR_OPTIMISTIC_TIMEOUT_MS = 2000;
+const RADIO_SDR_OPTIMISTIC_CONFIRM_MIN_HZ = 50;
+const RADIO_SDR_OPTIMISTIC_CONFIRM_SPAN_RATIO = 0.001;
 
 function createHistoryMap(): HistoryMap {
   return {
@@ -208,9 +219,9 @@ function buildViewKey(
   context: StreamContext
 ): string {
   if (kind === 'radio-sdr') {
-    const range = context.radioSdrDisplayRange;
+    const range = context.radioSdrViewRange;
     return range
-      ? `${kind}:${range.min}:${range.max}:${frame.frequencyRange.min}:${frame.frequencyRange.max}`
+      ? `${kind}:${range.min}:${range.max}:${frame.frequencyRange.min}:${frame.frequencyRange.max}:${frame.binCount}`
       : `${kind}:missing`;
   }
 
@@ -232,9 +243,9 @@ export class SpectrumStreamController {
   private readonly pendingByKind: PendingMap = createPendingMap();
   private context: StreamContext = {
     selectedKind: null,
-    radioSdrDisplayRange: null,
     openWebRXViewport: null,
     isOpenWebRXDetailMode: false,
+    radioSdrViewRange: null,
   };
   private statusSnapshot: SpectrumStreamStatus = {
     hasData: false,
@@ -243,6 +254,14 @@ export class SpectrumStreamController {
   };
   private pendingBatch: SpectrumRenderBatch | null = null;
   private rafId: number | null = null;
+  private radioSdrOptimisticTimer: ReturnType<typeof setTimeout> | null = null;
+  private radioSdrOptimisticIntent: {
+    targetFrequencyHz: number;
+    baselineFrequencyHz: number;
+    baselineFrameCenterHz: number;
+    sentAt: number;
+    timeoutMs: number;
+  } | null = null;
   private lastRenderTime = 0;
   private lastArrivalTime = 0;
   private arrivalIntervalEma = DEFAULT_FRAME_DURATION_MS;
@@ -276,6 +295,35 @@ export class SpectrumStreamController {
     return latest ? latest.frequencyRange : null;
   };
 
+  setRadioSdrOptimisticFrequencyIntent(intent: RadioSdrOptimisticFrequencyIntent | null): void {
+    this.clearRadioSdrOptimisticTimer();
+
+    if (
+      !intent
+      || !Number.isFinite(intent.targetFrequencyHz)
+      || !Number.isFinite(intent.baselineFrequencyHz)
+      || !Number.isFinite(intent.baselineFrameCenterHz)
+    ) {
+      this.clearRadioSdrOptimisticIntent();
+      return;
+    }
+
+    const nextIntent = {
+      targetFrequencyHz: intent.targetFrequencyHz,
+      baselineFrequencyHz: intent.baselineFrequencyHz,
+      baselineFrameCenterHz: intent.baselineFrameCenterHz,
+      sentAt: intent.sentAt ?? Date.now(),
+      timeoutMs: intent.timeoutMs ?? RADIO_SDR_OPTIMISTIC_TIMEOUT_MS,
+    };
+    this.radioSdrOptimisticIntent = nextIntent;
+    this.applyRadioSdrViewRange(this.deriveRadioSdrOptimisticRange());
+
+    this.radioSdrOptimisticTimer = setTimeout(() => {
+      this.radioSdrOptimisticTimer = null;
+      this.clearRadioSdrOptimisticIntent();
+    }, nextIntent.timeoutMs);
+  }
+
   primeRenderBatch(): SpectrumRenderBatch {
     const selectedKind = this.context.selectedKind;
     if (selectedKind) {
@@ -293,12 +341,18 @@ export class SpectrumStreamController {
 
   destroy(): void {
     this.clearBufferedFrames();
+    this.clearRadioSdrOptimisticIntent({ notify: false });
     this.frameListeners.clear();
     this.statusListeners.clear();
   }
 
   reset(): void {
     this.clearBufferedFrames();
+    this.clearRadioSdrOptimisticIntent({ notify: false });
+    this.context = {
+      ...this.context,
+      radioSdrViewRange: null,
+    };
     this.pendingBatch = {
       mode: 'reset',
       rows: [],
@@ -329,6 +383,93 @@ export class SpectrumStreamController {
     this.arrivalIntervalEma = DEFAULT_FRAME_DURATION_MS;
   }
 
+  private clearRadioSdrOptimisticTimer(): void {
+    if (this.radioSdrOptimisticTimer) {
+      clearTimeout(this.radioSdrOptimisticTimer);
+      this.radioSdrOptimisticTimer = null;
+    }
+  }
+
+  private clearRadioSdrOptimisticIntent(options: { notify?: boolean } = {}): void {
+    if (!this.radioSdrOptimisticIntent) {
+      return;
+    }
+
+    this.clearRadioSdrOptimisticTimer();
+    this.radioSdrOptimisticIntent = null;
+    this.applyRadioSdrViewRange(this.deriveRadioSdrNativeRange(), options);
+  }
+
+  private invalidateCachedViews(kind: SpectrumKind): void {
+    for (const frame of this.histories[kind]) {
+      frame.cachedViewKey = null;
+      frame.cachedViewValues = null;
+      frame.cachedAxis = null;
+    }
+    for (const frame of this.pendingByKind[kind]) {
+      frame.cachedViewKey = null;
+      frame.cachedViewValues = null;
+      frame.cachedAxis = null;
+    }
+  }
+
+  private rebuildSelectedViewIfNeeded(kind: SpectrumKind): void {
+    if (this.context.selectedKind !== kind) {
+      return;
+    }
+
+    this.pendingByKind[kind].length = 0;
+    this.pendingBatch = this.buildReplaceBatch();
+    this.notifyFrameListeners();
+  }
+
+  private deriveRadioSdrNativeRange(): { min: number; max: number } | null {
+    const latestFrame = this.histories['radio-sdr'][0]?.frame ?? null;
+    return latestFrame ? { ...latestFrame.frequencyRange } : null;
+  }
+
+  private deriveRadioSdrOptimisticRange(): { min: number; max: number } | null {
+    const nativeRange = this.deriveRadioSdrNativeRange();
+    const intent = this.radioSdrOptimisticIntent;
+    if (!nativeRange || !intent) {
+      return nativeRange;
+    }
+
+    const offsetHz = intent.targetFrequencyHz - intent.baselineFrequencyHz;
+    return {
+      min: nativeRange.min + offsetHz,
+      max: nativeRange.max + offsetHz,
+    };
+  }
+
+  private resolveRadioSdrViewRange(): { min: number; max: number } | null {
+    return this.radioSdrOptimisticIntent
+      ? this.deriveRadioSdrOptimisticRange()
+      : this.deriveRadioSdrNativeRange();
+  }
+
+  private applyRadioSdrViewRange(
+    nextRange: { min: number; max: number } | null,
+    options: { notify?: boolean } = {},
+  ): boolean {
+    const normalizedRange = nextRange && Number.isFinite(nextRange.min) && Number.isFinite(nextRange.max) && nextRange.max > nextRange.min
+      ? { min: nextRange.min, max: nextRange.max }
+      : null;
+    if (areRangesEqual(this.context.radioSdrViewRange, normalizedRange)) {
+      return false;
+    }
+
+    this.context = {
+      ...this.context,
+      radioSdrViewRange: normalizedRange,
+    };
+    this.invalidateCachedViews('radio-sdr');
+    if (options.notify !== false) {
+      this.rebuildSelectedViewIfNeeded('radio-sdr');
+    }
+    return true;
+  }
+
   updateContext(nextContext: Partial<StreamContext>): void {
     const previous = this.context;
     this.context = {
@@ -337,13 +478,17 @@ export class SpectrumStreamController {
     };
 
     const selectedKindChanged = previous.selectedKind !== this.context.selectedKind;
-    const radioRangeChanged = !areRangesEqual(previous.radioSdrDisplayRange, this.context.radioSdrDisplayRange);
     const openWebRXViewportChanged = !areViewportsEqual(previous.openWebRXViewport, this.context.openWebRXViewport);
     const detailModeChanged = previous.isOpenWebRXDetailMode !== this.context.isOpenWebRXDetailMode;
+    const radioSdrViewRangeChanged = !areRangesEqual(previous.radioSdrViewRange, this.context.radioSdrViewRange);
 
     this.syncStatusSnapshot();
 
-    if (!selectedKindChanged && !radioRangeChanged && !openWebRXViewportChanged && !detailModeChanged) {
+    if (selectedKindChanged && this.context.selectedKind !== 'radio-sdr') {
+      this.clearRadioSdrOptimisticIntent({ notify: false });
+    }
+
+    if (!selectedKindChanged && !openWebRXViewportChanged && !detailModeChanged && !radioSdrViewRangeChanged) {
       return;
     }
 
@@ -372,8 +517,14 @@ export class SpectrumStreamController {
       return;
     }
 
+    const retainedFrame = retainFrameMeta(frame);
+    const isConfirmingRadioSdrOptimisticIntent = this.isRadioSdrOptimisticIntentConfirmed(retainedFrame);
+    if (isConfirmingRadioSdrOptimisticIntent) {
+      this.clearRadioSdrOptimisticIntent({ notify: false });
+    }
+
     const canonicalFrame = this.storeCanonicalFrame({
-      frame: retainFrameMeta(frame),
+      frame: retainedFrame,
       values,
       receivedAt,
       cachedViewKey: null,
@@ -381,14 +532,24 @@ export class SpectrumStreamController {
       cachedAxis: null,
     });
 
+    const radioSdrViewRangeChanged = frame.kind === 'radio-sdr'
+      ? this.applyRadioSdrViewRange(this.resolveRadioSdrViewRange(), { notify: false })
+      : false;
+
     if (frame.kind === this.context.selectedKind) {
-      const pendingQueue = this.pendingByKind[frame.kind];
-      pendingQueue.push({
-        ...canonicalFrame,
-        queuedAt: receivedAt,
-      });
-      this.trimPendingQueue(frame.kind);
-      this.schedule();
+      if (radioSdrViewRangeChanged) {
+        this.pendingByKind[frame.kind].length = 0;
+        this.pendingBatch = this.buildReplaceBatch();
+        this.notifyFrameListeners();
+      } else {
+        const pendingQueue = this.pendingByKind[frame.kind];
+        pendingQueue.push({
+          ...canonicalFrame,
+          queuedAt: receivedAt,
+        });
+        this.trimPendingQueue(frame.kind);
+        this.schedule();
+      }
     }
 
     this.syncStatusSnapshot();
@@ -588,7 +749,7 @@ export class SpectrumStreamController {
     let axis: SpectrumAxis;
 
     if (selectedKind === 'radio-sdr') {
-      const range = this.context.radioSdrDisplayRange;
+      const range = this.context.radioSdrViewRange;
       if (!range) {
         return null;
       }
@@ -622,6 +783,26 @@ export class SpectrumStreamController {
     frame.cachedViewValues = values;
     frame.cachedAxis = axis;
     return { values, axis };
+  }
+
+  private isRadioSdrOptimisticIntentConfirmed(frame: RetainedSpectrumFrame): boolean {
+    const intent = this.radioSdrOptimisticIntent;
+    if (!intent || frame.kind !== 'radio-sdr') {
+      return false;
+    }
+
+    const frameSpanHz = frame.frequencyRange.max - frame.frequencyRange.min;
+    if (!Number.isFinite(frameSpanHz) || frameSpanHz <= 0) {
+      return false;
+    }
+
+    const frameCenterHz = frame.frequencyRange.min + frameSpanHz / 2;
+    const expectedCenterHz = intent.baselineFrameCenterHz + (intent.targetFrequencyHz - intent.baselineFrequencyHz);
+    const toleranceHz = Math.max(
+      RADIO_SDR_OPTIMISTIC_CONFIRM_MIN_HZ,
+      frameSpanHz * RADIO_SDR_OPTIMISTIC_CONFIRM_SPAN_RATIO,
+    );
+    return Math.abs(frameCenterHz - expectedCenterHz) <= toleranceHz;
   }
 
   private syncStatusSnapshot(): void {

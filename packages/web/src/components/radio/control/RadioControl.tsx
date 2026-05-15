@@ -36,6 +36,7 @@ import {
   presentRealtimeConnectivityFailure,
 } from '../../../realtime/realtimeConnectivity';
 import { resetOperatorsForOperatingStateChange } from '../../../utils/operatorReset';
+import { setRadioFrequencyWithIntent } from '../../../utils/radioFrequencyIntent';
 import {
   loadRealtimeAudioCodecPreference,
   saveRealtimeAudioCodecPreference,
@@ -1331,7 +1332,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     setIsSettingCustomFrequency(true);
 
     try {
-      const response = await api.setRadioFrequency({
+      const response = await setRadioFrequencyWithIntent({
         frequency: frequency,
         mode: radioMode.currentMode?.name || 'FT8',
         band: t('frequency.custom'),
@@ -1487,7 +1488,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
         params.radioMode = frequency.radioMode;
       }
 
-      const response = await api.setRadioFrequency(params);
+      const response = await setRadioFrequencyWithIntent(params);
 
       if (!response.success) {
         logger.debug('Auto set frequency failed:', response.message);
@@ -1556,7 +1557,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
         params.radioMode = selectedFrequency.radioMode;
       }
 
-      const response = await api.setRadioFrequency(params);
+      const response = await setRadioFrequencyWithIntent(params);
 
       if (response.success) {
         setCurrentFrequency(selectedFrequencyKey);

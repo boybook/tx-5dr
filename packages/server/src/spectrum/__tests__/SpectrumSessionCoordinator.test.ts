@@ -174,6 +174,34 @@ describe('SpectrumSessionCoordinator', () => {
     expect(engine.radioManager.getMode).not.toHaveBeenCalled();
   });
 
+  it('does not derive radio SDR display range from CAT fixed edges before frames arrive', async () => {
+    const engine = new MockEngine();
+    const spectrumCoordinator = new EventEmitter();
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    const connection = {
+      configureSpectrumDisplay: vi.fn(),
+      getSpectrumDisplayState: vi.fn().mockResolvedValue({
+        mode: 'fixed',
+        edgeLowHz: 14_073_000,
+        edgeHighHz: 14_078_000,
+        spanHz: 5000,
+        supportsFixedEdges: true,
+        supportedSpans: [5000, 10_000],
+      }),
+      getRadioIoQueueSnapshot: vi.fn(() => createBusySnapshot(false)),
+    };
+
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getActiveConnection.mockReturnValue(connection);
+    engine.radioManager.getFrequency.mockResolvedValue(14_074_000);
+
+    const state = await coordinator.refresh('radio-sdr');
+
+    expect(state.displayRange).toBeNull();
+    expect(state.edgeLowHz).toBe(14_073_000);
+    expect(state.edgeHighHz).toBe(14_078_000);
+  });
+
   it('reuses cached digital window controls while the radio I/O queue is busy', async () => {
     const engine = new MockEngine();
     const spectrumCoordinator = new EventEmitter();

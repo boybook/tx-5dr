@@ -22,6 +22,7 @@ import { canWriteRadioFrequency, isCoreCapabilityAvailable } from '../../utils/r
 import { resetOperatorsForOperatingStateChange } from '../../utils/operatorReset';
 import { FrequencyPresetAddModal } from '../settings/FrequencyPresetAddModal';
 import { formatToneSquelch } from '../../utils/toneSquelch';
+import { setRadioFrequencyWithIntent } from '../../utils/radioFrequencyIntent';
 import { FrequencyDigit } from '../radio/frequency/FrequencyDigit';
 
 const logger = createLogger('VoiceFrequencyControl');
@@ -121,7 +122,7 @@ export const VoiceFrequencyControl: React.FC = () => {
     const freq = pending.intendedFrequency;
     pendingFreqRef.current = { intendedFrequency: freq, sentAt: Date.now() };
     try {
-      const response = await api.setRadioFrequency({
+      const response = await setRadioFrequencyWithIntent({
         frequency: freq,
         mode: 'VOICE',
         band: overrides?.band ?? 'Custom',
@@ -449,7 +450,7 @@ export const VoiceFrequencyControl: React.FC = () => {
 
     try {
       const supportsFmOptions = preset.radioMode === 'FM';
-      const response = await api.setRadioFrequency({
+      const response = await setRadioFrequencyWithIntent({
         frequency: preset.frequency,
         mode: 'VOICE',
         band: preset.band,
