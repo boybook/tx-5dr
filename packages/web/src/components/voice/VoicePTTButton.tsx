@@ -602,16 +602,16 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
     ? Math.max(0, Math.min(100, meterFillPercent))
     : 0;
   const meterContainerClass = voiceCaptureController.captureState === 'error'
-    ? 'border-danger-400/70 bg-danger-50/40 dark:bg-danger-950/20'
+    ? 'bg-danger-50/45 dark:bg-danger-950/20'
     : meterIsPttActive
-      ? 'border-success-400/60 bg-content2/90'
-      : 'border-default-300/70 bg-default-100/45 dark:border-default-600/60 dark:bg-default-900/25 opacity-70';
+      ? 'bg-content2 dark:bg-content1'
+      : 'bg-content2/85 dark:bg-content1/80 opacity-80';
   const meterFillClass = meterIsPttActive
     ? 'bg-gradient-to-t from-danger-500 via-warning-400 to-success-300'
-    : 'bg-default-400/70 dark:bg-default-500/60';
+    : 'bg-default-500/55 dark:bg-default-400/40';
   const peakMarkerClass = meterIsPttActive
     ? 'bg-white/90'
-    : 'bg-default-500/45 dark:bg-default-300/35';
+    : 'bg-default-600/40 dark:bg-default-200/30';
   const httpsRoleTitle = isAdmin
     ? t('ptt.httpsRequiredRoleTitleAdmin')
     : isOperator
@@ -675,7 +675,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
             ref={buttonRef}
             type="button"
             className={`
-              h-full w-full rounded-lg px-2 flex flex-col items-center justify-center
+              h-full w-full rounded-large px-2 flex flex-col items-center justify-center
               transition-all duration-150 select-none touch-none
               font-bold whitespace-nowrap
               [-webkit-touch-callout:none] [-webkit-user-select:none]
@@ -756,7 +756,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
 
         <div
           className={`
-            relative h-full w-3.5 shrink-0 rounded-lg border p-[2px] overflow-hidden md:w-4
+            relative h-full w-3.5 shrink-0 rounded-large p-[2px] overflow-hidden md:w-4
             transition-colors duration-150
             ${meterContainerClass}
           `}
@@ -768,7 +768,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
           aria-valuenow={meterPercent}
           aria-valuetext={t('ptt.inputLevelAria', { percent: meterPercent })}
         >
-          <div className="relative h-full w-full rounded-md bg-default-200/70 dark:bg-default-100/10 overflow-hidden">
+          <div className="relative h-full w-full rounded-medium bg-content1/75 dark:bg-default-100/10 overflow-hidden">
             <div
               className={`
                 absolute inset-x-0 bottom-0 rounded-md transition-[height,opacity] duration-75 ease-out
@@ -787,7 +787,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
               }}
             />
             {!meterHasInput && (
-              <div className="absolute inset-x-0 bottom-0 h-1.5 rounded-full bg-default-400/35" />
+              <div className="absolute inset-x-0 bottom-0 h-1.5 rounded-full bg-default-500/30 dark:bg-default-300/20" />
             )}
           </div>
         </div>

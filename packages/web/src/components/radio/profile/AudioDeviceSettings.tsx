@@ -75,7 +75,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   const [outputSampleRate, setOutputSampleRate] = useState<number>(resolveAudioSettingNumber(initialConfig, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
   const [inputBufferSize, setInputBufferSize] = useState<number>(resolveAudioSettingNumber(initialConfig, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
   const [outputBufferSize, setOutputBufferSize] = useState<number>(resolveAudioSettingNumber(initialConfig, 'outputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
-  const [deviceResolution, setDeviceResolution] = useState<{
+  const [, setDeviceResolution] = useState<{
     input: AudioDeviceResolution;
     output: AudioDeviceResolution;
   } | null>(null);

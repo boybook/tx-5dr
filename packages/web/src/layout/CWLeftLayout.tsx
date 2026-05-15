@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Button } from '@heroui/react';
+import { Button, Card, CardBody } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faGithub } from '@fortawesome/free-brands-svg-icons';
 import { RadioMetersDisplay } from '../components/radio/control/RadioMetersDisplay';
@@ -105,11 +105,13 @@ export const CWLeftLayout: React.FC = () => {
           <CWFrequencyControl />
 
           {/* Spectrum Display (CW filter on audio, RF TX marker on radio SDR) */}
-          <div className="flex-shrink-0 bg-content2 rounded-lg shadow-sm overflow-hidden">
-            <CWSpectrumFilterOverlay
-              height={isMobile ? 80 : 128}
-            />
-          </div>
+          <Card shadow="sm" className="flex-shrink-0 overflow-hidden">
+            <CardBody className="p-0 overflow-hidden">
+              <CWSpectrumFilterOverlay
+                height={isMobile ? 80 : 128}
+              />
+            </CardBody>
+          </Card>
 
           {/* Radio Meters */}
           {showRadioMeters && (

@@ -1,6 +1,6 @@
 import React from 'react';
 import type { MeterData, MeterCapabilities } from '@tx5dr/contracts';
-import { Popover, PopoverContent, PopoverTrigger, Progress } from '@heroui/react';
+import { Card, CardBody, Popover, PopoverContent, PopoverTrigger, Progress } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
 import { useBufferedMeterData } from '../../../hooks/useBufferedMeterData';
 import { TxVolumeGainControl } from './TxVolumeGainControl';
@@ -237,16 +237,19 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
   }
 
   return (
-    <div
+    <Card
       ref={containerRef}
+      shadow="none"
       className={[
-        'w-full px-2 py-2 pt-1.5 rounded-lg border transition-colors',
+        'w-full overflow-visible border transition-colors',
         isAlcOverLimit
-          ? 'bg-danger-50 dark:bg-danger-500/15 border-danger/60 dark:border-danger-400/60 shadow-sm'
-          : 'bg-default-50 dark:bg-default-100/50 border-default-200 dark:border-default-100',
+          ? 'bg-danger-50 border-danger/60 dark:bg-danger-500/15 dark:border-danger-400/60'
+          : 'bg-default-50 border-default-200 dark:bg-default-100/50 dark:border-default-100',
         className,
       ].filter(Boolean).join(' ')}
+      classNames={{ base: 'overflow-visible' }}
     >
+      <CardBody className="overflow-visible px-2 py-2 pt-1.5">
       <div className="flex items-center gap-2">
         {/* 第一个仪表：根据 PTT 状态动态切换 Level/Power */}
         {showLevelPower && (isPttActive ? (
@@ -361,6 +364,7 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
           );
         })()}
       </div>
-    </div>
+      </CardBody>
+    </Card>
   );
 };

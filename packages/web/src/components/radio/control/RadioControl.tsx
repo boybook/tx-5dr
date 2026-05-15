@@ -1,5 +1,5 @@
 import * as React from 'react';
-import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner, Alert, Tabs, Tab, Tooltip} from "@heroui/react";
+import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner, Alert, Tabs, Tab, Tooltip, Card, CardBody} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faTowerBroadcast, faPowerOff, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
@@ -1664,7 +1664,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   }, [buildCurrentCustomFrequencyOption, connection.state.radioService, availableFrequencies]);
 
   return (
-    <div className="relative flex flex-col gap-0 bg-content2 dark:bg-content1 px-4 py-2 pt-3 rounded-lg cursor-default select-none">
+    <Card shadow="none" className="w-full overflow-visible border-none bg-content2 dark:bg-content1" classNames={{ base: 'overflow-visible border-none bg-content2 dark:bg-content1 shadow-none' }}>
+      <CardBody className="relative flex flex-col gap-0 overflow-visible px-4 py-2 pt-3 cursor-default select-none">
       <span ref={frequencyMeasureRef} aria-hidden="true" className={SELECT_TEXT_MEASURE_CLASS}>
         {frequencySelectLabel}
       </span>
@@ -2459,6 +2460,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
           </ModalFooter>
         </ModalContent>
       </Modal>
-    </div>
+      </CardBody>
+    </Card>
   );
 };

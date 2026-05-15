@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Button } from '@heroui/react';
+import { Button, Card, CardBody } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faGithub } from '@fortawesome/free-brands-svg-icons';
 import { SpectrumDisplay } from '../components/radio/spectrum/SpectrumDisplay';
@@ -111,12 +111,14 @@ export const VoiceLeftLayout: React.FC = () => {
         </div>
 
         {/* Spectrum Display (no frequency markers for voice mode) */}
-        <div className="flex-shrink-0 bg-content2 rounded-lg shadow-sm overflow-hidden">
-          <SpectrumDisplay
-            height={isMobile ? 80 : 128}
-            showMarkers={false}
-          />
-        </div>
+        <Card shadow="sm" className="flex-shrink-0 overflow-hidden">
+          <CardBody className="p-0 overflow-hidden">
+            <SpectrumDisplay
+              height={isMobile ? 80 : 128}
+              showMarkers={false}
+            />
+          </CardBody>
+        </Card>
 
         {/* Radio Meters */}
         {showRadioMeters && (

@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import {
   Button,
+  Card,
+  CardBody,
   Dropdown,
   DropdownItem,
   DropdownMenu,
@@ -216,13 +218,15 @@ export const LeftLayout: React.FC = () => {
 
         {/* 频谱显示：弹出到独立窗口后整体隐藏 */}
         {!isSpectrumPopedOut && (
-          <div className="bg-content2 rounded-lg shadow-sm overflow-hidden">
-            <SpectrumDisplay
-              height={isMobile ? 80 : 128}
-              hoverFrequency={hoveredMessageFreq}
-              onPopOutChange={setIsSpectrumPopedOut}
-            />
-          </div>
+          <Card shadow="sm" className="overflow-hidden">
+            <CardBody className="p-0 overflow-hidden">
+              <SpectrumDisplay
+                height={isMobile ? 80 : 128}
+                hoverFrequency={hoveredMessageFreq}
+                onPopOutChange={setIsSpectrumPopedOut}
+              />
+            </CardBody>
+          </Card>
         )}
 
         {/* 电台数值表（无电台模式下隐藏，不支持时由组件内部返回 null） */}
