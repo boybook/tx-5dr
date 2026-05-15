@@ -167,12 +167,16 @@ function retainFrameMeta(frame: SpectrumFrame): RetainedSpectrumFrame {
   };
 }
 
-function cropSpectrumToRange(
+export function cropSpectrumToRange(
   values: Float32Array,
   fullRange: { min: number; max: number },
   targetRange: { min: number; max: number }
 ): Float32Array {
   if (values.length === 0) {
+    return values;
+  }
+
+  if (areRangesEqual(fullRange, targetRange)) {
     return values;
   }
 
@@ -254,6 +258,7 @@ export class SpectrumStreamController {
   };
   private pendingBatch: SpectrumRenderBatch | null = null;
   private rafId: number | null = null;
+  private replaceRafId: number | null = null;
   private radioSdrOptimisticTimer: ReturnType<typeof setTimeout> | null = null;
   private radioSdrOptimisticIntent: {
     targetFrequencyHz: number;
@@ -325,6 +330,7 @@ export class SpectrumStreamController {
   }
 
   primeRenderBatch(): SpectrumRenderBatch {
+    this.cancelScheduledReplaceBatch();
     const selectedKind = this.context.selectedKind;
     if (selectedKind) {
       this.pendingByKind[selectedKind].length = 0;
@@ -371,6 +377,7 @@ export class SpectrumStreamController {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
     }
+    this.cancelScheduledReplaceBatch();
 
     for (const kind of SPECTRUM_KINDS) {
       this.histories[kind].length = 0;
@@ -419,8 +426,7 @@ export class SpectrumStreamController {
     }
 
     this.pendingByKind[kind].length = 0;
-    this.pendingBatch = this.buildReplaceBatch();
-    this.notifyFrameListeners();
+    this.scheduleReplaceBatch();
   }
 
   private deriveRadioSdrNativeRange(): { min: number; max: number } | null {
@@ -470,6 +476,26 @@ export class SpectrumStreamController {
     return true;
   }
 
+  private scheduleReplaceBatch(): void {
+    this.pendingBatch = null;
+    if (this.replaceRafId !== null) {
+      return;
+    }
+
+    this.replaceRafId = requestAnimationFrame(() => {
+      this.replaceRafId = null;
+      this.pendingBatch = this.buildReplaceBatch();
+      this.notifyFrameListeners();
+    });
+  }
+
+  private cancelScheduledReplaceBatch(): void {
+    if (this.replaceRafId !== null) {
+      cancelAnimationFrame(this.replaceRafId);
+      this.replaceRafId = null;
+    }
+  }
+
   updateContext(nextContext: Partial<StreamContext>): void {
     const previous = this.context;
     this.context = {
@@ -497,6 +523,7 @@ export class SpectrumStreamController {
       this.pendingByKind[selectedKind].length = 0;
     }
 
+    this.cancelScheduledReplaceBatch();
     this.pendingBatch = this.buildReplaceBatch();
     this.notifyFrameListeners();
   }
@@ -539,8 +566,7 @@ export class SpectrumStreamController {
     if (frame.kind === this.context.selectedKind) {
       if (radioSdrViewRangeChanged) {
         this.pendingByKind[frame.kind].length = 0;
-        this.pendingBatch = this.buildReplaceBatch();
-        this.notifyFrameListeners();
+        this.scheduleReplaceBatch();
       } else {
         const pendingQueue = this.pendingByKind[frame.kind];
         pendingQueue.push({

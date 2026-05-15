@@ -127,7 +127,29 @@ interface WebGLWaterfallProps {
 }
 
 const FREQUENCY_GESTURE_DRAG_THRESHOLD_PX = 4;
+export const WATERFALL_MAX_DEVICE_PIXEL_RATIO = 1.5;
 export const WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ = 15;
+
+export function getWaterfallCanvasPixelRatio(devicePixelRatio: number | null | undefined): number {
+  return Math.max(
+    1,
+    Math.min(
+      WATERFALL_MAX_DEVICE_PIXEL_RATIO,
+      typeof devicePixelRatio === 'number' && Number.isFinite(devicePixelRatio) ? devicePixelRatio : 1,
+    ),
+  );
+}
+
+export function createWaterfallUploadBuffer(width: number, height: number): Uint8Array {
+  return new Uint8Array(Math.max(0, width) * Math.max(0, height));
+}
+
+export function ensureWaterfallScratchRow(current: Uint8Array | null, width: number): Uint8Array {
+  if (!current || current.length !== width) {
+    return new Uint8Array(Math.max(0, width));
+  }
+  return current;
+}
 
 export function getWaterfallFrequencyPositionPercent(
   displayFrequency: number,
@@ -190,7 +212,7 @@ function calculateSpectrumAxisTransitionDuration(fromAxis: SpectrumAxis, toAxis:
 type MutableRef<T> = { current: T };
 
 export interface WaterfallTextureMemoryRefs {
-  textureDataRef: MutableRef<Uint8Array | null>;
+  scratchRowRef: MutableRef<Uint8Array | null>;
   lastDataLengthRef: MutableRef<number>;
   textureHeightRef: MutableRef<number>;
   rowCountRef: MutableRef<number>;
@@ -198,7 +220,7 @@ export interface WaterfallTextureMemoryRefs {
 }
 
 export function releaseWaterfallTextureMemoryRefs(refs: WaterfallTextureMemoryRefs): void {
-  refs.textureDataRef.current = null;
+  refs.scratchRowRef.current = null;
   refs.lastDataLengthRef.current = 0;
   refs.textureHeightRef.current = 1;
   refs.rowCountRef.current = 0;
@@ -371,7 +393,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const lastDataLengthRef = useRef<number>(0);
   const rangeUpdateCounterRef = useRef<number>(0);
   const cachedRangeRef = useRef<{min: number, max: number} | null>(null);
-  const textureDataRef = useRef<Uint8Array | null>(null);
+  const scratchRowRef = useRef<Uint8Array | null>(null);
   const heightRef = useRef(height);
   useEffect(() => { heightRef.current = height; }, [height]);
   const minDbRef = useRef(minDb);
@@ -394,6 +416,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const headRowLocationRef = useRef<WebGLUniformLocation | null>(null);
   const textureHeightLocationRef = useRef<WebGLUniformLocation | null>(null);
   const scrollRowsLocationRef = useRef<WebGLUniformLocation | null>(null);
+  const resolutionLocationRef = useRef<WebGLUniformLocation | null>(null);
+  const minDbLocationRef = useRef<WebGLUniformLocation | null>(null);
+  const maxDbLocationRef = useRef<WebGLUniformLocation | null>(null);
   const axisTransitionActiveLocationRef = useRef<WebGLUniformLocation | null>(null);
   const axisTransitionProgressLocationRef = useRef<WebGLUniformLocation | null>(null);
   const currentAxisLocationRef = useRef<WebGLUniformLocation | null>(null);
@@ -806,14 +831,14 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 0, 0);
 
       // 设置uniform
-      const resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
-      gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
+      resolutionLocationRef.current = gl.getUniformLocation(program, 'u_resolution');
+      gl.uniform2f(resolutionLocationRef.current, canvas.width, canvas.height);
 
-      const minDbLocation = gl.getUniformLocation(program, 'u_minDb');
-      gl.uniform1f(minDbLocation, minDbRef.current);
+      minDbLocationRef.current = gl.getUniformLocation(program, 'u_minDb');
+      gl.uniform1f(minDbLocationRef.current, minDbRef.current);
 
-      const maxDbLocation = gl.getUniformLocation(program, 'u_maxDb');
-      gl.uniform1f(maxDbLocation, maxDbRef.current);
+      maxDbLocationRef.current = gl.getUniformLocation(program, 'u_maxDb');
+      gl.uniform1f(maxDbLocationRef.current, maxDbRef.current);
 
       const useFloatTextureLocation = gl.getUniformLocation(program, 'u_useFloatTexture');
       gl.uniform1i(useFloatTextureLocation, 0);
@@ -992,18 +1017,18 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
   }, [render]);
 
-  const captureAxisTransitionTexture = useCallback((fromAxis: SpectrumAxis, toAxis: SpectrumAxis): boolean => {
+  const prepareAxisTransitionTexture = useCallback((fromAxis: SpectrumAxis, toAxis: SpectrumAxis): boolean => {
     const gl = glRef.current;
     const program = programRef.current;
+    const currentTexture = textureRef.current;
     const transitionTexture = transitionTextureRef.current;
-    const textureData = textureDataRef.current;
     const previousTextureHeight = textureHeightRef.current;
 
     if (
       !gl
       || !program
+      || !currentTexture
       || !transitionTexture
-      || !textureData
       || gl.isContextLost()
       || previousTextureHeight <= 0
       || fromAxis.binCount <= 0
@@ -1012,24 +1037,12 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       return false;
     }
 
+    textureRef.current = transitionTexture;
+    transitionTextureRef.current = currentTexture;
     gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, currentTexture);
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, transitionTexture);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      0,
-      gl.LUMINANCE,
-      fromAxis.binCount,
-      previousTextureHeight,
-      0,
-      gl.LUMINANCE,
-      gl.UNSIGNED_BYTE,
-      textureData
-    );
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
     gl.useProgram(program);
     if (transitionAxisLocationRef.current) {
@@ -1057,7 +1070,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
 
     const duration = calculateSpectrumAxisTransitionDuration(fromAxis, toAxis);
-    if (duration <= 0 || !captureAxisTransitionTexture(fromAxis, toAxis)) {
+    if (duration <= 0 || !prepareAxisTransitionTexture(fromAxis, toAxis)) {
       stopAxisTransition(false);
       return;
     }
@@ -1108,9 +1121,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       render();
     };
 
-    render();
     axisTransitionAnimRef.current = requestAnimationFrame(animate);
-  }, [captureAxisTransitionTexture, render, stopAxisTransition, updateCurrentAxisUniform]);
+  }, [prepareAxisTransitionTexture, render, stopAxisTransition, updateCurrentAxisUniform]);
 
   const buildSegments = useCallback((actualHeight: number, currentMin: number, currentMax: number) => {
     const segments: Array<{ rowCount: number; rangeMin: number; rangeScale: number }> = [];
@@ -1170,12 +1182,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const actualHeight = spectrumData.length;
     const textureHeight = totalRows ? Math.max(actualHeight, totalRows) : Math.max(actualHeight, 1);
     const dataSize = width * textureHeight;
-
-    if (!textureDataRef.current || textureDataRef.current.length !== dataSize) {
-      textureDataRef.current = new Uint8Array(dataSize);
-    }
-    const textureData = textureDataRef.current;
-    textureData.fill(0);
+    const textureData = createWaterfallUploadBuffer(width, textureHeight);
 
     let currentMin = minDb;
     let currentMax = maxDb;
@@ -1212,14 +1219,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, textureHeight, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureData);
-
-    if (lastDataLengthRef.current !== dataSize) {
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      lastDataLengthRef.current = dataSize;
-    }
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    lastDataLengthRef.current = dataSize;
 
     rowCountRef.current = actualHeight;
     updateTextureMetadata(textureHeight, 0);
@@ -1243,9 +1247,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const releaseTextureStorage = useCallback((shouldRender = true) => {
     const gl = glRef.current;
     const texture = textureRef.current;
+    const transitionTexture = transitionTextureRef.current;
     const program = programRef.current;
     releaseWaterfallTextureMemoryRefs({
-      textureDataRef,
+      scratchRowRef,
       lastDataLengthRef,
       textureHeightRef,
       rowCountRef,
@@ -1260,6 +1265,12 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array(1));
+    if (transitionTexture) {
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, transitionTexture);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array(1));
+    }
 
     if (program && scrollRowsLocationRef.current) {
       gl.useProgram(program);
@@ -1301,12 +1312,6 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const actualHeight = spectrumData.length;
     const previousTextureHeight = textureHeightRef.current;
     const textureHeight = totalRows ? Math.max(actualHeight, totalRows) : Math.max(actualHeight, 1);
-    const dataSize = width * textureHeight;
-
-    if (!textureDataRef.current || textureDataRef.current.length !== dataSize) {
-      textureDataRef.current = new Uint8Array(dataSize);
-    }
-    const textureData = textureDataRef.current;
 
     let txModeChanged = false;
     if (autoRange && isTransmitting !== prevTransmittingRef.current && prevTransmittingRef.current !== undefined) {
@@ -1354,7 +1359,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     for (const row of rowsToAppend) {
       headRow = (headRow - 1 + textureHeight) % textureHeight;
-      writeNormalizedRow(textureData, headRow, row, width, currentMin, rangeScale);
+      const scratchRow = ensureWaterfallScratchRow(scratchRowRef.current, width);
+      scratchRowRef.current = scratchRow;
+      writeNormalizedRow(scratchRow, 0, row, width, currentMin, rangeScale);
       gl.texSubImage2D(
         gl.TEXTURE_2D,
         0,
@@ -1364,7 +1371,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         1,
         gl.LUMINANCE,
         gl.UNSIGNED_BYTE,
-        textureData.subarray(headRow * width, (headRow + 1) * width)
+        scratchRow
       );
     }
 
@@ -1392,23 +1399,25 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     // 获取容器的实际尺寸
     const containerRect = container.getBoundingClientRect();
-    const pixelRatio = window.devicePixelRatio || 1;
+    const pixelRatio = getWaterfallCanvasPixelRatio(window.devicePixelRatio);
 
     // 使用容器的宽度和传入的height（通过 ref 读取，避免 handleResize 随 height 变化重建）
     const canvasWidth = containerRect.width;
     const canvasHeight = heightRef.current;
+    const nextCanvasWidth = Math.max(1, Math.round(canvasWidth * pixelRatio));
+    const nextCanvasHeight = Math.max(1, Math.round(canvasHeight * pixelRatio));
 
     // 防止零尺寸导致 WebGL 错误（布局切换时容器可能瞬间为 0）
     if (canvasWidth <= 0 || canvasHeight <= 0) return;
     
     // 只在尺寸真正改变时更新
-    if (canvas.width === canvasWidth * pixelRatio && 
-        canvas.height === canvasHeight * pixelRatio) {
+    if (canvas.width === nextCanvasWidth && 
+        canvas.height === nextCanvasHeight) {
       return;
     }
     
-    canvas.width = canvasWidth * pixelRatio;
-    canvas.height = canvasHeight * pixelRatio;
+    canvas.width = nextCanvasWidth;
+    canvas.height = nextCanvasHeight;
     
     canvas.style.width = `${canvasWidth}px`;
     canvas.style.height = `${canvasHeight}px`;
@@ -1423,8 +1432,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       gl.viewport(0, 0, canvas.width, canvas.height);
       
       // 更新分辨率uniform
-      const resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
-      gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
+      if (resolutionLocationRef.current) {
+        gl.uniform2f(resolutionLocationRef.current, canvas.width, canvas.height);
+      }
       
       // 重用已有的缓冲区，只更新数据
       const positions = new Float32Array([
@@ -1749,10 +1759,12 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     if (!gl || !program) return;
 
     gl.useProgram(program);
-    const minDbLocation = gl.getUniformLocation(program, 'u_minDb');
-    const maxDbLocation = gl.getUniformLocation(program, 'u_maxDb');
-    gl.uniform1f(minDbLocation, minDb);
-    gl.uniform1f(maxDbLocation, maxDb);
+    if (minDbLocationRef.current) {
+      gl.uniform1f(minDbLocationRef.current, minDb);
+    }
+    if (maxDbLocationRef.current) {
+      gl.uniform1f(maxDbLocationRef.current, maxDb);
+    }
 
     if (displayRowsRef.current.length > 0 && currentAxisRef.current) {
       rebuildTexture(displayRowsRef.current, currentAxisRef.current);

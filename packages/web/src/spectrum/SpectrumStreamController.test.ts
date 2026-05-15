@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Buffer } from 'node:buffer';
 import type { SpectrumFrame, SpectrumKind } from '@tx5dr/contracts';
-import { SpectrumStreamController } from './SpectrumStreamController';
+import { SpectrumStreamController, cropSpectrumToRange } from './SpectrumStreamController';
 
 type ControllerInternals = {
   histories: Record<SpectrumKind, Array<{
@@ -170,12 +170,20 @@ describe('SpectrumStreamController memory behavior', () => {
     });
 
     controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200, 300, 400], { min: 0, max: 400 }));
+    flushNextAnimationFrame();
     const batch = controller.consumeRenderBatch();
 
     expect(batch?.mode).toBe('replace');
     expect(batch?.axis).toEqual({ minHz: 0, maxHz: 400, binCount: 5 });
     expect(batch?.rowTimestamps).toEqual([10]);
     expect(Array.from(batch?.rows[0] ?? [])).toEqual([0, 100, 200, 300, 400]);
+  });
+
+  it('reuses spectrum rows when cropping to the same source range', () => {
+    const values = new Float32Array([0, 100, 200]);
+    const cropped = cropSpectrumToRange(values, { min: 900, max: 1100 }, { min: 900, max: 1100 });
+
+    expect(cropped).toBe(values);
   });
 
   it('ignores stale radio SDR display ranges that do not overlap the incoming frame', () => {
@@ -192,6 +200,7 @@ describe('SpectrumStreamController memory behavior', () => {
     });
 
     controller.pushFrame(makeFrame('radio-sdr', 10, [10, 20, 30, 40, 50], { min: 0, max: 400 }));
+    flushNextAnimationFrame();
     const batch = controller.consumeRenderBatch();
 
     expect(batch?.mode).toBe('replace');
@@ -203,9 +212,11 @@ describe('SpectrumStreamController memory behavior', () => {
     const controller = new SpectrumStreamController(4);
     controller.updateContext({ selectedKind: 'radio-sdr' });
     controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200], { min: 900, max: 1100 }));
+    flushNextAnimationFrame();
     controller.consumeRenderBatch();
 
     controller.pushFrame(makeFrame('radio-sdr', 11, [10, 110, 210], { min: 1000, max: 1200 }));
+    flushNextAnimationFrame();
     const batch = controller.consumeRenderBatch();
 
     expect(batch?.mode).toBe('replace');
@@ -219,6 +230,7 @@ describe('SpectrumStreamController memory behavior', () => {
     const controller = new SpectrumStreamController(4);
     controller.updateContext({ selectedKind: 'radio-sdr' });
     controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200], { min: 900, max: 1100 }));
+    flushNextAnimationFrame();
     controller.consumeRenderBatch();
 
     controller.setRadioSdrOptimisticFrequencyIntent({
@@ -226,6 +238,7 @@ describe('SpectrumStreamController memory behavior', () => {
       baselineFrequencyHz: 1000,
       baselineFrameCenterHz: 1000,
     });
+    flushNextAnimationFrame();
     const batch = controller.consumeRenderBatch();
 
     expect(batch?.mode).toBe('replace');
@@ -239,6 +252,7 @@ describe('SpectrumStreamController memory behavior', () => {
     const controller = new SpectrumStreamController(4);
     controller.updateContext({ selectedKind: 'radio-sdr' });
     controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200], { min: 900, max: 1100 }));
+    flushNextAnimationFrame();
     controller.consumeRenderBatch();
 
     controller.setRadioSdrOptimisticFrequencyIntent({
@@ -246,6 +260,7 @@ describe('SpectrumStreamController memory behavior', () => {
       baselineFrequencyHz: 1000,
       baselineFrameCenterHz: 1000,
     });
+    flushNextAnimationFrame();
     controller.consumeRenderBatch();
 
     controller.pushFrame(makeFrame('radio-sdr', 11, [10, 110, 210], { min: 900, max: 1100 }));
@@ -263,6 +278,7 @@ describe('SpectrumStreamController memory behavior', () => {
     const controller = new SpectrumStreamController(4);
     controller.updateContext({ selectedKind: 'radio-sdr' });
     controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200], { min: 900, max: 1100 }));
+    flushNextAnimationFrame();
     controller.consumeRenderBatch();
 
     controller.setRadioSdrOptimisticFrequencyIntent({
@@ -270,12 +286,14 @@ describe('SpectrumStreamController memory behavior', () => {
       baselineFrequencyHz: 1000,
       baselineFrameCenterHz: 1000,
     });
+    flushNextAnimationFrame();
     controller.consumeRenderBatch();
     controller.setRadioSdrOptimisticFrequencyIntent({
       targetFrequencyHz: 1200,
       baselineFrequencyHz: 1000,
       baselineFrameCenterHz: 1000,
     });
+    flushNextAnimationFrame();
     const batch = controller.consumeRenderBatch();
 
     expect(batch?.mode).toBe('replace');
@@ -285,10 +303,43 @@ describe('SpectrumStreamController memory behavior', () => {
     controller.setRadioSdrOptimisticFrequencyIntent(null);
   });
 
+  it('coalesces rapid radio SDR view range changes into one replace batch per RAF', () => {
+    const controller = new SpectrumStreamController(4);
+    const frameListener = vi.fn();
+    controller.updateContext({ selectedKind: 'radio-sdr' });
+    controller.subscribeFrameTick(frameListener);
+    controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200], { min: 900, max: 1100 }));
+    flushNextAnimationFrame();
+    controller.consumeRenderBatch();
+    frameListener.mockClear();
+
+    controller.setRadioSdrOptimisticFrequencyIntent({
+      targetFrequencyHz: 1100,
+      baselineFrequencyHz: 1000,
+      baselineFrameCenterHz: 1000,
+    });
+    controller.setRadioSdrOptimisticFrequencyIntent({
+      targetFrequencyHz: 1200,
+      baselineFrequencyHz: 1000,
+      baselineFrameCenterHz: 1000,
+    });
+
+    expect(rafCallbacks.size).toBe(1);
+    flushNextAnimationFrame();
+    const batch = controller.consumeRenderBatch();
+
+    expect(frameListener).toHaveBeenCalledTimes(1);
+    expect(batch?.mode).toBe('replace');
+    expect(batch?.axis).toEqual({ minHz: 1100, maxHz: 1300, binCount: 3 });
+
+    controller.setRadioSdrOptimisticFrequencyIntent(null);
+  });
+
   it('clears optimistic radio SDR offset when a confirming frame arrives', () => {
     const controller = new SpectrumStreamController(4);
     controller.updateContext({ selectedKind: 'radio-sdr' });
     controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200], { min: 900, max: 1100 }));
+    flushNextAnimationFrame();
     controller.consumeRenderBatch();
 
     controller.setRadioSdrOptimisticFrequencyIntent({
@@ -296,9 +347,11 @@ describe('SpectrumStreamController memory behavior', () => {
       baselineFrequencyHz: 1000,
       baselineFrameCenterHz: 1000,
     });
+    flushNextAnimationFrame();
     controller.consumeRenderBatch();
 
     controller.pushFrame(makeFrame('radio-sdr', 11, [10, 110, 210], { min: 1000, max: 1200 }));
+    flushNextAnimationFrame();
     const batch = controller.consumeRenderBatch();
 
     expect(batch?.mode).toBe('replace');
@@ -313,6 +366,7 @@ describe('SpectrumStreamController memory behavior', () => {
       const controller = new SpectrumStreamController(4);
       controller.updateContext({ selectedKind: 'radio-sdr' });
       controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200], { min: 900, max: 1100 }));
+      flushNextAnimationFrame();
       controller.consumeRenderBatch();
 
       controller.setRadioSdrOptimisticFrequencyIntent({
@@ -321,9 +375,11 @@ describe('SpectrumStreamController memory behavior', () => {
         baselineFrameCenterHz: 1000,
         timeoutMs: 10,
       });
+      flushNextAnimationFrame();
       controller.consumeRenderBatch();
 
       vi.advanceTimersByTime(10);
+      flushNextAnimationFrame();
       const batch = controller.consumeRenderBatch();
 
       expect(batch?.mode).toBe('replace');
