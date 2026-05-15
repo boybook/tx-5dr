@@ -14,6 +14,17 @@ test('FT8 Fox/Hound RR73 parsing exposes senderCallsign when full Fox callsign i
   assert.equal(parsed.snrForNext, -20);
 });
 
+test('FT8 Fox/Hound RR73 parsing supports BD4XYR completion sample', () => {
+  const parsed = FT8MessageParser.parseMessage('BD4XYR RR73; JH1UBK <EX8ABR> -24');
+
+  assert.equal(parsed.type, FT8MessageType.FOX_RR73);
+  assert.equal(parsed.senderCallsign, 'EX8ABR');
+  assert.equal(parsed.completedCallsign, 'BD4XYR');
+  assert.equal(parsed.nextCallsign, 'JH1UBK');
+  assert.equal(parsed.foxHash, 'EX8ABR');
+  assert.equal(parsed.snrForNext, -24);
+});
+
 test('FT8 Fox/Hound RR73 parsing keeps senderCallsign empty when only short hash is present', () => {
   const parsed = FT8MessageParser.parseMessage('JA0OAV RR73; JG1MPG <4>');
 

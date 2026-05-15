@@ -93,7 +93,9 @@ export function shouldTriggerMessage(
   }
 
   if (triggerMode === 'cq-or-signoff') {
-    return message.type === FT8MessageType.RRR || message.type === FT8MessageType.SEVENTY_THREE;
+    return message.type === FT8MessageType.RRR
+      || message.type === FT8MessageType.SEVENTY_THREE
+      || message.type === FT8MessageType.FOX_RR73;
   }
 
   return false;

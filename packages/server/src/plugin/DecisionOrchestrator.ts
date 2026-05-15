@@ -487,6 +487,19 @@ export class DecisionOrchestrator {
     targetCallsign: string,
     myCallsign: string,
   ): boolean {
+    if (message.message.type === FT8MessageType.FOX_RR73) {
+      const foxMessage = message.message as { completedCallsign?: unknown; senderCallsign?: unknown };
+      const completedCallsign = typeof foxMessage.completedCallsign === 'string'
+        ? foxMessage.completedCallsign.trim().toUpperCase()
+        : undefined;
+      if (completedCallsign !== myCallsign) {
+        return false;
+      }
+
+      const senderCallsign = getParsedMessageSenderCallsign(message.message);
+      return senderCallsign === undefined || senderCallsign === targetCallsign;
+    }
+
     const senderCallsign = getParsedMessageSenderCallsign(message.message);
     const target = getParsedMessageTargetCallsign(message.message);
     if (senderCallsign !== targetCallsign || target !== myCallsign) {

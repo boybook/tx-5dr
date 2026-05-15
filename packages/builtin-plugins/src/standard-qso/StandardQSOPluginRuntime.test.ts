@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MODES, type FrameMessage, type OperatorConfig, type SlotInfo } from '@tx5dr/contracts';
+import { MODES, type FrameMessage, type OperatorConfig, type ParsedFT8Message, type SlotInfo } from '@tx5dr/contracts';
+import { FT8MessageParser } from '@tx5dr/core';
 import {
   StandardQSOPluginRuntime,
   type StandardQSOPluginOperator,
@@ -151,5 +152,37 @@ describe('StandardQSOPluginRuntime nonstandard callsign slots', () => {
     const snapshot = runtime.getSnapshot();
     expect(snapshot.currentState).toBe('TX4');
     expect(snapshot.slots?.TX4).toBe('<VA7CD/DU7> BG5DRB RR73');
+  });
+
+  it('advances from TX3 when Fox/Hound RR73 completes my callsign', async () => {
+    const operator = createOperator({ myCallsign: 'BD4XYR', myGrid: 'OM89' });
+    const runtime = new StandardQSOPluginRuntime(operator);
+    const rawMessage = 'BD4XYR RR73; JH1UBK <EX8ABR> -24';
+    const parsedMessage: ParsedFT8Message = {
+      snr: -10,
+      dt: 0,
+      df: 1500,
+      rawMessage,
+      message: FT8MessageParser.parseMessage(rawMessage),
+      slotId: 'slot-fox-rr73',
+      timestamp: 0,
+    };
+
+    runtime.patchContext({
+      targetCallsign: 'EX8ABR',
+      reportSent: -24,
+      reportReceived: -10,
+    });
+    runtime.setState('TX3');
+
+    await runtime.decide([parsedMessage]);
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.currentState).toBe('TX5');
+    expect(snapshot.slots?.TX5).toBe('EX8ABR BD4XYR 73');
+    expect(operator.recordQSOLog).toHaveBeenCalledWith(expect.objectContaining({
+      callsign: 'EX8ABR',
+      myCallsign: 'BD4XYR',
+    }));
   });
 });

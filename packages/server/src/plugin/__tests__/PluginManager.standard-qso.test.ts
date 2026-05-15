@@ -1998,6 +1998,50 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('preserves Fox/Hound RR73 completion during late re-decision even when filters reject it', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BD4XYR',
+      myGrid: 'OM89',
+      targetCallsign: 'EX8ABR',
+      pluginConfigs: {
+        'snr-filter': {
+          enabled: true,
+          settings: {
+            minSNR: -15,
+          },
+        },
+      },
+    });
+
+    patchRuntimeContext(pluginManager, operator.config.id, {
+      targetCallsign: 'EX8ABR',
+      reportSent: -24,
+      reportReceived: -10,
+    });
+    setRuntimeState(pluginManager, operator.config.id, 'TX3');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('EX8ABR BD4XYR R-24');
+
+    await (pluginManager as any).handleSlotStart(
+      createSlotInfo(60_000),
+      createSlotPack(createSlotInfo(45_000), []),
+    );
+
+    const changed = await pluginManager.reDecideOperator(
+      operator.config.id,
+      createSlotPack(createSlotInfo(45_000), [{
+        message: 'BD4XYR RR73; JH1UBK <EX8ABR> -24',
+        snr: -24,
+        freq: 971,
+      }]),
+    );
+
+    expect(changed).toBe(true);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX5');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('EX8ABR BD4XYR 73');
+
+    await pluginManager.shutdown();
+  });
+
   it('biases candidate scores using worked-station-bias', async () => {
     const hasWorkedSpy = vi.fn((callsign: string) => callsign === 'BG5DRB' || callsign === 'K1AAA');
     const { operator, pluginManager } = await createRuntimeHarness({
@@ -2301,6 +2345,78 @@ describe('PluginManager standard-qso late re-decision', () => {
     expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('BG5DRB BG7XTV OL32');
 
     await pluginManager.shutdown();
+  });
+
+  it('supports Fox/Hound RR73 in cq-or-signoff mode for watched-callsign-autocall', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      startOperator: false,
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      pluginConfigs: {
+        'watched-callsign-autocall': {
+          enabled: true,
+          settings: {},
+        },
+      },
+      operatorPluginSettings: {
+        'watched-callsign-autocall': {
+          watchList: ['EX8ABR'],
+          triggerMode: 'cq-or-signoff',
+          workedCallsignSkipDays: 0,
+        },
+      },
+    });
+
+    await (pluginManager as any).handleSlotStart(
+      createSlotInfo(30_000),
+      createSlotPack(createSlotInfo(15_000), [{
+        message: 'BD4XYR RR73; JH1UBK <EX8ABR> -24',
+        snr: -24,
+        freq: 1502,
+      }]),
+    );
+
+    expect(operator.isTransmitting).toBe(true);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBe('EX8ABR');
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX1');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('EX8ABR BG7XTV OL32');
+
+    await pluginManager.shutdown();
+  });
+
+  it('does not treat Fox/Hound completed or next Hound callsigns as watched autocall senders', async () => {
+    for (const watchList of [['BD4XYR'], ['JH1UBK']]) {
+      const { operator, pluginManager } = await createRuntimeHarness({
+        startOperator: false,
+        pluginConfigs: {
+          'watched-callsign-autocall': {
+            enabled: true,
+            settings: {},
+          },
+        },
+        operatorPluginSettings: {
+          'watched-callsign-autocall': {
+            watchList,
+            triggerMode: 'cq-or-signoff',
+            workedCallsignSkipDays: 0,
+          },
+        },
+      });
+
+      await (pluginManager as any).handleSlotStart(
+        createSlotInfo(30_000),
+        createSlotPack(createSlotInfo(15_000), [{
+          message: 'BD4XYR RR73; JH1UBK <EX8ABR> -24',
+          snr: -24,
+          freq: 1502,
+        }]),
+      );
+
+      expect(operator.isTransmitting).toBe(false);
+      expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBeUndefined();
+
+      await pluginManager.shutdown();
+    }
   });
 
   it('does not interrupt a non-idle operator when watched-callsign-autocall matches', async () => {
