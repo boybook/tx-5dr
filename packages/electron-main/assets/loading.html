@@ -52,6 +52,34 @@
     text-align: center;
   }
 
+  .log-preview {
+    width: min(680px, calc(100vw - 40px));
+    margin-top: 10px;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: rgba(55, 65, 81, 0.54);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 10px;
+    line-height: 1.4;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: default;
+    -webkit-app-region: no-drag;
+  }
+
+  .log-preview:hover {
+    background: rgba(17, 24, 39, 0.045);
+    color: rgba(55, 65, 81, 0.72);
+  }
+
+  .shell.logs-expanded .log-preview {
+    display: none;
+  }
+
   .startup-error {
     position: relative;
     display: none;
@@ -144,7 +172,12 @@
 
   .log-wrap {
     position: relative;
+    display: none;
     width: 100%;
+  }
+
+  .shell.logs-expanded .log-wrap {
+    display: block;
   }
 
   .open-logs-button {
@@ -258,6 +291,15 @@
       color: rgba(212, 212, 216, 0.66);
     }
 
+    .log-preview {
+      color: rgba(212, 212, 216, 0.54);
+    }
+
+    .log-preview:hover {
+      background: rgba(255, 255, 255, 0.075);
+      color: rgba(212, 212, 216, 0.72);
+    }
+
     .open-logs-button {
       background: rgba(255, 255, 255, 0.075);
       color: rgba(212, 212, 216, 0.54);
@@ -288,6 +330,10 @@
       height: 48vh;
       font-size: 9px;
     }
+
+    .log-preview {
+      width: calc(100vw - 24px);
+    }
   }
 
   @keyframes spin {
@@ -300,6 +346,7 @@
     <div class="startup-mark">
       <div class="spinner"></div>
       <div class="text" id="loading-text">Starting...</div>
+      <button class="log-preview" id="log-preview" type="button">Waiting for log output...</button>
       <div class="startup-error" id="startup-error" role="alert">
         <svg class="startup-error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M12 3 2.8 19h18.4L12 3z"></path>
@@ -336,15 +383,29 @@
     const startupErrorMessage = document.getElementById('startup-error-message');
     const startupErrorDetail = document.getElementById('startup-error-detail');
     const startupErrorActions = document.getElementById('startup-error-actions');
+    const shell = document.querySelector('.shell');
+    const logPreview = document.getElementById('log-preview');
     const logCard = document.getElementById('log-card');
     const openLogsButton = document.getElementById('open-logs-button');
+    logPreview.setAttribute('aria-label', text.waiting);
+    logPreview.setAttribute('title', text.waiting);
     openLogsButton.setAttribute('aria-label', text.openLogs);
     openLogsButton.setAttribute('title', text.openLogs);
     const MAX_RENDERED_LINES = 300;
     let lines = [];
+    let isExpanded = false;
     let unsubscribe = null;
 
     function renderLines() {
+      shell.classList.toggle('logs-expanded', isExpanded);
+      const latestLine = lines.length > 0 ? lines[lines.length - 1].text : text.waiting;
+      logPreview.textContent = latestLine;
+      logPreview.setAttribute('aria-label', latestLine);
+      logPreview.setAttribute('title', latestLine);
+      if (!isExpanded) {
+        return;
+      }
+
       const shouldStick = logCard.scrollHeight - logCard.scrollTop - logCard.clientHeight < 32;
       logCard.textContent = '';
       if (lines.length === 0) {
@@ -407,6 +468,7 @@
       }
 
       startupMark.classList.add('has-error');
+      isExpanded = true;
       startupErrorTitle.textContent = error.title || '';
       startupErrorMessage.textContent = error.message || '';
       startupErrorDetail.textContent = error.detail || '';
@@ -487,6 +549,11 @@
       } catch (error) {
         console.warn('Failed to open startup log folder', error);
       }
+    });
+
+    logPreview.addEventListener('click', () => {
+      isExpanded = true;
+      renderLines();
     });
 
     renderLines();

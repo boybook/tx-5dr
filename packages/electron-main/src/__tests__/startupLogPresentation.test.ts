@@ -4,9 +4,13 @@ import { describe, expect, it } from 'vitest';
 
 type Classifier = (value: string) => string;
 
-function loadStartupLogClassifier(): Classifier {
+function loadStartupHtml(): string {
   const htmlPath = path.resolve(__dirname, '../../assets/loading.html');
-  const html = readFileSync(htmlPath, 'utf8');
+  return readFileSync(htmlPath, 'utf8');
+}
+
+function loadStartupLogClassifier(): Classifier {
+  const html = loadStartupHtml();
   const match = html.match(/\/\/ STARTUP_LOG_CLASSIFIER_START([\s\S]*?)\/\/ STARTUP_LOG_CLASSIFIER_END/);
 
   if (!match) {
@@ -19,6 +23,24 @@ function loadStartupLogClassifier(): Classifier {
 const getLogLineClassName = loadStartupLogClassifier();
 
 describe('startup loading log presentation', () => {
+  it('starts with a collapsed one-line log preview', () => {
+    const html = loadStartupHtml();
+
+    expect(html).toContain('class="log-preview" id="log-preview"');
+    expect(html).toContain('.log-preview:hover');
+    expect(html).toContain('.log-wrap {\n    position: relative;\n    display: none;');
+    expect(html).toContain('.shell.logs-expanded .log-wrap {\n    display: block;');
+    expect(html).toContain('let isExpanded = false;');
+    expect(html).toContain("shell.classList.toggle('logs-expanded', isExpanded);");
+  });
+
+  it('expands the full log card after click or startup error', () => {
+    const html = loadStartupHtml();
+
+    expect(html).toContain("logPreview.addEventListener('click', () => {");
+    expect(html).toContain('startupMark.classList.add(\'has-error\');\n      isExpanded = true;');
+  });
+
   it('keeps normal child lifecycle lines neutral', () => {
     const neutralLines = [
       '[2026-05-10 12:37:12.342] [info] [ElectronMain] [child:client-tools] starting entry=/Users/fangyizhou/Documents/coding/tx-5dr/packages/client-tools/src/proxy.js cwd=/Users/fangyizhou/Documents/coding/tx-5dr/packages/client-tools/src',
