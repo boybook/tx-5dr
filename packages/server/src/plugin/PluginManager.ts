@@ -68,6 +68,7 @@ const PLUGIN_RUNTIME_LOG_HISTORY_LIMIT = 1000;
  * - 持久化插件配置
  */
 export class PluginManager {
+  private static readonly MAX_PAGE_PUSH_QUEUE = 500;
   private loadedPlugins = new Map<string, LoadedPlugin>();
   // operatorId → Map<pluginName, PluginInstance>
   private instances = new Map<string, Map<string, PluginInstance>>();
@@ -81,6 +82,13 @@ export class PluginManager {
   private unsubscribeFns: Array<() => void> = [];
   private _logbookSyncHost: import('./LogbookSyncHost.js').LogbookSyncHost;
   private readonly pageSessions = new PluginPageSessionStore();
+  private readonly pageSessionPushQueues = new Map<string, Array<{
+    pluginName: string;
+    pageId: string;
+    pageSessionId: string;
+    action: string;
+    data?: unknown;
+  }>>();
   private readonly panelMetaState = new Map<string, PluginPanelMetaPayload>();
   private readonly runtimePanelContributions = new Map<string, PluginUIPanelContributionGroup>();
   private pluginRuntimeLogHistory: PluginLogHistoryEntry[] = [];
@@ -693,6 +701,7 @@ export class PluginManager {
 
   deletePluginPageSession(sessionId: string): void {
     this.pageSessions.delete(sessionId);
+    this.pageSessionPushQueues.delete(sessionId);
   }
 
   listPluginPageSessions(
@@ -718,13 +727,47 @@ export class PluginManager {
       throw new Error(`Page session does not belong to ${pluginName}/${pageId}: ${pageSessionId}`);
     }
 
-    this.eventEmitter.emit('pluginPagePush', {
+    const payload = {
       pluginName,
       pageId,
       pageSessionId,
       action,
       data,
-    });
+    };
+
+    const queue = this.pageSessionPushQueues.get(pageSessionId) ?? [];
+    queue.push(payload);
+    if (queue.length > PluginManager.MAX_PAGE_PUSH_QUEUE) {
+      queue.splice(0, queue.length - PluginManager.MAX_PAGE_PUSH_QUEUE);
+    }
+    this.pageSessionPushQueues.set(pageSessionId, queue);
+
+    this.eventEmitter.emit('pluginPagePush', payload);
+  }
+
+  pullPluginPageSessionPushes(
+    pluginName: string,
+    pageId: string,
+    pageSessionId: string,
+  ): Array<{
+    pluginName: string;
+    pageId: string;
+    pageSessionId: string;
+    action: string;
+    data?: unknown;
+  }> {
+    const session = this.pageSessions.get(pageSessionId);
+    if (!session) {
+      this.pageSessionPushQueues.delete(pageSessionId);
+      throw new Error(`Page session not found: ${pageSessionId}`);
+    }
+    if (session.pluginName !== pluginName || session.pageId !== pageId) {
+      throw new Error(`Page session does not belong to ${pluginName}/${pageId}: ${pageSessionId}`);
+    }
+
+    const queued = this.pageSessionPushQueues.get(pageSessionId) ?? [];
+    this.pageSessionPushQueues.delete(pageSessionId);
+    return queued;
   }
 
   /** Host-side manager for logbook sync providers registered by plugins. */

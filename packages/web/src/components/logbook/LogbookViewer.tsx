@@ -327,6 +327,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     code: string;
     severity: 'info' | 'warning' | 'error';
     message: string;
+    detail?: string;
+    qsoId?: string;
+    qsoCallsign?: string;
   }
   interface SyncUploadPreflightResult {
     ready: boolean;
@@ -334,6 +337,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     uploadableCount: number;
     blockedCount: number;
     issues?: SyncPreflightIssue[];
+    canSkipBlocked?: boolean;
     guidance?: string[];
   }
   interface SyncFailure {
@@ -536,6 +540,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     // Format upload result: "uploaded 3, skipped 1, failed 0"
     const fmtUpload = (res: Record<string, unknown>): string => {
       const parts: string[] = [];
+      if (res.submitted) parts.push(t('sync.provider.resultSubmitted', { count: res.submitted }));
+      if (res.verified) parts.push(t('sync.provider.resultVerified', { count: res.verified }));
       if (res.uploaded) parts.push(t('sync.provider.resultUploaded', { count: res.uploaded }));
       if (res.skipped) parts.push(t('sync.provider.resultSkipped', { count: res.skipped }));
       if (res.failed) parts.push(t('sync.provider.resultFailed', { count: res.failed }));
@@ -549,6 +555,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       if (res.downloaded) parts.push(t('sync.provider.resultDownloaded', { count: res.downloaded }));
       if (res.matched) parts.push(t('sync.provider.resultMatched', { count: res.matched }));
       if (res.updated) parts.push(t('sync.provider.resultUpdated', { count: res.updated }));
+      if (res.imported) parts.push(t('sync.provider.resultImported', { count: res.imported }));
+      if (res.windowCount) parts.push(t('sync.provider.resultWindows', { count: res.windowCount }));
       if (parts.length === 0) parts.push(t('sync.provider.resultDownloaded', { count: 0 }));
       return parts.join(t('sync.provider.resultSeparator'));
     };
@@ -561,6 +569,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         if (failure.qsoCallsign) parts.push(`${failure.qsoCallsign}:`);
         parts.push(failure.message || failure.code);
         if (failure.httpStatus) parts.push(`(HTTP ${failure.httpStatus})`);
+        if (failure.retryable) parts.push(`[${t('sync.provider.retryable')}]`);
         if (failure.detail && failure.detail !== failure.message) parts.push(`— ${failure.detail}`);
         return parts.join(' ');
       });
@@ -584,7 +593,14 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         }),
       ];
       if (result.issues?.length) {
-        lines.push(...result.issues.map((issue) => issue.message));
+        lines.push(...result.issues.map((issue) => {
+          const details = [
+            issue.qsoCallsign ? `QSO=${issue.qsoCallsign}` : '',
+            issue.qsoId ? `id=${issue.qsoId}` : '',
+            issue.detail && issue.detail !== issue.message ? issue.detail : '',
+          ].filter(Boolean);
+          return details.length > 0 ? `${issue.message} (${details.join('; ')})` : issue.message;
+        }));
       }
       return lines.join('\n');
     };
@@ -2323,11 +2339,12 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           // Refresh logbook data in case the action modified records
           refreshLogbookData();
         }}
-        size="lg"
+        size={actionModal?.pageId === 'upload-wizard' ? '3xl' : 'lg'}
+        scrollBehavior="inside"
       >
-        <ModalContent className="overflow-hidden">
+        <ModalContent className="max-h-[85vh] overflow-hidden">
           <ModalHeader>{actionModal?.title}</ModalHeader>
-          <ModalBody className="p-0">
+          <ModalBody className="min-h-0 overflow-y-auto p-0">
             {actionModal && (
               <PluginIframeHost
                 pluginName={actionModal.pluginName}

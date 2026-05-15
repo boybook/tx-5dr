@@ -850,10 +850,10 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.post<{
     Params: { providerId: string };
-    Body: { callsign: string };
+    Body: { callsign: string; since?: number; until?: number; includeAlreadyUploaded?: boolean };
   }>('/sync-providers/:providerId/upload-preflight', async (req, reply) => {
     const { providerId } = req.params;
-    const { callsign } = req.body ?? {};
+    const { callsign, since, until, includeAlreadyUploaded } = req.body ?? {};
     if (!callsign) {
       return reply.status(400).send(syncRouteFailure('sync_callsign_required', 'callsign is required', {
         providerId,
@@ -874,7 +874,11 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     try {
-      const result = await engine.pluginManager.logbookSyncHost.getUploadPreflight(providerId, callsign);
+      const result = await engine.pluginManager.logbookSyncHost.getUploadPreflight(providerId, callsign, {
+        since,
+        until,
+        includeAlreadyUploaded: includeAlreadyUploaded === true,
+      });
       return reply.send(result);
     } catch (err) {
       logger.error(`Sync upload preflight failed: provider=${providerId}`, err);
@@ -884,10 +888,10 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.post<{
     Params: { providerId: string };
-    Body: { callsign: string };
+    Body: { callsign: string; skipBlockedQsos?: boolean; since?: number; until?: number; includeAlreadyUploaded?: boolean };
   }>('/sync-providers/:providerId/upload', async (req, reply) => {
     const { providerId } = req.params;
-    const { callsign } = req.body ?? {};
+    const { callsign, skipBlockedQsos, since, until, includeAlreadyUploaded } = req.body ?? {};
     if (!callsign) {
       return reply.status(400).send(syncRouteFailure('sync_callsign_required', 'callsign is required', {
         providerId,
@@ -908,7 +912,12 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     try {
-      const result = await engine.pluginManager.logbookSyncHost.upload(providerId, callsign);
+      const result = await engine.pluginManager.logbookSyncHost.upload(providerId, callsign, {
+        skipBlockedQsos: skipBlockedQsos === true,
+        since,
+        until,
+        includeAlreadyUploaded: includeAlreadyUploaded === true,
+      });
       return reply.send(result);
     } catch (err) {
       logger.error(`Sync upload failed: provider=${providerId}`, err);
@@ -918,10 +927,10 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.post<{
     Params: { providerId: string };
-    Body: { callsign: string; since?: number };
+    Body: { callsign: string; since?: number; until?: number };
   }>('/sync-providers/:providerId/download', async (req, reply) => {
     const { providerId } = req.params;
-    const { callsign, since } = req.body ?? {};
+    const { callsign, since, until } = req.body ?? {};
     if (!callsign) {
       return reply.status(400).send(syncRouteFailure('sync_callsign_required', 'callsign is required', {
         providerId,
@@ -942,7 +951,7 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     try {
-      const options = since ? { since } : undefined;
+      const options = since || until ? { since, until } : undefined;
       const result = await engine.pluginManager.logbookSyncHost.download(providerId, callsign, options);
       return reply.send(result);
     } catch (err) {
@@ -1434,6 +1443,38 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
       }
 
       return reply.send({ result: true });
+    },
+  );
+
+  fastify.post<{
+    Params: { name: string };
+    Body: { pageId: string; pageSessionId: string };
+  }>(
+    '/:name/ui-session/pushes',
+    async (req, reply) => {
+      const { name } = req.params;
+      const { pageId, pageSessionId } = req.body ?? {};
+
+      if (!pageId || !pageSessionId) {
+        return reply.status(400).send({ error: 'pageId and pageSessionId are required' });
+      }
+
+      const pageContext = await resolveValidatedPageSession(
+        fastify,
+        req,
+        reply,
+        engine,
+        name,
+        pageId,
+        pageSessionId,
+      );
+      if (!pageContext) {
+        return;
+      }
+
+      return reply.send({
+        result: engine.pluginManager.pullPluginPageSessionPushes(name, pageId, pageSessionId),
+      });
     },
   );
 

@@ -13,6 +13,7 @@ export default defineConfig({
       input: {
         settings: resolve(import.meta.dirname, 'settings.html'),
         'download-wizard': resolve(import.meta.dirname, 'download-wizard.html'),
+        'upload-wizard': resolve(import.meta.dirname, 'upload-wizard.html'),
       },
     },
   },

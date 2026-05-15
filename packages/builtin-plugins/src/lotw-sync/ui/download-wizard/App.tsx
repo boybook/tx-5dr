@@ -9,26 +9,36 @@ const I18N: Record<string, Record<string, string>> = {
   zh: {
     description: '选择从 LoTW 下载确认记录的起始日期。',
     sinceDateLabel: '下载确认记录，起始日期',
+    untilDateLabel: '截止日期',
+    invalidRange: '开始日期不能晚于截止日期',
     downloadBtn: '开始下载',
     downloading: '正在下载...',
     resultTitle: '下载结果',
     downloaded: '下载',
     matched: '匹配本地记录',
     updated: '新增导入',
+    imported: '新增导入',
+    windows: '请求分段',
     errors: '错误',
+    retryable: '可重试',
     success: '下载完成',
     failed: '下载失败',
   },
   en: {
     description: 'Select the date range for downloading LoTW confirmations.',
     sinceDateLabel: 'Download confirmations since',
+    untilDateLabel: 'Download confirmations until',
+    invalidRange: 'Start date cannot be later than end date',
     downloadBtn: 'Download',
     downloading: 'Downloading...',
     resultTitle: 'Results',
     downloaded: 'Downloaded',
     matched: 'Matched local QSOs',
     updated: 'New imports',
+    imported: 'New imports',
+    windows: 'Request windows',
     errors: 'Errors',
+    retryable: 'Retryable',
     success: 'Download complete',
     failed: 'Download failed',
   },
@@ -40,12 +50,15 @@ interface DownloadResult {
   downloaded?: number;
   matched?: number;
   updated?: number;
+  imported?: number;
+  windowCount?: number;
   failures?: Array<{
     code: string;
     message: string;
     qsoCallsign?: string;
     httpStatus?: number;
     detail?: string;
+    retryable?: boolean;
   }>;
 }
 
@@ -60,8 +73,10 @@ export function App() {
 
   const defaultDate = new Date();
   defaultDate.setDate(defaultDate.getDate() - 30);
+  const today = new Date();
 
   const [sinceDate, setSinceDate] = useState(formatDate(defaultDate));
+  const [untilDate, setUntilDate] = useState(formatDate(today));
   const [downloading, setDownloading] = useState(false);
   const [status, setStatus] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [result, setResult] = useState<DownloadResult | null>(null);
@@ -92,7 +107,12 @@ export function App() {
   // ===== Download =====
   const handleDownload = useCallback(async () => {
     const since = new Date(sinceDate).getTime();
-    if (!since || isNaN(since)) return;
+    const until = new Date(`${untilDate}T23:59:59.999Z`).getTime();
+    if (!since || isNaN(since) || !until || isNaN(until)) return;
+    if (since > until) {
+      setStatus({ text: t('invalidRange'), type: 'error' });
+      return;
+    }
 
     setDownloading(true);
     setStatus(null);
@@ -102,6 +122,7 @@ export function App() {
       const res = await window.tx5dr.invoke('performDownload', {
         callsign,
         since,
+        until,
       }) as DownloadResult;
 
       if (res.failures?.length) {
@@ -117,7 +138,7 @@ export function App() {
     } finally {
       setDownloading(false);
     }
-  }, [sinceDate, callsign, t]);
+  }, [sinceDate, untilDate, callsign, t]);
 
   return (
     <div className="container">
@@ -130,6 +151,14 @@ export function App() {
           type="date"
           value={sinceDate}
           onChange={e => setSinceDate(e.target.value)}
+        />
+      </div>
+      <div className="form-group">
+        <label>{t('untilDateLabel')}</label>
+        <input
+          type="date"
+          value={untilDate}
+          onChange={e => setUntilDate(e.target.value)}
         />
       </div>
 
@@ -161,8 +190,12 @@ export function App() {
               <span className="stat-value">{result.matched ?? 0}</span>
             </div>
             <div className="stat">
-              <span>{t('updated')}</span>
-              <span className="stat-value">{result.updated ?? 0}</span>
+              <span>{t('imported')}</span>
+              <span className="stat-value">{result.imported ?? result.updated ?? 0}</span>
+            </div>
+            <div className="stat">
+              <span>{t('windows')}</span>
+              <span className="stat-value">{result.windowCount ?? 1}</span>
             </div>
             {result.failures && result.failures.length > 0 && (
               <>
@@ -183,6 +216,7 @@ export function App() {
                   >
                     {failure.qsoCallsign ? `${failure.qsoCallsign}: ` : ''}{failure.message || failure.code}
                     {failure.httpStatus ? ` (HTTP ${failure.httpStatus})` : ''}
+                    {failure.retryable ? ` — ${t('retryable')}` : ''}
                     {failure.detail && failure.detail !== failure.message ? ` — ${failure.detail}` : ''}
                   </div>
                 ))}

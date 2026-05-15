@@ -1,34 +1,17 @@
 /// <reference types="@tx5dr/plugin-api/bridge" />
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useI18n } from '../../../_shared/ui/useI18n';
 import { useAutoResize } from '../../../_shared/ui/useAutoResize';
 import './App.css';
-
-// ===== DXCC location rules (mirrors contracts/lotw.schema.ts) =====
-const LOTW_LOCATION_RULES: Record<number, {
-  stateLabel: string;
-  countyLabel: string | null;
-}> = {
-  1:   { stateLabel: 'Province',   countyLabel: null },
-  5:   { stateLabel: 'Kunta',      countyLabel: null },
-  6:   { stateLabel: 'State',      countyLabel: 'County' },
-  15:  { stateLabel: 'Oblast',     countyLabel: null },
-  54:  { stateLabel: 'Oblast',     countyLabel: null },
-  61:  { stateLabel: 'Oblast',     countyLabel: null },
-  110: { stateLabel: 'State',      countyLabel: 'County' },
-  125: { stateLabel: 'Oblast',     countyLabel: null },
-  150: { stateLabel: 'State',      countyLabel: null },
-  151: { stateLabel: 'Oblast',     countyLabel: null },
-  224: { stateLabel: 'Kunta',      countyLabel: null },
-  291: { stateLabel: 'State',      countyLabel: 'County' },
-  318: { stateLabel: 'Province',   countyLabel: null },
-  339: { stateLabel: 'Prefecture', countyLabel: 'City / Gun / Ku' },
-};
-
-function getLocationRule(dxccId: number | null) {
-  if (!dxccId) return { stateLabel: 'State / Province', countyLabel: null };
-  return LOTW_LOCATION_RULES[dxccId] ?? { stateLabel: 'State / Province', countyLabel: null };
-}
+import {
+  getLoTWDXCCEntity,
+  getLoTWDXCCOptions,
+  getLoTWLocationRule,
+  getLoTWSubdivisionOptions,
+  suggestStationLocation,
+  validateStationLocation,
+  type LoTWStationSuggestion,
+} from '@tx5dr/core';
 
 // ===== i18n =====
 const I18N: Record<string, Record<string, string>> = {
@@ -66,7 +49,31 @@ const I18N: Record<string, Record<string, string>> = {
     deleteBtn: '删除',
     locationTitle: '上传台站位置',
     callsignLabel: '呼号',
-    dxccLabel: 'DXCC 实体编号',
+    dxccLabel: 'DXCC 实体',
+    dxccPlaceholder: '选择 DXCC 实体',
+    suggestedTitle: '建议的台站字段',
+    applySuggestions: '应用建议',
+    suggestionSource_cty: 'BigCTY',
+    suggestionSource_dxcc: 'DXCC 默认值',
+    suggestionSource_grid: '网格定位',
+    suggestionSource_adif: 'ADIF 标准',
+    suggestionConfidence_high: '高可信',
+    suggestionConfidence_medium: '中等可信',
+    suggestionConfidence_low: '低可信',
+    noSuggestion: '暂无可应用建议',
+    locationWarningTitle: '台站位置提示',
+    stateOptionPlaceholder: '选择州/省/地区',
+    issue_lotw_location_callsign_missing: 'LoTW 上传台站呼号未配置',
+    issue_lotw_location_dxcc_missing: 'LoTW 上传 DXCC 未配置',
+    issue_lotw_location_grid_missing: 'LoTW 上传网格定位未配置',
+    issue_lotw_location_cq_missing: 'LoTW 上传 CQ 区未配置',
+    issue_lotw_location_itu_missing: 'LoTW 上传 ITU 区未配置',
+    issue_lotw_location_state_missing: '该 DXCC 需要选择州/省/地区',
+    issue_lotw_location_county_missing: '该 DXCC 需要填写县/区',
+    issue_lotw_location_state_invalid: '州/省/地区不是该 DXCC 的有效 ADIF 代码',
+    issue_lotw_location_state_suggested: '州/省/地区将按 ADIF 标准规范化',
+    issue_lotw_location_zone_mismatch: 'CQ/ITU 分区与建议值不一致',
+    issue_lotw_location_grid_mismatch: 'QSO 的 MY_* 台站字段与上传台站位置不一致',
     gridLabel: '网格定位',
     iotaLabel: 'IOTA',
     cqZoneLabel: 'CQ 区',
@@ -80,6 +87,17 @@ const I18N: Record<string, Record<string, string>> = {
     checking: '检查中...',
     preflightReady: '已就绪，可以上传',
     preflightNotReady: '未就绪，存在问题',
+    issue_certificate_date_range_mismatch: '部分 QSO 不匹配任何已上传的 LoTW 证书',
+    issue_qso_callsign_missing: '部分 QSO 缺少本台呼号信息',
+    issue_qso_callsign_mismatch: '部分 QSO 属于其他本台呼号',
+    issue_certificate_missing: '尚未上传 LoTW 证书',
+    issue_upload_location_callsign_missing: 'LoTW 上传台站呼号未配置',
+    issue_upload_location_dxcc_missing: 'LoTW 上传 DXCC 未配置',
+    issue_upload_location_grid_missing: 'LoTW 上传网格定位未配置',
+    issue_upload_location_cq_missing: 'LoTW 上传 CQ 区未配置',
+    issue_upload_location_itu_missing: 'LoTW 上传 ITU 区未配置',
+    issue_upload_location_state_missing: '该 DXCC 需要填写州/省/地区',
+    issue_upload_location_county_missing: '该 DXCC 需要填写县/区',
     saveBtn: '保存',
     saving: '保存中...',
     saved: '已保存',
@@ -122,7 +140,31 @@ const I18N: Record<string, Record<string, string>> = {
     deleteBtn: 'Delete',
     locationTitle: 'Upload Location',
     callsignLabel: 'Callsign',
-    dxccLabel: 'DXCC Entity ID',
+    dxccLabel: 'DXCC Entity',
+    dxccPlaceholder: 'Select DXCC entity',
+    suggestedTitle: 'Suggested Station Fields',
+    applySuggestions: 'Apply suggestions',
+    suggestionSource_cty: 'BigCTY',
+    suggestionSource_dxcc: 'DXCC default',
+    suggestionSource_grid: 'Grid locator',
+    suggestionSource_adif: 'ADIF standard',
+    suggestionConfidence_high: 'high confidence',
+    suggestionConfidence_medium: 'medium confidence',
+    suggestionConfidence_low: 'low confidence',
+    noSuggestion: 'No suggestions to apply',
+    locationWarningTitle: 'Station location notice',
+    stateOptionPlaceholder: 'Select state/province',
+    issue_lotw_location_callsign_missing: 'LoTW upload callsign is not configured',
+    issue_lotw_location_dxcc_missing: 'LoTW upload DXCC is not configured',
+    issue_lotw_location_grid_missing: 'LoTW upload grid square is not configured',
+    issue_lotw_location_cq_missing: 'LoTW upload CQ zone is not configured',
+    issue_lotw_location_itu_missing: 'LoTW upload ITU zone is not configured',
+    issue_lotw_location_state_missing: 'State/province is required for this DXCC',
+    issue_lotw_location_county_missing: 'County is required for this DXCC',
+    issue_lotw_location_state_invalid: 'State/province is not a valid ADIF code for this DXCC',
+    issue_lotw_location_state_suggested: 'State/province will be normalized to the ADIF code',
+    issue_lotw_location_zone_mismatch: 'CQ/ITU zone differs from the suggestion',
+    issue_lotw_location_grid_mismatch: 'QSO MY_* station fields differ from the upload station location',
     gridLabel: 'Grid Square',
     iotaLabel: 'IOTA',
     cqZoneLabel: 'CQ Zone',
@@ -136,6 +178,17 @@ const I18N: Record<string, Record<string, string>> = {
     checking: 'Checking...',
     preflightReady: 'Ready to upload',
     preflightNotReady: 'Not ready, issues found',
+    issue_certificate_date_range_mismatch: 'Some QSOs do not match any uploaded LoTW certificate',
+    issue_qso_callsign_missing: 'Some QSOs are missing station callsign information',
+    issue_qso_callsign_mismatch: 'Some QSOs belong to a different station callsign',
+    issue_certificate_missing: 'No LoTW certificate has been uploaded yet',
+    issue_upload_location_callsign_missing: 'LoTW upload callsign is not configured',
+    issue_upload_location_dxcc_missing: 'LoTW upload DXCC is not configured',
+    issue_upload_location_grid_missing: 'LoTW upload grid square is not configured',
+    issue_upload_location_cq_missing: 'LoTW upload CQ zone is not configured',
+    issue_upload_location_itu_missing: 'LoTW upload ITU zone is not configured',
+    issue_upload_location_state_missing: 'State/province is required for this DXCC',
+    issue_upload_location_county_missing: 'County is required for this DXCC',
     saveBtn: 'Save',
     saving: 'Saving...',
     saved: 'Saved',
@@ -160,8 +213,12 @@ interface Certificate {
 }
 
 interface PreflightIssue {
+  code?: string;
   severity: 'error' | 'warning' | 'info';
   message: string;
+  detail?: string;
+  qsoId?: string;
+  qsoCallsign?: string;
 }
 
 interface PreflightResult {
@@ -218,10 +275,43 @@ export function App() {
   const [lastDownloadTime, setLastDownloadTime] = useState<string | null>(null);
 
   // Derived: location rule based on DXCC
+  const dxccOptions = useMemo(() => getLoTWDXCCOptions(), []);
   const dxccId = parseInt(locDxcc, 10) || null;
-  const locationRule = getLocationRule(dxccId);
+  const dxccEntity = useMemo(() => getLoTWDXCCEntity(dxccId), [dxccId]);
+  const locationRule = useMemo(() => getLoTWLocationRule(dxccId), [dxccId]);
+  const stateOptions = useMemo(() => getLoTWSubdivisionOptions(dxccId), [dxccId]);
+  const currentLocation = useMemo(() => ({
+    callsign: locCallsign,
+    dxccId: dxccId ?? undefined,
+    gridSquare: locGrid,
+    cqZone: locCqZone,
+    ituZone: locItuZone,
+    iota: locIota,
+    state: locState,
+    county: locCounty,
+  }), [locCallsign, dxccId, locGrid, locCqZone, locItuZone, locIota, locState, locCounty]);
+  const stationSuggestionResult = useMemo(() => suggestStationLocation({
+    callsign: locCallsign,
+    dxccId: dxccId ?? undefined,
+    gridSquare: locGrid,
+    current: currentLocation,
+  }), [locCallsign, dxccId, locGrid, currentLocation]);
+  const locationValidationIssues = useMemo(() => validateStationLocation(currentLocation), [currentLocation]);
+  const actionableSuggestions = stationSuggestionResult.suggestions.filter((suggestion) => {
+    if (suggestion.field === 'cqZone') return locCqZone.trim() !== String(suggestion.value);
+    if (suggestion.field === 'ituZone') return locItuZone.trim() !== String(suggestion.value);
+    if (suggestion.field === 'state') return locState.trim().toUpperCase() !== String(suggestion.value).toUpperCase();
+    return false;
+  });
 
   useAutoResize();
+
+  const formatIssueMessage = useCallback((issue: PreflightIssue): string => {
+    if (!issue.code) return issue.message;
+    const key = `issue_${issue.code}`;
+    const translated = t(key);
+    return translated === key ? issue.message : translated;
+  }, [t]);
 
   // ===== Load certificates =====
   const loadCertificates = useCallback(() => {
@@ -282,6 +372,31 @@ export function App() {
       autoUploadQSO,
     };
   }, [username, password, locCallsign, locDxcc, locGrid, locIota, locCqZone, locItuZone, locState, locCounty, autoUploadQSO]);
+
+  const formatSuggestion = useCallback((suggestion: LoTWStationSuggestion): string => {
+    const source = t(`suggestionSource_${suggestion.source}`);
+    const confidence = t(`suggestionConfidence_${suggestion.confidence}`);
+    const label = suggestion.label ? ` - ${suggestion.label}` : '';
+    return `${suggestion.field}: ${suggestion.value}${label} (${source}, ${confidence})`;
+  }, [t]);
+
+  const applySuggestion = useCallback((suggestion: LoTWStationSuggestion) => {
+    const value = String(suggestion.value);
+    if (suggestion.field === 'cqZone') setLocCqZone(value);
+    if (suggestion.field === 'ituZone') setLocItuZone(value);
+    if (suggestion.field === 'state') setLocState(value);
+  }, []);
+
+  const applyAllSuggestions = useCallback(() => {
+    for (const suggestion of actionableSuggestions) {
+      applySuggestion(suggestion);
+    }
+  }, [actionableSuggestions, applySuggestion]);
+
+  const firstLocationError = useMemo(
+    () => locationValidationIssues.find((issue) => issue.severity === 'error'),
+    [locationValidationIssues],
+  );
 
   // ===== Verify connection =====
   const handleVerify = useCallback(async () => {
@@ -431,15 +546,35 @@ export function App() {
       setSaveResult({ message: t('missingRequired'), type: 'danger' });
       return;
     }
+    if (firstLocationError) {
+      setSaveResult({
+        message: formatIssueMessage({
+          severity: firstLocationError.severity,
+          code: firstLocationError.code,
+          message: firstLocationError.message,
+          detail: firstLocationError.detail,
+        }),
+        type: 'danger',
+      });
+      return;
+    }
 
     setSaving(true);
     setSaveResult(null);
 
     try {
-      await window.tx5dr.invoke('saveConfig', {
+      const result: any = await window.tx5dr.invoke('saveConfig', {
         callsign,
         config: nextConfig,
       });
+      if (result?.success === false) {
+        const issue = result.issues?.find((item: PreflightIssue) => item.severity === 'error') ?? result.issues?.[0];
+        setSaveResult({
+          message: issue ? formatIssueMessage(issue) : t('saveFailed'),
+          type: 'danger',
+        });
+        return;
+      }
       setSaveResult({ message: t('saved'), type: 'success' });
       // Close the host modal so the parent can refresh "configured" state.
       setTimeout(() => {
@@ -451,7 +586,7 @@ export function App() {
     } finally {
       setSaving(false);
     }
-  }, [callsign, buildConfig, t]);
+  }, [callsign, buildConfig, firstLocationError, formatIssueMessage, t]);
 
   // ===== Certificate status helpers =====
   const certStatusText = (status: string) => {
@@ -605,13 +740,18 @@ export function App() {
         </div>
         <div className="form-group form-half">
           <label>{t('dxccLabel')}</label>
-          <input
-            type="number"
-            placeholder="291"
-            min={1}
+          <select
             value={locDxcc}
-            onChange={e => setLocDxcc(e.target.value)}
-          />
+            onChange={e => { setLocDxcc(e.target.value); setLocState(''); setLocCounty(''); }}
+          >
+            <option value="">{t('dxccPlaceholder')}</option>
+            {dxccOptions.map(entity => (
+              <option key={entity.entityCode} value={String(entity.entityCode)}>
+                {entity.flag ? `${entity.flag} ` : ''}{entity.name} ({entity.entityCode})
+              </option>
+            ))}
+          </select>
+          {dxccEntity && <div className="field-hint">{dxccEntity.name} ({dxccEntity.entityCode})</div>}
         </div>
       </div>
       <div className="form-row">
@@ -655,26 +795,77 @@ export function App() {
           />
         </div>
       </div>
-      <div className="form-row">
-        <div className="form-group form-half">
-          <label>{locationRule.stateLabel || t('stateLabel')}</label>
-          <input
-            type="text"
-            value={locState}
-            onChange={e => setLocState(e.target.value)}
-          />
-        </div>
-        {locationRule.countyLabel && (
+      {locationRule?.stateField && (
+        <div className="form-row">
           <div className="form-group form-half">
-            <label>{locationRule.countyLabel}</label>
-            <input
-              type="text"
-              value={locCounty}
-              onChange={e => setLocCounty(e.target.value)}
-            />
+            <label>{locationRule.stateLabel || t('stateLabel')}</label>
+            {stateOptions.length > 0 ? (
+              <select value={locState} onChange={e => setLocState(e.target.value)}>
+                <option value="">{t('stateOptionPlaceholder')}</option>
+                {stateOptions.map(option => (
+                  <option key={option.code} value={option.code}>{option.code} - {option.name}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                value={locState}
+                onChange={e => setLocState(e.target.value)}
+              />
+            )}
           </div>
-        )}
-      </div>
+          {locationRule?.countyField && (
+            <div className="form-group form-half">
+              <label>{locationRule.countyLabel}</label>
+              <input
+                type="text"
+                value={locCounty}
+                onChange={e => setLocCounty(e.target.value)}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {(actionableSuggestions.length > 0 || locationValidationIssues.some(issue => issue.severity !== 'info')) && (
+        <div className="suggestion-card">
+          <div className="suggestion-title">{t('suggestedTitle')}</div>
+          {actionableSuggestions.length > 0 ? (
+            <>
+              <div className="suggestion-list">
+                {actionableSuggestions.map((suggestion, index) => (
+                  <button
+                    key={`${suggestion.field}-${index}`}
+                    type="button"
+                    className="suggestion-pill"
+                    onClick={() => applySuggestion(suggestion)}
+                  >
+                    {formatSuggestion(suggestion)}
+                  </button>
+                ))}
+              </div>
+              <button type="button" className="btn btn-secondary" onClick={applyAllSuggestions}>
+                {t('applySuggestions')}
+              </button>
+            </>
+          ) : (
+            <div className="field-hint">{t('noSuggestion')}</div>
+          )}
+          {locationValidationIssues.some(issue => issue.severity !== 'info') && (
+            <div className="location-warning-list">
+              <div className="location-warning-title">{t('locationWarningTitle')}</div>
+              {locationValidationIssues
+                .filter(issue => issue.severity !== 'info')
+                .map((issue, index) => (
+                  <div key={index} className={`preflight-issue preflight-issue-${issue.severity}`}>
+                    <span className="preflight-icon">{severityIcon(issue.severity)}</span>
+                    <span>{formatIssueMessage({ severity: issue.severity, code: issue.code, message: issue.message, detail: issue.detail })}</span>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <hr className="section-divider" />
 
@@ -714,7 +905,19 @@ export function App() {
           {preflightResult.issues.map((issue, i) => (
             <div key={i} className={`preflight-issue preflight-issue-${issue.severity}`}>
               <span className="preflight-icon">{severityIcon(issue.severity)}</span>
-              <span>{issue.message}</span>
+              <span>
+                {formatIssueMessage(issue)}
+                {(issue.qsoCallsign || issue.qsoId || issue.detail) && (
+                  <span className="preflight-issue-detail">
+                    {' '}
+                    {[
+                      issue.qsoCallsign ? `QSO=${issue.qsoCallsign}` : '',
+                      issue.qsoId ? `id=${issue.qsoId}` : '',
+                      issue.detail && issue.detail !== issue.message ? issue.detail : '',
+                    ].filter(Boolean).join('; ')}
+                  </span>
+                )}
+              </span>
             </div>
           ))}
         </div>

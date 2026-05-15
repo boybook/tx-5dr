@@ -14,10 +14,20 @@ import type {
   SyncDownloadResult,
   SyncDownloadOptions,
   SyncUploadOptions,
+  SyncUploadPreflightOptions,
   SyncFailure,
+  SyncUploadProgress,
 } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
-import { getBandFromFrequency, toLotwContactMode } from '@tx5dr/core';
+import {
+  getBandFromFrequency,
+  toLotwContactMode,
+  getLoTWLocationRule as getSharedLoTWLocationRule,
+  normalizeLoTWStationLocation,
+  suggestStationLocation,
+  type LoTWLocationIssue,
+  type LoTWStationLocationInput,
+} from '@tx5dr/core';
 import {
   createSyncFailure,
   errorToSyncFailure,
@@ -48,6 +58,9 @@ interface LoTWUploadIssue {
   code: string;
   severity: 'info' | 'warning' | 'error';
   message: string;
+  detail?: string;
+  qsoId?: string;
+  qsoCallsign?: string;
 }
 
 interface LoTWUploadPreflightResponse extends SyncUploadPreflightResult {
@@ -71,15 +84,13 @@ interface LoTWLocationRule {
 
 /** DXCC location rules — determines which fields are required for upload signing. */
 function getLoTWLocationRule(dxccId?: number | null): LoTWLocationRule {
-  const defaults: LoTWLocationRule = { requiresState: false, requiresCounty: false, stateLabel: 'State/Province', countyLabel: 'County' };
-  if (!dxccId) return defaults;
-  // US (291), Alaska (6), Hawaii (110)
-  if ([291, 6, 110].includes(dxccId)) return { requiresState: true, requiresCounty: true, stateLabel: 'US State', countyLabel: 'US County' };
-  // Canada (1)
-  if (dxccId === 1) return { requiresState: true, requiresCounty: false, stateLabel: 'Province', countyLabel: 'County' };
-  // Russia (15, 54)
-  if ([15, 54].includes(dxccId)) return { requiresState: true, requiresCounty: false, stateLabel: 'Oblast', countyLabel: 'County' };
-  return defaults;
+  const shared = getSharedLoTWLocationRule(dxccId);
+  return {
+    requiresState: !!shared?.stateField,
+    requiresCounty: !!shared?.countyField,
+    stateLabel: shared?.stateLabel ?? 'State/Province',
+    countyLabel: shared?.countyLabel ?? 'County',
+  };
 }
 
 // ===== OIDs used in LoTW certificates =====
@@ -98,7 +109,7 @@ function isLotwAdifResponse(responseText: string): boolean {
   return responseText.toLowerCase().includes('<eoh>');
 }
 
-function classifyLotwErrorResponse(responseText: string): 'lotw_auth_failed' | 'lotw_response_invalid' {
+function classifyLotwErrorResponse(responseText: string): 'lotw_auth_failed' | 'lotw_rate_limited' | 'lotw_response_invalid' {
   const normalized = responseText.toLowerCase().replace(/\s+/g, ' ');
   const authFailurePatterns = [
     /\bincorrect\b.{0,80}\bpassword\b/,
@@ -111,9 +122,15 @@ function classifyLotwErrorResponse(responseText: string): 'lotw_auth_failed' | '
     /\blogin\b.{0,80}\bfailed\b/,
   ];
 
-  return authFailurePatterns.some(pattern => pattern.test(normalized))
-    ? 'lotw_auth_failed'
-    : 'lotw_response_invalid';
+  if (authFailurePatterns.some(pattern => pattern.test(normalized))) {
+    return 'lotw_auth_failed';
+  }
+
+  if (/\bpage request limit\b|\brate limit\b|\btoo many requests\b/.test(normalized)) {
+    return 'lotw_rate_limited';
+  }
+
+  return 'lotw_response_invalid';
 }
 
 function summarizeLotwResponse(responseText: string): string {
@@ -133,6 +150,13 @@ function describeLotwErrorResponse(responseText: string): Pick<SyncFailure, 'cod
     return {
       code,
       message: detail || 'LoTW authentication failed. Check your username and password.',
+      detail,
+    };
+  }
+  if (code === 'lotw_rate_limited') {
+    return {
+      code,
+      message: detail || 'LoTW rate limit reached. Please retry later.',
       detail,
     };
   }
@@ -165,6 +189,13 @@ export interface LoTWPluginConfig {
   lastUploadTime?: number;
   lastDownloadTime?: number;
 }
+
+type LoTWResolvedUploadLocation = LoTWStationLocationInput & {
+  callsign: string;
+  gridSquare: string;
+  cqZone: string;
+  ituZone: string;
+};
 
 export interface LoTWCertificateImportResult {
   certificate: LoTWCertificateSummary;
@@ -212,6 +243,25 @@ interface PreparedBatch {
   qsos: QSORecord[];
 }
 
+interface UploadBatchAcceptedResult {
+  acceptedAt: number;
+  responseSummary: string;
+}
+
+
+function lotwLocationIssueToUploadIssue(issue: LoTWLocationIssue): LoTWUploadIssue {
+  return {
+    code: issue.code,
+    severity: issue.severity,
+    message: issue.message,
+    detail: issue.detail ?? ([
+      issue.field ? `field=${issue.field}` : '',
+      issue.value ? `value=${issue.value}` : '',
+      issue.suggested ? `suggested=${issue.suggested}` : '',
+    ].filter(Boolean).join('; ') || undefined),
+  };
+}
+
 interface UploadPreparation {
   issues: LoTWUploadIssue[];
   guidance: string[];
@@ -221,9 +271,49 @@ interface UploadPreparation {
   blockedCount: number;
 }
 
+function isUploadPreflightOptions(value: unknown): value is SyncUploadPreflightOptions {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return ('since' in candidate || 'until' in candidate || 'includeAlreadyUploaded' in candidate)
+    && !('uploadLocation' in candidate)
+    && !('username' in candidate)
+    && !('password' in candidate);
+}
+
+function isUploadCandidate(qso: QSORecord, options?: Pick<SyncUploadOptions, 'since' | 'until' | 'includeAlreadyUploaded'>): boolean {
+  if (options?.includeAlreadyUploaded !== true && qso.lotwQslSent === 'Y') {
+    return false;
+  }
+  const startTime = qso.startTime;
+  if (typeof options?.since === 'number' && Number.isFinite(options.since) && startTime < options.since) {
+    return false;
+  }
+  if (typeof options?.until === 'number' && Number.isFinite(options.until) && startTime > options.until) {
+    return false;
+  }
+  return true;
+}
+
+class LoTWRemoteError extends Error {
+  constructor(
+    message: string,
+    readonly httpStatus?: number,
+    readonly retryable?: boolean,
+    readonly remoteDetail?: string,
+  ) {
+    super(message);
+    this.name = 'LoTWRemoteError';
+  }
+}
+
 // ===== Helpers =====
 
 const CONFIG_KEY_PREFIX = 'config:';
+const LOTW_DOWNLOAD_WINDOW_DAYS = 31;
+const LOTW_UPLOAD_BATCH_SIZE = 100;
+const LOTW_PREFLIGHT_DETAIL_LIMIT = 20;
+const LOTW_DOWNLOAD_MATCH_TOLERANCE_MS = 15 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function toMillis(dateLike: string): number {
   return new Date(dateLike).getTime();
@@ -289,14 +379,87 @@ function getDateDaysAgo(days: number): string {
   return date.toISOString().split('T')[0];
 }
 
+function startOfUtcDay(timestamp: number): number {
+  const date = new Date(timestamp);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+
+function endOfUtcDay(timestamp: number): number {
+  return startOfUtcDay(timestamp) + DAY_MS - 1;
+}
+
+function formatLotwQueryDate(timestamp: number): string {
+  return new Date(timestamp).toISOString().split('T')[0];
+}
+
+function formatIssueTimestamp(timestamp: number): string {
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : 'unknown time';
+}
+
+function buildDateWindows(since: number, until: number, windowDays = LOTW_DOWNLOAD_WINDOW_DAYS): Array<{ start: number; end: number; startDate: string; endDate: string }> {
+  const windows: Array<{ start: number; end: number; startDate: string; endDate: string }> = [];
+  let cursor = startOfUtcDay(since);
+  const finalEnd = endOfUtcDay(until);
+  const windowLengthMs = Math.max(1, windowDays) * DAY_MS;
+
+  while (cursor <= finalEnd) {
+    const end = Math.min(cursor + windowLengthMs - 1, finalEnd);
+    windows.push({
+      start: cursor,
+      end,
+      startDate: formatLotwQueryDate(cursor),
+      endDate: formatLotwQueryDate(end),
+    });
+    cursor = end + 1;
+  }
+
+  return windows;
+}
+
+function normalizeQsoCallsign(value?: string): string {
+  return (value || '').trim().toUpperCase();
+}
+
+function normalizeQsoMode(value?: string): string {
+  const mode = (value || '').trim().toUpperCase();
+  if (mode === 'USB' || mode === 'LSB') return 'SSB';
+  return mode;
+}
+
+function lotwMatchBand(qso: QSORecord): string {
+  const band = getBandFromFrequency(qso.frequency);
+  return band === 'Unknown' ? '' : band.toUpperCase();
+}
+
+function lotwMatchMode(qso: QSORecord): string {
+  return normalizeQsoMode(toLotwContactMode(qso));
+}
+
+function lotwQsoKey(qso: QSORecord, fallbackStationCallsign?: string): string {
+  const station = normalizeQsoCallsign(qso.myCallsign || fallbackStationCallsign);
+  const call = normalizeQsoCallsign(qso.callsign);
+  const band = lotwMatchBand(qso);
+  const mode = lotwMatchMode(qso);
+  const minute = Math.floor(qso.startTime / 60000);
+  return [station, call, band, mode, String(minute)].join('|');
+}
+
 function dedupeIssues(issues: LoTWUploadIssue[]): LoTWUploadIssue[] {
   const seen = new Set<string>();
   return issues.filter((issue) => {
-    const key = issue.code + ':' + issue.message;
+    const key = [issue.code, issue.message, issue.qsoId || '', issue.detail || ''].join(':');
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+function isSkippableUploadIssue(issue: LoTWUploadIssue): boolean {
+  return [
+    'certificate_date_range_mismatch',
+    'qso_callsign_missing',
+    'qso_callsign_mismatch',
+  ].includes(issue.code);
 }
 
 // ===== Provider =====
@@ -316,7 +479,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
   readonly settingsPageId = 'settings';
   readonly actions: SyncAction[] = [
     { id: 'download', label: 'Download', icon: 'download', pageId: 'download-wizard' },
-    { id: 'upload', label: 'Upload', icon: 'upload', operation: 'upload' },
+    { id: 'upload', label: 'Upload', icon: 'upload', pageId: 'upload-wizard' },
   ];
 
   constructor(private ctx: PluginContext) {}
@@ -720,59 +883,188 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       };
     }
     const logbook = this.ctx.logbook.forCallsign(callsign);
+    this.emitUploadProgress(options, {
+      stage: 'preparing',
+      callsign,
+      message: 'Preparing LoTW upload',
+    });
 
     const pendingQsos = options?.records
-      ? options.records.filter((qso) => qso.lotwQslSent !== 'Y')
-      : await this.queryPendingQsos(logbook);
+      ? options.records.filter((qso) => isUploadCandidate(qso, options))
+      : await this.queryPendingQsos(logbook, options);
 
     if (pendingQsos.length === 0) {
+      this.emitUploadProgress(options, {
+        stage: 'finished',
+        callsign,
+        pendingCount: 0,
+        submitted: 0,
+        uploaded: 0,
+        skipped: 0,
+        failed: 0,
+        failureCount: 0,
+      });
       return { uploaded: 0, skipped: 0, failed: 0 };
     }
 
     const preparation = await this.prepareUpload(config, pendingQsos, callsign);
-    const blockingIssue = preparation.issues.find((i) => i.severity === 'error');
-    if (blockingIssue) {
+    const blockingIssues = preparation.issues.filter((i) => i.severity === 'error');
+    const nonSkippableBlockingIssue = blockingIssues.find((issue) => !isSkippableUploadIssue(issue));
+    const canSkipBlocked = options?.skipBlockedQsos
+      && preparation.batches.length > 0
+      && !nonSkippableBlockingIssue;
+    if (blockingIssues.length > 0 && !canSkipBlocked) {
       return {
         uploaded: 0,
         skipped: 0,
         failed: pendingQsos.length,
-        failures: preparation.issues
-          .filter((i) => i.severity === 'error')
+        failures: blockingIssues
           .map((issue) => this.createFailure(issue.code, issue.message, {
             operation: 'preflight',
+            qsoId: issue.qsoId,
+            qsoCallsign: issue.qsoCallsign,
+            detail: issue.detail,
           })),
       };
     }
 
-    const location = this.resolveUploadLocation(config, callsign);
-    let uploaded = 0;
-    const uploadedQsoIds: string[] = [];
+    const canonicalLocation = normalizeLoTWStationLocation(this.resolveUploadLocation(config, callsign));
+    if (!canonicalLocation.location) {
+      return {
+        uploaded: 0,
+        skipped: 0,
+        failed: pendingQsos.length,
+        failures: canonicalLocation.issues.map((issue) => this.createFailure(issue.code, issue.message, {
+          operation: 'preflight',
+          detail: issue.detail,
+        })),
+      };
+    }
+    const location = canonicalLocation.location;
+    this.ctx.log.info('LoTW upload station location canonicalized', {
+      callsign: location.callsign,
+      dxccId: location.dxccId,
+      gridSquare: location.gridSquare,
+      cqZone: location.cqZone,
+      ituZone: location.ituZone,
+      stateField: location.stateField,
+      state: location.state,
+      countyField: location.countyField,
+      county: location.county,
+    });
+    let submitted = 0;
+    let rejected = 0;
+    let updateFailed = 0;
+    const acceptedQsoIds: string[] = [];
     const failures: SyncFailure[] = [];
+    const uploadBatches = this.splitPreparedBatches(preparation.batches);
+    this.emitUploadProgress(options, {
+      stage: 'prepared',
+      callsign,
+      pendingCount: pendingQsos.length,
+      uploadableCount: preparation.uploadableCount,
+      blockedCount: preparation.blockedCount,
+      batchCount: uploadBatches.length,
+      skipped: preparation.blockedCount,
+    });
 
-    for (const batch of preparation.batches) {
+    this.ctx.log.info('LoTW upload prepared', {
+      callsign,
+      pendingCount: pendingQsos.length,
+      uploadableCount: preparation.uploadableCount,
+      blockedCount: preparation.blockedCount,
+      skipBlockedQsos: options?.skipBlockedQsos === true,
+      batchCount: uploadBatches.length,
+    });
+
+    for (const [batchIndex, batch] of uploadBatches.entries()) {
       try {
-        await this.uploadBatch(batch, location);
-        uploaded += batch.qsos.length;
-        uploadedQsoIds.push(...batch.qsos.map(q => q.id));
+        this.ctx.log.info('LoTW upload batch starting', {
+          callsign,
+          batchIndex: batchIndex + 1,
+          batchCount: uploadBatches.length,
+          qsoCount: batch.qsos.length,
+          certificateCallsign: batch.certificate.callsign,
+        });
+        this.emitUploadProgress(options, {
+          stage: 'batch_uploading',
+          callsign,
+          batchIndex: batchIndex + 1,
+          batchCount: uploadBatches.length,
+          qsoCount: batch.qsos.length,
+          submitted,
+          skipped: preparation.blockedCount,
+        });
+        const accepted = await this.uploadBatch(batch, location);
+        submitted += batch.qsos.length;
+        acceptedQsoIds.push(...batch.qsos.map((qso) => qso.id));
+        this.ctx.log.info('LoTW upload batch accepted', {
+          callsign,
+          batchIndex: batchIndex + 1,
+          batchCount: uploadBatches.length,
+          qsoCount: batch.qsos.length,
+          responseSummary: accepted.responseSummary,
+        });
+        this.emitUploadProgress(options, {
+          stage: 'batch_accepted',
+          callsign,
+          batchIndex: batchIndex + 1,
+          batchCount: uploadBatches.length,
+          qsoCount: batch.qsos.length,
+          submitted,
+          skipped: preparation.blockedCount,
+          message: accepted.responseSummary,
+        });
       } catch (error) {
+        rejected += batch.qsos.length;
         const msg = error instanceof Error ? error.message : 'Upload failed';
-        failures.push(this.createFailure('lotw_upload_failed', msg, {
+        const remoteError = error instanceof LoTWRemoteError ? error : null;
+        this.ctx.log.warn('LoTW upload batch failed', {
+          callsign,
+          batchIndex: batchIndex + 1,
+          batchCount: uploadBatches.length,
+          qsoCount: batch.qsos.length,
+          error: msg,
+        });
+        this.emitUploadProgress(options, {
+          stage: 'batch_failed',
+          callsign,
+          batchIndex: batchIndex + 1,
+          batchCount: uploadBatches.length,
+          qsoCount: batch.qsos.length,
+          submitted,
+          skipped: preparation.blockedCount,
+          failureCount: failures.length + 1,
+          message: msg,
+        });
+        failures.push(this.createFailure('lotw_upload_rejected', msg, {
           source: this.isNetworkError(error) ? 'network' : 'remote',
           operation: 'upload',
           qsoCallsign: batch.certificate.callsign,
-          retryable: this.isNetworkError(error),
+          httpStatus: remoteError?.httpStatus,
+          retryable: remoteError?.retryable ?? this.isNetworkError(error),
+          detail: remoteError?.remoteDetail ?? msg,
+          secrets: [config.username, config.password],
         }));
       }
     }
 
-    // Mark uploaded QSOs with LoTW QSL sent status
-    for (const qsoId of uploadedQsoIds) {
+    // LoTW accepted means the batch was received. Confirmation is handled by download sync.
+    this.emitUploadProgress(options, {
+      stage: 'updating_local',
+      callsign,
+      submitted,
+      skipped: preparation.blockedCount,
+      failureCount: failures.length,
+    });
+    for (const qsoId of acceptedQsoIds) {
       try {
         await logbook.updateQSO(qsoId, {
           lotwQslSent: 'Y',
           lotwQslSentDate: Date.now(),
         });
       } catch (err) {
+        updateFailed += 1;
         failures.push(this.createFailure('lotw_update_qsl_status_failed', err instanceof Error ? err.message : 'Failed to update QSL sent status', {
           source: 'logbook',
           operation: 'upload',
@@ -786,27 +1078,199 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     }
 
     // Update lastUploadTime
-    if (uploaded > 0) {
+    if (submitted > 0) {
       this.setConfig(callsign, { ...config, lastUploadTime: Date.now() });
       await logbook.notifyUpdated();
     }
 
-    return {
+    const uploaded = Math.max(0, acceptedQsoIds.length - updateFailed);
+    const failed = rejected + updateFailed;
+
+    this.ctx.log.info('LoTW upload finished', {
+      callsign,
+      submitted,
       uploaded,
       skipped: preparation.blockedCount,
-      failed: failures.some((failure) => failure.source !== 'logbook')
-        ? pendingQsos.length - uploaded - preparation.blockedCount
-        : 0,
+      failed,
+      failureCount: failures.length,
+    });
+    this.emitUploadProgress(options, {
+      stage: 'finished',
+      callsign,
+      submitted,
+      skipped: preparation.blockedCount,
+      uploaded,
+      failed,
+      failureCount: failures.length,
+    });
+
+    return {
+      submitted,
+      uploaded,
+      skipped: preparation.blockedCount,
+      failed,
       failures: failures.length > 0 ? failures : undefined,
     };
   }
 
   private async queryPendingQsos(
     logbook: ReturnType<PluginContext['logbook']['forCallsign']>,
+    options?: Pick<SyncUploadOptions, 'since' | 'until' | 'includeAlreadyUploaded'>,
   ): Promise<QSORecord[]> {
     // Manual upload scans the whole logbook so historical unsent records stay recoverable.
     const allQsos = await logbook.queryQSOs({});
-    return allQsos.filter((qso) => qso.lotwQslSent !== 'Y');
+    return allQsos.filter((qso) => isUploadCandidate(qso, options));
+  }
+
+  private emitUploadProgress(options: SyncUploadOptions | undefined, progress: SyncUploadProgress): void {
+    try {
+      options?.onProgress?.(progress);
+    } catch (error) {
+      this.ctx.log.warn('LoTW upload progress push failed', {
+        stage: progress.stage,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async downloadWindow(
+    config: LoTWPluginConfig,
+    callsign: string,
+    window: { startDate: string; endDate: string },
+    qslSinceDate: string,
+  ): Promise<{ records: QSORecord[]; failures: SyncFailure[] }> {
+    const params = new URLSearchParams({
+      login: config.username,
+      password: config.password,
+      qso_query: '1',
+      qso_qsl: 'yes',
+      qso_qsldetail: 'yes',
+      qso_mydetail: 'yes',
+      qso_qslsince: qslSinceDate,
+      qso_startdate: window.startDate,
+      qso_enddate: window.endDate,
+    });
+    const ownCall = this.resolveUploadLocation(config, callsign).callsign || callsign;
+    if (ownCall) {
+      params.set('qso_owncall', ownCall);
+    }
+
+    const rangeDetail = `range=${window.startDate}..${window.endDate}`;
+    try {
+      const response = await this.doFetch(LOTW_REPORT_URL + '?' + params.toString(), {
+        method: 'GET',
+        timeout: 45000,
+      });
+      const responseText = await response.text();
+
+      if (!response.ok) {
+        const detail = `${rangeDetail}; remote=${summarizeLotwResponse(responseText)}`;
+        return {
+          records: [],
+          failures: [
+            this.createFailure('lotw_http_error', detail, {
+              source: 'remote',
+              operation: 'download',
+              httpStatus: response.status,
+              detail,
+              retryable: response.status >= 500 || response.status === 429,
+              secrets: [config.username, config.password],
+            }),
+          ],
+        };
+      }
+
+      if (!isLotwAdifResponse(responseText)) {
+        const described = describeLotwErrorResponse(responseText);
+        const detail = `${rangeDetail}; remote=${described.detail ?? described.message}`;
+        return {
+          records: [],
+          failures: [
+            this.createFailure(described.code, described.message, {
+              source: described.code === 'lotw_auth_failed' ? 'provider' : 'remote',
+              operation: 'download',
+              detail,
+              retryable: described.code === 'lotw_rate_limited',
+              secrets: [config.username, config.password],
+            }),
+          ],
+        };
+      }
+
+      try {
+        return { records: parseADIFContent(responseText, 'lotw'), failures: [] };
+      } catch (error) {
+        const detail = `${rangeDetail}; remote=${summarizeLotwResponse(responseText)}`;
+        return {
+          records: [],
+          failures: [
+            this.createFailure('lotw_adif_parse_failed', error instanceof Error ? error.message : 'LoTW ADIF parse failed', {
+              source: 'remote',
+              operation: 'download',
+              detail,
+              retryable: false,
+              secrets: [config.username, config.password],
+            }),
+          ],
+        };
+      }
+    } catch (error) {
+      const failure = this.errorFailure(error, 'download', 'lotw_download_window_failed', config);
+      return {
+        records: [],
+        failures: [{
+          ...failure,
+          detail: failure.detail ? `${rangeDetail}; ${failure.detail}` : rangeDetail,
+        }],
+      };
+    }
+  }
+
+  private async findLotwLocalMatch(
+    logbook: ReturnType<PluginContext['logbook']['forCallsign']>,
+    remote: QSORecord,
+    fallbackCallsign: string,
+  ): Promise<QSORecord | null> {
+    const candidates = await logbook.queryQSOs({
+      callsign: remote.callsign,
+      timeRange: {
+        start: remote.startTime - LOTW_DOWNLOAD_MATCH_TOLERANCE_MS,
+        end: (remote.endTime || remote.startTime) + LOTW_DOWNLOAD_MATCH_TOLERANCE_MS,
+      },
+      limit: 25,
+    });
+
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    const remoteStation = normalizeQsoCallsign(remote.myCallsign || fallbackCallsign);
+    const remoteBand = lotwMatchBand(remote);
+    const remoteMode = lotwMatchMode(remote);
+
+    const scored = candidates
+      .map((local) => {
+        let score = 0;
+        const localStation = normalizeQsoCallsign(local.myCallsign || fallbackCallsign);
+        if (remoteStation && localStation === remoteStation) score += 8;
+        if (remoteBand && lotwMatchBand(local) === remoteBand) score += 5;
+        if (remoteMode && lotwMatchMode(local) === remoteMode) score += 5;
+        const frequencyDelta = Math.abs((local.frequency || 0) - (remote.frequency || 0));
+        if (frequencyDelta <= 3000) score += 2;
+        const timeDelta = Math.abs((local.startTime || 0) - (remote.startTime || 0));
+        score += Math.max(0, 3 - Math.floor(timeDelta / (5 * 60 * 1000)));
+        return { local, score, timeDelta };
+      })
+      .filter(({ local }) => {
+        const localStation = normalizeQsoCallsign(local.myCallsign || fallbackCallsign);
+        if (remoteStation && localStation && localStation !== remoteStation) return false;
+        if (remoteBand && lotwMatchBand(local) && lotwMatchBand(local) !== remoteBand) return false;
+        if (remoteMode && lotwMatchMode(local) && lotwMatchMode(local) !== remoteMode) return false;
+        return true;
+      })
+      .sort((left, right) => right.score - left.score || left.timeDelta - right.timeDelta);
+
+    return scored[0]?.local ?? null;
   }
 
   async download(callsign: string, options?: SyncDownloadOptions): Promise<SyncDownloadResult> {
@@ -826,77 +1290,60 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     const logbook = this.ctx.logbook.forCallsign(callsign);
 
     try {
-      const sinceDate = options?.since
-        ? new Date(options.since).toISOString().split('T')[0]
+      const since = options?.since
+        ? startOfUtcDay(options.since)
         : (config.lastDownloadTime
-          ? new Date(config.lastDownloadTime).toISOString().split('T')[0]
-          : getDateDaysAgo(30));
+          ? startOfUtcDay(config.lastDownloadTime)
+          : startOfUtcDay(Date.parse(`${getDateDaysAgo(30)}T00:00:00.000Z`)));
+      const until = options?.until ? endOfUtcDay(options.until) : endOfUtcDay(Date.now());
 
-      const params = new URLSearchParams({
-        login: config.username,
-        password: config.password,
-        qso_query: '1',
-        qso_qsl: 'yes',
-        qso_qsldetail: 'yes',
-        qso_qslsince: sinceDate,
-      });
-      const url = LOTW_REPORT_URL + '?' + params.toString();
-
-      const response = await this.doFetch(url, { method: 'GET', timeout: 30000 });
-      const responseText = await response.text();
-
-      if (!isLotwAdifResponse(responseText)) {
-        const described = describeLotwErrorResponse(responseText);
-        return {
-          downloaded: 0,
-          matched: 0,
-          updated: 0,
-          failures: [
-            this.createFailure(described.code, described.message, {
-              source: described.code === 'lotw_auth_failed' ? 'provider' : 'remote',
-              operation: 'download',
-              detail: described.detail,
-            }),
-          ],
-        };
+      if (!Number.isFinite(since) || !Number.isFinite(until) || since > until) {
+        const failure = this.createFailure('lotw_download_range_invalid', 'LoTW download date range is invalid', {
+          source: 'provider',
+          operation: 'download',
+          detail: `since=${options?.since ?? 'default'}; until=${options?.until ?? 'now'}`,
+        });
+        return { downloaded: 0, matched: 0, updated: 0, imported: 0, windowCount: 0, failures: [failure] };
       }
 
-      const remoteRecords = parseADIFContent(responseText, 'lotw');
+      const windows = buildDateWindows(since, until);
+      const remoteRecords: QSORecord[] = [];
+      const failures: SyncFailure[] = [];
+
+      for (const window of windows) {
+        const result = await this.downloadWindow(config, callsign, window, formatLotwQueryDate(since));
+        remoteRecords.push(...result.records);
+        failures.push(...result.failures);
+      }
+
       this.ctx.log.info('Downloaded confirmation records', { count: remoteRecords.length });
 
       let matched = 0;
       let imported = 0;
-      const failures: SyncFailure[] = [];
-      const TIME_TOLERANCE_MS = 2 * 60 * 1000; // 2 minutes
+      const importedKeys = new Set<string>();
 
       for (const remote of remoteRecords) {
         try {
-          // Fuzzy match: same callsign, time within 2 minutes
-          const candidates = await logbook.queryQSOs({
-            callsign: remote.callsign,
-            timeRange: {
-              start: remote.startTime - TIME_TOLERANCE_MS,
-              end: (remote.endTime || remote.startTime) + TIME_TOLERANCE_MS,
-            },
-            limit: 5,
-          });
-
-          // Find best match considering frequency proximity (3kHz tolerance)
-          const FREQ_TOLERANCE_HZ = 3000;
-          const localMatch = candidates.find(local =>
-            Math.abs(local.frequency - remote.frequency) <= FREQ_TOLERANCE_HZ,
-          ) ?? (candidates.length > 0 ? candidates[0] : null);
+          const localMatch = await this.findLotwLocalMatch(logbook, remote, callsign);
 
           if (localMatch) {
-            // Update QSL confirmation status
+            // Download sync is the source of truth for LoTW confirmation and
+            // also backfills sent status for records uploaded elsewhere.
             await logbook.updateQSO(localMatch.id, {
+              lotwQslSent: 'Y',
+              lotwQslSentDate: localMatch.lotwQslSentDate ?? remote.lotwQslSentDate ?? remote.lotwQslReceivedDate ?? Date.now(),
               lotwQslReceived: 'Y',
               lotwQslReceivedDate: remote.lotwQslReceivedDate ?? Date.now(),
             });
             matched++;
           } else {
             // Import as new record
+            const remoteKey = lotwQsoKey(remote, callsign);
+            if (importedKeys.has(remoteKey)) {
+              continue;
+            }
             await logbook.addQSO(remote);
+            importedKeys.add(remoteKey);
             imported++;
           }
         } catch (err) {
@@ -914,15 +1361,19 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       }
 
       // Update lastDownloadTime and notify
-      if (matched > 0 || imported > 0) {
+      if (failures.length === 0) {
         this.setConfig(callsign, { ...config, lastDownloadTime: Date.now() });
+      }
+      if (matched > 0 || imported > 0) {
         await logbook.notifyUpdated();
       }
 
       return {
         downloaded: remoteRecords.length,
         matched,
-        updated: imported,
+        updated: matched,
+        imported,
+        windowCount: windows.length,
         failures: failures.length > 0 ? failures : undefined,
       };
     } catch (error) {
@@ -931,6 +1382,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
         downloaded: 0,
         matched: 0,
         updated: 0,
+        imported: 0,
         failures: [this.errorFailure(error, 'download', 'lotw_download_failed', config)],
       };
     }
@@ -940,14 +1392,21 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
 
   async getUploadPreflight(
     callsign: string,
-    overrideConfig?: LoTWPluginConfig | null,
+    optionsOrOverrideConfig?: SyncUploadPreflightOptions | LoTWPluginConfig | null,
+    maybeOptions?: SyncUploadPreflightOptions,
   ): Promise<LoTWUploadPreflightResponse> {
+    const overrideConfig = isUploadPreflightOptions(optionsOrOverrideConfig)
+      ? null
+      : optionsOrOverrideConfig;
+    const options = isUploadPreflightOptions(optionsOrOverrideConfig)
+      ? optionsOrOverrideConfig
+      : maybeOptions;
     const config = this.getEffectiveConfig(callsign, overrideConfig);
     const certificates = await this.getCertificates(callsign);
     const validCerts = certificates.filter((item) => item.status === 'valid');
     const logbook = this.ctx.logbook.forCallsign(callsign);
     const allQsos = await logbook.queryQSOs({});
-    const pendingQsos = allQsos.filter((qso) => qso.lotwQslSent !== 'Y');
+    const pendingQsos = allQsos.filter((qso) => isUploadCandidate(qso, options));
     const preparation = await this.prepareUpload(config, pendingQsos, callsign);
     const issues: LoTWUploadIssue[] = [...preparation.issues];
 
@@ -964,12 +1423,18 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       : (pendingQsos.length === 0 ? validCerts : []);
     const location = this.resolveUploadLocation(config, callsign);
     const hasBlockingIssue = issues.some((issue) => issue.severity === 'error');
+    const blockingIssues = issues.filter((issue) => issue.severity === 'error');
+    const canSkipBlocked = preparation.uploadableCount > 0
+      && preparation.blockedCount > 0
+      && blockingIssues.length > 0
+      && blockingIssues.every(isSkippableUploadIssue);
 
     return {
       ready: !hasBlockingIssue,
       pendingCount: pendingQsos.length,
       uploadableCount: preparation.uploadableCount,
       blockedCount: preparation.blockedCount,
+      canSkipBlocked,
       matchedCertificateIds: selectedCertificates.map((item) => item.id),
       selectedCertificates,
       locationSummary: {
@@ -996,8 +1461,6 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     const issues: LoTWUploadIssue[] = [];
     const guidance: string[] = ['export_unprotected_p12', 'configure_station_location'];
     const location = this.resolveUploadLocation(config, fallbackCallsign);
-    const rule = getLoTWLocationRule(location.dxccId ?? null);
-
     const certificateInventory = await this.listCertificateInventory(fallbackCallsign);
     const certificates = certificateInventory.map((entry) => this.toSummary(entry.certificate));
     const certificateById = new Map<string, StoredCertificate>(
@@ -1009,27 +1472,28 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       guidance.push('open_settings_and_upload_certificate');
     }
 
-    if (!location.callsign) {
-      issues.push({ code: 'upload_location_callsign_missing', severity: 'error', message: 'LoTW upload callsign is not configured' });
+    const normalizedLocation = normalizeLoTWStationLocation(location);
+    issues.push(...normalizedLocation.issues.map(lotwLocationIssueToUploadIssue));
+
+    const suggestions = suggestStationLocation({
+      callsign: location.callsign || fallbackCallsign,
+      dxccId: location.dxccId,
+      gridSquare: location.gridSquare,
+      current: location,
+    });
+    for (const suggestion of suggestions.suggestions) {
+      const currentValue = String((location as Record<string, unknown>)[suggestion.field] ?? '').trim();
+      const suggestedValue = String(suggestion.value);
+      if (currentValue && currentValue.toUpperCase() !== suggestedValue.toUpperCase()) {
+        issues.push({
+          code: suggestion.field === 'state' ? 'lotw_location_state_suggested' : 'lotw_location_zone_mismatch',
+          severity: 'warning',
+          message: `LoTW station ${suggestion.field} differs from the suggested ${suggestedValue}`,
+          detail: `field=${suggestion.field}; value=${currentValue}; suggested=${suggestedValue}; source=${suggestion.source}; confidence=${suggestion.confidence}`,
+        });
+      }
     }
-    if (!location.dxccId) {
-      issues.push({ code: 'upload_location_dxcc_missing', severity: 'error', message: 'LoTW upload DXCC is not configured' });
-    }
-    if (!location.gridSquare) {
-      issues.push({ code: 'upload_location_grid_missing', severity: 'error', message: 'LoTW upload grid square is not configured' });
-    }
-    if (!location.cqZone) {
-      issues.push({ code: 'upload_location_cq_missing', severity: 'error', message: 'LoTW upload CQ zone is not configured' });
-    }
-    if (!location.ituZone) {
-      issues.push({ code: 'upload_location_itu_missing', severity: 'error', message: 'LoTW upload ITU zone is not configured' });
-    }
-    if (rule.requiresState && !location.state) {
-      issues.push({ code: 'upload_location_state_missing', severity: 'error', message: rule.stateLabel + ' is required for this DXCC' });
-    }
-    if (rule.requiresCounty && !location.county) {
-      issues.push({ code: 'upload_location_county_missing', severity: 'error', message: (rule.countyLabel || 'County') + ' is required for this DXCC' });
-    }
+    issues.push(...this.createQsoLocationMismatchIssues(qsos, normalizedLocation.location ?? location));
 
     if (qsos.length === 0) {
       issues.push({ code: 'no_pending_qsos', severity: 'info', message: 'No pending QSOs need to be uploaded right now' });
@@ -1038,6 +1502,27 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     const batches = new Map<string, PreparedBatch>();
     const matchedCertificates = new Map<string, LoTWCertificateSummary>();
     let blockedCount = 0;
+    let certificateMismatchDetails = 0;
+    let omittedCertificateMismatchDetails = 0;
+
+    const pushCertificateMismatchIssue = (
+      qso: QSORecord,
+      stationCallsign: string,
+      reasonOverride?: string,
+    ): void => {
+      if (certificateMismatchDetails >= LOTW_PREFLIGHT_DETAIL_LIMIT) {
+        omittedCertificateMismatchDetails += 1;
+        return;
+      }
+      certificateMismatchDetails += 1;
+      issues.push(this.createCertificateMismatchIssue(
+        qso,
+        stationCallsign,
+        location.dxccId,
+        certificates,
+        reasonOverride,
+      ));
+    };
 
     for (const qso of qsos) {
       const qsoCallsign = (qso.myCallsign || fallbackCallsign || '').trim().toUpperCase();
@@ -1056,14 +1541,14 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       const summary = this.selectCertificateForQSO(qso, qsoCallsign, location.dxccId, certificates);
       if (!summary) {
         blockedCount += 1;
-        issues.push({ code: 'certificate_date_range_mismatch', severity: 'error', message: 'Some QSOs do not match any uploaded certificate by callsign, DXCC, and QSO date range' });
+        pushCertificateMismatchIssue(qso, qsoCallsign);
         continue;
       }
 
       const stored = certificateById.get(summary.id);
       if (!stored) {
         blockedCount += 1;
-        issues.push({ code: 'certificate_date_range_mismatch', severity: 'error', message: 'Some QSOs do not match any uploaded certificate by callsign, DXCC, and QSO date range' });
+        pushCertificateMismatchIssue(qso, qsoCallsign, `Matched certificate ${summary.id} but its backing file is missing`);
         continue;
       }
 
@@ -1076,6 +1561,15 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       }
     }
 
+    if (omittedCertificateMismatchDetails > 0) {
+      issues.push({
+        code: 'certificate_date_range_mismatch',
+        severity: 'error',
+        message: `${omittedCertificateMismatchDetails} more QSO(s) do not match any uploaded LoTW certificate`,
+        detail: `Only the first ${LOTW_PREFLIGHT_DETAIL_LIMIT} certificate mismatch QSO(s) are listed. Narrow the upload range or fix the station location/certificate mismatch and retry.`,
+      });
+    }
+
     return {
       issues: dedupeIssues(issues),
       guidance,
@@ -1084,6 +1578,88 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       uploadableCount: qsos.length - blockedCount,
       blockedCount,
     };
+  }
+
+  private createQsoLocationMismatchIssues(
+    qsos: QSORecord[],
+    location: LoTWResolvedUploadLocation,
+  ): LoTWUploadIssue[] {
+    const issues: LoTWUploadIssue[] = [];
+    let omitted = 0;
+    for (const qso of qsos) {
+      const mismatches = this.describeQsoLocationMismatches(qso, location);
+      if (mismatches.length === 0) continue;
+      if (issues.length >= LOTW_PREFLIGHT_DETAIL_LIMIT) {
+        omitted += 1;
+        continue;
+      }
+      const workedCallsign = normalizeQsoCallsign(qso.callsign) || '(unknown)';
+      const firstCode = mismatches.some((item) => item.field === 'MY_GRIDSQUARE')
+        ? 'lotw_location_grid_mismatch'
+        : 'lotw_location_zone_mismatch';
+      issues.push({
+        code: firstCode,
+        severity: 'warning',
+        message: `${workedCallsign} has MY_* fields that differ from the LoTW upload station location`,
+        detail: [
+          `qsoId=${qso.id || '(missing)'}`,
+          `workedCallsign=${workedCallsign}`,
+          ...mismatches.map((item) => `${item.field}: qso=${item.qsoValue}, station=${item.stationValue}`),
+        ].join('; '),
+        qsoId: qso.id,
+        qsoCallsign: workedCallsign,
+      });
+    }
+    if (omitted > 0) {
+      issues.push({
+        code: 'lotw_location_grid_mismatch',
+        severity: 'warning',
+        message: `${omitted} more QSO(s) have MY_* fields that differ from the LoTW upload station location`,
+        detail: `Only the first ${LOTW_PREFLIGHT_DETAIL_LIMIT} QSO location mismatch warning(s) are listed. Narrow the upload range or update the station location/QSO MY_* fields.`,
+      });
+    }
+    return issues;
+  }
+
+  private describeQsoLocationMismatches(
+    qso: QSORecord,
+    location: LoTWResolvedUploadLocation,
+  ): Array<{ field: string; qsoValue: string; stationValue: string }> {
+    const mismatches: Array<{ field: string; qsoValue: string; stationValue: string }> = [];
+    const compare = (field: string, qsoValue: unknown, stationValue: unknown) => {
+      const qsoText = normalizeLocationValue(String(qsoValue ?? ''));
+      const stationText = normalizeLocationValue(String(stationValue ?? ''));
+      if (qsoText && stationText && qsoText !== stationText) {
+        mismatches.push({ field, qsoValue: qsoText, stationValue: stationText });
+      }
+    };
+
+    compare('MY_GRIDSQUARE', qso.myGrid, location.gridSquare);
+    compare('MY_DXCC', qso.myDxccId, location.dxccId);
+    compare('MY_CQ_ZONE', qso.myCqZone, location.cqZone);
+    compare('MY_ITU_ZONE', qso.myItuZone, location.ituZone);
+    compare('MY_COUNTY', qso.myCounty, location.county);
+
+    const qsoState = this.normalizeQsoStateForLocation(qso.myState, qso.myDxccId ?? location.dxccId, location);
+    const stationState = normalizeLocationValue(location.state);
+    if (qsoState && stationState && qsoState !== stationState) {
+      mismatches.push({ field: 'MY_STATE', qsoValue: qsoState, stationValue: stationState });
+    }
+    return mismatches;
+  }
+
+  private normalizeQsoStateForLocation(
+    state: string | undefined,
+    dxccId: number | undefined,
+    location: LoTWResolvedUploadLocation,
+  ): string {
+    if (!state) return '';
+    const normalized = normalizeLoTWStationLocation({
+      ...location,
+      dxccId,
+      state,
+    }).location?.state;
+    return normalizeLocationValue(normalized ?? state);
   }
 
   private selectCertificateForQSO(
@@ -1107,10 +1683,100 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     return candidates[0] || null;
   }
 
+  private createCertificateMismatchIssue(
+    qso: QSORecord,
+    stationCallsign: string,
+    dxccId: number | undefined,
+    certificates: LoTWCertificateSummary[],
+    reasonOverride?: string,
+  ): LoTWUploadIssue {
+    const qsoTime = qso.startTime;
+    const workedCallsign = normalizeQsoCallsign(qso.callsign) || '(unknown)';
+    const when = formatIssueTimestamp(qsoTime);
+    const reason = reasonOverride || this.describeCertificateMismatch(qso, stationCallsign, dxccId, certificates);
+    const certificateSummary = this.formatCertificateCandidates(certificates, stationCallsign);
+    const detailParts = [
+      `reason=${reason}`,
+      `qsoId=${qso.id || '(missing)'}`,
+      `workedCallsign=${workedCallsign}`,
+      `stationCallsign=${stationCallsign || '(missing)'}`,
+      `qsoTime=${when}`,
+      `uploadDxcc=${dxccId ?? '(missing)'}`,
+      `availableCertificates=${certificateSummary}`,
+    ];
+
+    return {
+      code: 'certificate_date_range_mismatch',
+      severity: 'error',
+      message: `${workedCallsign} at ${when} does not match any uploaded LoTW certificate by station callsign, DXCC, and QSO date range`,
+      detail: detailParts.join('; '),
+      qsoId: qso.id,
+      qsoCallsign: workedCallsign,
+    };
+  }
+
+  private describeCertificateMismatch(
+    qso: QSORecord,
+    stationCallsign: string,
+    dxccId: number | undefined,
+    certificates: LoTWCertificateSummary[],
+  ): string {
+    if (certificates.length === 0) {
+      return 'No LoTW certificates are uploaded';
+    }
+
+    const stationMatches = certificates.filter((cert) => cert.callsign === stationCallsign);
+    if (stationMatches.length === 0) {
+      return `No certificate matches station callsign ${stationCallsign || '(missing)'}`;
+    }
+
+    const dxccMatches = stationMatches.filter((cert) => !dxccId || cert.dxccId === dxccId);
+    if (dxccId && dxccMatches.length === 0) {
+      const availableDxcc = Array.from(new Set(stationMatches.map((cert) => cert.dxccId ?? 'missing'))).join(',');
+      return `Station callsign matches, but configured upload DXCC ${dxccId} does not match certificate DXCC (${availableDxcc})`;
+    }
+
+    const qsoTime = qso.startTime;
+    const dateMatches = dxccMatches.filter((cert) => qsoTime >= cert.qsoStartDate && qsoTime <= cert.qsoEndDate);
+    if (dateMatches.length === 0) {
+      return `Station callsign and DXCC match, but QSO time ${formatIssueTimestamp(qsoTime)} is outside certificate QSO date range`;
+    }
+
+    return 'No usable LoTW certificate could be selected for this QSO';
+  }
+
+  private formatCertificateCandidates(certificates: LoTWCertificateSummary[], stationCallsign: string): string {
+    if (certificates.length === 0) {
+      return 'none';
+    }
+
+    const relevant = certificates
+      .filter((cert) => cert.callsign === stationCallsign)
+      .slice(0, 10);
+    const list = (relevant.length > 0 ? relevant : certificates.slice(0, 10)).map((cert) => (
+      `${cert.id}{callsign=${cert.callsign},dxcc=${cert.dxccId ?? 'missing'},qsoRange=${formatLotwQueryDate(cert.qsoStartDate)}..${formatLotwQueryDate(cert.qsoEndDate)},status=${cert.status}}`
+    ));
+    const omitted = Math.max(0, (relevant.length > 0 ? certificates.filter((cert) => cert.callsign === stationCallsign).length : certificates.length) - list.length);
+    return omitted > 0 ? `${list.join('|')}|and ${omitted} more` : list.join('|');
+  }
+
+  private splitPreparedBatches(batches: PreparedBatch[]): PreparedBatch[] {
+    const split: PreparedBatch[] = [];
+    for (const batch of batches) {
+      for (let index = 0; index < batch.qsos.length; index += LOTW_UPLOAD_BATCH_SIZE) {
+        split.push({
+          certificate: batch.certificate,
+          qsos: batch.qsos.slice(index, index + LOTW_UPLOAD_BATCH_SIZE),
+        });
+      }
+    }
+    return split;
+  }
+
   private async uploadBatch(
     batch: PreparedBatch,
-    location: ReturnType<LoTWSyncProvider['resolveUploadLocation']>,
-  ): Promise<void> {
+    location: LoTWResolvedUploadLocation,
+  ): Promise<UploadBatchAcceptedResult> {
     const tq8Content = this.buildTq8Content(batch.qsos, batch.certificate, location);
     const compressed = gzipSync(Buffer.from(tq8Content, 'utf-8'), { level: 9 });
     const form = new FormData();
@@ -1125,11 +1791,21 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     });
     const body = await response.text();
 
-    if (!/<!--\s*\.UPL\.\s*accepted\s*-->/i.test(body)) {
+    if (!response.ok || !/<!--\s*\.UPL\.\s*accepted\s*-->/i.test(body)) {
       const firstLine = summarizeLotwResponse(body) || 'LoTW server rejected the upload payload';
       this.ctx.log.warn('LoTW server rejected upload', { responseSnippet: firstLine });
-      throw new Error(`LoTW server rejected the upload payload: ${firstLine}`);
+      throw new LoTWRemoteError(
+        `LoTW server rejected the upload payload: ${firstLine}`,
+        response.ok ? undefined : response.status,
+        response.status >= 500 || response.status === 429,
+        firstLine,
+      );
     }
+
+    return {
+      acceptedAt: Date.now(),
+      responseSummary: summarizeLotwResponse(body),
+    };
   }
 
   // ========== TQ8 generation ==========
@@ -1137,7 +1813,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
   private buildTq8Content(
     qsos: QSORecord[],
     certificate: StoredCertificate,
-    location: ReturnType<LoTWSyncProvider['resolveUploadLocation']>,
+    location: LoTWResolvedUploadLocation,
   ): string {
     const certBody = certificate.certPem
       .replace('-----BEGIN CERTIFICATE-----', '')
@@ -1194,7 +1870,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
   }
 
   private buildStationFields(
-    location: ReturnType<LoTWSyncProvider['resolveUploadLocation']>,
+    location: LoTWResolvedUploadLocation,
     dxccId: number,
   ): string[] {
     const fields: string[] = [];
@@ -1211,8 +1887,9 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       fields.push('<IOTA:' + String(location.iota.length) + '>' + location.iota);
     }
 
-    const state = normalizeLocationValue(location.state);
-    const county = normalizeLocationValue(location.county);
+    const canonical = normalizeLoTWStationLocation({ ...location, dxccId: location.dxccId ?? dxccId }).location;
+    const state = normalizeLocationValue(canonical?.state ?? location.state);
+    const county = normalizeLocationValue(canonical?.county ?? location.county);
 
     switch (dxccId) {
       case 1:
@@ -1257,7 +1934,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
 
   private buildSignData(input: {
     qso: QSORecord;
-    location: ReturnType<LoTWSyncProvider['resolveUploadLocation']>;
+    location: LoTWResolvedUploadLocation;
     dxccId: number;
     band: string;
     mode: string;
@@ -1266,8 +1943,9 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     time: string;
   }): string {
     const parts: string[] = [];
-    const state = normalizeLocationValue(input.location.state);
-    const county = normalizeLocationValue(input.location.county);
+    const canonical = normalizeLoTWStationLocation({ ...input.location, dxccId: input.location.dxccId ?? input.dxccId }).location;
+    const state = normalizeLocationValue(canonical?.state ?? input.location.state);
+    const county = normalizeLocationValue(canonical?.county ?? input.location.county);
 
     if (input.dxccId === 150 && state) parts.push(state);
     if (input.dxccId === 1 && state) parts.push(mapCanadaProvince(state));

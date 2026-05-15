@@ -4,7 +4,8 @@ import type { PluginDefinition, PluginUIRequestContext } from '@tx5dr/plugin-api
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import { LoTWSyncProvider, type LoTWPluginConfig } from './provider.js';
-import { normalizeCallsign } from '@tx5dr/plugin-api';
+import { createSyncFailure, normalizeCallsign } from '@tx5dr/plugin-api';
+import { normalizeLoTWStationLocation } from '@tx5dr/core';
 
 export const BUILTIN_LOTW_SYNC_PLUGIN_NAME = 'lotw-sync';
 
@@ -127,6 +128,13 @@ export const lotwSyncPlugin: PluginDefinition = {
         accessScope: 'operator',
         resourceBinding: 'callsign',
       },
+      {
+        id: 'upload-wizard',
+        title: 'LoTW Upload',
+        entry: 'upload-wizard.html',
+        accessScope: 'operator',
+        resourceBinding: 'callsign',
+      },
     ],
   },
 
@@ -160,8 +168,28 @@ export const lotwSyncPlugin: PluginDefinition = {
               };
               autoUploadQSO: boolean;
             };
-            provider.setConfig(cs, config);
-            return { success: true };
+            const normalized = normalizeLoTWStationLocation(config.uploadLocation);
+            const blockingIssues = normalized.issues.filter((issue) => issue.severity === 'error');
+            if (blockingIssues.length > 0) {
+              return { success: false, issues: normalized.issues };
+            }
+            provider.setConfig(cs, {
+              ...config,
+              uploadLocation: normalized.location
+                ? {
+                  ...config.uploadLocation,
+                  callsign: normalized.location.callsign,
+                  dxccId: normalized.location.dxccId,
+                  gridSquare: normalized.location.gridSquare,
+                  cqZone: normalized.location.cqZone,
+                  ituZone: normalized.location.ituZone,
+                  iota: normalized.location.iota,
+                  state: normalized.location.state,
+                  county: normalized.location.county,
+                }
+                : config.uploadLocation,
+            });
+            return { success: true, issues: normalized.issues };
           }
           case 'testConnection': {
             const cs = requireBoundCallsign(requestContext, d);
@@ -205,12 +233,18 @@ export const lotwSyncPlugin: PluginDefinition = {
           }
           case 'getUploadPreflight': {
             const cs = requireBoundCallsign(requestContext, d);
-            return provider.getUploadPreflight(cs);
+            const since = d.since as number | undefined;
+            const until = d.until as number | undefined;
+            const includeAlreadyUploaded = d.includeAlreadyUploaded === true;
+            return provider.getUploadPreflight(cs, { since, until, includeAlreadyUploaded });
           }
           case 'getUploadPreflightDraft': {
             const cs = requireBoundCallsign(requestContext, d);
             const draftConfig = mergeDraftConfig(cs, provider.getConfig(cs), d.config);
-            return provider.getUploadPreflight(cs, draftConfig);
+            const since = d.since as number | undefined;
+            const until = d.until as number | undefined;
+            const includeAlreadyUploaded = d.includeAlreadyUploaded === true;
+            return provider.getUploadPreflight(cs, draftConfig, { since, until, includeAlreadyUploaded });
           }
           case 'getLastDownloadTime': {
             const cs = requireBoundCallsign(requestContext, d);
@@ -220,19 +254,54 @@ export const lotwSyncPlugin: PluginDefinition = {
           case 'performDownload': {
             const cs = requireBoundCallsign(requestContext, d);
             const since = d.since as number | undefined;
+            const until = d.until as number | undefined;
             try {
-              const result = await provider.download(cs, since ? { since } : undefined);
+              const result = await provider.download(cs, since || until ? { since, until } : undefined);
               return result;
             } catch (err) {
               return {
-                downloaded: 0, matched: 0, updated: 0,
-                failures: [{
-                  code: 'lotw_download_failed',
-                  message: err instanceof Error ? err.message : 'Download failed',
-                  source: 'provider',
-                  operation: 'download',
-                  providerId: 'lotw',
-                }],
+                downloaded: 0, matched: 0, updated: 0, imported: 0,
+                failures: [
+                  createSyncFailure({
+                    code: 'lotw_download_failed',
+                    message: err instanceof Error ? err.message : 'Download failed',
+                    source: 'provider',
+                    operation: 'download',
+                    providerId: 'lotw',
+                  }),
+                ],
+              };
+            }
+          }
+          case 'performUpload': {
+            const cs = requireBoundCallsign(requestContext, d);
+            const skipBlockedQsos = d.skipBlockedQsos === true;
+            const since = d.since as number | undefined;
+            const until = d.until as number | undefined;
+            const includeAlreadyUploaded = d.includeAlreadyUploaded === true;
+            try {
+              return await provider.upload(cs, {
+                trigger: 'manual',
+                since,
+                until,
+                includeAlreadyUploaded,
+                skipBlockedQsos,
+                onProgress: (progress) => {
+                  requestContext.page.push('uploadProgress', progress);
+                },
+              });
+            } catch (err) {
+              return {
+                uploaded: 0, skipped: 0, failed: 0,
+                failures: [
+                  createSyncFailure({
+                    code: 'lotw_upload_failed',
+                    message: err instanceof Error ? err.message : 'Upload failed',
+                    source: 'provider',
+                    operation: 'upload',
+                    providerId: 'lotw',
+                  }),
+                ],
               };
             }
           }

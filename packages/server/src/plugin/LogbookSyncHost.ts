@@ -3,6 +3,7 @@ import type {
   SyncAction,
   SyncTestResult,
   SyncUploadResult,
+  SyncUploadOptions,
   SyncUploadPreflightResult,
   SyncDownloadResult,
   SyncDownloadOptions,
@@ -154,6 +155,7 @@ export class LogbookSyncHost {
   async upload(
     providerId: string,
     callsign: string,
+    options?: Pick<SyncUploadOptions, 'skipBlockedQsos' | 'since' | 'until' | 'includeAlreadyUploaded'>,
   ): Promise<SyncUploadResult> {
     const entry = this.providers.get(providerId);
     if (!entry) {
@@ -174,18 +176,25 @@ export class LogbookSyncHost {
     }
 
     const key = LogbookSyncHost.uploadKey(providerId, callsign);
-    return this.enqueueUpload(key, () => entry.provider.upload(callsign, { trigger: 'manual' }));
+    return this.enqueueUpload(key, () => entry.provider.upload(callsign, {
+      trigger: 'manual',
+      since: options?.since,
+      until: options?.until,
+      includeAlreadyUploaded: options?.includeAlreadyUploaded,
+      skipBlockedQsos: options?.skipBlockedQsos,
+    }));
   }
 
   async getUploadPreflight(
     providerId: string,
     callsign: string,
+    options?: Pick<SyncUploadOptions, 'since' | 'until' | 'includeAlreadyUploaded'>,
   ): Promise<SyncUploadPreflightResult | null> {
     const entry = this.providers.get(providerId);
     if (!entry?.provider.getUploadPreflight) {
       return null;
     }
-    return entry.provider.getUploadPreflight(callsign);
+    return entry.provider.getUploadPreflight(callsign, options);
   }
 
   /**

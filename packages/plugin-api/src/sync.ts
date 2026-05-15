@@ -76,7 +76,7 @@ export interface LogbookSyncProvider {
    * When implemented, the host may call this before upload/full-sync actions
    * to surface blocked QSOs or missing configuration without starting upload.
    */
-  getUploadPreflight?(callsign: string): Promise<SyncUploadPreflightResult>;
+  getUploadPreflight?(callsign: string, options?: SyncUploadPreflightOptions): Promise<SyncUploadPreflightResult>;
 
   /**
    * Downloads QSO confirmations/records from the external service.
@@ -168,7 +168,7 @@ export function sanitizeSyncFailureText(
     if (!secret || secret.length < 4) {
       continue;
     }
-    text = text.replace(new RegExp(escapeRegExp(secret), 'g'), '[redacted]');
+    text = text.replace(new RegExp(`(?<![A-Za-z0-9])${escapeRegExp(secret)}(?![A-Za-z0-9])`, 'g'), '[redacted]');
   }
 
   return text
@@ -228,15 +228,55 @@ export interface SyncTestResult {
 }
 
 export interface SyncUploadResult {
+  /** Number of records submitted to the external service. */
+  submitted?: number;
+  /** @deprecated Upload providers should not verify by querying the external service; download sync owns confirmation. */
+  verified?: number;
   uploaded: number;
   skipped: number;
   failed: number;
   failures?: SyncFailure[];
 }
 
+export interface SyncUploadProgress {
+  stage:
+    | 'preparing'
+    | 'prepared'
+    | 'batch_uploading'
+    | 'batch_accepted'
+    | 'batch_failed'
+    | 'updating_local'
+    | 'finished';
+  callsign?: string;
+  batchIndex?: number;
+  batchCount?: number;
+  qsoCount?: number;
+  pendingCount?: number;
+  uploadableCount?: number;
+  blockedCount?: number;
+  submitted?: number;
+  uploaded?: number;
+  /** @deprecated Upload providers should not verify by querying the external service; download sync owns confirmation. */
+  verified?: number;
+  skipped?: number;
+  failed?: number;
+  failureCount?: number;
+  message?: string;
+}
+
 export interface SyncUploadOptions {
   /** Distinguishes manual uploads from auto-upload triggered by QSO completion. */
   trigger?: 'manual' | 'auto';
+  /** Upload records starting at this timestamp (epoch ms), inclusive. */
+  since?: number;
+  /** Upload records ending at this timestamp (epoch ms), inclusive. */
+  until?: number;
+  /** Include records already marked as uploaded/sent locally. Defaults to false. */
+  includeAlreadyUploaded?: boolean;
+  /** Continue with uploadable records when preflight only found per-QSO blockers. */
+  skipBlockedQsos?: boolean;
+  /** Optional in-process progress callback for custom sync UIs. */
+  onProgress?: (progress: SyncUploadProgress) => void;
   /**
    * Optional explicit QSO batch supplied by the host.
    *
@@ -246,10 +286,22 @@ export interface SyncUploadOptions {
   records?: import('@tx5dr/contracts').QSORecord[];
 }
 
+export interface SyncUploadPreflightOptions {
+  /** Check records starting at this timestamp (epoch ms), inclusive. */
+  since?: number;
+  /** Check records ending at this timestamp (epoch ms), inclusive. */
+  until?: number;
+  /** Include records already marked as uploaded/sent locally. Defaults to false. */
+  includeAlreadyUploaded?: boolean;
+}
+
 export interface SyncPreflightIssue {
   code: string;
   severity: 'info' | 'warning' | 'error';
   message: string;
+  detail?: string;
+  qsoId?: string;
+  qsoCallsign?: string;
 }
 
 export interface SyncUploadPreflightResult {
@@ -258,6 +310,7 @@ export interface SyncUploadPreflightResult {
   uploadableCount: number;
   blockedCount: number;
   issues?: SyncPreflightIssue[];
+  canSkipBlocked?: boolean;
   guidance?: string[];
 }
 
@@ -268,6 +321,10 @@ export interface SyncDownloadResult {
   matched: number;
   /** Number of local QSOs whose QSL status was updated. */
   updated: number;
+  /** Number of downloaded records imported because no local match existed. */
+  imported?: number;
+  /** Number of provider request windows used to download the range. */
+  windowCount?: number;
   failures?: SyncFailure[];
 }
 

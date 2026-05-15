@@ -11,7 +11,7 @@ export interface ProjectedQsoMode {
 }
 
 const SSB_SUBMODES = new Set(['USB', 'LSB']);
-const LOTW_MFSK_CONTACT_MODES = new Set(['FT4', 'FST4', 'MFSK16', 'MFSK8', 'Q65']);
+const LOTW_MFSK_CONTACT_MODES = new Set(['FT8', 'FT4', 'FST4', 'MFSK16', 'MFSK8', 'Q65']);
 
 function normalizeModeToken(value?: string): string | undefined {
   const normalized = value?.trim().toUpperCase();

@@ -474,6 +474,77 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
     },
   );
 
+  // Standalone plugin pages (not wrapped in RadioProvider) do not have the
+  // app WebSocket, so drain queued page pushes over the existing HTTP bridge.
+  useEffect(() => {
+    if (!pageSessionId || radioService) {
+      return;
+    }
+
+    let cancelled = false;
+    let inFlight = false;
+    let warned = false;
+
+    const pollPushes = async () => {
+      if (inFlight) {
+        return;
+      }
+      inFlight = true;
+      try {
+        const response = await fetch(`/api/plugins/${encodeURIComponent(pluginName)}/ui-session/pushes`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify({ pageId, pageSessionId }),
+        });
+        const json = await response.json() as { result?: PluginPagePushPayload[]; error?: string };
+        if (!response.ok) {
+          throw new Error(json.error ?? 'Plugin page push polling failed');
+        }
+        if (cancelled || !Array.isArray(json.result)) {
+          return;
+        }
+        for (const payload of json.result) {
+          if (
+            payload.pluginName === pluginName
+            && payload.pageId === pageId
+            && payload.pageSessionId === pageSessionId
+          ) {
+            postToIframe({
+              type: 'tx5dr:push',
+              action: payload.action,
+              data: payload.data,
+            });
+          }
+        }
+      } catch (err) {
+        if (!cancelled && !warned) {
+          warned = true;
+          logger.warn('Plugin page push polling failed', {
+            pluginName,
+            pageId,
+            pageSessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void pollPushes();
+    const timer = window.setInterval(() => {
+      void pollPushes();
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [pageId, pageSessionId, pluginName, postToIframe, radioService]);
+
   return (
     <div
       className={className}

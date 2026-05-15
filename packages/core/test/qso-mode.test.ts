@@ -38,5 +38,6 @@ test('projects stored modes to ADIF and LoTW modes', () => {
   assert.deepEqual(toAdifMode({ mode: 'SSB', submode: 'USB' }), { mode: 'SSB', submode: 'USB' });
   assert.equal(toLotwContactMode({ mode: 'SSB', submode: 'USB' }), 'SSB');
   assert.deepEqual(toAdifMode({ mode: 'FT4' }), { mode: 'MFSK', submode: 'FT4' });
+  assert.equal(toLotwContactMode({ mode: 'MFSK', submode: 'FT8' }), 'FT8');
   assert.equal(toLotwContactMode({ mode: 'MFSK', submode: 'FT4' }), 'FT4');
 });
