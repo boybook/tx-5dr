@@ -22,6 +22,7 @@ import { RadioMetersDisplay } from '../components/radio/control/RadioMetersDispl
 import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
 import { ClockDisplay } from '../components/system/ClockDisplay';
 import { StationInfoPopover } from '../components/station/StationInfoPopover';
+import { AppBrandAboutLink } from '../components/common/AppBrandAboutLink';
 import { useSlotPacks, useRadioState, useConnection, useStationInfo, useMyRelatedTimeline } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
@@ -136,7 +137,7 @@ export const LeftLayout: React.FC = () => {
         <div className="flex items-center">
           {!isElectron() && !(isMobile && hasStationContent) && (
             <div className="text-lg font-bold text-foreground cursor-default select-none pl-2 flex items-center gap-1">
-              <span className="text-default-800">TX-5DR</span>
+              <AppBrandAboutLink />
               <Button
                 onPress={() => window.open('https://github.com/boybook/tx-5dr', '_blank')}
                 isIconOnly

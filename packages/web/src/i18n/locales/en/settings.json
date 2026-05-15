@@ -354,7 +354,8 @@
     "radioProfileDesc1": "Radio connection and audio devices are configured in the Radio Config Profile.",
     "radioProfileDesc2": "Each Profile contains independent radio and audio settings for quick switching between physical radios.",
     "goToRadioProfile": "Go to Radio Config",
-    "saveSettings": "Save Settings"
+    "saveSettings": "Save Settings",
+    "tabAbout": "About"
   },
   "qsoNotifications": {
     "title": "QSO System Notifications",

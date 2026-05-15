@@ -354,7 +354,8 @@
     "radioProfileDesc1": "电台连接和音频设备在「电台配置 Profile」中设置。",
     "radioProfileDesc2": "每个 Profile 包含独立的电台和音频配置，支持快速切换不同方案。",
     "goToRadioProfile": "前往电台配置",
-    "saveSettings": "保存设置"
+    "saveSettings": "保存设置",
+    "tabAbout": "关于"
   },
   "qsoNotifications": {
     "title": "QSO 系统提醒",

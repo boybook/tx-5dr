@@ -24,6 +24,7 @@ import { TokenManagement } from '../auth/TokenManagement';
 import { StationInfoSettings, type StationInfoSettingsRef } from './StationInfoSettings';
 import { OpenWebRXSettings } from './OpenWebRXSettings';
 import { ShortcutSettings, type ShortcutSettingsRef } from './ShortcutSettings';
+import { AboutPage } from '../../pages/AboutPage';
 import { useHasMinRole, useCan } from '../../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import type { PluginSettingsTabRef } from '../plugins/PluginSettingsTab';
@@ -41,7 +42,7 @@ interface SettingsModalProps {
 }
 
 // 设置标签页类型（radio 和 audio 已迁移到 ProfileModal，logbook_sync 已迁移到 SyncConfigModal）
-export type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'rigctld' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx' | 'plugins' | 'shortcuts';
+export type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'rigctld' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx' | 'plugins' | 'shortcuts' | 'about';
 export type SettingsSection = 'updates';
 
 const DEFAULT_USES_MODAL_FOOTER_SAVE: Record<SettingsTab, boolean> = {
@@ -58,6 +59,7 @@ const DEFAULT_USES_MODAL_FOOTER_SAVE: Record<SettingsTab, boolean> = {
   openwebrx: false,
   plugins: true,
   shortcuts: true,
+  about: false,
 };
 
 export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPresetMode, initialSection }: SettingsModalProps) {
@@ -311,6 +313,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
           return '🔌';
         case 'shortcuts':
           return '⌨️';
+        case 'about':
+          return 'ℹ️';
         default:
           return '⚙️';
       }
@@ -340,6 +344,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         return `🔌 ${t('plugins.tabTitle', 'Plugins')}`;
       case 'shortcuts':
         return `⌨️ ${t('shortcuts.tabTitle')}`;
+      case 'about':
+        return `ℹ️ ${t('modal.tabAbout')}`;
       default:
         return t('modal.defaultTab');
     }
@@ -423,6 +429,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         </React.Suspense>;
       case 'shortcuts':
         return <ShortcutSettings ref={shortcutSettingsRef} onUnsavedChanges={setHasUnsavedChanges} />;
+      case 'about':
+        return <AboutPage embedded />;
       default:
         return null;
     }
@@ -476,7 +484,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                 className={
                   isMobile
                     ? 'min-w-0 w-full px-3 py-2 border-b border-divider'
-                    : 'p-5 pr-1 min-h-0 max-h-full overflow-y-auto overflow-x-hidden flex-shrink-0'
+                    : 'p-5 min-h-0 max-h-full overflow-y-auto overflow-x-hidden flex-shrink-0 bg-content1'
                 }
               >
                 <Tabs
@@ -555,12 +563,16 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                       title={getTabTitle('plugins', isMobile)}
                     />
                   )}
+                  <Tab
+                    key="about"
+                    title={getTabTitle('about', isMobile)}
+                  />
                 </Tabs>
               </div>
 
               {/* 内容区域 */}
-              <div className="flex-1 overflow-auto min-h-0">
-                <div className="p-3 sm:p-6">
+              <div className={`flex-1 min-h-0 ${activeTab === 'about' ? 'overflow-hidden' : 'overflow-auto'}`}>
+                <div className={activeTab === 'about' ? 'h-full' : 'p-3 sm:p-6'}>
                   {renderTabContent()}
                 </div>
               </div>

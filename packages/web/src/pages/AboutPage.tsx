@@ -19,7 +19,11 @@ const LICENSE_URL = 'https://github.com/boybook/tx-5dr/blob/main/LICENSE';
 const AUTHOR_URL = 'https://github.com/boybook';
 const TITLEBAR_HEIGHT = 32;
 
-export const AboutPage: React.FC = () => {
+interface AboutPageProps {
+  embedded?: boolean;
+}
+
+export const AboutPage: React.FC<AboutPageProps> = ({ embedded }) => {
   useTheme();
   const { t } = useTranslation('about');
   const version = useAppVersion();
@@ -28,19 +32,24 @@ export const AboutPage: React.FC = () => {
   const isNightly = packaged && buildInfo?.channel === 'nightly';
   const displayVersion = buildInfo?.version || version || t('versionUnknown');
   const year = new Date().getFullYear();
-  const showMacTitlebar = isElectron() && navigator.userAgent.includes('Macintosh');
+  const isEmbedded = embedded ?? (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('embed') === '1');
+  const showMacTitlebar = !isEmbedded && isElectron() && navigator.userAgent.includes('Macintosh');
 
   useEffect(() => {
+    if (isEmbedded) {
+      return undefined;
+    }
+
     document.documentElement.classList.add('about-page');
     document.body.classList.add('about-page');
     return () => {
       document.documentElement.classList.remove('about-page');
       document.body.classList.remove('about-page');
     };
-  }, []);
+  }, [isEmbedded]);
 
   return (
-    <div className="min-h-screen bg-default-100 text-foreground">
+    <div className={`${isEmbedded ? 'h-full overflow-y-auto' : 'min-h-screen'} bg-default-100 text-foreground`}>
       {showMacTitlebar && (
         <div
           className="fixed top-0 left-0 right-0 z-50 flex"
