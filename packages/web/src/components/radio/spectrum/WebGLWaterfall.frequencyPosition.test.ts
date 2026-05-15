@@ -7,6 +7,7 @@ import {
   WATERFALL_WHEEL_DELTA_LINE,
   WATERFALL_WHEEL_DELTA_PAGE,
   WATERFALL_WHEEL_DELTA_PIXEL,
+  clearWaterfallGestureOverrideForSource,
   easeSpectrumAxisTransition,
   getWaterfallDragCommitDelayMs,
   getWaterfallDragTunedFrequency,
@@ -72,5 +73,13 @@ describe('WebGLWaterfall frequency positioning', () => {
     expect(WATERFALL_HORIZONTAL_WHEEL_FREQUENCY_SCALE).toBe(0.25);
     expect(getWaterfallHorizontalWheelTunedFrequency(14_200_000, 100, 40)).toBe(14_201_000);
     expect(getWaterfallHorizontalWheelTunedFrequency(14_200_000, -100, 40)).toBe(14_199_000);
+  });
+
+  it('clears only the gesture overlay owned by the ending gesture source', () => {
+    const mouseDragOverride = { source: 'mouse-drag' as const, frequency: 14_200_000 };
+    const wheelOverride = { source: 'horizontal-wheel' as const, frequency: 14_201_000 };
+
+    expect(clearWaterfallGestureOverrideForSource(mouseDragOverride, 'horizontal-wheel')).toBe(mouseDragOverride);
+    expect(clearWaterfallGestureOverrideForSource(wheelOverride, 'horizontal-wheel')).toBeNull();
   });
 });
