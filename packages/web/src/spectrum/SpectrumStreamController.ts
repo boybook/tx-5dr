@@ -18,6 +18,7 @@ export interface RadioSdrOptimisticFrequencyIntent {
   targetFrequencyHz: number;
   baselineFrequencyHz: number;
   baselineFrameCenterHz: number;
+  baselineFrameRange?: { min: number; max: number };
   sentAt?: number;
   timeoutMs?: number;
 }
@@ -264,9 +265,11 @@ export class SpectrumStreamController {
     targetFrequencyHz: number;
     baselineFrequencyHz: number;
     baselineFrameCenterHz: number;
+    baselineFrameRange: { min: number; max: number } | null;
     sentAt: number;
     timeoutMs: number;
   } | null = null;
+  private radioSdrServerSyncHoldUntil = 0;
   private lastRenderTime = 0;
   private lastArrivalTime = 0;
   private arrivalIntervalEma = DEFAULT_FRAME_DURATION_MS;
@@ -300,6 +303,14 @@ export class SpectrumStreamController {
     return latest ? latest.frequencyRange : null;
   };
 
+  setRadioSdrServerSyncHoldUntil(untilMs: number | null): void {
+    this.radioSdrServerSyncHoldUntil = typeof untilMs === 'number' && Number.isFinite(untilMs)
+      ? Math.max(0, untilMs)
+      : untilMs === Number.POSITIVE_INFINITY
+        ? Number.POSITIVE_INFINITY
+        : 0;
+  }
+
   setRadioSdrOptimisticFrequencyIntent(intent: RadioSdrOptimisticFrequencyIntent | null): void {
     this.clearRadioSdrOptimisticTimer();
 
@@ -317,6 +328,12 @@ export class SpectrumStreamController {
       targetFrequencyHz: intent.targetFrequencyHz,
       baselineFrequencyHz: intent.baselineFrequencyHz,
       baselineFrameCenterHz: intent.baselineFrameCenterHz,
+      baselineFrameRange: intent.baselineFrameRange
+        && Number.isFinite(intent.baselineFrameRange.min)
+        && Number.isFinite(intent.baselineFrameRange.max)
+        && intent.baselineFrameRange.max > intent.baselineFrameRange.min
+        ? { ...intent.baselineFrameRange }
+        : this.deriveRadioSdrNativeRange(),
       sentAt: intent.sentAt ?? Date.now(),
       timeoutMs: intent.timeoutMs ?? RADIO_SDR_OPTIMISTIC_TIMEOUT_MS,
     };
@@ -435,10 +452,16 @@ export class SpectrumStreamController {
   }
 
   private deriveRadioSdrOptimisticRange(): { min: number; max: number } | null {
-    const nativeRange = this.deriveRadioSdrNativeRange();
     const intent = this.radioSdrOptimisticIntent;
-    if (!nativeRange || !intent) {
-      return nativeRange;
+    if (!intent) {
+      return this.deriveRadioSdrNativeRange();
+    }
+
+    const nativeRange = this.isRadioSdrServerSyncHeld()
+      ? (intent.baselineFrameRange ?? this.deriveRadioSdrNativeRange())
+      : this.deriveRadioSdrNativeRange();
+    if (!nativeRange) {
+      return null;
     }
 
     const offsetHz = intent.targetFrequencyHz - intent.baselineFrequencyHz;
@@ -817,6 +840,10 @@ export class SpectrumStreamController {
       return false;
     }
 
+    if (this.isRadioSdrServerSyncHeld()) {
+      return false;
+    }
+
     const frameSpanHz = frame.frequencyRange.max - frame.frequencyRange.min;
     if (!Number.isFinite(frameSpanHz) || frameSpanHz <= 0) {
       return false;
@@ -829,6 +856,11 @@ export class SpectrumStreamController {
       frameSpanHz * RADIO_SDR_OPTIMISTIC_CONFIRM_SPAN_RATIO,
     );
     return Math.abs(frameCenterHz - expectedCenterHz) <= toleranceHz;
+  }
+
+  private isRadioSdrServerSyncHeld(now = Date.now()): boolean {
+    return this.radioSdrServerSyncHoldUntil === Number.POSITIVE_INFINITY
+      || (this.radioSdrServerSyncHoldUntil > 0 && now < this.radioSdrServerSyncHoldUntil);
   }
 
   private syncStatusSnapshot(): void {

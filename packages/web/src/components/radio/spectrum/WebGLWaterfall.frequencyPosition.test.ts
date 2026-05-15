@@ -1,9 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
+  WATERFALL_DRAG_FREQUENCY_COMMIT_INTERVAL_MS,
+  WATERFALL_HORIZONTAL_WHEEL_FREQUENCY_SCALE,
+  WATERFALL_HORIZONTAL_WHEEL_SESSION_IDLE_MS,
   WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ,
+  WATERFALL_WHEEL_DELTA_LINE,
+  WATERFALL_WHEEL_DELTA_PAGE,
+  WATERFALL_WHEEL_DELTA_PIXEL,
   easeSpectrumAxisTransition,
+  getWaterfallDragCommitDelayMs,
+  getWaterfallDragTunedFrequency,
   getWaterfallFrequencyPositionPercent,
+  getWaterfallHorizontalWheelTunedFrequency,
   interpolateSpectrumAxis,
+  normalizeWaterfallWheelDeltaX,
+  shouldHandleWaterfallHorizontalWheel,
 } from './WebGLWaterfall';
 
 describe('WebGLWaterfall frequency positioning', () => {
@@ -33,5 +44,33 @@ describe('WebGLWaterfall frequency positioning', () => {
     );
 
     expect(axis).toEqual({ minHz: 950, maxHz: 1150, binCount: 256 });
+  });
+
+  it('throttles drag frequency commits at the configured cadence', () => {
+    expect(WATERFALL_DRAG_FREQUENCY_COMMIT_INTERVAL_MS).toBe(80);
+    expect(getWaterfallDragCommitDelayMs(1_000, null)).toBe(0);
+    expect(getWaterfallDragCommitDelayMs(1_040, 1_000)).toBe(40);
+    expect(getWaterfallDragCommitDelayMs(1_080, 1_000)).toBe(0);
+  });
+
+  it('maps drag distance to a one-to-one image-following tuning delta', () => {
+    expect(getWaterfallDragTunedFrequency(14_200_000, 25, 40)).toBe(14_199_000);
+    expect(getWaterfallDragTunedFrequency(14_200_000, -25, 40)).toBe(14_201_000);
+  });
+
+  it('normalizes horizontal wheel deltas and ignores vertical/pinch gestures', () => {
+    expect(WATERFALL_HORIZONTAL_WHEEL_SESSION_IDLE_MS).toBe(350);
+    expect(normalizeWaterfallWheelDeltaX({ deltaX: 2, deltaMode: WATERFALL_WHEEL_DELTA_PIXEL }, 800)).toBe(2);
+    expect(normalizeWaterfallWheelDeltaX({ deltaX: 2, deltaMode: WATERFALL_WHEEL_DELTA_LINE }, 800)).toBe(32);
+    expect(normalizeWaterfallWheelDeltaX({ deltaX: 2, deltaMode: WATERFALL_WHEEL_DELTA_PAGE }, 800)).toBe(1600);
+    expect(shouldHandleWaterfallHorizontalWheel({ deltaX: 10, deltaY: 1, ctrlKey: false })).toBe(true);
+    expect(shouldHandleWaterfallHorizontalWheel({ deltaX: 1, deltaY: 10, ctrlKey: false })).toBe(false);
+    expect(shouldHandleWaterfallHorizontalWheel({ deltaX: 10, deltaY: 1, ctrlKey: true })).toBe(false);
+  });
+
+  it('maps horizontal wheel distance to a slower fine-tuning frequency delta', () => {
+    expect(WATERFALL_HORIZONTAL_WHEEL_FREQUENCY_SCALE).toBe(0.25);
+    expect(getWaterfallHorizontalWheelTunedFrequency(14_200_000, 100, 40)).toBe(14_201_000);
+    expect(getWaterfallHorizontalWheelTunedFrequency(14_200_000, -100, 40)).toBe(14_199_000);
   });
 });

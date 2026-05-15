@@ -530,10 +530,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
         canDragTx: isDigital,
         canRightClickSetFrequency: isDigital || canSetRadioFrequency,
         canDoubleClickSetFrequency: canSetRadioFrequency,
-        // Voice-mode drag tuning is intentionally disabled for now.
-        // In follow/center mode the SDR viewport recenters while dragging, which makes
-        // whole-spectrum drag interaction feel jumpy and harder to control precisely.
-        canDragFrequency: false,
+        canDragFrequency: canSetRadioFrequency && !isFixed,
         frequencyGestureTarget: isDigital ? 'operator-tx' : (canSetRadioFrequency ? 'radio-frequency' : null),
         frequencyStepHz: isDigital ? 1 : (canVoiceSetFrequency ? VOICE_FREQUENCY_GESTURE_STEP_HZ : (canCwSetFrequency ? 10 : null)),
         // Voice preset markers are negotiated here so SDR preset rendering stays on the

@@ -4,6 +4,7 @@ import {
   buildRadioSdrTxBandOverlays,
   clampCollapsedSpectrumFrequency,
   getCollapsedSpectrumPosition,
+  getRadioSdrDragFrequencyStepHz,
   resolveCollapsedSpectrumMarkerFrequencies,
   resolveSpectrumMarkerFrequencies,
 } from './SpectrumDisplay';
@@ -232,5 +233,11 @@ describe('collapsed spectrum positioning', () => {
       repeaterShift: 'none',
       toneMode: 'none',
     });
+  });
+
+  it('uses radio SDR drag steps for voice and CW tuning', () => {
+    expect(getRadioSdrDragFrequencyStepHz('voice')).toBe(1000);
+    expect(getRadioSdrDragFrequencyStepHz('cw')).toBe(10);
+    expect(getRadioSdrDragFrequencyStepHz('digital')).toBeNull();
   });
 });

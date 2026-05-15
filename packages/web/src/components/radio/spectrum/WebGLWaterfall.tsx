@@ -107,7 +107,12 @@ interface WebGLWaterfallProps {
   onFrequencyBandOverlayPreviewChange?: (id: string, change: FrequencyBandOverlayChange) => void;
   onFrequencyBandOverlayCommit?: (id: string, change: FrequencyBandOverlayChange) => void;
   onPresetMarkerClick?: (frequency: number) => void;
+  onDragFrequencyPreview?: (frequency: number) => void;
   onDragFrequencyChange?: (frequency: number) => void;
+  onDragFrequencyActiveChange?: (active: boolean) => void;
+  enableHorizontalWheelFrequency?: boolean;
+  dragFrequencyStepHz?: number | null;
+  dragFrequencyCommitIntervalMs?: number;
   onDoubleClickSetFrequency?: (frequency: number) => void;
   onRightClickSetFrequency?: (frequency: number) => void;
   onActualRangeChange?: (range: { min: number; max: number } | null) => void;
@@ -127,8 +132,76 @@ interface WebGLWaterfallProps {
 }
 
 const FREQUENCY_GESTURE_DRAG_THRESHOLD_PX = 4;
+export const WATERFALL_DRAG_FREQUENCY_COMMIT_INTERVAL_MS = 80;
+export const WATERFALL_HORIZONTAL_WHEEL_SESSION_IDLE_MS = 350;
+export const WATERFALL_HORIZONTAL_WHEEL_FREQUENCY_SCALE = 0.25;
+export const WATERFALL_WHEEL_DELTA_PIXEL = 0;
+export const WATERFALL_WHEEL_DELTA_LINE = 1;
+export const WATERFALL_WHEEL_DELTA_PAGE = 2;
 export const WATERFALL_MAX_DEVICE_PIXEL_RATIO = 1.5;
 export const WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ = 15;
+
+export function getWaterfallDragCommitDelayMs(
+  nowMs: number,
+  lastCommitAtMs: number | null | undefined,
+  intervalMs = WATERFALL_DRAG_FREQUENCY_COMMIT_INTERVAL_MS,
+): number {
+  if (
+    typeof lastCommitAtMs !== 'number'
+    || !Number.isFinite(lastCommitAtMs)
+    || lastCommitAtMs <= 0
+  ) {
+    return 0;
+  }
+
+  return Math.max(0, intervalMs - (nowMs - lastCommitAtMs));
+}
+
+export function getWaterfallDragTunedFrequency(
+  startFrequency: number,
+  dragDistancePx: number,
+  hzPerPixel: number,
+): number {
+  return startFrequency - dragDistancePx * hzPerPixel;
+}
+
+export function normalizeWaterfallWheelDeltaX(
+  event: Pick<WheelEvent, 'deltaX' | 'deltaMode'>,
+  pageWidthPx: number,
+): number {
+  if (!Number.isFinite(event.deltaX) || event.deltaX === 0) {
+    return 0;
+  }
+  switch (event.deltaMode) {
+    case WATERFALL_WHEEL_DELTA_LINE:
+      return event.deltaX * 16;
+    case WATERFALL_WHEEL_DELTA_PAGE:
+      return event.deltaX * Math.max(1, pageWidthPx);
+    case WATERFALL_WHEEL_DELTA_PIXEL:
+    default:
+      return event.deltaX;
+  }
+}
+
+export function shouldHandleWaterfallHorizontalWheel(
+  event: Pick<WheelEvent, 'deltaX' | 'deltaY' | 'ctrlKey'>,
+): boolean {
+  if (event.ctrlKey) {
+    return false;
+  }
+  const absX = Math.abs(event.deltaX);
+  const absY = Math.abs(event.deltaY);
+  return absX >= 0.5 && absX > absY * 1.25;
+}
+
+export function getWaterfallHorizontalWheelTunedFrequency(
+  startFrequency: number,
+  accumulatedDeltaXPx: number,
+  hzPerPixel: number,
+  scale = WATERFALL_HORIZONTAL_WHEEL_FREQUENCY_SCALE,
+): number {
+  return startFrequency + accumulatedDeltaXPx * hzPerPixel * scale;
+}
 
 export function getWaterfallCanvasPixelRatio(devicePixelRatio: number | null | undefined): number {
   return Math.max(
@@ -311,7 +384,12 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   onFrequencyBandOverlayPreviewChange,
   onFrequencyBandOverlayCommit,
   onPresetMarkerClick,
+  onDragFrequencyPreview,
   onDragFrequencyChange,
+  onDragFrequencyActiveChange,
+  enableHorizontalWheelFrequency = false,
+  dragFrequencyStepHz = null,
+  dragFrequencyCommitIntervalMs = WATERFALL_DRAG_FREQUENCY_COMMIT_INTERVAL_MS,
   onDoubleClickSetFrequency,
   onRightClickSetFrequency,
   onActualRangeChange,
@@ -378,6 +456,19 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const gestureDragDebounceRef = useRef<NodeJS.Timeout | null>(null);
   const gestureCooldownTimerRef = useRef<NodeJS.Timeout | null>(null);
   const latestGestureFrequencyRef = useRef<number | null>(null);
+  const lastCommittedGestureFrequencyRef = useRef<number | null>(null);
+  const lastGestureCommitAtRef = useRef<number | null>(null);
+  const horizontalWheelStateRef = useRef<{
+    startFrequency: number;
+    accumulatedDeltaXPx: number;
+    hzPerPixel: number;
+    active: boolean;
+  } | null>(null);
+  const horizontalWheelCommitTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const horizontalWheelIdleTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const latestHorizontalWheelFrequencyRef = useRef<number | null>(null);
+  const lastCommittedHorizontalWheelFrequencyRef = useRef<number | null>(null);
+  const lastHorizontalWheelCommitAtRef = useRef<number | null>(null);
 
   // RX Popover hover状态
   const [hoveredRxMarkerId, setHoveredRxMarkerId] = React.useState<string | null>(null);
@@ -1811,23 +1902,36 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const maxFrequency = axis?.maxHz ?? 0;
   const hasAxis = Boolean(axis && axis.binCount > 0 && maxFrequency > minFrequency);
 
-  const snapFrequency = useCallback((frequency: number) => {
-    const stepHz = typeof interactionFrequencyStepHz === 'number' && Number.isFinite(interactionFrequencyStepHz) && interactionFrequencyStepHz > 0
-      ? interactionFrequencyStepHz
-      : 1;
+  const snapFrequency = useCallback((frequency: number, overrideStepHz?: number | null) => {
+    const stepHz = typeof overrideStepHz === 'number' && Number.isFinite(overrideStepHz) && overrideStepHz > 0
+      ? overrideStepHz
+      : typeof interactionFrequencyStepHz === 'number' && Number.isFinite(interactionFrequencyStepHz) && interactionFrequencyStepHz > 0
+        ? interactionFrequencyStepHz
+        : 1;
     return Math.round(frequency / stepHz) * stepHz;
   }, [interactionFrequencyStepHz]);
 
-  const clampBasebandFrequency = useCallback((frequency: number) => {
-    return snapFrequency(Math.max(basebandInteractionRange.min, Math.min(basebandInteractionRange.max, frequency)));
+  const effectiveDragFrequencyStepHz = typeof dragFrequencyStepHz === 'number' && Number.isFinite(dragFrequencyStepHz) && dragFrequencyStepHz > 0
+    ? dragFrequencyStepHz
+    : interactionFrequencyStepHz;
+
+  const clampBasebandFrequency = useCallback((frequency: number, stepHz?: number | null) => {
+    return snapFrequency(Math.max(basebandInteractionRange.min, Math.min(basebandInteractionRange.max, frequency)), stepHz);
   }, [basebandInteractionRange.max, basebandInteractionRange.min, snapFrequency]);
 
-  const clampInteractionFrequency = useCallback((frequency: number) => {
+  const clampInteractionFrequency = useCallback((frequency: number, stepHz?: number | null) => {
     if (!interactionFrequencyRange) {
-      return snapFrequency(frequency);
+      return snapFrequency(frequency, stepHz);
     }
-    return snapFrequency(Math.max(interactionFrequencyRange.min, Math.min(interactionFrequencyRange.max, frequency)));
+    return snapFrequency(Math.max(interactionFrequencyRange.min, Math.min(interactionFrequencyRange.max, frequency)), stepHz);
   }, [interactionFrequencyRange, snapFrequency]);
+
+  const snapBandValue = useCallback((value: number, stepHz: number | null | undefined) => {
+    const normalizedStepHz = typeof stepHz === 'number' && Number.isFinite(stepHz) && stepHz > 0
+      ? stepHz
+      : 1;
+    return Math.round(value / normalizedStepHz) * normalizedStepHz;
+  }, []);
 
   const getDisplayFrequency = useCallback((basebandFrequency: number) => {
     if (!hasAxis) return null;
@@ -1879,7 +1983,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     return clampBasebandFrequency(basebandFrequency);
   }, [clampBasebandFrequency, hasAxis, isAbsoluteDisplayMode, maxFrequency, minFrequency, referenceFrequencyHz]);
 
-  const getInteractionFrequencyFromMousePosition = useCallback((clientX: number, visualOffsetHz = FREQ_POSITION_OFFSET) => {
+  const getInteractionFrequencyFromMousePosition = useCallback((clientX: number, visualOffsetHz = FREQ_POSITION_OFFSET, stepHz?: number | null) => {
     const container = containerRef.current;
     if (!container || !hasAxis) return 0;
 
@@ -1889,11 +1993,23 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const displayFrequency = minFrequency + percentage * (maxFrequency - minFrequency) - visualOffsetHz;
 
     if (interactionFrequencyMode === 'absolute') {
-      return clampInteractionFrequency(displayFrequency);
+      return clampInteractionFrequency(displayFrequency, stepHz);
     }
 
-    return getFrequencyFromMousePosition(clientX, visualOffsetHz);
-  }, [clampInteractionFrequency, getFrequencyFromMousePosition, hasAxis, interactionFrequencyMode, maxFrequency, minFrequency]);
+    const basebandFrequency = isAbsoluteDisplayMode
+      ? displayFrequency - (referenceFrequencyHz ?? minFrequency)
+      : displayFrequency;
+    return clampBasebandFrequency(basebandFrequency, stepHz);
+  }, [
+    clampBasebandFrequency,
+    clampInteractionFrequency,
+    hasAxis,
+    interactionFrequencyMode,
+    isAbsoluteDisplayMode,
+    maxFrequency,
+    minFrequency,
+    referenceFrequencyHz,
+  ]);
 
   const getInteractionFrequencyPosition = useCallback((frequency: number, visualOffsetHz = FREQ_POSITION_OFFSET) => {
     if (interactionFrequencyMode === 'absolute') {
@@ -1906,10 +2022,56 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     return Number.isFinite(position) ? position : null;
   }, [getDisplayFrequency, getFrequencyPosition, interactionFrequencyMode]);
 
-  const snapBandValue = useCallback((value: number, stepHz: number | null | undefined) => {
-    const step = typeof stepHz === 'number' && Number.isFinite(stepHz) && stepHz > 0 ? stepHz : 1;
-    return Math.round(value / step) * step;
-  }, []);
+  const getCurrentReferenceInteractionFrequency = useCallback(() => {
+    const referenceFrequency = referenceFrequencyHz ?? null;
+    if (
+      interactionFrequencyMode === 'absolute'
+      && typeof referenceFrequency === 'number'
+      && Number.isFinite(referenceFrequency)
+    ) {
+      return clampInteractionFrequency(referenceFrequency, effectiveDragFrequencyStepHz);
+    }
+    return null;
+  }, [clampInteractionFrequency, effectiveDragFrequencyStepHz, interactionFrequencyMode, referenceFrequencyHz]);
+
+  const commitFrequencyGestureValue = useCallback((frequency: number) => {
+    if (!onDragFrequencyChange || lastCommittedGestureFrequencyRef.current === frequency) {
+      return;
+    }
+
+    onDragFrequencyChange(frequency);
+    lastCommittedGestureFrequencyRef.current = frequency;
+    lastGestureCommitAtRef.current = Date.now();
+  }, [onDragFrequencyChange]);
+
+  const scheduleFrequencyGestureCommit = useCallback((frequency: number) => {
+    const nowMs = Date.now();
+    const delayMs = getWaterfallDragCommitDelayMs(
+      nowMs,
+      lastGestureCommitAtRef.current,
+      dragFrequencyCommitIntervalMs,
+    );
+
+    if (delayMs <= 0) {
+      if (gestureDragDebounceRef.current) {
+        clearTimeout(gestureDragDebounceRef.current);
+        gestureDragDebounceRef.current = null;
+      }
+      commitFrequencyGestureValue(frequency);
+      return;
+    }
+
+    if (gestureDragDebounceRef.current) {
+      clearTimeout(gestureDragDebounceRef.current);
+    }
+    gestureDragDebounceRef.current = setTimeout(() => {
+      gestureDragDebounceRef.current = null;
+      const latestFrequency = latestGestureFrequencyRef.current;
+      if (typeof latestFrequency === 'number') {
+        commitFrequencyGestureValue(latestFrequency);
+      }
+    }, delayMs);
+  }, [commitFrequencyGestureValue, dragFrequencyCommitIntervalMs]);
 
   const buildFrequencyBandChange = useCallback((
     overlay: FrequencyBandOverlay,
@@ -1969,9 +2131,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const hzPerPixel = rect.width > 0
       ? (maxFrequency - minFrequency) / rect.width
       : 0;
-    const startFrequency = getInteractionFrequencyFromMousePosition(event.clientX);
+    const startFrequency = getCurrentReferenceInteractionFrequency()
+      ?? getInteractionFrequencyFromMousePosition(event.clientX, FREQ_POSITION_OFFSET, effectiveDragFrequencyStepHz);
 
     latestGestureFrequencyRef.current = startFrequency;
+    lastCommittedGestureFrequencyRef.current = null;
+    lastGestureCommitAtRef.current = null;
+    onDragFrequencyActiveChange?.(true);
     setLocalGestureFrequencyOverride(startFrequency);
     setFrequencyGestureDragState({
       startX: event.clientX,
@@ -1979,7 +2145,18 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       hzPerPixel,
       hasExceededThreshold: false,
     });
-  }, [getInteractionFrequencyFromMousePosition, hasAxis, maxFrequency, minFrequency, onDragFrequencyChange]);
+  }, [
+    clampInteractionFrequency,
+    effectiveDragFrequencyStepHz,
+    getCurrentReferenceInteractionFrequency,
+    getInteractionFrequencyFromMousePosition,
+    hasAxis,
+    interactionFrequencyMode,
+    maxFrequency,
+    minFrequency,
+    onDragFrequencyChange,
+    referenceFrequencyHz,
+  ]);
 
   // 拖动处理函数
   const handleMouseDown = useCallback((operatorId: string) => {
@@ -2193,9 +2370,20 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         return;
       }
 
+      const nextRawFrequency = getWaterfallDragTunedFrequency(
+        frequencyGestureDragState.startFrequency,
+        dragDistance,
+        frequencyGestureDragState.hzPerPixel,
+      );
       const nextFrequency = interactionFrequencyMode === 'absolute'
-        ? clampInteractionFrequency(frequencyGestureDragState.startFrequency + dragDistance * frequencyGestureDragState.hzPerPixel)
-        : clampBasebandFrequency(frequencyGestureDragState.startFrequency + dragDistance * frequencyGestureDragState.hzPerPixel);
+        ? clampInteractionFrequency(
+            nextRawFrequency,
+            effectiveDragFrequencyStepHz,
+          )
+        : clampBasebandFrequency(
+            nextRawFrequency,
+            effectiveDragFrequencyStepHz,
+          );
 
       if (!frequencyGestureDragState.hasExceededThreshold) {
         setFrequencyGestureDragState(current => (
@@ -2210,17 +2398,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
       setLocalGestureFrequencyOverride(nextFrequency);
       latestGestureFrequencyRef.current = nextFrequency;
-
-      if (gestureDragDebounceRef.current) {
-        clearTimeout(gestureDragDebounceRef.current);
-      }
-
-      gestureDragDebounceRef.current = setTimeout(() => {
-        const latestFrequency = latestGestureFrequencyRef.current;
-        if (typeof latestFrequency === 'number') {
-          onDragFrequencyChange(latestFrequency);
-        }
-      }, 120);
+      onDragFrequencyPreview?.(nextFrequency);
+      scheduleFrequencyGestureCommit(nextFrequency);
     };
 
     const handleGestureMouseUp = () => {
@@ -2231,7 +2410,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
       const latestFrequency = latestGestureFrequencyRef.current;
       if (frequencyGestureDragState.hasExceededThreshold && typeof latestFrequency === 'number') {
-        onDragFrequencyChange(latestFrequency);
+        commitFrequencyGestureValue(latestFrequency);
       }
 
       setFrequencyGestureDragState(null);
@@ -2239,12 +2418,17 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         gestureCooldownTimerRef.current = setTimeout(() => {
           setLocalGestureFrequencyOverride(null);
           latestGestureFrequencyRef.current = null;
+          lastCommittedGestureFrequencyRef.current = null;
+          lastGestureCommitAtRef.current = null;
           gestureCooldownTimerRef.current = null;
         }, 500);
       } else {
         setLocalGestureFrequencyOverride(null);
         latestGestureFrequencyRef.current = null;
+        lastCommittedGestureFrequencyRef.current = null;
+        lastGestureCommitAtRef.current = null;
       }
+      onDragFrequencyActiveChange?.(false);
     };
 
     document.addEventListener('mousemove', handleGestureMouseMove);
@@ -2256,9 +2440,174 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   }, [
     clampBasebandFrequency,
     clampInteractionFrequency,
+    commitFrequencyGestureValue,
+    effectiveDragFrequencyStepHz,
     frequencyGestureDragState,
     interactionFrequencyMode,
+    onDragFrequencyActiveChange,
+    onDragFrequencyPreview,
     onDragFrequencyChange,
+    scheduleFrequencyGestureCommit,
+  ]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !enableHorizontalWheelFrequency || !onDragFrequencyChange || !hasAxis) {
+      return;
+    }
+
+    const clearWheelTimers = () => {
+      if (horizontalWheelCommitTimerRef.current) {
+        clearTimeout(horizontalWheelCommitTimerRef.current);
+        horizontalWheelCommitTimerRef.current = null;
+      }
+      if (horizontalWheelIdleTimerRef.current) {
+        clearTimeout(horizontalWheelIdleTimerRef.current);
+        horizontalWheelIdleTimerRef.current = null;
+      }
+    };
+
+    const finishWheelSession = () => {
+      if (horizontalWheelCommitTimerRef.current) {
+        clearTimeout(horizontalWheelCommitTimerRef.current);
+        horizontalWheelCommitTimerRef.current = null;
+      }
+
+      const latestFrequency = latestHorizontalWheelFrequencyRef.current;
+      if (typeof latestFrequency === 'number') {
+        commitFrequencyGestureValue(latestFrequency);
+      }
+
+      if (horizontalWheelStateRef.current?.active) {
+        onDragFrequencyActiveChange?.(false);
+      }
+      horizontalWheelStateRef.current = null;
+      latestHorizontalWheelFrequencyRef.current = null;
+      lastCommittedHorizontalWheelFrequencyRef.current = null;
+      lastHorizontalWheelCommitAtRef.current = null;
+    };
+
+    const commitWheelFrequency = (frequency: number) => {
+      if (lastCommittedHorizontalWheelFrequencyRef.current === frequency) {
+        return;
+      }
+      onDragFrequencyChange(frequency);
+      lastCommittedHorizontalWheelFrequencyRef.current = frequency;
+      lastHorizontalWheelCommitAtRef.current = Date.now();
+    };
+
+    const scheduleWheelCommit = (frequency: number) => {
+      const nowMs = Date.now();
+      const delayMs = getWaterfallDragCommitDelayMs(
+        nowMs,
+        lastHorizontalWheelCommitAtRef.current,
+        dragFrequencyCommitIntervalMs,
+      );
+
+      if (delayMs <= 0) {
+        if (horizontalWheelCommitTimerRef.current) {
+          clearTimeout(horizontalWheelCommitTimerRef.current);
+          horizontalWheelCommitTimerRef.current = null;
+        }
+        commitWheelFrequency(frequency);
+        return;
+      }
+
+      if (horizontalWheelCommitTimerRef.current) {
+        clearTimeout(horizontalWheelCommitTimerRef.current);
+      }
+      horizontalWheelCommitTimerRef.current = setTimeout(() => {
+        horizontalWheelCommitTimerRef.current = null;
+        const latestFrequency = latestHorizontalWheelFrequencyRef.current;
+        if (typeof latestFrequency === 'number') {
+          commitWheelFrequency(latestFrequency);
+        }
+      }, delayMs);
+    };
+
+    const handleWheel = (event: WheelEvent) => {
+      if (!shouldHandleWaterfallHorizontalWheel(event)) {
+        return;
+      }
+
+      const rect = container.getBoundingClientRect();
+      if (rect.width <= 0) {
+        return;
+      }
+
+      const startFrequency = getCurrentReferenceInteractionFrequency();
+      if (startFrequency === null) {
+        return;
+      }
+
+      event.preventDefault();
+      const hzPerPixel = (maxFrequency - minFrequency) / rect.width;
+      if (!horizontalWheelStateRef.current) {
+        horizontalWheelStateRef.current = {
+          startFrequency,
+          accumulatedDeltaXPx: 0,
+          hzPerPixel,
+          active: true,
+        };
+        latestHorizontalWheelFrequencyRef.current = startFrequency;
+        lastCommittedHorizontalWheelFrequencyRef.current = null;
+        lastHorizontalWheelCommitAtRef.current = null;
+        onDragFrequencyActiveChange?.(true);
+      }
+
+      const wheelState = horizontalWheelStateRef.current;
+      wheelState.accumulatedDeltaXPx += normalizeWaterfallWheelDeltaX(event, rect.width);
+      wheelState.hzPerPixel = hzPerPixel;
+      const nextRawFrequency = getWaterfallHorizontalWheelTunedFrequency(
+        wheelState.startFrequency,
+        wheelState.accumulatedDeltaXPx,
+        wheelState.hzPerPixel,
+      );
+      const nextFrequency = interactionFrequencyMode === 'absolute'
+        ? clampInteractionFrequency(nextRawFrequency, effectiveDragFrequencyStepHz)
+        : clampBasebandFrequency(nextRawFrequency, effectiveDragFrequencyStepHz);
+
+      setLocalGestureFrequencyOverride(nextFrequency);
+      latestHorizontalWheelFrequencyRef.current = nextFrequency;
+      onDragFrequencyPreview?.(nextFrequency);
+      scheduleWheelCommit(nextFrequency);
+
+      if (horizontalWheelIdleTimerRef.current) {
+        clearTimeout(horizontalWheelIdleTimerRef.current);
+      }
+      horizontalWheelIdleTimerRef.current = setTimeout(() => {
+        horizontalWheelIdleTimerRef.current = null;
+        finishWheelSession();
+      }, WATERFALL_HORIZONTAL_WHEEL_SESSION_IDLE_MS);
+    };
+
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      container.removeEventListener('wheel', handleWheel);
+      clearWheelTimers();
+      if (horizontalWheelStateRef.current?.active) {
+        onDragFrequencyActiveChange?.(false);
+      }
+      horizontalWheelStateRef.current = null;
+      latestHorizontalWheelFrequencyRef.current = null;
+      lastCommittedHorizontalWheelFrequencyRef.current = null;
+      lastHorizontalWheelCommitAtRef.current = null;
+    };
+  }, [
+    clampBasebandFrequency,
+    clampInteractionFrequency,
+    commitFrequencyGestureValue,
+    dragFrequencyCommitIntervalMs,
+    effectiveDragFrequencyStepHz,
+    enableHorizontalWheelFrequency,
+    getCurrentReferenceInteractionFrequency,
+    hasAxis,
+    interactionFrequencyMode,
+    maxFrequency,
+    minFrequency,
+    onDragFrequencyActiveChange,
+    onDragFrequencyChange,
+    onDragFrequencyPreview,
   ]);
 
   return (

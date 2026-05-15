@@ -360,6 +360,33 @@ describe('SpectrumStreamController memory behavior', () => {
     expect(Array.from(batch?.rows[1] ?? [])).toEqual([100, 200, 0]);
   });
 
+  it('keeps optimistic radio SDR range while server sync is held during drag', () => {
+    const controller = new SpectrumStreamController(4);
+    controller.updateContext({ selectedKind: 'radio-sdr' });
+    controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200], { min: 900, max: 1100 }));
+    flushNextAnimationFrame();
+    controller.consumeRenderBatch();
+
+    controller.setRadioSdrOptimisticFrequencyIntent({
+      targetFrequencyHz: 1100,
+      baselineFrequencyHz: 1000,
+      baselineFrameCenterHz: 1000,
+    });
+    controller.setRadioSdrServerSyncHoldUntil(Number.POSITIVE_INFINITY);
+    flushNextAnimationFrame();
+    controller.consumeRenderBatch();
+
+    controller.pushFrame(makeFrame('radio-sdr', 11, [10, 110, 210], { min: 1000, max: 1200 }));
+    flushNextAnimationFrame();
+    const batch = controller.consumeRenderBatch();
+
+    expect(batch?.axis).toEqual({ minHz: 1000, maxHz: 1200, binCount: 3 });
+    expect(Array.from(batch?.rows[0] ?? [])).toEqual([10, 110, 210]);
+
+    controller.setRadioSdrServerSyncHoldUntil(null);
+    controller.setRadioSdrOptimisticFrequencyIntent(null);
+  });
+
   it('falls back to the latest native radio SDR range when optimistic tuning times out', () => {
     vi.useFakeTimers();
     try {
