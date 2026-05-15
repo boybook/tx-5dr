@@ -133,7 +133,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   private cachedRadioDisplayState: ResolvedRadioDisplayState | null = null;
   private cachedRadioZoomState: ZoomState | null = null;
   private cachedDigitalWindowState: DigitalWindowState | null = null;
-  private voiceFollowSyncPromise: Promise<void> | null = null;
+  private nonDigitalFollowSyncPromise: Promise<void> | null = null;
   private radioIoBackpressureStartedAt: number | null = null;
   private lastRadioIoBackpressureWarnAt = 0;
 
@@ -154,7 +154,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
         this.clearPendingDigitalTransition();
       }
       this.updatePollingState();
-      void this.ensureVoiceRadioFollowMode();
+      void this.ensureNonDigitalRadioFollowMode();
       this.markDirty();
     });
 
@@ -164,13 +164,13 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       this.clearRadioSdrUiStateCache();
       this.clearPendingZoom();
       this.clearPendingDigitalTransition();
-      void this.ensureVoiceRadioFollowMode();
+      void this.ensureNonDigitalRadioFollowMode();
       this.markDirty();
     });
 
     this.engine.on('modeChanged', () => {
       this.updatePollingState();
-      void this.ensureVoiceRadioFollowMode();
+      void this.ensureNonDigitalRadioFollowMode();
       this.markDirty();
     });
 
@@ -286,6 +286,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       }
       this.displayPollIntervalMs = displayPollIntervalMs;
       this.displayPollTimer = setInterval(() => {
+        void this.ensureNonDigitalRadioFollowMode();
         this.markDirty();
       }, displayPollIntervalMs);
     } else if (!connected && this.displayPollTimer) {
@@ -1221,24 +1222,25 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       }));
   }
 
-  private async ensureVoiceRadioFollowMode(): Promise<void> {
-    if (this.engine.getEngineMode() !== 'voice') {
+  private async ensureNonDigitalRadioFollowMode(): Promise<void> {
+    const engineMode = this.engine.getEngineMode();
+    if (engineMode !== 'voice' && engineMode !== 'cw') {
       return;
     }
 
-    if (this.voiceFollowSyncPromise) {
-      return this.voiceFollowSyncPromise;
+    if (this.nonDigitalFollowSyncPromise) {
+      return this.nonDigitalFollowSyncPromise;
     }
 
-    this.voiceFollowSyncPromise = this.doEnsureVoiceRadioFollowMode()
+    this.nonDigitalFollowSyncPromise = this.doEnsureNonDigitalRadioFollowMode()
       .finally(() => {
-        this.voiceFollowSyncPromise = null;
+        this.nonDigitalFollowSyncPromise = null;
       });
 
-    return this.voiceFollowSyncPromise;
+    return this.nonDigitalFollowSyncPromise;
   }
 
-  private async doEnsureVoiceRadioFollowMode(): Promise<void> {
+  private async doEnsureNonDigitalRadioFollowMode(): Promise<void> {
     if (!this.engine.getRadioManager().isConnected() || this.shouldDeferRadioCatReads()) {
       return;
     }
@@ -1261,9 +1263,9 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       this.clearPendingDigitalTransition();
       await connection.configureSpectrumDisplay({ mode: 'center' });
       this.clearSpectrumDisplayStateCache();
-      logger.info('Restored radio spectrum to follow mode for voice');
+      logger.info('Restored radio spectrum to follow mode for non-digital mode');
     } catch (error) {
-      logger.warn('Failed to restore radio spectrum follow mode for voice', error);
+      logger.warn('Failed to restore radio spectrum follow mode for non-digital mode', error);
     }
   }
 

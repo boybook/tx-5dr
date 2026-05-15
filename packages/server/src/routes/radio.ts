@@ -69,7 +69,7 @@ function inferModeOptions(appMode: string | undefined, engineMode: 'digital' | '
     return { intent: 'digital' };
   }
 
-  return { intent: engineMode === 'voice' ? 'voice' : 'digital' };
+  return { intent: engineMode === 'voice' ? 'voice' : engineMode === 'cw' ? 'cw' : 'digital' };
 }
 
 function parseRepeaterDuplexConfig(repeaterShift: unknown, repeaterOffsetHz: unknown): RepeaterDuplexConfig {
@@ -363,7 +363,9 @@ export async function radioRoutes(fastify: FastifyInstance) {
       });
     }
 
-    const isVoiceFrequencyRequest = mode === 'VOICE' || (!mode && engine.getEngineMode() === 'voice');
+    const effectiveMode = mode
+      || (engine.getEngineMode() === 'voice' ? 'VOICE' : engine.getEngineMode() === 'cw' ? 'CW' : 'FT8');
+    const isVoiceFrequencyRequest = effectiveMode === 'VOICE';
     const isVoiceFmFrequencyRequest = isVoiceFrequencyRequest && radioMode?.toUpperCase() === 'FM';
     const repeaterDuplexToApply: RepeaterDuplexConfig = isVoiceFmFrequencyRequest
       ? parseRepeaterDuplexConfig(repeaterShift, repeaterOffsetHz)
@@ -373,22 +375,29 @@ export async function radioRoutes(fastify: FastifyInstance) {
       : { toneMode: 'none' };
 
     // 获取当前频率配置，用于判断是否真正改变
-    const lastFrequency = configManager.getLastSelectedFrequency();
+    const lastFrequency = effectiveMode === 'VOICE'
+      ? configManager.getLastVoiceFrequency()
+      : effectiveMode === 'CW'
+        ? configManager.getLastCWFrequency()
+        : configManager.getLastSelectedFrequency();
+    const lastMode = effectiveMode === 'VOICE' || effectiveMode === 'CW'
+      ? effectiveMode
+      : (lastFrequency as { mode?: string } | null | undefined)?.mode;
     const isFrequencyChanged = !lastFrequency ||
       lastFrequency.frequency !== frequency ||
-      (mode && lastFrequency.mode !== mode);
+      lastMode !== effectiveMode;
 
     if (isFrequencyChanged) {
-      logger.debug(`Frequency changed: ${lastFrequency?.frequency || 'null'} -> ${frequency}, mode: ${lastFrequency?.mode || 'null'} -> ${mode || 'null'}`);
+      logger.debug(`Frequency changed: ${lastFrequency?.frequency || 'null'} -> ${frequency}, mode: ${lastMode || 'null'} -> ${effectiveMode}`);
     } else {
-      logger.debug(`Frequency unchanged, skipping clear and broadcast: ${frequency} Hz, mode: ${mode}`);
+      logger.debug(`Frequency unchanged, skipping clear and broadcast: ${frequency} Hz, mode: ${effectiveMode}`);
     }
 
     // 保存到配置文件（无论电台是否连接都要保存）
     // Voice mode saves to separate lastVoiceFrequency to avoid overwriting digital frequency
-    if (mode && band) {
+    if (effectiveMode && band) {
       try {
-        if (mode === 'VOICE') {
+        if (effectiveMode === 'VOICE') {
           await configManager.updateLastVoiceFrequency({
             frequency,
             radioMode,
@@ -400,7 +409,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
             ctcssToneTenthsHz: toneSquelchToApply.ctcssToneTenthsHz,
             dcsCode: toneSquelchToApply.dcsCode,
           });
-        } else if (mode === 'CW') {
+        } else if (effectiveMode === 'CW') {
           await configManager.updateLastCWFrequency({
             frequency,
             radioMode,
@@ -410,7 +419,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
         } else {
           await configManager.updateLastSelectedFrequency({
             frequency,
-            mode,
+            mode: effectiveMode,
             radioMode,
             band,
             description
@@ -432,7 +441,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       if (isFrequencyChanged) {
       engine.emit('frequencyChanged', {
         frequency,
-        mode: mode || 'FT8',
+        mode: effectiveMode,
         band: band || '',
         description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
         radioMode,
@@ -460,7 +469,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       frequency,
       mode: radioMode,
       bandwidth: radioMode ? 'nochange' : undefined,
-      options: radioMode ? inferModeOptions(mode, engine.getEngineMode()) : undefined,
+      options: radioMode ? inferModeOptions(effectiveMode, engine.getEngineMode()) : undefined,
       tolerateModeFailure: true,
     });
     const frequencySuccess = applyResult.frequencyApplied;
@@ -507,7 +516,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       // 广播频率变化到所有客户端
       engine.emit('frequencyChanged', {
         frequency,
-        mode: mode || 'FT8',
+        mode: effectiveMode,
         band: band || '',
         description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
         radioMode,

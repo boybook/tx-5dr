@@ -228,4 +228,109 @@ describe('RadioBridge', () => {
       source: 'radio',
     }));
   });
+
+  it('persists custom CW frequencies without overwriting digital history', async () => {
+    const radioManager = createRadioManagerStub();
+    const engineEmitter = new EventEmitter();
+    const frequencyChanged = vi.fn();
+    engineEmitter.on('frequencyChanged', frequencyChanged);
+
+    const configManager = ConfigManager.getInstance();
+    const updateLastCWFrequency = vi.spyOn(configManager, 'updateLastCWFrequency').mockResolvedValue();
+    const updateLastSelectedFrequency = vi.spyOn(configManager, 'updateLastSelectedFrequency').mockResolvedValue();
+    vi.spyOn(configManager, 'getLastCWFrequency').mockReturnValue({
+      frequency: 7030000,
+      radioMode: 'CW',
+      band: '40m',
+      description: '7.030 MHz 40m',
+    });
+
+    const bridge = new RadioBridge({
+      engineEmitter: engineEmitter as any,
+      radioManager: radioManager as any,
+      frequencyManager: {
+        getPresets: vi.fn().mockReturnValue([
+          { frequency: 7074000, mode: 'FT8', band: '40m', radioMode: 'USB', description: '7.074 MHz 40m' },
+        ]),
+      } as any,
+      slotPackManager: { clearInMemory: vi.fn() } as any,
+      operatorManager: { stopAllOperators: vi.fn() } as any,
+      getTransmissionPipeline: () => ({ getIsPTTActive: vi.fn().mockReturnValue(false) } as any),
+      getEngineLifecycle: () => ({
+        getIsRunning: vi.fn().mockReturnValue(false),
+        getEngineState: vi.fn().mockReturnValue('idle'),
+        start: vi.fn(),
+        sendRadioDisconnected: vi.fn(),
+      } as any),
+      getEngineMode: () => 'cw',
+      getCurrentModeName: () => 'CW',
+    });
+
+    bridge.setupListeners();
+    radioManager.emit('radioFrequencyChanged', 7035000);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(updateLastCWFrequency).toHaveBeenCalledWith({
+      frequency: 7035000,
+      radioMode: 'CW',
+      band: '40m',
+      description: '7.035 MHz 40m',
+    });
+    expect(updateLastSelectedFrequency).not.toHaveBeenCalled();
+    expect(frequencyChanged).toHaveBeenCalledWith(expect.objectContaining({
+      frequency: 7035000,
+      mode: 'CW',
+      band: '40m',
+      radioMode: 'CW',
+      source: 'radio',
+    }));
+  });
+
+  it('uses the current digital mode for radio-origin digital frequency changes', async () => {
+    const radioManager = createRadioManagerStub();
+    const engineEmitter = new EventEmitter();
+    const frequencyChanged = vi.fn();
+    engineEmitter.on('frequencyChanged', frequencyChanged);
+
+    const configManager = ConfigManager.getInstance();
+    const updateLastSelectedFrequency = vi.spyOn(configManager, 'updateLastSelectedFrequency').mockResolvedValue();
+    const updateLastVoiceFrequency = vi.spyOn(configManager, 'updateLastVoiceFrequency').mockResolvedValue();
+    const updateLastCWFrequency = vi.spyOn(configManager, 'updateLastCWFrequency').mockResolvedValue();
+
+    const bridge = new RadioBridge({
+      engineEmitter: engineEmitter as any,
+      radioManager: radioManager as any,
+      frequencyManager: {
+        getPresets: vi.fn().mockReturnValue([]),
+      } as any,
+      slotPackManager: { clearInMemory: vi.fn() } as any,
+      operatorManager: { stopAllOperators: vi.fn() } as any,
+      getTransmissionPipeline: () => ({ getIsPTTActive: vi.fn().mockReturnValue(false) } as any),
+      getEngineLifecycle: () => ({
+        getIsRunning: vi.fn().mockReturnValue(false),
+        getEngineState: vi.fn().mockReturnValue('idle'),
+        start: vi.fn(),
+        sendRadioDisconnected: vi.fn(),
+      } as any),
+      getEngineMode: () => 'digital',
+      getCurrentModeName: () => 'FT4',
+    });
+
+    bridge.setupListeners();
+    radioManager.emit('radioFrequencyChanged', 7047500);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
+      frequency: 7047500,
+      mode: 'FT4',
+      band: '40m',
+    }));
+    expect(updateLastVoiceFrequency).not.toHaveBeenCalled();
+    expect(updateLastCWFrequency).not.toHaveBeenCalled();
+    expect(frequencyChanged).toHaveBeenCalledWith(expect.objectContaining({
+      frequency: 7047500,
+      mode: 'FT4',
+      source: 'radio',
+    }));
+  });
 });

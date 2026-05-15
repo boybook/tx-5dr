@@ -277,6 +277,7 @@ describe('DigitalRadioEngine mode switching', () => {
       emitStatusSnapshot: vi.fn(() => undefined),
       restoreLastVoiceOperatingState: vi.fn(async () => undefined),
       restoreLastCWOperatingState: vi.fn(async () => undefined),
+      restoreLastDigitalOperatingState: vi.fn(async () => undefined),
       resetVoicePttState: vi.fn(() => undefined),
       squelchStatusMonitor: {
         reevaluate: vi.fn(() => undefined),
@@ -424,6 +425,136 @@ describe('DigitalRadioEngine mode switching', () => {
       mode: 'VOICE',
       radioMode: 'USB',
       source: 'program',
+    }));
+  });
+
+  it('restores CW frequency and radio mode when entering CW mode', async () => {
+    const applyOperatingState = vi.fn(async () => ({
+      frequencyApplied: true,
+      modeApplied: true,
+    }));
+    const emit = vi.fn();
+    const configManager = {
+      getLastCWFrequency: vi.fn(() => ({
+        frequency: 7030000,
+        radioMode: 'CW',
+        band: '40m',
+        description: '7.030 MHz 40m',
+      })),
+    };
+    const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
+      radioManager: {
+        isConnected: vi.fn(() => true),
+        applyOperatingState,
+      },
+      emit,
+    });
+
+    await (DigitalRadioEngine.prototype as unknown as {
+      restoreLastCWOperatingState: (configManager: ConfigManager) => Promise<void>;
+    }).restoreLastCWOperatingState.call(fakeEngine, configManager as unknown as ConfigManager);
+
+    expect(applyOperatingState).toHaveBeenCalledWith({
+      frequency: 7030000,
+      mode: 'CW',
+      bandwidth: 'nochange',
+      options: { intent: 'cw' },
+      tolerateModeFailure: true,
+    });
+    expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
+      frequency: 7030000,
+      mode: 'CW',
+      radioMode: 'CW',
+      source: 'program',
+    }));
+  });
+
+  it('restores saved digital frequency when returning from CW to the same digital mode', async () => {
+    const applyOperatingState = vi.fn(async () => ({
+      frequencyApplied: true,
+      modeApplied: true,
+    }));
+    const updateLastSelectedFrequency = vi.fn(async () => undefined);
+    const emit = vi.fn();
+    const configManager = {
+      getLastSelectedFrequency: vi.fn(() => ({
+        frequency: 14074000,
+        mode: 'FT8',
+        radioMode: 'USB',
+        band: '20m',
+        description: '14.074 MHz 20m',
+      })),
+      getCustomFrequencyPresets: vi.fn(() => null),
+      updateLastSelectedFrequency,
+    };
+    vi.spyOn(ConfigManager, 'getInstance').mockReturnValue(configManager as unknown as ConfigManager);
+    const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
+      radioManager: {
+        isConnected: vi.fn(() => true),
+        applyOperatingState,
+        applyRepeaterDuplexConfig: vi.fn(async () => ({ warning: false })),
+        applyToneSquelchConfig: vi.fn(async () => ({ warning: false })),
+      },
+      slotPackManager: { clearInMemory: vi.fn() },
+      emit,
+    });
+
+    await (DigitalRadioEngine.prototype as unknown as {
+      restoreLastDigitalOperatingState: (configManager: ConfigManager, targetMode: typeof MODES.FT8) => Promise<void>;
+    }).restoreLastDigitalOperatingState.call(fakeEngine, configManager as unknown as ConfigManager, MODES.FT8);
+
+    expect(applyOperatingState).toHaveBeenCalledWith(expect.objectContaining({
+      frequency: 14074000,
+      mode: 'USB',
+      options: { intent: 'digital' },
+    }));
+    expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
+      frequency: 14074000,
+      mode: 'FT8',
+    }));
+    expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
+      frequency: 14074000,
+      mode: 'FT8',
+      source: 'program',
+    }));
+  });
+
+  it('uses nearest target digital preset when returning to a different digital mode', async () => {
+    const applyOperatingState = vi.fn(async () => ({
+      frequencyApplied: true,
+      modeApplied: true,
+    }));
+    const configManager = {
+      getLastSelectedFrequency: vi.fn(() => ({
+        frequency: 14074000,
+        mode: 'FT8',
+        radioMode: 'USB',
+        band: '20m',
+        description: '14.074 MHz 20m',
+      })),
+      getCustomFrequencyPresets: vi.fn(() => null),
+      updateLastSelectedFrequency: vi.fn(async () => undefined),
+    };
+    vi.spyOn(ConfigManager, 'getInstance').mockReturnValue(configManager as unknown as ConfigManager);
+    const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
+      radioManager: {
+        isConnected: vi.fn(() => true),
+        applyOperatingState,
+        applyRepeaterDuplexConfig: vi.fn(async () => ({ warning: false })),
+        applyToneSquelchConfig: vi.fn(async () => ({ warning: false })),
+      },
+      slotPackManager: { clearInMemory: vi.fn() },
+      emit: vi.fn(),
+    });
+
+    await (DigitalRadioEngine.prototype as unknown as {
+      restoreLastDigitalOperatingState: (configManager: ConfigManager, targetMode: typeof MODES.FT4) => Promise<void>;
+    }).restoreLastDigitalOperatingState.call(fakeEngine, configManager as unknown as ConfigManager, MODES.FT4);
+
+    expect(applyOperatingState).toHaveBeenCalledWith(expect.objectContaining({
+      frequency: 14080000,
+      mode: 'USB',
+      options: { intent: 'digital' },
     }));
   });
 

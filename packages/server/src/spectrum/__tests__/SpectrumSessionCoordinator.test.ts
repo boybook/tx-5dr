@@ -392,4 +392,67 @@ describe('SpectrumSessionCoordinator', () => {
       frequencyStepHz: 1000,
     });
   });
+
+  it('restores radio SDR display mode to center when entering CW', async () => {
+    const engine = new MockEngine();
+    engine.engineMode = 'cw';
+    engine.currentModeName = 'CW';
+    const connection = {
+      configureSpectrumDisplay: vi.fn().mockResolvedValue(undefined),
+      getSpectrumDisplayState: vi.fn().mockResolvedValue({
+        mode: 'fixed',
+        edgeLowHz: 14_073_000,
+        edgeHighHz: 14_078_000,
+        spanHz: 5000,
+        supportsFixedEdges: true,
+        supportedSpans: [5000, 10_000],
+      }),
+      getRadioIoQueueSnapshot: vi.fn(() => createBusySnapshot(false)),
+    };
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getActiveConnection.mockReturnValue(connection);
+    const spectrumCoordinator = new EventEmitter();
+    new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+
+    (engine as any).emit('modeChanged');
+
+    await vi.waitFor(() => {
+      expect(connection.configureSpectrumDisplay).toHaveBeenCalledWith({ mode: 'center' });
+    });
+  });
+
+  it('retries non-digital radio SDR center restore after CAT queue backpressure clears', async () => {
+    vi.useFakeTimers();
+    const engine = new MockEngine();
+    engine.engineMode = 'voice';
+    engine.currentModeName = 'VOICE';
+    let busy = true;
+    const connection = {
+      configureSpectrumDisplay: vi.fn().mockResolvedValue(undefined),
+      getSpectrumDisplayState: vi.fn().mockResolvedValue({
+        mode: 'fixed',
+        edgeLowHz: 14_073_000,
+        edgeHighHz: 14_078_000,
+        spanHz: 5000,
+        supportsFixedEdges: true,
+        supportedSpans: [5000, 10_000],
+      }),
+      getRadioIoQueueSnapshot: vi.fn(() => createBusySnapshot(busy)),
+    };
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getActiveConnection.mockReturnValue(connection);
+    engine.radioManager.getConfig.mockReturnValue({ type: 'serial' });
+    const spectrumCoordinator = new EventEmitter();
+    new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+
+    (engine as any).emit('modeChanged');
+    await Promise.resolve();
+    expect(connection.configureSpectrumDisplay).not.toHaveBeenCalled();
+
+    busy = false;
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(connection.configureSpectrumDisplay).toHaveBeenCalledWith({ mode: 'center' });
+    vi.useRealTimers();
+  });
 });

@@ -25,6 +25,7 @@ export interface RadioBridgeDeps {
   getTransmissionPipeline: () => TransmissionPipeline;
   getEngineLifecycle: () => EngineLifecycle;
   getEngineMode: () => EngineMode;
+  getCurrentModeName?: () => string;
 }
 
 /**
@@ -248,14 +249,17 @@ export class RadioBridge {
     logger.debug(`No ${engineMode} preset matched, using custom frequency`);
     const band = this.resolveBandLabel(frequency);
     const isVoiceMode = engineMode === 'voice';
+    const isCWMode = engineMode === 'cw';
     const lastVoiceFrequency = isVoiceMode ? ConfigManager.getInstance().getLastVoiceFrequency() : null;
+    const lastCWFrequency = isCWMode ? ConfigManager.getInstance().getLastCWFrequency() : null;
     const supportsFmOptions = lastVoiceFrequency?.radioMode?.toUpperCase() === 'FM';
+    const digitalModeName = this.deps.getCurrentModeName?.() || 'FT8';
 
     return {
       frequency,
-      mode: isVoiceMode ? 'VOICE' : 'FT8',
+      mode: isVoiceMode ? 'VOICE' : isCWMode ? 'CW' : digitalModeName,
       band,
-      radioMode: isVoiceMode ? lastVoiceFrequency?.radioMode : undefined,
+      radioMode: isVoiceMode ? lastVoiceFrequency?.radioMode : isCWMode ? (lastCWFrequency?.radioMode || 'CW') : undefined,
       description: `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`,
       repeaterShift: supportsFmOptions ? lastVoiceFrequency?.repeaterShift : undefined,
       repeaterOffsetHz: supportsFmOptions ? lastVoiceFrequency?.repeaterOffsetHz : undefined,
@@ -271,12 +275,16 @@ export class RadioBridge {
     engineMode: EngineMode,
     tolerance: number = 500,
   ): PresetFrequency | null {
-    const targetMode = engineMode === 'voice' ? 'VOICE' : null;
+    const targetMode = engineMode === 'voice'
+      ? 'VOICE'
+      : engineMode === 'cw'
+        ? 'CW'
+        : this.deps.getCurrentModeName?.();
     let closestPreset: PresetFrequency | null = null;
     let smallestDiff = Infinity;
 
     for (const preset of presets) {
-      if (targetMode ? preset.mode !== targetMode : preset.mode === 'VOICE') {
+      if (targetMode ? preset.mode !== targetMode : preset.mode === 'VOICE' || preset.mode === 'CW') {
         continue;
       }
 

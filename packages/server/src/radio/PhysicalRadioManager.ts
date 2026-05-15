@@ -60,6 +60,8 @@ const logger = createLogger('PhysicalRadioManager');
 const NORMAL_FREQUENCY_POLL_MS = 2000;
 const FAST_FREQUENCY_POLL_MS = 500;
 const FAST_FREQUENCY_POLL_WINDOW_MS = 5000;
+const FREQUENCY_WRITE_SETTLE_MS = 2000;
+const FREQUENCY_MATCH_TOLERANCE_HZ = 10;
 const HAMLIB_RIG_SCHEMA_TIMEOUT_MS = 3000;
 
 /** Hamlib valid frequency range: 1 kHz to 10 GHz */
@@ -342,6 +344,15 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private activeFrequencyPollGeneration: number | null = null;
   private fastFrequencyPollingUntil = 0;
   private lastKnownFrequency: number | null = null;
+  private frequencyWriteEpoch = 0;
+  private lastFrequencyWrite:
+    | {
+        epoch: number;
+        targetFrequency: number;
+        previousFrequency: number | null;
+        settleUntil: number;
+      }
+    | null = null;
   private cachedTunerCapabilities: TunerCapabilities | null = null;
   private readonly postConnectSettleMs = 250;
   private postFrequencyCapabilityRefresh: Promise<void> = Promise.resolve();
@@ -942,10 +953,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       return false;
     }
 
+    const write = this.beginFrequencyWrite(freq);
     try {
       await this.connection.setFrequency(freq);
       this.markCoreCapabilitySupported('writeFrequency');
-      this.updateKnownFrequency(freq);
+      this.completeFrequencyWrite(write);
       this.queuePostFrequencyCapabilityRefresh('setFrequency');
       logger.debug(`Frequency set: ${(freq / 1000000).toFixed(3)} MHz`);
       return true;
@@ -978,12 +990,17 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       throw new Error('set mode failed: radio mode control not supported');
     }
 
+    const frequencyWrite = request.frequency !== undefined
+      ? this.beginFrequencyWrite(request.frequency)
+      : null;
     try {
       const result = await this.connection.applyOperatingState(request);
 
       if (request.frequency !== undefined && result.frequencyApplied) {
         this.markCoreCapabilitySupported('writeFrequency');
-        this.updateKnownFrequency(request.frequency);
+        if (frequencyWrite) {
+          this.completeFrequencyWrite(frequencyWrite);
+        }
         this.queuePostFrequencyCapabilityRefresh('applyOperatingState');
       }
 
@@ -1023,6 +1040,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 获取当前频率
    */
   async getFrequency(): Promise<number> {
+    return this.readFrequency({ updateKnownFrequency: true });
+  }
+
+  private async readFrequency(options: { updateKnownFrequency: boolean }): Promise<number> {
     if (!this.connection) {
       logger.error('Radio not connected, cannot get frequency');
       return 0;
@@ -1034,9 +1055,14 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     try {
+      const observedWriteEpoch = this.frequencyWriteEpoch;
       const frequency = await this.connection.getFrequency();
       this.markCoreCapabilitySupported('readFrequency');
-      if (frequency > 0) {
+      if (
+        options.updateKnownFrequency
+        && frequency > 0
+        && !this.shouldIgnoreFrequencyObservation(frequency, observedWriteEpoch, 'readFrequency')
+      ) {
         this.updateKnownFrequency(frequency);
       }
       return frequency;
@@ -2163,7 +2189,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     // 频率变化（来自 IRadioConnection）
     const onFrequencyChanged = (frequency: number) => {
+      if (this.shouldIgnoreFrequencyObservation(frequency, this.frequencyWriteEpoch, 'connection-event')) {
+        return;
+      }
       logger.debug(`Frequency changed: ${(frequency / 1000000).toFixed(3)} MHz`);
+      this.updateKnownFrequency(frequency);
       this.emit('radioFrequencyChanged', frequency);
     };
     this.connection.on('frequencyChanged', onFrequencyChanged);
@@ -2393,6 +2423,77 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     this.lastKnownFrequency = frequency;
     this.connection.setKnownFrequency(frequency);
     void this.refreshRfPowerDescriptor();
+  }
+
+  private beginFrequencyWrite(targetFrequency: number): {
+    epoch: number;
+    targetFrequency: number;
+    previousFrequency: number | null;
+  } {
+    this.frequencyWriteEpoch += 1;
+    return {
+      epoch: this.frequencyWriteEpoch,
+      targetFrequency,
+      previousFrequency: this.lastKnownFrequency,
+    };
+  }
+
+  private completeFrequencyWrite(write: {
+    epoch: number;
+    targetFrequency: number;
+    previousFrequency: number | null;
+  }): void {
+    this.lastFrequencyWrite = {
+      ...write,
+      settleUntil: Date.now() + FREQUENCY_WRITE_SETTLE_MS,
+    };
+    this.updateKnownFrequency(write.targetFrequency);
+  }
+
+  private isSameFrequency(left: number | null | undefined, right: number | null | undefined): boolean {
+    return typeof left === 'number'
+      && typeof right === 'number'
+      && Number.isFinite(left)
+      && Number.isFinite(right)
+      && Math.abs(left - right) <= FREQUENCY_MATCH_TOLERANCE_HZ;
+  }
+
+  private shouldIgnoreFrequencyObservation(
+    frequency: number,
+    observedWriteEpoch: number,
+    source: string,
+  ): boolean {
+    if (!Number.isFinite(frequency) || frequency <= 0) {
+      return false;
+    }
+
+    if (observedWriteEpoch !== this.frequencyWriteEpoch) {
+      logger.debug('Ignoring stale frequency observation from before a frequency write completed', {
+        source,
+        frequency,
+        observedWriteEpoch,
+        currentWriteEpoch: this.frequencyWriteEpoch,
+      });
+      return true;
+    }
+
+    const write = this.lastFrequencyWrite;
+    if (
+      write
+      && Date.now() < write.settleUntil
+      && !this.isSameFrequency(frequency, write.targetFrequency)
+      && this.isSameFrequency(frequency, write.previousFrequency)
+    ) {
+      logger.debug('Ignoring old frequency echo during post-write settle window', {
+        source,
+        frequency,
+        targetFrequency: write.targetFrequency,
+        previousFrequency: write.previousFrequency,
+      });
+      return true;
+    }
+
+    return false;
   }
 
   private async refreshRfPowerDescriptor(): Promise<void> {
@@ -2641,7 +2742,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     try {
       const previousKnownFrequency = this.lastKnownFrequency;
-      const currentFrequency = await this.getFrequency();
+      const observedWriteEpoch = this.frequencyWriteEpoch;
+      const currentFrequency = await this.readFrequency({ updateKnownFrequency: false });
 
       // 容忍连接初始化期间的 0 返回（CIV 通道可能尚未完全就绪）
       if (currentFrequency === 0) {
@@ -2649,6 +2751,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
           logger.debug('Frequency returned 0 (possibly initializing), waiting for next poll');
         }
         return; // 静默跳过，等待下次轮询（5秒后）
+      }
+
+      if (this.shouldIgnoreFrequencyObservation(currentFrequency, observedWriteEpoch, 'frequency-monitor')) {
+        return;
       }
 
       // 频率有效且与上次不同

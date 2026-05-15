@@ -496,6 +496,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getTransmissionPipeline: () => this.transmissionPipeline,
       getEngineLifecycle: () => this.engineLifecycle,
       getEngineMode: () => this.engineMode,
+      getCurrentModeName: () => this.currentMode.name,
     });
     this.radioBridge.setupListeners();
 
@@ -1471,6 +1472,39 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     });
   }
 
+  private async restoreLastDigitalOperatingState(configManager: ConfigManager, targetMode: ModeDescriptor): Promise<void> {
+    const lastDigital = configManager.getLastSelectedFrequency();
+    if (!lastDigital?.frequency) {
+      return;
+    }
+
+    let targetFrequency: PresetFrequency = {
+      frequency: lastDigital.frequency,
+      mode: targetMode.name,
+      radioMode: lastDigital.radioMode,
+      band: lastDigital.band || this.resolveBandLabel(lastDigital.frequency),
+      description: lastDigital.description,
+    };
+
+    if (lastDigital.mode && lastDigital.mode !== targetMode.name) {
+      const nearestPreset = this.findNearestPresetForMode(targetMode.name, lastDigital.frequency, configManager);
+      if (nearestPreset) {
+        targetFrequency = nearestPreset;
+      } else {
+        logger.warn(`No ${targetMode.name} preset found while restoring digital mode; using saved digital frequency`);
+      }
+    } else if (lastDigital.mode === targetMode.name) {
+      targetFrequency.mode = lastDigital.mode;
+    }
+
+    try {
+      await this.applyDigitalPresetFrequency(targetFrequency);
+      logger.info(`Restored digital operating state: ${(targetFrequency.frequency / 1000000).toFixed(3)} MHz (${targetFrequency.mode})`);
+    } catch (error) {
+      logger.warn(`Failed to restore digital operating state: ${(error as Error).message}`);
+    }
+  }
+
   private async applyRepeaterDuplexConfigWithWarning(
     config: RepeaterDuplexConfig,
     frequency: number,
@@ -1600,13 +1634,14 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       await configManager.setLastDigitalModeName(targetMode.name);
     }
 
-    this.emitModeAndStatusSnapshot();
     if (targetEngineMode === 'voice') {
       await this.restoreLastVoiceOperatingState(configManager);
-    }
-    if (goingToCW) {
+    } else if (goingToCW) {
       await this.restoreLastCWOperatingState(configManager);
+    } else if (targetEngineMode === 'digital') {
+      await this.restoreLastDigitalOperatingState(configManager, targetMode);
     }
+    this.emitModeAndStatusSnapshot();
 
     this.resetVoicePttState();
     this.squelchStatusMonitor.reevaluate();

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'eventemitter3';
 import type { HamlibConfig } from '@tx5dr/contracts';
 
 vi.mock('icom-wlan-node', () => ({
@@ -975,6 +976,98 @@ describe('PhysicalRadioManager', () => {
     expect(setKnownFrequency).toHaveBeenCalledWith(14075000);
     expect(asTestManager(manager).lastKnownFrequency).toBe(14075000);
     expect(emitSpy).toHaveBeenCalledWith('radioFrequencyChanged', 14075000);
+  });
+
+  it('drops a frequency poll result that started before a frequency write', async () => {
+    const read = createDeferred<number>();
+    const setKnownFrequency = vi.fn();
+    asTestManager(manager).lastKnownFrequency = 14074000;
+    asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
+      isCriticalOperationActive: vi.fn().mockReturnValue(false),
+      getFrequency: vi.fn().mockReturnValue(read.promise),
+      applyOperatingState: vi.fn().mockResolvedValue({ frequencyApplied: true, modeApplied: false }),
+      setKnownFrequency,
+    };
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+    const emitSpy = vi.spyOn(manager as unknown as { emit: (event: string, payload: number) => void }, 'emit');
+
+    const poll = asTestManager(manager).checkFrequencyChange();
+    await Promise.resolve();
+    await manager.applyOperatingState({ frequency: 14080000 });
+
+    read.resolve(14074000);
+    await poll;
+
+    expect(setKnownFrequency).toHaveBeenCalledWith(14080000);
+    expect(asTestManager(manager).lastKnownFrequency).toBe(14080000);
+    expect(emitSpy).not.toHaveBeenCalledWith('radioFrequencyChanged', 14074000);
+  });
+
+  it('ignores the previous frequency during the post-write settle window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    const setKnownFrequency = vi.fn();
+    asTestManager(manager).lastKnownFrequency = 14074000;
+    asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
+      isCriticalOperationActive: vi.fn().mockReturnValue(false),
+      getFrequency: vi.fn().mockResolvedValue(14074000),
+      applyOperatingState: vi.fn().mockResolvedValue({ frequencyApplied: true, modeApplied: false }),
+      setKnownFrequency,
+    };
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+    const emitSpy = vi.spyOn(manager as unknown as { emit: (event: string, payload: number) => void }, 'emit');
+
+    await manager.applyOperatingState({ frequency: 14080000 });
+    await asTestManager(manager).checkFrequencyChange();
+
+    expect(asTestManager(manager).lastKnownFrequency).toBe(14080000);
+    expect(emitSpy).not.toHaveBeenCalledWith('radioFrequencyChanged', 14074000);
+    vi.useRealTimers();
+  });
+
+  it('accepts a real radio-side frequency change after the post-write settle window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    asTestManager(manager).lastKnownFrequency = 14074000;
+    asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
+      isCriticalOperationActive: vi.fn().mockReturnValue(false),
+      getFrequency: vi.fn().mockResolvedValue(14074000),
+      applyOperatingState: vi.fn().mockResolvedValue({ frequencyApplied: true, modeApplied: false }),
+      setKnownFrequency: vi.fn(),
+    };
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+    const emitSpy = vi.spyOn(manager as unknown as { emit: (event: string, payload: number) => void }, 'emit');
+
+    await manager.applyOperatingState({ frequency: 14080000 });
+    await vi.advanceTimersByTimeAsync(2001);
+    await asTestManager(manager).checkFrequencyChange();
+
+    expect(asTestManager(manager).lastKnownFrequency).toBe(14074000);
+    expect(emitSpy).toHaveBeenCalledWith('radioFrequencyChanged', 14074000);
+    vi.useRealTimers();
+  });
+
+  it('ignores stale connection frequency events during the post-write settle window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    const connection = Object.assign(new EventEmitter(), {
+      applyOperatingState: vi.fn().mockResolvedValue({ frequencyApplied: true, modeApplied: false }),
+      setKnownFrequency: vi.fn(),
+    });
+    asTestManager(manager).lastKnownFrequency = 14074000;
+    asTestManager(manager).connection = connection as unknown as TestRadioConnection;
+    asTestManager(manager).setupConnectionEventForwarding();
+    const emitSpy = vi.spyOn(manager as unknown as { emit: (event: string, payload: number) => void }, 'emit');
+
+    await manager.applyOperatingState({ frequency: 14080000 });
+    connection.emit('frequencyChanged', 14074000);
+
+    expect(asTestManager(manager).lastKnownFrequency).toBe(14080000);
+    expect(emitSpy).not.toHaveBeenCalledWith('radioFrequencyChanged', 14074000);
+    vi.useRealTimers();
   });
 
   it('skips post-frequency capability refreshes for ICOM WLAN frequency monitor changes', async () => {
