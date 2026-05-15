@@ -85,3 +85,4 @@ registerCapabilityComponent('spectrum_rbw', EnumCapabilityPanel);
 registerCapabilityComponent('spectrum_during_tx', BooleanCapabilityPanel);
 registerCapabilityComponent('spectrum_center_type', EnumCapabilityPanel);
 registerCapabilityComponent('dcs_code', EnumCapabilityPanel);
+registerCapabilityComponent('split', BooleanCapabilityPanel);

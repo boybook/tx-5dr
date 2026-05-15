@@ -293,6 +293,7 @@ export const CAPABILITY_IDS = [
   'tuning_step',
   'repeater_shift',
   'repeater_offset',
+  'split',
   'ctcss_tone',
   'spectrum_data_output',
   'spectrum_hold',

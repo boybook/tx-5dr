@@ -11,7 +11,7 @@ import {
 } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { api, ApiError } from '@tx5dr/core';
-import { useConnection, useOperators, useRadioConnectionState, useRadioState } from '../../store/radioStore';
+import { useConnection, useOperators, useRadioConnectionState, useRadioState, useSplitState } from '../../store/radioStore';
 import { useAuth, useHasMinRole, useCan, useAbility } from '../../store/authStore';
 import { UserRole, type PresetFrequency } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
@@ -75,6 +75,46 @@ export const VoiceFrequencyControl: React.FC = () => {
   const currentRadioModeRef = React.useRef(currentRadioMode);
   currentRadioModeRef.current = currentRadioMode;
   const [isAddPresetModalOpen, setIsAddPresetModalOpen] = useState(false);
+
+  // Split state
+  const { splitEnabled, splitTxFrequency } = useSplitState();
+  const [currentTxFrequency, setCurrentTxFrequency] = useState<number>(splitTxFrequency ?? 14270000);
+  const currentTxFrequencyRef = React.useRef(currentTxFrequency);
+  currentTxFrequencyRef.current = currentTxFrequency;
+
+  // Sync TX frequency from store when split state changes
+  useEffect(() => {
+    if (splitEnabled && splitTxFrequency && splitTxFrequency > 0) {
+      setCurrentTxFrequency(splitTxFrequency);
+    }
+  }, [splitEnabled, splitTxFrequency]);
+
+  // TX frequency echo suppression
+  const pendingTxFreqRef = React.useRef<{ intendedFrequency: number; sentAt: number } | null>(null);
+  const txFreqDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const applyTxFrequency = useCallback((newFreq: number) => {
+    if (!canWriteFrequency || !connection.state.isConnected) {
+      pendingTxFreqRef.current = null;
+      return;
+    }
+
+    setCurrentTxFrequency(newFreq);
+    pendingTxFreqRef.current = { intendedFrequency: newFreq, sentAt: Date.now() };
+    if (txFreqDebounceTimerRef.current) {
+      clearTimeout(txFreqDebounceTimerRef.current);
+    }
+    txFreqDebounceTimerRef.current = setTimeout(() => {
+      txFreqDebounceTimerRef.current = null;
+      const pending = pendingTxFreqRef.current;
+      if (!pending) return;
+      pendingTxFreqRef.current = { intendedFrequency: pending.intendedFrequency, sentAt: Date.now() };
+      const wsClient = connection.state.radioService?.wsClientInstance;
+      if (wsClient) {
+        wsClient.setSplitFrequency(pending.intendedFrequency);
+      }
+    }, FREQ_DEBOUNCE_MS);
+  }, [canWriteFrequency, connection.state.isConnected, connection.state.radioService]);
 
   // Pending frequency tracking: suppresses stale server echo (e.g. from 5s radio polling)
   // overwriting user's just-typed value. Also used as a trailing-debounce buffer so that
@@ -162,11 +202,15 @@ export const VoiceFrequencyControl: React.FC = () => {
     }, FREQ_DEBOUNCE_MS);
   }, [canWriteTargetFrequency, connection.state.isConnected, flushPendingFrequency]);
 
-  // Cleanup debounce timer on unmount
+  // Cleanup debounce timers on unmount
   useEffect(() => () => {
     if (freqDebounceTimerRef.current) {
       clearTimeout(freqDebounceTimerRef.current);
       freqDebounceTimerRef.current = null;
+    }
+    if (txFreqDebounceTimerRef.current) {
+      clearTimeout(txFreqDebounceTimerRef.current);
+      txFreqDebounceTimerRef.current = null;
     }
   }, []);
 
@@ -419,6 +463,61 @@ export const VoiceFrequencyControl: React.FC = () => {
     return result;
   }, [currentFrequency]);
 
+  const txFrequencyDigits = useMemo(() => {
+    const freq = Math.round(currentTxFrequency);
+    const mhzWhole = Math.floor(freq / 1000000);
+    const remainder = freq % 1000000;
+    const khzPart = Math.floor(remainder / 1000);
+    const hzPart = remainder % 1000;
+
+    const mhzStr = String(mhzWhole).padStart(3, '0');
+    const khzStr = String(khzPart).padStart(3, '0');
+    const hzStr = String(hzPart).padStart(3, '0');
+
+    type DigitEntry = { char: string; placeValue: number; isSeparator: false; index: number; isLeadingZero: boolean }
+      | { char: string; isSeparator: true };
+    const result: DigitEntry[] = [];
+
+    const mhzPlaces = [100000000, 10000000, 1000000];
+    let seenNonZero = false;
+    for (let i = 0; i < 3; i++) {
+      const isLeadingZero = !seenNonZero && mhzStr[i] === '0';
+      if (mhzStr[i] !== '0') seenNonZero = true;
+      result.push({ char: mhzStr[i], placeValue: mhzPlaces[i], isSeparator: false, index: result.length, isLeadingZero });
+    }
+    result.push({ char: '.', isSeparator: true });
+
+    const khzPlaces = [100000, 10000, 1000];
+    for (let i = 0; i < 3; i++) {
+      result.push({ char: khzStr[i], placeValue: khzPlaces[i], isSeparator: false, index: result.length, isLeadingZero: false });
+    }
+    result.push({ char: '.', isSeparator: true });
+
+    const hzPlaces = [100, 10, 1];
+    for (let i = 0; i < 3; i++) {
+      result.push({ char: hzStr[i], placeValue: hzPlaces[i], isSeparator: false, index: result.length, isLeadingZero: false });
+    }
+
+    return result;
+  }, [currentTxFrequency]);
+
+  const changeTxDigitAtPlace = useCallback((placeValue: number, delta: number) => {
+    const freq = currentTxFrequencyRef.current;
+    const newFreq = Math.max(0, freq + delta * placeValue);
+    if (newFreq < 1000000 || newFreq > 1000000000) return;
+    applyTxFrequency(newFreq);
+  }, [applyTxFrequency]);
+
+  const setTxDigitAtPlace = useCallback((placeValue: number, newDigitValue: number) => {
+    const freq = Math.round(currentTxFrequencyRef.current);
+    const currentDigit = Math.floor(freq / placeValue) % 10;
+    const delta = newDigitValue - currentDigit;
+    if (delta === 0) return;
+    const newFreq = freq + delta * placeValue;
+    if (newFreq < 1000000 || newFreq > 1000000000) return;
+    applyTxFrequency(newFreq);
+  }, [applyTxFrequency]);
+
   // Change a single digit at a given place value (stable - reads from ref)
   const changeDigitAtPlace = useCallback((placeValue: number, delta: number) => {
     const freq = currentFrequencyRef.current;
@@ -603,31 +702,86 @@ export const VoiceFrequencyControl: React.FC = () => {
       <CardBody className="pt-1 gap-3 overflow-hidden">
         {/* Interactive frequency display */}
         <div className="flex-shrink-0 text-center py-2">
-          <div className="flex items-center justify-center font-mono font-bold text-foreground">
-            <div className="min-w-0 shrink overflow-hidden flex justify-end" aria-hidden="true">
-              <span className="mr-3 translate-y-1.5 text-xs font-semibold text-default-400 invisible">{t('frequency.mhz')}</span>
+          {splitEnabled ? (
+            /* Split mode: show RX and TX rows */
+            <div className="flex flex-col md:flex-row md:justify-center md:gap-6 gap-1">
+              {/* RX row */}
+              <div className="flex items-center justify-center font-mono font-bold text-foreground">
+                <span className="mr-2 text-xs font-semibold text-success-500">{t('frequency.rxLabel')}</span>
+                <div className="flex flex-none items-center justify-center">
+                  {frequencyDigits.map((entry, i) => {
+                    if (entry.isSeparator) {
+                      return <span key={`rx-sep-${i}`} className="text-3xl mx-0.5 text-default-400 select-none">.</span>;
+                    }
+                    return (
+                      <FrequencyDigit
+                        key={`rx-d-${i}`}
+                        digit={entry.char}
+                        placeValue={entry.placeValue}
+                        disabled={!canWriteFrequency}
+                        isLeadingZero={entry.isLeadingZero}
+                        onIncrement={() => changeDigitAtPlace(entry.placeValue, 1)}
+                        onDecrement={() => changeDigitAtPlace(entry.placeValue, -1)}
+                        onSetDigit={(v) => setDigitAtPlace(entry.placeValue, v)}
+                      />
+                    );
+                  })}
+                </div>
+                <span className="ml-2 flex-none self-center text-xs font-semibold text-default-400">{t('frequency.mhz')}</span>
+              </div>
+              {/* TX row */}
+              <div className="flex items-center justify-center font-mono font-bold text-foreground">
+                <span className="mr-2 text-xs font-semibold text-danger-500">{t('frequency.txLabel')}</span>
+                <div className="flex flex-none items-center justify-center">
+                  {txFrequencyDigits.map((entry, i) => {
+                    if (entry.isSeparator) {
+                      return <span key={`tx-sep-${i}`} className="text-3xl mx-0.5 text-default-400 select-none">.</span>;
+                    }
+                    return (
+                      <FrequencyDigit
+                        key={`tx-d-${i}`}
+                        digit={entry.char}
+                        placeValue={entry.placeValue}
+                        disabled={!canWriteFrequency}
+                        isLeadingZero={entry.isLeadingZero}
+                        onIncrement={() => changeTxDigitAtPlace(entry.placeValue, 1)}
+                        onDecrement={() => changeTxDigitAtPlace(entry.placeValue, -1)}
+                        onSetDigit={(v) => setTxDigitAtPlace(entry.placeValue, v)}
+                      />
+                    );
+                  })}
+                </div>
+                <span className="ml-2 flex-none self-center text-xs font-semibold text-default-400">{t('frequency.mhz')}</span>
+              </div>
             </div>
-            <div className="flex flex-none items-center justify-center">
-              {frequencyDigits.map((entry, i) => {
-                if (entry.isSeparator) {
-                  return <span key={`sep-${i}`} className="text-3xl mx-0.5 text-default-400 select-none">.</span>;
-                }
-                return (
-                  <FrequencyDigit
-                    key={`d-${i}`}
-                    digit={entry.char}
-                    placeValue={entry.placeValue}
-                    disabled={!canWriteFrequency}
-                    isLeadingZero={entry.isLeadingZero}
-                    onIncrement={() => changeDigitAtPlace(entry.placeValue, 1)}
-                    onDecrement={() => changeDigitAtPlace(entry.placeValue, -1)}
-                    onSetDigit={(v) => setDigitAtPlace(entry.placeValue, v)}
-                  />
-                );
-              })}
+          ) : (
+            /* Normal mode: single frequency row */
+            <div className="flex items-center justify-center font-mono font-bold text-foreground">
+              <div className="min-w-0 shrink overflow-hidden flex justify-end" aria-hidden="true">
+                <span className="mr-3 translate-y-1.5 text-xs font-semibold text-default-400 invisible">{t('frequency.mhz')}</span>
+              </div>
+              <div className="flex flex-none items-center justify-center">
+                {frequencyDigits.map((entry, i) => {
+                  if (entry.isSeparator) {
+                    return <span key={`sep-${i}`} className="text-3xl mx-0.5 text-default-400 select-none">.</span>;
+                  }
+                  return (
+                    <FrequencyDigit
+                      key={`d-${i}`}
+                      digit={entry.char}
+                      placeValue={entry.placeValue}
+                      disabled={!canWriteFrequency}
+                      isLeadingZero={entry.isLeadingZero}
+                      onIncrement={() => changeDigitAtPlace(entry.placeValue, 1)}
+                      onDecrement={() => changeDigitAtPlace(entry.placeValue, -1)}
+                      onSetDigit={(v) => setDigitAtPlace(entry.placeValue, v)}
+                    />
+                  );
+                })}
+              </div>
+              <span className="ml-3 flex-none self-center translate-y-1.5 text-xs font-semibold text-default-400">{t('frequency.mhz')}</span>
             </div>
-            <span className="ml-3 flex-none self-center translate-y-1.5 text-xs font-semibold text-default-400">{t('frequency.mhz')}</span>
-          </div>
+          )}
         </div>
 
         {/* Radio mode buttons */}

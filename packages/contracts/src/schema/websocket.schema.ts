@@ -143,6 +143,8 @@ export enum WSMessageType {
   WRITE_RADIO_CAPABILITY = 'writeRadioCapability',
   /** 客户端请求刷新所有能力值（client → server） */
   REFRESH_RADIO_CAPABILITIES = 'refreshRadioCapabilities',
+  /** 客户端设置 Split TX 频率（client → server） */
+  SET_SPLIT_FREQUENCY = 'setSplitFrequency',
 
   // ===== 电台重连控制 =====
   RADIO_STOP_RECONNECT = 'radioStopReconnect',

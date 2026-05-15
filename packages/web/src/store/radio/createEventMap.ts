@@ -712,11 +712,26 @@ export function createRadioEventMap({
         stateCount: listData.capabilities.length,
       });
       radioDispatch({ type: 'setCapabilityList', payload: listData });
+
+      // Sync split state from capability snapshot
+      const splitCap = listData.capabilities.find(c => c.id === 'split');
+      if (splitCap) {
+        const enabled = typeof splitCap.value === 'boolean' ? splitCap.value : false;
+        const txFrequency = (splitCap.meta as { txFrequency?: number } | undefined)?.txFrequency ?? null;
+        radioDispatch({ type: 'splitStateChanged', payload: { enabled, txFrequency } });
+      }
     },
     radioCapabilityChanged: (data: unknown) => {
       const state = data as CapabilityState;
       logger.debug('Radio capability changed', { id: state.id, value: state.value });
       radioDispatch({ type: 'updateCapabilityState', payload: state });
+
+      // Sync split state to dedicated radio state fields
+      if (state.id === 'split') {
+        const enabled = typeof state.value === 'boolean' ? state.value : false;
+        const txFrequency = (state.meta as { txFrequency?: number } | undefined)?.txFrequency ?? null;
+        radioDispatch({ type: 'splitStateChanged', payload: { enabled, txFrequency } });
+      }
     },
     audioSidecarStatusChanged: (data: unknown) => {
       const payload = data as AudioSidecarStatusPayload;

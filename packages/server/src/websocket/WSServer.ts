@@ -419,6 +419,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.AUDIO_RETRY_NOW]: () => this.handleAudioRetryNow(),
       [WSMessageType.WRITE_RADIO_CAPABILITY]: (data, id) => this.handleWriteRadioCapability(id, data),
       [WSMessageType.REFRESH_RADIO_CAPABILITIES]: () => this.handleRefreshRadioCapabilities(),
+      [WSMessageType.SET_SPLIT_FREQUENCY]: (data) => this.handleSetSplitFrequency(data),
       [WSMessageType.FORCE_STOP_TRANSMISSION]: () => this.handleForceStopTransmission(),
       [WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION]: (data) => this.handleRemoveOperatorFromTransmission(data),
       [WSMessageType.START_TUNE_TONE]: (data, id) => this.handleStartTuneTone(id, data),
@@ -793,6 +794,7 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.FORCE_STOP_TRANSMISSION]: { ability: { action: 'execute', subject: 'Engine' } },
     [WSMessageType.WRITE_RADIO_CAPABILITY]: { ability: { action: 'execute', subject: 'RadioControl' } },
     [WSMessageType.REFRESH_RADIO_CAPABILITIES]: { ability: { action: 'execute', subject: 'RadioControl' } },
+    [WSMessageType.SET_SPLIT_FREQUENCY]: { ability: { action: 'execute', subject: 'RadioFrequency' } },
     [WSMessageType.START_TUNE_TONE]: { ability: { action: 'execute', subject: 'RadioControl' } },
     [WSMessageType.STOP_TUNE_TONE]: { ability: { action: 'execute', subject: 'RadioControl' } },
     [WSMessageType.INVOKE_SPECTRUM_CONTROL]: { ability: { action: 'execute', subject: 'RadioControl' }, requiresHandshake: true },
@@ -2475,6 +2477,17 @@ export class WSServer extends WSMessageHandler {
       await radioManager.refreshCapabilities();
     } catch (error) {
       logger.error('refreshRadioCapabilities failed', error);
+    }
+  }
+
+  private async handleSetSplitFrequency(data: unknown): Promise<void> {
+    try {
+      const { txFrequency } = data as { txFrequency: number };
+      logger.info('setSplitFrequency command', { txFrequency });
+      const radioManager = this.digitalRadioEngine.getRadioManager();
+      await radioManager.setSplitFrequency(txFrequency);
+    } catch (error) {
+      logger.error('setSplitFrequency failed', error);
     }
   }
 

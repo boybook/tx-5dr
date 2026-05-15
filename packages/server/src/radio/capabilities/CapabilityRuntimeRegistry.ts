@@ -390,18 +390,31 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       const newValue = await definition.read(this.connection);
       const cached = this.valueCache.get(id);
 
-      if (!cached || cached.value !== newValue || cached.availability !== 'available' || cached.lastError) {
+      // Read additional metadata (e.g. split TX frequency) if supported
+      let mergedMeta = cached?.meta;
+      if (definition.readMeta) {
+        try {
+          const extraMeta = await definition.readMeta(this.connection);
+          if (extraMeta) {
+            mergedMeta = { ...(mergedMeta ?? {}), ...extraMeta };
+          }
+        } catch (metaError) {
+          logger.debug(`readMeta failed for ${id}`, metaError);
+        }
+      }
+
+      if (!cached || cached.value !== newValue || cached.availability !== 'available' || cached.lastError || JSON.stringify(cached.meta) !== JSON.stringify(mergedMeta)) {
         const newState: CapabilityState = {
           id,
           supported: true,
           availability: 'available',
           value: newValue,
-          meta: cached?.meta,
+          meta: mergedMeta,
           updatedAt: Date.now(),
         };
 
         if (id === 'tuner_switch') {
-          const currentMeta = cached?.meta ?? {};
+          const currentMeta = mergedMeta ?? {};
           newState.meta = currentMeta.status === 'tuning' ? currentMeta : { ...currentMeta, status: 'idle' };
         }
 

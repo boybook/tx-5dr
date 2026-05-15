@@ -1665,6 +1665,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
     this.emitModeAndStatusSnapshot();
 
+    // Refresh split capability after mode switch (some radios support split only in certain modes)
+    void this.radioManager?.refreshSplitCapability?.();
+
     this.resetVoicePttState();
     this.squelchStatusMonitor.reevaluate();
     this.physicalPttMonitor.reevaluate();

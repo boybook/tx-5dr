@@ -795,6 +795,10 @@
       "label": "DCS Code",
       "description": "Selects the digital-coded squelch (DCS) code used to match repeater or radio network squelch settings."
     },
+    "split": {
+      "label": "Split",
+      "description": "Enable split-frequency operation. When enabled, RX and TX frequencies can be set independently. Both VFOs maintain the same radio mode."
+    },
     "options": {
       "common": {
         "off": "Off"

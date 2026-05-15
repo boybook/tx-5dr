@@ -537,4 +537,11 @@ export class WSClient extends WSMessageHandler {
   setVoiceRadioMode(radioMode: string): void {
     this.send(WSMessageType.VOICE_SET_RADIO_MODE, { radioMode });
   }
+
+  /**
+   * 设置 Split TX 频率
+   */
+  setSplitFrequency(txFrequency: number): void {
+    this.send(WSMessageType.SET_SPLIT_FREQUENCY, { txFrequency });
+  }
 } 

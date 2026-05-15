@@ -1171,6 +1171,32 @@ function createDefinitions(): CapabilityDefinition[] {
       read: (conn) => conn.getDcsCode!(),
       write: (conn, value) => conn.setDcsCode!(value as number),
     },
+    // ===== Split (异频收发) =====
+    {
+      id: 'split',
+      descriptor: createBooleanDescriptor('split', 'operation', 'radio:capability.split.label', 'radio:capability.split.description'),
+      probeSupport: async (conn) => {
+        if (!conn.getSplitEnabled) return false;
+        try {
+          await conn.getSplitEnabled();
+          return { supported: true, source: 'runtime-probe' };
+        } catch {
+          return false;
+        }
+      },
+      read: (conn) => conn.getSplitEnabled!(),
+      write: (conn, value) => conn.setSplitEnabled!(Boolean(value)),
+      readMeta: async (conn) => {
+        const enabled = await conn.getSplitEnabled!();
+        if (!enabled) return undefined;
+        try {
+          const txFreq = await conn.getSplitFrequency!();
+          return txFreq ? { txFrequency: txFreq } : undefined;
+        } catch {
+          return undefined;
+        }
+      },
+    },
   ];
 }
 

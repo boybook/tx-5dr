@@ -902,4 +902,21 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * 获取支持的最大 XIT 偏移（Hz）。
    */
   getMaxXit?(): Promise<number>;
+
+  // ===== Split operation (optional) =====
+
+  /** 获取 Split 异频收发开关状态。 */
+  getSplitEnabled?(): Promise<boolean>;
+
+  /** 设置 Split 异频收发开关。 */
+  setSplitEnabled?(enabled: boolean): Promise<void>;
+
+  /** 获取当前 TX 频率（Split 开启时）。Split 关闭时返回 null。 */
+  getSplitFrequency?(): Promise<number | null>;
+
+  /** 设置 Split TX 频率。 */
+  setSplitFrequency?(txFrequency: number): Promise<void>;
+
+  /** 原子设置 Split TX 频率和模式。 */
+  setSplitFreqMode?(txFrequency: number, txMode: string, txWidth: number): Promise<void>;
 }

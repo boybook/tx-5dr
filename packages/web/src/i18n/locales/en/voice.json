@@ -22,7 +22,9 @@
     "confirm": "Confirm",
     "switchSuccess": "Frequency switched",
     "switchFailed": "Frequency switch failed",
-    "switched": "Switched to {{freq}} MHz"
+    "switched": "Switched to {{freq}} MHz",
+    "rxLabel": "RX",
+    "txLabel": "TX"
   },
   "radioMode": {
     "title": "Radio Mode",
