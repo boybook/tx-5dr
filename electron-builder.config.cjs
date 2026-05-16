@@ -75,11 +75,11 @@ module.exports = {
     entitlements: 'build/entitlements.mac.plist',
     entitlementsInherit: 'build/entitlements.mac.plist',
     identity: process.env.APPLE_IDENTITY || undefined,
-    notarize: process.env.APPLE_ID ? {
-      appleId: process.env.APPLE_ID,
-      appleIdPassword: process.env.APPLE_APP_SPECIFIC_PASSWORD,
-      teamId: process.env.APPLE_TEAM_ID,
-    } : false,
+    notarize: Boolean(
+      process.env.APPLE_ID
+      && process.env.APPLE_APP_SPECIFIC_PASSWORD
+      && process.env.APPLE_TEAM_ID
+    ),
   },
   win: {
     icon: path.join(__dirname, 'packages/electron-main/assets/AppIcon.ico'),
