@@ -6,6 +6,7 @@ import {
 } from '@tx5dr/core';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
+import jaLocale from './locales/ja.json' with { type: 'json' };
 
 function getSenderCallsign(message: unknown): string {
   if (typeof message === 'object' && message !== null && 'senderCallsign' in message) {
@@ -100,4 +101,5 @@ export const callsignFilterPlugin: PluginDefinition = {
 export const callsignFilterLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,
   en: enLocale,
+  ja: jaLocale,
 };

@@ -5,6 +5,7 @@ import { useTheme } from '../hooks/useTheme';
 import { useViewportHeightValue } from '../hooks/useViewportHeight';
 import { SpectrumDisplay } from '../components/radio/spectrum/SpectrumDisplay';
 import { isElectron } from '../utils/config';
+import { useLanguage } from '../hooks/useLanguage';
 
 /**
  * 独立频谱图窗口内容，已在 RadioProvider 内部
@@ -71,6 +72,7 @@ const SpectrumAuthGate: React.FC = () => {
  */
 export const SpectrumPage: React.FC = () => {
   useTheme();
+  useLanguage();
 
   return (
     <AuthProvider>

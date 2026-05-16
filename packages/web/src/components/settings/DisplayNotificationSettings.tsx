@@ -368,6 +368,7 @@ export const DisplayNotificationSettings = forwardRef<
               <SelectItem key="system">{t('settings:language.system')}</SelectItem>
               <SelectItem key="zh">{t('settings:language.zh')}</SelectItem>
               <SelectItem key="en">{t('settings:language.en')}</SelectItem>
+              <SelectItem key="ja">{t('settings:language.ja')}</SelectItem>
             </Select>
           </div>
         </CardBody>

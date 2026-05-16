@@ -1,0 +1,10 @@
+{
+  "pluginName": "すでに接続されているオフセット",
+  "pluginDescription": "ターゲットが以前に交信を取ったことがあるかどうかに応じて、候補ターゲットの優先度スコアが増減します。",
+  "biasOverview": "採点の指示",
+  "biasOverviewDesc": "このプラグインはターゲットをフィルターせず、新しい局にポイントを追加し、すでに交信した局のポイントを減らすだけです。",
+  "newStationBonus": "新局ボーナス点",
+  "newStationBonusDesc": "コールサインが失敗すると追加ポイントが与えられます。",
+  "workedStationPenalty": "すでに接続されている場合はポイントが減ります",
+  "workedStationPenaltyDesc": "交信したコールサインは減点となります。"
+}

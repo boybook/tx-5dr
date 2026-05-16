@@ -1,0 +1,211 @@
+{
+  "severity": {
+    "critical": "⚠️重大なエラー",
+    "error": "エラー",
+    "warning": "⚠️ 警告",
+    "info": "ヒント"
+  },
+  "copyLabel": {
+    "errorCode": "エラーコード",
+    "severity": "重大度",
+    "message": "エラーメッセージ",
+    "suggestions": "提案"
+  },
+  "code": {
+    "CONNECTION_FAILED": {
+      "userMessage": "局に接続できません",
+      "suggestions": [
+        "检查电台是否开机",
+        "检查网络连接",
+        "检查配置是否正确",
+        "尝试重启电台"
+      ]
+    },
+    "CONNECTION_TIMEOUT": {
+      "userMessage": "接続タイムアウト",
+      "suggestions": [
+        "检查网络是否正常",
+        "确认电台地址和端口",
+        "增大连接超时时间"
+      ]
+    },
+    "CONNECTION_LOST": {
+      "userMessage": "無線機への接続が失われました",
+      "suggestions": [
+        "检查电台是否仍在运行",
+        "检查网络连接",
+        "系统将自动尝试重连"
+      ]
+    },
+    "RECONNECT_FAILED": {
+      "userMessage": "再接続に失敗しました",
+      "suggestions": [
+        "检查电台是否正常工作",
+        "检查网络连接",
+        "稍后手动重试"
+      ]
+    },
+    "RECONNECT_MAX_ATTEMPTS": {
+      "userMessage": "無線に再接続できません",
+      "suggestions": [
+        "检查电台是否正常工作",
+        "检查网络连接",
+        "尝试手动重启系统",
+        "联系技术支持"
+      ]
+    },
+    "INVALID_CONFIG": {
+      "userMessage": "無効な構成",
+      "suggestions": [
+        "检查配置参数是否正确",
+        "前往设置页面重新配置",
+        "恢复默认配置"
+      ]
+    },
+    "MISSING_CONFIG": {
+      "userMessage": "必要な設定がありません",
+      "suggestions": [
+        "前往设置页面完成配置",
+        "检查所有必填项"
+      ]
+    },
+    "UNSUPPORTED_MODE": {
+      "userMessage": "サポートされていない動作モードです",
+      "suggestions": [
+        "检查电台是否支持该模式",
+        "尝试切换到其他模式"
+      ]
+    },
+    "DEVICE_NOT_FOUND": {
+      "userMessage": "デバイスが見つかりません",
+      "suggestions": [
+        "检查设备是否已连接",
+        "刷新设备列表",
+        "选择其他可用设备"
+      ]
+    },
+    "DEVICE_BUSY": {
+      "userMessage": "デバイスがビジー状態です",
+      "suggestions": [
+        "关闭其他使用该设备的程序",
+        "稍后重试",
+        "重启设备"
+      ]
+    },
+    "DEVICE_ERROR": {
+      "userMessage": "デバイスエラー",
+      "suggestions": [
+        "检查设备连接",
+        "重启设备",
+        "重新安装驱动程序"
+      ]
+    },
+    "AUDIO_DEVICE_ERROR": {
+      "userMessage": "オーディオデバイスの操作に失敗しました",
+      "suggestions": [
+        "检查音频设备是否可用",
+        "尝试选择其他设备",
+        "重启应用程序"
+      ]
+    },
+    "INVALID_OPERATION": {
+      "userMessage": "無効な操作",
+      "suggestions": [
+        "当前状态不允许此操作",
+        "请稍后重试"
+      ]
+    },
+    "OPERATION_TIMEOUT": {
+      "userMessage": "操作のタイムアウト",
+      "suggestions": [
+        "检查系统是否正常运行",
+        "稍后重试"
+      ]
+    },
+    "OPERATION_CANCELLED": {
+      "userMessage": "操作がキャンセルされました",
+      "suggestions": []
+    },
+    "PTT_ACTIVATION_FAILED": {
+      "userMessage": "送信 (PTT) をアクティブ化できません",
+      "suggestions": [
+        "检查电台连接",
+        "确认电台未被其他程序占用",
+        "检查 PTT 配置"
+      ]
+    },
+    "INVALID_STATE": {
+      "userMessage": "この操作は現在の状態では許可されていません",
+      "suggestions": [
+        "等待当前操作完成后重试"
+      ]
+    },
+    "NOT_INITIALIZED": {
+      "userMessage": "システムはまだ初期化されていません",
+      "suggestions": [
+        "等待系统启动完成",
+        "如果长时间等待，请重启应用"
+      ]
+    },
+    "ALREADY_RUNNING": {
+      "userMessage": "システムはすでに稼働しています",
+      "suggestions": []
+    },
+    "NOT_RUNNING": {
+      "userMessage": "システムが動作していません",
+      "suggestions": [
+        "先启动系统再执行此操作"
+      ]
+    },
+    "RESOURCE_UNAVAILABLE": {
+      "userMessage": "必要なリソースが利用できない",
+      "suggestions": [
+        "检查系统资源是否充足",
+        "关闭其他占用资源的程序"
+      ]
+    },
+    "RESOURCE_CLEANUP_FAILED": {
+      "userMessage": "リソースのクリーンアップに失敗しました",
+      "suggestions": [
+        "重启应用程序"
+      ]
+    },
+    "NETWORK_ERROR": {
+      "userMessage": "ネットワークエラー",
+      "suggestions": [
+        "检查网络连接",
+        "检查防火墙设置",
+        "确认服务器地址正确"
+      ]
+    },
+    "UDP_ERROR": {
+      "userMessage": "UDP通信エラー",
+      "suggestions": [
+        "检查 UDP 端口是否被占用",
+        "检查防火墙是否允许 UDP 通信"
+      ]
+    },
+    "WEBSOCKET_ERROR": {
+      "userMessage": "WebSocket接続エラー",
+      "suggestions": [
+        "检查网络连接",
+        "刷新页面重试"
+      ]
+    },
+    "DECODE_WORKER_UNAVAILABLE": {
+      "userMessage": "デコード ワーカーの起動に失敗したため、FT8/FT4 デコードは一時的に利用できません。他の無線機能は引き続き動作します。",
+      "suggestions": [
+        "打开 Server Health 查看 Decode Workers 状态。",
+        "检查 server 日志中的原生模块或 worker 启动错误。"
+      ]
+    },
+    "UNKNOWN_ERROR": {
+      "userMessage": "不明なエラーが発生しました",
+      "suggestions": [
+        "查看错误详情",
+        "重试操作",
+        "如果问题持续，请联系技术支持"
+      ]
+    }
+  }
+}

@@ -25,6 +25,7 @@ import { useViewportHeightCssVar } from './hooks/useViewportHeight';
 import { GlobalShortcutBridge } from './components/app/GlobalShortcutBridge';
 import { UpdateNotificationProvider } from './components/app/UpdateNotificationProvider';
 import { BootstrapStatusChip } from './components/app/BootstrapStatusChip';
+import { useLanguage } from './hooks/useLanguage';
 
 function AppContent() {
   const { state } = useRadioState();
@@ -147,6 +148,7 @@ function AuthGate() {
 function App() {
   // 初始化主题系统
   useTheme();
+  useLanguage();
   useViewportHeightCssVar();
 
   return (

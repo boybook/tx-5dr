@@ -1,7 +1,8 @@
 import i18n from '../i18n/index';
+import { getIntlLocale } from '../i18n/language';
 
 function getLocale(): string {
-  return i18n.language === 'zh' ? 'zh-CN' : 'en-US';
+  return getIntlLocale(i18n.language);
 }
 
 export function formatDateTime(date: string | number | Date): string {

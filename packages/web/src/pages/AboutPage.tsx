@@ -12,6 +12,7 @@ import { isElectron } from '../utils/config';
 import { AboutHeader } from './about/AboutHeader';
 import { DependencyList } from './about/DependencyList';
 import { SponsorList } from './about/SponsorList';
+import { useLanguage } from '../hooks/useLanguage';
 
 const REPO_URL = 'https://github.com/boybook/tx-5dr';
 const ISSUES_URL = 'https://github.com/boybook/tx-5dr/issues';
@@ -25,6 +26,7 @@ interface AboutPageProps {
 
 export const AboutPage: React.FC<AboutPageProps> = ({ embedded }) => {
   useTheme();
+  useLanguage();
   const { t } = useTranslation('about');
   const version = useAppVersion();
   const buildInfo = useBuildInfo();

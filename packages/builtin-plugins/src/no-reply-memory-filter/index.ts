@@ -5,6 +5,7 @@ import type { ParsedFT8Message, QSORecord } from '@tx5dr/contracts';
 import type { PluginDefinition, PluginContext, QSOFailureInfo } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
+import jaLocale from './locales/ja.json' with { type: 'json' };
 
 export const BUILTIN_NO_REPLY_MEMORY_FILTER_PLUGIN_NAME = 'no-reply-memory-filter';
 export const noReplyMemoryFilterDirPath = path.dirname(fileURLToPath(import.meta.url));
@@ -488,4 +489,5 @@ export const noReplyMemoryFilterPlugin: PluginDefinition = {
 export const noReplyMemoryFilterLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,
   en: enLocale,
+  ja: jaLocale,
 };

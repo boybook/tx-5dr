@@ -3,6 +3,7 @@ import path from 'path';
 import type { PluginDefinition, PluginUIRequestContext } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
+import jaLocale from './locales/ja.json' with { type: 'json' };
 import { QRZSyncProvider } from './provider.js';
 import { normalizeCallsign } from '@tx5dr/plugin-api';
 
@@ -107,4 +108,5 @@ export const qrzSyncPlugin: PluginDefinition = {
 export const qrzSyncLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,
   en: enLocale,
+  ja: jaLocale,
 };

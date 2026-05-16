@@ -1,0 +1,13 @@
+{
+  "pluginName": "無応答記憶フィルター",
+  "pluginDescription": "何度も積極的に発信しているのに応答がない無線局を一時的に抑止し、自動追跡を繰り返して交信機会を無駄にすることを防ぎます。",
+  "memoryOverview": "記憶戦略",
+  "memoryOverviewDesc": "現在のオペレーターごとに、呼んでも応答がなかったコールサインを記憶します。スコアがしきい値を下回ると自動追跡から除外され、時間経過で自然に回復します。",
+  "blockThreshold": "閾値スコア",
+  "blockThresholdDesc": "現在のスコアがこの値よりも低い場合、コールサインの自動追跡が防止されます。",
+  "failurePenalty": "失敗による減点",
+  "failurePenaltyDesc": "TX1ステージで全く返答がなくターゲットを放棄した場合に減点されます。直接通話切替対象のため半額が差し引かれます。",
+  "recoveryPerCycle": "ラウンドごとに回復するポイント",
+  "recoveryPerCycleDesc": "メモリ スコアが時間の経過とともに遅延復元されるときに、FT8 トランシーバー ラウンドごとに追加されるスコア。",
+  "memoryManagerTitle": "記憶スコア"
+}

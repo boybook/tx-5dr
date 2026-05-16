@@ -1,6 +1,7 @@
 import type { PluginDefinition, ScoredCandidate } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
+import jaLocale from './locales/ja.json' with { type: 'json' };
 
 export const BUILTIN_SNR_FILTER_PLUGIN_NAME = 'snr-filter';
 const SNR_PRIORITY_SCORE_MULTIPLIER = 1000;
@@ -89,4 +90,5 @@ export const snrFilterPlugin: PluginDefinition = {
 export const snrFilterLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,
   en: enLocale,
+  ja: jaLocale,
 };

@@ -1,0 +1,57 @@
+{
+  "severity": {
+    "info": "ヒント",
+    "warning": "⚠️ 警告",
+    "error": "エラー",
+    "critical": "⚠️重大なエラー"
+  },
+  "suggestion": {
+    "label": "提案:"
+  },
+  "hint": {
+    "retryManually": "今すぐ操作を手動で再試行してください",
+    "tryLater": "後でもう一度試してください"
+  },
+  "serverMessage": {
+    "timingAlert": {
+      "title": "タイミングアラーム",
+      "description": "オペレーターの自動決定がこの送信スロットのエンコーディングに追いつかない可能性があります"
+    },
+    "radioConnected": {
+      "title": "無線が接続されています",
+      "description": "無線接続に成功しました"
+    },
+    "qsoLogged": {
+      "title": "QSOが記録されました",
+      "description": "{{summary}}"
+    },
+    "qsoUpdated": {
+      "title": "QSOが更新されました",
+      "description": "{{summary}}"
+    },
+    "realtimeConnectivityWarning": {
+      "title": "リアルタイム音声接続異常",
+      "description": "リアルタイム音声接続が異常であるため、クライアントはコンテンツを正常に送信または聞くことができない可能性があります。\n\nトラブルシューティングの提案:\n- /api/realtime/rtc-data-audio シグナリングが到達可能であることを確認する\n- rtc-data-audio UDP ポート {{localUdpPort}} が開いているか、マップされていることを確認します。\n- 構成されたパブリック ネットワーク UDP エンドポイントが到達可能であることを確認します。\n- クライアントが {{signalingUrl}} にアクセスできることを確認します。\n\n技術詳細: {{details}}"
+    },
+    "realtimeServiceDown": {
+      "title": "リアルタイム音声サービスの例外",
+      "description": "サーバー上のリアルタイム音声サービスが異常であるため、クライアントはコンテンツを正常に送信または聞くことができない可能性があります。\n\nトラブルシューティングの提案:\n- /api/realtime/rtc-data-audio シグナリングが到達可能であることを確認する\n- rtc-data-audio UDP ポート {{localUdpPort}} が開いているか、マップされていることを確認します。\n- 構成されたパブリック ネットワーク UDP エンドポイントが到達可能であることを確認します。\n- クライアントが {{signalingUrl}} にアクセスできることを確認します。\n\n技術詳細: {{details}}"
+    },
+    "realtimeNoAudio": {
+      "title": "音声データを使用しないリアルタイム音声",
+      "description": "ライブ音声セッションは接続されていますが、サーバーは公開可能な音声データを受信しません。\n\nトラブルシューティングの提案:\n- 現在のオーディオソースが実際にデータを出力しているかどうかを確認します\n- /api/realtime/rtc-data-audio シグナリングが到達可能であることを確認する\n- rtc-data-audio UDP ポート {{localUdpPort}} が開いているか、マップされていることを確認します。\n- 構成されたパブリック ネットワーク UDP エンドポイントが到達可能であることを確認します。\n- クライアントが {{signalingUrl}} にアクセスできることを確認します。\n\n技術詳細: {{details}}"
+    },
+    "sameTransmissionLimit": {
+      "title": "停止中: メッセージが重複しています",
+      "description": "オペレーター {{operatorId}} が {{attemptedCount}} 時間同じメッセージを送信しようとすると、周波数の繰り返し占有を避けるために自動的に停止されました (最大 {{maxCount}} 回): {{transmission}}"
+    },
+    "repeaterDuplexUnsupported": {
+      "title": "リピータ周波数オフセットは効果がありません",
+      "description": "{{frequency}} MHz に切り替えましたが、現在の無線はリピーター周波数オフセットをサポートしていないか、設定できませんでした。 {{reason}}"
+    },
+    "toneSquelchUnsupported": {
+      "title": "ミュートは有効になりません",
+      "description": "{{frequency}} MHz に切り替えましたが、現在の局がサポートしていないか、ミュートできませんでした。 {{reason}}"
+    }
+  }
+}

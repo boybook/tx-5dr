@@ -1,0 +1,19 @@
+{
+  "pluginName": "コールサインフィルター",
+  "pluginDescription": "コールサインまたは高度な規則ルールによって候補局をフィルターします。",
+  "filterOverview": "フィルターモードの説明",
+  "filterOverviewDesc": "まずフィルター モードを選択し、次にルールを入力します。ルールが空白のままの場合、コールサイン フィルターは有効になりません。",
+  "filterMode": "フィルターモード",
+  "filterModeDesc": "一般的なコールサイン/プレフィックスを使用して除外するか、高度な正則化を使用してそれらを保持するかを選択します。",
+  "filterModeBlocklist": "コールサイン/プレフィックスをフィルターして除外する",
+  "filterModeRegexKeep": "高度な正規表現の保持",
+  "filterRules": "コールサイン/プレフィックス/規則",
+  "filterRulesDesc": "現在のフィルター モードに基づいてルールを入力します。",
+  "filterRulesBlocklistDesc": "BG5DRB や JA など、フィルターで除外するコールサインまたはプレフィックスを 1 行に 1 つ記述します。",
+  "filterRulesRegexKeepDesc": "^JA や ^(BG5DRB|K1ABC)$ など、行ごとに保持用の正規表現を記述します。",
+  "filterRulesInvalidRegexSyntax": "{{line}} 行の正規表現を解析できません。構文を確認してください。",
+  "filterScope": "申請場所",
+  "filterScopeDesc": "選択ルールは自動応答チャネル選択のみに使用されますか、それともメッセージ パネルの表示にも使用されますか?",
+  "scopeAutoReply": "自動応答チャネルの選択のみに影響します",
+  "scopeAutoReplyAndDisplay": "自動応答チャンネル選択+フィルターメッセージパネル"
+}

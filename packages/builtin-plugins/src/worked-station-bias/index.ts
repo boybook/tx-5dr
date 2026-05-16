@@ -1,6 +1,7 @@
 import type { PluginDefinition, ScoredCandidate } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
+import jaLocale from './locales/ja.json' with { type: 'json' };
 
 function getSenderCallsign(message: unknown): string {
   if (typeof message === 'object' && message !== null && 'senderCallsign' in message) {
@@ -81,4 +82,5 @@ export const workedStationBiasPlugin: PluginDefinition = {
 export const workedStationBiasLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,
   en: enLocale,
+  ja: jaLocale,
 };

@@ -17,6 +17,7 @@ import {
 } from '../_shared/autocall-utils.js';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
+import jaLocale from './locales/ja.json' with { type: 'json' };
 
 function getAutocallPriority(ctx: PluginContext): number {
   return getAutocallPriorityBase(ctx, 80);
@@ -182,4 +183,5 @@ export const watchedNoveltyAutocallPlugin: PluginDefinition = {
 export const watchedNoveltyAutocallLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,
   en: enLocale,
+  ja: jaLocale,
 };

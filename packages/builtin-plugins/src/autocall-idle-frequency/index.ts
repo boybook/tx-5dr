@@ -6,6 +6,7 @@ import type {
 } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
+import jaLocale from './locales/ja.json' with { type: 'json' };
 
 export const BUILTIN_AUTOCALL_IDLE_FREQUENCY_PLUGIN_NAME = 'autocall-idle-frequency';
 const AUTOCALL_IDLE_FREQUENCY_MIN_HZ = 300;
@@ -95,4 +96,5 @@ export const autocallIdleFrequencyPlugin: PluginDefinition = {
 export const autocallIdleFrequencyLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,
   en: enLocale,
+  ja: jaLocale,
 };

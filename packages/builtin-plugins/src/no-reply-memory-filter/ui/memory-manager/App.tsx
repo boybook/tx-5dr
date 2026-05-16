@@ -23,6 +23,14 @@ const I18N: Record<string, Record<string, string>> = {
     failed: '操作失败',
     threshold: '低于 {value} 会过滤',
   },
+  ja: {
+    refresh: '更新',
+    empty: '記憶中のコールサインはありません',
+    clear: 'クリア',
+    loading: '読み込み中...',
+    failed: '操作失敗',
+    threshold: '{value} 未満をフィルター',
+  },
   en: {
     refresh: 'Refresh',
     empty: 'No callsigns are currently remembered',

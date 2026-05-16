@@ -1,38 +1,29 @@
 import { useState, useEffect } from 'react';
 import i18n from '../i18n/index';
+import {
+  getDocumentLanguage,
+  getEffectiveLanguage,
+  getStoredLanguageMode,
+  getSystemLanguage,
+  LANGUAGE_MODE_CHANGED_EVENT,
+  LANGUAGE_STORAGE_KEY,
+  type AppLanguage,
+  type LanguageMode,
+} from '../i18n/language';
 
-export type LanguageMode = 'zh' | 'en' | 'system';
+export type { AppLanguage, LanguageMode } from '../i18n/language';
 
 interface UseLanguageReturn {
-  language: 'zh' | 'en';
+  language: AppLanguage;
   languageMode: LanguageMode;
   setLanguageMode: (mode: LanguageMode) => void;
 }
 
-const LANGUAGE_STORAGE_KEY = 'tx5dr-language';
-
-function getSystemLanguage(): 'zh' | 'en' {
-  if (typeof window !== 'undefined' && navigator.language) {
-    return navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en';
-  }
-  return 'zh';
-}
-
-function getStoredLanguageMode(): LanguageMode {
-  if (typeof window !== 'undefined') {
-    const stored = localStorage.getItem(LANGUAGE_STORAGE_KEY);
-    if (stored && ['zh', 'en', 'system'].includes(stored)) {
-      return stored as LanguageMode;
-    }
-  }
-  return 'system';
-}
-
 export const useLanguage = (): UseLanguageReturn => {
   const [languageMode, setLanguageModeState] = useState<LanguageMode>(getStoredLanguageMode);
-  const [systemLanguage, setSystemLanguage] = useState<'zh' | 'en'>(getSystemLanguage);
+  const [systemLanguage, setSystemLanguage] = useState<AppLanguage>(getSystemLanguage);
 
-  const actualLanguage = languageMode === 'system' ? systemLanguage : languageMode;
+  const actualLanguage = languageMode === 'system' ? systemLanguage : getEffectiveLanguage(languageMode);
 
   // 监听系统语言变化（仅在 system 模式下生效）
   useEffect(() => {
@@ -48,16 +39,33 @@ export const useLanguage = (): UseLanguageReturn => {
     };
   }, []);
 
+  // 同步同一窗口中的多个 useLanguage 实例，以及其他标签页的语言模式变化。
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const syncStoredMode = () => {
+      setLanguageModeState(getStoredLanguageMode());
+    };
+
+    window.addEventListener(LANGUAGE_MODE_CHANGED_EVENT, syncStoredMode);
+    window.addEventListener('storage', syncStoredMode);
+    return () => {
+      window.removeEventListener(LANGUAGE_MODE_CHANGED_EVENT, syncStoredMode);
+      window.removeEventListener('storage', syncStoredMode);
+    };
+  }, []);
+
   // 同步语言到 i18n 和 document.documentElement.lang
   useEffect(() => {
     i18n.changeLanguage(actualLanguage);
-    document.documentElement.lang = actualLanguage === 'zh' ? 'zh-CN' : 'en';
+    document.documentElement.lang = getDocumentLanguage(actualLanguage);
   }, [actualLanguage]);
 
   const setLanguageMode = (mode: LanguageMode) => {
     setLanguageModeState(mode);
     if (typeof window !== 'undefined') {
       localStorage.setItem(LANGUAGE_STORAGE_KEY, mode);
+      window.dispatchEvent(new Event(LANGUAGE_MODE_CHANGED_EVENT));
     }
   };
 

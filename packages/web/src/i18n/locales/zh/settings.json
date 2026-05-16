@@ -32,7 +32,8 @@
     "label": "界面语言",
     "system": "跟随系统",
     "zh": "中文",
-    "en": "English"
+    "en": "English",
+    "ja": "日本語"
   },
   "reportInterval": {
     "label": "上报间隔",

@@ -18,6 +18,7 @@ import {
 } from '../_shared/autocall-utils.js';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
+import jaLocale from './locales/ja.json' with { type: 'json' };
 
 type LegacyMatchMode = 'exact' | 'prefix';
 type WatchRule = {
@@ -298,4 +299,5 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
 export const watchedCallsignAutocallLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,
   en: enLocale,
+  ja: jaLocale,
 };

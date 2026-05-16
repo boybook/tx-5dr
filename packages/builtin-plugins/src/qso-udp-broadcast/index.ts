@@ -1,6 +1,7 @@
 import type { PluginContext, PluginDefinition } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
+import jaLocale from './locales/ja.json' with { type: 'json' };
 import { WsjtUdpSession, type UdpTarget, type WsjtUdpSettings } from './wsjtx-session.js';
 
 export const BUILTIN_QSO_UDP_BROADCAST_PLUGIN_NAME = 'qso-udp-broadcast';
@@ -264,4 +265,5 @@ export const qsoUdpBroadcastPlugin: PluginDefinition = {
 export const qsoUdpBroadcastLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,
   en: enLocale,
+  ja: jaLocale,
 };

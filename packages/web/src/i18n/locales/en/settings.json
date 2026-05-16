@@ -32,7 +32,8 @@
     "label": "Interface Language",
     "system": "Follow System",
     "zh": "Chinese",
-    "en": "English"
+    "en": "English",
+    "ja": "Japanese"
   },
   "reportInterval": {
     "label": "Report Interval",

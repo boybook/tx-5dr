@@ -2,7 +2,7 @@
  * TX-5DR Built-in Plugins
  *
  * All built-in plugins are declared here. Each plugin:
- * - Has its own subdirectory with index.ts + locales/zh.json + locales/en.json
+ * - Has its own subdirectory with index.ts + locales/zh.json + locales/en.json + locales/ja.json
  * - Depends only on @tx5dr/plugin-api, @tx5dr/contracts, and @tx5dr/core
  * - Does NOT import any server-internal modules
  *

@@ -1,6 +1,6 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
-import LanguageDetector from 'i18next-browser-languagedetector';
+import { getInitialLanguage, SUPPORTED_LANGUAGES } from './language';
 
 // 中文语言包
 import zhCommon from './locales/zh/common.json';
@@ -12,6 +12,17 @@ import zhAuth from './locales/zh/auth.json';
 import zhErrors from './locales/zh/errors.json';
 import zhVoice from './locales/zh/voice.json';
 import zhAbout from './locales/zh/about.json';
+
+// 日语语言包
+import jaCommon from './locales/ja/common.json';
+import jaToast from './locales/ja/toast.json';
+import jaRadio from './locales/ja/radio.json';
+import jaSettings from './locales/ja/settings.json';
+import jaLogbook from './locales/ja/logbook.json';
+import jaAuth from './locales/ja/auth.json';
+import jaErrors from './locales/ja/errors.json';
+import jaVoice from './locales/ja/voice.json';
+import jaAbout from './locales/ja/about.json';
 
 // 英文语言包
 import enCommon from './locales/en/common.json';
@@ -25,17 +36,13 @@ import enVoice from './locales/en/voice.json';
 import enAbout from './locales/en/about.json';
 
 i18n
-  .use(LanguageDetector)
   .use(initReactI18next)
   .init({
+    lng: getInitialLanguage(),
     fallbackLng: 'zh',
+    supportedLngs: [...SUPPORTED_LANGUAGES],
     defaultNS: 'common',
     ns: ['common', 'toast', 'radio', 'settings', 'logbook', 'auth', 'errors', 'voice', 'about'],
-    detection: {
-      order: ['localStorage'],
-      lookupLocalStorage: 'tx5dr-language',
-      caches: ['localStorage'],
-    },
     resources: {
       zh: {
         common: zhCommon,
@@ -47,6 +54,17 @@ i18n
         errors: zhErrors,
         voice: zhVoice,
         about: zhAbout,
+      },
+      ja: {
+        common: jaCommon,
+        toast: jaToast,
+        radio: jaRadio,
+        settings: jaSettings,
+        logbook: jaLogbook,
+        auth: jaAuth,
+        errors: jaErrors,
+        voice: jaVoice,
+        about: jaAbout,
       },
       en: {
         common: enCommon,

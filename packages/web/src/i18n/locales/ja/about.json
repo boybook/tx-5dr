@@ -1,0 +1,49 @@
+{
+  "title": "TX-5DR について",
+  "appName": "TX-5DR",
+  "tagline": "アマチュア無線デジタルモードソフトウェア",
+  "version": "バージョン",
+  "versionUnknown": "不明",
+  "channel": {
+    "release": "正式版",
+    "nightly": "Nightly"
+  },
+  "commit": "ビルドする",
+  "buildTime": "ビルド時間",
+  "author": "著者",
+  "authorCallsign": "BG5DRB",
+  "license": "オープンソース契約",
+  "licenseNote": "このプロジェクトのメイン リポジトリは全体として GPL-3.0 プロトコルを採用しています。プラグイン関連のサブパッケージ (@tx5dr/plugin-api、create-tx5dr-plugin、@tx5dr/rigctld-server) は、二次開発用に MIT プロトコルに基づいて個別にリリースされます。",
+  "viewLicense": "ライセンスを見る",
+  "repository": "GitHubリポジトリ",
+  "issues": "質問を送信する",
+  "openExternal": "リンクを開く",
+  "loading": "読み込み中...",
+  "loadFailed": "読み込みに失敗しました",
+  "dependencies": {
+    "title": "サードパーティの依存関係",
+    "subtitle": "以下のオープンソース プロジェクトのサポートに感謝します。",
+    "licenseLabel": "合意",
+    "category": {
+      "frontend": "フロントエンド",
+      "backend": "バックエンド",
+      "electron": "Electron",
+      "protocol": "プロトコルとDSP",
+      "tools": "ビルドツール"
+    }
+  },
+  "sponsors": {
+    "title": "スポンサー",
+    "subtitle": "サポーターの皆様に感謝します",
+    "empty": "皆様のご支援をお待ちしております",
+    "becomeSponsor": "スポンサーになる",
+    "since": "{{date}}以降",
+    "message": "メッセージを残す",
+    "tier": {
+      "gold": "ゴールドスポンサー",
+      "silver": "シルバースポンサーシップ",
+      "bronze": "ブロンズスポンサー",
+      "individual": "個人スポンサー"
+    }
+  }
+}

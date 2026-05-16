@@ -17,6 +17,7 @@ import {
 } from './StandardQSOPluginRuntime.js';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
+import jaLocale from './locales/ja.json' with { type: 'json' };
 
 /**
  * 内置标准 QSO 策略插件
@@ -214,6 +215,7 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
 export const standardQSOLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,
   en: enLocale,
+  ja: jaLocale,
 };
 
 export {

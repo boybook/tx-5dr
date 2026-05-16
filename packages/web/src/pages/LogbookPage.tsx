@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 import '../index.css';
 import { createLogger } from '../utils/logger';
 import { useViewportHeightCssVar } from '../hooks/useViewportHeight';
+import { useLanguage } from '../hooks/useLanguage';
 
 const logger = createLogger('LogbookPage');
 const LOGBOOK_GLOBE_THEME_COLOR = '#020617';
@@ -289,6 +290,8 @@ const ThemedLogbookWrapper: React.FC = () => {
  * 用于在新窗口或新标签页中显示通联日志
  */
 const LogbookPage: React.FC = () => {
+  useLanguage();
+
   return (
     <HeroUIProvider>
       <ThemedLogbookWrapper />

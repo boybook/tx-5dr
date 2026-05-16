@@ -3,6 +3,7 @@ import path from 'path';
 import type { PluginDefinition, PluginUIRequestContext } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
+import jaLocale from './locales/ja.json' with { type: 'json' };
 import { LoTWSyncProvider, type LoTWPluginConfig } from './provider.js';
 import { createSyncFailure, normalizeCallsign } from '@tx5dr/plugin-api';
 import { normalizeLoTWStationLocation } from '@tx5dr/core';
@@ -323,4 +324,5 @@ export const lotwSyncPlugin: PluginDefinition = {
 export const lotwSyncLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,
   en: enLocale,
+  ja: jaLocale,
 };
