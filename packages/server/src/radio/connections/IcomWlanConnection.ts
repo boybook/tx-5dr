@@ -9,14 +9,14 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import { IcomControl, AUDIO_RATE, type IcomScopeFrame } from 'icom-wlan-node';
+import { IcomControl, AUDIO_RATE, type IcomModelId, type IcomScopeFrame } from 'icom-wlan-node';
 import type { MeterCapabilities } from '@tx5dr/contracts';
 import { TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
 import { createLogger } from '../../utils/logger.js';
 import { isProcessShuttingDown } from '../../utils/process-shutdown.js';
-import { RADIO_IO_SKIPPED, RadioIoQueue } from './RadioIoQueue.js';
+import { ICOM_WLAN_RADIO_IO_QUEUE_OPTIONS, RADIO_IO_SKIPPED, RadioIoQueue } from './RadioIoQueue.js';
 import {
   type ApplyOperatingStateRequest,
   type ApplyOperatingStateResult,
@@ -36,7 +36,9 @@ const logger = createLogger('IcomWlanConnection');
 const SPECTRUM_CAT_TIMEOUT_MS = 1000;
 const TX_METER_SETTLE_MS = 200;
 const METER_SAMPLE_LOG_INTERVAL_MS = 5000;
-const ICOM_WLAN_POWER_METER_SUPPORTED = false;
+const ICOM_WLAN_POWER_METER_SUPPORTED = true;
+const FREQUENCY_NULL_FAILURE_LIMIT = 3;
+const FREQUENCY_NULL_FAILURE_WINDOW_MS = 8000;
 
 /**
  * IcomWlanConnection 实现类
@@ -45,7 +47,10 @@ export class IcomWlanConnection
   extends EventEmitter<IRadioConnectionEvents>
   implements IRadioConnection
 {
-  private readonly ioQueue = new RadioIoQueue();
+  private readonly ioQueue = new RadioIoQueue({
+    label: 'ICOM WLAN UDP',
+    ...ICOM_WLAN_RADIO_IO_QUEUE_OPTIONS,
+  });
   private ioSessionId = 0;
   private backgroundTasksStarted = false;
   /**
@@ -88,6 +93,11 @@ export class IcomWlanConnection
   private softwarePttActive = false;
   private pttActivatedAt: number | null = null;
   private lastMeterSampleLoggedAt = 0;
+  private detectedModelId: IcomModelId | null = null;
+  private detectedProfileName: string | null = null;
+  private lastKnownFrequency: number | null = null;
+  private frequencyNullFailureCount = 0;
+  private firstFrequencyNullFailureAt: number | null = null;
 
   constructor() {
     super();
@@ -104,6 +114,17 @@ export class IcomWlanConnection
 
   isCriticalOperationActive(): boolean {
     return this.ioQueue.isCriticalActive();
+  }
+
+  getRadioIoQueueSnapshot() {
+    return this.ioQueue.getSnapshot();
+  }
+
+  getDetectedRadioInfo(): { modelId: string | null; profileName: string | null } {
+    return {
+      modelId: this.detectedModelId,
+      profileName: this.detectedProfileName,
+    };
   }
 
   /**
@@ -148,7 +169,8 @@ export class IcomWlanConnection
     options?: { critical?: boolean; id?: string },
   ): Promise<T> {
     const sessionId = this.ioSessionId;
-    return this.ioQueue.run({ sessionId, critical: options?.critical, id: options?.id }, async (activeSessionId) => {
+    const id = options?.id ?? (!options?.critical && taskName.startsWith('get') ? taskName : undefined);
+    return this.ioQueue.run({ sessionId, name: taskName, critical: options?.critical, id }, async (activeSessionId) => {
       this.ensureSession(activeSessionId);
       const result = await task();
       this.ensureSession(activeSessionId);
@@ -312,6 +334,8 @@ export class IcomWlanConnection
     this.defaultDataMode = config.icomWlan.dataMode ?? true;
     this.ioSessionId += 1;
     this.backgroundTasksStarted = false;
+    this.lastKnownFrequency = null;
+    this.resetFrequencyNullFailures();
 
     // 更新状态
     this.setState(RadioConnectionState.CONNECTING);
@@ -328,6 +352,7 @@ export class IcomWlanConnection
         },
         userName: config.icomWlan.userName || 'ICOM',
         password: config.icomWlan.password || '',
+        model: 'auto',
       });
 
       // 设置事件监听器
@@ -390,6 +415,8 @@ export class IcomWlanConnection
     logger.info(`Disconnecting: ${reason || 'no reason'}`);
     this.ioSessionId += 1;
     this.backgroundTasksStarted = false;
+    this.lastKnownFrequency = null;
+    this.resetFrequencyNullFailures();
 
     // 清理资源
     await this.cleanup();
@@ -422,13 +449,51 @@ export class IcomWlanConnection
       try {
         const freq = await this.rig!.readOperatingFrequency({ timeout: 3000 });
         if (freq !== null) {
+          this.noteFrequencyReadSuccess(freq);
           return freq;
         }
-        throw new Error('Get frequency returned null');
+        return this.handleFrequencyReadNull();
       } catch (error) {
         throw this.convertError(error, 'getFrequency');
       }
     }, { id: 'getFrequency' });
+  }
+
+  private noteFrequencyReadSuccess(frequency: number): void {
+    if (Number.isFinite(frequency) && frequency > 0) {
+      this.lastKnownFrequency = frequency;
+    }
+    this.resetFrequencyNullFailures();
+  }
+
+  private handleFrequencyReadNull(): number {
+    const now = Date.now();
+    if (this.firstFrequencyNullFailureAt === null) {
+      this.firstFrequencyNullFailureAt = now;
+    }
+    this.frequencyNullFailureCount += 1;
+
+    const failureWindowMs = now - this.firstFrequencyNullFailureAt;
+    const shouldEscalate = this.frequencyNullFailureCount >= FREQUENCY_NULL_FAILURE_LIMIT
+      || failureWindowMs >= FREQUENCY_NULL_FAILURE_WINDOW_MS;
+    if (shouldEscalate) {
+      throw new Error(
+        `Get frequency returned null after ${this.frequencyNullFailureCount} attempts over ${failureWindowMs}ms`
+      );
+    }
+
+    const fallbackFrequency = this.lastKnownFrequency ?? 0;
+    logger.debug('ICOM WLAN frequency read returned null; using transient fallback', {
+      failureCount: this.frequencyNullFailureCount,
+      failureWindowMs,
+      fallbackFrequency,
+    });
+    return fallbackFrequency;
+  }
+
+  private resetFrequencyNullFailures(): void {
+    this.frequencyNullFailureCount = 0;
+    this.firstFrequencyNullFailureAt = null;
   }
 
   /**
@@ -442,7 +507,7 @@ export class IcomWlanConnection
 
   async getPTT(): Promise<boolean> {
     this.checkConnected();
-    const result = await this.ioQueue.runLowPriority({ sessionId: this.ioSessionId }, async (activeSessionId) => {
+    const result = await this.ioQueue.runLowPriority({ sessionId: this.ioSessionId, name: 'getPTT', id: 'getPTT' }, async (activeSessionId) => {
       this.ensureSession(activeSessionId);
       try {
         const state = await this.rig!.readTransceiverState({ timeout: 1000 });
@@ -720,9 +785,8 @@ export class IcomWlanConnection
   /**
    * 获取电台数值表能力。
    *
-   * icom-wlan-node 当前 readPowerLevel() 会把 raw=0 映射成 50%，
-   * 在实机上会造成假的发射功率读数。先禁用 Power meter，保留
-   * RX Level / TX SWR / TX ALC。
+   * icom-wlan-node 0.6.0 uses model-specific Hamlib-aligned calibration,
+   * so ICOM WLAN can expose both percentage and estimated watts.
    */
   getMeterCapabilities(): MeterCapabilities {
     return {
@@ -730,12 +794,14 @@ export class IcomWlanConnection
       swr: true,
       alc: true,
       power: ICOM_WLAN_POWER_METER_SUPPORTED,
-      powerWatts: false,
+      powerWatts: ICOM_WLAN_POWER_METER_SUPPORTED,
     };
   }
 
-  setKnownFrequency(_frequencyHz: number): void {
-    // icom-wlan-node handles frequency-aware S-meter calibration internally
+  setKnownFrequency(frequencyHz: number): void {
+    if (Number.isFinite(frequencyHz) && frequencyHz > 0) {
+      this.lastKnownFrequency = frequencyHz;
+    }
   }
 
   /**
@@ -989,7 +1055,11 @@ export class IcomWlanConnection
 
     // 能力信息
     this.rig.events.on('capabilities', (c) => {
-      logger.debug(`ICOM capabilities: CIV address=${c.civAddress}, audio name=${c.audioName}`);
+      this.detectedModelId = c.modelId ?? null;
+      this.detectedProfileName = c.profileName ?? null;
+      logger.debug(
+        `ICOM capabilities: CIV address=${c.civAddress}, audio name=${c.audioName}, profile=${c.profileName ?? c.modelId ?? 'unknown'}`,
+      );
     });
 
     // 音频数据
@@ -1050,7 +1120,7 @@ export class IcomWlanConnection
    */
   private async pollMeters(): Promise<void> {
     try {
-      const result = await this.ioQueue.runLowPriority({ sessionId: this.ioSessionId }, async (activeSessionId) => {
+      const result = await this.ioQueue.runLowPriority({ sessionId: this.ioSessionId, name: 'pollMeters', id: 'pollMeters' }, async (activeSessionId) => {
         this.ensureSession(activeSessionId);
         if (!this.rig) {
           return;
@@ -1073,7 +1143,12 @@ export class IcomWlanConnection
         const level = levelRaw ? { ...levelRaw, displayStyle: 's-meter-dbm' as const } : null;
         const swr = swrRaw ? { ...swrRaw, swr: Math.max(1, swrRaw.swr) } : null;
         const alc = alcRaw ? { ...alcRaw, alert: alcRaw.percent >= 100 } : null;
-        const power = powerRaw !== null ? { ...powerRaw, watts: null, maxWatts: null } : null;
+        const power = powerRaw !== null ? {
+          raw: powerRaw.raw,
+          percent: powerRaw.percent,
+          watts: typeof powerRaw.watts === 'number' ? powerRaw.watts : null,
+          maxWatts: null,
+        } : null;
 
         if (swr === null && alc === null && level === null && power === null) {
           return;
@@ -1277,6 +1352,8 @@ export class IcomWlanConnection
 
       this.currentConfig = null;
       this.tunerEnabled = false;
+      this.detectedModelId = null;
+      this.detectedProfileName = null;
       this.removeAllListeners();
     } finally {
       // 确保标志位被重置

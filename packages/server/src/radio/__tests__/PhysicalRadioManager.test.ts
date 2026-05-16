@@ -159,6 +159,40 @@ describe('PhysicalRadioManager', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('does not report ICOM WLAN transient frequency fallback as a connection health failure', async () => {
+    const getFrequency = vi.fn().mockResolvedValue(0);
+    asTestManager(manager).connection = {
+      getFrequency,
+      setKnownFrequency: vi.fn(),
+    };
+
+    await expect(manager.getFrequency()).resolves.toBe(0);
+
+    expect(getFrequency).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('reports ICOM WLAN frequency read failure as a health failure after connection threshold escalation', async () => {
+    const error = new RadioError({
+      code: RadioErrorCode.UNKNOWN_ERROR,
+      message: 'ICOM WLAN unknown error (getFrequency): Get frequency returned null after 3 attempts over 4000ms',
+      userMessage: 'ICOM radio operation failed',
+      severity: RadioErrorSeverity.ERROR,
+      context: { operation: 'getFrequency' },
+    });
+    asTestManager(manager).connection = {
+      getFrequency: vi.fn().mockRejectedValue(error),
+      setKnownFrequency: vi.fn(),
+    };
+
+    await expect(manager.getFrequency()).resolves.toBe(0);
+
+    expect(send).toHaveBeenCalledWith({
+      type: 'HEALTH_CHECK_FAILED',
+      error,
+    });
+  });
+
   it('stores diagnostic details for unsupported capabilities and preserves the first failure', async () => {
     const firstCause = new Error('rig_set_freq invalid parameter');
     const secondCause = new Error('another failure');
@@ -554,7 +588,7 @@ describe('PhysicalRadioManager', () => {
     expect(refreshAll).toHaveBeenCalledTimes(1);
   });
 
-  it('skips post-frequency capability refreshes after ICOM WLAN direct frequency writes', async () => {
+  it('queues capability refreshes after ICOM WLAN direct frequency writes', async () => {
     const refreshAll = vi.spyOn(asTestManager(manager).capabilityManager, 'refreshAll').mockResolvedValue(undefined);
     asTestManager(manager).connection = {
       getType: vi.fn().mockReturnValue(RadioConnectionType.ICOM_WLAN),
@@ -566,30 +600,32 @@ describe('PhysicalRadioManager', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(refreshAll).not.toHaveBeenCalled();
+    expect(refreshAll).toHaveBeenCalledTimes(1);
   });
 
-  it('bypasses the capability system while ICOM WLAN is active', async () => {
+  it('uses the capability system while ICOM WLAN is active', async () => {
     const testManager = asTestManager(manager);
     testManager.connection = {
       getType: vi.fn().mockReturnValue(RadioConnectionType.ICOM_WLAN),
       setTuner: vi.fn(),
     };
-    const getSnapshot = vi.spyOn(testManager.capabilityManager, 'getCapabilitySnapshot');
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+    const snapshot = { descriptors: [], capabilities: [] };
+    const getSnapshot = vi.spyOn(testManager.capabilityManager, 'getCapabilitySnapshot').mockReturnValue(snapshot);
     const refreshAll = vi.spyOn(testManager.capabilityManager, 'refreshAll').mockResolvedValue(undefined);
+    const writeCapability = vi.spyOn(testManager.capabilityManager, 'writeCapability').mockResolvedValue(undefined);
 
-    expect(manager.getCapabilitySnapshot()).toEqual({ descriptors: [], capabilities: [] });
+    expect(manager.getCapabilitySnapshot()).toBe(snapshot);
     await expect(manager.refreshCapabilities()).resolves.toBeUndefined();
-    await expect(manager.writeCapability('tuner_switch', true)).rejects.toThrow(
-      'radio capability system is disabled for ICOM WLAN'
-    );
+    await expect(manager.writeCapability('af_gain', 0.5)).resolves.toBeUndefined();
 
-    expect(getSnapshot).not.toHaveBeenCalled();
-    expect(refreshAll).not.toHaveBeenCalled();
+    expect(getSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshAll).toHaveBeenCalledTimes(1);
+    expect(writeCapability).toHaveBeenCalledWith('af_gain', 0.5, undefined);
     expect(testManager.connection.setTuner).not.toHaveBeenCalled();
   });
 
-  it('does not notify capability runtime of PTT/tuner state while ICOM WLAN is active', async () => {
+  it('notifies capability runtime of PTT/tuner state while ICOM WLAN is active', async () => {
     const testManager = asTestManager(manager);
     testManager.connection = {
       getType: vi.fn().mockReturnValue(RadioConnectionType.ICOM_WLAN),
@@ -609,8 +645,9 @@ describe('PhysicalRadioManager', () => {
     await expect(manager.setTuner(true)).resolves.toBeUndefined();
     await expect(manager.startTuning()).resolves.toBe(true);
 
-    expect(setPTTActive).not.toHaveBeenCalled();
-    expect(syncTunerStatus).not.toHaveBeenCalled();
+    expect(setPTTActive).toHaveBeenCalledWith(true);
+    expect(setPTTActive).toHaveBeenCalledWith(false);
+    expect(syncTunerStatus).toHaveBeenCalled();
     expect(manager.isPTTActive()).toBe(false);
   });
 
@@ -654,7 +691,7 @@ describe('PhysicalRadioManager', () => {
     expect(refreshAll).toHaveBeenCalledTimes(2);
   });
 
-  it('skips post-frequency capability refreshes after ICOM WLAN operating-state frequency changes', async () => {
+  it('queues capability refreshes after ICOM WLAN operating-state frequency changes', async () => {
     const refreshAll = vi.spyOn(asTestManager(manager).capabilityManager, 'refreshAll').mockResolvedValue(undefined);
     asTestManager(manager).connection = {
       getType: vi.fn().mockReturnValue(RadioConnectionType.ICOM_WLAN),
@@ -669,7 +706,7 @@ describe('PhysicalRadioManager', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(refreshAll).not.toHaveBeenCalled();
+    expect(refreshAll).toHaveBeenCalledTimes(1);
   });
 
   it('applies frequency and mode through the connection-level operating state helper', async () => {
@@ -1070,7 +1107,7 @@ describe('PhysicalRadioManager', () => {
     vi.useRealTimers();
   });
 
-  it('skips post-frequency capability refreshes for ICOM WLAN frequency monitor changes', async () => {
+  it('queues capability refreshes for ICOM WLAN frequency monitor changes', async () => {
     const refreshAll = vi.spyOn(asTestManager(manager).capabilityManager, 'refreshAll').mockResolvedValue(undefined);
     asTestManager(manager).lastKnownFrequency = 14074000;
     asTestManager(manager).connection = {
@@ -1085,7 +1122,7 @@ describe('PhysicalRadioManager', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(refreshAll).not.toHaveBeenCalled();
+    expect(refreshAll).toHaveBeenCalledTimes(1);
   });
 
   it('uses a 2s default frequency polling interval', async () => {
@@ -1296,7 +1333,7 @@ describe('PhysicalRadioManager', () => {
     await manager.disconnect('test cleanup');
   });
 
-  it('skips capability bootstrap probes for ICOM WLAN connections', async () => {
+  it('runs capability bootstrap probes for ICOM WLAN connections', async () => {
     const order: string[] = [];
     const testManager = asTestManager(manager);
     const connection: TestRadioConnection = {
@@ -1335,7 +1372,9 @@ describe('PhysicalRadioManager', () => {
       description: '15m FT8',
     });
     vi.spyOn(testManager.configManager, 'getLastVoiceFrequency').mockReturnValue(null);
-    const onConnected = vi.spyOn(testManager.capabilityManager, 'onConnected').mockResolvedValue(undefined);
+    const onConnected = vi.spyOn(testManager.capabilityManager, 'onConnected').mockImplementation(async () => {
+      order.push('capability');
+    });
     const onDisconnected = vi.spyOn(testManager.capabilityManager, 'onDisconnected');
     vi.spyOn(testManager, 'startFrequencyMonitoring').mockImplementation(() => {
       order.push('monitor');
@@ -1358,11 +1397,12 @@ describe('PhysicalRadioManager', () => {
       'ptt-off',
       'tuner',
       'restore',
+      'capability',
       'background',
       'monitor',
     ]);
-    expect(onConnected).not.toHaveBeenCalled();
-    expect(onDisconnected).toHaveBeenCalledTimes(1);
+    expect(onConnected).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).not.toHaveBeenCalled();
 
     await manager.disconnect('test cleanup');
   });

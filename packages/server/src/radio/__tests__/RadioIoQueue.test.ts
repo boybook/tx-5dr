@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  PARALLEL_RADIO_IO_QUEUE_OPTIONS,
   RADIO_IO_SKIPPED,
   RadioIoQueue,
   type RadioIoQueueCongestionSnapshot,
@@ -94,6 +95,104 @@ describe('RadioIoQueue', () => {
 
     releaseActive.resolve(undefined);
     await active;
+  });
+
+  it('runs tasks concurrently when configured for parallel dispatch', async () => {
+    const queue = new RadioIoQueue(PARALLEL_RADIO_IO_QUEUE_OPTIONS);
+    const events: string[] = [];
+    const releaseA = createDeferred<void>();
+    const releaseB = createDeferred<void>();
+
+    const taskA = queue.run({ sessionId: 1, name: 'A' }, async () => {
+      events.push('A-start');
+      await releaseA.promise;
+      events.push('A-end');
+    });
+    const taskB = queue.run({ sessionId: 1, name: 'B' }, async () => {
+      events.push('B-start');
+      await releaseB.promise;
+      events.push('B-end');
+    });
+
+    await vi.waitFor(() => {
+      expect(events).toEqual(['A-start', 'B-start']);
+    });
+    expect(queue.getSnapshot()).toMatchObject({
+      busy: true,
+      backpressure: false,
+      activeCount: 2,
+    });
+
+    releaseB.resolve(undefined);
+    releaseA.resolve(undefined);
+    await Promise.all([taskA, taskB]);
+    expect(events).toEqual(['A-start', 'B-start', 'B-end', 'A-end']);
+  });
+
+  it('limits configured parallel dispatch to the configured concurrency', async () => {
+    const queue = new RadioIoQueue(PARALLEL_RADIO_IO_QUEUE_OPTIONS);
+    const events: string[] = [];
+    const releases = [createDeferred<void>(), createDeferred<void>(), createDeferred<void>(), createDeferred<void>()];
+
+    const tasks = releases.map((release, index) =>
+      queue.run({ sessionId: 1, name: `task-${index + 1}` }, async () => {
+        events.push(`task-${index + 1}-start`);
+        await release.promise;
+        events.push(`task-${index + 1}-end`);
+        return index + 1;
+      })
+    );
+
+    await vi.waitFor(() => {
+      expect(events).toEqual(['task-1-start', 'task-2-start', 'task-3-start']);
+    });
+    expect(queue.getSnapshot()).toMatchObject({
+      activeCount: 3,
+      pendingCount: 1,
+      backpressure: false,
+    });
+
+    releases[0].resolve(undefined);
+    await vi.waitFor(() => {
+      expect(events).toContain('task-4-start');
+    });
+
+    releases[1].resolve(undefined);
+    releases[2].resolve(undefined);
+    releases[3].resolve(undefined);
+    await expect(Promise.all(tasks)).resolves.toEqual([1, 2, 3, 4]);
+  });
+
+  it('runs low-priority tasks while parallel work is active', async () => {
+    const queue = new RadioIoQueue(PARALLEL_RADIO_IO_QUEUE_OPTIONS);
+    const releaseActive = createDeferred<void>();
+
+    const active = queue.run({ sessionId: 1, critical: true }, async () => {
+      await releaseActive.promise;
+    });
+
+    await vi.waitFor(() => {
+      expect(queue.getSnapshot().activeCount).toBe(1);
+    });
+
+    await expect(queue.runLowPriority({ sessionId: 1 }, async () => 'meter')).resolves.toBe('meter');
+    expect(queue.isCriticalActive()).toBe(false);
+
+    releaseActive.resolve(undefined);
+    await active;
+  });
+
+  it('dedupes tasks by id when configured for parallel dispatch', async () => {
+    const queue = new RadioIoQueue(PARALLEL_RADIO_IO_QUEUE_OPTIONS);
+    const releaseRead = createDeferred<string>();
+    const task = vi.fn().mockReturnValue(releaseRead.promise);
+
+    const first = queue.run({ sessionId: 1, id: 'getFrequency' }, task);
+    const second = queue.run({ sessionId: 1, id: 'getFrequency' }, async () => 'duplicate');
+
+    releaseRead.resolve('frequency');
+    await expect(Promise.all([first, second])).resolves.toEqual(['frequency', 'frequency']);
+    expect(task).toHaveBeenCalledTimes(1);
   });
 
   it('reuses a queued task with the same id and session', async () => {

@@ -169,6 +169,7 @@ describe('RadioCapabilityManager', () => {
       getSQL,
       getRadioIoQueueSnapshot: vi.fn(() => ({
         busy,
+        backpressure: busy,
         criticalActive: false,
         activeCount: busy ? 1 : 0,
         activeTask: busy ? 'startManagedSpectrum' : null,

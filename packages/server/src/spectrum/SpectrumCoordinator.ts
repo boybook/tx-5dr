@@ -358,7 +358,7 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
         };
       }
 
-      if (activeConnection.getRadioIoQueueSnapshot?.().busy) {
+      if (activeConnection.getRadioIoQueueSnapshot?.().backpressure) {
         const cached = this.getCachedRadioSourceAvailability(activeConnection, config.serial?.rigModel);
         if (cached) {
           return cached;

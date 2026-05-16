@@ -6575,7 +6575,7 @@ __metadata:
     fastify: "npm:^5.8.4"
     fastify-plugin: "npm:^5.1.0"
     hamlib: "npm:0.7.1"
-    icom-wlan-node: "npm:0.5.1"
+    icom-wlan-node: "npm:0.6.1"
     mic: "npm:^2.1.2"
     node-datachannel: "npm:0.32.3"
     node-forge: "npm:^1.4.0"
@@ -12746,10 +12746,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"icom-wlan-node@npm:0.5.1":
-  version: 0.5.1
-  resolution: "icom-wlan-node@npm:0.5.1"
-  checksum: 10c0/a3d653035b6c11d3cfbb2c54d49a0421e123a08bc9c5ccc11f27cf1baf8ca6a944a85be7dbf0463039a8b6021e664e8b4f82fbe829bb80db9c9eb06299344d0f
+"icom-wlan-node@npm:0.6.1":
+  version: 0.6.1
+  resolution: "icom-wlan-node@npm:0.6.1"
+  checksum: 10c0/747430981884270635a82fb69a2ccf7faade9adc2c4153650e9128c34f999e42e647624a0a1fa216c7d154b488482dfdcdd010c343d9647c966d449463624206
   languageName: node
   linkType: hard
 

@@ -432,7 +432,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
 
   private shouldSkipForRadioIoBackpressure(id: string): boolean {
     const snapshot = this.connection?.getRadioIoQueueSnapshot?.();
-    if (!snapshot?.busy) {
+    if (!snapshot?.backpressure) {
       this.radioIoBackpressureStartedAt = null;
       return false;
     }

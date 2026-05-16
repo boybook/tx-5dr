@@ -923,11 +923,16 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       }
 
       case 'icom-wlan': {
-        // ICOM WLAN 模式: 返回基本信息
-        // TODO: 未来可通过 icom-wlan-node 库或 CI-V 命令获取具体型号
+        const detectedInfo = typeof (this.connection as any).getDetectedRadioInfo === 'function'
+          ? (this.connection as any).getDetectedRadioInfo()
+          : null;
+        const model = typeof detectedInfo?.modelId === 'string' && detectedInfo.modelId
+          ? detectedInfo.modelId
+          : 'WLAN';
+
         return {
           manufacturer: 'ICOM',
-          model: 'WLAN',
+          model,
           connectionType: 'icom-wlan',
         };
       }
@@ -1107,9 +1112,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   setPTTActive(active: boolean): void {
     this._isPTTActive = active;
-    if (!this.shouldBypassCapabilitySystem()) {
-      this.capabilityManager.setPTTActive(active);
-    }
+    this.capabilityManager.setPTTActive(active);
     logger.debug('PTT state updated for I/O scheduling', { active });
   }
 
@@ -1189,8 +1192,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       return modeInfo;
     } catch (error) {
       if (isRecoverableOptionalRadioError(error)) {
+        const wasUnsupported = this.isCoreCapabilityUnsupported('readRadioMode');
         this.markCoreCapabilityUnsupported('readRadioMode', error);
-        logger.warn(`Mode read failed but connection remains healthy: ${(error as Error).message}`);
+        if (wasUnsupported) {
+          logger.debug(`Mode read remains unavailable: ${(error as Error).message}`);
+        } else {
+          logger.warn(`Mode read failed but connection remains healthy: ${(error as Error).message}`);
+        }
         throw new Error(`get mode failed: ${(error as Error).message}`);
       }
 
@@ -1252,9 +1260,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 获取当前所有能力的状态快照（用于 REST 接口和客户端首次连接）
    */
   getCapabilitySnapshot(): { descriptors: CapabilityDescriptor[]; capabilities: CapabilityState[] } {
-    if (this.shouldBypassCapabilitySystem()) {
-      return { descriptors: [], capabilities: [] };
-    }
     return this.capabilityManager.getCapabilitySnapshot();
   }
 
@@ -1262,10 +1267,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * Refresh all capability values on demand (triggered by frontend button).
    */
   async refreshCapabilities(): Promise<void> {
-    if (this.shouldBypassCapabilitySystem()) {
-      logger.debug('Skipping capability refresh because capability system is disabled for ICOM WLAN');
-      return;
-    }
     await this.capabilityManager.refreshAll();
   }
 
@@ -1277,10 +1278,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     value?: CapabilityValue,
     action?: boolean,
   ): Promise<void> {
-    if (this.shouldBypassCapabilitySystem()) {
-      throw new Error('radio capability system is disabled for ICOM WLAN');
-    }
-
     if (!this.connection || !this.isConnected()) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_STATE,
@@ -1322,16 +1319,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         skipped: true,
         warning: requested ? 'unsupported' : undefined,
         message: 'radio not connected',
-      };
-    }
-
-    if (this.shouldBypassCapabilitySystem()) {
-      return {
-        requested,
-        applied: false,
-        skipped: true,
-        warning: requested ? 'unsupported' : undefined,
-        message: 'radio capability system is disabled for ICOM WLAN',
       };
     }
 
@@ -1403,16 +1390,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         skipped: true,
         warning: requested ? 'unsupported' : undefined,
         message: 'radio not connected',
-      };
-    }
-
-    if (this.shouldBypassCapabilitySystem()) {
-      return {
-        requested,
-        applied: false,
-        skipped: true,
-        warning: requested ? 'unsupported' : undefined,
-        message: 'radio capability system is disabled for ICOM WLAN',
       };
     }
 
@@ -1544,14 +1521,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       // 获取更新后的状态并广播事件
       const status = await this.getTunerStatus();
-      if (!this.shouldBypassCapabilitySystem()) {
-        this.capabilityManager.syncTunerStatus(status);
-      }
+      this.capabilityManager.syncTunerStatus(status);
       this.emit('tunerStatusChanged', status);
     } catch (error) {
       // 天调设置失败不影响主连接状态
       logger.error(`Failed to set tuner: ${(error as Error).message}`);
-      if (!this.shouldBypassCapabilitySystem() && isRecoverableOptionalRadioError(error)) {
+      if (isRecoverableOptionalRadioError(error)) {
         this.capabilityManager.markCapabilityUnavailable('tuner_switch', error);
       }
       throw error;
@@ -1618,9 +1593,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
           active: true,
           status: 'tuning',
         };
-        if (!this.shouldBypassCapabilitySystem()) {
-          this.capabilityManager.syncTunerStatus(beforeStatus);
-        }
+        this.capabilityManager.syncTunerStatus(beforeStatus);
         this.emit('tunerStatusChanged', beforeStatus);
       }
 
@@ -1634,9 +1607,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         // 根据结果更新状态
         afterStatus.status = result ? 'success' : 'failed';
         afterStatus.active = false;
-        if (!this.shouldBypassCapabilitySystem()) {
-          this.capabilityManager.syncTunerStatus(afterStatus);
-        }
+        this.capabilityManager.syncTunerStatus(afterStatus);
         this.emit('tunerStatusChanged', afterStatus);
       }
 
@@ -1645,7 +1616,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       // 调谐失败不影响主连接状态
       logger.error(`Failed to start tuning: ${(error as Error).message}`);
       const isRecoverableTunerError = isRecoverableOptionalRadioError(error);
-      if (!this.shouldBypassCapabilitySystem() && isRecoverableTunerError) {
+      if (isRecoverableTunerError) {
         this.capabilityManager.markCapabilityUnavailable('tuner_switch', error);
         this.capabilityManager.markCapabilityUnavailable('tuner_tune', error);
       }
@@ -1657,9 +1628,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
           active: false,
           status: 'failed',
         };
-        if (!this.shouldBypassCapabilitySystem()) {
-          this.capabilityManager.syncTunerStatus(failedStatus);
-        }
+        this.capabilityManager.syncTunerStatus(failedStatus);
         this.emit('tunerStatusChanged', failedStatus);
       }
 
@@ -2069,12 +2038,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     const restoredFrequency = await this.restoreSavedFrequencyIfAvailable();
 
     logger.debug('Bootstrap phase: capability manager');
-    if (this.shouldBypassCapabilitySystem(connection)) {
-      logger.info('Skipping radio capability system for ICOM WLAN');
-      this.capabilityManager.onDisconnected();
-    } else {
-      await this.capabilityManager.onConnected(connection);
-    }
+    await this.capabilityManager.onConnected(connection);
 
     if (restoredFrequency !== null) {
       this.updateKnownFrequency(restoredFrequency);
@@ -2497,19 +2461,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   private async refreshRfPowerDescriptor(): Promise<void> {
-    if (this.shouldBypassCapabilitySystem()) {
-      return;
-    }
-
     try {
       await this.capabilityManager.refreshDescriptor('rf_power');
     } catch (error) {
       logger.debug(`RF power descriptor refresh skipped: ${(error as Error).message}`);
     }
-  }
-
-  private shouldBypassCapabilitySystem(connection: IRadioConnection | null = this.connection): boolean {
-    return connection?.getType?.() === RadioConnectionType.ICOM_WLAN;
   }
 
   private isSessionCancellationError(error: Error): boolean {
@@ -2801,14 +2757,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       .then(async () => {
         const connection = this.connection;
         if (!connection || this._isPTTActive) {
-          return;
-        }
-
-        const connectionType = typeof connection.getType === 'function'
-          ? connection.getType()
-          : null;
-        if (connectionType === RadioConnectionType.ICOM_WLAN) {
-          logger.debug('Skipping post-frequency capability refresh for ICOM WLAN', { reason });
           return;
         }
 

@@ -82,6 +82,7 @@ describe('SpectrumCoordinator', () => {
       getSpectrumSupportSummary,
       getRadioIoQueueSnapshot: () => ({
         busy: true,
+        backpressure: true,
         criticalActive: false,
         activeCount: 1,
         activeTask: 'getFrequency',
@@ -122,6 +123,7 @@ describe('SpectrumCoordinator', () => {
       getSpectrumSupportSummary,
       getRadioIoQueueSnapshot: () => ({
         busy,
+        backpressure: busy,
         criticalActive: false,
         activeCount: busy ? 1 : 0,
         activeTask: busy ? 'getFrequency' : null,

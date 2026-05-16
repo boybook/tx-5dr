@@ -1,7 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const icomWlanMock = vi.hoisted(() => {
+  const constructorCalls: unknown[] = [];
+
+  class MockIcomControl {
+    events: any;
+
+    constructor(options: unknown) {
+      const events: any = {};
+      events.on = vi.fn(() => events);
+      events.once = vi.fn(() => events);
+      events.off = vi.fn(() => events);
+      events.removeAllListeners = vi.fn(() => events);
+      this.events = events;
+      constructorCalls.push(options);
+    }
+
+    configureMonitoring = vi.fn();
+    connect = vi.fn().mockResolvedValue(undefined);
+    disconnect = vi.fn().mockResolvedValue(undefined);
+    getConnectionPhase = vi.fn(() => 'CONNECTED');
+  }
+
+  return { MockIcomControl, constructorCalls };
+});
+
 vi.mock('icom-wlan-node', () => ({
-  IcomControl: class MockIcomControl {},
+  IcomControl: icomWlanMock.MockIcomControl,
   AUDIO_RATE: 48000,
 }));
 
@@ -20,6 +45,7 @@ type MockRig = {
   readALC: ReturnType<typeof vi.fn>;
   getLevelMeter: ReturnType<typeof vi.fn>;
   readPowerLevel: ReturnType<typeof vi.fn>;
+  getAFGain: ReturnType<typeof vi.fn>;
   enableScope: ReturnType<typeof vi.fn>;
   disableScope: ReturnType<typeof vi.fn>;
   readScopeSpan: ReturnType<typeof vi.fn>;
@@ -64,6 +90,7 @@ function createConnectedConnection(): { connection: IcomWlanConnection; rig: Moc
     readALC: vi.fn().mockResolvedValue(null),
     getLevelMeter: vi.fn().mockResolvedValue(null),
     readPowerLevel: vi.fn().mockResolvedValue(null),
+    getAFGain: vi.fn().mockResolvedValue({ normalized: 0.5 }),
     enableScope: vi.fn().mockResolvedValue(undefined),
     disableScope: vi.fn().mockResolvedValue(undefined),
     readScopeSpan: vi.fn().mockResolvedValue({ spanHz: 50000 }),
@@ -87,6 +114,38 @@ function createConnectedConnection(): { connection: IcomWlanConnection; rig: Moc
 describe('IcomWlanConnection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    icomWlanMock.constructorCalls.length = 0;
+  });
+
+  it('passes auto model detection to icom-wlan-node', async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = new IcomWlanConnection();
+
+      await connection.connect({
+        type: 'icom-wlan',
+        icomWlan: {
+          ip: '192.168.1.100',
+          port: 50001,
+          userName: 'ICOM',
+          password: 'secret',
+          dataMode: true,
+        },
+      });
+
+      expect(icomWlanMock.constructorCalls[0]).toMatchObject({
+        control: {
+          ip: '192.168.1.100',
+          port: 50001,
+        },
+        userName: 'ICOM',
+        password: 'secret',
+        model: 'auto',
+      });
+      vi.runOnlyPendingTimers();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('treats nochange as keep-current-bandwidth semantics', async () => {
@@ -174,6 +233,130 @@ describe('IcomWlanConnection', () => {
     expect(rig.readOperatingFrequency).toHaveBeenCalledTimes(1);
   });
 
+  it('limits ICOM WLAN CAT work to three concurrent queue tasks', async () => {
+    const frequencyRead = createDeferred<number>();
+    const modeRead = createDeferred<any>();
+    const pttRead = createDeferred<string>();
+    const gainRead = createDeferred<any>();
+    const { connection, rig } = createConnectedConnection();
+    rig.readOperatingFrequency.mockReturnValueOnce(frequencyRead.promise);
+    rig.readOperatingMode.mockReturnValueOnce(modeRead.promise);
+    rig.readTransceiverState.mockReturnValueOnce(pttRead.promise);
+    rig.getAFGain.mockReturnValueOnce(gainRead.promise);
+
+    const frequencyPromise = connection.getFrequency();
+    const modePromise = connection.getMode();
+    const pttPromise = connection.getPTT();
+    const gainPromise = connection.getAFGain();
+
+    await vi.waitFor(() => {
+      expect(rig.readOperatingFrequency).toHaveBeenCalledTimes(1);
+      expect(rig.readOperatingMode).toHaveBeenCalledTimes(1);
+      expect(rig.readTransceiverState).toHaveBeenCalledTimes(1);
+    });
+    expect(rig.getAFGain).not.toHaveBeenCalled();
+    expect(connection.getRadioIoQueueSnapshot()).toMatchObject({
+      activeCount: 3,
+      pendingCount: 1,
+      backpressure: false,
+    });
+
+    frequencyRead.resolve(7100000);
+    await vi.waitFor(() => {
+      expect(rig.getAFGain).toHaveBeenCalledTimes(1);
+    });
+
+    modeRead.resolve({ mode: 1, modeName: 'USB', filterName: 'Normal' });
+    pttRead.resolve('RX');
+    gainRead.resolve({ normalized: 0.25 });
+
+    await expect(Promise.all([frequencyPromise, modePromise, pttPromise, gainPromise])).resolves.toEqual([
+      7100000,
+      { mode: 'USB', bandwidth: 'Normal' },
+      false,
+      0.25,
+    ]);
+  });
+
+  it('returns the last known frequency for transient null ICOM frequency readback', async () => {
+    const { connection, rig } = createConnectedConnection();
+    connection.setKnownFrequency(7100000);
+    rig.readOperatingFrequency.mockResolvedValue(null);
+
+    await expect(connection.getFrequency()).resolves.toBe(7100000);
+    await expect(connection.getFrequency()).resolves.toBe(7100000);
+    expect(rig.readOperatingFrequency).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns zero for transient null ICOM frequency readback without a known frequency', async () => {
+    const { connection, rig } = createConnectedConnection();
+    rig.readOperatingFrequency.mockResolvedValueOnce(null);
+
+    await expect(connection.getFrequency()).resolves.toBe(0);
+  });
+
+  it('escalates repeated null ICOM frequency readback after three attempts', async () => {
+    const { connection, rig } = createConnectedConnection();
+    connection.setKnownFrequency(7100000);
+    rig.readOperatingFrequency.mockResolvedValue(null);
+
+    await expect(connection.getFrequency()).resolves.toBe(7100000);
+    await expect(connection.getFrequency()).resolves.toBe(7100000);
+    await expect(connection.getFrequency()).rejects.toMatchObject({
+      code: RadioErrorCode.UNKNOWN_ERROR,
+      context: expect.objectContaining({ operation: 'getFrequency' }),
+    });
+  });
+
+  it('escalates sustained null ICOM frequency readback after the failure window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    try {
+      const { connection, rig } = createConnectedConnection();
+      connection.setKnownFrequency(7100000);
+      rig.readOperatingFrequency.mockResolvedValue(null);
+
+      await expect(connection.getFrequency()).resolves.toBe(7100000);
+      vi.setSystemTime(new Date(8001));
+      await expect(connection.getFrequency()).rejects.toThrow(/Get frequency returned null/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resets the null frequency failure window after a successful read', async () => {
+    const { connection, rig } = createConnectedConnection();
+    rig.readOperatingFrequency
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(7100000)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+
+    await expect(connection.getFrequency()).resolves.toBe(0);
+    await expect(connection.getFrequency()).resolves.toBe(7100000);
+    await expect(connection.getFrequency()).resolves.toBe(7100000);
+    await expect(connection.getFrequency()).resolves.toBe(7100000);
+  });
+
+  it('dedupes fan-out getMode null readback through one bottom request', async () => {
+    const modeRead = createDeferred<null>();
+    const { connection, rig } = createConnectedConnection();
+    rig.readOperatingMode.mockReturnValueOnce(modeRead.promise);
+
+    const first = connection.getMode();
+    await Promise.resolve();
+    const second = connection.getMode();
+
+    expect(rig.readOperatingMode).toHaveBeenCalledTimes(1);
+    modeRead.resolve(null);
+
+    await expect(Promise.allSettled([first, second])).resolves.toEqual([
+      expect.objectContaining({ status: 'rejected' }),
+      expect.objectContaining({ status: 'rejected' }),
+    ]);
+    expect(rig.readOperatingMode).toHaveBeenCalledTimes(1);
+  });
+
   it('treats null ICOM mode readback as a recoverable optional read failure', async () => {
     const { connection, rig } = createConnectedConnection();
     rig.readOperatingMode.mockResolvedValueOnce(null);
@@ -233,18 +416,18 @@ describe('IcomWlanConnection', () => {
 
     expect(rig.readALC).toHaveBeenCalledTimes(1);
     expect(rig.getLevelMeter).not.toHaveBeenCalled();
-    expect(rig.readPowerLevel).not.toHaveBeenCalled();
+    expect(rig.readPowerLevel).toHaveBeenCalledTimes(1);
   });
 
-  it('marks ICOM WLAN power meter unsupported until readPowerLevel is validated', () => {
+  it('marks ICOM WLAN power meter supported by calibrated icom-wlan-node profiles', () => {
     const { connection } = createConnectedConnection();
 
     expect(connection.getMeterCapabilities()).toMatchObject({
       strength: true,
       swr: true,
       alc: true,
-      power: false,
-      powerWatts: false,
+      power: true,
+      powerWatts: true,
     });
   });
 
@@ -291,20 +474,55 @@ describe('IcomWlanConnection', () => {
     expect(emitted[0]?.swr).toMatchObject({ raw: 0, swr: 1 });
   });
 
-  it('skips low-priority meter polling while a critical ICOM CAT write is active', async () => {
+  it('allows low-priority meter polling while a critical ICOM UDP write is active', async () => {
     const firstWrite = createDeferred<void>();
     const { connection, rig } = createConnectedConnection();
     rig.setFrequency.mockReturnValueOnce(firstWrite.promise);
+    rig.getLevelMeter.mockResolvedValueOnce({
+      raw: 120,
+      percent: 50,
+      sUnits: 9,
+      dBm: -73,
+      formatted: 'S9',
+    });
 
     const writePromise = connection.setFrequency(7100000);
     await Promise.resolve();
 
+    expect(connection.isCriticalOperationActive()).toBe(false);
+    expect(connection.getRadioIoQueueSnapshot()).toMatchObject({
+      busy: true,
+      backpressure: false,
+    });
+
     await (connection as any).pollMeters();
 
-    expect(rig.readSWR).not.toHaveBeenCalled();
+    expect(rig.getLevelMeter).toHaveBeenCalledTimes(1);
 
     firstWrite.resolve(undefined);
     await writePromise;
+  });
+
+  it('passes calibrated ICOM WLAN power watts through meter polling', async () => {
+    const { connection, rig } = createConnectedConnection();
+    const testConnection = asTestConnection(connection);
+    testConnection.softwarePttActive = true;
+    testConnection.pttActivatedAt = Date.now() - 1000;
+    rig.readSWR.mockResolvedValueOnce(null);
+    rig.readALC.mockResolvedValueOnce(null);
+    rig.readPowerLevel.mockResolvedValueOnce({ raw: 143, percent: 50, watts: 50 });
+
+    const emitted: any[] = [];
+    connection.on('meterData', (data) => emitted.push(data));
+
+    await (connection as any).pollMeters();
+
+    expect(emitted[0]?.power).toMatchObject({
+      raw: 143,
+      percent: 50,
+      watts: 50,
+      maxWatts: null,
+    });
   });
 
   it('keeps ICOM spectrum display polling out of the main CAT queue', async () => {

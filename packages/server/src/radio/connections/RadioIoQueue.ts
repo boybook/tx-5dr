@@ -32,6 +32,7 @@ export interface RadioIoQueueCongestionSnapshot {
 export interface RadioIoQueueSnapshot {
   label?: string;
   busy: boolean;
+  backpressure: boolean;
   criticalActive: boolean;
   activeCount: number;
   activeTask: string | null;
@@ -46,6 +47,10 @@ export interface RadioIoQueueSnapshot {
 
 export interface RadioIoQueueOptions {
   label?: string;
+  maxConcurrent?: number;
+  lowPrioritySkipsWhenBusy?: boolean;
+  criticalBackpressure?: boolean;
+  busyBackpressure?: boolean;
   congestionPendingThreshold?: number;
   congestionWarnCooldownMs?: number;
   now?: () => number;
@@ -65,12 +70,23 @@ type QueuedRadioIoTask<T> = {
 
 const DEFAULT_CONGESTION_PENDING_THRESHOLD = 5;
 const DEFAULT_CONGESTION_WARN_COOLDOWN_MS = 10_000;
+export const PARALLEL_RADIO_IO_QUEUE_OPTIONS: Pick<
+  RadioIoQueueOptions,
+  'maxConcurrent' | 'lowPrioritySkipsWhenBusy' | 'criticalBackpressure' | 'busyBackpressure'
+> = {
+  maxConcurrent: 3,
+  lowPrioritySkipsWhenBusy: false,
+  criticalBackpressure: false,
+  busyBackpressure: false,
+};
+
+export const ICOM_WLAN_RADIO_IO_QUEUE_OPTIONS = PARALLEL_RADIO_IO_QUEUE_OPTIONS;
 
 export class RadioIoQueue {
   private queue: QueuedRadioIoTask<unknown>[] = [];
   private activeCount = 0;
   private criticalCount = 0;
-  private activeTask: QueuedRadioIoTask<unknown> | null = null;
+  private readonly activeTasks: QueuedRadioIoTask<unknown>[] = [];
   private pumpScheduled = false;
   private readonly dedupedTasks = new Map<string, Promise<unknown>>();
   private lastCongestionWarningAt = Number.NEGATIVE_INFINITY;
@@ -78,7 +94,7 @@ export class RadioIoQueue {
   constructor(private readonly options: RadioIoQueueOptions = {}) {}
 
   isCriticalActive(): boolean {
-    return this.criticalCount > 0;
+    return this.shouldCriticalApplyBackpressure() && this.criticalCount > 0;
   }
 
   isBusy(): boolean {
@@ -89,15 +105,17 @@ export class RadioIoQueue {
     const now = this.now();
     const oldestPendingTask = this.getOldestPendingTask();
     const criticalPendingCount = this.countCriticalPending();
+    const oldestActiveTask = this.getOldestActiveTask();
 
     return {
       label: this.options.label,
       busy: this.isBusy(),
+      backpressure: this.hasBackpressure(),
       criticalActive: this.isCriticalActive(),
       activeCount: this.activeCount,
-      activeTask: this.activeTask ? this.describeTask(this.activeTask) : null,
-      activeRunMs: this.activeTask?.startedAt !== null && this.activeTask?.startedAt !== undefined
-        ? Math.max(0, now - this.activeTask.startedAt)
+      activeTask: oldestActiveTask ? this.describeTask(oldestActiveTask) : null,
+      activeRunMs: oldestActiveTask?.startedAt !== null && oldestActiveTask?.startedAt !== undefined
+        ? Math.max(0, now - oldestActiveTask.startedAt)
         : null,
       pendingCount: this.queue.length,
       criticalPendingCount,
@@ -112,7 +130,7 @@ export class RadioIoQueue {
     options: RadioIoTaskOptions,
     task: (sessionId: number) => Promise<T>,
   ): Promise<T | typeof RADIO_IO_SKIPPED> {
-    if (this.isBusy() || this.isCriticalActive()) {
+    if (this.lowPrioritySkipsWhenBusy() && this.hasBackpressure()) {
       return RADIO_IO_SKIPPED;
     }
 
@@ -265,17 +283,18 @@ export class RadioIoQueue {
   }
 
   private pumpNext(): void {
-    if (this.activeCount > 0) {
-      return;
+    while (this.activeCount < this.maxConcurrent() && this.queue.length > 0) {
+      const queuedTask = this.queue.shift();
+      if (!queuedTask) {
+        return;
+      }
+      this.startTask(queuedTask);
     }
+  }
 
-    const queuedTask = this.queue.shift();
-    if (!queuedTask) {
-      return;
-    }
-
+  private startTask(queuedTask: QueuedRadioIoTask<unknown>): void {
     this.activeCount += 1;
-    this.activeTask = queuedTask;
+    this.activeTasks.push(queuedTask);
     queuedTask.startedAt = this.now();
     if (queuedTask.options.critical) {
       this.criticalCount += 1;
@@ -289,8 +308,9 @@ export class RadioIoQueue {
         if (queuedTask.dedupeKey && this.dedupedTasks.get(queuedTask.dedupeKey) === queuedTask.promise) {
           this.dedupedTasks.delete(queuedTask.dedupeKey);
         }
-        if (this.activeTask === queuedTask) {
-          this.activeTask = null;
+        const activeIndex = this.activeTasks.indexOf(queuedTask);
+        if (activeIndex !== -1) {
+          this.activeTasks.splice(activeIndex, 1);
         }
         this.activeCount -= 1;
         this.schedulePump();
@@ -305,5 +325,42 @@ export class RadioIoQueue {
         finishTask();
       }
     })();
+  }
+
+  private maxConcurrent(): number {
+    const configured = this.options.maxConcurrent ?? 1;
+    if (!Number.isFinite(configured)) {
+      return Number.POSITIVE_INFINITY;
+    }
+    return Math.max(1, Math.trunc(configured));
+  }
+
+  private lowPrioritySkipsWhenBusy(): boolean {
+    return this.options.lowPrioritySkipsWhenBusy ?? true;
+  }
+
+  private shouldCriticalApplyBackpressure(): boolean {
+    return this.options.criticalBackpressure ?? true;
+  }
+
+  private shouldBusyApplyBackpressure(): boolean {
+    return this.options.busyBackpressure ?? true;
+  }
+
+  private hasBackpressure(): boolean {
+    return (this.shouldBusyApplyBackpressure() && this.isBusy())
+      || (this.shouldCriticalApplyBackpressure() && this.criticalCount > 0);
+  }
+
+  private getOldestActiveTask(): QueuedRadioIoTask<unknown> | null {
+    if (this.activeTasks.length === 0) {
+      return null;
+    }
+
+    return this.activeTasks.reduce((oldest, item) => {
+      if (oldest.startedAt === null) return item;
+      if (item.startedAt === null) return oldest;
+      return item.startedAt < oldest.startedAt ? item : oldest;
+    });
   }
 }

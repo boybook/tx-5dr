@@ -54,6 +54,7 @@ function seedRadioSdrFrame(coordinator: SpectrumSessionCoordinator, frequency = 
 function createBusySnapshot(busy: boolean) {
   return {
     busy,
+    backpressure: busy,
     criticalActive: false,
     activeCount: busy ? 1 : 0,
     activeTask: busy ? 'getFrequency' : null,
@@ -151,6 +152,7 @@ describe('SpectrumSessionCoordinator', () => {
       getSpectrumDisplayState: vi.fn().mockRejectedValue(new Error('must not read spectrum state')),
       getRadioIoQueueSnapshot: vi.fn(() => ({
         busy: true,
+        backpressure: true,
         criticalActive: false,
         activeCount: 1,
         activeTask: 'startManagedSpectrum',

@@ -113,7 +113,7 @@
   },
   {
     "name": "icom-wlan-node",
-    "version": "0.5.1",
+    "version": "0.6.1",
     "license": "MIT",
     "url": "https://github.com/boybook/icom-wlan-node",
     "category": "backend"

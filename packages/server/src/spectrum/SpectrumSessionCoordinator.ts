@@ -1434,7 +1434,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     }
 
     const snapshot = radioManager.getActiveConnection?.()?.getRadioIoQueueSnapshot?.();
-    if (!snapshot?.busy) {
+    if (!snapshot?.backpressure) {
       this.radioIoBackpressureStartedAt = null;
       return false;
     }
