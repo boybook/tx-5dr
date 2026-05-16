@@ -17,8 +17,15 @@ const LINUX_DEB_DEPENDS = [
 
 function normalizeBuilderArch(value) {
   if (typeof value === 'string') return value;
-  const archNames = { 0: 'x64', 1: 'ia32', 2: 'armv7l', 3: 'arm64', 4: 'universal' };
+  const archNames = { 0: 'ia32', 1: 'x64', 2: 'armv7l', 3: 'arm64', 4: 'universal' };
   return archNames[value] || process.env.ARCH || process.arch;
+}
+
+function sanitizeMacIdentity(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^Developer ID Application:\s*/i, '')
+    || undefined;
 }
 
 function resolveBuilderPackagePaths(context) {
@@ -74,7 +81,7 @@ module.exports = {
     hardenedRuntime: true,
     entitlements: 'build/entitlements.mac.plist',
     entitlementsInherit: 'build/entitlements.mac.plist',
-    identity: process.env.APPLE_IDENTITY || undefined,
+    identity: sanitizeMacIdentity(process.env.APPLE_IDENTITY),
     notarize: Boolean(
       process.env.APPLE_ID
       && process.env.APPLE_APP_SPECIFIC_PASSWORD
