@@ -43,7 +43,7 @@ function normalizeBaseVersion(value) {
 }
 
 function formatNightlyVersion(baseVersion, buildStamp, shortSha) {
-  // Prefix commit metadata so Windows MSI tooling never treats a digit-led SHA
+  // Prefix commit metadata so installer tooling never treats a digit-led SHA
   // like "0e87916" as a numeric build component.
   return `${baseVersion}-nightly.${buildStamp}+g${shortSha}`;
 }

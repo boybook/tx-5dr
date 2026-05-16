@@ -171,13 +171,13 @@ done
 
 NM="$APP_ROOT/node_modules"
 
-# === Cleanup: adapted from forge.config.js packageAfterCopy ===
+# === Cleanup: aligned with Electron package hook cleanup ===
 log "Cleaning node_modules (removing dev/frontend/build dependencies)..."
 
 # 1. Remove exact-match packages (dev tools, frontend, build tools, Electron)
 REMOVE_PACKAGES=(
     # Electron & related
-    electron @electron @electron-forge electron-squirrel-startup
+    electron @electron electron-builder @electron-builder electron-squirrel-startup
     electron-installer-common electron-installer-debian electron-installer-redhat
 
     # Build tools / bundlers
@@ -208,7 +208,7 @@ REMOVE_PACKAGES=(
     esquery graphemer espree esrecurse estraverse estree-walker esutils
     acorn acorn-jsx acorn-walk doctrine optionator
 
-    # Electron Forge packaging residuals
+    # Electron packaging residuals
     resedit pe-library dir-compare flora-colossus galactus
     got global-agent global-dirs roarr serialize-error
     listr2 ora log-symbols log-update

@@ -15,16 +15,15 @@
     "electron": "yarn workspace @tx5dr/electron-main dev",
     "lint": "turbo run lint",
     "test": "turbo run test",
-    "package": "electron-forge package",
-    "package:mac": "node scripts/run-with-env.mjs --env PLATFORM=darwin --env ARCH=arm64 electron-forge package",
-    "package:mac:x64": "node scripts/run-with-env.mjs --env PLATFORM=darwin --env ARCH=x64 electron-forge package",
-    "make": "electron-forge make",
-    "make:mac": "node scripts/run-with-env.mjs --env PLATFORM=darwin --env ARCH=arm64 electron-forge make",
-    "make:mac:x64": "node scripts/run-with-env.mjs --env PLATFORM=darwin --env ARCH=x64 electron-forge make",
-    "make:win": "node scripts/run-with-env.mjs --env PLATFORM=win32 --env ARCH=x64 electron-forge make",
-    "make:mac:unsigned": "node scripts/run-with-env.mjs --env CSC_IDENTITY_AUTO_DISCOVERY=false yarn make:mac",
-    "publish": "electron-forge publish",
-    "start": "electron-forge start",
+    "package": "electron-builder --config electron-builder.config.cjs --dir",
+    "package:mac": "electron-builder --config electron-builder.config.cjs --mac --arm64 --dir",
+    "package:mac:x64": "electron-builder --config electron-builder.config.cjs --mac --x64 --dir",
+    "make": "electron-builder --config electron-builder.config.cjs --publish never",
+    "make:mac": "electron-builder --config electron-builder.config.cjs --mac --arm64 --publish never",
+    "make:mac:x64": "electron-builder --config electron-builder.config.cjs --mac --x64 --publish never",
+    "make:win": "electron-builder --config electron-builder.config.cjs --win --x64 --publish never",
+    "make:mac:unsigned": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.config.cjs --mac --arm64 --publish never",
+    "start": "yarn workspace @tx5dr/electron-main start",
     "build:package": "yarn build && yarn package",
     "build:make": "yarn build && yarn make",
     "clean": "node scripts/clean-paths.mjs out packages/*/dist",
@@ -36,18 +35,14 @@
     "docker:build-multi": "scripts/build-docker.sh",
     "docker:build-and-push": "scripts/build-docker.sh boybook tx-5dr latest true",
     "generate:dxcc": "node scripts/generate-dxcc-data.mjs",
-    "sync:cty": "node scripts/sync-cty-data.mjs"
+    "sync:cty": "node scripts/sync-cty-data.mjs",
+    "make:autoupdate": "electron-builder --config electron-builder.config.cjs --publish never",
+    "make:linux": "electron-builder --config electron-builder.config.cjs --linux --publish never"
   },
   "devDependencies": {
-    "@electron-forge/cli": "^7.8.1",
-    "@electron-forge/maker-deb": "^7.8.1",
-    "@electron-forge/maker-dmg": "7.8.1",
-    "@electron-forge/maker-rpm": "^7.8.1",
-    "@electron-forge/maker-wix": "^7.8.1",
-    "@electron-forge/maker-zip": "^7.8.1",
-    "@electron-forge/plugin-auto-unpack-natives": "^7.8.1",
     "@electron/rebuild": "^4.0.1",
     "electron": "^36.4.0",
+    "electron-builder": "26.8.1",
     "png-to-ico": "^2.1.8",
     "turbo": "^2.9.6"
   },
@@ -59,5 +54,8 @@
     "hamlib": {
       "built": false
     }
-  }
+  },
+  "author": "BG5DRB <bg5drb@example.com>",
+  "homepage": "https://tx5dr.com",
+  "license": "MIT"
 }
