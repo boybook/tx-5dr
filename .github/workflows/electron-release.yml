@@ -525,7 +525,7 @@ jobs:
           dpkg-deb -c "${DEB_FILE}" | grep -E '/opt/TX-5DR/tx-5dr$'
           DESKTOP_FILE="${DEB_TMP}/root/usr/share/applications/tx-5dr.desktop"
           grep -Fx 'Name=tx-5dr' "${DESKTOP_FILE}"
-          grep -Fx 'Comment=TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio' "${DESKTOP_FILE}"
+          grep -Fx 'Comment=TX-5DR - Shared Node backend + web browser client + optional Electron shell' "${DESKTOP_FILE}"
           grep -Fx 'GenericName=Ham Radio Application' "${DESKTOP_FILE}"
           grep -Fx 'Exec=/opt/TX-5DR/tx-5dr %U' "${DESKTOP_FILE}"
           grep -Fx 'Icon=tx-5dr' "${DESKTOP_FILE}"
@@ -543,7 +543,7 @@ jobs:
           (cd "${RPM_TMP}" && rpm2cpio "${RPM_FILE}" | cpio -id --quiet ./usr/share/applications/tx-5dr.desktop)
           RPM_DESKTOP="${RPM_TMP}/usr/share/applications/tx-5dr.desktop"
           grep -Fx 'Name=tx-5dr' "${RPM_DESKTOP}"
-          grep -Fx 'Comment=TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio' "${RPM_DESKTOP}"
+          grep -Fx 'Comment=TX-5DR - Shared Node backend + web browser client + optional Electron shell' "${RPM_DESKTOP}"
           grep -Fx 'GenericName=Ham Radio Application' "${RPM_DESKTOP}"
           grep -Fx 'Exec=/opt/TX-5DR/tx-5dr %U' "${RPM_DESKTOP}"
           grep -Fx 'Icon=tx-5dr' "${RPM_DESKTOP}"
