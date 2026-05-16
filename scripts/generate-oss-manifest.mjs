@@ -5,6 +5,11 @@ import path from 'node:path';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 
 const RECENT_COMMITS_LIMIT = 10;
+const AUTO_UPDATE_TARGETS = new Map([
+  ['windows:exe', { target: 'nsis', installerFamily: 'nsis' }],
+  ['macos:zip', { target: 'mac-zip', installerFamily: 'mac-zip' }],
+  ['linux:AppImage', { target: 'appimage', installerFamily: 'appimage' }],
+]);
 
 function parseArgs(argv) {
   const args = {};
@@ -115,6 +120,7 @@ async function buildAssetEntry({
   const fileName = path.basename(filePath);
   const [fileBuffer, fileStats] = await Promise.all([readFile(filePath), stat(filePath)]);
   const sha256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+  const sha512 = crypto.createHash('sha512').update(fileBuffer).digest('base64');
   const canonicalUrl = joinUrl(baseUrl, `${objectPrefix}/${fileName}`);
   const ossUrl = buildOptionalAssetUrl(ossBaseUrl, ossObjectPrefix, fileName) || canonicalUrl;
   const githubUrl = buildOptionalAssetUrl(githubBaseUrl, githubObjectPrefix, fileName);
@@ -135,6 +141,19 @@ async function buildAssetEntry({
     metadata = detectAppAssetMetadata(fileName);
   }
 
+  const autoUpdateKey = `${metadata.platform}:${metadata.package_type}`;
+  const autoUpdateTarget = product === 'app' ? AUTO_UPDATE_TARGETS.get(autoUpdateKey) : null;
+  const blockMapPath = `${filePath}.blockmap`;
+  let blockMapSize;
+  try {
+    blockMapSize = (await stat(blockMapPath)).size;
+  } catch {
+    blockMapSize = undefined;
+  }
+  if (autoUpdateTarget && !blockMapSize) {
+    throw new Error(`Auto-update asset is missing blockmap: ${blockMapPath}`);
+  }
+
   return {
     name: fileName,
     url: ossUrl,
@@ -143,8 +162,24 @@ async function buildAssetEntry({
     url_oss: ossUrl,
     url_github: githubUrl,
     sha256,
+    sha512,
     size: fileStats.size,
     ...metadata,
+    ...(autoUpdateTarget ? {
+      auto_update: {
+        supported: true,
+        target: autoUpdateTarget.target,
+        installerFamily: autoUpdateTarget.installerFamily,
+        sha512,
+        blockMapSize,
+        files: [{
+          url: fileName,
+          sha512,
+          size: fileStats.size,
+          blockMapSize,
+        }],
+      },
+    } : {}),
   };
 }
 
@@ -156,6 +191,7 @@ async function listFiles(dirPath) {
   const entries = await readdir(dirPath, { withFileTypes: true });
   return entries
     .filter((entry) => entry.isFile())
+    .filter((entry) => !entry.name.endsWith('.blockmap') && !/^latest.*\.ya?ml$/i.test(entry.name))
     .map((entry) => path.join(dirPath, entry.name))
     .sort((left, right) => left.localeCompare(right));
 }

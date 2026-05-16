@@ -443,9 +443,8 @@
     "desktopUpdateViewAllCommits": "View all updates",
     "desktopUpdateNoNotes": "No release notes available.",
     "desktopUpdateDownloadOptionsTitle": "Download Options",
-    "desktopUpdateDownloadOptionsDesc": "Manual downloads remain available as a fallback, especially for MSI, DEB/RPM, archives, or failed automatic updates.",
+    "desktopUpdateDownloadOptionsDesc": "Manual downloads remain available as a fallback, especially for DEB/RPM, archives, or failed automatic updates.",
     "desktopUpdatePackageType": {
-      "msi": "Windows Installer (MSI)",
       "dmg": "macOS Installer (DMG)",
       "7z": "Windows Archive (7z)",
       "zip": "Archive (ZIP)",
