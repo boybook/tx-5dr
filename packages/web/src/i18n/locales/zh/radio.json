@@ -567,6 +567,22 @@
       "label": "监听增益",
       "description": "调节电台内置发射监听（MONI）音量。设为 0 视为关闭监听；提高数值可在本机耳机或扬声器中监听自己的发射音频。"
     },
+    "monitor_enabled": {
+      "label": "监听开关",
+      "description": "控制支持 MON 功能的电台发射监听开关。"
+    },
+    "vox_gain": {
+      "label": "VOX 增益",
+      "description": "调节 VOX 对麦克风音频触发发射的灵敏度。"
+    },
+    "anti_vox": {
+      "label": "Anti-VOX",
+      "description": "调节 VOX 对扬声器回放音频的抑制，减少误触发发射。"
+    },
+    "break_in_delay": {
+      "label": "Break-In 延时",
+      "description": "调节 CW Break-In 后电台返回接收的延迟。"
+    },
     "nb": {
       "label": "噪声消隐",
       "description": "噪声消隐器（NB），专门抑制脉冲型干扰，例如汽车点火噪声、工业电气干扰等。0 表示关闭，数值越大消隐强度越高。对持续性背景噪声效果有限，建议仅在有明显脉冲干扰时启用。"
@@ -574,6 +590,42 @@
     "nr": {
       "label": "数字降噪",
       "description": "数字信号处理降噪（NR），通过 DSP 算法降低背景白噪声，提升弱信号可读性。0 表示关闭；进行 FT8 等数字模式解码时建议设为 0，避免 DSP 处理影响解码准确性。"
+    },
+    "rf_gain": {
+      "label": "RF 增益",
+      "description": "调节接收射频增益。在强信号环境下降低增益可改善前端动态范围。"
+    },
+    "if_shift": {
+      "label": "IF Shift",
+      "description": "移动中频通带位置，用于减轻邻频干扰。"
+    },
+    "pbt_in": {
+      "label": "PBT 内侧",
+      "description": "调节支持机型的内侧通带调谐控制。"
+    },
+    "pbt_out": {
+      "label": "PBT 外侧",
+      "description": "调节支持机型的外侧通带调谐控制。"
+    },
+    "cw_pitch": {
+      "label": "CW 音调",
+      "description": "设置 CW 侧音和接收音调频率。"
+    },
+    "key_speed": {
+      "label": "键速",
+      "description": "设置电台内置键控器速度（WPM）。"
+    },
+    "notch_raw": {
+      "label": "手动陷波",
+      "description": "调节电台暴露的手动陷波位置或深度。"
+    },
+    "drive_gain": {
+      "label": "Drive 增益",
+      "description": "调节支持机型的 Drive Gain 控制。"
+    },
+    "digi_sel_level": {
+      "label": "Digi-SEL 电平",
+      "description": "调节支持机型的数字选择滤波电平。"
     },
     "lock_mode": {
       "label": "面板锁定",
@@ -586,6 +638,38 @@
     "vox": {
       "label": "VOX",
       "description": "启用语音控制发射（VOX）。当麦克风检测到语音输入时，电台可自动切换到发射状态。数字模式通常建议关闭。"
+    },
+    "auto_notch": {
+      "label": "自动陷波",
+      "description": "启用自动陷波滤波，用于抑制稳定单音干扰。"
+    },
+    "manual_notch": {
+      "label": "手动陷波开关",
+      "description": "启用手动陷波滤波器。"
+    },
+    "rit_enabled": {
+      "label": "RIT 开关",
+      "description": "启用接收增量调谐。"
+    },
+    "xit_enabled": {
+      "label": "XIT 开关",
+      "description": "启用发射增量调谐。"
+    },
+    "tone_enabled": {
+      "label": "亚音发射",
+      "description": "启用中继亚音发射。"
+    },
+    "tone_squelch_enabled": {
+      "label": "亚音静噪",
+      "description": "启用支持机型的亚音静噪解码。"
+    },
+    "beep_enabled": {
+      "label": "按键提示音",
+      "description": "控制电台按键或旋钮提示音。"
+    },
+    "break_in_mode": {
+      "label": "Break-In 模式",
+      "description": "选择 CW Break-In 模式：关闭、半插入或全插入。"
     },
     "agc_mode": {
       "label": "AGC 速度",
@@ -602,6 +686,18 @@
     "mode_bandwidth": {
       "label": "模式频宽",
       "description": "读取并切换当前工作模式的滤波频宽。语音频谱矩形会优先根据这里对应的真实频宽显示。"
+    },
+    "split_enabled": {
+      "label": "Split",
+      "description": "启用分开发收频点的 Split 操作。"
+    },
+    "vfo_select": {
+      "label": "VFO",
+      "description": "选择支持机型的当前活动 VFO。"
+    },
+    "audio_if_mode": {
+      "label": "Audio IF",
+      "description": "选择当前 ICOM WLAN profile 暴露的音频 IF 路由。"
     },
     "rit_offset": {
       "label": "RIT 偏移",
@@ -626,6 +722,42 @@
     "ctcss_tone": {
       "label": "CTCSS 亚音",
       "description": "选择连续音频编码静噪系统（CTCSS）亚音频率，用于中继接入或静噪控制。"
+    },
+    "spectrum_data_output": {
+      "label": "频谱输出",
+      "description": "启用支持机型的电台频谱数据输出。"
+    },
+    "spectrum_hold": {
+      "label": "频谱保持",
+      "description": "冻结或恢复电台频谱显示。"
+    },
+    "spectrum_speed": {
+      "label": "频谱速度",
+      "description": "设置电台频谱扫描速度。"
+    },
+    "spectrum_ref": {
+      "label": "频谱参考",
+      "description": "调节电台频谱参考电平（dB）。"
+    },
+    "spectrum_average": {
+      "label": "频谱平均",
+      "description": "调节支持机型的频谱平均程度。"
+    },
+    "spectrum_vbw": {
+      "label": "频谱 VBW",
+      "description": "选择电台频谱显示的视频带宽设置。"
+    },
+    "spectrum_rbw": {
+      "label": "频谱 RBW",
+      "description": "选择电台频谱显示的分辨率带宽设置。"
+    },
+    "spectrum_during_tx": {
+      "label": "发射时频谱",
+      "description": "控制发射期间是否保持频谱输出。"
+    },
+    "spectrum_center_type": {
+      "label": "频谱中心",
+      "description": "选择电台频谱显示使用的中心参考方式。"
     },
     "dcs_code": {
       "label": "DCS 码",

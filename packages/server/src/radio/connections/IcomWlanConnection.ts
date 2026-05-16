@@ -9,13 +9,25 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import { IcomControl, AUDIO_RATE, type IcomModelId, type IcomScopeFrame } from 'icom-wlan-node';
+import {
+  IcomControl,
+  AUDIO_RATE,
+  type IcomAudioIfSource,
+  type IcomFunctionName,
+  type IcomLevelName,
+  type IcomModelId,
+  type IcomScopeFrame,
+  type IcomSpectrumCenterType,
+  type IcomSpectrumSpeed,
+  type IcomVfoName,
+} from 'icom-wlan-node';
 import type { MeterCapabilities } from '@tx5dr/contracts';
 import { TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
 import { createLogger } from '../../utils/logger.js';
 import { isProcessShuttingDown } from '../../utils/process-shutdown.js';
+import { isRecoverableOptionalRadioError } from '../optionalRadioError.js';
 import { ICOM_WLAN_RADIO_IO_QUEUE_OPTIONS, RADIO_IO_SKIPPED, RadioIoQueue } from './RadioIoQueue.js';
 import {
   type ApplyOperatingStateRequest,
@@ -39,6 +51,34 @@ const METER_SAMPLE_LOG_INTERVAL_MS = 5000;
 const ICOM_WLAN_POWER_METER_SUPPORTED = true;
 const FREQUENCY_NULL_FAILURE_LIMIT = 3;
 const FREQUENCY_NULL_FAILURE_WINDOW_MS = 8000;
+const ICOM_AGC_CODE_TO_MODE: Record<number, string> = {
+  0: 'off',
+  1: 'superfast',
+  2: 'fast',
+  3: 'slow',
+  4: 'user',
+  5: 'medium',
+  6: 'auto',
+  7: 'long',
+  8: 'on',
+};
+const ICOM_AGC_MODE_TO_CODE: Record<string, number> = Object.fromEntries(
+  Object.entries(ICOM_AGC_CODE_TO_MODE).map(([code, mode]) => [mode, Number(code)]),
+) as Record<string, number>;
+const ICOM_CTCSS_TONES_TENTHS_HZ = [
+  670, 693, 719, 744, 770, 797, 825, 854, 885, 915,
+  948, 974, 1000, 1035, 1072, 1109, 1148, 1188, 1230, 1273,
+  1318, 1365, 1413, 1462, 1514, 1567, 1598, 1622, 1655, 1679,
+  1713, 1738, 1773, 1799, 1835, 1862, 1899, 1928, 1966, 1995,
+  2035, 2065, 2107, 2181, 2257, 2291, 2336, 2418, 2503, 2541,
+];
+const ICOM_AUDIO_IF_SOURCES: IcomAudioIfSource[] = ['default', 'wlan', 'lan', 'acc'];
+const ICOM_SPECTRUM_SPEEDS: IcomSpectrumSpeed[] = ['slow', 'mid', 'fast'];
+const ICOM_SPECTRUM_CENTER_TYPES: IcomSpectrumCenterType[] = [
+  'filter-center',
+  'carrier-point-center',
+  'carrier-point-center-abs',
+];
 
 /**
  * IcomWlanConnection 实现类
@@ -175,6 +215,121 @@ export class IcomWlanConnection
       const result = await task();
       this.ensureSession(activeSessionId);
       return result;
+    });
+  }
+
+  private optionalOperationUnavailable(context: string, message: string, cause?: unknown): RadioError {
+    return new RadioError({
+      code: RadioErrorCode.INVALID_OPERATION,
+      message: `Optional radio operation unavailable (${context}): ${message}`,
+      userMessage: 'Radio operation is not supported by this model',
+      severity: RadioErrorSeverity.WARNING,
+      suggestions: [
+        'This control can be ignored on radios that do not expose it over ICOM WLAN',
+        'Continue using the supported basic radio operations',
+      ],
+      cause,
+      context: {
+        operation: context,
+        optional: true,
+        recoverable: true,
+      },
+    });
+  }
+
+  private requireOptionalValue<T>(context: string, value: T | null | undefined): T {
+    if (value === null || value === undefined) {
+      throw this.optionalOperationUnavailable(context, 'radio returned null');
+    }
+    return value;
+  }
+
+  private convertOptionalOperationError(error: unknown, context: string): RadioError {
+    if (isRecoverableOptionalRadioError(error)) {
+      const message = error instanceof Error ? error.message : String(error);
+      return this.optionalOperationUnavailable(context, message, error);
+    }
+
+    return this.convertError(error, context);
+  }
+
+  private getActiveProfile(): any | null {
+    return (this.rig as any)?.profile ?? null;
+  }
+
+  private profileList<T>(key: string): T[] {
+    const profile = this.getActiveProfile();
+    const values = profile?.[key];
+    return Array.isArray(values) ? values as T[] : [];
+  }
+
+  private hasProfileFunction(name: string): boolean {
+    const functions = this.profileList<string>('functions');
+    return functions.length === 0 || functions.includes(name);
+  }
+
+  private hasProfileLevel(name: string): boolean {
+    const levels = this.profileList<string>('levels');
+    return levels.length === 0 || levels.includes(name);
+  }
+
+  private hasProfileParameter(name: string): boolean {
+    return this.profileList<string>('parameters').includes(name);
+  }
+
+  private hasAdvancedSpectrumControl(name: string): boolean {
+    return this.profileList<string>('spectrumAdvanced').includes(name);
+  }
+
+  private async readFunctionCapability(taskName: string, functionName: IcomFunctionName): Promise<boolean> {
+    return this.runSerializedTask(taskName, async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue(taskName, await this.rig!.getFunction(functionName, { timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, taskName);
+      }
+    });
+  }
+
+  private async writeFunctionCapability(
+    taskName: string,
+    functionName: IcomFunctionName,
+    enabled: boolean,
+  ): Promise<void> {
+    await this.runSerializedTask(taskName, async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setFunction(functionName, enabled);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, taskName);
+      }
+    });
+  }
+
+  private async readLevelCapability(taskName: string, levelName: IcomLevelName): Promise<number> {
+    return this.runSerializedTask(taskName, async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue(taskName, await this.rig!.getLevel(levelName, { timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, taskName);
+      }
+    });
+  }
+
+  private async writeLevelCapability(
+    taskName: string,
+    levelName: IcomLevelName,
+    value: number,
+  ): Promise<void> {
+    await this.runSerializedTask(taskName, async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setLevel(levelName, value);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, taskName);
+      }
     });
   }
 
@@ -775,11 +930,14 @@ export class IcomWlanConnection
    * ICOM 电台通常都支持内置天调
    */
   async getTunerCapabilities(): Promise<TunerCapabilities> {
-    return this.runSerializedTask('getTunerCapabilities', async () => ({
-      supported: true,
-      hasSwitch: true,
-      hasManualTune: true,
-    }));
+    return this.runSerializedTask('getTunerCapabilities', async () => {
+      const supported = this.hasProfileFunction('TUNER');
+      return {
+        supported,
+        hasSwitch: supported,
+        hasManualTune: supported,
+      };
+    });
   }
 
   /**
@@ -808,11 +966,23 @@ export class IcomWlanConnection
    * 获取天线调谐器状态（简化版：使用本地状态跟踪）
    */
   async getTunerStatus(): Promise<TunerStatus> {
-    return this.runSerializedTask('getTunerStatus', async () => ({
-      enabled: this.tunerEnabled,
-      active: false,
-      status: 'idle',
-    }));
+    return this.runSerializedTask('getTunerStatus', async () => {
+      this.checkConnected();
+      try {
+        const status = this.requireOptionalValue(
+          'getTunerStatus',
+          await this.rig!.readTunerStatus({ timeout: 3000 }),
+        );
+        this.tunerEnabled = status.state === 'ON' || status.state === 'TUNING';
+        return {
+          enabled: this.tunerEnabled,
+          active: status.state === 'TUNING',
+          status: status.state === 'TUNING' ? 'tuning' : 'idle',
+        };
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getTunerStatus');
+      }
+    }, { id: 'getTunerStatus' });
   }
 
   /**
@@ -824,18 +994,14 @@ export class IcomWlanConnection
       this.checkConnected();
 
       try {
-        // CI-V: 1C 01 <00/01>
-        const data = Buffer.from([0x1C, 0x01, enabled ? 0x01 : 0x00]);
-        this.rig!.sendCiv(data);
-
-        // 更新本地状态
+        this.rig!.setTunerEnabled(enabled);
         this.tunerEnabled = enabled;
         logger.debug(`Tuner ${enabled ? 'enabled' : 'disabled'}`);
       } catch (error) {
         logger.error('Failed to set tuner:', error);
-        throw this.convertError(error, 'setTuner');
+        throw this.convertOptionalOperationError(error, 'setTuner');
       }
-    });
+    }, { critical: true });
   }
 
   /**
@@ -847,16 +1013,14 @@ export class IcomWlanConnection
       this.checkConnected();
 
       try {
-        // CI-V: 1C 01 02
-        const data = Buffer.from([0x1C, 0x01, 0x02]);
-        this.rig!.sendCiv(data);
+        this.rig!.startManualTune();
         logger.debug('Manual tuning started');
         return true;
       } catch (error) {
         logger.error('Failed to start tuning:', error);
-        return false;
+        throw this.convertOptionalOperationError(error, 'startTuning');
       }
-    });
+    }, { critical: true });
   }
 
   // ===== Level 类控制（AF 增益、静噪、发射功率、MIC 增益、噪声消隐、降噪） =====
@@ -865,12 +1029,12 @@ export class IcomWlanConnection
     return this.runSerializedTask('getAFGain', async () => {
       this.checkConnected();
       try {
-        const reading = await this.rig!.getAFGain({ timeout: 3000 });
-        const value = reading?.normalized ?? 0;
+        const reading = this.requireOptionalValue('getAFGain', await this.rig!.getAFGain({ timeout: 3000 }));
+        const value = reading.normalized;
         logger.debug(`AF gain read: ${(value * 100).toFixed(0)}%`);
         return value;
       } catch (error) {
-        throw this.convertError(error, 'getAFGain');
+        throw this.convertOptionalOperationError(error, 'getAFGain');
       }
     });
   }
@@ -882,7 +1046,7 @@ export class IcomWlanConnection
         this.rig!.setAFGain(value);
         logger.debug(`AF gain set: ${(value * 100).toFixed(0)}%`);
       } catch (error) {
-        throw this.convertError(error, 'setAFGain');
+        throw this.convertOptionalOperationError(error, 'setAFGain');
       }
     });
   }
@@ -891,12 +1055,12 @@ export class IcomWlanConnection
     return this.runSerializedTask('getSQL', async () => {
       this.checkConnected();
       try {
-        const reading = await this.rig!.getSQL({ timeout: 3000 });
-        const value = reading?.normalized ?? 0;
+        const reading = this.requireOptionalValue('getSQL', await this.rig!.getSQL({ timeout: 3000 }));
+        const value = reading.normalized;
         logger.debug(`SQL read: ${(value * 100).toFixed(0)}%`);
         return value;
       } catch (error) {
-        throw this.convertError(error, 'getSQL');
+        throw this.convertOptionalOperationError(error, 'getSQL');
       }
     });
   }
@@ -908,7 +1072,7 @@ export class IcomWlanConnection
         this.rig!.setSQL(value);
         logger.debug(`SQL set: ${(value * 100).toFixed(0)}%`);
       } catch (error) {
-        throw this.convertError(error, 'setSQL');
+        throw this.convertOptionalOperationError(error, 'setSQL');
       }
     });
   }
@@ -917,12 +1081,12 @@ export class IcomWlanConnection
     return this.runSerializedTask('getRFPower', async () => {
       this.checkConnected();
       try {
-        const reading = await this.rig!.getRFPower({ timeout: 3000 });
-        const value = reading?.normalized ?? 0;
+        const reading = this.requireOptionalValue('getRFPower', await this.rig!.getRFPower({ timeout: 3000 }));
+        const value = reading.normalized;
         logger.debug(`RF power read: ${(value * 100).toFixed(0)}%`);
         return value;
       } catch (error) {
-        throw this.convertError(error, 'getRFPower');
+        throw this.convertOptionalOperationError(error, 'getRFPower');
       }
     });
   }
@@ -934,7 +1098,7 @@ export class IcomWlanConnection
         this.rig!.setRFPower(value);
         logger.debug(`RF power set: ${(value * 100).toFixed(0)}%`);
       } catch (error) {
-        throw this.convertError(error, 'setRFPower');
+        throw this.convertOptionalOperationError(error, 'setRFPower');
       }
     });
   }
@@ -943,12 +1107,12 @@ export class IcomWlanConnection
     return this.runSerializedTask('getMicGain', async () => {
       this.checkConnected();
       try {
-        const reading = await this.rig!.getMicGain({ timeout: 3000 });
-        const value = reading?.normalized ?? 0;
+        const reading = this.requireOptionalValue('getMicGain', await this.rig!.getMicGain({ timeout: 3000 }));
+        const value = reading.normalized;
         logger.debug(`MIC gain read: ${(value * 100).toFixed(0)}%`);
         return value;
       } catch (error) {
-        throw this.convertError(error, 'getMicGain');
+        throw this.convertOptionalOperationError(error, 'getMicGain');
       }
     });
   }
@@ -960,7 +1124,7 @@ export class IcomWlanConnection
         this.rig!.setMicGain(value);
         logger.debug(`MIC gain set: ${(value * 100).toFixed(0)}%`);
       } catch (error) {
-        throw this.convertError(error, 'setMicGain');
+        throw this.convertOptionalOperationError(error, 'setMicGain');
       }
     });
   }
@@ -969,12 +1133,12 @@ export class IcomWlanConnection
     return this.runSerializedTask('getNBEnabled', async () => {
       this.checkConnected();
       try {
-        const reading = await this.rig!.getNBLevel({ timeout: 3000 });
-        const value = reading?.normalized ?? 0;
+        const reading = this.requireOptionalValue('getNBEnabled', await this.rig!.getNBLevel({ timeout: 3000 }));
+        const value = reading.normalized;
         logger.debug(`NB level read: ${(value * 100).toFixed(0)}%`);
         return value;
       } catch (error) {
-        throw this.convertError(error, 'getNBEnabled');
+        throw this.convertOptionalOperationError(error, 'getNBEnabled');
       }
     });
   }
@@ -986,7 +1150,7 @@ export class IcomWlanConnection
         this.rig!.setNBLevel(value);
         logger.debug(`NB level set: ${(value * 100).toFixed(0)}%`);
       } catch (error) {
-        throw this.convertError(error, 'setNBEnabled');
+        throw this.convertOptionalOperationError(error, 'setNBEnabled');
       }
     });
   }
@@ -995,12 +1159,12 @@ export class IcomWlanConnection
     return this.runSerializedTask('getNREnabled', async () => {
       this.checkConnected();
       try {
-        const reading = await this.rig!.getNRLevel({ timeout: 3000 });
-        const value = reading?.normalized ?? 0;
+        const reading = this.requireOptionalValue('getNREnabled', await this.rig!.getNRLevel({ timeout: 3000 }));
+        const value = reading.normalized;
         logger.debug(`NR level read: ${(value * 100).toFixed(0)}%`);
         return value;
       } catch (error) {
-        throw this.convertError(error, 'getNREnabled');
+        throw this.convertOptionalOperationError(error, 'getNREnabled');
       }
     });
   }
@@ -1012,9 +1176,626 @@ export class IcomWlanConnection
         this.rig!.setNRLevel(value);
         logger.debug(`NR level set: ${(value * 100).toFixed(0)}%`);
       } catch (error) {
-        throw this.convertError(error, 'setNREnabled');
+        throw this.convertOptionalOperationError(error, 'setNREnabled');
       }
     });
+  }
+
+  async getCompressorEnabled(): Promise<boolean> {
+    return this.readFunctionCapability('getCompressorEnabled', 'COMP');
+  }
+
+  async setCompressorEnabled(enabled: boolean): Promise<void> {
+    await this.writeFunctionCapability('setCompressorEnabled', 'COMP', enabled);
+  }
+
+  async getCompressorLevel(): Promise<number> {
+    return this.readLevelCapability('getCompressorLevel', 'COMP');
+  }
+
+  async setCompressorLevel(value: number): Promise<void> {
+    await this.writeLevelCapability('setCompressorLevel', 'COMP', value);
+  }
+
+  async getMonitorGain(): Promise<number> {
+    return this.readLevelCapability('getMonitorGain', 'MONITOR_GAIN');
+  }
+
+  async setMonitorGain(value: number): Promise<void> {
+    await this.writeLevelCapability('setMonitorGain', 'MONITOR_GAIN', value);
+  }
+
+  async getMonitorEnabled(): Promise<boolean> {
+    return this.readFunctionCapability('getMonitorEnabled', 'MON');
+  }
+
+  async setMonitorEnabled(enabled: boolean): Promise<void> {
+    await this.writeFunctionCapability('setMonitorEnabled', 'MON', enabled);
+  }
+
+  async getVOXEnabled(): Promise<boolean> {
+    return this.readFunctionCapability('getVOXEnabled', 'VOX');
+  }
+
+  async setVOXEnabled(enabled: boolean): Promise<void> {
+    await this.writeFunctionCapability('setVOXEnabled', 'VOX', enabled);
+  }
+
+  async getLockMode(): Promise<boolean> {
+    return this.readFunctionCapability('getLockMode', 'LOCK');
+  }
+
+  async setLockMode(enabled: boolean): Promise<void> {
+    await this.writeFunctionCapability('setLockMode', 'LOCK', enabled);
+  }
+
+  async getAutoNotchEnabled(): Promise<boolean> {
+    return this.readFunctionCapability('getAutoNotchEnabled', 'ANF');
+  }
+
+  async setAutoNotchEnabled(enabled: boolean): Promise<void> {
+    await this.writeFunctionCapability('setAutoNotchEnabled', 'ANF', enabled);
+  }
+
+  async getManualNotchEnabled(): Promise<boolean> {
+    return this.readFunctionCapability('getManualNotchEnabled', 'MN');
+  }
+
+  async setManualNotchEnabled(enabled: boolean): Promise<void> {
+    await this.writeFunctionCapability('setManualNotchEnabled', 'MN', enabled);
+  }
+
+  async getRitEnabled(): Promise<boolean> {
+    return this.readFunctionCapability('getRitEnabled', 'RIT');
+  }
+
+  async setRitEnabled(enabled: boolean): Promise<void> {
+    await this.writeFunctionCapability('setRitEnabled', 'RIT', enabled);
+  }
+
+  async getXitEnabled(): Promise<boolean> {
+    return this.readFunctionCapability('getXitEnabled', 'XIT');
+  }
+
+  async setXitEnabled(enabled: boolean): Promise<void> {
+    await this.writeFunctionCapability('setXitEnabled', 'XIT', enabled);
+  }
+
+  async getToneEnabled(): Promise<boolean> {
+    return this.readFunctionCapability('getToneEnabled', 'TONE');
+  }
+
+  async setToneEnabled(enabled: boolean): Promise<void> {
+    await this.writeFunctionCapability('setToneEnabled', 'TONE', enabled);
+  }
+
+  async getToneSquelchEnabled(): Promise<boolean> {
+    return this.readFunctionCapability('getToneSquelchEnabled', 'TSQL');
+  }
+
+  async setToneSquelchEnabled(enabled: boolean): Promise<void> {
+    await this.writeFunctionCapability('setToneSquelchEnabled', 'TSQL', enabled);
+  }
+
+  async getBeepEnabled(): Promise<boolean> {
+    return this.runSerializedTask('getBeepEnabled', async () => {
+      this.checkConnected();
+      try {
+        const value = this.requireOptionalValue('getBeepEnabled', await this.rig!.getBeepEnabled({ timeout: 3000 }));
+        return Boolean(value);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getBeepEnabled');
+      }
+    });
+  }
+
+  async setBeepEnabled(enabled: boolean): Promise<void> {
+    await this.runSerializedTask('setBeepEnabled', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setBeepEnabled(enabled);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setBeepEnabled');
+      }
+    });
+  }
+
+  async getRFGain(): Promise<number> { return this.readLevelCapability('getRFGain', 'RF'); }
+  async setRFGain(value: number): Promise<void> { await this.writeLevelCapability('setRFGain', 'RF', value); }
+  async getIFShift(): Promise<number> { return this.readLevelCapability('getIFShift', 'IF'); }
+  async setIFShift(value: number): Promise<void> { await this.writeLevelCapability('setIFShift', 'IF', value); }
+  async getPbtIn(): Promise<number> { return this.readLevelCapability('getPbtIn', 'PBT_IN'); }
+  async setPbtIn(value: number): Promise<void> { await this.writeLevelCapability('setPbtIn', 'PBT_IN', value); }
+  async getPbtOut(): Promise<number> { return this.readLevelCapability('getPbtOut', 'PBT_OUT'); }
+  async setPbtOut(value: number): Promise<void> { await this.writeLevelCapability('setPbtOut', 'PBT_OUT', value); }
+  async getCwPitch(): Promise<number> { return this.readLevelCapability('getCwPitch', 'CWPITCH'); }
+  async setCwPitch(hz: number): Promise<void> { await this.writeLevelCapability('setCwPitch', 'CWPITCH', hz); }
+  async getKeySpeed(): Promise<number> { return this.readLevelCapability('getKeySpeed', 'KEYSPD'); }
+  async setKeySpeed(wpm: number): Promise<void> { await this.writeLevelCapability('setKeySpeed', 'KEYSPD', wpm); }
+  async getNotchRaw(): Promise<number> { return this.readLevelCapability('getNotchRaw', 'NOTCHF_RAW'); }
+  async setNotchRaw(value: number): Promise<void> { await this.writeLevelCapability('setNotchRaw', 'NOTCHF_RAW', value); }
+  async getVoxGain(): Promise<number> { return this.readLevelCapability('getVoxGain', 'VOXGAIN'); }
+  async setVoxGain(value: number): Promise<void> { await this.writeLevelCapability('setVoxGain', 'VOXGAIN', value); }
+  async getAntiVox(): Promise<number> { return this.readLevelCapability('getAntiVox', 'ANTIVOX'); }
+  async setAntiVox(value: number): Promise<void> { await this.writeLevelCapability('setAntiVox', 'ANTIVOX', value); }
+
+  async getBreakInDelay(): Promise<number> {
+    return this.runSerializedTask('getBreakInDelay', async () => {
+      this.checkConnected();
+      try {
+        const reading = this.requireOptionalValue('getBreakInDelay', await this.rig!.getBreakInDelay({ timeout: 3000 }));
+        return reading.normalized;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getBreakInDelay');
+      }
+    });
+  }
+
+  async setBreakInDelay(value: number): Promise<void> {
+    await this.runSerializedTask('setBreakInDelay', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setBreakInDelay(value);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setBreakInDelay');
+      }
+    });
+  }
+
+  async getDriveGain(): Promise<number> { return this.readLevelCapability('getDriveGain', 'DRIVE_GAIN'); }
+  async setDriveGain(value: number): Promise<void> { await this.writeLevelCapability('setDriveGain', 'DRIVE_GAIN', value); }
+  async getDigiSelLevel(): Promise<number> { return this.readLevelCapability('getDigiSelLevel', 'DIGI_SEL_LEVEL'); }
+  async setDigiSelLevel(value: number): Promise<void> { await this.writeLevelCapability('setDigiSelLevel', 'DIGI_SEL_LEVEL', value); }
+
+  async getAgcMode(): Promise<string> {
+    const value = await this.readLevelCapability('getAgcMode', 'AGC');
+    return ICOM_AGC_CODE_TO_MODE[Math.round(value)] ?? 'off';
+  }
+
+  async setAgcMode(mode: string): Promise<void> {
+    const normalized = mode.trim().toLowerCase();
+    const code = ICOM_AGC_MODE_TO_CODE[normalized];
+    if (code === undefined) {
+      throw this.optionalOperationUnavailable('setAgcMode', `Unsupported AGC mode: ${mode}`);
+    }
+    await this.writeLevelCapability('setAgcMode', 'AGC', code);
+  }
+
+  async getSupportedAgcModes(): Promise<string[]> {
+    return this.hasProfileLevel('AGC') ? Object.values(ICOM_AGC_CODE_TO_MODE) : [];
+  }
+
+  async getRitOffset(): Promise<number> {
+    return this.runSerializedTask('getRitOffset', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getRitOffset', await this.rig!.getRitOffset({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getRitOffset');
+      }
+    });
+  }
+
+  async setRitOffset(offsetHz: number): Promise<void> {
+    await this.runSerializedTask('setRitOffset', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setRitOffset(offsetHz);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setRitOffset');
+      }
+    });
+  }
+
+  async getXitOffset(): Promise<number> {
+    return this.runSerializedTask('getXitOffset', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getXitOffset', await this.rig!.getXitOffset({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getXitOffset');
+      }
+    });
+  }
+
+  async setXitOffset(offsetHz: number): Promise<void> {
+    await this.runSerializedTask('setXitOffset', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setXitOffset(offsetHz);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setXitOffset');
+      }
+    });
+  }
+
+  async getMaxRit(): Promise<number> { return 9999; }
+  async getMaxXit(): Promise<number> { return 9999; }
+
+  async getBreakInMode(): Promise<string> {
+    return this.runSerializedTask('getBreakInMode', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getBreakInMode', await this.rig!.getBreakInMode({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getBreakInMode');
+      }
+    });
+  }
+
+  async setBreakInMode(mode: string): Promise<void> {
+    await this.runSerializedTask('setBreakInMode', async () => {
+      this.checkConnected();
+      const normalized = mode === 'semi' || mode === 'full' ? mode : 'off';
+      try {
+        this.rig!.setBreakInMode(normalized);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setBreakInMode');
+      }
+    });
+  }
+
+  async getVfo(): Promise<string> {
+    return this.runSerializedTask('getVfo', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getVfo', await this.rig!.getVfo({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getVfo');
+      }
+    });
+  }
+
+  async setVfo(vfo: string): Promise<void> {
+    await this.runSerializedTask('setVfo', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setVfo(vfo as IcomVfoName);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setVfo');
+      }
+    }, { critical: true });
+  }
+
+  async getSupportedVfos(): Promise<string[]> {
+    return this.profileList<string>('vfos');
+  }
+
+  async getSplitEnabled(): Promise<boolean> {
+    return this.runSerializedTask('getSplitEnabled', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getSplitEnabled', await this.rig!.getSplitEnabled({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getSplitEnabled');
+      }
+    });
+  }
+
+  async setSplitEnabled(enabled: boolean): Promise<void> {
+    await this.runSerializedTask('setSplitEnabled', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setSplitEnabled(enabled);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setSplitEnabled');
+      }
+    }, { critical: true });
+  }
+
+  async getTuningStep(): Promise<number> {
+    return this.runSerializedTask('getTuningStep', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getTuningStep', await this.rig!.getTuningStep({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getTuningStep');
+      }
+    });
+  }
+
+  async setTuningStep(stepHz: number): Promise<void> {
+    await this.runSerializedTask('setTuningStep', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setTuningStep(stepHz);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setTuningStep');
+      }
+    });
+  }
+
+  async getSupportedTuningSteps(): Promise<number[]> {
+    return this.profileList<{ hz: number }>('tuningSteps')
+      .map((step) => step.hz)
+      .filter((step) => Number.isFinite(step) && step > 0)
+      .sort((left, right) => left - right);
+  }
+
+  async getRepeaterShift(): Promise<string> {
+    return this.runSerializedTask('getRepeaterShift', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getRepeaterShift', await this.rig!.getRepeaterShift({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getRepeaterShift');
+      }
+    });
+  }
+
+  async setRepeaterShift(shift: string): Promise<void> {
+    await this.runSerializedTask('setRepeaterShift', async () => {
+      this.checkConnected();
+      const normalized = shift === 'minus' || shift === 'plus' ? shift : 'none';
+      try {
+        this.rig!.setRepeaterShift(normalized);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setRepeaterShift');
+      }
+    });
+  }
+
+  async getRepeaterOffset(): Promise<number> {
+    return this.runSerializedTask('getRepeaterOffset', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getRepeaterOffset', await this.rig!.getRepeaterOffset({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getRepeaterOffset');
+      }
+    });
+  }
+
+  async setRepeaterOffset(offsetHz: number): Promise<void> {
+    await this.runSerializedTask('setRepeaterOffset', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setRepeaterOffset(offsetHz);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setRepeaterOffset');
+      }
+    });
+  }
+
+  async getCtcssTone(): Promise<number> {
+    return this.runSerializedTask('getCtcssTone', async () => {
+      this.checkConnected();
+      try {
+        const hz = this.requireOptionalValue('getCtcssTone', await this.rig!.getToneFrequency({ timeout: 3000 }));
+        return Math.round(hz * 10);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getCtcssTone');
+      }
+    });
+  }
+
+  async setCtcssTone(tone: number): Promise<void> {
+    await this.runSerializedTask('setCtcssTone', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setToneFrequency(tone / 10);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setCtcssTone');
+      }
+    });
+  }
+
+  async getAvailableCtcssTones(): Promise<number[]> {
+    return this.getActiveProfile()?.tone === false ? [] : ICOM_CTCSS_TONES_TENTHS_HZ;
+  }
+
+  async getAudioIfMode(): Promise<string> {
+    return this.runSerializedTask('getAudioIfMode', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getAudioIfMode', await this.rig!.getAudioIfMode({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getAudioIfMode');
+      }
+    });
+  }
+
+  async setAudioIfMode(source: string): Promise<void> {
+    await this.runSerializedTask('setAudioIfMode', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setAudioIfMode(source as IcomAudioIfSource);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setAudioIfMode');
+      }
+    });
+  }
+
+  async getSupportedAudioIfModes(): Promise<string[]> {
+    return this.profileList<string>('audioIfSources')
+      .filter((source) => ICOM_AUDIO_IF_SOURCES.includes(source as IcomAudioIfSource));
+  }
+
+  async getSpectrumDataOutput(): Promise<boolean> {
+    return this.runSerializedTask('getSpectrumDataOutput', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getSpectrumDataOutput', await this.rig!.getSpectrumDataOutput({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getSpectrumDataOutput');
+      }
+    });
+  }
+
+  async setSpectrumDataOutput(enabled: boolean): Promise<void> {
+    await this.runSerializedTask('setSpectrumDataOutput', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setSpectrumDataOutput(enabled);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setSpectrumDataOutput');
+      }
+    });
+  }
+
+  async getSpectrumHold(): Promise<boolean> {
+    return this.runSerializedTask('getSpectrumHold', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getSpectrumHold', await this.rig!.getSpectrumHold({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getSpectrumHold');
+      }
+    });
+  }
+
+  async setSpectrumHold(enabled: boolean): Promise<void> {
+    await this.runSerializedTask('setSpectrumHold', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setSpectrumHold(enabled);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setSpectrumHold');
+      }
+    });
+  }
+
+  async getSpectrumSpeed(): Promise<string> {
+    return this.runSerializedTask('getSpectrumSpeed', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getSpectrumSpeed', await this.rig!.getSpectrumSpeed({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getSpectrumSpeed');
+      }
+    });
+  }
+
+  async setSpectrumSpeed(speed: string): Promise<void> {
+    await this.runSerializedTask('setSpectrumSpeed', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setSpectrumSpeed(speed as IcomSpectrumSpeed);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setSpectrumSpeed');
+      }
+    });
+  }
+
+  async getSupportedSpectrumSpeeds(): Promise<string[]> {
+    return this.hasAdvancedSpectrumControl('speed') ? ICOM_SPECTRUM_SPEEDS : [];
+  }
+
+  async getSpectrumRef(): Promise<number> {
+    return this.runSerializedTask('getSpectrumRef', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getSpectrumRef', await this.rig!.getSpectrumRef({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getSpectrumRef');
+      }
+    });
+  }
+
+  async setSpectrumRef(db: number): Promise<void> {
+    await this.runSerializedTask('setSpectrumRef', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setSpectrumRef(db);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setSpectrumRef');
+      }
+    });
+  }
+
+  async getSpectrumAverage(): Promise<number> { return this.readLevelCapability('getSpectrumAverage', 'SPECTRUM_AVG'); }
+  async setSpectrumAverage(value: number): Promise<void> { await this.writeLevelCapability('setSpectrumAverage', 'SPECTRUM_AVG', value); }
+
+  async getSpectrumVbw(): Promise<number> {
+    return this.runSerializedTask('getSpectrumVbw', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getSpectrumVbw', await this.rig!.getSpectrumVbw({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getSpectrumVbw');
+      }
+    });
+  }
+
+  async setSpectrumVbw(value: number): Promise<void> {
+    await this.runSerializedTask('setSpectrumVbw', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setSpectrumVbw(value);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setSpectrumVbw');
+      }
+    });
+  }
+
+  async getSpectrumRbw(): Promise<number> {
+    return this.runSerializedTask('getSpectrumRbw', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getSpectrumRbw', await this.rig!.getSpectrumRbw({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getSpectrumRbw');
+      }
+    });
+  }
+
+  async setSpectrumRbw(value: number): Promise<void> {
+    await this.runSerializedTask('setSpectrumRbw', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setSpectrumRbw(value);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setSpectrumRbw');
+      }
+    });
+  }
+
+  async getSpectrumDuringTx(): Promise<boolean> {
+    return this.runSerializedTask('getSpectrumDuringTx', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getSpectrumDuringTx', await this.rig!.getSpectrumDuringTx({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getSpectrumDuringTx');
+      }
+    });
+  }
+
+  async setSpectrumDuringTx(enabled: boolean): Promise<void> {
+    await this.runSerializedTask('setSpectrumDuringTx', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setSpectrumDuringTx(enabled);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setSpectrumDuringTx');
+      }
+    });
+  }
+
+  async getSpectrumCenterType(): Promise<string> {
+    return this.runSerializedTask('getSpectrumCenterType', async () => {
+      this.checkConnected();
+      try {
+        return this.requireOptionalValue('getSpectrumCenterType', await this.rig!.getSpectrumCenterType({ timeout: 3000 }));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getSpectrumCenterType');
+      }
+    });
+  }
+
+  async setSpectrumCenterType(type: string): Promise<void> {
+    await this.runSerializedTask('setSpectrumCenterType', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setSpectrumCenterType(type as IcomSpectrumCenterType);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setSpectrumCenterType');
+      }
+    });
+  }
+
+  async getSupportedSpectrumCenterTypes(): Promise<string[]> {
+    return this.hasAdvancedSpectrumControl('centerType') ? ICOM_SPECTRUM_CENTER_TYPES : [];
   }
 
   /**

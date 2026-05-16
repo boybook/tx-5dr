@@ -320,6 +320,70 @@ describe('RadioCapabilityManager', () => {
     manager.onDisconnected();
   });
 
+  it('probes ICOM WLAN 0.6.2 profile-gated capability methods through generic descriptors', async () => {
+    const manager = new RadioCapabilityManager();
+    const setMonitorEnabled = vi.fn().mockResolvedValue(undefined);
+    const setRFGain = vi.fn().mockResolvedValue(undefined);
+    const setSpectrumSpeed = vi.fn().mockResolvedValue(undefined);
+    const connection = new MockConnection(RadioConnectionType.ICOM_WLAN, {
+      getMonitorEnabled: vi.fn().mockResolvedValue(true),
+      setMonitorEnabled,
+      getRFGain: vi.fn().mockResolvedValue(0.4),
+      setRFGain,
+      getRitEnabled: vi.fn().mockResolvedValue(false),
+      setRitEnabled: vi.fn().mockResolvedValue(undefined),
+      getTuningStep: vi.fn().mockResolvedValue(50),
+      setTuningStep: vi.fn().mockResolvedValue(undefined),
+      getSupportedTuningSteps: vi.fn().mockResolvedValue([10, 50, 100]),
+      getAudioIfMode: vi.fn().mockResolvedValue('wlan'),
+      setAudioIfMode: vi.fn().mockResolvedValue(undefined),
+      getSupportedAudioIfModes: vi.fn().mockResolvedValue(['default', 'wlan']),
+      getSpectrumDataOutput: vi.fn().mockResolvedValue(true),
+      setSpectrumDataOutput: vi.fn().mockResolvedValue(undefined),
+      getSpectrumSpeed: vi.fn().mockResolvedValue('fast'),
+      setSpectrumSpeed,
+      getSupportedSpectrumSpeeds: vi.fn().mockResolvedValue(['slow', 'fast']),
+    });
+
+    let latestSnapshot = manager.getCapabilitySnapshot();
+    manager.on('capabilityList', (snapshot) => {
+      latestSnapshot = snapshot;
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+
+    expect(getCapability(latestSnapshot.capabilities, 'monitor_enabled')).toMatchObject({
+      supported: true,
+      value: true,
+    });
+    expect(getCapability(latestSnapshot.capabilities, 'rf_gain')).toMatchObject({
+      supported: true,
+      value: 0.4,
+    });
+    expect(getCapability(latestSnapshot.capabilities, 'rit_enabled')).toMatchObject({
+      supported: true,
+      value: false,
+    });
+    expect(getDescriptor(latestSnapshot.descriptors, 'tuning_step')).toMatchObject({
+      options: [{ value: 10 }, { value: 50 }, { value: 100 }],
+    });
+    expect(getDescriptor(latestSnapshot.descriptors, 'audio_if_mode')).toMatchObject({
+      options: [{ value: 'default' }, { value: 'wlan' }],
+    });
+    expect(getDescriptor(latestSnapshot.descriptors, 'spectrum_speed')).toMatchObject({
+      options: [{ value: 'slow' }, { value: 'fast' }],
+    });
+
+    await expect(manager.writeCapability('monitor_enabled', false)).resolves.toBeUndefined();
+    await expect(manager.writeCapability('rf_gain', 0.8)).resolves.toBeUndefined();
+    await expect(manager.writeCapability('spectrum_speed', 'slow')).resolves.toBeUndefined();
+    expect(setMonitorEnabled).toHaveBeenCalledWith(false);
+    expect(setRFGain).toHaveBeenCalledWith(0.8);
+    expect(setSpectrumSpeed).toHaveBeenCalledWith('slow');
+
+    manager.onDisconnected();
+  });
+
   it('emits tuner capability updates when only tuner meta changes', async () => {
     const manager = new RadioCapabilityManager();
     const connection = new MockConnection(RadioConnectionType.ICOM_WLAN, {

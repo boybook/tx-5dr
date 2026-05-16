@@ -18,6 +18,39 @@ import {
   isHamlibStaticVfoOpSupported,
 } from './definition-builders.js';
 import type { CapabilitySupportSource, ProbeSupportResult } from './types.js';
+import type { CapabilityRuntimeValue } from './types.js';
+
+type DynamicConnectionMethod = (...args: unknown[]) => unknown;
+
+function getDynamicMethod(
+  conn: Parameters<CapabilityDefinition['probeSupport']>[0],
+  methodName: string,
+): DynamicConnectionMethod | null {
+  const candidate = (conn as unknown as Record<string, unknown>)[methodName];
+  return typeof candidate === 'function' ? candidate as DynamicConnectionMethod : null;
+}
+
+function requireDynamicMethod(
+  conn: Parameters<CapabilityDefinition['probeSupport']>[0],
+  methodName: string,
+): DynamicConnectionMethod {
+  const method = getDynamicMethod(conn, methodName);
+  if (!method) {
+    throw new Error(`Radio capability method is missing: ${methodName}`);
+  }
+  return method;
+}
+
+function asRuntimeValue(value: unknown): CapabilityRuntimeValue {
+  return value as CapabilityRuntimeValue;
+}
+
+function asOptionValues(values: unknown, fallback: Array<string | number>): Array<string | number> {
+  if (!Array.isArray(values)) return fallback;
+  return values.filter((value): value is string | number => (
+    typeof value === 'string' || typeof value === 'number'
+  ));
+}
 
 function getHamlibConfigType(conn: Parameters<CapabilityDefinition['probeSupport']>[0]): string | undefined {
   return conn.getConnectionInfo?.().config?.type;
@@ -55,6 +88,167 @@ function probeHamlibStaticVfoOp(conn: Parameters<CapabilityDefinition['probeSupp
     return staticSupportResult(true);
   }
   return shouldTrustNegativeHamlibStaticCaps(conn) ? staticSupportResult(false) : null;
+}
+
+function createRuntimeBooleanDefinition(
+  id: string,
+  category: CapabilityDefinition['descriptor']['category'],
+  readMethod: string,
+  writeMethod: string,
+  staticFunction?: string,
+): CapabilityDefinition {
+  return {
+    id,
+    descriptor: createBooleanDescriptor(
+      id,
+      category,
+      `radio:capability.${id}.label`,
+      `radio:capability.${id}.description`,
+    ),
+    probeSupport: async (conn) => {
+      const reader = getDynamicMethod(conn, readMethod);
+      if (!reader) return false;
+      if (staticFunction) {
+        const staticProbe = probeHamlibStaticFunction(conn, staticFunction);
+        if (staticProbe) return staticProbe;
+      }
+      await reader.call(conn);
+      return { supported: true, source: 'runtime-probe' };
+    },
+    read: async (conn) => asRuntimeValue(await requireDynamicMethod(conn, readMethod).call(conn)),
+    write: async (conn, value) => {
+      await requireDynamicMethod(conn, writeMethod).call(conn, Boolean(value));
+    },
+  };
+}
+
+function createRuntimePercentDefinition(
+  id: string,
+  category: CapabilityDefinition['descriptor']['category'],
+  readMethod: string,
+  writeMethod: string,
+  staticLevel?: string,
+): CapabilityDefinition {
+  return {
+    id,
+    descriptor: createPercentDescriptor(
+      id,
+      category,
+      `radio:capability.${id}.label`,
+      `radio:capability.${id}.description`,
+    ),
+    probeSupport: async (conn) => {
+      const reader = getDynamicMethod(conn, readMethod);
+      if (!reader) return false;
+      if (staticLevel) {
+        const staticProbe = probeHamlibStaticLevel(conn, staticLevel);
+        if (staticProbe) return staticProbe;
+      }
+      await reader.call(conn);
+      return { supported: true, source: 'runtime-probe' };
+    },
+    read: async (conn) => asRuntimeValue(await requireDynamicMethod(conn, readMethod).call(conn)),
+    write: async (conn, value) => {
+      await requireDynamicMethod(conn, writeMethod).call(conn, value as number);
+    },
+  };
+}
+
+function createRuntimeNumberDefinition(
+  id: string,
+  category: CapabilityDefinition['descriptor']['category'],
+  readMethod: string,
+  writeMethod: string,
+  range: { min: number; max: number; step?: number },
+  display?: CapabilityDefinition['descriptor']['display'],
+): CapabilityDefinition {
+  return {
+    id,
+    descriptor: {
+      id,
+      category,
+      valueType: 'number',
+      range,
+      readable: true,
+      writable: true,
+      updateMode: 'polling',
+      pollIntervalMs: 10000,
+      labelI18nKey: `radio:capability.${id}.label`,
+      descriptionI18nKey: `radio:capability.${id}.description`,
+      display,
+      hasSurfaceControl: false,
+    },
+    probeSupport: async (conn) => {
+      const reader = getDynamicMethod(conn, readMethod);
+      if (!reader) return false;
+      await reader.call(conn);
+      return { supported: true, source: 'runtime-probe' };
+    },
+    read: async (conn) => asRuntimeValue(await requireDynamicMethod(conn, readMethod).call(conn)),
+    write: async (conn, value) => {
+      await requireDynamicMethod(conn, writeMethod).call(conn, value as number);
+    },
+  };
+}
+
+function createRuntimeEnumDefinition(
+  id: string,
+  category: CapabilityDefinition['descriptor']['category'],
+  readMethod: string,
+  writeMethod: string,
+  options: Array<string | number>,
+  getOptionsMethod?: string,
+): CapabilityDefinition {
+  const buildOptions = (values: Array<string | number>) => values.map((value) => createOption(value));
+  return {
+    id,
+    descriptor: {
+      id,
+      category,
+      valueType: 'enum',
+      options: buildOptions(options),
+      readable: true,
+      writable: true,
+      updateMode: 'polling',
+      pollIntervalMs: 10000,
+      labelI18nKey: `radio:capability.${id}.label`,
+      descriptionI18nKey: `radio:capability.${id}.description`,
+      display: { mode: 'value', unit: 'state' },
+      hasSurfaceControl: false,
+    },
+    resolveDescriptor: getOptionsMethod ? async (conn) => ({
+      id,
+      category,
+      valueType: 'enum',
+      options: buildOptions(
+        asOptionValues(await requireDynamicMethod(conn, getOptionsMethod).call(conn), options),
+      ),
+      readable: true,
+      writable: true,
+      updateMode: 'polling',
+      pollIntervalMs: 10000,
+      labelI18nKey: `radio:capability.${id}.label`,
+      descriptionI18nKey: `radio:capability.${id}.description`,
+      display: { mode: 'value', unit: 'state' },
+      hasSurfaceControl: false,
+    }) : undefined,
+    probeSupport: async (conn) => {
+      const reader = getDynamicMethod(conn, readMethod);
+      if (!reader) return false;
+      if (getOptionsMethod) {
+        const getOptions = getDynamicMethod(conn, getOptionsMethod);
+        if (!getOptions) return false;
+        const values = await getOptions.call(conn);
+        if (!Array.isArray(values) || values.length === 0) return false;
+      }
+      await reader.call(conn);
+      return { supported: true, source: 'runtime-probe' };
+    },
+    read: async (conn) => asRuntimeValue(await requireDynamicMethod(conn, readMethod).call(conn)),
+    write: async (conn, value) => {
+      await requireDynamicMethod(conn, writeMethod).call(conn, value);
+    },
+  };
 }
 
 function createDefinitions(): CapabilityDefinition[] {
@@ -266,6 +460,10 @@ function createDefinitions(): CapabilityDefinition[] {
       read: (conn) => conn.getMonitorGain!(),
       write: (conn, value) => conn.setMonitorGain!(value as number),
     },
+    createRuntimeBooleanDefinition('monitor_enabled', 'audio', 'getMonitorEnabled', 'setMonitorEnabled', 'MON'),
+    createRuntimePercentDefinition('vox_gain', 'audio', 'getVoxGain', 'setVoxGain', 'VOXGAIN'),
+    createRuntimePercentDefinition('anti_vox', 'audio', 'getAntiVox', 'setAntiVox', 'ANTIVOX'),
+    createRuntimePercentDefinition('break_in_delay', 'operation', 'getBreakInDelay', 'setBreakInDelay', 'BKINDL'),
     {
       id: 'nb',
       descriptor: createPercentDescriptor(
@@ -302,6 +500,29 @@ function createDefinitions(): CapabilityDefinition[] {
       read: (conn) => conn.getNREnabled!(),
       write: (conn, value) => conn.setNREnabled!(value as number),
     },
+    createRuntimePercentDefinition('rf_gain', 'rf', 'getRFGain', 'setRFGain', 'RF'),
+    createRuntimePercentDefinition('if_shift', 'rf', 'getIFShift', 'setIFShift', 'IF'),
+    createRuntimePercentDefinition('pbt_in', 'rf', 'getPbtIn', 'setPbtIn', 'PBT_IN'),
+    createRuntimePercentDefinition('pbt_out', 'rf', 'getPbtOut', 'setPbtOut', 'PBT_OUT'),
+    createRuntimeNumberDefinition(
+      'cw_pitch',
+      'operation',
+      'getCwPitch',
+      'setCwPitch',
+      { min: 300, max: 900, step: 1 },
+      { mode: 'value', unit: 'Hz', decimals: 0 },
+    ),
+    createRuntimeNumberDefinition(
+      'key_speed',
+      'operation',
+      'getKeySpeed',
+      'setKeySpeed',
+      { min: 6, max: 48, step: 1 },
+      { mode: 'value', decimals: 0 },
+    ),
+    createRuntimePercentDefinition('notch_raw', 'rf', 'getNotchRaw', 'setNotchRaw', 'NOTCHF_RAW'),
+    createRuntimePercentDefinition('drive_gain', 'rf', 'getDriveGain', 'setDriveGain', 'DRIVE_GAIN'),
+    createRuntimePercentDefinition('digi_sel_level', 'rf', 'getDigiSelLevel', 'setDigiSelLevel', 'DIGI_SEL_LEVEL'),
     {
       id: 'lock_mode',
       descriptor: createBooleanDescriptor(
@@ -354,6 +575,20 @@ function createDefinitions(): CapabilityDefinition[] {
       read: (conn) => conn.getVOXEnabled!(),
       write: (conn, value) => conn.setVOXEnabled!(Boolean(value)),
     },
+    createRuntimeBooleanDefinition('auto_notch', 'rf', 'getAutoNotchEnabled', 'setAutoNotchEnabled', 'ANF'),
+    createRuntimeBooleanDefinition('manual_notch', 'rf', 'getManualNotchEnabled', 'setManualNotchEnabled', 'MN'),
+    createRuntimeBooleanDefinition('rit_enabled', 'operation', 'getRitEnabled', 'setRitEnabled', 'RIT'),
+    createRuntimeBooleanDefinition('xit_enabled', 'operation', 'getXitEnabled', 'setXitEnabled', 'XIT'),
+    createRuntimeBooleanDefinition('tone_enabled', 'operation', 'getToneEnabled', 'setToneEnabled', 'TONE'),
+    createRuntimeBooleanDefinition('tone_squelch_enabled', 'operation', 'getToneSquelchEnabled', 'setToneSquelchEnabled', 'TSQL'),
+    createRuntimeBooleanDefinition('beep_enabled', 'system', 'getBeepEnabled', 'setBeepEnabled'),
+    createRuntimeEnumDefinition(
+      'break_in_mode',
+      'operation',
+      'getBreakInMode',
+      'setBreakInMode',
+      ['off', 'semi', 'full'],
+    ),
     {
       id: 'agc_mode',
       descriptor: {
@@ -513,6 +748,23 @@ function createDefinitions(): CapabilityDefinition[] {
       read: (conn) => conn.getModeBandwidth!(),
       write: (conn, value) => conn.setModeBandwidth!(value as RadioModeBandwidth),
     },
+    createRuntimeBooleanDefinition('split_enabled', 'operation', 'getSplitEnabled', 'setSplitEnabled'),
+    createRuntimeEnumDefinition(
+      'vfo_select',
+      'operation',
+      'getVfo',
+      'setVfo',
+      ['A', 'B', 'MAIN', 'SUB'],
+      'getSupportedVfos',
+    ),
+    createRuntimeEnumDefinition(
+      'audio_if_mode',
+      'audio',
+      'getAudioIfMode',
+      'setAudioIfMode',
+      ['default', 'wlan', 'lan', 'acc'],
+      'getSupportedAudioIfModes',
+    ),
     {
       id: 'rit_offset',
       descriptor: {
@@ -726,6 +978,48 @@ function createDefinitions(): CapabilityDefinition[] {
       read: (conn) => conn.getCtcssTone!(),
       write: (conn, value) => conn.setCtcssTone!(value as number),
     },
+    createRuntimeBooleanDefinition('spectrum_data_output', 'rf', 'getSpectrumDataOutput', 'setSpectrumDataOutput'),
+    createRuntimeBooleanDefinition('spectrum_hold', 'rf', 'getSpectrumHold', 'setSpectrumHold'),
+    createRuntimeEnumDefinition(
+      'spectrum_speed',
+      'rf',
+      'getSpectrumSpeed',
+      'setSpectrumSpeed',
+      ['slow', 'mid', 'fast'],
+      'getSupportedSpectrumSpeeds',
+    ),
+    createRuntimeNumberDefinition(
+      'spectrum_ref',
+      'rf',
+      'getSpectrumRef',
+      'setSpectrumRef',
+      { min: -20, max: 20, step: 0.5 },
+      { mode: 'value', decimals: 1, signed: true },
+    ),
+    createRuntimePercentDefinition('spectrum_average', 'rf', 'getSpectrumAverage', 'setSpectrumAverage', 'SPECTRUM_AVG'),
+    createRuntimeEnumDefinition(
+      'spectrum_vbw',
+      'rf',
+      'getSpectrumVbw',
+      'setSpectrumVbw',
+      [0, 1],
+    ),
+    createRuntimeEnumDefinition(
+      'spectrum_rbw',
+      'rf',
+      'getSpectrumRbw',
+      'setSpectrumRbw',
+      [0, 1, 2],
+    ),
+    createRuntimeBooleanDefinition('spectrum_during_tx', 'rf', 'getSpectrumDuringTx', 'setSpectrumDuringTx'),
+    createRuntimeEnumDefinition(
+      'spectrum_center_type',
+      'rf',
+      'getSpectrumCenterType',
+      'setSpectrumCenterType',
+      ['filter-center', 'carrier-point-center', 'carrier-point-center-abs'],
+      'getSupportedSpectrumCenterTypes',
+    ),
     {
       id: 'dcs_code',
       descriptor: {

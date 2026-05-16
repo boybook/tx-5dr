@@ -557,6 +557,9 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    */
   setMonitorGain?(value: number): Promise<void>;
 
+  getMonitorEnabled?(): Promise<boolean>;
+  setMonitorEnabled?(enabled: boolean): Promise<void>;
+
   /**
    * 获取噪声消隐电平（0.0–1.0，0 = 关闭）
    * @optional Hamlib: getLevel('NB'), icom-wlan: CI-V 0x14 0x12
@@ -613,6 +616,21 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    */
   setVOXEnabled?(enabled: boolean): Promise<void>;
 
+  getAutoNotchEnabled?(): Promise<boolean>;
+  setAutoNotchEnabled?(enabled: boolean): Promise<void>;
+  getManualNotchEnabled?(): Promise<boolean>;
+  setManualNotchEnabled?(enabled: boolean): Promise<void>;
+  getRitEnabled?(): Promise<boolean>;
+  setRitEnabled?(enabled: boolean): Promise<void>;
+  getXitEnabled?(): Promise<boolean>;
+  setXitEnabled?(enabled: boolean): Promise<void>;
+  getToneEnabled?(): Promise<boolean>;
+  setToneEnabled?(enabled: boolean): Promise<void>;
+  getToneSquelchEnabled?(): Promise<boolean>;
+  setToneSquelchEnabled?(enabled: boolean): Promise<void>;
+  getBeepEnabled?(): Promise<boolean>;
+  setBeepEnabled?(enabled: boolean): Promise<void>;
+
   /**
    * 获取 AGC 模式。
    * 推荐值：off/superfast/fast/slow/user/medium/auto/long/on
@@ -629,6 +647,61 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * 获取当前连接支持的 AGC 模式列表。
    */
   getSupportedAgcModes?(): Promise<string[]>;
+
+  getRFGain?(): Promise<number>;
+  setRFGain?(value: number): Promise<void>;
+  getIFShift?(): Promise<number>;
+  setIFShift?(value: number): Promise<void>;
+  getPbtIn?(): Promise<number>;
+  setPbtIn?(value: number): Promise<void>;
+  getPbtOut?(): Promise<number>;
+  setPbtOut?(value: number): Promise<void>;
+  getCwPitch?(): Promise<number>;
+  setCwPitch?(hz: number): Promise<void>;
+  getKeySpeed?(): Promise<number>;
+  setKeySpeed?(wpm: number): Promise<void>;
+  getNotchRaw?(): Promise<number>;
+  setNotchRaw?(value: number): Promise<void>;
+  getVoxGain?(): Promise<number>;
+  setVoxGain?(value: number): Promise<void>;
+  getAntiVox?(): Promise<number>;
+  setAntiVox?(value: number): Promise<void>;
+  getBreakInDelay?(): Promise<number>;
+  setBreakInDelay?(value: number): Promise<void>;
+  getDriveGain?(): Promise<number>;
+  setDriveGain?(value: number): Promise<void>;
+  getDigiSelLevel?(): Promise<number>;
+  setDigiSelLevel?(value: number): Promise<void>;
+  getBreakInMode?(): Promise<string>;
+  setBreakInMode?(mode: string): Promise<void>;
+  getVfo?(): Promise<string>;
+  setVfo?(vfo: string): Promise<void>;
+  getSupportedVfos?(): Promise<string[]>;
+  getSplitEnabled?(): Promise<boolean>;
+  setSplitEnabled?(enabled: boolean): Promise<void>;
+  getAudioIfMode?(): Promise<string>;
+  setAudioIfMode?(source: string): Promise<void>;
+  getSupportedAudioIfModes?(): Promise<string[]>;
+  getSpectrumDataOutput?(): Promise<boolean>;
+  setSpectrumDataOutput?(enabled: boolean): Promise<void>;
+  getSpectrumHold?(): Promise<boolean>;
+  setSpectrumHold?(enabled: boolean): Promise<void>;
+  getSpectrumSpeed?(): Promise<string>;
+  setSpectrumSpeed?(speed: string): Promise<void>;
+  getSupportedSpectrumSpeeds?(): Promise<string[]>;
+  getSpectrumRef?(): Promise<number>;
+  setSpectrumRef?(db: number): Promise<void>;
+  getSpectrumAverage?(): Promise<number>;
+  setSpectrumAverage?(value: number): Promise<void>;
+  getSpectrumVbw?(): Promise<number>;
+  setSpectrumVbw?(value: number): Promise<void>;
+  getSpectrumRbw?(): Promise<number>;
+  setSpectrumRbw?(value: number): Promise<void>;
+  getSpectrumDuringTx?(): Promise<boolean>;
+  setSpectrumDuringTx?(enabled: boolean): Promise<void>;
+  getSpectrumCenterType?(): Promise<string>;
+  setSpectrumCenterType?(type: string): Promise<void>;
+  getSupportedSpectrumCenterTypes?(): Promise<string[]>;
 
   /**
    * 获取前置放大（PREAMP）级别，单位 dB。

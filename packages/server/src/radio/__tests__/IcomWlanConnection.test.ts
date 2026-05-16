@@ -35,6 +35,7 @@ import { RadioConnectionState } from '../connections/IRadioConnection.js';
 import { RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 
 type MockRig = {
+  profile?: any;
   setFrequency: ReturnType<typeof vi.fn>;
   setMode: ReturnType<typeof vi.fn>;
   setPtt: ReturnType<typeof vi.fn>;
@@ -52,6 +53,55 @@ type MockRig = {
   setScopeSpan: ReturnType<typeof vi.fn>;
   getSpectrumDisplayState: ReturnType<typeof vi.fn>;
   configureSpectrumDisplay: ReturnType<typeof vi.fn>;
+  getFunction: ReturnType<typeof vi.fn>;
+  setFunction: ReturnType<typeof vi.fn>;
+  getLevel: ReturnType<typeof vi.fn>;
+  setLevel: ReturnType<typeof vi.fn>;
+  readTunerStatus: ReturnType<typeof vi.fn>;
+  setTunerEnabled: ReturnType<typeof vi.fn>;
+  startManualTune: ReturnType<typeof vi.fn>;
+  getBreakInDelay: ReturnType<typeof vi.fn>;
+  setBreakInDelay: ReturnType<typeof vi.fn>;
+  getRitOffset: ReturnType<typeof vi.fn>;
+  setRitOffset: ReturnType<typeof vi.fn>;
+  getXitOffset: ReturnType<typeof vi.fn>;
+  setXitOffset: ReturnType<typeof vi.fn>;
+  getBreakInMode: ReturnType<typeof vi.fn>;
+  setBreakInMode: ReturnType<typeof vi.fn>;
+  getVfo: ReturnType<typeof vi.fn>;
+  setVfo: ReturnType<typeof vi.fn>;
+  getSplitEnabled: ReturnType<typeof vi.fn>;
+  setSplitEnabled: ReturnType<typeof vi.fn>;
+  getTuningStep: ReturnType<typeof vi.fn>;
+  setTuningStep: ReturnType<typeof vi.fn>;
+  getRepeaterShift: ReturnType<typeof vi.fn>;
+  setRepeaterShift: ReturnType<typeof vi.fn>;
+  getRepeaterOffset: ReturnType<typeof vi.fn>;
+  setRepeaterOffset: ReturnType<typeof vi.fn>;
+  getToneFrequency: ReturnType<typeof vi.fn>;
+  setToneFrequency: ReturnType<typeof vi.fn>;
+  getBeepEnabled: ReturnType<typeof vi.fn>;
+  setBeepEnabled: ReturnType<typeof vi.fn>;
+  getAudioIfMode: ReturnType<typeof vi.fn>;
+  setAudioIfMode: ReturnType<typeof vi.fn>;
+  getSpectrumDataOutput: ReturnType<typeof vi.fn>;
+  setSpectrumDataOutput: ReturnType<typeof vi.fn>;
+  getSpectrumHold: ReturnType<typeof vi.fn>;
+  setSpectrumHold: ReturnType<typeof vi.fn>;
+  getSpectrumSpeed: ReturnType<typeof vi.fn>;
+  setSpectrumSpeed: ReturnType<typeof vi.fn>;
+  getSpectrumRef: ReturnType<typeof vi.fn>;
+  setSpectrumRef: ReturnType<typeof vi.fn>;
+  getSpectrumAverage: ReturnType<typeof vi.fn>;
+  setSpectrumAverage: ReturnType<typeof vi.fn>;
+  getSpectrumVbw: ReturnType<typeof vi.fn>;
+  setSpectrumVbw: ReturnType<typeof vi.fn>;
+  getSpectrumRbw: ReturnType<typeof vi.fn>;
+  setSpectrumRbw: ReturnType<typeof vi.fn>;
+  getSpectrumDuringTx: ReturnType<typeof vi.fn>;
+  setSpectrumDuringTx: ReturnType<typeof vi.fn>;
+  getSpectrumCenterType: ReturnType<typeof vi.fn>;
+  setSpectrumCenterType: ReturnType<typeof vi.fn>;
 };
 
 type IcomWlanConnectionTestAccessor = {
@@ -80,6 +130,17 @@ function createDeferred<T>() {
 function createConnectedConnection(): { connection: IcomWlanConnection; rig: MockRig } {
   const connection = new IcomWlanConnection();
   const rig: MockRig = {
+    profile: {
+      functions: ['TUNER', 'COMP', 'VOX', 'LOCK', 'RIT', 'XIT', 'TONE', 'TSQL', 'MON', 'ANF', 'MN'],
+      levels: ['COMP', 'MONITOR_GAIN', 'AGC', 'RF', 'CWPITCH', 'KEYSPD', 'SPECTRUM_AVG'],
+      parameters: ['BEEP', 'AFIF_WLAN'],
+      tuningSteps: [{ hz: 10 }, { hz: 50 }, { hz: 100 }],
+      vfos: ['A', 'B', 'MAIN', 'SUB'],
+      repeater: true,
+      tone: true,
+      spectrumAdvanced: ['dataOutput', 'hold', 'speed', 'ref', 'avg', 'vbw', 'rbw', 'duringTx', 'centerType'],
+      audioIfSources: ['default', 'wlan'],
+    },
     setFrequency: vi.fn().mockResolvedValue(undefined),
     setMode: vi.fn().mockResolvedValue(undefined),
     setPtt: vi.fn().mockResolvedValue(undefined),
@@ -101,6 +162,55 @@ function createConnectedConnection(): { connection: IcomWlanConnection; rig: Moc
       supportedSpans: [50000],
     }),
     configureSpectrumDisplay: vi.fn().mockResolvedValue(undefined),
+    getFunction: vi.fn().mockResolvedValue(true),
+    setFunction: vi.fn(),
+    getLevel: vi.fn().mockResolvedValue(0.5),
+    setLevel: vi.fn(),
+    readTunerStatus: vi.fn().mockResolvedValue({ state: 'ON' }),
+    setTunerEnabled: vi.fn(),
+    startManualTune: vi.fn(),
+    getBreakInDelay: vi.fn().mockResolvedValue({ normalized: 0.25 }),
+    setBreakInDelay: vi.fn(),
+    getRitOffset: vi.fn().mockResolvedValue(120),
+    setRitOffset: vi.fn(),
+    getXitOffset: vi.fn().mockResolvedValue(-80),
+    setXitOffset: vi.fn(),
+    getBreakInMode: vi.fn().mockResolvedValue('semi'),
+    setBreakInMode: vi.fn(),
+    getVfo: vi.fn().mockResolvedValue('A'),
+    setVfo: vi.fn(),
+    getSplitEnabled: vi.fn().mockResolvedValue(false),
+    setSplitEnabled: vi.fn(),
+    getTuningStep: vi.fn().mockResolvedValue(50),
+    setTuningStep: vi.fn(),
+    getRepeaterShift: vi.fn().mockResolvedValue('plus'),
+    setRepeaterShift: vi.fn(),
+    getRepeaterOffset: vi.fn().mockResolvedValue(600000),
+    setRepeaterOffset: vi.fn(),
+    getToneFrequency: vi.fn().mockResolvedValue(88.5),
+    setToneFrequency: vi.fn(),
+    getBeepEnabled: vi.fn().mockResolvedValue(true),
+    setBeepEnabled: vi.fn(),
+    getAudioIfMode: vi.fn().mockResolvedValue('wlan'),
+    setAudioIfMode: vi.fn(),
+    getSpectrumDataOutput: vi.fn().mockResolvedValue(true),
+    setSpectrumDataOutput: vi.fn(),
+    getSpectrumHold: vi.fn().mockResolvedValue(false),
+    setSpectrumHold: vi.fn(),
+    getSpectrumSpeed: vi.fn().mockResolvedValue('fast'),
+    setSpectrumSpeed: vi.fn(),
+    getSpectrumRef: vi.fn().mockResolvedValue(-10.5),
+    setSpectrumRef: vi.fn(),
+    getSpectrumAverage: vi.fn().mockResolvedValue(0.5),
+    setSpectrumAverage: vi.fn(),
+    getSpectrumVbw: vi.fn().mockResolvedValue(1),
+    setSpectrumVbw: vi.fn(),
+    getSpectrumRbw: vi.fn().mockResolvedValue(2),
+    setSpectrumRbw: vi.fn(),
+    getSpectrumDuringTx: vi.fn().mockResolvedValue(true),
+    setSpectrumDuringTx: vi.fn(),
+    getSpectrumCenterType: vi.fn().mockResolvedValue('filter-center'),
+    setSpectrumCenterType: vi.fn(),
   };
 
   const testConnection = asTestConnection(connection);
@@ -501,6 +611,117 @@ describe('IcomWlanConnection', () => {
 
     firstWrite.resolve(undefined);
     await writePromise;
+  });
+
+  it('uses icom-wlan-node 0.6.2 native tuner APIs', async () => {
+    const { connection, rig } = createConnectedConnection();
+    rig.readTunerStatus.mockResolvedValueOnce({ state: 'TUNING' });
+
+    await expect(connection.getTunerCapabilities()).resolves.toEqual({
+      supported: true,
+      hasSwitch: true,
+      hasManualTune: true,
+    });
+    await expect(connection.getTunerStatus()).resolves.toMatchObject({
+      enabled: true,
+      active: true,
+      status: 'tuning',
+    });
+    await expect(connection.setTuner(false)).resolves.toBeUndefined();
+    await expect(connection.startTuning()).resolves.toBe(true);
+
+    expect(rig.readTunerStatus).toHaveBeenCalledWith({ timeout: 3000 });
+    expect(rig.setTunerEnabled).toHaveBeenCalledWith(false);
+    expect(rig.startManualTune).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps generic 0.6.2 function and level capabilities through the CAT queue', async () => {
+    const { connection, rig } = createConnectedConnection();
+    rig.getFunction.mockImplementation(async (name: string) => name !== 'LOCK');
+    rig.getLevel.mockImplementation(async (name: string) => (name === 'AGC' ? 2 : 0.42));
+
+    await expect(connection.getCompressorEnabled()).resolves.toBe(true);
+    await expect(connection.setVOXEnabled(false)).resolves.toBeUndefined();
+    await expect(connection.getLockMode()).resolves.toBe(false);
+    await expect(connection.setRitEnabled(true)).resolves.toBeUndefined();
+    await expect(connection.getMonitorGain()).resolves.toBe(0.42);
+    await expect(connection.setRFGain(0.7)).resolves.toBeUndefined();
+    await expect(connection.getAgcMode()).resolves.toBe('fast');
+    await expect(connection.setAgcMode('slow')).resolves.toBeUndefined();
+
+    expect(rig.getFunction).toHaveBeenCalledWith('COMP', { timeout: 3000 });
+    expect(rig.setFunction).toHaveBeenCalledWith('VOX', false);
+    expect(rig.getFunction).toHaveBeenCalledWith('LOCK', { timeout: 3000 });
+    expect(rig.setFunction).toHaveBeenCalledWith('RIT', true);
+    expect(rig.getLevel).toHaveBeenCalledWith('MONITOR_GAIN', { timeout: 3000 });
+    expect(rig.setLevel).toHaveBeenCalledWith('RF', 0.7);
+    expect(rig.getLevel).toHaveBeenCalledWith('AGC', { timeout: 3000 });
+    expect(rig.setLevel).toHaveBeenCalledWith('AGC', 3);
+  });
+
+  it('exposes profile-gated options for tuning, VFO, audio IF, and advanced spectrum controls', async () => {
+    const { connection } = createConnectedConnection();
+
+    await expect(connection.getSupportedTuningSteps()).resolves.toEqual([10, 50, 100]);
+    await expect(connection.getSupportedVfos()).resolves.toEqual(['A', 'B', 'MAIN', 'SUB']);
+    await expect(connection.getSupportedAudioIfModes()).resolves.toEqual(['default', 'wlan']);
+    await expect(connection.getSupportedSpectrumSpeeds()).resolves.toEqual(['slow', 'mid', 'fast']);
+    await expect(connection.getSupportedSpectrumCenterTypes()).resolves.toEqual([
+      'filter-center',
+      'carrier-point-center',
+      'carrier-point-center-abs',
+    ]);
+  });
+
+  it('converts CTCSS capability values between tx5dr tenths-Hz and icom-wlan Hz', async () => {
+    const { connection, rig } = createConnectedConnection();
+    rig.getToneFrequency.mockResolvedValueOnce(88.5);
+
+    await expect(connection.getCtcssTone()).resolves.toBe(885);
+    await expect(connection.setCtcssTone(1000)).resolves.toBeUndefined();
+    await expect(connection.getAvailableCtcssTones()).resolves.toContain(885);
+
+    expect(rig.getToneFrequency).toHaveBeenCalledWith({ timeout: 3000 });
+    expect(rig.setToneFrequency).toHaveBeenCalledWith(100);
+  });
+
+  it('treats nullable 0.6.2 optional reads as recoverable optional failures', async () => {
+    const { connection, rig } = createConnectedConnection();
+    rig.getLevel.mockResolvedValueOnce(null);
+
+    await expect(connection.getMonitorGain()).rejects.toMatchObject({
+      code: RadioErrorCode.INVALID_OPERATION,
+      severity: RadioErrorSeverity.WARNING,
+      context: expect.objectContaining({
+        operation: 'getMonitorGain',
+        optional: true,
+        recoverable: true,
+      }),
+    });
+  });
+
+  it('routes advanced spectrum controls to the 0.6.2 API wrappers', async () => {
+    const { connection, rig } = createConnectedConnection();
+
+    await expect(connection.getSpectrumDataOutput()).resolves.toBe(true);
+    await expect(connection.setSpectrumHold(true)).resolves.toBeUndefined();
+    await expect(connection.getSpectrumSpeed()).resolves.toBe('fast');
+    await expect(connection.setSpectrumRef(-12.5)).resolves.toBeUndefined();
+    await expect(connection.getSpectrumAverage()).resolves.toBe(0.5);
+    await expect(connection.setSpectrumVbw(1)).resolves.toBeUndefined();
+    await expect(connection.getSpectrumRbw()).resolves.toBe(2);
+    await expect(connection.setSpectrumDuringTx(false)).resolves.toBeUndefined();
+    await expect(connection.getSpectrumCenterType()).resolves.toBe('filter-center');
+
+    expect(rig.getSpectrumDataOutput).toHaveBeenCalledWith({ timeout: 3000 });
+    expect(rig.setSpectrumHold).toHaveBeenCalledWith(true);
+    expect(rig.getSpectrumSpeed).toHaveBeenCalledWith({ timeout: 3000 });
+    expect(rig.setSpectrumRef).toHaveBeenCalledWith(-12.5);
+    expect(rig.getLevel).toHaveBeenCalledWith('SPECTRUM_AVG', { timeout: 3000 });
+    expect(rig.setSpectrumVbw).toHaveBeenCalledWith(1);
+    expect(rig.getSpectrumRbw).toHaveBeenCalledWith({ timeout: 3000 });
+    expect(rig.setSpectrumDuringTx).toHaveBeenCalledWith(false);
+    expect(rig.getSpectrumCenterType).toHaveBeenCalledWith({ timeout: 3000 });
   });
 
   it('passes calibrated ICOM WLAN power watts through meter polling', async () => {

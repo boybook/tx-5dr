@@ -2,6 +2,8 @@ import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/
 
 const RECOVERABLE_OPTIONAL_ERROR_PATTERNS = [
   'not supported by this radio',
+  'unsupported command',
+  'not enabled for active profile',
   'feature not available',
   'invalid parameter',
   'protocol error',

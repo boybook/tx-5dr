@@ -567,6 +567,22 @@
       "label": "Monitor Gain",
       "description": "Adjusts the radio transmit monitor (MONI) level. A value of 0 effectively turns monitor audio off; higher values let you hear more of your own transmitted audio in the rig speaker or headphones."
     },
+    "monitor_enabled": {
+      "label": "Monitor",
+      "description": "Enables or disables transmit audio monitoring on radios that expose the MON function."
+    },
+    "vox_gain": {
+      "label": "VOX Gain",
+      "description": "Adjusts how sensitive VOX transmit triggering is to microphone audio."
+    },
+    "anti_vox": {
+      "label": "Anti-VOX",
+      "description": "Adjusts VOX rejection for speaker audio to reduce accidental transmit triggering."
+    },
+    "break_in_delay": {
+      "label": "Break-In Delay",
+      "description": "Adjusts the CW break-in delay before the radio returns to receive."
+    },
     "nb": {
       "label": "Noise Blanker",
       "description": "The Noise Blanker (NB) suppresses impulse-type interference such as automotive ignition noise and industrial electrical interference. 0 means off; higher values increase blanking strength. Ineffective against continuous background noise — enable only when impulse interference is present."
@@ -574,6 +590,42 @@
     "nr": {
       "label": "Noise Reduction",
       "description": "Digital Signal Processing noise reduction (NR) reduces background white noise using DSP algorithms, improving weak signal readability. 0 means off. For FT8 and other digital mode decoding, set to 0 to avoid DSP processing affecting decode accuracy."
+    },
+    "rf_gain": {
+      "label": "RF Gain",
+      "description": "Adjusts receiver RF gain. Reducing gain can improve handling of very strong signals."
+    },
+    "if_shift": {
+      "label": "IF Shift",
+      "description": "Moves the IF passband to reduce adjacent-channel interference."
+    },
+    "pbt_in": {
+      "label": "PBT Inner",
+      "description": "Adjusts the inner passband tuning control where supported by the radio."
+    },
+    "pbt_out": {
+      "label": "PBT Outer",
+      "description": "Adjusts the outer passband tuning control where supported by the radio."
+    },
+    "cw_pitch": {
+      "label": "CW Pitch",
+      "description": "Sets the CW sidetone and receive pitch in Hz."
+    },
+    "key_speed": {
+      "label": "Key Speed",
+      "description": "Sets the built-in keyer speed in words per minute."
+    },
+    "notch_raw": {
+      "label": "Manual Notch",
+      "description": "Adjusts the manual notch position or depth as exposed by the radio."
+    },
+    "drive_gain": {
+      "label": "Drive Gain",
+      "description": "Adjusts the drive gain control on radios that expose it."
+    },
+    "digi_sel_level": {
+      "label": "Digi-SEL Level",
+      "description": "Adjusts the digital select filter level on radios that expose it."
     },
     "lock_mode": {
       "label": "Panel Lock",
@@ -586,6 +638,38 @@
     "vox": {
       "label": "VOX",
       "description": "Enables voice-operated transmit. When microphone audio exceeds the VOX threshold, the radio can switch to transmit automatically. Usually keep this off for digital modes."
+    },
+    "auto_notch": {
+      "label": "Auto Notch",
+      "description": "Enables automatic notch filtering for steady interfering tones."
+    },
+    "manual_notch": {
+      "label": "Manual Notch Enable",
+      "description": "Enables the manual notch filter."
+    },
+    "rit_enabled": {
+      "label": "RIT",
+      "description": "Enables receive incremental tuning."
+    },
+    "xit_enabled": {
+      "label": "XIT",
+      "description": "Enables transmit incremental tuning."
+    },
+    "tone_enabled": {
+      "label": "Tone Encode",
+      "description": "Enables repeater tone encode."
+    },
+    "tone_squelch_enabled": {
+      "label": "Tone Squelch",
+      "description": "Enables tone squelch decode where supported."
+    },
+    "beep_enabled": {
+      "label": "Beep",
+      "description": "Enables or disables radio key/button beeps."
+    },
+    "break_in_mode": {
+      "label": "Break-In Mode",
+      "description": "Selects CW break-in mode: off, semi, or full."
     },
     "agc_mode": {
       "label": "AGC Speed",
@@ -602,6 +686,18 @@
     "mode_bandwidth": {
       "label": "Mode Bandwidth",
       "description": "Reads and switches the active filter bandwidth for the current operating mode. The voice spectrum overlay prefers this real bandwidth when available."
+    },
+    "split_enabled": {
+      "label": "Split",
+      "description": "Enables split operation using separate receive and transmit VFO state."
+    },
+    "vfo_select": {
+      "label": "VFO",
+      "description": "Selects the active VFO where supported by the radio."
+    },
+    "audio_if_mode": {
+      "label": "Audio IF",
+      "description": "Selects the radio audio IF routing source exposed by the active ICOM WLAN profile."
     },
     "rit_offset": {
       "label": "RIT Offset",
@@ -626,6 +722,42 @@
     "ctcss_tone": {
       "label": "CTCSS Tone",
       "description": "Selects the continuous tone-coded squelch system (CTCSS) tone frequency used for repeater access or squelch control."
+    },
+    "spectrum_data_output": {
+      "label": "Spectrum Output",
+      "description": "Enables radio spectrum data output where supported."
+    },
+    "spectrum_hold": {
+      "label": "Spectrum Hold",
+      "description": "Freezes or resumes the radio spectrum display."
+    },
+    "spectrum_speed": {
+      "label": "Spectrum Speed",
+      "description": "Sets the radio spectrum sweep speed."
+    },
+    "spectrum_ref": {
+      "label": "Spectrum Ref",
+      "description": "Adjusts the radio spectrum reference level in dB."
+    },
+    "spectrum_average": {
+      "label": "Spectrum Average",
+      "description": "Adjusts spectrum averaging where supported."
+    },
+    "spectrum_vbw": {
+      "label": "Spectrum VBW",
+      "description": "Selects the video bandwidth setting for the radio spectrum display."
+    },
+    "spectrum_rbw": {
+      "label": "Spectrum RBW",
+      "description": "Selects the resolution bandwidth setting for the radio spectrum display."
+    },
+    "spectrum_during_tx": {
+      "label": "Spectrum During TX",
+      "description": "Controls whether spectrum output remains active during transmit."
+    },
+    "spectrum_center_type": {
+      "label": "Spectrum Center",
+      "description": "Selects the center reference used by the radio spectrum display."
     },
     "dcs_code": {
       "label": "DCS Code",
