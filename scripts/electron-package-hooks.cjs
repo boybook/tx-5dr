@@ -104,6 +104,10 @@ function findFilesByExt(dir, ext) {
   return results;
 }
 
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
 function getBuilderExtraResources() {
   return [
     { from: 'resources/bin', to: 'bin' },
@@ -284,18 +288,40 @@ function fixMacosNodeRpaths(appRoot) {
 }
 
 function signMacosBinaries(appRoot, resourcesDir, arch) {
-  if (process.platform !== 'darwin' || !process.env.APPLE_IDENTITY) return;
+  const identity = process.env.TX5DR_CODESIGN_IDENTITY_FULL || process.env.APPLE_IDENTITY;
+  if (process.platform !== 'darwin' || !identity) return;
   const entitlementsPath = path.join(process.cwd(), 'build/entitlements.mac.plist');
+  if (!fs.existsSync(entitlementsPath)) {
+    throw new Error(`macOS entitlements file not found: ${entitlementsPath}`);
+  }
   const nodeFiles = findFilesByExt(path.join(appRoot, 'node_modules'), '.node');
-  console.log(`Signing macOS native modules (${nodeFiles.length})...`);
-  for (const nodeFile of nodeFiles) {
-    execSync(`codesign --force --sign "${process.env.APPLE_IDENTITY}" --options runtime --entitlements "${entitlementsPath}" --timestamp "${nodeFile}"`, { stdio: 'inherit' });
+  const dylibFiles = findFilesByExt(path.join(appRoot, 'node_modules'), '.dylib');
+  const runtimeFiles = [...dylibFiles, ...nodeFiles];
+  console.log(`Signing macOS native runtime files (${runtimeFiles.length})...`);
+  for (const runtimeFile of runtimeFiles) {
+    execSync([
+      'codesign',
+      '--force',
+      '--sign', shellQuote(identity),
+      '--options runtime',
+      '--entitlements', shellQuote(entitlementsPath),
+      '--timestamp',
+      shellQuote(runtimeFile),
+    ].join(' '), { stdio: 'inherit' });
   }
 
   const nodeBinary = path.join(resourcesDir, 'bin', `darwin-${arch}`, 'node');
   if (fs.existsSync(nodeBinary)) {
     console.log(`Signing macOS portable node: ${nodeBinary}`);
-    execSync(`codesign --force --sign "${process.env.APPLE_IDENTITY}" --options runtime --entitlements "${entitlementsPath}" --timestamp "${nodeBinary}"`, { stdio: 'inherit' });
+    execSync([
+      'codesign',
+      '--force',
+      '--sign', shellQuote(identity),
+      '--options runtime',
+      '--entitlements', shellQuote(entitlementsPath),
+      '--timestamp',
+      shellQuote(nodeBinary),
+    ].join(' '), { stdio: 'inherit' });
   }
 }
 

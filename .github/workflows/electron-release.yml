@@ -432,9 +432,15 @@ jobs:
               echo "❌ 错误: 未找到 Developer ID Application 证书"
               exit 1
             fi
+            BUILDER_IDENTITY="${CERT_IDENTITY#Developer ID Application: }"
+            if [ -z "$BUILDER_IDENTITY" ]; then
+              echo "❌ 错误: 无法解析 electron-builder 签名身份"
+              exit 1
+            fi
 
             echo "✅ 使用证书: $CERT_IDENTITY"
-            package_with_retry env APPLE_IDENTITY="$CERT_IDENTITY" yarn make:autoupdate
+            echo "✅ electron-builder identity: $BUILDER_IDENTITY"
+            package_with_retry env TX5DR_CODESIGN_IDENTITY_FULL="$CERT_IDENTITY" APPLE_IDENTITY="$BUILDER_IDENTITY" yarn make:autoupdate
           elif [ "${{ matrix.platform }}" = "darwin" ]; then
             echo "📦 PR macOS build: unsigned electron-builder package"
             package_with_retry env CSC_IDENTITY_AUTO_DISCOVERY=false yarn make:autoupdate
@@ -490,6 +496,72 @@ jobs:
           done
 
           echo "✅ electron-builder package content verified: $RESOURCES_DIR"
+
+      - name: Validate macOS signing and notarization
+        if: matrix.platform == 'darwin' && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          APP_PATH=$(find out/electron-builder -maxdepth 3 -name "*.app" -type d | head -1)
+          if [ -z "${APP_PATH:-}" ] || [ ! -d "$APP_PATH" ]; then
+            echo "Unable to locate packaged macOS app" >&2
+            find out/electron-builder -maxdepth 4 -type d >&2 || true
+            exit 1
+          fi
+
+          echo "=== macOS signing summary ==="
+          echo "App: ${APP_PATH}"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${APP_PATH}/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${APP_PATH}/Contents/Info.plist"
+          codesign -dv --verbose=4 "${APP_PATH}" 2>&1 | sed -E 's/(TeamIdentifier=).*/\1***/'
+
+          echo "=== Verify app code signature ==="
+          codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
+          spctl --assess --type execute --verbose=4 "${APP_PATH}"
+          xcrun stapler validate "${APP_PATH}"
+
+          DMG_FILE=$(find out/electron-builder -maxdepth 1 -name "*.dmg" -type f | head -1)
+          if [ -z "${DMG_FILE:-}" ] || [ ! -f "$DMG_FILE" ]; then
+            echo "Unable to locate macOS DMG artifact" >&2
+            find out/electron-builder -maxdepth 1 -type f >&2 || true
+            exit 1
+          fi
+
+          echo "=== Notarize and staple DMG artifact ==="
+          xcrun notarytool submit "${DMG_FILE}" \
+            --apple-id "${APPLE_ID}" \
+            --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --wait
+          xcrun stapler staple "${DMG_FILE}"
+
+          echo "=== Verify DMG notarization ticket ==="
+          xcrun stapler validate "${DMG_FILE}"
+
+          ZIP_FILE=$(find out/electron-builder -maxdepth 1 -name "*.zip" -type f | head -1)
+          if [ -z "${ZIP_FILE:-}" ] || [ ! -f "$ZIP_FILE" ]; then
+            echo "Unable to locate macOS ZIP artifact" >&2
+            find out/electron-builder -maxdepth 1 -type f >&2 || true
+            exit 1
+          fi
+          ZIP_CHECK_DIR=$(mktemp -d)
+          unzip -q "${ZIP_FILE}" -d "${ZIP_CHECK_DIR}"
+          ZIP_APP_PATH=$(find "${ZIP_CHECK_DIR}" -maxdepth 2 -name "*.app" -type d | head -1)
+          if [ -z "${ZIP_APP_PATH:-}" ] || [ ! -d "$ZIP_APP_PATH" ]; then
+            echo "Unable to locate app inside macOS ZIP artifact" >&2
+            find "${ZIP_CHECK_DIR}" -maxdepth 3 -type d >&2 || true
+            exit 1
+          fi
+          echo "=== Verify ZIP app signature and notarization ticket ==="
+          codesign --verify --deep --strict --verbose=2 "${ZIP_APP_PATH}"
+          spctl --assess --type execute --verbose=4 "${ZIP_APP_PATH}"
+          xcrun stapler validate "${ZIP_APP_PATH}"
+          rm -rf "${ZIP_CHECK_DIR}"
 
       - name: Verify Linux package metadata
         if: matrix.platform == 'linux'
