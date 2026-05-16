@@ -111,7 +111,8 @@ module.exports = {
     maintainer: 'BG5DRB <bg5drb@example.com>',
     vendor: 'TX-5DR Team',
     synopsis: LINUX_SHORT_DESCRIPTION,
-    description: LINUX_LONG_DESCRIPTION,
+    // electron-builder derives desktop Comment from linux.description after entry overrides.
+    description: LINUX_SHORT_DESCRIPTION,
     desktop: {
       entry: {
         Name: 'tx-5dr',
@@ -128,6 +129,7 @@ module.exports = {
     packageName: 'tx-5dr',
     priority: 'optional',
     packageCategory: 'utils',
+    description: LINUX_LONG_DESCRIPTION,
     depends: LINUX_DEB_DEPENDS,
     recommends: ['pulseaudio | libasound2'],
     fpm: ['--deb-suggests', 'gir1.2-gnomekeyring-1.0', '--deb-suggests', 'libgnome-keyring0', '--deb-suggests', 'lsb-release'],
