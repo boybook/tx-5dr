@@ -286,6 +286,17 @@ module.exports = {
       }
     },
     // macOS Packages - DMG 安装包
+    // Windows EXE Installer (Squirrel)
+    {
+      name: '@electron-forge/maker-squirrel',
+      platforms: ['win32'],
+      config: {
+        name: 'tx_5dr',
+        setupExe: 'TX-5DR-Setup.exe',
+        noMsi: true
+      }
+    },
+    // macOS Packages - DMG
     {
       name: '@electron-forge/maker-dmg',
       platforms: ['darwin'],

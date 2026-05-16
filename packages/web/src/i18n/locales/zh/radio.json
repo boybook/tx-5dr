@@ -386,7 +386,7 @@
     "initialized": "已初始化",
     "notInitialized": "未初始化",
     "standardFrequencyMultiTxTitle": "禁止同呼号同周期多路发射",
-    "standardFrequencyMultiTxDesc": "这是 FT8/FT4 标准频率下的违规发射行为，请立刻停止其中一路发射或调整到不同周期。涉及呼号：{{callsigns}}。"
+    "standardFrequencyMultiTxDesc": "这是 FT8/FT4/MSK144 标准频率下的违规发射行为，请立刻停止其中一路发射或调整到不同周期。涉及呼号：{{callsigns}}。"
   },
   "profile": {
     "reconnecting": "正在重新连接「{{name}}」",
@@ -657,9 +657,6 @@
     "title": "CW",
     "keyerTitle": "CW 发报",
     "wpm": "WPM 速度",
-    "sidetone": "Web 侧音",
-    "sidetoneFrequency": "音调",
-    "sidetoneVolume": "音量",
     "keyMethod": "键控方式",
     "textInputPlaceholder": "输入 CW 报文，支持 {MYCALL} / {HISCALL}...",
     "send": "发送",
@@ -690,7 +687,6 @@
     "catUnavailableBody": "请连接支持 CAT Morse 发送的 Hamlib 电台后再使用该后端。",
     "catUnavailableDisconnected": "使用 CAT CW 前请先连接 Hamlib 电台。",
     "catUnavailableHamlibOnly": "CAT CW 当前仅支持 Hamlib 串口或网络电台连接。",
-    "catUnsupportedSendMorse": "当前电台未报告支持 CAT CW 发报（Hamlib SEND_MORSE）。请选择电键接口，或检查电台/Hamlib 后端是否支持该功能。",
     "qsoTab": "通联日志",
     "qso": {
       "title": "CW 通联日志",
@@ -749,21 +745,15 @@
     "settings": "设置",
     "placeholderMyCall": "当前操作员呼号",
     "placeholderHisCall": "通联日志中的对方呼号",
-    "placeholderTrst": "发送的信号报告",
-    "placeholderRrst": "接收的信号报告",
     "placeholderTooltip": "{{source}}：{{label}}",
     "placeholderMissingTooltip": "{{source}} 需要{{label}}",
     "placeholderMissingValue": "未设置",
     "placeholderMissingMyCall": "操作员呼号",
     "placeholderMissingHisCall": "对方呼号",
-    "placeholderMissingTrst": "发送 RST",
-    "placeholderMissingRrst": "接收 RST",
     "placeholderMissingTitle": "缺少 CW 占位符内容",
     "placeholderMissingToast": "请先填写 {{placeholders}} 后再发送该 CW 报文。",
     "placeholderHint": "可用占位符",
     "placeholderHintSuffix": "将在发送时替换。",
-    "trstLabel": "TX RST",
-    "rrstLabel": "RX RST",
     "decoder": {
       "title": "CW 解码",
       "enable": "启用 CW 解码",
@@ -782,10 +772,6 @@
       "transcriptEmpty": "确认后的解码片段会显示在这里。",
       "clear": "清空",
       "confidence": "置信度",
-      "filter": "音频滤波",
-      "filterSummary": "{{target}} Hz 音调 · {{width}} Hz 宽度",
-      "filterOverlayLabel": "CW 滤波",
-      "filterOverlayDescription": "{{target}} Hz · {{width}} Hz 音频滤波",
       "useCallsign": "使用呼号 {{callsign}}",
       "noCallsign": "未找到呼号",
       "settings": "解码设置",
@@ -793,24 +779,6 @@
       "runtimeMode": "运行模式",
       "cpuMode": "CPU",
       "gpuMode": "GPU",
-      "runtimeBackends": {
-        "cpu": {
-          "label": "CPU",
-          "description": "通用 CPU 执行后端。"
-        },
-        "coreml": {
-          "label": "CoreML",
-          "description": "适用于受支持 Apple 设备的 macOS CoreML 加速。"
-        },
-        "cuda": {
-          "label": "CUDA",
-          "description": "Linux x64 NVIDIA GPU；需要外部安装 CUDA v12 运行时。"
-        },
-        "webgpu": {
-          "label": "WebGPU",
-          "description": "实验性的 ONNX Runtime WebGPU 执行后端。"
-        }
-      },
       "modelSizes": {
         "tiny": "Tiny",
         "small": "Small",

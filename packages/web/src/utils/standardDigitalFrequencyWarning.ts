@@ -30,6 +30,11 @@ const STANDARD_DIGITAL_FREQUENCIES_HZ = {
     28180000,
     50318000,
   ],
+  MSK144: [
+    50280000,
+    144360000,
+    432360000,
+  ],
 } as const;
 
 type StandardDigitalModeName = keyof typeof STANDARD_DIGITAL_FREQUENCIES_HZ;
@@ -50,7 +55,10 @@ type WarningOperatorInput = Pick<OperatorStatus, 'id' | 'isTransmitting' | 'cont
 
 function normalizeModeName(modeName: string | null | undefined): StandardDigitalModeName | null {
   const normalized = modeName?.trim().toUpperCase();
-  return normalized === 'FT8' || normalized === 'FT4' ? normalized : null;
+  if (normalized === 'FT8') return 'FT8';
+  if (normalized === 'FT4') return 'FT4';
+  if (normalized === 'MSK144') return 'MSK144';
+  return null;
 }
 
 function normalizeCallsign(callsign: string | null | undefined): string {

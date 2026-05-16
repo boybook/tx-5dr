@@ -8,6 +8,7 @@ vi.mock('wsjtx-lib', () => {
   const WSJTXMode = {
     FT8: 0,
     FT4: 1,
+    MSK144: 10,
   };
 
   class WSJTXLib {
@@ -107,5 +108,15 @@ describe('WSJTXEncodeWorkQueue messageSent validation', () => {
     expect(queue.size()).toBe(0);
     expect(queueEmpty).toHaveBeenCalledTimes(1);
     await queue.destroy();
+  });
+
+  it('uses the MSK144 native encoder mode for MSK144 requests', async () => {
+    const result = await encodeOnce(
+      { mode: 'MSK144', message: 'CQ BG5DRB OL32' },
+      { messageSent: 'CQ BG5DRB OL32' },
+    );
+
+    expect(result.type).toBe('complete');
+    expect(encodeCalls[0]).toMatchObject({ mode: 10 });
   });
 });

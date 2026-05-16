@@ -519,7 +519,7 @@ export class WSServer extends WSMessageHandler {
     this.digitalRadioEngine.on('decodeWorkerUnavailable' as any, (status: any) => {
       this.broadcast(WSMessageType.ERROR, {
         message: status?.lastFailure || 'Decode worker is unavailable',
-        userMessage: 'FT8/FT4 decoding is temporarily unavailable because the decode worker failed to start. Other radio functions can continue running.',
+        userMessage: 'Digital mode decoding is temporarily unavailable because the decode worker failed to start. Other radio functions can continue running.',
         userMessageKey: DECODE_WORKER_UNAVAILABLE_USER_MESSAGE_KEY,
         code: 'DECODE_WORKER_UNAVAILABLE',
         severity: 'warning',
@@ -1927,7 +1927,7 @@ export class WSServer extends WSMessageHandler {
     if (decodeWorkers?.summary.status !== 'unavailable') return;
     connection.send(WSMessageType.ERROR, {
       message: decodeWorkers.summary.lastError || 'Decode worker is unavailable',
-      userMessage: 'FT8/FT4 decoding is temporarily unavailable because the decode worker failed to start. Other radio functions can continue running.',
+      userMessage: 'Digital mode decoding is temporarily unavailable because the decode worker failed to start. Other radio functions can continue running.',
       userMessageKey: DECODE_WORKER_UNAVAILABLE_USER_MESSAGE_KEY,
       code: 'DECODE_WORKER_UNAVAILABLE',
       severity: 'warning',

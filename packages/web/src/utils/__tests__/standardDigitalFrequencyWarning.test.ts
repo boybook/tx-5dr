@@ -59,6 +59,14 @@ describe('standardDigitalFrequencyWarning utils', () => {
     expect(getStandardDigitalFrequencyMatch('FT8', 7047500)).toBeNull();
   });
 
+  it('matches an MSK144 standard frequency only when the active mode is MSK144', () => {
+    expect(getStandardDigitalFrequencyMatch('MSK144', 144360000)).toEqual({
+      modeName: 'MSK144',
+      standardFrequency: 144360000,
+    });
+    expect(getStandardDigitalFrequencyMatch('FT8', 144360000)).toBeNull();
+  });
+
   it('does not warn for non-standard frequency or non-digital mode', () => {
     const operators = [
       createOperator({ id: 'operator-a' }),

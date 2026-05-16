@@ -24,17 +24,11 @@ import {
   type TuneToneStartPayload,
   type TuneToneStatus,
   type CWKeyerStatus,
-  type CWDecoderBackendDescriptor,
-  type CWDecoderRuntimeBackend,
   type PresetFrequency,
   resolveWindowTiming,
 } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
-import {
-  AudioStreamManager,
-  CW_INPUT_PROCESSING_SAMPLE_RATE,
-  DEFAULT_INPUT_PROCESSING_SAMPLE_RATE,
-} from './audio/AudioStreamManager.js';
+import { AudioStreamManager } from './audio/AudioStreamManager.js';
 import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue.js';
 import type { DecodeWorkerPoolHealthSnapshot } from './decode/WSJTXDecodeProcessPool.js';
 import { WSJTXEncodeWorkQueue } from './decode/WSJTXEncodeWorkQueue.js';
@@ -91,93 +85,6 @@ import { RadioPowerController } from './radio/RadioPowerController.js';
 import { TuneToneController } from './radio/TuneToneController.js';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-
-export interface DeepCWModelPathConfig {
-  language?: string;
-  modelSize?: 'tiny' | 'small';
-}
-
-export interface DeepCWModelPathOptions {
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  moduleDir?: string;
-  exists?: (candidate: string) => boolean;
-}
-
-const DEFAULT_DEEPCW_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
-
-export function resolveDeepCWModelPath(
-  config: DeepCWModelPathConfig,
-  options: DeepCWModelPathOptions = {},
-): string | null {
-  const env = options.env ?? process.env;
-  const configured = env.TX5DR_DEEPCW_MODEL_PATH;
-  if (configured) return configured;
-
-  const language = config.language === 'en' ? 'en' : 'en';
-  const modelSize = config.modelSize === 'small' ? 'small' : 'tiny';
-  const fileName = `${language}_${modelSize}.onnx`;
-  const cwd = options.cwd ?? process.cwd();
-  const moduleDir = options.moduleDir ?? DEFAULT_DEEPCW_MODULE_DIR;
-  const appRootFromModule = path.resolve(moduleDir, '..', '..', '..');
-  const exists = options.exists ?? existsSync;
-  const candidates = [
-    env.APP_RESOURCES ? path.join(env.APP_RESOURCES, 'models', 'deepcw', fileName) : null,
-    path.resolve(appRootFromModule, 'resources', 'models', 'deepcw', fileName),
-    path.resolve(cwd, 'resources', 'models', 'deepcw', fileName),
-    path.resolve(cwd, '..', '..', 'resources', 'models', 'deepcw', fileName),
-    path.resolve(cwd, '..', '..', '..', 'resources', 'models', 'deepcw', fileName),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-
-  return candidates.find((candidate) => exists(candidate)) ?? candidates[0] ?? null;
-}
-
-export interface DeepCWRuntimeBackendOptions {
-  platform?: NodeJS.Platform | string;
-  arch?: NodeJS.Architecture | string;
-}
-
-export function resolveDeepCWRuntimeBackends(options: DeepCWRuntimeBackendOptions = {}): CWDecoderRuntimeBackend[] {
-  const platform = options.platform ?? process.platform;
-  const arch = options.arch ?? process.arch;
-  const backends: CWDecoderRuntimeBackend[] = ['cpu'];
-
-  if (platform === 'darwin') {
-    backends.push('coreml');
-  } else if (platform === 'linux' && arch === 'x64') {
-    backends.push('cuda', 'webgpu');
-  }
-
-  return backends;
-}
-
-export interface DeepCWBackendDescriptorOptions {
-  available: boolean;
-  error?: string | null;
-  runtimeBackend?: CWDecoderRuntimeBackend;
-}
-
-export function makeDeepCWBackendDescriptor(options: DeepCWBackendDescriptorOptions): CWDecoderBackendDescriptor {
-  const runtimeBackends = resolveDeepCWRuntimeBackends();
-  return {
-    id: 'deepcw-onnx' as const,
-    name: 'DeepCW ONNX',
-    label: 'DeepCW ONNX',
-    available: options.available,
-    error: options.error ?? null,
-    reason: options.error ?? undefined,
-    runtimeBackends,
-    modelSizes: ['tiny', 'small'],
-    languages: ['en'],
-    modes: ['streaming'],
-    model: 'en_tiny/en_small',
-    runtime: options.runtimeBackend ?? 'cpu',
-    attributionName: 'DeepCW / web-deep-cw-decoder',
-    sourceUrl: 'https://github.com/e04/web-deep-cw-decoder',
-    license: 'GPL-3.0',
-  };
-}
 
 /**
  * DigitalRadioEngine — 数字电台引擎 Facade
@@ -266,7 +173,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         isDigitalClockRunning: () => this.slotClock?.isRunning ?? false,
       },
     );
-    this.audioStreamManager = new AudioStreamManager({ now: () => this.clockSource.now() });
+    this.audioStreamManager = new AudioStreamManager();
     this.realDecodeQueue = new WSJTXDecodeWorkQueue();
     const decodeWorkerEvents = this as unknown as DecodeWorkerEngineEmitter;
     this.realDecodeQueue.on('decodeWorkerUnavailable', (status) => {
@@ -496,7 +403,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getTransmissionPipeline: () => this.transmissionPipeline,
       getEngineLifecycle: () => this.engineLifecycle,
       getEngineMode: () => this.engineMode,
-      getCurrentModeName: () => this.currentMode.name,
     });
     this.radioBridge.setupListeners();
 
@@ -525,7 +431,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.on('radioStatusChanged', () => {
       this.squelchStatusMonitor.reevaluate();
       this.physicalPttMonitor.reevaluate();
-      this.cwKeyerManager?.refreshRuntimeState();
     });
     this.on('radioStatusChanged', (data) => {
       if (!data.connected) {
@@ -635,7 +540,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     if (ft8) {
       pools.push({
         id: 'wsjtx-decode',
-        name: 'FT8/FT4 Decode Workers',
+        name: 'FT8/FT4/MSK144 Decode Workers',
         kind: 'decode',
         summary: ft8.summary,
         workers: ft8.workers,
@@ -644,9 +549,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     const cwTelemetry = this.cwDecoderManager?.getWorkerPoolTelemetrySnapshot();
     if (cwTelemetry) {
-      const workers = cwTelemetry.workers ?? [];
-      const readyCount = workers.filter((worker) => worker.ready).length;
-      const busyCount = workers.filter((worker) => worker.busy).length;
       const status = cwTelemetry.status === 'running'
         ? 'ready'
         : cwTelemetry.status === 'error'
@@ -658,18 +560,18 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         kind: 'cw-decode',
         summary: {
           status,
-          workerCount: workers.length,
+          workerCount: cwTelemetry.workerCount,
           desiredWorkers: cwTelemetry.workerCount,
-          readyCount,
-          busyCount,
-          totalRss: workers.reduce((sum, worker) => sum + worker.memory.rss, 0),
-          totalCpu: workers.reduce((sum, worker) => sum + worker.cpu.total, 0),
+          readyCount: status === 'ready' ? cwTelemetry.workerCount : 0,
+          busyCount: cwTelemetry.inFlight,
+          totalRss: 0,
+          totalCpu: 0,
           nativeThreadsPerWorker: 1,
           pendingJobs: cwTelemetry.pendingJobs ?? 0,
           activeJobs: cwTelemetry.inFlight,
           lastError: cwTelemetry.lastError ?? undefined,
         },
-        workers,
+        workers: cwTelemetry.workers ?? [],
       });
     }
 
@@ -725,14 +627,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       });
       this.cwDecoderManager.attachAudioStream(this.audioStreamManager as unknown as import('./cw-decoder/index.js').CWDecoderAudioStream);
       this.cwDecoderManager.on('cwDecoderStatusChanged', (status) => {
-        this.emit('cwDecoderStatusChanged', this.toContractCWDecoderStatus(status, this.getEffectiveCWDecoderStatusConfig()));
-      });
-      this.cwDecoderManager.on('cwDecoderTranscriptReset', (event) => {
-        this.emit('cwDecoderEvent', {
-          kind: 'transcript_reset',
-          sessionId: event.sessionId,
-          timestamp: event.timestamp,
-        });
+        this.emit('cwDecoderStatusChanged', this.toContractCWDecoderStatus(status));
       });
       this.cwDecoderManager.on('cwDecoderPending', (event) => {
         this.emit('cwDecoderEvent', {
@@ -741,54 +636,23 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           confidence: event.confidence,
           timestamp: event.timestamp,
         });
-        if (event.sessionId && event.version != null) {
-          this.emit('cwDecoderEvent', {
-            kind: 'transcript_pending',
-            pending: event.text ? {
-              sessionId: event.sessionId,
-              version: event.version,
-              text: event.text,
-              plainText: event.plainText,
-              finalized: false,
-              confidence: event.confidence,
-              targetFreqHz: event.targetFreqHz,
-              filterWidthHz: event.filterWidthHz,
-              characterSpans: event.characterSpans,
-              wordSpaceSpans: event.wordSpaceSpans,
-              updatedAt: event.timestamp,
-            } : null,
-            timestamp: event.timestamp,
-          });
-        }
       });
       this.cwDecoderManager.on('cwDecoderCommit', (event) => {
-        const segment = {
-          id: event.id,
-          sessionId: event.sessionId ?? 'legacy',
-          sequence: event.sequence ?? 0,
-          text: event.text,
-          plainText: event.plainText,
-          confidence: event.confidence,
-          targetFreqHz: event.targetFreqHz,
-          filterWidthHz: event.filterWidthHz,
-          startedAt: event.startedAt ?? event.timestamp,
-          updatedAt: event.updatedAt ?? event.timestamp,
-          endedAt: event.endedAt ?? event.timestamp,
-          finalized: true as const,
-          prependSpace: event.prependSpace ?? true,
-          characterSpans: event.characterSpans,
-          wordSpaceSpans: event.wordSpaceSpans,
-        };
         this.emit('cwDecoderEvent', {
           kind: 'commit',
-          segment,
+          segment: {
+            id: event.id,
+            text: event.text,
+            confidence: event.confidence,
+            startedAt: event.timestamp,
+            updatedAt: event.timestamp,
+            endedAt: event.timestamp,
+            finalized: true,
+            characterSpans: event.characterSpans,
+            wordSpaceSpans: event.wordSpaceSpans,
+          },
           text: event.text,
           confidence: event.confidence,
-          timestamp: event.timestamp,
-        });
-        this.emit('cwDecoderEvent', {
-          kind: 'transcript_commit',
-          segment,
           timestamp: event.timestamp,
         });
       });
@@ -809,16 +673,27 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   public getCWDecoderBackends() {
-    const config = ConfigManager.getInstance().getCWDecoderConfig();
-    return this.getCWDecoderManager().getBackends().map((backend) => makeDeepCWBackendDescriptor({
+    return this.getCWDecoderManager().getBackends().map((backend) => ({
+      id: backend.id,
+      name: 'DeepCW ONNX',
+      label: 'DeepCW ONNX',
       available: backend.available,
       error: backend.error,
-      runtimeBackend: config.runtimeBackend,
+      reason: backend.error ?? undefined,
+      runtimeBackends: ['cpu'],
+      modelSizes: ['tiny', 'small'],
+      languages: ['en'],
+      modes: ['streaming'],
+      model: 'en_tiny/en_small',
+      runtime: 'cpu',
+      attributionName: 'DeepCW / web-deep-cw-decoder',
+      sourceUrl: 'https://github.com/e04/web-deep-cw-decoder',
+      license: 'GPL-3.0',
     }));
   }
 
   public getCWDecoderStatus() {
-    return this.toContractCWDecoderStatus(this.getCWDecoderManager().getStatus(), this.getEffectiveCWDecoderStatusConfig());
+    return this.toContractCWDecoderStatus(this.getCWDecoderManager().getStatus());
   }
 
   public async updateCWDecoderConfig(update: Partial<CWDecoderConfig>) {
@@ -826,16 +701,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     const runtimeEnabled = this.cwDecoderManager?.getStatus().enabled ?? false;
     await this.getCWDecoderManager().updateConfig(this.toServerCWDecoderConfig({ ...saved, enabled: runtimeEnabled }));
     return saved;
-  }
-
-  public async updateCWDecoderTuning(update: Pick<Partial<CWDecoderConfig>, 'targetFreqHz' | 'filterWidthHz'>) {
-    await this.getCWDecoderManager().updateRuntimeTuning(update);
-    const status = this.toContractCWDecoderStatus(
-      this.getCWDecoderManager().getStatus(),
-      this.getEffectiveCWDecoderStatusConfig(),
-    );
-    this.emit('cwDecoderStatusChanged', status);
-    return status;
   }
 
   public async startCWDecoder(update: Partial<CWDecoderConfig> = {}) {
@@ -846,7 +711,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     if (this.engineMode !== 'cw') {
       await this.setMode(MODES.CW);
     }
-    this.configureAudioProcessingForCurrentMode('cw-decoder-start');
     if (!this.engineLifecycle?.getIsRunning()) {
       this.cwDecoderStartedEngine = true;
       await this.engineLifecycle.startAndWaitForRunning();
@@ -860,7 +724,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public async stopCWDecoder() {
     const saved = await ConfigManager.getInstance().updateCWDecoderConfig({ enabled: false });
-    await this.getCWDecoderManager().updateConfig(this.toServerCWDecoderConfig({ ...saved, enabled: false }));
     await this.getCWDecoderManager().stop('user-disabled');
     if (this.cwDecoderStartedEngine && this.engineMode === 'cw') {
       this.cwDecoderStartedEngine = false;
@@ -872,7 +735,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public clearCWDecoderTranscript() {
     const status = this.getCWDecoderManager().clearTranscript();
-    const contractStatus = this.toContractCWDecoderStatus(status, this.getEffectiveCWDecoderStatusConfig());
+    const contractStatus = this.toContractCWDecoderStatus(status);
+    this.emit('cwDecoderEvent', {
+      kind: 'pending',
+      text: '',
+      confidence: 0,
+      timestamp: Date.now(),
+    });
     this.emit('cwDecoderStatusChanged', contractStatus);
     return contractStatus;
   }
@@ -890,7 +759,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     const pskreporterService = await this.initializeDomainServicesPhase();
     await this.initializeSubsystemAssemblyPhase(pskreporterService);
     this.restorePersistedModePhase();
-    await this.finalizeLifecyclePhase();
+    this.finalizeLifecyclePhase();
 
     // rigctld bridge: lifetime-independent of the engine. Start early so
     // external clients can poll while the radio spins up.
@@ -922,7 +791,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     await printAppPaths();
 
     // Start NTP calibration (non-blocking, does not delay engine startup)
-    bootstrapCoordinator.startPhase('ntp-initial-check', 'Starting clock calibration');
+    bootstrapCoordinator.startPhase('ntp-initial-check', '正在启动时间校准');
     await this.ntpCalibrationService.start();
     bootstrapCoordinator.completePhase('ntp-initial-check');
 
@@ -964,12 +833,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     logger.info('Initialization phase: domain-services');
 
     await this.operatorManager.initialize();
-    bootstrapCoordinator.startPhase('plugin-bootstrap', 'Loading plugins');
+    bootstrapCoordinator.startPhase('plugin-bootstrap', '正在加载插件');
     try {
       await this._pluginManager.start();
       bootstrapCoordinator.completePhase('plugin-bootstrap');
     } catch (error) {
-      bootstrapCoordinator.failPhase('plugin-bootstrap', 'Plugin loading failed; retry later');
+      bootstrapCoordinator.failPhase('plugin-bootstrap', '插件加载失败，可稍后重试');
       logger.error('Plugin manager startup failed; continuing without plugins', {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -1095,47 +964,18 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.slotPackManager.setMode(this.currentMode);
       logger.info('Restored last engine mode: cw');
     }
-
-    this.configureAudioProcessingForCurrentMode('restore-mode');
   }
 
-  private configureAudioProcessingForCurrentMode(reason: string): void {
-    const audioStreamManager = this.audioStreamManager as AudioStreamManager | undefined;
-    if (!audioStreamManager?.setInputProcessingSampleRate) {
-      return;
-    }
-
-    const targetSampleRate = this.currentMode.name === 'CW'
-      ? CW_INPUT_PROCESSING_SAMPLE_RATE
-      : DEFAULT_INPUT_PROCESSING_SAMPLE_RATE;
-
-    const changed = audioStreamManager.setInputProcessingSampleRate(targetSampleRate, reason);
-    this.spectrumScheduler?.setAudioSource?.(
-      audioStreamManager.getAudioProvider(),
-      audioStreamManager.getInternalSampleRate(),
-    );
-
-    if (changed) {
-      logger.info('audio processing sample rate aligned to engine mode', {
-        mode: this.currentMode.name,
-        engineMode: this.engineMode,
-        targetSampleRate,
-        reason,
-      });
-    }
-  }
-
-  private async finalizeLifecyclePhase(): Promise<void> {
+  private finalizeLifecyclePhase(): void {
     logger.info('Initialization phase: lifecycle');
 
-    await this.engineLifecycle.rebuildResourcePlan();
+    this.engineLifecycle.rebuildResourcePlan();
     this.engineLifecycle.initializeStateMachine();
   }
 
   // ─── 委托方法 ────────────────────────────────────
 
   async start(): Promise<void> {
-    this.configureAudioProcessingForCurrentMode('engine-start');
     return this.engineLifecycle.start();
   }
 
@@ -1472,39 +1312,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     });
   }
 
-  private async restoreLastDigitalOperatingState(configManager: ConfigManager, targetMode: ModeDescriptor): Promise<void> {
-    const lastDigital = configManager.getLastSelectedFrequency();
-    if (!lastDigital?.frequency) {
-      return;
-    }
-
-    let targetFrequency: PresetFrequency = {
-      frequency: lastDigital.frequency,
-      mode: targetMode.name,
-      radioMode: lastDigital.radioMode,
-      band: lastDigital.band || this.resolveBandLabel(lastDigital.frequency),
-      description: lastDigital.description,
-    };
-
-    if (lastDigital.mode && lastDigital.mode !== targetMode.name) {
-      const nearestPreset = this.findNearestPresetForMode(targetMode.name, lastDigital.frequency, configManager);
-      if (nearestPreset) {
-        targetFrequency = nearestPreset;
-      } else {
-        logger.warn(`No ${targetMode.name} preset found while restoring digital mode; using saved digital frequency`);
-      }
-    } else if (lastDigital.mode === targetMode.name) {
-      targetFrequency.mode = lastDigital.mode;
-    }
-
-    try {
-      await this.applyDigitalPresetFrequency(targetFrequency);
-      logger.info(`Restored digital operating state: ${(targetFrequency.frequency / 1000000).toFixed(3)} MHz (${targetFrequency.mode})`);
-    } catch (error) {
-      logger.warn(`Failed to restore digital operating state: ${(error as Error).message}`);
-    }
-  }
-
   private async applyRepeaterDuplexConfigWithWarning(
     config: RepeaterDuplexConfig,
     frequency: number,
@@ -1566,8 +1373,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private async switchEngineMode(targetEngineMode: EngineMode, targetMode: ModeDescriptor): Promise<void> {
     let engineState = this.engineLifecycle?.getEngineState() ?? EngineState.IDLE;
     let shouldResumeAfterSwitch = engineState === EngineState.RUNNING || engineState === EngineState.STARTING;
-    // CW keying can lazy-init its own manager, but RX monitor/decoder still
-    // need the engine audio chain. Preserve the user's running/idle intent.
+    // CW uses independent serial port and lazy-initializes CWKeyerManager.
+    // Going TO CW: stop engine but preserve radio connection, rebuild CW plan, don't restart.
+    // Going FROM CW: normal stop/start cycle to restore digital/voice resources.
     const comingFromCW = this.engineMode === 'cw';
     const goingToCW = targetEngineMode === 'cw';
     logger.info(`Switching engine mode: ${this.engineMode}/${this.currentMode.name} -> ${targetEngineMode}/${targetMode.name}`);
@@ -1611,7 +1419,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     this.engineMode = targetEngineMode;
     this.currentMode = targetMode;
-    this.configureAudioProcessingForCurrentMode?.('mode-switch');
 
     if (targetEngineMode === 'digital') {
       this.applyDecodeWindowOverrides();
@@ -1626,7 +1433,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     for (const op of this._operatorManager?.getAllOperators() ?? []) {
       op.setMode(this.currentMode);
     }
-    await this.engineLifecycle.rebuildResourcePlan();
+    this.engineLifecycle.rebuildResourcePlan();
 
     const configManager = ConfigManager.getInstance();
     await configManager.setLastEngineMode(targetEngineMode);
@@ -1634,21 +1441,21 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       await configManager.setLastDigitalModeName(targetMode.name);
     }
 
+    this.emitModeAndStatusSnapshot();
     if (targetEngineMode === 'voice') {
       await this.restoreLastVoiceOperatingState(configManager);
-    } else if (goingToCW) {
-      await this.restoreLastCWOperatingState(configManager);
-    } else if (targetEngineMode === 'digital') {
-      await this.restoreLastDigitalOperatingState(configManager, targetMode);
     }
-    this.emitModeAndStatusSnapshot();
+    if (goingToCW) {
+      await this.restoreLastCWOperatingState(configManager);
+    }
 
     this.resetVoicePttState();
     this.squelchStatusMonitor.reevaluate();
     this.physicalPttMonitor.reevaluate();
 
-    // Keep the engine running across mode switches only if it was running before.
-    if (shouldResumeAfterSwitch) {
+    // CW target: engine start not needed (CWKeyerManager lazy-inits on first key action).
+    // CW→digital / other: restart if engine was running (or should resume).
+    if (!goingToCW && (shouldResumeAfterSwitch || comingFromCW)) {
       await this.engineLifecycle.startAndWaitForRunning();
       this.emitStatusSnapshot();
     }
@@ -1841,7 +1648,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       ...DEFAULT_CW_DECODER_CONFIG,
       ...config,
       backend: 'deepcw-onnx' as const,
-      inputSampleRate: this.audioStreamManager?.getInternalSampleRate?.() ?? DEFAULT_CW_DECODER_CONFIG.decodeSampleRate,
+      inputSampleRate: DEFAULT_CW_DECODER_CONFIG.inputSampleRate,
       decodeSampleRate: DEFAULT_CW_DECODER_CONFIG.decodeSampleRate,
     };
     return {
@@ -1850,23 +1657,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     };
   }
 
-  private getEffectiveCWDecoderStatusConfig(): Partial<CWDecoderConfig> {
-    const runtimeConfig = this.cwDecoderManager?.getConfig();
-    if (!runtimeConfig) {
-      return ConfigManager.getInstance().getCWDecoderConfig();
-    }
-    const { modelPath: _modelPath, ...contractConfig } = runtimeConfig;
-    return contractConfig as unknown as Partial<CWDecoderConfig>;
-  }
-
-  private toContractCWDecoderStatus(status: ServerCWDecoderStatus, config: Partial<CWDecoderConfig> = ConfigManager.getInstance().getCWDecoderConfig()): CWDecoderStatus {
-    const configuredEnabled = typeof config.enabled === 'boolean' ? config.enabled : status.enabled;
-    const enabled = configuredEnabled || status.state === 'running' || status.state === 'starting';
-    const contractConfig = {
-      ...ConfigManager.getInstance().getCWDecoderConfig(),
-      ...config,
-      enabled,
-    } as CWDecoderConfig;
+  private toContractCWDecoderStatus(status: ServerCWDecoderStatus, config: CWDecoderConfig = ConfigManager.getInstance().getCWDecoderConfig()): CWDecoderStatus {
+    const enabled = status.enabled || status.state === 'running' || status.state === 'starting';
+    const contractConfig = { ...config, enabled };
     const state = status.muted
       ? 'muted'
       : status.state === 'running'
@@ -1884,11 +1677,19 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       config: contractConfig,
       active: status.state === 'running' && !status.muted,
       muted: status.muted,
-      backend: makeDeepCWBackendDescriptor({
+      backend: {
+        id: 'deepcw-onnx',
+        name: 'DeepCW ONNX',
         available: status.backendAvailable,
+        runtimeBackends: ['cpu'],
+        modelSizes: ['tiny', 'small'],
+        languages: ['en'],
+        modes: ['streaming'],
+        attributionName: 'DeepCW / web-deep-cw-decoder',
+        sourceUrl: 'https://github.com/e04/web-deep-cw-decoder',
+        license: 'GPL-3.0',
         error: status.backendError,
-        runtimeBackend: contractConfig.runtimeBackend,
-      }),
+      },
       lastDecodeAt: status.lastDecodeAt ?? undefined,
       lastError: enabled ? status.backendError : null,
       updatedAt: Date.now(),
@@ -1901,7 +1702,19 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   private resolveDeepCWModelPath(config: Pick<ServerCWDecoderConfig, 'language' | 'modelSize'>): string | null {
-    return resolveDeepCWModelPath(config);
+    const configured = process.env.TX5DR_DEEPCW_MODEL_PATH;
+    if (configured) return configured;
+
+    const language = config.language === 'en' ? 'en' : 'en';
+    const modelSize = config.modelSize === 'small' ? 'small' : 'tiny';
+    const fileName = `${language}_${modelSize}.onnx`;
+    const candidates = [
+      process.env.APP_RESOURCES ? path.join(process.env.APP_RESOURCES, 'models', 'deepcw', fileName) : null,
+      path.resolve(process.cwd(), 'resources', 'models', 'deepcw', fileName),
+      path.resolve(process.cwd(), '..', '..', 'resources', 'models', 'deepcw', fileName),
+    ].filter((candidate): candidate is string => Boolean(candidate));
+
+    return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0] ?? null;
   }
 
   private resetVoicePttState(): void {

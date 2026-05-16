@@ -4,6 +4,13 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('SlotScheduler');
 
+function resolveDecodeMode(modeName: string): DecodeRequest['mode'] {
+  const normalized = modeName.toUpperCase();
+  if (normalized === 'FT4') return 'FT4';
+  if (normalized === 'MSK144') return 'MSK144';
+  return 'FT8';
+}
+
 /**
  * 解码队列接口 - 由 server 包实现
  */
@@ -138,7 +145,7 @@ export class SlotScheduler {
       const apContext = this.decodeApContextProvider?.(slotInfo, windowIdx);
       const decodeRequest: DecodeRequest = {
         slotId: slotInfo.id,
-        mode: mode.name === 'FT4' ? 'FT4' : 'FT8',
+        mode: resolveDecodeMode(mode.name),
         windowIdx,
         pcm: pcmBuffer,
         sampleRate: actualSampleRate, // 使用实际采样率

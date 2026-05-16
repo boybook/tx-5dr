@@ -16,6 +16,18 @@ function parseNativeThreads(value: string | undefined): number {
   return Math.min(Math.max(parsed, 1), MAX_NATIVE_THREADS);
 }
 
+function resolveNativeDecodeMode(mode: DecodeRequest['mode']): number {
+  const nativeModes = WSJTXMode as unknown as Record<string, number>;
+  if (mode === 'FT4') return nativeModes.FT4;
+  if (mode === 'MSK144') {
+    if (typeof nativeModes.MSK144 !== 'number') {
+      throw new Error('wsjtx-lib does not expose WSJTXMode.MSK144');
+    }
+    return nativeModes.MSK144;
+  }
+  return nativeModes.FT8;
+}
+
 export class WSJTXDecodeWorkerCore {
   private readonly lib: WSJTXLib;
   private readonly nativeThreads: number;
@@ -45,7 +57,14 @@ export class WSJTXDecodeWorkerCore {
 
     const apContext = request.apContext;
     const baseFrequency = apContext ? apContext.frequencyHz : 0;
-    const decodeMode = request.mode === 'FT4' ? WSJTXMode.FT4 : WSJTXMode.FT8;
+    const decodeMode = resolveNativeDecodeMode(request.mode);
+    logger.debug('decode start', {
+      slotId: request.slotId,
+      windowIdx: request.windowIdx,
+      mode: request.mode,
+      sampleRate: request.sampleRate,
+      apDecode: Boolean(apContext),
+    });
     const audioInt16 = await this.lib.convertAudioFormat(resampledAudioData, 'int16') as Int16Array;
     const rawResult = await this.lib.decode(decodeMode, audioInt16, {
       frequency: baseFrequency,
@@ -82,6 +101,7 @@ export class WSJTXDecodeWorkerCore {
     logger.debug('decode complete', {
       slotId: request.slotId,
       windowIdx: request.windowIdx,
+      mode: request.mode,
       apDecode: Boolean(apContext),
       apOperatorId: apContext?.operatorId,
       apCurrentSlot: apContext?.currentSlot,

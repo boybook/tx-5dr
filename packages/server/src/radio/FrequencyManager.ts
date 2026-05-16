@@ -23,9 +23,12 @@ export class FrequencyManager {
     { band: '10m', mode: 'FT4', radioMode: 'USB', frequency: 28180000, description: '28.180 MHz 10m' },
     { band: '6m', mode: 'FT8', radioMode: 'USB', frequency: 50313000, description: '50.313 MHz 6m' },
     { band: '6m', mode: 'FT4', radioMode: 'USB', frequency: 50318000, description: '50.318 MHz 6m' },
+    { band: '6m', mode: 'MSK144', radioMode: 'USB', frequency: 50280000, description: '50.280 MHz 6m' },
     { band: '2m', mode: 'FT8', radioMode: 'USB', frequency: 144174000, description: '144.174 MHz 2m' },
     { band: '2m', mode: 'FT8', radioMode: 'USB', frequency: 144460000, description: '144.460 MHz 2m' },
+    { band: '2m', mode: 'MSK144', radioMode: 'USB', frequency: 144360000, description: '144.360 MHz 2m' },
     { band: '70cm', mode: 'FT8', radioMode: 'USB', frequency: 432174000, description: '432.174 MHz 70cm' },
+    { band: '70cm', mode: 'MSK144', radioMode: 'USB', frequency: 432360000, description: '432.360 MHz 70cm' },
 
     // ===== VOICE 语音模式 =====
     // HF SSB - LSB below 10 MHz, USB above 10 MHz (ham radio convention)

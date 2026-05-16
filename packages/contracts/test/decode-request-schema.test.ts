@@ -45,4 +45,17 @@ describe('DecodeRequestSchema', () => {
       currentSlot: 'TX4',
     }));
   });
+
+  it('accepts MSK144 decode requests', () => {
+    const parsed = DecodeRequestSchema.parse({
+      slotId: 'MSK144-1-15000',
+      mode: 'MSK144',
+      windowIdx: 0,
+      pcm: makePcm(),
+      sampleRate: 12000,
+      windowOffsetMs: 0,
+    });
+
+    expect(parsed.mode).toBe('MSK144');
+  });
 });

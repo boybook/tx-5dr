@@ -389,13 +389,13 @@ export class RadioOperatorManager {
     // 初始化日志管理器
     await this.logManager.initialize();
     if (ConfigManager.getInstance().getOperatorsConfig().length === 0) {
-      this.logManager.skipBootstrapPrewarm?.('No configured operators; logbook prewarm skipped');
+      this.logManager.skipBootstrapPrewarm?.('没有已配置的操作员，跳过日志本预热');
     }
 
     // 从配置文件初始化操作员（包括创建对应的日志本）
     await this.initializeOperatorsFromConfig();
     if (ConfigManager.getInstance().getOperatorsConfig().length > 0 && this.operators.size === 0) {
-      this.logManager.skipBootstrapPrewarm?.('No available operators were created; logbook prewarm skipped');
+      this.logManager.skipBootstrapPrewarm?.('未能创建可用操作员，跳过日志本预热');
     }
 
     logger.info('Initialized');
@@ -997,7 +997,9 @@ export class RadioOperatorManager {
         operatorId,
         message: transmission,
         frequency,
-        mode: currentMode.name === 'FT4' ? 'FT4' : 'FT8',
+        mode: currentMode.name === 'FT4'
+          ? 'FT4'
+          : (currentMode.name === 'MSK144' ? 'MSK144' : 'FT8'),
         slotStartMs: slotStartMs,
         timeSinceSlotStartMs: timeSinceSlotStartMs,
         requestId
@@ -1242,7 +1244,9 @@ export class RadioOperatorManager {
         operatorId,
         message: transmission,
         frequency,
-        mode: currentMode.name === 'FT4' ? 'FT4' : 'FT8',
+        mode: currentMode.name === 'FT4'
+          ? 'FT4'
+          : (currentMode.name === 'MSK144' ? 'MSK144' : 'FT8'),
         slotStartMs: currentSlotStartMs,
         timeSinceSlotStartMs: currentTimeSinceSlotStartMs,
         requestId
@@ -1884,7 +1888,10 @@ export class RadioOperatorManager {
   }
 
   private getSlotDurationForMode(mode: string): number {
-    return mode.toUpperCase() === 'FT4' ? MODES.FT4.slotMs : MODES.FT8.slotMs;
+    const normalized = mode.toUpperCase();
+    if (normalized === 'FT4') return MODES.FT4.slotMs;
+    if (normalized === 'MSK144') return MODES.MSK144.slotMs;
+    return MODES.FT8.slotMs;
   }
 
   private getDateStringsBetween(startMs: number, endMs: number): string[] {

@@ -113,7 +113,7 @@
       "suggestions": ["检查网络连接", "刷新页面重试"]
     },
     "DECODE_WORKER_UNAVAILABLE": {
-      "userMessage": "FT8/FT4 解码暂时不可用，因为解码 Worker 启动失败。其他电台功能仍可继续运行。",
+      "userMessage": "数字模式解码暂时不可用，因为解码 Worker 启动失败。其他电台功能仍可继续运行。",
       "suggestions": ["打开 Server Health 查看 Decode Workers 状态。", "检查 server 日志中的原生模块或 worker 启动错误。"]
     },
     "UNKNOWN_ERROR": {

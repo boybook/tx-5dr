@@ -113,7 +113,7 @@
       "suggestions": ["Check network connection", "Refresh page and retry"]
     },
     "DECODE_WORKER_UNAVAILABLE": {
-      "userMessage": "FT8/FT4 decoding is temporarily unavailable because the decode worker failed to start. Other radio functions can continue running.",
+      "userMessage": "Digital mode decoding is temporarily unavailable because the decode worker failed to start. Other radio functions can continue running.",
       "suggestions": ["Open Server Health to inspect Decode Workers status.", "Check server logs for the native module or worker startup error."]
     },
     "UNKNOWN_ERROR": {

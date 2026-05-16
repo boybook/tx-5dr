@@ -14,10 +14,10 @@ export interface EncodeRequest {
   message: string;
   frequency: number;
   operatorId: string;
-  mode?: 'FT8' | 'FT4';
-  slotStartMs?: number; // 时隙开始时间戳
-  timeSinceSlotStartMs?: number; // 从时隙开始到现在经过的时间（毫秒）
-  requestId?: string; // 编码请求唯一ID（用于去重和追踪）
+  mode?: 'FT8' | 'FT4' | 'MSK144';
+  slotStartMs?: number;
+  timeSinceSlotStartMs?: number;
+  requestId?: string;
 }
 
 export interface EncodeResult {
@@ -30,13 +30,32 @@ export interface EncodeResult {
 }
 
 export interface EncodeWorkQueueEvents {
-  'encodeComplete': (result: EncodeResult) => void;
-  'encodeError': (error: Error, request: EncodeRequest) => void;
-  'queueEmpty': () => void;
+  encodeComplete: (result: EncodeResult) => void;
+  encodeError: (error: Error, request: EncodeRequest) => void;
+  queueEmpty: () => void;
+}
+
+const EXPECTED_DURATION_SECONDS_BY_MODE: Record<NonNullable<EncodeRequest['mode']>, number> = {
+  FT8: 12.64,
+  FT4: 6.0,
+  MSK144: 15.0,
+};
+
+function resolveNativeMode(mode: EncodeRequest['mode']): number {
+  const normalized = mode?.toUpperCase() ?? 'FT8';
+  const nativeModes = WSJTXMode as unknown as Record<string, number>;
+  if (normalized === 'FT4') return nativeModes.FT4;
+  if (normalized === 'MSK144') {
+    if (typeof nativeModes.MSK144 !== 'number') {
+      throw new Error('wsjtx-lib does not expose WSJTXMode.MSK144');
+    }
+    return nativeModes.MSK144;
+  }
+  return nativeModes.FT8;
 }
 
 /**
- * 使用 wsjtx-lib 进行FT8消息编码
+ * Encode queue backed by wsjtx-lib.
  */
 export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
   private readonly maxConcurrency: number;
@@ -46,7 +65,7 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
     request: EncodeRequest;
     resolve: () => void;
   }> = [];
-  
+
   constructor(maxConcurrency: number = 2) {
     super();
     this.maxConcurrency = Number.isFinite(maxConcurrency)
@@ -55,10 +74,7 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
     this.lib = new WSJTXLib({ maxThreads: 4 });
     logger.info('encode work queue initialized', { maxConcurrency: this.maxConcurrency });
   }
-  
-  /**
-   * 推送编码请求到队列
-   */
+
   async push(request: EncodeRequest): Promise<void> {
     return new Promise<void>((resolve) => {
       this.pending.push({ request, resolve });
@@ -93,17 +109,17 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
   private async processItem(request: EncodeRequest): Promise<void> {
     try {
       const startTime = performance.now();
+      const modeName: NonNullable<EncodeRequest['mode']> = request.mode ?? 'FT8';
+      const nativeMode = resolveNativeMode(modeName);
 
-      // 确定模式
-      const mode = request.mode === 'FT4' ? WSJTXMode.FT4 : WSJTXMode.FT8;
+      logger.debug('encode start', {
+        operatorId: request.operatorId,
+        mode: modeName,
+        frequency: request.frequency,
+      });
 
-      // 调用原生库编码
       const { audioData: audioFloat32, messageSent } = await WSJTXNativeGate.run(
-        () => this.lib.encode(
-          mode,
-          request.message,
-          request.frequency
-        )
+        () => this.lib.encode(nativeMode, request.message, request.frequency),
       );
 
       const normalizedRequestedMessage = normalizeMessageForEncodeCheck(request.message);
@@ -119,9 +135,8 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
         throw new Error('encode returned empty audio data');
       }
 
-      // 基于模式校验并必要时截断
-      const expectedDuration = mode === WSJTXMode.FT8 ? 12.64 : 6.0;
-      const encodeSampleRate = 48000; // wsjtx-lib 编码输出为 48kHz
+      const expectedDuration = EXPECTED_DURATION_SECONDS_BY_MODE[modeName];
+      const encodeSampleRate = 48000;
       const actualDuration = audioFloat32.length / encodeSampleRate;
       const maxSamples = Math.floor(expectedDuration * encodeSampleRate * 1.5);
       let finalAudio = audioFloat32;
@@ -135,35 +150,30 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
         finalAudio = finalAudio.slice(0, expectedSamples);
       }
 
-      // 重采样到统一的内部采样率（12kHz）
       const INTERNAL_SAMPLE_RATE = 12000;
       logger.debug(`resampling: ${encodeSampleRate}Hz -> ${INTERNAL_SAMPLE_RATE}Hz`);
       finalAudio = await resampleAudioProfessional(
         finalAudio,
         encodeSampleRate,
         INTERNAL_SAMPLE_RATE,
-        1 // 单声道
+        1,
       );
 
-      // 统计振幅范围
       let minSample = finalAudio[0];
       let maxSample = finalAudio[0];
-      let maxAmplitude = 0;
-      for (let i = 0; i < finalAudio.length; i++) {
-        const s = finalAudio[i];
-        if (s < minSample) minSample = s;
-        if (s > maxSample) maxSample = s;
-        const a = Math.abs(s);
-        if (a > maxAmplitude) maxAmplitude = a;
+      for (let i = 1; i < finalAudio.length; i += 1) {
+        const sample = finalAudio[i];
+        if (sample < minSample) minSample = sample;
+        if (sample > maxSample) maxSample = sample;
       }
 
-      // 输出采样率固定为 12kHz（统一内部采样率）
       const sampleRate = INTERNAL_SAMPLE_RATE;
       const duration = finalAudio.length / sampleRate;
       const processingTimeMs = performance.now() - startTime;
 
       logger.debug('encode complete', {
         operatorId: request.operatorId,
+        mode: modeName,
         duration: `${duration.toFixed(2)}s`,
         amplitude: `[${minSample.toFixed(4)}, ${maxSample.toFixed(4)}]`,
         processingTimeMs: processingTimeMs.toFixed(2),
@@ -175,27 +185,24 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
         sampleRate,
         duration,
         success: true,
-        request
+        request,
       };
 
       this.emit('encodeComplete', encodeResult);
-
     } catch (error) {
-      logger.error('encode failed', { operatorId: request.operatorId, error });
+      logger.error('encode failed', {
+        operatorId: request.operatorId,
+        mode: request.mode ?? 'FT8',
+        error,
+      });
       this.emit('encodeError', error as Error, request);
     }
   }
-  
-  /**
-   * 获取队列大小
-   */
+
   size(): number {
     return this.pending.length + this.activeCount;
   }
-  
-  /**
-   * 获取工作池状态
-   */
+
   getStatus() {
     return {
       queueSize: this.size(),
@@ -204,10 +211,7 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
       utilization: this.activeCount / this.maxConcurrency,
     };
   }
-  
-  /**
-   * 销毁工作池
-   */
+
   async destroy(): Promise<void> {
     this.pending.splice(0).forEach((item) => item.resolve());
     logger.info('encode work queue destroyed (main thread)', {

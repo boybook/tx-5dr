@@ -386,7 +386,7 @@
     "initialized": "Initialized",
     "notInitialized": "Not initialized",
     "standardFrequencyMultiTxTitle": "Same-callsign same-cycle multi-TX is prohibited",
-    "standardFrequencyMultiTxDesc": "This is a prohibited transmission on standard FT8/FT4 frequencies. Stop one transmitter immediately or move it to a different cycle. Callsign: {{callsigns}}."
+    "standardFrequencyMultiTxDesc": "This is a prohibited transmission on standard FT8/FT4/MSK144 frequencies. Stop one transmitter immediately or move it to a different cycle. Callsign: {{callsigns}}."
   },
   "profile": {
     "reconnecting": "Reconnecting to \"{{name}}\"",
@@ -657,9 +657,6 @@
     "title": "CW",
     "keyerTitle": "CW Keyer",
     "wpm": "WPM",
-    "sidetone": "Web Sidetone",
-    "sidetoneFrequency": "Pitch",
-    "sidetoneVolume": "Volume",
     "keyMethod": "Key Method",
     "textInputPlaceholder": "Enter CW text, supports {MYCALL} / {HISCALL}...",
     "send": "Send",
@@ -690,7 +687,6 @@
     "catUnavailableBody": "Connect a Hamlib radio that supports CAT Morse sending before using this backend.",
     "catUnavailableDisconnected": "Connect a Hamlib radio before using CAT CW.",
     "catUnavailableHamlibOnly": "CAT CW currently supports Hamlib serial or network radio connections only.",
-    "catUnsupportedSendMorse": "The radio does not report CAT CW sending support (Hamlib SEND_MORSE). Use Key jack instead, or verify the rig/Hamlib backend supports it.",
     "qsoTab": "QSOs",
     "qso": {
       "title": "CW QSO Log",
@@ -749,21 +745,15 @@
     "settings": "Settings",
     "placeholderMyCall": "current operator callsign",
     "placeholderHisCall": "station callsign in the QSO log",
-    "placeholderTrst": "sent signal report",
-    "placeholderRrst": "received signal report",
     "placeholderTooltip": "{{source}}: {{label}}",
     "placeholderMissingTooltip": "{{source}} needs {{label}}",
     "placeholderMissingValue": "Not set",
     "placeholderMissingMyCall": "MY CALL",
     "placeholderMissingHisCall": "DX CALL",
-    "placeholderMissingTrst": "Sent RST",
-    "placeholderMissingRrst": "Received RST",
     "placeholderMissingTitle": "Missing CW placeholder value",
     "placeholderMissingToast": "Fill in {{placeholders}} before sending this CW message.",
     "placeholderHint": "Placeholders",
     "placeholderHintSuffix": "are replaced when sending.",
-    "trstLabel": "TX RST",
-    "rrstLabel": "RX RST",
     "decoder": {
       "title": "CW Decoder",
       "enable": "Enable CW decoder",
@@ -782,10 +772,6 @@
       "transcriptEmpty": "Confirmed decoded segments will appear here.",
       "clear": "Clear",
       "confidence": "Confidence",
-      "filter": "Audio filter",
-      "filterSummary": "{{target}} Hz tone · {{width}} Hz width",
-      "filterOverlayLabel": "CW filter",
-      "filterOverlayDescription": "{{target}} Hz · {{width}} Hz audio filter",
       "useCallsign": "Use callsign {{callsign}}",
       "noCallsign": "No callsign found",
       "settings": "Decoder settings",
@@ -793,24 +779,6 @@
       "runtimeMode": "Runtime mode",
       "cpuMode": "CPU",
       "gpuMode": "GPU",
-      "runtimeBackends": {
-        "cpu": {
-          "label": "CPU",
-          "description": "Portable CPU execution provider."
-        },
-        "coreml": {
-          "label": "CoreML",
-          "description": "macOS CoreML acceleration on supported Apple devices."
-        },
-        "cuda": {
-          "label": "CUDA",
-          "description": "Linux x64 NVIDIA GPU; requires externally installed CUDA v12 runtime."
-        },
-        "webgpu": {
-          "label": "WebGPU",
-          "description": "Experimental ONNX Runtime WebGPU execution provider."
-        }
-      },
       "modelSizes": {
         "tiny": "Tiny",
         "small": "Small",

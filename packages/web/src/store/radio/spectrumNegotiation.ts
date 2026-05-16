@@ -11,6 +11,11 @@ import { isSpectrumSubscriptionPaused } from '../../utils/spectrumSubscriptionPa
 
 type Logger = ReturnType<typeof createLogger>;
 
+function isDigitalSpectrumDetailMode(modeName: string | null | undefined): boolean {
+  const normalized = modeName?.trim().toUpperCase();
+  return normalized === 'FT8' || normalized === 'FT4' || normalized === 'MSK144';
+}
+
 interface SpectrumNegotiationDeps {
   radioDispatch: React.Dispatch<RadioAction>;
   radioService: RadioService;
@@ -106,7 +111,7 @@ export function createSpectrumNegotiator({
     const shouldAutoEnableOpenWebRXDetail = shouldAutoApplyPriority
       && effectiveKind === 'openwebrx-sdr'
       && profileId !== null
-      && (currentModeName === 'FT8' || currentModeName === 'FT4');
+      && isDigitalSpectrumDetailMode(currentModeName);
 
     capabilitiesRef.current = capabilities;
     radioDispatch({ type: 'setSpectrumCapabilities', payload: capabilities });
@@ -170,7 +175,7 @@ export function createSpectrumNegotiator({
       && currentProfileId === pendingProfileId
       && sessionState.kind === 'openwebrx-sdr'
       && sessionState.sourceMode === 'full'
-      && (currentModeName === 'FT8' || currentModeName === 'FT4');
+      && isDigitalSpectrumDetailMode(currentModeName);
 
     if (shouldAutoEnableDetail) {
       pendingDefaultOpenWebRXDetailProfileRef.current = null;

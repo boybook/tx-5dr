@@ -22,6 +22,7 @@ const AP_DECODE_SUPPRESSION_CYCLES = 3;
 const MODE_SLOT_MS: Record<DecodeRequest['mode'], number> = {
   FT8: 15_000,
   FT4: 7_500,
+  MSK144: 15_000,
 };
 
 export type DecodeWorkerCountReason = 'explicit' | 'low-memory' | 'low-cpu' | 'default';

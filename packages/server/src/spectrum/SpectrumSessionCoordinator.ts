@@ -26,8 +26,6 @@ const DISPLAY_STATE_POLL_INTERVAL_MS = 2000;
 const ICOM_WLAN_DISPLAY_STATE_POLL_INTERVAL_MS = 5000;
 const VOICE_STATE_POLL_INTERVAL_MS = 2000;
 const DISPLAY_STATE_RETRY_MS = 30_000;
-const RADIO_IO_BACKPRESSURE_WARN_MS = 30_000;
-const RADIO_IO_BACKPRESSURE_WARN_COOLDOWN_MS = 10_000;
 const RADIO_FRAME_SESSION_STATE_MIN_INTERVAL_MS = 2000;
 const ZOOM_CONFIRM_TIMEOUT_MS = 2000;
 const STANDARD_FREQUENCY_TOLERANCE_HZ = 1500;
@@ -37,6 +35,16 @@ const DIGITAL_WINDOW_HIGH_OFFSET_HZ = 4000;
 const DIGITAL_WINDOW_PENDING_TIMEOUT_MS = 3000;
 const OPENWEBRX_DETAIL_OFFSET_HZ = 1500;
 const VOICE_FREQUENCY_GESTURE_STEP_HZ = 1000;
+type DigitalModeName = 'FT8' | 'FT4' | 'MSK144';
+
+function normalizeDigitalModeName(modeName: string | null | undefined): DigitalModeName | null {
+  if (!modeName) return null;
+  const normalized = modeName.trim().toUpperCase();
+  if (normalized === 'FT8') return 'FT8';
+  if (normalized === 'FT4') return 'FT4';
+  if (normalized === 'MSK144') return 'MSK144';
+  return null;
+}
 
 function formatPresetMarkerLabel(frequencyHz: number): string {
   return `${(frequencyHz / 1_000_000).toFixed(3)} MHz`;
@@ -76,17 +84,6 @@ interface DigitalWindowState {
   standardFrequencyHz: number | null;
   lowHz: number | null;
   highHz: number | null;
-}
-
-interface ResolvedRadioDisplayState {
-  mode: SpectrumDisplayMode | 'unknown';
-  displayRange: SpectrumSessionState['displayRange'];
-  centerFrequency: number | null;
-  edgeLowHz: number | null;
-  edgeHighHz: number | null;
-  spanHz: number | null;
-  supportsFixedEdges: boolean;
-  supportsSpanControl: boolean;
 }
 
 interface PendingDigitalTransition {
@@ -130,12 +127,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   private pendingConnectionType: 'hamlib' | 'icom-wlan' | null = null;
   private pendingZoomTimer: NodeJS.Timeout | null = null;
   private pendingDigitalTransition: PendingDigitalTransition | null = null;
-  private cachedRadioDisplayState: ResolvedRadioDisplayState | null = null;
-  private cachedRadioZoomState: ZoomState | null = null;
-  private cachedDigitalWindowState: DigitalWindowState | null = null;
-  private nonDigitalFollowSyncPromise: Promise<void> | null = null;
-  private radioIoBackpressureStartedAt: number | null = null;
-  private lastRadioIoBackpressureWarnAt = 0;
+  private voiceFollowSyncPromise: Promise<void> | null = null;
 
   constructor(
     private readonly engine: DigitalRadioEngine,
@@ -149,28 +141,26 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       if (!this.engine.getRadioManager().isConnected()) {
         this.lastKnownRadioFrequency = null;
         this.cachedVoiceState = EMPTY_VOICE_STATE;
-        this.clearRadioSdrUiStateCache();
         this.clearPendingZoom();
         this.clearPendingDigitalTransition();
       }
       this.updatePollingState();
-      void this.ensureNonDigitalRadioFollowMode();
+      void this.ensureVoiceRadioFollowMode();
       this.markDirty();
     });
 
     this.engine.on('profileChanged', () => {
       this.displayStateFailedAt = null;
       this.clearSpectrumDisplayStateCache();
-      this.clearRadioSdrUiStateCache();
       this.clearPendingZoom();
       this.clearPendingDigitalTransition();
-      void this.ensureNonDigitalRadioFollowMode();
+      void this.ensureVoiceRadioFollowMode();
       this.markDirty();
     });
 
     this.engine.on('modeChanged', () => {
       this.updatePollingState();
-      void this.ensureNonDigitalRadioFollowMode();
+      void this.ensureVoiceRadioFollowMode();
       this.markDirty();
     });
 
@@ -271,12 +261,6 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     this.spectrumDisplayStateCache = null;
   }
 
-  private clearRadioSdrUiStateCache(): void {
-    this.cachedRadioDisplayState = null;
-    this.cachedRadioZoomState = null;
-    this.cachedDigitalWindowState = null;
-  }
-
   private updatePollingState(): void {
     const connected = this.engine.getRadioManager().isConnected();
     const displayPollIntervalMs = this.resolveDisplayStatePollIntervalMs();
@@ -286,7 +270,6 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       }
       this.displayPollIntervalMs = displayPollIntervalMs;
       this.displayPollTimer = setInterval(() => {
-        void this.ensureNonDigitalRadioFollowMode();
         this.markDirty();
       }, displayPollIntervalMs);
     } else if (!connected && this.displayPollTimer) {
@@ -331,10 +314,9 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       return;
     }
 
-    const modeName = data.mode === 'FT8' || data.mode === 'FT4'
-      ? data.mode
-      : this.engine.getStatus().currentMode.name;
-    if (modeName !== 'FT8' && modeName !== 'FT4') {
+    const modeName = normalizeDigitalModeName(data.mode)
+      ?? normalizeDigitalModeName(this.engine.getStatus().currentMode.name);
+    if (!modeName) {
       this.markDirty();
       return;
     }
@@ -461,19 +443,13 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     const display = await this.resolveRadioDisplayState(currentRadioFrequency);
     const zoom = await this.buildZoomState(display);
     const digitalWindow = await this.buildDigitalWindowState(display, standardFrequencyHz);
-    const engineMode = this.engine.getEngineMode();
-    const isVoiceMode = engineMode === 'voice';
-    const isCwMode = engineMode === 'cw';
+    const isVoiceMode = this.engine.getEngineMode() === 'voice';
     const sourceMode = this.mapRadioDisplayModeToSourceMode(display.mode);
     const isFixed = sourceMode === 'fixed' || sourceMode === 'scroll-fixed';
-    const isDigital = engineMode === 'digital';
+    const isDigital = this.engine.getEngineMode() === 'digital';
     const canVoiceSetFrequency = isVoiceMode
       && currentRadioFrequency !== null
       && display.displayRange !== null;
-    const canCwSetFrequency = isCwMode
-      && currentRadioFrequency !== null
-      && display.displayRange !== null;
-    const canSetRadioFrequency = canVoiceSetFrequency || canCwSetFrequency;
     const presetMarkers = isVoiceMode && display.displayRange
       ? this.resolveVoicePresetMarkers(display.displayRange.min, display.displayRange.max, canVoiceSetFrequency)
       : [];
@@ -528,11 +504,14 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
         showTxMarkers: isDigital,
         showRxMarkers: isDigital,
         canDragTx: isDigital,
-        canRightClickSetFrequency: isDigital || canSetRadioFrequency,
-        canDoubleClickSetFrequency: canSetRadioFrequency,
-        canDragFrequency: canSetRadioFrequency && !isFixed,
-        frequencyGestureTarget: isDigital ? 'operator-tx' : (canSetRadioFrequency ? 'radio-frequency' : null),
-        frequencyStepHz: isDigital ? 1 : (canVoiceSetFrequency ? VOICE_FREQUENCY_GESTURE_STEP_HZ : (canCwSetFrequency ? 10 : null)),
+        canRightClickSetFrequency: isDigital || canVoiceSetFrequency,
+        canDoubleClickSetFrequency: canVoiceSetFrequency,
+        // Voice-mode drag tuning is intentionally disabled for now.
+        // In follow/center mode the SDR viewport recenters while dragging, which makes
+        // whole-spectrum drag interaction feel jumpy and harder to control precisely.
+        canDragFrequency: false,
+        frequencyGestureTarget: isDigital ? 'operator-tx' : (canVoiceSetFrequency ? 'radio-frequency' : null),
+        frequencyStepHz: isDigital ? 1 : (canVoiceSetFrequency ? VOICE_FREQUENCY_GESTURE_STEP_HZ : null),
         // Voice preset markers are negotiated here so SDR preset rendering stays on the
         // same capability/session-state channel as the rest of the spectrum interactions.
         presetMarkers,
@@ -559,7 +538,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     const sourceMode: SpectrumSessionSourceMode = detailEnabled ? 'detail' : 'full';
     const isVoiceMode = this.engine.getEngineMode() === 'voice';
     const isDigitalMode = this.engine.getEngineMode() === 'digital'
-      && (this.engine.getStatus().currentMode.name === 'FT8' || this.engine.getStatus().currentMode.name === 'FT4');
+      && normalizeDigitalModeName(this.engine.getStatus().currentMode.name) !== null;
 
     const controls: SpectrumSessionControl[] = [];
     if (adapter?.isConnected() && isDigitalMode) {
@@ -695,15 +674,20 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
 
   private async resolveRadioDisplayState(
     currentRadioFrequencyOverride?: number | null,
-  ): Promise<ResolvedRadioDisplayState> {
+  ): Promise<{
+    mode: SpectrumDisplayMode | 'unknown';
+    displayRange: SpectrumSessionState['displayRange'];
+    centerFrequency: number | null;
+    edgeLowHz: number | null;
+    edgeHighHz: number | null;
+    spanHz: number | null;
+    supportsFixedEdges: boolean;
+    supportsSpanControl: boolean;
+  }> {
     const currentRadioFrequency = normalizeRadioFrequency(currentRadioFrequencyOverride) ?? this.lastKnownRadioFrequency;
     const activeConnection = this.engine.getRadioManager().getActiveConnection();
     const now = Date.now();
     const deferCatReads = this.shouldDeferRadioCatReads();
-    if (deferCatReads && this.cachedRadioDisplayState) {
-      return this.cachedRadioDisplayState;
-    }
-
     const canTryDisplayState = Boolean(activeConnection?.getSpectrumDisplayState)
       && !deferCatReads
       && (this.displayStateFailedAt === null || now - this.displayStateFailedAt >= DISPLAY_STATE_RETRY_MS);
@@ -748,7 +732,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       configured?.spanHz ?? null,
     );
 
-    const displayRange = this.resolveDisplayRange();
+    const displayRange = this.resolveDisplayRange(mode, configured?.edgeLowHz ?? null, configured?.edgeHighHz ?? null);
     const edgeLowHz = (mode === 'fixed' || mode === 'scroll-fixed') && displayRange
       ? displayRange.min
       : (typeof configured?.edgeLowHz === 'number' ? configured.edgeLowHz : null);
@@ -758,7 +742,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     const centerFrequency = this.resolveCenterFrequency(displayRange, currentRadioFrequency);
     const spanHz = this.resolveSpanHz(displayRange, configured?.spanHz ?? null);
 
-    const resolved: ResolvedRadioDisplayState = {
+    return {
       mode,
       displayRange,
       centerFrequency,
@@ -771,10 +755,6 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       ),
       supportsSpanControl: (configured?.supportedSpans?.length ?? 0) > 0,
     };
-    if (!deferCatReads) {
-      this.cachedRadioDisplayState = resolved;
-    }
-    return resolved;
   }
 
   private resolveDisplayMode(
@@ -807,11 +787,27 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     return 'unknown';
   }
 
-  private resolveDisplayRange(): SpectrumSessionState['displayRange'] {
+  private resolveDisplayRange(
+    mode: SpectrumDisplayMode | 'unknown',
+    edgeLowHz: number | null,
+    edgeHighHz: number | null,
+  ): SpectrumSessionState['displayRange'] {
     if (this.lastRadioFrame) {
       return {
         min: this.lastRadioFrame.frequencyRange.min,
         max: this.lastRadioFrame.frequencyRange.max,
+      };
+    }
+
+    if ((mode === 'fixed' || mode === 'scroll-fixed')
+      && typeof edgeLowHz === 'number'
+      && typeof edgeHighHz === 'number'
+      && Number.isFinite(edgeLowHz)
+      && Number.isFinite(edgeHighHz)
+      && edgeHighHz > edgeLowHz) {
+      return {
+        min: edgeLowHz,
+        max: edgeHighHz,
       };
     }
 
@@ -852,30 +848,40 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     return null;
   }
 
-  private async buildZoomState(display: ResolvedRadioDisplayState): Promise<ZoomState> {
-    if (this.shouldDeferRadioCatReads()) {
-      return this.cachedRadioZoomState ?? this.createEmptyZoomState();
-    }
-
+  private async buildZoomState(display: Awaited<ReturnType<SpectrumSessionCoordinator['resolveRadioDisplayState']>>): Promise<ZoomState> {
     const connection = this.getZoomCapableConnection();
     const isCenterMode = display.mode === 'center' || display.mode === 'scroll-center';
-    if (!connection || !this.engine.getRadioManager().isConnected() || !isCenterMode) {
-      const empty = this.createEmptyZoomState();
-      this.cachedRadioZoomState = empty;
-      return empty;
+    if (!connection || !this.engine.getRadioManager().isConnected() || !isCenterMode || this.shouldDeferRadioCatReads()) {
+      return {
+        levels: [],
+        currentLevelId: null,
+        currentSpanHz: null,
+        canZoomIn: false,
+        canZoomOut: false,
+        visible: false,
+        enabled: false,
+        pending: false,
+      };
     }
 
     const levels = await this.getZoomLevels(connection);
     if (levels.length === 0) {
-      const empty = this.createEmptyZoomState();
-      this.cachedRadioZoomState = empty;
-      return empty;
+      return {
+        levels: [],
+        currentLevelId: null,
+        currentSpanHz: null,
+        canZoomIn: false,
+        canZoomOut: false,
+        visible: false,
+        enabled: false,
+        pending: false,
+      };
     }
 
     const currentSpanHz = await this.resolveCurrentSpan(connection, display.spanHz);
     const currentLevel = this.resolveCurrentLevel(levels, currentSpanHz);
     const currentIndex = currentLevel ? levels.findIndex(level => level.id === currentLevel.id) : -1;
-    const zoom: ZoomState = {
+    return {
       levels,
       currentLevelId: currentLevel?.id ?? null,
       currentSpanHz,
@@ -884,21 +890,6 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       visible: true,
       enabled: true,
       pending: this.pendingTargetSpanHz !== null,
-    };
-    this.cachedRadioZoomState = zoom;
-    return zoom;
-  }
-
-  private createEmptyZoomState(): ZoomState {
-    return {
-      levels: [],
-      currentLevelId: null,
-      currentSpanHz: null,
-      canZoomIn: false,
-      canZoomOut: false,
-      visible: false,
-      enabled: false,
-      pending: false,
     };
   }
 
@@ -1053,43 +1044,35 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   }
 
   private async buildDigitalWindowState(
-    display: ResolvedRadioDisplayState,
+    display: Awaited<ReturnType<SpectrumSessionCoordinator['resolveRadioDisplayState']>>,
     standardFrequencyHint?: number | null,
   ): Promise<DigitalWindowState> {
-    if (!this.engine.getRadioManager().isConnected() || this.engine.getEngineMode() !== 'digital') {
+    if (
+      !this.engine.getRadioManager().isConnected()
+      || this.engine.getEngineMode() !== 'digital'
+      || this.shouldDeferRadioCatReads()
+    ) {
       this.clearPendingDigitalTransition();
-      const empty = this.createEmptyDigitalWindowState();
-      this.cachedDigitalWindowState = empty;
-      return empty;
+      return this.createEmptyDigitalWindowState();
     }
 
-    const currentModeName = this.engine.getStatus().currentMode.name;
-    if (currentModeName !== 'FT8' && currentModeName !== 'FT4') {
+    const currentModeName = normalizeDigitalModeName(this.engine.getStatus().currentMode.name);
+    if (!currentModeName) {
       this.clearPendingDigitalTransition();
-      const empty = this.createEmptyDigitalWindowState();
-      this.cachedDigitalWindowState = empty;
-      return empty;
-    }
-
-    if (this.shouldDeferRadioCatReads()) {
-      return this.cachedDigitalWindowState ?? this.createEmptyDigitalWindowState();
+      return this.createEmptyDigitalWindowState();
     }
 
     const connection = this.getDisplayConfigurableConnection();
     const supported = Boolean(connection?.configureSpectrumDisplay && connection?.getSpectrumDisplayState);
     if (!supported) {
       this.clearPendingDigitalTransition();
-      const empty = this.createEmptyDigitalWindowState();
-      this.cachedDigitalWindowState = empty;
-      return empty;
+      return this.createEmptyDigitalWindowState();
     }
 
     const standardFrequencyHz = standardFrequencyHint ?? await this.resolveStandardFrequency(currentModeName, this.lastKnownRadioFrequency);
     if (standardFrequencyHz === null) {
       this.clearPendingDigitalTransition();
-      const empty = this.createEmptyDigitalWindowState();
-      this.cachedDigitalWindowState = empty;
-      return empty;
+      return this.createEmptyDigitalWindowState();
     }
 
     const lowHz = standardFrequencyHz + DIGITAL_WINDOW_LOW_OFFSET_HZ;
@@ -1100,7 +1083,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       && this.isWithinTolerance(display.edgeHighHz, highHz, ACTIVE_WINDOW_TOLERANCE_HZ);
     const pending = this.resolvePendingDigitalState(display, lowHz, highHz);
 
-    const digitalWindow: DigitalWindowState = {
+    return {
       supported: true,
       active,
       pending,
@@ -1109,8 +1092,6 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       lowHz,
       highHz,
     };
-    this.cachedDigitalWindowState = digitalWindow;
-    return digitalWindow;
   }
 
   private createEmptyDigitalWindowState(): DigitalWindowState {
@@ -1164,8 +1145,8 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       return null;
     }
 
-    const modeName = this.engine.getStatus().currentMode.name;
-    if (modeName !== 'FT8' && modeName !== 'FT4') {
+    const modeName = normalizeDigitalModeName(this.engine.getStatus().currentMode.name);
+    if (!modeName) {
       return null;
     }
 
@@ -1173,7 +1154,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   }
 
   private async resolveStandardFrequency(
-    modeName: 'FT8' | 'FT4',
+    modeName: DigitalModeName,
     currentRadioFrequency: number | null,
   ): Promise<number | null> {
     const configManager = ConfigManager.getInstance();
@@ -1219,25 +1200,24 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       }));
   }
 
-  private async ensureNonDigitalRadioFollowMode(): Promise<void> {
-    const engineMode = this.engine.getEngineMode();
-    if (engineMode !== 'voice' && engineMode !== 'cw') {
+  private async ensureVoiceRadioFollowMode(): Promise<void> {
+    if (this.engine.getEngineMode() !== 'voice') {
       return;
     }
 
-    if (this.nonDigitalFollowSyncPromise) {
-      return this.nonDigitalFollowSyncPromise;
+    if (this.voiceFollowSyncPromise) {
+      return this.voiceFollowSyncPromise;
     }
 
-    this.nonDigitalFollowSyncPromise = this.doEnsureNonDigitalRadioFollowMode()
+    this.voiceFollowSyncPromise = this.doEnsureVoiceRadioFollowMode()
       .finally(() => {
-        this.nonDigitalFollowSyncPromise = null;
+        this.voiceFollowSyncPromise = null;
       });
 
-    return this.nonDigitalFollowSyncPromise;
+    return this.voiceFollowSyncPromise;
   }
 
-  private async doEnsureNonDigitalRadioFollowMode(): Promise<void> {
+  private async doEnsureVoiceRadioFollowMode(): Promise<void> {
     if (!this.engine.getRadioManager().isConnected() || this.shouldDeferRadioCatReads()) {
       return;
     }
@@ -1260,9 +1240,9 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       this.clearPendingDigitalTransition();
       await connection.configureSpectrumDisplay({ mode: 'center' });
       this.clearSpectrumDisplayStateCache();
-      logger.info('Restored radio spectrum to follow mode for non-digital mode');
+      logger.info('Restored radio spectrum to follow mode for voice');
     } catch (error) {
-      logger.warn('Failed to restore radio spectrum follow mode for non-digital mode', error);
+      logger.warn('Failed to restore radio spectrum follow mode for voice', error);
     }
   }
 
@@ -1311,7 +1291,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   }
 
   private resolvePendingDigitalState(
-    display: ResolvedRadioDisplayState,
+    display: Awaited<ReturnType<SpectrumSessionCoordinator['resolveRadioDisplayState']>>,
     targetLowHz: number,
     targetHighHz: number,
   ): boolean {
@@ -1423,44 +1403,12 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     const radioManager = this.engine.getRadioManager() as {
       isCriticalRadioOperationActive?: () => boolean;
       isSessionMutationInProgress?: () => boolean;
-      getActiveConnection?: () => IRadioConnection | null;
     };
-    const criticalOrMutation = Boolean(
+
+    return Boolean(
       radioManager.isCriticalRadioOperationActive?.()
       || radioManager.isSessionMutationInProgress?.(),
     );
-    if (criticalOrMutation) {
-      return true;
-    }
-
-    const snapshot = radioManager.getActiveConnection?.()?.getRadioIoQueueSnapshot?.();
-    if (!snapshot?.busy) {
-      this.radioIoBackpressureStartedAt = null;
-      return false;
-    }
-
-    const now = Date.now();
-    if (this.radioIoBackpressureStartedAt === null) {
-      this.radioIoBackpressureStartedAt = now;
-    }
-
-    const pauseDurationMs = now - this.radioIoBackpressureStartedAt;
-    const context = {
-      reason: 'spectrum-session-polling',
-      pauseDurationMs,
-      ...snapshot,
-    };
-    logger.debug('Skipping spectrum CAT reads while radio I/O queue is busy', context);
-
-    if (
-      pauseDurationMs >= RADIO_IO_BACKPRESSURE_WARN_MS
-      && now - this.lastRadioIoBackpressureWarnAt >= RADIO_IO_BACKPRESSURE_WARN_COOLDOWN_MS
-    ) {
-      this.lastRadioIoBackpressureWarnAt = now;
-      logger.warn('Serial CAT queue remains busy; low-priority polling paused', context);
-    }
-
-    return true;
   }
 
   private normalizeBandwidthProfile(bandwidthLabel: string | number | null): 'narrow' | 'normal' | 'wide' {
@@ -1507,7 +1455,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       return;
     }
 
-    const currentMode = this.engine.getStatus().currentMode.name;
+    const currentMode = normalizeDigitalModeName(this.engine.getStatus().currentMode.name);
     const detailMode = currentMode === 'FT4' ? 'ft4' : 'ft8';
     adapter.enableDigitalDetailSpectrum(detailMode, OPENWEBRX_DETAIL_OFFSET_HZ);
   }

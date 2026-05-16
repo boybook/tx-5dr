@@ -112,6 +112,52 @@ test('SlotScheduler tags FT4 decode requests with FT4 mode', async () => {
   assert.deepStrictEqual(decodeModes, ['FT4']);
 });
 
+test('SlotScheduler tags MSK144 decode requests with MSK144 mode', async () => {
+  class FakeSlotClock extends EventEmitter<{ subWindow: (slotInfo: SlotInfo, windowIdx: number) => void }> {
+    getMode(): ModeDescriptor {
+      return {
+        name: 'MSK144',
+        slotMs: 15000,
+        toleranceMs: 100,
+        windowTiming: [0],
+        transmitTiming: 500,
+        encodeAdvance: 0,
+      };
+    }
+  }
+
+  const slotClock = new FakeSlotClock();
+  const decodeModes: string[] = [];
+  const scheduler = new SlotScheduler(
+    slotClock as unknown as any,
+    {
+      push: async (request) => {
+        decodeModes.push(request.mode);
+      },
+      size: () => 0,
+    },
+    {
+      getBuffer: async () => new ArrayBuffer(32),
+      getSampleRate: () => 12000,
+    },
+  );
+
+  scheduler.start();
+  slotClock.emit('subWindow', {
+    id: 'MSK144-1-15000',
+    startMs: 15000,
+    phaseMs: 0,
+    driftMs: 0,
+    cycleNumber: 1,
+    utcSeconds: 15,
+    mode: 'MSK144',
+  }, 0);
+  await wait(10);
+  scheduler.stop();
+
+  assert.deepStrictEqual(decodeModes, ['MSK144']);
+});
+
 test('SlotScheduler attaches AP context only when provider returns one', async () => {
   class FakeSlotClock extends EventEmitter<{ subWindow: (slotInfo: SlotInfo, windowIdx: number) => void }> {
     getMode(): ModeDescriptor {

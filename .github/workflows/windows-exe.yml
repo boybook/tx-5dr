@@ -1,0 +1,78 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.15.1"
+
+      - name: Enable Corepack and setup Yarn
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare yarn@4.9.1 --activate
+          yarn --version
+
+      - name: Setup Python (for native modules)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install dependencies
+        shell: bash
+        run: yarn install
+        env:
+          YARN_NODE_LINKER: node-modules
+
+      - name: Generate ICO file
+        run: node scripts/generate-ico.js
+
+      - name: Build app
+        run: yarn build
+        env:
+          NODE_ENV: production
+
+      - name: Make Windows packages
+        run: yarn make:win
+
+      - name: Collect EXE artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+
+          if (Test-Path "out/make/squirrel.windows/x64/TX-5DR-Setup.exe") {
+            Copy-Item "out/make/squirrel.windows/x64/TX-5DR-Setup.exe" "artifacts/"
+          } else {
+            Get-ChildItem "out/make" -Recurse -Filter "*.exe" | ForEach-Object {
+              Copy-Item $_.FullName "artifacts/"
+            }
+          }
+
+          $exeFiles = Get-ChildItem "artifacts" -Filter "*.exe" -ErrorAction SilentlyContinue
+          if (-not $exeFiles) {
+            Write-Error "No EXE artifacts found under out/make."
+            exit 1
+          }
+
+      - name: Upload EXE artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tx-5dr-windows-exe-${{ github.sha }}
+          path: artifacts/*.exe
+          retention-days: 14

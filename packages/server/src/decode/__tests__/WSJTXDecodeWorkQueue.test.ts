@@ -15,6 +15,7 @@ vi.mock('wsjtx-lib', () => {
   const WSJTXMode = {
     FT8: 0,
     FT4: 1,
+    MSK144: 10,
   };
 
   class WSJTXLib {
@@ -29,7 +30,9 @@ vi.mock('wsjtx-lib', () => {
     async decode(mode: number, audioData: Int16Array, options: Record<string, unknown>): Promise<{ success: boolean; messages: Array<{ text: string; snr: number; deltaTime: number; deltaFrequency: number }> }> {
       decodeCalls.push({ mode, samples: audioData.length, options: { ...options } });
       pendingMessages.push({
-        text: mode === WSJTXMode.FT4 ? 'CQ DX BH1ABC OM88' : 'CQ DX FT8TEST OM88',
+        text: mode === WSJTXMode.FT4
+          ? 'CQ DX BH1ABC OM88'
+          : (mode === WSJTXMode.MSK144 ? 'CQ DX MSKTEST OM88' : 'CQ DX FT8TEST OM88'),
         snr: 10,
         deltaTime: 0.1,
         deltaFrequency: 1000,
@@ -122,6 +125,33 @@ describe('WSJTXDecodeWorkerCore mode selection', () => {
         decodeDepth: 1,
       }),
     }]);
+  });
+
+  it('uses the MSK144 native decoder for MSK144 decode requests', async () => {
+    decodeCalls.length = 0;
+    pendingMessages.length = 0;
+
+    const result = await decodeOnce({
+      slotId: 'MSK144-0-0',
+      mode: 'MSK144',
+      windowIdx: 0,
+      pcm: makePcm(900),
+      sampleRate: 12000,
+      timestamp: Date.now(),
+      windowOffsetMs: 0,
+    });
+
+    expect(decodeCalls).toEqual([{
+      mode: 10,
+      samples: 900,
+      options: expect.objectContaining({
+        frequency: 0,
+        txFrequency: 0,
+        threads: 1,
+        apDecode: false,
+      }),
+    }]);
+    expect(result.frames[0]?.message).toBe('CQ DX MSKTEST OM88');
   });
 
   it('passes conservative AP context to native decode when provided', async () => {
