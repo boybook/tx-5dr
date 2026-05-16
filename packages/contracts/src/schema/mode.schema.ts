@@ -39,7 +39,7 @@ export const MODES = {
     slotMs: 15000,
     toleranceMs: 100,
     windowTiming: [0],
-    transmitTiming: 500,
+    transmitTiming: 0,
     encodeAdvance: 0,
   } as ModeDescriptor,
   VOICE: {

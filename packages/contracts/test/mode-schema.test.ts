@@ -35,10 +35,10 @@ describe('MODES.FT8 timing constants (regression guard)', () => {
 });
 
 describe('MODES.MSK144 timing constants', () => {
-  it('keeps MSK144 at 15s slot timing with slot-end decode pass', () => {
+  it('keeps MSK144 at 15s slot timing with slot-end decode pass and immediate transmit start', () => {
     expect(MODES.MSK144.slotMs).toBe(15000);
     expect(MODES.MSK144.windowTiming).toEqual([0]);
-    expect(MODES.MSK144.transmitTiming).toBe(500);
+    expect(MODES.MSK144.transmitTiming).toBe(0);
     expect(MODES.MSK144.encodeAdvance).toBe(0);
   });
 });

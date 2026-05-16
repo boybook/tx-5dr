@@ -7003,7 +7003,7 @@ __metadata:
     typescript: "npm:^5.0.0"
     vitest: "npm:^1.0.0"
     wav: "npm:^1.0.2"
-    wsjtx-lib: "npm:2.0.2"
+    wsjtx-lib: "file:../../../wsjtx_lib_nodejs-xcx/wsjtx_lib_nodejs-main"
     xstate: "npm:^5.23.0"
     zod: "npm:^3.25.30"
     zod-to-json-schema: "npm:^3.24.5"
@@ -21141,13 +21141,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"wsjtx-lib@npm:2.0.2":
+"wsjtx-lib@file:../../../wsjtx_lib_nodejs-xcx/wsjtx_lib_nodejs-main::locator=%40tx5dr%2Fserver%40workspace%3Apackages%2Fserver":
   version: 2.0.2
-  resolution: "wsjtx-lib@npm:2.0.2"
+  resolution: "wsjtx-lib@file:../../../wsjtx_lib_nodejs-xcx/wsjtx_lib_nodejs-main#../../../wsjtx_lib_nodejs-xcx/wsjtx_lib_nodejs-main::hash=417e52&locator=%40tx5dr%2Fserver%40workspace%3Apackages%2Fserver"
   dependencies:
     node-addon-api: "npm:^8.3.1"
     node-gyp-build: "npm:^4.8.0"
-  checksum: 10c0/6227bd8980fabc94597e98a6a8cae75e05f99fb6818304e768974ffcbf2d0b6134e19b3922977df4d5056622108c5d78b5546714c91da45ee31a06102f77b67b
+  checksum: 10c0/7e0842b1384d3d448088d7e080efdfed77b561aabed8027bb46c6dbf44cc2b01c260b35e60c5be661bfeaca77645a91b1e01c77c33612905255a7ffab7b8dad2
   conditions: (os=darwin | os=linux | os=win32) & (cpu=x64 | cpu=arm64)
   languageName: node
   linkType: hard
