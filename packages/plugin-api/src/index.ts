@@ -172,6 +172,7 @@ export type {
   SyncUploadResult,
   SyncPreflightIssue,
   SyncUploadPreflightResult,
+  SyncDownloadProgress,
   SyncDownloadResult,
   SyncDownloadOptions,
 } from './sync.js';

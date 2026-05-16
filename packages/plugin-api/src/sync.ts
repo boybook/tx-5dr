@@ -328,11 +328,39 @@ export interface SyncDownloadResult {
   failures?: SyncFailure[];
 }
 
+export interface SyncDownloadProgress {
+  stage:
+    | 'preparing'
+    | 'window_waiting'
+    | 'window_downloading'
+    | 'window_retrying'
+    | 'window_processing'
+    | 'window_done'
+    | 'window_failed'
+    | 'finished';
+  callsign?: string;
+  windowIndex?: number;
+  windowCount?: number;
+  range?: string;
+  waitSeconds?: number;
+  attempt?: number;
+  recordCount?: number;
+  downloaded?: number;
+  matched?: number;
+  updated?: number;
+  imported?: number;
+  failed?: number;
+  failureCount?: number;
+  message?: string;
+}
+
 export interface SyncDownloadOptions {
   /** Download records since this timestamp (epoch ms). */
   since?: number;
   /** Download records until this timestamp (epoch ms). */
   until?: number;
+  /** Optional in-process progress callback for custom sync UIs. */
+  onProgress?: (progress: SyncDownloadProgress) => void;
 }
 
 // ===== Registrar interface =====

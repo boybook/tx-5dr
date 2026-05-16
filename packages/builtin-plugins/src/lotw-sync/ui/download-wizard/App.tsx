@@ -23,6 +23,15 @@ const I18N: Record<string, Record<string, string>> = {
     retryable: '可重试',
     success: '下载完成',
     failed: '下载失败',
+    progressPreparing: '正在准备下载请求...',
+    progressWaiting: 'LoTW 限流保护，等待 {seconds} 秒',
+    progressDownloading: '第 {current}/{total} 段：正在下载 {range}',
+    progressRetrying: 'LoTW 限流或超时，等待 {seconds} 秒后重试',
+    progressProcessing: '正在处理本段记录',
+    progressDone: '第 {current}/{total} 段完成',
+    progressFailed: '第 {current}/{total} 段失败',
+    progressFinished: '下载同步完成',
+    progressCounts: '已下载 {downloaded}，已匹配 {matched}，已导入 {imported}，失败 {failed}',
   },
   en: {
     description: 'Select the date range for downloading LoTW confirmations.',
@@ -41,6 +50,15 @@ const I18N: Record<string, Record<string, string>> = {
     retryable: 'Retryable',
     success: 'Download complete',
     failed: 'Download failed',
+    progressPreparing: 'Preparing download requests...',
+    progressWaiting: 'LoTW rate-limit guard: waiting {seconds}s',
+    progressDownloading: 'Window {current}/{total}: downloading {range}',
+    progressRetrying: 'LoTW limited or timed out; retrying in {seconds}s',
+    progressProcessing: 'Processing this window',
+    progressDone: 'Window {current}/{total} complete',
+    progressFailed: 'Window {current}/{total} failed',
+    progressFinished: 'Download sync complete',
+    progressCounts: 'Downloaded {downloaded}, matched {matched}, imported {imported}, failed {failed}',
   },
 };
 
@@ -62,8 +80,55 @@ interface DownloadResult {
   }>;
 }
 
+type DownloadProgressStage =
+  | 'preparing'
+  | 'window_waiting'
+  | 'window_downloading'
+  | 'window_retrying'
+  | 'window_processing'
+  | 'window_done'
+  | 'window_failed'
+  | 'finished';
+
+interface DownloadProgress {
+  stage: DownloadProgressStage;
+  windowIndex?: number;
+  windowCount?: number;
+  range?: string;
+  waitSeconds?: number;
+  attempt?: number;
+  recordCount?: number;
+  downloaded?: number;
+  matched?: number;
+  updated?: number;
+  imported?: number;
+  failed?: number;
+  failureCount?: number;
+  message?: string;
+}
+
 function formatDate(date: Date): string {
   return date.toISOString().split('T')[0];
+}
+
+function progressText(progress: DownloadProgress, t: (key: string, vars?: Record<string, string | number>) => string): string {
+  const vars = {
+    current: progress.windowIndex ?? 0,
+    total: progress.windowCount ?? 0,
+    range: progress.range ?? '',
+    seconds: progress.waitSeconds ?? 0,
+  };
+  switch (progress.stage) {
+    case 'preparing': return t('progressPreparing');
+    case 'window_waiting': return t('progressWaiting', vars);
+    case 'window_downloading': return t('progressDownloading', vars);
+    case 'window_retrying': return progress.message ? `${t('progressRetrying', vars)}: ${progress.message}` : t('progressRetrying', vars);
+    case 'window_processing': return t('progressProcessing');
+    case 'window_done': return t('progressDone', vars);
+    case 'window_failed': return progress.message ? `${t('progressFailed', vars)}: ${progress.message}` : t('progressFailed', vars);
+    case 'finished': return t('progressFinished');
+    default: return progress.stage;
+  }
 }
 
 // ===== Component =====
@@ -80,6 +145,7 @@ export function App() {
   const [downloading, setDownloading] = useState(false);
   const [status, setStatus] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [result, setResult] = useState<DownloadResult | null>(null);
+  const [progress, setProgress] = useState<DownloadProgress | null>(null);
   const dateInputRef = useRef<HTMLInputElement>(null);
 
   useAutoResize();
@@ -104,6 +170,16 @@ export function App() {
     }).catch(() => {});
   }, [callsign]);
 
+  useEffect(() => {
+    const handleProgress = (next: DownloadProgress) => {
+      setProgress(next);
+    };
+    window.tx5dr.onPush('downloadProgress', handleProgress);
+    return () => {
+      window.tx5dr.offPush?.('downloadProgress', handleProgress);
+    };
+  }, []);
+
   // ===== Download =====
   const handleDownload = useCallback(async () => {
     const since = new Date(sinceDate).getTime();
@@ -117,6 +193,7 @@ export function App() {
     setDownloading(true);
     setStatus(null);
     setResult(null);
+    setProgress(null);
 
     try {
       const res = await window.tx5dr.invoke('performDownload', {
@@ -170,12 +247,36 @@ export function App() {
         >
           <span>{downloading ? t('downloading') : t('downloadBtn')}</span>
         </button>
-        {status && (
+      {status && (
           <span className={`status ${status.type}`}>
             {status.text}
           </span>
         )}
       </div>
+
+      {progress && (
+        <div className="progress-box">
+          <div className="progress-title">{progressText(progress, t)}</div>
+          {progress.windowCount ? (
+            <div className="progress-bar" aria-label={progressText(progress, t)}>
+              <div
+                className="progress-bar-fill"
+                style={{
+                  width: `${Math.min(100, Math.max(3, ((progress.windowIndex ?? 0) / progress.windowCount) * 100))}%`,
+                }}
+              />
+            </div>
+          ) : null}
+          <div className="progress-meta">
+            {t('progressCounts', {
+              downloaded: progress.downloaded ?? 0,
+              matched: progress.matched ?? 0,
+              imported: progress.imported ?? 0,
+              failed: progress.failed ?? 0,
+            })}
+          </div>
+        </div>
+      )}
 
       {result && (
         <div className="result-box">
@@ -205,21 +306,16 @@ export function App() {
                     {result.failures.length}
                   </span>
                 </div>
-                {result.failures.map((failure, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      color: 'var(--tx5dr-danger)',
-                      fontSize: 'var(--tx5dr-font-size-sm)',
-                      marginTop: '4px',
-                    }}
-                  >
-                    {failure.qsoCallsign ? `${failure.qsoCallsign}: ` : ''}{failure.message || failure.code}
-                    {failure.httpStatus ? ` (HTTP ${failure.httpStatus})` : ''}
-                    {failure.retryable ? ` — ${t('retryable')}` : ''}
-                    {failure.detail && failure.detail !== failure.message ? ` — ${failure.detail}` : ''}
-                  </div>
-                ))}
+                <div className="failure-list">
+                  {result.failures.map((failure, i) => (
+                    <div className="failure-item" key={i}>
+                      {failure.qsoCallsign ? `${failure.qsoCallsign}: ` : ''}{failure.message || failure.code}
+                      {failure.httpStatus ? ` (HTTP ${failure.httpStatus})` : ''}
+                      {failure.retryable ? ` - ${t('retryable')}` : ''}
+                      {failure.detail && failure.detail !== failure.message ? ` - ${failure.detail}` : ''}
+                    </div>
+                  ))}
+                </div>
               </>
             )}
           </div>

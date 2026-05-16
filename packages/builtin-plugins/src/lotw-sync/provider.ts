@@ -17,6 +17,7 @@ import type {
   SyncUploadPreflightOptions,
   SyncFailure,
   SyncUploadProgress,
+  SyncDownloadProgress,
 } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import {
@@ -248,6 +249,31 @@ interface UploadBatchAcceptedResult {
   responseSummary: string;
 }
 
+interface DownloadWindow {
+  start: number;
+  end: number;
+  startDate: string;
+  endDate: string;
+  startTime?: string;
+  endTime?: string;
+  splitDepth: number;
+}
+
+interface DownloadCounters {
+  downloaded: number;
+  matched: number;
+  updated: number;
+  imported: number;
+  failed: number;
+  failureCount: number;
+}
+
+interface DownloadWindowFetchResult {
+  records: QSORecord[];
+  failures: SyncFailure[];
+  shouldSplit?: boolean;
+}
+
 
 function lotwLocationIssueToUploadIssue(issue: LoTWLocationIssue): LoTWUploadIssue {
   return {
@@ -309,7 +335,14 @@ class LoTWRemoteError extends Error {
 // ===== Helpers =====
 
 const CONFIG_KEY_PREFIX = 'config:';
-const LOTW_DOWNLOAD_WINDOW_DAYS = 31;
+const LOTW_DOWNLOAD_WINDOW_DAYS = 7;
+const LOTW_DOWNLOAD_MIN_TIME_WINDOW_MS = 3 * 60 * 60 * 1000;
+const LOTW_DOWNLOAD_REQUEST_TIMEOUT_MS = 45000;
+const LOTW_DOWNLOAD_MAX_RETRIES = 2;
+const LOTW_DOWNLOAD_REQUEST_INTERVAL_MS = process.env.NODE_ENV === 'test' || process.env.VITEST ? 0 : 3000;
+const LOTW_DOWNLOAD_RETRY_BACKOFF_MS = process.env.NODE_ENV === 'test' || process.env.VITEST
+  ? [0, 0, 0]
+  : [30000, 60000, 120000];
 const LOTW_UPLOAD_BATCH_SIZE = 100;
 const LOTW_PREFLIGHT_DETAIL_LIMIT = 20;
 const LOTW_DOWNLOAD_MATCH_TOLERANCE_MS = 15 * 60 * 1000;
@@ -392,28 +425,86 @@ function formatLotwQueryDate(timestamp: number): string {
   return new Date(timestamp).toISOString().split('T')[0];
 }
 
+function formatLotwQueryTime(timestamp: number): string {
+  return new Date(timestamp).toISOString().slice(11, 19).replace(/:/g, '');
+}
+
 function formatIssueTimestamp(timestamp: number): string {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : 'unknown time';
 }
 
-function buildDateWindows(since: number, until: number, windowDays = LOTW_DOWNLOAD_WINDOW_DAYS): Array<{ start: number; end: number; startDate: string; endDate: string }> {
-  const windows: Array<{ start: number; end: number; startDate: string; endDate: string }> = [];
+function createDownloadWindow(start: number, end: number, splitDepth = 0): DownloadWindow {
+  const startDate = formatLotwQueryDate(start);
+  const endDate = formatLotwQueryDate(end);
+  const fullStartOfDay = start === startOfUtcDay(start);
+  const fullEndOfDay = end === endOfUtcDay(end);
+  const includeTimes = startDate === endDate && (!fullStartOfDay || !fullEndOfDay);
+  return {
+    start,
+    end,
+    startDate,
+    endDate,
+    startTime: includeTimes ? formatLotwQueryTime(start) : undefined,
+    endTime: includeTimes ? formatLotwQueryTime(end) : undefined,
+    splitDepth,
+  };
+}
+
+function formatDownloadWindowRange(window: DownloadWindow): string {
+  const startTime = window.startTime ? ` ${window.startTime}` : '';
+  const endTime = window.endTime ? ` ${window.endTime}` : '';
+  return `${window.startDate}${startTime}..${window.endDate}${endTime}`;
+}
+
+function buildDateWindows(since: number, until: number, windowDays = LOTW_DOWNLOAD_WINDOW_DAYS): DownloadWindow[] {
+  const windows: DownloadWindow[] = [];
   let cursor = startOfUtcDay(since);
   const finalEnd = endOfUtcDay(until);
   const windowLengthMs = Math.max(1, windowDays) * DAY_MS;
 
   while (cursor <= finalEnd) {
     const end = Math.min(cursor + windowLengthMs - 1, finalEnd);
-    windows.push({
-      start: cursor,
-      end,
-      startDate: formatLotwQueryDate(cursor),
-      endDate: formatLotwQueryDate(end),
-    });
+    windows.push(createDownloadWindow(cursor, end));
     cursor = end + 1;
   }
 
   return windows;
+}
+
+function canSplitDownloadWindow(window: DownloadWindow): boolean {
+  return (window.end - window.start + 1) > LOTW_DOWNLOAD_MIN_TIME_WINDOW_MS;
+}
+
+function splitDownloadWindow(window: DownloadWindow): DownloadWindow[] {
+  if (!canSplitDownloadWindow(window)) {
+    return [window];
+  }
+
+  const startDay = startOfUtcDay(window.start);
+  const endDay = startOfUtcDay(window.end);
+  const dayCount = Math.floor((endDay - startDay) / DAY_MS) + 1;
+  if (dayCount > 1) {
+    const firstDayCount = Math.max(1, Math.floor(dayCount / 2));
+    const firstEnd = Math.min(endOfUtcDay(startDay + (firstDayCount - 1) * DAY_MS), window.end);
+    return [
+      createDownloadWindow(window.start, firstEnd, window.splitDepth + 1),
+      createDownloadWindow(firstEnd + 1, window.end, window.splitDepth + 1),
+    ];
+  }
+
+  if (!window.startTime && !window.endTime) {
+    return [0, 6, 12, 18].map((hour) => {
+      const start = window.start + hour * 60 * 60 * 1000;
+      const end = Math.min(start + 6 * 60 * 60 * 1000 - 1, window.end);
+      return createDownloadWindow(start, end, window.splitDepth + 1);
+    });
+  }
+
+  const midpoint = window.start + Math.floor((window.end - window.start) / 2);
+  return [
+    createDownloadWindow(window.start, midpoint, window.splitDepth + 1),
+    createDownloadWindow(midpoint + 1, window.end, window.splitDepth + 1),
+  ];
 }
 
 function normalizeQsoCallsign(value?: string): string {
@@ -472,6 +563,9 @@ function isSkippableUploadIssue(issue: LoTWUploadIssue): boolean {
  * for QSO upload (TQ8 format with RSA-SHA1 signing) and download.
  */
 export class LoTWSyncProvider implements LogbookSyncProvider {
+  private static readonly reportRequestQueues = new Map<string, Promise<unknown>>();
+  private static readonly lastReportRequestAt = new Map<string, number>();
+
   readonly id = 'lotw';
   readonly displayName = 'LoTW';
   readonly color = 'success' as const;
@@ -847,7 +941,9 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       });
       const url = LOTW_REPORT_URL + '?' + params.toString();
 
-      const response = await this.doFetch(url, { method: 'GET', timeout: 15000 });
+      const response = await this.withReportRequestSlot(config.username, () => undefined, () => (
+        this.doFetch(url, { method: 'GET', timeout: 15000 })
+      ));
       const responseText = await response.text();
 
       if (isLotwAdifResponse(responseText)) {
@@ -1133,12 +1229,63 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     }
   }
 
+  private emitDownloadProgress(options: SyncDownloadOptions | undefined, progress: SyncDownloadProgress): void {
+    try {
+      options?.onProgress?.(progress);
+    } catch (error) {
+      this.ctx.log.warn('LoTW download progress push failed', {
+        stage: progress.stage,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    if (ms <= 0) return;
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async withReportRequestSlot<T>(
+    username: string,
+    onWait: (waitMs: number) => void,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    const key = normalizeQsoCallsign(username || 'anonymous');
+    const previous = LoTWSyncProvider.reportRequestQueues.get(key) ?? Promise.resolve();
+    const run = previous.catch(() => undefined).then(async () => {
+      const lastRequestAt = LoTWSyncProvider.lastReportRequestAt.get(key) ?? 0;
+      const waitMs = Math.max(0, LOTW_DOWNLOAD_REQUEST_INTERVAL_MS - (Date.now() - lastRequestAt));
+      if (waitMs > 0) {
+        onWait(waitMs);
+        await this.sleep(waitMs);
+      }
+      LoTWSyncProvider.lastReportRequestAt.set(key, Date.now());
+      return task();
+    });
+
+    const queued = run.catch(() => undefined);
+    LoTWSyncProvider.reportRequestQueues.set(key, queued);
+    try {
+      return await run;
+    } finally {
+      if (LoTWSyncProvider.reportRequestQueues.get(key) === queued) {
+        LoTWSyncProvider.reportRequestQueues.delete(key);
+      }
+    }
+  }
+
   private async downloadWindow(
     config: LoTWPluginConfig,
     callsign: string,
-    window: { startDate: string; endDate: string },
+    window: DownloadWindow,
     qslSinceDate: string,
-  ): Promise<{ records: QSORecord[]; failures: SyncFailure[] }> {
+    options: SyncDownloadOptions | undefined,
+    progressBase: {
+      windowIndex: number;
+      windowCount: number;
+      counters: DownloadCounters;
+    },
+  ): Promise<DownloadWindowFetchResult> {
     const params = new URLSearchParams({
       login: config.username,
       password: config.password,
@@ -1146,84 +1293,136 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       qso_qsl: 'yes',
       qso_qsldetail: 'yes',
       qso_mydetail: 'yes',
+      qso_withown: 'yes',
       qso_qslsince: qslSinceDate,
       qso_startdate: window.startDate,
       qso_enddate: window.endDate,
     });
+    if (window.startTime && window.endTime) {
+      params.set('qso_starttime', window.startTime);
+      params.set('qso_endtime', window.endTime);
+    }
     const ownCall = this.resolveUploadLocation(config, callsign).callsign || callsign;
     if (ownCall) {
       params.set('qso_owncall', ownCall);
     }
 
-    const rangeDetail = `range=${window.startDate}..${window.endDate}`;
-    try {
-      const response = await this.doFetch(LOTW_REPORT_URL + '?' + params.toString(), {
-        method: 'GET',
-        timeout: 45000,
+    const range = formatDownloadWindowRange(window);
+    const rangeDetail = `range=${range}`;
+    const makeProgress = (stage: SyncDownloadProgress['stage'], extra: Partial<SyncDownloadProgress> = {}) => {
+      this.emitDownloadProgress(options, {
+        stage,
+        callsign,
+        windowIndex: progressBase.windowIndex,
+        windowCount: progressBase.windowCount,
+        range,
+        downloaded: progressBase.counters.downloaded,
+        matched: progressBase.counters.matched,
+        updated: progressBase.counters.updated,
+        imported: progressBase.counters.imported,
+        failed: progressBase.counters.failed,
+        failureCount: progressBase.counters.failureCount,
+        ...extra,
       });
-      const responseText = await response.text();
+    };
 
-      if (!response.ok) {
-        const detail = `${rangeDetail}; remote=${summarizeLotwResponse(responseText)}`;
-        return {
-          records: [],
-          failures: [
-            this.createFailure('lotw_http_error', detail, {
-              source: 'remote',
-              operation: 'download',
-              httpStatus: response.status,
-              detail,
-              retryable: response.status >= 500 || response.status === 429,
-              secrets: [config.username, config.password],
-            }),
-          ],
-        };
-      }
-
-      if (!isLotwAdifResponse(responseText)) {
-        const described = describeLotwErrorResponse(responseText);
-        const detail = `${rangeDetail}; remote=${described.detail ?? described.message}`;
-        return {
-          records: [],
-          failures: [
-            this.createFailure(described.code, described.message, {
-              source: described.code === 'lotw_auth_failed' ? 'provider' : 'remote',
-              operation: 'download',
-              detail,
-              retryable: described.code === 'lotw_rate_limited',
-              secrets: [config.username, config.password],
-            }),
-          ],
-        };
-      }
-
+    let lastRetryableFailure: SyncFailure | null = null;
+    for (let attempt = 1; attempt <= LOTW_DOWNLOAD_MAX_RETRIES + 1; attempt++) {
       try {
-        return { records: parseADIFContent(responseText, 'lotw'), failures: [] };
+        makeProgress('window_downloading', { attempt });
+        const response = await this.withReportRequestSlot(config.username, (waitMs) => {
+          makeProgress('window_waiting', {
+            waitSeconds: Math.ceil(waitMs / 1000),
+            attempt,
+          });
+        }, () => this.doFetch(LOTW_REPORT_URL + '?' + params.toString(), {
+          method: 'GET',
+          timeout: LOTW_DOWNLOAD_REQUEST_TIMEOUT_MS,
+        }));
+        const responseText = await response.text();
+
+        if (!response.ok) {
+          const described = describeLotwErrorResponse(responseText);
+          const isRateLimited = described.code === 'lotw_rate_limited' || response.status === 429;
+          const code = isRateLimited ? described.code : 'lotw_http_error';
+          const message = isRateLimited ? described.message : `LoTW HTTP ${response.status}`;
+          const detail = `${rangeDetail}; attempt=${attempt}; remote=${described.detail ?? summarizeLotwResponse(responseText)}`;
+          lastRetryableFailure = this.createFailure(code, message, {
+            source: 'remote',
+            operation: 'download',
+            httpStatus: response.status,
+            detail,
+            retryable: response.status >= 500 || response.status === 429,
+            secrets: [config.username, config.password],
+          });
+        } else if (!isLotwAdifResponse(responseText)) {
+          const described = describeLotwErrorResponse(responseText);
+          const detail = `${rangeDetail}; attempt=${attempt}; remote=${described.detail ?? described.message}`;
+          const failure = this.createFailure(described.code, described.message, {
+            source: described.code === 'lotw_auth_failed' ? 'provider' : 'remote',
+            operation: 'download',
+            detail,
+            retryable: described.code === 'lotw_rate_limited',
+            secrets: [config.username, config.password],
+          });
+          if (!failure.retryable) {
+            return { records: [], failures: [failure] };
+          }
+          lastRetryableFailure = failure;
+        } else {
+          try {
+            return { records: parseADIFContent(responseText, 'lotw'), failures: [] };
+          } catch (error) {
+            const detail = `${rangeDetail}; attempt=${attempt}; remote=${summarizeLotwResponse(responseText)}`;
+            return {
+              records: [],
+              failures: [
+                this.createFailure('lotw_adif_parse_failed', error instanceof Error ? error.message : 'LoTW ADIF parse failed', {
+                  source: 'remote',
+                  operation: 'download',
+                  detail,
+                  retryable: false,
+                  secrets: [config.username, config.password],
+                }),
+              ],
+            };
+          }
+        }
       } catch (error) {
-        const detail = `${rangeDetail}; remote=${summarizeLotwResponse(responseText)}`;
-        return {
-          records: [],
-          failures: [
-            this.createFailure('lotw_adif_parse_failed', error instanceof Error ? error.message : 'LoTW ADIF parse failed', {
-              source: 'remote',
-              operation: 'download',
-              detail,
-              retryable: false,
-              secrets: [config.username, config.password],
-            }),
-          ],
+        const failureCode = this.isTimeoutError(error) ? 'lotw_download_timeout' : 'lotw_download_window_failed';
+        const failure = this.errorFailure(error, 'download', failureCode, config);
+        lastRetryableFailure = {
+          ...failure,
+          code: failureCode,
+          retryable: true,
+          detail: failure.detail ? `${rangeDetail}; attempt=${attempt}; ${failure.detail}` : `${rangeDetail}; attempt=${attempt}`,
         };
       }
-    } catch (error) {
-      const failure = this.errorFailure(error, 'download', 'lotw_download_window_failed', config);
-      return {
-        records: [],
-        failures: [{
-          ...failure,
-          detail: failure.detail ? `${rangeDetail}; ${failure.detail}` : rangeDetail,
-        }],
-      };
+
+      if (!lastRetryableFailure?.retryable || attempt > LOTW_DOWNLOAD_MAX_RETRIES) {
+        break;
+      }
+
+      const waitMs = LOTW_DOWNLOAD_RETRY_BACKOFF_MS[Math.min(attempt - 1, LOTW_DOWNLOAD_RETRY_BACKOFF_MS.length - 1)] ?? 0;
+      makeProgress('window_retrying', {
+        attempt,
+        waitSeconds: Math.ceil(waitMs / 1000),
+        message: lastRetryableFailure.message,
+      });
+      await this.sleep(waitMs);
     }
+
+    const failure = lastRetryableFailure ?? this.createFailure('lotw_download_window_failed', 'LoTW download window failed', {
+      source: 'remote',
+      operation: 'download',
+      detail: rangeDetail,
+      retryable: true,
+      secrets: [config.username, config.password],
+    });
+    const shouldSplit = failure.retryable === true
+      && failure.code !== 'lotw_rate_limited'
+      && canSplitDownloadWindow(window);
+    return { records: [], failures: [failure], shouldSplit };
   }
 
   private async findLotwLocalMatch(
@@ -1273,6 +1472,58 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     return scored[0]?.local ?? null;
   }
 
+  private async processDownloadedRecords(
+    logbook: ReturnType<PluginContext['logbook']['forCallsign']>,
+    callsign: string,
+    records: QSORecord[],
+    importedKeys: Set<string>,
+    failures: SyncFailure[],
+  ): Promise<{ matched: number; updated: number; imported: number }> {
+    let matched = 0;
+    let updated = 0;
+    let imported = 0;
+
+    for (const remote of records) {
+      try {
+        const localMatch = await this.findLotwLocalMatch(logbook, remote, callsign);
+
+        if (localMatch) {
+          // Download sync is the source of truth for LoTW confirmation and
+          // also backfills sent status for records uploaded elsewhere.
+          await logbook.updateQSO(localMatch.id, {
+            lotwQslSent: 'Y',
+            lotwQslSentDate: localMatch.lotwQslSentDate ?? remote.lotwQslSentDate ?? remote.lotwQslReceivedDate ?? Date.now(),
+            lotwQslReceived: 'Y',
+            lotwQslReceivedDate: remote.lotwQslReceivedDate ?? Date.now(),
+          });
+          matched++;
+          updated++;
+        } else {
+          const remoteKey = lotwQsoKey(remote, callsign);
+          if (importedKeys.has(remoteKey)) {
+            continue;
+          }
+          await logbook.addQSO(remote);
+          importedKeys.add(remoteKey);
+          imported++;
+        }
+      } catch (err) {
+        failures.push(this.createFailure('lotw_download_logbook_failed', err instanceof Error ? err.message : 'Failed to process downloaded LoTW record', {
+          source: 'logbook',
+          operation: 'download',
+          qsoId: remote.id,
+          qsoCallsign: remote.callsign,
+        }));
+        this.ctx.log.warn('Failed to process downloaded LoTW record', {
+          callsign: remote.callsign,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    return { matched, updated, imported };
+  }
+
   async download(callsign: string, options?: SyncDownloadOptions): Promise<SyncDownloadResult> {
     const config = this.getConfig(callsign);
     if (!config?.username || !config?.password) {
@@ -1306,74 +1557,142 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
         return { downloaded: 0, matched: 0, updated: 0, imported: 0, windowCount: 0, failures: [failure] };
       }
 
-      const windows = buildDateWindows(since, until);
-      const remoteRecords: QSORecord[] = [];
+      const pendingWindows = buildDateWindows(since, until);
+      let totalWindows = pendingWindows.length;
+      let completedWindows = 0;
+      const counters: DownloadCounters = {
+        downloaded: 0,
+        matched: 0,
+        updated: 0,
+        imported: 0,
+        failed: 0,
+        failureCount: 0,
+      };
       const failures: SyncFailure[] = [];
-
-      for (const window of windows) {
-        const result = await this.downloadWindow(config, callsign, window, formatLotwQueryDate(since));
-        remoteRecords.push(...result.records);
-        failures.push(...result.failures);
-      }
-
-      this.ctx.log.info('Downloaded confirmation records', { count: remoteRecords.length });
-
-      let matched = 0;
-      let imported = 0;
       const importedKeys = new Set<string>();
 
-      for (const remote of remoteRecords) {
-        try {
-          const localMatch = await this.findLotwLocalMatch(logbook, remote, callsign);
+      this.emitDownloadProgress(options, {
+        stage: 'preparing',
+        callsign,
+        windowCount: totalWindows,
+        downloaded: counters.downloaded,
+        matched: counters.matched,
+        updated: counters.updated,
+        imported: counters.imported,
+        failed: counters.failed,
+        failureCount: counters.failureCount,
+      });
 
-          if (localMatch) {
-            // Download sync is the source of truth for LoTW confirmation and
-            // also backfills sent status for records uploaded elsewhere.
-            await logbook.updateQSO(localMatch.id, {
-              lotwQslSent: 'Y',
-              lotwQslSentDate: localMatch.lotwQslSentDate ?? remote.lotwQslSentDate ?? remote.lotwQslReceivedDate ?? Date.now(),
-              lotwQslReceived: 'Y',
-              lotwQslReceivedDate: remote.lotwQslReceivedDate ?? Date.now(),
-            });
-            matched++;
-          } else {
-            // Import as new record
-            const remoteKey = lotwQsoKey(remote, callsign);
-            if (importedKeys.has(remoteKey)) {
-              continue;
-            }
-            await logbook.addQSO(remote);
-            importedKeys.add(remoteKey);
-            imported++;
-          }
-        } catch (err) {
-          failures.push(this.createFailure('lotw_download_logbook_failed', err instanceof Error ? err.message : 'Failed to process downloaded LoTW record', {
-            source: 'logbook',
-            operation: 'download',
-            qsoId: remote.id,
-            qsoCallsign: remote.callsign,
-          }));
-          this.ctx.log.warn('Failed to process downloaded LoTW record', {
-            callsign: remote.callsign,
-            error: err instanceof Error ? err.message : String(err),
+      while (pendingWindows.length > 0) {
+        const window = pendingWindows.shift()!;
+        const windowIndex = completedWindows + 1;
+        const range = formatDownloadWindowRange(window);
+        const result = await this.downloadWindow(config, callsign, window, formatLotwQueryDate(since), options, {
+          windowIndex,
+          windowCount: totalWindows,
+          counters,
+        });
+
+        if (result.records.length > 0) {
+          counters.downloaded += result.records.length;
+          this.emitDownloadProgress(options, {
+            stage: 'window_processing',
+            callsign,
+            windowIndex,
+            windowCount: totalWindows,
+            range,
+            recordCount: result.records.length,
+            downloaded: counters.downloaded,
+            matched: counters.matched,
+            updated: counters.updated,
+            imported: counters.imported,
+            failed: counters.failed,
+            failureCount: counters.failureCount,
+          });
+          const processed = await this.processDownloadedRecords(logbook, callsign, result.records, importedKeys, failures);
+          counters.matched += processed.matched;
+          counters.updated += processed.updated;
+          counters.imported += processed.imported;
+        }
+
+        if (result.failures.length > 0 && result.shouldSplit && canSplitDownloadWindow(window)) {
+          const splitWindows = splitDownloadWindow(window);
+          totalWindows += splitWindows.length - 1;
+          pendingWindows.unshift(...splitWindows);
+          this.ctx.log.info('Splitting LoTW download window after retryable failure', {
+            callsign,
+            range,
+            splitCount: splitWindows.length,
+            reason: result.failures[0]?.code,
+          });
+          continue;
+        }
+
+        completedWindows++;
+        if (result.failures.length > 0) {
+          failures.push(...result.failures);
+          counters.failureCount = failures.length;
+          counters.failed += 1;
+          this.emitDownloadProgress(options, {
+            stage: 'window_failed',
+            callsign,
+            windowIndex: completedWindows,
+            windowCount: totalWindows,
+            range,
+            downloaded: counters.downloaded,
+            matched: counters.matched,
+            updated: counters.updated,
+            imported: counters.imported,
+            failed: counters.failed,
+            failureCount: counters.failureCount,
+            message: result.failures[0]?.message,
+          });
+        } else {
+          this.emitDownloadProgress(options, {
+            stage: 'window_done',
+            callsign,
+            windowIndex: completedWindows,
+            windowCount: totalWindows,
+            range,
+            recordCount: result.records.length,
+            downloaded: counters.downloaded,
+            matched: counters.matched,
+            updated: counters.updated,
+            imported: counters.imported,
+            failed: counters.failed,
+            failureCount: counters.failureCount,
           });
         }
       }
+
+      this.ctx.log.info('Downloaded confirmation records', { count: counters.downloaded });
 
       // Update lastDownloadTime and notify
       if (failures.length === 0) {
         this.setConfig(callsign, { ...config, lastDownloadTime: Date.now() });
       }
-      if (matched > 0 || imported > 0) {
+      if (counters.matched > 0 || counters.imported > 0) {
         await logbook.notifyUpdated();
       }
 
+      this.emitDownloadProgress(options, {
+        stage: 'finished',
+        callsign,
+        windowCount: totalWindows,
+        downloaded: counters.downloaded,
+        matched: counters.matched,
+        updated: counters.updated,
+        imported: counters.imported,
+        failed: counters.failed,
+        failureCount: failures.length,
+      });
+
       return {
-        downloaded: remoteRecords.length,
-        matched,
-        updated: matched,
-        imported,
-        windowCount: windows.length,
+        downloaded: counters.downloaded,
+        matched: counters.matched,
+        updated: counters.updated,
+        imported: counters.imported,
+        windowCount: totalWindows,
         failures: failures.length > 0 ? failures : undefined,
       };
     } catch (error) {
@@ -2116,5 +2435,13 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       || e?.code === 'ABORT_ERR'
       || e?.code === 'UND_ERR_CONNECT_TIMEOUT'
       || (typeof e?.message === 'string' && /fetch failed|network|timeout|connection/i.test(e.message));
+  }
+
+  private isTimeoutError(error: unknown): boolean {
+    const e = error as any;
+    return e?.name === 'AbortError'
+      || e?.code === 'ABORT_ERR'
+      || e?.code === 'UND_ERR_CONNECT_TIMEOUT'
+      || (typeof e?.message === 'string' && /timeout|timed out|aborted/i.test(e.message));
   }
 }

@@ -671,7 +671,7 @@ describe('LoTWSyncProvider', () => {
 
   it('marks accepted uploads as sent without querying LoTW reports', async () => {
     const { ctx, updateQSO } = createContext();
-    ctx.fetch.mockResolvedValue(lotwResponse('ARRL Logbook of the World Status Report\n<eoh>\n'));
+    ctx.fetch.mockImplementation(async () => lotwResponse('ARRL Logbook of the World Status Report\n<eoh>\n'));
     const provider = new LoTWSyncProvider(ctx);
     configureProvider(provider);
     const qso = createQso('qso-1');
@@ -910,7 +910,7 @@ describe('LoTWSyncProvider', () => {
 
   it('downloads large LoTW ranges in dated request windows', async () => {
     const { ctx } = createContext();
-    ctx.fetch.mockResolvedValue(lotwResponse('ARRL Logbook of the World Status Report\n<eoh>\n'));
+    ctx.fetch.mockImplementation(async () => lotwResponse('ARRL Logbook of the World Status Report\n<eoh>\n'));
     const provider = new LoTWSyncProvider(ctx);
     configureProvider(provider);
 
@@ -919,15 +919,16 @@ describe('LoTWSyncProvider', () => {
       until: Date.parse('2026-03-15T23:59:59.999Z'),
     });
 
-    expect(result.windowCount).toBe(3);
-    expect(ctx.fetch).toHaveBeenCalledTimes(3);
+    expect(result.windowCount).toBe(11);
+    expect(ctx.fetch).toHaveBeenCalledTimes(11);
     const urls = ctx.fetch.mock.calls.map(([url]) => String(url));
     expect(urls[0]).toContain('qso_startdate=2026-01-01');
-    expect(urls[0]).toContain('qso_enddate=2026-01-31');
-    expect(urls[1]).toContain('qso_startdate=2026-02-01');
-    expect(urls[1]).toContain('qso_enddate=2026-03-03');
-    expect(urls[2]).toContain('qso_startdate=2026-03-04');
-    expect(urls[2]).toContain('qso_enddate=2026-03-15');
+    expect(urls[0]).toContain('qso_enddate=2026-01-07');
+    expect(urls[0]).toContain('qso_withown=yes');
+    expect(urls[1]).toContain('qso_startdate=2026-01-08');
+    expect(urls[1]).toContain('qso_enddate=2026-01-14');
+    expect(urls[10]).toContain('qso_startdate=2026-03-12');
+    expect(urls[10]).toContain('qso_enddate=2026-03-15');
   });
 
   it('keeps successful LoTW download windows when another window fails', async () => {
@@ -938,13 +939,13 @@ describe('LoTWSyncProvider', () => {
         + '<CALL:6>N0CALL <STATION_CALLSIGN:6>BG5DRB <BAND:3>20M <FREQ:8>14.07400 '
         + '<MODE:3>FT8 <QSO_DATE:8>20260101 <TIME_ON:6>120000 <eor>',
       ))
-      .mockResolvedValueOnce(lotwResponse('<html><b>Page Request Limit!</b></html>'));
+      .mockImplementation(async () => new Response('<html><b>Page Request Limit!</b></html>', { status: 503 }));
     const provider = new LoTWSyncProvider(ctx);
     configureProvider(provider);
 
     const result = await provider.download('BG5DRB', {
       since: Date.parse('2026-01-01T00:00:00.000Z'),
-      until: Date.parse('2026-02-15T23:59:59.999Z'),
+      until: Date.parse('2026-01-08T23:59:59.999Z'),
     });
 
     expect(result.downloaded).toBe(1);
@@ -952,11 +953,61 @@ describe('LoTWSyncProvider', () => {
     expect(result.failures).toEqual([
       expect.objectContaining({
         code: 'lotw_rate_limited',
-        detail: expect.stringContaining('range=2026-02-01..2026-02-15'),
+        detail: expect.stringContaining('range=2026-01-08..2026-01-08'),
         retryable: true,
       }),
     ]);
     expect(addQSO).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a LoTW page request limit on the same window before moving on', async () => {
+    const { ctx } = createContext();
+    ctx.fetch
+      .mockResolvedValueOnce(new Response('<html><b>Page Request Limit!</b></html>', { status: 503 }))
+      .mockResolvedValueOnce(new Response('<html><b>Page Request Limit!</b></html>', { status: 503 }))
+      .mockImplementation(async () => lotwResponse('ARRL Logbook of the World Status Report\n<eoh>\n'));
+    const progress: Array<{ stage: string; windowIndex?: number; range?: string }> = [];
+    const provider = new LoTWSyncProvider(ctx);
+    configureProvider(provider);
+
+    const result = await provider.download('BG5DRB', {
+      since: Date.parse('2026-01-01T00:00:00.000Z'),
+      until: Date.parse('2026-01-08T23:59:59.999Z'),
+      onProgress: (next) => progress.push(next),
+    });
+
+    expect(result.failures).toBeUndefined();
+    const urls = ctx.fetch.mock.calls.map(([url]) => String(url));
+    expect(urls.slice(0, 3).every((url) => (
+      url.includes('qso_startdate=2026-01-01') && url.includes('qso_enddate=2026-01-07')
+    ))).toBe(true);
+    expect(urls[3]).toContain('qso_startdate=2026-01-08');
+    expect(progress.map((item) => item.stage)).toContain('window_retrying');
+  });
+
+  it('splits retryable timeout windows and adds time bounds for single-day chunks', async () => {
+    const { ctx } = createContext();
+    const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'AbortError' });
+    ctx.fetch
+      .mockRejectedValueOnce(timeout)
+      .mockRejectedValueOnce(timeout)
+      .mockRejectedValueOnce(timeout)
+      .mockImplementation(async () => lotwResponse('ARRL Logbook of the World Status Report\n<eoh>\n'));
+    const provider = new LoTWSyncProvider(ctx);
+    configureProvider(provider);
+
+    const result = await provider.download('BG5DRB', {
+      since: Date.parse('2026-01-01T00:00:00.000Z'),
+      until: Date.parse('2026-01-01T23:59:59.999Z'),
+    });
+
+    expect(result.failures).toBeUndefined();
+    expect(result.windowCount).toBe(4);
+    const urls = ctx.fetch.mock.calls.map(([url]) => String(url));
+    expect(urls[3]).toContain('qso_starttime=000000');
+    expect(urls[3]).toContain('qso_endtime=055959');
+    expect(urls[4]).toContain('qso_starttime=060000');
+    expect(urls[4]).toContain('qso_endtime=115959');
   });
 
   it('reports LoTW auth failure only for explicit credential errors', async () => {
@@ -976,7 +1027,10 @@ describe('LoTWSyncProvider', () => {
         }),
       ],
     });
-    await expect(provider.download('BG5DRB')).resolves.toMatchObject({
+    await expect(provider.download('BG5DRB', {
+      since: Date.parse('2026-04-17T00:00:00.000Z'),
+      until: Date.parse('2026-04-17T23:59:59.999Z'),
+    })).resolves.toMatchObject({
       failures: [
         expect.objectContaining({
           code: 'lotw_auth_failed',
@@ -1003,7 +1057,10 @@ describe('LoTWSyncProvider', () => {
         }),
       ],
     });
-    await expect(provider.download('BG5DRB')).resolves.toMatchObject({
+    await expect(provider.download('BG5DRB', {
+      since: Date.parse('2026-04-17T00:00:00.000Z'),
+      until: Date.parse('2026-04-17T23:59:59.999Z'),
+    })).resolves.toMatchObject({
       failures: [
         expect.objectContaining({
           code: 'lotw_response_invalid',

@@ -256,7 +256,12 @@ export const lotwSyncPlugin: PluginDefinition = {
             const since = d.since as number | undefined;
             const until = d.until as number | undefined;
             try {
-              const result = await provider.download(cs, since || until ? { since, until } : undefined);
+              const result = await provider.download(cs, {
+                ...(since || until ? { since, until } : {}),
+                onProgress: (progress) => {
+                  requestContext.page.push('downloadProgress', progress);
+                },
+              });
               return result;
             } catch (err) {
               return {
