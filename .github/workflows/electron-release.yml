@@ -678,6 +678,11 @@ jobs:
             file="$(printf '%s\n' "$matches" | sed '/^$/d' | head -1)"
             cp "$file" "$destination"
             if [ "$require_blockmap" = "true" ]; then
+              if [ ! -f "${file}.blockmap" ] && [[ "$file" == *.AppImage ]]; then
+                echo "ℹ️ AppImage 仅内嵌 blockmap，额外生成外置 blockmap 供 latest.json/CI 校验使用"
+                APP_BUILDER_BIN=$(node -p "require('app-builder-bin').appBuilderPath")
+                "$APP_BUILDER_BIN" blockmap --input "$file" --output "${file}.blockmap"
+              fi
               if [ ! -f "${file}.blockmap" ]; then
                 echo "❌ 自动更新产物缺少 blockmap: ${file}.blockmap" >&2
                 exit 1
