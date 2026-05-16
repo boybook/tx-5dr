@@ -54,5 +54,5 @@ yarn build:make          # 安装程序
 ```
 
 ## 依赖
-依赖: electron + @tx5dr/electron-preload + @electron-forge
+依赖: electron + @tx5dr/electron-preload + electron-builder
 运行时: @tx5dr/web + @tx5dr/server

@@ -154,10 +154,10 @@
     "category": "electron"
   },
   {
-    "name": "@electron-forge/cli",
-    "version": "7.x",
+    "name": "electron-builder",
+    "version": "26.x",
     "license": "MIT",
-    "url": "https://www.electronforge.io",
+    "url": "https://www.electron.build",
     "category": "electron"
   },
   {

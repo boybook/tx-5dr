@@ -443,9 +443,8 @@
     "desktopUpdateViewAllCommits": "查看全部更新",
     "desktopUpdateNoNotes": "暂无更新说明。",
     "desktopUpdateDownloadOptionsTitle": "可选下载方式",
-    "desktopUpdateDownloadOptionsDesc": "手动下载仍保留为兜底方式，适用于 MSI、DEB/RPM、压缩包或自动更新失败的场景。",
+    "desktopUpdateDownloadOptionsDesc": "手动下载仍保留为兜底方式，适用于 DEB/RPM、压缩包或自动更新失败的场景。",
     "desktopUpdatePackageType": {
-      "msi": "Windows 安装包（MSI）",
       "dmg": "macOS 安装包（DMG）",
       "7z": "Windows 压缩包（7z）",
       "zip": "压缩包（ZIP）",

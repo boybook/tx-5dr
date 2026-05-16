@@ -55,6 +55,9 @@ interface DesktopUpdateState extends Omit<SystemUpdateStatus, 'currentDigest' | 
     arch: string;
     recommended: boolean;
     source: 'oss' | 'github';
+    autoUpdateSupported?: boolean;
+    autoUpdateTarget?: string | null;
+    installerFamily?: string | null;
   }>;
   downloadSource?: 'oss' | 'github' | null;
   recentCommits?: Array<{
@@ -65,6 +68,15 @@ interface DesktopUpdateState extends Omit<SystemUpdateStatus, 'currentDigest' | 
   }>;
   currentDigest?: string | null;
   latestDigest?: string | null;
+  phase?: DesktopUpdateStatus['phase'];
+  autoUpdateSupported?: boolean;
+  autoUpdateTarget?: string | null;
+  autoUpdateInstallerFamily?: string | null;
+  autoUpdateReason?: string | null;
+  downloadProgress?: DesktopUpdateStatus['downloadProgress'];
+  downloaded?: boolean;
+  pendingInstallIdentity?: string | null;
+  lastInstallFailed?: boolean;
 }
 
 
@@ -211,8 +223,8 @@ function getDesktopUpdateOptionLabel(
   t: (key: string) => string,
 ): string {
   switch (packageType) {
-    case 'msi':
-      return t('system.desktopUpdatePackageType.msi');
+    case 'exe':
+      return t('system.desktopUpdatePackageType.exe');
     case 'dmg':
       return t('system.desktopUpdatePackageType.dmg');
     case '7z':
@@ -793,6 +805,18 @@ export const SystemSettings = forwardRef<
     }
   }, [t, updateNotification]);
 
+  useEffect(() => {
+    if (!window.electronAPI?.updater?.onStatus) return undefined;
+    const handleStatus = (status: DesktopUpdateStatus) => {
+      setDesktopUpdateStatus(status as DesktopUpdateState);
+      setDesktopUpdateError(status.errorMessage || '');
+    };
+    window.electronAPI.updater.onStatus(handleStatus);
+    return () => {
+      window.electronAPI?.updater?.offStatus?.(handleStatus);
+    };
+  }, []);
+
   const handleOpenDesktopUpdateDownload = useCallback(async (url?: string) => {
     if (!window.electronAPI?.updater?.openDownload) return;
     setDesktopUpdateBusy(true);
@@ -803,6 +827,40 @@ export const SystemSettings = forwardRef<
       logger.error('Failed to open desktop update download:', err);
       setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateOpenFailed'));
     } finally {
+      setDesktopUpdateBusy(false);
+    }
+  }, [t]);
+
+  const handleDownloadDesktopUpdate = useCallback(async () => {
+    if (!window.electronAPI?.updater?.download) {
+      await handleOpenDesktopUpdateDownload();
+      return;
+    }
+    setDesktopUpdateBusy(true);
+    setDesktopUpdateError('');
+    try {
+      const status = await window.electronAPI.updater.download();
+      setDesktopUpdateStatus(status as DesktopUpdateState);
+      setDesktopUpdateError(status.errorMessage || '');
+    } catch (err) {
+      logger.error('Failed to download desktop update:', err);
+      setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateDownloadFailed'));
+    } finally {
+      setDesktopUpdateBusy(false);
+    }
+  }, [handleOpenDesktopUpdateDownload, t]);
+
+  const handleInstallDesktopUpdate = useCallback(async () => {
+    if (!window.electronAPI?.updater?.installAndRestart) return;
+    setDesktopUpdateBusy(true);
+    setDesktopUpdateError('');
+    try {
+      const status = await window.electronAPI.updater.installAndRestart();
+      setDesktopUpdateStatus(status as DesktopUpdateState);
+      setDesktopUpdateError(status.errorMessage || '');
+    } catch (err) {
+      logger.error('Failed to install desktop update:', err);
+      setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateInstallFailed'));
       setDesktopUpdateBusy(false);
     }
   }, [t]);
@@ -1281,6 +1339,19 @@ export const SystemSettings = forwardRef<
     ? t(`system.desktopUpdateSourceValue.${desktopUpdateStatus.metadataSource}`)
     : t('system.desktopUpdateSourceValue.unknown');
   const desktopDownloadOptions = desktopUpdateStatus?.downloadOptions || [];
+  const desktopUpdatePhase = desktopUpdateStatus?.phase || (desktopUpdateStatus?.checking ? 'checking' : 'idle');
+  const desktopUpdateProgress = desktopUpdateStatus?.downloadProgress;
+  const desktopUpdateProgressLabel = desktopUpdateProgress
+    ? `${Math.round(desktopUpdateProgress.percent)}%`
+    : '';
+  const canAutoDownloadDesktopUpdate = Boolean(
+    isElectron
+    && desktopUpdateStatus?.updateAvailable
+    && desktopUpdateStatus?.autoUpdateSupported
+    && desktopUpdatePhase !== 'downloaded'
+    && desktopUpdatePhase !== 'installing',
+  );
+  const canInstallDownloadedDesktopUpdate = Boolean(isElectron && (desktopUpdateStatus?.downloaded || desktopUpdatePhase === 'downloaded'));
   const isElectronUpdateTarget = isElectron || desktopUpdateStatus?.target === 'electron-app';
   const updateTargetLabel = isElectronUpdateTarget
     ? t('system.updateTargetElectron', 'Electron')
@@ -2733,6 +2804,9 @@ export const SystemSettings = forwardRef<
                   <Chip size="sm" color={getDesktopUpdateSourceColor(desktopUpdateStatus?.metadataSource ?? null)} variant="flat">
                     {t('system.desktopUpdateSource')}: {desktopUpdateSourceLabel}
                   </Chip>
+                  <Chip size="sm" color={desktopUpdatePhase === 'error' ? 'danger' : desktopUpdatePhase === 'downloaded' ? 'success' : desktopUpdatePhase === 'unsupported' ? 'warning' : 'default'} variant="flat">
+                    {t(`system.desktopUpdatePhase.${desktopUpdatePhase}`)}
+                  </Chip>
                 </div>
               </div>
 
@@ -2838,6 +2912,31 @@ export const SystemSettings = forwardRef<
                 <p className={`${SETTINGS_SUBDESC_CLASS} whitespace-pre-wrap`}>
                   {desktopUpdateStatus?.releaseNotes || t('system.desktopUpdateNoNotes')}
                 </p>
+
+                {desktopUpdatePhase === 'downloading' && desktopUpdateProgress && (
+                  <div className="rounded-medium border border-divider bg-content1 px-3 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopUpdateDownloading')}</p>
+                      <Chip size="sm" color="primary" variant="flat">{desktopUpdateProgressLabel}</Chip>
+                    </div>
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-default-200">
+                      <div
+                        className="h-full rounded-full bg-primary transition-all"
+                        style={{ width: `${Math.max(0, Math.min(100, desktopUpdateProgress.percent))}%` }}
+                      />
+                    </div>
+                    <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>
+                      {t('system.desktopUpdateDownloadProgress', {
+                        transferred: Math.round((desktopUpdateProgress.transferred || 0) / 1024 / 1024),
+                        total: Math.round((desktopUpdateProgress.total || 0) / 1024 / 1024),
+                      })}
+                    </p>
+                  </div>
+                )}
+
+                {desktopUpdateStatus?.updateAvailable && !desktopUpdateStatus?.autoUpdateSupported && desktopUpdateStatus?.autoUpdateReason && (
+                  <Alert color="warning" variant="flat" title={t(`system.desktopUpdateAutoReason.${desktopUpdateStatus.autoUpdateReason}`, { defaultValue: t('system.desktopUpdateManualFallback') })} />
+                )}
               </div>
 
               {isElectronUpdateTarget && desktopDownloadOptions.length > 0 && (
@@ -2866,7 +2965,7 @@ export const SystemSettings = forwardRef<
                             onPress={() => { void handleOpenDesktopUpdateDownload(option.url); }}
                             isDisabled={!desktopUpdateStatus?.updateAvailable || isSaving || desktopUpdateBusy}
                           >
-                            {t('system.desktopUpdateDownload')}
+                            {t('system.desktopUpdateManualDownload')}
                           </Button>
                         </div>
                       </div>
@@ -2886,13 +2985,35 @@ export const SystemSettings = forwardRef<
                   {t('system.desktopUpdateCheck')}
                 </Button>
 
-                {isElectronUpdateTarget && desktopDownloadOptions.length === 0 && (
+                {isElectronUpdateTarget && canAutoDownloadDesktopUpdate && (
+                  <Button
+                    color="primary"
+                    onPress={() => { void handleDownloadDesktopUpdate(); }}
+                    isLoading={desktopUpdatePhase === 'downloading'}
+                    isDisabled={isSaving || desktopUpdateBusy || desktopUpdatePhase === 'downloading'}
+                  >
+                    {desktopUpdatePhase === 'downloading' ? t('system.desktopUpdateDownloading') : t('system.desktopUpdateDownload')}
+                  </Button>
+                )}
+
+                {isElectronUpdateTarget && canInstallDownloadedDesktopUpdate && (
+                  <Button
+                    color="success"
+                    onPress={() => { void handleInstallDesktopUpdate(); }}
+                    isLoading={desktopUpdatePhase === 'installing'}
+                    isDisabled={isSaving || desktopUpdateBusy || desktopUpdatePhase === 'installing'}
+                  >
+                    {t('system.desktopUpdateInstallAndRestart')}
+                  </Button>
+                )}
+
+                {isElectronUpdateTarget && !canAutoDownloadDesktopUpdate && !canInstallDownloadedDesktopUpdate && (
                   <Button
                     color="primary"
                     onPress={() => { void handleOpenDesktopUpdateDownload(); }}
                     isDisabled={!desktopUpdateStatus?.downloadUrl || !desktopUpdateStatus?.updateAvailable || isSaving || desktopUpdateBusy}
                   >
-                    {t('system.desktopUpdateDownload')}
+                    {t('system.desktopUpdateManualDownload')}
                   </Button>
                 )}
 

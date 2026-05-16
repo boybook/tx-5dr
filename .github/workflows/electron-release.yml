@@ -25,31 +25,26 @@ jobs:
           - os: windows-latest
             platform: win32
             arch: x64
-            build_command: make
             artifact_name: tx-5dr-windows-x64
 
           - os: macos-latest
             platform: darwin
             arch: arm64
-            build_command: make
             artifact_name: tx-5dr-macos-arm64
 
           - os: macos-15-intel
             platform: darwin
             arch: x64
-            build_command: make
             artifact_name: tx-5dr-macos-x64
 
           - os: ubuntu-latest
             platform: linux
             arch: x64
-            build_command: make
             artifact_name: tx-5dr-linux-x64
 
           - os: ubuntu-24.04-arm
             platform: linux
             arch: arm64
-            build_command: make
             artifact_name: tx-5dr-linux-arm64
 
     runs-on: ${{ matrix.os }}
@@ -107,19 +102,7 @@ jobs:
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
             libopus-dev \
             portaudio19-dev build-essential python3-dev pkg-config \
-            xz-utils rpm
-
-      - name: Setup MSBuild (Windows)
-        if: matrix.os == 'windows-latest'
-        uses: microsoft/setup-msbuild@v1
-
-      - name: Verify WiX Toolset (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: bash
-        run: |
-          echo "Verifying WiX Toolset v3..."
-          where candle.exe && echo "✅ candle.exe found" || echo "❌ candle.exe not found"
-          where light.exe && echo "✅ light.exe found" || echo "❌ light.exe not found"
+            xz-utils rpm cpio
 
       - name: Verify Yarn version
         run: |
@@ -181,8 +164,26 @@ jobs:
             --build-timestamp "$COMMIT_TIMESTAMP" \
             --build-stamp "$COMMIT_STAMP"
 
+      - name: Verify macOS signing secrets (release builds)
+        if: matrix.platform == 'darwin' && github.event_name != 'pull_request'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in MACOS_CERTIFICATE MACOS_CERTIFICATE_PWD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing required macOS signing secret: ${name}" >&2
+              exit 1
+            fi
+          done
+
       - name: Import Code Signing Certificate (macOS)
-        if: matrix.platform == 'darwin'
+        if: matrix.platform == 'darwin' && github.event_name != 'pull_request'
         env:
           MACOS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           MACOS_CERTIFICATE_PWD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -376,9 +377,11 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
           DEBUG: electron-osx-sign*
         run: |
-          # macOS: 增加文件描述符限制,避免 EMFILE 错误
+          set -euo pipefail
+
           if [ "${{ matrix.platform }}" = "darwin" ]; then
             echo "🔧 增加文件描述符限制..."
             ulimit -n 10240
@@ -389,9 +392,6 @@ jobs:
             if [ "${{ matrix.platform }}" != "darwin" ]; then
               return 0
             fi
-
-            # appdmg occasionally leaves the transient volume state inconsistent
-            # on macOS CI. Clean up best-effort before retrying packaging.
             if [ -d "/Volumes/TX-5DR" ]; then
               hdiutil detach "/Volumes/TX-5DR" -force || true
             fi
@@ -401,35 +401,29 @@ jobs:
             local attempt=1
             local max_attempts=2
             if [ "${{ matrix.platform }}" = "darwin" ]; then
-              # Apple timestamp/notary services occasionally return transient failures.
-              # Retry macOS packaging more aggressively so one short outage does not fail the release.
               max_attempts=4
             fi
 
             while [ "$attempt" -le "$max_attempts" ]; do
-              echo "📦 打包尝试 ${attempt}/${max_attempts}..."
+              echo "📦 electron-builder 打包尝试 ${attempt}/${max_attempts}..."
               if "$@"; then
                 return 0
               fi
 
               if [ "$attempt" -ge "$max_attempts" ]; then
-                echo "❌ 打包失败，已达到最大重试次数"
+                echo "❌ electron-builder 打包失败，已达到最大重试次数"
                 return 1
               fi
 
-              echo "⚠️ 打包失败，清理临时打包产物后重试..."
+              echo "⚠️ electron-builder 打包失败，清理输出后重试..."
               cleanup_macos_dmg_volume
-              rm -rf out/make "out/TX-5DR-${{ matrix.platform }}-${{ matrix.arch }}"
-              if [ "${{ matrix.platform }}" = "darwin" ]; then
-                rm -rf "${TMPDIR:-/tmp}"/electron-packager
-              fi
+              rm -rf out/electron-builder
               attempt=$((attempt + 1))
               sleep $((attempt * 10))
             done
           }
 
-          # macOS: 解锁钥匙串并提取证书 identity
-          if [ "${{ matrix.platform }}" = "darwin" ]; then
+          if [ "${{ matrix.platform }}" = "darwin" ] && [ "${IS_PULL_REQUEST}" != "true" ]; then
             echo "🔓 解锁钥匙串并提取证书..."
             security unlock-keychain -p actions temp.keychain
 
@@ -440,17 +434,122 @@ jobs:
             fi
 
             echo "✅ 使用证书: $CERT_IDENTITY"
-
-            # 方式 1: export (可能不生效)
-            export APPLE_IDENTITY="$CERT_IDENTITY"
-
-            # 方式 2: 直接在命令前设置 (更可靠)
-            echo "📦 开始打包 (使用环境变量)..."
-            package_with_retry env APPLE_IDENTITY="$CERT_IDENTITY" yarn ${{ matrix.build_command }}
+            package_with_retry env APPLE_IDENTITY="$CERT_IDENTITY" yarn make:autoupdate
+          elif [ "${{ matrix.platform }}" = "darwin" ]; then
+            echo "📦 PR macOS build: unsigned electron-builder package"
+            package_with_retry env CSC_IDENTITY_AUTO_DISCOVERY=false yarn make:autoupdate
           else
-            echo "📦 开始打包..."
-            package_with_retry yarn ${{ matrix.build_command }}
+            echo "📦 使用 electron-builder 构建 ${PLATFORM}-${ARCH} 全部桌面产物"
+            package_with_retry yarn make:autoupdate
           fi
+
+      - name: Verify auto-update package contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          PLATFORM="${{ matrix.platform }}"
+          ARCH="${{ matrix.arch }}"
+          TRIPLET="${PLATFORM}-${ARCH}"
+
+          if [ "$PLATFORM" = "darwin" ]; then
+            RESOURCES_DIR=$(find out/electron-builder -path "*.app/Contents/Resources" -type d | head -1)
+          else
+            APP_ROOT_CANDIDATE=$(find out/electron-builder -path "*/resources/app" -type d | head -1)
+            RESOURCES_DIR=$(dirname "$APP_ROOT_CANDIDATE")
+          fi
+
+          if [ -z "${RESOURCES_DIR:-}" ] || [ ! -d "$RESOURCES_DIR" ]; then
+            echo "Unable to locate electron-builder resources directory" >&2
+            find out/electron-builder -maxdepth 4 -type d >&2 || true
+            exit 1
+          fi
+
+          APP_ROOT="$RESOURCES_DIR/app"
+          NODE_EXE="node"
+          if [ "$PLATFORM" = "win32" ]; then
+            NODE_EXE="node.exe"
+          fi
+
+          required_paths=(
+            "$RESOURCES_DIR/app-update.yml"
+            "$RESOURCES_DIR/bin/$TRIPLET/$NODE_EXE"
+            "$RESOURCES_DIR/models/deepcw"
+            "$APP_ROOT/packages/electron-main/dist"
+            "$APP_ROOT/packages/server/dist"
+            "$APP_ROOT/packages/web/dist"
+            "$APP_ROOT/packages/client-tools/src/proxy.js"
+          )
+
+          for required in "${required_paths[@]}"; do
+            if [ ! -e "$required" ]; then
+              echo "Missing required packaged path: $required" >&2
+              echo "Resources dir: $RESOURCES_DIR" >&2
+              find "$RESOURCES_DIR" -maxdepth 4 -type d | sort >&2 || true
+              exit 1
+            fi
+          done
+
+          echo "✅ electron-builder package content verified: $RESOURCES_DIR"
+
+      - name: Verify Linux package metadata
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEB_FILE=$(find out/electron-builder -maxdepth 1 -name "*.deb" -type f | head -1)
+          RPM_FILE=$(find out/electron-builder -maxdepth 1 -name "*.rpm" -type f | head -1)
+          if [ -z "${DEB_FILE}" ] || [ -z "${RPM_FILE}" ]; then
+            echo "Missing Linux deb/rpm artifacts" >&2
+            find out/electron-builder -maxdepth 1 -type f >&2 || true
+            exit 1
+          fi
+          DEB_FILE=$(realpath "${DEB_FILE}")
+          RPM_FILE=$(realpath "${RPM_FILE}")
+
+          echo "Checking DEB metadata: ${DEB_FILE}"
+          [ "$(dpkg-deb -f "${DEB_FILE}" Package)" = "tx-5dr" ]
+          [ "$(dpkg-deb -f "${DEB_FILE}" Section)" = "utils" ]
+          [ "$(dpkg-deb -f "${DEB_FILE}" Priority)" = "optional" ]
+          dpkg-deb -f "${DEB_FILE}" Maintainer | grep -Fx 'BG5DRB <bg5drb@example.com>'
+          dpkg-deb -f "${DEB_FILE}" Homepage | grep -Fx 'https://tx5dr.com'
+          dpkg-deb -f "${DEB_FILE}" Description | head -1 | grep -Fx 'TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio'
+          dpkg-deb -f "${DEB_FILE}" Description | grep -F 'TX-5DR - Shared Node backend + web browser client + optional Electron shell'
+          dpkg-deb -f "${DEB_FILE}" Depends | grep -F 'libgtk-3-0'
+          dpkg-deb -f "${DEB_FILE}" Recommends | grep -F 'pulseaudio | libasound2'
+          dpkg-deb -f "${DEB_FILE}" Suggests | grep -F 'lsb-release'
+
+          DEB_TMP=$(mktemp -d)
+          dpkg-deb -e "${DEB_FILE}" "${DEB_TMP}/control"
+          dpkg-deb -x "${DEB_FILE}" "${DEB_TMP}/root"
+          grep -F "update-alternatives --install '/usr/bin/tx-5dr'" "${DEB_TMP}/control/postinst"
+          dpkg-deb -c "${DEB_FILE}" | grep -E '/opt/TX-5DR/tx-5dr$'
+          DESKTOP_FILE="${DEB_TMP}/root/usr/share/applications/tx-5dr.desktop"
+          grep -Fx 'Name=tx-5dr' "${DESKTOP_FILE}"
+          grep -Fx 'Comment=TX-5DR - Shared Node backend + web browser client + optional Electron shell' "${DESKTOP_FILE}"
+          grep -Fx 'GenericName=Ham Radio Application' "${DESKTOP_FILE}"
+          grep -Fx 'Exec=/opt/TX-5DR/tx-5dr %U' "${DESKTOP_FILE}"
+          grep -Fx 'Icon=tx-5dr' "${DESKTOP_FILE}"
+          grep -Fx 'Categories=Utility;AudioVideo;' "${DESKTOP_FILE}"
+
+          echo "Checking RPM metadata: ${RPM_FILE}"
+          rpm -qpi "${RPM_FILE}" | grep -F 'Name        : tx-5dr'
+          rpm -qpi "${RPM_FILE}" | grep -F 'Summary     : TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio'
+          rpm -qpi "${RPM_FILE}" | grep -F 'URL         : https://tx5dr.com'
+          rpm -qpl "${RPM_FILE}" | grep -Fx '/usr/share/applications/tx-5dr.desktop'
+          rpm -qpl "${RPM_FILE}" | grep -Fx '/opt/TX-5DR/tx-5dr'
+          rpm -qp --scripts "${RPM_FILE}" | grep -F "update-alternatives --install '/usr/bin/tx-5dr'"
+
+          RPM_TMP=$(mktemp -d)
+          (cd "${RPM_TMP}" && rpm2cpio "${RPM_FILE}" | cpio -id --quiet ./usr/share/applications/tx-5dr.desktop)
+          RPM_DESKTOP="${RPM_TMP}/usr/share/applications/tx-5dr.desktop"
+          grep -Fx 'Name=tx-5dr' "${RPM_DESKTOP}"
+          grep -Fx 'Comment=TX-5DR - Shared Node backend + web browser client + optional Electron shell' "${RPM_DESKTOP}"
+          grep -Fx 'GenericName=Ham Radio Application' "${RPM_DESKTOP}"
+          grep -Fx 'Exec=/opt/TX-5DR/tx-5dr %U' "${RPM_DESKTOP}"
+          grep -Fx 'Icon=tx-5dr' "${RPM_DESKTOP}"
+          grep -Fx 'Categories=Utility;AudioVideo;' "${RPM_DESKTOP}"
+
+          echo "✅ Linux deb/rpm metadata verified"
 
       - name: Verify bundled VC runtime (Windows)
         if: matrix.platform == 'win32'
@@ -468,10 +567,10 @@ jobs:
               ;;
           esac
 
-          APP_DIR=$(find out -maxdepth 1 -type d -name "TX-5DR-win32-*" | head -1)
-          if [ -z "${APP_DIR}" ]; then
-            echo "Unable to find packaged Windows app directory under out/." >&2
-            find out -maxdepth 2 -type d >&2 || true
+          APP_DIR="out/electron-builder/win-unpacked"
+          if [ ! -d "${APP_DIR}" ]; then
+            echo "Unable to find electron-builder Windows unpacked app at ${APP_DIR}." >&2
+            find out/electron-builder -maxdepth 2 -type d >&2 || true
             exit 1
           fi
 
@@ -536,7 +635,7 @@ jobs:
         run: |
           echo "=== Build Output Directory ==="
           ls -la out/ || echo "No out/ directory found"
-          find out/ -type f -name "*.msi" -o -name "*.exe" -o -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" -o -name "*.zip" -o -name "*.tar.gz" || echo "No installable files found"
+          find out/ -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" -o -name "*.zip" -o -name "*.7z" -o -name "*.blockmap" \) || echo "No installable files found"
 
       - name: Prepare artifacts (rename for nightly if needed)
         shell: bash
@@ -557,55 +656,68 @@ jobs:
             PREFIX="TX-5DR-${VERSION}"
           fi
 
-          if [ "$PLATFORM" = "darwin" ]; then
-            # macOS: 分别重命名 DMG 和 ZIP
-            find out/make -name "*.dmg" -type f | while read -r file; do
-              cp "$file" "release-artifacts/${PREFIX}-macos-${ARCH}.dmg"
-              echo "✅ 已准备: ${PREFIX}-macos-${ARCH}.dmg"
-            done
-
-            find out/make -name "*.zip" -type f | while read -r file; do
-              cp "$file" "release-artifacts/${PREFIX}-macos-${ARCH}.zip"
-              echo "✅ 已准备: ${PREFIX}-macos-${ARCH}.zip"
-            done
-          elif [ "$PLATFORM" = "linux" ]; then
-            # Linux: 分别重命名 DEB, RPM, ZIP
-            find out/make -name "*.deb" -type f | while read -r file; do
-              cp "$file" "release-artifacts/${PREFIX}-linux-${ARCH}.deb"
-              echo "✅ 已准备: ${PREFIX}-linux-${ARCH}.deb"
-            done
-
-            find out/make -name "*.rpm" -type f | while read -r file; do
-              cp "$file" "release-artifacts/${PREFIX}-linux-${ARCH}.rpm"
-              echo "✅ 已准备: ${PREFIX}-linux-${ARCH}.rpm"
-            done
-
-            find out/make -name "*.zip" -type f | while read -r file; do
-              cp "$file" "release-artifacts/${PREFIX}-linux-${ARCH}.zip"
-              echo "✅ 已准备: ${PREFIX}-linux-${ARCH}.zip"
-            done
-          elif [ "$PLATFORM" = "win32" ]; then
-            # Windows: MSI 安装包和 ZIP 便携版
-            find out/make -name "*.msi" -type f | while read -r file; do
-              cp "$file" "release-artifacts/${PREFIX}-windows-${ARCH}.msi"
-              echo "✅ 已准备: ${PREFIX}-windows-${ARCH}.msi"
-            done
-
-            find out/make -name "*.zip" -type f | while read -r file; do
-              cp "$file" "release-artifacts/${PREFIX}-windows-${ARCH}.zip"
-              echo "✅ 已准备: ${PREFIX}-windows-${ARCH}.zip"
-            done
-
-            # Windows: 用 7-Zip LZMA2 打包便携版（比 ZIP Deflate 小 ~100MB）
-            # PE/DLL 文件对 Deflate 压缩不友好，LZMA2 可将包体从 ~300MB 降至 ~190MB
-            APP_DIR=$(find out -maxdepth 1 -type d -name "TX-5DR-win32-*" | head -1)
-            if [ -n "$APP_DIR" ]; then
-              echo "📦 使用 7-Zip LZMA2 压缩便携版..."
-              7z a -t7z -mx=9 -mmt=on "release-artifacts/${PREFIX}-windows-${ARCH}.7z" "${APP_DIR}/"
-              echo "✅ 已准备: ${PREFIX}-windows-${ARCH}.7z ($(du -sh "release-artifacts/${PREFIX}-windows-${ARCH}.7z" | cut -f1))"
-            else
-              echo "⚠️ 未找到 Forge 打包输出目录，跳过 7z 压缩"
+          copy_single_artifact() {
+            local search_dir="$1"
+            local pattern="$2"
+            local destination="$3"
+            local require_blockmap="${4:-false}"
+            local matches
+            matches="$(find "$search_dir" -maxdepth 1 -name "$pattern" -type f 2>/dev/null | sort)"
+            local count
+            count="$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')"
+            if [ "$count" -eq 0 ]; then
+              echo "❌ 未找到产物: ${search_dir}/${pattern}" >&2
+              exit 1
             fi
+            if [ "$count" -gt 1 ]; then
+              echo "❌ 找到多个匹配产物，请保持输出目录唯一: ${search_dir}/${pattern}" >&2
+              printf '%s\n' "$matches" | sed 's/^/ - /' >&2
+              exit 1
+            fi
+            local file
+            file="$(printf '%s\n' "$matches" | sed '/^$/d' | head -1)"
+            cp "$file" "$destination"
+            if [ "$require_blockmap" = "true" ]; then
+              if [ ! -f "${file}.blockmap" ] && [[ "$file" == *.AppImage ]]; then
+                echo "ℹ️ AppImage 仅内嵌 blockmap，额外生成外置 blockmap 供 latest.json/CI 校验使用"
+                APP_BUILDER_BIN=$(node -p "require('app-builder-bin').appBuilderPath")
+                "$APP_BUILDER_BIN" blockmap --input "$file" --output "${file}.blockmap"
+              fi
+              if [ ! -f "${file}.blockmap" ]; then
+                echo "❌ 自动更新产物缺少 blockmap: ${file}.blockmap" >&2
+                exit 1
+              fi
+              cp "${file}.blockmap" "${destination}.blockmap"
+            fi
+          }
+
+          if [ "$PLATFORM" = "darwin" ]; then
+            copy_single_artifact "out/electron-builder" "*.dmg" "release-artifacts/${PREFIX}-macos-${ARCH}.dmg" false
+            echo "✅ 已准备: ${PREFIX}-macos-${ARCH}.dmg"
+
+            copy_single_artifact "out/electron-builder" "*.zip" "release-artifacts/${PREFIX}-macos-${ARCH}.zip" true
+            echo "✅ 已准备: ${PREFIX}-macos-${ARCH}.zip"
+          elif [ "$PLATFORM" = "linux" ]; then
+            copy_single_artifact "out/electron-builder" "*.deb" "release-artifacts/${PREFIX}-linux-${ARCH}.deb" false
+            echo "✅ 已准备: ${PREFIX}-linux-${ARCH}.deb"
+
+            copy_single_artifact "out/electron-builder" "*.rpm" "release-artifacts/${PREFIX}-linux-${ARCH}.rpm" false
+            echo "✅ 已准备: ${PREFIX}-linux-${ARCH}.rpm"
+
+            copy_single_artifact "out/electron-builder" "*.zip" "release-artifacts/${PREFIX}-linux-${ARCH}.zip" false
+            echo "✅ 已准备: ${PREFIX}-linux-${ARCH}.zip"
+
+            copy_single_artifact "out/electron-builder" "*.AppImage" "release-artifacts/${PREFIX}-linux-${ARCH}.AppImage" true
+            echo "✅ 已准备: ${PREFIX}-linux-${ARCH}.AppImage"
+          elif [ "$PLATFORM" = "win32" ]; then
+            copy_single_artifact "out/electron-builder" "*-nsis.exe" "release-artifacts/${PREFIX}-windows-${ARCH}-nsis.exe" true
+            echo "✅ 已准备: ${PREFIX}-windows-${ARCH}-nsis.exe ($(du -sh "release-artifacts/${PREFIX}-windows-${ARCH}-nsis.exe" | cut -f1))"
+
+            copy_single_artifact "out/electron-builder" "*.zip" "release-artifacts/${PREFIX}-windows-${ARCH}.zip" false
+            echo "✅ 已准备: ${PREFIX}-windows-${ARCH}.zip"
+
+            copy_single_artifact "out/electron-builder" "*.7z" "release-artifacts/${PREFIX}-windows-${ARCH}.7z" false
+            echo "✅ 已准备: ${PREFIX}-windows-${ARCH}.7z ($(du -sh "release-artifacts/${PREFIX}-windows-${ARCH}.7z" | cut -f1))"
           fi
 
           echo "=== 产物准备完成 ==="
@@ -689,7 +801,7 @@ jobs:
           echo "=== 准备 release 产物 ==="
           mkdir -p publish-assets
           mkdir -p release-assets
-          find dist/ -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" -o -name "*.msi" -o -name "*.7z" \) -exec cp {} publish-assets/ \;
+          find dist/ -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" -o -name "*.7z" -o -name "*.exe" -o -name "*.AppImage" -o -name "*.blockmap" \) -exec cp {} publish-assets/ \;
           find publish-assets/ -type f -exec cp {} release-assets/ \;
           echo "=== Release 产物列表 ==="
           ls -lh release-assets/
@@ -788,6 +900,44 @@ jobs:
           }
           const hasMacArmDmg = manifest.assets.some((asset) => asset.platform === 'macos' && asset.arch === 'arm64' && asset.package_type === 'dmg' && asset.url_cn && asset.url_global);
           if (!hasMacArmDmg) throw new Error('app manifest missing macOS arm64 dmg with dual urls');
+          const forbiddenMsi = manifest.assets.find((asset) => asset.package_type === 'msi' || asset.name.endsWith('.msi'));
+          if (forbiddenMsi) throw new Error(`app manifest must not include MSI asset: ${forbiddenMsi.name}`);
+          const requiredAssets = [
+            ['windows', 'x64', 'exe'],
+            ['windows', 'x64', 'zip'],
+            ['windows', 'x64', '7z'],
+            ['macos', 'arm64', 'dmg'],
+            ['macos', 'arm64', 'zip'],
+            ['macos', 'x64', 'dmg'],
+            ['macos', 'x64', 'zip'],
+            ['linux', 'x64', 'AppImage'],
+            ['linux', 'x64', 'deb'],
+            ['linux', 'x64', 'rpm'],
+            ['linux', 'x64', 'zip'],
+            ['linux', 'arm64', 'AppImage'],
+            ['linux', 'arm64', 'deb'],
+            ['linux', 'arm64', 'rpm'],
+            ['linux', 'arm64', 'zip'],
+          ];
+          for (const [platform, arch, packageType] of requiredAssets) {
+            if (!manifest.assets.some((asset) => asset.platform === platform && asset.arch === arch && asset.package_type === packageType)) {
+              throw new Error(`app manifest missing ${platform}-${arch}-${packageType}`);
+            }
+          }
+          const autoAssets = manifest.assets.filter((asset) => asset.auto_update?.supported);
+          for (const asset of autoAssets) {
+            if (!asset.size || !asset.sha512 || !asset.auto_update.sha512 || !asset.auto_update.installerFamily || !asset.auto_update.blockMapSize || !Array.isArray(asset.auto_update.files) || asset.auto_update.files.length === 0) {
+              throw new Error(`app manifest missing auto_update metadata for ${asset.name}`);
+            }
+            for (const file of asset.auto_update.files) {
+              if (!file.sha512 || !file.size || !file.blockMapSize) {
+                throw new Error(`app manifest missing auto_update file metadata for ${asset.name}`);
+              }
+            }
+            if (!fs.existsSync(`release-assets/${asset.name}.blockmap`)) {
+              throw new Error(`app manifest missing blockmap asset for ${asset.name}`);
+            }
+          }
           for (const asset of manifest.assets) {
             if (!asset.url_cn || !asset.url_global) {
               throw new Error(`app manifest missing dual urls for ${asset.name}`);
@@ -812,7 +962,7 @@ jobs:
             ### 📦 Downloads 下载
 
             #### Windows (x64)
-            - [**MSI Installer**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-windows-x64.msi) （安装包）— recommended for installation, supports custom install directory
+            - [**NSIS Installer**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-windows-x64-nsis.exe) （安装包）— recommended for installation and auto-update
             - [**7z Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-windows-x64.7z) （压缩包，推荐）— LZMA2 compression, ~100MB smaller than ZIP, requires [7-Zip](https://www.7-zip.org/)
             - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-windows-x64.zip) （压缩包）— larger file size
 
@@ -827,11 +977,13 @@ jobs:
             #### Linux Desktop (x64) — Electron App
             - [**DEB Package**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-x64.deb) (Ubuntu/Debian)
             - [**RPM Package**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-x64.rpm) (Fedora/RHEL)
+            - [**AppImage**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-x64.AppImage) — supports in-app auto-update
             - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-x64.zip) （压缩包）
 
             #### Linux Desktop (ARM64) — Electron App
             - [**DEB Package**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-arm64.deb) (Ubuntu/Debian)
             - [**RPM Package**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-arm64.rpm) (Fedora/RHEL)
+            - [**AppImage**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-arm64.AppImage) — supports in-app auto-update
             - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-arm64.zip) （压缩包）
 
             > Looking for **Linux Server** (headless, no Electron)? See [nightly-server](https://github.com/${{ github.repository }}/releases/tag/nightly-server).
@@ -870,7 +1022,7 @@ jobs:
             ### 📦 Downloads 下载
 
             #### Windows (x64)
-            - [**MSI Installer**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-windows-x64.msi) （安装包）— recommended, supports custom install directory
+            - [**NSIS Installer**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-windows-x64-nsis.exe) （安装包）— recommended for installation and auto-update
             - [**7z Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-windows-x64.7z) （压缩包，推荐）— LZMA2 compression, ~100MB smaller than ZIP, requires [7-Zip](https://www.7-zip.org/)
             - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-windows-x64.zip) （压缩包）— larger file size
 
@@ -885,11 +1037,13 @@ jobs:
             #### Linux Desktop (x64) — Electron App
             - [**DEB Package**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-x64.deb) (Ubuntu/Debian)
             - [**RPM Package**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-x64.rpm) (Fedora/RHEL)
+            - [**AppImage**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-x64.AppImage) — supports in-app auto-update
             - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-x64.zip) （压缩包）
 
             #### Linux Desktop (ARM64) — Electron App
             - [**DEB Package**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-arm64.deb) (Ubuntu/Debian)
             - [**RPM Package**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-arm64.rpm) (Fedora/RHEL)
+            - [**AppImage**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-arm64.AppImage) — supports in-app auto-update
             - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-arm64.zip) （压缩包）
 
             ### 🔧 System Requirements 系统要求
@@ -978,6 +1132,22 @@ jobs:
           }
           if (manifest.recent_commits[0]?.title !== manifest.commit_title) {
             throw new Error('oss app manifest recent_commits[0] does not match top-level commit_title');
+          }
+          const forbiddenMsi = (manifest.assets || []).find((asset) => asset.package_type === 'msi' || asset.name.endsWith('.msi'));
+          if (forbiddenMsi) throw new Error(`oss app manifest must not include MSI asset: ${forbiddenMsi.name}`);
+          const autoAssets = (manifest.assets || []).filter((asset) => asset.auto_update?.supported);
+          for (const asset of autoAssets) {
+            if (!asset.size || !asset.sha512 || !asset.auto_update.sha512 || !asset.auto_update.installerFamily || !asset.auto_update.blockMapSize || !Array.isArray(asset.auto_update.files) || asset.auto_update.files.length === 0) {
+              throw new Error(`oss app manifest missing auto_update metadata for ${asset.name}`);
+            }
+            for (const file of asset.auto_update.files) {
+              if (!file.sha512 || !file.size || !file.blockMapSize) {
+                throw new Error(`oss app manifest missing auto_update file metadata for ${asset.name}`);
+              }
+            }
+            if (!fs.existsSync(`publish-assets/${asset.name}.blockmap`)) {
+              throw new Error(`oss app manifest missing blockmap asset for ${asset.name}`);
+            }
           }
           EOF
 

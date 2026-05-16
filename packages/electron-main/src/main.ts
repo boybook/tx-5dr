@@ -10,7 +10,7 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import type { DesktopHttpsStatus } from '@tx5dr/contracts';
-import { DesktopUpdateService } from './desktopUpdate.js';
+import { DesktopUpdateService, type DesktopUpdateStatus } from './desktopUpdate.js';
 import { BUILD_INFO } from './generated/buildInfo.js';
 import { createLogger } from './utils/logger.js';
 import { getMessages } from './i18n.js';
@@ -38,7 +38,7 @@ import {
 // const __dirname = dirname(__filename);
 
 const logger = createLogger('ElectronMain');
-const desktopUpdateService = new DesktopUpdateService();
+let desktopUpdateService: DesktopUpdateService | null = null;
 const DEFAULT_WEB_HTTP_PORT = 8076;
 const DEFAULT_WEB_HTTPS_PORT = 8443;
 const DEFAULT_PORT_SCAN_STEPS = 50;
@@ -3372,6 +3372,7 @@ const startApp = async () => {
   await app.whenReady();
 
   logger.info('app ready');
+  getDesktopUpdateService();
 
   // 初始化 electron-log：统一日志目录到与 server AppPaths 一致的位置
   const logsDir = getAppLogsDir();
@@ -3410,7 +3411,7 @@ const startApp = async () => {
   startDevProcessMemoryLogger();
 
   if (app.isPackaged) {
-    void desktopUpdateService.checkForUpdates().catch((error) => {
+    void getDesktopUpdateService().checkForUpdates().catch((error) => {
       logger.warn('initial desktop update check failed', error);
     });
   }
@@ -3422,6 +3423,87 @@ let hasCleanedUp = false;
 let cleanupPromise: Promise<void> | null = null;
 let lastQuitSource: QuitSource = 'unknown';
 let relaunchAfterCleanup = false;
+let isInstallingDesktopUpdate = false;
+
+
+function getDesktopUpdateService(): DesktopUpdateService {
+  if (!desktopUpdateService) {
+    desktopUpdateService = new DesktopUpdateService({
+      prepareInstall: prepareForDesktopUpdateInstall,
+      beforeQuitAndInstall: markDesktopUpdateInstallHandoff,
+      onQuitAndInstallError: resetDesktopUpdateInstallHandoff,
+      onStatus: broadcastDesktopUpdateStatus,
+    });
+  }
+  return desktopUpdateService;
+}
+
+function broadcastDesktopUpdateStatus(status: DesktopUpdateStatus): void {
+  for (const windowInstance of BrowserWindow.getAllWindows()) {
+    try {
+      if (!windowInstance.isDestroyed()) {
+        windowInstance.webContents.send('updater:status', status);
+      }
+    } catch (error) {
+      logger.warn('failed to broadcast desktop update status', error);
+    }
+  }
+}
+
+function markDesktopUpdateInstallHandoff(): void {
+  isInstallingDesktopUpdate = true;
+}
+
+function resetDesktopUpdateInstallHandoff(): void {
+  isInstallingDesktopUpdate = false;
+}
+
+async function prepareForDesktopUpdateInstall(): Promise<void> {
+  if (cleanupPromise) {
+    await cleanupPromise;
+    return;
+  }
+
+  lastQuitSource = 'renderer';
+  cleanupPromise = (async () => {
+    const totalStartedAt = Date.now();
+    isQuitting = true;
+    isCleaningUp = true;
+    let visualCloseMs = 0;
+    let cleanupSucceeded = false;
+
+    try {
+      const childResults = await cleanup();
+      visualCloseMs = closeFrontendWindowsImmediately();
+      hasCleanedUp = true;
+      cleanupSucceeded = true;
+      logger.info('cleanup done before desktop update install', {
+        visualCloseMs,
+        totalMs: Date.now() - totalStartedAt,
+        childResults,
+      });
+    } catch (error) {
+      hasCleanedUp = false;
+      logger.error('cleanup failed before desktop update install', {
+        visualCloseMs,
+        totalMs: Date.now() - totalStartedAt,
+        error,
+      });
+      throw error;
+    } finally {
+      isCleaningUp = false;
+      if (cleanupSucceeded) {
+        unregisterGlobalShortcuts();
+      } else {
+        isQuitting = false;
+        isInstallingDesktopUpdate = false;
+        cleanupPromise = null;
+      }
+    }
+  })();
+
+  await cleanupPromise;
+}
 
 // 统一的清理和退出处理函数
 async function cleanupAndQuit(source: QuitSource = 'unknown', options?: { relaunch?: boolean }): Promise<void> {
@@ -3473,6 +3555,10 @@ async function cleanupAndQuit(source: QuitSource = 'unknown', options?: { relaun
 app.on('will-quit', (event) => {
   logger.info('app will-quit');
 
+  if (isInstallingDesktopUpdate) {
+    return;
+  }
+
   if (!hasCleanedUp) {
     event.preventDefault();
     if (!isCleaningUp) {
@@ -3483,6 +3569,10 @@ app.on('will-quit', (event) => {
 
 app.on('before-quit', (event) => {
   logger.info('app before-quit');
+
+  if (isInstallingDesktopUpdate) {
+    return;
+  }
 
   if (!hasCleanedUp) {
     event.preventDefault();
@@ -3839,15 +3929,23 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('updater:getStatus', () => {
-    return desktopUpdateService.getStatus();
+    return getDesktopUpdateService().getStatus();
   });
 
   ipcMain.handle('updater:check', async () => {
-    return desktopUpdateService.checkForUpdates();
+    return getDesktopUpdateService().checkForUpdates();
   });
 
   ipcMain.handle('updater:openDownload', async (_event, url?: string) => {
-    await desktopUpdateService.openDownload(url);
+    await getDesktopUpdateService().openDownload(url);
+  });
+
+  ipcMain.handle('updater:download', async () => {
+    return getDesktopUpdateService().download();
+  });
+
+  ipcMain.handle('updater:installAndRestart', async () => {
+    return getDesktopUpdateService().installAndRestart();
   });
 
   ipcMain.handle('https:getStatus', async () => {
@@ -3964,9 +4062,10 @@ function setupIpcHandlers() {
 
 // ===== 单实例锁（仅生产模式，开发模式下跳过以便于调试重启） =====
 const isDevMode = process.env.NODE_ENV === 'development' && !app.isPackaged;
+const disableSingleInstanceLock = process.env.TX5DR_DISABLE_SINGLE_INSTANCE_LOCK === '1';
 let shouldStart = true;
 
-if (!isDevMode) {
+if (!isDevMode && !disableSingleInstanceLock) {
   const gotTheLock = app.requestSingleInstanceLock();
 
   if (!gotTheLock) {
@@ -3979,6 +4078,8 @@ if (!isDevMode) {
       showMainWindow();
     });
   }
+} else if (disableSingleInstanceLock) {
+  logger.info('single instance lock disabled by TX5DR_DISABLE_SINGLE_INSTANCE_LOCK');
 }
 
 if (shouldStart) {

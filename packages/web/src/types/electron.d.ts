@@ -51,6 +51,15 @@ interface DesktopUpdateRecentCommit {
   publishedAt: string | null;
 }
 
+type DesktopUpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'unsupported' | 'error';
+
+interface DesktopDownloadProgress {
+  percent: number;
+  transferred: number;
+  total: number;
+  bytesPerSecond: number;
+}
+
 interface DesktopUpdateStatus {
   channel: 'release' | 'nightly';
   currentVersion: string;
@@ -72,6 +81,9 @@ interface DesktopUpdateStatus {
     arch: string;
     recommended: boolean;
     source: DesktopUpdateSource;
+    autoUpdateSupported: boolean;
+    autoUpdateTarget: string | null;
+    installerFamily: string | null;
   }>;
   metadataSource: DesktopUpdateSource | null;
   downloadSource: DesktopUpdateSource | null;
@@ -80,6 +92,15 @@ interface DesktopUpdateStatus {
   distribution: 'electron';
   identity: string | null;
   websiteUrl: string;
+  phase: DesktopUpdatePhase;
+  autoUpdateSupported: boolean;
+  autoUpdateTarget: string | null;
+  autoUpdateInstallerFamily: string | null;
+  autoUpdateReason: string | null;
+  downloadProgress: DesktopDownloadProgress | null;
+  downloaded: boolean;
+  pendingInstallIdentity: string | null;
+  lastInstallFailed: boolean;
 }
 
 type StartupLogSourceId = 'electron-main' | 'server' | 'client-tools';
@@ -154,7 +175,11 @@ interface ElectronAPI {
   updater?: {
     getStatus(): Promise<DesktopUpdateStatus>;
     check(): Promise<DesktopUpdateStatus>;
+    download(): Promise<DesktopUpdateStatus>;
+    installAndRestart(): Promise<DesktopUpdateStatus>;
     openDownload(url?: string): Promise<void>;
+    onStatus(callback: (status: DesktopUpdateStatus) => void): void;
+    offStatus(callback: (status: DesktopUpdateStatus) => void): void;
   };
   startupLogs?: {
     openFolder(): Promise<void>;

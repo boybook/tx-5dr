@@ -106,6 +106,15 @@ interface BuildInfo {
   buildTimestamp: string;
 }
 
+type DesktopUpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'unsupported' | 'error';
+
+interface DesktopDownloadProgress {
+  percent: number;
+  transferred: number;
+  total: number;
+  bytesPerSecond: number;
+}
+
 interface DesktopUpdateStatus {
   channel: 'release' | 'nightly';
   currentVersion: string;
@@ -127,6 +136,9 @@ interface DesktopUpdateStatus {
     arch: string;
     recommended: boolean;
     source: DesktopUpdateSource;
+    autoUpdateSupported: boolean;
+    autoUpdateTarget: string | null;
+    installerFamily: string | null;
   }>;
   metadataSource: DesktopUpdateSource | null;
   downloadSource: DesktopUpdateSource | null;
@@ -135,6 +147,15 @@ interface DesktopUpdateStatus {
   distribution: 'electron';
   identity: string | null;
   websiteUrl: string;
+  phase: DesktopUpdatePhase;
+  autoUpdateSupported: boolean;
+  autoUpdateTarget: string | null;
+  autoUpdateInstallerFamily: string | null;
+  autoUpdateReason: string | null;
+  downloadProgress: DesktopDownloadProgress | null;
+  downloaded: boolean;
+  pendingInstallIdentity: string | null;
+  lastInstallFailed: boolean;
 }
 
 type StartupLogSourceId = 'electron-main' | 'server' | 'client-tools';
@@ -204,6 +225,10 @@ const shortcutRecordingCancelledListeners = new WeakMap<
 const voicePttShortcutCommandListeners = new WeakMap<
   (payload: VoicePttShortcutCommandPayload) => void,
   (_event: unknown, payload: VoicePttShortcutCommandPayload) => void
+>();
+const updaterStatusListeners = new WeakMap<
+  (status: DesktopUpdateStatus) => void,
+  (_event: unknown, status: DesktopUpdateStatus) => void
 >();
 
 /**
@@ -294,7 +319,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updater: {
     getStatus: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:getStatus'),
     check: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:check'),
+    download: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:download'),
+    installAndRestart: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:installAndRestart'),
     openDownload: (url?: string): Promise<void> => ipcRenderer.invoke('updater:openDownload', url),
+    onStatus: (callback: (status: DesktopUpdateStatus) => void) => {
+      if (updaterStatusListeners.has(callback)) return;
+      const listener = (_event: unknown, status: DesktopUpdateStatus) => callback(status);
+      updaterStatusListeners.set(callback, listener);
+      ipcRenderer.on('updater:status', listener);
+    },
+    offStatus: (callback: (status: DesktopUpdateStatus) => void) => {
+      const listener = updaterStatusListeners.get(callback);
+      if (!listener) return;
+      ipcRenderer.removeListener('updater:status', listener);
+      updaterStatusListeners.delete(callback);
+    },
   },
 
   startupLogs: {
@@ -485,7 +524,11 @@ declare global {
       updater: {
         getStatus(): Promise<DesktopUpdateStatus>;
         check(): Promise<DesktopUpdateStatus>;
+        download(): Promise<DesktopUpdateStatus>;
+        installAndRestart(): Promise<DesktopUpdateStatus>;
         openDownload(url?: string): Promise<void>;
+        onStatus(callback: (status: DesktopUpdateStatus) => void): void;
+        offStatus(callback: (status: DesktopUpdateStatus) => void): void;
       };
       startupLogs: {
         openFolder(): Promise<void>;

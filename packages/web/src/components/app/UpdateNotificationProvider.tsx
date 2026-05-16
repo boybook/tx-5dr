@@ -22,7 +22,19 @@ type UpdateStatusWithDownloads = SystemUpdateStatus & {
     arch: string;
     recommended: boolean;
     source: 'oss' | 'github';
+    autoUpdateSupported?: boolean;
+    autoUpdateTarget?: string | null;
+    installerFamily?: string | null;
   }>;
+  phase?: DesktopUpdateStatus['phase'];
+  autoUpdateSupported?: boolean;
+  autoUpdateTarget?: string | null;
+  autoUpdateInstallerFamily?: string | null;
+  autoUpdateReason?: string | null;
+  downloadProgress?: DesktopUpdateStatus['downloadProgress'];
+  downloaded?: boolean;
+  pendingInstallIdentity?: string | null;
+  lastInstallFailed?: boolean;
   downloadSource?: 'oss' | 'github' | null;
 };
 
