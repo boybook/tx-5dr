@@ -389,13 +389,13 @@ export class RadioOperatorManager {
     // 初始化日志管理器
     await this.logManager.initialize();
     if (ConfigManager.getInstance().getOperatorsConfig().length === 0) {
-      this.logManager.skipBootstrapPrewarm?.('没有已配置的操作员，跳过日志本预热');
+      this.logManager.skipBootstrapPrewarm?.('No configured operators; logbook prewarm skipped');
     }
 
     // 从配置文件初始化操作员（包括创建对应的日志本）
     await this.initializeOperatorsFromConfig();
     if (ConfigManager.getInstance().getOperatorsConfig().length > 0 && this.operators.size === 0) {
-      this.logManager.skipBootstrapPrewarm?.('未能创建可用操作员，跳过日志本预热');
+      this.logManager.skipBootstrapPrewarm?.('No available operators were created; logbook prewarm skipped');
     }
 
     logger.info('Initialized');

@@ -456,7 +456,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       && now - this.lastRadioIoBackpressureWarnAt >= RADIO_IO_BACKPRESSURE_WARN_COOLDOWN_MS
     ) {
       this.lastRadioIoBackpressureWarnAt = now;
-      logger.warn('串口 CAT 队列持续繁忙，已暂停低优先级轮询', context);
+      logger.warn('Serial CAT queue remains busy; low-priority polling paused', context);
     }
 
     return true;

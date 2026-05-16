@@ -190,7 +190,7 @@ describe('DeviceUiProjectionService', () => {
         slotId: 'FT8-1',
         slotStartMs: 15_000,
         message: 'CQ DX BG2AAA OM88',
-        countryZh: '中国·黑龙江',
+        countryZh: '\u4e2d\u56fd\u00b7\u9ed1\u9f99\u6c5f',
         countryEn: 'China·Heilongjiang',
       }],
       currentTx: {

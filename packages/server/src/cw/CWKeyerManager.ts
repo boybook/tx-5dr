@@ -31,12 +31,12 @@ const DEFAULT_CW_MESSAGE_SLOTS: Array<Pick<CWMessageSlot, 'label' | 'text' | 're
     repeatIntervalSec: 5,
   },
   {
-    label: '呼叫',
+    label: 'CALL',
     text: '{HISCALL} DE {MYCALL} {MYCALL} K',
     repeatIntervalSec: 5,
   },
   {
-    label: '报告',
+    label: 'RST',
     text: '{HISCALL} DE {MYCALL} UR 599 599 BK',
     repeatIntervalSec: 5,
   },
@@ -46,7 +46,7 @@ const DEFAULT_CW_MESSAGE_SLOTS: Array<Pick<CWMessageSlot, 'label' | 'text' | 're
     repeatIntervalSec: 5,
   },
   {
-    label: '重发呼号',
+    label: 'MYCALL',
     text: 'DE {MYCALL} {MYCALL} K',
     repeatIntervalSec: 5,
   },

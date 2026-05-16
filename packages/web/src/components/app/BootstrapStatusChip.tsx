@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Button, Chip, Popover, PopoverContent, PopoverTrigger, Spinner } from '@heroui/react';
 import { addToast } from '@heroui/toast';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { UserRole, type BootstrapPhaseStatus, type BootstrapStatus } from '@tx5dr/contracts';
 import { api } from '@tx5dr/core';
 import { useRadioState } from '../../store/radioStore';
@@ -47,22 +49,22 @@ function phaseTone(phase: BootstrapPhaseStatus): 'success' | 'warning' | 'danger
   }
 }
 
-function phaseText(phase: BootstrapPhaseStatus): string {
+function phaseText(phase: BootstrapPhaseStatus, t: TFunction): string {
   switch (phase.state) {
     case 'pending':
-      return '等待中';
+      return t('bootstrapStatus.phaseState.pending', 'Pending');
     case 'running':
-      return '准备中';
+      return t('bootstrapStatus.phaseState.running', 'Preparing');
     case 'ready':
-      return '就绪';
+      return t('bootstrapStatus.phaseState.ready', 'Ready');
     case 'skipped':
-      return '已跳过';
+      return t('bootstrapStatus.phaseState.skipped', 'Skipped');
     case 'warning':
-      return '需注意';
+      return t('bootstrapStatus.phaseState.warning', 'Needs attention');
     case 'failed':
-      return '失败';
+      return t('bootstrapStatus.phaseState.failed', 'Failed');
     case 'timed_out':
-      return '耗时较长';
+      return t('bootstrapStatus.phaseState.timed_out', 'Taking longer');
     default:
       return phase.state;
   }
@@ -72,17 +74,33 @@ function visiblePhases(status: BootstrapStatus): BootstrapPhaseStatus[] {
   return status.phases.filter(phase => phase.userVisible !== false);
 }
 
-function chipCopy(status: BootstrapStatus): { label: string; color: 'primary' | 'warning' | 'danger' } {
+function chipCopy(status: BootstrapStatus, t: TFunction): { label: string; color: 'primary' | 'warning' | 'danger' } {
   if (status.lifecycle === 'failed') {
-    return { label: '部分功能未准备好', color: 'danger' };
+    return { label: t('bootstrapStatus.chip.failed', 'Some services are not ready'), color: 'danger' };
   }
   if (status.lifecycle === 'degraded') {
-    return { label: '部分功能准备时间较长', color: 'warning' };
+    return { label: t('bootstrapStatus.chip.degraded', 'Some services are taking longer'), color: 'warning' };
   }
-  return { label: '正在准备后台服务...', color: 'primary' };
+  return { label: t('bootstrapStatus.chip.booting', 'Preparing background services...'), color: 'primary' };
+}
+
+function phaseLabel(phase: BootstrapPhaseStatus, t: TFunction): string {
+  return t(`bootstrapStatus.phase.${phase.id}.label`, phase.label);
+}
+
+function phaseDescription(phase: BootstrapPhaseStatus, t: TFunction): string {
+  return t(`bootstrapStatus.phase.${phase.id}.description`, phase.description);
+}
+
+function phaseMessage(phase: BootstrapPhaseStatus, t: TFunction): string {
+  if (phase.message) {
+    return t(`bootstrapStatus.message.${phase.id}.${phase.state}`, phase.message);
+  }
+  return phaseDescription(phase, t) || t('bootstrapStatus.checking', 'Checking status');
 }
 
 export function BootstrapStatusChip(): JSX.Element | null {
+  const { t } = useTranslation();
   const { state, dispatch } = useRadioState();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const status = state.bootstrapStatus;
@@ -101,7 +119,7 @@ export function BootstrapStatusChip(): JSX.Element | null {
     return null;
   }
 
-  const copy = chipCopy(status);
+  const copy = chipCopy(status, t);
   const phases = visiblePhases(status);
   const running = status.summary.running > 0 && status.lifecycle === 'booting';
   const canRetry = isAdmin
@@ -118,10 +136,10 @@ export function BootstrapStatusChip(): JSX.Element | null {
     try {
       const nextStatus = await api.retryBootstrapStatus();
       dispatch({ type: 'bootstrapStatusChanged', payload: nextStatus });
-      addToast({ title: '已开始重试启动准备项', color: 'primary', timeout: 2500 });
+      addToast({ title: t('bootstrapStatus.retryStarted', 'Retry started'), color: 'primary', timeout: 2500 });
     } catch (error) {
       addToast({
-        title: '无法重试启动准备项',
+        title: t('bootstrapStatus.retryFailed', 'Failed to retry startup item'),
         description: error instanceof Error ? error.message : String(error),
         color: 'danger',
         timeout: 4000,
@@ -139,14 +157,14 @@ export function BootstrapStatusChip(): JSX.Element | null {
         return;
       }
       addToast({
-        title: '日志目录',
+        title: t('bootstrapStatus.logsDir', 'Logs directory'),
         description: runtimeInfo.logsDir,
         color: 'default',
         timeout: 6000,
       });
     } catch (error) {
       addToast({
-        title: '无法打开日志目录',
+        title: t('bootstrapStatus.openLogsFailed', 'Failed to open logs directory'),
         description: error instanceof Error ? error.message : String(error),
         color: 'danger',
         timeout: 4000,
@@ -158,7 +176,7 @@ export function BootstrapStatusChip(): JSX.Element | null {
     <div className="fixed left-1/2 top-2 z-[9000] -translate-x-1/2 pointer-events-auto">
       <Popover placement="bottom" showArrow>
         <PopoverTrigger>
-          <button type="button" className="outline-none" aria-label="查看启动状态">
+          <button type="button" className="outline-none" aria-label={t('bootstrapStatus.viewAria', 'View startup status')}>
             <Chip
               size="sm"
               color={copy.color}
@@ -174,13 +192,13 @@ export function BootstrapStatusChip(): JSX.Element | null {
           <div className="w-full p-3">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-foreground">后台服务启动状态</div>
+                <div className="text-sm font-semibold text-foreground">{t('bootstrapStatus.title', 'Background service startup')}</div>
                 <div className="mt-1 text-xs text-default-500">
-                  不影响已就绪功能的正常使用。全部准备完成后提示会自动消失。
+                  {t('bootstrapStatus.subtitle', 'Ready features remain available. This notice disappears after all services finish.')}
                 </div>
               </div>
               <Button size="sm" variant="light" className="h-7 px-2 text-xs" onPress={handleDismiss}>
-                暂不提示
+                {t('bootstrapStatus.dismiss', 'Dismiss')}
               </Button>
             </div>
 
@@ -189,18 +207,18 @@ export function BootstrapStatusChip(): JSX.Element | null {
                 <div key={phase.id} className="rounded-lg bg-content2/70 px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="truncate text-xs font-medium text-foreground">{phase.label}</div>
+                      <div className="truncate text-xs font-medium text-foreground">{phaseLabel(phase, t)}</div>
                       <div className="truncate text-[11px] text-default-500">
-                        {phase.message || phase.description || '正在检查状态'}
+                        {phaseMessage(phase, t)}
                       </div>
                     </div>
                     <Chip size="sm" variant="flat" color={phaseTone(phase)} className="h-5 shrink-0 text-[10px]">
-                      {phaseText(phase)}
+                      {phaseText(phase, t)}
                     </Chip>
                   </div>
                   {phase.durationMs !== undefined && (
                     <div className="mt-1 text-[10px] text-default-400">
-                      用时 {formatDuration(phase.durationMs)}
+                      {t('bootstrapStatus.duration', 'Took {{duration}}', { duration: formatDuration(phase.durationMs) })}
                     </div>
                   )}
                 </div>
@@ -211,7 +229,7 @@ export function BootstrapStatusChip(): JSX.Element | null {
               <div className="mt-3 flex justify-end gap-2">
                 {isAdmin && (
                   <Button size="sm" variant="flat" className="h-7 text-xs" onPress={handleViewLogs}>
-                    查看日志
+                    {t('bootstrapStatus.viewLogs', 'View logs')}
                   </Button>
                 )}
                 {canRetry && (
@@ -223,7 +241,7 @@ export function BootstrapStatusChip(): JSX.Element | null {
                     isLoading={isRetrying}
                     onPress={handleRetry}
                   >
-                    重试
+                    {t('common:action.retry', 'Retry')}
                   </Button>
                 )}
               </div>

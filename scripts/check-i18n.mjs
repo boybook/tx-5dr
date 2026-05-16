@@ -261,6 +261,7 @@ function checkBackendConsoleCalls() {
 // i18n.ts 是 electron-main 的多语言字符串模块，允许包含中文
 const BACKEND_CJK_ALLOWED_FILES = new Set([
   'callsign/callsign.ts',
+  'lotwStationLocation.ts',
   'i18n.ts',
 ]);
 

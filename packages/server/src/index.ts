@@ -185,7 +185,7 @@ async function start() {
     }
 
     const portOptions = resolveServerPortOptions();
-    bootstrapCoordinator.startPhase('core-http', '正在启动本地服务');
+    bootstrapCoordinator.startPhase('core-http', 'Starting local service');
     const actualPort = await listenWithPortNegotiation(server, portOptions);
     await writeServerReadyFile(createServerReadyState({
       requestedPort: portOptions.requestedPort,
@@ -206,9 +206,9 @@ async function start() {
           () => clockManager.start(),
           {
             timeoutMs: 15_000,
-            pendingMessage: '正在按上次配置启动电台',
-            successMessage: '电台自动启动完成',
-            failureMessage: '电台自动启动失败，可稍后重试',
+            pendingMessage: 'Starting radio from last configuration',
+            successMessage: 'Radio auto-start completed',
+            failureMessage: 'Radio auto-start failed; retry later',
           },
         );
       } catch (error) {
@@ -217,7 +217,7 @@ async function start() {
         });
       }
     } else {
-      bootstrapCoordinator.skipPhase('active-profile-autostart', '没有已启用的 Profile，跳过自动启动');
+      bootstrapCoordinator.skipPhase('active-profile-autostart', 'No active profile; auto-start skipped');
       logger.info('no active profile, engine startup deferred until profile is configured');
     }
     bootstrapCoordinator.finalizeIfSettled();

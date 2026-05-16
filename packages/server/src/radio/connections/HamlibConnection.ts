@@ -244,7 +244,7 @@ export class HamlibConnection
     onCongestionWarning: (snapshot) => {
       const logContext = this.flattenRadioIoSnapshotContext(snapshot);
       logger.warn(
-        logContext.connectionType === 'serial' ? '串口 CAT 请求队列拥堵' : '电台 CAT 请求队列拥堵',
+        logContext.connectionType === 'serial' ? 'Serial CAT request queue congested' : 'Radio CAT request queue congested',
         logContext,
       );
     },

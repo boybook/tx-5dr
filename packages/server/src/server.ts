@@ -80,9 +80,9 @@ function retryBootstrapPhase(phaseId: BootstrapPhaseId, digitalRadioEngine: Digi
           () => AudioDeviceManager.getInstance().initializeDeviceRegistry(),
           {
             timeoutMs: 15_000,
-            pendingMessage: '正在重新发现音频设备',
-            successMessage: '音频设备发现完成',
-            failureMessage: '音频设备发现失败，可稍后重试',
+            pendingMessage: 'Rediscovering audio devices',
+            successMessage: 'Audio device discovery completed',
+            failureMessage: 'Audio device discovery failed; retry later',
           },
         );
         return;
@@ -95,9 +95,9 @@ function retryBootstrapPhase(phaseId: BootstrapPhaseId, digitalRadioEngine: Digi
           () => digitalRadioEngine.pluginManager.start(),
           {
             timeoutMs: 15_000,
-            pendingMessage: '正在重新加载插件',
-            successMessage: '插件加载完成',
-            failureMessage: '插件加载失败，可稍后重试',
+            pendingMessage: 'Reloading plugins',
+            successMessage: 'Plugin loading completed',
+            failureMessage: 'Plugin loading failed; retry later',
           },
         );
         return;
@@ -107,15 +107,15 @@ function retryBootstrapPhase(phaseId: BootstrapPhaseId, digitalRadioEngine: Digi
           () => digitalRadioEngine.getNtpCalibrationService().start(),
           {
             timeoutMs: 10_000,
-            pendingMessage: '正在重新启动时间校准',
-            successMessage: '时间校准服务已启动',
-            failureMessage: '时间校准服务启动失败，可稍后重试',
+            pendingMessage: 'Restarting clock calibration',
+            successMessage: 'Clock calibration service started',
+            failureMessage: 'Clock calibration service failed to start; retry later',
           },
         );
         return;
       case 'active-profile-autostart':
         if (ConfigManager.getInstance().getActiveProfileId() === null) {
-          bootstrapCoordinator.skipPhase(phaseId, '没有已启用的 Profile，跳过自动启动');
+          bootstrapCoordinator.skipPhase(phaseId, 'No active profile; auto-start skipped');
           return;
         }
         await bootstrapCoordinator.runPhase(
@@ -123,9 +123,9 @@ function retryBootstrapPhase(phaseId: BootstrapPhaseId, digitalRadioEngine: Digi
           () => digitalRadioEngine.start(),
           {
             timeoutMs: 15_000,
-            pendingMessage: '正在重试自动启动电台',
-            successMessage: '电台自动启动完成',
-            failureMessage: '电台自动启动失败，可稍后重试',
+            pendingMessage: 'Retrying radio auto-start',
+            successMessage: 'Radio auto-start completed',
+            failureMessage: 'Radio auto-start failed; retry later',
           },
         );
         return;
@@ -231,11 +231,11 @@ export async function createServer() {
 
   // 初始化配置管理器
   const configManager = ConfigManager.getInstance();
-  bootstrapCoordinator.startPhase('config-auth', '正在读取基础配置');
+  bootstrapCoordinator.startPhase('config-auth', 'Reading base configuration');
   await configManager.initialize();
   fastify.log.info('Config manager initialized');
 
-  bootstrapCoordinator.startPhase('audio-device-discovery', '正在发现音频设备');
+  bootstrapCoordinator.startPhase('audio-device-discovery', 'Discovering audio devices');
   await AudioDeviceManager.getInstance().initializeDeviceRegistry();
   bootstrapCoordinator.completePhase('audio-device-discovery');
   fastify.log.info('Audio device registry initialized');
@@ -271,7 +271,7 @@ export async function createServer() {
   bootLogger.info('initializing digital radio engine...');
   ConsoleLogger.getInstance().flushSync();
   const digitalRadioEngine = DigitalRadioEngine.getInstance();
-  bootstrapCoordinator.startPhase('engine-bootstrap', '正在装配电台引擎');
+  bootstrapCoordinator.startPhase('engine-bootstrap', 'Assembling radio engine');
   await digitalRadioEngine.initialize();
   bootstrapCoordinator.completePhase('engine-bootstrap');
   bootLogger.info('digital radio engine initialized');

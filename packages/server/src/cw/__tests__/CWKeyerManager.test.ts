@@ -102,10 +102,10 @@ describe('CWKeyerManager', () => {
     expect(panel.slotCount).toBe(8);
     expect(panel.slots.slice(0, 8).map(slot => ({ label: slot.label, text: slot.text }))).toEqual([
       { label: 'CQ', text: 'CQ CQ DE {MYCALL} {MYCALL} K' },
-      { label: '呼叫', text: '{HISCALL} DE {MYCALL} {MYCALL} K' },
-      { label: '报告', text: '{HISCALL} DE {MYCALL} UR 599 599 BK' },
+      { label: 'CALL', text: '{HISCALL} DE {MYCALL} {MYCALL} K' },
+      { label: 'RST', text: '{HISCALL} DE {MYCALL} UR 599 599 BK' },
       { label: 'TU', text: '{HISCALL} DE {MYCALL} R R TU 73 SK' },
-      { label: '重发呼号', text: 'DE {MYCALL} {MYCALL} K' },
+      { label: 'MYCALL', text: 'DE {MYCALL} {MYCALL} K' },
       { label: 'QRZ?', text: 'QRZ? DE {MYCALL} K' },
       { label: 'AGN?', text: 'AGN? AGN? DE {MYCALL} K' },
       { label: 'SRI', text: 'SRI CALL? DE {MYCALL} K' },

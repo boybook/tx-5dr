@@ -122,20 +122,20 @@ describe('PluginLogPanel logic helpers', () => {
       source: 'system',
       stage: 'activate',
       level: 'info',
-      pluginName: 'websdr.bd8ftc.de FRP穿透服务',
+      pluginName: 'websdr.bd8ftc.de FRP tunnel service',
       message: 'Plugin loaded',
       timestamp: 1713744000000,
     });
     const pluginView = toPluginLogHistoryViewEntry({
-      pluginName: 'websdr.bd8ftc.de FRP穿透服务',
+      pluginName: 'websdr.bd8ftc.de FRP tunnel service',
       level: 'info',
-      message: 'FRPC 已启动',
+      message: 'FRPC started',
       timestamp: 1713744001000,
     });
 
     expect(systemView.source).toBe('system');
     expect(systemView.stage).toBe('activate');
     expect(pluginView.source).toBe('plugin');
-    expect(pluginView.message).toBe('FRPC 已启动');
+    expect(pluginView.message).toBe('FRPC started');
   });
 });

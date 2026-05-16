@@ -922,7 +922,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     await printAppPaths();
 
     // Start NTP calibration (non-blocking, does not delay engine startup)
-    bootstrapCoordinator.startPhase('ntp-initial-check', '正在启动时间校准');
+    bootstrapCoordinator.startPhase('ntp-initial-check', 'Starting clock calibration');
     await this.ntpCalibrationService.start();
     bootstrapCoordinator.completePhase('ntp-initial-check');
 
@@ -964,12 +964,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     logger.info('Initialization phase: domain-services');
 
     await this.operatorManager.initialize();
-    bootstrapCoordinator.startPhase('plugin-bootstrap', '正在加载插件');
+    bootstrapCoordinator.startPhase('plugin-bootstrap', 'Loading plugins');
     try {
       await this._pluginManager.start();
       bootstrapCoordinator.completePhase('plugin-bootstrap');
     } catch (error) {
-      bootstrapCoordinator.failPhase('plugin-bootstrap', '插件加载失败，可稍后重试');
+      bootstrapCoordinator.failPhase('plugin-bootstrap', 'Plugin loading failed; retry later');
       logger.error('Plugin manager startup failed; continuing without plugins', {
         error: error instanceof Error ? error.message : String(error),
       });

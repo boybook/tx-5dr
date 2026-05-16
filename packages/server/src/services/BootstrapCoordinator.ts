@@ -14,54 +14,54 @@ const logger = createLogger('BootstrapCoordinator');
 const PHASE_DEFINITIONS: Array<Pick<BootstrapPhaseStatus, 'id' | 'label' | 'description' | 'retryable' | 'userVisible'>> = [
   {
     id: 'config-auth',
-    label: '基础配置与登录',
-    description: '读取配置文件并准备本地访问令牌',
+    label: 'Base config and login',
+    description: 'Read config files and prepare local access tokens',
     userVisible: false,
   },
   {
     id: 'core-http',
-    label: '本地服务',
-    description: '启动本地 HTTP/WebSocket 服务',
+    label: 'Local service',
+    description: 'Start local HTTP/WebSocket service',
     userVisible: false,
   },
   {
     id: 'engine-bootstrap',
-    label: '电台引擎',
-    description: '装配数字电台引擎和运行时服务',
+    label: 'Radio engine',
+    description: 'Assemble the digital radio engine and runtime services',
     userVisible: true,
   },
   {
     id: 'audio-device-discovery',
-    label: '音频设备',
-    description: '发现输入/输出音频设备',
+    label: 'Audio devices',
+    description: 'Discover input/output audio devices',
     retryable: true,
     userVisible: true,
   },
   {
     id: 'logbook-prewarm',
-    label: '日志本',
-    description: '后台准备操作员日志本',
+    label: 'Logbook',
+    description: 'Prepare operator logbooks in the background',
     retryable: true,
     userVisible: true,
   },
   {
     id: 'plugin-bootstrap',
-    label: '插件',
-    description: '加载插件和自动化策略',
+    label: 'Plugins',
+    description: 'Load plugins and automation strategies',
     retryable: true,
     userVisible: true,
   },
   {
     id: 'ntp-initial-check',
-    label: '时间校准',
-    description: '启动时间校准服务',
+    label: 'Clock calibration',
+    description: 'Start time calibration service',
     retryable: true,
     userVisible: true,
   },
   {
     id: 'active-profile-autostart',
-    label: '自动启动电台',
-    description: '按上次配置自动启动当前 Profile',
+    label: 'Radio auto-start',
+    description: 'Start the current profile from the last configuration',
     retryable: true,
     userVisible: true,
   },
@@ -170,13 +170,13 @@ export class BootstrapCoordinator extends EventEmitter<{ statusChanged: (status:
     if (options.timeoutMs) {
       timeoutHandle = setTimeout(() => {
         timedOut = true;
-        this.timeoutPhase(id, `${this.getPhaseLabel(id)} 准备时间较长，仍在后台继续`);
+        this.timeoutPhase(id, `${this.getPhaseLabel(id)} is taking longer and continues in the background`);
       }, options.timeoutMs);
     }
     try {
       const result = await operation();
       if (timeoutHandle) clearTimeout(timeoutHandle);
-      this.completePhase(id, options.successMessage ?? (timedOut ? '后台准备已完成' : undefined));
+      this.completePhase(id, options.successMessage ?? (timedOut ? 'Background preparation completed' : undefined));
       return result;
     } catch (error) {
       if (timeoutHandle) clearTimeout(timeoutHandle);

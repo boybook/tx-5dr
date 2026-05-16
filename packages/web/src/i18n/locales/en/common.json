@@ -416,7 +416,7 @@
     "closeBehaviorTray": "Minimize to system tray",
     "closeBehaviorQuit": "Quit application",
     "desktopUpdateTitle": "Desktop Updates",
-    "desktopUpdateDesc": "Checks whether a newer build exists and provides the download link. The app does not download or install updates automatically.",
+    "desktopUpdateDesc": "Checks whether a newer build exists. Supported desktop installs can download the update silently, then apply it after restart.",
     "desktopUpdateSource": "Source",
     "desktopUpdateSourceValue": {
       "oss": "OSS mirror",
@@ -443,7 +443,7 @@
     "desktopUpdateViewAllCommits": "View all updates",
     "desktopUpdateNoNotes": "No release notes available.",
     "desktopUpdateDownloadOptionsTitle": "Download Options",
-    "desktopUpdateDownloadOptionsDesc": "Each release can provide installer and archive packages. Choose the one that matches how you use the app.",
+    "desktopUpdateDownloadOptionsDesc": "Manual downloads remain available as a fallback, especially for MSI, DEB/RPM, archives, or failed automatic updates.",
     "desktopUpdatePackageType": {
       "msi": "Windows Installer (MSI)",
       "dmg": "macOS Installer (DMG)",
@@ -451,7 +451,8 @@
       "zip": "Archive (ZIP)",
       "deb": "Linux Package (DEB)",
       "rpm": "Linux Package (RPM)",
-      "AppImage": "Linux AppImage"
+      "AppImage": "Linux AppImage",
+      "exe": "NSIS Installer"
     },
     "desktopUpdateCheck": "Check for updates",
     "desktopUpdateDownload": "Download update",
@@ -554,7 +555,34 @@
     "updateOpenWebsite": "Official website",
     "updateTargetElectron": "Electron",
     "updateTargetLinuxServer": "Linux Server",
-    "updateTargetDocker": "Docker"
+    "updateTargetDocker": "Docker",
+    "desktopUpdateManualDownload": "Download manually",
+    "desktopUpdateDownloading": "Downloading update",
+    "desktopUpdateDownloadProgress": "{{transferred}} MB / {{total}} MB",
+    "desktopUpdateDownloadFailed": "Failed to download the update.",
+    "desktopUpdateInstallAndRestart": "Restart to install",
+    "desktopUpdateInstallFailed": "Failed to prepare the update installer.",
+    "desktopUpdateManualFallback": "Automatic update is not available for this install. Use the manual download instead.",
+    "desktopUpdatePhase": {
+      "idle": "Idle",
+      "checking": "Checking",
+      "available": "Ready to download",
+      "downloading": "Downloading",
+      "downloaded": "Ready to install",
+      "installing": "Installing",
+      "unsupported": "Manual update",
+      "error": "Needs attention"
+    },
+    "desktopUpdateAutoReason": {
+      "auto_update_asset_unavailable": "This release does not provide an automatic update package for this platform.",
+      "auto_update_requires_nsis_installer": "This Windows install was not created by the new NSIS installer. Install the NSIS package manually once to enable future automatic updates.",
+      "auto_update_requires_appimage": "Automatic updates on Linux are supported only when running the AppImage package.",
+      "auto_update_requires_signed_zip_install": "This macOS install cannot use automatic updates. Install the signed desktop package manually once.",
+      "auto_update_download_url_unavailable": "The automatic update package does not have a usable download URL.",
+      "auto_update_metadata_incomplete": "The automatic update metadata is incomplete. Use the manual download instead.",
+      "auto_update_semver_not_newer": "The updater did not accept this package as a newer version. Use the manual download if needed.",
+      "update_install_not_completed": "The previous update did not appear to finish. You can retry or use the manual download."
+    }
   },
   "freqPresets": {
     "title": "Frequency Preset Management",
@@ -658,5 +686,105 @@
   },
   "voice": {
     "qsoTab": "QSOs"
+  },
+  "bootstrapStatus": {
+    "chip": {
+      "failed": "Some services are not ready",
+      "degraded": "Some services are taking longer",
+      "booting": "Preparing background services..."
+    },
+    "phaseState": {
+      "pending": "Pending",
+      "running": "Preparing",
+      "ready": "Ready",
+      "skipped": "Skipped",
+      "warning": "Needs attention",
+      "failed": "Failed",
+      "timed_out": "Taking longer"
+    },
+    "phase": {
+      "config-auth": {
+        "label": "Base config and login",
+        "description": "Read config files and prepare local access tokens"
+      },
+      "core-http": {
+        "label": "Local service",
+        "description": "Start local HTTP/WebSocket service"
+      },
+      "engine-bootstrap": {
+        "label": "Radio engine",
+        "description": "Assemble the digital radio engine and runtime services"
+      },
+      "audio-device-discovery": {
+        "label": "Audio devices",
+        "description": "Discover input/output audio devices"
+      },
+      "logbook-prewarm": {
+        "label": "Logbook",
+        "description": "Prepare operator logbooks in the background"
+      },
+      "plugin-bootstrap": {
+        "label": "Plugins",
+        "description": "Load plugins and automation strategies"
+      },
+      "ntp-initial-check": {
+        "label": "Clock calibration",
+        "description": "Start time calibration service"
+      },
+      "active-profile-autostart": {
+        "label": "Radio auto-start",
+        "description": "Start the current profile from the last configuration"
+      }
+    },
+    "message": {
+      "config-auth": {
+        "running": "Reading base configuration"
+      },
+      "core-http": {
+        "running": "Starting local service"
+      },
+      "engine-bootstrap": {
+        "running": "Assembling radio engine"
+      },
+      "audio-device-discovery": {
+        "running": "Discovering audio devices",
+        "ready": "Audio device discovery completed",
+        "failed": "Audio device discovery failed; retry later"
+      },
+      "logbook-prewarm": {
+        "running": "Preparing logbooks",
+        "ready": "Logbook preparation completed",
+        "skipped": "Logbook prewarm skipped",
+        "timed_out": "Logbook preparation is taking longer and continues in the background",
+        "failed": "Logbook preparation failed; retry later"
+      },
+      "plugin-bootstrap": {
+        "running": "Loading plugins",
+        "ready": "Plugin loading completed",
+        "failed": "Plugin loading failed; retry later"
+      },
+      "ntp-initial-check": {
+        "running": "Starting clock calibration",
+        "ready": "Clock calibration service started",
+        "failed": "Clock calibration service failed to start; retry later"
+      },
+      "active-profile-autostart": {
+        "running": "Starting radio from last configuration",
+        "ready": "Radio auto-start completed",
+        "skipped": "No active profile; auto-start skipped",
+        "failed": "Radio auto-start failed; retry later"
+      }
+    },
+    "checking": "Checking status",
+    "title": "Background service startup",
+    "subtitle": "Ready features remain available. This notice disappears after all services finish.",
+    "dismiss": "Dismiss",
+    "duration": "Took {{duration}}",
+    "viewLogs": "View logs",
+    "viewAria": "View startup status",
+    "retryStarted": "Retry started",
+    "retryFailed": "Failed to retry startup item",
+    "logsDir": "Logs directory",
+    "openLogsFailed": "Failed to open logs directory"
   }
 }
