@@ -273,7 +273,7 @@
     "cwKeyerSectionDesc": "CW 键控使用独立串口的 DTR/RTS 引脚，与 CAT 控制口分离",
     "cwKeyPort": "CW 键控端口",
     "cwKeyPortPlaceholder": "选择或输入串口路径",
-    "cwKeyPortDesc": "专用于 CW 键控的串口（与 CAT/PTT 分离）",
+    "cwKeyPortDesc": "专用于 CW 键控的串口。若电台通过 USB 连接，通常会模拟出两个虚拟串口：CAT 控制已占用其中一个，请在这里选择另一个串口，并在电台菜单中手动开启或指定对应的 CW 键控端口/引脚。",
     "cwKeyMethod": "键控方式",
     "cwKeyMethodDesc": "使用哪个引脚控制电台发射",
     "cwKeyPortRequired": "请先配置 CW 键控端口",

@@ -273,7 +273,7 @@
     "cwKeyerSectionDesc": "CW keying uses a separate serial port DTR/RTS pin, independent from CAT control",
     "cwKeyPort": "CW Key Port",
     "cwKeyPortPlaceholder": "Select or enter serial port path",
-    "cwKeyPortDesc": "Serial port dedicated to CW keying (separate from CAT/PTT)",
+    "cwKeyPortDesc": "Serial port dedicated to CW keying. For USB-connected radios, the radio usually exposes two virtual serial ports: CAT control uses one of them, so choose the other port here and manually enable or assign the matching CW keying port/pin in the radio menu.",
     "cwKeyMethod": "Key Method",
     "cwKeyMethodDesc": "Which pin to use for keying the radio",
     "cwKeyPortRequired": "Please configure CW key port first",

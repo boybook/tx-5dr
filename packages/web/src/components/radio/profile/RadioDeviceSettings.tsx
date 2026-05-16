@@ -1021,6 +1021,39 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                     </Autocomplete>
                   )}
                   <Divider />
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      color="primary"
+                      onPress={handleTestConnection}
+                      isLoading={isTestingConnection}
+                      isDisabled={!effectiveRigPath || !config.serial?.rigModel || isTestingPTT}
+                    >
+                      {isTestingConnection ? t('radio.testingConnection') : t('radio.testConnection')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      color="secondary"
+                      onPress={handleTestPTT}
+                      isLoading={isTestingPTT}
+                      isDisabled={!effectiveRigPath || !config.serial?.rigModel || config.pttMethod === 'vox' || isTestingConnection}
+                    >
+                      {config.pttMethod === 'vox' ? t('radio.voxNoTest') : isTestingPTT ? t('radio.testingPTT') : t('radio.testPTT')}
+                    </Button>
+                  </div>
+                  {testResult && (
+                    <Chip
+                      color={testResult.type === 'success' ? 'success' : 'danger'}
+                      variant="flat"
+                      className="w-full"
+                    >
+                      {testResult.message}
+                    </Chip>
+                  )}
+
+                  <Divider />
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
                       <div>
@@ -1117,38 +1150,6 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                   {renderPttConfig()}
                   <Divider />
                   {renderCWKeyerPortConfig()}
-                  <Divider />
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="flat"
-                      color="primary"
-                      onPress={handleTestConnection}
-                      isLoading={isTestingConnection}
-                      isDisabled={!effectiveRigPath || !config.serial?.rigModel || isTestingPTT}
-                    >
-                      {isTestingConnection ? t('radio.testingConnection') : t('radio.testConnection')}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="flat"
-                      color="secondary"
-                      onPress={handleTestPTT}
-                      isLoading={isTestingPTT}
-                      isDisabled={!effectiveRigPath || !config.serial?.rigModel || config.pttMethod === 'vox' || isTestingConnection}
-                    >
-                      {config.pttMethod === 'vox' ? t('radio.voxNoTest') : isTestingPTT ? t('radio.testingPTT') : t('radio.testPTT')}
-                    </Button>
-                  </div>
-                  {testResult && (
-                    <Chip
-                      color={testResult.type === 'success' ? 'success' : 'danger'}
-                      variant="flat"
-                      className="w-full"
-                    >
-                      {testResult.message}
-                    </Chip>
-                  )}
 
                   <Divider />
 
