@@ -103,7 +103,7 @@ module.exports = {
     runAfterFinish: true,
   },
   linux: {
-    icon: path.join(__dirname, 'packages/electron-main/assets'),
+    icon: path.join(__dirname, 'packages/electron-main/assets/AppIcon.png'),
     category: 'Utility;AudioVideo',
     packageCategory: 'utils',
     target: ['AppImage', 'deb', 'rpm', 'zip'],
