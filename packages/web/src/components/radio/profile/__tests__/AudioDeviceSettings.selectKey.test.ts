@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   getDeviceNameFromSelectKey,
   makeAudioDeviceSelectKey,
+  resolveOutputChannelMode,
+  resolveOutputSampleFormat,
 } from '../AudioDeviceSettings';
 
 describe('AudioDeviceSettings select keys', () => {
@@ -15,5 +17,12 @@ describe('AudioDeviceSettings select keys', () => {
     expect(inputKey).not.toBe(outputKey);
     expect(getDeviceNameFromSelectKey('input', inputKey)).toBe(deviceName);
     expect(getDeviceNameFromSelectKey('output', outputKey)).toBe(deviceName);
+  });
+
+  it('defaults output diagnostics to the existing Float32 mono behavior', () => {
+    expect(resolveOutputSampleFormat(undefined)).toBe('float32');
+    expect(resolveOutputChannelMode(undefined)).toBe('mono');
+    expect(resolveOutputSampleFormat({ outputSampleFormat: 'int16' })).toBe('int16');
+    expect(resolveOutputChannelMode({ outputChannelMode: 'both' })).toBe('both');
   });
 });

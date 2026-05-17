@@ -194,6 +194,8 @@ const DEFAULT_AUDIO: AudioDeviceSettings = {
   outputSampleRate: 48000,
   inputBufferSize: 1024,
   outputBufferSize: 1024,
+  outputSampleFormat: 'float32',
+  outputChannelMode: 'mono',
 };
 
 export function normalizeAudioDeviceSettings(audioConfig?: Partial<AudioDeviceSettings> | null): AudioDeviceSettings {
@@ -207,6 +209,8 @@ export function normalizeAudioDeviceSettings(audioConfig?: Partial<AudioDeviceSe
     outputSampleRate: audioConfig?.outputSampleRate ?? legacySampleRate ?? 48000,
     inputBufferSize: audioConfig?.inputBufferSize ?? legacyBufferSize ?? 1024,
     outputBufferSize: audioConfig?.outputBufferSize ?? legacyBufferSize ?? 1024,
+    outputSampleFormat: audioConfig?.outputSampleFormat ?? 'float32',
+    outputChannelMode: audioConfig?.outputChannelMode ?? 'mono',
   };
 }
 

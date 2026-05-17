@@ -67,6 +67,8 @@ vi.mock('../config-manager.js', () => ({
       outputSampleRate: config.outputSampleRate ?? config.sampleRate ?? 48000,
       inputBufferSize: config.inputBufferSize ?? config.bufferSize ?? 1024,
       outputBufferSize: config.outputBufferSize ?? config.bufferSize ?? 1024,
+      outputSampleFormat: config.outputSampleFormat ?? 'float32',
+      outputChannelMode: config.outputChannelMode ?? 'mono',
     };
   },
 }));
@@ -91,6 +93,8 @@ function makeProfile(overrides: Partial<RadioProfile> = {}): RadioProfile {
       outputSampleRate: 48000,
       inputBufferSize: 1024,
       outputBufferSize: 1024,
+      outputSampleFormat: 'float32',
+      outputChannelMode: 'mono',
     },
     audioLockedToRadio: false,
     createdAt: 1,
@@ -166,6 +170,27 @@ describe('ProfileManager audio runtime config application', () => {
       outputSampleRate: 48000,
       inputBufferSize: 1024,
       outputBufferSize: 1024,
+      outputSampleFormat: 'float32',
+      outputChannelMode: 'mono',
+    });
+    expect(mockReloadAudioConfig).not.toHaveBeenCalled();
+  });
+
+  it('preserves output sample format and channel mode in Profile audio updates', async () => {
+    const manager = ProfileManager.getInstance();
+
+    await manager.updateProfile('profile-1', {
+      audio: {
+        outputSampleFormat: 'int16',
+        outputChannelMode: 'both',
+      },
+    });
+
+    expect(state.profiles[0]?.audio).toMatchObject({
+      inputDeviceName: 'IC-705',
+      outputDeviceName: 'IC-705',
+      outputSampleFormat: 'int16',
+      outputChannelMode: 'both',
     });
     expect(mockReloadAudioConfig).not.toHaveBeenCalled();
   });

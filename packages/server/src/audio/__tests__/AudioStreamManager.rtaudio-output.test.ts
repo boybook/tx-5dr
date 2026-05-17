@@ -13,6 +13,7 @@ const { mockConfigManager, mockLogger, mockResampleAudioProfessional, mockRtAudi
     throwOnWrite: false,
     writes: [] as Buffer[],
     inputCallback: null as ((inputData: Buffer) => void) | null,
+    openCalls: [] as Array<{ outputChannels: number; format: number; frameSize: number }>,
     devices: [
       {
         id: 11,
@@ -34,6 +35,7 @@ const { mockConfigManager, mockLogger, mockResampleAudioProfessional, mockRtAudi
     private sampleRate = 48000;
     private frameSize = 64;
     private outputChannels = 1;
+    private bytesPerSample = 4;
 
     constructor(private readonly api: number) {}
 
@@ -52,7 +54,7 @@ const { mockConfigManager, mockLogger, mockResampleAudioProfessional, mockRtAudi
     openStream(
       outputParams: { deviceId: number; nChannels: number } | null,
       _inputParams: { deviceId: number; nChannels: number } | null,
-      _format: number,
+      format: number,
       sampleRate: number,
       frameSize: number,
       _streamName: string,
@@ -65,6 +67,8 @@ const { mockConfigManager, mockLogger, mockResampleAudioProfessional, mockRtAudi
       this.sampleRate = sampleRate;
       this.frameSize = frameSize;
       this.outputChannels = outputParams?.nChannels ?? 0;
+      this.bytesPerSample = format === 0x2 ? 2 : 4;
+      state.openCalls.push({ outputChannels: this.outputChannels, format, frameSize });
       state.inputCallback = inputCallback;
       this.frameOutputCallback = frameOutputCallback;
       this.errorCallback = errorCallback ?? null;
@@ -104,7 +108,7 @@ const { mockConfigManager, mockLogger, mockResampleAudioProfessional, mockRtAudi
     }
 
     write(buffer: Buffer) {
-      if (buffer.length !== this.frameSize * this.outputChannels * 4) {
+      if (buffer.length !== this.frameSize * this.outputChannels * this.bytesPerSample) {
         throw new Error(`bad write size: ${buffer.length}`);
       }
       if (state.throwOnWrite) {
@@ -167,6 +171,7 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     mockRtAudioState.consumeOnWrite = true;
     mockRtAudioState.throwOnWrite = false;
     mockRtAudioState.writes = [];
+    mockRtAudioState.openCalls = [];
     mockRtAudioState.inputCallback = null;
     mockResampleAudioProfessional.mockImplementation(async (samples: Float32Array) => samples);
     mockConfigManager.getAudioConfig.mockReturnValue({
@@ -255,6 +260,105 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
         }),
       }),
     );
+  });
+
+  it('opens the default RtAudio output as Float32 mono', async () => {
+    const manager = new AudioStreamManager();
+    await manager.startOutput();
+
+    expect(mockRtAudioState.openCalls.at(-1)).toMatchObject({
+      outputChannels: 1,
+      format: 0x10,
+      frameSize: 64,
+    });
+  });
+
+  it('writes Int16 duplicated stereo output when both channels are selected', async () => {
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      inputDeviceName: 'USB Audio',
+      outputDeviceName: 'USB Audio',
+      inputSampleRate: 48000,
+      outputSampleRate: 48000,
+      inputBufferSize: 64,
+      outputBufferSize: 64,
+      outputSampleFormat: 'int16',
+      outputChannelMode: 'both',
+    });
+    const manager = new AudioStreamManager();
+    manager.setVolumeGain(1);
+    await manager.startOutput();
+
+    await manager.playAudio(new Float32Array([0.5, -0.5]), 48000);
+
+    expect(mockRtAudioState.openCalls.at(-1)).toMatchObject({
+      outputChannels: 2,
+      format: 0x2,
+    });
+    const buffer = mockRtAudioState.writes[0]!;
+    expect(buffer).toHaveLength(64 * 2 * 2);
+    expect(buffer.readInt16LE(0)).toBe(16384);
+    expect(buffer.readInt16LE(2)).toBe(16384);
+    expect(buffer.readInt16LE(4)).toBe(-16384);
+    expect(buffer.readInt16LE(6)).toBe(-16384);
+  });
+
+  it('routes Float32 stereo output to the selected side channel', async () => {
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      inputDeviceName: 'USB Audio',
+      outputDeviceName: 'USB Audio',
+      inputSampleRate: 48000,
+      outputSampleRate: 48000,
+      inputBufferSize: 64,
+      outputBufferSize: 64,
+      outputSampleFormat: 'float32',
+      outputChannelMode: 'right',
+    });
+    const manager = new AudioStreamManager();
+    manager.setVolumeGain(1);
+    await manager.startOutput();
+
+    await manager.playAudio(new Float32Array([0.25]), 48000);
+
+    expect(mockRtAudioState.openCalls.at(-1)).toMatchObject({
+      outputChannels: 2,
+      format: 0x10,
+    });
+    const buffer = mockRtAudioState.writes[0]!;
+    expect(buffer).toHaveLength(64 * 2 * 4);
+    expect(buffer.readFloatLE(0)).toBe(0);
+    expect(buffer.readFloatLE(4)).toBeCloseTo(0.25);
+  });
+
+  it('uses the same RtAudio encoding for voice TX writes without applying gain twice', async () => {
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      inputDeviceName: 'USB Audio',
+      outputDeviceName: 'USB Audio',
+      inputSampleRate: 48000,
+      outputSampleRate: 48000,
+      inputBufferSize: 64,
+      outputBufferSize: 64,
+      outputSampleFormat: 'int16',
+      outputChannelMode: 'left',
+    });
+    const manager = new AudioStreamManager();
+    manager.setVolumeGain(0.1);
+    await manager.startOutput();
+
+    const writeOk = await (manager as unknown as {
+      writeVoiceTxOutputChunk: (samples: Float32Array, sink: { kind: 'rtaudio'; available: boolean; outputSampleRate: number; outputBufferSize: number }) => Promise<boolean>;
+    }).writeVoiceTxOutputChunk(new Float32Array([0.5, -0.5]), {
+      kind: 'rtaudio',
+      available: true,
+      outputSampleRate: 48000,
+      outputBufferSize: 64,
+    });
+
+    expect(writeOk).toBe(true);
+    const buffer = mockRtAudioState.writes[0]!;
+    expect(buffer.readInt16LE(0)).toBe(16384);
+    expect(buffer.readInt16LE(2)).toBe(0);
+    expect(buffer.readInt16LE(4)).toBe(-16384);
+    expect(buffer.readInt16LE(6)).toBe(0);
   });
 
   it('emits a runtime error when Windows writes are submitted but RtAudio never consumes frames', async () => {

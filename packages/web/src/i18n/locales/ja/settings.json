@@ -320,6 +320,22 @@
     "selectOutputSampleRate": "出力サンプリングの選択",
     "selectInputBufferSize": "入力バッファサイズの選択",
     "selectOutputBufferSize": "出力バッファサイズの選択",
+    "outputSampleFormat": "出力形式",
+    "selectOutputSampleFormat": "出力サンプル形式の選択",
+    "outputSampleFormatOptions": {
+      "float32": "Float32",
+      "int16": "Int16"
+    },
+    "outputSampleFormatHint": "サウンドカードへ送るサンプルデータ形式を選択します",
+    "outputChannelMode": "出力チャンネル",
+    "selectOutputChannelMode": "出力チャンネルの選択",
+    "outputChannelModeOptions": {
+      "mono": "Mono",
+      "left": "左",
+      "right": "右",
+      "both": "両方"
+    },
+    "outputChannelModeHint": "音声を Mono、左、右、または両方のチャンネルへ出力します",
     "sampleRateFromDevice": "現在のサウンドカードに適しています",
     "sampleRateFallback": "一般的に使用されるサンプリング レート (手動で選択可能)",
     "sampleRateUnsupported": "現在の値はこのサウンドカードに適していない可能性があります",

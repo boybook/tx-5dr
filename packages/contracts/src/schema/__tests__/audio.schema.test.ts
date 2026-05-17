@@ -3,7 +3,10 @@ import {
   AudioDevicesResponseSchema,
   AudioDeviceResolutionSchema,
   AudioDeviceResolutionStatusSchema,
+  AudioDeviceSettingsSchema,
   AudioDeviceSettingsResponseSchema,
+  AudioOutputChannelModeSchema,
+  AudioOutputSampleFormatSchema,
   AudioSettingsResolveResponseSchema,
 } from '../audio.schema.js';
 
@@ -120,6 +123,21 @@ describe('audio device resolution schemas', () => {
         },
       },
     }).currentSettings.outputBufferSize).toBe(1024);
+  });
+
+  it('accepts and validates output diagnostic audio settings', () => {
+    expect(AudioOutputSampleFormatSchema.parse('int16')).toBe('int16');
+    expect(AudioOutputChannelModeSchema.parse('both')).toBe('both');
+    expect(AudioDeviceSettingsSchema.parse({
+      outputSampleFormat: 'int16',
+      outputChannelMode: 'right',
+    })).toMatchObject({
+      outputSampleFormat: 'int16',
+      outputChannelMode: 'right',
+    });
+
+    expect(() => AudioDeviceSettingsSchema.parse({ outputSampleFormat: 'int24' })).toThrow();
+    expect(() => AudioDeviceSettingsSchema.parse({ outputChannelMode: 'stereo' })).toThrow();
   });
 
   it('accepts resolve responses with every supported status', () => {

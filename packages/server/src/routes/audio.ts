@@ -141,6 +141,8 @@ export async function audioRoutes(fastify: FastifyInstance) {
         outputSampleRate: 48000,
         inputBufferSize: 1024,
         outputBufferSize: 1024,
+        outputSampleFormat: 'float32',
+        outputChannelMode: 'mono',
       });
       digitalRadioEngine.getAudioStreamManager().reloadAudioConfig();
 

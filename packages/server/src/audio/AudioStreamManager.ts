@@ -14,6 +14,7 @@ import { VoiceTxOutputPipeline, type VoiceTxOutputSinkState } from './VoiceTxOut
 
 const logger = createLogger('AudioStreamManager');
 // RtAudioFormat 是 const enum，isolatedModules 下无法直接导入，使用数值常量
+const RTAUDIO_SINT16 = 0x2;
 const RTAUDIO_FLOAT32 = 0x10;
 const RTAUDIO_STREAM_FLAGS_NONE = 0 as unknown as Parameters<RtAudioInstance['openStream']>[8];
 const RTAUDIO_ERROR_WARNING = 0;
@@ -114,6 +115,16 @@ export interface PlayAudioOptions {
 }
 
 export type PlaybackKind = 'digital' | 'voice-keyer' | 'tune-tone';
+type OutputSampleFormat = 'float32' | 'int16';
+type OutputChannelMode = 'mono' | 'left' | 'right' | 'both';
+
+interface EncodedOutputChunk {
+  buffer: Buffer;
+  monitorChunk: Float32Array | null;
+  sourceSamples: number;
+  peak: number;
+  sumSquares: number;
+}
 
 export interface StopPlaybackOptions {
   kind?: PlaybackKind;
@@ -143,6 +154,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private inputBufferSize: number;
   private outputBufferSize: number;
   private channels: number = 1;
+  private outputSampleFormat: OutputSampleFormat = 'float32';
+  private outputChannelMode: OutputChannelMode = 'mono';
+  private outputChannels: number = 1;
   private volumeGain: number = Math.pow(10, -10 / 20); // 默认 -10dB
   private volumeGainDb: number = -10; // 以dB为单位的增益值
   private currentAudioData: Float32Array | null = null; // 当前正在播放的音频数据
@@ -190,6 +204,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.outputSampleRate = audioConfig.outputSampleRate ?? audioConfig.sampleRate ?? 48000;
     this.inputBufferSize = audioConfig.inputBufferSize ?? audioConfig.bufferSize ?? 1024;
     this.outputBufferSize = audioConfig.outputBufferSize ?? audioConfig.bufferSize ?? 1024;
+    this.outputSampleFormat = this.normalizeOutputSampleFormat(audioConfig.outputSampleFormat);
+    this.outputChannelMode = this.normalizeOutputChannelMode(audioConfig.outputChannelMode);
+    this.outputChannels = this.getOutputChannelCount(this.outputChannelMode);
     this.currentSampleRate = this.outputSampleRate;
 
     // 创建音频缓冲区提供者，使用统一的内部处理采样率，保留 60 秒 RX/input 历史。
@@ -205,6 +222,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       outputSampleRate: this.outputSampleRate,
       inputBufferSize: this.inputBufferSize,
       outputBufferSize: this.outputBufferSize,
+      outputSampleFormat: this.outputSampleFormat,
+      outputChannelMode: this.outputChannelMode,
+      outputChannels: this.outputChannels,
       internalSampleRate: this.inputProcessingSampleRate,
     });
   }
@@ -487,11 +507,17 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     const oldOutputSampleRate = this.outputSampleRate;
     const oldInputBufferSize = this.inputBufferSize;
     const oldOutputBufferSize = this.outputBufferSize;
+    const oldOutputSampleFormat = this.outputSampleFormat;
+    const oldOutputChannelMode = this.outputChannelMode;
+    const oldOutputChannels = this.outputChannels;
 
     this.inputSampleRate = audioConfig.inputSampleRate ?? audioConfig.sampleRate ?? 48000;
     this.outputSampleRate = audioConfig.outputSampleRate ?? audioConfig.sampleRate ?? 48000;
     this.inputBufferSize = audioConfig.inputBufferSize ?? audioConfig.bufferSize ?? 1024;
     this.outputBufferSize = audioConfig.outputBufferSize ?? audioConfig.bufferSize ?? 1024;
+    this.outputSampleFormat = this.normalizeOutputSampleFormat(audioConfig.outputSampleFormat);
+    this.outputChannelMode = this.normalizeOutputChannelMode(audioConfig.outputChannelMode);
+    this.outputChannels = this.getOutputChannelCount(this.outputChannelMode);
     this.currentSampleRate = this.outputSampleRate;
 
     logger.info('audio config reloaded (restart required)', {
@@ -499,7 +525,22 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       outputSampleRate: `${oldOutputSampleRate}Hz -> ${this.outputSampleRate}Hz`,
       inputBufferSize: `${oldInputBufferSize} -> ${this.inputBufferSize}`,
       outputBufferSize: `${oldOutputBufferSize} -> ${this.outputBufferSize}`,
+      outputSampleFormat: `${oldOutputSampleFormat} -> ${this.outputSampleFormat}`,
+      outputChannelMode: `${oldOutputChannelMode} -> ${this.outputChannelMode}`,
+      outputChannels: `${oldOutputChannels} -> ${this.outputChannels}`,
     });
+  }
+
+  private normalizeOutputSampleFormat(value: unknown): OutputSampleFormat {
+    return value === 'int16' ? 'int16' : 'float32';
+  }
+
+  private normalizeOutputChannelMode(value: unknown): OutputChannelMode {
+    return value === 'left' || value === 'right' || value === 'both' ? value : 'mono';
+  }
+
+  private getOutputChannelCount(mode: OutputChannelMode): number {
+    return mode === 'mono' ? 1 : 2;
   }
   
   /**
@@ -517,6 +558,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       outputSampleRate: this.outputSampleRate,
       inputBufferSize: this.inputBufferSize,
       outputBufferSize: this.outputBufferSize,
+      outputSampleFormat: this.outputSampleFormat,
+      outputChannelMode: this.outputChannelMode,
+      outputChannels: this.outputChannels,
       channels: this.channels,
       bufferStatus: this.audioProvider.getStatus()
     };
@@ -607,10 +651,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
       logger.info('audio output starting', {
         deviceId: outputDeviceId,
-        channels: this.channels,
+        channels: this.outputChannels,
         sampleRate: this.outputSampleRate,
         frameSize: this.outputBufferSize,
-        format: 'Float32',
+        format: this.outputSampleFormat,
+        channelMode: this.outputChannelMode,
       });
 
       await this.createAndStartOutputWithTimeout(outputDeviceId, configuredOutputDeviceName);
@@ -735,7 +780,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               this.activeOutputDeviceName,
               this.outputDeviceId,
               this.outputSampleRate,
-              this.channels,
+              this.outputChannels,
             );
 
             logger.info('audio output stream started');
@@ -933,9 +978,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.resetOutputConsumeDiagnostics();
 
     this.rtAudioOutput.openStream(
-      { deviceId: outputDeviceId, nChannels: this.channels, firstChannel: 0 },
+      { deviceId: outputDeviceId, nChannels: this.outputChannels, firstChannel: 0 },
       null,
-      RTAUDIO_FLOAT32,
+      this.outputSampleFormat === 'int16' ? RTAUDIO_SINT16 : RTAUDIO_FLOAT32,
       this.outputSampleRate,
       this.outputBufferSize,
       'TX5DR-Output',
@@ -944,6 +989,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       RTAUDIO_STREAM_FLAGS_NONE,
       (type: number, message: string) => this.recordOutputRtAudioIssue(type, message)
     );
+    logger.info('RtAudio output stream opened', {
+      outputSampleFormat: this.outputSampleFormat,
+      outputChannelMode: this.outputChannelMode,
+      outputChannels: this.outputChannels,
+      outputSampleRate: this.outputSampleRate,
+      outputBufferSize: this.outputBufferSize,
+    });
   }
 
   private resetOutputConsumeDiagnostics(): void {
@@ -954,6 +1006,85 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.outputRuntimeLossEmitted = false;
     this.outputRtAudioIssueLogState.clear();
     this.outputWatchdogGeneration++;
+  }
+
+  private getOutputBytesPerSample(): number {
+    return this.outputSampleFormat === 'int16' ? 2 : 4;
+  }
+
+  private encodeRtAudioOutputChunk(
+    chunk: Float32Array,
+    targetFrames: number,
+    gain: number,
+    includeMonitor: boolean,
+  ): EncodedOutputChunk {
+    const channels = this.outputChannels;
+    const bytesPerSample = this.getOutputBytesPerSample();
+    const buffer = Buffer.allocUnsafe(targetFrames * channels * bytesPerSample);
+    const monitorChunk = includeMonitor ? new Float32Array(chunk.length) : null;
+    let peak = 0;
+    let sumSquares = 0;
+
+    for (let frame = 0; frame < targetFrames; frame++) {
+      const source = frame < chunk.length ? (chunk[frame] ?? 0) : 0;
+      const sample = this.clampAudioSample(source * gain);
+      if (frame < chunk.length) {
+        const abs = Math.abs(sample);
+        if (abs > peak) {
+          peak = abs;
+        }
+        sumSquares += sample * sample;
+        if (monitorChunk) {
+          monitorChunk[frame] = sample;
+        }
+      }
+
+      for (let channel = 0; channel < channels; channel++) {
+        const outputSample = this.getMappedOutputSample(sample, channel);
+        const offset = (frame * channels + channel) * bytesPerSample;
+        if (this.outputSampleFormat === 'int16') {
+          buffer.writeInt16LE(this.floatToInt16(outputSample), offset);
+        } else {
+          buffer.writeFloatLE(outputSample, offset);
+        }
+      }
+    }
+
+    return {
+      buffer,
+      monitorChunk,
+      sourceSamples: chunk.length,
+      peak,
+      sumSquares,
+    };
+  }
+
+  private clampAudioSample(sample: number): number {
+    if (!Number.isFinite(sample)) return 0;
+    if (sample > 1) return 1;
+    if (sample < -1) return -1;
+    return sample;
+  }
+
+  private floatToInt16(sample: number): number {
+    const clamped = this.clampAudioSample(sample);
+    return clamped < 0
+      ? Math.round(clamped * 32768)
+      : Math.round(clamped * 32767);
+  }
+
+  private getMappedOutputSample(sample: number, channelIndex: number): number {
+    switch (this.outputChannelMode) {
+      case 'left':
+        return channelIndex === 0 ? sample : 0;
+      case 'right':
+        return channelIndex === 1 ? sample : 0;
+      case 'both':
+        return sample;
+      case 'mono':
+      default:
+        return sample;
+    }
   }
 
   private recordOutputFrameConsumed(): void {
@@ -1500,6 +1631,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       duration: `${(audioData.length / targetSampleRate).toFixed(2)}s`,
       targetSampleRate: this.outputSampleRate,
       volumeGain: this.volumeGain.toFixed(2),
+      outputSampleFormat: this.outputSampleFormat,
+      outputChannelMode: this.outputChannelMode,
+      outputChannels: this.outputChannels,
     });
 
     // 保存当前播放的Promise
@@ -1544,7 +1678,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       // 相比链式 await setTimeout，setInterval 在事件循环延迟后能立即追赶
       const TICK_MS = 5;
       const framesPerBuffer = Math.max(64, this.outputBufferSize || 1024);
-      const chunkSize = framesPerBuffer * this.channels;
+      const chunkSize = framesPerBuffer;
       const totalChunks = Math.ceil(playbackData.length / chunkSize);
 
       // 预缓冲目标（~85ms），控制延迟的同时避免 underrun
@@ -1628,43 +1762,24 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             const start = idx * chunkSize;
             const end = Math.min(start + chunkSize, playbackData.length);
             const chunk = playbackData.subarray(start, end);
-            // Apply gain at write time so volume changes take effect immediately
-            const gain = this.volumeGain;
-            // RtAudio requires exactly chunkSize frames per write; pad short last chunk with silence
-            const bufferSamples = chunkSize;
-            const buffer = Buffer.allocUnsafe(bufferSamples * 4);
-            const monitorChunk = options.injectIntoMonitor ? new Float32Array(chunk.length) : null;
-            let chunkPeak = 0;
-            let chunkSumSquares = 0;
-            for (let j = 0; j < chunk.length; j++) {
-              const s = chunk[j] * gain;
-              const clamped = s > 1 ? 1 : (s < -1 ? -1 : s);
-              buffer.writeFloatLE(clamped, j * 4);
-              const abs = Math.abs(clamped);
-              if (abs > chunkPeak) {
-                chunkPeak = abs;
-              }
-              chunkSumSquares += clamped * clamped;
-              if (monitorChunk) {
-                monitorChunk[j] = clamped;
-              }
+            const encoded = this.encodeRtAudioOutputChunk(
+              chunk,
+              chunkSize,
+              this.volumeGain,
+              Boolean(options.injectIntoMonitor),
+            );
+            this.rtAudioOutput.write(encoded.buffer);
+            if (encoded.monitorChunk && encoded.monitorChunk.length > 0) {
+              this.emit('txMonitorAudioData', { samples: encoded.monitorChunk, sampleRate: this.outputSampleRate });
             }
-            // Zero-fill remainder (silence padding for short last chunk)
-            for (let j = chunk.length; j < bufferSamples; j++) {
-              buffer.writeFloatLE(0, j * 4);
-            }
-            this.rtAudioOutput.write(buffer);
-            if (monitorChunk && monitorChunk.length > 0) {
-              this.emit('txMonitorAudioData', { samples: monitorChunk, sampleRate: this.outputSampleRate });
-            }
-            samplesWritten += chunk.length;
+            samplesWritten += encoded.sourceSamples;
             submittedChunks++;
-            submittedSamples += chunk.length;
-            if (chunkPeak > postGainPeak) {
-              postGainPeak = chunkPeak;
+            submittedSamples += encoded.sourceSamples;
+            if (encoded.peak > postGainPeak) {
+              postGainPeak = encoded.peak;
             }
-            postGainSumSquares += chunkSumSquares;
-            postGainSampleCount += chunk.length;
+            postGainSumSquares += encoded.sumSquares;
+            postGainSampleCount += encoded.sourceSamples;
             return true;
           } catch (error) {
             writeFailCount++;
@@ -1717,6 +1832,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
                 totalChunks,
                 totalSamples,
                 writeFails: writeFailCount,
+                outputSampleFormat: this.outputSampleFormat,
+                outputChannelMode: this.outputChannelMode,
+                outputChannels: this.outputChannels,
               });
               resolve();
               return;
@@ -1801,6 +1919,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           sourceSegments,
           postGainPeak: Number(postGainStats.peak.toFixed(6)),
           postGainRms: Number(postGainStats.rms.toFixed(6)),
+          outputSampleFormat: this.outputSampleFormat,
+          outputChannelMode: this.outputChannelMode,
+          outputChannels: this.outputChannels,
           backend: this.getOutputBackendSnapshot(),
           recentRtAudioErrors: this.outputRtAudioErrors,
         };
@@ -1895,11 +2016,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     }
 
     try {
-      const buffer = Buffer.allocUnsafe(samples.length * 4);
-      for (let index = 0; index < samples.length; index += 1) {
-        buffer.writeFloatLE(samples[index] ?? 0, index * 4);
-      }
-      this.rtAudioOutput.write(buffer);
+      const encoded = this.encodeRtAudioOutputChunk(
+        samples,
+        Math.max(1, sink.outputBufferSize || samples.length),
+        1,
+        false,
+      );
+      this.rtAudioOutput.write(encoded.buffer);
       return true;
     } catch (error) {
       logger.debug('Voice audio RtAudio write failed', error);

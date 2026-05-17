@@ -15,6 +15,8 @@ import type {
   AudioDevice,
   AudioDeviceResolution,
   AudioDeviceSettings as AudioDeviceSettingsType,
+  AudioOutputChannelMode,
+  AudioOutputSampleFormat,
   HamlibConfig,
 } from '@tx5dr/contracts';
 import {
@@ -51,6 +53,10 @@ export type Direction = 'input' | 'output';
 
 const DEFAULT_SAMPLE_RATE = 48000;
 const DEFAULT_BUFFER_SIZE = 1024;
+const DEFAULT_OUTPUT_SAMPLE_FORMAT: AudioOutputSampleFormat = 'float32';
+const DEFAULT_OUTPUT_CHANNEL_MODE: AudioOutputChannelMode = 'mono';
+const OUTPUT_SAMPLE_FORMAT_OPTIONS: AudioOutputSampleFormat[] = ['float32', 'int16'];
+const OUTPUT_CHANNEL_MODE_OPTIONS: AudioOutputChannelMode[] = ['mono', 'left', 'right', 'both'];
 
 export function makeAudioDeviceSelectKey(direction: Direction, deviceName: string): string {
   return `${direction}::${deviceName}`;
@@ -75,6 +81,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   const [outputSampleRate, setOutputSampleRate] = useState<number>(resolveAudioSettingNumber(initialConfig, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
   const [inputBufferSize, setInputBufferSize] = useState<number>(resolveAudioSettingNumber(initialConfig, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
   const [outputBufferSize, setOutputBufferSize] = useState<number>(resolveAudioSettingNumber(initialConfig, 'outputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
+  const [outputSampleFormat, setOutputSampleFormat] = useState<AudioOutputSampleFormat>(resolveOutputSampleFormat(initialConfig));
+  const [outputChannelMode, setOutputChannelMode] = useState<AudioOutputChannelMode>(resolveOutputChannelMode(initialConfig));
   const [, setDeviceResolution] = useState<{
     input: AudioDeviceResolution;
     output: AudioDeviceResolution;
@@ -104,6 +112,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     setOutputSampleRate(resolveAudioSettingNumber(initialConfig, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
     setInputBufferSize(resolveAudioSettingNumber(initialConfig, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
     setOutputBufferSize(resolveAudioSettingNumber(initialConfig, 'outputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
+    setOutputSampleFormat(resolveOutputSampleFormat(initialConfig));
+    setOutputChannelMode(resolveOutputChannelMode(initialConfig));
     return () => { syncingFromParentRef.current = false; };
   }, [initialConfig, loading, isControlled]);
 
@@ -114,6 +124,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     outputSampleRate,
     inputBufferSize,
     outputBufferSize,
+    outputSampleFormat,
+    outputChannelMode,
   });
 
   const hasUnsavedChanges = () => {
@@ -123,7 +135,9 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       inputSampleRate !== resolveAudioSettingNumber(currentSettings, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE) ||
       outputSampleRate !== resolveAudioSettingNumber(currentSettings, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE) ||
       inputBufferSize !== resolveAudioSettingNumber(currentSettings, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE) ||
-      outputBufferSize !== resolveAudioSettingNumber(currentSettings, 'outputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE)
+      outputBufferSize !== resolveAudioSettingNumber(currentSettings, 'outputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE) ||
+      outputSampleFormat !== resolveOutputSampleFormat(currentSettings) ||
+      outputChannelMode !== resolveOutputChannelMode(currentSettings)
     );
   };
 
@@ -131,11 +145,11 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     hasUnsavedChanges,
     getSettings: buildSettings,
     save: handleSubmit
-  }), [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, currentSettings]);
+  }), [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, currentSettings]);
 
   useEffect(() => {
     onUnsavedChanges?.(hasUnsavedChanges());
-  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, currentSettings, onUnsavedChanges]);
+  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, currentSettings, onUnsavedChanges]);
 
   useEffect(() => {
     if (!isControlled || loading) return;
@@ -147,7 +161,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       return;
     }
     onChange?.(settings);
-  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, initialConfig]);
+  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, initialConfig]);
 
   useEffect(() => {
     loadAudioData();
@@ -170,7 +184,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     return () => {
       active = false;
     };
-  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, radioType, loading]);
+  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, radioType, loading]);
 
   const inputEffectiveDevice = getEffectiveDevice('input');
   const outputEffectiveDevice = getEffectiveDevice('output');
@@ -215,6 +229,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
         setOutputSampleRate(resolveAudioSettingNumber(settings, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
         setInputBufferSize(resolveAudioSettingNumber(settings, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
         setOutputBufferSize(resolveAudioSettingNumber(settings, 'outputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
+        setOutputSampleFormat(resolveOutputSampleFormat(settings));
+        setOutputChannelMode(resolveOutputChannelMode(settings));
         setDeviceResolution(settingsResponse.deviceResolution);
       }
 
@@ -385,6 +401,54 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
             {renderOptionHint(bufferOptions.isFallback, bufferOptions.isCurrentUnsupported, isVirtual, 'bufferSize')}
           </div>
         </div>
+
+        {!isInput && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Select
+                label={t('audio.outputSampleFormat')}
+                selectedKeys={[outputSampleFormat]}
+                onSelectionChange={(keys) => {
+                  const selected = Array.from(keys)[0] as AudioOutputSampleFormat | undefined;
+                  setOutputSampleFormat(resolveOutputSampleFormat({ outputSampleFormat: selected }));
+                }}
+                isDisabled={saving || isVirtual}
+                aria-label={t('audio.selectOutputSampleFormat')}
+              >
+                {OUTPUT_SAMPLE_FORMAT_OPTIONS.map((value) => (
+                  <SelectItem key={value} textValue={t(`audio.outputSampleFormatOptions.${value}`)}>
+                    {t(`audio.outputSampleFormatOptions.${value}`)}
+                  </SelectItem>
+                )) as unknown as React.ReactElement}
+              </Select>
+              <p className="text-xs text-default-400">
+                {isVirtual ? t('audio.virtualAudioFixed') : t('audio.outputSampleFormatHint')}
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <Select
+                label={t('audio.outputChannelMode')}
+                selectedKeys={[outputChannelMode]}
+                onSelectionChange={(keys) => {
+                  const selected = Array.from(keys)[0] as AudioOutputChannelMode | undefined;
+                  setOutputChannelMode(resolveOutputChannelMode({ outputChannelMode: selected }));
+                }}
+                isDisabled={saving || isVirtual}
+                aria-label={t('audio.selectOutputChannelMode')}
+              >
+                {OUTPUT_CHANNEL_MODE_OPTIONS.map((value) => (
+                  <SelectItem key={value} textValue={t(`audio.outputChannelModeOptions.${value}`)}>
+                    {t(`audio.outputChannelModeOptions.${value}`)}
+                  </SelectItem>
+                )) as unknown as React.ReactElement}
+              </Select>
+              <p className="text-xs text-default-400">
+                {isVirtual ? t('audio.virtualAudioFixed') : t('audio.outputChannelModeHint')}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -474,7 +538,20 @@ function audioSettingsEqual(
     && a.inputSampleRate === resolveAudioSettingNumber(b, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE)
     && a.outputSampleRate === resolveAudioSettingNumber(b, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE)
     && a.inputBufferSize === resolveAudioSettingNumber(b, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE)
-    && a.outputBufferSize === resolveAudioSettingNumber(b, 'outputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE);
+    && a.outputBufferSize === resolveAudioSettingNumber(b, 'outputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE)
+    && resolveOutputSampleFormat(a) === resolveOutputSampleFormat(b)
+    && resolveOutputChannelMode(a) === resolveOutputChannelMode(b);
+}
+
+export function resolveOutputSampleFormat(settings: AudioDeviceSettingsType | undefined): AudioOutputSampleFormat {
+  return settings?.outputSampleFormat === 'int16' ? 'int16' : DEFAULT_OUTPUT_SAMPLE_FORMAT;
+}
+
+export function resolveOutputChannelMode(settings: AudioDeviceSettingsType | undefined): AudioOutputChannelMode {
+  const value = settings?.outputChannelMode;
+  return value === 'left' || value === 'right' || value === 'both'
+    ? value
+    : DEFAULT_OUTPUT_CHANNEL_MODE;
 }
 
 function formatHertz(value: number): string {

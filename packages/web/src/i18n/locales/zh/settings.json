@@ -320,6 +320,22 @@
     "selectOutputSampleRate": "选择输出采样率",
     "selectInputBufferSize": "选择输入缓冲区大小",
     "selectOutputBufferSize": "选择输出缓冲区大小",
+    "outputSampleFormat": "输出格式",
+    "selectOutputSampleFormat": "选择输出采样格式",
+    "outputSampleFormatOptions": {
+      "float32": "Float32",
+      "int16": "Int16"
+    },
+    "outputSampleFormatHint": "选择写入声卡的采样数据格式",
+    "outputChannelMode": "输出声道",
+    "selectOutputChannelMode": "选择输出声道",
+    "outputChannelModeOptions": {
+      "mono": "单声道",
+      "left": "左声道",
+      "right": "右声道",
+      "both": "双声道"
+    },
+    "outputChannelModeHint": "选择音频输出到单声道、左声道、右声道或双声道",
     "sampleRateFromDevice": "适合当前声卡",
     "sampleRateFallback": "常用采样率，可手动选择",
     "sampleRateUnsupported": "当前值可能不适合这块声卡",

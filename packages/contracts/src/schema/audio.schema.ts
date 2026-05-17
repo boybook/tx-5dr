@@ -34,6 +34,9 @@ export const AudioDeviceResolutionSetSchema = z.object({
   output: AudioDeviceResolutionSchema,
 });
 
+export const AudioOutputSampleFormatSchema = z.enum(['float32', 'int16']);
+export const AudioOutputChannelModeSchema = z.enum(['mono', 'left', 'right', 'both']);
+
 // 音频设备列表响应
 export const AudioDevicesResponseSchema = z.object({
   inputDevices: z.array(AudioDeviceSchema),
@@ -50,6 +53,8 @@ export const AudioDeviceSettingsSchema = z.object({
   outputSampleRate: z.number().optional(),
   inputBufferSize: z.number().optional(),
   outputBufferSize: z.number().optional(),
+  outputSampleFormat: AudioOutputSampleFormatSchema.optional(),
+  outputChannelMode: AudioOutputChannelModeSchema.optional(),
   sampleRate: z.number().optional(),
   bufferSize: z.number().optional(),
 });
@@ -108,6 +113,8 @@ export type AudioDevice = z.infer<typeof AudioDeviceSchema>;
 export type AudioDeviceResolutionStatus = z.infer<typeof AudioDeviceResolutionStatusSchema>;
 export type AudioDeviceResolution = z.infer<typeof AudioDeviceResolutionSchema>;
 export type AudioDeviceResolutionSet = z.infer<typeof AudioDeviceResolutionSetSchema>;
+export type AudioOutputSampleFormat = z.infer<typeof AudioOutputSampleFormatSchema>;
+export type AudioOutputChannelMode = z.infer<typeof AudioOutputChannelModeSchema>;
 export type AudioDevicesResponse = z.infer<typeof AudioDevicesResponseSchema>;
 export type AudioDeviceSettings = z.infer<typeof AudioDeviceSettingsSchema>;
 export type AudioDeviceSettingsResponse = z.infer<typeof AudioDeviceSettingsResponseSchema>;

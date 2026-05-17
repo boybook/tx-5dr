@@ -320,6 +320,22 @@
     "selectOutputSampleRate": "Select output sample rate",
     "selectInputBufferSize": "Select input buffer size",
     "selectOutputBufferSize": "Select output buffer size",
+    "outputSampleFormat": "Output Format",
+    "selectOutputSampleFormat": "Select output sample format",
+    "outputSampleFormatOptions": {
+      "float32": "Float32",
+      "int16": "Int16"
+    },
+    "outputSampleFormatHint": "Choose the sample data format sent to the sound card",
+    "outputChannelMode": "Output Channel",
+    "selectOutputChannelMode": "Select output channel",
+    "outputChannelModeOptions": {
+      "mono": "Mono",
+      "left": "Left",
+      "right": "Right",
+      "both": "Both"
+    },
+    "outputChannelModeHint": "Choose whether audio is sent as mono, left, right, or both channels",
     "sampleRateFromDevice": "Good for this sound card",
     "sampleRateFallback": "Common rates; choose manually",
     "sampleRateUnsupported": "This rate may not suit this sound card",
