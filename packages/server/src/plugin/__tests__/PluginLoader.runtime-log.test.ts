@@ -350,6 +350,66 @@ describe('PluginLoader runtime logs', () => {
     expect(errorLog?.message).toContain('UI page entry file not found');
   });
 
+  it('rejects unsafe custom ui directories', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'unsafe-ui-dir');
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        name: 'unsafe-ui-dir',
+        version: '1.0.0',
+        type: 'utility',
+        ui: {
+          dir: '../outside',
+          pages: [
+            { id: 'settings', title: 'Settings', entry: 'settings.html' },
+          ],
+        },
+      };
+    `, 'utf8');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loader = new PluginLoader((entry) => runtimeLogs.push(entry));
+    const loaded = await loader.scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(0);
+    const errorLog = runtimeLogs.find((entry) =>
+      entry.stage === 'validate'
+      && entry.level === 'error'
+      && entry.directoryName === 'unsafe-ui-dir');
+    expect(errorLog?.message).toContain('Unsafe plugin UI directory');
+  });
+
+  it('rejects unsafe custom ui page entries', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'unsafe-ui-entry');
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        name: 'unsafe-ui-entry',
+        version: '1.0.0',
+        type: 'utility',
+        ui: {
+          dir: 'ui',
+          pages: [
+            { id: 'settings', title: 'Settings', entry: '../settings.html' },
+          ],
+        },
+      };
+    `, 'utf8');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loader = new PluginLoader((entry) => runtimeLogs.push(entry));
+    const loaded = await loader.scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(0);
+    const errorLog = runtimeLogs.find((entry) =>
+      entry.stage === 'validate'
+      && entry.level === 'error'
+      && entry.directoryName === 'unsafe-ui-entry');
+    expect(errorLog?.message).toContain('Unsafe plugin UI page entry');
+  });
+
   it('emits locale parse warning but still loads plugin', async () => {
     const pluginRoot = await createPluginRoot();
     const pluginDir = join(pluginRoot, 'bad-locale');

@@ -28,6 +28,7 @@ import {
 import { ScopedPluginFileStoreProvider } from '../plugin/ScopedPluginFileStoreProvider.js';
 import { PluginStorageProvider } from '../plugin/PluginStorageProvider.js';
 import { PluginFileStoreProvider } from '../plugin/PluginFileStoreProvider.js';
+import { assertRealPathInside, resolveSafeRelativePath } from '../plugin/path-security.js';
 import { getPluginBridgeSdkScript } from '../plugin/bridge-sdk.js';
 import {
   type PluginPageBoundResource,
@@ -1029,14 +1030,6 @@ html, body {
 
 // ===== Safe path resolution =====
 
-function resolveSafePath(root: string, relative: string): string | null {
-  const normalized = path.normalize(relative);
-  if (path.isAbsolute(normalized) || normalized.startsWith('..')) return null;
-  const resolved = path.resolve(root, normalized);
-  if (!resolved.startsWith(root)) return null;
-  return resolved;
-}
-
 // ===== Token injection into HTML =====
 
 const TOKEN_LINK = '<link rel="stylesheet" href="/api/plugins/_bridge/tokens.css">';
@@ -1347,12 +1340,13 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
 
       const uiDir = loaded.definition.ui?.dir ?? 'ui';
       const root = path.resolve(loaded.dirPath, uiDir);
-      const resolved = resolveSafePath(root, filePath);
+      const resolved = resolveSafeRelativePath(root, filePath);
       if (!resolved) {
         return reply.status(403).send({ error: 'Access denied' });
       }
 
       try {
+        await assertRealPathInside(root, resolved);
         const content = await fs.readFile(resolved);
         const mime = getMimeType(resolved);
 
@@ -1365,6 +1359,9 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
       } catch (err: unknown) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
           return reply.status(404).send({ error: 'File not found' });
+        }
+        if (err instanceof Error && err.message.includes('escapes root')) {
+          return reply.status(403).send({ error: 'Access denied' });
         }
         throw err;
       }

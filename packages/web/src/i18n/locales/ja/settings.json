@@ -579,6 +579,71 @@
     "logSource": {
       "system": "システム",
       "plugin": "プラグイン"
+    },
+    "marketInstallRiskTitle": "インストール前に確認",
+    "marketInstallRiskDescription": "マーケットプレイスのプラグインは、このマシン上の TX-5DR プラグインコードとして実行されます。公式掲載はレビューされ、コミュニティも確認できますが、インストールや更新の前にソースを確認することを推奨します。",
+    "marketReviewSourceLink": "ソースを確認",
+    "marketNoSensitivePermissionsTitle": "機密権限は要求されていません",
+    "marketNoSensitivePermissionsDescription": "このプラグインは、ネットワーク、無線制御、ホスト依存関係、ホスト設定 API へのアクセスを宣言していません。",
+    "marketPermissionRiskSummary": "これらの権限は機密性の高いホスト API を有効にします。プラグインの目的に合っている場合のみインストールしてください。",
+    "marketPermissionCount": "{{count}} 個の権限",
+    "manualInstallRiskTitle": "手動プラグインはローカルで実行されます",
+    "manualInstallRiskDescription": "このディレクトリに置いたプラグインは、TX-5DR ホストプロセスの権限でコードを実行できます。信頼できるソース、またはコード確認済みの場合のみリロードしてください。",
+    "permission": {
+      "network": {
+        "name": "ネットワークアクセス",
+        "description": "このマシンから HTTP リクエストを送信し、UDP ソケットを開くことを許可します。"
+      },
+      "host": {
+        "hamlib": {
+          "name": "ホスト Hamlib 依存関係",
+          "description": "無線機やローテーターと直接通信するため、ホストの Hamlib ランタイムへのアクセスを許可します。"
+        }
+      },
+      "radio": {
+        "read": {
+          "name": "無線状態の読み取り",
+          "description": "無線接続状態、周波数、機能、電源サポートの読み取りを許可します。"
+        },
+        "control": {
+          "name": "無線の制御",
+          "description": "無線周波数と対応する機能値の書き込みを許可します。"
+        },
+        "power": {
+          "name": "無線電源の制御",
+          "description": "ホスト経由で対応無線機の電源オン/オフを許可します。"
+        }
+      },
+      "settings": {
+        "ft8": {
+          "name": "FT8 設定",
+          "description": "FT8 運用設定の読み取りと変更を許可します。"
+        },
+        "decode-windows": {
+          "name": "デコードウィンドウ設定",
+          "description": "デコードタイミングウィンドウの読み取りと変更を許可します。"
+        },
+        "realtime": {
+          "name": "リアルタイム転送設定",
+          "description": "リアルタイム音声/データ転送設定の読み取りと変更を許可します。"
+        },
+        "frequency-presets": {
+          "name": "周波数プリセット",
+          "description": "モード別周波数プリセットの読み取り、変更、リセットを許可します。"
+        },
+        "station": {
+          "name": "局情報設定",
+          "description": "局の識別情報と位置設定の読み取りと変更を許可します。"
+        },
+        "psk-reporter": {
+          "name": "PSK Reporter 設定",
+          "description": "PSK Reporter アップロード設定の読み取りと変更を許可します。"
+        },
+        "ntp": {
+          "name": "NTP 設定",
+          "description": "時刻同期サーバー設定の読み取りと変更を許可します。"
+        }
+      }
     }
   },
   "serverHealth": {

@@ -7,6 +7,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { createLogger } from '../utils/logger.js';
+import { validateArchiveRelativePath } from './path-security.js';
 
 const logger = createLogger('PluginLoader');
 const ENTRY_FILE_CANDIDATES = ['plugin.js', 'plugin.mjs', 'index.js', 'index.mjs'] as const;
@@ -73,6 +74,8 @@ export function validatePluginDefinition(def: PluginDefinition): void {
     }
   }
 
+  validatePluginUiPaths(manifest);
+
   const uiPageIds = new Set((manifest.ui?.pages ?? []).map((page) => page.id));
   const uiPageById = new Map((manifest.ui?.pages ?? []).map((page) => [page.id, page]));
   for (const panel of manifest.panels ?? []) {
@@ -121,6 +124,26 @@ export function validatePluginDefinition(def: PluginDefinition): void {
     const activeUnsupportedGlobalHook = unsupportedGlobalHooks.find((hookName) => typeof hooks?.[hookName] === 'function');
     if (activeUnsupportedGlobalHook) {
       throw new Error(`Global plugin instances must not implement hook "${activeUnsupportedGlobalHook}"`);
+    }
+  }
+}
+
+function validatePluginUiPaths(manifest: ReturnType<typeof PluginManifestSchema.parse>): void {
+  if (!manifest.ui) {
+    return;
+  }
+
+  try {
+    validateArchiveRelativePath(manifest.ui.dir ?? 'ui');
+  } catch {
+    throw new Error(`Unsafe plugin UI directory: ${manifest.ui.dir ?? 'ui'}`);
+  }
+
+  for (const page of manifest.ui.pages ?? []) {
+    try {
+      validateArchiveRelativePath(page.entry);
+    } catch {
+      throw new Error(`Unsafe plugin UI page entry "${page.id}": ${page.entry}`);
     }
   }
 }

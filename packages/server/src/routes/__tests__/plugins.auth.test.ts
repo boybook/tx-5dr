@@ -1,5 +1,8 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { UserRole, type PluginSystemSnapshot } from '@tx5dr/contracts';
 
 const snapshot: PluginSystemSnapshot = {
@@ -24,6 +27,7 @@ const snapshot: PluginSystemSnapshot = {
 };
 
 const getSnapshot = vi.fn(() => snapshot);
+const getLoadedPlugin = vi.fn();
 const logbookSyncHost = {
   getProviderInfo: vi.fn(),
   upload: vi.fn(),
@@ -39,6 +43,7 @@ vi.mock('../../DigitalRadioEngine.js', () => ({
     getInstance: () => ({
       pluginManager: {
         getSnapshot,
+        getLoadedPlugin,
         logbookSyncHost,
       },
     }),
@@ -68,9 +73,11 @@ vi.mock('../../auth/AuthManager.js', () => {
 
 describe('pluginRoutes auth', () => {
   let fastify: ReturnType<typeof Fastify>;
+  const tempDirs: string[] = [];
 
   beforeEach(async () => {
     getSnapshot.mockClear();
+    getLoadedPlugin.mockReset();
     logbookSyncHost.getProviderInfo.mockReset();
     logbookSyncHost.upload.mockReset();
     logbookSyncHost.download.mockReset();
@@ -98,6 +105,7 @@ describe('pluginRoutes auth', () => {
 
   afterEach(async () => {
     await fastify.close();
+    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
   it('allows operator accounts to read the plugin snapshot for automation UI', async () => {
@@ -174,5 +182,35 @@ describe('pluginRoutes auth', () => {
         }),
       ],
     });
+  });
+
+  it('does not serve plugin ui assets through symlinks that escape the ui root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-ui-route-'));
+    tempDirs.push(root);
+    const pluginDir = join(root, 'plugin');
+    await mkdir(join(pluginDir, 'ui'), { recursive: true });
+    await writeFile(join(root, 'secret.txt'), 'secret', 'utf8');
+    await symlink('../../secret.txt', join(pluginDir, 'ui', 'secret-link.txt'));
+    getLoadedPlugin.mockReturnValue({
+      dirPath: pluginDir,
+      definition: {
+        name: 'ui-symlink-test',
+        version: '1.0.0',
+        type: 'utility',
+        ui: {
+          dir: 'ui',
+          pages: [],
+        },
+      },
+    });
+
+    const response = await fastify.inject({
+      method: 'GET',
+      url: '/api/plugins/ui-symlink-test/ui/secret-link.txt',
+      headers: { 'x-role': UserRole.ADMIN },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.body).not.toContain('secret');
   });
 });

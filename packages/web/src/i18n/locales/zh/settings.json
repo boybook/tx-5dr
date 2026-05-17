@@ -579,6 +579,71 @@
     "logSource": {
       "system": "系统",
       "plugin": "插件"
+    },
+    "marketInstallRiskTitle": "安装前请确认",
+    "marketInstallRiskDescription": "市场插件会作为本机 TX-5DR 插件代码运行。官方上架会经过审核且源码可被社区检查，但安装或更新前仍建议先查看源码。",
+    "marketReviewSourceLink": "查看源码",
+    "marketNoSensitivePermissionsTitle": "未请求敏感权限",
+    "marketNoSensitivePermissionsDescription": "此插件未声明访问网络、电台控制、宿主依赖或宿主设置 API。",
+    "marketPermissionRiskSummary": "这些权限会解锁敏感的宿主 API。请确认能力与插件用途匹配后再安装。",
+    "marketPermissionCount": "{{count}} 项权限",
+    "manualInstallRiskTitle": "手动插件会在本机运行",
+    "manualInstallRiskDescription": "放入此目录的插件可以随 TX-5DR 宿主进程执行代码。请只在信任来源或检查过源码后再重载插件。",
+    "permission": {
+      "network": {
+        "name": "网络访问",
+        "description": "允许插件从本机发起 HTTP 请求并打开 UDP Socket。"
+      },
+      "host": {
+        "hamlib": {
+          "name": "宿主 Hamlib 依赖",
+          "description": "允许访问宿主加载的 Hamlib 运行时，用于直接与电台或旋转器通信。"
+        }
+      },
+      "radio": {
+        "read": {
+          "name": "读取电台状态",
+          "description": "允许读取电台连接状态、频率、能力和电源支持情况。"
+        },
+        "control": {
+          "name": "控制电台",
+          "description": "允许写入电台频率和受支持的能力值。"
+        },
+        "power": {
+          "name": "控制电台电源",
+          "description": "允许通过宿主打开或关闭受支持电台的电源。"
+        }
+      },
+      "settings": {
+        "ft8": {
+          "name": "FT8 设置",
+          "description": "允许读取和修改 FT8 运行设置。"
+        },
+        "decode-windows": {
+          "name": "解码窗口设置",
+          "description": "允许读取和修改解码时序窗口。"
+        },
+        "realtime": {
+          "name": "实时传输设置",
+          "description": "允许读取和修改实时音频/数据传输设置。"
+        },
+        "frequency-presets": {
+          "name": "频率预设",
+          "description": "允许读取、修改或重置模式频率预设。"
+        },
+        "station": {
+          "name": "电台信息设置",
+          "description": "允许读取和修改电台身份与位置设置。"
+        },
+        "psk-reporter": {
+          "name": "PSK Reporter 设置",
+          "description": "允许读取和修改 PSK Reporter 上传设置。"
+        },
+        "ntp": {
+          "name": "NTP 设置",
+          "description": "允许读取和修改时间同步服务器设置。"
+        }
+      }
     }
   },
   "serverHealth": {

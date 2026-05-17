@@ -23,6 +23,7 @@ import type {
   PluginMarketCatalogEntry,
   PluginMarketCatalogResponse,
   PluginMarketChannel,
+  PluginPermission,
   PluginSource,
   PluginStatus,
 } from '@tx5dr/contracts';
@@ -419,6 +420,15 @@ export function PluginMarketplace({ isActive, onOpenInstalledPlugin }: PluginMar
   const selectedHasGlobalSettings = hasGlobalSettings(selectedItem?.installedPlugin);
   const selectedTitle = selectedItem ? getMarketplaceEntryTitle(selectedItem.entry) : '';
   const selectedDescription = selectedItem ? getMarketplaceEntryDescription(selectedItem.entry) : '';
+  const selectedMarketActionNeedsWarning = Boolean(
+    isAdmin
+    && selectedItem
+    && !selectedItem.isBuiltIn
+    && (
+      !selectedItem.isInstalled
+      || (selectedItem.isMarketplaceManaged && (selectedItem.hasUpdate || selectedItem.hasChannelSwitch))
+    ),
+  );
 
   const handleToggleEnabled = useCallback(async (plugin: PluginStatus, enabled: boolean) => {
     setPendingToggleByPlugin((prev) => ({ ...prev, [plugin.name]: true }));
@@ -750,40 +760,45 @@ export function PluginMarketplace({ isActive, onOpenInstalledPlugin }: PluginMar
                     )}
 
                     {isAdmin && (
-                      <div className="flex flex-wrap items-center gap-2">
-                        {!selectedItem.isInstalled && !selectedItem.isBuiltIn && (
-                          <Button
-                            color="primary"
-                            onPress={() => { void runPluginAction('install', selectedItem); }}
-                            isLoading={selectedPendingAction === 'install'}
-                          >
-                            {t('plugins.marketActionInstall', 'Install')}
-                          </Button>
+                      <div className="flex flex-col gap-3">
+                        {selectedMarketActionNeedsWarning && (
+                          <MarketplaceInstallRiskNotice entry={selectedItem.entry} />
                         )}
+                        <div className="flex flex-wrap items-center gap-2">
+                          {!selectedItem.isInstalled && !selectedItem.isBuiltIn && (
+                            <Button
+                              color="primary"
+                              onPress={() => { void runPluginAction('install', selectedItem); }}
+                              isLoading={selectedPendingAction === 'install'}
+                            >
+                              {t('plugins.marketActionInstall', 'Install')}
+                            </Button>
+                          )}
 
-                        {selectedItem.isMarketplaceManaged && (selectedItem.hasUpdate || selectedItem.hasChannelSwitch) && (
-                          <Button
-                            color="primary"
-                            variant={selectedItem.hasUpdate ? 'solid' : 'flat'}
-                            onPress={() => { void runPluginAction('update', selectedItem); }}
-                            isLoading={selectedPendingAction === 'update'}
-                          >
-                            {selectedItem.hasUpdate
-                              ? t('plugins.marketActionUpdate', 'Update')
-                              : t('plugins.marketActionSwitchChannel', 'Switch channel')}
-                          </Button>
-                        )}
+                          {selectedItem.isMarketplaceManaged && (selectedItem.hasUpdate || selectedItem.hasChannelSwitch) && (
+                            <Button
+                              color="primary"
+                              variant={selectedItem.hasUpdate ? 'solid' : 'flat'}
+                              onPress={() => { void runPluginAction('update', selectedItem); }}
+                              isLoading={selectedPendingAction === 'update'}
+                            >
+                              {selectedItem.hasUpdate
+                                ? t('plugins.marketActionUpdate', 'Update')
+                                : t('plugins.marketActionSwitchChannel', 'Switch channel')}
+                            </Button>
+                          )}
 
-                        {selectedItem.isMarketplaceManaged && (
-                          <Button
-                            color="danger"
-                            variant="flat"
-                            onPress={() => setUninstallCandidate(selectedItem.entry)}
-                            isDisabled={Boolean(selectedPendingAction)}
-                          >
-                            {t('plugins.marketActionUninstall', 'Uninstall')}
-                          </Button>
-                        )}
+                          {selectedItem.isMarketplaceManaged && (
+                            <Button
+                              color="danger"
+                              variant="flat"
+                              onPress={() => setUninstallCandidate(selectedItem.entry)}
+                              isDisabled={Boolean(selectedPendingAction)}
+                            >
+                              {t('plugins.marketActionUninstall', 'Uninstall')}
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     )}
 
@@ -894,23 +909,8 @@ export function PluginMarketplace({ isActive, onOpenInstalledPlugin }: PluginMar
                       </>
                     )}
 
-                    {selectedItem.entry.permissions.length > 0 && (
-                      <>
-                        <Divider />
-                        <section className="flex flex-col gap-2">
-                          <span className="text-xs font-medium uppercase tracking-wider text-default-400">
-                            {t('plugins.marketPermissions', 'Requested permissions')}
-                          </span>
-                          <div className="flex flex-wrap gap-2">
-                            {selectedItem.entry.permissions.map((permission) => (
-                              <Chip key={permission} size="sm" variant="flat" color="warning" className="text-xs">
-                                {permission}
-                              </Chip>
-                            ))}
-                          </div>
-                        </section>
-                      </>
-                    )}
+                    <Divider />
+                    <MarketplacePermissionRiskSection permissions={selectedItem.entry.permissions} />
 
                     <Divider />
 
@@ -1012,3 +1012,105 @@ const MarketplaceMeta: React.FC<MarketplaceMetaProps> = ({ label, value }) => (
     <div className="mt-1 text-sm text-default-700">{value}</div>
   </div>
 );
+
+function getPermissionI18nKey(permission: PluginPermission): string {
+  return permission.replace(':', '.');
+}
+
+const MarketplaceInstallRiskNotice: React.FC<{ entry: PluginMarketCatalogEntry }> = ({ entry }) => {
+  const { t } = useTranslation('settings');
+  return (
+    <Alert
+      color="warning"
+      variant="flat"
+      title={t('plugins.marketInstallRiskTitle', 'Review before installing')}
+      description={(
+        <span>
+          {t(
+            'plugins.marketInstallRiskDescription',
+            'Marketplace plugins run as local TX-5DR plugin code. Official listings are reviewed and open to community inspection, but you should still inspect the source before installing or updating.',
+          )}
+          {entry.repository && (
+            <>
+              {' '}
+              <a
+                href={entry.repository}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-warning-700 underline underline-offset-2 hover:text-warning-800"
+              >
+                {t('plugins.marketReviewSourceLink', 'Review source')}
+              </a>
+            </>
+          )}
+        </span>
+      )}
+    />
+  );
+};
+
+const MarketplacePermissionRiskSection: React.FC<{ permissions: PluginPermission[] }> = ({ permissions }) => {
+  const { t } = useTranslation('settings');
+  if (permissions.length === 0) {
+    return (
+      <section className="rounded-large border border-default-200 bg-default-50 px-4 py-3">
+        <div className="text-xs font-medium uppercase tracking-wider text-default-400">
+          {t('plugins.marketPermissions', 'Requested permissions')}
+        </div>
+        <div className="mt-2 text-sm font-medium text-default-700">
+          {t('plugins.marketNoSensitivePermissionsTitle', 'No sensitive permissions requested')}
+        </div>
+        <p className="mt-1 text-xs leading-5 text-default-500">
+          {t(
+            'plugins.marketNoSensitivePermissionsDescription',
+            'This plugin does not declare access to network, radio control, host dependencies, or host settings APIs.',
+          )}
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-large border border-warning-200 bg-warning-50/60 px-4 py-4">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="text-xs font-medium uppercase tracking-wider text-warning-700">
+            {t('plugins.marketPermissions', 'Requested permissions')}
+          </div>
+          <p className="mt-1 text-sm leading-6 text-warning-800">
+            {t(
+              'plugins.marketPermissionRiskSummary',
+              'These permissions unlock sensitive host APIs. Install only if the capability matches the plugin purpose.',
+            )}
+          </p>
+        </div>
+        <Chip size="sm" variant="flat" color="warning" className="shrink-0 text-xs">
+          {t('plugins.marketPermissionCount', '{{count}} permissions', { count: permissions.length })}
+        </Chip>
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        {permissions.map((permission) => {
+          const key = getPermissionI18nKey(permission);
+          return (
+            <div
+              key={permission}
+              className="rounded-medium border border-warning-200/80 bg-content1/80 px-3 py-3"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold text-default-800">
+                  {t(`plugins.permission.${key}.name`, permission)}
+                </span>
+                <code className="rounded bg-warning-100 px-1.5 py-0.5 text-[11px] text-warning-800">
+                  {permission}
+                </code>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-default-600">
+                {t(`plugins.permission.${key}.description`, permission)}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+};

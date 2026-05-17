@@ -13,6 +13,11 @@ import type {
 import { validatePluginDefinition } from './PluginLoader.js';
 import { fetchPluginMarketCatalog } from './marketplace.js';
 import { writePluginSource } from './plugin-source.js';
+import {
+  resolveSafeRelativePath,
+  validateArchiveRelativePath,
+  validateExtractedTree,
+} from './path-security.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('PluginMarketplaceInstaller');
@@ -25,23 +30,9 @@ function ensureHexSha256(content: Uint8Array): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
-function resolveSafeExtractPath(root: string, relativePath: string): string | null {
-  const normalized = path.normalize(relativePath);
-  if (path.isAbsolute(normalized) || normalized.startsWith('..')) {
-    return null;
-  }
-  const resolved = path.resolve(root, normalized);
-  const normalizedRoot = path.resolve(root);
-  const relativeToRoot = path.relative(normalizedRoot, resolved);
-  if (relativeToRoot !== '' && (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot))) {
-    return null;
-  }
-  return resolved;
-}
-
 function resolveMarketplaceWorkspaceBase(pluginDir: string): string {
   const managedRoot = path.dirname(path.resolve(pluginDir));
-  const workspaceBase = resolveSafeExtractPath(managedRoot, MARKETPLACE_TEMP_DIR_NAME);
+  const workspaceBase = resolveSafeRelativePath(managedRoot, MARKETPLACE_TEMP_DIR_NAME);
   if (!workspaceBase) {
     throw new Error(`Invalid plugin workspace root: ${pluginDir}`);
   }
@@ -54,16 +45,54 @@ async function createMarketplaceInstallWorkspace(pluginDir: string): Promise<str
   return fs.mkdtemp(path.join(workspaceBase, MARKETPLACE_TEMP_DIR_PREFIX));
 }
 
+function quotePowerShellString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function assertHttpsMarketplaceAsset(url: string): void {
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`Plugin marketplace assets must use HTTPS: ${url}`);
+  }
+}
+
+async function listZipArchiveEntries(archivePath: string): Promise<string[]> {
+  if (process.platform === 'win32') {
+    const command = [
+      'Add-Type -AssemblyName System.IO.Compression.FileSystem;',
+      `$zip=[System.IO.Compression.ZipFile]::OpenRead(${quotePowerShellString(archivePath)});`,
+      'try { $zip.Entries | ForEach-Object { $_.FullName } } finally { $zip.Dispose() }',
+    ].join(' ');
+    const { stdout } = await execFileAsync('powershell', ['-NoLogo', '-NoProfile', '-Command', command]);
+    return stdout.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean);
+  }
+
+  const { stdout } = await execFileAsync('unzip', ['-Z', '-1', archivePath]);
+  return stdout.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean);
+}
+
+async function validateZipArchiveBeforeExtraction(archivePath: string): Promise<void> {
+  const entries = await listZipArchiveEntries(archivePath);
+  if (entries.length === 0) {
+    throw new Error('Plugin archive is empty');
+  }
+  for (const entry of entries) {
+    validateArchiveRelativePath(entry);
+  }
+}
+
 async function extractZipArchive(archivePath: string, outputDir: string): Promise<void> {
   await fs.mkdir(outputDir, { recursive: true });
+  await validateZipArchiveBeforeExtraction(archivePath);
 
   if (process.platform === 'win32') {
     const command = `Expand-Archive -LiteralPath "${archivePath.replace(/"/g, '`"')}" -DestinationPath "${outputDir.replace(/"/g, '`"')}" -Force`;
     await execFileAsync('powershell', ['-NoLogo', '-NoProfile', '-Command', command]);
-    return;
+  } else {
+    await execFileAsync('unzip', ['-qq', archivePath, '-d', outputDir]);
   }
 
-  await execFileAsync('unzip', ['-qq', archivePath, '-d', outputDir]);
+  await validateExtractedTree(outputDir);
 }
 
 async function resolveExtractedPluginRoot(extractDir: string): Promise<string> {
@@ -140,6 +169,7 @@ async function downloadArchiveToTempFile(
     fetchImpl?: typeof fetch;
   } = {},
 ): Promise<{ archivePath: string; checksum: string; tempRoot: string }> {
+  assertHttpsMarketplaceAsset(artifact.artifactUrl);
   const fetchImpl = options.fetchImpl ?? fetch;
   const response = await fetchImpl(artifact.artifactUrl, {
     headers: {
@@ -197,7 +227,7 @@ export async function installPluginFromMarketplace(
     const extractedRoot = await resolveExtractedPluginRoot(extractDir);
     await validateExtractedPlugin(extractedRoot, pluginName);
 
-    const destinationDir = resolveSafeExtractPath(pluginDir, pluginName);
+    const destinationDir = resolveSafeRelativePath(pluginDir, pluginName);
     if (!destinationDir) {
       throw new Error(`Invalid plugin destination path: ${pluginName}`);
     }
@@ -250,7 +280,7 @@ export async function uninstallPluginFromMarketplace(
   pluginName: string,
   pluginDir: string,
 ): Promise<PluginMarketInstallResult> {
-  const destinationDir = resolveSafeExtractPath(pluginDir, pluginName);
+  const destinationDir = resolveSafeRelativePath(pluginDir, pluginName);
   if (!destinationDir) {
     throw new Error(`Invalid plugin destination path: ${pluginName}`);
   }

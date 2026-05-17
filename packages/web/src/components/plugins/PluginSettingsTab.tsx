@@ -1,6 +1,6 @@
 import React, { forwardRef, useImperativeHandle, useRef, useState, useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button, Divider, Tab, Tabs, Tooltip } from '@heroui/react';
+import { Alert, Button, Divider, Tab, Tabs, Tooltip } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faRotate, faCopy, faCheck, faFolderOpen } from '@fortawesome/free-solid-svg-icons';
 import { PluginList, type PluginListRef } from './PluginList';
@@ -291,6 +291,16 @@ export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettings
                   'Plugin source files stay in the plugin directory, while runtime state and store files are written into the plugin data directory.',
                 )}
               </p>
+              <Alert
+                color="warning"
+                variant="flat"
+                className="mt-3"
+                title={t('plugins.manualInstallRiskTitle', 'Manual plugins run locally')}
+                description={t(
+                  'plugins.manualInstallRiskDescription',
+                  'A plugin placed in this directory can execute code with the TX-5DR host process. Only reload after you trust the source or have reviewed the code.',
+                )}
+              />
             </div>
           </div>
         </div>

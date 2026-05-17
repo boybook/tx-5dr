@@ -579,6 +579,71 @@
     "logSource": {
       "system": "System",
       "plugin": "Plugin"
+    },
+    "marketInstallRiskTitle": "Review before installing",
+    "marketInstallRiskDescription": "Marketplace plugins run as local TX-5DR plugin code. Official listings are reviewed and open to community inspection, but you should still inspect the source before installing or updating.",
+    "marketReviewSourceLink": "Review source",
+    "marketNoSensitivePermissionsTitle": "No sensitive permissions requested",
+    "marketNoSensitivePermissionsDescription": "This plugin does not declare access to network, radio control, host dependencies, or host settings APIs.",
+    "marketPermissionRiskSummary": "These permissions unlock sensitive host APIs. Install only if the capability matches the plugin purpose.",
+    "marketPermissionCount": "{{count}} permissions",
+    "manualInstallRiskTitle": "Manual plugins run locally",
+    "manualInstallRiskDescription": "A plugin placed in this directory can execute code with the TX-5DR host process. Only reload after you trust the source or have reviewed the code.",
+    "permission": {
+      "network": {
+        "name": "Network access",
+        "description": "Allows the plugin to make HTTP requests and open UDP sockets from this machine."
+      },
+      "host": {
+        "hamlib": {
+          "name": "Host Hamlib dependency",
+          "description": "Allows access to the host Hamlib runtime for direct radio or rotator communication."
+        }
+      },
+      "radio": {
+        "read": {
+          "name": "Read radio state",
+          "description": "Allows reading radio connection state, frequency, capabilities, and power support."
+        },
+        "control": {
+          "name": "Control radio",
+          "description": "Allows writing radio frequency and supported capability values."
+        },
+        "power": {
+          "name": "Control radio power",
+          "description": "Allows powering supported radios on or off through the host."
+        }
+      },
+      "settings": {
+        "ft8": {
+          "name": "FT8 settings",
+          "description": "Allows reading and changing FT8 operating settings."
+        },
+        "decode-windows": {
+          "name": "Decode window settings",
+          "description": "Allows reading and changing decode timing windows."
+        },
+        "realtime": {
+          "name": "Realtime transport settings",
+          "description": "Allows reading and changing realtime audio/data transport settings."
+        },
+        "frequency-presets": {
+          "name": "Frequency presets",
+          "description": "Allows reading, changing, or resetting mode frequency presets."
+        },
+        "station": {
+          "name": "Station settings",
+          "description": "Allows reading and changing station identity and location settings."
+        },
+        "psk-reporter": {
+          "name": "PSK Reporter settings",
+          "description": "Allows reading and changing PSK Reporter upload settings."
+        },
+        "ntp": {
+          "name": "NTP settings",
+          "description": "Allows reading and changing time synchronization server settings."
+        }
+      }
     }
   },
   "serverHealth": {

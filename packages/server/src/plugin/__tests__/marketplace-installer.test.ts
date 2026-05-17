@@ -35,6 +35,62 @@ async function createPluginArchive(root: string, pluginName: string, version: st
   return archivePath;
 }
 
+async function createTraversalArchive(root: string, pluginName: string, version: string): Promise<string> {
+  const sourceDir = path.join(root, 'source-traversal');
+  await fs.mkdir(sourceDir, { recursive: true });
+  await fs.writeFile(path.join(root, 'escape.txt'), 'escape', 'utf8');
+  const archivePath = path.join(root, `${pluginName}-${version}-traversal.zip`);
+  await execFileAsync('zip', ['-q', archivePath, '../escape.txt'], { cwd: sourceDir });
+  return archivePath;
+}
+
+async function createSymlinkArchive(root: string, pluginName: string, version: string): Promise<string> {
+  const sourceDir = path.join(root, 'source-symlink');
+  await fs.mkdir(sourceDir, { recursive: true });
+  await fs.writeFile(
+    path.join(root, 'outside-index.mjs'),
+    `export default { name: ${JSON.stringify(pluginName)}, version: ${JSON.stringify(version)}, type: 'utility' };`,
+    'utf8',
+  );
+  await fs.symlink('../outside-index.mjs', path.join(sourceDir, 'index.mjs'));
+  const archivePath = path.join(root, `${pluginName}-${version}-symlink.zip`);
+  await execFileAsync('zip', ['-qry', archivePath, 'index.mjs'], { cwd: sourceDir });
+  return archivePath;
+}
+
+async function createCatalogFetch(
+  archivePath: string,
+  pluginName = 'hello-plugin',
+  version = '1.0.0',
+  artifactUrl = `https://cdn.example.com/${pluginName}-${version}.zip`,
+) {
+  const artifactBytes = await fs.readFile(archivePath);
+  const sha256 = (await import('node:crypto')).createHash('sha256').update(artifactBytes).digest('hex');
+  return {
+    artifactBytes,
+    fetchImpl: vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        schemaVersion: 1,
+        generatedAt: '2026-04-22T12:00:00.000Z',
+        channel: 'stable',
+        plugins: [
+          {
+            name: pluginName,
+            title: 'Hello Plugin',
+            description: 'test plugin',
+            latestVersion: version,
+            minHostVersion: '1.0.0',
+            artifactUrl,
+            sha256,
+            size: artifactBytes.length,
+            publishedAt: '2026-04-22T12:00:00.000Z',
+          },
+        ],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(artifactBytes, { status: 200 })),
+  };
+}
+
 async function expectMarketplaceWorkspaceEmpty(root: string): Promise<void> {
   const workspaceDir = path.join(root, MARKETPLACE_TEMP_DIR_NAME);
   const entries = await fs.readdir(workspaceDir).catch((error: NodeJS.ErrnoException) => {
@@ -205,6 +261,61 @@ describe('plugin marketplace installer', () => {
 
     await expect(fs.access(path.join(pluginDir, 'hello-plugin'))).rejects.toThrow();
     await expectMarketplaceWorkspaceEmpty(root);
+  });
+
+  it('rejects archives that contain parent-directory paths before extraction', async () => {
+    const root = await makeTempDir('tx5dr-market-traversal-');
+    const pluginDir = path.join(root, 'plugins');
+    await fs.mkdir(pluginDir, { recursive: true });
+
+    const archivePath = await createTraversalArchive(root, 'hello-plugin', '1.0.0');
+    const { fetchImpl } = await createCatalogFetch(archivePath);
+
+    await expect(installPluginFromMarketplace('hello-plugin', pluginDir, 'stable', {
+      fetchImpl,
+      env: { TX5DR_PLUGIN_MARKET_BASE_URL: 'https://cdn.example.com/market' },
+    })).rejects.toThrow('Unsafe archive path rejected');
+
+    await expect(fs.access(path.join(pluginDir, 'hello-plugin'))).rejects.toThrow();
+    await expectMarketplaceWorkspaceEmpty(root);
+  });
+
+  it('rejects archives that contain symbolic links', async () => {
+    const root = await makeTempDir('tx5dr-market-symlink-');
+    const pluginDir = path.join(root, 'plugins');
+    await fs.mkdir(pluginDir, { recursive: true });
+
+    const archivePath = await createSymlinkArchive(root, 'hello-plugin', '1.0.0');
+    const { fetchImpl } = await createCatalogFetch(archivePath);
+
+    await expect(installPluginFromMarketplace('hello-plugin', pluginDir, 'stable', {
+      fetchImpl,
+      env: { TX5DR_PLUGIN_MARKET_BASE_URL: 'https://cdn.example.com/market' },
+    })).rejects.toThrow('symbolic links');
+
+    await expect(fs.access(path.join(pluginDir, 'hello-plugin'))).rejects.toThrow();
+    await expectMarketplaceWorkspaceEmpty(root);
+  });
+
+  it('rejects non-HTTPS marketplace asset URLs', async () => {
+    const root = await makeTempDir('tx5dr-market-http-');
+    const pluginDir = path.join(root, 'plugins');
+    await fs.mkdir(pluginDir, { recursive: true });
+
+    const archivePath = await createPluginArchive(root, 'hello-plugin', '1.0.0');
+    const { fetchImpl } = await createCatalogFetch(
+      archivePath,
+      'hello-plugin',
+      '1.0.0',
+      'http://cdn.example.com/hello-plugin-1.0.0.zip',
+    );
+
+    await expect(installPluginFromMarketplace('hello-plugin', pluginDir, 'stable', {
+      fetchImpl,
+      env: { TX5DR_PLUGIN_MARKET_BASE_URL: 'https://cdn.example.com/market' },
+    })).rejects.toThrow('must use HTTPS');
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('uninstalls plugin code but leaves plugin-data untouched', async () => {

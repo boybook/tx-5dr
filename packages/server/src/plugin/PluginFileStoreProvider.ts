@@ -3,6 +3,7 @@ import path from 'path';
 import { createLogger } from '../utils/logger.js';
 import type { PluginFileStore } from '@tx5dr/plugin-api';
 import { PersistenceCoordinator, safeWriteFile } from '../utils/persistence/index.js';
+import { resolveSafeRelativePath } from './path-security.js';
 
 const logger = createLogger('PluginFileStore');
 
@@ -72,12 +73,8 @@ export class PluginFileStoreProvider implements PluginFileStore {
    * result stays within the sandbox. Throws on any traversal attempt.
    */
   private resolve(filePath: string): string {
-    const normalized = path.normalize(filePath);
-    if (path.isAbsolute(normalized) || normalized.startsWith('..')) {
-      throw new Error(`Path traversal rejected: ${filePath}`);
-    }
-    const resolved = path.resolve(this.root, normalized);
-    if (!resolved.startsWith(this.root)) {
+    const resolved = resolveSafeRelativePath(this.root, filePath);
+    if (!resolved) {
       throw new Error(`Path traversal rejected: ${filePath}`);
     }
     return resolved;
