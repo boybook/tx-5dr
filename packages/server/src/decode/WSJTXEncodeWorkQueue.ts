@@ -98,7 +98,7 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
       const mode = request.mode === 'FT4' ? WSJTXMode.FT4 : WSJTXMode.FT8;
 
       // 调用原生库编码
-      const { audioData: audioFloat32, messageSent } = await WSJTXNativeGate.run(
+      const { audioData: audioFloat32, messageSent, sampleRate: resultSampleRate } = await WSJTXNativeGate.run(
         () => this.lib.encode(
           mode,
           request.message,
@@ -121,7 +121,9 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
 
       // 基于模式校验并必要时截断
       const expectedDuration = mode === WSJTXMode.FT8 ? 12.64 : 6.0;
-      const encodeSampleRate = 48000; // wsjtx-lib 编码输出为 48kHz
+      const encodeSampleRate = Number.isFinite(resultSampleRate)
+        ? resultSampleRate
+        : this.lib.getSampleRate(mode);
       const actualDuration = audioFloat32.length / encodeSampleRate;
       const maxSamples = Math.floor(expectedDuration * encodeSampleRate * 1.5);
       let finalAudio = audioFloat32;
@@ -137,13 +139,15 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
 
       // 重采样到统一的内部采样率（12kHz）
       const INTERNAL_SAMPLE_RATE = 12000;
-      logger.debug(`resampling: ${encodeSampleRate}Hz -> ${INTERNAL_SAMPLE_RATE}Hz`);
-      finalAudio = await resampleAudioProfessional(
-        finalAudio,
-        encodeSampleRate,
-        INTERNAL_SAMPLE_RATE,
-        1 // 单声道
-      );
+      if (encodeSampleRate !== INTERNAL_SAMPLE_RATE) {
+        logger.debug(`resampling: ${encodeSampleRate}Hz -> ${INTERNAL_SAMPLE_RATE}Hz`);
+        finalAudio = await resampleAudioProfessional(
+          finalAudio,
+          encodeSampleRate,
+          INTERNAL_SAMPLE_RATE,
+          1 // 单声道
+        );
+      }
 
       // 统计振幅范围
       let minSample = finalAudio[0];

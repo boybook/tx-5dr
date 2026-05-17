@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { EncodeRequest, EncodeResult } from '../WSJTXEncodeWorkQueue.js';
 
-const encodeResponses = vi.hoisted((): Array<{ messageSent: string; audioData?: Float32Array }> => []);
+const encodeResponses = vi.hoisted((): Array<{ messageSent: string; audioData?: Float32Array; sampleRate?: number }> => []);
 const encodeCalls = vi.hoisted((): Array<{ mode: number; message: string; frequency: number }> => []);
 
 vi.mock('wsjtx-lib', () => {
@@ -11,13 +11,18 @@ vi.mock('wsjtx-lib', () => {
   };
 
   class WSJTXLib {
-    async encode(mode: number, message: string, frequency: number): Promise<{ audioData: Float32Array; messageSent: string }> {
+    async encode(mode: number, message: string, frequency: number): Promise<{ audioData: Float32Array; messageSent: string; sampleRate?: number }> {
       encodeCalls.push({ mode, message, frequency });
       const response = encodeResponses.shift() ?? { messageSent: message };
       return {
         audioData: response.audioData ?? new Float32Array(4800).fill(0.1),
         messageSent: response.messageSent,
+        sampleRate: response.sampleRate,
       };
+    }
+
+    getSampleRate(_mode: number): number {
+      return 48000;
     }
   }
 
@@ -26,7 +31,7 @@ vi.mock('wsjtx-lib', () => {
 
 import { WSJTXEncodeWorkQueue } from '../WSJTXEncodeWorkQueue.js';
 
-async function encodeOnce(request: Partial<EncodeRequest>, response: { messageSent: string; audioData?: Float32Array }) {
+async function encodeOnce(request: Partial<EncodeRequest>, response: { messageSent: string; audioData?: Float32Array; sampleRate?: number }) {
   encodeResponses.length = 0;
   encodeCalls.length = 0;
   encodeResponses.push(response);
@@ -107,5 +112,20 @@ describe('WSJTXEncodeWorkQueue messageSent validation', () => {
     expect(queue.size()).toBe(0);
     expect(queueEmpty).toHaveBeenCalledTimes(1);
     await queue.destroy();
+  });
+
+  it('uses the sample rate reported by wsjtx-lib encode results', async () => {
+    const audioData = new Float32Array(12000).fill(0.1);
+
+    const result = await encodeOnce(
+      { message: 'CQ BG5DRB OL32' },
+      { messageSent: 'CQ BG5DRB OL32', audioData, sampleRate: 12000 },
+    );
+
+    expect(result.type).toBe('complete');
+    if (result.type === 'complete') {
+      expect(result.result.sampleRate).toBe(12000);
+      expect(result.result.audioData).toBe(audioData);
+    }
   });
 });
