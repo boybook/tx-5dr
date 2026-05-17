@@ -126,11 +126,11 @@ export function createRadioEventMap({
     pendingOperatorStatuses.clear();
   };
 
-  const refreshRealtimeState = () => {
+  const refreshRealtimeState = (options: { replaySpectrum?: boolean } = {}) => {
     radioService.getSystemStatus();
 
     const subscribedKind = radioStateRef.current.subscribedSpectrumKind;
-    if (subscribedKind && !isSpectrumSubscriptionPaused()) {
+    if (options.replaySpectrum && subscribedKind && !isSpectrumSubscriptionPaused()) {
       radioService.subscribeSpectrum(subscribedKind);
     }
   };
@@ -529,6 +529,8 @@ export function createRadioEventMap({
       } catch (error) {
         logger.warn('Failed to fetch station info', error);
       }
+
+      refreshRealtimeState({ replaySpectrum: true });
     },
     radioStatusChanged: (data: unknown) => {
       const radioData = data as {

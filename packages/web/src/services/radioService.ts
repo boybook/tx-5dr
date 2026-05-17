@@ -2,6 +2,7 @@ import { api, WSClient } from '@tx5dr/core';
 import type {
   OperatorRuntimeSlot,
   SpectrumKind,
+  WSSpectrumSubscriptionChangedMessage,
   WSSelectedFrame,
   WSSetOperatorContextMessage,
 } from '@tx5dr/contracts';
@@ -9,6 +10,8 @@ import { getApiBaseUrl, getWebSocketUrl } from '../utils/config';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('RadioService');
+const SPECTRUM_SUBSCRIPTION_ACK_TIMEOUT_MS = 5000;
+const SPECTRUM_SUBSCRIPTION_MAX_RETRIES = 3;
 
 /**
  * 无线电数据服务
@@ -20,6 +23,10 @@ export class RadioService {
   private _isDecoding = false;
   private providerEventHandlers: Array<{ event: string; handler: (data?: unknown) => void }> = [];
   private providerEventOwner: symbol | null = null;
+  private desiredSpectrumKind: SpectrumKind | null = null;
+  private pendingSpectrumAckKind: SpectrumKind | null = null;
+  private spectrumAckTimer: ReturnType<typeof setTimeout> | null = null;
+  private spectrumAckRetryCount = 0;
 
   constructor() {
     // 创建WebSocket客户端
@@ -42,6 +49,10 @@ export class RadioService {
 
     this.wsClient.onWSEvent('disconnected', () => {
       this._isDecoding = false;
+    });
+
+    this.wsClient.onWSEvent('spectrumSubscriptionChanged', (data) => {
+      this.handleSpectrumSubscriptionAck(data as WSSpectrumSubscriptionChangedMessage['data']);
     });
   }
 
@@ -69,6 +80,7 @@ export class RadioService {
    */
   disconnect(): void {
     this.clearProviderEventHandlers();
+    this.clearSpectrumAckTimer();
     this.wsClient.disconnect();
     this._isDecoding = false;
   }
@@ -131,9 +143,34 @@ export class RadioService {
   }
 
   subscribeSpectrum(kind: SpectrumKind | null): void {
+    this.desiredSpectrumKind = kind;
+    this.spectrumAckRetryCount = 0;
+
     if (this.isConnected) {
-      this.wsClient.subscribeSpectrum(kind);
+      this.sendSpectrumSubscription(kind);
     }
+  }
+
+  replaySpectrumSubscription(): void {
+    if (!this.isConnected || !this.desiredSpectrumKind) {
+      return;
+    }
+
+    this.spectrumAckRetryCount = 0;
+    this.sendSpectrumSubscription(this.desiredSpectrumKind);
+  }
+
+  retrySpectrumSubscription(reason?: string): void {
+    if (!this.isConnected || !this.desiredSpectrumKind) {
+      return;
+    }
+
+    logger.warn('Retrying spectrum subscription', {
+      kind: this.desiredSpectrumKind,
+      reason,
+    });
+    this.spectrumAckRetryCount = 0;
+    this.sendSpectrumSubscription(this.desiredSpectrumKind);
   }
 
   invokeSpectrumControl(id: string, action: 'in' | 'out' | 'toggle'): void {
@@ -173,6 +210,79 @@ export class RadioService {
    */
   get wsClientInstance(): WSClient {
     return this.wsClient;
+  }
+
+  get desiredSpectrumSubscription(): SpectrumKind | null {
+    return this.desiredSpectrumKind;
+  }
+
+  private sendSpectrumSubscription(kind: SpectrumKind | null): void {
+    if (!this.isConnected) {
+      return;
+    }
+
+    this.wsClient.subscribeSpectrum(kind);
+    this.pendingSpectrumAckKind = kind;
+
+    if (!kind) {
+      this.clearSpectrumAckTimer();
+      return;
+    }
+
+    this.scheduleSpectrumAckTimeout(kind);
+  }
+
+  private scheduleSpectrumAckTimeout(kind: SpectrumKind): void {
+    this.clearSpectrumAckTimer();
+    this.spectrumAckTimer = setTimeout(() => {
+      this.spectrumAckTimer = null;
+
+      if (!this.isConnected || this.desiredSpectrumKind !== kind || this.pendingSpectrumAckKind !== kind) {
+        return;
+      }
+
+      if (this.spectrumAckRetryCount >= SPECTRUM_SUBSCRIPTION_MAX_RETRIES) {
+        logger.warn('Spectrum subscription ack timed out after max retries', { kind });
+        this.pendingSpectrumAckKind = null;
+        return;
+      }
+
+      this.spectrumAckRetryCount += 1;
+      logger.warn('Spectrum subscription ack timed out, retrying', {
+        kind,
+        retry: this.spectrumAckRetryCount,
+        maxRetries: SPECTRUM_SUBSCRIPTION_MAX_RETRIES,
+      });
+      this.sendSpectrumSubscription(kind);
+    }, SPECTRUM_SUBSCRIPTION_ACK_TIMEOUT_MS);
+  }
+
+  private clearSpectrumAckTimer(): void {
+    if (this.spectrumAckTimer) {
+      clearTimeout(this.spectrumAckTimer);
+      this.spectrumAckTimer = null;
+    }
+  }
+
+  private handleSpectrumSubscriptionAck(data: WSSpectrumSubscriptionChangedMessage['data']): void {
+    if (data.requestedKind !== this.pendingSpectrumAckKind && data.requestedKind !== this.desiredSpectrumKind) {
+      logger.debug('Ignoring stale spectrum subscription ack', data);
+      return;
+    }
+
+    this.clearSpectrumAckTimer();
+    this.pendingSpectrumAckKind = null;
+    this.spectrumAckRetryCount = 0;
+
+    if (!data.ok || data.effectiveKind !== this.desiredSpectrumKind) {
+      logger.warn('Spectrum subscription did not converge to desired kind', {
+        desiredKind: this.desiredSpectrumKind,
+        ...data,
+      });
+      return;
+    }
+
+    logger.debug('Spectrum subscription acknowledged', data);
   }
 
   /**

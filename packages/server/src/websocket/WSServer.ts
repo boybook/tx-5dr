@@ -35,6 +35,7 @@ import { OperatorScopedSlotPackProjectionService } from './OperatorScopedSlotPac
 
 const logger = createLogger('WSServer');
 const DECODE_WORKER_UNAVAILABLE_USER_MESSAGE_KEY = 'errors:code.DECODE_WORKER_UNAVAILABLE.userMessage';
+const SPECTRUM_CAPABILITIES_TIMEOUT_MS = 3000;
 const DECODE_WORKER_UNAVAILABLE_SUGGESTION_KEYS = [
   'errors:code.DECODE_WORKER_UNAVAILABLE.suggestions.0',
   'errors:code.DECODE_WORKER_UNAVAILABLE.suggestions.1',
@@ -999,21 +1000,69 @@ export class WSServer extends WSMessageHandler {
     }
 
     const requestedKind = (data as { kind?: SpectrumKind | null } | undefined)?.kind ?? null;
-    const capabilities = await this.spectrumCoordinator.getCapabilities();
+
+    if (requestedKind && (!connection.isHandshakeCompleted() || !connection.hasMinRole(UserRole.VIEWER))) {
+      connection.send(WSMessageType.SPECTRUM_SUBSCRIPTION_CHANGED, {
+        requestedKind,
+        effectiveKind: connection.getSpectrumSubscription(),
+        ok: false,
+        reason: 'not_authenticated_or_handshake_pending',
+      });
+      return;
+    }
+
+    let capabilities: SpectrumCapabilities;
+    try {
+      capabilities = await Promise.race([
+        this.spectrumCoordinator.getCapabilities(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('spectrum capabilities timeout')), SPECTRUM_CAPABILITIES_TIMEOUT_MS)),
+      ]);
+    } catch (error) {
+      logger.warn('failed to resolve spectrum capabilities for subscription', error);
+      connection.send(WSMessageType.SPECTRUM_SUBSCRIPTION_CHANGED, {
+        requestedKind,
+        effectiveKind: connection.getSpectrumSubscription(),
+        ok: false,
+        reason: 'capabilities_timeout',
+      });
+      return;
+    }
+
     const requestedSource = requestedKind
       ? capabilities.sources.find(source => source.kind === requestedKind)
       : null;
-
     const effectiveKind = requestedKind && requestedSource?.available ? requestedKind : null;
+    const reason = requestedKind && effectiveKind === null
+      ? (requestedSource?.reason ?? (requestedSource ? 'spectrum_source_unavailable' : 'spectrum_source_unknown'))
+      : undefined;
 
-    await this.spectrumCoordinator.setConnectionSubscription(connectionId, effectiveKind);
-    connection.setSpectrumSubscription(effectiveKind);
+    try {
+      await this.spectrumCoordinator.setConnectionSubscription(connectionId, effectiveKind);
+      connection.setSpectrumSubscription(effectiveKind);
 
-    if (requestedKind && effectiveKind === null) {
-      connection.send(WSMessageType.SPECTRUM_CAPABILITIES, capabilities);
+      if (requestedKind && effectiveKind === null) {
+        connection.send(WSMessageType.SPECTRUM_CAPABILITIES, capabilities);
+      }
+
+      connection.send(WSMessageType.SPECTRUM_SUBSCRIPTION_CHANGED, {
+        requestedKind,
+        effectiveKind,
+        ok: requestedKind === null || effectiveKind === requestedKind,
+        ...(reason ? { reason } : {}),
+        capabilities,
+      });
+
+      await this.sendSpectrumSessionStateToConnection(connection);
+    } catch (error) {
+      logger.warn('failed to apply spectrum subscription', error);
+      connection.send(WSMessageType.SPECTRUM_SUBSCRIPTION_CHANGED, {
+        requestedKind,
+        effectiveKind: connection.getSpectrumSubscription(),
+        ok: false,
+        reason: 'subscription_failed',
+        capabilities,
+      });
     }
-
-    await this.sendSpectrumSessionStateToConnection(connection);
   }
 
   private async handleInvokeSpectrumControl(connectionId: string, data: unknown): Promise<void> {
@@ -1897,7 +1946,11 @@ export class WSServer extends WSMessageHandler {
   broadcastSpectrumFrame(frame: SpectrumFrame): void {
     const targetConnectionIds = this.spectrumCoordinator.getSubscribedConnectionIds(frame.kind);
     for (const connectionId of targetConnectionIds) {
-      this.sendToConnection(connectionId, WSMessageType.SPECTRUM_FRAME, frame);
+      const connection = this.getConnection(connectionId);
+      if (!connection?.isAlive || !connection.isHandshakeCompleted()) {
+        continue;
+      }
+      connection.send(WSMessageType.SPECTRUM_FRAME, frame);
     }
   }
 

@@ -156,6 +156,8 @@
   },
   "spectrum": {
     "waiting": "等待频谱数据...",
+    "retrying": "等待频谱数据...正在重试 {{count}}/{{max}}",
+    "noData": "暂无频谱数据，正在等待数据流恢复...",
     "collapsed": "频谱已收起",
     "restore": "展开频谱",
     "audioSource": "音频",

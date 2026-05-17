@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SystemStatus } from '@tx5dr/contracts';
+import { WSMessageType, type SystemStatus } from '@tx5dr/contracts';
 import { WSServer } from '../WSServer.js';
 import { ConfigManager } from '../../config/config-manager.js';
 
@@ -177,5 +177,67 @@ describe('WSServer current slot handshake snapshot', () => {
     (server as any).broadcastCurrentSlotSnapshot();
 
     expect(server.broadcastSlotStart).toHaveBeenCalledWith(slotInfo);
+  });
+});
+
+describe('WSServer spectrum subscriptions', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('rejects non-null spectrum subscriptions before handshake', async () => {
+    const send = vi.fn();
+    const setConnectionSubscription = vi.fn();
+    const server = Object.create(WSServer.prototype) as any;
+    server.getConnection = vi.fn(() => ({
+      isHandshakeCompleted: () => false,
+      hasMinRole: () => false,
+      getSpectrumSubscription: () => null,
+      send,
+    }));
+    server.spectrumCoordinator = {
+      setConnectionSubscription,
+      getCapabilities: vi.fn(),
+    };
+
+    await (server as any).handleSubscribeSpectrum('conn-1', { kind: 'audio' });
+
+    expect(setConnectionSubscription).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(WSMessageType.SPECTRUM_SUBSCRIPTION_CHANGED, {
+      requestedKind: 'audio',
+      effectiveKind: null,
+      ok: false,
+      reason: 'not_authenticated_or_handshake_pending',
+    });
+  });
+
+  it('acks capability timeout without creating a half subscription', async () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const setConnectionSubscription = vi.fn();
+    const server = Object.create(WSServer.prototype) as any;
+    server.getConnection = vi.fn(() => ({
+      isHandshakeCompleted: () => true,
+      hasMinRole: () => true,
+      getSpectrumSubscription: () => null,
+      send,
+    }));
+    server.spectrumCoordinator = {
+      setConnectionSubscription,
+      getCapabilities: vi.fn(() => new Promise(() => {})),
+    };
+
+    const pending = (server as any).handleSubscribeSpectrum('conn-1', { kind: 'audio' });
+    await vi.advanceTimersByTimeAsync(3000);
+    await pending;
+
+    expect(setConnectionSubscription).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(WSMessageType.SPECTRUM_SUBSCRIPTION_CHANGED, {
+      requestedKind: 'audio',
+      effectiveKind: null,
+      ok: false,
+      reason: 'capabilities_timeout',
+    });
   });
 });

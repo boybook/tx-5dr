@@ -38,6 +38,9 @@ import {
 } from './spectrumThemes';
 
 const logger = createLogger('SpectrumDisplay');
+const SPECTRUM_NO_FRAME_STALE_MS = 10_000;
+const SPECTRUM_NO_FRAME_CHECK_MS = 1_000;
+const SPECTRUM_NO_FRAME_MAX_RETRIES = 3;
 
 type ElectronWindowHelper = Window & {
   electronAPI?: {
@@ -673,7 +676,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const { pttStatus } = usePTTState();
   const canSetFrequency = useCan('execute', 'RadioFrequency');
   const canWriteFrequency = canWriteRadioFrequency(canSetFrequency, radioConnection.coreCapabilities);
-  const { capabilities, selectedKind, sessionState, setSelectedKind, setSubscribedKind } = useSpectrum();
+  const { capabilities, selectedKind, subscribedKind, sessionState, setSelectedKind, setSubscribedKind } = useSpectrum();
   const controllerRef = useRef<SpectrumStreamController | null>(null);
   if (!controllerRef.current) {
     controllerRef.current = new SpectrumStreamController(SPECTRUM_HISTORY_LIMITS);
@@ -704,6 +707,19 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const radioSdrServerSyncHoldUntilRef = useRef(0);
   const radioSdrServerSyncHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const baseRadioSdrFrequencyRef = useRef<number | null>(null);
+  const lastAcceptedSpectrumFrameAtRef = useRef(Date.now());
+  const spectrumNoFrameRetryCountRef = useRef(0);
+  const radioServiceRef = useRef(connection.state.radioService);
+  const hasActiveSpectrumSubscriptionRef = useRef(false);
+  const [spectrumRecoveryState, setSpectrumRecoveryState] = useState<{
+    isStale: boolean;
+    retryCount: number;
+    exhausted: boolean;
+  }>({
+    isStale: false,
+    retryCount: 0,
+    exhausted: false,
+  });
 
   const isElectron = typeof window !== 'undefined' && (window as ElectronWindowHelper).electronAPI !== undefined;
   const resetOperatorsAfterOperatingStateChange = useCallback(() => {
@@ -717,6 +733,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const txFrequencies = useTxFrequencies();
   const { currentOperatorId } = useCurrentOperatorId();
   const effectiveSelectedKind = selectedKind ?? capabilities?.defaultKind ?? AUDIO_SOURCE;
+  const activeSpectrumKind = subscribedKind ?? effectiveSelectedKind;
   const isAudioSpectrumSelected = effectiveSelectedKind === AUDIO_SOURCE;
   const isRadioSdrSelected = effectiveSelectedKind === RADIO_SDR_SOURCE;
   const isOpenWebRXSdrSelected = effectiveSelectedKind === OPENWEBRX_SDR_SOURCE;
@@ -747,6 +764,8 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   );
   const baseRadioSdrFrequency = sessionState?.currentRadioFrequency ?? currentRadioFrequency ?? null;
   baseRadioSdrFrequencyRef.current = baseRadioSdrFrequency;
+  radioServiceRef.current = connection.state.radioService;
+  hasActiveSpectrumSubscriptionRef.current = !isCollapsed && Boolean(subscribedKind);
   const effectiveRadioSdrFrequency = isRadioSdrSelected && !isFixedSpectrumMode
     ? resolveRadioSdrOptimisticDisplayFrequencyHz(radioSdrOptimisticDisplayState, baseRadioSdrFrequency)
     : baseRadioSdrFrequency;
@@ -1082,6 +1101,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         clearTimeout(radioSdrServerSyncHoldTimerRef.current);
         radioSdrServerSyncHoldTimerRef.current = null;
       }
+      if (hasActiveSpectrumSubscriptionRef.current) {
+        radioServiceRef.current?.subscribeSpectrum(null);
+      }
       streamController.destroy();
     };
   }, [streamController]);
@@ -1097,6 +1119,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   }, [connection.state.radioService, isCollapsed, setSubscribedKind, streamController]);
 
   useEffect(() => {
+    if (isCollapsed || !connection.state.isConnected || !subscribedKind) {
+      return;
+    }
+
+    connection.state.radioService?.subscribeSpectrum(subscribedKind);
+  }, [connection.state.isConnected, connection.state.radioService, isCollapsed, subscribedKind]);
+
+  useEffect(() => {
     const radioService = connection.state.radioService;
     if (!radioService) {
       streamController.reset();
@@ -1109,7 +1139,16 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         return;
       }
       const frame = data as SpectrumFrame;
+      const frameProfileId = frame.meta.profileId;
+      if (frameProfileId !== undefined && activeProfileId !== null && frameProfileId !== activeProfileId) {
+        return;
+      }
       streamController.pushFrame(frame);
+      if (frame.kind === activeSpectrumKind) {
+        lastAcceptedSpectrumFrameAtRef.current = Date.now();
+        spectrumNoFrameRetryCountRef.current = 0;
+        setSpectrumRecoveryState({ isStale: false, retryCount: 0, exhausted: false });
+      }
       if (frame.kind === RADIO_SDR_SOURCE && !isRadioSdrServerFrequencySyncHeld()) {
         const nextOptimisticState = confirmRadioSdrOptimisticDisplayStateWithFrame(
           radioSdrOptimisticDisplayStateRef.current,
@@ -1127,7 +1166,47 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     return () => {
       wsClient.offWSEvent('spectrumFrame', handleSpectrumFrame);
     };
-  }, [connection.state.radioService, isCollapsed, isRadioSdrServerFrequencySyncHeld, streamController, updateRadioSdrOptimisticDisplayState]);
+  }, [activeProfileId, activeSpectrumKind, connection.state.radioService, isCollapsed, isRadioSdrServerFrequencySyncHeld, streamController, updateRadioSdrOptimisticDisplayState]);
+
+  useEffect(() => {
+    lastAcceptedSpectrumFrameAtRef.current = Date.now();
+    spectrumNoFrameRetryCountRef.current = 0;
+    setSpectrumRecoveryState({ isStale: false, retryCount: 0, exhausted: false });
+
+    if (isCollapsed || !connection.state.isConnected || !connection.state.radioService || !subscribedKind) {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      const elapsedMs = Date.now() - lastAcceptedSpectrumFrameAtRef.current;
+      if (elapsedMs < SPECTRUM_NO_FRAME_STALE_MS) {
+        return;
+      }
+
+      const nextRetryCount = spectrumNoFrameRetryCountRef.current + 1;
+      if (nextRetryCount <= SPECTRUM_NO_FRAME_MAX_RETRIES) {
+        spectrumNoFrameRetryCountRef.current = nextRetryCount;
+        lastAcceptedSpectrumFrameAtRef.current = Date.now();
+        setSpectrumRecoveryState({
+          isStale: true,
+          retryCount: nextRetryCount,
+          exhausted: false,
+        });
+        connection.state.radioService?.retrySpectrumSubscription('no-frame-timeout');
+        return;
+      }
+
+      setSpectrumRecoveryState({
+        isStale: true,
+        retryCount: spectrumNoFrameRetryCountRef.current,
+        exhausted: true,
+      });
+    }, SPECTRUM_NO_FRAME_CHECK_MS);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, [connection.state.isConnected, connection.state.radioService, isCollapsed, subscribedKind]);
 
   useLayoutEffect(() => {
     streamController.updateContext({
@@ -1619,9 +1698,17 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   }
 
   if (!streamStatus.hasData) {
+    const waitingText = spectrumRecoveryState.exhausted
+      ? t('spectrum.noData')
+      : spectrumRecoveryState.isStale
+        ? t('spectrum.retrying', {
+            count: spectrumRecoveryState.retryCount,
+            max: SPECTRUM_NO_FRAME_MAX_RETRIES,
+          })
+        : t('spectrum.waiting');
     return (
       <div className={`relative flex items-center justify-center ${className}`} style={{ height }}>
-        <div className="text-default-400">{t('spectrum.waiting')}</div>
+        <div className="text-default-400">{waitingText}</div>
         {shouldShowSourceTabs && selectedKind && (
           <div className="absolute top-1 left-1 z-20" style={topLeftOverlayStyle}>
             <Tabs
@@ -1731,6 +1818,16 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         isTransmitting={isTransmitting}
         className="bg-transparent"
       />
+      {spectrumRecoveryState.isStale && (
+        <div className="pointer-events-none absolute left-1/2 top-2 z-20 -translate-x-1/2 rounded-full bg-black/55 px-3 py-1 text-[11px] text-white/85 backdrop-blur-sm">
+          {spectrumRecoveryState.exhausted
+            ? t('spectrum.noData')
+            : t('spectrum.retrying', {
+                count: spectrumRecoveryState.retryCount,
+                max: SPECTRUM_NO_FRAME_MAX_RETRIES,
+              })}
+        </div>
+      )}
 
       {shouldShowSourceTabs && selectedKind && (
         <div className="absolute top-1 left-1 z-20" style={topLeftOverlayStyle}>

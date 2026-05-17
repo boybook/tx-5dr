@@ -9,3 +9,10 @@ test('routes squelch status messages to frontend event handlers', () => {
     'squelchStatusChanged',
   );
 });
+
+test('routes spectrum subscription acknowledgements to frontend event handlers', () => {
+  assert.equal(
+    WS_MESSAGE_EVENT_MAP[WSMessageType.SPECTRUM_SUBSCRIPTION_CHANGED],
+    'spectrumSubscriptionChanged',
+  );
+});

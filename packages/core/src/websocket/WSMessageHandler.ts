@@ -15,6 +15,7 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.SLOT_PACK_UPDATED]: 'slotPackUpdated',
   [WSMessageType.SLOT_PACKS_RESET]: 'slotPacksReset',
   [WSMessageType.SPECTRUM_CAPABILITIES]: 'spectrumCapabilities',
+  [WSMessageType.SPECTRUM_SUBSCRIPTION_CHANGED]: 'spectrumSubscriptionChanged',
   [WSMessageType.SPECTRUM_FRAME]: 'spectrumFrame',
   [WSMessageType.SPECTRUM_SESSION_STATE_CHANGED]: 'spectrumSessionStateChanged',
   [WSMessageType.DECODE_ERROR]: 'decodeError',

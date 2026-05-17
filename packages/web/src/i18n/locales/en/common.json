@@ -156,6 +156,8 @@
   },
   "spectrum": {
     "waiting": "Waiting for spectrum data...",
+    "retrying": "Waiting for spectrum data... retrying {{count}}/{{max}}",
+    "noData": "No spectrum data. Waiting for the stream to recover...",
     "collapsed": "Spectrum collapsed",
     "restore": "Restore spectrum",
     "audioSource": "Audio",

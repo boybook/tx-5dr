@@ -79,12 +79,12 @@ describe('createRadioEventMap spectrum refresh', () => {
     vi.unstubAllGlobals();
   });
 
-  it('resubscribes on reconnect when spectrum is expanded', () => {
+  it('does not subscribe before the server handshake completes', () => {
     const { eventMap, radioService } = createHarness(false);
 
     eventMap.connected();
 
-    expect(radioService.subscribeSpectrum).toHaveBeenCalledWith('audio');
+    expect(radioService.subscribeSpectrum).not.toHaveBeenCalled();
   });
 
   it('does not resubscribe on reconnect when spectrum is collapsed', () => {

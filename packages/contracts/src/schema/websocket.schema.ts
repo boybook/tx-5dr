@@ -58,6 +58,7 @@ export enum WSMessageType {
   SLOT_PACK_UPDATED = 'slotPackUpdated',
   SPECTRUM_CAPABILITIES = 'spectrumCapabilities',
   SUBSCRIBE_SPECTRUM = 'subscribeSpectrum',
+  SPECTRUM_SUBSCRIPTION_CHANGED = 'spectrumSubscriptionChanged',
   SPECTRUM_FRAME = 'spectrumFrame',
   SPECTRUM_SESSION_STATE_CHANGED = 'spectrumSessionStateChanged',
   INVOKE_SPECTRUM_CONTROL = 'invokeSpectrumControl',
@@ -527,6 +528,17 @@ export const WSSubscribeSpectrumMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.SUBSCRIBE_SPECTRUM),
   data: z.object({
     kind: SpectrumKindSchema.nullable(),
+  }),
+});
+
+export const WSSpectrumSubscriptionChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SPECTRUM_SUBSCRIPTION_CHANGED),
+  data: z.object({
+    requestedKind: SpectrumKindSchema.nullable(),
+    effectiveKind: SpectrumKindSchema.nullable(),
+    ok: z.boolean(),
+    reason: z.string().optional(),
+    capabilities: SpectrumCapabilitiesSchema.optional(),
   }),
 });
 
@@ -1371,6 +1383,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSSlotPackUpdatedMessageSchema,
   WSSpectrumCapabilitiesMessageSchema,
   WSSubscribeSpectrumMessageSchema,
+  WSSpectrumSubscriptionChangedMessageSchema,
   WSSpectrumFrameMessageSchema,
   WSSpectrumSessionStateChangedMessageSchema,
   WSInvokeSpectrumControlMessageSchema,
@@ -1484,6 +1497,7 @@ export type WSSubWindowMessage = z.infer<typeof WSSubWindowMessageSchema>;
 export type WSSlotPackUpdatedMessage = z.infer<typeof WSSlotPackUpdatedMessageSchema>;
 export type WSSpectrumCapabilitiesMessage = z.infer<typeof WSSpectrumCapabilitiesMessageSchema>;
 export type WSSubscribeSpectrumMessage = z.infer<typeof WSSubscribeSpectrumMessageSchema>;
+export type WSSpectrumSubscriptionChangedMessage = z.infer<typeof WSSpectrumSubscriptionChangedMessageSchema>;
 export type WSSpectrumFrameMessage = z.infer<typeof WSSpectrumFrameMessageSchema>;
 export type WSSpectrumSessionStateChangedMessage = z.infer<typeof WSSpectrumSessionStateChangedMessageSchema>;
 export type WSInvokeSpectrumControlMessage = z.infer<typeof WSInvokeSpectrumControlMessageSchema>;
@@ -1539,6 +1553,7 @@ export interface DigitalRadioEngineEvents {
   slotPackUpdated: (slotPack: z.infer<typeof SlotPackSchema>) => void;
   slotPacksReset: (data: z.infer<typeof WSSlotPacksResetMessageSchema>['data']) => void;
   spectrumCapabilities: (data: z.infer<typeof SpectrumCapabilitiesSchema>) => void;
+  spectrumSubscriptionChanged: (data: z.infer<typeof WSSpectrumSubscriptionChangedMessageSchema>['data']) => void;
   spectrumFrame: (data: z.infer<typeof SpectrumFrameSchema>) => void;
   spectrumSessionStateChanged: (data: z.infer<typeof SpectrumSessionStateSchema>) => void;
 
