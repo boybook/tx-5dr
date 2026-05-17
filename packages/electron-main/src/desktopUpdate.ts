@@ -17,16 +17,9 @@ const DEFAULT_OSS_BASE_URL = 'https://tx5dr.oss-cn-hangzhou.aliyuncs.com';
 const WEBSITE_URL = 'https://tx5dr.com';
 const RECENT_COMMITS_LIMIT = 10;
 const PENDING_UPDATE_FILE = 'pending-update-install.json';
-const COUNTRY_LOOKUP_URLS = [
-  'https://ipinfo.io/country',
-  'https://ifconfig.co/country-iso',
-  'https://ipapi.co/country/',
-  'https://api.country.is/',
-] as const;
 
 type UpdateChannel = 'release' | 'nightly';
-type UpdateSource = 'oss' | 'github';
-type UpdateSourcePolicy = 'auto' | 'oss' | 'github';
+type UpdateSource = 'oss';
 export type DesktopUpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'unsupported' | 'error';
 
 type AutoUpdateTarget = 'nsis' | 'mac-zip' | 'appimage';
@@ -211,16 +204,6 @@ function normalizeVersion(value: string | null | undefined): string {
   return (value || '').trim().replace(/^v/i, '');
 }
 
-function normalizeCountryCode(input: string | null | undefined): string | null {
-  if (!input) return null;
-  const trimmed = input.trim().toUpperCase();
-  if (/^[A-Z]{2}$/.test(trimmed)) {
-    return trimmed;
-  }
-  const apiCountryMatch = trimmed.match(/"country"\s*:\s*"([A-Z]{2})"/);
-  return apiCountryMatch?.[1] || null;
-}
-
 function parseVersionSegments(version: string): number[] {
   return normalizeVersion(version)
     .split('-')[0]
@@ -370,29 +353,6 @@ async function fetchJson<T>(url: string, timeoutMs = 5000, headers?: Record<stri
   return JSON.parse(text) as T;
 }
 
-async function fetchCountryCode(): Promise<string | null> {
-  for (const url of COUNTRY_LOOKUP_URLS) {
-    try {
-      const text = await fetchText(url, 4000);
-      const country = normalizeCountryCode(text);
-      if (country) {
-        return country;
-      }
-    } catch {
-      // ignore
-    }
-  }
-  return null;
-}
-
-async function resolvePreferredSource(policy: UpdateSourcePolicy): Promise<UpdateSource> {
-  if (policy === 'oss' || policy === 'github') {
-    return policy;
-  }
-  const country = await fetchCountryCode();
-  return country === 'CN' ? 'oss' : 'github';
-}
-
 function getOssManifestUrl(channel: UpdateChannel): string {
   const baseUrl = normalizeUrl(process.env.TX5DR_DOWNLOAD_BASE_URL || DEFAULT_OSS_BASE_URL);
   return joinUrl(baseUrl, `tx-5dr/app/${channel}/latest.json`);
@@ -449,19 +409,11 @@ function preferredPackageTypes(platform: string): string[] {
 
 function resolveAssetDownload(
   asset: DesktopUpdateAsset,
-  preferredSource: UpdateSource,
 ): { source: UpdateSource; url: string | null } {
-  const candidates: Array<{ source: UpdateSource; url: string | null }> = preferredSource === 'oss'
-    ? [
-      { source: 'oss', url: asset.url_cn || asset.url_oss || asset.url || null },
-      { source: 'github', url: asset.url_global || asset.url_github || null },
-      { source: 'oss', url: asset.url || null },
-    ]
-    : [
-      { source: 'github', url: asset.url_global || asset.url_github || null },
-      { source: 'oss', url: asset.url_cn || asset.url_oss || asset.url || null },
-      { source: 'oss', url: asset.url || null },
-    ];
+  const candidates: Array<{ source: UpdateSource; url: string | null }> = [
+    { source: 'oss', url: asset.url_cn || asset.url_oss || asset.url || null },
+    { source: 'oss', url: asset.url || null },
+  ];
 
   for (const candidate of candidates) {
     if (candidate.url) {
@@ -469,10 +421,10 @@ function resolveAssetDownload(
     }
   }
 
-  return { source: preferredSource, url: null };
+  return { source: 'oss', url: null };
 }
 
-function listDownloadOptions(manifest: DesktopUpdateManifest, preferredSource: UpdateSource): DesktopDownloadOption[] {
+function listDownloadOptions(manifest: DesktopUpdateManifest): DesktopDownloadOption[] {
   const assets = Array.isArray(manifest.assets) ? manifest.assets : [];
   const platform = currentPlatform();
   const arch = currentArch();
@@ -498,7 +450,7 @@ function listDownloadOptions(manifest: DesktopUpdateManifest, preferredSource: U
 
   return ordered
     .map((asset, index) => {
-      const resolved = resolveAssetDownload(asset, preferredSource);
+      const resolved = resolveAssetDownload(asset);
       if (!resolved.url) {
         return null;
       }
@@ -661,7 +613,6 @@ function buildUpdateInfoFromAsset(
 
 function resolvePreparedAutoUpdate(
   manifest: DesktopUpdateManifest,
-  preferredSource: UpdateSource,
 ): { update: PreparedAutoUpdate | null; reason: string | null } {
   const platform = currentPlatform();
   const arch = currentArch();
@@ -689,7 +640,7 @@ function resolvePreparedAutoUpdate(
     return { update: null, reason: 'auto_update_requires_signed_zip_install' };
   }
 
-  const resolved = resolveAssetDownload(asset, preferredSource);
+  const resolved = resolveAssetDownload(asset);
   if (!resolved.url) {
     return { update: null, reason: 'auto_update_download_url_unavailable' };
   }
@@ -824,7 +775,7 @@ export class DesktopUpdateService {
     });
   }
 
-  async checkForUpdates(policy: UpdateSourcePolicy = 'auto'): Promise<DesktopUpdateStatus> {
+  async checkForUpdates(): Promise<DesktopUpdateStatus> {
     this.preparedAutoUpdate = null;
     this.setStatus({
       checking: true,
@@ -835,14 +786,13 @@ export class DesktopUpdateService {
     });
 
     try {
-      const preferredSource = await resolvePreferredSource(policy);
       const manifest = await fetchJson<DesktopUpdateManifest>(getOssManifestUrl(BUILD_INFO.channel), 8000);
-      const downloadOptions = listDownloadOptions(manifest, preferredSource);
+      const downloadOptions = listDownloadOptions(manifest);
       const recentCommits = normalizeRecentCommits(manifest);
       const downloadAsset = downloadOptions[0] || null;
       const updateAvailable = shouldUpdateFromManifest(manifest);
       const identity = updateIdentityFromManifest(manifest);
-      const prepared = updateAvailable ? resolvePreparedAutoUpdate(manifest, preferredSource) : { update: null, reason: null };
+      const prepared = updateAvailable ? resolvePreparedAutoUpdate(manifest) : { update: null, reason: null };
       this.preparedAutoUpdate = prepared.update;
       const pendingState = getInitialPendingState();
 
@@ -979,7 +929,8 @@ export class DesktopUpdateService {
       }
       writePendingUpdateInstall(this.status);
       this.beforeQuitAndInstall?.();
-      this.updater.quitAndInstall(process.platform === 'win32', true);
+      // Keep the NSIS installer visible on Windows so users can see progress during slow updates.
+      this.updater.quitAndInstall(false, true);
       return this.getStatus();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

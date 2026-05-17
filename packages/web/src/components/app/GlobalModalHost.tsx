@@ -1,7 +1,7 @@
 import React, { memo, useEffect, useState } from 'react';
 import { useHasMinRole } from '../../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
-import { SettingsModal, type SettingsTab, type SettingsSection } from '../settings/SettingsModal';
+import { SettingsModal, type SettingsTab } from '../settings/SettingsModal';
 import { ProfileModal } from '../radio/profile/ProfileModal';
 import { AccountSecurityModal } from '../auth/AccountSecurityModal';
 
@@ -12,7 +12,6 @@ function GlobalModalHostInner() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('radio');
   const [settingsInitialFrequencyPresetMode, setSettingsInitialFrequencyPresetMode] = useState<string | undefined>(undefined);
-  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection | undefined>(undefined);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isAccountSecurityOpen, setIsAccountSecurityOpen] = useState(false);
 
@@ -24,11 +23,9 @@ function GlobalModalHostInner() {
     };
 
     const handleOpenSettingsModal = (event: Event) => {
-      const customEvent = event as CustomEvent<{ tab?: SettingsTab; frequencyPresetMode?: string; section?: SettingsSection }>;
+      const customEvent = event as CustomEvent<{ tab?: SettingsTab; frequencyPresetMode?: string }>;
       const tab = customEvent.detail?.tab;
       const frequencyPresetMode = customEvent.detail?.frequencyPresetMode;
-      const section = customEvent.detail?.section;
-
       if (tab) {
         setSettingsInitialTab(tab);
       }
@@ -36,7 +33,6 @@ function GlobalModalHostInner() {
       setSettingsInitialFrequencyPresetMode(
         typeof frequencyPresetMode === 'string' ? frequencyPresetMode : undefined,
       );
-      setSettingsInitialSection(section);
       setIsSettingsOpen(true);
     };
 
@@ -63,7 +59,6 @@ function GlobalModalHostInner() {
           onClose={() => setIsSettingsOpen(false)}
           initialTab={settingsInitialTab}
           initialFrequencyPresetMode={settingsInitialFrequencyPresetMode}
-          initialSection={settingsInitialSection}
         />
       )}
 

@@ -12,6 +12,7 @@ import { isElectron } from '../utils/config';
 import { AboutHeader } from './about/AboutHeader';
 import { DependencyList } from './about/DependencyList';
 import { SponsorList } from './about/SponsorList';
+import { DesktopUpdateCard } from '../components/app/DesktopUpdateCard';
 import { useLanguage } from '../hooks/useLanguage';
 
 const REPO_URL = 'https://github.com/boybook/tx-5dr';
@@ -74,6 +75,8 @@ export const AboutPage: React.FC<AboutPageProps> = ({ embedded }) => {
             <AboutHeader />
           </CardBody>
         </Card>
+
+        <DesktopUpdateCard />
 
         <Card shadow="none">
           <CardBody className="gap-3 px-6 py-5">

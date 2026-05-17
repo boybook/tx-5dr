@@ -1,8 +1,8 @@
 const path = require('path');
 const { getBuilderExtraResources, packageAfterCopy } = require('./scripts/electron-package-hooks.cjs');
 
-const LINUX_SHORT_DESCRIPTION = 'TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio';
-const LINUX_LONG_DESCRIPTION = 'TX-5DR - Shared Node backend + web browser client + optional Electron shell';
+const APP_SHORT_DESCRIPTION = 'A modern digital radio station for amateur radio operators.';
+const APP_LONG_DESCRIPTION = 'A modern digital radio station for amateur radio operators. Operate FT8, FT4, and voice modes from any web browser - anywhere, anytime.';
 const LINUX_DEB_DEPENDS = [
   'libgtk-3-0',
   'libnotify4',
@@ -117,13 +117,13 @@ module.exports = {
     artifactName: 'TX-5DR-${version}-linux-${arch}.${ext}',
     maintainer: 'BG5DRB <bg5drb@example.com>',
     vendor: 'TX-5DR Team',
-    synopsis: LINUX_SHORT_DESCRIPTION,
+    synopsis: APP_SHORT_DESCRIPTION,
     // electron-builder derives desktop Comment from linux.description after entry overrides.
-    description: LINUX_SHORT_DESCRIPTION,
+    description: APP_SHORT_DESCRIPTION,
     desktop: {
       entry: {
         Name: 'tx-5dr',
-        Comment: LINUX_SHORT_DESCRIPTION,
+        Comment: APP_LONG_DESCRIPTION,
         GenericName: 'Ham Radio Application',
         StartupNotify: 'true',
       },
@@ -136,7 +136,7 @@ module.exports = {
     packageName: 'tx-5dr',
     priority: 'optional',
     packageCategory: 'utils',
-    description: LINUX_LONG_DESCRIPTION,
+    description: APP_LONG_DESCRIPTION,
     depends: LINUX_DEB_DEPENDS,
     recommends: ['pulseaudio | libasound2'],
     fpm: ['--deb-suggests', 'gir1.2-gnomekeyring-1.0', '--deb-suggests', 'libgnome-keyring0', '--deb-suggests', 'lsb-release'],
@@ -144,7 +144,7 @@ module.exports = {
   rpm: {
     packageName: 'tx-5dr',
     packageCategory: 'utils',
-    synopsis: LINUX_SHORT_DESCRIPTION,
-    description: LINUX_LONG_DESCRIPTION,
+    synopsis: APP_SHORT_DESCRIPTION,
+    description: APP_LONG_DESCRIPTION,
   },
 };

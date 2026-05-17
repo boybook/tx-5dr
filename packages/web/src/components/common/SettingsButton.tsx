@@ -13,7 +13,7 @@ export function SettingsButton() {
     if (isUnreadUpdateAvailable) {
       markCurrentAsRead();
       window.dispatchEvent(new CustomEvent('openSettingsModal', {
-        detail: { tab: 'system', section: 'updates' },
+        detail: { tab: 'about' },
       }));
       return;
     }

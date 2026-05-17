@@ -1,4 +1,4 @@
-import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
@@ -28,14 +28,12 @@ import type {
   DesktopHttpsStatus,
   DesktopHttpsMode,
   ServerCpuProfileStatus,
-  SystemUpdateStatus,
 } from '@tx5dr/contracts';
 import { DEFAULT_DECODE_WINDOW_SETTINGS, FT8_WINDOW_PRESETS, FT4_WINDOW_PRESETS, isValidNtpServerHost } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
 import { createLogger } from '../../utils/logger';
 import { useConnection } from '../../store/radioStore';
 import { useWSEvent } from '../../hooks/useWSEvent';
-import { useUpdateNotification, type UpdateStatusWithDownloads } from '../app/UpdateNotificationProvider';
 
 interface DecodeWindowState {
   ft8Preset: string;
@@ -43,42 +41,6 @@ interface DecodeWindowState {
   ft4Preset: string;
   ft4CustomWindows: number[];
 }
-
-interface DesktopUpdateState extends Omit<SystemUpdateStatus, 'currentDigest' | 'latestDigest'> {
-  checking?: boolean;
-  downloadUrl?: string | null;
-  downloadOptions?: Array<{
-    name: string;
-    url: string;
-    packageType: string;
-    platform: string;
-    arch: string;
-    recommended: boolean;
-    source: 'oss' | 'github';
-    autoUpdateSupported?: boolean;
-    autoUpdateTarget?: string | null;
-    installerFamily?: string | null;
-  }>;
-  downloadSource?: 'oss' | 'github' | null;
-  recentCommits?: Array<{
-    id: string;
-    shortId: string;
-    title: string;
-    publishedAt: string | null;
-  }>;
-  currentDigest?: string | null;
-  latestDigest?: string | null;
-  phase?: DesktopUpdateStatus['phase'];
-  autoUpdateSupported?: boolean;
-  autoUpdateTarget?: string | null;
-  autoUpdateInstallerFamily?: string | null;
-  autoUpdateReason?: string | null;
-  downloadProgress?: DesktopUpdateStatus['downloadProgress'];
-  downloaded?: boolean;
-  pendingInstallIdentity?: string | null;
-  lastInstallFailed?: boolean;
-}
-
 
 type RealtimeRuntimeView = NonNullable<RealtimeSettingsResponseData['runtime']>;
 
@@ -95,7 +57,6 @@ const SETTINGS_MUTED_CLASS = 'text-xs leading-5 text-default-400';
 const SETTINGS_PANEL_CLASS = 'rounded-medium border border-divider bg-default-50 px-3 py-3 dark:bg-default-100/5';
 const SETTINGS_SOFT_PANEL_CLASS = 'rounded-medium bg-default-50 px-3 py-3 dark:bg-default-100/5';
 const SETTINGS_METRIC_CLASS = 'rounded-medium bg-content1 px-3 py-2';
-const DESKTOP_UPDATE_COMMITS_URL = 'https://github.com/boybook/tx-5dr/commits/main';
 
 interface NtpServerDraftItem {
   id: string;
@@ -210,36 +171,6 @@ function getDesktopHttpsStatusColor(status: DesktopHttpsStatus['certificateStatu
   if (status === 'valid') return 'success';
   if (status === 'invalid') return 'danger';
   return 'warning';
-}
-
-function getDesktopUpdateSourceColor(source: DesktopUpdateState['metadataSource']): 'success' | 'primary' | 'default' {
-  if (source === 'oss') return 'success';
-  if (source === 'github') return 'primary';
-  return 'default';
-}
-
-function getDesktopUpdateOptionLabel(
-  packageType: string,
-  t: (key: string) => string,
-): string {
-  switch (packageType) {
-    case 'exe':
-      return t('system.desktopUpdatePackageType.exe');
-    case 'dmg':
-      return t('system.desktopUpdatePackageType.dmg');
-    case '7z':
-      return t('system.desktopUpdatePackageType.7z');
-    case 'zip':
-      return t('system.desktopUpdatePackageType.zip');
-    case 'deb':
-      return t('system.desktopUpdatePackageType.deb');
-    case 'rpm':
-      return t('system.desktopUpdatePackageType.rpm');
-    case 'AppImage':
-      return t('system.desktopUpdatePackageType.AppImage');
-    default:
-      return packageType.toUpperCase();
-  }
 }
 
 function getWindowCount(preset: string, customWindows: number[], presets: Record<string, number[]>): number {
@@ -373,7 +304,6 @@ export interface SystemSettingsRef {
 
 interface SystemSettingsProps {
   onUnsavedChanges?: (hasChanges: boolean) => void;
-  initialSection?: 'updates';
 }
 
 function getReportIntervalOptions(t: (key: string) => string) {
@@ -388,7 +318,7 @@ function getReportIntervalOptions(t: (key: string) => string) {
 export const SystemSettings = forwardRef<
   SystemSettingsRef,
   SystemSettingsProps
->(({ onUnsavedChanges, initialSection }, ref) => {
+>(({ onUnsavedChanges }, ref) => {
   const { t } = useTranslation();
   const connection = useConnection();
   const REPORT_INTERVAL_OPTIONS = useMemo(() => getReportIntervalOptions(t), [t]);
@@ -434,8 +364,6 @@ export const SystemSettings = forwardRef<
   const [closeBehavior, setCloseBehavior] = useState<string>('ask');
   const [originalCloseBehavior, setOriginalCloseBehavior] = useState<string>('ask');
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
-  const updateNotification = useUpdateNotification();
-  const updateCardRef = useRef<HTMLDivElement | null>(null);
   const [desktopHttpsStatus, setDesktopHttpsStatus] = useState<DesktopHttpsStatus | null>(null);
   const [desktopHttpsEnabled, setDesktopHttpsEnabled] = useState(false);
   const [originalDesktopHttpsEnabled, setOriginalDesktopHttpsEnabled] = useState(false);
@@ -449,10 +377,6 @@ export const SystemSettings = forwardRef<
   const [desktopHttpsUrlCopied, setDesktopHttpsUrlCopied] = useState(false);
   const [desktopHttpsPendingCertPath, setDesktopHttpsPendingCertPath] = useState<string | null>(null);
   const [desktopHttpsPendingKeyPath, setDesktopHttpsPendingKeyPath] = useState<string | null>(null);
-  const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateState | null>(null);
-  const [desktopUpdateBusy, setDesktopUpdateBusy] = useState(false);
-  const [desktopUpdateError, setDesktopUpdateError] = useState('');
-  const [desktopUpdateExpanded, setDesktopUpdateExpanded] = useState(false);
   const [cpuProfileStatus, setCpuProfileStatus] = useState<ServerCpuProfileStatus | null>(null);
   const [cpuProfileBusy, setCpuProfileBusy] = useState(false);
   const [cpuProfilePathCopied, setCpuProfilePathCopied] = useState(false);
@@ -472,22 +396,7 @@ export const SystemSettings = forwardRef<
     if (isElectron) {
       void loadDesktopHttpsSettings();
     }
-    void loadDesktopUpdateStatus();
   }, []);
-
-  useEffect(() => {
-    if (updateNotification.status) {
-      setDesktopUpdateStatus(updateNotification.status as DesktopUpdateState);
-      setDesktopUpdateError(updateNotification.status.errorMessage || '');
-    }
-  }, [updateNotification.status]);
-
-  useEffect(() => {
-    if (initialSection !== 'updates') return;
-    window.setTimeout(() => {
-      updateCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 0);
-  }, [initialSection]);
 
   const loadSettings = async () => {
     try {
@@ -752,150 +661,6 @@ export const SystemSettings = forwardRef<
       logger.error('Failed to load desktop HTTPS settings:', err);
     }
   }, [applyDesktopHttpsSnapshot]);
-
-  const loadDesktopUpdateStatus = useCallback(async () => {
-    try {
-      if (updateNotification.status) {
-        setDesktopUpdateStatus(updateNotification.status as DesktopUpdateState);
-        setDesktopUpdateError(updateNotification.status.errorMessage || '');
-        setDesktopUpdateExpanded(false);
-        return;
-      }
-
-      if (window.electronAPI?.updater?.getStatus) {
-        const status = await window.electronAPI.updater.getStatus();
-        setDesktopUpdateStatus(status as DesktopUpdateState);
-        setDesktopUpdateError(status.errorMessage || '');
-        setDesktopUpdateExpanded(false);
-        return;
-      }
-
-      const status = await api.getSystemUpdateStatus();
-      setDesktopUpdateStatus(status as DesktopUpdateState);
-      setDesktopUpdateError(status.errorMessage || '');
-      setDesktopUpdateExpanded(false);
-    } catch (err) {
-      logger.error('Failed to load update status:', err);
-      setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateCheckFailed'));
-    }
-  }, [t, updateNotification.status]);
-
-  const handleCheckDesktopUpdate = useCallback(async () => {
-    setDesktopUpdateBusy(true);
-    setDesktopUpdateError('');
-    try {
-      let status: UpdateStatusWithDownloads | SystemUpdateStatus | DesktopUpdateStatus | null = null;
-      if (updateNotification.refresh) {
-        status = await updateNotification.refresh();
-      }
-      if (!status && window.electronAPI?.updater?.check) {
-        status = await window.electronAPI.updater.check();
-      }
-      if (!status) {
-        status = await api.getSystemUpdateStatus();
-      }
-      setDesktopUpdateStatus(status as DesktopUpdateState);
-      setDesktopUpdateError(status.errorMessage || '');
-      setDesktopUpdateExpanded(false);
-    } catch (err) {
-      logger.error('Failed to check update:', err);
-      setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateCheckFailed'));
-    } finally {
-      setDesktopUpdateBusy(false);
-    }
-  }, [t, updateNotification]);
-
-  useEffect(() => {
-    if (!window.electronAPI?.updater?.onStatus) return undefined;
-    const handleStatus = (status: DesktopUpdateStatus) => {
-      setDesktopUpdateStatus(status as DesktopUpdateState);
-      setDesktopUpdateError(status.errorMessage || '');
-    };
-    window.electronAPI.updater.onStatus(handleStatus);
-    return () => {
-      window.electronAPI?.updater?.offStatus?.(handleStatus);
-    };
-  }, []);
-
-  const handleOpenDesktopUpdateDownload = useCallback(async (url?: string) => {
-    if (!window.electronAPI?.updater?.openDownload) return;
-    setDesktopUpdateBusy(true);
-    setDesktopUpdateError('');
-    try {
-      await window.electronAPI.updater.openDownload(url);
-    } catch (err) {
-      logger.error('Failed to open desktop update download:', err);
-      setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateOpenFailed'));
-    } finally {
-      setDesktopUpdateBusy(false);
-    }
-  }, [t]);
-
-  const handleDownloadDesktopUpdate = useCallback(async () => {
-    if (!window.electronAPI?.updater?.download) {
-      await handleOpenDesktopUpdateDownload();
-      return;
-    }
-    setDesktopUpdateBusy(true);
-    setDesktopUpdateError('');
-    try {
-      const status = await window.electronAPI.updater.download();
-      setDesktopUpdateStatus(status as DesktopUpdateState);
-      setDesktopUpdateError(status.errorMessage || '');
-    } catch (err) {
-      logger.error('Failed to download desktop update:', err);
-      setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateDownloadFailed'));
-    } finally {
-      setDesktopUpdateBusy(false);
-    }
-  }, [handleOpenDesktopUpdateDownload, t]);
-
-  const handleInstallDesktopUpdate = useCallback(async () => {
-    if (!window.electronAPI?.updater?.installAndRestart) return;
-    setDesktopUpdateBusy(true);
-    setDesktopUpdateError('');
-    try {
-      const status = await window.electronAPI.updater.installAndRestart();
-      setDesktopUpdateStatus(status as DesktopUpdateState);
-      setDesktopUpdateError(status.errorMessage || '');
-    } catch (err) {
-      logger.error('Failed to install desktop update:', err);
-      setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateInstallFailed'));
-      setDesktopUpdateBusy(false);
-    }
-  }, [t]);
-
-  const handleOpenUpdateWebsite = useCallback(async () => {
-    const url = desktopUpdateStatus?.websiteUrl || 'https://tx5dr.com';
-    setDesktopUpdateBusy(true);
-    setDesktopUpdateError('');
-    try {
-      if (window.electronAPI?.shell?.openExternal) {
-        await window.electronAPI.shell.openExternal(url);
-      } else {
-        window.open(url, '_blank', 'noopener,noreferrer');
-      }
-    } catch (err) {
-      logger.error('Failed to open update website:', err);
-      setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateOpenFailed'));
-    } finally {
-      setDesktopUpdateBusy(false);
-    }
-  }, [desktopUpdateStatus?.websiteUrl, t]);
-
-  const handleOpenDesktopUpdateCommits = useCallback(async () => {
-    if (!window.electronAPI?.shell?.openExternal) return;
-    setDesktopUpdateBusy(true);
-    setDesktopUpdateError('');
-    try {
-      await window.electronAPI.shell.openExternal(DESKTOP_UPDATE_COMMITS_URL);
-    } catch (err) {
-      logger.error('Failed to open desktop update commits page:', err);
-      setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateOpenFailed'));
-    } finally {
-      setDesktopUpdateBusy(false);
-    }
-  }, [t]);
 
   const copyDesktopHttpsUrl = useCallback(async () => {
     const url = desktopHttpsStatus?.browserAccessUrl;
@@ -1335,30 +1100,6 @@ export const SystemSettings = forwardRef<
     : t('system.rtcDataAudioPublicCandidateDisabled');
   const desktopHttpsCertificateMeta = desktopHttpsStatus?.certificateMeta ?? null;
   const desktopHttpsBrowserUrl = desktopHttpsStatus?.browserAccessUrl ?? null;
-  const desktopUpdateSourceLabel = desktopUpdateStatus?.metadataSource
-    ? t(`system.desktopUpdateSourceValue.${desktopUpdateStatus.metadataSource}`)
-    : t('system.desktopUpdateSourceValue.unknown');
-  const desktopDownloadOptions = desktopUpdateStatus?.downloadOptions || [];
-  const desktopUpdatePhase = desktopUpdateStatus?.phase || (desktopUpdateStatus?.checking ? 'checking' : 'idle');
-  const desktopUpdateProgress = desktopUpdateStatus?.downloadProgress;
-  const desktopUpdateProgressLabel = desktopUpdateProgress
-    ? `${Math.round(desktopUpdateProgress.percent)}%`
-    : '';
-  const canAutoDownloadDesktopUpdate = Boolean(
-    isElectron
-    && desktopUpdateStatus?.updateAvailable
-    && desktopUpdateStatus?.autoUpdateSupported
-    && desktopUpdatePhase !== 'downloaded'
-    && desktopUpdatePhase !== 'installing',
-  );
-  const canInstallDownloadedDesktopUpdate = Boolean(isElectron && (desktopUpdateStatus?.downloaded || desktopUpdatePhase === 'downloaded'));
-  const isElectronUpdateTarget = isElectron || desktopUpdateStatus?.target === 'electron-app';
-  const updateTargetLabel = isElectronUpdateTarget
-    ? t('system.updateTargetElectron', 'Electron')
-    : desktopUpdateStatus?.target === 'docker'
-      ? t('system.updateTargetDocker', 'Docker')
-      : t('system.updateTargetLinuxServer', 'Linux Server');
-  const desktopRecentCommits = desktopUpdateStatus?.recentCommits || [];
   const ntpCanRestoreDefaults = !areStringArraysEqual(getNtpServerValues(ntpServers), defaultNtpServers);
   const cpuProfileState = cpuProfileStatus?.state ?? 'idle';
   const cpuProfilePrimaryAction = cpuProfileStatus
@@ -2784,251 +2525,6 @@ export const SystemSettings = forwardRef<
           </Card>
         </>
       )}
-
-      <Card ref={updateCardRef} shadow="none" radius="lg" className="order-[12]" classNames={SETTINGS_CARD_CLASS_NAMES}>
-            <CardBody className={`${SETTINGS_CARD_BODY_CLASS} space-y-4`}>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.updateTitle', 'Version Updates')}</h4>
-                  <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{isElectronUpdateTarget ? t('system.desktopUpdateDesc') : t('system.updateWebsiteOnlyDesc', 'Checks whether a newer build exists. This deployment is updated outside the web UI; use the official website for instructions.')}</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Chip size="sm" color="default" variant="flat">
-                    {updateTargetLabel}
-                  </Chip>
-                  <Chip size="sm" color="default" variant="flat">
-                    {desktopUpdateStatus?.channel === 'nightly'
-                      ? t('system.desktopUpdateChannelNightly')
-                      : t('system.desktopUpdateChannelRelease')}
-                  </Chip>
-                  <Chip size="sm" color={getDesktopUpdateSourceColor(desktopUpdateStatus?.metadataSource ?? null)} variant="flat">
-                    {t('system.desktopUpdateSource')}: {desktopUpdateSourceLabel}
-                  </Chip>
-                  <Chip size="sm" color={desktopUpdatePhase === 'error' ? 'danger' : desktopUpdatePhase === 'downloaded' ? 'success' : desktopUpdatePhase === 'unsupported' ? 'warning' : 'default'} variant="flat">
-                    {t(`system.desktopUpdatePhase.${desktopUpdatePhase}`)}
-                  </Chip>
-                </div>
-              </div>
-
-              {desktopUpdateError && (
-                <Alert color="danger" variant="flat" title={desktopUpdateError} />
-              )}
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className={SETTINGS_SOFT_PANEL_CLASS}>
-                  <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopUpdateCurrentVersion')}</p>
-                  <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{desktopUpdateStatus?.currentVersion || '-'}</p>
-                  <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>
-                    {t('system.desktopUpdateCurrentCommit', { value: desktopUpdateStatus?.currentCommit || '-' })}
-                  </p>
-                </div>
-
-                <div className={SETTINGS_SOFT_PANEL_CLASS}>
-                  <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopUpdateLatestVersion')}</p>
-                  <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{desktopUpdateStatus?.latestVersion || '-'}</p>
-                  <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>
-                    {t('system.desktopUpdatePublishedAt', { value: formatDateTimeValue(desktopUpdateStatus?.publishedAt) })}
-                  </p>
-                </div>
-              </div>
-
-              <div className={`${SETTINGS_SOFT_PANEL_CLASS} space-y-2`}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Chip
-                    size="sm"
-                    color={desktopUpdateStatus?.updateAvailable ? 'warning' : 'success'}
-                    variant="flat"
-                  >
-                    {desktopUpdateStatus?.updateAvailable
-                      ? t('system.desktopUpdateAvailable')
-                      : t('system.desktopUpdateUpToDate')}
-                  </Chip>
-                  {desktopUpdateStatus?.latestCommit && (
-                    <Chip size="sm" color="default" variant="flat">
-                      {t('system.desktopUpdateLatestCommit', { value: desktopUpdateStatus.latestCommit })}
-                    </Chip>
-                  )}
-                </div>
-
-                <div>
-                  <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopUpdateLatestSummary')}</p>
-                  <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>
-                    {desktopUpdateStatus?.latestCommitTitle || t('system.desktopUpdateNoSummary')}
-                  </p>
-                </div>
-
-                {desktopRecentCommits.length > 0 && (
-                  <div className="rounded-medium border border-divider bg-content1 px-3 py-3">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopUpdateRecentCommitsTitle')}</p>
-                        <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopUpdateRecentCommitsDesc')}</p>
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="light"
-                        onPress={() => setDesktopUpdateExpanded((value) => !value)}
-                      >
-                        {desktopUpdateExpanded
-                          ? t('system.desktopUpdateRecentCommitsCollapse')
-                          : t('system.desktopUpdateRecentCommitsExpand')}
-                      </Button>
-                    </div>
-
-                    {desktopUpdateExpanded && (
-                      <div className="mt-3 space-y-2">
-                        {desktopRecentCommits.map((commit) => (
-                          <div key={`${commit.id}-${commit.publishedAt || commit.shortId}`} className="rounded-medium border border-divider bg-default-50 px-3 py-3 dark:bg-default-100/5">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <p className={SETTINGS_SUBTITLE_CLASS}>
-                                {commit.title || t('system.desktopUpdateNoSummary')}
-                              </p>
-                              <Chip size="sm" color="default" variant="flat">
-                                {commit.shortId || commit.id || '-'}
-                              </Chip>
-                            </div>
-                            <p className={`mt-2 ${SETTINGS_SUBDESC_CLASS}`}>
-                              {t('system.desktopUpdateRecentCommitTime', { value: formatDateTimeValue(commit.publishedAt) })}
-                            </p>
-                            <p className={`mt-1 break-all ${SETTINGS_MUTED_CLASS}`}>
-                              {t('system.desktopUpdateRecentCommitId', { value: commit.id || commit.shortId || '-' })}
-                            </p>
-                          </div>
-                        ))}
-
-                        <Button
-                          size="sm"
-                          variant="flat"
-                          onPress={() => { void handleOpenDesktopUpdateCommits(); }}
-                          isDisabled={desktopUpdateBusy}
-                        >
-                          {t('system.desktopUpdateViewAllCommits')}
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <p className={`${SETTINGS_SUBDESC_CLASS} whitespace-pre-wrap`}>
-                  {desktopUpdateStatus?.releaseNotes || t('system.desktopUpdateNoNotes')}
-                </p>
-
-                {desktopUpdatePhase === 'downloading' && desktopUpdateProgress && (
-                  <div className="rounded-medium border border-divider bg-content1 px-3 py-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopUpdateDownloading')}</p>
-                      <Chip size="sm" color="primary" variant="flat">{desktopUpdateProgressLabel}</Chip>
-                    </div>
-                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-default-200">
-                      <div
-                        className="h-full rounded-full bg-primary transition-all"
-                        style={{ width: `${Math.max(0, Math.min(100, desktopUpdateProgress.percent))}%` }}
-                      />
-                    </div>
-                    <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>
-                      {t('system.desktopUpdateDownloadProgress', {
-                        transferred: Math.round((desktopUpdateProgress.transferred || 0) / 1024 / 1024),
-                        total: Math.round((desktopUpdateProgress.total || 0) / 1024 / 1024),
-                      })}
-                    </p>
-                  </div>
-                )}
-
-                {desktopUpdateStatus?.updateAvailable && !desktopUpdateStatus?.autoUpdateSupported && desktopUpdateStatus?.autoUpdateReason && (
-                  <Alert color="warning" variant="flat" title={t(`system.desktopUpdateAutoReason.${desktopUpdateStatus.autoUpdateReason}`, { defaultValue: t('system.desktopUpdateManualFallback') })} />
-                )}
-              </div>
-
-              {isElectronUpdateTarget && desktopDownloadOptions.length > 0 && (
-                <div className={`${SETTINGS_SOFT_PANEL_CLASS} space-y-3`}>
-                  <div>
-                    <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopUpdateDownloadOptionsTitle')}</p>
-                    <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopUpdateDownloadOptionsDesc')}</p>
-                  </div>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    {desktopDownloadOptions.map((option) => (
-                      <div key={option.url} className="rounded-medium border border-divider bg-content1 px-3 py-3">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className={SETTINGS_SUBTITLE_CLASS}>{getDesktopUpdateOptionLabel(option.packageType, t)}</p>
-                          {option.recommended && (
-                            <Chip size="sm" color="primary" variant="flat">
-                              {t('system.recommended')}
-                            </Chip>
-                          )}
-                        </div>
-                        <p className={`mt-1 break-all ${SETTINGS_MUTED_CLASS}`}>{option.name}</p>
-                        <div className="mt-3">
-                          <Button
-                            size="sm"
-                            color={option.recommended ? 'primary' : 'default'}
-                            variant={option.recommended ? 'solid' : 'flat'}
-                            onPress={() => { void handleOpenDesktopUpdateDownload(option.url); }}
-                            isDisabled={!desktopUpdateStatus?.updateAvailable || isSaving || desktopUpdateBusy}
-                          >
-                            {t('system.desktopUpdateManualDownload')}
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="flex flex-wrap gap-3">
-                <Button
-                  color="primary"
-                  variant="flat"
-                  onPress={() => { void handleCheckDesktopUpdate(); }}
-                  isLoading={desktopUpdateBusy || desktopUpdateStatus?.checking}
-                  isDisabled={isSaving || desktopHttpsBusy}
-                >
-                  {t('system.desktopUpdateCheck')}
-                </Button>
-
-                {isElectronUpdateTarget && canAutoDownloadDesktopUpdate && (
-                  <Button
-                    color="primary"
-                    onPress={() => { void handleDownloadDesktopUpdate(); }}
-                    isLoading={desktopUpdatePhase === 'downloading'}
-                    isDisabled={isSaving || desktopUpdateBusy || desktopUpdatePhase === 'downloading'}
-                  >
-                    {desktopUpdatePhase === 'downloading' ? t('system.desktopUpdateDownloading') : t('system.desktopUpdateDownload')}
-                  </Button>
-                )}
-
-                {isElectronUpdateTarget && canInstallDownloadedDesktopUpdate && (
-                  <Button
-                    color="success"
-                    onPress={() => { void handleInstallDesktopUpdate(); }}
-                    isLoading={desktopUpdatePhase === 'installing'}
-                    isDisabled={isSaving || desktopUpdateBusy || desktopUpdatePhase === 'installing'}
-                  >
-                    {t('system.desktopUpdateInstallAndRestart')}
-                  </Button>
-                )}
-
-                {isElectronUpdateTarget && !canAutoDownloadDesktopUpdate && !canInstallDownloadedDesktopUpdate && (
-                  <Button
-                    color="primary"
-                    onPress={() => { void handleOpenDesktopUpdateDownload(); }}
-                    isDisabled={!desktopUpdateStatus?.downloadUrl || !desktopUpdateStatus?.updateAvailable || isSaving || desktopUpdateBusy}
-                  >
-                    {t('system.desktopUpdateManualDownload')}
-                  </Button>
-                )}
-
-                {!isElectronUpdateTarget && (
-                  <Button
-                    color="primary"
-                    onPress={() => { void handleOpenUpdateWebsite(); }}
-                    isDisabled={isSaving || desktopUpdateBusy}
-                  >
-                    {t('system.updateOpenWebsite', 'Official website')}
-                  </Button>
-                )}
-              </div>
-            </CardBody>
-          </Card>
 
       {cpuProfileCard}
 

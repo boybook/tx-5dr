@@ -1,7 +1,7 @@
 {
   "name": "tx-5dr",
   "version": "1.0.0",
-  "description": "TX-5DR - Shared Node backend + web browser client + optional Electron shell",
+  "description": "A modern digital radio station for amateur radio operators. Operate FT8, FT4, and voice modes from any web browser - anywhere, anytime.",
   "private": true,
   "main": "packages/electron-main/dist/main.js",
   "workspaces": [
