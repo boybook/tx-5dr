@@ -1425,6 +1425,163 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('blocks candidates by DXCC entity when callsign-filter DXCC block is enabled', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      pluginConfigs: {
+        'callsign-filter': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'callsign-filter': {
+          dxccBlockEnabled: true,
+          blockedDxccEntityCodes: ['339'],
+        },
+      },
+    });
+
+    const filtered = await pluginManager.getHookDispatcher().dispatchFilterCandidates(
+      operator.config.id,
+      [
+        createParsedMessage('CQ JA1AAA PM95', -5, 1200),
+        createParsedMessage('CQ BG5DRB OL32', -7, 1400),
+      ],
+      (instance) => pluginManager.getCtxForInstance(instance),
+    );
+
+    expect(filtered.map((candidate) => getSenderCallsign(candidate.message))).toEqual(['BG5DRB']);
+
+    await pluginManager.shutdown();
+  });
+
+  it('uses only the active band DXCC blocks when callsign-filter per-band mode is enabled', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      radioBand: '40m',
+      pluginConfigs: {
+        'callsign-filter': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'callsign-filter': {
+          perBandEnabled: true,
+          dxccBlockEnabled: true,
+          blockedDxccEntityCodes: ['318'],
+          bandBlockedDxccEntityCodes: {
+            '40m': ['339'],
+            '20m': ['318'],
+          },
+        },
+      },
+    });
+
+    const filtered = await pluginManager.getHookDispatcher().dispatchFilterCandidates(
+      operator.config.id,
+      [
+        createParsedMessage('CQ JA1AAA PM95', -5, 1200),
+        createParsedMessage('CQ BG5DRB OL32', -7, 1400),
+        createParsedMessage('CQ K1ABC FN31', -3, 1600),
+      ],
+      (instance) => pluginManager.getCtxForInstance(instance),
+    );
+
+    expect(filtered.map((candidate) => getSenderCallsign(candidate.message))).toEqual(['BG5DRB', 'K1ABC']);
+
+    await pluginManager.shutdown();
+  });
+
+  it('does not inherit common DXCC blocks when per-band mode has no entities for the active band', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      radioBand: '20m',
+      pluginConfigs: {
+        'callsign-filter': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'callsign-filter': {
+          perBandEnabled: true,
+          dxccBlockEnabled: true,
+          blockedDxccEntityCodes: ['339'],
+          bandBlockedDxccEntityCodes: {
+            '40m': ['339'],
+          },
+        },
+      },
+    });
+
+    const filtered = await pluginManager.getHookDispatcher().dispatchFilterCandidates(
+      operator.config.id,
+      [
+        createParsedMessage('CQ JA1AAA PM95', -5, 1200),
+        createParsedMessage('CQ BG5DRB OL32', -7, 1400),
+      ],
+      (instance) => pluginManager.getCtxForInstance(instance),
+    );
+
+    expect(filtered.map((candidate) => getSenderCallsign(candidate.message))).toEqual(['JA1AAA', 'BG5DRB']);
+
+    await pluginManager.shutdown();
+  });
+
+  it('leaves DXCC entities untouched when callsign-filter DXCC block is disabled', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      pluginConfigs: {
+        'callsign-filter': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'callsign-filter': {
+          dxccBlockEnabled: false,
+          blockedDxccEntityCodes: ['339'],
+        },
+      },
+    });
+
+    const filtered = await pluginManager.getHookDispatcher().dispatchFilterCandidates(
+      operator.config.id,
+      [
+        createParsedMessage('CQ JA1AAA PM95', -5, 1200),
+        createParsedMessage('CQ BG5DRB OL32', -7, 1400),
+      ],
+      (instance) => pluginManager.getCtxForInstance(instance),
+    );
+
+    expect(filtered.map((candidate) => getSenderCallsign(candidate.message))).toEqual(['JA1AAA', 'BG5DRB']);
+
+    await pluginManager.shutdown();
+  });
+
+  it('applies per-band DXCC blocks as an extra condition in regex keep mode', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      radioBand: '40m',
+      pluginConfigs: {
+        'callsign-filter': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'callsign-filter': {
+          filterMode: 'regex-keep',
+          perBandEnabled: true,
+          bandFilterRules: {
+            '40m': ['^JA', '^BG5DRB$'],
+          },
+          dxccBlockEnabled: true,
+          bandBlockedDxccEntityCodes: {
+            '40m': ['339'],
+          },
+        },
+      },
+    });
+
+    const filtered = await pluginManager.getHookDispatcher().dispatchFilterCandidates(
+      operator.config.id,
+      [
+        createParsedMessage('CQ JA1AAA PM95', -5, 1200),
+        createParsedMessage('CQ BG5DRB OL32', -7, 1400),
+        createParsedMessage('CQ K1ABC FN31', -3, 1600),
+      ],
+      (instance) => pluginManager.getCtxForInstance(instance),
+    );
+
+    expect(filtered.map((candidate) => getSenderCallsign(candidate.message))).toEqual(['BG5DRB']);
+
+    await pluginManager.shutdown();
+  });
+
+
   it('keeps an empty candidate list when snr-filter removes all weak CQ calls', async () => {
     const { operator, pluginManager } = await createRuntimeHarness({
       autoReplyToCQ: true,

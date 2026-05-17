@@ -67,6 +67,61 @@ const perBandPlugin: PluginStatus = {
   settings: perBandPluginSettings,
 };
 
+const dxccPluginSettings = {
+  ...mockPluginSettings,
+  blockedDxccEntityCodes: {
+    type: 'string[]',
+    label: 'Blocked DXCC',
+    scope: 'operator',
+    default: [],
+    options: [
+      { label: 'Japan (339)', value: '339' },
+      { label: 'China (318)', value: '318' },
+    ],
+    visibleWhen: {
+      allOf: [
+        { setting: 'dxccBlockEnabled', equals: true },
+        { setting: 'perBandEnabled', notEquals: true },
+      ],
+    },
+  },
+  bandBlockedDxccEntityCodes: {
+    type: 'keyedStringArrays',
+    label: 'Blocked DXCC by band',
+    scope: 'operator',
+    default: {},
+    keys: [
+      { key: '40m', label: '40m' },
+      { key: '20m', label: '20m' },
+    ],
+    options: [
+      { label: 'Japan (339)', value: '339' },
+      { label: 'China (318)', value: '318' },
+    ],
+    visibleWhen: {
+      anyOf: [
+        {
+          allOf: [
+            { setting: 'dxccBlockEnabled', equals: true },
+            { setting: 'perBandEnabled', equals: true },
+          ],
+        },
+      ],
+    },
+  },
+  dxccBlockEnabled: {
+    type: 'boolean',
+    label: 'DXCC block',
+    scope: 'operator',
+    default: false,
+  },
+} satisfies NonNullable<PluginStatus['settings']>;
+
+const dxccPlugin: PluginStatus = {
+  ...mockPlugin,
+  settings: dxccPluginSettings,
+};
+
 describe('pluginSettings utils', () => {
   it('treats textarea drafts and normalized arrays as equal for string arrays', () => {
     expect(
@@ -106,6 +161,47 @@ describe('pluginSettings utils', () => {
     ).toEqual({
       threshold: -20,
     });
+  });
+
+
+  it('normalizes string array option selections when saving', () => {
+    expect(
+      normalizePluginSettingsForSave(
+        dxccPlugin,
+        {
+          watchList: [],
+          dxccBlockEnabled: true,
+          blockedDxccEntityCodes: [' 339 ', '318', ''],
+        },
+        'operator',
+      ),
+    ).toEqual({
+      watchList: [],
+      blockedDxccEntityCodes: ['339', '318'],
+      bandBlockedDxccEntityCodes: {},
+      dxccBlockEnabled: true,
+    });
+  });
+
+  it('evaluates visibleWhen for string array option selections', () => {
+    expect(isPluginSettingVisible(dxccPluginSettings.blockedDxccEntityCodes, { dxccBlockEnabled: false })).toBe(false);
+    expect(isPluginSettingVisible(dxccPluginSettings.blockedDxccEntityCodes, { dxccBlockEnabled: true, perBandEnabled: false })).toBe(true);
+    expect(isPluginSettingVisible(dxccPluginSettings.blockedDxccEntityCodes, { dxccBlockEnabled: true, perBandEnabled: true })).toBe(false);
+  });
+
+  it('evaluates composite visibleWhen conditions for per-band DXCC selections', () => {
+    expect(isPluginSettingVisible(dxccPluginSettings.bandBlockedDxccEntityCodes, {
+      dxccBlockEnabled: false,
+      perBandEnabled: true,
+    })).toBe(false);
+    expect(isPluginSettingVisible(dxccPluginSettings.bandBlockedDxccEntityCodes, {
+      dxccBlockEnabled: true,
+      perBandEnabled: false,
+    })).toBe(false);
+    expect(isPluginSettingVisible(dxccPluginSettings.bandBlockedDxccEntityCodes, {
+      dxccBlockEnabled: true,
+      perBandEnabled: true,
+    })).toBe(true);
   });
 
   it('reports invalid regex in watched callsign rules', () => {
@@ -162,6 +258,32 @@ describe('pluginSettings utils', () => {
         '20m': ['K1ABC'],
       },
       perBandEnabled: true,
+    });
+  });
+
+  it('normalizes keyed string array option selections when saving', () => {
+    expect(
+      normalizePluginSettingsForSave(
+        dxccPlugin,
+        {
+          watchList: [],
+          dxccBlockEnabled: true,
+          bandBlockedDxccEntityCodes: {
+            '40m': [' 339 ', '', '318'],
+            '30m': '291, 110',
+            '20m': [],
+          },
+        },
+        'operator',
+      ),
+    ).toEqual({
+      watchList: [],
+      blockedDxccEntityCodes: [],
+      bandBlockedDxccEntityCodes: {
+        '40m': ['339', '318'],
+        '30m': ['291', '110'],
+      },
+      dxccBlockEnabled: true,
     });
   });
 

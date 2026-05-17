@@ -467,6 +467,16 @@ interface RadioPowerControl {
 
 `ctx.radio` 只在服务端插件上下文中可用。`power.set()` 的 `profileId` 缺省为当前 active profile，`autoEngine` 缺省为 `true`。
 
+#### Callsign / DXCC helpers
+
+```typescript
+import { getCallsignInfo, listDXCCEntities, resolveDXCCEntity } from '@tx5dr/plugin-api';
+```
+
+- `resolveDXCCEntity(callsign)` 根据呼号解析 DXCC 实体，返回 `entity.entityCode/name/flag` 等信息
+- `getCallsignInfo(callsign)` 返回更适合显示的呼号国家/地区信息
+- `listDXCCEntities()` 返回当前内置 DXCC 实体列表，适合生成设置项多选选项
+
 #### LogbookAccess
 
 ```typescript
@@ -720,10 +730,10 @@ interface PluginSettingDescriptor {
   max?: number;
   options?: Array<{ label: string; value: string }>;
   /** 根据同一表单中的其它设置决定是否显示 */
-  visibleWhen?: { setting: string; equals?: unknown; notEquals?: unknown };
+  visibleWhen?: PluginSettingCondition;
   /** 根据同一表单中的其它设置切换说明文案 */
   descriptionWhen?: Array<{
-    when: { setting: string; equals?: unknown; notEquals?: unknown };
+    when: PluginSettingCondition;
     description: string;
   }>;
   /** type='object[]' 时用于生成编辑器字段 */
@@ -740,13 +750,23 @@ interface PluginSettingDescriptor {
   /** 隐藏设置（持久化但不显示在 UI） */
   hidden?: boolean;
 }
+
+type PluginSettingCondition = {
+  setting?: string;
+  equals?: unknown;
+  notEquals?: unknown;
+  allOf?: PluginSettingCondition[];
+  anyOf?: PluginSettingCondition[];
+};
 ```
 
 - `info` 类型是纯展示节点，不参与持久化和脏数据比较
 - `hidden` 设置仍然持久化和注入 `ctx.config`，只是不在生成的 UI 中显示
 - `object[]` 适合简单的全局共享列表；复杂交互建议用 iframe 设置页面
-- `keyedStringArrays` 适合固定分类下的多行字符串配置，例如“每个波段一组规则”
+- `string[]` 带 `options` 时渲染为可搜索多选；不带 `options` 时仍是多行文本
+- `keyedStringArrays` 适合固定分类下的字符串数组配置，例如“每个波段一组规则”；带 `options` 时每个固定键渲染为可搜索多选，不带 `options` 时每个固定键渲染为多行文本
 - `visibleWhen` / `descriptionWhen` 只依赖同一表单中的当前设置值，适合轻量条件显示，不应承载复杂业务逻辑
+- 条件旧写法 `{ setting, equals, notEquals }` 继续有效；需要多个条件时用 `{ allOf: [...] }` 或 `{ anyOf: [...] }`
 
 #### ctx.config 的合并规则
 
@@ -1370,7 +1390,18 @@ export default plugin;
 
 ### callsign-filter
 
-展示 `string[]` 设置和 `onFilterCandidates` 的过滤插件。默认未启用。
+展示 `string[]` 设置、按波段规则、DXCC 实体屏蔽和 `onFilterCandidates` 的过滤插件。默认未启用。呼号规则与 DXCC 屏蔽同时生效；未识别 DXCC 的呼号不会因 DXCC 规则被屏蔽。开启按波段后，呼号规则和 DXCC 屏蔽都按当前波段读取，未填写的波段不继承通用规则。
+
+| Key（operator scope） | 类型 | 默认值 |
+|------|------|--------|
+| `filterMode` | string | `blocklist` |
+| `filterRules` | string[] | `[]` |
+| `perBandEnabled` | boolean | `false` |
+| `bandFilterRules` | keyedStringArrays | `{}` |
+| `dxccBlockEnabled` | boolean | `false` |
+| `blockedDxccEntityCodes` | string[] options | `[]` |
+| `bandBlockedDxccEntityCodes` | keyedStringArrays options | `{}` |
+| `filterScope` | string | `auto-reply` |
 
 ### worked-station-bias
 

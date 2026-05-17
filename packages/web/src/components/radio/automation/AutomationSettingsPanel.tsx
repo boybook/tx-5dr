@@ -556,6 +556,65 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                 }
 
                 if (descriptor.type === 'string[]') {
+                  if (descriptor.options?.length) {
+                    const selectedValues = typeof currentValue === 'string'
+                      ? currentValue.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean)
+                      : Array.isArray(currentValue)
+                        ? currentValue.filter((item): item is string => typeof item === 'string')
+                        : [];
+                    return (
+                      <div
+                        key={fieldId}
+                        className="rounded-md border border-default-200/70 bg-content1 px-2.5 py-2"
+                      >
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-default-500">{label}</span>
+                          {dirty && (
+                            <Button
+                              size="sm"
+                              color="primary"
+                              variant="flat"
+                              className="h-6 min-w-0 rounded-md px-2 text-[11px]"
+                              isDisabled={Boolean(validationIssue) || savingSettingKey === fieldId}
+                              isLoading={visibleSavingSettingKey === fieldId}
+                              spinner={QUICK_ACTION_SPINNER}
+                              spinnerPlacement="end"
+                              onPress={() => void handleSaveDraftSetting(plugin, entry.settingKey)}
+                            >
+                              {t('common:button.save')}
+                            </Button>
+                          )}
+                        </div>
+                        {description && (
+                          <div className="mb-1.5 text-[11px] leading-4 text-default-400">
+                            {description}
+                          </div>
+                        )}
+                        <Select
+                          size="sm"
+                          aria-label={label}
+                          selectionMode="multiple"
+                          selectedKeys={new Set(selectedValues)}
+                          isDisabled={savingSettingKey === fieldId}
+                          onSelectionChange={(keys) => {
+                            handleSettingDraftChange(plugin.name, entry.settingKey, Array.from(keys as Set<string>).map(String));
+                          }}
+                          classNames={{
+                            trigger: 'min-h-8 px-2 rounded-md',
+                            value: 'whitespace-normal text-xs',
+                            popoverContent: 'min-w-[220px]',
+                          }}
+                        >
+                          {(descriptor.options ?? []).map((option) => (
+                            <SelectItem key={option.value} textValue={resolvePluginLabel(option.label, plugin.name)}>
+                              {resolvePluginLabel(option.label, plugin.name)}
+                            </SelectItem>
+                          ))}
+                        </Select>
+                      </div>
+                    );
+                  }
+
                   const textValue = typeof currentValue === 'string'
                     ? currentValue
                     : Array.isArray(currentValue)

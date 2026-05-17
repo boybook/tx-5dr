@@ -51,6 +51,8 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
   pluginName,
   settings,
 }) => {
+  const [optionSearch, setOptionSearch] = React.useState('');
+  const [keyedOptionSearch, setKeyedOptionSearch] = React.useState<Record<string, string>>({});
   const label = resolvePluginLabel(descriptor.label, pluginName);
   const descriptionKey = getPluginSettingDescriptionKey(pluginName, fieldKey, descriptor, settings);
   const description = descriptionKey
@@ -138,6 +140,88 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
   }
 
   if (descriptor.type === 'string[]') {
+    if (descriptor.options?.length) {
+      const selectedValues = typeof value === 'string'
+        ? value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean)
+        : Array.isArray(value)
+          ? value.filter((item): item is string => typeof item === 'string')
+          : Array.isArray(descriptor.default)
+            ? descriptor.default.filter((item): item is string => typeof item === 'string')
+            : [];
+      const selectedSet = new Set(selectedValues);
+      const normalizedSearch = optionSearch.trim().toLocaleLowerCase();
+      const filteredOptions = (descriptor.options ?? []).filter((opt) => {
+        if (!normalizedSearch) return true;
+        const optionLabel = resolvePluginLabel(opt.label, pluginName).toLocaleLowerCase();
+        return optionLabel.includes(normalizedSearch) || opt.value.toLocaleLowerCase().includes(normalizedSearch);
+      });
+      const toggleOption = (optionValue: string) => {
+        if (selectedSet.has(optionValue)) {
+          onChange(selectedValues.filter((entry) => entry !== optionValue));
+          return;
+        }
+        onChange([...selectedValues, optionValue]);
+      };
+
+      return (
+        <div className="rounded-lg border border-default-200/70 bg-content1 px-3 py-2.5">
+          <div className="mb-2">
+            <div className="text-sm font-medium text-default-700">{label}</div>
+            {description && (
+              <div className="mt-0.5 whitespace-pre-line text-xs leading-5 text-default-500">{description}</div>
+            )}
+          </div>
+          <Input
+            size="sm"
+            aria-label={i18n.t('common:search', { defaultValue: 'Search' })}
+            placeholder={i18n.t('common:search', { defaultValue: 'Search' })}
+            value={optionSearch}
+            onValueChange={setOptionSearch}
+            variant="bordered"
+          />
+          <div className="mt-2 flex items-center justify-between gap-3 text-xs text-default-500">
+            <span>
+              {i18n.t('settings:plugins.selectedCount', {
+                count: selectedValues.length,
+                defaultValue: `${selectedValues.length} selected`,
+              })}
+            </span>
+            {selectedValues.length > 0 && (
+              <Button size="sm" variant="light" className="h-6 min-w-0 px-2 text-xs" onPress={() => onChange([])}>
+                {i18n.t('common:button.clear', { defaultValue: 'Clear' })}
+              </Button>
+            )}
+          </div>
+          <div className="mt-2 max-h-64 overflow-y-auto rounded-md border border-default-200/70 bg-default-50/40 p-1">
+            {filteredOptions.length === 0 ? (
+              <div className="px-2 py-3 text-center text-xs text-default-400">
+                {i18n.t('settings:plugins.noOptions', { defaultValue: 'No options found.' })}
+              </div>
+            ) : filteredOptions.map((opt) => {
+              const optionLabel = resolvePluginLabel(opt.label, pluginName);
+              const selected = selectedSet.has(opt.value);
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${selected ? 'bg-primary-50 text-primary-700' : 'text-default-600 hover:bg-default-100'}`}
+                  onClick={() => toggleOption(opt.value)}
+                >
+                  <span className={`inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[10px] ${selected ? 'border-primary-500 bg-primary-500 text-white' : 'border-default-300 bg-content1'}`}>
+                    {selected ? '✓' : ''}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{optionLabel}</span>
+                </button>
+              );
+            })}
+          </div>
+          {validationMessage && (
+            <div className="mt-1 text-xs text-danger">{validationMessage}</div>
+          )}
+        </div>
+      );
+    }
+
     const currentValue = typeof value === 'string'
       ? value
       : Array.isArray(value)
@@ -168,6 +252,19 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
         ? descriptor.default as Record<string, unknown>
         : {};
 
+    const getArrayValue = (key: string): string[] => {
+      const rowValue = currentRows[key];
+      if (typeof rowValue === 'string') {
+        return rowValue.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
+      }
+      if (Array.isArray(rowValue)) {
+        return rowValue.filter((item): item is string => typeof item === 'string')
+          .map((item) => item.trim())
+          .filter(Boolean);
+      }
+      return [];
+    };
+
     const getTextValue = (key: string): string => {
       const rowValue = currentRows[key];
       if (typeof rowValue === 'string') return rowValue;
@@ -178,6 +275,13 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
     };
 
     const updateKey = (key: string, nextValue: string) => {
+      onChange({
+        ...currentRows,
+        [key]: nextValue,
+      });
+    };
+
+    const updateKeyArray = (key: string, nextValue: string[]) => {
       onChange({
         ...currentRows,
         [key]: nextValue,
@@ -199,6 +303,88 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
               ? resolvePluginLabel(keyDescriptor.description, pluginName)
               : undefined;
             const isRowInvalid = validationIssue?.params?.band === keyDescriptor.label;
+            if (descriptor.options?.length) {
+              const selectedValues = getArrayValue(keyDescriptor.key);
+              const selectedSet = new Set(selectedValues);
+              const searchValue = keyedOptionSearch[keyDescriptor.key] ?? '';
+              const normalizedSearch = searchValue.trim().toLocaleLowerCase();
+              const filteredOptions = (descriptor.options ?? []).filter((opt) => {
+                if (!normalizedSearch) return true;
+                const optionLabel = resolvePluginLabel(opt.label, pluginName).toLocaleLowerCase();
+                return optionLabel.includes(normalizedSearch) || opt.value.toLocaleLowerCase().includes(normalizedSearch);
+              });
+              const toggleOption = (optionValue: string) => {
+                if (selectedSet.has(optionValue)) {
+                  updateKeyArray(keyDescriptor.key, selectedValues.filter((entry) => entry !== optionValue));
+                  return;
+                }
+                updateKeyArray(keyDescriptor.key, [...selectedValues, optionValue]);
+              };
+
+              return (
+                <div key={keyDescriptor.key} className="rounded-md border border-default-200/70 bg-default-50/40 p-2">
+                  <div className="mb-2 flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-default-700">{keyLabel}</div>
+                      {keyDescription && (
+                        <div className="mt-0.5 text-[11px] leading-4 text-default-500">{keyDescription}</div>
+                      )}
+                    </div>
+                    {selectedValues.length > 0 && (
+                      <Button
+                        size="sm"
+                        variant="light"
+                        className="h-6 min-w-0 shrink-0 px-2 text-[11px]"
+                        onPress={() => updateKeyArray(keyDescriptor.key, [])}
+                      >
+                        {i18n.t('common:button.clear', { defaultValue: 'Clear' })}
+                      </Button>
+                    )}
+                  </div>
+                  <Input
+                    size="sm"
+                    aria-label={`${keyLabel} ${i18n.t('common:search', { defaultValue: 'Search' })}`}
+                    placeholder={i18n.t('common:search', { defaultValue: 'Search' })}
+                    value={searchValue}
+                    onValueChange={(nextValue) => setKeyedOptionSearch((prev) => ({
+                      ...prev,
+                      [keyDescriptor.key]: nextValue,
+                    }))}
+                    variant="bordered"
+                  />
+                  <div className="mt-1.5 text-[11px] text-default-500">
+                    {i18n.t('settings:plugins.selectedCount', {
+                      count: selectedValues.length,
+                      defaultValue: `${selectedValues.length} selected`,
+                    })}
+                  </div>
+                  <div className="mt-1.5 max-h-36 overflow-y-auto rounded-md border border-default-200/70 bg-content1 p-1">
+                    {filteredOptions.length === 0 ? (
+                      <div className="px-2 py-3 text-center text-xs text-default-400">
+                        {i18n.t('settings:plugins.noOptions', { defaultValue: 'No options found.' })}
+                      </div>
+                    ) : filteredOptions.map((opt) => {
+                      const optionLabel = resolvePluginLabel(opt.label, pluginName);
+                      const selected = selectedSet.has(opt.value);
+                      return (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${selected ? 'bg-primary-50 text-primary-700' : 'text-default-600 hover:bg-default-100'}`}
+                          onClick={() => toggleOption(opt.value)}
+                        >
+                          <span className={`inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[10px] ${selected ? 'border-primary-500 bg-primary-500 text-white' : 'border-default-300 bg-content1'}`}>
+                            {selected ? '✓' : ''}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">{optionLabel}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
             return (
               <Textarea
                 key={keyDescriptor.key}

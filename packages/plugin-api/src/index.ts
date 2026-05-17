@@ -89,6 +89,19 @@ export type {
   PluginUdpRemoteInfo,
 } from './helpers.js';
 
+
+/** Callsign and DXCC helpers available to plugins. */
+export {
+  getCallsignInfo,
+  listDXCCEntities,
+  resolveDXCCEntity,
+} from '@tx5dr/core';
+export type {
+  CallsignInfo,
+  DXCCEntity,
+  DXCCResolutionResult,
+} from '@tx5dr/core';
+
 /** Common radio/message/settings types re-exported for plugin author convenience. */
 export type {
   FT8Message,

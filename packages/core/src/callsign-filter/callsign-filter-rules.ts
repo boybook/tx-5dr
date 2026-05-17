@@ -12,10 +12,13 @@
  * Empty rule list always allows all callsigns (filter disabled).
  */
 
+import { resolveDXCCEntity } from '../callsign/callsign.js';
+
 const REGEX_META_CHARS = /[\\^$.*+?()[\]{}|]/;
 
 export type CallsignFilterMode = 'blocklist' | 'regex-keep';
 export type CallsignBandFilterRules = Record<string, string[]>;
+export type CallsignBandDxccEntityCodes = Record<string, string[]>;
 
 export interface CallsignFilterRule {
   /** Original input line (before normalization). */
@@ -73,6 +76,104 @@ export function selectCallsignFilterRuleEntries(options: {
   }
 
   return Array.isArray(options.filterRules) ? normalizeEntries(options.filterRules) : [];
+}
+
+
+function normalizeDxccEntityCode(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
+    return String(value);
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (/^[1-9]\d*$/.test(trimmed)) return trimmed;
+  }
+  return undefined;
+}
+
+export function normalizeDxccEntityCodes(value: unknown): string[] {
+  const rawEntries = typeof value === 'string'
+    ? value.split(/\r?\n|,/)
+    : Array.isArray(value)
+      ? value
+      : [];
+
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const entry of rawEntries) {
+    const code = normalizeDxccEntityCode(entry);
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    normalized.push(code);
+  }
+  return normalized;
+}
+
+export function normalizeBandDxccEntityCodes(value: unknown): CallsignBandDxccEntityCodes {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  const normalized: CallsignBandDxccEntityCodes = {};
+  for (const [rawBand, rawEntries] of Object.entries(value)) {
+    const band = normalizeBandKey(rawBand);
+    if (!band) continue;
+    const entries = normalizeDxccEntityCodes(rawEntries);
+    if (entries.length > 0) {
+      normalized[band] = entries;
+    }
+  }
+  return normalized;
+}
+
+export function selectDxccBlockEntityCodes(options: {
+  perBandEnabled?: unknown;
+  blockedDxccEntityCodes?: unknown;
+  bandBlockedDxccEntityCodes?: unknown;
+  band?: unknown;
+}): string[] {
+  if (options.perBandEnabled === true) {
+    const band = normalizeBandKey(options.band);
+    if (!band || band === 'unknown') {
+      return [];
+    }
+    return normalizeBandDxccEntityCodes(options.bandBlockedDxccEntityCodes)[band] ?? [];
+  }
+
+  return normalizeDxccEntityCodes(options.blockedDxccEntityCodes);
+}
+
+export function resolveCallsignDxccEntityCode(callsign: unknown): string | undefined {
+  if (typeof callsign !== 'string' || !callsign.trim()) return undefined;
+  const code = resolveDXCCEntity(callsign.trim().toUpperCase()).entity?.entityCode;
+  return normalizeDxccEntityCode(code);
+}
+
+export function selectDxccEntityCodeForFilter(options: {
+  dxccId?: unknown;
+  callsign?: unknown;
+}): string | undefined {
+  return normalizeDxccEntityCode(options.dxccId)
+    ?? resolveCallsignDxccEntityCode(options.callsign);
+}
+
+export function evaluateDxccBlocklist(options: {
+  dxccBlockEnabled?: unknown;
+  blockedDxccEntityCodes?: unknown;
+  dxccId?: unknown;
+  callsign?: unknown;
+}): boolean {
+  if (options.dxccBlockEnabled !== true) return true;
+
+  const blockedCodes = new Set(normalizeDxccEntityCodes(options.blockedDxccEntityCodes));
+  if (blockedCodes.size === 0) return true;
+
+  const entityCode = selectDxccEntityCodeForFilter({
+    dxccId: options.dxccId,
+    callsign: options.callsign,
+  });
+  if (!entityCode) return true;
+
+  return !blockedCodes.has(entityCode);
 }
 
 export function normalizeCallsignFilterMode(value: unknown): CallsignFilterMode {

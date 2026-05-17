@@ -110,12 +110,24 @@ export const PluginKeyedStringArrayKeySchema = z.object({
 });
 export type PluginKeyedStringArrayKey = z.infer<typeof PluginKeyedStringArrayKeySchema>;
 
-export const PluginSettingConditionSchema = z.object({
-  setting: z.string(),
+export interface PluginSettingCondition {
+  /** Single setting key to compare. Preserves the original condition shape. */
+  setting?: string;
+  equals?: unknown;
+  notEquals?: unknown;
+  /** All nested conditions must match. */
+  allOf?: PluginSettingCondition[];
+  /** At least one nested condition must match. */
+  anyOf?: PluginSettingCondition[];
+}
+
+export const PluginSettingConditionSchema: z.ZodType<PluginSettingCondition> = z.lazy(() => z.object({
+  setting: z.string().optional(),
   equals: z.unknown().optional(),
   notEquals: z.unknown().optional(),
-});
-export type PluginSettingCondition = z.infer<typeof PluginSettingConditionSchema>;
+  allOf: z.array(PluginSettingConditionSchema).optional(),
+  anyOf: z.array(PluginSettingConditionSchema).optional(),
+}));
 
 export const PluginSettingConditionalDescriptionSchema = z.object({
   when: PluginSettingConditionSchema,

@@ -1,9 +1,12 @@
 import type { PluginDefinition } from '@tx5dr/plugin-api';
 import {
   evaluateCallsignFilter,
+  evaluateDxccBlocklist,
+  listDXCCEntities,
   normalizeCallsignFilterMode,
   parseCallsignFilterRules,
   selectCallsignFilterRuleEntries,
+  selectDxccBlockEntityCodes,
 } from '@tx5dr/core';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
@@ -38,6 +41,13 @@ const callsignFilterBandKeys = CALLSIGN_FILTER_BANDS.map((band) => ({
   label: band,
 }));
 
+const dxccEntityOptions = listDXCCEntities()
+  .filter((entity) => typeof entity.entityCode === 'number')
+  .map((entity) => ({
+    label: `${entity.flag ? `${entity.flag} ` : ''}${entity.name} (${entity.entityCode})`,
+    value: String(entity.entityCode),
+  }));
+
 export const callsignFilterPlugin: PluginDefinition = {
   name: 'callsign-filter',
   version: '1.0.0',
@@ -45,6 +55,13 @@ export const callsignFilterPlugin: PluginDefinition = {
   description: 'Filter candidate stations by callsign or advanced regex keep rules',
 
   settings: {
+    perBandEnabled: {
+      type: 'boolean',
+      default: false,
+      label: 'perBandEnabled',
+      description: 'perBandEnabledDesc',
+      scope: 'operator',
+    },
     filterOverview: {
       type: 'info',
       default: '',
@@ -81,13 +98,6 @@ export const callsignFilterPlugin: PluginDefinition = {
       scope: 'operator',
       visibleWhen: { setting: 'perBandEnabled', notEquals: true },
     },
-    perBandEnabled: {
-      type: 'boolean',
-      default: false,
-      label: 'perBandEnabled',
-      description: 'perBandEnabledDesc',
-      scope: 'operator',
-    },
     bandFilterRules: {
       type: 'keyedStringArrays',
       default: {},
@@ -107,6 +117,42 @@ export const callsignFilterPlugin: PluginDefinition = {
       keys: callsignFilterBandKeys,
       visibleWhen: { setting: 'perBandEnabled', equals: true },
     },
+    dxccBlockEnabled: {
+      type: 'boolean',
+      default: false,
+      label: 'dxccBlockEnabled',
+      description: 'dxccBlockEnabledDesc',
+      scope: 'operator',
+    },
+    blockedDxccEntityCodes: {
+      type: 'string[]',
+      default: [],
+      label: 'blockedDxccEntityCodes',
+      description: 'blockedDxccEntityCodesDesc',
+      scope: 'operator',
+      options: dxccEntityOptions,
+      visibleWhen: {
+        allOf: [
+          { setting: 'dxccBlockEnabled', equals: true },
+          { setting: 'perBandEnabled', notEquals: true },
+        ],
+      },
+    },
+    bandBlockedDxccEntityCodes: {
+      type: 'keyedStringArrays',
+      default: {},
+      label: 'bandBlockedDxccEntityCodes',
+      description: 'bandBlockedDxccEntityCodesDesc',
+      scope: 'operator',
+      keys: callsignFilterBandKeys,
+      options: dxccEntityOptions,
+      visibleWhen: {
+        allOf: [
+          { setting: 'dxccBlockEnabled', equals: true },
+          { setting: 'perBandEnabled', equals: true },
+        ],
+      },
+    },
     filterScope: {
       type: 'string',
       default: 'auto-reply',
@@ -121,8 +167,9 @@ export const callsignFilterPlugin: PluginDefinition = {
   },
 
   quickSettings: [
-    { settingKey: 'filterMode' },
     { settingKey: 'perBandEnabled' },
+    { settingKey: 'filterMode' },
+    { settingKey: 'dxccBlockEnabled' },
     { settingKey: 'filterRules' },
     { settingKey: 'filterScope' },
   ],
@@ -137,16 +184,29 @@ export const callsignFilterPlugin: PluginDefinition = {
       });
       const filterMode = normalizeCallsignFilterMode(ctx.config.filterMode);
       const rules = parseCallsignFilterRules(rawEntries, filterMode);
-      if (rules.length === 0) {
+      const dxccBlockEnabled = ctx.config.dxccBlockEnabled === true;
+      const blockedDxccCodes = selectDxccBlockEntityCodes({
+        perBandEnabled: ctx.config.perBandEnabled,
+        blockedDxccEntityCodes: ctx.config.blockedDxccEntityCodes,
+        bandBlockedDxccEntityCodes: ctx.config.bandBlockedDxccEntityCodes,
+        band: ctx.radio.band,
+      });
+      const dxccFilterActive = dxccBlockEnabled && blockedDxccCodes.length > 0;
+      if (rules.length === 0 && !dxccFilterActive) {
         return candidates;
       }
 
       const filtered = candidates.filter((candidate) => {
         const sender = getSenderCallsign(candidate.message);
-        if (!sender) {
-          return false;
-        }
-        return evaluateCallsignFilter(sender, rules);
+        const passesCallsignRules = rules.length === 0
+          ? true
+          : Boolean(sender) && evaluateCallsignFilter(sender, rules);
+        return passesCallsignRules && evaluateDxccBlocklist({
+          dxccBlockEnabled: dxccFilterActive,
+          blockedDxccEntityCodes: blockedDxccCodes,
+          dxccId: candidate.logbookAnalysis?.dxccId,
+          callsign: sender,
+        });
       });
 
       ctx.log.debug('Callsign filter applied', {
@@ -155,6 +215,8 @@ export const callsignFilterPlugin: PluginDefinition = {
         ruleCount: rules.length,
         mode: filterMode,
         perBandEnabled: ctx.config.perBandEnabled === true,
+        dxccBlockEnabled,
+        blockedDxccCount: blockedDxccCodes.length,
         band: ctx.radio.band,
       });
 

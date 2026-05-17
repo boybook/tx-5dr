@@ -43,14 +43,17 @@ function normalizeWatchedCallsignWatchListValue(value: unknown): string[] {
   return [];
 }
 
-function normalizeKeyedStringArraysValue(value: unknown): Record<string, string[]> {
+function normalizeKeyedStringArraysValue(
+  value: unknown,
+  entryNormalizer: (value: unknown) => string[] = normalizeWatchedCallsignWatchListValue,
+): Record<string, string[]> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return {};
   }
 
   const normalized: Record<string, string[]> = {};
   for (const [key, rawValue] of Object.entries(value)) {
-    const entries = normalizeWatchedCallsignWatchListValue(rawValue);
+    const entries = entryNormalizer(rawValue);
     if (entries.length > 0) {
       normalized[key] = entries;
     }
@@ -69,13 +72,28 @@ export function matchesPluginSettingCondition(
 ): boolean {
   if (!condition) return true;
 
-  const value = settings?.[condition.setting];
-  if ('equals' in condition && !areConditionValuesEqual(value, condition.equals)) {
+  if (Array.isArray(condition.allOf) && !condition.allOf.every((child) =>
+    matchesPluginSettingCondition(child, settings)
+  )) {
     return false;
   }
-  if ('notEquals' in condition && areConditionValuesEqual(value, condition.notEquals)) {
+
+  if (Array.isArray(condition.anyOf) && !condition.anyOf.some((child) =>
+    matchesPluginSettingCondition(child, settings)
+  )) {
     return false;
   }
+
+  if (condition.setting) {
+    const value = settings?.[condition.setting];
+    if ('equals' in condition && !areConditionValuesEqual(value, condition.equals)) {
+      return false;
+    }
+    if ('notEquals' in condition && areConditionValuesEqual(value, condition.notEquals)) {
+      return false;
+    }
+  }
+
   return true;
 }
 
@@ -105,7 +123,10 @@ function normalizeByPluginSetting(
   }
 
   if (descriptor.type === 'keyedStringArrays') {
-    return normalizeKeyedStringArraysValue(value);
+    return normalizeKeyedStringArraysValue(
+      value,
+      descriptor.options?.length ? normalizeStringArrayValue : normalizeWatchedCallsignWatchListValue,
+    );
   }
 
   if (pluginName === 'watched-callsign-autocall' && fieldKey === 'watchList') {

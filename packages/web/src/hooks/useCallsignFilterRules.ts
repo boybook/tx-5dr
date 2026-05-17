@@ -3,6 +3,7 @@ import {
   normalizeCallsignFilterMode,
   parseCallsignFilterRules,
   selectCallsignFilterRuleEntries,
+  selectDxccBlockEntityCodes,
   getBandFromFrequency,
   type CallsignFilterMode,
   type CallsignFilterRule,
@@ -22,12 +23,16 @@ interface CallsignFilterState {
   rules: CallsignFilterRule[];
   filterMode: CallsignFilterMode;
   filterScope: CallsignFilterScope;
+  dxccBlockEnabled: boolean;
+  blockedDxccEntityCodes: string[];
 }
 
 const EMPTY_STATE: CallsignFilterState = {
   rules: [],
   filterMode: 'blocklist',
   filterScope: 'auto-reply',
+  dxccBlockEnabled: false,
+  blockedDxccEntityCodes: [],
 };
 
 /**
@@ -92,7 +97,23 @@ export function useCallsignFilterRules(
     return parseCallsignFilterRules(rawRules, filterMode);
   }, [filterMode, rawRules]);
 
+  const blockedDxccEntityCodes = useMemo(
+    () => selectDxccBlockEntityCodes({
+      perBandEnabled: settings.perBandEnabled,
+      blockedDxccEntityCodes: settings.blockedDxccEntityCodes,
+      bandBlockedDxccEntityCodes: settings.bandBlockedDxccEntityCodes,
+      band: currentBand,
+    }),
+    [
+      currentBand,
+      settings.perBandEnabled,
+      settings.blockedDxccEntityCodes,
+      settings.bandBlockedDxccEntityCodes,
+    ],
+  );
+  const dxccBlockEnabled = settings.dxccBlockEnabled === true && blockedDxccEntityCodes.length > 0;
+
   if (!isEnabled) return EMPTY_STATE;
 
-  return { rules, filterMode, filterScope };
+  return { rules, filterMode, filterScope, dxccBlockEnabled, blockedDxccEntityCodes };
 }

@@ -1,6 +1,6 @@
 {
   "name": "@tx5dr/plugin-api",
-  "version": "1.7.5",
+  "version": "1.7.7",
   "type": "module",
   "description": "Public plugin API for TX-5DR digital radio engine",
   "license": "MIT",

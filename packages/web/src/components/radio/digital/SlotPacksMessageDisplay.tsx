@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { FramesTable, FrameGroup, FrameDisplayMessage } from './FramesTable';
-import { parseFT8LocationInfo, FT8MessageParser, evaluateCallsignFilter, getBandFromFrequency, CycleUtils } from '@tx5dr/core';
+import { parseFT8LocationInfo, FT8MessageParser, evaluateCallsignFilter, evaluateDxccBlocklist, getBandFromFrequency, CycleUtils } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useMyRelatedTimeline, useRadioState, useSlotPacks } from '../../../store/radioStore';
 import type { FrameMessage, WSSelectedFrame } from '@tx5dr/contracts';
 import { useSplitLayoutActions } from '../../common/SplitLayout';
@@ -27,6 +27,8 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
     () => callsignFilter.filterScope === 'auto-reply-and-display' ? callsignFilter.rules : [],
     [callsignFilter.rules, callsignFilter.filterScope],
   );
+  const displayDxccBlockEnabled = callsignFilter.filterScope === 'auto-reply-and-display'
+    && callsignFilter.dxccBlockEnabled;
   const groupHeaderBand = useMemo(() => {
     const frequency = radio.state.currentRadioFrequency;
     if (!frequency || frequency <= 0) {
@@ -76,7 +78,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
         }
 
         // Apply display filter when enabled
-        if (displayFilterRules.length > 0) {
+        if (displayFilterRules.length > 0 || displayDxccBlockEnabled) {
           const parsedMessage = FT8MessageParser.parseMessage(frame.message);
           const parsedSenderCallsign = parsedMessage && 'senderCallsign' in parsedMessage
             ? parsedMessage.senderCallsign
@@ -84,7 +86,15 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
           const sender = frame.logbookAnalysis?.callsign
             ?? parsedSenderCallsign
             ?? '';
-          if (sender && !evaluateCallsignFilter(sender, displayFilterRules)) {
+          if (displayFilterRules.length > 0 && sender && !evaluateCallsignFilter(sender, displayFilterRules)) {
+            return;
+          }
+          if (!evaluateDxccBlocklist({
+            dxccBlockEnabled: displayDxccBlockEnabled,
+            blockedDxccEntityCodes: callsignFilter.blockedDxccEntityCodes,
+            dxccId: frame.logbookAnalysis?.dxccId,
+            callsign: sender,
+          })) {
             return;
           }
         }
@@ -150,7 +160,13 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       .sort((a, b) => a.startMs - b.startMs);
 
     setFrameGroups(groups);
-  }, [slotPacks.state.slotPacks, radio.state.currentMode, displayFilterRules]);
+  }, [
+    slotPacks.state.slotPacks,
+    radio.state.currentMode,
+    displayFilterRules,
+    displayDxccBlockEnabled,
+    callsignFilter.blockedDxccEntityCodes,
+  ]);
 
   const buildSelectedFrame = (message: FrameDisplayMessage, group: FrameGroup): WSSelectedFrame | undefined => {
     if (typeof message.db !== 'number' || typeof message.dt !== 'number') {

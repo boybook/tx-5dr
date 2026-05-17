@@ -1,6 +1,6 @@
 {
   "name": "@tx5dr/contracts",
-  "version": "1.7.5",
+  "version": "1.7.7",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

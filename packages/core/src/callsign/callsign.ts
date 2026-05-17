@@ -484,7 +484,7 @@ class LRU<K, V> {
 }
 
 // DXCC 实体接口定义。英文展示名直接来自 CTY 原始数据。
-interface DXCCEntity {
+export interface DXCCEntity {
   entityCode?: number;
   name: string;
   prefix?: string;
@@ -1475,4 +1475,22 @@ export function getITUZone(callsign: string): number | null {
 
 export function resolveDXCCEntity(callsign: string, timestamp: number = Date.now()): DXCCResolutionResult {
   return dxccIndex.resolveCallsign(callsign, timestamp);
+}
+
+export function listDXCCEntities(): DXCCEntity[] {
+  const byCode = new Map<number, DXCCEntity>();
+  for (const entity of dxccIndex.getAllEntities()) {
+    if (typeof entity.entityCode === 'number' && !byCode.has(entity.entityCode)) {
+      byCode.set(entity.entityCode, entity);
+    }
+  }
+
+  return Array.from(byCode.values())
+    .sort((left, right) => {
+      const leftName = left.name.toLocaleLowerCase();
+      const rightName = right.name.toLocaleLowerCase();
+      if (leftName !== rightName) return leftName.localeCompare(rightName);
+      return (left.entityCode ?? 0) - (right.entityCode ?? 0);
+    })
+    .map((entity) => ({ ...entity }));
 }
