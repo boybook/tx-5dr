@@ -2,6 +2,8 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('RingBuffer');
 const OVERFLOW_LOG_INTERVAL_MS = 5000;
+const CLOCK_DRIFT_WARNING_THRESHOLD_MS = 250;
+const CLOCK_DRIFT_LOG_INTERVAL_MS = 5000;
 export type AudioClock = () => number;
 
 /**
@@ -12,6 +14,7 @@ export class RingBuffer {
   private buffer: Float32Array;
   private writeIndex = 0;
   private readIndex = 0;
+  private storedSamples = 0;
   private size: number;
   private sampleRate: number;
   private maxDurationMs: number;
@@ -20,6 +23,7 @@ export class RingBuffer {
   private lastWriteTimestamp: number; // 最后写入时间戳
   private lastOverflowLogAt = 0;
   private suppressedOverflowSamples = 0;
+  private lastClockDriftLogAt = 0;
   private readonly now: AudioClock;
   
   constructor(sampleRate: number, maxDurationMs: number = 60000, now: AudioClock = Date.now) {
@@ -38,20 +42,31 @@ export class RingBuffer {
    */
   write(samples: Float32Array): void {
     const writeTimestamp = this.now();
+    let inputOffset = 0;
 
     // 在写入前一次性检查可用空间
-    const available = this.getAvailableSamples();
-    const freeSpace = this.size - available;
+    const freeSpace = this.size - this.storedSamples;
 
-    // 如果空间不足，批量移动读指针
-    if (samples.length > freeSpace) {
+    // 如果单次写入超过容量，只保留输入块的最新尾部，并清掉旧内容。
+    if (samples.length >= this.size) {
+      const droppedSamples = this.storedSamples + samples.length - this.size;
+      if (droppedSamples > 0) {
+        this.logOverflow(droppedSamples, writeTimestamp);
+      }
+      inputOffset = samples.length - this.size;
+      this.readIndex = this.writeIndex;
+      this.storedSamples = 0;
+    } else if (samples.length > freeSpace) {
+      // 空间不足时丢弃最旧的已存样本，确保新样本保持实时。
       const needToDrop = samples.length - freeSpace;
       this.logOverflow(needToDrop, writeTimestamp);
       this.readIndex = (this.readIndex + needToDrop) % this.size;
+      this.storedSamples = Math.max(0, this.storedSamples - needToDrop);
     }
 
     // 批量写入所有样本
-    for (let i = 0; i < samples.length; i++) {
+    this.totalSamplesWritten += inputOffset;
+    for (let i = inputOffset; i < samples.length; i++) {
       const sample = samples[i] || 0;
 
       // 检查样本有效性
@@ -66,10 +81,12 @@ export class RingBuffer {
 
       this.writeIndex = (this.writeIndex + 1) % this.size;
       this.totalSamplesWritten++;
+      this.storedSamples = Math.min(this.size, this.storedSamples + 1);
     }
 
     // 更新最后写入时间（用于计算时间偏移）
     this.lastWriteTimestamp = writeTimestamp;
+    this.logClockDriftIfNeeded(writeTimestamp);
   }
 
   private logOverflow(droppedSamples: number, now: number): void {
@@ -89,6 +106,39 @@ export class RingBuffer {
     this.lastOverflowLogAt = now;
     this.suppressedOverflowSamples = 0;
   }
+
+  private getWallClockSamples(now = this.now()): number {
+    const elapsedMs = Math.max(0, now - this.startTimestamp);
+    return Math.floor((this.sampleRate * elapsedMs) / 1000);
+  }
+
+  private getProducerLeadMs(now = this.now()): number {
+    if (this.sampleRate <= 0) {
+      return 0;
+    }
+    const wallClockSamples = this.getWallClockSamples(now);
+    return ((this.totalSamplesWritten - wallClockSamples) / this.sampleRate) * 1000;
+  }
+
+  private logClockDriftIfNeeded(now: number): void {
+    const producerLeadMs = this.getProducerLeadMs(now);
+    if (Math.abs(producerLeadMs) < CLOCK_DRIFT_WARNING_THRESHOLD_MS) {
+      return;
+    }
+    if (now - this.lastClockDriftLogAt < CLOCK_DRIFT_LOG_INTERVAL_MS) {
+      return;
+    }
+
+    logger.warn('RX/input audio sample clock drift detected', {
+      bufferKind: 'rx-input',
+      producerLeadMs: Number(producerLeadMs.toFixed(1)),
+      totalSamplesWritten: this.totalSamplesWritten,
+      wallClockSamples: this.getWallClockSamples(now),
+      availableSamples: this.getAvailableSamples(),
+      sampleRate: this.sampleRate,
+    });
+    this.lastClockDriftLogAt = now;
+  }
   
   /**
    * 读取指定时间范围的音频数据
@@ -97,20 +147,8 @@ export class RingBuffer {
    * @returns PCM 音频数据
    */
   read(startMs: number, durationMs: number): ArrayBuffer {
-    const sampleCount = Math.floor((this.sampleRate * Math.max(0, durationMs)) / 1000);
-    const result = new Float32Array(sampleCount);
-    
-    // 计算从当前写入位置向前回溯的样本数
-    // 对于多窗口解码，我们需要从最新数据开始向前读取指定时长的数据
-    const startSample = Math.max(0, this.writeIndex - sampleCount);
-    
-    for (let i = 0; i < sampleCount; i++) {
-      const bufferIndex = (startSample + i) % this.size;
-      const value = this.buffer[bufferIndex];
-      result[i] = (value !== undefined && !isNaN(value)) ? value : 0;
-    }
-    
-    return result.buffer;
+    void startMs;
+    return this.readLatest(durationMs);
   }
   
   /**
@@ -120,28 +158,25 @@ export class RingBuffer {
    * @returns PCM 音频数据
    */
   readFromSlotStart(slotStartMs: number, durationMs: number): ArrayBuffer {
+    void slotStartMs;
+    return this.readLatest(durationMs);
+  }
+
+  private readLatest(durationMs: number): ArrayBuffer {
     const sampleCount = Math.floor((this.sampleRate * Math.max(0, durationMs)) / 1000);
     const result = new Float32Array(sampleCount);
-    
-    // 计算当前时间相对于缓冲区开始的总样本数
-    const currentTime = this.now();
-    const totalTimeMs = currentTime - this.startTimestamp;
-    const totalSamplesFromStart = Math.floor((this.sampleRate * totalTimeMs) / 1000);
-    
-    // 计算要读取的数据在缓冲区中的结束位置（最新数据位置）
-    const endSample = Math.min(totalSamplesFromStart, this.totalSamplesWritten);
-    
-    // 计算起始位置（向前回溯 sampleCount 个样本）
-    const startSample = Math.max(0, endSample - sampleCount);
 
-    // 从环形缓冲区读取数据
-    for (let i = 0; i < sampleCount; i++) {
-      const sampleIndex = startSample + i;
-      const bufferIndex = sampleIndex % this.size;
+    // 以最新写入位置为窗口结尾读取，避免样本时钟和墙钟漂移导致越读越旧。
+    const samplesToRead = Math.min(sampleCount, this.storedSamples);
+    const outputOffset = sampleCount - samplesToRead;
+    const startIndex = (this.writeIndex - samplesToRead + this.size) % this.size;
+
+    for (let i = 0; i < samplesToRead; i++) {
+      const bufferIndex = (startIndex + i) % this.size;
       const value = this.buffer[bufferIndex];
-      result[i] = (value !== undefined && !isNaN(value)) ? value : 0;
+      result[outputOffset + i] = (value !== undefined && !isNaN(value)) ? value : 0;
     }
-    
+
     return result.buffer;
   }
   
@@ -162,6 +197,7 @@ export class RingBuffer {
       result[i] = this.buffer[this.readIndex];
       this.readIndex = (this.readIndex + 1) % this.size;
     }
+    this.storedSamples = Math.max(0, this.storedSamples - samplesToRead);
 
     // 如果缓冲区不足，剩余部分填充静音
     for (let i = samplesToRead; i < sampleCount; i++) {
@@ -175,11 +211,7 @@ export class RingBuffer {
    * 获取当前可用的样本数量
    */
   getAvailableSamples(): number {
-    if (this.writeIndex >= this.readIndex) {
-      return this.writeIndex - this.readIndex;
-    } else {
-      return this.size - this.readIndex + this.writeIndex;
-    }
+    return this.storedSamples;
   }
   
   /**
@@ -188,23 +220,36 @@ export class RingBuffer {
   clear(): void {
     this.writeIndex = 0;
     this.readIndex = 0;
+    this.storedSamples = 0;
+    this.totalSamplesWritten = 0;
     this.buffer.fill(0);
+    this.startTimestamp = this.now();
+    this.lastWriteTimestamp = this.startTimestamp;
+    this.lastOverflowLogAt = 0;
+    this.suppressedOverflowSamples = 0;
+    this.lastClockDriftLogAt = 0;
   }
   
   /**
    * 获取缓冲区状态信息
    */
   getStatus() {
+    const now = this.now();
+    const wallClockSamples = this.getWallClockSamples(now);
+    const producerLeadMs = this.getProducerLeadMs(now);
     return {
       size: this.size,
       writeIndex: this.writeIndex,
       readIndex: this.readIndex,
+      storedSamples: this.storedSamples,
       availableSamples: this.getAvailableSamples(),
       sampleRate: this.sampleRate,
       maxDurationMs: this.maxDurationMs,
       startTimestamp: this.startTimestamp,
       totalSamplesWritten: this.totalSamplesWritten,
-      uptimeMs: Date.now() - this.startTimestamp
+      wallClockSamples,
+      producerLeadMs,
+      uptimeMs: now - this.startTimestamp
     };
   }
 }
