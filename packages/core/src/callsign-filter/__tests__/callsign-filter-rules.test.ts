@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   evaluateCallsignFilter,
+  normalizeCallsignBandFilterRules,
   parseCallsignFilterRules,
+  selectCallsignFilterRuleEntries,
   validateFilterRuleLine,
 } from '../callsign-filter-rules.js';
 
@@ -35,5 +37,56 @@ describe('callsign filter rules', () => {
       params: { line: 2 },
     });
     assert.equal(validateFilterRuleLine('JA', 1, 'regex-keep'), null);
+  });
+
+  it('selects common rules while per-band filtering is disabled', () => {
+    assert.deepEqual(selectCallsignFilterRuleEntries({
+      perBandEnabled: false,
+      filterRules: [' JA ', '', '# comment', 'BG5DRB'],
+      bandFilterRules: { '40m': ['K'] },
+      band: '40m',
+    }), ['JA', 'BG5DRB']);
+  });
+
+  it('selects only the active band rules while per-band filtering is enabled', () => {
+    assert.deepEqual(selectCallsignFilterRuleEntries({
+      perBandEnabled: true,
+      filterRules: ['JA'],
+      bandFilterRules: {
+        '40m': [' JA '],
+        '20m': ['K'],
+      },
+      band: '40M',
+    }), ['JA']);
+  });
+
+  it('allows all when per-band filtering has no rules for the active band', () => {
+    assert.deepEqual(selectCallsignFilterRuleEntries({
+      perBandEnabled: true,
+      filterRules: ['JA'],
+      bandFilterRules: { '20m': ['K'] },
+      band: '40m',
+    }), []);
+  });
+
+  it('allows all when per-band filtering cannot resolve a known band', () => {
+    assert.deepEqual(selectCallsignFilterRuleEntries({
+      perBandEnabled: true,
+      filterRules: ['JA'],
+      bandFilterRules: { '20m': ['K'] },
+      band: 'Unknown',
+    }), []);
+  });
+
+  it('normalizes per-band rule maps', () => {
+    assert.deepEqual(normalizeCallsignBandFilterRules({
+      ' 40M ': [' JA ', '', '# comment'],
+      '20m': ['K'],
+      empty: [],
+      invalid: 'JA',
+    }), {
+      '40m': ['JA'],
+      '20m': ['K'],
+    });
   });
 });

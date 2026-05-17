@@ -7,6 +7,7 @@ import { resolvePluginName } from '../../utils/pluginLocales';
 import {
   arePluginSettingValuesEqual,
   getPluginSettingValidationIssue,
+  isPluginSettingVisible,
 } from '../../utils/pluginSettings';
 
 interface PluginOperatorSettingsFormProps {
@@ -49,13 +50,13 @@ export const PluginOperatorSettingsForm: React.FC<PluginOperatorSettingsFormProp
   className,
 }) => {
   const { t } = useTranslation('settings');
-  const operatorEntries = useMemo(() => Object.entries(plugin.settings ?? {}).filter(
-    ([, descriptor]) => descriptor.scope === 'operator' && !descriptor.hidden
-  ), [plugin.settings]);
   const currentSettings = useMemo(
     () => ({ ...getDefaultOperatorPluginSettings(plugin), ...settings }),
     [plugin, settings],
   );
+  const operatorEntries = useMemo(() => Object.entries(plugin.settings ?? {}).filter(
+    ([, descriptor]) => descriptor.scope === 'operator' && isPluginSettingVisible(descriptor, currentSettings)
+  ), [currentSettings, plugin.settings]);
   const originalWithDefaults = useMemo(
     () => ({ ...getDefaultOperatorPluginSettings(plugin), ...originalSettings }),
     [plugin, originalSettings],
@@ -66,6 +67,7 @@ export const PluginOperatorSettingsForm: React.FC<PluginOperatorSettingsFormProp
   const hasValidationIssues = persistableKeys.some((key) => {
     const descriptor = plugin.settings?.[key];
     return descriptor
+      && isPluginSettingVisible(descriptor, currentSettings)
       ? Boolean(getPluginSettingValidationIssue(plugin.name, key, descriptor, currentSettings[key], currentSettings))
       : false;
   });

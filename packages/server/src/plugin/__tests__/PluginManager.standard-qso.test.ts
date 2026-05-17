@@ -108,6 +108,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     pluginConfigs?: Record<string, { enabled: boolean; settings: Record<string, unknown> }>;
     operatorPluginSettings?: Record<string, Record<string, unknown>>;
     interruptOperatorTransmission?: (operatorId: string) => Promise<void>;
+    radioBand?: string;
   }) {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string; callsign: string }) => {
@@ -156,7 +157,7 @@ describe('PluginManager standard-qso late re-decision', () => {
       },
       getRadioFrequency: async () => operator.config.frequency,
       setRadioFrequency: () => {},
-      getRadioBand: () => '40m',
+      getRadioBand: () => options?.radioBand ?? '40m',
       getRadioConnected: () => true,
       getLatestSlotPack: () => null,
       interruptOperatorTransmission,
@@ -1322,6 +1323,104 @@ describe('PluginManager standard-qso late re-decision', () => {
     );
 
     expect(filtered.map((candidate) => getSenderCallsign(candidate.message))).toEqual(['K1ABC']);
+
+    await pluginManager.shutdown();
+  });
+
+  it('uses only the active band rules when callsign-filter per-band mode is enabled', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      radioBand: '40m',
+      pluginConfigs: {
+        'callsign-filter': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'callsign-filter': {
+          filterMode: 'blocklist',
+          perBandEnabled: true,
+          filterRules: ['K'],
+          bandFilterRules: {
+            '40m': ['JA'],
+            '20m': ['BG5DRB'],
+          },
+        },
+      },
+    });
+
+    const filtered = await pluginManager.getHookDispatcher().dispatchFilterCandidates(
+      operator.config.id,
+      [
+        createParsedMessage('CQ JA1AAA PM95', -5, 1200),
+        createParsedMessage('CQ BG5DRB OL32', -7, 1400),
+        createParsedMessage('CQ K1ABC FN31', -3, 1600),
+      ],
+      (instance) => pluginManager.getCtxForInstance(instance),
+    );
+
+    expect(filtered.map((candidate) => getSenderCallsign(candidate.message))).toEqual(['BG5DRB', 'K1ABC']);
+
+    await pluginManager.shutdown();
+  });
+
+  it('allows all callsigns when callsign-filter per-band mode has no rules for the active band', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      radioBand: '20m',
+      pluginConfigs: {
+        'callsign-filter': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'callsign-filter': {
+          filterMode: 'blocklist',
+          perBandEnabled: true,
+          filterRules: ['K'],
+          bandFilterRules: {
+            '40m': ['JA'],
+          },
+        },
+      },
+    });
+
+    const filtered = await pluginManager.getHookDispatcher().dispatchFilterCandidates(
+      operator.config.id,
+      [
+        createParsedMessage('CQ JA1AAA PM95', -5, 1200),
+        createParsedMessage('CQ K1ABC FN31', -3, 1600),
+      ],
+      (instance) => pluginManager.getCtxForInstance(instance),
+    );
+
+    expect(filtered.map((candidate) => getSenderCallsign(candidate.message))).toEqual(['JA1AAA', 'K1ABC']);
+
+    await pluginManager.shutdown();
+  });
+
+  it('applies regex keep rules in callsign-filter per-band mode', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      radioBand: '40m',
+      pluginConfigs: {
+        'callsign-filter': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'callsign-filter': {
+          filterMode: 'regex-keep',
+          perBandEnabled: true,
+          bandFilterRules: {
+            '40m': ['^JA', '^BG5DRB$'],
+          },
+        },
+      },
+    });
+
+    const filtered = await pluginManager.getHookDispatcher().dispatchFilterCandidates(
+      operator.config.id,
+      [
+        createParsedMessage('CQ JA1AAA PM95', -5, 1200),
+        createParsedMessage('CQ BG5DRB OL32', -7, 1400),
+        createParsedMessage('CQ K1ABC FN31', -3, 1600),
+      ],
+      (instance) => pluginManager.getCtxForInstance(instance),
+    );
+
+    expect(filtered.map((candidate) => getSenderCallsign(candidate.message))).toEqual(['JA1AAA', 'BG5DRB']);
 
     await pluginManager.shutdown();
   });

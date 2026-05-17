@@ -2,12 +2,15 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   normalizeCallsignFilterMode,
   parseCallsignFilterRules,
+  selectCallsignFilterRuleEntries,
+  getBandFromFrequency,
   type CallsignFilterMode,
   type CallsignFilterRule,
 } from '@tx5dr/core';
 import { pluginApi } from '../utils/pluginApi';
 import { usePluginSnapshot } from './usePluginSnapshot';
 import { createLogger } from '../utils/logger';
+import { useRadioState } from '../store/radioStore';
 
 const logger = createLogger('useCallsignFilterRules');
 
@@ -36,7 +39,8 @@ export function useCallsignFilterRules(
   operatorId: string | undefined,
 ): CallsignFilterState {
   const pluginSnapshot = usePluginSnapshot();
-  const [rawRules, setRawRules] = useState<string[]>([]);
+  const radio = useRadioState();
+  const [settings, setSettings] = useState<Record<string, unknown>>({});
   const [filterMode, setFilterMode] = useState<CallsignFilterMode>('blocklist');
   const [filterScope, setFilterScope] = useState<CallsignFilterScope>('auto-reply');
 
@@ -47,7 +51,7 @@ export function useCallsignFilterRules(
 
   useEffect(() => {
     if (!operatorId || !isEnabled) {
-      setRawRules([]);
+      setSettings({});
       setFilterMode('blocklist');
       setFilterScope('auto-reply');
       return;
@@ -56,12 +60,11 @@ export function useCallsignFilterRules(
     pluginApi
       .getOperatorState(operatorId)
       .then((res) => {
-        const settings = res?.operatorSettings?.[PLUGIN_NAME] ?? {};
-        const entries = Array.isArray(settings.filterRules) ? settings.filterRules as string[] : [];
-        setRawRules(entries);
-        setFilterMode(normalizeCallsignFilterMode(settings.filterMode));
+        const nextSettings = res?.operatorSettings?.[PLUGIN_NAME] ?? {};
+        setSettings(nextSettings);
+        setFilterMode(normalizeCallsignFilterMode(nextSettings.filterMode));
         setFilterScope(
-          settings.filterScope === 'auto-reply-and-display'
+          nextSettings.filterScope === 'auto-reply-and-display'
             ? 'auto-reply-and-display'
             : 'auto-reply',
         );
@@ -70,6 +73,19 @@ export function useCallsignFilterRules(
         logger.debug('Failed to load callsign filter settings', err);
       });
   }, [operatorId, isEnabled, pluginSnapshot.generation]);
+
+  const currentBand = useMemo(() => (
+    radio.state.currentRadioFrequency > 0
+      ? getBandFromFrequency(radio.state.currentRadioFrequency)
+      : undefined
+  ), [radio.state.currentRadioFrequency]);
+
+  const rawRules = useMemo(() => selectCallsignFilterRuleEntries({
+    perBandEnabled: settings.perBandEnabled,
+    filterRules: settings.filterRules,
+    bandFilterRules: settings.bandFilterRules,
+    band: currentBand,
+  }), [currentBand, settings]);
 
   const rules = useMemo(() => {
     if (rawRules.length === 0) return [];

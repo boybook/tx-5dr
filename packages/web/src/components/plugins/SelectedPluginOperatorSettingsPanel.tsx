@@ -7,6 +7,7 @@ import { createLogger } from '../../utils/logger';
 import {
   arePluginSettingValuesEqual,
   getPluginSettingValidationIssue,
+  isPluginSettingVisible,
   normalizePluginSettingsForSave,
 } from '../../utils/pluginSettings';
 import {
@@ -141,6 +142,7 @@ export const SelectedPluginOperatorSettingsPanel = forwardRef<SelectedPluginOper
         descriptor.scope === 'operator'
         && descriptor.type !== 'info'
         && !descriptor.hidden
+        && isPluginSettingVisible(descriptor, currentSettings)
         && Boolean(getPluginSettingValidationIssue(
           plugin.name,
           key,

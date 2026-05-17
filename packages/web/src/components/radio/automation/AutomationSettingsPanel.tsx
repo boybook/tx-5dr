@@ -26,6 +26,7 @@ import {
   arePluginSettingValuesEqual,
   getPluginSettingDescriptionKey,
   getPluginSettingValidationIssue,
+  isPluginSettingVisible,
   normalizePluginSettingsForSave,
 } from '../../../utils/pluginSettings';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -447,6 +448,9 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                   ...(savedSettingsMap[plugin.name] ?? {}),
                   ...(draftSettingsMap[plugin.name] ?? {}),
                 };
+                if (!isPluginSettingVisible(descriptor, currentSettings)) {
+                  return null;
+                }
                 const currentValue = getEffectiveValue(plugin, descriptor, entry.settingKey, draftSettingsMap);
                 const savedValue = getEffectiveValue(plugin, descriptor, entry.settingKey, savedSettingsMap);
                 const dirty = !arePluginSettingValuesEqual(
@@ -465,6 +469,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                 );
                 const validationMessage = validationIssue
                   ? resolvePluginLabel(validationIssue.key, plugin.name).replace('{{line}}', String(validationIssue.params?.line ?? ''))
+                    .replace('{{band}}', String(validationIssue.params?.band ?? ''))
                   : '';
                 const fieldId = `${plugin.name}:${entry.settingKey}`;
                 const label = resolvePluginLabel(descriptor.label, plugin.name);

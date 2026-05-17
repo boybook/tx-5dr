@@ -161,6 +161,64 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
     );
   }
 
+  if (descriptor.type === 'keyedStringArrays') {
+    const currentRows = value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : descriptor.default && typeof descriptor.default === 'object' && !Array.isArray(descriptor.default)
+        ? descriptor.default as Record<string, unknown>
+        : {};
+
+    const getTextValue = (key: string): string => {
+      const rowValue = currentRows[key];
+      if (typeof rowValue === 'string') return rowValue;
+      if (Array.isArray(rowValue)) {
+        return rowValue.filter((item): item is string => typeof item === 'string').join('\n');
+      }
+      return '';
+    };
+
+    const updateKey = (key: string, nextValue: string) => {
+      onChange({
+        ...currentRows,
+        [key]: nextValue,
+      });
+    };
+
+    return (
+      <div className="rounded-lg border border-default-200/70 bg-content1 px-3 py-2.5">
+        <div className="mb-2">
+          <div className="text-sm font-medium text-default-700">{label}</div>
+          {description && (
+            <div className="mt-0.5 whitespace-pre-line text-xs leading-5 text-default-500">{description}</div>
+          )}
+        </div>
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {(descriptor.keys ?? []).map((keyDescriptor) => {
+            const keyLabel = resolvePluginLabel(keyDescriptor.label, pluginName);
+            const keyDescription = keyDescriptor.description
+              ? resolvePluginLabel(keyDescriptor.description, pluginName)
+              : undefined;
+            const isRowInvalid = validationIssue?.params?.band === keyDescriptor.label;
+            return (
+              <Textarea
+                key={keyDescriptor.key}
+                size="sm"
+                label={keyLabel}
+                description={keyDescription}
+                value={getTextValue(keyDescriptor.key)}
+                onValueChange={(nextValue) => updateKey(keyDescriptor.key, nextValue)}
+                isInvalid={Boolean(isRowInvalid)}
+                errorMessage={isRowInvalid ? validationMessage : undefined}
+                minRows={2}
+                variant="bordered"
+              />
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   if (descriptor.type === 'object[]') {
     const rows = Array.isArray(value)
       ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))

@@ -73,7 +73,7 @@ export type PluginPanelComponent = z.infer<typeof PluginPanelComponentSchema>;
  * These values control both validation expectations and default frontend
  * rendering in plugin settings UIs.
  */
-export const PluginSettingTypeSchema = z.enum(['boolean', 'number', 'string', 'string[]', 'object[]', 'info']);
+export const PluginSettingTypeSchema = z.enum(['boolean', 'number', 'string', 'string[]', 'object[]', 'keyedStringArrays', 'info']);
 
 /**
  * Supported generated-form field types for plugin settings.
@@ -102,6 +102,26 @@ export const PluginObjectArrayFieldSchema = z.object({
   required: z.boolean().optional(),
 });
 export type PluginObjectArrayField = z.infer<typeof PluginObjectArrayFieldSchema>;
+
+export const PluginKeyedStringArrayKeySchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  description: z.string().optional(),
+});
+export type PluginKeyedStringArrayKey = z.infer<typeof PluginKeyedStringArrayKeySchema>;
+
+export const PluginSettingConditionSchema = z.object({
+  setting: z.string(),
+  equals: z.unknown().optional(),
+  notEquals: z.unknown().optional(),
+});
+export type PluginSettingCondition = z.infer<typeof PluginSettingConditionSchema>;
+
+export const PluginSettingConditionalDescriptionSchema = z.object({
+  when: PluginSettingConditionSchema,
+  description: z.string(),
+});
+export type PluginSettingConditionalDescription = z.infer<typeof PluginSettingConditionalDescriptionSchema>;
 
 /**
  * Persistence and UI scope for a plugin setting.
@@ -134,6 +154,12 @@ export const PluginSettingDescriptorSchema = z.object({
   options: z.array(PluginSettingOptionSchema).optional(),
   /** Field schema used by generated editors for `object[]` settings. */
   itemFields: z.array(PluginObjectArrayFieldSchema).optional(),
+  /** Fixed key list used by generated editors for `keyedStringArrays` settings. */
+  keys: z.array(PluginKeyedStringArrayKeySchema).optional(),
+  /** Conditionally show the field based on another setting in the same form. */
+  visibleWhen: PluginSettingConditionSchema.optional(),
+  /** Conditionally override the field description based on another setting. */
+  descriptionWhen: z.array(PluginSettingConditionalDescriptionSchema).optional(),
   /** Internal settings are persisted/injected but hidden from generated UIs. */
   hidden: z.boolean().optional(),
   /** 设置作用域：global（所有操作员共享）或 operator（每操作员独立），默认 global */

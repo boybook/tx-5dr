@@ -711,7 +711,7 @@ interface AutoCallExecutionPlan {
 
 ```typescript
 interface PluginSettingDescriptor {
-  type: 'boolean' | 'number' | 'string' | 'string[]' | 'object[]' | 'info';
+  type: 'boolean' | 'number' | 'string' | 'string[]' | 'object[]' | 'keyedStringArrays' | 'info';
   default: unknown;
   label: string;         // i18n key
   description?: string;
@@ -719,6 +719,13 @@ interface PluginSettingDescriptor {
   min?: number;
   max?: number;
   options?: Array<{ label: string; value: string }>;
+  /** 根据同一表单中的其它设置决定是否显示 */
+  visibleWhen?: { setting: string; equals?: unknown; notEquals?: unknown };
+  /** 根据同一表单中的其它设置切换说明文案 */
+  descriptionWhen?: Array<{
+    when: { setting: string; equals?: unknown; notEquals?: unknown };
+    description: string;
+  }>;
   /** type='object[]' 时用于生成编辑器字段 */
   itemFields?: Array<{
     key: string;
@@ -728,6 +735,8 @@ interface PluginSettingDescriptor {
     placeholder?: string;
     required?: boolean;
   }>;
+  /** type='keyedStringArrays' 时用于生成固定键多行列表 */
+  keys?: Array<{ key: string; label: string; description?: string }>;
   /** 隐藏设置（持久化但不显示在 UI） */
   hidden?: boolean;
 }
@@ -736,6 +745,8 @@ interface PluginSettingDescriptor {
 - `info` 类型是纯展示节点，不参与持久化和脏数据比较
 - `hidden` 设置仍然持久化和注入 `ctx.config`，只是不在生成的 UI 中显示
 - `object[]` 适合简单的全局共享列表；复杂交互建议用 iframe 设置页面
+- `keyedStringArrays` 适合固定分类下的多行字符串配置，例如“每个波段一组规则”
+- `visibleWhen` / `descriptionWhen` 只依赖同一表单中的当前设置值，适合轻量条件显示，不应承载复杂业务逻辑
 
 #### ctx.config 的合并规则
 

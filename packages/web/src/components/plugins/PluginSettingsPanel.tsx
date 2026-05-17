@@ -4,6 +4,7 @@ import { Card, CardBody, CardHeader } from '@heroui/react';
 import type { PluginStatus } from '@tx5dr/contracts';
 import { PluginSettingField } from '../settings/PluginSettingField';
 import { resolvePluginName } from '../../utils/pluginLocales';
+import { isPluginSettingVisible } from '../../utils/pluginSettings';
 
 interface PluginSettingsPanelProps {
   plugin: PluginStatus;
@@ -24,7 +25,7 @@ export const PluginSettingsPanel: React.FC<PluginSettingsPanelProps> = ({
   const pluginTitle = resolvePluginName(plugin.name, plugin.name);
 
   // 只展示 global scope 的设置（operator scope 在 OperatorPluginSettings 里）
-  const globalEntries = useMemo(() => Object.entries(plugin.settings ?? {}).filter(
+  const globalSettingEntries = useMemo(() => Object.entries(plugin.settings ?? {}).filter(
     ([, d]) => !d.scope || d.scope === 'global'
   ), [plugin.settings]);
   const hasOperatorEntries = useMemo(
@@ -34,11 +35,14 @@ export const PluginSettingsPanel: React.FC<PluginSettingsPanelProps> = ({
 
   const effectiveSettings = useMemo(() => {
     const defaults: Record<string, unknown> = {};
-    for (const [key, descriptor] of globalEntries) {
+    for (const [key, descriptor] of globalSettingEntries) {
       defaults[key] = descriptor.default;
     }
     return { ...defaults, ...settings };
-  }, [globalEntries, settings]);
+  }, [globalSettingEntries, settings]);
+  const globalEntries = useMemo(() => globalSettingEntries.filter(
+    ([, descriptor]) => isPluginSettingVisible(descriptor, effectiveSettings)
+  ), [effectiveSettings, globalSettingEntries]);
 
   if (globalEntries.length === 0) {
     return (

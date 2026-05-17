@@ -1,4 +1,4 @@
-import type { PluginSettingDescriptor, PluginStatus } from '@tx5dr/contracts';
+import type { PluginSettingCondition, PluginSettingDescriptor, PluginStatus } from '@tx5dr/contracts';
 import { normalizeCallsignFilterMode, validateFilterRuleLine } from '@tx5dr/core';
 
 export interface PluginSettingValidationIssue {
@@ -43,6 +43,49 @@ function normalizeWatchedCallsignWatchListValue(value: unknown): string[] {
   return [];
 }
 
+function normalizeKeyedStringArraysValue(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  const normalized: Record<string, string[]> = {};
+  for (const [key, rawValue] of Object.entries(value)) {
+    const entries = normalizeWatchedCallsignWatchListValue(rawValue);
+    if (entries.length > 0) {
+      normalized[key] = entries;
+    }
+  }
+  return normalized;
+}
+
+function areConditionValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+export function matchesPluginSettingCondition(
+  condition: PluginSettingCondition | undefined,
+  settings?: Record<string, unknown>,
+): boolean {
+  if (!condition) return true;
+
+  const value = settings?.[condition.setting];
+  if ('equals' in condition && !areConditionValuesEqual(value, condition.equals)) {
+    return false;
+  }
+  if ('notEquals' in condition && areConditionValuesEqual(value, condition.notEquals)) {
+    return false;
+  }
+  return true;
+}
+
+export function isPluginSettingVisible(
+  descriptor: PluginSettingDescriptor,
+  settings?: Record<string, unknown>,
+): boolean {
+  return !descriptor.hidden && matchesPluginSettingCondition(descriptor.visibleWhen, settings);
+}
+
 function isWatchListComment(entry: string): boolean {
   return entry.startsWith('#');
 }
@@ -57,8 +100,12 @@ function normalizeByPluginSetting(
   descriptor: PluginSettingDescriptor,
   value: unknown,
 ): unknown {
-  if (descriptor.type !== 'string[]') {
+  if (descriptor.type !== 'string[]' && descriptor.type !== 'keyedStringArrays') {
     return value;
+  }
+
+  if (descriptor.type === 'keyedStringArrays') {
+    return normalizeKeyedStringArraysValue(value);
   }
 
   if (pluginName === 'watched-callsign-autocall' && fieldKey === 'watchList') {
@@ -88,7 +135,7 @@ export function arePluginSettingValuesEqual(
   pluginName?: string,
   fieldKey?: string,
 ): boolean {
-  if (descriptor.type === 'string[]') {
+  if (descriptor.type === 'string[]' || descriptor.type === 'keyedStringArrays') {
     const normalizedLeft = normalizeByPluginSetting(pluginName, fieldKey, descriptor, left);
     const normalizedRight = normalizeByPluginSetting(pluginName, fieldKey, descriptor, right);
     return JSON.stringify(normalizedLeft) === JSON.stringify(normalizedRight);
@@ -126,10 +173,11 @@ export function getPluginSettingDescriptionKey(
   descriptor: PluginSettingDescriptor,
   settings?: Record<string, unknown>,
 ): string | undefined {
-  if (pluginName === 'callsign-filter' && fieldKey === 'filterRules') {
-    return normalizeCallsignFilterMode(settings?.filterMode) === 'regex-keep'
-      ? 'filterRulesRegexKeepDesc'
-      : 'filterRulesBlocklistDesc';
+  const override = descriptor.descriptionWhen?.find((entry) =>
+    matchesPluginSettingCondition(entry.when, settings)
+  );
+  if (override) {
+    return override.description;
   }
 
   return descriptor.description;
@@ -142,7 +190,7 @@ export function getPluginSettingValidationIssue(
   value: unknown,
   settings?: Record<string, unknown>,
 ): PluginSettingValidationIssue | null {
-  if (descriptor.type !== 'string[]') {
+  if (descriptor.type !== 'string[]' && descriptor.type !== 'keyedStringArrays') {
     return null;
   }
 
@@ -172,6 +220,27 @@ export function getPluginSettingValidationIssue(
     for (let index = 0; index < entries.length; index += 1) {
       const issue = validateFilterRuleLine(entries[index], index + 1, mode);
       if (issue) return issue;
+    }
+    return null;
+  }
+
+  if (pluginName === 'callsign-filter' && fieldKey === 'bandFilterRules') {
+    const entriesByKey = normalizeKeyedStringArraysValue(value);
+    const mode = normalizeCallsignFilterMode(settings?.filterMode);
+    for (const keyDescriptor of descriptor.keys ?? []) {
+      const entries = entriesByKey[keyDescriptor.key] ?? [];
+      for (let index = 0; index < entries.length; index += 1) {
+        const issue = validateFilterRuleLine(entries[index], index + 1, mode);
+        if (issue) {
+          return {
+            key: 'filterRulesInvalidBandRegexSyntax',
+            params: {
+              ...(issue.params ?? {}),
+              band: keyDescriptor.label,
+            },
+          };
+        }
+      }
     }
     return null;
   }

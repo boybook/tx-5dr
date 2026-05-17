@@ -15,6 +15,7 @@
 const REGEX_META_CHARS = /[\\^$.*+?()[\]{}|]/;
 
 export type CallsignFilterMode = 'blocklist' | 'regex-keep';
+export type CallsignBandFilterRules = Record<string, string[]>;
 
 export interface CallsignFilterRule {
   /** Original input line (before normalization). */
@@ -34,6 +35,44 @@ function normalizeEntries(rawEntries: unknown[]): string[] {
   return rawEntries
     .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
     .filter((entry) => entry.length > 0 && !entry.startsWith('#'));
+}
+
+function normalizeBandKey(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+export function normalizeCallsignBandFilterRules(value: unknown): CallsignBandFilterRules {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  const normalized: CallsignBandFilterRules = {};
+  for (const [rawBand, rawEntries] of Object.entries(value)) {
+    const band = normalizeBandKey(rawBand);
+    if (!band) continue;
+    const entries = Array.isArray(rawEntries) ? normalizeEntries(rawEntries) : [];
+    if (entries.length > 0) {
+      normalized[band] = entries;
+    }
+  }
+  return normalized;
+}
+
+export function selectCallsignFilterRuleEntries(options: {
+  perBandEnabled?: unknown;
+  filterRules?: unknown;
+  bandFilterRules?: unknown;
+  band?: unknown;
+}): string[] {
+  if (options.perBandEnabled === true) {
+    const band = normalizeBandKey(options.band);
+    if (!band || band === 'unknown') {
+      return [];
+    }
+    return normalizeCallsignBandFilterRules(options.bandFilterRules)[band] ?? [];
+  }
+
+  return Array.isArray(options.filterRules) ? normalizeEntries(options.filterRules) : [];
 }
 
 export function normalizeCallsignFilterMode(value: unknown): CallsignFilterMode {
