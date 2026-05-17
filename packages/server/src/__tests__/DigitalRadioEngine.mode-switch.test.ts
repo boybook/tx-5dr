@@ -30,6 +30,7 @@ describe('DigitalRadioEngine mode switching', () => {
     const setLastDigitalModeName = vi.fn(async () => undefined);
     const emit = vi.fn();
     const clearInMemory = vi.fn();
+    const operatorSetMode = vi.fn();
 
     vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
       getCustomFrequencyPresets: vi.fn(() => options.customFrequencyPresets ?? null),
@@ -63,7 +64,7 @@ describe('DigitalRadioEngine mode switching', () => {
         onModeChanged: vi.fn(() => undefined),
       },
       _operatorManager: {
-        getAllOperators: vi.fn(() => []),
+        getAllOperators: vi.fn(() => [{ setMode: operatorSetMode }]),
       },
       emit,
       emitModeAndStatusSnapshot: vi.fn(() => undefined),
@@ -77,6 +78,7 @@ describe('DigitalRadioEngine mode switching', () => {
       setLastDigitalModeName,
       emit,
       clearInMemory,
+      operatorSetMode,
     };
   }
 
@@ -93,7 +95,7 @@ describe('DigitalRadioEngine mode switching', () => {
       }),
     } as unknown as ConfigManager);
 
-    const fakeEngine = {
+    const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
       engineMode: 'digital',
       currentMode: MODES.FT8,
       radioBridge: { wasRunningBeforeDisconnect: true },
@@ -159,7 +161,7 @@ describe('DigitalRadioEngine mode switching', () => {
           sequence.push('physicalPttMonitor.reevaluate');
         }),
       },
-    };
+    });
 
     await (DigitalRadioEngine.prototype as unknown as {
       switchEngineMode: (targetEngineMode: 'digital' | 'voice', targetMode: typeof MODES.VOICE) => Promise<void>;
@@ -181,7 +183,7 @@ describe('DigitalRadioEngine mode switching', () => {
       setLastDigitalModeName: vi.fn(async () => undefined),
     } as unknown as ConfigManager);
 
-    const fakeEngine = {
+    const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
       engineMode: 'digital',
       currentMode: MODES.FT8,
       radioBridge: { wasRunningBeforeDisconnect: true },
@@ -212,7 +214,7 @@ describe('DigitalRadioEngine mode switching', () => {
       physicalPttMonitor: {
         reevaluate: vi.fn(() => undefined),
       },
-    };
+    });
 
     await (DigitalRadioEngine.prototype as unknown as {
       switchEngineMode: (targetEngineMode: 'digital' | 'voice', targetMode: typeof MODES.VOICE) => Promise<void>;
@@ -239,7 +241,7 @@ describe('DigitalRadioEngine mode switching', () => {
       setLastDigitalModeName,
     } as unknown as ConfigManager);
 
-    const fakeEngine = {
+    const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
       engineMode: options.initialEngineMode,
       currentMode: options.initialMode,
       radioBridge: { wasRunningBeforeDisconnect: true },
@@ -288,7 +290,7 @@ describe('DigitalRadioEngine mode switching', () => {
       physicalPttMonitor: {
         reevaluate: vi.fn(() => undefined),
       },
-    };
+    });
 
     return { fakeEngine, sequence, setLastEngineMode, setLastDigitalModeName };
   }
@@ -675,6 +677,57 @@ describe('DigitalRadioEngine mode switching', () => {
       mode: 'USB',
       options: { intent: 'digital' },
     }));
+  });
+
+  it('syncs restored FT4 mode to operators during startup restore', () => {
+    const operatorSetMode = vi.fn();
+    const slotClockSetMode = vi.fn();
+    const slotPackSetMode = vi.fn();
+    const onModeChanged = vi.fn();
+
+    vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+      getLastEngineMode: vi.fn(() => 'digital'),
+      getLastDigitalModeName: vi.fn(() => 'FT4'),
+    } as unknown as ConfigManager);
+
+    const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
+      engineMode: 'digital',
+      currentMode: MODES.FT8,
+      applyDecodeWindowOverrides: vi.fn(() => undefined),
+      slotClock: { setMode: slotClockSetMode },
+      slotPackManager: { setMode: slotPackSetMode },
+      clockCoordinator: { onModeChanged },
+      _operatorManager: {
+        getAllOperators: vi.fn(() => [{ setMode: operatorSetMode }]),
+      },
+      configureAudioProcessingForCurrentMode: vi.fn(() => undefined),
+    });
+
+    (DigitalRadioEngine.prototype as unknown as {
+      restorePersistedModePhase: () => void;
+    }).restorePersistedModePhase.call(fakeEngine);
+
+    expect(fakeEngine.currentMode.name).toBe('FT4');
+    expect(slotClockSetMode).toHaveBeenCalledWith(MODES.FT4);
+    expect(slotPackSetMode).toHaveBeenCalledWith(MODES.FT4);
+    expect(onModeChanged).toHaveBeenCalledWith(MODES.FT4);
+    expect(operatorSetMode).toHaveBeenCalledWith(MODES.FT4);
+  });
+
+  it('resyncs stale operators when setting the already-active FT4 mode', async () => {
+    const { fakeEngine, applyOperatingState, setLastDigitalModeName, operatorSetMode } = createDigitalSwitchHarness({
+      initialMode: MODES.FT4,
+      knownFrequency: 14_080_000,
+      radioConnected: true,
+    });
+
+    await (DigitalRadioEngine.prototype as unknown as {
+      setMode: (mode: typeof MODES.FT4) => Promise<void>;
+    }).setMode.call(fakeEngine, MODES.FT4);
+
+    expect(applyOperatingState).not.toHaveBeenCalled();
+    expect(setLastDigitalModeName).not.toHaveBeenCalled();
+    expect(operatorSetMode).toHaveBeenCalledWith(MODES.FT4);
   });
 
   it('switches from FT8 to the nearest FT4 preset frequency', async () => {

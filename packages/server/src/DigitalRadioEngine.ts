@@ -1066,8 +1066,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       if (targetMode && targetMode.name !== 'VOICE' && targetMode.name !== 'CW') {
         this.currentMode = targetMode;
         this.applyDecodeWindowOverrides();
-        this.slotClock?.setMode(this.currentMode);
-        this.slotPackManager.setMode(this.currentMode);
+        this.syncCurrentModeToRuntimeComponents('restore-digital-mode');
         logger.info(`Restored last digital mode: ${this.currentMode.name}`);
       }
     }
@@ -1075,12 +1074,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     if (lastEngineMode === 'voice') {
       this.engineMode = 'voice';
       this.currentMode = MODES.VOICE;
+      this.syncCurrentModeToRuntimeComponents('restore-voice-mode');
       logger.info('Restored last engine mode: voice');
     } else if (lastEngineMode === 'cw') {
       this.engineMode = 'cw';
       this.currentMode = MODES.CW;
-      this.slotClock?.setMode(this.currentMode);
-      this.slotPackManager.setMode(this.currentMode);
+      this.syncCurrentModeToRuntimeComponents('restore-cw-mode');
       logger.info('Restored last engine mode: cw');
     }
 
@@ -1314,6 +1313,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       // Normal digital mode switch (FT8 <-> FT4)
       if (this.currentMode.name === digitalMode.name) {
         logger.info(`Already in mode: ${digitalMode.name}`);
+        this.syncCurrentModeToRuntimeComponents('already-in-mode');
         this.emitStatusSnapshot();
         return;
       }
@@ -1323,18 +1323,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
       this.currentMode = digitalMode;
       this.applyDecodeWindowOverrides();
-
-      if (this.slotClock) {
-        this.slotClock.setMode(this.currentMode);
-      }
-
-      this.slotPackManager.setMode(this.currentMode);
-      this.clockCoordinator?.onModeChanged(this.currentMode);
-      // 同步 operator.config.mode，避免下游读到陈旧 slotMs（例如 standard-qso 的 retryWindowMs、
-      // PluginContextFactory 暴露给插件的 ctx.operator.mode）
-      for (const op of this._operatorManager?.getAllOperators() ?? []) {
-        op.setMode(this.currentMode);
-      }
+      this.syncCurrentModeToRuntimeComponents('digital-mode-switch');
 
       await ConfigManager.getInstance().setLastDigitalModeName(digitalMode.name);
       this.emitModeAndStatusSnapshot();
@@ -1638,15 +1627,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.applyDecodeWindowOverrides();
     }
 
-    if (this.slotClock) {
-      this.slotClock.setMode(this.currentMode);
-    }
-
-    this.slotPackManager.setMode(this.currentMode);
-    this.clockCoordinator?.onModeChanged(this.currentMode);
-    for (const op of this._operatorManager?.getAllOperators() ?? []) {
-      op.setMode(this.currentMode);
-    }
+    this.syncCurrentModeToRuntimeComponents('engine-mode-switch');
     await this.engineLifecycle.rebuildResourcePlan();
 
     const configManager = ConfigManager.getInstance();
@@ -1963,6 +1944,24 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.emit('systemStatus', this.getStatus());
   }
 
+  private syncCurrentModeToRuntimeComponents(reason: string): void {
+    if (this.slotClock) {
+      this.slotClock.setMode(this.currentMode);
+    }
+
+    this.slotPackManager.setMode(this.currentMode);
+    this.clockCoordinator?.onModeChanged(this.currentMode);
+
+    for (const op of this._operatorManager?.getAllOperators() ?? []) {
+      op.setMode(this.currentMode);
+    }
+
+    logger.debug('Current mode synchronized to runtime components', {
+      mode: this.currentMode.name,
+      reason,
+    });
+  }
+
   /**
    * Apply decode window settings from config to currentMode
    */
@@ -1980,9 +1979,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    */
   public updateDecodeWindows(): void {
     this.applyDecodeWindowOverrides();
-    if (this.slotClock) {
-      this.slotClock.setMode(this.currentMode);
-    }
+    this.syncCurrentModeToRuntimeComponents('decode-window-update');
     this.emit('modeChanged', this.currentMode);
     logger.info(`Decode windows updated: ${this.currentMode.windowTiming.length} windows`);
   }
