@@ -606,8 +606,8 @@ jobs:
           [ "$(dpkg-deb -f "${DEB_FILE}" Priority)" = "optional" ]
           dpkg-deb -f "${DEB_FILE}" Maintainer | grep -Fx 'BG5DRB <bg5drb@example.com>'
           dpkg-deb -f "${DEB_FILE}" Homepage | grep -Fx 'https://tx5dr.com'
-          dpkg-deb -f "${DEB_FILE}" Description | head -1 | grep -Fx 'TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio'
-          dpkg-deb -f "${DEB_FILE}" Description | grep -F 'TX-5DR - Shared Node backend + web browser client + optional Electron shell'
+          dpkg-deb -f "${DEB_FILE}" Description | head -1 | grep -Fx 'A modern digital radio station for amateur radio operators.'
+          dpkg-deb -f "${DEB_FILE}" Description | grep -F 'A modern digital radio station for amateur radio operators. Operate FT8, FT4, and voice modes from any web browser - anywhere, anytime.'
           dpkg-deb -f "${DEB_FILE}" Depends | grep -F 'libgtk-3-0'
           dpkg-deb -f "${DEB_FILE}" Recommends | grep -F 'pulseaudio | libasound2'
           dpkg-deb -f "${DEB_FILE}" Suggests | grep -F 'lsb-release'
@@ -619,7 +619,7 @@ jobs:
           dpkg-deb -c "${DEB_FILE}" | grep -E '/opt/TX-5DR/tx-5dr$'
           DESKTOP_FILE="${DEB_TMP}/root/usr/share/applications/tx-5dr.desktop"
           grep -Fx 'Name=tx-5dr' "${DESKTOP_FILE}"
-          grep -Fx 'Comment=TX-5DR - Shared Node backend + web browser client + optional Electron shell' "${DESKTOP_FILE}"
+          grep -Fx 'Comment=A modern digital radio station for amateur radio operators. Operate FT8, FT4, and voice modes from any web browser - anywhere, anytime.' "${DESKTOP_FILE}"
           grep -Fx 'GenericName=Ham Radio Application' "${DESKTOP_FILE}"
           grep -Fx 'Exec=/opt/TX-5DR/tx-5dr %U' "${DESKTOP_FILE}"
           grep -Fx 'Icon=tx-5dr' "${DESKTOP_FILE}"
@@ -627,7 +627,7 @@ jobs:
 
           echo "Checking RPM metadata: ${RPM_FILE}"
           rpm -qpi "${RPM_FILE}" | grep -F 'Name        : tx-5dr'
-          rpm -qpi "${RPM_FILE}" | grep -F 'Summary     : TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio'
+          rpm -qpi "${RPM_FILE}" | grep -F 'Summary     : A modern digital radio station for amateur radio operators.'
           rpm -qpi "${RPM_FILE}" | grep -F 'URL         : https://tx5dr.com'
           rpm -qpl "${RPM_FILE}" | grep -Fx '/usr/share/applications/tx-5dr.desktop'
           rpm -qpl "${RPM_FILE}" | grep -Fx '/opt/TX-5DR/tx-5dr'
@@ -637,7 +637,7 @@ jobs:
           (cd "${RPM_TMP}" && rpm2cpio "${RPM_FILE}" | cpio -id --quiet ./usr/share/applications/tx-5dr.desktop)
           RPM_DESKTOP="${RPM_TMP}/usr/share/applications/tx-5dr.desktop"
           grep -Fx 'Name=tx-5dr' "${RPM_DESKTOP}"
-          grep -Fx 'Comment=TX-5DR - Shared Node backend + web browser client + optional Electron shell' "${RPM_DESKTOP}"
+          grep -Fx 'Comment=A modern digital radio station for amateur radio operators. Operate FT8, FT4, and voice modes from any web browser - anywhere, anytime.' "${RPM_DESKTOP}"
           grep -Fx 'GenericName=Ham Radio Application' "${RPM_DESKTOP}"
           grep -Fx 'Exec=/opt/TX-5DR/tx-5dr %U' "${RPM_DESKTOP}"
           grep -Fx 'Icon=tx-5dr' "${RPM_DESKTOP}"
