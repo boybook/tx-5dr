@@ -14,7 +14,6 @@ import { api, ApiError } from '@tx5dr/core';
 import type { ModeDescriptor, RealtimeAudioCodecPreference, RealtimeTransportKind, VoiceTxBufferProfile } from '@tx5dr/contracts';
 import type { ConnectionState } from '../../../store/radioStore';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
-import { subject as caslSubject } from '@casl/ability';
 import { showErrorToast, localizeError } from '../../../utils/errorToast';
 import { useHasMinRole, useCan, useAbility } from '../../../store/authStore';
 import { useState, useEffect } from 'react';
@@ -25,6 +24,7 @@ import { useWSEvent } from '../../../hooks/useWSEvent';
 import { createLogger } from '../../../utils/logger';
 import { TxVolumeGainControl } from './TxVolumeGainControl';
 import {
+  canExecuteRadioFrequency,
   canWriteRadioFrequency,
   deriveMonitorActivationCtaState,
   filterDigitalFrequencyOptions,
@@ -557,6 +557,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const tunerIsTuning = (tunerSwitchCapState?.meta as { status?: string } | undefined)?.status === 'tuning';
   const tuneToneActive = tuneToneStatus.active;
   const ability = useAbility();
+  const canWriteTargetFrequency = React.useCallback((frequency: number) => (
+    canWriteFrequency && canExecuteRadioFrequency(ability, frequency)
+  ), [ability, canWriteFrequency]);
   const formatBandLabel = React.useCallback((band?: string | null) => (
     !band || band.toLowerCase() === CUSTOM_BAND ? t('frequency.custom') : band
   ), [t]);
@@ -1330,6 +1333,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     }
 
     const { frequency } = result;
+    if (!canWriteTargetFrequency(frequency)) {
+      setCustomFrequencyError(t('auth:errors.insufficient_permission'));
+      return;
+    }
     setIsSettingCustomFrequency(true);
 
     try {
@@ -1416,8 +1423,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       filtered = filtered.filter(freq => {
         // 自定义频率选项始终保留（后端会做最终校验）
         if (freq.key === customFrequencyOption?.key) return true;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return ability.can('execute', caslSubject('RadioFrequency', { frequency: freq.frequency }) as any);
+        return canExecuteRadioFrequency(ability, freq.frequency);
       });
     }
 
@@ -1475,7 +1481,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   // 自动设置频率到后端（避免递归调用）
   const autoSetFrequency = async (frequency: FrequencyOption) => {
-    if (!isRadioConnectedRef.current || !canWriteFrequency) return;
+    if (!isRadioConnectedRef.current || !canWriteTargetFrequency(frequency.frequency)) return;
 
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1543,7 +1549,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const executeFrequencySwitch = async (selectedFrequencyKey: string, selectedFrequency: any) => {
-    if (!canWriteFrequency) return;
+    if (!canWriteTargetFrequency(selectedFrequency.frequency)) return;
 
     try {
       // 设置频率和电台调制模式

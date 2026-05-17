@@ -57,6 +57,7 @@ function getEntries(params: {
 
 describe('RadioControlPluginToolbar helpers', () => {
   it('resolves FontAwesome Free solid and brands icons with fallback', () => {
+    expect(resolveRadioToolbarIcon('arrows-rotate').iconName).toBe('arrows-rotate');
     expect(resolveRadioToolbarIcon('satellite-dish').iconName).toBe('satellite-dish');
     expect(resolveRadioToolbarIcon('solid:tower-broadcast').iconName).toBe('tower-broadcast');
     expect(resolveRadioToolbarIcon('brands:github').iconName).toBe('github');

@@ -60,6 +60,7 @@ describe('plugin market schema', () => {
   });
 
   it('accepts host settings permissions', () => {
+    expect(PluginPermissionSchema.parse('host:hamlib')).toBe('host:hamlib');
     expect(PluginPermissionSchema.parse('settings:ft8')).toBe('settings:ft8');
     expect(PluginPermissionSchema.parse('settings:ntp')).toBe('settings:ntp');
   });

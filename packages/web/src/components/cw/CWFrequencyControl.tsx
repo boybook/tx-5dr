@@ -2,10 +2,10 @@ import React, { useCallback, useEffect, useMemo } from 'react';
 import { Card, CardBody } from '@heroui/react';
 import { api, ApiError, getBandFromFrequency } from '@tx5dr/core';
 import { useTranslation } from 'react-i18next';
-import { useCan } from '../../store/authStore';
+import { useAbility, useCan } from '../../store/authStore';
 import { useConnection, useOperators, useRadioConnectionState, useRadioState } from '../../store/radioStore';
 import { createLogger } from '../../utils/logger';
-import { canWriteRadioFrequency } from '../../utils/radioControl';
+import { canExecuteRadioFrequency, canWriteRadioFrequency } from '../../utils/radioControl';
 import { resetOperatorsForOperatingStateChange } from '../../utils/operatorReset';
 import { showErrorToast } from '../../utils/errorToast';
 import { setRadioFrequencyWithIntent } from '../../utils/radioFrequencyIntent';
@@ -62,7 +62,11 @@ export const CWFrequencyControl: React.FC = () => {
   const radioConnection = useRadioConnectionState();
   const radio = useRadioState();
   const canSetFrequency = useCan('execute', 'RadioFrequency');
+  const ability = useAbility();
   const canWriteFrequency = canWriteRadioFrequency(canSetFrequency, radioConnection.coreCapabilities);
+  const canWriteTargetFrequency = useCallback((frequency: number) => (
+    canWriteFrequency && canExecuteRadioFrequency(ability, frequency)
+  ), [ability, canWriteFrequency]);
   const liveFrequency = radio.state.currentRadioFrequency && radio.state.currentRadioFrequency > 0
     ? radio.state.currentRadioFrequency
     : null;
@@ -96,7 +100,7 @@ export const CWFrequencyControl: React.FC = () => {
     const pending = pendingFreqRef.current;
     if (!pending) return;
 
-    if (!canWriteFrequency || !connection.state.isConnected) {
+    if (!canWriteTargetFrequency(pending.intendedFrequency) || !connection.state.isConnected) {
       pendingFreqRef.current = null;
       return;
     }
@@ -123,10 +127,10 @@ export const CWFrequencyControl: React.FC = () => {
         showErrorToast({ userMessage: error.userMessage, suggestions: error.suggestions, severity: error.severity, code: error.code });
       }
     }
-  }, [canWriteFrequency, connection.state.isConnected, resetOperatorsAfterOperatingStateChange]);
+  }, [canWriteTargetFrequency, connection.state.isConnected, resetOperatorsAfterOperatingStateChange]);
 
   const applyFrequency = useCallback((newFreq: number) => {
-    if (!canWriteFrequency || !connection.state.isConnected) {
+    if (!canWriteTargetFrequency(newFreq) || !connection.state.isConnected) {
       pendingFreqRef.current = null;
       return;
     }
@@ -140,7 +144,7 @@ export const CWFrequencyControl: React.FC = () => {
       freqDebounceTimerRef.current = null;
       void flushPendingFrequency();
     }, FREQ_DEBOUNCE_MS);
-  }, [canWriteFrequency, connection.state.isConnected, flushPendingFrequency]);
+  }, [canWriteTargetFrequency, connection.state.isConnected, flushPendingFrequency]);
 
   useEffect(() => () => {
     if (freqDebounceTimerRef.current) {

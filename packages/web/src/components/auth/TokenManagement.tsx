@@ -27,7 +27,15 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus, faTrash, faCopy, faCheck, faRotate, faLock, faChevronDown, faShareNodes, faEye, faEyeSlash, faPen } from '@fortawesome/free-solid-svg-icons';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '@tx5dr/core';
-import { UserRole, Permission, PERMISSION_GROUPS, CONDITIONAL_PERMISSIONS } from '@tx5dr/contracts';
+import {
+  buildRadioFrequencyPermissionGrants,
+  FREQUENCY_PERMISSION_BAND_RANGES,
+  getPresetFrequenciesFromFrequencyGrants,
+  getRangesFromFrequencyGrants,
+  UserRole,
+  Permission,
+  PERMISSION_GROUPS,
+} from '@tx5dr/contracts';
 import type { TokenInfo, CreateTokenRequest, NetworkInfo, PermissionGrant, PresetFrequency, UpdateTokenRequest } from '@tx5dr/contracts';
 import { useOperators } from '../../store/radioStore';
 
@@ -37,13 +45,69 @@ const ROLE_COLORS: Record<string, 'default' | 'primary' | 'warning'> = {
   admin: 'warning',
 };
 const CUSTOM_BAND = 'custom';
+const CUSTOM_RANGE_BAND = 'custom';
+const FREQUENCY_RANGE_BAND_OPTIONS = Object.entries(FREQUENCY_PERMISSION_BAND_RANGES).map(([key, range]) => ({
+  key,
+  label: `${key} ${(range.minFrequency / 1_000_000).toFixed(3)}-${(range.maxFrequency / 1_000_000).toFixed(3)} MHz`,
+  range,
+}));
 
 type CreateLoginCredentialInitMode = 'none' | 'admin' | 'self-service';
+
+interface FrequencyRangeDraft {
+  id: string;
+  bandKey: string;
+  minMHz: string;
+  maxMHz: string;
+}
 
 function expiryKeyToTimestamp(key: string): number | undefined {
   if (key === 'never') return undefined;
   const days = parseInt(key);
   return Date.now() + days * 24 * 60 * 60 * 1000;
+}
+
+function formatMHzValue(frequencyHz: number): string {
+  return Number((frequencyHz / 1_000_000).toFixed(6)).toString();
+}
+
+function createFrequencyRangeDraft(range?: { band?: string; minFrequency: number; maxFrequency: number }): FrequencyRangeDraft {
+  const id = `range-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  if (range) {
+    return {
+      id,
+      bandKey: range.band ?? CUSTOM_RANGE_BAND,
+      minMHz: formatMHzValue(range.minFrequency),
+      maxMHz: formatMHzValue(range.maxFrequency),
+    };
+  }
+
+  const defaultRange = FREQUENCY_PERMISSION_BAND_RANGES['20m'];
+  return {
+    id,
+    bandKey: '20m',
+    minMHz: formatMHzValue(defaultRange.minFrequency),
+    maxMHz: formatMHzValue(defaultRange.maxFrequency),
+  };
+}
+
+function parseFrequencyRangeDraft(draft: FrequencyRangeDraft): { band?: string; minFrequency: number; maxFrequency: number } | null {
+  const minMHz = Number(draft.minMHz);
+  const maxMHz = Number(draft.maxMHz);
+  if (!Number.isFinite(minMHz) || !Number.isFinite(maxMHz) || minMHz <= 0 || maxMHz <= 0 || minMHz > maxMHz) {
+    return null;
+  }
+  return {
+    band: draft.bandKey === CUSTOM_RANGE_BAND ? undefined : draft.bandKey,
+    minFrequency: Math.round(minMHz * 1_000_000),
+    maxFrequency: Math.round(maxMHz * 1_000_000),
+  };
+}
+
+function hasUnconditionalFrequencyGrant(grants: PermissionGrant[] | undefined): boolean {
+  return (grants ?? []).some((grant) => (
+    grant.permission === Permission.RADIO_SET_FREQUENCY && grant.conditions === undefined
+  ));
 }
 
 interface TokenCardProps {
@@ -168,8 +232,8 @@ function TokenCard({ token, operators, onRevoke, onRegenerate, onShare, onEdit }
         )}
         {token.permissionGrants && token.permissionGrants.length > 0 && (
           <div className="flex flex-wrap gap-1">
-            {token.permissionGrants.map((grant) => (
-              <Chip key={grant.permission} size="sm" variant="flat" color="secondary" className="text-[10px] h-5">
+            {token.permissionGrants.map((grant, index) => (
+              <Chip key={`${grant.permission}-${index}`} size="sm" variant="flat" color="secondary" className="text-[10px] h-5">
                 {t(`auth:permissions.${grant.permission.replace(':', '.')}`)}
               </Chip>
             ))}
@@ -276,6 +340,7 @@ export function TokenManagement() {
   const [selectedPermissions, setSelectedPermissions] = useState<string[]>([]);
   const [frequencyPresets, setFrequencyPresets] = useState<PresetFrequency[]>([]);
   const [selectedPresetFrequencies, setSelectedPresetFrequencies] = useState<string[]>([]);
+  const [frequencyRangeDrafts, setFrequencyRangeDrafts] = useState<FrequencyRangeDraft[]>([]);
   const [presetsLoading, setPresetsLoading] = useState(false);
 
   // 加载 Token 列表
@@ -310,19 +375,35 @@ export function TokenManagement() {
   // 构建 permissionGrants
   const buildPermissionGrants = useCallback((): PermissionGrant[] | undefined => {
     if (selectedPermissions.length === 0) return undefined;
-    return selectedPermissions.map((p) => {
-      const grant: PermissionGrant = { permission: p as Permission };
-      const condDef = CONDITIONAL_PERMISSIONS[p as Permission];
-      if (condDef && p === Permission.RADIO_SET_FREQUENCY && selectedPresetFrequencies.length > 0) {
-        grant.conditions = {
-          [condDef.conditionField]: {
-            [condDef.conditionOperator]: selectedPresetFrequencies.map(Number),
-          },
-        };
+    const grants: PermissionGrant[] = [];
+
+    for (const permission of selectedPermissions) {
+      if (permission !== Permission.RADIO_SET_FREQUENCY) {
+        grants.push({ permission: permission as Permission });
       }
-      return grant;
-    });
-  }, [selectedPermissions, selectedPresetFrequencies]);
+    }
+
+    if (selectedPermissions.includes(Permission.RADIO_SET_FREQUENCY)) {
+      const ranges = frequencyRangeDrafts.map((draft, index) => {
+        const range = parseFrequencyRangeDraft(draft);
+        if (range === null) {
+          throw new Error(`Invalid frequency range at index ${index}`);
+        }
+        return range;
+      });
+      grants.push(...buildRadioFrequencyPermissionGrants(
+        selectedPresetFrequencies.map(Number),
+        ranges,
+      ));
+    }
+
+    return grants;
+  }, [frequencyRangeDrafts, selectedPermissions, selectedPresetFrequencies]);
+
+  const hasInvalidFrequencyRanges = useMemo(() => (
+    selectedPermissions.includes(Permission.RADIO_SET_FREQUENCY)
+    && frequencyRangeDrafts.some((draft) => parseFrequencyRangeDraft(draft) === null)
+  ), [frequencyRangeDrafts, selectedPermissions]);
 
   const isCreateAdminCredentialMode = !editingToken && loginCredentialInitMode === 'admin';
   const isEditingConfiguredCredential = Boolean(editingToken?.loginCredential) && !clearExistingCredential;
@@ -352,6 +433,7 @@ export function TokenManagement() {
     setClearExistingCredential(false);
     setSelectedPermissions([]);
     setSelectedPresetFrequencies([]);
+    setFrequencyRangeDrafts([]);
   }, []);
 
   // 创建 Token
@@ -361,6 +443,14 @@ export function TokenManagement() {
       addToast({
         title: t('auth:token.loginCredential.validationFailed'),
         description: t('auth:token.loginCredential.passwordRequiredForCreate'),
+        color: 'danger',
+        timeout: 4000,
+      });
+      return;
+    }
+    if (hasInvalidFrequencyRanges) {
+      addToast({
+        title: t('auth:permissions.frequencyRangeInvalid'),
         color: 'danger',
         timeout: 4000,
       });
@@ -421,7 +511,7 @@ export function TokenManagement() {
     } finally {
       setCreating(false);
     }
-  }, [allowSelfLoginCredential, buildPermissionGrants, closeFormModal, loadTokens, loginCredentialInitMode, loginCredentialPassword, loginCredentialUsername, newExpiry, newLabel, newMaxOperators, newOperatorIds, newRole, t]);
+  }, [allowSelfLoginCredential, buildPermissionGrants, closeFormModal, hasInvalidFrequencyRanges, loadTokens, loginCredentialInitMode, loginCredentialPassword, loginCredentialUsername, newExpiry, newLabel, newMaxOperators, newOperatorIds, newRole, t]);
 
   // 打开编辑 Modal（复用创建 Modal 的表单状态）
   const handleEdit = useCallback((token: TokenInfo) => {
@@ -437,12 +527,22 @@ export function TokenManagement() {
     setShowCredentialEditor(false);
     setClearExistingCredential(false);
     // 从现有 permissionGrants 恢复选中的权限和频率条件
-    const perms = (token.permissionGrants ?? []).map(g => g.permission);
+    const presetFrequencies = getPresetFrequenciesFromFrequencyGrants(token.permissionGrants);
+    const frequencyRanges = getRangesFromFrequencyGrants(token.permissionGrants);
+    const recoverFrequencyPermission = hasUnconditionalFrequencyGrant(token.permissionGrants)
+      || presetFrequencies.length > 0
+      || frequencyRanges.length > 0;
+    const perms = [
+      ...new Set([
+        ...(token.permissionGrants ?? [])
+          .filter((grant) => grant.permission !== Permission.RADIO_SET_FREQUENCY)
+          .map(g => g.permission),
+        ...(recoverFrequencyPermission ? [Permission.RADIO_SET_FREQUENCY] : []),
+      ]),
+    ];
     setSelectedPermissions(perms);
-    const freqGrant = (token.permissionGrants ?? []).find(g => g.permission === Permission.RADIO_SET_FREQUENCY);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const freqIn = (freqGrant?.conditions as any)?.frequency?.['$in'] as number[] | undefined;
-    setSelectedPresetFrequencies(freqIn ? freqIn.map(String) : []);
+    setSelectedPresetFrequencies(presetFrequencies.map(String));
+    setFrequencyRangeDrafts(frequencyRanges.map(createFrequencyRangeDraft));
     // expiry: 编辑时不改变已有过期时间，显示为 "never"（保持不变）
     setNewExpiry('never');
     setCreateModalOpen(true);
@@ -473,6 +573,14 @@ export function TokenManagement() {
       addToast({
         title: t('auth:token.loginCredential.validationFailed'),
         description: t('auth:token.loginCredential.passwordTooShort'),
+        color: 'danger',
+        timeout: 4000,
+      });
+      return;
+    }
+    if (hasInvalidFrequencyRanges) {
+      addToast({
+        title: t('auth:permissions.frequencyRangeInvalid'),
         color: 'danger',
         timeout: 4000,
       });
@@ -515,7 +623,7 @@ export function TokenManagement() {
     } finally {
       setCreating(false);
     }
-  }, [allowSelfLoginCredential, buildPermissionGrants, clearExistingCredential, closeFormModal, editingToken, loadTokens, loginCredentialPassword, loginCredentialUsername, newLabel, newMaxOperators, newOperatorIds, newRole, shouldShowCredentialInputs, showCredentialEditor, t]);
+  }, [allowSelfLoginCredential, buildPermissionGrants, clearExistingCredential, closeFormModal, editingToken, hasInvalidFrequencyRanges, loadTokens, loginCredentialPassword, loginCredentialUsername, newLabel, newMaxOperators, newOperatorIds, newRole, shouldShowCredentialInputs, showCredentialEditor, t]);
 
   // 撤销 Token
   const handleRevoke = useCallback(async (tokenId: string) => {
@@ -894,6 +1002,7 @@ export function TokenManagement() {
                                   setSelectedPermissions((prev) => prev.filter((p) => p !== perm));
                                   if (perm === Permission.RADIO_SET_FREQUENCY) {
                                     setSelectedPresetFrequencies([]);
+                                    setFrequencyRangeDrafts([]);
                                   }
                                 }
                               }}
@@ -902,8 +1011,9 @@ export function TokenManagement() {
                             </Checkbox>
                             {/* 频率限制条件编辑器 */}
                             {perm === Permission.RADIO_SET_FREQUENCY && selectedPermissions.includes(perm) && (
-                              <div className="pl-7 pt-1 pb-1">
-                                <p className="text-xs text-default-400 mb-1.5">{t('auth:permissions.frequencyRestriction')}</p>
+                              <div className="pl-7 pt-1 pb-1 space-y-3">
+                                <div>
+                                  <p className="text-xs text-default-400 mb-1.5">{t('auth:permissions.frequencyPresetRestriction')}</p>
                                 {presetsLoading ? (
                                   <Spinner size="sm" />
                                 ) : frequencyPresets.length > 0 ? (
@@ -919,10 +1029,87 @@ export function TokenManagement() {
                                     ))}
                                   </CheckboxGroup>
                                 ) : null}
-                                <p className="text-xs text-default-300 mt-1">
-                                  {selectedPresetFrequencies.length === 0
-                                    ? t('auth:permissions.allPresets')
-                                    : t('auth:permissions.selectedPresets', { count: selectedPresetFrequencies.length })}
+                                </div>
+
+                                <div className="space-y-2">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="text-xs text-default-400">{t('auth:permissions.frequencyRangeRestriction')}</p>
+                                    <Button
+                                      size="sm"
+                                      variant="flat"
+                                      onPress={() => setFrequencyRangeDrafts((prev) => [...prev, createFrequencyRangeDraft()])}
+                                    >
+                                      {t('auth:permissions.frequencyRangeAdd')}
+                                    </Button>
+                                  </div>
+                                  {frequencyRangeDrafts.map((range) => (
+                                    <div key={range.id} className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 items-end">
+                                      <Select
+                                        size="sm"
+                                        label={t('auth:permissions.frequencyRangeBand')}
+                                        selectedKeys={new Set([range.bandKey])}
+                                        onSelectionChange={(keys) => {
+                                          const key = Array.from(keys)[0] as string | undefined;
+                                          if (!key) return;
+                                          setFrequencyRangeDrafts((prev) => prev.map((item) => {
+                                            if (item.id !== range.id) return item;
+                                            const presetRange = FREQUENCY_PERMISSION_BAND_RANGES[key];
+                                            return {
+                                              ...item,
+                                              bandKey: key,
+                                              ...(presetRange ? {
+                                                minMHz: formatMHzValue(presetRange.minFrequency),
+                                                maxMHz: formatMHzValue(presetRange.maxFrequency),
+                                              } : {}),
+                                            };
+                                          }));
+                                        }}
+                                      >
+                                        {FREQUENCY_RANGE_BAND_OPTIONS.map((option) => (
+                                          <SelectItem key={option.key}>{option.label}</SelectItem>
+                                        ))}
+                                        <SelectItem key={CUSTOM_RANGE_BAND}>{t('auth:permissions.frequencyRangeCustom')}</SelectItem>
+                                      </Select>
+                                      <Input
+                                        size="sm"
+                                        type="number"
+                                        label={t('auth:permissions.frequencyRangeMin')}
+                                        value={range.minMHz}
+                                        onValueChange={(value) => setFrequencyRangeDrafts((prev) => prev.map((item) => (
+                                          item.id === range.id ? { ...item, bandKey: CUSTOM_RANGE_BAND, minMHz: value } : item
+                                        )))}
+                                      />
+                                      <Input
+                                        size="sm"
+                                        type="number"
+                                        label={t('auth:permissions.frequencyRangeMax')}
+                                        value={range.maxMHz}
+                                        onValueChange={(value) => setFrequencyRangeDrafts((prev) => prev.map((item) => (
+                                          item.id === range.id ? { ...item, bandKey: CUSTOM_RANGE_BAND, maxMHz: value } : item
+                                        )))}
+                                      />
+                                      <Button
+                                        size="sm"
+                                        variant="light"
+                                        color="danger"
+                                        isIconOnly
+                                        onPress={() => setFrequencyRangeDrafts((prev) => prev.filter((item) => item.id !== range.id))}
+                                        aria-label={t('common:button.delete')}
+                                      >
+                                        <FontAwesomeIcon icon={faTrash} />
+                                      </Button>
+                                    </div>
+                                  ))}
+                                </div>
+                                <p className={`text-xs mt-1 ${hasInvalidFrequencyRanges ? 'text-danger' : 'text-default-300'}`}>
+                                  {hasInvalidFrequencyRanges
+                                    ? t('auth:permissions.frequencyRangeInvalid')
+                                    : selectedPresetFrequencies.length === 0 && frequencyRangeDrafts.length === 0
+                                      ? t('auth:permissions.frequencyRestrictionAllowAll')
+                                      : t('auth:permissions.frequencyRestrictionSummary', {
+                                        presetCount: selectedPresetFrequencies.length,
+                                        rangeCount: frequencyRangeDrafts.length,
+                                      })}
                                 </p>
                               </div>
                             )}
@@ -969,7 +1156,7 @@ export function TokenManagement() {
               color="primary"
               onPress={editingToken ? handleUpdate : handleCreate}
               isLoading={creating}
-              isDisabled={!newLabel.trim() || !isCredentialFormValid}
+              isDisabled={!newLabel.trim() || !isCredentialFormValid || hasInvalidFrequencyRanges}
             >
               {editingToken ? t('common:button.save') : t('auth:token.create')}
             </Button>

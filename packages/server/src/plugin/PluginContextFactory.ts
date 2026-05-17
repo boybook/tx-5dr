@@ -1,8 +1,10 @@
 import path from 'path';
 import { createSocket } from 'node:dgram';
+import * as hostHamlib from 'hamlib';
 import type { RemoteInfo, Socket, SocketType } from 'node:dgram';
 import type {
   HostSettingsControl,
+  HamlibHostDependency,
   LogbookSyncProvider,
   PluginContext,
   PluginUIInstanceTarget,
@@ -35,6 +37,23 @@ import { HostSettingsService } from './HostSettingsService.js';
 import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
 import { createLogger } from '../utils/logger.js';
 import type { LoadedPlugin, PluginManagerDeps } from './types.js';
+
+type HostHamlibModule = {
+  Rotator: HamlibHostDependency['Rotator'];
+  PASSBAND: HamlibHostDependency['PASSBAND'];
+};
+
+function createAllowedHamlibDependency(source: HostHamlibModule): HamlibHostDependency {
+  return Object.freeze({
+    Rotator: source.Rotator,
+    PASSBAND: Object.freeze({
+      NORMAL: source.PASSBAND.NORMAL,
+      NOCHANGE: source.PASSBAND.NOCHANGE,
+    }),
+  });
+}
+
+const HOST_HAMLIB_DEPENDENCY = createAllowedHamlibDependency(hostHamlib as unknown as HostHamlibModule);
 
 /**
  * 为插件实例创建 PluginContext。
@@ -113,6 +132,9 @@ export class PluginContextFactory {
       ui: uiBridge,
       files: fileStore,
       settings: settingsControl,
+      hostDependencies: plugin.definition.permissions?.includes('host:hamlib')
+        ? { hamlib: HOST_HAMLIB_DEPENDENCY }
+        : {},
       network: networkControl,
       logbookSync: {
         register: (provider) => {

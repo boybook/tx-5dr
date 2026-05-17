@@ -12,6 +12,7 @@ import type {
 } from './helpers.js';
 import type { LogbookSyncRegistrar } from './sync.js';
 import type { HostSettingsControl } from './settings.js';
+import type { HostDependencies } from './host-dependencies.js';
 
 /**
  * Runtime services exposed to a plugin instance.
@@ -146,6 +147,15 @@ export interface PluginContext {
    * such as WSJT-X UDP belong inside plugins.
    */
   readonly network?: PluginNetworkControl;
+
+  /**
+   * Host-owned runtime dependencies exposed to plugins.
+   *
+   * Native dependencies such as Hamlib are loaded by the host process. Each
+   * dependency is optional and requires its own manifest permission; feature
+   * detect before use.
+   */
+  readonly hostDependencies: HostDependencies;
 
   /**
    * Permission-gated HTTP client.

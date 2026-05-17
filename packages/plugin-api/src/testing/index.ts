@@ -29,11 +29,13 @@ import type {
   HostSettingsControl,
 } from '../settings.js';
 import type { PluginContext } from '../context.js';
+import type { HostDependencies } from '../host-dependencies.js';
 // Type-only imports from contracts (devDependency — erased at compile time)
 import type {
   SlotInfo,
   ParsedFT8Message,
   ModeDescriptor,
+  PluginPermission,
   CapabilityList,
   RadioPowerStateEvent,
   DecodeWindowSettings,
@@ -76,6 +78,7 @@ export interface MockPluginContext extends PluginContext {
   readonly timers: MockTimers;
   readonly ui: MockUIBridge;
   readonly settings: HostSettingsControl;
+  readonly hostDependencies: HostDependencies;
   readonly network: PluginNetworkControl;
 }
 
@@ -89,6 +92,48 @@ export interface MockUdpSocket extends PluginUdpSocket {
 
 export interface MockNetworkControl extends PluginNetworkControl {
   readonly _sockets: MockUdpSocket[];
+}
+
+
+function createMockHostDependencies(): HostDependencies {
+  class MockRotator {
+    static getSupportedRotators() { return []; }
+    static getHamlibVersion() { return 'mock-hamlib'; }
+    static setDebugLevel(_level: number) { /* no-op */ }
+    async open() { return 0; }
+    async close() { return 0; }
+    destroy() { /* no-op */ }
+    getConnectionInfo() { return { connectionType: 'network' as const, portPath: '', isOpen: false, originalModel: 0, currentModel: 0 }; }
+    async setPosition(_azimuth: number, _elevation: number) { return 0; }
+    async getPosition() { return { azimuth: 0, elevation: 0 }; }
+    async move(_direction: unknown, _speed: number) { return 0; }
+    async stop() { return 0; }
+    async park() { return 0; }
+    async reset(_resetType: unknown) { return 0; }
+    async getInfo() { return ''; }
+    async getStatus() { return { mask: 0, flags: [] }; }
+    async setConf(_name: string, _value: string) { return 0; }
+    async getConf(_name: string) { return ''; }
+    getConfigSchema() { return []; }
+    getPortCaps() { return { portType: 'network' }; }
+    getRotatorCaps() { return { rotType: 'azimuth' as const, rotTypeMask: 0, minAz: 0, maxAz: 360, minEl: 0, maxEl: 0, supportedStatuses: [] }; }
+    async setLevel(_level: string, _value: number) { return 0; }
+    async getLevel(_level: string) { return 0; }
+    getSupportedLevels() { return []; }
+    async setFunction(_func: string, _enable: boolean) { return 0; }
+    async getFunction(_func: string) { return false; }
+    getSupportedFunctions() { return []; }
+    async setParm(_parm: string, _value: number) { return 0; }
+    async getParm(_parm: string) { return 0; }
+    getSupportedParms() { return []; }
+  }
+
+  return {
+    hamlib: {
+      Rotator: MockRotator,
+      PASSBAND: { NORMAL: 0, NOCHANGE: -1 },
+    },
+  };
 }
 
 // ===== Factory: KVStore =====
@@ -481,6 +526,10 @@ export interface MockPluginContextOptions {
   band?: Partial<BandAccess>;
   /** Host settings control overrides. */
   settings?: Partial<HostSettingsControl>;
+  /** Host dependency overrides. */
+  hostDependencies?: HostDependencies;
+  /** Manifest permissions to model permission-gated optional host dependencies. */
+  permissions?: PluginPermission[];
   /** Pre-constructed stores (uses fresh empty stores when omitted). */
   store?: { global?: MockKVStore; operator?: MockKVStore };
 }
@@ -513,6 +562,8 @@ export function createMockContext(options?: MockPluginContextOptions): MockPlugi
   const settings = createMockHostSettingsControl(opts.settings);
   const files = createMockFileStore();
   const network = opts.network ?? createMockNetworkControl();
+  const hostDependencies = opts.hostDependencies
+    ?? (opts.permissions?.includes('host:hamlib') ? createMockHostDependencies() : {});
   const logbookSync = { register() { /* no-op in mock */ } };
 
   return {
@@ -529,6 +580,7 @@ export function createMockContext(options?: MockPluginContextOptions): MockPlugi
     band,
     ui,
     settings,
+    hostDependencies,
     files,
     network,
     logbookSync,

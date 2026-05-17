@@ -116,4 +116,22 @@ describe('PluginContextFactory radio access', () => {
     expect(setRadioPower).toHaveBeenNthCalledWith(1, 'on', undefined);
     expect(setRadioPower).toHaveBeenNthCalledWith(2, 'standby', { profileId: 'profile-2', autoEngine: false });
   });
+
+
+  it('does not expose host-owned hamlib dependency without host permission', async () => {
+    const ctx = await createContext(createPlugin(), createDeps());
+
+    expect(ctx.hostDependencies.hamlib).toBeUndefined();
+  });
+
+  it('exposes allow-listed host-owned hamlib dependency to permitted plugins', async () => {
+    const ctx = await createContext(createPlugin(['host:hamlib']), createDeps());
+
+    expect(ctx.hostDependencies.hamlib).toBeDefined();
+    expect(typeof ctx.hostDependencies.hamlib?.Rotator).toBe('function');
+    expect(typeof ctx.hostDependencies.hamlib?.Rotator.getSupportedRotators).toBe('function');
+    expect(typeof ctx.hostDependencies.hamlib?.Rotator.getHamlibVersion()).toBe('string');
+    expect(ctx.hostDependencies.hamlib).not.toHaveProperty('HamLib');
+    expect(ctx.hostDependencies.hamlib).not.toHaveProperty('default');
+  });
 });

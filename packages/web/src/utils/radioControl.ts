@@ -1,4 +1,5 @@
 import type { CapabilityState, CoreRadioCapabilities } from '@tx5dr/contracts';
+import { subject as caslSubject } from '@casl/ability';
 
 export interface FrequencyOptionLike {
   key: string;
@@ -22,6 +23,21 @@ export function canWriteRadioFrequency(
   coreCapabilities: CoreRadioCapabilities | null | undefined,
 ): boolean {
   return canSetFrequency && isCoreCapabilityAvailable(coreCapabilities, 'writeFrequency');
+}
+
+export interface AbilityLike {
+  can(action: string, subject: unknown): boolean;
+}
+
+export function canExecuteRadioFrequency(
+  ability: AbilityLike,
+  frequency: number | null | undefined,
+): boolean {
+  if (typeof frequency !== 'number' || !Number.isFinite(frequency) || frequency <= 0) {
+    return false;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return ability.can('execute', caslSubject('RadioFrequency', { frequency: Math.round(frequency) }) as any);
 }
 
 export function shouldShowAutoTunerShortcut(

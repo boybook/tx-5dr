@@ -14,11 +14,10 @@ import { api, ApiError } from '@tx5dr/core';
 import { useConnection, useOperators, useRadioConnectionState, useRadioState } from '../../store/radioStore';
 import { useHasMinRole, useCan, useAbility } from '../../store/authStore';
 import { UserRole, type PresetFrequency } from '@tx5dr/contracts';
-import { subject as caslSubject } from '@casl/ability';
 import { showErrorToast } from '../../utils/errorToast';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
-import { canWriteRadioFrequency, isCoreCapabilityAvailable } from '../../utils/radioControl';
+import { canExecuteRadioFrequency, canWriteRadioFrequency, isCoreCapabilityAvailable } from '../../utils/radioControl';
 import { resetOperatorsForOperatingStateChange } from '../../utils/operatorReset';
 import { FrequencyPresetAddModal } from '../settings/FrequencyPresetAddModal';
 import { formatToneSquelch } from '../../utils/toneSquelch';
@@ -60,6 +59,9 @@ export const VoiceFrequencyControl: React.FC = () => {
   const canManageFrequencyPresets = useCan('update', 'SettingsFrequencyPresets');
   const ability = useAbility();
   const canWriteFrequency = canWriteRadioFrequency(canSetFrequency, radioConnection.coreCapabilities);
+  const canWriteTargetFrequency = useCallback((frequency: number) => (
+    canWriteFrequency && canExecuteRadioFrequency(ability, frequency)
+  ), [ability, canWriteFrequency]);
   const canWriteRadioMode = canSetFrequency && isCoreCapabilityAvailable(radioConnection.coreCapabilities, 'writeRadioMode');
 
   const [presets, setPresets] = useState<FrequencyPreset[]>([]);
@@ -114,7 +116,7 @@ export const VoiceFrequencyControl: React.FC = () => {
     const pending = pendingFreqRef.current;
     if (!pending) return;
 
-    if (!canWriteFrequency || !connection.state.isConnected) {
+    if (!canWriteTargetFrequency(pending.intendedFrequency) || !connection.state.isConnected) {
       pendingFreqRef.current = null;
       return;
     }
@@ -137,12 +139,12 @@ export const VoiceFrequencyControl: React.FC = () => {
     } catch (error) {
       logger.error('Failed to set frequency:', error);
     }
-  }, [canWriteFrequency, connection.state.isConnected, resetOperatorsAfterOperatingStateChange]);
+  }, [canWriteTargetFrequency, connection.state.isConnected, resetOperatorsAfterOperatingStateChange]);
 
   // Apply a new frequency from digit edits. Updates UI immediately, marks pending,
   // and coalesces rapid consecutive edits via a 50ms trailing debounce.
   const applyFrequency = useCallback((newFreq: number) => {
-    if (!canWriteFrequency || !connection.state.isConnected) {
+    if (!canWriteTargetFrequency(newFreq) || !connection.state.isConnected) {
       pendingFreqRef.current = null;
       return;
     }
@@ -156,7 +158,7 @@ export const VoiceFrequencyControl: React.FC = () => {
       freqDebounceTimerRef.current = null;
       void flushPendingFrequency();
     }, FREQ_DEBOUNCE_MS);
-  }, [canWriteFrequency, connection.state.isConnected, flushPendingFrequency]);
+  }, [canWriteTargetFrequency, connection.state.isConnected, flushPendingFrequency]);
 
   // Cleanup debounce timer on unmount
   useEffect(() => () => {
@@ -293,8 +295,7 @@ export const VoiceFrequencyControl: React.FC = () => {
     // CASL 条件过滤：非 admin 用户只显示被允许的频率预设
     if (!isAdmin && canSetFrequency) {
       filtered = presets.filter(preset =>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ability.can('execute', caslSubject('RadioFrequency', { frequency: preset.frequency }) as any),
+        canExecuteRadioFrequency(ability, preset.frequency),
       );
     }
     const groups: Record<string, FrequencyPreset[]> = {};
@@ -437,6 +438,7 @@ export const VoiceFrequencyControl: React.FC = () => {
 
     const preset = presets.find(p => p.key === key);
     if (!preset) return;
+    if (!canWriteTargetFrequency(preset.frequency)) return;
 
     // Immediately update UI + register pending intent so any stale server echo
     // (incl. in-flight debounced digit edits) is suppressed until preset confirms.

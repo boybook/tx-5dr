@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildRadioSdrFrequencyRequest,
   buildRadioSdrTxBandOverlays,
+  canUseRadioSdrFrequencyRequest,
   clampCollapsedSpectrumFrequency,
   getCollapsedSpectrumPosition,
   getRadioSdrDragFrequencyStepHz,
@@ -239,5 +240,22 @@ describe('collapsed spectrum positioning', () => {
     expect(getRadioSdrDragFrequencyStepHz('voice')).toBe(1000);
     expect(getRadioSdrDragFrequencyStepHz('cw')).toBe(10);
     expect(getRadioSdrDragFrequencyStepHz('digital')).toBeNull();
+  });
+
+  it('checks SDR frequency gesture requests against target frequency authorization', () => {
+    const request = buildRadioSdrFrequencyRequest({
+      engineMode: 'voice',
+      frequency: 14_270_499,
+      stepHz: 1000,
+      voiceRadioMode: 'USB',
+    });
+    const canWrite20mOnly = (frequency: number) => frequency >= 14_000_000 && frequency <= 14_350_000;
+
+    expect(canUseRadioSdrFrequencyRequest(request, canWrite20mOnly)).toBe(true);
+    expect(canUseRadioSdrFrequencyRequest({
+      ...request!,
+      frequency: 14_500_000,
+    }, canWrite20mOnly)).toBe(false);
+    expect(canUseRadioSdrFrequencyRequest(null, canWrite20mOnly)).toBe(false);
   });
 });

@@ -81,6 +81,17 @@ describe('plugin-api testing utilities', () => {
       expect(ctx.config).toEqual({});
     });
 
+    it('does not expose mock host dependencies without permissions', () => {
+      const ctx = createMockContext();
+      expect(ctx.hostDependencies.hamlib).toBeUndefined();
+    });
+
+    it('provides mock host dependencies with host permissions', () => {
+      const ctx = createMockContext({ permissions: ['host:hamlib'] });
+      expect(ctx.hostDependencies.hamlib?.Rotator.getHamlibVersion()).toBe('mock-hamlib');
+      expect(ctx.hostDependencies.hamlib?.Rotator.getSupportedRotators()).toEqual([]);
+    });
+
     it('accepts overrides', () => {
       const ctx = createMockContext({
         callsign: 'JA1ABC',

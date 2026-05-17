@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { createMongoAbility } from '@casl/ability';
 import {
+  canExecuteRadioFrequency,
   canWriteRadioFrequency,
   deriveMonitorActivationCtaState,
   filterDigitalFrequencyOptions,
@@ -62,6 +64,16 @@ describe('radioControl utils', () => {
       readRadioMode: true,
       writeRadioMode: true,
     })).toBe(false);
+  });
+
+  it('checks radio frequency permission with target frequency data', () => {
+    const ability = createMongoAbility([
+      { action: 'execute', subject: 'RadioFrequency', conditions: { frequency: { $gte: 14_000_000, $lte: 14_350_000 } } },
+    ]);
+
+    expect(canExecuteRadioFrequency(ability, 14_270_000)).toBe(true);
+    expect(canExecuteRadioFrequency(ability, 14_500_000)).toBe(false);
+    expect(canExecuteRadioFrequency(ability, null)).toBe(false);
   });
 
   it('shows auto tuner shortcut only when connected, permitted, and supported', () => {

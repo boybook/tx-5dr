@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Switch, Tab, Tabs, Tooltip } from '@heroui/react';
+import { addToast } from '@heroui/toast';
 import { ArrowsPointingOutIcon, ChevronDownIcon, ChevronUpIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
 import type { EngineMode, SpectrumFrame, SpectrumKind, SpectrumSessionVoiceState } from '@tx5dr/contracts';
 import { getBandFromFrequency } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useSpectrum } from '../../../store/radioStore';
-import { useCan } from '../../../store/authStore';
+import { useAbility, useCan } from '../../../store/authStore';
 import { createLogger } from '../../../utils/logger';
 import { setPreferredSpectrumKind } from '../../../utils/spectrumPreferences';
 import { useTargetRxFrequencies, type RxFrequency } from '../../../hooks/useTargetRxFrequencies';
@@ -15,7 +16,7 @@ import type { AutoRangeConfig, FrequencyBandOverlay, FrequencyBandOverlayChange,
 import { SpectrumStreamController } from '../../../spectrum/SpectrumStreamController';
 import { readSpectrumSubscriptionPaused, setSpectrumSubscriptionPaused } from '../../../utils/spectrumSubscriptionPause';
 import { resetOperatorsForOperatingStateChange } from '../../../utils/operatorReset';
-import { canWriteRadioFrequency } from '../../../utils/radioControl';
+import { canExecuteRadioFrequency, canWriteRadioFrequency } from '../../../utils/radioControl';
 import { setRadioFrequencyWithIntent, subscribeRadioFrequencyIntent, type SetRadioFrequencyParams } from '../../../utils/radioFrequencyIntent';
 import {
   RADIO_SDR_OPTIMISTIC_DISPLAY_HOLD_TIMEOUT_MS,
@@ -238,6 +239,13 @@ export function buildRadioSdrFrequencyRequest({
   }
 
   return null;
+}
+
+export function canUseRadioSdrFrequencyRequest(
+  request: SetRadioFrequencyParams | null,
+  canWriteTargetFrequency: (frequency: number) => boolean,
+): boolean {
+  return request !== null && canWriteTargetFrequency(request.frequency);
 }
 
 export function buildRadioSdrTxBandOverlays({
@@ -675,7 +683,11 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const { currentMode, currentRadioMode, currentRadioFrequency, engineMode } = useRadioModeState();
   const { pttStatus } = usePTTState();
   const canSetFrequency = useCan('execute', 'RadioFrequency');
+  const ability = useAbility();
   const canWriteFrequency = canWriteRadioFrequency(canSetFrequency, radioConnection.coreCapabilities);
+  const canWriteTargetFrequency = useCallback((frequency: number) => (
+    canWriteFrequency && canExecuteRadioFrequency(ability, frequency)
+  ), [ability, canWriteFrequency]);
   const { capabilities, selectedKind, subscribedKind, sessionState, setSelectedKind, setSubscribedKind } = useSpectrum();
   const controllerRef = useRef<SpectrumStreamController | null>(null);
   if (!controllerRef.current) {
@@ -925,7 +937,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       voiceRadioMode: sessionState?.voice.radioMode,
       currentRadioMode,
     });
-    if (!request) return;
+    if (!canUseRadioSdrFrequencyRequest(request, canWriteTargetFrequency)) {
+      addToast({
+        title: t('auth:errors.insufficient_permission'),
+        color: 'warning',
+        timeout: 2500,
+      });
+      return;
+    }
 
     try {
       const response = await setRadioFrequencyWithIntent(request);
@@ -935,7 +954,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     } catch (error) {
       logger.error('Failed to set radio frequency from SDR overlay', error);
     }
-  }, [canWriteFrequency, connection.state.isConnected, currentRadioMode, engineMode, frequencyGestureStepHz, frequencyGestureTarget, resetOperatorsAfterOperatingStateChange, sessionState?.voice.radioMode]);
+  }, [canWriteFrequency, canWriteTargetFrequency, connection.state.isConnected, currentRadioMode, engineMode, frequencyGestureStepHz, frequencyGestureTarget, resetOperatorsAfterOperatingStateChange, sessionState?.voice.radioMode, t]);
 
   const handleRadioFrequencyGesture = useCallback((frequency: number) => {
     if (!canWriteFrequency || frequencyGestureTarget !== 'radio-frequency') {

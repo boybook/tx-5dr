@@ -40,6 +40,8 @@ const POPOVER_SIZE_CLASS: Record<'sm' | 'md' | 'lg', string> = {
   lg: 'w-[28rem]',
 };
 
+const POPOVER_SCROLL_CLASS = 'max-h-[calc(100vh-5rem)] overflow-x-hidden overflow-y-auto overscroll-contain';
+
 const POPOVER_MIN_HEIGHT: Record<'sm' | 'md' | 'lg', number> = {
   sm: 180,
   md: 260,
@@ -307,7 +309,7 @@ const RadioControlToolbarButton: React.FC<{ entry: RadioControlToolbarEntry }> =
         <PopoverTrigger>
           {commonButton}
         </PopoverTrigger>
-        <PopoverContent className={`max-w-[calc(100vw-2rem)] p-0 overflow-hidden ${POPOVER_SIZE_CLASS[entry.uiSize]}`}>
+        <PopoverContent className={`max-w-[calc(100vw-2rem)] p-0 ${POPOVER_SCROLL_CLASS} ${POPOVER_SIZE_CLASS[entry.uiSize]}`}>
           <PluginIframeHost
             key={`${entry.pluginName}:${entry.pageId}:${entry.pluginGeneration}:popover`}
             pluginName={entry.pluginName}

@@ -100,6 +100,136 @@ export const PermissionGrantSchema = z.object({
 
 export type PermissionGrant = z.infer<typeof PermissionGrantSchema>;
 
+// ===== Frequency permission helpers =====
+
+export interface FrequencyPermissionRange {
+  band?: string;
+  minFrequency: number;
+  maxFrequency: number;
+}
+
+export const FREQUENCY_PERMISSION_BAND_RANGES: Record<string, FrequencyPermissionRange> = {
+  '160m': { band: '160m', minFrequency: 1_800_000, maxFrequency: 2_000_000 },
+  '80m': { band: '80m', minFrequency: 3_500_000, maxFrequency: 4_000_000 },
+  '60m': { band: '60m', minFrequency: 5_000_000, maxFrequency: 5_500_000 },
+  '40m': { band: '40m', minFrequency: 7_000_000, maxFrequency: 7_300_000 },
+  '30m': { band: '30m', minFrequency: 10_100_000, maxFrequency: 10_150_000 },
+  '20m': { band: '20m', minFrequency: 14_000_000, maxFrequency: 14_350_000 },
+  '17m': { band: '17m', minFrequency: 18_068_000, maxFrequency: 18_168_000 },
+  '15m': { band: '15m', minFrequency: 21_000_000, maxFrequency: 21_450_000 },
+  '12m': { band: '12m', minFrequency: 24_890_000, maxFrequency: 24_990_000 },
+  '10m': { band: '10m', minFrequency: 28_000_000, maxFrequency: 29_700_000 },
+  '6m': { band: '6m', minFrequency: 50_000_000, maxFrequency: 54_000_000 },
+  '2m': { band: '2m', minFrequency: 144_000_000, maxFrequency: 148_000_000 },
+  '70cm': { band: '70cm', minFrequency: 420_000_000, maxFrequency: 450_000_000 },
+};
+
+function getFrequencyCondition(grant: PermissionGrant): Record<string, unknown> | null {
+  if (grant.permission !== Permission.RADIO_SET_FREQUENCY) return null;
+  const frequency = grant.conditions?.frequency;
+  if (!frequency || typeof frequency !== 'object' || Array.isArray(frequency)) return null;
+  return frequency as Record<string, unknown>;
+}
+
+function normalizeFrequency(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : null;
+}
+
+function requireFrequency(value: unknown, label: string): number {
+  const frequency = normalizeFrequency(value);
+  if (frequency === null) {
+    throw new Error(`${label} must be a finite positive frequency in Hz`);
+  }
+  return frequency;
+}
+
+export function getPresetFrequenciesFromFrequencyGrants(grants: PermissionGrant[] | undefined): number[] {
+  const result: number[] = [];
+  const seen = new Set<number>();
+
+  for (const grant of grants ?? []) {
+    const condition = getFrequencyCondition(grant);
+    const values = condition?.$in;
+    if (!Array.isArray(values)) continue;
+
+    for (const value of values) {
+      const frequency = normalizeFrequency(value);
+      if (frequency !== null && !seen.has(frequency)) {
+        seen.add(frequency);
+        result.push(frequency);
+      }
+    }
+  }
+
+  return result;
+}
+
+export function getRangesFromFrequencyGrants(grants: PermissionGrant[] | undefined): FrequencyPermissionRange[] {
+  const result: FrequencyPermissionRange[] = [];
+
+  for (const grant of grants ?? []) {
+    const condition = getFrequencyCondition(grant);
+    const minFrequency = normalizeFrequency(condition?.$gte);
+    const maxFrequency = normalizeFrequency(condition?.$lte);
+    if (minFrequency === null || maxFrequency === null || minFrequency > maxFrequency) continue;
+
+    result.push({
+      minFrequency,
+      maxFrequency,
+      band: inferFrequencyPermissionBand(minFrequency, maxFrequency),
+    });
+  }
+
+  return result;
+}
+
+export function inferFrequencyPermissionBand(minFrequency: number, maxFrequency: number): string | undefined {
+  const entry = Object.entries(FREQUENCY_PERMISSION_BAND_RANGES)
+    .find(([, range]) => range.minFrequency === minFrequency && range.maxFrequency === maxFrequency);
+  return entry?.[0];
+}
+
+export function buildRadioFrequencyPermissionGrants(
+  presetFrequencies: number[],
+  ranges: FrequencyPermissionRange[],
+): PermissionGrant[] {
+  const grants: PermissionGrant[] = [];
+  const normalizedPresetFrequencies = [...new Set(presetFrequencies.map((value, index) => requireFrequency(value, `presetFrequencies[${index}]`)))];
+
+  if (normalizedPresetFrequencies.length > 0) {
+    grants.push({
+      permission: Permission.RADIO_SET_FREQUENCY,
+      conditions: {
+        frequency: { $in: normalizedPresetFrequencies },
+      },
+    });
+  }
+
+  for (const [index, range] of ranges.entries()) {
+    const minFrequency = requireFrequency(range.minFrequency, `ranges[${index}].minFrequency`);
+    const maxFrequency = requireFrequency(range.maxFrequency, `ranges[${index}].maxFrequency`);
+    if (minFrequency > maxFrequency) {
+      throw new Error(`ranges[${index}] minFrequency must be less than or equal to maxFrequency`);
+    }
+
+    grants.push({
+      permission: Permission.RADIO_SET_FREQUENCY,
+      conditions: {
+        frequency: {
+          $gte: minFrequency,
+          $lte: maxFrequency,
+        },
+      },
+    });
+  }
+
+  return grants.length > 0
+    ? grants
+    : [{ permission: Permission.RADIO_SET_FREQUENCY }];
+}
+
 // ===== Raw rule type (pure data, no CASL dependency) =====
 
 export interface RawRule {

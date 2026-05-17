@@ -24,6 +24,21 @@
 export type { PluginDefinition } from './definition.js';
 export type { PluginContext } from './context.js';
 export type {
+  HostDependencies,
+  HamlibHostDependency,
+  HamlibRotator,
+  HamlibRotatorConstructor,
+  HamlibSupportedRotatorInfo,
+  HamlibRotatorConnectionInfo,
+  HamlibRotatorPosition,
+  HamlibRotatorStatus,
+  HamlibRotatorDirection,
+  HamlibRotatorResetType,
+  HamlibConfigFieldDescriptor,
+  HamlibPortCaps,
+  HamlibRotatorCaps,
+} from './host-dependencies.js';
+export type {
   PluginHooks,
   AutoCallProposal,
   AutoCallExecutionRequest,

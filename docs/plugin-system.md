@@ -261,6 +261,7 @@ interface PluginDefinition {
   /** 可选：所需权限声明 */
   permissions?: (
     | 'network'
+    | 'host:hamlib'
     | 'radio:read' | 'radio:control' | 'radio:power'
     | 'settings:ft8' | 'settings:decode-windows' | 'settings:realtime'
     | 'settings:frequency-presets' | 'settings:station'
@@ -326,6 +327,7 @@ interface PluginDefinition {
 | 权限 | 授予能力 |
 |------|---------|
 | `network` | `ctx.fetch()` HTTP 请求 |
+| `host:hamlib` | `ctx.hostDependencies.hamlib` 宿主 Hamlib Rotator 依赖 |
 | `radio:read` | `ctx.radio.capabilities.getSnapshot()` / `getState()` / `refresh()` |
 | `radio:control` | `ctx.radio.capabilities.write()` |
 | `radio:power` | `ctx.radio.power.*` |
@@ -392,12 +394,43 @@ interface PluginContext {
   readonly settings: HostSettingsControl;
 
   /**
+   * 宿主进程持有的运行时依赖。每个依赖都需要独立权限并且可能为 undefined。
+   */
+  readonly hostDependencies: HostDependencies;
+
+  /**
    * 受控 HTTP fetch
    * 仅声明 permissions: ['network'] 后可用，否则为 undefined
    */
   readonly fetch?: (url: string, init?: RequestInit) => Promise<Response>;
 }
 ```
+
+
+#### HostDependencies
+
+`ctx.hostDependencies` 暴露由 TX-5DR 宿主进程加载和持有的 native/runtime 依赖。每个依赖都需要独立权限；未声明权限时对应字段为 `undefined`。插件目录位于宿主包树之外，直接 `import('hamlib')` 在生产安装、Electron 打包、开发软链接等场景下都可能解析失败；因此需要通过宿主上下文拿到同一个依赖实例。
+
+`ctx.hostDependencies.hamlib` 需要 manifest 声明 `permissions: ['host:hamlib']`。该权限允许插件直接打开 Hamlib Rotator 的串口或网络连接，应只授予可信插件；`radio:read` / `radio:control` / `radio:power` 不会自动授予该能力。
+
+当前暴露：
+
+```typescript
+const hamlib = ctx.hostDependencies.hamlib;
+if (!hamlib) throw new Error('host:hamlib permission is required');
+
+const { Rotator } = hamlib;
+const rotators = Rotator.getSupportedRotators();
+const rotator = new Rotator(rotators[0].rotModel, '127.0.0.1:4533');
+
+await rotator.open();
+await rotator.setPosition(135, 0);
+const position = await rotator.getPosition();
+await rotator.stop();
+await rotator.close();
+```
+
+`ctx.hostDependencies.hamlib` 是宿主的 allow-listed `hamlib` / node-hamlib Rotator 表面，只包含 `Rotator` 与 `PASSBAND`。Rotator API 包含：`getSupportedRotators()`、`open()`、`setPosition()`、`getPosition()`、`move()`、`stop()`、`park()`、`reset()`、`setConf()`、`getConfigSchema()`、`getRotatorCaps()` 等。
 
 #### KVStore
 
@@ -890,6 +923,7 @@ export default {
   version: '0.1.0',
   type: 'utility',
   instanceScope: 'global',
+  permissions: ['host:hamlib'],
   ui: {
     pages: [{
       id: 'rotator',
