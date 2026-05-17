@@ -21,6 +21,10 @@ import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceS
 import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
 import { matchAudioDeviceForRig } from './radioAudioDeviceMapping';
 
+const NEW_PROFILE_AUDIO_DEFAULTS: AudioDeviceSettingsType = {
+  outputSampleFormat: 'int16',
+};
+
 interface ProfileSetupOverlayProps {
   isOpen: boolean;
 }
@@ -38,7 +42,7 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
   const [step, setStep] = useState(0); // 0=选类型, 1=填配置, 2=选音频, 3=命名
   const [selectedType, setSelectedType] = useState<RadioType | null>(null);
   const [radioConfig, setRadioConfig] = useState<HamlibConfig>({ type: 'none' });
-  const [audioConfig, setAudioConfig] = useState<AudioDeviceSettingsType>({});
+  const [audioConfig, setAudioConfig] = useState<AudioDeviceSettingsType>(NEW_PROFILE_AUDIO_DEFAULTS);
   const [profileName, setProfileName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [rigs, setRigs] = useState<SupportedRig[]>([]);
@@ -95,9 +99,9 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
     userManuallyChangedAudioRef.current = false;
     // ICOM WLAN 默认使用电台音频设备
     if (type === 'icom-wlan') {
-      setAudioConfig({ inputDeviceName: 'ICOM WLAN', outputDeviceName: 'ICOM WLAN' });
+      setAudioConfig({ ...NEW_PROFILE_AUDIO_DEFAULTS, inputDeviceName: 'ICOM WLAN', outputDeviceName: 'ICOM WLAN' });
     } else {
-      setAudioConfig({});
+      setAudioConfig(NEW_PROFILE_AUDIO_DEFAULTS);
     }
     if (type === 'none') {
       // 无电台模式直接跳到音频

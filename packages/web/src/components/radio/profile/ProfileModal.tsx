@@ -27,6 +27,10 @@ import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceS
 import { PowerControlButton } from './PowerControlButton';
 import { matchAudioDeviceForRig } from './radioAudioDeviceMapping';
 
+const NEW_PROFILE_AUDIO_DEFAULTS: AudioDeviceSettingsType = {
+  outputSampleFormat: 'int16',
+};
+
 interface ProfileModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -164,7 +168,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     setEditName('');
     setEditDescription('');
     setEditRadioConfig({ type: 'none' });
-    setEditAudioConfig({});
+    setEditAudioConfig(NEW_PROFILE_AUDIO_DEFAULTS);
     setEditingProfileId(null);
     autoAudioAppliedRef.current = null;
     userManuallyChangedAudioRef.current = false;
