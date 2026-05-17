@@ -169,9 +169,11 @@ export interface PluginDefinition {
    * Each panel has a `slot` that controls where it renders: `'operator'` (the
    * default, shown in the operator card), `'automation'` (shown in the
    * top-right automation popover), `'main-right'` (the optional far-right main
-   * pane), `'voice-left-top'` (above the voice frequency card), or
-   * `'voice-right-top'` (the tabbed top area of the voice right panel). Panels
-   * may also declare a preferred `width`, such as `'full'`, so hosts can
+   * pane), `'voice-left-top'` (above the voice frequency card),
+   * `'voice-right-top'` (the tabbed top area of the voice right panel),
+   * `'cw-right-top'` (the tabbed top area of the CW right panel), or
+   * `'radio-control-toolbar'` (a global utility iframe button in RadioControl).
+   * Panels may also declare a preferred `width`, such as `'full'`, so hosts can
    * promote more important live panels.
    */
   panels?: PluginPanelDescriptor[];

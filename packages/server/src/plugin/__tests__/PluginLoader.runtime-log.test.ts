@@ -207,6 +207,115 @@ describe('PluginLoader runtime logs', () => {
     expect(errorLog?.message).toContain('references unknown ui page');
   });
 
+  it('loads a global utility radio-control-toolbar iframe panel', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'valid-radio-toolbar');
+    await mkdir(join(pluginDir, 'ui'), { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        name: 'valid-radio-toolbar',
+        version: '1.0.0',
+        type: 'utility',
+        instanceScope: 'global',
+        panels: [
+          {
+            id: 'rotator-button',
+            title: 'Rotator',
+            component: 'iframe',
+            pageId: 'rotator',
+            slot: 'radio-control-toolbar',
+            icon: 'satellite-dish',
+            openMode: 'popover',
+            uiSize: 'md',
+          },
+        ],
+        ui: {
+          dir: 'ui',
+          pages: [
+            { id: 'rotator', title: 'Rotator', entry: 'rotator.html', resourceBinding: 'none' },
+          ],
+        },
+      };
+    `, 'utf8');
+    await writeFile(join(pluginDir, 'ui', 'rotator.html'), '<!doctype html><html><body>rotator</body></html>', 'utf8');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loader = new PluginLoader((entry) => runtimeLogs.push(entry));
+    const loaded = await loader.scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]?.definition.panels?.[0]?.slot).toBe('radio-control-toolbar');
+  });
+
+  it('rejects radio-control-toolbar panels on operator-scoped plugins', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'invalid-radio-toolbar-scope');
+    await mkdir(join(pluginDir, 'ui'), { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        name: 'invalid-radio-toolbar-scope',
+        version: '1.0.0',
+        type: 'utility',
+        panels: [
+          { id: 'rotator-button', title: 'Rotator', component: 'iframe', pageId: 'rotator', slot: 'radio-control-toolbar' },
+        ],
+        ui: {
+          dir: 'ui',
+          pages: [
+            { id: 'rotator', title: 'Rotator', entry: 'rotator.html', resourceBinding: 'none' },
+          ],
+        },
+      };
+    `, 'utf8');
+    await writeFile(join(pluginDir, 'ui', 'rotator.html'), '<!doctype html><html><body>rotator</body></html>', 'utf8');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loader = new PluginLoader((entry) => runtimeLogs.push(entry));
+    const loaded = await loader.scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(0);
+    const errorLog = runtimeLogs.find((entry) =>
+      entry.stage === 'validate'
+      && entry.level === 'error'
+      && entry.directoryName === 'invalid-radio-toolbar-scope');
+    expect(errorLog?.message).toContain('radio-control-toolbar panels are only supported for global utility plugins');
+  });
+
+  it('rejects radio-control-toolbar panels bound to operator or callsign resources', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'invalid-radio-toolbar-binding');
+    await mkdir(join(pluginDir, 'ui'), { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        name: 'invalid-radio-toolbar-binding',
+        version: '1.0.0',
+        type: 'utility',
+        instanceScope: 'global',
+        panels: [
+          { id: 'rotator-button', title: 'Rotator', component: 'iframe', pageId: 'rotator', slot: 'radio-control-toolbar' },
+        ],
+        ui: {
+          dir: 'ui',
+          pages: [
+            { id: 'rotator', title: 'Rotator', entry: 'rotator.html', resourceBinding: 'operator' },
+          ],
+        },
+      };
+    `, 'utf8');
+    await writeFile(join(pluginDir, 'ui', 'rotator.html'), '<!doctype html><html><body>rotator</body></html>', 'utf8');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loader = new PluginLoader((entry) => runtimeLogs.push(entry));
+    const loaded = await loader.scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(0);
+    const errorLog = runtimeLogs.find((entry) =>
+      entry.stage === 'validate'
+      && entry.level === 'error'
+      && entry.directoryName === 'invalid-radio-toolbar-binding');
+    expect(errorLog?.message).toContain('must reference a UI page with resourceBinding "none"');
+  });
+
   it('emits validate-stage error when custom ui entry html file is missing', async () => {
     const pluginRoot = await createPluginRoot();
     const pluginDir = join(pluginRoot, 'missing-ui-entry');

@@ -1323,7 +1323,8 @@ export class PluginManager {
       throw new Error(`Plugin not found: ${pluginName}`);
     }
 
-    const uiPageIds = new Set((plugin.definition.ui?.pages ?? []).map((page) => page.id));
+    const uiPageById = new Map((plugin.definition.ui?.pages ?? []).map((page) => [page.id, page]));
+    const uiPageIds = new Set(uiPageById.keys());
     const ids = new Set<string>();
     for (const panel of panels) {
       if (!panel.id || ids.has(panel.id)) {
@@ -1337,6 +1338,28 @@ export class PluginManager {
         }
         if (!uiPageIds.has(panel.pageId)) {
           throw new Error(`Iframe panel "${panel.id}" references unknown ui page "${panel.pageId}"`);
+        }
+      }
+
+      if (panel.slot === 'radio-control-toolbar') {
+        if (plugin.definition.type !== 'utility' || (plugin.definition.instanceScope ?? 'operator') !== 'global') {
+          throw new Error('radio-control-toolbar panels are only supported for global utility plugins');
+        }
+        if (instanceTarget.kind !== 'global') {
+          throw new Error(`radio-control-toolbar panel "${panel.id}" must be contributed by a global plugin instance`);
+        }
+        if (panel.component !== 'iframe') {
+          throw new Error(`radio-control-toolbar panel "${panel.id}" must use iframe component`);
+        }
+        if (!panel.pageId) {
+          throw new Error(`radio-control-toolbar panel "${panel.id}" must declare pageId`);
+        }
+        if (!uiPageIds.has(panel.pageId)) {
+          throw new Error(`Iframe panel "${panel.id}" references unknown ui page "${panel.pageId}"`);
+        }
+        const page = uiPageById.get(panel.pageId);
+        if ((page?.resourceBinding ?? 'none') !== 'none') {
+          throw new Error(`radio-control-toolbar panel "${panel.id}" must reference a UI page with resourceBinding "none"`);
         }
       }
 

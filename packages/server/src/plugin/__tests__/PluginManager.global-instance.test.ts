@@ -57,6 +57,248 @@ async function flushAsyncWork(): Promise<void> {
 }
 
 describe('PluginManager global instance scope', () => {
+  it('accepts runtime radio-control-toolbar panel contributions from global utility instances', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-global-toolbar-'));
+    tempDirs.push(dataDir);
+
+    await writeUserPlugin(dataDir, 'global-toolbar-test', `
+      export default {
+        name: 'global-toolbar-test',
+        version: '1.0.0',
+        type: 'utility',
+        instanceScope: 'global',
+        ui: {
+          pages: [
+            { id: 'rotator', title: 'Rotator', entry: 'rotator.html', accessScope: 'operator', resourceBinding: 'none' },
+          ],
+        },
+        onLoad(ctx) {
+          ctx.ui.setPanelContributions('toolbar', [{
+            id: 'rotator-button',
+            title: 'Rotator',
+            component: 'iframe',
+            pageId: 'rotator',
+            slot: 'radio-control-toolbar',
+            icon: 'satellite-dish',
+            openMode: 'popover',
+            uiSize: 'md',
+          }]);
+        },
+      };
+    `);
+    await mkdir(join(dataDir, 'plugins', 'global-toolbar-test', 'ui'), { recursive: true });
+    await writeFile(
+      join(dataDir, 'plugins', 'global-toolbar-test', 'ui', 'rotator.html'),
+      '<!doctype html><html><body>rotator</body></html>',
+      'utf8',
+    );
+
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string }) => {
+      eventEmitter.emit('hasWorkedCallsignResponse' as any, {
+        requestId: data.requestId,
+        hasWorked: false,
+      });
+    });
+
+    const operator = createOperator('operator-1', 'BG4IAJ');
+    let pluginManager!: PluginManager;
+    pluginManager = new PluginManager({
+      eventEmitter,
+      getOperators: () => [operator],
+      getOperatorById: (id) => (id === operator.config.id ? operator : undefined),
+      getCurrentMode: () => operator.config.mode,
+      getOperatorAutomationSnapshot: (id) => pluginManager.getOperatorAutomationSnapshot(id),
+      requestOperatorCall: (operatorId, callsign, lastMessage) => {
+        pluginManager.requestCall(operatorId, callsign, lastMessage);
+      },
+      getRadioFrequency: async () => operator.config.frequency,
+      setRadioFrequency: () => {},
+      getRadioBand: () => '40m',
+      getRadioConnected: () => true,
+      getLatestSlotPack: () => null,
+      interruptOperatorTransmission: async () => {},
+      hasWorkedCallsign: async () => false,
+      resetOperatorRuntime: () => {},
+      dataDir,
+    });
+
+    pluginManager.loadConfig({
+      configs: {
+        'global-toolbar-test': { enabled: true, settings: {} },
+      },
+      operatorStrategies: {
+        [operator.config.id]: 'standard-qso',
+      },
+      operatorSettings: {
+        [operator.config.id]: {
+          'standard-qso': {
+            autoReplyToCQ: false,
+            autoResumeCQAfterFail: false,
+            autoResumeCQAfterSuccess: false,
+            replyToWorkedStations: false,
+            targetSelectionPriorityMode: 'dxcc_first',
+            maxQSOTimeoutCycles: 6,
+            maxCallAttempts: 5,
+          },
+        },
+      },
+    });
+
+    await pluginManager.start();
+
+    expect(pluginManager.getSnapshot().panelContributions).toContainEqual({
+      pluginName: 'global-toolbar-test',
+      groupId: 'toolbar',
+      source: 'runtime',
+      instanceTarget: { kind: 'global' },
+      panels: [expect.objectContaining({
+        id: 'rotator-button',
+        component: 'iframe',
+        pageId: 'rotator',
+        slot: 'radio-control-toolbar',
+      })],
+    });
+
+    await pluginManager.shutdown();
+  });
+
+  it('rejects runtime radio-control-toolbar contributions outside global unbound UI pages', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-invalid-toolbar-'));
+    tempDirs.push(dataDir);
+
+    await writeUserPlugin(dataDir, 'operator-toolbar-test', `
+      export default {
+        name: 'operator-toolbar-test',
+        version: '1.0.0',
+        type: 'utility',
+        ui: {
+          pages: [
+            { id: 'rotator', title: 'Rotator', entry: 'rotator.html', accessScope: 'operator', resourceBinding: 'none' },
+          ],
+        },
+        onLoad(ctx) {
+          ctx.ui.setPanelContributions('toolbar', [{
+            id: 'rotator-button',
+            title: 'Rotator',
+            component: 'iframe',
+            pageId: 'rotator',
+            slot: 'radio-control-toolbar',
+          }]);
+        },
+      };
+    `);
+    await mkdir(join(dataDir, 'plugins', 'operator-toolbar-test', 'ui'), { recursive: true });
+    await writeFile(
+      join(dataDir, 'plugins', 'operator-toolbar-test', 'ui', 'rotator.html'),
+      '<!doctype html><html><body>rotator</body></html>',
+      'utf8',
+    );
+
+    await writeUserPlugin(dataDir, 'bound-toolbar-test', `
+      export default {
+        name: 'bound-toolbar-test',
+        version: '1.0.0',
+        type: 'utility',
+        instanceScope: 'global',
+        ui: {
+          pages: [
+            { id: 'rotator', title: 'Rotator', entry: 'rotator.html', accessScope: 'operator', resourceBinding: 'operator' },
+          ],
+        },
+        onLoad(ctx) {
+          ctx.ui.setPanelContributions('toolbar', [{
+            id: 'rotator-button',
+            title: 'Rotator',
+            component: 'iframe',
+            pageId: 'rotator',
+            slot: 'radio-control-toolbar',
+          }]);
+        },
+      };
+    `);
+    await mkdir(join(dataDir, 'plugins', 'bound-toolbar-test', 'ui'), { recursive: true });
+    await writeFile(
+      join(dataDir, 'plugins', 'bound-toolbar-test', 'ui', 'rotator.html'),
+      '<!doctype html><html><body>rotator</body></html>',
+      'utf8',
+    );
+
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string }) => {
+      eventEmitter.emit('hasWorkedCallsignResponse' as any, {
+        requestId: data.requestId,
+        hasWorked: false,
+      });
+    });
+
+    const operator = createOperator('operator-1', 'BG4IAJ');
+    let pluginManager!: PluginManager;
+    pluginManager = new PluginManager({
+      eventEmitter,
+      getOperators: () => [operator],
+      getOperatorById: (id) => (id === operator.config.id ? operator : undefined),
+      getCurrentMode: () => operator.config.mode,
+      getOperatorAutomationSnapshot: (id) => pluginManager.getOperatorAutomationSnapshot(id),
+      requestOperatorCall: (operatorId, callsign, lastMessage) => {
+        pluginManager.requestCall(operatorId, callsign, lastMessage);
+      },
+      getRadioFrequency: async () => operator.config.frequency,
+      setRadioFrequency: () => {},
+      getRadioBand: () => '40m',
+      getRadioConnected: () => true,
+      getLatestSlotPack: () => null,
+      interruptOperatorTransmission: async () => {},
+      hasWorkedCallsign: async () => false,
+      resetOperatorRuntime: () => {},
+      dataDir,
+    });
+
+    pluginManager.loadConfig({
+      configs: {
+        'operator-toolbar-test': { enabled: true, settings: {} },
+        'bound-toolbar-test': { enabled: true, settings: {} },
+      },
+      operatorStrategies: {
+        [operator.config.id]: 'standard-qso',
+      },
+      operatorSettings: {
+        [operator.config.id]: {
+          'standard-qso': {
+            autoReplyToCQ: false,
+            autoResumeCQAfterFail: false,
+            autoResumeCQAfterSuccess: false,
+            replyToWorkedStations: false,
+            targetSelectionPriorityMode: 'dxcc_first',
+            maxQSOTimeoutCycles: 6,
+            maxCallAttempts: 5,
+          },
+        },
+      },
+    });
+
+    await pluginManager.start();
+
+    expect((pluginManager.getSnapshot().panelContributions ?? []).filter((group) =>
+      group.pluginName === 'operator-toolbar-test' || group.pluginName === 'bound-toolbar-test',
+    )).toEqual([]);
+    const runtimeLogDetails = pluginManager.getRuntimeLogHistory()
+      .filter((entry): entry is typeof entry & { details: unknown } => 'details' in entry)
+      .map((entry) => entry.details);
+    expect(runtimeLogDetails).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          error: 'radio-control-toolbar panels are only supported for global utility plugins',
+        }),
+        expect.objectContaining({
+          error: 'radio-control-toolbar panel "rotator-button" must reference a UI page with resourceBinding "none"',
+        }),
+      ]),
+    );
+
+    await pluginManager.shutdown();
+  });
+
   it('creates a global utility plugin only once and unregisters its sync provider on disable', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-global-'));
     tempDirs.push(dataDir);

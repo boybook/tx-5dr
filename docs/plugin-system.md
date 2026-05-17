@@ -816,9 +816,15 @@ interface PluginPanelDescriptor {
   /** 可选字符串参数，传入 iframe */
   params?: Record<string, string>;
   /** 渲染位置，默认 'operator' */
-  slot?: 'operator' | 'automation' | 'main-right' | 'voice-left-top' | 'voice-right-top';
+  slot?: 'operator' | 'automation' | 'main-right' | 'voice-left-top' | 'voice-right-top' | 'cw-right-top' | 'radio-control-toolbar';
   /** 宽度偏好，默认 'half' */
   width?: 'half' | 'full';
+  /** 工具栏类入口的 FontAwesome Free 图标名，如 'satellite-dish' 或 'brands:github' */
+  icon?: string;
+  /** 工具栏类入口的打开方式 */
+  openMode?: 'popover' | 'modal';
+  /** 工具栏类入口的尺寸提示 */
+  uiSize?: 'sm' | 'md' | 'lg';
 }
 ```
 
@@ -853,6 +859,40 @@ ctx.ui.clearPanelContributions('my-group');
 ```
 
 `groupId` 不能使用保留的 `manifest`。`setPanelContributions` 是替换整个 group 的语义。
+
+#### RadioControl 工具栏 iframe 入口
+
+`slot: 'radio-control-toolbar'` 可把插件 iframe 页面扩展到 RadioControl 顶部的一排小按钮中。该入口仅支持 `type: 'utility'` 且 `instanceScope: 'global'` 的插件，且引用的页面必须使用 `resourceBinding: 'none'`。
+
+```typescript
+export default {
+  name: 'rotator-control',
+  version: '0.1.0',
+  type: 'utility',
+  instanceScope: 'global',
+  ui: {
+    pages: [{
+      id: 'rotator',
+      title: 'Rotator',
+      entry: 'rotator.html',
+      accessScope: 'operator',
+      resourceBinding: 'none',
+    }],
+  },
+  panels: [{
+    id: 'rotator-button',
+    title: 'rotatorTitle',
+    component: 'iframe',
+    pageId: 'rotator',
+    slot: 'radio-control-toolbar',
+    icon: 'satellite-dish',
+    openMode: 'popover',
+    uiSize: 'md',
+  }],
+};
+```
+
+图标支持当前前端已安装的 FontAwesome Free solid 和 brands 图标。默认按 solid 查找；brands 图标使用 `brands:` 前缀，例如 `brands:github`。找不到图标时前端会回退到 `puzzle-piece`。该入口不会自动传入 `operatorId`，iframe 收到的默认参数为 `{ panelId, ...panel.params }`。
 
 ### 4.8 持久化存储
 

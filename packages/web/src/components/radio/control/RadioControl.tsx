@@ -8,6 +8,7 @@ import type { AudioSidecarStatusPayload } from '@tx5dr/contracts';
 import { AudioSidecarStatus } from '@tx5dr/contracts';
 import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
 import { RadioControlPanel } from './RadioControlPanel';
+import { RadioControlPluginToolbar } from './RadioControlPluginToolbar';
 import { TunerCapabilitySurface } from '../../../radio-capability/components/TunerCapability';
 import { api, ApiError } from '@tx5dr/core';
 import type { ModeDescriptor, RealtimeAudioCodecPreference, RealtimeTransportKind, VoiceTxBufferProfile } from '@tx5dr/contracts';
@@ -2176,6 +2177,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                 </Popover>
               </ToolbarIconTooltip>
             )}
+            <RadioControlPluginToolbar />
             {/* 天调控制：已连接且具备电台控制权限时统一露出内置/外接天调入口 */}
             {showAntennaTuneEntry && (
               <ToolbarIconTooltip label={t('tuner.control')}>

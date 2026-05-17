@@ -1,5 +1,5 @@
 import type { PluginDefinition } from '@tx5dr/plugin-api';
-import type { PluginRuntimeLogEntry } from '@tx5dr/contracts';
+import type { PluginPanelDescriptor, PluginRuntimeLogEntry, PluginUIPageDescriptor } from '@tx5dr/contracts';
 import { PluginManifestSchema } from '@tx5dr/contracts';
 import type { LoadedPlugin } from './types.js';
 import type { Dirent } from 'fs';
@@ -74,6 +74,7 @@ export function validatePluginDefinition(def: PluginDefinition): void {
   }
 
   const uiPageIds = new Set((manifest.ui?.pages ?? []).map((page) => page.id));
+  const uiPageById = new Map((manifest.ui?.pages ?? []).map((page) => [page.id, page]));
   for (const panel of manifest.panels ?? []) {
     if (panel.component !== 'iframe') {
       continue;
@@ -84,6 +85,7 @@ export function validatePluginDefinition(def: PluginDefinition): void {
     if (!uiPageIds.has(panel.pageId)) {
       throw new Error(`Iframe panel "${panel.id}" references unknown ui page "${panel.pageId}"`);
     }
+    validateRadioControlToolbarPanel(manifest, panel, uiPageById.get(panel.pageId));
   }
 
   if (manifest.instanceScope === 'global') {
@@ -98,7 +100,7 @@ export function validatePluginDefinition(def: PluginDefinition): void {
     if ((manifest.quickSettings?.length ?? 0) > 0) {
       throw new Error('Global plugin instances must not declare quick settings');
     }
-    if ((manifest.panels?.length ?? 0) > 0) {
+    if ((manifest.panels ?? []).some((panel) => panel.slot !== 'radio-control-toolbar')) {
       throw new Error('Global plugin instances must not declare operator-facing panels');
     }
 
@@ -120,6 +122,22 @@ export function validatePluginDefinition(def: PluginDefinition): void {
     if (activeUnsupportedGlobalHook) {
       throw new Error(`Global plugin instances must not implement hook "${activeUnsupportedGlobalHook}"`);
     }
+  }
+}
+
+function validateRadioControlToolbarPanel(
+  manifest: ReturnType<typeof PluginManifestSchema.parse>,
+  panel: PluginPanelDescriptor,
+  page: PluginUIPageDescriptor | undefined,
+): void {
+  if (panel.slot !== 'radio-control-toolbar') {
+    return;
+  }
+  if (manifest.type !== 'utility' || manifest.instanceScope !== 'global') {
+    throw new Error('radio-control-toolbar panels are only supported for global utility plugins');
+  }
+  if (page?.resourceBinding !== 'none') {
+    throw new Error(`radio-control-toolbar panel "${panel.id}" must reference a UI page with resourceBinding "none"`);
   }
 }
 

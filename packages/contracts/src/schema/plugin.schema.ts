@@ -238,7 +238,15 @@ export type PluginCapability = z.infer<typeof PluginCapabilitySchema>;
  * - `voice-left-top`: shown above the voice frequency control card.
  * - `voice-right-top`: shown in the tabbed top area of the voice right panel.
  */
-export const PluginPanelSlotSchema = z.enum(['operator', 'automation', 'main-right', 'voice-left-top', 'voice-right-top', 'cw-right-top']);
+export const PluginPanelSlotSchema = z.enum([
+  'operator',
+  'automation',
+  'main-right',
+  'voice-left-top',
+  'voice-right-top',
+  'cw-right-top',
+  'radio-control-toolbar',
+]);
 
 /**
  * Rendering slot that determines where a panel appears in the UI.
@@ -260,6 +268,26 @@ export const PluginPanelWidthSchema = z.enum(['half', 'full']);
 export type PluginPanelWidth = z.infer<typeof PluginPanelWidthSchema>;
 
 /**
+ * How an iframe panel is opened when rendered as a toolbar entry.
+ */
+export const PluginPanelOpenModeSchema = z.enum(['popover', 'modal']);
+
+/**
+ * How an iframe panel is opened when rendered as a toolbar entry.
+ */
+export type PluginPanelOpenMode = z.infer<typeof PluginPanelOpenModeSchema>;
+
+/**
+ * Controlled size hint for iframe panels rendered as popovers or modals.
+ */
+export const PluginPanelUISizeSchema = z.enum(['sm', 'md', 'lg']);
+
+/**
+ * Controlled size hint for iframe panels rendered as popovers or modals.
+ */
+export type PluginPanelUISize = z.infer<typeof PluginPanelUISizeSchema>;
+
+/**
  * Declarative definition of a plugin-owned panel in the frontend.
  *
  * Panels are passive containers rendered by the host. A plugin sends data into
@@ -279,6 +307,30 @@ export const PluginPanelDescriptorSchema = z.object({
   slot: PluginPanelSlotSchema.optional(),
   /** Preferred width hint. Defaults to `'half'`. */
   width: PluginPanelWidthSchema.optional(),
+  /** Optional FontAwesome Free icon name used by toolbar-style hosts. */
+  icon: z.string().optional(),
+  /** Optional toolbar opening mode. Defaults to host-specific behavior, typically `'popover'`. */
+  openMode: PluginPanelOpenModeSchema.optional(),
+  /** Optional controlled UI size hint for toolbar popovers/modals. */
+  uiSize: PluginPanelUISizeSchema.optional(),
+}).superRefine((panel, ctx) => {
+  if (panel.slot !== 'radio-control-toolbar') {
+    return;
+  }
+  if (panel.component !== 'iframe') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['component'],
+      message: 'radio-control-toolbar panels must use iframe component',
+    });
+  }
+  if (!panel.pageId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['pageId'],
+      message: 'radio-control-toolbar panels must declare pageId',
+    });
+  }
 });
 
 /**

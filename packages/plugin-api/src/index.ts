@@ -125,6 +125,8 @@ export type {
   PluginPanelDescriptor,
   PluginPanelComponent,
   PluginPanelWidth,
+  PluginPanelOpenMode,
+  PluginPanelUISize,
   PluginUIPanelContributionGroup,
   PluginUIPanelContributionTarget,
   PluginObjectArrayField,
