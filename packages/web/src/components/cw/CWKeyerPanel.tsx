@@ -180,17 +180,21 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const showSerialPortAlert = isSerialBackend && !serialKeyPort;
   const radioConnected = radioState.state.radioConnected;
   const radioConfigType = radioState.state.radioConfig?.type;
-  const isHamlibRadioConfig = radioConfigType === 'serial' || radioConfigType === 'network';
+  const isRadioKeyerCapableConfig = radioConfigType === 'serial'
+    || radioConfigType === 'network'
+    || radioConfigType === 'icom-wlan';
   const catBackendError = cwKeyerStatus?.backend === 'cat' && cwKeyerStatus.backendAvailable === false
     ? cwKeyerStatus.backendError
     : null;
-  const catUnsupportedSendMorse = catBackendError?.includes('SEND_MORSE') === true;
+  const catUnsupportedSendMorse = catBackendError?.includes('SEND_MORSE') === true
+    || catBackendError?.includes('CW 0x17') === true
+    || catBackendError?.includes('CW text sending support') === true;
   const catUnavailableReason = !radioConnected
-    ? t('radio:cw.catUnavailableDisconnected', 'Connect a Hamlib radio before using CAT CW.')
-    : !isHamlibRadioConfig
-      ? t('radio:cw.catUnavailableHamlibOnly', 'CAT CW currently supports Hamlib serial or network radio connections only.')
+    ? t('radio:cw.catUnavailableDisconnected', 'Connect a radio before using CAT CW.')
+    : !isRadioKeyerCapableConfig
+      ? t('radio:cw.catUnavailableHamlibOnly', 'CAT CW currently supports Hamlib serial/network or ICOM WLAN radio connections only.')
       : catUnsupportedSendMorse
-        ? t('radio:cw.catUnsupportedSendMorse', 'The radio does not report CAT CW sending support (Hamlib SEND_MORSE). Use Key jack instead, or verify the rig/Hamlib backend supports it.')
+        ? t('radio:cw.catUnsupportedSendMorse', 'The radio does not report CAT/radio CW text sending support. Use Key jack instead, or verify Hamlib SEND_MORSE / ICOM CI-V CW support.')
         : catBackendError;
   const showCatAlert = backend === 'cat' && Boolean(catUnavailableReason);
 
@@ -962,7 +966,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
             classNames={CW_ALERT_CLASS_NAMES}
           >
             <span className="text-xs leading-4">
-              {catUnavailableReason || t('radio:cw.catUnavailableBody', 'Connect a Hamlib radio that supports CAT Morse sending before using this backend.')}
+              {catUnavailableReason || t('radio:cw.catUnavailableBody', 'Connect a radio that supports CAT/radio CW text sending before using this backend.')}
             </span>
           </Alert>
         )}

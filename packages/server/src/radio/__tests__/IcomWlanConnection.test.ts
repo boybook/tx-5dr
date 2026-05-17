@@ -57,6 +57,9 @@ type MockRig = {
   setFunction: ReturnType<typeof vi.fn>;
   getLevel: ReturnType<typeof vi.fn>;
   setLevel: ReturnType<typeof vi.fn>;
+  setKeySpeed: ReturnType<typeof vi.fn>;
+  sendMorse: ReturnType<typeof vi.fn>;
+  stopMorse: ReturnType<typeof vi.fn>;
   readTunerStatus: ReturnType<typeof vi.fn>;
   setTunerEnabled: ReturnType<typeof vi.fn>;
   startManualTune: ReturnType<typeof vi.fn>;
@@ -138,6 +141,7 @@ function createConnectedConnection(): { connection: IcomWlanConnection; rig: Moc
       vfos: ['A', 'B', 'MAIN', 'SUB'],
       repeater: true,
       tone: true,
+      cw: { sendMorse: true, maxChunkLength: 30 },
       spectrumAdvanced: ['dataOutput', 'hold', 'speed', 'ref', 'avg', 'vbw', 'rbw', 'duringTx', 'centerType'],
       audioIfSources: ['default', 'wlan'],
     },
@@ -166,6 +170,9 @@ function createConnectedConnection(): { connection: IcomWlanConnection; rig: Moc
     setFunction: vi.fn(),
     getLevel: vi.fn().mockResolvedValue(0.5),
     setLevel: vi.fn(),
+    setKeySpeed: vi.fn().mockResolvedValue(undefined),
+    sendMorse: vi.fn().mockResolvedValue(undefined),
+    stopMorse: vi.fn().mockResolvedValue(undefined),
     readTunerStatus: vi.fn().mockResolvedValue({ state: 'ON' }),
     setTunerEnabled: vi.fn(),
     startManualTune: vi.fn(),
@@ -284,6 +291,15 @@ describe('IcomWlanConnection', () => {
     expect(rig.setMode).toHaveBeenCalledWith(expect.any(Number), { dataMode: false });
   });
 
+  it('uses non-data mode for CW mode writes even when the ICOM WLAN default is data mode', async () => {
+    const { connection, rig } = createConnectedConnection();
+    asTestConnection(connection).defaultDataMode = true;
+
+    await expect(connection.setMode('CW', 'nochange', { intent: 'cw' })).resolves.toBeUndefined();
+
+    expect(rig.setMode).toHaveBeenCalledWith(expect.any(Number), { dataMode: false });
+  });
+
   it('passes digital intent through applyOperatingState', async () => {
     const { connection, rig } = createConnectedConnection();
     asTestConnection(connection).defaultDataMode = false;
@@ -297,6 +313,72 @@ describe('IcomWlanConnection', () => {
 
     expect(result.modeApplied).toBe(true);
     expect(rig.setMode).toHaveBeenCalledWith(expect.any(Number), { dataMode: true });
+  });
+
+  it('passes CW intent through applyOperatingState', async () => {
+    const { connection, rig } = createConnectedConnection();
+    asTestConnection(connection).defaultDataMode = true;
+
+    const result = await connection.applyOperatingState({
+      frequency: 7100000,
+      mode: 'CW',
+      bandwidth: 'nochange',
+      options: { intent: 'cw' },
+    });
+
+    expect(result.modeApplied).toBe(true);
+    expect(rig.setMode).toHaveBeenCalledWith(expect.any(Number), { dataMode: false });
+  });
+
+  it('reports profile-gated ICOM WLAN CW text sending support', () => {
+    const { connection, rig } = createConnectedConnection();
+
+    expect(connection.supportsCWMessageKeyer()).toBe(true);
+
+    rig.profile.cw.sendMorse = false;
+    expect(connection.supportsCWMessageKeyer()).toBe(false);
+
+    rig.profile.cw.sendMorse = true;
+    rig.sendMorse = undefined as unknown as MockRig['sendMorse'];
+    expect(connection.supportsCWMessageKeyer()).toBe(false);
+  });
+
+  it('sends CW text through ICOM WLAN with key speed and mode checking', async () => {
+    const { connection, rig } = createConnectedConnection();
+
+    await expect(connection.sendCWMessage('cq de bg5drb', 24)).resolves.toBeUndefined();
+
+    expect(rig.setKeySpeed).toHaveBeenCalledWith(24);
+    expect(rig.sendMorse).toHaveBeenCalledWith('cq de bg5drb', { timeout: 3000, checkMode: true });
+  });
+
+  it('continues ICOM WLAN CW sending if key speed update fails', async () => {
+    const { connection, rig } = createConnectedConnection();
+    rig.setKeySpeed.mockRejectedValueOnce(new Error('key speed unsupported'));
+
+    await expect(connection.sendCWMessage('CQ', 20)).resolves.toBeUndefined();
+
+    expect(rig.sendMorse).toHaveBeenCalledWith('CQ', { timeout: 3000, checkMode: true });
+  });
+
+  it('rejects ICOM WLAN CW text sending when the active profile does not support it', async () => {
+    const { connection, rig } = createConnectedConnection();
+    rig.profile.cw.sendMorse = false;
+
+    await expect(connection.sendCWMessage('CQ', 20)).rejects.toMatchObject({
+      code: RadioErrorCode.INVALID_OPERATION,
+      severity: RadioErrorSeverity.WARNING,
+      context: expect.objectContaining({ operation: 'sendCWMessage', recoverable: true }),
+    });
+    expect(rig.sendMorse).not.toHaveBeenCalled();
+  });
+
+  it('stops ICOM WLAN CW text sending through stopMorse', async () => {
+    const { connection, rig } = createConnectedConnection();
+
+    await expect(connection.stopCWMessage()).resolves.toBeUndefined();
+
+    expect(rig.stopMorse).toHaveBeenCalledWith({ timeout: 3000 });
   });
 
   it('rejects numeric passband widths', async () => {
@@ -613,7 +695,7 @@ describe('IcomWlanConnection', () => {
     await writePromise;
   });
 
-  it('uses icom-wlan-node 0.6.2 native tuner APIs', async () => {
+  it('uses icom-wlan-node native tuner APIs', async () => {
     const { connection, rig } = createConnectedConnection();
     rig.readTunerStatus.mockResolvedValueOnce({ state: 'TUNING' });
 

@@ -299,6 +299,27 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
   setPTT(enabled: boolean): Promise<void>;
 
   /**
+   * Reports whether the active radio can send CW text through its CAT/CI-V keyer.
+   *
+   * @optional Hamlib maps this to SEND_MORSE; ICOM WLAN maps this to profile-gated CI-V 0x17.
+   */
+  supportsCWMessageKeyer?(): boolean;
+
+  /**
+   * Sends CW text through the radio's internal CAT/CI-V CW keyer.
+   *
+   * @optional Implementations that support it should treat this as a high-priority radio write.
+   */
+  sendCWMessage?(message: string, wpm: number): Promise<void>;
+
+  /**
+   * Stops the active radio CAT/CI-V CW text message when supported.
+   *
+   * @optional Best-effort stop used by the CW keyer manager.
+   */
+  stopCWMessage?(): Promise<void>;
+
+  /**
    * 获取电台当前 PTT/TX 状态。
    * true = radio reports TX, false = radio reports RX.
    *

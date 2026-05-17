@@ -9,7 +9,7 @@ import type {
   CWKeyerBackend as CWKeyerBackendType,
   CWPlaceholderValues,
 } from '@tx5dr/contracts';
-import { HamlibCatCWKeyerBackend } from './HamlibCatCWKeyerBackend.js';
+import { RadioCatCWKeyerBackend } from './RadioCatCWKeyerBackend.js';
 import { SerialCWKeyerBackend } from './SerialCWKeyerBackend.js';
 import type { CWKeyerBackend } from './CWKeyerBackend.js';
 import { getDataFilePath } from '../utils/app-paths.js';
@@ -122,7 +122,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     error: null,
     backend: 'cat',
     backendAvailable: false,
-    backendError: 'CAT CW requires an active Hamlib radio connection',
+    backendError: 'CAT CW requires an active radio connection',
     currentText: null,
     lastText: null,
   };
@@ -130,7 +130,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
   constructor(getRadioManager?: () => PhysicalRadioManager) {
     super();
     this.backends = {
-      cat: new HamlibCatCWKeyerBackend(() => {
+      cat: new RadioCatCWKeyerBackend(() => {
         const radioManager = getRadioManager?.();
         if (!radioManager) {
           throw new Error('Radio manager is not available for CAT CW backend');

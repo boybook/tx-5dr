@@ -401,7 +401,7 @@ export class IcomWlanConnection
           ? false
           : options?.intent === 'digital'
             ? true
-            : options?.intent === 'voice'
+            : options?.intent === 'voice' || options?.intent === 'cw'
               ? false
               : this.defaultDataMode;
 
@@ -657,6 +657,71 @@ export class IcomWlanConnection
   async setPTT(enabled: boolean): Promise<void> {
     await this.runSerializedTask('setPTT', async () => {
       await this.performPTTWrite(enabled);
+    }, { critical: true });
+  }
+
+  supportsCWMessageKeyer(): boolean {
+    const rig = this.rig as (IcomControl & {
+      sendMorse?: (message: string, options?: { timeout?: number; checkMode?: boolean }) => Promise<void>;
+      stopMorse?: (options?: { timeout?: number }) => Promise<void>;
+    }) | null;
+    const profile = this.getActiveProfile();
+    return Boolean(
+      rig
+      && typeof rig.sendMorse === 'function'
+      && typeof rig.stopMorse === 'function'
+      && profile?.cw?.sendMorse === true,
+    );
+  }
+
+  async sendCWMessage(message: string, wpm: number): Promise<void> {
+    await this.runSerializedTask('sendCWMessage', async () => {
+      this.checkConnected();
+      const rig = this.rig as (IcomControl & {
+        sendMorse?: (message: string, options?: { timeout?: number; checkMode?: boolean }) => Promise<void>;
+        setKeySpeed?: (wpm: number) => void | Promise<void>;
+      }) | null;
+      if (!this.supportsCWMessageKeyer() || !rig || typeof rig.sendMorse !== 'function') {
+        throw this.optionalOperationUnavailable(
+          'sendCWMessage',
+          'ICOM WLAN active profile does not support CW text sending',
+        );
+      }
+
+      try {
+        if (this.hasProfileLevel('KEYSPD') && typeof rig.setKeySpeed === 'function') {
+          try {
+            await rig.setKeySpeed(wpm);
+          } catch (error) {
+            logger.warn('Failed to set ICOM WLAN CW key speed before CAT CW send', {
+              error: error instanceof Error ? error.message : String(error),
+              wpm,
+            });
+          }
+        }
+
+        await rig.sendMorse(message, { timeout: 3000, checkMode: true });
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'sendCWMessage');
+      }
+    }, { critical: true });
+  }
+
+  async stopCWMessage(): Promise<void> {
+    await this.runSerializedTask('stopCWMessage', async () => {
+      this.checkConnected();
+      const rig = this.rig as (IcomControl & {
+        stopMorse?: (options?: { timeout?: number }) => Promise<void>;
+      }) | null;
+      if (!this.supportsCWMessageKeyer() || !rig || typeof rig.stopMorse !== 'function') {
+        return;
+      }
+
+      try {
+        await rig.stopMorse({ timeout: 3000 });
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'stopCWMessage');
+      }
     }, { critical: true });
   }
 

@@ -56,7 +56,7 @@ afterEach(async () => {
 });
 
 describe('CWKeyerManager', () => {
-  it('defaults to CAT when Hamlib reports CAT CW support', async () => {
+  it('defaults to CAT when the active radio reports CAT CW support', async () => {
     const { manager } = await createManager({ catAvailable: true, keyPort: '/dev/cw' });
 
     expect(manager.getConfig()).toMatchObject({ backend: 'cat' });
@@ -68,7 +68,7 @@ describe('CWKeyerManager', () => {
   it('defaults to serial when CAT CW is unsupported and a key port is configured', async () => {
     const { manager } = await createManager({
       catAvailable: false,
-      catError: 'Active Hamlib radio does not report CAT CW sending support (SEND_MORSE)',
+      catError: 'Active radio does not report CAT/radio CW text sending support (SEND_MORSE or ICOM CW 0x17)',
       keyPort: '/dev/cw',
     });
 
@@ -80,7 +80,7 @@ describe('CWKeyerManager', () => {
   it('keeps explicit CAT selection and reports unavailable when CAT CW is unsupported', async () => {
     const { manager } = await createManager({
       catAvailable: false,
-      catError: 'Active Hamlib radio does not report CAT CW sending support (SEND_MORSE)',
+      catError: 'Active radio does not report CAT/radio CW text sending support (SEND_MORSE or ICOM CW 0x17)',
       keyPort: '/dev/cw',
     });
 
@@ -90,7 +90,7 @@ describe('CWKeyerManager', () => {
     expect(manager.getStatus()).toMatchObject({
       backend: 'cat',
       backendAvailable: false,
-      backendError: 'Active Hamlib radio does not report CAT CW sending support (SEND_MORSE)',
+      backendError: 'Active radio does not report CAT/radio CW text sending support (SEND_MORSE or ICOM CW 0x17)',
     });
   });
 
