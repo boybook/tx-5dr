@@ -495,6 +495,28 @@ jobs:
             fi
           done
 
+          if [ "$PLATFORM" = "darwin" ]; then
+            python3 - "$APP_ROOT/node_modules" <<'PY'
+import pathlib
+import re
+import subprocess
+import sys
+
+root = pathlib.Path(sys.argv[1])
+failed = False
+for binary in list(root.rglob('*.node')) + list(root.rglob('*.dylib')):
+    output = subprocess.check_output(['otool', '-l', str(binary)], text=True)
+    rpaths = re.findall(r'^\s*path\s+(.+?)\s+\(offset\s+\d+\)$', output, re.MULTILINE)
+    duplicates = sorted({rpath for rpath in rpaths if rpaths.count(rpath) > 1})
+    if duplicates:
+        failed = True
+        print(f'Duplicate LC_RPATH in {binary}: {", ".join(duplicates)}', file=sys.stderr)
+
+if failed:
+    sys.exit(1)
+PY
+          fi
+
           echo "✅ electron-builder package content verified: $RESOURCES_DIR"
 
       - name: Validate macOS signing and notarization

@@ -261,30 +261,45 @@ function cleanPlatformPrebuilds(nm, platform, arch) {
   }
 }
 
-function fixMacosNodeRpaths(appRoot) {
-  console.log('Fixing macOS native module RPATHs...');
+function readMacosRpaths(runtimeFile) {
+  const loadCommands = execSync(`otool -l ${shellQuote(runtimeFile)}`, { encoding: 'utf8' });
+  return Array.from(loadCommands.matchAll(/^\s*path\s+(.+?)\s+\(offset\s+\d+\)$/gm), (match) => match[1]);
+}
+
+function fixMacosRuntimeRpaths(appRoot) {
+  console.log('Fixing macOS native runtime RPATHs...');
   const nodeFiles = findFilesByExt(path.join(appRoot, 'node_modules'), '.node');
+  const dylibFiles = findFilesByExt(path.join(appRoot, 'node_modules'), '.dylib');
+  const runtimeFiles = [...nodeFiles, ...dylibFiles];
   let fixedCount = 0;
-  for (const nodeFile of nodeFiles) {
+  for (const runtimeFile of runtimeFiles) {
     try {
-      const rpaths = execSync(`otool -l "${nodeFile}" | grep -A 2 LC_RPATH | grep path | awk '{print $2}'`, { encoding: 'utf8' })
-        .trim()
-        .split('\n')
-        .filter(Boolean);
-      const loaderPathCount = rpaths.filter((p) => p === '@loader_path/').length;
-      if (loaderPathCount > 1) {
-        console.log(`  Fixing duplicate @loader_path/ in ${path.basename(nodeFile)}`);
-        for (let i = 1; i < loaderPathCount; i += 1) {
-          execSync(`install_name_tool -delete_rpath "@loader_path/" "${nodeFile}"`, { stdio: 'pipe' });
+      const rpaths = readMacosRpaths(runtimeFile);
+      const seen = new Set();
+      const duplicateRpaths = [];
+      for (const rpath of rpaths) {
+        if (seen.has(rpath) && !duplicateRpaths.includes(rpath)) {
+          duplicateRpaths.push(rpath);
         }
-        execSync(`codesign -f -s - "${nodeFile}"`, { stdio: 'pipe' });
+        seen.add(rpath);
+      }
+
+      if (duplicateRpaths.length > 0) {
+        console.log(`  Fixing duplicate RPATHs in ${path.basename(runtimeFile)}: ${duplicateRpaths.join(', ')}`);
+        for (const rpath of duplicateRpaths) {
+          const duplicateCount = rpaths.filter((p) => p === rpath).length;
+          for (let i = 1; i < duplicateCount; i += 1) {
+            execSync(`install_name_tool -delete_rpath ${shellQuote(rpath)} ${shellQuote(runtimeFile)}`, { stdio: 'pipe' });
+          }
+        }
+        execSync(`codesign -f -s - ${shellQuote(runtimeFile)}`, { stdio: 'pipe' });
         fixedCount += 1;
       }
     } catch (error) {
-      console.log(`  Skipping ${path.basename(nodeFile)} (${error.message})`);
+      console.log(`  Skipping ${path.basename(runtimeFile)} (${error.message})`);
     }
   }
-  console.log(`macOS RPATH fix complete (${fixedCount}/${nodeFiles.length})`);
+  console.log(`macOS RPATH fix complete (${fixedCount}/${runtimeFiles.length})`);
 }
 
 function signMacosBinaries(appRoot, resourcesDir, arch) {
@@ -338,7 +353,7 @@ async function packageAfterCopy({ appRoot, resourcesDir, platform, arch }) {
   try { cleanPlatformPrebuilds(nm, platform, arch); } catch (error) { console.warn('prebuild cleanup warning:', error.message || error); }
 
   if (platform === 'darwin') {
-    try { fixMacosNodeRpaths(appRoot); } catch (error) { console.warn('macOS RPATH warning:', error.message || error); }
+    try { fixMacosRuntimeRpaths(appRoot); } catch (error) { console.warn('macOS RPATH warning:', error.message || error); }
     signMacosBinaries(appRoot, resourcesDir, arch);
   }
 }
