@@ -212,4 +212,71 @@ describe('CWDecoderWorkerPool telemetry', () => {
       { targetFreqHz: 650, filterWidthHz: 250 },
     ]);
   });
+
+  it('rejects pending and active jobs, clears workers, and reports zero workers after stop', async () => {
+    const pool = new CWDecoderWorkerPool({
+      workerCount: 1,
+      runtimeProbe: () => ({ available: true, error: null }),
+    });
+    const pendingReject = vi.fn();
+    const activeReject = vi.fn();
+    const activeTimer = setTimeout(() => undefined, 10_000);
+    const fakeWorker = {
+      pid: 4321,
+      killed: true,
+      once: vi.fn(),
+      send: vi.fn(),
+      kill: vi.fn(),
+    };
+    const internals = pool as unknown as {
+      status: string;
+      inFlight: number;
+      pending: Array<unknown>;
+      workers: Map<number, unknown>;
+    };
+    internals.status = 'running';
+    internals.inFlight = 1;
+    internals.pending.push({
+      id: 1,
+      audio: new Float32Array(9_600),
+      sampleRate: 9_600,
+      resolve: vi.fn(),
+      reject: pendingReject,
+    });
+    internals.workers.set(1, {
+      id: 1,
+      worker: fakeWorker,
+      ready: true,
+      activeJob: {
+        id: 2,
+        audio: new Float32Array(9_600),
+        sampleRate: 9_600,
+        resolve: vi.fn(),
+        reject: activeReject,
+        timer: activeTimer,
+        startedAt: 1_000,
+      },
+      lastTelemetry: null,
+      lastCompletedJob: undefined,
+      recentlyActiveUntil: 0,
+      lastNonZeroCpu: null,
+      lastNonZeroCpuAt: 0,
+    });
+
+    await pool.stop();
+
+    expect(pendingReject).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'CW decoder worker pool stopped before job started',
+    }));
+    expect(activeReject).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'CW decoder worker pool stopped before job completed',
+    }));
+    expect(internals.pending).toHaveLength(0);
+    expect(internals.workers.size).toBe(0);
+    expect(pool.getTelemetrySnapshot()).toMatchObject({
+      status: 'stopped',
+      inFlight: 0,
+      workers: [],
+    });
+  });
 });

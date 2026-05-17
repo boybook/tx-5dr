@@ -260,6 +260,9 @@ describe('DigitalRadioEngine mode switching', () => {
         sequence.push('stop');
         engineState = EngineState.IDLE;
       }),
+      stopCWDecoderRuntime: vi.fn(async (reason: string) => {
+        sequence.push(`stopCWDecoderRuntime:${reason}`);
+      }),
       applyDecodeWindowOverrides: vi.fn(() => undefined),
       slotClock: {
         setMode: vi.fn(() => undefined),
@@ -307,6 +310,7 @@ describe('DigitalRadioEngine mode switching', () => {
     expect(fakeEngine.emitStatusSnapshot).toHaveBeenCalledOnce();
     expect(fakeEngine.restoreLastCWOperatingState).toHaveBeenCalledOnce();
     expect(setLastEngineMode).toHaveBeenCalledWith('cw');
+    expect(fakeEngine.stopCWDecoderRuntime).not.toHaveBeenCalled();
     expect(sequence).toEqual(['stop', 'rebuildResourcePlan', 'startAndWaitForRunning']);
   });
 
@@ -326,9 +330,10 @@ describe('DigitalRadioEngine mode switching', () => {
     expect(fakeEngine.engineLifecycle.startAndWaitForRunning).not.toHaveBeenCalled();
     expect(fakeEngine.emitStatusSnapshot).not.toHaveBeenCalled();
     expect(fakeEngine.restoreLastCWOperatingState).toHaveBeenCalledOnce();
+    expect(fakeEngine.stopCWDecoderRuntime).not.toHaveBeenCalled();
   });
 
-  it('keeps the engine running when switching from running CW to FT8', async () => {
+  it('stops the CW decoder worker runtime when switching from running CW to FT8', async () => {
     const { fakeEngine, setLastDigitalModeName } = createEngineModeSwitchHarness({
       initialEngineMode: 'cw',
       initialMode: MODES.CW,
@@ -339,6 +344,7 @@ describe('DigitalRadioEngine mode switching', () => {
       switchEngineMode: (targetEngineMode: 'digital', targetMode: typeof MODES.FT8) => Promise<void>;
     }).switchEngineMode.call(fakeEngine, 'digital', MODES.FT8);
 
+    expect(fakeEngine.stopCWDecoderRuntime).toHaveBeenCalledWith('leaving-cw-mode');
     expect(fakeEngine.stop).toHaveBeenCalledOnce();
     expect(fakeEngine.applyDecodeWindowOverrides).toHaveBeenCalledOnce();
     expect(fakeEngine.engineLifecycle.rebuildResourcePlan).toHaveBeenCalledOnce();
@@ -346,7 +352,7 @@ describe('DigitalRadioEngine mode switching', () => {
     expect(setLastDigitalModeName).toHaveBeenCalledWith('FT8');
   });
 
-  it('keeps the engine running when switching from running CW to voice', async () => {
+  it('stops the CW decoder worker runtime when switching from running CW to voice', async () => {
     const { fakeEngine } = createEngineModeSwitchHarness({
       initialEngineMode: 'cw',
       initialMode: MODES.CW,
@@ -357,6 +363,7 @@ describe('DigitalRadioEngine mode switching', () => {
       switchEngineMode: (targetEngineMode: 'voice', targetMode: typeof MODES.VOICE) => Promise<void>;
     }).switchEngineMode.call(fakeEngine, 'voice', MODES.VOICE);
 
+    expect(fakeEngine.stopCWDecoderRuntime).toHaveBeenCalledWith('leaving-cw-mode');
     expect(fakeEngine.stop).toHaveBeenCalledOnce();
     expect(fakeEngine.engineLifecycle.rebuildResourcePlan).toHaveBeenCalledOnce();
     expect(fakeEngine.engineLifecycle.startAndWaitForRunning).toHaveBeenCalledOnce();
@@ -380,9 +387,121 @@ describe('DigitalRadioEngine mode switching', () => {
       }).switchEngineMode.call(fakeEngine, target.engineMode, target.mode);
 
       expect(fakeEngine.stop).not.toHaveBeenCalled();
+      expect(fakeEngine.stopCWDecoderRuntime).toHaveBeenCalledWith('leaving-cw-mode');
       expect(fakeEngine.engineLifecycle.rebuildResourcePlan).toHaveBeenCalledOnce();
       expect(fakeEngine.engineLifecycle.startAndWaitForRunning).not.toHaveBeenCalled();
     }
+  });
+
+  it('routes startCWDecoder through the CW decoder runtime reconciler', async () => {
+    const savedConfig = {
+      enabled: false,
+      backend: 'deepcw-onnx',
+      runtimeBackend: 'cpu',
+      modelSize: 'tiny',
+      language: 'en',
+      mode: 'streaming',
+      targetFreqHz: 800,
+      filterWidthHz: 800,
+      windowSeconds: 12,
+      decodeIntervalMs: 1000,
+      muteWhileTransmitting: true,
+      workerCount: 1,
+      minCommitChars: 1,
+      commitStability: 2,
+      maxPendingAgeMs: 4000,
+    };
+    const expectedStatus = { enabled: true, state: 'listening' };
+    const fakeEngine = {
+      updateCWDecoderConfig: vi.fn(async () => savedConfig),
+      startCWDecoderRuntime: vi.fn(async () => expectedStatus),
+    };
+
+    const status = await (DigitalRadioEngine.prototype as unknown as {
+      startCWDecoder: (update?: Record<string, unknown>) => Promise<unknown>;
+    }).startCWDecoder.call(fakeEngine, { enabled: true, modelSize: 'small' });
+
+    expect(fakeEngine.updateCWDecoderConfig).toHaveBeenCalledWith({ modelSize: 'small' });
+    expect(fakeEngine.startCWDecoderRuntime).toHaveBeenCalledWith({ ...savedConfig, enabled: true }, 'cw-decoder-start');
+    expect(status).toBe(expectedStatus);
+  });
+
+  it('startCWDecoderRuntime switches to CW, starts the engine if needed, and starts the manager', async () => {
+    const manager = {
+      start: vi.fn(async () => undefined),
+    };
+    const expectedStatus = { enabled: true, state: 'listening' };
+    const fakeEngine = {
+      engineMode: 'digital',
+      cwDecoderStartedEngine: false,
+      setMode: vi.fn(async () => undefined),
+      configureAudioProcessingForCurrentMode: vi.fn(),
+      engineLifecycle: {
+        getIsRunning: vi.fn(() => false),
+        startAndWaitForRunning: vi.fn(async () => undefined),
+      },
+      getCWDecoderManager: vi.fn(() => manager),
+      toServerCWDecoderConfig: vi.fn((config) => ({ ...config, server: true })),
+      emitStatusSnapshot: vi.fn(),
+      getCWDecoderStatus: vi.fn(() => expectedStatus),
+    };
+
+    const status = await (DigitalRadioEngine.prototype as unknown as {
+      startCWDecoderRuntime: (config: Record<string, unknown>, reason: string) => Promise<unknown>;
+    }).startCWDecoderRuntime.call(fakeEngine, { enabled: true }, 'cw-decoder-start');
+
+    expect(fakeEngine.setMode).toHaveBeenCalledWith(MODES.CW);
+    expect(fakeEngine.configureAudioProcessingForCurrentMode).toHaveBeenCalledWith('cw-decoder-start');
+    expect(fakeEngine.engineLifecycle.startAndWaitForRunning).toHaveBeenCalledOnce();
+    expect(fakeEngine.cwDecoderStartedEngine).toBe(true);
+    expect(manager.start).toHaveBeenCalledWith({ enabled: true, server: true });
+    expect(fakeEngine.emitStatusSnapshot).toHaveBeenCalledOnce();
+    expect(status).toBe(expectedStatus);
+  });
+
+  it('stopCWDecoder stops the runtime and stops the engine only when the decoder started it', async () => {
+    const savedConfig = {
+      enabled: false,
+      backend: 'deepcw-onnx',
+      runtimeBackend: 'cpu',
+      modelSize: 'tiny',
+      language: 'en',
+      mode: 'streaming',
+      targetFreqHz: 800,
+      filterWidthHz: 800,
+      windowSeconds: 12,
+      decodeIntervalMs: 1000,
+      muteWhileTransmitting: true,
+      workerCount: 1,
+      minCommitChars: 1,
+      commitStability: 2,
+      maxPendingAgeMs: 4000,
+    };
+    const expectedStatus = { enabled: false, state: 'disabled' };
+    vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+      updateCWDecoderConfig: vi.fn(async () => savedConfig),
+    } as unknown as ConfigManager);
+    const fakeEngine = {
+      cwDecoderStartedEngine: true,
+      engineMode: 'cw',
+      stopCWDecoderRuntime: vi.fn(async () => undefined),
+      engineLifecycle: {
+        stop: vi.fn(async () => undefined),
+      },
+      emitStatusSnapshot: vi.fn(),
+      getCWDecoderManager: vi.fn(() => ({ getStatus: vi.fn(() => ({ state: 'stopped' })) })),
+      toContractCWDecoderStatus: vi.fn(() => expectedStatus),
+    };
+
+    const status = await (DigitalRadioEngine.prototype as unknown as {
+      stopCWDecoder: () => Promise<unknown>;
+    }).stopCWDecoder.call(fakeEngine);
+
+    expect(fakeEngine.stopCWDecoderRuntime).toHaveBeenCalledWith('user-disabled', savedConfig);
+    expect(fakeEngine.engineLifecycle.stop).toHaveBeenCalledOnce();
+    expect(fakeEngine.cwDecoderStartedEngine).toBe(false);
+    expect(fakeEngine.emitStatusSnapshot).toHaveBeenCalledOnce();
+    expect(status).toBe(expectedStatus);
   });
 
   it('restores voice frequency and radio mode when entering voice mode', async () => {

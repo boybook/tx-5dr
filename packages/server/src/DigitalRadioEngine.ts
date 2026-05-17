@@ -841,30 +841,18 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   public async startCWDecoder(update: Partial<CWDecoderConfig> = {}) {
     const { enabled: _runtimeOnly, ...persistentUpdate } = update;
     const saved = await this.updateCWDecoderConfig(persistentUpdate);
-    const runtimeConfig = { ...saved, enabled: true };
-    const wasRunning = this.engineLifecycle?.getIsRunning() ?? false;
-    if (this.engineMode !== 'cw') {
-      await this.setMode(MODES.CW);
-    }
-    this.configureAudioProcessingForCurrentMode('cw-decoder-start');
-    if (!this.engineLifecycle?.getIsRunning()) {
-      this.cwDecoderStartedEngine = true;
-      await this.engineLifecycle.startAndWaitForRunning();
-    } else {
-      this.cwDecoderStartedEngine = !wasRunning;
-    }
-    await this.getCWDecoderManager().start(this.toServerCWDecoderConfig(runtimeConfig));
-    this.emitStatusSnapshot();
-    return this.getCWDecoderStatus();
+    return this.startCWDecoderRuntime({ ...saved, enabled: true }, 'cw-decoder-start');
   }
 
   public async stopCWDecoder() {
     const saved = await ConfigManager.getInstance().updateCWDecoderConfig({ enabled: false });
-    await this.getCWDecoderManager().updateConfig(this.toServerCWDecoderConfig({ ...saved, enabled: false }));
-    await this.getCWDecoderManager().stop('user-disabled');
-    if (this.cwDecoderStartedEngine && this.engineMode === 'cw') {
+    const shouldStopEngine = this.cwDecoderStartedEngine && this.engineMode === 'cw';
+    await this.stopCWDecoderRuntime('user-disabled', saved);
+    if (shouldStopEngine) {
       this.cwDecoderStartedEngine = false;
       await this.engineLifecycle.stop();
+    } else {
+      this.cwDecoderStartedEngine = false;
     }
     this.emitStatusSnapshot();
     return this.toContractCWDecoderStatus(this.getCWDecoderManager().getStatus(), saved);
@@ -1563,6 +1551,35 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return typeof frequency === 'number' && Number.isFinite(frequency) && frequency > 0;
   }
 
+  private async startCWDecoderRuntime(config: Partial<CWDecoderConfig>, reason: string): Promise<CWDecoderStatus> {
+    const wasRunning = this.engineLifecycle?.getIsRunning() ?? false;
+    if (this.engineMode !== 'cw') {
+      await this.setMode(MODES.CW);
+    }
+
+    this.configureAudioProcessingForCurrentMode(reason);
+    if (!this.engineLifecycle?.getIsRunning()) {
+      this.cwDecoderStartedEngine = true;
+      await this.engineLifecycle.startAndWaitForRunning();
+    } else {
+      this.cwDecoderStartedEngine = !wasRunning;
+    }
+
+    await this.getCWDecoderManager().start(this.toServerCWDecoderConfig({ ...config, enabled: true }));
+    this.emitStatusSnapshot();
+    return this.getCWDecoderStatus();
+  }
+
+  private async stopCWDecoderRuntime(reason: string, config: Partial<CWDecoderConfig> = ConfigManager.getInstance().getCWDecoderConfig()): Promise<void> {
+    const manager = this.cwDecoderManager;
+    if (!manager) {
+      return;
+    }
+
+    await manager.updateConfig(this.toServerCWDecoderConfig({ ...config, enabled: false }));
+    await manager.stop(reason);
+  }
+
   private async switchEngineMode(targetEngineMode: EngineMode, targetMode: ModeDescriptor): Promise<void> {
     let engineState = this.engineLifecycle?.getEngineState() ?? EngineState.IDLE;
     let shouldResumeAfterSwitch = engineState === EngineState.RUNNING || engineState === EngineState.STARTING;
@@ -1578,6 +1595,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     if (comingFromCW) {
       await this.cwKeyerManager?.stopActive('leaving cw mode');
+      if (targetEngineMode !== 'cw') {
+        await this.stopCWDecoderRuntime('leaving-cw-mode');
+        this.cwDecoderStartedEngine = false;
+      }
     }
 
     if (engineState === EngineState.STARTING) {

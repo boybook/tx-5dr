@@ -176,6 +176,7 @@ describe('EngineLifecycle', () => {
       'spectrumScheduler',
     ]);
     expect(names).not.toContain('decodeWorkerPool');
+    expect(names).not.toContain('cwDecoderManager');
     expect(names).not.toContain('clock');
     expect(names).not.toContain('slotScheduler');
     expect(names).not.toContain('operatorManager');

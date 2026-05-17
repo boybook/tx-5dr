@@ -380,7 +380,7 @@ export class EngineLifecycle {
 
   private buildCWModeResourcePlan(): SimplifiedResourceConfig[] {
     const { spectrumScheduler } = this.deps;
-    const resources: SimplifiedResourceConfig[] = [
+    return [
       {
         name: 'spectrumScheduler',
         start: async () => {
@@ -400,39 +400,6 @@ export class EngineLifecycle {
         optional: false,
       },
     ];
-
-    const cwDecoderConfig = ConfigManager.getInstance().getCWDecoderConfig();
-    if (cwDecoderConfig.enabled) {
-      resources.push({
-        name: 'cwDecoderManager',
-        start: async () => {
-          const config = ConfigManager.getInstance().getCWDecoderConfig();
-          if (!config.enabled) {
-            logger.debug('CW decoder disabled, skipping decoder manager start');
-            return;
-          }
-          const cwDecoderManager = this.deps.getCWDecoderManager();
-          await cwDecoderManager.start({
-            ...cwDecoderManager.getConfig(),
-            ...config,
-            enabled: true,
-          } as never);
-          logger.debug('CW decoder manager started');
-        },
-        stop: async () => {
-          const cwDecoderManager = this.deps.getCWDecoderManager();
-          await cwDecoderManager.stop('cw-mode-resource-stop');
-          logger.debug('CW decoder manager stopped');
-        },
-        priority: 7,
-        dependencies: [],
-        optional: true,
-      });
-    } else {
-      logger.debug('CW decoder disabled, not registering decoder manager resource');
-    }
-
-    return resources;
   }
 
   private buildDigitalModeResourcePlan(): SimplifiedResourceConfig[] {
