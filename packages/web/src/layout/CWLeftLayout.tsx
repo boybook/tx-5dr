@@ -67,13 +67,13 @@ export const CWLeftLayout: React.FC = () => {
     <div className="h-full flex flex-col">
       {/* Top toolbar */}
       <div
-        className="flex-shrink-0 flex justify-between items-center p-1 px-2 md:p-2 md:px-3 cursor-default select-none"
+        className="flex-shrink-0 flex justify-between items-center gap-2 p-1 px-2 md:p-2 md:px-3 cursor-default select-none"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties & { WebkitAppRegion: string }}
       >
         {/* Left: App name (non-Electron) */}
-        <div className="flex items-center">
-          {!isElectron() && !(isMobile && hasStationContent) && (
-            <div className="text-lg font-bold text-foreground cursor-default select-none pl-2 flex items-center gap-1">
+        <div className="flex min-w-0 flex-1 items-center gap-1">
+          {!isElectron() && (
+            <div className="text-lg font-bold text-foreground cursor-default select-none pl-1 md:pl-2 flex shrink-0 items-center gap-1 whitespace-nowrap">
               <AppBrandAboutLink />
               <Button
                 onPress={() => window.open('https://github.com/boybook/tx-5dr', '_blank')}
@@ -82,19 +82,20 @@ export const CWLeftLayout: React.FC = () => {
                 size="sm"
                 title="Github"
                 aria-label="Github"
+                className="hidden md:inline-flex"
               >
                 <FontAwesomeIcon icon={faGithub} className="text-default-400 text-sm" />
               </Button>
             </div>
           )}
           <div
-            className={stationInfoOffsetClassName}
+            className={`min-w-0 ${stationInfoOffsetClassName}`}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}
           >
             <StationInfoPopover />
           </div>
         </div>
-        <div className="flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}>
+        <div className="flex flex-shrink-0 items-center gap-0.5 md:gap-1 whitespace-nowrap" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}>
           {isAdmin && <RemoteAccessPopover clientCount={clientCount} />}
           <ClockDisplay />
         </div>

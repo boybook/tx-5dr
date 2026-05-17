@@ -213,18 +213,18 @@ export const ClockDisplay: React.FC = () => {
 
   if (!isAdmin) {
     return (
-      <div className="bg-content1 dark:bg-content2 rounded-md px-3 py-1 cursor-default">
-        <div className="text-xs font-mono text-default-500">
-          UTC {formatUTCTime(currentTime)}
+      <div className="bg-content1 dark:bg-content2 rounded-md px-2 py-1 md:px-3 cursor-default whitespace-nowrap">
+        <div className="text-xs font-mono text-default-500 whitespace-nowrap">
+          <span className="hidden md:inline">UTC </span>{formatUTCTime(currentTime)}
         </div>
       </div>
     );
   }
 
   const clockElement = (
-    <div className="bg-content1 dark:bg-content2 rounded-md px-3 py-1 flex items-center gap-1.5 cursor-pointer">
-      <div className="text-xs font-mono text-default-500">
-        UTC {formatUTCTime(currentTime)}
+    <div className="bg-content1 dark:bg-content2 rounded-md px-2 py-1 md:px-3 flex items-center gap-1 md:gap-1.5 cursor-pointer whitespace-nowrap">
+      <div className="text-xs font-mono text-default-500 whitespace-nowrap">
+        <span className="hidden md:inline">UTC </span>{formatUTCTime(currentTime)}
       </div>
       <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${syncDotColor}`} />
     </div>
