@@ -323,11 +323,37 @@ describe('RadioCapabilityManager', () => {
   it('probes ICOM WLAN 0.6.2 profile-gated capability methods through generic descriptors', async () => {
     const manager = new RadioCapabilityManager();
     const setMonitorEnabled = vi.fn().mockResolvedValue(undefined);
+    const setApfEnabled = vi.fn().mockResolvedValue(undefined);
+    const setNBEnabled = vi.fn().mockResolvedValue(undefined);
+    const setNRLevel = vi.fn().mockResolvedValue(undefined);
+    const setDigiSelEnabled = vi.fn().mockResolvedValue(undefined);
     const setRFGain = vi.fn().mockResolvedValue(undefined);
     const setSpectrumSpeed = vi.fn().mockResolvedValue(undefined);
     const connection = new MockConnection(RadioConnectionType.ICOM_WLAN, {
       getMonitorEnabled: vi.fn().mockResolvedValue(true),
       setMonitorEnabled,
+      getApfEnabled: vi.fn().mockResolvedValue(true),
+      setApfEnabled,
+      getApfLevel: vi.fn().mockResolvedValue(0.5),
+      setApfLevel: vi.fn().mockResolvedValue(undefined),
+      getNBEnabled: vi.fn().mockResolvedValue(true),
+      setNBEnabled,
+      getNBLevel: vi.fn().mockResolvedValue(0.35),
+      setNBLevel: vi.fn().mockResolvedValue(undefined),
+      getNREnabled: vi.fn().mockResolvedValue(false),
+      setNREnabled: vi.fn().mockResolvedValue(undefined),
+      getNRLevel: vi.fn().mockResolvedValue(0.6),
+      setNRLevel,
+      getVoxDelay: vi.fn().mockResolvedValue(12),
+      setVoxDelay: vi.fn().mockResolvedValue(undefined),
+      getAgcTime: vi.fn().mockResolvedValue(4),
+      setAgcTime: vi.fn().mockResolvedValue(undefined),
+      getBalance: vi.fn().mockResolvedValue(0.45),
+      setBalance: vi.fn().mockResolvedValue(undefined),
+      getDigiSelEnabled: vi.fn().mockResolvedValue(true),
+      setDigiSelEnabled,
+      getDigiSelLevel: vi.fn().mockResolvedValue(0.7),
+      setDigiSelLevel: vi.fn().mockResolvedValue(undefined),
       getRFGain: vi.fn().mockResolvedValue(0.4),
       setRFGain,
       getRitEnabled: vi.fn().mockResolvedValue(false),
@@ -356,6 +382,57 @@ describe('RadioCapabilityManager', () => {
       supported: true,
       value: true,
     });
+    expect(getCapability(latestSnapshot.capabilities, 'apf_enabled')).toMatchObject({
+      supported: true,
+      value: true,
+    });
+    expect(getDescriptor(latestSnapshot.descriptors, 'apf_level')).toMatchObject({
+      compoundGroup: 'apf',
+    });
+    expect(getDescriptor(latestSnapshot.descriptors, 'nb')).toMatchObject({
+      valueType: 'boolean',
+      compoundGroup: 'nb',
+    });
+    expect(getCapability(latestSnapshot.capabilities, 'nb')).toMatchObject({
+      supported: true,
+      value: true,
+    });
+    expect(getDescriptor(latestSnapshot.descriptors, 'nb_level')).toMatchObject({
+      valueType: 'number',
+      compoundGroup: 'nb',
+    });
+    expect(getCapability(latestSnapshot.capabilities, 'nb_level')).toMatchObject({
+      supported: true,
+      value: 0.35,
+    });
+    expect(getCapability(latestSnapshot.capabilities, 'nr')).toMatchObject({
+      supported: true,
+      value: false,
+    });
+    expect(getCapability(latestSnapshot.capabilities, 'nr_level')).toMatchObject({
+      supported: true,
+      value: 0.6,
+    });
+    expect(getCapability(latestSnapshot.capabilities, 'vox_delay')).toMatchObject({
+      supported: true,
+      value: 12,
+    });
+    expect(getCapability(latestSnapshot.capabilities, 'agc_time')).toMatchObject({
+      supported: true,
+      value: 4,
+    });
+    expect(getCapability(latestSnapshot.capabilities, 'balance')).toMatchObject({
+      supported: true,
+      value: 0.45,
+    });
+    expect(getCapability(latestSnapshot.capabilities, 'digi_sel_enabled')).toMatchObject({
+      supported: true,
+      value: true,
+    });
+    expect(getCapability(latestSnapshot.capabilities, 'digi_sel_level')).toMatchObject({
+      supported: true,
+      value: 0.7,
+    });
     expect(getCapability(latestSnapshot.capabilities, 'rf_gain')).toMatchObject({
       supported: true,
       value: 0.4,
@@ -375,9 +452,17 @@ describe('RadioCapabilityManager', () => {
     });
 
     await expect(manager.writeCapability('monitor_enabled', false)).resolves.toBeUndefined();
+    await expect(manager.writeCapability('apf_enabled', false)).resolves.toBeUndefined();
+    await expect(manager.writeCapability('nb', false)).resolves.toBeUndefined();
+    await expect(manager.writeCapability('nr_level', 0.25)).resolves.toBeUndefined();
+    await expect(manager.writeCapability('digi_sel_enabled', false)).resolves.toBeUndefined();
     await expect(manager.writeCapability('rf_gain', 0.8)).resolves.toBeUndefined();
     await expect(manager.writeCapability('spectrum_speed', 'slow')).resolves.toBeUndefined();
     expect(setMonitorEnabled).toHaveBeenCalledWith(false);
+    expect(setApfEnabled).toHaveBeenCalledWith(false);
+    expect(setNBEnabled).toHaveBeenCalledWith(false);
+    expect(setNRLevel).toHaveBeenCalledWith(0.25);
+    expect(setDigiSelEnabled).toHaveBeenCalledWith(false);
     expect(setRFGain).toHaveBeenCalledWith(0.8);
     expect(setSpectrumSpeed).toHaveBeenCalledWith('slow');
 

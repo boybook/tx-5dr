@@ -1959,7 +1959,7 @@ export class HamlibConnection
     });
   }
 
-  async getNBEnabled(): Promise<number> {
+  async getNBEnabled(): Promise<boolean> {
     return this.runSerializedTask('getNBEnabled', async () => {
       this.checkConnected();
       try {
@@ -1971,32 +1971,71 @@ export class HamlibConnection
         ])) as boolean;
         this.lastSuccessfulOperation = Date.now();
         logger.debug(`NB state read: ${value ? 'enabled' : 'disabled'}`);
-        return value ? 1 : 0;
+        return value;
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'getNBEnabled');
       }
     });
   }
 
-  async setNBEnabled(value: number): Promise<void> {
+  async setNBEnabled(enabled: boolean): Promise<void> {
     await this.runSerializedTask('setNBEnabled', async () => {
       this.checkConnected();
       try {
         await Promise.race([
-          this.rig!.setFunction('NB', value > 0),
+          this.rig!.setFunction('NB', enabled),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('Set NB state timeout')), 5000)
           ),
         ]);
         this.lastSuccessfulOperation = Date.now();
-        logger.debug(`NB state set: ${value > 0 ? 'enabled' : 'disabled'}`);
+        logger.debug(`NB state set: ${enabled ? 'enabled' : 'disabled'}`);
       } catch (error) {
         throw this.convertError(error, 'setNBEnabled');
       }
     });
   }
 
-  async getNREnabled(): Promise<number> {
+  async getNBLevel(): Promise<number> {
+    return this.runSerializedTask('getNBLevel', async () => {
+      this.checkConnected();
+      if (!this.supportedLevels.has('NB')) {
+        throw new Error('NB level not supported by this radio');
+      }
+      try {
+        const value = (await Promise.race([
+          this.rig!.getLevel('NB'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get NB level timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getNBLevel');
+      }
+    });
+  }
+
+  async setNBLevel(value: number): Promise<void> {
+    await this.runSerializedTask('setNBLevel', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setLevel('NB', value),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set NB level timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`NB level set: ${(value * 100).toFixed(0)}%`);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setNBLevel');
+      }
+    });
+  }
+
+  async getNREnabled(): Promise<boolean> {
     return this.runSerializedTask('getNREnabled', async () => {
       this.checkConnected();
       try {
@@ -2008,27 +2047,66 @@ export class HamlibConnection
         ])) as boolean;
         this.lastSuccessfulOperation = Date.now();
         logger.debug(`NR state read: ${value ? 'enabled' : 'disabled'}`);
-        return value ? 1 : 0;
+        return value;
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'getNREnabled');
       }
     });
   }
 
-  async setNREnabled(value: number): Promise<void> {
+  async setNREnabled(enabled: boolean): Promise<void> {
     await this.runSerializedTask('setNREnabled', async () => {
       this.checkConnected();
       try {
         await Promise.race([
-          this.rig!.setFunction('NR', value > 0),
+          this.rig!.setFunction('NR', enabled),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('Set NR state timeout')), 5000)
           ),
         ]);
         this.lastSuccessfulOperation = Date.now();
-        logger.debug(`NR state set: ${value > 0 ? 'enabled' : 'disabled'}`);
+        logger.debug(`NR state set: ${enabled ? 'enabled' : 'disabled'}`);
       } catch (error) {
         throw this.convertError(error, 'setNREnabled');
+      }
+    });
+  }
+
+  async getNRLevel(): Promise<number> {
+    return this.runSerializedTask('getNRLevel', async () => {
+      this.checkConnected();
+      if (!this.supportedLevels.has('NR')) {
+        throw new Error('NR level not supported by this radio');
+      }
+      try {
+        const value = (await Promise.race([
+          this.rig!.getLevel('NR'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get NR level timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getNRLevel');
+      }
+    });
+  }
+
+  async setNRLevel(value: number): Promise<void> {
+    await this.runSerializedTask('setNRLevel', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setLevel('NR', value),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set NR level timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`NR level set: ${(value * 100).toFixed(0)}%`);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setNRLevel');
       }
     });
   }

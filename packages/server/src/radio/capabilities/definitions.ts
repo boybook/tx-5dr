@@ -96,15 +96,19 @@ function createRuntimeBooleanDefinition(
   readMethod: string,
   writeMethod: string,
   staticFunction?: string,
+  descriptorExtra: Partial<CapabilityDefinition['descriptor']> = {},
 ): CapabilityDefinition {
   return {
     id,
-    descriptor: createBooleanDescriptor(
-      id,
-      category,
-      `radio:capability.${id}.label`,
-      `radio:capability.${id}.description`,
-    ),
+    descriptor: {
+      ...createBooleanDescriptor(
+        id,
+        category,
+        `radio:capability.${id}.label`,
+        `radio:capability.${id}.description`,
+      ),
+      ...descriptorExtra,
+    },
     probeSupport: async (conn) => {
       const reader = getDynamicMethod(conn, readMethod);
       if (!reader) return false;
@@ -128,15 +132,19 @@ function createRuntimePercentDefinition(
   readMethod: string,
   writeMethod: string,
   staticLevel?: string,
+  descriptorExtra: Partial<CapabilityDefinition['descriptor']> = {},
 ): CapabilityDefinition {
   return {
     id,
-    descriptor: createPercentDescriptor(
-      id,
-      category,
-      `radio:capability.${id}.label`,
-      `radio:capability.${id}.description`,
-    ),
+    descriptor: {
+      ...createPercentDescriptor(
+        id,
+        category,
+        `radio:capability.${id}.label`,
+        `radio:capability.${id}.description`,
+      ),
+      ...descriptorExtra,
+    },
     probeSupport: async (conn) => {
       const reader = getDynamicMethod(conn, readMethod);
       if (!reader) return false;
@@ -161,6 +169,7 @@ function createRuntimeNumberDefinition(
   writeMethod: string,
   range: { min: number; max: number; step?: number },
   display?: CapabilityDefinition['descriptor']['display'],
+  descriptorExtra: Partial<CapabilityDefinition['descriptor']> = {},
 ): CapabilityDefinition {
   return {
     id,
@@ -177,6 +186,7 @@ function createRuntimeNumberDefinition(
       descriptionI18nKey: `radio:capability.${id}.description`,
       display,
       hasSurfaceControl: false,
+      ...descriptorExtra,
     },
     probeSupport: async (conn) => {
       const reader = getDynamicMethod(conn, readMethod);
@@ -444,12 +454,15 @@ function createDefinitions(): CapabilityDefinition[] {
     },
     {
       id: 'monitor_gain',
-      descriptor: createPercentDescriptor(
-        'monitor_gain',
-        'audio',
-        'radio:capability.monitor_gain.label',
-        'radio:capability.monitor_gain.description',
-      ),
+      descriptor: {
+        ...createPercentDescriptor(
+          'monitor_gain',
+          'audio',
+          'radio:capability.monitor_gain.label',
+          'radio:capability.monitor_gain.description',
+        ),
+        compoundGroup: 'monitor',
+      },
       probeSupport: async (conn) => {
         const staticProbe = probeHamlibStaticLevel(conn, 'MONITOR_GAIN');
         if (staticProbe) return staticProbe;
@@ -460,18 +473,44 @@ function createDefinitions(): CapabilityDefinition[] {
       read: (conn) => conn.getMonitorGain!(),
       write: (conn, value) => conn.setMonitorGain!(value as number),
     },
-    createRuntimeBooleanDefinition('monitor_enabled', 'audio', 'getMonitorEnabled', 'setMonitorEnabled', 'MON'),
-    createRuntimePercentDefinition('vox_gain', 'audio', 'getVoxGain', 'setVoxGain', 'VOXGAIN'),
-    createRuntimePercentDefinition('anti_vox', 'audio', 'getAntiVox', 'setAntiVox', 'ANTIVOX'),
-    createRuntimePercentDefinition('break_in_delay', 'operation', 'getBreakInDelay', 'setBreakInDelay', 'BKINDL'),
+    createRuntimeBooleanDefinition('monitor_enabled', 'audio', 'getMonitorEnabled', 'setMonitorEnabled', 'MON', {
+      compoundGroup: 'monitor',
+    }),
+    createRuntimeBooleanDefinition('apf_enabled', 'rf', 'getApfEnabled', 'setApfEnabled', 'APF', {
+      compoundGroup: 'apf',
+    }),
+    createRuntimePercentDefinition('apf_level', 'rf', 'getApfLevel', 'setApfLevel', 'APF', {
+      compoundGroup: 'apf',
+    }),
+    createRuntimePercentDefinition('vox_gain', 'audio', 'getVoxGain', 'setVoxGain', 'VOXGAIN', {
+      compoundGroup: 'vox',
+    }),
+    createRuntimePercentDefinition('anti_vox', 'audio', 'getAntiVox', 'setAntiVox', 'ANTIVOX', {
+      compoundGroup: 'vox',
+    }),
+    createRuntimeNumberDefinition(
+      'vox_delay',
+      'audio',
+      'getVoxDelay',
+      'setVoxDelay',
+      { min: 0, max: 255, step: 1 },
+      { mode: 'value', decimals: 0 },
+      { compoundGroup: 'vox' },
+    ),
+    createRuntimePercentDefinition('break_in_delay', 'operation', 'getBreakInDelay', 'setBreakInDelay', 'BKINDL', {
+      compoundGroup: 'break_in',
+    }),
     {
       id: 'nb',
-      descriptor: createPercentDescriptor(
-        'nb',
-        'rf',
-        'radio:capability.nb.label',
-        'radio:capability.nb.description',
-      ),
+      descriptor: {
+        ...createBooleanDescriptor(
+          'nb',
+          'rf',
+          'radio:capability.nb.label',
+          'radio:capability.nb.description',
+        ),
+        compoundGroup: 'nb',
+      },
       probeSupport: async (conn) => {
         const staticProbe = probeHamlibStaticFunction(conn, 'NB');
         if (staticProbe) return staticProbe;
@@ -480,16 +519,40 @@ function createDefinitions(): CapabilityDefinition[] {
         return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getNBEnabled!(),
-      write: (conn, value) => conn.setNBEnabled!(value as number),
+      write: (conn, value) => conn.setNBEnabled!(Boolean(value)),
+    },
+    {
+      id: 'nb_level',
+      descriptor: {
+        ...createPercentDescriptor(
+          'nb_level',
+          'rf',
+          'radio:capability.nb_level.label',
+          'radio:capability.nb_level.description',
+        ),
+        compoundGroup: 'nb',
+      },
+      probeSupport: async (conn) => {
+        const staticProbe = probeHamlibStaticLevel(conn, 'NB');
+        if (staticProbe) return staticProbe;
+        if (!conn.getNBLevel) return false;
+        await conn.getNBLevel();
+        return { supported: true, source: 'runtime-probe' };
+      },
+      read: (conn) => conn.getNBLevel!(),
+      write: (conn, value) => conn.setNBLevel!(value as number),
     },
     {
       id: 'nr',
-      descriptor: createPercentDescriptor(
-        'nr',
-        'rf',
-        'radio:capability.nr.label',
-        'radio:capability.nr.description',
-      ),
+      descriptor: {
+        ...createBooleanDescriptor(
+          'nr',
+          'rf',
+          'radio:capability.nr.label',
+          'radio:capability.nr.description',
+        ),
+        compoundGroup: 'nr',
+      },
       probeSupport: async (conn) => {
         const staticProbe = probeHamlibStaticFunction(conn, 'NR');
         if (staticProbe) return staticProbe;
@@ -498,7 +561,28 @@ function createDefinitions(): CapabilityDefinition[] {
         return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getNREnabled!(),
-      write: (conn, value) => conn.setNREnabled!(value as number),
+      write: (conn, value) => conn.setNREnabled!(Boolean(value)),
+    },
+    {
+      id: 'nr_level',
+      descriptor: {
+        ...createPercentDescriptor(
+          'nr_level',
+          'rf',
+          'radio:capability.nr_level.label',
+          'radio:capability.nr_level.description',
+        ),
+        compoundGroup: 'nr',
+      },
+      probeSupport: async (conn) => {
+        const staticProbe = probeHamlibStaticLevel(conn, 'NR');
+        if (staticProbe) return staticProbe;
+        if (!conn.getNRLevel) return false;
+        await conn.getNRLevel();
+        return { supported: true, source: 'runtime-probe' };
+      },
+      read: (conn) => conn.getNRLevel!(),
+      write: (conn, value) => conn.setNRLevel!(value as number),
     },
     createRuntimePercentDefinition('rf_gain', 'rf', 'getRFGain', 'setRFGain', 'RF'),
     createRuntimePercentDefinition('if_shift', 'rf', 'getIFShift', 'setIFShift', 'IF'),
@@ -520,9 +604,25 @@ function createDefinitions(): CapabilityDefinition[] {
       { min: 6, max: 48, step: 1 },
       { mode: 'value', decimals: 0 },
     ),
-    createRuntimePercentDefinition('notch_raw', 'rf', 'getNotchRaw', 'setNotchRaw', 'NOTCHF_RAW'),
+    createRuntimePercentDefinition('notch_raw', 'rf', 'getNotchRaw', 'setNotchRaw', 'NOTCHF_RAW', {
+      compoundGroup: 'manual_notch',
+    }),
+    createRuntimeNumberDefinition(
+      'agc_time',
+      'rf',
+      'getAgcTime',
+      'setAgcTime',
+      { min: 0, max: 255, step: 1 },
+      { mode: 'value', decimals: 0 },
+    ),
+    createRuntimePercentDefinition('balance', 'audio', 'getBalance', 'setBalance', 'BALANCE'),
     createRuntimePercentDefinition('drive_gain', 'rf', 'getDriveGain', 'setDriveGain', 'DRIVE_GAIN'),
-    createRuntimePercentDefinition('digi_sel_level', 'rf', 'getDigiSelLevel', 'setDigiSelLevel', 'DIGI_SEL_LEVEL'),
+    createRuntimeBooleanDefinition('digi_sel_enabled', 'rf', 'getDigiSelEnabled', 'setDigiSelEnabled', 'DIGI_SEL', {
+      compoundGroup: 'digi_sel',
+    }),
+    createRuntimePercentDefinition('digi_sel_level', 'rf', 'getDigiSelLevel', 'setDigiSelLevel', 'DIGI_SEL_LEVEL', {
+      compoundGroup: 'digi_sel',
+    }),
     {
       id: 'lock_mode',
       descriptor: createBooleanDescriptor(
@@ -559,12 +659,15 @@ function createDefinitions(): CapabilityDefinition[] {
     },
     {
       id: 'vox',
-      descriptor: createBooleanDescriptor(
-        'vox',
-        'audio',
-        'radio:capability.vox.label',
-        'radio:capability.vox.description',
-      ),
+      descriptor: {
+        ...createBooleanDescriptor(
+          'vox',
+          'audio',
+          'radio:capability.vox.label',
+          'radio:capability.vox.description',
+        ),
+        compoundGroup: 'vox',
+      },
       probeSupport: async (conn) => {
         const staticProbe = probeHamlibStaticFunction(conn, 'VOX');
         if (staticProbe) return staticProbe;
@@ -576,11 +679,21 @@ function createDefinitions(): CapabilityDefinition[] {
       write: (conn, value) => conn.setVOXEnabled!(Boolean(value)),
     },
     createRuntimeBooleanDefinition('auto_notch', 'rf', 'getAutoNotchEnabled', 'setAutoNotchEnabled', 'ANF'),
-    createRuntimeBooleanDefinition('manual_notch', 'rf', 'getManualNotchEnabled', 'setManualNotchEnabled', 'MN'),
-    createRuntimeBooleanDefinition('rit_enabled', 'operation', 'getRitEnabled', 'setRitEnabled', 'RIT'),
-    createRuntimeBooleanDefinition('xit_enabled', 'operation', 'getXitEnabled', 'setXitEnabled', 'XIT'),
-    createRuntimeBooleanDefinition('tone_enabled', 'operation', 'getToneEnabled', 'setToneEnabled', 'TONE'),
-    createRuntimeBooleanDefinition('tone_squelch_enabled', 'operation', 'getToneSquelchEnabled', 'setToneSquelchEnabled', 'TSQL'),
+    createRuntimeBooleanDefinition('manual_notch', 'rf', 'getManualNotchEnabled', 'setManualNotchEnabled', 'MN', {
+      compoundGroup: 'manual_notch',
+    }),
+    createRuntimeBooleanDefinition('rit_enabled', 'operation', 'getRitEnabled', 'setRitEnabled', 'RIT', {
+      compoundGroup: 'rit',
+    }),
+    createRuntimeBooleanDefinition('xit_enabled', 'operation', 'getXitEnabled', 'setXitEnabled', 'XIT', {
+      compoundGroup: 'xit',
+    }),
+    createRuntimeBooleanDefinition('tone_enabled', 'operation', 'getToneEnabled', 'setToneEnabled', 'TONE', {
+      compoundGroup: 'tone',
+    }),
+    createRuntimeBooleanDefinition('tone_squelch_enabled', 'operation', 'getToneSquelchEnabled', 'setToneSquelchEnabled', 'TSQL', {
+      compoundGroup: 'tone',
+    }),
     createRuntimeBooleanDefinition('beep_enabled', 'system', 'getBeepEnabled', 'setBeepEnabled'),
     createRuntimeEnumDefinition(
       'break_in_mode',

@@ -559,30 +559,58 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
 
   getMonitorEnabled?(): Promise<boolean>;
   setMonitorEnabled?(enabled: boolean): Promise<void>;
+  getApfEnabled?(): Promise<boolean>;
+  setApfEnabled?(enabled: boolean): Promise<void>;
+  getApfLevel?(): Promise<number>;
+  setApfLevel?(value: number): Promise<void>;
 
   /**
-   * 获取噪声消隐电平（0.0–1.0，0 = 关闭）
-   * @optional Hamlib: getLevel('NB'), icom-wlan: CI-V 0x14 0x12
+   * 获取噪声消隐开关状态。
+   * @optional Hamlib: getFunction('NB'), icom-wlan: getFunction('NB')
    */
-  getNBEnabled?(): Promise<number>;
+  getNBEnabled?(): Promise<boolean>;
 
   /**
-   * 设置噪声消隐电平（0.0–1.0，0 = 关闭）
-   * @optional Hamlib: setLevel('NB', value), icom-wlan: CI-V 0x14 0x12
+   * 设置噪声消隐开关状态。
+   * @optional Hamlib: setFunction('NB', enabled), icom-wlan: setFunction('NB', enabled)
    */
-  setNBEnabled?(value: number): Promise<void>;
+  setNBEnabled?(enabled: boolean): Promise<void>;
 
   /**
-   * 获取数字降噪电平（0.0–1.0，0 = 关闭）
-   * @optional Hamlib: getLevel('NR'), icom-wlan: CI-V 0x14 0x13
+   * 获取噪声消隐电平（0.0–1.0）。
+   * @optional Hamlib: getLevel('NB'), icom-wlan: getLevel('NB')
    */
-  getNREnabled?(): Promise<number>;
+  getNBLevel?(): Promise<number>;
 
   /**
-   * 设置数字降噪电平（0.0–1.0，0 = 关闭）
-   * @optional Hamlib: setLevel('NR', value), icom-wlan: CI-V 0x14 0x13
+   * 设置噪声消隐电平（0.0–1.0）。
+   * @optional Hamlib: setLevel('NB', value), icom-wlan: setLevel('NB', value)
    */
-  setNREnabled?(value: number): Promise<void>;
+  setNBLevel?(value: number): Promise<void>;
+
+  /**
+   * 获取数字降噪开关状态。
+   * @optional Hamlib: getFunction('NR'), icom-wlan: getFunction('NR')
+   */
+  getNREnabled?(): Promise<boolean>;
+
+  /**
+   * 设置数字降噪开关状态。
+   * @optional Hamlib: setFunction('NR', enabled), icom-wlan: setFunction('NR', enabled)
+   */
+  setNREnabled?(enabled: boolean): Promise<void>;
+
+  /**
+   * 获取数字降噪电平（0.0–1.0）。
+   * @optional Hamlib: getLevel('NR'), icom-wlan: getLevel('NR')
+   */
+  getNRLevel?(): Promise<number>;
+
+  /**
+   * 设置数字降噪电平（0.0–1.0）。
+   * @optional Hamlib: setLevel('NR', value), icom-wlan: setLevel('NR', value)
+   */
+  setNRLevel?(value: number): Promise<void>;
 
   // ===== Rich capability controls（主要由 Hamlib 提供）=====
 
@@ -666,10 +694,18 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
   setVoxGain?(value: number): Promise<void>;
   getAntiVox?(): Promise<number>;
   setAntiVox?(value: number): Promise<void>;
+  getVoxDelay?(): Promise<number>;
+  setVoxDelay?(value: number): Promise<void>;
   getBreakInDelay?(): Promise<number>;
   setBreakInDelay?(value: number): Promise<void>;
+  getAgcTime?(): Promise<number>;
+  setAgcTime?(value: number): Promise<void>;
+  getBalance?(): Promise<number>;
+  setBalance?(value: number): Promise<void>;
   getDriveGain?(): Promise<number>;
   setDriveGain?(value: number): Promise<void>;
+  getDigiSelEnabled?(): Promise<boolean>;
+  setDigiSelEnabled?(enabled: boolean): Promise<void>;
   getDigiSelLevel?(): Promise<number>;
   setDigiSelLevel?(value: number): Promise<void>;
   getBreakInMode?(): Promise<string>;

@@ -571,6 +571,14 @@
       "label": "监听开关",
       "description": "控制支持 MON 功能的电台发射监听开关。"
     },
+    "apf_enabled": {
+      "label": "APF",
+      "description": "打开或关闭支持机型的音频峰值滤波器（APF）。"
+    },
+    "apf_level": {
+      "label": "APF 强度",
+      "description": "调节电台 profile 暴露的音频峰值滤波器强度或宽度。"
+    },
     "vox_gain": {
       "label": "VOX 增益",
       "description": "调节 VOX 对麦克风音频触发发射的灵敏度。"
@@ -579,17 +587,29 @@
       "label": "Anti-VOX",
       "description": "调节 VOX 对扬声器回放音频的抑制，减少误触发发射。"
     },
+    "vox_delay": {
+      "label": "VOX 延时",
+      "description": "调节电台 VOX 释放延时，数值单位遵循当前电台 profile。"
+    },
     "break_in_delay": {
       "label": "Break-In 延时",
       "description": "调节 CW Break-In 后电台返回接收的延迟。"
     },
     "nb": {
       "label": "噪声消隐",
-      "description": "噪声消隐器（NB），专门抑制脉冲型干扰，例如汽车点火噪声、工业电气干扰等。0 表示关闭，数值越大消隐强度越高。对持续性背景噪声效果有限，建议仅在有明显脉冲干扰时启用。"
+      "description": "打开或关闭噪声消隐器（NB）。NB 专门抑制汽车点火、工业电气干扰等脉冲型噪声。"
+    },
+    "nb_level": {
+      "label": "噪声消隐强度",
+      "description": "调节 NB 消隐强度。数值越大，对脉冲噪声的抑制越强，但过高可能让接收音频或数字信号产生失真。"
     },
     "nr": {
       "label": "数字降噪",
-      "description": "数字信号处理降噪（NR），通过 DSP 算法降低背景白噪声，提升弱信号可读性。0 表示关闭；进行 FT8 等数字模式解码时建议设为 0，避免 DSP 处理影响解码准确性。"
+      "description": "打开或关闭 DSP 数字降噪（NR）。NR 通过 DSP 算法降低背景白噪声，提升弱信号可读性。"
+    },
+    "nr_level": {
+      "label": "数字降噪强度",
+      "description": "调节 DSP NR 降噪强度。进行 FT8 等数字模式解码时建议关闭或保持较低，避免 DSP 处理影响解码准确性。"
     },
     "rf_gain": {
       "label": "RF 增益",
@@ -619,9 +639,21 @@
       "label": "手动陷波",
       "description": "调节电台暴露的手动陷波位置或深度。"
     },
+    "agc_time": {
+      "label": "AGC 时间",
+      "description": "调节电台 profile 暴露的 AGC 时间常数。"
+    },
+    "balance": {
+      "label": "平衡",
+      "description": "调节支持机型的接收音频平衡。"
+    },
     "drive_gain": {
       "label": "Drive 增益",
       "description": "调节支持机型的 Drive Gain 控制。"
+    },
+    "digi_sel_enabled": {
+      "label": "Digi-SEL",
+      "description": "打开或关闭支持机型的数字选择滤波器。"
     },
     "digi_sel_level": {
       "label": "Digi-SEL 电平",

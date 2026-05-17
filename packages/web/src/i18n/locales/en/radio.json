@@ -571,6 +571,14 @@
       "label": "Monitor",
       "description": "Enables or disables transmit audio monitoring on radios that expose the MON function."
     },
+    "apf_enabled": {
+      "label": "APF",
+      "description": "Turns the audio peak filter (APF) on or off on radios that expose it."
+    },
+    "apf_level": {
+      "label": "APF Level",
+      "description": "Adjusts the audio peak filter level or width as exposed by the radio profile."
+    },
     "vox_gain": {
       "label": "VOX Gain",
       "description": "Adjusts how sensitive VOX transmit triggering is to microphone audio."
@@ -579,17 +587,29 @@
       "label": "Anti-VOX",
       "description": "Adjusts VOX rejection for speaker audio to reduce accidental transmit triggering."
     },
+    "vox_delay": {
+      "label": "VOX Delay",
+      "description": "Adjusts the radio VOX release delay. The value follows the radio profile scale."
+    },
     "break_in_delay": {
       "label": "Break-In Delay",
       "description": "Adjusts the CW break-in delay before the radio returns to receive."
     },
     "nb": {
       "label": "Noise Blanker",
-      "description": "The Noise Blanker (NB) suppresses impulse-type interference such as automotive ignition noise and industrial electrical interference. 0 means off; higher values increase blanking strength. Ineffective against continuous background noise — enable only when impulse interference is present."
+      "description": "Turns the Noise Blanker (NB) on or off. NB suppresses impulse-type interference such as automotive ignition noise and industrial electrical interference."
+    },
+    "nb_level": {
+      "label": "Noise Blanker Level",
+      "description": "Adjusts NB blanking strength. Higher values increase impulse-noise suppression, but too much blanking can distort received audio or digital signals."
     },
     "nr": {
       "label": "Noise Reduction",
-      "description": "Digital Signal Processing noise reduction (NR) reduces background white noise using DSP algorithms, improving weak signal readability. 0 means off. For FT8 and other digital mode decoding, set to 0 to avoid DSP processing affecting decode accuracy."
+      "description": "Turns DSP Noise Reduction (NR) on or off. NR reduces background white noise and can improve weak signal readability."
+    },
+    "nr_level": {
+      "label": "Noise Reduction Level",
+      "description": "Adjusts DSP NR strength. For FT8 and other digital mode decoding, keep NR off or low to avoid DSP processing affecting decode accuracy."
     },
     "rf_gain": {
       "label": "RF Gain",
@@ -619,9 +639,21 @@
       "label": "Manual Notch",
       "description": "Adjusts the manual notch position or depth as exposed by the radio."
     },
+    "agc_time": {
+      "label": "AGC Time",
+      "description": "Adjusts the AGC time constant value exposed by the radio profile."
+    },
+    "balance": {
+      "label": "Balance",
+      "description": "Adjusts receiver audio balance on radios that expose it."
+    },
     "drive_gain": {
       "label": "Drive Gain",
       "description": "Adjusts the drive gain control on radios that expose it."
+    },
+    "digi_sel_enabled": {
+      "label": "Digi-SEL",
+      "description": "Turns the digital select filter on or off on radios that expose it."
     },
     "digi_sel_level": {
       "label": "Digi-SEL Level",

@@ -1,7 +1,7 @@
 /**
  * NumberLevelCapability - 通用数值能力面板组件
  *
- * - percent 模式：使用 Slider，适合 rf_power / af_gain / sql / mic_gain / nb / nr
+ * - percent 模式：使用 Slider，适合 rf_power / af_gain / sql / mic_gain / nb_level / nr_level
  * - value 模式：使用数字输入框，适合 RIT/XIT/中继偏移等非归一化参数
  */
 

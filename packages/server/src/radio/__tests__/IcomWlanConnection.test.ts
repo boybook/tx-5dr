@@ -131,8 +131,8 @@ function createConnectedConnection(): { connection: IcomWlanConnection; rig: Moc
   const connection = new IcomWlanConnection();
   const rig: MockRig = {
     profile: {
-      functions: ['TUNER', 'COMP', 'VOX', 'LOCK', 'RIT', 'XIT', 'TONE', 'TSQL', 'MON', 'ANF', 'MN'],
-      levels: ['COMP', 'MONITOR_GAIN', 'AGC', 'RF', 'CWPITCH', 'KEYSPD', 'SPECTRUM_AVG'],
+      functions: ['TUNER', 'NB', 'NR', 'COMP', 'VOX', 'LOCK', 'RIT', 'XIT', 'TONE', 'TSQL', 'MON', 'ANF', 'MN', 'APF', 'DIGI_SEL'],
+      levels: ['NB', 'NR', 'COMP', 'MONITOR_GAIN', 'APF', 'AGC', 'AGC_TIME', 'RF', 'CWPITCH', 'KEYSPD', 'VOXDELAY', 'BALANCE', 'DIGI_SEL_LEVEL', 'SPECTRUM_AVG'],
       parameters: ['BEEP', 'AFIF_WLAN'],
       tuningSteps: [{ hz: 10 }, { hz: 50 }, { hz: 100 }],
       vfos: ['A', 'B', 'MAIN', 'SUB'],
@@ -641,6 +641,17 @@ describe('IcomWlanConnection', () => {
     rig.getLevel.mockImplementation(async (name: string) => (name === 'AGC' ? 2 : 0.42));
 
     await expect(connection.getCompressorEnabled()).resolves.toBe(true);
+    await expect(connection.getNBEnabled()).resolves.toBe(true);
+    await expect(connection.setNREnabled(false)).resolves.toBeUndefined();
+    await expect(connection.getNBLevel()).resolves.toBe(0.42);
+    await expect(connection.setNRLevel(0.3)).resolves.toBeUndefined();
+    await expect(connection.getApfEnabled()).resolves.toBe(true);
+    await expect(connection.setApfLevel(0.55)).resolves.toBeUndefined();
+    await expect(connection.getDigiSelEnabled()).resolves.toBe(true);
+    await expect(connection.setDigiSelLevel(0.25)).resolves.toBeUndefined();
+    await expect(connection.getVoxDelay()).resolves.toBe(0.42);
+    await expect(connection.setAgcTime(4)).resolves.toBeUndefined();
+    await expect(connection.getBalance()).resolves.toBe(0.42);
     await expect(connection.setVOXEnabled(false)).resolves.toBeUndefined();
     await expect(connection.getLockMode()).resolves.toBe(false);
     await expect(connection.setRitEnabled(true)).resolves.toBeUndefined();
@@ -650,6 +661,17 @@ describe('IcomWlanConnection', () => {
     await expect(connection.setAgcMode('slow')).resolves.toBeUndefined();
 
     expect(rig.getFunction).toHaveBeenCalledWith('COMP', { timeout: 3000 });
+    expect(rig.getFunction).toHaveBeenCalledWith('NB', { timeout: 3000 });
+    expect(rig.setFunction).toHaveBeenCalledWith('NR', false);
+    expect(rig.getLevel).toHaveBeenCalledWith('NB', { timeout: 3000 });
+    expect(rig.setLevel).toHaveBeenCalledWith('NR', 0.3);
+    expect(rig.getFunction).toHaveBeenCalledWith('APF', { timeout: 3000 });
+    expect(rig.setLevel).toHaveBeenCalledWith('APF', 0.55);
+    expect(rig.getFunction).toHaveBeenCalledWith('DIGI_SEL', { timeout: 3000 });
+    expect(rig.setLevel).toHaveBeenCalledWith('DIGI_SEL_LEVEL', 0.25);
+    expect(rig.getLevel).toHaveBeenCalledWith('VOXDELAY', { timeout: 3000 });
+    expect(rig.setLevel).toHaveBeenCalledWith('AGC_TIME', 4);
+    expect(rig.getLevel).toHaveBeenCalledWith('BALANCE', { timeout: 3000 });
     expect(rig.setFunction).toHaveBeenCalledWith('VOX', false);
     expect(rig.getFunction).toHaveBeenCalledWith('LOCK', { timeout: 3000 });
     expect(rig.setFunction).toHaveBeenCalledWith('RIT', true);
