@@ -92,4 +92,35 @@ describe('pluginPanelSlots', () => {
 
     expect(entries).toEqual([]);
   });
+
+  it('filters CW left-top panels independently from voice left-top panels', () => {
+    const entries = getVisiblePluginPanelsForSlot({
+      plugins: [buildPlugin({
+        panels: [
+          {
+            id: 'voice-left',
+            title: 'Voice Left',
+            component: 'iframe',
+            pageId: 'voice-left-webview',
+            slot: 'voice-left-top',
+          },
+          {
+            id: 'cw-left',
+            title: 'CW Left',
+            component: 'iframe',
+            pageId: 'cw-left-webview',
+            slot: 'cw-left-top',
+          },
+        ],
+      })],
+      panelContributions: [],
+      getMeta: () => ({}),
+      operatorId: 'operator-1',
+      slot: 'cw-left-top',
+      pluginGeneration: 1,
+      initialPanelMeta: [],
+    });
+
+    expect(entries.map((entry) => entry.panel.id)).toEqual(['cw-left']);
+  });
 });

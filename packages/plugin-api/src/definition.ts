@@ -171,6 +171,7 @@ export interface PluginDefinition {
    * top-right automation popover), `'main-right'` (the optional far-right main
    * pane), `'voice-left-top'` (above the voice frequency card),
    * `'voice-right-top'` (the tabbed top area of the voice right panel),
+   * `'cw-left-top'` (above the CW frequency card),
    * `'cw-right-top'` (the tabbed top area of the CW right panel), or
    * `'radio-control-toolbar'` (a global utility iframe button in RadioControl).
    * Panels may also declare a preferred `width`, such as `'full'`, so hosts can

@@ -6,13 +6,14 @@ import { RadioMetersDisplay } from '../components/radio/control/RadioMetersDispl
 import { CWKeyerPanel } from '../components/cw/CWKeyerPanel';
 import { CWDecoderPanel } from '../components/cw/CWDecoderPanel';
 import { CWFrequencyControl } from '../components/cw/CWFrequencyControl';
+import { CWLeftPluginSlot } from '../components/cw/CWLeftPluginSlot';
 import { CWSpectrumFilterOverlay } from '../components/cw/CWSpectrumFilterOverlay';
 import { CWDecoderProvider } from '../hooks/useCWDecoder';
 import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
 import { ClockDisplay } from '../components/system/ClockDisplay';
 import { StationInfoPopover } from '../components/station/StationInfoPopover';
 import { AppBrandAboutLink } from '../components/common/AppBrandAboutLink';
-import { useRadioState, useConnection, useStationInfo } from '../store/radioStore';
+import { useRadioState, useConnection, useStationInfo, useCurrentOperatorId, useOperators } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { isElectron, isMacOS } from '../utils/config';
@@ -31,6 +32,9 @@ export const CWLeftLayout: React.FC = () => {
   const radio = useRadioState();
   const connection = useConnection();
   const stationInfo = useStationInfo();
+  const { currentOperatorId } = useCurrentOperatorId();
+  const { operators } = useOperators();
+  const activeOperatorId = currentOperatorId || operators[0]?.id || null;
   const hasStationContent = !!(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
   const [isMobile, setIsMobile] = useState(false);
   const [clientCount, setClientCount] = useState(0);
@@ -104,6 +108,8 @@ export const CWLeftLayout: React.FC = () => {
       {/* Main content */}
       <CWDecoderProvider>
         <div className="flex-1 px-2 pb-2 md:px-5 md:pb-5 min-h-0 flex flex-col gap-2 md:gap-3">
+          <CWLeftPluginSlot operatorId={activeOperatorId} />
+
           <CWFrequencyControl />
 
           {/* Spectrum Display (CW filter on audio, RF TX marker on radio SDR) */}

@@ -250,6 +250,8 @@ export type PluginCapability = z.infer<typeof PluginCapabilitySchema>;
  * - `main-right`: shown in the optional main layout plugin pane on the far right.
  * - `voice-left-top`: shown above the voice frequency control card.
  * - `voice-right-top`: shown in the tabbed top area of the voice right panel.
+ * - `cw-left-top`: shown above the CW frequency control card.
+ * - `cw-right-top`: shown in the tabbed top area of the CW right panel.
  */
 export const PluginPanelSlotSchema = z.enum([
   'operator',
@@ -257,6 +259,7 @@ export const PluginPanelSlotSchema = z.enum([
   'main-right',
   'voice-left-top',
   'voice-right-top',
+  'cw-left-top',
   'cw-right-top',
   'radio-control-toolbar',
 ]);

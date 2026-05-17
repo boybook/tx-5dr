@@ -8,6 +8,7 @@ describe('PluginPanelSlotSchema', () => {
     expect(PluginPanelSlotSchema.parse('main-right')).toBe('main-right');
     expect(PluginPanelSlotSchema.parse('voice-left-top')).toBe('voice-left-top');
     expect(PluginPanelSlotSchema.parse('voice-right-top')).toBe('voice-right-top');
+    expect(PluginPanelSlotSchema.parse('cw-left-top')).toBe('cw-left-top');
     expect(PluginPanelSlotSchema.parse('cw-right-top')).toBe('cw-right-top');
     expect(PluginPanelSlotSchema.parse('radio-control-toolbar')).toBe('radio-control-toolbar');
   });
@@ -27,6 +28,14 @@ describe('PluginPanelSlotSchema', () => {
       component: 'iframe',
       pageId: 'voice-top',
       slot: 'voice-right-top',
+    })).not.toThrow();
+
+    expect(() => PluginPanelDescriptorSchema.parse({
+      id: 'cw-left-top',
+      title: 'cwLeftTopTitle',
+      component: 'iframe',
+      pageId: 'cw-left-top',
+      slot: 'cw-left-top',
     })).not.toThrow();
   });
 

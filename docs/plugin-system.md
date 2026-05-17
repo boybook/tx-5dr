@@ -869,7 +869,7 @@ interface PluginPanelDescriptor {
   /** 可选字符串参数，传入 iframe */
   params?: Record<string, string>;
   /** 渲染位置，默认 'operator' */
-  slot?: 'operator' | 'automation' | 'main-right' | 'voice-left-top' | 'voice-right-top' | 'cw-right-top' | 'radio-control-toolbar';
+  slot?: 'operator' | 'automation' | 'main-right' | 'voice-left-top' | 'voice-right-top' | 'cw-left-top' | 'cw-right-top' | 'radio-control-toolbar';
   /** 宽度偏好，默认 'half' */
   width?: 'half' | 'full';
   /** 工具栏类入口的 FontAwesome Free 图标名，如 'satellite-dish' 或 'brands:github' */
