@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  getMeterSlotVisibility,
   shouldAutoOpenAlcWarning,
   shouldShowLevelDbmDetail,
   shouldShowLevelPowerMeter,
@@ -97,5 +98,51 @@ describe('RadioMetersDisplay', () => {
       power: false,
       powerWatts: false,
     }, true, false)).toBe(true);
+  });
+
+  it('keeps ICOM WLAN declared SWR/ALC slots visible when RX data only has Level', () => {
+    expect(getMeterSlotVisibility({
+      strength: true,
+      swr: true,
+      alc: true,
+      power: true,
+      powerWatts: true,
+    }, {
+      swr: null,
+      alc: null,
+      level: {
+        raw: 120,
+        percent: 50,
+        sUnits: 9,
+        dBm: -73,
+        formatted: 'S9',
+        displayStyle: 's-meter-dbm',
+      },
+      power: null,
+    })).toEqual({
+      levelPower: true,
+      swr: true,
+      alc: true,
+    });
+  });
+
+  it('falls back to value-driven slot visibility when meter capabilities are unknown', () => {
+    expect(getMeterSlotVisibility(null, {
+      swr: null,
+      alc: null,
+      level: {
+        raw: 120,
+        percent: 50,
+        sUnits: 9,
+        dBm: -73,
+        formatted: 'S9',
+        displayStyle: 's-meter-dbm',
+      },
+      power: null,
+    })).toEqual({
+      levelPower: true,
+      swr: false,
+      alc: false,
+    });
   });
 });

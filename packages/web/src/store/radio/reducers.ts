@@ -30,6 +30,30 @@ function hasRadioConfigChanged(prev: RadioState['radioConfig'], next?: RadioStat
   return JSON.stringify(prev) !== JSON.stringify(next);
 }
 
+function shouldResetMeterTrackingForProfileSync(
+  state: RadioState,
+  nextProfiles: RadioState['profiles'],
+  nextActiveProfileId: string | null
+): boolean {
+  if (state.activeProfileId !== nextActiveProfileId) {
+    // The first profile-list hydration often arrives after radio status; keep
+    // meter capabilities from the already-connected radio in that case.
+    return state.activeProfileId !== null;
+  }
+
+  if (!nextActiveProfileId) {
+    return false;
+  }
+
+  const previousActiveProfile = state.profiles.find(profile => profile.id === state.activeProfileId);
+  const nextActiveProfile = nextProfiles.find(profile => profile.id === nextActiveProfileId);
+  const previousRadioConfig = previousActiveProfile?.radio ?? state.radioConfig;
+
+  return nextActiveProfile
+    ? hasRadioConfigChanged(previousRadioConfig, nextActiveProfile.radio)
+    : false;
+}
+
 export const initialConnectionState: ConnectionState = {
   isConnected: false,
   isConnecting: true,
@@ -349,15 +373,19 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
       };
 
     case 'setProfiles': {
-      const activeProfileChanged = state.activeProfileId !== action.payload.activeProfileId;
+      const shouldResetMeterTracking = shouldResetMeterTrackingForProfileSync(
+        state,
+        action.payload.profiles,
+        action.payload.activeProfileId
+      );
       return {
         ...state,
         profiles: action.payload.profiles,
         activeProfileId: action.payload.activeProfileId,
         profilesLoaded: true,
-        meterData: activeProfileChanged ? null : state.meterData,
-        hasReceivedMeterData: activeProfileChanged ? false : state.hasReceivedMeterData,
-        meterCapabilities: activeProfileChanged ? null : state.meterCapabilities,
+        meterData: shouldResetMeterTracking ? null : state.meterData,
+        hasReceivedMeterData: shouldResetMeterTracking ? false : state.hasReceivedMeterData,
+        meterCapabilities: shouldResetMeterTracking ? null : state.meterCapabilities,
       };
     }
 
@@ -377,14 +405,18 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
     }
 
     case 'profileListUpdated': {
-      const activeProfileChanged = state.activeProfileId !== action.payload.activeProfileId;
+      const shouldResetMeterTracking = shouldResetMeterTrackingForProfileSync(
+        state,
+        action.payload.profiles,
+        action.payload.activeProfileId
+      );
       return {
         ...state,
         profiles: action.payload.profiles,
         activeProfileId: action.payload.activeProfileId,
-        meterData: activeProfileChanged ? null : state.meterData,
-        hasReceivedMeterData: activeProfileChanged ? false : state.hasReceivedMeterData,
-        meterCapabilities: activeProfileChanged ? null : state.meterCapabilities,
+        meterData: shouldResetMeterTracking ? null : state.meterData,
+        hasReceivedMeterData: shouldResetMeterTracking ? false : state.hasReceivedMeterData,
+        meterCapabilities: shouldResetMeterTracking ? null : state.meterCapabilities,
       };
     }
 

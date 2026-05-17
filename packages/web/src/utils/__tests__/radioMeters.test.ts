@@ -23,7 +23,7 @@ describe('radioMeters', () => {
     })).toBe(true);
   });
 
-  it('hides the panel until a real meter reading has been received', () => {
+  it('shows the panel immediately when backend-declared meter capabilities are available', () => {
     expect(shouldShowRadioMetersPanel({
       radioConnected: true,
       radioConfigType: 'serial',
@@ -35,7 +35,7 @@ describe('radioMeters', () => {
         powerWatts: false,
       },
       hasReceivedMeterData: false,
-    })).toBe(false);
+    })).toBe(true);
   });
 
   it('keeps the panel hidden when the backend explicitly reports no supported meters', () => {
@@ -68,5 +68,14 @@ describe('radioMeters', () => {
       meterCapabilities: null,
       hasReceivedMeterData: true,
     })).toBe(true);
+  });
+
+  it('keeps the fallback panel hidden until real meter data arrives when capabilities are unknown', () => {
+    expect(shouldShowRadioMetersPanel({
+      radioConnected: true,
+      radioConfigType: 'serial',
+      meterCapabilities: null,
+      hasReceivedMeterData: false,
+    })).toBe(false);
   });
 });

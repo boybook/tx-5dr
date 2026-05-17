@@ -42,6 +42,21 @@ export function shouldShowLevelPowerMeter(
     : hasLevelValue || hasPowerValue;
 }
 
+export function getMeterSlotVisibility(
+  meterCapabilities: MeterCapabilities | null,
+  meterData: Pick<MeterData, 'swr' | 'alc' | 'level' | 'power'>
+): { levelPower: boolean; swr: boolean; alc: boolean } {
+  return {
+    levelPower: shouldShowLevelPowerMeter(
+      meterCapabilities,
+      meterData.level !== null,
+      meterData.power !== null
+    ),
+    swr: meterCapabilities ? meterCapabilities.swr : meterData.swr !== null,
+    alc: meterCapabilities ? meterCapabilities.alc : meterData.alc !== null,
+  };
+}
+
 interface RadioMetersDisplayProps {
   meterData: MeterData;
   isPttActive: boolean;
@@ -180,13 +195,16 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
 
   // 已经挂载此组件意味着布局层确认“整块应该显示”。
   // 当 capability 未知时，仅展示当前连接周期里实际出现过数据的仪表，避免空占位。
-  const showLevelPower = shouldShowLevelPowerMeter(
-    meterCapabilities,
-    buffered.level.value !== null,
-    buffered.power.value !== null
-  );
-  const showSwr = meterCapabilities ? meterCapabilities.swr : buffered.swr.value !== null;
-  const showAlc = meterCapabilities ? meterCapabilities.alc : buffered.alc.value !== null;
+  const {
+    levelPower: showLevelPower,
+    swr: showSwr,
+    alc: showAlc,
+  } = getMeterSlotVisibility(meterCapabilities, {
+    swr: buffered.swr.value,
+    alc: buffered.alc.value,
+    level: buffered.level.value,
+    power: buffered.power.value,
+  });
   const powerValue = meterCapabilities?.power === false ? null : buffered.power.value;
   const powerIsTimeout = meterCapabilities?.power === false ? true : buffered.power.isTimeout;
   const isAlcOverLimit = shouldAutoOpenAlcWarning(

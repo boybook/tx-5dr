@@ -1,6 +1,36 @@
 import { describe, expect, it } from 'vitest';
-import { RadioConnectionStatus, type CapabilityDescriptor, type CapabilityState } from '@tx5dr/contracts';
+import {
+  RadioConnectionStatus,
+  type CapabilityDescriptor,
+  type CapabilityState,
+  type MeterCapabilities,
+  type RadioProfile,
+} from '@tx5dr/contracts';
 import { initialRadioState, radioReducer, type RadioState } from '../radioStore';
+
+const SUPPORTED_METER_CAPABILITIES: MeterCapabilities = {
+  strength: true,
+  swr: true,
+  alc: true,
+  power: true,
+  powerWatts: true,
+};
+
+function createProfile(
+  id: string,
+  radio: RadioProfile['radio'],
+  updatedAt = 1,
+): RadioProfile {
+  return {
+    id,
+    name: id,
+    radio,
+    audio: {},
+    audioLockedToRadio: false,
+    createdAt: 1,
+    updatedAt,
+  };
+}
 
 describe('radioStore capability reducer', () => {
   it('hydrates runtime descriptors and states from capability list snapshots', () => {
@@ -204,5 +234,115 @@ describe('radioStore capability reducer', () => {
 
     expect(nextState.hasReceivedMeterData).toBe(false);
     expect(nextState.meterData).toBeNull();
+  });
+
+  it('keeps meter capabilities during initial profile hydration after radio status sync', () => {
+    const meterData: NonNullable<RadioState['meterData']> = {
+      swr: null,
+      alc: null,
+      level: {
+        raw: 120,
+        percent: 50,
+        sUnits: 9,
+        dBm: -73,
+        formatted: 'S9',
+        displayStyle: 's-meter-dbm',
+      },
+      power: null,
+    };
+    const stateAfterRadioStatus: RadioState = {
+      ...initialRadioState,
+      radioConnected: true,
+      radioConnectionStatus: RadioConnectionStatus.CONNECTED,
+      radioConfig: { type: 'icom-wlan' },
+      activeProfileId: null,
+      meterCapabilities: SUPPORTED_METER_CAPABILITIES,
+      meterData,
+      hasReceivedMeterData: true,
+    };
+    const activeProfile = createProfile('icom-wlan-profile', { type: 'icom-wlan' });
+
+    const nextState = radioReducer(stateAfterRadioStatus, {
+      type: 'setProfiles',
+      payload: {
+        profiles: [activeProfile],
+        activeProfileId: activeProfile.id,
+      },
+    });
+
+    expect(nextState.meterCapabilities).toEqual(SUPPORTED_METER_CAPABILITIES);
+    expect(nextState.meterData).toBe(meterData);
+    expect(nextState.hasReceivedMeterData).toBe(true);
+  });
+
+  it('resets meter tracking when profile sync changes the active profile id after hydration', () => {
+    const stateWithActiveProfile: RadioState = {
+      ...initialRadioState,
+      radioConnected: true,
+      radioConnectionStatus: RadioConnectionStatus.CONNECTED,
+      activeProfileId: 'profile-a',
+      profiles: [
+        createProfile('profile-a', { type: 'serial', serial: { path: '/dev/tty.usbserial-a', rigModel: 3073 } }),
+        createProfile('profile-b', { type: 'icom-wlan' }),
+      ],
+      meterCapabilities: SUPPORTED_METER_CAPABILITIES,
+      meterData: {
+        swr: null,
+        alc: {
+          raw: 10,
+          percent: 25,
+          alert: false,
+        },
+        level: null,
+        power: null,
+      },
+      hasReceivedMeterData: true,
+    };
+
+    const nextState = radioReducer(stateWithActiveProfile, {
+      type: 'setProfiles',
+      payload: {
+        profiles: stateWithActiveProfile.profiles,
+        activeProfileId: 'profile-b',
+      },
+    });
+
+    expect(nextState.meterCapabilities).toBeNull();
+    expect(nextState.meterData).toBeNull();
+    expect(nextState.hasReceivedMeterData).toBe(false);
+  });
+
+  it('resets meter tracking when a profile list update changes the active radio config', () => {
+    const stateWithActiveProfile: RadioState = {
+      ...initialRadioState,
+      radioConnected: true,
+      radioConnectionStatus: RadioConnectionStatus.CONNECTED,
+      activeProfileId: 'profile-a',
+      profiles: [createProfile('profile-a', { type: 'serial', serial: { path: '/dev/tty.usbserial-a', rigModel: 3073 } })],
+      meterCapabilities: SUPPORTED_METER_CAPABILITIES,
+      meterData: {
+        swr: null,
+        alc: {
+          raw: 10,
+          percent: 25,
+          alert: false,
+        },
+        level: null,
+        power: null,
+      },
+      hasReceivedMeterData: true,
+    };
+
+    const nextState = radioReducer(stateWithActiveProfile, {
+      type: 'profileListUpdated',
+      payload: {
+        profiles: [createProfile('profile-a', { type: 'network', network: { host: '127.0.0.1', port: 4532 } }, 2)],
+        activeProfileId: 'profile-a',
+      },
+    });
+
+    expect(nextState.meterCapabilities).toBeNull();
+    expect(nextState.meterData).toBeNull();
+    expect(nextState.hasReceivedMeterData).toBe(false);
   });
 });

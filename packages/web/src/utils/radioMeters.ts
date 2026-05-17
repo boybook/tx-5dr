@@ -42,13 +42,13 @@ export function shouldShowRadioMetersPanel({
   meterCapabilities,
   hasReceivedMeterData,
 }: ShouldShowRadioMetersPanelOptions): boolean {
-  if (!radioConnected || radioConfigType === 'none' || !hasReceivedMeterData) {
+  if (!radioConnected || radioConfigType === 'none') {
     return false;
   }
 
-  if (meterCapabilities && !hasAnyMeterCapability(meterCapabilities)) {
-    return false;
+  if (meterCapabilities) {
+    return hasAnyMeterCapability(meterCapabilities);
   }
 
-  return true;
+  return hasReceivedMeterData;
 }
