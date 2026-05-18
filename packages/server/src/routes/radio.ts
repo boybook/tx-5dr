@@ -6,6 +6,7 @@
  * 📊 Day14优化：统一错误处理，使用 RadioError + Fastify 全局错误处理器
  */
 import { FastifyInstance } from 'fastify';
+import { readFile } from 'node:fs/promises';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('RadioRoute');
@@ -16,6 +17,7 @@ import { requireAbility, requireAbilityFor, requireRole } from '../auth/authPlug
 import type { HamlibConfig } from '@tx5dr/contracts';
 import serialport from 'serialport';
 const { SerialPort } = serialport;
+
 import { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { RepeaterDuplexApplyResult, RepeaterDuplexConfig, ToneSquelchApplyResult, ToneSquelchConfig } from '../radio/PhysicalRadioManager.js';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
@@ -26,6 +28,21 @@ import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/
 import { normalizeHamlibConfig } from '../radio/hamlibConfigUtils.js';
 import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
 import { canReadFullProfiles, redactHamlibConfigForRead } from '../security/profileRedaction.js';
+
+async function listAndroidBridgeSerialPorts(): Promise<unknown[] | null> {
+  const file = process.env.TX5DR_ANDROID_SERIAL_DEVICES_FILE?.trim();
+  if (!file) return null;
+  try {
+    const parsed = JSON.parse(await readFile(file, 'utf8')) as { ports?: unknown[] };
+    return Array.isArray(parsed.ports) ? parsed.ports : [];
+  } catch (error) {
+    logger.warn('failed to read Android bridge serial devices file', {
+      file,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+}
 
 /** 判断两个配置是否指向同一硬件目标（用于复用判断） */
 function isHardwareSameTarget(a: HamlibConfig, b: HamlibConfig): boolean {
@@ -304,6 +321,10 @@ export async function radioRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/serial-ports', { onRequest: adminOnly }, async (_req, reply) => {
+    const androidPorts = await listAndroidBridgeSerialPorts();
+    if (androidPorts) {
+      return reply.send({ ports: androidPorts });
+    }
     const ports = await SerialPort.list();
     return reply.send({ ports });
   });

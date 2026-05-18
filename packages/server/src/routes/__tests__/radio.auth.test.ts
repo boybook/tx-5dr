@@ -1,4 +1,7 @@
 import Fastify, { type FastifyRequest } from 'fastify';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 
@@ -60,8 +63,10 @@ vi.mock('../../radio/PhysicalRadioManager.js', () => ({
 
 describe('radioRoutes authorization', () => {
   let fastify: ReturnType<typeof Fastify>;
+  let previousAndroidSerialFile: string | undefined;
 
   beforeEach(async () => {
+    previousAndroidSerialFile = process.env.TX5DR_ANDROID_SERIAL_DEVICES_FILE;
     const { radioRoutes } = await import('../radio.js');
     fastify = Fastify();
     fastify.decorateRequest('authUser', null);
@@ -82,6 +87,8 @@ describe('radioRoutes authorization', () => {
   });
 
   afterEach(async () => {
+    if (previousAndroidSerialFile === undefined) delete process.env.TX5DR_ANDROID_SERIAL_DEVICES_FILE;
+    else process.env.TX5DR_ANDROID_SERIAL_DEVICES_FILE = previousAndroidSerialFile;
     await fastify.close();
   });
 
@@ -95,6 +102,35 @@ describe('radioRoutes authorization', () => {
 
     expect(anonymous.statusCode).toBe(401);
     expect(viewer.statusCode).toBe(403);
+  });
+
+
+  it('uses Android bridge serial devices file when configured', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'tx5dr-android-serial-'));
+    const file = path.join(dir, 'android-serial-devices.json');
+    writeFileSync(file, JSON.stringify({
+      ports: [{
+        path: '/opt/tx5dr-data/android-dev/ttyUSB0',
+        manufacturer: 'Android USB Host',
+        vendorId: '0c26',
+        productId: '0000',
+      }],
+    }), 'utf8');
+    process.env.TX5DR_ANDROID_SERIAL_DEVICES_FILE = file;
+
+    const response = await fastify.inject({
+      method: 'GET',
+      url: '/api/radio/serial-ports',
+      headers: { 'x-role': UserRole.ADMIN },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().ports).toEqual([{
+      path: '/opt/tx5dr-data/android-dev/ttyUSB0',
+      manufacturer: 'Android USB Host',
+      vendorId: '0c26',
+      productId: '0000',
+    }]);
   });
 
   it('rejects non-admin connection tests before schema validation', async () => {
