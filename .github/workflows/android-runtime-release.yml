@@ -52,7 +52,7 @@ jobs:
             libhamlib-dev libhamlib4 \
             libopus-dev libfftw3-dev libudev-dev libusb-1.0-0-dev \
             build-essential python3-dev pkg-config gfortran cmake ninja-build \
-            rsync patchelf
+            rsync
 
       - name: Install dependencies
         shell: bash
