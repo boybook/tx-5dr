@@ -199,9 +199,28 @@ jobs:
           prerelease: false
           makeLatest: false
 
-      - name: Install ossutil
+      - name: Install ossutil (Linux arm64)
         if: env.OSS_BASE_URL != '' && env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != ''
-        run: bash scripts/install-ossutil.sh
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${OSSUTIL_VERSION:-2.2.1}"
+          archive="ossutil-${version}-linux-arm64.zip"
+          url="https://gosspublic.alicdn.com/ossutil/v2/${version}/${archive}"
+          install_dir="${GITHUB_WORKSPACE}/.tools/ossutil"
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "${tmp_dir}"' EXIT
+
+          mkdir -p "${install_dir}"
+          curl -fsSL -o "${tmp_dir}/${archive}" "${url}"
+          unzip -q "${tmp_dir}/${archive}" -d "${tmp_dir}/extracted"
+          ossutil_bin="$(find "${tmp_dir}/extracted" -type f -name ossutil | head -1)"
+          if [ -z "${ossutil_bin}" ]; then
+            echo "Failed to locate ossutil binary after extraction." >&2
+            exit 1
+          fi
+          install -m 0755 "${ossutil_bin}" "${install_dir}/ossutil"
+          echo "${install_dir}" >> "${GITHUB_PATH}"
 
       - name: Configure ossutil
         if: env.OSS_BASE_URL != '' && env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != ''
