@@ -233,6 +233,7 @@ export type PluginQuickSetting = z.infer<typeof PluginQuickSettingSchema>;
 export const PluginCapabilitySchema = z.enum([
   'auto_call_candidate',
   'auto_call_execution',
+  'auto_call_operator_selection',
 ]);
 
 /**

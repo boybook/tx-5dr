@@ -127,6 +127,7 @@ export class PluginManager {
     );
     this.dispatcher = new PluginHookDispatcher(
       (operatorId) => this.getActiveInstances(operatorId),
+      () => this.getGlobalUtilityInstances(),
       (operatorId) => this.getStrategyInstance(operatorId),
       (pluginName, reason) => this.handleAutoDisable(pluginName, reason),
     );
@@ -985,6 +986,14 @@ export class PluginManager {
       (instance) => instance.plugin.definition.type === 'strategy'
         ? instance === this.getStrategyInstance(operatorId)
         : instance.enabled && !instance.autoDisabled,
+    );
+  }
+
+  private getGlobalUtilityInstances(): PluginInstance[] {
+    return Array.from(this.globalInstances.values()).filter(
+      (instance) => instance.enabled
+        && !instance.autoDisabled
+        && instance.plugin.definition.type === 'utility',
     );
   }
 

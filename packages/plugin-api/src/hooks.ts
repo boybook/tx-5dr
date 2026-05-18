@@ -139,6 +139,52 @@ export interface AutoCallExecutionPlan {
 }
 
 /**
+ * Candidate operator that can execute an accepted automatic-call target.
+ *
+ * The host builds this after each operator finishes local proposal
+ * arbitration. Cross-operator selection hooks should use this shape to decide
+ * who should call next for the same target callsign.
+ */
+export interface AutoCallOperatorCandidate {
+  /** Operator id that can execute the call right now. */
+  operatorId: string;
+  /** Operator's own station callsign (for UI-facing manual order settings). */
+  operatorCallsign: string;
+  /** Target callsign (normalized uppercase). */
+  callsign: string;
+  /** Plugin name that produced this operator's local winning proposal. */
+  sourcePluginName: string;
+  /** Optional frame context preserved from proposal stage. */
+  lastMessage?: LastMessageInfo;
+  /** Optional diagnostics: local plugin priority used only in stage A. */
+  priority?: number;
+  /** Optional diagnostics: source scored-candidate score from stage A. */
+  sourceScore?: number;
+  /** Optional diagnostics: source message order from stage A. */
+  messageOrder?: number;
+}
+
+/**
+ * Cross-operator automatic-call selection input for one target callsign.
+ */
+export interface AutoCallOperatorSelectionRequest {
+  /** Slot currently being processed. */
+  slotInfo: SlotInfo;
+  /** Target callsign shared by all candidates. */
+  callsign: string;
+  /** Operators that can call this target right now. */
+  candidates: AutoCallOperatorCandidate[];
+}
+
+/**
+ * Cross-operator selection result.
+ */
+export interface AutoCallOperatorSelectionDecision {
+  /** Selected operator id from {@link AutoCallOperatorSelectionRequest.candidates}. */
+  selectedOperatorId: string;
+}
+
+/**
  * Raw and parsed decode activity for one slot.
  *
  * This is intentionally protocol-neutral: plugins can consume the original
@@ -196,6 +242,18 @@ export interface PluginHooks {
     plan: AutoCallExecutionPlan,
     ctx: PluginContext,
   ): AutoCallExecutionPlan | null | undefined | Promise<AutoCallExecutionPlan | null | undefined>;
+
+  /**
+   * Selects which operator should execute an automatic-call target when
+   * multiple operators have the same local winning target callsign.
+   *
+   * This hook runs after per-operator local proposal arbitration and before
+   * the final `requestCall(...)` dispatch.
+   */
+  onResolveAutoCallOperator?(
+    request: AutoCallOperatorSelectionRequest,
+    ctx: PluginContext,
+  ): AutoCallOperatorSelectionDecision | null | undefined | Promise<AutoCallOperatorSelectionDecision | null | undefined>;
 
   /**
    * Filters candidate target messages before the scoring phase.

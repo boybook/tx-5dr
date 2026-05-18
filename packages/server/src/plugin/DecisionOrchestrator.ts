@@ -16,6 +16,8 @@ import {
 import type {
   AutoCallExecutionPlan,
   AutoCallExecutionRequest,
+  AutoCallOperatorCandidate,
+  AutoCallOperatorSelectionRequest,
   ScoredCandidate,
   StrategyDecision,
   StrategyDecisionMeta,
@@ -61,6 +63,18 @@ function getScoredCandidateScore(message: ParsedFT8Message | undefined): number 
   return typeof score === 'number' && Number.isFinite(score) ? score : undefined;
 }
 
+interface RankedAutoCallProposal extends AutoCallProposalResult {
+  priority: number;
+  messageOrder: number;
+  sourceScore: number;
+}
+
+interface LocalAutoCallWinner extends RankedAutoCallProposal {
+  operatorId: string;
+  operatorCallsign: string;
+  slotInfo: SlotInfo;
+}
+
 export class DecisionOrchestrator {
   private decisionStates = new Map<string, OperatorDecisionState>();
   private silentDirectedCallGates = new Map<string, SilentDirectedCallGate>();
@@ -70,6 +84,8 @@ export class DecisionOrchestrator {
   // ===== Public API =====
 
   async handleSlotStart(slotInfo: SlotInfo, slotPack: SlotPack | null): Promise<void> {
+    const localAutoCallWinners: LocalAutoCallWinner[] = [];
+
     for (const operator of this.deps.getOperators()) {
       const parsedMessages = slotPack
         ? await this.parseSlotPackMessages(slotPack, operator.config.id)
@@ -120,7 +136,16 @@ export class DecisionOrchestrator {
           automaticTargetMessages,
           (instance) => this.deps.getCtxForInstance(instance),
         );
-        await this.applyAutoCallProposal(operator.config.id, slotInfo, automaticTargetMessages, autoCallProposals);
+        const localWinner = this.resolveLocalAutoCallWinner(
+          operator.config.id,
+          operator.config.myCallsign,
+          slotInfo,
+          automaticTargetMessages,
+          autoCallProposals,
+        );
+        if (localWinner) {
+          localAutoCallWinners.push(localWinner);
+        }
       }
 
       if (!operator.isTransmitting) continue;
@@ -167,6 +192,8 @@ export class DecisionOrchestrator {
         await this.applyStrategyStop(operator.config.id);
       }
     }
+
+    await this.applyCrossOperatorAutoCallSelections(slotInfo, localAutoCallWinners);
   }
 
   handleEncodeStart(slotInfo: SlotInfo): void {
@@ -708,18 +735,19 @@ export class DecisionOrchestrator {
 
   // ===== Private: Auto-call arbitration =====
 
-  private async applyAutoCallProposal(
+  private resolveLocalAutoCallWinner(
     operatorId: string,
+    operatorCallsign: string,
     slotInfo: SlotInfo,
     messages: ParsedFT8Message[],
     proposals: AutoCallProposalResult[],
-  ): Promise<void> {
+  ): LocalAutoCallWinner | null {
     if (proposals.length === 0 || !this.isOperatorPureStandby(operatorId)) {
-      return;
+      return null;
     }
 
     const snrPriorityEnabled = this.deps.isSnrPriorityEnabled?.(operatorId) === true;
-    const ranked = proposals
+    const ranked: RankedAutoCallProposal[] = proposals
       .filter((entry) => this.isAutoCallProposalEligible(operatorId, entry, messages))
       .map((entry) => this.normalizeAutoCallProposal(operatorId, slotInfo, messages, entry))
       .map((entry) => ({
@@ -743,11 +771,11 @@ export class DecisionOrchestrator {
 
     const winner = ranked[0];
     if (!winner) {
-      return;
+      return null;
     }
 
     if (ranked.length > 1) {
-      logger.info('Auto call proposals arbitrated', {
+      logger.info('Auto call proposals arbitrated (stage A: per-operator)', {
         operatorId,
         selectedPlugin: winner.pluginName,
         selectedCallsign: winner.proposal.callsign,
@@ -755,23 +783,114 @@ export class DecisionOrchestrator {
       });
     }
 
-    logger.info('Auto call proposal accepted', {
+    return {
+      ...winner,
       operatorId,
+      operatorCallsign: operatorCallsign.trim().toUpperCase(),
+      slotInfo,
+    };
+  }
+
+  private async applyCrossOperatorAutoCallSelections(
+    slotInfo: SlotInfo,
+    localWinners: LocalAutoCallWinner[],
+  ): Promise<void> {
+    if (localWinners.length === 0) {
+      return;
+    }
+
+    const winnersByCallsign = new Map<string, LocalAutoCallWinner[]>();
+    for (const winner of localWinners) {
+      const key = winner.proposal.callsign;
+      const list = winnersByCallsign.get(key);
+      if (list) {
+        list.push(winner);
+      } else {
+        winnersByCallsign.set(key, [winner]);
+      }
+    }
+
+    for (const [callsign, groupedCandidates] of winnersByCallsign) {
+      const selected = await this.selectAutoCallOperatorForTarget(
+        slotInfo,
+        callsign,
+        groupedCandidates,
+      );
+      if (!selected) {
+        continue;
+      }
+      await this.acceptResolvedAutoCallWinner(selected);
+    }
+  }
+
+  private async selectAutoCallOperatorForTarget(
+    slotInfo: SlotInfo,
+    callsign: string,
+    groupedCandidates: LocalAutoCallWinner[],
+  ): Promise<LocalAutoCallWinner | null> {
+    const availableCandidates = groupedCandidates.filter((candidate) => this.isOperatorPureStandby(candidate.operatorId));
+    const defaultSelection = availableCandidates[0];
+    if (!defaultSelection) {
+      return null;
+    }
+
+    const request: AutoCallOperatorSelectionRequest = {
+      slotInfo,
+      callsign,
+      candidates: availableCandidates.map<AutoCallOperatorCandidate>((candidate) => ({
+        operatorId: candidate.operatorId,
+        operatorCallsign: candidate.operatorCallsign,
+        callsign: candidate.proposal.callsign,
+        sourcePluginName: candidate.pluginName,
+        lastMessage: candidate.proposal.lastMessage,
+        priority: candidate.priority,
+        sourceScore: candidate.sourceScore,
+        messageOrder: candidate.messageOrder,
+      })),
+    };
+    const decision = await this.deps.dispatcher.dispatchAutoCallOperatorSelection(
+      request,
+      { selectedOperatorId: defaultSelection.operatorId },
+      (instance) => this.deps.getCtxForInstance(instance),
+    );
+    const selected = availableCandidates.find((candidate) => candidate.operatorId === decision.selectedOperatorId)
+      ?? defaultSelection;
+
+    if (availableCandidates.length > 1) {
+      logger.info('Auto call operator selected (stage B: cross-operator)', {
+        callsign,
+        selectedOperatorId: selected.operatorId,
+        selectedOperatorCallsign: selected.operatorCallsign,
+        candidateCount: availableCandidates.length,
+      });
+    }
+
+    return selected;
+  }
+
+  private async acceptResolvedAutoCallWinner(winner: LocalAutoCallWinner): Promise<void> {
+    if (!this.isOperatorPureStandby(winner.operatorId)) {
+      return;
+    }
+
+    logger.info('Auto call proposal accepted', {
+      operatorId: winner.operatorId,
       pluginName: winner.pluginName,
       callsign: winner.proposal.callsign,
       priority: winner.priority,
+      sourceScore: winner.sourceScore,
     });
 
     const request: AutoCallExecutionRequest = {
       sourcePluginName: winner.pluginName,
       callsign: winner.proposal.callsign,
-      slotInfo,
+      slotInfo: winner.slotInfo,
       sourceSlotInfo: winner.proposal.lastMessage?.slotInfo,
       lastMessage: winner.proposal.lastMessage,
     };
-    const executionPlan = await this.resolveAutoCallExecutionPlan(operatorId, request);
-    await this.applyAutoCallExecutionPlan(operatorId, request, executionPlan);
-    this.deps.requestCall(operatorId, request.callsign, request.lastMessage);
+    const executionPlan = await this.resolveAutoCallExecutionPlan(winner.operatorId, request);
+    await this.applyAutoCallExecutionPlan(winner.operatorId, request, executionPlan);
+    this.deps.requestCall(winner.operatorId, request.callsign, request.lastMessage);
   }
 
   private isAutoCallProposalEligible(

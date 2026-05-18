@@ -2,6 +2,8 @@ import type { ParsedFT8Message } from '@tx5dr/contracts';
 import type {
   AutoCallExecutionPlan,
   AutoCallExecutionRequest,
+  AutoCallOperatorSelectionDecision,
+  AutoCallOperatorSelectionRequest,
   AutoCallProposal,
   PluginContext,
   PluginHooks,
@@ -46,6 +48,7 @@ export class PluginHookDispatcher {
 
   constructor(
     private getActiveInstances: (operatorId: string) => PluginInstance[],
+    private getGlobalUtilityInstances: () => PluginInstance[],
     private getStrategyInstance: (operatorId: string) => PluginInstance | undefined,
     onAutoDisable: (pluginName: string, reason: string) => void,
   ) {
@@ -150,6 +153,60 @@ export class PluginHookDispatcher {
     }
 
     return plan;
+  }
+
+  async dispatchAutoCallOperatorSelection(
+    request: AutoCallOperatorSelectionRequest,
+    initialDecision: AutoCallOperatorSelectionDecision,
+    getCtx: (instance: PluginInstance) => PluginContext,
+  ): Promise<AutoCallOperatorSelectionDecision> {
+    let decision = initialDecision;
+    const candidateOperatorIds = new Set(request.candidates.map((candidate) => candidate.operatorId));
+
+    for (const instance of this.getGlobalUtilityInstances()) {
+      const hook = instance.plugin.definition.hooks?.onResolveAutoCallOperator;
+      if (!hook || this.errorTracker.isDisabled(instance)) {
+        continue;
+      }
+
+      try {
+        const ctx = getCtx(instance);
+        const output = await withTimeout(
+          Promise.resolve(hook(request, ctx)),
+          HOOK_TIMEOUT_MS,
+        );
+
+        if (output == null) {
+          this.errorTracker.resetErrors(instance, 'onResolveAutoCallOperator');
+          continue;
+        }
+
+        if (typeof output !== 'object' || Array.isArray(output)) {
+          logger.warn(`Plugin ${instance.plugin.definition.name} onResolveAutoCallOperator returned an invalid decision, keeping previous selection`);
+          this.errorTracker.resetErrors(instance, 'onResolveAutoCallOperator');
+          continue;
+        }
+
+        const selectedOperatorId = typeof output.selectedOperatorId === 'string'
+          ? output.selectedOperatorId.trim()
+          : '';
+        if (!selectedOperatorId || !candidateOperatorIds.has(selectedOperatorId)) {
+          logger.warn(`Plugin ${instance.plugin.definition.name} onResolveAutoCallOperator selected an operator outside candidate set, keeping previous selection`, {
+            selectedOperatorId: output.selectedOperatorId,
+            candidateOperatorIds: Array.from(candidateOperatorIds),
+          });
+          this.errorTracker.resetErrors(instance, 'onResolveAutoCallOperator');
+          continue;
+        }
+
+        decision = { selectedOperatorId };
+        this.errorTracker.resetErrors(instance, 'onResolveAutoCallOperator');
+      } catch (err) {
+        this.errorTracker.recordError(instance, 'onResolveAutoCallOperator', err);
+      }
+    }
+
+    return decision;
   }
 
   async dispatchFilterCandidates(

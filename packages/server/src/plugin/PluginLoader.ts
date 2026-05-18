@@ -60,6 +60,9 @@ export function validatePluginDefinition(def: PluginDefinition): void {
   if (manifest.type === 'utility' && def.createStrategyRuntime !== undefined) {
     throw new Error('Utility plugins must not provide createStrategyRuntime(ctx)');
   }
+  if (manifest.instanceScope !== 'global' && typeof def.hooks?.onResolveAutoCallOperator === 'function') {
+    throw new Error('Hook "onResolveAutoCallOperator" requires instanceScope="global"');
+  }
 
   for (const quickSetting of manifest.quickSettings ?? []) {
     const setting = manifest.settings?.[quickSetting.settingKey];
@@ -118,8 +121,6 @@ export function validatePluginDefinition(def: PluginDefinition): void {
       'onDecode',
       'onFrequencyChange',
       'onQSOStart',
-      'onQSOComplete',
-      'onQSOFail',
     ];
     const activeUnsupportedGlobalHook = unsupportedGlobalHooks.find((hookName) => typeof hooks?.[hookName] === 'function');
     if (activeUnsupportedGlobalHook) {

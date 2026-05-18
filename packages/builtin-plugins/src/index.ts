@@ -63,6 +63,12 @@ import {
 } from './watched-novelty-autocall/index.js';
 
 import {
+  autocallOperatorRotationPlugin,
+  autocallOperatorRotationLocales,
+  BUILTIN_AUTOCALL_OPERATOR_ROTATION_PLUGIN_NAME,
+} from './autocall-operator-rotation/index.js';
+
+import {
   wavelogSyncPlugin,
   wavelogSyncLocales,
   wavelogSyncDirPath,
@@ -112,6 +118,7 @@ export {
   BUILTIN_QRZ_SYNC_PLUGIN_NAME,
   BUILTIN_LOTW_SYNC_PLUGIN_NAME,
   BUILTIN_AUTOCALL_IDLE_FREQUENCY_PLUGIN_NAME,
+  BUILTIN_AUTOCALL_OPERATOR_ROTATION_PLUGIN_NAME,
   BUILTIN_QSO_UDP_BROADCAST_PLUGIN_NAME,
   BUILTIN_NO_REPLY_MEMORY_FILTER_PLUGIN_NAME,
 };
@@ -156,6 +163,11 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
   {
     definition: watchedNoveltyAutocallPlugin,
     locales: watchedNoveltyAutocallLocales,
+    enabledByDefault: false,
+  },
+  {
+    definition: autocallOperatorRotationPlugin,
+    locales: autocallOperatorRotationLocales,
     enabledByDefault: false,
   },
   {

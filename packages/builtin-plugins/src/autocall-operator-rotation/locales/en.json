@@ -1,0 +1,14 @@
+{
+  "pluginName": "Autocall Operator Rotation",
+  "pluginDescription": "Chooses which operator should start an autocall when multiple operators match the same target in the same slot.",
+  "mode": "Rotation Mode",
+  "modeDesc": "Choose manual operator order or random operator selection.",
+  "modeManual": "Manual Order",
+  "modeRandom": "Random",
+  "manualOrder": "Manual Order (Operator Callsigns)",
+  "manualOrderDesc": "List operator callsigns in rotation order. If the current next operator is unavailable, the plugin falls through to the next matching candidate in this list.",
+  "failAdvanceThreshold": "Fail Advance Threshold",
+  "failAdvanceThresholdDesc": "After this many consecutive failures for the same target, the next match advances to the next operator.",
+  "avoidImmediateRepeatInRandom": "Avoid Immediate Repeat in Random Mode",
+  "avoidImmediateRepeatInRandomDesc": "When more than one candidate is available, try not to pick the same operator twice in a row."
+}

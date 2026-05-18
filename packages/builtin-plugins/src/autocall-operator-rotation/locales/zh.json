@@ -1,0 +1,14 @@
+{
+  "pluginName": "自动起呼跨操作员轮叫",
+  "pluginDescription": "当多个操作员在同一时隙命中同一目标呼号时，决定由哪个操作员起呼。",
+  "mode": "轮叫模式",
+  "modeDesc": "选择按手动顺序轮叫，或按随机方式轮叫。",
+  "modeManual": "手动顺序",
+  "modeRandom": "随机",
+  "manualOrder": "手动顺序（操作员呼号）",
+  "manualOrderDesc": "按操作员呼号填写轮叫顺序。当前顺位不可用时，将顺延到候选集中下一个命中的呼号。",
+  "failAdvanceThreshold": "失败后切换阈值",
+  "failAdvanceThresholdDesc": "同一目标连续失败达到该次数后，下一次命中切换到下一位操作员。",
+  "avoidImmediateRepeatInRandom": "随机模式避免连续重复",
+  "avoidImmediateRepeatInRandomDesc": "候选数量大于 1 时，尽量避免连续两次选择同一操作员。"
+}

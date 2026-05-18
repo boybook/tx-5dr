@@ -103,7 +103,7 @@ TX-5DR 的插件系统允许开发者通过编写单个 JavaScript（或 TypeScr
 - 不能声明 operator-scope `settings`
 - 不能声明 `quickSettings`
 - 不能声明 operator 面板 `panels`
-- 不能实现依赖单个操作员运行时语义的 hooks（如 `onDecode`、`onQSOComplete`、`onAutoCallCandidate` 等）
+- 不能实现依赖单个操作员解码/候选流水线语义的 hooks（如 `onDecode`、`onAutoCallCandidate`、`onFilterCandidates` 等）
 
 ### 设置作用域
 
@@ -148,6 +148,7 @@ packages/builtin-plugins/src/
 ├── worked-station-bias/    # 工具插件：已通联偏置评分
 ├── watched-callsign-autocall/  # 工具插件：守候呼号自动起呼
 ├── watched-novelty-autocall/   # 工具插件：守候新类型自动起呼
+├── autocall-operator-rotation/ # 工具插件：跨操作员自动起呼调度
 ├── autocall-idle-frequency/    # 工具插件：自动起呼择频
 ├── lotw-sync/              # 工具插件：LoTW 日志同步
 ├── qrz-sync/               # 工具插件：QRZ 日志同步
@@ -667,6 +668,7 @@ interface OperatorControl {
 | `onScoreCandidates` | `candidates: ScoredCandidate[], ctx` | 评分后的列表 | 无 |
 | `onAutoCallCandidate` | `slotInfo, messages, ctx` | `AutoCallProposal \| null` | 多插件按优先级仲裁 |
 | `onConfigureAutoCallExecution` | `request, plan, ctx` | 更新后的 plan | 链式修改执行计划 |
+| `onResolveAutoCallOperator` | `request, ctx` | `AutoCallOperatorSelectionDecision \| null` | 跨操作员选择最终执行者（global utility） |
 
 #### Strategy Runtime（仅活跃策略插件）
 
@@ -726,9 +728,43 @@ Fire-and-forget，不阻塞主流程。
 }
 ```
 
-- Host 收集所有 proposal 后统一仲裁：`priority` 高者优先 → 命中消息顺序 → 插件名稳定排序
-- 仲裁完成后最多执行一次 `requestCall()`
+- Host 先在**每个操作员内部**做本地仲裁（阶段 A）：`priority` 高者优先 → 命中消息顺序 → 插件名稳定排序
+- 阶段 A 后，每个操作员最多产出一个本地 winner
 - 触发源是 CQ 时，proposal 仍受宿主统一的 directed CQ / modifier 过滤
+- `autocallPriority` 的语义严格限定在阶段 A（单操作员内插件仲裁）
+
+#### Autocall Cross-Operator Selection Hook
+
+当多个操作员的本地 winner 命中同一 `targetCallsign` 时，Host 进入阶段 B：按目标呼号聚合候选，并调用 `onResolveAutoCallOperator(request, ctx)` 选择最终执行者。
+
+```typescript
+interface AutoCallOperatorCandidate {
+  operatorId: string;
+  operatorCallsign: string;
+  callsign: string;
+  sourcePluginName: string;
+  lastMessage?: LastMessageInfo;
+  // 诊断字段（可选，不要求插件依赖）
+  priority?: number;
+  sourceScore?: number;
+  messageOrder?: number;
+}
+
+interface AutoCallOperatorSelectionRequest {
+  slotInfo: SlotInfo;
+  callsign: string;
+  candidates: AutoCallOperatorCandidate[];
+}
+
+interface AutoCallOperatorSelectionDecision {
+  selectedOperatorId: string;
+}
+```
+
+- 阶段 B 仅决定“谁来叫”，不改变“叫谁”
+- 未启用任何 `onResolveAutoCallOperator` 时，默认按候选出现顺序（与操作员遍历顺序一致）选择
+- 阶段 B 禁止使用 `autocallPriority` 作为跨操作员排序依据（避免语义冲突）
+- 选出执行者后，Host 仍会在该操作员上执行 `onConfigureAutoCallExecution`
 
 #### Autocall Execution Hook
 
@@ -1462,6 +1498,22 @@ export default plugin;
 | `watchNewCallsign` | boolean | `false` |
 | `autocallPriority` | number | `80` |
 
+### autocall-operator-rotation
+
+跨操作员自动起呼调度插件（`instanceScope: 'global'`）。仅在自动起呼阶段 B 参与，负责“同一目标由哪个操作员起呼”，不参与目标呼号选择。
+
+| Key（global scope） | 类型 | 默认值 |
+|------|------|--------|
+| `mode` | string (`manual` / `random`) | `'manual'` |
+| `manualOrder` | string[] | `[]` |
+| `failAdvanceThreshold` | number | `1` |
+| `avoidImmediateRepeatInRandom` | boolean | `true` |
+
+- `manual`：按 `manualOrder`（操作员呼号）轮叫；下一位不在当前候选集时顺延
+- `random`：随机选择；候选数大于 1 时可避免连续重复
+- QSO 完成后推进下一位
+- QSO 失败时累计计数，达到 `failAdvanceThreshold` 后下一次命中推进
+
 ### autocall-idle-frequency
 
 自动起呼执行层插件：在自动起呼前挑选更空闲的发射音频频率。通过 `onConfigureAutoCallExecution` 实现。默认启用。
@@ -1591,6 +1643,7 @@ Pipeline 额外安全网
 | 两个工具插件同时定义 `onFilterCandidates` | Pipeline 链式执行 |
 | 两个工具插件同时定义 `onQSOComplete` | 并发 fire-and-forget |
 | 两个自动起呼工具插件同时定义 `onAutoCallCandidate` | Host 统一收集提议后仲裁 |
+| 多个操作员同时命中同一自动起呼目标 | 先做每操作员本地仲裁（阶段 A），再用 `onResolveAutoCallOperator` 做跨操作员选择（阶段 B） |
 | 两个策略插件（理论上不可能）| 每个操作员只能选择一个策略 |
 | 工具插件过滤器把候选清空 | 安全网保留上一步结果 |
 

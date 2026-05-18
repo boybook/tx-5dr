@@ -194,6 +194,9 @@ export function toPluginStatus(plugin: LoadedPlugin, instance?: PluginInstance):
   if (plugin.definition.hooks?.onConfigureAutoCallExecution) {
     capabilities.push('auto_call_execution');
   }
+  if (plugin.definition.hooks?.onResolveAutoCallOperator) {
+    capabilities.push('auto_call_operator_selection');
+  }
 
   return {
     name: plugin.definition.name,

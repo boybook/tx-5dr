@@ -1,0 +1,14 @@
+{
+  "pluginName": "自動コール運用者ローテーション",
+  "pluginDescription": "同一スロットで複数オペレーターが同じ対象を検出したとき、誰が自動コールするかを選択します。",
+  "mode": "ローテーションモード",
+  "modeDesc": "手動順序ローテーションまたはランダム選択を指定します。",
+  "modeManual": "手動順序",
+  "modeRandom": "ランダム",
+  "manualOrder": "手動順序（オペレーター呼出符号）",
+  "manualOrderDesc": "呼出符号で順序を指定します。次順のオペレーターが候補にいない場合は、候補に存在する次の一致へ順延します。",
+  "failAdvanceThreshold": "失敗時の切替しきい値",
+  "failAdvanceThresholdDesc": "同一ターゲットで連続失敗がこの回数に達すると、次回一致時に次のオペレーターへ切り替えます。",
+  "avoidImmediateRepeatInRandom": "ランダム時に連続重複を回避",
+  "avoidImmediateRepeatInRandomDesc": "候補が 2 件以上ある場合、同じオペレーターの連続選択を可能な限り避けます。"
+}

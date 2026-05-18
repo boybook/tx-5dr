@@ -154,6 +154,109 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
     return { eventEmitter, operator, pluginManager };
   }
 
+  async function createDualHarness(options?: {
+    pluginConfigs?: Record<string, { enabled: boolean; settings: Record<string, unknown> }>;
+    operatorPluginSettings?: Record<string, Record<string, Record<string, unknown>>>;
+  }) {
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string }) => {
+      eventEmitter.emit('hasWorkedCallsignResponse' as any, {
+        requestId: data.requestId,
+        hasWorked: false,
+      });
+    });
+
+    const operatorA = new RadioOperator({
+      id: 'operator-1',
+      mode: MODES.FT8,
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      frequency: 1000,
+      transmitCycles: [0],
+      maxQSOTimeoutCycles: 6,
+      maxCallAttempts: 5,
+      autoReplyToCQ: false,
+      autoResumeCQAfterFail: false,
+      autoResumeCQAfterSuccess: false,
+      replyToWorkedStations: false,
+      prioritizeNewCalls: true,
+      targetSelectionPriorityMode: 'dxcc_first',
+    }, eventEmitter);
+
+    const operatorB = new RadioOperator({
+      id: 'operator-2',
+      mode: MODES.FT8,
+      myCallsign: 'BG4IBX',
+      myGrid: 'OM96',
+      frequency: 1200,
+      transmitCycles: [0],
+      maxQSOTimeoutCycles: 6,
+      maxCallAttempts: 5,
+      autoReplyToCQ: false,
+      autoResumeCQAfterFail: false,
+      autoResumeCQAfterSuccess: false,
+      replyToWorkedStations: false,
+      prioritizeNewCalls: true,
+      targetSelectionPriorityMode: 'dxcc_first',
+    }, eventEmitter);
+
+    const operators = [operatorA, operatorB];
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-autocall-dual-'));
+    tempDirs.push(dataDir);
+
+    let pluginManager!: PluginManager;
+    pluginManager = new PluginManager({
+      eventEmitter,
+      getOperators: () => operators,
+      getOperatorById: (id) => operators.find((operator) => operator.config.id === id),
+      getCurrentMode: () => operatorA.config.mode,
+      getOperatorAutomationSnapshot: (id) => pluginManager.getOperatorAutomationSnapshot(id),
+      requestOperatorCall: (operatorId, callsign, lastMessage) => {
+        pluginManager.requestCall(operatorId, callsign, lastMessage);
+      },
+      getRadioFrequency: async () => operatorA.config.frequency,
+      setRadioFrequency: () => {},
+      getRadioBand: () => '40m',
+      getRadioConnected: () => true,
+      getLatestSlotPack: () => null,
+      interruptOperatorTransmission: async () => {},
+      hasWorkedCallsign: async () => false,
+      resetOperatorRuntime: () => {},
+      dataDir,
+    });
+
+    const standardSettings = {
+      autoReplyToCQ: false,
+      autoResumeCQAfterFail: false,
+      autoResumeCQAfterSuccess: false,
+      replyToWorkedStations: false,
+      targetSelectionPriorityMode: 'dxcc_first',
+      maxQSOTimeoutCycles: 6,
+      maxCallAttempts: 5,
+    };
+
+    pluginManager.loadConfig({
+      configs: options?.pluginConfigs ?? {},
+      operatorStrategies: {
+        [operatorA.config.id]: 'standard-qso',
+        [operatorB.config.id]: 'standard-qso',
+      },
+      operatorSettings: {
+        [operatorA.config.id]: {
+          'standard-qso': standardSettings,
+          ...(options?.operatorPluginSettings?.[operatorA.config.id] ?? {}),
+        },
+        [operatorB.config.id]: {
+          'standard-qso': standardSettings,
+          ...(options?.operatorPluginSettings?.[operatorB.config.id] ?? {}),
+        },
+      },
+    });
+
+    await pluginManager.start();
+    return { eventEmitter, pluginManager, operatorA, operatorB };
+  }
+
   it('prefers the higher-priority autocall plugin when multiple plugins match the same slot', async () => {
     const { eventEmitter, operator, pluginManager } = await createHarness({
       pluginConfigs: {
@@ -628,6 +731,87 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
     expect(operator.isTransmitting).toBe(true);
     expect(operator.getTransmitCycles()).toEqual([decodeSlot.cycleNumber === 0 ? 1 : 0]);
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBe('JA1AAA');
+  });
+
+  it('does not use per-operator autocallPriority as a cross-operator selector', async () => {
+    const { eventEmitter, operatorA, operatorB, pluginManager } = await createDualHarness({
+      pluginConfigs: {
+        'watched-callsign-autocall': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'operator-1': {
+          'watched-callsign-autocall': {
+            watchList: ['JA1AAA'],
+            triggerMode: 'cq',
+            autocallPriority: 1,
+            workedCallsignSkipDays: 0,
+          },
+        },
+        'operator-2': {
+          'watched-callsign-autocall': {
+            watchList: ['JA1AAA'],
+            triggerMode: 'cq',
+            autocallPriority: 1000,
+            workedCallsignSkipDays: 0,
+          },
+        },
+      },
+    });
+
+    const slotInfo = createSlotInfo(90_000);
+    eventEmitter.emit('slotStart', slotInfo, createSlotPack(slotInfo, [
+      { message: 'CQ JA1AAA PM95' },
+    ]));
+    await flushAsyncWork();
+
+    expect(operatorA.isTransmitting).toBe(true);
+    expect(operatorB.isTransmitting).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(operatorA.config.id).context?.targetCallsign).toBe('JA1AAA');
+    expect(pluginManager.getOperatorRuntimeStatus(operatorB.config.id).context?.targetCallsign).toBeUndefined();
+  });
+
+  it('allows global operator-rotation plugin to choose which operator calls a shared target', async () => {
+    const { eventEmitter, operatorA, operatorB, pluginManager } = await createDualHarness({
+      pluginConfigs: {
+        'watched-callsign-autocall': { enabled: true, settings: {} },
+        'autocall-operator-rotation': {
+          enabled: true,
+          settings: {
+            mode: 'manual',
+            manualOrder: ['BG4IBX', 'BG4IAJ'],
+            failAdvanceThreshold: 2,
+          },
+        },
+      },
+      operatorPluginSettings: {
+        'operator-1': {
+          'watched-callsign-autocall': {
+            watchList: ['JA1AAA'],
+            triggerMode: 'cq',
+            autocallPriority: 100,
+            workedCallsignSkipDays: 0,
+          },
+        },
+        'operator-2': {
+          'watched-callsign-autocall': {
+            watchList: ['JA1AAA'],
+            triggerMode: 'cq',
+            autocallPriority: 100,
+            workedCallsignSkipDays: 0,
+          },
+        },
+      },
+    });
+
+    const slotInfo = createSlotInfo(105_000);
+    eventEmitter.emit('slotStart', slotInfo, createSlotPack(slotInfo, [
+      { message: 'CQ JA1AAA PM95' },
+    ]));
+    await flushAsyncWork();
+
+    expect(operatorA.isTransmitting).toBe(false);
+    expect(operatorB.isTransmitting).toBe(true);
+    expect(pluginManager.getOperatorRuntimeStatus(operatorB.config.id).context?.targetCallsign).toBe('JA1AAA');
   });
 
   it('enriches parsed messages with operator-specific logbook analysis before standard-qso selects a target', async () => {

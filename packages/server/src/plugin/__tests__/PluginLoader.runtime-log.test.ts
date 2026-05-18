@@ -173,6 +173,68 @@ describe('PluginLoader runtime logs', () => {
     expect(errorLog?.message).toContain('Global plugin instances must not implement hook "onFrequencyChange"');
   });
 
+  it('rejects operator-scoped plugins that implement onResolveAutoCallOperator', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'invalid-operator-autocall-selector');
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        name: 'invalid-operator-autocall-selector',
+        version: '1.0.0',
+        type: 'utility',
+        hooks: {
+          onResolveAutoCallOperator() {
+            return { selectedOperatorId: 'operator-1' };
+          },
+        },
+      };
+    `, 'utf8');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loader = new PluginLoader((entry) => runtimeLogs.push(entry));
+    const loaded = await loader.scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(0);
+    const errorLog = runtimeLogs.find((entry) =>
+      entry.stage === 'validate'
+      && entry.level === 'error'
+      && entry.directoryName === 'invalid-operator-autocall-selector');
+    expect(errorLog?.message).toContain('onResolveAutoCallOperator');
+    expect(errorLog?.message).toContain('instanceScope="global"');
+  });
+
+  it('accepts global utility plugins that implement onResolveAutoCallOperator and onQSOFail hooks', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'valid-global-autocall-selector');
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        name: 'valid-global-autocall-selector',
+        version: '1.0.0',
+        type: 'utility',
+        instanceScope: 'global',
+        hooks: {
+          onResolveAutoCallOperator(request) {
+            return { selectedOperatorId: request.candidates[0]?.operatorId ?? '' };
+          },
+          onQSOFail() {},
+        },
+      };
+    `, 'utf8');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loader = new PluginLoader((entry) => runtimeLogs.push(entry));
+    const loaded = await loader.scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]?.definition.name).toBe('valid-global-autocall-selector');
+    expect(runtimeLogs.some((entry) =>
+      entry.stage === 'load'
+      && entry.level === 'info'
+      && entry.pluginName === 'valid-global-autocall-selector'
+      && entry.message.includes('Plugin loaded'))).toBe(true);
+  });
+
   it('emits validate-stage error when iframe panel references unknown ui page', async () => {
     const pluginRoot = await createPluginRoot();
     const pluginDir = join(pluginRoot, 'invalid-ui-page-ref');
