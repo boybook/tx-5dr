@@ -84,7 +84,7 @@ fi
 
 tar -C "$APP_ROOT" -czf "$DIST_DIR/$ARTIFACT_NAME" .
 SHA256="$(shasum -a 256 "$DIST_DIR/$ARTIFACT_NAME" | awk '{print $1}')"
-SIZE="$(stat -f %z "$DIST_DIR/$ARTIFACT_NAME" 2>/dev/null || stat -c %s "$DIST_DIR/$ARTIFACT_NAME")"
+SIZE="$(node -e 'process.stdout.write(String(require("node:fs").statSync(process.argv[1]).size))' "$DIST_DIR/$ARTIFACT_NAME")"
 cat > "$DIST_DIR/latest.json" <<JSON
 {
   "product": "android-runtime",
