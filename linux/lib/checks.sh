@@ -73,19 +73,6 @@ check_glibcxx() {
     grep -qa "GLIBCXX_3.4.32" "$libpath" 2>/dev/null
 }
 
-check_glibc_execstack() {
-    # Only relevant if glibc >= 2.41
-    local glibc_int
-    glibc_int=$(get_glibc_version_int)
-    [[ "$glibc_int" -lt 241 ]] && return 0  # Not needed
-
-    # Check if systemd service has GLIBC_TUNABLES
-    if [[ -f /lib/systemd/system/tx5dr.service ]]; then
-        grep -q "GLIBC_TUNABLES=glibc.rtld.execstack=2" /lib/systemd/system/tx5dr.service && return 0
-    fi
-    return 1
-}
-
 NGINX_BIN=""
 TX5DR_NGINX_CLIENT_MAX_BODY_SIZE="${TX5DR_NGINX_CLIENT_MAX_BODY_SIZE:-128M}"
 _find_nginx() {
@@ -927,21 +914,10 @@ run_doctor() {
         issues=$((issues + 1))
     fi
 
-    # glibc execstack
+    # glibc version
     local glibc_ver
     glibc_ver=$(ldd --version 2>&1 | grep -oP '\d+\.\d+' | head -1 || true)
-    local glibc_int
-    glibc_int=$(get_glibc_version_int)
-    if [[ "$glibc_int" -ge 241 ]]; then
-        if check_glibc_execstack; then
-            check_line "$(msg CHECK_GLIBC)" "ok" "${glibc_ver} (GLIBC_TUNABLES configured)"
-        else
-            check_line "$(msg CHECK_GLIBC)" "fail" "${glibc_ver} (GLIBC_TUNABLES missing)"
-            issues=$((issues + 1))
-        fi
-    else
-        check_line "$(msg CHECK_GLIBC)" "ok" "${glibc_ver}"
-    fi
+    check_line "$(msg CHECK_GLIBC)" "ok" "${glibc_ver}"
 
     # unzip (plugin marketplace)
     if check_unzip; then

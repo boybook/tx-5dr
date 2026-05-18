@@ -3,7 +3,6 @@ import { spawn } from 'node:child_process';
 
 const args = process.argv.slice(2);
 const env = { ...process.env };
-let addGlibcExecstackTunable = false;
 let commandIndex = 0;
 
 function setEnvAssignment(assignment) {
@@ -30,11 +29,6 @@ while (commandIndex < args.length) {
     commandIndex += 1;
     break;
   }
-  if (arg === '--glibc-tunables') {
-    addGlibcExecstackTunable = true;
-    commandIndex += 1;
-    continue;
-  }
   if (arg === '--env' || arg.startsWith('--env=')) {
     const { value, nextIndex } = readOptionValue(arg, commandIndex);
     if (!value) {
@@ -60,18 +54,8 @@ while (commandIndex < args.length) {
 
 const [command, ...commandArgs] = args.slice(commandIndex);
 if (!command) {
-  console.error('Usage: node scripts/run-with-env.mjs [--env KEY=value] [--node-env=value] [--glibc-tunables] <command> [...]');
+  console.error('Usage: node scripts/run-with-env.mjs [--env KEY=value] [--node-env=value] <command> [...]');
   process.exit(1);
-}
-
-if (addGlibcExecstackTunable && process.platform === 'linux') {
-  const tunable = 'glibc.rtld.execstack=2';
-  const existing = env.GLIBC_TUNABLES || '';
-  env.GLIBC_TUNABLES = existing.split(':').includes(tunable)
-    ? existing
-    : existing
-      ? `${existing}:${tunable}`
-      : tunable;
 }
 
 const child = spawn(command, commandArgs, {

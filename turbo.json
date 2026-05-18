@@ -1,7 +1,6 @@
 {
   "$schema": "https://turborepo.org/schema.json",
   "globalPassThroughEnv": [
-    "GLIBC_TUNABLES",
     "PORT",
     "WEB_PORT",
     "TX5DR_WEB_DEV_PORT",

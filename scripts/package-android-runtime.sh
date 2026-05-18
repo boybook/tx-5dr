@@ -160,51 +160,15 @@ if [[ -d "$NM/onnxruntime-node/bin/napi-v6" ]]; then
          "$NM/onnxruntime-node/bin/napi-v6/win32" || true
 fi
 
-# Android/PRoot cannot enable an executable stack on demand. The Linux server
-# and Electron paths use GLIBC_TUNABLES for wsjtx-lib, but Android rejects that
-# with EPERM, so clear PT_GNU_STACK on the packaged core library for this
-# Android-only runtime artifact.
+# wsjtx-lib 2.1.1+ no longer requires an executable stack. Keep the Android
+# runtime strict: fail packaging if a stale prebuild regresses to PT_GNU_STACK X.
 WSJTX_CORE="$NM/wsjtx-lib/prebuilds/linux-arm64/libwsjtx_core.so"
-if [[ -f "$WSJTX_CORE" ]]; then
-  python3 - "$WSJTX_CORE" <<'PY'
-import struct
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-data = bytearray(path.read_bytes())
-if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
-    raise SystemExit(f"Unsupported ELF format: {path}")
-
-PT_GNU_STACK = 0x6474E551
-PF_X = 0x1
-phoff = struct.unpack_from("<Q", data, 32)[0]
-phentsize = struct.unpack_from("<H", data, 54)[0]
-phnum = struct.unpack_from("<H", data, 56)[0]
-found = False
-
-for index in range(phnum):
-    offset = phoff + index * phentsize
-    p_type, p_flags = struct.unpack_from("<II", data, offset)
-    if p_type != PT_GNU_STACK:
-        continue
-    found = True
-    if p_flags & PF_X:
-        struct.pack_into("<I", data, offset + 4, p_flags & ~PF_X)
-    break
-
-if not found:
-    raise SystemExit(f"PT_GNU_STACK not found: {path}")
-
-path.write_bytes(data)
-
-verify = bytearray(path.read_bytes())
-for index in range(phnum):
-    offset = phoff + index * phentsize
-    p_type, p_flags = struct.unpack_from("<II", verify, offset)
-    if p_type == PT_GNU_STACK and (p_flags & PF_X):
-        raise SystemExit(f"Failed to clear executable stack flag: {path}")
-PY
+if [[ -f "$WSJTX_CORE" ]] && command -v readelf >/dev/null 2>&1; then
+  FLAGS="$(readelf -W -l "$WSJTX_CORE" | awk '/GNU_STACK/ {print $(NF-1)}')"
+  if [[ -z "$FLAGS" || "$FLAGS" == *E* ]]; then
+    echo "wsjtx-lib linux-arm64 prebuild must not require executable stack: ${FLAGS:-missing}" >&2
+    exit 1
+  fi
 fi
 
 tar -C "$APP_ROOT" -czf "$DIST_DIR/$ARTIFACT_NAME" .
