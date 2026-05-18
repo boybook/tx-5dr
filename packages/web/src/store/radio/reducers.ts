@@ -21,6 +21,20 @@ import type {
 } from './types';
 
 const logger = createLogger('RadioStore');
+const MAX_VALID_DATE_MS = 8_640_000_000_000_000;
+
+function isValidTimestampMs(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isFinite(value)
+    && value >= 0
+    && value <= MAX_VALID_DATE_MS;
+}
+
+function isValidSlotPack(slotPack: SlotPack): boolean {
+  return isValidTimestampMs(slotPack.startMs)
+    && isValidTimestampMs(slotPack.endMs)
+    && slotPack.endMs >= slotPack.startMs;
+}
 
 function hasRadioConfigChanged(prev: RadioState['radioConfig'], next?: RadioState['radioConfig']): boolean {
   if (!next) {
@@ -527,6 +541,15 @@ export function slotPacksReducer(state: SlotPacksState, action: SlotPacksAction)
   switch (action.type) {
     case 'slotPackUpdated': {
       const newSlotPack = action.payload;
+      if (!isValidSlotPack(newSlotPack)) {
+        logger.warn('Ignoring invalid slot pack update', {
+          slotId: newSlotPack.slotId,
+          startMs: newSlotPack.startMs,
+          endMs: newSlotPack.endMs,
+        });
+        return state;
+      }
+
       if (state.isSyncing) {
         return {
           ...state,

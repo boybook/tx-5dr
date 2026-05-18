@@ -10,6 +10,7 @@ import { FT8MessageParser } from '@tx5dr/core';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('SlotPackManager');
+const MAX_VALID_DATE_MS = 8_640_000_000_000_000;
 
 export interface SlotPackManagerEvents {
   'slotPackUpdated': (slotPack: SlotPack) => void;
@@ -55,12 +56,45 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    * 判断 slotId 对应的时隙是否早于最近一次 clearInMemory()
    * 用于丢弃频率切换后仍在队列中完成的旧频率解码结果
    */
-  private isStaleSlot(slotId: string, fallbackTimestamp: number): boolean {
+  private isStaleSlot(slotStartMs: number): boolean {
     if (this.lastClearTimestamp === 0) return false;
+    return slotStartMs < this.lastClearTimestamp;
+  }
+
+  private isValidTimestampMs(value: unknown): value is number {
+    return typeof value === 'number'
+      && Number.isFinite(value)
+      && value >= 0
+      && value <= MAX_VALID_DATE_MS;
+  }
+
+  private isValidSlotMs(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0;
+  }
+
+  private parseSlotIdStartMs(slotId: string): number | null {
     const parts = slotId.split('-');
     const timePart = parts[parts.length - 1];
-    const startMs = (timePart && !isNaN(parseInt(timePart))) ? parseInt(timePart) : fallbackTimestamp;
-    return startMs < this.lastClearTimestamp;
+    const parsedSlotStartMs = timePart ? Number(timePart) : NaN;
+
+    if (this.isValidTimestampMs(parsedSlotStartMs)) {
+      return parsedSlotStartMs;
+    }
+
+    return null;
+  }
+
+  private resolveSlotStartMs(slotId: string, fallbackTimestamp: number): number | null {
+    const parsedSlotStartMs = this.parseSlotIdStartMs(slotId);
+    if (parsedSlotStartMs !== null) {
+      return parsedSlotStartMs;
+    }
+
+    if (this.isValidTimestampMs(fallbackTimestamp)) {
+      return fallbackTimestamp;
+    }
+
+    return null;
   }
 
   /**
@@ -69,15 +103,27 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    */
   addTransmissionFrame(slotId: string, operatorId: string, message: string, frequency: number, timestamp: number, replaceExisting?: boolean): void {
     try {
-      if (this.isStaleSlot(slotId, timestamp)) {
+      const slotStartMs = this.resolveSlotStartMs(slotId, timestamp);
+      if (slotStartMs === null) {
+        logger.warn('Discarding transmission frame with invalid slot time', { slotId, timestamp, operatorId, message });
+        return;
+      }
+
+      if (this.isStaleSlot(slotStartMs)) {
         logger.debug(`Discarding stale transmission frame after frequency change: slot=${slotId}`);
         return;
       }
+      const updateTimestamp = this.isValidTimestampMs(timestamp) ? timestamp : slotStartMs;
 
       // 获取或创建时隙包
       let slotPack = this.slotPacks.get(slotId);
       if (!slotPack) {
-        slotPack = this.createSlotPack(slotId, timestamp);
+        const createdSlotPack = this.createSlotPack(slotId, updateTimestamp);
+        if (!createdSlotPack) {
+          logger.warn('Discarding transmission frame because slot pack could not be created', { slotId, timestamp, operatorId });
+          return;
+        }
+        slotPack = createdSlotPack;
         this.slotPacks.set(slotId, slotPack);
 
         // 更新最新的 SlotPack
@@ -127,7 +173,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       }
       
       // 更新统计信息
-      slotPack.stats.lastUpdated = timestamp;
+      slotPack.stats.lastUpdated = updateTimestamp;
       slotPack.stats.totalFramesAfterDedup = slotPack.frames.length;
       this.bumpUpdateSeq(slotPack);
       const snapshot = this.snapshotSlotPack(slotPack);
@@ -177,13 +223,24 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   /**
    * 处理解码结果，更新对应的 SlotPack
    */
-  processDecodeResult(result: DecodeResult): SlotPack {
-    if (this.isStaleSlot(result.slotId, result.timestamp)) {
+  processDecodeResult(result: DecodeResult): SlotPack | null {
+    const slotStartMs = this.parseSlotIdStartMs(result.slotId);
+    if (slotStartMs === null) {
+      logger.warn('Discarding decode result with invalid slot time', {
+        slotId: result.slotId,
+        timestamp: result.timestamp,
+        windowIdx: result.windowIdx,
+      });
+      return null;
+    }
+
+    if (this.isStaleSlot(slotStartMs)) {
       logger.debug(`Discarding stale decode result after frequency change: slot=${result.slotId}`);
-      return this.createSlotPack(result.slotId, result.timestamp);
+      return null;
     }
 
     const { slotId } = result;
+    const resultTimestamp = this.isValidTimestampMs(result.timestamp) ? result.timestamp : slotStartMs;
     const filteredFrames = result.frames.filter((frame) => !this.isBareCallsignDecodeFrame(frame));
     const droppedFrameCount = result.frames.length - filteredFrames.length;
     if (droppedFrameCount > 0) {
@@ -193,7 +250,15 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     // 获取或创建 SlotPack
     let slotPack = this.slotPacks.get(slotId);
     if (!slotPack) {
-      slotPack = this.createSlotPack(slotId, result.timestamp);
+      const createdSlotPack = this.createSlotPack(slotId, resultTimestamp);
+      if (!createdSlotPack) {
+        logger.warn('Discarding decode result because slot pack could not be created', {
+          slotId,
+          timestamp: result.timestamp,
+        });
+        return null;
+      }
+      slotPack = createdSlotPack;
       this.slotPacks.set(slotId, slotPack);
       
       // 更新最新的 SlotPack
@@ -220,7 +285,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     // 添加解码历史
     slotPack.decodeHistory.push({
       windowIdx: result.windowIdx,
-      timestamp: result.timestamp,
+      timestamp: resultTimestamp,
       frameCount: filteredFrames.length,
       processingTimeMs: result.processingTimeMs
     });
@@ -271,19 +336,23 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   /**
    * 创建新的 SlotPack
    */
-  private createSlotPack(slotId: string, timestamp: number): SlotPack {
-    // 从 slotId 中提取时隙开始时间
-    const parts = slotId.split('-');
-    let startMs = timestamp;
-    
-    // 尝试从 slotId 中提取时间戳
-    const timePart = parts[parts.length - 1];
-    if (timePart && !isNaN(parseInt(timePart))) {
-      startMs = parseInt(timePart);
+  private createSlotPack(slotId: string, timestamp: number): SlotPack | null {
+    const startMs = this.resolveSlotStartMs(slotId, timestamp);
+    if (startMs === null) {
+      logger.warn('Cannot create slot pack with invalid slot time', { slotId, timestamp });
+      return null;
     }
     
     // 使用当前模式的时隙长度
     const slotDurationMs = this.currentMode.slotMs;
+    if (!this.isValidSlotMs(slotDurationMs)) {
+      logger.warn('Cannot create slot pack with invalid mode slot length', {
+        slotId,
+        mode: this.currentMode.name,
+        slotMs: slotDurationMs,
+      });
+      return null;
+    }
     
     const slotPack: SlotPack = {
       slotId,

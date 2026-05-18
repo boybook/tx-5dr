@@ -62,6 +62,35 @@ import type {
 
 let lastDecodeWorkerUnavailableToastAt = 0;
 const DECODE_WORKER_UNAVAILABLE_TOAST_COOLDOWN_MS = 60_000;
+const MAX_VALID_DATE_MS = 8_640_000_000_000_000;
+
+function isValidTimestampMs(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isFinite(value)
+    && value >= 0
+    && value <= MAX_VALID_DATE_MS;
+}
+
+function isValidSlotMs(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function isValidSlotInfoPayload(data: unknown): data is SlotInfo {
+  return typeof data === 'object'
+    && data !== null
+    && isValidTimestampMs((data as { startMs?: unknown }).startMs);
+}
+
+function isValidSlotPackPayload(data: unknown): data is SlotPack {
+  if (typeof data !== 'object' || data === null) {
+    return false;
+  }
+
+  const slotPack = data as { startMs?: unknown; endMs?: unknown };
+  return isValidTimestampMs(slotPack.startMs)
+    && isValidTimestampMs(slotPack.endMs)
+    && slotPack.endMs >= slotPack.startMs;
+}
 
 interface SpectrumNegotiationBridge {
   applySpectrumSelection: (capabilities: SpectrumCapabilities) => void;
@@ -243,7 +272,13 @@ export function createRadioEventMap({
     },
     slotStart: (data: unknown) => {
       flushPendingOperatorStatuses();
-      radioDispatch({ type: 'slotStart', payload: data as SlotInfo });
+      if (!isValidSlotInfoPayload(data)) {
+        logger.warn('Ignoring invalid slotStart payload', {
+          startMs: (data as { startMs?: unknown } | null | undefined)?.startMs,
+        });
+        return;
+      }
+      radioDispatch({ type: 'slotStart', payload: data });
     },
     systemStatus: (data: unknown) => {
       const status = data as SystemStatus;
@@ -379,7 +414,17 @@ export function createRadioEventMap({
       });
     },
     slotPackUpdated: (data: unknown) => {
-      slotPacksDispatch({ type: 'slotPackUpdated', payload: data as SlotPack });
+      const currentSlotMs = radioStateRef.current.currentMode?.slotMs;
+      if (!isValidSlotPackPayload(data) || (currentSlotMs !== undefined && !isValidSlotMs(currentSlotMs))) {
+        logger.warn('Ignoring invalid slotPackUpdated payload', {
+          slotId: (data as { slotId?: unknown } | null | undefined)?.slotId,
+          startMs: (data as { startMs?: unknown } | null | undefined)?.startMs,
+          endMs: (data as { endMs?: unknown } | null | undefined)?.endMs,
+          slotMs: currentSlotMs,
+        });
+        return;
+      }
+      slotPacksDispatch({ type: 'slotPackUpdated', payload: data });
     },
     slotPacksReset: (data: unknown) => {
       const resetData = data as { phase?: 'start' | 'complete' } | undefined;

@@ -635,4 +635,88 @@ describe('myRelatedTimelineReducer', () => {
     expect(state.liveGroups).toEqual([]);
     expect(state.lastProcessedSlotPackSeq.get(slotPack.slotId)).toBe(2);
   });
+
+  it('ignores slot packs with invalid start times without throwing', () => {
+    const liveSlotStartMs = Date.UTC(2026, 4, 6, 6, 28, 30);
+    const invalidSlotPack = {
+      ...createSlotPack(liveSlotStartMs, [createRxFrame('R9WXK BG5BNW -08', 1200)], createFrequencyContext(), 2),
+      startMs: Number.NaN,
+    };
+
+    expect(() => reduce([
+      {
+        type: 'syncLiveContext',
+        payload: {
+          currentMode: mode,
+          liveSlotStartMs,
+          visibleOperatorCallsigns: ['BG5BNW'],
+          targetCallsign: '',
+        },
+      },
+      {
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack: invalidSlotPack,
+          currentMode: mode,
+          liveSlotStartMs,
+          visibleOperatorCallsigns: ['BG5BNW'],
+          targetCallsign: '',
+        },
+      },
+    ])).not.toThrow();
+
+    const state = reduce([
+      {
+        type: 'syncLiveContext',
+        payload: {
+          currentMode: mode,
+          liveSlotStartMs,
+          visibleOperatorCallsigns: ['BG5BNW'],
+          targetCallsign: '',
+        },
+      },
+      {
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack: invalidSlotPack,
+          currentMode: mode,
+          liveSlotStartMs,
+          visibleOperatorCallsigns: ['BG5BNW'],
+          targetCallsign: '',
+        },
+      },
+    ]);
+
+    expect(buildMyRelatedTimelineGroups(state)).toEqual([]);
+  });
+
+  it('ignores transmission logs with invalid slot times without polluting groups', () => {
+    const liveSlotStartMs = Date.UTC(2026, 4, 6, 6, 28, 30);
+    const invalidLog: MyRelatedTransmissionLog = {
+      ...createTransmissionLog(liveSlotStartMs, 'BG5BNW R9WXK RR73'),
+      slotStartMs: Number.NaN,
+    };
+
+    const state = reduce([
+      {
+        type: 'syncLiveContext',
+        payload: {
+          currentMode: mode,
+          liveSlotStartMs,
+          visibleOperatorCallsigns: ['BG5BNW'],
+          targetCallsign: '',
+        },
+      },
+      {
+        type: 'ingestTransmissionLog',
+        payload: {
+          log: invalidLog,
+          currentMode: mode,
+          liveSlotStartMs,
+        },
+      },
+    ]);
+
+    expect(buildMyRelatedTimelineGroups(state)).toEqual([]);
+  });
 });

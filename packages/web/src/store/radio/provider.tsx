@@ -47,6 +47,14 @@ import type { FrameDisplayMessage, FrameGroup } from '../../components/radio/dig
 import type { RadioState } from './types';
 
 const logger = createLogger('RadioStore');
+const MAX_VALID_DATE_MS = 8_640_000_000_000_000;
+
+function isValidTimestampMs(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isFinite(value)
+    && value >= 0
+    && value <= MAX_VALID_DATE_MS;
+}
 
 function buildFrequencyContext(
   currentMode: string | null,
@@ -101,12 +109,12 @@ function buildCurrentOperatorTargetCallsign(radioState: RadioState): string {
 }
 
 function buildCurrentLiveSlotStartMs(radioState: RadioState): number | null {
-  if (radioState.currentSlotInfo?.startMs) {
+  if (typeof radioState.currentSlotInfo?.startMs === 'number' && Number.isFinite(radioState.currentSlotInfo.startMs)) {
     return radioState.currentSlotInfo.startMs;
   }
 
   const slotMs = radioState.currentMode?.slotMs;
-  if (!slotMs) {
+  if (typeof slotMs !== 'number' || !Number.isFinite(slotMs) || slotMs <= 0) {
     return null;
   }
 
@@ -431,6 +439,15 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
 
     const wsClient = radioService.wsClientInstance;
     const handleTransmissionLog = (data: MyRelatedTransmissionLog) => {
+      if (!isValidTimestampMs(data?.slotStartMs)) {
+        logger.warn('Ignoring invalid transmissionLog payload', {
+          operatorId: data?.operatorId,
+          message: data?.message,
+          slotStartMs: data?.slotStartMs,
+        });
+        return;
+      }
+
       const currentMode = radioStateRef.current.currentMode;
       if (!currentMode) {
         return;

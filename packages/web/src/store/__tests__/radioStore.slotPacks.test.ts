@@ -78,4 +78,23 @@ describe('radioStore slot packs reducer', () => {
 
     expect(updatedState.slotPacks[0]?.frames[0]?.message).toBe('R9WXK BG5BNW PM00');
   });
+
+  it('ignores slot pack updates with invalid time values', () => {
+    const validState = slotPacksReducer(initialSlotPacksState, {
+      type: 'slotPackUpdated',
+      payload: createSlotPack('slot-1', 1000, 'CQ BG5BNW PM00'),
+    });
+
+    const invalidState = slotPacksReducer(validState, {
+      type: 'slotPackUpdated',
+      payload: {
+        ...createSlotPack('slot-bad', 2000, 'BAD TIME'),
+        startMs: Number.NaN,
+      },
+    });
+
+    expect(invalidState).toBe(validState);
+    expect(invalidState.slotPacks).toHaveLength(1);
+    expect(invalidState.slotPacks[0]?.frames[0]?.message).toBe('CQ BG5BNW PM00');
+  });
 });

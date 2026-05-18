@@ -59,12 +59,12 @@ describe('SlotPackManager event routing', () => {
       { message: 'VK9BSA', snr: -3 },
     ]));
 
-    expect(returnedPack.frames).toEqual([]);
-    expect(returnedPack.stats.totalDecodes).toBe(1);
-    expect(returnedPack.stats.successfulDecodes).toBe(0);
-    expect(returnedPack.stats.totalFramesBeforeDedup).toBe(0);
-    expect(returnedPack.stats.totalFramesAfterDedup).toBe(0);
-    expect(returnedPack.decodeHistory[0]?.frameCount).toBe(0);
+    expect(returnedPack?.frames).toEqual([]);
+    expect(returnedPack?.stats.totalDecodes).toBe(1);
+    expect(returnedPack?.stats.successfulDecodes).toBe(0);
+    expect(returnedPack?.stats.totalFramesBeforeDedup).toBe(0);
+    expect(returnedPack?.stats.totalFramesAfterDedup).toBe(0);
+    expect(returnedPack?.decodeHistory[0]?.frameCount).toBe(0);
 
     expect(slotPackUpdatedSpy).toHaveBeenCalledTimes(1);
     expect(slotPackDecodeUpdatedSpy).toHaveBeenCalledTimes(1);
@@ -87,7 +87,7 @@ describe('SlotPackManager event routing', () => {
       { message: 'VK9BSA BH6AJS 73', snr: 3 },
     ]));
 
-    expect(slotPack.frames.map((frame) => frame.message)).toEqual([
+    expect(slotPack?.frames.map((frame) => frame.message)).toEqual([
       'BG2BFG K6QQX RRR',
       'BH6AJS VK9BSA RR73',
       'CQ VK9BSA NH87',
@@ -95,10 +95,10 @@ describe('SlotPackManager event routing', () => {
       'VK9BSA BH6AJS R+06',
       'VK9BSA BH6AJS 73',
     ]);
-    expect(slotPack.stats.successfulDecodes).toBe(1);
-    expect(slotPack.stats.totalFramesBeforeDedup).toBe(6);
-    expect(slotPack.stats.totalFramesAfterDedup).toBe(6);
-    expect(slotPack.decodeHistory[0]?.frameCount).toBe(6);
+    expect(slotPack?.stats.successfulDecodes).toBe(1);
+    expect(slotPack?.stats.totalFramesBeforeDedup).toBe(6);
+    expect(slotPack?.stats.totalFramesAfterDedup).toBe(6);
+    expect(slotPack?.decodeHistory[0]?.frameCount).toBe(6);
   });
 
   it('addTransmissionFrame only emits slotPackUpdated (NOT slotPackDecodeUpdated)', () => {
@@ -122,6 +122,45 @@ describe('SlotPackManager event routing', () => {
     expect(slotPackUpdatedSpy).toHaveBeenCalledTimes(1);
     // 但 slotPackDecodeUpdated 只在 RX 解码写入时触发；TX echo 不应该走这条路径
     expect(slotPackDecodeUpdatedSpy).not.toHaveBeenCalled();
+  });
+
+  it('drops decode results with invalid slot starts without emitting slot packs', () => {
+    const manager = new SlotPackManager();
+    manager.setPersistenceEnabled(false);
+
+    const slotPackUpdatedSpy = vi.fn();
+    const slotPackDecodeUpdatedSpy = vi.fn();
+    manager.on('slotPackUpdated', slotPackUpdatedSpy as (pack: SlotPack) => void);
+    manager.on('slotPackDecodeUpdated', slotPackDecodeUpdatedSpy as (pack: SlotPack) => void);
+
+    const returnedPack = manager.processDecodeResult({
+      ...buildDecodeResult(45_000, [{ message: 'CQ BG5DRB PM00', snr: -5 }]),
+      slotId: 'slot-NaN',
+    });
+
+    expect(returnedPack).toBeNull();
+    expect(slotPackUpdatedSpy).not.toHaveBeenCalled();
+    expect(slotPackDecodeUpdatedSpy).not.toHaveBeenCalled();
+    expect(manager.getActiveSlotPacks()).toEqual([]);
+  });
+
+  it('drops transmission frames with invalid slot times without creating slot packs', () => {
+    const manager = new SlotPackManager();
+    manager.setPersistenceEnabled(false);
+
+    const slotPackUpdatedSpy = vi.fn();
+    manager.on('slotPackUpdated', slotPackUpdatedSpy as (pack: SlotPack) => void);
+
+    manager.addTransmissionFrame(
+      'slot-NaN',
+      'operator-1',
+      'R40CHA BG5DRB 73',
+      14_074_000,
+      Number.NaN,
+    );
+
+    expect(slotPackUpdatedSpy).not.toHaveBeenCalled();
+    expect(manager.getActiveSlotPacks()).toEqual([]);
   });
 
   it('replaces a transmission frame for the same operator and slot when requested', () => {

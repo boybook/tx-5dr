@@ -3,6 +3,32 @@ import { CycleUtils, parseFT8LocationInfo } from '@tx5dr/core';
 import type { FrameDisplayMessage, FrameGroup } from '../../components/radio/digital/FramesTable';
 
 const MAX_GROUPS = 100;
+const MAX_VALID_DATE_MS = 8_640_000_000_000_000;
+
+function isValidTimestampMs(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isFinite(value)
+    && value >= 0
+    && value <= MAX_VALID_DATE_MS;
+}
+
+function isValidSlotMs(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function isValidMode(mode: ModeDescriptor): boolean {
+  return isValidSlotMs(mode.slotMs);
+}
+
+function isValidSlotPack(slotPack: SlotPack): boolean {
+  return isValidTimestampMs(slotPack.startMs)
+    && isValidTimestampMs(slotPack.endMs)
+    && slotPack.endMs >= slotPack.startMs;
+}
+
+function sanitizeLiveSlotStartMs(value: number | null): number | null {
+  return isValidTimestampMs(value) ? value : null;
+}
 
 interface MyRelatedTimelineLiveRxEntry {
   slotStartMs: number;
@@ -110,13 +136,19 @@ export function myRelatedTimelineReducer(
   switch (action.type) {
     case 'syncLiveContext': {
       const { currentMode, liveSlotStartMs, visibleOperatorCallsigns, targetCallsign } = action.payload;
-      const nextState = rolloverLiveCycle(state, currentMode, liveSlotStartMs);
+      if (!isValidMode(currentMode)) {
+        return state;
+      }
+      const nextState = rolloverLiveCycle(state, currentMode, sanitizeLiveSlotStartMs(liveSlotStartMs));
       return reprojectLiveGroups(nextState, currentMode, visibleOperatorCallsigns, targetCallsign);
     }
 
     case 'seedSelectedRx': {
       const { currentMode, message, slotStartMs, liveSlotStartMs, frequencyContext } = action.payload;
-      const nextState = rolloverLiveCycle(state, currentMode, liveSlotStartMs);
+      if (!isValidMode(currentMode) || !isValidTimestampMs(slotStartMs)) {
+        return state;
+      }
+      const nextState = rolloverLiveCycle(state, currentMode, sanitizeLiveSlotStartMs(liveSlotStartMs));
       const messageKey = buildRxDisplayMessageKey(slotStartMs, message);
       const liveRxEntries = new Map(nextState.liveRxEntries);
       const existing = liveRxEntries.get(messageKey);
@@ -142,6 +174,10 @@ export function myRelatedTimelineReducer(
 
     case 'ingestSlotPack': {
       const { slotPack, currentMode, liveSlotStartMs, visibleOperatorCallsigns, targetCallsign } = action.payload;
+      if (!isValidMode(currentMode) || !isValidSlotPack(slotPack)) {
+        return state;
+      }
+
       const previousSeq = state.lastProcessedSlotPackSeq.get(slotPack.slotId) ?? -1;
       const incomingSeq = slotPack.stats?.updateSeq ?? 0;
       if (incomingSeq <= previousSeq) {
@@ -154,7 +190,7 @@ export function myRelatedTimelineReducer(
           lastProcessedSlotPackSeq: new Map(state.lastProcessedSlotPackSeq).set(slotPack.slotId, incomingSeq),
         },
         currentMode,
-        liveSlotStartMs,
+        sanitizeLiveSlotStartMs(liveSlotStartMs),
       );
 
       if (nextState.pendingRestore) {
@@ -208,7 +244,15 @@ export function myRelatedTimelineReducer(
 
     case 'ingestTransmissionLog': {
       const { log, currentMode, liveSlotStartMs } = action.payload;
-      const nextState = rolloverLiveCycle(state, currentMode, liveSlotStartMs ?? log.slotStartMs);
+      if (!isValidMode(currentMode) || !isValidTimestampMs(log.slotStartMs)) {
+        return state;
+      }
+
+      const nextState = rolloverLiveCycle(
+        state,
+        currentMode,
+        sanitizeLiveSlotStartMs(liveSlotStartMs) ?? log.slotStartMs,
+      );
 
       if (
         nextState.currentLiveSlotStartMs !== null &&
@@ -249,7 +293,15 @@ export function myRelatedTimelineReducer(
         return state;
       }
 
-      const resolvedLiveSlotStartMs = liveSlotStartMs ?? findLatestSlotStartMs(slotPacks);
+      if (!isValidMode(currentMode)) {
+        return {
+          ...state,
+          pendingRestore: false,
+        };
+      }
+
+      const validSlotPacks = slotPacks.filter(isValidSlotPack);
+      const resolvedLiveSlotStartMs = sanitizeLiveSlotStartMs(liveSlotStartMs) ?? findLatestSlotStartMs(validSlotPacks);
       let nextState: MyRelatedTimelineState = {
         frozenGroups: [],
         frozenMessageKeys: new Set<string>(),
@@ -260,10 +312,10 @@ export function myRelatedTimelineReducer(
         liveVisibleOperatorCallsigns: visibleOperatorCallsigns,
         liveTargetCallsign: targetCallsign,
         pendingRestore: false,
-        lastProcessedSlotPackSeq: createProcessedSeqMap(state.lastProcessedSlotPackSeq, slotPacks),
+        lastProcessedSlotPackSeq: createProcessedSeqMap(state.lastProcessedSlotPackSeq, validSlotPacks),
       };
 
-      const sortedSlotPacks = [...slotPacks].sort((left, right) => left.startMs - right.startMs);
+      const sortedSlotPacks = [...validSlotPacks].sort((left, right) => left.startMs - right.startMs);
       for (const slotPack of sortedSlotPacks) {
         const isLiveSlot = resolvedLiveSlotStartMs !== null && slotPack.startMs === resolvedLiveSlotStartMs;
 
@@ -354,6 +406,10 @@ function rolloverLiveCycle(
   currentMode: ModeDescriptor,
   nextLiveSlotStartMs: number | null,
 ): MyRelatedTimelineState {
+  if (!isValidMode(currentMode)) {
+    return state;
+  }
+
   if (nextLiveSlotStartMs === null) {
     return state;
   }
@@ -458,6 +514,10 @@ function appendFrozenDisplayMessage(
   headerContextKey: string,
   frequencyContext?: SlotPackFrequencyContext,
 ): MyRelatedTimelineState {
+  if (!isValidMode(currentMode) || !isValidTimestampMs(slotStartMs)) {
+    return state;
+  }
+
   if (state.frozenMessageKeys.has(messageKey)) {
     return state;
   }
@@ -485,6 +545,10 @@ function appendFrozenTransmission(
   log: MyRelatedTransmissionLog,
   currentMode: ModeDescriptor,
 ): MyRelatedTimelineState {
+  if (!isValidMode(currentMode) || !isValidTimestampMs(log.slotStartMs)) {
+    return state;
+  }
+
   const messageKey = buildFrozenMessageKey(log.slotStartMs, transmissionLogToDisplayMessage(log));
   const frozenMessageKeys = new Set(state.frozenMessageKeys);
   frozenMessageKeys.add(messageKey);
@@ -510,7 +574,15 @@ function appendMessageToGroups(
   headerContextKey: string,
   frequencyContext?: SlotPackFrequencyContext,
 ): FrameGroup[] {
+  if (!isValidTimestampMs(slotStartMs) || !isValidSlotMs(slotMs)) {
+    return groups;
+  }
+
   const alignedMs = Math.floor(slotStartMs / slotMs) * slotMs;
+  if (!isValidTimestampMs(alignedMs)) {
+    return groups;
+  }
+
   const groupKey = getGroupIdentityKey(alignedMs, frequencyContext);
   const existingIndex = groups.findIndex(group => getGroupIdentityKey(group.startMs, group.frequencyContext) === groupKey);
 
@@ -550,7 +622,15 @@ function upsertTransmissionGroupMessage(
   currentMode: ModeDescriptor,
   frequencyContext?: SlotPackFrequencyContext,
 ): FrameGroup[] {
+  if (!isValidMode(currentMode) || !isValidTimestampMs(log.slotStartMs)) {
+    return groups;
+  }
+
   const alignedMs = Math.floor(log.slotStartMs / currentMode.slotMs) * currentMode.slotMs;
+  if (!isValidTimestampMs(alignedMs)) {
+    return groups;
+  }
+
   const groupKey = getGroupIdentityKey(alignedMs, frequencyContext);
   const existingIndex = groups.findIndex(group => getGroupIdentityKey(group.startMs, group.frequencyContext) === groupKey);
   const txMessage = transmissionLogToDisplayMessage(log);
@@ -718,11 +798,12 @@ function mergeFrequencyContext(
 }
 
 function findLatestSlotStartMs(slotPacks: SlotPack[]): number | null {
-  if (slotPacks.length === 0) {
+  const validSlotPacks = slotPacks.filter(isValidSlotPack);
+  if (validSlotPacks.length === 0) {
     return null;
   }
 
-  return slotPacks.reduce<number | null>((latest, slotPack) => {
+  return validSlotPacks.reduce<number | null>((latest, slotPack) => {
     if (latest === null || slotPack.startMs > latest) {
       return slotPack.startMs;
     }
