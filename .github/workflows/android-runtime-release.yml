@@ -1,0 +1,243 @@
+name: Build and Release Android Runtime
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0, leave empty for nightly)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-android-runtime:
+    name: Build Android Runtime (Linux arm64)
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 60
+    env:
+      OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_ACCESS_KEY_ID }}
+      OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}
+      OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+      OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+      OSS_BASE_URL: ${{ secrets.OSS_BASE_URL }}
+      OSS_REGION: ${{ secrets.OSS_REGION }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.15.1'
+
+      - name: Enable Corepack and setup Yarn
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare yarn@4.9.1 --activate
+
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libpulse-dev \
+            libhamlib-dev libhamlib4 \
+            libopus-dev libfftw3-dev libudev-dev libusb-1.0-0-dev \
+            build-essential python3-dev pkg-config gfortran cmake ninja-build \
+            rsync
+
+      - name: Install dependencies
+        shell: bash
+        run: yarn install
+        env:
+          YARN_NODE_LINKER: node-modules
+          npm_config_build_from_source: false
+
+      - name: Generate release info
+        id: release_info
+        shell: bash
+        env:
+          TZ: UTC
+        run: |
+          echo "timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+          echo "display_timestamp=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+          echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+          echo "commit_title=$(git show -s --format=%s "${{ github.sha }}")" >> $GITHUB_OUTPUT
+          BASE_VERSION=$(node -p "require('./package.json').version.split('-')[0].split('+')[0]")
+          COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ github.sha }}")
+          if [ -z "${{ github.event.inputs.version }}" ]; then
+            echo "tag=nightly-android-runtime" >> $GITHUB_OUTPUT
+            echo "version=${BASE_VERSION}-nightly.${COMMIT_STAMP}+$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+            echo "channel=nightly" >> $GITHUB_OUTPUT
+            echo "channel_path=nightly" >> $GITHUB_OUTPUT
+            echo "object_prefix=tx-5dr/android-runtime/nightly" >> $GITHUB_OUTPUT
+          else
+            VERSION_NO_V="${{ github.event.inputs.version }}"
+            echo "tag=${{ github.event.inputs.version }}-android-runtime" >> $GITHUB_OUTPUT
+            echo "version=${VERSION_NO_V#v}" >> $GITHUB_OUTPUT
+            echo "channel=release" >> $GITHUB_OUTPUT
+            echo "channel_path=release" >> $GITHUB_OUTPUT
+            echo "object_prefix=tx-5dr/android-runtime/${{ github.event.inputs.version }}-android-runtime" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Android portable runtime
+        shell: bash
+        env:
+          TX5DR_ANDROID_RUNTIME_BASE_URL: ${{ secrets.OSS_BASE_URL }}
+          TX5DR_ANDROID_RUNTIME_OBJECT_PREFIX: ${{ steps.release_info.outputs.object_prefix }}
+        run: |
+          BASE_URL="${TX5DR_ANDROID_RUNTIME_BASE_URL:-https://tx5dr.oss-cn-hangzhou.aliyuncs.com}"
+          scripts/package-android-runtime.sh \
+            --version "${{ steps.release_info.outputs.version }}" \
+            --channel "${{ steps.release_info.outputs.channel }}" \
+            --commit "${{ github.sha }}" \
+            --commit-title "${{ steps.release_info.outputs.commit_title }}" \
+            --build-timestamp "${{ steps.release_info.outputs.timestamp }}" \
+            --base-url "$BASE_URL" \
+            --object-prefix "${{ steps.release_info.outputs.object_prefix }}"
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          cp out/android-runtime/dist/* release-assets/
+          ls -lh release-assets/
+
+      - name: Validate Android runtime manifest
+        shell: bash
+        run: |
+          node - <<'EOF'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const path = require('node:path');
+          const manifest = JSON.parse(fs.readFileSync('release-assets/latest.json', 'utf8'));
+          if (manifest.product !== 'android-runtime') throw new Error('manifest product must be android-runtime');
+          if (!manifest.version) throw new Error('manifest missing version');
+          if (!manifest.commit_title) throw new Error('manifest missing commit_title');
+          if (!Array.isArray(manifest.assets) || manifest.assets.length !== 1) throw new Error('manifest must contain exactly one asset');
+          const asset = manifest.assets[0];
+          if (asset.platform !== 'android' || asset.arch !== 'arm64' || asset.package_type !== 'tar.gz') {
+            throw new Error('manifest asset must be android arm64 tar.gz');
+          }
+          if (!asset.name.endsWith('.tar.gz')) throw new Error(`unexpected artifact name: ${asset.name}`);
+          for (const field of ['url', 'url_cn', 'url_oss', 'url_global', 'sha256', 'size']) {
+            if (!asset[field]) throw new Error(`asset missing ${field}`);
+          }
+          const artifactPath = path.join('release-assets', asset.name);
+          const data = fs.readFileSync(artifactPath);
+          if (data.length !== asset.size) throw new Error(`size mismatch for ${asset.name}`);
+          const sha256 = crypto.createHash('sha256').update(data).digest('hex');
+          if (sha256 !== asset.sha256) throw new Error(`sha256 mismatch for ${asset.name}`);
+          EOF
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tx5dr-android-runtime-linux-arm64
+          path: release-assets/*
+          retention-days: 30
+          overwrite: true
+
+      - name: Create or Update Nightly Android Runtime Release
+        if: steps.release_info.outputs.channel == 'nightly'
+        uses: ncipollo/release-action@v1
+        with:
+          tag: nightly-android-runtime
+          name: "Nightly Build — Android Runtime"
+          body: |
+            ## TX-5DR Nightly Build — Android Runtime
+
+            **Built at** （构建时间）: ${{ steps.release_info.outputs.display_timestamp }}
+            **Commit**: [${{ steps.release_info.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+            **Branch**: ${{ github.ref_name }}
+
+            ### Android Bridge Manifest
+
+            ```text
+            https://tx5dr.oss-cn-hangzhou.aliyuncs.com/tx-5dr/android-runtime/nightly/latest.json
+            ```
+
+            ### Artifact
+
+            - `TX-5DR-${{ steps.release_info.outputs.version }}-android-runtime-linux-arm64.tar.gz`
+            - Portable Linux arm64 runtime for the Android PRoot bridge.
+            - Contains built server/web/client-tools outputs, production node_modules, and packaged model resources.
+
+            This artifact is not an APK and is consumed by the separate Android bridge app.
+          allowUpdates: true
+          removeArtifacts: true
+          artifacts: "release-assets/*"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: true
+          makeLatest: false
+
+      - name: Create Official Android Runtime Release
+        if: steps.release_info.outputs.channel == 'release'
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.release_info.outputs.tag }}
+          name: "TX-5DR Android Runtime ${{ github.event.inputs.version }}"
+          body: |
+            ## TX-5DR Android Runtime ${{ github.event.inputs.version }}
+
+            **Built at** （构建时间）: ${{ steps.release_info.outputs.display_timestamp }}
+            **Commit**: [${{ steps.release_info.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+
+            Portable Linux arm64 runtime for the separate Android PRoot bridge app.
+          allowUpdates: true
+          removeArtifacts: true
+          artifacts: "release-assets/*"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: false
+          makeLatest: false
+
+      - name: Install ossutil
+        if: env.OSS_BASE_URL != '' && env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != ''
+        run: bash scripts/install-ossutil.sh
+
+      - name: Configure ossutil
+        if: env.OSS_BASE_URL != '' && env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != ''
+        shell: bash
+        run: |
+          oss_region="${OSS_REGION:-}"
+          oss_endpoint_host="${OSS_ENDPOINT#https://}"
+          oss_endpoint_host="${oss_endpoint_host#http://}"
+          oss_endpoint_host="${oss_endpoint_host%%/*}"
+
+          if [ -z "${oss_region}" ]; then
+            if [[ "${oss_endpoint_host}" =~ oss-([a-z0-9-]+)\.aliyuncs\.com$ ]]; then
+              oss_region="${BASH_REMATCH[1]}"
+            fi
+          fi
+
+          if [ -z "${oss_region}" ]; then
+            echo "Failed to determine OSS region from OSS_ENDPOINT=${OSS_ENDPOINT}" >&2
+            echo "Please configure the OSS_REGION GitHub secret, for example: cn-hangzhou" >&2
+            exit 1
+          fi
+
+          cat > "${RUNNER_TEMP}/.ossutilconfig" <<EOF
+          [Credentials]
+          language = EN
+          endpoint = ${OSS_ENDPOINT}
+          region = ${oss_region}
+          accessKeyID = ${OSS_ACCESS_KEY_ID}
+          accessKeySecret = ${OSS_ACCESS_KEY_SECRET}
+          EOF
+
+      - name: Upload Android runtime to OSS
+        if: env.OSS_BASE_URL != '' && env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != ''
+        run: |
+          for file in release-assets/*; do
+            ossutil cp "$file" "oss://${OSS_BUCKET}/${{ steps.release_info.outputs.object_prefix }}/$(basename "$file")" --force -c "${RUNNER_TEMP}/.ossutilconfig"
+          done
+          ossutil cp "release-assets/latest.json" "oss://${OSS_BUCKET}/tx-5dr/android-runtime/${{ steps.release_info.outputs.channel_path }}/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
+          ossutil cp "release-assets/latest.json" "oss://${OSS_BUCKET}/tx-5dr/android-runtime/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
