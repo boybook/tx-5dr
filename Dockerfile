@@ -159,7 +159,8 @@ COPY --from=builder /app/yarn.lock ./yarn.lock
 COPY --from=builder /app/turbo.json ./turbo.json
 
 RUN rm -rf /tmp/tx5dr-linux/
-RUN node -e "const a=require('audify'); const e=new a.OpusEncoder(48000,1,a.OpusApplication.OPUS_APPLICATION_RESTRICTED_LOWDELAY); const d=new a.OpusDecoder(48000,1); const p=e.encode(Buffer.alloc(960*2),960); d.decode(p,960); console.log('audify Opus runtime ok');"
+RUN node -e "const a=require('audify'); const e=new a.OpusEncoder(48000,1,a.OpusApplication.OPUS_APPLICATION_RESTRICTED_LOWDELAY); const d=new a.OpusDecoder(48000,1); const p=e.encode(Buffer.alloc(960*2),960); d.decode(p,960); console.log('audify Opus runtime ok');" \
+    && node -e "import('wsjtx-lib').then(()=>console.log('wsjtx-lib runtime ok'))"
 
 # Nginx configuration: shared template + Docker-specific wrapper
 COPY docker/nginx-wrapper.conf /etc/nginx/nginx.conf
