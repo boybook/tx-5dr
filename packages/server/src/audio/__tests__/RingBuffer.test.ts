@@ -36,6 +36,27 @@ describe('RingBuffer latest-window reads', () => {
     expect(readFloats(ringBuffer.readFromSlotStart(0, 1000))).toEqual([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]);
   });
 
+  it('anchors producer clock on first audio write instead of construction time', () => {
+    let now = 0;
+    const ringBuffer = new RingBuffer(1000, 1000, () => now);
+
+    now = 5000;
+    ringBuffer.write(floats([0.1, 0.2, 0.3, 0.4, 0.5]));
+
+    expect(ringBuffer.getStatus()).toMatchObject({
+      startTimestamp: 5000,
+      totalSamplesWritten: 5,
+      wallClockSamples: 0,
+      producerLeadMs: 5,
+    });
+
+    now = 5005;
+    expect(ringBuffer.getStatus()).toMatchObject({
+      wallClockSamples: 5,
+      producerLeadMs: 0,
+    });
+  });
+
   it('drops the oldest samples on overflow and keeps the newest tail', () => {
     const ringBuffer = new RingBuffer(10, 500, () => 0);
 

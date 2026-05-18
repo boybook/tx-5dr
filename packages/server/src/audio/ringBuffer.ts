@@ -44,6 +44,11 @@ export class RingBuffer {
     const writeTimestamp = this.now();
     let inputOffset = 0;
 
+    if (this.totalSamplesWritten === 0) {
+      this.startTimestamp = writeTimestamp;
+      this.lastWriteTimestamp = writeTimestamp;
+    }
+
     // 在写入前一次性检查可用空间
     const freeSpace = this.size - this.storedSamples;
 

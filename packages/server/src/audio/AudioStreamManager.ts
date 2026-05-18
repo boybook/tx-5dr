@@ -1169,10 +1169,21 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       return false;
     }
 
+    if (this.isAndroidBridgeAlsaOutputUnderrun(normalized)) {
+      return false;
+    }
+
     return normalized.includes('no such device')
       || normalized.includes('audio write error')
       || normalized.includes('device unavailable')
       || normalized.includes('invalid device');
+  }
+
+  private isAndroidBridgeAlsaOutputUnderrun(normalizedMessage: string): boolean {
+    return process.env.TX5DR_RUNTIME_FLAVOR === 'android-bridge'
+      && normalizedMessage.includes('rtapialsa::callbackevent')
+      && normalizedMessage.includes('audio write error')
+      && normalizedMessage.includes('underrun');
   }
 
   private isFatalRtAudioErrorType(type: number): boolean {

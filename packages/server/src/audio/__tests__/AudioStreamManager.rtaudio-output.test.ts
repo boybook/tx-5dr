@@ -166,6 +166,7 @@ import { RingBuffer } from '../ringBuffer.js';
 describe('AudioStreamManager RtAudio output diagnostics', () => {
   const originalForceWatchdog = process.env.TX5DR_FORCE_WINDOWS_AUDIO_WATCHDOG;
   const originalConsumeDiagnostics = process.env.TX5DR_RTAUDIO_CONSUME_DIAGNOSTICS;
+  const originalRuntimeFlavor = process.env.TX5DR_RUNTIME_FLAVOR;
 
   beforeEach(() => {
     mockRtAudioState.consumeOnWrite = true;
@@ -198,6 +199,11 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
       delete process.env.TX5DR_RTAUDIO_CONSUME_DIAGNOSTICS;
     } else {
       process.env.TX5DR_RTAUDIO_CONSUME_DIAGNOSTICS = originalConsumeDiagnostics;
+    }
+    if (originalRuntimeFlavor === undefined) {
+      delete process.env.TX5DR_RUNTIME_FLAVOR;
+    } else {
+      process.env.TX5DR_RUNTIME_FLAVOR = originalRuntimeFlavor;
     }
     vi.restoreAllMocks();
   });
@@ -453,6 +459,35 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
         suppressedCount: 2,
         suppressWindowMs: 5000,
       }),
+    );
+  });
+
+  it('treats Android bridge ALSA output underruns as non-fatal warnings', async () => {
+    process.env.TX5DR_RUNTIME_FLAVOR = 'android-bridge';
+    const manager = new AudioStreamManager();
+    const runtimeErrors: Error[] = [];
+    manager.on('error', (error) => runtimeErrors.push(error));
+    await manager.startOutput();
+    vi.clearAllMocks();
+
+    const output = (manager as unknown as { rtAudioOutput: { emitRtAudioError: (type: number, message: string) => void } }).rtAudioOutput;
+    const message = 'RtApiAlsa::callbackEvent: audio write error, underrun.';
+
+    output.emitRtAudioError(1, message);
+
+    expect(runtimeErrors).toHaveLength(0);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      'RtAudio output callback warning',
+      expect.objectContaining({
+        type: 1,
+        typeName: 'DEBUG_WARNING',
+        message,
+        fatal: false,
+      }),
+    );
+    expect(mockLogger.error).not.toHaveBeenCalledWith(
+      'RtAudio output runtime error',
+      expect.anything(),
     );
   });
 
