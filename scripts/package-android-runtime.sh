@@ -160,6 +160,23 @@ if [[ -d "$NM/onnxruntime-node/bin/napi-v6" ]]; then
          "$NM/onnxruntime-node/bin/napi-v6/win32" || true
 fi
 
+# Android/PRoot cannot enable an executable stack on demand. The Linux server
+# and Electron paths use GLIBC_TUNABLES for wsjtx-lib, but Android rejects that
+# with EPERM, so clear PT_GNU_STACK on the packaged core library for this
+# Android-only runtime artifact.
+WSJTX_CORE="$NM/wsjtx-lib/prebuilds/linux-arm64/libwsjtx_core.so"
+if [[ -f "$WSJTX_CORE" ]]; then
+  if ! command -v patchelf >/dev/null 2>&1; then
+    echo "patchelf is required to clear execstack on $WSJTX_CORE" >&2
+    exit 1
+  fi
+  patchelf --clear-execstack "$WSJTX_CORE"
+  if ! patchelf --print-execstack "$WSJTX_CORE" | grep -q "execstack: -"; then
+    echo "Failed to clear execstack on $WSJTX_CORE" >&2
+    exit 1
+  fi
+fi
+
 tar -C "$APP_ROOT" -czf "$DIST_DIR/$ARTIFACT_NAME" .
 SHA256="$(shasum -a 256 "$DIST_DIR/$ARTIFACT_NAME" | awk '{print $1}')"
 SIZE="$(node -e 'process.stdout.write(String(require("node:fs").statSync(process.argv[1]).size))' "$DIST_DIR/$ARTIFACT_NAME")"

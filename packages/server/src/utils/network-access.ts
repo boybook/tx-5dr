@@ -23,7 +23,7 @@ export interface NetworkAccessInfoOptions {
 
 export function getNetworkAccessInfo(options: NetworkAccessInfoOptions = {}): NetworkAccessInfo {
   const webPort = resolveWebPort(options);
-  const interfaces = options.networkInterfaces ?? os.networkInterfaces();
+  const interfaces = options.networkInterfaces ?? safeNetworkInterfaces();
   const addresses: NetworkAccessAddress[] = [];
 
   for (const nets of Object.values(interfaces)) {
@@ -40,9 +40,26 @@ export function getNetworkAccessInfo(options: NetworkAccessInfoOptions = {}): Ne
 
   return {
     addresses,
-    hostname: options.hostname ?? os.hostname(),
+    hostname: options.hostname ?? safeHostname(),
     webPort,
   };
+}
+
+function safeNetworkInterfaces(): NodeJS.Dict<NetworkInterfaceInfo[]> {
+  try {
+    return os.networkInterfaces();
+  } catch (error) {
+    console.warn('[NetworkAccess] Failed to enumerate network interfaces', error);
+    return {};
+  }
+}
+
+function safeHostname(): string {
+  try {
+    return os.hostname();
+  } catch {
+    return 'localhost';
+  }
 }
 
 function resolveWebPort(options: NetworkAccessInfoOptions): number {
