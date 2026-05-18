@@ -5,6 +5,7 @@ describe('server ready helpers', () => {
   it('auto-negotiates when PORT is not explicit', () => {
     expect(resolveServerPortOptions({} as NodeJS.ProcessEnv)).toMatchObject({
       requestedPort: 4000,
+      listenHost: '0.0.0.0',
       autoPort: true,
       scanSteps: 50,
     });
@@ -13,7 +14,17 @@ describe('server ready helpers', () => {
   it('keeps explicit PORT strict by default', () => {
     expect(resolveServerPortOptions({ PORT: '4100' } as NodeJS.ProcessEnv)).toMatchObject({
       requestedPort: 4100,
+      listenHost: '0.0.0.0',
       autoPort: false,
+    });
+  });
+
+  it('lets Android bridge force a loopback server listen host', () => {
+    expect(resolveServerPortOptions({
+      HOST: '0.0.0.0',
+      TX5DR_SERVER_HOST: '127.0.0.1',
+    } as NodeJS.ProcessEnv)).toMatchObject({
+      listenHost: '127.0.0.1',
     });
   });
 
@@ -42,6 +53,7 @@ describe('server ready helpers', () => {
   it('creates a ready state with the negotiated base URL', () => {
     expect(createServerReadyState({
       requestedPort: 4000,
+      listenHost: '0.0.0.0',
       httpPort: 4001,
       autoPort: true,
     })).toMatchObject({

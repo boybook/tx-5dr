@@ -103,7 +103,7 @@ async function listenWithPortNegotiation(
   for (let step = 0; step <= options.scanSteps; step += 1) {
     const candidatePort = options.requestedPort + step;
     try {
-      await server.listen({ port: candidatePort, host: '0.0.0.0' });
+      await server.listen({ port: candidatePort, host: options.listenHost });
       if (candidatePort !== options.requestedPort) {
         logger.warn('server port changed after negotiation', {
           requestedPort: options.requestedPort,
@@ -124,6 +124,7 @@ async function listenWithPortNegotiation(
       if (isAddressInUseError(error)) {
         await writeServerReadyFile(createServerReadyState({
           requestedPort: options.requestedPort,
+          listenHost: options.listenHost,
           httpPort: null,
           autoPort: options.autoPort,
           error: {
@@ -189,11 +190,12 @@ async function start() {
     const actualPort = await listenWithPortNegotiation(server, portOptions);
     await writeServerReadyFile(createServerReadyState({
       requestedPort: portOptions.requestedPort,
+      listenHost: portOptions.listenHost,
       httpPort: actualPort,
       autoPort: portOptions.autoPort,
     }));
     bootstrapCoordinator.completePhase('core-http');
-    logger.info(`TX-5DR server running on http://localhost:${actualPort}`);
+    logger.info(`TX-5DR server listening on ${portOptions.listenHost}:${actualPort}`);
 
     // 启动引擎（仅在有激活的 Profile 时）
     const clockManager = DigitalRadioEngine.getInstance();

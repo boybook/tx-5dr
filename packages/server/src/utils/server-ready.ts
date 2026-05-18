@@ -6,6 +6,7 @@ export const DEFAULT_SERVER_PORT_SCAN_STEPS = 50;
 
 export interface ServerPortOptions {
   requestedPort: number;
+  listenHost: string;
   autoPort: boolean;
   scanSteps: number;
 }
@@ -14,6 +15,7 @@ export interface ServerReadyState {
   pid: number;
   timestamp: string;
   requestedPort: number;
+  listenHost: string;
   httpPort: number | null;
   baseUrl: string | null;
   healthOk: boolean;
@@ -48,11 +50,13 @@ function isDisabled(value: string | undefined): boolean {
 export function resolveServerPortOptions(env: NodeJS.ProcessEnv = process.env): ServerPortOptions {
   const hasExplicitPort = typeof env.PORT === 'string' && env.PORT.trim() !== '';
   const requestedPort = parsePort(env.PORT, DEFAULT_SERVER_PORT);
+  const listenHost = env.TX5DR_SERVER_HOST?.trim() || env.HOST?.trim() || '0.0.0.0';
   const forcedAuto = isEnabled(env.TX5DR_SERVER_PORT_AUTO);
   const forcedStrict = isEnabled(env.TX5DR_SERVER_PORT_STRICT) || isDisabled(env.TX5DR_SERVER_PORT_AUTO);
 
   return {
     requestedPort,
+    listenHost,
     autoPort: !forcedStrict && (forcedAuto || !hasExplicitPort),
     scanSteps: parseNonNegativeInteger(env.TX5DR_SERVER_PORT_SCAN_STEPS, DEFAULT_SERVER_PORT_SCAN_STEPS),
   };
@@ -73,6 +77,7 @@ export async function writeServerReadyFile(state: ServerReadyState, env: NodeJS.
 
 export function createServerReadyState(options: {
   requestedPort: number;
+  listenHost?: string;
   httpPort: number | null;
   autoPort: boolean;
   error?: ServerReadyState['error'];
@@ -82,6 +87,7 @@ export function createServerReadyState(options: {
     pid: process.pid,
     timestamp: new Date().toISOString(),
     requestedPort: options.requestedPort,
+    listenHost: options.listenHost ?? '0.0.0.0',
     httpPort: options.httpPort,
     baseUrl,
     healthOk: Boolean(options.httpPort),

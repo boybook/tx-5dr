@@ -1,4 +1,5 @@
 import os, { type NetworkInterfaceInfo } from 'node:os';
+import { readFileSync } from 'node:fs';
 
 const DEFAULT_WEB_PORT = 8076;
 
@@ -23,6 +24,9 @@ export interface NetworkAccessInfoOptions {
 
 export function getNetworkAccessInfo(options: NetworkAccessInfoOptions = {}): NetworkAccessInfo {
   const webPort = resolveWebPort(options);
+  const injected = getInjectedNetworkAccessInfo(options, webPort);
+  if (injected) return injected;
+
   const interfaces = options.networkInterfaces ?? safeNetworkInterfaces();
   const addresses: NetworkAccessAddress[] = [];
 
@@ -43,6 +47,51 @@ export function getNetworkAccessInfo(options: NetworkAccessInfoOptions = {}): Ne
     hostname: options.hostname ?? safeHostname(),
     webPort,
   };
+}
+
+function getInjectedNetworkAccessInfo(options: NetworkAccessInfoOptions, fallbackWebPort: number): NetworkAccessInfo | null {
+  const env = options.env ?? process.env;
+  const filePath = env.TX5DR_NETWORK_ACCESS_FILE?.trim();
+  if (!filePath) return null;
+
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf-8')) as {
+      hostname?: unknown;
+      webPort?: unknown;
+      addresses?: Array<{ ip?: unknown }>;
+    };
+    const webPort = parsePort(parsed.webPort) ?? fallbackWebPort;
+    const addresses = Array.isArray(parsed.addresses)
+      ? parsed.addresses
+        .map(address => typeof address?.ip === 'string' ? address.ip.trim() : '')
+        .filter(isUsableIpv4)
+        .map(ip => ({ ip, url: `http://${ip}:${webPort}` }))
+      : [];
+    const hostname = typeof parsed.hostname === 'string' && parsed.hostname.trim()
+      ? parsed.hostname.trim()
+      : (options.hostname ?? 'android');
+    return { addresses, hostname, webPort };
+  } catch (error) {
+    console.warn('[NetworkAccess] Failed to read injected network access file', {
+      filePath,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      addresses: [],
+      hostname: options.hostname ?? 'android',
+      webPort: fallbackWebPort,
+    };
+  }
+}
+
+function isUsableIpv4(value: string): boolean {
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(value)) return false;
+  const parts = value.split('.').map(part => Number(part));
+  if (parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  if (parts[0] === 127) return false;
+  if (parts[0] === 169 && parts[1] === 254) return false;
+  if (parts[0] === 0) return false;
+  return true;
 }
 
 function safeNetworkInterfaces(): NodeJS.Dict<NetworkInterfaceInfo[]> {

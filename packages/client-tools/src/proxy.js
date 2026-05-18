@@ -27,6 +27,7 @@ const HTTPS_REDIRECT_EXTERNAL_HTTP = process.env.HTTPS_REDIRECT_EXTERNAL_HTTP !=
 const READY_FILE = process.env.TX5DR_CLIENT_TOOLS_READY_FILE || '';
 const LOG_FILE = process.env.TX5DR_CLIENT_TOOLS_LOG_FILE || '';
 const PORT_SCAN_STEPS = Number(process.env.TX5DR_PORT_SCAN_STEPS || DEFAULT_PORT_SCAN_STEPS);
+const NETWORK_ACCESS_FILE = process.env.TX5DR_NETWORK_ACCESS_FILE || '';
 
 // DEFAULT to packaged path layout; allow override via STATIC_DIR
 const resourcesPath = process.env.APP_RESOURCES || process.cwd();
@@ -36,6 +37,39 @@ let activeHttpPort = PORT;
 let activeHttpsPort = HTTPS_PORT;
 let httpsAvailable = false;
 let httpsStartupError = null;
+
+function isUsableIpv4(value) {
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(value)) return false;
+  const parts = value.split('.').map(part => Number(part));
+  if (parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  if (parts[0] === 127) return false;
+  if (parts[0] === 169 && parts[1] === 254) return false;
+  if (parts[0] === 0) return false;
+  return true;
+}
+
+function readPublicUrls(port) {
+  if (!NETWORK_ACCESS_FILE) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(NETWORK_ACCESS_FILE, 'utf-8'));
+    const addresses = Array.isArray(parsed.addresses) ? parsed.addresses : [];
+    const seen = new Set();
+    const urls = [];
+    for (const address of addresses) {
+      const ip = typeof address?.ip === 'string' ? address.ip.trim() : '';
+      if (!isUsableIpv4(ip) || seen.has(ip)) continue;
+      seen.add(ip);
+      urls.push(`http://${ip}:${port}`);
+    }
+    return urls;
+  } catch (err) {
+    console.warn('[client-tools] failed to read network access file:', {
+      file: NETWORK_ACCESS_FILE,
+      message: err?.message || String(err),
+    });
+    return [];
+  }
+}
 
 const originalConsole = {
   log: console.log.bind(console),
@@ -518,6 +552,8 @@ function writeReadyFile(state) {
       requestedPort: PORT,
       httpPort: state.httpPort ?? null,
       httpOk: Boolean(state.httpOk),
+      listenHost: HOST,
+      publicUrls: state.httpPort ? readPublicUrls(state.httpPort) : [],
       requestedHttpsPort: HTTPS_PORT,
       httpsPort: state.httpsPort ?? null,
       httpsOk: Boolean(state.httpsOk),
@@ -669,6 +705,8 @@ Promise.all([
   });
   console.info('[client-tools] startup complete', {
     httpPort: httpResult.port,
+    listenHost: HOST,
+    publicUrls: readPublicUrls(httpResult.port),
     httpsPort: httpsResult.ok ? httpsResult.port : null,
     httpsEnabled: HTTPS_ENABLE,
     httpsOk: Boolean(httpsResult.ok && httpsResult.port),
