@@ -30,7 +30,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-ARTIFACT_NAME="TX-5DR-${VERSION}-android-runtime-linux-arm64.tar.gz"
+SAFE_VERSION="$(printf '%s' "$VERSION" | sed 's/[^A-Za-z0-9._-]/./g')"
+ARTIFACT_NAME="TX-5DR-${SAFE_VERSION}-android-runtime-linux-arm64.tar.gz"
 rm -rf "$WORK_DIR" "$DIST_DIR"
 mkdir -p "$WORK_DIR/tx5dr" "$DIST_DIR"
 
