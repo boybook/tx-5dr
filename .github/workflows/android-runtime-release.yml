@@ -91,10 +91,10 @@ jobs:
       - name: Build Android portable runtime
         shell: bash
         env:
-          TX5DR_ANDROID_RUNTIME_BASE_URL: ${{ secrets.OSS_BASE_URL }}
+          TX5DR_ANDROID_RUNTIME_BASE_URL: https://dl.tx5dr.com
           TX5DR_ANDROID_RUNTIME_OBJECT_PREFIX: ${{ steps.release_info.outputs.object_prefix }}
         run: |
-          BASE_URL="${TX5DR_ANDROID_RUNTIME_BASE_URL:-https://tx5dr.oss-cn-hangzhou.aliyuncs.com}"
+          BASE_URL="${TX5DR_ANDROID_RUNTIME_BASE_URL:-https://dl.tx5dr.com}"
           scripts/package-android-runtime.sh \
             --version "${{ steps.release_info.outputs.version }}" \
             --channel "${{ steps.release_info.outputs.channel }}" \
@@ -162,7 +162,7 @@ jobs:
             ### Android Bridge Manifest
 
             ```text
-            https://tx5dr.oss-cn-hangzhou.aliyuncs.com/tx-5dr/android-runtime/nightly/latest.json
+            https://dl.tx5dr.com/tx-5dr/android-runtime/nightly/latest.json
             ```
 
             ### Artifact

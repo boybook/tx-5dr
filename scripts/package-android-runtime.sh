@@ -12,7 +12,7 @@ SHORT="${COMMIT:0:7}"
 BUILD_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 COMMIT_TITLE="$(git -C "$PROJECT_ROOT" show -s --format=%s "$COMMIT" 2>/dev/null || echo "")"
 ARTIFACT_NAME="TX-5DR-${VERSION}-android-runtime-linux-arm64.tar.gz"
-BASE_URL="${TX5DR_ANDROID_RUNTIME_BASE_URL:-https://tx5dr.oss-cn-hangzhou.aliyuncs.com}"
+BASE_URL="${TX5DR_ANDROID_RUNTIME_BASE_URL:-https://dl.tx5dr.com}"
 OBJECT_PREFIX="${TX5DR_ANDROID_RUNTIME_OBJECT_PREFIX:-tx-5dr/android-runtime/${CHANNEL}}"
 
 while [[ $# -gt 0 ]]; do
@@ -63,7 +63,6 @@ cp "$PROJECT_ROOT/yarn.lock" "$APP_ROOT/yarn.lock"
 mkdir -p "$APP_ROOT/node_modules"
 rsync -a --delete \
   --exclude='.cache' \
-  --exclude='*/src' \
   --exclude='*/test' \
   --exclude='*/tests' \
   "$PROJECT_ROOT/node_modules/" "$APP_ROOT/node_modules/"
@@ -73,14 +72,92 @@ for pkg in builtin-plugins client-tools contracts core plugin-api rigctld-server
   ln -s "../../packages/$pkg" "$APP_ROOT/node_modules/@tx5dr/$pkg"
 done
 
-# Keep Linux arm64 native prebuilds only where packages provide multiple platforms.
-find "$APP_ROOT/node_modules" -path '*/prebuilds/darwin-*' -type d -prune -exec rm -rf {} + 2>/dev/null || true
-find "$APP_ROOT/node_modules" -path '*/prebuilds/win32-*' -type d -prune -exec rm -rf {} + 2>/dev/null || true
-find "$APP_ROOT/node_modules" -path '*/prebuilds/linux-x64' -type d -prune -exec rm -rf {} + 2>/dev/null || true
-if [[ -d "$APP_ROOT/node_modules/onnxruntime-node/bin/napi-v6" ]]; then
-  rm -rf "$APP_ROOT/node_modules/onnxruntime-node/bin/napi-v6/linux/x64" \
-         "$APP_ROOT/node_modules/onnxruntime-node/bin/napi-v6/darwin" \
-         "$APP_ROOT/node_modules/onnxruntime-node/bin/napi-v6/win32" || true
+NM="$APP_ROOT/node_modules"
+
+echo "Cleaning Android runtime node_modules..."
+REMOVE_PACKAGES=(
+  electron @electron electron-builder @electron-builder electron-squirrel-startup
+  electron-installer-common electron-installer-debian electron-installer-redhat
+  rollup @rollup vite @vitejs esbuild @esbuild postject sucrase
+  appdmg jiti @swc webpack
+  typescript @types eslint @eslint @eslint-community @typescript-eslint prettier
+  @heroui @heroicons @fortawesome caniuse-lite
+  tailwindcss tailwind-merge tailwind-variants
+  @react-aria @react-stately @react-types @formatjs
+  react react-dom framer-motion motion-dom motion-utils
+  @internationalized
+  postcss autoprefixer lilconfig postcss-load-config
+  react-refresh react-is scheduler csstype
+  @babel @jridgewell yaml source-map pngjs bluebird rxjs
+  vitest @vitest chai @statelyai autocannon clinic tsx
+  esquery graphemer espree esrecurse estraverse estree-walker esutils
+  acorn acorn-jsx acorn-walk doctrine optionator
+  resedit pe-library dir-compare flora-colossus galactus
+  got global-agent global-dirs roarr serialize-error
+  listr2 ora log-symbols log-update
+  sudo-prompt cross-zip sumchecker
+  @malept @gar @hapi @jest
+  superjson lodash axios png-to-ico node-gyp segfault-handler
+  inquirer @inquirer
+  @tensorflow
+  flag-icons showdown i18next i18next-browser-languagedetector react-i18next
+  @tanstack recharts d3-array d3-color d3-format d3-interpolate d3-path
+  d3-scale d3-shape d3-time d3-time-format victory-vendor
+  clsx date-fns
+  cmake-js @clinic
+  turbo turbo-darwin-arm64 turbo-darwin-x64 turbo-linux-64 turbo-linux-arm64
+)
+for pkg in "${REMOVE_PACKAGES[@]}"; do
+  rm -rf "$NM/$pkg" 2>/dev/null || true
+done
+find "$NM" -maxdepth 1 -name "turbo*" -exec rm -rf {} + 2>/dev/null || true
+
+# Keep compiled native payloads but remove source/build/test/documentation bulk.
+rm -rf "$NM/audify/vendor" "$NM/audify/src" "$NM/audify/binding.gyp" 2>/dev/null || true
+rm -rf "$NM/naudiodon2/src" "$NM/naudiodon2/binding.gyp" 2>/dev/null || true
+rm -rf "$NM/node-datachannel/src" \
+       "$NM/node-datachannel/CMakeLists.txt" \
+       "$NM/node-datachannel/BULDING.md" \
+       "$NM/node-datachannel/rollup.config.mjs" 2>/dev/null || true
+find "$NM" -type d -name ".npm" -exec rm -rf {} + 2>/dev/null || true
+for dirName in test tests __tests__ docs doc example examples .github; do
+  find "$NM" -type d -name "$dirName" -exec rm -rf {} + 2>/dev/null || true
+done
+find "$NM" -name "*.map" -delete 2>/dev/null || true
+find "$NM" -name "*.d.ts" -delete 2>/dev/null || true
+find "$NM" -name "*.d.ts.map" -delete 2>/dev/null || true
+find "$NM" -name "*.d.cts" -delete 2>/dev/null || true
+find "$NM" -name "*.d.mts" -delete 2>/dev/null || true
+find "$NM" -maxdepth 2 -iname "README*" -delete 2>/dev/null || true
+find "$NM" -maxdepth 2 -iname "CHANGELOG*" -delete 2>/dev/null || true
+find "$NM" -maxdepth 2 -iname "HISTORY*" -delete 2>/dev/null || true
+find "$NM" -maxdepth 2 -name ".eslintrc*" -delete 2>/dev/null || true
+find "$NM" -maxdepth 2 -name "tsconfig*" -delete 2>/dev/null || true
+find "$NM" -maxdepth 2 -name ".prettierrc*" -delete 2>/dev/null || true
+find "$NM" -name ".cache" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# Keep only Linux arm64 native prebuilds for the Android PRoot Debian runtime.
+for prebuilds_dir in \
+  "$NM/wsjtx-lib/prebuilds" \
+  "$NM/hamlib/prebuilds" \
+  "$NM/@serialport/bindings-cpp/prebuilds"; do
+  if [[ -d "$prebuilds_dir" ]]; then
+    for subdir in "$prebuilds_dir"/*/; do
+      [[ -d "$subdir" ]] || continue
+      if [[ "$(basename "$subdir")" != "linux-arm64" ]]; then
+        rm -rf "$subdir"
+      fi
+    done
+  fi
+done
+find "$NM" -path '*/prebuilds/darwin-*' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+find "$NM" -path '*/prebuilds/win32-*' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+find "$NM" -path '*/prebuilds/android-*' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+find "$NM" -path '*/prebuilds/linux-x64' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+if [[ -d "$NM/onnxruntime-node/bin/napi-v6" ]]; then
+  rm -rf "$NM/onnxruntime-node/bin/napi-v6/linux/x64" \
+         "$NM/onnxruntime-node/bin/napi-v6/darwin" \
+         "$NM/onnxruntime-node/bin/napi-v6/win32" || true
 fi
 
 tar -C "$APP_ROOT" -czf "$DIST_DIR/$ARTIFACT_NAME" .
