@@ -278,7 +278,7 @@ export const VoiceKeyerCard: React.FC<VoiceKeyerCardProps> = ({
     }
     onCollapsedChange?.(resolved);
   }, [collapsed, isCollapsed, onCollapsedChange]);
-  const canOperate = isOperator && hasCallsign && connection.state.isConnected;
+  const canOperate = isOperator && hasCallsign && Boolean(selectedOperatorId) && connection.state.isConnected;
   const activeForCallsign = status.active && status.callsign === callsign;
   const activeSlot = activeForCallsign ? status.slotId : null;
 
@@ -566,8 +566,8 @@ export const VoiceKeyerCard: React.FC<VoiceKeyerCardProps> = ({
   const playSlot = useCallback((slot: VoiceKeyerSlot, repeat = false, startImmediately = true) => {
     if (!canOperate || !slot.hasAudio || !callsign) return;
     stopPreview();
-    radioService?.playVoiceKeyer(callsign, slot.id, repeat, startImmediately);
-  }, [callsign, canOperate, radioService, stopPreview]);
+    radioService?.playVoiceKeyer(callsign, slot.id, repeat, startImmediately, selectedOperatorId ?? undefined);
+  }, [callsign, canOperate, radioService, selectedOperatorId, stopPreview]);
 
   const stopKeyer = useCallback(() => {
     radioService?.stopVoiceKeyer();

@@ -503,8 +503,11 @@ export class WSClient extends WSMessageHandler {
    * 请求语音 PTT 锁
    * @param voiceAudioClientId - Voice audio WS client ID to associate with this PTT session
    */
-  requestVoicePTT(voiceAudioClientId?: string): void {
-    this.send(WSMessageType.VOICE_PTT_REQUEST, voiceAudioClientId ? { voiceAudioClientId } : undefined);
+  requestVoicePTT(voiceAudioClientId?: string, operatorId?: string): void {
+    this.send(WSMessageType.VOICE_PTT_REQUEST, {
+      ...(voiceAudioClientId ? { voiceAudioClientId } : {}),
+      ...(operatorId ? { operatorId } : {}),
+    });
   }
 
   /**
@@ -514,8 +517,14 @@ export class WSClient extends WSMessageHandler {
     this.send(WSMessageType.VOICE_PTT_RELEASE);
   }
 
-  playVoiceKeyer(callsign: string, slotId: string, repeat = false, startImmediately = true): void {
-    this.send(WSMessageType.VOICE_KEYER_PLAY, { callsign, slotId, repeat, startImmediately });
+  playVoiceKeyer(callsign: string, slotId: string, repeat = false, startImmediately = true, operatorId?: string): void {
+    this.send(WSMessageType.VOICE_KEYER_PLAY, {
+      callsign,
+      slotId,
+      repeat,
+      startImmediately,
+      ...(operatorId ? { operatorId } : {}),
+    });
   }
 
   stopVoiceKeyer(): void {

@@ -529,9 +529,9 @@ export class RadioService {
   /**
    * 请求语音 PTT 锁
    */
-  requestVoicePTT(participantIdentity?: string): void {
+  requestVoicePTT(participantIdentity?: string, operatorId?: string): void {
     if (this.isConnected) {
-      this.wsClient.requestVoicePTT(participantIdentity);
+      this.wsClient.requestVoicePTT(participantIdentity, operatorId);
     }
   }
 
@@ -544,9 +544,9 @@ export class RadioService {
     }
   }
 
-  playVoiceKeyer(callsign: string, slotId: string, repeat = false, startImmediately = true): void {
+  playVoiceKeyer(callsign: string, slotId: string, repeat = false, startImmediately = true, operatorId?: string): void {
     if (this.isConnected) {
-      this.wsClient.playVoiceKeyer(callsign, slotId, repeat, startImmediately);
+      this.wsClient.playVoiceKeyer(callsign, slotId, repeat, startImmediately, operatorId);
     }
   }
 

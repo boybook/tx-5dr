@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useConnection, usePTTState } from '../../store/radioStore';
+import { useConnection, useCurrentOperatorId, usePTTState } from '../../store/radioStore';
 import { useAuth, useHasMinRole } from '../../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
@@ -114,6 +114,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   const { t } = useTranslation(['voice', 'common']);
   const { state: authState } = useAuth();
   const connection = useConnection();
+  const { currentOperatorId } = useCurrentOperatorId();
   const { voicePttLock } = usePTTState();
   const isOperator = useHasMinRole(UserRole.OPERATOR);
   const isAdmin = useHasMinRole(UserRole.ADMIN);
@@ -276,7 +277,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   }, [releaseWakeLock, voiceCaptureController, voicePttLock]);
 
   const startManualPtt = useCallback(async () => {
-    if (!isOperator || !radioService || manualPttActiveRef.current) return;
+    if (!isOperator || !radioService || !currentOperatorId || manualPttActiveRef.current) return;
     if (pttState === 'locked-by-other') return;
 
     const pressId = pressTrackerRef.current.beginPress();
@@ -310,7 +311,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
       }
 
       manualPttOwnsLockRef.current = true;
-      radioService.requestVoicePTT(participantIdentity);
+      radioService.requestVoicePTT(participantIdentity, currentOperatorId);
       voiceCaptureController.setPTTActive(true);
     } catch (error) {
       pressTrackerRef.current.cancelPress(pressId);
@@ -328,7 +329,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
     }
 
     logger.debug('PTT toggled on');
-  }, [acquireWakeLock, getExternalPttState, isOperator, pttState, radioService, voiceCaptureController]);
+  }, [acquireWakeLock, currentOperatorId, getExternalPttState, isOperator, pttState, radioService, voiceCaptureController]);
 
   const stopManualPtt = useCallback(() => {
     const { pressId, shouldRelease } = pressTrackerRef.current.releaseActivePress();
@@ -361,12 +362,13 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
       return;
     }
 
-    if (!isOperator || !radioService || pttState === 'locked-by-other') return;
+    if (!isOperator || !radioService || !currentOperatorId || pttState === 'locked-by-other') return;
     if (shouldBlockForHttpsWarning()) return;
 
     await startManualPtt();
   }, [
     isOperator,
+    currentOperatorId,
     pttState,
     radioService,
     shouldBlockForHttpsWarning,

@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { useConnection, useRadioState } from '../store/radioStore';
+import { useConnection, useCurrentOperatorId, useRadioState } from '../store/radioStore';
 import type { CWKeyerStatus, CWKeyerConfig, CWPlaceholderValues } from '@tx5dr/contracts';
 import { WSMessageType } from '@tx5dr/contracts';
 
@@ -9,6 +9,7 @@ import { WSMessageType } from '@tx5dr/contracts';
 export function useCWKeyer() {
   const connection = useConnection();
   const radioState = useRadioState();
+  const { currentOperatorId } = useCurrentOperatorId();
   const radioService = connection.state.radioService;
 
   const cwKeyerStatus: CWKeyerStatus | null = radioState.state.cwKeyerStatus;
@@ -17,14 +18,14 @@ export function useCWKeyer() {
   const isCWMode = engineMode === 'cw';
 
   const sendKeyAction = useCallback((action: 'key-down' | 'key-up') => {
-    if (!radioService) return;
-    radioService.wsClientInstance.send(WSMessageType.CW_KEY_ACTION, { action });
-  }, [radioService]);
+    if (!radioService || !currentOperatorId) return;
+    radioService.wsClientInstance.send(WSMessageType.CW_KEY_ACTION, { action, operatorId: currentOperatorId });
+  }, [currentOperatorId, radioService]);
 
   const sendText = useCallback((text: string, callsign?: string, placeholderValues?: CWPlaceholderValues) => {
-    if (!radioService) return;
-    radioService.wsClientInstance.send(WSMessageType.CW_TEXT_INPUT, { text, callsign, placeholderValues });
-  }, [radioService]);
+    if (!radioService || !currentOperatorId) return;
+    radioService.wsClientInstance.send(WSMessageType.CW_TEXT_INPUT, { text, callsign, placeholderValues, operatorId: currentOperatorId });
+  }, [currentOperatorId, radioService]);
 
   const playMessage = useCallback((
     callsign: string,
@@ -33,15 +34,16 @@ export function useCWKeyer() {
     startImmediately = true,
     placeholderValues?: CWPlaceholderValues,
   ) => {
-    if (!radioService) return;
+    if (!radioService || !currentOperatorId) return;
     radioService.wsClientInstance.send(WSMessageType.CW_PLAY_MESSAGE, {
       callsign,
       slotId,
       repeat,
       startImmediately,
       placeholderValues,
+      operatorId: currentOperatorId,
     });
-  }, [radioService]);
+  }, [currentOperatorId, radioService]);
 
   const stopMessage = useCallback(() => {
     if (!radioService) return;
