@@ -15,7 +15,7 @@ import type { ModeDescriptor, RealtimeAudioCodecPreference, RealtimeTransportKin
 import type { ConnectionState } from '../../../store/radioStore';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { showErrorToast, localizeError } from '../../../utils/errorToast';
-import { useHasMinRole, useCan, useAbility } from '../../../store/authStore';
+import { useAuth, useHasMinRole, useCan, useAbility } from '../../../store/authStore';
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAudioMonitorPlayback } from '../../../hooks/useAudioMonitorPlayback';
@@ -332,20 +332,23 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radioConnection: Radi
   // 加载支持的电台列表
   useEffect(() => {
     const loadSupportedRigs = async () => {
-      if (connection.isConnected) {
-        try {
-          const rigsResponse = await api.getSupportedRigs();
-          if (rigsResponse.rigs && Array.isArray(rigsResponse.rigs)) {
-            setSupportedRigs(rigsResponse.rigs);
-          }
-        } catch (error) {
-          logger.error('Failed to fetch supported rigs list:', error);
+      if (!connection.isConnected || !canConfigure) {
+        setSupportedRigs([]);
+        return;
+      }
+
+      try {
+        const rigsResponse = await api.getSupportedRigs();
+        if (rigsResponse.rigs && Array.isArray(rigsResponse.rigs)) {
+          setSupportedRigs(rigsResponse.rigs);
         }
+      } catch (error) {
+        logger.error('Failed to fetch supported rigs list:', error);
       }
     };
 
     loadSupportedRigs();
-  }, [connection.isConnected]);
+  }, [canConfigure, connection.isConnected]);
 
   // 监听电台状态变化事件
   useEffect(() => {
@@ -533,8 +536,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const { state: radioState } = useRadioState();
   const { activeProfile } = useProfiles();
   const { latestError } = useRadioErrors();
+  const { state: authState } = useAuth();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const isOperator = useHasMinRole(UserRole.OPERATOR);
+  const canUseAuthenticatedRest = !authState.authEnabled || Boolean(authState.jwt);
   const canSetFrequency = useCan('execute', 'RadioFrequency');
   const canSwitchMode = useCan('execute', 'ModeSwitch');
   const canStartStopEngine = useCan('execute', 'Engine');
@@ -892,6 +897,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
         setAvailableModes([]);
         return;
       }
+      if (!canUseAuthenticatedRest) {
+        setAvailableModes([]);
+        setModeError(null);
+        return;
+      }
 
       setIsLoadingModes(true);
       setModeError(null);
@@ -918,12 +928,16 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     };
 
     loadModes();
-  }, [connection.state.isConnected, formatBandLabel]);
+  }, [canUseAuthenticatedRest, connection.state.isConnected, t]);
 
   // 加载预设频率列表
   React.useEffect(() => {
     const loadFrequencies = async () => {
       if (!connection.state.isConnected) {
+        setAvailableFrequencies([]);
+        return;
+      }
+      if (!canUseAuthenticatedRest) {
         setAvailableFrequencies([]);
         return;
       }
@@ -956,12 +970,15 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     };
 
     loadFrequencies();
-  }, [connection.state.isConnected]);
+  }, [canUseAuthenticatedRest, connection.state.isConnected, formatBandLabel]);
 
   // 加载并恢复上次选择的频率
   React.useEffect(() => {
     const loadLastFrequency = async () => {
       if (!isRadioConnectedRef.current || availableFrequencies.length === 0) {
+        return;
+      }
+      if (!canUseAuthenticatedRest) {
         return;
       }
 
@@ -998,7 +1015,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       }, 500);
       return () => window.clearTimeout(timeoutId);
     }
-  }, [availableFrequencies, radioMode.currentMode, connection.state.isConnected, canWriteFrequency]);
+  }, [availableFrequencies, radioMode.currentMode, connection.state.isConnected, canUseAuthenticatedRest, canWriteFrequency]);
 
 
 

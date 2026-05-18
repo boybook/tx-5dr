@@ -150,10 +150,10 @@ export const PluginLogPanel: React.FC = () => {
   const logContainerRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
-    if (connection.state.isConnected) {
+    if (connection.state.isReady) {
       connection.state.radioService?.getPluginRuntimeLogHistory(PLUGIN_LOG_BUFFER_LIMIT);
     }
-  }, [connection.state.isConnected, connection.state.radioService]);
+  }, [connection.state.isReady, connection.state.radioService]);
 
   useWSEvent(connection.state.radioService, 'pluginLog', (entry: PluginLogEntry) => {
     setEntries((prev) => appendPluginLogEntry(prev, toPluginLogViewEntry(entry)));

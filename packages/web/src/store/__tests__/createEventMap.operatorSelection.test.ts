@@ -33,7 +33,7 @@ function installLocalStorageMock() {
   });
 }
 
-function createAuthState(): AuthState {
+function createAuthState(overrides: Partial<AuthState> = {}): AuthState {
   return {
     initialized: true,
     sessionResolved: true,
@@ -46,29 +46,31 @@ function createAuthState(): AuthState {
     isPublicViewer: false,
     loginError: null,
     loginLoading: false,
+    ...overrides,
   };
 }
 
-function createEventMapForTest() {
+function createEventMapForTest(authOverrides: Partial<AuthState> = {}) {
   const connectionDispatch = vi.fn();
   const radioDispatch = vi.fn();
   const slotPacksDispatch = vi.fn();
   const logbookDispatch = vi.fn();
+  const radioService = {
+    getSystemStatus: vi.fn(),
+    subscribeSpectrum: vi.fn(),
+    sendHandshake: vi.fn(),
+    setClientEnabledOperators: vi.fn(),
+    setClientSelectedOperator: vi.fn(),
+    wsClientInstance: {},
+  } as unknown as RadioService;
 
   const eventMap = createRadioEventMap({
     connectionDispatch,
     radioDispatch,
     slotPacksDispatch,
     logbookDispatch,
-    authStateRef: { current: createAuthState() },
-    radioService: {
-      getSystemStatus: vi.fn(),
-      subscribeSpectrum: vi.fn(),
-      sendHandshake: vi.fn(),
-      setClientEnabledOperators: vi.fn(),
-      setClientSelectedOperator: vi.fn(),
-      wsClientInstance: {},
-    } as unknown as RadioService,
+    authStateRef: { current: createAuthState(authOverrides) },
+    radioService,
     radioServiceRef: { current: null },
     clientInstanceId: 'client-test',
     radioStateRef: { current: initialRadioState },
@@ -95,6 +97,7 @@ function createEventMapForTest() {
     slotPacksDispatch,
     logbookDispatch,
     eventMap,
+    radioService,
   };
 }
 
@@ -123,7 +126,7 @@ describe('createRadioEventMap operator selection flow', () => {
   });
 
   it('persists and dispatches the final selected operator from handshakeComplete', async () => {
-    const { eventMap, radioDispatch } = createEventMapForTest();
+    const { eventMap, connectionDispatch, radioDispatch } = createEventMapForTest();
 
     await eventMap.handshakeComplete({
       finalSelectedOperatorId: 'op-b',
@@ -136,5 +139,33 @@ describe('createRadioEventMap operator selection flow', () => {
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}')).toMatchObject({
       selectedOperatorId: 'op-b',
     });
+    expect(connectionDispatch).toHaveBeenCalledWith({ type: 'handshakeComplete' });
+  });
+
+  it('waits for server handshake before requesting status snapshots', async () => {
+    const { eventMap, radioService } = createEventMapForTest();
+
+    eventMap.connected();
+    eventMap.authResult({ success: true, role: UserRole.ADMIN });
+
+    expect(radioService.getSystemStatus).not.toHaveBeenCalled();
+
+    await eventMap.handshakeComplete({
+      finalSelectedOperatorId: null,
+    });
+
+    expect(radioService.getSystemStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not send no-auth handshake when URL-token login has a JWT', () => {
+    const { eventMap, radioService } = createEventMapForTest({
+      authEnabled: true,
+      jwt: 'jwt-from-url-token',
+      role: UserRole.ADMIN,
+    });
+
+    eventMap.connected();
+
+    expect(radioService.sendHandshake).not.toHaveBeenCalled();
   });
 });

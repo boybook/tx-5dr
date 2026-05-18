@@ -3,11 +3,23 @@ import { Button, Tooltip } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faHeartPulse } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
+import { UserRole } from '@tx5dr/contracts';
+import { useHasMinRole } from '../../store/authStore';
 import { useConnection, useRadioConnectionState } from '../../store/radioStore';
 import { useServerHealth } from '../../hooks/useServerHealth';
 import { ServerHealthModal } from './ServerHealthModal';
 
 export const ServerHealthButton: React.FC = () => {
+  const isAdmin = useHasMinRole(UserRole.ADMIN);
+
+  if (!isAdmin) {
+    return null;
+  }
+
+  return <AdminServerHealthButton />;
+};
+
+const AdminServerHealthButton: React.FC = () => {
   const { t } = useTranslation('settings');
   const connection = useConnection();
   const radioConnection = useRadioConnectionState();

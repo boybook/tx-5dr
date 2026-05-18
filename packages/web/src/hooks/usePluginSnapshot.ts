@@ -1,6 +1,7 @@
 import * as React from 'react';
 import type { PluginStatus, PluginSystemSnapshot } from '@tx5dr/contracts';
 import { api } from '@tx5dr/core';
+import { useAuth } from '../store/authStore';
 import { useConnection } from '../store/radioStore';
 import { useWSEvent } from './useWSEvent';
 import { registerPluginLocales } from '../utils/pluginLocales';
@@ -18,26 +19,36 @@ const EMPTY_SNAPSHOT: PluginSystemSnapshot = {
 
 export function usePluginSnapshot(): PluginSystemSnapshot {
   const connection = useConnection();
+  const { state: authState } = useAuth();
   const [snapshot, setSnapshot] = React.useState<PluginSystemSnapshot>(EMPTY_SNAPSHOT);
+  const canLoadPluginSnapshot = !authState.authEnabled
+    || (Boolean(authState.jwt) && (authState.role === 'admin' || authState.role === 'operator'));
 
   React.useEffect(() => {
+    if (!canLoadPluginSnapshot) {
+      setSnapshot(EMPTY_SNAPSHOT);
+      return;
+    }
+
     api.getPlugins()
       .then((nextSnapshot) => {
         nextSnapshot.plugins.forEach((plugin) => registerPluginLocales(plugin.name, plugin.locales));
         setSnapshot(nextSnapshot);
       })
       .catch((err: unknown) => logger.error('Failed to load plugin snapshot', err));
-  }, []);
+  }, [canLoadPluginSnapshot]);
 
   useWSEvent(connection.state.radioService, 'pluginList', (data: PluginSystemSnapshot) => {
+    if (!canLoadPluginSnapshot) return;
     data.plugins.forEach((plugin) => registerPluginLocales(plugin.name, plugin.locales));
     setSnapshot((prev) => data.generation >= prev.generation ? data : prev);
-  });
+  }, [canLoadPluginSnapshot]);
 
   useWSEvent(
     connection.state.radioService,
     'pluginStatusChanged',
     (data: { generation: number; plugin: PluginStatus }) => {
+      if (!canLoadPluginSnapshot) return;
       registerPluginLocales(data.plugin.name, data.plugin.locales);
       setSnapshot((prev) => {
         if (data.generation < prev.generation) {
@@ -53,12 +64,14 @@ export function usePluginSnapshot(): PluginSystemSnapshot {
         };
       });
     },
+    [canLoadPluginSnapshot],
   );
 
   useWSEvent(
     connection.state.radioService,
     'pluginPanelContributionsChanged',
     (group: NonNullable<PluginSystemSnapshot['panelContributions']>[number]) => {
+      if (!canLoadPluginSnapshot) return;
       setSnapshot((prev) => {
         const existing = prev.panelContributions ?? [];
         const nextGroups = existing.filter((entry) => {
@@ -74,6 +87,7 @@ export function usePluginSnapshot(): PluginSystemSnapshot {
         };
       });
     },
+    [canLoadPluginSnapshot],
   );
 
   return snapshot;

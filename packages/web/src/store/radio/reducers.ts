@@ -57,6 +57,7 @@ function shouldResetMeterTrackingForProfileSync(
 export const initialConnectionState: ConnectionState = {
   isConnected: false,
   isConnecting: true,
+  isReady: false,
   wasEverConnected: false,
   radioService: null,
   connectError: null,
@@ -69,20 +70,27 @@ export function connectionReducer(state: ConnectionState, action: ConnectionActi
         ...state,
         isConnected: true,
         isConnecting: false,
+        isReady: false,
         wasEverConnected: true,
         connectError: null,
+      };
+    case 'handshakeComplete':
+      return {
+        ...state,
+        isReady: true,
       };
     case 'reconnecting':
       return {
         ...state,
         isConnected: false,
         isConnecting: true,
+        isReady: false,
         connectError: null,
       };
     case 'disconnected':
-      return { ...state, isConnected: false, isConnecting: false };
+      return { ...state, isConnected: false, isConnecting: false, isReady: false };
     case 'connectFailed':
-      return { ...state, isConnecting: false, connectError: 'SERVER_UNAVAILABLE' };
+      return { ...state, isConnecting: false, isReady: false, connectError: 'SERVER_UNAVAILABLE' };
     case 'SET_RADIO_SERVICE':
       return { ...state, radioService: action.payload };
     default:

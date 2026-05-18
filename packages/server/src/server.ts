@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // Server - Fastify服务器配置需要使用any
 
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import multipart from '@fastify/multipart';
@@ -15,7 +15,7 @@ import { DigitalRadioEngine } from './DigitalRadioEngine.js';
 import { UserRole } from '@tx5dr/contracts';
 import { AuthManager } from './auth/AuthManager.js';
 import { DeviceServiceAuthManager } from './auth/DeviceServiceAuthManager.js';
-import { authPlugin, requireRole, withRole } from './auth/authPlugin.js';
+import { authPlugin, requireRole } from './auth/authPlugin.js';
 import { authRoutes } from './routes/auth.js';
 import { audioRoutes } from './routes/audio.js';
 import { slotpackRoutes } from './routes/slotpack.js';
@@ -46,6 +46,7 @@ import { ConsoleLogger } from './utils/console-logger.js';
 import { PersistenceCoordinator } from './utils/persistence/index.js';
 import { areNewMutationsBlocked, blockNewMutations, markProcessShuttingDown } from './utils/process-shutdown.js';
 import { bootstrapCoordinator } from './services/BootstrapCoordinator.js';
+import { getNetworkAccessInfo } from './utils/network-access.js';
 
 const bootLogger = createLogger('ServerBoot');
 const logger = createLogger('Server');
@@ -139,6 +140,66 @@ function retryBootstrapPhase(phaseId: BootstrapPhaseId, digitalRadioEngine: Digi
       phaseId,
       error: error instanceof Error ? error.message : String(error),
     });
+  });
+}
+
+function getConfiguredWebPort(): number {
+  const raw = process.env.WEB_PORT || process.env.TX5DR_WEB_DEV_PORT || '8076';
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 && parsed < 65536 ? parsed : 8076;
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === 'localhost'
+    || hostname === '127.0.0.1'
+    || hostname === '::1'
+    || hostname === '[::1]';
+}
+
+function buildAllowedBrowserOrigins(): Set<string> {
+  const webPort = getConfiguredWebPort();
+  const accessInfo = getNetworkAccessInfo({ webPort });
+  const hostnames = new Set([
+    'localhost',
+    '127.0.0.1',
+    '::1',
+    '[::1]',
+    accessInfo.hostname,
+    ...accessInfo.addresses.map(address => address.ip),
+  ].filter(Boolean));
+  const origins = new Set<string>();
+
+  for (const hostname of hostnames) {
+    const host = hostname === '::1' ? '[::1]' : hostname;
+    origins.add(`http://${host}:${webPort}`);
+    origins.add(`https://${host}:${webPort}`);
+  }
+
+  return origins;
+}
+
+export function isAllowedCorsOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+
+  try {
+    const parsed = new URL(origin);
+    if (isLoopbackHostname(parsed.hostname)) {
+      return true;
+    }
+    return buildAllowedBrowserOrigins().has(parsed.origin);
+  } catch {
+    return false;
+  }
+}
+
+export async function registerRoleScope(
+  fastify: FastifyInstance,
+  minRole: UserRole,
+  registerRoutes: (scope: FastifyInstance) => Promise<void>,
+): Promise<void> {
+  await fastify.register(async (scope) => {
+    scope.addHook('onRequest', requireRole(minRole));
+    await registerRoutes(scope);
   });
 }
 
@@ -309,10 +370,11 @@ export async function createServer() {
   const deviceUiWsServer = new DeviceUiWSServer(digitalRadioEngine, deviceServiceAuthManager);
   fastify.log.info('WebSocket server initialized');
 
-  // Register CORS plugin - 允许所有跨域
+  // Register CORS plugin. Keep localhost/same-host web access, but do not
+  // reflect arbitrary browser origins while credentials are enabled.
   await fastify.register(cors, {
     origin: (origin, callback) => {
-      callback(null, origin || false);
+      callback(null, isAllowedCorsOrigin(origin) ? (origin ?? false) : false);
     },
     credentials: true,
   });
@@ -505,11 +567,13 @@ export async function createServer() {
   bootLogger.info('registering routes...');
   ConsoleLogger.getInstance().flushSync();
 
-  // Admin 路由：音频、Profile、设置、存储、第三方服务
-  await fastify.register(async (scope) => {
-    await scope.register(withRole(UserRole.ADMIN));
+  // Profile 列表是角色感知的：Admin 完整，其他身份脱敏；写操作在路由内单独要求 Admin。
+  await fastify.register(profileRoutes, { prefix: '/api/profiles' });
+  fastify.log.info('Profile routes registered');
+
+  // Admin 路由：音频、设置、存储、第三方服务
+  await registerRoleScope(fastify, UserRole.ADMIN, async (scope) => {
     await scope.register(audioRoutes, { prefix: '/api/audio' });
-    await scope.register(profileRoutes, { prefix: '/api/profiles' });
     await scope.register(settingsRoutes, { prefix: '/api/settings' });
     const { storageRoutes } = await import('./routes/storage.js');
     await scope.register(storageRoutes, { prefix: '/api/storage' });
@@ -518,11 +582,10 @@ export async function createServer() {
     await scope.register(systemRoutes, { prefix: '/api/system' });
     await scope.register(openwebrxRoutes, { prefix: '/api/openwebrx' });
   });
-  fastify.log.info('Admin routes registered (audio, profiles, settings, storage, pskreporter, system, openwebrx)');
+  fastify.log.info('Admin routes registered (audio, settings, storage, pskreporter, system, openwebrx)');
 
   // Viewer+ 路由：操作员（内部根据角色过滤）、电台状态、模式、时隙包、语音
-  await fastify.register(async (scope) => {
-    await scope.register(withRole(UserRole.VIEWER));
+  await registerRoleScope(fastify, UserRole.VIEWER, async (scope) => {
     await scope.register(operatorRoutes, { prefix: '/api/operators' });
     await scope.register(radioRoutes, { prefix: '/api/radio' });
     await scope.register(powerRoutes, { prefix: '/api/radio/power' });
@@ -536,8 +599,7 @@ export async function createServer() {
   fastify.log.info('Viewer+ routes registered (operators, radio, mode, slotpack, voice, callsigns)');
 
   // Operator+ 路由：日志本（细粒度权限由路由内部 preHandler 控制）
-  await fastify.register(async (scope) => {
-    await scope.register(withRole(UserRole.OPERATOR));
+  await registerRoleScope(fastify, UserRole.OPERATOR, async (scope) => {
     const { logbookRoutes } = await import('./routes/logbooks.js');
     await scope.register(logbookRoutes, { prefix: '/api/logbooks' });
   });

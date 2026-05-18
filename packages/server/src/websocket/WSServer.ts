@@ -8,6 +8,7 @@ import type {
   FrameMessage,
   JWTPayload,
   ModeDescriptor,
+  RadioProfile,
   SlotInfo,
   SlotPack,
   SpectrumCapabilities,
@@ -32,6 +33,7 @@ import { SpectrumCoordinator } from '../spectrum/SpectrumCoordinator.js';
 import { SpectrumSessionCoordinator } from '../spectrum/SpectrumSessionCoordinator.js';
 import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
 import { OperatorScopedSlotPackProjectionService } from './OperatorScopedSlotPackProjectionService.js';
+import { canReadFullProfiles, redactHamlibConfigForRead, redactProfileForRead, redactProfilesForRead } from '../security/profileRedaction.js';
 
 const logger = createLogger('WSServer');
 const DECODE_WORKER_UNAVAILABLE_USER_MESSAGE_KEY = 'errors:code.DECODE_WORKER_UNAVAILABLE.userMessage';
@@ -259,6 +261,10 @@ export class WSConnection extends WSMessageHandler {
   getUserRole(): UserRole | null { return this.userRole; }
   getAuthLabel(): string { return this.authLabel; }
   getAuthorizedOperatorIds(): string[] { return Array.from(this.authorizedOperatorIds); }
+  hasResolvedIdentity(): boolean { return this.userRole !== null; }
+  isPublicViewer(): boolean {
+    return this.userRole === UserRole.VIEWER && !this.authenticated && this.tokenId === null;
+  }
 
   /**
    * 检查是否有最低角色权限
@@ -373,7 +379,7 @@ export class WSServer extends WSMessageHandler {
     if (processMonitor) {
       this.processMonitor = processMonitor;
       processMonitor.setBroadcastCallback((snapshot) => {
-        this.broadcast(WSMessageType.PROCESS_SNAPSHOT, snapshot);
+        this.broadcastToMinRole(UserRole.ADMIN, WSMessageType.PROCESS_SNAPSHOT, snapshot);
       });
     }
     this.spectrumCoordinator = new SpectrumCoordinator(digitalRadioEngine);
@@ -388,12 +394,12 @@ export class WSServer extends WSMessageHandler {
     this.commandHandlers = {
       [WSMessageType.START_ENGINE]: () => this.handleStartEngine(),
       [WSMessageType.STOP_ENGINE]: () => this.handleStopEngine(),
-      [WSMessageType.GET_STATUS]: () => this.handleGetStatus(),
+      [WSMessageType.GET_STATUS]: (_data, id) => this.handleGetStatus(id),
       [WSMessageType.SET_MODE]: (data) => this.handleSetMode((data as any)?.mode),
       [WSMessageType.GET_PLUGIN_RUNTIME_LOG_HISTORY]: (data, id) => this.handleGetPluginRuntimeLogHistory(id, data),
       [WSMessageType.SUBSCRIBE_SPECTRUM]: (data, id) => this.handleSubscribeSpectrum(id, data),
       [WSMessageType.INVOKE_SPECTRUM_CONTROL]: (data: unknown, id: string) => this.handleInvokeSpectrumControl(id, data),
-      [WSMessageType.GET_OPERATORS]: () => this.handleGetOperators(),
+      [WSMessageType.GET_OPERATORS]: (_data, id) => this.handleGetOperators(id),
       [WSMessageType.SET_OPERATOR_CONTEXT]: (data, id) => this.handleSetOperatorContext(data, id),
       [WSMessageType.SET_OPERATOR_RUNTIME_STATE]: (data, id) => this.handleSetOperatorRuntimeState(data, id),
       [WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT]: (data, id) => this.handleSetOperatorRuntimeSlotContent(data, id),
@@ -518,7 +524,7 @@ export class WSServer extends WSMessageHandler {
     });
 
     this.digitalRadioEngine.on('decodeWorkerUnavailable' as any, (status: any) => {
-      this.broadcast(WSMessageType.ERROR, {
+      this.broadcastToMinRole(UserRole.ADMIN, WSMessageType.ERROR, {
         message: status?.lastFailure || 'Decode worker is unavailable',
         userMessage: 'FT8/FT4 decoding is temporarily unavailable because the decode worker failed to start. Other radio functions can continue running.',
         userMessageKey: DECODE_WORKER_UNAVAILABLE_USER_MESSAGE_KEY,
@@ -549,7 +555,7 @@ export class WSServer extends WSMessageHandler {
     // 监听发射日志事件
     this.digitalRadioEngine.on('transmissionLog' as any, (data) => {
       logger.debug('transmission log received, broadcasting to clients', data);
-      this.broadcast(WSMessageType.TRANSMISSION_LOG, data);
+      this.broadcastTransmissionLog(data);
     });
 
     // 监听操作员状态更新事件
@@ -600,7 +606,7 @@ export class WSServer extends WSMessageHandler {
     // 监听电台状态变化事件
     this.digitalRadioEngine.on('radioStatusChanged', (data) => {
       logger.debug('radio status changed event received', data);
-      this.broadcast(WSMessageType.RADIO_STATUS_CHANGED, data);
+      this.broadcastRadioStatusChanged(data);
 
       // 仅在连接状态从非 connected 进入 connected 时推送 Toast。
       // capability/meter 等状态刷新也会复用 radioStatusChanged，不应反复提示连接成功。
@@ -680,7 +686,7 @@ export class WSServer extends WSMessageHandler {
     // 监听PTT状态变化事件
     this.digitalRadioEngine.on('pttStatusChanged', (data) => {
       logger.debug(`PTT status changed: ${data.isTransmitting ? 'transmitting' : 'idle'}, operators=[${data.operatorIds?.join(', ') || ''}]`);
-      this.broadcast(WSMessageType.PTT_STATUS_CHANGED, data);
+      this.broadcastPttStatusChanged(data);
     });
 
     this.digitalRadioEngine.on('tuneToneStatusChanged', (data) => {
@@ -710,13 +716,13 @@ export class WSServer extends WSMessageHandler {
     // 监听 Profile 变更事件
     this.digitalRadioEngine.on('profileChanged', (data: any) => {
       logger.debug(`profile switched: ${data.profile?.name} (id: ${data.profileId})`);
-      this.broadcast(WSMessageType.PROFILE_CHANGED, data);
+      this.broadcastProfileChanged(data);
     });
 
     // 监听 Profile 列表更新事件
     this.digitalRadioEngine.on('profileListUpdated', (data: any) => {
       logger.debug(`profile list updated: ${data.profiles?.length} profiles`);
-      this.broadcast(WSMessageType.PROFILE_LIST_UPDATED, data);
+      this.broadcastProfileListUpdated(data);
     });
 
     // 监听语音 PTT 锁状态变化事件
@@ -763,42 +769,55 @@ export class WSServer extends WSMessageHandler {
     return shouldBroadcast;
   }
 
-  // CASL ability requirements for WebSocket commands
-  private static readonly COMMAND_ABILITIES: Partial<Record<WSMessageType, { action: AppAction; subject: AppSubject }>> = {
+  // Explicit allowlist for client-originated WebSocket commands.
+  private static readonly COMMAND_ACCESS: Partial<Record<WSMessageType, {
+    minRole?: UserRole;
+    publicViewer?: boolean;
+    requiresHandshake?: boolean;
+    ability?: { action: AppAction; subject: AppSubject };
+  }>> = {
+    [WSMessageType.GET_STATUS]: { publicViewer: true },
+    [WSMessageType.GET_OPERATORS]: { publicViewer: true, requiresHandshake: true },
+    [WSMessageType.CLIENT_HANDSHAKE]: { publicViewer: true },
+    [WSMessageType.SET_CLIENT_ENABLED_OPERATORS]: { publicViewer: true, requiresHandshake: true },
+    [WSMessageType.SET_CLIENT_SELECTED_OPERATOR]: { publicViewer: true, requiresHandshake: true },
+    [WSMessageType.SUBSCRIBE_SPECTRUM]: { publicViewer: true, requiresHandshake: true },
+    [WSMessageType.GET_PLUGIN_RUNTIME_LOG_HISTORY]: { minRole: UserRole.ADMIN },
     // Capability-based (delegatable from admin)
-    [WSMessageType.START_ENGINE]: { action: 'execute', subject: 'Engine' },
-    [WSMessageType.STOP_ENGINE]: { action: 'execute', subject: 'Engine' },
-    [WSMessageType.SET_MODE]: { action: 'execute', subject: 'ModeSwitch' },
-    [WSMessageType.RADIO_MANUAL_RECONNECT]: { action: 'execute', subject: 'RadioReconnect' },
-    [WSMessageType.RADIO_STOP_RECONNECT]: { action: 'execute', subject: 'RadioReconnect' },
-    [WSMessageType.AUDIO_RETRY_NOW]: { action: 'execute', subject: 'Engine' },
-    [WSMessageType.FORCE_STOP_TRANSMISSION]: { action: 'execute', subject: 'Engine' },
-    [WSMessageType.WRITE_RADIO_CAPABILITY]: { action: 'execute', subject: 'RadioControl' },
-    [WSMessageType.REFRESH_RADIO_CAPABILITIES]: { action: 'execute', subject: 'RadioControl' },
-    [WSMessageType.START_TUNE_TONE]: { action: 'execute', subject: 'RadioControl' },
-    [WSMessageType.STOP_TUNE_TONE]: { action: 'execute', subject: 'RadioControl' },
-    [WSMessageType.INVOKE_SPECTRUM_CONTROL]: { action: 'execute', subject: 'RadioControl' },
-    [WSMessageType.OPENWEBRX_PROFILE_SELECT_RESPONSE]: { action: 'execute', subject: 'RadioFrequency' },
+    [WSMessageType.START_ENGINE]: { ability: { action: 'execute', subject: 'Engine' } },
+    [WSMessageType.STOP_ENGINE]: { ability: { action: 'execute', subject: 'Engine' } },
+    [WSMessageType.SET_MODE]: { ability: { action: 'execute', subject: 'ModeSwitch' } },
+    [WSMessageType.RADIO_MANUAL_RECONNECT]: { ability: { action: 'execute', subject: 'RadioReconnect' } },
+    [WSMessageType.RADIO_STOP_RECONNECT]: { ability: { action: 'execute', subject: 'RadioReconnect' } },
+    [WSMessageType.AUDIO_RETRY_NOW]: { ability: { action: 'execute', subject: 'Engine' } },
+    [WSMessageType.FORCE_STOP_TRANSMISSION]: { ability: { action: 'execute', subject: 'Engine' } },
+    [WSMessageType.WRITE_RADIO_CAPABILITY]: { ability: { action: 'execute', subject: 'RadioControl' } },
+    [WSMessageType.REFRESH_RADIO_CAPABILITIES]: { ability: { action: 'execute', subject: 'RadioControl' } },
+    [WSMessageType.START_TUNE_TONE]: { ability: { action: 'execute', subject: 'RadioControl' } },
+    [WSMessageType.STOP_TUNE_TONE]: { ability: { action: 'execute', subject: 'RadioControl' } },
+    [WSMessageType.INVOKE_SPECTRUM_CONTROL]: { ability: { action: 'execute', subject: 'RadioControl' }, requiresHandshake: true },
+    [WSMessageType.OPENWEBRX_PROFILE_SELECT_RESPONSE]: { ability: { action: 'execute', subject: 'RadioFrequency' } },
     // Operator-level commands (use Operator subject with conditions)
-    [WSMessageType.SET_VOLUME_GAIN]: { action: 'manage', subject: 'Operator' },
-    [WSMessageType.SET_VOLUME_GAIN_DB]: { action: 'manage', subject: 'Operator' },
-    [WSMessageType.VOICE_PTT_REQUEST]: { action: 'manage', subject: 'Transmission' },
-    [WSMessageType.VOICE_KEYER_PLAY]: { action: 'manage', subject: 'Transmission' },
-    [WSMessageType.VOICE_KEYER_STOP]: { action: 'manage', subject: 'Transmission' },
-    [WSMessageType.CW_KEY_ACTION]: { action: 'manage', subject: 'Transmission' },
-    [WSMessageType.CW_TEXT_INPUT]: { action: 'manage', subject: 'Transmission' },
-    [WSMessageType.CW_PLAY_MESSAGE]: { action: 'manage', subject: 'Transmission' },
-    [WSMessageType.CW_STOP_MESSAGE]: { action: 'manage', subject: 'Transmission' },
-    [WSMessageType.VOICE_SET_RADIO_MODE]: { action: 'manage', subject: 'Operator' },
-    [WSMessageType.START_OPERATOR]: { action: 'manage', subject: 'Operator' },
-    [WSMessageType.STOP_OPERATOR]: { action: 'manage', subject: 'Operator' },
-    [WSMessageType.SET_OPERATOR_CONTEXT]: { action: 'manage', subject: 'Operator' },
-    [WSMessageType.SET_OPERATOR_RUNTIME_STATE]: { action: 'manage', subject: 'Operator' },
-    [WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT]: { action: 'manage', subject: 'Operator' },
-    [WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES]: { action: 'manage', subject: 'Operator' },
-    [WSMessageType.OPERATOR_REQUEST_CALL]: { action: 'manage', subject: 'Operator' },
-    [WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION]: { action: 'manage', subject: 'Transmission' },
-    [WSMessageType.PLUGIN_USER_ACTION]: { action: 'manage', subject: 'Operator' },
+    [WSMessageType.SET_VOLUME_GAIN]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.SET_VOLUME_GAIN_DB]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.VOICE_PTT_REQUEST]: { ability: { action: 'manage', subject: 'Transmission' } },
+    [WSMessageType.VOICE_PTT_RELEASE]: { minRole: UserRole.OPERATOR },
+    [WSMessageType.VOICE_KEYER_PLAY]: { ability: { action: 'manage', subject: 'Transmission' } },
+    [WSMessageType.VOICE_KEYER_STOP]: { minRole: UserRole.OPERATOR },
+    [WSMessageType.CW_KEY_ACTION]: { ability: { action: 'manage', subject: 'Transmission' } },
+    [WSMessageType.CW_TEXT_INPUT]: { ability: { action: 'manage', subject: 'Transmission' } },
+    [WSMessageType.CW_PLAY_MESSAGE]: { ability: { action: 'manage', subject: 'Transmission' } },
+    [WSMessageType.CW_STOP_MESSAGE]: { minRole: UserRole.OPERATOR },
+    [WSMessageType.VOICE_SET_RADIO_MODE]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.START_OPERATOR]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.STOP_OPERATOR]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.SET_OPERATOR_CONTEXT]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.SET_OPERATOR_RUNTIME_STATE]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.OPERATOR_REQUEST_CALL]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION]: { ability: { action: 'manage', subject: 'Transmission' } },
+    [WSMessageType.PLUGIN_USER_ACTION]: { ability: { action: 'manage', subject: 'Operator' } },
   };
 
   // Commands that need operatorId-level data for CASL condition checks
@@ -810,6 +829,11 @@ export class WSServer extends WSMessageHandler {
     WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT,
     WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES,
     WSMessageType.OPERATOR_REQUEST_CALL,
+    WSMessageType.VOICE_PTT_REQUEST,
+    WSMessageType.VOICE_KEYER_PLAY,
+    WSMessageType.CW_KEY_ACTION,
+    WSMessageType.CW_TEXT_INPUT,
+    WSMessageType.CW_PLAY_MESSAGE,
     WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION,
     WSMessageType.PLUGIN_USER_ACTION,
   ]);
@@ -831,23 +855,82 @@ export class WSServer extends WSMessageHandler {
       return;
     }
 
-    // CASL ability check
-    const required = WSServer.COMMAND_ABILITIES[msgType];
+    if (msgType === WSMessageType.PING) {
+      const handler = this.commandHandlers[msgType];
+      if (handler) await handler(message.data, connectionId);
+      return;
+    }
+
+    const access = WSServer.COMMAND_ACCESS[msgType];
+    if (!access) {
+      connection.send(WSMessageType.ERROR, {
+        message: 'command_not_allowed',
+        code: 'FORBIDDEN',
+        details: { command: message.type },
+      });
+      return;
+    }
+
+    if (!connection.hasResolvedIdentity()) {
+      connection.send(WSMessageType.ERROR, {
+        message: 'authentication_required',
+        code: 'UNAUTHORIZED',
+        details: { command: message.type },
+      });
+      return;
+    }
+
+    const handshakeOptional = msgType === WSMessageType.CLIENT_HANDSHAKE || msgType === WSMessageType.GET_STATUS;
+    if ((access.requiresHandshake || !handshakeOptional) && !connection.isHandshakeCompleted()) {
+      connection.send(WSMessageType.ERROR, {
+        message: 'handshake_required',
+        code: 'UNAUTHORIZED',
+        details: { command: message.type },
+      });
+      return;
+    }
+
+    if (access.minRole && !connection.hasMinRole(access.minRole)) {
+      connection.send(WSMessageType.ERROR, {
+        message: 'insufficient_permission',
+        code: 'FORBIDDEN',
+        details: { command: message.type },
+      });
+      return;
+    }
+
+    if (!access.publicViewer && connection.isPublicViewer()) {
+      connection.send(WSMessageType.ERROR, {
+        message: 'insufficient_permission',
+        code: 'FORBIDDEN',
+        details: { command: message.type },
+      });
+      return;
+    }
+
+    const required = access.ability;
     if (required) {
       // For operator-level commands, include operatorId in CASL data for condition matching
       if (WSServer.OPERATOR_DATA_COMMANDS.has(msgType)) {
         const data = message.data as any;
         const operatorId = data?.operatorId;
-        if (operatorId) {
-          const conditionKey = required.subject === 'Transmission' ? 'operatorId' : 'id';
-          if (!connection.canPerform(required.action, required.subject, { [conditionKey]: operatorId })) {
-            connection.send(WSMessageType.ERROR, {
-              message: 'no_operator_access',
-              code: 'FORBIDDEN',
-              details: { operatorId },
-            });
-            return;
-          }
+        if (!operatorId) {
+          connection.send(WSMessageType.ERROR, {
+            message: 'operator_id_required',
+            code: 'FORBIDDEN',
+            details: { command: message.type },
+          });
+          return;
+        }
+
+        const conditionKey = required.subject === 'Transmission' ? 'operatorId' : 'id';
+        if (!connection.canPerform(required.action, required.subject, { [conditionKey]: operatorId })) {
+          connection.send(WSMessageType.ERROR, {
+            message: 'no_operator_access',
+            code: 'FORBIDDEN',
+            details: { operatorId },
+          });
+          return;
         }
       } else if (!connection.canPerform(required.action, required.subject)) {
         connection.send(WSMessageType.ERROR, {
@@ -973,10 +1056,15 @@ export class WSServer extends WSMessageHandler {
   /**
    * 处理获取状态命令
    */
-  private async handleGetStatus(): Promise<void> {
+  private async handleGetStatus(connectionId: string): Promise<void> {
+    const connection = this.getConnection(connectionId);
+    if (!connection) return;
     const currentStatus = this.digitalRadioEngine.getStatus();
-    this.broadcastSystemStatus(currentStatus);
-    this.broadcastClockStatusChanged(this.digitalRadioEngine.getNtpCalibrationService().getBroadcastStatus());
+    connection.send(WSMessageType.SYSTEM_STATUS, currentStatus);
+    connection.send(
+      WSMessageType.CLOCK_STATUS_CHANGED,
+      this.digitalRadioEngine.getNtpCalibrationService().getBroadcastStatus(),
+    );
   }
 
   private handleGetPluginRuntimeLogHistory(connectionId: string, data: unknown): void {
@@ -1107,18 +1195,13 @@ export class WSServer extends WSMessageHandler {
    * 处理获取操作员列表命令
    * 📊 Day14优化：使用统一的错误处理方法
    */
-  private async handleGetOperators(): Promise<void> {
+  private async handleGetOperators(connectionId: string): Promise<void> {
     logger.debug('getOperators request received');
     try {
-      const operators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
-
-      // 只向已完成握手的客户端发送过滤后的操作员列表
-      const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
-      activeConnections.forEach(connection => {
-        const filteredOperators = operators.filter(op => connection.isOperatorEnabled(op.id));
-        connection.send(WSMessageType.OPERATORS_LIST, { operators: filteredOperators });
-      });
-
+      const connection = this.getConnection(connectionId);
+      if (connection?.isHandshakeCompleted()) {
+        this.sendFilteredOperatorsList(connection);
+      }
     } catch (error) {
       this.handleCommandError(error, 'getOperators');
     }
@@ -1447,71 +1530,12 @@ export class WSServer extends WSMessageHandler {
     this.connections.set(id, connection);
     logger.info('new connection', { id });
 
-    // 阶段1: 发送基础状态信息（不包括需要过滤的数据）
-
-    // 1. 发送当前系统状态
-    const status = this.digitalRadioEngine.getStatus();
-    connection.send(WSMessageType.SYSTEM_STATUS, status);
-    connection.send(WSMessageType.BOOTSTRAP_STATUS_CHANGED, bootstrapCoordinator.getStatus());
-    connection.send(
-      WSMessageType.CLOCK_STATUS_CHANGED,
-      this.digitalRadioEngine.getNtpCalibrationService().getBroadcastStatus(),
-    );
-
-    // 2. 发送当前模式信息
-    connection.send(WSMessageType.MODE_CHANGED, status.currentMode);
-
-    // 2.1 发送当前频率信息，避免客户端在首次进入时错过服务端启动阶段的切频广播
-    const initialFrequencyState = this.buildInitialFrequencyState(status);
-    if (initialFrequencyState) {
-      connection.send(WSMessageType.FREQUENCY_CHANGED, initialFrequencyState);
-    }
-
-    // 2.2 发送外接天调单音状态，避免重连后按钮状态丢失
-    try {
-      connection.send(WSMessageType.TUNE_TONE_STATUS_CHANGED, this.digitalRadioEngine.getTuneToneStatus());
-    } catch (error) {
-      logger.error('failed to send tune tone status', error);
-    }
-
-    // 3. 发送当前音量增益
-    try {
-      const volumeGain = this.digitalRadioEngine.getVolumeGain();
-      const volumeGainDb = this.digitalRadioEngine.getVolumeGainDb();
-      connection.send(WSMessageType.VOLUME_GAIN_CHANGED, {
-        gain: volumeGain,
-        gainDb: volumeGainDb
-      });
-    } catch (error) {
-      logger.error('failed to send volume gain', error);
-    }
-
-    // 3.5 发送当前实际静噪状态
-    try {
-      connection.send(WSMessageType.SQUELCH_STATUS_CHANGED, this.digitalRadioEngine.getSquelchStatus());
-    } catch (error) {
-      logger.error('failed to send squelch status', error);
-    }
-
-    // 4. 发送当前电台连接状态（确保前端获取 connecting/reconnecting 等中间状态）
-    try {
-      const radioManager = this.digitalRadioEngine.getRadioManager();
-      const radioConnectionStatus = radioManager.getConnectionStatus();
-      connection.send(WSMessageType.RADIO_STATUS_CHANGED, buildRadioStatusPayload({
-        connected: radioManager.isConnected(),
-        status: radioConnectionStatus,
-        radioInfo: null,
-        radioManager,
-      }));
-    } catch (error) {
-      logger.error('failed to send radio connection status', error);
-    }
-
     // 认证流程
     const authManager = AuthManager.getInstance();
     if (!authManager.isAuthEnabled()) {
       // 认证未启用 → 直接作为 Admin（向后兼容）
       connection.setAdminBypass();
+      this.sendInitialState(connection);
       this.sendCWDecoderStatus(connection);
       logger.info(`connection ${id} basic state sent (auth disabled, Admin mode), waiting for client handshake`);
     } else {
@@ -1523,6 +1547,58 @@ export class WSServer extends WSMessageHandler {
     }
 
     return connection;
+  }
+
+  private sendInitialState(connection: WSConnection): void {
+    const status = this.digitalRadioEngine.getStatus();
+    connection.send(WSMessageType.SYSTEM_STATUS, status);
+    connection.send(WSMessageType.BOOTSTRAP_STATUS_CHANGED, bootstrapCoordinator.getStatus());
+    connection.send(
+      WSMessageType.CLOCK_STATUS_CHANGED,
+      this.digitalRadioEngine.getNtpCalibrationService().getBroadcastStatus(),
+    );
+    connection.send(WSMessageType.MODE_CHANGED, status.currentMode);
+
+    const initialFrequencyState = this.buildInitialFrequencyState(status);
+    if (initialFrequencyState) {
+      connection.send(WSMessageType.FREQUENCY_CHANGED, initialFrequencyState);
+    }
+
+    try {
+      connection.send(WSMessageType.TUNE_TONE_STATUS_CHANGED, this.digitalRadioEngine.getTuneToneStatus());
+    } catch (error) {
+      logger.error('failed to send tune tone status', error);
+    }
+
+    try {
+      const volumeGain = this.digitalRadioEngine.getVolumeGain();
+      const volumeGainDb = this.digitalRadioEngine.getVolumeGainDb();
+      connection.send(WSMessageType.VOLUME_GAIN_CHANGED, {
+        gain: volumeGain,
+        gainDb: volumeGainDb
+      });
+    } catch (error) {
+      logger.error('failed to send volume gain', error);
+    }
+
+    try {
+      connection.send(WSMessageType.SQUELCH_STATUS_CHANGED, this.digitalRadioEngine.getSquelchStatus());
+    } catch (error) {
+      logger.error('failed to send squelch status', error);
+    }
+
+    try {
+      const radioManager = this.digitalRadioEngine.getRadioManager();
+      const radioConnectionStatus = radioManager.getConnectionStatus();
+      this.sendRadioStatusChanged(connection, buildRadioStatusPayload({
+        connected: radioManager.isConnected(),
+        status: radioConnectionStatus,
+        radioInfo: null,
+        radioManager,
+      }));
+    } catch (error) {
+      logger.error('failed to send radio connection status', error);
+    }
   }
 
   /**
@@ -1608,7 +1684,7 @@ export class WSServer extends WSMessageHandler {
 
   private broadcastToMinRole(minRole: UserRole, type: string, data?: any, id?: string): void {
     const activeConnections = this.getActiveConnections()
-      .filter(connection => connection.hasMinRole(minRole));
+      .filter(connection => connection.isHandshakeCompleted() && connection.hasMinRole(minRole));
 
     activeConnections.forEach(connection => {
       connection.send(type, data, id);
@@ -1702,6 +1778,125 @@ export class WSServer extends WSMessageHandler {
       return true;
     }
     return false;
+  }
+
+  private getAllowedOperatorIds(connection: WSConnection): Set<string> {
+    if (connection.isPublicViewer()) {
+      return new Set();
+    }
+
+    const allOperatorIds = this.digitalRadioEngine.operatorManager
+      .getOperatorsStatus()
+      .map(operator => operator.id);
+
+    if (connection.getUserRole() === UserRole.ADMIN) {
+      return new Set(allOperatorIds);
+    }
+
+    return new Set(allOperatorIds.filter(id => connection.hasOperatorAccess(id)));
+  }
+
+  private filterRequestedOperatorIds(connection: WSConnection, requestedIds: string[]): string[] {
+    const allowed = this.getAllowedOperatorIds(connection);
+    const seen = new Set<string>();
+    const result: string[] = [];
+
+    for (const id of requestedIds) {
+      if (allowed.has(id) && !seen.has(id)) {
+        seen.add(id);
+        result.push(id);
+      }
+    }
+
+    return result;
+  }
+
+  private canSendFullProfiles(connection: WSConnection): boolean {
+    return canReadFullProfiles(connection.getUserRole());
+  }
+
+  private redactProfilePayloadForConnection(connection: WSConnection, profile: RadioProfile): RadioProfile {
+    return this.canSendFullProfiles(connection) ? profile : redactProfileForRead(profile);
+  }
+
+  private radioStatusPayloadForConnection(connection: WSConnection, data: any): any {
+    if (this.canSendFullProfiles(connection) || !data?.radioConfig) {
+      return data;
+    }
+    return {
+      ...data,
+      radioConfig: redactHamlibConfigForRead(data.radioConfig),
+    };
+  }
+
+  private sendRadioStatusChanged(connection: WSConnection, data: any): void {
+    connection.send(WSMessageType.RADIO_STATUS_CHANGED, this.radioStatusPayloadForConnection(connection, data));
+  }
+
+  private broadcastRadioStatusChanged(data: any): void {
+    const activeConnections = this.getActiveConnections().filter(conn => conn.hasResolvedIdentity());
+    activeConnections.forEach(connection => {
+      this.sendRadioStatusChanged(connection, data);
+    });
+  }
+
+  private pttStatusPayloadForConnection(connection: WSConnection, data: any): any {
+    if (!connection.isPublicViewer()) {
+      return data;
+    }
+    return {
+      ...data,
+      operatorIds: [],
+      operatorId: undefined,
+    };
+  }
+
+  private broadcastPttStatusChanged(data: any): void {
+    const activeConnections = this.getActiveConnections().filter(conn => conn.hasResolvedIdentity());
+    activeConnections.forEach(connection => {
+      connection.send(WSMessageType.PTT_STATUS_CHANGED, this.pttStatusPayloadForConnection(connection, data));
+    });
+  }
+
+  private broadcastProfileChanged(data: { profile?: RadioProfile; [key: string]: unknown }): void {
+    const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
+    activeConnections.forEach(connection => {
+      connection.send(WSMessageType.PROFILE_CHANGED, {
+        ...data,
+        profile: data.profile
+          ? this.redactProfilePayloadForConnection(connection, data.profile)
+          : data.profile,
+      });
+    });
+  }
+
+  private broadcastProfileListUpdated(data: { profiles?: RadioProfile[]; [key: string]: unknown }): void {
+    const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
+    activeConnections.forEach(connection => {
+      const profiles = data.profiles ?? [];
+      connection.send(WSMessageType.PROFILE_LIST_UPDATED, {
+        ...data,
+        profiles: this.canSendFullProfiles(connection) ? profiles : redactProfilesForRead(profiles),
+      });
+    });
+  }
+
+  private publicTransmissionLogPayload(data: any): any {
+    return {
+      ...data,
+      operatorId: 'public-tx',
+      myCallsign: undefined,
+    };
+  }
+
+  private broadcastTransmissionLog(data: any): void {
+    const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
+    activeConnections.forEach(connection => {
+      connection.send(
+        WSMessageType.TRANSMISSION_LOG,
+        connection.isPublicViewer() ? this.publicTransmissionLogPayload(data) : data,
+      );
+    });
   }
 
   // ===== 统一的广播方法 =====
@@ -1840,6 +2035,13 @@ export class WSServer extends WSMessageHandler {
       slotPack,
       selectedOperatorId,
     );
+    if (connection.isPublicViewer()) {
+      return {
+        ...projectedSlotPack,
+        frames: projectedSlotPack.frames.map((frame) => this.redactPublicFrame(frame)),
+      };
+    }
+
     const myOperatorCallsigns = this.getSelectedOperatorCallsigns(selectedOperatorId);
     if (myOperatorCallsigns.size === 0) {
       return projectedSlotPack;
@@ -1870,6 +2072,15 @@ export class WSServer extends WSMessageHandler {
       ...projectedSlotPack,
       frames: filteredFrames,
     };
+  }
+
+  private redactPublicFrame(frame: FrameMessage): FrameMessage {
+    const {
+      logbookAnalysis: _logbookAnalysis,
+      operatorId: _operatorId,
+      ...publicFrame
+    } = frame as FrameMessage & { operatorId?: string };
+    return { ...publicFrame };
   }
 
   private getSelectedOperatorCallsigns(selectedOperatorId: string | null): Set<string> {
@@ -2056,7 +2267,8 @@ export class WSServer extends WSMessageHandler {
    * 广播日志本更新事件
    */
   broadcastLogbookUpdated(data: { logBookId: string; statistics: any }): void {
-    const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
+    const activeConnections = this.getActiveConnections()
+      .filter(conn => conn.isHandshakeCompleted() && conn.hasMinRole(UserRole.OPERATOR));
 
     // 发送给所有已握手的客户端（日志本统计信息通常所有客户端都需要）
     activeConnections.forEach(connection => {
@@ -2134,13 +2346,15 @@ export class WSServer extends WSMessageHandler {
       const { enabledOperatorIds } = data;
       const connection = this.getConnection(connectionId);
       if (connection) {
-        connection.setEnabledOperators(enabledOperatorIds);
+        const requestedOperatorIds = Array.isArray(enabledOperatorIds) ? enabledOperatorIds : [];
+        const filteredOperatorIds = this.filterRequestedOperatorIds(connection, requestedOperatorIds);
+        connection.setEnabledOperators(filteredOperatorIds);
         const selectedOperatorId = this.resolveSelectedOperatorId(
           connection,
           connection.getSelectedOperatorId(),
         );
         connection.setSelectedOperatorId(selectedOperatorId);
-        logger.debug(`connection ${connectionId} set enabled operators: [${enabledOperatorIds.join(', ')}]`);
+        logger.debug(`connection ${connectionId} set enabled operators: [${filteredOperatorIds.join(', ')}]`);
 
         this.sendFilteredOperatorsList(connection);
         await this.sendProjectedRecentSlotPacks(connection, { reset: true });
@@ -2197,7 +2411,7 @@ export class WSServer extends WSMessageHandler {
         const radioManager = this.digitalRadioEngine.getRadioManager();
         const connectionHealth = radioManager.getConnectionHealth();
 
-        this.broadcast(WSMessageType.RADIO_STATUS_CHANGED, buildRadioStatusPayload({
+        this.broadcastRadioStatusChanged(buildRadioStatusPayload({
           connected: false,
           status: RadioConnectionStatus.DISCONNECTED,
           reason: 'manual reconnect failed',
@@ -2331,28 +2545,28 @@ export class WSServer extends WSMessageHandler {
 
     // ===== 插件系统事件 =====
     this.digitalRadioEngine.on('pluginList' as any, (data: any) => {
-      this.broadcast(WSMessageType.PLUGIN_LIST, data);
+      this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_LIST, data);
     });
     this.digitalRadioEngine.on('pluginStatusChanged' as any, (data: any) => {
-      this.broadcast(WSMessageType.PLUGIN_STATUS_CHANGED, data);
+      this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_STATUS_CHANGED, data);
     });
     this.digitalRadioEngine.on('pluginData' as any, (data: any) => {
-      this.broadcast(WSMessageType.PLUGIN_DATA, data);
+      this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_DATA, data);
     });
     this.digitalRadioEngine.on('pluginLog' as any, (data: any) => {
-      this.broadcast(WSMessageType.PLUGIN_LOG, data);
+      this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_LOG, data);
     });
     this.digitalRadioEngine.on('pluginRuntimeLog' as any, (data: any) => {
-      this.broadcast(WSMessageType.PLUGIN_RUNTIME_LOG, data);
+      this.broadcastToMinRole(UserRole.ADMIN, WSMessageType.PLUGIN_RUNTIME_LOG, data);
     });
     this.digitalRadioEngine.on('pluginPagePush', (data) => {
-      this.broadcast(WSMessageType.PLUGIN_PAGE_PUSH, data);
+      this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_PAGE_PUSH, data);
     });
     this.digitalRadioEngine.on('pluginPanelMeta' as any, (data: any) => {
-      this.broadcast(WSMessageType.PLUGIN_PANEL_META, data);
+      this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_PANEL_META, data);
     });
     this.digitalRadioEngine.on('pluginPanelContributionsChanged' as any, (data: any) => {
-      this.broadcast(WSMessageType.PLUGIN_PANEL_CONTRIBUTIONS_CHANGED, data);
+      this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_PANEL_CONTRIBUTIONS_CHANGED, data);
     });
 
     // Forward profile select requests from engine to clients
@@ -2429,14 +2643,14 @@ export class WSServer extends WSMessageHandler {
         });
       } else {
         // 已配置的客户端：直接使用发送的列表（可能为空数组表示全部禁用）
-        requestedOperatorIds = enabledOperatorIds;
-        logger.debug(`configured client ${connectionId}, enabled operators: [${enabledOperatorIds.join(', ')}]`, {
+        requestedOperatorIds = Array.isArray(enabledOperatorIds) ? enabledOperatorIds : [];
+        logger.debug(`configured client ${connectionId}, enabled operators: [${requestedOperatorIds.join(', ')}]`, {
           clientInstanceId,
         });
       }
 
-      // 完成握手（带权限过滤：requestedIds ∩ authorizedOperatorIds）
-      connection.completeHandshakeWithAuth(requestedOperatorIds);
+      // 完成握手（每次都按当前 token/public-viewer 权限过滤）
+      connection.completeHandshake(this.filterRequestedOperatorIds(connection, requestedOperatorIds));
       const finalEnabledOperatorIds = connection.getEnabledOperatorIds();
       const finalSelectedOperatorId = this.resolveSelectedOperatorId(connection, selectedOperatorId);
       connection.setSelectedOperatorId(finalSelectedOperatorId);
@@ -2461,7 +2675,7 @@ export class WSServer extends WSMessageHandler {
       }
 
       // 2.5 发送插件系统快照
-      try {
+      if (connection.hasMinRole(UserRole.OPERATOR)) try {
         connection.send(WSMessageType.PLUGIN_LIST, this.digitalRadioEngine.pluginManager.getSnapshot());
       } catch (error) {
         logger.error('failed to send plugin snapshot', error);
@@ -2481,10 +2695,12 @@ export class WSServer extends WSMessageHandler {
       });
 
       // 3.5 发送进程监控历史数据
-      if (this.processMonitor) {
+      if (this.processMonitor && connection.hasMinRole(UserRole.ADMIN)) {
         connection.send(WSMessageType.PROCESS_SNAPSHOT_HISTORY, this.processMonitor.getHistoryPayload());
       }
-      this.sendDecodeWorkerUnavailableHint(connection);
+      if (connection.hasMinRole(UserRole.ADMIN)) {
+        this.sendDecodeWorkerUnavailableHint(connection);
+      }
 
       // 4. 如果引擎正在运行，发送额外的状态同步
       const status = this.digitalRadioEngine.getStatus();
@@ -2595,6 +2811,7 @@ export class WSServer extends WSMessageHandler {
         label,
         operatorIds: perms.operatorIds,
       });
+      this.sendInitialState(connection);
       this.sendCWDecoderStatus(connection);
 
       // 如果是在线升级（之前已经握手完成），重新发送操作员列表
@@ -2635,6 +2852,7 @@ export class WSServer extends WSMessageHandler {
       label: 'public viewer',
       operatorIds: [],
     });
+    this.sendInitialState(connection);
     this.sendCWDecoderStatus(connection);
 
     logger.info(`connection ${connectionId} entered public viewer mode`);

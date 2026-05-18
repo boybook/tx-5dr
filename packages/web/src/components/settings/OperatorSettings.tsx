@@ -210,7 +210,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         });
 
         // 发送到服务器
-        if (connection.state.isConnected && connection.state.radioService) {
+        if (connection.state.isReady && connection.state.radioService) {
           const enabledIds = operators
             .filter(op => localEnabledStates[op.id] ?? true)
             .map(op => op.id);
@@ -317,7 +317,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         if (response.data) {
           logger.info('New operator auto-enabled', { id: response.data.id, callsign: response.data.myCallsign });
 
-          if (connection.state.isConnected && connection.state.radioService) {
+          if (connection.state.isReady && connection.state.radioService) {
             // 重新加载后的 operators 列表 + 新操作员，减去黑名单
             const hiddenSet = new Set(getHiddenOperatorIds());
             const allIds = [...operators.map(op => op.id), response.data.id];

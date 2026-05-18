@@ -4,19 +4,33 @@
 import { FastifyInstance } from 'fastify';
 import { ConfigManager } from '../config/config-manager.js';
 import { ProfileManager } from '../config/ProfileManager.js';
-import { CreateProfileRequestSchema, UpdateProfileRequestSchema } from '@tx5dr/contracts';
+import { CreateProfileRequestSchema, UpdateProfileRequestSchema, UserRole } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
+import { AuthManager } from '../auth/AuthManager.js';
+import { requireRole } from '../auth/authPlugin.js';
+import { canReadFullProfiles, redactProfilesForRead } from '../security/profileRedaction.js';
 
 export async function profileRoutes(fastify: FastifyInstance) {
   const profileManager = ProfileManager.getInstance();
   const configManager = ConfigManager.getInstance();
+  const authManager = AuthManager.getInstance();
 
   /**
    * GET /profiles - 获取 Profile 列表
    */
-  fastify.get('/', async (_req, reply) => {
+  fastify.get('/', async (req, reply) => {
+    if (authManager.isAuthEnabled() && !req.authUser && !authManager.isPublicViewingAllowed()) {
+      return reply.code(401).send({
+        success: false,
+        error: { code: 'UNAUTHORIZED', message: 'Authentication required', userMessage: 'Please login first' },
+      });
+    }
+
+    const profiles = profileManager.getAllProfiles();
     return reply.send({
-      profiles: profileManager.getAllProfiles(),
+      profiles: canReadFullProfiles(req.authUser?.role)
+        ? profiles
+        : redactProfilesForRead(profiles),
       activeProfileId: configManager.getActiveProfileId(),
     });
   });
@@ -24,7 +38,7 @@ export async function profileRoutes(fastify: FastifyInstance) {
   /**
    * POST /profiles - 创建 Profile
    */
-  fastify.post('/', async (req, reply) => {
+  fastify.post('/', { preHandler: [requireRole(UserRole.ADMIN)] }, async (req, reply) => {
     try {
       const data = CreateProfileRequestSchema.parse(req.body);
       const profile = await profileManager.createProfile(data);
@@ -46,7 +60,7 @@ export async function profileRoutes(fastify: FastifyInstance) {
   /**
    * PUT /profiles/reorder - 重排 Profile 顺序
    */
-  fastify.put('/reorder', async (req, reply) => {
+  fastify.put('/reorder', { preHandler: [requireRole(UserRole.ADMIN)] }, async (req, reply) => {
     const { profileIds } = req.body as { profileIds: string[] };
 
     if (!Array.isArray(profileIds) || profileIds.length === 0) {
@@ -65,7 +79,10 @@ export async function profileRoutes(fastify: FastifyInstance) {
   /**
    * PUT /profiles/:id - 更新 Profile
    */
-  fastify.put<{ Params: { id: string } }>('/:id', async (req, reply) => {
+  fastify.put<{ Params: { id: string } }>(
+    '/:id',
+    { preHandler: [requireRole(UserRole.ADMIN)] },
+    async (req, reply) => {
     const { id } = req.params;
 
     // 检查 Profile 是否存在
@@ -95,12 +112,16 @@ export async function profileRoutes(fastify: FastifyInstance) {
       }
       throw e;
     }
-  });
+    },
+  );
 
   /**
    * DELETE /profiles/:id - 删除 Profile
    */
-  fastify.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {
+  fastify.delete<{ Params: { id: string } }>(
+    '/:id',
+    { preHandler: [requireRole(UserRole.ADMIN)] },
+    async (req, reply) => {
     const { id } = req.params;
 
     if (!profileManager.getProfile(id)) {
@@ -126,12 +147,16 @@ export async function profileRoutes(fastify: FastifyInstance) {
 
     await profileManager.deleteProfile(id);
     return reply.send({ success: true });
-  });
+    },
+  );
 
   /**
    * POST /profiles/:id/activate - 激活 Profile
    */
-  fastify.post<{ Params: { id: string } }>('/:id/activate', async (req, reply) => {
+  fastify.post<{ Params: { id: string } }>(
+    '/:id/activate',
+    { preHandler: [requireRole(UserRole.ADMIN)] },
+    async (req, reply) => {
     const { id } = req.params;
 
     if (!profileManager.getProfile(id)) {
@@ -146,5 +171,6 @@ export async function profileRoutes(fastify: FastifyInstance) {
 
     const result = await profileManager.activateProfile(id);
     return reply.send(result);
-  });
+    },
+  );
 }

@@ -121,10 +121,10 @@ export const TxVolumeGainControl: React.FC<TxVolumeGainControlProps> = ({
   }, [connection.state.radioService]);
 
   React.useEffect(() => {
-    if (connection.state.isConnected && connection.state.radioService) {
+    if (connection.state.isReady && connection.state.radioService) {
       connection.state.radioService.getSystemStatus();
     }
-  }, [connection.state.isConnected, connection.state.radioService]);
+  }, [connection.state.isReady, connection.state.radioService]);
 
   const currentDbValue = gainToDb(volumeGain);
   const handleWheel = React.useCallback((event: React.WheelEvent<HTMLElement>) => {

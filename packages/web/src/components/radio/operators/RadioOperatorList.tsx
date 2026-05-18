@@ -42,7 +42,7 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
       operatorCount: radio.state.operators.length
     }); */
     
-    if (connection.state.isConnected && connection.state.radioService) {
+    if (connection.state.isReady && connection.state.radioService) {
       // console.log('🔗 [RadioOperatorList] 连接成功，延迟500ms后请求操作员列表');
       // 延迟一下确保WebSocket完全就绪
       const timer = setTimeout(() => {
@@ -52,7 +52,7 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
       
       return () => clearTimeout(timer);
     }
-  }, [connection.state.isConnected, connection.state.radioService]);
+  }, [connection.state.isReady, connection.state.radioService]);
 
   if (operators.length === 0) {
     return (

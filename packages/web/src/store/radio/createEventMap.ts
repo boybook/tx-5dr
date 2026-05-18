@@ -109,6 +109,8 @@ export function createRadioEventMap({
 }: CreateRadioEventMapDeps): Record<string, (data?: unknown) => void> {
   const pendingOperatorStatuses = new Map<string, OperatorStatus>();
   let operatorStatusFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  let handshakeCompleted = false;
+  let pendingEnabledOperatorIds: string[] | null = null;
 
   const flushPendingOperatorStatuses = () => {
     if (operatorStatusFlushTimer) {
@@ -135,6 +137,14 @@ export function createRadioEventMap({
     }
   };
 
+  const syncEnabledOperatorsAfterHandshake = (enabledIds: string[]): void => {
+    if (!handshakeCompleted) {
+      pendingEnabledOperatorIds = enabledIds;
+      return;
+    }
+    radioService.setClientEnabledOperators(enabledIds);
+  };
+
   const syncCurrentOperatorSelection = (visibleOperatorIds: string[]): void => {
     const currentOperatorId = radioStateRef.current.currentOperatorId;
     const storedSelectedOperatorId = getSelectedOperatorId();
@@ -152,8 +162,15 @@ export function createRadioEventMap({
 
   return {
     connected: () => {
+      handshakeCompleted = false;
+      pendingEnabledOperatorIds = null;
       connectionDispatch({ type: 'connected' });
-      if (!authStateRef.current.authEnabled) {
+      const authState = authStateRef.current;
+      const canUseNoAuthHandshake = authState.initialized
+        && authState.sessionResolved
+        && !authState.authEnabled
+        && !authState.jwt;
+      if (canUseNoAuthHandshake) {
         const handshakeOperatorIds = getHandshakeOperatorIds();
         const handshakeSelectedOperatorId = getHandshakeSelectedOperatorId();
         logger.info('Auth disabled, sending handshake directly:', {
@@ -163,9 +180,10 @@ export function createRadioEventMap({
         });
         radioService.sendHandshake(handshakeOperatorIds, handshakeSelectedOperatorId, clientInstanceId);
       }
-      refreshRealtimeState();
     },
     reconnecting: (data: unknown) => {
+      handshakeCompleted = false;
+      pendingEnabledOperatorIds = null;
       const reconnectData = data as { attempt: number; delayMs: number };
       logger.info('WebSocket reconnecting', reconnectData);
       connectionDispatch({ type: 'reconnecting' });
@@ -192,7 +210,6 @@ export function createRadioEventMap({
         const handshakeOperatorIds = getHandshakeOperatorIds();
         const handshakeSelectedOperatorId = getHandshakeSelectedOperatorId();
         radioService.sendHandshake(handshakeOperatorIds, handshakeSelectedOperatorId, clientInstanceId);
-        refreshRealtimeState();
       } else {
         const errorCode = result.error;
         const localizedError = errorCode
@@ -212,6 +229,8 @@ export function createRadioEventMap({
       });
     },
     disconnected: () => {
+      handshakeCompleted = false;
+      pendingEnabledOperatorIds = null;
       connectionDispatch({ type: 'disconnected' });
     },
     modeChanged: (data: unknown) => {
@@ -409,7 +428,7 @@ export function createRadioEventMap({
         if (allIds.some((id) => hiddenSet.has(id))) {
           const enabledIds = allIds.filter((id) => !hiddenSet.has(id));
           logger.debug('Syncing enabled operators after receiving list:', enabledIds);
-          radioService.setClientEnabledOperators(enabledIds);
+          syncEnabledOperatorsAfterHandshake(enabledIds);
         }
       }
     },
@@ -491,10 +510,17 @@ export function createRadioEventMap({
         finalSelectedOperatorId?: string | null;
       };
       logger.info('Handshake complete', handshakeData);
+      handshakeCompleted = true;
+      connectionDispatch({ type: 'handshakeComplete' });
       if (Object.prototype.hasOwnProperty.call(handshakeData, 'finalSelectedOperatorId')) {
         const finalSelectedOperatorId = handshakeData.finalSelectedOperatorId ?? null;
         setSelectedOperatorId(finalSelectedOperatorId);
         radioDispatch({ type: 'setCurrentOperator', payload: finalSelectedOperatorId });
+      }
+      if (pendingEnabledOperatorIds) {
+        const enabledIds = pendingEnabledOperatorIds;
+        pendingEnabledOperatorIds = null;
+        radioService.setClientEnabledOperators(enabledIds);
       }
       logger.info('Handshake complete, requesting profile list');
       try {

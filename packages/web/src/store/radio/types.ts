@@ -40,6 +40,7 @@ import type { RadioService } from '../../services/radioService';
 export interface ConnectionState {
   isConnected: boolean;
   isConnecting: boolean;
+  isReady: boolean;
   wasEverConnected: boolean;
   radioService: RadioService | null;
   connectError: string | null;
@@ -47,6 +48,7 @@ export interface ConnectionState {
 
 export type ConnectionAction =
   | { type: 'connected' }
+  | { type: 'handshakeComplete' }
   | { type: 'reconnecting' }
   | { type: 'disconnected' }
   | { type: 'SET_RADIO_SERVICE'; payload: RadioService }

@@ -23,9 +23,10 @@ const TITLEBAR_HEIGHT = 32;
 
 interface AboutPageProps {
   embedded?: boolean;
+  showUpdateCard?: boolean;
 }
 
-export const AboutPage: React.FC<AboutPageProps> = ({ embedded }) => {
+export const AboutPage: React.FC<AboutPageProps> = ({ embedded, showUpdateCard = false }) => {
   useTheme();
   useLanguage();
   const { t } = useTranslation('about');
@@ -76,7 +77,7 @@ export const AboutPage: React.FC<AboutPageProps> = ({ embedded }) => {
           </CardBody>
         </Card>
 
-        <DesktopUpdateCard />
+        {showUpdateCard && <DesktopUpdateCard />}
 
         <Card shadow="none">
           <CardBody className="gap-3 px-6 py-5">

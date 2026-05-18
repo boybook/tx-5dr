@@ -11,8 +11,8 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('RadioRoute');
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
-import { HamlibConfigSchema, WriteCapabilityPayloadSchema } from '@tx5dr/contracts';
-import { requireAbility, requireAbilityFor } from '../auth/authPlugin.js';
+import { HamlibConfigSchema, UserRole, WriteCapabilityPayloadSchema } from '@tx5dr/contracts';
+import { requireAbility, requireAbilityFor, requireRole } from '../auth/authPlugin.js';
 import type { HamlibConfig } from '@tx5dr/contracts';
 import serialport from 'serialport';
 const { SerialPort } = serialport;
@@ -25,6 +25,7 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { normalizeHamlibConfig } from '../radio/hamlibConfigUtils.js';
 import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
+import { canReadFullProfiles, redactHamlibConfigForRead } from '../security/profileRedaction.js';
 
 /** 判断两个配置是否指向同一硬件目标（用于复用判断） */
 function isHardwareSameTarget(a: HamlibConfig, b: HamlibConfig): boolean {
@@ -203,12 +204,13 @@ export async function radioRoutes(fastify: FastifyInstance) {
   const engine = DigitalRadioEngine.getInstance();
   const configManager = ConfigManager.getInstance();
   const radioManager = engine.getRadioManager();
+  const adminOnly = [requireRole(UserRole.ADMIN)];
 
-  fastify.get('/config', async (_req, reply) => {
+  fastify.get('/config', { onRequest: adminOnly }, async (_req, reply) => {
     return reply.send({ success: true, config: configManager.getRadioConfig() });
   });
 
-  fastify.post('/config', { schema: { body: zodToJsonSchema(HamlibConfigSchema) }, preHandler: [requireAbility('update', 'RadioConfig')] }, async (req, reply) => {
+  fastify.post('/config', { schema: { body: zodToJsonSchema(HamlibConfigSchema) }, onRequest: adminOnly, preHandler: [requireAbility('update', 'RadioConfig')] }, async (req, reply) => {
     const config = normalizeHamlibConfig(HamlibConfigSchema.parse(req.body));
     await configManager.updateRadioConfig(config);
 
@@ -281,11 +283,11 @@ export async function radioRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, config });
   });
 
-  fastify.get('/rigs', async (_req, reply) => {
+  fastify.get('/rigs', { onRequest: adminOnly }, async (_req, reply) => {
     return reply.send({ rigs: await PhysicalRadioManager.listSupportedRigs() });
   });
 
-  fastify.get('/rigs/:rigModel/config-schema', async (req: any, reply) => {
+  fastify.get('/rigs/:rigModel/config-schema', { onRequest: adminOnly }, async (req: any, reply) => {
     const rigModel = Number(req.params?.rigModel);
 
     if (!Number.isInteger(rigModel) || rigModel <= 0) {
@@ -301,7 +303,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     return reply.send(schema);
   });
 
-  fastify.get('/serial-ports', async (_req, reply) => {
+  fastify.get('/serial-ports', { onRequest: adminOnly }, async (_req, reply) => {
     const ports = await SerialPort.list();
     return reply.send({ ports });
   });
@@ -539,7 +541,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     });
   });
 
-  fastify.post('/test', { schema: { body: zodToJsonSchema(HamlibConfigSchema) } }, async (req, reply) => {
+  fastify.post('/test', { schema: { body: zodToJsonSchema(HamlibConfigSchema) }, onRequest: adminOnly }, async (req, reply) => {
     const config = normalizeHamlibConfig(HamlibConfigSchema.parse(req.body));
 
     if (config.type === 'none') {
@@ -590,7 +592,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.post('/test-ptt', { schema: { body: zodToJsonSchema(HamlibConfigSchema) } }, async (req, reply) => {
+  fastify.post('/test-ptt', { schema: { body: zodToJsonSchema(HamlibConfigSchema) }, onRequest: adminOnly }, async (req, reply) => {
     const config = normalizeHamlibConfig(HamlibConfigSchema.parse(req.body));
 
     if (config.type === 'none') {
@@ -664,7 +666,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
   });
 
   // CW 键控端口测试
-  fastify.post('/test-cw-keyer', { schema: { body: zodToJsonSchema(HamlibConfigSchema) } }, async (req, reply) => {
+  fastify.post('/test-cw-keyer', { schema: { body: zodToJsonSchema(HamlibConfigSchema) }, onRequest: adminOnly }, async (req, reply) => {
     const config = normalizeHamlibConfig(HamlibConfigSchema.parse(req.body));
 
     const cwKeyPort = config.cwKeyPort?.trim();
@@ -697,7 +699,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
   });
 
   // 获取电台连接状态
-  fastify.get('/status', async (_req, reply) => {
+  fastify.get('/status', async (req, reply) => {
     const config = configManager.getRadioConfig();
     const isConnected = radioManager.isConnected();
     const connectionStatus = radioManager.getConnectionStatus();
@@ -711,7 +713,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
         connected: isConnected,
         connectionStatus,
         radioInfo,
-        radioConfig: config,
+        radioConfig: canReadFullProfiles(req.authUser?.role) ? config : redactHamlibConfigForRead(config),
         connectionHealth: radioManager.getConnectionHealth(),
         coreCapabilities: radioManager.getCoreCapabilities(),
         coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),

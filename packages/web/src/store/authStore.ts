@@ -95,6 +95,7 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         ...state,
         initialized: true,
         sessionResolved: true,
+        authEnabled: true,
         jwt: action.payload.jwt,
         role: action.payload.role,
         label: action.payload.label,

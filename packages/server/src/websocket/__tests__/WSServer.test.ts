@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { WSMessageType, type SystemStatus } from '@tx5dr/contracts';
-import { WSServer } from '../WSServer.js';
+import { UserRole, WSMessageType, type SystemStatus } from '@tx5dr/contracts';
+import { WSConnection, WSServer } from '../WSServer.js';
 import { ConfigManager } from '../../config/config-manager.js';
 
 function createStatus(overrides: Partial<SystemStatus> = {}): SystemStatus {
@@ -116,6 +116,150 @@ describe('WSServer initial frequency snapshot', () => {
     expect(server.shouldBroadcastRadioConnectedToast(true)).toBe(false);
     expect(server.shouldBroadcastRadioConnectedToast(false)).toBe(false);
     expect(server.shouldBroadcastRadioConnectedToast(true)).toBe(true);
+  });
+});
+
+function createTestConnection(id = 'conn-test'): { connection: WSConnection; sent: Array<{ type: string; data: any }> } {
+  const sent: Array<{ type: string; data: any }> = [];
+  const listeners = new Map<string, (...args: unknown[]) => void>();
+  const ws = {
+    readyState: 1,
+    on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      listeners.set(event, listener);
+    }),
+    off: vi.fn(),
+    close: vi.fn(),
+    send: vi.fn((raw: string) => {
+      const parsed = JSON.parse(raw);
+      sent.push({ type: parsed.type, data: parsed.data });
+    }),
+  };
+  return { connection: new WSConnection(ws, id), sent };
+}
+
+describe('WSServer security filtering', () => {
+  it('keeps public viewers from self-subscribing to operators', async () => {
+    const { connection, sent } = createTestConnection('conn-public');
+    connection.setPublicViewer();
+    connection.completeHandshake([]);
+
+    const server = Object.create(WSServer.prototype) as any;
+    server.getConnection = vi.fn(() => connection);
+    server.digitalRadioEngine = {
+      operatorManager: {
+        getOperatorsStatus: vi.fn(() => [
+          { id: 'op-a', context: { myCall: 'BG5AAA' } },
+          { id: 'op-b', context: { myCall: 'BH1BBB' } },
+        ]),
+      },
+    };
+    server.sendProjectedRecentSlotPacks = vi.fn();
+
+    await (server as any).handleSetClientEnabledOperators('conn-public', {
+      enabledOperatorIds: ['op-a', 'op-b'],
+    });
+
+    expect(connection.getEnabledOperatorIds()).toEqual([]);
+    expect(connection.getSelectedOperatorId()).toBeNull();
+    expect(sent.find(message => message.type === WSMessageType.OPERATORS_LIST)?.data).toEqual({ operators: [] });
+  });
+
+  it('rejects non-auth commands before handshake', async () => {
+    const send = vi.fn();
+    const server = Object.create(WSServer.prototype) as any;
+    server.getConnection = vi.fn(() => ({
+      hasResolvedIdentity: () => true,
+      isHandshakeCompleted: () => false,
+      isPublicViewer: () => false,
+      send,
+    }));
+
+    await (server as any).handleClientCommand('conn-1', {
+      type: WSMessageType.GET_PLUGIN_RUNTIME_LOG_HISTORY,
+      data: { limit: 1 },
+    });
+
+    expect(send).toHaveBeenCalledWith(WSMessageType.ERROR, expect.objectContaining({
+      code: 'UNAUTHORIZED',
+      message: 'handshake_required',
+    }));
+  });
+
+  it('redacts operator identity from public slot packs and tx logs', async () => {
+    const { connection, sent } = createTestConnection('conn-public');
+    connection.setPublicViewer();
+    connection.completeHandshake([]);
+
+    const server = Object.create(WSServer.prototype) as any;
+    server.slotPackProjectionService = {
+      projectSlotPack: vi.fn(async (slotPack: any) => slotPack),
+    };
+    const slotPack = {
+      id: 'slot-1',
+      startMs: 1000,
+      frames: [
+        {
+          utc: '00:00:00',
+          snr: -999,
+          dt: 0,
+          freq: 14074000,
+          message: 'CQ BG5AAA PM00',
+          operatorId: 'op-a',
+          logbookAnalysis: { callsign: 'BG5AAA' },
+        },
+      ],
+      stats: {},
+      decodeHistory: [],
+    };
+
+    const customized = await (server as any).customizeSlotPackForClient(connection, slotPack);
+    expect(customized.frames[0].operatorId).toBeUndefined();
+    expect(customized.frames[0].logbookAnalysis).toBeUndefined();
+
+    server.getActiveConnections = vi.fn(() => [connection]);
+    (server as any).broadcastTransmissionLog({
+      operatorId: 'op-a',
+      time: '000000',
+      message: 'CQ BG5AAA PM00',
+      frequency: 14074000,
+      slotStartMs: 1000,
+    });
+
+    expect(sent.find(message => message.type === WSMessageType.TRANSMISSION_LOG)?.data.operatorId).toBe('public-tx');
+  });
+
+  it('redacts radio topology and PTT operator ids for public viewers', () => {
+    const { connection: publicConnection, sent: publicSent } = createTestConnection('conn-public');
+    publicConnection.setPublicViewer();
+    publicConnection.completeHandshake([]);
+
+    const { connection: adminConnection, sent: adminSent } = createTestConnection('conn-admin');
+    adminConnection.setAuthenticated(UserRole.ADMIN, [], 'admin');
+    adminConnection.completeHandshake([]);
+
+    const server = Object.create(WSServer.prototype) as any;
+    server.getActiveConnections = vi.fn(() => [publicConnection, adminConnection]);
+
+    (server as any).broadcastRadioStatusChanged({
+      connected: true,
+      status: 'connected',
+      radioInfo: null,
+      radioConfig: {
+        type: 'icom-wlan',
+        icomWlan: { ip: '192.168.1.50', port: 50001, userName: 'radio-user', password: 'radio-secret' },
+        cwKeyPort: '/dev/tty.cw',
+      },
+    });
+    (server as any).broadcastPttStatusChanged({
+      isTransmitting: true,
+      operatorIds: ['op-a'],
+      operatorId: 'op-a',
+    });
+
+    expect(publicSent.find(message => message.type === WSMessageType.RADIO_STATUS_CHANGED)?.data.radioConfig).toEqual({ type: 'icom-wlan' });
+    expect(adminSent.find(message => message.type === WSMessageType.RADIO_STATUS_CHANGED)?.data.radioConfig.icomWlan.password).toBe('radio-secret');
+    expect(publicSent.find(message => message.type === WSMessageType.PTT_STATUS_CHANGED)?.data.operatorIds).toEqual([]);
+    expect(adminSent.find(message => message.type === WSMessageType.PTT_STATUS_CHANGED)?.data.operatorIds).toEqual(['op-a']);
   });
 });
 

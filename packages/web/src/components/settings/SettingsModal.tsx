@@ -427,7 +427,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
       case 'shortcuts':
         return <ShortcutSettings ref={shortcutSettingsRef} onUnsavedChanges={setHasUnsavedChanges} />;
       case 'about':
-        return <AboutPage embedded />;
+        return <AboutPage embedded showUpdateCard={isAdmin} />;
       default:
         return null;
     }

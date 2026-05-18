@@ -12,7 +12,7 @@ import {
 import { addToast } from '@heroui/toast';
 import { api, ApiError } from '@tx5dr/core';
 import { useConnection, useOperators, useRadioConnectionState, useRadioState } from '../../store/radioStore';
-import { useHasMinRole, useCan, useAbility } from '../../store/authStore';
+import { useAuth, useHasMinRole, useCan, useAbility } from '../../store/authStore';
 import { UserRole, type PresetFrequency } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
 import { useTranslation } from 'react-i18next';
@@ -54,7 +54,9 @@ export const VoiceFrequencyControl: React.FC = () => {
   const { operators } = useOperators();
   const radioConnection = useRadioConnectionState();
   const radio = useRadioState();
+  const { state: authState } = useAuth();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
+  const canUseAuthenticatedRest = !authState.authEnabled || Boolean(authState.jwt);
   const canSetFrequency = useCan('execute', 'RadioFrequency');
   const canManageFrequencyPresets = useCan('update', 'SettingsFrequencyPresets');
   const ability = useAbility();
@@ -185,6 +187,10 @@ export const VoiceFrequencyControl: React.FC = () => {
   }, []);
   const loadVoicePresets = useCallback(async () => {
     if (!connection.state.isConnected) return;
+    if (!canUseAuthenticatedRest) {
+      setPresets([]);
+      return;
+    }
 
     setIsLoadingPresets(true);
     try {
@@ -240,7 +246,7 @@ export const VoiceFrequencyControl: React.FC = () => {
     } finally {
       setIsLoadingPresets(false);
     }
-  }, [connection.state.isConnected, formatBandLabel]);
+  }, [canUseAuthenticatedRest, connection.state.isConnected, formatBandLabel]);
 
   // Load voice frequency presets + restore last frequency
   useEffect(() => {

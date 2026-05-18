@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo } from 'react';
 import { Card, CardBody } from '@heroui/react';
 import { api, ApiError, getBandFromFrequency } from '@tx5dr/core';
 import { useTranslation } from 'react-i18next';
-import { useAbility, useCan } from '../../store/authStore';
+import { useAbility, useAuth, useCan } from '../../store/authStore';
 import { useConnection, useOperators, useRadioConnectionState, useRadioState } from '../../store/radioStore';
 import { createLogger } from '../../utils/logger';
 import { canExecuteRadioFrequency, canWriteRadioFrequency } from '../../utils/radioControl';
@@ -61,6 +61,8 @@ export const CWFrequencyControl: React.FC = () => {
   const { operators } = useOperators();
   const radioConnection = useRadioConnectionState();
   const radio = useRadioState();
+  const { state: authState } = useAuth();
+  const canUseAuthenticatedRest = !authState.authEnabled || Boolean(authState.jwt);
   const canSetFrequency = useCan('execute', 'RadioFrequency');
   const ability = useAbility();
   const canWriteFrequency = canWriteRadioFrequency(canSetFrequency, radioConnection.coreCapabilities);
@@ -161,6 +163,7 @@ export const CWFrequencyControl: React.FC = () => {
 
   useEffect(() => {
     if (liveFrequency !== null) return;
+    if (!canUseAuthenticatedRest) return;
     let cancelled = false;
     api.getLastFrequency()
       .then((resp) => {
@@ -173,7 +176,7 @@ export const CWFrequencyControl: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [liveFrequency]);
+  }, [canUseAuthenticatedRest, liveFrequency]);
 
   useEffect(() => {
     const radioService = connection.state.radioService;

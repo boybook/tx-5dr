@@ -64,10 +64,14 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
 
   // Load rigs list for auto-match
   useEffect(() => {
+    if (!isOpen) {
+      setRigs([]);
+      return;
+    }
     api.getSupportedRigs().then((res) => {
       if (res.rigs) setRigs(res.rigs);
     }).catch(() => { /* ignore */ });
-  }, []);
+  }, [isOpen]);
 
   // Auto-match USB audio device when rigModel changes (serial mode only)
   useEffect(() => {

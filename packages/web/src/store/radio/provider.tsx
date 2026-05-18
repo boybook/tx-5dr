@@ -125,6 +125,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
   );
 
   const { state: authState } = useAuth();
+  const canUseAdminRest = !authState.authEnabled || (Boolean(authState.jwt) && authState.role === 'admin');
   const authStateRef = useRef(authState);
   authStateRef.current = authState;
   const prevJwtRef = useRef<string | null>(authState.jwt);
@@ -238,6 +239,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     if (!connectionState.isConnected) return;
+    if (!canUseAdminRest) return;
     let cancelled = false;
     api.getBootstrapStatus()
       .then((status) => {
@@ -251,7 +253,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       cancelled = true;
     };
-  }, [connectionState.isConnected]);
+  }, [canUseAdminRest, connectionState.isConnected]);
 
   const markSpectrumSelectionManual = useCallback(() => {
     spectrumAutoPriorityPendingRef.current = false;

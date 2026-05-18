@@ -1138,12 +1138,12 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   }, [connection.state.radioService, isCollapsed, setSubscribedKind, streamController]);
 
   useEffect(() => {
-    if (isCollapsed || !connection.state.isConnected || !subscribedKind) {
+    if (isCollapsed || !connection.state.isReady || !subscribedKind) {
       return;
     }
 
     connection.state.radioService?.subscribeSpectrum(subscribedKind);
-  }, [connection.state.isConnected, connection.state.radioService, isCollapsed, subscribedKind]);
+  }, [connection.state.isReady, connection.state.radioService, isCollapsed, subscribedKind]);
 
   useEffect(() => {
     const radioService = connection.state.radioService;
@@ -1192,7 +1192,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     spectrumNoFrameRetryCountRef.current = 0;
     setSpectrumRecoveryState({ isStale: false, retryCount: 0, exhausted: false });
 
-    if (isCollapsed || !connection.state.isConnected || !connection.state.radioService || !subscribedKind) {
+    if (isCollapsed || !connection.state.isReady || !connection.state.radioService || !subscribedKind) {
       return;
     }
 
@@ -1225,7 +1225,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     return () => {
       clearInterval(timer);
     };
-  }, [connection.state.isConnected, connection.state.radioService, isCollapsed, subscribedKind]);
+  }, [connection.state.isReady, connection.state.radioService, isCollapsed, subscribedKind]);
 
   useLayoutEffect(() => {
     streamController.updateContext({

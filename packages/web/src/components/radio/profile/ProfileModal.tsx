@@ -20,7 +20,8 @@ import { addToast } from '@heroui/toast';
 import { Reorder } from 'framer-motion';
 import { api } from '@tx5dr/core';
 import type { RadioProfile, HamlibConfig, AudioDeviceSettings as AudioDeviceSettingsType, SupportedRig } from '@tx5dr/contracts';
-import { RadioConnectionStatus } from '@tx5dr/contracts';
+import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
+import { useHasMinRole } from '../../../store/authStore';
 import { useProfiles, useRadioConnectionState } from '../../../store/radioStore';
 import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceSettings';
 import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
@@ -38,10 +39,24 @@ interface ProfileModalProps {
 
 type ModalMode = 'list' | 'create' | 'edit';
 
+function isRedactedProfile(profile: RadioProfile): boolean {
+  switch (profile.radio.type) {
+    case 'network':
+      return !profile.radio.network;
+    case 'serial':
+      return !profile.radio.serial;
+    case 'icom-wlan':
+      return !profile.radio.icomWlan;
+    default:
+      return false;
+  }
+}
+
 export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   const { t } = useTranslation('radio');
   const { profiles, activeProfileId } = useProfiles();
   const radioConnection = useRadioConnectionState();
+  const canManageProfiles = useHasMinRole(UserRole.ADMIN);
   const [mode, setMode] = useState<ModalMode>('list');
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const [isActivating, setIsActivating] = useState(false);
@@ -58,6 +73,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
 
   // 本地排序状态（用于即时 UI 反馈）
   const [localProfiles, setLocalProfiles] = useState<RadioProfile[]>(profiles);
+  const canReorderProfiles = canManageProfiles && localProfiles.every(profile => !isRedactedProfile(profile));
   const reorderTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const radioSettingsRef = useRef<RadioDeviceSettingsRef | null>(null);
@@ -87,10 +103,14 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
 
   // Load rigs list for auto-match
   useEffect(() => {
+    if (!canManageProfiles) {
+      setRigs([]);
+      return;
+    }
     api.getSupportedRigs().then((res) => {
       if (res.rigs) setRigs(res.rigs);
     }).catch(() => { /* ignore */ });
-  }, []);
+  }, [canManageProfiles]);
 
   // Auto-match USB audio device when rigModel changes (serial mode only)
   useEffect(() => {
@@ -116,6 +136,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
 
   // 拖拽排序处理：即时更新 UI，debounce 保存到后端
   const handleReorder = useCallback((newOrder: RadioProfile[]) => {
+    if (!canReorderProfiles) return;
     setLocalProfiles(newOrder);
 
     if (reorderTimeoutRef.current) {
@@ -134,7 +155,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
         });
       }
     }, 500);
-  }, []);
+  }, [canReorderProfiles, t]);
 
   // 清理 timeout
   useEffect(() => {
@@ -149,9 +170,15 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   const getRadioTypeLabel = (config: HamlibConfig) => {
     switch (config.type) {
       case 'none': return t('connection.none');
-      case 'network': return `${t('profileModal.network')} | ${config.network?.host || ''}:${config.network?.port || ''}`;
-      case 'serial': return `${t('profileModal.serial')} | ${config.serial?.path || ''}`;
-      case 'icom-wlan': return `ICOM WLAN | ${config.icomWlan?.ip || ''}`;
+      case 'network': return config.network?.host && config.network?.port
+        ? `${t('profileModal.network')} | ${config.network.host}:${config.network.port}`
+        : t('profileModal.network');
+      case 'serial': return config.serial?.path
+        ? `${t('profileModal.serial')} | ${config.serial.path}`
+        : t('profileModal.serial');
+      case 'icom-wlan': return config.icomWlan?.ip
+        ? `ICOM WLAN | ${config.icomWlan.ip}`
+        : 'ICOM WLAN';
       default: return t('profileModal.unknownType');
     }
   };
@@ -165,6 +192,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
 
   // 进入创建模式
   const handleStartCreate = () => {
+    if (!canManageProfiles) return;
     setEditName('');
     setEditDescription('');
     setEditRadioConfig({ type: 'none' });
@@ -177,6 +205,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
 
   // 进入编辑模式
   const handleStartEdit = (profile: RadioProfile) => {
+    if (!canManageProfiles || isRedactedProfile(profile)) return;
     setEditName(profile.name);
     setEditDescription(profile.description || '');
     setEditRadioConfig(profile.radio);
@@ -236,6 +265,8 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
 
   // 删除 Profile
   const handleDelete = async (profileId: string) => {
+    const profile = profiles.find(p => p.id === profileId);
+    if (!canManageProfiles || (profile && isRedactedProfile(profile))) return;
     if (profileId === activeProfileId) {
       addToast({ title: t('profileModal.cannotDeleteActive'), color: 'warning', timeout: 3000 });
       return;
@@ -244,7 +275,6 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     setIsDeleting(profileId);
     try {
       await api.deleteProfile(profileId);
-      const profile = profiles.find(p => p.id === profileId);
       addToast({ title: t('profileModal.deleted', { name: profile?.name || '' }), color: 'success', timeout: 3000 });
     } catch (error) {
       addToast({
@@ -260,7 +290,10 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
 
   // 应用选中的 Profile（始终可用，后端会自动启动引擎并连接）
   const handleApply = async () => {
+    if (!canManageProfiles) return;
     if (!selectedProfileId) return;
+    const profile = profiles.find(p => p.id === selectedProfileId);
+    if (profile && isRedactedProfile(profile)) return;
 
     setIsActivating(true);
     try {
@@ -298,6 +331,13 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     }
   }, [editRadioConfig.type]);
 
+  const selectedProfile = selectedProfileId
+    ? profiles.find(profile => profile.id === selectedProfileId)
+    : null;
+  const canApplySelectedProfile = canManageProfiles
+    && !!selectedProfile
+    && !isRedactedProfile(selectedProfile);
+
   // 渲染列表模式
   const renderListMode = () => (
     <>
@@ -306,83 +346,94 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
           {profiles.length === 0 ? (
             <div className="text-center py-8">
               <p className="text-default-500 mb-4">{t('profileModal.noProfiles')}</p>
-              <Button color="primary" onPress={handleStartCreate} startContent={<FontAwesomeIcon icon={faPlus} />}>
-                {t('profileModal.newProfile')}
-              </Button>
+              {canManageProfiles && (
+                <Button color="primary" onPress={handleStartCreate} startContent={<FontAwesomeIcon icon={faPlus} />}>
+                  {t('profileModal.newProfile')}
+                </Button>
+              )}
             </div>
           ) : (
             <>
               <Reorder.Group axis="y" values={localProfiles} onReorder={handleReorder} className="space-y-2" as="div">
-                {localProfiles.map(profile => (
-                  <Reorder.Item key={profile.id} value={profile} as="div" className="w-full">
-                    <Card
-                      isPressable
-                      onPress={() => setSelectedProfileId(profile.id)}
-                      shadow="none"
-                      radius="lg"
-                      classNames={{
-                        base: `border overflow-hidden w-full ${selectedProfileId === profile.id ? 'border-primary bg-primary-50/50' : 'border-divider bg-content1'} transition-colors`
-                      }}
-                    >
-                      <div className="flex">
-                        <div className={`w-1 flex-shrink-0 ${getIndicatorColor(profile.id)}`} />
-                        <div className="flex items-center pl-2 cursor-grab active:cursor-grabbing text-default-300 hover:text-default-500 transition-colors">
-                          <FontAwesomeIcon icon={faGripVertical} className="text-xs" />
-                        </div>
-                        <CardBody className="p-3 flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <span className="font-medium text-default-900 truncate">{profile.name}</span>
-                                {profile.id === activeProfileId && (
-                                  <Chip size="sm" color="success" variant="flat">{t('profileModal.current')}</Chip>
-                                )}
+                {localProfiles.map(profile => {
+                  const canManageThisProfile = canManageProfiles && !isRedactedProfile(profile);
+                  return (
+                    <Reorder.Item key={profile.id} value={profile} as="div" className="w-full" dragListener={canReorderProfiles}>
+                      <Card
+                        isPressable
+                        onPress={() => setSelectedProfileId(profile.id)}
+                        shadow="none"
+                        radius="lg"
+                        classNames={{
+                          base: `border overflow-hidden w-full ${selectedProfileId === profile.id ? 'border-primary bg-primary-50/50' : 'border-divider bg-content1'} transition-colors`
+                        }}
+                      >
+                        <div className="flex">
+                          <div className={`w-1 flex-shrink-0 ${getIndicatorColor(profile.id)}`} />
+                          {canReorderProfiles && (
+                            <div className="flex items-center pl-2 cursor-grab active:cursor-grabbing text-default-300 hover:text-default-500 transition-colors">
+                              <FontAwesomeIcon icon={faGripVertical} className="text-xs" />
+                            </div>
+                          )}
+                          <CardBody className="p-3 flex-1 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium text-default-900 truncate">{profile.name}</span>
+                                  {profile.id === activeProfileId && (
+                                    <Chip size="sm" color="success" variant="flat">{t('profileModal.current')}</Chip>
+                                  )}
+                                </div>
+                                <p className="text-xs text-default-500 truncate mt-0.5">
+                                  {getRadioTypeLabel(profile.radio)}
+                                </p>
                               </div>
-                              <p className="text-xs text-default-500 truncate mt-0.5">
-                                {getRadioTypeLabel(profile.radio)}
-                              </p>
+                              {canManageThisProfile && (
+                                <div className="flex items-center gap-1 flex-shrink-0">
+                                  <PowerControlButton profileId={profile.id} compact onPowerOnSuccess={onClose} />
+                                  <Button
+                                    size="sm"
+                                    variant="light"
+                                    isIconOnly
+                                    onPress={() => handleStartEdit(profile)}
+                                    title={t('profileModal.edit')}
+                                  >
+                                    <FontAwesomeIcon icon={faPen} className="text-default-400 text-xs" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="light"
+                                    isIconOnly
+                                    color="danger"
+                                    isDisabled={profile.id === activeProfileId}
+                                    isLoading={isDeleting === profile.id}
+                                    onPress={() => handleDelete(profile.id)}
+                                    title={profile.id === activeProfileId ? t('profileModal.cannotDeleteActive') : t('common:button.delete')}
+                                  >
+                                    <FontAwesomeIcon icon={faTrash} className="text-xs" />
+                                  </Button>
+                                </div>
+                              )}
                             </div>
-                            <div className="flex items-center gap-1 flex-shrink-0">
-                              <PowerControlButton profileId={profile.id} compact onPowerOnSuccess={onClose} />
-                              <Button
-                                size="sm"
-                                variant="light"
-                                isIconOnly
-                                onPress={() => handleStartEdit(profile)}
-                                title={t('profileModal.edit')}
-                              >
-                                <FontAwesomeIcon icon={faPen} className="text-default-400 text-xs" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="light"
-                                isIconOnly
-                                color="danger"
-                                isDisabled={profile.id === activeProfileId}
-                                isLoading={isDeleting === profile.id}
-                                onPress={() => handleDelete(profile.id)}
-                                title={profile.id === activeProfileId ? t('profileModal.cannotDeleteActive') : t('common:button.delete')}
-                              >
-                                <FontAwesomeIcon icon={faTrash} className="text-xs" />
-                              </Button>
-                            </div>
-                          </div>
-                        </CardBody>
-                      </div>
-                    </Card>
-                  </Reorder.Item>
-                ))}
+                          </CardBody>
+                        </div>
+                      </Card>
+                    </Reorder.Item>
+                  );
+                })}
               </Reorder.Group>
 
-              <Button
-                fullWidth
-                variant="flat"
-                onPress={handleStartCreate}
-                startContent={<FontAwesomeIcon icon={faPlus} />}
-                className="mt-2"
-              >
-                {t('profileModal.createNew')}
-              </Button>
+              {canManageProfiles && (
+                <Button
+                  fullWidth
+                  variant="flat"
+                  onPress={handleStartCreate}
+                  startContent={<FontAwesomeIcon icon={faPlus} />}
+                  className="mt-2"
+                >
+                  {t('profileModal.createNew')}
+                </Button>
+              )}
             </>
           )}
         </div>
@@ -391,20 +442,22 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
       <ModalFooter>
         <div className="flex justify-between items-center w-full">
           <div className="text-sm text-default-400">
-            {selectedProfileId && selectedProfileId !== activeProfileId && t('profileModal.switchAndConnect')}
-            {selectedProfileId && selectedProfileId === activeProfileId && t('profileModal.reconnect')}
+            {canApplySelectedProfile && selectedProfileId !== activeProfileId && t('profileModal.switchAndConnect')}
+            {canApplySelectedProfile && selectedProfileId === activeProfileId && t('profileModal.reconnect')}
           </div>
           <div className="flex gap-2">
             <Button variant="flat" onPress={onClose}>{t('common:button.close')}</Button>
-            <Button
-              color="primary"
-              onPress={handleApply}
-              isLoading={isActivating}
-              isDisabled={!selectedProfileId}
-              startContent={!isActivating ? <FontAwesomeIcon icon={faCheck} /> : undefined}
-            >
-              {selectedProfileId && selectedProfileId === activeProfileId ? t('profileModal.reconnect') : t('profileModal.apply')}
-            </Button>
+            {canManageProfiles && (
+              <Button
+                color="primary"
+                onPress={handleApply}
+                isLoading={isActivating}
+                isDisabled={!canApplySelectedProfile}
+                startContent={!isActivating ? <FontAwesomeIcon icon={faCheck} /> : undefined}
+              >
+                {selectedProfileId && selectedProfileId === activeProfileId ? t('profileModal.reconnect') : t('profileModal.apply')}
+              </Button>
+            )}
           </div>
         </div>
       </ModalFooter>

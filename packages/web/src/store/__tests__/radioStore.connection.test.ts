@@ -11,17 +11,32 @@ describe('radioStore connection reducer', () => {
 
     expect(reconnectingState.isConnected).toBe(false);
     expect(reconnectingState.isConnecting).toBe(true);
+    expect(reconnectingState.isReady).toBe(false);
     expect(reconnectingState.wasEverConnected).toBe(true);
     expect(reconnectingState.connectError).toBeNull();
   });
 
-  it('treats a stable disconnect as disconnected instead of implicitly reconnecting', () => {
+  it('marks the connection ready only after server handshake completes', () => {
     const connectedState = connectionReducer(initialConnectionState, { type: 'connected' });
+    expect(connectedState.isConnected).toBe(true);
+    expect(connectedState.isReady).toBe(false);
+
+    const readyState = connectionReducer(connectedState, { type: 'handshakeComplete' });
+    expect(readyState.isConnected).toBe(true);
+    expect(readyState.isReady).toBe(true);
+  });
+
+  it('treats a stable disconnect as disconnected instead of implicitly reconnecting', () => {
+    const connectedState = connectionReducer(
+      connectionReducer(initialConnectionState, { type: 'connected' }),
+      { type: 'handshakeComplete' },
+    );
 
     const disconnectedState = connectionReducer(connectedState, { type: 'disconnected' });
 
     expect(disconnectedState.isConnected).toBe(false);
     expect(disconnectedState.isConnecting).toBe(false);
+    expect(disconnectedState.isReady).toBe(false);
     expect(disconnectedState.wasEverConnected).toBe(true);
   });
 
