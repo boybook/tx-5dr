@@ -387,6 +387,7 @@
     "description": "Show a system-level notification when a QSO is logged. Notifications only fire while the page is in the background to avoid duplicating the foreground UI.",
     "localOnly": "This feature is local to the current client only and is never stored on the server.",
     "requestPermission": "Request Permission",
+    "openSettings": "Open settings",
     "permissionRequiredTitle": "Notification permission required",
     "permissionRequiredDescription": "The local preference is enabled, but the browser or desktop runtime has not granted notification permission yet.",
     "blockedTitle": "Notifications are blocked",

@@ -387,6 +387,7 @@
     "description": "记录 QSO 时，在系统级通知中心弹出提醒。仅在页面不在前台时触发，避免和当前界面提示重复。",
     "localOnly": "此能力只绑定当前客户端本地，不会写入服务端配置。",
     "requestPermission": "请求授权",
+    "openSettings": "打开设置",
     "permissionRequiredTitle": "需要通知授权",
     "permissionRequiredDescription": "已启用本地偏好，但浏览器或桌面运行时还没有授予通知权限。点击右侧按钮后允许即可生效。",
     "blockedTitle": "通知已被阻止",
