@@ -569,7 +569,8 @@
       "docker": "Docker",
       "linuxService": "Linux Server",
       "dev": "Dev",
-      "generic": "Server"
+      "generic": "Server",
+      "androidBridge": "Android Bridge"
     },
     "level": {
       "debug": "デバッグ",
@@ -645,7 +646,8 @@
           "description": "時刻同期サーバー設定の読み取りと変更を許可します。"
         }
       }
-    }
+    },
+    "directoryHintAndroidBridge": "これは Android Bridge ランタイム内のプラグイン ディレクトリです。マーケットプレイスのプラグインをここにインストールし、Web UI からプラグインを再読み込みしてください。"
   },
   "serverHealth": {
     "title": "サーバープロセスの健全性ステータス",

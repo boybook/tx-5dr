@@ -4,7 +4,7 @@ export interface ServerBuildInfo {
   commit: string;
   commitShort: string;
   buildTimestamp: string;
-  distribution?: 'electron' | 'docker' | 'linux-service' | 'generic-server' | 'web-dev';
+  distribution?: 'electron' | 'docker' | 'android-bridge' | 'linux-service' | 'generic-server' | 'web-dev';
   dockerDigest?: string;
 }
 

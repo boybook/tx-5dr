@@ -569,7 +569,8 @@
       "docker": "Docker",
       "linuxService": "Linux Server",
       "dev": "Dev",
-      "generic": "Server"
+      "generic": "Server",
+      "androidBridge": "Android Bridge"
     },
     "level": {
       "debug": "调试",
@@ -645,7 +646,8 @@
           "description": "允许读取和修改时间同步服务器设置。"
         }
       }
-    }
+    },
+    "directoryHintAndroidBridge": "这是 Android Bridge 运行环境内的插件目录。可在这里安装市场插件，然后从 Web 界面重载插件。"
   },
   "serverHealth": {
     "title": "服务器进程健康状态",

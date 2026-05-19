@@ -41,7 +41,7 @@ if [[ "${NO_BUILD:-0}" != "1" ]]; then
     --version "$VERSION" \
     --commit "$COMMIT" \
     --build-timestamp "$BUILD_TS" \
-    --distribution generic-server
+    --distribution android-bridge
   (cd "$PROJECT_ROOT" && yarn build)
 fi
 

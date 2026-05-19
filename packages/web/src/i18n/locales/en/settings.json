@@ -569,7 +569,8 @@
       "docker": "Docker",
       "linuxService": "Linux Server",
       "dev": "Dev",
-      "generic": "Server"
+      "generic": "Server",
+      "androidBridge": "Android Bridge"
     },
     "level": {
       "debug": "Debug",
@@ -645,7 +646,8 @@
           "description": "Allows reading and changing time synchronization server settings."
         }
       }
-    }
+    },
+    "directoryHintAndroidBridge": "This is the plugin directory inside the Android bridge runtime. Install marketplace plugins here and reload plugins from the web UI."
   },
   "serverHealth": {
     "title": "Server Process Health",

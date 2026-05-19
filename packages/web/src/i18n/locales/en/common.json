@@ -497,7 +497,8 @@
         "docker": "Docker",
         "linuxService": "Linux Server",
         "dev": "Dev",
-        "generic": "Server"
+        "generic": "Server",
+        "androidBridge": "Android Bridge"
       },
       "recommended": {
         "start": {
@@ -505,14 +506,16 @@
           "docker": "docker restart tx5dr",
           "linuxService": "sudo tx5dr restart",
           "dev": "Restart the server normally to start capture",
-          "generic": "Restart the server normally to start capture"
+          "generic": "Restart the server normally to start capture",
+          "androidBridge": "Restart TX-5DR from the Android app to start capture"
         },
         "finish": {
           "electron": "Restart app to finish capture",
           "docker": "docker restart tx5dr",
           "linuxService": "sudo tx5dr restart",
           "dev": "Restart the server normally to finish capture",
-          "generic": "Restart the server normally to finish capture"
+          "generic": "Restart the server normally to finish capture",
+          "androidBridge": "Restart TX-5DR from the Android app to finish capture"
         }
       }
     },
@@ -565,7 +568,8 @@
       "auto_update_metadata_incomplete": "The automatic update metadata is incomplete. Use the manual download instead.",
       "auto_update_semver_not_newer": "The updater did not accept this package as a newer version. Use the manual download if needed.",
       "update_install_not_completed": "The previous update did not appear to finish. You can retry or use the manual download."
-    }
+    },
+    "updateTargetAndroidRuntime": "Android Runtime"
   },
   "freqPresets": {
     "title": "Frequency Preset Management",

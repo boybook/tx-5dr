@@ -497,7 +497,8 @@
         "docker": "Docker",
         "linuxService": "Linux Server",
         "dev": "开发环境",
-        "generic": "通用 Server"
+        "generic": "通用 Server",
+        "androidBridge": "Android Bridge"
       },
       "recommended": {
         "start": {
@@ -505,14 +506,16 @@
           "docker": "docker restart tx5dr",
           "linuxService": "sudo tx5dr restart",
           "dev": "正常重启 server 以开始采样",
-          "generic": "正常重启 server 以开始采样"
+          "generic": "正常重启 server 以开始采样",
+          "androidBridge": "从 Android 应用重启 TX-5DR 以开始采集"
         },
         "finish": {
           "electron": "重启应用并结束采样",
           "docker": "docker restart tx5dr",
           "linuxService": "sudo tx5dr restart",
           "dev": "正常重启 server 以结束采样",
-          "generic": "正常重启 server 以结束采样"
+          "generic": "正常重启 server 以结束采样",
+          "androidBridge": "从 Android 应用重启 TX-5DR 以结束采集"
         }
       }
     },
@@ -565,7 +568,8 @@
       "auto_update_metadata_incomplete": "自动更新元数据不完整，请使用手动下载。",
       "auto_update_semver_not_newer": "更新器未接受该包为更新版本。如有需要请手动下载。",
       "update_install_not_completed": "上一次更新似乎没有完成。你可以重试或使用手动下载。"
-    }
+    },
+    "updateTargetAndroidRuntime": "Android Runtime"
   },
   "freqPresets": {
     "title": "频率预设管理",
