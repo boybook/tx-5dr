@@ -4,12 +4,14 @@ import {
   getNotificationPermissionState,
   isNotificationSecureContext,
   isNotificationSupported,
+  requestNotificationPermission,
   showSystemNotification,
 } from '../notificationDriver';
 import { resolveQsoNotificationRuntimeState } from '../qsoNotificationState';
 
 describe('qsoNotificationState', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -107,6 +109,33 @@ describe('qsoNotificationState', () => {
 
     expect(isNotificationSecureContext()).toBe(false);
     expect(getNotificationPermissionState()).toBe('unsupported');
+  });
+
+  it('polls Android native permission state if the callback is not delivered', async () => {
+    vi.useFakeTimers();
+    let permission = 'default';
+    vi.stubGlobal('window', {
+      isSecureContext: false,
+      location: { hostname: '192.168.1.20' },
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+      Tx5drAndroidNotifications: {
+        getPermission: () => permission,
+        requestPermission: () => {
+          permission = 'granted';
+          return 'default';
+        },
+        showNotification: vi.fn(),
+      },
+    });
+
+    const permissionPromise = requestNotificationPermission();
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(permissionPromise).resolves.toBe('granted');
+    vi.useRealTimers();
   });
 
   it('builds a compact QSO notification summary', () => {

@@ -3,6 +3,7 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger('NotificationDriver');
 const ANDROID_PERMISSION_TIMEOUT_MS = 60_000;
+const ANDROID_PERMISSION_POLL_MS = 500;
 
 export type BrowserNotificationPermission = 'default' | 'granted' | 'denied';
 export type NotificationPermissionState = BrowserNotificationPermission | 'unsupported';
@@ -93,28 +94,47 @@ async function requestAndroidNotificationPermission(): Promise<NotificationPermi
   const requestId = `native-${Date.now()}-${nativePermissionRequestCounter++}`;
 
   return await new Promise<NotificationPermissionState>((resolve) => {
-    const timeout = window.setTimeout(() => {
+    let settled = false;
+    let pollTimer: number | null = null;
+
+    const finish = (permission: NotificationPermissionState) => {
+      if (settled) return;
+      settled = true;
       pendingNativePermissionRequests.delete(requestId);
-      resolve(getAndroidNotificationPermissionState());
+      window.clearTimeout(timeout);
+      if (pollTimer !== null) {
+        window.clearInterval(pollTimer);
+      }
+      resolve(permission);
+    };
+
+    const timeout = window.setTimeout(() => {
+      finish(getAndroidNotificationPermissionState());
     }, ANDROID_PERMISSION_TIMEOUT_MS);
 
     pendingNativePermissionRequests.set(requestId, (permission) => {
-      window.clearTimeout(timeout);
-      resolve(permission);
+      finish(permission);
     });
 
     try {
       const immediate = normalizePermission(bridge.requestPermission(requestId));
       if (immediate === 'granted' || immediate === 'denied') {
-        pendingNativePermissionRequests.delete(requestId);
-        window.clearTimeout(timeout);
-        resolve(immediate);
+        finish(immediate);
+        return;
       }
+
+      // Some Android WebView/ROM combinations do not deliver the permission callback
+      // reliably when the user returns from system permission UI. Poll the native
+      // bridge as a fallback so an already-granted permission is picked up quickly.
+      pollTimer = window.setInterval(() => {
+        const latest = getAndroidNotificationPermissionState();
+        if (latest === 'granted' || latest === 'denied') {
+          finish(latest);
+        }
+      }, ANDROID_PERMISSION_POLL_MS);
     } catch (error) {
-      pendingNativePermissionRequests.delete(requestId);
-      window.clearTimeout(timeout);
       logger.warn('Failed to request Android notification permission', error);
-      resolve(getAndroidNotificationPermissionState());
+      finish(getAndroidNotificationPermissionState());
     }
   });
 }
