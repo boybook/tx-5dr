@@ -904,16 +904,15 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       >
         <div ref={expandedContentRef} className="p-4 flex flex-col gap-3">
         {/* 第一行 - 发射周期和发射槽位选择 */}
-        <div className="flex gap-2 -my-1">
-          <div className="flex items-center gap-0">
-            <span className="text-default-500 text-sm">
-              <span className="sm:hidden">{t('operator.txCycleShort')}</span>
-              <span className="hidden sm:inline">{t('operator.txCycle')}:</span>
+        <div className="flex min-w-0 gap-2 -my-1">
+          <div className="flex shrink-0 items-center gap-0">
+            <span className="hidden text-default-500 text-sm sm:inline">
+              <span>{t('operator.txCycle')}:</span>
             </span>
             <Button
               size="sm"
               variant="light"
-                              className="h-auto p-1 min-w-0 bg-transparent hover:bg-content2 px-2 rounded-md"
+              className="h-auto p-1 min-w-0 bg-transparent hover:bg-content2 px-2 rounded-md"
               isDisabled={!connection.state.isConnected}
               aria-label={t('operator.toggleTxCycle')}
               onPress={() => {
@@ -987,7 +986,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             </Button>
           </div>
           
-          <div className="flex items-center gap-0">
+          <div className="flex min-w-0 flex-1 items-center gap-0">
             <Select
               key={`slot-select-${shortcutSelectHighlightToken ?? 'idle'}`}
               selectedKeys={[operatorStatus.currentSlot || 'TX6']}
@@ -999,12 +998,15 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               }}
               size="sm"
               variant="bordered"
-              className="w-auto min-w-[200px]"
+              className="min-w-0 flex-1 max-w-full sm:min-w-[200px]"
+              popoverProps={{
+                placement: 'bottom-end',
+              }}
               classNames={{
                 trigger: `bg-transparent border-none shadow-none p-1 pl-2 h-auto min-h-0 rounded-md data-[hover=true]:bg-content2 ${shortcutSelectHighlightToken ? 'tx-slot-shortcut-select-glow' : ''}`,
-                value: "text-sm font-mono text-foreground p-0",
+                value: "text-sm font-mono text-foreground p-0 truncate",
                 selectorIcon: "text-default-400 text-xs",
-                popoverContent: "min-w-[260px]",
+                popoverContent: "min-w-[260px] max-w-[calc(100vw-1rem)]",
               }}
               isDisabled={!connection.state.isConnected}
               aria-label={t('operator.selectSlot')}
@@ -1023,8 +1025,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 const slotContent = operatorStatus.slots?.[slot as keyof typeof operatorStatus.slots];
                 const displayText = slotContent ? `${slot}: ${slotContent}` : slot;
                 return (
-                  <SelectItem key={runtimeSlot}>
-                    {displayText}
+                  <SelectItem key={runtimeSlot} textValue={displayText}>
+                    <span className="block truncate whitespace-nowrap">{displayText}</span>
                   </SelectItem>
                 );
               })}

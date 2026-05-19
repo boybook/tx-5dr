@@ -194,18 +194,33 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
           className={`app-viewport-height flex flex-col w-full ${className}`}
         >
           <div className="relative flex-1 overflow-hidden">
-            <div className={`absolute inset-0 overflow-hidden ${selectedTab !== 'left' ? 'hidden' : ''}`}>
+            <div
+              className={`absolute inset-0 overflow-hidden transition-opacity duration-150 ${
+                selectedTab === 'left' ? 'visible z-10 opacity-100' : 'invisible z-0 opacity-0 pointer-events-none'
+              }`}
+              aria-hidden={selectedTab !== 'left'}
+            >
               <div className="h-full overflow-auto bg-content2 dark:bg-content1">
                 {leftContent}
               </div>
             </div>
-            <div className={`absolute inset-0 overflow-hidden ${selectedTab !== 'right' ? 'hidden' : ''}`}>
+            <div
+              className={`absolute inset-0 overflow-hidden transition-opacity duration-150 ${
+                selectedTab === 'right' ? 'visible z-10 opacity-100' : 'invisible z-0 opacity-0 pointer-events-none'
+              }`}
+              aria-hidden={selectedTab !== 'right'}
+            >
               <div className="h-full overflow-auto bg-background">
                 {rightContent}
               </div>
             </div>
             {hasExtraPane && (
-              <div className={`absolute inset-0 overflow-hidden ${selectedTab !== 'extra' ? 'hidden' : ''}`}>
+              <div
+                className={`absolute inset-0 overflow-hidden transition-opacity duration-150 ${
+                  selectedTab === 'extra' ? 'visible z-10 opacity-100' : 'invisible z-0 opacity-0 pointer-events-none'
+                }`}
+                aria-hidden={selectedTab !== 'extra'}
+              >
                 <div className="h-full overflow-auto bg-content1">
                   {extraContent}
                 </div>

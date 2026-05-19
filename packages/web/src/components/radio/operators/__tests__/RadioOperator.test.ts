@@ -56,6 +56,13 @@ describe('RadioOperator progress animation helpers', () => {
     expect((style as Record<string, string>)['--progress-start']).toBe('40%');
   });
 
+  it('restores an in-progress slot animation from the latest global phase after remount', () => {
+    const style = getRadioOperatorProgressAnimation(createSlotInfo({ phaseMs: 7500 }), 15000);
+
+    expect(style.animation).toBe('progress-bar 7500ms linear forwards');
+    expect((style as Record<string, string>)['--progress-start']).toBe('50%');
+  });
+
   it('returns a disabled animation when global slot info is missing', () => {
     expect(getRadioOperatorProgressAnimation(undefined, 15000)).toEqual({ animation: 'none' });
   });
