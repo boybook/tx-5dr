@@ -2,6 +2,7 @@ import path from 'path';
 import { createSocket } from 'node:dgram';
 import * as hostHamlib from 'hamlib';
 import type { RemoteInfo, Socket, SocketType } from 'node:dgram';
+import { getBandFromFrequency } from '@tx5dr/core';
 import type {
   HostSettingsControl,
   HamlibHostDependency,
@@ -18,6 +19,7 @@ import type {
   ModeDescriptor,
   PluginUIPageDescriptor,
   PluginPermission,
+  EngineMode,
   RadioPowerTarget,
   WriteCapabilityPayload,
 } from '@tx5dr/contracts';
@@ -54,6 +56,15 @@ function createAllowedHamlibDependency(source: HostHamlibModule): HamlibHostDepe
 }
 
 const HOST_HAMLIB_DEPENDENCY = createAllowedHamlibDependency(hostHamlib as unknown as HostHamlibModule);
+
+type SavedPluginFrequency = {
+  frequency: number;
+  band?: string;
+} | null | undefined;
+
+function isValidFrequency(frequency: unknown): frequency is number {
+  return typeof frequency === 'number' && Number.isFinite(frequency) && frequency > 0;
+}
 
 /**
  * 为插件实例创建 PluginContext。
@@ -541,6 +552,7 @@ export class PluginContextFactory {
 
   private createRadioControl(plugin: LoadedPlugin) {
     const deps = this.deps;
+    const configManager = ConfigManager.getInstance();
     const assertPermission = (permission: PluginPermission, action: string) => {
       if (!plugin.definition.permissions?.includes(permission)) {
         throw new Error(
@@ -563,12 +575,60 @@ export class PluginContextFactory {
       return deps.getRadioPowerState;
     };
 
+    const getEngineMode = (): EngineMode => deps.getEngineMode?.() ?? configManager.getLastEngineMode();
+    const getSavedFrequencyForEngineMode = (): SavedPluginFrequency => {
+      switch (getEngineMode()) {
+        case 'voice':
+          return configManager.getLastVoiceFrequency();
+        case 'cw':
+          return configManager.getLastCWFrequency();
+        case 'digital':
+        default:
+          return configManager.getLastSelectedFrequency();
+      }
+    };
+
+    const getKnownFrequency = (): number | null => {
+      const knownFrequency = deps.getKnownRadioFrequency?.();
+      if (isValidFrequency(knownFrequency)) {
+        return knownFrequency;
+      }
+      return null;
+    };
+
+    const getEffectiveFrequency = (): number => {
+      const knownFrequency = getKnownFrequency();
+      if (knownFrequency !== null) {
+        return knownFrequency;
+      }
+
+      const savedFrequency = getSavedFrequencyForEngineMode()?.frequency;
+      return isValidFrequency(savedFrequency) ? savedFrequency : 0;
+    };
+
+    const resolveBandFromFrequency = (frequency: number): string | null => {
+      if (!isValidFrequency(frequency)) {
+        return null;
+      }
+      try {
+        const band = getBandFromFrequency(frequency);
+        return band && band !== 'Unknown' ? band : null;
+      } catch {
+        return null;
+      }
+    };
+
     return {
       get frequency() {
-        return ConfigManager.getInstance().getLastSelectedFrequency()?.frequency ?? 0;
+        return getEffectiveFrequency();
       },
       get band() {
-        return deps.getRadioBand();
+        const derivedBand = resolveBandFromFrequency(getKnownFrequency() ?? 0);
+        if (derivedBand) {
+          return derivedBand;
+        }
+
+        return getSavedFrequencyForEngineMode()?.band || deps.getRadioBand();
       },
       get isConnected() {
         return deps.getRadioConnected();

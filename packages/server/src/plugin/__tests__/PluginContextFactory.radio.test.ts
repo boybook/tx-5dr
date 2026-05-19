@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { type CapabilityList, type DigitalRadioEngineEvents, MODES } from '@tx5dr/contracts';
 import type { LoadedPlugin, PluginManagerDeps } from '../types.js';
 import { PluginContextFactory } from '../PluginContextFactory.js';
+import { ConfigManager } from '../../config/config-manager.js';
 
 const tempDirs: string[] = [];
 
@@ -23,6 +24,8 @@ function createDeps(overrides: Partial<PluginManagerDeps> = {}): PluginManagerDe
     getOperatorAutomationSnapshot: () => null,
     requestOperatorCall: () => {},
     getRadioFrequency: async () => null,
+    getKnownRadioFrequency: () => null,
+    getEngineMode: () => 'digital',
     setRadioFrequency: () => {},
     getRadioBand: () => '20m',
     getRadioConnected: () => true,
@@ -55,6 +58,92 @@ async function createContext(plugin: LoadedPlugin, deps: PluginManagerDeps) {
 }
 
 describe('PluginContextFactory radio access', () => {
+  it('prefers the host known radio frequency cache over saved presets', async () => {
+    vi.spyOn(ConfigManager.getInstance(), 'getLastSelectedFrequency').mockReturnValue({
+      frequency: 14_074_000,
+      mode: 'FT8',
+      radioMode: 'USB',
+      band: '20m',
+      description: '20m FT8',
+    });
+    const ctx = await createContext(createPlugin(), createDeps({
+      getKnownRadioFrequency: () => 7_145_123,
+      getRadioBand: () => 'saved-band',
+    }));
+
+    expect(ctx.radio.frequency).toBe(7_145_123);
+    expect(ctx.radio.band).toBe('40m');
+  });
+
+  it('falls back to the saved voice frequency and band when no known radio frequency exists', async () => {
+    vi.spyOn(ConfigManager.getInstance(), 'getLastVoiceFrequency').mockReturnValue({
+      frequency: 145_525_000,
+      radioMode: 'FM',
+      band: '2m voice',
+      description: '2m FM',
+    });
+    const ctx = await createContext(createPlugin(), createDeps({
+      getEngineMode: () => 'voice',
+      getKnownRadioFrequency: () => null,
+      getRadioBand: () => 'host-band',
+    }));
+
+    expect(ctx.radio.frequency).toBe(145_525_000);
+    expect(ctx.radio.band).toBe('2m voice');
+  });
+
+  it('falls back to the saved CW frequency and band when no known radio frequency exists', async () => {
+    vi.spyOn(ConfigManager.getInstance(), 'getLastCWFrequency').mockReturnValue({
+      frequency: 7_030_000,
+      radioMode: 'CW',
+      band: '40m CW',
+      description: '40m CW',
+    });
+    const ctx = await createContext(createPlugin(), createDeps({
+      getEngineMode: () => 'cw',
+      getKnownRadioFrequency: () => null,
+      getRadioBand: () => 'host-band',
+    }));
+
+    expect(ctx.radio.frequency).toBe(7_030_000);
+    expect(ctx.radio.band).toBe('40m CW');
+  });
+
+  it('falls back to the saved digital frequency and band when no known radio frequency exists', async () => {
+    vi.spyOn(ConfigManager.getInstance(), 'getLastSelectedFrequency').mockReturnValue({
+      frequency: 21_074_000,
+      mode: 'FT8',
+      radioMode: 'USB',
+      band: '15m digital',
+      description: '15m FT8',
+    });
+    const ctx = await createContext(createPlugin(), createDeps({
+      getEngineMode: () => 'digital',
+      getKnownRadioFrequency: () => null,
+      getRadioBand: () => 'host-band',
+    }));
+
+    expect(ctx.radio.frequency).toBe(21_074_000);
+    expect(ctx.radio.band).toBe('15m digital');
+  });
+
+  it('falls back to the saved mode band when known radio frequency has no band match', async () => {
+    vi.spyOn(ConfigManager.getInstance(), 'getLastVoiceFrequency').mockReturnValue({
+      frequency: 145_525_000,
+      radioMode: 'FM',
+      band: '2m voice',
+      description: '2m FM',
+    });
+    const ctx = await createContext(createPlugin(), createDeps({
+      getEngineMode: () => 'voice',
+      getKnownRadioFrequency: () => 999_000_000,
+      getRadioBand: () => 'host-band',
+    }));
+
+    expect(ctx.radio.frequency).toBe(999_000_000);
+    expect(ctx.radio.band).toBe('2m voice');
+  });
+
   it('rejects protected radio APIs when plugin permissions are missing', async () => {
     const ctx = await createContext(createPlugin(), createDeps());
 

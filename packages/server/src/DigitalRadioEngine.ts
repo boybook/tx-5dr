@@ -334,6 +334,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           return typeof freq === 'number' ? freq : null;
         } catch { return null; }
       },
+      getKnownRadioFrequency: () => this.radioManager.getKnownFrequency(),
+      getEngineMode: () => this.engineMode,
       setRadioFrequency: (freq) => {
         try { this.radioManager.setFrequency(freq); } catch (e) { logger.error('Failed to set radio frequency', e); }
       },

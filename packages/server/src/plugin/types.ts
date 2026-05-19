@@ -14,6 +14,7 @@ import type {
   PluginSystemState,
   CapabilityList,
   CapabilityValue,
+  EngineMode,
   RadioPowerResponse,
   RadioPowerStateEvent,
   RadioPowerSupportInfo,
@@ -137,6 +138,8 @@ export interface PluginManagerDeps {
     lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo },
   ) => void;
   getRadioFrequency: () => Promise<number | null>;
+  getKnownRadioFrequency?: () => number | null;
+  getEngineMode?: () => EngineMode;
   setRadioFrequency: (freq: number) => void;
   getRadioBand: () => string;
   getRadioConnected: () => boolean;
