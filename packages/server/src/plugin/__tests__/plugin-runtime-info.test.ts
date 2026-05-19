@@ -43,6 +43,30 @@ describe('plugin runtime info', () => {
     });
   });
 
+  it('uses explicit plugin directories when Android bridge exposes external storage', () => {
+    expect(buildPluginRuntimeInfo({
+      configDir: '/opt/tx5dr-data/config',
+      dataDir: '/opt/tx5dr-user/data',
+      logsDir: '/opt/tx5dr-user/logs',
+      cacheDir: '/opt/tx5dr-data/cache',
+    }, {
+      env: {
+        TX5DR_RUNTIME_FLAVOR: 'android-bridge',
+        TX5DR_PLUGINS_DIR: '/opt/tx5dr-user/plugins',
+        TX5DR_PLUGIN_DATA_DIR: '/opt/tx5dr-user/plugin-data',
+      } as NodeJS.ProcessEnv,
+      hasDockerEnvFile: true,
+    })).toEqual({
+      pluginDir: '/opt/tx5dr-user/plugins',
+      pluginDataDir: '/opt/tx5dr-user/plugin-data',
+      dataDir: '/opt/tx5dr-user/data',
+      configDir: '/opt/tx5dr-data/config',
+      logsDir: '/opt/tx5dr-user/logs',
+      cacheDir: '/opt/tx5dr-data/cache',
+      distribution: 'android-bridge',
+    });
+  });
+
   it('detects linux service from the packaged server data directory', () => {
     expect(resolvePluginDistribution('/var/lib/tx5dr', {
       env: { NODE_ENV: 'production' } as NodeJS.ProcessEnv,

@@ -50,6 +50,7 @@ import { toPluginStatus, toPluginSystemSnapshot } from './types.js';
 import type { LoadedPlugin, PluginInstance, PluginManagerDeps, PluginSystemRuntimeState, FlushableKVStore } from './types.js';
 import { readPluginSource } from './plugin-source.js';
 import { createLogger } from '../utils/logger.js';
+import { resolvePluginPaths } from './paths.js';
 import path from 'path';
 
 const logger = createLogger('PluginManager');
@@ -161,6 +162,10 @@ export class PluginManager {
     this.deps.dataDir = dataDir;
   }
 
+  private getPluginPaths() {
+    return resolvePluginPaths(this.deps.dataDir);
+  }
+
   async start(): Promise<void> {
     if (this.running) {
       logger.debug('Plugin manager already started');
@@ -187,7 +192,7 @@ export class PluginManager {
 
     // Start dev watcher in non-production environments
     if (process.env.NODE_ENV !== 'production') {
-      const pluginDir = path.join(this.deps.dataDir, 'plugins');
+      const { pluginDir } = this.getPluginPaths();
       this.devWatcher = new PluginDevWatcher(pluginDir, async (pluginName) => {
         if (this.loadedPlugins.has(pluginName)) {
           await this.reloadPlugin(pluginName);
@@ -237,7 +242,7 @@ export class PluginManager {
       const configEntry = this.pluginsConfig.configs?.[pluginName];
       const enabled = this.resolveInstanceEnabled(pluginName, plugin, configEntry);
 
-      const pluginStorageDir = path.join(this.deps.dataDir, 'plugin-data', pluginName);
+      const pluginStorageDir = path.join(this.getPluginPaths().pluginDataDir, pluginName);
       const instance: PluginInstance = {
         plugin,
         scope: { kind: 'operator', operatorId },
@@ -290,7 +295,7 @@ export class PluginManager {
 
       const configEntry = this.pluginsConfig.configs?.[pluginName];
       const enabled = this.resolveInstanceEnabled(pluginName, plugin, configEntry);
-      const pluginStorageDir = path.join(this.deps.dataDir, 'plugin-data', pluginName);
+      const pluginStorageDir = path.join(this.getPluginPaths().pluginDataDir, pluginName);
       const instance: PluginInstance = {
         plugin,
         scope: { kind: 'global' },
@@ -683,7 +688,7 @@ export class PluginManager {
   }
 
   getPluginStorageDir(pluginName: string): string {
-    return path.join(this.deps.dataDir, 'plugin-data', pluginName);
+    return path.join(this.getPluginPaths().pluginDataDir, pluginName);
   }
 
   createPluginPageSession(
@@ -1128,7 +1133,7 @@ export class PluginManager {
       });
     }
 
-    const pluginDir = path.join(this.deps.dataDir, 'plugins');
+    const { pluginDir } = this.getPluginPaths();
     const userPlugins = await this.loader.scanAndLoad(pluginDir);
     for (const plugin of userPlugins) {
       if (discoveredPlugins.has(plugin.definition.name)) {

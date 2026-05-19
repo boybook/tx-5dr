@@ -1,8 +1,8 @@
 import { existsSync } from 'node:fs';
-import path from 'node:path';
 import type { PluginDistribution, PluginRuntimeInfo } from '@tx5dr/contracts';
 import { tx5drPaths } from '../utils/app-paths.js';
 import { resolveRuntimeDistribution, type RuntimeDetectionOptions } from '../utils/runtime-distribution.js';
+import { resolvePluginPaths } from './paths.js';
 
 
 interface PluginRuntimePaths {
@@ -27,9 +27,10 @@ export function buildPluginRuntimeInfo(
   options: RuntimeDetectionOptions = {},
 ): PluginRuntimeInfo {
   const distribution = resolvePluginDistribution(paths.dataDir, options);
+  const pluginPaths = resolvePluginPaths(paths.dataDir, options.env ?? process.env);
   const info: PluginRuntimeInfo = {
-    pluginDir: path.join(paths.dataDir, 'plugins'),
-    pluginDataDir: path.join(paths.dataDir, 'plugin-data'),
+    pluginDir: pluginPaths.pluginDir,
+    pluginDataDir: pluginPaths.pluginDataDir,
     dataDir: paths.dataDir,
     configDir: paths.configDir,
     logsDir: paths.logsDir,
