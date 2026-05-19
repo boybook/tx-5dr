@@ -2393,6 +2393,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
         onClose={() => setSdrConfirmPending(null)}
         placement="center"
         size="sm"
+        scrollBehavior="inside"
       >
         <ModalContent>
           <ModalHeader>{t('openwebrx.clientConfirm.title')}</ModalHeader>
@@ -2430,6 +2431,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
         }}
         placement="center"
         size="sm"
+        scrollBehavior="inside"
       >
         <ModalContent>
           <ModalHeader>

@@ -391,7 +391,9 @@ export function CWDecoderPanel() {
         )}
       </div>
 
-      <Modal isOpen={settingsOpen} onClose={closeSettings} size="sm" placement="center">
+      <Modal isOpen={settingsOpen} onClose={closeSettings} size="sm" placement="center"
+        scrollBehavior="inside"
+      >
         <ModalContent>
           <ModalHeader className="flex flex-col gap-1">
             <span>{t('cw.decoder.settings', 'Decoder settings')}</span>

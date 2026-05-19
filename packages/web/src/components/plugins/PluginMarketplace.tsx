@@ -956,7 +956,10 @@ export function PluginMarketplace({ isActive, onOpenInstalledPlugin }: PluginMar
         )}
       </div>
 
-      <Modal isOpen={Boolean(uninstallCandidate)} onClose={() => setUninstallCandidate(null)} size="sm">
+      <Modal isOpen={Boolean(uninstallCandidate)} onClose={() => setUninstallCandidate(null)} size="sm"
+        placement="center"
+        scrollBehavior="inside"
+      >
         <ModalContent>
           <ModalHeader>
             {t('plugins.marketUninstallConfirmTitle', 'Uninstall plugin')}

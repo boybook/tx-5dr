@@ -99,7 +99,9 @@ export function AccountSecurityModal({ isOpen, onClose }: AccountSecurityModalPr
   }, [canSave, password, t, username]);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="md" placement="center">
+    <Modal isOpen={isOpen} onClose={onClose} size="md" placement="center"
+      scrollBehavior="inside"
+    >
       <ModalContent>
         <ModalHeader>{t('auth:accountSecurity.title')}</ModalHeader>
         <ModalBody className="gap-4">

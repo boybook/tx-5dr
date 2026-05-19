@@ -838,6 +838,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
           }}
           size="sm"
           placement="center"
+          scrollBehavior="inside"
         >
           <ModalContent>
             <ModalHeader className="flex flex-col gap-1">

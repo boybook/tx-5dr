@@ -789,7 +789,9 @@ export function TokenManagement() {
       })()}
 
       {/* 创建 Token 弹窗 */}
-      <Modal isOpen={createModalOpen} onClose={closeFormModal} size="lg" scrollBehavior="inside">
+      <Modal isOpen={createModalOpen} onClose={closeFormModal} size="lg" scrollBehavior="inside"
+        placement="center"
+      >
         <ModalContent>
           <ModalHeader>{editingToken ? t('auth:token.editModal.title') : t('auth:token.createModal.title')}</ModalHeader>
           <ModalBody className="gap-4">
@@ -1165,7 +1167,10 @@ export function TokenManagement() {
       </Modal>
 
       {/* 分享 / 创建成功 弹窗（合并） */}
-      <Modal isOpen={!!sharingToken} onClose={closeShareModal} size="md">
+      <Modal isOpen={!!sharingToken} onClose={closeShareModal} size="md"
+        placement="center"
+        scrollBehavior="inside"
+      >
         <ModalContent>
           <ModalHeader>{justCreatedTokenValue ? t('auth:token.created.title') : t('auth:token.shareModal.title')}</ModalHeader>
           <ModalBody className="gap-4">

@@ -336,7 +336,9 @@ interface PowerConfirmModalProps {
 
 function PowerConfirmModal({ target, text, onCancel, onConfirm, t }: PowerConfirmModalProps) {
   return (
-    <Modal isOpen={target !== null} onClose={onCancel} size="sm" placement="center">
+    <Modal isOpen={target !== null} onClose={onCancel} size="sm" placement="center"
+      scrollBehavior="inside"
+    >
       <ModalContent>
         <ModalHeader>{t('power.confirmTitle')}</ModalHeader>
         <ModalBody>

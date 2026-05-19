@@ -145,6 +145,7 @@ export function OpenWebRXProfileSelectModal() {
       onClose={handleClose}
       size="lg"
       scrollBehavior="inside"
+      placement="center"
     >
       <ModalContent>
         <ModalHeader>

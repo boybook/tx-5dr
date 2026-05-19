@@ -609,6 +609,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         placement="center"
         backdrop="opaque"
         disableAnimation
+        scrollBehavior="inside"
       >
         <ModalContent>
           <ModalHeader>

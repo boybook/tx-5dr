@@ -42,6 +42,7 @@ export function ViewerWelcomeOverlay({ isOpen }: ViewerWelcomeOverlayProps) {
         header: "px-6 pt-6 pb-2",
         footer: "border-t border-divider px-6 py-3",
       }}
+      scrollBehavior="inside"
     >
       <ModalContent>
         <ModalHeader>

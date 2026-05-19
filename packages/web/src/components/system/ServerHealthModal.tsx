@@ -994,7 +994,9 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="2xl" scrollBehavior="inside">
+    <Modal isOpen={isOpen} onClose={onClose} size="2xl" scrollBehavior="inside"
+      placement="center"
+    >
       <ModalContent>
         <ModalHeader className="flex flex-col gap-0 pb-2">
           <div className="flex items-center justify-between w-full pr-6">
