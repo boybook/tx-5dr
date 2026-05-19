@@ -579,6 +579,7 @@ export type PluginSystemSnapshot = z.infer<typeof PluginSystemSnapshotSchema>;
 export const PluginDistributionSchema = z.enum([
   'electron',
   'docker',
+  'android-bridge',
   'linux-service',
   'generic-server',
   'web-dev',

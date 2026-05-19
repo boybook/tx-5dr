@@ -795,7 +795,9 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
         </div>
       </div>
 
-      <Modal isOpen={httpsRequiredModalOpen} onOpenChange={setHttpsRequiredModalOpen} placement="center">
+      <Modal isOpen={httpsRequiredModalOpen} onOpenChange={setHttpsRequiredModalOpen} placement="center"
+        scrollBehavior="inside"
+      >
         <ModalContent>
           {(onClose) => (
             <>

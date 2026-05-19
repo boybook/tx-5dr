@@ -497,7 +497,8 @@
         "docker": "Docker",
         "linuxService": "Linux Server",
         "dev": "開発環境",
-        "generic": "ユニバーサルサーバー"
+        "generic": "ユニバーサルサーバー",
+        "androidBridge": "Android Bridge"
       },
       "recommended": {
         "start": {
@@ -505,14 +506,16 @@
           "docker": "docker restart tx5dr",
           "linuxService": "sudo tx5dr restart",
           "dev": "server を通常再起動してサンプリング開始",
-          "generic": "server を通常再起動してサンプリング開始"
+          "generic": "server を通常再起動してサンプリング開始",
+          "androidBridge": "Android アプリから TX-5DR を再起動してキャプチャを開始"
         },
         "finish": {
           "electron": "アプリを再起動してサンプリング終了",
           "docker": "docker restart tx5dr",
           "linuxService": "sudo tx5dr restart",
           "dev": "server を通常再起動してサンプリング終了",
-          "generic": "server を通常再起動してサンプリング終了"
+          "generic": "server を通常再起動してサンプリング終了",
+          "androidBridge": "Android アプリから TX-5DR を再起動してキャプチャを終了"
         }
       }
     },
@@ -565,7 +568,8 @@
       "auto_update_metadata_incomplete": "自動更新メタデータが不完全です。手動ダウンロードを使用してください。",
       "auto_update_semver_not_newer": "アップデーターはパッケージを更新バージョンとして受け入れませんでした。必要に応じて手動でダウンロードしてください。",
       "update_install_not_completed": "前回の更新が完了していないようです。再試行するか、手動ダウンロードを使用できます。"
-    }
+    },
+    "updateTargetAndroidRuntime": "Android Runtime"
   },
   "freqPresets": {
     "title": "周波数プリセット管理",

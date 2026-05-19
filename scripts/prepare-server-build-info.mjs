@@ -72,7 +72,7 @@ async function main() {
   };
 
   await fs.mkdir(path.dirname(OUTPUT_PATH), { recursive: true });
-  await fs.writeFile(OUTPUT_PATH, `export interface ServerBuildInfo {\n  channel: 'release' | 'nightly';\n  version: string;\n  commit: string;\n  commitShort: string;\n  buildTimestamp: string;\n  distribution?: 'electron' | 'docker' | 'linux-service' | 'generic-server' | 'web-dev';\n  dockerDigest?: string;\n}\n\nexport const SERVER_BUILD_INFO: ServerBuildInfo = ${JSON.stringify(buildInfo, null, 2)};\n`);
+  await fs.writeFile(OUTPUT_PATH, `export interface ServerBuildInfo {\n  channel: 'release' | 'nightly';\n  version: string;\n  commit: string;\n  commitShort: string;\n  buildTimestamp: string;\n  distribution?: 'electron' | 'docker' | 'android-bridge' | 'linux-service' | 'generic-server' | 'web-dev';\n  dockerDigest?: string;\n}\n\nexport const SERVER_BUILD_INFO: ServerBuildInfo = ${JSON.stringify(buildInfo, null, 2)};\n`);
   console.log(`Wrote ${path.relative(PROJECT_ROOT, OUTPUT_PATH)} (${buildInfo.version}, ${buildInfo.commitShort})`);
 }
 

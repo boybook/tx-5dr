@@ -281,6 +281,7 @@ const RadioControlToolbarButton: React.FC<{ entry: RadioControlToolbarEntry }> =
           onClose={() => setIsModalOpen(false)}
           size={MODAL_SIZE[entry.uiSize]}
           scrollBehavior="inside"
+          placement="center"
         >
           <ModalContent>
             <ModalHeader className="flex flex-col gap-0.5">

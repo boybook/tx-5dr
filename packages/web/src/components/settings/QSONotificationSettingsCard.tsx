@@ -2,6 +2,7 @@ import React, { useCallback, useMemo } from 'react';
 import { addToast } from '@heroui/toast';
 import { Alert, Button, Card, CardBody, Chip, Switch } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
+import { openSystemNotificationSettings } from '../../notifications/notificationDriver';
 import { useQsoNotificationController } from '../../notifications/useQsoNotificationController';
 
 function getStatusColor(status: 'active' | 'disabled' | 'needs-permission' | 'blocked' | 'unsupported'): 'success' | 'default' | 'warning' | 'danger' {
@@ -67,6 +68,10 @@ export const QSONotificationSettingsCard: React.FC = () => {
     await handleToggle(true);
   }, [handleToggle]);
 
+  const handleOpenNotificationSettings = useCallback(() => {
+    openSystemNotificationSettings();
+  }, []);
+
   return (
     <Card shadow="none" radius="lg" classNames={{ base: 'border border-divider bg-content1' }}>
       <CardBody className="p-4 space-y-4">
@@ -109,6 +114,11 @@ export const QSONotificationSettingsCard: React.FC = () => {
             color="warning"
             title={t('qsoNotifications.blockedTitle')}
             description={t('qsoNotifications.blockedDescription')}
+            endContent={(
+              <Button size="sm" color="warning" variant="flat" onPress={handleOpenNotificationSettings}>
+                {t('qsoNotifications.openSettings')}
+              </Button>
+            )}
           />
         )}
 

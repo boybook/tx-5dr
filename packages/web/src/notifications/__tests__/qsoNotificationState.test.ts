@@ -1,8 +1,20 @@
-import { describe, expect, it } from 'vitest';
-import { buildQsoNotificationSummary } from '../notificationDriver';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  buildQsoNotificationSummary,
+  getNotificationPermissionState,
+  isNotificationSecureContext,
+  isNotificationSupported,
+  requestNotificationPermission,
+  showSystemNotification,
+} from '../notificationDriver';
 import { resolveQsoNotificationRuntimeState } from '../qsoNotificationState';
 
 describe('qsoNotificationState', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
   it('marks granted permission with enabled preference as active', () => {
     expect(resolveQsoNotificationRuntimeState({
       supported: true,
@@ -54,6 +66,76 @@ describe('qsoNotificationState', () => {
       status: 'disabled',
       isBlocked: false,
     });
+  });
+
+  it('uses the Android native bridge even when the page is not a secure context', () => {
+    const shownPayloads: string[] = [];
+    vi.stubGlobal('window', {
+      isSecureContext: false,
+      location: { hostname: '192.168.1.20' },
+      Tx5drAndroidNotifications: {
+        getPermission: () => 'granted',
+        requestPermission: vi.fn(),
+        showNotification: (payloadJson: string) => {
+          shownPayloads.push(payloadJson);
+          return true;
+        },
+      },
+    });
+
+    expect(isNotificationSupported()).toBe(true);
+    expect(isNotificationSecureContext()).toBe(true);
+    expect(getNotificationPermissionState()).toBe('granted');
+
+    const handle = showSystemNotification({
+      title: 'QSO logged',
+      body: 'JA1ABC • PM95 • 14.074 MHz • FT8',
+      tag: 'qso-1',
+    });
+
+    expect(handle).not.toBeNull();
+    expect(JSON.parse(shownPayloads[0])).toMatchObject({
+      title: 'QSO logged',
+      body: 'JA1ABC • PM95 • 14.074 MHz • FT8',
+      tag: 'qso-1',
+    });
+  });
+
+  it('keeps ordinary insecure HTTP pages unsupported without the Android bridge', () => {
+    vi.stubGlobal('window', {
+      isSecureContext: false,
+      location: { hostname: '192.168.1.20' },
+    });
+
+    expect(isNotificationSecureContext()).toBe(false);
+    expect(getNotificationPermissionState()).toBe('unsupported');
+  });
+
+  it('polls Android native permission state if the callback is not delivered', async () => {
+    vi.useFakeTimers();
+    let permission = 'default';
+    vi.stubGlobal('window', {
+      isSecureContext: false,
+      location: { hostname: '192.168.1.20' },
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+      Tx5drAndroidNotifications: {
+        getPermission: () => permission,
+        requestPermission: () => {
+          permission = 'granted';
+          return 'default';
+        },
+        showNotification: vi.fn(),
+      },
+    });
+
+    const permissionPromise = requestNotificationPermission();
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(permissionPromise).resolves.toBe('granted');
+    vi.useRealTimers();
   });
 
   it('builds a compact QSO notification summary', () => {

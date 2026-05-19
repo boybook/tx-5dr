@@ -509,7 +509,10 @@ export const FrequencyPresetSettings = forwardRef<
       />
 
       {/* 恢复默认确认模态框 */}
-      <Modal isOpen={isResetConfirmOpen} onClose={() => setIsResetConfirmOpen(false)} size="sm">
+      <Modal isOpen={isResetConfirmOpen} onClose={() => setIsResetConfirmOpen(false)} size="sm"
+        placement="center"
+        scrollBehavior="inside"
+      >
         <ModalContent>
           <ModalHeader>{t('freqPresets.resetToDefault')}</ModalHeader>
           <ModalBody>

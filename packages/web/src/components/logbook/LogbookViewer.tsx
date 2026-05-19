@@ -2129,6 +2129,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           setDeletingQSO(null);
         }}
         size="sm"
+        placement="center"
+        scrollBehavior="inside"
       >
         <ModalContent>
           <ModalHeader>
@@ -2195,6 +2197,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         onClose={handleExportDialogClose}
         size="lg"
         isDismissable={!isExporting}
+        placement="center"
+        scrollBehavior="inside"
       >
         <ModalContent>
           <ModalHeader>{t('export.modalTitle', { format: pendingExportFormatLabel })}</ModalHeader>
@@ -2265,6 +2269,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         isOpen={isImportGuideOpen}
         onClose={() => setIsImportGuideOpen(false)}
         size="lg"
+        placement="center"
+        scrollBehavior="inside"
       >
         <ModalContent>
           <ModalHeader>{t('import.guideTitle')}</ModalHeader>
@@ -2341,6 +2347,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         }}
         size={actionModal?.pageId === 'upload-wizard' ? '3xl' : 'lg'}
         scrollBehavior="inside"
+        placement="center"
       >
         <ModalContent className="max-h-[85vh] overflow-hidden">
           <ModalHeader>{actionModal?.title}</ModalHeader>

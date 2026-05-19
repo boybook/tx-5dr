@@ -248,7 +248,9 @@ export const RadioControlPanel: React.FC<RadioControlPanelProps> = ({ isOpen, on
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size={isMobile ? 'sm' : '3xl'} scrollBehavior="inside">
+    <Modal isOpen={isOpen} onClose={onClose} size={isMobile ? 'sm' : '3xl'} scrollBehavior="inside"
+      placement="center"
+    >
       <ModalContent>
         <ModalHeader className="flex flex-col gap-0.5">
           <div className="flex items-center gap-2">

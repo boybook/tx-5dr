@@ -13,7 +13,7 @@ const DEFAULT_OSS_BASE_URL = 'https://tx5dr.oss-cn-hangzhou.aliyuncs.com';
 const WEBSITE_URL = 'https://tx5dr.com';
 
 type UpdateChannel = 'release' | 'nightly';
-type UpdateTarget = 'linux-server' | 'docker';
+type UpdateTarget = 'linux-server' | 'docker' | 'android-runtime';
 
 interface ReleaseManifest {
   product?: string;
@@ -69,6 +69,9 @@ function manifestUrl(target: UpdateTarget, channel: UpdateChannel): string {
   if (target === 'docker') {
     return `${base}/tx-5dr/docker/latest.json`;
   }
+  if (target === 'android-runtime') {
+    return `${base}/tx-5dr/android-runtime/${channel}/latest.json`;
+  }
   return `${base}/tx-5dr/server/${channel}/latest.json`;
 }
 
@@ -105,7 +108,9 @@ async function getLocalBuildInfo(_distribution: PluginDistribution): Promise<Loc
 }
 
 function resolveTarget(distribution: PluginDistribution): UpdateTarget {
-  return distribution === 'docker' ? 'docker' : 'linux-server';
+  if (distribution === 'docker') return 'docker';
+  if (distribution === 'android-bridge') return 'android-runtime';
+  return 'linux-server';
 }
 
 function remoteIdentity(target: UpdateTarget, channel: UpdateChannel, manifest: ReleaseManifest): string | null {

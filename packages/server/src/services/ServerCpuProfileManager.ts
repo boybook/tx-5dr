@@ -89,6 +89,8 @@ function buildRecommendedStartAction(distribution: PluginDistribution): string {
       return 'Restart app to start capture';
     case 'docker':
       return 'docker restart tx5dr';
+    case 'android-bridge':
+      return 'Restart TX-5DR from the Android app';
     case 'linux-service':
       return 'sudo tx5dr restart';
     default:
@@ -102,6 +104,8 @@ function buildRecommendedFinishAction(distribution: PluginDistribution): string 
       return 'Restart app to finish capture';
     case 'docker':
       return 'docker restart tx5dr';
+    case 'android-bridge':
+      return 'Restart TX-5DR from the Android app';
     case 'linux-service':
       return 'sudo tx5dr restart';
     default:

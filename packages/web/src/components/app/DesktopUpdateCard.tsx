@@ -218,7 +218,9 @@ export function DesktopUpdateCard() {
     ? t('system.updateTargetElectron', 'Electron')
     : desktopUpdateStatus?.target === 'docker'
       ? t('system.updateTargetDocker', 'Docker')
-      : t('system.updateTargetLinuxServer', 'Linux Server');
+      : desktopUpdateStatus?.target === 'android-runtime'
+        ? t('system.updateTargetAndroidRuntime', 'Android Runtime')
+        : t('system.updateTargetLinuxServer', 'Linux Server');
   const desktopRecentCommits = desktopUpdateStatus?.recentCommits || [];
 
   return (

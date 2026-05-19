@@ -215,7 +215,10 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="md">
+    <Modal isOpen={isOpen} onClose={onClose} size="md"
+      placement="center"
+      scrollBehavior="inside"
+    >
       <ModalContent>
         <ModalHeader>{editingPreset ? t('freqPresets.editTitle') : t('freqPresets.addTitle')}</ModalHeader>
         <ModalBody>

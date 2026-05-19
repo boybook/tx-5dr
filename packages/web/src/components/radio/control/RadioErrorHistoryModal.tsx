@@ -124,7 +124,9 @@ export const RadioErrorHistoryModal: React.FC<RadioErrorHistoryModalProps> = ({ 
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="2xl" scrollBehavior="inside">
+    <Modal isOpen={isOpen} onClose={onClose} size="2xl" scrollBehavior="inside"
+      placement="center"
+    >
       <ModalContent>
         <ModalHeader className="flex flex-col gap-1">
           {t('errorHistory.title')}

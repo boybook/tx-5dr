@@ -121,6 +121,8 @@ export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettings
         return t('plugins.runtime.electron', 'Electron');
       case 'docker':
         return t('plugins.runtime.docker', 'Docker');
+      case 'android-bridge':
+        return t('plugins.runtime.androidBridge', 'Android Bridge');
       case 'linux-service':
         return t('plugins.runtime.linuxService', 'Linux Server');
       case 'web-dev':
@@ -144,6 +146,11 @@ export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettings
         return t(
           'plugins.directoryHintDocker',
           'This is the container path. Mount it to a host folder, then place plugin folders there and reload plugins.',
+        );
+      case 'android-bridge':
+        return t(
+          'plugins.directoryHintAndroidBridge',
+          'This is the plugin directory inside the Android bridge runtime. Install marketplace plugins here and reload plugins from the web UI.',
         );
       case 'linux-service':
         return t(

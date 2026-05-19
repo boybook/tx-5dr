@@ -5,6 +5,7 @@ export const SystemUpdateTargetSchema = z.enum([
   'electron-app',
   'linux-server',
   'docker',
+  'android-runtime',
 ]);
 export type SystemUpdateTarget = z.infer<typeof SystemUpdateTargetSchema>;
 

@@ -16,6 +16,33 @@ describe('plugin runtime info', () => {
     })).toBe('docker');
   });
 
+  it('prefers Android bridge runtime flavor over docker filesystem markers', () => {
+    expect(resolvePluginDistribution('/opt/tx5dr-data', {
+      env: { TX5DR_RUNTIME_FLAVOR: 'android-bridge', NODE_ENV: 'production' } as NodeJS.ProcessEnv,
+      hasDockerEnvFile: true,
+    })).toBe('android-bridge');
+  });
+
+  it('does not expose docker host mapping hints for Android bridge runtime', () => {
+    expect(buildPluginRuntimeInfo({
+      configDir: '/opt/tx5dr-data/config',
+      dataDir: '/opt/tx5dr-data',
+      logsDir: '/opt/tx5dr-data/logs',
+      cacheDir: '/opt/tx5dr-data/cache',
+    }, {
+      env: { TX5DR_RUNTIME_FLAVOR: 'android-bridge' } as NodeJS.ProcessEnv,
+      hasDockerEnvFile: true,
+    })).toEqual({
+      pluginDir: '/opt/tx5dr-data/plugins',
+      pluginDataDir: '/opt/tx5dr-data/plugin-data',
+      dataDir: '/opt/tx5dr-data',
+      configDir: '/opt/tx5dr-data/config',
+      logsDir: '/opt/tx5dr-data/logs',
+      cacheDir: '/opt/tx5dr-data/cache',
+      distribution: 'android-bridge',
+    });
+  });
+
   it('detects linux service from the packaged server data directory', () => {
     expect(resolvePluginDistribution('/var/lib/tx5dr', {
       env: { NODE_ENV: 'production' } as NodeJS.ProcessEnv,

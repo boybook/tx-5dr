@@ -184,6 +184,7 @@ export function ErrorSuggestionsDialog({
       size="2xl"
       scrollBehavior="inside"
       backdrop="blur"
+      placement="center"
     >
       <ModalContent>
         <ModalHeader className="flex items-center gap-2">

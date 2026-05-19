@@ -241,6 +241,8 @@ function getCpuProfileRuntimeLabel(
       return t('system.cpuProfile.runtime.electron', 'Electron');
     case 'docker':
       return t('system.cpuProfile.runtime.docker', 'Docker');
+    case 'android-bridge':
+      return t('system.cpuProfile.runtime.androidBridge', 'Android Bridge');
     case 'linux-service':
       return t('system.cpuProfile.runtime.linuxService', 'Linux Server');
     case 'web-dev':
@@ -265,6 +267,8 @@ function getCpuProfileRecommendedAction(
       return t(`${keyBase}.electron`, fallback || 'Restart app');
     case 'docker':
       return t(`${keyBase}.docker`, fallback || 'docker restart tx5dr');
+    case 'android-bridge':
+      return t(`${keyBase}.androidBridge`, fallback || 'Restart TX-5DR from the Android app');
     case 'linux-service':
       return t(`${keyBase}.linuxService`, fallback || 'sudo tx5dr restart');
     case 'web-dev':

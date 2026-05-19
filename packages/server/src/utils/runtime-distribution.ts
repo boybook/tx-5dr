@@ -22,6 +22,10 @@ export function resolveRuntimeDistribution(
     return 'electron';
   }
 
+  if (normalizeEnvValue(env.TX5DR_RUNTIME_FLAVOR) === 'android-bridge') {
+    return 'android-bridge';
+  }
+
   if (hasDockerEnvFile || dataDir === '/app/data') {
     return 'docker';
   }

@@ -95,7 +95,9 @@ const QSOFormModal: React.FC<QSOFormModalProps> = ({
     : !formData.callsign || !formData.frequency;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="2xl" scrollBehavior="inside">
+    <Modal isOpen={isOpen} onClose={onClose} size="2xl" scrollBehavior="inside"
+      placement="center"
+    >
       <ModalContent>
         <ModalHeader>
           <h3 className="text-lg font-semibold">{title}</h3>
