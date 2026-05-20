@@ -1522,11 +1522,15 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
         </div>
 
         {/* 模式选择 */}
-        <div>
+        <div className="inline-block max-w-full overflow-x-auto align-top sm:max-w-none sm:overflow-visible">
           <Tabs
             selectedKey={config.type}
             onSelectionChange={(key) => updateConfig({ type: key as HamlibConfig['type'] })}
             size="lg"
+            classNames={{
+              tabList: 'flex-nowrap',
+              tab: 'flex-none whitespace-nowrap',
+            }}
           >
             <Tab key="none" title={`📻 ${t('radio.modeNone')}`} />
             <Tab key="serial" title={`🔌 ${t('radio.modeSerial')}`} />
