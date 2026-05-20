@@ -79,6 +79,7 @@ export type {
   PluginTimers,
   OperatorControl,
   RadioControl,
+  RadioOperatingMode,
   RadioCapabilitiesControl,
   RadioPowerControl,
   RadioPowerSetOptions,

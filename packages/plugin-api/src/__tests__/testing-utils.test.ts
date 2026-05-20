@@ -183,6 +183,7 @@ describe('plugin-api testing utilities', () => {
       const radio = createMockRadioControl();
       expect(radio.isConnected).toBe(true);
       expect(radio.frequency).toBe(14074000);
+      expect(radio.mode).toMatchObject({ engineMode: 'digital', mode: 'FT8', radioMode: 'USB' });
       expect(radio.capabilities.getSnapshot()).toEqual({ descriptors: [], capabilities: [] });
       expect(radio.power.getState()).toMatchObject({ state: 'awake', stage: 'idle' });
     });

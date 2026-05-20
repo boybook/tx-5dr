@@ -6,6 +6,7 @@ import type {
   FrameMessage,
   OperatorSlots,
   ModeDescriptor,
+  EngineMode,
   PermissionGrant,
   PluginPanelDescriptor,
   CapabilityList,
@@ -233,11 +234,40 @@ export interface OperatorControl {
 /**
  * Read/write access to radio state that is safe for plugins.
  */
+export interface RadioOperatingMode {
+  /**
+   * TX-5DR engine mode that owns the current radio operating mode.
+   */
+  readonly engineMode: EngineMode;
+
+  /**
+   * ADIF-compatible main mode, for example `SSB`, `FM`, `CW`, `FT8` or `MFSK`.
+   */
+  readonly mode: string;
+
+  /**
+   * ADIF-compatible submode when applicable, for example `USB`, `LSB` or `FT4`.
+   */
+  readonly submode?: string;
+
+  /**
+   * Raw radio modulation mode reported or remembered by the host, for example `USB`.
+   */
+  readonly radioMode?: string;
+
+  /**
+   * TX-5DR runtime mode descriptor used by automation and timing subsystems.
+   */
+  readonly descriptor: ModeDescriptor;
+}
+
 export interface RadioControl {
   /** Current tuned radio frequency in Hz. */
   readonly frequency: number;
   /** Human-readable current band label, for example `20m`. */
   readonly band: string;
+  /** Current operating mode projected to ADIF mode/submode semantics. */
+  readonly mode: RadioOperatingMode;
   /** Whether the radio transport is currently connected. */
   readonly isConnected: boolean;
 

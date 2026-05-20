@@ -422,7 +422,7 @@
     "desktopUpdateChannelRelease": "正式版",
     "desktopUpdateChannelNightly": "Nightly",
     "desktopUpdateCurrentVersion": "当前版本",
-    "desktopUpdateCurrentCommit": "当前 Commit：{{value}}",
+    "desktopUpdateCurrentCommit": "Commit：{{value}}",
     "desktopUpdateLatestVersion": "远端版本",
     "desktopUpdateLatestCommit": "远端 Commit：{{value}}",
     "desktopUpdateLatestSummary": "更新摘要",

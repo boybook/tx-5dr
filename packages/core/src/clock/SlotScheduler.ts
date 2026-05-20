@@ -177,4 +177,10 @@ export interface AudioBufferProvider {
    * @returns 采样率（Hz）
    */
   getSampleRate?(): number;
+
+  /**
+   * 获取音频缓冲区使用的当前时钟（毫秒）。
+   * 频谱等实时读取路径应优先使用该时钟，避免 NTP 校准后与缓冲区时钟不一致。
+   */
+  getCurrentTimeMs?(): number;
 } 

@@ -2,12 +2,13 @@ import path from 'path';
 import { createSocket } from 'node:dgram';
 import * as hostHamlib from 'hamlib';
 import type { RemoteInfo, Socket, SocketType } from 'node:dgram';
-import { getBandFromFrequency } from '@tx5dr/core';
+import { getBandFromFrequency, toAdifMode } from '@tx5dr/core';
 import type {
   HostSettingsControl,
   HamlibHostDependency,
   LogbookSyncProvider,
   PluginContext,
+  RadioOperatingMode,
   PluginUIInstanceTarget,
   QSOQueryFilter,
 } from '@tx5dr/plugin-api';
@@ -59,11 +60,18 @@ const HOST_HAMLIB_DEPENDENCY = createAllowedHamlibDependency(hostHamlib as unkno
 
 type SavedPluginFrequency = {
   frequency: number;
+  mode?: string;
+  radioMode?: string;
   band?: string;
 } | null | undefined;
 
 function isValidFrequency(frequency: unknown): frequency is number {
   return typeof frequency === 'number' && Number.isFinite(frequency) && frequency > 0;
+}
+
+function normalizeModeToken(mode: string | null | undefined): string | undefined {
+  const normalized = mode?.trim().toUpperCase();
+  return normalized || undefined;
 }
 
 /**
@@ -588,6 +596,59 @@ export class PluginContextFactory {
       }
     };
 
+    const getModeDescriptorForEngineMode = (): ModeDescriptor => {
+      switch (getEngineMode()) {
+        case 'voice':
+          return MODES.VOICE;
+        case 'cw':
+          return MODES.CW;
+        case 'digital':
+        default:
+          return deps.getCurrentMode();
+      }
+    };
+
+    const getCurrentRadioMode = (): string | undefined => {
+      const savedFrequency = getSavedFrequencyForEngineMode();
+      const hostRadioMode = normalizeModeToken(deps.getCurrentRadioMode?.());
+      if (hostRadioMode) {
+        return hostRadioMode;
+      }
+
+      const savedRadioMode = normalizeModeToken(savedFrequency?.radioMode);
+      if (savedRadioMode) {
+        return savedRadioMode;
+      }
+
+      if (getEngineMode() === 'voice') {
+        return 'USB';
+      }
+      if (getEngineMode() === 'cw') {
+        return 'CW';
+      }
+      return undefined;
+    };
+
+    const getOperatingMode = (): RadioOperatingMode => {
+      const engineMode = getEngineMode();
+      const descriptor = getModeDescriptorForEngineMode();
+      const radioMode = getCurrentRadioMode();
+      const baseMode = engineMode === 'voice'
+        ? (radioMode ?? 'USB')
+        : engineMode === 'cw'
+          ? 'CW'
+          : descriptor.name;
+      const projected = toAdifMode({ mode: baseMode });
+
+      return {
+        engineMode,
+        mode: projected.mode,
+        ...(projected.submode ? { submode: projected.submode } : {}),
+        ...(radioMode ? { radioMode } : {}),
+        descriptor,
+      };
+    };
+
     const getKnownFrequency = (): number | null => {
       const knownFrequency = deps.getKnownRadioFrequency?.();
       if (isValidFrequency(knownFrequency)) {
@@ -629,6 +690,9 @@ export class PluginContextFactory {
         }
 
         return getSavedFrequencyForEngineMode()?.band || deps.getRadioBand();
+      },
+      get mode() {
+        return getOperatingMode();
       },
       get isConnected() {
         return deps.getRadioConnected();

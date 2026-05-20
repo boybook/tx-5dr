@@ -70,6 +70,7 @@ permissions: ['radio:read', 'radio:control', 'radio:power']
 - `radio:read` enables `ctx.radio.capabilities.getSnapshot()` and `ctx.radio.power.getSupport()`.
 - `radio:control` enables `ctx.radio.setFrequency()` and `ctx.radio.capabilities.write()`.
 - `radio:power` enables `ctx.radio.power.set('on' | 'off' | 'standby' | 'operate')`.
+- `ctx.radio.mode` is always readable and exposes the current best-known operating mode using ADIF `MODE`/`SUBMODE` semantics, for example `SSB` + `USB` in voice USB.
 
 These APIs are not exposed directly to iframe pages; custom UI should call a server-side page handler.
 

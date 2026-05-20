@@ -244,7 +244,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
 
       // 计算需要的音频样本数（基于分析间隔）
       const durationMs = this.config.analysisInterval;
-      const timestamp = Date.now();
+      const timestamp = this.audioProvider.getCurrentTimeMs?.() ?? Date.now();
 
       // 从音频缓冲区获取最新的音频数据
       const startMs = timestamp - durationMs;

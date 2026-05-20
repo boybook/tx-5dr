@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const { mockState, mockConfigManager, MockRtAudio } = vi.hoisted(() => {
   const state = {
@@ -127,8 +130,164 @@ describe('audio hotplug recovery', () => {
     mockConfigManager.getRadioConfig.mockClear();
     mockConfigManager.getOpenWebRXStations.mockReturnValue([]);
     mockConfigManager.getRadioConfig.mockReturnValue({ type: 'serial' });
+    delete process.env.TX5DR_RUNTIME_FLAVOR;
+    delete process.env.TX5DR_ANDROID_AUDIO_DEVICES_FILE;
     setAudioConfig();
     (AudioDeviceManager as unknown as { instance?: AudioDeviceManager }).instance = undefined;
+  });
+
+  it('lists Android bridge audio devices from the manifest and resolves them by name', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tx5dr-android-audio-'));
+    const manifest = join(dir, 'android-audio-devices.json');
+    writeFileSync(manifest, JSON.stringify({
+      inputDevices: [
+        {
+          id: 'android-input-11',
+          androidDeviceId: 11,
+          name: '[Android] USB Audio CODEC',
+          direction: 'input',
+          kind: 'usb',
+          channels: 1,
+          sampleRate: 48000,
+          sampleRates: [44100, 48000],
+          format: 's16le',
+          socketPath: '/opt/tx5dr-data/runtime/sockets/audio-input-11.sock',
+          available: true,
+          isDefault: true,
+        },
+        {
+          id: 'android-input-12',
+          androidDeviceId: 12,
+          name: '[Android] USB Audio CODEC #2',
+          direction: 'input',
+          kind: 'usb',
+          channels: 1,
+          sampleRate: 48000,
+          sampleRates: [48000],
+          format: 's16le',
+          socketPath: '/opt/tx5dr-data/runtime/sockets/audio-input-12.sock',
+          available: true,
+          isDefault: false,
+        },
+      ],
+      outputDevices: [
+        {
+          id: 'android-output-21',
+          androidDeviceId: 21,
+          name: '[Android] Phone speaker',
+          direction: 'output',
+          kind: 'builtinSpeaker',
+          channels: 1,
+          sampleRate: 48000,
+          sampleRates: [48000],
+          format: 's16le',
+          socketPath: '/opt/tx5dr-data/runtime/sockets/audio-output-21.sock',
+          available: true,
+          isDefault: true,
+        },
+      ],
+    }));
+    process.env.TX5DR_RUNTIME_FLAVOR = 'android-bridge';
+    process.env.TX5DR_ANDROID_AUDIO_DEVICES_FILE = manifest;
+
+    const manager = AudioDeviceManager.getInstance();
+    const devices = await manager.getAllDevices();
+
+    expect(devices.inputDevices.map((device) => device.name)).toContain('[Android] USB Audio CODEC');
+    expect(devices.inputDevices.map((device) => device.name)).toContain('[Android] USB Audio CODEC #2');
+    await expect(manager.resolveInputDeviceId('[Android] USB Audio CODEC #2')).resolves.toBe('android-input-12');
+    await expect(manager.resolveInputDeviceId()).resolves.toBe('android-input-11');
+    await expect(manager.resolveInputDeviceId('TX5DRAndroidUsbInput')).resolves.toBe('android-input-11');
+    await expect(manager.resolveOutputDeviceId()).resolves.toBe('android-output-21');
+    await expect(manager.resolveOutputDeviceId('TX5DRAndroidOutput')).resolves.toBe('android-output-21');
+  });
+
+  it('merges active Android socket devices into manifest devices without duplicating them', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tx5dr-android-audio-'));
+    const manifest = join(dir, 'android-audio-devices.json');
+    writeFileSync(manifest, JSON.stringify({
+      inputDevices: [
+        {
+          id: 'android-input-24',
+          androidDeviceId: 24,
+          name: '[Android] Phone microphone',
+          direction: 'input',
+          kind: 'builtinMic',
+          channels: 1,
+          sampleRate: 48000,
+          sampleRates: [48000],
+          format: 's16le',
+          socketPath: '/opt/tx5dr-data/runtime/sockets/audio-input-24.sock',
+          available: true,
+          isDefault: true,
+        },
+        {
+          id: 'android-input-26',
+          androidDeviceId: 26,
+          name: '[Android] Phone microphone #2',
+          direction: 'input',
+          kind: 'builtinMic',
+          channels: 1,
+          sampleRate: 48000,
+          sampleRates: [48000],
+          format: 's16le',
+          socketPath: '/opt/tx5dr-data/runtime/sockets/audio-input-26.sock',
+          available: true,
+          isDefault: false,
+        },
+      ],
+      outputDevices: [
+        {
+          id: 'android-output-3',
+          androidDeviceId: 3,
+          name: '[Android] Phone speaker',
+          direction: 'output',
+          kind: 'builtinSpeaker',
+          channels: 1,
+          sampleRate: 48000,
+          sampleRates: [48000],
+          format: 's16le',
+          socketPath: '/opt/tx5dr-data/runtime/sockets/audio-output-3.sock',
+          available: true,
+          isDefault: true,
+        },
+      ],
+    }));
+    process.env.TX5DR_RUNTIME_FLAVOR = 'android-bridge';
+    process.env.TX5DR_ANDROID_AUDIO_DEVICES_FILE = manifest;
+
+    const manager = AudioDeviceManager.getInstance();
+    manager.markDeviceActive('input', '[Android] Phone microphone', 'android-input-24', 48000, 1);
+    manager.markDeviceActive('output', '[Android] Phone speaker', 'android-output-3', 48000, 1);
+
+    const devices = await manager.getAllDevices();
+
+    expect(devices.inputDevices.filter((device) => device.id === 'android-input-24')).toHaveLength(1);
+    expect(devices.inputDevices.filter((device) => device.name === '[Android] Phone microphone')).toHaveLength(1);
+    expect(devices.inputDevices.find((device) => device.id === 'android-input-24')).toMatchObject({
+      isDefault: true,
+      availability: 'active',
+      isActiveByTx5dr: true,
+    });
+    expect(devices.inputDevices.map((device) => device.name)).toEqual([
+      '[Android] Phone microphone',
+      '[Android] Phone microphone #2',
+    ]);
+    expect(devices.outputDevices.filter((device) => device.id === 'android-output-3')).toHaveLength(1);
+    expect(devices.outputDevices.find((device) => device.id === 'android-output-3')).toMatchObject({
+      isDefault: true,
+      availability: 'active',
+      isActiveByTx5dr: true,
+    });
+
+    manager.clearActiveDevice('input', '[Android] Phone microphone');
+    const refreshed = await manager.getAllDevices();
+    expect(refreshed.inputDevices.filter((device) => device.id === 'android-input-24')).toHaveLength(1);
+    expect(refreshed.inputDevices.find((device) => device.id === 'android-input-24')).toMatchObject({
+      isDefault: true,
+      availability: 'available',
+      isActiveByTx5dr: false,
+    });
   });
 
   it('re-resolves configured input device IDs from a fresh RtAudio enumeration', async () => {

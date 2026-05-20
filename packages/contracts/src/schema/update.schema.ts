@@ -18,6 +18,7 @@ export const SystemUpdateStatusSchema = z.object({
   channel: SystemUpdateChannelSchema,
   currentVersion: z.string(),
   currentCommit: z.string().nullable(),
+  currentPublishedAt: z.string().nullable(),
   currentDigest: z.string().nullable().optional(),
   latestVersion: z.string().nullable(),
   latestCommit: z.string().nullable(),

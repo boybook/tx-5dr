@@ -29,6 +29,7 @@ import type { PluginLogger } from '@tx5dr/plugin-api';
 export const STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING = 'tx6MessageOverride';
 
 export type StandardQSOOperatorConfig = OperatorConfig & {
+    autoReplyToDirectCallWhenStopped?: boolean;
     skipTx1?: boolean;
     distinguishWorkedStationsByBand?: boolean;
     tx6MessageOverride?: string;

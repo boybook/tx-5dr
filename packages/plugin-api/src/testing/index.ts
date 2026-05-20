@@ -252,6 +252,12 @@ export function createMockRadioControl(
   return {
     frequency: 14074000,
     band: '20m',
+    mode: {
+      engineMode: 'digital',
+      mode: 'FT8',
+      radioMode: 'USB',
+      descriptor: DEFAULT_MODE,
+    },
     isConnected: true,
     capabilities: {
       getSnapshot: () => capabilitySnapshot,

@@ -97,6 +97,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     targetCallsign?: string;
     startOperator?: boolean;
     autoReplyToCQ?: boolean;
+    autoReplyToDirectCallWhenStopped?: boolean;
     autoResumeCQAfterFail?: boolean;
     autoResumeCQAfterSuccess?: boolean;
     maxQSOTimeoutCycles?: number;
@@ -179,6 +180,7 @@ describe('PluginManager standard-qso late re-decision', () => {
         [operator.config.id]: {
           'standard-qso': {
             autoReplyToCQ: operator.config.autoReplyToCQ,
+            autoReplyToDirectCallWhenStopped: options?.autoReplyToDirectCallWhenStopped ?? false,
             autoResumeCQAfterFail: operator.config.autoResumeCQAfterFail,
             autoResumeCQAfterSuccess: operator.config.autoResumeCQAfterSuccess,
             replyToWorkedStations: operator.config.replyToWorkedStations,
@@ -221,6 +223,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     myCallsign?: string;
     myGrid?: string;
     autoReplyToCQ?: boolean;
+    autoReplyToDirectCallWhenStopped?: boolean;
     replyToWorkedStations?: boolean;
     hasWorkedCallsign?: boolean | ((callsign: string, options?: { anyBand?: boolean }) => boolean | Promise<boolean>);
   }) {
@@ -313,6 +316,7 @@ describe('PluginManager standard-qso late re-decision', () => {
         {
           'standard-qso': {
             autoReplyToCQ: operator.config.autoReplyToCQ,
+            autoReplyToDirectCallWhenStopped: options?.autoReplyToDirectCallWhenStopped ?? false,
             autoResumeCQAfterFail: operator.config.autoResumeCQAfterFail,
             autoResumeCQAfterSuccess: operator.config.autoResumeCQAfterSuccess,
             replyToWorkedStations: operator.config.replyToWorkedStations,
@@ -409,6 +413,12 @@ describe('PluginManager standard-qso late re-decision', () => {
       scope: 'operator',
     });
     expect(standardQso?.quickSettings?.some((entry) => entry.settingKey === 'distinguishWorkedStationsByBand')).toBe(false);
+    expect(standardQso?.settings?.autoReplyToDirectCallWhenStopped).toMatchObject({
+      type: 'boolean',
+      default: false,
+      scope: 'operator',
+    });
+    expect(standardQso?.quickSettings?.some((entry) => entry.settingKey === 'autoReplyToDirectCallWhenStopped')).toBe(true);
     expect(standardQso?.settings?.skipTx1).toMatchObject({
       type: 'boolean',
       default: false,
@@ -700,6 +710,163 @@ describe('PluginManager standard-qso late re-decision', () => {
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX2');
     const transmission = getCurrentTransmission(pluginManager, operator.config.id);
     expect(transmission).toBe('BG5DRB BG7XTV -08');
+
+    await pluginManager.shutdown();
+  });
+
+  it('does not wake a stopped operator for direct calls by default', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      startOperator: false,
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(createSlotInfo(15_000), [{
+      message: 'BG7XTV JA1AAA -12',
+      snr: -18,
+      freq: 1300,
+    }]));
+
+    expect(operator.isTransmitting).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBeUndefined();
+
+    await pluginManager.shutdown();
+  });
+
+  it('wakes a stopped idle operator for direct CALL when enabled', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      startOperator: false,
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      autoReplyToDirectCallWhenStopped: true,
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(createSlotInfo(15_000), [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.CALL,
+        senderCallsign: 'JA1AAA',
+        targetCallsign: 'BG7XTV',
+        grid: 'PM95',
+      }),
+      snr: -8,
+      freq: 1502,
+    }]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(operator.isTransmitting).toBe(true);
+    expect(operator.getTransmitCycles()).toEqual([0]);
+    expect(status.currentSlot).toBe('TX2');
+    expect(status.context?.targetCallsign).toBe('JA1AAA');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG7XTV -08');
+
+    await pluginManager.shutdown();
+  });
+
+  it('wakes a stopped idle operator for direct signal reports when enabled', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      startOperator: false,
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      autoReplyToDirectCallWhenStopped: true,
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(45_000), createSlotPack(createSlotInfo(30_000), [{
+      message: 'BG7XTV JA1AAA -12',
+      snr: -18,
+      freq: 1300,
+    }]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(operator.isTransmitting).toBe(true);
+    expect(operator.getTransmitCycles()).toEqual([1]);
+    expect(status.currentSlot).toBe('TX3');
+    expect(status.context?.targetCallsign).toBe('JA1AAA');
+    expect(status.context?.reportReceived).toBe(-12);
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG7XTV R-18');
+
+    await pluginManager.shutdown();
+  });
+
+  it('does not wake a stopped operator for worked direct callers when duplicates are disabled', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      startOperator: false,
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      autoReplyToDirectCallWhenStopped: true,
+      replyToWorkedStations: false,
+      hasWorkedCallsign: true,
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(createSlotInfo(15_000), [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.CALL,
+        senderCallsign: 'JA1AAA',
+        targetCallsign: 'BG7XTV',
+        grid: 'PM95',
+      }),
+      snr: -8,
+      freq: 1502,
+    }]));
+
+    expect(operator.isTransmitting).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBeUndefined();
+
+    await pluginManager.shutdown();
+  });
+
+  it('does not wake a stopped non-idle operator for direct calls', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      startOperator: false,
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      targetCallsign: 'BG5DRB',
+      autoReplyToDirectCallWhenStopped: true,
+    });
+    setRuntimeState(pluginManager, operator.config.id, 'TX2');
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(createSlotInfo(15_000), [{
+      message: 'BG7XTV JA1AAA -12',
+      snr: -18,
+      freq: 1300,
+    }]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(operator.isTransmitting).toBe(false);
+    expect(status.currentSlot).toBe('TX2');
+    expect(status.context?.targetCallsign).toBe('BG5DRB');
+
+    await pluginManager.shutdown();
+  });
+
+  it('does not wake a stopped operator when another same-callsign operator is working the direct caller', async () => {
+    const { operators, pluginManager } = await createMultiOperatorRuntimeHarness({
+      autoReplyToDirectCallWhenStopped: true,
+    });
+    const [stoppedOperator, activeOperator] = operators;
+    stoppedOperator.stop();
+    patchRuntimeContext(pluginManager, activeOperator.config.id, {
+      targetCallsign: 'JA1AAA',
+      targetGrid: 'PM95',
+      reportSent: -5,
+    });
+    setRuntimeState(pluginManager, activeOperator.config.id, 'TX2');
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(createSlotInfo(15_000), [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.CALL,
+        senderCallsign: 'JA1AAA',
+        targetCallsign: 'BG4IAJ',
+        grid: 'PM95',
+      }),
+      snr: -8,
+      freq: 1502,
+    }]));
+
+    expect(stoppedOperator.isTransmitting).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(stoppedOperator.config.id).currentSlot).toBe('TX6');
+    expect(pluginManager.getOperatorRuntimeStatus(stoppedOperator.config.id).context?.targetCallsign).toBeUndefined();
 
     await pluginManager.shutdown();
   });

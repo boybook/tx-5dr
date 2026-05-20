@@ -5,6 +5,8 @@
   "strategyOverviewDesc": "このポリシー プラグインは、CQ への自動応答、ターゲットの選択、タイムアウトと再試行動作の制御など、標準の FT8/FT4 交信プロセスを担当します。",
   "autoReplyToCQ": "CQへの自動応答",
   "autoReplyToCQDesc": "条件に合う CQ を受信したら、自動的に相手局を選択して応答します。新しい局を探す通常運用に適していますが、相手局を手動で選びたいバンドでは適しません。",
+  "autoReplyToDirectCallWhenStopped": "停止中も直呼びに応答",
+  "autoReplyToDirectCallWhenStoppedDesc": "送信スイッチがオフで TX6 待機中でも、このオペレーターのコールサインへの直接呼び出しを受信したら自動的に送信を再開して応答します。",
   "autoResumeCQAfterFail": "失敗後に CQ を自動的に回復する",
   "autoResumeCQAfterFailDesc": "複数回通話しても結果が得られない場合は自動的にCQ通話に戻り、中途半端な通話に留まることを防ぎます。",
   "autoResumeCQAfterSuccess": "成功後に CQ を自動的に回復する",

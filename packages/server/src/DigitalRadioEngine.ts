@@ -336,6 +336,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       },
       getKnownRadioFrequency: () => this.radioManager.getKnownFrequency(),
       getEngineMode: () => this.engineMode,
+      getCurrentRadioMode: () => this.getCurrentRadioMode(),
       setRadioFrequency: (freq) => {
         try { this.radioManager.setFrequency(freq); } catch (e) { logger.error('Failed to set radio frequency', e); }
       },
@@ -696,6 +697,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public getEngineMode(): EngineMode {
     return this.engineMode;
+  }
+
+  public getCurrentRadioMode(): string | null {
+    const configManager = ConfigManager.getInstance();
+    if (this.engineMode === 'voice') {
+      return configManager.getLastVoiceFrequency()?.radioMode ?? null;
+    }
+    if (this.engineMode === 'cw') {
+      return configManager.getLastCWFrequency()?.radioMode ?? 'CW';
+    }
+    return configManager.getLastSelectedFrequency()?.radioMode ?? null;
   }
 
   public getVoiceSessionManager(): VoiceSessionManager | null {
@@ -2023,6 +2035,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       isDecoding: isActuallyDecoding,
       currentMode: this.currentMode,
       engineMode: this.engineMode,
+      currentRadioMode: this.getCurrentRadioMode() ?? undefined,
       currentTime: this.clockSource.now(),
       nextSlotIn: this.slotClock?.getNextSlotIn() ?? 0,
       audioStarted: this.engineLifecycle?.getIsAudioStarted() ?? false,

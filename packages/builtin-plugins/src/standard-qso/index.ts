@@ -62,6 +62,7 @@ function getStandardQSOConfig(ctx: {
   const defaultTx6Message = buildStandardQSODefaultTx6Message(baseConfig);
   return {
     ...baseConfig,
+    autoReplyToDirectCallWhenStopped: (c.autoReplyToDirectCallWhenStopped as boolean | undefined) ?? false,
     skipTx1: c.skipTx1 === true,
     distinguishWorkedStationsByBand: (c.distinguishWorkedStationsByBand as boolean | undefined) ?? true,
     tx6MessageOverride: normalizeStandardQSOTx6MessageOverride(
@@ -90,6 +91,13 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
       default: false,
       label: 'autoReplyToCQ',
       description: 'autoReplyToCQDesc',
+      scope: 'operator',
+    },
+    autoReplyToDirectCallWhenStopped: {
+      type: 'boolean',
+      default: false,
+      label: 'autoReplyToDirectCallWhenStopped',
+      description: 'autoReplyToDirectCallWhenStoppedDesc',
       scope: 'operator',
     },
     autoResumeCQAfterFail: {
@@ -168,6 +176,7 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
    */
   quickSettings: [
     { settingKey: 'autoReplyToCQ' },
+    { settingKey: 'autoReplyToDirectCallWhenStopped' },
     { settingKey: 'autoResumeCQAfterFail' },
     { settingKey: 'autoResumeCQAfterSuccess' },
     { settingKey: 'replyToWorkedStations' },

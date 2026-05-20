@@ -5,6 +5,8 @@
   "strategyOverviewDesc": "This strategy plugin drives the standard FT8/FT4 QSO flow, including auto reply, target selection, timeout handling, and retry behavior.",
   "autoReplyToCQ": "Auto Reply to CQ",
   "autoReplyToCQDesc": "When listening, answer eligible CQ callers automatically. Useful for unattended hunting; leave it off when you want to choose every station yourself.",
+  "autoReplyToDirectCallWhenStopped": "Reply to direct calls when stopped",
+  "autoReplyToDirectCallWhenStoppedDesc": "When the transmit switch is off and the operator is idle in TX6, automatically turn transmit back on and answer direct calls to this operator callsign.",
   "autoResumeCQAfterFail": "Resume CQ after failure",
   "autoResumeCQAfterFailDesc": "If a call goes unanswered for several rounds, return to calling CQ instead of staying on a dead QSO attempt.",
   "autoResumeCQAfterSuccess": "Resume CQ after success",

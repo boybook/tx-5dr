@@ -6,6 +6,16 @@ import { createRtAudioInstance, describeConfiguredRtAudioBackend, type RtAudioIn
 import { ConfigManager } from '../config/config-manager.js';
 import { createLogger } from '../utils/logger.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
+import {
+  androidDescriptorToAudioDevice,
+  getAndroidAudioDevices,
+  isAndroidAudioDeviceId,
+  isAndroidBridgeRuntime,
+  isLegacyAndroidAudioDeviceName,
+  resolveAndroidAudioDevice,
+  type AndroidAudioDeviceDescriptor,
+  type AndroidAudioDirection,
+} from './android-audio-devices.js';
 
 const logger = createLogger('AudioDeviceManager');
 type RadioType = 'none' | 'network' | 'serial' | 'icom-wlan';
@@ -103,7 +113,26 @@ export class AudioDeviceManager {
   }
 
   private createRegisteredSnapshot(direction: AudioDirection): AudioDevice[] {
-    const devices = Array.from(this.deviceRegistry[direction].values()).map((device) => this.toPublicDevice(device));
+    const androidDevices = getAndroidAudioDevices(direction).map(androidDescriptorToAudioDevice);
+    const devicesById = new Map(androidDevices.map((device) => [device.id, device]));
+    const devices = [...androidDevices];
+
+    for (const registered of this.deviceRegistry[direction].values()) {
+      const publicDevice = this.toPublicDevice(registered);
+      const manifestDevice = devicesById.get(publicDevice.id);
+      if (isAndroidAudioDeviceId(publicDevice.id) && manifestDevice) {
+        if (publicDevice.isActiveByTx5dr || publicDevice.availability === 'active') {
+          Object.assign(manifestDevice, {
+            availability: publicDevice.availability,
+            isActiveByTx5dr: publicDevice.isActiveByTx5dr,
+            lastSeenAt: publicDevice.lastSeenAt,
+          });
+        }
+        continue;
+      }
+      devices.push(publicDevice);
+    }
+
     if (devices.length === 0) {
       devices.push(this.fallbackDevice(direction));
     }
@@ -228,6 +257,14 @@ export class AudioDeviceManager {
     rtAudio: RtAudioInstance,
     requestedDeviceId?: string,
   ): Promise<StreamDeviceResolution> {
+    if (isAndroidAudioDeviceId(requestedDeviceId) || deviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName('input', deviceName))) {
+      const device = this.resolveAndroidDeviceOrThrow(
+        'input',
+        isLegacyAndroidAudioDeviceName('input', deviceName) ? undefined : deviceName,
+        requestedDeviceId,
+      );
+      return { actualDeviceId: -1, persistedDeviceId: device.id, deviceName: device.name };
+    }
     return this.resolveDeviceForStream('input', deviceName, rtAudio, requestedDeviceId);
   }
 
@@ -236,7 +273,35 @@ export class AudioDeviceManager {
     rtAudio: RtAudioInstance,
     requestedDeviceId?: string,
   ): Promise<StreamDeviceResolution> {
+    if (isAndroidAudioDeviceId(requestedDeviceId) || deviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName('output', deviceName))) {
+      const device = this.resolveAndroidDeviceOrThrow(
+        'output',
+        isLegacyAndroidAudioDeviceName('output', deviceName) ? undefined : deviceName,
+        requestedDeviceId,
+      );
+      return { actualDeviceId: -1, persistedDeviceId: device.id, deviceName: device.name };
+    }
     return this.resolveDeviceForStream('output', deviceName, rtAudio, requestedDeviceId);
+  }
+
+  resolveAndroidDeviceForStream(
+    direction: AndroidAudioDirection,
+    deviceName?: string,
+    requestedDeviceId?: string,
+  ): AndroidAudioDeviceDescriptor | null {
+    return resolveAndroidAudioDevice(direction, deviceName, requestedDeviceId);
+  }
+
+  private resolveAndroidDeviceOrThrow(
+    direction: AndroidAudioDirection,
+    deviceName?: string,
+    requestedDeviceId?: string,
+  ): AndroidAudioDeviceDescriptor {
+    const device = resolveAndroidAudioDevice(direction, deviceName, requestedDeviceId);
+    if (!device) {
+      throw this.createUnavailableConfiguredDeviceError(direction, deviceName ?? requestedDeviceId ?? `Android ${direction} device`);
+    }
+    return device;
   }
 
   private async resolveDeviceForStream(
@@ -522,6 +587,16 @@ export class AudioDeviceManager {
       };
     }
 
+    if (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName(direction, configuredDeviceName)) {
+      return {
+        configuredDeviceName,
+        configuredDevice: null,
+        effectiveDevice: defaultDevice,
+        status: 'default',
+        reason: defaultDevice ? 'legacy-android-audio-device' : 'no-default-device',
+      };
+    }
+
     const configuredDevice = devices.find((device) => device.name === configuredDeviceName) ?? null;
     if (configuredDevice) {
       return {
@@ -645,6 +720,12 @@ export class AudioDeviceManager {
       return defaultDevice?.id;
     }
 
+    if (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName('input', deviceName)) {
+      const defaultDevice = await this.getDefaultInputDevice();
+      logger.debug(`Using default Android input device for legacy setting ${deviceName}: ${defaultDevice?.name || 'none'}`);
+      return defaultDevice?.id;
+    }
+
     if (deviceName === 'ICOM WLAN') {
       return 'icom-wlan-input';
     }
@@ -669,6 +750,12 @@ export class AudioDeviceManager {
     if (!deviceName) {
       const defaultDevice = await this.getDefaultOutputDevice();
       logger.debug(`Using default output device: ${defaultDevice?.name || 'none'}`);
+      return defaultDevice?.id;
+    }
+
+    if (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName('output', deviceName)) {
+      const defaultDevice = await this.getDefaultOutputDevice();
+      logger.debug(`Using default Android output device for legacy setting ${deviceName}: ${defaultDevice?.name || 'none'}`);
       return defaultDevice?.id;
     }
 

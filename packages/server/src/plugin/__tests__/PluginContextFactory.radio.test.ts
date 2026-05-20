@@ -144,6 +144,101 @@ describe('PluginContextFactory radio access', () => {
     expect(ctx.radio.band).toBe('2m voice');
   });
 
+  it('exposes voice USB as ADIF SSB with USB submode', async () => {
+    vi.spyOn(ConfigManager.getInstance(), 'getLastVoiceFrequency').mockReturnValue({
+      frequency: 14_270_000,
+      radioMode: 'USB',
+      band: '20m',
+      description: '20m USB',
+    });
+    const ctx = await createContext(createPlugin(), createDeps({
+      getEngineMode: () => 'voice',
+      getCurrentRadioMode: () => 'USB',
+    }));
+
+    expect(ctx.radio.mode).toMatchObject({
+      engineMode: 'voice',
+      mode: 'SSB',
+      submode: 'USB',
+      radioMode: 'USB',
+      descriptor: MODES.VOICE,
+    });
+  });
+
+  it('exposes voice LSB as ADIF SSB with LSB submode', async () => {
+    const ctx = await createContext(createPlugin(), createDeps({
+      getEngineMode: () => 'voice',
+      getCurrentRadioMode: () => 'LSB',
+    }));
+
+    expect(ctx.radio.mode).toMatchObject({
+      engineMode: 'voice',
+      mode: 'SSB',
+      submode: 'LSB',
+      radioMode: 'LSB',
+      descriptor: MODES.VOICE,
+    });
+  });
+
+  it('exposes voice FM and AM as ADIF main modes without submode', async () => {
+    const fmCtx = await createContext(createPlugin(), createDeps({
+      getEngineMode: () => 'voice',
+      getCurrentRadioMode: () => 'FM',
+    }));
+    const amCtx = await createContext(createPlugin(), createDeps({
+      getEngineMode: () => 'voice',
+      getCurrentRadioMode: () => 'AM',
+    }));
+
+    expect(fmCtx.radio.mode).toMatchObject({ engineMode: 'voice', mode: 'FM', radioMode: 'FM' });
+    expect(fmCtx.radio.mode.submode).toBeUndefined();
+    expect(amCtx.radio.mode).toMatchObject({ engineMode: 'voice', mode: 'AM', radioMode: 'AM' });
+    expect(amCtx.radio.mode.submode).toBeUndefined();
+  });
+
+  it('exposes CW as ADIF CW mode', async () => {
+    const ctx = await createContext(createPlugin(), createDeps({
+      getEngineMode: () => 'cw',
+      getCurrentRadioMode: () => 'CW',
+    }));
+
+    expect(ctx.radio.mode).toMatchObject({
+      engineMode: 'cw',
+      mode: 'CW',
+      radioMode: 'CW',
+      descriptor: MODES.CW,
+    });
+    expect(ctx.radio.mode.submode).toBeUndefined();
+  });
+
+  it('exposes digital FT8 as ADIF FT8 mode', async () => {
+    const ctx = await createContext(createPlugin(), createDeps({
+      getEngineMode: () => 'digital',
+      getCurrentMode: () => MODES.FT8,
+    }));
+
+    expect(ctx.radio.mode).toMatchObject({
+      engineMode: 'digital',
+      mode: 'FT8',
+      descriptor: MODES.FT8,
+    });
+    expect(ctx.radio.mode.submode).toBeUndefined();
+  });
+
+  it('exposes digital FT4 as ADIF MFSK with FT4 submode', async () => {
+    const ctx = await createContext(createPlugin(), createDeps({
+      getEngineMode: () => 'digital',
+      getCurrentMode: () => MODES.FT4,
+    }));
+
+    expect(ctx.radio.mode).toMatchObject({
+      engineMode: 'digital',
+      mode: 'MFSK',
+      submode: 'FT4',
+      descriptor: MODES.FT4,
+    });
+  });
+
   it('rejects protected radio APIs when plugin permissions are missing', async () => {
     const ctx = await createContext(createPlugin(), createDeps());
 

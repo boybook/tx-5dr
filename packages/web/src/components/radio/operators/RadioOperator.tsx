@@ -986,7 +986,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             </Button>
           </div>
           
-          <div className="flex min-w-0 flex-1 items-center gap-0">
+          <div className="flex items-center gap-0">
             <Select
               key={`slot-select-${shortcutSelectHighlightToken ?? 'idle'}`}
               selectedKeys={[operatorStatus.currentSlot || 'TX6']}
@@ -998,15 +998,12 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               }}
               size="sm"
               variant="bordered"
-              className="min-w-0 flex-1 max-w-full sm:min-w-[200px]"
-              popoverProps={{
-                placement: 'bottom-end',
-              }}
+              className="w-auto min-w-[200px]"
               classNames={{
                 trigger: `bg-transparent border-none shadow-none p-1 pl-2 h-auto min-h-0 rounded-md data-[hover=true]:bg-content2 ${shortcutSelectHighlightToken ? 'tx-slot-shortcut-select-glow' : ''}`,
-                value: "text-sm font-mono text-foreground p-0 truncate",
+                value: "text-sm font-mono text-foreground p-0",
                 selectorIcon: "text-default-400 text-xs",
-                popoverContent: "min-w-[260px] max-w-[calc(100vw-1rem)]",
+                popoverContent: "min-w-[260px]",
               }}
               isDisabled={!connection.state.isConnected}
               aria-label={t('operator.selectSlot')}
@@ -1025,8 +1022,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 const slotContent = operatorStatus.slots?.[slot as keyof typeof operatorStatus.slots];
                 const displayText = slotContent ? `${slot}: ${slotContent}` : slot;
                 return (
-                  <SelectItem key={runtimeSlot} textValue={displayText}>
-                    <span className="block truncate whitespace-nowrap">{displayText}</span>
+                  <SelectItem key={runtimeSlot}>
+                    {displayText}
                   </SelectItem>
                 );
               })}

@@ -75,23 +75,33 @@ export class CallsignContextTracker {
    */
   updateFromSlotPack(slotPack: SlotPack, parseFT8Message: (message: string) => FT8Message): void {
     const now = Date.now();
+    const snrByCallsign = new Map<string, number>();
+
     for (const frame of slotPack.frames) {
       try {
         const parsed = parseFT8Message(frame.message);
         this.updateFromParsedMessage(parsed, now);
 
-        // Track decoder SNR per sender callsign (skip local TX frames)
+        // Track one best decoder SNR per sender callsign per slot cycle.
         if (frame.snr !== -999) {
           const senderCallsign = 'senderCallsign' in parsed && typeof parsed.senderCallsign === 'string'
             ? parsed.senderCallsign
             : undefined;
           if (senderCallsign) {
-            this.addSnrObservation(senderCallsign, frame.snr, slotPack.startMs);
+            const key = senderCallsign.toUpperCase();
+            const existingSnr = snrByCallsign.get(key);
+            if (existingSnr === undefined || frame.snr > existingSnr) {
+              snrByCallsign.set(key, frame.snr);
+            }
           }
         }
       } catch {
         // Skip unparseable messages
       }
+    }
+
+    for (const [callsign, snr] of snrByCallsign) {
+      this.addSnrObservation(callsign, snr, slotPack.startMs);
     }
   }
 
@@ -224,6 +234,15 @@ export class CallsignContextTracker {
       entry = { lastSeenMs: timestamp, snrHistory: [] };
       this.entries.set(key, entry);
     }
+
+    const existingObservation = entry.snrHistory.find(observation => observation.timestamp === timestamp);
+    if (existingObservation) {
+      if (snr > existingObservation.snr) {
+        existingObservation.snr = snr;
+      }
+      return;
+    }
+
     entry.snrHistory.push({ snr, timestamp });
     if (entry.snrHistory.length > MAX_SNR_HISTORY) {
       entry.snrHistory.shift();

@@ -104,6 +104,7 @@ export interface DecisionOrchestratorDeps {
   resolveGrid?: (callsign: string) => string | undefined;
   setOperatorAudioFrequency?: (operatorId: string, frequency: number) => Promise<void>;
   isSnrPriorityEnabled?: (operatorId: string) => boolean;
+  isStoppedDirectCallAutoReplyEnabled?: (operatorId: string) => boolean;
   getStrategyRuntime: (operatorId: string) => import('@tx5dr/plugin-api').StrategyRuntime | undefined;
   getCtxForInstance: (instance: PluginInstance) => PluginContext;
   dispatcher: import('./PluginHookDispatcher.js').PluginHookDispatcher;
@@ -140,6 +141,7 @@ export interface PluginManagerDeps {
   getRadioFrequency: () => Promise<number | null>;
   getKnownRadioFrequency?: () => number | null;
   getEngineMode?: () => EngineMode;
+  getCurrentRadioMode?: () => string | null;
   setRadioFrequency: (freq: number) => void;
   getRadioBand: () => string;
   getRadioConnected: () => boolean;
