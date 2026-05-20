@@ -286,3 +286,16 @@ textarea.font-mono,
   animation: tx-slot-shortcut-select-glow 900ms ease-out;
   will-change: box-shadow, background-color, transform;
 }
+
+/* HeroUI center modals combine `w-full` with horizontal margins, which can
+   become wider than the viewport on narrow screens and create page-level
+   horizontal dragging. Keep the visual margin, but subtract it from width. */
+section[role="dialog"][data-placement="center"].w-full:not(.max-w-full) {
+  width: calc(100% - 0.5rem);
+}
+
+@media (min-width: 640px) {
+  section[role="dialog"][data-placement="center"].w-full:not(.max-w-full) {
+    width: calc(100% - 3rem);
+  }
+}
