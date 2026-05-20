@@ -107,6 +107,11 @@ export class DecisionOrchestrator {
         continue;
       }
 
+      if (!operator.isTransmitting
+          && await this.tryWakeFromStoppedDirectCallAutoReply(operator.config.id, parsedMessages, slotInfo, slotPack)) {
+        continue;
+      }
+
       let automaticTargetMessages: ParsedFT8Message[] | undefined;
       if (this.isOperatorPureStandby(operator.config.id)) {
         automaticTargetMessages = await this.getScoredAutomaticTargetMessages(
@@ -215,7 +220,10 @@ export class DecisionOrchestrator {
     if (!operator.isTransmitting) {
       const slotInfo = this.buildSlotInfoFromSlotPack(slotPack);
       const parsedMessages = await this.parseSlotPackMessages(slotPack, operatorId);
-      return this.tryWakeFromSilentDirectedCallGate(operatorId, parsedMessages, slotInfo, slotPack);
+      if (await this.tryWakeFromSilentDirectedCallGate(operatorId, parsedMessages, slotInfo, slotPack)) {
+        return true;
+      }
+      return this.tryWakeFromStoppedDirectCallAutoReply(operatorId, parsedMessages, slotInfo, slotPack);
     }
 
     const session = this.getOrCreateDecisionState(operatorId);
@@ -661,6 +669,66 @@ export class DecisionOrchestrator {
       fromState: beforeState,
       toState: afterState,
       rawMessage: sourceMessage.rawMessage,
+    });
+
+    return true;
+  }
+
+  private async tryWakeFromStoppedDirectCallAutoReply(
+    operatorId: string,
+    parsedMessages: ParsedFT8Message[],
+    slotInfo: SlotInfo,
+    slotPack: SlotPack | null,
+  ): Promise<boolean> {
+    const operator = this.deps.getOperatorById(operatorId);
+    if (!operator
+        || operator.isTransmitting
+        || !this.isOperatorPureStandby(operatorId)
+        || this.deps.isStoppedDirectCallAutoReplyEnabled?.(operatorId) !== true) {
+      return false;
+    }
+
+    const myCallsign = operator.config.myCallsign.trim().toUpperCase();
+    const scoredMessages = await this.getScoredAutomaticTargetMessages(operatorId, parsedMessages);
+    const directedMessages = scoredMessages.filter((message) =>
+      this.isInboundDirectCallMessage(message, myCallsign)
+    );
+    if (directedMessages.length === 0) {
+      return false;
+    }
+
+    const before = this.deps.getOperatorAutomationSnapshot(operatorId);
+    const decision = await this.invokeStrategyDecision(operatorId, directedMessages, { isReDecision: true });
+    await this.notifyQSOFailIfPresent(operatorId, decision);
+    if (decision?.stop) {
+      return false;
+    }
+
+    const after = this.deps.getOperatorAutomationSnapshot(operatorId);
+    const beforeTarget = before?.context?.targetCallsign?.trim().toUpperCase();
+    const afterTarget = after?.context?.targetCallsign?.trim().toUpperCase();
+    const afterState = after?.currentState ?? 'TX6';
+    if (!afterTarget
+        || (afterState !== 'TX2' && afterState !== 'TX3')
+        || (before?.currentState === afterState && beforeTarget === afterTarget)) {
+      return false;
+    }
+
+    const sourceMessage = directedMessages.find((message) =>
+      getParsedMessageSenderCallsign(message.message) === afterTarget
+    ) ?? directedMessages[0];
+    const sourceSlotInfo = this.buildSourceSlotInfoFromParsedMessage(operatorId, sourceMessage, slotInfo);
+
+    operator.start();
+    operator.setTransmitCycles((sourceSlotInfo.cycleNumber + 1) % 2);
+
+    logger.info('Stopped direct-call auto-reply woke operator', {
+      operatorId,
+      targetCallsign: afterTarget,
+      fromState: before?.currentState ?? 'TX6',
+      toState: afterState,
+      rawMessage: sourceMessage.rawMessage,
+      sourceSlotId: sourceSlotInfo.id,
     });
 
     return true;

@@ -5,6 +5,8 @@
   "strategyOverviewDesc": "该策略插件负责标准 FT8/FT4 通联流程，包括自动回复 CQ、选择目标以及控制超时与重试行为。",
   "autoReplyToCQ": "自动回复CQ",
   "autoReplyToCQDesc": "守听时遇到符合条件的 CQ，会自动挑选目标并回应；适合挂机找新台，不适合需要手动挑台的频段。",
+  "autoReplyToDirectCallWhenStopped": "关闭发射时回应直呼",
+  "autoReplyToDirectCallWhenStoppedDesc": "发射开关关闭且处于待机 TX6 时，如果有人直接呼叫本操作员呼号，会自动打开发射并回应。",
   "autoResumeCQAfterFail": "失败后自动恢复CQ",
   "autoResumeCQAfterFailDesc": "呼叫对方多轮仍没有下文时，自动回到 CQ 守叫，避免一直停在未完成的通联上。",
   "autoResumeCQAfterSuccess": "成功后自动恢复CQ",

@@ -141,6 +141,7 @@ export class PluginManager {
       resolveGrid: deps.resolveGrid,
       setOperatorAudioFrequency: deps.setOperatorAudioFrequency,
       isSnrPriorityEnabled: (operatorId) => this.isSnrPriorityEnabled(operatorId),
+      isStoppedDirectCallAutoReplyEnabled: (operatorId) => this.isStoppedDirectCallAutoReplyEnabled(operatorId),
       getStrategyRuntime: (operatorId) => this.getStrategyRuntime(operatorId),
       getCtxForInstance: (instance) => this.getCtxForInstance(instance),
       dispatcher: this.dispatcher,
@@ -675,6 +676,22 @@ export class PluginManager {
 
     const settings = this.buildMergedSettings(plugin, BUILTIN_SNR_FILTER_PLUGIN_NAME, operatorId);
     return settings.prioritizeHigherSNR === true;
+  }
+
+  private isStoppedDirectCallAutoReplyEnabled(operatorId: string): boolean {
+    const activeStrategy = this.pluginsConfig.operatorStrategies?.[operatorId] ?? BUILTIN_STANDARD_QSO_PLUGIN_NAME;
+    if (activeStrategy !== BUILTIN_STANDARD_QSO_PLUGIN_NAME) {
+      return false;
+    }
+
+    const plugin = this.loadedPlugins.get(BUILTIN_STANDARD_QSO_PLUGIN_NAME);
+    const instance = this.instances.get(operatorId)?.get(BUILTIN_STANDARD_QSO_PLUGIN_NAME);
+    if (!plugin || !instance?.enabled) {
+      return false;
+    }
+
+    const settings = this.buildMergedSettings(plugin, BUILTIN_STANDARD_QSO_PLUGIN_NAME, operatorId);
+    return settings.autoReplyToDirectCallWhenStopped === true;
   }
 
   /**
