@@ -1528,8 +1528,8 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
             onSelectionChange={(key) => updateConfig({ type: key as HamlibConfig['type'] })}
             size="lg"
             classNames={{
-              tabList: 'flex-nowrap',
-              tab: 'flex-none whitespace-nowrap',
+              tabList: 'w-auto flex-nowrap',
+              tab: 'w-auto min-w-max flex-none whitespace-nowrap',
             }}
           >
             <Tab key="none" title={`📻 ${t('radio.modeNone')}`} />
