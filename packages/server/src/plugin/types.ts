@@ -140,6 +140,7 @@ export interface PluginManagerDeps {
   getRadioFrequency: () => Promise<number | null>;
   getKnownRadioFrequency?: () => number | null;
   getEngineMode?: () => EngineMode;
+  getCurrentRadioMode?: () => string | null;
   setRadioFrequency: (freq: number) => void;
   getRadioBand: () => string;
   getRadioConnected: () => boolean;
