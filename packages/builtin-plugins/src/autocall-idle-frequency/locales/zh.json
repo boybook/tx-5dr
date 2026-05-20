@@ -2,5 +2,9 @@
   "pluginName": "自动起呼自动择频",
   "pluginDescription": "在自动起呼真正开始前，为当前操作员挑选更空闲的发射音频频率。",
   "autoSelectIdleFrequency": "自动选择空闲频率",
-  "autoSelectIdleFrequencyDesc": "当任意自动起呼 proposal 被宿主接受后，先基于触发该 proposal 的接收时隙，寻找更空闲的发射音频频率，再开始自动起呼。"
+  "autoSelectIdleFrequencyDesc": "当任意自动起呼 proposal 被宿主接受后，先基于触发该 proposal 的接收时隙，寻找更空闲的发射音频频率，再开始自动起呼。",
+  "idleFrequencyMinHz": "最小发射音频偏移",
+  "idleFrequencyMinHzDesc": "自动择频允许使用的最低发射音频偏移，单位 Hz。这里设置的是 FT8/FT4 音频偏移范围，不是电台射频频率。",
+  "idleFrequencyMaxHz": "最大发射音频偏移",
+  "idleFrequencyMaxHzDesc": "自动择频允许使用的最高发射音频偏移，单位 Hz。FT8/FT4 有效偏移限制为 0-3000 Hz；这里不是电台射频频率。"
 }

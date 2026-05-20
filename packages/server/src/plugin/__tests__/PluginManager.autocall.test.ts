@@ -65,7 +65,12 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
     pluginConfigs?: Record<string, { enabled: boolean; settings: Record<string, unknown> }>;
     operatorPluginSettings?: Record<string, Record<string, unknown>>;
     analyzeCallsign?: (callsign: string, grid?: string) => LogbookAnalysis | null | Promise<LogbookAnalysis | null>;
-    findBestTransmitFrequency?: (slotId: string) => number | undefined;
+    findBestTransmitFrequency?: (
+      slotId: string,
+      minFreq?: number,
+      maxFreq?: number,
+      guardBandwidth?: number,
+    ) => number | undefined;
   }) {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string }) => {
@@ -458,7 +463,12 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
   });
 
   it('can auto-select an idle transmit frequency before accepting an autocall proposal', async () => {
-    const observedSlotIds: string[] = [];
+    const observedCalls: Array<{
+      slotId: string;
+      minFreq?: number;
+      maxFreq?: number;
+      guardBandwidth?: number;
+    }> = [];
     const { eventEmitter, operator } = await createHarness({
       operatorFrequency: 1000,
       pluginConfigs: {
@@ -475,8 +485,8 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
           workedCallsignSkipDays: 0,
         },
       },
-      findBestTransmitFrequency: (slotId) => {
-        observedSlotIds.push(slotId);
+      findBestTransmitFrequency: (slotId, minFreq, maxFreq, guardBandwidth) => {
+        observedCalls.push({ slotId, minFreq, maxFreq, guardBandwidth });
         return 1825;
       },
     });
@@ -491,7 +501,114 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
     eventEmitter.emit('slotStart', slotInfo, slotPack);
     await flushAsyncWork();
 
-    expect(observedSlotIds).toEqual([sourceSlotInfo.id]);
+    expect(observedCalls).toEqual([{
+      slotId: sourceSlotInfo.id,
+      minFreq: 300,
+      maxFreq: 2800,
+      guardBandwidth: 100,
+    }]);
+    expect(operator.config.frequency).toBe(1825);
+    expect(operator.isTransmitting).toBe(true);
+  });
+
+  it('uses configured operator idle-frequency range when auto-selecting before autocall', async () => {
+    const observedCalls: Array<{
+      slotId: string;
+      minFreq?: number;
+      maxFreq?: number;
+      guardBandwidth?: number;
+    }> = [];
+    const { eventEmitter, operator } = await createHarness({
+      operatorFrequency: 1000,
+      pluginConfigs: {
+        'watched-callsign-autocall': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'autocall-idle-frequency': {
+          autoSelectIdleFrequency: true,
+          idleFrequencyMinHz: 1700,
+          idleFrequencyMaxHz: 1900,
+        },
+        'watched-callsign-autocall': {
+          watchList: ['JA1AAA'],
+          triggerMode: 'cq',
+          autocallPriority: 100,
+          workedCallsignSkipDays: 0,
+        },
+      },
+      findBestTransmitFrequency: (slotId, minFreq, maxFreq, guardBandwidth) => {
+        observedCalls.push({ slotId, minFreq, maxFreq, guardBandwidth });
+        return 1825;
+      },
+    });
+
+    const sourceSlotInfo = createSlotInfo(75_000);
+    const slotInfo = createSlotInfo(90_000);
+    const slotPack = createSlotPack(sourceSlotInfo, [
+      { message: 'CQ JA1AAA PM95', freq: 1100 },
+      { message: 'CQ DX1BBB OO01', freq: 1500 },
+    ]);
+
+    eventEmitter.emit('slotStart', slotInfo, slotPack);
+    await flushAsyncWork();
+
+    expect(observedCalls).toEqual([{
+      slotId: sourceSlotInfo.id,
+      minFreq: 1700,
+      maxFreq: 1900,
+      guardBandwidth: 100,
+    }]);
+    expect(operator.config.frequency).toBe(1825);
+    expect(operator.isTransmitting).toBe(true);
+  });
+
+  it('falls back to the default idle-frequency range when the configured range is invalid', async () => {
+    const observedCalls: Array<{
+      slotId: string;
+      minFreq?: number;
+      maxFreq?: number;
+      guardBandwidth?: number;
+    }> = [];
+    const { eventEmitter, operator } = await createHarness({
+      operatorFrequency: 1000,
+      pluginConfigs: {
+        'watched-callsign-autocall': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'autocall-idle-frequency': {
+          autoSelectIdleFrequency: true,
+          idleFrequencyMinHz: 3200,
+          idleFrequencyMaxHz: 300,
+        },
+        'watched-callsign-autocall': {
+          watchList: ['JA1AAA'],
+          triggerMode: 'cq',
+          autocallPriority: 100,
+          workedCallsignSkipDays: 0,
+        },
+      },
+      findBestTransmitFrequency: (slotId, minFreq, maxFreq, guardBandwidth) => {
+        observedCalls.push({ slotId, minFreq, maxFreq, guardBandwidth });
+        return 1825;
+      },
+    });
+
+    const sourceSlotInfo = createSlotInfo(75_000);
+    const slotInfo = createSlotInfo(90_000);
+    const slotPack = createSlotPack(sourceSlotInfo, [
+      { message: 'CQ JA1AAA PM95', freq: 1100 },
+      { message: 'CQ DX1BBB OO01', freq: 1500 },
+    ]);
+
+    eventEmitter.emit('slotStart', slotInfo, slotPack);
+    await flushAsyncWork();
+
+    expect(observedCalls).toEqual([{
+      slotId: sourceSlotInfo.id,
+      minFreq: 300,
+      maxFreq: 2800,
+      guardBandwidth: 100,
+    }]);
     expect(operator.config.frequency).toBe(1825);
     expect(operator.isTransmitting).toBe(true);
   });
