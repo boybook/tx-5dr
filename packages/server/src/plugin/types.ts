@@ -160,6 +160,7 @@ export interface PluginManagerDeps {
     minFreq?: number,
     maxFreq?: number,
     guardBandwidth?: number,
+    additionalOccupiedFrequenciesHz?: readonly number[],
   ) => number | undefined;
   setOperatorAudioFrequency?: (operatorId: string, frequency: number) => Promise<void>;
   interruptOperatorTransmission: (operatorId: string) => Promise<void>;

@@ -22,6 +22,7 @@ import {
   OPERATOR_SLOT_SHORTCUT_FEEDBACK_EVENT,
   type OperatorSlotShortcutFeedbackDetail,
 } from '../../../utils/operatorSlotShortcutFeedbackEvents';
+import { pickManualIdleFrequency } from './radioOperatorIdleFrequency';
 
 const logger = createLogger('RadioOperator');
 
@@ -692,22 +693,15 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       return;
     }
 
-    const latest = candidates[0];
-    const freqs = [0, 3000];  // 默认添加边界值
-    freqs.push(...latest.frames.map(f => f.freq).filter(f => Number.isFinite(f)));
-    freqs.sort((a, b) => a - b);
+    const midFreq = pickManualIdleFrequency({
+      slotPacks: slotPacks.state.slotPacks || [],
+      operators,
+      operatorId: operatorStatus.id,
+      transmitCycles,
+      slotMs: mode.slotMs,
+    });
 
-    let maxGap = -1;
-    let midFreq = freqs[0];
-    for (let i = 0; i < freqs.length - 1; i++) {
-      const gap = freqs[i + 1] - freqs[i];
-      if (gap > maxGap) {
-        maxGap = gap;
-        midFreq = Math.round(freqs[i] + gap / 2);
-      }
-    }
-
-    if (!Number.isFinite(midFreq)) {
+    if (typeof midFreq !== 'number' || !Number.isFinite(midFreq)) {
       addToast({
         title: t('operator.calcFailed'),
         description: t('operator.calcFailedDesc'),

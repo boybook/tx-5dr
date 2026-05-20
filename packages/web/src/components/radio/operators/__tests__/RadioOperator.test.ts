@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { OperatorStatus, SlotInfo } from '@tx5dr/contracts';
+import type { OperatorStatus, SlotInfo, SlotPack } from '@tx5dr/contracts';
 
 import {
   getRadioOperatorProgressAnimation,
   shouldRadioOperatorPropsBeEqual,
 } from '../radioOperatorProgress';
+import { pickManualIdleFrequency } from '../radioOperatorIdleFrequency';
 
 function createOperatorStatus(overrides: Partial<OperatorStatus> = {}): OperatorStatus {
   return {
@@ -44,6 +45,30 @@ function createSlotInfo(overrides: Partial<SlotInfo> = {}): SlotInfo {
     cycleNumber: 42,
     utcSeconds: 630,
     mode: 'FT8',
+    ...overrides,
+  };
+}
+
+function createSlotPack(overrides: Partial<SlotPack> = {}): SlotPack {
+  return {
+    slotId: 'slot-0',
+    startMs: 0,
+    endMs: 15000,
+    frames: [{
+      message: 'CQ JA1AAA PM95',
+      snr: -10,
+      dt: 0,
+      freq: 1500,
+      confidence: 0.9,
+    }],
+    stats: {
+      totalDecodes: 1,
+      successfulDecodes: 1,
+      totalFramesBeforeDedup: 1,
+      totalFramesAfterDedup: 1,
+      lastUpdated: 0,
+    },
+    decodeHistory: [],
     ...overrides,
   };
 }
@@ -88,5 +113,58 @@ describe('RadioOperator memo comparison', () => {
     const next = createOperatorStatus({ transmitCycles: [1] });
 
     expect(shouldRadioOperatorPropsBeEqual(prev, next)).toBe(false);
+  });
+});
+
+describe('manual idle frequency picker', () => {
+  it('avoids audio offsets already used by other operators', () => {
+    const slotPack = createSlotPack({
+      frames: [
+        { message: 'CQ JA1AAA PM95', snr: -10, dt: 0, freq: 900, confidence: 0.9 },
+        { message: 'CQ JA2BBB PM96', snr: -8, dt: 0, freq: 2100, confidence: 0.9 },
+      ],
+    });
+    const currentOperator = createOperatorStatus({
+      id: 'operator-1',
+      context: { ...createOperatorStatus().context, frequency: 1000 },
+    });
+    const otherOperator = createOperatorStatus({
+      id: 'operator-2',
+      isTransmitting: false,
+      context: { ...createOperatorStatus().context, frequency: 1500 },
+    });
+
+    expect(pickManualIdleFrequency({
+      slotPacks: [slotPack],
+      operators: [currentOperator, otherOperator],
+      operatorId: 'operator-1',
+      transmitCycles: [0],
+      slotMs: 15000,
+    })).toBe(425);
+  });
+
+  it('ignores the current operator frequency and invalid other-operator offsets', () => {
+    const slotPack = createSlotPack({
+      frames: [
+        { message: 'CQ JA1AAA PM95', snr: -10, dt: 0, freq: 500, confidence: 0.9 },
+        { message: 'CQ JA2BBB PM96', snr: -8, dt: 0, freq: 2500, confidence: 0.9 },
+      ],
+    });
+    const currentOperator = createOperatorStatus({
+      id: 'operator-1',
+      context: { ...createOperatorStatus().context, frequency: 1500 },
+    });
+    const invalidOtherOperator = createOperatorStatus({
+      id: 'operator-2',
+      context: { ...createOperatorStatus().context, frequency: 4200 },
+    });
+
+    expect(pickManualIdleFrequency({
+      slotPacks: [slotPack],
+      operators: [currentOperator, invalidOtherOperator],
+      operatorId: 'operator-1',
+      transmitCycles: [0],
+      slotMs: 15000,
+    })).toBe(1500);
   });
 });

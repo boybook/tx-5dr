@@ -356,8 +356,14 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getRadioPowerState: (profileId) => this.getLatestRadioPowerState(profileId),
       setRadioPower: (state, options) => this.setPluginRadioPower(state, options),
       getLatestSlotPack: () => this.slotPackManager.getLatestSlotPack(),
-      findBestTransmitFrequency: (slotId, minFreq, maxFreq, guardBandwidth) => (
-        this.slotPackManager.findBestTransmitFrequency(slotId, minFreq, maxFreq, guardBandwidth)
+      findBestTransmitFrequency: (slotId, minFreq, maxFreq, guardBandwidth, additionalOccupiedFrequenciesHz) => (
+        this.slotPackManager.findBestTransmitFrequency(
+          slotId,
+          minFreq,
+          maxFreq,
+          guardBandwidth,
+          additionalOccupiedFrequenciesHz,
+        )
       ),
       setOperatorAudioFrequency: async (operatorId, frequency) => {
         await this._operatorManager.updateOperatorContext(operatorId, { frequency });

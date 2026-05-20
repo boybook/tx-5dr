@@ -776,10 +776,11 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    * @returns 推荐的发射频率，如果没有找到合适频率则返回undefined
    */
   findBestTransmitFrequency(
-    slotId: string, 
-    minFreq: number = 300, 
-    maxFreq: number = 3500, 
-    guardBandwidth: number = 100
+    slotId: string,
+    minFreq: number = 300,
+    maxFreq: number = 3500,
+    guardBandwidth: number = 100,
+    additionalOccupiedFrequenciesHz: readonly number[] = [],
   ): number | undefined {
     const slotPack = this.slotPacks.get(slotId);
     if (!slotPack) {
@@ -787,10 +788,14 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       return undefined;
     }
 
-    // 收集所有接收帧的频率（跳过发射帧 SNR=-999）
+    const halfGuard = Math.max(0, guardBandwidth / 2);
+
+    // 收集所有接收帧和宿主注入的额外占用频率（例如其他操作员的 TX 音频偏移）。
     const usedFrequencies: number[] = slotPack.frames
       .filter(frame => frame.snr !== -999) // 排除发射帧
       .map(frame => frame.freq)
+      .concat(additionalOccupiedFrequenciesHz)
+      .filter((freq) => Number.isFinite(freq))
       .sort((a, b) => a - b); // 按频率排序
 
     logger.debug(`Occupied frequencies in slot ${slotId}: [${usedFrequencies.join(', ')}]Hz`);
@@ -810,54 +815,53 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       center: number;
     }
 
-    const gaps: FrequencyGap[] = [];
-    
-    // 检查最低频率之前的空隙
-    if (usedFrequencies[0] > minFreq + guardBandwidth) {
-      const start = minFreq;
-      const end = usedFrequencies[0] - guardBandwidth / 2;
-      gaps.push({
-        start,
-        end,
-        width: end - start,
-        center: Math.round((start + end) / 2)
-      });
+    interface OccupiedInterval {
+      start: number;
+      end: number;
     }
 
-    // 检查频率之间的空隙
-    for (let i = 0; i < usedFrequencies.length - 1; i++) {
-      const currentFreq = usedFrequencies[i];
-      const nextFreq = usedFrequencies[i + 1];
-      const gapWidth = nextFreq - currentFreq;
-      
-      // 只有当空隙宽度大于保护带宽时才考虑
-      if (gapWidth > guardBandwidth) {
-        const start = currentFreq + guardBandwidth / 2;
-        const end = nextFreq - guardBandwidth / 2;
-        gaps.push({
-          start,
-          end,
-          width: end - start,
-          center: Math.round((start + end) / 2)
-        });
+    const occupiedIntervals = usedFrequencies
+      .map((freq) => ({
+        start: Math.max(minFreq, freq - halfGuard),
+        end: Math.min(maxFreq, freq + halfGuard),
+      }))
+      .filter((interval) => interval.end >= minFreq && interval.start <= maxFreq)
+      .sort((a, b) => a.start - b.start);
+
+    const mergedIntervals: OccupiedInterval[] = [];
+    for (const interval of occupiedIntervals) {
+      const last = mergedIntervals[mergedIntervals.length - 1];
+      if (!last || interval.start > last.end) {
+        mergedIntervals.push({ ...interval });
+      } else {
+        last.end = Math.max(last.end, interval.end);
       }
     }
 
-    // 检查最高频率之后的空隙
-    const lastFreq = usedFrequencies[usedFrequencies.length - 1];
-    if (lastFreq < maxFreq - guardBandwidth) {
-      const start = lastFreq + guardBandwidth / 2;
-      const end = maxFreq;
+    const gaps: FrequencyGap[] = [];
+    let cursor = minFreq;
+    for (const interval of mergedIntervals) {
+      if (interval.start > cursor) {
+        gaps.push({
+          start: cursor,
+          end: interval.start,
+          width: interval.start - cursor,
+          center: Math.round((cursor + interval.start) / 2),
+        });
+      }
+      cursor = Math.max(cursor, interval.end);
+    }
+    if (cursor < maxFreq) {
       gaps.push({
-        start,
-        end,
-        width: end - start,
-        center: Math.round((start + end) / 2)
+        start: cursor,
+        end: maxFreq,
+        width: maxFreq - cursor,
+        center: Math.round((cursor + maxFreq) / 2),
       });
     }
 
     // 过滤掉太小的空隙（宽度小于最小保护带宽）
-    const validGaps = gaps.filter(gap => gap.width >= guardBandwidth / 2);
+    const validGaps = gaps.filter(gap => gap.width >= halfGuard);
 
     if (validGaps.length === 0) {
       logger.warn(`No suitable frequency gap found in slot ${slotId}`);

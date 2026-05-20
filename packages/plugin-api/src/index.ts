@@ -74,6 +74,7 @@ export type {
   KVStore,
   PluginLogger,
   PluginTimers,
+  OtherOperatorSnapshot,
   OperatorControl,
   RadioControl,
   RadioOperatingMode,

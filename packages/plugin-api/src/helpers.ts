@@ -140,6 +140,23 @@ export interface PluginNetworkControl {
  * This interface lets plugins inspect operator state and request host-managed
  * actions such as starting automation, calling a target or notifying the UI.
  */
+export interface OtherOperatorSnapshot {
+  /** Unique operator identifier used by the host. */
+  readonly id: string;
+  /** Configured callsign of the operator/station. */
+  readonly callsign: string;
+  /** Configured grid locator of the operator/station. */
+  readonly grid: string;
+  /** Current transmit audio offset in Hz within the passband. */
+  readonly audioFrequencyHz: number;
+  /** Active digital mode descriptor, for example FT8 or FT4. */
+  readonly mode: ModeDescriptor;
+  /** Whether this operator is currently transmitting or otherwise armed. */
+  readonly isTransmitting: boolean;
+  /** Current transmit cycle selection where `0` is even and `1` is odd. */
+  readonly transmitCycles: number[];
+}
+
 export interface OperatorControl {
   /** Unique operator identifier used by the host. */
   readonly id: string;
@@ -157,6 +174,9 @@ export interface OperatorControl {
   readonly transmitCycles: number[];
   /** Current automation runtime snapshot visible to the operator UI. */
   readonly automation: StrategyRuntimeSnapshot | null;
+
+  /** Returns read-only snapshots for operators other than the current instance. */
+  getOtherOperators(): OtherOperatorSnapshot[];
 
   /** Enables transmission/automation for the current operator. */
   startTransmitting(): void;

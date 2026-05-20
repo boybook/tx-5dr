@@ -225,6 +225,24 @@ describe('SlotPackManager event routing', () => {
     });
   });
 
+  it('treats additional occupied audio offsets as unavailable when recommending transmit frequency', () => {
+    const manager = new SlotPackManager();
+    manager.setPersistenceEnabled(false);
+
+    manager.processDecodeResult(buildDecodeResult(45_000, []));
+
+    expect(manager.findBestTransmitFrequency('slot-45000', 300, 2800, 100, [1550])).toBe(900);
+  });
+
+  it('applies guard bandwidth when additional occupied offsets sit near range boundaries', () => {
+    const manager = new SlotPackManager();
+    manager.setPersistenceEnabled(false);
+
+    manager.processDecodeResult(buildDecodeResult(45_000, []));
+
+    expect(manager.findBestTransmitFrequency('slot-45000', 300, 2800, 100, [320])).toBe(1585);
+  });
+
   it('emits immutable snapshots with increasing updateSeq values', () => {
     const manager = new SlotPackManager();
     manager.setPersistenceEnabled(false);

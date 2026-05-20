@@ -169,12 +169,31 @@ describe('plugin-api testing utilities', () => {
       const op = createMockOperatorControl();
       expect(op.isTransmitting).toBe(false);
       expect(op.mode.name).toBe('FT8');
+      expect(op.getOtherOperators()).toEqual([]);
     });
 
     it('supports partial overrides', () => {
-      const op = createMockOperatorControl({ isTransmitting: true, callsign: 'K1ABC' });
+      const otherMode = createMockOperatorControl().mode;
+      const op = createMockOperatorControl({
+        isTransmitting: true,
+        callsign: 'K1ABC',
+        getOtherOperators: () => [{
+          id: 'operator-1',
+          callsign: 'N0CALL',
+          grid: 'FN20',
+          audioFrequencyHz: 1800,
+          mode: otherMode,
+          isTransmitting: false,
+          transmitCycles: [1],
+        }],
+      });
       expect(op.isTransmitting).toBe(true);
       expect(op.callsign).toBe('K1ABC');
+      expect(op.getOtherOperators()).toEqual([expect.objectContaining({
+        id: 'operator-1',
+        audioFrequencyHz: 1800,
+        isTransmitting: false,
+      })]);
     });
   });
 

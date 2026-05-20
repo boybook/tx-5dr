@@ -70,6 +70,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
       minFreq?: number,
       maxFreq?: number,
       guardBandwidth?: number,
+      additionalOccupiedFrequenciesHz?: readonly number[],
     ) => number | undefined;
   }) {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
@@ -157,6 +158,146 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
     }
 
     return { eventEmitter, operator, pluginManager };
+  }
+
+  async function createMultiOperatorHarness(options?: {
+    findBestTransmitFrequency?: (
+      slotId: string,
+      minFreq?: number,
+      maxFreq?: number,
+      guardBandwidth?: number,
+      additionalOccupiedFrequenciesHz?: readonly number[],
+    ) => number | undefined;
+  }) {
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string }) => {
+      eventEmitter.emit('hasWorkedCallsignResponse' as any, {
+        requestId: data.requestId,
+        hasWorked: false,
+      });
+    });
+
+    const operators = [
+      new RadioOperator({
+        id: 'operator-1',
+        mode: MODES.FT8,
+        myCallsign: 'BG4IAJ',
+        myGrid: 'OM96',
+        frequency: 1000,
+        transmitCycles: [0],
+        maxQSOTimeoutCycles: 6,
+        maxCallAttempts: 5,
+        autoReplyToCQ: false,
+        autoResumeCQAfterFail: false,
+        autoResumeCQAfterSuccess: false,
+        replyToWorkedStations: false,
+        prioritizeNewCalls: true,
+        targetSelectionPriorityMode: 'dxcc_first',
+      }, eventEmitter),
+      new RadioOperator({
+        id: 'operator-2',
+        mode: MODES.FT8,
+        myCallsign: 'BG4IAK',
+        myGrid: 'OM96',
+        frequency: 1200,
+        transmitCycles: [0],
+        maxQSOTimeoutCycles: 6,
+        maxCallAttempts: 5,
+        autoReplyToCQ: false,
+        autoResumeCQAfterFail: false,
+        autoResumeCQAfterSuccess: false,
+        replyToWorkedStations: false,
+        prioritizeNewCalls: true,
+        targetSelectionPriorityMode: 'dxcc_first',
+      }, eventEmitter),
+    ];
+
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-autocall-'));
+    tempDirs.push(dataDir);
+
+    let pluginManager!: PluginManager;
+    pluginManager = new PluginManager({
+      eventEmitter,
+      getOperators: () => operators,
+      getOperatorById: (id) => operators.find((operator) => operator.config.id === id),
+      getCurrentMode: () => MODES.FT8,
+      getOperatorAutomationSnapshot: (id) => pluginManager.getOperatorAutomationSnapshot(id),
+      requestOperatorCall: (operatorId, callsign, lastMessage) => {
+        pluginManager.requestCall(operatorId, callsign, lastMessage);
+      },
+      getRadioFrequency: async () => operators[0]?.config.frequency ?? null,
+      setRadioFrequency: () => {},
+      getRadioBand: () => '40m',
+      getRadioConnected: () => true,
+      getLatestSlotPack: () => null,
+      findBestTransmitFrequency: options?.findBestTransmitFrequency,
+      setOperatorAudioFrequency: async (operatorId, frequency) => {
+        const operator = operators.find((candidate) => candidate.config.id === operatorId);
+        if (operator) {
+          operator.config.frequency = frequency;
+        }
+      },
+      interruptOperatorTransmission: async () => {},
+      hasWorkedCallsign: async () => false,
+      resetOperatorRuntime: () => {},
+      dataDir,
+    });
+
+    pluginManager.loadConfig({
+      configs: {
+        'watched-callsign-autocall': { enabled: true, settings: {} },
+      },
+      operatorStrategies: Object.fromEntries(operators.map((operator) => [
+        operator.config.id,
+        'standard-qso',
+      ])),
+      operatorSettings: {
+        'operator-1': {
+          'standard-qso': {
+            autoReplyToCQ: false,
+            autoResumeCQAfterFail: false,
+            autoResumeCQAfterSuccess: false,
+            replyToWorkedStations: false,
+            targetSelectionPriorityMode: 'dxcc_first',
+            maxQSOTimeoutCycles: 6,
+            maxCallAttempts: 5,
+          },
+          'autocall-idle-frequency': {
+            autoSelectIdleFrequency: true,
+          },
+          'watched-callsign-autocall': {
+            watchList: ['JA1AAA'],
+            triggerMode: 'cq',
+            autocallPriority: 100,
+            workedCallsignSkipDays: 0,
+          },
+        },
+        'operator-2': {
+          'standard-qso': {
+            autoReplyToCQ: false,
+            autoResumeCQAfterFail: false,
+            autoResumeCQAfterSuccess: false,
+            replyToWorkedStations: false,
+            targetSelectionPriorityMode: 'dxcc_first',
+            maxQSOTimeoutCycles: 6,
+            maxCallAttempts: 5,
+          },
+          'autocall-idle-frequency': {
+            autoSelectIdleFrequency: true,
+          },
+          'watched-callsign-autocall': {
+            watchList: ['JA2BBB'],
+            triggerMode: 'cq',
+            autocallPriority: 100,
+            workedCallsignSkipDays: 0,
+          },
+        },
+      },
+    });
+
+    await pluginManager.start();
+
+    return { eventEmitter, operators, pluginManager };
   }
 
   it('prefers the higher-priority autocall plugin when multiple plugins match the same slot', async () => {
@@ -468,6 +609,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
       minFreq?: number;
       maxFreq?: number;
       guardBandwidth?: number;
+      additionalOccupiedFrequenciesHz?: readonly number[];
     }> = [];
     const { eventEmitter, operator } = await createHarness({
       operatorFrequency: 1000,
@@ -485,8 +627,8 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
           workedCallsignSkipDays: 0,
         },
       },
-      findBestTransmitFrequency: (slotId, minFreq, maxFreq, guardBandwidth) => {
-        observedCalls.push({ slotId, minFreq, maxFreq, guardBandwidth });
+      findBestTransmitFrequency: (slotId, minFreq, maxFreq, guardBandwidth, additionalOccupiedFrequenciesHz) => {
+        observedCalls.push({ slotId, minFreq, maxFreq, guardBandwidth, additionalOccupiedFrequenciesHz });
         return 1825;
       },
     });
@@ -506,6 +648,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
       minFreq: 300,
       maxFreq: 2800,
       guardBandwidth: 100,
+      additionalOccupiedFrequenciesHz: [],
     }]);
     expect(operator.config.frequency).toBe(1825);
     expect(operator.isTransmitting).toBe(true);
@@ -517,6 +660,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
       minFreq?: number;
       maxFreq?: number;
       guardBandwidth?: number;
+      additionalOccupiedFrequenciesHz?: readonly number[];
     }> = [];
     const { eventEmitter, operator } = await createHarness({
       operatorFrequency: 1000,
@@ -536,8 +680,8 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
           workedCallsignSkipDays: 0,
         },
       },
-      findBestTransmitFrequency: (slotId, minFreq, maxFreq, guardBandwidth) => {
-        observedCalls.push({ slotId, minFreq, maxFreq, guardBandwidth });
+      findBestTransmitFrequency: (slotId, minFreq, maxFreq, guardBandwidth, additionalOccupiedFrequenciesHz) => {
+        observedCalls.push({ slotId, minFreq, maxFreq, guardBandwidth, additionalOccupiedFrequenciesHz });
         return 1825;
       },
     });
@@ -557,6 +701,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
       minFreq: 1700,
       maxFreq: 1900,
       guardBandwidth: 100,
+      additionalOccupiedFrequenciesHz: [],
     }]);
     expect(operator.config.frequency).toBe(1825);
     expect(operator.isTransmitting).toBe(true);
@@ -568,6 +713,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
       minFreq?: number;
       maxFreq?: number;
       guardBandwidth?: number;
+      additionalOccupiedFrequenciesHz?: readonly number[];
     }> = [];
     const { eventEmitter, operator } = await createHarness({
       operatorFrequency: 1000,
@@ -587,8 +733,8 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
           workedCallsignSkipDays: 0,
         },
       },
-      findBestTransmitFrequency: (slotId, minFreq, maxFreq, guardBandwidth) => {
-        observedCalls.push({ slotId, minFreq, maxFreq, guardBandwidth });
+      findBestTransmitFrequency: (slotId, minFreq, maxFreq, guardBandwidth, additionalOccupiedFrequenciesHz) => {
+        observedCalls.push({ slotId, minFreq, maxFreq, guardBandwidth, additionalOccupiedFrequenciesHz });
         return 1825;
       },
     });
@@ -608,9 +754,47 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
       minFreq: 300,
       maxFreq: 2800,
       guardBandwidth: 100,
+      additionalOccupiedFrequenciesHz: [],
     }]);
     expect(operator.config.frequency).toBe(1825);
     expect(operator.isTransmitting).toBe(true);
+  });
+
+  it('passes other operator audio offsets as occupied frequencies when auto-selecting', async () => {
+    const observedCalls: Array<{
+      slotId: string;
+      additionalOccupiedFrequenciesHz?: readonly number[];
+    }> = [];
+    const recommendations = [1825, 2250];
+    const { eventEmitter, operators } = await createMultiOperatorHarness({
+      findBestTransmitFrequency: (slotId, _minFreq, _maxFreq, _guardBandwidth, additionalOccupiedFrequenciesHz) => {
+        observedCalls.push({ slotId, additionalOccupiedFrequenciesHz });
+        return recommendations.shift();
+      },
+    });
+
+    const sourceSlotInfo = createSlotInfo(75_000);
+    const slotInfo = createSlotInfo(90_000);
+    const slotPack = createSlotPack(sourceSlotInfo, [
+      { message: 'CQ JA1AAA PM95', freq: 1100 },
+      { message: 'CQ JA2BBB PM96', freq: 1500 },
+    ]);
+
+    eventEmitter.emit('slotStart', slotInfo, slotPack);
+    await flushAsyncWork();
+
+    expect(observedCalls).toEqual([
+      {
+        slotId: sourceSlotInfo.id,
+        additionalOccupiedFrequenciesHz: [1200],
+      },
+      {
+        slotId: sourceSlotInfo.id,
+        additionalOccupiedFrequenciesHz: [1825],
+      },
+    ]);
+    expect(operators.map((operator) => operator.config.frequency)).toEqual([1825, 2250]);
+    expect(operators.every((operator) => operator.isTransmitting)).toBe(true);
   });
 
   it('rejects watched autocall proposals when a directed CQ modifier excludes my station identity', async () => {

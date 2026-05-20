@@ -7,6 +7,7 @@ import type {
   HostSettingsControl,
   HamlibHostDependency,
   LogbookSyncProvider,
+  OtherOperatorSnapshot,
   PluginContext,
   RadioOperatingMode,
   PluginUIInstanceTarget,
@@ -72,6 +73,13 @@ function isValidFrequency(frequency: unknown): frequency is number {
 function normalizeModeToken(mode: string | null | undefined): string | undefined {
   const normalized = mode?.trim().toUpperCase();
   return normalized || undefined;
+}
+
+function cloneModeDescriptor(mode: ModeDescriptor): ModeDescriptor {
+  return {
+    ...mode,
+    windowTiming: [...mode.windowTiming],
+  };
 }
 
 /**
@@ -455,6 +463,7 @@ export class PluginContextFactory {
         get mode(): ModeDescriptor { return MODES.FT8; },
         get transmitCycles() { return []; },
         get automation() { return null; },
+        getOtherOperators() { return []; },
         startTransmitting() {},
         stopTransmitting() {},
         call(_callsign: string, _lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }) {},
@@ -497,6 +506,7 @@ export class PluginContextFactory {
       get automation() {
         return deps.getOperatorAutomationSnapshot(operatorId);
       },
+      getOtherOperators: () => this.createOtherOperatorSnapshots(operatorId),
       startTransmitting() {
         deps.getOperatorById(operatorId)?.start();
       },
@@ -556,6 +566,35 @@ export class PluginContextFactory {
         deps.getOperatorById(operatorId)?.notifyStateChanged(state);
       },
     };
+  }
+
+  private createOtherOperatorSnapshots(operatorId: string | undefined): OtherOperatorSnapshot[] {
+    if (!operatorId) {
+      return [];
+    }
+
+    return this.deps.getOperators()
+      .filter((operator) => operator.config.id !== operatorId)
+      .map((operator) => ({
+        id: operator.config.id,
+        callsign: operator.config.myCallsign ?? '',
+        grid: operator.config.myGrid ?? '',
+        audioFrequencyHz: operator.config.frequency ?? 0,
+        mode: cloneModeDescriptor(operator.config.mode ?? MODES.FT8),
+        isTransmitting: operator.isTransmitting,
+        transmitCycles: operator.getTransmitCycles(),
+      }));
+  }
+
+  private getOtherOperatorAudioFrequenciesHz(operatorId: string | undefined): number[] {
+    return this.createOtherOperatorSnapshots(operatorId)
+      .map((operator) => operator.audioFrequencyHz)
+      .filter((frequency) => (
+        typeof frequency === 'number'
+        && Number.isFinite(frequency)
+        && frequency >= 0
+        && frequency <= 3000
+      ));
   }
 
   private createRadioControl(plugin: LoadedPlugin) {
@@ -923,6 +962,7 @@ export class PluginContextFactory {
 
   private createBandAccess(operatorId: string | undefined) {
     const deps = this.deps;
+    const getOtherOperatorAudioFrequenciesHz = () => this.getOtherOperatorAudioFrequenciesHz(operatorId);
     return {
       getActiveCallers() {
         // 从最新 SlotPack 中提取 CQ 消息
@@ -954,6 +994,7 @@ export class PluginContextFactory {
           options?.minHz,
           options?.maxHz,
           options?.guardHz,
+          getOtherOperatorAudioFrequenciesHz(),
         );
         return typeof result === 'number' && Number.isFinite(result) ? result : null;
       },

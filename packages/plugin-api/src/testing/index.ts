@@ -222,6 +222,7 @@ export function createMockOperatorControl(
     mode: DEFAULT_MODE,
     transmitCycles: [0],
     automation: null,
+    getOtherOperators: () => [],
     startTransmitting(): void {},
     stopTransmitting(): void {},
     call(): void {},
