@@ -18,6 +18,8 @@ describe('plugin market schema', () => {
           name: 'heartbeat-demo',
           title: 'Heartbeat Demo',
           description: 'Example timer and quick-action plugin.',
+          readmeMarkdown: '# Heartbeat Demo\n\nExample timer and quick-action plugin.',
+          readmeSourceUrl: 'https://github.com/boybook/tx-5dr-plugins/blob/main/heartbeat-demo/README.md',
           locales: {
             en: {
               pluginName: 'Heartbeat Demo',
@@ -53,6 +55,8 @@ describe('plugin market schema', () => {
 
     expect(catalog.channel).toBe('stable');
     expect(catalog.plugins[0]?.name).toBe('heartbeat-demo');
+    expect(catalog.plugins[0]?.readmeMarkdown).toContain('# Heartbeat Demo');
+    expect(catalog.plugins[0]?.readmeSourceUrl).toContain('/heartbeat-demo/README.md');
   });
 
   it('rejects unsupported channels', () => {

@@ -620,6 +620,8 @@ export const PluginMarketCatalogEntrySchema = z.object({
   name: z.string(),
   title: z.string(),
   description: z.string(),
+  readmeMarkdown: z.string().max(100 * 1024).optional(),
+  readmeSourceUrl: z.string().url().optional(),
   locales: PluginLocalesSchema.optional(),
   latestVersion: z.string(),
   minHostVersion: z.string(),

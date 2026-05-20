@@ -30,6 +30,8 @@ describe('plugin marketplace helpers', () => {
           name: 'heartbeat-demo',
           title: 'Heartbeat Demo',
           description: 'Example timer and quick-action plugin.',
+          readmeMarkdown: '# Heartbeat Demo\n\nExample timer and quick-action plugin.',
+          readmeSourceUrl: 'https://github.com/boybook/tx-5dr-plugins/blob/main/heartbeat-demo/README.md',
           latestVersion: '1.2.3',
           minHostVersion: '1.0.0',
           artifactUrl: 'https://cdn.example.com/plugins/heartbeat-demo-1.2.3.zip',
@@ -57,6 +59,8 @@ describe('plugin marketplace helpers', () => {
       }),
     );
     expect(result.catalog.plugins[0]?.name).toBe('heartbeat-demo');
+    expect(result.catalog.plugins[0]?.readmeMarkdown).toContain('# Heartbeat Demo');
+    expect(result.catalog.plugins[0]?.readmeSourceUrl).toContain('/heartbeat-demo/README.md');
   });
 
   it('rejects channel mismatch responses', async () => {

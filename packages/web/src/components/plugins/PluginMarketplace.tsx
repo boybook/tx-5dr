@@ -29,6 +29,7 @@ import type {
 } from '@tx5dr/contracts';
 import { UserRole } from '@tx5dr/contracts';
 import { api } from '@tx5dr/core';
+import ReactMarkdown from 'react-markdown';
 import { useTranslation } from 'react-i18next';
 import { usePluginSnapshot } from '../../hooks/usePluginSnapshot';
 import { useHasMinRole } from '../../store/authStore';
@@ -199,6 +200,32 @@ function registerMarketplaceCatalogLocales(entries: PluginMarketCatalogEntry[]):
   for (const entry of entries) {
     registerPluginLocales(entry.name, entry.locales);
   }
+}
+
+function resolveMarketplaceMarkdownUrl(
+  value: unknown,
+  baseUrl?: string,
+  options: { allowMailto?: boolean } = {},
+): string | null {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return null;
+  }
+
+  try {
+    const parsed = baseUrl
+      ? new URL(value, baseUrl)
+      : new URL(value);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.href;
+    }
+    if (options.allowMailto && parsed.protocol === 'mailto:') {
+      return parsed.href;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 export function PluginMarketplace({ isActive, onOpenInstalledPlugin }: PluginMarketplaceProps) {
@@ -912,6 +939,16 @@ export function PluginMarketplace({ isActive, onOpenInstalledPlugin }: PluginMar
                     <Divider />
                     <MarketplacePermissionRiskSection permissions={selectedItem.entry.permissions} />
 
+                    {selectedItem.entry.readmeMarkdown && (
+                      <>
+                        <Divider />
+                        <MarketplaceReadmeSection
+                          markdown={selectedItem.entry.readmeMarkdown}
+                          sourceUrl={selectedItem.entry.readmeSourceUrl}
+                        />
+                      </>
+                    )}
+
                     <Divider />
 
                     <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -1113,6 +1150,59 @@ const MarketplacePermissionRiskSection: React.FC<{ permissions: PluginPermission
             </div>
           );
         })}
+      </div>
+    </section>
+  );
+};
+
+const MarketplaceReadmeSection: React.FC<{ markdown: string; sourceUrl?: string }> = ({ markdown, sourceUrl }) => {
+  const { t } = useTranslation('settings');
+  const safeSourceUrl = resolveMarketplaceMarkdownUrl(sourceUrl);
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs font-medium uppercase tracking-wider text-default-400">
+          {t('plugins.marketReadme', 'README')}
+        </span>
+        {safeSourceUrl && (
+          <a
+            href={safeSourceUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs text-primary hover:underline"
+          >
+            {t('plugins.marketReadmeSource', 'View README source')}
+          </a>
+        )}
+      </div>
+      <div className="prose prose-sm dark:prose-invert max-w-none rounded-large border border-divider bg-content2/40 px-4 py-4 text-default-700
+                      prose-headings:scroll-mt-20 prose-headings:text-default-800 prose-p:leading-7 prose-a:text-primary prose-code:text-default-800
+                      prose-pre:max-w-full prose-pre:overflow-x-auto prose-img:my-3 prose-img:max-h-80 prose-img:rounded-large prose-img:border prose-img:border-divider">
+        <ReactMarkdown
+          components={{
+            a: ({ href, children }) => {
+              const safeHref = resolveMarketplaceMarkdownUrl(href, sourceUrl, { allowMailto: true });
+              if (!safeHref) {
+                return <span>{children}</span>;
+              }
+              return (
+                <a href={safeHref} target="_blank" rel="noreferrer">
+                  {children}
+                </a>
+              );
+            },
+            img: ({ src, alt }) => {
+              const safeSrc = resolveMarketplaceMarkdownUrl(src, sourceUrl, { allowMailto: false });
+              if (!safeSrc) {
+                return null;
+              }
+              return <img src={safeSrc} alt={alt ?? ''} loading="lazy" />;
+            },
+          }}
+        >
+          {markdown}
+        </ReactMarkdown>
       </div>
     </section>
   );

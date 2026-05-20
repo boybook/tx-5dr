@@ -486,6 +486,8 @@
     "marketRepository": "代码仓库",
     "marketHomepage": "主页",
     "marketDownloadArtifact": "构建包",
+    "marketReadme": "README",
+    "marketReadmeSource": "查看 README 源文",
     "marketManagedByMarketplace": "由插件市场管理",
     "marketManagedManually": "由文件系统手工管理",
     "marketNotInstalled": "未安装",

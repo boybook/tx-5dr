@@ -486,6 +486,8 @@
     "marketRepository": "Repository",
     "marketHomepage": "Homepage",
     "marketDownloadArtifact": "Artifact",
+    "marketReadme": "README",
+    "marketReadmeSource": "View README source",
     "marketManagedByMarketplace": "Managed by marketplace",
     "marketManagedManually": "Managed manually",
     "marketNotInstalled": "Not installed",
