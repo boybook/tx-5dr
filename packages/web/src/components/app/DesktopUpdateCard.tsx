@@ -46,6 +46,11 @@ function formatDateTimeValue(value?: string | null): string {
   return time.toLocaleString();
 }
 
+function formatCommitValue(value?: string | null): string {
+  const trimmed = (value || '').trim();
+  return trimmed ? trimmed.slice(0, 7) : '-';
+}
+
 export function DesktopUpdateCard() {
   const { t } = useTranslation('common');
   const updateNotification = useUpdateNotification();
@@ -257,15 +262,19 @@ export function DesktopUpdateCard() {
         <div className="grid gap-3 md:grid-cols-2">
           <div className={SOFT_PANEL_CLASS}>
             <p className={SUBTITLE_CLASS}>{t('system.desktopUpdateCurrentVersion')}</p>
-            <p className={`mt-1 ${CARD_DESC_CLASS}`}>{desktopUpdateStatus?.currentVersion || '-'}</p>
+            <p className={`mt-1 ${CARD_DESC_CLASS}`}>
+              {t('system.desktopUpdateCurrentCommit', { value: formatCommitValue(desktopUpdateStatus?.currentCommit) })}
+            </p>
             <p className={`mt-2 ${MUTED_CLASS}`}>
-              {t('system.desktopUpdateCurrentCommit', { value: desktopUpdateStatus?.currentCommit || '-' })}
+              {t('system.desktopUpdatePublishedAt', { value: formatDateTimeValue(desktopUpdateStatus?.currentPublishedAt) })}
             </p>
           </div>
 
           <div className={SOFT_PANEL_CLASS}>
             <p className={SUBTITLE_CLASS}>{t('system.desktopUpdateLatestVersion')}</p>
-            <p className={`mt-1 ${CARD_DESC_CLASS}`}>{desktopUpdateStatus?.latestVersion || '-'}</p>
+            <p className={`mt-1 ${CARD_DESC_CLASS}`}>
+              {t('system.desktopUpdateCurrentCommit', { value: formatCommitValue(desktopUpdateStatus?.latestCommit) })}
+            </p>
             <p className={`mt-2 ${MUTED_CLASS}`}>
               {t('system.desktopUpdatePublishedAt', { value: formatDateTimeValue(desktopUpdateStatus?.publishedAt) })}
             </p>

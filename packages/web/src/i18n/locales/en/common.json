@@ -422,7 +422,7 @@
     "desktopUpdateChannelRelease": "Release",
     "desktopUpdateChannelNightly": "Nightly",
     "desktopUpdateCurrentVersion": "Current version",
-    "desktopUpdateCurrentCommit": "Current commit: {{value}}",
+    "desktopUpdateCurrentCommit": "Commit: {{value}}",
     "desktopUpdateLatestVersion": "Remote version",
     "desktopUpdateLatestCommit": "Remote commit: {{value}}",
     "desktopUpdateLatestSummary": "Update summary",

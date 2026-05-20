@@ -31,6 +31,7 @@ interface LocalBuildInfo {
   channel: UpdateChannel;
   version: string;
   commit: string | null;
+  publishedAt: string | null;
   digest: string | null;
 }
 
@@ -54,6 +55,11 @@ function normalizeCommit(value: string | null | undefined): string | null {
 function normalizeDigest(value: string | null | undefined): string | null {
   const trimmed = (value || '').trim();
   return trimmed || null;
+}
+
+function normalizePublishedAt(value: string | null | undefined): string | null {
+  const trimmed = (value || '').trim();
+  return trimmed && trimmed !== 'development' ? trimmed : null;
 }
 
 async function fetchJson<T>(url: string, timeoutMs = 8000): Promise<T> {
@@ -103,6 +109,7 @@ async function getLocalBuildInfo(_distribution: PluginDistribution): Promise<Loc
     channel,
     version: normalizeVersion(installedVersion || SERVER_BUILD_INFO.version || 'unknown') || 'unknown',
     commit: normalizeCommit(SERVER_BUILD_INFO.commitShort || SERVER_BUILD_INFO.commit),
+    publishedAt: normalizePublishedAt(SERVER_BUILD_INFO.buildTimestamp),
     digest: normalizeDigest(SERVER_BUILD_INFO.dockerDigest),
   };
 }
@@ -169,6 +176,7 @@ export async function getSystemUpdateStatus(): Promise<SystemUpdateStatus> {
       channel: local.channel,
       currentVersion: local.version,
       currentCommit: local.commit,
+      currentPublishedAt: local.publishedAt,
       currentDigest: local.digest,
       latestVersion,
       latestCommit,
@@ -192,6 +200,7 @@ export async function getSystemUpdateStatus(): Promise<SystemUpdateStatus> {
       channel: local.channel,
       currentVersion: local.version,
       currentCommit: local.commit,
+      currentPublishedAt: local.publishedAt,
       currentDigest: local.digest,
       latestVersion: null,
       latestCommit: null,

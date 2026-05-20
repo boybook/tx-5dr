@@ -422,7 +422,7 @@
     "desktopUpdateChannelRelease": "正式版",
     "desktopUpdateChannelNightly": "Nightly",
     "desktopUpdateCurrentVersion": "現在のバージョン",
-    "desktopUpdateCurrentCommit": "現在のコミット: {{value}}",
+    "desktopUpdateCurrentCommit": "Commit: {{value}}",
     "desktopUpdateLatestVersion": "リモートバージョン",
     "desktopUpdateLatestCommit": "リモートコミット: {{value}}",
     "desktopUpdateLatestSummary": "アップデートの概要",

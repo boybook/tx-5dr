@@ -102,6 +102,7 @@ export interface DesktopUpdateStatus {
   channel: UpdateChannel;
   currentVersion: string;
   currentCommit: string | null;
+  currentPublishedAt: string | null;
   checking: boolean;
   updateAvailable: boolean;
   latestVersion: string | null;
@@ -302,6 +303,7 @@ function createInitialStatus(): DesktopUpdateStatus {
     channel: BUILD_INFO.channel,
     currentVersion: BUILD_INFO.version,
     currentCommit: BUILD_INFO.commit === 'development' ? null : BUILD_INFO.commitShort,
+    currentPublishedAt: BUILD_INFO.buildTimestamp === 'development' ? null : BUILD_INFO.buildTimestamp,
     checking: false,
     updateAvailable: false,
     latestVersion: null,
@@ -800,6 +802,7 @@ export class DesktopUpdateService {
         channel: BUILD_INFO.channel,
         currentVersion: BUILD_INFO.version,
         currentCommit: BUILD_INFO.commit === 'development' ? null : BUILD_INFO.commitShort,
+        currentPublishedAt: BUILD_INFO.buildTimestamp === 'development' ? null : BUILD_INFO.buildTimestamp,
         checking: false,
         updateAvailable,
         latestVersion: normalizeVersion(manifest.version) || null,

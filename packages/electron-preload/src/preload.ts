@@ -119,6 +119,7 @@ interface DesktopUpdateStatus {
   channel: 'release' | 'nightly';
   currentVersion: string;
   currentCommit: string | null;
+  currentPublishedAt: string | null;
   checking: boolean;
   updateAvailable: boolean;
   latestVersion: string | null;

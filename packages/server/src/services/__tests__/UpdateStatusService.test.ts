@@ -31,6 +31,15 @@ describe('UpdateStatusService', () => {
       }),
     }));
     vi.stubGlobal('fetch', fetchMock);
+    vi.doMock('../../generated/buildInfo.js', () => ({
+      SERVER_BUILD_INFO: {
+        channel: 'nightly',
+        version: '1.0.0-nightly.202605181200+abcdef1',
+        commit: 'abcdef1234567890',
+        commitShort: 'abcdef1',
+        buildTimestamp: '2026-05-18T12:00:00Z',
+      },
+    }));
 
     const { getSystemUpdateStatus } = await import('../UpdateStatusService.js');
     const status = await getSystemUpdateStatus();
@@ -42,6 +51,8 @@ describe('UpdateStatusService', () => {
     expect(status.distribution).toBe('android-bridge');
     expect(status.target).toBe('android-runtime');
     expect(status.metadataSource).toBe('oss');
+    expect(status.currentCommit).toBe('abcdef1');
+    expect(status.currentPublishedAt).toBe('2026-05-18T12:00:00Z');
     expect(status.latestCommit).toBe('abcdef1234567890');
   });
 });
