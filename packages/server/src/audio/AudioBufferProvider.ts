@@ -29,6 +29,10 @@ export class RingBufferAudioProvider implements AudioBufferProvider {
     return this.sampleRate;
   }
 
+  getCurrentTimeMs(): number {
+    return this.now();
+  }
+
   /**
    * Rebuilds the backing ring buffer when the unified RX processing rate changes.
    * Existing samples are intentionally dropped so consumers never mix rates.

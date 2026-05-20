@@ -1,8 +1,9 @@
 import { EventEmitter } from 'eventemitter3';
 import { describe, expect, it, vi } from 'vitest';
-import { SlotScheduler, type IDecodeQueue } from '@tx5dr/core';
+import { SlotScheduler, type AudioBufferProvider, type IDecodeQueue } from '@tx5dr/core';
 import { FT8_WINDOW_PRESETS, MODES, type DecodeRequest, type SlotInfo } from '@tx5dr/contracts';
 import { RingBufferAudioProvider } from '../AudioBufferProvider.js';
+import { SpectrumScheduler } from '../SpectrumScheduler.js';
 
 describe('RingBufferAudioProvider clock calibration', () => {
   it('uses the injected calibrated clock when the system clock is one FT8 slot behind', async () => {
@@ -72,5 +73,44 @@ describe('SlotScheduler with a calibrated audio provider', () => {
     expect(queued).toHaveLength(FT8_WINDOW_PRESETS.maximum.length);
     expect(queued.map((request) => request.windowIdx)).toEqual([0, 1, 2, 3, 4]);
     expect(queued.every((request) => request.pcm.byteLength > 0)).toBe(true);
+  });
+});
+
+describe('SpectrumScheduler with a calibrated audio provider', () => {
+  it('uses the audio provider clock for short spectrum reads after NTP offset is applied', async () => {
+    const systemNow = 1_779_279_931_310;
+    const calibratedNow = systemNow - 543;
+    const sampleRate = 12_000;
+    const getCurrentTimeMs = vi.fn(() => calibratedNow);
+    const getBuffer = vi.fn(async () => new Float32Array(sampleRate).buffer);
+    const audioProvider: AudioBufferProvider = {
+      getSampleRate: () => sampleRate,
+      getCurrentTimeMs,
+      getBuffer,
+    };
+    const scheduler = new SpectrumScheduler({
+      analysisInterval: 150,
+      fftSize: 2048,
+      targetSampleRate: 6000,
+      windowFunction: 'hann',
+      enabled: true,
+    });
+
+    await scheduler.initialize(audioProvider, sampleRate);
+    const spectrumReady = new Promise((resolve) => scheduler.once('spectrumReady', resolve));
+
+    try {
+      scheduler.start();
+      scheduler.setSubscriptionActive(true);
+
+      await spectrumReady;
+
+      expect(getCurrentTimeMs).toHaveBeenCalled();
+      expect(getBuffer).toHaveBeenCalledWith(calibratedNow - 150, 150);
+      expect(getBuffer).not.toHaveBeenCalledWith(systemNow - 150, 150);
+    } finally {
+      scheduler.stop();
+      await scheduler.destroy();
+    }
   });
 });
