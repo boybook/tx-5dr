@@ -116,6 +116,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       throw new Error(`Unknown capability '${id}'`);
     }
     await this.refreshDescriptorIfNeeded(id, definition);
+    await this.pollCapabilityOnce(id);
   }
 
   async writeCapability(id: string, value?: CapabilityValue, action?: boolean): Promise<void> {

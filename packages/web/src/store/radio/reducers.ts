@@ -171,6 +171,7 @@ export const initialRadioState: RadioState = {
   cwConfig: null,
   splitEnabled: false,
   splitTxFrequency: null,
+  splitTxFrequencyWritable: false,
 };
 
 export function radioReducer(state: RadioState, action: RadioAction): RadioState {
@@ -373,6 +374,7 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
         ...state,
         splitEnabled: action.payload.enabled,
         splitTxFrequency: action.payload.txFrequency,
+        splitTxFrequencyWritable: action.payload.txFrequencyWritable,
       };
 
     case 'pttStatusChanged':

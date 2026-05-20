@@ -10,6 +10,8 @@ import { resetOperatorsForOperatingStateChange } from '../../utils/operatorReset
 import { showErrorToast } from '../../utils/errorToast';
 import { setRadioFrequencyWithIntent } from '../../utils/radioFrequencyIntent';
 import { FrequencyDigit } from '../radio/frequency/FrequencyDigit';
+import { SPLIT_FREQUENCY_ROW_CLASS, SplitFrequencyLayout } from '../radio/frequency/SplitFrequencyLayout';
+import { SplitSettingsPopover } from '../radio/frequency/SplitSettingsPopover';
 
 const logger = createLogger('CWFrequencyControl');
 const DEFAULT_CW_FREQUENCY = 14_000_000;
@@ -80,7 +82,8 @@ export const CWFrequencyControl: React.FC = () => {
   const freqDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Split state
-  const { splitEnabled, splitTxFrequency } = useSplitState();
+  const { splitEnabled, splitTxFrequency, splitTxFrequencyWritable } = useSplitState();
+  const showSplitFrequencyControls = splitEnabled && splitTxFrequencyWritable && splitTxFrequency !== null;
   const [currentTxFrequency, setCurrentTxFrequency] = React.useState<number>(splitTxFrequency ?? DEFAULT_CW_FREQUENCY);
   const currentTxFrequencyRef = React.useRef(currentTxFrequency);
   currentTxFrequencyRef.current = currentTxFrequency;
@@ -89,10 +92,10 @@ export const CWFrequencyControl: React.FC = () => {
 
   // Sync TX frequency from store when split state changes
   React.useEffect(() => {
-    if (splitEnabled && splitTxFrequency && splitTxFrequency > 0) {
+    if (showSplitFrequencyControls && splitTxFrequency && splitTxFrequency > 0) {
       setCurrentTxFrequency(splitTxFrequency);
     }
-  }, [splitEnabled, splitTxFrequency]);
+  }, [showSplitFrequencyControls, splitTxFrequency]);
 
   const resetOperatorsAfterOperatingStateChange = useCallback(() => {
     resetOperatorsForOperatingStateChange({
@@ -275,12 +278,15 @@ export const CWFrequencyControl: React.FC = () => {
   }, [applyTxFrequency]);
 
   return (
-    <Card className="w-full flex-shrink-0 bg-default-50 dark:bg-default-100/50 border border-default-200 dark:border-default-100" shadow="none">
+    <Card className="relative w-full flex-shrink-0 bg-default-50 dark:bg-default-100/50 border border-default-200 dark:border-default-100" shadow="none">
+      <div className="absolute right-1 top-1 z-10">
+        <SplitSettingsPopover className="h-6 min-w-6" />
+      </div>
       <CardBody className="px-3 py-1.5">
-        {splitEnabled ? (
-          <div className="flex flex-col md:flex-row md:justify-center md:gap-6 gap-0.5">
+        {showSplitFrequencyControls ? (
+          <SplitFrequencyLayout>
             {/* RX */}
-            <div className="flex items-center justify-center font-mono font-bold text-foreground">
+            <div className={SPLIT_FREQUENCY_ROW_CLASS}>
               <span className="mr-2 text-[11px] font-semibold text-success-500">{t('frequency.rxLabel')}</span>
               <div className="flex flex-none items-center justify-center">
                 {frequencyDigits.map((entry, i) => {
@@ -306,7 +312,7 @@ export const CWFrequencyControl: React.FC = () => {
               <span className="ml-2 flex-none self-center text-[11px] font-semibold text-default-400">{t('frequency.mhz')}</span>
             </div>
             {/* TX */}
-            <div className="flex items-center justify-center font-mono font-bold text-foreground">
+            <div className={SPLIT_FREQUENCY_ROW_CLASS}>
               <span className="mr-2 text-[11px] font-semibold text-danger-500">{t('frequency.txLabel')}</span>
               <div className="flex flex-none items-center justify-center">
                 {txFrequencyDigits.map((entry, i) => {
@@ -331,7 +337,7 @@ export const CWFrequencyControl: React.FC = () => {
               </div>
               <span className="ml-2 flex-none self-center text-[11px] font-semibold text-default-400">{t('frequency.mhz')}</span>
             </div>
-          </div>
+          </SplitFrequencyLayout>
         ) : (
           <div className="flex items-center justify-center font-mono font-bold text-foreground">
             <div className="min-w-0 shrink overflow-hidden flex justify-end" aria-hidden="true">

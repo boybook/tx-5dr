@@ -2983,7 +2983,6 @@ export class HamlibConnection
         ),
       ]);
 
-      await this.syncSplitFrequencyIfNeeded(frequency);
       this.lastSuccessfulOperation = Date.now();
       this.currentFrequencyHz = frequency;
       logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
@@ -3081,30 +3080,6 @@ export class HamlibConnection
         `PTT ${enabled ? 'activation' : 'deactivation'} failed`,
         error instanceof Error ? error : new Error(String(error))
       );
-    }
-  }
-
-  private async syncSplitFrequencyIfNeeded(frequency: number): Promise<void> {
-    const splitEnabled = await this.isSplitEnabled();
-
-    if (!splitEnabled) {
-      return;
-    }
-
-    try {
-      await Promise.race([
-        this.rig!.setSplitFreq(frequency),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Set split frequency timeout')), 5000)
-        ),
-      ]);
-
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`Split TX frequency synchronized: ${(frequency / 1000000).toFixed(3)} MHz`);
-    } catch (error) {
-      logger.warn(`Split TX frequency sync failed: ${this.getErrorMessage(error)}`, {
-        frequency,
-      });
     }
   }
 

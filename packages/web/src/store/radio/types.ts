@@ -104,6 +104,7 @@ export interface RadioState {
   cwConfig: CWKeyerConfig | null;
   splitEnabled: boolean;
   splitTxFrequency: number | null;
+  splitTxFrequencyWritable: boolean;
 }
 
 export interface ErrorEventData {
@@ -187,7 +188,7 @@ export type RadioAction =
   | { type: 'audioSidecarStatusChanged'; payload: AudioSidecarStatusPayload }
   | { type: 'UPDATE_CW_KEYER_STATUS'; payload: CWKeyerStatus }
   | { type: 'UPDATE_CW_CONFIG'; payload: CWKeyerConfig }
-  | { type: 'splitStateChanged'; payload: { enabled: boolean; txFrequency: number | null } };
+  | { type: 'splitStateChanged'; payload: { enabled: boolean; txFrequency: number | null; txFrequencyWritable: boolean } };
 
 export interface SlotPacksState {
   slotPacks: SlotPack[];

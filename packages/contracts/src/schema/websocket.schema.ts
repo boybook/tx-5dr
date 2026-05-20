@@ -1257,6 +1257,19 @@ export const WSWriteRadioCapabilityMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSWriteRadioCapabilityMessage = z.infer<typeof WSWriteRadioCapabilityMessageSchema>;
 
+export const SetSplitFrequencyPayloadSchema = z.object({
+  txFrequency: z.number().finite().int().min(1_000_000).max(1_000_000_000),
+});
+
+export type SetSplitFrequencyPayload = z.infer<typeof SetSplitFrequencyPayloadSchema>;
+
+export const WSSetSplitFrequencyMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SET_SPLIT_FREQUENCY),
+  data: SetSplitFrequencyPayloadSchema,
+});
+
+export type WSSetSplitFrequencyMessage = z.infer<typeof WSSetSplitFrequencyMessageSchema>;
+
 // ===== 认证相关消息 =====
 
 /**
@@ -1448,6 +1461,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
 
   // 频率管理消息
   WSFrequencyChangedMessageSchema,
+  WSSetSplitFrequencyMessageSchema,
 
   // PTT状态管理消息
   WSPTTStatusChangedMessageSchema,

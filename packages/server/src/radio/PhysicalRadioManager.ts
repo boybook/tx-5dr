@@ -1274,21 +1274,25 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 设置 Split TX 频率（由 WSServer 命令处理器调用）
    */
   async setSplitFrequency(txFrequency: number): Promise<void> {
-    if (!this.connection?.setSplitFrequency) {
+    if (!this.connection?.getSplitEnabled || !this.connection.getSplitFrequency || !this.connection.setSplitFrequency) {
       throw new Error('Split frequency control not supported');
     }
+
+    if (!(await this.connection.getSplitEnabled())) {
+      throw new Error('Split frequency control requires split mode to be enabled');
+    }
+
     await this.connection.setSplitFrequency(txFrequency);
     // Trigger capability re-read to update meta.txFrequency
-    void this.capabilityManager.refreshDescriptor('split');
+    void this.capabilityManager.refreshDescriptor('split_enabled');
   }
 
   /**
    * 刷新 Split 能力检测（模式切换后调用）
    */
   async refreshSplitCapability(): Promise<void> {
-    if (this.shouldBypassCapabilitySystem()) return;
     try {
-      await this.capabilityManager.refreshDescriptor('split');
+      await this.capabilityManager.refreshDescriptor('split_enabled');
     } catch (error) {
       logger.debug(`Split descriptor refresh skipped: ${(error as Error).message}`);
     }

@@ -600,6 +600,54 @@ describe('RadioCapabilityManager', () => {
     expect(getDescriptor(latestSnapshot.descriptors, 'rf_power').discreteOptions).toEqual(currentSteps);
   });
 
+  it('exposes Split TX frequency through split_enabled metadata', async () => {
+    const manager = new RadioCapabilityManager();
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      getSplitEnabled: vi.fn().mockResolvedValue(true),
+      setSplitEnabled: vi.fn().mockResolvedValue(undefined),
+      getSplitFrequency: vi.fn().mockResolvedValue(14_275_000),
+      setSplitFrequency: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+
+    const snapshot = manager.getCapabilitySnapshot();
+    expect(snapshot.descriptors.some((descriptor) => descriptor.id === 'split')).toBe(false);
+    expect(getCapability(snapshot.capabilities, 'split_enabled')).toMatchObject({
+      id: 'split_enabled',
+      supported: true,
+      value: true,
+      meta: {
+        txFrequency: 14_275_000,
+        txFrequencyWritable: true,
+      },
+    });
+
+    manager.onDisconnected();
+  });
+
+  it('keeps split_enabled available without TX frequency controls when the connection cannot read TX frequency', async () => {
+    const manager = new RadioCapabilityManager();
+    const connection = new MockConnection(RadioConnectionType.ICOM_WLAN, {
+      getSplitEnabled: vi.fn().mockResolvedValue(true),
+      setSplitEnabled: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+
+    expect(getCapability(manager.getCapabilityStates(), 'split_enabled')).toMatchObject({
+      id: 'split_enabled',
+      supported: true,
+      value: true,
+      meta: {
+        txFrequency: null,
+        txFrequencyWritable: false,
+      },
+    });
+
+    manager.onDisconnected();
+  });
+
   it('allows rf_power percent writes even when Hamlib discrete steps are present', async () => {
     const manager = new RadioCapabilityManager();
     const setRFPower = vi.fn().mockResolvedValue(undefined);

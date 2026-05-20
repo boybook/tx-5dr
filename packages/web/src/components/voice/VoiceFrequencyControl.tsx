@@ -23,6 +23,8 @@ import { FrequencyPresetAddModal } from '../settings/FrequencyPresetAddModal';
 import { formatToneSquelch } from '../../utils/toneSquelch';
 import { setRadioFrequencyWithIntent } from '../../utils/radioFrequencyIntent';
 import { FrequencyDigit } from '../radio/frequency/FrequencyDigit';
+import { SPLIT_FREQUENCY_ROW_CLASS, SplitFrequencyLayout } from '../radio/frequency/SplitFrequencyLayout';
+import { SplitSettingsPopover } from '../radio/frequency/SplitSettingsPopover';
 
 const logger = createLogger('VoiceFrequencyControl');
 const CURRENT_CUSTOM_VOICE_FREQUENCY_KEY = '__current_custom_voice_frequency__';
@@ -77,17 +79,18 @@ export const VoiceFrequencyControl: React.FC = () => {
   const [isAddPresetModalOpen, setIsAddPresetModalOpen] = useState(false);
 
   // Split state
-  const { splitEnabled, splitTxFrequency } = useSplitState();
+  const { splitEnabled, splitTxFrequency, splitTxFrequencyWritable } = useSplitState();
+  const showSplitFrequencyControls = splitEnabled && splitTxFrequencyWritable && splitTxFrequency !== null;
   const [currentTxFrequency, setCurrentTxFrequency] = useState<number>(splitTxFrequency ?? 14270000);
   const currentTxFrequencyRef = React.useRef(currentTxFrequency);
   currentTxFrequencyRef.current = currentTxFrequency;
 
   // Sync TX frequency from store when split state changes
   useEffect(() => {
-    if (splitEnabled && splitTxFrequency && splitTxFrequency > 0) {
+    if (showSplitFrequencyControls && splitTxFrequency && splitTxFrequency > 0) {
       setCurrentTxFrequency(splitTxFrequency);
     }
-  }, [splitEnabled, splitTxFrequency]);
+  }, [showSplitFrequencyControls, splitTxFrequency]);
 
   // TX frequency echo suppression
   const pendingTxFreqRef = React.useRef<{ intendedFrequency: number; sentAt: number } | null>(null);
@@ -697,16 +700,17 @@ export const VoiceFrequencyControl: React.FC = () => {
       <CardHeader className="pb-1 flex-shrink-0">
         <div className="flex items-center justify-between w-full">
           <span className="text-sm font-semibold">{t('frequency.title')}</span>
+          <SplitSettingsPopover />
         </div>
       </CardHeader>
       <CardBody className="pt-1 gap-3 overflow-hidden">
         {/* Interactive frequency display */}
         <div className="flex-shrink-0 text-center py-2">
-          {splitEnabled ? (
+          {showSplitFrequencyControls ? (
             /* Split mode: show RX and TX rows */
-            <div className="flex flex-col gap-1">
+            <SplitFrequencyLayout>
               {/* RX row */}
-              <div className="flex items-center justify-center font-mono font-bold text-foreground">
+              <div className={SPLIT_FREQUENCY_ROW_CLASS}>
                 <span className="mr-2 text-xs font-semibold text-success-500">{t('frequency.rxLabel')}</span>
                 <div className="flex flex-none items-center justify-center">
                   {frequencyDigits.map((entry, i) => {
@@ -730,7 +734,7 @@ export const VoiceFrequencyControl: React.FC = () => {
                 <span className="ml-2 flex-none self-center text-xs font-semibold text-default-400">{t('frequency.mhz')}</span>
               </div>
               {/* TX row */}
-              <div className="flex items-center justify-center font-mono font-bold text-foreground">
+              <div className={SPLIT_FREQUENCY_ROW_CLASS}>
                 <span className="mr-2 text-xs font-semibold text-danger-500">{t('frequency.txLabel')}</span>
                 <div className="flex flex-none items-center justify-center">
                   {txFrequencyDigits.map((entry, i) => {
@@ -753,7 +757,7 @@ export const VoiceFrequencyControl: React.FC = () => {
                 </div>
                 <span className="ml-2 flex-none self-center text-xs font-semibold text-default-400">{t('frequency.mhz')}</span>
               </div>
-            </div>
+            </SplitFrequencyLayout>
           ) : (
             /* Normal mode: single frequency row */
             <div className="flex items-center justify-center font-mono font-bold text-foreground">

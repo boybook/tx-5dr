@@ -196,6 +196,7 @@ export const useSplitState = () => {
   return {
     splitEnabled: radio.state.splitEnabled,
     splitTxFrequency: radio.state.splitTxFrequency,
+    splitTxFrequencyWritable: radio.state.splitTxFrequencyWritable,
   };
 };
 
