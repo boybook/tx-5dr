@@ -1,9 +1,27 @@
 import net from 'node:net';
+import { performance } from 'node:perf_hooks';
 import { EventEmitter } from 'eventemitter3';
 import { createLogger } from '../utils/logger.js';
 import type { AndroidAudioDeviceDescriptor } from './android-audio-devices.js';
 
 const logger = createLogger('AndroidAudioSocketBackend');
+const OUTPUT_DRAIN_TIMEOUT_MS = 250;
+const OUTPUT_BACKPRESSURE_LOG_INTERVAL_MS = 5_000;
+
+export interface AndroidAudioBackpressureResult {
+  ok: boolean;
+  backpressured: boolean;
+  waitMs: number;
+}
+
+interface DrainableSocket {
+  destroyed: boolean;
+  writable: boolean;
+  writableLength?: number;
+  write(buffer: Buffer): boolean;
+  once(event: 'drain' | 'close' | 'error', listener: () => void): unknown;
+  off(event: 'drain' | 'close' | 'error', listener: () => void): unknown;
+}
 
 export interface AndroidAudioInputEvents {
   audioData: (samples: Float32Array, sampleRate: number) => void;
@@ -67,6 +85,10 @@ export class AndroidAudioInputSocket extends EventEmitter<AndroidAudioInputEvent
 
 export class AndroidAudioOutputSocket {
   private socket: net.Socket | null = null;
+  private backpressureCount = 0;
+  private backpressureWaitMs = 0;
+  private writeFailures = 0;
+  private lastBackpressureLogAt = 0;
 
   constructor(private readonly device: AndroidAudioDeviceDescriptor) {}
 
@@ -99,10 +121,87 @@ export class AndroidAudioOutputSocket {
     this.socket = null;
   }
 
-  write(samples: Float32Array, gain = 1): boolean {
-    if (!this.socket || this.socket.destroyed) return false;
-    return this.socket.write(convertFloat32ToS16Le(samples, gain));
+  async write(samples: Float32Array, gain = 1): Promise<boolean> {
+    const socket = this.socket;
+    if (!socket || socket.destroyed || !socket.writable) return false;
+    try {
+      const payload = convertFloat32ToS16Le(samples, gain);
+      const result = await writeBufferWithBackpressure(socket, payload, OUTPUT_DRAIN_TIMEOUT_MS);
+      if (result.backpressured) {
+        this.backpressureCount += 1;
+        this.backpressureWaitMs += result.waitMs;
+      }
+      if (!result.ok) {
+        this.writeFailures += 1;
+      }
+      this.maybeLogBackpressure(result.backpressured || !result.ok);
+      return result.ok;
+    } catch (error) {
+      this.writeFailures += 1;
+      logger.warn('Android audio output write failed', {
+        device: this.device.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
+
+  private maybeLogBackpressure(force = false): void {
+    const now = Date.now();
+    if (!force && now - this.lastBackpressureLogAt < OUTPUT_BACKPRESSURE_LOG_INTERVAL_MS) return;
+    if (this.backpressureCount <= 0 && this.writeFailures <= 0) return;
+    logger.info('Android audio output socket backpressure stats', {
+      device: this.device.name,
+      backpressureCount: this.backpressureCount,
+      backpressureWaitMs: Math.round(this.backpressureWaitMs),
+      writeFailures: this.writeFailures,
+      writableLength: this.socket?.writableLength ?? 0,
+    });
+    this.lastBackpressureLogAt = now;
+  }
+}
+
+export async function writeBufferWithBackpressure(
+  socket: DrainableSocket,
+  buffer: Buffer,
+  timeoutMs = OUTPUT_DRAIN_TIMEOUT_MS,
+): Promise<AndroidAudioBackpressureResult> {
+  if (socket.destroyed || !socket.writable) {
+    return { ok: false, backpressured: false, waitMs: 0 };
+  }
+  if (socket.write(buffer)) {
+    return { ok: true, backpressured: false, waitMs: 0 };
+  }
+  const startedAt = performance.now();
+  const drained = await waitForDrain(socket, timeoutMs);
+  return {
+    ok: drained,
+    backpressured: true,
+    waitMs: performance.now() - startedAt,
+  };
+}
+
+function waitForDrain(socket: DrainableSocket, timeoutMs: number): Promise<boolean> {
+  if (socket.destroyed || !socket.writable) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.off('drain', onDrain);
+      socket.off('close', onClose);
+      socket.off('error', onError);
+      resolve(ok);
+    };
+    const onDrain = () => finish(true);
+    const onClose = () => finish(false);
+    const onError = () => finish(false);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    socket.once('drain', onDrain);
+    socket.once('close', onClose);
+    socket.once('error', onError);
+  });
 }
 
 function convertS16LeToFloat32(buffer: Buffer): Float32Array {

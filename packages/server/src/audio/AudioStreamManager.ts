@@ -1723,7 +1723,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         for (let offset = 0; offset < playbackData.length; offset += chunkSize) {
           if (this.shouldStopPlayback) throw new Error('playback interrupted');
           const chunk = playbackData.subarray(offset, Math.min(offset + chunkSize, playbackData.length));
-          this.androidAudioOutput?.write(chunk, this.volumeGain);
+          const wrote = await this.androidAudioOutput?.write(chunk, this.volumeGain);
+          if (!wrote) {
+            throw new Error('Android audio output write failed');
+          }
           if (options.injectIntoMonitor) {
             this.emit('txMonitorAudioData', { samples: chunk, sampleRate: this.outputSampleRate });
           }
@@ -2157,7 +2160,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     }
 
     if (sink.kind === 'android') {
-      return this.androidAudioOutput?.write(samples, 1) ?? false;
+      return this.androidAudioOutput ? await this.androidAudioOutput.write(samples, 1) : false;
     }
 
     if (!this.rtAudioOutput) {
