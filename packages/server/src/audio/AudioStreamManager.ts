@@ -11,6 +11,8 @@ import type { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.j
 import { createLogger } from '../utils/logger.js';
 import type { VoiceTxFrameMeta, VoiceTxProcessedFrameStats } from '../voice/VoiceTxDiagnostics.js';
 import { VoiceTxOutputPipeline, type VoiceTxOutputSinkState } from './VoiceTxOutputPipeline.js';
+import { AndroidAudioInputSocket, AndroidAudioOutputSocket } from './AndroidAudioSocketBackend.js';
+import { isAndroidAudioDeviceId, isAndroidBridgeRuntime, isLegacyAndroidAudioDeviceName } from './android-audio-devices.js';
 
 const logger = createLogger('AudioStreamManager');
 // RtAudioFormat 是 const enum，isolatedModules 下无法直接导入，使用数值常量
@@ -141,6 +143,8 @@ export interface AudioStreamManagerOptions {
 export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private rtAudioInput: RtAudioInstance | null = null;
   private rtAudioOutput: RtAudioInstance | null = null;
+  private androidAudioInput: AndroidAudioInputSocket | null = null;
+  private androidAudioOutput: AndroidAudioOutputSocket | null = null;
   private isStreaming = false;
   private isOutputting = false;
   private audioProvider: RingBufferAudioProvider;
@@ -172,6 +176,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private usingOpenWebRXInput = false;
   private openwebrxAudioDataHandler: ((samples: Float32Array) => void) | null = null;
   private openwebrxErrorHandler: ((error: Error) => void) | null = null;
+  private usingAndroidInput = false;
+  private usingAndroidOutput = false;
 
   // 播放状态跟踪（用于重新混音兜底方案）
   private playing: boolean = false;             // 是否正在播放
@@ -397,6 +403,41 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         return;
       }
 
+      if (isAndroidAudioDeviceId(deviceId) || audioConfig.inputDeviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && (!audioConfig.inputDeviceName || isLegacyAndroidAudioDeviceName('input', audioConfig.inputDeviceName)))) {
+        const audioDeviceManager = AudioDeviceManager.getInstance();
+        const androidDevice = audioDeviceManager.resolveAndroidDeviceForStream(
+          'input',
+          isLegacyAndroidAudioDeviceName('input', configuredInputDeviceName) ? undefined : configuredInputDeviceName,
+          deviceId,
+        );
+        if (!androidDevice) {
+          throw new Error(`Android audio input device is unavailable: ${configuredInputDeviceName ?? deviceId ?? 'default'}`);
+        }
+        const input = new AndroidAudioInputSocket(androidDevice);
+        input.on('audioData', (samples, sampleRate) => {
+          void this.ingestInputSamples(samples, sampleRate, 'audio-device');
+        });
+        input.on('error', (error) => {
+          logger.error('Android audio input socket error', error);
+          this.emit('error', error);
+        });
+        await input.start();
+        this.androidAudioInput = input;
+        this.usingAndroidInput = true;
+        this.deviceId = androidDevice.id;
+        this.activeInputDeviceName = androidDevice.name;
+        this.inputSampleRate = androidDevice.sampleRate || this.inputSampleRate;
+        this.isStreaming = true;
+        audioDeviceManager.markDeviceActive('input', this.activeInputDeviceName, this.deviceId, this.inputSampleRate, 1);
+        logger.info('Android audio input started', {
+          device: androidDevice.name,
+          socketPath: androidDevice.socketPath,
+          sampleRate: this.inputSampleRate,
+        });
+        this.emit('started');
+        return;
+      }
+
       logger.info('audio input starting', {
         deviceId,
         channels: this.channels,
@@ -455,6 +496,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.openwebrxAudioAdapter.stopReceiving();
         this.usingOpenWebRXInput = false;
         logger.info('OpenWebRX audio input stopped');
+      }
+
+      if (this.usingAndroidInput) {
+        this.androidAudioInput?.stop();
+        this.androidAudioInput = null;
+        this.usingAndroidInput = false;
+        logger.info('Android audio input stopped');
       }
 
       // 停止传统声卡输入
@@ -649,6 +697,34 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
       }
 
+      if (isAndroidAudioDeviceId(outputDeviceId) || configuredOutputDeviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && (!configuredOutputDeviceName || isLegacyAndroidAudioDeviceName('output', configuredOutputDeviceName)))) {
+        const audioDeviceManager = AudioDeviceManager.getInstance();
+        const androidDevice = audioDeviceManager.resolveAndroidDeviceForStream(
+          'output',
+          isLegacyAndroidAudioDeviceName('output', configuredOutputDeviceName) ? undefined : configuredOutputDeviceName,
+          outputDeviceId,
+        );
+        if (!androidDevice) {
+          throw new Error(`Android audio output device is unavailable: ${configuredOutputDeviceName ?? outputDeviceId ?? 'default'}`);
+        }
+        const output = new AndroidAudioOutputSocket(androidDevice);
+        await output.start();
+        this.androidAudioOutput = output;
+        this.usingAndroidOutput = true;
+        this.outputDeviceId = androidDevice.id;
+        this.activeOutputDeviceName = androidDevice.name;
+        this.outputSampleRate = androidDevice.sampleRate || this.outputSampleRate;
+        this.outputChannels = 1;
+        this.isOutputting = true;
+        audioDeviceManager.markDeviceActive('output', this.activeOutputDeviceName, this.outputDeviceId, this.outputSampleRate, 1);
+        logger.info('Android audio output started', {
+          device: androidDevice.name,
+          socketPath: androidDevice.socketPath,
+          sampleRate: this.outputSampleRate,
+        });
+        return;
+      }
+
       logger.info('audio output starting', {
         deviceId: outputDeviceId,
         channels: this.outputChannels,
@@ -819,6 +895,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       if (this.usingIcomWlanOutput) {
         this.usingIcomWlanOutput = false;
         logger.info('ICOM WLAN audio output stopped');
+      }
+
+      if (this.usingAndroidOutput) {
+        this.androidAudioOutput?.stop();
+        this.androidAudioOutput = null;
+        this.usingAndroidOutput = false;
+        logger.info('Android audio output stopped');
       }
 
       // 停止传统声卡输出
@@ -1622,6 +1705,48 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       return;
     }
 
+    if (this.usingAndroidOutput && this.androidAudioOutput) {
+      if (!this.isOutputting) {
+        throw new Error('Android audio output stream not started');
+      }
+      this.playing = true;
+      this.playbackStartTime = playStartTime;
+      this.currentPlaybackKind = playbackKind;
+      this.shouldStopPlayback = false;
+      const playbackPromise = (async () => {
+        const playbackData = targetSampleRate === this.outputSampleRate
+          ? audioData
+          : await resampleAudioProfessional(audioData, targetSampleRate, this.outputSampleRate, 1);
+        const chunkSize = Math.max(64, this.outputBufferSize || 1024);
+        const hrStart = performance.now();
+        let samplesWritten = 0;
+        for (let offset = 0; offset < playbackData.length; offset += chunkSize) {
+          if (this.shouldStopPlayback) throw new Error('playback interrupted');
+          const chunk = playbackData.subarray(offset, Math.min(offset + chunkSize, playbackData.length));
+          this.androidAudioOutput?.write(chunk, this.volumeGain);
+          if (options.injectIntoMonitor) {
+            this.emit('txMonitorAudioData', { samples: chunk, sampleRate: this.outputSampleRate });
+          }
+          samplesWritten += chunk.length;
+          const targetElapsedMs = (samplesWritten / this.outputSampleRate) * 1000 - 80;
+          const waitMs = targetElapsedMs - (performance.now() - hrStart);
+          if (waitMs > 0) await new Promise<void>(res => setTimeout(res, Math.min(waitMs, 20)));
+        }
+      })();
+      this.currentPlaybackPromise = playbackPromise;
+      try {
+        await playbackPromise;
+      } finally {
+        if (this.currentPlaybackPromise === playbackPromise) {
+          this.playing = false;
+          this.currentPlaybackPromise = null;
+          this.currentPlaybackKind = null;
+          this.currentAudioData = null;
+        }
+      }
+      return;
+    }
+
     // 传统声卡输出
     if (!this.isOutputting || !this.rtAudioOutput) {
       throw new Error('audio output stream not started');
@@ -2000,6 +2125,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       };
     }
 
+    if (this.usingAndroidOutput && this.androidAudioOutput) {
+      return {
+        available: this.isOutputting,
+        kind: 'android',
+        outputSampleRate: this.outputSampleRate,
+        outputBufferSize: Math.max(64, this.outputBufferSize || 1024),
+      };
+    }
+
     return {
       available: this.isOutputting && Boolean(this.rtAudioOutput),
       kind: 'rtaudio',
@@ -2020,6 +2154,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         logger.error('Voice audio ICOM WLAN send failed', error);
         return false;
       }
+    }
+
+    if (sink.kind === 'android') {
+      return this.androidAudioOutput?.write(samples, 1) ?? false;
     }
 
     if (!this.rtAudioOutput) {
