@@ -238,7 +238,7 @@ const MessageRow = React.memo<MessageRowProps>(({
     if (!displayName) return null;
     const text = isNarrow ? (displayName.split('·')[1] || displayName) : displayName;
     const inner = (
-      <div className="flex min-w-0 items-center justify-end gap-1">
+      <div className={`flex min-w-0 items-center justify-end gap-1 ${isNarrow ? 'max-w-[80px]' : 'max-w-[140px]'}`}>
         <span className="min-w-0 truncate whitespace-nowrap text-xs" title={displayName}>
           {text}
         </span>
@@ -331,8 +331,8 @@ const MessageRow = React.memo<MessageRowProps>(({
         </div>
       )}
       <div className="text-xs text-center font-mono">{message.freq}</div>
-      <div className="text-xs font-mono">
-        <span className="flex items-center gap-1">
+      <div className="min-w-0 text-xs font-mono">
+        <span className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5">
           {isTarget && (
             <span
               className="w-2 h-2 rounded-full bg-danger-500 flex-shrink-0 -ml-3"
@@ -343,14 +343,14 @@ const MessageRow = React.memo<MessageRowProps>(({
             />
           )}
           <span
-            className={`${hasMyCallsign ? 'font-semibold' : ''} ${message.db !== 'TX' && hasMyCallsign ? 'text-danger' : ''} ${isWorkedCallsign ? 'line-through opacity-70' : ''}`}
+            className={`min-w-0 max-w-full whitespace-normal break-words ${hasMyCallsign ? 'font-semibold' : ''} ${message.db !== 'TX' && hasMyCallsign ? 'text-danger' : ''} ${isWorkedCallsign ? 'line-through opacity-70' : ''}`}
           >
             {message.message}
           </span>
           {chipNode}
         </span>
       </div>
-      <div className={`text-xs text-right ${isNarrow ? '' : 'pr-1'}`}>
+      <div className={`pl-1 text-xs text-right ${isNarrow ? '' : 'pr-1'}`}>
         {locationNode}
       </div>
     </div>
@@ -538,8 +538,8 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
 
   // ─── 列宽 ──────────────────────────────
   const gridCols = isNarrow
-    ? 'grid-cols-[42px_36px_52px_1fr_80px]'
-    : 'grid-cols-[56px_40px_40px_64px_1fr_140px]';
+    ? 'grid-cols-[42px_36px_52px_minmax(0,1fr)_auto]'
+    : 'grid-cols-[56px_40px_40px_64px_minmax(0,1fr)_auto]';
   const showScrollToBottomButton = shouldShowScrollToBottomButton(groups, wasAtBottom);
 
   if (groups.length === 0) {
