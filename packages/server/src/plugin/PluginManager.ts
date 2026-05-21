@@ -1263,7 +1263,7 @@ export class PluginManager {
     };
   }
 
-  private resetOperatorPluginRuntime(operatorId: string, reason: string): void {
+  resetOperatorPluginRuntime(operatorId: string, reason: string): void {
     const runtime = this.getStrategyRuntime(operatorId);
     if (runtime) {
       try {

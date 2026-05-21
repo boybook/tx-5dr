@@ -220,6 +220,13 @@ describe('RadioOperatorManager same transmission guard', () => {
     eventEmitter.on('textMessage', textMessageSpy);
 
     await addBasicOperator(manager, 'op1');
+    const resetOperatorPluginRuntime = vi.fn((operatorId: string, reason: string) => {
+      manager.resetPluginRuntime(operatorId, reason);
+    });
+    manager.setPluginManager({
+      resetOperatorPluginRuntime,
+      getOperatorRuntimeStatus: vi.fn(() => undefined),
+    } as any);
     manager.start();
 
     for (let index = 0; index < 21; index += 1) {
@@ -235,6 +242,8 @@ describe('RadioOperatorManager same transmission guard', () => {
     expect(manager.getOperatorById('op1')?.isTransmitting).toBe(false);
     expect(manager.getPendingTransmissionsCount()).toBe(0);
     expect(manager.getLatestEncodeRequestId('op1')).toBeUndefined();
+    expect(resetOperatorPluginRuntime).toHaveBeenCalledTimes(1);
+    expect(resetOperatorPluginRuntime).toHaveBeenCalledWith('op1', 'same transmission guard limit');
     expect(textMessageSpy).toHaveBeenCalledTimes(1);
     expect(textMessageSpy.mock.calls[0]?.[0]).toMatchObject({
       color: 'warning',
@@ -250,6 +259,90 @@ describe('RadioOperatorManager same transmission guard', () => {
       id: 'op1',
       isTransmitting: false,
     });
+  });
+
+  it('resets the standard-qso context and returns to TX6 after the guard stops an operator', async () => {
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 0,
+      encodeQueue,
+    });
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-same-transmission-reset-'));
+
+    let pluginManager!: PluginManager;
+    pluginManager = new PluginManager({
+      eventEmitter,
+      getOperators: () => manager.getAllOperators(),
+      getOperatorById: (id) => manager.getOperatorById(id),
+      getCurrentMode: () => MODES.FT8,
+      getOperatorAutomationSnapshot: (id) => pluginManager.getOperatorAutomationSnapshot(id),
+      requestOperatorCall: () => {},
+      getRadioFrequency: async () => 7_074_000,
+      setRadioFrequency: () => {},
+      getRadioBand: () => '40m',
+      getRadioConnected: () => true,
+      getLatestSlotPack: () => null,
+      interruptOperatorTransmission: async () => {},
+      hasWorkedCallsign: async () => false,
+      resetOperatorRuntime: (operatorId, reason) => manager.resetPluginRuntime(operatorId, reason),
+      dataDir,
+    });
+
+    try {
+      manager.setPluginManager(pluginManager);
+      pluginManager.loadConfig({ configs: {}, operatorStrategies: {}, operatorSettings: {} });
+      await manager.addOperator({
+        id: 'op1',
+        myCallsign: 'BG4IAJ',
+        myGrid: 'OM96',
+        frequency: 1500,
+        transmitCycles: [0],
+        mode: MODES.FT8,
+      });
+      await pluginManager.start();
+      manager.start();
+
+      const operator = manager.getOperatorById('op1');
+      expect(operator).toBeDefined();
+      operator!.start();
+
+      pluginManager.requestCall('op1', 'JA1AAA', {
+        message: {
+          message: 'CQ JA1AAA PM95',
+          snr: 0,
+          dt: 0,
+          freq: 1500,
+          confidence: 1,
+        },
+        slotInfo: createSlotInfo(0),
+      });
+
+      expect(pluginManager.getOperatorRuntimeStatus('op1')).toMatchObject({
+        currentSlot: 'TX1',
+        context: { targetCallsign: 'JA1AAA' },
+      });
+
+      encodeQueue.push.mockClear();
+      for (let index = 0; index < 21; index += 1) {
+        eventEmitter.emit('requestTransmit', { operatorId: 'op1', transmission: 'JA1AAA BG4IAJ -10' });
+        manager.processPendingTransmissions(createSlotInfo(index * MODES.FT8.slotMs));
+      }
+
+      expect(encodeQueue.push).toHaveBeenCalledTimes(20);
+      expect(manager.getOperatorById('op1')?.isTransmitting).toBe(false);
+      const status = pluginManager.getOperatorRuntimeStatus('op1');
+      expect(status.currentSlot).toBe('TX6');
+      expect(status.context?.targetCallsign).toBeUndefined();
+      expect(status.context?.targetGrid).toBeUndefined();
+      expect(status.context?.reportSent).toBeUndefined();
+      expect(status.context?.reportReceived).toBeUndefined();
+    } finally {
+      manager.stop();
+      await pluginManager.shutdown().catch(() => undefined);
+      await rm(dataDir, { recursive: true, force: true });
+    }
   });
 
   it('disables the guard when maxSameTransmissionCount is set to 0', async () => {

@@ -33,6 +33,7 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('RadioOperatorManager');
 
 const DEFAULT_MAX_SAME_TRANSMISSION_COUNT = 20;
+const SAME_TRANSMISSION_GUARD_RESET_REASON = 'same transmission guard limit';
 const AP_DECODE_QSO_PROGRESS: Record<string, number | undefined> = {
   TX3: 3,
   TX4: 4,
@@ -897,14 +898,20 @@ export class RadioOperatorManager {
     });
 
     operator.stop();
-    this.pendingTransmissions = this.pendingTransmissions.filter(
-      (request) => request.operatorId !== operatorId,
-    );
-    this.latestEncodeRequestIds.delete(operatorId);
-    this.activeTransmissionOperatorIds.delete(operatorId);
-    this.clearSameTransmissionGuard(operatorId);
-    this.lastEmittedStatusHash.delete(operatorId);
-    this.emitOperatorStatusUpdate(operatorId);
+    const resetOperatorPluginRuntime = this._pluginManager?.resetOperatorPluginRuntime?.bind(this._pluginManager);
+    if (resetOperatorPluginRuntime) {
+      try {
+        resetOperatorPluginRuntime(operatorId, SAME_TRANSMISSION_GUARD_RESET_REASON);
+        return;
+      } catch (error) {
+        logger.warn('Failed to reset plugin runtime after same transmission limit, falling back to local cleanup', {
+          operatorId,
+          error,
+        });
+      }
+    }
+
+    this.resetPluginRuntime(operatorId, SAME_TRANSMISSION_GUARD_RESET_REASON);
   }
 
   /**
