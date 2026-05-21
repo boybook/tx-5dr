@@ -1,7 +1,9 @@
 import os, { type NetworkInterfaceInfo } from 'node:os';
 import { readFileSync } from 'node:fs';
+import { createLogger } from './logger.js';
 
 const DEFAULT_WEB_PORT = 8076;
+const logger = createLogger('NetworkAccess');
 
 export interface NetworkAccessAddress {
   ip: string;
@@ -72,7 +74,7 @@ function getInjectedNetworkAccessInfo(options: NetworkAccessInfoOptions, fallbac
       : (options.hostname ?? 'android');
     return { addresses, hostname, webPort };
   } catch (error) {
-    console.warn('[NetworkAccess] Failed to read injected network access file', {
+    logger.warn('Failed to read injected network access file', {
       filePath,
       message: error instanceof Error ? error.message : String(error),
     });
@@ -98,7 +100,7 @@ function safeNetworkInterfaces(): NodeJS.Dict<NetworkInterfaceInfo[]> {
   try {
     return os.networkInterfaces();
   } catch (error) {
-    console.warn('[NetworkAccess] Failed to enumerate network interfaces', error);
+    logger.warn('Failed to enumerate network interfaces', error);
     return {};
   }
 }
