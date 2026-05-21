@@ -171,6 +171,7 @@ describe('collapsed spectrum positioning', () => {
       rangeStartFrequency: 14_050_000,
       rangeEndFrequency: 14_050_000,
       draggable: false,
+      variant: 'tx',
     }]);
 
     expect(buildRadioSdrTxBandOverlays({
@@ -201,6 +202,115 @@ describe('collapsed spectrum positioning', () => {
       rangeStartFrequency: 14_200_000,
       rangeEndFrequency: 14_202_400,
       draggable: true,
+      variant: 'tx',
+    }]);
+  });
+
+  it('renders separate RX and TX RF overlays when Split is enabled', () => {
+    expect(buildRadioSdrTxBandOverlays({
+      engineMode: 'cw',
+      isRadioSdrSelected: true,
+      currentRadioFrequency: 14_050_000,
+      splitEnabled: true,
+      splitTxFrequency: 14_052_500,
+      voice: null,
+      voiceOverlayIsInteractive: false,
+    })).toEqual([
+      {
+        id: 'cw-current-rx',
+        label: 'RX',
+        lineFrequency: 14_050_000,
+        rangeStartFrequency: 14_050_000,
+        rangeEndFrequency: 14_050_000,
+        draggable: false,
+        variant: 'rx',
+      },
+      {
+        id: 'cw-split-tx',
+        label: 'TX',
+        lineFrequency: 14_052_500,
+        rangeStartFrequency: 14_052_500,
+        rangeEndFrequency: 14_052_500,
+        draggable: false,
+        variant: 'tx',
+      },
+    ]);
+
+    expect(buildRadioSdrTxBandOverlays({
+      engineMode: 'voice',
+      isRadioSdrSelected: true,
+      currentRadioFrequency: 14_200_000,
+      splitEnabled: true,
+      splitTxFrequency: 14_205_000,
+      voice: {
+        radioMode: 'USB',
+        bandwidthLabel: '2400 Hz',
+        occupiedBandwidthHz: 2400,
+        offsetModel: 'upper',
+      },
+      voiceOverlayIsInteractive: true,
+    })).toEqual([
+      {
+        id: 'voice-current-rx',
+        label: 'RX',
+        lineFrequency: 14_200_000,
+        rangeStartFrequency: 14_200_000,
+        rangeEndFrequency: 14_202_400,
+        draggable: true,
+        variant: 'rx',
+      },
+      {
+        id: 'voice-split-tx',
+        label: 'TX',
+        lineFrequency: 14_205_000,
+        rangeStartFrequency: 14_205_000,
+        rangeEndFrequency: 14_207_400,
+        draggable: false,
+        variant: 'tx',
+      },
+    ]);
+  });
+
+  it('does not synthesize a Split TX overlay before TX frequency metadata arrives', () => {
+    expect(buildRadioSdrTxBandOverlays({
+      engineMode: 'cw',
+      isRadioSdrSelected: true,
+      currentRadioFrequency: 14_050_000,
+      splitEnabled: true,
+      splitTxFrequency: null,
+      voice: null,
+      voiceOverlayIsInteractive: false,
+    })).toEqual([{
+      id: 'cw-current-rx',
+      label: 'RX',
+      lineFrequency: 14_050_000,
+      rangeStartFrequency: 14_050_000,
+      rangeEndFrequency: 14_050_000,
+      draggable: false,
+      variant: 'rx',
+    }]);
+
+    expect(buildRadioSdrTxBandOverlays({
+      engineMode: 'voice',
+      isRadioSdrSelected: true,
+      currentRadioFrequency: 14_200_000,
+      splitEnabled: true,
+      splitTxFrequency: null,
+      voice: {
+        radioMode: 'USB',
+        bandwidthLabel: '2400 Hz',
+        occupiedBandwidthHz: 2400,
+        offsetModel: 'upper',
+      },
+      voiceOverlayIsInteractive: true,
+    })).toEqual([{
+      id: 'voice-current-rx',
+      label: 'RX',
+      lineFrequency: 14_200_000,
+      rangeStartFrequency: 14_200_000,
+      rangeEndFrequency: 14_202_400,
+      draggable: true,
+      variant: 'rx',
     }]);
   });
 
@@ -212,7 +322,6 @@ describe('collapsed spectrum positioning', () => {
     })).toEqual({
       frequency: 14_050_000,
       mode: 'CW',
-      radioMode: 'CW',
       band: '20m',
       description: '14.050 MHz',
     });
@@ -223,16 +332,11 @@ describe('collapsed spectrum positioning', () => {
       engineMode: 'voice',
       frequency: 14_200_499,
       stepHz: 1000,
-      voiceRadioMode: 'USB',
-      currentRadioMode: 'LSB',
     })).toEqual({
       frequency: 14_200_000,
       mode: 'VOICE',
       band: 'Custom',
       description: '14.200 MHz',
-      radioMode: 'USB',
-      repeaterShift: 'none',
-      toneMode: 'none',
     });
   });
 
@@ -247,7 +351,6 @@ describe('collapsed spectrum positioning', () => {
       engineMode: 'voice',
       frequency: 14_270_499,
       stepHz: 1000,
-      voiceRadioMode: 'USB',
     });
     const canWrite20mOnly = (frequency: number) => frequency >= 14_000_000 && frequency <= 14_350_000;
 

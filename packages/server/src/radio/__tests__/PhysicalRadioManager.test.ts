@@ -716,6 +716,7 @@ describe('PhysicalRadioManager', () => {
       modeError: new Error('mode unavailable'),
     });
     const setKnownFrequency = vi.fn();
+    const writeCapability = vi.spyOn(asTestManager(manager).capabilityManager, 'writeCapability');
     asTestManager(manager).connection = {
       applyOperatingState,
       setKnownFrequency,
@@ -736,6 +737,7 @@ describe('PhysicalRadioManager', () => {
       tolerateModeFailure: true,
     });
     expect(setKnownFrequency).toHaveBeenCalledWith(14074000);
+    expect(writeCapability).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
   });
 

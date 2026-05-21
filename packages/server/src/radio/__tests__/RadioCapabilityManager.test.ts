@@ -68,6 +68,7 @@ function getDescriptor(snapshot: CapabilityDescriptor[], id: string): Capability
 
 describe('RadioCapabilityManager', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -189,6 +190,79 @@ describe('RadioCapabilityManager', () => {
     busy = false;
     await expect(manager.refreshAll()).resolves.toBeUndefined();
     expect(getSQL).toHaveBeenCalledTimes(1);
+
+    manager.onDisconnected();
+  });
+
+  it('still polls split_enabled while the radio I/O queue reports backpressure', async () => {
+    const manager = new RadioCapabilityManager();
+    const getSplitEnabled = vi.fn().mockResolvedValue(true);
+    const getSplitFrequency = vi.fn().mockResolvedValue(14_275_000);
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      getSplitEnabled,
+      setSplitEnabled: vi.fn().mockResolvedValue(undefined),
+      getSplitFrequency,
+      setSplitFrequency: vi.fn().mockResolvedValue(undefined),
+      getRadioIoQueueSnapshot: vi.fn(() => ({
+        busy: true,
+        backpressure: true,
+        criticalActive: false,
+        activeCount: 1,
+        activeTask: 'getSupportedModeBandwidths',
+        activeRunMs: 5,
+        pendingCount: 0,
+        criticalPendingCount: 0,
+        normalPendingCount: 0,
+        oldestPendingTask: null,
+        oldestPendingWaitMs: null,
+        dedupedTaskCount: 0,
+      })),
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+
+    expect(getSplitEnabled).toHaveBeenCalledTimes(2);
+    expect(getSplitFrequency).toHaveBeenCalledTimes(1);
+    expect(getCapability(manager.getCapabilityStates(), 'split_enabled')).toMatchObject({
+      value: true,
+      meta: { txFrequency: 14_275_000 },
+    });
+
+    manager.onDisconnected();
+  });
+
+  it('dedupes overlapping split_enabled polls', async () => {
+    const manager = new RadioCapabilityManager();
+    let releaseSplitRead!: (value: boolean) => void;
+    const splitRead = new Promise<boolean>((resolve) => {
+      releaseSplitRead = resolve;
+    });
+    const getSplitEnabled = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockReturnValueOnce(splitRead)
+      .mockResolvedValue(true);
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      getSplitEnabled,
+      setSplitEnabled: vi.fn().mockResolvedValue(undefined),
+      getSplitFrequency: vi.fn().mockResolvedValue(14_275_000),
+      setSplitFrequency: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+
+    const firstPoll = (manager as any).runtime.pollCapabilityOnce('split_enabled');
+    await Promise.resolve();
+    const secondPoll = (manager as any).runtime.pollCapabilityOnce('split_enabled');
+    await Promise.resolve();
+
+    expect(getSplitEnabled).toHaveBeenCalledTimes(3);
+
+    releaseSplitRead(true);
+    await expect(firstPoll).resolves.toBeUndefined();
+    await expect(secondPoll).resolves.toBeUndefined();
+
+    expect(getSplitEnabled).toHaveBeenCalledTimes(3);
 
     manager.onDisconnected();
   });
@@ -526,6 +600,9 @@ describe('RadioCapabilityManager', () => {
     const manager = new RadioCapabilityManager();
     let currentMode = 'USB';
     const setModeBandwidth = vi.fn().mockResolvedValue(undefined);
+    const getSupportedModeBandwidths = vi.fn().mockImplementation(async () => (
+      currentMode === 'USB' ? [1800, 2400, 3000] : [6000, 10000, 12000]
+    ));
     const connection = new MockConnection(RadioConnectionType.HAMLIB, {
       getMode: vi.fn().mockImplementation(async () => ({
         mode: currentMode,
@@ -533,9 +610,7 @@ describe('RadioCapabilityManager', () => {
       })),
       getModeBandwidth: vi.fn().mockImplementation(async () => (currentMode === 'USB' ? 2400 : 12000)),
       setModeBandwidth,
-      getSupportedModeBandwidths: vi.fn().mockImplementation(async () => (
-        currentMode === 'USB' ? [1800, 2400, 3000] : [6000, 10000, 12000]
-      )),
+      getSupportedModeBandwidths,
     });
 
     let latestSnapshot = manager.getCapabilitySnapshot();
@@ -559,6 +634,20 @@ describe('RadioCapabilityManager', () => {
 
     currentMode = 'FM';
     await (manager as any).runtime.pollCapabilityOnce('mode_bandwidth');
+
+    const staleDescriptor = getDescriptor(latestSnapshot.descriptors, 'mode_bandwidth');
+    expect(staleDescriptor).toMatchObject({
+      id: 'mode_bandwidth',
+      options: [{ value: 1800 }, { value: 2400 }, { value: 3000 }],
+    });
+    expect(getSupportedModeBandwidths).toHaveBeenCalledTimes(2);
+    expect(getCapability(manager.getCapabilityStates(), 'mode_bandwidth')).toMatchObject({
+      id: 'mode_bandwidth',
+      supported: true,
+      value: 12000,
+    });
+
+    await expect(manager.refreshDescriptor('mode_bandwidth')).resolves.toBeUndefined();
 
     const fmDescriptor = getDescriptor(latestSnapshot.descriptors, 'mode_bandwidth');
     expect(fmDescriptor).toMatchObject({
@@ -598,6 +687,129 @@ describe('RadioCapabilityManager', () => {
     await expect(manager.refreshDescriptor('rf_power')).resolves.toBeUndefined();
 
     expect(getDescriptor(latestSnapshot.descriptors, 'rf_power').discreteOptions).toEqual(currentSteps);
+  });
+
+  it('exposes Split TX frequency through split_enabled metadata', async () => {
+    const manager = new RadioCapabilityManager();
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      getSplitEnabled: vi.fn().mockResolvedValue(true),
+      setSplitEnabled: vi.fn().mockResolvedValue(undefined),
+      getSplitFrequency: vi.fn().mockResolvedValue(14_275_000),
+      setSplitFrequency: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+
+    const snapshot = manager.getCapabilitySnapshot();
+    expect(snapshot.descriptors.some((descriptor) => descriptor.id === 'split')).toBe(false);
+    expect(getCapability(snapshot.capabilities, 'split_enabled')).toMatchObject({
+      id: 'split_enabled',
+      supported: true,
+      value: true,
+      meta: {
+        txFrequency: 14_275_000,
+        txFrequencyWritable: true,
+      },
+    });
+
+    manager.onDisconnected();
+  });
+
+  it('polls split_enabled metadata and emits TX frequency changes', async () => {
+    vi.useFakeTimers();
+    const manager = new RadioCapabilityManager();
+    let splitEnabled = true;
+    let txFrequency = 14_275_000;
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      getSplitEnabled: vi.fn().mockImplementation(async () => splitEnabled),
+      setSplitEnabled: vi.fn().mockResolvedValue(undefined),
+      getSplitFrequency: vi.fn().mockImplementation(async () => (splitEnabled ? txFrequency : null)),
+      setSplitFrequency: vi.fn().mockResolvedValue(undefined),
+    });
+    const changes: CapabilityState[] = [];
+    manager.on('capabilityChanged', (state) => {
+      if (state.id === 'split_enabled') changes.push(state);
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+    expect(getDescriptor(manager.getCapabilityDescriptors(), 'split_enabled').pollIntervalMs).toBe(2000);
+
+    txFrequency = 14_276_500;
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(changes.at(-1)).toMatchObject({
+      id: 'split_enabled',
+      value: true,
+      meta: {
+        txFrequency: 14_276_500,
+        txFrequencyWritable: true,
+      },
+    });
+
+    splitEnabled = false;
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(changes.at(-1)).toMatchObject({
+      id: 'split_enabled',
+      value: false,
+      meta: {
+        txFrequency: null,
+        txFrequencyWritable: true,
+      },
+    });
+
+    manager.onDisconnected();
+  });
+
+  it('refreshes split_enabled metadata immediately after writing Split', async () => {
+    const manager = new RadioCapabilityManager();
+    let splitEnabled = false;
+    const getSplitFrequency = vi.fn().mockResolvedValue(14_275_000);
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      getSplitEnabled: vi.fn().mockImplementation(async () => splitEnabled),
+      setSplitEnabled: vi.fn().mockImplementation(async (value: boolean) => {
+        splitEnabled = value;
+      }),
+      getSplitFrequency,
+      setSplitFrequency: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+    await expect(manager.writeCapability('split_enabled', true)).resolves.toBeUndefined();
+
+    expect(getCapability(manager.getCapabilityStates(), 'split_enabled')).toMatchObject({
+      id: 'split_enabled',
+      value: true,
+      meta: {
+        txFrequency: 14_275_000,
+        txFrequencyWritable: true,
+      },
+    });
+    expect(getSplitFrequency).toHaveBeenCalled();
+
+    manager.onDisconnected();
+  });
+
+  it('keeps split_enabled available without TX frequency controls when the connection cannot read TX frequency', async () => {
+    const manager = new RadioCapabilityManager();
+    const connection = new MockConnection(RadioConnectionType.ICOM_WLAN, {
+      getSplitEnabled: vi.fn().mockResolvedValue(true),
+      setSplitEnabled: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+
+    expect(getCapability(manager.getCapabilityStates(), 'split_enabled')).toMatchObject({
+      id: 'split_enabled',
+      supported: true,
+      value: true,
+      meta: {
+        txFrequency: null,
+        txFrequencyWritable: false,
+      },
+    });
+
+    manager.onDisconnected();
   });
 
   it('allows rf_power percent writes even when Hamlib discrete steps are present', async () => {

@@ -62,7 +62,14 @@
     "setFailed": "Set failed",
     "recorded": "📝 Frequency recorded",
     "recordedDetail": "{{message}} (radio not connected)",
-    "confirm": "Confirm"
+    "confirm": "Confirm",
+    "splitSettingsTitle": "Frequency settings",
+    "splitSettingsAria": "Open frequency settings",
+    "splitLabelFallback": "Split",
+    "splitUnsupported": "Radio does not support Split.",
+    "splitDetecting": "Waiting for radio capability detection.",
+    "splitPermissionRequired": "No permission to control radio capabilities.",
+    "splitReadOnly": "Split is read-only on this radio."
   },
   "audioSidecar": {
     "popoverTitle": "Audio system",

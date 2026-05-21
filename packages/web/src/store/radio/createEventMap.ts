@@ -92,6 +92,18 @@ function isValidSlotPackPayload(data: unknown): data is SlotPack {
     && slotPack.endMs >= slotPack.startMs;
 }
 
+function getSplitStatePayload(capability: CapabilityState): { enabled: boolean; txFrequency: number | null; txFrequencyWritable: boolean } {
+  const enabled = typeof capability.value === 'boolean' ? capability.value : false;
+  const meta = capability.meta as { txFrequency?: unknown; txFrequencyWritable?: unknown } | undefined;
+  const txFrequency = typeof meta?.txFrequency === 'number' && Number.isFinite(meta.txFrequency) && meta.txFrequency > 0
+    ? meta.txFrequency
+    : null;
+  const txFrequencyWritable = meta?.txFrequencyWritable === undefined
+    ? txFrequency !== null
+    : meta.txFrequencyWritable === true;
+  return { enabled, txFrequency, txFrequencyWritable };
+}
+
 interface SpectrumNegotiationBridge {
   applySpectrumSelection: (capabilities: SpectrumCapabilities) => void;
   applyProfileDrivenSpectrumNegotiation: (profileId: string | null, clearSpectrumState: boolean) => void;
@@ -712,11 +724,22 @@ export function createRadioEventMap({
         stateCount: listData.capabilities.length,
       });
       radioDispatch({ type: 'setCapabilityList', payload: listData });
+
+      // Sync split state from capability snapshot
+      const splitCap = listData.capabilities.find(c => c.id === 'split_enabled');
+      if (splitCap) {
+        radioDispatch({ type: 'splitStateChanged', payload: getSplitStatePayload(splitCap) });
+      }
     },
     radioCapabilityChanged: (data: unknown) => {
       const state = data as CapabilityState;
       logger.debug('Radio capability changed', { id: state.id, value: state.value });
       radioDispatch({ type: 'updateCapabilityState', payload: state });
+
+      // Sync split state to dedicated radio state fields
+      if (state.id === 'split_enabled') {
+        radioDispatch({ type: 'splitStateChanged', payload: getSplitStatePayload(state) });
+      }
     },
     audioSidecarStatusChanged: (data: unknown) => {
       const payload = data as AudioSidecarStatusPayload;

@@ -62,7 +62,14 @@
     "setFailed": "设置失败",
     "recorded": "📝 频率已记录",
     "recordedDetail": "{{message}} (电台未连接)",
-    "confirm": "确认"
+    "confirm": "确认",
+    "splitSettingsTitle": "频率设置",
+    "splitSettingsAria": "打开频率设置",
+    "splitLabelFallback": "Split",
+    "splitUnsupported": "当前电台不支持 Split。",
+    "splitDetecting": "正在等待电台能力检测。",
+    "splitPermissionRequired": "没有权限控制电台能力。",
+    "splitReadOnly": "当前电台的 Split 只读。"
   },
   "audioSidecar": {
     "popoverTitle": "音频系统",

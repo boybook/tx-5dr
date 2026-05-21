@@ -2983,7 +2983,6 @@ export class HamlibConnection
         ),
       ]);
 
-      await this.syncSplitFrequencyIfNeeded(frequency);
       this.lastSuccessfulOperation = Date.now();
       this.currentFrequencyHz = frequency;
       logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
@@ -3018,6 +3017,21 @@ export class HamlibConnection
         resolvedMode,
         intent: options?.intent ?? 'unspecified',
       });
+
+      // Split mode sync: keep TX VFO mode consistent with RX VFO
+      if (await this.isSplitEnabled()) {
+        try {
+          await Promise.race([
+            this.rig!.setSplitMode(resolvedMode as any),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Set split mode timeout')), 5000)
+            ),
+          ]);
+          logger.debug(`Split TX mode synced to ${resolvedMode}`);
+        } catch (syncError) {
+          logger.warn(`Split TX mode sync failed: ${this.getErrorMessage(syncError)}`);
+        }
+      }
 
       return previousMode !== this.currentRadioMode;
     } catch (error) {
@@ -3069,43 +3083,15 @@ export class HamlibConnection
     }
   }
 
-  private async syncSplitFrequencyIfNeeded(frequency: number): Promise<void> {
-    const splitEnabled = await this.isSplitEnabled();
-
-    if (!splitEnabled) {
-      return;
-    }
-
-    try {
-      await Promise.race([
-        this.rig!.setSplitFreq(frequency),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Set split frequency timeout')), 5000)
-        ),
-      ]);
-
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`Split TX frequency synchronized: ${(frequency / 1000000).toFixed(3)} MHz`);
-    } catch (error) {
-      logger.warn(`Split TX frequency sync failed: ${this.getErrorMessage(error)}`, {
-        frequency,
-      });
-    }
-  }
-
   private async isSplitEnabled(): Promise<boolean> {
-    if (this.splitSupportState === 'supported') {
-      return this.splitEnabled;
-    }
-
     if (this.splitSupportState === 'unsupported') {
       return false;
     }
 
-    return this.probeSplitStatus();
+    return (await this.readSplitStatus()).enabled;
   }
 
-  private async probeSplitStatus(): Promise<boolean> {
+  private async readSplitStatus(): Promise<{ enabled: boolean; txVfo?: string }> {
     if (!this.rig) {
       throw new Error('Radio instance not initialized');
     }
@@ -3121,18 +3107,224 @@ export class HamlibConnection
       this.lastSuccessfulOperation = Date.now();
       this.splitSupportState = 'supported';
       this.splitEnabled = Boolean(splitStatus?.enabled);
+      const txVfo = typeof splitStatus?.txVfo === 'string' ? splitStatus.txVfo : undefined;
+      logger.info('Hamlib Split live status read', {
+        enabled: this.splitEnabled,
+        txVfo,
+      });
       logger.debug(`Split status detected via getSplit: ${this.splitEnabled ? 'enabled' : 'disabled'}`);
-      return this.splitEnabled;
+      return { enabled: this.splitEnabled, txVfo };
     } catch (error) {
       if (isRecoverableOptionalRadioError(error)) {
         this.splitSupportState = 'unsupported';
         this.splitEnabled = false;
+        logger.info('Hamlib Split live status read unavailable', {
+          error: this.getErrorMessage(error),
+        });
         logger.debug(`Split status probe unavailable: ${this.getErrorMessage(error)}`);
-        return false;
+        return { enabled: false };
       }
 
-      logger.warn(`Failed to probe split status: ${this.getErrorMessage(error)}`);
-      return false;
+      logger.warn('Hamlib Split live status read failed', {
+        error: this.getErrorMessage(error),
+      });
+      return { enabled: false };
+    }
+  }
+
+  private getSplitTxVfoCandidates(txVfo?: string | null): string[] {
+    const candidates: string[] = [];
+    const normalizedTxVfo = typeof txVfo === 'string' ? txVfo.trim() : '';
+
+    if (
+      normalizedTxVfo
+      && !['currvfo', 'vfo', 'unknown', 'none'].includes(normalizedTxVfo.toLowerCase())
+    ) {
+      candidates.push(normalizedTxVfo);
+    }
+
+    // IC-705/Hamlib reports split TX as otherVFO, while node-hamlib also
+    // exposes the broader "Other" token. Try both before falling back.
+    candidates.push('Other', 'otherVFO');
+
+    return Array.from(new Set(candidates));
+  }
+
+  private async setSplitEnabledDirect(enabled: boolean): Promise<void> {
+    if (enabled) {
+      let lastExplicitError: unknown;
+      for (const txVfo of this.getSplitTxVfoCandidates()) {
+        try {
+          await Promise.race([
+            this.rig!.setSplit(true, 'currVFO', txVfo as Parameters<HamLib['setSplit']>[2]),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Set split timeout')), 5000)
+            ),
+          ]);
+          return;
+        } catch (error) {
+          lastExplicitError = error;
+          logger.debug('Failed to enable Split with explicit TX VFO candidate', {
+            txVfo,
+            error: this.getErrorMessage(error),
+          });
+        }
+      }
+
+      logger.warn('Failed to enable Split with explicit TX VFO; falling back to default Split enable', {
+        error: this.getErrorMessage(lastExplicitError),
+      });
+    }
+
+    await Promise.race([
+      this.rig!.setSplit(enabled),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Set split timeout')), 5000)
+      ),
+    ]);
+  }
+
+  private async readSplitFrequencyForVfo(vfo?: string): Promise<number> {
+    const read = vfo
+      ? this.rig!.getSplitFreq(vfo as Parameters<HamLib['getSplitFreq']>[0])
+      : this.rig!.getSplitFreq();
+
+    return (await Promise.race([
+      read,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Get split freq timeout')), 5000)
+      ),
+    ])) as number;
+  }
+
+  private async writeSplitFrequencyForVfo(txFrequency: number, vfo?: string): Promise<void> {
+    const write = vfo
+      ? this.rig!.setSplitFreq(txFrequency, vfo as Parameters<HamLib['setSplitFreq']>[1])
+      : this.rig!.setSplitFreq(txFrequency);
+
+    await Promise.race([
+      write,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Set split freq timeout')), 5000)
+      ),
+    ]);
+  }
+
+  // ===== Public split interface (IRadioConnection) =====
+
+  async getSplitEnabled(): Promise<boolean> {
+    return this.runSerializedTask('getSplitEnabled', async () => this.isSplitEnabled(), { id: 'getSplitEnabled' });
+  }
+
+  async setSplitEnabled(enabled: boolean): Promise<void> {
+    await this.runSerializedTask('setSplitEnabled', async () => {
+      this.checkConnected();
+
+      try {
+        await this.setSplitEnabledDirect(enabled);
+
+        this.lastSuccessfulOperation = Date.now();
+        this.splitSupportState = 'supported';
+        this.splitEnabled = enabled;
+        logger.debug(`Split ${enabled ? 'enabled' : 'disabled'}`);
+      } catch (error) {
+        if (isRecoverableOptionalRadioError(error)) {
+          this.splitSupportState = 'unsupported';
+          this.splitEnabled = false;
+        }
+        throw this.convertError(error, 'setSplitEnabled');
+      }
+    }, { critical: true });
+  }
+
+  async getSplitFrequency(): Promise<number | null> {
+    return this.runSerializedTask('getSplitFrequency', async () => {
+      this.checkConnected();
+
+      const splitStatus = await this.readSplitStatus();
+      if (!splitStatus.enabled) {
+        logger.info('Hamlib Split TX frequency read skipped because Split is disabled');
+        return null;
+      }
+
+      let lastError: unknown;
+      for (const txVfo of this.getSplitTxVfoCandidates(splitStatus.txVfo)) {
+        try {
+          const txFreq = await this.readSplitFrequencyForVfo(txVfo);
+          logger.info('Hamlib Split TX frequency read', {
+            txFrequency: txFreq,
+            txVfo,
+          });
+
+          if (Number.isFinite(txFreq) && txFreq > 0) {
+            this.lastSuccessfulOperation = Date.now();
+            return txFreq;
+          }
+        } catch (error) {
+          lastError = error;
+          logger.debug('Failed to read Split TX frequency for VFO candidate', {
+            txVfo,
+            error: this.getErrorMessage(error),
+          });
+        }
+      }
+
+      if (lastError) {
+        logger.warn('Hamlib Split TX frequency read failed for all VFO candidates', {
+          error: this.getErrorMessage(lastError),
+          txVfo: splitStatus.txVfo,
+        });
+      } else {
+        logger.info('Hamlib Split TX frequency read returned no usable frequency', {
+          txVfo: splitStatus.txVfo,
+        });
+      }
+      return null;
+    }, { id: 'getSplitFrequency' });
+  }
+
+  async setSplitFrequency(txFrequency: number): Promise<void> {
+    await this.runSerializedTask('setSplitFrequency', async () => {
+      this.checkConnected();
+
+      const splitStatus = await this.readSplitStatus();
+      const txVfoCandidates = this.getSplitTxVfoCandidates(splitStatus.txVfo);
+      let lastError: unknown;
+
+      for (const txVfo of txVfoCandidates) {
+        try {
+          await this.writeSplitFrequencyForVfo(txFrequency, txVfo);
+          this.lastSuccessfulOperation = Date.now();
+          logger.debug(`Split TX frequency set: ${(txFrequency / 1000000).toFixed(3)} MHz`);
+          return;
+        } catch (error) {
+          lastError = error;
+          logger.debug('Failed to write Split TX frequency for VFO candidate', {
+            txVfo,
+            error: this.getErrorMessage(error),
+          });
+        }
+      }
+
+      throw this.convertError(lastError ?? new Error('No usable Split TX VFO candidate'), 'setSplitFrequency');
+    }, { critical: true });
+  }
+
+  async setSplitFreqMode(txFrequency: number, txMode: string, txWidth: number): Promise<void> {
+    this.checkConnected();
+
+    try {
+      await Promise.race([
+        this.rig!.setSplitFreqMode(txFrequency, txMode as any, txWidth),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Set split freq/mode timeout')), 5000)
+        ),
+      ]);
+
+      this.lastSuccessfulOperation = Date.now();
+      logger.debug(`Split TX freq/mode set: ${(txFrequency / 1000000).toFixed(3)} MHz ${txMode} ${txWidth}Hz`);
+    } catch (error) {
+      throw this.convertError(error, 'setSplitFreqMode');
     }
   }
 

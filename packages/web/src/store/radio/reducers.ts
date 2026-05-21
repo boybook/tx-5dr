@@ -169,6 +169,9 @@ export const initialRadioState: RadioState = {
   audioSidecar: null,
   cwKeyerStatus: null,
   cwConfig: null,
+  splitEnabled: false,
+  splitTxFrequency: null,
+  splitTxFrequencyWritable: false,
 };
 
 export function radioReducer(state: RadioState, action: RadioAction): RadioState {
@@ -364,6 +367,14 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
       return {
         ...state,
         cwConfig: action.payload,
+      };
+
+    case 'splitStateChanged':
+      return {
+        ...state,
+        splitEnabled: action.payload.enabled,
+        splitTxFrequency: action.payload.txFrequency,
+        splitTxFrequencyWritable: action.payload.txFrequencyWritable,
       };
 
     case 'pttStatusChanged':

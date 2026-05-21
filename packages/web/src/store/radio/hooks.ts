@@ -190,6 +190,16 @@ export const useCapabilityStates = (): Map<string, CapabilityState> => {
   return context;
 };
 
+export const useSplitState = () => {
+  const radio = useContext(RadioStateContext);
+  if (!radio) throw new Error('useSplitState must be used within RadioProvider');
+  return {
+    splitEnabled: radio.state.splitEnabled,
+    splitTxFrequency: radio.state.splitTxFrequency,
+    splitTxFrequencyWritable: radio.state.splitTxFrequencyWritable,
+  };
+};
+
 export const useMyRelatedTimeline = () => {
   const context = useContext(MyRelatedTimelineContext);
   if (!context) throw new Error('useMyRelatedTimeline must be used within RadioProvider');

@@ -22,7 +22,7 @@ import { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { RepeaterDuplexApplyResult, RepeaterDuplexConfig, ToneSquelchApplyResult, ToneSquelchConfig } from '../radio/PhysicalRadioManager.js';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
 import { CWKeyerHardware } from '../cw/CWKeyerHardware.js';
-import type { SetRadioModeOptions } from '../radio/connections/IRadioConnection.js';
+import type { ApplyOperatingStateRequest, SetRadioModeOptions } from '../radio/connections/IRadioConnection.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { normalizeHamlibConfig } from '../radio/hamlibConfigUtils.js';
@@ -90,6 +90,47 @@ function inferModeOptions(appMode: string | undefined, engineMode: 'digital' | '
   return { intent: engineMode === 'voice' ? 'voice' : engineMode === 'cw' ? 'cw' : 'digital' };
 }
 
+export function buildFrequencyOperatingStateRequest({
+  frequency,
+  radioMode,
+  effectiveMode,
+  engineMode,
+}: {
+  frequency: number;
+  radioMode?: string;
+  effectiveMode?: string;
+  engineMode: 'digital' | 'voice' | 'cw';
+}): ApplyOperatingStateRequest {
+  const request: ApplyOperatingStateRequest = {
+    frequency,
+    tolerateModeFailure: true,
+  };
+
+  if (typeof radioMode === 'string' && radioMode.trim().length > 0) {
+    request.mode = radioMode;
+    request.bandwidth = 'nochange';
+    request.options = inferModeOptions(effectiveMode, engineMode);
+  }
+
+  return request;
+}
+
+function hasNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function normalizeRadioMode(value: unknown): string | undefined {
+  return hasNonEmptyString(value) ? value.trim() : undefined;
+}
+
+function hasExplicitFmAuxField(...values: unknown[]): boolean {
+  return values.some((value) => {
+    if (value === undefined || value === null) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    return true;
+  });
+}
+
 function parseRepeaterDuplexConfig(repeaterShift: unknown, repeaterOffsetHz: unknown): RepeaterDuplexConfig {
   const shift = repeaterShift === undefined || repeaterShift === null || repeaterShift === ''
     ? 'none'
@@ -121,6 +162,48 @@ function parseRepeaterDuplexConfig(repeaterShift: unknown, repeaterOffsetHz: unk
   }
 
   return { repeaterShift: shift, repeaterOffsetHz: Math.round(offset) };
+}
+
+export function buildFrequencyAuxControlPlan({
+  effectiveMode,
+  radioMode,
+  repeaterShift,
+  repeaterOffsetHz,
+  toneMode,
+  ctcssToneTenthsHz,
+  dcsCode,
+}: {
+  effectiveMode?: string;
+  radioMode?: string;
+  repeaterShift?: unknown;
+  repeaterOffsetHz?: unknown;
+  toneMode?: unknown;
+  ctcssToneTenthsHz?: unknown;
+  dcsCode?: unknown;
+}): {
+  shouldApply: boolean;
+  repeaterDuplex?: RepeaterDuplexConfig;
+  toneSquelch?: ToneSquelchConfig;
+} {
+  const normalizedRadioMode = normalizeRadioMode(radioMode);
+  const isVoiceFmRequest = effectiveMode === 'VOICE' && normalizedRadioMode?.toUpperCase() === 'FM';
+  const hasAuxPayload = hasExplicitFmAuxField(
+    repeaterShift,
+    repeaterOffsetHz,
+    toneMode,
+    ctcssToneTenthsHz,
+    dcsCode,
+  );
+
+  if (!isVoiceFmRequest || !hasAuxPayload) {
+    return { shouldApply: false };
+  }
+
+  return {
+    shouldApply: true,
+    repeaterDuplex: parseRepeaterDuplexConfig(repeaterShift, repeaterOffsetHz),
+    toneSquelch: parseToneSquelchConfig(toneMode, ctcssToneTenthsHz, dcsCode),
+  };
 }
 
 function emitRepeaterDuplexWarning(
@@ -388,14 +471,18 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
     const effectiveMode = mode
       || (engine.getEngineMode() === 'voice' ? 'VOICE' : engine.getEngineMode() === 'cw' ? 'CW' : 'FT8');
-    const isVoiceFrequencyRequest = effectiveMode === 'VOICE';
-    const isVoiceFmFrequencyRequest = isVoiceFrequencyRequest && radioMode?.toUpperCase() === 'FM';
-    const repeaterDuplexToApply: RepeaterDuplexConfig = isVoiceFmFrequencyRequest
-      ? parseRepeaterDuplexConfig(repeaterShift, repeaterOffsetHz)
-      : { repeaterShift: 'none' };
-    const toneSquelchToApply: ToneSquelchConfig = isVoiceFmFrequencyRequest
-      ? parseToneSquelchConfig(toneMode, ctcssToneTenthsHz, dcsCode)
-      : { toneMode: 'none' };
+    const normalizedRadioMode = normalizeRadioMode(radioMode);
+    const auxControlPlan = buildFrequencyAuxControlPlan({
+      effectiveMode,
+      radioMode: normalizedRadioMode,
+      repeaterShift,
+      repeaterOffsetHz,
+      toneMode,
+      ctcssToneTenthsHz,
+      dcsCode,
+    });
+    const repeaterDuplexToApply = auxControlPlan.repeaterDuplex;
+    const toneSquelchToApply = auxControlPlan.toneSquelch;
 
     // 获取当前频率配置，用于判断是否真正改变
     const lastFrequency = effectiveMode === 'VOICE'
@@ -421,31 +508,41 @@ export async function radioRoutes(fastify: FastifyInstance) {
     if (effectiveMode && band) {
       try {
         if (effectiveMode === 'VOICE') {
+          const previousVoiceFrequency = configManager.getLastVoiceFrequency();
           await configManager.updateLastVoiceFrequency({
+            ...(previousVoiceFrequency ?? {}),
             frequency,
-            radioMode,
             band,
             description,
-            repeaterShift: repeaterDuplexToApply.repeaterShift,
-            repeaterOffsetHz: repeaterDuplexToApply.repeaterOffsetHz,
-            toneMode: toneSquelchToApply.toneMode,
-            ctcssToneTenthsHz: toneSquelchToApply.ctcssToneTenthsHz,
-            dcsCode: toneSquelchToApply.dcsCode,
+            ...(normalizedRadioMode ? { radioMode: normalizedRadioMode } : {}),
+            ...(repeaterDuplexToApply ? {
+              repeaterShift: repeaterDuplexToApply.repeaterShift,
+              repeaterOffsetHz: repeaterDuplexToApply.repeaterOffsetHz,
+            } : {}),
+            ...(toneSquelchToApply ? {
+              toneMode: toneSquelchToApply.toneMode,
+              ctcssToneTenthsHz: toneSquelchToApply.ctcssToneTenthsHz,
+              dcsCode: toneSquelchToApply.dcsCode,
+            } : {}),
           });
         } else if (effectiveMode === 'CW') {
+          const previousCWFrequency = configManager.getLastCWFrequency();
           await configManager.updateLastCWFrequency({
+            ...(previousCWFrequency ?? {}),
             frequency,
-            radioMode,
             band,
             description,
+            ...(normalizedRadioMode ? { radioMode: normalizedRadioMode } : {}),
           });
         } else {
+          const previousFrequency = configManager.getLastSelectedFrequency();
           await configManager.updateLastSelectedFrequency({
+            ...(previousFrequency ?? {}),
             frequency,
             mode: effectiveMode,
-            radioMode,
             band,
-            description
+            description,
+            ...(normalizedRadioMode ? { radioMode: normalizedRadioMode } : {}),
           });
         }
       } catch (configError) {
@@ -458,43 +555,44 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
     if (!radioConnected) {
       // 电台未连接时，只记录频率但不实际设置
-      logger.debug(`Radio not connected, recording frequency: ${(frequency / 1000000).toFixed(3)} MHz${radioMode ? ` (${radioMode})` : ''}`);
+      logger.debug(`Radio not connected, recording frequency: ${(frequency / 1000000).toFixed(3)} MHz${normalizedRadioMode ? ` (${normalizedRadioMode})` : ''}`);
 
       // 只有在频率真正改变时才广播
       if (isFrequencyChanged) {
-      engine.emit('frequencyChanged', {
-        frequency,
-        mode: effectiveMode,
-        band: band || '',
-        description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
-        radioMode,
-        radioConnected: false,
-        source: 'program',
-      });
+        engine.emit('frequencyChanged', {
+          frequency,
+          mode: effectiveMode,
+          band: band || '',
+          description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
+          radioMode: normalizedRadioMode,
+          radioConnected: false,
+          source: 'program',
+        });
       }
 
       return reply.send({
         success: true,
         frequency,
-        radioMode,
-        repeaterShift: repeaterDuplexToApply.repeaterShift,
-        repeaterOffsetHz: repeaterDuplexToApply.repeaterOffsetHz,
-        toneMode: toneSquelchToApply.toneMode,
-        ctcssToneTenthsHz: toneSquelchToApply.ctcssToneTenthsHz,
-        dcsCode: toneSquelchToApply.dcsCode,
+        radioMode: normalizedRadioMode,
+        repeaterShift: repeaterDuplexToApply?.repeaterShift,
+        repeaterOffsetHz: repeaterDuplexToApply?.repeaterOffsetHz,
+        toneMode: toneSquelchToApply?.toneMode,
+        ctcssToneTenthsHz: toneSquelchToApply?.ctcssToneTenthsHz,
+        dcsCode: toneSquelchToApply?.dcsCode,
         message: 'Frequency recorded (radio not connected)',
         radioConnected: false
       });
     }
 
     // 在同一个关键区间内切换频率/模式，避免被后台轮询插入。
-    const applyResult = await radioManager.applyOperatingState({
+    const operatingStateRequest = buildFrequencyOperatingStateRequest({
       frequency,
-      mode: radioMode,
-      bandwidth: radioMode ? 'nochange' : undefined,
-      options: radioMode ? inferModeOptions(effectiveMode, engine.getEngineMode()) : undefined,
-      tolerateModeFailure: true,
+      radioMode: normalizedRadioMode,
+      effectiveMode,
+      engineMode: engine.getEngineMode(),
     });
+
+    const applyResult = await radioManager.applyOperatingState(operatingStateRequest);
     const frequencySuccess = applyResult.frequencyApplied;
 
     if (!frequencySuccess) {
@@ -516,14 +614,16 @@ export async function radioRoutes(fastify: FastifyInstance) {
       // 模式设置失败不影响频率设置的成功
     }
 
-    const repeaterDuplexResult = await radioManager.applyRepeaterDuplexConfig(repeaterDuplexToApply);
-    if (repeaterDuplexToApply.repeaterShift !== 'none') {
-      emitRepeaterDuplexWarning(engine, repeaterDuplexResult, frequency);
-    }
+    if (auxControlPlan.shouldApply && repeaterDuplexToApply && toneSquelchToApply) {
+      const repeaterDuplexResult = await radioManager.applyRepeaterDuplexConfig(repeaterDuplexToApply);
+      if (repeaterDuplexToApply.repeaterShift !== 'none') {
+        emitRepeaterDuplexWarning(engine, repeaterDuplexResult, frequency);
+      }
 
-    const toneSquelchResult = await radioManager.applyToneSquelchConfig(toneSquelchToApply);
-    if (toneSquelchToApply.toneMode !== 'none') {
-      emitToneSquelchWarning(engine, toneSquelchResult, frequency);
+      const toneSquelchResult = await radioManager.applyToneSquelchConfig(toneSquelchToApply);
+      if (toneSquelchToApply.toneMode !== 'none') {
+        emitToneSquelchWarning(engine, toneSquelchResult, frequency);
+      }
     }
 
     // 只有在频率真正改变时才清空缓存和广播
@@ -542,7 +642,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
         mode: effectiveMode,
         band: band || '',
         description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
-        radioMode,
+        radioMode: normalizedRadioMode,
         radioConnected: true,
         source: 'program',
       });
@@ -551,13 +651,13 @@ export async function radioRoutes(fastify: FastifyInstance) {
     return reply.send({
       success: true,
       frequency,
-      radioMode,
-      repeaterShift: repeaterDuplexToApply.repeaterShift,
-      repeaterOffsetHz: repeaterDuplexToApply.repeaterOffsetHz,
-      toneMode: toneSquelchToApply.toneMode,
-      ctcssToneTenthsHz: toneSquelchToApply.ctcssToneTenthsHz,
-      dcsCode: toneSquelchToApply.dcsCode,
-      message: radioMode ? `Frequency and mode set successfully (${radioMode})` : 'Frequency set successfully',
+      radioMode: normalizedRadioMode,
+      repeaterShift: repeaterDuplexToApply?.repeaterShift,
+      repeaterOffsetHz: repeaterDuplexToApply?.repeaterOffsetHz,
+      toneMode: toneSquelchToApply?.toneMode,
+      ctcssToneTenthsHz: toneSquelchToApply?.ctcssToneTenthsHz,
+      dcsCode: toneSquelchToApply?.dcsCode,
+      message: normalizedRadioMode ? `Frequency and mode set successfully (${normalizedRadioMode})` : 'Frequency set successfully',
       radioConnected: true
     });
   });

@@ -185,6 +185,42 @@ describe('WSServer security filtering', () => {
     }));
   });
 
+  it('sends a failure receipt for invalid Split TX frequency payloads', async () => {
+    const sendToConnection = vi.fn();
+    const server = Object.create(WSServer.prototype) as any;
+    server.sendToConnection = sendToConnection;
+    server.digitalRadioEngine = {
+      getRadioManager: () => ({
+        setSplitFrequency: vi.fn(),
+      }),
+    };
+
+    await (server as any).handleSetSplitFrequency('conn-1', { txFrequency: Number.POSITIVE_INFINITY });
+
+    expect(sendToConnection).toHaveBeenCalledWith('conn-1', WSMessageType.ERROR, expect.objectContaining({
+      code: 'SPLIT_FREQUENCY_FAILED',
+      context: { command: WSMessageType.SET_SPLIT_FREQUENCY },
+    }));
+  });
+
+  it('sends a failure receipt when Split TX frequency control is unsupported', async () => {
+    const sendToConnection = vi.fn();
+    const server = Object.create(WSServer.prototype) as any;
+    server.sendToConnection = sendToConnection;
+    server.digitalRadioEngine = {
+      getRadioManager: () => ({
+        setSplitFrequency: vi.fn().mockRejectedValue(new Error('Split frequency control not supported')),
+      }),
+    };
+
+    await (server as any).handleSetSplitFrequency('conn-1', { txFrequency: 14_275_000 });
+
+    expect(sendToConnection).toHaveBeenCalledWith('conn-1', WSMessageType.ERROR, expect.objectContaining({
+      code: 'SPLIT_FREQUENCY_FAILED',
+      message: expect.stringContaining('Split frequency control not supported'),
+    }));
+  });
+
   it('redacts operator identity from public slot packs and tx logs', async () => {
     const { connection, sent } = createTestConnection('conn-public');
     connection.setPublicViewer();

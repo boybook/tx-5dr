@@ -22,7 +22,10 @@
     "confirm": "确认",
     "switchSuccess": "频率切换成功",
     "switchFailed": "频率切换失败",
-    "switched": "已切换到 {{freq}} MHz"
+    "switched": "已切换到 {{freq}} MHz",
+    "rxLabel": "RX",
+    "txLabel": "TX",
+    "txPending": "同步中"
   },
   "radioMode": {
     "title": "电台模式",

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
-import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, TuneToneStartPayloadSchema, type AppAction, type AppSubject } from '@tx5dr/contracts';
+import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, SetSplitFrequencyPayloadSchema, TuneToneStartPayloadSchema, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type {
   ClockStatusSummary,
   DecodeErrorInfo,
@@ -419,6 +419,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.AUDIO_RETRY_NOW]: () => this.handleAudioRetryNow(),
       [WSMessageType.WRITE_RADIO_CAPABILITY]: (data, id) => this.handleWriteRadioCapability(id, data),
       [WSMessageType.REFRESH_RADIO_CAPABILITIES]: () => this.handleRefreshRadioCapabilities(),
+      [WSMessageType.SET_SPLIT_FREQUENCY]: (data, id) => this.handleSetSplitFrequency(id, data),
       [WSMessageType.FORCE_STOP_TRANSMISSION]: () => this.handleForceStopTransmission(),
       [WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION]: (data) => this.handleRemoveOperatorFromTransmission(data),
       [WSMessageType.START_TUNE_TONE]: (data, id) => this.handleStartTuneTone(id, data),
@@ -793,6 +794,7 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.FORCE_STOP_TRANSMISSION]: { ability: { action: 'execute', subject: 'Engine' } },
     [WSMessageType.WRITE_RADIO_CAPABILITY]: { ability: { action: 'execute', subject: 'RadioControl' } },
     [WSMessageType.REFRESH_RADIO_CAPABILITIES]: { ability: { action: 'execute', subject: 'RadioControl' } },
+    [WSMessageType.SET_SPLIT_FREQUENCY]: { ability: { action: 'execute', subject: 'RadioFrequency' } },
     [WSMessageType.START_TUNE_TONE]: { ability: { action: 'execute', subject: 'RadioControl' } },
     [WSMessageType.STOP_TUNE_TONE]: { ability: { action: 'execute', subject: 'RadioControl' } },
     [WSMessageType.INVOKE_SPECTRUM_CONTROL]: { ability: { action: 'execute', subject: 'RadioControl' }, requiresHandshake: true },
@@ -2475,6 +2477,22 @@ export class WSServer extends WSMessageHandler {
       await radioManager.refreshCapabilities();
     } catch (error) {
       logger.error('refreshRadioCapabilities failed', error);
+    }
+  }
+
+  private async handleSetSplitFrequency(connectionId: string, data: unknown): Promise<void> {
+    try {
+      const { txFrequency } = SetSplitFrequencyPayloadSchema.parse(data);
+      logger.info('setSplitFrequency command', { txFrequency });
+      const radioManager = this.digitalRadioEngine.getRadioManager();
+      await radioManager.setSplitFrequency(txFrequency);
+    } catch (error) {
+      logger.error('setSplitFrequency failed', error);
+      this.sendToConnection(connectionId, WSMessageType.ERROR, {
+        message: `Failed to set split TX frequency: ${(error as Error).message}`,
+        code: 'SPLIT_FREQUENCY_FAILED',
+        context: { command: WSMessageType.SET_SPLIT_FREQUENCY },
+      });
     }
   }
 

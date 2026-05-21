@@ -861,7 +861,32 @@ function createDefinitions(): CapabilityDefinition[] {
       read: (conn) => conn.getModeBandwidth!(),
       write: (conn, value) => conn.setModeBandwidth!(value as RadioModeBandwidth),
     },
-    createRuntimeBooleanDefinition('split_enabled', 'operation', 'getSplitEnabled', 'setSplitEnabled'),
+    {
+      ...createRuntimeBooleanDefinition('split_enabled', 'operation', 'getSplitEnabled', 'setSplitEnabled', undefined, {
+        pollIntervalMs: 2000,
+      }),
+      readMeta: async (conn) => {
+        const canReadTxFrequency = typeof conn.getSplitFrequency === 'function';
+        const canWriteTxFrequency = typeof conn.setSplitFrequency === 'function';
+        const txFrequencyWritable = canReadTxFrequency && canWriteTxFrequency;
+
+        if (!canReadTxFrequency) {
+          return { txFrequency: null, txFrequencyWritable };
+        }
+
+        try {
+          const txFrequency = await conn.getSplitFrequency!();
+          return {
+            txFrequency: typeof txFrequency === 'number' && Number.isFinite(txFrequency) && txFrequency > 0
+              ? txFrequency
+              : null,
+            txFrequencyWritable,
+          };
+        } catch {
+          return { txFrequency: null, txFrequencyWritable };
+        }
+      },
+    },
     createRuntimeEnumDefinition(
       'vfo_select',
       'operation',

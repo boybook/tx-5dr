@@ -3,13 +3,15 @@ import { Card, CardBody } from '@heroui/react';
 import { api, ApiError, getBandFromFrequency } from '@tx5dr/core';
 import { useTranslation } from 'react-i18next';
 import { useAbility, useAuth, useCan } from '../../store/authStore';
-import { useConnection, useOperators, useRadioConnectionState, useRadioState } from '../../store/radioStore';
+import { useConnection, useOperators, useRadioConnectionState, useRadioState, useSplitState } from '../../store/radioStore';
 import { createLogger } from '../../utils/logger';
 import { canExecuteRadioFrequency, canWriteRadioFrequency } from '../../utils/radioControl';
 import { resetOperatorsForOperatingStateChange } from '../../utils/operatorReset';
 import { showErrorToast } from '../../utils/errorToast';
 import { setRadioFrequencyWithIntent } from '../../utils/radioFrequencyIntent';
 import { FrequencyDigit } from '../radio/frequency/FrequencyDigit';
+import { SPLIT_FREQUENCY_ROW_CLASS, SplitFrequencyLayout } from '../radio/frequency/SplitFrequencyLayout';
+import { SplitSettingsPopover } from '../radio/frequency/SplitSettingsPopover';
 
 const logger = createLogger('CWFrequencyControl');
 const DEFAULT_CW_FREQUENCY = 14_000_000;
@@ -79,6 +81,28 @@ export const CWFrequencyControl: React.FC = () => {
   const pendingFreqRef = React.useRef<{ intendedFrequency: number; sentAt: number } | null>(null);
   const freqDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Split state
+  const { splitEnabled, splitTxFrequency, splitTxFrequencyWritable } = useSplitState();
+  const showSplitFrequencyControls = splitEnabled;
+  const [currentTxFrequency, setCurrentTxFrequency] = React.useState<number>(
+    splitTxFrequency && splitTxFrequency > 0 ? splitTxFrequency : 0,
+  );
+  const currentTxFrequencyRef = React.useRef(currentTxFrequency);
+  currentTxFrequencyRef.current = currentTxFrequency;
+  const canEditSplitTxFrequency = currentTxFrequency > 0;
+  const pendingTxFreqRef = React.useRef<{ intendedFrequency: number; sentAt: number } | null>(null);
+  const txFreqDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sync TX frequency from store when split state changes
+  React.useEffect(() => {
+    if (!splitEnabled) {
+      return;
+    }
+    if (splitTxFrequency && splitTxFrequency > 0) {
+      setCurrentTxFrequency(splitTxFrequency);
+    }
+  }, [splitEnabled, splitTxFrequency]);
+
   const resetOperatorsAfterOperatingStateChange = useCallback(() => {
     resetOperatorsForOperatingStateChange({
       operators,
@@ -116,7 +140,6 @@ export const CWFrequencyControl: React.FC = () => {
       const response = await setRadioFrequencyWithIntent({
         frequency: freq,
         mode: 'CW',
-        radioMode: 'CW',
         band,
         description,
       });
@@ -152,6 +175,10 @@ export const CWFrequencyControl: React.FC = () => {
     if (freqDebounceTimerRef.current) {
       clearTimeout(freqDebounceTimerRef.current);
       freqDebounceTimerRef.current = null;
+    }
+    if (txFreqDebounceTimerRef.current) {
+      clearTimeout(txFreqDebounceTimerRef.current);
+      txFreqDebounceTimerRef.current = null;
     }
   }, []);
 
@@ -196,6 +223,31 @@ export const CWFrequencyControl: React.FC = () => {
 
   const frequencyDigits = useMemo(() => buildFrequencyDigits(currentFrequency), [currentFrequency]);
 
+  const txFrequencyDigits = useMemo(() => buildFrequencyDigits(currentTxFrequency), [currentTxFrequency]);
+
+  const applyTxFrequency = useCallback((newFreq: number) => {
+    if (!canWriteFrequency || !splitTxFrequencyWritable || !connection.state.isConnected) {
+      pendingTxFreqRef.current = null;
+      return;
+    }
+
+    setCurrentTxFrequency(newFreq);
+    pendingTxFreqRef.current = { intendedFrequency: newFreq, sentAt: Date.now() };
+    if (txFreqDebounceTimerRef.current) {
+      clearTimeout(txFreqDebounceTimerRef.current);
+    }
+    txFreqDebounceTimerRef.current = setTimeout(() => {
+      txFreqDebounceTimerRef.current = null;
+      const pending = pendingTxFreqRef.current;
+      if (!pending) return;
+      pendingTxFreqRef.current = { intendedFrequency: pending.intendedFrequency, sentAt: Date.now() };
+      const wsClient = connection.state.radioService?.wsClientInstance;
+      if (wsClient) {
+        wsClient.setSplitFrequency(pending.intendedFrequency);
+      }
+    }, FREQ_DEBOUNCE_MS);
+  }, [canWriteFrequency, connection.state.isConnected, connection.state.radioService, splitTxFrequencyWritable]);
+
   const changeDigitAtPlace = useCallback((placeValue: number, delta: number) => {
     const freq = currentFrequencyRef.current;
     const newFreq = Math.max(0, freq + delta * placeValue);
@@ -213,36 +265,117 @@ export const CWFrequencyControl: React.FC = () => {
     applyFrequency(newFreq);
   }, [applyFrequency]);
 
+  const changeTxDigitAtPlace = useCallback((placeValue: number, delta: number) => {
+    const freq = currentTxFrequencyRef.current;
+    const newFreq = Math.max(0, freq + delta * placeValue);
+    if (newFreq < 1_000_000 || newFreq > 1_000_000_000) return;
+    applyTxFrequency(newFreq);
+  }, [applyTxFrequency]);
+
+  const setTxDigitAtPlace = useCallback((placeValue: number, newDigitValue: number) => {
+    const freq = Math.round(currentTxFrequencyRef.current);
+    const currentDigit = Math.floor(freq / placeValue) % 10;
+    const delta = newDigitValue - currentDigit;
+    if (delta === 0) return;
+    const newFreq = freq + delta * placeValue;
+    if (newFreq < 1_000_000 || newFreq > 1_000_000_000) return;
+    applyTxFrequency(newFreq);
+  }, [applyTxFrequency]);
+
   return (
-    <Card className="w-full flex-shrink-0 bg-default-50 dark:bg-default-100/50 border border-default-200 dark:border-default-100" shadow="none">
+    <Card className="relative w-full flex-shrink-0 bg-default-50 dark:bg-default-100/50 border border-default-200 dark:border-default-100" shadow="none">
+      <div className="absolute right-1 top-1 z-10">
+        <SplitSettingsPopover className="h-6 min-w-6" />
+      </div>
       <CardBody className="px-3 py-1.5">
-        <div className="flex items-center justify-center font-mono font-bold text-foreground">
-          <div className="min-w-0 shrink overflow-hidden flex justify-end" aria-hidden="true">
-            <span className="mr-2 translate-y-1 text-[11px] font-semibold text-default-400 invisible">{t('frequency.mhz')}</span>
+        {showSplitFrequencyControls ? (
+          <SplitFrequencyLayout>
+            {/* RX */}
+            <div className={SPLIT_FREQUENCY_ROW_CLASS}>
+              <span className="mr-2 text-[11px] font-semibold text-success-500">{t('frequency.rxLabel')}</span>
+              <div className="flex flex-none items-center justify-center">
+                {frequencyDigits.map((entry, i) => {
+                  if (entry.isSeparator) {
+                    return <span key={`cw-rx-sep-${i}`} className="mx-0.5 select-none text-2xl text-default-400">.</span>;
+                  }
+                  return (
+                    <FrequencyDigit
+                      key={`cw-rx-d-${i}`}
+                      digit={entry.char}
+                      placeValue={entry.placeValue}
+                      disabled={!canWriteFrequency || !connection.state.isConnected}
+                      isLeadingZero={entry.isLeadingZero}
+                      digitClassName="text-2xl"
+                      arrowClassName="h-3 text-[10px]"
+                      onIncrement={() => changeDigitAtPlace(entry.placeValue, 1)}
+                      onDecrement={() => changeDigitAtPlace(entry.placeValue, -1)}
+                      onSetDigit={(v) => setDigitAtPlace(entry.placeValue, v)}
+                    />
+                  );
+                })}
+              </div>
+              <span className="ml-2 flex-none self-center text-[11px] font-semibold text-default-400">{t('frequency.mhz')}</span>
+            </div>
+            {/* TX */}
+            <div className={SPLIT_FREQUENCY_ROW_CLASS}>
+              <span className="mr-2 text-[11px] font-semibold text-danger-500">{t('frequency.txLabel')}</span>
+              <div className="flex flex-none items-center justify-center">
+                {canEditSplitTxFrequency ? txFrequencyDigits.map((entry, i) => {
+                  if (entry.isSeparator) {
+                    return <span key={`cw-tx-sep-${i}`} className="mx-0.5 select-none text-2xl text-default-400">.</span>;
+                  }
+                  return (
+                    <FrequencyDigit
+                      key={`cw-tx-d-${i}`}
+                      digit={entry.char}
+                      placeValue={entry.placeValue}
+                      disabled={!canWriteFrequency || !splitTxFrequencyWritable || !connection.state.isConnected}
+                      isLeadingZero={entry.isLeadingZero}
+                      digitClassName="text-2xl"
+                      arrowClassName="h-3 text-[10px]"
+                      onIncrement={() => changeTxDigitAtPlace(entry.placeValue, 1)}
+                      onDecrement={() => changeTxDigitAtPlace(entry.placeValue, -1)}
+                      onSetDigit={(v) => setTxDigitAtPlace(entry.placeValue, v)}
+                    />
+                  );
+                }) : (
+                  <span className="font-mono text-xl font-semibold tracking-wide text-default-400 select-none">
+                    {t('frequency.txPending')}
+                  </span>
+                )}
+              </div>
+              <span className="ml-2 flex-none self-center text-[11px] font-semibold text-default-400">{t('frequency.mhz')}</span>
+            </div>
+          </SplitFrequencyLayout>
+        ) : (
+          <div className="flex items-center justify-center font-mono font-bold text-foreground">
+            <div className="min-w-0 shrink overflow-hidden flex justify-end" aria-hidden="true">
+              <span className="mr-2 translate-y-1 text-[11px] font-semibold text-default-400 invisible">{t('frequency.mhz')}</span>
+            </div>
+            <div className="flex flex-none items-center justify-center">
+              {frequencyDigits.map((entry, i) => {
+                if (entry.isSeparator) {
+                  return <span key={`cw-sep-${i}`} className="mx-0.5 select-none text-2xl text-default-400">.</span>;
+                }
+                return (
+                  <FrequencyDigit
+                    key={`cw-d-${i}`}
+                    digit={entry.char}
+                    placeValue={entry.placeValue}
+                    disabled={!canWriteFrequency || !connection.state.isConnected}
+                    isLeadingZero={entry.isLeadingZero}
+                    digitClassName="text-2xl"
+                    arrowClassName="h-3 text-[10px]"
+                    onIncrement={() => changeDigitAtPlace(entry.placeValue, 1)}
+                    onDecrement={() => changeDigitAtPlace(entry.placeValue, -1)}
+                    onSetDigit={(v) => setDigitAtPlace(entry.placeValue, v)}
+                  />
+                );
+              })}
+            </div>
+            <span className="ml-2 flex-none self-center translate-y-1 text-[11px] font-semibold text-default-400">{t('frequency.mhz')}</span>
           </div>
-          <div className="flex flex-none items-center justify-center">
-            {frequencyDigits.map((entry, i) => {
-              if (entry.isSeparator) {
-                return <span key={`cw-sep-${i}`} className="mx-0.5 select-none text-2xl text-default-400">.</span>;
-              }
-              return (
-                <FrequencyDigit
-                  key={`cw-d-${i}`}
-                  digit={entry.char}
-                  placeValue={entry.placeValue}
-                  disabled={!canWriteFrequency || !connection.state.isConnected}
-                  isLeadingZero={entry.isLeadingZero}
-                  digitClassName="text-2xl"
-                  arrowClassName="h-3 text-[10px]"
-                  onIncrement={() => changeDigitAtPlace(entry.placeValue, 1)}
-                  onDecrement={() => changeDigitAtPlace(entry.placeValue, -1)}
-                  onSetDigit={(v) => setDigitAtPlace(entry.placeValue, v)}
-                />
-              );
-            })}
-          </div>
-          <span className="ml-2 flex-none self-center translate-y-1 text-[11px] font-semibold text-default-400">{t('frequency.mhz')}</span>
-        </div>
+        )}
       </CardBody>
     </Card>
   );
