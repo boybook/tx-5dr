@@ -463,7 +463,7 @@ export class PluginContextFactory {
         get mode(): ModeDescriptor { return MODES.FT8; },
         get transmitCycles() { return []; },
         get automation() { return null; },
-        getOtherOperators() { return []; },
+        getOtherOperators: () => this.createOtherOperatorSnapshots(undefined),
         startTransmitting() {},
         stopTransmitting() {},
         call(_callsign: string, _lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }) {},
@@ -569,12 +569,8 @@ export class PluginContextFactory {
   }
 
   private createOtherOperatorSnapshots(operatorId: string | undefined): OtherOperatorSnapshot[] {
-    if (!operatorId) {
-      return [];
-    }
-
     return this.deps.getOperators()
-      .filter((operator) => operator.config.id !== operatorId)
+      .filter((operator) => !operatorId || operator.config.id !== operatorId)
       .map((operator) => ({
         id: operator.config.id,
         callsign: operator.config.myCallsign ?? '',
@@ -583,6 +579,7 @@ export class PluginContextFactory {
         mode: cloneModeDescriptor(operator.config.mode ?? MODES.FT8),
         isTransmitting: operator.isTransmitting,
         transmitCycles: operator.getTransmitCycles(),
+        automation: this.deps.getOperatorAutomationSnapshot(operator.config.id),
       }));
   }
 
@@ -738,7 +735,10 @@ export class PluginContextFactory {
       },
       async setFrequency(freq: number) {
         assertPermission('radio:control', 'set radio frequency');
-        deps.setRadioFrequency(freq);
+        const result = await deps.setRadioFrequency(freq);
+        if (result === false) {
+          throw new Error('Failed to set radio frequency');
+        }
       },
       capabilities: {
         getSnapshot() {

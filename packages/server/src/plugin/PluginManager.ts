@@ -923,6 +923,14 @@ export class PluginManager {
         if (key in operatorSettings) merged[key] = operatorSettings[key];
       }
     }
+
+    if (pluginName === 'watched-callsign-autocall'
+      && !Object.prototype.hasOwnProperty.call(operatorSettings, 'watchMatchMode')) {
+      if (operatorSettings.matchMode === 'prefix' || operatorSettings.matchMode === 'exact') {
+        merged.watchMatchMode = operatorSettings.matchMode;
+      }
+      merged.__legacyAutoRegexWatchList = true;
+    }
     return merged;
   }
 

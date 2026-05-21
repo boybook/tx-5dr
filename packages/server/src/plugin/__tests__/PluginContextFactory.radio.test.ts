@@ -247,6 +247,17 @@ describe('PluginContextFactory radio access', () => {
     await expect(ctx.radio.power.set('off')).rejects.toThrow("requires permission 'radio:power'");
   });
 
+  it('awaits host radio frequency writes and reports rejected writes', async () => {
+    const setRadioFrequency = vi.fn(async () => false);
+    const ctx = await createContext(
+      createPlugin(['radio:control']),
+      createDeps({ setRadioFrequency }),
+    );
+
+    await expect(ctx.radio.setFrequency(7_074_000)).rejects.toThrow('Failed to set radio frequency');
+    expect(setRadioFrequency).toHaveBeenCalledWith(7_074_000);
+  });
+
   it('exposes capability read/write APIs with radio permissions', async () => {
     const snapshot: CapabilityList = {
       descriptors: [],

@@ -337,8 +337,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getKnownRadioFrequency: () => this.radioManager.getKnownFrequency(),
       getEngineMode: () => this.engineMode,
       getCurrentRadioMode: () => this.getCurrentRadioMode(),
-      setRadioFrequency: (freq) => {
-        try { this.radioManager.setFrequency(freq); } catch (e) { logger.error('Failed to set radio frequency', e); }
+      setRadioFrequency: async (freq) => {
+        try {
+          const success = await this.radioManager.setFrequency(freq);
+          if (success) {
+            this.radioManager.emit('radioFrequencyChanged', freq);
+          }
+          return success;
+        } catch (e) {
+          logger.error('Failed to set radio frequency', e);
+          return false;
+        }
       },
       getRadioBand: () => ConfigManager.getInstance().getLastSelectedFrequency()?.band ?? '',
       getRadioConnected: () => this.radioManager.isConnected(),

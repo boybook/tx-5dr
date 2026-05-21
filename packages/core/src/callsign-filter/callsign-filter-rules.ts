@@ -13,8 +13,13 @@
  */
 
 import { resolveDXCCEntity } from '../callsign/callsign.js';
-
-const REGEX_META_CHARS = /[\\^$.*+?()[\]{}|]/;
+import {
+  compileTextMatchRules,
+  matchTextValue,
+  validateLegacyAutoRegexTextMatchRuleLine,
+  validateTextMatchRuleLine,
+  type TextMatchRule,
+} from '../match-rules/match-rules.js';
 
 export type CallsignFilterMode = 'blocklist' | 'regex-keep';
 export type CallsignBandFilterRules = Record<string, string[]>;
@@ -27,6 +32,8 @@ export interface CallsignFilterRule {
   mode: CallsignFilterMode;
   /** How the pattern was interpreted. */
   type: 'prefix' | 'regex';
+  /** Shared compiled matcher used by all text-rule based plugins. */
+  matcher: TextMatchRule;
   /** Returns true if the given uppercase callsign matches this rule's pattern. */
   matches: (callsign: string) => boolean;
 }
@@ -191,34 +198,14 @@ export function parseCallsignFilterRules(
   mode: CallsignFilterMode = 'blocklist',
 ): CallsignFilterRule[] {
   const normalizedMode = normalizeCallsignFilterMode(mode);
-  const rules: CallsignFilterRule[] = [];
-
-  for (const rawEntry of normalizeEntries(entries)) {
-    if (normalizedMode === 'regex-keep') {
-      try {
-        const regex = new RegExp(rawEntry, 'i');
-        rules.push({
-          raw: rawEntry,
-          mode: normalizedMode,
-          type: 'regex',
-          matches: (callsign) => regex.test(callsign),
-        });
-      } catch {
-        continue;
-      }
-      continue;
-    }
-
-    const normalizedPrefix = rawEntry.toUpperCase();
-    rules.push({
-      raw: rawEntry,
-      mode: normalizedMode,
-      type: 'prefix',
-      matches: (callsign) => callsign.startsWith(normalizedPrefix),
-    });
-  }
-
-  return rules;
+  const matcherMode = normalizedMode === 'regex-keep' ? 'regex' : 'prefix';
+  return compileTextMatchRules(entries, matcherMode).map((matcher): CallsignFilterRule => ({
+    raw: matcher.raw,
+    mode: normalizedMode,
+    type: matcher.mode === 'regex' ? 'regex' : 'prefix',
+    matcher,
+    matches: matcher.matches,
+  }));
 }
 
 /**
@@ -237,7 +224,7 @@ export function evaluateCallsignFilter(callsign: string, rules: CallsignFilterRu
 
   const upper = callsign.toUpperCase();
   const mode = normalizeCallsignFilterMode(rules[0]?.mode);
-  const matched = rules.some((rule) => rule.matches(upper));
+  const matched = Boolean(matchTextValue(upper, rules.map((rule) => rule.matcher)));
 
   return mode === 'regex-keep' ? matched : !matched;
 }
@@ -256,21 +243,15 @@ export function validateFilterRuleLine(
   const trimmed = line.trim();
   if (trimmed.length === 0 || trimmed.startsWith('#')) return null;
 
-  // In the simple blocklist mode, entries are literal callsign prefixes. Keep a
-  // light regex-looking check for legacy drafts so obvious mistakes still show.
-  const shouldValidateAsRegex = normalizeCallsignFilterMode(mode) === 'regex-keep'
-    || REGEX_META_CHARS.test(trimmed);
-
-  if (shouldValidateAsRegex) {
-    try {
-      new RegExp(trimmed, 'i');
-    } catch {
-      return {
-        key: 'filterRulesInvalidRegexSyntax',
-        params: { line: lineNumber },
-      };
-    }
+  if (normalizeCallsignFilterMode(mode) === 'regex-keep') {
+    return validateTextMatchRuleLine(trimmed, lineNumber, 'regex', {
+      issueKey: 'filterRulesInvalidRegexSyntax',
+    });
   }
 
-  return null;
+  // Blocklist entries remain literal prefixes. Keep legacy regex-looking
+  // validation so obvious draft mistakes still surface before saving.
+  return validateLegacyAutoRegexTextMatchRuleLine(trimmed, lineNumber, {
+    issueKey: 'filterRulesInvalidRegexSyntax',
+  });
 }

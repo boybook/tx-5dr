@@ -155,6 +155,8 @@ export interface OtherOperatorSnapshot {
   readonly isTransmitting: boolean;
   /** Current transmit cycle selection where `0` is even and `1` is odd. */
   readonly transmitCycles: number[];
+  /** Current automation runtime snapshot when available. */
+  readonly automation?: StrategyRuntimeSnapshot | null;
 }
 
 export interface OperatorControl {

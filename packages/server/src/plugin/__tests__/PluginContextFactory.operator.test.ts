@@ -90,6 +90,7 @@ describe('PluginContextFactory operator access', () => {
       mode: MODES.FT4,
       isTransmitting: true,
       transmitCycles: [1],
+      automation: null,
     }]);
   });
 });

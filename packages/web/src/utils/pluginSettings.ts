@@ -1,12 +1,16 @@
 import type { PluginSettingCondition, PluginSettingDescriptor, PluginStatus } from '@tx5dr/contracts';
-import { normalizeCallsignFilterMode, validateFilterRuleLine } from '@tx5dr/core';
+import {
+  normalizeCallsignFilterMode,
+  normalizeTextMatchMode,
+  validateFilterRuleLine,
+  validateLegacyAutoRegexTextMatchRuleLine,
+  validateTextMatchRuleLine,
+} from '@tx5dr/core';
 
 export interface PluginSettingValidationIssue {
   key: string;
   params?: Record<string, unknown>;
 }
-const WATCH_LIST_REGEX_META_CHARS = /[\\^$.*+?()[\]{}|]/;
-
 function normalizeStringArrayValue(value: unknown): string[] {
   if (typeof value === 'string') {
     return value
@@ -104,13 +108,6 @@ export function isPluginSettingVisible(
   return !descriptor.hidden && matchesPluginSettingCondition(descriptor.visibleWhen, settings);
 }
 
-function isWatchListComment(entry: string): boolean {
-  return entry.startsWith('#');
-}
-
-function looksLikeRegexRule(entry: string): boolean {
-  return WATCH_LIST_REGEX_META_CHARS.test(entry);
-}
 
 function normalizeByPluginSetting(
   pluginName: string | undefined,
@@ -129,7 +126,8 @@ function normalizeByPluginSetting(
     );
   }
 
-  if (pluginName === 'watched-callsign-autocall' && fieldKey === 'watchList') {
+  if ((pluginName === 'watched-callsign-autocall' && fieldKey === 'watchList')
+    || (pluginName === 'watched-grid-autocall' && fieldKey === 'gridWatchList')) {
     return normalizeWatchedCallsignWatchListValue(value);
   }
 
@@ -217,20 +215,27 @@ export function getPluginSettingValidationIssue(
 
   if (pluginName === 'watched-callsign-autocall' && fieldKey === 'watchList') {
     const entries = normalizeWatchedCallsignWatchListValue(value);
+    const mode = normalizeTextMatchMode(settings?.watchMatchMode ?? settings?.matchMode);
+    const hasExplicitMode = Boolean(settings && Object.prototype.hasOwnProperty.call(settings, 'watchMatchMode'));
     for (let index = 0; index < entries.length; index += 1) {
-      const entry = entries[index];
-      if (!entry || isWatchListComment(entry) || !looksLikeRegexRule(entry)) {
-        continue;
-      }
+      const issue = hasExplicitMode
+        ? validateTextMatchRuleLine(entries[index], index + 1, mode, { issueKey: 'watchListInvalidRegexSyntax' })
+        : mode === 'regex'
+          ? validateTextMatchRuleLine(entries[index], index + 1, 'regex', { issueKey: 'watchListInvalidRegexSyntax' })
+          : validateLegacyAutoRegexTextMatchRuleLine(entries[index], index + 1, { issueKey: 'watchListInvalidRegexSyntax' });
+      if (issue) return issue;
+    }
+    return null;
+  }
 
-      try {
-        new RegExp(entry, 'i');
-      } catch {
-        return {
-          key: 'watchListInvalidRegexSyntax',
-          params: { line: index + 1 },
-        };
-      }
+  if (pluginName === 'watched-grid-autocall' && fieldKey === 'gridWatchList') {
+    const entries = normalizeWatchedCallsignWatchListValue(value);
+    const mode = normalizeTextMatchMode(settings?.gridMatchMode);
+    for (let index = 0; index < entries.length; index += 1) {
+      const issue = validateTextMatchRuleLine(entries[index], index + 1, mode, {
+        issueKey: 'gridWatchListInvalidRegexSyntax',
+      });
+      if (issue) return issue;
     }
     return null;
   }

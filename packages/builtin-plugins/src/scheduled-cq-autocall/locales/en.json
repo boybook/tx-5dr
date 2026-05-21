@@ -1,0 +1,19 @@
+{
+  "pluginName": "Scheduled CQ Autocall",
+  "pluginDescription": "Start this operator's CQ automation at scheduled local times or fixed intervals.",
+  "scheduledCqOverview": "CQ methods",
+  "scheduledCqOverviewDesc": "You can use fixed times and fixed intervals together. CQ only starts when this operator is idle.",
+  "scheduledCqEnabled": "Enable scheduled CQ",
+  "scheduledCqEnabledDesc": "When enabled, the fixed-time and interval settings below start CQ automation.",
+  "scheduledCqTasks": "Fixed-Time CQ",
+  "scheduledCqTasksDesc": "Each task uses local system time. Days accept daily, mon-fri, sat,sun, or 1-5 where 1 is Monday and 7 is Sunday. Leave empty if you only want interval CQ.",
+  "taskEnabled": "Enabled",
+  "taskDays": "Days",
+  "taskDaysDesc": "Examples: daily, mon-fri, sat,sun, 1-5.",
+  "taskTime": "Time",
+  "taskTimeDesc": "24-hour HH:mm, for example 08:30.",
+  "scheduledCqIntervalEnabled": "Enable interval CQ",
+  "scheduledCqIntervalEnabledDesc": "Start CQ at a fixed interval. This can be used together with fixed-time tasks.",
+  "scheduledCqIntervalMinutes": "CQ Interval Minutes",
+  "scheduledCqIntervalMinutesDesc": "How many minutes to wait between CQ attempts. After enabling, the first interval CQ waits for one full interval."
+}

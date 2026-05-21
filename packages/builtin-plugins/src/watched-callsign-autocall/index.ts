@@ -8,6 +8,14 @@ import {
 } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import {
+  compileLegacyAutoRegexTextMatchRules,
+  compileTextMatchRules,
+  matchTextValue,
+  normalizeTextMatchMode,
+  type TextMatchMode,
+  type TextMatchRule,
+} from '@tx5dr/core';
+import {
   getSenderCallsign,
   getTriggerMode,
   getAutocallPriority as getAutocallPriorityBase,
@@ -20,30 +28,19 @@ import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import jaLocale from './locales/ja.json' with { type: 'json' };
 
-type LegacyMatchMode = 'exact' | 'prefix';
-type WatchRule = {
-  raw: string;
-  type: 'exact' | 'prefix' | 'regex';
-  matches: (callsign: string) => boolean;
-};
-const REGEX_META_CHARS = /[\\^$.*+?()[\]{}|]/;
+type WatchRule = TextMatchRule;
+const LEGACY_AUTO_REGEX_CONFIG_KEY = '__legacyAutoRegexWatchList';
 
-function normalizeWatchList(rawValue: unknown): string[] {
-  if (!Array.isArray(rawValue)) {
-    return [];
-  }
-
-  return rawValue
-    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
-    .filter((entry) => Boolean(entry) && !entry.startsWith('#'));
+function looksLikeRegexWatchRule(entry: string): boolean {
+  return /[\\^$.*+?()[\]{}|]/.test(entry);
 }
 
-function escapeRegex(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function getWatchMatchMode(ctx: PluginContext): TextMatchMode {
+  return normalizeTextMatchMode(ctx.config.watchMatchMode ?? ctx.config.matchMode);
 }
 
-function getLegacyMatchMode(ctx: PluginContext): LegacyMatchMode {
-  return ctx.config.matchMode === 'prefix' ? 'prefix' : 'exact';
+function shouldUseLegacyAutoRegex(ctx: PluginContext): boolean {
+  return ctx.config[LEGACY_AUTO_REGEX_CONFIG_KEY] === true;
 }
 
 function getAutocallPriority(ctx: PluginContext): number {
@@ -51,46 +48,20 @@ function getAutocallPriority(ctx: PluginContext): number {
 }
 
 function buildWatchRules(ctx: PluginContext): WatchRule[] {
-  const legacyMatchMode = getLegacyMatchMode(ctx);
-  const rules: WatchRule[] = [];
+  const matchMode = getWatchMatchMode(ctx);
+  const onInvalidRegex = (entry: string, error: unknown) => {
+    ctx.log.warn('Watched callsign regex is invalid and will be ignored', { entry, error });
+  };
 
-  for (const rawEntry of normalizeWatchList(ctx.config.watchList)) {
-    if (REGEX_META_CHARS.test(rawEntry)) {
-      try {
-        const regex = new RegExp(rawEntry, 'i');
-        rules.push({
-          raw: rawEntry,
-          type: 'regex',
-          matches: (callsign) => regex.test(callsign),
-        });
-      } catch (error) {
-        ctx.log.warn('Watched callsign regex is invalid and will be ignored', {
-          entry: rawEntry,
-          error,
-        });
-      }
-      continue;
-    }
-
-    const normalizedEntry = rawEntry.toUpperCase();
-    if (legacyMatchMode === 'prefix') {
-      rules.push({
-        raw: rawEntry,
-        type: 'prefix',
-        matches: (callsign) => callsign.startsWith(normalizedEntry),
-      });
-      continue;
-    }
-
-    const exactRegex = new RegExp(`^${escapeRegex(rawEntry)}$`, 'i');
-    rules.push({
-      raw: rawEntry,
-      type: 'exact',
-      matches: (callsign) => exactRegex.test(callsign),
-    });
+  if (matchMode === 'regex') {
+    return compileTextMatchRules(ctx.config.watchList, 'regex', { onInvalidRegex });
   }
 
-  return rules;
+  if (shouldUseLegacyAutoRegex(ctx) && (matchMode === 'exact' || matchMode === 'prefix')) {
+    return compileLegacyAutoRegexTextMatchRules(ctx.config.watchList, matchMode, { onInvalidRegex });
+  }
+
+  return compileTextMatchRules(ctx.config.watchList, matchMode, { onInvalidRegex });
 }
 
 function findMatchedTarget(
@@ -114,7 +85,7 @@ function findMatchedTarget(
   for (const [ruleOrder, watchRule] of watchRules.entries()) {
     for (const [messageOrder, parsedMessage] of messages.entries()) {
       const senderCallsign = getSenderCallsign(parsedMessage.message);
-      if (!senderCallsign || !watchRule.matches(senderCallsign)) {
+      if (!senderCallsign || !matchTextValue(senderCallsign, [watchRule])) {
         continue;
       }
       if (!shouldTriggerMessage(parsedMessage, ctx, triggerMode)) {
@@ -160,6 +131,19 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
       description: 'watchListDesc',
       scope: 'operator',
     },
+    watchMatchMode: {
+      type: 'string',
+      default: 'exact',
+      label: 'watchMatchMode',
+      description: 'watchMatchModeDesc',
+      scope: 'operator',
+      options: [
+        { label: 'matchModeExact', value: 'exact' },
+        { label: 'matchModePrefix', value: 'prefix' },
+        { label: 'matchModeFuzzy', value: 'fuzzy' },
+        { label: 'matchModeRegex', value: 'regex' },
+      ],
+    },
     triggerMode: {
       type: 'string',
       default: 'cq',
@@ -201,6 +185,7 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
 
   quickSettings: [
     { settingKey: 'triggerMode' },
+    { settingKey: 'watchMatchMode' },
     { settingKey: 'watchList' },
   ],
 
@@ -219,7 +204,7 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
         if (typeof entry !== 'string') return false;
         const trimmed = entry.trim();
         if (!trimmed || trimmed.startsWith('#')) return false;
-        if (REGEX_META_CHARS.test(trimmed)) return false;
+        if (looksLikeRegexWatchRule(trimmed)) return false;
         return trimmed.toUpperCase() === completedCallsign;
       });
 
@@ -281,7 +266,7 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
 
       ctx.log.debug('Watched callsign proposed for automatic call', {
         callsign: matched.callsign,
-        matchedBy: matched.rule.type,
+        matchedBy: matched.rule.mode,
         watchEntry: matched.rule.raw,
         triggerMode: getTriggerMode(ctx),
         priority: getAutocallPriority(ctx),

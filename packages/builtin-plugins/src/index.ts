@@ -63,6 +63,21 @@ import {
 } from './watched-novelty-autocall/index.js';
 
 import {
+  watchedGridAutocallPlugin,
+  watchedGridAutocallLocales,
+} from './watched-grid-autocall/index.js';
+
+import {
+  scheduledCqAutocallPlugin,
+  scheduledCqAutocallLocales,
+} from './scheduled-cq-autocall/index.js';
+
+import {
+  scheduledBandSwitcherPlugin,
+  scheduledBandSwitcherLocales,
+} from './scheduled-band-switcher/index.js';
+
+import {
   wavelogSyncPlugin,
   wavelogSyncLocales,
   wavelogSyncDirPath,
@@ -156,6 +171,21 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
   {
     definition: watchedNoveltyAutocallPlugin,
     locales: watchedNoveltyAutocallLocales,
+    enabledByDefault: false,
+  },
+  {
+    definition: watchedGridAutocallPlugin,
+    locales: watchedGridAutocallLocales,
+    enabledByDefault: false,
+  },
+  {
+    definition: scheduledCqAutocallPlugin,
+    locales: scheduledCqAutocallLocales,
+    enabledByDefault: false,
+  },
+  {
+    definition: scheduledBandSwitcherPlugin,
+    locales: scheduledBandSwitcherLocales,
     enabledByDefault: false,
   },
   {

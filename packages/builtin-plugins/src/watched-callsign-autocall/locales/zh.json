@@ -4,7 +4,7 @@
   "watchOverview": "适用场景",
   "watchOverviewDesc": "适合盯 DX、朋友台、稀有实体或约定 sked。该功能默认不启用；只要为当前操作者填入守候规则，就会在纯待机状态下监听，并在命中时自动设定目标、对齐下一发射时隙开始呼叫。",
   "watchList": "守候呼号列表",
-  "watchListDesc": "每行一个规则，按顺序决定优先级。纯文本会按完整呼号精确匹配；只要写入正则语法，就按正则匹配，例如 ^JA 可守候所有 JA 前缀，^BG5DRB$ 可精确匹配单一呼号。以 # 开头的行会作为注释保留，不参与匹配。留空表示当前操作者不启用。已通联过的台站会在指定天数内被自动跳过。",
+  "watchListDesc": "每行一个规则，按顺序决定优先级。默认按下方匹配方式判断；旧配置中带 ^、$、.* 等正则语法的行仍会按正则兼容处理。以 # 开头的行会作为注释保留，不参与匹配。留空表示当前操作者不启用。已通联过的台站会在指定天数内被自动跳过。",
   "watchListInvalidRegexFormat": "第 {{line}} 行的正则格式无效，请检查表达式。",
   "watchListInvalidRegexSyntax": "第 {{line}} 行的正则无法解析，请检查括号、转义或量词写法。",
   "triggerMode": "触发条件",
@@ -17,5 +17,11 @@
   "workedCallsignSkipDays": "已通联跳过天数",
   "workedCallsignSkipDaysDesc": "在指定天数内已通联过的台站会自动跳过，不会重复起呼。设为 0 表示不检查通联记录。",
   "removeExactMatchAfterQSO": "通联完成后自动移除该呼号",
-  "removeExactMatchAfterQSODesc": "开启后，守候列表中精确写出的呼号（非通配、非前缀）在通联完成后会自动移除，避免重复起呼。"
+  "removeExactMatchAfterQSODesc": "开启后，守候列表中精确写出的呼号（非通配、非前缀）在通联完成后会自动移除，避免重复起呼。",
+  "watchMatchMode": "呼号匹配方式",
+  "watchMatchModeDesc": "普通用户建议使用精准或前缀匹配；模糊匹配适合只记得部分呼号；高级正则适合熟悉正则表达式的用户。",
+  "matchModeExact": "精准匹配",
+  "matchModePrefix": "前缀匹配",
+  "matchModeFuzzy": "模糊匹配",
+  "matchModeRegex": "高级正则"
 }

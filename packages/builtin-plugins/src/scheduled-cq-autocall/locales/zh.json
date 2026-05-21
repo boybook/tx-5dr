@@ -1,0 +1,19 @@
+{
+  "pluginName": "定时自动起呼",
+  "pluginDescription": "按指定时间或固定间隔自动打开当前操作者的 CQ 自动化。",
+  "scheduledCqOverview": "起呼方式",
+  "scheduledCqOverviewDesc": "可以同时使用固定时间和固定间隔两种方式。只有当前操作者空闲时才会启动 CQ。",
+  "scheduledCqEnabled": "启用定时 CQ",
+  "scheduledCqEnabledDesc": "开启后按照下面的固定时间或间隔设置启动 CQ 自动化。",
+  "scheduledCqTasks": "固定时间起呼",
+  "scheduledCqTasksDesc": "每条任务使用本机本地时间。星期可写 daily、mon-fri、sat,sun 或 1-5（1=周一，7=周日）。不需要固定时间时可以留空。",
+  "taskEnabled": "启用",
+  "taskDays": "星期",
+  "taskDaysDesc": "例如 daily、mon-fri、sat,sun、1-5。",
+  "taskTime": "时间",
+  "taskTimeDesc": "24 小时制 HH:mm，例如 08:30。",
+  "scheduledCqIntervalEnabled": "启用固定间隔起呼",
+  "scheduledCqIntervalEnabledDesc": "开启后会按固定间隔自动启动 CQ，可与上面的固定时间任务同时使用。",
+  "scheduledCqIntervalMinutes": "起呼间隔分钟",
+  "scheduledCqIntervalMinutesDesc": "每隔多少分钟尝试启动一次 CQ。启用后会先等待一个完整间隔。"
+}
