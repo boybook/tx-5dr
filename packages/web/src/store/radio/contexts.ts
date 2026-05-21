@@ -16,6 +16,7 @@ import type {
   SpectrumKind,
   SpectrumSessionState,
   StationInfo,
+  SystemStatus,
   VoicePTTLock,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
@@ -78,6 +79,8 @@ export const RadioConnectionContext = createContext<{
 
 export const RadioModeContext = createContext<{
   isDecoding: boolean;
+  isEngineRunning: boolean | null;
+  engineState: SystemStatus['engineState'] | null;
   currentMode: ModeDescriptor | null;
   engineMode: EngineMode;
   currentRadioMode: string | null;

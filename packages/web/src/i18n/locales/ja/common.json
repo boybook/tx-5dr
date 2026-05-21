@@ -158,6 +158,8 @@
     "waiting": "スペクトルデータを待っています...",
     "retrying": "スペクトルデータを待っています...再試行 {{count}}/{{max}}",
     "noData": "スペクトルデータがありません。ストリームの復旧を待っています...",
+    "engineNotStarted": "エンジンはまだ開始されていません",
+    "transmittingPaused": "送信中、スペクトルを一時停止中",
     "collapsed": "スペクトルは閉鎖されました",
     "restore": "スペクトルを拡大する",
     "audioSource": "オーディオ",

@@ -373,6 +373,8 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
   const radioModeContextValue = useMemo(
     () => ({
       isDecoding: radioState.isDecoding,
+      isEngineRunning: radioState.systemStatus?.isRunning ?? null,
+      engineState: radioState.systemStatus?.engineState ?? null,
       currentMode: radioState.currentMode,
       engineMode: radioState.engineMode,
       currentRadioMode: radioState.currentRadioMode,
@@ -381,6 +383,8 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
     }),
     [
       radioState.isDecoding,
+      radioState.systemStatus?.isRunning,
+      radioState.systemStatus?.engineState,
       radioState.currentMode,
       radioState.engineMode,
       radioState.currentRadioMode,

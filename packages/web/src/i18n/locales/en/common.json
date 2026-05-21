@@ -158,6 +158,8 @@
     "waiting": "Waiting for spectrum data...",
     "retrying": "Waiting for spectrum data... retrying {{count}}/{{max}}",
     "noData": "No spectrum data. Waiting for the stream to recover...",
+    "engineNotStarted": "Engine not started",
+    "transmittingPaused": "Transmitting, spectrum paused",
     "collapsed": "Spectrum collapsed",
     "restore": "Restore spectrum",
     "audioSource": "Audio",

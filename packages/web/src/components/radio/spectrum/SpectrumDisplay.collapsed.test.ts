@@ -6,9 +6,94 @@ import {
   clampCollapsedSpectrumFrequency,
   getCollapsedSpectrumPosition,
   getRadioSdrDragFrequencyStepHz,
+  isSpectrumEngineNotStarted,
+  resolveSpectrumEmptyStatusKey,
   resolveCollapsedSpectrumMarkerFrequencies,
   resolveSpectrumMarkerFrequencies,
+  shouldPauseSpectrumNoFrameRecovery,
 } from './SpectrumDisplay';
+
+describe('spectrum no-frame recovery gate', () => {
+  it('pauses recovery for Radio SDR while PTT is active', () => {
+    expect(shouldPauseSpectrumNoFrameRecovery({
+      connectionReady: true,
+      selectedKind: 'radio-sdr',
+      isTransmitting: true,
+      isEngineRunning: true,
+      engineState: 'running',
+    })).toBe(true);
+  });
+
+  it('keeps audio and OpenWebRX recovery active while PTT is active', () => {
+    for (const selectedKind of ['audio', 'openwebrx-sdr'] as const) {
+      expect(shouldPauseSpectrumNoFrameRecovery({
+        connectionReady: true,
+        selectedKind,
+        isTransmitting: true,
+        isEngineRunning: true,
+        engineState: 'running',
+      })).toBe(false);
+    }
+  });
+
+  it('pauses recovery when the connected engine is explicitly stopped', () => {
+    expect(isSpectrumEngineNotStarted({
+      connectionReady: true,
+      isEngineRunning: false,
+      engineState: 'idle',
+    })).toBe(true);
+
+    expect(shouldPauseSpectrumNoFrameRecovery({
+      connectionReady: true,
+      selectedKind: 'audio',
+      isTransmitting: false,
+      isEngineRunning: false,
+      engineState: 'idle',
+    })).toBe(true);
+  });
+
+  it('does not treat stale or disconnected engine state as not started', () => {
+    expect(isSpectrumEngineNotStarted({
+      connectionReady: false,
+      isEngineRunning: false,
+      engineState: 'idle',
+    })).toBe(false);
+  });
+
+  it('prioritizes engine and transmit placeholders before recovery copy', () => {
+    const staleState = { isStale: true, retryCount: 1, exhausted: false };
+
+    expect(resolveSpectrumEmptyStatusKey({
+      engineNotStarted: true,
+      radioSdrTransmitPaused: true,
+      recoveryState: staleState,
+    })).toBe('engineNotStarted');
+
+    expect(resolveSpectrumEmptyStatusKey({
+      engineNotStarted: false,
+      radioSdrTransmitPaused: true,
+      recoveryState: staleState,
+    })).toBe('transmittingPaused');
+
+    expect(resolveSpectrumEmptyStatusKey({
+      engineNotStarted: false,
+      radioSdrTransmitPaused: false,
+      recoveryState: { isStale: true, retryCount: 3, exhausted: true },
+    })).toBe('noData');
+
+    expect(resolveSpectrumEmptyStatusKey({
+      engineNotStarted: false,
+      radioSdrTransmitPaused: false,
+      recoveryState: staleState,
+    })).toBe('retrying');
+
+    expect(resolveSpectrumEmptyStatusKey({
+      engineNotStarted: false,
+      radioSdrTransmitPaused: false,
+      recoveryState: { isStale: false, retryCount: 0, exhausted: false },
+    })).toBe('waiting');
+  });
+});
 
 describe('collapsed spectrum positioning', () => {
   it('clamps digital baseband frequencies to 0-3000 Hz', () => {

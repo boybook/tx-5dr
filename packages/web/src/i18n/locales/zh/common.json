@@ -158,6 +158,8 @@
     "waiting": "等待频谱数据...",
     "retrying": "等待频谱数据...正在重试 {{count}}/{{max}}",
     "noData": "暂无频谱数据，正在等待数据流恢复...",
+    "engineNotStarted": "引擎还未开启",
+    "transmittingPaused": "发射中，频谱暂停",
     "collapsed": "频谱已收起",
     "restore": "展开频谱",
     "audioSource": "音频",

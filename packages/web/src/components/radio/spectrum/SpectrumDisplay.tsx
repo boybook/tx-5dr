@@ -3,7 +3,7 @@ import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Switch,
 import { addToast } from '@heroui/toast';
 import { ArrowsPointingOutIcon, ChevronDownIcon, ChevronUpIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
-import type { EngineMode, SpectrumFrame, SpectrumKind, SpectrumSessionVoiceState } from '@tx5dr/contracts';
+import type { EngineMode, SpectrumFrame, SpectrumKind, SpectrumSessionVoiceState, SystemStatus } from '@tx5dr/contracts';
 import { getBandFromFrequency } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useSpectrum, useSplitState } from '../../../store/radioStore';
 import { useAbility, useCan } from '../../../store/authStore';
@@ -104,6 +104,75 @@ interface AudioRangeSettings {
   mode: 'auto' | 'manual';
   manual: ManualRangeSettings;
   auto: AutoRangeConfig;
+}
+
+type SpectrumEngineState = SystemStatus['engineState'] | null | undefined;
+
+interface SpectrumNoFrameRecoveryGateInput {
+  connectionReady: boolean;
+  selectedKind: SpectrumKind;
+  isTransmitting: boolean;
+  isEngineRunning: boolean | null | undefined;
+  engineState: SpectrumEngineState;
+}
+
+interface SpectrumRecoveryStateSnapshot {
+  isStale: boolean;
+  retryCount: number;
+  exhausted: boolean;
+}
+
+export type SpectrumEmptyStatusKey =
+  | 'engineNotStarted'
+  | 'transmittingPaused'
+  | 'noData'
+  | 'retrying'
+  | 'waiting';
+
+export function isSpectrumEngineNotStarted({
+  connectionReady,
+  isEngineRunning,
+  engineState,
+}: Pick<SpectrumNoFrameRecoveryGateInput, 'connectionReady' | 'isEngineRunning' | 'engineState'>): boolean {
+  return connectionReady && (engineState === 'idle' || isEngineRunning === false);
+}
+
+export function shouldPauseSpectrumNoFrameRecovery({
+  connectionReady,
+  selectedKind,
+  isTransmitting,
+  isEngineRunning,
+  engineState,
+}: SpectrumNoFrameRecoveryGateInput): boolean {
+  if (isSpectrumEngineNotStarted({ connectionReady, isEngineRunning, engineState })) {
+    return true;
+  }
+
+  return selectedKind === RADIO_SDR_SOURCE && isTransmitting;
+}
+
+export function resolveSpectrumEmptyStatusKey({
+  engineNotStarted,
+  radioSdrTransmitPaused,
+  recoveryState,
+}: {
+  engineNotStarted: boolean;
+  radioSdrTransmitPaused: boolean;
+  recoveryState: SpectrumRecoveryStateSnapshot;
+}): SpectrumEmptyStatusKey {
+  if (engineNotStarted) {
+    return 'engineNotStarted';
+  }
+  if (radioSdrTransmitPaused) {
+    return 'transmittingPaused';
+  }
+  if (recoveryState.exhausted) {
+    return 'noData';
+  }
+  if (recoveryState.isStale) {
+    return 'retrying';
+  }
+  return 'waiting';
 }
 
 interface LegacyAudioRangeSettings {
@@ -722,7 +791,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const { operators } = useOperators();
   const { activeProfileId } = useProfiles();
   const radioConnection = useRadioConnectionState();
-  const { currentMode, currentRadioFrequency, engineMode } = useRadioModeState();
+  const { currentMode, currentRadioFrequency, engineMode, isEngineRunning, engineState } = useRadioModeState();
   const { pttStatus } = usePTTState();
   const { splitEnabled, splitTxFrequency } = useSplitState();
   const canSetFrequency = useCan('execute', 'RadioFrequency');
@@ -792,6 +861,19 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const isAudioSpectrumSelected = effectiveSelectedKind === AUDIO_SOURCE;
   const isRadioSdrSelected = effectiveSelectedKind === RADIO_SDR_SOURCE;
   const isOpenWebRXSdrSelected = effectiveSelectedKind === OPENWEBRX_SDR_SOURCE;
+  const engineNotStarted = isSpectrumEngineNotStarted({
+    connectionReady: connection.state.isReady,
+    isEngineRunning,
+    engineState,
+  });
+  const radioSdrTransmitPaused = isRadioSdrSelected && isTransmitting;
+  const pauseNoFrameRecovery = shouldPauseSpectrumNoFrameRecovery({
+    connectionReady: connection.state.isReady,
+    selectedKind: effectiveSelectedKind,
+    isTransmitting,
+    isEngineRunning,
+    engineState,
+  });
   const isVoiceMode = engineMode === 'voice';
   const isCwMode = engineMode === 'cw';
   const sourceMode = sessionState?.sourceMode ?? 'unknown';
@@ -1233,7 +1315,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     spectrumNoFrameRetryCountRef.current = 0;
     setSpectrumRecoveryState({ isStale: false, retryCount: 0, exhausted: false });
 
-    if (isCollapsed || !connection.state.isReady || !connection.state.radioService || !subscribedKind) {
+    if (isCollapsed || pauseNoFrameRecovery || !connection.state.isReady || !connection.state.radioService || !subscribedKind) {
       return;
     }
 
@@ -1266,7 +1348,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     return () => {
       clearInterval(timer);
     };
-  }, [connection.state.isReady, connection.state.radioService, isCollapsed, subscribedKind]);
+  }, [connection.state.isReady, connection.state.radioService, isCollapsed, pauseNoFrameRecovery, subscribedKind]);
 
   useLayoutEffect(() => {
     streamController.updateContext({
@@ -1760,14 +1842,23 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   }
 
   if (!streamStatus.hasData) {
-    const waitingText = spectrumRecoveryState.exhausted
-      ? t('spectrum.noData')
-      : spectrumRecoveryState.isStale
-        ? t('spectrum.retrying', {
-            count: spectrumRecoveryState.retryCount,
-            max: SPECTRUM_NO_FRAME_MAX_RETRIES,
-          })
-        : t('spectrum.waiting');
+    const emptyStatusKey = resolveSpectrumEmptyStatusKey({
+      engineNotStarted,
+      radioSdrTransmitPaused,
+      recoveryState: spectrumRecoveryState,
+    });
+    const waitingText = emptyStatusKey === 'engineNotStarted'
+      ? t('spectrum.engineNotStarted')
+      : emptyStatusKey === 'transmittingPaused'
+        ? t('spectrum.transmittingPaused')
+        : emptyStatusKey === 'noData'
+          ? t('spectrum.noData')
+          : emptyStatusKey === 'retrying'
+            ? t('spectrum.retrying', {
+                count: spectrumRecoveryState.retryCount,
+                max: SPECTRUM_NO_FRAME_MAX_RETRIES,
+              })
+            : t('spectrum.waiting');
     return (
       <div className={`relative flex items-center justify-center ${className}`} style={{ height }}>
         <div className="text-default-400">{waitingText}</div>
@@ -1880,7 +1971,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         isTransmitting={isTransmitting}
         className="bg-transparent"
       />
-      {spectrumRecoveryState.isStale && (
+      {spectrumRecoveryState.isStale && !pauseNoFrameRecovery && (
         <div className="pointer-events-none absolute left-1/2 top-2 z-20 -translate-x-1/2 rounded-full bg-black/55 px-3 py-1 text-[11px] text-white/85 backdrop-blur-sm">
           {spectrumRecoveryState.exhausted
             ? t('spectrum.noData')
