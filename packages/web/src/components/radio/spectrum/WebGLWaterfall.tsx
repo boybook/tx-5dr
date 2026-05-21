@@ -48,6 +48,7 @@ export interface TxBandOverlay {
   rangeStartFrequency: number;
   rangeEndFrequency: number;
   draggable?: boolean;
+  variant?: 'tx' | 'rx';
 }
 
 export interface FrequencyBandOverlay {
@@ -2850,7 +2851,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
           );
         })}
 
-        {/* TX标记 - 红色 */}
+        {/* RF TX/RX line overlays */}
         {txBandOverlays.map((overlay) => {
           const isOverridden = localBandOverlayOverride?.id === overlay.id
             && (draggingBandOverlayId === overlay.id || cooldownBandOverlayId === overlay.id);
@@ -2875,6 +2876,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
           const width = Math.max(0, clippedRight - clippedLeft);
           const draggable = overlay.draggable && !!onTxBandOverlayFrequencyChange;
           const isDragging = draggingBandOverlayId === overlay.id;
+          const variant = overlay.variant ?? 'tx';
+          const isRx = variant === 'rx';
+          const bandClassName = isRx ? 'bg-green-500/15' : 'bg-red-500/15';
+          const lineClassName = isRx
+            ? (isDragging ? 'bg-green-500' : 'bg-green-500/50')
+            : (isDragging ? 'bg-red-500' : 'bg-red-500/50');
+          const labelClassName = isRx ? 'text-green-500' : 'text-red-500';
 
           return (
             <div
@@ -2883,7 +2891,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
             >
               {width > 0 && (
                 <div
-                  className="absolute top-0 h-full bg-red-500/15"
+                  className={`absolute top-0 h-full ${bandClassName}`}
                   style={{
                     left: `${clippedLeft}%`,
                     width: `${width}%`,
@@ -2909,8 +2917,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
                   setDraggingBandOverlayId(overlay.id);
                 } : undefined}
               >
-                <div className={`w-0.5 h-full ${isDragging ? 'bg-red-500' : 'bg-red-500/50'}`} />
-                <div className="absolute bottom-1 left-1/2 -translate-x-1/2 px-1 text-xs font-semibold bg-black/60 rounded text-red-500 select-none">
+                <div className={`w-0.5 h-full ${lineClassName}`} />
+                <div className={`absolute bottom-1 left-1/2 -translate-x-1/2 px-1 text-xs font-semibold bg-black/60 rounded select-none ${labelClassName}`}>
                   {overlay.label}
                 </div>
               </div>

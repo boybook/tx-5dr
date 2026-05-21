@@ -211,7 +211,7 @@ describe('HamlibConnection', () => {
     await expect(connection.getDCD()).rejects.toThrow(/getDCD/);
   });
 
-  it('does not write split TX frequency when split is disabled', async () => {
+  it('keeps RX frequency writes independent from Split probing when Split is disabled', async () => {
     const { connection, rig } = createConnectedConnection({
       getSplit: vi.fn().mockResolvedValue({ enabled: false }),
     });
@@ -220,11 +220,11 @@ describe('HamlibConnection', () => {
     await connection.setFrequency(7200000);
 
     expect(rig.setFrequency).toHaveBeenCalledTimes(2);
-    expect(rig.getSplit).toHaveBeenCalledTimes(1);
+    expect(rig.getSplit).not.toHaveBeenCalled();
     expect(rig.setSplitFreq).not.toHaveBeenCalled();
   });
 
-  it('writes split TX frequency when split is enabled', async () => {
+  it('does not mirror RX frequency writes into the Split TX frequency', async () => {
     const { connection, rig } = createConnectedConnection({
       getSplit: vi.fn().mockResolvedValue({ enabled: true }),
     });
@@ -232,13 +232,12 @@ describe('HamlibConnection', () => {
     await connection.setFrequency(7100000);
     await connection.setFrequency(7200000);
 
-    expect(rig.getSplit).toHaveBeenCalledTimes(1);
-    expect(rig.setSplitFreq).toHaveBeenCalledTimes(2);
-    expect(rig.setSplitFreq).toHaveBeenNthCalledWith(1, 7100000);
-    expect(rig.setSplitFreq).toHaveBeenNthCalledWith(2, 7200000);
+    expect(rig.setFrequency).toHaveBeenCalledTimes(2);
+    expect(rig.getSplit).not.toHaveBeenCalled();
+    expect(rig.setSplitFreq).not.toHaveBeenCalled();
   });
 
-  it('falls back to plain RX writes when split probing is recoverably unsupported', async () => {
+  it('does not probe Split while performing plain RX frequency writes', async () => {
     const { connection, rig } = createConnectedConnection({
       getSplit: vi.fn().mockRejectedValue(new Error('Feature not available')),
     });
@@ -247,11 +246,11 @@ describe('HamlibConnection', () => {
     await connection.setFrequency(7200000);
 
     expect(rig.setFrequency).toHaveBeenCalledTimes(2);
-    expect(rig.getSplit).toHaveBeenCalledTimes(1);
+    expect(rig.getSplit).not.toHaveBeenCalled();
     expect(rig.setSplitFreq).not.toHaveBeenCalled();
   });
 
-  it('keeps setFrequency successful when split TX sync fails', async () => {
+  it('keeps setFrequency successful when Split TX writes would fail', async () => {
     const { connection, rig } = createConnectedConnection({
       getSplit: vi.fn().mockResolvedValue({ enabled: true }),
       setSplitFreq: vi.fn().mockRejectedValue(new Error('Protocol error')),
@@ -260,8 +259,8 @@ describe('HamlibConnection', () => {
     await expect(connection.setFrequency(7100000)).resolves.toBeUndefined();
     await expect(connection.setFrequency(7200000)).resolves.toBeUndefined();
 
-    expect(rig.getSplit).toHaveBeenCalledTimes(1);
-    expect(rig.setSplitFreq).toHaveBeenCalledTimes(2);
+    expect(rig.getSplit).not.toHaveBeenCalled();
+    expect(rig.setSplitFreq).not.toHaveBeenCalled();
   });
 
   it('does not attempt split TX sync when the primary frequency write fails', async () => {
@@ -300,7 +299,7 @@ describe('HamlibConnection', () => {
 
     expect(rig.setFrequency).toHaveBeenCalledTimes(2);
     expect(rig.setFrequency).toHaveBeenNthCalledWith(2, 7200000);
-    expect(rig.getSplit).toHaveBeenCalledTimes(1);
+    expect(rig.getSplit).not.toHaveBeenCalled();
   });
 
   it('dedupes concurrent getFrequency reads through the CAT queue', async () => {

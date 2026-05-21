@@ -74,30 +74,33 @@ export const VoiceFrequencyControl: React.FC = () => {
   const currentFrequencyRef = React.useRef(currentFrequency);
   currentFrequencyRef.current = currentFrequency;
   const [currentRadioMode, setCurrentRadioMode] = useState<string>('USB');
-  const currentRadioModeRef = React.useRef(currentRadioMode);
-  currentRadioModeRef.current = currentRadioMode;
   const [isAddPresetModalOpen, setIsAddPresetModalOpen] = useState(false);
 
   // Split state
   const { splitEnabled, splitTxFrequency, splitTxFrequencyWritable } = useSplitState();
-  const showSplitFrequencyControls = splitEnabled && splitTxFrequencyWritable && splitTxFrequency !== null;
-  const [currentTxFrequency, setCurrentTxFrequency] = useState<number>(splitTxFrequency ?? 14270000);
+  const showSplitFrequencyControls = splitEnabled;
+  const [currentTxFrequency, setCurrentTxFrequency] = useState<number>(splitTxFrequency ?? currentFrequency);
   const currentTxFrequencyRef = React.useRef(currentTxFrequency);
   currentTxFrequencyRef.current = currentTxFrequency;
 
   // Sync TX frequency from store when split state changes
   useEffect(() => {
-    if (showSplitFrequencyControls && splitTxFrequency && splitTxFrequency > 0) {
-      setCurrentTxFrequency(splitTxFrequency);
+    if (!splitEnabled) {
+      return;
     }
-  }, [showSplitFrequencyControls, splitTxFrequency]);
+    if (splitTxFrequency && splitTxFrequency > 0) {
+      setCurrentTxFrequency(splitTxFrequency);
+    } else if (currentFrequency > 0) {
+      setCurrentTxFrequency(currentFrequency);
+    }
+  }, [currentFrequency, splitEnabled, splitTxFrequency]);
 
   // TX frequency echo suppression
   const pendingTxFreqRef = React.useRef<{ intendedFrequency: number; sentAt: number } | null>(null);
   const txFreqDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const applyTxFrequency = useCallback((newFreq: number) => {
-    if (!canWriteFrequency || !connection.state.isConnected) {
+    if (!canWriteFrequency || !splitTxFrequencyWritable || !connection.state.isConnected) {
       pendingTxFreqRef.current = null;
       return;
     }
@@ -117,7 +120,7 @@ export const VoiceFrequencyControl: React.FC = () => {
         wsClient.setSplitFrequency(pending.intendedFrequency);
       }
     }, FREQ_DEBOUNCE_MS);
-  }, [canWriteFrequency, connection.state.isConnected, connection.state.radioService]);
+  }, [canWriteFrequency, connection.state.isConnected, connection.state.radioService, splitTxFrequencyWritable]);
 
   // Pending frequency tracking: suppresses stale server echo (e.g. from 5s radio polling)
   // overwriting user's just-typed value. Also used as a trailing-debounce buffer so that
@@ -169,15 +172,17 @@ export const VoiceFrequencyControl: React.FC = () => {
     const freq = pending.intendedFrequency;
     pendingFreqRef.current = { intendedFrequency: freq, sentAt: Date.now() };
     try {
-      const response = await setRadioFrequencyWithIntent({
+      const request: Parameters<typeof setRadioFrequencyWithIntent>[0] = {
         frequency: freq,
         mode: 'VOICE',
         band: overrides?.band ?? 'Custom',
         description: overrides?.description ?? `${(freq / 1000000).toFixed(3)} MHz`,
-        radioMode: overrides?.radioMode ?? currentRadioModeRef.current,
-        repeaterShift: 'none',
-        toneMode: 'none',
-      });
+      };
+      if (typeof overrides?.radioMode === 'string' && overrides.radioMode.trim().length > 0) {
+        request.radioMode = overrides.radioMode;
+      }
+
+      const response = await setRadioFrequencyWithIntent(request);
       if (response.success) {
         resetOperatorsAfterOperatingStateChange();
       }
@@ -560,18 +565,23 @@ export const VoiceFrequencyControl: React.FC = () => {
 
     try {
       const supportsFmOptions = preset.radioMode === 'FM';
-      const response = await setRadioFrequencyWithIntent({
+      const request: Parameters<typeof setRadioFrequencyWithIntent>[0] = {
         frequency: preset.frequency,
         mode: 'VOICE',
         band: preset.band,
         description: preset.label,
         radioMode: preset.radioMode,
-        repeaterShift: supportsFmOptions ? (preset.repeaterShift ?? 'none') : 'none',
-        repeaterOffsetHz: supportsFmOptions ? preset.repeaterOffsetHz : undefined,
-        toneMode: supportsFmOptions ? (preset.toneMode ?? 'none') : 'none',
-        ctcssToneTenthsHz: supportsFmOptions ? preset.ctcssToneTenthsHz : undefined,
-        dcsCode: supportsFmOptions ? preset.dcsCode : undefined,
-      });
+      };
+
+      if (supportsFmOptions) {
+        request.repeaterShift = preset.repeaterShift ?? 'none';
+        request.repeaterOffsetHz = preset.repeaterOffsetHz;
+        request.toneMode = preset.toneMode ?? 'none';
+        request.ctcssToneTenthsHz = preset.ctcssToneTenthsHz;
+        request.dcsCode = preset.dcsCode;
+      }
+
+      const response = await setRadioFrequencyWithIntent(request);
 
       if (response.success) {
         if (pendingFreqRef.current) {
@@ -746,7 +756,7 @@ export const VoiceFrequencyControl: React.FC = () => {
                         key={`tx-d-${i}`}
                         digit={entry.char}
                         placeValue={entry.placeValue}
-                        disabled={!canWriteFrequency}
+                        disabled={!canWriteFrequency || !splitTxFrequencyWritable || !connection.state.isConnected}
                         isLeadingZero={entry.isLeadingZero}
                         onIncrement={() => changeTxDigitAtPlace(entry.placeValue, 1)}
                         onDecrement={() => changeTxDigitAtPlace(entry.placeValue, -1)}

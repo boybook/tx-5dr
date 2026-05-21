@@ -83,8 +83,8 @@ export const CWFrequencyControl: React.FC = () => {
 
   // Split state
   const { splitEnabled, splitTxFrequency, splitTxFrequencyWritable } = useSplitState();
-  const showSplitFrequencyControls = splitEnabled && splitTxFrequencyWritable && splitTxFrequency !== null;
-  const [currentTxFrequency, setCurrentTxFrequency] = React.useState<number>(splitTxFrequency ?? DEFAULT_CW_FREQUENCY);
+  const showSplitFrequencyControls = splitEnabled;
+  const [currentTxFrequency, setCurrentTxFrequency] = React.useState<number>(splitTxFrequency ?? liveFrequency ?? DEFAULT_CW_FREQUENCY);
   const currentTxFrequencyRef = React.useRef(currentTxFrequency);
   currentTxFrequencyRef.current = currentTxFrequency;
   const pendingTxFreqRef = React.useRef<{ intendedFrequency: number; sentAt: number } | null>(null);
@@ -92,10 +92,15 @@ export const CWFrequencyControl: React.FC = () => {
 
   // Sync TX frequency from store when split state changes
   React.useEffect(() => {
-    if (showSplitFrequencyControls && splitTxFrequency && splitTxFrequency > 0) {
-      setCurrentTxFrequency(splitTxFrequency);
+    if (!splitEnabled) {
+      return;
     }
-  }, [showSplitFrequencyControls, splitTxFrequency]);
+    if (splitTxFrequency && splitTxFrequency > 0) {
+      setCurrentTxFrequency(splitTxFrequency);
+    } else if (liveFrequency && liveFrequency > 0) {
+      setCurrentTxFrequency(liveFrequency);
+    }
+  }, [liveFrequency, splitEnabled, splitTxFrequency]);
 
   const resetOperatorsAfterOperatingStateChange = useCallback(() => {
     resetOperatorsForOperatingStateChange({
@@ -134,7 +139,6 @@ export const CWFrequencyControl: React.FC = () => {
       const response = await setRadioFrequencyWithIntent({
         frequency: freq,
         mode: 'CW',
-        radioMode: 'CW',
         band,
         description,
       });
@@ -221,7 +225,7 @@ export const CWFrequencyControl: React.FC = () => {
   const txFrequencyDigits = useMemo(() => buildFrequencyDigits(currentTxFrequency), [currentTxFrequency]);
 
   const applyTxFrequency = useCallback((newFreq: number) => {
-    if (!canWriteFrequency || !connection.state.isConnected) {
+    if (!canWriteFrequency || !splitTxFrequencyWritable || !connection.state.isConnected) {
       pendingTxFreqRef.current = null;
       return;
     }
@@ -241,7 +245,7 @@ export const CWFrequencyControl: React.FC = () => {
         wsClient.setSplitFrequency(pending.intendedFrequency);
       }
     }, FREQ_DEBOUNCE_MS);
-  }, [canWriteFrequency, connection.state.isConnected, connection.state.radioService]);
+  }, [canWriteFrequency, connection.state.isConnected, connection.state.radioService, splitTxFrequencyWritable]);
 
   const changeDigitAtPlace = useCallback((placeValue: number, delta: number) => {
     const freq = currentFrequencyRef.current;
@@ -324,7 +328,7 @@ export const CWFrequencyControl: React.FC = () => {
                       key={`cw-tx-d-${i}`}
                       digit={entry.char}
                       placeValue={entry.placeValue}
-                      disabled={!canWriteFrequency || !connection.state.isConnected}
+                      disabled={!canWriteFrequency || !splitTxFrequencyWritable || !connection.state.isConnected}
                       isLeadingZero={entry.isLeadingZero}
                       digitClassName="text-2xl"
                       arrowClassName="h-3 text-[10px]"
