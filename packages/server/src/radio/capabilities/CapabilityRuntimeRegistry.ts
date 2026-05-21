@@ -13,6 +13,7 @@ import type { CapabilityRuntimeEvents, CapabilitySupportSource, ProbeSupportResu
 const logger = createLogger('CapabilityRuntimeRegistry');
 const RADIO_IO_BACKPRESSURE_WARN_MS = 30_000;
 const RADIO_IO_BACKPRESSURE_WARN_COOLDOWN_MS = 10_000;
+const RADIO_IO_BACKPRESSURE_RESET_GRACE_MS = 5_000;
 
 function shouldEnforceDiscreteNumberOptions(descriptor: CapabilityDescriptor): boolean {
   // rf_power keeps Hamlib discrete metadata for the optional step slider, but
@@ -27,13 +28,16 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
   private readonly valueCache = new Map<string, CapabilityState>();
   private readonly descriptorCache = new Map<string, CapabilityDescriptor>();
   private readonly pollingTimers = new Map<string, ReturnType<typeof setInterval>>();
+  private readonly activePolls = new Map<string, Promise<void>>();
 
   // PTT state: pause capability polling during TX to reduce USB serial bus load
   private _isPTTActive = false;
   private _isPTTCooldown = false;
   private _pttCooldownTimer: ReturnType<typeof setTimeout> | null = null;
   private radioIoBackpressureStartedAt: number | null = null;
+  private lastRadioIoBackpressureSeenAt = 0;
   private lastRadioIoBackpressureWarnAt = 0;
+  private splitPollSequence = 0;
 
   setPTTActive(active: boolean): void {
     if (active) {
@@ -95,6 +99,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     this.supportSources.clear();
     this.valueCache.clear();
     this.descriptorCache.clear();
+    this.activePolls.clear();
     this.emit('capabilityList', { descriptors: [], capabilities: [] });
   }
 
@@ -165,10 +170,37 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       throw new Error(`No write handler for capability '${id}'`);
     }
 
+    const isSplitWrite = id === 'split_enabled';
+    const writeStartedAt = Date.now();
     logger.info(`Writing capability: ${id}`, { value });
+    if (isSplitWrite) {
+      logger.info('Split capability write started', {
+        value,
+        cachedValue: this.valueCache.get(id)?.value,
+        cachedMeta: this.valueCache.get(id)?.meta,
+        queue: this.connection.getRadioIoQueueSnapshot?.(),
+      });
+    }
+
     try {
       await definition.write(this.connection, value);
+      if (isSplitWrite) {
+        logger.info('Split capability write completed', {
+          value,
+          durationMs: Date.now() - writeStartedAt,
+          queue: this.connection.getRadioIoQueueSnapshot?.(),
+        });
+      }
     } catch (error) {
+      if (isSplitWrite) {
+        logger.warn('Split capability write failed', {
+          value,
+          durationMs: Date.now() - writeStartedAt,
+          error: error instanceof Error ? error.message : String(error),
+          queue: this.connection.getRadioIoQueueSnapshot?.(),
+        });
+      }
+
       if (isRecoverableOptionalRadioError(error)) {
         this.markCapabilityUnavailable(id, error);
         throw new Error(`Capability '${id}' is currently unavailable`);
@@ -186,6 +218,21 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     };
     this.valueCache.set(id, optimisticState);
     this.emit('capabilityChanged', optimisticState);
+
+    if (id === 'split_enabled') {
+      logger.info('Split capability write readback requested', {
+        value,
+        queue: this.connection.getRadioIoQueueSnapshot?.(),
+      });
+      await this.pollCapabilityOnce(id, { queueAfterActive: true, source: 'write-readback' });
+      logger.info('Split capability write readback completed', {
+        value,
+        cachedValue: this.valueCache.get(id)?.value,
+        cachedMeta: this.valueCache.get(id)?.meta,
+        queue: this.connection.getRadioIoQueueSnapshot?.(),
+      });
+      return;
+    }
 
     setTimeout(() => {
       void this.pollCapabilityOnce(id);
@@ -359,17 +406,69 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     this._isPTTActive = false;
     this._isPTTCooldown = false;
     this.radioIoBackpressureStartedAt = null;
+    this.lastRadioIoBackpressureSeenAt = 0;
     this.lastRadioIoBackpressureWarnAt = 0;
+    this.activePolls.clear();
     if (this._pttCooldownTimer) {
       clearTimeout(this._pttCooldownTimer);
       this._pttCooldownTimer = null;
     }
   }
 
-  private async pollCapabilityOnce(id: string): Promise<void> {
+  private async pollCapabilityOnce(
+    id: string,
+    options: { queueAfterActive?: boolean; source?: string } = {},
+  ): Promise<void> {
+    const activePoll = this.activePolls.get(id);
+    if (activePoll) {
+      if (id === 'split_enabled') {
+        logger.info('Split capability poll already active', {
+          source: options.source ?? 'polling',
+          queueAfterActive: Boolean(options.queueAfterActive),
+        });
+      }
+
+      if (options.queueAfterActive) {
+        try {
+          await activePoll;
+        } catch {
+          // The follow-up poll below will surface the latest state/error.
+        }
+        return this.pollCapabilityOnce(id, { ...options, queueAfterActive: false });
+      }
+      return;
+    }
+
+    const poll = this.runCapabilityPoll(id, options);
+    this.activePolls.set(id, poll);
+    try {
+      await poll;
+    } finally {
+      if (this.activePolls.get(id) === poll) {
+        this.activePolls.delete(id);
+      }
+    }
+  }
+
+  private async runCapabilityPoll(
+    id: string,
+    options: { source?: string } = {},
+  ): Promise<void> {
     if (!this.connection) return;
 
+    const isSplitPoll = id === 'split_enabled';
+    const splitPollId = isSplitPoll ? ++this.splitPollSequence : 0;
+    const splitPollStartedAt = Date.now();
+
     if (this._isPTTActive || this._isPTTCooldown) {
+      if (isSplitPoll) {
+        logger.info('Split capability poll skipped: PTT guard active', {
+          pollId: splitPollId,
+          source: options.source ?? 'polling',
+          pttActive: this._isPTTActive,
+          pttCooldown: this._isPTTCooldown,
+        });
+      }
       return;
     }
 
@@ -378,8 +477,16 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     }
 
     if (this.connection.isCriticalOperationActive?.()) {
-      logger.debug(`Skipping capability poll while critical radio operation is active: ${id}`);
-      return;
+      if (isSplitPoll) {
+        logger.info('Split capability poll queued despite critical radio operation active', {
+          pollId: splitPollId,
+          source: options.source ?? 'polling',
+          queue: this.connection.getRadioIoQueueSnapshot?.(),
+        });
+      } else {
+        logger.debug(`Skipping capability poll while critical radio operation is active: ${id}`);
+        return;
+      }
     }
 
     const definition = CAPABILITY_DEFINITION_MAP.get(id);
@@ -387,7 +494,16 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     if (!definition?.read || !descriptor?.readable) return;
 
     try {
-      await this.refreshDescriptorIfNeeded(id, definition);
+      if (isSplitPoll) {
+        logger.info('Split capability poll started', {
+          pollId: splitPollId,
+          source: options.source ?? 'polling',
+          cachedValue: this.valueCache.get(id)?.value,
+          cachedMeta: this.valueCache.get(id)?.meta,
+          queue: this.connection.getRadioIoQueueSnapshot?.(),
+        });
+      }
+
       const newValue = await definition.read(this.connection);
       const cached = this.valueCache.get(id);
 
@@ -400,11 +516,38 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
             mergedMeta = { ...(mergedMeta ?? {}), ...extraMeta };
           }
         } catch (metaError) {
+          if (isSplitPoll) {
+            logger.info('Split capability poll meta read failed', {
+              pollId: splitPollId,
+              source: options.source ?? 'polling',
+              error: metaError instanceof Error ? metaError.message : String(metaError),
+            });
+          }
           logger.debug(`readMeta failed for ${id}`, metaError);
         }
       }
 
-      if (!cached || cached.value !== newValue || cached.availability !== 'available' || cached.lastError || JSON.stringify(cached.meta) !== JSON.stringify(mergedMeta)) {
+      const changed = !cached
+        || cached.value !== newValue
+        || cached.availability !== 'available'
+        || Boolean(cached.lastError)
+        || JSON.stringify(cached.meta) !== JSON.stringify(mergedMeta);
+
+      if (isSplitPoll) {
+        logger.info('Split capability poll completed', {
+          pollId: splitPollId,
+          source: options.source ?? 'polling',
+          durationMs: Date.now() - splitPollStartedAt,
+          value: newValue,
+          meta: mergedMeta,
+          cachedValue: cached?.value,
+          cachedMeta: cached?.meta,
+          changed,
+          queue: this.connection.getRadioIoQueueSnapshot?.(),
+        });
+      }
+
+      if (changed) {
         const newState: CapabilityState = {
           id,
           supported: true,
@@ -431,6 +574,16 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
         this.markRelatedTunerActionAvailable();
       }
     } catch (error) {
+      if (isSplitPoll) {
+        logger.warn('Split capability poll failed', {
+          pollId: splitPollId,
+          source: options.source ?? 'polling',
+          durationMs: Date.now() - splitPollStartedAt,
+          error: error instanceof Error ? error.message : String(error),
+          queue: this.connection.getRadioIoQueueSnapshot?.(),
+        });
+      }
+
       if (isRecoverableOptionalRadioError(error)) {
         if (this.supportedCapabilities.has(id)) {
           this.markCapabilityUnavailable(id, error);
@@ -445,13 +598,23 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
   }
 
   private shouldSkipForRadioIoBackpressure(id: string): boolean {
-    const snapshot = this.connection?.getRadioIoQueueSnapshot?.();
-    if (!snapshot?.backpressure) {
-      this.radioIoBackpressureStartedAt = null;
+    if (id === 'split_enabled') {
       return false;
     }
 
+    const snapshot = this.connection?.getRadioIoQueueSnapshot?.();
     const now = Date.now();
+    if (!snapshot?.backpressure) {
+      if (
+        this.radioIoBackpressureStartedAt !== null
+        && now - this.lastRadioIoBackpressureSeenAt > RADIO_IO_BACKPRESSURE_RESET_GRACE_MS
+      ) {
+        this.radioIoBackpressureStartedAt = null;
+      }
+      return false;
+    }
+
+    this.lastRadioIoBackpressureSeenAt = now;
     if (this.radioIoBackpressureStartedAt === null) {
       this.radioIoBackpressureStartedAt = now;
     }
@@ -463,6 +626,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       pauseDurationMs,
       ...snapshot,
     };
+
     logger.debug('Skipping capability poll while radio I/O queue is busy', context);
 
     if (

@@ -271,6 +271,49 @@ describe('collapsed spectrum positioning', () => {
     ]);
   });
 
+  it('does not synthesize a Split TX overlay before TX frequency metadata arrives', () => {
+    expect(buildRadioSdrTxBandOverlays({
+      engineMode: 'cw',
+      isRadioSdrSelected: true,
+      currentRadioFrequency: 14_050_000,
+      splitEnabled: true,
+      splitTxFrequency: null,
+      voice: null,
+      voiceOverlayIsInteractive: false,
+    })).toEqual([{
+      id: 'cw-current-rx',
+      label: 'RX',
+      lineFrequency: 14_050_000,
+      rangeStartFrequency: 14_050_000,
+      rangeEndFrequency: 14_050_000,
+      draggable: false,
+      variant: 'rx',
+    }]);
+
+    expect(buildRadioSdrTxBandOverlays({
+      engineMode: 'voice',
+      isRadioSdrSelected: true,
+      currentRadioFrequency: 14_200_000,
+      splitEnabled: true,
+      splitTxFrequency: null,
+      voice: {
+        radioMode: 'USB',
+        bandwidthLabel: '2400 Hz',
+        occupiedBandwidthHz: 2400,
+        offsetModel: 'upper',
+      },
+      voiceOverlayIsInteractive: true,
+    })).toEqual([{
+      id: 'voice-current-rx',
+      label: 'RX',
+      lineFrequency: 14_200_000,
+      rangeStartFrequency: 14_200_000,
+      rangeEndFrequency: 14_202_400,
+      draggable: true,
+      variant: 'rx',
+    }]);
+  });
+
   it('builds CW SDR frequency requests with CW mode and 10 Hz snapping', () => {
     expect(buildRadioSdrFrequencyRequest({
       engineMode: 'cw',

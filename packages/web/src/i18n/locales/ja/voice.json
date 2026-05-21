@@ -22,7 +22,10 @@
     "confirm": "確認",
     "switchSuccess": "周波数切り替えが成功しました",
     "switchFailed": "周波数切り替えに失敗しました",
-    "switched": "{{freq}} MHzに切り替えました"
+    "switched": "{{freq}} MHzに切り替えました",
+    "rxLabel": "RX",
+    "txLabel": "TX",
+    "txPending": "同期中"
   },
   "radioMode": {
     "title": "無線機モード",

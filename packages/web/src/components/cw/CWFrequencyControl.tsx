@@ -84,9 +84,12 @@ export const CWFrequencyControl: React.FC = () => {
   // Split state
   const { splitEnabled, splitTxFrequency, splitTxFrequencyWritable } = useSplitState();
   const showSplitFrequencyControls = splitEnabled;
-  const [currentTxFrequency, setCurrentTxFrequency] = React.useState<number>(splitTxFrequency ?? liveFrequency ?? DEFAULT_CW_FREQUENCY);
+  const [currentTxFrequency, setCurrentTxFrequency] = React.useState<number>(
+    splitTxFrequency && splitTxFrequency > 0 ? splitTxFrequency : 0,
+  );
   const currentTxFrequencyRef = React.useRef(currentTxFrequency);
   currentTxFrequencyRef.current = currentTxFrequency;
+  const canEditSplitTxFrequency = currentTxFrequency > 0;
   const pendingTxFreqRef = React.useRef<{ intendedFrequency: number; sentAt: number } | null>(null);
   const txFreqDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -97,10 +100,8 @@ export const CWFrequencyControl: React.FC = () => {
     }
     if (splitTxFrequency && splitTxFrequency > 0) {
       setCurrentTxFrequency(splitTxFrequency);
-    } else if (liveFrequency && liveFrequency > 0) {
-      setCurrentTxFrequency(liveFrequency);
     }
-  }, [liveFrequency, splitEnabled, splitTxFrequency]);
+  }, [splitEnabled, splitTxFrequency]);
 
   const resetOperatorsAfterOperatingStateChange = useCallback(() => {
     resetOperatorsForOperatingStateChange({
@@ -319,7 +320,7 @@ export const CWFrequencyControl: React.FC = () => {
             <div className={SPLIT_FREQUENCY_ROW_CLASS}>
               <span className="mr-2 text-[11px] font-semibold text-danger-500">{t('frequency.txLabel')}</span>
               <div className="flex flex-none items-center justify-center">
-                {txFrequencyDigits.map((entry, i) => {
+                {canEditSplitTxFrequency ? txFrequencyDigits.map((entry, i) => {
                   if (entry.isSeparator) {
                     return <span key={`cw-tx-sep-${i}`} className="mx-0.5 select-none text-2xl text-default-400">.</span>;
                   }
@@ -337,7 +338,11 @@ export const CWFrequencyControl: React.FC = () => {
                       onSetDigit={(v) => setTxDigitAtPlace(entry.placeValue, v)}
                     />
                   );
-                })}
+                }) : (
+                  <span className="font-mono text-xl font-semibold tracking-wide text-default-400 select-none">
+                    {t('frequency.txPending')}
+                  </span>
+                )}
               </div>
               <span className="ml-2 flex-none self-center text-[11px] font-semibold text-default-400">{t('frequency.mhz')}</span>
             </div>

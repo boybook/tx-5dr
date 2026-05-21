@@ -24,7 +24,8 @@
     "switchFailed": "Frequency switch failed",
     "switched": "Switched to {{freq}} MHz",
     "rxLabel": "RX",
-    "txLabel": "TX"
+    "txLabel": "TX",
+    "txPending": "Syncing"
   },
   "radioMode": {
     "title": "Radio Mode",

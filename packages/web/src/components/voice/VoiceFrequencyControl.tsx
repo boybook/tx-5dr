@@ -79,9 +79,12 @@ export const VoiceFrequencyControl: React.FC = () => {
   // Split state
   const { splitEnabled, splitTxFrequency, splitTxFrequencyWritable } = useSplitState();
   const showSplitFrequencyControls = splitEnabled;
-  const [currentTxFrequency, setCurrentTxFrequency] = useState<number>(splitTxFrequency ?? currentFrequency);
+  const [currentTxFrequency, setCurrentTxFrequency] = useState<number>(
+    splitTxFrequency && splitTxFrequency > 0 ? splitTxFrequency : 0,
+  );
   const currentTxFrequencyRef = React.useRef(currentTxFrequency);
   currentTxFrequencyRef.current = currentTxFrequency;
+  const canEditSplitTxFrequency = currentTxFrequency > 0;
 
   // Sync TX frequency from store when split state changes
   useEffect(() => {
@@ -90,10 +93,8 @@ export const VoiceFrequencyControl: React.FC = () => {
     }
     if (splitTxFrequency && splitTxFrequency > 0) {
       setCurrentTxFrequency(splitTxFrequency);
-    } else if (currentFrequency > 0) {
-      setCurrentTxFrequency(currentFrequency);
     }
-  }, [currentFrequency, splitEnabled, splitTxFrequency]);
+  }, [splitEnabled, splitTxFrequency]);
 
   // TX frequency echo suppression
   const pendingTxFreqRef = React.useRef<{ intendedFrequency: number; sentAt: number } | null>(null);
@@ -747,7 +748,7 @@ export const VoiceFrequencyControl: React.FC = () => {
               <div className={SPLIT_FREQUENCY_ROW_CLASS}>
                 <span className="mr-2 text-xs font-semibold text-danger-500">{t('frequency.txLabel')}</span>
                 <div className="flex flex-none items-center justify-center">
-                  {txFrequencyDigits.map((entry, i) => {
+                  {canEditSplitTxFrequency ? txFrequencyDigits.map((entry, i) => {
                     if (entry.isSeparator) {
                       return <span key={`tx-sep-${i}`} className="text-3xl mx-0.5 text-default-400 select-none">.</span>;
                     }
@@ -763,7 +764,11 @@ export const VoiceFrequencyControl: React.FC = () => {
                         onSetDigit={(v) => setTxDigitAtPlace(entry.placeValue, v)}
                       />
                     );
-                  })}
+                  }) : (
+                    <span className="font-mono text-2xl font-semibold tracking-wide text-default-400 select-none">
+                      {t('frequency.txPending')}
+                    </span>
+                  )}
                 </div>
                 <span className="ml-2 flex-none self-center text-xs font-semibold text-default-400">{t('frequency.mhz')}</span>
               </div>

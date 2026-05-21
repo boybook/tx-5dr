@@ -10,6 +10,8 @@ import { RadioErrorCode } from '../../utils/errors/RadioError.js';
 type MockRig = {
   setFrequency: ReturnType<typeof vi.fn>;
   getSplit: ReturnType<typeof vi.fn>;
+  setSplit: ReturnType<typeof vi.fn>;
+  getSplitFreq: ReturnType<typeof vi.fn>;
   setSplitFreq: ReturnType<typeof vi.fn>;
   setMode: ReturnType<typeof vi.fn>;
   setPtt: ReturnType<typeof vi.fn>;
@@ -95,6 +97,8 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
   const rig: MockRig = {
     setFrequency: vi.fn().mockResolvedValue(0),
     getSplit: vi.fn().mockResolvedValue({ enabled: false }),
+    setSplit: vi.fn().mockResolvedValue(0),
+    getSplitFreq: vi.fn().mockResolvedValue(null),
     setSplitFreq: vi.fn().mockResolvedValue(0),
     setMode: vi.fn().mockResolvedValue(0),
     setPtt: vi.fn().mockResolvedValue(0),
@@ -261,6 +265,85 @@ describe('HamlibConnection', () => {
 
     expect(rig.getSplit).not.toHaveBeenCalled();
     expect(rig.setSplitFreq).not.toHaveBeenCalled();
+  });
+
+  it('live-reads Split status after support has been detected', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getSplit: vi.fn()
+        .mockResolvedValueOnce({ enabled: true, txVfo: 'VFOB' })
+        .mockResolvedValueOnce({ enabled: false, txVfo: 'VFOB' }),
+    });
+
+    await expect(connection.getSplitEnabled()).resolves.toBe(true);
+    await expect(connection.getSplitEnabled()).resolves.toBe(false);
+
+    expect(rig.getSplit).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns null Split TX frequency after a live Split read reports disabled', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getSplit: vi.fn()
+        .mockResolvedValueOnce({ enabled: true, txVfo: 'VFOB' })
+        .mockResolvedValueOnce({ enabled: false, txVfo: 'VFOB' }),
+      getSplitFreq: vi.fn().mockResolvedValue(14_275_000),
+    });
+
+    await expect(connection.getSplitEnabled()).resolves.toBe(true);
+    await expect(connection.getSplitFrequency()).resolves.toBeNull();
+
+    expect(rig.getSplit).toHaveBeenCalledTimes(2);
+    expect(rig.getSplitFreq).not.toHaveBeenCalled();
+  });
+
+  it('enables Split with an explicit TX VFO before falling back to the default Split write', async () => {
+    const { connection, rig } = createConnectedConnection();
+
+    await expect(connection.setSplitEnabled(true)).resolves.toBeUndefined();
+    expect(rig.setSplit).toHaveBeenCalledWith(true, 'currVFO', 'Other');
+
+    rig.setSplit.mockClear();
+    rig.setSplit
+      .mockRejectedValueOnce(new Error('Invalid VFO'))
+      .mockResolvedValueOnce(0);
+
+    await expect(connection.setSplitEnabled(true)).resolves.toBeUndefined();
+    expect(rig.setSplit).toHaveBeenNthCalledWith(1, true, 'currVFO', 'Other');
+    expect(rig.setSplit).toHaveBeenNthCalledWith(2, true, 'currVFO', 'otherVFO');
+
+    rig.setSplit.mockClear();
+    rig.setSplit
+      .mockRejectedValueOnce(new Error('Invalid VFO'))
+      .mockRejectedValueOnce(new Error('Invalid VFO'))
+      .mockResolvedValueOnce(0);
+
+    await expect(connection.setSplitEnabled(true)).resolves.toBeUndefined();
+    expect(rig.setSplit).toHaveBeenNthCalledWith(1, true, 'currVFO', 'Other');
+    expect(rig.setSplit).toHaveBeenNthCalledWith(2, true, 'currVFO', 'otherVFO');
+    expect(rig.setSplit).toHaveBeenNthCalledWith(3, true);
+  });
+
+  it('reads Split TX frequency from the reported TX VFO and falls back when Hamlib reports current VFO as zero', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getSplit: vi.fn().mockResolvedValue({ enabled: true, txVfo: 'currVFO' }),
+      getSplitFreq: vi.fn().mockImplementation(async (vfo?: string) => (
+        vfo === 'otherVFO' ? 14_275_000 : 0
+      )),
+    });
+
+    await expect(connection.getSplitFrequency()).resolves.toBe(14_275_000);
+
+    expect(rig.getSplitFreq).toHaveBeenNthCalledWith(1, 'Other');
+    expect(rig.getSplitFreq).toHaveBeenNthCalledWith(2, 'otherVFO');
+  });
+
+  it('writes Split TX frequency to the live Split TX VFO', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getSplit: vi.fn().mockResolvedValue({ enabled: true, txVfo: 'VFOB' }),
+    });
+
+    await expect(connection.setSplitFrequency(14_275_000)).resolves.toBeUndefined();
+
+    expect(rig.setSplitFreq).toHaveBeenCalledWith(14_275_000, 'VFOB');
   });
 
   it('does not attempt split TX sync when the primary frequency write fails', async () => {

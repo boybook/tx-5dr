@@ -862,14 +862,15 @@ function createDefinitions(): CapabilityDefinition[] {
       write: (conn, value) => conn.setModeBandwidth!(value as RadioModeBandwidth),
     },
     {
-      ...createRuntimeBooleanDefinition('split_enabled', 'operation', 'getSplitEnabled', 'setSplitEnabled'),
+      ...createRuntimeBooleanDefinition('split_enabled', 'operation', 'getSplitEnabled', 'setSplitEnabled', undefined, {
+        pollIntervalMs: 2000,
+      }),
       readMeta: async (conn) => {
         const canReadTxFrequency = typeof conn.getSplitFrequency === 'function';
         const canWriteTxFrequency = typeof conn.setSplitFrequency === 'function';
         const txFrequencyWritable = canReadTxFrequency && canWriteTxFrequency;
-        const enabled = await conn.getSplitEnabled!();
 
-        if (!enabled || !canReadTxFrequency) {
+        if (!canReadTxFrequency) {
           return { txFrequency: null, txFrequencyWritable };
         }
 
