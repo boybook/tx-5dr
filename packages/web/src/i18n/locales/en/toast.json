@@ -29,6 +29,12 @@
       "title": "QSO Updated",
       "description": "{{summary}}"
     },
+    "qsoSummary": {
+      "title": "QSO Notification Summary",
+      "descriptionLogged": "{{logged}} QSO(s) were logged while the page was in the background. Latest: {{latestSummary}}",
+      "descriptionUpdated": "{{updated}} QSO(s) were updated while the page was in the background. Latest: {{latestSummary}}",
+      "descriptionMixed": "{{logged}} QSO(s) were logged and {{updated}} QSO(s) were updated while the page was in the background. Latest: {{latestSummary}}"
+    },
     "realtimeConnectivityWarning": {
       "title": "Realtime Voice Connectivity Issue",
       "description": "Realtime voice connectivity failed, so the client may be unable to hear or send audio.\n\nChecks:\n- Confirm /api/realtime/rtc-data-audio signaling is reachable\n- Confirm rtc-data-audio UDP port {{localUdpPort}} is open or mapped\n- Confirm the configured public UDP endpoint is reachable\n- Confirm the client can reach {{signalingUrl}}\n\nTechnical details: {{details}}"

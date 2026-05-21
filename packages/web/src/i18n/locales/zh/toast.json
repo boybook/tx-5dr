@@ -29,6 +29,12 @@
       "title": "QSO已更新",
       "description": "{{summary}}"
     },
+    "qsoSummary": {
+      "title": "QSO通知汇总",
+      "descriptionLogged": "后台期间记录了 {{logged}} 个 QSO，最新：{{latestSummary}}",
+      "descriptionUpdated": "后台期间更新了 {{updated}} 个 QSO，最新：{{latestSummary}}",
+      "descriptionMixed": "后台期间记录了 {{logged}} 个 QSO、更新了 {{updated}} 个 QSO，最新：{{latestSummary}}"
+    },
     "realtimeConnectivityWarning": {
       "title": "实时语音连接异常",
       "description": "实时语音连接异常，客户端可能无法正常发送或听到内容。\n\n排查建议：\n- 确认 /api/realtime/rtc-data-audio 信令可达\n- 确认 rtc-data-audio UDP 端口 {{localUdpPort}} 已开放或映射\n- 确认配置的公网 UDP 端点可通\n- 确认客户端可访问 {{signalingUrl}}\n\n技术详情：{{details}}"

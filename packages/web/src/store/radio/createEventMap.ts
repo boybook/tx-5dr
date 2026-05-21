@@ -45,6 +45,7 @@ import {
   createRefreshStatusAction,
   isRetryableError,
 } from '../../utils/errorToast';
+import { handleQsoToastAggregation, type ServerTextToastMessage } from '../../utils/qsoToastAggregator';
 import { isSpectrumSubscriptionPaused } from '../../utils/spectrumSubscriptionPause';
 import i18n from '../../i18n/index';
 import type { AuthState } from '../authStore';
@@ -675,7 +676,7 @@ export function createRadioEventMap({
       logger.warn('Radio disconnected during transmission:', data);
     },
     textMessage: (data: unknown) => {
-      const msgData = data as { title: string; text: string; color?: string; timeout?: number | null; key?: string; params?: Record<string, string> };
+      const msgData = data as { title: string; text: string; color?: string; timeout?: number | null; key?: string; params?: Record<string, string>; createdAtMs?: number };
       logger.debug('Text message received:', msgData);
       const title = msgData.key
         ? i18n.t(`toast:serverMessage.${msgData.key}.title`, msgData.params || {})
@@ -683,11 +684,23 @@ export function createRadioEventMap({
       const description = msgData.key
         ? i18n.t(`toast:serverMessage.${msgData.key}.description`, { ...msgData.params, defaultValue: msgData.text })
         : msgData.text;
-      addToast({
+      const toast: ServerTextToastMessage = {
         title,
         description,
         color: (msgData.color as 'default' | 'foreground' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger' | undefined) || 'default',
         timeout: msgData.timeout === null ? undefined : (msgData.timeout || 3000),
+        key: msgData.key,
+        params: msgData.params,
+        createdAtMs: msgData.createdAtMs,
+      };
+      if (handleQsoToastAggregation(toast, addToast)) {
+        return;
+      }
+      addToast({
+        title: toast.title,
+        description: toast.description,
+        color: toast.color,
+        timeout: toast.timeout,
       });
     },
     profileChanged: (data: unknown) => {

@@ -1964,11 +1964,13 @@ export class WSServer extends WSMessageHandler {
     params?: Record<string, string>
   ): void {
     logger.debug(`broadcasting text message: ${title} - ${text}`, { color, timeout });
+    const createdAtMs = Date.now();
     this.broadcast(WSMessageType.TEXT_MESSAGE, {
       title,
       text,
       color,
       timeout,
+      createdAtMs,
       key,
       params
     });
@@ -1993,12 +1995,14 @@ export class WSServer extends WSMessageHandler {
   ): void {
     const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
     const targets = activeConnections.filter(conn => conn.isOperatorEnabled(operatorId));
+    const createdAtMs = Date.now();
     targets.forEach(conn => {
       conn.send(WSMessageType.TEXT_MESSAGE, {
         title,
         text,
         color,
         timeout,
+        createdAtMs,
         key,
         params
       });

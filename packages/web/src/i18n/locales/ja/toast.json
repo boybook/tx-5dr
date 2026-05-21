@@ -29,6 +29,12 @@
       "title": "QSOが更新されました",
       "description": "{{summary}}"
     },
+    "qsoSummary": {
+      "title": "QSO通知の概要",
+      "descriptionLogged": "バックグラウンド中に {{logged}} 件の QSO が記録されました。最新: {{latestSummary}}",
+      "descriptionUpdated": "バックグラウンド中に {{updated}} 件の QSO が更新されました。最新: {{latestSummary}}",
+      "descriptionMixed": "バックグラウンド中に {{logged}} 件の QSO が記録され、{{updated}} 件の QSO が更新されました。最新: {{latestSummary}}"
+    },
     "realtimeConnectivityWarning": {
       "title": "リアルタイム音声接続異常",
       "description": "リアルタイム音声接続が異常であるため、クライアントはコンテンツを正常に送信または聞くことができない可能性があります。\n\nトラブルシューティングの提案:\n- /api/realtime/rtc-data-audio シグナリングが到達可能であることを確認する\n- rtc-data-audio UDP ポート {{localUdpPort}} が開いているか、マップされていることを確認します。\n- 構成されたパブリック ネットワーク UDP エンドポイントが到達可能であることを確認します。\n- クライアントが {{signalingUrl}} にアクセスできることを確認します。\n\n技術詳細: {{details}}"
