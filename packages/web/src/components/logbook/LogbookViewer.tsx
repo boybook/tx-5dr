@@ -70,6 +70,10 @@ interface QSOFilters {
 
 type DxccViewMode = 'mixed' | 'band' | 'mode';
 type ExportFormat = 'adif' | 'csv';
+const EXPORT_FILE_EXTENSIONS: Record<ExportFormat, string> = {
+  adif: 'adi',
+  csv: 'csv',
+};
 type ExportRangeMode = 'all' | 'range';
 type ExportDateRange = NonNullable<DateRangePickerProps['value']>;
 type ExportDateValue = ExportDateRange['start'];
@@ -441,7 +445,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `logbook_${operatorId}_${new Date().toISOString().split('T')[0]}.${pendingExportFormat}`;
+      a.download = `logbook_${operatorId}_${new Date().toISOString().split('T')[0]}.${EXPORT_FILE_EXTENSIONS[pendingExportFormat]}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
