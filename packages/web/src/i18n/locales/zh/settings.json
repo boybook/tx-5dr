@@ -549,6 +549,7 @@
     "allPlugins": "全部插件",
     "allLevels": "全部级别",
     "logsEmpty": "当前会话还没有插件运行日志。请把插件文件夹放到运行时插件目录，点击重载插件后回到此处查看加载尝试和失败原因。",
+    "logsFilterEmpty": "当前筛选没有日志。",
     "directoryTargetPrefix": "目录",
     "unknownTarget": "未知目标",
     "viewLogDetails": "查看详情",

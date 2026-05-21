@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  filterPluginLogEntries,
   formatPluginLogLine,
+  getPluginLogTargetOptions,
   mergePluginLogEntries,
   toPluginLogHistoryViewEntry,
   toPluginLogViewEntry,
@@ -137,5 +139,97 @@ describe('PluginLogPanel logic helpers', () => {
     expect(systemView.stage).toBe('activate');
     expect(pluginView.source).toBe('plugin');
     expect(pluginView.message).toBe('FRPC started');
+  });
+
+  it('matches plugin and system logs with the same plugin target', () => {
+    const entries = [
+      {
+        source: 'system' as const,
+        stage: 'activate' as const,
+        level: 'info' as const,
+        pluginName: 'hello-plugin',
+        message: 'Plugin loaded',
+        timestamp: 1713744000000,
+      },
+      {
+        source: 'plugin' as const,
+        level: 'info' as const,
+        pluginName: 'hello-plugin',
+        message: 'plugin started',
+        timestamp: 1713744001000,
+      },
+      {
+        source: 'plugin' as const,
+        level: 'info' as const,
+        pluginName: 'other-plugin',
+        message: 'other started',
+        timestamp: 1713744002000,
+      },
+    ];
+
+    const options = getPluginLogTargetOptions(entries);
+    const filtered = filterPluginLogEntries(entries, 'hello-plugin');
+
+    expect(options).toContainEqual({ key: 'hello-plugin', label: 'hello-plugin' });
+    expect(filtered.map((entry) => entry.message)).toEqual(['Plugin loaded', 'plugin started']);
+  });
+
+  it('creates and filters directory targets for plugin load failures', () => {
+    const entries = [
+      {
+        source: 'system' as const,
+        stage: 'load' as const,
+        level: 'error' as const,
+        directoryName: 'broken-folder',
+        message: 'No entry file found',
+        timestamp: 1713744000000,
+      },
+      {
+        source: 'system' as const,
+        stage: 'load' as const,
+        level: 'error' as const,
+        details: { dirPath: '/tmp/plugins/also-broken' },
+        message: 'Manifest parse failed',
+        timestamp: 1713744001000,
+      },
+    ];
+
+    const options = getPluginLogTargetOptions(entries);
+    const filtered = filterPluginLogEntries(entries, 'dir:broken-folder');
+
+    expect(options).toContainEqual({ key: 'dir:broken-folder', label: 'dir:broken-folder' });
+    expect(options).toContainEqual({
+      key: 'dir:/tmp/plugins/also-broken',
+      label: 'dir:/tmp/plugins/also-broken',
+    });
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0]?.message).toBe('No entry file found');
+  });
+
+  it('excludes global system logs when a specific plugin target is selected', () => {
+    const entries = [
+      {
+        source: 'system' as const,
+        stage: 'scan' as const,
+        level: 'info' as const,
+        message: 'Scanning plugin directory',
+        timestamp: 1713744000000,
+      },
+      {
+        source: 'plugin' as const,
+        level: 'info' as const,
+        pluginName: 'hello-plugin',
+        message: 'plugin started',
+        timestamp: 1713744001000,
+      },
+    ];
+
+    expect(filterPluginLogEntries(entries, 'all')).toEqual(entries);
+    expect(getPluginLogTargetOptions(entries)).toEqual([
+      { key: 'hello-plugin', label: 'hello-plugin' },
+    ]);
+    expect(filterPluginLogEntries(entries, 'hello-plugin').map((entry) => entry.message)).toEqual([
+      'plugin started',
+    ]);
   });
 });

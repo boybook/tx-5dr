@@ -549,6 +549,7 @@
     "allPlugins": "All plugins",
     "allLevels": "All levels",
     "logsEmpty": "No plugin runtime logs yet. Put plugin folders in the runtime plugin directory, reload plugins, and return here to inspect load attempts and failures.",
+    "logsFilterEmpty": "No logs match the current plugin filter.",
     "directoryTargetPrefix": "Directory",
     "unknownTarget": "Unknown target",
     "viewLogDetails": "View details",

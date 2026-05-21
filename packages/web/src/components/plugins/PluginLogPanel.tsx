@@ -1,5 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import { Select, SelectItem } from '@heroui/react';
 import type {
   PluginLogHistoryEntry,
   PluginLogEntry,
@@ -78,6 +79,52 @@ function resolveTargetLabel(entry: PluginLogViewEntry): string {
   return entry.source === 'system' ? 'system' : 'plugin';
 }
 
+export function getPluginLogTargetKey(entry: PluginLogViewEntry): string | null {
+  if (entry.pluginName) {
+    return entry.pluginName;
+  }
+  if (entry.directoryName) {
+    return `dir:${entry.directoryName}`;
+  }
+  const pluginDir = getStringDetail(entry.details, 'pluginDir');
+  if (pluginDir) {
+    return `dir:${pluginDir}`;
+  }
+  const dirPath = getStringDetail(entry.details, 'dirPath');
+  if (dirPath) {
+    return `dir:${dirPath}`;
+  }
+  return null;
+}
+
+export interface PluginLogTargetOption {
+  key: string;
+  label: string;
+}
+
+export function getPluginLogTargetOptions(entries: PluginLogViewEntry[]): PluginLogTargetOption[] {
+  const options = new Map<string, string>();
+  for (const entry of entries) {
+    const key = getPluginLogTargetKey(entry);
+    if (key && !options.has(key)) {
+      options.set(key, resolveTargetLabel(entry));
+    }
+  }
+  return Array.from(options.entries())
+    .map(([key, label]) => ({ key, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+export function filterPluginLogEntries(
+  entries: PluginLogViewEntry[],
+  selectedTarget: string,
+): PluginLogViewEntry[] {
+  if (selectedTarget === 'all') {
+    return entries;
+  }
+  return entries.filter((entry) => getPluginLogTargetKey(entry) === selectedTarget);
+}
+
 export function formatPluginLogLine(entry: PluginLogViewEntry): string {
   const sourceLabel = entry.source === 'system' ? 'System' : 'Plugin';
   const stageSuffix = entry.stage ? `/${entry.stage}` : '';
@@ -147,7 +194,13 @@ export const PluginLogPanel: React.FC = () => {
   const { t } = useTranslation('settings');
   const connection = useConnection();
   const [entries, setEntries] = React.useState<PluginLogViewEntry[]>([]);
+  const [selectedTarget, setSelectedTarget] = React.useState('all');
   const logContainerRef = React.useRef<HTMLDivElement | null>(null);
+  const targetOptions = React.useMemo(() => getPluginLogTargetOptions(entries), [entries]);
+  const filteredEntries = React.useMemo(
+    () => filterPluginLogEntries(entries, selectedTarget),
+    [entries, selectedTarget],
+  );
 
   React.useEffect(() => {
     if (connection.state.isReady) {
@@ -178,29 +231,58 @@ export const PluginLogPanel: React.FC = () => {
 
   return (
     <section className="space-y-3">
-      <div>
-        <h3 className="text-base font-semibold text-default-700">
-          {t('plugins.logsTitle', 'Plugin Runtime Logs')}
-        </h3>
-        <p className="mt-1 text-sm text-default-400">
-          {t(
-            'plugins.logsDescription',
-            'Shows plugin loading/reload logs from the host and runtime logs emitted by plugin code.',
-          )}
-        </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h3 className="text-base font-semibold text-default-700">
+            {t('plugins.logsTitle', 'Plugin Runtime Logs')}
+          </h3>
+          <p className="mt-1 text-sm text-default-400">
+            {t(
+              'plugins.logsDescription',
+              'Shows plugin loading/reload logs from the host and runtime logs emitted by plugin code.',
+            )}
+          </p>
+        </div>
+        <Select
+          size="sm"
+          label={t('plugins.filterPlugin', 'Plugin')}
+          selectedKeys={[selectedTarget]}
+          onSelectionChange={(keys) => {
+            const nextTarget = Array.from(keys as Set<string>)[0];
+            if (nextTarget) {
+              setSelectedTarget(nextTarget);
+            }
+          }}
+          disallowEmptySelection
+          variant="bordered"
+          className="w-full sm:max-w-xs"
+        >
+          <SelectItem key="all">
+            {t('plugins.allPlugins', 'All plugins')}
+          </SelectItem>
+          {targetOptions.map((option) => (
+            <SelectItem key={option.key} textValue={option.label}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </Select>
       </div>
 
       <div
         ref={logContainerRef}
-        className="max-h-96 overflow-y-auto rounded-xl border border-default-200/70 bg-default-50/40"
+        className="h-96 overflow-y-auto rounded-xl border border-default-200/70 bg-default-50/40"
       >
         {entries.length === 0 ? (
           <div className="px-4 py-6 text-center text-sm text-default-400">
             {t('plugins.logsEmpty', 'No plugin logs in this session yet.')}
           </div>
+        ) : filteredEntries.length === 0 ? (
+          <div className="px-4 py-6 text-center text-sm text-default-400">
+            {t('plugins.logsFilterEmpty', 'No logs match the current plugin filter.')}
+          </div>
         ) : (
           <div className="space-y-1 px-4 py-3 font-mono text-xs leading-5">
-            {entries.map((entry, index) => {
+            {filteredEntries.map((entry, index) => {
               const identity = getPluginLogEntryIdentity(entry);
               const sourceLabel = entry.source === 'system' ? 'System' : 'Plugin';
               const stageSuffix = entry.stage ? `/${entry.stage}` : '';
