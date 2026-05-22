@@ -74,7 +74,17 @@ export type PluginPanelComponent = z.infer<typeof PluginPanelComponentSchema>;
  * These values control both validation expectations and default frontend
  * rendering in plugin settings UIs.
  */
-export const PluginSettingTypeSchema = z.enum(['boolean', 'number', 'string', 'string[]', 'object[]', 'keyedStringArrays', 'info']);
+export const PluginSettingTypeSchema = z.enum([
+  'boolean',
+  'number',
+  'string',
+  'string[]',
+  'object[]',
+  'keyedStringArrays',
+  'keyedObjectArrays',
+  'keyedObjects',
+  'info',
+]);
 
 /**
  * Supported generated-form field types for plugin settings.
@@ -101,6 +111,7 @@ export const PluginObjectArrayFieldSchema = z.object({
   description: z.string().optional(),
   placeholder: z.string().optional(),
   required: z.boolean().optional(),
+  default: z.unknown().optional(),
 });
 export type PluginObjectArrayField = z.infer<typeof PluginObjectArrayFieldSchema>;
 
@@ -167,7 +178,7 @@ export const PluginSettingDescriptorSchema = z.object({
   options: z.array(PluginSettingOptionSchema).optional(),
   /** Field schema used by generated editors for `object[]` settings. */
   itemFields: z.array(PluginObjectArrayFieldSchema).optional(),
-  /** Fixed key list used by generated editors for `keyedStringArrays` settings. */
+  /** Fixed key list used by generated keyed setting editors. */
   keys: z.array(PluginKeyedStringArrayKeySchema).optional(),
   /** Conditionally show the field based on another setting in the same form. */
   visibleWhen: PluginSettingConditionSchema.optional(),

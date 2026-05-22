@@ -245,6 +245,61 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
     );
   }
 
+  const objectFields = descriptor.itemFields ?? [];
+  const nextId = () => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return `item-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  };
+  const getObjectFieldDefault = (field: (typeof objectFields)[number]): unknown => {
+    if ('default' in field && field.default !== undefined) return field.default;
+    return field.type === 'boolean' ? false : '';
+  };
+  const createEmptyObjectRow = (): Record<string, unknown> => {
+    const row: Record<string, unknown> = { id: nextId() };
+    for (const field of objectFields) {
+      row[field.key] = getObjectFieldDefault(field);
+    }
+    return row;
+  };
+  const renderObjectField = (
+    row: Record<string, unknown>,
+    field: (typeof objectFields)[number],
+    updateField: (key: string, nextValue: unknown) => void,
+  ) => {
+    const fieldLabel = resolvePluginLabel(field.label, pluginName);
+    const fieldDescription = field.description ? resolvePluginLabel(field.description, pluginName) : undefined;
+    const currentValue = row[field.key] ?? getObjectFieldDefault(field);
+    if (field.type === 'boolean') {
+      return (
+        <div key={field.key} className="flex items-center justify-between gap-3 rounded-md border border-default-200/60 bg-content1 px-3 py-2">
+          <span className="text-sm text-default-700">{fieldLabel}</span>
+          <Switch
+            size="sm"
+            isSelected={Boolean(currentValue)}
+            onValueChange={(nextValue) => updateField(field.key, nextValue)}
+          />
+        </div>
+      );
+    }
+    return (
+      <Input
+        key={field.key}
+        size="sm"
+        label={fieldLabel}
+        description={fieldDescription}
+        placeholder={field.placeholder}
+        type={field.type === 'number' ? 'number' : 'text'}
+        value={String(currentValue ?? '')}
+        onValueChange={(nextValue) =>
+          updateField(field.key, field.type === 'number' ? (nextValue === '' ? '' : Number(nextValue)) : nextValue)
+        }
+        variant="bordered"
+      />
+    );
+  };
+
   if (descriptor.type === 'keyedStringArrays') {
     const currentRows = value && typeof value === 'object' && !Array.isArray(value)
       ? value as Record<string, unknown>
@@ -405,19 +460,157 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
     );
   }
 
+  if (descriptor.type === 'keyedObjectArrays') {
+    const currentRows = value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : descriptor.default && typeof descriptor.default === 'object' && !Array.isArray(descriptor.default)
+        ? descriptor.default as Record<string, unknown>
+        : {};
+    const getRowsForKey = (key: string): Record<string, unknown>[] => {
+      const rowValue = currentRows[key];
+      return Array.isArray(rowValue)
+        ? rowValue.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+        : [];
+    };
+    const updateRowsForKey = (key: string, rows: Record<string, unknown>[]) => {
+      onChange({
+        ...currentRows,
+        [key]: rows,
+      });
+    };
+
+    return (
+      <div className="rounded-lg border border-default-200/70 bg-content1 px-3 py-2.5">
+        <div className="mb-2">
+          <div className="text-sm font-medium text-default-700">{label}</div>
+          {description && (
+            <div className="mt-0.5 whitespace-pre-line text-xs leading-5 text-default-500">{description}</div>
+          )}
+        </div>
+        <div className="grid gap-2 xl:grid-cols-2">
+          {(descriptor.keys ?? []).map((keyDescriptor) => {
+            const keyLabel = resolvePluginLabel(keyDescriptor.label, pluginName);
+            const keyDescription = keyDescriptor.description
+              ? resolvePluginLabel(keyDescriptor.description, pluginName)
+              : undefined;
+            const rows = getRowsForKey(keyDescriptor.key);
+            const addRow = () => updateRowsForKey(keyDescriptor.key, [...rows, createEmptyObjectRow()]);
+            const updateRow = (index: number, fieldKey: string, nextValue: unknown) => {
+              updateRowsForKey(keyDescriptor.key, rows.map((row, rowIndex) =>
+                rowIndex === index ? { ...row, [fieldKey]: nextValue } : row
+              ));
+            };
+            const removeRow = (index: number) => {
+              updateRowsForKey(keyDescriptor.key, rows.filter((_, rowIndex) => rowIndex !== index));
+            };
+
+            return (
+              <div key={keyDescriptor.key} className="rounded-md border border-default-200/70 bg-default-50/40 p-2">
+                <div className="mb-2 flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-default-700">{keyLabel}</div>
+                    {keyDescription && (
+                      <div className="mt-0.5 text-[11px] leading-4 text-default-500">{keyDescription}</div>
+                    )}
+                  </div>
+                  <Button size="sm" variant="flat" className="h-7 min-w-0 shrink-0 px-2 text-[11px]" onPress={addRow}>
+                    {i18n.t('common:button.add', { defaultValue: 'Add' })}
+                  </Button>
+                </div>
+                {rows.length === 0 ? (
+                  <div className="rounded-md border border-dashed border-default-200 px-3 py-4 text-center text-xs text-default-400">
+                    {i18n.t('settings:plugins.noItems', { defaultValue: 'No items yet.' })}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {rows.map((row, index) => (
+                      <div key={String(row.id ?? index)} className="rounded-md border border-default-200/70 bg-content1 p-2">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-default-500">
+                            {i18n.t('settings:plugins.itemNumber', { index: index + 1, defaultValue: `Item ${index + 1}` })}
+                          </span>
+                          <Button size="sm" color="danger" variant="light" onPress={() => removeRow(index)}>
+                            {i18n.t('common:button.delete', { defaultValue: 'Delete' })}
+                          </Button>
+                        </div>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          {objectFields.map((field) => renderObjectField(row, field, (fieldKey, nextValue) =>
+                            updateRow(index, fieldKey, nextValue)
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  if (descriptor.type === 'keyedObjects') {
+    const currentRows = value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : descriptor.default && typeof descriptor.default === 'object' && !Array.isArray(descriptor.default)
+        ? descriptor.default as Record<string, unknown>
+        : {};
+    const getObjectForKey = (key: string): Record<string, unknown> => {
+      const rowValue = currentRows[key];
+      return rowValue && typeof rowValue === 'object' && !Array.isArray(rowValue)
+        ? rowValue as Record<string, unknown>
+        : {};
+    };
+    const updateObjectForKey = (key: string, nextRow: Record<string, unknown>) => {
+      onChange({
+        ...currentRows,
+        [key]: nextRow,
+      });
+    };
+
+    return (
+      <div className="rounded-lg border border-default-200/70 bg-content1 px-3 py-2.5">
+        <div className="mb-2">
+          <div className="text-sm font-medium text-default-700">{label}</div>
+          {description && (
+            <div className="mt-0.5 whitespace-pre-line text-xs leading-5 text-default-500">{description}</div>
+          )}
+        </div>
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {(descriptor.keys ?? []).map((keyDescriptor) => {
+            const keyLabel = resolvePluginLabel(keyDescriptor.label, pluginName);
+            const keyDescription = keyDescriptor.description
+              ? resolvePluginLabel(keyDescriptor.description, pluginName)
+              : undefined;
+            const row = getObjectForKey(keyDescriptor.key);
+            return (
+              <div key={keyDescriptor.key} className="rounded-md border border-default-200/70 bg-default-50/40 p-2">
+                <div className="mb-2 min-w-0">
+                  <div className="text-xs font-medium text-default-700">{keyLabel}</div>
+                  {keyDescription && (
+                    <div className="mt-0.5 text-[11px] leading-4 text-default-500">{keyDescription}</div>
+                  )}
+                </div>
+                <div className="grid gap-2">
+                  {objectFields.map((field) => renderObjectField(row, field, (fieldKey, nextValue) =>
+                    updateObjectForKey(keyDescriptor.key, { ...row, [fieldKey]: nextValue })
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   if (descriptor.type === 'object[]') {
     const rows = Array.isArray(value)
       ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
       : Array.isArray(descriptor.default)
         ? descriptor.default.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
         : [];
-    const fields = descriptor.itemFields ?? [];
-    const nextId = () => {
-      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-        return crypto.randomUUID();
-      }
-      return `item-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    };
     const updateRow = (index: number, key: string, nextValue: unknown) => {
       onChange(rows.map((row, rowIndex) => rowIndex === index ? { ...row, [key]: nextValue } : row));
     };
@@ -425,13 +618,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
       onChange(rows.filter((_, rowIndex) => rowIndex !== index));
     };
     const addRow = () => {
-      const nextRow: Record<string, unknown> = { id: nextId() };
-      for (const field of fields) {
-        if (!(field.key in nextRow)) {
-          nextRow[field.key] = field.type === 'boolean' ? false : '';
-        }
-      }
-      onChange([...rows, nextRow]);
+      onChange([...rows, createEmptyObjectRow()]);
     };
 
     return (
@@ -464,37 +651,9 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
                   </Button>
                 </div>
                 <div className="grid gap-2 md:grid-cols-2">
-                  {fields.map((field) => {
-                    const fieldLabel = resolvePluginLabel(field.label, pluginName);
-                    const fieldDescription = field.description ? resolvePluginLabel(field.description, pluginName) : undefined;
-                    if (field.type === 'boolean') {
-                      return (
-                        <div key={field.key} className="flex items-center justify-between gap-3 rounded-md border border-default-200/60 bg-content1 px-3 py-2">
-                          <span className="text-sm text-default-700">{fieldLabel}</span>
-                          <Switch
-                            size="sm"
-                            isSelected={Boolean(row[field.key])}
-                            onValueChange={(nextValue) => updateRow(index, field.key, nextValue)}
-                          />
-                        </div>
-                      );
-                    }
-                    return (
-                      <Input
-                        key={field.key}
-                        size="sm"
-                        label={fieldLabel}
-                        description={fieldDescription}
-                        placeholder={field.placeholder}
-                        type={field.type === 'number' ? 'number' : 'text'}
-                        value={String(row[field.key] ?? '')}
-                        onValueChange={(nextValue) =>
-                          updateRow(index, field.key, field.type === 'number' ? Number(nextValue) : nextValue)
-                        }
-                        variant="bordered"
-                      />
-                    );
-                  })}
+                  {objectFields.map((field) => renderObjectField(row, field, (fieldKey, nextValue) =>
+                    updateRow(index, fieldKey, nextValue)
+                  ))}
                 </div>
               </div>
             ))}

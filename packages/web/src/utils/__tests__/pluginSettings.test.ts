@@ -46,6 +46,37 @@ const perBandPluginSettings = {
     scope: 'operator',
     default: false,
   },
+  perBandTaskRows: {
+    type: 'keyedObjectArrays',
+    label: 'Per-band tasks',
+    scope: 'operator',
+    default: {},
+    keys: [
+      { key: '40m', label: '40m' },
+      { key: '20m', label: '20m' },
+    ],
+    itemFields: [
+      { key: 'enabled', type: 'boolean', label: 'Enabled' },
+      { key: 'time', type: 'string', label: 'Time' },
+      { key: 'count', type: 'number', label: 'Count' },
+    ],
+    visibleWhen: { setting: 'perBandEnabled', equals: true },
+  },
+  perBandIntervalRows: {
+    type: 'keyedObjects',
+    label: 'Per-band intervals',
+    scope: 'operator',
+    default: {},
+    keys: [
+      { key: '40m', label: '40m' },
+      { key: '20m', label: '20m' },
+    ],
+    itemFields: [
+      { key: 'enabled', type: 'boolean', label: 'Enabled', default: false },
+      { key: 'intervalMinutes', type: 'number', label: 'Interval', default: 30 },
+    ],
+    visibleWhen: { setting: 'perBandEnabled', equals: true },
+  },
 } satisfies NonNullable<PluginStatus['settings']>;
 
 const mockPlugin: PluginStatus = {
@@ -284,6 +315,49 @@ describe('pluginSettings utils', () => {
         '30m': ['291', '110'],
       },
       dxccBlockEnabled: true,
+    });
+  });
+
+  it('normalizes keyed object arrays when saving', () => {
+    expect(
+      normalizePluginSettingsForSave(
+        perBandPlugin,
+        {
+          perBandEnabled: true,
+          perBandTaskRows: {
+            '40m': [
+              { id: 'empty', enabled: false, time: '', count: '' },
+              { id: 'task-1', enabled: true, time: ' 08:30 ', count: '2' },
+            ],
+            '20m': [],
+          },
+        },
+        'operator',
+      ),
+    ).toMatchObject({
+      perBandTaskRows: {
+        '40m': [{ id: 'task-1', enabled: true, time: '08:30', count: 2 }],
+      },
+    });
+  });
+
+  it('normalizes keyed objects while omitting default-only rows when saving', () => {
+    expect(
+      normalizePluginSettingsForSave(
+        perBandPlugin,
+        {
+          perBandEnabled: true,
+          perBandIntervalRows: {
+            '40m': { enabled: false, intervalMinutes: 30 },
+            '20m': { enabled: true, intervalMinutes: '15' },
+          },
+        },
+        'operator',
+      ),
+    ).toMatchObject({
+      perBandIntervalRows: {
+        '20m': { enabled: true, intervalMinutes: 15 },
+      },
     });
   });
 

@@ -1,4 +1,4 @@
-import type { PluginSettingCondition, PluginSettingDescriptor, PluginStatus } from '@tx5dr/contracts';
+import type { PluginObjectArrayField, PluginSettingCondition, PluginSettingDescriptor, PluginStatus } from '@tx5dr/contracts';
 import {
   normalizeCallsignFilterMode,
   normalizeTextMatchMode,
@@ -65,6 +65,94 @@ function normalizeKeyedStringArraysValue(
   return normalized;
 }
 
+function normalizeObjectFieldValue(field: PluginObjectArrayField, value: unknown): unknown {
+  if (field.type === 'boolean') {
+    return value === true;
+  }
+  if (field.type === 'number') {
+    if (value === '' || value === null || value === undefined) return undefined;
+    const numberValue = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(numberValue) ? numberValue : undefined;
+  }
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function isDefaultObjectFieldValue(field: PluginObjectArrayField, value: unknown): boolean {
+  const defaultValue = field.default ?? (field.type === 'boolean' ? false : field.type === 'number' ? undefined : '');
+  return Object.is(value, defaultValue);
+}
+
+function normalizeObjectValue(
+  value: unknown,
+  fields: PluginObjectArrayField[],
+): { value: Record<string, unknown>; hasContent: boolean } {
+  const source = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const normalized: Record<string, unknown> = {};
+  let hasContent = false;
+
+  if (typeof source.id === 'string' && source.id.trim()) {
+    normalized.id = source.id.trim();
+  }
+
+  for (const field of fields) {
+    const fieldValue = normalizeObjectFieldValue(field, source[field.key]);
+    if (fieldValue !== undefined) {
+      normalized[field.key] = fieldValue;
+      if (!isDefaultObjectFieldValue(field, fieldValue)) {
+        hasContent = true;
+      }
+    }
+  }
+
+  return { value: normalized, hasContent };
+}
+
+function normalizeObjectArrayValue(value: unknown, fields: PluginObjectArrayField[]): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => normalizeObjectValue(entry, fields))
+    .filter((entry) => entry.hasContent)
+    .map((entry) => entry.value);
+}
+
+function normalizeKeyedObjectArraysValue(
+  value: unknown,
+  fields: PluginObjectArrayField[],
+): Record<string, Record<string, unknown>[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  const normalized: Record<string, Record<string, unknown>[]> = {};
+  for (const [key, rawValue] of Object.entries(value)) {
+    const rows = normalizeObjectArrayValue(rawValue, fields);
+    if (rows.length > 0) {
+      normalized[key] = rows;
+    }
+  }
+  return normalized;
+}
+
+function normalizeKeyedObjectsValue(
+  value: unknown,
+  fields: PluginObjectArrayField[],
+): Record<string, Record<string, unknown>> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  const normalized: Record<string, Record<string, unknown>> = {};
+  for (const [key, rawValue] of Object.entries(value)) {
+    const entry = normalizeObjectValue(rawValue, fields);
+    if (entry.hasContent) {
+      normalized[key] = entry.value;
+    }
+  }
+  return normalized;
+}
+
 function areConditionValuesEqual(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true;
   return JSON.stringify(left) === JSON.stringify(right);
@@ -115,7 +203,7 @@ function normalizeByPluginSetting(
   descriptor: PluginSettingDescriptor,
   value: unknown,
 ): unknown {
-  if (descriptor.type !== 'string[]' && descriptor.type !== 'keyedStringArrays') {
+  if (!['string[]', 'keyedStringArrays', 'keyedObjectArrays', 'keyedObjects'].includes(descriptor.type)) {
     return value;
   }
 
@@ -124,6 +212,14 @@ function normalizeByPluginSetting(
       value,
       descriptor.options?.length ? normalizeStringArrayValue : normalizeWatchedCallsignWatchListValue,
     );
+  }
+
+  if (descriptor.type === 'keyedObjectArrays') {
+    return normalizeKeyedObjectArraysValue(value, descriptor.itemFields ?? []);
+  }
+
+  if (descriptor.type === 'keyedObjects') {
+    return normalizeKeyedObjectsValue(value, descriptor.itemFields ?? []);
   }
 
   if ((pluginName === 'watched-callsign-autocall' && fieldKey === 'watchList')
@@ -154,7 +250,7 @@ export function arePluginSettingValuesEqual(
   pluginName?: string,
   fieldKey?: string,
 ): boolean {
-  if (descriptor.type === 'string[]' || descriptor.type === 'keyedStringArrays') {
+  if (['string[]', 'keyedStringArrays', 'keyedObjectArrays', 'keyedObjects'].includes(descriptor.type)) {
     const normalizedLeft = normalizeByPluginSetting(pluginName, fieldKey, descriptor, left);
     const normalizedRight = normalizeByPluginSetting(pluginName, fieldKey, descriptor, right);
     return JSON.stringify(normalizedLeft) === JSON.stringify(normalizedRight);
@@ -180,7 +276,15 @@ export function normalizePluginSettingsForSave(
       continue;
     }
 
-    normalized[key] = normalizePluginSettingValue(descriptor, settings[key], plugin.name, key);
+    const value = normalizePluginSettingValue(descriptor, settings[key], plugin.name, key);
+    if ((descriptor.type === 'keyedObjectArrays' || descriptor.type === 'keyedObjects')
+      && value
+      && typeof value === 'object'
+      && !Array.isArray(value)
+      && Object.keys(value).length === 0) {
+      continue;
+    }
+    normalized[key] = value;
   }
 
   return normalized;
