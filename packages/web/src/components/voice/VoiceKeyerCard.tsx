@@ -42,6 +42,7 @@ import {
   normalizeVoiceKeyerShortcutPreset,
   saveVoiceKeyerSlotShortcutPreset,
 } from '../../utils/voiceKeyerShortcutPreferences';
+import { VOICE_KEYER_RECORDING_AUDIO_CONSTRAINTS } from '../../audio/audioRuntime';
 
 const logger = createLogger('VoiceKeyerCard');
 const TARGET_SAMPLE_RATE = 16000;
@@ -427,12 +428,7 @@ export const VoiceKeyerCard: React.FC<VoiceKeyerCardProps> = ({
     stopPreview();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
+        audio: VOICE_KEYER_RECORDING_AUDIO_CONSTRAINTS,
       });
       const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!AudioContextCtor) {

@@ -17,12 +17,14 @@ import { normalizeWsUrl } from '../utils/config';
 import {
   createCompatCaptureBackend,
   type CompatCaptureBackend,
+  type CompatCaptureFrame,
 } from './compatAudioBackends';
 import {
   ensureInteractiveAudioContext,
   requestInteractiveMicrophone,
   closeAudioContext,
   stopMediaStream,
+  VOICE_TX_MIC_CONSTRAINTS,
 } from './audioRuntime';
 import { executeRealtimeSessionFlow } from '../realtime/realtimeSessionFlow';
 import { showRealtimeTransportFallbackToast } from '../realtime/realtimeConnectivity';
@@ -44,13 +46,6 @@ const VOICE_TX_CLOCK_SYNC_INTERVAL_MS = 1000;
 const VOICE_TX_CAPTURE_DIAGNOSTIC_INTERVAL_MS = 1000;
 const VOICE_TX_PRE_PTT_STALE_GRACE_MS = 30;
 const VOICE_TX_PTT_FLUSH_GUARD_MS = 40;
-type AudioTrackConstraints = {
-  sampleRate?: number;
-  channelCount?: number;
-  echoCancellation?: boolean;
-  noiseSuppression?: boolean;
-  autoGainControl?: boolean;
-};
 
 interface VoiceTxCaptureDiagnosticsWindow {
   startedAt: number;
@@ -89,14 +84,6 @@ interface VoiceCaptureCleanupOptions {
 }
 
 export type VoiceCaptureState = 'idle' | 'starting' | 'capturing' | 'error';
-
-const AUDIO_CONSTRAINTS: AudioTrackConstraints = {
-  sampleRate: 16000,
-  channelCount: 1,
-  echoCancellation: true,
-  noiseSuppression: true,
-  autoGainControl: true,
-};
 
 export class VoiceCapture {
   private options: VoiceCaptureOptions;
@@ -399,7 +386,7 @@ export class VoiceCapture {
     mediaSource: MediaStreamAudioSourceNode;
     captureBackend: CompatCaptureBackend;
   }> {
-    const mediaStream = await requestInteractiveMicrophone(AUDIO_CONSTRAINTS, this.mediaStream);
+    const mediaStream = await requestInteractiveMicrophone(VOICE_TX_MIC_CONSTRAINTS, this.mediaStream);
     const audioContext = await ensureInteractiveAudioContext(this.audioContext);
     const mediaSource = this.mediaSource ?? audioContext.createMediaStreamSource(mediaStream);
 
