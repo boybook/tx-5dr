@@ -1,6 +1,9 @@
 import type { CapabilityState } from '@tx5dr/contracts';
 
-type Translate = (key: string, defaultValue?: string) => string;
+type Translate = {
+  (key: string): string;
+  (key: string, defaultValue: string): string;
+};
 
 export function getCapabilityAvailability(state: CapabilityState | null | undefined): 'available' | 'unavailable' | 'unknown' {
   if (state?.availability) {

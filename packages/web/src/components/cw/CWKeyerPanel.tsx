@@ -140,7 +140,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
   const { hisCallsign, trst, rrst } = useCWQSODraft();
 
-  const textInputRef = useRef<HTMLDivElement>(null);
+  const textInputRef = useRef<HTMLInputElement>(null);
   const slotUpdateTimersRef = useRef<Record<string, number>>({});
   const [textInput, setTextInput] = useState('');
   const [lastSentText, setLastSentText] = useState<string | null>(null);
@@ -537,11 +537,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
     if (text === textInput) {
       setTextInput('');
       requestAnimationFrame(() => {
-        const el = textInputRef.current;
-        if (el) {
-          const input = el.tagName === 'INPUT' ? el : el.querySelector('input');
-          (input as HTMLInputElement)?.focus();
-        }
+        textInputRef.current?.focus();
       });
     }
   }, [isActive, myCallsign, placeholderValues, resolveMessageForSend, sendText, statusMode, textInput]);

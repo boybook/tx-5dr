@@ -40,7 +40,7 @@ export function toPluginRuntimeLogViewEntry(entry: PluginRuntimeLogEntry): Plugi
 }
 
 export function toPluginLogHistoryViewEntry(entry: PluginLogHistoryEntry): PluginLogViewEntry {
-  return 'source' in entry && entry.source === 'system'
+  return 'source' in entry
     ? toPluginRuntimeLogViewEntry(entry)
     : toPluginLogViewEntry(entry);
 }
@@ -257,14 +257,16 @@ export const PluginLogPanel: React.FC = () => {
           variant="bordered"
           className="w-full sm:max-w-xs"
         >
-          <SelectItem key="all">
-            {t('plugins.allPlugins', 'All plugins')}
-          </SelectItem>
-          {targetOptions.map((option) => (
-            <SelectItem key={option.key} textValue={option.label}>
-              {option.label}
-            </SelectItem>
-          ))}
+          {[
+            <SelectItem key="all">
+              {t('plugins.allPlugins', 'All plugins')}
+            </SelectItem>,
+            ...targetOptions.map((option) => (
+              <SelectItem key={option.key} textValue={option.label}>
+                {option.label}
+              </SelectItem>
+            )),
+          ]}
         </Select>
       </div>
 

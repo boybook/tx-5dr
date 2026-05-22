@@ -1496,10 +1496,12 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               handleFilterChange('mode', selected[0]);
             }}
           >
-            <DropdownItem key="">{t('filter.allModes')}</DropdownItem>
-            {MODE_FILTER_OPTIONS.map((mode) => (
-              <DropdownItem key={mode}>{mode}</DropdownItem>
-            ))}
+            {[
+              <DropdownItem key="">{t('filter.allModes')}</DropdownItem>,
+              ...MODE_FILTER_OPTIONS.map((mode) => (
+                <DropdownItem key={mode}>{mode}</DropdownItem>
+              )),
+            ]}
           </DropdownMenu>
         </Dropdown>
 

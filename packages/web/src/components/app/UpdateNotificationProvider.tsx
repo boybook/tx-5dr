@@ -5,6 +5,7 @@ import { UserRole } from '@tx5dr/contracts';
 import { useAuth, useHasMinRole } from '../../store/authStore';
 import { useConnection } from '../../store/radioStore';
 import { createLogger } from '../../utils/logger';
+import type { DesktopUpdateStatus } from '../../types/electron';
 
 const logger = createLogger('UpdateNotificationProvider');
 const UPDATE_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;

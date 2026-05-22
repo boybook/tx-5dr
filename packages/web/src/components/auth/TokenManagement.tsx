@@ -1067,10 +1067,12 @@ export function TokenManagement() {
                                           }));
                                         }}
                                       >
-                                        {FREQUENCY_RANGE_BAND_OPTIONS.map((option) => (
-                                          <SelectItem key={option.key}>{option.label}</SelectItem>
-                                        ))}
-                                        <SelectItem key={CUSTOM_RANGE_BAND}>{t('auth:permissions.frequencyRangeCustom')}</SelectItem>
+                                        {[
+                                          ...FREQUENCY_RANGE_BAND_OPTIONS.map((option) => (
+                                            <SelectItem key={option.key}>{option.label}</SelectItem>
+                                          )),
+                                          <SelectItem key={CUSTOM_RANGE_BAND}>{t('auth:permissions.frequencyRangeCustom')}</SelectItem>,
+                                        ]}
                                       </Select>
                                       <Input
                                         size="sm"

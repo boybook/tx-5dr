@@ -17,6 +17,9 @@ declare global {
   
   interface ImportMeta {
     readonly env: ImportMetaEnv;
+    readonly hot?: {
+      dispose(callback: () => void): void;
+    };
   }
 }
 

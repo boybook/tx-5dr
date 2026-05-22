@@ -7,10 +7,12 @@ function buildPlugin(overrides: Partial<PluginStatus> = {}): PluginStatus {
   return {
     name: 'web-iframe-embed',
     type: 'utility',
+    instanceScope: 'operator',
     version: '1.0.0',
     isBuiltIn: false,
     loaded: true,
     enabled: true,
+    autoDisabled: false,
     errorCount: 0,
     ...overrides,
   };

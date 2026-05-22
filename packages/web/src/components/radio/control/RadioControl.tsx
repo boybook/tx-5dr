@@ -2167,11 +2167,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                         )}
                       </div>
 
-                      {voiceTxDiagnostics?.serverOutput.writeFailures > 0 && (
+                      {(voiceTxDiagnostics?.serverOutput.writeFailures ?? 0) > 0 && (
                         <div className="flex justify-between items-center gap-3 text-[11px] text-warning-500">
                             <span>{t('voiceTx.writeFailures')}</span>
                             <span className="font-mono">
-                              {formatIntegerMetric(voiceTxDiagnostics.serverOutput.writeFailures)}
+                              {formatIntegerMetric(voiceTxDiagnostics?.serverOutput.writeFailures ?? 0)}
                             </span>
                           </div>
                       )}

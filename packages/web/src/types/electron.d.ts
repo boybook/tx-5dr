@@ -2,7 +2,7 @@ import type { DesktopHttpsMode, DesktopHttpsStatus } from '@tx5dr/contracts';
 import type { ShortcutConfig, ShortcutActionId } from '../utils/shortcutPreferences';
 import type { VoicePttShortcutPreset } from '../utils/voicePttShortcutPreferences';
 
-type DesktopUpdateSource = 'oss' | 'github';
+export type DesktopUpdateSource = 'oss' | 'github';
 
 
 interface ShortcutRegistrationStatus {
@@ -44,23 +44,23 @@ interface VoicePttShortcutCommandPayload {
   source: 'electron-before-input';
 }
 
-interface DesktopUpdateRecentCommit {
+export interface DesktopUpdateRecentCommit {
   id: string;
   shortId: string;
   title: string;
   publishedAt: string | null;
 }
 
-type DesktopUpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'unsupported' | 'error';
+export type DesktopUpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'unsupported' | 'error';
 
-interface DesktopDownloadProgress {
+export interface DesktopDownloadProgress {
   percent: number;
   transferred: number;
   total: number;
   bytesPerSecond: number;
 }
 
-interface DesktopUpdateStatus {
+export interface DesktopUpdateStatus {
   channel: 'release' | 'nightly';
   currentVersion: string;
   currentCommit: string | null;

@@ -85,16 +85,16 @@ function chipCopy(status: BootstrapStatus, t: TFunction): { label: string; color
 }
 
 function phaseLabel(phase: BootstrapPhaseStatus, t: TFunction): string {
-  return t(`bootstrapStatus.phase.${phase.id}.label`, phase.label);
+  return t(`bootstrapStatus.phase.${phase.id}.label`, { defaultValue: phase.label });
 }
 
 function phaseDescription(phase: BootstrapPhaseStatus, t: TFunction): string {
-  return t(`bootstrapStatus.phase.${phase.id}.description`, phase.description);
+  return t(`bootstrapStatus.phase.${phase.id}.description`, { defaultValue: phase.description ?? '' });
 }
 
 function phaseMessage(phase: BootstrapPhaseStatus, t: TFunction): string {
   if (phase.message) {
-    return t(`bootstrapStatus.message.${phase.id}.${phase.state}`, phase.message);
+    return t(`bootstrapStatus.message.${phase.id}.${phase.state}`, { defaultValue: phase.message });
   }
   return phaseDescription(phase, t) || t('bootstrapStatus.checking', 'Checking status');
 }

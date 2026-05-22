@@ -5,11 +5,11 @@ import type {
   RealtimeSessionDirection,
   RealtimeTransportKind,
   RealtimeTransportOffer,
-  type ResolvedVoiceTxBufferPolicy,
-  type VoiceTxBufferPreference,
-  type RealtimeAudioCodecCapabilities,
-  type RealtimeAudioCodecPreference,
-  type ResolvedRealtimeAudioCodecPolicy,
+  ResolvedVoiceTxBufferPolicy,
+  VoiceTxBufferPreference,
+  RealtimeAudioCodecCapabilities,
+  RealtimeAudioCodecPreference,
+  ResolvedRealtimeAudioCodecPolicy,
 } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger';
 import {
@@ -85,7 +85,7 @@ export async function executeRealtimeSessionFlow(
       ...(options.previewSessionId ? { previewSessionId: options.previewSessionId } : {}),
       ...(options.transportOverride ? { transportOverride: options.transportOverride } : {}),
       ...(options.voiceTxBufferPreference ? { voiceTxBufferPreference: options.voiceTxBufferPreference } : {}),
-      ...(options.audioCodecPreference ? { audioCodecPreference: options.audioCodecPreference } : {}),
+      audioCodecPreference: options.audioCodecPreference ?? 'auto',
       ...(options.audioCodecCapabilities ? { audioCodecCapabilities: options.audioCodecCapabilities } : {}),
     });
 

@@ -4,6 +4,7 @@ import { Alert, Button, Card, CardBody, Chip } from '@heroui/react';
 import { api } from '@tx5dr/core';
 import type { SystemUpdateStatus } from '@tx5dr/contracts';
 import { createLogger } from '../../utils/logger';
+import type { DesktopUpdateStatus } from '../../types/electron';
 import { useUpdateNotification, type UpdateStatusWithDownloads } from './UpdateNotificationProvider';
 
 const logger = createLogger('DesktopUpdateCard');

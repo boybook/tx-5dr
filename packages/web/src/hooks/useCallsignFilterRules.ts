@@ -80,8 +80,8 @@ export function useCallsignFilterRules(
   }, [operatorId, isEnabled, pluginSnapshot.generation]);
 
   const currentBand = useMemo(() => (
-    radio.state.currentRadioFrequency > 0
-      ? getBandFromFrequency(radio.state.currentRadioFrequency)
+    (radio.state.currentRadioFrequency ?? 0) > 0
+      ? getBandFromFrequency(radio.state.currentRadioFrequency ?? 0)
       : undefined
   ), [radio.state.currentRadioFrequency]);
 

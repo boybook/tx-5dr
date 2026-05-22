@@ -305,7 +305,7 @@ export function buildRadioSdrFrequencyRequest({
 export function canUseRadioSdrFrequencyRequest(
   request: SetRadioFrequencyParams | null,
   canWriteTargetFrequency: (frequency: number) => boolean,
-): boolean {
+): request is SetRadioFrequencyParams {
   return request !== null && canWriteTargetFrequency(request.frequency);
 }
 

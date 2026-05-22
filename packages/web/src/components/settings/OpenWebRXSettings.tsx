@@ -564,9 +564,9 @@ export function OpenWebRXSettings() {
                         {listenStatus.sampleRate && ` (BW: ${(listenStatus.sampleRate / 1000).toFixed(0)} kHz)`}
                       </span>
                     )}
-                    {audioPlayback.isPlaying && (
+                    {audioPlayback.isPlaying && audioPlayback.stats?.receiver?.codec && (
                       <span>
-                        {t('openwebrx.codec')}: <span className="font-mono uppercase">{audioPlayback.codec}</span>
+                        {t('openwebrx.codec')}: <span className="font-mono uppercase">{audioPlayback.stats.receiver.codec}</span>
                       </span>
                     )}
                     {audioPlayback.stats && (

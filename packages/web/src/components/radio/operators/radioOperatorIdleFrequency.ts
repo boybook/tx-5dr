@@ -40,14 +40,14 @@ export function pickManualIdleFrequency(params: {
     return null;
   }
 
-  const occupiedFrequencies = latest.frames
-    .filter((frame) => frame.snr !== -999)
-    .map((frame) => frame.freq)
-    .concat(
-      params.operators
-        .filter((operator) => operator.id !== params.operatorId)
-        .map((operator) => operator.context.frequency),
-    )
+  const occupiedFrequencies = [
+    ...latest.frames
+      .filter((frame) => frame.snr !== -999)
+      .map((frame) => frame.freq),
+    ...params.operators
+      .filter((operator) => operator.id !== params.operatorId)
+      .map((operator) => operator.context.frequency),
+  ]
     .filter((frequency): frequency is number => (
       typeof frequency === 'number'
       && Number.isFinite(frequency)

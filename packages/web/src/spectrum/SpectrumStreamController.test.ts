@@ -56,7 +56,7 @@ function makeFrame(
 describe('SpectrumStreamController memory behavior', () => {
   let rafCallbacks: Map<number, FrameRequestCallback>;
   let nextRafId: number;
-  let cancelAnimationFrameMock: ReturnType<typeof vi.fn>;
+  let cancelAnimationFrameMock: ReturnType<typeof vi.fn<[id: number], void>>;
 
   beforeEach(() => {
     rafCallbacks = new Map();

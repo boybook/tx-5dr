@@ -15,6 +15,7 @@ function buildPlugin(overrides: Partial<PluginStatus> = {}): PluginStatus {
     isBuiltIn: false,
     loaded: true,
     enabled: true,
+    autoDisabled: false,
     errorCount: 0,
     ui: {
       dir: 'ui',
