@@ -53,12 +53,60 @@ const FREQUENCY_RANGE_BAND_OPTIONS = Object.entries(FREQUENCY_PERMISSION_BAND_RA
 }));
 
 type CreateLoginCredentialInitMode = 'none' | 'admin' | 'self-service';
+type LoginCredentialStatusKind = 'token-only' | 'configured' | 'self-service-pending' | 'admin-draft' | 'clearing';
+const LOGIN_CREDENTIAL_STATUS_I18N_KEYS: Record<LoginCredentialStatusKind, string> = {
+  'token-only': 'tokenOnly',
+  configured: 'configured',
+  'self-service-pending': 'selfServicePending',
+  'admin-draft': 'adminDraft',
+  clearing: 'clearing',
+};
 
 interface FrequencyRangeDraft {
   id: string;
   bandKey: string;
   minMHz: string;
   maxMHz: string;
+}
+
+interface LoginCredentialUiState {
+  kind: LoginCredentialStatusKind;
+  configured: boolean;
+  editorOpen: boolean;
+  passwordRequired: boolean;
+  selfServiceAllowed: boolean;
+}
+
+function getLoginCredentialUiState(
+  token: TokenInfo | null,
+  draft: {
+    initMode: CreateLoginCredentialInitMode;
+    editorOpen: boolean;
+    clearing: boolean;
+    selfServiceAllowed: boolean;
+  },
+): LoginCredentialUiState {
+  const configured = Boolean(token?.loginCredential) && !draft.clearing;
+  const selfServiceAllowed = token
+    ? draft.selfServiceAllowed
+    : draft.initMode === 'self-service' || (draft.initMode === 'admin' && draft.selfServiceAllowed);
+  const editorOpen = token ? draft.editorOpen && !draft.clearing : draft.initMode === 'admin';
+
+  return {
+    kind: draft.clearing
+      ? 'clearing'
+      : configured
+        ? 'configured'
+        : !token && draft.initMode === 'admin'
+          ? 'admin-draft'
+          : selfServiceAllowed
+          ? 'self-service-pending'
+          : 'token-only',
+    configured,
+    editorOpen,
+    passwordRequired: token ? editorOpen && !token.loginCredential : draft.initMode === 'admin',
+    selfServiceAllowed,
+  };
 }
 
 function expiryKeyToTimestamp(key: string): number | undefined {
@@ -239,20 +287,22 @@ function TokenCard({ token, operators, onRevoke, onRegenerate, onShare, onEdit }
             ))}
           </div>
         )}
-        {(token.loginCredential || token.allowSelfLoginCredential) && (
-          <div className="flex flex-wrap gap-2 text-xs text-default-500">
-            {token.loginCredential && (
-              <span>
-                {t('auth:token.loginCredential.username')}: {token.loginCredential.username}
-              </span>
-            )}
-            <span>
-              {token.allowSelfLoginCredential
-                ? t('auth:token.loginCredential.selfServiceEnabled')
-                : t('auth:token.loginCredential.selfServiceDisabled')}
-            </span>
-          </div>
-        )}
+        <div className="flex flex-wrap gap-1.5">
+          {token.loginCredential ? (
+            <Chip size="sm" variant="flat" color="success" className="text-[10px] h-5">
+              {t('auth:token.loginCredential.cardConfigured', { username: token.loginCredential.username })}
+            </Chip>
+          ) : (
+            <Chip size="sm" variant="flat" color="default" className="text-[10px] h-5">
+              {t('auth:token.loginCredential.cardNotConfigured')}
+            </Chip>
+          )}
+          {token.allowSelfLoginCredential && (
+            <Chip size="sm" variant="flat" color="primary" className="text-[10px] h-5">
+              {t('auth:token.loginCredential.cardSelfService')}
+            </Chip>
+          )}
+        </div>
         {token.token && !token.revoked && (
           <div className="flex items-center gap-1 bg-default-100 rounded-md px-2 py-1.5">
             <code className="flex-1 text-xs break-all text-default-600 select-all">
@@ -405,16 +455,19 @@ export function TokenManagement() {
     && frequencyRangeDrafts.some((draft) => parseFrequencyRangeDraft(draft) === null)
   ), [frequencyRangeDrafts, selectedPermissions]);
 
-  const isCreateAdminCredentialMode = !editingToken && loginCredentialInitMode === 'admin';
-  const isEditingConfiguredCredential = Boolean(editingToken?.loginCredential) && !clearExistingCredential;
-  const isEditingAdminCredentialMode = Boolean(editingToken) && (showCredentialEditor || isEditingConfiguredCredential);
-  const shouldShowCredentialInputs = isCreateAdminCredentialMode || isEditingAdminCredentialMode;
+  const loginCredentialUiState = useMemo(() => getLoginCredentialUiState(editingToken, {
+    initMode: loginCredentialInitMode,
+    editorOpen: showCredentialEditor,
+    clearing: clearExistingCredential,
+    selfServiceAllowed: allowSelfLoginCredential,
+  }), [allowSelfLoginCredential, clearExistingCredential, editingToken, loginCredentialInitMode, showCredentialEditor]);
+  const shouldShowCredentialInputs = loginCredentialUiState.editorOpen;
   const isCredentialUsernameValid = loginCredentialUsername.trim().length >= 3;
   const isCredentialPasswordValid = loginCredentialPassword.length === 0 || loginCredentialPassword.length >= 8;
   const isCredentialFormValid = !shouldShowCredentialInputs
     || (isCredentialUsernameValid
       && isCredentialPasswordValid
-      && (editingToken?.loginCredential ? true : loginCredentialPassword.length >= 8));
+      && (!loginCredentialUiState.passwordRequired || loginCredentialPassword.length >= 8));
 
   // 关闭创建/编辑 Modal 并重置表单
   const closeFormModal = useCallback(() => {
@@ -560,7 +613,7 @@ export function TokenManagement() {
       });
       return;
     }
-    if (showCredentialEditor && !editingToken.loginCredential && loginCredentialPassword.length < 8) {
+    if (loginCredentialUiState.passwordRequired && loginCredentialPassword.length < 8) {
       addToast({
         title: t('auth:token.loginCredential.validationFailed'),
         description: t('auth:token.loginCredential.passwordRequiredForCreate'),
@@ -599,16 +652,25 @@ export function TokenManagement() {
         ...(clearExistingCredential
           ? { loginCredential: null }
           : shouldShowCredentialInputs
-          ? {
-            loginCredential: {
-              username: loginCredentialUsername.trim(),
-              ...(loginCredentialPassword ? { password: loginCredentialPassword } : {}),
-            },
-          }
-          : {}),
+            ? {
+              loginCredential: {
+                username: loginCredentialUsername.trim(),
+                ...(loginCredentialPassword ? { password: loginCredentialPassword } : {}),
+              },
+            }
+            : {}),
       };
-      await api.updateToken(editingToken.id, req);
-      addToast({ title: t('auth:token.updateSuccess'), color: 'success', timeout: 3000 });
+      const updatedToken = await api.updateToken(editingToken.id, req);
+      const title = clearExistingCredential
+        ? t('auth:token.loginCredential.disabledSuccess')
+        : shouldShowCredentialInputs && updatedToken.loginCredential
+          ? t(editingToken.loginCredential
+            ? 'auth:token.loginCredential.updatedSuccess'
+            : 'auth:token.loginCredential.enabledSuccess')
+          : !updatedToken.loginCredential && allowSelfLoginCredential
+            ? t('auth:token.loginCredential.selfServiceOnlySuccess')
+            : t('auth:token.loginCredential.permissionUpdateSuccess');
+      addToast({ title, color: 'success', timeout: 3000 });
       closeFormModal();
       await loadTokens();
     } catch (err) {
@@ -623,7 +685,7 @@ export function TokenManagement() {
     } finally {
       setCreating(false);
     }
-  }, [allowSelfLoginCredential, buildPermissionGrants, clearExistingCredential, closeFormModal, editingToken, hasInvalidFrequencyRanges, loadTokens, loginCredentialPassword, loginCredentialUsername, newLabel, newMaxOperators, newOperatorIds, newRole, shouldShowCredentialInputs, showCredentialEditor, t]);
+  }, [allowSelfLoginCredential, buildPermissionGrants, clearExistingCredential, closeFormModal, editingToken, hasInvalidFrequencyRanges, loadTokens, loginCredentialPassword, loginCredentialUiState.passwordRequired, loginCredentialUsername, newLabel, newMaxOperators, newOperatorIds, newRole, shouldShowCredentialInputs, t]);
 
   // 撤销 Token
   const handleRevoke = useCallback(async (tokenId: string) => {
@@ -846,6 +908,22 @@ export function TokenManagement() {
               <p className="text-sm font-medium">{t('auth:token.loginCredential.sectionTitle')}</p>
               <p className="text-xs text-default-400 mb-2">{t('auth:token.loginCredential.sectionDesc')}</p>
               <div className="border border-default-200 rounded-lg p-3 space-y-3">
+                <div className="rounded-lg bg-content2 px-3 py-2 text-xs text-default-600 space-y-1">
+                  <p className="font-medium text-default-700">
+                    {t(`auth:token.loginCredential.status.${LOGIN_CREDENTIAL_STATUS_I18N_KEYS[loginCredentialUiState.kind]}.title`, {
+                      username: editingToken?.loginCredential?.username ?? loginCredentialUsername.trim(),
+                    })}
+                  </p>
+                  <p className="text-default-500">
+                    {t(`auth:token.loginCredential.status.${LOGIN_CREDENTIAL_STATUS_I18N_KEYS[loginCredentialUiState.kind]}.description`)}
+                  </p>
+                  {loginCredentialUiState.selfServiceAllowed && (
+                    <p className="text-default-500">
+                      {t('auth:token.loginCredential.selfServicePermissionHint')}
+                    </p>
+                  )}
+                </div>
+
                 {!editingToken ? (
                   <>
                     <RadioGroup
@@ -900,19 +978,6 @@ export function TokenManagement() {
                   </>
                 ) : (
                   <>
-                    <div className="rounded-lg bg-content2 px-3 py-2 text-xs text-default-600 space-y-1">
-                      <p>
-                        {editingToken.loginCredential && !clearExistingCredential
-                          ? t('auth:token.loginCredential.statusConfigured', { username: editingToken.loginCredential.username })
-                          : t('auth:token.loginCredential.statusNotConfigured')}
-                      </p>
-                      <p className="text-default-500">
-                        {(allowSelfLoginCredential
-                          ? t('auth:token.loginCredential.selfServiceEnabledHint')
-                          : t('auth:token.loginCredential.selfServiceDisabledHint'))}
-                      </p>
-                    </div>
-
                     <Checkbox
                       size="sm"
                       isSelected={allowSelfLoginCredential}
@@ -960,16 +1025,38 @@ export function TokenManagement() {
                         )}
                       </>
                     ) : (
-                      <Button
-                        size="sm"
-                        variant="flat"
-                        onPress={() => {
-                          setShowCredentialEditor(true);
-                          setClearExistingCredential(false);
-                        }}
-                      >
-                        {t('auth:token.loginCredential.setNowAction')}
-                      </Button>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          variant="flat"
+                          color={editingToken.loginCredential ? 'default' : 'primary'}
+                          onPress={() => {
+                            setShowCredentialEditor(true);
+                            setClearExistingCredential(false);
+                            setLoginCredentialUsername(editingToken.loginCredential?.username ?? loginCredentialUsername);
+                            setLoginCredentialPassword('');
+                          }}
+                        >
+                          {editingToken.loginCredential
+                            ? t('auth:token.loginCredential.changeAction')
+                            : t('auth:token.loginCredential.setNowAction')}
+                        </Button>
+                        {editingToken.loginCredential && (
+                          <Button
+                            size="sm"
+                            variant="flat"
+                            color="danger"
+                            onPress={() => {
+                              setClearExistingCredential(true);
+                              setShowCredentialEditor(false);
+                              setLoginCredentialUsername('');
+                              setLoginCredentialPassword('');
+                            }}
+                          >
+                            {t('auth:token.loginCredential.clearAction')}
+                          </Button>
+                        )}
+                      </div>
                     )}
 
                     {clearExistingCredential && (
