@@ -7,7 +7,6 @@ import {
   SelectItem,
   Spinner,
   Textarea,
-  Tooltip,
 } from '@heroui/react';
 import { useConnection } from '../../../store/radioStore';
 import { api } from '@tx5dr/core';
@@ -30,7 +29,7 @@ import {
   normalizePluginSettingsForSave,
 } from '../../../utils/pluginSettings';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCheck, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
+import { faCheck } from '@fortawesome/free-solid-svg-icons';
 import { PluginPanelRenderer } from '../../plugins/PluginPanelRenderer';
 import {
   getVisiblePluginPanelsForSlot,
@@ -38,6 +37,7 @@ import {
 } from '../../plugins/pluginPanelSlots';
 import { pluginMatchesAutomationFilter, type AutomationPanelFilter } from './automationFilters';
 import { PluginSettingField } from '../../settings/PluginSettingField';
+import { PluginSettingLabelWithHelp } from '../../settings/PluginSettingHelp';
 
 const logger = createLogger('AutomationSettingsPanel');
 
@@ -60,25 +60,6 @@ const QUICK_ACTION_SPINNER = (
     color="current"
     classNames={{ base: 'shrink-0' }}
   />
-);
-
-const QuickSettingInfoIcon: React.FC<{ description: string; label: string }> = ({ description, label }) => (
-  <Tooltip
-    content={<div className="max-w-[220px] whitespace-normal text-[11px] leading-4">{description}</div>}
-    placement="top"
-    closeDelay={80}
-  >
-    <span
-      className="inline-flex h-5 w-5 shrink-0 cursor-help items-center justify-center rounded-full text-default-400 transition-colors hover:text-default-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
-      tabIndex={0}
-      aria-label={label}
-      onClick={(event) => event.stopPropagation()}
-      onMouseDown={(event) => event.stopPropagation()}
-      onPointerDown={(event) => event.stopPropagation()}
-    >
-      <FontAwesomeIcon icon={faCircleInfo} className="text-[12px]" />
-    </span>
-  </Tooltip>
 );
 
 function hasOperatorQuickSetting(
@@ -492,6 +473,16 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                   currentSettings,
                 );
                 const description = descriptionKey ? resolvePluginLabel(descriptionKey, plugin.name) : '';
+                const renderQuickLabel = (className = 'flex-1 text-[11px] text-default-500') => (
+                  <PluginSettingLabelWithHelp
+                    label={label}
+                    description={description}
+                    helpLabel={description ? `${label}: ${description}` : undefined}
+                    className={className}
+                    textClassName="truncate"
+                    stopPropagation
+                  />
+                );
 
                 if (descriptor.type === 'boolean') {
                   const isEnabled = currentValue === true;
@@ -511,15 +502,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                         void handleBooleanToggle(plugin, entry.settingKey, !isEnabled);
                       }}
                     >
-                      <span className="flex min-w-0 items-center gap-1.5">
-                        <span className="min-w-0 truncate text-xs">{label}</span>
-                        {description && (
-                          <QuickSettingInfoIcon
-                            description={description}
-                            label={`${label}: ${description}`}
-                          />
-                        )}
-                      </span>
+                      {renderQuickLabel('flex-1 text-xs')}
                       <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
                         <FontAwesomeIcon
                           icon={faCheck}
@@ -538,7 +521,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                       key={fieldId}
                       className="rounded-md border border-default-200/70 bg-content1 px-2.5 py-2"
                     >
-                      <div className="mb-1 text-[11px] text-default-500">{label}</div>
+                      <div className="mb-1">{renderQuickLabel()}</div>
                       <Select
                         size="sm"
                         aria-label={label}
@@ -580,7 +563,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                         className="rounded-md border border-default-200/70 bg-content1 px-2.5 py-2"
                       >
                         <div className="mb-1 flex items-center justify-between gap-2">
-                          <span className="text-[11px] text-default-500">{label}</span>
+                          {renderQuickLabel()}
                           {dirty && (
                             <Button
                               size="sm"
@@ -597,11 +580,6 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                             </Button>
                           )}
                         </div>
-                        {description && (
-                          <div className="mb-1.5 text-[11px] leading-4 text-default-400">
-                            {description}
-                          </div>
-                        )}
                         <Select
                           size="sm"
                           aria-label={label}
@@ -638,7 +616,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                       className="rounded-md border border-default-200/70 bg-content1 px-2.5 py-2"
                     >
                       <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className="text-[11px] text-default-500">{label}</span>
+                        {renderQuickLabel()}
                         {dirty && (
                           <Button
                             size="sm"
@@ -655,11 +633,6 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                           </Button>
                         )}
                       </div>
-                      {description && (
-                        <div className="mb-1.5 text-[11px] leading-4 text-default-400">
-                          {description}
-                        </div>
-                      )}
                       <Textarea
                         size="sm"
                         aria-label={label}
@@ -718,7 +691,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                       className="rounded-md border border-default-200/70 bg-content1 px-2.5 py-2"
                     >
                       <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className="text-[11px] text-default-500">{label}</span>
+                        {renderQuickLabel()}
                         {dirty && (
                           <Button
                             size="sm"
@@ -735,11 +708,6 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                           </Button>
                         )}
                       </div>
-                      {description && (
-                        <div className="mb-1.5 text-[11px] leading-4 text-default-400">
-                          {description}
-                        </div>
-                      )}
                       <Input
                         size="sm"
                         type="number"
@@ -769,7 +737,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                     className="rounded-md border border-default-200/70 bg-content1 px-2.5 py-2"
                   >
                     <div className="mb-1 flex items-center justify-between gap-2">
-                      <span className="text-[11px] text-default-500">{label}</span>
+                      {renderQuickLabel()}
                       {dirty && (
                         <Button
                           size="sm"

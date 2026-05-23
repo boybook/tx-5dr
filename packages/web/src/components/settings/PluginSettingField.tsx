@@ -1,7 +1,5 @@
 import React from 'react';
-import { Button, Switch, Input, Select, SelectItem, Textarea, Tooltip } from '@heroui/react';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleInfo } from '@fortawesome/free-solid-svg-icons';
+import { Button, Switch, Input, Select, SelectItem, Textarea } from '@heroui/react';
 import type { PluginSettingDescriptor } from '@tx5dr/contracts';
 import i18n from '../../i18n/index';
 import { resolvePluginLabel } from '../../utils/pluginLocales';
@@ -9,6 +7,7 @@ import {
   getPluginSettingDescriptionKey,
   getPluginSettingValidationIssue,
 } from '../../utils/pluginSettings';
+import { PluginSettingLabelWithHelp } from './PluginSettingHelp';
 
 interface PluginSettingFieldProps {
   fieldKey: string;
@@ -19,22 +18,6 @@ interface PluginSettingFieldProps {
   pluginName: string;
   settings?: Record<string, unknown>;
 }
-
-const PluginSettingInfoIcon: React.FC<{ description: string; label: string }> = ({ description, label }) => (
-  <Tooltip
-    content={<div className="max-w-[260px] whitespace-normal text-xs leading-5">{description}</div>}
-    placement="top"
-    closeDelay={80}
-  >
-    <span
-      className="inline-flex h-5 w-5 shrink-0 cursor-help items-center justify-center rounded-full text-default-400 transition-colors hover:text-default-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
-      tabIndex={0}
-      aria-label={label}
-    >
-      <FontAwesomeIcon icon={faCircleInfo} className="text-[13px]" />
-    </span>
-  </Tooltip>
-);
 
 const RESPONSIVE_SETTING_GRID_CLASS = 'grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(100%,12rem),1fr))]';
 const RESPONSIVE_FIELD_GRID_CLASS = 'grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(100%,10rem),1fr))]';
@@ -69,6 +52,18 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
       defaultValue: validationIssue.key,
     })
     : undefined;
+  const renderLabelWithHelp = (
+    fieldLabel: string,
+    fieldDescription?: string,
+    className?: string,
+  ) => (
+    <PluginSettingLabelWithHelp
+      label={fieldLabel}
+      description={fieldDescription}
+      helpLabel={fieldDescription ? `${fieldLabel}: ${fieldDescription}` : undefined}
+      className={className}
+    />
+  );
 
   if (descriptor.type === 'info') {
     return (
@@ -84,15 +79,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
   if (descriptor.type === 'boolean') {
     return (
       <div className="flex items-center justify-between gap-3 rounded-lg border border-default-200/60 bg-content1 px-3 py-2">
-        <span className="flex min-w-0 items-center gap-1.5 text-sm text-default-700">
-          <span className="min-w-0">{label}</span>
-          {description && (
-            <PluginSettingInfoIcon
-              description={description}
-              label={`${label}: ${description}`}
-            />
-          )}
-        </span>
+        {renderLabelWithHelp(label, description, 'text-sm text-default-700')}
         <Switch
           size="sm"
           isSelected={!!value}
@@ -106,10 +93,9 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
     return (
       <Input
         size="sm"
-        label={label}
+        label={renderLabelWithHelp(label, description)}
         type="number"
         value={String(value ?? descriptor.default ?? '')}
-        description={description || undefined}
         min={descriptor.min}
         max={descriptor.max}
         onValueChange={(v) => onChange(Number(v))}
@@ -124,8 +110,17 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
     return (
       <Select
         size="sm"
-        label={label}
-        description={description || undefined}
+        label={(
+          <PluginSettingLabelWithHelp
+            label={label}
+            description={description}
+            helpLabel={description ? `${label}: ${description}` : undefined}
+            stopPropagation
+          />
+        )}
+        classNames={{
+          label: 'pointer-events-auto',
+        }}
         selectedKeys={hasSelectedOption ? [selectedValue] : []}
         onSelectionChange={(keys) => {
           const val = Array.from(keys as Set<string>)[0];
@@ -169,10 +164,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
       return (
         <div className="rounded-lg border border-default-200/70 bg-content1 px-3 py-2.5">
           <div className="mb-2">
-            <div className="text-sm font-medium text-default-700">{label}</div>
-            {description && (
-              <div className="mt-0.5 whitespace-pre-line text-xs leading-5 text-default-500">{description}</div>
-            )}
+            {renderLabelWithHelp(label, description, 'text-sm font-medium text-default-700')}
           </div>
           <Input
             size="sm"
@@ -236,8 +228,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
     return (
       <Textarea
         size="sm"
-        label={label}
-        description={description || undefined}
+        label={renderLabelWithHelp(label, description)}
         value={currentValue}
         onValueChange={onChange}
         isInvalid={Boolean(validationMessage)}
@@ -277,7 +268,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
     if (field.type === 'boolean') {
       return (
         <div key={field.key} className="flex items-center justify-between gap-3 rounded-md border border-default-200/60 bg-content1 px-3 py-2">
-          <span className="text-sm text-default-700">{fieldLabel}</span>
+          {renderLabelWithHelp(fieldLabel, fieldDescription, 'text-sm text-default-700')}
           <Switch
             size="sm"
             isSelected={Boolean(currentValue)}
@@ -290,8 +281,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
       <Input
         key={field.key}
         size="sm"
-        label={fieldLabel}
-        description={fieldDescription}
+        label={renderLabelWithHelp(fieldLabel, fieldDescription)}
         placeholder={field.placeholder}
         type={field.type === 'number' ? 'number' : 'text'}
         value={String(currentValue ?? '')}
@@ -349,10 +339,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
     return (
       <div className="rounded-lg border border-default-200/70 bg-content1 px-3 py-2.5">
         <div className="mb-2">
-          <div className="text-sm font-medium text-default-700">{label}</div>
-          {description && (
-            <div className="mt-0.5 whitespace-pre-line text-xs leading-5 text-default-500">{description}</div>
-          )}
+          {renderLabelWithHelp(label, description, 'text-sm font-medium text-default-700')}
         </div>
         <div className={RESPONSIVE_SETTING_GRID_CLASS}>
           {(descriptor.keys ?? []).map((keyDescriptor) => {
@@ -383,10 +370,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
                 <div key={keyDescriptor.key} className="rounded-md border border-default-200/70 bg-default-50/40 p-2">
                   <div className="mb-2 flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="text-xs font-medium text-default-700">{keyLabel}</div>
-                      {keyDescription && (
-                        <div className="mt-0.5 text-[11px] leading-4 text-default-500">{keyDescription}</div>
-                      )}
+                      {renderLabelWithHelp(keyLabel, keyDescription, 'text-xs font-medium text-default-700')}
                     </div>
                     {selectedValues.length > 0 && (
                       <Button
@@ -447,8 +431,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
               <Textarea
                 key={keyDescriptor.key}
                 size="sm"
-                label={keyLabel}
-                description={keyDescription}
+                label={renderLabelWithHelp(keyLabel, keyDescription)}
                 value={getTextValue(keyDescriptor.key)}
                 onValueChange={(nextValue) => updateKey(keyDescriptor.key, nextValue)}
                 isInvalid={Boolean(isRowInvalid)}
@@ -485,10 +468,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
     return (
       <div className="rounded-lg border border-default-200/70 bg-content1 px-3 py-2.5">
         <div className="mb-2">
-          <div className="text-sm font-medium text-default-700">{label}</div>
-          {description && (
-            <div className="mt-0.5 whitespace-pre-line text-xs leading-5 text-default-500">{description}</div>
-          )}
+          {renderLabelWithHelp(label, description, 'text-sm font-medium text-default-700')}
         </div>
         <div className={RESPONSIVE_SETTING_GRID_CLASS}>
           {(descriptor.keys ?? []).map((keyDescriptor) => {
@@ -511,10 +491,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
               <div key={keyDescriptor.key} className="rounded-md border border-default-200/70 bg-default-50/40 p-2">
                 <div className="mb-2 flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="text-xs font-medium text-default-700">{keyLabel}</div>
-                    {keyDescription && (
-                      <div className="mt-0.5 text-[11px] leading-4 text-default-500">{keyDescription}</div>
-                    )}
+                    {renderLabelWithHelp(keyLabel, keyDescription, 'text-xs font-medium text-default-700')}
                   </div>
                   <Button size="sm" variant="flat" className="h-7 min-w-0 shrink-0 px-2 text-[11px]" onPress={addRow}>
                     {i18n.t('common:button.add', { defaultValue: 'Add' })}
@@ -575,10 +552,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
     return (
       <div className="rounded-lg border border-default-200/70 bg-content1 px-3 py-2.5">
         <div className="mb-2">
-          <div className="text-sm font-medium text-default-700">{label}</div>
-          {description && (
-            <div className="mt-0.5 whitespace-pre-line text-xs leading-5 text-default-500">{description}</div>
-          )}
+          {renderLabelWithHelp(label, description, 'text-sm font-medium text-default-700')}
         </div>
         <div className={RESPONSIVE_SETTING_GRID_CLASS}>
           {(descriptor.keys ?? []).map((keyDescriptor) => {
@@ -590,10 +564,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
             return (
               <div key={keyDescriptor.key} className="rounded-md border border-default-200/70 bg-default-50/40 p-2">
                 <div className="mb-2 min-w-0">
-                  <div className="text-xs font-medium text-default-700">{keyLabel}</div>
-                  {keyDescription && (
-                    <div className="mt-0.5 text-[11px] leading-4 text-default-500">{keyDescription}</div>
-                  )}
+                  {renderLabelWithHelp(keyLabel, keyDescription, 'text-xs font-medium text-default-700')}
                 </div>
                 <div className="grid gap-2">
                   {objectFields.map((field) => renderObjectField(row, field, (fieldKey, nextValue) =>
@@ -628,10 +599,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
       <div className="rounded-lg border border-default-200/70 bg-content1 px-3 py-2.5">
         <div className="mb-2 flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-medium text-default-700">{label}</div>
-            {description && (
-              <div className="mt-0.5 text-xs leading-5 text-default-500">{description}</div>
-            )}
+            {renderLabelWithHelp(label, description, 'text-sm font-medium text-default-700')}
           </div>
           <Button size="sm" variant="flat" onPress={addRow}>
             {i18n.t('common:button.add', { defaultValue: 'Add' })}
@@ -669,8 +637,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
   return (
     <Input
       size="sm"
-      label={label}
-      description={description || undefined}
+      label={renderLabelWithHelp(label, description)}
       value={String(value ?? descriptor.default ?? '')}
       onValueChange={onChange}
       variant="bordered"

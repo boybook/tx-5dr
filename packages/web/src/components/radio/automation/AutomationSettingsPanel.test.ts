@@ -10,6 +10,8 @@ function createPlugin(permissions: PluginStatus['permissions'] = []): PluginStat
     isBuiltIn: false,
     loaded: true,
     enabled: true,
+    instanceScope: 'operator',
+    autoDisabled: false,
     errorCount: 0,
     permissions,
   };

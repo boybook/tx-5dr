@@ -10,7 +10,10 @@ function createPlugin(overrides: Partial<PluginStatus>): PluginStatus {
     isBuiltIn: false,
     loaded: true,
     enabled: true,
+    instanceScope: 'operator',
+    autoDisabled: false,
     errorCount: 0,
+    permissions: [],
     ...overrides,
   };
 }

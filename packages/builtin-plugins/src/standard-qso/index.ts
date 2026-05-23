@@ -139,6 +139,7 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
       type: 'string',
       default: 'dxcc_first',
       label: 'targetSelectionPriorityMode',
+      description: 'targetSelectionPriorityModeDesc',
       scope: 'operator',
       options: [
         { label: 'dxcc_first', value: 'dxcc_first' },
@@ -150,6 +151,7 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
       type: 'number',
       default: 6,
       label: 'maxQSOTimeoutCycles',
+      description: 'maxQSOTimeoutCyclesDesc',
       scope: 'operator',
       min: 1,
       max: 20,
@@ -158,6 +160,7 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
       type: 'number',
       default: 5,
       label: 'maxCallAttempts',
+      description: 'maxCallAttemptsDesc',
       scope: 'operator',
       min: 1,
       max: 20,
