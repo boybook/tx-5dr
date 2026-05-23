@@ -11,6 +11,7 @@ import {
   deriveSameCallsignStandardFrequencyWarning,
   formatSameCallsignWarningCallsigns,
 } from '../../../utils/standardDigitalFrequencyWarning';
+import { usePluginSnapshot } from '../../../hooks/usePluginSnapshot';
 
 interface RadioOperatorListProps {
   onCreateOperator?: () => void; // 创建操作员的回调
@@ -22,6 +23,7 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
   const connection = useConnection();
   const { currentMode, currentRadioFrequency } = useRadioModeState();
   const { state: authState } = useAuth();
+  const pluginSnapshot = usePluginSnapshot();
   const standardFrequencyWarning = React.useMemo(
     () => deriveSameCallsignStandardFrequencyWarning(
       operators,
@@ -114,6 +116,7 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
         <RadioOperator
           key={operator.id}
           operatorStatus={operator}
+          pluginStatuses={pluginSnapshot.plugins}
         />
       ))}
     </div>

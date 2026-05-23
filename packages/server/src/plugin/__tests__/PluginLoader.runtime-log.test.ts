@@ -144,6 +144,81 @@ describe('PluginLoader runtime logs', () => {
     expect(errorLog?.message).toContain('Plugin definition validation failed');
   });
 
+  it('rejects transmit-control plugins without auto-call state declaration', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'missing-autocall-state');
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        name: 'missing-autocall-state',
+        version: '1.0.0',
+        type: 'utility',
+        permissions: ['operator:transmit-control'],
+      };
+    `, 'utf8');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loader = new PluginLoader((entry) => runtimeLogs.push(entry));
+    const loaded = await loader.scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(0);
+    const errorLog = runtimeLogs.find((entry) =>
+      entry.stage === 'validate'
+      && entry.level === 'error'
+      && entry.directoryName === 'missing-autocall-state');
+    expect(errorLog).toBeDefined();
+    expect(JSON.stringify(errorLog?.details)).toContain('isAutoCallEnabled');
+  });
+
+  it('rejects global transmit-control plugins', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'global-transmit-control');
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        name: 'global-transmit-control',
+        version: '1.0.0',
+        type: 'utility',
+        instanceScope: 'global',
+        permissions: ['operator:transmit-control'],
+        isAutoCallEnabled() { return true; },
+      };
+    `, 'utf8');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loader = new PluginLoader((entry) => runtimeLogs.push(entry));
+    const loaded = await loader.scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(0);
+    const errorLog = runtimeLogs.find((entry) =>
+      entry.stage === 'validate'
+      && entry.level === 'error'
+      && entry.directoryName === 'global-transmit-control');
+    expect(errorLog).toBeDefined();
+    expect(JSON.stringify(errorLog?.details)).toContain('operator instance scope');
+  });
+
+  it('loads operator-scoped transmit-control plugins with auto-call state declaration', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'valid-transmit-control');
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        name: 'valid-transmit-control',
+        version: '1.0.0',
+        type: 'utility',
+        permissions: ['operator:transmit-control'],
+        isAutoCallEnabled() { return true; },
+      };
+    `, 'utf8');
+
+    const loader = new PluginLoader();
+    const loaded = await loader.scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]?.definition.name).toBe('valid-transmit-control');
+  });
+
   it('rejects global plugins that implement the frequency-change hook', async () => {
     const pluginRoot = await createPluginRoot();
     const pluginDir = join(pluginRoot, 'invalid-global-frequency-hook');

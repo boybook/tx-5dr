@@ -52,6 +52,15 @@ function getAutocallPriority(ctx: PluginContext): number {
   return getAutocallPriorityBase(ctx, 90);
 }
 
+function hasActiveGridWatchEntries(value: unknown): boolean {
+  return Array.isArray(value)
+    && value.some((entry) => typeof entry === 'string' && entry.trim() !== '' && !entry.trim().startsWith('#'));
+}
+
+function isWatchedGridAutoCallEnabled(ctx: PluginContext): boolean {
+  return hasActiveGridWatchEntries(ctx.config.gridWatchList);
+}
+
 function buildGridRules(ctx: PluginContext): TextMatchRule[] {
   const matchMode = getGridMatchMode(ctx);
   const onInvalidRegex = (entry: string, error: unknown) => {
@@ -103,6 +112,7 @@ export const watchedGridAutocallPlugin: PluginDefinition = {
   version: '1.0.0',
   type: 'utility',
   description: 'Automatically call stations from watched Maidenhead grids while the operator is idle',
+  permissions: ['operator:transmit-control'],
 
   settings: {
     gridWatchOverview: {
@@ -175,6 +185,8 @@ export const watchedGridAutocallPlugin: PluginDefinition = {
     { settingKey: 'gridWatchList' },
   ],
 
+  isAutoCallEnabled: isWatchedGridAutoCallEnabled,
+
   hooks: {
     onQSOComplete(record: QSORecord, ctx: PluginContext): void {
       if (!ctx.config.removeExactMatchAfterQSO || !record.grid) return;
@@ -243,4 +255,8 @@ export const watchedGridAutocallLocales: Record<string, Record<string, string>> 
   zh: zhLocale,
   en: enLocale,
   ja: jaLocale,
+};
+
+export const watchedGridAutocallTestables = {
+  isWatchedGridAutoCallEnabled,
 };

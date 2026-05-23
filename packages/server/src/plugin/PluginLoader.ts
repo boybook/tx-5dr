@@ -60,6 +60,14 @@ export function validatePluginDefinition(def: PluginDefinition): void {
   if (manifest.type === 'utility' && def.createStrategyRuntime !== undefined) {
     throw new Error('Utility plugins must not provide createStrategyRuntime(ctx)');
   }
+  if (manifest.permissions?.includes('operator:transmit-control')) {
+    if (manifest.instanceScope === 'global') {
+      throw new Error('Plugins with permission "operator:transmit-control" must use operator instance scope');
+    }
+    if (typeof def.isAutoCallEnabled !== 'function') {
+      throw new Error('Plugins with permission "operator:transmit-control" must implement isAutoCallEnabled(ctx): boolean');
+    }
+  }
 
   for (const quickSetting of manifest.quickSettings ?? []) {
     const setting = manifest.settings?.[quickSetting.settingKey];

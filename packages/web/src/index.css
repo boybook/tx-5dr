@@ -287,6 +287,27 @@ textarea.font-mono,
   will-change: box-shadow, background-color, transform;
 }
 
+@keyframes auto-call-ptt-breath {
+  0%, 100% {
+    box-shadow: 0 0 0 4px hsl(var(--heroui-danger) / 0.26);
+  }
+  50% {
+    box-shadow: 0 0 0 4px hsl(var(--heroui-danger) / 0.48);
+  }
+}
+
+.auto-call-ptt-breath {
+  box-shadow: 0 0 0 4px hsl(var(--heroui-danger) / 0.26);
+  animation: auto-call-ptt-breath 4.2s ease-in-out infinite;
+  will-change: box-shadow;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auto-call-ptt-breath {
+    animation: none;
+  }
+}
+
 /* HeroUI center modals combine `w-full` with horizontal margins, which can
    become wider than the viewport on narrow screens and create page-level
    horizontal dragging. Keep the visual margin, but subtract it from width. */

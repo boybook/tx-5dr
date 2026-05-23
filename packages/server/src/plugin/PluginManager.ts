@@ -947,6 +947,7 @@ export class PluginManager {
           ? (representativeInstance?.enabled ?? this.resolveUtilityEnabled(name, plugin))
           : assignedOperatorIds.length > 0,
         assignedOperatorIds: plugin.definition.type === 'strategy' ? assignedOperatorIds : undefined,
+        autoCallEnabledOperatorIds: this.getAutoCallEnabledOperatorIds(name),
       });
     }
     return result;
@@ -1095,6 +1096,33 @@ export class PluginManager {
     return this.deps.getOperators()
       .map((operator) => operator.config.id)
       .filter((operatorId) => this.getResolvedStrategyName(operatorId) === pluginName);
+  }
+
+  private getAutoCallEnabledOperatorIds(pluginName: string): string[] | undefined {
+    const plugin = this.loadedPlugins.get(pluginName);
+    if (!plugin?.definition.permissions?.includes('operator:transmit-control')) {
+      return undefined;
+    }
+
+    const ids: string[] = [];
+    for (const [operatorId, operatorInstances] of this.instances) {
+      const instance = operatorInstances.get(pluginName);
+      if (!instance?.enabled || instance.autoDisabled) {
+        continue;
+      }
+      if (typeof plugin.definition.isAutoCallEnabled !== 'function') {
+        continue;
+      }
+      try {
+        if (plugin.definition.isAutoCallEnabled(instance.ctx) === true) {
+          ids.push(operatorId);
+        }
+      } catch (err) {
+        logger.warn(`Failed to read plugin auto-call state: plugin=${pluginName}, operator=${operatorId}`, err);
+      }
+    }
+
+    return ids.length > 0 ? ids : undefined;
   }
 
   private resolveUtilityEnabled(pluginName: string, plugin: LoadedPlugin): boolean {
@@ -1528,6 +1556,7 @@ export class PluginManager {
       assignedOperatorIds: plugin.definition.type === 'strategy'
         ? this.getAssignedOperatorIds(pluginName)
         : undefined,
+      autoCallEnabledOperatorIds: this.getAutoCallEnabledOperatorIds(pluginName),
     };
     this.deps.eventEmitter.emit('pluginStatusChanged', {
       generation: this.systemState.generation,

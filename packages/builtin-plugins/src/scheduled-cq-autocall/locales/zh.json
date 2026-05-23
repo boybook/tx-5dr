@@ -13,6 +13,7 @@
   "scheduledCqBandTasksDesc": "为每个波段单独设置固定时间起呼。未填写的波段不会继承全波段共用设置。",
   "scheduledCqBandIntervalSettings": "各波段固定间隔起呼",
   "scheduledCqBandIntervalSettingsDesc": "为每个波段单独设置是否启用固定间隔起呼和起呼间隔。",
+  "scheduledCqBandIntervalEnabled": "启用该波段固定间隔起呼",
   "taskEnabled": "启用",
   "taskDays": "星期",
   "taskDaysDesc": "例如 daily、mon-fri、sat,sun、1-5。",

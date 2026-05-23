@@ -36,6 +36,9 @@ const PluginSettingInfoIcon: React.FC<{ description: string; label: string }> = 
   </Tooltip>
 );
 
+const RESPONSIVE_SETTING_GRID_CLASS = 'grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(100%,12rem),1fr))]';
+const RESPONSIVE_FIELD_GRID_CLASS = 'grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(100%,10rem),1fr))]';
+
 /**
  * 通用的单个插件设置项渲染组件
  * 根据 descriptor.type 自动选择合适的控件（Switch/Input/Select）
@@ -351,7 +354,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
             <div className="mt-0.5 whitespace-pre-line text-xs leading-5 text-default-500">{description}</div>
           )}
         </div>
-        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+        <div className={RESPONSIVE_SETTING_GRID_CLASS}>
           {(descriptor.keys ?? []).map((keyDescriptor) => {
             const keyLabel = resolvePluginLabel(keyDescriptor.label, pluginName);
             const keyDescription = keyDescriptor.description
@@ -487,7 +490,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
             <div className="mt-0.5 whitespace-pre-line text-xs leading-5 text-default-500">{description}</div>
           )}
         </div>
-        <div className="grid gap-2 xl:grid-cols-2">
+        <div className={RESPONSIVE_SETTING_GRID_CLASS}>
           {(descriptor.keys ?? []).map((keyDescriptor) => {
             const keyLabel = resolvePluginLabel(keyDescriptor.label, pluginName);
             const keyDescription = keyDescriptor.description
@@ -533,7 +536,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
                             {i18n.t('common:button.delete', { defaultValue: 'Delete' })}
                           </Button>
                         </div>
-                        <div className="grid gap-2 md:grid-cols-2">
+                        <div className={RESPONSIVE_FIELD_GRID_CLASS}>
                           {objectFields.map((field) => renderObjectField(row, field, (fieldKey, nextValue) =>
                             updateRow(index, fieldKey, nextValue)
                           ))}
@@ -577,7 +580,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
             <div className="mt-0.5 whitespace-pre-line text-xs leading-5 text-default-500">{description}</div>
           )}
         </div>
-        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+        <div className={RESPONSIVE_SETTING_GRID_CLASS}>
           {(descriptor.keys ?? []).map((keyDescriptor) => {
             const keyLabel = resolvePluginLabel(keyDescriptor.label, pluginName);
             const keyDescription = keyDescriptor.description
@@ -650,7 +653,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
                     {i18n.t('common:button.delete', { defaultValue: 'Delete' })}
                   </Button>
                 </div>
-                <div className="grid gap-2 md:grid-cols-2">
+                <div className={RESPONSIVE_FIELD_GRID_CLASS}>
                   {objectFields.map((field) => renderObjectField(row, field, (fieldKey, nextValue) =>
                     updateRow(index, fieldKey, nextValue)
                   ))}

@@ -216,4 +216,13 @@ describe('scheduled-cq-autocall', () => {
 
     expect(starts).toEqual([]);
   });
+
+  it('reports auto-call enabled state from scheduled CQ master switch', () => {
+    expect(scheduledCqAutocallTestables.isScheduledCqAutoCallEnabled(createMockContext({
+      config: { scheduledCqEnabled: true },
+    }))).toBe(true);
+    expect(scheduledCqAutocallTestables.isScheduledCqAutoCallEnabled(createMockContext({
+      config: { scheduledCqEnabled: false },
+    }))).toBe(false);
+  });
 });

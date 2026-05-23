@@ -23,6 +23,12 @@ function getAutocallPriority(ctx: PluginContext): number {
   return getAutocallPriorityBase(ctx, 80);
 }
 
+function isWatchedNoveltyAutoCallEnabled(ctx: PluginContext): boolean {
+  return ctx.config.watchNewDxcc === true
+    || ctx.config.watchNewGrid === true
+    || ctx.config.watchNewCallsign === true;
+}
+
 function getMatchedNoveltyKinds(parsedMessage: ParsedFT8Message, ctx: PluginContext): string[] {
   const analysis = parsedMessage.logbookAnalysis;
   if (!analysis) {
@@ -81,6 +87,7 @@ export const watchedNoveltyAutocallPlugin: PluginDefinition = {
   version: '1.0.0',
   type: 'utility',
   description: 'Automatically call newly needed DXCC, grids, or callsigns while the operator is idle',
+  permissions: ['operator:transmit-control'],
 
   settings: {
     noveltyOverview: {
@@ -141,6 +148,8 @@ export const watchedNoveltyAutocallPlugin: PluginDefinition = {
     { settingKey: 'triggerMode' },
   ],
 
+  isAutoCallEnabled: isWatchedNoveltyAutoCallEnabled,
+
   hooks: {
     onAutoCallCandidate(slotInfo: SlotInfo, messages: ParsedFT8Message[], ctx: PluginContext): AutoCallProposal | null {
       if (!isPureStandby(ctx)) {
@@ -184,4 +193,8 @@ export const watchedNoveltyAutocallLocales: Record<string, Record<string, string
   zh: zhLocale,
   en: enLocale,
   ja: jaLocale,
+};
+
+export const watchedNoveltyAutocallTestables = {
+  isWatchedNoveltyAutoCallEnabled,
 };

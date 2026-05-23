@@ -13,6 +13,7 @@
   "scheduledCqBandTasksDesc": "バンドごとに固定時刻 CQ を設定します。空のバンドは全バンド共用設定を継承しません。",
   "scheduledCqBandIntervalSettings": "バンド別固定間隔 CQ",
   "scheduledCqBandIntervalSettingsDesc": "バンドごとに固定間隔 CQ の有効化と間隔を設定します。",
+  "scheduledCqBandIntervalEnabled": "このバンドの固定間隔 CQ を有効化",
   "taskEnabled": "有効",
   "taskDays": "曜日",
   "taskDaysDesc": "例: daily、mon-fri、sat,sun、1-5。",

@@ -36,11 +36,14 @@ import {
   getVisiblePluginPanelsForSlot,
   type VisiblePluginPanelEntry,
 } from '../../plugins/pluginPanelSlots';
+import { pluginMatchesAutomationFilter, type AutomationPanelFilter } from './automationFilters';
+import { PluginSettingField } from '../../settings/PluginSettingField';
 
 const logger = createLogger('AutomationSettingsPanel');
 
 interface AutomationSettingsPanelProps {
   operatorId: string;
+  filter?: AutomationPanelFilter;
 }
 
 interface PluginQuickGroup {
@@ -102,6 +105,13 @@ function getQuickGroupRank(plugin: PluginStatus): number {
   return 3;
 }
 
+function usesGeneratedSettingEditor(descriptor: PluginSettingDescriptor): boolean {
+  return descriptor.type === 'object[]'
+    || descriptor.type === 'keyedStringArrays'
+    || descriptor.type === 'keyedObjectArrays'
+    || descriptor.type === 'keyedObjects';
+}
+
 function useDelayedBusyKey(busyKey: string | null, delayMs = 500): string | null {
   const [visibleBusyKey, setVisibleBusyKey] = React.useState<string | null>(null);
 
@@ -132,7 +142,7 @@ function AutomationSettingsPanelSkeleton(): React.JSX.Element {
   );
 }
 
-export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = ({ operatorId }) => {
+export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = ({ operatorId, filter = 'all' }) => {
   const { t } = useTranslation('settings');
   const connection = useConnection();
   const pluginSnapshot = usePluginSnapshot();
@@ -215,6 +225,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
 
     return pluginSnapshot.plugins
       .map((plugin, index) => ({ plugin, index }))
+      .filter(({ plugin }) => pluginMatchesAutomationFilter(plugin, filter))
       .filter((plugin) => {
         const settings = (plugin.plugin.quickSettings ?? []).filter((entry) => hasOperatorQuickSetting(plugin.plugin, entry));
         const actions = plugin.plugin.quickActions ?? [];
@@ -248,6 +259,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
     pluginSnapshot.panelContributions,
     pluginSnapshot.panelMeta,
     pluginSnapshot.plugins,
+    filter,
   ]);
 
   React.useEffect(() => {
@@ -661,6 +673,90 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                           input: 'text-xs leading-5',
                           inputWrapper: 'rounded-md px-2 py-1 shadow-none',
                           errorMessage: 'text-[11px]',
+                        }}
+                      />
+                    </div>
+                  );
+                }
+
+                if (usesGeneratedSettingEditor(descriptor)) {
+                  return (
+                    <div key={fieldId} className="space-y-1.5">
+                      {dirty && (
+                        <div className="flex justify-end">
+                          <Button
+                            size="sm"
+                            color="primary"
+                            variant="flat"
+                            className="h-6 min-w-0 rounded-md px-2 text-[11px]"
+                            isDisabled={Boolean(validationIssue) || savingSettingKey === fieldId}
+                            isLoading={visibleSavingSettingKey === fieldId}
+                            spinner={QUICK_ACTION_SPINNER}
+                            spinnerPlacement="end"
+                            onPress={() => void handleSaveDraftSetting(plugin, entry.settingKey)}
+                          >
+                            {t('common:button.save')}
+                          </Button>
+                        </div>
+                      )}
+                      <PluginSettingField
+                        fieldKey={entry.settingKey}
+                        descriptor={descriptor}
+                        value={currentValue}
+                        onChange={(value) => handleSettingDraftChange(plugin.name, entry.settingKey, value)}
+                        pluginName={plugin.name}
+                        settings={currentSettings}
+                      />
+                    </div>
+                  );
+                }
+
+                if (descriptor.type === 'number') {
+                  return (
+                    <div
+                      key={fieldId}
+                      className="rounded-md border border-default-200/70 bg-content1 px-2.5 py-2"
+                    >
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className="text-[11px] text-default-500">{label}</span>
+                        {dirty && (
+                          <Button
+                            size="sm"
+                            color="primary"
+                            variant="flat"
+                            className="h-6 min-w-0 rounded-md px-2 text-[11px]"
+                            isDisabled={Boolean(validationIssue) || savingSettingKey === fieldId}
+                            isLoading={visibleSavingSettingKey === fieldId}
+                            spinner={QUICK_ACTION_SPINNER}
+                            spinnerPlacement="end"
+                            onPress={() => void handleSaveDraftSetting(plugin, entry.settingKey)}
+                          >
+                            {t('common:button.save')}
+                          </Button>
+                        )}
+                      </div>
+                      {description && (
+                        <div className="mb-1.5 text-[11px] leading-4 text-default-400">
+                          {description}
+                        </div>
+                      )}
+                      <Input
+                        size="sm"
+                        type="number"
+                        aria-label={label}
+                        value={String(currentValue ?? descriptor.default ?? '')}
+                        min={descriptor.min}
+                        max={descriptor.max}
+                        onValueChange={(value) => {
+                          handleSettingDraftChange(
+                            plugin.name,
+                            entry.settingKey,
+                            value === '' ? '' : Number(value),
+                          );
+                        }}
+                        classNames={{
+                          input: 'text-xs',
+                          inputWrapper: 'min-h-8 h-8 rounded-md px-2 shadow-none',
                         }}
                       />
                     </div>

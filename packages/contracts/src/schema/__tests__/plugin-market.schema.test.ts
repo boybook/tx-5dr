@@ -3,8 +3,10 @@ import {
   PluginMarketCatalogResponseSchema,
   PluginMarketCatalogSchema,
   PluginMarketChannelSchema,
+  PluginManifestSchema,
   PluginPermissionSchema,
   PluginSourceSchema,
+  PluginStatusSchema,
 } from '../../index.js';
 
 describe('plugin market schema', () => {
@@ -65,8 +67,33 @@ describe('plugin market schema', () => {
 
   it('accepts host settings permissions', () => {
     expect(PluginPermissionSchema.parse('host:hamlib')).toBe('host:hamlib');
+    expect(PluginPermissionSchema.parse('operator:transmit-control')).toBe('operator:transmit-control');
     expect(PluginPermissionSchema.parse('settings:ft8')).toBe('settings:ft8');
     expect(PluginPermissionSchema.parse('settings:ntp')).toBe('settings:ntp');
+    expect(() => PluginPermissionSchema.parse('operator:transmit')).toThrow();
+  });
+
+  it('accepts transmit-control permission and auto-call status in plugin snapshots', () => {
+    const manifest = PluginManifestSchema.parse({
+      name: 'autocall-demo',
+      version: '1.0.0',
+      type: 'utility',
+      permissions: ['operator:transmit-control'],
+    });
+    expect(manifest.permissions).toEqual(['operator:transmit-control']);
+
+    const status = PluginStatusSchema.parse({
+      name: 'autocall-demo',
+      version: '1.0.0',
+      type: 'utility',
+      isBuiltIn: false,
+      loaded: true,
+      enabled: true,
+      errorCount: 0,
+      permissions: ['operator:transmit-control'],
+      autoCallEnabledOperatorIds: ['operator-1'],
+    });
+    expect(status.autoCallEnabledOperatorIds).toEqual(['operator-1']);
   });
 
   it('accepts the route response envelope', () => {

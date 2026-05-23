@@ -125,8 +125,9 @@ export class PluginContextFactory {
       this.onPanelMeta,
       this.onPanelContributions,
     );
+    let ctx: PluginContext | undefined;
     const pluginLogger = this.createLogger(plugin.definition.name);
-    const operatorControl = this.createOperatorControl(operatorId, instanceScope);
+    const operatorControl = this.createOperatorControl(plugin, operatorId, instanceScope, () => ctx);
     const radioControl = this.createRadioControl(plugin);
     const logbookAccess = this.createLogbookAccess(operatorId, instanceScope);
     const bandAccess = this.createBandAccess(operatorId);
@@ -136,7 +137,7 @@ export class PluginContextFactory {
     );
     const networkControl = this.createNetworkControl(plugin);
 
-    const ctx: PluginContext = {
+    ctx = {
       get config() {
         return Object.freeze({ ...getPluginSettings() });
       },
@@ -449,10 +450,46 @@ export class PluginContextFactory {
   }
 
   private createOperatorControl(
+    plugin: LoadedPlugin,
     operatorId: string | undefined,
     instanceScope: 'operator' | 'global',
+    getContext: () => PluginContext | undefined,
   ) {
     const deps = this.deps;
+    const assertTransmitControlAllowed = (action: string): void => {
+      if (!plugin.definition.permissions?.includes('operator:transmit-control')) {
+        throw new Error(
+          `Plugin '${plugin.definition.name}' cannot ${action}. Add permissions: ['operator:transmit-control'] and implement isAutoCallEnabled(ctx) before using operator transmit-control APIs.`,
+        );
+      }
+      if (typeof plugin.definition.isAutoCallEnabled !== 'function') {
+        throw new Error(
+          `Plugin '${plugin.definition.name}' must implement isAutoCallEnabled(ctx): boolean before using operator transmit-control APIs.`,
+        );
+      }
+
+      const ctx = getContext();
+      if (!ctx) {
+        throw new Error(`Plugin '${plugin.definition.name}' cannot ${action} before its PluginContext is ready`);
+      }
+
+      let enabled = false;
+      try {
+        enabled = plugin.definition.isAutoCallEnabled(ctx) === true;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Plugin '${plugin.definition.name}' failed to evaluate isAutoCallEnabled(ctx) before ${action}: ${message}`,
+        );
+      }
+
+      if (!enabled) {
+        throw new Error(
+          `Plugin '${plugin.definition.name}' cannot ${action} because isAutoCallEnabled(ctx) returned false. Only call operator transmit-control APIs while your automatic calling feature is enabled, or update isAutoCallEnabled(ctx) to reflect the active state.`,
+        );
+      }
+    };
+
     if (instanceScope === 'global' || !operatorId) {
       return {
         get id() { return '__global__'; },
@@ -464,15 +501,15 @@ export class PluginContextFactory {
         get transmitCycles() { return []; },
         get automation() { return null; },
         getOtherOperators: () => this.createOtherOperatorSnapshots(undefined),
-        startTransmitting() {},
-        stopTransmitting() {},
-        call(_callsign: string, _lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }) {},
-        replyToDecode(_decode: { callsign: string; lastMessage: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }; modifiers?: number }) {},
+        startTransmitting() { assertTransmitControlAllowed('start transmitting'); },
+        stopTransmitting() { assertTransmitControlAllowed('stop transmitting'); },
+        call(_callsign: string, _lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }) { assertTransmitControlAllowed('call a target station'); },
+        replyToDecode(_decode: { callsign: string; lastMessage: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }; modifiers?: number }) { assertTransmitControlAllowed('reply to a decode'); },
         setTransmitCycles(_cycles: number | number[]) {},
         clearDecodes(_window?: number) {},
-        haltTransmission(_options?: { autoOnly?: boolean }) {},
+        haltTransmission(_options?: { autoOnly?: boolean }) { assertTransmitControlAllowed('halt transmission'); },
         setFreeText(_text: string) {},
-        sendFreeText(_text?: string) {},
+        sendFreeText(_text?: string) { assertTransmitControlAllowed('send free text'); },
         setTemporaryLocation(_location: string) {},
         highlightCallsign(_rule: { callsign: string; background?: string | null; foreground?: string | null; lastOnly?: boolean }) {},
         async hasWorkedCallsign(_callsign: string, _options?: { anyBand?: boolean }) { return false; },
@@ -508,15 +545,19 @@ export class PluginContextFactory {
       },
       getOtherOperators: () => this.createOtherOperatorSnapshots(operatorId),
       startTransmitting() {
+        assertTransmitControlAllowed('start transmitting');
         deps.getOperatorById(operatorId)?.start();
       },
       stopTransmitting() {
+        assertTransmitControlAllowed('stop transmitting');
         deps.getOperatorById(operatorId)?.stop();
       },
       call(callsign: string, lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }) {
+        assertTransmitControlAllowed('call a target station');
         deps.requestOperatorCall(operatorId, callsign, lastMessage);
       },
       replyToDecode(decode: { callsign: string; lastMessage: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }; modifiers?: number }) {
+        assertTransmitControlAllowed('reply to a decode');
         deps.eventEmitter.emit('pluginRemoteReplyToDecode', { operatorId, callsign: decode.callsign, modifiers: decode.modifiers });
         deps.requestOperatorCall(operatorId, decode.callsign, decode.lastMessage);
       },
@@ -527,6 +568,7 @@ export class PluginContextFactory {
         deps.eventEmitter.emit('pluginRemoteClearDecodes', { operatorId, window });
       },
       haltTransmission(options?: { autoOnly?: boolean }) {
+        assertTransmitControlAllowed('halt transmission');
         if (options?.autoOnly) {
           deps.getOperatorById(operatorId)?.stop();
         } else {
@@ -539,6 +581,7 @@ export class PluginContextFactory {
         deps.eventEmitter.emit('pluginRemoteFreeText', { operatorId, text, send: false });
       },
       sendFreeText(text?: string) {
+        assertTransmitControlAllowed('send free text');
         deps.eventEmitter.emit('pluginRemoteFreeText', { operatorId, text, send: true });
         if (text && text.trim()) {
           deps.eventEmitter.emit('requestTransmit', { operatorId, transmission: text });

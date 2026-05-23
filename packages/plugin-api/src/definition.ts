@@ -242,4 +242,16 @@ export interface PluginDefinition {
    * active strategy participate in decision making.
    */
   hooks?: PluginHooks;
+
+  /**
+   * Reports whether this operator-scoped plugin currently has automatic
+   * calling/transmit-control behavior enabled for its operator instance.
+   *
+   * Plugins that declare `operator:transmit-control` must implement this
+   * function. The host uses it both for operator-card status indicators and as
+   * a safety gate before allowing plugin code to call operator transmit-control
+   * APIs such as `startTransmitting`, `call`, `replyToDecode` or
+   * `sendFreeText`.
+   */
+  isAutoCallEnabled?(ctx: PluginContext): boolean;
 }

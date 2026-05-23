@@ -39,6 +39,7 @@ export type PluginInstanceScope = z.infer<typeof PluginInstanceScopeSchema>;
 export const PluginPermissionSchema = z.enum([
   'network',
   'host:hamlib',
+  'operator:transmit-control',
   'radio:read',
   'radio:control',
   'radio:power',
@@ -532,6 +533,7 @@ export const PluginStatusSchema = z.object({
   panels: z.array(PluginPanelDescriptorSchema).optional(),
   permissions: z.array(PluginPermissionSchema).optional(),
   capabilities: z.array(PluginCapabilitySchema).optional(),
+  autoCallEnabledOperatorIds: z.array(z.string()).optional(),
   ui: PluginUIConfigSchema.optional(),
   locales: PluginLocalesSchema.optional(),
   source: PluginSourceSchema.optional(),

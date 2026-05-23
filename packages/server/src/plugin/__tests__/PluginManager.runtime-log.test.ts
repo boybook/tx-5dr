@@ -178,6 +178,67 @@ describe('PluginManager runtime logs', () => {
     await pluginManager.shutdown();
   });
 
+  it('updates auto-call enabled operator ids when operator settings change', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-runtime-log-'));
+    tempDirs.push(dataDir);
+
+    await writeUserPlugin(dataDir, 'tx-control-test', `
+      export default {
+        name: 'tx-control-test',
+        version: '1.0.0',
+        type: 'utility',
+        permissions: ['operator:transmit-control'],
+        settings: {
+          autoCallEnabled: {
+            type: 'boolean',
+            default: false,
+            label: 'autoCallEnabled',
+            scope: 'operator',
+          },
+        },
+        isAutoCallEnabled(ctx) {
+          return ctx.config.autoCallEnabled === true;
+        },
+      };
+    `);
+
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const operator = createOperator(eventEmitter);
+    const pluginManager = createPluginManager(dataDir, eventEmitter, operator);
+    pluginManager.loadConfig({
+      configs: {
+        'tx-control-test': { enabled: true, settings: {} },
+        'qso-udp-broadcast': { enabled: false, settings: {} },
+      },
+      operatorStrategies: {
+        [operator.config.id]: 'standard-qso',
+      },
+      operatorSettings: {
+        [operator.config.id]: {
+          'tx-control-test': { autoCallEnabled: false },
+        },
+      },
+    });
+
+    await pluginManager.start();
+    expect(pluginManager.getSnapshot().plugins.find((plugin) => plugin.name === 'tx-control-test')?.autoCallEnabledOperatorIds).toBeUndefined();
+
+    const statusChanged = vi.fn();
+    eventEmitter.on('pluginStatusChanged', statusChanged);
+    pluginManager.setOperatorPluginSettings(operator.config.id, 'tx-control-test', { autoCallEnabled: true });
+
+    const status = pluginManager.getSnapshot().plugins.find((plugin) => plugin.name === 'tx-control-test');
+    expect(status?.autoCallEnabledOperatorIds).toEqual([operator.config.id]);
+    expect(statusChanged).toHaveBeenCalledWith(expect.objectContaining({
+      plugin: expect.objectContaining({
+        name: 'tx-control-test',
+        autoCallEnabledOperatorIds: [operator.config.id],
+      }),
+    }));
+
+    await pluginManager.shutdown();
+  });
+
   it('emits reload started and completed logs', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-runtime-log-'));
     tempDirs.push(dataDir);

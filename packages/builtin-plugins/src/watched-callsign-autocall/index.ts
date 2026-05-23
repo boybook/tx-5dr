@@ -47,6 +47,15 @@ function getAutocallPriority(ctx: PluginContext): number {
   return getAutocallPriorityBase(ctx, 100);
 }
 
+function hasActiveWatchEntries(value: unknown): boolean {
+  return Array.isArray(value)
+    && value.some((entry) => typeof entry === 'string' && entry.trim() !== '' && !entry.trim().startsWith('#'));
+}
+
+function isWatchedCallsignAutoCallEnabled(ctx: PluginContext): boolean {
+  return hasActiveWatchEntries(ctx.config.watchList);
+}
+
 function buildWatchRules(ctx: PluginContext): WatchRule[] {
   const matchMode = getWatchMatchMode(ctx);
   const onInvalidRegex = (entry: string, error: unknown) => {
@@ -115,6 +124,7 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
   version: '1.0.0',
   type: 'utility',
   description: 'Automatically start calling watched callsigns when they appear while the operator is idle',
+  permissions: ['operator:transmit-control'],
 
   settings: {
     watchOverview: {
@@ -188,6 +198,8 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
     { settingKey: 'watchMatchMode' },
     { settingKey: 'watchList' },
   ],
+
+  isAutoCallEnabled: isWatchedCallsignAutoCallEnabled,
 
   hooks: {
     onQSOComplete(record: QSORecord, ctx: PluginContext): void {
@@ -285,4 +297,8 @@ export const watchedCallsignAutocallLocales: Record<string, Record<string, strin
   zh: zhLocale,
   en: enLocale,
   ja: jaLocale,
+};
+
+export const watchedCallsignAutocallTestables = {
+  isWatchedCallsignAutoCallEnabled,
 };

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FT8MessageType } from '@tx5dr/plugin-api';
 import { createMockContext, createMockParsedMessage, createMockSlotInfo } from '@tx5dr/plugin-api/testing';
-import { watchedGridAutocallPlugin } from './index.js';
+import { watchedGridAutocallPlugin, watchedGridAutocallTestables } from './index.js';
 
 describe('watched-grid-autocall', () => {
   it('proposes an autocall when a watched grid appears', async () => {
@@ -67,5 +67,14 @@ describe('watched-grid-autocall', () => {
 
     const proposal = await watchedGridAutocallPlugin.hooks?.onAutoCallCandidate?.(createMockSlotInfo(), [message], ctx);
     expect(proposal).toBeNull();
+  });
+
+  it('reports auto-call enabled only when grid watch list has active entries', () => {
+    expect(watchedGridAutocallTestables.isWatchedGridAutoCallEnabled(createMockContext({
+      config: { gridWatchList: ['PM95'] },
+    }))).toBe(true);
+    expect(watchedGridAutocallTestables.isWatchedGridAutoCallEnabled(createMockContext({
+      config: { gridWatchList: ['  ', '# PM95'] },
+    }))).toBe(false);
   });
 });

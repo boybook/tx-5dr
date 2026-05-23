@@ -227,11 +227,16 @@ function runScheduledCqCheck(ctx: PluginContext, now = new Date()): void {
   ctx.operator.startTransmitting();
 }
 
+function isScheduledCqAutoCallEnabled(ctx: PluginContext): boolean {
+  return ctx.config.scheduledCqEnabled === true;
+}
+
 export const scheduledCqAutocallPlugin: PluginDefinition = {
   name: 'scheduled-cq-autocall',
   version: '1.0.0',
   type: 'utility',
   description: 'Start CQ automation at scheduled local times or fixed intervals while the operator is idle',
+  permissions: ['operator:transmit-control'],
 
   settings: {
     scheduledCqOverview: {
@@ -314,7 +319,7 @@ export const scheduledCqAutocallPlugin: PluginDefinition = {
       keys: scheduledCqBandKeys,
       visibleWhen: { setting: 'scheduledCqPerBandEnabled', equals: true },
       itemFields: [
-        { key: 'enabled', type: 'boolean', label: 'scheduledCqIntervalEnabled', default: false },
+        { key: 'enabled', type: 'boolean', label: 'scheduledCqBandIntervalEnabled', default: false },
         {
           key: 'intervalMinutes',
           type: 'number',
@@ -341,6 +346,8 @@ export const scheduledCqAutocallPlugin: PluginDefinition = {
     configureTimer(ctx);
   },
 
+  isAutoCallEnabled: isScheduledCqAutoCallEnabled,
+
   hooks: {
     onConfigChange(_changes, ctx) {
       configureTimer(ctx);
@@ -363,4 +370,5 @@ export const scheduledCqAutocallTestables = {
   getDueIntervalKey,
   resolveScheduledCqConfig,
   runScheduledCqCheck,
+  isScheduledCqAutoCallEnabled,
 };

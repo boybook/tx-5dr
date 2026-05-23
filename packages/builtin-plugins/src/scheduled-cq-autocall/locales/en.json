@@ -13,6 +13,7 @@
   "scheduledCqBandTasksDesc": "Configure fixed-time CQ separately for each band. Empty bands do not inherit all-band settings.",
   "scheduledCqBandIntervalSettings": "Interval CQ by Band",
   "scheduledCqBandIntervalSettingsDesc": "Configure interval CQ and the interval length separately for each band.",
+  "scheduledCqBandIntervalEnabled": "Enable interval CQ for this band",
   "taskEnabled": "Enabled",
   "taskDays": "Days",
   "taskDaysDesc": "Examples: daily, mon-fri, sat,sun, 1-5.",
