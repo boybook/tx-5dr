@@ -557,6 +557,7 @@ export class ConfigManager {
     parsedConfig.plugins.configs ??= {};
     parsedConfig.plugins.operatorStrategies ??= {};
     parsedConfig.plugins.operatorSettings ??= {};
+    parsedConfig.plugins.operatorPluginPauses ??= {};
 
     for (const operator of parsedConfig.operators) {
       if (!operator || typeof operator !== 'object' || typeof operator.id !== 'string') {
@@ -1494,12 +1495,12 @@ export class ConfigManager {
   // ===== 插件配置 =====
 
   getPluginsConfig(): PluginsConfig {
-    return this.config.plugins ?? { configs: {}, operatorStrategies: {}, operatorSettings: {} };
+    return this.config.plugins ?? { configs: {}, operatorStrategies: {}, operatorSettings: {}, operatorPluginPauses: {} };
   }
 
   async setPluginConfig(name: string, entry: { enabled: boolean; settings: Record<string, unknown> }): Promise<void> {
     if (!this.config.plugins) {
-      this.config.plugins = { configs: {}, operatorStrategies: {}, operatorSettings: {} };
+      this.config.plugins = { configs: {}, operatorStrategies: {}, operatorSettings: {}, operatorPluginPauses: {} };
     }
     this.config.plugins.configs = { ...(this.config.plugins.configs ?? {}), [name]: entry };
     await this.saveConfig();
@@ -1511,7 +1512,7 @@ export class ConfigManager {
 
   async setOperatorStrategy(operatorId: string, pluginName: string): Promise<void> {
     if (!this.config.plugins) {
-      this.config.plugins = { configs: {}, operatorStrategies: {}, operatorSettings: {} };
+      this.config.plugins = { configs: {}, operatorStrategies: {}, operatorSettings: {}, operatorPluginPauses: {} };
     }
     this.config.plugins.operatorStrategies = {
       ...this.config.plugins.operatorStrategies,
@@ -1533,7 +1534,7 @@ export class ConfigManager {
     settings: Record<string, unknown>,
   ): Promise<void> {
     if (!this.config.plugins) {
-      this.config.plugins = { configs: {}, operatorStrategies: {}, operatorSettings: {} };
+      this.config.plugins = { configs: {}, operatorStrategies: {}, operatorSettings: {}, operatorPluginPauses: {} };
     }
     if (!this.config.plugins.operatorSettings) {
       this.config.plugins.operatorSettings = {};
@@ -1544,5 +1545,26 @@ export class ConfigManager {
     this.config.plugins.operatorSettings[operatorId][pluginName] = settings;
     await this.saveConfig();
     logger.info('Operator plugin settings updated', { operatorId, pluginName });
+  }
+
+  getOperatorPluginPauses(operatorId: string): string[] {
+    return this.config.plugins?.operatorPluginPauses?.[operatorId] ?? [];
+  }
+
+  async setOperatorPluginPauses(operatorId: string, pluginNames: string[]): Promise<void> {
+    if (!this.config.plugins) {
+      this.config.plugins = { configs: {}, operatorStrategies: {}, operatorSettings: {}, operatorPluginPauses: {} };
+    }
+    if (!this.config.plugins.operatorPluginPauses) {
+      this.config.plugins.operatorPluginPauses = {};
+    }
+    const uniqueNames = Array.from(new Set(pluginNames.filter((name) => typeof name === 'string' && name.trim().length > 0)));
+    if (uniqueNames.length === 0) {
+      delete this.config.plugins.operatorPluginPauses[operatorId];
+    } else {
+      this.config.plugins.operatorPluginPauses[operatorId] = uniqueNames;
+    }
+    await this.saveConfig();
+    logger.info('Operator plugin pauses updated', { operatorId, pluginNames: uniqueNames });
   }
 }

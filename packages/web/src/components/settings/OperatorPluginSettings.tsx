@@ -7,6 +7,7 @@ import { createLogger } from '../../utils/logger';
 import { pluginApi } from '../../utils/pluginApi';
 import { usePluginSnapshot } from '../../hooks/usePluginSnapshot';
 import { PluginStrategySelector } from '../plugins/PluginStrategySelector';
+import { isTransmitControlPlugin, isTransmitControlPluginPaused } from '../radio/operators/radioOperatorAutomation';
 import {
   getPluginSettingValidationIssue,
   normalizePluginSettingsForSave,
@@ -33,6 +34,8 @@ export const OperatorPluginSettings: React.FC<OperatorPluginSettingsProps> = ({ 
   const [settingsMap, setSettingsMap] = useState<Record<string, Record<string, unknown>>>({});
   const [originalSettingsMap, setOriginalSettingsMap] = useState<Record<string, Record<string, unknown>>>({});
   const [savingMap, setSavingMap] = useState<Record<string, boolean>>({});
+  const [pausingMap, setPausingMap] = useState<Record<string, boolean>>({});
+  const [pauseErrorMap, setPauseErrorMap] = useState<Record<string, string>>({});
   const [currentStrategy, setCurrentStrategy] = useState('standard-qso');
 
   // 有 operator scope settings 的已启用插件
@@ -124,6 +127,33 @@ export const OperatorPluginSettings: React.FC<OperatorPluginSettingsProps> = ({ 
     }
   }, [operatorId, relevantPlugins, settingsMap]);
 
+  const handleTogglePause = useCallback(async (pluginName: string) => {
+    const plugin = relevantPlugins.find((entry) => entry.name === pluginName);
+    if (!plugin) {
+      return;
+    }
+    const nextPaused = !isTransmitControlPluginPaused(plugin, operatorId);
+    setPausingMap(prev => ({ ...prev, [pluginName]: true }));
+    setPauseErrorMap(prev => {
+      const next = { ...prev };
+      delete next[pluginName];
+      return next;
+    });
+    try {
+      await pluginApi.setOperatorPluginPaused(pluginName, operatorId, nextPaused);
+    } catch (err: unknown) {
+      logger.error('Failed to update automation pause state', err);
+      setPauseErrorMap(prev => ({
+        ...prev,
+        [pluginName]: err instanceof Error
+          ? err.message
+          : t('automation.pauseUpdateFailed', 'Failed to update automation pause state.'),
+      }));
+    } finally {
+      setPausingMap(prev => ({ ...prev, [pluginName]: false }));
+    }
+  }, [operatorId, relevantPlugins, t]);
+
   const [expanded, setExpanded] = useState(false);
 
   if (!hasStrategyChoice && relevantPlugins.length === 0) return null;
@@ -163,6 +193,11 @@ export const OperatorPluginSettings: React.FC<OperatorPluginSettingsProps> = ({ 
             onChange={(key, value) => handleChange(plugin.name, key, value)}
             onSave={() => { void handleSave(plugin.name); }}
             isSaving={savingMap[plugin.name]}
+            canToggleAutomationPause={isTransmitControlPlugin(plugin)}
+            isAutomationPaused={isTransmitControlPluginPaused(plugin, operatorId)}
+            isAutomationPauseUpdating={pausingMap[plugin.name]}
+            onToggleAutomationPause={() => { void handleTogglePause(plugin.name); }}
+            automationPauseError={pauseErrorMap[plugin.name]}
             description={plugin.type === 'strategy'
               ? t('plugins.operatorStrategySettingsHint', 'Settings for the current strategy plugin.')
               : t('plugins.operatorPluginSettingsHint', 'Operator-specific plugin settings.')}

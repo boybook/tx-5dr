@@ -410,7 +410,13 @@
     "initialized": "Initialized",
     "notInitialized": "Not initialized",
     "standardFrequencyMultiTxTitle": "Same-callsign same-cycle multi-TX is prohibited",
-    "standardFrequencyMultiTxDesc": "This is a prohibited transmission on standard FT8/FT4 frequencies. Stop one transmitter immediately or move it to a different cycle. Callsign: {{callsigns}}."
+    "standardFrequencyMultiTxDesc": "This is a prohibited transmission on standard FT8/FT4 frequencies. Stop one transmitter immediately or move it to a different cycle. Callsign: {{callsigns}}.",
+    "autoCallPausedTitle": "Auto-call is paused",
+    "autoCallPausedDesc": "{{count}} auto-call plugin(s) paused.",
+    "pauseAllAutoCall": "Pause all auto-call",
+    "resumeAllAutoCall": "Resume all auto-call",
+    "autoCallPauseFailed": "Failed to pause auto-call",
+    "autoCallResumeFailed": "Failed to resume auto-call"
   },
   "profile": {
     "reconnecting": "Reconnecting to \"{{name}}\"",

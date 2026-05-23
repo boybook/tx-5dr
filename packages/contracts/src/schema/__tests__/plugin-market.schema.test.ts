@@ -5,6 +5,7 @@ import {
   PluginMarketChannelSchema,
   PluginManifestSchema,
   PluginPermissionSchema,
+  PluginsConfigSchema,
   PluginSourceSchema,
   PluginStatusSchema,
 } from '../../index.js';
@@ -92,8 +93,22 @@ describe('plugin market schema', () => {
       errorCount: 0,
       permissions: ['operator:transmit-control'],
       autoCallEnabledOperatorIds: ['operator-1'],
+      pausedOperatorIds: ['operator-2'],
     });
     expect(status.autoCallEnabledOperatorIds).toEqual(['operator-1']);
+    expect(status.pausedOperatorIds).toEqual(['operator-2']);
+  });
+
+  it('accepts persisted operator plugin pause state with defaults', () => {
+    const emptyConfig = PluginsConfigSchema.parse({});
+    expect(emptyConfig.operatorPluginPauses).toEqual({});
+
+    const config = PluginsConfigSchema.parse({
+      operatorPluginPauses: {
+        'operator-1': ['scheduled-cq-autocall'],
+      },
+    });
+    expect(config.operatorPluginPauses['operator-1']).toEqual(['scheduled-cq-autocall']);
   });
 
   it('accepts the route response envelope', () => {

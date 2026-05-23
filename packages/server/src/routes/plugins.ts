@@ -735,6 +735,71 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  fastify.put<{
+    Params: { name: string; operatorId: string };
+    Body: { paused: boolean };
+  }>(
+    '/:name/operator/:operatorId/pause',
+    async (req, reply) => {
+      const { name, operatorId } = req.params;
+      if (!await requireOperatorBindingAccess(fastify, req, reply, operatorId)) {
+        return;
+      }
+
+      const { paused } = req.body ?? {};
+      if (typeof paused !== 'boolean') {
+        return reply.status(400).send({ error: 'paused must be a boolean' });
+      }
+
+      try {
+        const pausedPlugins = await engine.pluginManager.setOperatorPluginPaused(operatorId, name, paused);
+        return reply.send({ success: true, operatorId, pausedPlugins });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to update plugin pause state';
+        const statusCode = message.includes('not found') ? 404 : 400;
+        return reply.status(statusCode).send({ error: message });
+      }
+    },
+  );
+
+  fastify.post<{ Params: { operatorId: string } }>(
+    '/operators/:operatorId/transmit-control/pause-all',
+    async (req, reply) => {
+      const { operatorId } = req.params;
+      if (!await requireOperatorBindingAccess(fastify, req, reply, operatorId)) {
+        return;
+      }
+
+      try {
+        const pausedPlugins = await engine.pluginManager.pauseActiveTransmitControlPlugins(operatorId);
+        return reply.send({ success: true, operatorId, pausedPlugins });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to pause transmit-control plugins';
+        const statusCode = message.includes('not found') ? 404 : 400;
+        return reply.status(statusCode).send({ error: message });
+      }
+    },
+  );
+
+  fastify.post<{ Params: { operatorId: string } }>(
+    '/operators/:operatorId/transmit-control/resume-all',
+    async (req, reply) => {
+      const { operatorId } = req.params;
+      if (!await requireOperatorBindingAccess(fastify, req, reply, operatorId)) {
+        return;
+      }
+
+      try {
+        const pausedPlugins = await engine.pluginManager.resumeTransmitControlPlugins(operatorId);
+        return reply.send({ success: true, operatorId, pausedPlugins });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to resume transmit-control plugins';
+        const statusCode = message.includes('not found') ? 404 : 400;
+        return reply.status(statusCode).send({ error: message });
+      }
+    },
+  );
+
   fastify.post('/reload', async (req, reply) => {
     if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
       return;

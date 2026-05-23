@@ -4,6 +4,8 @@ import { Button, Card, CardBody, Tab, Tabs } from '@heroui/react';
 import { api } from '@tx5dr/core';
 import type { PluginStatus, RadioOperatorConfig } from '@tx5dr/contracts';
 import { createLogger } from '../../utils/logger';
+import { pluginApi } from '../../utils/pluginApi';
+import { isTransmitControlPlugin, isTransmitControlPluginPaused } from '../radio/operators/radioOperatorAutomation';
 import {
   arePluginSettingValuesEqual,
   getPluginSettingValidationIssue,
@@ -48,6 +50,8 @@ export const SelectedPluginOperatorSettingsPanel = forwardRef<SelectedPluginOper
   const [loadingMap, setLoadingMap] = useState<Record<string, boolean>>({});
   const [savingMap, setSavingMap] = useState<Record<string, boolean>>({});
   const [errorMap, setErrorMap] = useState<Record<string, string>>({});
+  const [pausingMap, setPausingMap] = useState<Record<string, boolean>>({});
+  const [pauseErrorMap, setPauseErrorMap] = useState<Record<string, string>>({});
 
   const hasOperatorSettings = hasOperatorPluginSettings(plugin);
 
@@ -57,6 +61,8 @@ export const SelectedPluginOperatorSettingsPanel = forwardRef<SelectedPluginOper
     setLoadingMap({});
     setSavingMap({});
     setErrorMap({});
+    setPausingMap({});
+    setPauseErrorMap({});
     setActiveOperatorId((current) => {
       if (current && operators.some((operator) => operator.id === current)) {
         return current;
@@ -183,6 +189,29 @@ export const SelectedPluginOperatorSettingsPanel = forwardRef<SelectedPluginOper
     }
   }, [plugin, settingsMap, t]);
 
+  const handleTogglePause = useCallback(async (operatorId: string) => {
+    const nextPaused = !isTransmitControlPluginPaused(plugin, operatorId);
+    setPausingMap((prev) => ({ ...prev, [operatorId]: true }));
+    setPauseErrorMap((prev) => {
+      const next = { ...prev };
+      delete next[operatorId];
+      return next;
+    });
+    try {
+      await pluginApi.setOperatorPluginPaused(plugin.name, operatorId, nextPaused);
+    } catch (err: unknown) {
+      logger.error('Failed to update automation pause state', err);
+      setPauseErrorMap((prev) => ({
+        ...prev,
+        [operatorId]: err instanceof Error
+          ? err.message
+          : t('automation.pauseUpdateFailed', 'Failed to update automation pause state.'),
+      }));
+    } finally {
+      setPausingMap((prev) => ({ ...prev, [operatorId]: false }));
+    }
+  }, [plugin, t]);
+
   useImperativeHandle(ref, () => ({
     hasUnsavedChanges: () => dirtyOperatorIds.length > 0,
     save: async () => {
@@ -265,6 +294,11 @@ export const SelectedPluginOperatorSettingsPanel = forwardRef<SelectedPluginOper
                         onChange={(key, value) => handleChange(operator.id, key, value)}
                         onSave={() => { void handleSaveOperator(operator.id); }}
                         isSaving={Boolean(savingMap[operator.id])}
+                        canToggleAutomationPause={isTransmitControlPlugin(plugin)}
+                        isAutomationPaused={isTransmitControlPluginPaused(plugin, operator.id)}
+                        isAutomationPauseUpdating={pausingMap[operator.id]}
+                        onToggleAutomationPause={() => { void handleTogglePause(operator.id); }}
+                        automationPauseError={pauseErrorMap[operator.id]}
                         description={plugin.type === 'strategy'
                           ? t('plugins.operatorStrategySettingsHint', 'Settings for the current strategy plugin.')
                           : t('plugins.operatorPluginSettingsHint', 'Operator-specific plugin settings.')}

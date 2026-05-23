@@ -28,6 +28,9 @@ const snapshot: PluginSystemSnapshot = {
 
 const getSnapshot = vi.fn(() => snapshot);
 const getLoadedPlugin = vi.fn();
+const setOperatorPluginPaused = vi.fn();
+const pauseActiveTransmitControlPlugins = vi.fn();
+const resumeTransmitControlPlugins = vi.fn();
 const logbookSyncHost = {
   getProviderInfo: vi.fn(),
   upload: vi.fn(),
@@ -44,6 +47,9 @@ vi.mock('../../DigitalRadioEngine.js', () => ({
       pluginManager: {
         getSnapshot,
         getLoadedPlugin,
+        setOperatorPluginPaused,
+        pauseActiveTransmitControlPlugins,
+        resumeTransmitControlPlugins,
         logbookSyncHost,
       },
     }),
@@ -78,6 +84,9 @@ describe('pluginRoutes auth', () => {
   beforeEach(async () => {
     getSnapshot.mockClear();
     getLoadedPlugin.mockReset();
+    setOperatorPluginPaused.mockReset().mockResolvedValue(['automation-demo']);
+    pauseActiveTransmitControlPlugins.mockReset().mockResolvedValue(['automation-demo']);
+    resumeTransmitControlPlugins.mockReset().mockResolvedValue([]);
     logbookSyncHost.getProviderInfo.mockReset();
     logbookSyncHost.upload.mockReset();
     logbookSyncHost.download.mockReset();
@@ -129,6 +138,93 @@ describe('pluginRoutes auth', () => {
 
     expect(response.statusCode).toBe(403);
     expect(getSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('allows operator accounts to pause their own operator transmit-control plugins', async () => {
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/api/plugins/operators/operator-1/transmit-control/pause-all',
+      headers: { 'x-role': UserRole.OPERATOR },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      success: true,
+      operatorId: 'operator-1',
+      pausedPlugins: ['automation-demo'],
+    });
+    expect(pauseActiveTransmitControlPlugins).toHaveBeenCalledWith('operator-1');
+  });
+
+  it('prevents operator accounts from pausing another operator transmit-control plugins', async () => {
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/api/plugins/operators/operator-2/transmit-control/pause-all',
+      headers: { 'x-role': UserRole.OPERATOR },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({
+      success: false,
+      error: {
+        code: 'FORBIDDEN',
+        message: 'No operator access',
+        userMessage: 'You do not have access to this operator',
+      },
+    });
+    expect(pauseActiveTransmitControlPlugins).not.toHaveBeenCalled();
+  });
+
+  it('keeps transmit-control pause actions unavailable to viewers', async () => {
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/api/plugins/operators/operator-1/transmit-control/pause-all',
+      headers: { 'x-role': UserRole.VIEWER },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(pauseActiveTransmitControlPlugins).not.toHaveBeenCalled();
+  });
+
+  it('allows operator accounts to resume their own operator transmit-control plugins', async () => {
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/api/plugins/operators/operator-1/transmit-control/resume-all',
+      headers: { 'x-role': UserRole.OPERATOR },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      success: true,
+      operatorId: 'operator-1',
+      pausedPlugins: [],
+    });
+    expect(resumeTransmitControlPlugins).toHaveBeenCalledWith('operator-1');
+  });
+
+  it('uses the same operator binding gate for per-plugin pause changes', async () => {
+    const allowed = await fastify.inject({
+      method: 'PUT',
+      url: '/api/plugins/automation-demo/operator/operator-1/pause',
+      headers: { 'x-role': UserRole.OPERATOR },
+      payload: { paused: true },
+    });
+    const denied = await fastify.inject({
+      method: 'PUT',
+      url: '/api/plugins/automation-demo/operator/operator-2/pause',
+      headers: { 'x-role': UserRole.OPERATOR },
+      payload: { paused: true },
+    });
+
+    expect(allowed.statusCode).toBe(200);
+    expect(allowed.json()).toEqual({
+      success: true,
+      operatorId: 'operator-1',
+      pausedPlugins: ['automation-demo'],
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(setOperatorPluginPaused).toHaveBeenCalledTimes(1);
+    expect(setOperatorPluginPaused).toHaveBeenCalledWith('operator-1', 'automation-demo', true);
   });
 
   it('returns structured sync failures when a provider upload throws', async () => {

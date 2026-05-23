@@ -403,7 +403,13 @@
     "initialized": "初期化されました",
     "notInitialized": "初期化されていません",
     "standardFrequencyMultiTxTitle": "同一のコールサイン・ピリオドで複数のチャネルを送信することは禁止されています",
-    "standardFrequencyMultiTxDesc": "これはFT8/FT4の標準周波数での不正送信行為です。いずれかの送信を直ちに停止するか、別のサイクルに調整してください。関与するコールサイン: {{callsigns}}。"
+    "standardFrequencyMultiTxDesc": "これはFT8/FT4の標準周波数での不正送信行為です。いずれかの送信を直ちに停止するか、別のサイクルに調整してください。関与するコールサイン: {{callsigns}}。",
+    "autoCallPausedTitle": "自動呼び出しは一時停止中",
+    "autoCallPausedDesc": "{{count}} 件の自動呼び出しプラグインを一時停止中です。",
+    "pauseAllAutoCall": "すべて一時停止",
+    "resumeAllAutoCall": "すべて再開",
+    "autoCallPauseFailed": "自動呼び出しを一時停止できませんでした",
+    "autoCallResumeFailed": "自動呼び出しを再開できませんでした"
   },
   "profile": {
     "reconnecting": "「{{name}}」を再接続しています",

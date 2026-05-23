@@ -424,7 +424,11 @@
     "priorityModeNewCallsignFirst": "Prefer new callsigns",
     "priorityModeBalancedDesc": "Balance signal quality with grid, DXCC, and callsign novelty.",
     "priorityModeDxccFirstDesc": "Priority order: new DXCC > new grid > new callsign.",
-    "priorityModeNewCallsignFirstDesc": "Priority order: new callsign > new DXCC > new grid."
+    "priorityModeNewCallsignFirstDesc": "Priority order: new callsign > new DXCC > new grid.",
+    "pausePlugin": "Pause",
+    "resumePlugin": "Resume",
+    "pluginPausedHint": "Automation is paused for this operator.",
+    "pauseUpdateFailed": "Failed to update automation pause state."
   },
   "plugins": {
     "tabTitle": "Plugins",

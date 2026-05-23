@@ -410,7 +410,13 @@
     "initialized": "已初始化",
     "notInitialized": "未初始化",
     "standardFrequencyMultiTxTitle": "禁止同呼号同周期多路发射",
-    "standardFrequencyMultiTxDesc": "这是 FT8/FT4 标准频率下的违规发射行为，请立刻停止其中一路发射或调整到不同周期。涉及呼号：{{callsigns}}。"
+    "standardFrequencyMultiTxDesc": "这是 FT8/FT4 标准频率下的违规发射行为，请立刻停止其中一路发射或调整到不同周期。涉及呼号：{{callsigns}}。",
+    "autoCallPausedTitle": "自动起呼已暂停",
+    "autoCallPausedDesc": "已暂停 {{count}} 个自动起呼插件。",
+    "pauseAllAutoCall": "全部暂停自动起呼",
+    "resumeAllAutoCall": "全部恢复自动起呼",
+    "autoCallPauseFailed": "暂停自动起呼失败",
+    "autoCallResumeFailed": "恢复自动起呼失败"
   },
   "profile": {
     "reconnecting": "正在重新连接「{{name}}」",

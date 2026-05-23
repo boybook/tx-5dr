@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { PluginStatus } from '@tx5dr/contracts';
-import { getActiveTransmitControlPlugins, hasActiveTransmitControlPlugin } from './radioOperatorAutomation';
+import {
+  getActiveTransmitControlPlugins,
+  getPausedTransmitControlPlugins,
+  hasActiveTransmitControlPlugin,
+} from './radioOperatorAutomation';
 
 function createPlugin(overrides: Partial<PluginStatus>): PluginStatus {
   return {
@@ -63,5 +67,18 @@ describe('RadioOperator auto-call indicator', () => {
     ];
 
     expect(getActiveTransmitControlPlugins(plugins, 'operator-1')).toEqual([activePlugin]);
+  });
+
+  it('excludes paused transmit-control plugins from active summaries', () => {
+    const pausedPlugin = createPlugin({
+      name: 'paused-autocall',
+      permissions: ['operator:transmit-control'],
+      autoCallEnabledOperatorIds: ['operator-1'],
+      pausedOperatorIds: ['operator-1'],
+    });
+
+    expect(getActiveTransmitControlPlugins([pausedPlugin], 'operator-1')).toEqual([]);
+    expect(hasActiveTransmitControlPlugin([pausedPlugin], 'operator-1')).toBe(false);
+    expect(getPausedTransmitControlPlugins([pausedPlugin], 'operator-1')).toEqual([pausedPlugin]);
   });
 });

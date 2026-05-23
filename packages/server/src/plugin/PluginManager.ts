@@ -107,6 +107,7 @@ export class PluginManager {
     configs: {},
     operatorStrategies: {},
     operatorSettings: {},
+    operatorPluginPauses: {},
   };
 
   constructor(private deps: PluginManagerDeps) {
@@ -125,6 +126,7 @@ export class PluginManager {
       (payload) => this.recordPanelMeta(payload),
       (pluginName, instanceTarget, groupId, panels) =>
         this.setRuntimePanelContributions(pluginName, instanceTarget, groupId, panels),
+      (pluginName, operatorId) => this.isOperatorPluginPaused(operatorId, pluginName),
     );
     this.dispatcher = new PluginHookDispatcher(
       (operatorId) => this.getActiveInstances(operatorId),
@@ -259,7 +261,7 @@ export class PluginManager {
         'operator',
         pluginStorageDir,
         (timerId) => {
-          if (instance.ctx) {
+          if (instance.ctx && !this.isInstancePaused(instance)) {
             plugin.definition.hooks?.onTimer?.(timerId, instance.ctx);
           }
         },
@@ -312,7 +314,7 @@ export class PluginManager {
         'global',
         pluginStorageDir,
         (timerId) => {
-          if (instance.ctx) {
+          if (instance.ctx && !this.isInstancePaused(instance)) {
             plugin.definition.hooks?.onTimer?.(timerId, instance.ctx);
           }
         },
@@ -479,6 +481,10 @@ export class PluginManager {
     if (!instance?.enabled) {
       throw new Error(`Plugin action target not available: plugin=${pluginName}${operatorId ? `, operator=${operatorId}` : ''}`);
     }
+    if (this.isInstancePaused(instance)) {
+      const pausedOperatorId = instance.scope.kind === 'operator' ? instance.scope.operatorId : operatorId;
+      throw new Error(`Plugin action is paused for operator: plugin=${pluginName}${pausedOperatorId ? `, operator=${pausedOperatorId}` : ''}`);
+    }
 
     const hook = instance.plugin.definition.hooks?.onUserAction;
     if (!hook) {
@@ -575,12 +581,13 @@ export class PluginManager {
 
   // ===== 配置 API =====
 
-  loadConfig(config: PluginsConfig): void {
+  loadConfig(config: Partial<PluginsConfig>): void {
     this.pluginsConfig = {
       ...config,
       configs: config.configs ?? {},
       operatorStrategies: config.operatorStrategies ?? {},
       operatorSettings: config.operatorSettings ?? {},
+      operatorPluginPauses: config.operatorPluginPauses ?? {},
     };
   }
 
@@ -665,6 +672,51 @@ export class PluginManager {
   /** 获取操作员维度的插件设置 */
   getOperatorPluginSettings(operatorId: string, pluginName: string): Record<string, unknown> {
     return this.pluginsConfig.operatorSettings?.[operatorId]?.[pluginName] ?? {};
+  }
+
+  isOperatorPluginPaused(operatorId: string, pluginName: string): boolean {
+    return this.pluginsConfig.operatorPluginPauses?.[operatorId]?.includes(pluginName) ?? false;
+  }
+
+  async setOperatorPluginPaused(operatorId: string, pluginName: string, paused: boolean): Promise<string[]> {
+    this.assertTransmitControlPauseTarget(operatorId, pluginName);
+    const changed = this.setOperatorPluginPausedInMemory(operatorId, pluginName, paused);
+    const nextPaused = this.pluginsConfig.operatorPluginPauses?.[operatorId] ?? [];
+    await ConfigManager.getInstance().setOperatorPluginPauses(operatorId, nextPaused);
+    if (changed.length > 0) {
+      this.bumpGeneration();
+      this.broadcastStatusChanged(pluginName);
+    }
+    return nextPaused;
+  }
+
+  async pauseActiveTransmitControlPlugins(operatorId: string): Promise<string[]> {
+    this.assertOperatorExists(operatorId);
+    const pluginNames = this.getTransmitControlPluginNamesForOperator(operatorId)
+      .filter((pluginName) => this.getAutoCallEnabledOperatorIds(pluginName)?.includes(operatorId));
+    const changed = this.setOperatorPluginPausesInMemory(operatorId, pluginNames, true);
+    await ConfigManager.getInstance().setOperatorPluginPauses(
+      operatorId,
+      this.pluginsConfig.operatorPluginPauses?.[operatorId] ?? [],
+    );
+    this.bumpGeneration();
+    this.broadcastStatusChangedForPluginNames(changed);
+    return this.pluginsConfig.operatorPluginPauses?.[operatorId] ?? [];
+  }
+
+  async resumeTransmitControlPlugins(operatorId: string): Promise<string[]> {
+    this.assertOperatorExists(operatorId);
+    const pluginNames = this.getTransmitControlPluginNamesForOperator(operatorId);
+    const changed = this.setOperatorPluginPausesInMemory(operatorId, pluginNames, false);
+    await ConfigManager.getInstance().setOperatorPluginPauses(
+      operatorId,
+      this.pluginsConfig.operatorPluginPauses?.[operatorId] ?? [],
+    );
+    if (changed.length > 0) {
+      this.bumpGeneration();
+      this.broadcastStatusChangedForPluginNames(changed);
+    }
+    return this.pluginsConfig.operatorPluginPauses?.[operatorId] ?? [];
   }
 
   private isSnrPriorityEnabled(operatorId: string): boolean {
@@ -948,6 +1000,7 @@ export class PluginManager {
           : assignedOperatorIds.length > 0,
         assignedOperatorIds: plugin.definition.type === 'strategy' ? assignedOperatorIds : undefined,
         autoCallEnabledOperatorIds: this.getAutoCallEnabledOperatorIds(name),
+        pausedOperatorIds: this.getPausedOperatorIds(name),
       });
     }
     return result;
@@ -1006,6 +1059,84 @@ export class PluginManager {
 
   // ===== 内部辅助 =====
 
+  private assertOperatorExists(operatorId: string): void {
+    if (!this.deps.getOperatorById(operatorId)) {
+      throw new Error(`Operator not found: ${operatorId}`);
+    }
+  }
+
+  private isTransmitControlOperatorPlugin(pluginName: string): boolean {
+    const plugin = this.loadedPlugins.get(pluginName);
+    return Boolean(
+      plugin
+      && (plugin.definition.instanceScope ?? 'operator') === 'operator'
+      && plugin.definition.permissions?.includes('operator:transmit-control'),
+    );
+  }
+
+  private assertTransmitControlPauseTarget(operatorId: string, pluginName: string): void {
+    this.assertOperatorExists(operatorId);
+    const plugin = this.loadedPlugins.get(pluginName);
+    if (!plugin) {
+      throw new Error(`Plugin not found: ${pluginName}`);
+    }
+    if ((plugin.definition.instanceScope ?? 'operator') !== 'operator') {
+      throw new Error(`Plugin pause is only available for operator-scope plugins: ${pluginName}`);
+    }
+    if (!plugin.definition.permissions?.includes('operator:transmit-control')) {
+      throw new Error(`Plugin does not declare operator:transmit-control: ${pluginName}`);
+    }
+    if (!this.instances.get(operatorId)?.has(pluginName)) {
+      throw new Error(`Plugin instance not found for operator: plugin=${pluginName}, operator=${operatorId}`);
+    }
+  }
+
+  private getTransmitControlPluginNamesForOperator(operatorId: string): string[] {
+    this.assertOperatorExists(operatorId);
+    return Array.from(this.instances.get(operatorId)?.keys() ?? [])
+      .filter((pluginName) => this.isTransmitControlOperatorPlugin(pluginName));
+  }
+
+  private setOperatorPluginPausedInMemory(operatorId: string, pluginName: string, paused: boolean): string[] {
+    return this.setOperatorPluginPausesInMemory(operatorId, [pluginName], paused);
+  }
+
+  private setOperatorPluginPausesInMemory(operatorId: string, pluginNames: string[], paused: boolean): string[] {
+    if (!this.pluginsConfig.operatorPluginPauses) {
+      this.pluginsConfig.operatorPluginPauses = {};
+    }
+    const current = new Set(this.pluginsConfig.operatorPluginPauses[operatorId] ?? []);
+    const changed: string[] = [];
+    for (const pluginName of pluginNames) {
+      const hadPlugin = current.has(pluginName);
+      if (paused && !hadPlugin) {
+        current.add(pluginName);
+        changed.push(pluginName);
+      } else if (!paused && hadPlugin) {
+        current.delete(pluginName);
+        changed.push(pluginName);
+      }
+    }
+    if (current.size === 0) {
+      delete this.pluginsConfig.operatorPluginPauses[operatorId];
+    } else {
+      this.pluginsConfig.operatorPluginPauses[operatorId] = Array.from(current).sort();
+    }
+    return changed;
+  }
+
+  private isInstancePaused(instance: PluginInstance): boolean {
+    return instance.scope.kind === 'operator'
+      && this.isTransmitControlOperatorPlugin(instance.plugin.definition.name)
+      && this.isOperatorPluginPaused(instance.scope.operatorId, instance.plugin.definition.name);
+  }
+
+  private broadcastStatusChangedForPluginNames(pluginNames: string[]): void {
+    for (const pluginName of Array.from(new Set(pluginNames))) {
+      this.broadcastStatusChanged(pluginName);
+    }
+  }
+
   private getActiveInstances(operatorId: string): PluginInstance[] {
     const operatorInstances = this.instances.get(operatorId);
     const scopedInstances = operatorInstances ? Array.from(operatorInstances.values()) : [];
@@ -1015,19 +1146,19 @@ export class PluginManager {
     return [...globalInstances, ...scopedInstances].filter(
       (instance) => instance.plugin.definition.type === 'strategy'
         ? instance === this.getStrategyInstance(operatorId)
-        : instance.enabled && !instance.autoDisabled,
+        : instance.enabled && !instance.autoDisabled && !this.isInstancePaused(instance),
     );
   }
 
   private getStrategyInstance(operatorId: string): PluginInstance | undefined {
     const strategyName = this.getResolvedStrategyName(operatorId);
     const instance = this.instances.get(operatorId)?.get(strategyName);
-    if (instance?.enabled && !instance.autoDisabled) {
+    if (instance?.enabled && !instance.autoDisabled && !this.isInstancePaused(instance)) {
       return instance;
     }
 
     const fallback = this.instances.get(operatorId)?.get(BUILTIN_STANDARD_QSO_PLUGIN_NAME);
-    if (fallback?.enabled && !fallback.autoDisabled) {
+    if (fallback?.enabled && !fallback.autoDisabled && !this.isInstancePaused(fallback)) {
       return fallback;
     }
 
@@ -1122,6 +1253,18 @@ export class PluginManager {
       }
     }
 
+    return ids.length > 0 ? ids : undefined;
+  }
+
+  private getPausedOperatorIds(pluginName: string): string[] | undefined {
+    if (!this.isTransmitControlOperatorPlugin(pluginName)) {
+      return undefined;
+    }
+    const ids = Object.entries(this.pluginsConfig.operatorPluginPauses ?? {})
+      .filter(([, pluginNames]) => pluginNames.includes(pluginName))
+      .map(([operatorId]) => operatorId)
+      .filter((operatorId) => this.instances.get(operatorId)?.has(pluginName))
+      .sort();
     return ids.length > 0 ? ids : undefined;
   }
 
@@ -1557,6 +1700,7 @@ export class PluginManager {
         ? this.getAssignedOperatorIds(pluginName)
         : undefined,
       autoCallEnabledOperatorIds: this.getAutoCallEnabledOperatorIds(pluginName),
+      pausedOperatorIds: this.getPausedOperatorIds(pluginName),
     };
     this.deps.eventEmitter.emit('pluginStatusChanged', {
       generation: this.systemState.generation,

@@ -177,6 +177,32 @@ describe('PluginContextFactory operator access', () => {
     }
   });
 
+  it('rejects transmit-control APIs while the operator plugin is paused by the host', async () => {
+    const deps = createDeps();
+    const plugin = createPlugin({
+      permissions: ['operator:transmit-control'],
+      isAutoCallEnabled: () => true,
+    });
+    const factory = new PluginContextFactory(
+      deps,
+      undefined,
+      undefined,
+      (pluginName, operatorId) => pluginName === 'test-plugin' && operatorId === 'operator-1',
+    );
+    const storageDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-ctx-'));
+    tempDirs.push(storageDir);
+    const ctx = await factory.create(
+      plugin,
+      'operator-1',
+      'operator',
+      storageDir,
+      () => {},
+      () => ({}),
+    );
+
+    expect(() => ctx.operator.startTransmitting()).toThrow('automatic calling is paused');
+  });
+
   it('allows transmit-control APIs when permission and auto-call state are enabled', async () => {
     const deps = createDeps();
     const { ctx } = await createOperatorContext(createPlugin({

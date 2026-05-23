@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Select, SelectItem, Input, Button, Switch, Selection, Tooltip, Popover, PopoverTrigger, PopoverContent } from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faWandMagicSparkles, faRepeat, faBook, faRotateLeft } from '@fortawesome/free-solid-svg-icons';
+import { faWandMagicSparkles, faRepeat, faBook, faRotateLeft, faPause, faPlay } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioState, useSlotPacks } from '../../../store/radioStore';
 import type { OperatorRuntimeSlot, OperatorStatus, PluginStatus, WSSetOperatorContextMessage } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
@@ -25,7 +25,8 @@ import {
   type OperatorSlotShortcutFeedbackDetail,
 } from '../../../utils/operatorSlotShortcutFeedbackEvents';
 import { pickManualIdleFrequency } from './radioOperatorIdleFrequency';
-import { getActiveTransmitControlPlugins } from './radioOperatorAutomation';
+import { getActiveTransmitControlPlugins, getPausedTransmitControlPlugins } from './radioOperatorAutomation';
+import { pluginApi } from '../../../utils/pluginApi';
 
 const logger = createLogger('RadioOperator');
 
@@ -87,7 +88,13 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     () => getActiveTransmitControlPlugins(pluginStatuses, operatorStatus.id),
     [operatorStatus.id, pluginStatuses],
   );
+  const pausedTransmitControlPlugins = React.useMemo(
+    () => getPausedTransmitControlPlugins(pluginStatuses, operatorStatus.id),
+    [operatorStatus.id, pluginStatuses],
+  );
   const isAutoCallControlActive = activeTransmitControlPlugins.length > 0;
+  const isAutoCallControlPaused = !isAutoCallControlActive && pausedTransmitControlPlugins.length > 0;
+  const hasAutoCallControlStatus = isAutoCallControlActive || isAutoCallControlPaused;
 
   // 调试：渲染计数器
   const renderCountRef = React.useRef(0);
@@ -177,6 +184,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   const [isForceStopPopoverOpen, setIsForceStopPopoverOpen] = React.useState(false);
   const [isAutoCallPopoverOpen, setIsAutoCallPopoverOpen] = React.useState(false);
   const [isAutoCallPopoverExpanded, setIsAutoCallPopoverExpanded] = React.useState(false);
+  const [isUpdatingAutoCallPause, setIsUpdatingAutoCallPause] = React.useState(false);
   // 用户已点击"立即停止"后，防止 Popover 被自动重新打开（等待服务端确认）
   const hasRequestedForceStopRef = React.useRef(false);
   const autoCallLongPressTimerRef = React.useRef<number | null>(null);
@@ -288,13 +296,13 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   }, []);
 
   const openAutoCallPopover = React.useCallback((expanded = false) => {
-    if (!isAutoCallControlActive || shouldShowForceStopPopover()) {
+    if (!hasAutoCallControlStatus || shouldShowForceStopPopover()) {
       return;
     }
     cancelAutoCallPopoverClose();
     setIsAutoCallPopoverExpanded(expanded);
     setIsAutoCallPopoverOpen(true);
-  }, [cancelAutoCallPopoverClose, isAutoCallControlActive, shouldShowForceStopPopover]);
+  }, [cancelAutoCallPopoverClose, hasAutoCallControlStatus, shouldShowForceStopPopover]);
 
   const scheduleAutoCallPopoverClose = React.useCallback(() => {
     cancelAutoCallPopoverClose();
@@ -311,11 +319,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   }, [cancelAutoCallPopoverClose, clearAutoCallLongPressTimer]);
 
   React.useEffect(() => {
-    if (!isAutoCallControlActive) {
+    if (!hasAutoCallControlStatus) {
       setIsAutoCallPopoverOpen(false);
       setIsAutoCallPopoverExpanded(false);
     }
-  }, [isAutoCallControlActive]);
+  }, [hasAutoCallControlStatus]);
 
   // 同步服务端状态到本地
   // - 聚焦中的字段：保留本地值（用户正在输入）
@@ -817,13 +825,52 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     .slice(0, 3)
     .map((plugin) => resolvePluginName(plugin.name, plugin.name));
   const activeAutoCallExtraCount = Math.max(0, activeTransmitControlPlugins.length - activeAutoCallPluginNames.length);
+  const pausedAutoCallPluginNames = pausedTransmitControlPlugins
+    .slice(0, 3)
+    .map((plugin) => resolvePluginName(plugin.name, plugin.name));
+  const pausedAutoCallExtraCount = Math.max(0, pausedTransmitControlPlugins.length - pausedAutoCallPluginNames.length);
+  const autoCallPauseActionLabel = isAutoCallControlPaused
+    ? t('operator.resumeAllAutoCall', 'Resume all auto-call')
+    : t('operator.pauseAllAutoCall', 'Pause all auto-call');
   const isPttPopoverOpen = isForceStopPopoverOpen || isAutoCallPopoverOpen;
   const pttStatusWrapperClassName = 'inline-flex rounded-full';
-  const pttSwitchClassNames = isAutoCallControlActive
+  const pttSwitchClassNames = hasAutoCallControlStatus
     ? {
-      wrapper: 'auto-call-ptt-breath',
+      wrapper: isAutoCallControlActive ? 'auto-call-ptt-breath' : 'auto-call-ptt-paused',
     }
     : undefined;
+
+  const handlePauseAllAutoCall = React.useCallback(async () => {
+    setIsUpdatingAutoCallPause(true);
+    try {
+      await pluginApi.pauseOperatorTransmitControlPlugins(operatorStatus.id);
+    } catch (err) {
+      logger.error('Failed to pause operator auto-call plugins', err);
+      addToast({
+        title: t('operator.autoCallPauseFailed', 'Failed to pause auto-call'),
+        description: err instanceof Error ? err.message : undefined,
+        color: 'danger',
+      });
+    } finally {
+      setIsUpdatingAutoCallPause(false);
+    }
+  }, [operatorStatus.id, t]);
+
+  const handleResumeAllAutoCall = React.useCallback(async () => {
+    setIsUpdatingAutoCallPause(true);
+    try {
+      await pluginApi.resumeOperatorTransmitControlPlugins(operatorStatus.id);
+    } catch (err) {
+      logger.error('Failed to resume operator auto-call plugins', err);
+      addToast({
+        title: t('operator.autoCallResumeFailed', 'Failed to resume auto-call'),
+        description: err instanceof Error ? err.message : undefined,
+        color: 'danger',
+      });
+    } finally {
+      setIsUpdatingAutoCallPause(false);
+    }
+  }, [operatorStatus.id, t]);
 
   const handlePttPopoverOpenChange = (open: boolean) => {
     if (open) {
@@ -836,7 +883,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   };
 
   const handlePttPointerDown = (event: React.PointerEvent) => {
-    if (event.pointerType === 'mouse' || !isAutoCallControlActive || shouldShowForceStopPopover()) {
+    if (event.pointerType === 'mouse' || !hasAutoCallControlStatus || shouldShowForceStopPopover()) {
       return;
     }
 
@@ -967,11 +1014,15 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                   onPointerCancel={handlePttPointerEnd}
                   onPointerLeave={handlePttPointerEnd}
                   onContextMenu={(event) => {
-                    if (isAutoCallControlActive) {
+                    if (hasAutoCallControlStatus) {
                       event.preventDefault();
                     }
                   }}
-                  title={isAutoCallControlActive ? t('operator.autoCallStatus', 'Auto-call enabled') : undefined}
+                  title={hasAutoCallControlStatus
+                    ? (isAutoCallControlPaused
+                      ? t('operator.autoCallPausedTitle', 'Auto-call is paused')
+                      : t('operator.autoCallStatus', 'Auto-call enabled'))
+                    : undefined}
                 >
                   <Switch
                     isSelected={operatorStatus.isTransmitting}
@@ -1002,26 +1053,68 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                   </div>
                 ) : (
                   <div className="w-[260px] p-2">
-                    <div className="rounded-lg border border-danger-200/60 bg-danger-50/70 px-3 py-2 text-danger-700 dark:border-[#ff6f9f]/70 dark:bg-[#21151b] dark:text-[#ffd6e2]">
-                      <div className="text-xs font-semibold dark:!text-[#ff8fb2]">
-                        {t('operator.autoCallEnabledTitle', 'Auto-call is enabled')}
+                    <div className={isAutoCallControlPaused
+                      ? 'relative rounded-lg border border-warning-200/70 bg-warning-50/70 px-3 py-2 pr-11 text-warning-800 dark:border-warning-400/45 dark:bg-warning-500/10 dark:text-warning-100'
+                      : 'relative rounded-lg border border-danger-200/60 bg-danger-50/70 px-3 py-2 pr-11 text-danger-700 dark:border-[#ff6f9f]/70 dark:bg-[#21151b] dark:text-[#ffd6e2]'
+                    }>
+                      <Tooltip content={autoCallPauseActionLabel} placement="left" offset={6}>
+                        <Button
+                          isIconOnly
+                          size="sm"
+                          variant="flat"
+                          color={isAutoCallControlPaused ? 'warning' : 'danger'}
+                          className="absolute right-2 top-2 h-7 w-7 min-w-7 rounded-full"
+                          isLoading={isUpdatingAutoCallPause}
+                          aria-label={autoCallPauseActionLabel}
+                          title={autoCallPauseActionLabel}
+                          onPress={() => {
+                            void (isAutoCallControlPaused ? handleResumeAllAutoCall() : handlePauseAllAutoCall());
+                          }}
+                        >
+                          <FontAwesomeIcon
+                            icon={isAutoCallControlPaused ? faPlay : faPause}
+                            className="text-[11px]"
+                          />
+                        </Button>
+                      </Tooltip>
+                      <div className={isAutoCallControlPaused
+                        ? 'text-xs font-semibold dark:!text-warning-100'
+                        : 'text-xs font-semibold dark:!text-[#ff8fb2]'
+                      }>
+                        {isAutoCallControlPaused
+                          ? t('operator.autoCallPausedTitle', 'Auto-call is paused')
+                          : t('operator.autoCallEnabledTitle', 'Auto-call is enabled')}
                       </div>
-                      <div className="mt-1 whitespace-nowrap text-[11px] leading-4 text-danger-700/80 dark:!text-[#ffd6e2]">
-                        {t('operator.autoCallEnabledDesc', {
-                          count: activeTransmitControlPlugins.length,
-                          defaultValue: `${activeTransmitControlPlugins.length} auto-call plugin(s) can control PTT.`,
-                        })}
+                      <div className={isAutoCallControlPaused
+                        ? 'mt-1 whitespace-nowrap text-[11px] leading-4 text-warning-800/80 dark:!text-warning-100'
+                        : 'mt-1 whitespace-nowrap text-[11px] leading-4 text-danger-700/80 dark:!text-[#ffd6e2]'
+                      }>
+                        {isAutoCallControlPaused
+                          ? t('operator.autoCallPausedDesc', {
+                            count: pausedTransmitControlPlugins.length,
+                            defaultValue: `${pausedTransmitControlPlugins.length} auto-call plugin(s) paused.`,
+                          })
+                          : t('operator.autoCallEnabledDesc', {
+                            count: activeTransmitControlPlugins.length,
+                            defaultValue: `${activeTransmitControlPlugins.length} auto-call plugin(s) can control PTT.`,
+                          })}
                       </div>
-                      {activeAutoCallPluginNames.length > 0 && (
+                      {(isAutoCallControlPaused ? pausedAutoCallPluginNames : activeAutoCallPluginNames).length > 0 && (
                         <div className="mt-1.5 flex flex-wrap gap-1">
-                          {activeAutoCallPluginNames.map((name) => (
-                            <span key={name} className="rounded-full bg-danger-500/10 px-2 py-0.5 text-[10px] font-medium text-danger-700 dark:bg-[#ff6f9f]/20 dark:!text-[#ffb8cd]">
+                          {(isAutoCallControlPaused ? pausedAutoCallPluginNames : activeAutoCallPluginNames).map((name) => (
+                            <span key={name} className={isAutoCallControlPaused
+                              ? 'rounded-full bg-warning-500/10 px-2 py-0.5 text-[10px] font-medium text-warning-800 dark:bg-warning-400/15 dark:!text-warning-100'
+                              : 'rounded-full bg-danger-500/10 px-2 py-0.5 text-[10px] font-medium text-danger-700 dark:bg-[#ff6f9f]/20 dark:!text-[#ffb8cd]'
+                            }>
                               {name}
                             </span>
                           ))}
-                          {activeAutoCallExtraCount > 0 && (
-                            <span className="rounded-full bg-danger-500/10 px-2 py-0.5 text-[10px] font-medium text-danger-700 dark:bg-[#ff6f9f]/20 dark:!text-[#ffb8cd]">
-                              +{activeAutoCallExtraCount}
+                          {(isAutoCallControlPaused ? pausedAutoCallExtraCount : activeAutoCallExtraCount) > 0 && (
+                            <span className={isAutoCallControlPaused
+                              ? 'rounded-full bg-warning-500/10 px-2 py-0.5 text-[10px] font-medium text-warning-800 dark:bg-warning-400/15 dark:!text-warning-100'
+                              : 'rounded-full bg-danger-500/10 px-2 py-0.5 text-[10px] font-medium text-danger-700 dark:bg-[#ff6f9f]/20 dark:!text-[#ffb8cd]'
+                            }>
+                              +{isAutoCallControlPaused ? pausedAutoCallExtraCount : activeAutoCallExtraCount}
                             </span>
                           )}
                         </div>
@@ -1031,15 +1124,20 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                       <Button
                         size="sm"
                         variant="flat"
-                        color="danger"
+                        color={isAutoCallControlPaused ? 'warning' : 'danger'}
                         className="mt-2 h-8 w-full justify-center text-xs"
                         onPress={() => setIsAutoCallPopoverExpanded(true)}
                       >
                         {t('operator.expandAutoCallControls', 'Expand auto-call controls')}
                       </Button>
                     ) : (
-                      <div className="mt-2 max-h-[min(72vh,calc(100vh-5rem))] overflow-y-auto overscroll-contain px-1 py-1">
-                        <AutomationSettingsPanel operatorId={operatorStatus.id} filter="transmit-control" />
+                      <div className="mt-2 max-h-[min(72vh,calc(100vh-5rem))] overflow-y-auto overflow-x-hidden overscroll-contain">
+                        <AutomationSettingsPanel
+                          operatorId={operatorStatus.id}
+                          filter="transmit-control"
+                          className="w-full"
+                          paddingClassName="p-0"
+                        />
                       </div>
                     )}
                   </div>

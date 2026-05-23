@@ -12,10 +12,13 @@ import type {
 import { MODES } from '@tx5dr/contracts';
 import { RadioOperator } from '@tx5dr/core';
 import { PluginManager } from '../PluginManager.js';
+import { ConfigManager } from '../../config/config-manager.js';
 
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -235,6 +238,111 @@ describe('PluginManager runtime logs', () => {
         autoCallEnabledOperatorIds: [operator.config.id],
       }),
     }));
+
+    await pluginManager.shutdown();
+  });
+
+  it('persists operator plugin pauses and gates transmit-control hooks and actions', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-pause-'));
+    tempDirs.push(dataDir);
+
+    await writeUserPlugin(dataDir, 'pausable-tx-control', `
+      export default {
+        name: 'pausable-tx-control',
+        version: '1.0.0',
+        type: 'utility',
+        permissions: ['operator:transmit-control'],
+        settings: {
+          autoCallEnabled: {
+            type: 'boolean',
+            default: true,
+            label: 'autoCallEnabled',
+            scope: 'operator',
+          },
+        },
+        quickActions: [{ id: 'ping', label: 'Ping' }],
+        onLoad(ctx) {
+          ctx.timers.set('poll', 1000);
+        },
+        hooks: {
+          onTimer(timerId, ctx) {
+            ctx.log.info('timer:' + timerId);
+          },
+          onDecode(messages, ctx) {
+            ctx.log.info('decode');
+          },
+          onUserAction(actionId, payload, ctx) {
+            ctx.log.info('action:' + actionId);
+          },
+        },
+        isAutoCallEnabled(ctx) {
+          return ctx.config.autoCallEnabled === true;
+        },
+      };
+    `);
+
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const operator = createOperator(eventEmitter);
+    const pluginManager = createPluginManager(dataDir, eventEmitter, operator);
+    pluginManager.loadConfig({
+      configs: {
+        'pausable-tx-control': { enabled: true, settings: {} },
+      },
+      operatorStrategies: {
+        [operator.config.id]: 'standard-qso',
+      },
+      operatorSettings: {
+        [operator.config.id]: {
+          'pausable-tx-control': { autoCallEnabled: true },
+        },
+      },
+      operatorPluginPauses: {},
+    });
+
+    await pluginManager.start();
+    const setOperatorPluginPauses = vi.fn(async () => {});
+    vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+      setOperatorPluginPauses,
+    } as unknown as ConfigManager);
+    const timerManager = (pluginManager as any).instances.get(operator.config.id).get('pausable-tx-control').ctx.timers;
+    timerManager.onTimerFired('poll');
+    await (pluginManager as any).handleSlotStart({ id: 'slot-1', startMs: 0, window: 0 }, null);
+    pluginManager.handlePluginUserAction('pausable-tx-control', 'ping', operator.config.id);
+
+    const countLogs = (message: string) => pluginManager.getRuntimeLogHistory()
+      .filter((entry) => isPluginLogEntry(entry) && entry.pluginName === 'pausable-tx-control' && entry.message === message)
+      .length;
+    expect(countLogs('timer:poll')).toBe(1);
+    expect(countLogs('decode')).toBe(1);
+    expect(countLogs('action:ping')).toBe(1);
+
+    const statusChanged = vi.fn();
+    eventEmitter.on('pluginStatusChanged', statusChanged);
+    await pluginManager.setOperatorPluginPaused(operator.config.id, 'pausable-tx-control', true);
+
+    const pausedStatus = pluginManager.getSnapshot().plugins.find((plugin) => plugin.name === 'pausable-tx-control');
+    expect(pausedStatus?.autoCallEnabledOperatorIds).toEqual([operator.config.id]);
+    expect(pausedStatus?.pausedOperatorIds).toEqual([operator.config.id]);
+    expect(setOperatorPluginPauses).toHaveBeenCalledWith(operator.config.id, ['pausable-tx-control']);
+    expect(statusChanged).toHaveBeenCalledWith(expect.objectContaining({
+      plugin: expect.objectContaining({
+        name: 'pausable-tx-control',
+        pausedOperatorIds: [operator.config.id],
+      }),
+    }));
+
+    timerManager.onTimerFired('poll');
+    await (pluginManager as any).handleSlotStart({ id: 'slot-2', startMs: 15_000, window: 0 }, null);
+    expect(() => pluginManager.handlePluginUserAction('pausable-tx-control', 'ping', operator.config.id)).toThrow('paused');
+    expect(countLogs('timer:poll')).toBe(1);
+    expect(countLogs('decode')).toBe(1);
+    expect(countLogs('action:ping')).toBe(1);
+
+    await pluginManager.setOperatorPluginPaused(operator.config.id, 'pausable-tx-control', false);
+    await (pluginManager as any).handleSlotStart({ id: 'slot-3', startMs: 30_000, window: 0 }, null);
+    expect(() => pluginManager.handlePluginUserAction('pausable-tx-control', 'ping', operator.config.id)).not.toThrow();
+    expect(countLogs('decode')).toBe(2);
+    expect(countLogs('action:ping')).toBe(2);
 
     await pluginManager.shutdown();
   });

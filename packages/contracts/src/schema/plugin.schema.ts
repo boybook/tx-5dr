@@ -534,6 +534,7 @@ export const PluginStatusSchema = z.object({
   permissions: z.array(PluginPermissionSchema).optional(),
   capabilities: z.array(PluginCapabilitySchema).optional(),
   autoCallEnabledOperatorIds: z.array(z.string()).optional(),
+  pausedOperatorIds: z.array(z.string()).optional(),
   ui: PluginUIConfigSchema.optional(),
   locales: PluginLocalesSchema.optional(),
   source: PluginSourceSchema.optional(),
@@ -701,6 +702,8 @@ export const PluginsConfigSchema = z.object({
     z.string(),
     z.record(z.string(), z.record(z.string(), z.unknown()))
   ).optional().default({}),
+  /** 每操作员暂停的 transmit-control 插件：operatorId → pluginName[] */
+  operatorPluginPauses: z.record(z.string(), z.array(z.string())).optional().default({}),
 });
 export type PluginsConfig = z.infer<typeof PluginsConfigSchema>;
 

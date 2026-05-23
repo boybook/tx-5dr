@@ -1,6 +1,8 @@
 import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '@heroui/react';
+import { Button, Tooltip } from '@heroui/react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faPause, faPlay } from '@fortawesome/free-solid-svg-icons';
 import type { PluginStatus } from '@tx5dr/contracts';
 import { PluginSettingField } from '../settings/PluginSettingField';
 import { resolvePluginName } from '../../utils/pluginLocales';
@@ -19,6 +21,11 @@ interface PluginOperatorSettingsFormProps {
   isSaving?: boolean;
   description?: string;
   className?: string;
+  canToggleAutomationPause?: boolean;
+  isAutomationPaused?: boolean;
+  isAutomationPauseUpdating?: boolean;
+  onToggleAutomationPause?: () => void;
+  automationPauseError?: string;
 }
 
 export function getDefaultOperatorPluginSettings(plugin: PluginStatus): Record<string, unknown> {
@@ -48,6 +55,11 @@ export const PluginOperatorSettingsForm: React.FC<PluginOperatorSettingsFormProp
   isSaving = false,
   description,
   className,
+  canToggleAutomationPause = false,
+  isAutomationPaused = false,
+  isAutomationPauseUpdating = false,
+  onToggleAutomationPause,
+  automationPauseError = '',
 }) => {
   const { t } = useTranslation('settings');
   const currentSettings = useMemo(
@@ -83,6 +95,9 @@ export const PluginOperatorSettingsForm: React.FC<PluginOperatorSettingsFormProp
       )
       : currentSettings[key] !== originalWithDefaults[key];
   });
+  const pauseActionLabel = isAutomationPaused
+    ? t('automation.resumePlugin', 'Resume')
+    : t('automation.pausePlugin', 'Pause');
 
   if (operatorEntries.length === 0) {
     return (
@@ -103,20 +118,50 @@ export const PluginOperatorSettingsForm: React.FC<PluginOperatorSettingsFormProp
             {description ?? t('plugins.operatorPluginSettingsHint', 'Operator-specific plugin settings.')}
           </p>
         </div>
-        {hasChanges && (
-          <Button
-            size="sm"
-            color="primary"
-            variant="flat"
-            isLoading={isSaving}
-            isDisabled={hasValidationIssues}
-            onPress={onSave}
-            className="shrink-0"
-          >
-            {t('common:button.save')}
-          </Button>
-        )}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {canToggleAutomationPause && onToggleAutomationPause && (
+            <Tooltip content={pauseActionLabel} placement="left" offset={6}>
+              <Button
+                isIconOnly
+                size="sm"
+                variant={isAutomationPaused ? 'flat' : 'light'}
+                color={isAutomationPaused ? 'warning' : 'default'}
+                className="h-8 w-8 min-w-8 rounded-full"
+                isLoading={isAutomationPauseUpdating}
+                aria-label={pauseActionLabel}
+                title={pauseActionLabel}
+                onPress={onToggleAutomationPause}
+              >
+                <FontAwesomeIcon icon={isAutomationPaused ? faPlay : faPause} className="text-xs" />
+              </Button>
+            </Tooltip>
+          )}
+          {hasChanges && (
+            <Button
+              size="sm"
+              color="primary"
+              variant="flat"
+              isLoading={isSaving}
+              isDisabled={hasValidationIssues}
+              onPress={onSave}
+              className="shrink-0"
+            >
+              {t('common:button.save')}
+            </Button>
+          )}
+        </div>
       </div>
+
+      {isAutomationPaused && (
+        <div className="mb-3 rounded-md border border-warning-200/70 bg-warning-50/70 px-2.5 py-1.5 text-xs leading-5 text-warning-700 dark:border-warning-400/40 dark:bg-warning-500/10 dark:text-warning-200">
+          {t('automation.pluginPausedHint', 'Automation is paused for this operator.')}
+        </div>
+      )}
+      {automationPauseError && (
+        <div className="mb-3 rounded-md border border-danger-200/70 bg-danger-50 px-2.5 py-1.5 text-xs leading-5 text-danger-700 dark:border-danger-400/40 dark:bg-danger-500/10 dark:text-danger-200">
+          {automationPauseError}
+        </div>
+      )}
 
       <div className="space-y-2">
         {operatorEntries.map(([key, descriptor]) => (

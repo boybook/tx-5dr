@@ -95,6 +95,7 @@ export class PluginContextFactory {
       groupId: string,
       panels: PluginPanelDescriptor[],
     ) => void,
+    private readonly isOperatorPluginPaused: (pluginName: string, operatorId: string) => boolean = () => false,
   ) {}
 
   async create(
@@ -471,6 +472,12 @@ export class PluginContextFactory {
       const ctx = getContext();
       if (!ctx) {
         throw new Error(`Plugin '${plugin.definition.name}' cannot ${action} before its PluginContext is ready`);
+      }
+
+      if (operatorId && this.isOperatorPluginPaused(plugin.definition.name, operatorId)) {
+        throw new Error(
+          `Plugin '${plugin.definition.name}' cannot ${action} because automatic calling is paused for operator '${operatorId}'. Resume this plugin for the operator before using operator transmit-control APIs.`,
+        );
       }
 
       let enabled = false;

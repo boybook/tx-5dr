@@ -302,6 +302,10 @@ textarea.font-mono,
   will-change: box-shadow;
 }
 
+.auto-call-ptt-paused {
+  box-shadow: 0 0 0 3px hsl(var(--heroui-warning) / 0.24);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .auto-call-ptt-breath {
     animation: none;

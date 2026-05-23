@@ -424,7 +424,11 @@
     "priorityModeNewCallsignFirst": "优先新呼号",
     "priorityModeBalancedDesc": "先看网格和信号，再兼顾 DXCC 与新呼号。",
     "priorityModeDxccFirstDesc": "优先顺序：新 DXCC > 新网格 > 新呼号。",
-    "priorityModeNewCallsignFirstDesc": "优先顺序：新呼号 > 新 DXCC > 新网格。"
+    "priorityModeNewCallsignFirstDesc": "优先顺序：新呼号 > 新 DXCC > 新网格。",
+    "pausePlugin": "暂停",
+    "resumePlugin": "恢复",
+    "pluginPausedHint": "此操作员的自动化已暂停。",
+    "pauseUpdateFailed": "更新自动化暂停状态失败。"
   },
   "plugins": {
     "tabTitle": "插件",

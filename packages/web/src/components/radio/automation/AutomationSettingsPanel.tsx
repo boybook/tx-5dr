@@ -7,6 +7,7 @@ import {
   SelectItem,
   Spinner,
   Textarea,
+  Tooltip,
 } from '@heroui/react';
 import { useConnection } from '../../../store/radioStore';
 import { api } from '@tx5dr/core';
@@ -29,7 +30,7 @@ import {
   normalizePluginSettingsForSave,
 } from '../../../utils/pluginSettings';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCheck } from '@fortawesome/free-solid-svg-icons';
+import { faCheck, faPause, faPlay } from '@fortawesome/free-solid-svg-icons';
 import { PluginPanelRenderer } from '../../plugins/PluginPanelRenderer';
 import {
   getVisiblePluginPanelsForSlot,
@@ -38,12 +39,15 @@ import {
 import { pluginMatchesAutomationFilter, type AutomationPanelFilter } from './automationFilters';
 import { PluginSettingField } from '../../settings/PluginSettingField';
 import { PluginSettingLabelWithHelp } from '../../settings/PluginSettingHelp';
+import { isTransmitControlPlugin, isTransmitControlPluginPaused } from '../operators/radioOperatorAutomation';
 
 const logger = createLogger('AutomationSettingsPanel');
 
 interface AutomationSettingsPanelProps {
   operatorId: string;
   filter?: AutomationPanelFilter;
+  className?: string;
+  paddingClassName?: string;
 }
 
 interface PluginQuickGroup {
@@ -114,16 +118,27 @@ function useDelayedBusyKey(busyKey: string | null, delayMs = 500): string | null
   return visibleBusyKey === busyKey ? visibleBusyKey : null;
 }
 
-function AutomationSettingsPanelSkeleton(): React.JSX.Element {
+function AutomationSettingsPanelSkeleton({
+  className = 'w-[260px]',
+  paddingClassName = 'p-1',
+}: {
+  className?: string;
+  paddingClassName?: string;
+} = {}): React.JSX.Element {
   return (
-    <div className="w-[260px] space-y-1.5 p-1">
+    <div className={`${className} max-w-full min-w-0 space-y-1.5 ${paddingClassName}`}>
       <div className="h-2 w-16 animate-pulse rounded-full bg-default-200/80" />
       <div className="h-8 w-full animate-pulse rounded-md bg-default-100/90" />
     </div>
   );
 }
 
-export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = ({ operatorId, filter = 'all' }) => {
+export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = ({
+  operatorId,
+  filter = 'all',
+  className = 'w-[260px]',
+  paddingClassName = 'p-1',
+}) => {
   const { t } = useTranslation('settings');
   const connection = useConnection();
   const pluginSnapshot = usePluginSnapshot();
@@ -134,6 +149,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
   const [savedSettingsMap, setSavedSettingsMap] = React.useState<Record<string, Record<string, unknown>>>({});
   const [savingSettingKey, setSavingSettingKey] = React.useState<string | null>(null);
   const [runningButtonKey, setRunningButtonKey] = React.useState<string | null>(null);
+  const [pausingPluginName, setPausingPluginName] = React.useState<string | null>(null);
   const visibleSavingSettingKey = useDelayedBusyKey(savingSettingKey);
   const visibleRunningButtonKey = useDelayedBusyKey(runningButtonKey);
 
@@ -387,6 +403,9 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
   }, [draftSettingsMap, getEffectiveValue, persistPluginSettings, savedSettingsMap]);
 
   const handleButtonAction = React.useCallback(async (plugin: PluginStatus, action: PluginQuickAction) => {
+    if (isTransmitControlPluginPaused(plugin, operatorId)) {
+      return;
+    }
     const actionKey = `${plugin.name}:${action.id}`;
     setRunningButtonKey(actionKey);
     setError('');
@@ -403,8 +422,23 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
     }
   }, [connection.state.radioService, operatorId, t]);
 
+  const handleTogglePluginPause = React.useCallback(async (plugin: PluginStatus) => {
+    const nextPaused = !isTransmitControlPluginPaused(plugin, operatorId);
+    setPausingPluginName(plugin.name);
+    setError('');
+
+    try {
+      await pluginApi.setOperatorPluginPaused(plugin.name, operatorId, nextPaused);
+    } catch (err) {
+      logger.error('Failed to update automation pause state', err);
+      setError(err instanceof Error ? err.message : t('automation.pauseUpdateFailed', 'Failed to update automation pause state.'));
+    } finally {
+      setPausingPluginName(null);
+    }
+  }, [operatorId, t]);
+
   if (loading) {
-    return <AutomationSettingsPanelSkeleton />;
+    return <AutomationSettingsPanelSkeleton className={className} paddingClassName={paddingClassName} />;
   }
 
   if (activeGroups.length === 0) {
@@ -416,18 +450,50 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
   }
 
   return (
-    <div className="w-[260px] space-y-2.5 p-1">
+    <div className={`${className} max-w-full min-w-0 space-y-2.5 ${paddingClassName}`}>
       {error && (
         <div className="rounded-md border border-danger-200 bg-danger-50 px-2.5 py-2 text-[11px] leading-5 text-danger-700">
           {error}
         </div>
       )}
 
-      {activeGroups.map(({ plugin, settings, actions, panels }) => (
+      {activeGroups.map(({ plugin, settings, actions, panels }) => {
+        const canPausePlugin = isTransmitControlPlugin(plugin);
+        const isPluginPaused = isTransmitControlPluginPaused(plugin, operatorId);
+        const pauseActionLabel = isPluginPaused
+          ? t('automation.resumePlugin', 'Resume')
+          : t('automation.pausePlugin', 'Pause');
+        return (
         <section key={plugin.name} className="space-y-1.5">
-          <div className="px-1 text-[10px] uppercase tracking-[0.12em] text-default-400">
-            {resolvePluginName(plugin.name, plugin.name)}
+          <div className="flex items-center justify-between gap-2 px-1">
+            <div className="min-w-0 truncate text-[10px] uppercase tracking-[0.12em] text-default-400">
+              {resolvePluginName(plugin.name, plugin.name)}
+            </div>
+            {canPausePlugin && (
+              <Tooltip content={pauseActionLabel} placement="left" offset={6}>
+                <Button
+                  isIconOnly
+                  size="sm"
+                  variant={isPluginPaused ? 'flat' : 'light'}
+                  color={isPluginPaused ? 'warning' : 'default'}
+                  className="h-6 w-6 min-w-6 shrink-0 rounded-full text-[10px]"
+                  isLoading={pausingPluginName === plugin.name}
+                  spinner={QUICK_ACTION_SPINNER}
+                  aria-label={pauseActionLabel}
+                  title={pauseActionLabel}
+                  onPress={() => void handleTogglePluginPause(plugin)}
+                >
+                  <FontAwesomeIcon icon={isPluginPaused ? faPlay : faPause} />
+                </Button>
+              </Tooltip>
+            )}
           </div>
+
+          {isPluginPaused && (
+            <div className="rounded-md border border-warning-200/70 bg-warning-50/70 px-2.5 py-1.5 text-[11px] leading-4 text-warning-700 dark:border-warning-400/40 dark:bg-warning-500/10 dark:text-warning-200">
+              {t('automation.pluginPausedHint', 'Automation is paused for this operator.')}
+            </div>
+          )}
 
           {settings.length > 0 && (
             <div className="space-y-1.5">
@@ -774,7 +840,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
           )}
 
           {panels.length > 0 && (
-            <div className="space-y-1.5">
+            <div className={`space-y-1.5 ${isPluginPaused ? 'pointer-events-none opacity-55 grayscale-[0.2]' : ''}`}>
               {panels
                 .map((entry) => (
                   <PluginPanelRenderer
@@ -805,6 +871,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                     variant="flat"
                     className="h-8 w-full min-w-0 justify-start rounded-md px-2.5 text-xs"
                     isLoading={visibleRunningButtonKey === actionKey}
+                    isDisabled={isPluginPaused}
                     spinner={QUICK_ACTION_SPINNER}
                     spinnerPlacement="end"
                     onPress={() => void handleButtonAction(plugin, action)}
@@ -816,7 +883,8 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
             </div>
           )}
         </section>
-      ))}
+        );
+      })}
     </div>
   );
 };

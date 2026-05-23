@@ -424,7 +424,11 @@
     "priorityModeNewCallsignFirst": "新しいコールサインを優先する",
     "priorityModeBalancedDesc": "まずグリッドと信号を見て、次に DXCC と新しいコールサインを検討します。",
     "priorityModeDxccFirstDesc": "優先順位: 新しい DXCC > 新しいグリッド > 新しいコールサイン。",
-    "priorityModeNewCallsignFirstDesc": "優先順位: 新しいコールサイン > 新しい DXCC > 新しいグリッド。"
+    "priorityModeNewCallsignFirstDesc": "優先順位: 新しいコールサイン > 新しい DXCC > 新しいグリッド。",
+    "pausePlugin": "一時停止",
+    "resumePlugin": "再開",
+    "pluginPausedHint": "このオペレーターの自動化は一時停止中です。",
+    "pauseUpdateFailed": "自動化の一時停止状態を更新できませんでした。"
   },
   "plugins": {
     "tabTitle": "プラグイン",
