@@ -517,6 +517,37 @@ jobs:
           PY
           fi
 
+          if [ "$PLATFORM" = "linux" ]; then
+            if find "$APP_ROOT/node_modules/wsjtx-lib/prebuilds" -path "*/linux-*/libstdc++.so.6" -type f | grep -q .; then
+              echo "Packaged wsjtx-lib must not bundle libstdc++.so.6 on Linux Electron builds" >&2
+              find "$APP_ROOT/node_modules/wsjtx-lib/prebuilds" -path "*/linux-*/libstdc++.so.6" -type f >&2
+              exit 1
+            fi
+
+            NODE_BIN="$RESOURCES_DIR/bin/$TRIPLET/node"
+            SERVER_SCRIPT_DIR="$APP_ROOT/packages/server/dist/scripts"
+            export NODE_ENV=production
+            export APP_RESOURCES="$RESOURCES_DIR"
+            export NODE_PATH="$APP_ROOT/node_modules"
+            export LD_LIBRARY_PATH="$RESOURCES_DIR/native:${LD_LIBRARY_PATH:-}"
+
+            echo "=== Linux packaged native module preflight ==="
+            (cd "$SERVER_SCRIPT_DIR" && "$NODE_BIN" check-native-modules.js)
+
+            run_packaged_import_order() {
+              echo "=== Linux packaged native import order: $* ==="
+              (cd "$SERVER_SCRIPT_DIR" && "$NODE_BIN" --input-type=module -e '
+                for (const mod of process.argv.slice(1)) {
+                  console.log(`import ${mod}`);
+                  await import(mod);
+                }
+              ' "$@")
+            }
+
+            run_packaged_import_order audify hamlib wsjtx-lib
+            run_packaged_import_order wsjtx-lib audify hamlib
+          fi
+
           echo "✅ electron-builder package content verified: $RESOURCES_DIR"
 
       - name: Validate macOS signing and notarization

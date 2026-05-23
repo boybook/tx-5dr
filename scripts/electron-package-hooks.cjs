@@ -205,9 +205,11 @@ function cleanPlatformPrebuilds(nm, platform, arch) {
   if (platform === 'linux') {
     const removeArch = arch === 'arm64' ? 'linux-x64' : 'linux-arm64';
     const onnxKeepArch = arch === 'arm64' ? 'arm64' : 'x64';
+    const keepWsjtxArch = arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
     rmGlob(wsjtxPrebuilds, 'win32-');
     rmGlob(wsjtxPrebuilds, 'darwin-');
     rmrf(path.join(wsjtxPrebuilds, removeArch));
+    rmrf(path.join(wsjtxPrebuilds, keepWsjtxArch, 'libstdc++.so.6'));
     rmGlob(hamlibPrebuilds, 'win32-');
     rmGlob(hamlibPrebuilds, 'darwin-');
     rmrf(path.join(hamlibPrebuilds, removeArch));

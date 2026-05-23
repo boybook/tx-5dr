@@ -27,9 +27,14 @@ import {
 import { isPrepareShutdownSuccess } from './prepareShutdown.js';
 import { awaitServerReadyWithCleanup } from './serverStartupCleanup.js';
 import {
+  buildChildRuntimeEnv,
+  buildNativeModuleCheckExitResult,
+  isDegradableNativeModuleCheckFailure,
+  type NativeModuleCheckResult,
+} from './nativeRuntime.js';
+import {
   VC_REDIST_MIN_VERSION,
   VC_REDIST_X64_URL,
-  buildWindowsChildPath,
   detectWindowsVCRuntime,
 } from './vcRuntime.js';
 
@@ -1640,30 +1645,12 @@ function killProcess(
 
 function createChildEnv(extraEnv: Record<string, string> = {}) {
   const res = resourcesRoot();
-  const wsjtxPrebuildDir = path.join(res, 'app', 'node_modules', 'wsjtx-lib', 'prebuilds', triplet());
-  const childEnv = {
-    ...process.env,
-    NODE_ENV: 'production',
-    APP_RESOURCES: res,
-    // 明确为子进程提供模块解析路径，确保能解析到 app/node_modules
-    NODE_PATH: path.join(res, 'app', 'node_modules'),
-    ...(process.platform === 'win32'
-      ? {
-          PATH: buildWindowsChildPath(res, triplet(), process.env.PATH || ''),
-        }
-      : process.platform === 'darwin'
-      ? {
-          // macOS 动态库搜索路径，附带 wsjtx-lib 预编译目录
-          DYLD_LIBRARY_PATH: `${wsjtxPrebuildDir}:${path.join(res, 'native')}:${process.env.DYLD_LIBRARY_PATH || ''}`,
-        }
-      : {
-          // Linux 动态库搜索路径，附带 wsjtx-lib 预编译目录
-          LD_LIBRARY_PATH: `${wsjtxPrebuildDir}:${path.join(res, 'native')}:${process.env.LD_LIBRARY_PATH || ''}`,
-        }),
-    ...extraEnv,
-  } as NodeJS.ProcessEnv;
-
-  return childEnv;
+  return buildChildRuntimeEnv({
+    resourcesRoot: res,
+    triplet: triplet(),
+    currentEnv: process.env,
+    extraEnv,
+  });
 }
 
 function buildLogPathsHint(name: string): string {
@@ -1886,21 +1873,6 @@ function runChild(name: string, entryAbs: string, extraEnv: Record<string, strin
   return child;
 }
 
-interface NativeModuleCheckResult {
-  /** All modules loaded successfully and script exited cleanly */
-  success: boolean;
-  /** Per-module results collected before the process exited */
-  modules: Array<{ name: string; ok: boolean; error?: string }>;
-  /** Module that was being loaded when the process crashed (null if no crash) */
-  crashedModule: string | null;
-  /** Process exit code */
-  exitCode: number | null;
-  /** Signal that killed the process */
-  signal: string | null;
-  /** True if the check was aborted due to timeout */
-  timeout: boolean;
-}
-
 /**
  * Run the native module diagnostic script in an isolated child process.
  * Returns a structured result even if the child crashes or times out.
@@ -1967,14 +1939,12 @@ function runNativeModuleCheck(
     });
 
     child.on('exit', (code, signal) => {
-      finish({
-        success: code === 0,
-        modules,
-        crashedModule: code !== 0 ? lastChecking : null,
-        exitCode: code,
+      finish(buildNativeModuleCheckExitResult({
+        code,
         signal: signal as string | null,
-        timeout: false,
-      });
+        modules,
+        lastChecking,
+      }));
     });
 
     child.on('error', (err) => {
@@ -3184,9 +3154,7 @@ async function createWindow() {
     if (!nativeCheck.success) {
       const okModules = nativeCheck.modules.filter(m => m.ok).map(m => m.name);
       const failedModules = nativeCheck.modules.filter(m => !m.ok);
-      const degradableRealtimeModules = new Set(['node-datachannel']);
-      const degradedRealtimeOnly = (nativeCheck.crashedModule && degradableRealtimeModules.has(nativeCheck.crashedModule))
-        || (failedModules.length > 0 && failedModules.every(m => degradableRealtimeModules.has(m.name)));
+      const degradedRealtimeOnly = isDegradableNativeModuleCheckFailure(nativeCheck);
 
       if (degradedRealtimeOnly) {
         logger.warn('degradable realtime native check failed; continuing with PCM/ws fallback available', nativeCheck);
