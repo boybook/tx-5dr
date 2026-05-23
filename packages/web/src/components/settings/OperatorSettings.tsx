@@ -43,6 +43,12 @@ const logger = createLogger('OperatorSettings');
 type EditableOperatorField = 'myCallsign' | 'myGrid';
 const CALLSIGN_MAX_LENGTH = 10;
 
+const normalizeOperatorConfig = (operator: RadioOperatorConfig): RadioOperatorConfig => ({
+  ...operator,
+  myCallsign: sanitizeCallsignInput(operator.myCallsign),
+  myGrid: operator.myGrid ? sanitizeGridInput(operator.myGrid) : operator.myGrid,
+});
+
 export interface OperatorSettingsRef {
   hasUnsavedChanges: () => boolean;
   save: () => Promise<void>;
@@ -126,7 +132,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
       try {
         setLoading(true);
         const response = await api.getOperators();
-        setOperators(response.data);
+        setOperators(response.data.map(normalizeOperatorConfig));
       } catch (err) {
         setError(err instanceof Error ? err.message : t('settings.loadFailed'));
       } finally {
@@ -233,7 +239,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     const startFieldEditing = (operator: RadioOperatorConfig, field: EditableOperatorField) => {
       const key = getFieldEditKey(operator.id, field);
       const initialValue = field === 'myGrid'
-        ? operator.myGrid || ''
+        ? sanitizeGridInput(operator.myGrid)
         : sanitizeCallsignInput(operator.myCallsign);
 
       setEditingFields(prev => ({ ...prev, [key]: true }));
@@ -275,7 +281,9 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
       const key = getFieldEditKey(operator.id, field);
       const rawValue = fieldDrafts[key] ?? '';
       const normalizedValue = field === 'myGrid' ? sanitizeGridInput(rawValue) : sanitizeCallsignInput(rawValue);
-      const currentValue = field === 'myGrid' ? (operator.myGrid || '') : (operator.myCallsign || '');
+      const currentValue = field === 'myGrid'
+        ? sanitizeGridInput(operator.myGrid)
+        : sanitizeCallsignInput(operator.myCallsign);
 
       if (normalizedValue === currentValue) {
         cancelFieldEditing(operator.id, field);
@@ -310,6 +318,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         const response = await api.createOperator({
           ...newOperatorData,
           myCallsign: sanitizeCallsignInput(newOperatorData.myCallsign),
+          myGrid: sanitizeGridInput(newOperatorData.myGrid),
         } as CreateRadioOperatorRequest);
         await loadOperators();
 
@@ -391,7 +400,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                       description={options?.description}
                       onValueChange={(nextValue) => updateFieldDraft(operator.id, field, nextValue)}
                       maxLength={options?.maxLength}
-                      autoCapitalize={field === 'myCallsign' ? 'characters' : undefined}
+                      autoCapitalize="characters"
                     />
                     <Button
                       size="sm"

@@ -19,6 +19,8 @@ import {
   type DecodeApContext,
   type SlotInfo,
   MODES,
+  sanitizeCallsignInput,
+  sanitizeGridInput,
 } from '@tx5dr/contracts';
 import { CycleUtils, getBandFromFrequency } from '@tx5dr/core';
 import { ConfigManager } from '../config/config-manager.js';
@@ -49,6 +51,18 @@ function normalizeApGrid(value: string | undefined): string | undefined {
   const normalized = value?.trim().toUpperCase();
   if (!normalized || normalized.length < 4) return undefined;
   return normalized;
+}
+
+function normalizeOperatorContext(context: any): any {
+  return {
+    ...context,
+    ...(typeof context?.myCall === 'string'
+      ? { myCall: sanitizeCallsignInput(context.myCall) }
+      : {}),
+    ...(typeof context?.myGrid === 'string'
+      ? { myGrid: sanitizeGridInput(context.myGrid) }
+      : {}),
+  };
 }
 
 interface SameTransmissionGuardState {
@@ -660,21 +674,22 @@ export class RadioOperatorManager {
     if (!operator) {
       throw new Error(`operator ${operatorId} not found`);
     }
+    const normalizedContext = normalizeOperatorContext(context);
 
     // 构建更新对象（只包含实际变化的字段）
     const updates: Partial<RadioOperatorConfig> = {};
 
     // 更新基本信息
-    if (context.myCall !== undefined && context.myCall !== operator.config.myCallsign) {
-      operator.config.myCallsign = context.myCall;
-      updates.myCallsign = context.myCall;
+    if (normalizedContext.myCall !== undefined && normalizedContext.myCall !== operator.config.myCallsign) {
+      operator.config.myCallsign = normalizedContext.myCall;
+      updates.myCallsign = normalizedContext.myCall;
     }
-    if (context.myGrid !== undefined && context.myGrid !== operator.config.myGrid) {
-      operator.config.myGrid = context.myGrid;
-      updates.myGrid = context.myGrid;
+    if (normalizedContext.myGrid !== undefined && normalizedContext.myGrid !== operator.config.myGrid) {
+      operator.config.myGrid = normalizedContext.myGrid;
+      updates.myGrid = normalizedContext.myGrid;
     }
-    if (context.frequency !== undefined) {
-      const clampedFreq = Math.max(1, Math.min(3000, context.frequency));
+    if (normalizedContext.frequency !== undefined) {
+      const clampedFreq = Math.max(1, Math.min(3000, normalizedContext.frequency));
       if (clampedFreq !== operator.config.frequency) {
         operator.config.frequency = clampedFreq;
         updates.frequency = clampedFreq;
@@ -701,15 +716,15 @@ export class RadioOperatorManager {
     }
 
     const runtimePatch: Record<string, unknown> = {};
-    if (context.targetCallsign !== undefined) runtimePatch.targetCallsign = context.targetCallsign;
-    if (context.targetGrid !== undefined) runtimePatch.targetGrid = context.targetGrid;
-    if (context.reportSent !== undefined) runtimePatch.reportSent = context.reportSent;
-    if (context.reportReceived !== undefined) runtimePatch.reportReceived = context.reportReceived;
+    if (normalizedContext.targetCallsign !== undefined) runtimePatch.targetCallsign = normalizedContext.targetCallsign;
+    if (normalizedContext.targetGrid !== undefined) runtimePatch.targetGrid = normalizedContext.targetGrid;
+    if (normalizedContext.reportSent !== undefined) runtimePatch.reportSent = normalizedContext.reportSent;
+    if (normalizedContext.reportReceived !== undefined) runtimePatch.reportReceived = normalizedContext.reportReceived;
     if (Object.keys(runtimePatch).length > 0) {
       this._pluginManager?.patchOperatorRuntimeContext(operatorId, runtimePatch as any);
     }
 
-    logger.debug(`Updated operator ${operatorId} context:`, context);
+    logger.debug(`Updated operator ${operatorId} context:`, normalizedContext);
     this.emitOperatorStatusUpdate(operatorId);
   }
 
@@ -722,18 +737,19 @@ export class RadioOperatorManager {
     if (!operator) {
       throw new Error(`operator ${operatorId} not found`);
     }
+    const normalizedContext = normalizeOperatorContext(context);
 
     // 比较并构建更新对象（仅包含实际变化的字段）
     const updates: Partial<RadioOperatorConfig> = {};
 
-    if (context.myCall !== undefined && context.myCall !== operator.config.myCallsign) {
-      updates.myCallsign = context.myCall;
+    if (normalizedContext.myCall !== undefined && normalizedContext.myCall !== operator.config.myCallsign) {
+      updates.myCallsign = normalizedContext.myCall;
     }
-    if (context.myGrid !== undefined && context.myGrid !== operator.config.myGrid) {
-      updates.myGrid = context.myGrid;
+    if (normalizedContext.myGrid !== undefined && normalizedContext.myGrid !== operator.config.myGrid) {
+      updates.myGrid = normalizedContext.myGrid;
     }
-    if (context.frequency !== undefined) {
-      const clampedFreq = Math.max(1, Math.min(3000, context.frequency));
+    if (normalizedContext.frequency !== undefined) {
+      const clampedFreq = Math.max(1, Math.min(3000, normalizedContext.frequency));
       if (clampedFreq !== operator.config.frequency) {
         updates.frequency = clampedFreq;
       }

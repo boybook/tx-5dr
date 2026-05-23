@@ -82,12 +82,19 @@ function areStringArraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+const DEFAULT_MAX_SAME_TRANSMISSION_COUNT = 20;
+const MIN_MAX_SAME_TRANSMISSION_COUNT = 1;
+const MAX_MAX_SAME_TRANSMISSION_COUNT = 200;
+
 function normalizeMaxSameTransmissionCount(value: unknown): number {
   const numeric = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(numeric)) {
-    return 20;
+    return DEFAULT_MAX_SAME_TRANSMISSION_COUNT;
   }
-  return Math.max(1, Math.min(200, Math.trunc(numeric)));
+  return Math.max(
+    MIN_MAX_SAME_TRANSMISSION_COUNT,
+    Math.min(MAX_MAX_SAME_TRANSMISSION_COUNT, Math.trunc(numeric)),
+  );
 }
 
 interface NtpServerReorderItemProps {
@@ -330,8 +337,9 @@ export const SystemSettings = forwardRef<
   const [originalDecodeValue, setOriginalDecodeValue] = useState(false);
   const [spectrumWhileTransmitting, setSpectrumWhileTransmitting] = useState(true);
   const [originalSpectrumValue, setOriginalSpectrumValue] = useState(true);
-  const [maxSameTransmissionCount, setMaxSameTransmissionCount] = useState(20);
-  const [originalMaxSameTransmissionCount, setOriginalMaxSameTransmissionCount] = useState(20);
+  const [maxSameTransmissionCount, setMaxSameTransmissionCount] = useState(DEFAULT_MAX_SAME_TRANSMISSION_COUNT);
+  const [maxSameTransmissionCountDraft, setMaxSameTransmissionCountDraft] = useState(String(DEFAULT_MAX_SAME_TRANSMISSION_COUNT));
+  const [originalMaxSameTransmissionCount, setOriginalMaxSameTransmissionCount] = useState(DEFAULT_MAX_SAME_TRANSMISSION_COUNT);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string>('');
 
@@ -419,6 +427,7 @@ export const SystemSettings = forwardRef<
       setSpectrumWhileTransmitting(spectrumValue);
       setOriginalSpectrumValue(spectrumValue);
       setMaxSameTransmissionCount(maxSameCountValue);
+      setMaxSameTransmissionCountDraft(String(maxSameCountValue));
       setOriginalMaxSameTransmissionCount(maxSameCountValue);
     } catch (err) {
       logger.error('Failed to load FT8 settings:', err);
@@ -937,6 +946,32 @@ export const SystemSettings = forwardRef<
     setNtpServers(toNtpServerDraftItems(defaultNtpServers));
   }, [defaultNtpServers]);
 
+  const handleMaxSameTransmissionCountChange = useCallback((value: string) => {
+    if (value === '') {
+      setMaxSameTransmissionCountDraft('');
+      return;
+    }
+
+    if (!/^\d+$/.test(value)) {
+      return;
+    }
+
+    setMaxSameTransmissionCountDraft(value);
+    setMaxSameTransmissionCount(normalizeMaxSameTransmissionCount(value));
+  }, []);
+
+  const commitMaxSameTransmissionCountDraft = useCallback(() => {
+    if (maxSameTransmissionCountDraft.trim() === '') {
+      setMaxSameTransmissionCountDraft(String(maxSameTransmissionCount));
+      return maxSameTransmissionCount;
+    }
+
+    const normalized = normalizeMaxSameTransmissionCount(maxSameTransmissionCountDraft);
+    setMaxSameTransmissionCount(normalized);
+    setMaxSameTransmissionCountDraft(String(normalized));
+    return normalized;
+  }, [maxSameTransmissionCount, maxSameTransmissionCountDraft]);
+
   // 保存配置
   const handleSave = async () => {
     setIsSaving(true);
@@ -949,19 +984,20 @@ export const SystemSettings = forwardRef<
       }
 
       // 保存 FT8 设置
+      const committedMaxSameTransmissionCount = commitMaxSameTransmissionCountDraft();
       const ft8Updates: Parameters<typeof api.updateFT8Settings>[0] = {
         decodeWhileTransmitting,
         spectrumWhileTransmitting,
       };
-      if (maxSameTransmissionCount !== originalMaxSameTransmissionCount) {
-        ft8Updates.maxSameTransmissionCount = maxSameTransmissionCount;
+      if (committedMaxSameTransmissionCount !== originalMaxSameTransmissionCount) {
+        ft8Updates.maxSameTransmissionCount = committedMaxSameTransmissionCount;
       }
       const result = await api.updateFT8Settings(ft8Updates);
 
       if (result.success) {
         setOriginalDecodeValue(decodeWhileTransmitting);
         setOriginalSpectrumValue(spectrumWhileTransmitting);
-        setOriginalMaxSameTransmissionCount(maxSameTransmissionCount);
+        setOriginalMaxSameTransmissionCount(committedMaxSameTransmissionCount);
       } else {
         throw new Error(result.message || t('system.saveFailed'));
       }
@@ -2029,11 +2065,12 @@ export const SystemSettings = forwardRef<
             </div>
             <Input
               type="number"
-              min={1}
-              max={200}
+              min={MIN_MAX_SAME_TRANSMISSION_COUNT}
+              max={MAX_MAX_SAME_TRANSMISSION_COUNT}
               step={1}
-              value={String(maxSameTransmissionCount)}
-              onValueChange={(value) => setMaxSameTransmissionCount(normalizeMaxSameTransmissionCount(value))}
+              value={maxSameTransmissionCountDraft}
+              onValueChange={handleMaxSameTransmissionCountChange}
+              onBlur={commitMaxSameTransmissionCountDraft}
               isDisabled={isSaving}
               label={t('system.maxSameTransmissionCountField')}
               description={t('system.maxSameTransmissionCountHint')}

@@ -14,6 +14,8 @@ import {
   type RigctldBridgeConfig,
   type CWDecoderConfig,
   UpdateNtpServerListRequestSchema,
+  sanitizeCallsignInput,
+  sanitizeGridInput,
 } from '@tx5dr/contracts';
 import type { RadioProfile, DecodeWindowSettings, PresetFrequency, RepeaterShift, ToneSquelchMode, StationInfo, OpenWebRXStationConfig, PluginsConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
@@ -36,6 +38,20 @@ const LEGACY_STANDARD_QSO_SETTING_KEYS = [
   'prioritizeNewCalls',
   'targetSelectionPriorityMode',
 ] as const;
+
+function normalizeOperatorIdentityFields<T extends Partial<Pick<RadioOperatorConfig, 'myCallsign' | 'myGrid'>>>(
+  operator: T,
+): T {
+  return {
+    ...operator,
+    ...(typeof operator.myCallsign === 'string'
+      ? { myCallsign: sanitizeCallsignInput(operator.myCallsign) }
+      : {}),
+    ...(typeof operator.myGrid === 'string'
+      ? { myGrid: sanitizeGridInput(operator.myGrid) }
+      : {}),
+  };
+}
 
 // 应用配置接口
 export interface AppConfig {
@@ -436,6 +452,11 @@ export class ConfigManager {
       migrated = true;
     }
 
+    if (this.normalizeOperatorIdentityConfig(parsedConfig)) {
+      logger.info('Operator callsign/grid values normalized to uppercase');
+      migrated = true;
+    }
+
     // 迁移全局 lastVolumeGain → 按模式+频段的 volumeGainMap
     if (parsedConfig.lastVolumeGain && !parsedConfig.volumeGainMap) {
       logger.info('Migrating global volume gain to per-band/mode volumeGainMap...');
@@ -584,6 +605,31 @@ export class ConfigManager {
           ...(parsedConfig.plugins.operatorSettings[operator.id]['standard-qso'] ?? {}),
           ...migratedSettings,
         };
+      }
+    }
+
+    return changed;
+  }
+
+  private normalizeOperatorIdentityConfig(parsedConfig: any): boolean {
+    if (!Array.isArray(parsedConfig.operators)) {
+      return false;
+    }
+
+    let changed = false;
+    for (const operator of parsedConfig.operators) {
+      if (!operator || typeof operator !== 'object') {
+        continue;
+      }
+
+      const normalized = normalizeOperatorIdentityFields(operator);
+      if (normalized.myCallsign !== operator.myCallsign) {
+        operator.myCallsign = normalized.myCallsign;
+        changed = true;
+      }
+      if (normalized.myGrid !== operator.myGrid) {
+        operator.myGrid = normalized.myGrid;
+        changed = true;
       }
     }
 
@@ -966,10 +1012,11 @@ export class ConfigManager {
   async addOperatorConfig(operatorConfig: Omit<RadioOperatorConfig, 'id'>): Promise<RadioOperatorConfig> {
     // 生成唯一ID
     const id = `operator-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const normalizedOperatorConfig = normalizeOperatorIdentityFields(operatorConfig);
     const newOperator: RadioOperatorConfig = {
-      ...operatorConfig,
+      ...normalizedOperatorConfig,
       id,
-      mode: operatorConfig.mode || MODES.FT8,
+      mode: normalizedOperatorConfig.mode || MODES.FT8,
     };
 
     this.config.operators.push(newOperator);
@@ -986,9 +1033,10 @@ export class ConfigManager {
       throw new Error(`Operator ${id} does not exist`);
     }
 
+    const normalizedUpdates = normalizeOperatorIdentityFields(updates);
     this.config.operators[operatorIndex] = {
       ...this.config.operators[operatorIndex],
-      ...updates,
+      ...normalizedUpdates,
     };
 
     await this.saveConfig();

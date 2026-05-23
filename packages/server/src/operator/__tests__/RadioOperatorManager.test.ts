@@ -192,6 +192,57 @@ describe('RadioOperatorManager logbook startup binding', () => {
     expect(manager.getOperatorById('op1')).toBeDefined();
     expect(fakeLogManager.connectOperatorToLogBook).toHaveBeenCalledWith('op1', 'log-1');
   });
+
+  it('normalizes operator callsign and grid updates before persisting and broadcasting', async () => {
+    const logBook = {
+      id: 'log-1',
+      name: 'Test Log',
+      provider: {},
+    };
+    const { manager, eventEmitter } = createManager({ logBook, callsign: 'BG4IAJ' });
+    const updateOperatorConfig = vi.fn().mockImplementation(async (_id, updates) => ({
+      id: 'op1',
+      myCallsign: 'BG5DRB',
+      myGrid: 'PM01',
+      frequency: 1500,
+      transmitCycles: [0],
+      mode: MODES.FT8,
+      ...updates,
+    }));
+    vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+      updateOperatorConfig,
+      getOperatorConfig: vi.fn(() => ({ logBookId: undefined })),
+    } as any);
+    const statusSpy = vi.fn();
+    eventEmitter.on('operatorStatusUpdate', statusSpy);
+
+    await manager.addOperator({
+      id: 'op1',
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      frequency: 1500,
+      transmitCycles: [0],
+      mode: MODES.FT8,
+    });
+
+    await manager.updateOperatorContext('op1', {
+      myCall: ' bg5drb ',
+      myGrid: ' pm01 ',
+    });
+
+    expect(updateOperatorConfig).toHaveBeenCalledWith('op1', {
+      myCallsign: 'BG5DRB',
+      myGrid: 'PM01',
+    });
+    expect(manager.getOperatorById('op1')?.config.myCallsign).toBe('BG5DRB');
+    expect(manager.getOperatorById('op1')?.config.myGrid).toBe('PM01');
+    expect(statusSpy).toHaveBeenCalledWith(expect.objectContaining({
+      context: expect.objectContaining({
+        myCall: 'BG5DRB',
+        myGrid: 'PM01',
+      }),
+    }));
+  });
 });
 
 describe('RadioOperatorManager same transmission guard', () => {

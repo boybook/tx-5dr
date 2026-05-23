@@ -98,6 +98,7 @@ import type {
   BootstrapStatus,
   BootstrapPhaseId,
 } from '@tx5dr/contracts';
+import { sanitizeCallsignInput, sanitizeGridInput } from '@tx5dr/contracts';
 
 // ========== 错误处理 ==========
 
@@ -489,6 +490,20 @@ async function apiRequest<T = unknown>(
       }
     );
   }
+}
+
+function normalizeOperatorRequest<T extends CreateRadioOperatorRequest | UpdateRadioOperatorRequest>(
+  operatorData: T,
+): T {
+  return {
+    ...operatorData,
+    ...(operatorData.myCallsign !== undefined
+      ? { myCallsign: sanitizeCallsignInput(operatorData.myCallsign) }
+      : {}),
+    ...(operatorData.myGrid !== undefined
+      ? { myGrid: sanitizeGridInput(operatorData.myGrid) }
+      : {}),
+  };
 }
 
 // ========== API 对象 ==========
@@ -1215,11 +1230,12 @@ export const api = {
     operatorData: CreateRadioOperatorRequest,
     apiBase?: string
   ): Promise<RadioOperatorActionResponse> {
+    const normalizedOperatorData = normalizeOperatorRequest(operatorData);
     return apiRequest<RadioOperatorActionResponse>(
       '/operators',
       {
         method: 'POST',
-        body: JSON.stringify(operatorData),
+        body: JSON.stringify(normalizedOperatorData),
       },
       apiBase
     );
@@ -1233,11 +1249,12 @@ export const api = {
     updates: UpdateRadioOperatorRequest,
     apiBase?: string
   ): Promise<RadioOperatorActionResponse> {
+    const normalizedUpdates = normalizeOperatorRequest(updates);
     return apiRequest<RadioOperatorActionResponse>(
       `/operators/${encodeURIComponent(id)}`,
       {
         method: 'PUT',
-        body: JSON.stringify(updates),
+        body: JSON.stringify(normalizedUpdates),
       },
       apiBase
     );
