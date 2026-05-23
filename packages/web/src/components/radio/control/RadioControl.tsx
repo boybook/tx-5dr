@@ -1225,6 +1225,17 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     }
   }, [t]);
 
+  const getMonitorPlaybackBackendLabel = React.useCallback((backendType: 'audio-worklet' | 'script-processor' | null | undefined): string => {
+    switch (backendType) {
+      case 'audio-worklet':
+        return t('monitor.backendAudioWorklet');
+      case 'script-processor':
+        return t('monitor.backendScriptProcessor');
+      default:
+        return '--';
+    }
+  }, [t]);
+
   const selectedMonitorBufferProfile = audioMonitor.playbackBufferPreference.profile;
   const monitorCustomBufferMs = audioMonitor.playbackBufferPreference.profile === 'custom'
     ? audioMonitor.playbackBufferPreference.customTargetBufferMs
@@ -1859,6 +1870,54 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                                 <span className="text-default-500">{t('monitor.bitrate')}</span>
                                 <span className="font-mono text-default-400 text-right whitespace-nowrap">
                                   {formatBitrateMetric(audioMonitor.stats.receiver?.bitrateKbps)}
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-[auto_auto] gap-x-5 gap-y-1 border-t border-divider pt-1 text-[11px]">
+                                <span className="text-default-500">{t('monitor.playbackBackend')}</span>
+                                <span className="inline-flex items-center justify-end gap-1 font-mono text-default-400 text-right whitespace-nowrap">
+                                  {getMonitorPlaybackBackendLabel(audioMonitor.stats.playbackBackendType)}
+                                  {audioMonitor.stats.playbackBackendType === 'script-processor' && (
+                                    <Tooltip
+                                      size="sm"
+                                      placement="top"
+                                      content={t('monitor.scriptProcessorBackendHelp')}
+                                      classNames={{ content: 'max-w-56 whitespace-normal text-xs leading-snug' }}
+                                    >
+                                      <span
+                                        className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center text-warning"
+                                        aria-label={t('monitor.scriptProcessorBackendHelp')}
+                                      >
+                                        <FontAwesomeIcon icon={faCircleInfo} className="text-[11px]" />
+                                      </span>
+                                    </Tooltip>
+                                  )}
+                                </span>
+
+                                <span className="text-default-500">{t('monitor.underruns')}</span>
+                                <span
+                                  className={`font-mono text-right whitespace-nowrap ${(audioMonitor.stats.receiver?.underrunCount ?? 0) > 0 ? 'text-warning' : 'text-default-400'}`}
+                                  title={t('monitor.underrunsHelp')}
+                                >
+                                  {formatIntegerMetric(audioMonitor.stats.receiver?.underrunCount)}
+                                </span>
+
+                                <span className="text-default-500">{t('monitor.jitter')}</span>
+                                <span
+                                  className="font-mono text-default-400 text-right whitespace-nowrap"
+                                  title={t('monitor.jitterHelp')}
+                                >
+                                  {formatLatencyMetric(audioMonitor.stats.receiver?.jitterP95Ms)}
+                                  {' / '}
+                                  {formatLatencyMetric(audioMonitor.stats.receiver?.jitterEwmaMs)}
+                                </span>
+
+                                <span className="text-default-500">{t('monitor.enqueue')}</span>
+                                <span
+                                  className="font-mono text-default-400 text-right whitespace-nowrap"
+                                  title={t('monitor.enqueueHelp')}
+                                >
+                                  {formatLatencyMetric(audioMonitor.stats.mainToWorkletMs)}
                                 </span>
                               </div>
 

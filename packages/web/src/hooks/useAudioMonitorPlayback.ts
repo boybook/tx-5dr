@@ -87,6 +87,7 @@ interface ReceiverStatsData {
   codecFallbackReason?: ResolvedRealtimeAudioCodecPolicy['fallbackReason'];
   jitterP95Ms?: number;
   jitterEwmaMs?: number;
+  playbackBackendType?: CompatPlaybackBackend['backendType'] | null;
 }
 
 function waitForSocketClosed(socket: WebSocket, timeoutMs = TRANSPORT_SWITCH_DRAIN_TIMEOUT_MS): Promise<void> {
@@ -127,6 +128,7 @@ export interface MonitorStatsData {
   mainToWorkletMs: number | null;
   outputDeviceLatencyMs: number;
   clockRttMs: number | null;
+  playbackBackendType: CompatPlaybackBackend['backendType'] | null;
   clockConfidence: RealtimeClockConfidence;
   source?: RealtimeSourceStats | null;
   receiver?: ReceiverStatsData | null;
@@ -214,6 +216,7 @@ export function useAudioMonitorPlayback(
   const transportKindRef = useRef<RealtimeTransportKind | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const compatPlaybackBackendRef = useRef<CompatPlaybackBackend | null>(null);
+  const playbackBackendTypeRef = useRef<CompatPlaybackBackend['backendType'] | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
   const compatSocketRef = useRef<WebSocket | null>(null);
   const rtcDataAudioClientRef = useRef<RtcDataAudioClient | null>(null);
@@ -350,6 +353,7 @@ export function useAudioMonitorPlayback(
         // ignore
       }
       compatPlaybackBackendRef.current = null;
+      playbackBackendTypeRef.current = null;
     } else if (compatPlaybackBackendRef.current && preserveCompatPlaybackRuntime) {
       compatPlaybackBackendRef.current.reset();
     }
@@ -366,6 +370,10 @@ export function useAudioMonitorPlayback(
     if (!preserveAudioContext && !preserveCompatPlaybackRuntime && audioContextRef.current) {
       void closeAudioContext(audioContextRef.current);
       audioContextRef.current = null;
+    }
+
+    if (!preserveCompatPlaybackRuntime) {
+      playbackBackendTypeRef.current = null;
     }
 
     sourceStatsRef.current = null;
@@ -523,6 +531,7 @@ export function useAudioMonitorPlayback(
           outputDeviceLatencyMs,
           clockRttMs: clockSnapshot.rttMs,
           clockConfidence: clockSnapshot.confidence,
+          playbackBackendType: receiver.playbackBackendType ?? playbackBackendTypeRef.current,
         }
       : null;
 
@@ -539,6 +548,7 @@ export function useAudioMonitorPlayback(
       outputDeviceLatencyMs,
       clockRttMs: clockSnapshot.rttMs,
       clockConfidence: clockSnapshot.confidence,
+      playbackBackendType: receiver?.playbackBackendType ?? playbackBackendTypeRef.current,
       source,
       receiver: receiverWithDerivedStats,
     });
@@ -628,6 +638,7 @@ export function useAudioMonitorPlayback(
       codecFallbackReason: activeAudioCodecPolicyRef.current?.fallbackReason ?? null,
       inputSampleRate: data.inputSampleRate,
       bitrateKbps: getWireBitrateKbps(),
+      playbackBackendType: playbackBackendTypeRef.current,
     };
     recomputeStats();
   }, [getWireBitrateKbps, recomputeStats]);
@@ -698,6 +709,7 @@ export function useAudioMonitorPlayback(
     audioContextRef.current = await ensureInteractiveAudioContext(audioContextRef.current);
     const audioContext = audioContextRef.current;
     if (compatPlaybackBackendRef.current && gainNodeRef.current) {
+      playbackBackendTypeRef.current = compatPlaybackBackendRef.current.backendType;
       return { audioContext, backend: compatPlaybackBackendRef.current };
     }
 
@@ -741,6 +753,7 @@ export function useAudioMonitorPlayback(
           bitrateKbps: getWireBitrateKbps(),
           jitterP95Ms: backendStats.jitterP95Ms,
           jitterEwmaMs: backendStats.jitterEwmaMs,
+          playbackBackendType: playbackBackendTypeRef.current,
         };
         if (playbackBufferPreferenceRef.current.profile === 'auto') {
           const seedTargetMs = resolveMonitorPlaybackJitterSeedTargetMs({
@@ -761,6 +774,7 @@ export function useAudioMonitorPlayback(
     );
     const gainNode = audioContext.createGain();
     gainNode.gain.value = currentVolumeRef.current;
+    playbackBackendTypeRef.current = backend.backendType;
     backend.outputNode.connect(gainNode);
     gainNode.connect(audioContext.destination);
     compatPlaybackBackendRef.current = backend;
