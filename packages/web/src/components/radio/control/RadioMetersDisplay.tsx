@@ -1,11 +1,29 @@
 import React from 'react';
 import type { MeterData, MeterCapabilities } from '@tx5dr/contracts';
-import { Card, CardBody, Popover, PopoverContent, PopoverTrigger, Progress } from '@heroui/react';
+import {
+  Button,
+  Card,
+  CardBody,
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  Progress,
+  Tooltip,
+} from '@heroui/react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faBellSlash } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import { useBufferedMeterData } from '../../../hooks/useBufferedMeterData';
 import { TxVolumeGainControl } from './TxVolumeGainControl';
 
 const LEVEL_DBM_MIN_CARD_WIDTH = 580;
+
+let alcAutoPromptSuppressedForSession = false;
 
 export function shouldShowLevelDbmDetail(
   width: number,
@@ -30,6 +48,21 @@ export function shouldAutoOpenAlcWarning(
   }
 
   return alc.percent >= 100;
+}
+
+export function shouldForceOpenAlcWarning(
+  isAlcOverLimit: boolean,
+  isSuppressedForSession: boolean
+): boolean {
+  return isAlcOverLimit && !isSuppressedForSession;
+}
+
+export function isAlcAutoPromptSuppressedForSession(): boolean {
+  return alcAutoPromptSuppressedForSession;
+}
+
+export function setAlcAutoPromptSuppressedForSession(isSuppressed: boolean): void {
+  alcAutoPromptSuppressedForSession = isSuppressed;
 }
 
 export function shouldShowLevelPowerMeter(
@@ -167,6 +200,10 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
   const [showLevelDbmDetail, setShowLevelDbmDetail] = React.useState(true);
   const [isAlcPopoverOpen, setIsAlcPopoverOpen] = React.useState(false);
   const [hasAlcPopoverInteraction, setHasAlcPopoverInteraction] = React.useState(false);
+  const [isAlcSuppressConfirmOpen, setIsAlcSuppressConfirmOpen] = React.useState(false);
+  const [isAlcAutoPromptSuppressed, setIsAlcAutoPromptSuppressed] = React.useState(
+    isAlcAutoPromptSuppressedForSession
+  );
 
   React.useEffect(() => {
     const container = containerRef.current;
@@ -214,6 +251,7 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
     buffered.alc.isTimeout,
     enableAlcOverLimitPrompt
   );
+  const shouldForceAlcPopoverOpen = shouldForceOpenAlcWarning(isAlcOverLimit, isAlcAutoPromptSuppressed);
 
   React.useEffect(() => {
     if (!showAlc || !enableAlcOverLimitPrompt) {
@@ -222,7 +260,7 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
       return;
     }
 
-    if (isAlcOverLimit) {
+    if (shouldForceAlcPopoverOpen) {
       setIsAlcPopoverOpen(true);
       return;
     }
@@ -230,11 +268,11 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
     if (!hasAlcPopoverInteraction) {
       setIsAlcPopoverOpen(false);
     }
-  }, [enableAlcOverLimitPrompt, hasAlcPopoverInteraction, isAlcOverLimit, showAlc]);
+  }, [enableAlcOverLimitPrompt, hasAlcPopoverInteraction, shouldForceAlcPopoverOpen, showAlc]);
 
   const handleAlcPopoverOpenChange = React.useCallback((open: boolean) => {
     if (!open) {
-      if (isAlcOverLimit) {
+      if (shouldForceAlcPopoverOpen) {
         setIsAlcPopoverOpen(true);
         return;
       }
@@ -247,7 +285,15 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
     if (isAlcOverLimit || hasAlcPopoverInteraction) {
       setIsAlcPopoverOpen(true);
     }
-  }, [hasAlcPopoverInteraction, isAlcOverLimit]);
+  }, [hasAlcPopoverInteraction, isAlcOverLimit, shouldForceAlcPopoverOpen]);
+
+  const handleConfirmSuppressAlcAutoPrompt = React.useCallback(() => {
+    setAlcAutoPromptSuppressedForSession(true);
+    setIsAlcAutoPromptSuppressed(true);
+    setIsAlcSuppressConfirmOpen(false);
+    setIsAlcPopoverOpen(false);
+    setHasAlcPopoverInteraction(false);
+  }, []);
 
   // 全部不支持时隐藏整个组件
   if (!showLevelPower && !showSwr && !showAlc) {
@@ -255,6 +301,7 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
   }
 
   return (
+    <>
     <Card
       ref={containerRef}
       shadow="none"
@@ -356,8 +403,25 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
               <PopoverContent className="w-80 max-w-[calc(100vw-2rem)] p-0">
                 <div className="space-y-3 p-3">
                   <div className="space-y-1">
-                    <div className="text-sm font-semibold text-danger">
-                      {t('alcWarning.title')}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="text-sm font-semibold text-danger">
+                        {t('alcWarning.title')}
+                      </div>
+                      {!isAlcAutoPromptSuppressed && (
+                        <Tooltip content={t('alcWarning.suppressSessionTooltip')}>
+                          <Button
+                            isIconOnly
+                            size="sm"
+                            variant="light"
+                            color="danger"
+                            className="-mr-1 -mt-1 h-6 w-6 min-w-[1.5rem] text-danger"
+                            aria-label={t('alcWarning.suppressSessionLabel')}
+                            onPress={() => setIsAlcSuppressConfirmOpen(true)}
+                          >
+                            <FontAwesomeIcon icon={faBellSlash} className="text-xs" />
+                          </Button>
+                        </Tooltip>
+                      )}
                     </div>
                     <div className="text-xs leading-relaxed text-default-600 dark:text-default-300">
                       {t('alcWarning.description')}
@@ -384,5 +448,30 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
       </div>
       </CardBody>
     </Card>
+    <Modal
+      isOpen={isAlcSuppressConfirmOpen}
+      onClose={() => setIsAlcSuppressConfirmOpen(false)}
+      size="sm"
+      placement="center"
+      scrollBehavior="inside"
+    >
+      <ModalContent>
+        <ModalHeader>{t('alcWarning.suppressConfirmTitle')}</ModalHeader>
+        <ModalBody>
+          <p className="text-sm text-default-700 dark:text-default-300">
+            {t('alcWarning.suppressConfirmDescription')}
+          </p>
+        </ModalBody>
+        <ModalFooter>
+          <Button variant="light" onPress={() => setIsAlcSuppressConfirmOpen(false)}>
+            {t('common:button.cancel')}
+          </Button>
+          <Button color="danger" onPress={handleConfirmSuppressAlcAutoPrompt}>
+            {t('common:button.confirm')}
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+    </>
   );
 };

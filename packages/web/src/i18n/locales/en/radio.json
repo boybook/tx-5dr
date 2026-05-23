@@ -34,7 +34,11 @@
     "title": "ALC Too High",
     "description": "The current TX ALC has reached or exceeded 100%. Reduce the master gain now to avoid overdrive and distortion.",
     "gainControl": "Master gain control",
-    "dismissHint": "Click outside the popover to dismiss this reminder."
+    "dismissHint": "Click outside the popover to dismiss this reminder.",
+    "suppressSessionLabel": "Do not auto-open this session",
+    "suppressSessionTooltip": "Do not auto-open this session",
+    "suppressConfirmTitle": "Disable automatic ALC prompts?",
+    "suppressConfirmDescription": "For this web session, high ALC will no longer auto-open this popover. Refreshing the page restores it. ALC meter warnings and manual popover access remain available."
   },
   "mode": {
     "noModes": "No modes available",

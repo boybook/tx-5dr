@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getMeterSlotVisibility,
+  isAlcAutoPromptSuppressedForSession,
+  setAlcAutoPromptSuppressedForSession,
   shouldAutoOpenAlcWarning,
+  shouldForceOpenAlcWarning,
   shouldShowLevelDbmDetail,
   shouldShowLevelPowerMeter,
 } from '../RadioMetersDisplay';
@@ -68,6 +71,31 @@ describe('RadioMetersDisplay', () => {
       false,
       true,
     )).toBe(true);
+  });
+
+  it('keeps ALC over-limit detection independent from session suppression', () => {
+    setAlcAutoPromptSuppressedForSession(true);
+
+    expect(shouldAutoOpenAlcWarning(
+      true,
+      true,
+      {
+        raw: 1,
+        percent: 100,
+        alert: true,
+      },
+      false,
+      true,
+    )).toBe(true);
+    expect(isAlcAutoPromptSuppressedForSession()).toBe(true);
+
+    setAlcAutoPromptSuppressedForSession(false);
+  });
+
+  it('forces the ALC popover open only while session suppression is disabled', () => {
+    expect(shouldForceOpenAlcWarning(true, false)).toBe(true);
+    expect(shouldForceOpenAlcWarning(true, true)).toBe(false);
+    expect(shouldForceOpenAlcWarning(false, false)).toBe(false);
   });
 
   it('treats an all-false capability snapshot as unsupported', () => {
