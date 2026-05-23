@@ -13,7 +13,12 @@ import {
   DXCC_RESOLVER_VERSION,
   toAdifMode,
 } from '@tx5dr/core';
-import { parseLegacyComment, resolveQsoComment, sanitizeAdifFieldValue } from './qso-text-fields.js';
+import {
+  buildCommentFromMessageHistory,
+  parseQsoTextFields,
+  resolveQsoComment,
+  sanitizeAdifFieldValue,
+} from './qso-text-fields.js';
 
 function mapAdifModeToInternal(mode?: string, submode?: string): Pick<QSORecord, 'mode' | 'submode'> {
   const normalizedMode = mode?.trim().toUpperCase();
@@ -197,6 +202,10 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
   if (qso.stationLocationId) {
     adifFields.push(`<app_tx5dr_station_location_id:${qso.stationLocationId.length}>${qso.stationLocationId}`);
   }
+  const messageHistory = sanitizeAdifFieldValue(buildCommentFromMessageHistory(qso.messageHistory) ?? '') || undefined;
+  if (messageHistory) {
+    adifFields.push(`<app_tx5dr_message_history:${messageHistory.length}>${messageHistory}`);
+  }
   const comment = sanitizeAdifFieldValue(resolveQsoComment(qso) ?? '') || undefined;
   if (comment) {
     adifFields.push(`<comment:${comment.length}>${comment}`);
@@ -260,7 +269,10 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
     const startTime = parseADIFDateTime(qsoDate, timeOn);
     const endTime = parseADIFDateTime(fields.qso_date_off || qsoDate, timeOff);
 
-    const { comment, messageHistory } = parseLegacyComment(fields.comment);
+    const { comment, messageHistory } = parseQsoTextFields(
+      fields.comment,
+      fields.app_tx5dr_message_history,
+    );
 
     const record: QSORecord = {
       id: `${source}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,

@@ -363,11 +363,57 @@ describe('ADIFLogProvider import', () => {
     expect(exported).toContain('<MY_STATE:2>CA');
     expect(exported).toContain('<MY_CNTY:2>LA');
     expect(exported).toContain('<MY_IOTA:6>AS-007');
-    expect(exported).toContain('<COMMENT:7>CQ TEST');
+    expect(exported).toContain('<APP_TX5DR_MESSAGE_HISTORY:7>CQ TEST');
+    expect(exported).not.toContain('<COMMENT:7>CQ TEST');
     expect(exported).toContain('<NOTES:11>Manual note');
     expect(exported).toContain('<OPERATOR:6>BG2XYZ');
     expect(exported).not.toContain('<NOTE:11>Manual note');
     expect(exported).not.toContain('<STATE:2>CA');
+
+    await provider.close();
+  });
+
+  it('rewrites imported ADIF records with canonical COMMENT after local edits', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    const rawRecord = '<call:5>BG2AA<qso_date:8>20260101<time_on:6>120000<freq:9>14.074000<mode:3>FT8<rst_sent:3>-12<rst_rcvd:3>-09<eor>';
+
+    await provider.importADIF(buildAdif([rawRecord]));
+    expect(await provider.exportADIF()).toContain(`${rawRecord}\n`);
+
+    const qso = (await provider.queryQSOs())[0]!;
+    await provider.updateQSO(qso.id, { comment: 'TU' });
+    const exported = await provider.exportADIF();
+
+    expect(exported).not.toContain(`${rawRecord}\n`);
+    expect(exported).toContain('<COMMENT:30>FT8  Sent: -12  Rcvd: -09 | TU');
+
+    await provider.close();
+  });
+
+  it('exports WSJT-X compatible signal reports in COMMENT while keeping message history private', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'ft8-report-comment',
+      callsign: 'BG2AA',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:00:00Z'),
+      reportSent: '-12',
+      reportReceived: '-09',
+      messageHistory: ['BG2AA BG2XYZ -09', 'BG2XYZ BG2AA R-12'],
+      myCallsign: 'BG2XYZ',
+      myGrid: 'PM00AA',
+      comment: 'TU',
+    }, 'op1');
+
+    const exported = await provider.exportADIF();
+
+    expect(exported).toContain('<COMMENT:30>FT8  Sent: -12  Rcvd: -09 | TU');
+    expect(exported).toMatch(/<APP_TX5DR_MESSAGE_HISTORY:\d+>BG2AA BG2XYZ -09 \| BG2XYZ BG2AA R-12/);
 
     await provider.close();
   });

@@ -36,7 +36,7 @@ import {
 import {
   buildCommentFromMessageHistory,
   normalizeMessageHistory,
-  parseLegacyComment,
+  parseQsoTextFields,
   resolveQsoComment,
   sanitizeAdifFieldValue,
 } from '@tx5dr/plugin-api';
@@ -1036,7 +1036,10 @@ export class ADIFLogProvider implements ILogProvider {
       && !fields.my_cnty
       && !fields.my_iota;
     
-    const { comment, messageHistory } = parseLegacyComment(fields.comment);
+    const { comment, messageHistory } = parseQsoTextFields(
+      fields.comment,
+      fields.app_tx5dr_message_history,
+    );
 
     const record: QSORecord = {
       id,
@@ -1230,6 +1233,11 @@ export class ADIFLogProvider implements ILogProvider {
       adifRecord += `<RST_RCVD:${qso.reportReceived.length}>${qso.reportReceived}`;
     }
     
+    const messageHistory = sanitizeAdifFieldValue(buildCommentFromMessageHistory(qso.messageHistory) ?? '') || undefined;
+    if (messageHistory) {
+      adifRecord += `<APP_TX5DR_MESSAGE_HISTORY:${messageHistory.length}>${messageHistory}`;
+    }
+
     const comment = sanitizeAdifFieldValue(resolveQsoComment(qso) ?? '') || undefined;
     if (comment) {
       adifRecord += `<COMMENT:${comment.length}>${comment}`;
@@ -1691,10 +1699,14 @@ export class ADIFLogProvider implements ILogProvider {
     this.ensureInitialized();
     PersistenceCoordinator.getInstance().assertMutationsAllowed('logbook:add');
     await this.enqueueWrite(async () => {
-      const persisted = enrichQSOWithDXCC(normalizeQsoModeForStorage({
+      const messageHistory = normalizeMessageHistory(record.messageHistory);
+      const normalizedTextRecord = {
         ...record,
-        messageHistory: normalizeMessageHistory(record.messageHistory),
-        comment: record.comment ?? buildCommentFromMessageHistory(record.messageHistory),
+        messageHistory,
+      };
+      const persisted = enrichQSOWithDXCC(normalizeQsoModeForStorage({
+        ...normalizedTextRecord,
+        comment: resolveQsoComment(normalizedTextRecord),
       }));
 
       // 生成唯一ID
@@ -1725,13 +1737,17 @@ export class ADIFLogProvider implements ILogProvider {
       const nextSubmode = updates.mode !== undefined && updates.submode === undefined
         ? undefined
         : updates.submode ?? existing.submode;
-      const updated = normalizeQsoModeForStorage({
+      const messageHistory = normalizeMessageHistory(updates.messageHistory ?? existing.messageHistory);
+      const normalizedTextRecord = {
         ...existing,
         ...updates,
         id,
         submode: nextSubmode,
-        messageHistory: normalizeMessageHistory(updates.messageHistory ?? existing.messageHistory),
-        comment: updates.comment ?? existing.comment ?? buildCommentFromMessageHistory(updates.messageHistory ?? existing.messageHistory),
+        messageHistory,
+      };
+      const updated = normalizeQsoModeForStorage({
+        ...normalizedTextRecord,
+        comment: resolveQsoComment(normalizedTextRecord),
       });
       const persisted = enrichQSOWithDXCC(updated);
       await this.appendJournal('update', {
@@ -2286,8 +2302,8 @@ export class ADIFLogProvider implements ILogProvider {
       changed = true;
     }
 
-    const nextComment = merged.comment ?? buildCommentFromMessageHistory(merged.messageHistory);
-    const incomingComment = incoming.comment ?? buildCommentFromMessageHistory(incoming.messageHistory);
+    const nextComment = resolveQsoComment(merged);
+    const incomingComment = resolveQsoComment(incoming);
     if (isMissingValue(nextComment) && !isMissingValue(incomingComment)) {
       merged.comment = incomingComment;
       changed = true;

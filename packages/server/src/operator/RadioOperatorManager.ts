@@ -25,7 +25,7 @@ import {
 import { CycleUtils, getBandFromFrequency } from '@tx5dr/core';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
-import { buildCommentFromMessageHistory } from '@tx5dr/plugin-api';
+import { resolveQsoComment } from '@tx5dr/plugin-api';
 import type { WSJTXEncodeWorkQueue } from '../decode/WSJTXEncodeWorkQueue.js';
 import type { SlotPackManager } from '../slot/SlotPackManager.js';
 import type { CallsignContextTracker } from '../slot/CallsignContextTracker.js';
@@ -1738,7 +1738,7 @@ export class RadioOperatorManager {
       endMs: historyEndMs,
     });
 
-    return {
+    const completedRecord = {
       ...qsoRecord,
       callsign: targetCallsign,
       myCallsign: myCallsign || qsoRecord.myCallsign,
@@ -1746,7 +1746,10 @@ export class RadioOperatorManager {
       reportSent: reportSent || qsoRecord.reportSent,
       reportReceived: reportReceived || qsoRecord.reportReceived,
       messageHistory,
-      comment: qsoRecord.comment ?? buildCommentFromMessageHistory(messageHistory),
+    };
+    return {
+      ...completedRecord,
+      comment: resolveQsoComment(completedRecord),
     };
   }
 
@@ -1884,7 +1887,8 @@ export class RadioOperatorManager {
     const existingEndTime = existing.endTime ?? existing.startTime;
     const incomingEndTime = incoming.endTime ?? incoming.startTime;
 
-    return {
+    const messageHistory = incoming.messageHistory.length > 0 ? incoming.messageHistory : existing.messageHistory;
+    const merged = {
       ...existing,
       ...incoming,
       id: existing.id,
@@ -1893,8 +1897,7 @@ export class RadioOperatorManager {
       grid: incoming.grid || existing.grid,
       reportSent: incoming.reportSent || existing.reportSent,
       reportReceived: incoming.reportReceived || existing.reportReceived,
-      messageHistory: incoming.messageHistory.length > 0 ? incoming.messageHistory : existing.messageHistory,
-      comment: incoming.comment || existing.comment || buildCommentFromMessageHistory(incoming.messageHistory.length > 0 ? incoming.messageHistory : existing.messageHistory),
+      messageHistory,
       lotwQslSent: existing.lotwQslSent,
       lotwQslReceived: existing.lotwQslReceived,
       lotwQslSentDate: existing.lotwQslSentDate,
@@ -1903,6 +1906,11 @@ export class RadioOperatorManager {
       qrzQslReceived: existing.qrzQslReceived,
       qrzQslSentDate: existing.qrzQslSentDate,
       qrzQslReceivedDate: existing.qrzQslReceivedDate,
+    };
+
+    return {
+      ...merged,
+      comment: resolveQsoComment(merged),
     };
   }
 

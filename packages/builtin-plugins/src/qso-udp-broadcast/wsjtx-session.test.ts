@@ -279,8 +279,17 @@ describe('WSJT-X UDP session', () => {
 
     await session.onQSOComplete(record);
 
-    expect(decodeWsjtMessage(sentBuffer(network, 0)).kind).toBe('qso-logged');
-    expect(decodeWsjtMessage(sentBuffer(network, 1)).kind).toBe('logged-adif');
+    const qsoLogged = decodeWsjtMessage(sentBuffer(network, 0));
+    const loggedAdif = decodeWsjtMessage(sentBuffer(network, 1));
+
+    expect(qsoLogged.kind).toBe('qso-logged');
+    expect(qsoLogged).toMatchObject({
+      comments: 'FT8  Sent: -10  Rcvd: -08',
+    });
+    expect(loggedAdif.kind).toBe('logged-adif');
+    expect(loggedAdif).toMatchObject({
+      adifText: expect.stringContaining('<comment:25>FT8  Sent: -10  Rcvd: -08'),
+    });
     expect(network._sockets[0]._sent[2]).toMatchObject({ host: '127.0.0.1', port: 2333 });
   });
 });

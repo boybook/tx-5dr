@@ -248,7 +248,10 @@ export type { PluginPageBoundResource } from './utils/page-scope.js';
 
 /** QSO text field utilities. */
 export {
+  buildSignalReportComment,
+  parseQsoTextFields,
   parseLegacyComment,
+  parseMessageHistoryText,
   resolveQsoComment,
   buildCommentFromMessageHistory,
   normalizeMessageHistory,

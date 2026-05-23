@@ -39,3 +39,57 @@ describe('ADIF QSO mode projection', () => {
     expect(parsed?.submode).toBe('USB');
   });
 });
+
+describe('ADIF QSO comments', () => {
+  it('exports WSJT-X compatible signal reports in COMMENT', () => {
+    const adif = convertQSOToADIF(createQso({
+      mode: 'FT8',
+      submode: undefined,
+      reportSent: '-12',
+      reportReceived: '-09',
+    }));
+
+    expect(adif).toMatch(/<comment:\d+>FT8  Sent: -12  Rcvd: -09/);
+  });
+
+  it('keeps operator comments after the signal report COMMENT prefix', () => {
+    const adif = convertQSOToADIF(createQso({
+      mode: 'FT8',
+      submode: undefined,
+      reportSent: '-12',
+      reportReceived: '-09',
+      comment: 'TU',
+    }));
+
+    expect(adif).toMatch(/<comment:\d+>FT8  Sent: -12  Rcvd: -09 \| TU/);
+  });
+
+  it('stores message history in a TX-5DR private field instead of COMMENT', () => {
+    const adif = convertQSOToADIF(createQso({
+      mode: 'FT8',
+      submode: undefined,
+      reportSent: undefined,
+      reportReceived: undefined,
+      messageHistory: ['CQ TEST', 'RR73'],
+    }));
+
+    expect(adif).toMatch(/<app_tx5dr_message_history:\d+>CQ TEST \| RR73/);
+    expect(adif).not.toMatch(/<comment:\d+>CQ TEST/);
+  });
+
+  it('parses private message history and legacy COMMENT history', () => {
+    const parsedPrivate = parseADIFRecord(
+      '<call:6>N0CALL<qso_date:8>20260417<time_on:6>120000<mode:3>FT8<freq:9>14.074000<comment:25>FT8  Sent: -12  Rcvd: -09<app_tx5dr_message_history:14>CQ TEST | RR73<eor>',
+      'test',
+    );
+    const parsedLegacy = parseADIFRecord(
+      '<call:6>N0CALL<qso_date:8>20260417<time_on:6>120000<mode:3>FT8<freq:9>14.074000<comment:14>CQ TEST | RR73<eor>',
+      'test',
+    );
+
+    expect(parsedPrivate?.comment).toBe('FT8  Sent: -12  Rcvd: -09');
+    expect(parsedPrivate?.messageHistory).toEqual(['CQ TEST', 'RR73']);
+    expect(parsedLegacy?.comment).toBe('CQ TEST | RR73');
+    expect(parsedLegacy?.messageHistory).toEqual(['CQ TEST', 'RR73']);
+  });
+});

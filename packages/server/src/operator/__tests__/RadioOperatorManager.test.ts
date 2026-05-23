@@ -678,6 +678,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     expect(updatedSpy).not.toHaveBeenCalled();
     expect(addedSpy).toHaveBeenCalledTimes(1);
     expect(provider.addQSO.mock.calls[0]?.[0]?.messageHistory).toEqual(['BG5DRB N0CALL -12']);
+    expect(provider.addQSO.mock.calls[0]?.[0]?.comment).toBe('FT8  Sent: -12  Rcvd: -09');
     expect(autoSync).toHaveBeenCalledTimes(1);
     expect(notifyQSOComplete).toHaveBeenCalledTimes(1);
     expect(notifyQSOComplete).toHaveBeenCalledWith(
@@ -686,6 +687,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         id: 'temp-2',
         callsign: 'N0CALL',
         messageHistory: ['BG5DRB N0CALL -12'],
+        comment: 'FT8  Sent: -12  Rcvd: -09',
       }),
     );
   });
@@ -705,6 +707,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         reportSent: '-12',
         reportReceived: '-09',
         messageHistory: ['merged message'],
+        comment: 'FT8  Sent: -12  Rcvd: -09',
       }),
       getLastQSOWithCallsign: vi.fn().mockResolvedValue({
         id: 'existing-1',
@@ -750,6 +753,9 @@ describe('RadioOperatorManager automatic QSO logging', () => {
 
     expect(provider.addQSO).not.toHaveBeenCalled();
     expect(provider.updateQSO).toHaveBeenCalledTimes(1);
+    expect(provider.updateQSO.mock.calls[0]?.[1]).toMatchObject({
+      comment: 'FT8  Sent: -12  Rcvd: -09',
+    });
     expect(addedSpy).not.toHaveBeenCalled();
     expect(updatedSpy).toHaveBeenCalledTimes(1);
     expect(autoSync).not.toHaveBeenCalled();
@@ -759,6 +765,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       expect.objectContaining({
         id: 'existing-1',
         callsign: 'N0CALL',
+        comment: 'FT8  Sent: -12  Rcvd: -09',
       }),
     );
   });

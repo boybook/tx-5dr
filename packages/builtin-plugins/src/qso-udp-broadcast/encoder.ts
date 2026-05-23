@@ -1,5 +1,5 @@
 import type { QSORecord } from '@tx5dr/plugin-api';
-import { convertQSOToADIF, generateADIFFile } from '@tx5dr/plugin-api';
+import { convertQSOToADIF, generateADIFFile, resolveQsoComment } from '@tx5dr/plugin-api';
 import { encodeQtByteArray, encodeWsjtMessage, msSinceUtcMidnight } from './wsjtx-codec.js';
 import { WSJTX_UDP_MAGIC, WSJTX_UDP_SCHEMA, WsjtMessageType, UINT32_MAX, type WsjtDecodeMessage, type WsjtQsoLoggedMessage, type WsjtStatusMessage } from './wsjtx-types.js';
 
@@ -67,7 +67,7 @@ export function qsoRecordToWsjtQsoLogged(record: QSORecord): WsjtQsoLoggedMessag
     reportSent: record.reportSent ?? '',
     reportReceived: record.reportReceived ?? '',
     txPower: '',
-    comments: record.comment ?? record.notes ?? '',
+    comments: resolveQsoComment(record) ?? '',
     name: '',
     timeOn,
     operatorCall: record.myCallsign ?? '',

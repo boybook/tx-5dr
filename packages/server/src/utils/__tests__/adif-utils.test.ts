@@ -27,7 +27,8 @@ describe('adif-utils', () => {
     expect(adif).toContain('<my_state:2>CA');
     expect(adif).toContain('<my_cnty:2>LA');
     expect(adif).toContain('<my_iota:6>AS-007');
-    expect(adif).toContain('<comment:7>CQ TEST');
+    expect(adif).toContain('<app_tx5dr_message_history:7>CQ TEST');
+    expect(adif).not.toContain('<comment:7>CQ TEST');
     expect(adif).toContain('<notes:11>Manual note');
     expect(adif).not.toContain('<state:2>CA');
   });
