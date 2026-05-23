@@ -1054,7 +1054,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 ) : (
                   <div className="w-[260px] p-2">
                     <div className={isAutoCallControlPaused
-                      ? 'relative rounded-lg border border-warning-200/70 bg-warning-50/70 px-3 py-2 pr-11 text-warning-800 dark:border-warning-400/45 dark:bg-warning-500/10 dark:text-warning-100'
+                      ? 'relative rounded-lg border border-warning-200/70 bg-warning-50/70 px-3 py-2 pr-11 text-warning-800 dark:border-[#f7b34d]/70 dark:bg-[#241b10] dark:text-[#ffe4b5]'
                       : 'relative rounded-lg border border-danger-200/60 bg-danger-50/70 px-3 py-2 pr-11 text-danger-700 dark:border-[#ff6f9f]/70 dark:bg-[#21151b] dark:text-[#ffd6e2]'
                     }>
                       <Tooltip content={autoCallPauseActionLabel} placement="left" offset={6}>
@@ -1078,7 +1078,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                         </Button>
                       </Tooltip>
                       <div className={isAutoCallControlPaused
-                        ? 'text-xs font-semibold dark:!text-warning-100'
+                        ? 'text-xs font-semibold dark:!text-[#ffbd59]'
                         : 'text-xs font-semibold dark:!text-[#ff8fb2]'
                       }>
                         {isAutoCallControlPaused
@@ -1086,7 +1086,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                           : t('operator.autoCallEnabledTitle', 'Auto-call is enabled')}
                       </div>
                       <div className={isAutoCallControlPaused
-                        ? 'mt-1 whitespace-nowrap text-[11px] leading-4 text-warning-800/80 dark:!text-warning-100'
+                        ? 'mt-1 whitespace-nowrap text-[11px] leading-4 text-warning-800/80 dark:!text-[#ffe4b5]'
                         : 'mt-1 whitespace-nowrap text-[11px] leading-4 text-danger-700/80 dark:!text-[#ffd6e2]'
                       }>
                         {isAutoCallControlPaused
@@ -1103,7 +1103,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                         <div className="mt-1.5 flex flex-wrap gap-1">
                           {(isAutoCallControlPaused ? pausedAutoCallPluginNames : activeAutoCallPluginNames).map((name) => (
                             <span key={name} className={isAutoCallControlPaused
-                              ? 'rounded-full bg-warning-500/10 px-2 py-0.5 text-[10px] font-medium text-warning-800 dark:bg-warning-400/15 dark:!text-warning-100'
+                              ? 'rounded-full bg-warning-500/10 px-2 py-0.5 text-[10px] font-medium text-warning-800 dark:bg-[#f7b34d]/18 dark:!text-[#ffd186]'
                               : 'rounded-full bg-danger-500/10 px-2 py-0.5 text-[10px] font-medium text-danger-700 dark:bg-[#ff6f9f]/20 dark:!text-[#ffb8cd]'
                             }>
                               {name}
@@ -1111,7 +1111,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                           ))}
                           {(isAutoCallControlPaused ? pausedAutoCallExtraCount : activeAutoCallExtraCount) > 0 && (
                             <span className={isAutoCallControlPaused
-                              ? 'rounded-full bg-warning-500/10 px-2 py-0.5 text-[10px] font-medium text-warning-800 dark:bg-warning-400/15 dark:!text-warning-100'
+                              ? 'rounded-full bg-warning-500/10 px-2 py-0.5 text-[10px] font-medium text-warning-800 dark:bg-[#f7b34d]/18 dark:!text-[#ffd186]'
                               : 'rounded-full bg-danger-500/10 px-2 py-0.5 text-[10px] font-medium text-danger-700 dark:bg-[#ff6f9f]/20 dark:!text-[#ffb8cd]'
                             }>
                               +{isAutoCallControlPaused ? pausedAutoCallExtraCount : activeAutoCallExtraCount}
