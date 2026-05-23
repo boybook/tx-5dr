@@ -1035,6 +1035,132 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('resumes from TX6 to reply to a delayed R-report after failed CQ recovery', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      targetCallsign: 'BG5DRB',
+      autoResumeCQAfterFail: true,
+      maxQSOTimeoutCycles: 1,
+    });
+
+    setRuntimeState(pluginManager, operator.config.id, 'TX2');
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), []));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('CQ BG7XTV OL32');
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(75_000), createSlotPack(createSlotInfo(60_000), [{
+      message: 'BG7XTV BG5DRB R-11',
+      snr: -6,
+      freq: 1502,
+    }]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(status.currentSlot).toBe('TX4');
+    expect(status.context?.targetCallsign).toBe('BG5DRB');
+    expect(status.context?.reportReceived).toBe(-11);
+    expect(status.context?.reportSent).toBe(-6);
+    expect(operator.isTransmitting).toBe(true);
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('BG5DRB BG7XTV RR73');
+
+    await pluginManager.shutdown();
+  });
+
+  it('re-decides from queued CQ to a delayed R-report after failed CQ recovery', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      targetCallsign: 'BG5DRB',
+      autoResumeCQAfterFail: true,
+      maxQSOTimeoutCycles: 1,
+    });
+
+    setRuntimeState(pluginManager, operator.config.id, 'TX2');
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), []));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('CQ BG7XTV OL32');
+
+    const changed = await pluginManager.reDecideOperator(operator.config.id, createSlotPack(createSlotInfo(45_000), [{
+      message: 'BG7XTV BG5DRB R-11',
+      snr: -6,
+      freq: 1502,
+    }]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(changed).toBe(true);
+    expect(status.currentSlot).toBe('TX4');
+    expect(status.context?.targetCallsign).toBe('BG5DRB');
+    expect(operator.isTransmitting).toBe(true);
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('BG5DRB BG7XTV RR73');
+
+    await pluginManager.shutdown();
+  });
+
+  it('re-decides from queued CQ to a delayed RR73 after failed CQ recovery', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      targetCallsign: 'BG5DRB',
+      autoResumeCQAfterFail: true,
+      maxQSOTimeoutCycles: 1,
+    });
+
+    setRuntimeState(pluginManager, operator.config.id, 'TX2');
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), []));
+
+    const changed = await pluginManager.reDecideOperator(operator.config.id, createSlotPack(createSlotInfo(45_000), [{
+      message: 'BG7XTV BG5DRB RR73',
+      snr: -6,
+      freq: 1502,
+    }]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(changed).toBe(true);
+    expect(status.currentSlot).toBe('TX5');
+    expect(status.context?.targetCallsign).toBe('BG5DRB');
+    expect(operator.isTransmitting).toBe(true);
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('BG5DRB BG7XTV 73');
+
+    await pluginManager.shutdown();
+  });
+
+  it('preserves delayed R-report recovery through candidate filters at TX6', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      targetCallsign: 'BG5DRB',
+      autoResumeCQAfterFail: true,
+      maxQSOTimeoutCycles: 1,
+      pluginConfigs: {
+        'snr-filter': {
+          enabled: true,
+          settings: {
+            minSNR: -15,
+          },
+        },
+      },
+    });
+
+    setRuntimeState(pluginManager, operator.config.id, 'TX2');
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), []));
+
+    const changed = await pluginManager.reDecideOperator(operator.config.id, createSlotPack(createSlotInfo(45_000), [{
+      message: 'BG7XTV BG5DRB R-11',
+      snr: -21,
+      freq: 1502,
+    }]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(changed).toBe(true);
+    expect(status.currentSlot).toBe('TX4');
+    expect(status.context?.targetCallsign).toBe('BG5DRB');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('BG5DRB BG7XTV RR73');
+
+    await pluginManager.shutdown();
+  });
+
   it('returns to TX6 and stops transmitting after a failed QSO when autoResumeCQAfterFail is disabled', async () => {
     const { operator, pluginManager } = await createRuntimeHarness({
       myCallsign: 'BG7XTV',
@@ -1279,6 +1405,16 @@ describe('PluginManager standard-qso late re-decision', () => {
     }]));
 
     expect(changed).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(operator.isTransmitting).toBe(false);
+
+    const rReportChanged = await pluginManager.reDecideOperator(operator.config.id, createSlotPack(createSlotInfo(45_000), [{
+      message: 'BG7XTV JA1AAA R-12',
+      snr: -18,
+      freq: 1300,
+    }]));
+
+    expect(rReportChanged).toBe(false);
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
     expect(operator.isTransmitting).toBe(false);
 

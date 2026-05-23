@@ -455,7 +455,7 @@ export class DecisionOrchestrator {
       if (filteredKeys.has(getParsedMessageKey(message))) {
         return false;
       }
-      if (this.isInboundDirectCallMessage(message, myCallsign)) {
+      if (this.isInboundDirectedProtocolMessage(message, myCallsign)) {
         return true;
       }
       return targetCallsign !== undefined
@@ -488,6 +488,21 @@ export class DecisionOrchestrator {
 
     return message.message.type === FT8MessageType.CALL
       || message.message.type === FT8MessageType.SIGNAL_REPORT;
+  }
+
+  private isInboundDirectedProtocolMessage(
+    message: ParsedFT8Message,
+    myCallsign: string,
+  ): boolean {
+    const target = getParsedMessageTargetCallsign(message.message);
+    if (target !== myCallsign) {
+      return false;
+    }
+
+    return message.message.type === FT8MessageType.CALL
+      || message.message.type === FT8MessageType.SIGNAL_REPORT
+      || message.message.type === FT8MessageType.ROGER_REPORT
+      || message.message.type === FT8MessageType.RRR;
   }
 
   private isActiveQsoProtocolMessage(

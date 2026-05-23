@@ -173,6 +173,19 @@ async function trySwitchToDirectedCall(
         clearPost73Reason?: string;
     },
 ): Promise<StateHandleResult | null> {
+    return trySwitchToDirectedProtocol(strategy, messages, options);
+}
+
+async function trySwitchToDirectedProtocol(
+    strategy: StandardQSOPluginRuntime,
+    messages: ParsedFT8Message[],
+    options?: {
+        excludeCallsigns?: Array<string | undefined>;
+        logPrefix?: string;
+        clearPost73Reason?: string;
+        acceptFollowUpProtocol?: boolean;
+    },
+): Promise<StateHandleResult | null> {
     const excluded = new Set(
         (options?.excludeCallsigns ?? [])
             .filter((callsign): callsign is string => typeof callsign === 'string' && callsign.trim().length > 0)
@@ -182,7 +195,11 @@ async function trySwitchToDirectedCall(
     const directCalls = messages
         .filter((msg) => {
             const message = msg.message;
-            if (message.type !== FT8MessageType.CALL && message.type !== FT8MessageType.SIGNAL_REPORT) {
+            const isInitialDirectCall = message.type === FT8MessageType.CALL
+                || message.type === FT8MessageType.SIGNAL_REPORT;
+            const isFollowUpProtocol = options?.acceptFollowUpProtocol === true
+                && (message.type === FT8MessageType.ROGER_REPORT || message.type === FT8MessageType.RRR);
+            if (!isInitialDirectCall && !isFollowUpProtocol) {
                 return false;
             }
             return message.targetCallsign.toUpperCase() === myCallsign
@@ -192,7 +209,12 @@ async function trySwitchToDirectedCall(
 
     for (const directCall of directCalls) {
         const msg = directCall.message;
-        if (msg.type !== FT8MessageType.CALL && msg.type !== FT8MessageType.SIGNAL_REPORT) {
+        if (
+            msg.type !== FT8MessageType.CALL
+            && msg.type !== FT8MessageType.SIGNAL_REPORT
+            && msg.type !== FT8MessageType.ROGER_REPORT
+            && msg.type !== FT8MessageType.RRR
+        ) {
             continue;
         }
         const callsign = msg.senderCallsign;
@@ -229,16 +251,35 @@ async function trySwitchToDirectedCall(
             return { changeState: 'TX2' };
         }
 
-        strategy.logger.debug(`${prefix}: switching to direct signal report ${callsign} (SNR: ${directCall.snr})`);
-        if (!strategy.restoreContext(callsign)) {
-            strategy.context.reportReceived = (msg as FT8MessageSignalReport).report;
+        if (msg.type === FT8MessageType.SIGNAL_REPORT) {
+            strategy.logger.debug(`${prefix}: switching to direct signal report ${callsign} (SNR: ${directCall.snr})`);
+            if (!strategy.restoreContext(callsign)) {
+                strategy.context.reportReceived = (msg as FT8MessageSignalReport).report;
+                strategy.context.reportSent = directCall.snr;
+                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                    strategy.context.actualFrequency = strategy.context.config.frequency + directCall.df;
+                }
+            }
+            strategy.updateSlots();
+            return { changeState: 'TX3' };
+        }
+
+        if (msg.type === FT8MessageType.ROGER_REPORT) {
+            strategy.logger.debug(`${prefix}: resuming from direct R-report ${callsign} (SNR: ${directCall.snr})`);
+            strategy.restoreContext(callsign);
+            strategy.context.reportReceived = (msg as FT8MessageRogerReport).report;
             strategy.context.reportSent = directCall.snr;
             if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
                 strategy.context.actualFrequency = strategy.context.config.frequency + directCall.df;
             }
+            strategy.updateSlots();
+            return { changeState: 'TX4' };
         }
+
+        strategy.logger.debug(`${prefix}: resuming from direct RRR/RR73 ${callsign} (SNR: ${directCall.snr})`);
+        strategy.restoreContext(callsign);
         strategy.updateSlots();
-        return { changeState: 'TX3' };
+        return { changeState: 'TX5' };
     }
 
     return null;
@@ -916,8 +957,9 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 .sort((a, b) => a.snr - b.snr);
 
             // 优先处理直接呼叫 - 遍历所有直接呼叫，找到第一个没有冲突的
-            const directHandoff = await trySwitchToDirectedCall(strategy, messages, {
+            const directHandoff = await trySwitchToDirectedProtocol(strategy, messages, {
                 logPrefix: 'TX6',
+                acceptFollowUpProtocol: true,
             });
             if (directHandoff) {
                 return directHandoff;
