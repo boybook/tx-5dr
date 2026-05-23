@@ -470,6 +470,7 @@ jobs:
             exit 1
           fi
 
+          RESOURCES_DIR="$(cd "$RESOURCES_DIR" && pwd)"
           APP_ROOT="$RESOURCES_DIR/app"
           NODE_EXE="node"
           if [ "$PLATFORM" = "win32" ]; then
