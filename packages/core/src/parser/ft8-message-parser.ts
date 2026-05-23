@@ -75,6 +75,12 @@ export class FT8MessageParser {
     return true;
   }
 
+  private static canSendCQGrid(callsign: string): boolean {
+    const cleanCallsign = callsign.replace(/[<>]/g, '').toUpperCase();
+    // Match WSJT-X stdCall CQ-grid eligibility: base standard call plus optional /P or /R.
+    return /^([A-Z]{0,2}|[A-Z][0-9]|[0-9][A-Z])([0-9][A-Z]{0,3})(\/[PR])?$/.test(cleanCallsign);
+  }
+
   /**
    * 判断是否需要使用 <> 包裹呼号
    * 规则：
@@ -90,8 +96,7 @@ export class FT8MessageParser {
     // 根据消息类型判断是否需要包裹
     switch (message.type) {
       case FT8MessageType.CQ:
-        // CQ 消息中，如果包含网格，非标准呼号需要包裹
-        return !!('grid' in message && message.grid);
+        return false;
 
       case FT8MessageType.CALL:
       case FT8MessageType.SIGNAL_REPORT:
@@ -591,11 +596,11 @@ export class FT8MessageParser {
 
     switch (message.type) {
       case FT8MessageType.CQ:
-        if (message.flag && ft8Grid) {
+        if (message.flag && ft8Grid && this.canSendCQGrid(message.senderCallsign)) {
           return `CQ ${message.flag} ${wrapCallsign(message.senderCallsign)} ${ft8Grid}`;
         } else if (message.flag) {
           return `CQ ${message.flag} ${wrapCallsign(message.senderCallsign)}`;
-        } else if (ft8Grid) {
+        } else if (ft8Grid && this.canSendCQGrid(message.senderCallsign)) {
           return `CQ ${wrapCallsign(message.senderCallsign)} ${ft8Grid}`;
         } else {
           return `CQ ${wrapCallsign(message.senderCallsign)}`;

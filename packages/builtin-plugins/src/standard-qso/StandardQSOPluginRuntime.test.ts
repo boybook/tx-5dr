@@ -38,6 +38,41 @@ function createOperator(overrides: Partial<OperatorConfig> = {}): StandardQSOPlu
 }
 
 describe('StandardQSOPluginRuntime TX6 override', () => {
+  it('omits the TX6 grid for compound CQ callsigns by default', () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator({
+      myCallsign: 'BG7KEO/QRP',
+      myGrid: 'OL62',
+    }));
+
+    expect(runtime.getSnapshot().slots?.TX6).toBe('CQ BG7KEO/QRP');
+  });
+
+  it('regenerates compound CQ TX6 without a grid unless TX6 has a manual override', () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator({
+      myCallsign: 'BG7KEO/QRP',
+      myGrid: 'OL62',
+    }));
+
+    runtime.patchContext({
+      targetCallsign: 'JA1AAA',
+      targetGrid: 'PM95',
+      reportSent: -12,
+    });
+    runtime.updateSlots();
+
+    expect(runtime.getSnapshot().slots?.TX6).toBe('CQ BG7KEO/QRP');
+
+    runtime.setSlotContent({ slot: 'TX6', content: 'CQ TEST BG7KEO/QRP' });
+    runtime.patchContext({
+      targetCallsign: 'VK2ABC',
+      targetGrid: 'QF56',
+      reportSent: -7,
+    });
+    runtime.updateSlots();
+
+    expect(runtime.getSnapshot().slots?.TX6).toBe('CQ TEST BG7KEO/QRP');
+  });
+
   it('keeps a manually edited TX6 message across slot regeneration', () => {
     const runtime = new StandardQSOPluginRuntime(createOperator());
 

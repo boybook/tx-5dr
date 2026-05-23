@@ -5,14 +5,24 @@ import { calculateGridBearing, calculateGridDistance, calculateGridPath } from '
 import { FT8MessageParser } from '../src/parser/ft8-message-parser';
 
 test('FT8 grid transmission normalization', async (t) => {
-  await t.test('CQ messages always use a four-character grid', () => {
-    const message = FT8MessageParser.generateMessage({
-      type: FT8MessageType.CQ,
-      senderCallsign: 'BG5DRB',
-      grid: 'PL09AA',
-    });
+  await t.test('CQ messages only include grids for WSJT-X-compatible callsigns', () => {
+    const cases = [
+      { senderCallsign: 'BG5DRB', grid: 'PL09AA', expected: 'CQ BG5DRB PL09' },
+      { senderCallsign: 'BG7KEO/QRP', grid: 'OL62', expected: 'CQ BG7KEO/QRP' },
+      { senderCallsign: 'WB9XYZ/A', grid: 'EN34', expected: 'CQ WB9XYZ/A' },
+      { senderCallsign: 'G4ABC/P', grid: 'IO91', expected: 'CQ G4ABC/P IO91' },
+      { senderCallsign: 'LZ370TL', grid: 'OL32', expected: 'CQ LZ370TL' },
+    ];
 
-    assert.strictEqual(message, 'CQ BG5DRB PL09');
+    for (const { senderCallsign, grid, expected } of cases) {
+      const message = FT8MessageParser.generateMessage({
+        type: FT8MessageType.CQ,
+        senderCallsign,
+        grid,
+      });
+
+      assert.strictEqual(message, expected);
+    }
   });
 
   await t.test('CALL messages always use a four-character grid', () => {
