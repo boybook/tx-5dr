@@ -327,10 +327,35 @@ export class DecisionOrchestrator {
 
   private async parseSlotPackMessages(slotPack: SlotPack, operatorId: string): Promise<ParsedFT8Message[]> {
     const LOCAL_OPERATOR_SIMULATED_SNR = 10;
-    return Promise.all(slotPack.frames.map(async (frame) => {
+    const operator = this.deps.getOperatorById(operatorId);
+    const currentMode = this.deps.getCurrentMode();
+    const isOperatorTransmittingInSourceSlot = operator?.isTransmitting === true
+      && CycleUtils.isOperatorTransmitCycleFromMs(
+        operator.getTransmitCycles(),
+        slotPack.startMs,
+        currentMode.slotMs,
+      );
+
+    const parsedMessages = await Promise.all(slotPack.frames.map(async (frame) => {
+      const isLocalTxEcho = frame.snr === -999;
+      if (
+        isLocalTxEcho
+        && frame.operatorId
+        && frame.operatorId !== operatorId
+        && isOperatorTransmittingInSourceSlot
+      ) {
+        logger.debug('Filtered same-cycle local TX echo from automatic decision input', {
+          operatorId,
+          sourceOperatorId: frame.operatorId,
+          slotStartMs: slotPack.startMs,
+          rawMessage: frame.message,
+        });
+        return null;
+      }
+
       const parsedMessage: ParsedFT8Message = {
         message: FT8MessageParser.parseMessage(frame.message),
-        snr: frame.snr === -999 && frame.operatorId === operatorId ? LOCAL_OPERATOR_SIMULATED_SNR : frame.snr,
+        snr: isLocalTxEcho ? LOCAL_OPERATOR_SIMULATED_SNR : frame.snr,
         dt: frame.dt,
         df: frame.freq,
         rawMessage: frame.message,
@@ -349,6 +374,7 @@ export class DecisionOrchestrator {
         logbookAnalysis: analysis ?? parsedMessage.logbookAnalysis,
       };
     }));
+    return parsedMessages.filter((message): message is ParsedFT8Message => message !== null);
   }
 
   private async analyzeMessageForOperator(

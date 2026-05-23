@@ -2212,6 +2212,85 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('ignores another local operator TX echo when both operators transmit in the same source cycle', async () => {
+    const { operators, pluginManager } = await createMultiOperatorRuntimeHarness({
+      operatorCount: 2,
+      autoReplyToCQ: true,
+    });
+    const [sourceOperator, receivingOperator] = operators;
+    sourceOperator.config.myCallsign = 'BH2VSQ';
+    sourceOperator.config.myGrid = 'OM44';
+    receivingOperator.config.myCallsign = 'BI9CBK';
+    receivingOperator.config.myGrid = 'OM44';
+    sourceOperator.setTransmitCycles([0]);
+    receivingOperator.setTransmitCycles([0]);
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(createSlotInfo(30_000), [
+      {
+        message: FT8MessageParser.generateMessage({
+          type: FT8MessageType.CALL,
+          senderCallsign: 'BH2VSQ',
+          targetCallsign: 'BI9CBK',
+          grid: 'OM44',
+        }),
+        snr: -999,
+        freq: 1214,
+        operatorId: sourceOperator.config.id,
+      },
+      {
+        message: FT8MessageParser.generateMessage({
+          type: FT8MessageType.CQ,
+          senderCallsign: 'BH2VSQ',
+          grid: 'OM44',
+        }),
+        snr: -999,
+        freq: 1214,
+        operatorId: sourceOperator.config.id,
+      },
+    ]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(receivingOperator.config.id);
+    expect(status.currentSlot).toBe('TX6');
+    expect(status.context?.targetCallsign).toBeUndefined();
+    expect(getCurrentTransmission(pluginManager, receivingOperator.config.id)).toBe('CQ BI9CBK OM44');
+
+    await pluginManager.shutdown();
+  });
+
+  it('allows another local operator TX echo from an RX source cycle and normalizes its SNR', async () => {
+    const { operators, pluginManager } = await createMultiOperatorRuntimeHarness({
+      operatorCount: 2,
+      autoReplyToCQ: true,
+    });
+    const [sourceOperator, receivingOperator] = operators;
+    sourceOperator.config.myCallsign = 'BH2VSQ';
+    sourceOperator.config.myGrid = 'OM44';
+    receivingOperator.config.myCallsign = 'BI9CBK';
+    receivingOperator.config.myGrid = 'OM44';
+    sourceOperator.setTransmitCycles([0]);
+    receivingOperator.setTransmitCycles([1]);
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(createSlotInfo(30_000), [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.CALL,
+        senderCallsign: 'BH2VSQ',
+        targetCallsign: 'BI9CBK',
+        grid: 'OM44',
+      }),
+      snr: -999,
+      freq: 1214,
+      operatorId: sourceOperator.config.id,
+    }]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(receivingOperator.config.id);
+    expect(status.currentSlot).toBe('TX2');
+    expect(status.context?.targetCallsign).toBe('BH2VSQ');
+    expect(status.context?.reportSent).toBe(10);
+    expect(getCurrentTransmission(pluginManager, receivingOperator.config.id)).toBe('BH2VSQ BI9CBK +10');
+
+    await pluginManager.shutdown();
+  });
+
   it('penalizes standard-qso TX1 no-reply failures but not later-stage timeouts', async () => {
     const tx1Failure = await createRuntimeHarness({
       autoReplyToCQ: true,
