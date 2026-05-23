@@ -11,7 +11,7 @@ import type { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.j
 import { createLogger } from '../utils/logger.js';
 import type { VoiceTxFrameMeta, VoiceTxProcessedFrameStats } from '../voice/VoiceTxDiagnostics.js';
 import { VoiceTxOutputPipeline, type VoiceTxOutputSinkState } from './VoiceTxOutputPipeline.js';
-import { AndroidAudioInputSocket, AndroidAudioOutputSocket } from './AndroidAudioSocketBackend.js';
+import { AndroidAudioInputSocket, AndroidAudioOutputSocket, type AndroidAudioOutputFormat } from './AndroidAudioSocketBackend.js';
 import { isAndroidAudioDeviceId, isAndroidBridgeRuntime, isLegacyAndroidAudioDeviceName } from './android-audio-devices.js';
 
 const logger = createLogger('AudioStreamManager');
@@ -707,13 +707,17 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         if (!androidDevice) {
           throw new Error(`Android audio output device is unavailable: ${configuredOutputDeviceName ?? outputDeviceId ?? 'default'}`);
         }
-        const output = new AndroidAudioOutputSocket(androidDevice);
+        const androidOutputFormat: AndroidAudioOutputFormat = this.outputSampleFormat === 'int16' ? 's16le' : 'f32le';
+        const output = new AndroidAudioOutputSocket(androidDevice, {
+          sampleRate: this.outputSampleRate,
+          format: androidOutputFormat,
+          channels: 1,
+        });
         await output.start();
         this.androidAudioOutput = output;
         this.usingAndroidOutput = true;
         this.outputDeviceId = androidDevice.id;
         this.activeOutputDeviceName = androidDevice.name;
-        this.outputSampleRate = androidDevice.sampleRate || this.outputSampleRate;
         this.outputChannels = 1;
         this.isOutputting = true;
         audioDeviceManager.markDeviceActive('output', this.activeOutputDeviceName, this.outputDeviceId, this.outputSampleRate, 1);
@@ -721,6 +725,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           device: androidDevice.name,
           socketPath: androidDevice.socketPath,
           sampleRate: this.outputSampleRate,
+          format: androidOutputFormat,
+          channels: 1,
         });
         return;
       }

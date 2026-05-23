@@ -7,6 +7,16 @@ import type { AndroidAudioDeviceDescriptor } from './android-audio-devices.js';
 const logger = createLogger('AndroidAudioSocketBackend');
 const OUTPUT_DRAIN_TIMEOUT_MS = 250;
 const OUTPUT_BACKPRESSURE_LOG_INTERVAL_MS = 5_000;
+export const ANDROID_AUDIO_OUTPUT_HEADER_BYTES = 16;
+const ANDROID_AUDIO_OUTPUT_HEADER_MAGIC = Buffer.from('TX5DRAO1', 'ascii');
+
+export type AndroidAudioOutputFormat = 's16le' | 'f32le';
+
+export interface AndroidAudioOutputStreamConfig {
+  sampleRate: number;
+  format: AndroidAudioOutputFormat;
+  channels: 1;
+}
 
 export interface AndroidAudioBackpressureResult {
   ok: boolean;
@@ -90,7 +100,10 @@ export class AndroidAudioOutputSocket {
   private writeFailures = 0;
   private lastBackpressureLogAt = 0;
 
-  constructor(private readonly device: AndroidAudioDeviceDescriptor) {}
+  constructor(
+    private readonly device: AndroidAudioDeviceDescriptor,
+    private readonly streamConfig: AndroidAudioOutputStreamConfig,
+  ) {}
 
   start(): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -104,13 +117,34 @@ export class AndroidAudioOutputSocket {
         }
       };
       socket.once('connect', () => {
-        settled = true;
-        socket.off('error', onStartupError);
-        socket.on('error', (error) => {
-          logger.warn('Android audio output socket error', { device: this.device.name, error: error.message });
-        });
-        logger.info('Android audio output socket connected', { device: this.device.name, socketPath: this.device.socketPath });
-        resolve();
+        void (async () => {
+          try {
+            const header = encodeAndroidAudioOutputHeader(this.streamConfig);
+            const result = await writeBufferWithBackpressure(socket, header, OUTPUT_DRAIN_TIMEOUT_MS);
+            if (!result.ok) {
+              throw new Error('Android audio output stream header write failed');
+            }
+            settled = true;
+            socket.off('error', onStartupError);
+            socket.on('error', (error) => {
+              logger.warn('Android audio output socket error', { device: this.device.name, error: error.message });
+            });
+            logger.info('Android audio output socket connected', {
+              device: this.device.name,
+              socketPath: this.device.socketPath,
+              sampleRate: this.streamConfig.sampleRate,
+              format: this.streamConfig.format,
+              channels: this.streamConfig.channels,
+            });
+            resolve();
+          } catch (error) {
+            if (!settled) {
+              settled = true;
+              reject(error);
+            }
+            socket.destroy();
+          }
+        })();
       });
       socket.once('error', onStartupError);
     });
@@ -125,7 +159,7 @@ export class AndroidAudioOutputSocket {
     const socket = this.socket;
     if (!socket || socket.destroyed || !socket.writable) return false;
     try {
-      const payload = convertFloat32ToS16Le(samples, gain);
+      const payload = encodeAndroidAudioPayload(samples, gain, this.streamConfig.format);
       const result = await writeBufferWithBackpressure(socket, payload, OUTPUT_DRAIN_TIMEOUT_MS);
       if (result.backpressured) {
         this.backpressureCount += 1;
@@ -158,6 +192,40 @@ export class AndroidAudioOutputSocket {
       writableLength: this.socket?.writableLength ?? 0,
     });
     this.lastBackpressureLogAt = now;
+  }
+}
+
+export function encodeAndroidAudioOutputHeader(config: AndroidAudioOutputStreamConfig): Buffer {
+  if (!Number.isFinite(config.sampleRate) || config.sampleRate < 8_000 || config.sampleRate > 192_000) {
+    throw new Error(`Invalid Android audio output sample rate: ${config.sampleRate}`);
+  }
+  if (config.channels !== 1) {
+    throw new Error(`Invalid Android audio output channel count: ${config.channels}`);
+  }
+  const formatId = config.format === 's16le' ? 1 : config.format === 'f32le' ? 2 : 0;
+  if (formatId === 0) {
+    throw new Error(`Invalid Android audio output format: ${String(config.format)}`);
+  }
+  const header = Buffer.alloc(ANDROID_AUDIO_OUTPUT_HEADER_BYTES);
+  ANDROID_AUDIO_OUTPUT_HEADER_MAGIC.copy(header, 0);
+  header.writeUInt32LE(Math.round(config.sampleRate), 8);
+  header.writeUInt8(formatId, 12);
+  header.writeUInt8(config.channels, 13);
+  header.writeUInt16LE(0, 14);
+  return header;
+}
+
+export function encodeAndroidAudioPayload(
+  samples: Float32Array,
+  gain: number,
+  format: AndroidAudioOutputFormat,
+): Buffer {
+  switch (format) {
+    case 'f32le':
+      return convertFloat32ToF32Le(samples, gain);
+    case 's16le':
+    default:
+      return convertFloat32ToS16Le(samples, gain);
   }
 }
 
@@ -216,7 +284,16 @@ function convertFloat32ToS16Le(samples: Float32Array, gain: number): Buffer {
   const buffer = Buffer.allocUnsafe(samples.length * 2);
   for (let i = 0; i < samples.length; i++) {
     const sample = Math.max(-1, Math.min(1, (samples[i] ?? 0) * gain));
-    buffer.writeInt16LE(Math.round(sample * 32767), i * 2);
+    buffer.writeInt16LE(sample < 0 ? Math.round(sample * 32768) : Math.round(sample * 32767), i * 2);
+  }
+  return buffer;
+}
+
+function convertFloat32ToF32Le(samples: Float32Array, gain: number): Buffer {
+  const buffer = Buffer.allocUnsafe(samples.length * 4);
+  for (let i = 0; i < samples.length; i++) {
+    const sample = Math.max(-1, Math.min(1, (samples[i] ?? 0) * gain));
+    buffer.writeFloatLE(sample, i * 4);
   }
   return buffer;
 }

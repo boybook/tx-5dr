@@ -13,6 +13,7 @@ export interface AndroidAudioDeviceDescriptor {
   sampleRate: number;
   sampleRates: number[];
   format: 's16le';
+  formats?: Array<'s16le' | 'f32le'>;
   socketPath: string;
   available: boolean;
   isDefault: boolean;
