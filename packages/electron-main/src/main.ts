@@ -33,6 +33,19 @@ import {
   type NativeModuleCheckResult,
 } from './nativeRuntime.js';
 import {
+  BackendPortExhaustedError,
+  ServerReadyHealthProbeError,
+  ServerReadyTimeoutError,
+  findAvailableBackendPort,
+  getReadyErrorPort,
+  isRetryableBackendReadyError,
+  probeTx5drServer,
+  summarizeProbeResult,
+  waitForServerReadyWithProbe,
+  type BackendPortDiagnostic,
+  type ServerReadyState,
+} from './backendPortNegotiation.js';
+import {
   VC_REDIST_MIN_VERSION,
   VC_REDIST_X64_URL,
   detectWindowsVCRuntime,
@@ -47,6 +60,8 @@ let desktopUpdateService: DesktopUpdateService | null = null;
 const DEFAULT_WEB_HTTP_PORT = 8076;
 const DEFAULT_WEB_HTTPS_PORT = 8443;
 const DEFAULT_PORT_SCAN_STEPS = 50;
+const DEFAULT_BACKEND_HTTP_PORT = 4000;
+const BACKEND_HEALTH_FAILURE_RETRY_MS = 2_000;
 const DEV_FRONTEND_READY_TIMEOUT_MS = 60_000;
 const DEV_BACKEND_READY_TIMEOUT_MS = 60_000;
 const DEV_PROCESS_MEMORY_LOG_INTERVAL_MS = 30_000;
@@ -1483,6 +1498,67 @@ async function findFreePort(
   });
 }
 
+interface BackendLaunchFailureSummary {
+  requestedPort: number;
+  actualPort: number | null;
+  reason: string;
+  probe: string | null;
+}
+
+async function selectBackendPort(avoidPorts: ReadonlySet<number>): Promise<number> {
+  const selection = await findAvailableBackendPort({
+    startPort: DEFAULT_BACKEND_HTTP_PORT,
+    scanSteps: DEFAULT_PORT_SCAN_STEPS,
+    host: '0.0.0.0',
+    avoidPorts,
+    logger,
+  });
+  return selection.port;
+}
+
+function summarizePortDiagnostics(diagnostics: BackendPortDiagnostic[]): string {
+  if (diagnostics.length === 0) {
+    return 'No occupied backend ports were diagnosed.';
+  }
+  return diagnostics
+    .slice(0, 8)
+    .map(diagnostic => `  - ${diagnostic.port}: ${summarizeProbeResult(diagnostic.probe)}`)
+    .join('\n');
+}
+
+function summarizeBackendLaunchFailures(failures: BackendLaunchFailureSummary[]): string {
+  if (failures.length === 0) {
+    return 'No backend launch attempts completed a health probe.';
+  }
+  return failures
+    .slice(-8)
+    .map((failure) => {
+      const actual = failure.actualPort === null ? 'unknown' : String(failure.actualPort);
+      const probe = failure.probe ? `; ${failure.probe}` : '';
+      return `  - requested ${failure.requestedPort}, actual ${actual}: ${failure.reason}${probe}`;
+    })
+    .join('\n');
+}
+
+function buildBackendStartupTroubleshootingDetail(
+  requestedPort: number,
+  failures: BackendLaunchFailureSummary[],
+  error: unknown,
+  realtimeFallbackHint: string,
+): string {
+  const failureSummary = summarizeBackendLaunchFailures(failures);
+  const errorSummary = error instanceof Error ? error.message : String(error);
+  return [
+    `Requested backend port: ${requestedPort}. rtc-data-audio UDP port: ${process.env.RTC_DATA_AUDIO_UDP_PORT || '50110'}. ${realtimeFallbackHint}`,
+    `Last backend probe error: ${errorSummary}`,
+    'Diagnostics to run on Windows:',
+    `  Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -ge ${DEFAULT_BACKEND_HTTP_PORT} -and $_.LocalPort -le ${DEFAULT_BACKEND_HTTP_PORT + DEFAULT_PORT_SCAN_STEPS} } | Select-Object LocalAddress,LocalPort,OwningProcess`,
+    `  curl.exe -4 -v --max-time 5 http://127.0.0.1:${requestedPort}/`,
+    'Backend launch attempts:',
+    failureSummary,
+  ].join('\n');
+}
+
 function triplet() {
   const arch = process.arch; // 'x64' | 'arm64'
   const plat = process.platform; // 'win32' | 'linux' | 'darwin'
@@ -2027,23 +2103,6 @@ interface WebGatewayReadyState {
   error?: unknown;
 }
 
-interface ServerReadyState {
-  pid?: number;
-  timestamp?: string;
-  requestedPort?: number;
-  httpPort: number | null;
-  baseUrl: string | null;
-  healthOk: boolean;
-  autoPort?: boolean;
-  error?: {
-    code?: string | null;
-    message?: string;
-    attemptedPort?: number;
-    startPort?: number;
-    endPort?: number;
-  } | null;
-}
-
 function isValidPort(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) > 0 && Number(value) < 65536;
 }
@@ -2064,82 +2123,32 @@ function readServerReadyFile(minTimestampMs?: number): ServerReadyState | null {
   }
 }
 
-async function probeTx5drServer(baseUrl: string, timeoutMs = 2000): Promise<boolean> {
-  return new Promise((resolve) => {
-    try {
-      const parsed = new URL(baseUrl);
-      const req = http.request({
-        hostname: parsed.hostname,
-        port: Number(parsed.port || 80),
-        path: '/',
-        method: 'GET',
-        timeout: timeoutMs,
-      }, (res) => {
-        let data = '';
-        res.setEncoding('utf8');
-        res.on('data', (chunk) => {
-          data += chunk;
-          if (data.length > 4096) {
-            req.destroy();
-            resolve(false);
-          }
-        });
-        res.on('end', () => {
-          try {
-            const body = JSON.parse(data) as { status?: string; service?: string };
-            resolve(res.statusCode === 200 && body.status === 'ok' && body.service === 'TX-5DR Server');
-          } catch {
-            resolve(false);
-          }
-        });
-      });
-      req.on('error', () => resolve(false));
-      req.on('timeout', () => {
-        req.destroy();
-        resolve(false);
-      });
-      req.end();
-    } catch {
-      resolve(false);
-    }
-  });
-}
-
 async function waitForServerReady(
   timeoutMs = 15000,
   intervalMs = 200,
   minTimestampMs?: number,
+  options: { healthFailureTimeoutMs?: number } = {},
 ): Promise<ServerReadyState> {
-  const started = Date.now();
-  let lastReady: ServerReadyState | null = null;
-
-  while (Date.now() - started <= timeoutMs) {
-    const ready = readServerReadyFile(minTimestampMs);
-    if (ready) {
-      lastReady = ready;
-      if (ready.error) {
-        throw new Error(`server_ready_error:${JSON.stringify(ready.error)}`);
-      }
-      if (isValidPort(ready.httpPort) && ready.baseUrl && ready.healthOk) {
-        const probeOk = await probeTx5drServer(ready.baseUrl);
-        if (probeOk) {
-          return ready;
-        }
-        logger.warn('server ready file found but health identity probe failed', {
-          readyFile: getServerReadyPath(),
-          baseUrl: ready.baseUrl,
-          httpPort: ready.httpPort,
-        });
-      }
+  try {
+    return await waitForServerReadyWithProbe({
+      readyFile: getServerReadyPath(),
+      readReadyFile: () => readServerReadyFile(minTimestampMs),
+      timeoutMs,
+      intervalMs,
+      healthFailureTimeoutMs: options.healthFailureTimeoutMs,
+      logger,
+    });
+  } catch (error) {
+    if (error instanceof ServerReadyTimeoutError) {
+      throw new Error(`server_ready_timeout:${JSON.stringify({
+        readyFile: getServerReadyPath(),
+        timeoutMs,
+        lastReady: error.lastReady,
+        lastProbe: error.lastProbe,
+      })}`);
     }
-    await new Promise(r => setTimeout(r, intervalMs));
+    throw error;
   }
-
-  throw new Error(`server_ready_timeout:${JSON.stringify({
-    readyFile: getServerReadyPath(),
-    timeoutMs,
-    lastReady,
-  })}`);
 }
 
 function readWebGatewayReadyFile(expectedPid?: number): WebGatewayReadyState | null {
@@ -2843,7 +2852,7 @@ async function checkServerHealth(): Promise<boolean> {
   const port = selectedServerPort || 4000;
   const baseUrl = `http://127.0.0.1:${port}`;
   logger.debug(`health check: connecting to ${baseUrl}/`);
-  return probeTx5drServer(baseUrl);
+  return (await probeTx5drServer(baseUrl)).ok;
 }
 
 async function prepareEmbeddedServerShutdown(reason: string): Promise<boolean> {
@@ -3124,8 +3133,22 @@ async function createWindow() {
     const serverLauncherEntry = serverLauncherEntryPath();
     const webEntry = webGatewayEntryPath();
 
-    removeStaleServerReadyFile();
-    const serverPort = await findFreePort(4000, 50, undefined, '0.0.0.0');
+    const failedBackendPorts = new Set<number>();
+    const backendLaunchFailures: BackendLaunchFailureSummary[] = [];
+    let serverPort: number;
+    try {
+      serverPort = await selectBackendPort(failedBackendPorts);
+    } catch (error) {
+      logger.error('backend port negotiation exhausted', error);
+      showStartupError('port_conflict', {
+        processName: 'server',
+        detail: error instanceof BackendPortExhaustedError
+          ? `Backend port range ${error.startPort}-${error.endPort} is unavailable.\n${summarizePortDiagnostics(error.diagnostics)}`
+          : undefined,
+        error,
+      });
+      return;
+    }
     let webPort: number;
     try {
       webPort = await findFreePort(DEFAULT_WEB_HTTP_PORT, DEFAULT_PORT_SCAN_STEPS, serverPort, '0.0.0.0', { fallbackToRandom: false });
@@ -3191,46 +3214,86 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
     }
     logger.warn('native module check complete');
 
-    const serverLaunchStartedAt = Date.now();
-    internalShutdownToken = randomBytes(32).toString('hex');
-    serverProcess = runChild('server', serverLauncherEntry, {
-      PORT: String(serverPort),
-      WEB_PORT: String(webPort),
-      TX5DR_SERVER_ENTRY: serverEntry,
-      TX5DR_INTERNAL_SHUTDOWN_TOKEN: internalShutdownToken,
-      TX5DR_CONFIG_DIR: getAppConfigDir(),
-      TX5DR_DATA_DIR: getAppDataDir(),
-      TX5DR_LOGS_DIR: getAppLogsDir(),
-      TX5DR_CACHE_DIR: getAppCacheDir(),
-      TX5DR_SERVER_PORT_AUTO: '1',
-      TX5DR_SERVER_PORT_SCAN_STEPS: String(DEFAULT_PORT_SCAN_STEPS),
-      TX5DR_SERVER_READY_FILE: getServerReadyPath(),
-      RTC_DATA_AUDIO_UDP_PORT: process.env.RTC_DATA_AUDIO_UDP_PORT || '50110',
-      RTC_DATA_AUDIO_ICE_UDP_MUX: process.env.RTC_DATA_AUDIO_ICE_UDP_MUX || '1',
-    });
+    let serverReady: ServerReadyState | null = null;
+    while (serverReady === null) {
+      removeStaleServerReadyFile();
+      const requestedServerPort = serverPort;
+      const serverLaunchStartedAt = Date.now();
+      internalShutdownToken = randomBytes(32).toString('hex');
+      selectedServerPort = requestedServerPort;
+      serverProcess = runChild('server', serverLauncherEntry, {
+        PORT: String(requestedServerPort),
+        WEB_PORT: String(webPort),
+        TX5DR_SERVER_ENTRY: serverEntry,
+        TX5DR_INTERNAL_SHUTDOWN_TOKEN: internalShutdownToken,
+        TX5DR_CONFIG_DIR: getAppConfigDir(),
+        TX5DR_DATA_DIR: getAppDataDir(),
+        TX5DR_LOGS_DIR: getAppLogsDir(),
+        TX5DR_CACHE_DIR: getAppCacheDir(),
+        TX5DR_SERVER_PORT_AUTO: '1',
+        TX5DR_SERVER_PORT_SCAN_STEPS: String(DEFAULT_PORT_SCAN_STEPS),
+        TX5DR_SERVER_READY_FILE: getServerReadyPath(),
+        RTC_DATA_AUDIO_UDP_PORT: process.env.RTC_DATA_AUDIO_UDP_PORT || '50110',
+        RTC_DATA_AUDIO_ICE_UDP_MUX: process.env.RTC_DATA_AUDIO_ICE_UDP_MUX || '1',
+      });
 
-    logger.info('waiting for backend server ready file...', {
-      readyFile: getServerReadyPath(),
-      requestedPort: serverPort,
-    });
-    let serverReady: ServerReadyState;
-    try {
-      serverReady = await awaitServerReadyWithCleanup({
-        waitForServerReady: () => waitForServerReady(60_000, 200, serverLaunchStartedAt),
-        getServerProcess: () => serverProcess,
-        setServerProcess: (next) => {
-          serverProcess = next;
-        },
-        killProcess: (processToStop, name) => killProcess(processToStop, name, CHILD_SHUTDOWN_OPTIONS.server),
+      logger.info('waiting for backend server ready file...', {
+        readyFile: getServerReadyPath(),
+        requestedPort: requestedServerPort,
       });
-    } catch (error) {
-      logger.error('backend server startup timeout', error);
-      showStartupError('server_timeout', {
-        processName: 'server',
-        detail: `Requested backend port: ${serverPort}. rtc-data-audio UDP port: ${process.env.RTC_DATA_AUDIO_UDP_PORT || '50110'}. ${startupErrorMsgs.realtimeFallbackHint}`,
-        error,
-      });
-      return;
+
+      try {
+        serverReady = await awaitServerReadyWithCleanup({
+          waitForServerReady: () => waitForServerReady(60_000, 200, serverLaunchStartedAt, {
+            healthFailureTimeoutMs: BACKEND_HEALTH_FAILURE_RETRY_MS,
+          }),
+          getServerProcess: () => serverProcess,
+          setServerProcess: (next) => {
+            serverProcess = next;
+          },
+          killProcess: (processToStop, name) => killProcess(processToStop, name, CHILD_SHUTDOWN_OPTIONS.server),
+        });
+      } catch (error) {
+        if (isRetryableBackendReadyError(error)) {
+          const badPort = getReadyErrorPort(error) ?? requestedServerPort;
+          failedBackendPorts.add(badPort);
+          if (badPort !== requestedServerPort) {
+            failedBackendPorts.add(requestedServerPort);
+          }
+          backendLaunchFailures.push({
+            requestedPort: requestedServerPort,
+            actualPort: badPort,
+            reason: error instanceof ServerReadyHealthProbeError ? 'health probe failed' : (error.ready.error?.code ?? 'ready file error'),
+            probe: error instanceof ServerReadyHealthProbeError ? summarizeProbeResult(error.probe) : null,
+          });
+
+          try {
+            serverPort = await selectBackendPort(failedBackendPorts);
+            logger.warn('backend launch retrying on next port', {
+              failedPort: badPort,
+              nextPort: serverPort,
+              reason: error instanceof Error ? error.message : String(error),
+            });
+            continue;
+          } catch (selectionError) {
+            logger.error('backend port negotiation exhausted', selectionError);
+            showStartupError('server_timeout', {
+              processName: 'server',
+              detail: buildBackendStartupTroubleshootingDetail(requestedServerPort, backendLaunchFailures, selectionError, startupErrorMsgs.realtimeFallbackHint),
+              error: selectionError,
+            });
+            return;
+          }
+        }
+
+        logger.error('backend server startup timeout', error);
+        showStartupError('server_timeout', {
+          processName: 'server',
+          detail: buildBackendStartupTroubleshootingDetail(requestedServerPort, backendLaunchFailures, error, startupErrorMsgs.realtimeFallbackHint),
+          error,
+        });
+        return;
+      }
     }
 
     if (!isValidPort(serverReady.httpPort)) {
@@ -3244,7 +3307,7 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
 
     selectedServerPort = serverReady.httpPort;
     logger.info('backend server ready', {
-      requestedPort: serverPort,
+      requestedPort: serverReady.requestedPort ?? serverPort,
       actualPort: selectedServerPort,
       baseUrl: serverReady.baseUrl,
     });
