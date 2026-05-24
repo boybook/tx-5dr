@@ -52,6 +52,10 @@ import {
   type ToneSquelchConfig,
 } from './radio/PhysicalRadioManager.js';
 import { FrequencyManager } from './radio/FrequencyManager.js';
+import {
+  buildFrequencyOperatingStateRequest,
+  resolveFrequencyRadioMode,
+} from './radio/frequencyRadioMode.js';
 import { TransmissionTracker } from './transmission/TransmissionTracker.js';
 import type { OpenWebRXAudioAdapter } from './openwebrx/OpenWebRXAudioAdapter.js';
 import { MemoryLeakDetector } from './utils/MemoryLeakDetector.js';
@@ -1426,15 +1430,23 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     const description = preset.description
       || `${(preset.frequency / 1000000).toFixed(3)} MHz${preset.band ? ` ${preset.band}` : ''}`;
     const radioConnected = this.radioManager.isConnected();
+    const activeRadioConfig = configManager.getRadioConfig();
+    const radioModeResolution = resolveFrequencyRadioMode({
+      effectiveMode: preset.mode,
+      requestedRadioMode: preset.radioMode,
+      engineMode: 'digital',
+      digitalModeRadioMode: activeRadioConfig.digitalModeRadioMode,
+    });
+    const effectiveRadioMode = radioModeResolution.displayRadioMode;
 
     if (radioConnected) {
-      const applyResult = await this.radioManager.applyOperatingState({
+      const applyResult = await this.radioManager.applyOperatingState(buildFrequencyOperatingStateRequest({
         frequency: preset.frequency,
-        mode: preset.radioMode,
-        bandwidth: preset.radioMode ? 'nochange' : undefined,
-        options: preset.radioMode ? { intent: 'digital' } : undefined,
-        tolerateModeFailure: true,
-      });
+        radioMode: preset.radioMode,
+        effectiveMode: preset.mode,
+        engineMode: 'digital',
+        digitalModeRadioMode: activeRadioConfig.digitalModeRadioMode,
+      }));
 
       if (!applyResult.frequencyApplied) {
         throw new Error(`Failed to switch radio frequency to ${description}`);
@@ -1458,20 +1470,30 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       logger.debug(`Radio not connected, recording nearest digital preset: ${description}`);
     }
 
-    await configManager.updateLastSelectedFrequency({
+    const nextFrequency: {
+      frequency: number;
+      mode: string;
+      band: string;
+      description?: string;
+      radioMode?: string;
+    } = {
       frequency: preset.frequency,
       mode: preset.mode,
-      radioMode: preset.radioMode,
       band: preset.band,
       description,
-    });
+      radioMode: effectiveRadioMode,
+    };
+    if (!effectiveRadioMode) {
+      delete nextFrequency.radioMode;
+    }
+    await configManager.updateLastSelectedFrequency(nextFrequency);
 
     this.slotPackManager.clearInMemory();
     this.emit('frequencyChanged', {
       frequency: preset.frequency,
       mode: preset.mode,
       band: preset.band,
-      radioMode: preset.radioMode,
+      radioMode: effectiveRadioMode,
       description,
       radioConnected,
       source: 'program',

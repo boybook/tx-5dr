@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MODES } from '@tx5dr/contracts';
+import { MODES, type DigitalModeRadioModePreference } from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { EngineState } from '../state-machines/types.js';
@@ -14,6 +14,7 @@ describe('DigitalRadioEngine mode switching', () => {
     knownFrequency?: number | null;
     lastFrequency?: { frequency: number; mode?: string } | null;
     radioConnected?: boolean;
+    digitalModeRadioMode?: DigitalModeRadioModePreference;
     customFrequencyPresets?: Array<{
       frequency: number;
       mode: string;
@@ -35,6 +36,7 @@ describe('DigitalRadioEngine mode switching', () => {
     vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
       getCustomFrequencyPresets: vi.fn(() => options.customFrequencyPresets ?? null),
       getLastSelectedFrequency: vi.fn(() => options.lastFrequency ?? null),
+      getRadioConfig: vi.fn(() => ({ type: 'none', digitalModeRadioMode: options.digitalModeRadioMode })),
       updateLastSelectedFrequency,
       setLastDigitalModeName,
       getDecodeWindowSettings: vi.fn(() => ({})),
@@ -606,6 +608,7 @@ describe('DigitalRadioEngine mode switching', () => {
         description: '14.074 MHz 20m',
       })),
       getCustomFrequencyPresets: vi.fn(() => null),
+      getRadioConfig: vi.fn(() => ({ type: 'none' })),
       updateLastSelectedFrequency,
     };
     vi.spyOn(ConfigManager, 'getInstance').mockReturnValue(configManager as unknown as ConfigManager);
@@ -626,9 +629,9 @@ describe('DigitalRadioEngine mode switching', () => {
 
     expect(applyOperatingState).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 14074000,
-      mode: 'USB',
-      options: { intent: 'digital' },
+      tolerateModeFailure: true,
     }));
+    expect(applyOperatingState.mock.calls[0]?.[0]).not.toHaveProperty('mode');
     expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 14074000,
       mode: 'FT8',
@@ -654,6 +657,7 @@ describe('DigitalRadioEngine mode switching', () => {
         description: '14.074 MHz 20m',
       })),
       getCustomFrequencyPresets: vi.fn(() => null),
+      getRadioConfig: vi.fn(() => ({ type: 'none' })),
       updateLastSelectedFrequency: vi.fn(async () => undefined),
     };
     vi.spyOn(ConfigManager, 'getInstance').mockReturnValue(configManager as unknown as ConfigManager);
@@ -674,9 +678,9 @@ describe('DigitalRadioEngine mode switching', () => {
 
     expect(applyOperatingState).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 14080000,
-      mode: 'USB',
-      options: { intent: 'digital' },
+      tolerateModeFailure: true,
     }));
+    expect(applyOperatingState.mock.calls[0]?.[0]).not.toHaveProperty('mode');
   });
 
   it('syncs restored FT4 mode to operators during startup restore', () => {
@@ -743,17 +747,15 @@ describe('DigitalRadioEngine mode switching', () => {
 
     expect(applyOperatingState).toHaveBeenCalledWith({
       frequency: 14_080_000,
-      mode: 'USB',
-      bandwidth: 'nochange',
-      options: { intent: 'digital' },
       tolerateModeFailure: true,
     });
-    expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
+    const savedFrequency = updateLastSelectedFrequency.mock.calls[0]?.[0];
+    expect(savedFrequency).toMatchObject({
       frequency: 14_080_000,
       mode: 'FT4',
       band: '20m',
-      radioMode: 'USB',
-    }));
+    });
+    expect(savedFrequency).not.toHaveProperty('radioMode');
     expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
       frequency: 14_080_000,
       mode: 'FT4',
@@ -775,9 +777,62 @@ describe('DigitalRadioEngine mode switching', () => {
 
     expect(applyOperatingState).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 14_074_000,
+      tolerateModeFailure: true,
+    }));
+    expect(applyOperatingState.mock.calls[0]?.[0]).not.toHaveProperty('mode');
+  });
+
+  it('uses the active profile USB preference when switching digital preset frequency', async () => {
+    const { fakeEngine, applyOperatingState, updateLastSelectedFrequency, emit } = createDigitalSwitchHarness({
+      initialMode: MODES.FT8,
+      knownFrequency: 14_074_000,
+      radioConnected: true,
+      digitalModeRadioMode: 'usb',
+    });
+
+    await (DigitalRadioEngine.prototype as unknown as {
+      setMode: (mode: typeof MODES.FT4) => Promise<void>;
+    }).setMode.call(fakeEngine, MODES.FT4);
+
+    expect(applyOperatingState).toHaveBeenCalledWith({
+      frequency: 14_080_000,
+      mode: 'USB',
+      bandwidth: 'nochange',
+      options: { intent: 'voice' },
+      tolerateModeFailure: true,
+    });
+    expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
+      radioMode: 'USB',
+    }));
+    expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
+      radioMode: 'USB',
+    }));
+  });
+
+  it('uses the active profile USB-DATA preference when switching digital preset frequency', async () => {
+    const { fakeEngine, applyOperatingState, updateLastSelectedFrequency, emit } = createDigitalSwitchHarness({
+      initialMode: MODES.FT8,
+      knownFrequency: 14_074_000,
+      radioConnected: true,
+      digitalModeRadioMode: 'usb-data',
+    });
+
+    await (DigitalRadioEngine.prototype as unknown as {
+      setMode: (mode: typeof MODES.FT4) => Promise<void>;
+    }).setMode.call(fakeEngine, MODES.FT4);
+
+    expect(applyOperatingState).toHaveBeenCalledWith({
+      frequency: 14_080_000,
       mode: 'USB',
       bandwidth: 'nochange',
       options: { intent: 'digital' },
+      tolerateModeFailure: true,
+    });
+    expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
+      radioMode: 'USB-DATA',
+    }));
+    expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
+      radioMode: 'USB-DATA',
     }));
   });
 

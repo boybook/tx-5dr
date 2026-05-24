@@ -184,6 +184,14 @@
     "spectrumSpeedDefaultDesc": "留空时会使用默认值 {{value}}，保存当前激活的 Profile 后会立即热更新到当前电台。",
     "spectrumSpeedSupportDesc": "仅对支持 SPECTRUM_SPEED 的 Hamlib backend 或机型生效；不支持时会自动忽略。",
     "spectrumSpeedHotUpdateDesc": "修改当前激活 Profile 的该值时，无需重连电台或重启频谱流。",
+    "digitalModeRadioModeTitle": "FT8/FT4 电台模式",
+    "digitalModeRadioModeDesc": "设置该 Profile 在切换 FT8/FT4 频率时，是否同时写入电台 CAT 模式。",
+    "digitalModeRadioModeLabel": "数字模式电台模式",
+    "digitalModeRadioModeOptions": {
+      "none": "不设置电台模式",
+      "usb": "USB（上边带）",
+      "usb-data": "USB-DATA（上边带数据）"
+    },
     "serialTitle": "Hamlib 直连电台设置",
     "refreshPortsTooltip": "刷新串口列表",
     "serialDesc": "通过 Hamlib 直连电台，具体型号可能使用串口、服务器地址或设备路径。",

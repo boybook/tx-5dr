@@ -184,6 +184,14 @@
     "spectrumSpeedDefaultDesc": "Leave empty to use the default value {{value}}. Saving the active profile applies it to the live radio immediately.",
     "spectrumSpeedSupportDesc": "This only applies to Hamlib backends or rigs that support SPECTRUM_SPEED; unsupported backends ignore it automatically.",
     "spectrumSpeedHotUpdateDesc": "Changing this on the active profile does not require reconnecting the radio or restarting the spectrum stream.",
+    "digitalModeRadioModeTitle": "FT8/FT4 Radio Mode",
+    "digitalModeRadioModeDesc": "Choose whether FT8/FT4 frequency switches also write the radio CAT mode for this profile.",
+    "digitalModeRadioModeLabel": "Digital mode radio mode",
+    "digitalModeRadioModeOptions": {
+      "none": "Do not set radio mode",
+      "usb": "USB (upper sideband)",
+      "usb-data": "USB-DATA (upper sideband data)"
+    },
     "serialTitle": "Hamlib Direct Radio Settings",
     "refreshPortsTooltip": "Refresh port list",
     "serialDesc": "Connect directly through Hamlib. Depending on the model, this may use a serial port, server address, or device path.",

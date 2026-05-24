@@ -6,7 +6,7 @@ const logger = createLogger('RadioDeviceSettings');
 import { useTranslation } from 'react-i18next';
 import { Input, Select, SelectItem, Autocomplete, AutocompleteItem, Tabs, Tab, Card, CardBody, Divider, Button, Chip, Tooltip, Accordion, AccordionItem } from '@heroui/react';
 import { api, ApiError } from '@tx5dr/core';
-import type { HamlibConfig, HamlibConfigField, PttMethod, RigConfigSchemaResponse } from '@tx5dr/contracts';
+import type { DigitalModeRadioModePreference, HamlibConfig, HamlibConfigField, PttMethod, RigConfigSchemaResponse } from '@tx5dr/contracts';
 
 interface RigInfo {
   rigModel: number;
@@ -62,6 +62,8 @@ const MULTICAST_FIELD_ORDER = [
   'multicast_cmd_addr',
   'multicast_cmd_port',
 ] as const;
+
+const DIGITAL_MODE_RADIO_MODE_OPTIONS: DigitalModeRadioModePreference[] = ['none', 'usb', 'usb-data'];
 
 const CONNECTION_FIELD_NAME_SET: ReadonlySet<string> = new Set([
   ...CONNECTION_FIELD_ORDER,
@@ -327,6 +329,34 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     });
     setTestResult(null);
   };
+
+  const renderDigitalModeRadioModePreference = () => (
+    <Card shadow="none" radius="lg" classNames={{ base: 'border border-divider bg-content1' }}>
+      <CardBody className="space-y-3 p-4">
+        <div>
+          <h4 className="font-semibold text-default-900">{t('radio.digitalModeRadioModeTitle')}</h4>
+          <p className="text-sm text-default-600">{t('radio.digitalModeRadioModeDesc')}</p>
+        </div>
+        <Select
+          label={t('radio.digitalModeRadioModeLabel')}
+          selectedKeys={[config.digitalModeRadioMode ?? 'none']}
+          onSelectionChange={(keys) => {
+            const selected = Array.from(keys)[0] as DigitalModeRadioModePreference | undefined;
+            if (!selected) return;
+            updateConfig({ digitalModeRadioMode: selected });
+          }}
+          variant="flat"
+          size="md"
+        >
+          {DIGITAL_MODE_RADIO_MODE_OPTIONS.map((option) => (
+            <SelectItem key={option}>
+              {t(`radio.digitalModeRadioModeOptions.${option}`)}
+            </SelectItem>
+          ))}
+        </Select>
+      </CardBody>
+    </Card>
+  );
 
   // 更新 Hamlib backend 配置
   const updateBackendConfig = (name: string, value?: string) => {
@@ -1543,6 +1573,8 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
         <div>
           {renderConfigContent()}
         </div>
+
+        {renderDigitalModeRadioModePreference()}
 
         {/* 状态提示 */}
         <div className="flex justify-end">

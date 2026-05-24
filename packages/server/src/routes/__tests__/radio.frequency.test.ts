@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildFrequencyAuxControlPlan,
   buildFrequencyOperatingStateRequest,
+  resolveFrequencyRadioMode,
 } from '../radio.js';
 
 describe('buildFrequencyOperatingStateRequest', () => {
@@ -29,6 +30,84 @@ describe('buildFrequencyOperatingStateRequest', () => {
       bandwidth: 'nochange',
       options: { intent: 'voice' },
       tolerateModeFailure: true,
+    });
+  });
+
+  it('lets the profile suppress FT8/FT4 CAT mode writes even when presets carry USB', () => {
+    expect(buildFrequencyOperatingStateRequest({
+      frequency: 14_074_000,
+      radioMode: 'USB',
+      effectiveMode: 'FT8',
+      engineMode: 'digital',
+      digitalModeRadioMode: 'none',
+    })).toEqual({
+      frequency: 14_074_000,
+      tolerateModeFailure: true,
+    });
+  });
+
+  it('writes normal USB for FT8/FT4 when the profile requests USB', () => {
+    expect(buildFrequencyOperatingStateRequest({
+      frequency: 14_074_000,
+      radioMode: 'USB-DATA',
+      effectiveMode: 'FT8',
+      engineMode: 'digital',
+      digitalModeRadioMode: 'usb',
+    })).toEqual({
+      frequency: 14_074_000,
+      mode: 'USB',
+      bandwidth: 'nochange',
+      options: { intent: 'voice' },
+      tolerateModeFailure: true,
+    });
+  });
+
+  it('writes USB with digital intent for FT8/FT4 USB-DATA profile mode', () => {
+    expect(buildFrequencyOperatingStateRequest({
+      frequency: 14_074_000,
+      radioMode: 'USB',
+      effectiveMode: 'FT8',
+      engineMode: 'digital',
+      digitalModeRadioMode: 'usb-data',
+    })).toEqual({
+      frequency: 14_074_000,
+      mode: 'USB',
+      bandwidth: 'nochange',
+      options: { intent: 'digital' },
+      tolerateModeFailure: true,
+    });
+  });
+});
+
+describe('resolveFrequencyRadioMode', () => {
+  it('projects the digital profile preference as the emitted display radio mode', () => {
+    expect(resolveFrequencyRadioMode({
+      effectiveMode: 'FT4',
+      requestedRadioMode: 'USB',
+      engineMode: 'digital',
+      digitalModeRadioMode: 'none',
+    })).toEqual({});
+
+    expect(resolveFrequencyRadioMode({
+      effectiveMode: 'FT4',
+      requestedRadioMode: 'USB',
+      engineMode: 'digital',
+      digitalModeRadioMode: 'usb',
+    })).toEqual({
+      displayRadioMode: 'USB',
+      writeRadioMode: 'USB',
+      modeOptions: { intent: 'voice' },
+    });
+
+    expect(resolveFrequencyRadioMode({
+      effectiveMode: 'FT4',
+      requestedRadioMode: 'USB',
+      engineMode: 'digital',
+      digitalModeRadioMode: 'usb-data',
+    })).toEqual({
+      displayRadioMode: 'USB-DATA',
+      writeRadioMode: 'USB',
+      modeOptions: { intent: 'digital' },
     });
   });
 });

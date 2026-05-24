@@ -207,6 +207,15 @@ export const HamlibSpectrumConfigSchema = z.object({
 });
 
 /**
+ * FT8/FT4 数字模式切换频率时的电台 CAT 模式偏好。
+ *
+ * - none: 只切换频率，不主动设置电台模式
+ * - usb: 设置普通 USB
+ * - usb-data: 设置 USB-DATA / PKTUSB 类数据模式
+ */
+export const DigitalModeRadioModePreferenceSchema = z.enum(['none', 'usb', 'usb-data']);
+
+/**
  * PTT (Push-to-Talk) 方法Schema
  *
  * - cat: 通过 CAT 命令控制 PTT（Hamlib RIG 类型，推荐）
@@ -239,6 +248,9 @@ export const HamlibConfigSchema = z.object({
 
   // Hamlib 频谱配置（当前仅用于官方频谱流 speed）
   spectrum: HamlibSpectrumConfigSchema.optional(),
+
+  // FT8/FT4 切换频率时是否主动设置电台 CAT 模式；未设置按 none 处理
+  digitalModeRadioMode: DigitalModeRadioModePreferenceSchema.optional(),
 
   // 发射时序补偿（毫秒）- 用于补偿电台和网络的处理延迟
   // 正值表示提前发射，负值表示延后发射
@@ -463,6 +475,7 @@ export type NetworkConfig = z.infer<typeof NetworkConfigSchema>;
 export type IcomWlanConfig = z.infer<typeof IcomWlanConfigSchema>;
 export type SerialConnectionConfig = z.infer<typeof SerialConnectionConfigSchema>;
 export type HamlibSpectrumConfig = z.infer<typeof HamlibSpectrumConfigSchema>;
+export type DigitalModeRadioModePreference = z.infer<typeof DigitalModeRadioModePreferenceSchema>;
 export type PttMethod = z.infer<typeof PttMethodSchema>;
 export type HamlibConfig = z.infer<typeof HamlibConfigSchema>;
 export type RadioConfigResponse = z.infer<typeof RadioConfigResponseSchema>;

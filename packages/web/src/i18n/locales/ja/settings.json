@@ -184,6 +184,14 @@
     "spectrumSpeedDefaultDesc": "空白のままにすると、デフォルト値 {{value}} が使用されます。現在アクティブ化されているプロファイルを保存すると、現在の局にすぐにホットアップデートされます。",
     "spectrumSpeedSupportDesc": "これは、Hamlib バックエンドまたは SPECTRUM_SPEED をサポートするモデルに対してのみ有効です。サポートされていない場合は自動的に無視されます。",
     "spectrumSpeedHotUpdateDesc": "現在アクティブなプロファイルのこの値を変更する場合、無線を再接続したり、スペクトル ストリームを再起動したりする必要はありません。",
+    "digitalModeRadioModeTitle": "FT8/FT4 無線モード",
+    "digitalModeRadioModeDesc": "このプロファイルで FT8/FT4 の周波数を切り替えるときに、無線の CAT モードも書き込むかを選択します。",
+    "digitalModeRadioModeLabel": "デジタルモードの無線モード",
+    "digitalModeRadioModeOptions": {
+      "none": "無線モードを設定しない",
+      "usb": "USB（上側波帯）",
+      "usb-data": "USB-DATA（上側波帯データ）"
+    },
     "serialTitle": "Hamlib ダイレクト無線セットアップ",
     "refreshPortsTooltip": "シリアルポートリストを更新",
     "serialDesc": "Hamlib を介した無線への直接接続、特定のモデルではシリアル ポート、サーバー アドレス、またはデバイス パスを使用する場合があります。",

@@ -22,12 +22,20 @@ import { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { RepeaterDuplexApplyResult, RepeaterDuplexConfig, ToneSquelchApplyResult, ToneSquelchConfig } from '../radio/PhysicalRadioManager.js';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
 import { CWKeyerHardware } from '../cw/CWKeyerHardware.js';
-import type { ApplyOperatingStateRequest, SetRadioModeOptions } from '../radio/connections/IRadioConnection.js';
+import {
+  buildFrequencyOperatingStateRequest,
+  resolveFrequencyRadioMode,
+} from '../radio/frequencyRadioMode.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { normalizeHamlibConfig } from '../radio/hamlibConfigUtils.js';
 import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
 import { canReadFullProfiles, redactHamlibConfigForRead } from '../security/profileRedaction.js';
+
+export {
+  buildFrequencyOperatingStateRequest,
+  resolveFrequencyRadioMode,
+} from '../radio/frequencyRadioMode.js';
 
 async function listAndroidBridgeSerialPorts(): Promise<unknown[] | null> {
   const file = process.env.TX5DR_ANDROID_SERIAL_DEVICES_FILE?.trim();
@@ -74,45 +82,6 @@ function describeHardware(config: HamlibConfig): string {
     case 'icom-wlan': return `ICOM WLAN ${config.icomWlan?.ip || ''}`;
     default: return 'Unknown';
   }
-}
-
-function inferModeOptions(appMode: string | undefined, engineMode: 'digital' | 'voice' | 'cw'): SetRadioModeOptions {
-  const normalizedAppMode = appMode?.trim().toUpperCase();
-
-  if (normalizedAppMode === 'VOICE') {
-    return { intent: 'voice' };
-  }
-
-  if (normalizedAppMode === 'FT8' || normalizedAppMode === 'FT4') {
-    return { intent: 'digital' };
-  }
-
-  return { intent: engineMode === 'voice' ? 'voice' : engineMode === 'cw' ? 'cw' : 'digital' };
-}
-
-export function buildFrequencyOperatingStateRequest({
-  frequency,
-  radioMode,
-  effectiveMode,
-  engineMode,
-}: {
-  frequency: number;
-  radioMode?: string;
-  effectiveMode?: string;
-  engineMode: 'digital' | 'voice' | 'cw';
-}): ApplyOperatingStateRequest {
-  const request: ApplyOperatingStateRequest = {
-    frequency,
-    tolerateModeFailure: true,
-  };
-
-  if (typeof radioMode === 'string' && radioMode.trim().length > 0) {
-    request.mode = radioMode;
-    request.bandwidth = 'nochange';
-    request.options = inferModeOptions(effectiveMode, engineMode);
-  }
-
-  return request;
 }
 
 function hasNonEmptyString(value: unknown): value is string {
@@ -472,9 +441,17 @@ export async function radioRoutes(fastify: FastifyInstance) {
     const effectiveMode = mode
       || (engine.getEngineMode() === 'voice' ? 'VOICE' : engine.getEngineMode() === 'cw' ? 'CW' : 'FT8');
     const normalizedRadioMode = normalizeRadioMode(radioMode);
+    const activeRadioConfig = configManager.getRadioConfig();
+    const radioModeResolution = resolveFrequencyRadioMode({
+      effectiveMode,
+      requestedRadioMode: normalizedRadioMode,
+      engineMode: engine.getEngineMode(),
+      digitalModeRadioMode: activeRadioConfig.digitalModeRadioMode,
+    });
+    const effectiveRadioMode = radioModeResolution.displayRadioMode;
     const auxControlPlan = buildFrequencyAuxControlPlan({
       effectiveMode,
-      radioMode: normalizedRadioMode,
+      radioMode: effectiveRadioMode,
       repeaterShift,
       repeaterOffsetHz,
       toneMode,
@@ -536,14 +513,24 @@ export async function radioRoutes(fastify: FastifyInstance) {
           });
         } else {
           const previousFrequency = configManager.getLastSelectedFrequency();
-          await configManager.updateLastSelectedFrequency({
+          const nextFrequency: {
+            frequency: number;
+            mode: string;
+            band: string;
+            description?: string;
+            radioMode?: string;
+          } = {
             ...(previousFrequency ?? {}),
             frequency,
             mode: effectiveMode,
             band,
             description,
-            ...(normalizedRadioMode ? { radioMode: normalizedRadioMode } : {}),
-          });
+            radioMode: effectiveRadioMode,
+          };
+          if (!effectiveRadioMode) {
+            delete nextFrequency.radioMode;
+          }
+          await configManager.updateLastSelectedFrequency(nextFrequency);
         }
       } catch (configError) {
         logger.warn(`Failed to save frequency config: ${(configError as Error).message}`);
@@ -555,7 +542,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
     if (!radioConnected) {
       // 电台未连接时，只记录频率但不实际设置
-      logger.debug(`Radio not connected, recording frequency: ${(frequency / 1000000).toFixed(3)} MHz${normalizedRadioMode ? ` (${normalizedRadioMode})` : ''}`);
+      logger.debug(`Radio not connected, recording frequency: ${(frequency / 1000000).toFixed(3)} MHz${effectiveRadioMode ? ` (${effectiveRadioMode})` : ''}`);
 
       // 只有在频率真正改变时才广播
       if (isFrequencyChanged) {
@@ -564,7 +551,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
           mode: effectiveMode,
           band: band || '',
           description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
-          radioMode: normalizedRadioMode,
+          radioMode: effectiveRadioMode,
           radioConnected: false,
           source: 'program',
         });
@@ -573,7 +560,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       return reply.send({
         success: true,
         frequency,
-        radioMode: normalizedRadioMode,
+        radioMode: effectiveRadioMode,
         repeaterShift: repeaterDuplexToApply?.repeaterShift,
         repeaterOffsetHz: repeaterDuplexToApply?.repeaterOffsetHz,
         toneMode: toneSquelchToApply?.toneMode,
@@ -590,6 +577,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       radioMode: normalizedRadioMode,
       effectiveMode,
       engineMode: engine.getEngineMode(),
+      digitalModeRadioMode: activeRadioConfig.digitalModeRadioMode,
     });
 
     const applyResult = await radioManager.applyOperatingState(operatingStateRequest);
@@ -642,7 +630,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
         mode: effectiveMode,
         band: band || '',
         description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
-        radioMode: normalizedRadioMode,
+        radioMode: effectiveRadioMode,
         radioConnected: true,
         source: 'program',
       });
@@ -651,13 +639,13 @@ export async function radioRoutes(fastify: FastifyInstance) {
     return reply.send({
       success: true,
       frequency,
-      radioMode: normalizedRadioMode,
+      radioMode: effectiveRadioMode,
       repeaterShift: repeaterDuplexToApply?.repeaterShift,
       repeaterOffsetHz: repeaterDuplexToApply?.repeaterOffsetHz,
       toneMode: toneSquelchToApply?.toneMode,
       ctcssToneTenthsHz: toneSquelchToApply?.ctcssToneTenthsHz,
       dcsCode: toneSquelchToApply?.dcsCode,
-      message: normalizedRadioMode ? `Frequency and mode set successfully (${normalizedRadioMode})` : 'Frequency set successfully',
+      message: effectiveRadioMode ? `Frequency and mode set successfully (${effectiveRadioMode})` : 'Frequency set successfully',
       radioConnected: true
     });
   });

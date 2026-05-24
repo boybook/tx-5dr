@@ -1,5 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { PresetFrequencySchema } from '../radio.schema.js';
+import { DigitalModeRadioModePreferenceSchema, HamlibConfigSchema, PresetFrequencySchema } from '../radio.schema.js';
+
+describe('HamlibConfigSchema digital mode radio mode preference', () => {
+  it('accepts legacy configs without a digital mode radio mode preference', () => {
+    const parsed = HamlibConfigSchema.parse({ type: 'none' });
+
+    expect(parsed.digitalModeRadioMode ?? 'none').toBe('none');
+  });
+
+  it('accepts supported FT8/FT4 radio mode preferences', () => {
+    expect(DigitalModeRadioModePreferenceSchema.parse('none')).toBe('none');
+    expect(DigitalModeRadioModePreferenceSchema.parse('usb')).toBe('usb');
+    expect(DigitalModeRadioModePreferenceSchema.parse('usb-data')).toBe('usb-data');
+    expect(HamlibConfigSchema.parse({ type: 'serial', digitalModeRadioMode: 'usb-data' }).digitalModeRadioMode).toBe('usb-data');
+  });
+
+  it('rejects invalid FT8/FT4 radio mode preferences', () => {
+    expect(() => HamlibConfigSchema.parse({ type: 'none', digitalModeRadioMode: 'lsb-data' })).toThrow();
+  });
+});
 
 describe('PresetFrequencySchema repeater DUP fields', () => {
   it('accepts existing presets without repeater DUP fields', () => {
