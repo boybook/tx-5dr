@@ -53,9 +53,22 @@ describe('matchUsbAudioDevice', () => {
     expect(matchUsbAudioDevice(devices)?.name).toBe('USB Audio CODEC');
   });
 
+  it('matches USB audio codec names case-insensitively with collapsed whitespace', () => {
+    const devices = [
+      makeDevice('Built-in Microphone'),
+      makeDevice('BurrBrown from Texas Instruments: USB AUDIO  CODEC'),
+    ];
+    expect(matchUsbAudioDevice(devices)?.name).toBe('BurrBrown from Texas Instruments: USB AUDIO  CODEC');
+  });
+
   it('matches PCM2902 pattern', () => {
     const devices = [makeDevice('TI PCM2902 Audio')];
     expect(matchUsbAudioDevice(devices)?.name).toBe('TI PCM2902 Audio');
+  });
+
+  it('matches C-Media USB Audio Device used by FT-710 interfaces', () => {
+    const devices = [makeDevice('C-Media Electronics Inc.: USB Audio Device')];
+    expect(matchUsbAudioDevice(devices)?.name).toBe('C-Media Electronics Inc.: USB Audio Device');
   });
 
   it('returns null when no USB audio device found', () => {
@@ -69,6 +82,14 @@ describe('matchUsbAudioDevice', () => {
       makeDevice('Another USB Audio CODEC'),
     ];
     expect(matchUsbAudioDevice(devices)?.name).toBe('USB Audio CODEC');
+  });
+
+  it('prefers explicit codec devices over generic USB Audio Device matches', () => {
+    const devices = [
+      makeDevice('C-Media Electronics Inc.: USB Audio Device'),
+      makeDevice('BurrBrown from Texas Instruments: USB AUDIO  CODEC'),
+    ];
+    expect(matchUsbAudioDevice(devices)?.name).toBe('BurrBrown from Texas Instruments: USB AUDIO  CODEC');
   });
 });
 
@@ -130,6 +151,58 @@ describe('matchAudioDeviceForRig', () => {
       outputDeviceName: 'USB Audio CODEC',
       outputSampleRate: 44100,
     });
+  });
+
+  it('matches Yaesu FT-710 C-Media audio devices and selects 44.1kHz', async () => {
+    const result = await matchAudioDeviceForRig(1049, [
+      ...RIGS,
+      { rigModel: 1049, mfgName: 'Yaesu', modelName: 'FT-710' },
+    ], async () => ({
+      inputDevices: [
+        makeDevice('C-Media Electronics Inc.: USB Audio Device', [44100, 48000], 'input'),
+      ],
+      outputDevices: [
+        makeDevice('C-Media Electronics Inc.: USB Audio Device', [44100, 48000], 'output'),
+      ],
+    }));
+
+    expect(result).toEqual({
+      inputDeviceName: 'C-Media Electronics Inc.: USB Audio Device',
+      inputSampleRate: 44100,
+      outputDeviceName: 'C-Media Electronics Inc.: USB Audio Device',
+      outputSampleRate: 44100,
+    });
+  });
+
+  it('keeps Icom USB audio devices on the 48kHz recommendation', async () => {
+    const result = await matchAudioDeviceForRig(1037, RIGS, async () => ({
+      inputDevices: [
+        makeDevice('BurrBrown from Texas Instruments: USB AUDIO  CODEC', [44100, 48000], 'input'),
+      ],
+      outputDevices: [
+        makeDevice('BurrBrown from Texas Instruments: USB AUDIO  CODEC', [44100, 48000], 'output'),
+      ],
+    }));
+
+    expect(result).toEqual({
+      inputDeviceName: 'BurrBrown from Texas Instruments: USB AUDIO  CODEC',
+      inputSampleRate: 48000,
+      outputDeviceName: 'BurrBrown from Texas Instruments: USB AUDIO  CODEC',
+      outputSampleRate: 48000,
+    });
+  });
+
+  it('does not auto-match devices for unknown manufacturers', async () => {
+    const result = await matchAudioDeviceForRig(1039, RIGS, async () => ({
+      inputDevices: [
+        makeDevice('C-Media Electronics Inc.: USB Audio Device', [44100, 48000], 'input'),
+      ],
+      outputDevices: [
+        makeDevice('C-Media Electronics Inc.: USB Audio Device', [44100, 48000], 'output'),
+      ],
+    }));
+
+    expect(result).toBeNull();
   });
 
   it('does not copy an input-only USB match into output settings', async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  audioSettingsEqual,
   getDeviceNameFromSelectKey,
   makeAudioDeviceSelectKey,
   resolveOutputChannelMode,
@@ -24,5 +25,33 @@ describe('AudioDeviceSettings select keys', () => {
     expect(resolveOutputChannelMode(undefined)).toBe('mono');
     expect(resolveOutputSampleFormat({ outputSampleFormat: 'int16' })).toBe('int16');
     expect(resolveOutputChannelMode({ outputChannelMode: 'both' })).toBe('both');
+  });
+
+  it('treats controlled initial settings and local defaults as equal to avoid echo changes', () => {
+    expect(audioSettingsEqual({
+      inputSampleRate: 48000,
+      outputSampleRate: 48000,
+      inputBufferSize: 1024,
+      outputBufferSize: 1024,
+      outputSampleFormat: 'int16',
+      outputChannelMode: 'mono',
+    }, {
+      outputSampleFormat: 'int16',
+    })).toBe(true);
+  });
+
+  it('detects real controlled audio changes', () => {
+    expect(audioSettingsEqual({
+      inputDeviceName: 'C-Media Electronics Inc.: USB Audio Device',
+      outputDeviceName: 'C-Media Electronics Inc.: USB Audio Device',
+      inputSampleRate: 44100,
+      outputSampleRate: 44100,
+      inputBufferSize: 1024,
+      outputBufferSize: 1024,
+      outputSampleFormat: 'int16',
+      outputChannelMode: 'mono',
+    }, {
+      outputSampleFormat: 'int16',
+    })).toBe(false);
   });
 });

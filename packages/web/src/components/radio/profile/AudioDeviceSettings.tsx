@@ -160,6 +160,9 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       }
       return;
     }
+    if (audioSettingsEqual(settings, initialConfig)) {
+      return;
+    }
     onChange?.(settings);
   }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, initialConfig]);
 
@@ -529,7 +532,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   );
 });
 
-function audioSettingsEqual(
+export function audioSettingsEqual(
   a: AudioDeviceSettingsType,
   b: AudioDeviceSettingsType | undefined,
 ): boolean {

@@ -12,7 +12,20 @@ export const RIG_SAMPLE_RATE_MAP: Record<string, number> = {
 };
 
 /** USB audio device name patterns shared by Yaesu and ICOM */
-export const USB_AUDIO_DEVICE_PATTERNS = ['USB Audio CODEC', 'PCM2902', 'PCM2904'];
+export const USB_AUDIO_DEVICE_PATTERNS = [
+  'usb audio codec',
+  'pcm2902',
+  'pcm2904',
+  'burrbrown from texas instruments',
+  'burr brown from texas instruments',
+  'burr brown from ti',
+];
+
+const GENERIC_USB_AUDIO_DEVICE_PATTERNS = [
+  'c media electronics inc usb audio device',
+  'c media usb audio device',
+  'usb audio device',
+];
 
 /**
  * Resolve manufacturer and model info from the Hamlib rigs list.
@@ -25,20 +38,44 @@ export function resolveRigInfo(
   return rig ? { mfgName: rig.mfgName, modelName: rig.modelName } : null;
 }
 
+function normalizeDeviceName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function getUsbAudioDeviceMatchScore(device: AudioDevice): number {
+  const normalizedName = normalizeDeviceName(device.name);
+  if (USB_AUDIO_DEVICE_PATTERNS.some((pattern) => normalizedName.includes(pattern))) {
+    return 2;
+  }
+  if (GENERIC_USB_AUDIO_DEVICE_PATTERNS.some((pattern) => normalizedName.includes(pattern))) {
+    return 1;
+  }
+  return 0;
+}
+
 /**
  * Find a USB audio device from the device list by matching known patterns.
- * Returns the first match (user can manually switch if multiple exist).
+ * More explicit USB codec/PCM matches win over generic USB Audio Device names.
  */
 export function matchUsbAudioDevice(
   devices: AudioDevice[],
 ): AudioDevice | null {
-  return (
-    devices.find((device) =>
-      USB_AUDIO_DEVICE_PATTERNS.some((pattern) =>
-        device.name.includes(pattern),
-      ),
-    ) ?? null
-  );
+  let bestMatch: AudioDevice | null = null;
+  let bestScore = 0;
+
+  for (const device of devices) {
+    const score = getUsbAudioDeviceMatchScore(device);
+    if (score > bestScore) {
+      bestMatch = device;
+      bestScore = score;
+    }
+  }
+
+  return bestMatch;
 }
 
 /**
