@@ -159,7 +159,7 @@ vi.mock('../../utils/logger.js', () => ({
   createLogger: () => mockLogger,
 }));
 
-import { AudioStreamManager } from '../AudioStreamManager.js';
+import { AudioStreamManager, getAudioRuntimeIssue, isRtAudioRuntimeLossMessage } from '../AudioStreamManager.js';
 import { AudioDeviceManager } from '../audio-device-manager.js';
 import { RingBuffer } from '../ringBuffer.js';
 
@@ -174,6 +174,17 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     mockRtAudioState.writes = [];
     mockRtAudioState.openCalls = [];
     mockRtAudioState.inputCallback = null;
+    mockRtAudioState.devices = [
+      {
+        id: 11,
+        name: 'USB Audio',
+        inputChannels: 1,
+        outputChannels: 1,
+        preferredSampleRate: 48000,
+        isDefaultInput: true,
+        isDefaultOutput: true,
+      },
+    ];
     mockResampleAudioProfessional.mockImplementation(async (samples: Float32Array) => samples);
     mockConfigManager.getAudioConfig.mockReturnValue({
       inputDeviceName: 'USB Audio',
@@ -460,6 +471,54 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
         suppressWindowMs: 5000,
       }),
     );
+  });
+
+  it('classifies CoreAudio disconnected callbacks as structured runtime loss', async () => {
+    mockRtAudioState.devices = [
+      {
+        id: 11,
+        name: 'C-Media Electronics Inc.: USB Audio Device',
+        inputChannels: 1,
+        outputChannels: 1,
+        preferredSampleRate: 48000,
+        isDefaultInput: true,
+        isDefaultOutput: true,
+      },
+    ];
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      inputDeviceName: 'C-Media Electronics Inc.: USB Audio Device',
+      outputDeviceName: 'C-Media Electronics Inc.: USB Audio Device',
+      inputSampleRate: 48000,
+      outputSampleRate: 48000,
+      inputBufferSize: 64,
+      outputBufferSize: 64,
+    });
+    const manager = new AudioStreamManager();
+    const runtimeErrors: Error[] = [];
+    manager.on('error', (error) => runtimeErrors.push(error));
+    await manager.startOutput();
+
+    const output = (manager as unknown as { rtAudioOutput: { emitRtAudioError: (type: number, message: string) => void } }).rtAudioOutput;
+    output.emitRtAudioError(5, 'RtApiCore: the stream device was disconnected (and closed)!');
+
+    const issue = getAudioRuntimeIssue(runtimeErrors[0]);
+    expect(issue).toMatchObject({
+      direction: 'output',
+      phase: 'runtime',
+      deviceName: 'C-Media Electronics Inc.: USB Audio Device',
+      sampleRate: 48000,
+      bufferSize: 64,
+      runtimeLoss: true,
+      type: 5,
+      framesConsumed: 0,
+    });
+    expect(issue?.elapsedSinceOpenMs).not.toBeNull();
+  });
+
+  it('keeps close-stream and Android underrun warnings out of runtime-loss classification', () => {
+    expect(isRtAudioRuntimeLossMessage('RtApiCore: the stream device was disconnected (and closed)!')).toBe(true);
+    expect(isRtAudioRuntimeLossMessage('RtApiWasapi::closeStream: No open stream to close.')).toBe(false);
+    expect(isRtAudioRuntimeLossMessage('RtApiAlsa::callbackEvent: audio write error, underrun.')).toBe(false);
   });
 
   it('treats Android bridge ALSA output underruns as non-fatal warnings', async () => {

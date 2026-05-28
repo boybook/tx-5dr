@@ -19,6 +19,8 @@ export async function profileRoutes(fastify: FastifyInstance) {
    * GET /profiles - 获取 Profile 列表
    */
   fastify.get('/', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+
     if (authManager.isAuthEnabled() && !req.authUser && !authManager.isPublicViewingAllowed()) {
       return reply.code(401).send({
         success: false,

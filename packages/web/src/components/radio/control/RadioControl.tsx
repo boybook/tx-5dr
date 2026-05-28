@@ -2,7 +2,7 @@ import * as React from 'react';
 import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner, Alert, Tabs, Tab, Tooltip, Card, CardBody} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faTowerBroadcast, faPowerOff, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faTowerBroadcast, faPowerOff, faCircleInfo, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState, useAudioSidecarState, useRadioState, useOperators } from '../../../store/radioStore';
 import type { AudioSidecarStatusPayload } from '@tx5dr/contracts';
 import { AudioSidecarStatus } from '@tx5dr/contracts';
@@ -237,15 +237,20 @@ const AudioSidecarIndicator: React.FC<{
   const { t, i18n } = useTranslation('radio');
   const isRetrying = sidecar.status === AudioSidecarStatus.RETRYING;
   const isDisabled = sidecar.status === AudioSidecarStatus.DISABLED;
+  const isConnecting = sidecar.status === AudioSidecarStatus.CONNECTING;
   const color: 'warning' | 'danger' = isDisabled ? 'danger' : 'warning';
-  const deviceLabel = sidecar.deviceName || t('audioSidecar.deviceUnknown');
+  const deviceLabel = sidecar.affectedDeviceName || sidecar.deviceName || t('audioSidecar.deviceUnknown');
+  const fallback = sidecar.fallback;
 
   const statusLabel = React.useMemo(() => {
     if (isDisabled) return t('audioSidecar.statusDisabled');
+    if (sidecar.classification === 'sample-rate-fallback') return t('audioSidecar.statusFallback');
+    if (sidecar.classification === 'sample-rate-fallback-failed') return t('audioSidecar.statusFallbackFailed');
+    if (sidecar.classification === 'runtime-loss') return t('audioSidecar.statusRuntimeLoss');
     if (sidecar.longRunning) return t('audioSidecar.statusRetryingLong');
     if (isRetrying) return t('audioSidecar.statusRetrying');
     return t('audioSidecar.statusConnecting');
-  }, [isDisabled, isRetrying, sidecar.longRunning, t]);
+  }, [isDisabled, isRetrying, sidecar.classification, sidecar.longRunning, t]);
 
   const retryLine = React.useMemo(() => {
     if (!isRetrying) return null;
@@ -266,6 +271,35 @@ const AudioSidecarIndicator: React.FC<{
     }
     return error.userMessage || error.message || null;
   }, [i18n, sidecar.lastError, t]);
+  const fallbackText = React.useMemo(() => {
+    if (!fallback) return null;
+    if (sidecar.classification === 'sample-rate-fallback-failed') {
+      return t('audioSidecar.fallbackFailedDetail', {
+        from: fallback.fromSampleRate ?? 48000,
+        to: fallback.toSampleRate ?? 44100,
+      });
+    }
+    if (fallback.active && fallback.fromSampleRate && fallback.toSampleRate) {
+      return fallback.persisted
+        ? t('audioSidecar.fallbackPersistedDetail', {
+            from: fallback.fromSampleRate,
+            to: fallback.toSampleRate,
+          })
+        : t('audioSidecar.fallbackDetail', {
+            from: fallback.fromSampleRate,
+            to: fallback.toSampleRate,
+          });
+    }
+    return null;
+  }, [fallback, sidecar.classification, t]);
+  const reasonText = React.useMemo(() => {
+    if (sidecar.retryReason) return sidecar.retryReason;
+    if (sidecar.classification === 'device-unavailable') return t('audioSidecar.reasonDeviceUnavailable');
+    if (sidecar.classification === 'runtime-loss') return t('audioSidecar.reasonRuntimeLoss');
+    if (sidecar.classification === 'sample-rate-fallback') return t('audioSidecar.reasonFallback');
+    if (sidecar.classification === 'sample-rate-fallback-failed') return t('audioSidecar.reasonFallbackFailed');
+    return null;
+  }, [sidecar.classification, sidecar.retryReason, t]);
   const stopPopoverPropagation = React.useCallback((event: React.SyntheticEvent) => {
     event.stopPropagation();
   }, []);
@@ -282,7 +316,11 @@ const AudioSidecarIndicator: React.FC<{
           onPointerDown={(e) => e.stopPropagation()}
           className="flex items-center justify-center -ml-1 h-5 w-5 rounded-full hover:bg-default-200"
         >
-          <Spinner size="sm" color={color} />
+          {isConnecting ? (
+            <Spinner size="sm" color={color} />
+          ) : (
+            <FontAwesomeIcon icon={faTriangleExclamation} className={color === 'danger' ? 'text-danger text-xs' : 'text-warning text-xs'} />
+          )}
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -297,6 +335,15 @@ const AudioSidecarIndicator: React.FC<{
         <div className="text-xs text-default-600">
           {statusLabel} · {deviceLabel}
         </div>
+        {typeof sidecar.sampleRate === 'number' && (
+          <div className="text-xs text-default-500">{t('audioSidecar.sampleRateLine', { rate: sidecar.sampleRate })}</div>
+        )}
+        {fallbackText && (
+          <div className="text-xs text-warning-600">{fallbackText}</div>
+        )}
+        {reasonText && (
+          <div className="text-xs text-default-500 break-words">{reasonText}</div>
+        )}
         {retryLine && (
           <div className="text-xs text-default-500">{retryLine}</div>
         )}
@@ -315,7 +362,7 @@ const AudioSidecarIndicator: React.FC<{
               className="h-6 px-2 text-xs"
               onPress={() => radioService.retryAudioNow()}
             >
-              {t('audioSidecar.retryNow')}
+              {t('audioSidecar.retryAudioNow')}
             </Button>
           </div>
         )}

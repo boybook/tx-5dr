@@ -3,14 +3,36 @@ import { EventEmitter } from 'eventemitter3';
 import { AudioSidecarStatus } from '@tx5dr/contracts';
 
 import { AudioSidecarController } from '../AudioSidecarController.js';
+import { AudioRuntimeIssueError, type RtAudioRuntimeIssue } from '../../audio/AudioStreamManager.js';
 import { RadioError, RadioErrorCode } from '../../utils/errors/RadioError.js';
 import { ConfigManager } from '../../config/config-manager.js';
+
+const mockAudioDeviceManager = vi.hoisted(() => ({
+  getOutputDeviceByName: vi.fn(),
+}));
+
+const mockProfileManager = vi.hoisted(() => ({
+  updateActiveProfileAudioConfig: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../audio/audio-device-manager.js', () => ({
+  AudioDeviceManager: {
+    getInstance: () => mockAudioDeviceManager,
+  },
+}));
+
+vi.mock('../../config/ProfileManager.js', () => ({
+  ProfileManager: {
+    getInstance: () => mockProfileManager,
+  },
+}));
 
 class FakeAudioStreamManager extends EventEmitter {
   startStream = vi.fn().mockResolvedValue(undefined);
   stopStream = vi.fn().mockResolvedValue(undefined);
   startOutput = vi.fn().mockResolvedValue(undefined);
   stopOutput = vi.fn().mockResolvedValue(undefined);
+  applyRuntimeAudioSampleRateOverride = vi.fn();
   getAudioProvider = vi.fn().mockReturnValue({
     getSampleRate: () => 12000,
     getAvailableMs: () => 0,
@@ -46,12 +68,49 @@ function temporaryDeviceNotFound(): RadioError {
   });
 }
 
+function coreAudioRuntimeLoss(sampleRate = 48000, type = 1): AudioRuntimeIssueError {
+  const issue: RtAudioRuntimeIssue = {
+    phase: 'runtime',
+    direction: 'output',
+    deviceName: 'C-Media Electronics Inc.: USB Audio Device',
+    backend: 'CoreAudio',
+    message: `RtAudio output runtime error (${type}): RtApiCore: the stream device was disconnected (and closed)!`,
+    sampleRate,
+    bufferSize: 1024,
+    elapsedSinceOpenMs: 1500,
+    framesConsumed: 0,
+    fatal: true,
+    runtimeLoss: true,
+    type,
+    typeName: type === 1 ? 'DEBUG_WARNING' : `UNKNOWN_${type}`,
+    at: Date.now(),
+  };
+  return new AudioRuntimeIssueError(issue);
+}
+
+let configManagerMock: any;
+
 describe('AudioSidecarController', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
-      getAudioConfig: () => ({ inputDeviceName: 'usb-codec' }),
-    } as any);
+    vi.clearAllMocks();
+    configManagerMock = {
+      getAudioConfig: vi.fn(() => ({
+        inputDeviceName: 'C-Media Electronics Inc.: USB Audio Device',
+        outputDeviceName: 'C-Media Electronics Inc.: USB Audio Device',
+        inputSampleRate: 48000,
+        outputSampleRate: 48000,
+      })),
+      getRadioConfig: vi.fn(() => ({ type: 'serial', serial: { rigModel: 1049 } })),
+      getActiveProfileId: vi.fn(() => 'profile-ft710'),
+      updateAudioConfig: vi.fn().mockResolvedValue(undefined),
+    };
+    mockAudioDeviceManager.getOutputDeviceByName.mockResolvedValue({
+      name: 'C-Media Electronics Inc.: USB Audio Device',
+      availability: 'available',
+    });
+    mockProfileManager.updateActiveProfileAudioConfig.mockResolvedValue(undefined);
+    vi.spyOn(ConfigManager, 'getInstance').mockReturnValue(configManagerMock);
   });
 
   afterEach(() => {
@@ -233,5 +292,126 @@ describe('AudioSidecarController', () => {
 
     expect(sidecar.isConnected()).toBe(true);
     expect(audioStreamManager.getAudioProvider).not.toHaveBeenCalled();
+  });
+
+  it('applies 44.1 kHz runtime fallback for early FT-710/CoreAudio 48 kHz loss and persists after stable reconnect', async () => {
+    const { engineEmitter, audioStreamManager, audioVolumeController } = makeDeps();
+    const payloads: any[] = [];
+    engineEmitter.on('audioSidecarStatusChanged', (payload: any) => payloads.push(payload));
+
+    const sidecar = new AudioSidecarController({
+      engineEmitter: engineEmitter as any,
+      audioStreamManager: audioStreamManager as any,
+      audioVolumeController: audioVolumeController as any,
+    });
+
+    await sidecar.start();
+    await flushAsync();
+    expect(sidecar.isConnected()).toBe(true);
+
+    audioStreamManager.emit('error', coreAudioRuntimeLoss(48000, 5));
+    await flushAsync();
+
+    expect(audioStreamManager.applyRuntimeAudioSampleRateOverride).toHaveBeenCalledWith({
+      inputSampleRate: 44100,
+      outputSampleRate: 44100,
+      reason: 'early-rtaudio-runtime-loss',
+    });
+    expect(sidecar.buildStatusPayload()).toMatchObject({
+      status: AudioSidecarStatus.RETRYING,
+      classification: 'sample-rate-fallback',
+      sampleRate: 44100,
+      fallback: {
+        active: true,
+        fromSampleRate: 48000,
+        toSampleRate: 44100,
+        persisted: false,
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    await flushAsync();
+    expect(sidecar.isConnected()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushAsync();
+
+    expect(mockProfileManager.updateActiveProfileAudioConfig).toHaveBeenCalledWith({
+      inputSampleRate: 44100,
+      outputSampleRate: 44100,
+    });
+    expect(payloads.at(-1)?.fallback?.persisted).toBe(true);
+  });
+
+  it('does not reset retry attempt during reconnect storms before stable connection', async () => {
+    const { engineEmitter, audioStreamManager, audioVolumeController } = makeDeps();
+    const sidecar = new AudioSidecarController({
+      engineEmitter: engineEmitter as any,
+      audioStreamManager: audioStreamManager as any,
+      audioVolumeController: audioVolumeController as any,
+    });
+
+    await sidecar.start();
+    await flushAsync();
+
+    audioStreamManager.emit('error', coreAudioRuntimeLoss(48000));
+    await flushAsync();
+    expect(sidecar.buildStatusPayload().retryAttempt).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    await flushAsync();
+    expect(sidecar.isConnected()).toBe(true);
+
+    audioStreamManager.emit('error', coreAudioRuntimeLoss(44100));
+    await flushAsync();
+    expect(sidecar.buildStatusPayload()).toMatchObject({
+      status: AudioSidecarStatus.RETRYING,
+      retryAttempt: 2,
+      classification: 'sample-rate-fallback-failed',
+    });
+  });
+
+  it('does not apply sample-rate fallback for runtime loss after a stable connection', async () => {
+    const { engineEmitter, audioStreamManager, audioVolumeController } = makeDeps();
+    const sidecar = new AudioSidecarController({
+      engineEmitter: engineEmitter as any,
+      audioStreamManager: audioStreamManager as any,
+      audioVolumeController: audioVolumeController as any,
+    });
+
+    await sidecar.start();
+    await flushAsync();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushAsync();
+
+    audioStreamManager.emit('error', coreAudioRuntimeLoss(48000));
+    await flushAsync();
+
+    expect(audioStreamManager.applyRuntimeAudioSampleRateOverride).not.toHaveBeenCalled();
+    expect(sidecar.buildStatusPayload()).toMatchObject({
+      status: AudioSidecarStatus.RETRYING,
+      retryAttempt: 1,
+      classification: 'runtime-loss',
+    });
+  });
+
+  it('keeps failure history when manual retry is requested', async () => {
+    const { engineEmitter, audioStreamManager, audioVolumeController } = makeDeps();
+    const sidecar = new AudioSidecarController({
+      engineEmitter: engineEmitter as any,
+      audioStreamManager: audioStreamManager as any,
+      audioVolumeController: audioVolumeController as any,
+    });
+
+    audioStreamManager.startStream.mockRejectedValueOnce(temporaryDeviceNotFound());
+    await sidecar.start();
+    await flushAsync();
+    expect(sidecar.buildStatusPayload().retryAttempt).toBe(1);
+
+    await sidecar.retryNow();
+    await flushAsync();
+
+    expect(audioStreamManager.startStream).toHaveBeenCalledTimes(2);
+    expect(sidecar.buildStatusPayload().retryAttempt).toBe(1);
   });
 });

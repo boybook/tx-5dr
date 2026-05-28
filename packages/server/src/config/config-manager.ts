@@ -892,12 +892,19 @@ export class ConfigManager {
    * 更新音频配置（写入 activeProfile）
    */
   async updateAudioConfig(audioConfig: Partial<AudioDeviceSettings>): Promise<void> {
-    const profile = this.getActiveProfile();
-    if (profile) {
-      profile.audio = normalizeAudioDeviceSettings({ ...profile.audio, ...audioConfig });
-      profile.updatedAt = Date.now();
-      await this.saveConfig();
-    }
+    const activeProfileId = this.config.activeProfileId;
+    if (!activeProfileId) return;
+
+    const index = this.config.profiles.findIndex(profile => profile.id === activeProfileId);
+    if (index === -1) return;
+
+    const profile = this.config.profiles[index];
+    this.config.profiles[index] = {
+      ...profile,
+      audio: normalizeAudioDeviceSettings({ ...profile.audio, ...audioConfig }),
+      updatedAt: Date.now(),
+    };
+    await this.saveConfig();
   }
 
   /**

@@ -22,6 +22,15 @@ const { state, mockConfigManager, mockEngine, mockReloadAudioConfig } = vi.hoist
       } as RadioProfile;
       return testState.profiles[index];
     }),
+    updateAudioConfig: vi.fn(async (audioConfig: Partial<NonNullable<RadioProfile['audio']>>) => {
+      const profile = testState.profiles.find((item) => item.id === testState.activeProfileId);
+      if (!profile) return;
+      profile.audio = {
+        ...profile.audio,
+        ...audioConfig,
+      } as RadioProfile['audio'];
+      profile.updatedAt = Date.now();
+    }),
     setActiveProfileId: vi.fn(async (id: string | null) => {
       testState.activeProfileId = id;
     }),
@@ -191,6 +200,29 @@ describe('ProfileManager audio runtime config application', () => {
       outputDeviceName: 'IC-705',
       outputSampleFormat: 'int16',
       outputChannelMode: 'both',
+    });
+    expect(mockReloadAudioConfig).not.toHaveBeenCalled();
+  });
+
+  it('broadcasts Profile list updates after active Profile audio config changes', async () => {
+    const manager = ProfileManager.getInstance();
+
+    await manager.updateActiveProfileAudioConfig({
+      inputSampleRate: 44100,
+      outputSampleRate: 44100,
+    });
+
+    expect(mockConfigManager.updateAudioConfig).toHaveBeenCalledWith({
+      inputSampleRate: 44100,
+      outputSampleRate: 44100,
+    });
+    expect(state.profiles[0]?.audio).toMatchObject({
+      inputSampleRate: 44100,
+      outputSampleRate: 44100,
+    });
+    expect(mockEngine.emit).toHaveBeenCalledWith('profileListUpdated', {
+      profiles: state.profiles,
+      activeProfileId: 'profile-1',
     });
     expect(mockReloadAudioConfig).not.toHaveBeenCalled();
   });

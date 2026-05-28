@@ -99,6 +99,19 @@ export class ProfileManager {
   }
 
   /**
+   * 更新当前激活 Profile 的音频配置。
+   *
+   * 运行时自动修正、音频设置页和 radio 联动逻辑都应走这里，而不是直接调用
+   * ConfigManager.updateAudioConfig()，确保持久化后统一刷新前端 Profile store。
+   */
+  async updateActiveProfileAudioConfig(audioConfig: Partial<AudioDeviceSettings>): Promise<void> {
+    const configManager = ConfigManager.getInstance();
+    await configManager.updateAudioConfig(audioConfig);
+    logger.info('Active Profile audio config updated');
+    this.broadcastProfileListUpdated();
+  }
+
+  /**
    * 删除 Profile
    */
   async deleteProfile(id: string): Promise<void> {

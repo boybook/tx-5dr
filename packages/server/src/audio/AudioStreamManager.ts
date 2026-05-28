@@ -105,6 +105,68 @@ interface RtAudioIssueLogState {
   suppressedCount: number;
 }
 
+export type RtAudioRuntimeIssueDirection = 'input' | 'output';
+export type RtAudioRuntimeIssuePhase = 'start' | 'runtime';
+
+export interface RtAudioRuntimeIssue {
+  phase: RtAudioRuntimeIssuePhase;
+  direction: RtAudioRuntimeIssueDirection;
+  deviceName: string | null;
+  backend?: string;
+  message: string;
+  sampleRate: number;
+  bufferSize: number;
+  elapsedSinceOpenMs: number | null;
+  framesConsumed: number;
+  fatal: boolean;
+  runtimeLoss: boolean;
+  type?: number;
+  typeName?: string;
+  at: number;
+}
+
+export class AudioRuntimeIssueError extends Error {
+  constructor(public readonly audioIssue: RtAudioRuntimeIssue) {
+    super(audioIssue.message);
+    this.name = 'AudioRuntimeIssueError';
+  }
+}
+
+export function getAudioRuntimeIssue(error: unknown): RtAudioRuntimeIssue | null {
+  if (error instanceof AudioRuntimeIssueError) {
+    return error.audioIssue;
+  }
+  const maybeIssue = (error as { audioIssue?: unknown } | null)?.audioIssue;
+  if (!maybeIssue || typeof maybeIssue !== 'object') {
+    return null;
+  }
+  return maybeIssue as RtAudioRuntimeIssue;
+}
+
+export function isRtAudioRuntimeLossMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  if (normalized.includes('no open stream to close')) {
+    return false;
+  }
+
+  if (normalized.includes('underrun')) {
+    return false;
+  }
+
+  if (
+    normalized.includes('stream device was disconnected')
+    || (normalized.includes('stream device') && normalized.includes('closed'))
+    || normalized.includes('device was disconnected')
+  ) {
+    return true;
+  }
+
+  return normalized.includes('no such device')
+    || normalized.includes('audio write error')
+    || normalized.includes('device unavailable')
+    || normalized.includes('invalid device');
+}
+
 export interface PlayAudioOptions {
   /**
    * Mirrors the audio chunks written to the TX output into the monitor broadcast
@@ -191,6 +253,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private outputFramesConsumed = 0;
   private outputFirstFrameConsumedAt: number | null = null;
   private outputLastFrameConsumedAt: number | null = null;
+  private outputStreamOpenedAt: number | null = null;
   private outputRtAudioErrors: RtAudioIssue[] = [];
   private outputRtAudioIssueLogState = new Map<string, RtAudioIssueLogState>();
   private outputRuntimeLossEmitted = false;
@@ -590,6 +653,37 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private getOutputChannelCount(mode: OutputChannelMode): number {
     return mode === 'mono' ? 1 : 2;
   }
+
+  applyRuntimeAudioSampleRateOverride(update: {
+    inputSampleRate?: number;
+    outputSampleRate?: number;
+    reason: string;
+  }): void {
+    const nextInputSampleRate = this.normalizeRuntimeSampleRate(update.inputSampleRate, this.inputSampleRate);
+    const nextOutputSampleRate = this.normalizeRuntimeSampleRate(update.outputSampleRate, this.outputSampleRate);
+    const previous = {
+      inputSampleRate: this.inputSampleRate,
+      outputSampleRate: this.outputSampleRate,
+    };
+    this.inputSampleRate = nextInputSampleRate;
+    this.outputSampleRate = nextOutputSampleRate;
+    this.currentSampleRate = this.outputSampleRate;
+    logger.warn('runtime audio sample rate override applied', {
+      reason: update.reason,
+      previous,
+      next: {
+        inputSampleRate: this.inputSampleRate,
+        outputSampleRate: this.outputSampleRate,
+      },
+    });
+  }
+
+  private normalizeRuntimeSampleRate(value: number | undefined, fallback: number): number {
+    const rounded = Math.round(Number(value));
+    return Number.isFinite(rounded) && rounded >= 8000 && rounded <= 192000
+      ? rounded
+      : fallback;
+  }
   
   /**
    * 获取流状态
@@ -920,6 +1014,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.isOutputting = false;
       this.outputDeviceId = null;
       this.activeOutputDeviceName = null;
+      this.outputStreamOpenedAt = null;
       this.outputRuntimeLossEmitted = false;
       this.outputRtAudioIssueLogState.clear();
 
@@ -1065,6 +1160,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     }
 
     this.resetOutputConsumeDiagnostics();
+    this.outputStreamOpenedAt = Date.now();
 
     this.rtAudioOutput.openStream(
       { deviceId: outputDeviceId, nChannels: this.outputChannels, firstChannel: 0 },
@@ -1187,11 +1283,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
   private recordOutputRtAudioIssue(type: number, message: string): void {
     const runtimeLoss = this.isOutputRtAudioRuntimeLoss(type, message);
+    const at = Date.now();
     const issue = {
       type,
       typeName: this.describeRtAudioErrorType(type),
       message,
-      at: Date.now(),
+      at,
       fatal: runtimeLoss || this.isFatalRtAudioErrorType(type),
     };
     this.outputRtAudioErrors.push(issue);
@@ -1213,8 +1310,35 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.outputRuntimeLossEmitted = true;
     }
 
-    logger.error('RtAudio output runtime error', issue);
-    this.emit('error', new Error(`RtAudio output runtime error (${type}): ${message}`));
+    const runtimeIssue = this.buildOutputRtAudioRuntimeIssue(issue, runtimeLoss);
+    logger.error('RtAudio output runtime error', {
+      ...issue,
+      audioIssue: runtimeIssue,
+    });
+    this.emit('error', new AudioRuntimeIssueError(runtimeIssue));
+  }
+
+  private buildOutputRtAudioRuntimeIssue(issue: RtAudioIssue, runtimeLoss: boolean): RtAudioRuntimeIssue {
+    const backend = this.getOutputBackendSnapshot();
+    const deviceName = this.activeOutputDeviceName
+      ?? ConfigManager.getInstance().getAudioConfig().outputDeviceName
+      ?? null;
+    return {
+      phase: 'runtime',
+      direction: 'output',
+      deviceName,
+      backend: backend.api,
+      message: `RtAudio output runtime error (${issue.type}): ${issue.message}`,
+      sampleRate: this.outputSampleRate,
+      bufferSize: this.outputBufferSize,
+      elapsedSinceOpenMs: this.outputStreamOpenedAt !== null ? Math.max(0, issue.at - this.outputStreamOpenedAt) : null,
+      framesConsumed: this.outputFramesConsumed,
+      fatal: issue.fatal,
+      runtimeLoss,
+      type: issue.type,
+      typeName: issue.typeName,
+      at: issue.at,
+    };
   }
 
   private logOutputRtAudioIssueRateLimited(message: string, issue: RtAudioIssue, logFirst = true): void {
@@ -1249,23 +1373,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   }
 
   private isOutputRtAudioRuntimeLoss(type: number, message: string): boolean {
-    if (this.isFatalRtAudioErrorType(type)) {
-      return false;
-    }
-
     const normalized = message.toLowerCase();
-    if (normalized.includes('no open stream to close')) {
-      return false;
-    }
-
     if (this.isAndroidBridgeAlsaOutputUnderrun(normalized)) {
       return false;
     }
-
-    return normalized.includes('no such device')
-      || normalized.includes('audio write error')
-      || normalized.includes('device unavailable')
-      || normalized.includes('invalid device');
+    return isRtAudioRuntimeLossMessage(message);
   }
 
   private isAndroidBridgeAlsaOutputUnderrun(normalizedMessage: string): boolean {

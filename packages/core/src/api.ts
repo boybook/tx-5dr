@@ -1705,7 +1705,14 @@ export const api = {
   // ========== Profile 管理 API ==========
 
   async getProfiles(apiBase?: string): Promise<ProfileListResponse> {
-    return apiRequest<ProfileListResponse>('/profiles', undefined, apiBase);
+    return apiRequest<ProfileListResponse>(
+      '/profiles',
+      {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+      },
+      apiBase,
+    );
   },
 
   async createProfile(data: CreateProfileRequest, apiBase?: string): Promise<ProfileActionResponse> {

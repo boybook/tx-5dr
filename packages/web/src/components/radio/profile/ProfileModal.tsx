@@ -22,7 +22,7 @@ import { api } from '@tx5dr/core';
 import type { RadioProfile, HamlibConfig, AudioDeviceSettings as AudioDeviceSettingsType, SupportedRig } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { useHasMinRole } from '../../../store/authStore';
-import { useProfiles, useRadioConnectionState } from '../../../store/radioStore';
+import { useProfiles, useRadioConnectionState, useRadioState } from '../../../store/radioStore';
 import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceSettings';
 import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
 import { PowerControlButton } from './PowerControlButton';
@@ -55,6 +55,7 @@ function isRedactedProfile(profile: RadioProfile): boolean {
 export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   const { t } = useTranslation('radio');
   const { profiles, activeProfileId } = useProfiles();
+  const { dispatch: radioDispatch } = useRadioState();
   const radioConnection = useRadioConnectionState();
   const canManageProfiles = useHasMinRole(UserRole.ADMIN);
   const [mode, setMode] = useState<ModalMode>('list');
@@ -92,6 +93,40 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   useEffect(() => {
     setLocalProfiles(profiles);
   }, [profiles]);
+
+  // 打开 Profile 管理时主动从后端刷新，避免只依赖握手或 WebSocket 事件缓存。
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+
+    void api.getProfiles()
+      .then((response) => {
+        if (cancelled) return;
+        radioDispatch({
+          type: 'setProfiles',
+          payload: {
+            profiles: response.profiles,
+            activeProfileId: response.activeProfileId,
+          },
+        });
+      })
+      .catch(() => {
+        // 保持现有缓存可用；显式错误仍由保存/切换操作反馈。
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, radioDispatch]);
+
+  // 如果运行时 fallback 在编辑页打开期间写回 Profile，且用户尚未手动改音频，
+  // 同步最新后端音频配置到表单，避免继续显示旧的 48 kHz。
+  useEffect(() => {
+    if (mode !== 'edit' || !editingProfileId || userManuallyChangedAudioRef.current) return;
+    const latestProfile = profiles.find(profile => profile.id === editingProfileId);
+    if (!latestProfile || isRedactedProfile(latestProfile)) return;
+    setEditAudioConfig(latestProfile.audio);
+  }, [profiles, mode, editingProfileId]);
 
   // 重置到列表模式
   useEffect(() => {

@@ -8,6 +8,7 @@ import {
 } from '@tx5dr/contracts';
 import { AudioDeviceManager } from '../audio/audio-device-manager.js';
 import { ConfigManager } from '../config/config-manager.js';
+import { ProfileManager } from '../config/ProfileManager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
@@ -19,6 +20,7 @@ import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 export async function audioRoutes(fastify: FastifyInstance) {
   const audioManager = AudioDeviceManager.getInstance();
   const configManager = ConfigManager.getInstance();
+  const profileManager = ProfileManager.getInstance();
   const digitalRadioEngine = DigitalRadioEngine.getInstance();
 
   // 获取所有音频设备
@@ -92,7 +94,7 @@ export async function audioRoutes(fastify: FastifyInstance) {
       }
 
       // 更新配置（只存储设备名称）
-      await configManager.updateAudioConfig(settings);
+      await profileManager.updateActiveProfileAudioConfig(settings);
       digitalRadioEngine.getAudioStreamManager().reloadAudioConfig();
       fastify.log.info({ settings }, 'Audio device config updated');
 
@@ -134,7 +136,7 @@ export async function audioRoutes(fastify: FastifyInstance) {
         await digitalRadioEngine.stop();
       }
 
-      await configManager.updateAudioConfig({
+      await profileManager.updateActiveProfileAudioConfig({
         inputDeviceName: undefined,
         outputDeviceName: undefined,
         inputSampleRate: 48000,

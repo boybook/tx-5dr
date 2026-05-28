@@ -5,9 +5,11 @@ import {
   type AudioSidecarStatusPayload,
   type DigitalRadioEngineEvents,
 } from '@tx5dr/contracts';
-import { AudioStreamManager } from '../audio/AudioStreamManager.js';
+import { AudioDeviceManager } from '../audio/audio-device-manager.js';
+import { AudioStreamManager, getAudioRuntimeIssue, type RtAudioRuntimeIssue } from '../audio/AudioStreamManager.js';
 import type { AudioVolumeController } from './AudioVolumeController.js';
 import { ConfigManager } from '../config/config-manager.js';
+import { ProfileManager } from '../config/ProfileManager.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -16,6 +18,29 @@ const logger = createLogger('AudioSidecar');
 const RETRY_DELAYS_MS = [2000, 4000, 8000, 16000, 30000];
 const STEADY_RETRY_MS = 30000;
 const LONG_RUNNING_THRESHOLD = 10;
+const EARLY_RUNTIME_LOSS_MS = 5000;
+const STABLE_CONNECTION_MS = 10000;
+const YAESU_FALLBACK_SAMPLE_RATE = 44100;
+const DEFAULT_SAMPLE_RATE = 48000;
+
+type AudioSidecarPhase = 'startStream' | 'startOutput' | 'runtime';
+type AudioSidecarClassification =
+  | 'startup-failure'
+  | 'runtime-loss'
+  | 'sample-rate-fallback'
+  | 'sample-rate-fallback-failed'
+  | 'device-unavailable'
+  | 'disabled';
+
+interface RuntimeFallbackState {
+  active: boolean;
+  fromSampleRate: number | null;
+  toSampleRate: number | null;
+  persisted?: boolean;
+  reason?: string;
+  profileId?: string | null;
+  deviceName?: string | null;
+}
 
 export interface AudioSidecarDeps {
   engineEmitter: EventEmitter<DigitalRadioEngineEvents>;
@@ -43,6 +68,16 @@ export class AudioSidecarController {
   private retryTimer: NodeJS.Timeout | null = null;
   private lastError: AudioSidecarError | null = null;
   private deviceName: string | null = null;
+  private phase: AudioSidecarPhase | undefined;
+  private classification: AudioSidecarClassification | undefined;
+  private affectedDeviceName: string | null = null;
+  private sampleRate: number | null = null;
+  private retryReason: string | undefined;
+  private runtimeFallback: RuntimeFallbackState | null = null;
+  private attemptedFallbackKeys = new Set<string>();
+  private connectedAt: number | null = null;
+  private stableConnectionTimer: NodeJS.Timeout | null = null;
+  private nextRetryDelayMs: number | null = null;
 
   private pendingAttempt = 0;
   private audioStreamErrorHandler: ((error: Error) => void) | null = null;
@@ -65,6 +100,14 @@ export class AudioSidecarController {
     this.isStopping = false;
     this.retryAttempt = 0;
     this.lastError = null;
+    this.phase = undefined;
+    this.classification = undefined;
+    this.affectedDeviceName = null;
+    this.sampleRate = null;
+    this.retryReason = undefined;
+    this.runtimeFallback = null;
+    this.connectedAt = null;
+    this.clearStableConnectionTimer();
     this.setStatus(AudioSidecarStatus.CONNECTING);
     void this.attemptStart();
   }
@@ -84,6 +127,15 @@ export class AudioSidecarController {
     this.retryAttempt = 0;
     this.lastError = null;
     this.deviceName = null;
+    this.phase = undefined;
+    this.classification = undefined;
+    this.affectedDeviceName = null;
+    this.sampleRate = null;
+    this.retryReason = undefined;
+    this.runtimeFallback = null;
+    this.connectedAt = null;
+    this.nextRetryDelayMs = null;
+    this.clearStableConnectionTimer();
     this.setStatus(AudioSidecarStatus.IDLE);
     this.isStopping = false;
   }
@@ -102,6 +154,7 @@ export class AudioSidecarController {
     }
     logger.info('manual audio retry requested');
     this.clearRetryTimer();
+    this.nextRetryDelayMs = null;
     this.setStatus(AudioSidecarStatus.CONNECTING);
     void this.attemptStart();
   }
@@ -119,10 +172,24 @@ export class AudioSidecarController {
       status: this.status,
       isConnected: this.status === AudioSidecarStatus.CONNECTED,
       retryAttempt: this.retryAttempt,
-      nextRetryMs: this.status === AudioSidecarStatus.RETRYING ? this.peekNextDelay(this.retryAttempt) : null,
+      nextRetryMs: this.status === AudioSidecarStatus.RETRYING ? this.nextRetryDelayMs ?? this.peekNextDelay(this.retryAttempt) : null,
       longRunning: this.retryAttempt >= LONG_RUNNING_THRESHOLD,
       lastError: this.lastError,
       deviceName: this.deviceName,
+      phase: this.phase,
+      classification: this.classification,
+      affectedDeviceName: this.affectedDeviceName,
+      sampleRate: this.sampleRate,
+      fallback: this.runtimeFallback
+        ? {
+            active: this.runtimeFallback.active,
+            fromSampleRate: this.runtimeFallback.fromSampleRate,
+            toSampleRate: this.runtimeFallback.toSampleRate,
+            persisted: this.runtimeFallback.persisted,
+            reason: this.runtimeFallback.reason,
+          }
+        : undefined,
+      retryReason: this.retryReason,
     };
   }
 
@@ -130,22 +197,25 @@ export class AudioSidecarController {
 
   private async attemptStart(): Promise<void> {
     const attemptId = ++this.pendingAttempt;
-    this.deviceName = ConfigManager.getInstance().getAudioConfig().inputDeviceName || null;
+    const audioConfig = ConfigManager.getInstance().getAudioConfig();
+    this.deviceName = audioConfig.inputDeviceName || audioConfig.outputDeviceName || null;
+    this.phase = 'startStream';
 
     try {
       await this.deps.audioStreamManager.startStream();
     } catch (error) {
       if (attemptId !== this.pendingAttempt || this.isStopping) return;
-      this.handleFailure(error, 'startStream');
+      await this.handleFailure(error, 'startStream');
       return;
     }
 
+    this.phase = 'startOutput';
     try {
       await this.deps.audioStreamManager.startOutput();
     } catch (error) {
       if (attemptId !== this.pendingAttempt || this.isStopping) return;
       await this.safeStopInput();
-      this.handleFailure(error, 'startOutput');
+      await this.handleFailure(error, 'startOutput');
       return;
     }
 
@@ -157,35 +227,57 @@ export class AudioSidecarController {
     this.attachAudioStreamErrorListener();
     this.deps.audioVolumeController.restoreGainForCurrentSlot();
 
-    this.retryAttempt = 0;
     this.lastError = null;
+    this.connectedAt = Date.now();
+    this.retryReason = undefined;
+    this.phase = undefined;
     this.setStatus(AudioSidecarStatus.CONNECTED);
+    this.scheduleStableConnectionCheckpoint();
     logger.info('audio sidecar connected', { deviceName: this.deviceName });
   }
 
-  private handleFailure(error: unknown, phase: 'startStream' | 'startOutput'): void {
+  private async handleFailure(error: unknown, phase: 'startStream' | 'startOutput' | 'runtime'): Promise<void> {
     const summary = this.summarizeError(error);
     this.lastError = summary;
+    const runtimeIssue = getAudioRuntimeIssue(error);
+    this.phase = phase === 'runtime' ? 'runtime' : phase;
+    this.affectedDeviceName = this.resolveAffectedDeviceName(phase, runtimeIssue);
+    this.sampleRate = runtimeIssue?.sampleRate ?? this.resolveConfiguredSampleRate(phase);
+    this.retryReason = summary.userMessage ?? summary.message;
 
     if (this.isUnrecoverable(error)) {
+      this.classification = 'disabled';
       logger.error(`audio ${phase} failed with unrecoverable error`, { error: summary });
       this.setStatus(AudioSidecarStatus.DISABLED);
       return;
     }
 
-    const attempt = this.retryAttempt + 1;
-    this.retryAttempt = attempt;
-    const delayMs = this.peekNextDelay(attempt - 1);
-    logger.warn(`audio ${phase} failed, scheduling retry`, { attempt, delayMs, error: summary.message });
+    await this.maybeApplySampleRateFallback(error, phase, runtimeIssue);
+    const attempt = this.recordRecoverableFailure();
+    const delayMs = this.withJitter(this.peekNextDelay(attempt - 1));
+    this.nextRetryDelayMs = delayMs;
+    logger.warn(`audio ${phase} failed, scheduling retry`, {
+      attempt,
+      delayMs,
+      error: summary.message,
+      classification: this.classification,
+      affectedDeviceName: this.affectedDeviceName,
+      sampleRate: this.sampleRate,
+      fallback: this.runtimeFallback,
+    });
 
     this.setStatus(AudioSidecarStatus.RETRYING);
     this.scheduleRetry(delayMs);
   }
 
   private scheduleRetry(delayMs: number): void {
-    this.clearRetryTimer();
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
+      this.nextRetryDelayMs = null;
       if (this.isStopping) return;
       this.setStatus(AudioSidecarStatus.CONNECTING);
       void this.attemptStart();
@@ -197,6 +289,7 @@ export class AudioSidecarController {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
+    this.nextRetryDelayMs = null;
   }
 
   private peekNextDelay(attemptsSoFar: number): number {
@@ -205,6 +298,11 @@ export class AudioSidecarController {
       return STEADY_RETRY_MS;
     }
     return RETRY_DELAYS_MS[idx] ?? STEADY_RETRY_MS;
+  }
+
+  private withJitter(delayMs: number): number {
+    const jitter = Math.round(delayMs * 0.2 * Math.random());
+    return delayMs + jitter;
   }
 
   private async teardownAudio(): Promise<void> {
@@ -240,7 +338,7 @@ export class AudioSidecarController {
       }
       logger.warn('audio stream error while connected, triggering re-retry', { message: error.message });
       this.lastError = this.summarizeError(error);
-      void this.handleRuntimeLoss();
+      void this.handleRuntimeLoss(error);
     };
     this.audioStreamErrorHandler = handler;
     this.deps.audioStreamManager.on('error', handler);
@@ -252,17 +350,224 @@ export class AudioSidecarController {
     this.audioStreamErrorHandler = null;
   }
 
-  private async handleRuntimeLoss(): Promise<void> {
+  private async handleRuntimeLoss(error: Error): Promise<void> {
     if (this.isStopping) return;
     this.isHandlingRuntimeLoss = true;
-    this.retryAttempt = 1;
-    this.setStatus(AudioSidecarStatus.RETRYING);
     try {
+      if (this.connectedAt && Date.now() - this.connectedAt >= STABLE_CONNECTION_MS) {
+        this.resetRetryState();
+      }
+      this.clearStableConnectionTimer();
       await this.teardownAudio();
       if (this.isStopping) return;
-      this.scheduleRetry(this.peekNextDelay(0));
+      await this.handleFailure(error, 'runtime');
     } finally {
       this.isHandlingRuntimeLoss = false;
+    }
+  }
+
+  private resolveAffectedDeviceName(phase: 'startStream' | 'startOutput' | 'runtime', issue: RtAudioRuntimeIssue | null): string | null {
+    if (issue?.deviceName) return issue.deviceName;
+    const audioConfig = ConfigManager.getInstance().getAudioConfig();
+    if (phase === 'startOutput' || issue?.direction === 'output') {
+      return audioConfig.outputDeviceName ?? null;
+    }
+    if (phase === 'startStream' || issue?.direction === 'input') {
+      return audioConfig.inputDeviceName ?? null;
+    }
+    return audioConfig.outputDeviceName ?? audioConfig.inputDeviceName ?? null;
+  }
+
+  private resolveConfiguredSampleRate(phase: 'startStream' | 'startOutput' | 'runtime'): number | null {
+    const audioConfig = ConfigManager.getInstance().getAudioConfig();
+    if (phase === 'startStream') {
+      return audioConfig.inputSampleRate ?? audioConfig.sampleRate ?? DEFAULT_SAMPLE_RATE;
+    }
+    return audioConfig.outputSampleRate ?? audioConfig.sampleRate ?? DEFAULT_SAMPLE_RATE;
+  }
+
+  private recordRecoverableFailure(): number {
+    this.retryAttempt += 1;
+    return this.retryAttempt;
+  }
+
+  private resetRetryState(): void {
+    this.retryAttempt = 0;
+  }
+
+  private async maybeApplySampleRateFallback(
+    error: unknown,
+    phase: 'startStream' | 'startOutput' | 'runtime',
+    issue: RtAudioRuntimeIssue | null,
+  ): Promise<void> {
+    if (!this.shouldConsiderSampleRateFallback(error, phase, issue)) {
+      this.classification = this.classifyFailure(error, phase, issue);
+      return;
+    }
+
+    const audioConfig = ConfigManager.getInstance().getAudioConfig();
+    const profileId = ConfigManager.getInstance().getActiveProfileId?.() ?? null;
+    const deviceName = this.affectedDeviceName ?? audioConfig.outputDeviceName ?? audioConfig.inputDeviceName ?? null;
+    const signature = this.getFallbackKey(profileId, deviceName, issue);
+    const currentOutputRate = issue?.sampleRate ?? audioConfig.outputSampleRate ?? audioConfig.sampleRate ?? DEFAULT_SAMPLE_RATE;
+
+    if (currentOutputRate === YAESU_FALLBACK_SAMPLE_RATE || this.attemptedFallbackKeys.has(signature)) {
+      this.classification = 'sample-rate-fallback-failed';
+      this.runtimeFallback = {
+        active: false,
+        fromSampleRate: DEFAULT_SAMPLE_RATE,
+        toSampleRate: YAESU_FALLBACK_SAMPLE_RATE,
+        persisted: false,
+        reason: 'fallback-already-attempted',
+        profileId,
+        deviceName,
+      };
+      return;
+    }
+
+    const deviceAvailable = await this.isAffectedOutputDeviceAvailable(deviceName);
+    if (!deviceAvailable) {
+      this.classification = 'device-unavailable';
+      return;
+    }
+
+    this.attemptedFallbackKeys.add(signature);
+    const inputDeviceName = audioConfig.inputDeviceName;
+    const outputDeviceName = audioConfig.outputDeviceName;
+    const shouldFallbackInput = this.shouldFallbackInputWithOutput(inputDeviceName, outputDeviceName, deviceName);
+    this.deps.audioStreamManager.applyRuntimeAudioSampleRateOverride({
+      inputSampleRate: shouldFallbackInput ? YAESU_FALLBACK_SAMPLE_RATE : undefined,
+      outputSampleRate: YAESU_FALLBACK_SAMPLE_RATE,
+      reason: 'early-rtaudio-runtime-loss',
+    });
+    this.runtimeFallback = {
+      active: true,
+      fromSampleRate: currentOutputRate,
+      toSampleRate: YAESU_FALLBACK_SAMPLE_RATE,
+      persisted: false,
+      reason: 'early-rtaudio-runtime-loss',
+      profileId,
+      deviceName,
+    };
+    this.sampleRate = YAESU_FALLBACK_SAMPLE_RATE;
+    this.classification = 'sample-rate-fallback';
+    this.retryReason = 'Detected early RtAudio/CoreAudio runtime loss at 48 kHz; retrying at 44.1 kHz.';
+  }
+
+  private shouldConsiderSampleRateFallback(
+    error: unknown,
+    phase: 'startStream' | 'startOutput' | 'runtime',
+    issue: RtAudioRuntimeIssue | null,
+  ): boolean {
+    if (phase !== 'runtime' || !issue?.runtimeLoss || issue.direction !== 'output') return false;
+    if (this.connectedAt !== null && Date.now() - this.connectedAt >= STABLE_CONNECTION_MS) return false;
+    if (issue.sampleRate !== DEFAULT_SAMPLE_RATE) return false;
+    if (issue.elapsedSinceOpenMs !== null && issue.elapsedSinceOpenMs > EARLY_RUNTIME_LOSS_MS) return false;
+    if (!this.isYaesuLikeCurrentProfileOrDevice(issue.deviceName ?? this.affectedDeviceName)) return false;
+    const message = error instanceof Error ? error.message : issue.message;
+    const normalized = message.toLowerCase();
+    return normalized.includes('core')
+      || normalized.includes('stream device')
+      || normalized.includes('disconnected')
+      || normalized.includes('closed');
+  }
+
+  private classifyFailure(
+    error: unknown,
+    phase: 'startStream' | 'startOutput' | 'runtime',
+    issue: RtAudioRuntimeIssue | null,
+  ): AudioSidecarClassification {
+    if (this.runtimeFallback?.active && issue?.runtimeLoss) return 'sample-rate-fallback-failed';
+    if (issue?.runtimeLoss || phase === 'runtime') return 'runtime-loss';
+    if (error instanceof RadioError && error.code === RadioErrorCode.DEVICE_NOT_FOUND) return 'device-unavailable';
+    return 'startup-failure';
+  }
+
+  private getFallbackKey(profileId: string | null, deviceName: string | null, issue: RtAudioRuntimeIssue | null): string {
+    const message = (issue?.message ?? '').toLowerCase().replace(/\s+/g, ' ').slice(0, 120);
+    return [profileId ?? 'no-profile', deviceName ?? 'default-device', issue?.sampleRate ?? DEFAULT_SAMPLE_RATE, message].join('|');
+  }
+
+  private async isAffectedOutputDeviceAvailable(deviceName: string | null): Promise<boolean> {
+    if (!deviceName) return true;
+    const device = await AudioDeviceManager.getInstance().getOutputDeviceByName(deviceName);
+    return Boolean(device && device.availability !== 'cached');
+  }
+
+  private shouldFallbackInputWithOutput(
+    inputDeviceName: string | undefined,
+    outputDeviceName: string | undefined,
+    affectedDeviceName: string | null,
+  ): boolean {
+    if (!inputDeviceName) return false;
+    if (inputDeviceName === outputDeviceName || inputDeviceName === affectedDeviceName) return true;
+    return this.isUsbCodecLikeDevice(inputDeviceName) && this.isUsbCodecLikeDevice(outputDeviceName ?? affectedDeviceName ?? '');
+  }
+
+  private isYaesuLikeCurrentProfileOrDevice(deviceName: string | null | undefined): boolean {
+    const radioConfig = ConfigManager.getInstance().getRadioConfig?.();
+    const rigModel = Number(radioConfig?.serial?.rigModel);
+    if (rigModel === 1049) return true;
+    return this.isUsbCodecLikeDevice(deviceName ?? '');
+  }
+
+  private isUsbCodecLikeDevice(deviceName: string): boolean {
+    const normalized = deviceName.toLowerCase().replace(/[-_:.()]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!normalized) return false;
+    return normalized.includes('usb audio codec')
+      || normalized.includes('pcm2902')
+      || normalized.includes('pcm2904')
+      || normalized.includes('burrbrown')
+      || normalized.includes('burr brown')
+      || normalized.includes('c media') && normalized.includes('usb audio device');
+  }
+
+  private scheduleStableConnectionCheckpoint(): void {
+    this.clearStableConnectionTimer();
+    this.stableConnectionTimer = setTimeout(() => {
+      this.stableConnectionTimer = null;
+      if (this.status !== AudioSidecarStatus.CONNECTED || this.isStopping) return;
+      this.resetRetryState();
+      void this.persistStableRuntimeFallback();
+    }, STABLE_CONNECTION_MS);
+  }
+
+  private clearStableConnectionTimer(): void {
+    if (this.stableConnectionTimer) {
+      clearTimeout(this.stableConnectionTimer);
+      this.stableConnectionTimer = null;
+    }
+  }
+
+  private async persistStableRuntimeFallback(): Promise<void> {
+    const fallback = this.runtimeFallback;
+    if (!fallback?.active || fallback.persisted || fallback.toSampleRate !== YAESU_FALLBACK_SAMPLE_RATE) {
+      return;
+    }
+    try {
+      const audioConfig = ConfigManager.getInstance().getAudioConfig();
+      const outputPatch = { outputSampleRate: fallback.toSampleRate };
+      const inputPatch = this.shouldFallbackInputWithOutput(
+        audioConfig.inputDeviceName,
+        audioConfig.outputDeviceName,
+        fallback.deviceName ?? null,
+      )
+        ? { inputSampleRate: fallback.toSampleRate }
+        : {};
+      await ProfileManager.getInstance().updateActiveProfileAudioConfig({
+        ...inputPatch,
+        ...outputPatch,
+      });
+      fallback.persisted = true;
+      this.emitStatus();
+      logger.warn('stable runtime audio sample rate fallback persisted', {
+        profileId: fallback.profileId,
+        deviceName: fallback.deviceName,
+        fromSampleRate: fallback.fromSampleRate,
+        toSampleRate: fallback.toSampleRate,
+      });
+    } catch (error) {
+      logger.warn('failed to persist runtime audio sample rate fallback', error);
     }
   }
 
@@ -296,6 +601,10 @@ export class AudioSidecarController {
       return;
     }
     this.status = next;
+    this.emitStatus();
+  }
+
+  private emitStatus(): void {
     const payload = this.buildStatusPayload();
     this.deps.engineEmitter.emit('audioSidecarStatusChanged', payload);
   }

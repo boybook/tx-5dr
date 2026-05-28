@@ -12,6 +12,7 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('RadioRoute');
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
+import { ProfileManager } from '../config/ProfileManager.js';
 import { HamlibConfigSchema, UserRole, WriteCapabilityPayloadSchema } from '@tx5dr/contracts';
 import { requireAbility, requireAbilityFor, requireRole } from '../auth/authPlugin.js';
 import type { HamlibConfig } from '@tx5dr/contracts';
@@ -272,6 +273,7 @@ function emitToneSquelchWarning(
 export async function radioRoutes(fastify: FastifyInstance) {
   const engine = DigitalRadioEngine.getInstance();
   const configManager = ConfigManager.getInstance();
+  const profileManager = ProfileManager.getInstance();
   const radioManager = engine.getRadioManager();
   const adminOnly = [requireRole(UserRole.ADMIN)];
 
@@ -303,7 +305,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
         await engine.stop();
       }
 
-      await configManager.updateAudioConfig(updatedAudioConfig);
+      await profileManager.updateActiveProfileAudioConfig(updatedAudioConfig);
       engine.getAudioStreamManager().reloadAudioConfig();
       logger.info('Audio devices auto-set to ICOM WLAN');
 
