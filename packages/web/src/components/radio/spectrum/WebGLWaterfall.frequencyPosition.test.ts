@@ -7,11 +7,15 @@ import {
   WATERFALL_WHEEL_DELTA_LINE,
   WATERFALL_WHEEL_DELTA_PAGE,
   WATERFALL_WHEEL_DELTA_PIXEL,
+  buildWaterfallRulerTicks,
   clearWaterfallGestureOverrideForSource,
   easeSpectrumAxisTransition,
+  formatWaterfallHoverFrequency,
+  getWaterfallFrequencyAtRatio,
   getWaterfallDragCommitDelayMs,
   getWaterfallDragTunedFrequency,
   getWaterfallFrequencyPositionPercent,
+  getWaterfallHoverLabelLeftPx,
   getWaterfallHorizontalWheelTunedFrequency,
   interpolateSpectrumAxis,
   normalizeWaterfallWheelDeltaX,
@@ -25,6 +29,65 @@ describe('WebGLWaterfall frequency positioning', () => {
 
   it('keeps the legacy visual offset available for older markers', () => {
     expect(getWaterfallFrequencyPositionPercent(800, 0, 3000)).toBeCloseTo(((800 + WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ) / 3000) * 100, 6);
+  });
+
+  it('can map hover pointer ratios directly to the visual axis when no offset is requested', () => {
+    expect(getWaterfallFrequencyAtRatio(0, 0, 3000)).toBe(0);
+    expect(getWaterfallFrequencyAtRatio(0.5, 0, 3000)).toBe(1500);
+    expect(getWaterfallFrequencyAtRatio(1, 0, 3000)).toBe(3000);
+    expect(getWaterfallFrequencyPositionPercent(1500, 0, 3000, 0)).toBeCloseTo(50, 6);
+  });
+
+  it('applies the legacy visual offset for hover readouts to match right-click tuning', () => {
+    expect(getWaterfallFrequencyAtRatio(0.5, 0, 3000, WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ)).toBe(1485);
+    expect(getWaterfallFrequencyPositionPercent(1485, 0, 3000)).toBeCloseTo(50, 6);
+  });
+
+  it('builds a soft 0-3000 Hz baseband ruler with 100 Hz ticks and 500 Hz labels', () => {
+    const ticks = buildWaterfallRulerTicks(0, 3000, 900);
+    const tickFrequencies = ticks.map(tick => tick.frequency);
+    const labeledTicks = ticks.filter(tick => tick.label);
+
+    expect(tickFrequencies).toContain(100);
+    expect(tickFrequencies).toContain(500);
+    expect(tickFrequencies).toContain(3000);
+    expect(ticks.find(tick => tick.frequency === 100)?.kind).toBe('minor');
+    expect(ticks.find(tick => tick.frequency === 500)?.kind).toBe('major');
+    expect(labeledTicks.map(tick => tick.label)).toEqual(['500', '1000', '1500', '2000', '2500', '3000']);
+  });
+
+  it('can apply the legacy visual offset to top ruler tick positions', () => {
+    const ticks = buildWaterfallRulerTicks(0, 3000, 900, WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ);
+    const tick1500 = ticks.find(tick => tick.frequency === 1500);
+
+    expect(tick1500?.positionPercent).toBeCloseTo(
+      getWaterfallFrequencyPositionPercent(1500, 0, 3000),
+      6,
+    );
+  });
+
+  it('reduces baseband ruler label density when the panel is narrow', () => {
+    const labels = buildWaterfallRulerTicks(0, 3000, 260)
+      .map(tick => tick.label)
+      .filter(Boolean);
+
+    expect(labels).toEqual(['1000', '2000', '3000']);
+  });
+
+  it('uses nice-step labels for wide absolute-frequency rulers', () => {
+    const ticks = buildWaterfallRulerTicks(14_070_000, 14_080_000, 900);
+    const majorTicks = ticks.filter(tick => tick.kind === 'major');
+
+    expect(majorTicks.length).toBeGreaterThanOrEqual(2);
+    expect(majorTicks.every(tick => Number.isFinite(tick.positionPercent))).toBe(true);
+    expect(majorTicks.some(tick => tick.label === '14.075000')).toBe(true);
+  });
+
+  it('formats and clamps hover readout labels near ruler edges', () => {
+    expect(formatWaterfallHoverFrequency(1234.4)).toBe('1234 Hz');
+    expect(formatWaterfallHoverFrequency(14_074_123)).toBe('14.074123 MHz');
+    expect(getWaterfallHoverLabelLeftPx(0, 300)).toBeGreaterThan(0);
+    expect(getWaterfallHoverLabelLeftPx(100, 300)).toBeLessThan(300);
   });
 
   it('uses a nonlinear transition curve with fixed endpoints', () => {

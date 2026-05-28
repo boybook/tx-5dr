@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { Popover, PopoverTrigger, PopoverContent } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../../utils/logger';
@@ -84,6 +85,16 @@ export interface PresetMarker {
   clickable?: boolean;
 }
 
+export type WaterfallRulerTickKind = 'minor' | 'medium' | 'major';
+
+export interface WaterfallRulerTick {
+  id: string;
+  frequency: number;
+  positionPercent: number;
+  kind: WaterfallRulerTickKind;
+  label?: string;
+}
+
 interface WebGLWaterfallProps {
   controller: SpectrumStreamController;
   className?: string;
@@ -141,6 +152,13 @@ export const WATERFALL_WHEEL_DELTA_LINE = 1;
 export const WATERFALL_WHEEL_DELTA_PAGE = 2;
 export const WATERFALL_MAX_DEVICE_PIXEL_RATIO = 1.5;
 export const WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ = 15;
+const WATERFALL_HOVER_LABEL_WIDTH_PX = 82;
+const WATERFALL_HOVER_LABEL_EDGE_PADDING_PX = 6;
+const WATERFALL_BASEBAND_RULER_MIN_HZ = 0;
+const WATERFALL_BASEBAND_RULER_MAX_HZ = 3000;
+const WATERFALL_BASEBAND_RULER_MINOR_STEP_HZ = 100;
+const WATERFALL_BASEBAND_RULER_MAJOR_STEP_HZ = 500;
+const WATERFALL_RULER_MIN_LABEL_SPACING_PX = 56;
 
 export function getWaterfallDragCommitDelayMs(
   nowMs: number,
@@ -263,6 +281,148 @@ export function getWaterfallFrequencyPositionPercent(
   visualOffsetHz = WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ,
 ): number {
   return ((displayFrequency + visualOffsetHz - minFrequency) / (maxFrequency - minFrequency)) * 100;
+}
+
+export function getWaterfallFrequencyAtRatio(
+  ratio: number,
+  minFrequency: number,
+  maxFrequency: number,
+  visualOffsetHz = 0,
+): number {
+  const safeRatio = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0;
+  return minFrequency + safeRatio * (maxFrequency - minFrequency) - visualOffsetHz;
+}
+
+function getNiceWaterfallRulerStep(spanHz: number, targetTickCount: number): number {
+  if (!Number.isFinite(spanHz) || spanHz <= 0 || targetTickCount <= 0) {
+    return 1;
+  }
+
+  const rawStep = spanHz / targetTickCount;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const normalized = rawStep / magnitude;
+  const multiplier = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return multiplier * magnitude;
+}
+
+function isBasebandRulerRange(minFrequency: number, maxFrequency: number): boolean {
+  return Math.abs(minFrequency - WATERFALL_BASEBAND_RULER_MIN_HZ) <= 1
+    && Math.abs(maxFrequency - WATERFALL_BASEBAND_RULER_MAX_HZ) <= 50;
+}
+
+function getRulerLabelEvery(labelStepHz: number, spanHz: number, widthPx: number): number {
+  if (!Number.isFinite(widthPx) || widthPx <= 0 || !Number.isFinite(spanHz) || spanHz <= 0) {
+    return 1;
+  }
+
+  const labelSpacingPx = widthPx * (labelStepHz / spanHz);
+  if (labelSpacingPx <= 0) {
+    return 1;
+  }
+
+  return Math.max(1, Math.ceil(WATERFALL_RULER_MIN_LABEL_SPACING_PX / labelSpacingPx));
+}
+
+function formatWaterfallRulerTickLabel(frequency: number, spanHz: number): string {
+  if (Math.abs(frequency) >= 1_000_000) {
+    const decimals = spanHz <= 10_000 ? 6 : spanHz <= 100_000 ? 4 : 3;
+    return (frequency / 1_000_000).toFixed(decimals);
+  }
+
+  if (Math.abs(frequency) >= 10_000) {
+    return `${Math.round(frequency / 1000)}k`;
+  }
+
+  return `${Math.round(frequency)}`;
+}
+
+export function formatWaterfallHoverFrequency(frequency: number): string {
+  if (Math.abs(frequency) >= 1_000_000) {
+    return `${(frequency / 1_000_000).toFixed(6)} MHz`;
+  }
+
+  if (Math.abs(frequency) >= 10_000) {
+    return `${(frequency / 1000).toFixed(1)} kHz`;
+  }
+
+  return `${Math.round(frequency)} Hz`;
+}
+
+export function getWaterfallHoverLabelLeftPx(
+  positionPercent: number,
+  widthPx: number,
+  labelWidthPx = WATERFALL_HOVER_LABEL_WIDTH_PX,
+  paddingPx = WATERFALL_HOVER_LABEL_EDGE_PADDING_PX,
+): number {
+  if (!Number.isFinite(widthPx) || widthPx <= 0) {
+    return 0;
+  }
+
+  const rawLeft = (Math.max(0, Math.min(100, positionPercent)) / 100) * widthPx;
+  const minLeft = paddingPx + labelWidthPx / 2;
+  const maxLeft = Math.max(minLeft, widthPx - paddingPx - labelWidthPx / 2);
+  return Math.max(minLeft, Math.min(maxLeft, rawLeft));
+}
+
+export function buildWaterfallRulerTicks(
+  minFrequency: number,
+  maxFrequency: number,
+  widthPx: number,
+  visualOffsetHz = 0,
+): WaterfallRulerTick[] {
+  const spanHz = maxFrequency - minFrequency;
+  if (!Number.isFinite(spanHz) || spanHz <= 0 || !Number.isFinite(widthPx) || widthPx <= 0) {
+    return [];
+  }
+
+  const ticks: WaterfallRulerTick[] = [];
+  const baseband = isBasebandRulerRange(minFrequency, maxFrequency);
+  const minorStepHz = baseband
+    ? WATERFALL_BASEBAND_RULER_MINOR_STEP_HZ
+    : getNiceWaterfallRulerStep(spanHz, Math.max(8, Math.floor(widthPx / 42)));
+  const majorStepHz = baseband
+    ? WATERFALL_BASEBAND_RULER_MAJOR_STEP_HZ
+    : minorStepHz * 5;
+  const mediumStepHz = majorStepHz / 2;
+  const labelEvery = getRulerLabelEvery(majorStepHz, spanHz, widthPx);
+  const startFrequency = Math.ceil(minFrequency / minorStepHz) * minorStepHz;
+  const endFrequency = maxFrequency + minorStepHz * 0.001;
+  let majorIndex = 0;
+
+  for (let frequency = startFrequency; frequency <= endFrequency; frequency += minorStepHz) {
+    const positionPercent = getWaterfallFrequencyPositionPercent(
+      frequency,
+      minFrequency,
+      maxFrequency,
+      visualOffsetHz,
+    );
+    if (positionPercent < -0.001 || positionPercent > 100.001) {
+      continue;
+    }
+
+    const majorRatio = frequency / majorStepHz;
+    const mediumRatio = frequency / mediumStepHz;
+    const isMajor = Math.abs(majorRatio - Math.round(majorRatio)) < 0.001;
+    const isMedium = !isMajor && Math.abs(mediumRatio - Math.round(mediumRatio)) < 0.001;
+    const kind: WaterfallRulerTickKind = isMajor ? 'major' : isMedium ? 'medium' : 'minor';
+    const shouldLabel = isMajor
+      && Math.abs(frequency) > 0.001
+      && majorIndex % labelEvery === 0;
+
+    ticks.push({
+      id: `${Math.round(frequency * 1000)}-${kind}`,
+      frequency,
+      positionPercent,
+      kind,
+      label: shouldLabel ? formatWaterfallRulerTickLabel(frequency, spanHz) : undefined,
+    });
+
+    if (isMajor) {
+      majorIndex += 1;
+    }
+  }
+
+  return ticks;
 }
 
 function areAxesEqual(left: SpectrumAxis | null, right: SpectrumAxis | null): boolean {
@@ -451,6 +611,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   });
   const [actualRange, setActualRange] = React.useState<{min: number, max: number} | null>(null);
   const [cycleMarkers, setCycleMarkers] = React.useState<CycleMarkerPosition[]>([]);
+  const [rulerWidthPx, setRulerWidthPx] = React.useState(0);
+  const [hoverCursor, setHoverCursor] = React.useState<{ ratio: number; frequency: number; clientX: number; containerTop: number } | null>(null);
 
   // TX拖动状态
   const [draggingOperatorId, setDraggingOperatorId] = React.useState<string | null>(null);
@@ -1529,6 +1691,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     // 获取容器的实际尺寸
     const containerRect = container.getBoundingClientRect();
     const pixelRatio = getWaterfallCanvasPixelRatio(window.devicePixelRatio);
+    setRulerWidthPx(current => (
+      Math.abs(current - containerRect.width) < 0.5 ? current : containerRect.width
+    ));
 
     // 使用容器的宽度和传入的height（通过 ref 读取，避免 handleResize 随 height 变化重建）
     const canvasWidth = containerRect.width;
@@ -1939,6 +2104,65 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const minFrequency = axis?.minHz ?? 0;
   const maxFrequency = axis?.maxHz ?? 0;
   const hasAxis = Boolean(axis && axis.binCount > 0 && maxFrequency > minFrequency);
+  const rulerTicks = React.useMemo(
+    () => (!markerOnly && hasAxis
+      ? buildWaterfallRulerTicks(minFrequency, maxFrequency, rulerWidthPx, FREQ_POSITION_OFFSET)
+      : []),
+    [hasAxis, markerOnly, maxFrequency, minFrequency, rulerWidthPx],
+  );
+  const showHoverProbe = Boolean(
+    !markerOnly
+    && hasAxis
+    && hoverCursor
+    && !frequencyGestureDragState
+    && !draggingFrequencyBandOverlay
+    && !draggingOperatorId
+    && !draggingBandOverlayId
+  );
+  const hoverProbePositionPercent = hoverCursor ? hoverCursor.ratio * 100 : 0;
+  const hoverProbeLabel = hoverCursor ? formatWaterfallHoverFrequency(hoverCursor.frequency) : '';
+  const hoverProbePortalPosition = React.useMemo(() => {
+    if (!showHoverProbe || !hoverCursor || typeof window === 'undefined') {
+      return null;
+    }
+
+    const viewportWidth = window.innerWidth;
+    return {
+      left: getWaterfallHoverLabelLeftPx((hoverCursor.clientX / Math.max(viewportWidth, 1)) * 100, viewportWidth),
+      top: Math.max(4, hoverCursor.containerTop - 24),
+    };
+  }, [hoverCursor, showHoverProbe]);
+
+  const updateHoverCursorFromPointer = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (markerOnly || !hasAxis || (event.pointerType !== 'mouse' && event.pointerType !== 'pen')) {
+      setHoverCursor(null);
+      return;
+    }
+
+    const container = containerRef.current;
+    if (!container) {
+      setHoverCursor(null);
+      return;
+    }
+
+    const rect = container.getBoundingClientRect();
+    if (rect.width <= 0) {
+      setHoverCursor(null);
+      return;
+    }
+
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    setHoverCursor({
+      ratio,
+      frequency: getWaterfallFrequencyAtRatio(ratio, minFrequency, maxFrequency, FREQ_POSITION_OFFSET),
+      clientX: event.clientX,
+      containerTop: rect.top,
+    });
+  }, [hasAxis, markerOnly, maxFrequency, minFrequency]);
+
+  const clearHoverCursor = useCallback(() => {
+    setHoverCursor(null);
+  }, []);
 
   const snapFrequency = useCallback((frequency: number, overrideStepHz?: number | null) => {
     const stepHz = typeof overrideStepHz === 'number' && Number.isFinite(overrideStepHz) && overrideStepHz > 0
@@ -2735,6 +2959,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       className={`relative ${className}`}
       style={{ height: `${height}px`, touchAction: onDragFrequencyChange ? 'none' : undefined }}
       onPointerDown={onDragFrequencyChange ? handleGenericFrequencyDragPointerDown : undefined}
+      onPointerEnter={updateHoverCursorFromPointer}
+      onPointerMove={updateHoverCursorFromPointer}
+      onPointerLeave={clearHoverCursor}
       onDoubleClick={(e) => {
         if (!onDoubleClickSetFrequency) {
           return;
@@ -2773,6 +3000,62 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         </div>
       )}
 
+      {/* Hover ruler: below interactive markers/buttons, above the WebGL canvas. */}
+      <div className="pointer-events-none absolute inset-0 z-10">
+        <div
+          className={`absolute inset-x-0 top-0 h-11 overflow-hidden transition-all duration-150 ease-out ${
+            showHoverProbe ? 'translate-y-0 opacity-100' : '-translate-y-0.5 opacity-0'
+          }`}
+        >
+          <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/30 to-transparent" />
+          <div className="absolute inset-x-0 top-7 h-px bg-gradient-to-r from-transparent via-white/22 to-transparent" />
+          {rulerTicks.map((tick) => {
+            const tickClassName = tick.kind === 'major'
+              ? 'h-4 bg-white/35'
+              : tick.kind === 'medium'
+                ? 'h-3.5 bg-white/25'
+                : 'h-2.5 bg-white/18';
+
+            return (
+              <div
+                key={tick.id}
+                className="absolute top-0 -translate-x-1/2"
+                style={{ left: `${tick.positionPercent}%` }}
+              >
+                <div className={`mx-auto w-px rounded-full ${tickClassName}`} />
+                {tick.label && (
+                  <div className="absolute left-1/2 top-1.5 -translate-x-1/2 select-none whitespace-nowrap text-[10px] font-medium leading-none tabular-nums tracking-wide text-white/50">
+                    {tick.label}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {showHoverProbe && hoverCursor && (
+          <div
+            className="absolute top-0 h-full -translate-x-1/2"
+            style={{ left: `${hoverProbePositionPercent}%` }}
+          >
+            <div className="h-full w-0.5 bg-white/45 shadow-[0_0_8px_rgba(255,255,255,0.22)]" />
+          </div>
+        )}
+      </div>
+
+      {hoverProbePortalPosition && typeof document !== 'undefined' && createPortal(
+        <div
+          className="pointer-events-none fixed z-[9999] -translate-x-1/2 select-none whitespace-nowrap rounded-full border border-white/10 bg-black/70 px-2 py-1 text-[11px] font-semibold leading-none tabular-nums text-white/85 shadow-[0_8px_24px_rgba(0,0,0,0.32)]"
+          style={{
+            left: `${hoverProbePortalPosition.left}px`,
+            top: `${hoverProbePortalPosition.top}px`,
+          }}
+        >
+          {hoverProbeLabel}
+        </div>,
+        document.body
+      )}
+
       {/* 频率标记层 */}
       <div className="pointer-events-none absolute inset-0 z-30">
         {frequencyBandOverlays.map((overlay) => {
@@ -2802,7 +3085,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
             || (draggingFrequencyBandOverlay?.id === overlay.id && draggingFrequencyBandOverlay.dragTarget !== 'center');
 
           return (
-            <div key={`frequency-band-${overlay.id}`} className="absolute inset-0 h-full pointer-events-none">
+            <div
+              key={`frequency-band-${overlay.id}`}
+              className="absolute inset-0 h-full pointer-events-none"
+            >
               {width > 0 && (
                 <div
                   className={`absolute top-0 h-full bg-cyan-400/20 shadow-[inset_0_0_22px_rgba(34,211,238,0.22)] ${isDragging ? 'bg-cyan-300/25 ring-1 ring-cyan-100/25' : ''}`}
