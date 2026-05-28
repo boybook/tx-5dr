@@ -850,10 +850,10 @@ export class HamlibConnection
 
       if (request.mode) {
         try {
-          const modeChanged = await this.performModeWrite(request.mode, request.bandwidth, request.options);
+          await this.performModeWrite(request.mode, request.bandwidth, request.options);
           modeApplied = true;
 
-          if (request.frequency !== undefined && modeChanged) {
+          if (request.frequency !== undefined) {
             await this.performFrequencyWrite(request.frequency);
           }
         } catch (error) {

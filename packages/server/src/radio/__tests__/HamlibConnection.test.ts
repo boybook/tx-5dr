@@ -547,7 +547,17 @@ describe('HamlibConnection', () => {
   });
 
   it('applies frequency and mode as a single critical operating-state update', async () => {
-    const { connection, rig } = createConnectedConnection();
+    const sequence: string[] = [];
+    const { connection, rig } = createConnectedConnection({
+      setFrequency: vi.fn().mockImplementation(async (frequency) => {
+        sequence.push(`frequency:${frequency}`);
+        return 0;
+      }),
+      setMode: vi.fn().mockImplementation(async (mode, bandwidth) => {
+        sequence.push(`mode:${mode}:${bandwidth}`);
+        return 0;
+      }),
+    });
     const testConnection = asTestConnection(connection);
     testConnection.supportedModes = new Set(['USB']);
     testConnection.currentRadioMode = 'LSB';
@@ -566,6 +576,68 @@ describe('HamlibConnection', () => {
     });
     expect(rig.setMode).toHaveBeenCalledTimes(1);
     expect(rig.setFrequency).toHaveBeenCalledTimes(2);
+    expect(sequence).toEqual([
+      'frequency:7100000',
+      'mode:USB:nochange',
+      'frequency:7100000',
+    ]);
+  });
+
+  it('reasserts operating-state frequency even when the cached mode already matches', async () => {
+    const sequence: string[] = [];
+    const { connection, rig } = createConnectedConnection({
+      setFrequency: vi.fn().mockImplementation(async (frequency) => {
+        sequence.push(`frequency:${frequency}`);
+        return 0;
+      }),
+      setMode: vi.fn().mockImplementation(async (mode, bandwidth) => {
+        sequence.push(`mode:${mode}:${bandwidth}`);
+        return 0;
+      }),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedModes = new Set(['USB']);
+    testConnection.currentRadioMode = 'USB';
+
+    await expect(connection.applyOperatingState({
+      frequency: 7100000,
+      mode: 'USB',
+      bandwidth: 'nochange',
+      options: { intent: 'voice' },
+    })).resolves.toMatchObject({
+      frequencyApplied: true,
+      modeApplied: true,
+    });
+
+    expect(rig.setMode).toHaveBeenCalledTimes(1);
+    expect(rig.setFrequency).toHaveBeenCalledTimes(2);
+    expect(sequence).toEqual([
+      'frequency:7100000',
+      'mode:USB:nochange',
+      'frequency:7100000',
+    ]);
+  });
+
+  it('does not add extra writes for frequency-only or mode-only operating-state updates', async () => {
+    const { connection, rig } = createConnectedConnection();
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedModes = new Set(['USB']);
+    testConnection.currentRadioMode = 'LSB';
+
+    await expect(connection.applyOperatingState({ frequency: 7100000 })).resolves.toMatchObject({
+      frequencyApplied: true,
+      modeApplied: false,
+    });
+    expect(rig.setFrequency).toHaveBeenCalledTimes(1);
+    expect(rig.setMode).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    await expect(connection.applyOperatingState({ mode: 'USB', bandwidth: 'nochange' })).resolves.toMatchObject({
+      frequencyApplied: false,
+      modeApplied: true,
+    });
+    expect(rig.setFrequency).not.toHaveBeenCalled();
+    expect(rig.setMode).toHaveBeenCalledTimes(1);
   });
 
   it('returns a non-fatal mode error when operating-state writes tolerate mode failures', async () => {
