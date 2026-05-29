@@ -111,10 +111,12 @@ function formatSerialPortDisplay(port: PortInfo): { title: string; details: stri
   const friendlyName = normalizePortMetadata(port.friendlyName);
   const manufacturer = normalizePortMetadata(port.manufacturer);
   const pnpLabel = formatPnpIdForDisplay(port.pnpId);
-  const title = friendlyName || [manufacturer, pnpLabel].filter(Boolean).join(' · ') || port.path;
+  const title = port.path;
 
   const details: string[] = [];
-  pushUniquePortDetail(details, port.path);
+  pushUniquePortDetail(details, friendlyName);
+  pushUniquePortDetail(details, manufacturer);
+  pushUniquePortDetail(details, pnpLabel);
   if (port.vendorId && port.productId) {
     pushUniquePortDetail(details, `VID:PID ${port.vendorId}:${port.productId}`);
   } else {
@@ -138,9 +140,20 @@ function formatSerialPortDisplay(port: PortInfo): { title: string; details: stri
 
   return {
     title,
-    details: details.filter((detail) => detail !== title).join(' · '),
+    details: details.join(' · '),
     searchText: searchFields.filter(Boolean).join(' '),
   };
+}
+
+function serialPortMatchesInput(port: PortInfo | undefined, textValue: string, inputValue: string): boolean {
+  const query = inputValue.trim().toLowerCase();
+  if (!query) return true;
+
+  const searchText = port
+    ? formatSerialPortDisplay(port).searchText
+    : textValue;
+
+  return searchText.toLowerCase().includes(query);
 }
 
 function orderHamlibFields(fields: HamlibConfigField[]): HamlibConfigField[] {
@@ -239,6 +252,8 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
   const usesNetworkEndpoint = endpointKind === 'network-address';
   const usesDevicePathEndpoint = endpointKind === 'device-path';
   const effectiveRigPath = config.serial?.backendConfig?.rig_pathname ?? config.serial?.path ?? '';
+  const selectedSerialPort = ports.find((item) => item.path === effectiveRigPath);
+  const selectedSerialPortDisplay = selectedSerialPort ? formatSerialPortDisplay(selectedSerialPort) : null;
 
     useEffect(() => {
       loadData();
@@ -1108,11 +1123,23 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       variant="flat"
                       size="md"
                       defaultItems={ports}
+                      defaultFilter={(textValue, inputValue) => (
+                        serialPortMatchesInput(
+                          ports.find((port) => port.path === textValue),
+                          textValue,
+                          inputValue
+                        )
+                      )}
+                      endContent={selectedSerialPortDisplay?.details ? (
+                        <span className="pointer-events-none hidden max-w-[min(42vw,32rem)] truncate whitespace-nowrap text-small text-default-400 md:inline">
+                          ({selectedSerialPortDisplay.details})
+                        </span>
+                      ) : undefined}
                     >
                       {(item: PortInfo) => {
                         const display = formatSerialPortDisplay(item);
                         return (
-                          <AutocompleteItem key={item.path} textValue={display.searchText}>
+                          <AutocompleteItem key={item.path} textValue={item.path}>
                             <div className="flex flex-col gap-0.5 py-0.5">
                               <span className="text-small truncate">{display.title}</span>
                               {display.details && (
