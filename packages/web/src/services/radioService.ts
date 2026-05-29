@@ -194,6 +194,10 @@ export class RadioService {
    * 获取实时连接状态（基于WebSocket状态）
    */
   get isConnected(): boolean {
+    return this.wsClient.isReady;
+  }
+
+  get isTransportConnected(): boolean {
     return this.wsClient.isConnected;
   }
 

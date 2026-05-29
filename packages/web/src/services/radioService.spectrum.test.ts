@@ -5,6 +5,7 @@ import { RadioService } from './radioService';
 const mockState = vi.hoisted(() => ({
   clients: [] as Array<{
     connected: boolean;
+    ready: boolean;
     subscribeSpectrum: ReturnType<typeof vi.fn>;
     handlers: Map<string, Set<(data?: unknown) => void>>;
     emit: (event: string, data?: unknown) => void;
@@ -14,6 +15,7 @@ const mockState = vi.hoisted(() => ({
 vi.mock('@tx5dr/core', () => {
   class WSClient {
     connected = false;
+    ready = false;
     subscribeSpectrum = vi.fn();
     handlers = new Map<string, Set<(data?: unknown) => void>>();
 
@@ -25,8 +27,12 @@ vi.mock('@tx5dr/core', () => {
       return this.connected;
     }
 
+    get isReady() {
+      return this.connected && this.ready;
+    }
+
     get connectionInfo() {
-      return { isConnected: this.connected, isConnecting: false };
+      return { isConnected: this.isReady, isConnecting: this.connected && !this.ready };
     }
 
     onWSEvent(event: string, handler: (data?: unknown) => void) {
@@ -86,6 +92,7 @@ describe('RadioService spectrum subscription reliability', () => {
     expect(client.subscribeSpectrum).not.toHaveBeenCalled();
 
     client.connected = true;
+    client.ready = true;
     service.replaySpectrumSubscription();
 
     expect(client.subscribeSpectrum).toHaveBeenCalledTimes(1);
@@ -111,6 +118,7 @@ describe('RadioService spectrum subscription reliability', () => {
     const service = new RadioService();
     const client = mockState.clients[0]!;
     client.connected = true;
+    client.ready = true;
 
     service.subscribeSpectrum('radio-sdr');
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import { AuthProvider, useAuth } from '../store/authStore';
-import { RadioProvider } from '../store/radioStore';
+import { RadioProvider, useConnection } from '../store/radioStore';
+import { LoginPage } from './LoginPage';
 import { useTheme } from '../hooks/useTheme';
 import { useViewportHeightValue } from '../hooks/useViewportHeight';
 import { SpectrumDisplay } from '../components/radio/spectrum/SpectrumDisplay';
@@ -13,12 +14,21 @@ import { useLanguage } from '../hooks/useLanguage';
  */
 const SpectrumContent: React.FC = () => {
   const windowHeight = useViewportHeightValue();
+  const { state: connectionState } = useConnection();
 
   // 仅 macOS Electron 环境需要手动绘制拖拽条
   const showTitlebar = isElectron() && navigator.userAgent.includes('Macintosh');
   const topLeftOverlayInset = showTitlebar
     ? { left: 80 }
     : undefined;
+
+  if (!connectionState.isReady) {
+    return (
+      <div className="app-viewport-height w-full overflow-hidden bg-background flex items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-default-300/30 border-t-primary" />
+      </div>
+    );
+  }
 
   return (
     <div className="app-viewport-height w-full overflow-hidden bg-background">
@@ -48,13 +58,17 @@ const SpectrumContent: React.FC = () => {
 };
 
 /**
- * 鉴权门户：等待 authStore 初始化后再渲染 RadioProvider
+ * 鉴权门户：等待 authStore 初始化，并在需要登录时阻止 RadioProvider 提前建连
  */
 const SpectrumAuthGate: React.FC = () => {
-  const { state } = useAuth();
+  const { state, requiresLogin } = useAuth();
 
   if (!state.initialized || !state.sessionResolved) {
     return null;
+  }
+
+  if (requiresLogin) {
+    return <LoginPage />;
   }
 
   const authKey = state.jwt || (state.isPublicViewer ? 'public' : 'anon');

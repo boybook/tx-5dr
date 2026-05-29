@@ -39,6 +39,16 @@ class FakeWebSocket {
   }
 }
 
+function emitServerMessage(socket: FakeWebSocket, type: WSMessageType, data: unknown = {}): void {
+  socket.onmessage?.({
+    data: JSON.stringify({
+      type,
+      data,
+      timestamp: new Date().toISOString(),
+    }),
+  });
+}
+
 function installFakeWebSocket(): () => void {
   const originalWebSocket = globalThis.WebSocket;
   FakeWebSocket.sockets = [];
@@ -129,6 +139,8 @@ test('voice transmit commands include operatorId when provided', async () => {
     socket.open();
     await connectPromise;
 
+    emitServerMessage(socket, WSMessageType.SERVER_HANDSHAKE_COMPLETE);
+
     client.requestVoicePTT('voice-client-1', 'operator-1');
     client.playVoiceKeyer('BG5DRB', 'slot-1', true, false, 'operator-1');
 
@@ -148,6 +160,64 @@ test('voice transmit commands include operatorId when provided', async () => {
       startImmediately: false,
       operatorId: 'operator-1',
     });
+
+    client.disconnect();
+  } finally {
+    restoreWebSocket();
+  }
+});
+
+test('suppresses business commands before server handshake completes', async () => {
+  const restoreWebSocket = installFakeWebSocket();
+  try {
+    const client = new WSClient({ url: 'ws://example.test/ws' });
+    const connectPromise = client.connect();
+    const socket = FakeWebSocket.sockets[0];
+    socket.open();
+    await connectPromise;
+
+    client.requestVoicePTT('voice-client-1', 'operator-1');
+    client.subscribeSpectrum('audio');
+    client.startEngine();
+
+    assert.deepEqual(socket.sent, []);
+    assert.equal(client.isConnected, true);
+    assert.equal(client.isReady, false);
+
+    emitServerMessage(socket, WSMessageType.SERVER_HANDSHAKE_COMPLETE);
+    assert.equal(client.isReady, true);
+
+    client.startEngine();
+    const messages = socket.sent.map(raw => JSON.parse(raw) as { type: string });
+    assert.deepEqual(messages.map(message => message.type), [WSMessageType.START_ENGINE]);
+
+    client.disconnect();
+  } finally {
+    restoreWebSocket();
+  }
+});
+
+test('allows authentication protocol commands before session readiness', async () => {
+  const restoreWebSocket = installFakeWebSocket();
+  try {
+    const client = new WSClient({ url: 'ws://example.test/ws' });
+    const connectPromise = client.connect();
+    const socket = FakeWebSocket.sockets[0];
+    socket.open();
+    await connectPromise;
+
+    client.sendAuthToken('jwt-1');
+    client.sendAuthPublicViewer();
+    client.sendHandshake(['op-1'], 'op-1', 'client-1');
+
+    const messages = socket.sent.map(raw => JSON.parse(raw) as { type: string; data?: Record<string, unknown> });
+    assert.deepEqual(messages.map(message => message.type), [
+      WSMessageType.AUTH_TOKEN,
+      WSMessageType.AUTH_PUBLIC_VIEWER,
+      WSMessageType.CLIENT_HANDSHAKE,
+    ]);
+    assert.deepEqual(messages[0].data, { jwt: 'jwt-1' });
+    assert.deepEqual(messages[2].data?.enabledOperatorIds, ['op-1']);
 
     client.disconnect();
   } finally {

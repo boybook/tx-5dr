@@ -73,6 +73,7 @@ export const initialConnectionState: ConnectionState = {
   isConnecting: true,
   isReady: false,
   wasEverConnected: false,
+  wasEverReady: false,
   radioService: null,
   connectError: null,
 };
@@ -82,8 +83,8 @@ export function connectionReducer(state: ConnectionState, action: ConnectionActi
     case 'connected':
       return {
         ...state,
-        isConnected: true,
-        isConnecting: false,
+        isConnected: false,
+        isConnecting: true,
         isReady: false,
         wasEverConnected: true,
         connectError: null,
@@ -91,7 +92,11 @@ export function connectionReducer(state: ConnectionState, action: ConnectionActi
     case 'handshakeComplete':
       return {
         ...state,
+        isConnected: true,
+        isConnecting: false,
         isReady: true,
+        wasEverConnected: true,
+        wasEverReady: true,
       };
     case 'reconnecting':
       return {
@@ -104,7 +109,7 @@ export function connectionReducer(state: ConnectionState, action: ConnectionActi
     case 'disconnected':
       return { ...state, isConnected: false, isConnecting: false, isReady: false };
     case 'connectFailed':
-      return { ...state, isConnecting: false, isReady: false, connectError: 'SERVER_UNAVAILABLE' };
+      return { ...state, isConnected: false, isConnecting: false, isReady: false, connectError: 'SERVER_UNAVAILABLE' };
     case 'SET_RADIO_SERVICE':
       return { ...state, radioService: action.payload };
     default:

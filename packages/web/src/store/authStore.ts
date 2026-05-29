@@ -167,6 +167,13 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
   }
 }
 
+export function buildUrlWithoutAuthToken(location: Pick<Location, 'pathname' | 'search' | 'hash'>): string {
+  const params = new URLSearchParams(location.search);
+  params.delete('auth_token');
+  const query = params.toString();
+  return `${location.pathname}${query ? `?${query}` : ''}${location.hash}`;
+}
+
 // ===== JWT 本地存储 =====
 
 const JWT_STORAGE_KEY = 'tx5dr_jwt';
@@ -245,7 +252,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         if (urlToken) {
           // 清除 URL 参数
-          const cleanUrl = window.location.pathname + window.location.hash;
+          const cleanUrl = buildUrlWithoutAuthToken(window.location);
           window.history.replaceState({}, '', cleanUrl);
 
           // 直接用 URL token 登录

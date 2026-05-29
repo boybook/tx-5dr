@@ -42,6 +42,7 @@ export interface ConnectionState {
   isConnecting: boolean;
   isReady: boolean;
   wasEverConnected: boolean;
+  wasEverReady: boolean;
   radioService: RadioService | null;
   connectError: string | null;
 }

@@ -38,11 +38,11 @@ function AppContent() {
   const activeOperatorId = currentOperatorId || operators[0]?.id || null;
   const mainRightPanels = useVisiblePluginPanelsForSlot(activeOperatorId, 'main-right');
 
-  // 初次连接状态：未曾连接成功时，显示专用页面代替空 UI
-  if (!connectionState.wasEverConnected) {
+  // 首次业务握手完成前不渲染主界面，避免组件在仅 WS open 时抢先发受保护命令。
+  if (!connectionState.wasEverReady) {
     return (
       <ServerStatusPage
-        isConnecting={connectionState.isConnecting}
+        isConnecting={connectionState.isConnecting || connectionState.isConnected}
         connectError={connectionState.connectError}
         radioService={connectionState.radioService}
       />

@@ -902,7 +902,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const baseRadioSdrFrequency = sessionState?.currentRadioFrequency ?? currentRadioFrequency ?? null;
   baseRadioSdrFrequencyRef.current = baseRadioSdrFrequency;
   radioServiceRef.current = connection.state.radioService;
-  hasActiveSpectrumSubscriptionRef.current = !isCollapsed && Boolean(subscribedKind);
+  hasActiveSpectrumSubscriptionRef.current = connection.state.isConnected && !isCollapsed && Boolean(subscribedKind);
   const effectiveRadioSdrFrequency = isRadioSdrSelected && !isFixedSpectrumMode
     ? resolveRadioSdrOptimisticDisplayFrequencyHz(radioSdrOptimisticDisplayState, baseRadioSdrFrequency)
     : baseRadioSdrFrequency;
@@ -1261,12 +1261,12 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   }, [connection.state.radioService, isCollapsed, setSubscribedKind, streamController]);
 
   useEffect(() => {
-    if (isCollapsed || !connection.state.isReady || !subscribedKind) {
+    if (isCollapsed || !connection.state.isConnected || !subscribedKind) {
       return;
     }
 
     connection.state.radioService?.subscribeSpectrum(subscribedKind);
-  }, [connection.state.isReady, connection.state.radioService, isCollapsed, subscribedKind]);
+  }, [connection.state.isConnected, connection.state.radioService, isCollapsed, subscribedKind]);
 
   useEffect(() => {
     const radioService = connection.state.radioService;
@@ -1525,6 +1525,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
 
     setSelectedKind(kind);
     if (!isCollapsed) {
+      setSubscribedKind(kind);
       radioService.subscribeSpectrum(kind);
     } else {
       setSubscribedKind(null);
