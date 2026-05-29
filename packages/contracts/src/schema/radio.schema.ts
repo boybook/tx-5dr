@@ -327,6 +327,7 @@ export const RadioInfoSchema = z.object({
  */
 export const SerialPortSchema = z.object({
   path: z.string(),
+  friendlyName: z.string().optional(),
   manufacturer: z.string().optional(),
   serialNumber: z.string().optional(),
   pnpId: z.string().optional(),

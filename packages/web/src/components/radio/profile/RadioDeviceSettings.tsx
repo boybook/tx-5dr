@@ -16,9 +16,11 @@ interface RigInfo {
 
 interface PortInfo {
   path: string;
+  friendlyName?: string;
   manufacturer?: string;
   serialNumber?: string;
   pnpId?: string;
+  locationId?: string;
   vendorId?: string;
   productId?: string;
 }
@@ -76,6 +78,70 @@ const FIELD_ORDER = [
   ...ADVANCED_PRIORITY_FIELD_ORDER,
   ...MULTICAST_FIELD_ORDER,
 ] as const;
+
+function normalizePortMetadata(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function formatPnpIdForDisplay(pnpId: string | undefined): string | undefined {
+  const normalized = normalizePortMetadata(pnpId);
+  if (!normalized) return undefined;
+
+  const basename = normalized.split(/[\\/]/).filter(Boolean).pop() ?? normalized;
+  return basename
+    .replace(/^usb-/i, '')
+    .replace(/-if\d+-port\d+$/i, '')
+    .replace(/-port\d+$/i, '')
+    .replace(/_/g, ' ')
+    .trim() || normalized;
+}
+
+function pushUniquePortDetail(details: string[], value: string | undefined): void {
+  const normalized = normalizePortMetadata(value);
+  if (!normalized) return;
+
+  const alreadyIncluded = details.some((detail) => detail.toLowerCase() === normalized.toLowerCase());
+  if (!alreadyIncluded) {
+    details.push(normalized);
+  }
+}
+
+function formatSerialPortDisplay(port: PortInfo): { title: string; details: string; searchText: string } {
+  const friendlyName = normalizePortMetadata(port.friendlyName);
+  const manufacturer = normalizePortMetadata(port.manufacturer);
+  const pnpLabel = formatPnpIdForDisplay(port.pnpId);
+  const title = friendlyName || [manufacturer, pnpLabel].filter(Boolean).join(' · ') || port.path;
+
+  const details: string[] = [];
+  pushUniquePortDetail(details, port.path);
+  if (port.vendorId && port.productId) {
+    pushUniquePortDetail(details, `VID:PID ${port.vendorId}:${port.productId}`);
+  } else {
+    pushUniquePortDetail(details, port.vendorId ? `VID ${port.vendorId}` : undefined);
+    pushUniquePortDetail(details, port.productId ? `PID ${port.productId}` : undefined);
+  }
+  pushUniquePortDetail(details, port.serialNumber ? `SN ${port.serialNumber}` : undefined);
+  pushUniquePortDetail(details, port.pnpId);
+
+  const searchFields = [
+    port.path,
+    friendlyName,
+    manufacturer,
+    pnpLabel,
+    port.pnpId,
+    port.vendorId,
+    port.productId,
+    port.serialNumber,
+    port.locationId,
+  ];
+
+  return {
+    title,
+    details: details.filter((detail) => detail !== title).join(' · '),
+    searchText: searchFields.filter(Boolean).join(' '),
+  };
+}
 
 function orderHamlibFields(fields: HamlibConfigField[]): HamlibConfigField[] {
   return [...fields].sort((left, right) => {
@@ -1043,11 +1109,19 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       size="md"
                       defaultItems={ports}
                     >
-                      {(item: PortInfo) => (
-                        <AutocompleteItem key={item.path} textValue={item.path}>
-                          {item.path}
-                        </AutocompleteItem>
-                      )}
+                      {(item: PortInfo) => {
+                        const display = formatSerialPortDisplay(item);
+                        return (
+                          <AutocompleteItem key={item.path} textValue={display.searchText}>
+                            <div className="flex flex-col gap-0.5 py-0.5">
+                              <span className="text-small truncate">{display.title}</span>
+                              {display.details && (
+                                <span className="text-tiny text-default-400 truncate">{display.details}</span>
+                              )}
+                            </div>
+                          </AutocompleteItem>
+                        );
+                      }}
                     </Autocomplete>
                   )}
                   <Divider />
