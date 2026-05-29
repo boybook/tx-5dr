@@ -1,7 +1,35 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 
 describe('DigitalRadioEngine worker pool telemetry', () => {
+  it('releases an existing CW keyer during shutdown without creating one', async () => {
+    const cwKeyerManager = {
+      stop: vi.fn().mockResolvedValue(undefined),
+      removeAllListeners: vi.fn(),
+    };
+    const engine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
+      cwKeyerManager,
+    });
+
+    await engine.releaseCWKeyerForShutdown('test shutdown');
+
+    expect(cwKeyerManager.stop).toHaveBeenCalledTimes(1);
+    expect(cwKeyerManager.removeAllListeners).toHaveBeenCalledTimes(1);
+    expect(engine.cwKeyerManager).toBeNull();
+  });
+
+  it('does not create a CW keyer when shutdown release has nothing to close', async () => {
+    const engine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
+      cwKeyerManager: null,
+      getCWKeyerManager: vi.fn(),
+    });
+
+    await engine.releaseCWKeyerForShutdown('test shutdown');
+
+    expect(engine.getCWKeyerManager).not.toHaveBeenCalled();
+    expect(engine.cwKeyerManager).toBeNull();
+  });
+
   it('aggregates cw-decode worker RSS and CPU from worker snapshots', () => {
     const workers = [
       {

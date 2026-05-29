@@ -789,16 +789,17 @@ export async function radioRoutes(fastify: FastifyInstance) {
     }
 
     const cwKeyMethod = config.cwKeyMethod || 'dtr';
-    logger.debug(`Testing CW keyer on ${cwKeyPort} (${cwKeyMethod})`);
+    const cwKeyActiveLevel = config.cwKeyActiveLevel || 'high';
+    logger.debug(`Testing CW keyer on ${cwKeyPort} (${cwKeyMethod}, active ${cwKeyActiveLevel})`);
 
-    const hardware = new CWKeyerHardware(cwKeyPort, cwKeyMethod);
+    const hardware = new CWKeyerHardware(cwKeyPort, cwKeyMethod, cwKeyActiveLevel);
     try {
       await hardware.open();
       await hardware.keyDown();
       await new Promise(resolve => setTimeout(resolve, 500));
       await hardware.keyUp();
       logger.info(`CW keyer test successful on ${cwKeyPort}`);
-      return reply.send({ success: true, message: 'CW keyer test successful! Keyed for 0.5 seconds on ' + cwKeyPort + ' (' + cwKeyMethod.toUpperCase() + ').' });
+      return reply.send({ success: true, message: 'CW keyer test successful! Keyed for 0.5 seconds on ' + cwKeyPort + ' (' + cwKeyMethod.toUpperCase() + ', active ' + cwKeyActiveLevel + ').' });
     } catch (error) {
       logger.error('CW keyer test failed:', error);
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);

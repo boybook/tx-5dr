@@ -1,4 +1,5 @@
 import { SerialPort } from 'serialport';
+import type { CWKeyActiveLevel } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('CWKeyerHardware');
@@ -13,12 +14,14 @@ export class CWKeyerHardware {
   private port: SerialPort | null = null;
   private readonly portPath: string;
   private readonly method: 'dtr' | 'rts';
+  private readonly activeLevel: CWKeyActiveLevel;
   private _isKeyDown = false;
   private _open = false;
 
-  constructor(portPath: string, method: 'dtr' | 'rts') {
+  constructor(portPath: string, method: 'dtr' | 'rts', activeLevel: CWKeyActiveLevel = 'high') {
     this.portPath = portPath;
     this.method = method;
+    this.activeLevel = activeLevel;
   }
 
   get isOpen(): boolean {
@@ -49,18 +52,21 @@ export class CWKeyerHardware {
           reject(new Error(`Failed to open CW key port ${this.portPath}: ${err.message}`));
           return;
         }
-        resolve();
+        this.resetControlLines()
+          .then(resolve)
+          .catch(async (error) => {
+            await this.closePortBestEffort(this.port);
+            reject(new Error(`Failed to reset CW key port ${this.portPath}: ${error instanceof Error ? error.message : String(error)}`));
+          });
       });
     });
 
-    // 确保初始状态为 key-up
-    await this.setPin(false);
     this._open = true;
     logger.info(`CW keyer hardware opened on ${this.portPath} (${this.method})`);
   }
 
   /**
-   * 键控按下（引脚拉高）
+   * 键控按下（按配置的有效电平驱动引脚）
    */
   async keyDown(): Promise<void> {
     if (!this._open || this._isKeyDown) {
@@ -71,7 +77,7 @@ export class CWKeyerHardware {
   }
 
   /**
-   * 键控释放（引脚拉低）
+   * 键控释放（按配置的空闲电平驱动引脚）
    */
   async keyUp(): Promise<void> {
     if (!this._open || !this._isKeyDown) {
@@ -89,11 +95,15 @@ export class CWKeyerHardware {
       return;
     }
 
-    // 确保键控释放
-    if (this._isKeyDown) {
-      await this.setPin(false);
-      this._isKeyDown = false;
+    // 确保所有控制线释放，覆盖 Linux open() 后默认拉高 DTR/RTS 的情况。
+    try {
+      await this.resetControlLines();
+    } catch (error) {
+      logger.warn(`Failed to reset CW keyer control lines before close on ${this.portPath}`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
+    this._isKeyDown = false;
 
     const port = this.port;
     this.port = null;
@@ -108,11 +118,27 @@ export class CWKeyerHardware {
     logger.info(`CW keyer hardware closed on ${this.portPath}`);
   }
 
-  private async setPin(active: boolean): Promise<void> {
+  private async resetControlLines(): Promise<void> {
+    const idle = this.inactivePinState();
+    await this.setControlLines({ rts: idle, dtr: idle });
+  }
+
+  private async setPin(keyDown: boolean): Promise<void> {
+    await this.setControlLines({ [this.method]: keyDown ? this.activePinState() : this.inactivePinState() });
+  }
+
+  private activePinState(): boolean {
+    return this.activeLevel !== 'low';
+  }
+
+  private inactivePinState(): boolean {
+    return !this.activePinState();
+  }
+
+  private async setControlLines(signal: { dtr?: boolean; rts?: boolean }): Promise<void> {
     if (!this.port) {
       return;
     }
-    const signal = { [this.method]: active };
     await new Promise<void>((resolve, reject) => {
       this.port!.set(signal, (err) => {
         if (err) {
@@ -122,5 +148,19 @@ export class CWKeyerHardware {
         }
       });
     });
+  }
+
+  private async closePortBestEffort(port: SerialPort | null): Promise<void> {
+    if (!port) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      port.close(() => resolve());
+    });
+    if (this.port === port) {
+      this.port = null;
+    }
+    this._open = false;
+    this._isKeyDown = false;
   }
 }

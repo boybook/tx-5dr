@@ -109,6 +109,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     backend: 'cat',
     keyPort: '',
     keyMethod: 'dtr',
+    keyActiveLevel: 'high',
     wpm: 20,
   };
   private backendExplicit = false;
@@ -675,6 +676,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       ...config,
       keyPort: radioConfig.cwKeyPort || config.keyPort || '',
       keyMethod: radioConfig.cwKeyMethod || config.keyMethod || 'dtr',
+      keyActiveLevel: radioConfig.cwKeyActiveLevel || config.keyActiveLevel || 'high',
     });
     return {
       ...runtimeConfig,
@@ -711,6 +713,9 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     if (update.keyMethod === 'dtr' || update.keyMethod === 'rts') {
       filtered.keyMethod = update.keyMethod;
     }
+    if (update.keyActiveLevel === 'high' || update.keyActiveLevel === 'low') {
+      filtered.keyActiveLevel = update.keyActiveLevel;
+    }
     if (typeof update.wpm === 'number' && Number.isFinite(update.wpm)) {
       filtered.wpm = update.wpm;
     }
@@ -722,6 +727,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       backend: config.backend === 'serial' ? 'serial' : 'cat',
       keyPort: typeof config.keyPort === 'string' ? config.keyPort : '',
       keyMethod: config.keyMethod === 'rts' ? 'rts' : 'dtr',
+      keyActiveLevel: config.keyActiveLevel === 'low' ? 'low' : 'high',
       wpm: Math.max(5, Math.min(60, Math.round(Number(config.wpm ?? 20)))),
     };
   }

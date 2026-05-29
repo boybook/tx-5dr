@@ -6,7 +6,7 @@ const logger = createLogger('RadioDeviceSettings');
 import { useTranslation } from 'react-i18next';
 import { Input, Select, SelectItem, Autocomplete, AutocompleteItem, Tabs, Tab, Card, CardBody, Divider, Button, Chip, Tooltip, Accordion, AccordionItem } from '@heroui/react';
 import { api, ApiError } from '@tx5dr/core';
-import type { DigitalModeRadioModePreference, HamlibConfig, HamlibConfigField, PttMethod, RigConfigSchemaResponse } from '@tx5dr/contracts';
+import type { CWKeyActiveLevel, DigitalModeRadioModePreference, HamlibConfig, HamlibConfigField, PttMethod, RigConfigSchemaResponse } from '@tx5dr/contracts';
 
 interface RigInfo {
   rigModel: number;
@@ -754,6 +754,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     // 渲染 CW 键控端口配置区块（仅 serial / network 模式）
     const renderCWKeyerPortConfig = () => {
       const cwKeyMethod = config.cwKeyMethod || 'dtr';
+      const cwKeyActiveLevel: CWKeyActiveLevel = config.cwKeyActiveLevel || 'high';
 
       return (
         <div className="space-y-3">
@@ -799,6 +800,21 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
           >
             <SelectItem key="dtr" textValue="DTR">DTR</SelectItem>
             <SelectItem key="rts" textValue="RTS">RTS</SelectItem>
+          </Select>
+
+          <Select
+            label={t('radio.cwKeyActiveLevel')}
+            size="sm"
+            selectedKeys={[cwKeyActiveLevel]}
+            onSelectionChange={keys => {
+              const activeLevel = Array.from(keys)[0] as CWKeyActiveLevel;
+              updateConfig({ cwKeyActiveLevel: activeLevel });
+            }}
+            variant="flat"
+            description={t('radio.cwKeyActiveLevelDesc')}
+          >
+            <SelectItem key="high" textValue={t('radio.cwKeyActiveHigh')}>{t('radio.cwKeyActiveHigh')}</SelectItem>
+            <SelectItem key="low" textValue={t('radio.cwKeyActiveLow')}>{t('radio.cwKeyActiveLow')}</SelectItem>
           </Select>
 
           <Button

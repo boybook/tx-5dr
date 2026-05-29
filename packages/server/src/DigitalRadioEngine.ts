@@ -751,6 +751,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.cwKeyerManager;
   }
 
+  public async releaseCWKeyerForShutdown(reason: string): Promise<void> {
+    if (!this.cwKeyerManager) {
+      return;
+    }
+
+    await this.cwKeyerManager.stop();
+    this.cwKeyerManager.removeAllListeners();
+    this.cwKeyerManager = null;
+    logger.info('CW keyer manager released for shutdown', { reason });
+  }
+
   public getCWDecoderManager(): CWDecoderManager {
     if (!this.cwDecoderManager) {
       this.cwDecoderManager = new CWDecoderManager({
@@ -1226,12 +1237,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
 
     // 清理 CW 键控器
-    if (this.cwKeyerManager) {
-      await this.cwKeyerManager.stop();
-      this.cwKeyerManager.removeAllListeners();
-      this.cwKeyerManager = null;
-      logger.info('CW keyer manager destroyed');
-    }
+    await this.releaseCWKeyerForShutdown('engine destroyed');
     if (this.cwDecoderManager) {
       this.cwDecoderManager.detachAudioStream();
       await this.cwDecoderManager.stop('engine-destroy');

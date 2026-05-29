@@ -6,6 +6,9 @@ import { z } from 'zod';
 export const CWKeyerBackendSchema = z.enum(['cat', 'serial']);
 export type CWKeyerBackend = z.infer<typeof CWKeyerBackendSchema>;
 
+export const CWKeyActiveLevelSchema = z.enum(['high', 'low']);
+export type CWKeyActiveLevel = z.infer<typeof CWKeyActiveLevelSchema>;
+
 export const CWKeyerConfigSchema = z.object({
   /** CW 发报后端：cat=Hamlib 整报文，serial=DTR/RTS 时序键控 */
   backend: CWKeyerBackendSchema.default('cat'),
@@ -13,6 +16,8 @@ export const CWKeyerConfigSchema = z.object({
   keyPort: z.string(),
   /** CW 键控引脚类型 */
   keyMethod: z.enum(['dtr', 'rts']),
+  /** CW 键控有效电平：high=高电平按下，low=低电平按下 */
+  keyActiveLevel: CWKeyActiveLevelSchema.default('high'),
   /** 莫尔斯码速度 (WPM, 5-60) */
   wpm: z.number().int().min(5).max(60).default(20),
 });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CWKeyActiveLevelSchema } from './cw-keyer.schema.js';
 
 /**
  * 中继差频方向
@@ -270,6 +271,9 @@ export const HamlibConfigSchema = z.object({
 
   // CW 键控引脚类型（dtr 或 rts）
   cwKeyMethod: z.enum(['dtr', 'rts']).optional(),
+
+  // CW 键控有效电平（默认 high，即高电平按下；部分接口为低电平按下）
+  cwKeyActiveLevel: CWKeyActiveLevelSchema.optional(),
 });
 
 /**
