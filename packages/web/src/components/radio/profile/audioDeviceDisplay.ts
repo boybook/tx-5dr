@@ -29,7 +29,7 @@ export function getResolutionDescription(
   if (!resolution) return null;
 
   if (resolution.status === 'missing') {
-    return t('audio.deviceUnavailable');
+    return t('audio.deviceMissingPreserved');
   }
 
   if (resolution.status === 'virtual-selected') {
