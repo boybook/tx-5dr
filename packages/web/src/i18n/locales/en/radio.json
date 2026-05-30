@@ -307,6 +307,7 @@
     "networkUnreachable": "Cannot reach the radio network. Check Wi-Fi / IP address.",
     "operationTimeout": "Radio operation timed out.",
     "radioNoResponse": "The radio did not respond in time.",
+    "serialRadioCommunicationFailed": "Serial port opened, but the radio did not respond. Check that the baud rate on the radio matches the software setting.",
     "suggestion": {
       "connectRadioUsb": "Connect the radio via USB and power it on",
       "refreshSerialPortList": "Refresh the serial port list and pick the correct device",
@@ -322,7 +323,9 @@
       "checkWifi": "Check your Wi-Fi or network connection",
       "verifyRadioIpSameNetwork": "Verify the radio IP address is correct and on the same network",
       "checkCableConnected": "Verify the CAT cable is properly connected",
-      "verifyBaudRate": "Verify the baud rate matches the radio setting"
+      "verifyBaudRate": "Check the CAT/CI-V baud rate in the radio menu and make sure it matches this profile",
+      "verifyRadioModel": "Confirm the selected radio model matches the connected radio",
+      "enableCatControl": "Enable CAT/CI-V control on the radio if the model requires it"
     }
   },
   "power": {

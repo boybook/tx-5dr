@@ -954,6 +954,35 @@ describe('HamlibConnection', () => {
     });
   });
 
+  it('reports post-open serial communication failures with baud-rate guidance', async () => {
+    const { connection } = createConnectedConnection({
+      getFrequency: vi.fn().mockRejectedValue(new Error('Communication verification timeout')),
+    });
+
+    asTestConnection(connection).currentConfig = {
+      type: 'serial',
+      serial: { path: '/dev/ttyUSB0', rigModel: 1049 },
+    };
+
+    await expect(
+      (connection as unknown as { verifyRadioCommunication: () => Promise<void> }).verifyRadioCommunication(),
+    ).rejects.toMatchObject({
+      code: RadioErrorCode.CONNECTION_FAILED,
+      userMessage: 'Serial port opened but cannot establish radio communication',
+      userMessageKey: 'radio:error.serialRadioCommunicationFailed',
+      suggestions: expect.arrayContaining([
+        'radio:error.suggestion.verifyBaudRate',
+        'radio:error.suggestion.verifyRadioModel',
+        'radio:error.suggestion.enableCatControl',
+      ]),
+      context: expect.objectContaining({
+        operation: 'verifyRadioCommunication',
+        port: '/dev/ttyUSB0',
+        rigModel: 1049,
+      }),
+    });
+  });
+
   it('times out the extra Yaesu meter diagnostic strength read so polling can finish', async () => {
     vi.useFakeTimers();
     try {

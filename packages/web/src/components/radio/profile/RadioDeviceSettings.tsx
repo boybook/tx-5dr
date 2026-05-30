@@ -79,6 +79,22 @@ const FIELD_ORDER = [
   ...MULTICAST_FIELD_ORDER,
 ] as const;
 
+function formatApiErrorForSettings(
+  error: unknown,
+  t: (key: string, options?: Record<string, unknown>) => string,
+  fallbackKey: string,
+): string {
+  if (error instanceof ApiError) {
+    if (error.userMessageKey) {
+      return t(error.userMessageKey, { ...(error.userMessageParams ?? {}), defaultValue: error.userMessage });
+    }
+
+    return t(`radio.testError.${error.code}`, { defaultValue: error.userMessage });
+  }
+
+  return error instanceof Error ? error.message : t(fallbackKey);
+}
+
 function normalizePortMetadata(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
@@ -618,9 +634,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     } catch (error) {
       setTestResult({
         type: 'error',
-        message: error instanceof ApiError
-          ? t(`radio.testError.${error.code}`, { defaultValue: error.userMessage })
-          : (error instanceof Error ? error.message : t('radio.testConnectionFailedCheck'))
+        message: formatApiErrorForSettings(error, t, 'radio.testConnectionFailedCheck'),
       });
     } finally {
       setIsTestingConnection(false);

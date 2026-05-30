@@ -352,6 +352,7 @@
     "networkUnreachable": "無線が配置されているネットワークにアクセスできません。Wi-Fi または無線の IP アドレスを確認してください。",
     "operationTimeout": "無線操作がタイムアウトしました。",
     "radioNoResponse": "局は時間内に応答しませんでした。",
+    "serialRadioCommunicationFailed": "シリアルポートは開けましたが、無線機が応答しません。無線機側のボーレートがソフトウェア設定と一致しているか確認してください。",
     "suggestion": {
       "connectRadioUsb": "USB経由で無線機を接続し、オンにします",
       "refreshSerialPortList": "シリアルポートリストを更新し、正しいデバイスを選択します",
@@ -367,7 +368,9 @@
       "checkWifi": "Wi-Fiまたはネットワーク接続を確認してください",
       "verifyRadioIpSameNetwork": "局のIPアドレスが正しく、コンピュータと同じネットワーク上にあることを確認します。",
       "checkCableConnected": "CAT ケーブルの接続が確実であることを確認します。",
-      "verifyBaudRate": "ボーレートが無線設定と一致していることを確認します。"
+      "verifyBaudRate": "無線機メニューの CAT/CI-V ボーレートがこのプロファイルの設定と一致していることを確認してください",
+      "verifyRadioModel": "選択した無線機モデルが接続中の無線機と一致していることを確認してください",
+      "enableCatControl": "必要な機種では、無線機メニューで CAT/CI-V 制御を有効にしてください"
     }
   },
   "operator": {

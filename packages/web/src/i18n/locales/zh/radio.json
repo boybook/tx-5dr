@@ -359,6 +359,7 @@
     "networkUnreachable": "无法访问电台所在网络，请检查 Wi-Fi 或电台 IP 地址。",
     "operationTimeout": "电台操作超时。",
     "radioNoResponse": "电台未及时响应。",
+    "serialRadioCommunicationFailed": "串口已打开，但电台没有响应。请检查电台菜单中的波特率是否与软件配置一致。",
     "suggestion": {
       "connectRadioUsb": "将电台通过 USB 连接并开机",
       "refreshSerialPortList": "刷新串口列表并选择正确的设备",
@@ -374,7 +375,9 @@
       "checkWifi": "检查 Wi-Fi 或网络连接",
       "verifyRadioIpSameNetwork": "确认电台 IP 地址正确且与电脑处于同一网络",
       "checkCableConnected": "确认 CAT 线缆连接可靠",
-      "verifyBaudRate": "确认波特率与电台设置一致"
+      "verifyBaudRate": "检查电台菜单中的 CAT/CI-V 波特率，并确认它与此 Profile 中的软件配置一致",
+      "verifyRadioModel": "确认选择的电台型号与实际连接的电台一致",
+      "enableCatControl": "如果电台需要，请在电台菜单中启用 CAT/CI-V 控制"
     }
   },
   "operator": {

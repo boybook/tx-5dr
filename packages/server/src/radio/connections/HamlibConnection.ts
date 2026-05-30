@@ -2832,13 +2832,14 @@ export class HamlibConnection
         code: RadioErrorCode.CONNECTION_FAILED,
         message: `Serial port opened but cannot communicate with radio: ${(error as Error).message}`,
         userMessage: 'Serial port opened but cannot establish radio communication',
+        userMessageKey: 'radio:error.serialRadioCommunicationFailed',
         severity: RadioErrorSeverity.ERROR,
         suggestions: [
-          'Check if radio is powered on',
-          'Check if serial cable (CI-V/CAT) is properly connected',
-          'Confirm correct radio model selection',
-          'Verify baud rate and serial parameters match',
-          'Some radios require enabling CI-V/CAT function',
+          'radio:error.suggestion.verifyBaudRate',
+          'radio:error.suggestion.verifyRadioPoweredOn',
+          'radio:error.suggestion.checkCableConnected',
+          'radio:error.suggestion.verifyRadioModel',
+          'radio:error.suggestion.enableCatControl',
         ],
         cause: error,
         context: {
@@ -3686,6 +3687,28 @@ export class HamlibConnection
         suggestions: [
           'radio:error.suggestion.checkWifi',
           'radio:error.suggestion.verifyRadioIpSameNetwork',
+        ],
+        cause: error,
+        context: baseContext,
+      });
+    }
+
+    // 串口已打开，但无法完成真实 CAT/CI-V 通信验证，常见原因是波特率或电台 CAT 设置不一致。
+    if (
+      lower.includes('serial port opened but cannot establish radio communication') ||
+      lower.includes('serial port opened but cannot communicate with radio')
+    ) {
+      return new RadioError({
+        code: RadioErrorCode.CONNECTION_FAILED,
+        message: summary,
+        userMessage: 'Serial port opened but cannot establish radio communication',
+        userMessageKey: 'radio:error.serialRadioCommunicationFailed',
+        suggestions: [
+          'radio:error.suggestion.verifyBaudRate',
+          'radio:error.suggestion.verifyRadioPoweredOn',
+          'radio:error.suggestion.checkCableConnected',
+          'radio:error.suggestion.verifyRadioModel',
+          'radio:error.suggestion.enableCatControl',
         ],
         cause: error,
         context: baseContext,
