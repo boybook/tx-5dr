@@ -19,9 +19,9 @@ import {
   formatCtcssTone,
   formatDcsCode,
 } from '../../utils/toneSquelch';
+import { FALLBACK_VOICE_RADIO_MODES, normalizeVoiceRadioMode } from '../../utils/voiceRadioModeOptions';
 
 const MODE_OPTIONS = ['FT8', 'FT4', 'VOICE'];
-const RADIO_MODE_OPTIONS = ['USB', 'LSB', 'FM', 'AM'];
 const REPEATER_SHIFT_OPTIONS = ['none', 'minus', 'plus'] as const;
 const TONE_SQUELCH_OPTIONS = ['none', 'ctcss', 'dcs'] as const;
 const CUSTOM_BAND = 'custom';
@@ -33,6 +33,7 @@ interface FrequencyPresetAddModalProps {
   presets: PresetFrequency[];
   initialMode?: string;
   initialRadioMode?: string;
+  voiceRadioModeOptions?: string[];
   initialFrequencyHz?: number;
   editingPreset?: PresetFrequency | null;
   onClose: () => void;
@@ -45,6 +46,7 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
   presets,
   initialMode = 'FT8',
   initialRadioMode = 'USB',
+  voiceRadioModeOptions = [...FALLBACK_VOICE_RADIO_MODES],
   initialFrequencyHz,
   editingPreset,
   onClose,
@@ -112,6 +114,12 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
     () => inferredBand ?? (hasValidFrequencyInput ? t('freqPresets.customBand') : t('freqPresets.bandAutoPending')),
     [hasValidFrequencyInput, inferredBand, t],
   );
+  const radioModeOptions = useMemo(() => {
+    const normalizedModes = voiceRadioModeOptions
+      .map(normalizeVoiceRadioMode)
+      .filter((mode): mode is string => Boolean(mode));
+    return normalizedModes.length > 0 ? Array.from(new Set(normalizedModes)) : [...FALLBACK_VOICE_RADIO_MODES];
+  }, [voiceRadioModeOptions]);
   const supportsFmOptions = newMode === 'VOICE' && newRadioMode === 'FM';
 
   const clearFmOptions = () => {
@@ -263,7 +271,7 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
               }}
               className="flex-1"
             >
-              {RADIO_MODE_OPTIONS.map(mode => (
+              {radioModeOptions.map(mode => (
                 <SelectItem key={mode} textValue={mode}>{mode}</SelectItem>
               ))}
             </Select>

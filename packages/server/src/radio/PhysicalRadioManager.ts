@@ -1271,6 +1271,20 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     return this.capabilityManager.getCapabilitySnapshot();
   }
 
+  getSupportedRadioModeOptions(): string[] {
+    const snapshot = this.capabilityManager.getCapabilitySnapshot();
+    const state = snapshot.capabilities.find((capability) => capability.id === 'radio_mode');
+    if (!state?.supported) {
+      return [];
+    }
+
+    const descriptor = snapshot.descriptors.find((item) => item.id === 'radio_mode');
+    return (descriptor?.options ?? [])
+      .map((option) => option.value)
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map((value) => value.trim().toUpperCase());
+  }
+
   /**
    * Refresh all capability values on demand (triggered by frontend button).
    */

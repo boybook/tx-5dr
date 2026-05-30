@@ -666,6 +666,87 @@ describe('RadioCapabilityManager', () => {
     manager.onDisconnected();
   });
 
+  it('discovers WFM through the radio_mode capability when the radio reports support', async () => {
+    const manager = new RadioCapabilityManager();
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      getSupportedModes: vi.fn().mockResolvedValue(['LSB', 'USB', 'CW', 'WFM', 'FM']),
+      getMode: vi.fn().mockResolvedValue({ mode: 'WFM', bandwidth: 'wide' }),
+    });
+
+    let latestSnapshot = manager.getCapabilitySnapshot();
+    manager.on('capabilityList', (snapshot) => {
+      latestSnapshot = snapshot;
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+
+    expect(getDescriptor(latestSnapshot.descriptors, 'radio_mode')).toMatchObject({
+      id: 'radio_mode',
+      valueType: 'enum',
+      writable: false,
+      options: [{ value: 'USB' }, { value: 'LSB' }, { value: 'FM' }, { value: 'WFM' }],
+    });
+    expect(getCapability(latestSnapshot.capabilities, 'radio_mode')).toMatchObject({
+      id: 'radio_mode',
+      supported: true,
+      value: 'WFM',
+    });
+
+    manager.onDisconnected();
+  });
+
+  it('does not expose WFM when the radio mode capability does not report it', async () => {
+    const manager = new RadioCapabilityManager();
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      getSupportedModes: vi.fn().mockResolvedValue(['USB', 'LSB', 'AM', 'FM']),
+      getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 'wide' }),
+    });
+
+    let latestSnapshot = manager.getCapabilitySnapshot();
+    manager.on('capabilityList', (snapshot) => {
+      latestSnapshot = snapshot;
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+
+    expect(getDescriptor(latestSnapshot.descriptors, 'radio_mode').options).toEqual([
+      { value: 'USB', labelI18nKey: 'voice:radioMode.usb' },
+      { value: 'LSB', labelI18nKey: 'voice:radioMode.lsb' },
+      { value: 'FM', labelI18nKey: 'voice:radioMode.fm' },
+      { value: 'AM', labelI18nKey: 'voice:radioMode.am' },
+    ]);
+    expect(getCapability(latestSnapshot.capabilities, 'radio_mode')).toMatchObject({
+      id: 'radio_mode',
+      supported: true,
+      value: 'USB',
+    });
+
+    manager.onDisconnected();
+  });
+
+  it('marks radio_mode unsupported without a reliable supported mode list', async () => {
+    const manager = new RadioCapabilityManager();
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 'wide' }),
+    });
+
+    let latestSnapshot = manager.getCapabilitySnapshot();
+    manager.on('capabilityList', (snapshot) => {
+      latestSnapshot = snapshot;
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+
+    expect(getDescriptor(latestSnapshot.descriptors, 'radio_mode').options).toEqual([]);
+    expect(getCapability(latestSnapshot.capabilities, 'radio_mode')).toMatchObject({
+      id: 'radio_mode',
+      supported: false,
+      value: null,
+    });
+
+    manager.onDisconnected();
+  });
+
   it('refreshes the RF power descriptor when discrete steps change', async () => {
     const manager = new RadioCapabilityManager();
     let currentSteps = [{ value: 0.1, label: '1 W (10%)' }, { value: 0.5, label: '5 W (50%)' }];

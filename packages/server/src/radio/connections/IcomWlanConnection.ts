@@ -821,6 +821,12 @@ export class IcomWlanConnection
     }, { id: 'getMode' });
   }
 
+  async getSupportedModes(): Promise<string[]> {
+    // ICOM WLAN profiles do not expose a reliable per-model mode list here.
+    // Advertise only conservative voice modes; WFM requires explicit backend support.
+    return ['AM', 'FM', 'LSB', 'USB'];
+  }
+
   /**
    * 发送音频数据
    */

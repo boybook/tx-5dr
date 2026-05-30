@@ -11,7 +11,7 @@ import {
 } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { api, ApiError } from '@tx5dr/core';
-import { useConnection, useOperators, useRadioConnectionState, useRadioState, useSplitState } from '../../store/radioStore';
+import { useCapabilityDescriptor, useCapabilityState, useConnection, useOperators, useRadioConnectionState, useRadioState, useSplitState } from '../../store/radioStore';
 import { useAuth, useHasMinRole, useCan, useAbility } from '../../store/authStore';
 import { UserRole, type PresetFrequency } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
@@ -25,6 +25,7 @@ import { setRadioFrequencyWithIntent } from '../../utils/radioFrequencyIntent';
 import { FrequencyDigit } from '../radio/frequency/FrequencyDigit';
 import { SPLIT_FREQUENCY_ROW_CLASS, SplitFrequencyLayout } from '../radio/frequency/SplitFrequencyLayout';
 import { SplitSettingsPopover } from '../radio/frequency/SplitSettingsPopover';
+import { deriveVoiceRadioModeOptions } from '../../utils/voiceRadioModeOptions';
 
 const logger = createLogger('VoiceFrequencyControl');
 const CURRENT_CUSTOM_VOICE_FREQUENCY_KEY = '__current_custom_voice_frequency__';
@@ -56,6 +57,8 @@ export const VoiceFrequencyControl: React.FC = () => {
   const { operators } = useOperators();
   const radioConnection = useRadioConnectionState();
   const radio = useRadioState();
+  const radioModeDescriptor = useCapabilityDescriptor('radio_mode');
+  const radioModeCapabilityState = useCapabilityState('radio_mode');
   const { state: authState } = useAuth();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const canUseAuthenticatedRest = !authState.authEnabled || Boolean(authState.jwt);
@@ -223,7 +226,10 @@ export const VoiceFrequencyControl: React.FC = () => {
     }
   }, []);
 
-  const RADIO_MODES = ['USB', 'LSB', 'FM', 'AM'];
+  const radioModeOptions = useMemo(
+    () => deriveVoiceRadioModeOptions(radioModeDescriptor, radioModeCapabilityState),
+    [radioModeDescriptor, radioModeCapabilityState],
+  );
   const formatFrequencyLabel = useCallback((frequency: number) => `${(frequency / 1000000).toFixed(3)} MHz`, []);
   const formatBandLabel = useCallback((band?: string | null) => {
     if (!band || band.toLowerCase() === CUSTOM_BAND) {
@@ -806,7 +812,7 @@ export const VoiceFrequencyControl: React.FC = () => {
         {/* Radio mode buttons */}
         <div className="flex-shrink-0 flex justify-center">
           <ButtonGroup size="sm" variant="flat">
-            {RADIO_MODES.map((mode) => (
+            {radioModeOptions.map((mode) => (
               <Button
                 key={mode}
                 color={currentRadioMode === mode ? 'primary' : 'default'}
@@ -893,6 +899,7 @@ export const VoiceFrequencyControl: React.FC = () => {
         presets={presets}
         initialMode="VOICE"
         initialRadioMode={currentRadioMode}
+        voiceRadioModeOptions={radioModeOptions}
         initialFrequencyHz={currentFrequency}
         editingPreset={currentPresetForEdit}
         onClose={() => setIsAddPresetModalOpen(false)}

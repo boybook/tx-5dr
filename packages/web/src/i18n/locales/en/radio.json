@@ -757,6 +757,10 @@
       "label": "Attenuator",
       "description": "Switches the receive attenuator (ATT) level to reduce front-end overload in strong-signal environments. Higher values apply stronger attenuation."
     },
+    "radio_mode": {
+      "label": "Radio Mode",
+      "description": "Shows the current voice-capable modulation modes reported by the connected radio."
+    },
     "mode_bandwidth": {
       "label": "Mode Bandwidth",
       "description": "Reads and switches the active filter bandwidth for the current operating mode. The voice spectrum overlay prefers this real bandwidth when available."

@@ -22,6 +22,9 @@ import type { CapabilityRuntimeValue } from './types.js';
 
 type DynamicConnectionMethod = (...args: unknown[]) => unknown;
 
+const VOICE_RADIO_MODE_ORDER = ['USB', 'LSB', 'FM', 'AM', 'WFM'] as const;
+const VOICE_RADIO_MODE_SET = new Set<string>(VOICE_RADIO_MODE_ORDER);
+
 function getDynamicMethod(
   conn: Parameters<CapabilityDefinition['probeSupport']>[0],
   methodName: string,
@@ -50,6 +53,32 @@ function asOptionValues(values: unknown, fallback: Array<string | number>): Arra
   return values.filter((value): value is string | number => (
     typeof value === 'string' || typeof value === 'number'
   ));
+}
+
+function normalizeRadioModeName(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toUpperCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+async function getSupportedVoiceRadioModes(
+  conn: Parameters<CapabilityDefinition['probeSupport']>[0],
+): Promise<string[]> {
+  if (!conn.getSupportedModes) return [];
+
+  const supportedModes = await conn.getSupportedModes();
+  const normalizedModes = new Set(
+    supportedModes
+      .map(normalizeRadioModeName)
+      .filter((mode): mode is string => Boolean(mode))
+      .filter((mode) => VOICE_RADIO_MODE_SET.has(mode)),
+  );
+
+  return VOICE_RADIO_MODE_ORDER.filter((mode) => normalizedModes.has(mode));
+}
+
+function buildVoiceRadioModeOptions(modes: string[]) {
+  return modes.map((mode) => createOption(mode, `voice:radioMode.${mode.toLowerCase()}`));
 }
 
 function getHamlibConfigType(conn: Parameters<CapabilityDefinition['probeSupport']>[0]): string | undefined {
@@ -817,6 +846,44 @@ function createDefinitions(): CapabilityDefinition[] {
       },
       read: (conn) => conn.getAttenuatorLevel!(),
       write: (conn, value) => conn.setAttenuatorLevel!(value as number),
+    },
+    {
+      id: 'radio_mode',
+      descriptor: {
+        id: 'radio_mode',
+        category: 'operation',
+        valueType: 'enum',
+        options: [],
+        readable: true,
+        writable: false,
+        updateMode: 'polling',
+        pollIntervalMs: 2000,
+        labelI18nKey: 'radio:capability.radio_mode.label',
+        descriptionI18nKey: 'radio:capability.radio_mode.description',
+        hasSurfaceControl: false,
+      },
+      resolveDescriptor: async (conn) => ({
+        id: 'radio_mode',
+        category: 'operation',
+        valueType: 'enum',
+        options: buildVoiceRadioModeOptions(await getSupportedVoiceRadioModes(conn)),
+        readable: true,
+        writable: false,
+        updateMode: 'polling',
+        pollIntervalMs: 2000,
+        labelI18nKey: 'radio:capability.radio_mode.label',
+        descriptionI18nKey: 'radio:capability.radio_mode.description',
+        hasSurfaceControl: false,
+      }),
+      probeSupport: async (conn) => {
+        const modes = await getSupportedVoiceRadioModes(conn);
+        if (modes.length === 0) {
+          return false;
+        }
+        await conn.getMode();
+        return { supported: true, source: 'runtime-probe' };
+      },
+      read: async (conn) => normalizeRadioModeName((await conn.getMode()).mode),
     },
     {
       id: 'mode_bandwidth',
