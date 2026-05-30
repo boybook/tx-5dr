@@ -2680,6 +2680,82 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('preserves clipped Fox/Hound RR73 completion for a portable Fox callsign matched by base target', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'JH5FVT',
+      myGrid: 'PM74',
+      targetCallsign: 'EX8ABR',
+      pluginConfigs: {
+        'snr-filter': {
+          enabled: true,
+          settings: {
+            minSNR: -10,
+          },
+        },
+      },
+    });
+
+    patchRuntimeContext(pluginManager, operator.config.id, {
+      targetCallsign: 'EX8ABR',
+      reportSent: -14,
+      reportReceived: -9,
+    });
+    setRuntimeState(pluginManager, operator.config.id, 'TX3');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('EX8ABR JH5FVT R-14');
+
+    await (pluginManager as any).handleSlotStart(
+      createSlotInfo(60_000),
+      createSlotPack(createSlotInfo(45_000), []),
+    );
+
+    const changed = await pluginManager.reDecideOperator(
+      operator.config.id,
+      createSlotPack(createSlotInfo(45_000), [{
+        message: 'JH5FVT RR73; JA1AAA <EX8ABR/P',
+        snr: -14,
+        freq: 971,
+      }]),
+    );
+
+    expect(changed).toBe(true);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX5');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('EX8ABR JH5FVT 73');
+
+    await pluginManager.shutdown();
+  });
+
+  it('recognizes a portable Fox/Hound invite and replies with the full portable Fox callsign', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'JH5FVT',
+      myGrid: 'PM74',
+      targetCallsign: 'EX8ABR/P',
+    });
+
+    patchRuntimeContext(pluginManager, operator.config.id, {
+      targetCallsign: 'EX8ABR/P',
+      reportSent: -10,
+      reportReceived: -9,
+    });
+    setRuntimeState(pluginManager, operator.config.id, 'TX1');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('EX8ABR/P JH5FVT PM74');
+
+    const changed = await pluginManager.reDecideOperator(
+      operator.config.id,
+      createSlotPack(createSlotInfo(45_000), [{
+        message: 'BH5HIE RR73; JH5FVT <EX8ABR/P> -14',
+        snr: -9,
+        freq: 971,
+      }]),
+    );
+
+    expect(changed).toBe(true);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX3');
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.reportSent).toBe(-14);
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('EX8ABR/P JH5FVT R-14');
+
+    await pluginManager.shutdown();
+  });
+
   it('biases candidate scores using worked-station-bias', async () => {
     const hasWorkedSpy = vi.fn((callsign: string) => callsign === 'BG5DRB' || callsign === 'K1AAA');
     const { operator, pluginManager } = await createRuntimeHarness({
@@ -3018,6 +3094,43 @@ describe('PluginManager standard-qso late re-decision', () => {
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBe('EX8ABR');
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX1');
     expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('EX8ABR BG7XTV OL32');
+
+    await pluginManager.shutdown();
+  });
+
+  it('matches a base watched callsign against a portable Fox/Hound signoff', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      startOperator: false,
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      pluginConfigs: {
+        'watched-callsign-autocall': {
+          enabled: true,
+          settings: {},
+        },
+      },
+      operatorPluginSettings: {
+        'watched-callsign-autocall': {
+          watchList: ['EX8ABR'],
+          triggerMode: 'cq-or-signoff',
+          workedCallsignSkipDays: 0,
+        },
+      },
+    });
+
+    await (pluginManager as any).handleSlotStart(
+      createSlotInfo(30_000),
+      createSlotPack(createSlotInfo(15_000), [{
+        message: 'BH5HIE RR73; JH5FVT <EX8ABR/P> -14',
+        snr: -14,
+        freq: 1502,
+      }]),
+    );
+
+    expect(operator.isTransmitting).toBe(true);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBe('EX8ABR/P');
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX1');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('EX8ABR/P BG7XTV OL32');
 
     await pluginManager.shutdown();
   });

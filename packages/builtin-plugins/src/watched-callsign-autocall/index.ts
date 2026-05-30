@@ -5,6 +5,7 @@ import {
   type PluginContext,
   type PluginDefinition,
   type SlotInfo,
+  normalizeCallsign,
 } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import {
@@ -47,6 +48,10 @@ function getAutocallPriority(ctx: PluginContext): number {
   return getAutocallPriorityBase(ctx, 100);
 }
 
+function normalizeWatchCallsign(value: string): string {
+  return normalizeCallsign(value.trim().toUpperCase());
+}
+
 function hasActiveWatchEntries(value: unknown): boolean {
   return Array.isArray(value)
     && value.some((entry) => typeof entry === 'string' && entry.trim() !== '' && !entry.trim().startsWith('#'));
@@ -67,10 +72,16 @@ function buildWatchRules(ctx: PluginContext): WatchRule[] {
   }
 
   if (shouldUseLegacyAutoRegex(ctx) && (matchMode === 'exact' || matchMode === 'prefix')) {
-    return compileLegacyAutoRegexTextMatchRules(ctx.config.watchList, matchMode, { onInvalidRegex });
+    return compileLegacyAutoRegexTextMatchRules(ctx.config.watchList, matchMode, {
+      normalize: normalizeWatchCallsign,
+      onInvalidRegex,
+    });
   }
 
-  return compileTextMatchRules(ctx.config.watchList, matchMode, { onInvalidRegex });
+  return compileTextMatchRules(ctx.config.watchList, matchMode, {
+    normalize: normalizeWatchCallsign,
+    onInvalidRegex,
+  });
 }
 
 function findMatchedTarget(

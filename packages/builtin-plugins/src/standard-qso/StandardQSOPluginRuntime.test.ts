@@ -37,6 +37,19 @@ function createOperator(overrides: Partial<OperatorConfig> = {}): StandardQSOPlu
   };
 }
 
+function createParsedMessage(rawMessage: string, overrides: Partial<ParsedFT8Message> = {}): ParsedFT8Message {
+  return {
+    snr: -10,
+    dt: 0,
+    df: 1500,
+    rawMessage,
+    message: FT8MessageParser.parseMessage(rawMessage),
+    slotId: 'slot-test',
+    timestamp: 0,
+    ...overrides,
+  };
+}
+
 describe('StandardQSOPluginRuntime TX6 override', () => {
   it('omits the TX6 grid for compound CQ callsigns by default', () => {
     const runtime = new StandardQSOPluginRuntime(createOperator({
@@ -193,15 +206,7 @@ describe('StandardQSOPluginRuntime nonstandard callsign slots', () => {
     const operator = createOperator({ myCallsign: 'BD4XYR', myGrid: 'OM89' });
     const runtime = new StandardQSOPluginRuntime(operator);
     const rawMessage = 'BD4XYR RR73; JH1UBK <EX8ABR> -24';
-    const parsedMessage: ParsedFT8Message = {
-      snr: -10,
-      dt: 0,
-      df: 1500,
-      rawMessage,
-      message: FT8MessageParser.parseMessage(rawMessage),
-      slotId: 'slot-fox-rr73',
-      timestamp: 0,
-    };
+    const parsedMessage = createParsedMessage(rawMessage, { slotId: 'slot-fox-rr73' });
 
     runtime.patchContext({
       targetCallsign: 'EX8ABR',
@@ -219,5 +224,51 @@ describe('StandardQSOPluginRuntime nonstandard callsign slots', () => {
       callsign: 'EX8ABR',
       myCallsign: 'BD4XYR',
     }));
+  });
+
+  it('advances from TX3 when a portable Fox/Hound RR73 is clipped after the Fox callsign', async () => {
+    const operator = createOperator({ myCallsign: 'BH5HIE', myGrid: 'PM00' });
+    const runtime = new StandardQSOPluginRuntime(operator);
+    const rawMessage = 'BH5HIE RR73; JH5FVT <EX8ABR/P';
+    const parsedMessage = createParsedMessage(rawMessage, { snr: -12, slotId: 'slot-fox-rr73-clipped' });
+
+    runtime.patchContext({
+      targetCallsign: 'EX8ABR',
+      reportSent: -16,
+      reportReceived: -12,
+    });
+    runtime.setState('TX3');
+
+    await runtime.decide([parsedMessage]);
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.currentState).toBe('TX5');
+    expect(snapshot.slots?.TX5).toBe('EX8ABR BH5HIE 73');
+    expect(operator.recordQSOLog).toHaveBeenCalledWith(expect.objectContaining({
+      callsign: 'EX8ABR',
+      myCallsign: 'BH5HIE',
+    }));
+  });
+
+  it('matches a portable Fox callsign response against a base target callsign', async () => {
+    const operator = createOperator({ myCallsign: 'BH5HIE', myGrid: 'PM00' });
+    const runtime = new StandardQSOPluginRuntime(operator);
+    const rawMessage = 'BH5HIE EX8ABR/P +02';
+    const parsedMessage = createParsedMessage(rawMessage, { snr: -16, slotId: 'slot-portable-report' });
+
+    runtime.patchContext({
+      targetCallsign: 'EX8ABR',
+      reportSent: -14,
+    });
+    runtime.setState('TX1');
+
+    await runtime.decide([parsedMessage]);
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.currentState).toBe('TX3');
+    expect(snapshot.slots?.TX3).toBe('EX8ABR/P BH5HIE R-16');
+    expect(snapshot.context?.targetCallsign).toBe('EX8ABR/P');
+    expect(snapshot.context?.reportReceived).toBe(2);
+    expect(snapshot.context?.reportSent).toBe(-16);
   });
 });

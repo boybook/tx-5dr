@@ -14,7 +14,9 @@ import {
     OperatorSlots,
     OperatorConfig,
 } from '@tx5dr/contracts';
-import type {
+import {
+    normalizeCallsign,
+    type PluginLogger,
     StrategyDecision,
     StrategyDecisionMeta,
     StrategyRuntime,
@@ -24,7 +26,6 @@ import type {
     QSOFailureInfo,
 } from '@tx5dr/plugin-api';
 import { FT8MessageParser } from '@tx5dr/core';
-import type { PluginLogger } from '@tx5dr/plugin-api';
 
 export const STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING = 'tx6MessageOverride';
 
@@ -64,6 +65,14 @@ const fallbackLogger: PluginLogger = {
     warn(msg: string, data?: Record<string, unknown>) { console.warn(`[QSOStrategy] ${msg}`, data ?? ''); },
     error(msg: string, err?: unknown) { console.error(`[QSOStrategy] ${msg}`, err ?? ''); },
 };
+
+function callsignMatches(left: string | undefined, right: string | undefined): boolean {
+    if (!left || !right) return false;
+    const normalizedLeft = left.trim().toUpperCase();
+    const normalizedRight = right.trim().toUpperCase();
+    return normalizedLeft === normalizedRight
+        || normalizeCallsign(normalizedLeft) === normalizeCallsign(normalizedRight);
+}
 
 type SlotsIndex = 'TX1' | 'TX2' | 'TX3' | 'TX4' | 'TX5' | 'TX6';
 
@@ -186,12 +195,9 @@ async function trySwitchToDirectedProtocol(
         acceptFollowUpProtocol?: boolean;
     },
 ): Promise<StateHandleResult | null> {
-    const excluded = new Set(
-        (options?.excludeCallsigns ?? [])
-            .filter((callsign): callsign is string => typeof callsign === 'string' && callsign.trim().length > 0)
-            .map((callsign) => callsign.trim().toUpperCase()),
-    );
-    const myCallsign = strategy.context.config.myCallsign.toUpperCase();
+    const excluded = (options?.excludeCallsigns ?? [])
+        .filter((callsign): callsign is string => typeof callsign === 'string' && callsign.trim().length > 0);
+    const myCallsign = strategy.context.config.myCallsign;
     const directCalls = messages
         .filter((msg) => {
             const message = msg.message;
@@ -202,8 +208,8 @@ async function trySwitchToDirectedProtocol(
             if (!isInitialDirectCall && !isFollowUpProtocol) {
                 return false;
             }
-            return message.targetCallsign.toUpperCase() === myCallsign
-                && !excluded.has(message.senderCallsign.toUpperCase());
+            return callsignMatches(message.targetCallsign, myCallsign)
+                && !excluded.some((callsign) => callsignMatches(message.senderCallsign, callsign));
         })
         .sort((a, b) => compareCandidates(strategy, a, b));
 
@@ -292,8 +298,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
             // 这样可以确保当前QSO的连续性，避免在对方已回复时错误切换到新呼叫者
             const msgSignalReport = messages
                 .filter((msg) => msg.message.type === FT8MessageType.SIGNAL_REPORT &&
-                    msg.message.senderCallsign === strategy.context.targetCallsign &&
-                    msg.message.targetCallsign === strategy.context.config.myCallsign)
+                    callsignMatches(msg.message.senderCallsign, strategy.context.targetCallsign) &&
+                    callsignMatches(msg.message.targetCallsign, strategy.context.config.myCallsign))
                 .sort((a, b) => a.snr - b.snr)
                 .pop();
             if (msgSignalReport) {
@@ -316,8 +322,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             const msgRogerReport = messages
                 .filter((msg) => msg.message.type === FT8MessageType.ROGER_REPORT &&
-                    msg.message.senderCallsign === strategy.context.targetCallsign &&
-                    msg.message.targetCallsign === strategy.context.config.myCallsign)
+                    callsignMatches(msg.message.senderCallsign, strategy.context.targetCallsign) &&
+                    callsignMatches(msg.message.targetCallsign, strategy.context.config.myCallsign))
                 .sort((a, b) => a.snr - b.snr)
                 .pop();
             if (msgRogerReport) {
@@ -339,7 +345,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
             const foxInvite = messages
                 .filter((msg) =>
                     msg.message.type === FT8MessageType.FOX_RR73 &&
-                    (msg.message as FT8MessageFoxRR73).nextCallsign === strategy.context.config.myCallsign)
+                    callsignMatches((msg.message as FT8MessageFoxRR73).nextCallsign, strategy.context.config.myCallsign))
                 .sort((a, b) => a.snr - b.snr)
                 .pop();
 
@@ -362,8 +368,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 .filter((msg) =>
                     (msg.message.type === FT8MessageType.CALL ||
                      msg.message.type === FT8MessageType.SIGNAL_REPORT) &&
-                    msg.message.targetCallsign === strategy.context.config.myCallsign &&
-                    msg.message.senderCallsign !== strategy.context.targetCallsign) // 排除当前目标
+                    callsignMatches(msg.message.targetCallsign, strategy.context.config.myCallsign) &&
+                    !callsignMatches(msg.message.senderCallsign, strategy.context.targetCallsign)) // 排除当前目标
                 .sort((a, b) => compareCandidates(strategy, a, b));
 
             if (directCalls.length > 0) {
@@ -519,8 +525,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
             const msgRogerReport = messages
                 .filter((msg) =>
                     msg.message.type === FT8MessageType.ROGER_REPORT &&
-                    msg.message.targetCallsign === strategy.context.config.myCallsign &&
-                    msg.message.senderCallsign === strategy.context.targetCallsign
+                    callsignMatches(msg.message.targetCallsign, strategy.context.config.myCallsign) &&
+                    callsignMatches(msg.message.senderCallsign, strategy.context.targetCallsign)
                 )
                 .sort((a, b) => a.snr - b.snr)
                 .pop();
@@ -551,8 +557,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
             const msgSignalReport = messages
                 .filter((msg) =>
                     msg.message.type === FT8MessageType.SIGNAL_REPORT &&
-                    msg.message.targetCallsign === strategy.context.config.myCallsign &&
-                    msg.message.senderCallsign === strategy.context.targetCallsign
+                    callsignMatches(msg.message.targetCallsign, strategy.context.config.myCallsign) &&
+                    callsignMatches(msg.message.senderCallsign, strategy.context.targetCallsign)
                 )
                 .sort((a, b) => a.snr - b.snr)
                 .pop();
@@ -609,8 +615,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
             const msgRRR = messages
                 .filter((msg) =>
                     msg.message.type === FT8MessageType.RRR &&
-                    msg.message.senderCallsign === strategy.context.targetCallsign &&
-                    msg.message.targetCallsign === strategy.context.config.myCallsign)
+                    callsignMatches(msg.message.senderCallsign, strategy.context.targetCallsign) &&
+                    callsignMatches(msg.message.targetCallsign, strategy.context.config.myCallsign))
                 .sort((a, b) => a.snr - b.snr)
                 .pop();
 
@@ -635,8 +641,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
             const msg73 = messages
                 .filter((msg) =>
                     msg.message.type === FT8MessageType.SEVENTY_THREE &&
-                    msg.message.senderCallsign === strategy.context.targetCallsign &&
-                    msg.message.targetCallsign === strategy.context.config.myCallsign)
+                    callsignMatches(msg.message.senderCallsign, strategy.context.targetCallsign) &&
+                    callsignMatches(msg.message.targetCallsign, strategy.context.config.myCallsign))
                 .sort((a, b) => a.snr - b.snr)
                 .pop();
 
@@ -653,7 +659,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
             const foxRR73Confirm = messages
                 .filter((msg) =>
                     msg.message.type === FT8MessageType.FOX_RR73 &&
-                    (msg.message as FT8MessageFoxRR73).completedCallsign === strategy.context.config.myCallsign)
+                    callsignMatches((msg.message as FT8MessageFoxRR73).completedCallsign, strategy.context.config.myCallsign))
                 .sort((a, b) => a.snr - b.snr)
                 .pop();
 
@@ -667,8 +673,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
             const msgSignalReport = messages
                 .filter((msg) =>
                     msg.message.type === FT8MessageType.SIGNAL_REPORT &&
-                    msg.message.targetCallsign === strategy.context.config.myCallsign &&
-                    msg.message.senderCallsign === strategy.context.targetCallsign)
+                    callsignMatches(msg.message.targetCallsign, strategy.context.config.myCallsign) &&
+                    callsignMatches(msg.message.senderCallsign, strategy.context.targetCallsign))
                 .sort((a, b) => compareCandidates(strategy, a, b))
                 .shift();  // 取第一个（SNR最高的）
 
@@ -747,8 +753,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
             const msg73 = messages
                 .filter((msg) =>
                     msg.message.type === FT8MessageType.SEVENTY_THREE &&
-                    msg.message.senderCallsign === strategy.context.targetCallsign &&
-                    msg.message.targetCallsign === strategy.context.config.myCallsign)
+                    callsignMatches(msg.message.senderCallsign, strategy.context.targetCallsign) &&
+                    callsignMatches(msg.message.targetCallsign, strategy.context.config.myCallsign))
                 .sort((a, b) => a.snr - b.snr)
                 .pop();
 
@@ -782,8 +788,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
             const msgRRR = messages
                 .filter((msg) =>
                     msg.message.type === FT8MessageType.RRR &&
-                    msg.message.senderCallsign === strategy.context.targetCallsign &&
-                    msg.message.targetCallsign === strategy.context.config.myCallsign)
+                    callsignMatches(msg.message.senderCallsign, strategy.context.targetCallsign) &&
+                    callsignMatches(msg.message.targetCallsign, strategy.context.config.myCallsign))
                 .sort((a, b) => a.snr - b.snr)
                 .pop();
 
@@ -852,8 +858,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
             const msgRRR = messages
                 .filter((msg) =>
                     msg.message.type === FT8MessageType.RRR &&
-                    msg.message.senderCallsign === strategy.context.targetCallsign &&
-                    msg.message.targetCallsign === strategy.context.config.myCallsign)
+                    callsignMatches(msg.message.senderCallsign, strategy.context.targetCallsign) &&
+                    callsignMatches(msg.message.targetCallsign, strategy.context.config.myCallsign))
                 .sort((a, b) => a.snr - b.snr)
                 .pop();
 
@@ -936,8 +942,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 const retryRRR = messages
                     .filter((msg) =>
                         msg.message.type === FT8MessageType.RRR &&
-                        msg.message.senderCallsign === retryContext.targetCallsign &&
-                        msg.message.targetCallsign === strategy.context.config.myCallsign)
+                        callsignMatches(msg.message.senderCallsign, retryContext.targetCallsign) &&
+                        callsignMatches(msg.message.targetCallsign, strategy.context.config.myCallsign))
                     .sort((a, b) => a.snr - b.snr)
                     .pop();
 
@@ -1161,7 +1167,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         const currentState = states[this.state];
 
         // 过滤掉发送者是我自己的消息
-        const filteredMessages = messages.filter((msg) => msg.message.type == FT8MessageType.CUSTOM || msg.message.type == FT8MessageType.UNKNOWN || msg.message.type == FT8MessageType.FOX_RR73 || msg.message.senderCallsign !== this.operator.config.myCallsign);
+        const filteredMessages = messages.filter((msg) => msg.message.type == FT8MessageType.CUSTOM || msg.message.type == FT8MessageType.UNKNOWN || msg.message.type == FT8MessageType.FOX_RR73 || !callsignMatches(msg.message.senderCallsign, this.operator.config.myCallsign));
 
         // 处理接收到的消息
         const result = await currentState.handle(this, filteredMessages);
@@ -1254,7 +1260,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         }
         // 包含 targetCallsign 的消息
         if (msg.type === FT8MessageType.SIGNAL_REPORT || msg.type === FT8MessageType.CALL || msg.type === FT8MessageType.ROGER_REPORT || msg.type === FT8MessageType.RRR || msg.type === FT8MessageType.SEVENTY_THREE) {
-            if (msg.targetCallsign === this._context.config.myCallsign) {
+            if (callsignMatches(msg.targetCallsign, this._context.config.myCallsign)) {
                 // 消息是发给我的，直接转到对应的回复状态
                 if (msg.type === FT8MessageType.CALL) {
                     // 对方呼叫我，回复信号报告

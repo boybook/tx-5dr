@@ -197,7 +197,7 @@ export class FT8MessageParser {
    *       JA0OAV RR73; JG1MPG <4>
    */
   private static parseFoxRR73Message(raw: string): FT8Message {
-    const match = raw.match(/^(\S+)\s+RR73;\s+(\S+)(?:\s+(<[^>]+>))?(?:\s+([+-]\d{1,2}))?$/);
+    const match = raw.match(/^(\S+)\s+RR73;\s+(\S+)(?:\s+(<[^>\s]+>?))?(?:\s+([+-]\d{1,2}))?$/);
     if (!match) {
       return { type: FT8MessageType.UNKNOWN };
     }
@@ -220,9 +220,7 @@ export class FT8MessageParser {
 
     if (hashToken) {
       // 去掉尖括号，保留内部值（如 "<4>" → "4"，"<...>" → "..."）
-      foxRR73Result.foxHash = hashToken.startsWith('<') && hashToken.endsWith('>')
-        ? hashToken.slice(1, -1)
-        : hashToken;
+      foxRR73Result.foxHash = hashToken.replace(/^</, '').replace(/>$/, '');
       const senderCallsign = this.extractFoxSenderCallsign(foxRR73Result.foxHash);
       if (senderCallsign) {
         foxRR73Result.senderCallsign = senderCallsign;
