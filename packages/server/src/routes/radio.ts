@@ -6,7 +6,7 @@
  * 📊 Day14优化：统一错误处理，使用 RadioError + Fastify 全局错误处理器
  */
 import { FastifyInstance } from 'fastify';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('RadioRoute');
@@ -23,6 +23,7 @@ import { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { RepeaterDuplexApplyResult, RepeaterDuplexConfig, ToneSquelchApplyResult, ToneSquelchConfig } from '../radio/PhysicalRadioManager.js';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
 import { CWKeyerHardware } from '../cw/CWKeyerHardware.js';
+import { CWKeyerTestFailure, type CWSerialKeyerTestTarget } from '../cw/CWKeyerManager.js';
 import {
   buildFrequencyOperatingStateRequest,
   resolveFrequencyRadioMode,
@@ -38,6 +39,64 @@ export {
   resolveFrequencyRadioMode,
 } from '../radio/frequencyRadioMode.js';
 
+type SerialPortInfo = Awaited<ReturnType<typeof SerialPort.list>>[number];
+
+function buildDarwinCalloutPortFromDialin(port: SerialPortInfo): SerialPortInfo | null {
+  if (!port.path.startsWith('/dev/tty.')) {
+    return null;
+  }
+  return {
+    ...port,
+    path: `/dev/cu.${port.path.slice('/dev/tty.'.length)}`,
+  };
+}
+
+export function includeDarwinCalloutSerialPorts(
+  ports: SerialPortInfo[],
+  devEntries: string[],
+): SerialPortInfo[] {
+  const byPath = new Map<string, SerialPortInfo>();
+  const ordered: SerialPortInfo[] = [];
+
+  const addPort = (port: SerialPortInfo) => {
+    if (byPath.has(port.path)) return;
+    byPath.set(port.path, port);
+    ordered.push(port);
+  };
+
+  for (const port of ports) {
+    addPort(port);
+    const calloutPort = buildDarwinCalloutPortFromDialin(port);
+    if (calloutPort && devEntries.includes(calloutPort.path.slice('/dev/'.length))) {
+      addPort(calloutPort);
+    }
+  }
+
+  for (const entry of devEntries) {
+    if (entry.startsWith('cu.')) {
+      addPort({ path: `/dev/${entry}` } as SerialPortInfo);
+    }
+  }
+
+  return ordered;
+}
+
+async function listSerialPortsForControl(): Promise<SerialPortInfo[]> {
+  const ports = await SerialPort.list();
+  if (process.platform !== 'darwin') {
+    return ports;
+  }
+
+  try {
+    return includeDarwinCalloutSerialPorts(ports, await readdir('/dev'));
+  } catch (error) {
+    logger.warn('failed to scan /dev for macOS callout serial ports', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return ports;
+  }
+}
+
 async function listAndroidBridgeSerialPorts(): Promise<unknown[] | null> {
   const file = process.env.TX5DR_ANDROID_SERIAL_DEVICES_FILE?.trim();
   if (!file) return null;
@@ -51,6 +110,137 @@ async function listAndroidBridgeSerialPorts(): Promise<unknown[] | null> {
     });
     return [];
   }
+}
+
+type CWKeyerTestPhase = 'open' | 'keyDown' | 'keyUp';
+
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isSerialDeviceMissingError(message: string): boolean {
+  return /no such file|not found|cannot open|input\/output|i\/o error|eio|enoent|device not configured|port is not open|disconnected/i.test(message);
+}
+
+function isSerialDeviceBusyError(message: string): boolean {
+  return /cannot lock|resource busy|access denied|permission denied|busy|already open/i.test(message);
+}
+
+function createCWKeyerTestError(error: unknown, phase: CWKeyerTestPhase, port: string): RadioError {
+  const message = formatErrorMessage(error);
+
+  if (isSerialDeviceBusyError(message)) {
+    return new RadioError({
+      code: RadioErrorCode.DEVICE_BUSY,
+      message: `CW key port ${port} is busy during ${phase}: ${message}`,
+      userMessage: `CW key port "${port}" is already in use.`,
+      userMessageKey: 'settings:radio.cwKeyDeviceBusy',
+      userMessageParams: { port },
+      severity: RadioErrorSeverity.WARNING,
+      suggestions: [
+        'Stop any active CW keyer session before testing the same port again',
+        'Close other programs that may be using this serial port',
+        'Choose the macOS /dev/cu.* port for direct serial control',
+      ],
+      cause: error,
+      context: { port, phase },
+    });
+  }
+
+  if (phase === 'keyUp') {
+    return new RadioError({
+      code: isSerialDeviceMissingError(message) ? RadioErrorCode.DEVICE_NOT_FOUND : RadioErrorCode.DEVICE_ERROR,
+      message: `CW key release failed on ${port}: ${message}`,
+      userMessage: `CW key release command did not reach "${port}".`,
+      userMessageKey: 'settings:radio.cwKeyReleaseFailed',
+      userMessageParams: { port },
+      severity: RadioErrorSeverity.CRITICAL,
+      suggestions: [
+        'Confirm the radio has returned to receive state before continuing',
+        'Reconnect the USB serial adapter and refresh the serial port list',
+        'Move the antenna/feed line away from the USB cable and add ferrites if RF is entering the USB link',
+      ],
+      cause: error,
+      context: { port, phase },
+    });
+  }
+
+  if (isSerialDeviceMissingError(message)) {
+    return new RadioError({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+      message: `CW key port ${port} is unavailable during ${phase}: ${message}`,
+      userMessage: `CW key port "${port}" is no longer available.`,
+      userMessageKey: 'settings:radio.cwKeyDeviceUnavailable',
+      userMessageParams: { port },
+      severity: RadioErrorSeverity.ERROR,
+      suggestions: [
+        'Reconnect the USB serial adapter and refresh the serial port list',
+        'On macOS, choose the /dev/cu.* port instead of /dev/tty.* for direct serial control',
+        'Move the antenna/feed line away from the USB cable and add ferrites if this happens during transmit',
+      ],
+      cause: error,
+      context: { port, phase },
+    });
+  }
+
+  return new RadioError({
+    code: RadioErrorCode.DEVICE_ERROR,
+    message: `CW keyer test failed during ${phase} on ${port}: ${message}`,
+    userMessage: 'CW keyer test failed.',
+    userMessageKey: 'settings:radio.testCWFailedCheck',
+    userMessageParams: { port },
+    severity: RadioErrorSeverity.ERROR,
+    suggestions: [
+      'Check the configured CW serial port and keying pin',
+      'Confirm the radio menu maps the selected DTR/RTS line to CW keying',
+      'Try reconnecting the USB serial adapter',
+    ],
+    cause: error,
+    context: { port, phase },
+  });
+}
+
+function createCWKeyerActiveError(error: unknown, port: string): RadioError {
+  return new RadioError({
+    code: RadioErrorCode.INVALID_STATE,
+    message: `CW keyer test cannot start because the current keyer is active on ${port}: ${formatErrorMessage(error)}`,
+    userMessage: 'CW keyer is already sending or manually keying.',
+    userMessageKey: 'settings:radio.cwKeyerCurrentlyActive',
+    userMessageParams: { port },
+    severity: RadioErrorSeverity.WARNING,
+    suggestions: [
+      'Stop the current CW message or manual keying before running a hardware test',
+      'Wait for the current CW transmission to finish and try again',
+    ],
+    cause: error,
+    context: { port, phase: 'keyDown' },
+  });
+}
+
+function createCWKeyerBusyWithDifferentSettingsError(
+  port: string,
+  requested: CWSerialKeyerTestTarget,
+  current: { currentMethod: 'dtr' | 'rts'; currentActiveLevel: 'high' | 'low' },
+): RadioError {
+  return new RadioError({
+    code: RadioErrorCode.DEVICE_BUSY,
+    message: `CW key port ${port} is already open with ${current.currentMethod}/${current.currentActiveLevel}; requested ${requested.keyMethod}/${requested.keyActiveLevel}`,
+    userMessage: `CW key port "${port}" is already open with different settings.`,
+    userMessageKey: 'settings:radio.cwKeyDeviceBusyDifferentSettings',
+    userMessageParams: {
+      port,
+      currentMethod: current.currentMethod.toUpperCase(),
+      currentActiveLevel: current.currentActiveLevel,
+      requestedMethod: requested.keyMethod.toUpperCase(),
+      requestedActiveLevel: requested.keyActiveLevel,
+    },
+    severity: RadioErrorSeverity.WARNING,
+    suggestions: [
+      'Stop the current CW keyer before testing different DTR/RTS or active-level settings',
+      'Save the new CW settings and restart the CW keyer before testing again',
+    ],
+    context: { port, phase: 'open' },
+  });
 }
 
 /** 判断两个配置是否指向同一硬件目标（用于复用判断） */
@@ -379,7 +569,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     if (androidPorts) {
       return reply.send({ ports: androidPorts });
     }
-    const ports = await SerialPort.list();
+    const ports = await listSerialPortsForControl();
     return reply.send({ ports });
   });
 
@@ -792,21 +982,92 @@ export async function radioRoutes(fastify: FastifyInstance) {
     const cwKeyActiveLevel = config.cwKeyActiveLevel || 'high';
     logger.debug(`Testing CW keyer on ${cwKeyPort} (${cwKeyMethod}, active ${cwKeyActiveLevel})`);
 
+    const testTarget: CWSerialKeyerTestTarget = {
+      keyPort: cwKeyPort,
+      keyMethod: cwKeyMethod,
+      keyActiveLevel: cwKeyActiveLevel,
+    };
+    const existingCWKeyerManager = engine.getExistingCWKeyerManager();
+    if (existingCWKeyerManager?.getStatus().active) {
+      throw createCWKeyerActiveError(
+        new Error('CW keyer is already sending or manually keying'),
+        cwKeyPort,
+      );
+    }
+    const existingKeyerTestState = existingCWKeyerManager?.getSerialKeyerTestState(testTarget);
+    if (existingCWKeyerManager && existingKeyerTestState?.kind === 'reuse') {
+      try {
+        await existingCWKeyerManager.testKeyer(testTarget, 500);
+        logger.info('CW keyer test successful via active backend', {
+          port: cwKeyPort,
+          method: cwKeyMethod,
+          activeLevel: cwKeyActiveLevel,
+        });
+        return reply.send({ success: true, message: 'CW keyer test successful! Keyed for 0.5 seconds via the active CW backend on ' + cwKeyPort + ' (' + cwKeyMethod.toUpperCase() + ', active ' + cwKeyActiveLevel + ').' });
+      } catch (error) {
+        const phase = error instanceof CWKeyerTestFailure ? error.phase : 'keyDown';
+        const radioError = /already sending|manually keying|already active/i.test(formatErrorMessage(error))
+          ? createCWKeyerActiveError(error, cwKeyPort)
+          : createCWKeyerTestError(error instanceof CWKeyerTestFailure ? error.cause ?? error : error, phase, cwKeyPort);
+        logger.error('CW keyer test failed via active backend', {
+          port: cwKeyPort,
+          method: cwKeyMethod,
+          activeLevel: cwKeyActiveLevel,
+          error: formatErrorMessage(radioError),
+          code: radioError.code,
+          phase: radioError.context?.phase,
+        });
+        throw radioError;
+      }
+    }
+
+    if (existingKeyerTestState?.kind === 'busy-different-settings') {
+      throw createCWKeyerBusyWithDifferentSettingsError(cwKeyPort, testTarget, existingKeyerTestState);
+    }
+
     const hardware = new CWKeyerHardware(cwKeyPort, cwKeyMethod, cwKeyActiveLevel);
     try {
-      await hardware.open();
-      await hardware.keyDown();
+      try {
+        await hardware.open();
+      } catch (error) {
+        throw createCWKeyerTestError(error, 'open', cwKeyPort);
+      }
+
+      try {
+        await hardware.keyDown();
+      } catch (error) {
+        throw createCWKeyerTestError(error, 'keyDown', cwKeyPort);
+      }
+
       await new Promise(resolve => setTimeout(resolve, 500));
-      await hardware.keyUp();
+
+      try {
+        await hardware.keyUp();
+      } catch (error) {
+        throw createCWKeyerTestError(error, 'keyUp', cwKeyPort);
+      }
+
       logger.info(`CW keyer test successful on ${cwKeyPort}`);
       return reply.send({ success: true, message: 'CW keyer test successful! Keyed for 0.5 seconds on ' + cwKeyPort + ' (' + cwKeyMethod.toUpperCase() + ', active ' + cwKeyActiveLevel + ').' });
     } catch (error) {
-      logger.error('CW keyer test failed:', error);
+      logger.error('CW keyer test failed', {
+        port: cwKeyPort,
+        method: cwKeyMethod,
+        activeLevel: cwKeyActiveLevel,
+        error: formatErrorMessage(error),
+        code: error instanceof RadioError ? error.code : undefined,
+        phase: error instanceof RadioError ? error.context?.phase : undefined,
+      });
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     } finally {
       try {
         await hardware.close();
-      } catch { /* ignore */ }
+      } catch (error) {
+        logger.warn('Failed to close CW keyer test port after test', {
+          port: cwKeyPort,
+          error: formatErrorMessage(error),
+        });
+      }
     }
   });
 

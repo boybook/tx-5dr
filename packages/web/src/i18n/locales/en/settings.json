@@ -294,7 +294,12 @@
     "testingCW": "Testing CW...",
     "testCWSuccess": "CW keyer test successful! Keyed for 0.5 seconds.",
     "testCWFailed": "CW keyer test failed",
-    "testCWFailedCheck": "CW keyer test failed, please check port and connection"
+    "testCWFailedCheck": "CW keyer test failed, please check port and connection",
+    "cwKeyDeviceUnavailable": "CW key port {{port}} was not found. The USB serial adapter may have dropped during transmit; reconnect the device, refresh the port list, move the antenna/feed line away from the USB cable, and try again.",
+    "cwKeyDeviceBusy": "CW key port {{port}} is already in use. Stop the current CW keyer or close other programs using this serial port.",
+    "cwKeyDeviceBusyDifferentSettings": "CW key port {{port}} is already open by the current CW keyer with {{currentMethod}} / active {{currentActiveLevel}}. To test {{requestedMethod}} / active {{requestedActiveLevel}}, stop the current CW keyer, or save the settings and restart it before trying again.",
+    "cwKeyerCurrentlyActive": "The CW keyer is currently sending or manually keying. Stop the current CW transmission before running the hardware test.",
+    "cwKeyReleaseFailed": "The CW release command did not reach {{port}}. The USB serial adapter may have dropped during transmit; confirm the radio has stopped transmitting, then reconnect the device and check antenna/feed-line separation from the USB cable."
   },
   "audio": {
     "loading": "Loading audio devices...",

@@ -17,7 +17,7 @@ interface MockSerialPortInstance {
 const serialPortMock = vi.hoisted(() => ({
   instances: [] as MockSerialPortInstance[],
   openError: null as Error | null,
-  setErrors: [] as Error[],
+  setErrors: [] as Array<Error | null>,
   autoFlushSet: true,
   pendingSetCallbacks: [] as Array<(error?: Error | null) => void>,
 }));
@@ -151,14 +151,49 @@ describe('CWKeyerHardware', () => {
     expect(hardware.isKeyDown).toBe(false);
   });
 
-  it('closes best-effort and rejects when the open-time reset fails', async () => {
-    serialPortMock.setErrors.push(new Error('reset failed'));
-    const hardware = new CWKeyerHardware('/dev/ttyUSB-cw', 'dtr');
+  it('falls back to individual idle line resets when the combined reset fails', async () => {
+    serialPortMock.setErrors.push(new Error('combined reset failed'));
+    const hardware = new CWKeyerHardware('/dev/ttyUSB-cw', 'rts');
 
-    await expect(hardware.open()).rejects.toThrow('Failed to reset CW key port /dev/ttyUSB-cw: reset failed');
+    await hardware.open();
 
     const port = serialPortMock.instances[0]!;
-    expect(port.setCalls).toEqual([{ rts: false, dtr: false }]);
+    expect(port.setCalls).toEqual([
+      { rts: false, dtr: false },
+      { rts: false },
+      { dtr: false },
+    ]);
+    expect(hardware.isOpen).toBe(true);
+  });
+
+  it('keeps the port open when only an unused idle line reset fails after fallback', async () => {
+    serialPortMock.setErrors.push(new Error('combined reset failed'), null, new Error('unused line failed'));
+    const hardware = new CWKeyerHardware('/dev/ttyUSB-cw', 'rts');
+
+    await hardware.open();
+
+    const port = serialPortMock.instances[0]!;
+    expect(port.setCalls).toEqual([
+      { rts: false, dtr: false },
+      { rts: false },
+      { dtr: false },
+    ]);
+    expect(hardware.isOpen).toBe(true);
+  });
+
+  it('closes best-effort and rejects when the selected open-time reset fails', async () => {
+    serialPortMock.setErrors.push(new Error('combined reset failed'), new Error('selected reset failed'));
+    const hardware = new CWKeyerHardware('/dev/ttyUSB-cw', 'dtr');
+
+    await expect(hardware.open()).rejects.toThrow(
+      'Failed to reset CW key port /dev/ttyUSB-cw: Failed to release selected DTR line after combined reset failed: selected reset failed',
+    );
+
+    const port = serialPortMock.instances[0]!;
+    expect(port.setCalls).toEqual([
+      { rts: false, dtr: false },
+      { dtr: false },
+    ]);
     expect(port.close).toHaveBeenCalledTimes(1);
     expect(hardware.isOpen).toBe(false);
     expect(hardware.isKeyDown).toBe(false);

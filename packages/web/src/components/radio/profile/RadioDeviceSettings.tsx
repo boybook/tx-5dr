@@ -667,6 +667,18 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
         setTestResult({ type: 'error', message: response.message || t('radio.testCWFailed') });
       }
     } catch (error) {
+      if (error instanceof ApiError) {
+        const messageKey = error.userMessageKey?.startsWith('settings:')
+          ? error.userMessageKey.slice('settings:'.length)
+          : error.userMessageKey;
+        setTestResult({
+          type: 'error',
+          message: messageKey
+            ? t(messageKey, { ...(error.userMessageParams ?? {}), defaultValue: error.userMessage })
+            : error.userMessage,
+        });
+        return;
+      }
       setTestResult({
         type: 'error',
         message: error instanceof Error ? error.message : t('radio.testCWFailedCheck')

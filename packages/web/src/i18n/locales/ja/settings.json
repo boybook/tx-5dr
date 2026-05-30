@@ -294,7 +294,12 @@
     "testingCW": "CWをテスト中...",
     "testCWSuccess": "CW キーイング テストに成功しました。キーを押して送信すると 0.5 秒かかります。",
     "testCWFailed": "CW キーイング テストに失敗しました",
-    "testCWFailedCheck": "CW キーイング テストに失敗しました。ポートと接続を確認してください。"
+    "testCWFailedCheck": "CW キーイング テストに失敗しました。ポートと接続を確認してください。",
+    "cwKeyDeviceUnavailable": "CW キーイング ポート {{port}} が見つかりません。送信中に USB シリアルが切断された可能性があります。デバイスを再接続し、ポート一覧を更新し、アンテナ/給電線を USB ケーブルから離してから再試行してください。",
+    "cwKeyDeviceBusy": "CW キーイング ポート {{port}} は使用中です。現在の CW キーヤーを停止するか、このシリアルポートを使用している他のプログラムを終了してください。",
+    "cwKeyDeviceBusyDifferentSettings": "CW キーイング ポート {{port}} は現在の CW キーヤーにより {{currentMethod}} / active {{currentActiveLevel}} で開かれています。{{requestedMethod}} / active {{requestedActiveLevel}} をテストするには、現在の CW キーヤーを停止するか、設定を保存して再起動してから再試行してください。",
+    "cwKeyerCurrentlyActive": "CW キーヤーは送信中または手動キーイング中です。ハードウェア テストを実行する前に、現在の CW 送信を停止してください。",
+    "cwKeyReleaseFailed": "CW 解除コマンドが {{port}} に届きませんでした。送信中に USB シリアルが切断された可能性があります。無線機が送信を停止していることを確認してから、デバイスを再接続し、アンテナ/給電線と USB ケーブルの距離を確認してください。"
   },
   "audio": {
     "loading": "オーディオデバイスをロード中...",

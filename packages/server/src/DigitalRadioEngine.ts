@@ -751,6 +751,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.cwKeyerManager;
   }
 
+  public getExistingCWKeyerManager(): CWKeyerManager | null {
+    return this.cwKeyerManager;
+  }
+
   public async releaseCWKeyerForShutdown(reason: string): Promise<void> {
     if (!this.cwKeyerManager) {
       return;

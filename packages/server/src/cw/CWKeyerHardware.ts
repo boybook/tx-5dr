@@ -62,7 +62,7 @@ export class CWKeyerHardware {
     });
 
     this._open = true;
-    logger.info(`CW keyer hardware opened on ${this.portPath} (${this.method})`);
+    logger.info(`CW keyer hardware opened on ${this.portPath} (${this.method}, active ${this.activeLevel})`);
   }
 
   /**
@@ -120,7 +120,36 @@ export class CWKeyerHardware {
 
   private async resetControlLines(): Promise<void> {
     const idle = this.inactivePinState();
-    await this.setControlLines({ rts: idle, dtr: idle });
+    try {
+      await this.setControlLines({ rts: idle, dtr: idle });
+      return;
+    } catch (combinedError) {
+      logger.warn(`Failed to reset both CW keyer control lines on ${this.portPath}; trying individual lines`, {
+        error: this.formatError(combinedError),
+        method: this.method,
+        activeLevel: this.activeLevel,
+      });
+
+      try {
+        await this.setControlLines({ [this.method]: idle });
+      } catch (selectedError) {
+        throw new Error(
+          `Failed to release selected ${this.method.toUpperCase()} line after combined reset failed: `
+          + `${this.formatError(selectedError)} (combined reset: ${this.formatError(combinedError)})`,
+        );
+      }
+
+      const otherMethod = this.method === 'dtr' ? 'rts' : 'dtr';
+      try {
+        await this.setControlLines({ [otherMethod]: idle });
+      } catch (otherError) {
+        logger.warn(`Failed to reset unused ${otherMethod.toUpperCase()} CW control line on ${this.portPath}`, {
+          error: this.formatError(otherError),
+          method: this.method,
+          activeLevel: this.activeLevel,
+        });
+      }
+    }
   }
 
   private async setPin(keyDown: boolean): Promise<void> {
@@ -162,5 +191,9 @@ export class CWKeyerHardware {
     }
     this._open = false;
     this._isKeyDown = false;
+  }
+
+  private formatError(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 }

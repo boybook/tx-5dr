@@ -1,4 +1,4 @@
-import Fastify, { type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -46,10 +46,17 @@ const radioManager = {
   getCoreCapabilityDiagnostics: vi.fn(() => undefined),
 };
 
+let existingCWKeyerManager: {
+  getStatus: () => { active: boolean };
+  getSerialKeyerTestState: (target: unknown) => unknown;
+  testKeyer: (target: unknown, durationMs: number) => Promise<void>;
+} | null = null;
+
 vi.mock('../../DigitalRadioEngine.js', () => ({
   DigitalRadioEngine: {
     getInstance: () => ({
       getRadioManager: () => radioManager,
+      getExistingCWKeyerManager: () => existingCWKeyerManager,
     }),
   },
 }));
@@ -66,11 +73,25 @@ describe('radioRoutes authorization', () => {
   let previousAndroidSerialFile: string | undefined;
 
   beforeEach(async () => {
+    existingCWKeyerManager = null;
     previousAndroidSerialFile = process.env.TX5DR_ANDROID_SERIAL_DEVICES_FILE;
     const { radioRoutes } = await import('../radio.js');
     fastify = Fastify();
     fastify.decorateRequest('authUser', null);
     fastify.decorateRequest('ability', null);
+    fastify.setErrorHandler((error: Error & { code?: string; userMessageKey?: string }, _request: FastifyRequest, reply: FastifyReply) => {
+      if (error.name === 'RadioError') {
+        reply.status(error.code === 'INVALID_STATE' ? 409 : 500).send({
+          success: false,
+          error: {
+            code: error.code,
+            userMessageKey: error.userMessageKey,
+          },
+        });
+        return;
+      }
+      reply.send(error);
+    });
     fastify.addHook('onRequest', async (request: FastifyRequest) => {
       const role = request.headers['x-role'];
       request.authUser = typeof role === 'string'
@@ -133,6 +154,37 @@ describe('radioRoutes authorization', () => {
     }]);
   });
 
+  it('adds macOS /dev/cu callout serial ports for device control', async () => {
+    const { includeDarwinCalloutSerialPorts } = await import('../radio.js');
+
+    const ports = includeDarwinCalloutSerialPorts(
+      [
+        {
+          path: '/dev/tty.usbserial-016F24B71',
+          manufacturer: 'FTDI',
+          serialNumber: '016F24B71',
+        },
+        { path: '/dev/cu.already-listed' },
+      ] as any,
+      ['tty.usbserial-016F24B71', 'cu.usbserial-016F24B71', 'cu.extra-only', 'cu.already-listed'],
+    );
+
+    expect(ports).toEqual([
+      {
+        path: '/dev/tty.usbserial-016F24B71',
+        manufacturer: 'FTDI',
+        serialNumber: '016F24B71',
+      },
+      {
+        path: '/dev/cu.usbserial-016F24B71',
+        manufacturer: 'FTDI',
+        serialNumber: '016F24B71',
+      },
+      { path: '/dev/cu.already-listed' },
+      { path: '/dev/cu.extra-only' },
+    ]);
+  });
+
   it('rejects non-admin connection tests before schema validation', async () => {
     const response = await fastify.inject({
       method: 'POST',
@@ -142,6 +194,60 @@ describe('radioRoutes authorization', () => {
     });
 
     expect(response.statusCode).toBe(403);
+  });
+
+  it('reuses an already-open CW keyer backend for CW hardware tests', async () => {
+    existingCWKeyerManager = {
+      getStatus: vi.fn(() => ({ active: false })),
+      getSerialKeyerTestState: vi.fn(() => ({ kind: 'reuse' })),
+      testKeyer: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/api/radio/test-cw-keyer',
+      headers: { 'x-role': UserRole.ADMIN },
+      payload: {
+        ...secretRadioConfig,
+        cwKeyMethod: 'rts',
+        cwKeyActiveLevel: 'high',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(existingCWKeyerManager?.getSerialKeyerTestState).toHaveBeenCalledWith({
+      keyPort: '/dev/tty.cw',
+      keyMethod: 'rts',
+      keyActiveLevel: 'high',
+    });
+    expect(existingCWKeyerManager?.testKeyer).toHaveBeenCalledWith({
+      keyPort: '/dev/tty.cw',
+      keyMethod: 'rts',
+      keyActiveLevel: 'high',
+    }, 500);
+    expect(response.json()).toMatchObject({ success: true });
+  });
+
+  it('rejects CW hardware tests while the existing keyer is active', async () => {
+    existingCWKeyerManager = {
+      getStatus: vi.fn(() => ({ active: true })),
+      getSerialKeyerTestState: vi.fn(),
+      testKeyer: vi.fn(),
+    };
+
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/api/radio/test-cw-keyer',
+      headers: { 'x-role': UserRole.ADMIN },
+      payload: secretRadioConfig,
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toMatchObject({
+      code: 'INVALID_STATE',
+      userMessageKey: 'settings:radio.cwKeyerCurrentlyActive',
+    });
+    expect(existingCWKeyerManager?.testKeyer).not.toHaveBeenCalled();
   });
 
   it('redacts radio topology from non-admin status reads', async () => {
