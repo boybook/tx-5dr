@@ -49,6 +49,11 @@ import {
   getRealtimeAudioCodecCapabilities,
   loadRealtimeAudioCodecPreference,
 } from '../audio/realtimeAudioCodec';
+import {
+  enterAndroidVoiceAudio,
+  leaveAndroidVoiceAudio,
+  probeAndroidAudioEnvironment,
+} from '../utils/androidAudioBridge';
 
 const logger = createLogger('useAudioMonitorPlayback');
 const STATS_POLL_INTERVAL_MS = 1000;
@@ -56,6 +61,10 @@ const CLOCK_SYNC_INTERVAL_MS = 1000;
 const AUDIO_PATH_WAIT_TIMEOUT_MS = 5000;
 const TRANSPORT_SWITCH_DRAIN_TIMEOUT_MS = 1200;
 const VOLUME_RAMP_SECONDS = 0.003;
+
+function androidMonitorRouteReason(scope: RealtimeScope): string {
+  return `monitor:${scope}`;
+}
 
 interface ReceiverStatsData {
   latencyMs?: number;
@@ -372,6 +381,10 @@ export function useAudioMonitorPlayback(
       audioContextRef.current = null;
     }
 
+    if (!preserveAudioContext && !preserveCompatPlaybackRuntime) {
+      leaveAndroidVoiceAudio(androidMonitorRouteReason(scope));
+    }
+
     if (!preserveCompatPlaybackRuntime) {
       playbackBackendTypeRef.current = null;
     }
@@ -393,7 +406,7 @@ export function useAudioMonitorPlayback(
     }
 
     isInitializingRef.current = false;
-  }, [rejectPendingAudioPathWaiters, updateIsPlaying, updateTransportKind]);
+  }, [rejectPendingAudioPathWaiters, scope, updateIsPlaying, updateTransportKind]);
 
   const cleanup = useCallback(() => {
     cleanupTransportState();
@@ -706,6 +719,11 @@ export function useAudioMonitorPlayback(
     audioContext: AudioContext;
     backend: CompatPlaybackBackend;
   }> => {
+    enterAndroidVoiceAudio(androidMonitorRouteReason(scope));
+    const probe = probeAndroidAudioEnvironment();
+    if (probe) {
+      logger.debug('Android WebView monitor audio environment', probe);
+    }
     audioContextRef.current = await ensureInteractiveAudioContext(audioContextRef.current);
     const audioContext = audioContextRef.current;
     if (compatPlaybackBackendRef.current && gainNodeRef.current) {
@@ -780,11 +798,16 @@ export function useAudioMonitorPlayback(
     compatPlaybackBackendRef.current = backend;
     gainNodeRef.current = gainNode;
     return { audioContext, backend };
-  }, [getWireBitrateKbps, recomputeStats]);
+  }, [getWireBitrateKbps, recomputeStats, scope]);
 
   const preparePlaybackFromGesture = useCallback(async () => {
-    await ensureCompatPlaybackRuntime();
-  }, [ensureCompatPlaybackRuntime]);
+    try {
+      await ensureCompatPlaybackRuntime();
+    } catch (error) {
+      leaveAndroidVoiceAudio(androidMonitorRouteReason(scope));
+      throw error;
+    }
+  }, [ensureCompatPlaybackRuntime, scope]);
 
   const startCompatPlayback = useCallback(async (
     offer: RealtimeTransportOffer,
