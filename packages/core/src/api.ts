@@ -65,6 +65,8 @@ import type {
   UpdateSelfLoginCredentialRequest,
   UpdateAuthConfigRequest,
   NetworkInfo,
+  SystemLoggingSettings,
+  UpdateSystemLoggingSettingsRequest,
   ClockStatusDetail,
   NtpServerListSettings,
   SetClockAutoApplyRequest,
@@ -1802,6 +1804,24 @@ export const api = {
     return apiRequest<SystemUpdateStatus>('/system/update-status', undefined, apiBase);
   },
 
+  async getSystemLoggingSettings(apiBase?: string): Promise<SystemLoggingSettings> {
+    return apiRequest<SystemLoggingSettings>('/system/logging', undefined, apiBase);
+  },
+
+  async updateSystemLoggingSettings(
+    data: UpdateSystemLoggingSettingsRequest,
+    apiBase?: string,
+  ): Promise<SystemLoggingSettings> {
+    return apiRequest<SystemLoggingSettings>(
+      '/system/logging',
+      {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      },
+      apiBase,
+    );
+  },
+
   async getClockStatus(apiBase?: string): Promise<ClockStatusDetail> {
     return apiRequest<ClockStatusDetail>('/system/clock', undefined, apiBase);
   },
@@ -2452,6 +2472,8 @@ export const {
   ,updatePluginOperatorSettings
   ,setOperatorStrategyPlugin
   ,reloadPlugins
+  ,getSystemLoggingSettings
+  ,updateSystemLoggingSettings
   ,getNtpServerListSettings
   ,updateNtpServerListSettings
   ,setClockAutoApply

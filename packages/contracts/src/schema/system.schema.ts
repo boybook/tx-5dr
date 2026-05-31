@@ -17,6 +17,23 @@ export const NetworkInfoSchema = z.object({
 
 export type NetworkInfo = z.infer<typeof NetworkInfoSchema>;
 
+// ===== 日志设置 =====
+
+export const SystemLogLevelSchema = z.enum(['debug', 'info', 'warn', 'error']);
+export type SystemLogLevel = z.infer<typeof SystemLogLevelSchema>;
+
+export const SystemLoggingSettingsSchema = z.object({
+  level: SystemLogLevelSchema.optional(),
+  effectiveLevel: SystemLogLevelSchema,
+  logsDir: z.string(),
+});
+export type SystemLoggingSettings = z.infer<typeof SystemLoggingSettingsSchema>;
+
+export const UpdateSystemLoggingSettingsSchema = z.object({
+  level: SystemLogLevelSchema,
+});
+export type UpdateSystemLoggingSettingsRequest = z.infer<typeof UpdateSystemLoggingSettingsSchema>;
+
 // ===== 时钟状态 =====
 
 export const ClockSyncStateSchema = z.enum(['synced', 'stale', 'never', 'failed']);
