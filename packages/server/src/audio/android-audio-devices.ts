@@ -17,6 +17,7 @@ export interface AndroidAudioDeviceDescriptor {
   socketPath: string;
   available: boolean;
   isDefault: boolean;
+  connected?: boolean;
 }
 
 interface AndroidAudioManifest {

@@ -27,6 +27,7 @@ import type {
   CoreCapabilityDiagnostics,
   ClockStatusSummary,
   AudioSidecarStatusPayload,
+  AndroidOperatorAudioStatus,
   BootstrapStatus,
   SquelchStatus,
   SlotInfo,
@@ -101,6 +102,7 @@ export interface RadioState {
   subscribedSpectrumKind: SpectrumKind | null;
   clockStatus: ClockStatusSummary | null;
   audioSidecar: AudioSidecarStatusPayload | null;
+  androidOperatorAudio: AndroidOperatorAudioStatus | null;
   cwKeyerStatus: CWKeyerStatus | null;
   cwConfig: CWKeyerConfig | null;
   splitEnabled: boolean;
@@ -187,6 +189,7 @@ export type RadioAction =
   | { type: 'setSubscribedSpectrumKind'; payload: SpectrumKind | null }
   | { type: 'clockStatusChanged'; payload: ClockStatusSummary }
   | { type: 'audioSidecarStatusChanged'; payload: AudioSidecarStatusPayload }
+  | { type: 'androidOperatorAudioStatusChanged'; payload: AndroidOperatorAudioStatus }
   | { type: 'UPDATE_CW_KEYER_STATUS'; payload: CWKeyerStatus }
   | { type: 'UPDATE_CW_CONFIG'; payload: CWKeyerConfig }
   | { type: 'splitStateChanged'; payload: { enabled: boolean; txFrequency: number | null; txFrequencyWritable: boolean } };

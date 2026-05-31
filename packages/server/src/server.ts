@@ -354,6 +354,7 @@ export async function createServer() {
   const realtimeRxAudioRouter = new RealtimeRxAudioRouter(
     digitalRadioEngine.getAudioStreamManager(),
   );
+  digitalRadioEngine.initializeAndroidOperatorAudioService(realtimeRxAudioRouter);
   bootLogger.info('starting realtime audio transport manager...');
   const realtimeTransportManager = RealtimeTransportManager.initialize(
     digitalRadioEngine,

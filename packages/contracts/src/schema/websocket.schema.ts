@@ -34,6 +34,7 @@ import { RadioPowerStateEventSchema } from './radio-power.schema.js';
 import { AudioSidecarStatusPayloadSchema } from './audio-sidecar.schema.js';
 import { SpectrumCapabilitiesSchema, SpectrumFrameSchema, SpectrumKindSchema, SpectrumSessionControlActionSchema, SpectrumSessionControlIdSchema, SpectrumSessionStateSchema } from './spectrum.schema.js';
 import type { RealtimeSettingsResponseData } from './realtime.schema.js';
+import type { AndroidOperatorAudioStatus } from './android-operator-audio.schema.js';
 import { ClockStatusSummarySchema } from './system.schema.js';
 
 // WebSocket消息类型枚举
@@ -180,6 +181,7 @@ export enum WSMessageType {
   VOICE_KEYER_PLAY = 'voiceKeyerPlay',
   VOICE_KEYER_STOP = 'voiceKeyerStop',
   VOICE_KEYER_STATUS_CHANGED = 'voiceKeyerStatusChanged',
+  ANDROID_OPERATOR_AUDIO_STATUS_CHANGED = 'androidOperatorAudioStatusChanged',
 
   // ===== CW 模式 =====
   /** CW 键控器状态变化（server → client） */
@@ -1659,6 +1661,7 @@ export interface DigitalRadioEngineEvents {
   voicePttLockChanged: (data: VoicePTTLock) => void;
   voiceRadioModeChanged: (data: { radioMode: string }) => void;
   voiceKeyerStatusChanged: (data: VoiceKeyerStatus) => void;
+  androidOperatorAudioStatusChanged: (data: AndroidOperatorAudioStatus) => void;
 
   // CW 模式事件
   cwKeyerStatusChanged: (data: CWKeyerStatus) => void;

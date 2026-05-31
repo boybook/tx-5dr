@@ -20,7 +20,7 @@ type ParsedRealtimeSessionRequest = {
   scope: 'radio' | 'openwebrx-preview';
   direction: 'recv' | 'send';
   previewSessionId?: string;
-  transportOverride?: 'rtc-data-audio' | 'ws-compat';
+  transportOverride?: 'rtc-data-audio' | 'ws-compat' | 'android-native';
   voiceTxBufferPreference?: VoiceTxBufferPreference;
   audioCodecPreference?: RealtimeAudioCodecPreference;
   audioCodecCapabilities?: RealtimeAudioCodecCapabilities;
@@ -41,6 +41,14 @@ export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
         code: RadioErrorCode.INVALID_CONFIG,
         message: 'previewSessionId is required for OpenWebRX preview',
         userMessage: 'Preview session is missing',
+      });
+    }
+
+    if (body.transportOverride === 'android-native') {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_CONFIG,
+        message: 'android-native is not a realtime network transport',
+        userMessage: 'Android native audio is controlled by the Android audio endpoints, not realtime session transport selection.',
       });
     }
 

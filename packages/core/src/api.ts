@@ -86,6 +86,7 @@ import type {
   RealtimeStatsResponse,
   ServerCpuProfileStatus,
   RealtimeVoiceTxStatsResponse,
+  AndroidOperatorAudioStatus,
   VoiceKeyerPanel,
   VoiceKeyerPanelUpdate,
   VoiceKeyerSlotUpdate,
@@ -1955,6 +1956,41 @@ export const api = {
   async getRealtimeVoiceTxStats(scope: 'radio', apiBase?: string): Promise<RealtimeVoiceTxStatsResponse> {
     const params = new URLSearchParams({ scope });
     return apiRequest<RealtimeVoiceTxStatsResponse>(`/realtime/tx-stats?${params.toString()}`, undefined, apiBase);
+  },
+
+  async getAndroidOperatorAudioStatus(apiBase?: string): Promise<{ success: boolean; status: AndroidOperatorAudioStatus }> {
+    return apiRequest<{ success: boolean; status: AndroidOperatorAudioStatus }>('/voice/android-audio/status', undefined, apiBase);
+  },
+
+  async prepareAndroidOperatorAudio(apiBase?: string): Promise<{ success: boolean; status: AndroidOperatorAudioStatus }> {
+    return apiRequest<{ success: boolean; status: AndroidOperatorAudioStatus }>('/voice/android-audio/prepare', {
+      method: 'POST',
+    }, apiBase);
+  },
+
+  async setAndroidOperatorAudioGain(micGainDb: number, apiBase?: string): Promise<{ success: boolean; status: AndroidOperatorAudioStatus }> {
+    return apiRequest<{ success: boolean; status: AndroidOperatorAudioStatus }>('/voice/android-audio/gain', {
+      method: 'POST',
+      body: JSON.stringify({ micGainDb }),
+    }, apiBase);
+  },
+
+  async releaseAndroidOperatorAudio(apiBase?: string): Promise<{ success: boolean; status: AndroidOperatorAudioStatus }> {
+    return apiRequest<{ success: boolean; status: AndroidOperatorAudioStatus }>('/voice/android-audio/release', {
+      method: 'POST',
+    }, apiBase);
+  },
+
+  async startAndroidOperatorAudioMonitor(apiBase?: string): Promise<{ success: boolean; status: AndroidOperatorAudioStatus }> {
+    return apiRequest<{ success: boolean; status: AndroidOperatorAudioStatus }>('/voice/android-audio/monitor/start', {
+      method: 'POST',
+    }, apiBase);
+  },
+
+  async stopAndroidOperatorAudioMonitor(apiBase?: string): Promise<{ success: boolean; status: AndroidOperatorAudioStatus }> {
+    return apiRequest<{ success: boolean; status: AndroidOperatorAudioStatus }>('/voice/android-audio/monitor/stop', {
+      method: 'POST',
+    }, apiBase);
   },
 
   async getVoiceKeyerPanel(callsign: string, apiBase?: string): Promise<{ success: boolean; panel: VoiceKeyerPanel }> {

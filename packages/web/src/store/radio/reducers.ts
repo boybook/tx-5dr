@@ -172,6 +172,7 @@ export const initialRadioState: RadioState = {
   subscribedSpectrumKind: null,
   clockStatus: null,
   audioSidecar: null,
+  androidOperatorAudio: null,
   cwKeyerStatus: null,
   cwConfig: null,
   splitEnabled: false,
@@ -474,6 +475,9 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
 
     case 'voiceRadioModeChanged':
       return { ...state, currentRadioMode: action.payload };
+
+    case 'androidOperatorAudioStatusChanged':
+      return { ...state, androidOperatorAudio: action.payload };
 
     case 'setStationInfo':
       return { ...state, stationInfo: action.payload };

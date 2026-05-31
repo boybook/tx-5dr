@@ -28,6 +28,7 @@ import type {
   ReconnectProgress,
   ClockStatusSummary,
   AudioSidecarStatusPayload,
+  AndroidOperatorAudioStatus,
   BootstrapStatus,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
@@ -724,6 +725,9 @@ export function createRadioEventMap({
       const lockData = data as VoicePTTLock;
       logger.debug('Voice PTT lock changed:', lockData);
       radioDispatch({ type: 'voicePttLockChanged', payload: lockData });
+    },
+    androidOperatorAudioStatusChanged: (data: unknown) => {
+      radioDispatch({ type: 'androidOperatorAudioStatusChanged', payload: data as AndroidOperatorAudioStatus });
     },
     voiceRadioModeChanged: (data: unknown) => {
       const modeData = data as { radioMode: string };

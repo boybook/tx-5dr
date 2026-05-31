@@ -16,6 +16,7 @@ export interface AndroidAudioEnvironmentProbe {
 }
 
 interface AndroidAudioBridgeApi {
+  nativeOperatorAudio?: boolean;
   enterVoiceAudio(reason?: string): AndroidAudioEnvironmentProbe;
   leaveVoiceAudio(reason?: string): AndroidAudioEnvironmentProbe;
   probeAudioEnvironment(): AndroidAudioEnvironmentProbe;
@@ -70,4 +71,8 @@ export function probeAndroidAudioEnvironment(): AndroidAudioEnvironmentProbe | n
     logger.debug('Failed to probe Android WebView audio environment', error);
     return null;
   }
+}
+
+export function hasAndroidNativeOperatorAudio(): boolean {
+  return bridge()?.nativeOperatorAudio === true;
 }

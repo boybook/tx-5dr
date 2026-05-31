@@ -154,6 +154,7 @@ export * from './schema/rigctld.schema.js';
 
 // Realtime Schema
 export * from './schema/realtime.schema.js';
+export * from './schema/android-operator-audio.schema.js';
 
 // Desktop HTTPS Schema
 export * from './schema/desktop-https.schema.js';

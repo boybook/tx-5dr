@@ -743,6 +743,10 @@ export class WSServer extends WSMessageHandler {
       this.broadcast(WSMessageType.VOICE_KEYER_STATUS_CHANGED, data);
     });
 
+    this.digitalRadioEngine.on('androidOperatorAudioStatusChanged', (data) => {
+      this.broadcast(WSMessageType.ANDROID_OPERATOR_AUDIO_STATUS_CHANGED, data);
+    });
+
     this.digitalRadioEngine.on('cwKeyerStatusChanged', (data) => {
       logger.debug('cw keyer status changed', data);
       this.broadcast(WSMessageType.CW_KEYER_STATUS, data);

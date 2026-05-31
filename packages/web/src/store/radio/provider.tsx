@@ -8,6 +8,7 @@ import { type RadioService, getOrCreateRadioService } from '../../services/radio
 import { useAuth } from '../authStore';
 import {
   AudioSidecarContext,
+  AndroidOperatorAudioContext,
   CapabilityDescriptorsContext,
   CapabilityStatesContext,
   ConnectionContext,
@@ -577,7 +578,9 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
                             <CapabilityStatesContext.Provider value={capabilityStatesContextValue}>
                               <MyRelatedTimelineContext.Provider value={myRelatedTimelineContextValue}>
                                 <AudioSidecarContext.Provider value={radioState.audioSidecar}>
-                                  {children}
+                                  <AndroidOperatorAudioContext.Provider value={radioState.androidOperatorAudio}>
+                                    {children}
+                                  </AndroidOperatorAudioContext.Provider>
                                 </AudioSidecarContext.Provider>
                               </MyRelatedTimelineContext.Provider>
                             </CapabilityStatesContext.Provider>

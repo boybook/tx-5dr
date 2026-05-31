@@ -80,6 +80,7 @@ import { ClockCoordinator } from './subsystems/ClockCoordinator.js';
 import { EngineLifecycle } from './subsystems/EngineLifecycle.js';
 import { VoiceSessionManager } from './voice/VoiceSessionManager.js';
 import { VoiceKeyerManager } from './voice/VoiceKeyerManager.js';
+import { AndroidOperatorAudioService } from './voice/AndroidOperatorAudioService.js';
 import { CWKeyerManager } from './cw/CWKeyerManager.js';
 import { CWDecoderManager, DEFAULT_CW_DECODER_CONFIG, type CWDecoderStatus as ServerCWDecoderStatus, type CWDecoderConfig as ServerCWDecoderConfig } from './cw-decoder/index.js';
 import { EngineState } from './state-machines/types.js';
@@ -93,6 +94,7 @@ import { PhysicalPttMonitor } from './radio/PhysicalPttMonitor.js';
 import type { RigctldBridgeConfig, RigctldStatus } from '@tx5dr/contracts';
 import { RadioPowerController } from './radio/RadioPowerController.js';
 import { TuneToneController } from './radio/TuneToneController.js';
+import type { RealtimeRxAudioRouter } from './realtime/RealtimeRxAudioRouter.js';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -220,6 +222,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private engineMode: EngineMode = 'digital';
   private voiceSessionManager: VoiceSessionManager | null = null;
   private voiceKeyerManager: VoiceKeyerManager | null = null;
+  private androidOperatorAudioService: AndroidOperatorAudioService | null = null;
 
   // CW 模式
   private cwKeyerManager: CWKeyerManager | null = null;
@@ -737,6 +740,26 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.voiceKeyerManager;
   }
 
+  public initializeAndroidOperatorAudioService(rxAudioRouter: RealtimeRxAudioRouter): AndroidOperatorAudioService | null {
+    if (!this.voiceSessionManager) {
+      return null;
+    }
+    if (!this.androidOperatorAudioService) {
+      this.androidOperatorAudioService = new AndroidOperatorAudioService({
+        voiceSessionManager: this.voiceSessionManager,
+        rxAudioRouter,
+      });
+      this.androidOperatorAudioService.on('statusChanged', (status) => {
+        this.emit('androidOperatorAudioStatusChanged', status);
+      });
+    }
+    return this.androidOperatorAudioService;
+  }
+
+  public getAndroidOperatorAudioService(): AndroidOperatorAudioService | null {
+    return this.androidOperatorAudioService;
+  }
+
   public getCWKeyerManager(): CWKeyerManager {
     if (!this.cwKeyerManager) {
       this.cwKeyerManager = new CWKeyerManager(() => this.radioManager);
@@ -1184,6 +1207,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     try {
       await this.stopTuneTone('engine destroyed');
       await this.audioSidecar.stop('engine-destroy');
+      await this.androidOperatorAudioService?.destroy();
+      this.androidOperatorAudioService = null;
     } catch (err) {
       logger.warn('audio sidecar stop during destroy failed', err);
     }

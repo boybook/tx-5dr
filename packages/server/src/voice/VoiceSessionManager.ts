@@ -261,6 +261,10 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
     return this.pttLockManager.isLocked();
   }
 
+  getActiveVoiceAudioClientId(): string | null {
+    return this.pttLockManager.getVoiceAudioClientId();
+  }
+
   destroy(): void {
     this.audioStreamManager.setVoiceOutputObserver(null);
     this.pttLockManager.destroy();

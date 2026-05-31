@@ -67,6 +67,7 @@ const VOICE_TX_BUFFER_PROFILES: VoiceTxBufferProfile[] = [
 ];
 const REALTIME_AUDIO_CODEC_PREFERENCES: RealtimeAudioCodecPreference[] = ['auto', 'opus', 'pcm'];
 const MONITOR_PLAYBACK_BUFFER_PROFILES: MonitorPlaybackBufferProfile[] = ['auto', 'custom'];
+const ANDROID_MIC_GAIN_STORAGE_KEY = 'tx5dr.androidOperatorAudio.micGainDb';
 
 const clampWidth = (value: number, minWidth: number, maxWidth: number): number => (
   Math.min(maxWidth, Math.max(minWidth, value))
@@ -75,6 +76,27 @@ const clampWidth = (value: number, minWidth: number, maxWidth: number): number =
 const isVoiceKeyerLockHolder = (lockHolder: string | null | undefined): boolean => (
   typeof lockHolder === 'string' && lockHolder.startsWith('voice-keyer:')
 );
+
+function loadSavedAndroidMicGainDb(): number | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(ANDROID_MIC_GAIN_STORAGE_KEY);
+    if (!raw) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveAndroidMicGainDb(value: number): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(ANDROID_MIC_GAIN_STORAGE_KEY, String(value));
+  } catch {
+    // ignore storage failures
+  }
+}
 
 const ToolbarIconTooltip: React.FC<{
   label: string;
@@ -580,7 +602,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const radioConnection = useRadioConnectionState();
   const radioMode = useRadioModeState();
   const { pttStatus, tuneToneStatus, voicePttLock } = usePTTState();
-  const { state: radioState } = useRadioState();
+  const { state: radioState, dispatch: radioDispatch } = useRadioState();
   const { activeProfile } = useProfiles();
   const { latestError } = useRadioErrors();
   const { state: authState } = useAuth();
@@ -632,8 +654,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const [isTogglingListen, setIsTogglingListen] = useState(false);
   const [isSwitchingMonitorTransport, setIsSwitchingMonitorTransport] = useState(false);
   const [isSwitchingVoiceTransport, setIsSwitchingVoiceTransport] = useState(false);
+  const [isSettingAndroidMicGain, setIsSettingAndroidMicGain] = useState(false);
+  const [androidMicGainDraftDb, setAndroidMicGainDraftDb] = useState(18);
   const [isVoiceTxPopoverOpen, setIsVoiceTxPopoverOpen] = useState(false);
   const hasAutoOpenedVoiceTxUnderrunPopoverRef = React.useRef(false);
+  const hasAppliedSavedAndroidMicGainRef = React.useRef(false);
 
   // 音频监听 (reusable hook)
   const audioMonitor = useAudioMonitorPlayback({ scope: 'radio' });
@@ -674,6 +699,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   }, [canOpenRadioControl, isControlPanelOpen]);
 
   const getMonitorTransportLabel = React.useCallback((transport: RealtimeTransportKind | null | undefined): string => {
+    if (transport === 'android-native') {
+      return t('monitor.androidNativeAudioShort');
+    }
     if (transport === 'ws-compat') {
       return t('monitor.transportWsPcm');
     }
@@ -681,10 +709,14 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   }, [t]);
 
   const getNextMonitorTransport = React.useCallback((): RealtimeTransportKind => (
+    audioMonitor.transportKind === 'android-native' ? 'android-native' :
     audioMonitor.transportKind === 'ws-compat' ? 'rtc-data-audio' : 'ws-compat'
   ), [audioMonitor.transportKind]);
 
   const getVoiceTransportLabel = React.useCallback((transport: RealtimeTransportKind | null | undefined): string => {
+    if (transport === 'android-native') {
+      return t('voiceTx.androidNativeAudioShort');
+    }
     if (transport === 'ws-compat') {
       return t('monitor.transportWsPcm');
     }
@@ -703,7 +735,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   const currentVoiceTransport = voiceCaptureController?.activeTransport ?? null;
   const effectiveVoiceTransport = currentVoiceTransport ?? voiceCaptureController?.preferredTransport ?? null;
-  const nextVoiceTransport = effectiveVoiceTransport === 'ws-compat' ? 'rtc-data-audio' : 'ws-compat';
+  const nextVoiceTransport = effectiveVoiceTransport === 'android-native'
+    ? 'android-native'
+    : effectiveVoiceTransport === 'ws-compat'
+      ? 'rtc-data-audio'
+      : 'ws-compat';
   const monitorActivationCta = React.useMemo(() => deriveMonitorActivationCtaState(
     radioMode.engineMode === 'voice',
     connection.state.isConnected,
@@ -829,6 +865,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     if (!voiceCaptureController) {
       return '--';
     }
+    if (effectiveVoiceTransport === 'android-native') {
+      return getVoiceTransportLabel(effectiveVoiceTransport);
+    }
     const codec = voiceCaptureController.activeAudioCodecPolicy?.resolvedCodec === 'opus' ? 'Opus' : 'PCM';
     const transport = currentVoiceTransport
       ? getVoiceTransportLabel(currentVoiceTransport)
@@ -836,6 +875,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     return `${codec} · ${transport}`;
   }, [
     currentVoiceTransport,
+    effectiveVoiceTransport,
     getVoiceTransportLabel,
     t,
     voiceCaptureController,
@@ -886,6 +926,45 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const isVoiceTxBufferControlDisabled = Boolean(
     voiceCaptureController?.isPTTActive || voiceCaptureController?.captureState === 'starting',
   );
+  const androidOperatorAudio = radioState.androidOperatorAudio;
+  const isAndroidNativeVoiceTransport = effectiveVoiceTransport === 'android-native';
+
+  React.useEffect(() => {
+    if (typeof androidOperatorAudio?.micGainDb === 'number') {
+      setAndroidMicGainDraftDb(androidOperatorAudio.micGainDb);
+    }
+  }, [androidOperatorAudio?.micGainDb]);
+
+  React.useEffect(() => {
+    if (!canUseAuthenticatedRest || !androidOperatorAudio?.available || hasAppliedSavedAndroidMicGainRef.current) {
+      return;
+    }
+    const savedGainDb = loadSavedAndroidMicGainDb();
+    if (savedGainDb == null) {
+      hasAppliedSavedAndroidMicGainRef.current = true;
+      return;
+    }
+    const clampedGainDb = Math.max(androidOperatorAudio.micGainMinDb, Math.min(androidOperatorAudio.micGainMaxDb, savedGainDb));
+    hasAppliedSavedAndroidMicGainRef.current = true;
+    if (Math.abs(clampedGainDb - androidOperatorAudio.micGainDb) < 0.05) {
+      setAndroidMicGainDraftDb(androidOperatorAudio.micGainDb);
+      return;
+    }
+    setAndroidMicGainDraftDb(clampedGainDb);
+    void api.setAndroidOperatorAudioGain(clampedGainDb)
+      .then((response) => {
+        radioDispatch({ type: 'androidOperatorAudioStatusChanged', payload: response.status });
+        setAndroidMicGainDraftDb(response.status.micGainDb);
+      })
+      .catch((error) => logger.debug('Failed to restore saved Android microphone gain', error));
+  }, [
+    androidOperatorAudio?.available,
+    androidOperatorAudio?.micGainDb,
+    androidOperatorAudio?.micGainMaxDb,
+    androidOperatorAudio?.micGainMinDb,
+    canUseAuthenticatedRest,
+    radioDispatch,
+  ]);
 
   const handleVoiceTxBufferProfileChange = React.useCallback((profile: VoiceTxBufferProfile) => {
     if (!voiceCaptureController || isVoiceTxBufferControlDisabled) {
@@ -935,6 +1014,32 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       setIsSwitchingVoiceTransport(false);
     }
   }, [isSwitchingVoiceTransport, nextVoiceTransport, voiceCaptureController]);
+
+  const handleAndroidMicGainChange = React.useCallback((value: number | number[]) => {
+    const dbValue = Array.isArray(value) ? value[0] : value;
+    if (Number.isFinite(dbValue)) {
+      setAndroidMicGainDraftDb(dbValue);
+    }
+  }, []);
+
+  const handleAndroidMicGainCommit = React.useCallback(async (value: number | number[]) => {
+    const dbValue = Array.isArray(value) ? value[0] : value;
+    if (!Number.isFinite(dbValue) || isSettingAndroidMicGain) {
+      return;
+    }
+    setIsSettingAndroidMicGain(true);
+    try {
+      const response = await api.setAndroidOperatorAudioGain(dbValue);
+      radioDispatch({ type: 'androidOperatorAudioStatusChanged', payload: response.status });
+      setAndroidMicGainDraftDb(response.status.micGainDb);
+      saveAndroidMicGainDb(response.status.micGainDb);
+    } catch (error) {
+      logger.warn('Failed to set Android native microphone gain', error);
+      addToast({ title: t('voiceTx.androidMicGainFailed'), color: 'danger', timeout: 3000 });
+    } finally {
+      setIsSettingAndroidMicGain(false);
+    }
+  }, [isSettingAndroidMicGain, radioDispatch, t]);
 
 
   // 加载可用模式列表
@@ -2077,9 +2182,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                             className="w-full h-7"
                             onPress={handleSwitchMonitorTransport}
                             isLoading={isSwitchingMonitorTransport}
-                            isDisabled={!audioMonitor.transportKind || isSwitchingMonitorTransport}
+                            isDisabled={!audioMonitor.transportKind || audioMonitor.transportKind === 'android-native' || isSwitchingMonitorTransport}
                           >
-                            {audioMonitor.transportKind === 'ws-compat'
+                            {audioMonitor.transportKind === 'android-native'
+                              ? t('monitor.androidNativeAudioShort')
+                              : audioMonitor.transportKind === 'ws-compat'
                               ? t('monitor.switchToWebrtc')
                               : t('monitor.switchToWsPcm')}
                           </Button>
@@ -2282,6 +2389,31 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                           </div>
                       )}
 
+                      {isAndroidNativeVoiceTransport && androidOperatorAudio && (
+                        <div className="space-y-1.5 border-t border-divider pt-2">
+                          <div className="flex items-center justify-between gap-4 text-xs">
+                            <span className="text-default-500">{t('voiceTx.androidMicGain')}</span>
+                            <span className="font-mono text-default-400">
+                              {formatDbDisplay(androidMicGainDraftDb)}
+                            </span>
+                          </div>
+                          <Slider
+                            className="w-48 max-w-full"
+                            minValue={androidOperatorAudio.micGainMinDb}
+                            maxValue={androidOperatorAudio.micGainMaxDb}
+                            step={1}
+                            value={[androidMicGainDraftDb]}
+                            onChange={handleAndroidMicGainChange}
+                            onChangeEnd={handleAndroidMicGainCommit}
+                            isDisabled={isSettingAndroidMicGain}
+                            aria-label={t('voiceTx.androidMicGain')}
+                          />
+                          <div className="text-[11px] leading-snug text-default-400">
+                            {t('voiceTx.androidMicGainHint')}
+                          </div>
+                        </div>
+                      )}
+
                       <Button
                         size="sm"
                         variant="flat"
@@ -2289,9 +2421,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                         className="w-full h-7"
                         onPress={handleSwitchVoiceTransport}
                         isLoading={isSwitchingVoiceTransport}
-                        isDisabled={isSwitchingVoiceTransport || voiceCaptureController.isPTTActive || voiceCaptureController.captureState === 'starting'}
+                        isDisabled={effectiveVoiceTransport === 'android-native' || isSwitchingVoiceTransport || voiceCaptureController.isPTTActive || voiceCaptureController.captureState === 'starting'}
                       >
-                        {effectiveVoiceTransport === 'ws-compat'
+                        {effectiveVoiceTransport === 'android-native'
+                          ? t('voiceTx.androidNativeAudioShort')
+                          : effectiveVoiceTransport === 'ws-compat'
                           ? t('monitor.switchToWebrtc')
                           : t('monitor.switchToWsPcm')}
                       </Button>

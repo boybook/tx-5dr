@@ -7,6 +7,7 @@ import type {
 } from '@tx5dr/contracts';
 import {
   AudioSidecarContext,
+  AndroidOperatorAudioContext,
   CapabilityDescriptorsContext,
   CapabilityStatesContext,
   ConnectionContext,
@@ -125,6 +126,7 @@ export const useRadioConnectionState = () => {
 };
 
 export const useAudioSidecarState = () => useContext(AudioSidecarContext);
+export const useAndroidOperatorAudioState = () => useContext(AndroidOperatorAudioContext);
 
 export const useRadioModeState = () => {
   const context = useContext(RadioModeContext);
