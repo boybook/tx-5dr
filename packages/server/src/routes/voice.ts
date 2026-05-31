@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { readFile } from 'fs/promises';
 import {
   AndroidOperatorAudioGainUpdateSchema,
+  AndroidOperatorAudioMonitorGainUpdateSchema,
   UserRole,
   VoiceKeyerPanelUpdateSchema,
   VoiceKeyerSlotUpdateSchema,
@@ -59,6 +60,9 @@ export async function voiceRoutes(fastify: FastifyInstance) {
         micGainDb: 18,
         micGainMinDb: -12,
         micGainMaxDb: 24,
+        monitorGainDb: 0,
+        monitorGainMinDb: -60,
+        monitorGainMaxDb: 20,
         micDevice: null,
         speakerDevice: null,
         lastError: 'Android native operator audio service is not initialized',
@@ -88,6 +92,20 @@ export async function voiceRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ success: false, message: 'Invalid Android microphone gain' });
     }
     return reply.send({ success: true, status: service.setMicGainDb(body.data.micGainDb) });
+  });
+
+  fastify.post('/android-audio/monitor/gain', {
+    preHandler: [requireRole(UserRole.OPERATOR)],
+  }, async (req, reply) => {
+    const service = engine.getAndroidOperatorAudioService();
+    if (!service) {
+      return reply.code(503).send({ success: false, message: 'Android native operator audio service is not initialized' });
+    }
+    const body = AndroidOperatorAudioMonitorGainUpdateSchema.safeParse(req.body);
+    if (!body.success) {
+      return reply.code(400).send({ success: false, message: 'Invalid Android monitor gain' });
+    }
+    return reply.send({ success: true, status: service.setMonitorGainDb(body.data.monitorGainDb) });
   });
 
   fastify.post('/android-audio/release', {

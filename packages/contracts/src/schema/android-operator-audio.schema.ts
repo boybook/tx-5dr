@@ -29,6 +29,9 @@ export const AndroidOperatorAudioStatusSchema = z.object({
   micGainDb: z.number(),
   micGainMinDb: z.number(),
   micGainMaxDb: z.number(),
+  monitorGainDb: z.number(),
+  monitorGainMinDb: z.number(),
+  monitorGainMaxDb: z.number(),
   micDevice: AndroidOperatorAudioDeviceSchema.nullable(),
   speakerDevice: AndroidOperatorAudioDeviceSchema.nullable(),
   lastError: z.string().nullable(),
@@ -39,3 +42,8 @@ export const AndroidOperatorAudioGainUpdateSchema = z.object({
   micGainDb: z.number(),
 });
 export type AndroidOperatorAudioGainUpdate = z.infer<typeof AndroidOperatorAudioGainUpdateSchema>;
+
+export const AndroidOperatorAudioMonitorGainUpdateSchema = z.object({
+  monitorGainDb: z.number(),
+});
+export type AndroidOperatorAudioMonitorGainUpdate = z.infer<typeof AndroidOperatorAudioMonitorGainUpdateSchema>;

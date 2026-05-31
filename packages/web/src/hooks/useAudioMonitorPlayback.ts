@@ -1177,13 +1177,19 @@ export function useAudioMonitorPlayback(
   const setVolume = useCallback((db: number) => {
     const linear = Math.max(0, Math.pow(10, db / 20));
     currentVolumeRef.current = linear;
+    if (nativeOperatorAudioEnabled) {
+      void api.setAndroidOperatorAudioMonitorGain(db)
+        .then((response) => radioDispatch({ type: 'androidOperatorAudioStatusChanged', payload: response.status }))
+        .catch((error) => logger.warn('Failed to set Android native monitor gain', error));
+      return;
+    }
     if (gainNodeRef.current) {
       const gainParam = gainNodeRef.current.gain;
       const contextTime = gainNodeRef.current.context.currentTime;
       gainParam.cancelScheduledValues(contextTime);
       gainParam.setTargetAtTime(linear, contextTime, VOLUME_RAMP_SECONDS);
     }
-  }, []);
+  }, [nativeOperatorAudioEnabled, radioDispatch]);
 
   return {
     preparePlaybackFromGesture,

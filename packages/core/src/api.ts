@@ -1975,6 +1975,13 @@ export const api = {
     }, apiBase);
   },
 
+  async setAndroidOperatorAudioMonitorGain(monitorGainDb: number, apiBase?: string): Promise<{ success: boolean; status: AndroidOperatorAudioStatus }> {
+    return apiRequest<{ success: boolean; status: AndroidOperatorAudioStatus }>('/voice/android-audio/monitor/gain', {
+      method: 'POST',
+      body: JSON.stringify({ monitorGainDb }),
+    }, apiBase);
+  },
+
   async releaseAndroidOperatorAudio(apiBase?: string): Promise<{ success: boolean; status: AndroidOperatorAudioStatus }> {
     return apiRequest<{ success: boolean; status: AndroidOperatorAudioStatus }>('/voice/android-audio/release', {
       method: 'POST',

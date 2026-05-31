@@ -21,6 +21,9 @@ const INPUT_SILENCE_HOLD_MS = 1500;
 const DEFAULT_MIC_GAIN_DB = 18;
 const MAX_MIC_GAIN_DB = 24;
 const MIN_MIC_GAIN_DB = -12;
+const DEFAULT_MONITOR_GAIN_DB = 0;
+const MAX_MONITOR_GAIN_DB = 20;
+const MIN_MONITOR_GAIN_DB = -60;
 const BUILTIN_MIC_KINDS = new Set(['builtinMic', 'builtin-mic', 'builtin_microphone', 'builtinMicrophone']);
 const BUILTIN_SPEAKER_KINDS = new Set(['builtinSpeaker', 'builtin-speaker']);
 
@@ -70,6 +73,8 @@ export class AndroidOperatorAudioService extends EventEmitter<AndroidOperatorAud
   private monitorStartPromise: Promise<AndroidOperatorAudioStatus> | null = null;
   private micGainDb = getMicGainDb();
   private micGain = dbToGain(this.micGainDb);
+  private monitorGainDb = DEFAULT_MONITOR_GAIN_DB;
+  private monitorGain = dbToGain(this.monitorGainDb);
 
   constructor(private readonly deps: AndroidOperatorAudioServiceDeps) {
     super();
@@ -93,6 +98,9 @@ export class AndroidOperatorAudioService extends EventEmitter<AndroidOperatorAud
       micGainDb: this.micGainDb,
       micGainMinDb: MIN_MIC_GAIN_DB,
       micGainMaxDb: MAX_MIC_GAIN_DB,
+      monitorGainDb: this.monitorGainDb,
+      monitorGainMinDb: MIN_MONITOR_GAIN_DB,
+      monitorGainMaxDb: MAX_MONITOR_GAIN_DB,
       micDevice: devices.mic ? toStatusDevice(devices.mic) : null,
       speakerDevice: devices.speaker ? toStatusDevice(devices.speaker) : null,
       lastError: this.lastError,
@@ -120,6 +128,18 @@ export class AndroidOperatorAudioService extends EventEmitter<AndroidOperatorAud
     logger.info('Android native operator microphone gain updated', {
       micGainDb: this.micGainDb,
       micGain: Number(this.micGain.toFixed(3)),
+    });
+    this.emitStatus(true);
+    return this.getStatus();
+  }
+
+  setMonitorGainDb(value: number): AndroidOperatorAudioStatus {
+    const nextGainDb = clampMonitorGainDb(value);
+    this.monitorGainDb = nextGainDb;
+    this.monitorGain = dbToGain(nextGainDb);
+    logger.info('Android native operator monitor gain updated', {
+      monitorGainDb: this.monitorGainDb,
+      monitorGain: Number(this.monitorGain.toFixed(3)),
     });
     this.emitStatus(true);
     return this.getStatus();
@@ -234,6 +254,8 @@ export class AndroidOperatorAudioService extends EventEmitter<AndroidOperatorAud
         device: devices.speaker.name,
         socketPath: devices.speaker.socketPath,
         sampleRate,
+        monitorGainDb: this.monitorGainDb,
+        monitorGain: Number(this.monitorGain.toFixed(3)),
       });
       this.emitStatus(true);
       return this.getStatus();
@@ -349,7 +371,7 @@ export class AndroidOperatorAudioService extends EventEmitter<AndroidOperatorAud
     if (samples.length === 0) {
       return;
     }
-    void output.write(samples, 1).then((ok) => {
+    void output.write(samples, this.monitorGain).then((ok) => {
       if (!ok && this.monitorRequested) {
         this.failMonitor('Android native speaker socket write failed');
       }
@@ -498,6 +520,11 @@ function getMicGainDb(): number {
 function clampMicGainDb(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_MIC_GAIN_DB;
   return Math.max(MIN_MIC_GAIN_DB, Math.min(MAX_MIC_GAIN_DB, value));
+}
+
+function clampMonitorGainDb(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_MONITOR_GAIN_DB;
+  return Math.max(MIN_MONITOR_GAIN_DB, Math.min(MAX_MONITOR_GAIN_DB, value));
 }
 
 function dbToGain(db: number): number {

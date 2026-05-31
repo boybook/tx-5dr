@@ -20,10 +20,12 @@ class FakeOutputSocket {
   started = false;
   stopped = false;
   writes: Float32Array[] = [];
+  gains: number[] = [];
   async start(): Promise<void> { this.started = true; }
   stop(): void { this.stopped = true; }
-  async write(samples: Float32Array): Promise<boolean> {
+  async write(samples: Float32Array, gain = 1): Promise<boolean> {
     this.writes.push(new Float32Array(samples));
+    this.gains.push(gain);
     return true;
   }
 }
@@ -207,5 +209,18 @@ describe('AndroidOperatorAudioService', () => {
     voice.emit('voicePttLockChanged', { locked: false, lockedBy: null, lockedByLabel: null, lockedAt: null, timeoutMs: 180000 });
     source.emit('audioFrame', { samples: new Float32Array([0.5, 0.6]), sampleRate: 48000, channels: 1, timestamp: Date.now(), sequence: 3, sourceKind: 'native-radio' });
     await vi.waitFor(() => expect(output.writes).toHaveLength(2));
+  });
+
+  it('applies bounded native monitor gain to speaker writes', async () => {
+    const { service, output, source } = createHarness();
+    expect(service.getStatus().monitorGainDb).toBe(0);
+    expect(service.setMonitorGainDb(6).monitorGainDb).toBe(6);
+    await service.startMonitor();
+    source.emit('audioFrame', { samples: new Float32Array([0.1, 0.2]), sampleRate: 48000, channels: 1, timestamp: Date.now(), sequence: 1, sourceKind: 'native-radio' });
+
+    await vi.waitFor(() => expect(output.gains).toHaveLength(1));
+    expect(output.gains[0]).toBeCloseTo(Math.pow(10, 6 / 20), 5);
+    expect(service.setMonitorGainDb(99).monitorGainDb).toBe(20);
+    expect(service.setMonitorGainDb(-99).monitorGainDb).toBe(-60);
   });
 });
