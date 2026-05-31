@@ -22,6 +22,22 @@ export interface SlotPackManagerEvents {
   'slotPackDecodeUpdated': (slotPack: SlotPack) => void;
 }
 
+type SlotPackPersistenceLike = Pick<
+  SlotPackPersistence,
+  'store' | 'getStorageStats' | 'flush' | 'cleanup' | 'readRecords' | 'getAvailableDates'
+>;
+
+interface DecodeWindowCompletionState {
+  expectedWindowCount: number;
+  completedWindows: Set<number>;
+  hasDecodeResult: boolean;
+  persistedFinal: boolean;
+}
+
+interface SlotPackManagerOptions {
+  persistence?: SlotPackPersistenceLike;
+}
+
 /**
  * 时隙包管理器 - 管理同一时隙内的多次解码结果
  * 负责去重、优化选择和维护最优解码结果
@@ -30,15 +46,16 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   private slotPacks = new Map<string, SlotPack>();
   private lastSlotPack: SlotPack | null = null;
   private currentMode: ModeDescriptor = MODES.FT8;
-  private persistence: SlotPackPersistence;
+  private persistence: SlotPackPersistenceLike;
   private persistenceEnabled: boolean = true;
   private currentFrequencyContext: SlotPackFrequencyContext | undefined;
+  private decodeWindowCompletions = new Map<string, DecodeWindowCompletionState>();
   /** 上一次 clearInMemory() 的时间戳，用于过滤过时的解码结果 */
   private lastClearTimestamp = 0;
 
-  constructor() {
+  constructor(options: SlotPackManagerOptions = {}) {
     super();
-    this.persistence = new SlotPackPersistence();
+    this.persistence = options.persistence ?? new SlotPackPersistence();
   }
 
   /**
@@ -48,6 +65,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   clearInMemory(): void {
     logger.info('Cleared in-memory slot cache (listeners retained)');
     this.slotPacks.clear();
+    this.decodeWindowCompletions.clear();
     this.lastSlotPack = null;
     this.lastClearTimestamp = Date.now();
   }
@@ -266,12 +284,6 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
         this.lastSlotPack = slotPack;
       }
 
-      // 异步存储新创建的SlotPack（不阻塞主流程）
-      if (this.persistenceEnabled) {
-        this.persistence.store(slotPack, 'created', this.currentMode.name).catch(error => {
-          logger.error('store SlotPack failed', error);
-        });
-      }
     }
     
     // 更新解码统计
@@ -303,12 +315,8 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
 
     const snapshot = this.snapshotSlotPack(slotPack);
 
-    // 异步存储到本地（不阻塞主流程）
-    if (this.persistenceEnabled) {
-      this.persistence.store(snapshot, 'updated', this.currentMode.name).catch(error => {
-        logger.error('store SlotPack update failed', error);
-      });
-    }
+    this.markDecodeWindowCompleted(slotId, result.windowIdx, true);
+    this.persistFinalDecodeBatchIfComplete(slotId);
 
     // 发出通用更新事件（给前端/PSKReporter/callsignTracker 等消费者）
     this.emit('slotPackUpdated', snapshot);
@@ -317,6 +325,72 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     this.emit('slotPackDecodeUpdated', this.snapshotSlotPack(slotPack));
 
     return snapshot;
+  }
+
+  /**
+   * 标记一个解码窗口已经以错误结束。失败窗口不创建 SlotPack；它只用于
+   * 让同一 slot 的最终批量持久化不会无限等待缺失窗口。
+   */
+  markDecodeWindowFailed(slotId: string, windowIdx: number): void {
+    const slotStartMs = this.parseSlotIdStartMs(slotId);
+    if (slotStartMs === null) {
+      logger.warn('Ignoring decode failure with invalid slot time', { slotId, windowIdx });
+      return;
+    }
+
+    if (this.isStaleSlot(slotStartMs)) {
+      logger.debug(`Ignoring stale decode failure after frequency change: slot=${slotId}`);
+      return;
+    }
+
+    this.markDecodeWindowCompleted(slotId, windowIdx, false);
+    this.persistFinalDecodeBatchIfComplete(slotId);
+  }
+
+  private markDecodeWindowCompleted(slotId: string, windowIdx: number, hasDecodeResult: boolean): void {
+    const state = this.getDecodeWindowCompletionState(slotId, windowIdx);
+    state.completedWindows.add(windowIdx);
+    state.hasDecodeResult ||= hasDecodeResult;
+  }
+
+  private getDecodeWindowCompletionState(slotId: string, windowIdx: number): DecodeWindowCompletionState {
+    let state = this.decodeWindowCompletions.get(slotId);
+    if (!state) {
+      const configuredWindowCount = this.currentMode.windowTiming?.length ?? 0;
+      state = {
+        expectedWindowCount: Math.max(1, configuredWindowCount, windowIdx + 1),
+        completedWindows: new Set<number>(),
+        hasDecodeResult: false,
+        persistedFinal: false,
+      };
+      this.decodeWindowCompletions.set(slotId, state);
+    } else if (windowIdx + 1 > state.expectedWindowCount) {
+      state.expectedWindowCount = windowIdx + 1;
+    }
+
+    return state;
+  }
+
+  private persistFinalDecodeBatchIfComplete(slotId: string): void {
+    const state = this.decodeWindowCompletions.get(slotId);
+    if (!state || state.persistedFinal || state.completedWindows.size < state.expectedWindowCount) {
+      return;
+    }
+
+    const slotPack = this.slotPacks.get(slotId);
+    if (!slotPack || !state.hasDecodeResult) {
+      this.decodeWindowCompletions.delete(slotId);
+      return;
+    }
+
+    state.persistedFinal = true;
+    const snapshot = this.snapshotSlotPack(slotPack);
+
+    if (this.persistenceEnabled) {
+      this.persistence.store(snapshot, 'updated', this.currentMode.name).catch(error => {
+        logger.error('store final SlotPack batch failed', error);
+      });
+    }
   }
 
   private isBareCallsignDecodeFrame(frame: FrameMessage): boolean {
@@ -567,6 +641,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     const removed = this.slotPacks.delete(slotId);
     
     if (removed) {
+      this.decodeWindowCompletions.delete(slotId);
       logger.debug(`Removed slot pack: ${slotId}`);
       
       // 如果删除的是最新的 SlotPack，需要重新计算 lastSlotPack
@@ -617,6 +692,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
         }
         
         this.slotPacks.delete(slotId);
+        this.decodeWindowCompletions.delete(slotId);
         cleanedCount++;
         logger.debug(`Cleaned expired slot pack: ${slotId} (${Math.round((now - slotPack.stats.lastUpdated) / 1000)}s ago)`);
       }
@@ -965,6 +1041,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     }
     
     this.slotPacks.clear();
+    this.decodeWindowCompletions.clear();
     this.lastSlotPack = null; // 重置最新时隙包缓存
     this.removeAllListeners();
     

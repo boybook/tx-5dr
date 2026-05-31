@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { FT8_WINDOW_PRESETS, MODES } from '@tx5dr/contracts';
 import type { DecodeResult, SlotPack } from '@tx5dr/contracts';
 import { SlotPackManager } from '../SlotPackManager.js';
 
@@ -21,6 +22,26 @@ function buildDecodeResult(
     })),
     ...overrides,
   } as unknown as DecodeResult;
+}
+
+function createPersistenceMock() {
+  return {
+    store: vi.fn(async (
+      _slotPack: SlotPack,
+      _operation: 'updated' | 'created' = 'updated',
+      _mode?: string,
+    ) => undefined),
+    getStorageStats: vi.fn(async () => ({
+      currentFile: null,
+      queueSize: 0,
+      isWriting: false,
+      currentDate: null,
+    })),
+    flush: vi.fn(async () => undefined),
+    cleanup: vi.fn(async () => undefined),
+    readRecords: vi.fn(async () => []),
+    getAvailableDates: vi.fn(async () => []),
+  };
 }
 
 describe('SlotPackManager event routing', () => {
@@ -302,6 +323,143 @@ describe('SlotPackManager event routing', () => {
         dt: 0.2,
         freq: 1700,
       }),
+    ]);
+  });
+
+  it('persists one final RX batch after all FT8 balanced decode windows complete', () => {
+    const persistence = createPersistenceMock();
+    const manager = new SlotPackManager({ persistence });
+    manager.setMode({ ...MODES.FT8, windowTiming: FT8_WINDOW_PRESETS.balanced });
+
+    manager.processDecodeResult(buildDecodeResult(
+      45_000,
+      [{ message: 'CQ BG5DRB PM00', snr: -5, dt: 0.8 }],
+      { windowIdx: 0, windowOffsetMs: -3200 },
+    ));
+    manager.processDecodeResult(buildDecodeResult(
+      45_000,
+      [{ message: 'BG5DRB K1ABC -09', snr: -10, dt: 0.4 }],
+      { windowIdx: 1, windowOffsetMs: -1500 },
+    ));
+
+    expect(persistence.store).not.toHaveBeenCalled();
+
+    manager.processDecodeResult(buildDecodeResult(
+      45_000,
+      [
+        { message: 'CQ BG5DRB PM00', snr: -3, dt: 0.2 },
+        { message: 'K1ABC BG5DRB R-12', snr: -8, dt: 0.1 },
+      ],
+      { windowIdx: 2, windowOffsetMs: -300 },
+    ));
+
+    expect(persistence.store).toHaveBeenCalledTimes(1);
+    const [slotPack, operation, mode] = persistence.store.mock.calls[0] ?? [];
+    expect(operation).toBe('updated');
+    expect(mode).toBe('FT8');
+    expect((slotPack as SlotPack).decodeHistory.map((entry) => entry.windowIdx)).toEqual([0, 1, 2]);
+    expect((slotPack as SlotPack).frames.map((frame) => frame.message)).toEqual([
+      'CQ BG5DRB PM00',
+      'BG5DRB K1ABC -09',
+      'K1ABC BG5DRB R-12',
+    ]);
+    expect((slotPack as SlotPack).frames.find((frame) => frame.message === 'CQ BG5DRB PM00')?.snr).toBe(-3);
+  });
+
+  it('persists one final RX batch after all FT8 maximum decode windows complete out of order', () => {
+    const persistence = createPersistenceMock();
+    const manager = new SlotPackManager({ persistence });
+    manager.setMode({ ...MODES.FT8, windowTiming: FT8_WINDOW_PRESETS.maximum });
+
+    for (const windowIdx of [3, 0, 4, 1]) {
+      manager.processDecodeResult(buildDecodeResult(
+        45_000,
+        [{ message: `CQ TEST${windowIdx} PM00`, snr: -10 + windowIdx }],
+        { windowIdx, windowOffsetMs: FT8_WINDOW_PRESETS.maximum[windowIdx] ?? 0 },
+      ));
+    }
+
+    expect(persistence.store).not.toHaveBeenCalled();
+
+    manager.processDecodeResult(buildDecodeResult(
+      45_000,
+      [{ message: 'CQ TEST2 PM00', snr: -8 }],
+      { windowIdx: 2, windowOffsetMs: FT8_WINDOW_PRESETS.maximum[2] ?? 0 },
+    ));
+
+    expect(persistence.store).toHaveBeenCalledTimes(1);
+    const slotPack = persistence.store.mock.calls[0]?.[0] as SlotPack;
+    expect(new Set(slotPack.decodeHistory.map((entry) => entry.windowIdx))).toEqual(new Set([0, 1, 2, 3, 4]));
+    expect(slotPack.frames.map((frame) => frame.message).sort()).toEqual([
+      'CQ TEST0 PM00',
+      'CQ TEST1 PM00',
+      'CQ TEST2 PM00',
+      'CQ TEST3 PM00',
+      'CQ TEST4 PM00',
+    ]);
+  });
+
+  it('persists the final RX batch when one decode window fails but another succeeds', () => {
+    const persistence = createPersistenceMock();
+    const manager = new SlotPackManager({ persistence });
+    manager.setMode({ ...MODES.FT8, windowTiming: FT8_WINDOW_PRESETS.balanced });
+
+    manager.markDecodeWindowFailed('slot-45000', 0);
+    manager.processDecodeResult(buildDecodeResult(
+      45_000,
+      [{ message: 'CQ BG5DRB PM00', snr: -5 }],
+      { windowIdx: 1, windowOffsetMs: -1500 },
+    ));
+
+    expect(persistence.store).not.toHaveBeenCalled();
+
+    manager.markDecodeWindowFailed('slot-45000', 2);
+
+    expect(persistence.store).toHaveBeenCalledTimes(1);
+    const slotPack = persistence.store.mock.calls[0]?.[0] as SlotPack;
+    expect(slotPack.frames.map((frame) => frame.message)).toEqual(['CQ BG5DRB PM00']);
+    expect(slotPack.decodeHistory.map((entry) => entry.windowIdx)).toEqual([1]);
+  });
+
+  it('does not persist an empty record when all decode windows fail', () => {
+    const persistence = createPersistenceMock();
+    const manager = new SlotPackManager({ persistence });
+    manager.setMode({ ...MODES.FT8, windowTiming: FT8_WINDOW_PRESETS.balanced });
+
+    manager.markDecodeWindowFailed('slot-45000', 0);
+    manager.markDecodeWindowFailed('slot-45000', 1);
+    manager.markDecodeWindowFailed('slot-45000', 2);
+
+    expect(persistence.store).not.toHaveBeenCalled();
+    expect(manager.getSlotPack('slot-45000')).toBeNull();
+  });
+
+  it('includes a TX echo in the final RX batch when it is added before all decode windows complete', () => {
+    const persistence = createPersistenceMock();
+    const manager = new SlotPackManager({ persistence });
+    manager.setMode({ ...MODES.FT8, windowTiming: FT8_WINDOW_PRESETS.balanced });
+
+    manager.processDecodeResult(buildDecodeResult(
+      45_000,
+      [{ message: 'CQ BG5DRB PM00', snr: -5 }],
+      { windowIdx: 0, windowOffsetMs: -3200 },
+    ));
+    manager.addTransmissionFrame('slot-45000', 'op-1', 'BG5DRB K1ABC -09', 1550, 45_100);
+    manager.processDecodeResult(buildDecodeResult(45_000, [], { windowIdx: 1, windowOffsetMs: -1500 }));
+
+    expect(persistence.store).toHaveBeenCalledTimes(1);
+    expect(persistence.store.mock.calls[0]?.[1]).toBe('updated');
+    expect((persistence.store.mock.calls[0]?.[0] as SlotPack).frames.map((frame) => frame.message)).toEqual([
+      'BG5DRB K1ABC -09',
+      'CQ BG5DRB PM00',
+    ]);
+
+    manager.processDecodeResult(buildDecodeResult(45_000, [], { windowIdx: 2, windowOffsetMs: -300 }));
+
+    expect(persistence.store).toHaveBeenCalledTimes(2);
+    expect((persistence.store.mock.calls[1]?.[0] as SlotPack).frames.map((frame) => frame.message)).toEqual([
+      'BG5DRB K1ABC -09',
+      'CQ BG5DRB PM00',
     ]);
   });
 });
