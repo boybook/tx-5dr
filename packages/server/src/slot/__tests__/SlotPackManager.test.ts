@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { FT8_WINDOW_PRESETS, MODES } from '@tx5dr/contracts';
+import { FT8_WINDOW_PRESETS, MODES, SLOT_PACK_HISTORY_LIMIT } from '@tx5dr/contracts';
 import type { DecodeResult, SlotPack } from '@tx5dr/contracts';
 import { SlotPackManager } from '../SlotPackManager.js';
 
@@ -120,6 +120,52 @@ describe('SlotPackManager event routing', () => {
     expect(slotPack?.stats.totalFramesBeforeDedup).toBe(6);
     expect(slotPack?.stats.totalFramesAfterDedup).toBe(6);
     expect(slotPack?.decodeHistory[0]?.frameCount).toBe(6);
+  });
+
+  it('retains only the latest effective slot packs', () => {
+    const manager = new SlotPackManager();
+    manager.setPersistenceEnabled(false);
+
+    for (let index = 0; index < SLOT_PACK_HISTORY_LIMIT + 1; index++) {
+      manager.processDecodeResult(buildDecodeResult(
+        index * 15_000,
+        [{ message: `CQ TEST${index} PM00`, snr: -10 }],
+      ));
+    }
+
+    const activeSlotPacks = manager.getActiveSlotPacks();
+    expect(activeSlotPacks).toHaveLength(SLOT_PACK_HISTORY_LIMIT);
+    expect(activeSlotPacks.some((slotPack) => slotPack.slotId === 'slot-0')).toBe(false);
+    expect(activeSlotPacks.some((slotPack) => slotPack.slotId === `slot-${SLOT_PACK_HISTORY_LIMIT * 15_000}`)).toBe(true);
+    expect(manager.getStatus().lastSlotPack?.slotId).toBe(`slot-${SLOT_PACK_HISTORY_LIMIT * 15_000}`);
+  });
+
+  it('does not count empty slot packs toward the effective history limit and trims old empty packs', () => {
+    const manager = new SlotPackManager();
+    manager.setPersistenceEnabled(false);
+
+    for (let index = 0; index < SLOT_PACK_HISTORY_LIMIT; index++) {
+      manager.processDecodeResult(buildDecodeResult(
+        index * 15_000,
+        [{ message: `CQ FULL${index} PM00`, snr: -10 }],
+      ));
+    }
+
+    for (let index = 0; index < 6; index++) {
+      manager.processDecodeResult(buildDecodeResult(
+        (SLOT_PACK_HISTORY_LIMIT + index) * 15_000,
+        [],
+      ));
+    }
+
+    const activeSlotPacks = manager.getActiveSlotPacks();
+    const nonEmptySlotPacks = activeSlotPacks.filter((slotPack) => slotPack.frames.length > 0);
+    const emptySlotPacks = activeSlotPacks.filter((slotPack) => slotPack.frames.length === 0);
+
+    expect(nonEmptySlotPacks).toHaveLength(SLOT_PACK_HISTORY_LIMIT);
+    expect(emptySlotPacks).toHaveLength(4);
+    expect(emptySlotPacks.some((slotPack) => slotPack.slotId === `slot-${SLOT_PACK_HISTORY_LIMIT * 15_000}`)).toBe(false);
+    expect(manager.getStatus().lastSlotPack?.slotId).toBe(`slot-${(SLOT_PACK_HISTORY_LIMIT - 1) * 15_000}`);
   });
 
   it('addTransmissionFrame only emits slotPackUpdated (NOT slotPackDecodeUpdated)', () => {

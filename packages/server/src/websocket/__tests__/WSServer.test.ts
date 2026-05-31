@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { UserRole, WSMessageType, type SystemStatus } from '@tx5dr/contracts';
+import { SLOT_PACK_HISTORY_LIMIT, UserRole, WSMessageType, type SlotPack, type SystemStatus } from '@tx5dr/contracts';
 import { WSConnection, WSServer } from '../WSServer.js';
 import { ConfigManager } from '../../config/config-manager.js';
 
@@ -14,6 +14,31 @@ function createStatus(overrides: Partial<SystemStatus> = {}): SystemStatus {
     radioConnected: true,
     engineMode: 'voice',
     ...overrides,
+  };
+}
+
+function createSlotPack(index: number, frames = true): SlotPack {
+  return {
+    slotId: `slot-${index}`,
+    startMs: index * 15_000,
+    endMs: (index + 1) * 15_000,
+    frames: frames
+      ? [{
+          snr: -10,
+          dt: 0.2,
+          freq: 1200,
+          message: `CQ TEST${index} PM00`,
+          confidence: 1,
+        }]
+      : [],
+    stats: {
+      totalDecodes: 1,
+      successfulDecodes: frames ? 1 : 0,
+      totalFramesBeforeDedup: frames ? 1 : 0,
+      totalFramesAfterDedup: frames ? 1 : 0,
+      lastUpdated: index * 15_000,
+    },
+    decodeHistory: [],
   };
 }
 
@@ -296,6 +321,31 @@ describe('WSServer security filtering', () => {
     expect(adminSent.find(message => message.type === WSMessageType.RADIO_STATUS_CHANGED)?.data.radioConfig.icomWlan.password).toBe('radio-secret');
     expect(publicSent.find(message => message.type === WSMessageType.PTT_STATUS_CHANGED)?.data.operatorIds).toEqual([]);
     expect(adminSent.find(message => message.type === WSMessageType.PTT_STATUS_CHANGED)?.data.operatorIds).toEqual(['op-a']);
+  });
+});
+
+describe('WSServer slot pack history restore', () => {
+  it('sends reset-wrapped recent effective slot packs in chronological order', async () => {
+    const { connection, sent } = createTestConnection('conn-history');
+    const activeSlotPacks = [
+      createSlotPack(SLOT_PACK_HISTORY_LIMIT + 2, false),
+      ...Array.from({ length: SLOT_PACK_HISTORY_LIMIT + 2 }, (_, index) => createSlotPack(index)).reverse(),
+    ];
+    const server = Object.create(WSServer.prototype) as any;
+    server.digitalRadioEngine = {
+      getActiveSlotPacks: vi.fn(() => activeSlotPacks),
+    };
+    server.customizeSlotPackForClient = vi.fn(async (_connection: WSConnection, slotPack: SlotPack) => slotPack);
+
+    await (server as any).sendProjectedRecentSlotPacks(connection, { reset: true });
+
+    const updates = sent.filter((message) => message.type === WSMessageType.SLOT_PACK_UPDATED);
+    expect(sent[0]).toEqual({ type: WSMessageType.SLOT_PACKS_RESET, data: { phase: 'start' } });
+    expect(sent.at(-1)).toEqual({ type: WSMessageType.SLOT_PACKS_RESET, data: { phase: 'complete' } });
+    expect(updates).toHaveLength(SLOT_PACK_HISTORY_LIMIT);
+    expect((updates[0]?.data as SlotPack | undefined)?.slotId).toBe('slot-2');
+    expect((updates.at(-1)?.data as SlotPack | undefined)?.slotId).toBe(`slot-${SLOT_PACK_HISTORY_LIMIT + 1}`);
+    expect(updates.some((message) => (message.data as SlotPack).frames.length === 0)).toBe(false);
   });
 });
 

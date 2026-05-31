@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
-import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, SetSplitFrequencyPayloadSchema, TuneToneStartPayloadSchema, type AppAction, type AppSubject } from '@tx5dr/contracts';
+import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, SetSplitFrequencyPayloadSchema, TuneToneStartPayloadSchema, SLOT_PACK_HISTORY_LIMIT, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type {
   ClockStatusSummary,
   DecodeErrorInfo,
@@ -2135,7 +2135,7 @@ export class WSServer extends WSMessageHandler {
     connection: WSConnection,
     options?: { reset?: boolean; limit?: number },
   ): Promise<void> {
-    const { reset = false, limit = 50 } = options ?? {};
+    const { reset = false, limit = SLOT_PACK_HISTORY_LIMIT } = options ?? {};
     if (reset) {
       connection.send(WSMessageType.SLOT_PACKS_RESET, { phase: 'start' });
     }
@@ -2146,7 +2146,10 @@ export class WSServer extends WSMessageHandler {
         return;
       }
 
-      const recentSlotPacks = activeSlotPacks.slice(-limit);
+      const recentSlotPacks = activeSlotPacks
+        .filter((slotPack) => slotPack.frames.length > 0)
+        .sort((a, b) => a.startMs - b.startMs)
+        .slice(-limit);
       for (const slotPack of recentSlotPacks) {
         const customizedSlotPack = await this.customizeSlotPackForClient(connection, slotPack);
         connection.send(WSMessageType.SLOT_PACK_UPDATED, customizedSlotPack);

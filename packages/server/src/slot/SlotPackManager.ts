@@ -3,7 +3,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import type { SlotPack, DecodeResult, FrameMessage, ModeDescriptor, SlotInfo, SlotPackFrequencyContext } from '@tx5dr/contracts';
-import { MODES } from '@tx5dr/contracts';
+import { MODES, SLOT_PACK_HISTORY_LIMIT } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
 import { SlotPackPersistence } from './SlotPackPersistence.js';
 import { FT8MessageParser } from '@tx5dr/core';
@@ -11,6 +11,7 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('SlotPackManager');
 const MAX_VALID_DATE_MS = 8_640_000_000_000_000;
+const EMPTY_SLOT_PACK_RETENTION_LIMIT = 4;
 
 export interface SlotPackManagerEvents {
   'slotPackUpdated': (slotPack: SlotPack) => void;
@@ -194,6 +195,10 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       slotPack.stats.lastUpdated = updateTimestamp;
       slotPack.stats.totalFramesAfterDedup = slotPack.frames.length;
       this.bumpUpdateSeq(slotPack);
+      const removedSlotIds = this.trimSlotPackHistory();
+      if (removedSlotIds.has(slotId)) {
+        return;
+      }
       const snapshot = this.snapshotSlotPack(slotPack);
 
       // 异步存储到本地（不阻塞主流程）
@@ -307,10 +312,9 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     slotPack.frames = this.deduplicateAndOptimizeFrames(allFrames);
     slotPack.stats.totalFramesAfterDedup = slotPack.frames.length;
     this.bumpUpdateSeq(slotPack);
-
-    // 确保 lastSlotPack 指向最新的 SlotPack
-    if (slotPack.startMs > (this.lastSlotPack?.startMs || 0)) {
-      this.lastSlotPack = slotPack;
+    const removedSlotIds = this.trimSlotPackHistory();
+    if (removedSlotIds.has(slotId)) {
+      return null;
     }
 
     const snapshot = this.snapshotSlotPack(slotPack);
@@ -663,17 +667,56 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       return;
     }
     
-    let latestStartMs = 0;
+    let latestStartMs = Number.NEGATIVE_INFINITY;
+    let latestNonEmptyStartMs = Number.NEGATIVE_INFINITY;
+    let latestNonEmptySlotPack: SlotPack | null = null;
     for (const slotPack of this.slotPacks.values()) {
       if (slotPack.startMs > latestStartMs) {
         latestStartMs = slotPack.startMs;
         this.lastSlotPack = slotPack;
       }
+      if (slotPack.frames.length > 0 && slotPack.startMs > latestNonEmptyStartMs) {
+        latestNonEmptyStartMs = slotPack.startMs;
+        latestNonEmptySlotPack = slotPack;
+      }
     }
+
+    this.lastSlotPack = latestNonEmptySlotPack ?? this.lastSlotPack;
     
     if (this.lastSlotPack) {
       logger.debug(`Updated lastSlotPack cache: ${this.lastSlotPack.slotId}`);
     }
+  }
+
+  private trimSlotPackHistory(): Set<string> {
+    const removedSlotIds = new Set<string>();
+    const nonEmptySlotPacks = Array.from(this.slotPacks.values())
+      .filter((slotPack) => slotPack.frames.length > 0)
+      .sort((a, b) => b.startMs - a.startMs);
+    const emptySlotPacks = Array.from(this.slotPacks.values())
+      .filter((slotPack) => slotPack.frames.length === 0)
+      .sort((a, b) => b.startMs - a.startMs);
+
+    const retainedSlotIds = new Set<string>([
+      ...nonEmptySlotPacks.slice(0, SLOT_PACK_HISTORY_LIMIT).map((slotPack) => slotPack.slotId),
+      ...emptySlotPacks.slice(0, EMPTY_SLOT_PACK_RETENTION_LIMIT).map((slotPack) => slotPack.slotId),
+    ]);
+
+    for (const [slotId] of this.slotPacks.entries()) {
+      if (!retainedSlotIds.has(slotId)) {
+        this.slotPacks.delete(slotId);
+        this.decodeWindowCompletions.delete(slotId);
+        removedSlotIds.add(slotId);
+      }
+    }
+
+    this.updateLastSlotPack();
+
+    if (removedSlotIds.size > 0) {
+      logger.debug(`Trimmed ${removedSlotIds.size} slot packs beyond effective history limit`);
+    }
+
+    return removedSlotIds;
   }
   
   /**
