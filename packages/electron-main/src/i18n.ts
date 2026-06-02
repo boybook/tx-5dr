@@ -84,6 +84,7 @@ export interface ElectronMessages {
   };
   menu: {
     openMainWindow: string;
+    openDevTools: string;
     logViewer: string;
     openInBrowser: string;
     about: string;
@@ -172,6 +173,7 @@ const ZH: ElectronMessages = {
   },
   menu: {
     openMainWindow: '打开主窗口',
+    openDevTools: '打开开发者工具',
     logViewer: '日志查看器',
     openInBrowser: '在浏览器中打开',
     about: '关于 TX-5DR',
@@ -260,6 +262,7 @@ const EN: ElectronMessages = {
   },
   menu: {
     openMainWindow: 'Open Main Window',
+    openDevTools: 'Open DevTools',
     logViewer: 'Log Viewer',
     openInBrowser: 'Open in Browser',
     about: 'About TX-5DR',
