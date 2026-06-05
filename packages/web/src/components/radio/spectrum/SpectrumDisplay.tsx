@@ -95,12 +95,12 @@ interface SpectrumDisplayProps {
   };
 }
 
-interface ManualRangeSettings {
+export interface ManualRangeSettings {
   minDb: number;
   maxDb: number;
 }
 
-interface AudioRangeSettings {
+export interface AudioRangeSettings {
   mode: 'auto' | 'manual';
   manual: ManualRangeSettings;
   auto: AutoRangeConfig;
@@ -116,11 +116,17 @@ interface SpectrumNoFrameRecoveryGateInput {
   engineState: SpectrumEngineState;
 }
 
-interface SpectrumRecoveryStateSnapshot {
+export interface SpectrumRecoveryStateSnapshot {
   isStale: boolean;
   retryCount: number;
   exhausted: boolean;
 }
+
+export const SPECTRUM_RECOVERY_IDLE_STATE: SpectrumRecoveryStateSnapshot = {
+  isStale: false,
+  retryCount: 0,
+  exhausted: false,
+};
 
 export type SpectrumEmptyStatusKey =
   | 'engineNotStarted'
@@ -173,6 +179,45 @@ export function resolveSpectrumEmptyStatusKey({
     return 'retrying';
   }
   return 'waiting';
+}
+
+export function areSpectrumRecoveryStatesEqual(
+  left: SpectrumRecoveryStateSnapshot,
+  right: SpectrumRecoveryStateSnapshot,
+): boolean {
+  return left.isStale === right.isStale
+    && left.retryCount === right.retryCount
+    && left.exhausted === right.exhausted;
+}
+
+export function resolveSpectrumRecoveryStateAfterFrame(
+  current: SpectrumRecoveryStateSnapshot,
+): SpectrumRecoveryStateSnapshot {
+  return areSpectrumRecoveryStatesEqual(current, SPECTRUM_RECOVERY_IDLE_STATE)
+    ? current
+    : SPECTRUM_RECOVERY_IDLE_STATE;
+}
+
+export function resolveAudioRangeSettingsForModeChange(
+  current: AudioRangeSettings,
+  nextMode: AudioRangeSettings['mode'],
+  actualRange: { min: number; max: number } | null,
+): AudioRangeSettings {
+  if (current.mode === 'auto' && nextMode === 'manual' && actualRange) {
+    return {
+      ...current,
+      mode: 'manual',
+      manual: {
+        minDb: Math.round(actualRange.min),
+        maxDb: Math.round(actualRange.max),
+      },
+    };
+  }
+
+  return {
+    ...current,
+    mode: nextMode,
+  };
 }
 
 interface LegacyAudioRangeSettings {
@@ -813,7 +858,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   );
   const openWebRXStreamRange = streamController.getFullRange(OPENWEBRX_SDR_SOURCE);
   const isTransmitting = pttStatus.isTransmitting;
-  const [actualRange, setActualRange] = useState<{ min: number; max: number } | null>(null);
+  const actualRangeRef = useRef<{ min: number; max: number } | null>(null);
   const [persistedRangeSettings, setPersistedRangeSettings] = useState<PersistedRangeSettings>(() => loadPersistedRangeSettings());
   const [openWebRXViewport, setOpenWebRXViewport] = useState<OpenWebRXViewport | null>(() => readOpenWebRXViewport(activeProfileId));
   const [isCollapsed, setIsCollapsed] = useState(() => readSpectrumSubscriptionPaused());
@@ -835,15 +880,21 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const spectrumNoFrameRetryCountRef = useRef(0);
   const radioServiceRef = useRef(connection.state.radioService);
   const hasActiveSpectrumSubscriptionRef = useRef(false);
-  const [spectrumRecoveryState, setSpectrumRecoveryState] = useState<{
-    isStale: boolean;
-    retryCount: number;
-    exhausted: boolean;
-  }>({
-    isStale: false,
-    retryCount: 0,
-    exhausted: false,
-  });
+  const [spectrumRecoveryState, setSpectrumRecoveryState] = useState<SpectrumRecoveryStateSnapshot>(SPECTRUM_RECOVERY_IDLE_STATE);
+  const spectrumRecoveryStateRef = useRef<SpectrumRecoveryStateSnapshot>(SPECTRUM_RECOVERY_IDLE_STATE);
+  const updateSpectrumRecoveryState = useCallback((nextState: SpectrumRecoveryStateSnapshot) => {
+    if (areSpectrumRecoveryStatesEqual(spectrumRecoveryStateRef.current, nextState)) {
+      return;
+    }
+    spectrumRecoveryStateRef.current = nextState;
+    setSpectrumRecoveryState(nextState);
+  }, []);
+  const resetSpectrumRecoveryState = useCallback(() => {
+    updateSpectrumRecoveryState(SPECTRUM_RECOVERY_IDLE_STATE);
+  }, [updateSpectrumRecoveryState]);
+  const handleActualRangeChange = useCallback((range: { min: number; max: number } | null) => {
+    actualRangeRef.current = range;
+  }, []);
 
   const isElectron = typeof window !== 'undefined' && (window as ElectronWindowHelper).electronAPI !== undefined;
   const resetOperatorsAfterOperatingStateChange = useCallback(() => {
@@ -1289,7 +1340,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       if (frame.kind === activeSpectrumKind) {
         lastAcceptedSpectrumFrameAtRef.current = Date.now();
         spectrumNoFrameRetryCountRef.current = 0;
-        setSpectrumRecoveryState({ isStale: false, retryCount: 0, exhausted: false });
+        updateSpectrumRecoveryState(resolveSpectrumRecoveryStateAfterFrame(spectrumRecoveryStateRef.current));
       }
       if (frame.kind === RADIO_SDR_SOURCE && !isRadioSdrServerFrequencySyncHeld()) {
         const nextOptimisticState = confirmRadioSdrOptimisticDisplayStateWithFrame(
@@ -1308,12 +1359,12 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     return () => {
       wsClient.offWSEvent('spectrumFrame', handleSpectrumFrame);
     };
-  }, [activeProfileId, activeSpectrumKind, connection.state.radioService, isCollapsed, isRadioSdrServerFrequencySyncHeld, streamController, updateRadioSdrOptimisticDisplayState]);
+  }, [activeProfileId, activeSpectrumKind, connection.state.radioService, isCollapsed, isRadioSdrServerFrequencySyncHeld, streamController, updateRadioSdrOptimisticDisplayState, updateSpectrumRecoveryState]);
 
   useEffect(() => {
     lastAcceptedSpectrumFrameAtRef.current = Date.now();
     spectrumNoFrameRetryCountRef.current = 0;
-    setSpectrumRecoveryState({ isStale: false, retryCount: 0, exhausted: false });
+    resetSpectrumRecoveryState();
 
     if (isCollapsed || pauseNoFrameRecovery || !connection.state.isReady || !connection.state.radioService || !subscribedKind) {
       return;
@@ -1329,7 +1380,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       if (nextRetryCount <= SPECTRUM_NO_FRAME_MAX_RETRIES) {
         spectrumNoFrameRetryCountRef.current = nextRetryCount;
         lastAcceptedSpectrumFrameAtRef.current = Date.now();
-        setSpectrumRecoveryState({
+        updateSpectrumRecoveryState({
           isStale: true,
           retryCount: nextRetryCount,
           exhausted: false,
@@ -1338,7 +1389,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         return;
       }
 
-      setSpectrumRecoveryState({
+      updateSpectrumRecoveryState({
         isStale: true,
         retryCount: spectrumNoFrameRetryCountRef.current,
         exhausted: true,
@@ -1348,7 +1399,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     return () => {
       clearInterval(timer);
     };
-  }, [connection.state.isReady, connection.state.radioService, isCollapsed, pauseNoFrameRecovery, subscribedKind]);
+  }, [connection.state.isReady, connection.state.radioService, isCollapsed, pauseNoFrameRecovery, resetSpectrumRecoveryState, subscribedKind, updateSpectrumRecoveryState]);
 
   useLayoutEffect(() => {
     streamController.updateContext({
@@ -1396,7 +1447,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   }, [baseRadioSdrFrequency, isRadioSdrServerFrequencySyncHeld, updateRadioSdrOptimisticDisplayState]);
 
   useEffect(() => {
-    setActualRange(null);
+    actualRangeRef.current = null;
     streamController.reset();
     clearRadioSdrServerFrequencySyncHold();
     clearRadioSdrOptimisticDisplayState();
@@ -1967,7 +2018,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
             ? (canRightClickSetFrequency && canWriteFrequency ? handleRadioFrequencyGesture : undefined)
             : (showMarkers && canRightClickSetFrequency ? handleRightClickSetFrequency : undefined)
         }
-        onActualRangeChange={setActualRange}
+        onActualRangeChange={handleActualRangeChange}
         hoverFrequency={effectiveHoverFrequency}
         isTransmitting={isTransmitting}
         className="bg-transparent"
@@ -2102,21 +2153,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                     onSelectionChange={(key) => {
                       const nextMode = key as 'auto' | 'manual';
                       updateAudioRangeSettings(current => {
-                        if (current.mode === 'auto' && nextMode === 'manual' && actualRange) {
-                          return {
-                            ...current,
-                            mode: 'manual',
-                            manual: {
-                              minDb: Math.round(actualRange.min),
-                              maxDb: Math.round(actualRange.max),
-                            },
-                          };
-                        }
-
-                        return {
-                          ...current,
-                          mode: nextMode,
-                        };
+                        return resolveAudioRangeSettingsForModeChange(current, nextMode, actualRangeRef.current);
                       });
                     }}
                     fullWidth
