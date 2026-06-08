@@ -10,11 +10,15 @@ import '../index.css';
 import { createLogger } from '../utils/logger';
 import { useViewportHeightCssVar } from '../hooks/useViewportHeight';
 import { useLanguage } from '../hooks/useLanguage';
+import { AuthProvider, useAuth } from '../store/authStore';
+import { LoginPage } from './LoginPage';
 
 const logger = createLogger('LogbookPage');
 const LOGBOOK_GLOBE_THEME_COLOR = '#020617';
 const LOGBOOK_LIGHT_THEME_COLOR = '#f5f5f5';
 const LOGBOOK_DARK_THEME_COLOR = '#09090b';
+
+configureApi(getApiBaseUrl());
 
 function resolvePageThemeColor(theme: 'light' | 'dark'): string {
   return theme === 'dark' ? LOGBOOK_DARK_THEME_COLOR : LOGBOOK_LIGHT_THEME_COLOR;
@@ -31,9 +35,7 @@ const LogbookContent: React.FC = () => {
   const [operatorCallsign, setOperatorCallsign] = useState<string>('');
 
   useEffect(() => {
-    // 配置API及鉴权
-    configureApi(getApiBaseUrl());
-    // 独立页面无 AuthProvider，从 localStorage 读取 JWT 并初始化
+    // 独立页面中的裸 fetch/WS helper 仍从 localStorage 读取 JWT。
     const savedJwt = localStorage.getItem('tx5dr_jwt');
     configureAuthToken(savedJwt);
 
@@ -285,6 +287,20 @@ const ThemedLogbookWrapper: React.FC = () => {
   );
 };
 
+const LogbookAuthGate: React.FC = () => {
+  const { state } = useAuth();
+
+  if (!state.initialized || !state.sessionResolved) {
+    return null;
+  }
+
+  if (state.authEnabled && !state.jwt) {
+    return <LoginPage />;
+  }
+
+  return <ThemedLogbookWrapper />;
+};
+
 /**
  * 通联日志独立页面
  * 用于在新窗口或新标签页中显示通联日志
@@ -294,7 +310,9 @@ const LogbookPage: React.FC = () => {
 
   return (
     <HeroUIProvider>
-      <ThemedLogbookWrapper />
+      <AuthProvider>
+        <LogbookAuthGate />
+      </AuthProvider>
     </HeroUIProvider>
   );
 };

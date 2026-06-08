@@ -11,6 +11,8 @@ import {
 } from './VoiceTxDiagnostics.js';
 
 const logger = createLogger('VoiceSessionManager');
+const LEGACY_VOICE_RADIO_MODES = new Set(['USB', 'LSB', 'FM', 'AM']);
+const EXPLICIT_SUPPORT_REQUIRED_MODES = new Set(['WFM']);
 
 export interface VoiceSessionManagerEvents {
   voicePttLockChanged: (lock: VoicePTTLock) => void;
@@ -157,8 +159,22 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
    * Set the radio modulation mode (USB/LSB/FM/AM).
    */
   async setRadioMode(mode: string): Promise<void> {
-    await this.radioManager.setMode(mode, undefined, { intent: 'voice' });
-    if (mode.toUpperCase() !== 'FM') {
+    const normalizedMode = mode.trim().toUpperCase();
+    if (!normalizedMode) {
+      throw new Error('radio mode is required');
+    }
+
+    const supportedModes = this.radioManager.getSupportedRadioModeOptions?.() ?? [];
+    const hasCapabilityModeList = supportedModes.length > 0;
+    const isSupported = hasCapabilityModeList
+      ? supportedModes.includes(normalizedMode)
+      : LEGACY_VOICE_RADIO_MODES.has(normalizedMode);
+    if (!isSupported || (!hasCapabilityModeList && EXPLICIT_SUPPORT_REQUIRED_MODES.has(normalizedMode))) {
+      throw new Error(`Radio mode '${normalizedMode}' is not supported by the current radio`);
+    }
+
+    await this.radioManager.setMode(normalizedMode, undefined, { intent: 'voice' });
+    if (normalizedMode !== 'FM') {
       try {
         await this.radioManager.applyRepeaterDuplexConfig({ repeaterShift: 'none' });
         await this.radioManager.applyToneSquelchConfig({ toneMode: 'none' });
@@ -172,10 +188,10 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
     if (lastVoice?.frequency) {
       await configManager.updateLastVoiceFrequency({
         frequency: lastVoice.frequency,
-        radioMode: mode,
+        radioMode: normalizedMode,
         band: lastVoice.band,
         description: lastVoice.description,
-        ...(mode.toUpperCase() === 'FM'
+        ...(normalizedMode === 'FM'
           ? {
             repeaterShift: lastVoice.repeaterShift,
             repeaterOffsetHz: lastVoice.repeaterOffsetHz,
@@ -189,8 +205,8 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
           }),
       });
     }
-    this.emit('voiceRadioModeChanged', { radioMode: mode });
-    logger.info('Radio mode changed', { mode });
+    this.emit('voiceRadioModeChanged', { radioMode: normalizedMode });
+    logger.info('Radio mode changed', { mode: normalizedMode });
   }
 
   async handleParticipantAudioFrame(meta: VoiceTxFrameMeta, pcmData: Float32Array): Promise<void> {
@@ -243,6 +259,10 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
 
   getIsTransmitting(): boolean {
     return this.pttLockManager.isLocked();
+  }
+
+  getActiveVoiceAudioClientId(): string | null {
+    return this.pttLockManager.getVoiceAudioClientId();
   }
 
   destroy(): void {

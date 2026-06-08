@@ -14,7 +14,7 @@ import {
 } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCheck, faCopy, faDownload, faGripVertical, faPlus, faTrash } from '@fortawesome/free-solid-svg-icons';
+import { faCheck, faCopy, faDownload, faFolderOpen, faGripVertical, faPlus, faTrash } from '@fortawesome/free-solid-svg-icons';
 import { Reorder, useDragControls } from 'framer-motion';
 import { api, ApiError } from '@tx5dr/core';
 import type {
@@ -28,6 +28,8 @@ import type {
   DesktopHttpsStatus,
   DesktopHttpsMode,
   ServerCpuProfileStatus,
+  SystemLogLevel,
+  SystemLoggingSettings,
 } from '@tx5dr/contracts';
 import { DEFAULT_DECODE_WINDOW_SETTINGS, FT8_WINDOW_PRESETS, FT4_WINDOW_PRESETS, isValidNtpServerHost } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
@@ -85,6 +87,7 @@ function areStringArraysEqual(left: string[], right: string[]): boolean {
 const DEFAULT_MAX_SAME_TRANSMISSION_COUNT = 20;
 const MIN_MAX_SAME_TRANSMISSION_COUNT = 1;
 const MAX_MAX_SAME_TRANSMISSION_COUNT = 200;
+const LOG_LEVEL_OPTIONS: SystemLogLevel[] = ['debug', 'info', 'warn', 'error'];
 
 function normalizeMaxSameTransmissionCount(value: unknown): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -393,6 +396,10 @@ export const SystemSettings = forwardRef<
   const [cpuProfileBusy, setCpuProfileBusy] = useState(false);
   const [cpuProfilePathCopied, setCpuProfilePathCopied] = useState(false);
   const [cpuProfileDownloadBusy, setCpuProfileDownloadBusy] = useState(false);
+  const [loggingSettings, setLoggingSettings] = useState<SystemLoggingSettings | null>(null);
+  const [logLevel, setLogLevel] = useState<SystemLogLevel>('info');
+  const [originalLogLevel, setOriginalLogLevel] = useState<SystemLogLevel>('info');
+  const [logsDirCopied, setLogsDirCopied] = useState(false);
 
   // 加载配置
   useEffect(() => {
@@ -403,6 +410,7 @@ export const SystemSettings = forwardRef<
     loadDecodeWindowSettings();
     loadRealtimeSettings();
     loadNtpServerListSettings();
+    loadSystemLoggingSettings();
     api.getNetworkInfo().then(setNetworkInfo).catch(() => {});
     loadElectronCloseBehavior();
     if (isElectron) {
@@ -532,6 +540,45 @@ export const SystemSettings = forwardRef<
       logger.error('Failed to copy CPU profile path:', err);
     }
   }, []);
+
+  const loadSystemLoggingSettings = useCallback(async () => {
+    try {
+      const settings = await api.getSystemLoggingSettings();
+      const configuredLevel = settings.level ?? settings.effectiveLevel;
+      setLoggingSettings(settings);
+      setLogLevel(configuredLevel);
+      setOriginalLogLevel(configuredLevel);
+    } catch (err) {
+      logger.error('Failed to load logging settings:', err);
+    }
+  }, []);
+
+  const handleCopyLogsDir = useCallback(async () => {
+    if (!loggingSettings?.logsDir) return;
+    try {
+      await navigator.clipboard.writeText(loggingSettings.logsDir);
+      setLogsDirCopied(true);
+      window.setTimeout(() => setLogsDirCopied(false), 1500);
+    } catch (err) {
+      logger.error('Failed to copy logs directory:', err);
+    }
+  }, [loggingSettings?.logsDir]);
+
+  const handleOpenLogsDir = useCallback(async () => {
+    if (!loggingSettings?.logsDir || !window.electronAPI?.shell?.openPath) {
+      return;
+    }
+
+    try {
+      await window.electronAPI.shell.openPath(loggingSettings.logsDir);
+    } catch (err) {
+      logger.error('Failed to open logs directory:', err);
+      showErrorToast({
+        userMessage: err instanceof Error ? err.message : t('system.loggingOpenFolderFailed'),
+        severity: 'error',
+      });
+    }
+  }, [loggingSettings?.logsDir, t]);
 
   const handleOpenCpuProfileFolder = useCallback(async () => {
     if (!cpuProfileStatus?.profilePath || !window.electronAPI?.shell?.openPath) {
@@ -917,6 +964,7 @@ export const SystemSettings = forwardRef<
       hasPskrChanges() ||
       hasDecodeWindowChanges() ||
       hasNtpServerChanges() ||
+      logLevel !== originalLogLevel ||
       realtimeTransportPolicy !== originalRealtimeTransportPolicy ||
       rtcDataAudioPublicHost !== originalRtcDataAudioPublicHost ||
       rtcDataAudioPublicUdpPort !== originalRtcDataAudioPublicUdpPort ||
@@ -1057,6 +1105,14 @@ export const SystemSettings = forwardRef<
         setDefaultNtpServers([...ntpResult.defaultServers]);
       }
 
+      if (logLevel !== originalLogLevel) {
+        const nextLoggingSettings = await api.updateSystemLoggingSettings({ level: logLevel });
+        const committedLevel = nextLoggingSettings.level ?? nextLoggingSettings.effectiveLevel;
+        setLoggingSettings(nextLoggingSettings);
+        setLogLevel(committedLevel);
+        setOriginalLogLevel(committedLevel);
+      }
+
       if (
         realtimeTransportPolicy !== originalRealtimeTransportPolicy
         || rtcDataAudioPublicHost !== originalRtcDataAudioPublicHost
@@ -1131,7 +1187,7 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, maxSameTransmissionCount, originalDecodeValue, originalSpectrumValue, originalMaxSameTransmissionCount, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, ntpServers, originalNtpServers, realtimeTransportPolicy, originalRealtimeTransportPolicy, rtcDataAudioPublicHost, originalRtcDataAudioPublicHost, rtcDataAudioPublicUdpPort, originalRtcDataAudioPublicUdpPort, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, maxSameTransmissionCount, originalDecodeValue, originalSpectrumValue, originalMaxSameTransmissionCount, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, ntpServers, originalNtpServers, logLevel, originalLogLevel, realtimeTransportPolicy, originalRealtimeTransportPolicy, rtcDataAudioPublicHost, originalRtcDataAudioPublicHost, rtcDataAudioPublicUdpPort, originalRtcDataAudioPublicUdpPort, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
 
   const runtimeHints = realtimeRuntime?.connectivityHints ?? null;
   const rtcDataAudioRuntime = realtimeRuntime?.rtcDataAudio ?? null;
@@ -1182,8 +1238,77 @@ export const SystemSettings = forwardRef<
     return t('system.reportInSecs', { secs });
   };
 
-  const cpuProfileCard = cpuProfileStatus && (
+  const loggingCard = loggingSettings && (
     <Card shadow="none" radius="lg" className="order-[10]" classNames={SETTINGS_CARD_CLASS_NAMES}>
+      <CardBody className={SETTINGS_CARD_BODY_CLASS}>
+        <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+          <div className="flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.loggingTitle')}</h4>
+              <Chip size="sm" color="default" variant="flat">
+                {t('system.loggingEffectiveLevel', { level: loggingSettings.effectiveLevel })}
+              </Chip>
+            </div>
+            <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.loggingDesc')}</p>
+          </div>
+        </div>
+
+        <Select
+          label={t('system.loggingLevel')}
+          selectedKeys={[logLevel]}
+          onSelectionChange={(keys) => {
+            const value = Array.from(keys)[0] as SystemLogLevel | undefined;
+            if (value && LOG_LEVEL_OPTIONS.includes(value)) {
+              setLogLevel(value);
+            }
+          }}
+          isDisabled={isSaving}
+          variant="bordered"
+          className="max-w-md"
+          description={t(`system.loggingLevel${logLevel.charAt(0).toUpperCase()}${logLevel.slice(1)}Desc`)}
+        >
+          {LOG_LEVEL_OPTIONS.map((level) => (
+            <SelectItem key={level} textValue={t(`system.loggingLevel${level.charAt(0).toUpperCase()}${level.slice(1)}`)}>
+              {t(`system.loggingLevel${level.charAt(0).toUpperCase()}${level.slice(1)}`)}
+            </SelectItem>
+          ))}
+        </Select>
+
+        <div className={SETTINGS_PANEL_CLASS}>
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div className="min-w-0 flex-1">
+              <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.loggingPathTitle')}</p>
+              <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.loggingPathDesc')}</p>
+              <p className={`mt-2 break-all font-mono ${SETTINGS_SUBDESC_CLASS}`}>{loggingSettings.logsDir}</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="flat"
+                startContent={<FontAwesomeIcon icon={logsDirCopied ? faCheck : faCopy} />}
+                onPress={() => void handleCopyLogsDir()}
+              >
+                {logsDirCopied ? t('system.loggingCopied') : t('system.loggingCopyPath')}
+              </Button>
+              {isElectron && window.electronAPI?.shell?.openPath && (
+                <Button
+                  size="sm"
+                  variant="flat"
+                  startContent={<FontAwesomeIcon icon={faFolderOpen} />}
+                  onPress={() => void handleOpenLogsDir()}
+                >
+                  {t('system.loggingOpenFolder')}
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      </CardBody>
+    </Card>
+  );
+
+  const cpuProfileCard = cpuProfileStatus && (
+    <Card shadow="none" radius="lg" className="order-[11]" classNames={SETTINGS_CARD_CLASS_NAMES}>
       <CardBody className={SETTINGS_CARD_BODY_CLASS}>
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div className="flex-1">
@@ -2542,7 +2667,7 @@ export const SystemSettings = forwardRef<
       {/* 桌面应用设置 - 仅 Electron 环境显示 */}
       {isElectron && (
         <>
-          <Card shadow="none" radius="lg" className="order-[11]" classNames={SETTINGS_CARD_CLASS_NAMES}>
+          <Card shadow="none" radius="lg" className="order-[12]" classNames={SETTINGS_CARD_CLASS_NAMES}>
             <CardBody className={`${SETTINGS_CARD_BODY_CLASS} space-y-3`}>
               <div>
                 <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.closeBehavior')}</h4>
@@ -2567,6 +2692,7 @@ export const SystemSettings = forwardRef<
         </>
       )}
 
+      {loggingCard}
       {cpuProfileCard}
 
       {/* 提示信息 */}

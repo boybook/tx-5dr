@@ -32,7 +32,8 @@
     "usb": "USB",
     "lsb": "LSB",
     "fm": "FM",
-    "am": "AM"
+    "am": "AM",
+    "wfm": "WFM"
   },
   "ptt": {
     "title": "Voice PTT",

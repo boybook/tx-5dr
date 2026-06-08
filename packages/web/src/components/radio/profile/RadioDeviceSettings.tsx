@@ -6,7 +6,7 @@ const logger = createLogger('RadioDeviceSettings');
 import { useTranslation } from 'react-i18next';
 import { Input, Select, SelectItem, Autocomplete, AutocompleteItem, Tabs, Tab, Card, CardBody, Divider, Button, Chip, Tooltip, Accordion, AccordionItem } from '@heroui/react';
 import { api, ApiError } from '@tx5dr/core';
-import type { DigitalModeRadioModePreference, HamlibConfig, HamlibConfigField, PttMethod, RigConfigSchemaResponse } from '@tx5dr/contracts';
+import type { CWKeyActiveLevel, DigitalModeRadioModePreference, HamlibConfig, HamlibConfigField, PttMethod, RigConfigSchemaResponse } from '@tx5dr/contracts';
 
 interface RigInfo {
   rigModel: number;
@@ -16,9 +16,11 @@ interface RigInfo {
 
 interface PortInfo {
   path: string;
+  friendlyName?: string;
   manufacturer?: string;
   serialNumber?: string;
   pnpId?: string;
+  locationId?: string;
   vendorId?: string;
   productId?: string;
 }
@@ -76,6 +78,99 @@ const FIELD_ORDER = [
   ...ADVANCED_PRIORITY_FIELD_ORDER,
   ...MULTICAST_FIELD_ORDER,
 ] as const;
+
+function formatApiErrorForSettings(
+  error: unknown,
+  t: (key: string, options?: Record<string, unknown>) => string,
+  fallbackKey: string,
+): string {
+  if (error instanceof ApiError) {
+    if (error.userMessageKey) {
+      return t(error.userMessageKey, { ...(error.userMessageParams ?? {}), defaultValue: error.userMessage });
+    }
+
+    return t(`radio.testError.${error.code}`, { defaultValue: error.userMessage });
+  }
+
+  return error instanceof Error ? error.message : t(fallbackKey);
+}
+
+function normalizePortMetadata(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function formatPnpIdForDisplay(pnpId: string | undefined): string | undefined {
+  const normalized = normalizePortMetadata(pnpId);
+  if (!normalized) return undefined;
+
+  const basename = normalized.split(/[\\/]/).filter(Boolean).pop() ?? normalized;
+  return basename
+    .replace(/^usb-/i, '')
+    .replace(/-if\d+-port\d+$/i, '')
+    .replace(/-port\d+$/i, '')
+    .replace(/_/g, ' ')
+    .trim() || normalized;
+}
+
+function pushUniquePortDetail(details: string[], value: string | undefined): void {
+  const normalized = normalizePortMetadata(value);
+  if (!normalized) return;
+
+  const alreadyIncluded = details.some((detail) => detail.toLowerCase() === normalized.toLowerCase());
+  if (!alreadyIncluded) {
+    details.push(normalized);
+  }
+}
+
+function formatSerialPortDisplay(port: PortInfo): { title: string; details: string; searchText: string } {
+  const friendlyName = normalizePortMetadata(port.friendlyName);
+  const manufacturer = normalizePortMetadata(port.manufacturer);
+  const pnpLabel = formatPnpIdForDisplay(port.pnpId);
+  const title = port.path;
+
+  const details: string[] = [];
+  pushUniquePortDetail(details, friendlyName);
+  pushUniquePortDetail(details, manufacturer);
+  pushUniquePortDetail(details, pnpLabel);
+  if (port.vendorId && port.productId) {
+    pushUniquePortDetail(details, `VID:PID ${port.vendorId}:${port.productId}`);
+  } else {
+    pushUniquePortDetail(details, port.vendorId ? `VID ${port.vendorId}` : undefined);
+    pushUniquePortDetail(details, port.productId ? `PID ${port.productId}` : undefined);
+  }
+  pushUniquePortDetail(details, port.serialNumber ? `SN ${port.serialNumber}` : undefined);
+  pushUniquePortDetail(details, port.pnpId);
+
+  const searchFields = [
+    port.path,
+    friendlyName,
+    manufacturer,
+    pnpLabel,
+    port.pnpId,
+    port.vendorId,
+    port.productId,
+    port.serialNumber,
+    port.locationId,
+  ];
+
+  return {
+    title,
+    details: details.join(' · '),
+    searchText: searchFields.filter(Boolean).join(' '),
+  };
+}
+
+function serialPortMatchesInput(port: PortInfo | undefined, textValue: string, inputValue: string): boolean {
+  const query = inputValue.trim().toLowerCase();
+  if (!query) return true;
+
+  const searchText = port
+    ? formatSerialPortDisplay(port).searchText
+    : textValue;
+
+  return searchText.toLowerCase().includes(query);
+}
 
 function orderHamlibFields(fields: HamlibConfigField[]): HamlibConfigField[] {
   return [...fields].sort((left, right) => {
@@ -173,6 +268,8 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
   const usesNetworkEndpoint = endpointKind === 'network-address';
   const usesDevicePathEndpoint = endpointKind === 'device-path';
   const effectiveRigPath = config.serial?.backendConfig?.rig_pathname ?? config.serial?.path ?? '';
+  const selectedSerialPort = ports.find((item) => item.path === effectiveRigPath);
+  const selectedSerialPortDisplay = selectedSerialPort ? formatSerialPortDisplay(selectedSerialPort) : null;
 
     useEffect(() => {
       loadData();
@@ -537,9 +634,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     } catch (error) {
       setTestResult({
         type: 'error',
-        message: error instanceof ApiError
-          ? t(`radio.testError.${error.code}`, { defaultValue: error.userMessage })
-          : (error instanceof Error ? error.message : t('radio.testConnectionFailedCheck'))
+        message: formatApiErrorForSettings(error, t, 'radio.testConnectionFailedCheck'),
       });
     } finally {
       setIsTestingConnection(false);
@@ -586,6 +681,18 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
         setTestResult({ type: 'error', message: response.message || t('radio.testCWFailed') });
       }
     } catch (error) {
+      if (error instanceof ApiError) {
+        const messageKey = error.userMessageKey?.startsWith('settings:')
+          ? error.userMessageKey.slice('settings:'.length)
+          : error.userMessageKey;
+        setTestResult({
+          type: 'error',
+          message: messageKey
+            ? t(messageKey, { ...(error.userMessageParams ?? {}), defaultValue: error.userMessage })
+            : error.userMessage,
+        });
+        return;
+      }
       setTestResult({
         type: 'error',
         message: error instanceof Error ? error.message : t('radio.testCWFailedCheck')
@@ -673,6 +780,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     // 渲染 CW 键控端口配置区块（仅 serial / network 模式）
     const renderCWKeyerPortConfig = () => {
       const cwKeyMethod = config.cwKeyMethod || 'dtr';
+      const cwKeyActiveLevel: CWKeyActiveLevel = config.cwKeyActiveLevel || 'high';
 
       return (
         <div className="space-y-3">
@@ -718,6 +826,21 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
           >
             <SelectItem key="dtr" textValue="DTR">DTR</SelectItem>
             <SelectItem key="rts" textValue="RTS">RTS</SelectItem>
+          </Select>
+
+          <Select
+            label={t('radio.cwKeyActiveLevel')}
+            size="sm"
+            selectedKeys={[cwKeyActiveLevel]}
+            onSelectionChange={keys => {
+              const activeLevel = Array.from(keys)[0] as CWKeyActiveLevel;
+              updateConfig({ cwKeyActiveLevel: activeLevel });
+            }}
+            variant="flat"
+            description={t('radio.cwKeyActiveLevelDesc')}
+          >
+            <SelectItem key="high" textValue={t('radio.cwKeyActiveHigh')}>{t('radio.cwKeyActiveHigh')}</SelectItem>
+            <SelectItem key="low" textValue={t('radio.cwKeyActiveLow')}>{t('radio.cwKeyActiveLow')}</SelectItem>
           </Select>
 
           <Button
@@ -1042,12 +1165,32 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       variant="flat"
                       size="md"
                       defaultItems={ports}
-                    >
-                      {(item: PortInfo) => (
-                        <AutocompleteItem key={item.path} textValue={item.path}>
-                          {item.path}
-                        </AutocompleteItem>
+                      defaultFilter={(textValue, inputValue) => (
+                        serialPortMatchesInput(
+                          ports.find((port) => port.path === textValue),
+                          textValue,
+                          inputValue
+                        )
                       )}
+                      endContent={selectedSerialPortDisplay?.details ? (
+                        <span className="pointer-events-none hidden max-w-[min(42vw,32rem)] truncate whitespace-nowrap text-small text-default-400 md:inline">
+                          ({selectedSerialPortDisplay.details})
+                        </span>
+                      ) : undefined}
+                    >
+                      {(item: PortInfo) => {
+                        const display = formatSerialPortDisplay(item);
+                        return (
+                          <AutocompleteItem key={item.path} textValue={item.path}>
+                            <div className="flex flex-col gap-0.5 py-0.5">
+                              <span className="text-small truncate">{display.title}</span>
+                              {display.details && (
+                                <span className="text-tiny text-default-400 truncate">{display.details}</span>
+                              )}
+                            </div>
+                          </AutocompleteItem>
+                        );
+                      }}
                     </Autocomplete>
                   )}
                   <Divider />

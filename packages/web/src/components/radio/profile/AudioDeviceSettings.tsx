@@ -29,6 +29,8 @@ import {
 import {
   formatChannelText,
   formatDeviceText,
+  getResolutionDescription,
+  getResolutionTone,
 } from './audioDeviceDisplay';
 
 const logger = createLogger('AudioDeviceSettings');
@@ -67,6 +69,45 @@ export function getDeviceNameFromSelectKey(direction: Direction, key: string): s
   return key.startsWith(prefix) ? key.slice(prefix.length) : key;
 }
 
+export interface AudioDeviceSelectOption {
+  key: string;
+  deviceName: string;
+  device: AudioDevice | null;
+  isMissing: boolean;
+}
+
+export function buildAudioDeviceSelectOptions(
+  direction: Direction,
+  devices: AudioDevice[],
+  selectedName: string,
+  resolution?: AudioDeviceResolution | null,
+): AudioDeviceSelectOption[] {
+  const options: AudioDeviceSelectOption[] = devices.map((device) => ({
+    key: makeAudioDeviceSelectKey(direction, device.name),
+    deviceName: device.name,
+    device,
+    isMissing: false,
+  }));
+
+  const selectedDeviceExists = selectedName
+    ? devices.some((device) => device.name === selectedName)
+    : true;
+  const resolutionMatchesSelection = !resolution?.configuredDeviceName
+    || resolution.configuredDeviceName === selectedName;
+
+  if (selectedName && !selectedDeviceExists && resolutionMatchesSelection) {
+    const resolvedOptionDevice = resolution?.effectiveDevice ?? null;
+    options.push({
+      key: makeAudioDeviceSelectKey(direction, selectedName),
+      deviceName: selectedName,
+      device: resolvedOptionDevice,
+      isMissing: !resolvedOptionDevice,
+    });
+  }
+
+  return options;
+}
+
 export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDeviceSettingsProps>(({ onUnsavedChanges, initialConfig, onChange, radioType }, ref) => {
   const { t } = useTranslation('settings');
   const isControlled = initialConfig !== undefined;
@@ -83,7 +124,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   const [outputBufferSize, setOutputBufferSize] = useState<number>(resolveAudioSettingNumber(initialConfig, 'outputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
   const [outputSampleFormat, setOutputSampleFormat] = useState<AudioOutputSampleFormat>(resolveOutputSampleFormat(initialConfig));
   const [outputChannelMode, setOutputChannelMode] = useState<AudioOutputChannelMode>(resolveOutputChannelMode(initialConfig));
-  const [, setDeviceResolution] = useState<{
+  const [deviceResolution, setDeviceResolution] = useState<{
     input: AudioDeviceResolution;
     output: AudioDeviceResolution;
   } | null>(null);
@@ -306,24 +347,37 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   function getEffectiveDevice(direction: Direction): AudioDevice | null {
     const selectedName = direction === 'input' ? selectedInputDeviceName : selectedOutputDeviceName;
     const devices = direction === 'input' ? inputDevices : outputDevices;
-    return devices.find((device) => device.name === selectedName) ?? null;
+    const resolution = direction === 'input' ? deviceResolution?.input : deviceResolution?.output;
+    if (resolution?.status === 'missing') {
+      return null;
+    }
+    return resolution?.effectiveDevice ?? devices.find((device) => device.name === selectedName) ?? null;
   }
 
-  const renderDeviceItems = (direction: Direction, devices: AudioDevice[]) => devices.map((device) => (
+  const renderDeviceItems = (options: AudioDeviceSelectOption[]) => options.map((option) => (
     <SelectItem
-      key={makeAudioDeviceSelectKey(direction, device.name)}
-      textValue={formatDeviceText(t, device)}
+      key={option.key}
+      textValue={option.device ? formatDeviceText(t, option.device) : `${option.deviceName} (${t('audio.deviceUnavailableShort')})`}
     >
       <div className="flex flex-col">
         <span className="flex items-center gap-2">
-          {formatDeviceText(t, device)}
-          {device.name.startsWith('[SDR]') && (
+          {option.device ? formatDeviceText(t, option.device) : option.deviceName}
+          {option.isMissing && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-300">
+              {t('audio.deviceUnavailableShort')}
+            </span>
+          )}
+          {option.device?.name.startsWith('[SDR]') && (
             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300">
               WebSDR
             </span>
           )}
         </span>
-        <span className="text-xs text-default-400">{formatChannelText(t, device.channels)}, {formatHertz(device.sampleRate)}</span>
+        <span className="text-xs text-default-400">
+          {option.device
+            ? `${formatChannelText(t, option.device.channels)}, ${formatHertz(option.device.sampleRate)}`
+            : t('audio.deviceMissingPreservedShort')}
+        </span>
       </div>
     </SelectItem>
   ));
@@ -333,15 +387,24 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     const selectedName = isInput ? selectedInputDeviceName : selectedOutputDeviceName;
     const setSelectedName = isInput ? setSelectedInputDeviceName : setSelectedOutputDeviceName;
     const devices = isInput ? inputDevices : outputDevices;
+    const resolution = isInput ? deviceResolution?.input : deviceResolution?.output;
     const effectiveDevice = isInput ? inputEffectiveDevice : outputEffectiveDevice;
     const sampleRate = isInput ? inputSampleRate : outputSampleRate;
     const setSampleRate = isInput ? setInputSampleRate : setOutputSampleRate;
     const bufferSize = isInput ? inputBufferSize : outputBufferSize;
     const setBufferSize = isInput ? setInputBufferSize : setOutputBufferSize;
     const bufferSizes = isInput ? inputBufferSizes : outputBufferSizes;
+    const displayOptions = buildAudioDeviceSelectOptions(direction, devices, selectedName, resolution);
     const sampleOptions = deriveSampleRateOptions(effectiveDevice, sampleRate);
     const bufferOptions = deriveBufferSizeOptions(bufferSizes, bufferSize);
-    const isVirtual = isVirtualAudioDevice(effectiveDevice);
+    const isVirtual = resolution?.status === 'virtual-selected' || isVirtualAudioDevice(effectiveDevice);
+    const resolutionDescription = getResolutionDescription(t, resolution);
+    const resolutionTone = getResolutionTone(resolution);
+    const resolutionClassName = resolutionTone === 'warning'
+      ? 'text-warning-600'
+      : resolutionTone === 'virtual'
+        ? 'text-primary-500'
+        : 'text-default-400';
 
     return (
       <div className="space-y-3 rounded-xl border border-divider bg-content1 p-4">
@@ -360,8 +423,13 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
           isDisabled={saving}
           aria-label={isInput ? t('audio.selectInput') : t('audio.selectOutput')}
         >
-          {renderDeviceItems(direction, devices) as unknown as React.ReactElement}
+          {renderDeviceItems(displayOptions) as unknown as React.ReactElement}
         </Select>
+        {resolutionDescription && (
+          <p className={`text-xs ${resolutionClassName}`}>
+            {resolutionDescription}
+          </p>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="space-y-1">

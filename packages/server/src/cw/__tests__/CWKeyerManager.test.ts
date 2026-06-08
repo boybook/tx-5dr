@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CWKeyerManager } from '../CWKeyerManager.js';
+import { CWKeyerManager, CWKeyerTestFailure } from '../CWKeyerManager.js';
 import type { CWKeyerBackend } from '../CWKeyerBackend.js';
 
 const tempDirs: string[] = [];
@@ -178,6 +178,86 @@ describe('CWKeyerManager', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await playback;
     expect(manager.getStatus()).toMatchObject({ active: false, mode: 'idle' });
+  });
+
+  it('reuses the started serial backend for hardware tests instead of reopening the port', async () => {
+    const { manager, serialBackend } = await createManager({ catAvailable: false, keyPort: '/dev/cw' });
+    vi.useFakeTimers();
+
+    await manager.start({
+      backend: 'serial',
+      keyPort: '/dev/cw',
+      keyMethod: 'rts',
+      keyActiveLevel: 'high',
+      wpm: 20,
+    });
+
+    expect(manager.getSerialKeyerTestState({
+      keyPort: '/dev/cw',
+      keyMethod: 'rts',
+      keyActiveLevel: 'high',
+    })).toEqual({ kind: 'reuse' });
+
+    const test = manager.testKeyer({
+      keyPort: '/dev/cw',
+      keyMethod: 'rts',
+      keyActiveLevel: 'high',
+    }, 500);
+
+    await vi.waitFor(() => expect(serialBackend.keyDown).toHaveBeenCalledTimes(1));
+    expect(manager.getStatus()).toMatchObject({ active: true, mode: 'keying' });
+
+    await vi.advanceTimersByTimeAsync(500);
+    await test;
+
+    expect(serialBackend.start).toHaveBeenCalledTimes(1);
+    expect(serialBackend.keyUp).toHaveBeenCalledTimes(1);
+    expect(manager.getStatus()).toMatchObject({ active: false, mode: 'idle' });
+  });
+
+  it('reports busy when the open serial backend uses different key settings', async () => {
+    const { manager } = await createManager({ catAvailable: false, keyPort: '/dev/cw' });
+
+    await manager.start({
+      backend: 'serial',
+      keyPort: '/dev/cw',
+      keyMethod: 'rts',
+      keyActiveLevel: 'high',
+      wpm: 20,
+    });
+
+    expect(manager.getSerialKeyerTestState({
+      keyPort: '/dev/cw',
+      keyMethod: 'dtr',
+      keyActiveLevel: 'low',
+    })).toEqual({
+      kind: 'busy-different-settings',
+      currentMethod: 'rts',
+      currentActiveLevel: 'high',
+    });
+  });
+
+  it('rejects hardware tests while CW keying is already active', async () => {
+    const { manager, serialBackend } = await createManager({ catAvailable: false, keyPort: '/dev/cw' });
+    vi.useFakeTimers();
+    vi.mocked(serialBackend.sendText).mockImplementation(async (_text, _wpm, signal) => {
+      await signal.wait(1_000);
+    });
+
+    const playback = manager.handleTextInput('c1', 'Operator', 'EE');
+    await vi.waitFor(() => expect(serialBackend.sendText).toHaveBeenCalled());
+
+    await expect(manager.testKeyer({
+      keyPort: '/dev/cw',
+      keyMethod: 'dtr',
+      keyActiveLevel: 'high',
+    })).rejects.toMatchObject({
+      name: 'CWKeyerTestFailure',
+      phase: 'keyDown',
+    } satisfies Partial<CWKeyerTestFailure>);
+
+    await manager.stopActive('test cleanup');
+    await playback;
   });
 
   it('can arm repeat playback without transmitting immediately', async () => {

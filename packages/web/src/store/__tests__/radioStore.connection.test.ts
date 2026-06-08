@@ -13,17 +13,21 @@ describe('radioStore connection reducer', () => {
     expect(reconnectingState.isConnecting).toBe(true);
     expect(reconnectingState.isReady).toBe(false);
     expect(reconnectingState.wasEverConnected).toBe(true);
+    expect(reconnectingState.wasEverReady).toBe(false);
     expect(reconnectingState.connectError).toBeNull();
   });
 
-  it('marks the connection ready only after server handshake completes', () => {
+  it('marks the connection usable only after server handshake completes', () => {
     const connectedState = connectionReducer(initialConnectionState, { type: 'connected' });
-    expect(connectedState.isConnected).toBe(true);
+    expect(connectedState.isConnected).toBe(false);
+    expect(connectedState.isConnecting).toBe(true);
     expect(connectedState.isReady).toBe(false);
 
     const readyState = connectionReducer(connectedState, { type: 'handshakeComplete' });
     expect(readyState.isConnected).toBe(true);
+    expect(readyState.isConnecting).toBe(false);
     expect(readyState.isReady).toBe(true);
+    expect(readyState.wasEverReady).toBe(true);
   });
 
   it('treats a stable disconnect as disconnected instead of implicitly reconnecting', () => {
@@ -38,6 +42,7 @@ describe('radioStore connection reducer', () => {
     expect(disconnectedState.isConnecting).toBe(false);
     expect(disconnectedState.isReady).toBe(false);
     expect(disconnectedState.wasEverConnected).toBe(true);
+    expect(disconnectedState.wasEverReady).toBe(true);
   });
 
   it('force reconnects when reusing an already open singleton service', () => {

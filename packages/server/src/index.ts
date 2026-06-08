@@ -311,6 +311,19 @@ function startLogMaintenanceTasks(consoleLogger: ConsoleLogger): void {
 
       try {
         const engine = DigitalRadioEngine.getInstance();
+        await Promise.race([
+          engine.releaseCWKeyerForShutdown(`signal:${signal}`),
+          new Promise((_, reject) => {
+            const timer = setTimeout(() => reject(new Error('cw keyer release timeout')), Math.min(2_000, remainingShutdownBudgetMs(shutdownStartedAt)));
+            timer.unref?.();
+          }),
+        ]);
+      } catch (error) {
+        logger.warn('CW keyer release during shutdown failed', { error });
+      }
+
+      try {
+        const engine = DigitalRadioEngine.getInstance();
         await engine.operatorManager.getLogManager().close();
         logger.info('logbook providers flushed');
       } catch (error) {

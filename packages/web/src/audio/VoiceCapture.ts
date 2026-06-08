@@ -39,6 +39,11 @@ import {
   getRealtimeAudioCodecCapabilities,
   loadRealtimeAudioCodecPreference,
 } from './realtimeAudioCodec';
+import {
+  enterAndroidVoiceAudio,
+  leaveAndroidVoiceAudio,
+  probeAndroidAudioEnvironment,
+} from '../utils/androidAudioBridge';
 
 const logger = createLogger('VoiceCapture');
 const COMPAT_CAPTURE_CONNECT_TIMEOUT_MS = 5000;
@@ -153,7 +158,17 @@ export class VoiceCapture {
   }
 
   async prepareCaptureFromGesture(): Promise<void> {
-    await this.ensureCompatCaptureRuntime();
+    enterAndroidVoiceAudio('voice-capture');
+    const probe = probeAndroidAudioEnvironment();
+    if (probe) {
+      logger.debug('Android WebView voice capture environment', probe);
+    }
+    try {
+      await this.ensureCompatCaptureRuntime();
+    } catch (error) {
+      leaveAndroidVoiceAudio('voice-capture');
+      throw error;
+    }
   }
 
   async ensureStartedFromGesture(options?: VoiceCaptureStartOptions): Promise<void> {
@@ -806,6 +821,10 @@ export class VoiceCapture {
     if (!preserveInteractiveRuntime) {
       void closeAudioContext(this.audioContext);
       this.audioContext = null;
+    }
+
+    if (!preserveInteractiveRuntime) {
+      leaveAndroidVoiceAudio('voice-capture');
     }
 
     this.startPromise = null;

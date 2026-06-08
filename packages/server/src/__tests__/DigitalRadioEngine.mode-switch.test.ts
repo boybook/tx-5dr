@@ -631,7 +631,7 @@ describe('DigitalRadioEngine mode switching', () => {
       frequency: 14074000,
       tolerateModeFailure: true,
     }));
-    expect(applyOperatingState.mock.calls[0]?.[0]).not.toHaveProperty('mode');
+    expect((applyOperatingState.mock.calls[0] as unknown[] | undefined)?.[0]).not.toHaveProperty('mode');
     expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 14074000,
       mode: 'FT8',
@@ -680,7 +680,7 @@ describe('DigitalRadioEngine mode switching', () => {
       frequency: 14080000,
       tolerateModeFailure: true,
     }));
-    expect(applyOperatingState.mock.calls[0]?.[0]).not.toHaveProperty('mode');
+    expect((applyOperatingState.mock.calls[0] as unknown[] | undefined)?.[0]).not.toHaveProperty('mode');
   });
 
   it('syncs restored FT4 mode to operators during startup restore', () => {
@@ -749,7 +749,7 @@ describe('DigitalRadioEngine mode switching', () => {
       frequency: 14_080_000,
       tolerateModeFailure: true,
     });
-    const savedFrequency = updateLastSelectedFrequency.mock.calls[0]?.[0];
+    const savedFrequency = (updateLastSelectedFrequency.mock.calls[0] as unknown[] | undefined)?.[0];
     expect(savedFrequency).toMatchObject({
       frequency: 14_080_000,
       mode: 'FT4',
@@ -779,7 +779,7 @@ describe('DigitalRadioEngine mode switching', () => {
       frequency: 14_074_000,
       tolerateModeFailure: true,
     }));
-    expect(applyOperatingState.mock.calls[0]?.[0]).not.toHaveProperty('mode');
+    expect((applyOperatingState.mock.calls[0] as unknown[] | undefined)?.[0]).not.toHaveProperty('mode');
   });
 
   it('uses the active profile USB preference when switching digital preset frequency', async () => {

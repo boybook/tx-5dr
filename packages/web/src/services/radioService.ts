@@ -194,6 +194,10 @@ export class RadioService {
    * 获取实时连接状态（基于WebSocket状态）
    */
   get isConnected(): boolean {
+    return this.wsClient.isReady;
+  }
+
+  get isTransportConnected(): boolean {
     return this.wsClient.isConnected;
   }
 
@@ -478,7 +482,7 @@ export class RadioService {
     selectedOperatorId: string | null,
     clientInstanceId: string,
   ): void {
-    if (this.isConnected) {
+    if (this.isTransportConnected) {
       logger.debug('Sending handshake:', { enabledOperatorIds, selectedOperatorId, clientInstanceId });
       this.wsClient.sendHandshake(enabledOperatorIds, selectedOperatorId, clientInstanceId);
     }

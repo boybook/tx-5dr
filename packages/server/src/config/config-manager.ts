@@ -869,6 +869,14 @@ export class ConfigManager {
     return { ...this.config };
   }
 
+  async updateLogLevel(level: NonNullable<AppConfig['logLevel']>): Promise<void> {
+    if (!['debug', 'info', 'warn', 'error'].includes(level)) {
+      throw new Error('config.logLevel must be debug, info, warn, or error');
+    }
+    this.config.logLevel = level;
+    await this.saveConfig();
+  }
+
   /**
    * Internal migration helper used by plugin-layer compatibility routines.
    *

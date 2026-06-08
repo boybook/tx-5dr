@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { DxccStatusSchema, SubdivisionConfidenceSchema } from './qso.schema.js';
 
+/** Number of non-empty slot packs retained for live FT8/FT4 message history. */
+export const SLOT_PACK_HISTORY_LIMIT = 1000;
+
 /**
  * Frequency context captured when a slot pack is created.
  * Fields are optional so older persisted slot packs remain valid.

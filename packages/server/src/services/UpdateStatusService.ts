@@ -52,6 +52,15 @@ function normalizeCommit(value: string | null | undefined): string | null {
   return trimmed;
 }
 
+function commitsMatch(left: string | null | undefined, right: string | null | undefined): boolean {
+  const normalizedLeft = normalizeCommit(left)?.toLowerCase();
+  const normalizedRight = normalizeCommit(right)?.toLowerCase();
+  if (!normalizedLeft || !normalizedRight) return false;
+  if (normalizedLeft === normalizedRight) return true;
+  if (Math.min(normalizedLeft.length, normalizedRight.length) < 7) return false;
+  return normalizedLeft.startsWith(normalizedRight) || normalizedRight.startsWith(normalizedLeft);
+}
+
 function normalizeDigest(value: string | null | undefined): string | null {
   const trimmed = (value || '').trim();
   return trimmed || null;
@@ -149,7 +158,14 @@ function isUpdateAvailable(target: UpdateTarget, channel: UpdateChannel, local: 
 
     const latestCommit = normalizeCommit(manifest.commit);
     if (latestCommit && local.commit) {
-      return latestCommit !== local.commit && latestCommit.slice(0, 7) !== local.commit.slice(0, 7);
+      return !commitsMatch(latestCommit, local.commit);
+    }
+  }
+
+  if (channel === 'nightly') {
+    const latestCommit = normalizeCommit(manifest.commit);
+    if (latestCommit && local.commit) {
+      return !commitsMatch(latestCommit, local.commit);
     }
   }
 

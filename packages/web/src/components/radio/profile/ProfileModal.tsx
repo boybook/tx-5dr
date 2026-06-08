@@ -267,6 +267,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     setIsSaving(true);
     try {
       const audioConfigToSave = audioSettingsRef.current?.getSettings() ?? editAudioConfig;
+      let savedProfileId: string | null = null;
       if (mode === 'create') {
         const result = await api.createProfile({
           name: editName.trim(),
@@ -274,6 +275,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
           audio: audioConfigToSave,
           description: editDescription.trim() || undefined,
         });
+        savedProfileId = result.profile?.id ?? null;
         addToast({ title: t('profileModal.created', { name: result.profile?.name ?? editName.trim() }), color: 'success', timeout: 3000 });
       } else if (mode === 'edit' && editingProfileId) {
         const result = await api.updateProfile(editingProfileId, {
@@ -282,7 +284,11 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
           audio: audioConfigToSave,
           description: editDescription.trim() || undefined,
         });
+        savedProfileId = result.profile?.id ?? editingProfileId;
         addToast({ title: t('profileModal.updated', { name: result.profile?.name ?? editName.trim() }), color: 'success', timeout: 3000 });
+      }
+      if (savedProfileId) {
+        setSelectedProfileId(savedProfileId);
       }
       setMode('list');
       setEditingProfileId(null);
@@ -531,11 +537,6 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
             initialConfig={editRadioConfig}
             onChange={setEditRadioConfig}
           />
-
-          {/* 电源控制（仅编辑现有 Profile 时显示） */}
-          {mode === 'edit' && editingProfileId && (
-            <PowerControlButton profileId={editingProfileId} onPowerOnSuccess={onClose} />
-          )}
 
           <Divider />
 

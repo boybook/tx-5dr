@@ -726,6 +726,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
       backend: nextBackend,
       keyPort: prev?.keyPort ?? effectiveConfig?.keyPort ?? '',
       keyMethod: prev?.keyMethod ?? effectiveConfig?.keyMethod ?? 'dtr',
+      keyActiveLevel: prev?.keyActiveLevel ?? effectiveConfig?.keyActiveLevel ?? 'high',
       wpm: prev?.wpm ?? effectiveConfig?.wpm ?? wpm,
     }));
     void api.updateCWKeyerConfig({ backend: nextBackend })

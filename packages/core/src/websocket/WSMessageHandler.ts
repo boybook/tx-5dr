@@ -82,6 +82,7 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.VOICE_PTT_LOCK_CHANGED]: 'voicePttLockChanged',
   [WSMessageType.VOICE_RADIO_MODE_CHANGED]: 'voiceRadioModeChanged',
   [WSMessageType.VOICE_KEYER_STATUS_CHANGED]: 'voiceKeyerStatusChanged',
+  [WSMessageType.ANDROID_OPERATOR_AUDIO_STATUS_CHANGED]: 'androidOperatorAudioStatusChanged',
 
   // CW 事件
   [WSMessageType.CW_KEYER_STATUS]: 'cwKeyerStatusChanged',

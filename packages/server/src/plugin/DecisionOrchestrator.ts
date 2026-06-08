@@ -13,12 +13,13 @@ import {
   type SlotInfo,
   type SlotPack,
 } from '@tx5dr/contracts';
-import type {
-  AutoCallExecutionPlan,
-  AutoCallExecutionRequest,
-  ScoredCandidate,
-  StrategyDecision,
-  StrategyDecisionMeta,
+import {
+  normalizeCallsign,
+  type AutoCallExecutionPlan,
+  type AutoCallExecutionRequest,
+  type ScoredCandidate,
+  type StrategyDecision,
+  type StrategyDecisionMeta,
 } from '@tx5dr/plugin-api';
 import type { AutoCallProposalResult } from './PluginHookDispatcher.js';
 import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
@@ -44,6 +45,14 @@ function getParsedMessageTargetCallsign(message: ParsedFT8Message['message']): s
   return 'targetCallsign' in message && typeof message.targetCallsign === 'string'
     ? message.targetCallsign.toUpperCase()
     : undefined;
+}
+
+function callsignMatches(left: string | undefined, right: string | undefined): boolean {
+  if (!left || !right) return false;
+  const normalizedLeft = left.trim().toUpperCase();
+  const normalizedRight = right.trim().toUpperCase();
+  return normalizedLeft === normalizedRight
+    || normalizeCallsign(normalizedLeft) === normalizeCallsign(normalizedRight);
 }
 
 function getParsedMessageGrid(message: ParsedFT8Message['message']): string | undefined {
@@ -508,7 +517,7 @@ export class DecisionOrchestrator {
     myCallsign: string,
   ): boolean {
     const target = getParsedMessageTargetCallsign(message.message);
-    if (target !== myCallsign) {
+    if (!callsignMatches(target, myCallsign)) {
       return false;
     }
 
@@ -521,7 +530,7 @@ export class DecisionOrchestrator {
     myCallsign: string,
   ): boolean {
     const target = getParsedMessageTargetCallsign(message.message);
-    if (target !== myCallsign) {
+    if (!callsignMatches(target, myCallsign)) {
       return false;
     }
 
@@ -541,17 +550,17 @@ export class DecisionOrchestrator {
       const completedCallsign = typeof foxMessage.completedCallsign === 'string'
         ? foxMessage.completedCallsign.trim().toUpperCase()
         : undefined;
-      if (completedCallsign !== myCallsign) {
+      if (!callsignMatches(completedCallsign, myCallsign)) {
         return false;
       }
 
       const senderCallsign = getParsedMessageSenderCallsign(message.message);
-      return senderCallsign === undefined || senderCallsign === targetCallsign;
+      return senderCallsign === undefined || callsignMatches(senderCallsign, targetCallsign);
     }
 
     const senderCallsign = getParsedMessageSenderCallsign(message.message);
     const target = getParsedMessageTargetCallsign(message.message);
-    if (senderCallsign !== targetCallsign || target !== myCallsign) {
+    if (!callsignMatches(senderCallsign, targetCallsign) || !callsignMatches(target, myCallsign)) {
       return false;
     }
 

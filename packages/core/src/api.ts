@@ -65,6 +65,8 @@ import type {
   UpdateSelfLoginCredentialRequest,
   UpdateAuthConfigRequest,
   NetworkInfo,
+  SystemLoggingSettings,
+  UpdateSystemLoggingSettingsRequest,
   ClockStatusDetail,
   NtpServerListSettings,
   SetClockAutoApplyRequest,
@@ -86,6 +88,7 @@ import type {
   RealtimeStatsResponse,
   ServerCpuProfileStatus,
   RealtimeVoiceTxStatsResponse,
+  AndroidOperatorAudioStatus,
   VoiceKeyerPanel,
   VoiceKeyerPanelUpdate,
   VoiceKeyerSlotUpdate,
@@ -1801,6 +1804,24 @@ export const api = {
     return apiRequest<SystemUpdateStatus>('/system/update-status', undefined, apiBase);
   },
 
+  async getSystemLoggingSettings(apiBase?: string): Promise<SystemLoggingSettings> {
+    return apiRequest<SystemLoggingSettings>('/system/logging', undefined, apiBase);
+  },
+
+  async updateSystemLoggingSettings(
+    data: UpdateSystemLoggingSettingsRequest,
+    apiBase?: string,
+  ): Promise<SystemLoggingSettings> {
+    return apiRequest<SystemLoggingSettings>(
+      '/system/logging',
+      {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      },
+      apiBase,
+    );
+  },
+
   async getClockStatus(apiBase?: string): Promise<ClockStatusDetail> {
     return apiRequest<ClockStatusDetail>('/system/clock', undefined, apiBase);
   },
@@ -1955,6 +1976,48 @@ export const api = {
   async getRealtimeVoiceTxStats(scope: 'radio', apiBase?: string): Promise<RealtimeVoiceTxStatsResponse> {
     const params = new URLSearchParams({ scope });
     return apiRequest<RealtimeVoiceTxStatsResponse>(`/realtime/tx-stats?${params.toString()}`, undefined, apiBase);
+  },
+
+  async getAndroidOperatorAudioStatus(apiBase?: string): Promise<{ success: boolean; status: AndroidOperatorAudioStatus }> {
+    return apiRequest<{ success: boolean; status: AndroidOperatorAudioStatus }>('/voice/android-audio/status', undefined, apiBase);
+  },
+
+  async prepareAndroidOperatorAudio(apiBase?: string): Promise<{ success: boolean; status: AndroidOperatorAudioStatus }> {
+    return apiRequest<{ success: boolean; status: AndroidOperatorAudioStatus }>('/voice/android-audio/prepare', {
+      method: 'POST',
+    }, apiBase);
+  },
+
+  async setAndroidOperatorAudioGain(micGainDb: number, apiBase?: string): Promise<{ success: boolean; status: AndroidOperatorAudioStatus }> {
+    return apiRequest<{ success: boolean; status: AndroidOperatorAudioStatus }>('/voice/android-audio/gain', {
+      method: 'POST',
+      body: JSON.stringify({ micGainDb }),
+    }, apiBase);
+  },
+
+  async setAndroidOperatorAudioMonitorGain(monitorGainDb: number, apiBase?: string): Promise<{ success: boolean; status: AndroidOperatorAudioStatus }> {
+    return apiRequest<{ success: boolean; status: AndroidOperatorAudioStatus }>('/voice/android-audio/monitor/gain', {
+      method: 'POST',
+      body: JSON.stringify({ monitorGainDb }),
+    }, apiBase);
+  },
+
+  async releaseAndroidOperatorAudio(apiBase?: string): Promise<{ success: boolean; status: AndroidOperatorAudioStatus }> {
+    return apiRequest<{ success: boolean; status: AndroidOperatorAudioStatus }>('/voice/android-audio/release', {
+      method: 'POST',
+    }, apiBase);
+  },
+
+  async startAndroidOperatorAudioMonitor(apiBase?: string): Promise<{ success: boolean; status: AndroidOperatorAudioStatus }> {
+    return apiRequest<{ success: boolean; status: AndroidOperatorAudioStatus }>('/voice/android-audio/monitor/start', {
+      method: 'POST',
+    }, apiBase);
+  },
+
+  async stopAndroidOperatorAudioMonitor(apiBase?: string): Promise<{ success: boolean; status: AndroidOperatorAudioStatus }> {
+    return apiRequest<{ success: boolean; status: AndroidOperatorAudioStatus }>('/voice/android-audio/monitor/stop', {
+      method: 'POST',
+    }, apiBase);
   },
 
   async getVoiceKeyerPanel(callsign: string, apiBase?: string): Promise<{ success: boolean; panel: VoiceKeyerPanel }> {
@@ -2409,6 +2472,8 @@ export const {
   ,updatePluginOperatorSettings
   ,setOperatorStrategyPlugin
   ,reloadPlugins
+  ,getSystemLoggingSettings
+  ,updateSystemLoggingSettings
   ,getNtpServerListSettings
   ,updateNtpServerListSettings
   ,setClockAutoApply

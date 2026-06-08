@@ -139,6 +139,7 @@ export class ClockCoordinator {
 
     this.lm.listen(decodeQueue, 'decodeError', (error: Error, request: { slotId: string; windowIdx: number }) => {
       logger.error(`decode error: slot=${request.slotId} window=${request.windowIdx}: ${error.message}`);
+      slotPackManager.markDecodeWindowFailed(request.slotId, request.windowIdx);
       engineEmitter.emit('decodeError', { error, request });
     });
 

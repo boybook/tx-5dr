@@ -229,6 +229,12 @@ type TemporaryHamlibRig = {
   destroy?: () => Promise<unknown>;
 };
 
+type HamlibConstructorWithMetadata = {
+  new (rigModel: number): TemporaryHamlibRig;
+  getConfigSchemaForModel?: (rigModel: number) => unknown[];
+  getPortCapsForModel?: (rigModel: number) => HamlibPortCaps;
+};
+
 function deriveRigEndpointKind(portType?: string): RigEndpointKind {
   switch (portType) {
     case 'serial':
@@ -1265,6 +1271,20 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     return this.capabilityManager.getCapabilitySnapshot();
   }
 
+  getSupportedRadioModeOptions(): string[] {
+    const snapshot = this.capabilityManager.getCapabilitySnapshot();
+    const state = snapshot.capabilities.find((capability) => capability.id === 'radio_mode');
+    if (!state?.supported) {
+      return [];
+    }
+
+    const descriptor = snapshot.descriptors.find((item) => item.id === 'radio_mode');
+    return (descriptor?.options ?? [])
+      .map((option) => option.value)
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map((value) => value.trim().toUpperCase());
+  }
+
   /**
    * Refresh all capability values on demand (triggered by frontend button).
    */
@@ -1818,7 +1838,20 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     let rig: TemporaryHamlibRig | null = null;
     try {
       const hamlibModule = await import('hamlib');
-      const { HamLib } = hamlibModule;
+      const { HamLib } = hamlibModule as unknown as { HamLib: HamlibConstructorWithMetadata };
+      if (typeof HamLib.getConfigSchemaForModel === 'function'
+        && typeof HamLib.getPortCapsForModel === 'function') {
+        const fields = HamLib.getConfigSchemaForModel(rigModel);
+        const portCaps = HamLib.getPortCapsForModel(rigModel);
+        const portType = typeof portCaps?.portType === 'string' ? portCaps.portType : 'other';
+        return {
+          rigModel,
+          portType,
+          endpointKind: deriveRigEndpointKind(portType),
+          fields: enrichRigConfigFields(fields, portCaps),
+        };
+      }
+
       rig = new HamLib(rigModel) as unknown as TemporaryHamlibRig;
       const fields = typeof rig?.getConfigSchema === 'function'
         ? await withHamlibSchemaTimeout('getRigConfigSchema.getConfigSchema', rig.getConfigSchema())

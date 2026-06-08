@@ -7,7 +7,9 @@ import {
   ServerCpuProfileStatusSchema,
   SetClockAutoApplyRequestSchema,
   SetClockOffsetRequestSchema,
+  SystemLoggingSettingsSchema,
   UpdateNtpServerListRequestSchema,
+  UpdateSystemLoggingSettingsSchema,
 } from '@tx5dr/contracts';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { requireAbility } from '../auth/authPlugin.js';
@@ -15,6 +17,8 @@ import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { ServerCpuProfileManager } from '../services/ServerCpuProfileManager.js';
 import { getSystemUpdateStatus } from '../services/UpdateStatusService.js';
+import { tx5drPaths } from '../utils/app-paths.js';
+import { getActiveLogLevel, setLogLevel } from '../utils/logger.js';
 import { getNetworkAccessInfo } from '../utils/network-access.js';
 
 /**
@@ -28,6 +32,14 @@ export async function systemRoutes(fastify: FastifyInstance) {
     return ServerCpuProfileManager.create({ env: process.env });
   }
 
+  async function getLoggingSettingsSnapshot() {
+    return SystemLoggingSettingsSchema.parse({
+      level: configManager.getConfig().logLevel,
+      effectiveLevel: getActiveLogLevel(),
+      logsDir: await tx5drPaths.getLogsDir(),
+    });
+  }
+
   fastify.get('/update-status', {
     preHandler: [requireAbility('manage', 'all')],
   }, async (_request, reply) => {
@@ -39,6 +51,25 @@ export async function systemRoutes(fastify: FastifyInstance) {
     return reply.send(getNetworkAccessInfo({
       forwardedPort: request.headers['x-forwarded-port'],
     }));
+  });
+
+  fastify.get('/logging', {
+    preHandler: [requireAbility('manage', 'all')],
+  }, async (_request, reply) => {
+    return reply.send(await getLoggingSettingsSnapshot());
+  });
+
+  fastify.put('/logging', {
+    schema: {
+      body: zodToJsonSchema(UpdateSystemLoggingSettingsSchema),
+    },
+    preHandler: [requireAbility('manage', 'all')],
+  }, async (request, reply) => {
+    const { level } = UpdateSystemLoggingSettingsSchema.parse(request.body);
+    await configManager.updateLogLevel(level);
+    setLogLevel(level);
+    process.env.LOG_LEVEL = level;
+    return reply.send(await getLoggingSettingsSnapshot());
   });
 
   fastify.get('/clock', {

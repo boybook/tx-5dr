@@ -1503,4 +1503,58 @@ describe('PhysicalRadioManager', () => {
       vi.resetModules();
     }
   });
+
+  it('uses static HamLib model metadata without constructing a temporary rig', async () => {
+    const HamLib = Object.assign(vi.fn(), {
+      getConfigSchemaForModel: vi.fn().mockReturnValue([
+        { token: 1, name: 'rig_pathname', label: 'Path', tooltip: '', defaultValue: '', type: 'string' },
+      ]),
+      getPortCapsForModel: vi.fn().mockReturnValue({
+        portType: 'serial',
+        serialRateMax: 38400,
+      }),
+    });
+
+    vi.doMock('hamlib', () => ({ HamLib }));
+
+    try {
+      await expect(PhysicalRadioManager.getRigConfigSchema(1049)).resolves.toMatchObject({
+        rigModel: 1049,
+        portType: 'serial',
+        endpointKind: 'serial-port',
+      });
+      expect(HamLib).not.toHaveBeenCalled();
+      expect(HamLib.getConfigSchemaForModel).toHaveBeenCalledWith(1049);
+      expect(HamLib.getPortCapsForModel).toHaveBeenCalledWith(1049);
+    } finally {
+      vi.doUnmock('hamlib');
+      vi.resetModules();
+    }
+  });
+
+  it('falls back to temporary HamLib instance when static model metadata is unavailable', async () => {
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const HamLib = vi.fn().mockImplementation(() => ({
+      getConfigSchema: vi.fn().mockResolvedValue([
+        { token: 1, name: 'rig_pathname', label: 'Path', tooltip: '', defaultValue: '', type: 'string' },
+      ]),
+      getPortCaps: vi.fn().mockResolvedValue({ portType: 'network' }),
+      destroy,
+    }));
+
+    vi.doMock('hamlib', () => ({ HamLib }));
+
+    try {
+      await expect(PhysicalRadioManager.getRigConfigSchema(2036)).resolves.toMatchObject({
+        rigModel: 2036,
+        portType: 'network',
+        endpointKind: 'network-address',
+      });
+      expect(HamLib).toHaveBeenCalledWith(2036);
+      expect(destroy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock('hamlib');
+      vi.resetModules();
+    }
+  });
 });

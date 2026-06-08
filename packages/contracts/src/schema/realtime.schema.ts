@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const RealtimeScopeSchema = z.enum(['radio', 'openwebrx-preview']);
 export type RealtimeScope = z.infer<typeof RealtimeScopeSchema>;
 
-export const RealtimeTransportKindSchema = z.enum(['rtc-data-audio', 'ws-compat']);
+export const RealtimeTransportKindSchema = z.enum(['rtc-data-audio', 'ws-compat', 'android-native']);
 export type RealtimeTransportKind = z.infer<typeof RealtimeTransportKindSchema>;
 
 export const RealtimeSessionDirectionSchema = z.enum(['recv', 'send']);

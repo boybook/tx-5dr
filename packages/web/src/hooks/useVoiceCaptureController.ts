@@ -9,6 +9,7 @@ import {
   type ResolvedVoiceTxBufferPolicy,
   type VoiceTxBufferPreference,
 } from '@tx5dr/contracts';
+import { api } from '@tx5dr/core';
 import type { RadioService } from '../services/radioService';
 import { VoiceCapture, type VoiceCaptureState } from '../audio/VoiceCapture';
 import { createLogger } from '../utils/logger';
@@ -18,6 +19,8 @@ import {
   loadRealtimeAudioCodecPreference,
   saveRealtimeAudioCodecPreference,
 } from '../audio/realtimeAudioCodec';
+import { hasAndroidNativeOperatorAudio } from '../utils/androidAudioBridge';
+import { useAndroidOperatorAudioState, useRadioState } from '../store/radio';
 
 const logger = createLogger('useVoiceCaptureController');
 const VOICE_TX_BUFFER_PREFERENCE_STORAGE_KEY = 'tx5dr.voiceTx.bufferPreference';
@@ -82,7 +85,10 @@ export function useVoiceCaptureController(
   radioService: RadioService | null,
   engineMode: EngineMode,
 ): VoiceCaptureController {
+  const nativeStatus = useAndroidOperatorAudioState();
+  const { dispatch: radioDispatch } = useRadioState();
   const captureRef = useRef<VoiceCapture | null>(null);
+  const nativeStatusRef = useRef(nativeStatus);
   const preferredTransportRef = useRef<RealtimeTransportKind>('rtc-data-audio');
   const txBufferPreferenceRef = useRef<VoiceTxBufferPreference>(loadTxBufferPreference());
   const audioCodecPreferenceRef = useRef<RealtimeAudioCodecPreference>(loadRealtimeAudioCodecPreference());
@@ -96,6 +102,30 @@ export function useVoiceCaptureController(
   const [activeTxBufferPolicy, setActiveTxBufferPolicy] = useState<ResolvedVoiceTxBufferPolicy | null>(null);
   const [audioCodecPreference, setAudioCodecPreferenceState] = useState<RealtimeAudioCodecPreference>(() => audioCodecPreferenceRef.current);
   const [activeAudioCodecPolicy, setActiveAudioCodecPolicy] = useState<ResolvedRealtimeAudioCodecPolicy | null>(null);
+  const nativeOperatorAudioEnabled = hasAndroidNativeOperatorAudio();
+
+  useEffect(() => {
+    nativeStatusRef.current = nativeStatus;
+  }, [nativeStatus]);
+
+  const applyNativeStatus = useCallback((status = nativeStatusRef.current) => {
+    if (!nativeOperatorAudioEnabled || !status) {
+      return;
+    }
+    preferredTransportRef.current = 'android-native';
+    setPreferredTransportState('android-native');
+    setCaptureState(status.captureState === 'preparing'
+      ? 'starting'
+      : status.captureState === 'capturing'
+        ? 'capturing'
+        : status.captureState === 'error'
+          ? 'error'
+          : 'idle');
+    setActiveTransport(status.captureState === 'capturing' ? 'android-native' : null);
+    setParticipantIdentity(status.participantIdentity);
+    setActiveTxBufferPolicy(resolveVoiceTxBufferPolicy(txBufferPreferenceRef.current));
+    setActiveAudioCodecPolicy(null);
+  }, [nativeOperatorAudioEnabled]);
 
   const syncFromCapture = useCallback(() => {
     const capture = captureRef.current;
@@ -144,6 +174,11 @@ export function useVoiceCaptureController(
   }, [syncFromCapture]);
 
   const switchTransportFromGesture = useCallback(async (transport: RealtimeTransportKind) => {
+    if (nativeOperatorAudioEnabled) {
+      logger.info('Voice transport switch ignored while Android native operator audio is active', { transport });
+      applyNativeStatus();
+      return;
+    }
     setPreferredTransport(transport);
 
     const capture = captureRef.current;
@@ -157,9 +192,21 @@ export function useVoiceCaptureController(
       audioCodecPreference: audioCodecPreferenceRef.current,
     });
     syncFromCapture();
-  }, [setPreferredTransport, syncFromCapture]);
+  }, [applyNativeStatus, nativeOperatorAudioEnabled, setPreferredTransport, syncFromCapture]);
 
   const startFromGesture = useCallback(async () => {
+    if (nativeOperatorAudioEnabled) {
+      setCaptureState('starting');
+      setActiveTransport(null);
+      const response = await api.prepareAndroidOperatorAudio();
+      radioDispatch({ type: 'androidOperatorAudioStatusChanged', payload: response.status });
+      applyNativeStatus(response.status);
+      if (!response.status.available || response.status.captureState === 'error') {
+        throw new Error(response.status.lastError || 'Android native operator audio is unavailable');
+      }
+      return response.status.participantIdentity;
+    }
+
     const capture = captureRef.current;
     if (!capture) {
       throw new Error('Voice capture is unavailable');
@@ -172,23 +219,45 @@ export function useVoiceCaptureController(
     });
     syncFromCapture();
     return capture.participantIdentity;
-  }, [syncFromCapture]);
+  }, [applyNativeStatus, nativeOperatorAudioEnabled, radioDispatch, syncFromCapture]);
 
   const setPTTActive = useCallback((active: boolean) => {
+    if (nativeOperatorAudioEnabled) {
+      setIsPTTActiveState(active);
+      return;
+    }
     const capture = captureRef.current;
     capture?.setPTTActive(active);
     setIsPTTActiveState(active);
     syncFromCapture();
-  }, [syncFromCapture]);
+  }, [nativeOperatorAudioEnabled, syncFromCapture]);
 
   const stop = useCallback(() => {
+    if (nativeOperatorAudioEnabled) {
+      void api.releaseAndroidOperatorAudio()
+        .then((response) => {
+          radioDispatch({ type: 'androidOperatorAudioStatusChanged', payload: response.status });
+          applyNativeStatus(response.status);
+        })
+        .catch((error) => logger.warn('Failed to release Android native operator audio', error));
+      setCaptureState('idle');
+      setActiveTransport(null);
+      setParticipantIdentity(null);
+      setIsPTTActiveState(false);
+      setActiveTxBufferPolicy(null);
+      setActiveAudioCodecPolicy(null);
+      return;
+    }
     captureRef.current?.stop();
     syncFromCapture();
-  }, [syncFromCapture]);
+  }, [applyNativeStatus, nativeOperatorAudioEnabled, radioDispatch, syncFromCapture]);
 
   const getInputLevel = useCallback(() => {
+    if (nativeOperatorAudioEnabled) {
+      return nativeStatus?.inputLevel ?? 0;
+    }
     return captureRef.current?.inputLevel ?? 0;
-  }, []);
+  }, [nativeOperatorAudioEnabled, nativeStatus?.inputLevel]);
 
   const getDiagnostics = useCallback(() => {
     return captureRef.current?.diagnostics ?? null;
@@ -205,6 +274,22 @@ export function useVoiceCaptureController(
       setActiveTxBufferPolicy(null);
       setActiveAudioCodecPolicy(null);
       return;
+    }
+
+    if (nativeOperatorAudioEnabled) {
+      captureRef.current?.stop();
+      captureRef.current = null;
+      void api.getAndroidOperatorAudioStatus()
+        .then((response) => {
+          radioDispatch({ type: 'androidOperatorAudioStatusChanged', payload: response.status });
+          applyNativeStatus(response.status);
+        })
+        .catch((error) => logger.debug('Failed to load Android native operator audio status', error));
+      return () => {
+        void api.releaseAndroidOperatorAudio()
+          .then((response) => radioDispatch({ type: 'androidOperatorAudioStatusChanged', payload: response.status }))
+          .catch(() => {});
+      };
     }
 
     const capture = new VoiceCapture({
@@ -235,7 +320,11 @@ export function useVoiceCaptureController(
       setActiveTxBufferPolicy(null);
       setActiveAudioCodecPolicy(null);
     };
-  }, [engineMode, radioService, switchTransportFromGesture, syncFromCapture]);
+  }, [applyNativeStatus, engineMode, nativeOperatorAudioEnabled, radioDispatch, radioService, switchTransportFromGesture, syncFromCapture]);
+
+  useEffect(() => {
+    applyNativeStatus();
+  }, [applyNativeStatus]);
 
   const resolvedTxBufferPolicy = useMemo(
     () => resolveVoiceTxBufferPolicy(txBufferPreference),

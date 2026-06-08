@@ -22,6 +22,7 @@ export class WSClient extends WSMessageHandler {
   private isConnecting = false;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private jwt: string | null = null;
+  private sessionReady = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
   private manualDisconnect = false;
@@ -30,6 +31,12 @@ export class WSClient extends WSMessageHandler {
   private static readonly RECONNECT_BASE_DELAY_MS = 1000;
   private static readonly RECONNECT_MAX_DELAY_MS = 8000;
   private static readonly HANDSHAKE_TIMEOUT_MS = 10000;
+  private static readonly PRE_SESSION_COMMANDS = new Set<string>([
+    WSMessageType.AUTH_TOKEN,
+    WSMessageType.AUTH_PUBLIC_VIEWER,
+    WSMessageType.CLIENT_HANDSHAKE,
+    WSMessageType.PING,
+  ]);
 
   constructor(config: WSClientConfig) {
     super();
@@ -38,6 +45,16 @@ export class WSClient extends WSMessageHandler {
       url: config.url,
       heartbeatInterval: config.heartbeatInterval ?? 30000,
     };
+
+    this.onWSEvent('handshakeComplete', () => {
+      this.sessionReady = true;
+    });
+    this.onWSEvent('reconnecting', () => {
+      this.sessionReady = false;
+    });
+    this.onWSEvent('disconnected', () => {
+      this.sessionReady = false;
+    });
   }
 
   /**
@@ -53,6 +70,7 @@ export class WSClient extends WSMessageHandler {
     }
 
     this.manualDisconnect = false;
+    this.sessionReady = false;
     this.stopReconnectTimer();
     this.isConnecting = true;
 
@@ -206,6 +224,7 @@ export class WSClient extends WSMessageHandler {
    */
   async forceReconnect(): Promise<void> {
     logger.info('Force reconnect requested');
+    this.sessionReady = false;
     this.stopReconnectTimer();
     this.connectPromise = null;
     this.isConnecting = false;
@@ -225,6 +244,7 @@ export class WSClient extends WSMessageHandler {
    */
   disconnect(): void {
     this.manualDisconnect = true;
+    this.sessionReady = false;
     this.stopReconnectTimer();
     this.stopHeartbeat();
     this.connectPromise = null;
@@ -240,6 +260,10 @@ export class WSClient extends WSMessageHandler {
    */
   send(type: string, data?: unknown, id?: string): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      if (!this.sessionReady && !WSClient.PRE_SESSION_COMMANDS.has(type)) {
+        logger.debug('Session is not ready, suppressing WebSocket command', { type });
+        return;
+      }
       const messageStr = this.createAndSerializeMessage(type, data, id);
       this.ws.send(messageStr);
     } else {
@@ -397,6 +421,14 @@ export class WSClient extends WSMessageHandler {
   }
 
   /**
+   * True after the server-side auth/handshake protocol has completed.
+   * UI and services should treat this as the business-command readiness gate.
+   */
+  get isReady(): boolean {
+    return this.isConnected && this.sessionReady;
+  }
+
+  /**
    * 获取是否正在连接
    */
   get connecting(): boolean {
@@ -408,8 +440,8 @@ export class WSClient extends WSMessageHandler {
    */
   get connectionInfo() {
     return {
-      isConnected: this.isConnected,
-      isConnecting: this.connecting,
+      isConnected: this.isReady,
+      isConnecting: this.connecting || (this.isConnected && !this.sessionReady),
     };
   }
 

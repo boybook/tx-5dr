@@ -6,7 +6,7 @@ import type {
   SlotPack,
   SystemStatus,
 } from '@tx5dr/contracts';
-import { RadioConnectionStatus } from '@tx5dr/contracts';
+import { RadioConnectionStatus, SLOT_PACK_HISTORY_LIMIT } from '@tx5dr/contracts';
 import { createLogger } from '../../utils/logger';
 import { hasAnyMeterReading } from '../../utils/radioMeters';
 import type {
@@ -22,6 +22,7 @@ import type {
 
 const logger = createLogger('RadioStore');
 const MAX_VALID_DATE_MS = 8_640_000_000_000_000;
+const EMPTY_SLOT_PACK_RETENTION_LIMIT = 4;
 
 function isValidTimestampMs(value: unknown): value is number {
   return typeof value === 'number'
@@ -34,6 +35,22 @@ function isValidSlotPack(slotPack: SlotPack): boolean {
   return isValidTimestampMs(slotPack.startMs)
     && isValidTimestampMs(slotPack.endMs)
     && slotPack.endMs >= slotPack.startMs;
+}
+
+function trimSlotPacksByEffectiveHistory(slotPacks: SlotPack[]): SlotPack[] {
+  const sortedSlotPacks = [...slotPacks].sort((a, b) => a.startMs - b.startMs);
+  const retainedSlotIds = new Set<string>([
+    ...sortedSlotPacks
+      .filter((slotPack) => slotPack.frames.length > 0)
+      .slice(-SLOT_PACK_HISTORY_LIMIT)
+      .map((slotPack) => slotPack.slotId),
+    ...sortedSlotPacks
+      .filter((slotPack) => slotPack.frames.length === 0)
+      .slice(-EMPTY_SLOT_PACK_RETENTION_LIMIT)
+      .map((slotPack) => slotPack.slotId),
+  ]);
+
+  return sortedSlotPacks.filter((slotPack) => retainedSlotIds.has(slotPack.slotId));
 }
 
 function hasRadioConfigChanged(prev: RadioState['radioConfig'], next?: RadioState['radioConfig']): boolean {
@@ -73,6 +90,7 @@ export const initialConnectionState: ConnectionState = {
   isConnecting: true,
   isReady: false,
   wasEverConnected: false,
+  wasEverReady: false,
   radioService: null,
   connectError: null,
 };
@@ -82,8 +100,8 @@ export function connectionReducer(state: ConnectionState, action: ConnectionActi
     case 'connected':
       return {
         ...state,
-        isConnected: true,
-        isConnecting: false,
+        isConnected: false,
+        isConnecting: true,
         isReady: false,
         wasEverConnected: true,
         connectError: null,
@@ -91,7 +109,11 @@ export function connectionReducer(state: ConnectionState, action: ConnectionActi
     case 'handshakeComplete':
       return {
         ...state,
+        isConnected: true,
+        isConnecting: false,
         isReady: true,
+        wasEverConnected: true,
+        wasEverReady: true,
       };
     case 'reconnecting':
       return {
@@ -104,7 +126,7 @@ export function connectionReducer(state: ConnectionState, action: ConnectionActi
     case 'disconnected':
       return { ...state, isConnected: false, isConnecting: false, isReady: false };
     case 'connectFailed':
-      return { ...state, isConnecting: false, isReady: false, connectError: 'SERVER_UNAVAILABLE' };
+      return { ...state, isConnected: false, isConnecting: false, isReady: false, connectError: 'SERVER_UNAVAILABLE' };
     case 'SET_RADIO_SERVICE':
       return { ...state, radioService: action.payload };
     default:
@@ -167,6 +189,7 @@ export const initialRadioState: RadioState = {
   subscribedSpectrumKind: null,
   clockStatus: null,
   audioSidecar: null,
+  androidOperatorAudio: null,
   cwKeyerStatus: null,
   cwConfig: null,
   splitEnabled: false,
@@ -470,6 +493,9 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
     case 'voiceRadioModeChanged':
       return { ...state, currentRadioMode: action.payload };
 
+    case 'androidOperatorAudioStatusChanged':
+      return { ...state, androidOperatorAudio: action.payload };
+
     case 'setStationInfo':
       return { ...state, stationInfo: action.payload };
 
@@ -538,12 +564,7 @@ export function slotPacksReducer(state: SlotPacksState, action: SlotPacksAction)
       updatedSlotPacks = [...slotPacks, newSlotPack];
     }
 
-    updatedSlotPacks.sort((a, b) => a.startMs - b.startMs);
-    if (updatedSlotPacks.length > 50) {
-      return updatedSlotPacks.slice(-50);
-    }
-
-    return updatedSlotPacks;
+    return trimSlotPacksByEffectiveHistory(updatedSlotPacks);
   };
 
   const getTotalMessages = (slotPacks: SlotPack[]): number =>

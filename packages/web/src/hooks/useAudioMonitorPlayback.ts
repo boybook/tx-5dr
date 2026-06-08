@@ -49,6 +49,13 @@ import {
   getRealtimeAudioCodecCapabilities,
   loadRealtimeAudioCodecPreference,
 } from '../audio/realtimeAudioCodec';
+import {
+  enterAndroidVoiceAudio,
+  hasAndroidNativeOperatorAudio,
+  leaveAndroidVoiceAudio,
+  probeAndroidAudioEnvironment,
+} from '../utils/androidAudioBridge';
+import { useAndroidOperatorAudioState, useRadioState } from '../store/radio';
 
 const logger = createLogger('useAudioMonitorPlayback');
 const STATS_POLL_INTERVAL_MS = 1000;
@@ -56,6 +63,10 @@ const CLOCK_SYNC_INTERVAL_MS = 1000;
 const AUDIO_PATH_WAIT_TIMEOUT_MS = 5000;
 const TRANSPORT_SWITCH_DRAIN_TIMEOUT_MS = 1200;
 const VOLUME_RAMP_SECONDS = 0.003;
+
+function androidMonitorRouteReason(scope: RealtimeScope): string {
+  return `monitor:${scope}`;
+}
 
 interface ReceiverStatsData {
   latencyMs?: number;
@@ -204,6 +215,9 @@ export function useAudioMonitorPlayback(
   options: UseAudioMonitorPlaybackOptions
 ): UseAudioMonitorPlaybackReturn {
   const { scope, previewSessionId } = options;
+  const nativeStatus = useAndroidOperatorAudioState();
+  const { dispatch: radioDispatch } = useRadioState();
+  const nativeOperatorAudioEnabled = scope === 'radio' && hasAndroidNativeOperatorAudio();
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [stats, setStats] = useState<MonitorStatsData | null>(null);
@@ -321,6 +335,12 @@ export function useAudioMonitorPlayback(
 
     rejectPendingAudioPathWaiters('Realtime playback stopped before audio path became available');
 
+    if (transportKindRef.current === 'android-native') {
+      void api.stopAndroidOperatorAudioMonitor()
+        .then((response) => radioDispatch({ type: 'androidOperatorAudioStatusChanged', payload: response.status }))
+        .catch((error) => logger.debug('Failed to stop Android native monitor', error));
+    }
+
     if (compatSocketRef.current) {
       try {
         compatSocketRef.current.close();
@@ -372,6 +392,10 @@ export function useAudioMonitorPlayback(
       audioContextRef.current = null;
     }
 
+    if (!preserveAudioContext && !preserveCompatPlaybackRuntime) {
+      leaveAndroidVoiceAudio(androidMonitorRouteReason(scope));
+    }
+
     if (!preserveCompatPlaybackRuntime) {
       playbackBackendTypeRef.current = null;
     }
@@ -393,7 +417,7 @@ export function useAudioMonitorPlayback(
     }
 
     isInitializingRef.current = false;
-  }, [rejectPendingAudioPathWaiters, updateIsPlaying, updateTransportKind]);
+  }, [radioDispatch, rejectPendingAudioPathWaiters, scope, updateIsPlaying, updateTransportKind]);
 
   const cleanup = useCallback(() => {
     cleanupTransportState();
@@ -404,6 +428,36 @@ export function useAudioMonitorPlayback(
       cleanup();
     };
   }, [cleanup]);
+
+  useEffect(() => {
+    if (!nativeOperatorAudioEnabled || transportKindRef.current !== 'android-native' || !nativeStatus) {
+      return;
+    }
+    const active = nativeStatus.monitorState === 'playing' || nativeStatus.monitorState === 'paused-for-ptt';
+    updateIsPlaying(active);
+    if (!active) {
+      updateTransportKind(null);
+      setStats(null);
+      return;
+    }
+    setStats({
+      latencyMs: 0,
+      bufferFillPercent: nativeStatus.monitorState === 'playing' ? 100 : 0,
+      isActive: nativeStatus.monitorState === 'playing',
+      endToEndLatencyMs: null,
+      networkAgeMs: null,
+      playbackQueueMs: 0,
+      sourceToSendMs: null,
+      transportMs: null,
+      mainToWorkletMs: null,
+      outputDeviceLatencyMs: 0,
+      clockRttMs: null,
+      clockConfidence: 'unknown',
+      playbackBackendType: null,
+      source: null,
+      receiver: null,
+    });
+  }, [nativeOperatorAudioEnabled, nativeStatus, updateIsPlaying, updateTransportKind]);
 
   const recordWireBytes = useCallback((bytes: number) => {
     if (!Number.isFinite(bytes) || bytes <= 0) {
@@ -706,6 +760,11 @@ export function useAudioMonitorPlayback(
     audioContext: AudioContext;
     backend: CompatPlaybackBackend;
   }> => {
+    enterAndroidVoiceAudio(androidMonitorRouteReason(scope));
+    const probe = probeAndroidAudioEnvironment();
+    if (probe) {
+      logger.debug('Android WebView monitor audio environment', probe);
+    }
     audioContextRef.current = await ensureInteractiveAudioContext(audioContextRef.current);
     const audioContext = audioContextRef.current;
     if (compatPlaybackBackendRef.current && gainNodeRef.current) {
@@ -780,11 +839,19 @@ export function useAudioMonitorPlayback(
     compatPlaybackBackendRef.current = backend;
     gainNodeRef.current = gainNode;
     return { audioContext, backend };
-  }, [getWireBitrateKbps, recomputeStats]);
+  }, [getWireBitrateKbps, recomputeStats, scope]);
 
   const preparePlaybackFromGesture = useCallback(async () => {
-    await ensureCompatPlaybackRuntime();
-  }, [ensureCompatPlaybackRuntime]);
+    if (nativeOperatorAudioEnabled) {
+      return;
+    }
+    try {
+      await ensureCompatPlaybackRuntime();
+    } catch (error) {
+      leaveAndroidVoiceAudio(androidMonitorRouteReason(scope));
+      throw error;
+    }
+  }, [ensureCompatPlaybackRuntime, nativeOperatorAudioEnabled, scope]);
 
   const startCompatPlayback = useCallback(async (
     offer: RealtimeTransportOffer,
@@ -976,6 +1043,31 @@ export function useAudioMonitorPlayback(
       throw new Error('previewSessionId is required for OpenWebRX preview playback');
     }
 
+    if (nativeOperatorAudioEnabled) {
+      isInitializingRef.current = true;
+      try {
+        const response = await api.startAndroidOperatorAudioMonitor();
+        radioDispatch({ type: 'androidOperatorAudioStatusChanged', payload: response.status });
+        if (!response.status.available || response.status.monitorState === 'error') {
+          throw new Error(response.status.lastError || 'Android native monitor is unavailable');
+        }
+        sourceStatsRef.current = null;
+        receiverStatsRef.current = {
+          latencyMs: 0,
+          bufferFillPercent: 100,
+          playbackQueueMs: 0,
+          queueDurationMs: 0,
+          playbackBackendType: null,
+        };
+        updateTransportKind('android-native');
+        updateIsPlaying(true);
+        recomputeStats();
+        return 'android-native';
+      } finally {
+        isInitializingRef.current = false;
+      }
+    }
+
     isInitializingRef.current = true;
     playbackGenerationRef.current += 1;
     intentionalDisconnectRef.current = false;
@@ -1024,7 +1116,7 @@ export function useAudioMonitorPlayback(
       isInitializingRef.current = false;
       startPromiseRef.current = null;
     }
-  }, [cleanup, cleanupTransportState, previewSessionId, scope, setPlaybackBufferPreference, startCompatPlayback, startRtcDataAudioPlayback, startStatsPolling, updateIsPlaying, updateTransportKind, waitForPlaybackPath]);
+  }, [cleanup, cleanupTransportState, nativeOperatorAudioEnabled, previewSessionId, radioDispatch, recomputeStats, scope, setPlaybackBufferPreference, startCompatPlayback, startRtcDataAudioPlayback, startStatsPolling, updateIsPlaying, updateTransportKind, waitForPlaybackPath]);
 
   const startFromGesture = useCallback(async (
     startOptions?: string | AudioMonitorStartOptions,
@@ -1038,6 +1130,10 @@ export function useAudioMonitorPlayback(
     switchOptions?: Omit<AudioMonitorStartOptions, 'transportOverride'>,
   ): Promise<RealtimeTransportKind> => {
     await preparePlaybackFromGesture();
+
+    if (nativeOperatorAudioEnabled || transportKindRef.current === 'android-native') {
+      return start({ ...switchOptions, transportOverride: undefined });
+    }
 
     if (isInitializingRef.current) {
       throw new Error('Realtime playback is already initializing');
@@ -1071,7 +1167,7 @@ export function useAudioMonitorPlayback(
       audioCodecPreference: switchOptions?.audioCodecPreference,
       playbackBufferPreference: switchOptions?.playbackBufferPreference,
     });
-  }, [cleanupTransportState, preparePlaybackFromGesture, start]);
+  }, [cleanupTransportState, nativeOperatorAudioEnabled, preparePlaybackFromGesture, start]);
 
   const stop = useCallback(() => {
     intentionalDisconnectRef.current = true;
@@ -1081,13 +1177,19 @@ export function useAudioMonitorPlayback(
   const setVolume = useCallback((db: number) => {
     const linear = Math.max(0, Math.pow(10, db / 20));
     currentVolumeRef.current = linear;
+    if (nativeOperatorAudioEnabled) {
+      void api.setAndroidOperatorAudioMonitorGain(db)
+        .then((response) => radioDispatch({ type: 'androidOperatorAudioStatusChanged', payload: response.status }))
+        .catch((error) => logger.warn('Failed to set Android native monitor gain', error));
+      return;
+    }
     if (gainNodeRef.current) {
       const gainParam = gainNodeRef.current.gain;
       const contextTime = gainNodeRef.current.context.currentTime;
       gainParam.cancelScheduledValues(contextTime);
       gainParam.setTargetAtTime(linear, contextTime, VOLUME_RAMP_SECONDS);
     }
-  }, []);
+  }, [nativeOperatorAudioEnabled, radioDispatch]);
 
   return {
     preparePlaybackFromGesture,

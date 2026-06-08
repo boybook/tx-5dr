@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  areSpectrumRecoveryStatesEqual,
   buildRadioSdrFrequencyRequest,
   buildRadioSdrTxBandOverlays,
   canUseRadioSdrFrequencyRequest,
@@ -7,11 +8,68 @@ import {
   getCollapsedSpectrumPosition,
   getRadioSdrDragFrequencyStepHz,
   isSpectrumEngineNotStarted,
+  resolveAudioRangeSettingsForModeChange,
   resolveSpectrumEmptyStatusKey,
+  resolveSpectrumRecoveryStateAfterFrame,
   resolveCollapsedSpectrumMarkerFrequencies,
   resolveSpectrumMarkerFrequencies,
+  SPECTRUM_RECOVERY_IDLE_STATE,
   shouldPauseSpectrumNoFrameRecovery,
 } from './SpectrumDisplay';
+
+describe('spectrum recovery state helpers', () => {
+  it('detects equivalent recovery states before scheduling React updates', () => {
+    expect(areSpectrumRecoveryStatesEqual(
+      { isStale: false, retryCount: 0, exhausted: false },
+      { isStale: false, retryCount: 0, exhausted: false },
+    )).toBe(true);
+    expect(areSpectrumRecoveryStatesEqual(
+      { isStale: true, retryCount: 1, exhausted: false },
+      { isStale: true, retryCount: 2, exhausted: false },
+    )).toBe(false);
+  });
+
+  it('resets stale recovery state only once after normal spectrum frames resume', () => {
+    let current = { isStale: true, retryCount: 2, exhausted: false };
+    let updateCount = 0;
+
+    for (let index = 0; index < 2; index += 1) {
+      const next = resolveSpectrumRecoveryStateAfterFrame(current);
+      if (!areSpectrumRecoveryStatesEqual(current, next)) {
+        updateCount += 1;
+        current = next;
+      }
+    }
+
+    expect(updateCount).toBe(1);
+    expect(current).toBe(SPECTRUM_RECOVERY_IDLE_STATE);
+    expect(resolveSpectrumRecoveryStateAfterFrame(current)).toBe(current);
+  });
+
+  it('uses the latest actual auto range when switching audio spectrum to manual', () => {
+    const current = {
+      mode: 'auto' as const,
+      manual: { minDb: -35, maxDb: 10 },
+      auto: {
+        updateInterval: 10,
+        minPercentile: 15,
+        maxPercentile: 99,
+        rangeExpansionFactor: 4,
+      },
+    };
+
+    expect(resolveAudioRangeSettingsForModeChange(current, 'manual', { min: -42.4, max: 9.6 })).toEqual({
+      ...current,
+      mode: 'manual',
+      manual: { minDb: -42, maxDb: 10 },
+    });
+
+    expect(resolveAudioRangeSettingsForModeChange(current, 'manual', null)).toEqual({
+      ...current,
+      mode: 'manual',
+    });
+  });
+});
 
 describe('spectrum no-frame recovery gate', () => {
   it('pauses recovery for Radio SDR while PTT is active', () => {

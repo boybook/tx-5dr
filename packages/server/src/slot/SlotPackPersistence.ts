@@ -323,13 +323,13 @@ export class SlotPackPersistence {
   async getAvailableDates(): Promise<string[]> {
     try {
       const dataDir = await tx5drPaths.getDataDir();
-      const logsDir = join(dataDir, 'ft8-logs');
+      const logsDir = join(dataDir, 'frames-logs');
 
       try {
         const files = await fs.readdir(logsDir);
         const dates = files
-          .filter(file => file.startsWith('ft8-decodes-') && file.endsWith('.jsonl'))
-          .map(file => file.replace('ft8-decodes-', '').replace('.jsonl', ''))
+          .filter(file => file.startsWith('frames-') && file.endsWith('.jsonl'))
+          .map(file => file.replace('frames-', '').replace('.jsonl', ''))
           .sort();
 
         return dates;

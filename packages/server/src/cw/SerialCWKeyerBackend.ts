@@ -30,7 +30,7 @@ export class SerialCWKeyerBackend implements CWKeyerBackend {
       this.hardware = null;
     }
 
-    this.hardware = new CWKeyerHardware(config.keyPort, config.keyMethod);
+    this.hardware = new CWKeyerHardware(config.keyPort, config.keyMethod, config.keyActiveLevel);
     await this.hardware.open();
     this.started = true;
     logger.info('Serial CW backend started');

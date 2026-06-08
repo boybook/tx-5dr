@@ -143,6 +143,7 @@
     "bufferCustom": "自定义",
     "customBufferTarget": "固定延迟",
     "bufferPolicyHelp": "默认用自动。若自己监听仍断续，再改自定义并调大固定延迟。",
+    "androidNativeAudioShort": "手机音频",
     "transportWebrtc": "低延迟 RTC",
     "transportWsPcm": "兼容 WS",
     "switchToWebrtc": "切到低延迟 RTC",
@@ -175,6 +176,10 @@
     "bufferProfileCustom": "自定义",
     "customBufferTarget": "固定延迟",
     "bufferPolicyDisabledDuringTx": "发射中不可切换缓冲策略，下次发射生效",
+    "androidNativeAudioShort": "手机音频",
+    "androidMicGain": "麦克风增益",
+    "androidMicGainHint": "只影响手机麦克风发射音量；音量条显示增益后的电平。",
+    "androidMicGainFailed": "麦克风增益设置失败",
     "bottleneck": "主要瓶颈",
     "softwareLatency": "到输出写入",
     "softwareLatencyMeasured": "端到端时钟已同步",
@@ -359,6 +364,7 @@
     "networkUnreachable": "无法访问电台所在网络，请检查 Wi-Fi 或电台 IP 地址。",
     "operationTimeout": "电台操作超时。",
     "radioNoResponse": "电台未及时响应。",
+    "serialRadioCommunicationFailed": "串口已打开，但电台没有响应。请检查电台菜单中的波特率是否与软件配置一致。",
     "suggestion": {
       "connectRadioUsb": "将电台通过 USB 连接并开机",
       "refreshSerialPortList": "刷新串口列表并选择正确的设备",
@@ -374,7 +380,9 @@
       "checkWifi": "检查 Wi-Fi 或网络连接",
       "verifyRadioIpSameNetwork": "确认电台 IP 地址正确且与电脑处于同一网络",
       "checkCableConnected": "确认 CAT 线缆连接可靠",
-      "verifyBaudRate": "确认波特率与电台设置一致"
+      "verifyBaudRate": "检查电台菜单中的 CAT/CI-V 波特率，并确认它与此 Profile 中的软件配置一致",
+      "verifyRadioModel": "确认选择的电台型号与实际连接的电台一致",
+      "enableCatControl": "如果电台需要，请在电台菜单中启用 CAT/CI-V 控制"
     }
   },
   "operator": {
@@ -756,6 +764,10 @@
     "attenuator": {
       "label": "衰减器",
       "description": "切换接收衰减器（ATT）档位，用于在强信号环境下降低前端过载风险。数值越高，衰减越强。"
+    },
+    "radio_mode": {
+      "label": "电台模式",
+      "description": "显示当前连接电台报告的语音可用调制模式。"
     },
     "mode_bandwidth": {
       "label": "模式频宽",

@@ -9,9 +9,10 @@ import {
 } from '../realtime.schema.js';
 
 describe('Realtime transport schemas', () => {
-  it('accepts only rtc-data-audio and ws-compat transports', () => {
+  it('accepts realtime network transports plus the Android native diagnostics transport', () => {
     expect(RealtimeTransportKindSchema.parse('rtc-data-audio')).toBe('rtc-data-audio');
     expect(RealtimeTransportKindSchema.parse('ws-compat')).toBe('ws-compat');
+    expect(RealtimeTransportKindSchema.parse('android-native')).toBe('android-native');
     const retiredTransport = 'live' + 'kit';
     expect(() => RealtimeTransportKindSchema.parse(retiredTransport)).toThrow();
     expect(() => RealtimeSessionRequestSchema.parse({

@@ -143,6 +143,7 @@
     "bufferCustom": "Custom",
     "customBufferTarget": "Fixed delay",
     "bufferPolicyHelp": "Use Auto by default. If monitoring still drops out, switch to Custom and raise the fixed delay.",
+    "androidNativeAudioShort": "Phone audio",
     "transportWebrtc": "Low-latency RTC",
     "transportWsPcm": "Compatible WS",
     "switchToWebrtc": "Use low-latency RTC",
@@ -175,6 +176,10 @@
     "bufferProfileCustom": "Custom",
     "customBufferTarget": "Fixed delay",
     "bufferPolicyDisabledDuringTx": "Buffer policy cannot be switched while transmitting; it applies on the next TX",
+    "androidNativeAudioShort": "Phone audio",
+    "androidMicGain": "Mic gain",
+    "androidMicGainHint": "Only affects phone-mic TX. The level meter shows the boosted level.",
+    "androidMicGainFailed": "Failed to set mic gain",
     "bottleneck": "Main bottleneck",
     "softwareLatency": "To output write",
     "softwareLatencyMeasured": "End-to-end clock synced",
@@ -307,6 +312,7 @@
     "networkUnreachable": "Cannot reach the radio network. Check Wi-Fi / IP address.",
     "operationTimeout": "Radio operation timed out.",
     "radioNoResponse": "The radio did not respond in time.",
+    "serialRadioCommunicationFailed": "Serial port opened, but the radio did not respond. Check that the baud rate on the radio matches the software setting.",
     "suggestion": {
       "connectRadioUsb": "Connect the radio via USB and power it on",
       "refreshSerialPortList": "Refresh the serial port list and pick the correct device",
@@ -322,7 +328,9 @@
       "checkWifi": "Check your Wi-Fi or network connection",
       "verifyRadioIpSameNetwork": "Verify the radio IP address is correct and on the same network",
       "checkCableConnected": "Verify the CAT cable is properly connected",
-      "verifyBaudRate": "Verify the baud rate matches the radio setting"
+      "verifyBaudRate": "Check the CAT/CI-V baud rate in the radio menu and make sure it matches this profile",
+      "verifyRadioModel": "Confirm the selected radio model matches the connected radio",
+      "enableCatControl": "Enable CAT/CI-V control on the radio if the model requires it"
     }
   },
   "power": {
@@ -756,6 +764,10 @@
     "attenuator": {
       "label": "Attenuator",
       "description": "Switches the receive attenuator (ATT) level to reduce front-end overload in strong-signal environments. Higher values apply stronger attenuation."
+    },
+    "radio_mode": {
+      "label": "Radio Mode",
+      "description": "Shows the current voice-capable modulation modes reported by the connected radio."
     },
     "mode_bandwidth": {
       "label": "Mode Bandwidth",

@@ -91,6 +91,36 @@ interface ActiveKeying {
   currentText: string | null;
 }
 
+export type CWKeyerTestPhase = 'open' | 'keyDown' | 'keyUp';
+
+export interface CWSerialKeyerTestTarget {
+  keyPort: string;
+  keyMethod: 'dtr' | 'rts';
+  keyActiveLevel: 'high' | 'low';
+}
+
+export type CWSerialKeyerTestState =
+  | { kind: 'direct' }
+  | { kind: 'reuse' }
+  | {
+    kind: 'busy-different-settings';
+    currentMethod: 'dtr' | 'rts';
+    currentActiveLevel: 'high' | 'low';
+  };
+
+export class CWKeyerTestFailure extends Error {
+  readonly phase: CWKeyerTestPhase;
+  readonly cause?: unknown;
+
+  constructor(phase: CWKeyerTestPhase, message: string, cause?: unknown) {
+    super(message);
+    this.name = 'CWKeyerTestFailure';
+    this.phase = phase;
+    this.cause = cause;
+    Object.setPrototypeOf(this, CWKeyerTestFailure.prototype);
+  }
+}
+
 export interface CWKeyerManagerEvents {
   cwKeyerStatusChanged: (status: CWKeyerStatus) => void;
   cwConfigChanged: (config: CWKeyerConfig) => void;
@@ -109,6 +139,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     backend: 'cat',
     keyPort: '',
     keyMethod: 'dtr',
+    keyActiveLevel: 'high',
     wpm: 20,
   };
   private backendExplicit = false;
@@ -200,6 +231,101 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     await this.stopBackends();
     this._started = false;
     logger.info('CW keyer stopped');
+  }
+
+  getSerialKeyerTestState(target: CWSerialKeyerTestTarget): CWSerialKeyerTestState {
+    const runtimeConfig = this.resolveRuntimeConfig();
+    if (!this._started || runtimeConfig.backend !== 'serial') {
+      return { kind: 'direct' };
+    }
+    if (runtimeConfig.keyPort.trim() !== target.keyPort.trim()) {
+      return { kind: 'direct' };
+    }
+    if (
+      runtimeConfig.keyMethod === target.keyMethod
+      && runtimeConfig.keyActiveLevel === target.keyActiveLevel
+    ) {
+      return { kind: 'reuse' };
+    }
+    return {
+      kind: 'busy-different-settings',
+      currentMethod: runtimeConfig.keyMethod,
+      currentActiveLevel: runtimeConfig.keyActiveLevel,
+    };
+  }
+
+  async testKeyer(target: CWSerialKeyerTestTarget, durationMs = 500): Promise<void> {
+    await this.ensureConfigLoaded();
+    const testState = this.getSerialKeyerTestState(target);
+    if (testState.kind !== 'reuse') {
+      throw new CWKeyerTestFailure('open', 'Current CW keyer backend cannot be reused for this test target');
+    }
+
+    if (this.active) {
+      throw new CWKeyerTestFailure('keyDown', 'CW keyer is already sending or manually keying');
+    }
+
+    const backend = this.getBackend();
+    if (!backend.supportsManualKeying || !backend.keyDown || !backend.keyUp) {
+      throw new CWKeyerTestFailure('keyDown', 'Current CW backend does not support direct key testing');
+    }
+
+    const active: ActiveKeying = {
+      clientId: 'settings-cw-test',
+      label: 'CW Test',
+      mode: 'manual',
+      messageId: null,
+      repeating: false,
+      stopRequested: false,
+      timer: null,
+      delayResolve: null,
+      callsign: null,
+      placeholderValues: {},
+      currentText: null,
+    };
+
+    this.active = active;
+    let phase: CWKeyerTestPhase = 'open';
+    let keyDown = false;
+    try {
+      await this.ensureStarted();
+      phase = 'keyDown';
+      await backend.keyDown();
+      keyDown = true;
+      this.setStatus(this.statusFor(active.clientId, active.label, 'keying', null));
+
+      await this.delay(Math.max(0, Math.round(durationMs)), active);
+
+      if (!active.stopRequested && this.active === active) {
+        phase = 'keyUp';
+        await backend.keyUp();
+        keyDown = false;
+      }
+    } catch (error) {
+      if (keyDown) {
+        try {
+          await backend.keyUp();
+        } catch (releaseError) {
+          throw new CWKeyerTestFailure(
+            'keyUp',
+            `CW key release failed after test key-down: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`,
+            releaseError,
+          );
+        }
+      }
+      throw new CWKeyerTestFailure(
+        phase,
+        error instanceof Error ? error.message : String(error),
+        error,
+      );
+    } finally {
+      if (this.active === active) {
+        active.stopRequested = true;
+        this.clearActiveDelay(active);
+        this.active = null;
+        this.setStatus(this.idleStatus());
+      }
+    }
   }
 
   private async ensureStarted(): Promise<void> {
@@ -675,6 +801,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       ...config,
       keyPort: radioConfig.cwKeyPort || config.keyPort || '',
       keyMethod: radioConfig.cwKeyMethod || config.keyMethod || 'dtr',
+      keyActiveLevel: radioConfig.cwKeyActiveLevel || config.keyActiveLevel || 'high',
     });
     return {
       ...runtimeConfig,
@@ -711,6 +838,9 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     if (update.keyMethod === 'dtr' || update.keyMethod === 'rts') {
       filtered.keyMethod = update.keyMethod;
     }
+    if (update.keyActiveLevel === 'high' || update.keyActiveLevel === 'low') {
+      filtered.keyActiveLevel = update.keyActiveLevel;
+    }
     if (typeof update.wpm === 'number' && Number.isFinite(update.wpm)) {
       filtered.wpm = update.wpm;
     }
@@ -722,6 +852,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       backend: config.backend === 'serial' ? 'serial' : 'cat',
       keyPort: typeof config.keyPort === 'string' ? config.keyPort : '',
       keyMethod: config.keyMethod === 'rts' ? 'rts' : 'dtr',
+      keyActiveLevel: config.keyActiveLevel === 'low' ? 'low' : 'high',
       wpm: Math.max(5, Math.min(60, Math.round(Number(config.wpm ?? 20)))),
     };
   }

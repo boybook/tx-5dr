@@ -498,6 +498,36 @@ export interface CycleMarkerPosition {
   timestamp: number;
 }
 
+export function areCycleMarkerPositionsEqual(
+  left: CycleMarkerPosition[],
+  right: CycleMarkerPosition[],
+): boolean {
+  return left.length === right.length
+    && left.every((marker, index) => {
+      const nextMarker = right[index];
+      return nextMarker
+        && marker.id === nextMarker.id
+        && marker.timestamp === nextMarker.timestamp
+        && Math.abs(marker.topPercent - nextMarker.topPercent) < 0.001;
+    });
+}
+
+export function resolveNextCycleMarkerPositions(
+  currentMarkers: CycleMarkerPosition[],
+  rowTimestamps: number[],
+  showCycleMarkers: boolean,
+  cycleSlotMs: number | null | undefined,
+  visibleRows: number,
+): CycleMarkerPosition[] {
+  const nextMarkers = showCycleMarkers
+    ? buildCycleMarkerPositions(rowTimestamps, cycleSlotMs, visibleRows)
+    : [];
+
+  return areCycleMarkerPositionsEqual(currentMarkers, nextMarkers)
+    ? currentMarkers
+    : nextMarkers;
+}
+
 export function buildCycleMarkerPositions(
   rowTimestamps: ArrayLike<number>,
   cycleSlotMs: number | null | undefined,
@@ -605,12 +635,14 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const animationRef = useRef<number>();
   const [webglSupported, setWebglSupported] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
-  const [viewState, setViewState] = React.useState<{ axis: SpectrumAxis | null; hasData: boolean }>({
+  const initialViewState = {
     axis: null,
     hasData: false,
-  });
-  const [actualRange, setActualRange] = React.useState<{min: number, max: number} | null>(null);
+  };
+  const [viewState, setViewState] = React.useState<{ axis: SpectrumAxis | null; hasData: boolean }>(initialViewState);
   const [cycleMarkers, setCycleMarkers] = React.useState<CycleMarkerPosition[]>([]);
+  const viewStateRef = useRef<{ axis: SpectrumAxis | null; hasData: boolean }>(initialViewState);
+  const cycleMarkersRef = useRef<CycleMarkerPosition[]>([]);
   const [rulerWidthPx, setRulerWidthPx] = React.useState(0);
   const [hoverCursor, setHoverCursor] = React.useState<{ ratio: number; frequency: number; clientX: number; containerTop: number } | null>(null);
 
@@ -742,21 +774,18 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
   const refreshCycleMarkers = useCallback((rowTimestamps: number[] = displayRowTimestampsRef.current) => {
     const visibleRows = Math.max(textureHeightRef.current, rowTimestamps.length, 1);
-    const nextMarkers = buildCycleMarkerPositions(rowTimestamps, showCycleMarkers ? cycleSlotMs : null, visibleRows);
-    setCycleMarkers(currentMarkers => {
-      if (
-        currentMarkers.length === nextMarkers.length
-        && currentMarkers.every((marker, index) => {
-          const nextMarker = nextMarkers[index];
-          return nextMarker
-            && marker.timestamp === nextMarker.timestamp
-            && Math.abs(marker.topPercent - nextMarker.topPercent) < 0.001;
-        })
-      ) {
-        return currentMarkers;
-      }
-      return nextMarkers;
-    });
+    const nextMarkers = resolveNextCycleMarkerPositions(
+      cycleMarkersRef.current,
+      rowTimestamps,
+      showCycleMarkers,
+      cycleSlotMs,
+      visibleRows,
+    );
+    if (nextMarkers === cycleMarkersRef.current) {
+      return;
+    }
+    cycleMarkersRef.current = nextMarkers;
+    setCycleMarkers(nextMarkers);
   }, [cycleSlotMs, showCycleMarkers]);
 
   const resetAutoRangeState = useCallback(() => {
@@ -765,7 +794,6 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     actualRangeRef.current = null;
     frozenSegmentsRef.current = [];
     activeRowCountRef.current = 0;
-    setActualRange(null);
     onActualRangeChange?.(null);
   }, [onActualRangeChange]);
 
@@ -1206,22 +1234,21 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
   const updateViewState = useCallback((nextAxis: SpectrumAxis | null, hasData: boolean) => {
     currentAxisRef.current = nextAxis;
-    setViewState(current => {
-      if (current.hasData === hasData && areAxesEqual(current.axis, nextAxis)) {
-        return current;
-      }
-      return {
-        axis: nextAxis,
-        hasData,
-      };
-    });
+    if (viewStateRef.current.hasData === hasData && areAxesEqual(viewStateRef.current.axis, nextAxis)) {
+      return;
+    }
+    const nextViewState = {
+      axis: nextAxis,
+      hasData,
+    };
+    viewStateRef.current = nextViewState;
+    setViewState(nextViewState);
   }, []);
 
   const updateActualRangeState = useCallback((range: { min: number; max: number } | null) => {
     if (range === null) {
       if (actualRangeRef.current !== null) {
         actualRangeRef.current = null;
-        setActualRange(null);
         onActualRangeChange?.(null);
       }
       return;
@@ -1236,7 +1263,6 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
 
     actualRangeRef.current = range;
-    setActualRange(range);
     onActualRangeChange?.(range);
   }, [onActualRangeChange]);
 
@@ -1853,7 +1879,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       lastAnimatedFrameTokenRef.current = null;
       lastDataTimeRef.current = 0;
       applyCycleMarkerScrollOffset(0);
-      setCycleMarkers([]);
+      if (cycleMarkersRef.current.length > 0) {
+        cycleMarkersRef.current = [];
+        setCycleMarkers([]);
+      }
       updateViewState(null, false);
       resetAutoRangeState();
       releaseTextureStorage();
@@ -3413,11 +3442,6 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         )}
       </div>
 
-      {autoRange && actualRange && (
-        <div style={{ display: 'none' }} className="absolute top-2 right-2 text-xs text-white bg-black bg-opacity-50 px-2 py-1 rounded">
-          {t('spectrum.currentRange', { min: actualRange.min.toFixed(1), max: actualRange.max.toFixed(1) })}
-        </div>
-      )}
     </div>
   );
 }; 

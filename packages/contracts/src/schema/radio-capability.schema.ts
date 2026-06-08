@@ -284,6 +284,7 @@ export const CAPABILITY_IDS = [
   'agc_mode',
   'preamp',
   'attenuator',
+  'radio_mode',
   'mode_bandwidth',
   'split_enabled',
   'vfo_select',

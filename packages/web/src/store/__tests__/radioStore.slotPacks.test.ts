@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { SlotPack } from '@tx5dr/contracts';
+import { SLOT_PACK_HISTORY_LIMIT, type SlotPack } from '@tx5dr/contracts';
 import { initialSlotPacksState, slotPacksReducer } from '../radioStore';
 
 function createSlotPack(slotId: string, startMs: number, message: string, updateSeq?: number): SlotPack {
@@ -25,6 +25,20 @@ function createSlotPack(slotId: string, startMs: number, message: string, update
       ...(updateSeq !== undefined && { updateSeq }),
     },
     decodeHistory: [],
+  };
+}
+
+function createEmptySlotPack(slotId: string, startMs: number): SlotPack {
+  return {
+    ...createSlotPack(slotId, startMs, 'EMPTY'),
+    frames: [],
+    stats: {
+      totalDecodes: 1,
+      successfulDecodes: 0,
+      totalFramesBeforeDedup: 0,
+      totalFramesAfterDedup: 0,
+      lastUpdated: startMs,
+    },
   };
 }
 
@@ -96,5 +110,46 @@ describe('radioStore slot packs reducer', () => {
     expect(invalidState).toBe(validState);
     expect(invalidState.slotPacks).toHaveLength(1);
     expect(invalidState.slotPacks[0]?.frames[0]?.message).toBe('CQ BG5BNW PM00');
+  });
+
+  it('retains the latest effective slot packs without counting empty packs', () => {
+    let state = initialSlotPacksState;
+
+    for (let index = 0; index < SLOT_PACK_HISTORY_LIMIT + 1; index++) {
+      state = slotPacksReducer(state, {
+        type: 'slotPackUpdated',
+        payload: createSlotPack(`slot-${index}`, index * 15_000, `CQ TEST${index}`),
+      });
+    }
+
+    state = slotPacksReducer(state, {
+      type: 'slotPackUpdated',
+      payload: createEmptySlotPack('empty-latest', (SLOT_PACK_HISTORY_LIMIT + 1) * 15_000),
+    });
+
+    const nonEmptySlotPacks = state.slotPacks.filter((slotPack) => slotPack.frames.length > 0);
+    expect(nonEmptySlotPacks).toHaveLength(SLOT_PACK_HISTORY_LIMIT);
+    expect(nonEmptySlotPacks[0]?.slotId).toBe('slot-1');
+    expect(nonEmptySlotPacks.at(-1)?.slotId).toBe(`slot-${SLOT_PACK_HISTORY_LIMIT}`);
+    expect(state.slotPacks.some((slotPack) => slotPack.slotId === 'empty-latest')).toBe(true);
+    expect(state.totalMessages).toBe(SLOT_PACK_HISTORY_LIMIT);
+  });
+
+  it('applies the effective slot pack limit while buffering a sync', () => {
+    let state = slotPacksReducer(initialSlotPacksState, { type: 'beginSync' });
+
+    for (let index = 0; index < SLOT_PACK_HISTORY_LIMIT + 1; index++) {
+      state = slotPacksReducer(state, {
+        type: 'slotPackUpdated',
+        payload: createSlotPack(`sync-slot-${index}`, index * 15_000, `CQ SYNC${index}`),
+      });
+    }
+
+    const committedState = slotPacksReducer(state, { type: 'commitSync' });
+    expect(committedState.slotPacks).toHaveLength(SLOT_PACK_HISTORY_LIMIT);
+    expect(committedState.slotPacks[0]?.slotId).toBe('sync-slot-1');
+    expect(committedState.slotPacks.at(-1)?.slotId).toBe(`sync-slot-${SLOT_PACK_HISTORY_LIMIT}`);
+    expect(committedState.totalMessages).toBe(SLOT_PACK_HISTORY_LIMIT);
+    expect(committedState.pendingSlotPacks).toEqual([]);
   });
 });

@@ -64,6 +64,7 @@ registerCapabilityComponent('break_in_mode', EnumCapabilityPanel);
 registerCapabilityComponent('agc_mode', EnumCapabilityPanel);
 registerCapabilityComponent('preamp', EnumCapabilityPanel);
 registerCapabilityComponent('attenuator', EnumCapabilityPanel);
+registerCapabilityComponent('radio_mode', EnumCapabilityPanel);
 registerCapabilityComponent('mode_bandwidth', EnumCapabilityPanel);
 registerCapabilityComponent('split_enabled', BooleanCapabilityPanel);
 registerCapabilityComponent('vfo_select', EnumCapabilityPanel);

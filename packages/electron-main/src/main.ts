@@ -2234,6 +2234,7 @@ function buildContextMenu(includQuit: boolean): Menu {
     { label: msgs.menu.about, click: () => { void openAboutWindow(); } },
     { type: 'separator' },
     { label: msgs.menu.openMainWindow, click: () => showMainWindow() },
+    { label: msgs.menu.openDevTools, click: () => { void openMainWindowDevTools(); } },
     { label: msgs.menu.logViewer, click: () => openLogInTerminal() },
     { type: 'separator' },
     { label: msgs.menu.openInBrowser, click: () => openInBrowser() },
@@ -2646,22 +2647,50 @@ async function createMainWindowOnly(options: CreateMainWindowOptions = {}): Prom
 }
 
 /**
+ * 确保主窗口存在并可见，若已销毁则重新创建（不重启子进程）
+ */
+async function ensureMainWindowVisible(): Promise<BrowserWindow> {
+  let windowInstance = mainWindowInstance && !mainWindowInstance.isDestroyed()
+    ? mainWindowInstance
+    : null;
+
+  if (!windowInstance) {
+    windowInstance = await createMainWindowOnly();
+    if (mainAppReadyForWindow) {
+      await loadMainAppInWindow(windowInstance);
+    }
+  }
+
+  if (windowInstance.isMinimized()) {
+    windowInstance.restore();
+  }
+  windowInstance.show();
+  windowInstance.focus();
+
+  return windowInstance;
+}
+
+/**
  * 显示主窗口，若已销毁则重新创建（不重启子进程）
  */
 function showMainWindow() {
-  if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
-    mainWindowInstance.show();
-    mainWindowInstance.focus();
-    if (mainWindowInstance.isMinimized()) {
-      mainWindowInstance.restore();
+  void ensureMainWindowVisible().catch((error) => {
+    logger.error('failed to show main window', error);
+  });
+}
+
+async function openMainWindowDevTools(): Promise<void> {
+  try {
+    const windowInstance = await ensureMainWindowVisible();
+    if (windowInstance.isDestroyed()) {
+      logger.warn('cannot open main window DevTools because window is destroyed');
+      return;
     }
-  } else {
-    void (async () => {
-      const windowInstance = await createMainWindowOnly();
-      if (mainAppReadyForWindow) {
-        await loadMainAppInWindow(windowInstance);
-      }
-    })();
+
+    logger.info('opening main window DevTools');
+    windowInstance.webContents.openDevTools();
+  } catch (error) {
+    logger.error('failed to open main window DevTools', error);
   }
 }
 
