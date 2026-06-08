@@ -654,7 +654,18 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
       }
       if (e.key === 'Backspace' || e.key === 'Delete') {
         e.preventDefault();
-        setTextInput(current => current.slice(0, -1));
+        const input = textInputRef.current;
+        setTextInput(current => {
+          const selectionStart = input?.selectionStart ?? current.length;
+          const selectionEnd = input?.selectionEnd ?? current.length;
+          if (selectionStart !== selectionEnd) {
+            return current.slice(0, selectionStart) + current.slice(selectionEnd);
+          }
+          if (e.key === 'Delete') {
+            return current.slice(0, selectionStart) + current.slice(selectionStart + 1);
+          }
+          return current.slice(0, Math.max(0, selectionStart - 1)) + current.slice(selectionStart);
+        });
         return;
       }
       if (e.ctrlKey || e.altKey || e.metaKey || e.nativeEvent.isComposing || e.key.length !== 1) {
@@ -1138,7 +1149,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
           />
         </div>
 
-        {lastSentText && (
+        {textInputMode === 'buffered' && lastSentText && (
           <div className={`rounded-lg p-2 transition-colors ${isManualTextPlaying ? 'bg-danger-50 dark:bg-danger-950/20' : 'bg-content2'}`}>
             <Button
               color={isManualTextPlaying ? 'danger' : 'default'}
