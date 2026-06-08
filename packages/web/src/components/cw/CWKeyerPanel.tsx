@@ -429,11 +429,13 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
 
   const enqueueRealtimeInput = useCallback((value: string) => {
     let queued = false;
+    let displayText = '';
 
     for (const rawChar of value.toUpperCase()) {
       if (/\s/.test(rawChar)) {
         if (realtimeHasQueuedOrSentRef.current) {
           realtimePendingWordGapRef.current = true;
+          displayText += ' ';
         }
         continue;
       }
@@ -448,7 +450,12 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
       realtimeInputQueueRef.current.push({ text: rawChar, gapUnits });
       realtimeHasQueuedOrSentRef.current = true;
       realtimePendingWordGapRef.current = false;
+      displayText += rawChar;
       queued = true;
+    }
+
+    if (displayText) {
+      setTextInput(current => current + displayText);
     }
 
     if (queued) {
@@ -460,9 +467,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
     const nextMode: CWTextInputMode = enabled ? 'realtime' : 'buffered';
     setTextInputMode(nextMode);
     clearRealtimeInputQueue();
-    if (nextMode === 'realtime') {
-      setTextInput('');
-    }
+    setTextInput('');
     try { localStorage.setItem(CW_TEXT_INPUT_MODE_STORAGE_KEY, nextMode); } catch {}
   }, [clearRealtimeInputQueue]);
 
@@ -645,6 +650,11 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
     if (textInputMode === 'realtime') {
       if (e.key === 'Enter') {
         e.preventDefault();
+        return;
+      }
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault();
+        setTextInput(current => current.slice(0, -1));
         return;
       }
       if (e.ctrlKey || e.altKey || e.metaKey || e.nativeEvent.isComposing || e.key.length !== 1) {
@@ -1101,7 +1111,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
         <div className="flex gap-2">
           <Input
             ref={textInputRef}
-            value={textInputMode === 'realtime' ? '' : textInput}
+            value={textInput}
             onValueChange={(value) => {
               if (textInputMode === 'buffered') {
                 setTextInput(value.toUpperCase());
