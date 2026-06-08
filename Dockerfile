@@ -8,6 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV NODE_ENV=production
 ARG VCS_REF=development
 ARG BUILD_DATE=development
+ARG TX5DR_CLUBLOG_API_KEY=
 
 # 显示构建信息
 RUN echo "Building for platform: $(uname -m)" && \
@@ -92,7 +93,7 @@ RUN node scripts/prepare-server-build-info.mjs \
 
 # 构建应用
 RUN echo "Building application for $(uname -m)..." && \
-    yarn build
+    TX5DR_CLUBLOG_API_KEY="$TX5DR_CLUBLOG_API_KEY" yarn build
 
 # 清理不必要的文件但保留生产依赖
 RUN yarn cache clean && \

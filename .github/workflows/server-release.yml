@@ -92,6 +92,7 @@ jobs:
         run: yarn build
         env:
           NODE_ENV: production
+          TX5DR_CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
 
       - name: Build server packages (deb + rpm)
         run: scripts/package-linux.sh both --no-build

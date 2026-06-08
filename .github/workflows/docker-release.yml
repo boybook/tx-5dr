@@ -106,6 +106,7 @@ jobs:
           build-args: |
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
             VCS_REF=${{ github.sha }}
+            TX5DR_CLUBLOG_API_KEY=${{ secrets.CLUBLOG_API_KEY }}
           labels: |
             org.opencontainers.image.title=${{ env.DOCKER_IMAGE_NAME }}
             org.opencontainers.image.description=TX-5DR Digital Radio System

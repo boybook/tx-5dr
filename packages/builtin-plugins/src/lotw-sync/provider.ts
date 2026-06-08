@@ -23,7 +23,6 @@ import type { QSORecord } from '@tx5dr/contracts';
 import {
   getBandFromFrequency,
   toLotwContactMode,
-  getLoTWLocationRule as getSharedLoTWLocationRule,
   normalizeLoTWStationLocation,
   suggestStationLocation,
   type LoTWLocationIssue,
@@ -74,24 +73,6 @@ interface LoTWUploadPreflightResponse extends SyncUploadPreflightResult {
   matchedCertificateIds: string[];
   locationSummary?: Record<string, unknown>;
   guidance: string[];
-}
-
-interface LoTWLocationRule {
-  requiresState: boolean;
-  requiresCounty: boolean;
-  stateLabel: string;
-  countyLabel: string;
-}
-
-/** DXCC location rules — determines which fields are required for upload signing. */
-function getLoTWLocationRule(dxccId?: number | null): LoTWLocationRule {
-  const shared = getSharedLoTWLocationRule(dxccId);
-  return {
-    requiresState: !!shared?.stateField,
-    requiresCounty: !!shared?.countyField,
-    stateLabel: shared?.stateLabel ?? 'State/Province',
-    countyLabel: shared?.countyLabel ?? 'County',
-  };
 }
 
 // ===== OIDs used in LoTW certificates =====

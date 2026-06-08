@@ -1,0 +1,8 @@
+{
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": ["vite/client", "@tx5dr/plugin-api/bridge"]
+  },
+  "include": ["./**/*"]
+}

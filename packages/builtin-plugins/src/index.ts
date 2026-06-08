@@ -99,6 +99,13 @@ import {
 } from './lotw-sync/index.js';
 
 import {
+  clublogSyncPlugin,
+  clublogSyncLocales,
+  clublogSyncDirPath,
+  BUILTIN_CLUBLOG_SYNC_PLUGIN_NAME,
+} from './clublog-sync/index.js';
+
+import {
   qsoUdpBroadcastPlugin,
   qsoUdpBroadcastLocales,
   BUILTIN_QSO_UDP_BROADCAST_PLUGIN_NAME,
@@ -126,6 +133,7 @@ export {
   BUILTIN_WAVELOG_SYNC_PLUGIN_NAME,
   BUILTIN_QRZ_SYNC_PLUGIN_NAME,
   BUILTIN_LOTW_SYNC_PLUGIN_NAME,
+  BUILTIN_CLUBLOG_SYNC_PLUGIN_NAME,
   BUILTIN_AUTOCALL_IDLE_FREQUENCY_PLUGIN_NAME,
   BUILTIN_QSO_UDP_BROADCAST_PLUGIN_NAME,
   BUILTIN_NO_REPLY_MEMORY_FILTER_PLUGIN_NAME,
@@ -210,6 +218,12 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
     locales: lotwSyncLocales,
     enabledByDefault: true,
     dirPath: lotwSyncDirPath,
+  },
+  {
+    definition: clublogSyncPlugin,
+    locales: clublogSyncLocales,
+    enabledByDefault: true,
+    dirPath: clublogSyncDirPath,
   },
   {
     definition: qsoUdpBroadcastPlugin,
