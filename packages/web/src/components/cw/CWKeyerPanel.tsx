@@ -14,6 +14,7 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
+  Switch,
 } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -64,8 +65,11 @@ import {
 const WPM_MIN = 5;
 const WPM_MAX = 60;
 const TX_PROGRESS_OVERHEAD_MS = 650;
+const CW_TEXT_INPUT_MODE_STORAGE_KEY = 'tx5dr_cw_text_input_mode';
+const REALTIME_CW_CHARACTER_PATTERN = /^[A-Z0-9.,?/=@\-+:;'"!&()_$]$/;
 
 type CWPanelMode = 'operate' | 'edit';
+type CWTextInputMode = 'buffered' | 'realtime';
 
 const CW_ALERT_CLASS_NAMES = {
   base: '!flex-none !grow-0 py-2.5 px-3',
@@ -142,8 +146,18 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
 
   const textInputRef = useRef<HTMLInputElement>(null);
   const slotUpdateTimersRef = useRef<Record<string, number>>({});
+  const realtimeInputQueueRef = useRef<Array<{ text: string; gapUnits: number }>>([]);
+  const realtimePendingWordGapRef = useRef(false);
+  const realtimeHasQueuedOrSentRef = useRef(false);
+  const realtimeBlockedUntilRef = useRef(0);
   const [textInput, setTextInput] = useState('');
   const [lastSentText, setLastSentText] = useState<string | null>(null);
+  const [textInputMode, setTextInputMode] = useState<CWTextInputMode>(() => {
+    try {
+      return localStorage.getItem(CW_TEXT_INPUT_MODE_STORAGE_KEY) === 'realtime' ? 'realtime' : 'buffered';
+    } catch { return 'buffered'; }
+  });
+  const [realtimeQueueVersion, setRealtimeQueueVersion] = useState(0);
   const [panel, setPanel] = useState<CWMessagePanel | null>(null);
   const [panelLoading, setPanelLoading] = useState(false);
   const [panelMode, setPanelMode] = useState<CWPanelMode>('operate');
@@ -399,6 +413,64 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
     </div>
   ), [getPlaceholderLabel, t]);
 
+  const clearRealtimeInputQueue = useCallback(() => {
+    realtimeInputQueueRef.current = [];
+    realtimePendingWordGapRef.current = false;
+    realtimeHasQueuedOrSentRef.current = false;
+    realtimeBlockedUntilRef.current = 0;
+    setRealtimeQueueVersion(value => value + 1);
+  }, []);
+
+  const handleStopCW = useCallback(() => {
+    clearRealtimeInputQueue();
+    stopMessage();
+    sidetoneRef.current?.stop();
+  }, [clearRealtimeInputQueue, stopMessage]);
+
+  const enqueueRealtimeInput = useCallback((value: string) => {
+    let queued = false;
+    let displayText = '';
+
+    for (const rawChar of value.toUpperCase()) {
+      if (/\s/.test(rawChar)) {
+        if (realtimeHasQueuedOrSentRef.current) {
+          realtimePendingWordGapRef.current = true;
+          displayText += ' ';
+        }
+        continue;
+      }
+
+      if (!REALTIME_CW_CHARACTER_PATTERN.test(rawChar)) {
+        continue;
+      }
+
+      const gapUnits = !realtimeHasQueuedOrSentRef.current
+        ? 0
+        : realtimePendingWordGapRef.current ? 7 : 3;
+      realtimeInputQueueRef.current.push({ text: rawChar, gapUnits });
+      realtimeHasQueuedOrSentRef.current = true;
+      realtimePendingWordGapRef.current = false;
+      displayText += rawChar;
+      queued = true;
+    }
+
+    if (displayText) {
+      setTextInput(current => current + displayText);
+    }
+
+    if (queued) {
+      setRealtimeQueueVersion(value => value + 1);
+    }
+  }, []);
+
+  const handleTextInputModeChange = useCallback((enabled: boolean) => {
+    const nextMode: CWTextInputMode = enabled ? 'realtime' : 'buffered';
+    setTextInputMode(nextMode);
+    clearRealtimeInputQueue();
+    setTextInput('');
+    try { localStorage.setItem(CW_TEXT_INPUT_MODE_STORAGE_KEY, nextMode); } catch {}
+  }, [clearRealtimeInputQueue]);
+
   useEffect(() => {
     if (!myCallsign || !panel?.slots) {
       setSlotShortcuts({});
@@ -433,8 +505,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
 
       if (event.key === 'Escape' && isActive) {
         event.preventDefault();
-        stopMessage();
-        sidetoneRef.current?.stop();
+        handleStopCW();
         return;
       }
 
@@ -457,11 +528,43 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
 
     window.addEventListener('keydown', handleGlobalKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', handleGlobalKeyDown, { capture: true });
-  }, [isActive, isCWMode, myCallsign, panelMode, placeholderValues, playMessage, resolveMessageForSend, slotShortcuts, stopMessage, visibleSlots]);
+  }, [handleStopCW, isActive, isCWMode, myCallsign, panelMode, placeholderValues, playMessage, resolveMessageForSend, slotShortcuts, visibleSlots]);
+
+  useEffect(() => {
+    if (textInputMode !== 'realtime' || isActive || statusMode !== 'idle' || realtimeInputQueueRef.current.length === 0) {
+      return undefined;
+    }
+
+    const next = realtimeInputQueueRef.current[0];
+    const dotMs = Math.round(1200 / Math.max(WPM_MIN, Math.min(WPM_MAX, Math.round(Number(wpm) || 20))));
+    const delayMs = Math.max(0, realtimeBlockedUntilRef.current + (next.gapUnits * dotMs) - Date.now());
+    const timer = window.setTimeout(() => {
+      if (textInputMode !== 'realtime' || isActive || statusMode !== 'idle') return;
+      const pending = realtimeInputQueueRef.current.shift();
+      if (!pending) return;
+      sidetoneRef.current?.play(pending.text);
+      sendText(pending.text, myCallsign || undefined, placeholderValues);
+      setLastSentText(pending.text);
+      realtimeBlockedUntilRef.current = Date.now() + estimateCWMessageDurationMs(pending.text, wpm);
+      setRealtimeQueueVersion(value => value + 1);
+    }, delayMs);
+
+    return () => window.clearTimeout(timer);
+  }, [isActive, myCallsign, placeholderValues, realtimeQueueVersion, sendText, statusMode, textInputMode, wpm]);
+
+  useEffect(() => {
+    if (textInputMode !== 'realtime') {
+      clearRealtimeInputQueue();
+    }
+  }, [clearRealtimeInputQueue, textInputMode]);
 
   useEffect(() => () => {
     Object.values(slotUpdateTimersRef.current).forEach(timer => window.clearTimeout(timer));
     slotUpdateTimersRef.current = {};
+    realtimeInputQueueRef.current = [];
+    realtimePendingWordGapRef.current = false;
+    realtimeHasQueuedOrSentRef.current = false;
+    realtimeBlockedUntilRef.current = 0;
   }, []);
 
   const updateSlotLocal = useCallback((slotId: string, update: Partial<Pick<CWMessageSlot, 'label' | 'text' | 'repeatEnabled' | 'repeatIntervalSec'>>) => {
@@ -529,6 +632,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const handleSendText = useCallback((text = textInput) => {
     const trimmed = text.trim();
     if (!trimmed || (isActive && statusMode !== 'idle')) return;
+    clearRealtimeInputQueue();
     const resolvedText = resolveMessageForSend(trimmed);
     if (!resolvedText) return;
     sidetoneRef.current?.play(resolvedText);
@@ -540,14 +644,49 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
         textInputRef.current?.focus();
       });
     }
-  }, [isActive, myCallsign, placeholderValues, resolveMessageForSend, sendText, statusMode, textInput]);
+  }, [clearRealtimeInputQueue, isActive, myCallsign, placeholderValues, resolveMessageForSend, sendText, statusMode, textInput]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (textInputMode === 'realtime') {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        return;
+      }
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault();
+        const input = textInputRef.current;
+        setTextInput(current => {
+          const selectionStart = input?.selectionStart ?? current.length;
+          const selectionEnd = input?.selectionEnd ?? current.length;
+          if (selectionStart !== selectionEnd) {
+            return current.slice(0, selectionStart) + current.slice(selectionEnd);
+          }
+          if (e.key === 'Delete') {
+            return current.slice(0, selectionStart) + current.slice(selectionStart + 1);
+          }
+          return current.slice(0, Math.max(0, selectionStart - 1)) + current.slice(selectionStart);
+        });
+        return;
+      }
+      if (e.ctrlKey || e.altKey || e.metaKey || e.nativeEvent.isComposing || e.key.length !== 1) {
+        return;
+      }
+      e.preventDefault();
+      enqueueRealtimeInput(e.key);
+      return;
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       if (isActive && statusMode !== 'idle') return;
       handleSendText();
     }
+  };
+
+  const handleTextInputPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    if (textInputMode !== 'realtime') return;
+    e.preventDefault();
+    enqueueRealtimeInput(e.clipboardData.getData('text'));
   };
 
   const handleWpmChange = (value: number | number[]) => {
@@ -581,6 +720,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   };
 
   const handleBackendChange = (key: React.Key) => {
+    clearRealtimeInputQueue();
     const nextBackend: CWKeyerBackend = key === 'serial' ? 'serial' : 'cat';
     setLoadedConfig((prev) => ({
       backend: nextBackend,
@@ -712,8 +852,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const handlePlay = (slot: CWMessageSlot) => {
     if (!myCallsign || !slot.text) return;
     if (activeSlotId === slot.id) {
-      stopMessage();
-      sidetoneRef.current?.stop();
+      handleStopCW();
       return;
     }
     if (isActive) return;
@@ -739,8 +878,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
       sidetoneRef.current?.play(resolvedRepeatText);
       playMessage(myCallsign, slot.id, true, false, placeholderValues);
     } else if (!repeatEnabled && activeSlotId === slot.id) {
-      stopMessage();
-      sidetoneRef.current?.stop();
+      handleStopCW();
     }
   };
 
@@ -819,6 +957,20 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
                       )}
                     />
                   </Tabs>
+                </div>
+                <div className="flex items-center justify-between gap-3 border-t border-default-200 pt-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium text-default-700">{t('radio:cw.textInputModeRealtime', 'Realtime typing')}</div>
+                    <div className="mt-0.5 text-[11px] leading-4 text-default-500">
+                      {t('radio:cw.textInputModeDescription', 'Buffered mode sends with Enter; realtime mode queues each typed character immediately.')}
+                    </div>
+                  </div>
+                  <Switch
+                    size="sm"
+                    isSelected={textInputMode === 'realtime'}
+                    onValueChange={handleTextInputModeChange}
+                    aria-label={t('radio:cw.textInputModeRealtime', 'Realtime typing')}
+                  />
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="w-20 shrink-0 whitespace-nowrap text-xs text-default-600">{t('radio:cw.wpm', 'WPM')}</span>
@@ -972,11 +1124,18 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
           <Input
             ref={textInputRef}
             value={textInput}
-            onValueChange={(value) => setTextInput(value.toUpperCase())}
+            onValueChange={(value) => {
+              if (textInputMode === 'buffered') {
+                setTextInput(value.toUpperCase());
+              }
+            }}
             onKeyDown={handleKeyDown}
-            placeholder={t('radio:cw.textInputPlaceholder', 'Enter CW text...')}
+            onPaste={handleTextInputPaste}
+            placeholder={textInputMode === 'realtime'
+              ? t('radio:cw.realtimeTextInputPlaceholder', 'Realtime typing: typed characters are queued for CW immediately')
+              : t('radio:cw.textInputPlaceholder', 'Enter CW text...')}
             className="flex-1"
-            endContent={
+            endContent={textInputMode === 'buffered' ? (
               <Button
                 isIconOnly
                 size="sm"
@@ -987,17 +1146,17 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
               >
                 <FontAwesomeIcon icon={faPaperPlane} />
               </Button>
-            }
+            ) : null}
           />
         </div>
 
-        {lastSentText && (
+        {textInputMode === 'buffered' && lastSentText && (
           <div className={`rounded-lg p-2 transition-colors ${isManualTextPlaying ? 'bg-danger-50 dark:bg-danger-950/20' : 'bg-content2'}`}>
             <Button
               color={isManualTextPlaying ? 'danger' : 'default'}
               variant={isManualTextPlaying ? 'solid' : 'flat'}
               className={`relative h-12 w-full overflow-hidden rounded-md px-2 transition-colors ${isManualTextPlaying ? '' : 'hover:bg-primary-50 dark:hover:bg-primary-500/10'}`}
-              onPress={() => isManualTextPlaying ? stopMessage() : handleSendText(lastSentText)}
+              onPress={() => isManualTextPlaying ? handleStopCW() : handleSendText(lastSentText)}
               isDisabled={isActive && !isManualTextPlaying}
             >
               {isManualTextPlaying && (
