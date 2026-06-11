@@ -16,8 +16,9 @@
 
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, relative, extname } from 'path';
+import { fileURLToPath } from 'url';
 
-const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
+const ROOT = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
 const STRICT = process.argv.includes('--strict');
 
 // ─── ANSI 颜色 ───────────────────────────────────────────────────────────────

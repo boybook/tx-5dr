@@ -205,6 +205,7 @@ jobs:
         run: yarn build
         env:
           NODE_ENV: production
+          TX5DR_CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
 
       - name: Prepare portable Node runtime
         shell: bash

@@ -12,11 +12,11 @@
     }
   },
   "scripts": {
-    "build": "tsc && node scripts/build-ui.mjs",
-    "dev:server": "tsc --watch",
+    "build": "node scripts/generate-clublog-api-key.mjs && tsc && node scripts/build-ui.mjs",
+    "dev:server": "node scripts/generate-clublog-api-key.mjs && tsc --watch",
     "dev:ui": "node scripts/build-ui.mjs --watch",
-    "lint": "eslint src/**/*.ts",
-    "test": "vitest run --passWithNoTests"
+    "lint": "node scripts/generate-clublog-api-key.mjs && eslint src/**/*.ts",
+    "test": "node scripts/generate-clublog-api-key.mjs && vitest run --passWithNoTests"
   },
   "dependencies": {
     "@tx5dr/contracts": "workspace:*",

@@ -1,5 +1,8 @@
 {
   "$schema": "https://turborepo.org/schema.json",
+  "globalEnv": [
+    "TX5DR_CLUBLOG_API_KEY"
+  ],
   "globalPassThroughEnv": [
     "PORT",
     "WEB_PORT",
@@ -19,7 +22,8 @@
     "TX5DR_DEBUG_VOICE_TX",
     "TX5DR_DEBUG_REALTIME_JITTER",
     "RTC_DATA_AUDIO_UDP_PORT",
-    "RTC_DATA_AUDIO_ICE_UDP_MUX"
+    "RTC_DATA_AUDIO_ICE_UDP_MUX",
+    "TX5DR_CLUBLOG_API_KEY"
   ],
   "tasks": {
     "build": {
