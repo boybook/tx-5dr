@@ -1920,8 +1920,8 @@ export class IcomWlanConnection
 
     // 音频数据
     this.rig.events.on('audio', (frame) => {
-      // 转发音频帧给上层
-      this.emit('audioFrame', frame.pcm16);
+      // 转发音频帧给上层，并携带线级 seq 与 RX 到达时间用于丢包检测/诊断
+      this.emit('audioFrame', frame.pcm16, { seq: frame.seq, timestampMs: frame.timestampMs });
     });
 
     this.rig.events.on('scopeFrame', (frame) => {

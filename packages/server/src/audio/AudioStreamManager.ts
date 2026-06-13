@@ -7,6 +7,7 @@ import { ConfigManager } from '../config/config-manager.js';
 import { AudioDeviceManager } from './audio-device-manager.js';
 import { performance } from 'node:perf_hooks';
 import type { IcomWlanAudioAdapter } from './IcomWlanAudioAdapter.js';
+import type { AudioFrameMeta } from '../radio/connections/IRadioConnection.js';
 import type { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.js';
 import { createLogger } from '../utils/logger.js';
 import type { VoiceTxFrameMeta, VoiceTxProcessedFrameStats } from '../voice/VoiceTxDiagnostics.js';
@@ -394,12 +395,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.usingIcomWlanInput = true;
         this.icomWlanAudioAdapter.startReceiving();
 
-        // 订阅音频数据
-        this.icomWlanAudioAdapter.on('audioData', (samples: Float32Array) => {
+        // 订阅音频数据（携带线级 seq/timestamp 供 RingBuffer 精确丢包检测）
+        this.icomWlanAudioAdapter.on('audioData', (samples: Float32Array, meta?: AudioFrameMeta) => {
           void this.ingestInputSamples(
             samples,
             this.icomWlanAudioAdapter?.getSampleRate() ?? DEFAULT_INPUT_PROCESSING_SAMPLE_RATE,
             'icom-wlan',
+            meta,
           );
         });
 
@@ -1081,8 +1083,16 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     samples: Float32Array,
     sampleRate: number,
     sourceKind: NativeAudioInputSourceKind,
+    meta?: AudioFrameMeta,
   ): Promise<void> {
     if (samples.length === 0) return;
+
+    // 在源 chunk 进入时刻取一次到达时间；重采样是异步的，须用源到达时间而非重采样完成时间，
+    // 以避免重采样耗时被错误计入采集时钟模型。
+    // 注意：锚点统一使用校准时钟 this.now()，不用 meta.timestampMs（库侧未经 NTP 校准，
+    // 直接当锚点会引入 = 校准偏移量的恒定窗口偏移）。meta.seq 用于精确丢包检测。
+    const arrivalTimeMs = this.now();
+    const seq = meta?.seq;
 
     const sourceSampleRate = Number.isFinite(sampleRate) && sampleRate > 0
       ? Math.floor(sampleRate)
@@ -1091,7 +1101,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     const targetSampleRate = this.inputProcessingSampleRate;
     if (sourceSampleRate === targetSampleRate) {
-      this.writeProcessedInputAudio(samples, targetSampleRate);
+      this.writeProcessedInputAudio(samples, targetSampleRate, arrivalTimeMs, seq);
       return;
     }
 
@@ -1106,7 +1116,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         });
         return;
       }
-      this.writeProcessedInputAudio(resampled, targetSampleRate);
+      this.writeProcessedInputAudio(resampled, targetSampleRate, arrivalTimeMs, seq);
     } catch (error) {
       logger.error('audio input resample error', {
         sourceSampleRate,
@@ -1118,8 +1128,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     }
   }
 
-  private writeProcessedInputAudio(samples: Float32Array, sampleRate: number): void {
-    this.audioProvider.writeAudio(samples);
+  private writeProcessedInputAudio(samples: Float32Array, sampleRate: number, arrivalTimeMs?: number, seq?: number): void {
+    this.audioProvider.writeAudio(samples, arrivalTimeMs, seq);
     this.emit('audioData', samples, sampleRate);
   }
 

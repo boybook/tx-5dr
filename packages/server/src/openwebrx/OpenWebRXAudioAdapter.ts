@@ -2,7 +2,6 @@ import { EventEmitter } from 'eventemitter3';
 import { OpenWebRXClient } from '@openwebrx-js/api';
 import type { OpenWebRXSpectrumFrame, ServerConfig, Profile } from '@openwebrx-js/api';
 import type { OpenWebRXStationConfig } from '@tx5dr/contracts';
-import { RingBufferAudioProvider } from '../audio/AudioBufferProvider.js';
 import { createLogger } from '../utils/logger.js';
 import { OpenWebRXProfileService } from './OpenWebRXProfileService.js';
 
@@ -39,7 +38,6 @@ export interface OpenWebRXAudioAdapterEvents {
 export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEvents> {
   private client: OpenWebRXClient;
   private stationConfig: OpenWebRXStationConfig;
-  private audioProvider: RingBufferAudioProvider;
   private isReceiving = false;
   private _isConnected = false;
 
@@ -71,8 +69,6 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
       url: stationConfig.url,
       outputRate: INTERNAL_SAMPLE_RATE,
     });
-
-    this.audioProvider = new RingBufferAudioProvider(INTERNAL_SAMPLE_RATE, INTERNAL_SAMPLE_RATE * 5);
 
     // Bind handlers
     this.boundHandleAudio = this.handleAudioFrame.bind(this);
@@ -203,13 +199,6 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
   }
 
   /**
-   * Get the audio provider (RingBuffer) for AudioStreamManager integration
-   */
-  getAudioProvider(): RingBufferAudioProvider {
-    return this.audioProvider;
-  }
-
-  /**
    * Get connection status
    */
   isConnected(): boolean {
@@ -278,13 +267,6 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
 
   isDigitalDetailSpectrumEnabled(): boolean {
     return this.digitalDetailSpectrumMode !== null;
-  }
-
-  /**
-   * Clear audio buffer
-   */
-  clearBuffer(): void {
-    this.audioProvider.clear();
   }
 
   /**
@@ -398,10 +380,7 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
         samples[i] = pcm16[i] / 32768.0;
       }
 
-      // Write to ring buffer
-      this.audioProvider.writeAudio(samples);
-
-      // Emit event
+      // Forward to AudioStreamManager which owns the unified RX timeline ring buffer
       this.emit('audioData', samples);
     } catch (error) {
       logger.error('Failed to process audio frame', error);

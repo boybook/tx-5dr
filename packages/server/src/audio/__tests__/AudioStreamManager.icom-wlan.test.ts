@@ -154,6 +154,30 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
     await manager.stopStream();
   });
 
+  it('threads ICOM wire-level seq into the ring buffer for packet-loss detection', async () => {
+    const adapter = Object.assign(new EventEmitter(), {
+      sendAudio: vi.fn().mockResolvedValue(undefined),
+      getSampleRate: vi.fn().mockReturnValue(12000),
+      startReceiving: vi.fn(),
+      stopReceiving: vi.fn(),
+    });
+    const manager = new AudioStreamManager();
+    manager.setIcomWlanAudioAdapter(adapter as never);
+
+    await manager.startStream();
+    // 连续两个 seq 包 → lastSeq 推进、无丢包
+    adapter.emit('audioData', new Float32Array([0.1, 0.2]), { seq: 10, timestampMs: 1 });
+    adapter.emit('audioData', new Float32Array([0.3, 0.4]), { seq: 11, timestampMs: 2 });
+    // 跳过 seq 12 → 丢 1 包
+    adapter.emit('audioData', new Float32Array([0.5, 0.6]), { seq: 13, timestampMs: 3 });
+
+    const status = manager.getAudioProvider().getStatus() as unknown as { lastSeq: number; lostPackets: number };
+    expect(status.lastSeq).toBe(13);
+    expect(status.lostPackets).toBe(1);
+
+    await manager.stopStream();
+  });
+
   it('resamples ICOM input through the unified audioData pipeline when CW processing rate is 9600 Hz', async () => {
     const adapter = Object.assign(new EventEmitter(), {
       sendAudio: vi.fn().mockResolvedValue(undefined),

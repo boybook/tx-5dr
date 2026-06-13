@@ -638,13 +638,14 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     );
   });
 
-  it('labels RingBuffer overflow logs as RX/input buffer overflow', () => {
+  it('logs sliding-window eviction at debug (not warn) for the RX/input buffer', () => {
     const ringBuffer = new RingBuffer(12000, 10);
 
     ringBuffer.write(new Float32Array(200).fill(0.1));
 
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      'RX/input ring buffer overflow',
+    // 满缓冲淘汰最旧样本是正常稳态，记为 debug 避免误导性 WARN 噪声
+    expect(mockLogger.debug).toHaveBeenCalledWith(
+      'RX/input ring buffer evicted oldest samples (sliding window full)',
       expect.objectContaining({
         bufferKind: 'rx-input',
         droppedSamples: 80,

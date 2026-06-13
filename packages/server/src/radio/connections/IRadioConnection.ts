@@ -10,6 +10,16 @@ import type { HamlibConfig, LevelMeterReading, MeterCapabilities, TunerCapabilit
 import type { RadioIoQueueSnapshot } from './RadioIoQueue.js';
 
 /**
+ * 音频帧线级元数据（目前由 ICOM WLAN 提供）。
+ * - seq：协议线级序列号（16 位，0xffff 回绕），用于上层精确丢包检测。
+ * - timestampMs：RX 到达时间（未校准 Date.now()），仅用于诊断，不作同步基准。
+ */
+export interface AudioFrameMeta {
+  seq?: number;
+  timestampMs?: number;
+}
+
+/**
  * 电台连接类型
  */
 export enum RadioConnectionType {
@@ -156,8 +166,9 @@ export interface IRadioConnectionEvents {
 
   /**
    * 音频帧（仅 ICOM WLAN）
+   * @param meta 可选的线级元数据：seq（线级序列号，用于丢包检测）、timestampMs（RX 到达时间，诊断用）
    */
-  audioFrame: (pcm16: Buffer) => void;
+  audioFrame: (pcm16: Buffer, meta?: AudioFrameMeta) => void;
 
   /**
    * 数值表数据
