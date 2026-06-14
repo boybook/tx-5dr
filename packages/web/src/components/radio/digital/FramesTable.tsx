@@ -230,12 +230,16 @@ const MessageRow = React.memo<MessageRowProps>(({
 
   const formattedUtc = isNarrow ? message.utc.replace(/:/g, '') : message.utc;
 
-  // Format location
+  // Format location - only show when there's a valid callsign
+  // (country/flag info from fallback scan without a real callsign should not be displayed)
   const locationNode = useMemo(() => {
+    const hasValidCallsign = message.logbookAnalysis?.callsign;
     const displayName = isZh
       ? (message.countryZh || message.countryEn || message.country)
       : (message.countryEn || message.country);
     if (!displayName) return null;
+    // Don't show country/flag if there's no valid callsign (avoid showing info from fallback scan)
+    if (!hasValidCallsign) return null;
     const text = isNarrow ? (displayName.split('·')[1] || displayName) : displayName;
     const inner = (
       <div className={`flex min-w-0 items-center justify-end gap-1 ${isNarrow ? 'max-w-[80px]' : 'max-w-[140px]'}`}>
@@ -245,10 +249,10 @@ const MessageRow = React.memo<MessageRowProps>(({
         <FlagDisplay flag={message.flag} countryCode={message.countryCode} />
       </div>
     );
-    if (enableCallsignPopover && message.logbookAnalysis?.callsign) {
+    if (enableCallsignPopover && hasValidCallsign) {
       return (
         <CallsignInfoPopover
-          callsign={message.logbookAnalysis.callsign}
+          callsign={message.logbookAnalysis!.callsign}
           logbookAnalysis={message.logbookAnalysis}
           country={message.country}
           countryZh={message.countryZh}
