@@ -4,6 +4,9 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('AudioBufferProvider');
 
+/** 读取窗口填充率低于该阈值时记录诊断日志（提示音频滞后/丢失） */
+const UNDERFILL_LOG_THRESHOLD = 0.95;
+
 /**
  * 基于环形缓冲区的音频缓冲区提供者实现
  */
@@ -62,27 +65,39 @@ export class RingBufferAudioProvider implements AudioBufferProvider {
         durationMs,
       });
     }
-    
-    // 对于完整时隙请求，确保有足够的时间已经过去
-    if (durationMs >= 10000) { // 如果请求的是长时间数据（如完整时隙）
-      if (timeSinceSlotStart < durationMs) {
-        // 对于完整时隙，我们需要等待足够的时间
-        const actualDurationMs = Math.max(0, Math.min(durationMs, timeSinceSlotStart));
-        return this.ringBuffer.readFromSlotStart(startMs, actualDurationMs);
-      }
-    }
-    
-    // 确保不会读取超过实际可用的数据
+
+    // 确保不会读取超过实际已经过去的时间（尚未到来的部分由读取层零填充）
     const actualDurationMs = Math.max(0, Math.min(durationMs, timeSinceSlotStart));
 
-    return this.ringBuffer.readFromSlotStart(startMs, actualDurationMs);
+    const read = this.ringBuffer.readByWallClock(startMs, actualDurationMs);
+    if (read.requestedSamples > 0 && read.filledRatio < UNDERFILL_LOG_THRESHOLD) {
+      logger.debug('decode/spectrum window under-filled', {
+        startMs,
+        durationMs,
+        actualDurationMs,
+        filledRatio: Number(read.filledRatio.toFixed(3)),
+        futureSamples: read.futureSamples,
+        evictedSamples: read.evictedSamples,
+      });
+    }
+    return read.pcm;
   }
-  
+
+  /**
+   * 按挂钟时间窗口读取（诊断/测试用，暴露填充率等元数据）
+   */
+  readByWallClock(startMs: number, durationMs: number) {
+    return this.ringBuffer.readByWallClock(startMs, durationMs);
+  }
+
   /**
    * 写入音频数据到缓冲区
+   * @param samples PCM 样本
+   * @param arrivalTimeMs 该 chunk 的到达挂钟时间（缺省取注入时钟），驱动采集时钟模型
+   * @param seq 线级序列号（仅 ICOM 提供），用于精确丢包检测/补静音
    */
-  writeAudio(samples: Float32Array): void {
-    this.ringBuffer.write(samples);
+  writeAudio(samples: Float32Array, arrivalTimeMs?: number, seq?: number): void {
+    this.ringBuffer.write(samples, arrivalTimeMs, seq);
   }
   
   /**

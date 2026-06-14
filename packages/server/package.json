@@ -43,7 +43,7 @@
     "fastify": "^5.8.4",
     "fastify-plugin": "^5.1.0",
     "hamlib": "0.7.2",
-    "icom-wlan-node": "0.6.3",
+    "icom-wlan-node": "^0.6.4",
     "mic": "^2.1.2",
     "node-datachannel": "0.32.3",
     "node-forge": "^1.4.0",
