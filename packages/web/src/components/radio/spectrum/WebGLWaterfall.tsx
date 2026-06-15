@@ -1,6 +1,8 @@
 import React, { useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { Popover, PopoverTrigger, PopoverContent } from '@heroui/react';
+import { Popover, PopoverTrigger, PopoverContent, Button } from '@heroui/react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../../utils/logger';
 import type { SpectrumAxis, SpectrumRenderBatch, SpectrumStreamController } from '../../../spectrum/SpectrumStreamController';
@@ -141,6 +143,12 @@ interface WebGLWaterfallProps {
   showCycleMarkers?: boolean;
   /** 数字模式周期长度（毫秒），例如 FT8=15000、FT4=7500 */
   cycleSlotMs?: number | null;
+  /** 需要显示"低功率—可开启虚拟频率"弱警告的操作员 ID（由上层根据实测功率判断） */
+  lowPowerWarningOperatorIds?: string[];
+  /** 弱警告 popover 中点击"一键开启虚拟频率" */
+  onEnableFakeFrequency?: () => void;
+  /** 弱警告 popover 中点击"不再提示" */
+  onDismissLowPowerWarning?: () => void;
 }
 
 const FREQUENCY_GESTURE_DRAG_THRESHOLD_PX = 4;
@@ -623,8 +631,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   themeId = DEFAULT_SPECTRUM_THEME_ID,
   showCycleMarkers = false,
   cycleSlotMs = null,
+  lowPowerWarningOperatorIds = [],
+  onEnableFakeFrequency,
+  onDismissLowPowerWarning,
 }) => {
   const { t } = useTranslation('common');
+  const { t: tRadio } = useTranslation('radio');
+  const [hoveredWarningOperatorId, setHoveredWarningOperatorId] = React.useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cycleMarkerLayerRef = useRef<HTMLDivElement>(null);
@@ -3367,6 +3380,64 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
                   <div className="text-sm font-semibold">{callsign}</div>
                   <div className="text-xs text-default-400">
                     {frequency} Hz
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+          );
+        })}
+
+        {/* 虚拟频率弱警告：实测发射功率偏低的操作员，在其 TX 标记上方常驻一个小黄色感叹号；hover 展开详细说明与操作 */}
+        {lowPowerWarningOperatorIds.length > 0 && txFrequencies.map(({ operatorId, frequency }) => {
+          if (!lowPowerWarningOperatorIds.includes(operatorId)) return null;
+          // 与 TX 标记一致：拖动/冷却期使用本地覆盖频率，使警告图标实时跟随
+          const isOverridden = localFrequencyOverride?.operatorId === operatorId &&
+            (draggingOperatorId === operatorId || cooldownOperatorId === operatorId);
+          const displayFrequency = isOverridden ? localFrequencyOverride!.frequency : frequency;
+          const position = getMarkerPosition(displayFrequency);
+          if (position === null) return null;
+          const isOpen = hoveredWarningOperatorId === operatorId;
+          return (
+            <Popover
+              key={`tx-warn-${operatorId}`}
+              placement="top"
+              isOpen={isOpen}
+              onOpenChange={(open) => { if (!open) setHoveredWarningOperatorId(null); }}
+            >
+              <PopoverTrigger>
+                <div
+                  className="absolute z-10 pointer-events-auto cursor-help"
+                  style={{ left: `${position}%`, bottom: '1.5rem', transform: 'translateX(-50%)' }}
+                  onMouseEnter={() => setHoveredWarningOperatorId(operatorId)}
+                  onMouseLeave={() => setHoveredWarningOperatorId(null)}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  aria-label={tRadio('fakeFrequency.lowPowerTitle')}
+                >
+                  <FontAwesomeIcon icon={faTriangleExclamation} className="text-warning text-[10px] drop-shadow" />
+                </div>
+              </PopoverTrigger>
+              <PopoverContent
+                onMouseEnter={() => setHoveredWarningOperatorId(operatorId)}
+                onMouseLeave={() => setHoveredWarningOperatorId(null)}
+              >
+                <div className="px-3 py-3 max-w-[240px] space-y-2">
+                  <div className="text-xs font-semibold text-default-900">{tRadio('fakeFrequency.lowPowerTitle')}</div>
+                  <div className="text-xs text-default-500">{tRadio('fakeFrequency.lowPowerHint')}</div>
+                  <div className="flex gap-2 justify-end">
+                    <Button
+                      size="sm"
+                      variant="light"
+                      onPress={() => { setHoveredWarningOperatorId(null); onDismissLowPowerWarning?.(); }}
+                    >
+                      {tRadio('fakeFrequency.dontRemind')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      color="primary"
+                      onPress={() => { setHoveredWarningOperatorId(null); onEnableFakeFrequency?.(); }}
+                    >
+                      {tRadio('fakeFrequency.enableNow')}
+                    </Button>
                   </div>
                 </div>
               </PopoverContent>

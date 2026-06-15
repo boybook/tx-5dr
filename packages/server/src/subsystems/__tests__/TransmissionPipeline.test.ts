@@ -35,6 +35,8 @@ function createPipeline(configType: 'icom-wlan' | 'hamlib') {
       setPTT,
       setPTTActive: vi.fn(),
       getConfig: vi.fn(() => ({ type: configType })),
+      setTxDialOffset: vi.fn(async () => true),
+      clearTxDialOffset: vi.fn(async () => undefined),
     },
     spectrumScheduler: {
       setPTTActive: vi.fn(),
@@ -62,6 +64,7 @@ function createPipeline(configType: 'icom-wlan' | 'hamlib') {
     audioData: new Float32Array(12000),
     sampleRate: 12000,
     duration: 1,
+    txDialShiftHz: 0,
   };
 
   return { pipeline, deps, audioDone, mixedAudio };
@@ -145,5 +148,60 @@ describe('TransmissionPipeline PTT release timing', () => {
     audioDone.resolve();
     await handling;
     await pipeline.forceStopPTT();
+  });
+});
+
+describe('TransmissionPipeline fake frequency dial offset', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('applies the slot dial offset before PTT and restores it after stop', async () => {
+    const { pipeline, deps, audioDone, mixedAudio } = createPipeline('hamlib');
+    // shift 随音频负载流转：在 mixedAudio 上携带，PTT 时点据此平移 dial
+    mixedAudio.txDialShiftHz = 681;
+
+    const handling = (pipeline as unknown as {
+      handleMixedAudioReady: (mixedAudio: unknown) => Promise<void>;
+    }).handleMixedAudioReady(mixedAudio);
+
+    await vi.waitFor(() => {
+      expect(deps.radioManager.setPTT).toHaveBeenCalledWith(true);
+    });
+
+    // dial offset applied before PTT start, with the frozen slot shift
+    expect(deps.radioManager.setTxDialOffset).toHaveBeenCalledWith(681);
+    const offsetOrder = deps.radioManager.setTxDialOffset.mock.invocationCallOrder[0];
+    const pttOnOrder = deps.radioManager.setPTT.mock.invocationCallOrder[0];
+    expect(offsetOrder).toBeLessThan(pttOnOrder);
+
+    audioDone.resolve();
+    await handling;
+    await pipeline.forceStopPTT();
+
+    // dial restored after PTT stop
+    expect(deps.radioManager.clearTxDialOffset).toHaveBeenCalled();
+  });
+
+  it('does not touch the dial when the slot shift is zero', async () => {
+    const { pipeline, deps, audioDone, mixedAudio } = createPipeline('hamlib');
+    mixedAudio.txDialShiftHz = 0;
+
+    const handling = (pipeline as unknown as {
+      handleMixedAudioReady: (mixedAudio: unknown) => Promise<void>;
+    }).handleMixedAudioReady(mixedAudio);
+
+    await vi.waitFor(() => {
+      expect(deps.radioManager.setPTT).toHaveBeenCalledWith(true);
+    });
+
+    expect(deps.radioManager.setTxDialOffset).not.toHaveBeenCalled();
+
+    audioDone.resolve();
+    await handling;
+    await pipeline.forceStopPTT();
+
+    // clear is still called as an idempotent safety net
+    expect(deps.radioManager.clearTxDialOffset).toHaveBeenCalled();
   });
 });

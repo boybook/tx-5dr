@@ -1000,6 +1000,20 @@ export const api = {
     );
   },
 
+  /**
+   * 设置虚拟频率（Fake Frequency）开关
+   */
+  async setFakeFrequency(enabled: boolean, apiBase?: string): Promise<{ success: boolean; enabled: boolean }> {
+    return apiRequest<{ success: boolean; enabled: boolean }>(
+      '/radio/fake-frequency',
+      {
+        method: 'POST',
+        body: JSON.stringify({ enabled }),
+      },
+      apiBase
+    );
+  },
+
   // ========== 模式管理API ==========
 
   /**
@@ -2415,6 +2429,7 @@ export const {
   ,getTunerStatus
   ,setTuner
   ,startTuning
+  ,setFakeFrequency
   // PSKReporter 函数
   ,getPSKReporterConfig
   ,updatePSKReporterConfig

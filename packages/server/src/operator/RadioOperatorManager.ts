@@ -83,6 +83,8 @@ export interface RadioOperatorManagerOptions {
   getRadioFrequency?: () => Promise<number | null>;
   // 获取最近已知电台基频（Hz）；自动决策热路径使用它避免等待硬件I/O
   getKnownRadioFrequency?: () => number | null;
+  // 虚拟频率是否生效（已计入与 rig split 的互斥）；编码时据此决定是否平移音频载波
+  getFakeFrequencyEnabled?: () => boolean;
   callsignTracker?: CallsignContextTracker;
 }
 
@@ -103,7 +105,15 @@ export class RadioOperatorManager {
   private transmissionTracker: any; // TransmissionTracker实例
   private getRadioFrequency?: () => Promise<number | null>;
   private getKnownRadioFrequency?: () => number | null;
+  private getFakeFrequencyEnabled?: () => boolean;
   private callsignTracker?: CallsignContextTracker;
+
+  // 虚拟频率：当前时隙冻结的 dial 平移量（Hz）。按 slotStartMs 冻结，
+  // 保证同一时隙内中途加入的操作员复用同一 shift，与已编码音频匹配。
+  private currentSlotTxDialShift: { slotStartMs: number; shiftHz: number } | null = null;
+  // 虚拟频率常量：目标音频载波频率与滞回半宽（Hz）
+  private static readonly FAKE_FREQ_TARGET_HZ = 1500;
+  private static readonly FAKE_FREQ_HYSTERESIS_HZ = 200;
   // 插件管理器引用（延迟注入，引擎初始化完成后设置）
   private _pluginManager?: import('../plugin/PluginManager.js').PluginManager;
 
@@ -165,6 +175,7 @@ export class RadioOperatorManager {
     this.transmissionTracker = options.transmissionTracker;
     this.getRadioFrequency = options.getRadioFrequency;
     this.getKnownRadioFrequency = options.getKnownRadioFrequency;
+    this.getFakeFrequencyEnabled = options.getFakeFrequencyEnabled;
     this.callsignTracker = options.callsignTracker;
 
     // 监听发射请求
@@ -695,7 +706,16 @@ export class RadioOperatorManager {
         updates.frequency = clampedFreq;
         // 如果该操作员正在实际 PTT 发射，触发重编码和重混音
         if (this.activeTransmissionOperatorIds.has(operatorId)) {
-          this.checkAndTriggerTransmission(operatorId);
+          if (this.isFakeFrequencyCommittedForCurrentSlot()) {
+            // 虚拟频率已为本时隙提交 dial 平移：物理上 tone 期间不可移动 dial，
+            // 频率变更顺延到下一时隙（届时由 dial 吸收、音频回甜区）。仅更新 config，不重编码。
+            logger.debug('Deferring mid-slot frequency change to next slot (fake frequency committed)', {
+              operatorId,
+              clampedFreq,
+            });
+          } else {
+            this.checkAndTriggerTransmission(operatorId);
+          }
         }
       }
     }
@@ -969,6 +989,13 @@ export class RadioOperatorManager {
       logger.warn(`Duplicate transmit requests detected: ${requests.length} → ${uniqueRequests.length}`);
     }
 
+    // 虚拟频率：计算/复用本时隙统一的 dial 平移量（按 slotStartMs 冻结）
+    const fakeFrequencyEnabled = this.getFakeFrequencyEnabled?.() ?? false;
+    const slotShiftHz = this.resolveSlotTxDialShift(slotStartMs, uniqueRequests, fakeFrequencyEnabled);
+    if (slotShiftHz !== 0) {
+      logger.debug('Fake frequency active for slot', { slotStartMs, slotShiftHz });
+    }
+
     for (const request of uniqueRequests) {
       const operatorId = request.operatorId;
       const transmission = request.transmission;
@@ -1015,19 +1042,88 @@ export class RadioOperatorManager {
       // 记录该操作员的最新编码请求ID（用于丢弃过期编码结果）
       this.latestEncodeRequestIds.set(operatorId, requestId);
 
+      // 虚拟频率：编码音频载波归到甜区（origFreq - shift）；dial 将由发射管线反向平移 +shift，
+      // 使打到空中的绝对 RF 不变。clamp >=0 仅在操作员铺得极宽时兜底（极端情况下牺牲个别 RF 精度）。
+      const encodeFrequency = slotShiftHz !== 0
+        ? Math.max(0, Math.round(frequency - slotShiftHz))
+        : frequency;
+
+      // 多操作员物理限制：中途加入的操作员若远低于本时隙冻结的中心，frequency - shift 会 < 0
+      // 被钳位到 0，导致其空中 RF 偏移。单 VFO 无法对相距过远（铺宽 > ~1500Hz）的操作员分别居中。
+      // 初次整时隙计算因 freq∈[1,3000]、spread≤3000 → 恒 >=0，此告警只可能出现在极端中途加入。
+      if (slotShiftHz !== 0 && Math.round(frequency - slotShiftHz) < 0) {
+        logger.warn('Fake frequency clamp: operator audio below 0Hz under frozen slot shift, on-air RF will be offset', {
+          operatorId,
+          frequency,
+          slotShiftHz,
+        });
+      }
+
       // 提交到编码队列
       this.encodeQueue.push({
         operatorId,
         message: transmission,
-        frequency,
+        frequency: encodeFrequency,
         mode: currentMode.name === 'FT4' ? 'FT4' : 'FT8',
         slotStartMs: slotStartMs,
         timeSinceSlotStartMs: timeSinceSlotStartMs,
-        requestId
+        requestId,
+        txDialShiftHz: slotShiftHz
       });
 
       logger.debug(`Processed transmit request for operator ${operatorId}: "${transmission}", requestId=${requestId}`);
     }
+  }
+
+  /**
+   * 虚拟频率：计算/复用本时隙统一的 dial 平移量（Hz）。
+   * - 按 slotStartMs 冻结：同一时隙首次计算后固定，保证中途加入的操作员复用同一 shift，
+   *   与已编码音频及单次 dial 平移匹配（避免功能在时隙中途被切换导致 RF 错配）。
+   * - 多操作员：取所有发射操作员音频频率的 min/max 中心，把整团混音平移进甜区。
+   * - 滞回：中心已落在 [target±hysteresis] 内则不平移，避免每时隙来回切频。
+   */
+  private resolveSlotTxDialShift(
+    slotStartMs: number,
+    requests: TransmitRequest[],
+    enabled: boolean,
+  ): number {
+    if (this.currentSlotTxDialShift?.slotStartMs === slotStartMs) {
+      return this.currentSlotTxDialShift.shiftHz; // 本时隙已冻结
+    }
+
+    let shiftHz = 0;
+    if (enabled) {
+      const freqs = requests
+        .map((r) => this.operators.get(r.operatorId))
+        .filter((op): op is RadioOperator => !!op && op.isTransmitting)
+        .map((op) => op.config.frequency || 0)
+        .filter((f) => f > 0);
+
+      if (freqs.length > 0) {
+        const center = (Math.min(...freqs) + Math.max(...freqs)) / 2;
+        if (Math.abs(center - RadioOperatorManager.FAKE_FREQ_TARGET_HZ)
+            > RadioOperatorManager.FAKE_FREQ_HYSTERESIS_HZ) {
+          shiftHz = Math.round(center - RadioOperatorManager.FAKE_FREQ_TARGET_HZ);
+        }
+      }
+    }
+
+    this.currentSlotTxDialShift = { slotStartMs, shiftHz };
+    return shiftHz;
+  }
+
+  /**
+   * 虚拟频率：本时隙是否已提交 dial 平移计划（即已过 encodeStart、shift 已冻结）。
+   * 物理上 tone 期间不可移动 dial，因此一旦提交，发射中的频率变更必须顺延到下一时隙。
+   */
+  private isFakeFrequencyCommittedForCurrentSlot(): boolean {
+    if (!(this.getFakeFrequencyEnabled?.() ?? false)) {
+      return false;
+    }
+    const mode = this.getCurrentMode();
+    const now = this.clockSource.now();
+    const currentSlotStartMs = Math.floor(now / mode.slotMs) * mode.slotMs;
+    return this.currentSlotTxDialShift?.slotStartMs === currentSlotStartMs;
   }
 
   /**

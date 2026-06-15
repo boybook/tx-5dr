@@ -1259,4 +1259,11 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
     return reply.send({ success: true });
   });
+
+  // 虚拟频率（Fake Frequency）快捷开关：热更新 + 持久化到激活 Profile
+  fastify.post('/fake-frequency', { preHandler: [requireAbility('execute', 'RadioControl')] }, async (req, reply) => {
+    const enabled = !!(req.body as { enabled?: boolean } | undefined)?.enabled;
+    await engine.setFakeFrequencyEnabled(enabled);
+    return reply.send({ success: true, enabled });
+  });
 }

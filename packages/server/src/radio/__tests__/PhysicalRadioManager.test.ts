@@ -1557,4 +1557,51 @@ describe('PhysicalRadioManager', () => {
       vi.resetModules();
     }
   });
+
+  describe('fake frequency TX dial offset', () => {
+    it('applies the offset once and is idempotent for the same offset while active', async () => {
+      const setFrequency = vi.fn().mockResolvedValue(undefined);
+      asTestManager(manager).connection = { setFrequency };
+      asTestManager(manager).lastKnownFrequency = 7074000;
+
+      await expect(manager.setTxDialOffset(681)).resolves.toBe(true);
+      // tone 期间二次进入（中途切换/新操作员加入）相同 offset 不再写频
+      await expect(manager.setTxDialOffset(681)).resolves.toBe(true);
+
+      expect(setFrequency).toHaveBeenCalledTimes(1);
+      expect(setFrequency).toHaveBeenCalledWith(7074681);
+      expect(manager.isTxDialOffsetActive()).toBe(true);
+    });
+
+    it('rejects a conflicting offset while one is already active (dial is locked)', async () => {
+      const setFrequency = vi.fn().mockResolvedValue(undefined);
+      asTestManager(manager).connection = { setFrequency };
+      asTestManager(manager).lastKnownFrequency = 7074000;
+
+      await expect(manager.setTxDialOffset(681)).resolves.toBe(true);
+      // 不同 offset 被拒绝：dial 已为本次发射物理提交，不可中途改写
+      await expect(manager.setTxDialOffset(900)).resolves.toBe(true);
+
+      expect(setFrequency).toHaveBeenCalledTimes(1);
+      expect(setFrequency).toHaveBeenCalledWith(7074681);
+    });
+
+    it('restores the RX dial on clear and allows a fresh offset afterward', async () => {
+      const setFrequency = vi.fn().mockResolvedValue(undefined);
+      asTestManager(manager).connection = { setFrequency };
+      asTestManager(manager).lastKnownFrequency = 7074000;
+
+      await manager.setTxDialOffset(681);
+      await manager.clearTxDialOffset();
+
+      expect(manager.isTxDialOffsetActive()).toBe(false);
+      // 恢复写回原接收 dial
+      expect(setFrequency).toHaveBeenCalledWith(7074000);
+
+      // 下一次发射可重新提交新的 offset
+      setFrequency.mockClear();
+      await expect(manager.setTxDialOffset(900)).resolves.toBe(true);
+      expect(setFrequency).toHaveBeenCalledWith(7074900);
+    });
+  });
 });

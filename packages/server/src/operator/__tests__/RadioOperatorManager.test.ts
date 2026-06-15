@@ -52,6 +52,7 @@ function createManager(options: {
   getRadioFrequency?: () => Promise<number | null>;
   getKnownRadioFrequency?: () => number | null;
   callsignTracker?: { getGrid: (callsign: string) => string | undefined };
+  getFakeFrequencyEnabled?: () => boolean;
 }) {
   const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
   const slotPackManager = {
@@ -88,6 +89,7 @@ function createManager(options: {
     getRadioFrequency: options.getRadioFrequency,
     getKnownRadioFrequency: options.getKnownRadioFrequency,
     callsignTracker: options.callsignTracker as any,
+    getFakeFrequencyEnabled: options.getFakeFrequencyEnabled,
   });
 
   return {
@@ -1484,5 +1486,162 @@ describe('RadioOperatorManager operator status payloads', () => {
     manager.emitOperatorStatusUpdate('op1');
 
     expect(statusSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('RadioOperatorManager fake frequency dial shift', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function addTxOperator(manager: RadioOperatorManager, id: string, frequency: number) {
+    await manager.addOperator({
+      id,
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      frequency,
+      transmitCycles: [0],
+      mode: MODES.FT8,
+    });
+    const operator = manager.getOperatorById(id);
+    expect(operator).toBeDefined();
+    operator!.start();
+    return operator!;
+  }
+
+  function queueAndProcess(
+    manager: RadioOperatorManager,
+    eventEmitter: EventEmitter<DigitalRadioEngineEvents>,
+    operatorIds: string[],
+    slotStartMs: number,
+  ) {
+    for (const id of operatorIds) {
+      eventEmitter.emit('requestTransmit' as any, {
+        operatorId: id,
+        transmission: 'CQ BG4IAJ OM96',
+      });
+    }
+    manager.processPendingTransmissions(createSlotInfo(slotStartMs));
+  }
+
+  function mockConfigManager() {
+    return vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+      updateOperatorConfig: vi.fn().mockResolvedValue(undefined),
+      getOperatorConfig: vi.fn(() => undefined),
+      getFT8Config: () => ({ maxSameTransmissionCount: 20 }),
+    } as any);
+  }
+
+  it('attaches the frozen shift to the encode request and centers a single operator', async () => {
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 0,
+      encodeQueue,
+      getFakeFrequencyEnabled: () => true,
+    });
+    await addTxOperator(manager, 'op1', 2400);
+    manager.start();
+
+    queueAndProcess(manager, eventEmitter, ['op1'], 0);
+
+    expect(encodeQueue.push).toHaveBeenCalledTimes(1);
+    expect(encodeQueue.push.mock.calls[0][0]).toMatchObject({
+      operatorId: 'op1',
+      frequency: 1500, // 2400 - 900 → 甜区
+      txDialShiftHz: 900, // 2400 - 1500
+    });
+  });
+
+  it('uses the min/max center and shifts every operator by the same amount', async () => {
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 0,
+      encodeQueue,
+      getFakeFrequencyEnabled: () => true,
+    });
+    await addTxOperator(manager, 'op1', 1200);
+    await addTxOperator(manager, 'op2', 2400);
+    manager.start();
+
+    queueAndProcess(manager, eventEmitter, ['op1', 'op2'], 0);
+
+    // center = (1200 + 2400) / 2 = 1800 → shift = 300，两操作员同量平移
+    expect(encodeQueue.push).toHaveBeenCalledTimes(2);
+    const byId: Record<string, any> = Object.fromEntries(
+      encodeQueue.push.mock.calls.map((c: any[]) => [c[0].operatorId, c[0]]),
+    );
+    expect(byId.op1).toMatchObject({ frequency: 900, txDialShiftHz: 300 });
+    expect(byId.op2).toMatchObject({ frequency: 2100, txDialShiftHz: 300 });
+  });
+
+  it('does not shift when the center is within the hysteresis band', async () => {
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 0,
+      encodeQueue,
+      getFakeFrequencyEnabled: () => true,
+    });
+    await addTxOperator(manager, 'op1', 1550); // |1550 - 1500| = 50 <= 200 → 不平移
+    manager.start();
+
+    queueAndProcess(manager, eventEmitter, ['op1'], 0);
+
+    expect(encodeQueue.push.mock.calls[0][0]).toMatchObject({
+      operatorId: 'op1',
+      frequency: 1550,
+      txDialShiftHz: 0,
+    });
+  });
+
+  it('defers a mid-slot frequency change to the next slot once the shift is committed', async () => {
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 0,
+      encodeQueue,
+      getFakeFrequencyEnabled: () => true,
+    });
+    mockConfigManager();
+    await addTxOperator(manager, 'op1', 2400);
+    manager.start();
+
+    queueAndProcess(manager, eventEmitter, ['op1'], 0); // 提交本时隙 shift
+    manager.updateActiveTransmissionOperators(['op1']);
+
+    const retrigger = vi.spyOn(manager as any, 'checkAndTriggerTransmission').mockImplementation(() => {});
+    await manager.updateOperatorContext('op1', { frequency: 1000 });
+
+    // 已提交：不重编码，仅更新 config 供下一时隙采纳
+    expect(retrigger).not.toHaveBeenCalled();
+    expect(manager.getOperatorById('op1')?.config.frequency).toBe(1000);
+  });
+
+  it('re-triggers immediately when fake frequency is disabled (no regression)', async () => {
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 0,
+      encodeQueue,
+      getFakeFrequencyEnabled: () => false,
+    });
+    mockConfigManager();
+    await addTxOperator(manager, 'op1', 2400);
+    manager.start();
+
+    queueAndProcess(manager, eventEmitter, ['op1'], 0);
+    manager.updateActiveTransmissionOperators(['op1']);
+
+    const retrigger = vi.spyOn(manager as any, 'checkAndTriggerTransmission').mockImplementation(() => {});
+    await manager.updateOperatorContext('op1', { frequency: 1000 });
+
+    expect(retrigger).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,11 +1,11 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Switch, Tab, Tabs, Tooltip } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { ArrowsPointingOutIcon, ChevronDownIcon, ChevronUpIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
 import type { EngineMode, SpectrumFrame, SpectrumKind, SpectrumSessionVoiceState, SystemStatus } from '@tx5dr/contracts';
-import { getBandFromFrequency } from '@tx5dr/core';
-import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useSpectrum, useSplitState } from '../../../store/radioStore';
+import { api, getBandFromFrequency } from '@tx5dr/core';
+import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useRadioState, useCapabilityState, useCapabilityDescriptor, useSpectrum, useSplitState } from '../../../store/radioStore';
 import { useAbility, useCan } from '../../../store/authStore';
 import { createLogger } from '../../../utils/logger';
 import { setPreferredSpectrumKind } from '../../../utils/spectrumPreferences';
@@ -58,6 +58,12 @@ const SPECTRUM_HISTORY_LIMITS = {
   'openwebrx-sdr': 40,
 } satisfies Partial<Record<SpectrumKind, number>>;
 const SETTINGS_STORAGE_KEY = 'spectrum-range-settings';
+// 虚拟频率低功率弱警告相关常量
+const FAKE_FREQ_COMFORT_MIN_HZ = 500;   // 发射音频甜区下界（baseband Hz）
+const FAKE_FREQ_COMFORT_MAX_HZ = 2300;  // 发射音频甜区上界（baseband Hz）
+const FAKE_FREQ_OUTPUT_LOW_RATIO = 0.25;   // 实测输出/量程 低于此比例视为功率偏低
+const FAKE_FREQ_OUTPUT_LOW_PERCENT = 25;   // 无瓦数时按百分比判断
+const FAKE_FREQ_SETTING_LOW_RATIO = 0.5;   // RF 功率设置低于量程一半视为用户主动 QRP，不提示
 const OPENWEBRX_VIEWPORT_STORAGE_KEY = 'openwebrx-spectrum-viewports';
 const AUDIO_SOURCE: SpectrumKind = 'audio';
 const RADIO_SDR_SOURCE: SpectrumKind = 'radio-sdr';
@@ -819,6 +825,62 @@ const CollapsedSpectrumBar: React.FC<CollapsedSpectrumBarProps> = ({
   );
 };
 
+/**
+ * 虚拟频率低功率弱警告判定器：订阅高频 meterData 等，计算需要提示的操作员集合，
+ * 仅在结果集变化时通过 onChange 回写，避免高频 meter 刷新拖累整个频谱子树重渲染。
+ * 本组件不渲染任何内容。
+ */
+const FakeFreqLowPowerWatcher: React.FC<{
+  active: boolean;
+  onChange: (ids: string[]) => void;
+}> = ({ active, onChange }) => {
+  const { state: radioState } = useRadioState();
+  const { pttStatus } = usePTTState();
+  const txFrequencies = useTxFrequencies();
+  const rfPowerState = useCapabilityState('rf_power');
+  const rfPowerDescriptor = useCapabilityDescriptor('rf_power');
+  const lastKeyRef = useRef<string>('');
+
+  const ids = useMemo(() => {
+    if (!active) return [];
+    if (!pttStatus.isTransmitting || pttStatus.operatorIds.length === 0) return [];
+
+    // 实测输出功率是否偏低
+    const power = radioState.meterData?.power;
+    if (!power) return [];
+    let outputLow = false;
+    if (power.watts != null && power.maxWatts != null && power.maxWatts > 0) {
+      outputLow = power.watts / power.maxWatts < FAKE_FREQ_OUTPUT_LOW_RATIO;
+    } else if (power.percent != null) {
+      outputLow = power.percent < FAKE_FREQ_OUTPUT_LOW_PERCENT;
+    }
+    if (!outputLow) return [];
+
+    // 电台 RF 功率设置被用户主动调低（QRP）则不提示
+    if (typeof rfPowerState?.value === 'number' && rfPowerDescriptor?.range) {
+      const { min, max } = rfPowerDescriptor.range;
+      if (max > min && (rfPowerState.value - min) / (max - min) < FAKE_FREQ_SETTING_LOW_RATIO) return [];
+    }
+
+    // 仅对发射音频确实偏离甜区的操作员提示
+    return txFrequencies
+      .filter((tx) => pttStatus.operatorIds.includes(tx.operatorId)
+        && (tx.frequency < FAKE_FREQ_COMFORT_MIN_HZ || tx.frequency > FAKE_FREQ_COMFORT_MAX_HZ))
+      .map((tx) => tx.operatorId);
+  }, [active, pttStatus.isTransmitting, pttStatus.operatorIds, radioState.meterData,
+    rfPowerState?.value, rfPowerDescriptor?.range, txFrequencies]);
+
+  useEffect(() => {
+    const key = ids.join(',');
+    if (key !== lastKeyRef.current) {
+      lastKeyRef.current = key;
+      onChange(ids);
+    }
+  }, [ids, onChange]);
+
+  return null;
+};
+
 export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   className = '',
   height = 200,
@@ -840,6 +902,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const { pttStatus } = usePTTState();
   const { splitEnabled, splitTxFrequency } = useSplitState();
   const canSetFrequency = useCan('execute', 'RadioFrequency');
+  const canControlRadio = useCan('execute', 'RadioControl');
   const ability = useAbility();
   const canWriteFrequency = canWriteRadioFrequency(canSetFrequency, radioConnection.coreCapabilities);
   const canWriteTargetFrequency = useCallback((frequency: number) => (
@@ -907,6 +970,22 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const rxFrequencies = useTargetRxFrequencies();
   const txFrequencies = useTxFrequencies();
   const { currentOperatorId } = useCurrentOperatorId();
+
+  // 虚拟频率弱警告：判定逻辑放在独立的 FakeFreqLowPowerWatcher 中订阅高频 meterData，
+  // 仅当结果集变化时才回写到这里，避免每次 meter 刷新都重渲染整个频谱子树。
+  const fakeFrequencyEnabled = radioConnection.radioConfig?.fakeFrequency?.enabled ?? false;
+  // 仅内存态：刷新网页后重置，会再次提示（不持久化到 localStorage）
+  const [lowPowerHintDismissed, setLowPowerHintDismissed] = useState<boolean>(false);
+  const [lowPowerWarningOperatorIds, setLowPowerWarningOperatorIds] = useState<string[]>([]);
+
+  const handleEnableFakeFrequency = useCallback(() => {
+    void api.setFakeFrequency(true).catch((error) => {
+      logger.error('Failed to enable fake frequency from low-power hint', error);
+    });
+  }, []);
+  const handleDismissLowPowerHint = useCallback(() => {
+    setLowPowerHintDismissed(true);
+  }, []);
   const effectiveSelectedKind = selectedKind ?? capabilities?.defaultKind ?? AUDIO_SOURCE;
   const activeSpectrumKind = subscribedKind ?? effectiveSelectedKind;
   const isAudioSpectrumSelected = effectiveSelectedKind === AUDIO_SOURCE;
@@ -1965,6 +2044,10 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       onWheel={isOpenWebRXSdrSelected && canOpenWebRXLocalViewportZoom ? handleOpenWebRXWheel : undefined}
       onMouseDown={isOpenWebRXSdrSelected && canOpenWebRXLocalViewportPan ? handleOpenWebRXMouseDown : undefined}
     >
+      <FakeFreqLowPowerWatcher
+        active={canControlRadio && !fakeFrequencyEnabled && !lowPowerHintDismissed}
+        onChange={setLowPowerWarningOperatorIds}
+      />
       <WebGLWaterfall
         key={waterfallViewKey}
         controller={streamController}
@@ -1993,6 +2076,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         presetMarkers={presetMarkers}
         rxFrequencies={displaySpectrumMarkers.rxFrequencies}
         txFrequencies={displaySpectrumMarkers.txFrequencies}
+        lowPowerWarningOperatorIds={lowPowerWarningOperatorIds}
+        onEnableFakeFrequency={handleEnableFakeFrequency}
+        onDismissLowPowerWarning={handleDismissLowPowerHint}
         onTxFrequencyChange={displayTxFrequencyChange}
         onTxBandOverlayFrequencyChange={voiceOverlayIsInteractive ? (_id, frequency) => void handleRadioSdrFrequencyGesture(frequency) : undefined}
         onFrequencyBandOverlayPreviewChange={isAudioSpectrumSelected ? onFrequencyBandOverlayPreviewChange : undefined}

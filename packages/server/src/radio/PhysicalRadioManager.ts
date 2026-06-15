@@ -372,6 +372,16 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private _isPTTActive = false;
 
   /**
+   * 虚拟频率（Fake Frequency）发射期临时 dial 平移状态。
+   * 平移期间不更新 lastKnownFrequency，保证前端 dial 显示/TX 标记/广播保持用户视角；
+   * 同时作为频率监测的跳过条件，杜绝平移窗口被轮询拉回。
+   */
+  private txDialOffsetActive = false;
+  private txDialRestoreFrequency: number | null = null;
+  // 本次发射已提交的 dial 平移量（Hz）。一旦提交即锁定，tone 期间拒绝中途改写。
+  private txDialCurrentOffsetHz = 0;
+
+  /**
    * 当前连接会话的核心能力状态缓存。
    * 一旦明确判定为 unsupported，当前会话内不再重复访问底层连接。
    */
@@ -449,6 +459,18 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   getConfig(): HamlibConfig {
     return { ...this.currentConfig };
+  }
+
+  /**
+   * 虚拟频率：热更新当前配置中的开关（无需重启引擎/重连）。
+   * 编码时通过 getConfig().fakeFrequency 读取最新值。
+   */
+  setFakeFrequencyEnabled(enabled: boolean): void {
+    this.currentConfig = {
+      ...this.currentConfig,
+      fakeFrequency: { enabled },
+    };
+    logger.info(`Fake frequency ${enabled ? 'enabled' : 'disabled'}`);
   }
 
   /**
@@ -981,6 +1003,113 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       logger.error(`Failed to set frequency: ${(error as Error).message}`);
       this.handleConnectionError(error as Error);
       return false;
+    }
+  }
+
+  /**
+   * 是否处于虚拟频率发射期平移中。
+   * 作为频率监测/能力轮询的跳过条件，避免平移期间被误判为用户改频。
+   */
+  isTxDialOffsetActive(): boolean {
+    return this.txDialOffsetActive;
+  }
+
+  /**
+   * 电台 rig split 是否已开启（用于虚拟频率互斥判断）。
+   * 读取能力状态缓存，缺失时按未开启处理（best-effort，绝不抛错）。
+   */
+  isSplitEnabled(): boolean {
+    try {
+      const state = this.capabilityManager
+        .getCapabilityStates()
+        .find((capability) => capability.id === 'split_enabled');
+      return state?.value === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 虚拟频率：发射前临时把 dial 频率反向平移 offsetHz。
+   * 直接经连接层 critical queue 写入，**不更新 lastKnownFrequency**，保证对用户透明。
+   * 与 clearTxDialOffset() 成对调用（由 TransmissionPipeline 在 PTT 起停时驱动）。
+   */
+  async setTxDialOffset(offsetHz: number): Promise<boolean> {
+    if (!this.connection) {
+      logger.warn('Cannot apply TX dial offset: radio not connected');
+      return false;
+    }
+    if (this.isCoreCapabilityUnsupported('writeFrequency')) {
+      logger.debug('Skipping TX dial offset because write frequency is marked unsupported');
+      return false;
+    }
+    if (!Number.isFinite(offsetHz) || offsetHz === 0) {
+      return false;
+    }
+    // 幂等加锁：dial 是本次发射的物理提交，tone 期间不可移动。
+    // 中途切换/新操作员加入会二次进入 handleMixedAudioReady → 此处重入。
+    if (this.txDialOffsetActive) {
+      if (this.txDialCurrentOffsetHz !== offsetHz) {
+        logger.warn('Ignoring conflicting TX dial offset while one is already active', {
+          activeOffsetHz: this.txDialCurrentOffsetHz,
+          requestedOffsetHz: offsetHz,
+        });
+      }
+      return true;
+    }
+    const rxDial = this.lastKnownFrequency;
+    if (rxDial === null || rxDial <= 0) {
+      logger.warn('Cannot apply TX dial offset: RX dial frequency unknown');
+      return false;
+    }
+    const target = rxDial + offsetHz;
+    // 先置守卫，使频率监测在 PTT 真正激活前的窗口也跳过
+    this.txDialRestoreFrequency = rxDial;
+    this.txDialCurrentOffsetHz = offsetHz;
+    this.txDialOffsetActive = true;
+    try {
+      await this.connection.setFrequency(target);
+      logger.debug('TX dial offset applied', {
+        rxDialHz: rxDial,
+        offsetHz,
+        txDialHz: target,
+      });
+      return true;
+    } catch (error) {
+      this.txDialOffsetActive = false;
+      this.txDialRestoreFrequency = null;
+      this.txDialCurrentOffsetHz = 0;
+      logger.error(`Failed to apply TX dial offset: ${(error as Error).message}`);
+      return false;
+    }
+  }
+
+  /**
+   * 虚拟频率：发射结束后把 dial 频率恢复到接收频点。
+   * 兜底保证——即使恢复写入失败也清除平移守卫并记录 error，避免接收 dial 永久跑偏。
+   */
+  async clearTxDialOffset(): Promise<void> {
+    if (!this.txDialOffsetActive) {
+      return;
+    }
+    const restore = this.txDialRestoreFrequency;
+    // 释放守卫后走标准 setFrequency 恢复：重建 settle 窗口与频率写跟踪，
+    // 因恢复目标 == 原接收 dial == 当前 lastKnownFrequency，前端不会产生跳变。
+    this.txDialOffsetActive = false;
+    this.txDialRestoreFrequency = null;
+    this.txDialCurrentOffsetHz = 0;
+    if (restore === null || restore <= 0) {
+      return;
+    }
+    try {
+      const ok = await this.setFrequency(restore);
+      if (!ok) {
+        logger.error('Failed to restore RX dial after TX dial offset', { restoreHz: restore });
+      } else {
+        logger.debug('TX dial offset cleared, RX dial restored', { rxDialHz: restore });
+      }
+    } catch (error) {
+      logger.error(`Failed to restore RX dial after TX dial offset: ${(error as Error).message}`);
     }
   }
 
@@ -2758,6 +2887,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       return;
     }
 
+    if (this.txDialOffsetActive) {
+      // 虚拟频率平移窗口：dial 已被临时改动，跳过监测以免被误判为用户改频并拉回
+      return;
+    }
+
     if (this.connection.isCriticalOperationActive?.()) {
       logger.debug('Skipping frequency monitoring because a critical radio operation is in progress');
       return;
@@ -2827,7 +2961,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       .catch(() => undefined)
       .then(async () => {
         const connection = this.connection;
-        if (!connection || this._isPTTActive) {
+        if (!connection || this._isPTTActive || this.txDialOffsetActive) {
           return;
         }
 
