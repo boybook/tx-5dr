@@ -271,10 +271,26 @@ jobs:
             # Bundle MSVC runtime DLLs app-locally so portable archives work on clean Windows installs.
             # Use vswhere to find VC Redist directory (more reliable on GitHub Actions)
             VC_REDIST_DIR=""
+            VC_RUNTIME_DLLS=(
+              vcruntime140.dll
+              vcruntime140_1.dll
+              msvcp140.dll
+              msvcp140_1.dll
+              msvcp140_atomic_wait.dll
+            )
             
             # Try vswhere first (usually available on GitHub Actions)
-            if command -v vswhere &>/dev/null; then
-              VC_REDIST_DIR=$(vswhere -products * -find "VC/Redist/MSVC/*/${REDIST_ARCH}/Microsoft.VC14*.CRT" 2>/dev/null | sort -V | tail -1)
+            if [ -z "$VC_REDIST_DIR" ] || [ ! -d "$VC_REDIST_DIR" ]; then
+              if command -v vswhere &>/dev/null; then
+                VC_REDIST_DIR=$(vswhere -products * -find "VC/Redist/MSVC/*/${REDIST_ARCH}/Microsoft.VC14*.CRT" 2>/dev/null | sort -V | tail -1)
+                if [ -n "$VC_REDIST_DIR" ] && [ -d "$VC_REDIST_DIR" ]; then
+                  # Copy DLLs from VS directory
+                  for dll in "${VC_RUNTIME_DLLS[@]}"; do
+                    cp -f "${VC_REDIST_DIR}/${dll}" "resources/bin/${TRIPLET}/${dll}"
+                  done
+                  echo "✅ Found VC Redistributable using vswhere: ${VC_REDIST_DIR}"
+                fi
+              fi
             fi
             
             # Fallback: search Visual Studio directories
@@ -283,88 +299,95 @@ jobs:
                 if [ -d "$vs_path" ]; then
                   VC_REDIST_DIR=$(find "$vs_path" -type d -path "*/VC/Redist/MSVC/*/${REDIST_ARCH}/Microsoft.VC14*.CRT" 2>/dev/null | sort -V | tail -1)
                   if [ -n "$VC_REDIST_DIR" ] && [ -d "$VC_REDIST_DIR" ]; then
+                    # Copy DLLs from VS directory
+                    for dll in "${VC_RUNTIME_DLLS[@]}"; do
+                      cp -f "${VC_REDIST_DIR}/${dll}" "resources/bin/${TRIPLET}/${dll}"
+                    done
+                    echo "✅ Found VC Redistributable in Visual Studio directory: ${VC_REDIST_DIR}"
                     break
                   fi
                 fi
               done
             fi
 
-            # If still not found, download using winget (available on modern Windows)
+            # If still not found, download from node_modules
             if [ -z "$VC_REDIST_DIR" ] || [ ! -d "$VC_REDIST_DIR" ]; then
-              echo "VC Redistributable not found, trying winget..."
-              if command -v winget &>/dev/null; then
-                # Install VC++ Redistributable using winget
-                case "${ARCH}" in
-                  x64)
-                    winget install --accept-source-agreements --accept-package-agreements Microsoft.VCRedist.2022.x64
-                    ;;
-                  arm64)
-                    winget install --accept-source-agreements --accept-package-agreements Microsoft.VCRedist.2022.arm64
-                    ;;
-                esac
-                
-                # Now try to find it again
-                if command -v vswhere &>/dev/null; then
-                  VC_REDIST_DIR=$(vswhere -products * -find "VC/Redist/MSVC/*/${REDIST_ARCH}/Microsoft.VC14*.CRT" 2>/dev/null | sort -V | tail -1)
-                fi
-              fi
-            fi
-
-            # Final fallback: download specific DLLs from a known location
-            if [ -z "$VC_REDIST_DIR" ] || [ ! -d "$VC_REDIST_DIR" ]; then
-              echo "VC Redistributable not found, downloading individual DLLs..."
+              echo "VC Redistributable not found, searching node_modules..."
               mkdir -p "resources/bin/${TRIPLET}"
               
-              # Download from a reliable source (Node.js ships with some of these)
-              # Use the node_modules or other available sources
-              NODE_MODULES_DIR="node_modules"
-              
-              # List of DLLs we need
-              VC_RUNTIME_DLLS=(
-                vcruntime140.dll
-                vcruntime140_1.dll
-                msvcp140.dll
-                msvcp140_1.dll
-                msvcp140_atomic_wait.dll
-              )
-              
-              # Search for these DLLs in common locations
-              FOUND_ALL=0
+              FOUND_ALL=1
               for dll in "${VC_RUNTIME_DLLS[@]}"; do
-                # Search in node_modules
-                FOUND_PATH=$(find "$NODE_MODULES_DIR" -name "$dll" -type f 2>/dev/null | head -1)
+                FOUND_PATH=$(find "node_modules" -name "$dll" -type f 2>/dev/null | head -1)
                 if [ -n "$FOUND_PATH" ]; then
                   cp -f "$FOUND_PATH" "resources/bin/${TRIPLET}/$dll"
                   echo "Found $dll: $FOUND_PATH"
-                  FOUND_ALL=1
                 else
-                  echo "Warning: Could not find $dll"
+                  echo "Warning: Could not find $dll in node_modules"
                   FOUND_ALL=0
                 fi
               done
               
               if [ "$FOUND_ALL" -eq 1 ]; then
                 echo "✅ Successfully collected all VC runtime DLLs from node_modules"
-                # Set VC_REDIST_DIR to the destination so the rest of the script works
+                VC_REDIST_DIR="resources/bin/${TRIPLET}"
+              fi
+            fi
+
+            # Final fallback: download and extract from Microsoft's VC++ Redistributable
+            if [ -z "$VC_REDIST_DIR" ] || [ ! -d "$VC_REDIST_DIR" ]; then
+              echo "VC Redistributable not found, downloading from Microsoft..."
+              mkdir -p vc_redist_extract
+
+              case "${ARCH}" in
+                x64)
+                  VC_REDIST_URL="https://aka.ms/vs/17/release/vc_redist.x64.exe"
+                  ;;
+                arm64)
+                  VC_REDIST_URL="https://aka.ms/vs/17/release/vc_redist.arm64.exe"
+                  ;;
+                *)
+                  echo "Unsupported Windows VC runtime arch: ${ARCH}" >&2
+                  exit 1
+                  ;;
+              esac
+
+              echo "Downloading VC++ Redistributable from: ${VC_REDIST_URL}"
+              curl -fsSL -o vc_redist_extract/vc_redist.exe "${VC_REDIST_URL}"
+
+              # Extract the exe (it's a self-extracting archive containing CAB files)
+              7z x -y "vc_redist_extract/vc_redist.exe" -o"vc_redist_extract/extracted" >/dev/null
+
+              # Find and extract CAB files
+              mkdir -p "vc_redist_extract/cab_extracted"
+              for cab_file in $(find vc_redist_extract/extracted -name "*.cab" 2>/dev/null); do
+                echo "Extracting CAB: $cab_file"
+                7z x -y "$cab_file" -o"vc_redist_extract/cab_extracted" >/dev/null
+              done
+
+              # Find the CRT DLLs in extracted CAB files
+              mkdir -p "resources/bin/${TRIPLET}"
+              FOUND_ALL=1
+              for dll in "${VC_RUNTIME_DLLS[@]}"; do
+                FOUND_PATH=$(find "vc_redist_extract/cab_extracted" -name "$dll" -type f 2>/dev/null | head -1)
+                if [ -n "$FOUND_PATH" ]; then
+                  cp -f "$FOUND_PATH" "resources/bin/${TRIPLET}/$dll"
+                  echo "Found $dll: $FOUND_PATH"
+                else
+                  echo "Error: Could not find $dll in VC Redistributable" >&2
+                  FOUND_ALL=0
+                fi
+              done
+
+              if [ "$FOUND_ALL" -eq 1 ]; then
+                echo "✅ Successfully extracted all VC runtime DLLs from VC Redistributable"
                 VC_REDIST_DIR="resources/bin/${TRIPLET}"
               else
-                echo "❌ Failed to find all required VC runtime DLLs"
+                echo "❌ Failed to extract all required VC runtime DLLs" >&2
                 exit 1
               fi
             fi
 
             echo "Using VC runtime directory: ${VC_REDIST_DIR}"
-
-            for dll in "${VC_RUNTIME_DLLS[@]}"; do
-              src="${VC_REDIST_DIR}/${dll}"
-              if [ ! -f "${src}" ]; then
-                echo "Required VC runtime DLL not found: ${src}" >&2
-                echo "Available files in ${VC_REDIST_DIR}:" >&2
-                ls -la "${VC_REDIST_DIR}" >&2 || true
-                exit 1
-              fi
-              cp -f "${src}" "resources/bin/${TRIPLET}/${dll}"
-            done
 
             # Clean up temporary archive and extracted directory to avoid packaging them
             rm -rf "${PKG}" "${SRC_DIR}"
