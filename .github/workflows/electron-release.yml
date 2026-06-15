@@ -269,71 +269,92 @@ jobs:
             cp -f ${SRC_DIR}/LICENSE resources/licenses/nodejs-LICENSE || true
 
             # Bundle MSVC runtime DLLs app-locally so portable archives work on clean Windows installs.
-            # First, try to find CRT in Visual Studio installation directory
+            # Use vswhere to find VC Redist directory (more reliable on GitHub Actions)
             VC_REDIST_DIR=""
-            for vs_path in "/c/Program Files/Microsoft Visual Studio/2022" "/c/Program Files (x86)/Microsoft Visual Studio/2022"; do
-              if [ -d "$vs_path" ]; then
-                VC_REDIST_DIR=$(find "$vs_path" -type d -path "*/VC/Redist/MSVC/*/${REDIST_ARCH}/Microsoft.VC14*.CRT" 2>/dev/null | sort -V | tail -1)
-                if [ -n "$VC_REDIST_DIR" ] && [ -d "$VC_REDIST_DIR" ]; then
-                  break
-                fi
-              fi
-            done
-
-            # If not found in VS directory, download and extract from VC++ Redistributable package
+            
+            # Try vswhere first (usually available on GitHub Actions)
+            if command -v vswhere &>/dev/null; then
+              VC_REDIST_DIR=$(vswhere -products * -find "VC/Redist/MSVC/*/${REDIST_ARCH}/Microsoft.VC14*.CRT" 2>/dev/null | sort -V | tail -1)
+            fi
+            
+            # Fallback: search Visual Studio directories
             if [ -z "$VC_REDIST_DIR" ] || [ ! -d "$VC_REDIST_DIR" ]; then
-              echo "VC Redistributable not found in Visual Studio directory, downloading from NuGet..."
-              mkdir -p vc_redist_extract
-
-              # Use NuGet to download the VC++ CRT package
-              case "${ARCH}" in
-                x64)
-                  NUGET_ARCH="x64"
-                  ;;
-                arm64)
-                  NUGET_ARCH="arm64"
-                  ;;
-                *)
-                  echo "Unsupported Windows VC runtime arch: ${ARCH}" >&2
-                  exit 1
-                  ;;
-              esac
-
-              # Download Microsoft.VC143.CRT NuGet package
-              NUGET_URL="https://api.nuget.org/v3-flatcontainer/microsoft.vc143.crt/14.38.33130/microsoft.vc143.crt.14.38.33130.nupkg"
-              echo "Downloading Microsoft.VC143.CRT NuGet package from: ${NUGET_URL}"
-              curl -fsSL -o vc_redist_extract/vc_redist.nupkg "${NUGET_URL}"
-
-              # Extract the NuGet package (it's a zip file)
-              7z x -y "vc_redist_extract/vc_redist.nupkg" -o"vc_redist_extract/extracted" >/dev/null
-
-              # Find the CRT directory in extracted files (e.g., build/native/bin/x64/vc143.crt)
-              VC_REDIST_DIR=$(find vc_redist_extract/extracted -type d -name "vc143.crt" 2>/dev/null | head -1)
-
-              if [ -z "$VC_REDIST_DIR" ] || [ ! -d "$VC_REDIST_DIR" ]; then
-                # Try alternative path structure
-                VC_REDIST_DIR=$(find vc_redist_extract/extracted -type d -path "*native/bin/${NUGET_ARCH}*" 2>/dev/null | head -1)
-              fi
-
-              if [ -z "$VC_REDIST_DIR" ] || [ ! -d "$VC_REDIST_DIR" ]; then
-                echo "Unable to find Visual C++ Redistributable CRT directory after extraction." >&2
-                echo "Searched in: vc_redist_extract/extracted" >&2
-                find vc_redist_extract/extracted -type d 2>/dev/null | head -20 >&2 || true
-                exit 1
-              fi
-
-              echo "Successfully extracted VC Redistributable from NuGet: ${VC_REDIST_DIR}"
-            else
-              echo "Found VC Redistributable in Visual Studio directory: ${VC_REDIST_DIR}"
+              for vs_path in "/c/Program Files/Microsoft Visual Studio/2022" "/c/Program Files (x86)/Microsoft Visual Studio/2022"; do
+                if [ -d "$vs_path" ]; then
+                  VC_REDIST_DIR=$(find "$vs_path" -type d -path "*/VC/Redist/MSVC/*/${REDIST_ARCH}/Microsoft.VC14*.CRT" 2>/dev/null | sort -V | tail -1)
+                  if [ -n "$VC_REDIST_DIR" ] && [ -d "$VC_REDIST_DIR" ]; then
+                    break
+                  fi
+                fi
+              done
             fi
 
-            VC_RUNTIME_DLLS=(
-              vcruntime140.dll
-              vcruntime140_1.dll
-              msvcp140.dll
-              msvcp140_1.dll
-              msvcp140_atomic_wait.dll
-            )
+            # If still not found, download using winget (available on modern Windows)
+            if [ -z "$VC_REDIST_DIR" ] || [ ! -d "$VC_REDIST_DIR" ]; then
+              echo "VC Redistributable not found, trying winget..."
+              if command -v winget &>/dev/null; then
+                # Install VC++ Redistributable using winget
+                case "${ARCH}" in
+                  x64)
+                    winget install --accept-source-agreements --accept-package-agreements Microsoft.VCRedist.2022.x64
+                    ;;
+                  arm64)
+                    winget install --accept-source-agreements --accept-package-agreements Microsoft.VCRedist.2022.arm64
+                    ;;
+                esac
+                
+                # Now try to find it again
+                if command -v vswhere &>/dev/null; then
+                  VC_REDIST_DIR=$(vswhere -products * -find "VC/Redist/MSVC/*/${REDIST_ARCH}/Microsoft.VC14*.CRT" 2>/dev/null | sort -V | tail -1)
+                fi
+              fi
+            fi
+
+            # Final fallback: download specific DLLs from a known location
+            if [ -z "$VC_REDIST_DIR" ] || [ ! -d "$VC_REDIST_DIR" ]; then
+              echo "VC Redistributable not found, downloading individual DLLs..."
+              mkdir -p "resources/bin/${TRIPLET}"
+              
+              # Download from a reliable source (Node.js ships with some of these)
+              # Use the node_modules or other available sources
+              NODE_MODULES_DIR="node_modules"
+              
+              # List of DLLs we need
+              VC_RUNTIME_DLLS=(
+                vcruntime140.dll
+                vcruntime140_1.dll
+                msvcp140.dll
+                msvcp140_1.dll
+                msvcp140_atomic_wait.dll
+              )
+              
+              # Search for these DLLs in common locations
+              FOUND_ALL=0
+              for dll in "${VC_RUNTIME_DLLS[@]}"; do
+                # Search in node_modules
+                FOUND_PATH=$(find "$NODE_MODULES_DIR" -name "$dll" -type f 2>/dev/null | head -1)
+                if [ -n "$FOUND_PATH" ]; then
+                  cp -f "$FOUND_PATH" "resources/bin/${TRIPLET}/$dll"
+                  echo "Found $dll: $FOUND_PATH"
+                  FOUND_ALL=1
+                else
+                  echo "Warning: Could not find $dll"
+                  FOUND_ALL=0
+                fi
+              done
+              
+              if [ "$FOUND_ALL" -eq 1 ]; then
+                echo "✅ Successfully collected all VC runtime DLLs from node_modules"
+                # Set VC_REDIST_DIR to the destination so the rest of the script works
+                VC_REDIST_DIR="resources/bin/${TRIPLET}"
+              else
+                echo "❌ Failed to find all required VC runtime DLLs"
+                exit 1
+              fi
+            fi
+
+            echo "Using VC runtime directory: ${VC_REDIST_DIR}"
+
             for dll in "${VC_RUNTIME_DLLS[@]}"; do
               src="${VC_REDIST_DIR}/${dll}"
               if [ ! -f "${src}" ]; then
