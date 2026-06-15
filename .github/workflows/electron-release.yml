@@ -282,16 +282,16 @@ jobs:
 
             # If not found in VS directory, download and extract from VC++ Redistributable package
             if [ -z "$VC_REDIST_DIR" ] || [ ! -d "$VC_REDIST_DIR" ]; then
-              echo "VC Redistributable not found in Visual Studio directory, downloading from Microsoft..."
+              echo "VC Redistributable not found in Visual Studio directory, downloading from NuGet..."
               mkdir -p vc_redist_extract
 
-              # Download the latest VC++ Redistributable for the architecture
+              # Use NuGet to download the VC++ CRT package
               case "${ARCH}" in
                 x64)
-                  VC_REDIST_URL="https://aka.ms/vs/17/release/vc_redist.x64.exe"
+                  NUGET_ARCH="x64"
                   ;;
                 arm64)
-                  VC_REDIST_URL="https://aka.ms/vs/17/release/vc_redist.arm64.exe"
+                  NUGET_ARCH="arm64"
                   ;;
                 *)
                   echo "Unsupported Windows VC runtime arch: ${ARCH}" >&2
@@ -299,23 +299,30 @@ jobs:
                   ;;
               esac
 
-              echo "Downloading VC++ Redistributable from: ${VC_REDIST_URL}"
-              curl -fsSL -o vc_redist_extract/vc_redist.exe "${VC_REDIST_URL}"
+              # Download Microsoft.VC143.CRT NuGet package
+              NUGET_URL="https://api.nuget.org/v3-flatcontainer/microsoft.vc143.crt/14.38.33130/microsoft.vc143.crt.14.38.33130.nupkg"
+              echo "Downloading Microsoft.VC143.CRT NuGet package from: ${NUGET_URL}"
+              curl -fsSL -o vc_redist_extract/vc_redist.nupkg "${NUGET_URL}"
 
-              # Extract the executable (it's a self-extracting archive)
-              7z x -y "vc_redist_extract/vc_redist.exe" -o"vc_redist_extract/extracted" >/dev/null
+              # Extract the NuGet package (it's a zip file)
+              7z x -y "vc_redist_extract/vc_redist.nupkg" -o"vc_redist_extract/extracted" >/dev/null
 
-              # Find the CRT directory in extracted files
-              VC_REDIST_DIR=$(find vc_redist_extract/extracted -type d -name "Microsoft.VC14*.CRT" 2>/dev/null | head -1)
+              # Find the CRT directory in extracted files (e.g., build/native/bin/x64/vc143.crt)
+              VC_REDIST_DIR=$(find vc_redist_extract/extracted -type d -name "vc143.crt" 2>/dev/null | head -1)
+
+              if [ -z "$VC_REDIST_DIR" ] || [ ! -d "$VC_REDIST_DIR" ]; then
+                # Try alternative path structure
+                VC_REDIST_DIR=$(find vc_redist_extract/extracted -type d -path "*native/bin/${NUGET_ARCH}*" 2>/dev/null | head -1)
+              fi
 
               if [ -z "$VC_REDIST_DIR" ] || [ ! -d "$VC_REDIST_DIR" ]; then
                 echo "Unable to find Visual C++ Redistributable CRT directory after extraction." >&2
                 echo "Searched in: vc_redist_extract/extracted" >&2
-                ls -la vc_redist_extract/extracted >&2 || true
+                find vc_redist_extract/extracted -type d 2>/dev/null | head -20 >&2 || true
                 exit 1
               fi
 
-              echo "Successfully extracted VC Redistributable from: ${VC_REDIST_DIR}"
+              echo "Successfully extracted VC Redistributable from NuGet: ${VC_REDIST_DIR}"
             else
               echo "Found VC Redistributable in Visual Studio directory: ${VC_REDIST_DIR}"
             fi
