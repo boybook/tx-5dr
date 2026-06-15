@@ -215,6 +215,16 @@ jobs:
           PLATFORM="${{ matrix.platform }}"
           ARCH="${{ matrix.arch }}"
           TRIPLET="${PLATFORM}-${ARCH}"
+
+          # Define architecture for VC Redistributable (different from cross-compilation target)
+          case "${ARCH}" in
+            x64) REDIST_ARCH="x64" ;;
+            arm64) REDIST_ARCH="arm64" ;;
+            *)
+              echo "Unsupported Windows dependency arch: ${ARCH}" >&2
+              exit 1
+              ;;
+          esac
           echo "Preparing portable node ${NODE_VERSION} for ${TRIPLET}"
 
           mkdir -p resources/bin/${TRIPLET}
@@ -259,32 +269,56 @@ jobs:
             cp -f ${SRC_DIR}/LICENSE resources/licenses/nodejs-LICENSE || true
 
             # Bundle MSVC runtime DLLs app-locally so portable archives work on clean Windows installs.
-            case "${ARCH}" in
-              x64) REDIST_ARCH="x64" ;;
-              arm64) REDIST_ARCH="arm64" ;;
-              *)
-                echo "Unsupported Windows VC runtime arch: ${ARCH}" >&2
-                exit 1
-                ;;
-            esac
+            # First, try to find CRT in Visual Studio installation directory
+            VC_REDIST_DIR=""
+            for vs_path in "/c/Program Files/Microsoft Visual Studio/2022" "/c/Program Files (x86)/Microsoft Visual Studio/2022"; do
+              if [ -d "$vs_path" ]; then
+                VC_REDIST_DIR=$(find "$vs_path" -type d -path "*/VC/Redist/MSVC/*/${REDIST_ARCH}/Microsoft.VC14*.CRT" 2>/dev/null | sort -V | tail -1)
+                if [ -n "$VC_REDIST_DIR" ] && [ -d "$VC_REDIST_DIR" ]; then
+                  break
+                fi
+              fi
+            done
 
-            mapfile -t VC_REDIST_DIRS < <(
-              find \
-                "/c/Program Files/Microsoft Visual Studio/2022" \
-                "/c/Program Files (x86)/Microsoft Visual Studio/2022" \
-                -type d \
-                -path "*/VC/Redist/MSVC/*/${REDIST_ARCH}/Microsoft.VC14*.CRT" \
-                2>/dev/null | sort -V
-            )
-            if [ "${#VC_REDIST_DIRS[@]}" -eq 0 ]; then
-              echo "Unable to find Visual C++ Redistributable CRT directory for ${REDIST_ARCH}." >&2
-              echo "Searched:" >&2
-              echo "  /c/Program Files/Microsoft Visual Studio/2022/**/VC/Redist/MSVC/*/${REDIST_ARCH}/Microsoft.VC14*.CRT" >&2
-              echo "  /c/Program Files (x86)/Microsoft Visual Studio/2022/**/VC/Redist/MSVC/*/${REDIST_ARCH}/Microsoft.VC14*.CRT" >&2
-              exit 1
+            # If not found in VS directory, download and extract from VC++ Redistributable package
+            if [ -z "$VC_REDIST_DIR" ] || [ ! -d "$VC_REDIST_DIR" ]; then
+              echo "VC Redistributable not found in Visual Studio directory, downloading from Microsoft..."
+              mkdir -p vc_redist_extract
+
+              # Download the latest VC++ Redistributable for the architecture
+              case "${ARCH}" in
+                x64)
+                  VC_REDIST_URL="https://aka.ms/vs/17/release/vc_redist.x64.exe"
+                  ;;
+                arm64)
+                  VC_REDIST_URL="https://aka.ms/vs/17/release/vc_redist.arm64.exe"
+                  ;;
+                *)
+                  echo "Unsupported Windows VC runtime arch: ${ARCH}" >&2
+                  exit 1
+                  ;;
+              esac
+
+              echo "Downloading VC++ Redistributable from: ${VC_REDIST_URL}"
+              curl -fsSL -o vc_redist_extract/vc_redist.exe "${VC_REDIST_URL}"
+
+              # Extract the executable (it's a self-extracting archive)
+              7z x -y "vc_redist_extract/vc_redist.exe" -o"vc_redist_extract/extracted" >/dev/null
+
+              # Find the CRT directory in extracted files
+              VC_REDIST_DIR=$(find vc_redist_extract/extracted -type d -name "Microsoft.VC14*.CRT" 2>/dev/null | head -1)
+
+              if [ -z "$VC_REDIST_DIR" ] || [ ! -d "$VC_REDIST_DIR" ]; then
+                echo "Unable to find Visual C++ Redistributable CRT directory after extraction." >&2
+                echo "Searched in: vc_redist_extract/extracted" >&2
+                ls -la vc_redist_extract/extracted >&2 || true
+                exit 1
+              fi
+
+              echo "Successfully extracted VC Redistributable from: ${VC_REDIST_DIR}"
+            else
+              echo "Found VC Redistributable in Visual Studio directory: ${VC_REDIST_DIR}"
             fi
-            VC_REDIST_DIR="${VC_REDIST_DIRS[$((${#VC_REDIST_DIRS[@]} - 1))]}"
-            echo "Using VC runtime directory: ${VC_REDIST_DIR}"
 
             VC_RUNTIME_DLLS=(
               vcruntime140.dll
