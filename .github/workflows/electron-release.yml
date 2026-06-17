@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2022
             platform: win32
             arch: x64
             artifact_name: tx-5dr-windows-x64
@@ -268,41 +268,20 @@ jobs:
                 ;;
             esac
 
-            # Search for VC runtime in multiple Visual Studio versions (2019, 2022, 2025)
-            SEARCH_PATHS=()
-            for vs_year in 2025 2022 2019; do
-              for vs_base in "/c/Program Files/Microsoft Visual Studio/${vs_year}" "/c/Program Files (x86)/Microsoft Visual Studio/${vs_year}"; do
-                if [ -d "${vs_base}" ]; then
-                  SEARCH_PATHS+=("${vs_base}")
-                fi
-              done
-            done
-
-            if [ "${#SEARCH_PATHS[@]}" -eq 0 ]; then
-              echo "No Visual Studio installations found. Attempting to install VC++ Redistributable..." >&2
-              curl -fsSL -o vc_redist.x64.exe "https://aka.ms/vs/17/release/vc_redist.x64.exe"
-              ./vc_redist.x64.exe /install /quiet /norestart || true
-              rm -f vc_redist.x64.exe
-              # Re-search after install
-              for vs_year in 2025 2022 2019; do
-                for vs_base in "/c/Program Files/Microsoft Visual Studio/${vs_year}" "/c/Program Files (x86)/Microsoft Visual Studio/${vs_year}"; do
-                  if [ -d "${vs_base}" ]; then
-                    SEARCH_PATHS+=("${vs_base}")
-                  fi
-                done
-              done
-            fi
-
+            # Search for VC runtime in Visual Studio 2022 (pre-installed on windows-2022 runner)
             mapfile -t VC_REDIST_DIRS < <(
-              find "${SEARCH_PATHS[@]}" \
+              find \
+                "/c/Program Files/Microsoft Visual Studio/2022" \
+                "/c/Program Files (x86)/Microsoft Visual Studio/2022" \
                 -type d \
                 -path "*/VC/Redist/MSVC/*/${REDIST_ARCH}/Microsoft.VC143.CRT" \
                 2>/dev/null | sort -V
             )
             if [ "${#VC_REDIST_DIRS[@]}" -eq 0 ]; then
               echo "Unable to find Visual C++ Redistributable CRT directory for ${REDIST_ARCH}." >&2
-              echo "Searched Visual Studio versions: 2019, 2022, 2025" >&2
-              echo "Search paths: ${SEARCH_PATHS[*]}" >&2
+              echo "Searched:" >&2
+              echo "  /c/Program Files/Microsoft Visual Studio/2022/**/VC/Redist/MSVC/*/${REDIST_ARCH}/Microsoft.VC143.CRT" >&2
+              echo "  /c/Program Files (x86)/Microsoft Visual Studio/2022/**/VC/Redist/MSVC/*/${REDIST_ARCH}/Microsoft.VC143.CRT" >&2
               exit 1
             fi
             VC_REDIST_DIR="${VC_REDIST_DIRS[$((${#VC_REDIST_DIRS[@]} - 1))]}"
