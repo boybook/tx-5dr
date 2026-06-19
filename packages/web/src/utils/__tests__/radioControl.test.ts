@@ -5,9 +5,11 @@ import {
   canWriteRadioFrequency,
   deriveMonitorActivationCtaState,
   filterDigitalFrequencyOptions,
+  isFakeFrequencySupportedMode,
   isCoreCapabilityAvailable,
   shouldShowAntennaTuneEntry,
   shouldShowAutoTunerShortcut,
+  shouldShowFakeFrequencyEntry,
   shouldShowRadioControlEntry,
 } from '../radioControl';
 
@@ -118,6 +120,23 @@ describe('radioControl utils', () => {
     expect(shouldShowRadioControlEntry(true, true)).toBe(true);
     expect(shouldShowRadioControlEntry(true, false)).toBe(false);
     expect(shouldShowRadioControlEntry(false, true)).toBe(false);
+  });
+
+  it('supports virtual frequency offset only in FT8/FT4 digital modes', () => {
+    expect(isFakeFrequencySupportedMode('digital', 'FT8')).toBe(true);
+    expect(isFakeFrequencySupportedMode('digital', 'FT4')).toBe(true);
+    expect(isFakeFrequencySupportedMode('voice', 'VOICE')).toBe(false);
+    expect(isFakeFrequencySupportedMode('cw', 'CW')).toBe(false);
+    expect(isFakeFrequencySupportedMode('digital', null)).toBe(false);
+  });
+
+  it('shows virtual frequency offset entry only for connected controllable FT8/FT4 radios', () => {
+    expect(shouldShowFakeFrequencyEntry(true, true, 'serial', 'digital', 'FT8')).toBe(true);
+    expect(shouldShowFakeFrequencyEntry(true, true, 'network', 'digital', 'FT4')).toBe(true);
+    expect(shouldShowFakeFrequencyEntry(true, true, 'serial', 'voice', 'VOICE')).toBe(false);
+    expect(shouldShowFakeFrequencyEntry(true, true, 'none', 'digital', 'FT8')).toBe(false);
+    expect(shouldShowFakeFrequencyEntry(true, false, 'serial', 'digital', 'FT8')).toBe(false);
+    expect(shouldShowFakeFrequencyEntry(false, true, 'serial', 'digital', 'FT8')).toBe(false);
   });
 
   it('shows monitor activation CTA only before the first playback gesture succeeds', () => {

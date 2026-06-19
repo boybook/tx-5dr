@@ -192,8 +192,8 @@
       "usb": "USB（上边带）",
       "usb-data": "USB-DATA（上边带数据）"
     },
-    "fakeFrequencyTitle": "虚拟频率",
-    "fakeFrequencyDesc": "发射时自动将音频载波保持在最佳频段（约 1500Hz），并反向平移电台频率，使实际发射位置不变。可规避部分电台在音频频率过高/过低时发射功率衰减的问题；对接收显示与发射频点完全透明。",
+    "fakeFrequencyTitle": "虚拟频差",
+    "fakeFrequencyDesc": "仅在 FT8/FT4 模式生效。发射时自动将音频载波保持在最佳频段（约 1500Hz），并反向平移电台频率，使实际发射位置不变。可规避部分电台在音频频率过高/过低时发射功率衰减的问题；对接收显示与发射频点完全透明。",
     "serialTitle": "Hamlib 直连电台设置",
     "refreshPortsTooltip": "刷新串口列表",
     "serialDesc": "通过 Hamlib 直连电台，具体型号可能使用串口、服务器地址或设备路径。",

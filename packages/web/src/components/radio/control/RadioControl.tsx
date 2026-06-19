@@ -28,6 +28,7 @@ import {
   canWriteRadioFrequency,
   deriveMonitorActivationCtaState,
   filterDigitalFrequencyOptions,
+  shouldShowFakeFrequencyEntry,
   shouldShowAntennaTuneEntry,
   shouldShowRadioControlEntry,
 } from '../../../utils/radioControl';
@@ -626,6 +627,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const showAntennaTuneEntry = shouldShowAntennaTuneEntry(
     radioConnection.radioConnected,
     canControlRadio,
+  );
+  const showFakeFrequencyEntry = shouldShowFakeFrequencyEntry(
+    connection.state.isConnected,
+    canControlRadio,
+    radioConnection.radioConfig?.type,
+    radioMode.engineMode,
+    radioMode.currentMode?.name,
   );
   const tunerEnabled = typeof tunerSwitchCapState?.value === 'boolean' ? tunerSwitchCapState.value : false;
   const tunerIsTuning = (tunerSwitchCapState?.meta as { status?: string } | undefined)?.status === 'tuning';
@@ -2470,11 +2478,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                 </Popover>
               </ToolbarIconTooltip>
             )}
-            {/* 虚拟频率快捷开关：已连接且具备电台控制权限时露出 */}
-            {connection.state.isConnected
-              && canControlRadio
-              && radioConnection.radioConfig?.type
-              && radioConnection.radioConfig.type !== 'none' && (
+            {/* 虚拟频差快捷开关：仅在 FT8/FT4 数字模式下露出 */}
+            {showFakeFrequencyEntry && (
               <ToolbarIconTooltip
                 label={radioConnection.radioConfig?.fakeFrequency?.enabled
                   ? t('fakeFrequency.tooltipOn')

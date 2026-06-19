@@ -1001,7 +1001,7 @@ export const api = {
   },
 
   /**
-   * 设置虚拟频率（Fake Frequency）开关
+   * 设置虚拟频差（Virtual Frequency Offset）开关
    */
   async setFakeFrequency(enabled: boolean, apiBase?: string): Promise<{ success: boolean; enabled: boolean }> {
     return apiRequest<{ success: boolean; enabled: boolean }>(

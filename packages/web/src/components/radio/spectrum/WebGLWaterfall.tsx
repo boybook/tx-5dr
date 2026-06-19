@@ -149,9 +149,9 @@ interface WebGLWaterfallProps {
   showCycleMarkers?: boolean;
   /** 数字模式周期长度（毫秒），例如 FT8=15000、FT4=7500 */
   cycleSlotMs?: number | null;
-  /** 需要显示"低功率—可开启虚拟频率"弱警告的操作员 ID（由上层根据实测功率判断） */
+  /** 需要显示"低功率—可开启虚拟频差"弱警告的操作员 ID（由上层根据实测功率判断） */
   lowPowerWarningOperatorIds?: string[];
-  /** 弱警告 popover 中点击"一键开启虚拟频率" */
+  /** 弱警告 popover 中点击"一键开启虚拟频差" */
   onEnableFakeFrequency?: () => void;
   /** 弱警告 popover 中点击"不再提示" */
   onDismissLowPowerWarning?: () => void;
@@ -3477,7 +3477,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
           );
         })}
 
-        {/* 虚拟频率弱警告：实测发射功率偏低的操作员，在其 TX 标记上方常驻一个小黄色感叹号；hover 展开详细说明与操作 */}
+        {/* 虚拟频差弱警告：实测发射功率偏低的操作员，在其 TX 标记上方常驻一个小黄色感叹号；hover 展开详细说明与操作 */}
         {lowPowerWarningOperatorIds.length > 0 && txFrequencies.map(({ operatorId, frequency }) => {
           if (!lowPowerWarningOperatorIds.includes(operatorId)) return null;
           // 与 TX 标记一致：拖动/冷却期使用本地覆盖频率，使警告图标实时跟随

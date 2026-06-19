@@ -21,7 +21,7 @@ import {
 } from '../../../spectrum/frequencyAxisCalibration';
 import { readSpectrumSubscriptionPaused, setSpectrumSubscriptionPaused } from '../../../utils/spectrumSubscriptionPause';
 import { resetOperatorsForOperatingStateChange } from '../../../utils/operatorReset';
-import { canExecuteRadioFrequency, canWriteRadioFrequency } from '../../../utils/radioControl';
+import { canExecuteRadioFrequency, canWriteRadioFrequency, isFakeFrequencySupportedMode } from '../../../utils/radioControl';
 import { setRadioFrequencyWithIntent, subscribeRadioFrequencyIntent, type SetRadioFrequencyParams } from '../../../utils/radioFrequencyIntent';
 import {
   RADIO_SDR_OPTIMISTIC_DISPLAY_HOLD_TIMEOUT_MS,
@@ -63,7 +63,7 @@ const SPECTRUM_HISTORY_LIMITS = {
   'openwebrx-sdr': 40,
 } satisfies Partial<Record<SpectrumKind, number>>;
 const SETTINGS_STORAGE_KEY = 'spectrum-range-settings';
-// 虚拟频率低功率弱警告相关常量
+// 虚拟频差低功率弱警告相关常量
 const FAKE_FREQ_COMFORT_MIN_HZ = 500;   // 发射音频甜区下界（baseband Hz）
 const FAKE_FREQ_COMFORT_MAX_HZ = 2300;  // 发射音频甜区上界（baseband Hz）
 const FAKE_FREQ_OUTPUT_LOW_RATIO = 0.25;   // 实测输出/量程 低于此比例视为功率偏低
@@ -832,7 +832,7 @@ const CollapsedSpectrumBar: React.FC<CollapsedSpectrumBarProps> = ({
 };
 
 /**
- * 虚拟频率低功率弱警告判定器：订阅高频 meterData 等，计算需要提示的操作员集合，
+ * 虚拟频差低功率弱警告判定器：订阅高频 meterData 等，计算需要提示的操作员集合，
  * 仅在结果集变化时通过 onChange 回写，避免高频 meter 刷新拖累整个频谱子树重渲染。
  * 本组件不渲染任何内容。
  */
@@ -977,8 +977,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const txFrequencies = useTxFrequencies();
   const { currentOperatorId } = useCurrentOperatorId();
 
-  // 虚拟频率弱警告：判定逻辑放在独立的 FakeFreqLowPowerWatcher 中订阅高频 meterData，
+  // 虚拟频差弱警告：判定逻辑放在独立的 FakeFreqLowPowerWatcher 中订阅高频 meterData，
   // 仅当结果集变化时才回写到这里，避免每次 meter 刷新都重渲染整个频谱子树。
+  const fakeFrequencySupported = isFakeFrequencySupportedMode(engineMode, currentMode?.name);
   const fakeFrequencyEnabled = radioConnection.radioConfig?.fakeFrequency?.enabled ?? false;
   // 仅内存态：刷新网页后重置，会再次提示（不持久化到 localStorage）
   const [lowPowerHintDismissed, setLowPowerHintDismissed] = useState<boolean>(false);
@@ -2060,7 +2061,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       onMouseDown={isOpenWebRXSdrSelected && canOpenWebRXLocalViewportPan ? handleOpenWebRXMouseDown : undefined}
     >
       <FakeFreqLowPowerWatcher
-        active={canControlRadio && !fakeFrequencyEnabled && !lowPowerHintDismissed}
+        active={fakeFrequencySupported && canControlRadio && !fakeFrequencyEnabled && !lowPowerHintDismissed}
         onChange={setLowPowerWarningOperatorIds}
       />
       <WebGLWaterfall

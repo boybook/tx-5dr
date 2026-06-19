@@ -227,7 +227,7 @@ export const DigitalModeRadioModePreferenceSchema = z.enum(['none', 'usb', 'usb-
 export const PttMethodSchema = z.enum(['cat', 'vox', 'dtr', 'rts']);
 
 /**
- * 虚拟频率（Fake Frequency / "Fake It" Split）配置Schema
+ * 虚拟频差（Virtual Frequency Offset / "Fake It" Split）配置Schema
  * 目标音频频率与滞回区间目前由服务端常量控制（~1500Hz），此处仅暴露开关，预留扩展位。
  */
 export const FakeFrequencyConfigSchema = z.object({
@@ -267,7 +267,7 @@ export const HamlibConfigSchema = z.object({
   // 范围限制：-1000~1000ms，适用于各种网络和设备延迟场景
   transmitCompensationMs: z.number().int().min(-1000).max(1000).optional(),
 
-  // 虚拟频率（Fake Frequency / WSJT-X "Fake It" Split）
+  // 虚拟频差（Virtual Frequency Offset / WSJT-X "Fake It" Split）
   // 启用后，发射时临时反向平移电台 dial 频率，使送进电台的音频载波保持在甜区(~1500Hz)，
   // 而打到空中的实际 RF 位置与用户设定的发射频点完全一致。
   // 用于规避部分电台在音频频率过高/过低时发射功率衰减的问题；对用户透明（接收 dial、TX 标记不变）。
