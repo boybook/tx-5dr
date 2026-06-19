@@ -288,38 +288,45 @@ export class TransmissionPipeline {
   private async stopPTT(): Promise<void> {
     if (!this._isPTTActive) {
       logger.debug('PTT already stopped, skipping');
+      // 兜底清除可能残留的虚拟频率平移（如 startPTT 失败导致 PTT 未真正激活的场景）
+      await this.deps.radioManager.clearTxDialOffset();
       return;
     }
 
-    if (this.deps.radioManager.isConnected()) {
-      try {
-        await this.deps.radioManager.setPTT(false);
-        this._isPTTActive = false;
+    try {
+      if (this.deps.radioManager.isConnected()) {
+        try {
+          await this.deps.radioManager.setPTT(false);
+          this._isPTTActive = false;
 
+          this.deps.spectrumScheduler.setPTTActive(false);
+          this.deps.radioManager.setPTTActive(false);
+
+          this.deps.engineEmitter.emit('pttStatusChanged', {
+            isTransmitting: false,
+            operatorIds: []
+          });
+
+          this.deps.operatorManager.updateActiveTransmissionOperators([]);
+
+          logger.debug('PTT stopped');
+        } catch (error) {
+          logger.error(`PTT stop failed: ${error}`);
+          this._isPTTActive = false;
+          this.deps.spectrumScheduler.setPTTActive(false);
+          this.deps.radioManager.setPTTActive(false);
+          this.deps.operatorManager.updateActiveTransmissionOperators([]);
+        }
+      } else {
+        this._isPTTActive = false;
         this.deps.spectrumScheduler.setPTTActive(false);
         this.deps.radioManager.setPTTActive(false);
-
-        this.deps.engineEmitter.emit('pttStatusChanged', {
-          isTransmitting: false,
-          operatorIds: []
-        });
-
         this.deps.operatorManager.updateActiveTransmissionOperators([]);
-
-        logger.debug('PTT stopped');
-      } catch (error) {
-        logger.error(`PTT stop failed: ${error}`);
-        this._isPTTActive = false;
-        this.deps.spectrumScheduler.setPTTActive(false);
-        this.deps.radioManager.setPTTActive(false);
-        this.deps.operatorManager.updateActiveTransmissionOperators([]);
+        logger.debug('radio not connected, PTT state set to stopped');
       }
-    } else {
-      this._isPTTActive = false;
-      this.deps.spectrumScheduler.setPTTActive(false);
-      this.deps.radioManager.setPTTActive(false);
-      this.deps.operatorManager.updateActiveTransmissionOperators([]);
-      logger.debug('radio not connected, PTT state set to stopped');
+    } finally {
+      // 虚拟频率：PTT 关闭后恢复接收 dial（在 PTT 真正关闭之后执行，避免发射期间提前回频）
+      await this.deps.radioManager.clearTxDialOffset();
     }
   }
 
@@ -374,7 +381,7 @@ export class TransmissionPipeline {
     audioData: Float32Array;
     sampleRate: number;
     duration: number;
-    request?: { timeSinceSlotStartMs?: number; requestId?: string };
+    request?: { timeSinceSlotStartMs?: number; requestId?: string; txDialShiftHz?: number };
   }): Promise<void> {
     try {
       const request = result.request;
@@ -421,7 +428,8 @@ export class TransmissionPipeline {
         result.audioData,
         result.sampleRate,
         currentSlotStartMs,
-        requestId
+        requestId,
+        result.request?.txDialShiftHz ?? 0
       );
 
       this.deps.transmissionTracker.recordAudioAddedToMixer(result.operatorId);
@@ -499,6 +507,15 @@ export class TransmissionPipeline {
       }
 
       await this.deps.onBeforeStartPTT?.();
+
+      // 虚拟频率：在 PTT 之前临时把电台 dial 反向平移到本次发射的 shift。
+      // shift 与音频同源（随 mixedAudio 负载流转），保证施加到 dial 的平移量恒等于编码所用 shift。
+      // 音频已按 (origFreq - shift) 编码，dial +shift 后打到空中的绝对 RF 不变。
+      // clearTxDialOffset() 在 stopPTT 的 finally 中兜底恢复。
+      const txDialShiftHz = mixedAudio.txDialShiftHz ?? 0;
+      if (txDialShiftHz !== 0) {
+        await this.deps.radioManager.setTxDialOffset(txDialShiftHz);
+      }
 
       const startSequenceAt = Date.now();
       logger.info('starting PTT and audio playback in parallel', {

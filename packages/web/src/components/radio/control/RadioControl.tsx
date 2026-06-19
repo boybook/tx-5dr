@@ -2,7 +2,7 @@ import * as React from 'react';
 import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner, Alert, Tabs, Tab, Tooltip, Card, CardBody} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faTowerBroadcast, faPowerOff, faCircleInfo, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faTowerBroadcast, faPowerOff, faCircleInfo, faTriangleExclamation, faRightLeft } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState, useAudioSidecarState, useRadioState, useOperators } from '../../../store/radioStore';
 import type { AudioSidecarStatusPayload } from '@tx5dr/contracts';
 import { AudioSidecarStatus } from '@tx5dr/contracts';
@@ -2468,6 +2468,39 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                     <TunerCapabilitySurface />
                   </PopoverContent>
                 </Popover>
+              </ToolbarIconTooltip>
+            )}
+            {/* 虚拟频率快捷开关：已连接且具备电台控制权限时露出 */}
+            {connection.state.isConnected
+              && canControlRadio
+              && radioConnection.radioConfig?.type
+              && radioConnection.radioConfig.type !== 'none' && (
+              <ToolbarIconTooltip
+                label={radioConnection.radioConfig?.fakeFrequency?.enabled
+                  ? t('fakeFrequency.tooltipOn')
+                  : t('fakeFrequency.tooltipOff')}
+              >
+                <Button
+                  isIconOnly
+                  variant="light"
+                  size="sm"
+                  className={`min-w-unit-6 min-w-6 w-6 h-6 ${
+                    radioConnection.radioConfig?.fakeFrequency?.enabled
+                      ? 'text-success'
+                      : 'text-default-400'
+                  }`}
+                  aria-label={t('fakeFrequency.toggle')}
+                  onPress={async () => {
+                    const next = !radioConnection.radioConfig?.fakeFrequency?.enabled;
+                    try {
+                      await api.setFakeFrequency(next);
+                    } catch (error) {
+                      addToast({ title: t('fakeFrequency.toggleFailed'), color: 'danger', timeout: 3000 });
+                    }
+                  }}
+                >
+                  <FontAwesomeIcon icon={faRightLeft} className="text-xs" />
+                </Button>
               </ToolbarIconTooltip>
             )}
           </div>
