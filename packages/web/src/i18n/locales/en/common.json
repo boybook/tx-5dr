@@ -192,6 +192,11 @@
     "themeSettings": "Spectrum Theme",
     "cycleMarkers": "Cycle separators",
     "cycleMarkersDescription": "Show a subtle line at each digital cycle start",
+    "radioSdrCenterView": "Center View",
+    "radioSdrCenterViewDescription": "Show the full center-follow spectrum, or zoom into one side of 0 Hz.",
+    "radioSdrCenterViewFull": "Full",
+    "radioSdrCenterViewLeft": "Left",
+    "radioSdrCenterViewRight": "Right",
     "theme": {
       "classic": "Classic",
       "wsjtxDefault": "WSJT-X Default Style",

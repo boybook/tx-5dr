@@ -192,6 +192,11 @@
     "themeSettings": "スペクトルのテーマ",
     "cycleMarkers": "サイクル分割線",
     "cycleMarkersDescription": "各数値サイクルの先頭に明るい水平線を表示します。",
+    "radioSdrCenterView": "センタービュー",
+    "radioSdrCenterViewDescription": "中央追従スペクトラム全体、または 0Hz の片側だけを拡大表示します。",
+    "radioSdrCenterViewFull": "全体",
+    "radioSdrCenterViewLeft": "左側",
+    "radioSdrCenterViewRight": "右側",
     "theme": {
       "classic": "クラシック",
       "wsjtxDefault": "WSJT-X のデフォルトのスタイル",

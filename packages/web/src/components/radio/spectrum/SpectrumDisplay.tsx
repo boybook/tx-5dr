@@ -13,7 +13,7 @@ import { useTargetRxFrequencies, type RxFrequency } from '../../../hooks/useTarg
 import { useTxFrequencies, type TxFrequency } from '../../../hooks/useTxFrequencies';
 import { WebGLWaterfall, WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ } from './WebGLWaterfall';
 import type { AutoRangeConfig, FrequencyBandOverlay, FrequencyBandOverlayChange, PresetMarker, TxBandOverlay } from './WebGLWaterfall';
-import { SpectrumStreamController } from '../../../spectrum/SpectrumStreamController';
+import { SpectrumStreamController, type RadioSdrCenterViewMode } from '../../../spectrum/SpectrumStreamController';
 import {
   ICOM_RADIO_SDR_FREQUENCY_AXIS_CALIBRATION,
   IDENTITY_FREQUENCY_AXIS_TRANSFORM,
@@ -231,6 +231,51 @@ export function resolveAudioRangeSettingsForModeChange(
   };
 }
 
+type SpectrumFrequencyRangeMode = 'baseband' | 'absolute-center' | 'absolute-fixed' | 'absolute-windowed';
+
+export function normalizeRadioSdrCenterViewMode(value: unknown): RadioSdrCenterViewMode {
+  return value === 'left' || value === 'right' || value === 'full' ? value : 'full';
+}
+
+export function canShowRadioSdrCenterViewSetting({
+  isRadioSdrSelected,
+  frequencyRangeMode,
+}: {
+  isRadioSdrSelected: boolean;
+  frequencyRangeMode: SpectrumFrequencyRangeMode;
+}): boolean {
+  return isRadioSdrSelected && frequencyRangeMode === 'absolute-center';
+}
+
+export function resolveRadioSdrCenterViewContext({
+  isRadioSdrSelected,
+  frequencyRangeMode,
+  centerViewMode,
+  referenceFrequencyHz,
+}: {
+  isRadioSdrSelected: boolean;
+  frequencyRangeMode: SpectrumFrequencyRangeMode;
+  centerViewMode: RadioSdrCenterViewMode;
+  referenceFrequencyHz: number | null;
+}): { centerViewMode: RadioSdrCenterViewMode; referenceFrequencyHz: number | null } {
+  if (
+    !canShowRadioSdrCenterViewSetting({ isRadioSdrSelected, frequencyRangeMode })
+    || centerViewMode === 'full'
+    || typeof referenceFrequencyHz !== 'number'
+    || !Number.isFinite(referenceFrequencyHz)
+  ) {
+    return {
+      centerViewMode: 'full',
+      referenceFrequencyHz: null,
+    };
+  }
+
+  return {
+    centerViewMode,
+    referenceFrequencyHz,
+  };
+}
+
 interface LegacyAudioRangeSettings {
   manual?: Partial<ManualRangeSettings>;
   auto?: Partial<AutoRangeConfig>;
@@ -240,6 +285,7 @@ interface LegacyAudioRangeSettings {
 interface PersistedRangeSettings {
   themeId: SpectrumThemeId;
   showCycleMarkers: boolean;
+  radioSdrCenterViewMode: RadioSdrCenterViewMode;
   audio: AudioRangeSettings;
   radioSdr: ManualRangeSettings;
   openWebRxSdr: {
@@ -285,6 +331,7 @@ const DEFAULT_OPENWEBRX_DETAIL_RANGE_SETTINGS: ManualRangeSettings = {
 const DEFAULT_PERSISTED_RANGE_SETTINGS: PersistedRangeSettings = {
   themeId: DEFAULT_SPECTRUM_THEME_ID,
   showCycleMarkers: true,
+  radioSdrCenterViewMode: 'full',
   audio: {
     mode: 'auto',
     manual: {
@@ -532,6 +579,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
       return {
         themeId: DEFAULT_PERSISTED_RANGE_SETTINGS.themeId,
         showCycleMarkers: DEFAULT_PERSISTED_RANGE_SETTINGS.showCycleMarkers,
+        radioSdrCenterViewMode: DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdrCenterViewMode,
         audio: cloneAudioRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.audio),
         radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
         openWebRxSdr: {
@@ -550,6 +598,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
       return {
         themeId: normalizeSpectrumThemeId((parsed as Partial<PersistedRangeSettings>).themeId),
         showCycleMarkers: (parsed as Partial<PersistedRangeSettings>).showCycleMarkers !== false,
+        radioSdrCenterViewMode: normalizeRadioSdrCenterViewMode((parsed as Partial<PersistedRangeSettings>).radioSdrCenterViewMode),
         audio: normalizeAudioRangeSettings(
           (parsed as Partial<PersistedRangeSettings>).audio,
           DEFAULT_PERSISTED_RANGE_SETTINGS.audio
@@ -591,6 +640,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
     return {
       themeId: DEFAULT_PERSISTED_RANGE_SETTINGS.themeId,
       showCycleMarkers: DEFAULT_PERSISTED_RANGE_SETTINGS.showCycleMarkers,
+      radioSdrCenterViewMode: DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdrCenterViewMode,
       audio: normalizeAudioRangeSettings(
         parsed as LegacyAudioRangeSettings,
         DEFAULT_PERSISTED_RANGE_SETTINGS.audio
@@ -606,6 +656,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
     return {
       themeId: DEFAULT_PERSISTED_RANGE_SETTINGS.themeId,
       showCycleMarkers: DEFAULT_PERSISTED_RANGE_SETTINGS.showCycleMarkers,
+      radioSdrCenterViewMode: DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdrCenterViewMode,
       audio: cloneAudioRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.audio),
       radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
       openWebRxSdr: {
@@ -1064,6 +1115,17 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       : persistedRangeSettings.audio.manual;
   const selectedSpectrumThemeId = persistedRangeSettings.themeId;
   const showCycleMarkers = persistedRangeSettings.showCycleMarkers;
+  const radioSdrCenterViewMode = persistedRangeSettings.radioSdrCenterViewMode;
+  const showRadioSdrCenterViewSettings = canShowRadioSdrCenterViewSetting({
+    isRadioSdrSelected,
+    frequencyRangeMode,
+  });
+  const radioSdrCenterViewContext = React.useMemo(() => resolveRadioSdrCenterViewContext({
+    isRadioSdrSelected,
+    frequencyRangeMode,
+    centerViewMode: radioSdrCenterViewMode,
+    referenceFrequencyHz: spectrumReferenceFrequency,
+  }), [frequencyRangeMode, isRadioSdrSelected, radioSdrCenterViewMode, spectrumReferenceFrequency]);
   const cycleSlotMs = currentMode?.slotMs ?? null;
   const waterfallViewKey = `${effectiveSelectedKind}:${isOpenWebRXDetailMode ? 'detail' : 'main'}`;
   const audioRangeSettings = persistedRangeSettings.audio;
@@ -1141,6 +1203,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     setPersistedRangeSettings(prev => ({
       ...prev,
       showCycleMarkers: enabled,
+    }));
+  }, []);
+
+  const handleRadioSdrCenterViewModeChange = useCallback((mode: RadioSdrCenterViewMode) => {
+    setPersistedRangeSettings(prev => ({
+      ...prev,
+      radioSdrCenterViewMode: mode,
     }));
   }, []);
 
@@ -1501,12 +1570,15 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       selectedKind: effectiveSelectedKind,
       openWebRXViewport: isOpenWebRXSdrSelected && !isOpenWebRXDetailMode ? openWebRXViewport : null,
       isOpenWebRXDetailMode,
+      radioSdrCenterViewMode: radioSdrCenterViewContext.centerViewMode,
+      radioSdrReferenceFrequencyHz: radioSdrCenterViewContext.referenceFrequencyHz,
     });
   }, [
     effectiveSelectedKind,
     isOpenWebRXDetailMode,
     isOpenWebRXSdrSelected,
     openWebRXViewport,
+    radioSdrCenterViewContext,
     streamController,
   ]);
 
@@ -1583,6 +1655,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
 
     setPersistedRangeSettings(prev => ({
       ...prev,
+      radioSdrCenterViewMode: normalizeRadioSdrCenterViewMode(prev.radioSdrCenterViewMode),
       radioSdr: normalizeManualRangeSettings(prev.radioSdr, DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
     }));
   }, [selectedKind]);
@@ -2250,6 +2323,34 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                     aria-label={t('spectrum.cycleMarkers')}
                   />
                 </div>
+                {showRadioSdrCenterViewSettings && (
+                  <div className="space-y-2 rounded-lg bg-default-100/50 px-3 py-2 dark:bg-default-50/10">
+                    <div>
+                      <div className="text-xs font-medium text-default-700">
+                        {t('spectrum.radioSdrCenterView')}
+                      </div>
+                      <div className="text-[11px] leading-tight text-default-400">
+                        {t('spectrum.radioSdrCenterViewDescription')}
+                      </div>
+                    </div>
+                    <Tabs
+                      selectedKey={radioSdrCenterViewMode}
+                      onSelectionChange={(key) => handleRadioSdrCenterViewModeChange(normalizeRadioSdrCenterViewMode(key))}
+                      fullWidth
+                      size="sm"
+                      classNames={{
+                        base: 'w-full',
+                        tabList: 'w-full',
+                        cursor: 'w-full',
+                        tab: 'w-full',
+                      }}
+                    >
+                      <Tab key="full" title={t('spectrum.radioSdrCenterViewFull')} />
+                      <Tab key="left" title={t('spectrum.radioSdrCenterViewLeft')} />
+                      <Tab key="right" title={t('spectrum.radioSdrCenterViewRight')} />
+                    </Tabs>
+                  </div>
+                )}
                 <div className="h-px bg-divider" />
                 {!isRadioSdrSelected && !isOpenWebRXSdrSelected && (
                   <Tabs
