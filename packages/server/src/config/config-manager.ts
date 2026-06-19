@@ -712,6 +712,7 @@ export class ConfigManager {
     const hasNewNestedFields =
       radioConfig.network !== undefined ||
       radioConfig.icomWlan !== undefined ||
+      radioConfig.tci !== undefined ||
       radioConfig.serial !== undefined;
 
     return hasOldFlatFields && !hasNewNestedFields;

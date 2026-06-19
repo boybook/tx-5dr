@@ -7,6 +7,7 @@ import { ConfigManager } from '../config/config-manager.js';
 import { AudioDeviceManager } from './audio-device-manager.js';
 import { performance } from 'node:perf_hooks';
 import type { IcomWlanAudioAdapter } from './IcomWlanAudioAdapter.js';
+import type { TciAudioAdapter } from './TciAudioAdapter.js';
 import type { AudioFrameMeta } from '../radio/connections/IRadioConnection.js';
 import type { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.js';
 import { createLogger } from '../utils/logger.js';
@@ -28,12 +29,13 @@ const INPUT_RING_BUFFER_DURATION_MS = 60_000;
 const ICOM_WLAN_TX_CHUNK_SIZE = 1200;
 const ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS = 150;
 const ICOM_WLAN_TX_MAX_WAIT_SLICE_MS = 20;
+const TCI_AUDIO_DEVICE_NAME = 'TCI Audio';
 const RTAUDIO_TX_CONSUME_WATCHDOG_MS = 750;
 const RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS = 1000;
 const RTAUDIO_TX_WATCHDOG_MIN_SUBMITTED_CHUNKS = 3;
 const RTAUDIO_OUTPUT_WARNING_LOG_WINDOW_MS = 5000;
 
-export type NativeAudioInputSourceKind = 'audio-device' | 'icom-wlan' | 'openwebrx';
+export type NativeAudioInputSourceKind = 'audio-device' | 'icom-wlan' | 'tci' | 'openwebrx';
 
 export interface NativeAudioInputFrame {
   samples: Float32Array;
@@ -234,6 +236,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private usingIcomWlanInput = false; // 是否使用 ICOM WLAN 输入
   private usingIcomWlanOutput = false; // 是否使用 ICOM WLAN 输出
 
+  // TCI / SunSDR 音频适配器（外部注入）
+  private tciAudioAdapter: TciAudioAdapter | null = null;
+  private usingTciInput = false;
+  private usingTciOutput = false;
+
   // OpenWebRX 音频适配器（外部注入）
   private openwebrxAudioAdapter: OpenWebRXAudioAdapter | null = null;
   private usingOpenWebRXInput = false;
@@ -305,6 +312,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   setIcomWlanAudioAdapter(adapter: IcomWlanAudioAdapter | null): void {
     this.icomWlanAudioAdapter = adapter;
     logger.info(`ICOM WLAN audio adapter ${adapter ? 'set' : 'cleared'}`);
+  }
+
+  /**
+   * 设置 TCI 音频适配器（由 DigitalRadioEngine 注入）
+   */
+  setTciAudioAdapter(adapter: TciAudioAdapter | null): void {
+    this.tciAudioAdapter = adapter;
+    logger.info(`TCI audio adapter ${adapter ? 'set' : 'cleared'}`);
   }
 
   /**
@@ -415,6 +430,46 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.isStreaming = true;
         logger.info('ICOM WLAN audio input started', {
           sourceSampleRate: this.icomWlanAudioAdapter.getSampleRate(),
+          processingSampleRate: this.inputProcessingSampleRate,
+        });
+        this.emit('started');
+        return;
+      }
+
+      // 检测是否为 TCI 虚拟设备
+      if (deviceId === 'tci-input' || audioConfig.inputDeviceName === TCI_AUDIO_DEVICE_NAME) {
+        logger.info('TCI virtual input device detected');
+
+        if (!this.tciAudioAdapter) {
+          logger.warn('TCI audio adapter not set, skipping audio stream start');
+          this.deviceId = 'tci-input';
+          this.activeInputDeviceName = TCI_AUDIO_DEVICE_NAME;
+          this.usingTciInput = false;
+          this.isStreaming = true;
+          this.emit('started');
+          return;
+        }
+
+        this.usingTciInput = true;
+        this.tciAudioAdapter.startReceiving();
+        this.tciAudioAdapter.on('audioData', (samples: Float32Array, meta?: AudioFrameMeta) => {
+          void this.ingestInputSamples(
+            samples,
+            this.tciAudioAdapter?.getSampleRate() ?? DEFAULT_INPUT_PROCESSING_SAMPLE_RATE,
+            'tci',
+            meta,
+          );
+        });
+        this.tciAudioAdapter.on('error', (error: Error) => {
+          logger.error('TCI audio error', error);
+          this.emit('error', error);
+        });
+
+        this.deviceId = 'tci-input';
+        this.activeInputDeviceName = TCI_AUDIO_DEVICE_NAME;
+        this.isStreaming = true;
+        logger.info('TCI audio input started', {
+          sourceSampleRate: this.tciAudioAdapter.getSampleRate(),
           processingSampleRate: this.inputProcessingSampleRate,
         });
         this.emit('started');
@@ -553,6 +608,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.icomWlanAudioAdapter.removeAllListeners('error');
         this.usingIcomWlanInput = false;
         logger.info('ICOM WLAN audio input stopped');
+      }
+
+      // 停止 TCI 音频输入
+      if (this.usingTciInput && this.tciAudioAdapter) {
+        this.tciAudioAdapter.stopReceiving();
+        this.tciAudioAdapter.removeAllListeners('audioData');
+        this.tciAudioAdapter.removeAllListeners('error');
+        this.usingTciInput = false;
+        logger.info('TCI audio input stopped');
       }
 
       // 停止 OpenWebRX 音频输入
@@ -793,6 +857,23 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
       }
 
+      // 检测是否为 TCI 虚拟设备
+      if (outputDeviceId === 'tci-output' || audioConfig.outputDeviceName === TCI_AUDIO_DEVICE_NAME) {
+        logger.info('TCI virtual output device detected');
+
+        if (!this.tciAudioAdapter) {
+          logger.warn('TCI audio adapter not set, falling back to default audio device');
+          outputDeviceId = undefined;
+        } else {
+          this.usingTciOutput = true;
+          this.outputDeviceId = 'tci-output';
+          this.activeOutputDeviceName = TCI_AUDIO_DEVICE_NAME;
+          this.isOutputting = true;
+          logger.info('TCI audio output started');
+          return;
+        }
+      }
+
       if (isAndroidAudioDeviceId(outputDeviceId) || configuredOutputDeviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && (!configuredOutputDeviceName || isLegacyAndroidAudioDeviceName('output', configuredOutputDeviceName)))) {
         const audioDeviceManager = AudioDeviceManager.getInstance();
         const androidDevice = audioDeviceManager.resolveAndroidDeviceForStream(
@@ -983,7 +1064,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    * 停止音频输出流
    */
   async stopOutput(): Promise<void> {
-    if (!this.isOutputting && !this.rtAudioOutput && !this.usingIcomWlanOutput) {
+    if (!this.isOutputting && !this.rtAudioOutput && !this.usingIcomWlanOutput && !this.usingTciOutput) {
       logger.warn('audio output is not running');
       return;
     }
@@ -997,6 +1078,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       if (this.usingIcomWlanOutput) {
         this.usingIcomWlanOutput = false;
         logger.info('ICOM WLAN audio output stopped');
+      }
+
+      if (this.usingTciOutput) {
+        this.usingTciOutput = false;
+        logger.info('TCI audio output stopped');
       }
 
       if (this.usingAndroidOutput) {
@@ -1709,10 +1795,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     const playbackId = ++this.playbackSequence;
     const diagnosticContext = options.diagnosticContext ?? {};
 
-    // 检查是否使用 ICOM WLAN 输出（零重采样优化）
-    if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
-      const icomWlanAudioAdapter = this.icomWlanAudioAdapter;
-      logger.info('playing audio via ICOM WLAN output (zero-resample)', {
+    const radioAudioOutput = this.usingIcomWlanOutput && this.icomWlanAudioAdapter
+      ? { label: 'ICOM WLAN', kind: 'icom-wlan' as const, adapter: this.icomWlanAudioAdapter }
+      : this.usingTciOutput && this.tciAudioAdapter
+        ? { label: 'TCI', kind: 'tci' as const, adapter: this.tciAudioAdapter }
+        : null;
+
+    if (radioAudioOutput) {
+      const radioAudioAdapter = radioAudioOutput.adapter;
+      logger.info(`playing audio via ${radioAudioOutput.label} output (zero-resample)`, {
         playbackId,
         ...diagnosticContext,
         samples: audioData.length,
@@ -1721,19 +1812,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         volumeGain: this.volumeGain.toFixed(2),
       });
 
-      // 设置播放状态
       this.playing = true;
       this.playbackStartTime = playStartTime;
       this.currentPlaybackKind = playbackKind;
       this.shouldStopPlayback = false;
 
       const playbackPromise = (async () => {
-        // 分块发送音频，支持实时音量调整
-        // 块大小：1200样本（≈100ms @ 12kHz），并维持少量预缓冲避免 ICOM 侧 underrun。
         const chunkSize = ICOM_WLAN_TX_CHUNK_SIZE;
         const totalChunks = Math.ceil(audioData.length / chunkSize);
-
-        logger.debug(`ICOM WLAN chunked send: ${totalChunks} chunks, chunkSize=${chunkSize}, targetLeadMs=${ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS}`);
+        logger.debug(`${radioAudioOutput.label} chunked send: ${totalChunks} chunks, chunkSize=${chunkSize}, targetLeadMs=${ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS}`);
 
         const chunkStartTime = Date.now();
         const hrStart = performance.now();
@@ -1763,51 +1850,41 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         };
 
         for (let i = 0; i < totalChunks; i++) {
-          // 检查是否需要停止播放
           try {
             assertNotStopped();
           } catch (error) {
-            logger.debug(`ICOM WLAN stop signal received, aborting playback (sent ${i}/${totalChunks} chunks)`);
+            logger.debug(`${radioAudioOutput.label} stop signal received, aborting playback (sent ${i}/${totalChunks} chunks)`);
             throw error;
           }
 
           const start = i * chunkSize;
           const end = Math.min(start + chunkSize, audioData.length);
           const sourceChunk = audioData.subarray(start, end);
-
-          // 应用当前音量增益（每个chunk读取最新值，支持实时调整）
           const chunk = new Float32Array(sourceChunk.length);
           const gain = this.volumeGain;
           for (let j = 0; j < sourceChunk.length; j++) {
-            const s = sourceChunk[j] * gain;
-            // 限幅保护，防止异常爆音
-            chunk[j] = s > 1 ? 1 : (s < -1 ? -1 : s);
+            const sample = sourceChunk[j] * gain;
+            chunk[j] = sample > 1 ? 1 : (sample < -1 ? -1 : sample);
           }
 
-          // 节奏控制：保持约 150ms 的 ICOM 侧预缓冲，既不让缓冲见底，也避免数倍速灌入后过早结束 PTT。
           const leadMs = getBufferedLeadMs();
           if (leadMs > ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS) {
             await waitRespectingStop(leadMs - ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS);
           }
 
-          // 发送音频数据
-          await icomWlanAudioAdapter.sendAudio(chunk);
+          await radioAudioAdapter.sendAudio(chunk);
           if (options.injectIntoMonitor) {
             this.emit('txMonitorAudioData', { samples: chunk, sampleRate: targetSampleRate });
           }
-
           samplesWritten += chunk.length;
         }
 
-        // 等待已注入的最后一段预缓冲自然播放完，避免上层 PTT 轮询把“发送完成”误判为“音频结束”。
         const remainingBufferedMs = getBufferedLeadMs();
         if (remainingBufferedMs > 0) {
           await waitRespectingStop(remainingBufferedMs);
         }
 
-        const chunkEndTime = Date.now();
-        const chunkDuration = chunkEndTime - chunkStartTime;
-        logger.info(`ICOM WLAN audio send complete, duration: ${chunkDuration}ms`);
+        logger.info(`${radioAudioOutput.label} audio send complete, duration: ${Date.now() - chunkStartTime}ms`);
       })();
 
       this.currentPlaybackPromise = playbackPromise;
@@ -1817,11 +1894,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       } catch (error) {
         const isInterrupted = error instanceof Error && error.message === 'playback interrupted';
         if (!isInterrupted) {
-          logger.error('ICOM WLAN audio send failed', error);
+          logger.error(`${radioAudioOutput.label} audio send failed`, error);
         }
         throw error;
       } finally {
-        // 清理播放状态
         if (this.currentPlaybackPromise === playbackPromise) {
           this.playing = false;
           this.currentPlaybackPromise = null;
@@ -2256,6 +2332,16 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       };
     }
 
+    if (this.usingTciOutput && this.tciAudioAdapter) {
+      const outputSampleRate = this.tciAudioAdapter.getSampleRate();
+      return {
+        available: this.isOutputting,
+        kind: 'tci' as VoiceTxOutputSinkState['kind'],
+        outputSampleRate,
+        outputBufferSize: Math.max(80, Math.round(outputSampleRate * 0.01)),
+      };
+    }
+
     if (this.usingAndroidOutput && this.androidAudioOutput) {
       return {
         available: this.isOutputting,
@@ -2274,15 +2360,16 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   }
 
   private async writeVoiceTxOutputChunk(samples: Float32Array, sink: VoiceTxOutputSinkState): Promise<boolean> {
-    if (sink.kind === 'icom-wlan') {
-      if (!this.icomWlanAudioAdapter) {
+    if (sink.kind === 'icom-wlan' || sink.kind === 'tci') {
+      const adapter = sink.kind === 'tci' ? this.tciAudioAdapter : this.icomWlanAudioAdapter;
+      if (!adapter) {
         return false;
       }
       try {
-        await this.icomWlanAudioAdapter.sendAudio(samples);
+        await adapter.sendAudio(samples);
         return true;
       } catch (error) {
-        logger.error('Voice audio ICOM WLAN send failed', error);
+        logger.error(`Voice audio ${sink.kind.toUpperCase()} send failed`, error);
         return false;
       }
     }

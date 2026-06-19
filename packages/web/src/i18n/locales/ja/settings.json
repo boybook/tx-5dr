@@ -299,7 +299,19 @@
     "cwKeyDeviceBusy": "CW キーイング ポート {{port}} は使用中です。現在の CW キーヤーを停止するか、このシリアルポートを使用している他のプログラムを終了してください。",
     "cwKeyDeviceBusyDifferentSettings": "CW キーイング ポート {{port}} は現在の CW キーヤーにより {{currentMethod}} / active {{currentActiveLevel}} で開かれています。{{requestedMethod}} / active {{requestedActiveLevel}} をテストするには、現在の CW キーヤーを停止するか、設定を保存して再起動してから再試行してください。",
     "cwKeyerCurrentlyActive": "CW キーヤーは送信中または手動キーイング中です。ハードウェア テストを実行する前に、現在の CW 送信を停止してください。",
-    "cwKeyReleaseFailed": "CW 解除コマンドが {{port}} に届きませんでした。送信中に USB シリアルが切断された可能性があります。無線機が送信を停止していることを確認してから、デバイスを再接続し、アンテナ/給電線と USB ケーブルの距離を確認してください。"
+    "cwKeyReleaseFailed": "CW 解除コマンドが {{port}} に届きませんでした。送信中に USB シリアルが切断された可能性があります。無線機が送信を停止していることを確認してから、デバイスを再接続し、アンテナ/給電線と USB ケーブルの距離を確認してください。",
+    "tciTitle": "TCI / SunSDR 無線機",
+    "tciDesc": "TCI WebSocket で SunSDR / ExpertSDR に接続し、CAT 制御と無線機音声を利用します。",
+    "modeTci": "TCI / SunSDR",
+    "tciReceiver": "レシーバー",
+    "tciTrx": "TRX",
+    "tciVfo": "VFO",
+    "tciAudioEnabled": "TCI 音声を有効化",
+    "tciAudioEnabledDesc": "TCI RX/TX 音声を仮想オーディオデバイスとして使用します。",
+    "tciAudioSampleRate": "TCI 音声サンプルレート",
+    "tipTci": "ExpertSDR/SunSDR 側で TCI サーバーを有効にし、変更していなければポート 40001 を使います。",
+    "tipTciAudio": "無線機の音声ストリームを使う場合は、入力/出力に TCI Audio を選択します。",
+    "tipTciCompensation": "TCI モード: ローカル接続では通常、低めの補正で十分です"
   },
   "audio": {
     "loading": "オーディオデバイスをロード中...",
@@ -372,7 +384,9 @@
     "serial": "ハムリブダイレクト無線機",
     "serialDesc": "Hamlib 経由でサポートされている無線に直接接続します。特定のモデルではシリアル ポート、サーバー アドレス、またはデバイス パスを使用する場合があります。",
     "icomWlan": "ICOM WLAN",
-    "icomWlanDesc": "Wi-Fi経由でICOM無線に接続する"
+    "icomWlanDesc": "Wi-Fi経由でICOM無線に接続する",
+    "tci": "TCI / SunSDR",
+    "tciDesc": "ExpertSDR / SunSDR TCI WebSocket"
   },
   "common": {
     "error": "エラー",

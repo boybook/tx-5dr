@@ -23,4 +23,18 @@ describe('radio power support', () => {
       }),
     ).not.toThrow();
   });
+
+  it('does not expose physical power controls for TCI radios', () => {
+    const decision = decidePowerSupport({
+      type: 'tci',
+      tci: { host: '127.0.0.1', port: 40001, receiver: 0, trx: 0, vfo: 0, audioEnabled: true, audioSampleRate: 12000 },
+    });
+
+    expect(decision).toMatchObject({
+      canPowerOn: false,
+      canPowerOff: false,
+      supportedStates: [],
+      reason: 'model-unsupported',
+    });
+  });
 });

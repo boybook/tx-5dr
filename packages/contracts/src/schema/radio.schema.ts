@@ -193,6 +193,20 @@ export const IcomWlanConfigSchema = z.object({
   dataMode: z.boolean().optional().default(true),
 });
 
+
+/**
+ * TCI / SunSDR 连接配置Schema
+ */
+export const TciConfigSchema = z.object({
+  host: z.string().default('127.0.0.1'),
+  port: z.number().int().min(1).max(65535).default(40001),
+  receiver: z.number().int().min(0).default(0),
+  trx: z.number().int().min(0).default(0),
+  vfo: z.number().int().min(0).default(0),
+  audioEnabled: z.boolean().optional().default(true),
+  audioSampleRate: z.number().int().min(8000).max(48000).optional().default(12000),
+});
+
 /**
  * 串口连接配置Schema
  */
@@ -245,13 +259,16 @@ export type FakeFrequencyConfig = z.infer<typeof FakeFrequencyConfigSchema>;
  * - 根据 type 字段读取对应的配置对象
  */
 export const HamlibConfigSchema = z.object({
-  type: z.enum(['none', 'network', 'serial', 'icom-wlan']),
+  type: z.enum(['none', 'network', 'serial', 'icom-wlan', 'tci']),
 
   // 网络模式配置
   network: NetworkConfigSchema.optional(),
 
   // ICOM WLAN 模式配置
   icomWlan: IcomWlanConfigSchema.optional(),
+
+  // TCI / SunSDR 模式配置
+  tci: TciConfigSchema.optional(),
 
   // 串口模式配置
   serial: SerialConnectionConfigSchema.optional(),
@@ -334,7 +351,7 @@ export const RadioInfoSchema = z.object({
   /** Hamlib 电台型号 ID (serial/network 模式使用，icom-wlan 模式可选) */
   rigModel: z.number().optional(),
   /** 连接类型 */
-  connectionType: z.enum(['serial', 'network', 'icom-wlan']),
+  connectionType: z.enum(['serial', 'network', 'icom-wlan', 'tci']),
   /** 固件版本 (如果可获取) */
   firmwareVersion: z.string().optional(),
   /** 序列号 (如果可获取) */
@@ -493,6 +510,7 @@ export type HamlibConfigFieldType = z.infer<typeof HamlibConfigFieldTypeSchema>;
 export type HamlibConfigField = z.infer<typeof HamlibConfigFieldSchema>;
 export type NetworkConfig = z.infer<typeof NetworkConfigSchema>;
 export type IcomWlanConfig = z.infer<typeof IcomWlanConfigSchema>;
+export type TciConfig = z.infer<typeof TciConfigSchema>;
 export type SerialConnectionConfig = z.infer<typeof SerialConnectionConfigSchema>;
 export type HamlibSpectrumConfig = z.infer<typeof HamlibSpectrumConfigSchema>;
 export type DigitalModeRadioModePreference = z.infer<typeof DigitalModeRadioModePreferenceSchema>;

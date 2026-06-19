@@ -508,6 +508,27 @@ describe('audio hotplug recovery', () => {
     expect(resolution.output.effectiveDevice?.id).toBe('icom-wlan-output');
   });
 
+  it('treats TCI Audio as a virtual selected device for TCI profiles', async () => {
+    mockState.devices = [];
+    mockConfigManager.getRadioConfig.mockReturnValue({
+      type: 'tci',
+      tci: { host: '127.0.0.1', port: 40001, audioEnabled: true, audioSampleRate: 12000 },
+    } as never);
+    const manager = AudioDeviceManager.getInstance();
+
+    const resolution = await manager.resolveAudioSettings({
+      inputDeviceName: 'TCI Audio',
+      outputDeviceName: 'TCI Audio',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    }, 'tci');
+
+    expect(resolution.input.status).toBe('virtual-selected');
+    expect(resolution.input.effectiveDevice).toMatchObject({ id: 'tci-input', sampleRate: 12000 });
+    expect(resolution.output.status).toBe('virtual-selected');
+    expect(resolution.output.effectiveDevice).toMatchObject({ id: 'tci-output', sampleRate: 12000 });
+  });
+
   it('resolves existing OpenWebRX virtual input devices and marks removed stations missing', async () => {
     mockState.devices = [
       { id: 1, name: 'Built-in Mic', inputChannels: 1, outputChannels: 0, preferredSampleRate: 48000, isDefaultInput: true },

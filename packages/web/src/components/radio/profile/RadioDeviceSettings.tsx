@@ -875,6 +875,25 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
       );
     };
 
+    const selectRadioType = (type: HamlibConfig['type']) => {
+      if (type === 'tci') {
+        updateConfig({
+          type,
+          tci: config.tci ?? {
+            host: '127.0.0.1',
+            port: 40001,
+            receiver: 0,
+            trx: 0,
+            vfo: 0,
+            audioEnabled: true,
+            audioSampleRate: 12000,
+          },
+        });
+        return;
+      }
+      updateConfig({ type });
+    };
+
     // 渲染配置内容
     const renderConfigContent = () => {
       switch (config.type) {
@@ -1500,6 +1519,115 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
               </CardBody>
             </Card>
           );
+        case 'tci':
+          return (
+            <Card shadow="none" radius="lg" classNames={{ base: "border border-divider bg-content1" }}>
+              <CardBody className="space-y-4 p-4">
+                <h4 className="font-semibold text-default-900">{t('radio.tciTitle')}</h4>
+                <p className="text-sm text-default-600">{t('radio.tciDesc')}</p>
+                <Divider />
+                <div className="space-y-4">
+                  <Input
+                    label={t('radio.host')}
+                    placeholder="127.0.0.1"
+                    value={config.tci?.host || ''}
+                    onChange={e => updateConfig({ tci: { host: e.target.value, port: config.tci?.port ?? 40001, receiver: config.tci?.receiver ?? 0, trx: config.tci?.trx ?? 0, vfo: config.tci?.vfo ?? 0, audioEnabled: config.tci?.audioEnabled ?? true, audioSampleRate: config.tci?.audioSampleRate ?? 12000 } })}
+                  />
+                  <Input
+                    label={t('radio.port')}
+                    placeholder="40001"
+                    type="number"
+                    value={String(config.tci?.port ?? '')}
+                    onChange={e => updateConfig({ tci: { host: config.tci?.host ?? '127.0.0.1', port: Number(e.target.value), receiver: config.tci?.receiver ?? 0, trx: config.tci?.trx ?? 0, vfo: config.tci?.vfo ?? 0, audioEnabled: config.tci?.audioEnabled ?? true, audioSampleRate: config.tci?.audioSampleRate ?? 12000 } })}
+                  />
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <Input
+                      label={t('radio.tciReceiver')}
+                      type="number"
+                      min="0"
+                      value={String(config.tci?.receiver ?? 0)}
+                      onChange={e => updateConfig({ tci: { host: config.tci?.host ?? '127.0.0.1', port: config.tci?.port ?? 40001, receiver: Number(e.target.value), trx: config.tci?.trx ?? 0, vfo: config.tci?.vfo ?? 0, audioEnabled: config.tci?.audioEnabled ?? true, audioSampleRate: config.tci?.audioSampleRate ?? 12000 } })}
+                    />
+                    <Input
+                      label={t('radio.tciTrx')}
+                      type="number"
+                      min="0"
+                      value={String(config.tci?.trx ?? 0)}
+                      onChange={e => updateConfig({ tci: { host: config.tci?.host ?? '127.0.0.1', port: config.tci?.port ?? 40001, receiver: config.tci?.receiver ?? 0, trx: Number(e.target.value), vfo: config.tci?.vfo ?? 0, audioEnabled: config.tci?.audioEnabled ?? true, audioSampleRate: config.tci?.audioSampleRate ?? 12000 } })}
+                    />
+                    <Input
+                      label={t('radio.tciVfo')}
+                      type="number"
+                      min="0"
+                      value={String(config.tci?.vfo ?? 0)}
+                      onChange={e => updateConfig({ tci: { host: config.tci?.host ?? '127.0.0.1', port: config.tci?.port ?? 40001, receiver: config.tci?.receiver ?? 0, trx: config.tci?.trx ?? 0, vfo: Number(e.target.value), audioEnabled: config.tci?.audioEnabled ?? true, audioSampleRate: config.tci?.audioSampleRate ?? 12000 } })}
+                    />
+                  </div>
+                  <div className="flex items-start justify-between gap-4 rounded-lg bg-default-50 p-3">
+                    <div>
+                      <p className="text-sm font-medium text-default-700">{t('radio.tciAudioEnabled')}</p>
+                      <p className="text-xs text-default-500">{t('radio.tciAudioEnabledDesc')}</p>
+                    </div>
+                    <Switch
+                      size="sm"
+                      isSelected={config.tci?.audioEnabled ?? true}
+                      onValueChange={audioEnabled => updateConfig({ tci: { host: config.tci?.host ?? '127.0.0.1', port: config.tci?.port ?? 40001, receiver: config.tci?.receiver ?? 0, trx: config.tci?.trx ?? 0, vfo: config.tci?.vfo ?? 0, audioEnabled, audioSampleRate: config.tci?.audioSampleRate ?? 12000 } })}
+                    />
+                  </div>
+                  <Select
+                    label={t('radio.tciAudioSampleRate')}
+                    selectedKeys={[String(config.tci?.audioSampleRate ?? 12000)]}
+                    onSelectionChange={keys => {
+                      const value = Number(Array.from(keys)[0] ?? 12000);
+                      updateConfig({ tci: { host: config.tci?.host ?? '127.0.0.1', port: config.tci?.port ?? 40001, receiver: config.tci?.receiver ?? 0, trx: config.tci?.trx ?? 0, vfo: config.tci?.vfo ?? 0, audioEnabled: config.tci?.audioEnabled ?? true, audioSampleRate: value } });
+                    }}
+                    variant="flat"
+                  >
+                    {[8000, 12000, 24000, 48000].map(rate => (
+                      <SelectItem key={String(rate)} textValue={`${rate} Hz`}>{rate.toLocaleString()} Hz</SelectItem>
+                    ))}
+                  </Select>
+                  <Divider />
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      color="primary"
+                      onPress={handleTestConnection}
+                      isLoading={isTestingConnection}
+                      isDisabled={!config.tci?.host || !config.tci?.port || isTestingPTT}
+                    >
+                      {isTestingConnection ? t('radio.testingConnection') : t('radio.testConnection')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      color="secondary"
+                      onPress={handleTestPTT}
+                      isLoading={isTestingPTT}
+                      isDisabled={!config.tci?.host || !config.tci?.port || isTestingConnection}
+                    >
+                      {isTestingPTT ? t('radio.testingPTT') : t('radio.testPTT')}
+                    </Button>
+                  </div>
+                  {testResult && (
+                    <Chip
+                      color={testResult.type === 'success' ? 'success' : 'danger'}
+                      variant="flat"
+                      className="w-full"
+                    >
+                      {testResult.message}
+                    </Chip>
+                  )}
+                  <div className="text-xs text-default-400 space-y-1 bg-default-50 p-3 rounded-lg">
+                    <p className="font-medium">💡 {t('radio.usageTips')}</p>
+                    <p>• {t('radio.tipTci')}</p>
+                    <p>• {t('radio.tipTciAudio')}</p>
+                  </div>
+                </div>
+              </CardBody>
+            </Card>
+          );
         case 'icom-wlan':
           return (
             <Card shadow="none" radius="lg" classNames={{ base: "border border-divider bg-content1" }}>
@@ -1716,7 +1844,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
         <div className="inline-block max-w-full overflow-x-auto align-top sm:max-w-none sm:overflow-visible">
           <Tabs
             selectedKey={config.type}
-            onSelectionChange={(key) => updateConfig({ type: key as HamlibConfig['type'] })}
+            onSelectionChange={(key) => selectRadioType(key as HamlibConfig['type'])}
             size="lg"
             classNames={{
               tabList: 'w-auto flex-nowrap',
@@ -1727,6 +1855,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
             <Tab key="serial" title={`🔌 ${t('radio.modeSerial')}`} />
             <Tab key="network" title={`🌐 ${t('radio.modeNetwork')}`} />
             <Tab key="icom-wlan" title={`📡 ${t('radio.modeIcomWlan')}`} />
+            <Tab key="tci" title={`🛰️ ${t('radio.modeTci')}`} />
           </Tabs>
         </div>
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DigitalModeRadioModePreferenceSchema, HamlibConfigSchema, PresetFrequencySchema } from '../radio.schema.js';
+import { DigitalModeRadioModePreferenceSchema, HamlibConfigSchema, PresetFrequencySchema, RadioInfoSchema } from '../radio.schema.js';
 
 describe('HamlibConfigSchema digital mode radio mode preference', () => {
   it('accepts legacy configs without a digital mode radio mode preference', () => {
@@ -17,6 +17,35 @@ describe('HamlibConfigSchema digital mode radio mode preference', () => {
 
   it('rejects invalid FT8/FT4 radio mode preferences', () => {
     expect(() => HamlibConfigSchema.parse({ type: 'none', digitalModeRadioMode: 'lsb-data' })).toThrow();
+  });
+});
+
+describe('HamlibConfigSchema TCI connection', () => {
+  it('accepts TCI configs and applies SunSDR defaults', () => {
+    const parsed = HamlibConfigSchema.parse({
+      type: 'tci',
+      tci: {},
+    });
+
+    expect(parsed.tci).toMatchObject({
+      host: '127.0.0.1',
+      port: 40001,
+      receiver: 0,
+      trx: 0,
+      vfo: 0,
+      audioEnabled: true,
+      audioSampleRate: 12000,
+    });
+  });
+
+  it('accepts TCI as a reported radio connection type', () => {
+    const parsed = RadioInfoSchema.parse({
+      manufacturer: 'Expert Electronics',
+      model: 'SunSDR',
+      connectionType: 'tci',
+    });
+
+    expect(parsed.connectionType).toBe('tci');
   });
 });
 

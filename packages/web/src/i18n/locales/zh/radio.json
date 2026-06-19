@@ -487,7 +487,8 @@
     "unknownType": "未知类型",
     "reorderFailed": "排序保存失败",
     "retry": "请重试",
-    "updateFailed": "更新失败"
+    "updateFailed": "更新失败",
+    "tciDefaultDesc": "TCI 模式默认使用 {{device}}；仅在有特殊音频路由时修改。"
   },
   "errorHistory": {
     "title": "电台错误历史",
@@ -920,7 +921,7 @@
     "catUnavailableTitle": "CAT CW 当前不可用",
     "catUnavailableBody": "请连接支持 CAT/电台 CW 文本发报的电台后再使用该后端。",
     "catUnavailableDisconnected": "使用 CAT CW 前请先连接电台。",
-    "catUnavailableHamlibOnly": "CAT CW 当前支持 Hamlib 串口/网络或 ICOM WLAN 电台连接。",
+    "catUnavailableHamlibOnly": "CAT CW 当前支持 Hamlib 串口/网络、ICOM WLAN 或 TCI 电台连接。",
     "catUnsupportedSendMorse": "当前电台未报告支持 CAT/电台 CW 文本发报。请选择电键接口，或检查 Hamlib SEND_MORSE / ICOM CI-V CW 支持。",
     "qsoTab": "通联日志",
     "qso": {

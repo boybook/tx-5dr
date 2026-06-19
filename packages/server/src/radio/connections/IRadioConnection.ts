@@ -34,6 +34,11 @@ export enum RadioConnectionType {
   ICOM_WLAN = 'icom-wlan',
 
   /**
+   * TCI / SunSDR WebSocket 连接
+   */
+  TCI = 'tci',
+
+  /**
    * Hamlib 连接（支持多种型号）
    */
   HAMLIB = 'hamlib',
@@ -165,7 +170,7 @@ export interface IRadioConnectionEvents {
   frequencyChanged: (frequency: number) => void;
 
   /**
-   * 音频帧（仅 ICOM WLAN）
+   * 音频帧（ICOM WLAN / TCI）
    * @param meta 可选的线级元数据：seq（线级序列号，用于丢包检测）、timestampMs（RX 到达时间，诊断用）
    */
   audioFrame: (pcm16: Buffer, meta?: AudioFrameMeta) => void;

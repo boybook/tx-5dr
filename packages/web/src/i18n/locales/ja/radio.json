@@ -465,7 +465,8 @@
     "unknownType": "不明なタイプ",
     "reorderFailed": "並べ替え保存に失敗しました",
     "retry": "もう一度試してください",
-    "updateFailed": "アップデートに失敗しました"
+    "updateFailed": "アップデートに失敗しました",
+    "tciDefaultDesc": "TCI モードでは既定で {{device}} を使用します。特別な音声経路がある場合だけ変更してください。"
   },
   "errorHistory": {
     "title": "無線エラー履歴",
@@ -815,7 +816,7 @@
     "catUnavailableTitle": "CAT CW は現在利用できません",
     "catUnavailableBody": "このバックエンドを使用する前に、CAT/無線機 CW テキスト送信をサポートする無線機に接続してください。",
     "catUnavailableDisconnected": "CAT CWを使用する前に無線機に接続してください。",
-    "catUnavailableHamlibOnly": "CAT CW は現在、Hamlib シリアル/ネットワークまたは ICOM WLAN 無線機接続をサポートしています。",
+    "catUnavailableHamlibOnly": "CAT CW は現在、Hamlib シリアル/ネットワーク、ICOM WLAN、または TCI 無線機接続に対応しています。",
     "catUnsupportedSendMorse": "現在の無線機は CAT/無線機 CW テキスト送信のサポートを報告していません。キーインターフェイスを選択するか、Hamlib SEND_MORSE / ICOM CI-V CW サポートを確認してください。",
     "qsoTab": "交信ログ",
     "qso": {

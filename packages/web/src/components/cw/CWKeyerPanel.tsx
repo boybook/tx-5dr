@@ -196,7 +196,8 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const radioConfigType = radioState.state.radioConfig?.type;
   const isRadioKeyerCapableConfig = radioConfigType === 'serial'
     || radioConfigType === 'network'
-    || radioConfigType === 'icom-wlan';
+    || radioConfigType === 'icom-wlan'
+    || radioConfigType === 'tci';
   const catBackendError = cwKeyerStatus?.backend === 'cat' && cwKeyerStatus.backendAvailable === false
     ? cwKeyerStatus.backendError
     : null;
@@ -206,7 +207,7 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const catUnavailableReason = !radioConnected
     ? t('radio:cw.catUnavailableDisconnected', 'Connect a radio before using CAT CW.')
     : !isRadioKeyerCapableConfig
-      ? t('radio:cw.catUnavailableHamlibOnly', 'CAT CW currently supports Hamlib serial/network or ICOM WLAN radio connections only.')
+      ? t('radio:cw.catUnavailableHamlibOnly', 'CAT CW currently supports Hamlib serial/network, ICOM WLAN, or TCI radio connections only.')
       : catUnsupportedSendMorse
         ? t('radio:cw.catUnsupportedSendMorse', 'The radio does not report CAT/radio CW text sending support. Use Key jack instead, or verify Hamlib SEND_MORSE / ICOM CI-V CW support.')
         : catBackendError;

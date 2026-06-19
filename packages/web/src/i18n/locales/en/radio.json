@@ -487,7 +487,8 @@
     "unknownType": "Unknown type",
     "reorderFailed": "Failed to save order",
     "retry": "Please try again",
-    "updateFailed": "Update failed"
+    "updateFailed": "Update failed",
+    "tciDefaultDesc": "TCI mode uses {{device}} by default; change it only if you have a special audio route."
   },
   "errorHistory": {
     "title": "Radio Error History",
@@ -920,7 +921,7 @@
     "catUnavailableTitle": "CAT CW is not available",
     "catUnavailableBody": "Connect a radio that supports CAT/radio CW text sending before using this backend.",
     "catUnavailableDisconnected": "Connect a radio before using CAT CW.",
-    "catUnavailableHamlibOnly": "CAT CW currently supports Hamlib serial/network or ICOM WLAN radio connections only.",
+    "catUnavailableHamlibOnly": "CAT CW currently supports Hamlib serial/network, ICOM WLAN, or TCI radio connections only.",
     "catUnsupportedSendMorse": "The radio does not report CAT/radio CW text sending support. Use Key jack instead, or verify Hamlib SEND_MORSE / ICOM CI-V CW support.",
     "qsoTab": "QSOs",
     "qso": {

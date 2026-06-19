@@ -500,6 +500,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       if (oldIp !== newIp) {
         logger.info(`ICOM WLAN IP changed: ${oldIp} -> ${newIp}`);
       }
+    } else if (config.type === 'tci') {
+      const oldEndpoint = `${oldConfig.tci?.host ?? ''}:${oldConfig.tci?.port ?? ''}`;
+      const newEndpoint = `${config.tci?.host ?? ''}:${config.tci?.port ?? ''}`;
+      if (oldEndpoint !== newEndpoint) {
+        logger.info(`TCI endpoint changed: ${oldEndpoint} -> ${newEndpoint}`);
+      }
     }
 
     // 如果已有连接，先内部断开（不触发事件，避免时序混乱）
@@ -949,6 +955,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
           connectionType: 'network',
         };
       }
+
+      case 'tci':
+        return {
+          manufacturer: 'Expert Electronics',
+          model: 'TCI / SunSDR',
+          connectionType: 'tci',
+        };
 
       case 'icom-wlan': {
         const detectedInfo = typeof (this.connection as any).getDetectedRadioInfo === 'function'
@@ -1874,6 +1887,20 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   /**
+   * 获取 TCI 连接（用于音频适配器）
+   */
+  getTciConnection(): any | null {
+    if (
+      !this.connection ||
+      this.connection.getType() !== RadioConnectionType.TCI
+    ) {
+      return null;
+    }
+
+    return this.connection;
+  }
+
+  /**
    * 获取当前活动连接
    */
   getActiveConnection(): IRadioConnection | null {
@@ -2038,7 +2065,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
           cfg = this.configManager.getRadioConfig();
         }
         logger.debug(`Using config type: ${cfg.type}`,
-                    cfg.type === 'icom-wlan' ? { ip: cfg.icomWlan?.ip, port: cfg.icomWlan?.port } : {});
+                    cfg.type === 'icom-wlan'
+                      ? { ip: cfg.icomWlan?.ip, port: cfg.icomWlan?.port }
+                      : cfg.type === 'tci'
+                        ? { host: cfg.tci?.host, port: cfg.tci?.port }
+                        : {});
         await this.doConnect(cfg);
       },
 
@@ -2987,6 +3018,19 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       return (
         a.icomWlan?.ip === b.icomWlan?.ip &&
         a.icomWlan?.port === b.icomWlan?.port
+      );
+    }
+
+    // 比较 TCI 配置
+    if (a.type === 'tci' && b.type === 'tci') {
+      return (
+        a.tci?.host === b.tci?.host &&
+        a.tci?.port === b.tci?.port &&
+        a.tci?.receiver === b.tci?.receiver &&
+        a.tci?.trx === b.tci?.trx &&
+        a.tci?.vfo === b.tci?.vfo &&
+        a.tci?.audioEnabled === b.tci?.audioEnabled &&
+        a.tci?.audioSampleRate === b.tci?.audioSampleRate
       );
     }
 

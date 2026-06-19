@@ -111,6 +111,9 @@ export function decidePowerSupport(
       // ICOM WLAN 的 CI-V-over-UDP 通道在电台关机后无法维持；即便已连接
       // 发送 powerstat(off) 也不能可靠恢复。整体不暴露电源控制。
       return { canPowerOn: false, canPowerOff: false, supportedStates: [], reason: 'model-unsupported' };
+    case 'tci':
+      // TCI/ExpertSDR does not expose a safe physical power-on path here.
+      return { canPowerOn: false, canPowerOff: false, supportedStates: [], reason: 'model-unsupported' };
     case 'serial': {
       if (!rigInfo) {
         return { canPowerOn: false, canPowerOff: false, supportedStates: [], reason: 'model-unsupported' };

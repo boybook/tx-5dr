@@ -7,6 +7,7 @@ import {
   AudioDeviceSettingsResponseSchema,
   AudioOutputChannelModeSchema,
   AudioOutputSampleFormatSchema,
+  AudioSettingsResolveRequestSchema,
   AudioSettingsResolveResponseSchema,
 } from '../audio.schema.js';
 
@@ -160,5 +161,17 @@ describe('audio device resolution schemas', () => {
         },
       }).deviceResolution.input.status).toBe(status);
     }
+  });
+
+  it('accepts TCI as a radio-audio resolution request context', () => {
+    const parsed = AudioSettingsResolveRequestSchema.parse({
+      radioType: 'tci',
+      audio: {
+        inputDeviceName: 'TCI Audio',
+        outputDeviceName: 'TCI Audio',
+      },
+    });
+
+    expect(parsed.radioType).toBe('tci');
   });
 });

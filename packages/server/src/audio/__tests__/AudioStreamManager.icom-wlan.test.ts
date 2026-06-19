@@ -52,6 +52,8 @@ type MockIcomAdapter = {
   removeAllListeners?: EventEmitter['removeAllListeners'];
 };
 
+type MockTciAdapter = MockIcomAdapter;
+
 type MockOpenWebRXAdapter = EventEmitter & {
   getSampleRate: ReturnType<typeof vi.fn>;
   startReceiving: ReturnType<typeof vi.fn>;
@@ -63,6 +65,14 @@ function createIcomManager(adapter: MockIcomAdapter): AudioStreamManager {
   manager.setIcomWlanAudioAdapter(adapter as never);
   (manager as unknown as { usingIcomWlanOutput: boolean; isOutputting: boolean }).usingIcomWlanOutput = true;
   (manager as unknown as { usingIcomWlanOutput: boolean; isOutputting: boolean }).isOutputting = true;
+  return manager;
+}
+
+function createTciManager(adapter: MockTciAdapter): AudioStreamManager {
+  const manager = new AudioStreamManager();
+  manager.setTciAudioAdapter(adapter as never);
+  (manager as unknown as { usingTciOutput: boolean; isOutputting: boolean }).usingTciOutput = true;
+  (manager as unknown as { usingTciOutput: boolean; isOutputting: boolean }).isOutputting = true;
   return manager;
 }
 
@@ -127,6 +137,26 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
     expect(playbackError.message).toBe('playback interrupted');
   });
 
+  it('paces TCI chunks through the same radio-audio output path', async () => {
+    const adapter: MockTciAdapter = {
+      sendAudio: vi.fn().mockResolvedValue(undefined),
+      getSampleRate: vi.fn().mockReturnValue(12000),
+    };
+    const manager = createTciManager(adapter);
+    const audio = new Float32Array(12000);
+
+    const playback = manager.playAudio(audio, 12000);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(manager.isPlaying()).toBe(true);
+    expect(adapter.sendAudio).toHaveBeenCalled();
+    expect(adapter.sendAudio.mock.calls.length).toBeLessThan(10);
+
+    await expect(playback).resolves.toBeUndefined();
+    expect(manager.isPlaying()).toBe(false);
+    expect(adapter.sendAudio).toHaveBeenCalledTimes(10);
+  });
+
   it('emits native 12k ICOM input frames while still writing the digital ring buffer', async () => {
     const adapter = Object.assign(new EventEmitter(), {
       sendAudio: vi.fn().mockResolvedValue(undefined),
@@ -152,6 +182,41 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
     expect(manager.getAudioProvider().getAvailableMs()).toBeGreaterThan(0);
 
     await manager.stopStream();
+  });
+
+  it('emits native TCI input frames while still writing the digital ring buffer', async () => {
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      inputDeviceName: 'TCI Audio',
+      outputDeviceName: 'TCI Audio',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+    mockConfigManager.getRadioConfig.mockReturnValue({ type: 'tci', tci: { audioEnabled: true, audioSampleRate: 12000 } } as never);
+    const adapter = Object.assign(new EventEmitter(), {
+      sendAudio: vi.fn().mockResolvedValue(undefined),
+      getSampleRate: vi.fn().mockReturnValue(12000),
+      startReceiving: vi.fn(),
+      stopReceiving: vi.fn(),
+    });
+    const manager = new AudioStreamManager();
+    manager.setTciAudioAdapter(adapter as never);
+    const nativeFrames: Array<{ samples: Float32Array; sampleRate: number; sourceKind: string; sequence: number }> = [];
+    manager.on('nativeAudioInputData', frame => nativeFrames.push(frame));
+
+    await manager.startStream();
+    adapter.emit('audioData', new Float32Array([0.1, 0.2, 0.3, 0.4]));
+
+    expect(adapter.startReceiving).toHaveBeenCalledOnce();
+    expect(nativeFrames).toHaveLength(1);
+    expect(nativeFrames[0]?.sampleRate).toBe(12000);
+    expect(nativeFrames[0]?.sourceKind).toBe('tci');
+    expect(nativeFrames[0]?.sequence).toBe(0);
+    expect(nativeFrames[0]?.samples[0]).toBeCloseTo(0.1);
+    expect(nativeFrames[0]?.samples[3]).toBeCloseTo(0.4);
+    expect(manager.getAudioProvider().getAvailableMs()).toBeGreaterThan(0);
+
+    await manager.stopStream();
+    expect(adapter.stopReceiving).toHaveBeenCalledOnce();
   });
 
   it('threads ICOM wire-level seq into the ring buffer for packet-loss detection', async () => {
