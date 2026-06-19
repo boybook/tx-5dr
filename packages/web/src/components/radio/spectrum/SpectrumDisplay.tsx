@@ -11,9 +11,14 @@ import { createLogger } from '../../../utils/logger';
 import { setPreferredSpectrumKind } from '../../../utils/spectrumPreferences';
 import { useTargetRxFrequencies, type RxFrequency } from '../../../hooks/useTargetRxFrequencies';
 import { useTxFrequencies, type TxFrequency } from '../../../hooks/useTxFrequencies';
-import { WebGLWaterfall } from './WebGLWaterfall';
+import { WebGLWaterfall, WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ } from './WebGLWaterfall';
 import type { AutoRangeConfig, FrequencyBandOverlay, FrequencyBandOverlayChange, PresetMarker, TxBandOverlay } from './WebGLWaterfall';
 import { SpectrumStreamController } from '../../../spectrum/SpectrumStreamController';
+import {
+  ICOM_RADIO_SDR_FREQUENCY_AXIS_CALIBRATION,
+  IDENTITY_FREQUENCY_AXIS_TRANSFORM,
+  createFrequencyAxisTransform,
+} from '../../../spectrum/frequencyAxisCalibration';
 import { readSpectrumSubscriptionPaused, setSpectrumSubscriptionPaused } from '../../../utils/spectrumSubscriptionPause';
 import { resetOperatorsForOperatingStateChange } from '../../../utils/operatorReset';
 import { canExecuteRadioFrequency, canWriteRadioFrequency } from '../../../utils/radioControl';
@@ -805,6 +810,7 @@ const CollapsedSpectrumBar: React.FC<CollapsedSpectrumBarProps> = ({
           rxFrequencies={rxFrequencies}
           txFrequencies={txFrequencies}
           frequencyRangeMode="baseband"
+          visualFrequencyOffsetHz={WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ}
           basebandInteractionRange={BASEBAND_INTERACTION_RANGE}
           onTxFrequencyChange={onTxFrequencyChange}
           hoverFrequency={hoverFrequency}
@@ -991,6 +997,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const isAudioSpectrumSelected = effectiveSelectedKind === AUDIO_SOURCE;
   const isRadioSdrSelected = effectiveSelectedKind === RADIO_SDR_SOURCE;
   const isOpenWebRXSdrSelected = effectiveSelectedKind === OPENWEBRX_SDR_SOURCE;
+  const visualFrequencyOffsetHz = isAudioSpectrumSelected
+    ? WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ
+    : 0;
   const engineNotStarted = isSpectrumEngineNotStarted({
     connectionReady: connection.state.isReady,
     isEngineRunning,
@@ -1039,6 +1048,12 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const spectrumReferenceFrequency = isRadioSdrSelected
     ? effectiveRadioSdrFrequency
     : null;
+  const frequencyAxisTransform = React.useMemo(
+    () => (isRadioSdrSelected && typeof spectrumReferenceFrequency === 'number' && Number.isFinite(spectrumReferenceFrequency)
+      ? createFrequencyAxisTransform(ICOM_RADIO_SDR_FREQUENCY_AXIS_CALIBRATION, spectrumReferenceFrequency)
+      : IDENTITY_FREQUENCY_AXIS_TRANSFORM),
+    [isRadioSdrSelected, spectrumReferenceFrequency],
+  );
   const currentManualRangeSettings = isOpenWebRXSdrSelected
     ? (isOpenWebRXDetailMode
         ? persistedRangeSettings.openWebRxSdr.detail
@@ -2062,6 +2077,8 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         totalRows={WATERFALL_HISTORY_ROWS}
         frequencyRangeMode={frequencyRangeMode}
         referenceFrequencyHz={spectrumReferenceFrequency}
+        frequencyAxisTransform={frequencyAxisTransform}
+        visualFrequencyOffsetHz={visualFrequencyOffsetHz}
         basebandInteractionRange={BASEBAND_INTERACTION_RANGE}
         interactionFrequencyMode={
           frequencyGestureTarget === 'radio-frequency'
