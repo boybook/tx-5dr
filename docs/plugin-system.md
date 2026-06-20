@@ -394,6 +394,12 @@ interface PluginContext {
   readonly settings: HostSettingsControl;
 
   /**
+   * 插件间通信 Event Bus（权限门控）
+   * 仅声明 permissions: ['plugin:event-bus'] 后可用，否则为 undefined
+   */
+  readonly eventBus?: PluginEventBus;
+
+  /**
    * 宿主进程持有的运行时依赖。每个依赖都需要独立权限并且可能为 undefined。
    */
   readonly hostDependencies: HostDependencies;
@@ -404,6 +410,50 @@ interface PluginContext {
    */
   readonly fetch?: (url: string, init?: RequestInit) => Promise<Response>;
 }
+```
+
+#### PluginEventBus
+
+`ctx.eventBus` 为插件提供同一宿主进程内的轻量级插件间通信能力。该能力需要 manifest 声明 `permissions: ['plugin:event-bus']`；未声明权限时 `ctx.eventBus` 为 `undefined`。
+
+v1 接口：
+
+```typescript
+interface PluginEventBus {
+  publish(topic: string, payload?: unknown): void;
+  subscribe(
+    topic: string,
+    handler: (message: PluginEventBusMessage) => void | Promise<void>,
+  ): () => void;
+}
+
+interface PluginEventBusMessage {
+  topic: string;
+  payload: unknown;
+  timestamp: number;
+  publisher: {
+    pluginName: string;
+    instanceScope: 'operator' | 'global';
+    operatorId?: string;
+  };
+}
+```
+
+行为说明：
+
+- topic 为**精确匹配**的字符串，不支持 wildcard / pattern
+- `publish()` 不等待订阅方完成
+- 订阅回调抛错不会让发布方抛错；宿主会记录运行时日志
+- 插件卸载、重载、关闭时，宿主会自动清理该实例的所有订阅
+
+建议使用带插件名前缀的 topic，例如：
+
+```typescript
+ctx.eventBus?.publish('plugin.callsign-filter.updated', { callsigns: ['JA1ABC'] });
+
+const unsubscribe = ctx.eventBus?.subscribe('plugin.callsign-filter.updated', (message) => {
+  ctx.log.info('callsign list changed', message.payload as Record<string, unknown>);
+});
 ```
 
 

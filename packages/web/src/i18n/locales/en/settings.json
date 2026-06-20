@@ -622,6 +622,12 @@
         "name": "Network access",
         "description": "Allows the plugin to make HTTP requests and open UDP sockets from this machine."
       },
+      "plugin": {
+        "event-bus": {
+          "name": "Plugin event bus",
+          "description": "Allows publishing and subscribing to in-process Event Bus topics shared with other plugins."
+        }
+      },
       "host": {
         "hamlib": {
           "name": "Host Hamlib dependency",

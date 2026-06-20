@@ -109,6 +109,47 @@ export default plugin;
 
 The whitelist intentionally excludes authentication tokens, operator CRUD, hardware radio connection settings, audio devices, rigctld, OpenWebRX, profiles, and server host/port settings. These APIs are not exposed directly to iframe pages; custom UI should call a server-side page handler with `window.tx5dr.invoke()`.
 
+## Plugin Event Bus Permission
+
+Server-side plugins can exchange in-process messages through `ctx.eventBus` when the manifest declares:
+
+```ts
+permissions: ['plugin:event-bus']
+```
+
+`ctx.eventBus` is optional and should be feature-detected:
+
+```ts
+import type { PluginDefinition } from '@tx5dr/plugin-api';
+
+const plugin: PluginDefinition = {
+  name: 'event-bus-demo',
+  version: '1.0.0',
+  type: 'utility',
+  permissions: ['plugin:event-bus'],
+  onLoad(ctx) {
+    const unsubscribe = ctx.eventBus?.subscribe('plugin.shared.topic', (message) => {
+      ctx.log.info('received bus message', {
+        topic: message.topic,
+        publisher: message.publisher.pluginName,
+      });
+    });
+
+    ctx.eventBus?.publish('plugin.shared.topic', { status: 'ready' });
+    void unsubscribe;
+  },
+};
+
+export default plugin;
+```
+
+- `publish(topic, payload)` sends a best-effort message to current subscribers of the exact same topic.
+- `subscribe(topic, handler)` returns an unsubscribe function.
+- Subscriber failures are isolated and logged by the host instead of being thrown back to the publisher.
+- The host removes subscriptions automatically when the plugin instance unloads.
+
+Use plugin-prefixed topic names such as `plugin.callsign-filter.updated` to avoid accidental collisions.
+
 ## Bridge SDK Types
 
 Plugin iframe pages communicate with the host via the Bridge SDK (`window.tx5dr`), which is automatically injected by the host. To get IDE autocomplete for the Bridge SDK, add the type reference to your project:
