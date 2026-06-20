@@ -56,7 +56,7 @@ export default {
 | Subpath | Description |
 |---------|-------------|
 | `@tx5dr/plugin-api` | Core types: `PluginDefinition`, `PluginContext`, `PluginHooks`, helper interfaces, radio/message types |
-| `@tx5dr/plugin-api/testing` | Mock factories for unit testing: `createMockContext()`, `createMockSlotInfo()`, `createMockParsedMessage()` |
+| `@tx5dr/plugin-api/testing` | Mock factories for unit testing: `createMockContext()`, `createMockSlotInfo()`, `createMockParsedMessage()`, `createMockEventBus()` |
 | `@tx5dr/plugin-api/bridge` | Ambient type declarations for the iframe Bridge SDK (`window.tx5dr`) |
 
 ## Radio Permissions
@@ -109,46 +109,168 @@ export default plugin;
 
 The whitelist intentionally excludes authentication tokens, operator CRUD, hardware radio connection settings, audio devices, rigctld, OpenWebRX, profiles, and server host/port settings. These APIs are not exposed directly to iframe pages; custom UI should call a server-side page handler with `window.tx5dr.invoke()`.
 
-## Plugin Event Bus Permission
+## Plugin Event Bus
 
-Server-side plugins can exchange in-process messages through `ctx.eventBus` when the manifest declares:
+Server-side plugins can exchange in-process messages through `ctx.eventBus`, a topic-based pub/sub bus scoped to the host process. This enables loose coupling between plugins without shared state.
+
+### Permission
+
+Declare `plugin:event-bus` in the manifest to enable the bus:
 
 ```ts
 permissions: ['plugin:event-bus']
 ```
 
-`ctx.eventBus` is optional and should be feature-detected:
+`ctx.eventBus` is optional and should be feature-detected before use.
+
+### API Summary
+
+| Method | Description |
+|--------|-------------|
+| `publish(topic, payload?)` | Fire-and-forget message to all current subscribers of the exact topic. |
+| `subscribe(topic, handler)` | Registers a handler; returns an unsubscribe function. |
+
+Every message received by a subscriber is a `PluginEventBusMessage`:
+
+```ts
+interface PluginEventBusMessage {
+  topic: string;           // The topic this message was published to
+  payload: unknown;        // Arbitrary data set by the publisher
+  timestamp: number;       // Epoch ms when the host dispatched the message
+  publisher: {
+    pluginName: string;    // Publishing plugin's name
+    instanceScope: 'operator' | 'global';
+    operatorId?: string;   // Present when the publisher is operator-scoped
+  };
+}
+```
+
+### Topic Naming Convention
+
+Use dot-separated, plugin-prefixed names to avoid collisions between plugins:
+
+```
+<plugin-name>.<domain>.<event>
+```
+
+Examples:
+- `psk-reporter.spot.sent` — a spot was uploaded to PSK Reporter
+- `callsign-filter.match.found` — a callsign matched a filter rule
+- `logbook-sync.upload.complete` — a logbook sync finished
+
+Avoid generic names like `update` or `message` — they will collide.
+
+### Basic Usage
 
 ```ts
 import type { PluginDefinition } from '@tx5dr/plugin-api';
 
-const plugin: PluginDefinition = {
-  name: 'event-bus-demo',
+// Publisher plugin
+const publisher: PluginDefinition = {
+  name: 'spot-monitor',
   version: '1.0.0',
   type: 'utility',
   permissions: ['plugin:event-bus'],
-  onLoad(ctx) {
-    const unsubscribe = ctx.eventBus?.subscribe('plugin.shared.topic', (message) => {
-      ctx.log.info('received bus message', {
-        topic: message.topic,
-        publisher: message.publisher.pluginName,
-      });
-    });
-
-    ctx.eventBus?.publish('plugin.shared.topic', { status: 'ready' });
-    void unsubscribe;
+  hooks: {
+    onDecode(messages, ctx) {
+      for (const msg of messages) {
+        ctx.eventBus?.publish('spot-monitor.new-spot', {
+          callsign: msg.callsign,
+          frequency: msg.frequencyHz,
+        });
+      }
+    },
   },
 };
 
-export default plugin;
+// Subscriber plugin
+const subscriber: PluginDefinition = {
+  name: 'spot-logger',
+  version: '1.0.0',
+  type: 'utility',
+  permissions: ['plugin:event-bus'],
+  hooks: {
+    onLoad(ctx) {
+      ctx.eventBus?.subscribe('spot-monitor.new-spot', (message) => {
+        ctx.log.info('received spot', {
+          from: message.publisher.pluginName,
+          callsign: (message.payload as any).callsign,
+        });
+      });
+    },
+  },
+};
 ```
 
-- `publish(topic, payload)` sends a best-effort message to current subscribers of the exact same topic.
-- `subscribe(topic, handler)` returns an unsubscribe function.
-- Subscriber failures are isolated and logged by the host instead of being thrown back to the publisher.
-- The host removes subscriptions automatically when the plugin instance unloads.
+### Cross-Operator Communication
 
-Use plugin-prefixed topic names such as `plugin.callsign-filter.updated` to avoid accidental collisions.
+Operator-scoped plugins can communicate across operators on the same host. The `publisher` metadata lets subscribers identify which operator sent the message:
+
+```ts
+ctx.eventBus?.subscribe('qso-monitor.qso-complete', (message) => {
+  const { callsign, band } = message.payload as any;
+  ctx.log.info('QSO completed by another operator', {
+    operator: message.publisher.operatorId,
+    callsign,
+    band,
+  });
+});
+```
+
+### Lifecycle and Error Handling
+
+- **Auto-cleanup**: the host removes all subscriptions when a plugin instance unloads. No manual cleanup required.
+- **Manual unsubscribe**: call the function returned by `subscribe()` to cancel a single subscription early.
+- **Error isolation**: subscriber exceptions (sync or async) are captured and logged by the host. They never propagate back to the publisher.
+- **Delivery order**: subscribers receive messages in registration order. Async handlers are awaited, but the publisher does not wait for completion.
+
+### Testing
+
+Use `createMockEventBus()` from `@tx5dr/plugin-api/testing` to test plugin event bus logic in isolation:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { createMockEventBus } from '@tx5dr/plugin-api/testing';
+
+it('publishes spot data', () => {
+  const bus = createMockEventBus({ owner: { pluginName: 'spot-monitor' } });
+  const handler = vi.fn();
+
+  bus.subscribe('spot-monitor.new-spot', handler);
+  bus.publish('spot-monitor.new-spot', { callsign: 'W1AW', frequency: 14074000 });
+
+  expect(handler).toHaveBeenCalledTimes(1);
+  expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+    topic: 'spot-monitor.new-spot',
+    payload: { callsign: 'W1AW', frequency: 14074000 },
+    publisher: expect.objectContaining({ pluginName: 'spot-monitor' }),
+  }));
+});
+
+it('tracks published messages', () => {
+  const bus = createMockEventBus();
+
+  bus.publish('topic-a', { value: 1 });
+  bus.publish('topic-b', { value: 2 });
+
+  expect(bus._published).toHaveLength(2);
+  expect(bus._published[0].topic).toBe('topic-a');
+});
+
+it('unsubscribe prevents further delivery', () => {
+  const bus = createMockEventBus();
+  const handler = vi.fn();
+
+  const unsub = bus.subscribe('topic', handler);
+  bus.publish('topic', 'first');
+  unsub();
+  bus.publish('topic', 'second');
+
+  expect(handler).toHaveBeenCalledTimes(1);
+});
+```
+
+The mock records all published messages in `_published` and exposes the internal `_subscriptions` map for advanced inspection.
 
 ## Bridge SDK Types
 

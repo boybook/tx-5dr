@@ -134,19 +134,69 @@ export interface PluginNetworkControl {
   readonly udp: PluginUdpControl;
 }
 
+/**
+ * A message delivered through the plugin-to-plugin event bus.
+ *
+ * Every message carries metadata about its publisher so subscribers can
+ * apply routing or filtering logic based on the source plugin.
+ */
 export interface PluginEventBusMessage {
+  /** The topic this message was published to. */
   topic: string;
+  /** Arbitrary payload. The host does not inspect or validate this value. */
   payload: unknown;
+  /** Epoch milliseconds when the host dispatched the message. */
   timestamp: number;
+  /** Identity of the plugin instance that published this message. */
   publisher: {
+    /** Name of the publishing plugin (from its `PluginDefinition.name`). */
     pluginName: string;
+    /** Whether the publisher is a global or per-operator instance. */
     instanceScope: 'operator' | 'global';
+    /** Operator ID when the publisher is an operator-scoped instance. */
     operatorId?: string;
   };
 }
 
+/**
+ * Permission-gated pub/sub bus for in-process plugin-to-plugin communication.
+ *
+ * Topics are plain strings shared across all plugin instances within the same
+ * host process. Messages are delivered synchronously to each subscriber in
+ * subscription order; async handlers are awaited but their errors are captured
+ * and logged by the host rather than propagated to the publisher.
+ *
+ * **Lifecycle**: the host automatically removes all subscriptions owned by a
+ * plugin instance when it unloads. Individual subscriptions can be cancelled
+ * earlier by calling the function returned from {@link subscribe}.
+ *
+ * **Topic naming**: use dot-separated, plugin-prefixed names to avoid
+ * collisions — for example `my-plugin.status.changed` or
+ * `callsign-filter.match.found`.
+ */
 export interface PluginEventBus {
+  /**
+   * Publishes a message to all current subscribers of the given topic.
+   *
+   * This is a fire-and-forget operation. The host guarantees that subscriber
+   * exceptions never propagate back to the caller.
+   *
+   * @param topic - Exact topic string to publish to.
+   * @param payload - Optional arbitrary data. Keep payloads reasonably small.
+   */
   publish(topic: string, payload?: unknown): void;
+
+  /**
+   * Subscribes to messages on the given topic.
+   *
+   * The same handler function instance will only be added once per topic.
+   * Different closures with identical logic are treated as distinct subscribers.
+   *
+   * @param topic - Exact topic string to listen on.
+   * @param handler - Callback invoked for each matching message. May return a
+   *   `Promise`; the host catches rejections and logs them.
+   * @returns An unsubscribe function. Calling it more than once is a no-op.
+   */
   subscribe(
     topic: string,
     handler: (message: PluginEventBusMessage) => void | Promise<void>,

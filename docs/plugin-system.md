@@ -416,11 +416,13 @@ interface PluginContext {
 
 `ctx.eventBus` 为插件提供同一宿主进程内的轻量级插件间通信能力。该能力需要 manifest 声明 `permissions: ['plugin:event-bus']`；未声明权限时 `ctx.eventBus` 为 `undefined`。
 
-v1 接口：
+接口定义：
 
 ```typescript
 interface PluginEventBus {
+  /** 向指定 topic 的所有当前订阅者发送消息（fire-and-forget） */
   publish(topic: string, payload?: unknown): void;
+  /** 订阅指定 topic，返回取消订阅函数 */
   subscribe(
     topic: string,
     handler: (message: PluginEventBusMessage) => void | Promise<void>,
@@ -428,33 +430,131 @@ interface PluginEventBus {
 }
 
 interface PluginEventBusMessage {
-  topic: string;
-  payload: unknown;
-  timestamp: number;
+  topic: string;       // 消息发布到的 topic
+  payload: unknown;    // 发布者设置的任意数据
+  timestamp: number;   // 宿主分发消息时的 epoch 毫秒时间戳
   publisher: {
-    pluginName: string;
-    instanceScope: 'operator' | 'global';
-    operatorId?: string;
+    pluginName: string;                       // 发布插件的名称
+    instanceScope: 'operator' | 'global';     // 发布者是全局实例还是操作员实例
+    operatorId?: string;                      // 操作员实例时为其 ID
   };
 }
 ```
 
-行为说明：
+##### 行为说明
 
 - topic 为**精确匹配**的字符串，不支持 wildcard / pattern
-- `publish()` 不等待订阅方完成
-- 订阅回调抛错不会让发布方抛错；宿主会记录运行时日志
+- `publish()` 不等待订阅方完成（fire-and-forget）
+- 同一 handler 函数实例不会被重复添加；不同闭包（即使逻辑相同）视为不同订阅
+- 订阅回调抛错（同步或异步）不会让发布方抛错；宿主会记录运行时日志
 - 插件卸载、重载、关闭时，宿主会自动清理该实例的所有订阅
+- 手动取消单个订阅：调用 `subscribe()` 返回的函数
 
-建议使用带插件名前缀的 topic，例如：
+##### Topic 命名约定
+
+使用**点分隔、插件名前缀**的命名方式，避免不同插件间的 topic 冲突：
+
+```
+<插件名>.<领域>.<事件>
+```
+
+示例：
+
+| Topic | 含义 |
+|-------|------|
+| `psk-reporter.spot.sent` | 一条 spot 已上传到 PSK Reporter |
+| `callsign-filter.match.found` | 呼号匹配了过滤规则 |
+| `logbook-sync.upload.complete` | 日志同步上传完成 |
+
+避免使用 `update`、`message` 等过于通用的名称。
+
+##### 基本用法
 
 ```typescript
-ctx.eventBus?.publish('plugin.callsign-filter.updated', { callsigns: ['JA1ABC'] });
+// 发布方插件
+ctx.eventBus?.publish('callsign-filter.match.found', {
+  callsign: 'JA1ABC',
+  band: '20m',
+});
 
-const unsubscribe = ctx.eventBus?.subscribe('plugin.callsign-filter.updated', (message) => {
-  ctx.log.info('callsign list changed', message.payload as Record<string, unknown>);
+// 订阅方插件
+const unsubscribe = ctx.eventBus?.subscribe('callsign-filter.match.found', (message) => {
+  const { callsign, band } = message.payload as { callsign: string; band: string };
+  ctx.log.info('received match', { callsign, band });
 });
 ```
+
+##### 跨操作员通信
+
+操作员作用域的插件可以通过 Event Bus 与同一宿主上的其他操作员通信。`publisher` 元数据让订阅者识别消息来源：
+
+```typescript
+ctx.eventBus?.subscribe('qso-monitor.qso-complete', (message) => {
+  const { callsign, band } = message.payload as { callsign: string; band: string };
+  ctx.log.info('other operator completed QSO', {
+    operator: message.publisher.operatorId,
+    callsign,
+    band,
+  });
+});
+```
+
+##### 测试
+
+使用 `@tx5dr/plugin-api/testing` 中的 `createMockEventBus()` 进行单元测试：
+
+```typescript
+import { describe, it, expect, vi } from 'vitest';
+import { createMockEventBus } from '@tx5dr/plugin-api/testing';
+
+it('发布 spot 数据', () => {
+  // 可选：自定义发布者元数据
+  const bus = createMockEventBus({ owner: { pluginName: 'spot-monitor' } });
+  const handler = vi.fn();
+
+  bus.subscribe('spot-monitor.new-spot', handler);
+  bus.publish('spot-monitor.new-spot', { callsign: 'W1AW', frequency: 14074000 });
+
+  expect(handler).toHaveBeenCalledTimes(1);
+  expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+    topic: 'spot-monitor.new-spot',
+    payload: { callsign: 'W1AW', frequency: 14074000 },
+    publisher: expect.objectContaining({ pluginName: 'spot-monitor' }),
+  }));
+});
+
+it('跟踪已发布消息', () => {
+  const bus = createMockEventBus();
+
+  bus.publish('topic-a', { value: 1 });
+  bus.publish('topic-b', { value: 2 });
+
+  // _published 记录所有已发布消息
+  expect(bus._published).toHaveLength(2);
+  expect(bus._published[0].topic).toBe('topic-a');
+});
+
+it('取消订阅后不再接收消息', () => {
+  const bus = createMockEventBus();
+  const handler = vi.fn();
+
+  const unsub = bus.subscribe('topic', handler);
+  bus.publish('topic', 'first');
+  unsub();
+  bus.publish('topic', 'second');
+
+  expect(handler).toHaveBeenCalledTimes(1);
+});
+```
+
+Mock 对象说明：
+
+| 属性/方法 | 说明 |
+|-----------|------|
+| `_published` | 所有已发布消息的数组，用于断言 |
+| `_subscriptions` | 内部 topic → handler 映射，用于高级检查 |
+| `publish()` | 记录消息到 `_published` 并同步分发给订阅者 |
+| `subscribe()` | 返回取消订阅函数 |
 
 
 #### HostDependencies

@@ -449,9 +449,42 @@ export function createMockNetworkControl(): MockNetworkControl {
 
 // ===== Factory: EventBus =====
 
-export function createMockEventBus(): MockEventBus {
+/**
+ * Options for {@link createMockEventBus}.
+ */
+export interface MockEventBusOptions {
+  /** Publisher metadata injected into every message. Defaults to `mock-plugin` / `operator-0`. */
+  owner?: {
+    pluginName?: string;
+    instanceScope?: 'operator' | 'global';
+    operatorId?: string;
+  };
+}
+
+/**
+ * Creates a mock {@link PluginEventBus} for unit testing plugin code.
+ *
+ * All published messages are recorded in `_published` for assertion.
+ * The internal `_subscriptions` map lets tests inspect active subscriptions.
+ *
+ * @param options - Optional configuration for publisher metadata.
+ * @returns A mock event bus with inspection helpers.
+ *
+ * @example
+ * ```ts
+ * const bus = createMockEventBus({ owner: { pluginName: 'my-plugin' } });
+ * bus.subscribe('topic', handler);
+ * bus.publish('topic', { value: 42 });
+ * expect(bus._published).toHaveLength(1);
+ * expect(bus._published[0].publisher.pluginName).toBe('my-plugin');
+ * ```
+ */
+export function createMockEventBus(options?: MockEventBusOptions): MockEventBus {
   const subscriptions = new Map<string, Array<(message: PluginEventBusMessage) => void | Promise<void>>>();
   const published: PluginEventBusMessage[] = [];
+  const ownerName = options?.owner?.pluginName ?? 'mock-plugin';
+  const ownerScope = options?.owner?.instanceScope ?? 'operator';
+  const ownerId = options?.owner?.operatorId ?? 'operator-0';
 
   return {
     _subscriptions: subscriptions,
@@ -462,9 +495,9 @@ export function createMockEventBus(): MockEventBus {
         payload,
         timestamp: Date.now(),
         publisher: {
-          pluginName: 'mock-plugin',
-          instanceScope: 'operator',
-          operatorId: 'operator-0',
+          pluginName: ownerName,
+          instanceScope: ownerScope,
+          operatorId: ownerId,
         },
       };
       published.push(message);
