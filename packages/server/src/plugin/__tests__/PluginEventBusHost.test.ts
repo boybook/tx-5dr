@@ -45,6 +45,20 @@ describe('PluginEventBusHost', () => {
     expect(second).toHaveBeenCalledTimes(1);
   });
 
+  it('deduplicates the same handler for the same owner and topic', async () => {
+    const host = new PluginEventBusHost();
+    const owner = { pluginName: 'subscriber', instanceScope: 'operator' as const, operatorId: 'operator-1' };
+    const handler = vi.fn();
+
+    host.subscribe(owner, 'plugin.topic', handler);
+    host.subscribe(owner, 'plugin.topic', handler);
+
+    host.publish({ pluginName: 'publisher', instanceScope: 'global' }, 'plugin.topic', 'value');
+    await Promise.resolve();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it('captures subscriber errors without throwing to publishers', async () => {
     const onError = vi.fn();
     const host = new PluginEventBusHost(onError);

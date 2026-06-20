@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   createMockKVStore,
   createMockLogger,
@@ -147,6 +147,35 @@ describe('plugin-api testing utilities', () => {
       eventBus.publish('plugin.topic', 'second');
       await Promise.resolve();
       expect(received).toEqual(['first']);
+    });
+
+    it('deduplicates the same handler per topic', async () => {
+      const eventBus = createMockEventBus();
+      const handler = vi.fn();
+
+      eventBus.subscribe('plugin.topic', handler);
+      eventBus.subscribe('plugin.topic', handler);
+      eventBus.publish('plugin.topic', 'value');
+      await Promise.resolve();
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('omits operatorId for global-scope publishers', () => {
+      const eventBus = createMockEventBus({
+        owner: {
+          pluginName: 'global-plugin',
+          instanceScope: 'global',
+          operatorId: 'operator-should-be-ignored',
+        },
+      });
+
+      eventBus.publish('plugin.topic', 'value');
+
+      expect(eventBus._published[0]?.publisher).toEqual({
+        pluginName: 'global-plugin',
+        instanceScope: 'global',
+      });
     });
   });
 

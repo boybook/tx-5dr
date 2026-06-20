@@ -161,4 +161,78 @@ describe('PluginManager event bus lifecycle', () => {
 
     await pluginManager.shutdown();
   });
+
+  it('removes subscriptions when a plugin instance is deactivated', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-event-bus-cleanup-'));
+    tempDirs.push(dataDir);
+
+    await writeUserPlugin(dataDir, 'subscriber-plugin', `
+      export default {
+        name: 'subscriber-plugin',
+        version: '1.0.0',
+        type: 'utility',
+        permissions: ['plugin:event-bus'],
+        onLoad(ctx) {
+          ctx.eventBus.subscribe('plugin.topic', (message) => {
+            ctx.log.info('subscriber received event', { payload: message.payload });
+          });
+        },
+      };
+    `);
+
+    await writeUserPlugin(dataDir, 'publisher-plugin', `
+      export default {
+        name: 'publisher-plugin',
+        version: '1.0.0',
+        type: 'utility',
+        permissions: ['plugin:event-bus'],
+        onLoad(ctx) {
+          ctx.eventBus.publish('plugin.topic', 'published');
+        },
+      };
+    `);
+
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const operator = createOperator('operator-1', 'BG4IAJ');
+    const pluginManager = createPluginManager(dataDir, eventEmitter, operator);
+    pluginManager.loadConfig({
+      configs: {
+        'qso-udp-broadcast': { enabled: false, settings: {} },
+        'subscriber-plugin': { enabled: true, settings: {} },
+        'publisher-plugin': { enabled: false, settings: {} },
+      },
+      operatorStrategies: {
+        [operator.config.id]: 'standard-qso',
+      },
+      operatorSettings: {},
+    });
+
+    await pluginManager.start();
+
+    pluginManager.setPluginEnabled('publisher-plugin', true);
+    await flushAsyncWork();
+
+    const receivedBeforeDeactivate = pluginManager.getRuntimeLogHistory().filter((entry) => (
+      !('source' in entry)
+      && entry.pluginName === 'subscriber-plugin'
+      && entry.message === 'subscriber received event'
+    ));
+    expect(receivedBeforeDeactivate).toHaveLength(1);
+
+    pluginManager.setPluginEnabled('subscriber-plugin', false);
+    await flushAsyncWork();
+    pluginManager.setPluginEnabled('publisher-plugin', false);
+    await flushAsyncWork();
+    pluginManager.setPluginEnabled('publisher-plugin', true);
+    await flushAsyncWork();
+
+    const receivedAfterDeactivate = pluginManager.getRuntimeLogHistory().filter((entry) => (
+      !('source' in entry)
+      && entry.pluginName === 'subscriber-plugin'
+      && entry.message === 'subscriber received event'
+    ));
+    expect(receivedAfterDeactivate).toHaveLength(1);
+
+    await pluginManager.shutdown();
+  });
 });
