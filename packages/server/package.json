@@ -51,7 +51,7 @@
     "onnxruntime-node": "^1.26.0",
     "rubato-fft-node": "^0.1.0",
     "serialport": "^13.0.0",
-    "tci-client-node": "portal:../../../tci-client-node",
+    "tci-client-node": "^0.1.0",
     "wav": "^1.0.2",
     "wsjtx-lib": "2.1.3",
     "xstate": "^5.23.0",
