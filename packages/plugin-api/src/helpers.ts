@@ -134,6 +134,25 @@ export interface PluginNetworkControl {
   readonly udp: PluginUdpControl;
 }
 
+export interface PluginEventBusMessage {
+  topic: string;
+  payload: unknown;
+  timestamp: number;
+  publisher: {
+    pluginName: string;
+    instanceScope: 'operator' | 'global';
+    operatorId?: string;
+  };
+}
+
+export interface PluginEventBus {
+  publish(topic: string, payload?: unknown): void;
+  subscribe(
+    topic: string,
+    handler: (message: PluginEventBusMessage) => void | Promise<void>,
+  ): () => void;
+}
+
 /**
  * Control surface for the active operator instance.
  *

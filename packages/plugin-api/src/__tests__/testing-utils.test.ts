@@ -12,6 +12,7 @@ import {
   createMockLogbookAccess,
   createMockBandAccess,
   createMockHostSettingsControl,
+  createMockEventBus,
 } from '../testing/index.js';
 
 describe('plugin-api testing utilities', () => {
@@ -79,6 +80,7 @@ describe('plugin-api testing utilities', () => {
       expect(ctx.operator.grid).toBe('FN31');
       expect(ctx.radio.isConnected).toBe(true);
       expect(ctx.config).toEqual({});
+      expect(typeof ctx.eventBus.publish).toBe('function');
     });
 
     it('does not expose mock host dependencies without permissions', () => {
@@ -119,6 +121,32 @@ describe('plugin-api testing utilities', () => {
       await expect(ctx.settings.ft8.update({ maxSameTransmissionCount: 0 })).resolves.toMatchObject({
         maxSameTransmissionCount: 0,
       });
+    });
+
+    it('accepts an event bus override', () => {
+      const eventBus = createMockEventBus();
+      const ctx = createMockContext({ eventBus });
+      expect(ctx.eventBus).toBe(eventBus);
+    });
+  });
+
+  describe('createMockEventBus', () => {
+    it('publishes to matching subscribers and supports unsubscribe', async () => {
+      const eventBus = createMockEventBus();
+      const received: string[] = [];
+      const unsubscribe = eventBus.subscribe('plugin.topic', async (message) => {
+        received.push(String(message.payload));
+      });
+
+      eventBus.publish('plugin.topic', 'first');
+      await Promise.resolve();
+      expect(received).toEqual(['first']);
+      expect(eventBus._published).toHaveLength(1);
+
+      unsubscribe();
+      eventBus.publish('plugin.topic', 'second');
+      await Promise.resolve();
+      expect(received).toEqual(['first']);
     });
   });
 

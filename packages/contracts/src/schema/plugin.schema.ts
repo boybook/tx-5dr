@@ -38,6 +38,7 @@ export type PluginInstanceScope = z.infer<typeof PluginInstanceScopeSchema>;
  */
 export const PluginPermissionSchema = z.enum([
   'network',
+  'plugin:event-bus',
   'host:hamlib',
   'operator:transmit-control',
   'radio:read',
