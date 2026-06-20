@@ -5,6 +5,7 @@ import type {
   KVStore,
   PluginUIInstanceTarget,
 } from '@tx5dr/plugin-api';
+import type { PluginEventBusHost } from './PluginEventBusHost.js';
 import type {
   PluginPanelMetaPayload,
   PluginUIPanelContributionGroup,
@@ -187,6 +188,7 @@ export interface PluginManagerDeps {
     instanceTarget: PluginUIInstanceTarget,
     pageId?: string,
   ) => import('./PluginPageSessionStore.js').PluginPageSession[];
+  pluginEventBusHost?: PluginEventBusHost;
 }
 
 /**
