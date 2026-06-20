@@ -11,16 +11,20 @@ import {
   clearWaterfallGestureOverrideForSource,
   easeSpectrumAxisTransition,
   formatWaterfallHoverFrequency,
+  getWaterfallFrequencyAfterVisualDelta,
   getWaterfallFrequencyAtRatio,
   getWaterfallDragCommitDelayMs,
   getWaterfallDragTunedFrequency,
   getWaterfallFrequencyPositionPercent,
   getWaterfallHoverLabelLeftPx,
   getWaterfallHorizontalWheelTunedFrequency,
+  getWaterfallSemanticFrequencyAtRatio,
+  getWaterfallSemanticFrequencyPositionPercent,
   interpolateSpectrumAxis,
   normalizeWaterfallWheelDeltaX,
   shouldHandleWaterfallHorizontalWheel,
 } from './WebGLWaterfall';
+import { createFrequencyAxisTransform } from '../../../spectrum/frequencyAxisCalibration';
 
 describe('WebGLWaterfall frequency positioning', () => {
   it('allows CW frequency band overlays to use exact audio Hz without legacy marker offset', () => {
@@ -28,7 +32,7 @@ describe('WebGLWaterfall frequency positioning', () => {
   });
 
   it('keeps the legacy visual offset available for older markers', () => {
-    expect(getWaterfallFrequencyPositionPercent(800, 0, 3000)).toBeCloseTo(((800 + WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ) / 3000) * 100, 6);
+    expect(getWaterfallFrequencyPositionPercent(800, 0, 3000, WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ)).toBeCloseTo(((800 + WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ) / 3000) * 100, 6);
   });
 
   it('can map hover pointer ratios directly to the visual axis when no offset is requested', () => {
@@ -40,7 +44,7 @@ describe('WebGLWaterfall frequency positioning', () => {
 
   it('applies the legacy visual offset for hover readouts to match right-click tuning', () => {
     expect(getWaterfallFrequencyAtRatio(0.5, 0, 3000, WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ)).toBe(1485);
-    expect(getWaterfallFrequencyPositionPercent(1485, 0, 3000)).toBeCloseTo(50, 6);
+    expect(getWaterfallFrequencyPositionPercent(1485, 0, 3000, WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ)).toBeCloseTo(50, 6);
   });
 
   it('builds a soft 0-3000 Hz baseband ruler with 100 Hz ticks and 500 Hz labels', () => {
@@ -61,9 +65,46 @@ describe('WebGLWaterfall frequency positioning', () => {
     const tick1500 = ticks.find(tick => tick.frequency === 1500);
 
     expect(tick1500?.positionPercent).toBeCloseTo(
-      getWaterfallFrequencyPositionPercent(1500, 0, 3000),
+      getWaterfallFrequencyPositionPercent(1500, 0, 3000, WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ),
       6,
     );
+  });
+
+  it('keeps SDR positioning unshifted when no explicit visual offset is provided', () => {
+    expect(getWaterfallSemanticFrequencyPositionPercent(14_075_000, 14_070_000, 14_080_000)).toBeCloseTo(50, 6);
+    expect(getWaterfallSemanticFrequencyAtRatio(0.5, 14_070_000, 14_080_000)).toBe(14_075_000);
+  });
+
+  it('places calibrated ruler ticks by visual frequency while labeling actual frequency', () => {
+    const transform = createFrequencyAxisTransform({
+      enabled: true,
+      anchors: [
+        { actualOffsetHz: -5000, visualOffsetHz: -5000 },
+        { actualOffsetHz: 0, visualOffsetHz: 100 },
+        { actualOffsetHz: 5000, visualOffsetHz: 5000 },
+      ],
+    }, 14_075_000);
+    const ticks = buildWaterfallRulerTicks(14_070_000, 14_080_000, 900, 0, transform);
+    const tick14075 = ticks.find(tick => tick.frequency === 14_075_000);
+
+    expect(tick14075?.label).toBe('14.075000');
+    expect(tick14075?.positionPercent).toBeCloseTo(51, 6);
+  });
+
+  it('returns actual calibrated frequencies for hover, right-click, drag, and wheel helpers', () => {
+    const transform = createFrequencyAxisTransform({
+      enabled: true,
+      anchors: [
+        { actualOffsetHz: -1000, visualOffsetHz: -1000 },
+        { actualOffsetHz: 0, visualOffsetHz: 100 },
+        { actualOffsetHz: 1000, visualOffsetHz: 1000 },
+      ],
+    }, 2000);
+
+    expect(getWaterfallSemanticFrequencyAtRatio(0.55, 1000, 3000, transform)).toBeCloseTo(2000, 6);
+    expect(getWaterfallSemanticFrequencyPositionPercent(2000, 1000, 3000, transform)).toBeCloseTo(55, 6);
+    expect(getWaterfallFrequencyAfterVisualDelta(2000, 90, transform)).toBeCloseTo(2100, 6);
+    expect(getWaterfallFrequencyAfterVisualDelta(2000, -110, transform)).toBeCloseTo(1900, 6);
   });
 
   it('reduces baseband ruler label density when the panel is narrow', () => {

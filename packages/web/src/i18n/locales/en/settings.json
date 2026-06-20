@@ -192,6 +192,8 @@
       "usb": "USB (upper sideband)",
       "usb-data": "USB-DATA (upper sideband data)"
     },
+    "fakeFrequencyTitle": "Virtual Frequency Offset",
+    "fakeFrequencyDesc": "Only active in FT8/FT4 modes. Keep the transmit audio carrier in the radio's sweet spot (~1500 Hz) during TX and shift the dial frequency the opposite way, so the actual on-air position stays the same. Avoids reduced TX power on radios that roll off at high/low audio frequencies; fully transparent to the receive display and your set TX frequency.",
     "serialTitle": "Hamlib Direct Radio Settings",
     "refreshPortsTooltip": "Refresh port list",
     "serialDesc": "Connect directly through Hamlib. Depending on the model, this may use a serial port, server address, or device path.",

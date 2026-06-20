@@ -1,4 +1,4 @@
-import type { CapabilityState, CoreRadioCapabilities } from '@tx5dr/contracts';
+import type { CapabilityState, CoreRadioCapabilities, EngineMode } from '@tx5dr/contracts';
 import { subject as caslSubject } from '@casl/ability';
 
 export interface FrequencyOptionLike {
@@ -62,6 +62,27 @@ export function shouldShowRadioControlEntry(
   canControlRadio: boolean,
 ): boolean {
   return radioConnected && canControlRadio;
+}
+
+export function isFakeFrequencySupportedMode(
+  engineMode: EngineMode | null | undefined,
+  currentModeName: string | null | undefined,
+): boolean {
+  return engineMode === 'digital' && (currentModeName === 'FT8' || currentModeName === 'FT4');
+}
+
+export function shouldShowFakeFrequencyEntry(
+  radioConnected: boolean,
+  canControlRadio: boolean,
+  radioConfigType: string | null | undefined,
+  engineMode: EngineMode | null | undefined,
+  currentModeName: string | null | undefined,
+): boolean {
+  return radioConnected
+    && canControlRadio
+    && !!radioConfigType
+    && radioConfigType !== 'none'
+    && isFakeFrequencySupportedMode(engineMode, currentModeName);
 }
 
 export function filterDigitalFrequencyOptions<T extends FrequencyOptionLike>(

@@ -1,22 +1,27 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Switch, Tab, Tabs, Tooltip } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { ArrowsPointingOutIcon, ChevronDownIcon, ChevronUpIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
 import type { EngineMode, SpectrumFrame, SpectrumKind, SpectrumSessionVoiceState, SystemStatus } from '@tx5dr/contracts';
-import { getBandFromFrequency } from '@tx5dr/core';
-import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useSpectrum, useSplitState } from '../../../store/radioStore';
+import { api, getBandFromFrequency } from '@tx5dr/core';
+import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useRadioState, useCapabilityState, useCapabilityDescriptor, useSpectrum, useSplitState } from '../../../store/radioStore';
 import { useAbility, useCan } from '../../../store/authStore';
 import { createLogger } from '../../../utils/logger';
 import { setPreferredSpectrumKind } from '../../../utils/spectrumPreferences';
 import { useTargetRxFrequencies, type RxFrequency } from '../../../hooks/useTargetRxFrequencies';
 import { useTxFrequencies, type TxFrequency } from '../../../hooks/useTxFrequencies';
-import { WebGLWaterfall } from './WebGLWaterfall';
+import { WebGLWaterfall, WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ } from './WebGLWaterfall';
 import type { AutoRangeConfig, FrequencyBandOverlay, FrequencyBandOverlayChange, PresetMarker, TxBandOverlay } from './WebGLWaterfall';
-import { SpectrumStreamController } from '../../../spectrum/SpectrumStreamController';
+import { SpectrumStreamController, type RadioSdrCenterViewMode } from '../../../spectrum/SpectrumStreamController';
+import {
+  ICOM_RADIO_SDR_FREQUENCY_AXIS_CALIBRATION,
+  IDENTITY_FREQUENCY_AXIS_TRANSFORM,
+  createFrequencyAxisTransform,
+} from '../../../spectrum/frequencyAxisCalibration';
 import { readSpectrumSubscriptionPaused, setSpectrumSubscriptionPaused } from '../../../utils/spectrumSubscriptionPause';
 import { resetOperatorsForOperatingStateChange } from '../../../utils/operatorReset';
-import { canExecuteRadioFrequency, canWriteRadioFrequency } from '../../../utils/radioControl';
+import { canExecuteRadioFrequency, canWriteRadioFrequency, isFakeFrequencySupportedMode } from '../../../utils/radioControl';
 import { setRadioFrequencyWithIntent, subscribeRadioFrequencyIntent, type SetRadioFrequencyParams } from '../../../utils/radioFrequencyIntent';
 import {
   RADIO_SDR_OPTIMISTIC_DISPLAY_HOLD_TIMEOUT_MS,
@@ -58,6 +63,12 @@ const SPECTRUM_HISTORY_LIMITS = {
   'openwebrx-sdr': 40,
 } satisfies Partial<Record<SpectrumKind, number>>;
 const SETTINGS_STORAGE_KEY = 'spectrum-range-settings';
+// 虚拟频差低功率弱警告相关常量
+const FAKE_FREQ_COMFORT_MIN_HZ = 500;   // 发射音频甜区下界（baseband Hz）
+const FAKE_FREQ_COMFORT_MAX_HZ = 2300;  // 发射音频甜区上界（baseband Hz）
+const FAKE_FREQ_OUTPUT_LOW_RATIO = 0.25;   // 实测输出/量程 低于此比例视为功率偏低
+const FAKE_FREQ_OUTPUT_LOW_PERCENT = 25;   // 无瓦数时按百分比判断
+const FAKE_FREQ_SETTING_LOW_RATIO = 0.5;   // RF 功率设置低于量程一半视为用户主动 QRP，不提示
 const OPENWEBRX_VIEWPORT_STORAGE_KEY = 'openwebrx-spectrum-viewports';
 const AUDIO_SOURCE: SpectrumKind = 'audio';
 const RADIO_SDR_SOURCE: SpectrumKind = 'radio-sdr';
@@ -220,6 +231,51 @@ export function resolveAudioRangeSettingsForModeChange(
   };
 }
 
+type SpectrumFrequencyRangeMode = 'baseband' | 'absolute-center' | 'absolute-fixed' | 'absolute-windowed';
+
+export function normalizeRadioSdrCenterViewMode(value: unknown): RadioSdrCenterViewMode {
+  return value === 'left' || value === 'right' || value === 'full' ? value : 'full';
+}
+
+export function canShowRadioSdrCenterViewSetting({
+  isRadioSdrSelected,
+  frequencyRangeMode,
+}: {
+  isRadioSdrSelected: boolean;
+  frequencyRangeMode: SpectrumFrequencyRangeMode;
+}): boolean {
+  return isRadioSdrSelected && frequencyRangeMode === 'absolute-center';
+}
+
+export function resolveRadioSdrCenterViewContext({
+  isRadioSdrSelected,
+  frequencyRangeMode,
+  centerViewMode,
+  referenceFrequencyHz,
+}: {
+  isRadioSdrSelected: boolean;
+  frequencyRangeMode: SpectrumFrequencyRangeMode;
+  centerViewMode: RadioSdrCenterViewMode;
+  referenceFrequencyHz: number | null;
+}): { centerViewMode: RadioSdrCenterViewMode; referenceFrequencyHz: number | null } {
+  if (
+    !canShowRadioSdrCenterViewSetting({ isRadioSdrSelected, frequencyRangeMode })
+    || centerViewMode === 'full'
+    || typeof referenceFrequencyHz !== 'number'
+    || !Number.isFinite(referenceFrequencyHz)
+  ) {
+    return {
+      centerViewMode: 'full',
+      referenceFrequencyHz: null,
+    };
+  }
+
+  return {
+    centerViewMode,
+    referenceFrequencyHz,
+  };
+}
+
 interface LegacyAudioRangeSettings {
   manual?: Partial<ManualRangeSettings>;
   auto?: Partial<AutoRangeConfig>;
@@ -229,6 +285,7 @@ interface LegacyAudioRangeSettings {
 interface PersistedRangeSettings {
   themeId: SpectrumThemeId;
   showCycleMarkers: boolean;
+  radioSdrCenterViewMode: RadioSdrCenterViewMode;
   audio: AudioRangeSettings;
   radioSdr: ManualRangeSettings;
   openWebRxSdr: {
@@ -274,6 +331,7 @@ const DEFAULT_OPENWEBRX_DETAIL_RANGE_SETTINGS: ManualRangeSettings = {
 const DEFAULT_PERSISTED_RANGE_SETTINGS: PersistedRangeSettings = {
   themeId: DEFAULT_SPECTRUM_THEME_ID,
   showCycleMarkers: true,
+  radioSdrCenterViewMode: 'full',
   audio: {
     mode: 'auto',
     manual: {
@@ -521,6 +579,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
       return {
         themeId: DEFAULT_PERSISTED_RANGE_SETTINGS.themeId,
         showCycleMarkers: DEFAULT_PERSISTED_RANGE_SETTINGS.showCycleMarkers,
+        radioSdrCenterViewMode: DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdrCenterViewMode,
         audio: cloneAudioRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.audio),
         radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
         openWebRxSdr: {
@@ -539,6 +598,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
       return {
         themeId: normalizeSpectrumThemeId((parsed as Partial<PersistedRangeSettings>).themeId),
         showCycleMarkers: (parsed as Partial<PersistedRangeSettings>).showCycleMarkers !== false,
+        radioSdrCenterViewMode: normalizeRadioSdrCenterViewMode((parsed as Partial<PersistedRangeSettings>).radioSdrCenterViewMode),
         audio: normalizeAudioRangeSettings(
           (parsed as Partial<PersistedRangeSettings>).audio,
           DEFAULT_PERSISTED_RANGE_SETTINGS.audio
@@ -580,6 +640,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
     return {
       themeId: DEFAULT_PERSISTED_RANGE_SETTINGS.themeId,
       showCycleMarkers: DEFAULT_PERSISTED_RANGE_SETTINGS.showCycleMarkers,
+      radioSdrCenterViewMode: DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdrCenterViewMode,
       audio: normalizeAudioRangeSettings(
         parsed as LegacyAudioRangeSettings,
         DEFAULT_PERSISTED_RANGE_SETTINGS.audio
@@ -595,6 +656,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
     return {
       themeId: DEFAULT_PERSISTED_RANGE_SETTINGS.themeId,
       showCycleMarkers: DEFAULT_PERSISTED_RANGE_SETTINGS.showCycleMarkers,
+      radioSdrCenterViewMode: DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdrCenterViewMode,
       audio: cloneAudioRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.audio),
       radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
       openWebRxSdr: {
@@ -799,6 +861,7 @@ const CollapsedSpectrumBar: React.FC<CollapsedSpectrumBarProps> = ({
           rxFrequencies={rxFrequencies}
           txFrequencies={txFrequencies}
           frequencyRangeMode="baseband"
+          visualFrequencyOffsetHz={WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ}
           basebandInteractionRange={BASEBAND_INTERACTION_RANGE}
           onTxFrequencyChange={onTxFrequencyChange}
           hoverFrequency={hoverFrequency}
@@ -817,6 +880,62 @@ const CollapsedSpectrumBar: React.FC<CollapsedSpectrumBarProps> = ({
       </Button>
     </div>
   );
+};
+
+/**
+ * 虚拟频差低功率弱警告判定器：订阅高频 meterData 等，计算需要提示的操作员集合，
+ * 仅在结果集变化时通过 onChange 回写，避免高频 meter 刷新拖累整个频谱子树重渲染。
+ * 本组件不渲染任何内容。
+ */
+const FakeFreqLowPowerWatcher: React.FC<{
+  active: boolean;
+  onChange: (ids: string[]) => void;
+}> = ({ active, onChange }) => {
+  const { state: radioState } = useRadioState();
+  const { pttStatus } = usePTTState();
+  const txFrequencies = useTxFrequencies();
+  const rfPowerState = useCapabilityState('rf_power');
+  const rfPowerDescriptor = useCapabilityDescriptor('rf_power');
+  const lastKeyRef = useRef<string>('');
+
+  const ids = useMemo(() => {
+    if (!active) return [];
+    if (!pttStatus.isTransmitting || pttStatus.operatorIds.length === 0) return [];
+
+    // 实测输出功率是否偏低
+    const power = radioState.meterData?.power;
+    if (!power) return [];
+    let outputLow = false;
+    if (power.watts != null && power.maxWatts != null && power.maxWatts > 0) {
+      outputLow = power.watts / power.maxWatts < FAKE_FREQ_OUTPUT_LOW_RATIO;
+    } else if (power.percent != null) {
+      outputLow = power.percent < FAKE_FREQ_OUTPUT_LOW_PERCENT;
+    }
+    if (!outputLow) return [];
+
+    // 电台 RF 功率设置被用户主动调低（QRP）则不提示
+    if (typeof rfPowerState?.value === 'number' && rfPowerDescriptor?.range) {
+      const { min, max } = rfPowerDescriptor.range;
+      if (max > min && (rfPowerState.value - min) / (max - min) < FAKE_FREQ_SETTING_LOW_RATIO) return [];
+    }
+
+    // 仅对发射音频确实偏离甜区的操作员提示
+    return txFrequencies
+      .filter((tx) => pttStatus.operatorIds.includes(tx.operatorId)
+        && (tx.frequency < FAKE_FREQ_COMFORT_MIN_HZ || tx.frequency > FAKE_FREQ_COMFORT_MAX_HZ))
+      .map((tx) => tx.operatorId);
+  }, [active, pttStatus.isTransmitting, pttStatus.operatorIds, radioState.meterData,
+    rfPowerState?.value, rfPowerDescriptor?.range, txFrequencies]);
+
+  useEffect(() => {
+    const key = ids.join(',');
+    if (key !== lastKeyRef.current) {
+      lastKeyRef.current = key;
+      onChange(ids);
+    }
+  }, [ids, onChange]);
+
+  return null;
 };
 
 export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
@@ -840,6 +959,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const { pttStatus } = usePTTState();
   const { splitEnabled, splitTxFrequency } = useSplitState();
   const canSetFrequency = useCan('execute', 'RadioFrequency');
+  const canControlRadio = useCan('execute', 'RadioControl');
   const ability = useAbility();
   const canWriteFrequency = canWriteRadioFrequency(canSetFrequency, radioConnection.coreCapabilities);
   const canWriteTargetFrequency = useCallback((frequency: number) => (
@@ -907,11 +1027,31 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const rxFrequencies = useTargetRxFrequencies();
   const txFrequencies = useTxFrequencies();
   const { currentOperatorId } = useCurrentOperatorId();
+
+  // 虚拟频差弱警告：判定逻辑放在独立的 FakeFreqLowPowerWatcher 中订阅高频 meterData，
+  // 仅当结果集变化时才回写到这里，避免每次 meter 刷新都重渲染整个频谱子树。
+  const fakeFrequencySupported = isFakeFrequencySupportedMode(engineMode, currentMode?.name);
+  const fakeFrequencyEnabled = radioConnection.radioConfig?.fakeFrequency?.enabled ?? false;
+  // 仅内存态：刷新网页后重置，会再次提示（不持久化到 localStorage）
+  const [lowPowerHintDismissed, setLowPowerHintDismissed] = useState<boolean>(false);
+  const [lowPowerWarningOperatorIds, setLowPowerWarningOperatorIds] = useState<string[]>([]);
+
+  const handleEnableFakeFrequency = useCallback(() => {
+    void api.setFakeFrequency(true).catch((error) => {
+      logger.error('Failed to enable fake frequency from low-power hint', error);
+    });
+  }, []);
+  const handleDismissLowPowerHint = useCallback(() => {
+    setLowPowerHintDismissed(true);
+  }, []);
   const effectiveSelectedKind = selectedKind ?? capabilities?.defaultKind ?? AUDIO_SOURCE;
   const activeSpectrumKind = subscribedKind ?? effectiveSelectedKind;
   const isAudioSpectrumSelected = effectiveSelectedKind === AUDIO_SOURCE;
   const isRadioSdrSelected = effectiveSelectedKind === RADIO_SDR_SOURCE;
   const isOpenWebRXSdrSelected = effectiveSelectedKind === OPENWEBRX_SDR_SOURCE;
+  const visualFrequencyOffsetHz = isAudioSpectrumSelected
+    ? WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ
+    : 0;
   const engineNotStarted = isSpectrumEngineNotStarted({
     connectionReady: connection.state.isReady,
     isEngineRunning,
@@ -960,6 +1100,12 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const spectrumReferenceFrequency = isRadioSdrSelected
     ? effectiveRadioSdrFrequency
     : null;
+  const frequencyAxisTransform = React.useMemo(
+    () => (isRadioSdrSelected && typeof spectrumReferenceFrequency === 'number' && Number.isFinite(spectrumReferenceFrequency)
+      ? createFrequencyAxisTransform(ICOM_RADIO_SDR_FREQUENCY_AXIS_CALIBRATION, spectrumReferenceFrequency)
+      : IDENTITY_FREQUENCY_AXIS_TRANSFORM),
+    [isRadioSdrSelected, spectrumReferenceFrequency],
+  );
   const currentManualRangeSettings = isOpenWebRXSdrSelected
     ? (isOpenWebRXDetailMode
         ? persistedRangeSettings.openWebRxSdr.detail
@@ -969,6 +1115,17 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       : persistedRangeSettings.audio.manual;
   const selectedSpectrumThemeId = persistedRangeSettings.themeId;
   const showCycleMarkers = persistedRangeSettings.showCycleMarkers;
+  const radioSdrCenterViewMode = persistedRangeSettings.radioSdrCenterViewMode;
+  const showRadioSdrCenterViewSettings = canShowRadioSdrCenterViewSetting({
+    isRadioSdrSelected,
+    frequencyRangeMode,
+  });
+  const radioSdrCenterViewContext = React.useMemo(() => resolveRadioSdrCenterViewContext({
+    isRadioSdrSelected,
+    frequencyRangeMode,
+    centerViewMode: radioSdrCenterViewMode,
+    referenceFrequencyHz: spectrumReferenceFrequency,
+  }), [frequencyRangeMode, isRadioSdrSelected, radioSdrCenterViewMode, spectrumReferenceFrequency]);
   const cycleSlotMs = currentMode?.slotMs ?? null;
   const waterfallViewKey = `${effectiveSelectedKind}:${isOpenWebRXDetailMode ? 'detail' : 'main'}`;
   const audioRangeSettings = persistedRangeSettings.audio;
@@ -1046,6 +1203,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     setPersistedRangeSettings(prev => ({
       ...prev,
       showCycleMarkers: enabled,
+    }));
+  }, []);
+
+  const handleRadioSdrCenterViewModeChange = useCallback((mode: RadioSdrCenterViewMode) => {
+    setPersistedRangeSettings(prev => ({
+      ...prev,
+      radioSdrCenterViewMode: mode,
     }));
   }, []);
 
@@ -1406,12 +1570,15 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       selectedKind: effectiveSelectedKind,
       openWebRXViewport: isOpenWebRXSdrSelected && !isOpenWebRXDetailMode ? openWebRXViewport : null,
       isOpenWebRXDetailMode,
+      radioSdrCenterViewMode: radioSdrCenterViewContext.centerViewMode,
+      radioSdrReferenceFrequencyHz: radioSdrCenterViewContext.referenceFrequencyHz,
     });
   }, [
     effectiveSelectedKind,
     isOpenWebRXDetailMode,
     isOpenWebRXSdrSelected,
     openWebRXViewport,
+    radioSdrCenterViewContext,
     streamController,
   ]);
 
@@ -1488,6 +1655,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
 
     setPersistedRangeSettings(prev => ({
       ...prev,
+      radioSdrCenterViewMode: normalizeRadioSdrCenterViewMode(prev.radioSdrCenterViewMode),
       radioSdr: normalizeManualRangeSettings(prev.radioSdr, DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
     }));
   }, [selectedKind]);
@@ -1965,6 +2133,10 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       onWheel={isOpenWebRXSdrSelected && canOpenWebRXLocalViewportZoom ? handleOpenWebRXWheel : undefined}
       onMouseDown={isOpenWebRXSdrSelected && canOpenWebRXLocalViewportPan ? handleOpenWebRXMouseDown : undefined}
     >
+      <FakeFreqLowPowerWatcher
+        active={fakeFrequencySupported && canControlRadio && !fakeFrequencyEnabled && !lowPowerHintDismissed}
+        onChange={setLowPowerWarningOperatorIds}
+      />
       <WebGLWaterfall
         key={waterfallViewKey}
         controller={streamController}
@@ -1979,6 +2151,8 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         totalRows={WATERFALL_HISTORY_ROWS}
         frequencyRangeMode={frequencyRangeMode}
         referenceFrequencyHz={spectrumReferenceFrequency}
+        frequencyAxisTransform={frequencyAxisTransform}
+        visualFrequencyOffsetHz={visualFrequencyOffsetHz}
         basebandInteractionRange={BASEBAND_INTERACTION_RANGE}
         interactionFrequencyMode={
           frequencyGestureTarget === 'radio-frequency'
@@ -1993,6 +2167,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         presetMarkers={presetMarkers}
         rxFrequencies={displaySpectrumMarkers.rxFrequencies}
         txFrequencies={displaySpectrumMarkers.txFrequencies}
+        lowPowerWarningOperatorIds={lowPowerWarningOperatorIds}
+        onEnableFakeFrequency={handleEnableFakeFrequency}
+        onDismissLowPowerWarning={handleDismissLowPowerHint}
         onTxFrequencyChange={displayTxFrequencyChange}
         onTxBandOverlayFrequencyChange={voiceOverlayIsInteractive ? (_id, frequency) => void handleRadioSdrFrequencyGesture(frequency) : undefined}
         onFrequencyBandOverlayPreviewChange={isAudioSpectrumSelected ? onFrequencyBandOverlayPreviewChange : undefined}
@@ -2146,6 +2323,34 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                     aria-label={t('spectrum.cycleMarkers')}
                   />
                 </div>
+                {showRadioSdrCenterViewSettings && (
+                  <div className="space-y-2 rounded-lg bg-default-100/50 px-3 py-2 dark:bg-default-50/10">
+                    <div>
+                      <div className="text-xs font-medium text-default-700">
+                        {t('spectrum.radioSdrCenterView')}
+                      </div>
+                      <div className="text-[11px] leading-tight text-default-400">
+                        {t('spectrum.radioSdrCenterViewDescription')}
+                      </div>
+                    </div>
+                    <Tabs
+                      selectedKey={radioSdrCenterViewMode}
+                      onSelectionChange={(key) => handleRadioSdrCenterViewModeChange(normalizeRadioSdrCenterViewMode(key))}
+                      fullWidth
+                      size="sm"
+                      classNames={{
+                        base: 'w-full',
+                        tabList: 'w-full',
+                        cursor: 'w-full',
+                        tab: 'w-full',
+                      }}
+                    >
+                      <Tab key="full" title={t('spectrum.radioSdrCenterViewFull')} />
+                      <Tab key="left" title={t('spectrum.radioSdrCenterViewLeft')} />
+                      <Tab key="right" title={t('spectrum.radioSdrCenterViewRight')} />
+                    </Tabs>
+                  </div>
+                )}
                 <div className="h-px bg-divider" />
                 {!isRadioSdrSelected && !isOpenWebRXSdrSelected && (
                   <Tabs

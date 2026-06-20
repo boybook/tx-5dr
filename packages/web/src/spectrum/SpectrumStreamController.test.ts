@@ -179,6 +179,106 @@ describe('SpectrumStreamController memory behavior', () => {
     expect(Array.from(batch?.rows[0] ?? [])).toEqual([0, 100, 200, 300, 400]);
   });
 
+  it('crops radio SDR center view to the right side of the reference and stretches it to the full width', () => {
+    const controller = new SpectrumStreamController(4);
+    controller.updateContext({
+      selectedKind: 'radio-sdr',
+      radioSdrCenterViewMode: 'right',
+      radioSdrReferenceFrequencyHz: 200,
+    });
+
+    controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200, 300, 400], { min: 0, max: 400 }));
+    flushNextAnimationFrame();
+    const batch = controller.consumeRenderBatch();
+
+    expect(batch?.mode).toBe('replace');
+    expect(batch?.axis).toEqual({ minHz: 200, maxHz: 400, binCount: 5 });
+    expect(Array.from(batch?.rows[0] ?? [])).toEqual([200, 250, 300, 350, 400]);
+  });
+
+  it('crops radio SDR center view to the left side of the reference and stretches it to the full width', () => {
+    const controller = new SpectrumStreamController(4);
+    controller.updateContext({
+      selectedKind: 'radio-sdr',
+      radioSdrCenterViewMode: 'left',
+      radioSdrReferenceFrequencyHz: 200,
+    });
+
+    controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200, 300, 400], { min: 0, max: 400 }));
+    flushNextAnimationFrame();
+    const batch = controller.consumeRenderBatch();
+
+    expect(batch?.mode).toBe('replace');
+    expect(batch?.axis).toEqual({ minHz: 0, maxHz: 200, binCount: 5 });
+    expect(Array.from(batch?.rows[0] ?? [])).toEqual([0, 50, 100, 150, 200]);
+  });
+
+  it('falls back to the full radio SDR center range for invalid half-view references', () => {
+    const controller = new SpectrumStreamController(4);
+    controller.updateContext({
+      selectedKind: 'radio-sdr',
+      radioSdrCenterViewMode: 'right',
+      radioSdrReferenceFrequencyHz: 500,
+    });
+
+    controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200, 300, 400], { min: 0, max: 400 }));
+    flushNextAnimationFrame();
+    const outOfRangeBatch = controller.consumeRenderBatch();
+
+    expect(outOfRangeBatch?.axis).toEqual({ minHz: 0, maxHz: 400, binCount: 5 });
+    expect(Array.from(outOfRangeBatch?.rows[0] ?? [])).toEqual([0, 100, 200, 300, 400]);
+
+    controller.updateContext({
+      radioSdrCenterViewMode: 'left',
+      radioSdrReferenceFrequencyHz: 200,
+    });
+    controller.consumeRenderBatch();
+
+    controller.updateContext({
+      radioSdrCenterViewMode: 'left',
+      radioSdrReferenceFrequencyHz: Number.NaN,
+    });
+    const invalidReferenceBatch = controller.consumeRenderBatch();
+
+    expect(invalidReferenceBatch?.axis).toEqual({ minHz: 0, maxHz: 400, binCount: 5 });
+    expect(Array.from(invalidReferenceBatch?.rows[0] ?? [])).toEqual([0, 100, 200, 300, 400]);
+  });
+
+  it('rebuilds cached radio SDR history when switching center half-view modes without a new frame', () => {
+    const controller = new SpectrumStreamController(4);
+    controller.updateContext({ selectedKind: 'radio-sdr' });
+    controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200, 300, 400], { min: 0, max: 400 }));
+    flushNextAnimationFrame();
+    controller.consumeRenderBatch();
+
+    controller.updateContext({
+      radioSdrCenterViewMode: 'right',
+      radioSdrReferenceFrequencyHz: 200,
+    });
+    const rightBatch = controller.consumeRenderBatch();
+    expect(rightBatch?.mode).toBe('replace');
+    expect(rightBatch?.axis).toEqual({ minHz: 200, maxHz: 400, binCount: 5 });
+    expect(Array.from(rightBatch?.rows[0] ?? [])).toEqual([200, 250, 300, 350, 400]);
+
+    controller.updateContext({
+      radioSdrCenterViewMode: 'left',
+      radioSdrReferenceFrequencyHz: 200,
+    });
+    const leftBatch = controller.consumeRenderBatch();
+    expect(leftBatch?.mode).toBe('replace');
+    expect(leftBatch?.axis).toEqual({ minHz: 0, maxHz: 200, binCount: 5 });
+    expect(Array.from(leftBatch?.rows[0] ?? [])).toEqual([0, 50, 100, 150, 200]);
+
+    controller.updateContext({
+      radioSdrCenterViewMode: 'full',
+      radioSdrReferenceFrequencyHz: null,
+    });
+    const fullBatch = controller.consumeRenderBatch();
+    expect(fullBatch?.mode).toBe('replace');
+    expect(fullBatch?.axis).toEqual({ minHz: 0, maxHz: 400, binCount: 5 });
+    expect(Array.from(fullBatch?.rows[0] ?? [])).toEqual([0, 100, 200, 300, 400]);
+  });
+
   it('reuses spectrum rows when cropping to the same source range', () => {
     const values = new Float32Array([0, 100, 200]);
     const cropped = cropSpectrumToRange(values, { min: 900, max: 1100 }, { min: 900, max: 1100 });

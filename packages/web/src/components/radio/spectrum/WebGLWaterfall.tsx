@@ -1,9 +1,15 @@
 import React, { useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { Popover, PopoverTrigger, PopoverContent } from '@heroui/react';
+import { Popover, PopoverTrigger, PopoverContent, Button } from '@heroui/react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../../utils/logger';
 import type { SpectrumAxis, SpectrumRenderBatch, SpectrumStreamController } from '../../../spectrum/SpectrumStreamController';
+import {
+  IDENTITY_FREQUENCY_AXIS_TRANSFORM,
+  type FrequencyAxisTransform,
+} from '../../../spectrum/frequencyAxisCalibration';
 import {
   buildSpectrumThemeColorLut,
   DEFAULT_SPECTRUM_THEME_ID,
@@ -110,6 +116,8 @@ interface WebGLWaterfallProps {
   presetMarkers?: PresetMarker[];
   frequencyRangeMode?: 'baseband' | 'absolute-center' | 'absolute-fixed' | 'absolute-windowed';
   referenceFrequencyHz?: number | null;
+  frequencyAxisTransform?: FrequencyAxisTransform;
+  visualFrequencyOffsetHz?: number;
   basebandInteractionRange?: BasebandInteractionRange;
   interactionFrequencyMode?: 'baseband' | 'absolute';
   interactionFrequencyRange?: InteractionFrequencyRange | null;
@@ -141,6 +149,12 @@ interface WebGLWaterfallProps {
   showCycleMarkers?: boolean;
   /** 数字模式周期长度（毫秒），例如 FT8=15000、FT4=7500 */
   cycleSlotMs?: number | null;
+  /** 需要显示"低功率—可开启虚拟频差"弱警告的操作员 ID（由上层根据实测功率判断） */
+  lowPowerWarningOperatorIds?: string[];
+  /** 弱警告 popover 中点击"一键开启虚拟频差" */
+  onEnableFakeFrequency?: () => void;
+  /** 弱警告 popover 中点击"不再提示" */
+  onDismissLowPowerWarning?: () => void;
 }
 
 const FREQUENCY_GESTURE_DRAG_THRESHOLD_PX = 4;
@@ -255,6 +269,8 @@ interface HorizontalWheelFrequencyRuntime {
   hasAxis: boolean;
   minFrequency: number;
   maxFrequency: number;
+  frequencyAxisTransform: FrequencyAxisTransform;
+  visualFrequencyOffsetHz: number;
   interactionFrequencyMode: 'baseband' | 'absolute';
   effectiveDragFrequencyStepHz: number | null | undefined;
   dragFrequencyCommitIntervalMs: number;
@@ -278,7 +294,7 @@ export function getWaterfallFrequencyPositionPercent(
   displayFrequency: number,
   minFrequency: number,
   maxFrequency: number,
-  visualOffsetHz = WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ,
+  visualOffsetHz = 0,
 ): number {
   return ((displayFrequency + visualOffsetHz - minFrequency) / (maxFrequency - minFrequency)) * 100;
 }
@@ -291,6 +307,44 @@ export function getWaterfallFrequencyAtRatio(
 ): number {
   const safeRatio = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0;
   return minFrequency + safeRatio * (maxFrequency - minFrequency) - visualOffsetHz;
+}
+
+export function getWaterfallSemanticFrequencyPositionPercent(
+  actualFrequency: number,
+  minFrequency: number,
+  maxFrequency: number,
+  frequencyAxisTransform: FrequencyAxisTransform = IDENTITY_FREQUENCY_AXIS_TRANSFORM,
+  visualOffsetHz = 0,
+): number {
+  return getWaterfallFrequencyPositionPercent(
+    frequencyAxisTransform.toVisualHz(actualFrequency),
+    minFrequency,
+    maxFrequency,
+    visualOffsetHz,
+  );
+}
+
+export function getWaterfallSemanticFrequencyAtRatio(
+  ratio: number,
+  minFrequency: number,
+  maxFrequency: number,
+  frequencyAxisTransform: FrequencyAxisTransform = IDENTITY_FREQUENCY_AXIS_TRANSFORM,
+  visualOffsetHz = 0,
+): number {
+  return frequencyAxisTransform.toActualHz(
+    getWaterfallFrequencyAtRatio(ratio, minFrequency, maxFrequency, visualOffsetHz),
+  );
+}
+
+export function getWaterfallFrequencyAfterVisualDelta(
+  startFrequency: number,
+  visualDeltaHz: number,
+  frequencyAxisTransform: FrequencyAxisTransform = IDENTITY_FREQUENCY_AXIS_TRANSFORM,
+  visualOffsetHz = 0,
+): number {
+  return frequencyAxisTransform.toActualHz(
+    frequencyAxisTransform.toVisualHz(startFrequency) + visualOffsetHz + visualDeltaHz - visualOffsetHz,
+  );
 }
 
 function getNiceWaterfallRulerStep(spanHz: number, targetTickCount: number): number {
@@ -369,13 +423,23 @@ export function buildWaterfallRulerTicks(
   maxFrequency: number,
   widthPx: number,
   visualOffsetHz = 0,
+  frequencyAxisTransform: FrequencyAxisTransform = IDENTITY_FREQUENCY_AXIS_TRANSFORM,
 ): WaterfallRulerTick[] {
-  const spanHz = maxFrequency - minFrequency;
-  if (!Number.isFinite(spanHz) || spanHz <= 0 || !Number.isFinite(widthPx) || widthPx <= 0) {
+  const visualSpanHz = maxFrequency - minFrequency;
+  if (!Number.isFinite(visualSpanHz) || visualSpanHz <= 0 || !Number.isFinite(widthPx) || widthPx <= 0) {
     return [];
   }
 
   const ticks: WaterfallRulerTick[] = [];
+  const rawSemanticMin = frequencyAxisTransform.toActualHz(minFrequency - visualOffsetHz);
+  const rawSemanticMax = frequencyAxisTransform.toActualHz(maxFrequency - visualOffsetHz);
+  const minSemanticFrequency = Math.min(rawSemanticMin, rawSemanticMax);
+  const maxSemanticFrequency = Math.max(rawSemanticMin, rawSemanticMax);
+  const spanHz = maxSemanticFrequency - minSemanticFrequency;
+  if (!Number.isFinite(spanHz) || spanHz <= 0) {
+    return [];
+  }
+
   const baseband = isBasebandRulerRange(minFrequency, maxFrequency);
   const minorStepHz = baseband
     ? WATERFALL_BASEBAND_RULER_MINOR_STEP_HZ
@@ -385,15 +449,16 @@ export function buildWaterfallRulerTicks(
     : minorStepHz * 5;
   const mediumStepHz = majorStepHz / 2;
   const labelEvery = getRulerLabelEvery(majorStepHz, spanHz, widthPx);
-  const startFrequency = Math.ceil(minFrequency / minorStepHz) * minorStepHz;
-  const endFrequency = maxFrequency + minorStepHz * 0.001;
+  const startFrequency = Math.ceil(minSemanticFrequency / minorStepHz) * minorStepHz;
+  const endFrequency = maxSemanticFrequency + minorStepHz * 0.001;
   let majorIndex = 0;
 
   for (let frequency = startFrequency; frequency <= endFrequency; frequency += minorStepHz) {
-    const positionPercent = getWaterfallFrequencyPositionPercent(
+    const positionPercent = getWaterfallSemanticFrequencyPositionPercent(
       frequency,
       minFrequency,
       maxFrequency,
+      frequencyAxisTransform,
       visualOffsetHz,
     );
     if (positionPercent < -0.001 || positionPercent > 100.001) {
@@ -597,6 +662,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   presetMarkers = [],
   frequencyRangeMode = 'baseband',
   referenceFrequencyHz = null,
+  frequencyAxisTransform = IDENTITY_FREQUENCY_AXIS_TRANSFORM,
+  visualFrequencyOffsetHz = 0,
   basebandInteractionRange = { min: 0, max: 3000 },
   interactionFrequencyMode = 'baseband',
   interactionFrequencyRange = null,
@@ -623,8 +690,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   themeId = DEFAULT_SPECTRUM_THEME_ID,
   showCycleMarkers = false,
   cycleSlotMs = null,
+  lowPowerWarningOperatorIds = [],
+  onEnableFakeFrequency,
+  onDismissLowPowerWarning,
 }) => {
   const { t } = useTranslation('common');
+  const { t: tRadio } = useTranslation('radio');
+  const [hoveredWarningOperatorId, setHoveredWarningOperatorId] = React.useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cycleMarkerLayerRef = useRef<HTMLDivElement>(null);
@@ -2127,7 +2199,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     );
   }
 
-  const FREQ_POSITION_OFFSET = WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ;
+  const FREQ_POSITION_OFFSET = visualFrequencyOffsetHz;
   const isAbsoluteDisplayMode = frequencyRangeMode === 'absolute-center' || frequencyRangeMode === 'absolute-fixed';
   const isAbsoluteWindowedMode = frequencyRangeMode === 'absolute-windowed';
   const minFrequency = axis?.minHz ?? 0;
@@ -2135,9 +2207,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const hasAxis = Boolean(axis && axis.binCount > 0 && maxFrequency > minFrequency);
   const rulerTicks = React.useMemo(
     () => (!markerOnly && hasAxis
-      ? buildWaterfallRulerTicks(minFrequency, maxFrequency, rulerWidthPx, FREQ_POSITION_OFFSET)
+      ? buildWaterfallRulerTicks(minFrequency, maxFrequency, rulerWidthPx, FREQ_POSITION_OFFSET, frequencyAxisTransform)
       : []),
-    [hasAxis, markerOnly, maxFrequency, minFrequency, rulerWidthPx],
+    [FREQ_POSITION_OFFSET, frequencyAxisTransform, hasAxis, markerOnly, maxFrequency, minFrequency, rulerWidthPx],
   );
   const showHoverProbe = Boolean(
     !markerOnly
@@ -2183,11 +2255,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
     setHoverCursor({
       ratio,
-      frequency: getWaterfallFrequencyAtRatio(ratio, minFrequency, maxFrequency, FREQ_POSITION_OFFSET),
+      frequency: getWaterfallSemanticFrequencyAtRatio(ratio, minFrequency, maxFrequency, frequencyAxisTransform, FREQ_POSITION_OFFSET),
       clientX: event.clientX,
       containerTop: rect.top,
     });
-  }, [hasAxis, markerOnly, maxFrequency, minFrequency]);
+  }, [FREQ_POSITION_OFFSET, frequencyAxisTransform, hasAxis, markerOnly, maxFrequency, minFrequency]);
 
   const clearHoverCursor = useCallback(() => {
     setHoverCursor(null);
@@ -2239,11 +2311,17 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     return basebandFrequency;
   }, [hasAxis, isAbsoluteDisplayMode, isAbsoluteWindowedMode, referenceFrequencyHz]);
 
-  // 计算频率到位置的百分比
+  // 计算语义频率到未变形频谱图位置的百分比
   const getFrequencyPosition = useCallback((displayFrequency: number, visualOffsetHz = FREQ_POSITION_OFFSET) => {
     if (!hasAxis) return 0;
-    return getWaterfallFrequencyPositionPercent(displayFrequency, minFrequency, maxFrequency, visualOffsetHz);
-  }, [hasAxis, maxFrequency, minFrequency]);
+    return getWaterfallSemanticFrequencyPositionPercent(
+      displayFrequency,
+      minFrequency,
+      maxFrequency,
+      frequencyAxisTransform,
+      visualOffsetHz,
+    );
+  }, [FREQ_POSITION_OFFSET, frequencyAxisTransform, hasAxis, maxFrequency, minFrequency]);
 
   const getMarkerPosition = useCallback((basebandFrequency: number) => {
     const displayFrequency = getDisplayFrequency(basebandFrequency);
@@ -2266,13 +2344,19 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const relativeX = clientX - containerRect.left;
     const percentage = Math.max(0, Math.min(1, relativeX / containerRect.width));
 
-    const displayFrequency = minFrequency + percentage * (maxFrequency - minFrequency) - visualOffsetHz;
+    const displayFrequency = getWaterfallSemanticFrequencyAtRatio(
+      percentage,
+      minFrequency,
+      maxFrequency,
+      frequencyAxisTransform,
+      visualOffsetHz,
+    );
     const basebandFrequency = isAbsoluteDisplayMode
       ? displayFrequency - (referenceFrequencyHz ?? minFrequency)
       : displayFrequency;
 
     return clampBasebandFrequency(basebandFrequency);
-  }, [clampBasebandFrequency, hasAxis, isAbsoluteDisplayMode, maxFrequency, minFrequency, referenceFrequencyHz]);
+  }, [FREQ_POSITION_OFFSET, clampBasebandFrequency, frequencyAxisTransform, hasAxis, isAbsoluteDisplayMode, maxFrequency, minFrequency, referenceFrequencyHz]);
 
   const getInteractionFrequencyFromMousePosition = useCallback((clientX: number, visualOffsetHz = FREQ_POSITION_OFFSET, stepHz?: number | null) => {
     const container = containerRef.current;
@@ -2281,7 +2365,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const containerRect = container.getBoundingClientRect();
     const relativeX = clientX - containerRect.left;
     const percentage = Math.max(0, Math.min(1, relativeX / containerRect.width));
-    const displayFrequency = minFrequency + percentage * (maxFrequency - minFrequency) - visualOffsetHz;
+    const displayFrequency = getWaterfallSemanticFrequencyAtRatio(
+      percentage,
+      minFrequency,
+      maxFrequency,
+      frequencyAxisTransform,
+      visualOffsetHz,
+    );
 
     if (interactionFrequencyMode === 'absolute') {
       return clampInteractionFrequency(displayFrequency, stepHz);
@@ -2294,6 +2384,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   }, [
     clampBasebandFrequency,
     clampInteractionFrequency,
+    FREQ_POSITION_OFFSET,
+    frequencyAxisTransform,
     hasAxis,
     interactionFrequencyMode,
     isAbsoluteDisplayMode,
@@ -2381,7 +2473,12 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     if (dragState.dragTarget === 'center') {
       const deltaHz = (clientX - dragState.startX) * dragState.hzPerPixel;
       centerFrequency = Math.max(minCenter, Math.min(maxCenter, snapBandValue(
-        dragState.startCenterFrequency + deltaHz,
+        getWaterfallFrequencyAfterVisualDelta(
+          dragState.startCenterFrequency,
+          deltaHz,
+          frequencyAxisTransform,
+          FREQ_POSITION_OFFSET,
+        ),
         overlay.centerStepHz ?? overlay.stepHz,
       )));
     } else {
@@ -2396,7 +2493,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       rangeEndFrequency: centerFrequency + widthHz / 2,
       widthHz,
     };
-  }, [getInteractionFrequencyFromMousePosition, snapBandValue]);
+  }, [FREQ_POSITION_OFFSET, frequencyAxisTransform, getInteractionFrequencyFromMousePosition, snapBandValue]);
 
   const handleGenericFrequencyDragPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!onDragFrequencyChange || event.button !== 0 || !event.isPrimary || !hasAxis) {
@@ -2691,10 +2788,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         return;
       }
 
-      const nextRawFrequency = getWaterfallDragTunedFrequency(
+      const nextRawFrequency = getWaterfallFrequencyAfterVisualDelta(
         frequencyGestureDragState.startFrequency,
-        dragDistance,
-        frequencyGestureDragState.hzPerPixel,
+        -dragDistance * frequencyGestureDragState.hzPerPixel,
+        frequencyAxisTransform,
+        FREQ_POSITION_OFFSET,
       );
       const nextFrequency = interactionFrequencyMode === 'absolute'
         ? clampInteractionFrequency(
@@ -2768,7 +2866,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     clampInteractionFrequency,
     commitFrequencyGestureValue,
     effectiveDragFrequencyStepHz,
+    FREQ_POSITION_OFFSET,
     frequencyGestureDragState,
+    frequencyAxisTransform,
     interactionFrequencyMode,
     onDragFrequencyActiveChange,
     onDragFrequencyPreview,
@@ -2783,6 +2883,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     hasAxis,
     minFrequency,
     maxFrequency,
+    frequencyAxisTransform,
+    visualFrequencyOffsetHz: FREQ_POSITION_OFFSET,
     interactionFrequencyMode,
     effectiveDragFrequencyStepHz,
     dragFrequencyCommitIntervalMs,
@@ -2939,14 +3041,15 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       const wheelState = horizontalWheelStateRef.current;
       wheelState.accumulatedDeltaXPx += normalizeWaterfallWheelDeltaX(event, rect.width);
       wheelState.hzPerPixel = hzPerPixel;
-      const nextRawFrequency = getWaterfallHorizontalWheelTunedFrequency(
+      const nextRawSemanticFrequency = getWaterfallFrequencyAfterVisualDelta(
         wheelState.startFrequency,
-        wheelState.accumulatedDeltaXPx,
-        wheelState.hzPerPixel,
+        wheelState.accumulatedDeltaXPx * wheelState.hzPerPixel * WATERFALL_HORIZONTAL_WHEEL_FREQUENCY_SCALE,
+        runtime.frequencyAxisTransform,
+        runtime.visualFrequencyOffsetHz,
       );
       const nextFrequency = runtime.interactionFrequencyMode === 'absolute'
-        ? runtime.clampInteractionFrequency(nextRawFrequency, runtime.effectiveDragFrequencyStepHz)
-        : runtime.clampBasebandFrequency(nextRawFrequency, runtime.effectiveDragFrequencyStepHz);
+        ? runtime.clampInteractionFrequency(nextRawSemanticFrequency, runtime.effectiveDragFrequencyStepHz)
+        : runtime.clampBasebandFrequency(nextRawSemanticFrequency, runtime.effectiveDragFrequencyStepHz);
 
       setLocalGestureFrequencyOverride({ source: 'horizontal-wheel', frequency: nextFrequency });
       latestHorizontalWheelFrequencyRef.current = nextFrequency;
@@ -3367,6 +3470,64 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
                   <div className="text-sm font-semibold">{callsign}</div>
                   <div className="text-xs text-default-400">
                     {frequency} Hz
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+          );
+        })}
+
+        {/* 虚拟频差弱警告：实测发射功率偏低的操作员，在其 TX 标记上方常驻一个小黄色感叹号；hover 展开详细说明与操作 */}
+        {lowPowerWarningOperatorIds.length > 0 && txFrequencies.map(({ operatorId, frequency }) => {
+          if (!lowPowerWarningOperatorIds.includes(operatorId)) return null;
+          // 与 TX 标记一致：拖动/冷却期使用本地覆盖频率，使警告图标实时跟随
+          const isOverridden = localFrequencyOverride?.operatorId === operatorId &&
+            (draggingOperatorId === operatorId || cooldownOperatorId === operatorId);
+          const displayFrequency = isOverridden ? localFrequencyOverride!.frequency : frequency;
+          const position = getMarkerPosition(displayFrequency);
+          if (position === null) return null;
+          const isOpen = hoveredWarningOperatorId === operatorId;
+          return (
+            <Popover
+              key={`tx-warn-${operatorId}`}
+              placement="top"
+              isOpen={isOpen}
+              onOpenChange={(open) => { if (!open) setHoveredWarningOperatorId(null); }}
+            >
+              <PopoverTrigger>
+                <div
+                  className="absolute z-10 pointer-events-auto cursor-help"
+                  style={{ left: `${position}%`, bottom: '1.5rem', transform: 'translateX(-50%)' }}
+                  onMouseEnter={() => setHoveredWarningOperatorId(operatorId)}
+                  onMouseLeave={() => setHoveredWarningOperatorId(null)}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  aria-label={tRadio('fakeFrequency.lowPowerTitle')}
+                >
+                  <FontAwesomeIcon icon={faTriangleExclamation} className="text-warning text-[10px] drop-shadow" />
+                </div>
+              </PopoverTrigger>
+              <PopoverContent
+                onMouseEnter={() => setHoveredWarningOperatorId(operatorId)}
+                onMouseLeave={() => setHoveredWarningOperatorId(null)}
+              >
+                <div className="px-3 py-3 max-w-[240px] space-y-2">
+                  <div className="text-xs font-semibold text-default-900">{tRadio('fakeFrequency.lowPowerTitle')}</div>
+                  <div className="text-xs text-default-500">{tRadio('fakeFrequency.lowPowerHint')}</div>
+                  <div className="flex gap-2 justify-end">
+                    <Button
+                      size="sm"
+                      variant="light"
+                      onPress={() => { setHoveredWarningOperatorId(null); onDismissLowPowerWarning?.(); }}
+                    >
+                      {tRadio('fakeFrequency.dontRemind')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      color="primary"
+                      onPress={() => { setHoveredWarningOperatorId(null); onEnableFakeFrequency?.(); }}
+                    >
+                      {tRadio('fakeFrequency.enableNow')}
+                    </Button>
                   </div>
                 </div>
               </PopoverContent>

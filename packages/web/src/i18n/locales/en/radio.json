@@ -297,6 +297,16 @@
     "toneBusy": "The transmitter is already active, so tone tune cannot start.",
     "toneStartFailed": "Failed to start tone tune"
   },
+  "fakeFrequency": {
+    "toggle": "Virtual Frequency Offset",
+    "tooltipOn": "Virtual Frequency Offset: on (keeps FT8/FT4 TX audio carrier in the radio's sweet spot)",
+    "tooltipOff": "Virtual Frequency Offset: off (FT8/FT4 only; click to avoid power roll-off at high/low audio)",
+    "toggleFailed": "Failed to toggle Virtual Frequency Offset",
+    "lowPowerTitle": "Low TX power",
+    "lowPowerHint": "Your TX audio is away from the center band, where some radios output noticeably less power. Enabling Virtual Frequency Offset keeps the audio carrier in the sweet spot during TX while the actual on-air position stays the same.",
+    "enableNow": "Enable now",
+    "dontRemind": "Don't remind me"
+  },
   "error": {
     "unknown": "An unknown error occurred",
     "connectionFailed": "Radio connection failed",

@@ -66,6 +66,10 @@ import { bootstrapCoordinator } from './services/BootstrapCoordinator.js';
 
 const logger = createLogger('DigitalRadioEngine');
 
+const isFakeFrequencySupportedMode = (engineMode: EngineMode, mode: ModeDescriptor): boolean => (
+  engineMode === 'digital' && (mode.name === 'FT8' || mode.name === 'FT4')
+);
+
 type DecodeWorkerEngineEmitter = EventEmitter<{
   decodeWorkerUnavailable: (status: DecodeWorkerPoolHealthSnapshot) => void;
   decodeWorkerRecovered: (status: DecodeWorkerPoolHealthSnapshot) => void;
@@ -94,6 +98,7 @@ import { PhysicalPttMonitor } from './radio/PhysicalPttMonitor.js';
 import type { RigctldBridgeConfig, RigctldStatus } from '@tx5dr/contracts';
 import { RadioPowerController } from './radio/RadioPowerController.js';
 import { TuneToneController } from './radio/TuneToneController.js';
+import { buildRadioStatusPayload } from './radio/buildRadioStatusPayload.js';
 import type { RealtimeRxAudioRouter } from './realtime/RealtimeRxAudioRouter.js';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
@@ -320,6 +325,18 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         }
       },
       getKnownRadioFrequency: () => this.radioManager.getKnownFrequency(),
+      // 虚拟频差：仅 FT8/FT4 生效，并与 rig split 互斥（split 开启时本功能让步，避免双重 dial 操作）
+      getFakeFrequencyEnabled: () => {
+        try {
+          if (!isFakeFrequencySupportedMode(this.engineMode, this.currentMode)) {
+            return false;
+          }
+          const enabled = !!this.radioManager?.getConfig()?.fakeFrequency?.enabled;
+          return enabled && !this.radioManager?.isSplitEnabled?.();
+        } catch {
+          return false;
+        }
+      },
       transmissionTracker: this.transmissionTracker,
       callsignTracker: this._callsignTracker,
     });
@@ -597,6 +614,44 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public getRadioManager(): PhysicalRadioManager {
     return this.radioManager;
+  }
+
+  /**
+   * 虚拟频差开关：热更新 + 持久化到激活 Profile + 广播状态。
+   * 无需重启引擎——仅 FT8/FT4 发射会读取该配置并应用编码/平移行为。
+   */
+  public async setFakeFrequencyEnabled(enabled: boolean): Promise<void> {
+    // 1. 热更新 radioManager 当前配置（编码时读取）
+    this.radioManager?.setFakeFrequencyEnabled(enabled);
+
+    // 2. 持久化到当前激活 Profile（合并 radio 配置，避免覆盖其他字段）
+    try {
+      const cfg = ConfigManager.getInstance();
+      const active = cfg.getActiveProfile();
+      if (active) {
+        await cfg.updateProfile(active.id, {
+          radio: { ...active.radio, fakeFrequency: { enabled } },
+        });
+      }
+    } catch (error) {
+      logger.error('Failed to persist fake frequency setting', error);
+    }
+
+    // 3. 广播最新电台状态，前端据 radioConfig.fakeFrequency 同步开关
+    try {
+      const radioManager = this.radioManager;
+      const radioInfo = await radioManager.getRadioInfo();
+      this.emit('radioStatusChanged', buildRadioStatusPayload({
+        connected: radioManager.isConnected(),
+        status: radioManager.getConnectionStatus(),
+        radioInfo,
+        radioConfig: radioManager.getConfig(),
+        reason: 'Fake frequency setting updated',
+        radioManager,
+      }));
+    } catch (error) {
+      logger.error('Failed to broadcast radio status after fake frequency update', error);
+    }
   }
 
   public getRadioPowerController(): RadioPowerController {

@@ -297,6 +297,16 @@
     "toneBusy": "当前正在发射，无法启动单音调谐。",
     "toneStartFailed": "启动单音调谐失败"
   },
+  "fakeFrequency": {
+    "toggle": "虚拟频差",
+    "tooltipOn": "虚拟频差：已开启（FT8/FT4 发射音频载波保持在最佳频段）",
+    "tooltipOff": "虚拟频差：已关闭（仅 FT8/FT4 可用，点击开启以避免高/低音频发射功率衰减）",
+    "toggleFailed": "切换虚拟频差失败",
+    "lowPowerTitle": "发射功率偏低",
+    "lowPowerHint": "当前发射音频偏离中心频段，部分电台在此处发射功率会明显下降。开启「虚拟频差」可在发射时自动将音频载波保持在最佳频段，实际发射位置不变。",
+    "enableNow": "一键开启",
+    "dontRemind": "不再提示"
+  },
   "power": {
     "on": {
       "label": "开机",

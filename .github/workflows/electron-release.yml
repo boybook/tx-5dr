@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2022
             platform: win32
             arch: x64
             artifact_name: tx-5dr-windows-x64
@@ -268,6 +268,7 @@ jobs:
                 ;;
             esac
 
+            # Search for VC runtime in Visual Studio 2022 (pre-installed on windows-2022 runner)
             mapfile -t VC_REDIST_DIRS < <(
               find \
                 "/c/Program Files/Microsoft Visual Studio/2022" \

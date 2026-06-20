@@ -9,6 +9,12 @@ export interface MixedAudio {
   sampleRate: number;
   duration: number;
   operatorIds: string[];
+  /**
+   * 虚拟频率：本时隙冻结的 dial 平移量（Hz）。
+   * 与音频载波同源（音频按 origFreq - shift 编码），随负载流转到 PTT 时点，
+   * 保证施加到电台的 dial 平移量恒等于编码所用 shift。0 表示不平移。
+   */
+  txDialShiftHz: number;
 }
 
 /**
@@ -36,6 +42,9 @@ export class AudioMixer extends EventEmitter {
   // 当前时隙信息
   private currentSlotStartMs: number = 0;
 
+  // 虚拟频率：本时隙冻结的 dial 平移量（Hz），由 addOperatorAudio 写入、随每个 MixedAudio 流转
+  private currentSlotTxDialShiftHz: number = 0;
+
   // 播放状态跟踪
   private playbackStartTimeMs: number = 0;
   private isPlaying: boolean = false;
@@ -61,7 +70,8 @@ export class AudioMixer extends EventEmitter {
     audioData: Float32Array,
     sampleRate: number,
     slotStartMs: number,
-    requestId?: string
+    requestId?: string,
+    txDialShiftHz: number = 0
   ): void {
     const existing = this.slotAudioCache.get(operatorId);
     const duration = audioData.length / sampleRate;
@@ -78,6 +88,8 @@ export class AudioMixer extends EventEmitter {
       this.clearSlotCache();
     }
     this.currentSlotStartMs = slotStartMs;
+    // 在 clearSlotCache 之后赋值（否则会被重置为 0）。同一时隙所有操作员共享同一冻结 shift。
+    this.currentSlotTxDialShiftHz = txDialShiftHz;
 
     // 存储/替换该操作员的音频
     const operatorAudio: OperatorSlotAudio = {
@@ -224,7 +236,8 @@ export class AudioMixer extends EventEmitter {
           audioData: single.samples,
           sampleRate: targetSampleRate,
           duration: single.samples.length / targetSampleRate,
-          operatorIds: [single.operatorId]
+          operatorIds: [single.operatorId],
+          txDialShiftHz: this.currentSlotTxDialShiftHz
         };
       }
 
@@ -258,7 +271,8 @@ export class AudioMixer extends EventEmitter {
         audioData: mixedSamples,
         sampleRate: targetSampleRate,
         duration: finalDuration,
-        operatorIds: validAudios.map(a => a.operatorId)
+        operatorIds: validAudios.map(a => a.operatorId),
+        txDialShiftHz: this.currentSlotTxDialShiftHz
       };
 
     } catch (error) {
@@ -327,6 +341,7 @@ export class AudioMixer extends EventEmitter {
     this.isPlaying = false;
     this.playbackStartTimeMs = 0;
     this.cumulativeOffsetMs = 0;  // 重置累计偏移量
+    this.currentSlotTxDialShiftHz = 0;  // 重置虚拟频率平移量
 
     if (this.mixingTimeout) {
       clearTimeout(this.mixingTimeout);

@@ -4,7 +4,7 @@ import { localizeHamlibConfigText } from '../../../utils/hamlibConfigTextMap';
 
 const logger = createLogger('RadioDeviceSettings');
 import { useTranslation } from 'react-i18next';
-import { Input, Select, SelectItem, Autocomplete, AutocompleteItem, Tabs, Tab, Card, CardBody, Divider, Button, Chip, Tooltip, Accordion, AccordionItem } from '@heroui/react';
+import { Input, Select, SelectItem, Autocomplete, AutocompleteItem, Tabs, Tab, Card, CardBody, Divider, Button, Chip, Tooltip, Accordion, AccordionItem, Switch } from '@heroui/react';
 import { api, ApiError } from '@tx5dr/core';
 import type { CWKeyActiveLevel, DigitalModeRadioModePreference, HamlibConfig, HamlibConfigField, PttMethod, RigConfigSchemaResponse } from '@tx5dr/contracts';
 
@@ -451,6 +451,24 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
             </SelectItem>
           ))}
         </Select>
+      </CardBody>
+    </Card>
+  );
+
+  const renderFakeFrequencyToggle = () => (
+    <Card shadow="none" radius="lg" classNames={{ base: 'border border-divider bg-content1' }}>
+      <CardBody className="p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex-1">
+            <h4 className="font-semibold text-default-900">{t('radio.fakeFrequencyTitle')}</h4>
+            <p className="text-sm text-default-600">{t('radio.fakeFrequencyDesc')}</p>
+          </div>
+          <Switch
+            isSelected={!!config.fakeFrequency?.enabled}
+            onValueChange={(enabled) => updateConfig({ fakeFrequency: { enabled } })}
+            size="sm"
+          />
+        </div>
       </CardBody>
     </Card>
   );
@@ -1718,6 +1736,8 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
         </div>
 
         {renderDigitalModeRadioModePreference()}
+
+        {config.type !== 'none' && renderFakeFrequencyToggle()}
 
         {/* 状态提示 */}
         <div className="flex justify-end">

@@ -3,12 +3,15 @@ import {
   areSpectrumRecoveryStatesEqual,
   buildRadioSdrFrequencyRequest,
   buildRadioSdrTxBandOverlays,
+  canShowRadioSdrCenterViewSetting,
   canUseRadioSdrFrequencyRequest,
   clampCollapsedSpectrumFrequency,
   getCollapsedSpectrumPosition,
   getRadioSdrDragFrequencyStepHz,
   isSpectrumEngineNotStarted,
+  normalizeRadioSdrCenterViewMode,
   resolveAudioRangeSettingsForModeChange,
+  resolveRadioSdrCenterViewContext,
   resolveSpectrumEmptyStatusKey,
   resolveSpectrumRecoveryStateAfterFrame,
   resolveCollapsedSpectrumMarkerFrequencies,
@@ -150,6 +153,77 @@ describe('spectrum no-frame recovery gate', () => {
       radioSdrTransmitPaused: false,
       recoveryState: { isStale: false, retryCount: 0, exhausted: false },
     })).toBe('waiting');
+  });
+});
+
+describe('radio SDR center view settings', () => {
+  it('normalizes persisted center view modes', () => {
+    expect(normalizeRadioSdrCenterViewMode('full')).toBe('full');
+    expect(normalizeRadioSdrCenterViewMode('left')).toBe('left');
+    expect(normalizeRadioSdrCenterViewMode('right')).toBe('right');
+    expect(normalizeRadioSdrCenterViewMode('wide')).toBe('full');
+    expect(normalizeRadioSdrCenterViewMode(null)).toBe('full');
+  });
+
+  it('only enables client half-view context for radio SDR absolute center mode', () => {
+    expect(resolveRadioSdrCenterViewContext({
+      isRadioSdrSelected: true,
+      frequencyRangeMode: 'absolute-center',
+      centerViewMode: 'right',
+      referenceFrequencyHz: 14_074_000,
+    })).toEqual({
+      centerViewMode: 'right',
+      referenceFrequencyHz: 14_074_000,
+    });
+
+    expect(resolveRadioSdrCenterViewContext({
+      isRadioSdrSelected: true,
+      frequencyRangeMode: 'absolute-fixed',
+      centerViewMode: 'right',
+      referenceFrequencyHz: 14_074_000,
+    })).toEqual({
+      centerViewMode: 'full',
+      referenceFrequencyHz: null,
+    });
+
+    expect(resolveRadioSdrCenterViewContext({
+      isRadioSdrSelected: false,
+      frequencyRangeMode: 'absolute-center',
+      centerViewMode: 'left',
+      referenceFrequencyHz: 14_074_000,
+    })).toEqual({
+      centerViewMode: 'full',
+      referenceFrequencyHz: null,
+    });
+
+    expect(resolveRadioSdrCenterViewContext({
+      isRadioSdrSelected: true,
+      frequencyRangeMode: 'absolute-center',
+      centerViewMode: 'left',
+      referenceFrequencyHz: Number.NaN,
+    })).toEqual({
+      centerViewMode: 'full',
+      referenceFrequencyHz: null,
+    });
+  });
+
+  it('only shows the center view setting where the half-view is supported', () => {
+    expect(canShowRadioSdrCenterViewSetting({
+      isRadioSdrSelected: true,
+      frequencyRangeMode: 'absolute-center',
+    })).toBe(true);
+
+    for (const frequencyRangeMode of ['absolute-fixed', 'absolute-windowed', 'baseband'] as const) {
+      expect(canShowRadioSdrCenterViewSetting({
+        isRadioSdrSelected: true,
+        frequencyRangeMode,
+      })).toBe(false);
+    }
+
+    expect(canShowRadioSdrCenterViewSetting({
+      isRadioSdrSelected: false,
+      frequencyRangeMode: 'absolute-center',
+    })).toBe(false);
   });
 });
 

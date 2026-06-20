@@ -42,7 +42,17 @@ interface UploadResult {
   message: string;
 }
 
+type BatchUploadStatus = 'created' | 'fallback' | 'failed';
+
+interface BatchUploadResult {
+  success: boolean;
+  status: BatchUploadStatus;
+  message: string;
+}
+
 const CONFIG_KEY_PREFIX = 'config:';
+const WAVELOG_BATCH_MAX_QSOS = 100;
+const WAVELOG_BATCH_MAX_PAYLOAD_BYTES = 512 * 1024;
 
 /**
  * WaveLog sync provider — implements LogbookSyncProvider.
@@ -143,25 +153,36 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
     let failed = 0;
     const failures: SyncFailure[] = [];
 
-    for (const qso of qsos) {
-      try {
-        const result = await this.uploadSingleQSO(config, qso);
-        if (result.status === 'created') {
-          uploaded++;
-        } else if (result.status === 'duplicate') {
-          skipped++;
-        } else {
-          failed++;
-          failures.push(this.createQsoFailure(qso, 'wavelog_upload_rejected', result.message, config));
+    if (qsos.length === 1) {
+      const result = await this.uploadQsosIndividually(config, qsos, failures);
+      uploaded += result.uploaded;
+      skipped += result.skipped;
+      failed += result.failed;
+    } else {
+      for (const chunk of this.chunkQsos(config, qsos)) {
+        try {
+          const result = await this.uploadQsoBatch(config, chunk);
+          if (result.status === 'created') {
+            uploaded += chunk.length;
+          } else if (result.status === 'fallback') {
+            const fallbackResult = await this.uploadQsosIndividually(config, chunk, failures);
+            uploaded += fallbackResult.uploaded;
+            skipped += fallbackResult.skipped;
+            failed += fallbackResult.failed;
+          } else {
+            failed += chunk.length;
+            this.pushBatchFailures(chunk, failures, 'wavelog_upload_rejected', result.message, config);
+          }
+        } catch (err) {
+          failed += chunk.length;
+          this.pushBatchFailures(
+            chunk,
+            failures,
+            'wavelog_upload_failed',
+            err instanceof Error ? err.message : 'Unknown error',
+            config,
+          );
         }
-      } catch (err) {
-        failed++;
-        failures.push(this.createQsoFailure(
-          qso,
-          'wavelog_upload_failed',
-          err instanceof Error ? err.message : 'Unknown error',
-          config,
-        ));
       }
     }
 
@@ -304,6 +325,94 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
     }));
   }
 
+  private async uploadQsosIndividually(
+    config: WaveLogPluginConfig,
+    qsos: QSORecord[],
+    failures: SyncFailure[],
+  ): Promise<Pick<SyncUploadResult, 'uploaded' | 'skipped' | 'failed'>> {
+    let uploaded = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    for (const qso of qsos) {
+      try {
+        const result = await this.uploadSingleQSO(config, qso);
+        if (result.status === 'created') {
+          uploaded++;
+        } else if (result.status === 'duplicate') {
+          skipped++;
+        } else {
+          failed++;
+          failures.push(this.createQsoFailure(qso, 'wavelog_upload_rejected', result.message, config));
+        }
+      } catch (err) {
+        failed++;
+        failures.push(this.createQsoFailure(
+          qso,
+          'wavelog_upload_failed',
+          err instanceof Error ? err.message : 'Unknown error',
+          config,
+        ));
+      }
+    }
+
+    return { uploaded, skipped, failed };
+  }
+
+  private buildBatchAdif(qsos: QSORecord[]): string {
+    return qsos.map(qso => convertQSOToADIF(qso)).join('\n');
+  }
+
+  private chunkQsos(config: WaveLogPluginConfig, qsos: QSORecord[]): QSORecord[][] {
+    const chunks: QSORecord[][] = [];
+    let current: QSORecord[] = [];
+    let currentAdifParts: string[] = [];
+
+    for (const qso of qsos) {
+      const adif = convertQSOToADIF(qso);
+      const candidateAdifParts = [...currentAdifParts, adif];
+      const candidatePayloadBytes = this.estimateBatchPayloadBytes(config, candidateAdifParts.join('\n'));
+      const shouldStartNextChunk = current.length > 0
+        && (current.length >= WAVELOG_BATCH_MAX_QSOS || candidatePayloadBytes > WAVELOG_BATCH_MAX_PAYLOAD_BYTES);
+
+      if (shouldStartNextChunk) {
+        chunks.push(current);
+        current = [qso];
+        currentAdifParts = [adif];
+      } else {
+        current.push(qso);
+        currentAdifParts = candidateAdifParts;
+      }
+    }
+
+    if (current.length > 0) {
+      chunks.push(current);
+    }
+
+    return chunks;
+  }
+
+  private estimateBatchPayloadBytes(config: WaveLogPluginConfig, adifString: string): number {
+    return new TextEncoder().encode(JSON.stringify({
+      key: config.apiKey,
+      station_profile_id: config.stationId,
+      type: 'adif',
+      string: adifString,
+    })).length;
+  }
+
+  private pushBatchFailures(
+    qsos: QSORecord[],
+    failures: SyncFailure[],
+    code: string,
+    message: string,
+    config: WaveLogPluginConfig,
+  ): void {
+    for (const qso of qsos) {
+      failures.push(this.createQsoFailure(qso, code, message, config));
+    }
+  }
+
   private async uploadSingleQSO(config: WaveLogPluginConfig, qso: QSORecord): Promise<UploadResult> {
     const adifString = convertQSOToADIF(qso);
 
@@ -357,6 +466,68 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
     }
 
     this.ctx.log.warn('QSO upload rejected', { callsign: qso.callsign, message });
+    return { success: false, status: 'failed', message };
+  }
+
+  private async uploadQsoBatch(config: WaveLogPluginConfig, qsos: QSORecord[]): Promise<BatchUploadResult> {
+    const adifString = this.buildBatchAdif(qsos);
+    const payload = {
+      key: config.apiKey,
+      station_profile_id: config.stationId,
+      type: 'adif',
+      string: adifString,
+    };
+
+    this.ctx.log.debug('Uploading QSO batch', {
+      count: qsos.length,
+      payloadBytes: this.estimateBatchPayloadBytes(config, adifString),
+    });
+
+    const url = `${config.url.replace(/\/$/, '')}/index.php/api/qso`;
+    let response: Response;
+    try {
+      response = await this.doFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        timeout: 15000,
+      });
+    } catch (err) {
+      throw this.wrapNetworkError(err, url);
+    }
+
+    const text = await response.text();
+    this.ctx.log.debug('Batch upload response', { status: response.status, body: text });
+
+    let result: any;
+    try {
+      result = JSON.parse(text);
+    } catch {
+      const detail = this.sanitizeResponseText(text, [config.apiKey]);
+      if (text.includes('<html>')) throw new Error(`WaveLog URL error or server returned HTML: ${detail}`);
+      throw new Error(`WaveLog returned invalid response format: ${detail}`);
+    }
+
+    const message = this.extractMessage(result, `HTTP error ${response.status}: ${response.statusText}`);
+    const adifCount = this.toNumber(result?.adif_count);
+    const adifErrors = this.toNumber(result?.adif_errors);
+
+    if (response.ok && result.status === 'created' && adifErrors === 0 && adifCount === qsos.length) {
+      return { success: true, status: 'created', message: 'Upload successful' };
+    }
+
+    if (
+      (response.ok && result.status === 'created')
+      || (response.status === 400 && result.status === 'abort')
+    ) {
+      const detail = response.ok
+        ? `WaveLog parsed ${adifCount ?? 'unknown'} of ${qsos.length} QSOs`
+        : message;
+      this.ctx.log.warn('QSO batch needs single-record fallback', { count: qsos.length, message: detail });
+      return { success: false, status: 'fallback', message: detail };
+    }
+
+    this.ctx.log.warn('QSO batch upload rejected', { count: qsos.length, message });
     return { success: false, status: 'failed', message };
   }
 
@@ -473,6 +644,15 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
       .map(m => m.replace(/<br\s*\/?>/gi, ' ').replace(/\s+/g, ' ').trim())
       .filter(m => m.length > 0);
     return normalized.length > 0 ? normalized.join(' | ') : fallback;
+  }
+
+  private toNumber(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    return undefined;
   }
 
   private isDuplicate(result: any, message: string): boolean {

@@ -14,6 +14,8 @@ export interface OpenWebRXViewport {
   spanHz: number;
 }
 
+export type RadioSdrCenterViewMode = 'full' | 'left' | 'right';
+
 export interface RadioSdrOptimisticFrequencyIntent {
   targetFrequencyHz: number;
   baselineFrequencyHz: number;
@@ -65,6 +67,8 @@ interface StreamContext {
   selectedKind: SpectrumKind | null;
   openWebRXViewport: OpenWebRXViewport | null;
   isOpenWebRXDetailMode: boolean;
+  radioSdrCenterViewMode: RadioSdrCenterViewMode;
+  radioSdrReferenceFrequencyHz: number | null;
   radioSdrViewRange: { min: number; max: number } | null;
 }
 
@@ -134,6 +138,10 @@ function areViewportsEqual(left: OpenWebRXViewport | null, right: OpenWebRXViewp
     && left.centerHz === right.centerHz
     && left.spanHz === right.spanHz
   ) || (left === null && right === null);
+}
+
+function normalizeRadioSdrReferenceFrequency(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function decodeFrameValues(frame: SpectrumFrame): Float32Array {
@@ -250,6 +258,8 @@ export class SpectrumStreamController {
     selectedKind: null,
     openWebRXViewport: null,
     isOpenWebRXDetailMode: false,
+    radioSdrCenterViewMode: 'full',
+    radioSdrReferenceFrequencyHz: null,
     radioSdrViewRange: null,
   };
   private statusSnapshot: SpectrumStreamStatus = {
@@ -338,7 +348,7 @@ export class SpectrumStreamController {
       timeoutMs: intent.timeoutMs ?? RADIO_SDR_OPTIMISTIC_TIMEOUT_MS,
     };
     this.radioSdrOptimisticIntent = nextIntent;
-    this.applyRadioSdrViewRange(this.deriveRadioSdrOptimisticRange());
+    this.applyRadioSdrViewRange(this.resolveRadioSdrViewRange());
 
     this.radioSdrOptimisticTimer = setTimeout(() => {
       this.radioSdrOptimisticTimer = null;
@@ -421,7 +431,7 @@ export class SpectrumStreamController {
 
     this.clearRadioSdrOptimisticTimer();
     this.radioSdrOptimisticIntent = null;
-    this.applyRadioSdrViewRange(this.deriveRadioSdrNativeRange(), options);
+    this.applyRadioSdrViewRange(this.resolveRadioSdrViewRange(), options);
   }
 
   private invalidateCachedViews(kind: SpectrumKind): void {
@@ -471,10 +481,38 @@ export class SpectrumStreamController {
     };
   }
 
+  private applyRadioSdrCenterViewRange(fullRange: { min: number; max: number } | null): { min: number; max: number } | null {
+    if (!fullRange || this.context.radioSdrCenterViewMode === 'full') {
+      return fullRange;
+    }
+
+    const referenceFrequencyHz = normalizeRadioSdrReferenceFrequency(this.context.radioSdrReferenceFrequencyHz);
+    if (referenceFrequencyHz === null || referenceFrequencyHz < fullRange.min || referenceFrequencyHz > fullRange.max) {
+      return fullRange;
+    }
+
+    if (this.context.radioSdrCenterViewMode === 'right' && referenceFrequencyHz < fullRange.max) {
+      return {
+        min: referenceFrequencyHz,
+        max: fullRange.max,
+      };
+    }
+
+    if (this.context.radioSdrCenterViewMode === 'left' && referenceFrequencyHz > fullRange.min) {
+      return {
+        min: fullRange.min,
+        max: referenceFrequencyHz,
+      };
+    }
+
+    return fullRange;
+  }
+
   private resolveRadioSdrViewRange(): { min: number; max: number } | null {
-    return this.radioSdrOptimisticIntent
+    const fullRange = this.radioSdrOptimisticIntent
       ? this.deriveRadioSdrOptimisticRange()
       : this.deriveRadioSdrNativeRange();
+    return this.applyRadioSdrCenterViewRange(fullRange);
   }
 
   private applyRadioSdrViewRange(
@@ -524,11 +562,20 @@ export class SpectrumStreamController {
     this.context = {
       ...previous,
       ...nextContext,
+      radioSdrCenterViewMode: nextContext.radioSdrCenterViewMode ?? previous.radioSdrCenterViewMode,
+      radioSdrReferenceFrequencyHz: 'radioSdrReferenceFrequencyHz' in nextContext
+        ? normalizeRadioSdrReferenceFrequency(nextContext.radioSdrReferenceFrequencyHz)
+        : previous.radioSdrReferenceFrequencyHz,
     };
 
     const selectedKindChanged = previous.selectedKind !== this.context.selectedKind;
     const openWebRXViewportChanged = !areViewportsEqual(previous.openWebRXViewport, this.context.openWebRXViewport);
     const detailModeChanged = previous.isOpenWebRXDetailMode !== this.context.isOpenWebRXDetailMode;
+    const radioSdrCenterViewChanged = previous.radioSdrCenterViewMode !== this.context.radioSdrCenterViewMode
+      || previous.radioSdrReferenceFrequencyHz !== this.context.radioSdrReferenceFrequencyHz;
+    if (radioSdrCenterViewChanged) {
+      this.applyRadioSdrViewRange(this.resolveRadioSdrViewRange(), { notify: false });
+    }
     const radioSdrViewRangeChanged = !areRangesEqual(previous.radioSdrViewRange, this.context.radioSdrViewRange);
 
     this.syncStatusSnapshot();
