@@ -12,6 +12,7 @@ type SubscriptionHandler = (message: PluginEventBusMessage) => void | Promise<vo
 
 interface SubscriptionRecord {
   owner: PluginEventBusOwner;
+  ownerKey: string;
   handler: SubscriptionHandler;
 }
 
@@ -70,12 +71,25 @@ export class PluginEventBusHost {
     topic: string,
     handler: SubscriptionHandler,
   ): () => void {
-    const record: SubscriptionRecord = { owner, handler };
+    const ownerKey = this.getOwnerKey(owner);
     const topicSubscriptions = this.subscriptionsByTopic.get(topic) ?? new Set<SubscriptionRecord>();
+    const existingRecord = [...topicSubscriptions].find((subscription) => (
+      subscription.ownerKey === ownerKey && subscription.handler === handler
+    ));
+    if (existingRecord) {
+      const ownerSubscription = [...(this.subscriptionsByOwnerKey.get(ownerKey) ?? [])]
+        .find((subscription) => subscription.topic === topic && subscription.record === existingRecord);
+      return () => {
+        if (ownerSubscription) {
+          this.removeSubscription(ownerKey, ownerSubscription);
+        }
+      };
+    }
+
+    const record: SubscriptionRecord = { owner, ownerKey, handler };
     topicSubscriptions.add(record);
     this.subscriptionsByTopic.set(topic, topicSubscriptions);
 
-    const ownerKey = this.getOwnerKey(owner);
     const ownerSubscriptions = this.subscriptionsByOwnerKey.get(ownerKey) ?? new Set<{ topic: string; record: SubscriptionRecord }>();
     const ownerSubscription = { topic, record };
     ownerSubscriptions.add(ownerSubscription);

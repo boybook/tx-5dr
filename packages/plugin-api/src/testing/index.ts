@@ -484,7 +484,9 @@ export function createMockEventBus(options?: MockEventBusOptions): MockEventBus 
   const published: PluginEventBusMessage[] = [];
   const ownerName = options?.owner?.pluginName ?? 'mock-plugin';
   const ownerScope = options?.owner?.instanceScope ?? 'operator';
-  const ownerId = options?.owner?.operatorId ?? 'operator-0';
+  const ownerId = ownerScope === 'operator'
+    ? (options?.owner?.operatorId ?? 'operator-0')
+    : undefined;
 
   return {
     _subscriptions: subscriptions,
@@ -508,8 +510,10 @@ export function createMockEventBus(options?: MockEventBusOptions): MockEventBus 
     },
     subscribe(topic, handler) {
       const handlers = subscriptions.get(topic) ?? [];
-      handlers.push(handler);
-      subscriptions.set(topic, handlers);
+      if (!handlers.includes(handler)) {
+        handlers.push(handler);
+        subscriptions.set(topic, handlers);
+      }
       return () => {
         const current = subscriptions.get(topic);
         if (!current) return;
