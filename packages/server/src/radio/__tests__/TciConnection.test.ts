@@ -35,19 +35,19 @@ describe('TciConnection', () => {
     expect(connection.getState()).toBe(RadioConnectionState.CONNECTED);
 
     await connection.setFrequency(21_074_000);
-    await connection.setMode('USB', 'nochange', { intent: 'digital' });
+    await connection.setMode('LSB', 'nochange', { intent: 'digital' });
     await connection.setPTT(true);
     await connection.setSplitEnabled(true);
     await connection.setRFPower(0.42);
 
     expect(await connection.getFrequency()).toBe(21_074_000);
     expect(await connection.getPTT()).toBe(true);
-    expect(await connection.getMode()).toMatchObject({ mode: 'DIGU' });
+    expect(await connection.getMode()).toMatchObject({ mode: 'DIGL' });
     expect(await connection.getSplitEnabled()).toBe(true);
     expect(await connection.getRFPower()).toBeCloseTo(0.42, 2);
     expect(server.receivedCommands.map((command) => command.raw)).toEqual(expect.arrayContaining([
       'VFO:0,0,21074000',
-      'MODULATION:0,DIGU',
+      'MODULATION:0,DIGL',
       'TRX:1,true,tci',
       'SPLIT_ENABLE:1,true',
       'DRIVE:1,42',
@@ -95,6 +95,73 @@ describe('TciConnection', () => {
     expect(meterData.swr?.swr).toBe(1.4);
 
     await connection.stopAudioStream();
+    await connection.disconnect('test complete');
+  });
+
+  it('skips idempotent frequency and PTT writes when startup state already matches', async () => {
+    server = new MockTciServer({
+      startupCommands: [
+        'PROTOCOL:2.0;',
+        'DEVICE:Mock ExpertSDR3;',
+        'VFO:0,0,7074000;',
+        'TRX:0,false;',
+        'READY:true;',
+      ],
+    });
+    server.onCommand(({ command }) => command.name === 'vfo' || command.name === 'trx');
+    await server.start();
+    const endpoint = new URL(server.url());
+    const connection = new TciConnection();
+
+    await connection.connect({
+      type: 'tci',
+      tci: {
+        host: endpoint.hostname,
+        port: Number(endpoint.port),
+        receiver: 0,
+        trx: 0,
+        vfo: 0,
+        audioEnabled: true,
+        audioSampleRate: 12000,
+      },
+    });
+    const commandCountBefore = server.receivedCommands.length;
+
+    await connection.setPTT(false);
+    await connection.setFrequency(7_074_000);
+
+    expect(server.receivedCommands).toHaveLength(commandCountBefore);
+    expect(connection.getState()).toBe(RadioConnectionState.CONNECTED);
+
+    await connection.disconnect('test complete');
+  });
+
+  it('downgrades operating-state TCI frequency confirmation timeouts without disconnecting', async () => {
+    server = new MockTciServer();
+    server.onCommand(({ command }) => command.name === 'vfo');
+    await server.start();
+    const endpoint = new URL(server.url());
+    const connection = new TciConnection();
+
+    await connection.connect({
+      type: 'tci',
+      tci: {
+        host: endpoint.hostname,
+        port: Number(endpoint.port),
+        receiver: 0,
+        trx: 0,
+        vfo: 0,
+        audioEnabled: true,
+        audioSampleRate: 12000,
+      },
+    });
+
+    const result = await connection.applyOperatingState({ frequency: 7_074_000 });
+
+    expect(result).toMatchObject({ frequencyApplied: false, modeApplied: false });
+    expect(connection.getState()).toBe(RadioConnectionState.CONNECTED);
+    expect(connection.isHealthy()).toBe(true);
+
     await connection.disconnect('test complete');
   });
 });

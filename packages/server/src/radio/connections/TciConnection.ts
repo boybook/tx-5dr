@@ -31,6 +31,8 @@ const DEFAULT_TCI_PORT = 40001;
 const DEFAULT_TCI_AUDIO_RATE = 12_000;
 const TCI_COMMAND_TIMEOUT_MS = 1_500;
 const TCI_CONNECT_TIMEOUT_MS = 6_000;
+const TCI_WRITE_TIMEOUT_MS = 3_000;
+const TCI_FREQUENCY_WRITE_SETTLE_MS = 250;
 
 export class TciConnection extends EventEmitter<IRadioConnectionEvents> implements IRadioConnection {
   private readonly ioQueue = new RadioIoQueue({ label: 'TCI WebSocket' });
@@ -40,7 +42,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   private state = RadioConnectionState.DISCONNECTED;
   private lastKnownFrequency: number | null = null;
   private lastKnownMode: string | null = null;
-  private lastKnownPtt = false;
+  private lastKnownPtt: boolean | null = null;
   private lastRxLevelDbm: number | null = null;
   private lastTxPowerW: number | null = null;
   private lastTxPeakPowerW: number | null = null;
@@ -99,6 +101,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     this.ioSessionId += 1;
     this.lastKnownFrequency = null;
     this.lastKnownMode = null;
+    this.lastKnownPtt = null;
     this.audioRunning = false;
     this.setState(RadioConnectionState.CONNECTING);
 
@@ -110,6 +113,9 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       vfo: tci.vfo ?? 0,
       connectTimeoutMs: TCI_CONNECT_TIMEOUT_MS,
       commandTimeoutMs: TCI_COMMAND_TIMEOUT_MS,
+      writeAckMode: 'state',
+      writeTimeoutMs: TCI_WRITE_TIMEOUT_MS,
+      frequencyWriteSettleMs: TCI_FREQUENCY_WRITE_SETTLE_MS,
     });
     this.client = client;
     this.setupClientListeners(client);
@@ -132,7 +138,9 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       const state = client.getState();
       this.lastKnownFrequency = state.frequencies[`${tci.receiver ?? 0}:${tci.vfo ?? 0}`] ?? null;
       this.lastKnownMode = state.modes[`${tci.receiver ?? 0}:${tci.vfo ?? 0}`] ?? null;
-      this.lastKnownPtt = state.ptt[String(tci.trx ?? 0)] ?? false;
+      this.lastKnownPtt = typeof state.ptt[String(tci.trx ?? 0)] === 'boolean'
+        ? state.ptt[String(tci.trx ?? 0)]
+        : null;
 
       this.setState(RadioConnectionState.CONNECTED);
       this.emit('connected');
@@ -155,9 +163,15 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   async setFrequency(frequency: number): Promise<void> {
     await this.runTask('setFrequency', async () => {
       this.checkConnected();
-      await this.client!.setFrequency(frequency);
-      this.lastKnownFrequency = frequency;
-      this.emit('frequencyChanged', frequency);
+      const targetFrequency = Math.round(frequency);
+      if (this.isFrequencyAlreadyApplied(targetFrequency)) {
+        logger.debug('TCI state matched before write', { operation: 'setFrequency', frequency: targetFrequency });
+        this.lastKnownFrequency = targetFrequency;
+        return;
+      }
+      await this.client!.setFrequency(targetFrequency);
+      this.lastKnownFrequency = targetFrequency;
+      this.emit('frequencyChanged', targetFrequency);
     }, { critical: true });
   }
 
@@ -179,6 +193,11 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   async setPTT(enabled: boolean): Promise<void> {
     await this.runTask('setPTT', async () => {
       this.checkConnected();
+      if (this.isPttAlreadyApplied(enabled)) {
+        logger.debug('TCI state matched before write', { operation: 'setPTT', ptt: enabled });
+        this.lastKnownPtt = enabled;
+        return;
+      }
       await this.client!.setPtt(enabled, { source: enabled ? 'tci' : undefined });
       this.lastKnownPtt = enabled;
     }, { critical: true });
@@ -191,7 +210,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       if (typeof ptt === 'boolean') {
         this.lastKnownPtt = ptt;
       }
-      return this.lastKnownPtt;
+      return this.lastKnownPtt ?? false;
     }, { id: 'getPTT' });
   }
 
@@ -199,6 +218,11 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     await this.runTask('setMode', async () => {
       this.checkConnected();
       const tciMode = this.normalizeMode(mode, options);
+      if (this.isModeAlreadyApplied(tciMode)) {
+        logger.debug('TCI state matched before write', { operation: 'setMode', mode: tciMode });
+        this.lastKnownMode = tciMode.toLowerCase();
+        return;
+      }
       await this.client!.setMode(tciMode);
       this.lastKnownMode = tciMode.toLowerCase();
     }, { critical: true });
@@ -212,23 +236,55 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       let modeError: Error | undefined;
 
       if (request.frequency !== undefined) {
-        await this.client!.setFrequency(request.frequency);
-        this.lastKnownFrequency = request.frequency;
-        this.emit('frequencyChanged', request.frequency);
-        frequencyApplied = true;
+        const targetFrequency = Math.round(request.frequency);
+        if (this.isFrequencyAlreadyApplied(targetFrequency)) {
+          logger.debug('TCI state matched before write', { operation: 'applyOperatingState.setFrequency', frequency: targetFrequency });
+          this.lastKnownFrequency = targetFrequency;
+          frequencyApplied = true;
+        } else {
+          try {
+            await this.client!.setFrequency(targetFrequency);
+            this.lastKnownFrequency = targetFrequency;
+            this.emit('frequencyChanged', targetFrequency);
+            frequencyApplied = true;
+          } catch (error) {
+            if (!isTciCommandTimeout(error)) {
+              throw error;
+            }
+            logger.warn('TCI write timeout tolerated', {
+              operation: 'applyOperatingState.setFrequency',
+              frequency: targetFrequency,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
       }
 
       if (request.mode) {
         try {
           const tciMode = this.normalizeMode(request.mode, request.options);
-          await this.client!.setMode(tciMode);
-          this.lastKnownMode = tciMode.toLowerCase();
-          modeApplied = true;
-        } catch (error) {
-          if (!request.tolerateModeFailure) {
-            throw error;
+          if (this.isModeAlreadyApplied(tciMode)) {
+            logger.debug('TCI state matched before write', { operation: 'applyOperatingState.setMode', mode: tciMode });
+            this.lastKnownMode = tciMode.toLowerCase();
+            modeApplied = true;
+          } else {
+            await this.client!.setMode(tciMode);
+            this.lastKnownMode = tciMode.toLowerCase();
+            modeApplied = true;
           }
-          modeError = error instanceof Error ? error : new Error(String(error));
+        } catch (error) {
+          if (isTciCommandTimeout(error)) {
+            logger.warn('TCI write timeout tolerated', {
+              operation: 'applyOperatingState.setMode',
+              mode: request.mode,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            modeError = this.convertError(error, 'applyOperatingState.setMode');
+          } else if (!request.tolerateModeFailure) {
+            throw error;
+          } else {
+            modeError = error instanceof Error ? error : new Error(String(error));
+          }
         }
       }
 
@@ -533,31 +589,82 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     return upper;
   }
 
+  private isFrequencyAlreadyApplied(frequency: number): boolean {
+    if (this.isSameFrequency(this.lastKnownFrequency, frequency)) {
+      return true;
+    }
+    const tci = this.currentConfig?.tci;
+    const stateFrequency = this.client?.getState().frequencies[`${tci?.receiver ?? 0}:${tci?.vfo ?? 0}`];
+    return this.isSameFrequency(stateFrequency, frequency);
+  }
+
+  private isModeAlreadyApplied(mode: string): boolean {
+    const normalized = mode.toLowerCase();
+    if (this.lastKnownMode?.toLowerCase() === normalized) {
+      return true;
+    }
+    const tci = this.currentConfig?.tci;
+    return this.client?.getState().modes[`${tci?.receiver ?? 0}:${tci?.vfo ?? 0}`]?.toLowerCase() === normalized;
+  }
+
+  private isPttAlreadyApplied(enabled: boolean): boolean {
+    if (this.lastKnownPtt === enabled) {
+      return true;
+    }
+    const trx = this.currentConfig?.tci?.trx ?? 0;
+    return this.client?.getState().ptt[String(trx)] === enabled;
+  }
+
+  private isSameFrequency(left: number | null | undefined, right: number | null | undefined): boolean {
+    return typeof left === 'number'
+      && typeof right === 'number'
+      && Number.isFinite(left)
+      && Number.isFinite(right)
+      && Math.round(left) === Math.round(right);
+  }
+
   private convertError(error: unknown, operation: string): RadioError {
     if (error instanceof RadioError) {
       return error;
     }
     const message = error instanceof Error ? error.message : String(error);
-    const code = error instanceof TciError && error.code === 'connect-timeout'
+    const isTciError = error instanceof TciError;
+    const isWriteTimeout = isTciCommandTimeout(error) && isTciWriteOperation(operation);
+    const code = isTciError && error.code === 'connect-timeout'
       ? RadioErrorCode.CONNECTION_TIMEOUT
-      : error instanceof TciError && error.code === 'not-connected'
+      : isTciError && (error.code === 'not-connected' || error.code === 'disconnected')
         ? RadioErrorCode.CONNECTION_LOST
-        : message.toLowerCase().includes('timeout')
+        : isTciError && error.code === 'command-timeout'
           ? RadioErrorCode.OPERATION_TIMEOUT
-          : RadioErrorCode.WEBSOCKET_ERROR;
+          : message.toLowerCase().includes('timeout')
+            ? RadioErrorCode.OPERATION_TIMEOUT
+            : RadioErrorCode.WEBSOCKET_ERROR;
     return new RadioError({
       code,
       message: `TCI ${operation} failed: ${message}`,
       userMessage: 'TCI radio operation failed',
+      severity: isWriteTimeout ? RadioErrorSeverity.WARNING : RadioErrorSeverity.ERROR,
       suggestions: [
         'Check that ExpertSDR/SunSDR TCI server is enabled',
         'Confirm the TCI host and port are reachable',
         'Avoid connecting multiple TCI clients if the radio rejects them',
       ],
       cause: error,
-      context: { operation, protocol: 'tci' },
+      context: { operation, protocol: 'tci', writeTimeout: isWriteTimeout, recoverable: isWriteTimeout },
     });
   }
+}
+
+function isTciCommandTimeout(error: unknown): boolean {
+  return error instanceof TciError && error.code === 'command-timeout';
+}
+
+function isTciWriteOperation(operation: string): boolean {
+  return operation === 'setFrequency'
+    || operation === 'setPTT'
+    || operation === 'setMode'
+    || operation === 'applyOperatingState'
+    || operation.startsWith('applyOperatingState.');
 }
 
 function toNumber(value: unknown): number | undefined {

@@ -67,6 +67,18 @@ const HAMLIB_RIG_SCHEMA_TIMEOUT_MS = 3000;
 /** Hamlib valid frequency range: 1 kHz to 10 GHz */
 const HAMLIB_MIN_FREQUENCY_HZ = 1000;
 const HAMLIB_MAX_FREQUENCY_HZ = 10_000_000_000;
+const RECOVERABLE_TCI_WRITE_TIMEOUT_PATTERNS = [
+  'timed out waiting for tci state',
+  'timed out waiting for tci reply',
+];
+const TCI_WRITE_TIMEOUT_OPERATIONS = new Set([
+  'setFrequency',
+  'setPTT',
+  'setMode',
+  'applyOperatingState',
+  'applyOperatingState.setFrequency',
+  'applyOperatingState.setMode',
+]);
 
 function isFrequencyInHamlibRange(freq: unknown): freq is number {
   return typeof freq === 'number'
@@ -90,6 +102,52 @@ function withHamlibSchemaTimeout<T>(
       clearTimeout(timeout);
     }
   });
+}
+
+function collectErrorMessages(error: unknown, messages: string[] = []): string[] {
+  if (error instanceof RadioError) {
+    messages.push(error.message, error.userMessage);
+    if (error.cause && error.cause !== error) {
+      collectErrorMessages(error.cause, messages);
+    }
+    return messages;
+  }
+
+  if (error instanceof Error) {
+    messages.push(error.message);
+    const cause = (error as Error & { cause?: unknown }).cause;
+    if (cause && cause !== error) {
+      collectErrorMessages(cause, messages);
+    }
+    return messages;
+  }
+
+  messages.push(String(error));
+  return messages;
+}
+
+function isRecoverableTciWriteTimeout(error: unknown): boolean {
+  if (!(error instanceof RadioError)) {
+    return false;
+  }
+  if (error.code !== RadioErrorCode.OPERATION_TIMEOUT || error.context?.protocol !== 'tci') {
+    return false;
+  }
+  const operation = String(error.context?.operation ?? '');
+  if (!TCI_WRITE_TIMEOUT_OPERATIONS.has(operation)) {
+    return false;
+  }
+  if (error.context?.writeTimeout === true || error.context?.recoverable === true) {
+    return true;
+  }
+  return collectErrorMessages(error).some((message) => {
+    const lowerMessage = message.toLowerCase();
+    return RECOVERABLE_TCI_WRITE_TIMEOUT_PATTERNS.some((pattern) => lowerMessage.includes(pattern));
+  });
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 /**
@@ -1013,6 +1071,14 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         logger.warn(`Frequency write is unavailable for this radio: ${(error as Error).message}`);
         return false;
       }
+      if (isRecoverableTciWriteTimeout(error)) {
+        logger.warn('TCI write timeout tolerated', {
+          operation: 'setFrequency',
+          frequencyHz: freq,
+          error: (error as Error).message,
+        });
+        return false;
+      }
       logger.error(`Failed to set frequency: ${(error as Error).message}`);
       this.handleConnectionError(error as Error);
       return false;
@@ -1166,6 +1232,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       if (result.modeError) {
         if (isRecoverableOptionalRadioError(result.modeError)) {
           this.markCoreCapabilityUnsupported('writeRadioMode', result.modeError);
+        } else if (isRecoverableTciWriteTimeout(result.modeError)) {
+          logger.warn('TCI write timeout tolerated', {
+            operation: 'applyOperatingState.mode',
+            error: result.modeError.message,
+          });
         } else if (!request.tolerateModeFailure) {
           this.handleConnectionError(result.modeError);
         } else {
@@ -1183,6 +1254,20 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       if (request.frequency !== undefined && isRecoverableOptionalRadioError(error)) {
         this.markCoreCapabilityUnsupported('writeFrequency', error);
         return { frequencyApplied: false, modeApplied: false };
+      }
+
+      if (isRecoverableTciWriteTimeout(error)) {
+        logger.warn('TCI write timeout tolerated', {
+          operation: 'applyOperatingState',
+          frequencyHz: request.frequency,
+          mode: request.mode,
+          error: (error as Error).message,
+        });
+        return {
+          frequencyApplied: false,
+          modeApplied: false,
+          modeError: request.mode ? asError(error) : undefined,
+        };
       }
 
       this.handleConnectionError(error as Error);
@@ -1248,6 +1333,14 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       logger.debug(`PTT set: ${state ? 'TX' : 'RX'}`);
     } catch (error) {
+      if (isRecoverableTciWriteTimeout(error)) {
+        logger.warn('TCI write timeout tolerated', {
+          operation: 'setPTT',
+          ptt: state,
+          error: (error as Error).message,
+        });
+        return;
+      }
       logger.error(
         `PTT ${state ? 'TX' : 'RX'} failed: ${(error as Error).message}`
       );
@@ -1316,6 +1409,14 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     } catch (error) {
       if (isRecoverableOptionalRadioError(error)) {
         this.markCoreCapabilityUnsupported('writeRadioMode', error);
+        throw new Error(`set mode failed: ${(error as Error).message}`);
+      }
+      if (isRecoverableTciWriteTimeout(error)) {
+        logger.warn('TCI write timeout tolerated', {
+          operation: 'setMode',
+          mode,
+          error: (error as Error).message,
+        });
         throw new Error(`set mode failed: ${(error as Error).message}`);
       }
       this.handleConnectionError(error as Error);
@@ -2366,6 +2467,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         logger.info('Power operation active; suppressing HEALTH_CHECK_FAILED');
         return;
       }
+      if (isRecoverableTciWriteTimeout(error)) {
+        logger.warn('TCI write timeout tolerated', {
+          operation: error instanceof RadioError ? error.context?.operation : undefined,
+          error: error.message,
+        });
+        return;
+      }
       // 同时通知状态机触发重连逻辑
       if (this.radioActor && !this.isDisconnecting) {
         this.radioActor.send({ type: 'HEALTH_CHECK_FAILED', error });
@@ -2722,6 +2830,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private handleConnectionError(error: Error): void {
     if (this.shouldSuppressSessionCancellationError(error)) {
       logger.debug(`Suppressing stale session health error: ${error.message}`);
+      return;
+    }
+    if (isRecoverableTciWriteTimeout(error)) {
+      logger.warn('TCI write timeout tolerated', {
+        operation: error instanceof RadioError ? error.context?.operation : undefined,
+        error: error.message,
+      });
       return;
     }
     logger.error(`Connection error: ${error.message}`);
