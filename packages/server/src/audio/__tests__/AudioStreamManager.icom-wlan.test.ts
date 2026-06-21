@@ -52,7 +52,13 @@ type MockIcomAdapter = {
   removeAllListeners?: EventEmitter['removeAllListeners'];
 };
 
-type MockTciAdapter = MockIcomAdapter;
+type MockTciAdapter = MockIcomAdapter & {
+  startOutput?: ReturnType<typeof vi.fn>;
+  stopOutput?: ReturnType<typeof vi.fn>;
+  beginTransmission?: ReturnType<typeof vi.fn>;
+  drainTransmission?: ReturnType<typeof vi.fn>;
+  endTransmission?: ReturnType<typeof vi.fn>;
+};
 
 type MockOpenWebRXAdapter = EventEmitter & {
   getSampleRate: ReturnType<typeof vi.fn>;
@@ -141,6 +147,9 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
     const adapter: MockTciAdapter = {
       sendAudio: vi.fn().mockResolvedValue(undefined),
       getSampleRate: vi.fn().mockReturnValue(12000),
+      beginTransmission: vi.fn().mockResolvedValue(undefined),
+      drainTransmission: vi.fn().mockResolvedValue(undefined),
+      endTransmission: vi.fn().mockResolvedValue(undefined),
     };
     const manager = createTciManager(adapter);
     const audio = new Float32Array(12000);
@@ -155,6 +164,34 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
     await expect(playback).resolves.toBeUndefined();
     expect(manager.isPlaying()).toBe(false);
     expect(adapter.sendAudio).toHaveBeenCalledTimes(10);
+    expect(adapter.beginTransmission).toHaveBeenCalledOnce();
+    expect(adapter.drainTransmission).toHaveBeenCalledOnce();
+    expect(adapter.endTransmission).toHaveBeenCalledOnce();
+  });
+
+  it('starts and stops the TCI audio stream for output-only profiles', async () => {
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      inputDeviceName: 'Built-in Mic',
+      outputDeviceName: 'TCI Audio',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+    mockConfigManager.getRadioConfig.mockReturnValue({ type: 'tci', tci: { audioEnabled: true, audioSampleRate: 12000 } } as never);
+    const adapter: MockTciAdapter = {
+      sendAudio: vi.fn().mockResolvedValue(undefined),
+      getSampleRate: vi.fn().mockReturnValue(12000),
+      startOutput: vi.fn().mockResolvedValue(undefined),
+      stopOutput: vi.fn().mockResolvedValue(undefined),
+    };
+    const manager = new AudioStreamManager();
+    manager.setTciAudioAdapter(adapter as never);
+
+    await manager.startOutput();
+    expect(adapter.startOutput).toHaveBeenCalledOnce();
+    expect(manager.getStatus().outputDeviceId).toBe('tci-output');
+
+    await manager.stopOutput();
+    expect(adapter.stopOutput).toHaveBeenCalledOnce();
   });
 
   it('emits native 12k ICOM input frames while still writing the digital ring buffer', async () => {

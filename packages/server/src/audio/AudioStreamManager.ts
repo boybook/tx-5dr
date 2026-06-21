@@ -865,6 +865,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           logger.warn('TCI audio adapter not set, falling back to default audio device');
           outputDeviceId = undefined;
         } else {
+          await this.tciAudioAdapter.startOutput();
           this.usingTciOutput = true;
           this.outputDeviceId = 'tci-output';
           this.activeOutputDeviceName = TCI_AUDIO_DEVICE_NAME;
@@ -1081,6 +1082,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       }
 
       if (this.usingTciOutput) {
+        await this.tciAudioAdapter?.stopOutput().catch((error) => logger.debug('Failed to stop TCI audio output', error));
         this.usingTciOutput = false;
         logger.info('TCI audio output stopped');
       }
@@ -1803,6 +1805,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     if (radioAudioOutput) {
       const radioAudioAdapter = radioAudioOutput.adapter;
+      const tciRadioAudioAdapter = radioAudioOutput.kind === 'tci' ? radioAudioOutput.adapter : null;
       logger.info(`playing audio via ${radioAudioOutput.label} output (zero-resample)`, {
         playbackId,
         ...diagnosticContext,
@@ -1825,6 +1828,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         const chunkStartTime = Date.now();
         const hrStart = performance.now();
         let samplesWritten = 0;
+        let tciTransmissionStarted = false;
 
         const assertNotStopped = () => {
           if (this.shouldStopPlayback) {
@@ -1849,39 +1853,53 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           return producedMs - elapsedMs;
         };
 
-        for (let i = 0; i < totalChunks; i++) {
-          try {
-            assertNotStopped();
-          } catch (error) {
-            logger.debug(`${radioAudioOutput.label} stop signal received, aborting playback (sent ${i}/${totalChunks} chunks)`);
-            throw error;
+        try {
+          if (tciRadioAudioAdapter) {
+            await tciRadioAudioAdapter.beginTransmission();
+            tciTransmissionStarted = true;
           }
 
-          const start = i * chunkSize;
-          const end = Math.min(start + chunkSize, audioData.length);
-          const sourceChunk = audioData.subarray(start, end);
-          const chunk = new Float32Array(sourceChunk.length);
-          const gain = this.volumeGain;
-          for (let j = 0; j < sourceChunk.length; j++) {
-            const sample = sourceChunk[j] * gain;
-            chunk[j] = sample > 1 ? 1 : (sample < -1 ? -1 : sample);
+          for (let i = 0; i < totalChunks; i++) {
+            try {
+              assertNotStopped();
+            } catch (error) {
+              logger.debug(`${radioAudioOutput.label} stop signal received, aborting playback (sent ${i}/${totalChunks} chunks)`);
+              throw error;
+            }
+
+            const start = i * chunkSize;
+            const end = Math.min(start + chunkSize, audioData.length);
+            const sourceChunk = audioData.subarray(start, end);
+            const chunk = new Float32Array(sourceChunk.length);
+            const gain = this.volumeGain;
+            for (let j = 0; j < sourceChunk.length; j++) {
+              const sample = sourceChunk[j] * gain;
+              chunk[j] = sample > 1 ? 1 : (sample < -1 ? -1 : sample);
+            }
+
+            const leadMs = getBufferedLeadMs();
+            if (leadMs > ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS) {
+              await waitRespectingStop(leadMs - ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS);
+            }
+
+            await radioAudioAdapter.sendAudio(chunk);
+            if (options.injectIntoMonitor) {
+              this.emit('txMonitorAudioData', { samples: chunk, sampleRate: targetSampleRate });
+            }
+            samplesWritten += chunk.length;
           }
 
-          const leadMs = getBufferedLeadMs();
-          if (leadMs > ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS) {
-            await waitRespectingStop(leadMs - ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS);
+          const remainingBufferedMs = getBufferedLeadMs();
+          if (tciRadioAudioAdapter) {
+            const drainTimeoutMs = Math.max(1000, Math.ceil(audioData.length / targetSampleRate * 1000) + 1000);
+            await tciRadioAudioAdapter.drainTransmission(drainTimeoutMs);
+          } else if (remainingBufferedMs > 0) {
+            await waitRespectingStop(remainingBufferedMs);
           }
-
-          await radioAudioAdapter.sendAudio(chunk);
-          if (options.injectIntoMonitor) {
-            this.emit('txMonitorAudioData', { samples: chunk, sampleRate: targetSampleRate });
+        } finally {
+          if (tciTransmissionStarted) {
+            await tciRadioAudioAdapter?.endTransmission().catch((error) => logger.debug('Failed to end TCI transmission', error));
           }
-          samplesWritten += chunk.length;
-        }
-
-        const remainingBufferedMs = getBufferedLeadMs();
-        if (remainingBufferedMs > 0) {
-          await waitRespectingStop(remainingBufferedMs);
         }
 
         logger.info(`${radioAudioOutput.label} audio send complete, duration: ${Date.now() - chunkStartTime}ms`);

@@ -5,6 +5,7 @@ import {
   TciSampleType,
   payloadToFloat32,
   float32ToPcm16,
+  type TciTxChronoRequest,
   type TciStreamFrame,
 } from 'tci-client-node';
 import type { MeterCapabilities, TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
@@ -33,6 +34,13 @@ const TCI_COMMAND_TIMEOUT_MS = 1_500;
 const TCI_CONNECT_TIMEOUT_MS = 6_000;
 const TCI_WRITE_TIMEOUT_MS = 3_000;
 const TCI_FREQUENCY_WRITE_SETTLE_MS = 250;
+const TCI_TX_STREAM_BUFFERING_MS = 150;
+
+interface TxDrainWaiter {
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+}
 
 export class TciConnection extends EventEmitter<IRadioConnectionEvents> implements IRadioConnection {
   private readonly ioQueue = new RadioIoQueue({ label: 'TCI WebSocket' });
@@ -48,6 +56,12 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   private lastTxPeakPowerW: number | null = null;
   private lastSWR: number | null = null;
   private audioRunning = false;
+  private readonly audioStreamOwners = new Set<string>();
+  private txTransmissionActive = false;
+  private txAudioChunks: Float32Array[] = [];
+  private txAudioChunkOffset = 0;
+  private txAudioQueuedSamples = 0;
+  private txDrainWaiters: TxDrainWaiter[] = [];
 
   getType(): RadioConnectionType {
     return RadioConnectionType.TCI;
@@ -103,6 +117,9 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     this.lastKnownMode = null;
     this.lastKnownPtt = null;
     this.audioRunning = false;
+    this.audioStreamOwners.clear();
+    this.txTransmissionActive = false;
+    this.clearTxAudioQueue('connect-reset');
     this.setState(RadioConnectionState.CONNECTING);
 
     const url = `ws://${tci.host}:${tci.port || DEFAULT_TCI_PORT}`;
@@ -131,6 +148,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
         sampleType: TciSampleType.FLOAT32,
         channels: 1,
         samplesPerFrame: 512,
+        txBufferingMs: TCI_TX_STREAM_BUFFERING_MS,
       });
       await client.setRxSensorsEnabled(true, 300).catch((error) => logger.debug('Failed to enable TCI RX sensors', error));
       await client.setTxSensorsEnabled(true, 300).catch((error) => logger.debug('Failed to enable TCI TX sensors', error));
@@ -193,6 +211,9 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   async setPTT(enabled: boolean): Promise<void> {
     await this.runTask('setPTT', async () => {
       this.checkConnected();
+      if (!enabled) {
+        this.clearTxAudioQueue('ptt-off');
+      }
       if (this.isPttAlreadyApplied(enabled)) {
         logger.debug('TCI state matched before write', { operation: 'setPTT', ptt: enabled });
         this.lastKnownPtt = enabled;
@@ -200,6 +221,9 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       }
       await this.client!.setPtt(enabled, { source: enabled ? 'tci' : undefined });
       this.lastKnownPtt = enabled;
+      if (!enabled) {
+        this.clearTxAudioQueue('ptt-off-applied');
+      }
     }, { critical: true });
   }
 
@@ -389,16 +413,26 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     return this.currentConfig?.tci?.audioSampleRate ?? DEFAULT_TCI_AUDIO_RATE;
   }
 
-  async startAudioStream(): Promise<void> {
+  async startAudioStream(owner = 'rx'): Promise<void> {
     this.checkConnected();
+    this.audioStreamOwners.add(owner);
     if (this.audioRunning) {
       return;
     }
-    await this.client!.startAudio(this.currentConfig?.tci?.receiver ?? 0);
-    this.audioRunning = true;
+    try {
+      await this.client!.startAudio(this.currentConfig?.tci?.receiver ?? 0);
+      this.audioRunning = true;
+    } catch (error) {
+      this.audioStreamOwners.delete(owner);
+      throw error;
+    }
   }
 
-  async stopAudioStream(): Promise<void> {
+  async stopAudioStream(owner = 'rx'): Promise<void> {
+    this.audioStreamOwners.delete(owner);
+    if (this.audioStreamOwners.size > 0) {
+      return;
+    }
     if (!this.client?.isConnected() || !this.audioRunning) {
       this.audioRunning = false;
       return;
@@ -409,13 +443,34 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
 
   async sendAudio(samples: Float32Array): Promise<void> {
     this.checkConnected();
-    this.client!.sendTxAudio({
-      receiver: this.currentConfig?.tci?.receiver ?? 0,
-      sampleRate: this.getAudioSampleRate(),
-      sampleType: TciSampleType.FLOAT32,
-      channels: 1,
-      samples,
+    this.enqueueTxAudio(samples);
+  }
+
+  beginTxAudio(): void {
+    this.txTransmissionActive = true;
+    this.clearTxAudioQueue('tx-begin');
+  }
+
+  async waitForTxAudioDrain(timeoutMs: number): Promise<void> {
+    if (this.txAudioQueuedSamples <= 0) {
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const waiter: TxDrainWaiter = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          this.txDrainWaiters = this.txDrainWaiters.filter((candidate) => candidate !== waiter);
+          reject(new Error(`Timed out waiting for TCI TX audio drain (${this.txAudioQueuedSamples} samples queued)`));
+        }, timeoutMs),
+      };
+      this.txDrainWaiters.push(waiter);
     });
+  }
+
+  endTxAudio(): void {
+    this.txTransmissionActive = false;
+    this.clearTxAudioQueue('tx-end');
   }
 
   private setupClientListeners(client: TciClient): void {
@@ -427,6 +482,10 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     client.on('error', (error) => this.emit('error', this.convertError(error, 'event')));
     client.on('state', () => this.syncStateFromClient());
     client.on('rxAudioFrame', (frame) => this.handleRxAudioFrame(frame));
+    client.on('txChrono', (request) => {
+      if (this.client !== client) return;
+      this.handleTxChrono(request);
+    });
   }
 
   private syncStateFromClient(): void {
@@ -515,10 +574,93 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     }
   }
 
+  private handleTxChrono(request: TciTxChronoRequest): void {
+    try {
+      const channels = Math.max(1, Math.floor(request.channels || 1));
+      const requestedSamples = Math.max(0, Math.floor(request.sampleCount) * channels);
+      const { samples, copied } = this.dequeueTxAudio(requestedSamples);
+      if (copied < requestedSamples) {
+        logger.debug('TCI TX chrono underflow; sending silence for missing samples', {
+          requestedSamples,
+          copied,
+          queuedSamples: this.txAudioQueuedSamples,
+          active: this.txTransmissionActive,
+        });
+      }
+      this.client?.sendTxAudioForChrono(request, samples);
+    } catch (error) {
+      this.emit('error', this.convertError(error, 'txChrono'));
+    }
+  }
+
+  private enqueueTxAudio(samples: Float32Array): void {
+    if (samples.length <= 0) {
+      return;
+    }
+    const copy = new Float32Array(samples);
+    this.txAudioChunks.push(copy);
+    this.txAudioQueuedSamples += copy.length;
+  }
+
+  private dequeueTxAudio(sampleCount: number): { samples: Float32Array; copied: number } {
+    const output = new Float32Array(Math.max(0, sampleCount));
+    let copied = 0;
+    while (copied < output.length && this.txAudioChunks.length > 0) {
+      const chunk = this.txAudioChunks[0]!;
+      const available = chunk.length - this.txAudioChunkOffset;
+      const take = Math.min(output.length - copied, available);
+      output.set(chunk.subarray(this.txAudioChunkOffset, this.txAudioChunkOffset + take), copied);
+      copied += take;
+      this.txAudioChunkOffset += take;
+      this.txAudioQueuedSamples = Math.max(0, this.txAudioQueuedSamples - take);
+      if (this.txAudioChunkOffset >= chunk.length) {
+        this.txAudioChunks.shift();
+        this.txAudioChunkOffset = 0;
+      }
+    }
+    this.resolveTxDrainWaitersIfDrained();
+    return { samples: output, copied };
+  }
+
+  private clearTxAudioQueue(reason: string): void {
+    if (this.txAudioQueuedSamples > 0 || this.txAudioChunks.length > 0) {
+      logger.debug('Clearing TCI TX audio queue', { reason, queuedSamples: this.txAudioQueuedSamples });
+    }
+    this.txAudioChunks = [];
+    this.txAudioChunkOffset = 0;
+    this.txAudioQueuedSamples = 0;
+    this.resolveTxDrainWaitersIfDrained();
+  }
+
+  private resolveTxDrainWaitersIfDrained(): void {
+    if (this.txAudioQueuedSamples > 0 || this.txDrainWaiters.length === 0) {
+      return;
+    }
+    const waiters = this.txDrainWaiters;
+    this.txDrainWaiters = [];
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.resolve();
+    }
+  }
+
+  private rejectTxDrainWaiters(error: Error): void {
+    const waiters = this.txDrainWaiters;
+    this.txDrainWaiters = [];
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
+    }
+  }
+
   private async cleanup(): Promise<void> {
     const client = this.client;
     this.client = null;
     this.audioRunning = false;
+    this.audioStreamOwners.clear();
+    this.txTransmissionActive = false;
+    this.rejectTxDrainWaiters(new Error('TCI connection closed before TX audio drained'));
+    this.clearTxAudioQueue('cleanup');
     if (client) {
       client.removeAllListeners();
       await client.disconnect().catch((error) => logger.debug('TCI disconnect cleanup failed', error));

@@ -83,9 +83,14 @@ describe('TciConnection', () => {
     const [pcm16] = await audioFrame;
     expect(Array.from(payloadToFloat32(pcm16, TciSampleType.INT16))).toEqual([0, expect.closeTo(0.5, 4), expect.closeTo(-0.5, 4)]);
 
+    await connection.beginTxAudio();
     await connection.sendAudio(new Float32Array([0.25, -0.25]));
+    expect(server.receivedTxAudioFrames).toHaveLength(0);
+    server.sendTxChrono({ sampleCount: 2 });
     await waitFor(() => server!.receivedTxAudioFrames.length === 1);
     expect(Array.from(payloadToFloat32(server.receivedTxAudioFrames[0]!))).toEqual([expect.closeTo(0.25, 4), expect.closeTo(-0.25, 4)]);
+    await connection.waitForTxAudioDrain(100);
+    connection.endTxAudio();
 
     server.broadcast('RX_CHANNEL_SENSORS:0,0,-71.5;TX_SENSORS:0,-20,12.5,18.25,1.4;');
     await waitFor(() => meterFrames.some((data) => data.power?.watts === 12.5 && data.swr?.swr === 1.4));
@@ -95,6 +100,66 @@ describe('TciConnection', () => {
     expect(meterData.swr?.swr).toBe(1.4);
 
     await connection.stopAudioStream();
+    await connection.disconnect('test complete');
+  });
+
+  it('responds to TX_CHRONO with padded silence when queued TX audio underflows', async () => {
+    server = new MockTciServer();
+    await server.start();
+    const endpoint = new URL(server.url());
+    const connection = new TciConnection();
+
+    await connection.connect({
+      type: 'tci',
+      tci: {
+        host: endpoint.hostname,
+        port: Number(endpoint.port),
+        receiver: 0,
+        trx: 0,
+        vfo: 0,
+        audioEnabled: true,
+        audioSampleRate: 12000,
+      },
+    });
+
+    connection.beginTxAudio();
+    await connection.sendAudio(new Float32Array([0.5]));
+    server.sendTxChrono({ sampleCount: 4 });
+
+    await waitFor(() => server!.receivedTxAudioFrames.length === 1);
+    expect(Array.from(payloadToFloat32(server.receivedTxAudioFrames[0]!))).toEqual([expect.closeTo(0.5, 4), 0, 0, 0]);
+
+    connection.endTxAudio();
+    await connection.disconnect('test complete');
+  });
+
+  it('keeps TCI audio stream open until both RX and TX output owners stop', async () => {
+    server = new MockTciServer();
+    await server.start();
+    const endpoint = new URL(server.url());
+    const connection = new TciConnection();
+
+    await connection.connect({
+      type: 'tci',
+      tci: {
+        host: endpoint.hostname,
+        port: Number(endpoint.port),
+        receiver: 0,
+        trx: 0,
+        vfo: 0,
+        audioEnabled: true,
+        audioSampleRate: 12000,
+      },
+    });
+
+    await connection.startAudioStream('rx-input');
+    await connection.startAudioStream('tx-output');
+    await connection.stopAudioStream('rx-input');
+    expect(server.receivedCommands.filter((command) => command.name === 'audio_stop')).toHaveLength(0);
+
+    await connection.stopAudioStream('tx-output');
+    await waitFor(() => server!.receivedCommands.some((command) => command.raw === 'AUDIO_STOP:0'));
+
     await connection.disconnect('test complete');
   });
 

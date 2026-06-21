@@ -33,7 +33,7 @@ export class TciAudioAdapter extends EventEmitter<TciAudioAdapterEvents> {
 
     this.tciConnection.on('audioFrame', this.handleAudioFrameBound);
     this.tciConnection.on('error', this.handleErrorBound);
-    void this.tciConnection.startAudioStream().catch((error) => {
+    void this.tciConnection.startAudioStream('rx-input').catch((error) => {
       logger.error('Failed to start TCI audio stream', error);
       this.emit('error', error instanceof Error ? error : new Error(String(error)));
     });
@@ -48,11 +48,32 @@ export class TciAudioAdapter extends EventEmitter<TciAudioAdapterEvents> {
 
     this.tciConnection.off('audioFrame', this.handleAudioFrameBound);
     this.tciConnection.off('error', this.handleErrorBound);
-    void this.tciConnection.stopAudioStream().catch((error) => {
+    void this.tciConnection.stopAudioStream('rx-input').catch((error) => {
       logger.debug('Failed to stop TCI audio stream', error);
     });
     this.isReceiving = false;
     logger.info('TCI audio reception stopped');
+  }
+
+  async startOutput(): Promise<void> {
+    await this.tciConnection.startAudioStream('tx-output');
+  }
+
+  async stopOutput(): Promise<void> {
+    await this.tciConnection.stopAudioStream('tx-output');
+  }
+
+  async beginTransmission(): Promise<void> {
+    await this.startOutput();
+    this.tciConnection.beginTxAudio();
+  }
+
+  async drainTransmission(timeoutMs: number): Promise<void> {
+    await this.tciConnection.waitForTxAudioDrain(timeoutMs);
+  }
+
+  async endTransmission(): Promise<void> {
+    this.tciConnection.endTxAudio();
   }
 
   async sendAudio(samples: Float32Array): Promise<void> {
