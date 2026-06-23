@@ -1669,6 +1669,28 @@ export class RadioOperatorManager {
   }
 
   /**
+   * 获取当前开启发射的操作员数量
+   * 用于虚拟频差模式的多op发射检测
+   */
+  getTransmittingOperatorCount(): number {
+    let count = 0;
+    for (const operator of this.operators.values()) {
+      if (operator.isTransmitting) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * 获取虚拟频差是否实际生效
+   * 用于广播给前端显示开关状态
+   */
+  isFakeFrequencyEffective(): boolean {
+    return this.getFakeFrequencyEnabled?.() ?? false;
+  }
+
+  /**
    * 发射操作员状态更新事件（触发前端更新）
    * 📊 Day13优化：添加状态去重，避免发射重复的状态更新
    */
