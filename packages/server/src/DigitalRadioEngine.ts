@@ -1170,7 +1170,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.engineLifecycle.setVoiceSessionManager(this.voiceSessionManager);
 
     // 监听操作员状态变化，广播虚拟频差实际生效状态
-    this.on('operatorStatusChanged' as any, () => {
+    this.on('operatorStatusUpdate' as any, () => {
       try {
         const radioManager = this.radioManager;
         if (!radioManager) return;

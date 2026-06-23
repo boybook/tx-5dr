@@ -635,6 +635,22 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     radioMode.engineMode,
     radioMode.currentMode?.name,
   );
+  const fakeFrequencyState = React.useMemo(() => {
+    const enabled = radioConnection.radioConfig?.fakeFrequency?.enabled;
+    const effective = radioConnection.fakeFrequencyEffective;
+    const disabledByMultiOp = enabled && !effective;
+    const tooltipLabel = disabledByMultiOp
+      ? t('fakeFrequency.tooltipDisabledMultiOp')
+      : enabled
+        ? t('fakeFrequency.tooltipOn')
+        : t('fakeFrequency.tooltipOff');
+    const buttonClass = disabledByMultiOp
+      ? 'text-default-300'
+      : enabled
+        ? 'text-success'
+        : 'text-default-400';
+    return { enabled, effective, disabledByMultiOp, tooltipLabel, buttonClass };
+  }, [radioConnection.radioConfig?.fakeFrequency?.enabled, radioConnection.fakeFrequencyEffective, t]);
   const tunerEnabled = typeof tunerSwitchCapState?.value === 'boolean' ? tunerSwitchCapState.value : false;
   const tunerIsTuning = (tunerSwitchCapState?.meta as { status?: string } | undefined)?.status === 'tuning';
   const tuneToneActive = tuneToneStatus.active;
@@ -2479,43 +2495,27 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
               </ToolbarIconTooltip>
             )}
             {/* 虚拟频差快捷开关：仅在 FT8/FT4 数字模式下露出 */}
-            {showFakeFrequencyEntry && (() => {
-              const fakeFreqEnabled = radioConnection.radioConfig?.fakeFrequency?.enabled;
-              const fakeFreqEffective = radioConnection.fakeFrequencyEffective;
-              const isDisabledByMultiOp = fakeFreqEnabled && !fakeFreqEffective;
-              const tooltipLabel = isDisabledByMultiOp
-                ? t('fakeFrequency.tooltipDisabledMultiOp')
-                : fakeFreqEnabled
-                  ? t('fakeFrequency.tooltipOn')
-                  : t('fakeFrequency.tooltipOff');
-              const buttonClass = isDisabledByMultiOp
-                ? 'text-default-300'
-                : fakeFreqEnabled
-                  ? 'text-success'
-                  : 'text-default-400';
-
-              return (
-                <ToolbarIconTooltip label={tooltipLabel}>
-                  <Button
-                    isIconOnly
-                    variant="light"
-                    size="sm"
-                    className={`min-w-unit-6 min-w-6 w-6 h-6 ${buttonClass}`}
-                    aria-label={t('fakeFrequency.toggle')}
-                    onPress={async () => {
-                      const next = !fakeFreqEnabled;
-                      try {
-                        await api.setFakeFrequency(next);
-                      } catch (error) {
-                        addToast({ title: t('fakeFrequency.toggleFailed'), color: 'danger', timeout: 3000 });
-                      }
-                    }}
-                  >
-                    <FontAwesomeIcon icon={faRightLeft} className="text-xs" />
-                  </Button>
-                </ToolbarIconTooltip>
-              );
-            })()}
+            {showFakeFrequencyEntry && (
+              <ToolbarIconTooltip label={fakeFrequencyState.tooltipLabel}>
+                <Button
+                  isIconOnly
+                  variant="light"
+                  size="sm"
+                  className={`min-w-unit-6 min-w-6 w-6 h-6 ${fakeFrequencyState.buttonClass}`}
+                  aria-label={t('fakeFrequency.toggle')}
+                  onPress={async () => {
+                    const next = !fakeFrequencyState.enabled;
+                    try {
+                      await api.setFakeFrequency(next);
+                    } catch (error) {
+                      addToast({ title: t('fakeFrequency.toggleFailed'), color: 'danger', timeout: 3000 });
+                    }
+                  }}
+                >
+                  <FontAwesomeIcon icon={faRightLeft} className="text-xs" />
+                </Button>
+              </ToolbarIconTooltip>
+            )}
           </div>
         </div>
       </div>
