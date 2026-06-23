@@ -1645,3 +1645,93 @@ describe('RadioOperatorManager fake frequency dial shift', () => {
     expect(retrigger).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('getTransmittingOperatorCount', () => {
+  it('returns 0 when no operators exist', () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+    });
+    expect(manager.getTransmittingOperatorCount()).toBe(0);
+  });
+
+  it('returns 0 when operators exist but none are transmitting', async () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+    });
+    await manager.addOperator({
+      id: 'op1',
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      frequency: 1500,
+      transmitCycles: [0],
+      mode: MODES.FT8,
+    });
+    expect(manager.getTransmittingOperatorCount()).toBe(0);
+  });
+
+  it('returns count of transmitting operators', async () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+    });
+    await manager.addOperator({
+      id: 'op1',
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      frequency: 1500,
+      transmitCycles: [0],
+      mode: MODES.FT8,
+    });
+    await manager.addOperator({
+      id: 'op2',
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      frequency: 2000,
+      transmitCycles: [0],
+      mode: MODES.FT8,
+    });
+
+    expect(manager.getTransmittingOperatorCount()).toBe(0);
+
+    const op1 = manager.getOperatorById('op1');
+    op1!.start();
+    expect(manager.getTransmittingOperatorCount()).toBe(1);
+
+    const op2 = manager.getOperatorById('op2');
+    op2!.start();
+    expect(manager.getTransmittingOperatorCount()).toBe(2);
+
+    op1!.stop();
+    expect(manager.getTransmittingOperatorCount()).toBe(1);
+  });
+});
+
+describe('isFakeFrequencyEffective', () => {
+  it('returns false when getFakeFrequencyEnabled is not provided', () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+    });
+    expect(manager.isFakeFrequencyEffective()).toBe(false);
+  });
+
+  it('returns the value from getFakeFrequencyEnabled callback', () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      getFakeFrequencyEnabled: () => true,
+    });
+    expect(manager.isFakeFrequencyEffective()).toBe(true);
+  });
+
+  it('returns false when getFakeFrequencyEnabled returns false', () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      getFakeFrequencyEnabled: () => false,
+    });
+    expect(manager.isFakeFrequencyEffective()).toBe(false);
+  });
+});
