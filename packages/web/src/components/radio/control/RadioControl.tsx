@@ -2479,35 +2479,43 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
               </ToolbarIconTooltip>
             )}
             {/* 虚拟频差快捷开关：仅在 FT8/FT4 数字模式下露出 */}
-            {showFakeFrequencyEntry && (
-              <ToolbarIconTooltip
-                label={radioConnection.radioConfig?.fakeFrequency?.enabled
+            {showFakeFrequencyEntry && (() => {
+              const fakeFreqEnabled = radioConnection.radioConfig?.fakeFrequency?.enabled;
+              const fakeFreqEffective = radioConnection.fakeFrequencyEffective;
+              const isDisabledByMultiOp = fakeFreqEnabled && !fakeFreqEffective;
+              const tooltipLabel = isDisabledByMultiOp
+                ? t('fakeFrequency.tooltipDisabledMultiOp')
+                : fakeFreqEnabled
                   ? t('fakeFrequency.tooltipOn')
-                  : t('fakeFrequency.tooltipOff')}
-              >
-                <Button
-                  isIconOnly
-                  variant="light"
-                  size="sm"
-                  className={`min-w-unit-6 min-w-6 w-6 h-6 ${
-                    radioConnection.radioConfig?.fakeFrequency?.enabled
-                      ? 'text-success'
-                      : 'text-default-400'
-                  }`}
-                  aria-label={t('fakeFrequency.toggle')}
-                  onPress={async () => {
-                    const next = !radioConnection.radioConfig?.fakeFrequency?.enabled;
-                    try {
-                      await api.setFakeFrequency(next);
-                    } catch (error) {
-                      addToast({ title: t('fakeFrequency.toggleFailed'), color: 'danger', timeout: 3000 });
-                    }
-                  }}
-                >
-                  <FontAwesomeIcon icon={faRightLeft} className="text-xs" />
-                </Button>
-              </ToolbarIconTooltip>
-            )}
+                  : t('fakeFrequency.tooltipOff');
+              const buttonClass = isDisabledByMultiOp
+                ? 'text-default-300'
+                : fakeFreqEnabled
+                  ? 'text-success'
+                  : 'text-default-400';
+
+              return (
+                <ToolbarIconTooltip label={tooltipLabel}>
+                  <Button
+                    isIconOnly
+                    variant="light"
+                    size="sm"
+                    className={`min-w-unit-6 min-w-6 w-6 h-6 ${buttonClass}`}
+                    aria-label={t('fakeFrequency.toggle')}
+                    onPress={async () => {
+                      const next = !fakeFreqEnabled;
+                      try {
+                        await api.setFakeFrequency(next);
+                      } catch (error) {
+                        addToast({ title: t('fakeFrequency.toggleFailed'), color: 'danger', timeout: 3000 });
+                      }
+                    }}
+                  >
+                    <FontAwesomeIcon icon={faRightLeft} className="text-xs" />
+                  </Button>
+                </ToolbarIconTooltip>
+              );
+            })()}
           </div>
         </div>
       </div>

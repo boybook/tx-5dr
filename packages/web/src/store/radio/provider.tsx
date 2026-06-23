@@ -358,6 +358,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
       radioConnectionHealth: radioState.radioConnectionHealth,
       coreCapabilities: radioState.coreCapabilities,
       coreCapabilityDiagnostics: radioState.coreCapabilityDiagnostics,
+      fakeFrequencyEffective: radioState.fakeFrequencyEffective,
     }),
     [
       radioState.radioConnected,
@@ -368,6 +369,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
       radioState.radioConnectionHealth,
       radioState.coreCapabilities,
       radioState.coreCapabilityDiagnostics,
+      radioState.fakeFrequencyEffective,
     ],
   );
 

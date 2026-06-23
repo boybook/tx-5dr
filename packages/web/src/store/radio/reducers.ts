@@ -195,6 +195,7 @@ export const initialRadioState: RadioState = {
   splitEnabled: false,
   splitTxFrequency: null,
   splitTxFrequencyWritable: false,
+  fakeFrequencyEffective: false,
 };
 
 export function radioReducer(state: RadioState, action: RadioAction): RadioState {
@@ -347,6 +348,7 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
             : state.capabilityStates,
         currentRadioFrequency: action.payload.radioConnected ? state.currentRadioFrequency : null,
         spectrumSessionState: action.payload.radioConnected ? state.spectrumSessionState : null,
+        fakeFrequencyEffective: action.payload.fakeFrequencyEffective ?? state.fakeFrequencyEffective,
       };
     }
 

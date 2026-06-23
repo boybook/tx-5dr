@@ -631,6 +631,7 @@ export function createRadioEventMap({
         tunerCapabilities?: TunerCapabilities;
         reason?: string;
         message?: string;
+        fakeFrequencyEffective?: boolean;
       };
       logger.debug('Radio status changed', { status: radioData.status || (radioData.connected ? 'connected' : 'disconnected'), reason: radioData.reason });
 
@@ -647,6 +648,7 @@ export function createRadioEventMap({
           coreCapabilityDiagnostics: radioData.coreCapabilityDiagnostics,
           meterCapabilities: radioData.meterCapabilities,
           tunerCapabilities: radioData.tunerCapabilities,
+          fakeFrequencyEffective: radioData.fakeFrequencyEffective,
         },
       });
     },
