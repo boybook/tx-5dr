@@ -49,7 +49,7 @@ describe('ADIF QSO comments', () => {
       reportReceived: '-09',
     }));
 
-    expect(adif).toMatch(/<comment:\d+>FT8  Sent: -12  Rcvd: -09/);
+    expect(adif).toMatch(/<comment:\d+>FT8 {2}Sent: -12 {2}Rcvd: -09/);
   });
 
   it('keeps operator comments after the signal report COMMENT prefix', () => {
@@ -61,7 +61,7 @@ describe('ADIF QSO comments', () => {
       comment: 'TU',
     }));
 
-    expect(adif).toMatch(/<comment:\d+>FT8  Sent: -12  Rcvd: -09 \| TU/);
+    expect(adif).toMatch(/<comment:\d+>FT8 {2}Sent: -12 {2}Rcvd: -09 \| TU/);
   });
 
   it('stores message history in a TX-5DR private field instead of COMMENT', () => {

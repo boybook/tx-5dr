@@ -1,7 +1,7 @@
 import type { QSORecord } from '@tx5dr/contracts';
 
 const COMMENT_SEPARATOR = ' | ';
-const SIGNAL_REPORT_COMMENT_PREFIX = /^\S+(?:(?:  Sent: \S+)(?:  Rcvd: \S+)?|(?:  Rcvd: \S+))(?= \| |$)/;
+const SIGNAL_REPORT_COMMENT_PREFIX = /^\S+(?:(?: {2}Sent: \S+)(?: {2}Rcvd: \S+)?|(?: {2}Rcvd: \S+))(?= \| |$)/;
 
 function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== 'string') {
