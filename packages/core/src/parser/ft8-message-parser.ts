@@ -35,13 +35,15 @@ export class FT8MessageParser {
     // 移除可能存在的 <>
     let cleanCallsign = callsign.replace(/[<>]/g, '');
 
-    // 检查后缀：只允许标准后缀（如 /P, /1），不允许复合呼号（如 /K1ABC）
+    // 检查后缀：FT8 Type 1/2 仅支持 /R (Type 1 标志位) 与 /P (Type 2)，
+    // 其余后缀（/M /MM /AM /QRP /1 等）均属非标准呼号，必须用 <...> 包裹走 Type 4。
+    // 对齐上游 WSJT-X stdCall 的 (\/R|\/P)? 规则。
     const slashIndex = cleanCallsign.indexOf('/');
     if (slashIndex !== -1) {
       const suffix = cleanCallsign.substring(slashIndex + 1);
-      // 标准后缀只能是单个数字或单个字母
-      if (!/^[A-Z0-9]$/.test(suffix)) {
-        return false; // 复合呼号，非标准
+      // 标准后缀只能是 P 或 R
+      if (!/^[PR]$/.test(suffix)) {
+        return false; // 非标准后缀，需走 Type 4
       }
       cleanCallsign = cleanCallsign.substring(0, slashIndex);
     }
@@ -104,8 +106,10 @@ export class FT8MessageParser {
       case FT8MessageType.RRR:
       case FT8MessageType.SEVENTY_THREE:
       case FT8MessageType.FOX_RR73:
-        // 其他消息类型中，如果包含网格或报告，非标准呼号需要包裹
-        return !!(('grid' in message && message.grid) || ('report' in message && message.report));
+        // 双呼号 QSO 消息中，非标准呼号一律用 <...> 包裹走 Type 4；
+        // 无论是否带 grid/report（实测 wsjtx-lib 对裸 nonstandard 会丢后缀，
+        // 且无 grid/report 的 <A/X> B 形态也能正确编码）
+        return true;
 
       default:
         return false;
