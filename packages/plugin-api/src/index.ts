@@ -99,6 +99,8 @@ export type {
   PluginUIPageContext,
   PluginFileStore,
   PluginNetworkControl,
+  PluginEventBus,
+  PluginEventBusMessage,
   PluginUdpControl,
   PluginUdpSocket,
   PluginUdpSocketOptions,

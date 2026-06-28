@@ -9,6 +9,7 @@ import type {
   UIBridge,
   PluginFileStore,
   PluginNetworkControl,
+  PluginEventBus,
 } from './helpers.js';
 import type { LogbookSyncRegistrar } from './sync.js';
 import type { HostSettingsControl } from './settings.js';
@@ -147,6 +148,14 @@ export interface PluginContext {
    * such as WSJT-X UDP belong inside plugins.
    */
   readonly network?: PluginNetworkControl;
+
+  /**
+   * Permission-gated plugin-to-plugin event bus.
+   *
+   * Topics are shared across plugin instances within the same host process.
+   * Treat this capability as optional and feature-detect before use.
+   */
+  readonly eventBus?: PluginEventBus;
 
   /**
    * Host-owned runtime dependencies exposed to plugins.

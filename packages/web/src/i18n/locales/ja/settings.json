@@ -634,6 +634,12 @@
         "name": "ネットワークアクセス",
         "description": "このマシンから HTTP リクエストを送信し、UDP ソケットを開くことを許可します。"
       },
+      "plugin": {
+        "event-bus": {
+          "name": "プラグイン Event Bus",
+          "description": "他のプラグインと共有される同一プロセス内 Event Bus トピックの publish / subscribe を許可します。"
+        }
+      },
       "host": {
         "hamlib": {
           "name": "ホスト Hamlib 依存関係",

@@ -638,6 +638,12 @@
         "name": "网络访问",
         "description": "允许插件从本机发起 HTTP 请求并打开 UDP Socket。"
       },
+      "plugin": {
+        "event-bus": {
+          "name": "插件事件总线",
+          "description": "允许发布和订阅与其他插件共享的进程内 Event Bus topic。"
+        }
+      },
       "host": {
         "hamlib": {
           "name": "宿主 Hamlib 依赖",

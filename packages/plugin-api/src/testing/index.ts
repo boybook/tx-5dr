@@ -20,6 +20,8 @@ import type {
   UIBridge,
   PluginFileStore,
   PluginNetworkControl,
+  PluginEventBus,
+  PluginEventBusMessage,
   PluginUdpRemoteInfo,
   PluginUdpSocket,
 } from '../helpers.js';
@@ -80,6 +82,7 @@ export interface MockPluginContext extends PluginContext {
   readonly settings: HostSettingsControl;
   readonly hostDependencies: HostDependencies;
   readonly network: PluginNetworkControl;
+  readonly eventBus: PluginEventBus;
 }
 
 export interface MockUdpSocket extends PluginUdpSocket {
@@ -92,6 +95,11 @@ export interface MockUdpSocket extends PluginUdpSocket {
 
 export interface MockNetworkControl extends PluginNetworkControl {
   readonly _sockets: MockUdpSocket[];
+}
+
+export interface MockEventBus extends PluginEventBus {
+  readonly _subscriptions: Map<string, Array<(message: PluginEventBusMessage) => void | Promise<void>>>;
+  readonly _published: PluginEventBusMessage[];
 }
 
 
@@ -439,6 +447,87 @@ export function createMockNetworkControl(): MockNetworkControl {
   };
 }
 
+// ===== Factory: EventBus =====
+
+/**
+ * Options for {@link createMockEventBus}.
+ */
+export interface MockEventBusOptions {
+  /** Publisher metadata injected into every message. Defaults to `mock-plugin` / `operator-0`. */
+  owner?: {
+    pluginName?: string;
+    instanceScope?: 'operator' | 'global';
+    operatorId?: string;
+  };
+}
+
+/**
+ * Creates a mock {@link PluginEventBus} for unit testing plugin code.
+ *
+ * All published messages are recorded in `_published` for assertion.
+ * The internal `_subscriptions` map lets tests inspect active subscriptions.
+ *
+ * @param options - Optional configuration for publisher metadata.
+ * @returns A mock event bus with inspection helpers.
+ *
+ * @example
+ * ```ts
+ * const bus = createMockEventBus({ owner: { pluginName: 'my-plugin' } });
+ * bus.subscribe('topic', handler);
+ * bus.publish('topic', { value: 42 });
+ * expect(bus._published).toHaveLength(1);
+ * expect(bus._published[0].publisher.pluginName).toBe('my-plugin');
+ * ```
+ */
+export function createMockEventBus(options?: MockEventBusOptions): MockEventBus {
+  const subscriptions = new Map<string, Array<(message: PluginEventBusMessage) => void | Promise<void>>>();
+  const published: PluginEventBusMessage[] = [];
+  const ownerName = options?.owner?.pluginName ?? 'mock-plugin';
+  const ownerScope = options?.owner?.instanceScope ?? 'operator';
+  const ownerId = ownerScope === 'operator'
+    ? (options?.owner?.operatorId ?? 'operator-0')
+    : undefined;
+
+  return {
+    _subscriptions: subscriptions,
+    _published: published,
+    publish(topic: string, payload?: unknown) {
+      const message: PluginEventBusMessage = {
+        topic,
+        payload,
+        timestamp: Date.now(),
+        publisher: {
+          pluginName: ownerName,
+          instanceScope: ownerScope,
+          operatorId: ownerId,
+        },
+      };
+      published.push(message);
+      const handlers = [...(subscriptions.get(topic) ?? [])];
+      for (const handler of handlers) {
+        void Promise.resolve(handler(message));
+      }
+    },
+    subscribe(topic, handler) {
+      const handlers = subscriptions.get(topic) ?? [];
+      if (!handlers.includes(handler)) {
+        handlers.push(handler);
+        subscriptions.set(topic, handlers);
+      }
+      return () => {
+        const current = subscriptions.get(topic);
+        if (!current) return;
+        const next = current.filter((candidate) => candidate !== handler);
+        if (next.length === 0) {
+          subscriptions.delete(topic);
+          return;
+        }
+        subscriptions.set(topic, next);
+      };
+    },
+  };
+}
+
 // ===== Factory: HostSettingsControl =====
 
 export function createMockHostSettingsControl(overrides?: Partial<HostSettingsControl>): HostSettingsControl {
@@ -533,6 +622,8 @@ export interface MockPluginContextOptions {
   band?: Partial<BandAccess>;
   /** Host settings control overrides. */
   settings?: Partial<HostSettingsControl>;
+  /** Event bus override. */
+  eventBus?: PluginEventBus;
   /** Host dependency overrides. */
   hostDependencies?: HostDependencies;
   /** Manifest permissions to model permission-gated optional host dependencies. */
@@ -569,6 +660,7 @@ export function createMockContext(options?: MockPluginContextOptions): MockPlugi
   const settings = createMockHostSettingsControl(opts.settings);
   const files = createMockFileStore();
   const network = opts.network ?? createMockNetworkControl();
+  const eventBus = opts.eventBus ?? createMockEventBus();
   const hostDependencies = opts.hostDependencies
     ?? (opts.permissions?.includes('host:hamlib') ? createMockHostDependencies() : {});
   const logbookSync = { register() { /* no-op in mock */ } };
@@ -590,6 +682,7 @@ export function createMockContext(options?: MockPluginContextOptions): MockPlugi
     hostDependencies,
     files,
     network,
+    eventBus,
     logbookSync,
   };
 }

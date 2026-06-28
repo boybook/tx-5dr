@@ -35,6 +35,7 @@ import { PluginDevWatcher } from './PluginDevWatcher.js';
 import { PluginHookDispatcher } from './PluginHookDispatcher.js';
 import { DecisionOrchestrator } from './DecisionOrchestrator.js';
 import { PluginContextFactory } from './PluginContextFactory.js';
+import { PluginEventBusHost } from './PluginEventBusHost.js';
 import { LogbookSyncHost } from './LogbookSyncHost.js';
 import { PluginPageSessionStore, type PluginPageSession } from './PluginPageSessionStore.js';
 import {
@@ -92,6 +93,7 @@ export class PluginManager {
   }>>();
   private readonly panelMetaState = new Map<string, PluginPanelMetaPayload>();
   private readonly runtimePanelContributions = new Map<string, PluginUIPanelContributionGroup>();
+  private readonly pluginEventBusHost: PluginEventBusHost;
   private pluginRuntimeLogHistory: PluginLogHistoryEntry[] = [];
   private readonly recordPluginLogHistory = (entry: PluginLogEntry) => {
     this.appendPluginLogHistory({ ...entry });
@@ -113,6 +115,20 @@ export class PluginManager {
   constructor(private deps: PluginManagerDeps) {
     this.loader = new PluginLoader((event) => this.emitPluginRuntimeLog(event));
     this._logbookSyncHost = new LogbookSyncHost();
+    this.pluginEventBusHost = new PluginEventBusHost(({ subscriber, message, error }) => {
+      this.emitPluginRuntimeLog({
+        stage: 'activate',
+        level: 'warn',
+        message: 'Plugin event bus subscriber failed',
+        pluginName: subscriber.pluginName,
+        details: {
+          topic: message.topic,
+          publisher: message.publisher,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    });
+    deps.pluginEventBusHost = this.pluginEventBusHost;
     // Wire the logbook sync registration callback so plugins can register
     // providers via ctx.logbookSync.register().
     deps.registerLogbookSyncProvider = (pluginName, provider) => {
@@ -1761,6 +1777,11 @@ export class PluginManager {
     }
     this.clearPanelMetaForInstance(instance);
     this.clearRuntimePanelContributionsForInstance(instance);
+    this.pluginEventBusHost.unsubscribeAll({
+      pluginName: instance.plugin.definition.name,
+      instanceScope: instance.scope.kind,
+      operatorId: instance.scope.kind === 'operator' ? instance.scope.operatorId : undefined,
+    });
     this._logbookSyncHost.unregisterByPlugin(instance.plugin.definition.name);
     instance.ctx.timers.clearAll();
     await instance.ctx.network?.udp.closeAll().catch(() => {});

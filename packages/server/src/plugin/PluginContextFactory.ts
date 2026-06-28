@@ -39,6 +39,7 @@ import { PluginTimerManager } from './PluginTimerManager.js';
 import { PluginUIBridge } from './PluginUIBridge.js';
 import { HostSettingsService } from './HostSettingsService.js';
 import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
+import type { PluginEventBusOwner } from './PluginEventBusHost.js';
 import { createLogger } from '../utils/logger.js';
 import type { LoadedPlugin, PluginManagerDeps } from './types.js';
 
@@ -137,6 +138,7 @@ export class PluginContextFactory {
       path.join(pluginStorageDir, 'files'),
     );
     const networkControl = this.createNetworkControl(plugin);
+    const eventBusControl = this.createEventBusControl(plugin, operatorId, instanceScope);
 
     ctx = {
       get config() {
@@ -165,6 +167,7 @@ export class PluginContextFactory {
         ? { hamlib: HOST_HAMLIB_DEPENDENCY }
         : {},
       network: networkControl,
+      eventBus: eventBusControl,
       logbookSync: {
         register: (provider) => {
           this.validateLogbookSyncProvider(plugin, provider);
@@ -177,6 +180,36 @@ export class PluginContextFactory {
     };
 
     return ctx;
+  }
+
+  private createEventBusControl(
+    plugin: LoadedPlugin,
+    operatorId: string | undefined,
+    instanceScope: 'operator' | 'global',
+  ): PluginContext['eventBus'] {
+    if (!plugin.definition.permissions?.includes('plugin:event-bus')) {
+      return undefined;
+    }
+
+    const host = this.deps.pluginEventBusHost;
+    if (!host) {
+      return undefined;
+    }
+
+    const owner: PluginEventBusOwner = {
+      pluginName: plugin.definition.name,
+      instanceScope,
+      operatorId: instanceScope === 'operator' ? operatorId : undefined,
+    };
+
+    return {
+      publish(topic, payload) {
+        host.publish(owner, topic, payload);
+      },
+      subscribe(topic, handler) {
+        return host.subscribe(owner, topic, handler);
+      },
+    };
   }
 
 

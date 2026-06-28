@@ -67,6 +67,7 @@ describe('plugin market schema', () => {
   });
 
   it('accepts host settings permissions', () => {
+    expect(PluginPermissionSchema.parse('plugin:event-bus')).toBe('plugin:event-bus');
     expect(PluginPermissionSchema.parse('host:hamlib')).toBe('host:hamlib');
     expect(PluginPermissionSchema.parse('operator:transmit-control')).toBe('operator:transmit-control');
     expect(PluginPermissionSchema.parse('settings:ft8')).toBe('settings:ft8');
