@@ -462,6 +462,7 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radioConnection: Radi
     }
     if (config.type === 'network') return 'Network RigCtrl';
     if (config.type === 'icom-wlan') return 'ICOM WLAN';
+    if (config.type === 'tci') return 'TCI / SunSDR';
     return t('status.radio');
   };
 

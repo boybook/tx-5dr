@@ -250,11 +250,12 @@ function isHardwareSameTarget(a: HamlibConfig, b: HamlibConfig): boolean {
     case 'serial': return a.serial?.path === b.serial?.path;
     case 'network': return a.network?.host === b.network?.host && a.network?.port === b.network?.port;
     case 'icom-wlan': return a.icomWlan?.ip === b.icomWlan?.ip && a.icomWlan?.port === b.icomWlan?.port;
+    case 'tci': return a.tci?.host === b.tci?.host && a.tci?.port === b.tci?.port;
     default: return true;
   }
 }
 
-/** 判断测试配置是否与已有连接存在硬件冲突（串口独占 / ICOM WLAN 单客户端） */
+/** 判断测试配置是否与已有连接存在硬件冲突（串口独占 / ICOM WLAN/TCI 单客户端） */
 function isHardwareConflict(active: HamlibConfig, test: HamlibConfig): boolean {
   // 串口：同一 path 就冲突（OS 独占）
   if (test.type === 'serial' && active.type === 'serial'
@@ -262,6 +263,9 @@ function isHardwareConflict(active: HamlibConfig, test: HamlibConfig): boolean {
   // ICOM WLAN：同一 IP 就冲突（单客户端限制）
   if (test.type === 'icom-wlan' && active.type === 'icom-wlan'
       && active.icomWlan?.ip === test.icomWlan?.ip) return true;
+  // TCI：同一 ExpertSDR WebSocket endpoint 视为冲突
+  if (test.type === 'tci' && active.type === 'tci'
+      && active.tci?.host === test.tci?.host && active.tci?.port === test.tci?.port) return true;
   return false;
 }
 
@@ -271,6 +275,7 @@ function describeHardware(config: HamlibConfig): string {
     case 'serial': return `Serial ${config.serial?.path || ''}`;
     case 'network': return `Network ${config.network?.host || ''}:${config.network?.port || ''}`;
     case 'icom-wlan': return `ICOM WLAN ${config.icomWlan?.ip || ''}`;
+    case 'tci': return `TCI ${config.tci?.host || ''}:${config.tci?.port || ''}`;
     default: return 'Unknown';
   }
 }
@@ -478,14 +483,15 @@ export async function radioRoutes(fastify: FastifyInstance) {
     // 标记是否刚刚触发了引擎重启（用于避免重复调用 applyConfig）
     let engineRestarted = false;
 
-    // 如果切换到 ICOM WLAN 模式，自动设置音频设备为 ICOM WLAN
-    if (config.type === 'icom-wlan') {
-      logger.debug('ICOM WLAN mode detected, auto-setting audio devices');
+    // 如果切换到 radio-audio 模式，自动设置对应虚拟音频设备
+    if (config.type === 'icom-wlan' || (config.type === 'tci' && config.tci?.audioEnabled !== false)) {
+      const radioAudioDeviceName = config.type === 'tci' ? 'TCI Audio' : 'ICOM WLAN';
+      logger.debug(`${radioAudioDeviceName} mode detected, auto-setting audio devices`);
       const audioConfig = configManager.getAudioConfig();
       const updatedAudioConfig = {
         ...audioConfig,
-        inputDeviceName: 'ICOM WLAN',
-        outputDeviceName: 'ICOM WLAN'
+        inputDeviceName: radioAudioDeviceName,
+        outputDeviceName: radioAudioDeviceName
       };
 
       // 重启引擎以应用音频配置（参考 POST /audio/settings 的实现）
@@ -497,7 +503,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
       await profileManager.updateActiveProfileAudioConfig(updatedAudioConfig);
       engine.getAudioStreamManager().reloadAudioConfig();
-      logger.info('Audio devices auto-set to ICOM WLAN');
+      logger.info(`Audio devices auto-set to ${radioAudioDeviceName}`);
 
       if (wasRunning) {
         logger.debug('Restarting engine');
@@ -864,7 +870,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
         }
       }
 
-      // 硬件冲突检测：串口独占 / ICOM WLAN 单客户端
+      // 硬件冲突检测：串口独占 / ICOM WLAN/TCI 单客户端
       if (isHardwareConflict(activeConfig, config)) {
         return reply.send({
           success: false,

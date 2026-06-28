@@ -11,6 +11,7 @@
 import { RadioError, RadioErrorCode } from '../../utils/errors/RadioError.js';
 import type { IRadioConnection, RadioConnectionConfig } from './IRadioConnection.js';
 import { IcomWlanConnection } from './IcomWlanConnection.js';
+import { TciConnection } from './TciConnection.js';
 import { HamlibConnection } from './HamlibConnection.js';
 import { NullConnection } from './NullConnection.js';
 import { createLogger } from '../../utils/logger.js';
@@ -45,6 +46,10 @@ export class RadioConnectionFactory {
         logger.debug('Creating ICOM WLAN connection instance');
         return new IcomWlanConnection();
 
+      case 'tci':
+        logger.debug('Creating TCI connection instance');
+        return new TciConnection();
+
       case 'network':
       case 'serial':
         logger.debug(`Creating Hamlib connection instance (${config.type})`);
@@ -60,7 +65,7 @@ export class RadioConnectionFactory {
           message: `Unsupported connection type: ${(config as any).type}`,
           userMessage: 'Unsupported radio connection type',
           suggestions: [
-            'Supported types: icom-wlan, network, serial',
+            'Supported types: icom-wlan, tci, network, serial',
             'Check the connection type in the configuration file',
           ],
         });
@@ -85,6 +90,26 @@ export class RadioConnectionFactory {
 
     logger.debug('Creating ICOM WLAN connection instance');
     return new IcomWlanConnection();
+  }
+
+  /**
+   * 创建 TCI 连接实例
+   *
+   * @param config - TCI 配置
+   * @returns TCI 连接实例
+   */
+  static createTci(config: RadioConnectionConfig): IRadioConnection {
+    if (config.type !== 'tci') {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_CONFIG,
+        message: `Configuration type error: expected 'tci', got '${config.type}'`,
+        userMessage: 'Configuration type mismatch',
+        suggestions: ['Please use a TCI type configuration'],
+      });
+    }
+
+    logger.debug('Creating TCI connection instance');
+    return new TciConnection();
   }
 
   /**
@@ -132,6 +157,14 @@ export class RadioConnectionFactory {
         else {
           if (!config.icomWlan.ip) errors.push('ICOM WLAN configuration missing required field: icomWlan.ip');
           if (!config.icomWlan.port) errors.push('ICOM WLAN configuration missing required field: icomWlan.port');
+        }
+        break;
+
+      case 'tci':
+        if (!config.tci) errors.push('TCI configuration missing tci object');
+        else {
+          if (!config.tci.host) errors.push('TCI configuration missing required field: tci.host');
+          if (!config.tci.port) errors.push('TCI configuration missing required field: tci.port');
         }
         break;
 

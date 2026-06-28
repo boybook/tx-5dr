@@ -18,7 +18,7 @@ import {
 } from './android-audio-devices.js';
 
 const logger = createLogger('AudioDeviceManager');
-type RadioType = 'none' | 'network' | 'serial' | 'icom-wlan';
+type RadioType = 'none' | 'network' | 'serial' | 'icom-wlan' | 'tci';
 type AudioDirection = 'input' | 'output';
 type AudioDeviceAvailability = 'available' | 'cached' | 'active';
 
@@ -42,6 +42,7 @@ const FALLBACK_SAMPLE_RATES = [8000, 12000, 16000, 22050, 24000, 44100, 48000, 9
 export class AudioDeviceManager {
   private static instance: AudioDeviceManager;
   private icomWlanConnectedCallback: (() => boolean) | null = null;
+  private tciConnectedCallback: (() => boolean) | null = null;
   private readonly deviceRegistry: Record<AudioDirection, Map<string, RegisteredAudioDevice>> = {
     input: new Map(),
     output: new Map(),
@@ -67,6 +68,13 @@ export class AudioDeviceManager {
    */
   setIcomWlanConnectedCallback(callback: () => boolean): void {
     this.icomWlanConnectedCallback = callback;
+  }
+
+  /**
+   * 设置 TCI 连接状态检查回调
+   */
+  setTciConnectedCallback(callback: () => boolean): void {
+    this.tciConnectedCallback = callback;
   }
 
   async initializeDeviceRegistry(): Promise<void> {
@@ -141,13 +149,21 @@ export class AudioDeviceManager {
       if (this.shouldShowIcomWlanDevice()) {
         devices.unshift(this.createIcomWlanDevice('input'));
       }
+      if (this.shouldShowTciDevice()) {
+        devices.unshift(this.createTciDevice('input'));
+      }
 
       const openwebrxDevices = this.getOpenWebRXVirtualDevices();
       if (openwebrxDevices.length > 0) {
         devices.push(...openwebrxDevices);
       }
-    } else if (this.shouldShowIcomWlanDevice()) {
-      devices.unshift(this.createIcomWlanDevice('output'));
+    } else {
+      if (this.shouldShowIcomWlanDevice()) {
+        devices.unshift(this.createIcomWlanDevice('output'));
+      }
+      if (this.shouldShowTciDevice()) {
+        devices.unshift(this.createTciDevice('output'));
+      }
     }
 
     return devices;
@@ -455,6 +471,36 @@ export class AudioDeviceManager {
     };
   }
 
+  private shouldShowTciDevice(): boolean {
+    const configManager = ConfigManager.getInstance();
+    const radioConfig = configManager.getRadioConfig();
+
+    if (radioConfig.type !== 'tci' || radioConfig.tci?.audioEnabled === false) {
+      return false;
+    }
+
+    if (this.tciConnectedCallback) {
+      return this.tciConnectedCallback();
+    }
+
+    return true;
+  }
+
+  private createTciDevice(type: 'input' | 'output'): AudioDevice {
+    const sampleRate = ConfigManager.getInstance().getRadioConfig().tci?.audioSampleRate ?? 12000;
+    return {
+      id: `tci-${type}`,
+      name: 'TCI Audio',
+      isDefault: false,
+      channels: 1,
+      sampleRate,
+      sampleRates: [sampleRate],
+      type,
+      availability: 'available',
+      isActiveByTx5dr: false,
+    };
+  }
+
   private normalizeSampleRates(sampleRates: unknown): number[] {
     if (!Array.isArray(sampleRates)) {
       return [];
@@ -603,7 +649,7 @@ export class AudioDeviceManager {
         configuredDeviceName,
         configuredDevice,
         effectiveDevice: configuredDevice,
-        status: configuredDevice.id.startsWith('openwebrx-') || configuredDevice.id.startsWith('icom-wlan-')
+        status: configuredDevice.id.startsWith('openwebrx-') || configuredDevice.id.startsWith('icom-wlan-') || configuredDevice.id.startsWith('tci-')
           ? 'virtual-selected'
           : 'selected',
         reason: null,
@@ -618,6 +664,17 @@ export class AudioDeviceManager {
         effectiveDevice: virtualDevice,
         status: 'virtual-selected',
         reason: 'icom-wlan-radio-audio',
+      };
+    }
+
+    if (configuredDeviceName === 'TCI Audio' && radioType === 'tci') {
+      const virtualDevice = this.createTciDevice(direction);
+      return {
+        configuredDeviceName,
+        configuredDevice: virtualDevice,
+        effectiveDevice: virtualDevice,
+        status: 'virtual-selected',
+        reason: 'tci-radio-audio',
       };
     }
 
@@ -730,6 +787,10 @@ export class AudioDeviceManager {
       return 'icom-wlan-input';
     }
 
+    if (deviceName === 'TCI Audio') {
+      return 'tci-input';
+    }
+
     const device = await this.getInputDeviceByName(deviceName);
     if (device) {
       if (device.availability === 'cached' && !device.isActiveByTx5dr) {
@@ -761,6 +822,10 @@ export class AudioDeviceManager {
 
     if (deviceName === 'ICOM WLAN') {
       return 'icom-wlan-output';
+    }
+
+    if (deviceName === 'TCI Audio') {
+      return 'tci-output';
     }
 
     const device = await this.getOutputDeviceByName(deviceName);

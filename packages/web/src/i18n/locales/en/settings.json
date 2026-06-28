@@ -301,7 +301,19 @@
     "cwKeyDeviceBusy": "CW key port {{port}} is already in use. Stop the current CW keyer or close other programs using this serial port.",
     "cwKeyDeviceBusyDifferentSettings": "CW key port {{port}} is already open by the current CW keyer with {{currentMethod}} / active {{currentActiveLevel}}. To test {{requestedMethod}} / active {{requestedActiveLevel}}, stop the current CW keyer, or save the settings and restart it before trying again.",
     "cwKeyerCurrentlyActive": "The CW keyer is currently sending or manually keying. Stop the current CW transmission before running the hardware test.",
-    "cwKeyReleaseFailed": "The CW release command did not reach {{port}}. The USB serial adapter may have dropped during transmit; confirm the radio has stopped transmitting, then reconnect the device and check antenna/feed-line separation from the USB cable."
+    "cwKeyReleaseFailed": "The CW release command did not reach {{port}}. The USB serial adapter may have dropped during transmit; confirm the radio has stopped transmitting, then reconnect the device and check antenna/feed-line separation from the USB cable.",
+    "tciTitle": "TCI / SunSDR Radio",
+    "tciDesc": "Connect to SunSDR / ExpertSDR through the TCI WebSocket server, including CAT and radio audio.",
+    "modeTci": "TCI / SunSDR",
+    "tciReceiver": "Receiver",
+    "tciTrx": "TRX",
+    "tciVfo": "VFO",
+    "tciAudioEnabled": "Enable TCI audio",
+    "tciAudioEnabledDesc": "Use TCI RX/TX audio as a virtual audio device.",
+    "tciAudioSampleRate": "TCI audio sample rate",
+    "tipTci": "Enable the TCI server in ExpertSDR/SunSDR and keep the default port 40001 unless changed.",
+    "tipTciAudio": "Select TCI Audio for input/output when you want TX-5DR to use the radio audio stream.",
+    "tipTciCompensation": "TCI mode: usually needs low network compensation on localhost"
   },
   "audio": {
     "loading": "Loading audio devices...",
@@ -374,7 +386,9 @@
     "serial": "Hamlib Direct Radio",
     "serialDesc": "Connect directly to a supported radio through Hamlib. Depending on the model, this may use a serial port, server address, or device path.",
     "icomWlan": "ICOM WLAN",
-    "icomWlanDesc": "Connect ICOM radio via Wi-Fi"
+    "icomWlanDesc": "Connect ICOM radio via Wi-Fi",
+    "tci": "TCI / SunSDR",
+    "tciDesc": "ExpertSDR / SunSDR TCI WebSocket"
   },
   "common": {
     "error": "Error",

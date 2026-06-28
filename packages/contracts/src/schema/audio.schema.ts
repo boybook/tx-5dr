@@ -69,7 +69,7 @@ export const AudioDeviceSettingsResponseSchema = z.object({
 
 export const AudioSettingsResolveRequestSchema = z.object({
   audio: AudioDeviceSettingsSchema,
-  radioType: z.enum(['none', 'network', 'serial', 'icom-wlan']).optional(),
+  radioType: z.enum(['none', 'network', 'serial', 'icom-wlan', 'tci']).optional(),
 });
 
 export const AudioSettingsResolveResponseSchema = z.object({

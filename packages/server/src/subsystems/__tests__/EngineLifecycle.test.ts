@@ -89,6 +89,7 @@ describe('EngineLifecycle', () => {
     expect(resourceManager.register.mock.calls.map(([config]) => config.name)).toEqual([
       'radio',
       'icomWlanAudioAdapter',
+      'tciAudioAdapter',
       'openwebrxAudioAdapter',
       'decodeWorkerPool',
       'clock',
@@ -107,7 +108,7 @@ describe('EngineLifecycle', () => {
 
     expect(resourceManager.stopAll).toHaveBeenCalledTimes(2);
     expect(resourceManager.clear).toHaveBeenCalledTimes(2);
-    const firstPlanCount = 8; // radio + icom + openwebrx + decodeWorkerPool + clock + slotScheduler + spectrumScheduler + operatorManager
+    const firstPlanCount = 9; // radio + icom + tci + openwebrx + decodeWorkerPool + clock + slotScheduler + spectrumScheduler + operatorManager
     const secondPlanNames = resourceManager.register.mock.calls
       .slice(firstPlanCount)
       .map(([config]) => config.name);
@@ -115,6 +116,7 @@ describe('EngineLifecycle', () => {
     expect(secondPlanNames).toEqual([
       'radio',
       'icomWlanAudioAdapter',
+      'tciAudioAdapter',
       'openwebrxAudioAdapter',
       'spectrumScheduler',
       'voiceSessionManager',
@@ -157,6 +159,7 @@ describe('EngineLifecycle', () => {
     expect(names).toEqual([
       'radio',
       'icomWlanAudioAdapter',
+      'tciAudioAdapter',
       'openwebrxAudioAdapter',
       'spectrumScheduler',
       'voiceSessionManager',
@@ -172,6 +175,7 @@ describe('EngineLifecycle', () => {
     expect(names).toEqual([
       'radio',
       'icomWlanAudioAdapter',
+      'tciAudioAdapter',
       'openwebrxAudioAdapter',
       'spectrumScheduler',
     ]);

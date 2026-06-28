@@ -159,6 +159,23 @@ describe('PhysicalRadioManager', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('does not report TCI write-confirm frequency timeouts as connection health failures', async () => {
+    const error = new RadioError({
+      code: RadioErrorCode.OPERATION_TIMEOUT,
+      message: 'TCI setFrequency failed: Timed out waiting for TCI state VFO:0,0,7074000',
+      userMessage: 'TCI radio operation failed',
+      severity: RadioErrorSeverity.WARNING,
+      context: { operation: 'setFrequency', protocol: 'tci', writeTimeout: true, recoverable: true },
+    });
+    const setFrequency = vi.fn().mockRejectedValue(error);
+    asTestManager(manager).connection = { setFrequency };
+
+    await expect(manager.setFrequency(7074000)).resolves.toBe(false);
+
+    expect(setFrequency).toHaveBeenCalledWith(7074000);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('does not report ICOM WLAN transient frequency fallback as a connection health failure', async () => {
     const getFrequency = vi.fn().mockResolvedValue(0);
     asTestManager(manager).connection = {
@@ -761,6 +778,27 @@ describe('PhysicalRadioManager', () => {
     expect(result.frequencyApplied).toBe(true);
     expect(result.modeApplied).toBe(false);
     expect(result.modeError?.message).toBe('protocol error');
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('downgrades TCI operating-state write timeouts instead of reconnecting', async () => {
+    const error = new RadioError({
+      code: RadioErrorCode.OPERATION_TIMEOUT,
+      message: 'TCI applyOperatingState failed: Timed out waiting for TCI reply to VFO:0,0,7074000;',
+      userMessage: 'TCI radio operation failed',
+      severity: RadioErrorSeverity.WARNING,
+      context: { operation: 'applyOperatingState', protocol: 'tci', writeTimeout: true, recoverable: true },
+    });
+    const applyOperatingState = vi.fn().mockRejectedValue(error);
+    asTestManager(manager).connection = {
+      applyOperatingState,
+      setKnownFrequency: vi.fn(),
+    };
+
+    const result = await manager.applyOperatingState({ frequency: 7074000, mode: 'DIGU' });
+
+    expect(result).toMatchObject({ frequencyApplied: false, modeApplied: false });
+    expect(result.modeError).toBe(error);
     expect(send).not.toHaveBeenCalled();
   });
 

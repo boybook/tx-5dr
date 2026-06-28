@@ -119,6 +119,13 @@
     "category": "backend"
   },
   {
+    "name": "tci-client-node",
+    "version": "0.1.0",
+    "license": "MIT",
+    "url": "https://github.com/boybook/tci-client-node",
+    "category": "backend"
+  },
+  {
     "name": "fast-jwt",
     "version": "4.x",
     "license": "MIT",

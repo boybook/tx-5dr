@@ -301,7 +301,19 @@
     "cwKeyDeviceBusy": "CW 键控端口 {{port}} 正被占用。请先停止当前 CW 键控器或关闭其他占用该串口的程序。",
     "cwKeyDeviceBusyDifferentSettings": "CW 键控端口 {{port}} 已由当前 CW 键控器以 {{currentMethod}} / {{currentActiveLevel}} 有效电平打开。若要测试 {{requestedMethod}} / {{requestedActiveLevel}} 有效电平，请先停止当前 CW 键控器，或保存设置并重启后再试。",
     "cwKeyerCurrentlyActive": "CW 键控器正在发报或手键中。请先停止当前 CW 发射，再运行硬件测试。",
-    "cwKeyReleaseFailed": "CW 释放命令未能送达 {{port}}。USB 串口可能在发射时掉线，请先确认电台已经停止发射，再重新连接设备并检查天线/馈线与 USB 线的距离。"
+    "cwKeyReleaseFailed": "CW 释放命令未能送达 {{port}}。USB 串口可能在发射时掉线，请先确认电台已经停止发射，再重新连接设备并检查天线/馈线与 USB 线的距离。",
+    "tciTitle": "TCI / SunSDR 电台",
+    "tciDesc": "通过 TCI WebSocket 连接 SunSDR / ExpertSDR，支持 CAT 控制和电台音频。",
+    "modeTci": "TCI / SunSDR",
+    "tciReceiver": "接收机",
+    "tciTrx": "发射机",
+    "tciVfo": "VFO",
+    "tciAudioEnabled": "启用 TCI 音频",
+    "tciAudioEnabledDesc": "将 TCI RX/TX 音频作为虚拟音频设备使用。",
+    "tciAudioSampleRate": "TCI 音频采样率",
+    "tipTci": "请在 ExpertSDR/SunSDR 中启用 TCI 服务；未修改时端口通常为 40001。",
+    "tipTciAudio": "需要 TX-5DR 使用电台音频流时，输入/输出设备请选择 TCI Audio。",
+    "tipTciCompensation": "TCI 模式：本机连接通常只需要较低网络补偿"
   },
   "audio": {
     "loading": "正在加载音频设备...",
@@ -374,7 +386,9 @@
     "serial": "Hamlib 直连电台",
     "serialDesc": "通过 Hamlib 直接连接受支持的电台，具体型号可能使用串口、服务器地址或设备路径。",
     "icomWlan": "ICOM WLAN",
-    "icomWlanDesc": "通过 Wi-Fi 连接 ICOM 电台"
+    "icomWlanDesc": "通过 Wi-Fi 连接 ICOM 电台",
+    "tci": "TCI / SunSDR",
+    "tciDesc": "ExpertSDR / SunSDR TCI WebSocket"
   },
   "common": {
     "error": "错误",

@@ -10,6 +10,7 @@ import type { VoiceSessionManager } from '../voice/VoiceSessionManager.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { ResourceManager, type SimplifiedResourceConfig } from '../utils/ResourceManager.js';
 import { IcomWlanAudioAdapter } from '../audio/IcomWlanAudioAdapter.js';
+import { TciAudioAdapter } from '../audio/TciAudioAdapter.js';
 import { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.js';
 import { AudioDeviceManager } from '../audio/audio-device-manager.js';
 import type { AudioSidecarController } from './AudioSidecarController.js';
@@ -78,6 +79,9 @@ export class EngineLifecycle {
 
   // ICOM WLAN 音频适配器
   private icomWlanAudioAdapter: IcomWlanAudioAdapter | null = null;
+
+  // TCI / SunSDR 音频适配器
+  private tciAudioAdapter: TciAudioAdapter | null = null;
 
   // OpenWebRX 音频适配器
   private openwebrxAudioAdapter: OpenWebRXAudioAdapter | null = null;
@@ -181,6 +185,12 @@ export class EngineLifecycle {
               throw new Error('ICOM WLAN IP or port missing');
             }
             logger.debug(`ICOM WLAN config validated: IP=${radioConfig.icomWlan.ip}, Port=${radioConfig.icomWlan.port}`);
+          } else if (radioConfig.type === 'tci') {
+            if (!radioConfig.tci?.host || !radioConfig.tci?.port) {
+              logger.error('TCI config incomplete:', radioConfig.tci);
+              throw new Error('TCI host or port missing');
+            }
+            logger.debug(`TCI config validated: ${radioConfig.tci.host}:${radioConfig.tci.port}`);
           }
           logger.debug('Applying radio config:', radioConfig);
           await radioManager.applyConfig(radioConfig);
@@ -220,6 +230,38 @@ export class EngineLifecycle {
             audioStreamManager.setIcomWlanAudioAdapter(null);
             this.icomWlanAudioAdapter = null;
             logger.debug('ICOM WLAN audio adapter cleaned up');
+          }
+        },
+        priority: 2,
+        dependencies: [],
+        optional: true,
+      },
+      {
+        name: 'tciAudioAdapter',
+        start: async () => {
+          const radioConfig = configManager.getRadioConfig();
+          if (radioConfig.type !== 'tci' || radioConfig.tci?.audioEnabled === false) {
+            logger.debug('Not TCI audio mode, skipping adapter init');
+            return;
+          }
+          logger.debug('Initializing TCI audio adapter');
+          const tciConnection = radioManager.getTciConnection();
+          if (!tciConnection || !tciConnection.isConnected()) {
+            logger.warn('TCI radio not connected, falling back to normal audio input');
+            return;
+          }
+          this.tciAudioAdapter = new TciAudioAdapter(tciConnection);
+          audioStreamManager.setTciAudioAdapter(this.tciAudioAdapter);
+          const audioDeviceManager = AudioDeviceManager.getInstance();
+          audioDeviceManager.setTciConnectedCallback(() => tciConnection.isConnected());
+          logger.debug('TCI audio adapter initialized');
+        },
+        stop: async () => {
+          if (this.tciAudioAdapter) {
+            this.tciAudioAdapter.stopReceiving();
+            audioStreamManager.setTciAudioAdapter(null);
+            this.tciAudioAdapter = null;
+            logger.debug('TCI audio adapter cleaned up');
           }
         },
         priority: 2,

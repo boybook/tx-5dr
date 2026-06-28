@@ -47,6 +47,8 @@ function isRedactedProfile(profile: RadioProfile): boolean {
       return !profile.radio.serial;
     case 'icom-wlan':
       return !profile.radio.icomWlan;
+    case 'tci':
+      return !profile.radio.tci;
     default:
       return false;
   }
@@ -87,6 +89,18 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   const handleAudioConfigChange = useCallback((config: AudioDeviceSettingsType) => {
     setEditAudioConfig(config);
     userManuallyChangedAudioRef.current = true;
+  }, []);
+
+  const handleRadioConfigChange = useCallback((config: HamlibConfig) => {
+    setEditRadioConfig((prev) => {
+      if (prev.type !== config.type && !userManuallyChangedAudioRef.current) {
+        if (config.type === 'icom-wlan' || config.type === 'tci') {
+          const deviceName = config.type === 'tci' ? 'TCI Audio' : 'ICOM WLAN';
+          setEditAudioConfig({ ...NEW_PROFILE_AUDIO_DEFAULTS, inputDeviceName: deviceName, outputDeviceName: deviceName });
+        }
+      }
+      return config;
+    });
   }, []);
 
   // 同步 profiles 到本地状态
@@ -214,6 +228,9 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
       case 'icom-wlan': return config.icomWlan?.ip
         ? `ICOM WLAN | ${config.icomWlan.ip}`
         : 'ICOM WLAN';
+      case 'tci': return config.tci?.host && config.tci?.port
+        ? `TCI / SunSDR | ${config.tci.host}:${config.tci.port}`
+        : 'TCI / SunSDR';
       default: return t('profileModal.unknownType');
     }
   };
@@ -359,8 +376,9 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     }
   };
 
-  // ICOM WLAN 检测：音频锁定提示
-  const isIcomWlan = editRadioConfig.type === 'icom-wlan';
+  // Radio-audio 模式检测：音频锁定提示
+  const radioAudioDeviceName = editRadioConfig.type === 'tci' ? 'TCI Audio' : 'ICOM WLAN';
+  const isRadioAudioMode = editRadioConfig.type === 'icom-wlan' || editRadioConfig.type === 'tci';
 
   // Reset manual-change flag when radio connection type changes
   const prevRadioTypeRef = useRef(editRadioConfig.type);
@@ -535,19 +553,19 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
           <RadioDeviceSettings
             ref={radioSettingsRef}
             initialConfig={editRadioConfig}
-            onChange={setEditRadioConfig}
+            onChange={handleRadioConfigChange}
           />
 
           <Divider />
 
           {/* 音频设置 */}
           <div>
-            {isIcomWlan && (
+            {isRadioAudioMode && (
               <Card shadow="none" radius="lg" classNames={{ base: 'border border-divider bg-content1 mb-3' }}>
                 <CardBody className="p-3">
                   <div className="flex items-center gap-2 text-primary">
                     <Chip size="sm" color="primary" variant="flat">{t('profileModal.icomDefault')}</Chip>
-                    <span className="text-sm">{t('profileModal.icomDefaultDesc')}</span>
+                    <span className="text-sm">{t(editRadioConfig.type === 'tci' ? 'profileModal.tciDefaultDesc' : 'profileModal.icomDefaultDesc', { device: radioAudioDeviceName })}</span>
                   </div>
                 </CardBody>
               </Card>

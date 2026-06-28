@@ -373,7 +373,7 @@ export class TransmissionPipeline {
   }
 
   private shouldReleasePTTImmediatelyAfterAudio(): boolean {
-    return this.deps.radioManager.getConfig().type === 'icom-wlan';
+    return this.deps.radioManager.getConfig().type === 'icom-wlan' || this.deps.radioManager.getConfig().type === 'tci';
   }
 
   private async handleEncodeComplete(result: {
@@ -567,7 +567,7 @@ export class TransmissionPipeline {
       });
 
       if (this.shouldReleasePTTImmediatelyAfterAudio()) {
-        logger.debug('ICOM WLAN audio complete, stopping PTT without post-audio hold');
+        logger.debug('Radio audio output complete, stopping PTT without post-audio hold');
         this.stopPTTPoll();
         await this.stopPTT();
       }

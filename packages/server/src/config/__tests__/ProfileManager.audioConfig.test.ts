@@ -227,6 +227,59 @@ describe('ProfileManager audio runtime config application', () => {
     expect(mockReloadAudioConfig).not.toHaveBeenCalled();
   });
 
+  it('defaults TCI Profiles to the TCI virtual audio device', async () => {
+    const manager = ProfileManager.getInstance();
+
+    const profile = await manager.createProfile({
+      name: 'SunSDR',
+      radio: {
+        type: 'tci',
+        tci: { host: '127.0.0.1', port: 40001, receiver: 0, trx: 0, vfo: 0, audioEnabled: true, audioSampleRate: 12000 },
+      } as RadioProfile['radio'],
+    });
+
+    expect(profile.audioLockedToRadio).toBe(true);
+    expect(profile.audio).toMatchObject({
+      inputDeviceName: 'TCI Audio',
+      outputDeviceName: 'TCI Audio',
+    });
+    expect(mockConfigManager.addProfile).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'SunSDR',
+      audioLockedToRadio: true,
+    }));
+  });
+
+  it('marks TCI Profile radio updates as locked to radio audio', async () => {
+    state.profiles = [makeProfile({
+      audio: {
+        inputDeviceName: undefined,
+        outputDeviceName: undefined,
+        inputSampleRate: 48000,
+        outputSampleRate: 48000,
+        inputBufferSize: 1024,
+        outputBufferSize: 1024,
+        outputSampleFormat: 'float32',
+        outputChannelMode: 'mono',
+      },
+    })];
+    const manager = ProfileManager.getInstance();
+
+    await manager.updateProfile('profile-1', {
+      radio: {
+        type: 'tci',
+        tci: { host: '127.0.0.1', port: 40001, receiver: 0, trx: 0, vfo: 0, audioEnabled: true, audioSampleRate: 12000 },
+      } as RadioProfile['radio'],
+    });
+
+    expect(mockConfigManager.updateProfile).toHaveBeenCalledWith('profile-1', expect.objectContaining({
+      audioLockedToRadio: true,
+      audio: expect.objectContaining({
+        inputDeviceName: 'TCI Audio',
+        outputDeviceName: 'TCI Audio',
+      }),
+    }));
+  });
+
   it('reloads audio config after activating a Profile before starting the engine', async () => {
     const manager = ProfileManager.getInstance();
 

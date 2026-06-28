@@ -13,7 +13,7 @@ import {
   Progress
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowRight, faArrowLeft, faCheck, faWifi, faPlug, faBan, faSatelliteDish } from '@fortawesome/free-solid-svg-icons';
+import { faArrowRight, faArrowLeft, faCheck, faWifi, faPlug, faBan, faSatelliteDish, faTowerBroadcast } from '@fortawesome/free-solid-svg-icons';
 import { addToast } from '@heroui/toast';
 import { api } from '@tx5dr/core';
 import type { HamlibConfig, AudioDeviceSettings as AudioDeviceSettingsType, SupportedRig } from '@tx5dr/contracts';
@@ -29,7 +29,7 @@ interface ProfileSetupOverlayProps {
   isOpen: boolean;
 }
 
-type RadioType = 'none' | 'network' | 'serial' | 'icom-wlan';
+type RadioType = 'none' | 'network' | 'serial' | 'icom-wlan' | 'tci';
 
 export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
   const { t } = useTranslation();
@@ -38,6 +38,7 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
     { type: 'serial' as RadioType, icon: faPlug, title: t('settings:radioType.serial'), description: t('settings:radioType.serialDesc') },
     { type: 'network' as RadioType, icon: faSatelliteDish, title: t('settings:radioType.network'), description: t('settings:radioType.networkDesc') },
     { type: 'icom-wlan' as RadioType, icon: faWifi, title: t('settings:radioType.icomWlan'), description: t('settings:radioType.icomWlanDesc') },
+    { type: 'tci' as RadioType, icon: faTowerBroadcast, title: t('settings:radioType.tci'), description: t('settings:radioType.tciDesc') },
   ], [t]);
   const [step, setStep] = useState(0); // 0=选类型, 1=填配置, 2=选音频, 3=命名
   const [selectedType, setSelectedType] = useState<RadioType | null>(null);
@@ -98,12 +99,16 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
   // 步骤1：选择类型后
   const handleSelectType = (type: RadioType) => {
     setSelectedType(type);
-    setRadioConfig({ type } as HamlibConfig);
+    setRadioConfig(type === 'tci' ? {
+      type,
+      tci: { host: '127.0.0.1', port: 40001, receiver: 0, trx: 0, vfo: 0, audioEnabled: true, audioSampleRate: 12000 },
+    } as HamlibConfig : { type } as HamlibConfig);
     autoAudioAppliedRef.current = null;
     userManuallyChangedAudioRef.current = false;
-    // ICOM WLAN 默认使用电台音频设备
-    if (type === 'icom-wlan') {
-      setAudioConfig({ ...NEW_PROFILE_AUDIO_DEFAULTS, inputDeviceName: 'ICOM WLAN', outputDeviceName: 'ICOM WLAN' });
+    // Radio-audio modes default to their virtual radio audio device
+    if (type === 'icom-wlan' || type === 'tci') {
+      const deviceName = type === 'tci' ? 'TCI Audio' : 'ICOM WLAN';
+      setAudioConfig({ ...NEW_PROFILE_AUDIO_DEFAULTS, inputDeviceName: deviceName, outputDeviceName: deviceName });
     } else {
       setAudioConfig(NEW_PROFILE_AUDIO_DEFAULTS);
     }
@@ -178,6 +183,7 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
   const getDefaultName = () => {
     switch (selectedType) {
       case 'icom-wlan': return 'ICOM WLAN';
+      case 'tci': return 'TCI / SunSDR';
       case 'network': return t('settings:radioType.network');
       case 'serial': return t('settings:radioType.serial');
       case 'none': return t('settings:radioType.none');

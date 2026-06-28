@@ -31,15 +31,16 @@ export class ProfileManager {
     const configManager = ConfigManager.getInstance();
     const now = Date.now();
 
-    // ICOM WLAN 模式下，仅在用户未指定音频设备时默认使用 ICOM WLAN 虚拟设备
-    const audioLockedToRadio = data.radio.type === 'icom-wlan';
+    // Radio-audio modes default to their virtual audio device when the user has not specified one.
+    const audioLockedToRadio = data.radio.type === 'icom-wlan' || data.radio.type === 'tci';
+    const radioAudioDeviceName = data.radio.type === 'tci' ? 'TCI Audio' : 'ICOM WLAN';
     let audio: AudioDeviceSettings = normalizeAudioDeviceSettings(data.audio || { inputSampleRate: 48000, outputSampleRate: 48000, inputBufferSize: 1024, outputBufferSize: 1024 });
 
     if (audioLockedToRadio && !audio.inputDeviceName && !audio.outputDeviceName) {
       audio = {
         ...audio,
-        inputDeviceName: 'ICOM WLAN',
-        outputDeviceName: 'ICOM WLAN',
+        inputDeviceName: radioAudioDeviceName,
+        outputDeviceName: radioAudioDeviceName,
       };
     }
 
@@ -70,16 +71,17 @@ export class ProfileManager {
     const configManager = ConfigManager.getInstance();
     const existingProfile = configManager.getProfile(id);
 
-    // 如果更新了电台类型为 icom-wlan，标记锁定但不强制覆盖用户的音频设备选择
-    if (updates.radio?.type === 'icom-wlan') {
+    // 如果更新了电台类型为 radio-audio 模式，标记锁定但不强制覆盖用户的音频设备选择
+    if (updates.radio?.type === 'icom-wlan' || updates.radio?.type === 'tci') {
       updates.audioLockedToRadio = true;
-      // 仅在未提供音频配置时默认设置 ICOM WLAN 虚拟设备
+      const radioAudioDeviceName = updates.radio.type === 'tci' ? 'TCI Audio' : 'ICOM WLAN';
+      // 仅在未提供音频配置时默认设置对应虚拟设备
       if (!updates.audio) {
         if (!existingProfile?.audio?.inputDeviceName && !existingProfile?.audio?.outputDeviceName) {
           updates.audio = {
             ...normalizeAudioDeviceSettings(existingProfile?.audio),
-            inputDeviceName: 'ICOM WLAN',
-            outputDeviceName: 'ICOM WLAN',
+            inputDeviceName: radioAudioDeviceName,
+            outputDeviceName: radioAudioDeviceName,
           };
         }
       }
