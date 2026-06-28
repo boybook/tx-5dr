@@ -262,6 +262,17 @@
     "suggestionCheckRtcDataPublicEndpoint": "パブリック ネットワーク UDP エンドポイント {{endpoint}} がこの TX-5DR サーバーに正しくマッピングされていることを確認します。",
     "suggestionFallbackWsCompat": "現在のネットワークで UDP が使用できない場合は、セッションを自動的に ws-compat にフォールバックさせるか、互換性モードを直接強制します。"
   },
+  "fakeFrequency": {
+    "toggle": "仮想周波数オフセット",
+    "tooltipOn": "仮想周波数オフセット: オン（FT8/FT4 送信音声キャリアを無線機のスイートスポットに保持）",
+    "tooltipOff": "仮想周波数オフセット: オフ（FT8/FT4 のみ使用可能、クリックして高/低音声の電力低下を回避）",
+    "tooltipDisabledMultiOp": "仮想周波数オフセット: 無効（複数オペレーター送信中、周波数重複を回避）",
+    "toggleFailed": "仮想周波数オフセットの切り替えに失敗しました",
+    "lowPowerTitle": "送信電力が低い",
+    "lowPowerHint": "現在の送信音声は中央帯域から外れており、一部の無線機はここで顕著に電力が低下します。仮想周波数オフセットを有効にすると、送信中に音声キャリアをスイートスポットに保持しますが、実際のオンエア位置は同じままです。",
+    "enableNow": "今すぐ有効にする",
+    "dontRemind": "次回から表示しない"
+  },
   "tuner": {
     "control": "自然なコントロール",
     "switch": "空調整スイッチ",

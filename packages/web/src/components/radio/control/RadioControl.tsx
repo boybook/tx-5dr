@@ -636,6 +636,22 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     radioMode.engineMode,
     radioMode.currentMode?.name,
   );
+  const fakeFrequencyState = React.useMemo(() => {
+    const enabled = radioConnection.radioConfig?.fakeFrequency?.enabled;
+    const effective = radioConnection.fakeFrequencyEffective;
+    const disabledByMultiOp = enabled && !effective;
+    const tooltipLabel = disabledByMultiOp
+      ? t('fakeFrequency.tooltipDisabledMultiOp')
+      : enabled
+        ? t('fakeFrequency.tooltipOn')
+        : t('fakeFrequency.tooltipOff');
+    const buttonClass = disabledByMultiOp
+      ? 'text-default-300'
+      : enabled
+        ? 'text-success'
+        : 'text-default-400';
+    return { enabled, effective, disabledByMultiOp, tooltipLabel, buttonClass };
+  }, [radioConnection.radioConfig?.fakeFrequency?.enabled, radioConnection.fakeFrequencyEffective, t]);
   const tunerEnabled = typeof tunerSwitchCapState?.value === 'boolean' ? tunerSwitchCapState.value : false;
   const tunerIsTuning = (tunerSwitchCapState?.meta as { status?: string } | undefined)?.status === 'tuning';
   const tuneToneActive = tuneToneStatus.active;
@@ -2481,23 +2497,15 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
             )}
             {/* 虚拟频差快捷开关：仅在 FT8/FT4 数字模式下露出 */}
             {showFakeFrequencyEntry && (
-              <ToolbarIconTooltip
-                label={radioConnection.radioConfig?.fakeFrequency?.enabled
-                  ? t('fakeFrequency.tooltipOn')
-                  : t('fakeFrequency.tooltipOff')}
-              >
+              <ToolbarIconTooltip label={fakeFrequencyState.tooltipLabel}>
                 <Button
                   isIconOnly
                   variant="light"
                   size="sm"
-                  className={`min-w-unit-6 min-w-6 w-6 h-6 ${
-                    radioConnection.radioConfig?.fakeFrequency?.enabled
-                      ? 'text-success'
-                      : 'text-default-400'
-                  }`}
+                  className={`min-w-unit-6 min-w-6 w-6 h-6 ${fakeFrequencyState.buttonClass}`}
                   aria-label={t('fakeFrequency.toggle')}
                   onPress={async () => {
-                    const next = !radioConnection.radioConfig?.fakeFrequency?.enabled;
+                    const next = !fakeFrequencyState.enabled;
                     try {
                       await api.setFakeFrequency(next);
                     } catch (error) {

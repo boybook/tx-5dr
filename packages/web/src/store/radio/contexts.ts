@@ -76,6 +76,7 @@ export const RadioConnectionContext = createContext<{
   radioConnectionHealth: { connectionHealthy: boolean } | null;
   coreCapabilities: CoreRadioCapabilities | null;
   coreCapabilityDiagnostics: CoreCapabilityDiagnostics | null;
+  fakeFrequencyEffective: boolean;
 } | undefined>(undefined);
 
 export const RadioModeContext = createContext<{

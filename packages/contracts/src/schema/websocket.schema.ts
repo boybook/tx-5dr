@@ -977,6 +977,8 @@ export const WSRadioStatusChangedMessageSchema = WSBaseMessageSchema.extend({
     meterCapabilities: MeterCapabilitiesSchema.optional(), // 电台数值表能力（connected=true 时应始终携带）
     /** @deprecated Tuner capability is now in radioCapabilityList event. Kept for backward compat. */
     tunerCapabilities: TunerCapabilitiesSchema.optional(),
+    /** 虚拟频差实际生效状态（多op发射时为 false） */
+    fakeFrequencyEffective: z.boolean().optional(),
   }),
 });
 

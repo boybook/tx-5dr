@@ -326,13 +326,22 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       },
       getKnownRadioFrequency: () => this.radioManager.getKnownFrequency(),
       // 虚拟频差：仅 FT8/FT4 生效，并与 rig split 互斥（split 开启时本功能让步，避免双重 dial 操作）
+      // 多op同时发射时禁用，避免所有op在同一频率发射重叠
       getFakeFrequencyEnabled: () => {
         try {
           if (!isFakeFrequencySupportedMode(this.engineMode, this.currentMode)) {
             return false;
           }
           const enabled = !!this.radioManager?.getConfig()?.fakeFrequency?.enabled;
-          return enabled && !this.radioManager?.isSplitEnabled?.();
+          if (!enabled || this.radioManager?.isSplitEnabled?.()) {
+            return false;
+          }
+          // 多op发射时禁用虚拟频差
+          const transmittingCount = this._operatorManager.getTransmittingOperatorCount();
+          if (transmittingCount > 1) {
+            return false;
+          }
+          return true;
         } catch {
           return false;
         }
@@ -641,14 +650,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     try {
       const radioManager = this.radioManager;
       const radioInfo = await radioManager.getRadioInfo();
-      this.emit('radioStatusChanged', buildRadioStatusPayload({
+      const payload = buildRadioStatusPayload({
         connected: radioManager.isConnected(),
         status: radioManager.getConnectionStatus(),
         radioInfo,
         radioConfig: radioManager.getConfig(),
         reason: 'Fake frequency setting updated',
         radioManager,
-      }));
+      });
+      // 添加虚拟频差实际生效状态
+      (payload as any).fakeFrequencyEffective = this._operatorManager.isFakeFrequencyEffective();
+      this.emit('radioStatusChanged', payload);
     } catch (error) {
       logger.error('Failed to broadcast radio status after fake frequency update', error);
     }
@@ -1156,6 +1168,27 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getStatus: () => this.getStatus(),
     });
     this.engineLifecycle.setVoiceSessionManager(this.voiceSessionManager);
+
+    // 监听操作员状态变化，广播虚拟频差实际生效状态
+    this.on('operatorStatusUpdate' as any, () => {
+      try {
+        const radioManager = this.radioManager;
+        if (!radioManager) return;
+        const payload = buildRadioStatusPayload({
+          connected: radioManager.isConnected(),
+          status: radioManager.getConnectionStatus(),
+          radioInfo: null,
+          radioConfig: radioManager.getConfig(),
+          reason: 'Operator status changed',
+          radioManager,
+        });
+        // 添加虚拟频差实际生效状态
+        (payload as any).fakeFrequencyEffective = this._operatorManager.isFakeFrequencyEffective();
+        this.emit('radioStatusChanged', payload);
+      } catch (error) {
+        logger.warn('Failed to broadcast fake frequency status on operator status change', error);
+      }
+    });
   }
 
   private async initializeVoiceSessionManager(): Promise<void> {

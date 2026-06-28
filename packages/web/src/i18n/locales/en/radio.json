@@ -301,6 +301,7 @@
     "toggle": "Virtual Frequency Offset",
     "tooltipOn": "Virtual Frequency Offset: on (keeps FT8/FT4 TX audio carrier in the radio's sweet spot)",
     "tooltipOff": "Virtual Frequency Offset: off (FT8/FT4 only; click to avoid power roll-off at high/low audio)",
+    "tooltipDisabledMultiOp": "Virtual Frequency Offset: disabled (multiple operators transmitting, avoiding frequency overlap)",
     "toggleFailed": "Failed to toggle Virtual Frequency Offset",
     "lowPowerTitle": "Low TX power",
     "lowPowerHint": "Your TX audio is away from the center band, where some radios output noticeably less power. Enabling Virtual Frequency Offset keeps the audio carrier in the sweet spot during TX while the actual on-air position stays the same.",

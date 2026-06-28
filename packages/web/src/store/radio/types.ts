@@ -108,6 +108,7 @@ export interface RadioState {
   splitEnabled: boolean;
   splitTxFrequency: number | null;
   splitTxFrequencyWritable: boolean;
+  fakeFrequencyEffective: boolean;
 }
 
 export interface ErrorEventData {
