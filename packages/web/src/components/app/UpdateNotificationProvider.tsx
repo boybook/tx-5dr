@@ -63,19 +63,7 @@ function isSeen(status: SystemUpdateStatus): boolean {
   }
 }
 
-function normalizeElectronStatus(status: DesktopUpdateStatus): UpdateStatusWithDownloads {
-  return {
-    ...status,
-    currentDigest: null,
-    latestDigest: null,
-    websiteUrl: status.websiteUrl || 'https://tx5dr.com',
-  };
-}
-
 async function fetchUpdateStatus(): Promise<UpdateStatusWithDownloads | null> {
-  if (window.electronAPI?.updater?.check) {
-    return normalizeElectronStatus(await window.electronAPI.updater.check());
-  }
   return api.getSystemUpdateStatus();
 }
 

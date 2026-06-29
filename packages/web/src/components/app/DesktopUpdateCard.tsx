@@ -6,6 +6,12 @@ import type { SystemUpdateStatus } from '@tx5dr/contracts';
 import { createLogger } from '../../utils/logger';
 import type { DesktopUpdateStatus } from '../../types/electron';
 import { useUpdateNotification, type UpdateStatusWithDownloads } from './UpdateNotificationProvider';
+import {
+  canAutoDownloadDesktopUpdate,
+  canInstallDownloadedDesktopUpdate,
+  isElectronUpdateTarget,
+  resolveUpdateTargetLabelKey,
+} from './updateTargetPresentation';
 
 const logger = createLogger('DesktopUpdateCard');
 const DESKTOP_UPDATE_COMMITS_URL = 'https://github.com/boybook/tx-5dr/commits/main';
@@ -60,7 +66,7 @@ function formatVersionValue(value?: string | null): string {
 export function DesktopUpdateCard() {
   const { t } = useTranslation('common');
   const updateNotification = useUpdateNotification();
-  const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
+  const hasElectronUpdater = typeof window !== 'undefined' && !!window.electronAPI?.updater;
   const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateState | null>(null);
   const [desktopUpdateBusyAction, setDesktopUpdateBusyAction] = useState<'check' | 'download' | 'install' | 'openWebsite' | 'openCommits' | null>(null);
   const [desktopUpdateError, setDesktopUpdateError] = useState('');
@@ -71,14 +77,6 @@ export function DesktopUpdateCard() {
       if (updateNotification.status) {
         setDesktopUpdateStatus(updateNotification.status as DesktopUpdateState);
         setDesktopUpdateError(updateNotification.status.errorMessage || '');
-        setDesktopUpdateExpanded(false);
-        return;
-      }
-
-      if (window.electronAPI?.updater?.getStatus) {
-        const status = await window.electronAPI.updater.getStatus();
-        setDesktopUpdateStatus(status as DesktopUpdateState);
-        setDesktopUpdateError(status.errorMessage || '');
         setDesktopUpdateExpanded(false);
         return;
       }
@@ -104,28 +102,13 @@ export function DesktopUpdateCard() {
     }
   }, [updateNotification.status]);
 
-  useEffect(() => {
-    if (!window.electronAPI?.updater?.onStatus) return undefined;
-    const handleStatus = (status: DesktopUpdateStatus) => {
-      setDesktopUpdateStatus(status as DesktopUpdateState);
-      setDesktopUpdateError(status.errorMessage || '');
-    };
-    window.electronAPI.updater.onStatus(handleStatus);
-    return () => {
-      window.electronAPI?.updater?.offStatus?.(handleStatus);
-    };
-  }, []);
-
   const handleCheckDesktopUpdate = useCallback(async () => {
     setDesktopUpdateBusyAction('check');
     setDesktopUpdateError('');
     try {
-      let status: UpdateStatusWithDownloads | SystemUpdateStatus | DesktopUpdateStatus | null = null;
+      let status: UpdateStatusWithDownloads | SystemUpdateStatus | null = null;
       if (updateNotification.refresh) {
         status = await updateNotification.refresh();
-      }
-      if (!status && window.electronAPI?.updater?.check) {
-        status = await window.electronAPI.updater.check();
       }
       if (!status) {
         status = await api.getSystemUpdateStatus();
@@ -216,22 +199,18 @@ export function DesktopUpdateCard() {
   const desktopUpdateProgressLabel = desktopUpdateProgress
     ? `${Math.round(desktopUpdateProgress.percent)}%`
     : '';
-  const canAutoDownloadDesktopUpdate = Boolean(
-    isElectron
-    && desktopUpdateStatus?.updateAvailable
-    && desktopUpdateStatus?.autoUpdateSupported
-    && desktopUpdatePhase !== 'downloaded'
-    && desktopUpdatePhase !== 'installing',
-  );
-  const canInstallDownloadedDesktopUpdate = Boolean(isElectron && (desktopUpdateStatus?.downloaded || desktopUpdatePhase === 'downloaded'));
-  const isElectronUpdateTarget = isElectron || desktopUpdateStatus?.target === 'electron-app';
-  const updateTargetLabel = isElectronUpdateTarget
-    ? t('system.updateTargetElectron', 'Electron')
-    : desktopUpdateStatus?.target === 'docker'
-      ? t('system.updateTargetDocker', 'Docker')
-      : desktopUpdateStatus?.target === 'android-runtime'
-        ? t('system.updateTargetAndroidRuntime', 'Android Runtime')
-        : t('system.updateTargetLinuxServer', 'Linux Server');
+  const canAutoDownload = canAutoDownloadDesktopUpdate(desktopUpdateStatus, hasElectronUpdater);
+  const canInstallDownloaded = canInstallDownloadedDesktopUpdate(desktopUpdateStatus, hasElectronUpdater);
+  const isElectronTarget = isElectronUpdateTarget(desktopUpdateStatus);
+  const updateTargetLabel = t(resolveUpdateTargetLabelKey(desktopUpdateStatus), {
+    defaultValue: isElectronTarget
+      ? 'Electron'
+      : desktopUpdateStatus?.target === 'docker'
+        ? 'Docker'
+        : desktopUpdateStatus?.target === 'android-runtime'
+          ? 'Android Runtime'
+          : 'Linux Server',
+  });
   const desktopRecentCommits = desktopUpdateStatus?.recentCommits || [];
 
   return (
@@ -241,7 +220,7 @@ export function DesktopUpdateCard() {
           <div>
             <h4 className={CARD_TITLE_CLASS}>{t('system.updateTitle', 'Version Updates')}</h4>
             <p className={`mt-1 ${CARD_DESC_CLASS}`}>
-              {isElectronUpdateTarget
+              {isElectronTarget
                 ? t('system.desktopUpdateDesc')
                 : t('system.updateWebsiteOnlyDesc', 'Checks whether a newer build exists. This deployment is updated outside the web UI; use the official website for instructions.')}
             </p>
@@ -413,7 +392,7 @@ export function DesktopUpdateCard() {
             {t('system.desktopUpdateCheck')}
           </Button>
 
-          {isElectronUpdateTarget && canAutoDownloadDesktopUpdate && (
+          {isElectronTarget && canAutoDownload && (
             <Button
               color="primary"
               onPress={() => { void handleDownloadDesktopUpdate(); }}
@@ -424,7 +403,7 @@ export function DesktopUpdateCard() {
             </Button>
           )}
 
-          {isElectronUpdateTarget && canInstallDownloadedDesktopUpdate && (
+          {isElectronTarget && canInstallDownloaded && (
             <Button
               color="success"
               onPress={() => { void handleInstallDesktopUpdate(); }}
@@ -435,7 +414,7 @@ export function DesktopUpdateCard() {
             </Button>
           )}
 
-          {isElectronUpdateTarget && !canAutoDownloadDesktopUpdate && !canInstallDownloadedDesktopUpdate && (
+          {isElectronTarget && !canAutoDownload && !canInstallDownloaded && (
             <Button
               color="primary"
               onPress={() => { void handleOpenUpdateWebsite(); }}
@@ -446,7 +425,7 @@ export function DesktopUpdateCard() {
             </Button>
           )}
 
-          {!isElectronUpdateTarget && (
+          {!isElectronTarget && (
             <Button
               color="primary"
               onPress={() => { void handleOpenUpdateWebsite(); }}
