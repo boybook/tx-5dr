@@ -63,6 +63,14 @@ const MODAL_MIN_HEIGHT: Record<'sm' | 'md' | 'lg', number> = {
 type ToolbarTone = NonNullable<PanelMeta['tone']>;
 
 const DEFAULT_TOOLBAR_TONE: ToolbarTone = 'default';
+const TOOLBAR_TONE_CLASS: Record<ToolbarTone, string> = {
+  default: 'text-default-400',
+  primary: 'text-primary',
+  secondary: 'text-secondary',
+  success: 'text-success',
+  warning: 'text-warning',
+  danger: 'text-danger',
+};
 
 interface ToolbarIconTooltipProps {
   label: string;
@@ -270,9 +278,8 @@ const RadioControlToolbarButton: React.FC<{ entry: RadioControlToolbarEntry }> =
     <Button
       isIconOnly
       variant="light"
-      color={tone}
       size="sm"
-      className={TOOLBAR_BUTTON_CLASS}
+      className={`${TOOLBAR_BUTTON_CLASS} ${TOOLBAR_TONE_CLASS[tone]}`}
       aria-label={entry.resolvedTitle}
       onPress={entry.openMode === 'modal' ? () => setIsModalOpen(true) : undefined}
     >
