@@ -621,6 +621,15 @@ export interface PanelMeta {
    * - true / undefined: normal display
    */
   visible?: boolean;
+
+  /**
+   * Optional toolbar accent tone.
+   *
+   * The current host uses this on `radio-control-toolbar` iframe entries to
+   * tint the button when the plugin wants to signal status such as alerts or
+   * recent activity. Other panel hosts may ignore this field.
+   */
+  tone?: 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
 }
 
 /**

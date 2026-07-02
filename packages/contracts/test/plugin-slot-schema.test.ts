@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PluginPanelDescriptorSchema, PluginPanelSlotSchema } from '../src/schema/plugin.schema';
+import { PluginPanelDescriptorSchema, PluginPanelMetaSchema, PluginPanelSlotSchema } from '../src/schema/plugin.schema';
 
 describe('PluginPanelSlotSchema', () => {
   it('accepts every supported plugin panel slot', () => {
@@ -87,5 +87,15 @@ describe('PluginPanelSlotSchema', () => {
       slot: 'radio-control-toolbar',
       uiSize: 'xl',
     })).toThrow();
+  });
+
+  it('accepts toolbar tone metadata for runtime panel updates', () => {
+    expect(PluginPanelMetaSchema.parse({
+      tone: 'warning',
+      title: 'alertTitle',
+    })).toMatchObject({
+      tone: 'warning',
+      title: 'alertTitle',
+    });
   });
 });

@@ -564,6 +564,7 @@ export const PluginPanelMetaSchema = z.object({
   title: z.string().nullable().optional(),
   titleValues: z.record(z.unknown()).optional(),
   visible: z.boolean().optional(),
+  tone: z.enum(['default', 'primary', 'secondary', 'success', 'warning', 'danger']).optional(),
 });
 export type PluginPanelMeta = z.infer<typeof PluginPanelMetaSchema>;
 

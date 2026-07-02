@@ -7,6 +7,7 @@ export interface PanelMeta {
   title?: string | null;
   titleValues?: Record<string, unknown>;
   visible?: boolean;
+  tone?: 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
 }
 
 function getPanelMetaKey(payload: Pick<PluginPanelMetaPayload, 'pluginName' | 'operatorId' | 'panelId'>): string {
