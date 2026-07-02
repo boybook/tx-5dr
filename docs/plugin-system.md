@@ -758,6 +758,8 @@ interface PanelMeta {
   title?: string | null;
   titleValues?: Record<string, unknown>;
   visible?: boolean;
+  /** 工具栏按钮色调，用于信号状态（如告警、新消息） */
+  tone?: 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
 }
 
 interface PluginUIHandler {
