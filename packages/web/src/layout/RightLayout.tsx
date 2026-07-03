@@ -373,7 +373,7 @@ export const RightLayout: React.FC = () => {
                 isDragging={isDraggingSplit}
                 onMouseDown={handleSplitMouseDown}
               />
-              <div className="relative z-10 min-h-0 flex-1 overflow-y-auto overscroll-contain">
+              <div className="relative z-10 min-h-0 flex-1 overflow-y-scroll overscroll-contain [scrollbar-gutter:stable]">
                 <RadioOperatorList onCreateOperator={handleCreateOperator} />
               </div>
             </div>
