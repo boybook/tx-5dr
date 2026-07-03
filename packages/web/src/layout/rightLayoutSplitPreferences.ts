@@ -1,6 +1,7 @@
 export const DEFAULT_RIGHT_LAYOUT_SPLIT_PERCENT = 50;
 export const RIGHT_LAYOUT_SPLIT_DIVIDER_HEIGHT_PX = 8;
 export const RIGHT_LAYOUT_MIN_PANE_HEIGHT_PX = 180;
+export const RIGHT_LAYOUT_SPLIT_STORAGE_KEY = 'tx5dr_right_layout_split_percent';
 
 export function normalizeRightLayoutSplitPercent(
   value: unknown,
@@ -17,6 +18,37 @@ export function normalizeRightLayoutSplitPercent(
   }
 
   return Math.min(99, Math.max(1, numeric));
+}
+
+function getLocalStorage(): Storage | null {
+  if (typeof globalThis === 'undefined' || !('localStorage' in globalThis)) {
+    return null;
+  }
+
+  return globalThis.localStorage ?? null;
+}
+
+export function getStoredRightLayoutSplitPercent(): number {
+  try {
+    const storage = getLocalStorage();
+    const raw = storage?.getItem(RIGHT_LAYOUT_SPLIT_STORAGE_KEY);
+    return normalizeRightLayoutSplitPercent(raw, DEFAULT_RIGHT_LAYOUT_SPLIT_PERCENT);
+  } catch {
+    return DEFAULT_RIGHT_LAYOUT_SPLIT_PERCENT;
+  }
+}
+
+export function saveRightLayoutSplitPercent(splitPercent: number): number {
+  const normalized = normalizeRightLayoutSplitPercent(splitPercent, DEFAULT_RIGHT_LAYOUT_SPLIT_PERCENT);
+
+  try {
+    const storage = getLocalStorage();
+    storage?.setItem(RIGHT_LAYOUT_SPLIT_STORAGE_KEY, String(normalized));
+  } catch {
+    // Ignore storage write failures and keep the in-memory split.
+  }
+
+  return normalized;
 }
 
 export function clampRightLayoutSplitPercent(params: {
