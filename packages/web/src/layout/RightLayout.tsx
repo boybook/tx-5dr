@@ -23,8 +23,10 @@ import { OPEN_ACCOUNT_SECURITY_MODAL_EVENT } from '../components/app/GlobalModal
 import {
   clampRightLayoutSplitPercent,
   DEFAULT_RIGHT_LAYOUT_SPLIT_PERCENT,
+  getStoredRightLayoutSplitPercent,
   getRightLayoutPaneHeights,
   RIGHT_LAYOUT_SPLIT_DIVIDER_HEIGHT_PX,
+  saveRightLayoutSplitPercent,
 } from './rightLayoutSplitPreferences';
 
 function RightLayoutPaneDivider({
@@ -72,7 +74,7 @@ export const RightLayout: React.FC = () => {
   const [selectedMode, setSelectedMode] = useState<string>('auto5');
   const [loginPopoverOpen, setLoginPopoverOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [splitPercent, setSplitPercent] = useState(DEFAULT_RIGHT_LAYOUT_SPLIT_PERCENT);
+  const [splitPercent, setSplitPercent] = useState(() => getStoredRightLayoutSplitPercent());
   const [workspaceHeight, setWorkspaceHeight] = useState(0);
   const [isDraggingSplit, setIsDraggingSplit] = useState(false);
   const splitWorkspaceRef = useRef<HTMLDivElement | null>(null);
@@ -151,6 +153,23 @@ export const RightLayout: React.FC = () => {
     };
   }, [isMobile]);
 
+  useEffect(() => {
+    if (isMobile) {
+      return;
+    }
+
+    setSplitPercent((currentSplitPercent) => {
+      if (workspaceHeight <= 0) {
+        return currentSplitPercent;
+      }
+
+      return clampRightLayoutSplitPercent({
+        splitPercent: currentSplitPercent,
+        containerHeight: workspaceHeight,
+      });
+    });
+  }, [isMobile, workspaceHeight]);
+
   const handleSplitMouseDown = useCallback((event: React.MouseEvent) => {
     if (isMobile) {
       return;
@@ -200,6 +219,14 @@ export const RightLayout: React.FC = () => {
       document.body.style.userSelect = '';
     };
   }, [handleSplitMouseMove, handleSplitMouseUp, isDraggingSplit]);
+
+  useEffect(() => {
+    if (isMobile) {
+      return;
+    }
+
+    saveRightLayoutSplitPercent(splitPercent);
+  }, [isMobile, splitPercent]);
 
   const desktopPaneHeights = getRightLayoutPaneHeights({
     splitPercent,
