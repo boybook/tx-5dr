@@ -31,19 +31,19 @@ import {
 
 function RightLayoutPaneDivider({
   isDragging,
-  onMouseDown,
+  onPointerDown,
 }: {
   isDragging: boolean;
-  onMouseDown: (event: React.MouseEvent) => void;
+  onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
 }) {
   return (
     <div
       className={[
-        'group flex-shrink-0 cursor-row-resize transition-all duration-200',
+        'group touch-none flex-shrink-0 cursor-row-resize transition-all duration-200',
         isDragging ? 'bg-primary-400' : 'bg-transparent hover:bg-primary-200',
       ].join(' ')}
       style={{ height: `${RIGHT_LAYOUT_SPLIT_DIVIDER_HEIGHT_PX}px` }}
-      onMouseDown={onMouseDown}
+      onPointerDown={onPointerDown}
     >
       <div className="relative h-full w-full">
         <div
@@ -78,6 +78,7 @@ export const RightLayout: React.FC = () => {
   const [workspaceHeight, setWorkspaceHeight] = useState(0);
   const [isDraggingSplit, setIsDraggingSplit] = useState(false);
   const splitWorkspaceRef = useRef<HTMLDivElement | null>(null);
+  const activeSplitPointerIdRef = useRef<number | null>(null);
   const dragStartYRef = useRef(0);
   const dragStartSplitPercentRef = useRef(DEFAULT_RIGHT_LAYOUT_SPLIT_PERCENT);
   const showAuthenticatedIdentity = Boolean(authState.role) && (Boolean(authState.jwt) || !authState.authEnabled);
@@ -170,22 +171,37 @@ export const RightLayout: React.FC = () => {
     });
   }, [isMobile, workspaceHeight]);
 
-  const handleSplitMouseDown = useCallback((event: React.MouseEvent) => {
+  const handleSplitPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (isMobile) {
+      return;
+    }
+    if (!event.isPrimary) {
+      return;
+    }
+    if (event.pointerType === 'mouse' && event.button !== 0) {
       return;
     }
 
     event.preventDefault();
+    event.stopPropagation();
+    activeSplitPointerIdRef.current = event.pointerId;
     dragStartYRef.current = event.clientY;
     dragStartSplitPercentRef.current = splitPercent;
     setIsDraggingSplit(true);
   }, [isMobile, splitPercent]);
 
-  const handleSplitMouseUp = useCallback(() => {
+  const handleSplitPointerEnd = useCallback((event: PointerEvent) => {
+    if (activeSplitPointerIdRef.current !== event.pointerId) {
+      return;
+    }
+    activeSplitPointerIdRef.current = null;
     setIsDraggingSplit(false);
   }, []);
 
-  const handleSplitMouseMove = useCallback((event: MouseEvent) => {
+  const handleSplitPointerMove = useCallback((event: PointerEvent) => {
+    if (activeSplitPointerIdRef.current !== event.pointerId) {
+      return;
+    }
     if (!splitWorkspaceRef.current) {
       return;
     }
@@ -207,18 +223,20 @@ export const RightLayout: React.FC = () => {
       return;
     }
 
-    document.addEventListener('mousemove', handleSplitMouseMove);
-    document.addEventListener('mouseup', handleSplitMouseUp);
+    document.addEventListener('pointermove', handleSplitPointerMove);
+    document.addEventListener('pointerup', handleSplitPointerEnd);
+    document.addEventListener('pointercancel', handleSplitPointerEnd);
     document.body.style.cursor = 'row-resize';
     document.body.style.userSelect = 'none';
 
     return () => {
-      document.removeEventListener('mousemove', handleSplitMouseMove);
-      document.removeEventListener('mouseup', handleSplitMouseUp);
+      document.removeEventListener('pointermove', handleSplitPointerMove);
+      document.removeEventListener('pointerup', handleSplitPointerEnd);
+      document.removeEventListener('pointercancel', handleSplitPointerEnd);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
-  }, [handleSplitMouseMove, handleSplitMouseUp, isDraggingSplit]);
+  }, [handleSplitPointerEnd, handleSplitPointerMove, isDraggingSplit]);
 
   useEffect(() => {
     if (isMobile) {
@@ -371,7 +389,7 @@ export const RightLayout: React.FC = () => {
               </div>
               <RightLayoutPaneDivider
                 isDragging={isDraggingSplit}
-                onMouseDown={handleSplitMouseDown}
+                onPointerDown={handleSplitPointerDown}
               />
               <div className="relative z-10 min-h-0 flex-1 overflow-y-scroll overscroll-contain [scrollbar-gutter:stable]">
                 <RadioOperatorList onCreateOperator={handleCreateOperator} />
