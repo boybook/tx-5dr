@@ -239,12 +239,12 @@ export const RightLayout: React.FC = () => {
   }, [handleSplitPointerEnd, handleSplitPointerMove, isDraggingSplit]);
 
   useEffect(() => {
-    if (isMobile) {
+    if (isMobile || isDraggingSplit) {
       return;
     }
 
     saveRightLayoutSplitPercent(splitPercent);
-  }, [isMobile, splitPercent]);
+  }, [isDraggingSplit, isMobile, splitPercent]);
 
   const desktopPaneHeights = getRightLayoutPaneHeights({
     splitPercent,
