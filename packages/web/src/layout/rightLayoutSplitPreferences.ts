@@ -51,6 +51,37 @@ export function saveRightLayoutSplitPercent(splitPercent: number): number {
   return normalized;
 }
 
+export function shouldPersistRightLayoutSplit(params: {
+  isMobile: boolean;
+  isDraggingSplit: boolean;
+}): boolean {
+  return !params.isMobile && !params.isDraggingSplit;
+}
+
+export function shouldStartRightLayoutSplitPointerDrag(params: {
+  isMobile: boolean;
+  isPrimary: boolean;
+  pointerType: string;
+  button: number;
+}): boolean {
+  if (params.isMobile || !params.isPrimary) {
+    return false;
+  }
+
+  if (params.pointerType === 'mouse' && params.button !== 0) {
+    return false;
+  }
+
+  return true;
+}
+
+export function isActiveRightLayoutSplitPointer(
+  activePointerId: number | null,
+  pointerId: number,
+): boolean {
+  return activePointerId === pointerId;
+}
+
 export function clampRightLayoutSplitPercent(params: {
   splitPercent: number;
   containerHeight: number;

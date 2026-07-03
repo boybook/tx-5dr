@@ -24,9 +24,12 @@ import {
   clampRightLayoutSplitPercent,
   DEFAULT_RIGHT_LAYOUT_SPLIT_PERCENT,
   getStoredRightLayoutSplitPercent,
+  isActiveRightLayoutSplitPointer,
   getRightLayoutPaneHeights,
   RIGHT_LAYOUT_SPLIT_DIVIDER_HEIGHT_PX,
   saveRightLayoutSplitPercent,
+  shouldPersistRightLayoutSplit,
+  shouldStartRightLayoutSplitPointerDrag,
 } from './rightLayoutSplitPreferences';
 
 function RightLayoutPaneDivider({
@@ -172,13 +175,12 @@ export const RightLayout: React.FC = () => {
   }, [isMobile, workspaceHeight]);
 
   const handleSplitPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (isMobile) {
-      return;
-    }
-    if (!event.isPrimary) {
-      return;
-    }
-    if (event.pointerType === 'mouse' && event.button !== 0) {
+    if (!shouldStartRightLayoutSplitPointerDrag({
+      isMobile,
+      isPrimary: event.isPrimary,
+      pointerType: event.pointerType,
+      button: event.button,
+    })) {
       return;
     }
 
@@ -191,7 +193,7 @@ export const RightLayout: React.FC = () => {
   }, [isMobile, splitPercent]);
 
   const handleSplitPointerEnd = useCallback((event: PointerEvent) => {
-    if (activeSplitPointerIdRef.current !== event.pointerId) {
+    if (!isActiveRightLayoutSplitPointer(activeSplitPointerIdRef.current, event.pointerId)) {
       return;
     }
     activeSplitPointerIdRef.current = null;
@@ -199,7 +201,7 @@ export const RightLayout: React.FC = () => {
   }, []);
 
   const handleSplitPointerMove = useCallback((event: PointerEvent) => {
-    if (activeSplitPointerIdRef.current !== event.pointerId) {
+    if (!isActiveRightLayoutSplitPointer(activeSplitPointerIdRef.current, event.pointerId)) {
       return;
     }
     if (!splitWorkspaceRef.current) {
@@ -239,7 +241,7 @@ export const RightLayout: React.FC = () => {
   }, [handleSplitPointerEnd, handleSplitPointerMove, isDraggingSplit]);
 
   useEffect(() => {
-    if (isMobile || isDraggingSplit) {
+    if (!shouldPersistRightLayoutSplit({ isMobile, isDraggingSplit })) {
       return;
     }
 
