@@ -376,7 +376,7 @@ export const RightLayout: React.FC = () => {
             <div className="relative z-0 min-h-0 flex-1 overflow-hidden">
               <MyRelatedFramesTable className="h-full" />
             </div>
-            <div className="relative z-10 min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <div className="relative z-10 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pt-1 pb-2">
               <RadioOperatorList onCreateOperator={handleCreateOperator} />
             </div>
           </>
@@ -393,7 +393,7 @@ export const RightLayout: React.FC = () => {
                 isDragging={isDraggingSplit}
                 onPointerDown={handleSplitPointerDown}
               />
-              <div className="relative z-10 min-h-0 flex-1 overflow-y-scroll overscroll-contain [scrollbar-gutter:stable]">
+              <div className="relative z-10 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pt-1 pb-2 [scrollbar-gutter:stable]">
                 <RadioOperatorList onCreateOperator={handleCreateOperator} />
               </div>
             </div>
