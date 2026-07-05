@@ -922,7 +922,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       style={{
         transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)',
         boxShadow: operators.length > 1 && currentOperatorId === operatorStatus.id
-          ? 'inset 0 0 0 2px rgba(255, 166, 0, 0.5)'
+          ? '0 0 0 2px rgba(255, 166, 0, 0.5)'
           : 'none',
       }}
       onClick={() => {
