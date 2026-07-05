@@ -66,6 +66,17 @@ describe('right layout split preferences', () => {
     });
   });
 
+  it('returns a balanced split when the workspace is too short to avoid pane clipping', () => {
+    expect(getRightLayoutPaneHeights({
+      splitPercent: 85,
+      containerHeight: 320,
+    })).toEqual({
+      splitPercent: DEFAULT_RIGHT_LAYOUT_SPLIT_PERCENT,
+      topPaneHeightPx: 156,
+      operatorPaneHeightPx: 156,
+    });
+  });
+
   it('saves a normalized split and reloads it from storage', () => {
     expect(saveRightLayoutSplitPercent(63.7)).toBe(63.7);
     expect(localStorage.getItem(RIGHT_LAYOUT_SPLIT_STORAGE_KEY)).toBe('63.7');
