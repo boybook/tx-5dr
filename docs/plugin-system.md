@@ -735,6 +735,9 @@ interface UIBridge {
   /** 更新面板运行期 meta（标题、可见性等） */
   setPanelMeta(panelId: string, meta: PanelMeta): void;
 
+  /** 为指定登录 token 覆盖面板运行期 meta */
+  setPanelMetaForUser(panelId: string, tokenId: string, meta: PanelMeta): void;
+
   /** 替换一个运行期 UI Contribution group */
   setPanelContributions(groupId: string, panels: PluginPanelDescriptor[]): void;
 
@@ -771,6 +774,10 @@ interface PluginUIHandler {
   ): Promise<unknown>;
 }
 ```
+
+`setPanelMeta()` 作用于当前插件实例的所有查看者；`setPanelMetaForUser()`
+只作用于指定 `tokenId`，并且会在前端覆盖同一面板的全局 meta。典型用法是：
+先设置全局告警/未读状态，再为某个已经处理该状态的用户清除高亮。
 
 `requestContext` 由宿主基于页面 session 注入，包含：
 
@@ -1842,7 +1849,23 @@ interface PluginStatus {
   locales?: Record<string, Record<string, string>>;
   source?: PluginSource;
 }
+
+interface PluginPanelMetaPayload {
+  pluginName: string;
+  operatorId: string;
+  panelId: string;
+  /** 缺省表示全局 meta；存在时表示只发给该 token */
+  viewerTokenId?: string;
+  meta: PanelMeta;
+}
 ```
+
+`panelMeta` 的宿主规则：
+
+- `viewerTokenId` 为空时，表示当前插件实例的全局 meta。
+- `viewerTokenId` 存在时，表示用户级覆盖层，只会出现在对应用户的
+  `pluginList` 初始快照和后续 `pluginPanelMeta` websocket 更新里。
+- 前端合并顺序固定为“全局 meta -> 用户级 meta”，后者覆盖前者的同名字段。
 
 ---
 

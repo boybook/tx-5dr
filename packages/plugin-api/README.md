@@ -296,6 +296,44 @@ tx5dr.invoke('getState').then(function(state) {
 });
 ```
 
+## Runtime UI Metadata
+
+Server-side plugins can update iframe panel presentation at runtime through
+`ctx.ui`:
+
+```ts
+ctx.ui.setPanelMeta('chat-toolbar', {
+  tone: 'danger',
+  title: 'toolbarActiveTitle',
+});
+```
+
+Use `setPanelMeta()` for metadata shared by every viewer of the current plugin
+instance.
+
+When the UI state should differ per logged-in user, use
+`setPanelMetaForUser()`:
+
+```ts
+ctx.ui.setPanelMeta('chat-toolbar', { tone: 'danger' });
+ctx.ui.setPanelMetaForUser('chat-toolbar', requestContext.user.tokenId, {
+  tone: 'default',
+});
+```
+
+This lets a plugin keep a global baseline while overriding the panel for one
+specific token, such as clearing the unread highlight for the sender of a chat
+message.
+
+Rules:
+
+- `setPanelMetaForUser(panelId, tokenId, meta)` only affects that authenticated
+  user token.
+- User-scoped metadata overlays global metadata from `setPanelMeta()`.
+- The host only delivers user-scoped metadata to the matching token; other
+  clients never receive it in `pluginList` snapshots or `pluginPanelMeta`
+  websocket updates.
+
 ## CSS Design Tokens
 
 The host injects CSS custom properties (`--tx5dr-*`) into every iframe page. A reference copy is included in this package at `tokens.css` — copy it into your project for CSS autocomplete in your IDE:
