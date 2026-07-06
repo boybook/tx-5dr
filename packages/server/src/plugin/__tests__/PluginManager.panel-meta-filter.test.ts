@@ -4,12 +4,13 @@ import { PluginManager } from '../PluginManager.js';
 
 describe('PluginManager user-scoped panel meta filtering', () => {
   it('returns all entries without a viewer filter and narrows user-scoped entries per token', () => {
-    const manager = Object.create(PluginManager.prototype) as PluginManager & {
+    const manager = Object.create(PluginManager.prototype) as PluginManager;
+    const rawManager = manager as unknown as {
       panelMetaState: Map<string, PluginPanelMetaPayload>;
       getPanelMetaSnapshot(viewerTokenId?: string): PluginPanelMetaPayload[];
     };
 
-    manager.panelMetaState = new Map([
+    rawManager.panelMetaState = new Map([
       ['demo:__global__:toolbar:*', {
         pluginName: 'demo',
         operatorId: '__global__',
@@ -32,8 +33,8 @@ describe('PluginManager user-scoped panel meta filtering', () => {
       }],
     ]);
 
-    expect(manager.getPanelMetaSnapshot()).toHaveLength(3);
-    expect(manager.getPanelMetaSnapshot('token-a')).toEqual([
+    expect(rawManager.getPanelMetaSnapshot()).toHaveLength(3);
+    expect(rawManager.getPanelMetaSnapshot('token-a')).toEqual([
       {
         pluginName: 'demo',
         operatorId: '__global__',
