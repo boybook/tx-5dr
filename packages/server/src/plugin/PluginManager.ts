@@ -607,11 +607,11 @@ export class PluginManager {
     };
   }
 
-  getSnapshot(): PluginSystemSnapshot {
+  getSnapshot(viewerTokenId?: string | null): PluginSystemSnapshot {
     return toPluginSystemSnapshot(
       this.systemState,
       this.getPluginStatuses(),
-      this.getPanelMetaSnapshot(),
+      this.getPanelMetaSnapshot(viewerTokenId),
       this.getPanelContributionSnapshot(),
     );
   }
@@ -1672,19 +1672,35 @@ export class PluginManager {
     }
   }
 
-  private getPanelMetaSnapshot(): PluginPanelMetaPayload[] {
-    return Array.from(this.panelMetaState.values()).map((entry) => ({
+  private getPanelMetaSnapshot(viewerTokenId?: string | null): PluginPanelMetaPayload[] {
+    return Array.from(this.panelMetaState.values())
+      .filter((entry) => (
+        viewerTokenId === undefined
+        || entry.viewerTokenId === undefined
+        || entry.viewerTokenId === viewerTokenId
+      ))
+      .map((entry) => ({
       ...entry,
       meta: { ...entry.meta },
     }));
   }
 
-  private getPanelMetaKey(pluginName: string, operatorId: string, panelId: string): string {
-    return `${pluginName}:${operatorId}:${panelId}`;
+  private getPanelMetaKey(
+    pluginName: string,
+    operatorId: string,
+    panelId: string,
+    viewerTokenId?: string,
+  ): string {
+    return `${pluginName}:${operatorId}:${panelId}:${viewerTokenId ?? '*'}`;
   }
 
   private recordPanelMeta(payload: PluginPanelMetaPayload): void {
-    const key = this.getPanelMetaKey(payload.pluginName, payload.operatorId, payload.panelId);
+    const key = this.getPanelMetaKey(
+      payload.pluginName,
+      payload.operatorId,
+      payload.panelId,
+      payload.viewerTokenId,
+    );
     this.panelMetaState.set(key, {
       ...payload,
       meta: { ...payload.meta },

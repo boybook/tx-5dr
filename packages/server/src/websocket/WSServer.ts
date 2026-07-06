@@ -8,6 +8,8 @@ import type {
   FrameMessage,
   JWTPayload,
   ModeDescriptor,
+  PluginPanelMetaPayload,
+  PluginSystemSnapshot,
   RadioProfile,
   SlotInfo,
   SlotPack,
@@ -254,6 +256,7 @@ export class WSConnection extends WSMessageHandler {
     this.userRole = UserRole.ADMIN;
     this.authorizedOperatorIds = new Set();
     this.authLabel = 'local admin';
+    this.tokenId = '__local__';
     this.ability = buildAbility({ role: UserRole.ADMIN });
   }
 
@@ -1698,6 +1701,29 @@ export class WSServer extends WSMessageHandler {
     });
   }
 
+  private filterPluginSnapshotForConnection(
+    snapshot: PluginSystemSnapshot,
+    connection: WSConnection,
+  ): PluginSystemSnapshot {
+    const tokenId = connection.getTokenId();
+    return {
+      ...snapshot,
+      panelMeta: snapshot.panelMeta.filter((entry) =>
+        entry.viewerTokenId === undefined || entry.viewerTokenId === tokenId
+      ),
+    };
+  }
+
+  private resolvePluginPanelMetaForConnection(
+    payload: PluginPanelMetaPayload,
+    connection: WSConnection,
+  ): PluginPanelMetaPayload | null {
+    if (payload.viewerTokenId !== undefined && payload.viewerTokenId !== connection.getTokenId()) {
+      return null;
+    }
+    return payload;
+  }
+
   private sendCWDecoderStatus(connection: WSConnection): void {
     try {
       connection.send(WSMessageType.CW_DECODER_STATUS, this.digitalRadioEngine.getCWDecoderStatus());
@@ -2575,7 +2601,14 @@ export class WSServer extends WSMessageHandler {
 
     // ===== 插件系统事件 =====
     this.digitalRadioEngine.on('pluginList' as any, (data: any) => {
-      this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_LIST, data);
+      const activeConnections = this.getActiveConnections()
+        .filter(connection => connection.isHandshakeCompleted() && connection.hasMinRole(UserRole.OPERATOR));
+      activeConnections.forEach((connection) => {
+        connection.send(
+          WSMessageType.PLUGIN_LIST,
+          this.filterPluginSnapshotForConnection(data as PluginSystemSnapshot, connection),
+        );
+      });
     });
     this.digitalRadioEngine.on('pluginStatusChanged' as any, (data: any) => {
       this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_STATUS_CHANGED, data);
@@ -2593,7 +2626,15 @@ export class WSServer extends WSMessageHandler {
       this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_PAGE_PUSH, data);
     });
     this.digitalRadioEngine.on('pluginPanelMeta' as any, (data: any) => {
-      this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_PANEL_META, data);
+      const activeConnections = this.getActiveConnections()
+        .filter(connection => connection.isHandshakeCompleted() && connection.hasMinRole(UserRole.OPERATOR));
+      activeConnections.forEach((connection) => {
+        const payload = this.resolvePluginPanelMetaForConnection(data as PluginPanelMetaPayload, connection);
+        if (!payload) {
+          return;
+        }
+        connection.send(WSMessageType.PLUGIN_PANEL_META, payload);
+      });
     });
     this.digitalRadioEngine.on('pluginPanelContributionsChanged' as any, (data: any) => {
       this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_PANEL_CONTRIBUTIONS_CHANGED, data);
@@ -2706,7 +2747,10 @@ export class WSServer extends WSMessageHandler {
 
       // 2.5 发送插件系统快照
       if (connection.hasMinRole(UserRole.OPERATOR)) try {
-        connection.send(WSMessageType.PLUGIN_LIST, this.digitalRadioEngine.pluginManager.getSnapshot());
+        connection.send(
+          WSMessageType.PLUGIN_LIST,
+          this.digitalRadioEngine.pluginManager.getSnapshot(connection.getTokenId()),
+        );
       } catch (error) {
         logger.error('failed to send plugin snapshot', error);
       }

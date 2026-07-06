@@ -22,11 +22,41 @@ const snapshot: PluginSystemSnapshot = {
       quickActions: [{ id: 'run', label: 'Run' }],
     },
   ],
-  panelMeta: [],
+  panelMeta: [
+    {
+      pluginName: 'automation-demo',
+      operatorId: '__global__',
+      panelId: 'toolbar',
+      meta: {
+        title: 'Base',
+      },
+    },
+    {
+      pluginName: 'automation-demo',
+      operatorId: '__global__',
+      panelId: 'toolbar',
+      viewerTokenId: 'test-token',
+      meta: {
+        tone: 'danger',
+      },
+    },
+    {
+      pluginName: 'automation-demo',
+      operatorId: '__global__',
+      panelId: 'toolbar',
+      viewerTokenId: 'other-token',
+      meta: {
+        tone: 'warning',
+      },
+    },
+  ],
   panelContributions: [],
 };
 
-const getSnapshot = vi.fn(() => snapshot);
+const getSnapshot = vi.fn((viewerTokenId?: string) => ({
+  ...snapshot,
+  panelMeta: snapshot.panelMeta.filter((entry) => entry.viewerTokenId === undefined || entry.viewerTokenId === viewerTokenId),
+}));
 const getLoadedPlugin = vi.fn();
 const setOperatorPluginPaused = vi.fn();
 const pauseActiveTransmitControlPlugins = vi.fn();
@@ -125,8 +155,11 @@ describe('pluginRoutes auth', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(snapshot);
-    expect(getSnapshot).toHaveBeenCalledTimes(1);
+    expect(response.json()).toEqual({
+      ...snapshot,
+      panelMeta: snapshot.panelMeta.filter((entry) => entry.viewerTokenId === undefined || entry.viewerTokenId === 'test-token'),
+    });
+    expect(getSnapshot).toHaveBeenCalledWith('test-token');
   });
 
   it('keeps plugin snapshots unavailable to viewers', async () => {

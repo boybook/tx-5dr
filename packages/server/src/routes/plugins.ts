@@ -397,10 +397,11 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/', async (req, reply) => {
     // Operator-facing UI (automation quick actions/panels) needs plugin
     // metadata, while mutation routes below remain admin-only.
-    if (!await requireMinimumRole(fastify, req, reply, UserRole.OPERATOR)) {
+    const user = await requireMinimumRole(fastify, req, reply, UserRole.OPERATOR);
+    if (!user) {
       return;
     }
-    return reply.send(engine.pluginManager.getSnapshot());
+    return reply.send(engine.pluginManager.getSnapshot(user.tokenId));
   });
 
   fastify.get<{ Querystring: { channel?: string } }>('/market/catalog', async (req, reply) => {
@@ -689,11 +690,12 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     '/operators/:operatorId',
     async (req, reply) => {
       const { operatorId } = req.params;
-      if (!await requireOperatorBindingAccess(fastify, req, reply, operatorId)) {
+      const user = await requireOperatorBindingAccess(fastify, req, reply, operatorId);
+      if (!user) {
         return;
       }
 
-      const pluginSnapshot = engine.pluginManager.getSnapshot();
+      const pluginSnapshot = engine.pluginManager.getSnapshot(user.tokenId);
       const runtimeState = engine.pluginManager.getOperatorRuntimeStatus(operatorId);
       const operatorSettings = configManager.getPluginsConfig().operatorSettings?.[operatorId] ?? {};
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { PluginPanelDescriptorSchema, PluginPanelMetaSchema, PluginPanelSlotSchema } from '../src/schema/plugin.schema';
+import {
+  PluginPanelDescriptorSchema,
+  PluginPanelMetaPayloadSchema,
+  PluginPanelMetaSchema,
+  PluginPanelSlotSchema,
+} from '../src/schema/plugin.schema';
 
 describe('PluginPanelSlotSchema', () => {
   it('accepts every supported plugin panel slot', () => {
@@ -96,6 +101,23 @@ describe('PluginPanelSlotSchema', () => {
     })).toMatchObject({
       tone: 'warning',
       title: 'alertTitle',
+    });
+  });
+
+  it('accepts user-scoped runtime panel metadata payloads', () => {
+    expect(PluginPanelMetaPayloadSchema.parse({
+      pluginName: 'demo',
+      operatorId: '__global__',
+      panelId: 'toolbar',
+      viewerTokenId: 'token-1',
+      meta: {
+        tone: 'danger',
+      },
+    })).toMatchObject({
+      viewerTokenId: 'token-1',
+      meta: {
+        tone: 'danger',
+      },
     });
   });
 });

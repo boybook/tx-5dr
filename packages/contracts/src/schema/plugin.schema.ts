@@ -575,6 +575,7 @@ export const PluginPanelMetaPayloadSchema = z.object({
   pluginName: z.string(),
   operatorId: z.string(),
   panelId: z.string(),
+  viewerTokenId: z.string().optional(),
   meta: PluginPanelMetaSchema,
 });
 export type PluginPanelMetaPayload = z.infer<typeof PluginPanelMetaPayloadSchema>;

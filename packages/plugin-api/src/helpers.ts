@@ -649,6 +649,12 @@ export interface UIBridge {
   setPanelMeta(panelId: string, meta: PanelMeta): void;
 
   /**
+   * Updates the panel's display metadata at runtime for a specific logged-in
+   * user token. This overlays any global metadata from {@link setPanelMeta}.
+   */
+  setPanelMetaForUser(panelId: string, tokenId: string, meta: PanelMeta): void;
+
+  /**
    * Replaces one runtime-owned group of plugin UI panels for this plugin
    * instance. Static `PluginDefinition.panels` are exposed by the host as the
    * reserved `manifest` group; plugins should use their own stable group ids.

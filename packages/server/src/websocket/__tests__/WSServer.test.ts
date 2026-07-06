@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SLOT_PACK_HISTORY_LIMIT, UserRole, WSMessageType, type SlotPack, type SystemStatus } from '@tx5dr/contracts';
+import {
+  SLOT_PACK_HISTORY_LIMIT,
+  UserRole,
+  WSMessageType,
+  type PluginSystemSnapshot,
+  type SlotPack,
+  type SystemStatus,
+} from '@tx5dr/contracts';
 import { WSConnection, WSServer } from '../WSServer.js';
 import { ConfigManager } from '../../config/config-manager.js';
 
@@ -321,6 +328,71 @@ describe('WSServer security filtering', () => {
     expect(adminSent.find(message => message.type === WSMessageType.RADIO_STATUS_CHANGED)?.data.radioConfig.icomWlan.password).toBe('radio-secret');
     expect(publicSent.find(message => message.type === WSMessageType.PTT_STATUS_CHANGED)?.data.operatorIds).toEqual([]);
     expect(adminSent.find(message => message.type === WSMessageType.PTT_STATUS_CHANGED)?.data.operatorIds).toEqual(['op-a']);
+  });
+
+  it('filters plugin snapshots to the current connection token', () => {
+    const { connection } = createTestConnection('conn-plugin');
+    Object.assign(connection as unknown as Record<string, unknown>, {
+      authenticated: true,
+      userRole: UserRole.OPERATOR,
+      tokenId: 'token-a',
+    });
+    connection.completeHandshake(['operator-1']);
+
+    const server = Object.create(WSServer.prototype) as any;
+    const snapshot: PluginSystemSnapshot = {
+      state: 'ready',
+      generation: 1,
+      plugins: [],
+      panelMeta: [
+        {
+          pluginName: 'operator-live-chat',
+          operatorId: '__global__',
+          panelId: 'chat-toolbar',
+          meta: { title: 'OP Chat' },
+        },
+        {
+          pluginName: 'operator-live-chat',
+          operatorId: '__global__',
+          panelId: 'chat-toolbar',
+          viewerTokenId: 'token-a',
+          meta: { tone: 'default' },
+        },
+        {
+          pluginName: 'operator-live-chat',
+          operatorId: '__global__',
+          panelId: 'chat-toolbar',
+          viewerTokenId: 'token-b',
+          meta: { tone: 'danger' },
+        },
+      ],
+      panelContributions: [],
+    };
+
+    expect((server as any).filterPluginSnapshotForConnection(snapshot, connection)).toEqual({
+      ...snapshot,
+      panelMeta: snapshot.panelMeta.filter((entry) => entry.viewerTokenId === undefined || entry.viewerTokenId === 'token-a'),
+    });
+  });
+
+  it('does not forward user-scoped panel meta to other tokens', () => {
+    const { connection } = createTestConnection('conn-plugin');
+    Object.assign(connection as unknown as Record<string, unknown>, {
+      authenticated: true,
+      userRole: UserRole.OPERATOR,
+      tokenId: 'token-a',
+    });
+    connection.completeHandshake(['operator-1']);
+
+    const server = Object.create(WSServer.prototype) as any;
+
+    expect((server as any).resolvePluginPanelMetaForConnection({
+      pluginName: 'operator-live-chat',
+      operatorId: '__global__',
+      panelId: 'chat-toolbar',
+      viewerTokenId: 'token-b',
+      meta: { tone: 'danger' },
+    }, connection)).toBeNull();
   });
 });
 
