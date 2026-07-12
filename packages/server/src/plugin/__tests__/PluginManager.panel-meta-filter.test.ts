@@ -15,7 +15,7 @@ describe('PluginManager user-scoped panel meta filtering', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns all entries without a viewer filter and narrows user-scoped entries per token', () => {
+  it('returns only global entries without a viewer token and narrows scoped entries per token', () => {
     mockActivePanelMetaTokens(['token-a', 'token-b']);
 
     const manager = Object.create(PluginManager.prototype) as PluginManager;

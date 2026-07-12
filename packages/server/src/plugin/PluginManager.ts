@@ -1813,11 +1813,7 @@ export class PluginManager {
   }
 
   private isPanelMetaTokenActive(tokenId: string): boolean {
-    try {
-      return AuthManager.getInstance().isTokenStillValid(tokenId);
-    } catch {
-      return true;
-    }
+    return AuthManager.getInstance().isTokenStillValid(tokenId);
   }
 
   private clearPanelMetaForInstance(instance: PluginInstance): void {
