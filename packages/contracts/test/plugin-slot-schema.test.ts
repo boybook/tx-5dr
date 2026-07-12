@@ -104,6 +104,20 @@ describe('PluginPanelSlotSchema', () => {
     });
   });
 
+  it('accepts null panel metadata fields as clear patches', () => {
+    expect(PluginPanelMetaSchema.parse({
+      tone: null,
+      title: null,
+      titleValues: null,
+      visible: null,
+    })).toEqual({
+      tone: null,
+      title: null,
+      titleValues: null,
+      visible: null,
+    });
+  });
+
   it('accepts user-scoped runtime panel metadata payloads', () => {
     expect(PluginPanelMetaPayloadSchema.parse({
       pluginName: 'demo',

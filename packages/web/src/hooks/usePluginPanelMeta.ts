@@ -23,21 +23,65 @@ export function buildPanelMetaLayers(entries: PluginPanelMetaPayload[]): PanelMe
   return entries.reduce<PanelMetaLayers>((layers, entry) => {
     const key = getPanelMetaKey(entry);
     if (entry.viewerTokenId) {
-      layers.scopedMetaMap[key] = {
-        ...layers.scopedMetaMap[key],
-        ...entry.meta,
-      };
+      const meta = applyPanelMetaPatch(layers.scopedMetaMap[key], entry.meta);
+      if (meta) {
+        layers.scopedMetaMap[key] = meta;
+      } else {
+        delete layers.scopedMetaMap[key];
+      }
     } else {
-      layers.globalMetaMap[key] = {
-        ...layers.globalMetaMap[key],
-        ...entry.meta,
-      };
+      const meta = applyPanelMetaPatch(layers.globalMetaMap[key], entry.meta);
+      if (meta) {
+        layers.globalMetaMap[key] = meta;
+      } else {
+        delete layers.globalMetaMap[key];
+      }
     }
     return layers;
   }, {
     globalMetaMap: {},
     scopedMetaMap: {},
   });
+}
+
+function applyPanelMetaPatch(current: PanelMeta | undefined, patch: PluginPanelMetaPayload['meta']): PanelMeta | undefined {
+  const next: PanelMeta = { ...(current ?? {}) };
+  if (patch.title === null) {
+    delete next.title;
+  } else if (patch.title !== undefined) {
+    next.title = patch.title;
+  }
+  if (patch.titleValues === null) {
+    delete next.titleValues;
+  } else if (patch.titleValues !== undefined) {
+    next.titleValues = patch.titleValues;
+  }
+  if (patch.visible === null) {
+    delete next.visible;
+  } else if (patch.visible !== undefined) {
+    next.visible = patch.visible;
+  }
+  if (patch.tone === null) {
+    delete next.tone;
+  } else if (patch.tone !== undefined) {
+    next.tone = patch.tone;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function applyPanelMetaPayload(
+  previous: Record<string, PanelMeta>,
+  payload: PluginPanelMetaPayload,
+): Record<string, PanelMeta> {
+  const key = getPanelMetaKey(payload);
+  const meta = applyPanelMetaPatch(previous[key], payload.meta);
+  const next = { ...previous };
+  if (meta) {
+    next[key] = meta;
+  } else {
+    delete next[key];
+  }
+  return next;
 }
 
 export function usePluginPanelMeta(initialEntries: PluginPanelMetaPayload[] = []) {
@@ -59,18 +103,11 @@ export function usePluginPanelMeta(initialEntries: PluginPanelMetaPayload[] = []
     connection.state.radioService,
     'pluginPanelMeta',
     (payload: PluginPanelMetaPayload) => {
-      const key = getPanelMetaKey(payload);
       if (payload.viewerTokenId) {
-        setScopedMetaMap((prev) => ({
-          ...prev,
-          [key]: { ...prev[key], ...payload.meta },
-        }));
+        setScopedMetaMap((prev) => applyPanelMetaPayload(prev, payload));
         return;
       }
-      setGlobalMetaMap((prev) => ({
-        ...prev,
-        [key]: { ...prev[key], ...payload.meta },
-      }));
+      setGlobalMetaMap((prev) => applyPanelMetaPayload(prev, payload));
     },
   );
 

@@ -52,11 +52,13 @@ import type { LoadedPlugin, PluginInstance, PluginManagerDeps, PluginSystemRunti
 import { readPluginSource } from './plugin-source.js';
 import { createLogger } from '../utils/logger.js';
 import { resolvePluginPaths } from './paths.js';
+import { AuthManager } from '../auth/AuthManager.js';
 import path from 'path';
 
 const logger = createLogger('PluginManager');
 const GLOBAL_PLUGIN_SCOPE_ID = '__global__';
 const PLUGIN_RUNTIME_LOG_HISTORY_LIMIT = 1000;
+const PANEL_META_SCOPED_TOKEN_LIMIT = 500;
 
 /**
  * 插件管理器 — 中央编排器
@@ -92,6 +94,8 @@ export class PluginManager {
     data?: unknown;
   }>>();
   private readonly panelMetaState = new Map<string, PluginPanelMetaPayload>();
+  private readonly panelMetaTokenIndex = new Map<string, Set<string>>();
+  private readonly panelMetaTokenTouchedAt = new Map<string, number>();
   private readonly runtimePanelContributions = new Map<string, PluginUIPanelContributionGroup>();
   private readonly pluginEventBusHost: PluginEventBusHost;
   private pluginRuntimeLogHistory: PluginLogHistoryEntry[] = [];
@@ -1673,11 +1677,11 @@ export class PluginManager {
   }
 
   private getPanelMetaSnapshot(viewerTokenId?: string | null): PluginPanelMetaPayload[] {
+    this.prunePanelMetaTokens();
     return Array.from(this.panelMetaState.values())
       .filter((entry) => (
-        viewerTokenId === undefined
-        || entry.viewerTokenId === undefined
-        || entry.viewerTokenId === viewerTokenId
+        entry.viewerTokenId === undefined
+        || (viewerTokenId != null && entry.viewerTokenId === viewerTokenId)
       ))
       .map((entry) => ({
       ...entry,
@@ -1695,16 +1699,125 @@ export class PluginManager {
   }
 
   private recordPanelMeta(payload: PluginPanelMetaPayload): void {
+    this.prunePanelMetaTokens();
+    if (payload.viewerTokenId && !this.isPanelMetaTokenActive(payload.viewerTokenId)) {
+      return;
+    }
     const key = this.getPanelMetaKey(
       payload.pluginName,
       payload.operatorId,
       payload.panelId,
       payload.viewerTokenId,
     );
+    const meta = this.applyPanelMetaPatch(this.panelMetaState.get(key)?.meta, payload.meta);
+    if (Object.keys(meta).length === 0) {
+      this.deletePanelMetaEntry(key, payload.viewerTokenId);
+      return;
+    }
     this.panelMetaState.set(key, {
       ...payload,
-      meta: { ...payload.meta },
+      meta,
     });
+    if (payload.viewerTokenId) {
+      this.indexPanelMetaTokenEntry(payload.viewerTokenId, key);
+    }
+  }
+
+  private applyPanelMetaPatch(
+    current: PluginPanelMetaPayload['meta'] | undefined,
+    patch: PluginPanelMetaPayload['meta'],
+  ): PluginPanelMetaPayload['meta'] {
+    const next: PluginPanelMetaPayload['meta'] = { ...(current ?? {}) };
+    if (patch.title === null) {
+      delete next.title;
+    } else if (patch.title !== undefined) {
+      next.title = patch.title;
+    }
+    if (patch.titleValues === null) {
+      delete next.titleValues;
+    } else if (patch.titleValues !== undefined) {
+      next.titleValues = patch.titleValues;
+    }
+    if (patch.visible === null) {
+      delete next.visible;
+    } else if (patch.visible !== undefined) {
+      next.visible = patch.visible;
+    }
+    if (patch.tone === null) {
+      delete next.tone;
+    } else if (patch.tone !== undefined) {
+      next.tone = patch.tone;
+    }
+    return next;
+  }
+
+  private indexPanelMetaTokenEntry(tokenId: string, key: string): void {
+    const keys = this.panelMetaTokenIndex.get(tokenId) ?? new Set<string>();
+    keys.add(key);
+    this.panelMetaTokenIndex.set(tokenId, keys);
+    this.panelMetaTokenTouchedAt.set(tokenId, Date.now());
+    this.enforcePanelMetaTokenLimit();
+  }
+
+  private deletePanelMetaEntry(key: string, viewerTokenId?: string): void {
+    const existing = this.panelMetaState.get(key);
+    this.panelMetaState.delete(key);
+    const tokenId = viewerTokenId ?? existing?.viewerTokenId;
+    if (!tokenId) {
+      return;
+    }
+    const keys = this.panelMetaTokenIndex.get(tokenId);
+    if (!keys) {
+      return;
+    }
+    keys.delete(key);
+    if (keys.size === 0) {
+      this.panelMetaTokenIndex.delete(tokenId);
+      this.panelMetaTokenTouchedAt.delete(tokenId);
+    }
+  }
+
+  private clearPanelMetaForToken(tokenId: string): void {
+    const keys = this.panelMetaTokenIndex.get(tokenId);
+    if (!keys) {
+      return;
+    }
+    for (const key of Array.from(keys)) {
+      this.deletePanelMetaEntry(key, tokenId);
+    }
+  }
+
+  private prunePanelMetaTokens(): void {
+    for (const tokenId of Array.from(this.panelMetaTokenIndex.keys())) {
+      if (!this.isPanelMetaTokenActive(tokenId)) {
+        this.clearPanelMetaForToken(tokenId);
+      }
+    }
+    this.enforcePanelMetaTokenLimit();
+  }
+
+  private enforcePanelMetaTokenLimit(): void {
+    if (this.panelMetaTokenIndex.size <= PANEL_META_SCOPED_TOKEN_LIMIT) {
+      return;
+    }
+    const tokenIdsByAge = Array.from(this.panelMetaTokenIndex.keys())
+      .sort((left, right) => (
+        (this.panelMetaTokenTouchedAt.get(left) ?? 0) - (this.panelMetaTokenTouchedAt.get(right) ?? 0)
+      ));
+    for (const tokenId of tokenIdsByAge) {
+      if (this.panelMetaTokenIndex.size <= PANEL_META_SCOPED_TOKEN_LIMIT) {
+        return;
+      }
+      this.clearPanelMetaForToken(tokenId);
+    }
+  }
+
+  private isPanelMetaTokenActive(tokenId: string): boolean {
+    try {
+      return AuthManager.getInstance().isTokenStillValid(tokenId);
+    } catch {
+      return true;
+    }
   }
 
   private clearPanelMetaForInstance(instance: PluginInstance): void {
@@ -1712,9 +1825,9 @@ export class PluginManager {
       ? instance.scope.operatorId
       : GLOBAL_PLUGIN_SCOPE_ID;
     const prefix = `${instance.plugin.definition.name}:${operatorId}:`;
-    for (const key of this.panelMetaState.keys()) {
+    for (const [key, entry] of this.panelMetaState) {
       if (key.startsWith(prefix)) {
-        this.panelMetaState.delete(key);
+        this.deletePanelMetaEntry(key, entry.viewerTokenId);
       }
     }
   }

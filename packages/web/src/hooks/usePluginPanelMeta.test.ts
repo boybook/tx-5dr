@@ -43,4 +43,45 @@ describe('buildPanelMetaLayers', () => {
       tone: 'default',
     });
   });
+
+  it('clears scoped panel meta fields with null so global values apply again', () => {
+    const entries: PluginPanelMetaPayload[] = [
+      {
+        pluginName: 'operator-live-chat',
+        operatorId: '__global__',
+        panelId: 'chat-toolbar',
+        meta: {
+          title: 'OP Chat',
+          tone: 'danger',
+        },
+      },
+      {
+        pluginName: 'operator-live-chat',
+        operatorId: '__global__',
+        panelId: 'chat-toolbar',
+        viewerTokenId: 'token-1',
+        meta: {
+          tone: 'default',
+        },
+      },
+      {
+        pluginName: 'operator-live-chat',
+        operatorId: '__global__',
+        panelId: 'chat-toolbar',
+        viewerTokenId: 'token-1',
+        meta: {
+          tone: null,
+        },
+      },
+    ];
+
+    const layers = buildPanelMetaLayers(entries);
+    const key = 'operator-live-chat:__global__:chat-toolbar';
+
+    expect(layers.globalMetaMap[key]).toEqual({
+      title: 'OP Chat',
+      tone: 'danger',
+    });
+    expect(layers.scopedMetaMap[key]).toBeUndefined();
+  });
 });
