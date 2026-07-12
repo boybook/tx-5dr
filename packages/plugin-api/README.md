@@ -316,8 +316,17 @@ When the UI state should differ per logged-in user, use
 
 ```ts
 ctx.ui.setPanelMeta('chat-toolbar', { tone: 'danger' });
-ctx.ui.setPanelMetaForUser('chat-toolbar', requestContext.user.tokenId, {
+ctx.ui.setPanelMetaForUser?.('chat-toolbar', requestContext.user.tokenId, {
   tone: 'default',
+});
+```
+
+When that user-scoped override should stop shadowing future global updates,
+clear the field explicitly:
+
+```ts
+ctx.ui.setPanelMetaForUser?.('chat-toolbar', requestContext.user.tokenId, {
+  tone: null,
 });
 ```
 
@@ -330,9 +339,15 @@ Rules:
 - `setPanelMetaForUser(panelId, tokenId, meta)` only affects that authenticated
   user token.
 - User-scoped metadata overlays global metadata from `setPanelMeta()`.
+- Metadata uses patch semantics. Omitted fields keep their current runtime
+  value; `null` clears a field. For user-scoped metadata, clearing the field
+  restores inheritance from the global metadata layer.
 - The host only delivers user-scoped metadata to the matching token; other
   clients never receive it in `pluginList` snapshots or `pluginPanelMeta`
   websocket updates.
+- `setPanelMetaForUser` is available on hosts that support user-scoped panel
+  metadata. Feature-detect it with optional chaining and fall back to
+  `setPanelMeta()` or no per-user override on older hosts.
 
 ## CSS Design Tokens
 

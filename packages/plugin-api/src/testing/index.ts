@@ -350,7 +350,7 @@ export function createMockUIBridge(): MockUIBridge {
     setPanelMetaForUser(
       _panelId: string,
       _tokenId: string,
-      _meta: Parameters<UIBridge['setPanelMetaForUser']>[2],
+      _meta: Parameters<NonNullable<UIBridge['setPanelMetaForUser']>>[2],
     ): void {
       // no-op in mock
     },
