@@ -74,6 +74,7 @@ export class WSConnection extends WSMessageHandler {
   private authorizedOperatorIds: Set<string> = new Set(); // Token 授予的操作员权限
   private authLabel: string = '';
   private tokenId: string | null = null; // 用于懒查询最新权限
+  private jwtExpiresAtMs: number | null = null;
   private ability: AppAbility = emptyAbility();
 
   // 记录WebSocket事件监听器,用于清理 (修复内存泄漏)
@@ -219,12 +220,13 @@ export class WSConnection extends WSMessageHandler {
   /**
    * 设置为已认证用户
    */
-  setAuthenticated(role: UserRole, operatorIds: string[], label: string, tokenId?: string): void {
+  setAuthenticated(role: UserRole, operatorIds: string[], label: string, tokenId?: string, jwtExpiresAtMs?: number): void {
     this.authenticated = true;
     this.userRole = role;
     this.authorizedOperatorIds = new Set(operatorIds);
     this.authLabel = label;
     if (tokenId) this.tokenId = tokenId;
+    this.jwtExpiresAtMs = jwtExpiresAtMs ?? null;
     // Build CASL ability with latest permissions
     const authManager = AuthManager.getInstance();
     const perms = tokenId ? authManager.getTokenCurrentPermissions(tokenId) : null;
@@ -277,21 +279,58 @@ export class WSConnection extends WSMessageHandler {
     return AuthManager.hasMinRole(this.userRole, minRole);
   }
 
+  hasCurrentMinRole(minRole: UserRole): boolean {
+    const role = this.getCurrentRole();
+    return role ? AuthManager.hasMinRole(role, minRole) : false;
+  }
+
+  private getCurrentRole(): UserRole | null {
+    if (!this.userRole) return null;
+    if (!this.tokenId || this.tokenId === '__local__') {
+      return this.userRole;
+    }
+    if (this.jwtExpiresAtMs !== null && this.jwtExpiresAtMs <= Date.now()) {
+      return null;
+    }
+    const authManager = AuthManager.getInstance();
+    if (!authManager.isTokenStillValid(this.tokenId)) {
+      return null;
+    }
+    const perms = authManager.getTokenCurrentPermissions(this.tokenId);
+    if (!perms) {
+      return null;
+    }
+    this.userRole = perms.role;
+    this.authorizedOperatorIds = new Set(perms.operatorIds);
+    this.ability = buildAbility({
+      role: perms.role,
+      operatorIds: perms.operatorIds,
+      permissionGrants: perms.permissionGrants,
+    });
+    return perms.role;
+  }
+
   /**
    * 检查是否有操作员访问权限（懒查询：实时从 AuthManager 获取最新 operatorIds）
    */
   hasOperatorAccess(operatorId: string): boolean {
     if (!this.userRole) return false;
-    if (this.userRole === UserRole.ADMIN) return true;
 
     // 懒查询：优先使用 AuthManager 中的最新权限（处理操作员增删后的动态变化）
-    if (this.tokenId) {
+    if (this.tokenId && this.tokenId !== '__local__') {
       const authManager = AuthManager.getInstance();
+      if (!authManager.isTokenStillValid(this.tokenId)) {
+        return false;
+      }
       const perms = authManager.getTokenCurrentPermissions(this.tokenId);
       if (perms) {
+        if (perms.role === UserRole.ADMIN) return true;
         return perms.operatorIds.includes(operatorId);
       }
+      return false;
     }
+
+    if (this.userRole === UserRole.ADMIN) return true;
 
     // 降级：使用认证时的快照
     return this.authorizedOperatorIds.has(operatorId);
@@ -302,8 +341,12 @@ export class WSConnection extends WSMessageHandler {
    */
   canPerform(action: AppAction, subject: AppSubject, data?: Record<string, unknown>): boolean {
     // Lazy refresh: rebuild ability from latest token permissions
-    if (this.tokenId) {
+    if (this.tokenId && this.tokenId !== '__local__') {
       const authManager = AuthManager.getInstance();
+      if (!authManager.isTokenStillValid(this.tokenId)) {
+        this.ability = emptyAbility();
+        return false;
+      }
       const perms = authManager.getTokenCurrentPermissions(this.tokenId);
       if (perms) {
         this.ability = buildAbility({
@@ -343,12 +386,16 @@ export class WSConnection extends WSMessageHandler {
    * 获取当前最新的授权操作员 ID（优先从 AuthManager 懒查询）
    */
   private getCurrentAuthorizedOperatorIds(): Set<string> {
-    if (this.tokenId) {
+    if (this.tokenId && this.tokenId !== '__local__') {
       const authManager = AuthManager.getInstance();
+      if (!authManager.isTokenStillValid(this.tokenId)) {
+        return new Set();
+      }
       const perms = authManager.getTokenCurrentPermissions(this.tokenId);
       if (perms) {
         return new Set(perms.operatorIds);
       }
+      return new Set();
     }
     return this.authorizedOperatorIds;
   }
@@ -2600,13 +2647,13 @@ export class WSServer extends WSMessageHandler {
     });
 
     // ===== 插件系统事件 =====
-    this.digitalRadioEngine.on('pluginList' as any, (data: any) => {
+    this.digitalRadioEngine.on('pluginList' as any, () => {
       const activeConnections = this.getActiveConnections()
-        .filter(connection => connection.isHandshakeCompleted() && connection.hasMinRole(UserRole.OPERATOR));
+        .filter(connection => connection.isHandshakeCompleted() && connection.hasCurrentMinRole(UserRole.OPERATOR));
       activeConnections.forEach((connection) => {
         connection.send(
           WSMessageType.PLUGIN_LIST,
-          this.filterPluginSnapshotForConnection(data as PluginSystemSnapshot, connection),
+          this.digitalRadioEngine.pluginManager.getSnapshot(connection.getTokenId()),
         );
       });
     });
@@ -2627,7 +2674,7 @@ export class WSServer extends WSMessageHandler {
     });
     this.digitalRadioEngine.on('pluginPanelMeta' as any, (data: any) => {
       const activeConnections = this.getActiveConnections()
-        .filter(connection => connection.isHandshakeCompleted() && connection.hasMinRole(UserRole.OPERATOR));
+        .filter(connection => connection.isHandshakeCompleted() && connection.hasCurrentMinRole(UserRole.OPERATOR));
       activeConnections.forEach((connection) => {
         const payload = this.resolvePluginPanelMetaForConnection(data as PluginPanelMetaPayload, connection);
         if (!payload) {
@@ -2746,7 +2793,7 @@ export class WSServer extends WSMessageHandler {
       }
 
       // 2.5 发送插件系统快照
-      if (connection.hasMinRole(UserRole.OPERATOR)) try {
+      if (connection.hasCurrentMinRole(UserRole.OPERATOR)) try {
         connection.send(
           WSMessageType.PLUGIN_LIST,
           this.digitalRadioEngine.pluginManager.getSnapshot(connection.getTokenId()),
@@ -2877,7 +2924,7 @@ export class WSServer extends WSMessageHandler {
 
       // 更新连接的认证状态
       const wasAuthenticated = connection.isAuthenticated();
-      connection.setAuthenticated(perms.role, perms.operatorIds, label, decoded.tokenId);
+      connection.setAuthenticated(perms.role, perms.operatorIds, label, decoded.tokenId, decoded.exp * 1000);
 
       connection.send(WSMessageType.AUTH_RESULT, {
         success: true,

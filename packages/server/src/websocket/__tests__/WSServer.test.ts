@@ -9,6 +9,7 @@ import {
 } from '@tx5dr/contracts';
 import { WSConnection, WSServer } from '../WSServer.js';
 import { ConfigManager } from '../../config/config-manager.js';
+import { AuthManager } from '../../auth/AuthManager.js';
 
 function createStatus(overrides: Partial<SystemStatus> = {}): SystemStatus {
   return {
@@ -170,6 +171,10 @@ function createTestConnection(id = 'conn-test'): { connection: WSConnection; sen
 }
 
 describe('WSServer security filtering', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('keeps public viewers from self-subscribing to operators', async () => {
     const { connection, sent } = createTestConnection('conn-public');
     connection.setPublicViewer();
@@ -393,6 +398,52 @@ describe('WSServer security filtering', () => {
       viewerTokenId: 'token-b',
       meta: { tone: 'danger' },
     }, connection)).toBeNull();
+  });
+
+  it('checks current token validity, role and JWT expiry for plugin delivery', () => {
+    const currentPermissions: {
+      role: UserRole;
+      operatorIds: string[];
+      permissionGrants?: undefined;
+    } = {
+      role: UserRole.OPERATOR,
+      operatorIds: ['operator-1'],
+      permissionGrants: undefined,
+    };
+    const authManager = {
+      getTokenCurrentPermissions: vi.fn(() => currentPermissions),
+      isTokenStillValid: vi.fn(() => true),
+    };
+    vi.spyOn(AuthManager, 'getInstance').mockReturnValue(authManager as unknown as AuthManager);
+
+    const { connection } = createTestConnection('conn-current-auth');
+    connection.setAuthenticated(
+      UserRole.OPERATOR,
+      ['operator-1'],
+      'operator',
+      'token-a',
+      Date.now() + 60_000,
+    );
+
+    expect(connection.hasCurrentMinRole(UserRole.OPERATOR)).toBe(true);
+
+    currentPermissions.role = UserRole.VIEWER;
+    expect(connection.hasCurrentMinRole(UserRole.OPERATOR)).toBe(false);
+
+    currentPermissions.role = UserRole.OPERATOR;
+    authManager.isTokenStillValid.mockReturnValue(false);
+    expect(connection.hasCurrentMinRole(UserRole.OPERATOR)).toBe(false);
+
+    authManager.isTokenStillValid.mockReturnValue(true);
+    const expired = createTestConnection('conn-expired-auth').connection;
+    expired.setAuthenticated(
+      UserRole.OPERATOR,
+      ['operator-1'],
+      'operator',
+      'token-a',
+      Date.now() - 1,
+    );
+    expect(expired.hasCurrentMinRole(UserRole.OPERATOR)).toBe(false);
   });
 });
 

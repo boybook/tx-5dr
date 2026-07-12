@@ -493,6 +493,7 @@ export class AuthManager {
   getTokenCurrentPermissions(tokenId: string): { role: UserRole; operatorIds: string[]; maxOperators?: number; permissionGrants?: PermissionGrant[] } | null {
     const token = this.config.tokens.find(t => t.id === tokenId);
     if (!token || token.revoked) return null;
+    if (token.expiresAt && token.expiresAt < Date.now()) return null;
     return { role: token.role, operatorIds: token.operatorIds, maxOperators: token.maxOperators, permissionGrants: token.permissionGrants };
   }
 
