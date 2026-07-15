@@ -34,6 +34,9 @@ const { state, mockConfigManager, mockEngine, mockReloadAudioConfig } = vi.hoist
     setActiveProfileId: vi.fn(async (id: string | null) => {
       testState.activeProfileId = id;
     }),
+    snapshotOperatingMemoryForProfile: vi.fn(async () => {}),
+    loadOperatingMemoryForProfile: vi.fn(async () => {}),
+    deleteProfileOperatingMemory: vi.fn(async () => {}),
     getProfiles: vi.fn(() => testState.profiles),
     getActiveProfile: vi.fn(() => testState.profiles.find((profile) => profile.id === testState.activeProfileId) ?? null),
     reorderProfiles: vi.fn(),
@@ -293,5 +296,35 @@ describe('ProfileManager audio runtime config application', () => {
     expect(mockReloadAudioConfig).toHaveBeenCalledTimes(1);
     expect(mockEngine.start).toHaveBeenCalledTimes(1);
     expect(mockReloadAudioConfig.mock.invocationCallOrder[0]).toBeLessThan(mockEngine.start.mock.invocationCallOrder[0]);
+  });
+
+  it('snapshots previous profile operating memory then loads the new profile memory', async () => {
+    state.profiles = [
+      makeProfile({ id: 'profile-9700', name: 'IC-9700' }),
+      makeProfile({ id: 'profile-7610', name: 'IC-7610' }),
+    ];
+    state.activeProfileId = 'profile-9700';
+    const manager = ProfileManager.getInstance();
+
+    await manager.activateProfile('profile-7610');
+
+    expect(mockConfigManager.snapshotOperatingMemoryForProfile).toHaveBeenCalledWith('profile-9700');
+    expect(mockConfigManager.setActiveProfileId).toHaveBeenCalledWith('profile-7610');
+    expect(mockConfigManager.loadOperatingMemoryForProfile).toHaveBeenCalledWith('profile-7610');
+    expect(mockConfigManager.snapshotOperatingMemoryForProfile.mock.invocationCallOrder[0])
+      .toBeLessThan(mockConfigManager.setActiveProfileId.mock.invocationCallOrder[0]);
+    expect(mockConfigManager.setActiveProfileId.mock.invocationCallOrder[0])
+      .toBeLessThan(mockConfigManager.loadOperatingMemoryForProfile.mock.invocationCallOrder[0]);
+  });
+
+  it('does not swap operating memory when re-activating the same profile', async () => {
+    state.activeProfileId = 'profile-1';
+    const manager = ProfileManager.getInstance();
+
+    await manager.activateProfile('profile-1');
+
+    expect(mockConfigManager.snapshotOperatingMemoryForProfile).not.toHaveBeenCalled();
+    expect(mockConfigManager.loadOperatingMemoryForProfile).not.toHaveBeenCalled();
+    expect(mockConfigManager.setActiveProfileId).toHaveBeenCalledWith('profile-1');
   });
 });
