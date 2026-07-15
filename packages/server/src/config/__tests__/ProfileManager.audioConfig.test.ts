@@ -72,6 +72,10 @@ vi.mock('../config-manager.js', () => ({
     return {
       inputDeviceName: config.inputDeviceName,
       outputDeviceName: config.outputDeviceName,
+      inputDeviceId: config.inputDeviceId,
+      outputDeviceId: config.outputDeviceId,
+      inputHardwareId: config.inputHardwareId,
+      outputHardwareId: config.outputHardwareId,
       inputSampleRate: config.inputSampleRate ?? config.sampleRate ?? 48000,
       outputSampleRate: config.outputSampleRate ?? config.sampleRate ?? 48000,
       inputBufferSize: config.inputBufferSize ?? config.bufferSize ?? 1024,

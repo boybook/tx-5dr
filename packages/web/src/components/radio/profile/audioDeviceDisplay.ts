@@ -9,6 +9,19 @@ export function formatDeviceText(t: TFunction, device: AudioDevice): string {
   return `${device.name}${formatDeviceDefaultSuffix(t, device.isDefault)}`;
 }
 
+export function formatDeviceDetail(device: AudioDevice | null | undefined): string | null {
+  if (!device) return null;
+  if (device.detail?.trim()) return device.detail.trim();
+
+  const parts: string[] = [];
+  if (device.serialNumber) parts.push(`SN ${device.serialNumber}`);
+  if (device.vendorId && device.productId) {
+    parts.push(`VID:PID ${device.vendorId}:${device.productId}`);
+  }
+  if (device.usbPath) parts.push(`USB ${device.usbPath}`);
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
 export function formatChannelText(t: TFunction, channels: number): string {
   return t('audio.channels', { count: channels });
 }

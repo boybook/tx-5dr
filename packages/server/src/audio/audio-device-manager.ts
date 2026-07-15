@@ -16,6 +16,15 @@ import {
   type AndroidAudioDeviceDescriptor,
   type AndroidAudioDirection,
 } from './android-audio-devices.js';
+import {
+  assignBusyIdentitiesToActiveDevices,
+  attachLinuxUsbAudioIdentities,
+  buildSupplementalUsbAudioDevices,
+  dedupeAudioDevicesByHardwareId,
+  discoverLinuxUsbAudioIdentities,
+  identityToFields,
+  looksLikeUsbAudioDeviceName,
+} from './linux-usb-audio-identity.js';
 
 const logger = createLogger('AudioDeviceManager');
 type RadioType = 'none' | 'network' | 'serial' | 'icom-wlan' | 'tci';
@@ -33,6 +42,7 @@ type StreamDeviceResolution = {
   actualDeviceId: number;
   persistedDeviceId: string;
   deviceName: string;
+  hardwareId?: string;
 };
 
 const RTAUDIO_BUFFER_SIZE_OPTIONS = [128, 256, 512, 768, 1024, 2048, 4096];
@@ -86,8 +96,8 @@ export class AudioDeviceManager {
     this.registryInitialized = true;
   }
 
-  private getDeviceKey(direction: AudioDirection, name: string): string {
-    return `${direction}:${name.trim().toLocaleLowerCase()}`;
+  private getDeviceKey(direction: AudioDirection, deviceId: string): string {
+    return `${direction}:${deviceId}`;
   }
 
   private toPublicDevice(device: RegisteredAudioDevice): AudioDevice {
@@ -100,9 +110,17 @@ export class AudioDeviceManager {
 
   private parseNumericDeviceId(deviceId: string | undefined): number | null {
     if (!deviceId) return null;
+    if (deviceId.includes('usb:')) return null;
     const normalized = deviceId.replace(/^(input|output)-/, '');
     const parsed = Number.parseInt(normalized, 10);
     return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private extractHardwareId(deviceId?: string, hardwareId?: string): string | undefined {
+    if (hardwareId) return hardwareId;
+    if (!deviceId) return undefined;
+    const match = deviceId.match(/usb:[^/#]+/);
+    return match?.[0];
   }
 
   private fallbackDevice(direction: AudioDirection): AudioDevice {
@@ -141,32 +159,102 @@ export class AudioDeviceManager {
       devices.push(publicDevice);
     }
 
-    if (devices.length === 0) {
-      devices.push(this.fallbackDevice(direction));
+    const identities = discoverLinuxUsbAudioIdentities();
+    // Re-label TX5DR-owned busy cards (RtAudio hides them while open).
+    const reconciled = assignBusyIdentitiesToActiveDevices(devices, identities);
+    for (let index = 0; index < devices.length; index++) {
+      const enriched = reconciled[index];
+      if (!enriched) continue;
+      devices[index] = { ...devices[index], ...enriched };
+      const registered = this.deviceRegistry[direction].get(this.getDeviceKey(direction, devices[index].id));
+      if (registered && enriched.hardwareId) {
+        Object.assign(registered, {
+          hardwareId: enriched.hardwareId,
+          detail: enriched.detail,
+          vendorId: enriched.vendorId,
+          productId: enriched.productId,
+          serialNumber: enriched.serialNumber,
+          usbPath: enriched.usbPath,
+          alsaCard: enriched.alsaCard,
+          alsaCardId: enriched.alsaCardId,
+        });
+      }
+    }
+
+    const existingHardwareIds = new Set(
+      devices.map((device) => device.hardwareId).filter((id): id is string => Boolean(id)),
+    );
+    devices.push(...buildSupplementalUsbAudioDevices(direction, existingHardwareIds, identities));
+
+    const deduped = dedupeAudioDevicesByHardwareId(devices);
+
+    if (deduped.length === 0) {
+      deduped.push(this.fallbackDevice(direction));
     }
 
     if (direction === 'input') {
       if (this.shouldShowIcomWlanDevice()) {
-        devices.unshift(this.createIcomWlanDevice('input'));
+        deduped.unshift(this.createIcomWlanDevice('input'));
       }
       if (this.shouldShowTciDevice()) {
-        devices.unshift(this.createTciDevice('input'));
+        deduped.unshift(this.createTciDevice('input'));
       }
 
       const openwebrxDevices = this.getOpenWebRXVirtualDevices();
       if (openwebrxDevices.length > 0) {
-        devices.push(...openwebrxDevices);
+        deduped.push(...openwebrxDevices);
       }
     } else {
       if (this.shouldShowIcomWlanDevice()) {
-        devices.unshift(this.createIcomWlanDevice('output'));
+        deduped.unshift(this.createIcomWlanDevice('output'));
       }
       if (this.shouldShowTciDevice()) {
-        devices.unshift(this.createTciDevice('output'));
+        deduped.unshift(this.createTciDevice('output'));
       }
     }
 
-    return devices;
+    return deduped;
+  }
+
+  /**
+   * RtAudio numeric ids are unstable: opening a USB codec often makes ALSA reuse
+   * that index for an unrelated device (e.g. HDMI) or the other identical CODEC.
+   * Only treat devices as the same physical endpoint when hardwareIds match.
+   */
+  private isCompatibleLiveDevice(
+    existing: RegisteredAudioDevice,
+    liveDevice: AudioDevice,
+  ): boolean {
+    if (existing.hardwareId && liveDevice.hardwareId) {
+      return existing.hardwareId === liveDevice.hardwareId;
+    }
+    // Same product name (ICOM "USB Audio CODEC") must not imply same radio.
+    if (
+      looksLikeUsbAudioDeviceName(existing.name)
+      || looksLikeUsbAudioDeviceName(liveDevice.name)
+    ) {
+      return false;
+    }
+    return existing.name === liveDevice.name;
+  }
+
+  private relocateActiveDevice(
+    direction: AudioDirection,
+    existing: RegisteredAudioDevice,
+  ): void {
+    const stableId = existing.hardwareId
+      ? `${direction}-${existing.hardwareId}`
+      : `${existing.id}__held`;
+    if (stableId === existing.id) {
+      return;
+    }
+    this.deviceRegistry[direction].delete(this.getDeviceKey(direction, existing.id));
+    this.deviceRegistry[direction].set(this.getDeviceKey(direction, stableId), {
+      ...existing,
+      id: stableId,
+      availability: 'active',
+      isActiveByTx5dr: true,
+    });
   }
 
   private mergeLiveDevices(inputDevices: AudioDevice[], outputDevices: AudioDevice[], observedAt: number): void {
@@ -184,12 +272,51 @@ export class AudioDeviceManager {
       }
 
       for (const liveDevice of liveDevices[direction]) {
-        const key = this.getDeviceKey(direction, liveDevice.name);
-        const existing = this.deviceRegistry[direction].get(key);
+        const key = this.getDeviceKey(direction, liveDevice.id);
+        let existing = this.deviceRegistry[direction].get(key);
+        if (existing && !this.isCompatibleLiveDevice(existing, liveDevice)) {
+          if (existing.isActiveByTx5dr) {
+            this.relocateActiveDevice(direction, existing);
+          } else {
+            this.deviceRegistry[direction].delete(key);
+          }
+          existing = undefined;
+        }
+        if (!existing && liveDevice.hardwareId) {
+          const byHardware = this.findRegisteredDeviceByHardwareId(direction, liveDevice.hardwareId);
+          if (byHardware && this.isCompatibleLiveDevice(byHardware, liveDevice)) {
+            existing = byHardware;
+          }
+        }
         const isActive = existing?.isActiveByTx5dr === true;
+        // Drop stale duplicates if an older registry entry moved IDs.
+        if (existing && existing.id !== liveDevice.id) {
+          this.deviceRegistry[direction].delete(this.getDeviceKey(direction, existing.id));
+        }
+        const keepUsbIdentity = Boolean(
+          liveDevice.hardwareId
+          || (isActive && existing?.hardwareId && looksLikeUsbAudioDeviceName(liveDevice.name)),
+        );
         this.deviceRegistry[direction].set(key, {
-          ...existing,
-          ...liveDevice,
+          id: liveDevice.id,
+          name: liveDevice.name,
+          isDefault: liveDevice.isDefault,
+          channels: liveDevice.channels,
+          sampleRate: liveDevice.sampleRate,
+          ...(liveDevice.sampleRates ? { sampleRates: liveDevice.sampleRates } : {}),
+          type: liveDevice.type,
+          ...(keepUsbIdentity
+            ? {
+                hardwareId: liveDevice.hardwareId ?? existing?.hardwareId,
+                detail: liveDevice.detail ?? existing?.detail,
+                vendorId: liveDevice.vendorId ?? existing?.vendorId,
+                productId: liveDevice.productId ?? existing?.productId,
+                serialNumber: liveDevice.serialNumber ?? existing?.serialNumber,
+                usbPath: liveDevice.usbPath ?? existing?.usbPath,
+                alsaCard: liveDevice.alsaCard ?? existing?.alsaCard,
+                alsaCardId: liveDevice.alsaCardId ?? existing?.alsaCardId,
+              }
+            : {}),
           availability: isActive ? 'active' : 'available',
           isActiveByTx5dr: isActive,
           lastSeenAt: observedAt,
@@ -203,12 +330,16 @@ export class AudioDeviceManager {
     inputDevices: AudioDevice[];
     outputDevices: AudioDevice[];
   } {
-    const inputDevices = rawDevices
-      .filter((device: any) => device.inputChannels && device.inputChannels > 0)
-      .map((device: any) => this.convertAudifyDevice(device, 'input', Boolean(device.isDefaultInput)));
-    const outputDevices = rawDevices
-      .filter((device: any) => device.outputChannels && device.outputChannels > 0)
-      .map((device: any) => this.convertAudifyDevice(device, 'output', Boolean(device.isDefaultOutput)));
+    const inputDevices = attachLinuxUsbAudioIdentities(
+      rawDevices
+        .filter((device: any) => device.inputChannels && device.inputChannels > 0)
+        .map((device: any) => this.convertAudifyDevice(device, 'input', Boolean(device.isDefaultInput))),
+    );
+    const outputDevices = attachLinuxUsbAudioIdentities(
+      rawDevices
+        .filter((device: any) => device.outputChannels && device.outputChannels > 0)
+        .map((device: any) => this.convertAudifyDevice(device, 'output', Boolean(device.isDefaultOutput))),
+    );
 
     return { inputDevices, outputDevices };
   }
@@ -254,8 +385,70 @@ export class AudioDeviceManager {
     return liveDevices;
   }
 
+  private findRegisteredDeviceById(direction: AudioDirection, deviceId: string): RegisteredAudioDevice | null {
+    return this.deviceRegistry[direction].get(this.getDeviceKey(direction, deviceId)) ?? null;
+  }
+
+  private findRegisteredDeviceByHardwareId(
+    direction: AudioDirection,
+    hardwareId: string | undefined,
+  ): RegisteredAudioDevice | null {
+    if (!hardwareId) return null;
+    for (const device of this.deviceRegistry[direction].values()) {
+      if (device.hardwareId === hardwareId) {
+        return device;
+      }
+    }
+    return null;
+  }
+
   private findRegisteredDeviceByName(direction: AudioDirection, deviceName: string): RegisteredAudioDevice | null {
-    return this.deviceRegistry[direction].get(this.getDeviceKey(direction, deviceName)) ?? null;
+    for (const device of this.deviceRegistry[direction].values()) {
+      if (device.name === deviceName) {
+        return device;
+      }
+    }
+    return null;
+  }
+
+  private findDevicesByName(devices: AudioDevice[], deviceName: string): AudioDevice[] {
+    return devices.filter((device) => device.name === deviceName);
+  }
+
+  private findConfiguredDevice(
+    devices: AudioDevice[],
+    params: {
+      configuredDeviceId?: string | null;
+      configuredHardwareId?: string | null;
+      configuredDeviceName?: string | null;
+    },
+  ): AudioDevice | null {
+    const { configuredDeviceId, configuredHardwareId, configuredDeviceName } = params;
+
+    if (configuredHardwareId) {
+      const byHardwareId = devices.find((device) => device.hardwareId === configuredHardwareId);
+      if (byHardwareId) return byHardwareId;
+    }
+
+    if (configuredDeviceId) {
+      const byId = devices.find((device) => device.id === configuredDeviceId);
+      if (byId) return byId;
+    }
+
+    if (!configuredDeviceName) {
+      return null;
+    }
+
+    const byName = this.findDevicesByName(devices, configuredDeviceName);
+    if (byName.length === 1) {
+      return byName[0];
+    }
+    if (byName.length > 1) {
+      // Legacy profiles only stored the name. Keep deterministic first-match
+      // so existing setups keep working until the user re-saves with an id.
+      return byName[0];
+    }
+    return null;
   }
 
   private findDefaultDevice(devices: AudioDevice[]): AudioDevice | null {
@@ -272,6 +465,7 @@ export class AudioDeviceManager {
     deviceName: string | undefined,
     rtAudio: RtAudioInstance,
     requestedDeviceId?: string,
+    requestedHardwareId?: string,
   ): Promise<StreamDeviceResolution> {
     if (isAndroidAudioDeviceId(requestedDeviceId) || deviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName('input', deviceName))) {
       const device = this.resolveAndroidDeviceOrThrow(
@@ -281,13 +475,14 @@ export class AudioDeviceManager {
       );
       return { actualDeviceId: -1, persistedDeviceId: device.id, deviceName: device.name };
     }
-    return this.resolveDeviceForStream('input', deviceName, rtAudio, requestedDeviceId);
+    return this.resolveDeviceForStream('input', deviceName, rtAudio, requestedDeviceId, requestedHardwareId);
   }
 
   async resolveOutputDeviceForStream(
     deviceName: string | undefined,
     rtAudio: RtAudioInstance,
     requestedDeviceId?: string,
+    requestedHardwareId?: string,
   ): Promise<StreamDeviceResolution> {
     if (isAndroidAudioDeviceId(requestedDeviceId) || deviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName('output', deviceName))) {
       const device = this.resolveAndroidDeviceOrThrow(
@@ -297,7 +492,7 @@ export class AudioDeviceManager {
       );
       return { actualDeviceId: -1, persistedDeviceId: device.id, deviceName: device.name };
     }
-    return this.resolveDeviceForStream('output', deviceName, rtAudio, requestedDeviceId);
+    return this.resolveDeviceForStream('output', deviceName, rtAudio, requestedDeviceId, requestedHardwareId);
   }
 
   resolveAndroidDeviceForStream(
@@ -325,10 +520,36 @@ export class AudioDeviceManager {
     deviceName: string | undefined,
     rtAudio: RtAudioInstance,
     requestedDeviceId?: string,
+    requestedHardwareId?: string,
   ): Promise<StreamDeviceResolution> {
     const liveDevices = await this.observeRtAudioInstance(rtAudio);
     const directionalLiveDevices = direction === 'input' ? liveDevices.inputDevices : liveDevices.outputDevices;
+    const hardwareId = this.extractHardwareId(requestedDeviceId, requestedHardwareId);
     const requestedNumericId = this.parseNumericDeviceId(requestedDeviceId);
+
+    if (hardwareId) {
+      const byHardwareId = directionalLiveDevices.find((device) => device.hardwareId === hardwareId);
+      if (byHardwareId) {
+        const actualDeviceId = this.parseNumericDeviceId(byHardwareId.id);
+        if (actualDeviceId !== null) {
+          return {
+            actualDeviceId,
+            persistedDeviceId: byHardwareId.id,
+            deviceName: byHardwareId.name,
+            hardwareId,
+          };
+        }
+      }
+
+      const identities = discoverLinuxUsbAudioIdentities();
+      const identity = identities.find((item) => item.hardwareId === hardwareId);
+      const label = identity?.relatedRadioLabel || identity?.detail || hardwareId;
+      throw this.createUnavailableConfiguredDeviceError(
+        direction,
+        deviceName || label,
+        identity?.pcmBusy ? 'cached' : undefined,
+      );
+    }
 
     if (requestedNumericId !== null) {
       const requestedLiveDevice = directionalLiveDevices.find((device) => this.parseNumericDeviceId(device.id) === requestedNumericId);
@@ -337,12 +558,31 @@ export class AudioDeviceManager {
           actualDeviceId: requestedNumericId,
           persistedDeviceId: requestedLiveDevice.id,
           deviceName: requestedLiveDevice.name,
+          hardwareId: requestedLiveDevice.hardwareId,
         };
       }
     }
 
+    if (requestedDeviceId) {
+      const byExactId = directionalLiveDevices.find((device) => device.id === requestedDeviceId);
+      if (byExactId) {
+        const actualDeviceId = this.parseNumericDeviceId(byExactId.id);
+        if (actualDeviceId !== null) {
+          return {
+            actualDeviceId,
+            persistedDeviceId: byExactId.id,
+            deviceName: byExactId.name,
+            hardwareId: byExactId.hardwareId,
+          };
+        }
+      }
+    }
+
     if (deviceName) {
-      const liveDevice = directionalLiveDevices.find((device) => device.name === deviceName);
+      const namedDevices = this.findDevicesByName(directionalLiveDevices, deviceName);
+      const liveDevice = namedDevices.length === 1
+        ? namedDevices[0]
+        : (namedDevices.find((device) => device.id === requestedDeviceId) ?? namedDevices[0]);
       if (liveDevice) {
         const actualDeviceId = this.parseNumericDeviceId(liveDevice.id);
         if (actualDeviceId !== null) {
@@ -350,11 +590,14 @@ export class AudioDeviceManager {
             actualDeviceId,
             persistedDeviceId: liveDevice.id,
             deviceName: liveDevice.name,
+            hardwareId: liveDevice.hardwareId,
           };
         }
       }
 
-      const registeredDevice = this.findRegisteredDeviceByName(direction, deviceName);
+      const registeredDevice = this.findRegisteredDeviceByHardwareId(direction, hardwareId)
+        ?? (requestedDeviceId ? this.findRegisteredDeviceById(direction, requestedDeviceId) : null)
+        ?? this.findRegisteredDeviceByName(direction, deviceName);
       throw this.createUnavailableConfiguredDeviceError(direction, deviceName, registeredDevice?.availability);
     }
 
@@ -371,16 +614,33 @@ export class AudioDeviceManager {
       actualDeviceId: defaultDeviceId,
       persistedDeviceId: defaultDevice?.id ?? `${direction}-${defaultDeviceId}`,
       deviceName: defaultDevice?.name ?? (direction === 'input' ? 'Default audio input device' : 'Default audio output device'),
+      hardwareId: defaultDevice?.hardwareId,
     };
   }
 
-  markDeviceActive(direction: AudioDirection, deviceName: string | undefined, deviceId: string | undefined, sampleRate: number, channels: number): void {
+  markDeviceActive(
+    direction: AudioDirection,
+    deviceName: string | undefined,
+    deviceId: string | undefined,
+    sampleRate: number,
+    channels: number,
+    hardwareId?: string,
+  ): void {
     if (!deviceName || !deviceId) {
       return;
     }
 
-    const key = this.getDeviceKey(direction, deviceName);
-    const existing = this.deviceRegistry[direction].get(key);
+    const key = this.getDeviceKey(direction, deviceId);
+    const existing = this.deviceRegistry[direction].get(key)
+      ?? this.findRegisteredDeviceByHardwareId(direction, hardwareId)
+      ?? undefined;
+    const resolvedHardwareId = hardwareId ?? existing?.hardwareId;
+    const identityFields = resolvedHardwareId
+      ? (() => {
+          const identity = discoverLinuxUsbAudioIdentities().find((item) => item.hardwareId === resolvedHardwareId);
+          return identity ? identityToFields(identity) : (resolvedHardwareId ? { hardwareId: resolvedHardwareId } : {});
+        })()
+      : {};
     this.deviceRegistry[direction].set(key, {
       ...(existing ?? {
         id: deviceId,
@@ -398,13 +658,16 @@ export class AudioDeviceManager {
       isActiveByTx5dr: true,
       lastSeenAt: existing?.lastSeenAt ?? Date.now(),
       lastRtAudioId: deviceId,
+      ...identityFields,
     });
   }
 
-  clearActiveDevice(direction: AudioDirection, deviceName?: string | null): void {
-    const entries = deviceName
-      ? [[this.getDeviceKey(direction, deviceName), this.findRegisteredDeviceByName(direction, deviceName)] as const]
-      : Array.from(this.deviceRegistry[direction].entries());
+  clearActiveDevice(direction: AudioDirection, deviceName?: string | null, deviceId?: string | null): void {
+    const entries = deviceId
+      ? [[this.getDeviceKey(direction, deviceId), this.findRegisteredDeviceById(direction, deviceId)] as const]
+      : deviceName
+        ? Array.from(this.deviceRegistry[direction].entries()).filter(([, device]) => device.name === deviceName)
+        : Array.from(this.deviceRegistry[direction].entries());
 
     for (const [key, device] of entries) {
       if (!device?.isActiveByTx5dr) continue;
@@ -601,12 +864,16 @@ export class AudioDeviceManager {
     return {
       input: this.resolveDeviceDirection({
         configuredDeviceName: settings.inputDeviceName ?? null,
+        configuredDeviceId: settings.inputDeviceId ?? null,
+        configuredHardwareId: settings.inputHardwareId ?? null,
         devices: devices.inputDevices,
         direction: 'input',
         radioType: effectiveRadioType,
       }),
       output: this.resolveDeviceDirection({
         configuredDeviceName: settings.outputDeviceName ?? null,
+        configuredDeviceId: settings.outputDeviceId ?? null,
+        configuredHardwareId: settings.outputHardwareId ?? null,
         devices: devices.outputDevices,
         direction: 'output',
         radioType: effectiveRadioType,
@@ -616,16 +883,27 @@ export class AudioDeviceManager {
 
   private resolveDeviceDirection(params: {
     configuredDeviceName: string | null;
+    configuredDeviceId?: string | null;
+    configuredHardwareId?: string | null;
     devices: AudioDevice[];
     direction: 'input' | 'output';
     radioType: RadioType;
   }): AudioDeviceResolution {
-    const { configuredDeviceName, devices, direction, radioType } = params;
+    const {
+      configuredDeviceName,
+      configuredDeviceId = null,
+      configuredHardwareId = null,
+      devices,
+      direction,
+      radioType,
+    } = params;
     const defaultDevice = devices.find((device) => device.isDefault) ?? devices[0] ?? null;
 
-    if (!configuredDeviceName) {
+    if (!configuredDeviceName && !configuredDeviceId && !configuredHardwareId) {
       return {
         configuredDeviceName: null,
+        configuredDeviceId: null,
+        configuredHardwareId: null,
         configuredDevice: null,
         effectiveDevice: defaultDevice,
         status: 'default',
@@ -633,9 +911,11 @@ export class AudioDeviceManager {
       };
     }
 
-    if (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName(direction, configuredDeviceName)) {
+    if (configuredDeviceName && isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName(direction, configuredDeviceName)) {
       return {
         configuredDeviceName,
+        configuredDeviceId,
+        configuredHardwareId,
         configuredDevice: null,
         effectiveDevice: defaultDevice,
         status: 'default',
@@ -643,10 +923,16 @@ export class AudioDeviceManager {
       };
     }
 
-    const configuredDevice = devices.find((device) => device.name === configuredDeviceName) ?? null;
+    const configuredDevice = this.findConfiguredDevice(devices, {
+      configuredDeviceId,
+      configuredHardwareId,
+      configuredDeviceName,
+    });
     if (configuredDevice) {
       return {
-        configuredDeviceName,
+        configuredDeviceName: configuredDeviceName ?? configuredDevice.name,
+        configuredDeviceId: configuredDeviceId ?? configuredDevice.id,
+        configuredHardwareId: configuredHardwareId ?? configuredDevice.hardwareId ?? null,
         configuredDevice,
         effectiveDevice: configuredDevice,
         status: configuredDevice.id.startsWith('openwebrx-') || configuredDevice.id.startsWith('icom-wlan-') || configuredDevice.id.startsWith('tci-')
@@ -660,6 +946,8 @@ export class AudioDeviceManager {
       const virtualDevice = this.createIcomWlanDevice(direction);
       return {
         configuredDeviceName,
+        configuredDeviceId: configuredDeviceId ?? virtualDevice.id,
+        configuredHardwareId,
         configuredDevice: virtualDevice,
         effectiveDevice: virtualDevice,
         status: 'virtual-selected',
@@ -671,6 +959,8 @@ export class AudioDeviceManager {
       const virtualDevice = this.createTciDevice(direction);
       return {
         configuredDeviceName,
+        configuredDeviceId: configuredDeviceId ?? virtualDevice.id,
+        configuredHardwareId,
         configuredDevice: virtualDevice,
         effectiveDevice: virtualDevice,
         status: 'virtual-selected',
@@ -678,9 +968,11 @@ export class AudioDeviceManager {
       };
     }
 
-    if (configuredDeviceName.startsWith('[SDR]')) {
+    if (configuredDeviceName?.startsWith('[SDR]')) {
       return {
         configuredDeviceName,
+        configuredDeviceId,
+        configuredHardwareId,
         configuredDevice: null,
         effectiveDevice: null,
         status: 'missing',
@@ -689,7 +981,9 @@ export class AudioDeviceManager {
     }
 
     return {
-      configuredDeviceName,
+      configuredDeviceName: configuredDeviceName ?? null,
+      configuredDeviceId,
+      configuredHardwareId,
       configuredDevice: null,
       effectiveDevice: null,
       status: 'missing',

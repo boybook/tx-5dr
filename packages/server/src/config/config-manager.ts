@@ -149,8 +149,12 @@ export interface AppConfig {
 
 // 音频处理配置接口
 export interface AudioConfig {
-  inputDeviceName?: string; // 存储的设备名称
-  outputDeviceName?: string; // 存储的设备名称
+  inputDeviceName?: string;
+  outputDeviceName?: string;
+  inputDeviceId?: string;
+  outputDeviceId?: string;
+  inputHardwareId?: string;
+  outputHardwareId?: string;
   inputSampleRate?: number;
   outputSampleRate?: number;
   inputBufferSize?: number;
@@ -221,6 +225,10 @@ export function normalizeAudioDeviceSettings(audioConfig?: Partial<AudioDeviceSe
   return {
     inputDeviceName: audioConfig?.inputDeviceName,
     outputDeviceName: audioConfig?.outputDeviceName,
+    inputDeviceId: audioConfig?.inputDeviceId,
+    outputDeviceId: audioConfig?.outputDeviceId,
+    inputHardwareId: audioConfig?.inputHardwareId,
+    outputHardwareId: audioConfig?.outputHardwareId,
     inputSampleRate: audioConfig?.inputSampleRate ?? legacySampleRate ?? 48000,
     outputSampleRate: audioConfig?.outputSampleRate ?? legacySampleRate ?? 48000,
     inputBufferSize: audioConfig?.inputBufferSize ?? legacyBufferSize ?? 1024,

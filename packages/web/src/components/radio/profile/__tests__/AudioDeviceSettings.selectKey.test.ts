@@ -3,8 +3,6 @@ import type { AudioDevice, AudioDeviceResolution } from '@tx5dr/contracts';
 import {
   audioSettingsEqual,
   buildAudioDeviceSelectOptions,
-  getDeviceNameFromSelectKey,
-  makeAudioDeviceSelectKey,
   resolveOutputChannelMode,
   resolveOutputSampleFormat,
 } from '../AudioDeviceSettings';
@@ -18,24 +16,64 @@ const builtInInput: AudioDevice = {
   type: 'input',
 };
 
-const missingResolution = (deviceName: string): AudioDeviceResolution => ({
+const codecA: AudioDevice = {
+  id: 'input-130',
+  name: 'USB Audio CODEC',
+  isDefault: false,
+  channels: 2,
+  sampleRate: 48000,
+  type: 'input',
+  hardwareId: 'usb:1-7.2.4',
+  detail: 'IC-9700 12010311 · VID:PID 08bb:2901 · USB 1-7.2.4',
+  serialNumber: 'IC-9700 12010311',
+};
+
+const codecB: AudioDevice = {
+  id: 'input-140',
+  name: 'USB Audio CODEC',
+  isDefault: false,
+  channels: 2,
+  sampleRate: 48000,
+  type: 'input',
+  hardwareId: 'usb:1-7.4.4',
+  detail: 'IC-7610 11002034 · VID:PID 08bb:2901 · USB 1-7.4.4',
+  serialNumber: 'IC-7610 11002034',
+};
+
+const missingResolution = (deviceName: string, deviceId?: string): AudioDeviceResolution => ({
   configuredDeviceName: deviceName,
+  configuredDeviceId: deviceId ?? null,
+  configuredHardwareId: null,
   configuredDevice: null,
   effectiveDevice: null,
   status: 'missing',
 });
 
 describe('AudioDeviceSettings select keys', () => {
-  it('scopes same-named audio devices by direction without changing the saved name', () => {
-    const deviceName = 'USB Audio CODEC';
-    const inputKey = makeAudioDeviceSelectKey('input', deviceName);
-    const outputKey = makeAudioDeviceSelectKey('output', deviceName);
+  it('lists both same-named USB codecs as separate options with unique ids', () => {
+    const options = buildAudioDeviceSelectOptions([codecA, codecB], codecB.id, codecB.name);
 
-    expect(inputKey).toBe('input::USB Audio CODEC');
-    expect(outputKey).toBe('output::USB Audio CODEC');
-    expect(inputKey).not.toBe(outputKey);
-    expect(getDeviceNameFromSelectKey('input', inputKey)).toBe(deviceName);
-    expect(getDeviceNameFromSelectKey('output', outputKey)).toBe(deviceName);
+    expect(options).toHaveLength(2);
+    expect(options.map((option) => option.deviceId)).toEqual([
+      'input-130',
+      'input-140',
+    ]);
+    expect(new Set(options.map((option) => option.deviceId)).size).toBe(2);
+    expect(options[1]).toMatchObject({
+      deviceId: 'input-140',
+      hardwareId: 'usb:1-7.4.4',
+      deviceName: 'USB Audio CODEC',
+    });
+  });
+
+  it('dedupes colliding backend device ids so Select keys stay unique', () => {
+    const options = buildAudioDeviceSelectOptions(
+      [codecA, { ...codecA, hardwareId: 'usb:other' }],
+      '',
+      '',
+    );
+
+    expect(options.map((option) => option.deviceId)).toEqual(['input-130', 'input-130#1']);
   });
 
   it('defaults output diagnostics to the existing Float32 mono behavior', () => {
@@ -58,10 +96,12 @@ describe('AudioDeviceSettings select keys', () => {
     })).toBe(true);
   });
 
-  it('detects real controlled audio changes', () => {
+  it('detects real controlled audio changes including device ids', () => {
     expect(audioSettingsEqual({
       inputDeviceName: 'C-Media Electronics Inc.: USB Audio Device',
       outputDeviceName: 'C-Media Electronics Inc.: USB Audio Device',
+      inputDeviceId: 'input-10',
+      outputDeviceId: 'output-10',
       inputSampleRate: 44100,
       outputSampleRate: 44100,
       inputBufferSize: 1024,
@@ -73,75 +113,65 @@ describe('AudioDeviceSettings select keys', () => {
     })).toBe(false);
   });
 
-  it('adds a direction-scoped missing input option for the saved device name', () => {
+  it('adds a missing input option for the saved device', () => {
     const options = buildAudioDeviceSelectOptions(
-      'input',
       [builtInInput],
+      'input-999',
       'USB Audio CODEC',
-      missingResolution('USB Audio CODEC'),
+      missingResolution('USB Audio CODEC', 'input-999'),
     );
 
     expect(options).toEqual([
       expect.objectContaining({
-        key: 'input::Built-in Mic',
+        deviceId: 'input-1',
         deviceName: 'Built-in Mic',
         isMissing: false,
       }),
       {
-        key: 'input::USB Audio CODEC',
+        deviceId: 'input-999',
         deviceName: 'USB Audio CODEC',
+        hardwareId: undefined,
         device: null,
         isMissing: true,
       },
     ]);
   });
 
-  it('adds a direction-scoped missing output option without changing the saved name', () => {
+  it('adds a missing output option from the saved name when id is absent', () => {
     const options = buildAudioDeviceSelectOptions(
-      'output',
       [],
+      '',
       'USB Audio CODEC',
       missingResolution('USB Audio CODEC'),
     );
 
     expect(options).toEqual([{
-      key: 'output::USB Audio CODEC',
+      deviceId: 'missing:USB Audio CODEC',
       deviceName: 'USB Audio CODEC',
+      hardwareId: undefined,
       device: null,
       isMissing: true,
     }]);
-    expect(getDeviceNameFromSelectKey('output', options[0].key)).toBe('USB Audio CODEC');
-  });
-
-  it('keeps same-named missing input and output options distinct', () => {
-    const deviceName = 'C-Media Electronics Inc.: USB Audio Device';
-
-    const inputOptions = buildAudioDeviceSelectOptions('input', [], deviceName, missingResolution(deviceName));
-    const outputOptions = buildAudioDeviceSelectOptions('output', [], deviceName, missingResolution(deviceName));
-
-    expect(inputOptions[0].key).toBe('input::C-Media Electronics Inc.: USB Audio Device');
-    expect(outputOptions[0].key).toBe('output::C-Media Electronics Inc.: USB Audio Device');
-    expect(getDeviceNameFromSelectKey('input', inputOptions[0].key)).toBe(deviceName);
-    expect(getDeviceNameFromSelectKey('output', outputOptions[0].key)).toBe(deviceName);
   });
 
   it('does not add a synthetic option when the saved device is currently enumerated', () => {
     const options = buildAudioDeviceSelectOptions(
-      'input',
-      [{ ...builtInInput, name: 'USB Audio CODEC' }],
-      'USB Audio CODEC',
+      [codecA],
+      codecA.id,
+      codecA.name,
       {
-        configuredDeviceName: 'USB Audio CODEC',
-        configuredDevice: { ...builtInInput, name: 'USB Audio CODEC' },
-        effectiveDevice: { ...builtInInput, name: 'USB Audio CODEC' },
+        configuredDeviceName: codecA.name,
+        configuredDeviceId: codecA.id,
+        configuredHardwareId: codecA.hardwareId,
+        configuredDevice: codecA,
+        effectiveDevice: codecA,
         status: 'selected',
       },
     );
 
     expect(options).toHaveLength(1);
     expect(options[0]).toMatchObject({
-      key: 'input::USB Audio CODEC',
-      deviceName: 'USB Audio CODEC',
+      deviceId: 'input-130',
       isMissing: false,
     });
   });

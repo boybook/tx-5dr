@@ -1,0 +1,531 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('LinuxUsbAudioIdentity');
+
+export type LinuxUsbAudioIdentity = {
+  /** Stable key, e.g. usb:1-7.2.4 */
+  hardwareId: string;
+  alsaCard: number;
+  alsaCardId?: string;
+  /** ALSA card name, usually "USB Audio CODEC" */
+  productName: string;
+  usbPath: string;
+  vendorId?: string;
+  productId?: string;
+  /** Own USB iSerial when present (often empty for Icom PCM codecs). */
+  serialNumber?: string;
+  /**
+   * Best radio-facing label derived from sibling CP210 serials under the same hub,
+   * e.g. "IC-9700 12010311".
+   */
+  relatedRadioLabel?: string;
+  /** Raw sibling serial strings (A/B ports). */
+  relatedSerials: string[];
+  /** One-line detail for UI, similar to serial-port metadata. */
+  detail: string;
+  pcmBusy: boolean;
+  /** PID holding the PCM device when busy, if known. */
+  ownerPid?: number;
+};
+
+export type AudioDeviceIdentityFields = {
+  hardwareId?: string;
+  detail?: string;
+  vendorId?: string;
+  productId?: string;
+  serialNumber?: string;
+  usbPath?: string;
+  alsaCard?: number;
+  alsaCardId?: string;
+};
+
+const SILABS_VENDOR_ID = '10c4';
+
+function readText(filePath: string): string | null {
+  try {
+    const value = fs.readFileSync(filePath, 'utf8').trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+function walkParents(startPath: string): string[] {
+  const parents: string[] = [];
+  let current = startPath;
+  while (current && current !== '/') {
+    parents.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return parents;
+}
+
+function findUsbDeviceDir(startPath: string): string | null {
+  for (const candidate of walkParents(startPath)) {
+    if (readText(path.join(candidate, 'idVendor')) && readText(path.join(candidate, 'idProduct'))) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * Collapse "IC-9700 12010311 A" / "IC-7610_11002034_B" into a radio-level label.
+ */
+export function deriveRadioLabelFromSerial(serial: string): string | null {
+  const normalized = serial.trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
+  if (!normalized) return null;
+
+  const withPortSuffix = normalized.match(/^(IC-\d+(?:\s+\S+)+)\s+[A-Z]$/i);
+  if (withPortSuffix) {
+    return withPortSuffix[1].trim();
+  }
+
+  const icomMatch = normalized.match(/\b(IC-\d+(?:\s+\d+)?)\b/i);
+  if (icomMatch) {
+    const rest = normalized.slice(icomMatch.index!).trim();
+    const simplified = rest.replace(/\s+[AB]$/i, '').trim();
+    return simplified || icomMatch[1];
+  }
+
+  return normalized;
+}
+
+export function buildUsbAudioDetail(identity: {
+  relatedRadioLabel?: string;
+  productName?: string;
+  vendorId?: string;
+  productId?: string;
+  usbPath?: string;
+  relatedSerials?: string[];
+}): string {
+  const parts: string[] = [];
+  if (identity.relatedRadioLabel) {
+    parts.push(identity.relatedRadioLabel);
+  }
+  if (identity.vendorId && identity.productId) {
+    parts.push(`VID:PID ${identity.vendorId}:${identity.productId}`);
+  }
+  if (identity.usbPath) {
+    parts.push(`USB ${identity.usbPath}`);
+  }
+  if (!identity.relatedRadioLabel && identity.relatedSerials?.[0]) {
+    parts.push(`SN ${identity.relatedSerials[0]}`);
+  }
+  if (parts.length === 0 && identity.productName) {
+    parts.push(identity.productName);
+  }
+  return parts.join(' · ');
+}
+
+function collectSiblingRadioSerials(usbDeviceDir: string): string[] {
+  const parentDir = path.dirname(usbDeviceDir);
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(parentDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const serials: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const siblingDir = path.join(parentDir, entry.name);
+    const vendorId = readText(path.join(siblingDir, 'idVendor'))?.toLowerCase();
+    const serial = readText(path.join(siblingDir, 'serial'));
+    if (!serial) continue;
+    if (vendorId === SILABS_VENDOR_ID || /IC-\d+/i.test(serial)) {
+      serials.push(serial);
+    }
+  }
+
+  return Array.from(new Set(serials)).sort((a, b) => a.localeCompare(b));
+}
+
+function readPcmStatus(cardIndex: number): { busy: boolean; ownerPid?: number } {
+  for (const stream of ['pcm0c', 'pcm0p'] as const) {
+    const statusPath = `/proc/asound/card${cardIndex}/${stream}/sub0/status`;
+    const status = readText(statusPath);
+    if (!status) continue;
+    const firstLine = status.split('\n')[0]?.trim() || '';
+    if (/^closed$/i.test(firstLine)) continue;
+    const ownerMatch = status.match(/owner_pid\s*:\s*(\d+)/i);
+    return {
+      busy: true,
+      ownerPid: ownerMatch ? Number.parseInt(ownerMatch[1], 10) : undefined,
+    };
+  }
+  return { busy: false };
+}
+
+function readDirectionalPcmOwner(cardIndex: number, direction: 'input' | 'output'): number | undefined {
+  const stream = direction === 'input' ? 'pcm0c' : 'pcm0p';
+  const statusPath = `/proc/asound/card${cardIndex}/${stream}/sub0/status`;
+  const status = readText(statusPath);
+  if (!status) return undefined;
+  const firstLine = status.split('\n')[0]?.trim() || '';
+  if (/^closed$/i.test(firstLine)) return undefined;
+  const ownerMatch = status.match(/owner_pid\s*:\s*(\d+)/i);
+  return ownerMatch ? Number.parseInt(ownerMatch[1], 10) : undefined;
+}
+
+/**
+ * After opening an RtAudio stream, map the ALSA card actually owned by this
+ * process back to the USB/radio hardwareId (sibling Silabs serial on the hub).
+ */
+export function findOwnedUsbAudioHardwareId(
+  direction: 'input' | 'output',
+  identities: LinuxUsbAudioIdentity[] = discoverLinuxUsbAudioIdentities(),
+  ownerPid: number = process.pid,
+): string | undefined {
+  for (const identity of identities) {
+    if (readDirectionalPcmOwner(identity.alsaCard, direction) === ownerPid) {
+      return identity.hardwareId;
+    }
+  }
+  return undefined;
+}
+
+function parseProcAsoundCards(): Array<{ index: number; id: string; name: string; longName: string }> {
+  const content = readText('/proc/asound/cards');
+  if (!content) return [];
+
+  const cards: Array<{ index: number; id: string; name: string; longName: string }> = [];
+  const lines = content.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const header = lines[i]?.match(/^\s*(\d+)\s+\[([^\]]+)\]:\s+\S+\s+-\s+(.+)$/);
+    if (!header) continue;
+    const longName = (lines[i + 1] || '').trim();
+    cards.push({
+      index: Number.parseInt(header[1], 10),
+      id: header[2].trim(),
+      name: header[3].trim(),
+      longName,
+    });
+  }
+  return cards;
+}
+
+/**
+ * Discover USB sound cards on Linux and correlate them with sibling UART/radio serials.
+ * Returns an empty list on non-Linux hosts or when sysfs is unavailable.
+ */
+export function discoverLinuxUsbAudioIdentities(): LinuxUsbAudioIdentity[] {
+  if (process.platform !== 'linux') {
+    return [];
+  }
+
+  const cards = parseProcAsoundCards();
+  const identities: LinuxUsbAudioIdentity[] = [];
+
+  for (const card of cards) {
+    const cardSysfs = `/sys/class/sound/card${card.index}`;
+    let devicePath: string;
+    try {
+      devicePath = fs.realpathSync(path.join(cardSysfs, 'device'));
+    } catch {
+      continue;
+    }
+
+    const usbDeviceDir = findUsbDeviceDir(devicePath);
+    if (!usbDeviceDir) {
+      continue;
+    }
+
+    const vendorId = readText(path.join(usbDeviceDir, 'idVendor'))?.toLowerCase() || undefined;
+    const productId = readText(path.join(usbDeviceDir, 'idProduct'))?.toLowerCase() || undefined;
+    const productName = readText(path.join(usbDeviceDir, 'product')) || card.name;
+    const ownSerial = readText(path.join(usbDeviceDir, 'serial')) || undefined;
+    const usbPath = path.basename(usbDeviceDir);
+    const relatedSerials = collectSiblingRadioSerials(usbDeviceDir);
+    const relatedRadioLabel = relatedSerials
+      .map((serial) => deriveRadioLabelFromSerial(serial))
+      .find((label): label is string => Boolean(label));
+    const pcmStatus = readPcmStatus(card.index);
+
+    const identity: LinuxUsbAudioIdentity = {
+      hardwareId: `usb:${usbPath}`,
+      alsaCard: card.index,
+      alsaCardId: card.id,
+      productName,
+      usbPath,
+      vendorId,
+      productId,
+      serialNumber: ownSerial || relatedRadioLabel,
+      relatedRadioLabel,
+      relatedSerials,
+      detail: buildUsbAudioDetail({
+        relatedRadioLabel,
+        productName,
+        vendorId,
+        productId,
+        usbPath,
+        relatedSerials,
+      }),
+      pcmBusy: pcmStatus.busy,
+      ownerPid: pcmStatus.ownerPid,
+    };
+
+    identities.push(identity);
+  }
+
+  identities.sort((left, right) => left.alsaCard - right.alsaCard);
+  if (identities.length > 0) {
+    logger.debug('Discovered USB audio identities', {
+      count: identities.length,
+      labels: identities.map((item) => ({
+        card: item.alsaCard,
+        hardwareId: item.hardwareId,
+        relatedRadioLabel: item.relatedRadioLabel,
+        pcmBusy: item.pcmBusy,
+        ownerPid: item.ownerPid,
+      })),
+    });
+  }
+  return identities;
+}
+
+function normalizeName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+export function looksLikeUsbAudioDeviceName(name: string): boolean {
+  const normalized = normalizeName(name);
+  return (
+    normalized.includes('usb audio')
+    || normalized.includes('usb audio codec')
+    || normalized.includes('pcm290')
+    || normalized.includes('burr brown')
+    || normalized.includes('burrbrown')
+  );
+}
+
+/** Drop USB/radio identity fields that must not stick to non-USB RtAudio devices. */
+export function stripUsbIdentityFields<T extends AudioDeviceIdentityFields>(device: T): T {
+  if (!device.hardwareId?.startsWith('usb:') && !device.usbPath && !device.alsaCardId) {
+    return device;
+  }
+  if (looksLikeUsbAudioDeviceName((device as { name?: string }).name ?? '')) {
+    return device;
+  }
+  const {
+    hardwareId: _hardwareId,
+    detail: _detail,
+    vendorId: _vendorId,
+    productId: _productId,
+    serialNumber: _serialNumber,
+    usbPath: _usbPath,
+    alsaCard: _alsaCard,
+    alsaCardId: _alsaCardId,
+    ...rest
+  } = device;
+  return rest as T;
+}
+
+function namesLikelyMatch(deviceName: string, identity: LinuxUsbAudioIdentity): boolean {
+  const deviceNorm = normalizeName(deviceName);
+  const productNorm = normalizeName(identity.productName);
+  if (!deviceNorm || !productNorm) return false;
+  if (deviceNorm.includes(productNorm) || productNorm.includes(deviceNorm.split(' ')[0] || '')) {
+    return true;
+  }
+  return looksLikeUsbAudioDeviceName(deviceName) && looksLikeUsbAudioDeviceName(identity.productName);
+}
+
+export function identityToFields(identity: LinuxUsbAudioIdentity): AudioDeviceIdentityFields {
+  return {
+    hardwareId: identity.hardwareId,
+    detail: identity.detail,
+    vendorId: identity.vendorId,
+    productId: identity.productId,
+    serialNumber: identity.serialNumber ?? identity.relatedRadioLabel,
+    usbPath: identity.usbPath,
+    alsaCard: identity.alsaCard,
+    alsaCardId: identity.alsaCardId,
+  };
+}
+
+/**
+ * Attach Linux USB/radio identity metadata onto enumerated RtAudio devices.
+ *
+ * Matching order matters: the same process can still enumerate a PCM it already
+ * opened, while the free peer radio remains available. Claim "owned by us"
+ * identities only when enumeration still exposes more USB devices than free cards
+ * (the extras are almost certainly the open cards); otherwise attach free cards only.
+ */
+export function attachLinuxUsbAudioIdentities<T extends { name: string; hardwareId?: string }>(
+  devices: T[],
+  identities: LinuxUsbAudioIdentity[] = discoverLinuxUsbAudioIdentities(),
+  ownerPid: number = process.pid,
+): Array<T & AudioDeviceIdentityFields> {
+  if (identities.length === 0 || devices.length === 0) {
+    return devices.map((device) => ({ ...device }));
+  }
+
+  const usedHardwareIds = new Set<string>(
+    devices.map((device) => device.hardwareId).filter((id): id is string => Boolean(id)),
+  );
+
+  const claim = (
+    device: T,
+    pool: LinuxUsbAudioIdentity[],
+  ): (T & AudioDeviceIdentityFields) | null => {
+    if (!looksLikeUsbAudioDeviceName(device.name) || device.hardwareId) {
+      return null;
+    }
+    const match = pool.find((identity) => {
+      if (usedHardwareIds.has(identity.hardwareId)) return false;
+      return namesLikelyMatch(device.name, identity);
+    });
+    if (!match) return null;
+    usedHardwareIds.add(match.hardwareId);
+    return { ...device, ...identityToFields(match) };
+  };
+
+  const ownedByUs = identities.filter(
+    (identity) => identity.pcmBusy && identity.ownerPid === ownerPid,
+  );
+  const free = identities.filter((identity) => !identity.pcmBusy);
+  const unlabeledUsbCount = devices.filter(
+    (device) => looksLikeUsbAudioDeviceName(device.name) && !device.hardwareId,
+  ).length;
+  const ownedStillEnumerated = Math.min(
+    ownedByUs.length,
+    Math.max(0, unlabeledUsbCount - free.length),
+  );
+  const ownedPool = ownedByUs.slice(0, ownedStillEnumerated);
+
+  return devices.map((device) => {
+    if (device.hardwareId) {
+      const known = identities.find((identity) => identity.hardwareId === device.hardwareId);
+      return known ? { ...device, ...identityToFields(known) } : { ...device };
+    }
+    return claim(device, ownedPool) ?? claim(device, free) ?? { ...device };
+  });
+}
+
+/**
+ * Prefer identities occupied by this process for already-active TX5DR streams that
+ * lost their hardwareId (RtAudio stops listing busy cards).
+ */
+export function assignBusyIdentitiesToActiveDevices<T extends {
+  name: string;
+  hardwareId?: string;
+  isActiveByTx5dr?: boolean;
+}>(
+  devices: T[],
+  identities: LinuxUsbAudioIdentity[],
+  ownerPid: number = process.pid,
+): Array<T & AudioDeviceIdentityFields> {
+  const cleanedDevices = devices.map((device) => stripUsbIdentityFields(device));
+  const usedHardwareIds = new Set(
+    cleanedDevices.map((device) => device.hardwareId).filter((id): id is string => Boolean(id)),
+  );
+  const ownedBusy = identities.filter(
+    (identity) => identity.pcmBusy && identity.ownerPid === ownerPid && !usedHardwareIds.has(identity.hardwareId),
+  );
+
+  return cleanedDevices.map((device) => {
+    if (!looksLikeUsbAudioDeviceName(device.name)) {
+      return { ...device };
+    }
+    if (device.hardwareId) {
+      const known = identities.find((identity) => identity.hardwareId === device.hardwareId);
+      return known ? { ...device, ...identityToFields(known) } : { ...device };
+    }
+    if (!device.isActiveByTx5dr || ownedBusy.length === 0) {
+      return { ...device };
+    }
+
+    const match = ownedBusy.shift();
+    if (!match) return { ...device };
+    usedHardwareIds.add(match.hardwareId);
+    return {
+      ...device,
+      ...identityToFields(match),
+    };
+  });
+}
+
+/**
+ * Build placeholder devices for USB sound cards missing from RtAudio enumeration
+ * (typically busy cards). Keys are stable hardwareId-based ids.
+ */
+export function buildSupplementalUsbAudioDevices(
+  direction: 'input' | 'output',
+  existingHardwareIds: Set<string>,
+  identities: LinuxUsbAudioIdentity[] = discoverLinuxUsbAudioIdentities(),
+): Array<{
+  id: string;
+  name: string;
+  isDefault: false;
+  channels: number;
+  sampleRate: number;
+  sampleRates: number[];
+  type: 'input' | 'output';
+  availability: 'available' | 'cached';
+  isActiveByTx5dr: false;
+} & AudioDeviceIdentityFields> {
+  return identities
+    .filter((identity) => !existingHardwareIds.has(identity.hardwareId))
+    .map((identity) => ({
+      id: `${direction}-${identity.hardwareId}`,
+      name: identity.productName.includes('(')
+        ? identity.productName
+        : `${identity.productName} (USB Audio)`,
+      isDefault: false as const,
+      channels: 2,
+      sampleRate: 48000,
+      sampleRates: [44100, 48000],
+      type: direction,
+      availability: identity.pcmBusy ? 'cached' as const : 'available' as const,
+      isActiveByTx5dr: false as const,
+      ...identityToFields(identity),
+    }));
+}
+
+/**
+ * Collapse devices that share a hardwareId, preferring active then available then cached.
+ */
+export function dedupeAudioDevicesByHardwareId<T extends {
+  id: string;
+  hardwareId?: string;
+  availability?: string;
+  isActiveByTx5dr?: boolean;
+}>(devices: T[]): T[] {
+  const result: T[] = [];
+  const indexByHardwareId = new Map<string, number>();
+
+  const rank = (device: T): number => {
+    if (device.isActiveByTx5dr || device.availability === 'active') return 3;
+    if (device.availability === 'available') return 2;
+    if (device.availability === 'cached') return 1;
+    return 0;
+  };
+
+  for (const device of devices) {
+    if (!device.hardwareId) {
+      result.push(device);
+      continue;
+    }
+    const existingIndex = indexByHardwareId.get(device.hardwareId);
+    if (existingIndex === undefined) {
+      indexByHardwareId.set(device.hardwareId, result.length);
+      result.push(device);
+      continue;
+    }
+    if (rank(device) > rank(result[existingIndex])) {
+      result[existingIndex] = device;
+    }
+  }
+
+  return result;
+}

@@ -28,6 +28,7 @@ import {
 } from './audioDeviceOptions';
 import {
   formatChannelText,
+  formatDeviceDetail,
   formatDeviceText,
   getResolutionDescription,
   getResolutionTone,
@@ -60,46 +61,56 @@ const DEFAULT_OUTPUT_CHANNEL_MODE: AudioOutputChannelMode = 'mono';
 const OUTPUT_SAMPLE_FORMAT_OPTIONS: AudioOutputSampleFormat[] = ['float32', 'int16'];
 const OUTPUT_CHANNEL_MODE_OPTIONS: AudioOutputChannelMode[] = ['mono', 'left', 'right', 'both'];
 
-export function makeAudioDeviceSelectKey(direction: Direction, deviceName: string): string {
-  return `${direction}::${deviceName}`;
-}
-
-export function getDeviceNameFromSelectKey(direction: Direction, key: string): string {
-  const prefix = `${direction}::`;
-  return key.startsWith(prefix) ? key.slice(prefix.length) : key;
-}
-
 export interface AudioDeviceSelectOption {
-  key: string;
+  deviceId: string;
   deviceName: string;
+  hardwareId?: string;
   device: AudioDevice | null;
   isMissing: boolean;
 }
 
 export function buildAudioDeviceSelectOptions(
-  direction: Direction,
   devices: AudioDevice[],
+  selectedId: string,
   selectedName: string,
   resolution?: AudioDeviceResolution | null,
 ): AudioDeviceSelectOption[] {
-  const options: AudioDeviceSelectOption[] = devices.map((device) => ({
-    key: makeAudioDeviceSelectKey(direction, device.name),
-    deviceName: device.name,
-    device,
-    isMissing: false,
-  }));
+  const seenIds = new Set<string>();
+  const options: AudioDeviceSelectOption[] = [];
 
-  const selectedDeviceExists = selectedName
-    ? devices.some((device) => device.name === selectedName)
-    : true;
-  const resolutionMatchesSelection = !resolution?.configuredDeviceName
-    || resolution.configuredDeviceName === selectedName;
+  for (const [index, device] of devices.entries()) {
+    // Guard against duplicate device ids from the backend so Select keys stay unique.
+    let deviceId = device.id;
+    if (seenIds.has(deviceId)) {
+      deviceId = `${device.id}#${index}`;
+    }
+    seenIds.add(deviceId);
+    options.push({
+      deviceId,
+      deviceName: device.name,
+      hardwareId: device.hardwareId,
+      device: deviceId === device.id ? device : { ...device, id: deviceId },
+      isMissing: false,
+    });
+  }
 
-  if (selectedName && !selectedDeviceExists && resolutionMatchesSelection) {
+  const selectedDeviceExists = selectedId
+    ? options.some((option) => option.deviceId === selectedId)
+    : selectedName
+      ? options.some((option) => option.deviceName === selectedName)
+      : true;
+
+  const resolutionMatchesSelection = (!resolution?.configuredDeviceId && !resolution?.configuredDeviceName)
+    || (selectedId && resolution?.configuredDeviceId === selectedId)
+    || (!selectedId && resolution?.configuredDeviceName === selectedName);
+
+  if ((selectedId || selectedName) && !selectedDeviceExists && resolutionMatchesSelection) {
+    const missingId = selectedId || `missing:${selectedName}`;
     const resolvedOptionDevice = resolution?.effectiveDevice ?? null;
     options.push({
-      key: makeAudioDeviceSelectKey(direction, selectedName),
-      deviceName: selectedName,
+      deviceId: missingId,
+      deviceName: selectedName || missingId,
+      hardwareId: resolution?.configuredHardwareId ?? undefined,
       device: resolvedOptionDevice,
       isMissing: !resolvedOptionDevice,
     });
@@ -116,8 +127,12 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   const [inputBufferSizes, setInputBufferSizes] = useState<number[]>(FALLBACK_BUFFER_SIZE_OPTIONS);
   const [outputBufferSizes, setOutputBufferSizes] = useState<number[]>(FALLBACK_BUFFER_SIZE_OPTIONS);
   const [currentSettings, setCurrentSettings] = useState<AudioDeviceSettingsType>(initialConfig ?? {});
+  const [selectedInputDeviceId, setSelectedInputDeviceId] = useState<string>(initialConfig?.inputDeviceId || '');
+  const [selectedOutputDeviceId, setSelectedOutputDeviceId] = useState<string>(initialConfig?.outputDeviceId || '');
   const [selectedInputDeviceName, setSelectedInputDeviceName] = useState<string>(initialConfig?.inputDeviceName || '');
   const [selectedOutputDeviceName, setSelectedOutputDeviceName] = useState<string>(initialConfig?.outputDeviceName || '');
+  const [selectedInputHardwareId, setSelectedInputHardwareId] = useState<string>(initialConfig?.inputHardwareId || '');
+  const [selectedOutputHardwareId, setSelectedOutputHardwareId] = useState<string>(initialConfig?.outputHardwareId || '');
   const [inputSampleRate, setInputSampleRate] = useState<number>(resolveAudioSettingNumber(initialConfig, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
   const [outputSampleRate, setOutputSampleRate] = useState<number>(resolveAudioSettingNumber(initialConfig, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
   const [inputBufferSize, setInputBufferSize] = useState<number>(resolveAudioSettingNumber(initialConfig, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
@@ -147,8 +162,12 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     }
     if (!isControlled || !initialConfig) return;
     syncingFromParentRef.current = true;
+    setSelectedInputDeviceId(initialConfig.inputDeviceId || '');
+    setSelectedOutputDeviceId(initialConfig.outputDeviceId || '');
     setSelectedInputDeviceName(initialConfig.inputDeviceName || '');
     setSelectedOutputDeviceName(initialConfig.outputDeviceName || '');
+    setSelectedInputHardwareId(initialConfig.inputHardwareId || '');
+    setSelectedOutputHardwareId(initialConfig.outputHardwareId || '');
     setInputSampleRate(resolveAudioSettingNumber(initialConfig, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
     setOutputSampleRate(resolveAudioSettingNumber(initialConfig, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
     setInputBufferSize(resolveAudioSettingNumber(initialConfig, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
@@ -161,6 +180,10 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   const buildSettings = (): AudioDeviceSettingsType => ({
     inputDeviceName: selectedInputDeviceName || undefined,
     outputDeviceName: selectedOutputDeviceName || undefined,
+    inputDeviceId: selectedInputDeviceId || undefined,
+    outputDeviceId: selectedOutputDeviceId || undefined,
+    inputHardwareId: selectedInputHardwareId || undefined,
+    outputHardwareId: selectedOutputHardwareId || undefined,
     inputSampleRate,
     outputSampleRate,
     inputBufferSize,
@@ -171,8 +194,12 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
 
   const hasUnsavedChanges = () => {
     return (
+      selectedInputDeviceId !== (currentSettings.inputDeviceId || '') ||
+      selectedOutputDeviceId !== (currentSettings.outputDeviceId || '') ||
       selectedInputDeviceName !== (currentSettings.inputDeviceName || '') ||
       selectedOutputDeviceName !== (currentSettings.outputDeviceName || '') ||
+      selectedInputHardwareId !== (currentSettings.inputHardwareId || '') ||
+      selectedOutputHardwareId !== (currentSettings.outputHardwareId || '') ||
       inputSampleRate !== resolveAudioSettingNumber(currentSettings, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE) ||
       outputSampleRate !== resolveAudioSettingNumber(currentSettings, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE) ||
       inputBufferSize !== resolveAudioSettingNumber(currentSettings, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE) ||
@@ -186,11 +213,11 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     hasUnsavedChanges,
     getSettings: buildSettings,
     save: handleSubmit
-  }), [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, currentSettings]);
+  }), [selectedInputDeviceId, selectedOutputDeviceId, selectedInputDeviceName, selectedOutputDeviceName, selectedInputHardwareId, selectedOutputHardwareId, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, currentSettings]);
 
   useEffect(() => {
     onUnsavedChanges?.(hasUnsavedChanges());
-  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, currentSettings, onUnsavedChanges]);
+  }, [selectedInputDeviceId, selectedOutputDeviceId, selectedInputDeviceName, selectedOutputDeviceName, selectedInputHardwareId, selectedOutputHardwareId, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, currentSettings, onUnsavedChanges]);
 
   useEffect(() => {
     if (!isControlled || loading) return;
@@ -205,7 +232,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       return;
     }
     onChange?.(settings);
-  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, initialConfig]);
+  }, [selectedInputDeviceId, selectedOutputDeviceId, selectedInputDeviceName, selectedOutputDeviceName, selectedInputHardwareId, selectedOutputHardwareId, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, initialConfig]);
 
   useEffect(() => {
     loadAudioData();
@@ -228,7 +255,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     return () => {
       active = false;
     };
-  }, [selectedInputDeviceName, selectedOutputDeviceName, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, radioType, loading]);
+  }, [selectedInputDeviceId, selectedOutputDeviceId, selectedInputDeviceName, selectedOutputDeviceName, selectedInputHardwareId, selectedOutputHardwareId, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, radioType, loading]);
 
   const inputEffectiveDevice = getEffectiveDevice('input');
   const outputEffectiveDevice = getEffectiveDevice('output');
@@ -267,8 +294,12 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
 
         const settings = settingsResponse.currentSettings;
         setCurrentSettings(settings);
+        setSelectedInputDeviceId(settings.inputDeviceId || '');
+        setSelectedOutputDeviceId(settings.outputDeviceId || '');
         setSelectedInputDeviceName(settings.inputDeviceName || '');
         setSelectedOutputDeviceName(settings.outputDeviceName || '');
+        setSelectedInputHardwareId(settings.inputHardwareId || '');
+        setSelectedOutputHardwareId(settings.outputHardwareId || '');
         setInputSampleRate(resolveAudioSettingNumber(settings, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
         setOutputSampleRate(resolveAudioSettingNumber(settings, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
         setInputBufferSize(resolveAudioSettingNumber(settings, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
@@ -345,47 +376,68 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   }
 
   function getEffectiveDevice(direction: Direction): AudioDevice | null {
+    const selectedId = direction === 'input' ? selectedInputDeviceId : selectedOutputDeviceId;
     const selectedName = direction === 'input' ? selectedInputDeviceName : selectedOutputDeviceName;
+    const selectedHardwareId = direction === 'input' ? selectedInputHardwareId : selectedOutputHardwareId;
     const devices = direction === 'input' ? inputDevices : outputDevices;
     const resolution = direction === 'input' ? deviceResolution?.input : deviceResolution?.output;
     if (resolution?.status === 'missing') {
       return null;
     }
-    return resolution?.effectiveDevice ?? devices.find((device) => device.name === selectedName) ?? null;
+    return resolution?.effectiveDevice
+      ?? devices.find((device) => selectedHardwareId && device.hardwareId === selectedHardwareId)
+      ?? devices.find((device) => selectedId && device.id === selectedId)
+      ?? devices.find((device) => selectedName && device.name === selectedName)
+      ?? null;
   }
 
-  const renderDeviceItems = (options: AudioDeviceSelectOption[]) => options.map((option) => (
-    <SelectItem
-      key={option.key}
-      textValue={option.device ? formatDeviceText(t, option.device) : `${option.deviceName} (${t('audio.deviceUnavailableShort')})`}
-    >
-      <div className="flex flex-col">
-        <span className="flex items-center gap-2">
-          {option.device ? formatDeviceText(t, option.device) : option.deviceName}
-          {option.isMissing && (
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-300">
-              {t('audio.deviceUnavailableShort')}
-            </span>
-          )}
-          {option.device?.name.startsWith('[SDR]') && (
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300">
-              WebSDR
-            </span>
-          )}
-        </span>
-        <span className="text-xs text-default-400">
-          {option.device
-            ? `${formatChannelText(t, option.device.channels)}, ${formatHertz(option.device.sampleRate)}`
-            : t('audio.deviceMissingPreservedShort')}
-        </span>
-      </div>
-    </SelectItem>
-  ));
+  const selectDevice = (direction: Direction, option: AudioDeviceSelectOption | undefined) => {
+    const nextId = option && !option.isMissing ? option.deviceId : '';
+    const nextName = option?.deviceName || '';
+    const nextHardwareId = option && !option.isMissing ? (option.hardwareId || '') : '';
+    if (direction === 'input') {
+      setSelectedInputDeviceId(nextId);
+      setSelectedInputDeviceName(nextName);
+      setSelectedInputHardwareId(nextHardwareId);
+      return;
+    }
+    setSelectedOutputDeviceId(nextId);
+    setSelectedOutputDeviceName(nextName);
+    setSelectedOutputHardwareId(nextHardwareId);
+  };
+
+  const resolveSelectedOption = (
+    direction: Direction,
+    options: AudioDeviceSelectOption[],
+  ): AudioDeviceSelectOption | null => {
+    const selectedId = direction === 'input' ? selectedInputDeviceId : selectedOutputDeviceId;
+    const selectedName = direction === 'input' ? selectedInputDeviceName : selectedOutputDeviceName;
+    const selectedHardwareId = direction === 'input' ? selectedInputHardwareId : selectedOutputHardwareId;
+
+    if (selectedHardwareId) {
+      const byHardwareId = options.find((option) => option.hardwareId === selectedHardwareId);
+      if (byHardwareId) return byHardwareId;
+    }
+
+    if (selectedId) {
+      const byId = options.find((option) => option.deviceId === selectedId);
+      if (byId) return byId;
+    }
+
+    if (selectedName) {
+      const byName = options.filter((option) => !option.isMissing && option.deviceName === selectedName);
+      // Ambiguous same-name devices must not share a selected state.
+      if (byName.length === 1) return byName[0];
+      return options.find((option) => option.isMissing && option.deviceName === selectedName) ?? null;
+    }
+
+    return null;
+  };
 
   const renderDirectionSection = (direction: Direction) => {
     const isInput = direction === 'input';
+    const selectedId = isInput ? selectedInputDeviceId : selectedOutputDeviceId;
     const selectedName = isInput ? selectedInputDeviceName : selectedOutputDeviceName;
-    const setSelectedName = isInput ? setSelectedInputDeviceName : setSelectedOutputDeviceName;
     const devices = isInput ? inputDevices : outputDevices;
     const resolution = isInput ? deviceResolution?.input : deviceResolution?.output;
     const effectiveDevice = isInput ? inputEffectiveDevice : outputEffectiveDevice;
@@ -394,7 +446,10 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     const bufferSize = isInput ? inputBufferSize : outputBufferSize;
     const setBufferSize = isInput ? setInputBufferSize : setOutputBufferSize;
     const bufferSizes = isInput ? inputBufferSizes : outputBufferSizes;
-    const displayOptions = buildAudioDeviceSelectOptions(direction, devices, selectedName, resolution);
+    const displayOptions = buildAudioDeviceSelectOptions(devices, selectedId, selectedName, resolution);
+    const selectedOption = resolveSelectedOption(direction, displayOptions);
+    const selectedKey = selectedOption?.deviceId ?? null;
+    const selectedDetail = formatDeviceDetail(selectedOption?.device);
     const sampleOptions = deriveSampleRateOptions(effectiveDevice, sampleRate);
     const bufferOptions = deriveBufferSizeOptions(bufferSizes, bufferSize);
     const isVirtual = resolution?.status === 'virtual-selected' || isVirtualAudioDevice(effectiveDevice);
@@ -415,15 +470,73 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
         <Select
           label={isInput ? t('audio.inputDevice') : t('audio.outputDevice')}
           placeholder={isInput ? t('audio.inputDevicePlaceholder') : t('audio.outputDevicePlaceholder')}
-          selectedKeys={selectedName ? [makeAudioDeviceSelectKey(direction, selectedName)] : []}
+          items={displayOptions}
+          selectedKeys={selectedKey ? new Set([selectedKey]) : new Set()}
+          selectionMode="single"
+          disallowEmptySelection={false}
           onSelectionChange={(keys) => {
-            const selected = Array.from(keys)[0] as string;
-            setSelectedName(selected ? getDeviceNameFromSelectKey(direction, selected) : '');
+            if (keys === 'all') return;
+            const selected = Array.from(keys as Set<React.Key>)[0];
+            if (selected == null) {
+              selectDevice(direction, undefined);
+              return;
+            }
+            const option = displayOptions.find((item) => item.deviceId === String(selected));
+            selectDevice(direction, option);
           }}
           isDisabled={saving}
           aria-label={isInput ? t('audio.selectInput') : t('audio.selectOutput')}
+          renderValue={() => {
+            if (!selectedOption) return null;
+            const name = selectedOption.device
+              ? formatDeviceText(t, selectedOption.device)
+              : selectedOption.deviceName;
+            return <span className="truncate">{name}</span>;
+          }}
+          endContent={selectedDetail ? (
+            <span className="pointer-events-none hidden max-w-[min(42vw,32rem)] truncate whitespace-nowrap text-small text-default-400 md:inline">
+              ({selectedDetail})
+            </span>
+          ) : undefined}
         >
-          {renderDeviceItems(displayOptions) as unknown as React.ReactElement}
+          {(option) => {
+            const detail = formatDeviceDetail(option.device);
+            const displayName = option.device
+              ? formatDeviceText(t, option.device)
+              : option.deviceName;
+            return (
+              <SelectItem
+                key={option.deviceId}
+                textValue={option.deviceId}
+              >
+                <div className="flex flex-col">
+                  <span className="flex items-center gap-2">
+                    {displayName}
+                    {option.isMissing && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-300">
+                        {t('audio.deviceUnavailableShort')}
+                      </span>
+                    )}
+                    {option.device?.name.startsWith('[SDR]') && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300">
+                        WebSDR
+                      </span>
+                    )}
+                  </span>
+                  {detail && (
+                    <span className="text-xs text-default-500 truncate">
+                      {detail}
+                    </span>
+                  )}
+                  <span className="text-xs text-default-400">
+                    {option.device
+                      ? `${formatChannelText(t, option.device.channels)}, ${formatHertz(option.device.sampleRate)}`
+                      : t('audio.deviceMissingPreservedShort')}
+                  </span>
+                </div>
+              </SelectItem>
+            );
+          }}
         </Select>
         {resolutionDescription && (
           <p className={`text-xs ${resolutionClassName}`}>
@@ -606,6 +719,10 @@ export function audioSettingsEqual(
 ): boolean {
   return (a.inputDeviceName || '') === (b?.inputDeviceName || '')
     && (a.outputDeviceName || '') === (b?.outputDeviceName || '')
+    && (a.inputDeviceId || '') === (b?.inputDeviceId || '')
+    && (a.outputDeviceId || '') === (b?.outputDeviceId || '')
+    && (a.inputHardwareId || '') === (b?.inputHardwareId || '')
+    && (a.outputHardwareId || '') === (b?.outputHardwareId || '')
     && a.inputSampleRate === resolveAudioSettingNumber(b, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE)
     && a.outputSampleRate === resolveAudioSettingNumber(b, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE)
     && a.inputBufferSize === resolveAudioSettingNumber(b, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE)

@@ -91,6 +91,28 @@ describe('matchUsbAudioDevice', () => {
     ];
     expect(matchUsbAudioDevice(devices)?.name).toBe('BurrBrown from Texas Instruments: USB AUDIO  CODEC');
   });
+
+  it('matches preferred radio hint when multiple USB codecs are present', () => {
+    const devices = [
+      {
+        ...makeDevice('USB Audio CODEC'),
+        id: 'input-130',
+        detail: 'IC-9700 12010311 · VID:PID 08bb:2901 · USB 1-7.2.4',
+        serialNumber: 'IC-9700 12010311',
+        hardwareId: 'usb:1-7.2.4',
+      },
+      {
+        ...makeDevice('USB Audio CODEC'),
+        id: 'input-140',
+        detail: 'IC-7610 11002034 · VID:PID 08bb:2901 · USB 1-7.4.4',
+        serialNumber: 'IC-7610 11002034',
+        hardwareId: 'usb:1-7.4.4',
+      },
+    ];
+
+    expect(matchUsbAudioDevice(devices, 'IC-7610')?.id).toBe('input-140');
+    expect(matchUsbAudioDevice(devices, 'IC-9700 12010311')?.id).toBe('input-130');
+  });
 });
 
 describe('getRecommendedSampleRate', () => {
@@ -147,8 +169,10 @@ describe('matchAudioDeviceForRig', () => {
 
     expect(result).toEqual({
       inputDeviceName: 'USB Audio CODEC',
+      inputDeviceId: 'dev-USB Audio CODEC',
       inputSampleRate: 48000,
       outputDeviceName: 'USB Audio CODEC',
+      outputDeviceId: 'dev-USB Audio CODEC',
       outputSampleRate: 44100,
     });
   });
@@ -168,8 +192,10 @@ describe('matchAudioDeviceForRig', () => {
 
     expect(result).toEqual({
       inputDeviceName: 'C-Media Electronics Inc.: USB Audio Device',
+      inputDeviceId: 'dev-C-Media Electronics Inc.: USB Audio Device',
       inputSampleRate: 44100,
       outputDeviceName: 'C-Media Electronics Inc.: USB Audio Device',
+      outputDeviceId: 'dev-C-Media Electronics Inc.: USB Audio Device',
       outputSampleRate: 44100,
     });
   });
@@ -186,8 +212,10 @@ describe('matchAudioDeviceForRig', () => {
 
     expect(result).toEqual({
       inputDeviceName: 'BurrBrown from Texas Instruments: USB AUDIO  CODEC',
+      inputDeviceId: 'dev-BurrBrown from Texas Instruments: USB AUDIO  CODEC',
       inputSampleRate: 48000,
       outputDeviceName: 'BurrBrown from Texas Instruments: USB AUDIO  CODEC',
+      outputDeviceId: 'dev-BurrBrown from Texas Instruments: USB AUDIO  CODEC',
       outputSampleRate: 48000,
     });
   });
@@ -217,6 +245,7 @@ describe('matchAudioDeviceForRig', () => {
 
     expect(result).toEqual({
       inputDeviceName: 'USB Audio CODEC',
+      inputDeviceId: 'dev-USB Audio CODEC',
       inputSampleRate: 44100,
     });
   });
