@@ -605,7 +605,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const radioMode = useRadioModeState();
   const { pttStatus, tuneToneStatus, voicePttLock } = usePTTState();
   const { state: radioState, dispatch: radioDispatch } = useRadioState();
-  const { activeProfile } = useProfiles();
+  const { activeProfile, activeProfileId } = useProfiles();
   const { latestError } = useRadioErrors();
   const { state: authState } = useAuth();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
@@ -1192,7 +1192,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       }, 500);
       return () => window.clearTimeout(timeoutId);
     }
-  }, [availableFrequencies, radioMode.currentMode, connection.state.isConnected, canUseAuthenticatedRest, canWriteFrequency]);
+  }, [availableFrequencies, radioMode.currentMode, connection.state.isConnected, canUseAuthenticatedRest, canWriteFrequency, activeProfileId]);
 
 
 

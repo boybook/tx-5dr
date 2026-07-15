@@ -3,7 +3,7 @@ import { Card, CardBody } from '@heroui/react';
 import { api, ApiError, getBandFromFrequency } from '@tx5dr/core';
 import { useTranslation } from 'react-i18next';
 import { useAbility, useAuth, useCan } from '../../store/authStore';
-import { useConnection, useOperators, useRadioConnectionState, useRadioState, useSplitState } from '../../store/radioStore';
+import { useConnection, useOperators, useProfiles, useRadioConnectionState, useRadioState, useSplitState } from '../../store/radioStore';
 import { createLogger } from '../../utils/logger';
 import { canExecuteRadioFrequency, canWriteRadioFrequency } from '../../utils/radioControl';
 import { resetOperatorsForOperatingStateChange } from '../../utils/operatorReset';
@@ -61,6 +61,7 @@ export const CWFrequencyControl: React.FC = () => {
   const { t } = useTranslation('voice');
   const connection = useConnection();
   const { operators } = useOperators();
+  const { activeProfileId } = useProfiles();
   const radioConnection = useRadioConnectionState();
   const radio = useRadioState();
   const { state: authState } = useAuth();
@@ -203,7 +204,7 @@ export const CWFrequencyControl: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [canUseAuthenticatedRest, liveFrequency]);
+  }, [canUseAuthenticatedRest, liveFrequency, activeProfileId]);
 
   useEffect(() => {
     const radioService = connection.state.radioService;
