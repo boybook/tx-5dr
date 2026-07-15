@@ -32,6 +32,15 @@ export interface LastCWFrequencyState {
   description?: string;
 }
 
+/** Per-radio-profile operating snapshot used when switching profiles. */
+export interface ProfileOperatingMemory {
+  lastSelectedFrequency?: LastSelectedFrequencyState | null;
+  lastVoiceFrequency?: LastVoiceFrequencyState | null;
+  lastCWFrequency?: LastCWFrequencyState | null;
+  lastEngineMode?: 'digital' | 'voice' | 'cw';
+  lastDigitalModeName?: string;
+}
+
 export interface RuntimeState {
   lastSelectedFrequency?: LastSelectedFrequencyState | null;
   lastVoiceFrequency?: LastVoiceFrequencyState | null;
@@ -40,6 +49,8 @@ export interface RuntimeState {
   volumeGainMap?: Record<string, { gain: number; gainDb: number }> | null;
   lastEngineMode?: 'digital' | 'voice' | 'cw';
   lastDigitalModeName?: string;
+  /** Last digital/voice/CW frequency + mode, keyed by RadioProfile id. */
+  profileOperatingMemory?: Record<string, ProfileOperatingMemory> | null;
   pskreporterStats?: Partial<PSKReporterStats>;
   authLastUsedAt?: Record<string, number>;
 }
