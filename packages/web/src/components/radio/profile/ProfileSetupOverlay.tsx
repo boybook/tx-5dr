@@ -81,13 +81,18 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
     if (userManuallyChangedAudioRef.current) return;
     if (autoAudioAppliedRef.current === rigModel) return;
 
-    matchAudioDeviceForRig(rigModel, rigs, () => api.getAudioDevices())
+    const modelHint = rigs.find((rig) => rig.rigModel === rigModel)?.modelName;
+    matchAudioDeviceForRig(rigModel, rigs, () => api.getAudioDevices(), modelHint)
       .then((result) => {
         if (!result) return;
         setAudioConfig((prev) => ({
           ...prev,
           ...(result.inputDeviceName ? { inputDeviceName: result.inputDeviceName } : {}),
           ...(result.outputDeviceName ? { outputDeviceName: result.outputDeviceName } : {}),
+          ...(result.inputDeviceId ? { inputDeviceId: result.inputDeviceId } : {}),
+          ...(result.outputDeviceId ? { outputDeviceId: result.outputDeviceId } : {}),
+          ...(result.inputHardwareId ? { inputHardwareId: result.inputHardwareId } : {}),
+          ...(result.outputHardwareId ? { outputHardwareId: result.outputHardwareId } : {}),
           ...(result.inputSampleRate ? { inputSampleRate: result.inputSampleRate } : {}),
           ...(result.outputSampleRate ? { outputSampleRate: result.outputSampleRate } : {}),
         }));
