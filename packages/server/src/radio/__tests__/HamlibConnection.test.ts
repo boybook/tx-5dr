@@ -448,13 +448,30 @@ describe('HamlibConnection', () => {
     ]);
   });
 
-  it('falls back to standard mode for digital intent when DATA mode is unsupported', async () => {
+  it('prefers DATA mode for digital intent even when capability probing omitted it', async () => {
     const { connection, rig } = createConnectedConnection();
     asTestConnection(connection).supportedModes = new Set(['USB']);
 
     await expect(connection.setMode('USB', undefined, { intent: 'digital' })).resolves.toBeUndefined();
 
-    expect(rig.setMode).toHaveBeenCalledWith('USB', undefined);
+    expect(rig.setMode).toHaveBeenCalledWith('PKTUSB', undefined);
+  });
+
+  it('falls back to standard mode when DATA mode write fails', async () => {
+    const { connection, rig } = createConnectedConnection({
+      setMode: vi.fn().mockImplementation(async (mode: string) => {
+        if (mode === 'PKTUSB') {
+          throw new Error('mode not supported');
+        }
+        return 0;
+      }),
+    });
+    asTestConnection(connection).supportedModes = new Set(['USB']);
+
+    await expect(connection.setMode('USB', undefined, { intent: 'digital' })).resolves.toBeUndefined();
+
+    expect(rig.setMode).toHaveBeenNthCalledWith(1, 'PKTUSB', undefined);
+    expect(rig.setMode).toHaveBeenNthCalledWith(2, 'USB', undefined);
   });
 
   it('keeps standard mode for voice intent even when DATA mode is supported', async () => {
