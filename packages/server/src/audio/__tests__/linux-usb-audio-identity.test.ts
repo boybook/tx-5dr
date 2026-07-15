@@ -72,7 +72,9 @@ describe('attachLinuxUsbAudioIdentities', () => {
     expect(enriched[1].hardwareId).toBeUndefined();
   });
 
-  it('claims in-process owned cards before free peers when both are still listed', () => {
+  it('does not FIFO-label owned busy cards onto remaining enumerated USB devices', () => {
+    // RtAudio often still lists the busy codec alongside the free peer. Claiming
+    // owned identities first would mislabel the free peer as the open radio.
     const devices = [
       { id: 'output-130', name: 'USB Audio CODEC (USB Audio)' },
       { id: 'output-134', name: 'USB Audio CODEC (USB Audio)' },
@@ -80,13 +82,11 @@ describe('attachLinuxUsbAudioIdentities', () => {
 
     const enriched = attachLinuxUsbAudioIdentities(devices, identities, 1234);
     expect(enriched[0]).toMatchObject({
-      hardwareId: 'usb:1-7.2.4',
-      serialNumber: 'IC-9700 12010311',
-    });
-    expect(enriched[1]).toMatchObject({
       hardwareId: 'usb:1-7.4.4',
       serialNumber: 'IC-7610 11002034',
     });
+    // Busy IC-9700 must not be attached by listing order onto the second device.
+    expect(enriched[1].hardwareId).toBeUndefined();
   });
 });
 
