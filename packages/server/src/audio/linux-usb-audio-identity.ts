@@ -356,15 +356,18 @@ export function identityToFields(identity: LinuxUsbAudioIdentity): AudioDeviceId
 /**
  * Attach Linux USB/radio identity metadata onto enumerated RtAudio devices.
  *
- * Matching order matters: the same process can still enumerate a PCM it already
- * opened, while the free peer radio remains available. Claim "owned by us"
- * identities only when enumeration still exposes more USB devices than free cards
- * (the extras are almost certainly the open cards); otherwise attach free cards only.
+ * Only FREE cards are claimed onto live RtAudio entries. Busy cards that this
+ * process already opened must NOT be FIFO-matched onto the remaining enumerated
+ * USB devices: RtAudio listing order is unrelated to which card we opened, and
+ * attaching "owned" identities first mislabels the free peer (e.g. labels the
+ * IC-9700 device as IC-7610). Busy radios are rebound via
+ * {@link assignBusyIdentitiesToActiveDevices}, {@link findOwnedUsbAudioHardwareId},
+ * or registry/hardwareId fallbacks when opening the opposite stream direction.
  */
 export function attachLinuxUsbAudioIdentities<T extends { name: string; hardwareId?: string }>(
   devices: T[],
   identities: LinuxUsbAudioIdentity[] = discoverLinuxUsbAudioIdentities(),
-  ownerPid: number = process.pid,
+  _ownerPid: number = process.pid,
 ): Array<T & AudioDeviceIdentityFields> {
   if (identities.length === 0 || devices.length === 0) {
     return devices.map((device) => ({ ...device }));
@@ -374,41 +377,25 @@ export function attachLinuxUsbAudioIdentities<T extends { name: string; hardware
     devices.map((device) => device.hardwareId).filter((id): id is string => Boolean(id)),
   );
 
-  const claim = (
-    device: T,
-    pool: LinuxUsbAudioIdentity[],
-  ): (T & AudioDeviceIdentityFields) | null => {
-    if (!looksLikeUsbAudioDeviceName(device.name) || device.hardwareId) {
-      return null;
-    }
-    const match = pool.find((identity) => {
-      if (usedHardwareIds.has(identity.hardwareId)) return false;
-      return namesLikelyMatch(device.name, identity);
-    });
-    if (!match) return null;
-    usedHardwareIds.add(match.hardwareId);
-    return { ...device, ...identityToFields(match) };
-  };
-
-  const ownedByUs = identities.filter(
-    (identity) => identity.pcmBusy && identity.ownerPid === ownerPid,
-  );
   const free = identities.filter((identity) => !identity.pcmBusy);
-  const unlabeledUsbCount = devices.filter(
-    (device) => looksLikeUsbAudioDeviceName(device.name) && !device.hardwareId,
-  ).length;
-  const ownedStillEnumerated = Math.min(
-    ownedByUs.length,
-    Math.max(0, unlabeledUsbCount - free.length),
-  );
-  const ownedPool = ownedByUs.slice(0, ownedStillEnumerated);
 
   return devices.map((device) => {
     if (device.hardwareId) {
       const known = identities.find((identity) => identity.hardwareId === device.hardwareId);
       return known ? { ...device, ...identityToFields(known) } : { ...device };
     }
-    return claim(device, ownedPool) ?? claim(device, free) ?? { ...device };
+    if (!looksLikeUsbAudioDeviceName(device.name)) {
+      return { ...device };
+    }
+    const match = free.find((identity) => {
+      if (usedHardwareIds.has(identity.hardwareId)) return false;
+      return namesLikelyMatch(device.name, identity);
+    });
+    if (!match) {
+      return { ...device };
+    }
+    usedHardwareIds.add(match.hardwareId);
+    return { ...device, ...identityToFields(match) };
   });
 }
 
