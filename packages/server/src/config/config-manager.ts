@@ -153,6 +153,10 @@ export interface AudioConfig {
   outputDeviceName?: string; // 存储的设备名称
   inputRouteKey?: string; // Android 稳定输入路由标识
   outputRouteKey?: string; // Android 稳定输出路由标识
+  inputDeviceId?: string;
+  outputDeviceId?: string;
+  inputHardwareId?: string;
+  outputHardwareId?: string;
   inputSampleRate?: number;
   outputSampleRate?: number;
   inputBufferSize?: number;
@@ -225,6 +229,10 @@ export function normalizeAudioDeviceSettings(audioConfig?: Partial<AudioDeviceSe
     outputDeviceName: audioConfig?.outputDeviceName,
     inputRouteKey: audioConfig?.inputRouteKey ?? undefined,
     outputRouteKey: audioConfig?.outputRouteKey ?? undefined,
+    inputDeviceId: audioConfig?.inputDeviceId,
+    outputDeviceId: audioConfig?.outputDeviceId,
+    inputHardwareId: audioConfig?.inputHardwareId,
+    outputHardwareId: audioConfig?.outputHardwareId,
     inputSampleRate: audioConfig?.inputSampleRate ?? legacySampleRate ?? 48000,
     outputSampleRate: audioConfig?.outputSampleRate ?? legacySampleRate ?? 48000,
     inputBufferSize: audioConfig?.inputBufferSize ?? legacyBufferSize ?? 1024,

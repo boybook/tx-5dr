@@ -97,6 +97,11 @@ public
 tmp/
 temp/
 
+# Local runtime / cache (do not commit)
+.runtime/
+.yarn-cache/
+.runtime-yarn-install.log
+
 # Editor directories and files
 .vscode/
 .idea/
