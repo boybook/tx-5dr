@@ -638,6 +638,50 @@ export class AudioDeviceManager {
         }
       }
 
+      // Opposite direction may already own this USB radio (e.g. capture open on
+      // IC-7610 while playback starts). Live listing often drops or mis-orders the
+      // busy card, so reuse the numeric RtAudio id we opened / registered earlier.
+      const registeredSameDirection = this.findRegisteredDeviceByHardwareId(direction, hardwareId);
+      const registeredOtherDirection = this.findRegisteredDeviceByHardwareId(
+        direction === 'input' ? 'output' : 'input',
+        hardwareId,
+      );
+      const registered = registeredSameDirection ?? registeredOtherDirection;
+      const cachedNumericId = this.parseNumericDeviceId(
+        registered?.lastRtAudioId ?? registered?.id,
+      );
+      if (cachedNumericId !== null) {
+        const liveByCachedId = directionalLiveDevices.find(
+          (device) => this.parseNumericDeviceId(device.id) === cachedNumericId,
+        );
+        if (liveByCachedId) {
+          return {
+            actualDeviceId: cachedNumericId,
+            persistedDeviceId: liveByCachedId.id,
+            deviceName: liveByCachedId.name || registered?.name || deviceName || hardwareId,
+            hardwareId,
+          };
+        }
+
+        const rawDevices = rtAudio.getDevices();
+        const rawStillPresent = rawDevices.some((device: { id?: number }) => device.id === cachedNumericId);
+        if (rawStillPresent || registeredOtherDirection?.isActiveByTx5dr) {
+          logger.info('Resolving USB audio via registry cache for busy hardwareId', {
+            direction,
+            hardwareId,
+            cachedNumericId,
+            rawStillPresent,
+            fromOtherDirection: Boolean(registeredOtherDirection?.isActiveByTx5dr),
+          });
+          return {
+            actualDeviceId: cachedNumericId,
+            persistedDeviceId: registered?.id ?? `${direction}-${cachedNumericId}`,
+            deviceName: registered?.name || deviceName || hardwareId,
+            hardwareId,
+          };
+        }
+      }
+
       const identities = discoverLinuxUsbAudioIdentities();
       const identity = identities.find((item) => item.hardwareId === hardwareId);
       const label = identity?.relatedRadioLabel || identity?.detail || hardwareId;
