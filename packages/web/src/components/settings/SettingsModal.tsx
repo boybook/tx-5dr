@@ -445,7 +445,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         backdrop="opaque"
         disableAnimation
         classNames={{
-          body: "p-0 min-h-0 overflow-hidden",
+          body: `flex flex-col p-0 min-h-0 overflow-hidden ${isMobile || usesModalFooterSave ? 'rounded-none' : 'rounded-b-large'}`,
           header: "border-b border-divider px-3 sm:px-6 py-3 sm:py-4",
           footer: "border-t border-divider px-3 sm:px-6 py-3 sm:py-4",
         }}
@@ -460,14 +460,13 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
           
           <ModalBody>
             <div
-              className={`min-h-0 ${isMobile ? 'flex flex-1 flex-col' : 'flex'}`}
-              style={{
-                height: isMobile
-                  ? '100%'
-                  : (usesModalFooterSave ? 'calc(95vh - 180px)' : 'calc(95vh - 116px)'),
-                minHeight: isMobile ? '0' : '400px',
-                maxHeight: isMobile ? 'none' : (usesModalFooterSave ? '600px' : '664px')
-              }}
+              className={`min-h-0 ${isMobile ? 'flex flex-1 flex-col' : 'flex flex-1'}`}
+              style={isMobile ? {} : usesModalFooterSave
+                ? { maxHeight: '616px' }
+                : activeTab === 'about'
+                  ? { maxHeight: '689px' }
+                  : { minHeight: '689px', maxHeight: '689px' }
+              }
             >
               {/* 标签页菜单 */}
               {/*
@@ -481,8 +480,20 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                 className={
                   isMobile
                     ? 'min-w-0 w-full px-3 py-2 border-b border-divider'
-                    : 'p-5 min-h-0 max-h-full overflow-y-auto overflow-x-hidden flex-shrink-0 bg-content1'
+                    : 'p-5 min-h-0 overflow-y-auto overflow-x-hidden flex-shrink-0 bg-content1 scrollbar-hide self-start'
                 }
+                onWheel={isMobile ? (e) => {
+                  const tabList = e.currentTarget.querySelector('[role="tablist"]');
+                  if (tabList) {
+                    e.preventDefault();
+                    tabList.scrollLeft += e.deltaY;
+                  }
+                } : undefined}
+                style={isMobile ? undefined : {
+                  maxHeight: usesModalFooterSave
+                    ? 'calc(100vh - 286px)'
+                    : 'calc(100vh - 213px)'
+                }}
               >
                 <Tabs
                   selectedKey={activeTab}
@@ -493,7 +504,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                   classNames={{
                     tab: isMobile ? 'h-10 w-auto min-w-max flex-none px-3' : 'w-full h-10 sm:px-4',
                     tabContent: `group-data-[selected=true]:text-primary-600 text-default-500 ${isMobile ? 'text-xl' : ''}`,
-                    tabList: isMobile ? 'w-full overflow-x-auto flex-nowrap scrollbar-hide' : 'max-h-full overflow-y-auto overflow-x-hidden flex-col',
+                    tabList: isMobile ? 'w-full overflow-x-auto flex-nowrap scrollbar-hide' : 'max-h-full overflow-y-auto overflow-x-hidden flex-col scrollbar-hide',
                   }}
                 >
                   {isOperator && (
@@ -568,8 +579,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
               </div>
 
               {/* 内容区域 */}
-              <div className={`flex-1 min-h-0 ${activeTab === 'about' ? 'overflow-hidden' : 'overflow-auto'}`}>
-                <div className={activeTab === 'about' ? 'h-full' : 'p-3 sm:p-6'}>
+              <div className="flex-1 min-h-0 overflow-auto">
+                <div className={activeTab === 'about' ? 'min-h-full' : 'min-h-full p-3 sm:p-6 pb-8 sm:pb-10'}>
                   {renderTabContent()}
                 </div>
               </div>
