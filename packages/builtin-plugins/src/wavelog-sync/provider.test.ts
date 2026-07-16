@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { PluginContext } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
-import { WaveLogSyncProvider } from './provider.js';
+import { WaveLogSyncProvider, buildWavelogQslStatusUpdates } from './provider.js';
 
-function createQso(id: string): QSORecord {
+function createQso(id: string, overrides: Partial<QSORecord> = {}): QSORecord {
   return {
     id,
     callsign: 'N0CALL',
@@ -15,12 +15,16 @@ function createQso(id: string): QSORecord {
     messageHistory: [],
     myCallsign: 'BG5DRB',
     myGrid: 'PM01AA',
+    ...overrides,
   };
 }
 
 function createContext(fetchImpl: (input: string, init?: RequestInit) => Promise<Response>) {
   const store = new Map<string, unknown>();
   const queryQSOs = vi.fn(async (_filter?: unknown) => [] as QSORecord[]);
+  const addQSO = vi.fn(async (_qso: QSORecord) => {});
+  const updateQSO = vi.fn(async (_id: string, _updates: Partial<QSORecord>) => {});
+  const notifyUpdated = vi.fn(async () => {});
   const ctx = {
     store: {
       global: {
@@ -33,6 +37,9 @@ function createContext(fetchImpl: (input: string, init?: RequestInit) => Promise
     logbook: {
       forCallsign: vi.fn(() => ({
         queryQSOs,
+        addQSO,
+        updateQSO,
+        notifyUpdated,
       })),
     },
     log: {
@@ -48,6 +55,9 @@ function createContext(fetchImpl: (input: string, init?: RequestInit) => Promise
     ctx: ctx as unknown as PluginContext,
     store,
     queryQSOs,
+    addQSO,
+    updateQSO,
+    notifyUpdated,
     fetch: ctx.fetch,
   };
 }
@@ -58,6 +68,84 @@ function okResponse(payload: unknown, status = 200): Response {
     headers: { 'Content-Type': 'application/json' },
   });
 }
+
+function adifDownloadResponse(records: Array<{
+  call: string;
+  qsoDate: string;
+  timeOn: string;
+  freq: string;
+  mode: string;
+  lotwSent?: string;
+  lotwRcvd?: string;
+  lotwSentDate?: string;
+  lotwRcvdDate?: string;
+  myCall?: string;
+}>): Response {
+  const body = records.map((record) => {
+    const fields = [
+      `<call:${record.call.length}>${record.call}`,
+      `<qso_date:8>${record.qsoDate}`,
+      `<time_on:6>${record.timeOn}`,
+      `<freq:${record.freq.length}>${record.freq}`,
+      `<mode:${record.mode.length}>${record.mode}`,
+      `<station_callsign:${(record.myCall || 'BG5DRB').length}>${record.myCall || 'BG5DRB'}`,
+    ];
+    if (record.lotwSent) {
+      fields.push(`<lotw_qsl_sent:${record.lotwSent.length}>${record.lotwSent}`);
+    }
+    if (record.lotwRcvd) {
+      fields.push(`<lotw_qsl_rcvd:${record.lotwRcvd.length}>${record.lotwRcvd}`);
+    }
+    if (record.lotwSentDate) {
+      fields.push(`<lotw_qslsdate:8>${record.lotwSentDate}`);
+    }
+    if (record.lotwRcvdDate) {
+      fields.push(`<lotw_qslrdate:8>${record.lotwRcvdDate}`);
+    }
+    return `${fields.join('')}<eor>`;
+  }).join('\n');
+
+  return okResponse({
+    status: 'successful',
+    message: 'Export successful',
+    exported_qsos: records.length,
+    adif: body,
+  });
+}
+
+describe('buildWavelogQslStatusUpdates', () => {
+  it('merges higher-priority LoTW status from remote WaveLog records', () => {
+    const local = createQso('local-1');
+    const remote = createQso('remote-1', {
+      lotwQslSent: 'Y',
+      lotwQslReceived: 'Y',
+      lotwQslSentDate: Date.parse('2026-07-16T00:00:00.000Z'),
+      lotwQslReceivedDate: Date.parse('2026-07-16T00:00:00.000Z'),
+    });
+
+    expect(buildWavelogQslStatusUpdates(local, remote)).toEqual({
+      lotwQslSent: 'Y',
+      lotwQslReceived: 'Y',
+      lotwQslSentDate: Date.parse('2026-07-16T00:00:00.000Z'),
+      lotwQslReceivedDate: Date.parse('2026-07-16T00:00:00.000Z'),
+    });
+  });
+
+  it('does not downgrade existing confirmed LoTW status', () => {
+    const local = createQso('local-1', {
+      lotwQslSent: 'Y',
+      lotwQslReceived: 'Y',
+      lotwQslReceivedDate: Date.parse('2026-07-10T00:00:00.000Z'),
+    });
+    const remote = createQso('remote-1', {
+      lotwQslSent: 'N',
+      lotwQslReceived: 'R',
+      lotwQslReceivedDate: Date.parse('2026-07-01T00:00:00.000Z'),
+    });
+
+    expect(buildWavelogQslStatusUpdates(local, remote)).toBeNull();
+  });
+});
 
 describe('WaveLogSyncProvider', () => {
   it('single auto-upload uses explicit records without querying the whole logbook', async () => {
@@ -323,5 +411,117 @@ describe('WaveLogSyncProvider', () => {
       code: 'wavelog_upload_failed',
       message: 'Network request failed: check URL, network, and firewall',
     }));
+  });
+
+  it('download updates LoTW status on existing local matches instead of skipping', async () => {
+    const local = createQso('local-jq1xgv', {
+      callsign: 'JQ1XGV',
+      frequency: 144_460_970,
+      startTime: Date.parse('2026-07-16T03:01:00.000Z'),
+      endTime: Date.parse('2026-07-16T03:01:00.000Z'),
+    });
+    const { ctx, queryQSOs, addQSO, updateQSO, notifyUpdated } = createContext(async () =>
+      adifDownloadResponse([{
+        call: 'JQ1XGV',
+        qsoDate: '20260716',
+        timeOn: '030100',
+        freq: '144.46097',
+        mode: 'FT8',
+        lotwSent: 'Y',
+        lotwRcvd: 'Y',
+        lotwSentDate: '20260716',
+        lotwRcvdDate: '20260716',
+      }]),
+    );
+    queryQSOs.mockResolvedValue([local]);
+
+    const provider = new WaveLogSyncProvider(ctx);
+    provider.setConfig('BG5DRB', {
+      url: 'https://wavelog.example.com',
+      apiKey: 'api-key',
+      stationId: 'station-1',
+      radioName: 'TX5DR',
+      autoUploadQSO: true,
+    });
+
+    const result = await provider.download('BG5DRB');
+
+    expect(result).toEqual({
+      downloaded: 1,
+      matched: 1,
+      updated: 1,
+      imported: 0,
+      failures: undefined,
+    });
+    expect(addQSO).not.toHaveBeenCalled();
+    expect(updateQSO).toHaveBeenCalledWith('local-jq1xgv', expect.objectContaining({
+      lotwQslSent: 'Y',
+      lotwQslReceived: 'Y',
+    }));
+    expect(notifyUpdated).toHaveBeenCalledTimes(1);
+  });
+
+  it('download imports unmatched remote QSOs and skips noop status merges', async () => {
+    const alreadySynced = createQso('local-synced', {
+      callsign: 'JH0BBE',
+      frequency: 144_460_970,
+      startTime: Date.parse('2026-07-16T03:03:00.000Z'),
+      endTime: Date.parse('2026-07-16T03:03:00.000Z'),
+      lotwQslSent: 'Y',
+      lotwQslSentDate: Date.parse('2026-07-16T00:00:00.000Z'),
+    });
+    const { ctx, queryQSOs, addQSO, updateQSO, notifyUpdated } = createContext(async () =>
+      adifDownloadResponse([
+        {
+          call: 'JH0BBE',
+          qsoDate: '20260716',
+          timeOn: '030300',
+          freq: '144.46097',
+          mode: 'FT8',
+          lotwSent: 'Y',
+          lotwSentDate: '20260716',
+        },
+        {
+          call: 'JO1LVZ',
+          qsoDate: '20260716',
+          timeOn: '025100',
+          freq: '144.460964',
+          mode: 'FT8',
+          lotwSent: 'Y',
+        },
+      ]),
+    );
+    queryQSOs.mockImplementation(async (filter?: { callsign?: string }) => {
+      if (filter?.callsign?.toUpperCase() === 'JH0BBE') {
+        return [alreadySynced];
+      }
+      return [];
+    });
+
+    const provider = new WaveLogSyncProvider(ctx);
+    provider.setConfig('BG5DRB', {
+      url: 'https://wavelog.example.com',
+      apiKey: 'api-key',
+      stationId: 'station-1',
+      radioName: 'TX5DR',
+      autoUploadQSO: true,
+    });
+
+    const result = await provider.download('BG5DRB');
+
+    expect(result).toEqual({
+      downloaded: 2,
+      matched: 1,
+      updated: 0,
+      imported: 1,
+      failures: undefined,
+    });
+    expect(updateQSO).not.toHaveBeenCalled();
+    expect(addQSO).toHaveBeenCalledTimes(1);
+    expect(addQSO.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      callsign: 'JO1LVZ',
+      lotwQslSent: 'Y',
+    }));
+    expect(notifyUpdated).toHaveBeenCalledTimes(1);
   });
 });
