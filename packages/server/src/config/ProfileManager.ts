@@ -178,16 +178,8 @@ export class ProfileManager {
       }
     }
 
-    // 阶段2：切换配置（原子操作）
-    // Persist previous profile's operating state, then load the target profile's
-    // memory into globals so bootstrap restores the correct band for this radio.
-    if (previousProfileId && previousProfileId !== id) {
-      await configManager.snapshotOperatingMemoryForProfile(previousProfileId);
-    }
-    await configManager.setActiveProfileId(id);
-    if (previousProfileId !== id) {
-      await configManager.loadOperatingMemoryForProfile(id);
-    }
+    // 阶段2：切换配置（原子操作：snapshot → setActive → load）
+    await configManager.switchActiveProfile(id);
     engine.getAudioStreamManager().reloadAudioConfig();
     logger.info(`Profile activated: "${profile.name}" (id: ${id})`);
 

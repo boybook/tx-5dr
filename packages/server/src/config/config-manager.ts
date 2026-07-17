@@ -870,6 +870,29 @@ export class ConfigManager {
     await this.saveConfig();
   }
 
+  /**
+   * Atomically switch the active profile and its operating memory.
+   *
+   * All profile-switch callers (ProfileManager, RadioPowerController, …) must
+   * use this entry so snapshot → setActive → load stays ordered and complete.
+   */
+  async switchActiveProfile(id: string): Promise<{ previousProfileId: string | null; profileId: string }> {
+    if (!this.config.profiles.find((profile) => profile.id === id)) {
+      throw new Error(`Profile ${id} does not exist`);
+    }
+
+    const previousProfileId = this.getActiveProfileId();
+    if (previousProfileId && previousProfileId !== id) {
+      await this.snapshotOperatingMemoryForProfile(previousProfileId);
+    }
+    await this.setActiveProfileId(id);
+    if (previousProfileId !== id) {
+      await this.loadOperatingMemoryForProfile(id);
+    }
+
+    return { previousProfileId, profileId: id };
+  }
+
   // ===== 配置派生方法（从 activeProfile 派生，签名不变） =====
 
   /**

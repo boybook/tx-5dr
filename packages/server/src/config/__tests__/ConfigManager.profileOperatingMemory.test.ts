@@ -126,6 +126,44 @@ describe('ConfigManager profile operating memory', () => {
     });
   });
 
+  it('switchActiveProfile snapshots previous memory then loads the target bucket', async () => {
+    await configManager.updateLastSelectedFrequency({
+      frequency: 144_460_000,
+      mode: 'FT8',
+      band: '2m',
+    });
+    await configManager.setLastEngineMode('digital');
+
+    await configManager.setActiveProfileId('profile-7610');
+    await configManager.updateLastSelectedFrequency({
+      frequency: 14_074_000,
+      mode: 'FT8',
+      band: '20m',
+    });
+
+    // Put globals back on 9700 without going through switchActiveProfile,
+    // then exercise the atomic helper as RadioPowerController would.
+    await configManager.setActiveProfileId('profile-9700');
+    await configManager.loadOperatingMemoryForProfile('profile-9700');
+    await configManager.updateLastSelectedFrequency({
+      frequency: 144_460_000,
+      mode: 'FT8',
+      band: '2m',
+    });
+
+    const result = await configManager.switchActiveProfile('profile-7610');
+
+    expect(result).toEqual({ previousProfileId: 'profile-9700', profileId: 'profile-7610' });
+    expect(configManager.getActiveProfileId()).toBe('profile-7610');
+    expect(configManager.getLastSelectedFrequency()).toMatchObject({
+      frequency: 14_074_000,
+      band: '20m',
+    });
+    expect(configManager.getProfileOperatingMemory('profile-9700')).toMatchObject({
+      lastSelectedFrequency: expect.objectContaining({ frequency: 144_460_000 }),
+    });
+  });
+
   it('removes operating memory when a profile is deleted', async () => {
     await configManager.updateLastSelectedFrequency({
       frequency: 14_074_000,
