@@ -72,6 +72,8 @@ vi.mock('../config-manager.js', () => ({
     return {
       inputDeviceName: config.inputDeviceName,
       outputDeviceName: config.outputDeviceName,
+      inputRouteKey: config.inputRouteKey ?? undefined,
+      outputRouteKey: config.outputRouteKey ?? undefined,
       inputSampleRate: config.inputSampleRate ?? config.sampleRate ?? 48000,
       outputSampleRate: config.outputSampleRate ?? config.sampleRate ?? 48000,
       inputBufferSize: config.inputBufferSize ?? config.bufferSize ?? 1024,
@@ -183,6 +185,53 @@ describe('ProfileManager audio runtime config application', () => {
       outputChannelMode: 'mono',
     });
     expect(mockReloadAudioConfig).not.toHaveBeenCalled();
+  });
+
+  it('preserves stable Android route keys for partial updates and clears them when the device name changes', async () => {
+    state.profiles = [makeProfile({
+      audio: {
+        ...makeProfile().audio,
+        inputDeviceName: '[Android] Wired headset',
+        outputDeviceName: '[Android] Wired headset',
+        inputRouteKey: 'android:wired-headset:input',
+        outputRouteKey: 'android:wired-headset:output',
+      },
+    })];
+    const manager = ProfileManager.getInstance();
+
+    await manager.updateProfile('profile-1', { audio: { inputSampleRate: 44100 } });
+    expect(state.profiles[0]?.audio).toMatchObject({
+      inputRouteKey: 'android:wired-headset:input',
+      outputRouteKey: 'android:wired-headset:output',
+    });
+
+    await manager.updateProfile('profile-1', { audio: { inputDeviceName: 'IC-705' } });
+    expect(state.profiles[0]?.audio.inputRouteKey).toBeUndefined();
+    expect(state.profiles[0]?.audio.outputRouteKey).toBe('android:wired-headset:output');
+
+    state.profiles[0]!.audio = {
+      ...state.profiles[0]!.audio,
+      inputDeviceName: '[Android] Wired headset',
+      inputRouteKey: 'android:wired-headset:input',
+    };
+    await manager.updateProfile('profile-1', {
+      audio: { inputDeviceName: '[Android] Wired headset', inputRouteKey: null },
+    });
+    expect(state.profiles[0]?.audio.inputRouteKey).toBeUndefined();
+  });
+
+  it('normalizes audio updates for a migrated Profile that has no audio object', async () => {
+    state.profiles = [{ ...makeProfile(), audio: undefined } as unknown as RadioProfile];
+    const manager = ProfileManager.getInstance();
+
+    await expect(manager.updateProfile('profile-1', {
+      audio: { inputDeviceName: '[Android] Wired headset', inputRouteKey: 'android:wired-headset:input' },
+    })).resolves.toMatchObject({
+      audio: expect.objectContaining({
+        inputDeviceName: '[Android] Wired headset',
+        inputRouteKey: 'android:wired-headset:input',
+      }),
+    });
   });
 
   it('preserves output sample format and channel mode in Profile audio updates', async () => {

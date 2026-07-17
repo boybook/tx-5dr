@@ -328,13 +328,29 @@
     "inputDevice": "音频输入设备",
     "inputDevicePlaceholder": "请选择输入设备",
     "selectInput": "选择音频输入设备",
+    "selectedDeviceStatus": "已选音频设备状态",
     "deviceUnavailableShort": "未连接",
     "deviceUnavailable": "设备当前不可用，音频将自动重试",
     "deviceMissingPreserved": "已保存此设备配置，但当前未连接或未枚举到；保存不会清空该设备，连接后会自动重试。",
     "deviceMissingPreservedShort": "已保存，当前未连接",
+    "deviceRouteLostDescription": "已选的物理路由已丢失，TX-5DR 不会自动回退到其他设备。",
     "default": "默认",
     "channels": "{{count}} 声道",
     "deviceVirtualSelected": "虚拟音频设备",
+    "deviceCategory": {
+      "usb": "USB",
+      "analog": "3.5 mm",
+      "builtin": "内置",
+      "network": "网络",
+      "other": "其他"
+    },
+    "deviceStatus": {
+      "available": "可用",
+      "active": "使用中",
+      "clientConnected": "桥接已连接",
+      "routeVerified": "路由已验证",
+      "routeLost": "路由已丢失"
+    },
     "outputDevice": "音频输出设备",
     "outputDevicePlaceholder": "请选择输出设备",
     "selectOutput": "选择音频输出设备",
@@ -376,6 +392,7 @@
     "bufferSizeFallback": "常用缓冲区，可手动选择",
     "bufferSizeUnsupported": "当前缓冲区可能不够稳定",
     "virtualAudioFixed": "此音频路径自动使用固定参数",
+    "deviceManagedFixed": "由当前设备自动管理，无需手动设置",
     "autoMatched": "已自动匹配 USB 音频设备：{{device}}（{{rate}} Hz）"
   },
   "radioType": {

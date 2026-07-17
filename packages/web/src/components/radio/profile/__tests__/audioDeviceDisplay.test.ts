@@ -4,6 +4,8 @@ import type { TFunction } from 'i18next';
 import {
   formatChannelText,
   formatDeviceText,
+  getAudioDeviceCategory,
+  getAudioDeviceStatusBadges,
   getResolutionDescription,
   getResolutionTone,
 } from '../audioDeviceDisplay';
@@ -66,5 +68,48 @@ describe('audio device display helpers', () => {
     expect(getResolutionDescription(zh, missing)).toBe('\u5df2\u4fdd\u5b58\u6b64\u8bbe\u5907\u914d\u7f6e\uff0c\u4f46\u5f53\u524d\u672a\u8fde\u63a5\u6216\u672a\u679a\u4e3e\u5230\uff1b\u4fdd\u5b58\u4e0d\u4f1a\u6e05\u7a7a\u8be5\u8bbe\u5907\uff0c\u8fde\u63a5\u540e\u4f1a\u81ea\u52a8\u91cd\u8bd5\u3002');
     expect(getResolutionTone(virtual)).toBe('virtual');
     expect(getResolutionDescription(en, virtual)).toBe('Virtual audio device');
+  });
+
+  it('classifies USB, 3.5 mm, built-in, and network endpoints', () => {
+    expect(getAudioDeviceCategory({ ...defaultInput, kind: 'usb' })).toBe('usb');
+    expect(getAudioDeviceCategory({
+      ...defaultInput,
+      kind: 'wired-headset',
+      connector: '3.5mm',
+    })).toBe('analog');
+    expect(getAudioDeviceCategory({ ...defaultInput, kind: 'builtin-mic' })).toBe('builtin');
+    expect(getAudioDeviceCategory({
+      ...defaultInput,
+      backend: 'openwebrx',
+      kind: 'network',
+    })).toBe('network');
+  });
+
+  it('shows verified and lost route health without treating an idle route as failed', () => {
+    expect(getAudioDeviceStatusBadges({
+      ...defaultInput,
+      backend: 'android',
+      availability: 'active',
+      routeState: 'verified',
+      routeVerified: true,
+      clientConnected: true,
+    }).map((badge) => badge.key)).toEqual(['active', 'clientConnected', 'routeVerified']);
+
+    expect(getAudioDeviceStatusBadges({
+      ...defaultInput,
+      backend: 'android',
+      availability: 'available',
+      routeState: 'idle',
+      routeVerified: false,
+    }).map((badge) => badge.key)).toEqual(['available']);
+
+    expect(getAudioDeviceStatusBadges({
+      ...defaultInput,
+      backend: 'android',
+      availability: 'cached',
+      routeState: 'lost',
+      routeVerified: false,
+      failureReason: 'unplugged',
+    }).map((badge) => badge.key)).toEqual(['routeLost']);
   });
 });

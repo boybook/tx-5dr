@@ -7,8 +7,12 @@ import type { AndroidAudioDeviceDescriptor } from './android-audio-devices.js';
 const logger = createLogger('AndroidAudioSocketBackend');
 const OUTPUT_DRAIN_TIMEOUT_MS = 250;
 const OUTPUT_BACKPRESSURE_LOG_INTERVAL_MS = 5_000;
+const INPUT_ROUTE_READY_TIMEOUT_MS = 3_000;
+const OUTPUT_ROUTE_ACK_TIMEOUT_MS = 2_000;
 export const ANDROID_AUDIO_OUTPUT_HEADER_BYTES = 16;
-const ANDROID_AUDIO_OUTPUT_HEADER_MAGIC = Buffer.from('TX5DRAO1', 'ascii');
+const ANDROID_AUDIO_OUTPUT_HEADER_V1_MAGIC = Buffer.from('TX5DRAO1', 'ascii');
+const ANDROID_AUDIO_OUTPUT_HEADER_V2_MAGIC = Buffer.from('TX5DRAO2', 'ascii');
+const ANDROID_AUDIO_OUTPUT_ROUTE_ACK_MAGIC = Buffer.from('TX5DRAK1', 'ascii');
 
 export type AndroidAudioOutputFormat = 's16le' | 'f32le';
 
@@ -39,40 +43,79 @@ export interface AndroidAudioInputEvents {
   close: () => void;
 }
 
+export interface AndroidAudioOutputEvents {
+  error: (error: Error) => void;
+  close: () => void;
+}
+
 export class AndroidAudioInputSocket extends EventEmitter<AndroidAudioInputEvents> {
   private socket: net.Socket | null = null;
   private tail = Buffer.alloc(0);
   private stopped = false;
+  private terminalEventEmitted = false;
 
   constructor(private readonly device: AndroidAudioDeviceDescriptor) {
     super();
   }
 
   start(): Promise<void> {
+    this.stopped = false;
+    this.terminalEventEmitted = false;
     return new Promise((resolve, reject) => {
       const socket = net.createConnection({ path: this.device.socketPath });
       this.socket = socket;
       let settled = false;
-      const onStartupError = (error: Error) => {
-        if (!this.stopped) this.emit('error', error);
+      const readyTimeout = setTimeout(() => {
+        const error = new Error('Android audio input route-ready frame timed out');
+        this.emitTerminalError(error);
         if (!settled) {
           settled = true;
           reject(error);
         }
+        socket.destroy();
+      }, INPUT_ROUTE_READY_TIMEOUT_MS);
+      const clearReadyTimeout = () => clearTimeout(readyTimeout);
+      const onError = (error: Error) => {
+        this.emitTerminalError(error);
+        if (!settled) {
+          settled = true;
+          clearReadyTimeout();
+          reject(error);
+        }
       };
       socket.once('connect', () => {
-        settled = true;
-        socket.off('error', onStartupError);
-        socket.on('error', (error) => {
-          if (!this.stopped) this.emit('error', error);
-        });
-        logger.info('Android audio input socket connected', { device: this.device.name, socketPath: this.device.socketPath });
-        resolve();
+        if (this.stopped) {
+          if (!settled) {
+            settled = true;
+            clearReadyTimeout();
+            reject(new Error('Android audio input socket stopped before connection completed'));
+          }
+          socket.destroy();
+          return;
+        }
       });
-      socket.once('error', onStartupError);
-      socket.on('data', (chunk) => this.handleData(chunk));
+      socket.on('error', onError);
+      socket.on('data', (chunk) => {
+        const frame = this.decodeData(chunk);
+        if (!frame) return;
+        if (!settled) {
+          settled = true;
+          clearReadyTimeout();
+          logger.info('Android audio input route ready', { device: this.device.name, socketPath: this.device.socketPath });
+          resolve();
+          queueMicrotask(() => this.emitInputFrame(frame));
+          return;
+        }
+        this.emitInputFrame(frame);
+      });
       socket.once('close', () => {
-        if (!this.stopped) this.emit('close');
+        if (this.socket === socket) this.socket = null;
+        if (!settled) {
+          settled = true;
+          clearReadyTimeout();
+          reject(new Error('Android audio input socket closed before connection completed'));
+        }
+        this.emitTerminalClose();
       });
     });
   }
@@ -84,33 +127,61 @@ export class AndroidAudioInputSocket extends EventEmitter<AndroidAudioInputEvent
     this.tail = Buffer.alloc(0);
   }
 
-  private handleData(chunk: Buffer): void {
+  private emitTerminalError(error: Error): void {
+    if (this.stopped || this.terminalEventEmitted) return;
+    this.terminalEventEmitted = true;
+    this.emit('error', error);
+  }
+
+  private emitTerminalClose(): void {
+    if (this.stopped || this.terminalEventEmitted) return;
+    this.terminalEventEmitted = true;
+    this.emit('close');
+  }
+
+  private decodeData(chunk: Buffer): { samples: Float32Array; sampleRate: number } | null {
+    if (this.stopped || this.terminalEventEmitted) return null;
     const data = this.tail.length > 0 ? Buffer.concat([this.tail, chunk]) : chunk;
     const alignedLength = data.length - (data.length % 2);
     this.tail = alignedLength === data.length ? Buffer.alloc(0) : data.subarray(alignedLength);
-    if (alignedLength <= 0) return;
-    this.emit('audioData', convertS16LeToFloat32(data.subarray(0, alignedLength)), this.device.sampleRate || 48000);
+    if (alignedLength <= 0) return null;
+    return {
+      samples: convertS16LeToFloat32(data.subarray(0, alignedLength)),
+      sampleRate: this.device.sampleRate || 48000,
+    };
+  }
+
+  private emitInputFrame(frame: { samples: Float32Array; sampleRate: number }): void {
+    if (this.stopped || this.terminalEventEmitted) return;
+    this.emit('audioData', frame.samples, frame.sampleRate);
   }
 }
 
-export class AndroidAudioOutputSocket {
+export class AndroidAudioOutputSocket extends EventEmitter<AndroidAudioOutputEvents> {
   private socket: net.Socket | null = null;
   private backpressureCount = 0;
   private backpressureWaitMs = 0;
   private writeFailures = 0;
   private lastBackpressureLogAt = 0;
+  private stopped = false;
+  private terminalEventEmitted = false;
 
   constructor(
     private readonly device: AndroidAudioDeviceDescriptor,
     private readonly streamConfig: AndroidAudioOutputStreamConfig,
-  ) {}
+  ) {
+    super();
+  }
 
   start(): Promise<void> {
+    this.stopped = false;
+    this.terminalEventEmitted = false;
     return new Promise((resolve, reject) => {
       const socket = net.createConnection({ path: this.device.socketPath });
       this.socket = socket;
       let settled = false;
-      const onStartupError = (error: Error) => {
+      const onError = (error: Error) => {
+        this.emitTerminalError(error);
         if (!settled) {
           settled = true;
           reject(error);
@@ -119,16 +190,23 @@ export class AndroidAudioOutputSocket {
       socket.once('connect', () => {
         void (async () => {
           try {
-            const header = encodeAndroidAudioOutputHeader(this.streamConfig);
+            if (this.stopped) {
+              throw new Error('Android audio output socket stopped before connection completed');
+            }
+            const requiresRouteAck = this.device.capabilities?.outputRouteAck === true;
+            const header = encodeAndroidAudioOutputHeader(this.streamConfig, requiresRouteAck);
+            const routeAckPromise = requiresRouteAck
+              ? waitForAndroidAudioOutputRouteAck(socket, OUTPUT_ROUTE_ACK_TIMEOUT_MS)
+              : null;
+            void routeAckPromise?.catch(() => undefined);
             const result = await writeBufferWithBackpressure(socket, header, OUTPUT_DRAIN_TIMEOUT_MS);
             if (!result.ok) {
               throw new Error('Android audio output stream header write failed');
             }
+            if (routeAckPromise) {
+              await routeAckPromise;
+            }
             settled = true;
-            socket.off('error', onStartupError);
-            socket.on('error', (error) => {
-              logger.warn('Android audio output socket error', { device: this.device.name, error: error.message });
-            });
             logger.info('Android audio output socket connected', {
               device: this.device.name,
               socketPath: this.device.socketPath,
@@ -138,26 +216,37 @@ export class AndroidAudioOutputSocket {
             });
             resolve();
           } catch (error) {
+            const normalizedError = error instanceof Error ? error : new Error(String(error));
             if (!settled) {
               settled = true;
-              reject(error);
+              reject(normalizedError);
             }
+            this.emitTerminalError(normalizedError);
             socket.destroy();
           }
         })();
       });
-      socket.once('error', onStartupError);
+      socket.on('error', onError);
+      socket.once('close', () => {
+        if (this.socket === socket) this.socket = null;
+        if (!settled) {
+          settled = true;
+          reject(new Error('Android audio output socket closed before connection completed'));
+        }
+        this.emitTerminalClose();
+      });
     });
   }
 
   stop(): void {
+    this.stopped = true;
     this.socket?.destroy();
     this.socket = null;
   }
 
   async write(samples: Float32Array, gain = 1): Promise<boolean> {
     const socket = this.socket;
-    if (!socket || socket.destroyed || !socket.writable) return false;
+    if (this.stopped || this.terminalEventEmitted || !socket || socket.destroyed || !socket.writable) return false;
     try {
       const payload = encodeAndroidAudioPayload(samples, gain, this.streamConfig.format);
       const result = await writeBufferWithBackpressure(socket, payload, OUTPUT_DRAIN_TIMEOUT_MS);
@@ -167,17 +256,35 @@ export class AndroidAudioOutputSocket {
       }
       if (!result.ok) {
         this.writeFailures += 1;
+        this.emitTerminalError(new Error('Android audio output socket write failed'));
+        socket.destroy();
       }
       this.maybeLogBackpressure(result.backpressured || !result.ok);
       return result.ok;
     } catch (error) {
       this.writeFailures += 1;
+      const normalizedError = error instanceof Error ? error : new Error(String(error));
       logger.warn('Android audio output write failed', {
         device: this.device.name,
-        error: error instanceof Error ? error.message : String(error),
+        error: normalizedError.message,
       });
+      this.emitTerminalError(normalizedError);
+      socket.destroy();
       return false;
     }
+  }
+
+  private emitTerminalError(error: Error): void {
+    if (this.stopped || this.terminalEventEmitted) return;
+    this.terminalEventEmitted = true;
+    logger.warn('Android audio output socket error', { device: this.device.name, error: error.message });
+    this.emit('error', error);
+  }
+
+  private emitTerminalClose(): void {
+    if (this.stopped || this.terminalEventEmitted) return;
+    this.terminalEventEmitted = true;
+    this.emit('close');
   }
 
   private maybeLogBackpressure(force = false): void {
@@ -195,7 +302,7 @@ export class AndroidAudioOutputSocket {
   }
 }
 
-export function encodeAndroidAudioOutputHeader(config: AndroidAudioOutputStreamConfig): Buffer {
+export function encodeAndroidAudioOutputHeader(config: AndroidAudioOutputStreamConfig, requiresRouteAck = false): Buffer {
   if (!Number.isFinite(config.sampleRate) || config.sampleRate < 8_000 || config.sampleRate > 192_000) {
     throw new Error(`Invalid Android audio output sample rate: ${config.sampleRate}`);
   }
@@ -207,12 +314,49 @@ export function encodeAndroidAudioOutputHeader(config: AndroidAudioOutputStreamC
     throw new Error(`Invalid Android audio output format: ${String(config.format)}`);
   }
   const header = Buffer.alloc(ANDROID_AUDIO_OUTPUT_HEADER_BYTES);
-  ANDROID_AUDIO_OUTPUT_HEADER_MAGIC.copy(header, 0);
+  (requiresRouteAck ? ANDROID_AUDIO_OUTPUT_HEADER_V2_MAGIC : ANDROID_AUDIO_OUTPUT_HEADER_V1_MAGIC).copy(header, 0);
   header.writeUInt32LE(Math.round(config.sampleRate), 8);
   header.writeUInt8(formatId, 12);
   header.writeUInt8(config.channels, 13);
   header.writeUInt16LE(0, 14);
   return header;
+}
+
+export function waitForAndroidAudioOutputRouteAck(socket: net.Socket, timeoutMs = OUTPUT_ROUTE_ACK_TIMEOUT_MS): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let received = Buffer.alloc(0);
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.off('data', onData);
+      socket.off('close', onClose);
+      socket.off('error', onError);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onData = (chunk: Buffer) => {
+      received = received.length > 0 ? Buffer.concat([received, chunk]) : Buffer.from(chunk);
+      if (received.length > ANDROID_AUDIO_OUTPUT_ROUTE_ACK_MAGIC.length) {
+        finish(new Error(`Invalid Android audio output route ACK length: ${received.length}`));
+        return;
+      }
+      if (received.length === ANDROID_AUDIO_OUTPUT_ROUTE_ACK_MAGIC.length) {
+        if (!received.equals(ANDROID_AUDIO_OUTPUT_ROUTE_ACK_MAGIC)) {
+          finish(new Error('Invalid Android audio output route ACK'));
+          return;
+        }
+        finish();
+      }
+    };
+    const onClose = () => finish(new Error('Android audio output socket closed before route ACK'));
+    const onError = (error: Error) => finish(error);
+    const timer = setTimeout(() => finish(new Error('Android audio output route ACK timed out')), timeoutMs);
+    socket.on('data', onData);
+    socket.once('close', onClose);
+    socket.once('error', onError);
+  });
 }
 
 export function encodeAndroidAudioPayload(

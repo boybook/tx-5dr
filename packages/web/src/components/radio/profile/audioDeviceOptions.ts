@@ -10,7 +10,52 @@ export interface NumberOptionState {
 }
 
 export function isVirtualAudioDevice(device: AudioDevice | null | undefined): boolean {
-  return Boolean(device?.id.startsWith('icom-wlan-') || device?.id.startsWith('openwebrx-'));
+  return Boolean(
+    device?.transport === 'virtual'
+    || device?.kind === 'virtual'
+    || device?.id.startsWith('icom-wlan-')
+    || device?.id.startsWith('openwebrx-')
+    || device?.id.startsWith('tci-'),
+  );
+}
+
+export type AudioDeviceControl = 'sampleRate' | 'bufferSize' | 'sampleFormat' | 'channelMode';
+
+export function isAudioDeviceControlConfigurable(
+  device: AudioDevice | null | undefined,
+  control: AudioDeviceControl,
+): boolean {
+  if (!device || isVirtualAudioDevice(device)) return false;
+  const capabilities = device.capabilities;
+  if (!capabilities) return true;
+
+  switch (control) {
+    case 'sampleRate':
+      return capabilities.sampleRateConfigurable !== false && capabilities.fixedSampleRate === undefined;
+    case 'bufferSize':
+      return capabilities.bufferSizeConfigurable !== false && capabilities.fixedBufferSize === undefined;
+    case 'sampleFormat':
+      return capabilities.sampleFormatConfigurable !== false;
+    case 'channelMode':
+      return capabilities.channelModeConfigurable !== false && capabilities.fixedChannelCount !== 1;
+  }
+}
+
+export function getFixedAudioDeviceNumber(
+  device: AudioDevice | null | undefined,
+  control: 'sampleRate' | 'bufferSize',
+): number | undefined {
+  if (!device) return undefined;
+  if (control === 'sampleRate') {
+    return device.capabilities?.fixedSampleRate
+      ?? (device.capabilities?.sampleRateConfigurable === false
+        ? device.capabilities.sampleRates?.[0] ?? device.sampleRate
+        : undefined);
+  }
+  return device.capabilities?.fixedBufferSize
+    ?? (device.capabilities?.bufferSizeConfigurable === false
+      ? device.capabilities.bufferSizes?.[0]
+      : undefined);
 }
 
 export function resolveAudioSettingNumber(
@@ -27,7 +72,7 @@ export function deriveSampleRateOptions(
   currentValue: number,
   fallbackValues: number[] = FALLBACK_SAMPLE_RATE_OPTIONS,
 ): NumberOptionState {
-  const deviceRates = normalizeNumberOptions(device?.sampleRates);
+  const deviceRates = normalizeNumberOptions(device?.capabilities?.sampleRates ?? device?.sampleRates);
   const baseValues = deviceRates.length > 0 ? deviceRates : normalizeNumberOptions(fallbackValues);
   const isCurrentUnsupported = deviceRates.length > 0 && !deviceRates.includes(currentValue);
   const values = !baseValues.includes(currentValue)

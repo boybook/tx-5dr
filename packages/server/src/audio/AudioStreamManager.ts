@@ -14,7 +14,7 @@ import { createLogger } from '../utils/logger.js';
 import type { VoiceTxFrameMeta, VoiceTxProcessedFrameStats } from '../voice/VoiceTxDiagnostics.js';
 import { VoiceTxOutputPipeline, type VoiceTxOutputSinkState } from './VoiceTxOutputPipeline.js';
 import { AndroidAudioInputSocket, AndroidAudioOutputSocket, type AndroidAudioOutputFormat } from './AndroidAudioSocketBackend.js';
-import { isAndroidAudioDeviceId, isAndroidBridgeRuntime, isLegacyAndroidAudioDeviceName } from './android-audio-devices.js';
+import { getAndroidAudioStartFailure, isAndroidAudioDeviceId, isAndroidBridgeRuntime, isLegacyAndroidAudioDeviceName } from './android-audio-devices.js';
 
 const logger = createLogger('AudioStreamManager');
 // RtAudioFormat 是 const enum，isolatedModules 下无法直接导入，使用数值常量
@@ -34,8 +34,15 @@ const RTAUDIO_TX_CONSUME_WATCHDOG_MS = 750;
 const RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS = 1000;
 const RTAUDIO_TX_WATCHDOG_MIN_SUBMITTED_CHUNKS = 3;
 const RTAUDIO_OUTPUT_WARNING_LOG_WINDOW_MS = 5000;
+const MAX_SERIALIZED_INPUT_INGEST_DEPTH = 3;
 
 export type NativeAudioInputSourceKind = 'audio-device' | 'icom-wlan' | 'tci' | 'openwebrx';
+
+interface SerializedInputIngestQueue {
+  generation: number;
+  depth: number;
+  tail: Promise<void>;
+}
 
 export interface NativeAudioInputFrame {
   samples: Float32Array;
@@ -265,6 +272,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private outputRtAudioErrors: RtAudioIssue[] = [];
   private outputRtAudioIssueLogState = new Map<string, RtAudioIssueLogState>();
   private outputRuntimeLossEmitted = false;
+  private androidInputRuntimeLossEmitted = false;
+  private androidOutputRuntimeLossEmitted = false;
+  private androidInputRuntimeLossError: Error | null = null;
+  private inputIngestGeneration = 0;
+  private readonly inputIngestQueues = new Map<NativeAudioInputSourceKind, SerializedInputIngestQueue>();
   private outputWatchdogGeneration = 0;
   private playbackSequence = 0;
   private readonly now: AudioClock;
@@ -383,6 +395,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     }
     
     try {
+      this.inputIngestGeneration += 1;
       logger.info('starting audio stream');
       
       // 从配置获取设备名称并解析为设备ID
@@ -523,27 +536,45 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         return;
       }
 
-      if (isAndroidAudioDeviceId(deviceId) || audioConfig.inputDeviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && (!audioConfig.inputDeviceName || isLegacyAndroidAudioDeviceName('input', audioConfig.inputDeviceName)))) {
+      if (audioConfig.inputRouteKey || isAndroidAudioDeviceId(deviceId) || audioConfig.inputDeviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && (!audioConfig.inputDeviceName || isLegacyAndroidAudioDeviceName('input', audioConfig.inputDeviceName)))) {
         const audioDeviceManager = AudioDeviceManager.getInstance();
         const androidDevice = audioDeviceManager.resolveAndroidDeviceForStream(
           'input',
-          isLegacyAndroidAudioDeviceName('input', configuredInputDeviceName) ? undefined : configuredInputDeviceName,
+          configuredInputDeviceName,
           deviceId,
+          audioConfig.inputRouteKey ?? undefined,
         );
         if (!androidDevice) {
           throw new Error(`Android audio input device is unavailable: ${configuredInputDeviceName ?? deviceId ?? 'default'}`);
         }
+        const startFailure = getAndroidAudioStartFailure(androidDevice);
+        if (startFailure) {
+          throw new Error(`Android audio input route is unavailable: ${startFailure}`);
+        }
         const input = new AndroidAudioInputSocket(androidDevice);
+        let inputStarted = false;
         input.on('audioData', (samples, sampleRate) => {
-          void this.ingestInputSamples(samples, sampleRate, 'audio-device');
+          void this.ingestInputSamples(samples, sampleRate, 'audio-device', undefined, true);
         });
         input.on('error', (error) => {
-          logger.error('Android audio input socket error', error);
-          this.emit('error', error);
+          if (inputStarted) this.reportAndroidRuntimeLoss('input', input, error);
         });
-        await input.start();
+        input.on('close', () => {
+          if (inputStarted) {
+            this.reportAndroidRuntimeLoss('input', input, new Error(`Android audio input socket closed unexpectedly: ${androidDevice.name}`));
+          }
+        });
+        try {
+          await input.start();
+        } catch (error) {
+          input.stop();
+          throw error;
+        }
         this.androidAudioInput = input;
         this.usingAndroidInput = true;
+        this.androidInputRuntimeLossEmitted = false;
+        this.androidInputRuntimeLossError = null;
+        inputStarted = true;
         this.deviceId = androidDevice.id;
         this.activeInputDeviceName = androidDevice.name;
         this.inputSampleRate = androidDevice.sampleRate || this.inputSampleRate;
@@ -580,6 +611,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.cleanupRtAudioStream('input', this.rtAudioInput, 'start-failed');
         this.rtAudioInput = null;
       }
+      this.androidAudioInput?.stop();
+      this.androidAudioInput = null;
+      this.usingAndroidInput = false;
       this.isStreaming = false;
       this.deviceId = null;
       AudioDeviceManager.getInstance().clearActiveDevice('input', this.activeInputDeviceName);
@@ -593,6 +627,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    * 停止音频流
    */
   async stopStream(): Promise<void> {
+    this.inputIngestGeneration += 1;
     if (!this.isStreaming) {
       logger.warn('audio stream is not running');
       return;
@@ -628,6 +663,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       }
 
       if (this.usingAndroidInput) {
+        this.androidInputRuntimeLossEmitted = true;
         this.androidAudioInput?.stop();
         this.androidAudioInput = null;
         this.usingAndroidInput = false;
@@ -644,6 +680,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       clearResamplerCache();
 
       AudioDeviceManager.getInstance().clearActiveDevice('input', this.activeInputDeviceName);
+      this.androidInputRuntimeLossError = null;
       this.isStreaming = false;
       this.deviceId = null;
       this.activeInputDeviceName = null;
@@ -829,6 +866,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     }
 
     try {
+      if (this.usingAndroidInput && this.androidInputRuntimeLossError) {
+        throw this.androidInputRuntimeLossError;
+      }
       logger.info('starting audio output');
       
       // 从配置获取设备名称并解析为设备ID
@@ -875,15 +915,20 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
       }
 
-      if (isAndroidAudioDeviceId(outputDeviceId) || configuredOutputDeviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && (!configuredOutputDeviceName || isLegacyAndroidAudioDeviceName('output', configuredOutputDeviceName)))) {
+      if (audioConfig.outputRouteKey || isAndroidAudioDeviceId(outputDeviceId) || configuredOutputDeviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && (!configuredOutputDeviceName || isLegacyAndroidAudioDeviceName('output', configuredOutputDeviceName)))) {
         const audioDeviceManager = AudioDeviceManager.getInstance();
         const androidDevice = audioDeviceManager.resolveAndroidDeviceForStream(
           'output',
-          isLegacyAndroidAudioDeviceName('output', configuredOutputDeviceName) ? undefined : configuredOutputDeviceName,
+          configuredOutputDeviceName,
           outputDeviceId,
+          audioConfig.outputRouteKey ?? undefined,
         );
         if (!androidDevice) {
           throw new Error(`Android audio output device is unavailable: ${configuredOutputDeviceName ?? outputDeviceId ?? 'default'}`);
+        }
+        const startFailure = getAndroidAudioStartFailure(androidDevice);
+        if (startFailure) {
+          throw new Error(`Android audio output route is unavailable: ${startFailure}`);
         }
         const androidOutputFormat: AndroidAudioOutputFormat = this.outputSampleFormat === 'int16' ? 's16le' : 'f32le';
         const output = new AndroidAudioOutputSocket(androidDevice, {
@@ -891,9 +936,29 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           format: androidOutputFormat,
           channels: 1,
         });
-        await output.start();
+        let outputStarted = false;
+        output.on('error', (error) => {
+          if (outputStarted) this.reportAndroidRuntimeLoss('output', output, error);
+        });
+        output.on('close', () => {
+          if (outputStarted) {
+            this.reportAndroidRuntimeLoss('output', output, new Error(`Android audio output socket closed unexpectedly: ${androidDevice.name}`));
+          }
+        });
+        try {
+          await output.start();
+        } catch (error) {
+          output.stop();
+          throw error;
+        }
+        if (this.androidInputRuntimeLossError) {
+          output.stop();
+          throw this.androidInputRuntimeLossError;
+        }
         this.androidAudioOutput = output;
         this.usingAndroidOutput = true;
+        this.androidOutputRuntimeLossEmitted = false;
+        outputStarted = true;
         this.outputDeviceId = androidDevice.id;
         this.activeOutputDeviceName = androidDevice.name;
         this.outputChannels = 1;
@@ -930,11 +995,17 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.cleanupRtAudioStream('output', this.rtAudioOutput, 'start-failed');
         this.rtAudioOutput = null;
       }
+      this.androidAudioOutput?.stop();
+      this.androidAudioOutput = null;
+      this.usingAndroidOutput = false;
       this.isOutputting = false;
       this.outputDeviceId = null;
       AudioDeviceManager.getInstance().clearActiveDevice('output', this.activeOutputDeviceName);
       this.activeOutputDeviceName = null;
-      this.emit('error', error instanceof Error ? error : new Error(String(error)));
+      const normalizedError = error instanceof Error ? error : new Error(String(error));
+      if (normalizedError !== this.androidInputRuntimeLossError) {
+        this.emit('error', normalizedError);
+      }
       throw error;
     }
   }
@@ -1065,7 +1136,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    * 停止音频输出流
    */
   async stopOutput(): Promise<void> {
-    if (!this.isOutputting && !this.rtAudioOutput && !this.usingIcomWlanOutput && !this.usingTciOutput) {
+    if (!this.isOutputting && !this.rtAudioOutput && !this.usingIcomWlanOutput && !this.usingTciOutput && !this.usingAndroidOutput) {
       logger.warn('audio output is not running');
       return;
     }
@@ -1088,6 +1159,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       }
 
       if (this.usingAndroidOutput) {
+        this.androidOutputRuntimeLossEmitted = true;
         this.androidAudioOutput?.stop();
         this.androidAudioOutput = null;
         this.usingAndroidOutput = false;
@@ -1172,14 +1244,60 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     sampleRate: number,
     sourceKind: NativeAudioInputSourceKind,
     meta?: AudioFrameMeta,
+    serialize = false,
   ): Promise<void> {
     if (samples.length === 0) return;
+
+    const arrivalTimeMs = this.now();
+    const generation = this.inputIngestGeneration;
+    if (!serialize) {
+      return this.processInputSamples(samples, sampleRate, sourceKind, arrivalTimeMs, generation, meta);
+    }
+    let queue = this.inputIngestQueues.get(sourceKind);
+    if (!queue || queue.generation !== generation) {
+      queue = { generation, depth: 0, tail: Promise.resolve() };
+      this.inputIngestQueues.set(sourceKind, queue);
+    }
+    if (queue.depth >= MAX_SERIALIZED_INPUT_INGEST_DEPTH) {
+      logger.debug('dropping Android input chunk because serialized ingest is behind', {
+        sourceKind,
+        queueDepth: queue.depth,
+        samples: samples.length,
+      });
+      return;
+    }
+    queue.depth += 1;
+    const current = queue.tail.then(
+      () => this.processInputSamples(samples, sampleRate, sourceKind, arrivalTimeMs, generation, meta),
+      () => this.processInputSamples(samples, sampleRate, sourceKind, arrivalTimeMs, generation, meta),
+    ).catch((error) => {
+      logger.error('queued audio input processing error', error);
+      this.emit('error', error instanceof Error ? error : new Error(String(error)));
+    });
+    queue.tail = current;
+    void current.then(() => {
+      queue.depth = Math.max(0, queue.depth - 1);
+      if (queue.depth === 0 && this.inputIngestQueues.get(sourceKind) === queue) {
+        this.inputIngestQueues.delete(sourceKind);
+      }
+    });
+    return current;
+  }
+
+  private async processInputSamples(
+    samples: Float32Array,
+    sampleRate: number,
+    sourceKind: NativeAudioInputSourceKind,
+    arrivalTimeMs: number,
+    generation: number,
+    meta?: AudioFrameMeta,
+  ): Promise<void> {
+    if (generation !== this.inputIngestGeneration) return;
 
     // 在源 chunk 进入时刻取一次到达时间；重采样是异步的，须用源到达时间而非重采样完成时间，
     // 以避免重采样耗时被错误计入采集时钟模型。
     // 注意：锚点统一使用校准时钟 this.now()，不用 meta.timestampMs（库侧未经 NTP 校准，
     // 直接当锚点会引入 = 校准偏移量的恒定窗口偏移）。meta.seq 用于精确丢包检测。
-    const arrivalTimeMs = this.now();
     const seq = meta?.seq;
 
     const sourceSampleRate = Number.isFinite(sampleRate) && sampleRate > 0
@@ -1189,13 +1307,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     const targetSampleRate = this.inputProcessingSampleRate;
     if (sourceSampleRate === targetSampleRate) {
+      if (generation !== this.inputIngestGeneration) return;
       this.writeProcessedInputAudio(samples, targetSampleRate, arrivalTimeMs, seq);
       return;
     }
 
     try {
       const resampled = await resampleAudioProfessional(samples, sourceSampleRate, targetSampleRate, 1);
-      if (this.inputProcessingSampleRate !== targetSampleRate) {
+      if (generation !== this.inputIngestGeneration || this.inputProcessingSampleRate !== targetSampleRate) {
         logger.debug('dropping stale input resample result after processing rate change', {
           sourceSampleRate,
           staleTargetSampleRate: targetSampleRate,
@@ -1214,6 +1333,23 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       });
       this.emit('error', error as Error);
     }
+  }
+
+  private reportAndroidRuntimeLoss(
+    direction: 'input' | 'output',
+    socket: AndroidAudioInputSocket | AndroidAudioOutputSocket,
+    error: Error,
+  ): void {
+    if (direction === 'input') {
+      if (this.androidAudioInput !== socket || !this.usingAndroidInput || this.androidInputRuntimeLossEmitted) return;
+      this.androidInputRuntimeLossEmitted = true;
+      this.androidInputRuntimeLossError = error;
+    } else {
+      if (this.androidAudioOutput !== socket || !this.usingAndroidOutput || this.androidOutputRuntimeLossEmitted) return;
+      this.androidOutputRuntimeLossEmitted = true;
+    }
+    logger.error(`Android audio ${direction} runtime loss`, error);
+    this.emit('error', error);
   }
 
   private writeProcessedInputAudio(samples: Float32Array, sampleRate: number, arrivalTimeMs?: number, seq?: number): void {

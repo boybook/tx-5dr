@@ -326,13 +326,29 @@
     "inputDevice": "オーディオ入力デバイス",
     "inputDevicePlaceholder": "入力デバイスを選択してください",
     "selectInput": "オーディオ入力デバイスの選択",
+    "selectedDeviceStatus": "選択中のオーディオデバイスの状態",
     "deviceUnavailableShort": "未接続",
     "deviceUnavailable": "デバイスは現在利用できません。音声は自動的に再試行されます",
     "deviceMissingPreserved": "保存済みのデバイスは現在接続されていないか列挙されていません。保存してもこのデバイス設定は消去されず、再接続後に自動的に再試行されます。",
     "deviceMissingPreservedShort": "保存済み、未接続",
+    "deviceRouteLostDescription": "選択した物理ルートが失われました。TX-5DR は別のデバイスへ自動的に切り替えません。",
     "default": "デフォルト",
     "channels": "{{count}} チャンネル",
     "deviceVirtualSelected": "仮想オーディオデバイス",
+    "deviceCategory": {
+      "usb": "USB",
+      "analog": "3.5 mm",
+      "builtin": "内蔵",
+      "network": "ネットワーク",
+      "other": "その他"
+    },
+    "deviceStatus": {
+      "available": "利用可能",
+      "active": "使用中",
+      "clientConnected": "ブリッジ接続済み",
+      "routeVerified": "ルート確認済み",
+      "routeLost": "ルート切断"
+    },
     "outputDevice": "オーディオ出力デバイス",
     "outputDevicePlaceholder": "出力デバイスを選択してください",
     "selectOutput": "オーディオ出力デバイスの選択",
@@ -374,6 +390,7 @@
     "bufferSizeFallback": "よく使用されるバッファーを手動で選択可能",
     "bufferSizeUnsupported": "現在のバッファが十分に安定していない可能性があります",
     "virtualAudioFixed": "このオーディオ パスは固定パラメータを自動的に使用します",
+    "deviceManagedFixed": "このデバイスが自動管理するため、手動設定は不要です",
     "autoMatched": "自動的に一致する USB オーディオ デバイス: {{device}} ({{rate}} Hz)"
   },
   "radioType": {

@@ -480,8 +480,8 @@ function selectBuiltinDevice(
   devices: AndroidAudioDeviceDescriptor[],
   acceptedKinds: Set<string>,
 ): AndroidAudioDeviceDescriptor | null {
-  return devices.find((device) => device.available !== false && acceptedKinds.has(device.kind))
-    ?? devices.find((device) => acceptedKinds.has(device.kind))
+  return devices.find((device) => device.available !== false && Boolean(device.kind && acceptedKinds.has(device.kind)))
+    ?? devices.find((device) => Boolean(device.kind && acceptedKinds.has(device.kind)))
     ?? null;
 }
 
@@ -489,10 +489,10 @@ function toStatusDevice(device: AndroidAudioDeviceDescriptor): AndroidOperatorAu
   return {
     id: device.id,
     name: device.name,
-    kind: device.kind,
+    kind: device.kind ?? 'unknown',
     socketPath: device.socketPath,
     sampleRate: device.sampleRate || 48000,
-    connected: device.connected,
+    connected: device.clientConnected ?? device.connected,
   };
 }
 

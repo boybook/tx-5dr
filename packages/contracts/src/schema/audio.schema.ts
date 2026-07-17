@@ -1,5 +1,69 @@
 import { z } from 'zod';
 
+export const AudioDeviceBackendSchema = z.enum([
+  'rtaudio',
+  'android',
+  'icom-wlan',
+  'openwebrx',
+  'tci',
+  'network',
+]);
+
+export const AudioDeviceKindSchema = z.enum([
+  'usb',
+  'wired-headset',
+  'wired-headphones',
+  'analog-line',
+  'builtin-mic',
+  'builtin-speaker',
+  'network',
+  'virtual',
+  'unknown',
+]);
+
+export const AudioDeviceTransportSchema = z.enum([
+  'usb',
+  'analog',
+  'builtin',
+  'network',
+  'virtual',
+  'unknown',
+]);
+
+export const AudioDeviceConnectorSchema = z.enum([
+  'usb',
+  '3.5mm',
+  'builtin',
+  'network',
+  'virtual',
+  'unknown',
+]);
+
+export const AudioDeviceRouteStateSchema = z.enum([
+  'idle',
+  'opening',
+  'verified',
+  'lost',
+  'unavailable',
+  'failed',
+]);
+
+export const AudioDeviceCapabilitiesSchema = z.object({
+  sampleRates: z.array(z.number().int().positive()).optional(),
+  bufferSizes: z.array(z.number().int().positive()).optional(),
+  channelCounts: z.array(z.number().int().positive()).optional(),
+  sampleFormats: z.array(z.enum(['float32', 'int16'])).optional(),
+  channelModes: z.array(z.enum(['mono', 'left', 'right', 'both'])).optional(),
+  sampleRateConfigurable: z.boolean().optional(),
+  bufferSizeConfigurable: z.boolean().optional(),
+  sampleFormatConfigurable: z.boolean().optional(),
+  channelModeConfigurable: z.boolean().optional(),
+  outputRouteAck: z.boolean().optional(),
+  fixedSampleRate: z.number().int().positive().optional(),
+  fixedBufferSize: z.number().int().positive().optional(),
+  fixedChannelCount: z.number().int().positive().optional(),
+});
+
 // 音频设备信息
 export const AudioDeviceSchema = z.object({
   id: z.string(),
@@ -12,6 +76,16 @@ export const AudioDeviceSchema = z.object({
   availability: z.enum(['available', 'cached', 'active']).optional(),
   isActiveByTx5dr: z.boolean().optional(),
   lastSeenAt: z.number().int().positive().optional(),
+  backend: AudioDeviceBackendSchema.optional(),
+  kind: AudioDeviceKindSchema.optional(),
+  routeKey: z.string().min(1).optional(),
+  transport: AudioDeviceTransportSchema.optional(),
+  connector: AudioDeviceConnectorSchema.optional(),
+  clientConnected: z.boolean().optional(),
+  routeVerified: z.boolean().optional(),
+  routeState: AudioDeviceRouteStateSchema.optional(),
+  failureReason: z.string().min(1).optional(),
+  capabilities: AudioDeviceCapabilitiesSchema.optional(),
 });
 
 export const AudioDeviceResolutionStatusSchema = z.enum([
@@ -23,6 +97,7 @@ export const AudioDeviceResolutionStatusSchema = z.enum([
 
 export const AudioDeviceResolutionSchema = z.object({
   configuredDeviceName: z.string().nullable(),
+  configuredRouteKey: z.string().nullable().optional(),
   configuredDevice: AudioDeviceSchema.nullable(),
   effectiveDevice: AudioDeviceSchema.nullable(),
   status: AudioDeviceResolutionStatusSchema,
@@ -49,6 +124,8 @@ export const AudioDevicesResponseSchema = z.object({
 export const AudioDeviceSettingsSchema = z.object({
   inputDeviceName: z.string().optional(),  // 使用设备名称而非ID
   outputDeviceName: z.string().optional(), // 使用设备名称而非ID  
+  inputRouteKey: z.string().min(1).nullable().optional(),
+  outputRouteKey: z.string().min(1).nullable().optional(),
   inputSampleRate: z.number().optional(),
   outputSampleRate: z.number().optional(),
   inputBufferSize: z.number().optional(),
@@ -110,6 +187,12 @@ export const VolumeGainSchema = z.object({
 
 // 导出类型
 export type AudioDevice = z.infer<typeof AudioDeviceSchema>;
+export type AudioDeviceBackend = z.infer<typeof AudioDeviceBackendSchema>;
+export type AudioDeviceKind = z.infer<typeof AudioDeviceKindSchema>;
+export type AudioDeviceTransport = z.infer<typeof AudioDeviceTransportSchema>;
+export type AudioDeviceConnector = z.infer<typeof AudioDeviceConnectorSchema>;
+export type AudioDeviceRouteState = z.infer<typeof AudioDeviceRouteStateSchema>;
+export type AudioDeviceCapabilities = z.infer<typeof AudioDeviceCapabilitiesSchema>;
 export type AudioDeviceResolutionStatus = z.infer<typeof AudioDeviceResolutionStatusSchema>;
 export type AudioDeviceResolution = z.infer<typeof AudioDeviceResolutionSchema>;
 export type AudioDeviceResolutionSet = z.infer<typeof AudioDeviceResolutionSetSchema>;

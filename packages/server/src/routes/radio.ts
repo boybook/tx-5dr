@@ -491,7 +491,9 @@ export async function radioRoutes(fastify: FastifyInstance) {
       const updatedAudioConfig = {
         ...audioConfig,
         inputDeviceName: radioAudioDeviceName,
-        outputDeviceName: radioAudioDeviceName
+        outputDeviceName: radioAudioDeviceName,
+        inputRouteKey: undefined,
+        outputRouteKey: undefined,
       };
 
       // 重启引擎以应用音频配置（参考 POST /audio/settings 的实现）

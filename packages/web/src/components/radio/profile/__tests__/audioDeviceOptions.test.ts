@@ -3,6 +3,8 @@ import type { AudioDeviceSettings } from '@tx5dr/contracts';
 import {
   deriveBufferSizeOptions,
   deriveSampleRateOptions,
+  getFixedAudioDeviceNumber,
+  isAudioDeviceControlConfigurable,
   isVirtualAudioDevice,
   resolveAudioSettingNumber,
 } from '../audioDeviceOptions';
@@ -24,6 +26,41 @@ describe('audio device option helpers', () => {
       isFallback: false,
       isCurrentUnsupported: false,
     });
+  });
+
+  it('prefers backend capabilities over generic device sample rates', () => {
+    const options = deriveSampleRateOptions({
+      ...physicalDevice,
+      capabilities: { sampleRates: [48000], sampleRateConfigurable: false },
+    }, 48000);
+
+    expect(options.values).toEqual([48000]);
+    expect(isAudioDeviceControlConfigurable({
+      ...physicalDevice,
+      capabilities: { sampleRateConfigurable: false },
+    }, 'sampleRate')).toBe(false);
+  });
+
+  it('exposes fixed Android sample rate, buffer, and mono controls as non-configurable', () => {
+    const androidDevice = {
+      ...physicalDevice,
+      backend: 'android' as const,
+      kind: 'wired-headset' as const,
+      capabilities: {
+        fixedSampleRate: 48000,
+        fixedBufferSize: 960,
+        fixedChannelCount: 1,
+        sampleRateConfigurable: false,
+        bufferSizeConfigurable: false,
+        channelModeConfigurable: false,
+      },
+    };
+
+    expect(getFixedAudioDeviceNumber(androidDevice, 'sampleRate')).toBe(48000);
+    expect(getFixedAudioDeviceNumber(androidDevice, 'bufferSize')).toBe(960);
+    expect(isAudioDeviceControlConfigurable(androidDevice, 'sampleRate')).toBe(false);
+    expect(isAudioDeviceControlConfigurable(androidDevice, 'bufferSize')).toBe(false);
+    expect(isAudioDeviceControlConfigurable(androidDevice, 'channelMode')).toBe(false);
   });
 
   it('keeps an unsupported current sample rate visible', () => {

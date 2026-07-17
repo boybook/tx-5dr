@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AudioDevicesResponseSchema,
+  AudioDeviceSchema,
   AudioDeviceResolutionSchema,
   AudioDeviceResolutionStatusSchema,
   AudioDeviceSettingsSchema,
@@ -25,6 +26,59 @@ const device = {
 };
 
 describe('audio device resolution schemas', () => {
+  it('accepts Android route identity, health, and fixed audio capabilities', () => {
+    const parsed = AudioDeviceSchema.parse({
+      ...device,
+      backend: 'android',
+      kind: 'wired-headset',
+      routeKey: 'android:wired-headset:input',
+      transport: 'analog',
+      connector: '3.5mm',
+      clientConnected: true,
+      routeVerified: true,
+      routeState: 'verified',
+      capabilities: {
+        sampleRates: [48000],
+        bufferSizes: [960],
+        channelCounts: [1],
+        sampleFormats: ['int16'],
+        channelModes: ['mono'],
+        sampleRateConfigurable: false,
+        bufferSizeConfigurable: false,
+        sampleFormatConfigurable: false,
+        channelModeConfigurable: false,
+        outputRouteAck: true,
+        fixedSampleRate: 48000,
+        fixedBufferSize: 960,
+        fixedChannelCount: 1,
+      },
+    });
+
+    expect(parsed.routeKey).toBe('android:wired-headset:input');
+    expect(parsed.capabilities?.fixedChannelCount).toBe(1);
+    expect(parsed.capabilities?.outputRouteAck).toBe(true);
+  });
+
+  it('accepts route loss diagnostics without treating routeVerified as required', () => {
+    expect(AudioDeviceSchema.parse({
+      ...device,
+      backend: 'android',
+      routeState: 'lost',
+      routeVerified: false,
+      failureReason: 'The headset was unplugged',
+    })).toMatchObject({
+      routeState: 'lost',
+      routeVerified: false,
+    });
+
+    expect(AudioDeviceSchema.parse({
+      ...device,
+      backend: 'android',
+      routeState: 'idle',
+      routeVerified: false,
+    }).failureReason).toBeUndefined();
+  });
+
   it('accepts every resolution status', () => {
     for (const status of ['selected', 'default', 'virtual-selected', 'missing']) {
       expect(AudioDeviceResolutionStatusSchema.parse(status)).toBe(status);
@@ -124,6 +178,27 @@ describe('audio device resolution schemas', () => {
         },
       },
     }).currentSettings.outputBufferSize).toBe(1024);
+  });
+
+  it('keeps stable route keys alongside legacy display names', () => {
+    const parsed = AudioDeviceSettingsSchema.parse({
+      inputDeviceName: 'Headset microphone',
+      inputRouteKey: 'android:wired-headset:input',
+      outputDeviceName: 'Headset headphones',
+      outputRouteKey: 'android:wired-headset:output',
+    });
+
+    expect(parsed).toMatchObject({
+      inputDeviceName: 'Headset microphone',
+      inputRouteKey: 'android:wired-headset:input',
+      outputDeviceName: 'Headset headphones',
+      outputRouteKey: 'android:wired-headset:output',
+    });
+    expect(AudioDeviceSettingsSchema.parse({ inputDeviceName: 'Legacy USB Audio' })).toEqual({
+      inputDeviceName: 'Legacy USB Audio',
+    });
+    expect(AudioDeviceSettingsSchema.parse({ inputRouteKey: null })).toEqual({ inputRouteKey: null });
+    expect(() => AudioDeviceSettingsSchema.parse({ inputRouteKey: '' })).toThrow();
   });
 
   it('accepts and validates output diagnostic audio settings', () => {

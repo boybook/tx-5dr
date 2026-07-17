@@ -151,6 +151,8 @@ export interface AppConfig {
 export interface AudioConfig {
   inputDeviceName?: string; // 存储的设备名称
   outputDeviceName?: string; // 存储的设备名称
+  inputRouteKey?: string; // Android 稳定输入路由标识
+  outputRouteKey?: string; // Android 稳定输出路由标识
   inputSampleRate?: number;
   outputSampleRate?: number;
   inputBufferSize?: number;
@@ -221,6 +223,8 @@ export function normalizeAudioDeviceSettings(audioConfig?: Partial<AudioDeviceSe
   return {
     inputDeviceName: audioConfig?.inputDeviceName,
     outputDeviceName: audioConfig?.outputDeviceName,
+    inputRouteKey: audioConfig?.inputRouteKey ?? undefined,
+    outputRouteKey: audioConfig?.outputRouteKey ?? undefined,
     inputSampleRate: audioConfig?.inputSampleRate ?? legacySampleRate ?? 48000,
     outputSampleRate: audioConfig?.outputSampleRate ?? legacySampleRate ?? 48000,
     inputBufferSize: audioConfig?.inputBufferSize ?? legacyBufferSize ?? 1024,
@@ -908,9 +912,20 @@ export class ConfigManager {
     if (index === -1) return;
 
     const profile = this.config.profiles[index];
+    const nextAudioConfig = { ...audioConfig };
+    if (Object.prototype.hasOwnProperty.call(audioConfig, 'inputDeviceName')
+      && audioConfig.inputDeviceName !== profile.audio?.inputDeviceName
+      && !Object.prototype.hasOwnProperty.call(audioConfig, 'inputRouteKey')) {
+      nextAudioConfig.inputRouteKey = undefined;
+    }
+    if (Object.prototype.hasOwnProperty.call(audioConfig, 'outputDeviceName')
+      && audioConfig.outputDeviceName !== profile.audio?.outputDeviceName
+      && !Object.prototype.hasOwnProperty.call(audioConfig, 'outputRouteKey')) {
+      nextAudioConfig.outputRouteKey = undefined;
+    }
     this.config.profiles[index] = {
       ...profile,
-      audio: normalizeAudioDeviceSettings({ ...profile.audio, ...audioConfig }),
+      audio: normalizeAudioDeviceSettings({ ...profile.audio, ...nextAudioConfig }),
       updatedAt: Date.now(),
     };
     await this.saveConfig();
