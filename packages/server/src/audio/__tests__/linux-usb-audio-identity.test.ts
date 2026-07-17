@@ -6,8 +6,41 @@ import {
   buildUsbAudioDetail,
   dedupeAudioDevicesByHardwareId,
   deriveRadioLabelFromSerial,
+  findOwnedUsbAudioHardwareId,
+  getPcmDirectionStatus,
+  isPcmBusyForDirection,
   type LinuxUsbAudioIdentity,
+  type PcmDirectionStatus,
 } from '../linux-usb-audio-identity.js';
+
+const TX5DR_PID = 1234;
+const OTHER_PID = 5678;
+
+function makeIdentity(
+  overrides: Partial<Omit<LinuxUsbAudioIdentity, 'pcm'>> & {
+    hardwareId: string;
+    alsaCard: number;
+    relatedRadioLabel: string;
+    pcm?: { input?: PcmDirectionStatus; output?: PcmDirectionStatus };
+  },
+): LinuxUsbAudioIdentity {
+  const { pcm, ...rest } = overrides;
+  const usbPath = overrides.hardwareId.replace(/^usb:/, '');
+  return {
+    productName: 'USB Audio CODEC',
+    usbPath,
+    vendorId: '08bb',
+    productId: '2901',
+    relatedSerials: [`${overrides.relatedRadioLabel} A`, `${overrides.relatedRadioLabel} B`],
+    serialNumber: overrides.relatedRadioLabel,
+    detail: `${overrides.relatedRadioLabel} · VID:PID 08bb:2901 · USB ${usbPath}`,
+    ...rest,
+    pcm: {
+      input: pcm?.input ?? { busy: false },
+      output: pcm?.output ?? { busy: false },
+    },
+  };
+}
 
 describe('deriveRadioLabelFromSerial', () => {
   it('collapses Icom A/B port suffixes', () => {
@@ -27,34 +60,24 @@ describe('buildUsbAudioDetail', () => {
   });
 });
 
+// IC-9700 is busy in both directions (owned by us), IC-7610 is free.
 const identities: LinuxUsbAudioIdentity[] = [
-  {
+  makeIdentity({
     hardwareId: 'usb:1-7.2.4',
     alsaCard: 0,
     alsaCardId: 'CODEC',
-    productName: 'USB Audio CODEC',
-    usbPath: '1-7.2.4',
-    vendorId: '08bb',
-    productId: '2901',
     relatedRadioLabel: 'IC-9700 12010311',
-    relatedSerials: ['IC-9700 12010311 A', 'IC-9700 12010311 B'],
-    detail: 'IC-9700 12010311 · VID:PID 08bb:2901 · USB 1-7.2.4',
-    pcmBusy: true,
-    ownerPid: 1234,
-  },
-  {
+    pcm: {
+      input: { busy: true, ownerPid: TX5DR_PID },
+      output: { busy: true, ownerPid: TX5DR_PID },
+    },
+  }),
+  makeIdentity({
     hardwareId: 'usb:1-7.4.4',
     alsaCard: 2,
     alsaCardId: 'CODEC_1',
-    productName: 'USB Audio CODEC',
-    usbPath: '1-7.4.4',
-    vendorId: '08bb',
-    productId: '2901',
     relatedRadioLabel: 'IC-7610 11002034',
-    relatedSerials: ['IC-7610 11002034 A', 'IC-7610 11002034 B'],
-    detail: 'IC-7610 11002034 · VID:PID 08bb:2901 · USB 1-7.4.4',
-    pcmBusy: false,
-  },
+  }),
 ];
 
 describe('attachLinuxUsbAudioIdentities', () => {
@@ -64,7 +87,7 @@ describe('attachLinuxUsbAudioIdentities', () => {
       { id: 'input-131', name: 'HDA Intel PCH (ALC897 Analog)' },
     ];
 
-    const enriched = attachLinuxUsbAudioIdentities(devices, identities, 1234);
+    const enriched = attachLinuxUsbAudioIdentities(devices, 'input', identities);
     expect(enriched[0]).toMatchObject({
       hardwareId: 'usb:1-7.4.4',
       serialNumber: 'IC-7610 11002034',
@@ -80,13 +103,160 @@ describe('attachLinuxUsbAudioIdentities', () => {
       { id: 'output-134', name: 'USB Audio CODEC (USB Audio)' },
     ];
 
-    const enriched = attachLinuxUsbAudioIdentities(devices, identities, 1234);
+    const enriched = attachLinuxUsbAudioIdentities(devices, 'output', identities);
     expect(enriched[0]).toMatchObject({
       hardwareId: 'usb:1-7.4.4',
       serialNumber: 'IC-7610 11002034',
     });
     // Busy IC-9700 must not be attached by listing order onto the second device.
     expect(enriched[1].hardwareId).toBeUndefined();
+  });
+
+  it('attaches a card that is busy on the opposite direction but free on this one', () => {
+    // Capture is open on IC-9700, playback is free: attaching output devices must
+    // still claim IC-9700 because the playback PCM is available.
+    const captureOnly = [
+      makeIdentity({
+        hardwareId: 'usb:1-7.2.4',
+        alsaCard: 0,
+        relatedRadioLabel: 'IC-9700 12010311',
+        pcm: { input: { busy: true, ownerPid: TX5DR_PID }, output: { busy: false } },
+      }),
+    ];
+    const devices = [{ id: 'output-130', name: 'USB Audio CODEC (USB Audio)' }];
+
+    const outputEnriched = attachLinuxUsbAudioIdentities(devices, 'output', captureOnly);
+    expect(outputEnriched[0]).toMatchObject({ hardwareId: 'usb:1-7.2.4' });
+
+    const inputEnriched = attachLinuxUsbAudioIdentities(
+      [{ id: 'input-130', name: 'USB Audio CODEC (USB Audio)' }],
+      'input',
+      captureOnly,
+    );
+    expect(inputEnriched[0].hardwareId).toBeUndefined();
+  });
+});
+
+describe('per-direction PCM busy modeling', () => {
+  it('marks only the capture side busy when playback is free (capture-only busy)', () => {
+    const captureOnly = makeIdentity({
+      hardwareId: 'usb:1-7.2.4',
+      alsaCard: 0,
+      relatedRadioLabel: 'IC-9700 12010311',
+      pcm: { input: { busy: true, ownerPid: TX5DR_PID }, output: { busy: false } },
+    });
+
+    expect(isPcmBusyForDirection(captureOnly, 'input')).toBe(true);
+    expect(isPcmBusyForDirection(captureOnly, 'output')).toBe(false);
+
+    const inputSupplemental = buildSupplementalUsbAudioDevices('input', new Set(), [captureOnly]);
+    expect(inputSupplemental[0]).toMatchObject({ availability: 'cached' });
+
+    const outputSupplemental = buildSupplementalUsbAudioDevices('output', new Set(), [captureOnly]);
+    expect(outputSupplemental[0]).toMatchObject({ availability: 'available' });
+  });
+
+  it('marks only the playback side busy when capture is free (playback-only busy)', () => {
+    const playbackOnly = makeIdentity({
+      hardwareId: 'usb:1-7.2.4',
+      alsaCard: 0,
+      relatedRadioLabel: 'IC-9700 12010311',
+      pcm: { input: { busy: false }, output: { busy: true, ownerPid: TX5DR_PID } },
+    });
+
+    expect(getPcmDirectionStatus(playbackOnly, 'output').busy).toBe(true);
+    expect(getPcmDirectionStatus(playbackOnly, 'input').busy).toBe(false);
+
+    const outputSupplemental = buildSupplementalUsbAudioDevices('output', new Set(), [playbackOnly]);
+    expect(outputSupplemental[0]).toMatchObject({ availability: 'cached' });
+
+    const inputSupplemental = buildSupplementalUsbAudioDevices('input', new Set(), [playbackOnly]);
+    expect(inputSupplemental[0]).toMatchObject({ availability: 'available' });
+  });
+
+  it('resolves capture ownership without matching a playback owned by another PID', () => {
+    const splitOwners = makeIdentity({
+      hardwareId: 'usb:1-7.2.4',
+      alsaCard: 0,
+      relatedRadioLabel: 'IC-9700 12010311',
+      pcm: {
+        input: { busy: true, ownerPid: TX5DR_PID },
+        output: { busy: true, ownerPid: OTHER_PID },
+      },
+    });
+
+    expect(findOwnedUsbAudioHardwareId('input', [splitOwners], TX5DR_PID)).toBe('usb:1-7.2.4');
+    // Playback belongs to another process, so we must not claim it as ours.
+    expect(findOwnedUsbAudioHardwareId('output', [splitOwners], TX5DR_PID)).toBeUndefined();
+
+    const activeOutput = [
+      { id: 'output-130', name: 'USB Audio CODEC (USB Audio)', isActiveByTx5dr: true },
+    ];
+    const outputEnriched = assignBusyIdentitiesToActiveDevices(activeOutput, 'output', [splitOwners], TX5DR_PID);
+    expect(outputEnriched[0].hardwareId).toBeUndefined();
+
+    const activeInput = [
+      { id: 'input-130', name: 'USB Audio CODEC (USB Audio)', isActiveByTx5dr: true },
+    ];
+    const inputEnriched = assignBusyIdentitiesToActiveDevices(activeInput, 'input', [splitOwners], TX5DR_PID);
+    expect(inputEnriched[0]).toMatchObject({ hardwareId: 'usb:1-7.2.4' });
+  });
+
+  it('resolves playback ownership when capture is closed', () => {
+    const playbackOwned = makeIdentity({
+      hardwareId: 'usb:1-7.2.4',
+      alsaCard: 0,
+      relatedRadioLabel: 'IC-9700 12010311',
+      pcm: { input: { busy: false }, output: { busy: true, ownerPid: TX5DR_PID } },
+    });
+
+    expect(findOwnedUsbAudioHardwareId('output', [playbackOwned], TX5DR_PID)).toBe('usb:1-7.2.4');
+    expect(findOwnedUsbAudioHardwareId('input', [playbackOwned], TX5DR_PID)).toBeUndefined();
+
+    const activeOutput = [
+      { id: 'output-130', name: 'USB Audio CODEC (USB Audio)', isActiveByTx5dr: true },
+    ];
+    const outputEnriched = assignBusyIdentitiesToActiveDevices(activeOutput, 'output', [playbackOwned], TX5DR_PID);
+    expect(outputEnriched[0]).toMatchObject({ hardwareId: 'usb:1-7.2.4' });
+  });
+
+  it('does not let different per-direction owners impersonate each other across cards', () => {
+    // Capture is owned by us on card A, playback is owned by us on card B.
+    const captureCard = makeIdentity({
+      hardwareId: 'usb:1-7.2.4',
+      alsaCard: 0,
+      relatedRadioLabel: 'IC-9700 12010311',
+      pcm: {
+        input: { busy: true, ownerPid: TX5DR_PID },
+        output: { busy: true, ownerPid: OTHER_PID },
+      },
+    });
+    const playbackCard = makeIdentity({
+      hardwareId: 'usb:1-7.4.4',
+      alsaCard: 2,
+      relatedRadioLabel: 'IC-7610 11002034',
+      pcm: {
+        input: { busy: true, ownerPid: OTHER_PID },
+        output: { busy: true, ownerPid: TX5DR_PID },
+      },
+    });
+    const both = [captureCard, playbackCard];
+
+    // Each direction resolves to its own card, never the peer.
+    expect(findOwnedUsbAudioHardwareId('input', both, TX5DR_PID)).toBe('usb:1-7.2.4');
+    expect(findOwnedUsbAudioHardwareId('output', both, TX5DR_PID)).toBe('usb:1-7.4.4');
+
+    const activeInput = [
+      { id: 'input-130', name: 'USB Audio CODEC (USB Audio)', isActiveByTx5dr: true },
+    ];
+    const inputEnriched = assignBusyIdentitiesToActiveDevices(activeInput, 'input', both, TX5DR_PID);
+    expect(inputEnriched[0]).toMatchObject({ hardwareId: 'usb:1-7.2.4' });
+
+    const activeOutput = [
+      { id: 'output-130', name: 'USB Audio CODEC (USB Audio)', isActiveByTx5dr: true },
+    ];
+    const outputEnriched = assignBusyIdentitiesToActiveDevices(activeOutput, 'output', both, TX5DR_PID);
+    expect(outputEnriched[0]).toMatchObject({ hardwareId: 'usb:1-7.4.4' });
   });
 });
 
@@ -106,7 +276,7 @@ describe('assignBusyIdentitiesToActiveDevices', () => {
       },
     ];
 
-    const enriched = assignBusyIdentitiesToActiveDevices(devices, identities, 1234);
+    const enriched = assignBusyIdentitiesToActiveDevices(devices, 'input', identities, TX5DR_PID);
     expect(enriched[0]).toMatchObject({
       hardwareId: 'usb:1-7.2.4',
       serialNumber: 'IC-9700 12010311',
