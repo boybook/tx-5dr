@@ -493,6 +493,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
         ...prev,
         serial: {
           path,
+          serialNumber: prevSerial?.serialNumber,
           rigModel: prevSerial?.rigModel ?? 0,
           serialConfig: prevSerial?.serialConfig,
           backendConfig,
@@ -1084,6 +1085,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                         updateConfig({
                           serial: {
                             path: rigPath,
+                            serialNumber: config.serial?.serialNumber,
                             rigModel: nextRigModel,
                             serialConfig: config.serial?.serialConfig,
                             backendConfig: rigPath ? { rig_pathname: rigPath } : {},
@@ -1128,6 +1130,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                         updateConfig({
                           serial: {
                             path: value,
+                            serialNumber: config.serial?.serialNumber,
                             rigModel: config.serial?.rigModel ?? 0,
                             serialConfig: config.serial?.serialConfig,
                             backendConfig: {
@@ -1151,6 +1154,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                         updateConfig({
                           serial: {
                             path: value,
+                            serialNumber: config.serial?.serialNumber,
                             rigModel: config.serial?.rigModel ?? 0,
                             serialConfig: config.serial?.serialConfig,
                             backendConfig: {
@@ -1175,6 +1179,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                         updateConfig({
                           serial: {
                             path: value,
+                            serialNumber: ports.find((port) => port.path === value)?.serialNumber,
                             rigModel: config.serial?.rigModel ?? 0,
                             serialConfig: config.serial?.serialConfig,
                             backendConfig: {
@@ -1186,14 +1191,17 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       }}
                       onSelectionChange={selectedKey => {
                         if (selectedKey !== null) {
+                          const selectedPath = String(selectedKey);
+                          const selectedPort = ports.find((port) => port.path === selectedPath);
                           updateConfig({
                             serial: {
-                              path: String(selectedKey),
+                              path: selectedPath,
+                              serialNumber: selectedPort?.serialNumber,
                               rigModel: config.serial?.rigModel ?? 0,
                               serialConfig: config.serial?.serialConfig,
                               backendConfig: {
                                 ...(config.serial?.backendConfig || {}),
-                                rig_pathname: String(selectedKey),
+                                rig_pathname: selectedPath,
                               },
                             }
                           });
