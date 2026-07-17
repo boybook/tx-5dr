@@ -294,6 +294,13 @@ export class AudioDeviceManager {
             existing = byHardware;
           }
         }
+        // Non-USB devices can be renumbered by the OS (e.g. input-3 -> input-7)
+        // without any stable hardwareId. Migrate a unique same-name registered
+        // entry so the old key is dropped instead of lingering as a cached ghost.
+        // USB / same-name CODEC devices are excluded via isCompatibleLiveDevice.
+        if (!existing && !liveDevice.hardwareId) {
+          existing = this.findMigratableRegisteredDeviceByName(direction, liveDevice) ?? undefined;
+        }
         const isActive = existing?.isActiveByTx5dr === true;
         // Drop stale duplicates if an older registry entry moved IDs.
         if (existing && existing.id !== liveDevice.id) {
@@ -408,17 +415,95 @@ export class AudioDeviceManager {
     return null;
   }
 
+  private availabilityRank(device: RegisteredAudioDevice): number {
+    if (device.isActiveByTx5dr || device.availability === 'active') return 3;
+    if (device.availability === 'available') return 2;
+    if (device.availability === 'cached') return 1;
+    return 0;
+  }
+
   private findRegisteredDeviceByName(direction: AudioDirection, deviceName: string): RegisteredAudioDevice | null {
+    let best: RegisteredAudioDevice | null = null;
     for (const device of this.deviceRegistry[direction].values()) {
-      if (device.name === deviceName) {
-        return device;
+      if (device.name !== deviceName) continue;
+      if (!best) {
+        best = device;
+        continue;
+      }
+      const rankDiff = this.availabilityRank(device) - this.availabilityRank(best);
+      if (rankDiff > 0 || (rankDiff === 0 && (device.lastSeenAt ?? 0) > (best.lastSeenAt ?? 0))) {
+        best = device;
       }
     }
-    return null;
+    return best;
+  }
+
+  /**
+   * Find a single registered device that shares the live device's name and is a
+   * safe migration target (same non-USB endpoint that was renumbered). Returns
+   * null when the match is ambiguous (more than one candidate) or when the name
+   * belongs to a USB CODEC where identical names must not imply the same radio.
+   */
+  private findMigratableRegisteredDeviceByName(
+    direction: AudioDirection,
+    liveDevice: AudioDevice,
+  ): RegisteredAudioDevice | null {
+    const matches: RegisteredAudioDevice[] = [];
+    for (const device of this.deviceRegistry[direction].values()) {
+      if (device.name !== liveDevice.name) continue;
+      if (!this.isCompatibleLiveDevice(device, liveDevice)) continue;
+      matches.push(device);
+    }
+    return matches.length === 1 ? matches[0] : null;
   }
 
   private findDevicesByName(devices: AudioDevice[], deviceName: string): AudioDevice[] {
     return devices.filter((device) => device.name === deviceName);
+  }
+
+  /**
+   * RtAudio numeric ids are unstable: ALSA can reassign an index to a different
+   * but identical USB CODEC. Reusing a cached numeric/string id for such devices
+   * is only safe when the stable hardware identity is verifiable and matches the
+   * request. Non-USB devices without a hardwareId are treated as unambiguous.
+   */
+  private canReuseLiveDeviceId(liveDevice: AudioDevice, requestedHardwareId?: string): boolean {
+    const isAmbiguousUsb = looksLikeUsbAudioDeviceName(liveDevice.name) || Boolean(liveDevice.hardwareId);
+    if (!isAmbiguousUsb) {
+      return true;
+    }
+    return Boolean(requestedHardwareId) && liveDevice.hardwareId === requestedHardwareId;
+  }
+
+  /**
+   * Choose a live device from same-named candidates. A single match is always
+   * safe. When multiple candidates share a name (identical USB CODECs) we only
+   * accept an entry whose stable identity is verifiable; a non-USB group falls
+   * back to first-match for legacy name-only profiles.
+   */
+  private pickLiveDeviceByName(
+    namedDevices: AudioDevice[],
+    requestedDeviceId?: string,
+    requestedHardwareId?: string,
+  ): AudioDevice | undefined {
+    if (namedDevices.length <= 1) {
+      return namedDevices[0];
+    }
+    if (requestedHardwareId) {
+      const byHardware = namedDevices.find((device) => device.hardwareId === requestedHardwareId);
+      if (byHardware) return byHardware;
+    }
+    const byId = requestedDeviceId
+      ? namedDevices.find((device) => device.id === requestedDeviceId)
+      : undefined;
+    if (byId && this.canReuseLiveDeviceId(byId, requestedHardwareId)) {
+      return byId;
+    }
+    // Ambiguous identical USB codecs cannot be told apart without a hardwareId.
+    const isAmbiguousUsb = namedDevices.some(
+      (device) => looksLikeUsbAudioDeviceName(device.name) || device.hardwareId,
+    );
+    return isAmbiguousUsb ? undefined : namedDevices[0];
   }
 
   private findConfiguredDevice(
@@ -565,7 +650,11 @@ export class AudioDeviceManager {
 
     if (requestedNumericId !== null) {
       const requestedLiveDevice = directionalLiveDevices.find((device) => this.parseNumericDeviceId(device.id) === requestedNumericId);
-      if (requestedLiveDevice && (!deviceName || requestedLiveDevice.name === deviceName)) {
+      if (
+        requestedLiveDevice
+        && (!deviceName || requestedLiveDevice.name === deviceName)
+        && this.canReuseLiveDeviceId(requestedLiveDevice, requestedHardwareId)
+      ) {
         return {
           actualDeviceId: requestedNumericId,
           persistedDeviceId: requestedLiveDevice.id,
@@ -577,7 +666,7 @@ export class AudioDeviceManager {
 
     if (requestedDeviceId) {
       const byExactId = directionalLiveDevices.find((device) => device.id === requestedDeviceId);
-      if (byExactId) {
+      if (byExactId && this.canReuseLiveDeviceId(byExactId, requestedHardwareId)) {
         const actualDeviceId = this.parseNumericDeviceId(byExactId.id);
         if (actualDeviceId !== null) {
           return {
@@ -592,9 +681,7 @@ export class AudioDeviceManager {
 
     if (deviceName) {
       const namedDevices = this.findDevicesByName(directionalLiveDevices, deviceName);
-      const liveDevice = namedDevices.length === 1
-        ? namedDevices[0]
-        : (namedDevices.find((device) => device.id === requestedDeviceId) ?? namedDevices[0]);
+      const liveDevice = this.pickLiveDeviceByName(namedDevices, requestedDeviceId, requestedHardwareId);
       if (liveDevice) {
         const actualDeviceId = this.parseNumericDeviceId(liveDevice.id);
         if (actualDeviceId !== null) {
