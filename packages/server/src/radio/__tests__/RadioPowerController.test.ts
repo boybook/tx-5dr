@@ -1,5 +1,20 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { RadioProfile } from '@tx5dr/contracts';
+
+const { mockReloadAudioConfig, mockEngineEmit } = vi.hoisted(() => ({
+  mockReloadAudioConfig: vi.fn(),
+  mockEngineEmit: vi.fn(),
+}));
+
+vi.mock('../../DigitalRadioEngine.js', () => ({
+  DigitalRadioEngine: {
+    getInstance: () => ({
+      getAudioStreamManager: () => ({ reloadAudioConfig: mockReloadAudioConfig }),
+      emit: mockEngineEmit,
+    }),
+  },
+}));
+
 import { RadioPowerController } from '../RadioPowerController.js';
 import { PhysicalRadioManager } from '../PhysicalRadioManager.js';
 import { ConfigManager } from '../../config/config-manager.js';
@@ -26,7 +41,7 @@ function resetControllerSingleton(): void {
   (RadioPowerController as unknown as { instance: RadioPowerController | null }).instance = null;
 }
 
-function createProfile(): RadioProfile {
+function createProfile(overrides?: Partial<RadioProfile>): RadioProfile {
   return {
     id: 'profile-ft710',
     name: 'FT-710',
@@ -38,16 +53,17 @@ function createProfile(): RadioProfile {
     audioLockedToRadio: false,
     createdAt: 1,
     updatedAt: 1,
+    ...overrides,
   };
 }
 
-function installConfig(profile = createProfile()): void {
+function installConfig(profiles: RadioProfile[], activeProfileId?: string): void {
   const cfg = ConfigManager.getInstance() as unknown as {
     config: { profiles: RadioProfile[]; activeProfileId: string };
   };
   cfg.config = {
-    profiles: [profile],
-    activeProfileId: profile.id,
+    profiles,
+    activeProfileId: activeProfileId ?? profiles[0]!.id,
   };
 }
 
@@ -56,9 +72,11 @@ function createController(options?: {
   connected?: boolean;
   running?: boolean;
   wakeAndConnect?: ReturnType<typeof vi.fn>;
+  profiles?: RadioProfile[];
+  activeProfileId?: string;
 }) {
   resetControllerSingleton();
-  installConfig();
+  installConfig(options?.profiles ?? [createProfile()], options?.activeProfileId);
 
   const lifecycle: MockLifecycle = {
     getIsRunning: vi.fn().mockReturnValue(options?.running ?? false),
@@ -98,6 +116,8 @@ function unsupportedPowerError(): RadioError {
 describe('RadioPowerController', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    mockReloadAudioConfig.mockReset();
+    mockEngineEmit.mockReset();
     resetControllerSingleton();
   });
 
@@ -107,7 +127,7 @@ describe('RadioPowerController', () => {
   });
 
   it('does not expose operate for FT-710 power support', async () => {
-    installConfig();
+    installConfig([createProfile()]);
     vi.spyOn(PhysicalRadioManager, 'listSupportedRigs').mockResolvedValue([
       { rigModel: 1049, mfgName: 'Yaesu', modelName: 'FT-710' },
     ] as never);
@@ -118,6 +138,45 @@ describe('RadioPowerController', () => {
     expect(support.canPowerOn).toBe(true);
     expect(support.canPowerOff).toBe(true);
     expect(support.supportedStates).toEqual(['off']);
+  });
+
+  it('switches active profile through the shared snapshot/setActive/load path before power-on', async () => {
+    const order: string[] = [];
+    const profileA = createProfile({ id: 'profile-a', name: 'Radio A' });
+    const profileB = createProfile({ id: 'profile-b', name: 'Radio B' });
+    mockReloadAudioConfig.mockImplementation(() => {
+      order.push('reloadAudio');
+    });
+
+    const configManager = ConfigManager.getInstance();
+    const switchSpy = vi.spyOn(configManager, 'switchActiveProfile').mockImplementation(async (id) => {
+      order.push(`switch:${id}`);
+      return { previousProfileId: 'profile-a', profileId: id };
+    });
+    vi.spyOn(configManager, 'getProfile').mockImplementation((id) => (
+      id === 'profile-b' ? profileB : profileA
+    ));
+
+    const { controller, radioManager } = createController({
+      profiles: [profileA, profileB],
+      activeProfileId: 'profile-a',
+      connected: false,
+      running: false,
+      wakeAndConnect: vi.fn().mockImplementation(async () => {
+        order.push('wake');
+      }),
+    });
+
+    await expect(controller.handleRequest({
+      profileId: 'profile-b',
+      state: 'on',
+      autoEngine: false,
+    })).resolves.toBe('awake');
+
+    expect(switchSpy).toHaveBeenCalledWith('profile-b');
+    expect(mockReloadAudioConfig).toHaveBeenCalledTimes(1);
+    expect(radioManager.wakeAndConnect).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['switch:profile-b', 'reloadAudio', 'wake']);
   });
 
   it('does not stop the engine or disconnect when operate is unsupported', async () => {

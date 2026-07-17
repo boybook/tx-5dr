@@ -36,6 +36,17 @@ const { state, mockConfigManager, mockEngine, mockReloadAudioConfig } = vi.hoist
     }),
     snapshotOperatingMemoryForProfile: vi.fn(async () => {}),
     loadOperatingMemoryForProfile: vi.fn(async () => {}),
+    switchActiveProfile: vi.fn(async (id: string) => {
+      const previousProfileId = testState.activeProfileId;
+      if (previousProfileId && previousProfileId !== id) {
+        await configManager.snapshotOperatingMemoryForProfile(previousProfileId);
+      }
+      await configManager.setActiveProfileId(id);
+      if (previousProfileId !== id) {
+        await configManager.loadOperatingMemoryForProfile(id);
+      }
+      return { previousProfileId, profileId: id };
+    }),
     deleteProfileOperatingMemory: vi.fn(async () => {}),
     getProfiles: vi.fn(() => testState.profiles),
     getActiveProfile: vi.fn(() => testState.profiles.find((profile) => profile.id === testState.activeProfileId) ?? null),
@@ -337,7 +348,7 @@ describe('ProfileManager audio runtime config application', () => {
 
     await manager.activateProfile('profile-1');
 
-    expect(mockConfigManager.setActiveProfileId).toHaveBeenCalledWith('profile-1');
+    expect(mockConfigManager.switchActiveProfile).toHaveBeenCalledWith('profile-1');
     expect(mockReloadAudioConfig).toHaveBeenCalledTimes(1);
     expect(mockEngine.start).toHaveBeenCalledTimes(1);
     expect(mockReloadAudioConfig.mock.invocationCallOrder[0]).toBeLessThan(mockEngine.start.mock.invocationCallOrder[0]);
@@ -353,6 +364,7 @@ describe('ProfileManager audio runtime config application', () => {
 
     await manager.activateProfile('profile-7610');
 
+    expect(mockConfigManager.switchActiveProfile).toHaveBeenCalledWith('profile-7610');
     expect(mockConfigManager.snapshotOperatingMemoryForProfile).toHaveBeenCalledWith('profile-9700');
     expect(mockConfigManager.setActiveProfileId).toHaveBeenCalledWith('profile-7610');
     expect(mockConfigManager.loadOperatingMemoryForProfile).toHaveBeenCalledWith('profile-7610');
@@ -368,6 +380,7 @@ describe('ProfileManager audio runtime config application', () => {
 
     await manager.activateProfile('profile-1');
 
+    expect(mockConfigManager.switchActiveProfile).toHaveBeenCalledWith('profile-1');
     expect(mockConfigManager.snapshotOperatingMemoryForProfile).not.toHaveBeenCalled();
     expect(mockConfigManager.loadOperatingMemoryForProfile).not.toHaveBeenCalled();
     expect(mockConfigManager.setActiveProfileId).toHaveBeenCalledWith('profile-1');
