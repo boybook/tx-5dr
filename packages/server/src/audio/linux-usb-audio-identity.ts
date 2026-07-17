@@ -4,6 +4,15 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('LinuxUsbAudioIdentity');
 
+export type PcmDirection = 'input' | 'output';
+
+/** Per-direction ALSA PCM open state for a single USB sound card. */
+export type PcmDirectionStatus = {
+  busy: boolean;
+  /** PID holding the PCM substream when busy, if known. */
+  ownerPid?: number;
+};
+
 export type LinuxUsbAudioIdentity = {
   /** Stable key, e.g. usb:1-7.2.4 */
   hardwareId: string;
@@ -25,10 +34,32 @@ export type LinuxUsbAudioIdentity = {
   relatedSerials: string[];
   /** One-line detail for UI, similar to serial-port metadata. */
   detail: string;
-  pcmBusy: boolean;
-  /** PID holding the PCM device when busy, if known. */
-  ownerPid?: number;
+  /**
+   * ALSA capture/playback PCM state modeled per direction. Capture (pcm0c) and
+   * playback (pcm0p) open independently, so one direction being busy must not
+   * mark the other unavailable or let one owner impersonate the other.
+   */
+  pcm: {
+    input: PcmDirectionStatus;
+    output: PcmDirectionStatus;
+  };
 };
+
+/** Read the per-direction PCM busy/owner state for an identity. */
+export function getPcmDirectionStatus(
+  identity: LinuxUsbAudioIdentity,
+  direction: PcmDirection,
+): PcmDirectionStatus {
+  return identity.pcm[direction];
+}
+
+/** Whether the identity's PCM is open in the given direction. */
+export function isPcmBusyForDirection(
+  identity: LinuxUsbAudioIdentity,
+  direction: PcmDirection,
+): boolean {
+  return identity.pcm[direction].busy;
+}
 
 export type AudioDeviceIdentityFields = {
   hardwareId?: string;
@@ -146,44 +177,35 @@ function collectSiblingRadioSerials(usbDeviceDir: string): string[] {
   return Array.from(new Set(serials)).sort((a, b) => a.localeCompare(b));
 }
 
-function readPcmStatus(cardIndex: number): { busy: boolean; ownerPid?: number } {
-  for (const stream of ['pcm0c', 'pcm0p'] as const) {
-    const statusPath = `/proc/asound/card${cardIndex}/${stream}/sub0/status`;
-    const status = readText(statusPath);
-    if (!status) continue;
-    const firstLine = status.split('\n')[0]?.trim() || '';
-    if (/^closed$/i.test(firstLine)) continue;
-    const ownerMatch = status.match(/owner_pid\s*:\s*(\d+)/i);
-    return {
-      busy: true,
-      ownerPid: ownerMatch ? Number.parseInt(ownerMatch[1], 10) : undefined,
-    };
-  }
-  return { busy: false };
-}
-
-function readDirectionalPcmOwner(cardIndex: number, direction: 'input' | 'output'): number | undefined {
+/** Read the capture (pcm0c) or playback (pcm0p) PCM status for a single card. */
+function readPcmDirectionStatus(cardIndex: number, direction: PcmDirection): PcmDirectionStatus {
   const stream = direction === 'input' ? 'pcm0c' : 'pcm0p';
   const statusPath = `/proc/asound/card${cardIndex}/${stream}/sub0/status`;
   const status = readText(statusPath);
-  if (!status) return undefined;
+  if (!status) return { busy: false };
   const firstLine = status.split('\n')[0]?.trim() || '';
-  if (/^closed$/i.test(firstLine)) return undefined;
+  if (/^closed$/i.test(firstLine)) return { busy: false };
   const ownerMatch = status.match(/owner_pid\s*:\s*(\d+)/i);
-  return ownerMatch ? Number.parseInt(ownerMatch[1], 10) : undefined;
+  return {
+    busy: true,
+    ownerPid: ownerMatch ? Number.parseInt(ownerMatch[1], 10) : undefined,
+  };
 }
 
 /**
  * After opening an RtAudio stream, map the ALSA card actually owned by this
- * process back to the USB/radio hardwareId (sibling Silabs serial on the hub).
+ * process (in the given direction) back to the USB/radio hardwareId (sibling
+ * Silabs serial on the hub). Capture and playback owners are tracked separately,
+ * so an input open never resolves via a playback owner and vice versa.
  */
 export function findOwnedUsbAudioHardwareId(
-  direction: 'input' | 'output',
+  direction: PcmDirection,
   identities: LinuxUsbAudioIdentity[] = discoverLinuxUsbAudioIdentities(),
   ownerPid: number = process.pid,
 ): string | undefined {
   for (const identity of identities) {
-    if (readDirectionalPcmOwner(identity.alsaCard, direction) === ownerPid) {
+    const status = identity.pcm[direction];
+    if (status.busy && status.ownerPid === ownerPid) {
       return identity.hardwareId;
     }
   }
@@ -245,7 +267,10 @@ export function discoverLinuxUsbAudioIdentities(): LinuxUsbAudioIdentity[] {
     const relatedRadioLabel = relatedSerials
       .map((serial) => deriveRadioLabelFromSerial(serial))
       .find((label): label is string => Boolean(label));
-    const pcmStatus = readPcmStatus(card.index);
+    const pcm = {
+      input: readPcmDirectionStatus(card.index, 'input'),
+      output: readPcmDirectionStatus(card.index, 'output'),
+    };
 
     const identity: LinuxUsbAudioIdentity = {
       hardwareId: `usb:${usbPath}`,
@@ -266,8 +291,7 @@ export function discoverLinuxUsbAudioIdentities(): LinuxUsbAudioIdentity[] {
         usbPath,
         relatedSerials,
       }),
-      pcmBusy: pcmStatus.busy,
-      ownerPid: pcmStatus.ownerPid,
+      pcm,
     };
 
     identities.push(identity);
@@ -281,8 +305,10 @@ export function discoverLinuxUsbAudioIdentities(): LinuxUsbAudioIdentity[] {
         card: item.alsaCard,
         hardwareId: item.hardwareId,
         relatedRadioLabel: item.relatedRadioLabel,
-        pcmBusy: item.pcmBusy,
-        ownerPid: item.ownerPid,
+        inputBusy: item.pcm.input.busy,
+        inputOwnerPid: item.pcm.input.ownerPid,
+        outputBusy: item.pcm.output.busy,
+        outputOwnerPid: item.pcm.output.ownerPid,
       })),
     });
   }
@@ -356,18 +382,20 @@ export function identityToFields(identity: LinuxUsbAudioIdentity): AudioDeviceId
 /**
  * Attach Linux USB/radio identity metadata onto enumerated RtAudio devices.
  *
- * Only FREE cards are claimed onto live RtAudio entries. Busy cards that this
- * process already opened must NOT be FIFO-matched onto the remaining enumerated
- * USB devices: RtAudio listing order is unrelated to which card we opened, and
- * attaching "owned" identities first mislabels the free peer (e.g. labels the
- * IC-9700 device as IC-7610). Busy radios are rebound via
- * {@link assignBusyIdentitiesToActiveDevices}, {@link findOwnedUsbAudioHardwareId},
- * or registry/hardwareId fallbacks when opening the opposite stream direction.
+ * Only cards FREE in this direction are claimed onto live RtAudio entries. Busy
+ * cards that this process already opened must NOT be FIFO-matched onto the
+ * remaining enumerated USB devices: RtAudio listing order is unrelated to which
+ * card we opened, and attaching "owned" identities first mislabels the free peer
+ * (e.g. labels the IC-9700 device as IC-7610). Busy is evaluated per direction
+ * so a capture-only open never hides the free playback side and vice versa. Busy
+ * radios are rebound via {@link assignBusyIdentitiesToActiveDevices},
+ * {@link findOwnedUsbAudioHardwareId}, or registry/hardwareId fallbacks when
+ * opening the opposite stream direction.
  */
 export function attachLinuxUsbAudioIdentities<T extends { name: string; hardwareId?: string }>(
   devices: T[],
+  direction: PcmDirection,
   identities: LinuxUsbAudioIdentity[] = discoverLinuxUsbAudioIdentities(),
-  _ownerPid: number = process.pid,
 ): Array<T & AudioDeviceIdentityFields> {
   if (identities.length === 0 || devices.length === 0) {
     return devices.map((device) => ({ ...device }));
@@ -377,7 +405,7 @@ export function attachLinuxUsbAudioIdentities<T extends { name: string; hardware
     devices.map((device) => device.hardwareId).filter((id): id is string => Boolean(id)),
   );
 
-  const free = identities.filter((identity) => !identity.pcmBusy);
+  const free = identities.filter((identity) => !identity.pcm[direction].busy);
 
   return devices.map((device) => {
     if (device.hardwareId) {
@@ -400,8 +428,10 @@ export function attachLinuxUsbAudioIdentities<T extends { name: string; hardware
 }
 
 /**
- * Prefer identities occupied by this process for already-active TX5DR streams that
- * lost their hardwareId (RtAudio stops listing busy cards).
+ * Prefer identities occupied by this process (in the given direction) for
+ * already-active TX5DR streams that lost their hardwareId (RtAudio stops listing
+ * busy cards). Ownership is matched per direction so a playback stream is never
+ * relabeled from a capture owner (or another PID) and vice versa.
  */
 export function assignBusyIdentitiesToActiveDevices<T extends {
   name: string;
@@ -409,6 +439,7 @@ export function assignBusyIdentitiesToActiveDevices<T extends {
   isActiveByTx5dr?: boolean;
 }>(
   devices: T[],
+  direction: PcmDirection,
   identities: LinuxUsbAudioIdentity[],
   ownerPid: number = process.pid,
 ): Array<T & AudioDeviceIdentityFields> {
@@ -416,9 +447,10 @@ export function assignBusyIdentitiesToActiveDevices<T extends {
   const usedHardwareIds = new Set(
     cleanedDevices.map((device) => device.hardwareId).filter((id): id is string => Boolean(id)),
   );
-  const ownedBusy = identities.filter(
-    (identity) => identity.pcmBusy && identity.ownerPid === ownerPid && !usedHardwareIds.has(identity.hardwareId),
-  );
+  const ownedBusy = identities.filter((identity) => {
+    const status = identity.pcm[direction];
+    return status.busy && status.ownerPid === ownerPid && !usedHardwareIds.has(identity.hardwareId);
+  });
 
   return cleanedDevices.map((device) => {
     if (!looksLikeUsbAudioDeviceName(device.name)) {
@@ -473,7 +505,7 @@ export function buildSupplementalUsbAudioDevices(
       sampleRate: 48000,
       sampleRates: [44100, 48000],
       type: direction,
-      availability: identity.pcmBusy ? 'cached' as const : 'available' as const,
+      availability: identity.pcm[direction].busy ? 'cached' as const : 'available' as const,
       isActiveByTx5dr: false as const,
       ...identityToFields(identity),
     }));

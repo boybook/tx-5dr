@@ -167,7 +167,7 @@ export class AudioDeviceManager {
 
     const identities = discoverLinuxUsbAudioIdentities();
     // Re-label TX5DR-owned busy cards (RtAudio hides them while open).
-    const reconciled = assignBusyIdentitiesToActiveDevices(devices, identities);
+    const reconciled = assignBusyIdentitiesToActiveDevices(devices, direction, identities);
     for (let index = 0; index < devices.length; index++) {
       const enriched = reconciled[index];
       if (!enriched) continue;
@@ -347,11 +347,13 @@ export class AudioDeviceManager {
       rawDevices
         .filter((device: any) => device.inputChannels && device.inputChannels > 0)
         .map((device: any) => this.convertAudifyDevice(device, 'input', Boolean(device.isDefaultInput))),
+      'input',
     );
     const outputDevices = attachLinuxUsbAudioIdentities(
       rawDevices
         .filter((device: any) => device.outputChannels && device.outputChannels > 0)
         .map((device: any) => this.convertAudifyDevice(device, 'output', Boolean(device.isDefaultOutput))),
+      'output',
     );
 
     return { inputDevices, outputDevices };
@@ -688,7 +690,7 @@ export class AudioDeviceManager {
       throw this.createUnavailableConfiguredDeviceError(
         direction,
         deviceName || label,
-        identity?.pcmBusy ? 'cached' : undefined,
+        identity?.pcm[direction].busy ? 'cached' : undefined,
       );
     }
 

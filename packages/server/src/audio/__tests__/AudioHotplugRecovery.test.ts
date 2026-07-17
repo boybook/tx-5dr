@@ -108,8 +108,8 @@ vi.mock('../linux-usb-audio-identity.js', async (importOriginal) => {
   return {
     ...actual,
     discoverLinuxUsbAudioIdentities: discoverMock,
-    attachLinuxUsbAudioIdentities: (devices: any, identities = discoverMock(), ownerPid?: number) =>
-      actual.attachLinuxUsbAudioIdentities(devices, identities, ownerPid),
+    attachLinuxUsbAudioIdentities: (devices: any, direction: any, identities = discoverMock()) =>
+      actual.attachLinuxUsbAudioIdentities(devices, direction, identities),
     findOwnedUsbAudioHardwareId: (direction: any, identities = discoverMock(), ownerPid?: number) =>
       actual.findOwnedUsbAudioHardwareId(direction, identities, ownerPid),
     buildSupplementalUsbAudioDevices: (direction: any, existing: any, identities = discoverMock()) =>
@@ -131,8 +131,11 @@ function makeUsbIdentity(overrides: Partial<LinuxUsbAudioIdentity> & { hardwareI
     usbPath: overrides.hardwareId.replace(/^usb:/, ''),
     relatedSerials: [],
     detail: overrides.hardwareId,
-    pcmBusy: false,
     ...overrides,
+    pcm: {
+      input: overrides.pcm?.input ?? { busy: false },
+      output: overrides.pcm?.output ?? { busy: false },
+    },
   };
 }
 
