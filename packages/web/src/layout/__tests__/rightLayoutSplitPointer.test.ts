@@ -9,6 +9,7 @@ describe('right layout split pointer gating', () => {
   it('allows primary touch pointers on desktop', () => {
     expect(shouldStartRightLayoutSplitPointerDrag({
       isMobile: false,
+      hasActivePointer: false,
       isPrimary: true,
       pointerType: 'touch',
       button: 0,
@@ -18,6 +19,7 @@ describe('right layout split pointer gating', () => {
   it('allows only primary left mouse button on desktop', () => {
     expect(shouldStartRightLayoutSplitPointerDrag({
       isMobile: false,
+      hasActivePointer: false,
       isPrimary: true,
       pointerType: 'mouse',
       button: 0,
@@ -25,6 +27,7 @@ describe('right layout split pointer gating', () => {
 
     expect(shouldStartRightLayoutSplitPointerDrag({
       isMobile: false,
+      hasActivePointer: false,
       isPrimary: true,
       pointerType: 'mouse',
       button: 1,
@@ -34,6 +37,7 @@ describe('right layout split pointer gating', () => {
   it('rejects non-primary pointers and mobile layout drags', () => {
     expect(shouldStartRightLayoutSplitPointerDrag({
       isMobile: false,
+      hasActivePointer: false,
       isPrimary: false,
       pointerType: 'touch',
       button: 0,
@@ -41,6 +45,17 @@ describe('right layout split pointer gating', () => {
 
     expect(shouldStartRightLayoutSplitPointerDrag({
       isMobile: true,
+      hasActivePointer: false,
+      isPrimary: true,
+      pointerType: 'touch',
+      button: 0,
+    })).toBe(false);
+  });
+
+  it('rejects a second pointer while a drag is active', () => {
+    expect(shouldStartRightLayoutSplitPointerDrag({
+      isMobile: false,
+      hasActivePointer: true,
       isPrimary: true,
       pointerType: 'touch',
       button: 0,

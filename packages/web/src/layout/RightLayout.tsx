@@ -178,6 +178,7 @@ export const RightLayout: React.FC = () => {
   const handleSplitPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!shouldStartRightLayoutSplitPointerDrag({
       isMobile,
+      hasActivePointer: activeSplitPointerIdRef.current !== null,
       isPrimary: event.isPrimary,
       pointerType: event.pointerType,
       button: event.button,
@@ -187,6 +188,7 @@ export const RightLayout: React.FC = () => {
 
     event.preventDefault();
     event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
     activeSplitPointerIdRef.current = event.pointerId;
     dragStartYRef.current = event.clientY;
     dragStartSplitPercentRef.current = splitPercent;
@@ -205,6 +207,10 @@ export const RightLayout: React.FC = () => {
     if (!isActiveRightLayoutSplitPointer(activeSplitPointerIdRef.current, event.pointerId)) {
       return;
     }
+    if (event.buttons === 0) {
+      handleSplitPointerEnd(event);
+      return;
+    }
     if (!splitWorkspaceRef.current) {
       return;
     }
@@ -219,7 +225,7 @@ export const RightLayout: React.FC = () => {
       splitPercent: dragStartSplitPercentRef.current + deltaPercent,
       containerHeight,
     }));
-  }, []);
+  }, [handleSplitPointerEnd]);
 
   useEffect(() => {
     if (!isDraggingSplit) {
