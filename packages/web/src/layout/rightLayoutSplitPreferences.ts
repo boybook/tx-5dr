@@ -61,11 +61,12 @@ export function shouldPersistRightLayoutSplit(params: {
 
 export function shouldStartRightLayoutSplitPointerDrag(params: {
   isMobile: boolean;
+  hasActivePointer: boolean;
   isPrimary: boolean;
   pointerType: string;
   button: number;
 }): boolean {
-  if (params.isMobile || !params.isPrimary) {
+  if (params.isMobile || params.hasActivePointer || !params.isPrimary) {
     return false;
   }
 
