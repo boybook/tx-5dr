@@ -84,6 +84,7 @@ export const RightLayout: React.FC = () => {
   const activeSplitPointerIdRef = useRef<number | null>(null);
   const dragStartYRef = useRef(0);
   const dragStartSplitPercentRef = useRef(DEFAULT_RIGHT_LAYOUT_SPLIT_PERCENT);
+  const wasDraggingSplitRef = useRef(false);
   const showAuthenticatedIdentity = Boolean(authState.role) && (Boolean(authState.jwt) || !authState.authEnabled);
   const showLoginEntry = authState.authEnabled && !authState.jwt && authState.isPublicViewer;
   const automationOperatorId = currentOperatorId || operators[0]?.id;
@@ -241,7 +242,14 @@ export const RightLayout: React.FC = () => {
   }, [handleSplitPointerEnd, handleSplitPointerMove, isDraggingSplit]);
 
   useEffect(() => {
-    if (!shouldPersistRightLayoutSplit({ isMobile, isDraggingSplit })) {
+    const wasDraggingSplit = wasDraggingSplitRef.current;
+    wasDraggingSplitRef.current = isDraggingSplit;
+
+    if (!shouldPersistRightLayoutSplit({
+      isMobile,
+      wasDraggingSplit,
+      isDraggingSplit,
+    })) {
       return;
     }
 

@@ -53,9 +53,10 @@ export function saveRightLayoutSplitPercent(splitPercent: number): number {
 
 export function shouldPersistRightLayoutSplit(params: {
   isMobile: boolean;
+  wasDraggingSplit: boolean;
   isDraggingSplit: boolean;
 }): boolean {
-  return !params.isMobile && !params.isDraggingSplit;
+  return !params.isMobile && params.wasDraggingSplit && !params.isDraggingSplit;
 }
 
 export function shouldStartRightLayoutSplitPointerDrag(params: {
