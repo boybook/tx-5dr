@@ -88,6 +88,7 @@ export interface RadioState {
   coreCapabilityDiagnostics: CoreCapabilityDiagnostics | null;
   profiles: RadioProfile[];
   activeProfileId: string | null;
+  profileGeneration: number;
   profilesLoaded: boolean;
   engineMode: EngineMode;
   voicePttLock: VoicePTTLock | null;

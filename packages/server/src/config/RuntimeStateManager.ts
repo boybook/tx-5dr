@@ -32,7 +32,18 @@ export interface LastCWFrequencyState {
   description?: string;
 }
 
+export interface ProfileOperatingState {
+  lastSelectedFrequency?: LastSelectedFrequencyState | null;
+  lastVoiceFrequency?: LastVoiceFrequencyState | null;
+  lastCWFrequency?: LastCWFrequencyState | null;
+  lastEngineMode?: 'digital' | 'voice' | 'cw';
+  lastDigitalModeName?: string;
+}
+
 export interface RuntimeState {
+  /** Profile-scoped operating state. An empty map also marks legacy migration complete. */
+  operatingStateByProfile?: Record<string, ProfileOperatingState>;
+  // Legacy fields are retained only as one-time migration inputs.
   lastSelectedFrequency?: LastSelectedFrequencyState | null;
   lastVoiceFrequency?: LastVoiceFrequencyState | null;
   lastCWFrequency?: LastCWFrequencyState | null;
@@ -124,6 +135,14 @@ export class RuntimeStateManager {
   async patch(patch: Partial<RuntimeState>, options: { defer?: boolean } = { defer: true }): Promise<void> {
     const store = this.requireStore();
     await store.set({ ...store.get(), ...patch }, options);
+  }
+
+  async update(
+    mutator: (state: RuntimeState) => RuntimeState,
+    options: { defer?: boolean } = { defer: true },
+  ): Promise<void> {
+    const store = this.requireStore();
+    await store.update((state) => mutator(state), options);
   }
 
   async flush(): Promise<void> {

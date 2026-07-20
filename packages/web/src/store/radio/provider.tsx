@@ -25,6 +25,10 @@ import {
   StationInfoContext,
 } from './contexts';
 import { createRadioEventMap } from './createEventMap';
+import {
+  synchronizeProfileRequestScopeFromState,
+  type ProfileRequestScope,
+} from './profileRequestScope';
 import { setSelectedOperatorId } from '../../utils/operatorPreferences';
 import {
   connectionReducer,
@@ -144,6 +148,14 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
   const capabilitiesRef = useRef<SpectrumCapabilities | null>(radioState.spectrumCapabilities);
   const radioStateRef = useRef(radioState);
   const activeProfileIdRef = useRef<string | null>(radioState.activeProfileId);
+  const profileRequestScopeRef = useRef<ProfileRequestScope>({
+    profileId: radioState.activeProfileId,
+    generation: radioState.profileGeneration,
+  });
+  synchronizeProfileRequestScopeFromState(profileRequestScopeRef, {
+    profileId: radioState.activeProfileId,
+    generation: radioState.profileGeneration,
+  }, activeProfileIdRef);
   const spectrumAutoPriorityPendingRef = useRef(true);
   const connectionStateRef = useRef(connectionState);
   const myRelatedTimelineStateRef = useRef(myRelatedTimelineState);
@@ -156,7 +168,6 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     capabilitiesRef.current = radioState.spectrumCapabilities;
     radioStateRef.current = radioState;
-    activeProfileIdRef.current = radioState.activeProfileId;
   }, [radioState]);
 
   useEffect(() => {
@@ -195,6 +206,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
       radioStateRef,
       capabilitiesRef,
       activeProfileIdRef,
+      profileRequestScopeRef,
       spectrumNegotiation,
       logger,
     });
@@ -343,9 +355,16 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
     () => ({
       profiles: radioState.profiles,
       activeProfileId: radioState.activeProfileId,
+      profileGeneration: radioState.profileGeneration,
       profilesLoaded: radioState.profilesLoaded,
+      profileRequestScopeRef,
     }),
-    [radioState.profiles, radioState.activeProfileId, radioState.profilesLoaded],
+    [
+      radioState.profiles,
+      radioState.activeProfileId,
+      radioState.profileGeneration,
+      radioState.profilesLoaded,
+    ],
   );
 
   const radioConnectionContextValue = useMemo(

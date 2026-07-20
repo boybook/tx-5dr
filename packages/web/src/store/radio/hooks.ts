@@ -23,6 +23,12 @@ import {
   SlotPacksContext,
   StationInfoContext,
 } from './contexts';
+import {
+  advanceProfileRequestScope,
+  captureProfileRequestScope,
+  isProfileRequestScopeCurrent,
+  type ProfileRequestScope,
+} from './profileRequestScope';
 
 export const useRadio = () => {
   const connection = useContext(ConnectionContext);
@@ -110,8 +116,45 @@ export const useProfiles = () => {
   return {
     profiles: context.profiles,
     activeProfileId: context.activeProfileId,
+    profileGeneration: context.profileGeneration,
     activeProfile,
     profilesLoaded: context.profilesLoaded,
+  };
+};
+
+export const useProfileRequestScope = () => {
+  const context = useContext(ProfilesContext);
+  if (!context) throw new Error('useProfileRequestScope must be used within RadioProvider');
+
+  const capture = useCallback(
+    () => captureProfileRequestScope(context.profileRequestScopeRef),
+    [context.profileRequestScopeRef],
+  );
+  const isCurrent = useCallback(
+    (requestScope: ProfileRequestScope) => (
+      isProfileRequestScopeCurrent(requestScope, context.profileRequestScopeRef)
+    ),
+    [context.profileRequestScopeRef],
+  );
+  const synchronize = useCallback((
+    profileId: string | null,
+    serverGeneration?: number,
+    forceAdvance = false,
+  ) => {
+    context.profileRequestScopeRef.current = advanceProfileRequestScope(
+      context.profileRequestScopeRef.current,
+      profileId,
+      serverGeneration,
+      forceAdvance,
+    );
+    return context.profileRequestScopeRef.current;
+  }, [context.profileRequestScopeRef]);
+
+  return {
+    profileRequestScopeRef: context.profileRequestScopeRef,
+    capture,
+    isCurrent,
+    synchronize,
   };
 };
 

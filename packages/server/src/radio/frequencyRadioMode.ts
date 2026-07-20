@@ -1,5 +1,9 @@
 import type { DigitalModeRadioModePreference } from '@tx5dr/contracts';
-import type { ApplyOperatingStateRequest, SetRadioModeOptions } from './connections/IRadioConnection.js';
+import type {
+  ApplyOperatingStateRequest,
+  ApplyOperatingStateResult,
+  SetRadioModeOptions,
+} from './connections/IRadioConnection.js';
 
 type EngineMode = 'digital' | 'voice' | 'cw';
 
@@ -7,6 +11,12 @@ export interface FrequencyRadioModeResolution {
   displayRadioMode?: string;
   writeRadioMode?: string;
   modeOptions?: SetRadioModeOptions;
+}
+
+export interface AppliedFrequencyRadioModeProjection {
+  displayRadioMode?: string;
+  modeDegraded?: boolean;
+  modeFallbackReason?: string;
 }
 
 function hasNonEmptyString(value: unknown): value is string {
@@ -81,6 +91,58 @@ export function resolveFrequencyRadioMode({
     displayRadioMode: normalizedRadioMode,
     writeRadioMode: normalizedRadioMode,
     modeOptions: inferModeOptions(effectiveMode, engineMode),
+  };
+}
+
+function normalizeAppliedModeForDisplay(appliedMode: string, requestedDisplayMode?: string): string {
+  const normalizedAppliedMode = appliedMode.trim().toUpperCase();
+  const normalizedRequestedMode = requestedDisplayMode?.trim().toUpperCase();
+
+  // Keep the product-facing USB-DATA label when the backend confirms its
+  // Hamlib equivalent. A fallback to plain USB must remain visible as USB.
+  if (normalizedRequestedMode === 'USB-DATA' && normalizedAppliedMode === 'PKTUSB') {
+    return 'USB-DATA';
+  }
+
+  return normalizedAppliedMode;
+}
+
+export function projectAppliedFrequencyRadioMode(
+  requestedDisplayMode: string | undefined,
+  applyResult?: Pick<
+    ApplyOperatingStateResult,
+    'modeApplied' | 'modeError' | 'appliedMode' | 'modeDegraded' | 'modeFallbackReason'
+  >,
+): AppliedFrequencyRadioModeProjection {
+  const requestedMode = hasNonEmptyString(requestedDisplayMode)
+    ? requestedDisplayMode.trim()
+    : undefined;
+  if (!applyResult) {
+    return requestedMode ? { displayRadioMode: requestedMode } : {};
+  }
+
+  const appliedMode = hasNonEmptyString(applyResult.appliedMode)
+    ? normalizeAppliedModeForDisplay(applyResult.appliedMode, requestedMode)
+    : undefined;
+  const modeWriteFailed = Boolean(requestedMode && (!applyResult.modeApplied || applyResult.modeError));
+  const degradedModeIsUnknown = applyResult.modeDegraded === true && !appliedMode;
+  const modeDegraded = applyResult.modeDegraded === true || modeWriteFailed;
+  const modeFallbackReason = applyResult.modeFallbackReason
+    ?? applyResult.modeError?.message
+    ?? (modeWriteFailed
+      ? 'Radio did not confirm the requested mode'
+      : degradedModeIsUnknown
+        ? 'Radio mode degraded but the applied mode is unknown'
+        : undefined);
+
+  return {
+    ...(appliedMode
+      ? { displayRadioMode: appliedMode }
+      : !modeWriteFailed && !degradedModeIsUnknown && requestedMode
+        ? { displayRadioMode: requestedMode }
+        : {}),
+    ...(modeDegraded ? { modeDegraded: true } : {}),
+    ...(modeDegraded && modeFallbackReason ? { modeFallbackReason } : {}),
   };
 }
 

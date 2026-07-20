@@ -11,7 +11,19 @@ import {
 } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { api, ApiError } from '@tx5dr/core';
-import { useCapabilityDescriptor, useCapabilityState, useConnection, useOperators, useRadioConnectionState, useRadioState, useSplitState } from '../../store/radioStore';
+import {
+  awaitProfileScoped,
+  useCapabilityDescriptor,
+  useCapabilityState,
+  useConnection,
+  useOperators,
+  useProfiles,
+  useProfileRequestScope,
+  useRadioConnectionState,
+  useRadioState,
+  useSplitState,
+  type ProfileRequestScope,
+} from '../../store/radioStore';
 import { useAuth, useHasMinRole, useCan, useAbility } from '../../store/authStore';
 import { UserRole, type PresetFrequency } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
@@ -45,6 +57,12 @@ interface FrequencyPreset {
   dcsCode?: number;
 }
 
+interface PendingFrequencyIntent {
+  intendedFrequency: number;
+  sentAt: number;
+  requestScope: ProfileRequestScope;
+}
+
 /**
  * Voice Frequency Control Component
  *
@@ -55,6 +73,12 @@ export const VoiceFrequencyControl: React.FC = () => {
   const { t } = useTranslation('voice');
   const connection = useConnection();
   const { operators } = useOperators();
+  const { activeProfileId, profileGeneration } = useProfiles();
+  const {
+    profileRequestScopeRef,
+    capture: captureProfileRequestScope,
+    isCurrent: isProfileRequestScopeCurrent,
+  } = useProfileRequestScope();
   const radioConnection = useRadioConnectionState();
   const radio = useRadioState();
   const radioModeDescriptor = useCapabilityDescriptor('radio_mode');
@@ -76,6 +100,8 @@ export const VoiceFrequencyControl: React.FC = () => {
   const [currentFrequency, setCurrentFrequency] = useState<number>(14270000);
   const currentFrequencyRef = React.useRef(currentFrequency);
   currentFrequencyRef.current = currentFrequency;
+  const liveRadioFrequencyRef = React.useRef(radio.state.currentRadioFrequency);
+  liveRadioFrequencyRef.current = radio.state.currentRadioFrequency;
   const [currentRadioMode, setCurrentRadioMode] = useState<string>('USB');
   const [isAddPresetModalOpen, setIsAddPresetModalOpen] = useState(false);
 
@@ -100,7 +126,7 @@ export const VoiceFrequencyControl: React.FC = () => {
   }, [splitEnabled, splitTxFrequency]);
 
   // TX frequency echo suppression
-  const pendingTxFreqRef = React.useRef<{ intendedFrequency: number; sentAt: number } | null>(null);
+  const pendingTxFreqRef = React.useRef<PendingFrequencyIntent | null>(null);
   const txFreqDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const applyTxFrequency = useCallback((newFreq: number) => {
@@ -109,8 +135,9 @@ export const VoiceFrequencyControl: React.FC = () => {
       return;
     }
 
+    const requestScope = captureProfileRequestScope();
     setCurrentTxFrequency(newFreq);
-    pendingTxFreqRef.current = { intendedFrequency: newFreq, sentAt: Date.now() };
+    pendingTxFreqRef.current = { intendedFrequency: newFreq, sentAt: Date.now(), requestScope };
     if (txFreqDebounceTimerRef.current) {
       clearTimeout(txFreqDebounceTimerRef.current);
     }
@@ -118,23 +145,54 @@ export const VoiceFrequencyControl: React.FC = () => {
       txFreqDebounceTimerRef.current = null;
       const pending = pendingTxFreqRef.current;
       if (!pending) return;
-      pendingTxFreqRef.current = { intendedFrequency: pending.intendedFrequency, sentAt: Date.now() };
+      if (!isProfileRequestScopeCurrent(pending.requestScope)) {
+        pendingTxFreqRef.current = null;
+        return;
+      }
+      pendingTxFreqRef.current = { ...pending, sentAt: Date.now() };
       const wsClient = connection.state.radioService?.wsClientInstance;
       if (wsClient) {
         wsClient.setSplitFrequency(pending.intendedFrequency);
       }
     }, FREQ_DEBOUNCE_MS);
-  }, [canWriteFrequency, connection.state.isConnected, connection.state.radioService, splitTxFrequencyWritable]);
+  }, [
+    canWriteFrequency,
+    captureProfileRequestScope,
+    connection.state.isConnected,
+    connection.state.radioService,
+    isProfileRequestScopeCurrent,
+    splitTxFrequencyWritable,
+  ]);
 
   // Pending frequency tracking: suppresses stale server echo (e.g. from 5s radio polling)
   // overwriting user's just-typed value. Also used as a trailing-debounce buffer so that
   // rapid consecutive digit edits (▲/▼ clicks, arrow keys, 0-9 direct entry) coalesce into
   // a single setRadioFrequency call.
-  const pendingFreqRef = React.useRef<{ intendedFrequency: number; sentAt: number } | null>(null);
+  const pendingFreqRef = React.useRef<PendingFrequencyIntent | null>(null);
   const freqDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const presetLoadGenerationRef = React.useRef(0);
   const FREQ_PENDING_TIMEOUT_MS = 1500;
   const FREQ_MATCH_TOLERANCE_HZ = 10;
   const FREQ_DEBOUNCE_MS = 50;
+
+  useEffect(() => {
+    presetLoadGenerationRef.current += 1;
+    if (freqDebounceTimerRef.current) {
+      clearTimeout(freqDebounceTimerRef.current);
+      freqDebounceTimerRef.current = null;
+    }
+    if (txFreqDebounceTimerRef.current) {
+      clearTimeout(txFreqDebounceTimerRef.current);
+      txFreqDebounceTimerRef.current = null;
+    }
+    pendingFreqRef.current = null;
+    pendingTxFreqRef.current = null;
+    setPresets([]);
+    setIsLoadingPresets(false);
+    setCurrentFrequency(14_270_000);
+    setCurrentRadioMode('USB');
+    setCurrentTxFrequency(0);
+  }, [activeProfileId, profileGeneration]);
 
   const resetOperatorsAfterOperatingStateChange = useCallback(() => {
     resetOperatorsForOperatingStateChange({
@@ -152,13 +210,18 @@ export const VoiceFrequencyControl: React.FC = () => {
     if (typeof incoming !== 'number' || incoming <= 0) return;
     const pending = pendingFreqRef.current;
     if (pending) {
+      if (!isProfileRequestScopeCurrent(pending.requestScope)) {
+        pendingFreqRef.current = null;
+        setCurrentFrequency(incoming);
+        return;
+      }
       const withinWindow = Date.now() - pending.sentAt < FREQ_PENDING_TIMEOUT_MS;
       const matched = Math.abs(incoming - pending.intendedFrequency) < FREQ_MATCH_TOLERANCE_HZ;
       if (withinWindow && !matched) return;
       if (matched) pendingFreqRef.current = null;
     }
     setCurrentFrequency(incoming);
-  }, []);
+  }, [isProfileRequestScopeCurrent]);
 
   // Send the most recent pending frequency to the server. Reused by both the debounced
   // digit-edit path and the preset-select path (which bypasses debounce for snappy feel).
@@ -167,6 +230,10 @@ export const VoiceFrequencyControl: React.FC = () => {
   ) => {
     const pending = pendingFreqRef.current;
     if (!pending) return;
+    if (!isProfileRequestScopeCurrent(pending.requestScope)) {
+      pendingFreqRef.current = null;
+      return;
+    }
 
     if (!canWriteTargetFrequency(pending.intendedFrequency) || !connection.state.isConnected) {
       pendingFreqRef.current = null;
@@ -174,7 +241,7 @@ export const VoiceFrequencyControl: React.FC = () => {
     }
 
     const freq = pending.intendedFrequency;
-    pendingFreqRef.current = { intendedFrequency: freq, sentAt: Date.now() };
+    pendingFreqRef.current = { ...pending, sentAt: Date.now() };
     try {
       const request: Parameters<typeof setRadioFrequencyWithIntent>[0] = {
         frequency: freq,
@@ -186,14 +253,26 @@ export const VoiceFrequencyControl: React.FC = () => {
         request.radioMode = overrides.radioMode;
       }
 
-      const response = await setRadioFrequencyWithIntent(request);
+      const scopedResponse = await awaitProfileScoped(
+        setRadioFrequencyWithIntent(request),
+        pending.requestScope,
+        profileRequestScopeRef,
+      );
+      if (scopedResponse.status === 'stale') return;
+      const response = scopedResponse.value;
       if (response.success) {
         resetOperatorsAfterOperatingStateChange();
       }
     } catch (error) {
       logger.error('Failed to set frequency:', error);
     }
-  }, [canWriteTargetFrequency, connection.state.isConnected, resetOperatorsAfterOperatingStateChange]);
+  }, [
+    canWriteTargetFrequency,
+    connection.state.isConnected,
+    isProfileRequestScopeCurrent,
+    profileRequestScopeRef,
+    resetOperatorsAfterOperatingStateChange,
+  ]);
 
   // Apply a new frequency from digit edits. Updates UI immediately, marks pending,
   // and coalesces rapid consecutive edits via a 50ms trailing debounce.
@@ -203,8 +282,9 @@ export const VoiceFrequencyControl: React.FC = () => {
       return;
     }
 
+    const requestScope = captureProfileRequestScope();
     setCurrentFrequency(newFreq);
-    pendingFreqRef.current = { intendedFrequency: newFreq, sentAt: Date.now() };
+    pendingFreqRef.current = { intendedFrequency: newFreq, sentAt: Date.now(), requestScope };
     if (freqDebounceTimerRef.current) {
       clearTimeout(freqDebounceTimerRef.current);
     }
@@ -212,7 +292,12 @@ export const VoiceFrequencyControl: React.FC = () => {
       freqDebounceTimerRef.current = null;
       void flushPendingFrequency();
     }, FREQ_DEBOUNCE_MS);
-  }, [canWriteTargetFrequency, connection.state.isConnected, flushPendingFrequency]);
+  }, [
+    canWriteTargetFrequency,
+    captureProfileRequestScope,
+    connection.state.isConnected,
+    flushPendingFrequency,
+  ]);
 
   // Cleanup debounce timers on unmount
   useEffect(() => () => {
@@ -245,18 +330,34 @@ export const VoiceFrequencyControl: React.FC = () => {
     return `${shift === 'plus' ? '+' : '-'}${preset.repeaterOffsetHz / 1_000} kHz`;
   }, []);
   const loadVoicePresets = useCallback(async () => {
-    if (!connection.state.isConnected) return;
+    const requestGeneration = ++presetLoadGenerationRef.current;
+    const requestScope = captureProfileRequestScope();
+    if (!connection.state.isConnected) {
+      setPresets([]);
+      setIsLoadingPresets(false);
+      return;
+    }
     if (!canUseAuthenticatedRest) {
       setPresets([]);
+      setIsLoadingPresets(false);
       return;
     }
 
     setIsLoadingPresets(true);
     try {
-      const [presetsResponse, lastFreqResponse] = await Promise.all([
-        api.getPresetFrequencies(),
-        api.getLastFrequency(),
-      ]);
+      const scopedResponse = await awaitProfileScoped(
+        Promise.all([
+          api.getPresetFrequencies(),
+          api.getLastFrequency(),
+        ]),
+        requestScope,
+        profileRequestScopeRef,
+      );
+      if (
+        scopedResponse.status === 'stale'
+        || requestGeneration !== presetLoadGenerationRef.current
+      ) return;
+      const [presetsResponse, lastFreqResponse] = scopedResponse.value;
 
       if (presetsResponse.success && Array.isArray(presetsResponse.presets)) {
         // Filter for VOICE mode presets and always present them in ascending frequency order.
@@ -287,7 +388,7 @@ export const VoiceFrequencyControl: React.FC = () => {
       // Restore last voice frequency (separate from digital mode frequency)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lastVoice = (lastFreqResponse as any).lastVoiceFrequency;
-      if (lastVoice && lastVoice.frequency) {
+      if (lastVoice && lastVoice.frequency && (liveRadioFrequencyRef.current ?? 0) <= 0) {
         setCurrentFrequency(lastVoice.frequency);
         if (lastVoice.radioMode) setCurrentRadioMode(lastVoice.radioMode);
         logger.info('Restored last voice frequency', {
@@ -301,11 +402,30 @@ export const VoiceFrequencyControl: React.FC = () => {
         });
       }
     } catch (error) {
-      logger.error('Failed to load voice presets:', error);
+      if (
+        requestGeneration === presetLoadGenerationRef.current
+        && isProfileRequestScopeCurrent(requestScope)
+      ) {
+        logger.error('Failed to load voice presets:', error);
+      }
     } finally {
-      setIsLoadingPresets(false);
+      if (
+        requestGeneration === presetLoadGenerationRef.current
+        && isProfileRequestScopeCurrent(requestScope)
+      ) {
+        setIsLoadingPresets(false);
+      }
     }
-  }, [canUseAuthenticatedRest, connection.state.isConnected, formatBandLabel]);
+  }, [
+    activeProfileId,
+    canUseAuthenticatedRest,
+    captureProfileRequestScope,
+    connection.state.isConnected,
+    formatBandLabel,
+    isProfileRequestScopeCurrent,
+    profileGeneration,
+    profileRequestScopeRef,
+  ]);
 
   // Load voice frequency presets + restore last frequency
   useEffect(() => {
@@ -555,6 +675,7 @@ export const VoiceFrequencyControl: React.FC = () => {
   // Handle frequency preset selection
   const handlePresetSelect = async (key: string) => {
     if (!canWriteFrequency || !connection.state.isConnected) return;
+    const requestScope = captureProfileRequestScope();
 
     const preset = presets.find(p => p.key === key);
     if (!preset) return;
@@ -564,7 +685,11 @@ export const VoiceFrequencyControl: React.FC = () => {
     // (incl. in-flight debounced digit edits) is suppressed until preset confirms.
     setCurrentFrequency(preset.frequency);
     if (preset.radioMode) setCurrentRadioMode(preset.radioMode);
-    pendingFreqRef.current = { intendedFrequency: preset.frequency, sentAt: Date.now() };
+    pendingFreqRef.current = {
+      intendedFrequency: preset.frequency,
+      sentAt: Date.now(),
+      requestScope,
+    };
     if (freqDebounceTimerRef.current) {
       clearTimeout(freqDebounceTimerRef.current);
       freqDebounceTimerRef.current = null;
@@ -588,11 +713,20 @@ export const VoiceFrequencyControl: React.FC = () => {
         request.dcsCode = preset.dcsCode;
       }
 
-      const response = await setRadioFrequencyWithIntent(request);
+      const scopedResponse = await awaitProfileScoped(
+        setRadioFrequencyWithIntent(request),
+        requestScope,
+        profileRequestScopeRef,
+      );
+      if (scopedResponse.status === 'stale') return;
+      const response = scopedResponse.value;
 
       if (response.success) {
-        if (pendingFreqRef.current) {
-          pendingFreqRef.current = { intendedFrequency: preset.frequency, sentAt: Date.now() };
+        if (
+          pendingFreqRef.current
+          && isProfileRequestScopeCurrent(pendingFreqRef.current.requestScope)
+        ) {
+          pendingFreqRef.current = { ...pendingFreqRef.current, sentAt: Date.now() };
         }
         resetOperatorsAfterOperatingStateChange();
         addToast({

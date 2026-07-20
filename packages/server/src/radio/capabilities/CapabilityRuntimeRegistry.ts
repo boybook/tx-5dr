@@ -67,20 +67,26 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     this.supportSources.clear();
     this.valueCache.clear();
 
-    await this.resolveDescriptors(connection);
+    if (!(await this.resolveDescriptors(connection))) {
+      return;
+    }
 
     logger.info('Probing radio capabilities');
     try {
-      await this.probeCapabilities();
+      await this.probeCapabilities(connection);
     } catch (error) {
+      if (!this.isConnectionCurrent(connection)) return;
       logger.warn('Capability probe encountered an unexpected error', error);
     }
+    if (!this.isConnectionCurrent(connection)) return;
 
     try {
-      await this.readInitialValues();
+      await this.readInitialValues(connection);
     } catch (error) {
+      if (!this.isConnectionCurrent(connection)) return;
       logger.warn('Initial capability read encountered an unexpected error', error);
     }
+    if (!this.isConnectionCurrent(connection)) return;
 
     this.startPolling();
 
@@ -104,13 +110,15 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
   }
 
   async refreshAll(): Promise<void> {
-    if (!this.connection) return;
+    const connection = this.connection;
+    if (!connection) return;
     logger.info('Refreshing all capability values');
     for (const definition of CAPABILITY_DEFINITIONS) {
       if (!this.supportedCapabilities.has(definition.id)) continue;
       const descriptor = this.descriptorCache.get(definition.id);
       if (!descriptor?.readable || !definition.read) continue;
       await this.pollCapabilityOnce(definition.id);
+      if (!this.isConnectionCurrent(connection)) return;
     }
     this.emit('capabilityList', this.getCapabilitySnapshot());
   }
@@ -128,6 +136,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     if (!this.connection) {
       throw new Error('Radio not connected');
     }
+    const connection = this.connection;
 
     const definition = CAPABILITY_DEFINITION_MAP.get(id);
     const descriptor = this.descriptorCache.get(id);
@@ -148,9 +157,11 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
 
       logger.info(`Executing action: ${id}`);
       try {
-        await definition.action(this.connection);
+        await definition.action(connection);
+        this.assertConnectionCurrent(connection, `capability action '${id}'`);
         this.markCapabilityAvailable(id, this.valueCache.get(id)?.value ?? null, true);
       } catch (error) {
+        this.assertConnectionCurrent(connection, `capability action '${id}'`);
         if (isRecoverableOptionalRadioError(error)) {
           this.markCapabilityUnavailable(id, error);
           throw new Error(`Capability '${id}' is currently unavailable`);
@@ -178,26 +189,28 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
         value,
         cachedValue: this.valueCache.get(id)?.value,
         cachedMeta: this.valueCache.get(id)?.meta,
-        queue: this.connection.getRadioIoQueueSnapshot?.(),
+        queue: connection.getRadioIoQueueSnapshot?.(),
       });
     }
 
     try {
-      await definition.write(this.connection, value);
+      await definition.write(connection, value);
+      this.assertConnectionCurrent(connection, `capability write '${id}'`);
       if (isSplitWrite) {
         logger.info('Split capability write completed', {
           value,
           durationMs: Date.now() - writeStartedAt,
-          queue: this.connection.getRadioIoQueueSnapshot?.(),
+          queue: connection.getRadioIoQueueSnapshot?.(),
         });
       }
     } catch (error) {
+      this.assertConnectionCurrent(connection, `capability write '${id}'`);
       if (isSplitWrite) {
         logger.warn('Split capability write failed', {
           value,
           durationMs: Date.now() - writeStartedAt,
           error: error instanceof Error ? error.message : String(error),
-          queue: this.connection.getRadioIoQueueSnapshot?.(),
+          queue: connection.getRadioIoQueueSnapshot?.(),
         });
       }
 
@@ -222,20 +235,23 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     if (id === 'split_enabled') {
       logger.info('Split capability write readback requested', {
         value,
-        queue: this.connection.getRadioIoQueueSnapshot?.(),
+        queue: connection.getRadioIoQueueSnapshot?.(),
       });
       await this.pollCapabilityOnce(id, { queueAfterActive: true, source: 'write-readback' });
+      this.assertConnectionCurrent(connection, `capability write readback '${id}'`);
       logger.info('Split capability write readback completed', {
         value,
         cachedValue: this.valueCache.get(id)?.value,
         cachedMeta: this.valueCache.get(id)?.meta,
-        queue: this.connection.getRadioIoQueueSnapshot?.(),
+        queue: connection.getRadioIoQueueSnapshot?.(),
       });
       return;
     }
 
     setTimeout(() => {
-      void this.pollCapabilityOnce(id);
+      if (this.isConnectionCurrent(connection)) {
+        void this.pollCapabilityOnce(id);
+      }
     }, 500);
   }
 
@@ -316,7 +332,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       .filter((descriptor): descriptor is CapabilityDescriptor => Boolean(descriptor));
   }
 
-  private async resolveDescriptors(connection: IRadioConnection): Promise<void> {
+  private async resolveDescriptors(connection: IRadioConnection): Promise<boolean> {
     this.descriptorCache.clear();
 
     for (const definition of CAPABILITY_DEFINITIONS) {
@@ -325,20 +341,22 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
         const descriptor = definition.resolveDescriptor
           ? await definition.resolveDescriptor(connection)
           : fallbackDescriptor;
+        if (!this.isConnectionCurrent(connection)) return false;
         this.descriptorCache.set(definition.id, descriptor);
       } catch (error) {
+        if (!this.isConnectionCurrent(connection)) return false;
         logger.debug(`Using fallback descriptor for capability ${definition.id}`, error);
         this.descriptorCache.set(definition.id, fallbackDescriptor);
       }
     }
+    return true;
   }
 
-  private async probeCapabilities(): Promise<void> {
-    if (!this.connection) return;
-
+  private async probeCapabilities(connection: IRadioConnection): Promise<void> {
     for (const definition of CAPABILITY_DEFINITIONS) {
       try {
-        const probeResult = await definition.probeSupport(this.connection);
+        const probeResult = await definition.probeSupport(connection);
+        if (!this.isConnectionCurrent(connection)) return;
         const { supported, source } = this.normalizeProbeResult(probeResult);
         if (supported) {
           this.supportedCapabilities.add(definition.id);
@@ -348,6 +366,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
           logger.debug(`Capability supported: ${definition.id}`, { source });
         }
       } catch (error) {
+        if (!this.isConnectionCurrent(connection)) return;
         if (isRecoverableOptionalRadioError(error)) {
           logger.debug(`Capability not supported: ${definition.id} (recoverable probe failure)`);
           continue;
@@ -358,8 +377,9 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     }
   }
 
-  private async readInitialValues(): Promise<void> {
+  private async readInitialValues(connection: IRadioConnection): Promise<void> {
     for (const definition of CAPABILITY_DEFINITIONS) {
+      if (!this.isConnectionCurrent(connection)) return;
       if (!this.supportedCapabilities.has(definition.id)) {
         continue;
       }
@@ -370,6 +390,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       }
 
       await this.pollCapabilityOnce(definition.id);
+      if (!this.isConnectionCurrent(connection)) return;
     }
   }
 
@@ -454,7 +475,8 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     id: string,
     options: { source?: string } = {},
   ): Promise<void> {
-    if (!this.connection) return;
+    const connection = this.connection;
+    if (!connection) return;
 
     const isSplitPoll = id === 'split_enabled';
     const splitPollId = isSplitPoll ? ++this.splitPollSequence : 0;
@@ -472,16 +494,16 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       return;
     }
 
-    if (this.shouldSkipForRadioIoBackpressure(id)) {
+    if (this.shouldSkipForRadioIoBackpressure(id, connection)) {
       return;
     }
 
-    if (this.connection.isCriticalOperationActive?.()) {
+    if (connection.isCriticalOperationActive?.()) {
       if (isSplitPoll) {
         logger.info('Split capability poll queued despite critical radio operation active', {
           pollId: splitPollId,
           source: options.source ?? 'polling',
-          queue: this.connection.getRadioIoQueueSnapshot?.(),
+          queue: connection.getRadioIoQueueSnapshot?.(),
         });
       } else {
         logger.debug(`Skipping capability poll while critical radio operation is active: ${id}`);
@@ -500,18 +522,20 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
           source: options.source ?? 'polling',
           cachedValue: this.valueCache.get(id)?.value,
           cachedMeta: this.valueCache.get(id)?.meta,
-          queue: this.connection.getRadioIoQueueSnapshot?.(),
+          queue: connection.getRadioIoQueueSnapshot?.(),
         });
       }
 
-      const newValue = await definition.read(this.connection);
+      const newValue = await definition.read(connection);
+      if (!this.isConnectionCurrent(connection)) return;
       const cached = this.valueCache.get(id);
 
       // Read additional metadata (e.g. split TX frequency) if supported
       let mergedMeta = cached?.meta;
       if (definition.readMeta) {
         try {
-          const extraMeta = await definition.readMeta(this.connection);
+          const extraMeta = await definition.readMeta(connection);
+          if (!this.isConnectionCurrent(connection)) return;
           if (extraMeta) {
             mergedMeta = { ...(mergedMeta ?? {}), ...extraMeta };
           }
@@ -523,6 +547,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
               error: metaError instanceof Error ? metaError.message : String(metaError),
             });
           }
+          if (!this.isConnectionCurrent(connection)) return;
           logger.debug(`readMeta failed for ${id}`, metaError);
         }
       }
@@ -543,7 +568,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
           cachedValue: cached?.value,
           cachedMeta: cached?.meta,
           changed,
-          queue: this.connection.getRadioIoQueueSnapshot?.(),
+          queue: connection.getRadioIoQueueSnapshot?.(),
         });
       }
 
@@ -574,13 +599,14 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
         this.markRelatedTunerActionAvailable();
       }
     } catch (error) {
+      if (!this.isConnectionCurrent(connection)) return;
       if (isSplitPoll) {
         logger.warn('Split capability poll failed', {
           pollId: splitPollId,
           source: options.source ?? 'polling',
           durationMs: Date.now() - splitPollStartedAt,
           error: error instanceof Error ? error.message : String(error),
-          queue: this.connection.getRadioIoQueueSnapshot?.(),
+          queue: connection.getRadioIoQueueSnapshot?.(),
         });
       }
 
@@ -597,12 +623,15 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     }
   }
 
-  private shouldSkipForRadioIoBackpressure(id: string): boolean {
+  private shouldSkipForRadioIoBackpressure(
+    id: string,
+    connection: IRadioConnection,
+  ): boolean {
     if (id === 'split_enabled') {
       return false;
     }
 
-    const snapshot = this.connection?.getRadioIoQueueSnapshot?.();
+    const snapshot = connection.getRadioIoQueueSnapshot?.();
     const now = Date.now();
     if (!snapshot?.backpressure) {
       if (
@@ -641,12 +670,14 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
   }
 
   private async refreshDescriptorIfNeeded(id: string, definition = CAPABILITY_DEFINITION_MAP.get(id)): Promise<void> {
-    if (!this.connection || !definition?.resolveDescriptor) {
+    const connection = this.connection;
+    if (!connection || !definition?.resolveDescriptor) {
       return;
     }
 
     try {
-      const nextDescriptor = await definition.resolveDescriptor(this.connection);
+      const nextDescriptor = await definition.resolveDescriptor(connection);
+      if (!this.isConnectionCurrent(connection)) return;
       const currentDescriptor = this.descriptorCache.get(id);
       if (!currentDescriptor) {
         this.descriptorCache.set(id, nextDescriptor);
@@ -662,6 +693,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       logger.debug(`Capability descriptor refreshed: ${id}`);
       this.emit('capabilityList', this.getCapabilitySnapshot());
     } catch (error) {
+      if (!this.isConnectionCurrent(connection)) return;
       logger.debug(`Failed to refresh descriptor for ${id}`, error);
     }
   }
@@ -800,6 +832,16 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     if (cached?.availability === 'unavailable') {
       throw new Error(`Capability '${id}' is currently unavailable`);
     }
+  }
+
+  private assertConnectionCurrent(connection: IRadioConnection, operation: string): void {
+    if (!this.isConnectionCurrent(connection)) {
+      throw new Error(`radio session changed during ${operation}`);
+    }
+  }
+
+  private isConnectionCurrent(connection: IRadioConnection): boolean {
+    return this.connection === connection;
   }
 
   private formatCapabilityError(error: unknown): string {

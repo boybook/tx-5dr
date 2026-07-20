@@ -27,6 +27,7 @@ type TestRadioConnection = {
   getType?: ReturnType<typeof vi.fn>;
   getState?: ReturnType<typeof vi.fn>;
   setKnownFrequency?: ReturnType<typeof vi.fn>;
+  canTuneFrequency?: (frequency: number) => boolean | null;
   getTunerCapabilities?: ReturnType<typeof vi.fn>;
   getTunerStatus?: ReturnType<typeof vi.fn>;
   getFrequency?: ReturnType<typeof vi.fn>;
@@ -47,7 +48,9 @@ type PhysicalRadioManagerTestAccessor = {
   connection: TestRadioConnection;
   preconnectedSessionToAdopt?: TestRadioConnection | null;
   lastKnownFrequency: number | null;
+  activeRadioSessionContext: { profileId: string | null; sessionGeneration: number } | null;
   configManager: {
+    getActiveProfileId: ReturnType<typeof vi.fn>;
     getLastEngineMode: ReturnType<typeof vi.fn>;
     getLastSelectedFrequency: ReturnType<typeof vi.fn>;
     getLastVoiceFrequency: ReturnType<typeof vi.fn>;
@@ -66,11 +69,14 @@ type PhysicalRadioManagerTestAccessor = {
   startFrequencyMonitoring: () => void;
   stopFrequencyMonitoring: () => void;
   setupConnectionEventForwarding: () => void;
+  beginRadioSessionContext: () => void;
   handleConnectionError: (error: Error) => void;
   initializeStateMachine: (config: HamlibConfig) => Promise<void>;
   doConnect: (config: HamlibConfig) => Promise<void>;
   markCoreCapabilityUnsupported: (capability: string, error: Error) => void;
   coreCapabilityStates: Record<string, 'unknown' | 'supported' | 'unsupported'>;
+  requireVerifiedSavedFrequencyRestore: boolean;
+  canRestoreSavedFrequency: (frequency: number) => boolean;
 };
 
 function asTestManager(manager: PhysicalRadioManager): PhysicalRadioManagerTestAccessor {
@@ -98,6 +104,27 @@ describe('PhysicalRadioManager', () => {
     send = vi.fn();
     asTestManager(manager).radioActor = { send };
     asTestManager(manager).postConnectSettleMs = 0;
+    asTestManager(manager).activeRadioSessionContext = {
+      profileId: null,
+      sessionGeneration: 0,
+    };
+  });
+
+  it('requires an authoritative target-radio range after a Profile switch', () => {
+    const canTuneFrequency = vi.fn<[number], boolean | null>();
+    asTestManager(manager).connection = { canTuneFrequency };
+
+    canTuneFrequency.mockReturnValue(null);
+    expect(asTestManager(manager).canRestoreSavedFrequency(144_460_000)).toBe(true);
+
+    manager.prepareForProfileActivation();
+    expect(asTestManager(manager).canRestoreSavedFrequency(144_460_000)).toBe(false);
+
+    canTuneFrequency.mockReturnValue(false);
+    expect(asTestManager(manager).canRestoreSavedFrequency(144_460_000)).toBe(false);
+
+    canTuneFrequency.mockReturnValue(true);
+    expect(asTestManager(manager).canRestoreSavedFrequency(144_460_000)).toBe(true);
   });
 
   it('does not report recoverable getMode failures as connection health failures', async () => {
@@ -176,6 +203,32 @@ describe('PhysicalRadioManager', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('does not commit a deferred frequency write after the radio session changes', async () => {
+    const deferred = createDeferred<void>();
+    const oldSetKnownFrequency = vi.fn();
+    const testManager = asTestManager(manager);
+    vi.spyOn(testManager.configManager, 'getActiveProfileId').mockReturnValue('profile-a');
+    testManager.connection = {
+      setFrequency: vi.fn().mockReturnValue(deferred.promise),
+      setKnownFrequency: oldSetKnownFrequency,
+    };
+    testManager.beginRadioSessionContext();
+
+    const pending = manager.setFrequency(14_074_000);
+    await vi.waitFor(() => {
+      expect(testManager.connection.setFrequency).toHaveBeenCalledTimes(1);
+    });
+    const newSetKnownFrequency = vi.fn();
+    testManager.connection = { setKnownFrequency: newSetKnownFrequency };
+    testManager.beginRadioSessionContext();
+    deferred.resolve();
+
+    await expect(pending).resolves.toBe(false);
+    expect(testManager.lastKnownFrequency).toBeNull();
+    expect(oldSetKnownFrequency).not.toHaveBeenCalled();
+    expect(newSetKnownFrequency).not.toHaveBeenCalled();
+  });
+
   it('does not report ICOM WLAN transient frequency fallback as a connection health failure', async () => {
     const getFrequency = vi.fn().mockResolvedValue(0);
     asTestManager(manager).connection = {
@@ -187,6 +240,66 @@ describe('PhysicalRadioManager', () => {
 
     expect(getFrequency).toHaveBeenCalledTimes(1);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('discards a deferred frequency read after the radio session changes', async () => {
+    const deferred = createDeferred<number>();
+    const testManager = asTestManager(manager);
+    vi.spyOn(testManager.configManager, 'getActiveProfileId').mockReturnValue('profile-a');
+    const oldSetKnownFrequency = vi.fn();
+    testManager.connection = {
+      getFrequency: vi.fn().mockReturnValue(deferred.promise),
+      setKnownFrequency: oldSetKnownFrequency,
+    };
+    testManager.beginRadioSessionContext();
+
+    const pending = manager.getFrequency();
+    await vi.waitFor(() => expect(testManager.connection.getFrequency).toHaveBeenCalledTimes(1));
+
+    const newSetKnownFrequency = vi.fn();
+    testManager.connection = {
+      getFrequency: vi.fn().mockResolvedValue(7_100_000),
+      setKnownFrequency: newSetKnownFrequency,
+    };
+    testManager.beginRadioSessionContext();
+    deferred.resolve(14_074_000);
+
+    await expect(pending).resolves.toBe(0);
+    expect(testManager.lastKnownFrequency).toBeNull();
+    expect(oldSetKnownFrequency).not.toHaveBeenCalled();
+    expect(newSetKnownFrequency).not.toHaveBeenCalled();
+  });
+
+  it('propagates PTT failures instead of reporting unconfirmed transmit success', async () => {
+    const failure = new Error('PTT command rejected');
+    asTestManager(manager).connection = {
+      setPTT: vi.fn().mockRejectedValue(failure),
+    };
+
+    await expect(manager.setPTT(true)).rejects.toThrow('PTT command rejected');
+  });
+
+  it('rejects a deferred PTT result after the radio session changes', async () => {
+    const deferred = createDeferred<void>();
+    const testManager = asTestManager(manager);
+    vi.spyOn(testManager.configManager, 'getActiveProfileId').mockReturnValue('profile-a');
+    const oldSetPTT = vi.fn().mockReturnValue(deferred.promise);
+    testManager.connection = { setPTT: oldSetPTT };
+    testManager.beginRadioSessionContext();
+
+    const pending = manager.setPTT(true);
+    await vi.waitFor(() => expect(oldSetPTT).toHaveBeenCalledWith(true));
+
+    const newSetPTT = vi.fn().mockResolvedValue(undefined);
+    testManager.connection = { setPTT: newSetPTT };
+    testManager.beginRadioSessionContext();
+    deferred.resolve();
+
+    await expect(pending).rejects.toMatchObject({
+      code: RadioErrorCode.OPERATION_CANCELLED,
+      message: 'radio session changed during setPTT',
+    });
+    expect(newSetPTT).not.toHaveBeenCalled();
   });
 
   it('reports ICOM WLAN frequency read failure as a health failure after connection threshold escalation', async () => {
@@ -307,6 +420,28 @@ describe('PhysicalRadioManager', () => {
 
     expect(setMode).toHaveBeenCalledWith('USB', 'nochange', { intent: 'digital' });
     expect(manager.getCoreCapabilities().writeRadioMode).toBe(true);
+  });
+
+  it('rejects a deferred mode result after the radio session changes', async () => {
+    const deferred = createDeferred<void>();
+    const testManager = asTestManager(manager);
+    vi.spyOn(testManager.configManager, 'getActiveProfileId').mockReturnValue('profile-a');
+    const oldSetMode = vi.fn().mockReturnValue(deferred.promise);
+    testManager.connection = { setMode: oldSetMode };
+    testManager.beginRadioSessionContext();
+
+    const pending = manager.setMode('USB');
+    await vi.waitFor(() => {
+      expect(oldSetMode).toHaveBeenCalledTimes(1);
+    });
+    testManager.connection = { setMode: vi.fn().mockResolvedValue(undefined) };
+    testManager.beginRadioSessionContext();
+    deferred.resolve();
+
+    await expect(pending).rejects.toMatchObject({
+      code: RadioErrorCode.OPERATION_CANCELLED,
+      message: 'radio session changed during setMode',
+    });
   });
 
   it('clears diagnostics when a capability becomes supported again', async () => {
@@ -758,6 +893,44 @@ describe('PhysicalRadioManager', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('drops a deferred operating-state result from an old radio session', async () => {
+    const deferred = createDeferred<{
+      frequencyApplied: boolean;
+      modeApplied: boolean;
+      appliedMode?: string;
+    }>();
+    const oldSetKnownFrequency = vi.fn();
+    const oldConnection: TestRadioConnection = {
+      applyOperatingState: vi.fn().mockReturnValue(deferred.promise),
+      setKnownFrequency: oldSetKnownFrequency,
+    };
+    const newSetKnownFrequency = vi.fn();
+    const testManager = asTestManager(manager);
+    vi.spyOn(testManager.configManager, 'getActiveProfileId').mockReturnValue('profile-a');
+    testManager.connection = oldConnection;
+    testManager.beginRadioSessionContext();
+    const markCoreCapabilitySupported = vi.spyOn(
+      testManager as unknown as { markCoreCapabilitySupported: (key: string) => void },
+      'markCoreCapabilitySupported',
+    );
+    const refreshAll = vi.spyOn(testManager.capabilityManager, 'refreshAll');
+
+    const pending = manager.applyOperatingState({ frequency: 14_074_000, mode: 'USB' });
+    await vi.waitFor(() => {
+      expect(oldConnection.applyOperatingState).toHaveBeenCalledTimes(1);
+    });
+    testManager.connection = { setKnownFrequency: newSetKnownFrequency };
+    testManager.beginRadioSessionContext();
+    deferred.resolve({ frequencyApplied: true, modeApplied: true, appliedMode: 'USB' });
+
+    await expect(pending).rejects.toThrow('radio session changed during applyOperatingState');
+    expect(testManager.lastKnownFrequency).toBeNull();
+    expect(oldSetKnownFrequency).not.toHaveBeenCalled();
+    expect(newSetKnownFrequency).not.toHaveBeenCalled();
+    expect(markCoreCapabilitySupported).not.toHaveBeenCalled();
+    expect(refreshAll).not.toHaveBeenCalled();
+  });
+
   it('does not treat tolerated mode failures as connection health failures', async () => {
     const applyOperatingState = vi.fn().mockResolvedValue({
       frequencyApplied: true,
@@ -827,6 +1000,42 @@ describe('PhysicalRadioManager', () => {
     expect(result).toMatchObject({ requested: true, applied: true, skipped: false });
     expect(writeCapability).toHaveBeenNthCalledWith(1, 'repeater_offset', 600000);
     expect(writeCapability).toHaveBeenNthCalledWith(2, 'repeater_shift', 'plus');
+  });
+
+  it('does not apply repeater shift to a new session after an offset write completes', async () => {
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+    const testManager = asTestManager(manager);
+    vi.spyOn(testManager.configManager, 'getActiveProfileId').mockReturnValue('profile-a');
+    testManager.connection = { getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB) };
+    testManager.beginRadioSessionContext();
+    vi.spyOn(testManager.capabilityManager, 'getCapabilitySnapshot').mockReturnValue({
+      descriptors: [
+        { id: 'repeater_offset', writable: true },
+        { id: 'repeater_shift', writable: true },
+      ],
+      capabilities: [
+        { id: 'repeater_offset', supported: true, value: 0, updatedAt: 1 },
+        { id: 'repeater_shift', supported: true, value: 'none', updatedAt: 1 },
+      ],
+    } as any);
+    const deferred = createDeferred<void>();
+    const writeCapability = vi.spyOn(testManager.capabilityManager, 'writeCapability')
+      .mockReturnValueOnce(deferred.promise)
+      .mockResolvedValue(undefined);
+
+    const pending = manager.applyRepeaterDuplexConfig({
+      repeaterShift: 'plus',
+      repeaterOffsetHz: 600000,
+    });
+    await vi.waitFor(() => {
+      expect(writeCapability).toHaveBeenCalledWith('repeater_offset', 600000);
+    });
+    testManager.connection = { getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB) };
+    testManager.beginRadioSessionContext();
+    deferred.resolve();
+
+    await expect(pending).rejects.toThrow('radio session changed during repeater duplex config');
+    expect(writeCapability).toHaveBeenCalledTimes(1);
   });
 
   it('clears repeater shift for simplex or digital operating states', async () => {
@@ -904,6 +1113,42 @@ describe('PhysicalRadioManager', () => {
     expect(result).toMatchObject({ requested: true, applied: true, skipped: false });
     expect(writeCapability).toHaveBeenNthCalledWith(1, 'dcs_code', 0);
     expect(writeCapability).toHaveBeenNthCalledWith(2, 'ctcss_tone', 885);
+  });
+
+  it('does not apply a tone to a new session after clearing the old tone type', async () => {
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+    const testManager = asTestManager(manager);
+    vi.spyOn(testManager.configManager, 'getActiveProfileId').mockReturnValue('profile-a');
+    testManager.connection = { getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB) };
+    testManager.beginRadioSessionContext();
+    vi.spyOn(testManager.capabilityManager, 'getCapabilitySnapshot').mockReturnValue({
+      descriptors: [
+        { id: 'ctcss_tone', writable: true },
+        { id: 'dcs_code', writable: true },
+      ],
+      capabilities: [
+        { id: 'ctcss_tone', supported: true, value: 0, updatedAt: 1 },
+        { id: 'dcs_code', supported: true, value: 23, updatedAt: 1 },
+      ],
+    } as any);
+    const deferred = createDeferred<void>();
+    const writeCapability = vi.spyOn(testManager.capabilityManager, 'writeCapability')
+      .mockReturnValueOnce(deferred.promise)
+      .mockResolvedValue(undefined);
+
+    const pending = manager.applyToneSquelchConfig({
+      toneMode: 'ctcss',
+      ctcssToneTenthsHz: 885,
+    });
+    await vi.waitFor(() => {
+      expect(writeCapability).toHaveBeenCalledWith('dcs_code', 0);
+    });
+    testManager.connection = { getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB) };
+    testManager.beginRadioSessionContext();
+    deferred.resolve();
+
+    await expect(pending).rejects.toThrow('radio session changed during tone squelch config');
+    expect(writeCapability).toHaveBeenCalledTimes(1);
   });
 
   it('clears CTCSS before applying a DCS code preset', async () => {
@@ -1045,14 +1290,18 @@ describe('PhysicalRadioManager', () => {
       setKnownFrequency,
     };
     vi.spyOn(manager, 'isConnected').mockReturnValue(true);
-    const emitSpy = vi.spyOn(manager as unknown as { emit: (event: string, payload: number) => void }, 'emit');
+    const emitSpy = vi.spyOn(manager as unknown as { emit: (event: string, payload: number, context?: unknown) => void }, 'emit');
 
     await asTestManager(manager).checkFrequencyChange();
 
     expect(asTestManager(manager).connection.getFrequency).toHaveBeenCalledTimes(1);
     expect(setKnownFrequency).toHaveBeenCalledWith(14075000);
     expect(asTestManager(manager).lastKnownFrequency).toBe(14075000);
-    expect(emitSpy).toHaveBeenCalledWith('radioFrequencyChanged', 14075000);
+    expect(emitSpy).toHaveBeenCalledWith(
+      'radioFrequencyChanged',
+      14075000,
+      expect.objectContaining({ sessionGeneration: expect.any(Number) }),
+    );
   });
 
   it('drops a frequency poll result that started before a frequency write', async () => {
@@ -1067,7 +1316,7 @@ describe('PhysicalRadioManager', () => {
       setKnownFrequency,
     };
     vi.spyOn(manager, 'isConnected').mockReturnValue(true);
-    const emitSpy = vi.spyOn(manager as unknown as { emit: (event: string, payload: number) => void }, 'emit');
+    const emitSpy = vi.spyOn(manager as unknown as { emit: (event: string, payload: number, context?: unknown) => void }, 'emit');
 
     const poll = asTestManager(manager).checkFrequencyChange();
     await Promise.resolve();
@@ -1094,7 +1343,7 @@ describe('PhysicalRadioManager', () => {
       setKnownFrequency,
     };
     vi.spyOn(manager, 'isConnected').mockReturnValue(true);
-    const emitSpy = vi.spyOn(manager as unknown as { emit: (event: string, payload: number) => void }, 'emit');
+    const emitSpy = vi.spyOn(manager as unknown as { emit: (event: string, payload: number, context?: unknown) => void }, 'emit');
 
     await manager.applyOperatingState({ frequency: 14080000 });
     await asTestManager(manager).checkFrequencyChange();
@@ -1116,14 +1365,18 @@ describe('PhysicalRadioManager', () => {
       setKnownFrequency: vi.fn(),
     };
     vi.spyOn(manager, 'isConnected').mockReturnValue(true);
-    const emitSpy = vi.spyOn(manager as unknown as { emit: (event: string, payload: number) => void }, 'emit');
+    const emitSpy = vi.spyOn(manager as unknown as { emit: (event: string, payload: number, context?: unknown) => void }, 'emit');
 
     await manager.applyOperatingState({ frequency: 14080000 });
     await vi.advanceTimersByTimeAsync(2001);
     await asTestManager(manager).checkFrequencyChange();
 
     expect(asTestManager(manager).lastKnownFrequency).toBe(14074000);
-    expect(emitSpy).toHaveBeenCalledWith('radioFrequencyChanged', 14074000);
+    expect(emitSpy).toHaveBeenCalledWith(
+      'radioFrequencyChanged',
+      14074000,
+      expect.objectContaining({ sessionGeneration: expect.any(Number) }),
+    );
     vi.useRealTimers();
   });
 
@@ -1137,7 +1390,7 @@ describe('PhysicalRadioManager', () => {
     asTestManager(manager).lastKnownFrequency = 14074000;
     asTestManager(manager).connection = connection as unknown as TestRadioConnection;
     asTestManager(manager).setupConnectionEventForwarding();
-    const emitSpy = vi.spyOn(manager as unknown as { emit: (event: string, payload: number) => void }, 'emit');
+    const emitSpy = vi.spyOn(manager as unknown as { emit: (event: string, payload: number, context?: unknown) => void }, 'emit');
 
     await manager.applyOperatingState({ frequency: 14080000 });
     connection.emit('frequencyChanged', 14074000);
@@ -1145,6 +1398,51 @@ describe('PhysicalRadioManager', () => {
     expect(asTestManager(manager).lastKnownFrequency).toBe(14080000);
     expect(emitSpy).not.toHaveBeenCalledWith('radioFrequencyChanged', 14074000);
     vi.useRealTimers();
+  });
+
+  it('drops frequency events from the Profile that no longer owns the radio session', () => {
+    const oldConnection = Object.assign(new EventEmitter(), {
+      setKnownFrequency: vi.fn(),
+    });
+    const testManager = asTestManager(manager);
+    const getActiveProfileId = vi.spyOn(testManager.configManager, 'getActiveProfileId');
+    getActiveProfileId.mockReturnValue('profile-old');
+    testManager.connection = oldConnection as unknown as TestRadioConnection;
+    testManager.beginRadioSessionContext();
+    testManager.setupConnectionEventForwarding();
+
+    getActiveProfileId.mockReturnValue('profile-new');
+    testManager.beginRadioSessionContext();
+    const listener = vi.fn();
+    manager.on('radioFrequencyChanged', listener);
+
+    oldConnection.emit('frequencyChanged', 14_075_000);
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(testManager.lastKnownFrequency).toBeNull();
+    expect(manager.isCurrentRadioSessionContext({
+      profileId: 'profile-old',
+      sessionGeneration: 1,
+    })).toBe(false);
+  });
+
+  it('invalidates the active radio session as soon as disconnect begins', async () => {
+    const testManager = asTestManager(manager);
+    testManager.radioActor = null;
+    vi.spyOn(testManager.configManager, 'getActiveProfileId').mockReturnValue('profile-a');
+    testManager.connection = {
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      off: vi.fn(),
+    };
+    testManager.beginRadioSessionContext();
+    const context = {
+      profileId: 'profile-a',
+      sessionGeneration: 1,
+    };
+
+    expect(manager.isCurrentRadioSessionContext(context)).toBe(true);
+    await manager.disconnect('test disconnect');
+    expect(manager.isCurrentRadioSessionContext(context)).toBe(false);
   });
 
   it('queues capability refreshes for ICOM WLAN frequency monitor changes', async () => {

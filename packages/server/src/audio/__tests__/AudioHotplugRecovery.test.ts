@@ -14,7 +14,10 @@ const { mockState, mockConfigManager, MockRtAudio } = vi.hoisted(() => {
       sampleRates?: number[];
       isDefaultInput?: boolean;
       isDefaultOutput?: boolean;
+      inputNativeId?: string;
+      outputNativeId?: string;
     }>,
+    apiName: 'Mock',
     openCalls: [] as Array<{
       direction: 'input' | 'output';
       deviceId: number;
@@ -29,6 +32,10 @@ const { mockState, mockConfigManager, MockRtAudio } = vi.hoisted(() => {
 
     getDevices() {
       return state.devices;
+    }
+
+    getApi() {
+      return state.apiName;
     }
 
     getDefaultInputDevice() {
@@ -111,6 +118,8 @@ function setAudioConfig(overrides: Partial<{
   outputSampleRate: number;
   inputBufferSize: number;
   outputBufferSize: number;
+  inputRouteKey?: string;
+  outputRouteKey?: string;
 }> = {}) {
   mockConfigManager.getAudioConfig.mockReturnValue({
     inputDeviceName: 'IC-705',
@@ -125,6 +134,7 @@ describe('audio hotplug recovery', () => {
   beforeEach(() => {
     mockState.devices = [];
     mockState.openCalls = [];
+    mockState.apiName = 'Mock';
     mockConfigManager.getAudioConfig.mockReset();
     mockConfigManager.getOpenWebRXStations.mockClear();
     mockConfigManager.getRadioConfig.mockClear();
@@ -316,6 +326,46 @@ describe('audio hotplug recovery', () => {
       { id: 7, name: 'IC-705', inputChannels: 1, outputChannels: 1, preferredSampleRate: 48000 },
     ];
     await expect(manager.resolveInputDeviceId('IC-705')).resolves.toBe('input-7');
+  });
+
+  it('never reuses a numeric id after another Pulse route takes it', async () => {
+    mockState.apiName = 'PulseAudio';
+    const routeA = 'rtaudio:pulse:alsa_input.usb-ICOM_A-00.analog-stereo:input';
+    setAudioConfig({ inputDeviceName: 'USB Audio CODEC', inputRouteKey: routeA });
+    mockState.devices = [{
+      id: 3,
+      name: 'USB Audio CODEC',
+      inputChannels: 1,
+      preferredSampleRate: 48000,
+      inputNativeId: 'alsa_input.usb-ICOM_A-00.analog-stereo',
+    }];
+    await AudioDeviceManager.getInstance().getAllDevices();
+
+    mockState.devices = [{
+      id: 3,
+      name: 'USB Audio CODEC',
+      inputChannels: 1,
+      preferredSampleRate: 48000,
+      inputNativeId: 'alsa_input.usb-ICOM_B-00.analog-stereo',
+    }];
+    const streamManager = new AudioStreamManager();
+    await expect(streamManager.startStream()).rejects.toMatchObject({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+    });
+    expect(mockState.openCalls).toHaveLength(0);
+
+    mockState.devices = [{
+      id: 7,
+      name: 'USB Audio CODEC',
+      inputChannels: 1,
+      preferredSampleRate: 48000,
+      inputNativeId: 'alsa_input.usb-ICOM_A-00.analog-stereo',
+    }];
+    await streamManager.startStream();
+    expect(mockState.openCalls).toContainEqual(expect.objectContaining({
+      direction: 'input',
+      deviceId: 7,
+    }));
   });
 
   it('resolves empty audio settings to default devices', async () => {
@@ -573,7 +623,7 @@ describe('audio hotplug recovery', () => {
     ];
 
     const streamManager = new AudioStreamManager();
-    await streamManager.startStream('input-3');
+    await streamManager.startStream();
 
     expect(mockState.openCalls).toContainEqual(expect.objectContaining({
       direction: 'input',
@@ -583,6 +633,20 @@ describe('audio hotplug recovery', () => {
     expect(streamManager.getStatus().inputDeviceId).toBe('input-7');
   });
 
+  it('rejects ambiguous unqualified inputs', async () => {
+    mockState.devices = [
+      { id: 3, name: 'USB Audio CODEC', inputChannels: 1, preferredSampleRate: 48000 },
+      { id: 7, name: 'USB Audio CODEC', inputChannels: 1, preferredSampleRate: 48000 },
+    ];
+    setAudioConfig({ inputDeviceName: 'USB Audio CODEC' });
+
+    const streamManager = new AudioStreamManager();
+    await expect(streamManager.startStream()).rejects.toMatchObject({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+    });
+    expect(mockState.openCalls).toHaveLength(0);
+  });
+
   it('raises a temporary unavailable error when the configured input device is still missing', async () => {
     mockState.devices = [
       { id: 5, name: 'Built-in Mic', inputChannels: 1, preferredSampleRate: 48000, isDefaultInput: true },
@@ -590,7 +654,7 @@ describe('audio hotplug recovery', () => {
 
     const streamManager = new AudioStreamManager();
 
-    await expect(streamManager.startStream('input-3')).rejects.toMatchObject({
+    await expect(streamManager.startStream()).rejects.toMatchObject({
       code: RadioErrorCode.DEVICE_NOT_FOUND,
       userMessageKey: 'radio:audioSidecar.errorInputDeviceUnavailable',
       userMessageParams: { deviceName: 'IC-705' },
@@ -756,7 +820,7 @@ describe('audio hotplug recovery', () => {
     ];
 
     const streamManager = new AudioStreamManager();
-    await streamManager.startOutput('output-3');
+    await streamManager.startOutput();
 
     expect(mockState.openCalls).toContainEqual(expect.objectContaining({
       direction: 'output',

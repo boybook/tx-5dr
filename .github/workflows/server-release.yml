@@ -56,14 +56,17 @@ jobs:
             libasound2-dev libpulse-dev \
             libhamlib-dev libhamlib4 \
             libopus-dev \
-            build-essential python3-dev pkg-config \
+            build-essential python3-dev pkg-config cmake \
             ruby-dev rpm
 
       - name: Install fpm
         run: sudo gem install fpm --no-document
 
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --immutable
+
+      - name: Verify patched Audify native binding
+        run: yarn verify:audify-native
 
       - name: Prepare server build metadata
         env:

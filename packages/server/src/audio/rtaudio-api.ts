@@ -65,7 +65,7 @@ function expectedApiForBackend(backend: RtAudioBackendName): number | null {
   }
 }
 
-function getActualApiName(instance: RtAudioInstance): string | null {
+export function getRtAudioInstanceApiName(instance: RtAudioInstance): string | null {
   const maybeGetApi = (instance as unknown as { getApi?: () => string }).getApi;
   if (typeof maybeGetApi !== 'function') return null;
   try {
@@ -119,7 +119,7 @@ function chooseLinuxAutoApi(log: LoggerLike): number {
   for (const api of candidates) {
     try {
       const instance = instantiate(api);
-      const actualApi = getActualApiName(instance) ?? API_DISPLAY_NAMES[api] ?? String(api);
+      const actualApi = getRtAudioInstanceApiName(instance) ?? API_DISPLAY_NAMES[api] ?? String(api);
       const count = getDeviceCount(instance);
       log.debug('Probed RtAudio backend candidate', {
         requestedApi: API_DISPLAY_NAMES[api] ?? api,
@@ -194,11 +194,19 @@ export function createRtAudioInstance(options: {
   const log = options.logger ?? logger;
   const api = getSelectedRtAudioApi(log);
   const instance = instantiate(api);
-  const actualApi = getActualApiName(instance);
+  const actualApi = getRtAudioInstanceApiName(instance);
   log.debug('Created RtAudio instance', {
     purpose: options.purpose,
     requestedApi: API_DISPLAY_NAMES[api] ?? api,
     actualApi,
   });
   return instance;
+}
+
+export function isAlsaRtAudioInstance(instance: RtAudioInstance): boolean {
+  return getRtAudioInstanceApiName(instance)?.toLowerCase().includes('alsa') === true;
+}
+
+export function isPulseRtAudioInstance(instance: RtAudioInstance): boolean {
+  return getRtAudioInstanceApiName(instance)?.toLowerCase().includes('pulse') === true;
 }

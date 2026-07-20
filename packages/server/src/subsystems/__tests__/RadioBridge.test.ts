@@ -22,8 +22,23 @@ function createRadioManagerStub() {
     getMeterCapabilities: vi.fn().mockReturnValue(undefined),
     getConnectionStatus: vi.fn().mockReturnValue(RadioConnectionStatus.CONNECTED),
     isConnected: vi.fn().mockReturnValue(true),
+    getCurrentRadioSessionContext: vi.fn().mockReturnValue({
+      profileId: 'profile-a',
+      sessionGeneration: 1,
+    }),
+    isCurrentRadioSessionContext: vi.fn((context: { profileId: string | null; sessionGeneration: number }) => (
+      context.profileId === 'profile-a' && context.sessionGeneration === 1
+    )),
     setFrequency: vi.fn(),
   });
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 describe('RadioBridge', () => {
@@ -70,6 +85,45 @@ describe('RadioBridge', () => {
       },
       tunerCapabilities: { supported: true, hasSwitch: false, hasManualTune: false },
     }));
+  });
+
+  it('drops a connected handler that completes after its radio session is replaced', async () => {
+    const radioManager = createRadioManagerStub();
+    const radioInfo = createDeferred<{ manufacturer: string; model: string }>();
+    radioManager.getRadioInfo.mockReturnValueOnce(radioInfo.promise);
+    let sessionCurrent = true;
+    radioManager.isCurrentRadioSessionContext.mockImplementation(() => sessionCurrent);
+    const engineEmitter = new EventEmitter();
+    const radioStatusChanged = vi.fn();
+    engineEmitter.on('radioStatusChanged', radioStatusChanged);
+    const lifecycle = {
+      getIsRunning: vi.fn().mockReturnValue(false),
+      getEngineState: vi.fn().mockReturnValue('idle'),
+      start: vi.fn().mockResolvedValue(undefined),
+      sendRadioDisconnected: vi.fn(),
+    };
+    const bridge = new RadioBridge({
+      engineEmitter: engineEmitter as any,
+      radioManager: radioManager as any,
+      frequencyManager: { findMatchingPreset: vi.fn() } as any,
+      slotPackManager: { clearInMemory: vi.fn() } as any,
+      operatorManager: { stopAllOperators: vi.fn() } as any,
+      getTransmissionPipeline: () => ({ getIsPTTActive: vi.fn().mockReturnValue(false) } as any),
+      getEngineLifecycle: () => lifecycle as any,
+      getEngineMode: () => 'digital',
+    });
+    bridge.wasRunningBeforeDisconnect = true;
+    bridge.setupListeners();
+
+    radioManager.emit('connected');
+    await vi.waitFor(() => expect(radioManager.getRadioInfo).toHaveBeenCalledTimes(1));
+    sessionCurrent = false;
+    radioInfo.resolve({ manufacturer: 'ICOM', model: 'IC-9700' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(radioStatusChanged).not.toHaveBeenCalledWith(expect.objectContaining({ connected: true }));
+    expect(radioManager.getTunerCapabilities).not.toHaveBeenCalled();
+    expect(lifecycle.start).not.toHaveBeenCalled();
   });
 
   it('does not retry engine restore on audio failure (handled by AudioSidecarController)', async () => {
@@ -154,7 +208,10 @@ describe('RadioBridge', () => {
     });
 
     bridge.setupListeners();
-    radioManager.emit('radioFrequencyChanged', 14270000);
+    radioManager.emit('radioFrequencyChanged', 14270000, {
+      profileId: 'profile-a',
+      sessionGeneration: 1,
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(updateLastVoiceFrequency).toHaveBeenCalledWith({
@@ -162,7 +219,7 @@ describe('RadioBridge', () => {
       radioMode: 'USB',
       band: '20m',
       description: '14.270 MHz 20m Calling',
-    });
+    }, 'profile-a');
     expect(updateLastSelectedFrequency).not.toHaveBeenCalled();
     expect(frequencyChanged).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 14270000,
@@ -210,7 +267,10 @@ describe('RadioBridge', () => {
     });
 
     bridge.setupListeners();
-    radioManager.emit('radioFrequencyChanged', 14123456);
+    radioManager.emit('radioFrequencyChanged', 14123456, {
+      profileId: 'profile-a',
+      sessionGeneration: 1,
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(updateLastVoiceFrequency).toHaveBeenCalledWith({
@@ -218,7 +278,7 @@ describe('RadioBridge', () => {
       radioMode: 'USB',
       band: '20m',
       description: '14.123 MHz 20m',
-    });
+    }, 'profile-a');
     expect(updateLastSelectedFrequency).not.toHaveBeenCalled();
     expect(frequencyChanged).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 14123456,
@@ -267,7 +327,10 @@ describe('RadioBridge', () => {
     });
 
     bridge.setupListeners();
-    radioManager.emit('radioFrequencyChanged', 7035000);
+    radioManager.emit('radioFrequencyChanged', 7035000, {
+      profileId: 'profile-a',
+      sessionGeneration: 1,
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(updateLastCWFrequency).toHaveBeenCalledWith({
@@ -275,7 +338,7 @@ describe('RadioBridge', () => {
       radioMode: 'CW',
       band: '40m',
       description: '7.035 MHz 40m',
-    });
+    }, 'profile-a');
     expect(updateLastSelectedFrequency).not.toHaveBeenCalled();
     expect(frequencyChanged).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 7035000,
@@ -286,7 +349,7 @@ describe('RadioBridge', () => {
     }));
   });
 
-  it('uses the current digital mode for radio-origin digital frequency changes', async () => {
+  it('drops radio events from a stale Profile session before persistence or broadcast', async () => {
     const radioManager = createRadioManagerStub();
     const engineEmitter = new EventEmitter();
     const frequencyChanged = vi.fn();
@@ -316,21 +379,71 @@ describe('RadioBridge', () => {
       getCurrentModeName: () => 'FT4',
     });
 
+    vi.spyOn(configManager, 'getActiveProfileId').mockReturnValue('profile-new');
+
     bridge.setupListeners();
-    radioManager.emit('radioFrequencyChanged', 7047500);
+    radioManager.emit('radioFrequencyChanged', 7047500, {
+      profileId: 'profile-old',
+      sessionGeneration: 7,
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
-      frequency: 7047500,
-      mode: 'FT4',
-      band: '40m',
-    }));
+    expect(updateLastSelectedFrequency).not.toHaveBeenCalled();
     expect(updateLastVoiceFrequency).not.toHaveBeenCalled();
     expect(updateLastCWFrequency).not.toHaveBeenCalled();
-    expect(frequencyChanged).toHaveBeenCalledWith(expect.objectContaining({
-      frequency: 7047500,
-      mode: 'FT4',
-      source: 'radio',
-    }));
+    expect(frequencyChanged).not.toHaveBeenCalled();
+  });
+
+  it('drops global side effects when the radio session changes during persistence', async () => {
+    const radioManager = createRadioManagerStub();
+    const engineEmitter = new EventEmitter();
+    const frequencyChanged = vi.fn();
+    const clearInMemory = vi.fn();
+    engineEmitter.on('frequencyChanged', frequencyChanged);
+
+    const persistence = createDeferred<void>();
+    const configManager = ConfigManager.getInstance();
+    const updateLastSelectedFrequency = vi.spyOn(configManager, 'updateLastSelectedFrequency')
+      .mockReturnValueOnce(persistence.promise);
+
+    const bridge = new RadioBridge({
+      engineEmitter: engineEmitter as any,
+      radioManager: radioManager as any,
+      frequencyManager: {
+        getPresets: vi.fn().mockReturnValue([
+          { frequency: 14074000, mode: 'FT8', band: '20m', radioMode: 'USB', description: '14.074 MHz 20m' },
+        ]),
+      } as any,
+      slotPackManager: { clearInMemory } as any,
+      operatorManager: { stopAllOperators: vi.fn() } as any,
+      getTransmissionPipeline: () => ({ getIsPTTActive: vi.fn().mockReturnValue(false) } as any),
+      getEngineLifecycle: () => ({
+        getIsRunning: vi.fn().mockReturnValue(false),
+        getEngineState: vi.fn().mockReturnValue('idle'),
+        start: vi.fn(),
+        sendRadioDisconnected: vi.fn(),
+      } as any),
+      getEngineMode: () => 'digital',
+      getCurrentModeName: () => 'FT8',
+    });
+
+    bridge.setupListeners();
+    radioManager.emit('radioFrequencyChanged', 14074000, {
+      profileId: 'profile-a',
+      sessionGeneration: 1,
+    });
+    await vi.waitFor(() => {
+      expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
+        frequency: 14074000,
+      }), 'profile-a');
+    });
+
+    radioManager.isCurrentRadioSessionContext.mockReturnValue(false);
+    persistence.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(radioManager.isCurrentRadioSessionContext).toHaveBeenCalledTimes(2);
+    expect(clearInMemory).not.toHaveBeenCalled();
+    expect(frequencyChanged).not.toHaveBeenCalled();
   });
 });

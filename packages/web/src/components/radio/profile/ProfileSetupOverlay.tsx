@@ -20,6 +20,7 @@ import type { HamlibConfig, AudioDeviceSettings as AudioDeviceSettingsType, Supp
 import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceSettings';
 import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
 import { matchAudioDeviceForRig } from './radioAudioDeviceMapping';
+import { assessProfileActivation } from './profileActivationResult';
 
 const NEW_PROFILE_AUDIO_DEFAULTS: AudioDeviceSettingsType = {
   outputSampleFormat: 'int16',
@@ -46,6 +47,8 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
   const [audioConfig, setAudioConfig] = useState<AudioDeviceSettingsType>(NEW_PROFILE_AUDIO_DEFAULTS);
   const [profileName, setProfileName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [keepOpenForActivation, setKeepOpenForActivation] = useState(false);
+  const [pendingActivationProfile, setPendingActivationProfile] = useState<{ id: string; name: string } | null>(null);
   const [rigs, setRigs] = useState<SupportedRig[]>([]);
 
   const radioSettingsRef = useRef<RadioDeviceSettingsRef | null>(null);
@@ -88,6 +91,8 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
           ...prev,
           ...(result.inputDeviceName ? { inputDeviceName: result.inputDeviceName } : {}),
           ...(result.outputDeviceName ? { outputDeviceName: result.outputDeviceName } : {}),
+          ...(result.inputRouteKey ? { inputRouteKey: result.inputRouteKey } : {}),
+          ...(result.outputRouteKey ? { outputRouteKey: result.outputRouteKey } : {}),
           ...(result.inputSampleRate ? { inputSampleRate: result.inputSampleRate } : {}),
           ...(result.outputSampleRate ? { outputSampleRate: result.outputSampleRate } : {}),
         }));
@@ -152,18 +157,37 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
   const handleFinish = async () => {
     const name = profileName.trim() || getDefaultName();
     setIsCreating(true);
+    setKeepOpenForActivation(true);
     try {
-      const audioConfigToSave = audioSettingsRef.current?.getSettings() ?? audioConfig;
-      const result = await api.createProfile({
-        name,
-        radio: radioConfig,
-        audio: audioConfigToSave,
-      });
-      // 创建后立即激活
-      if (!result.profile) throw new Error('Profile creation returned no data');
-      await api.activateProfile(result.profile.id);
+      let profileToActivate = pendingActivationProfile;
+      if (!profileToActivate) {
+        const audioConfigToSave = audioSettingsRef.current?.getSettings() ?? audioConfig;
+        const result = await api.createProfile({
+          name,
+          radio: radioConfig,
+          audio: audioConfigToSave,
+        });
+        if (!result.profile) throw new Error('Profile creation returned no data');
+        profileToActivate = { id: result.profile.id, name: result.profile.name };
+        setPendingActivationProfile(profileToActivate);
+      }
+
+      const activationResult = await api.activateProfile(profileToActivate.id);
+      const activation = assessProfileActivation(activationResult);
+      if (!activation.success) {
+        addToast({
+          title: t('settings:profileSetup.createFailed'),
+          description: activation.error || t('common:action.retry'),
+          color: 'danger',
+          timeout: 5000,
+        });
+        return;
+      }
+
+      setPendingActivationProfile(null);
+      setKeepOpenForActivation(false);
       addToast({
-        title: t('settings:profileSetup.created', { name }),
+        title: t('settings:profileSetup.created', { name: profileToActivate.name }),
         description: t('settings:profileSetup.readyToUse'),
         color: 'success',
         timeout: 4000
@@ -268,7 +292,7 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
 
   return (
     <Modal
-      isOpen={isOpen}
+      isOpen={isOpen || keepOpenForActivation}
       isDismissable={false}
       hideCloseButton
       size="3xl"
@@ -310,6 +334,7 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
               <Button
                 variant="light"
                 onPress={handleBack}
+                isDisabled={isCreating || !!pendingActivationProfile}
                 startContent={<FontAwesomeIcon icon={faArrowLeft} />}
               >
                 {t('settings:profileSetup.back')}
@@ -330,7 +355,9 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
                     isLoading={isCreating}
                     startContent={!isCreating ? <FontAwesomeIcon icon={faCheck} /> : undefined}
                   >
-                    {t('settings:profileSetup.finish')}
+                    {pendingActivationProfile
+                      ? t('common:action.retry')
+                      : t('settings:profileSetup.finish')}
                   </Button>
                 )}
               </div>

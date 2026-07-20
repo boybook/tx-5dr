@@ -73,6 +73,8 @@ interface SpectrumControllerLike {
 }
 
 type SplitSupportState = 'unknown' | 'supported' | 'unsupported';
+type EmpiricalModeSupport = 'supported' | 'unsupported';
+type RxFrequencyRange = Awaited<ReturnType<HamLib['getFrequencyRanges']>>['rx'][number];
 type TxFrequencyRange = Awaited<ReturnType<HamLib['getFrequencyRanges']>>['tx'][number];
 type RfPowerStepTableEntry = {
   normalized: number;
@@ -83,6 +85,25 @@ type RfPowerStepTableEntry = {
     min: number;
     max: number;
   };
+};
+
+type ModeWritePlan = {
+  requestedMode: string;
+  preferredMode: string;
+  candidates: string[];
+  dataMode?: string;
+  cachedFallback: boolean;
+};
+
+type ModeWriteResult = {
+  appliedMode: string;
+  degraded: boolean;
+  fallbackReason?: string;
+};
+
+type HamlibOperationContext = {
+  sessionId: number;
+  rig: HamLib | null;
 };
 
 const DATA_TO_BASE_MODE: Record<string, string> = {
@@ -175,6 +196,126 @@ function normalizeModeName(mode: string): string {
   return mode.trim().toUpperCase();
 }
 
+function collectModeWriteErrorEvidence(error: unknown): {
+  text: string;
+  radioCodes: Set<string>;
+  hamlibCodes: Set<number>;
+} {
+  const messages: string[] = [];
+  const radioCodes = new Set<string>();
+  const hamlibCodes = new Set<number>();
+  const pending: unknown[] = [error];
+  const visited = new Set<object>();
+
+  while (pending.length > 0) {
+    const current = pending.shift();
+    if (current === null || current === undefined) {
+      continue;
+    }
+
+    if (typeof current !== 'object') {
+      messages.push(String(current));
+      continue;
+    }
+
+    if (visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+
+    const record = current as Record<string, unknown>;
+    if (typeof record.message === 'string') messages.push(record.message);
+    if (typeof record.userMessage === 'string') messages.push(record.userMessage);
+    if (typeof record.code === 'string') radioCodes.add(record.code);
+    if (typeof record.hamlibCode === 'number') hamlibCodes.add(record.hamlibCode);
+
+    if (record.context && typeof record.context === 'object') {
+      const context = record.context as Record<string, unknown>;
+      if (typeof context.rawHamlibTrace === 'string') messages.push(context.rawHamlibTrace);
+      if (typeof context.nativeCode === 'string') radioCodes.add(context.nativeCode);
+      if (typeof context.nativeCode === 'number') hamlibCodes.add(context.nativeCode);
+    }
+
+    if (record.cause && record.cause !== current) {
+      pending.push(record.cause);
+    }
+  }
+
+  return {
+    text: messages.join('\n').toLowerCase(),
+    radioCodes,
+    hamlibCodes,
+  };
+}
+
+function isExplicitUnsupportedModeError(
+  error: unknown,
+  bandwidth?: RadioModeBandwidth,
+): boolean {
+  const { text, radioCodes, hamlibCodes } = collectModeWriteErrorEvidence(error);
+
+  const nonFallbackRadioCodes = [
+    RadioErrorCode.CONNECTION_FAILED,
+    RadioErrorCode.CONNECTION_TIMEOUT,
+    RadioErrorCode.CONNECTION_LOST,
+    RadioErrorCode.DEVICE_ERROR,
+    RadioErrorCode.INVALID_STATE,
+    RadioErrorCode.NETWORK_ERROR,
+    RadioErrorCode.OPERATION_CANCELLED,
+    RadioErrorCode.OPERATION_TIMEOUT,
+  ];
+  if (nonFallbackRadioCodes.some((code) => radioCodes.has(code))) {
+    return false;
+  }
+
+  // Hamlib EIO, ETIMEOUT and EPROTO are transport/session failures, never a
+  // reason to issue a second mode write.
+  if ([-2, -4, -8].some((code) => hamlibCodes.has(code))) {
+    return false;
+  }
+
+  const nonFallbackPatterns = [
+    /\b(?:timeout|timed out|etimedout)\b/,
+    /hamlib_global_lock_timeout/,
+    /\b(?:disconnect(?:ed)?|connection lost|not connected)\b/,
+    /\b(?:session changed|cancelled|canceled|aborted)\b/,
+    /\b(?:i\/o error|io error|input\/output error|communication error|protocol error)\b/,
+    /\b(?:rig is not open|not initialized|has been destroyed)\b/,
+  ];
+  if (nonFallbackPatterns.some((pattern) => pattern.test(text))) {
+    return false;
+  }
+
+  if (radioCodes.has(RadioErrorCode.UNSUPPORTED_MODE)) {
+    return true;
+  }
+
+  // Current node-hamlib uses -3 for ENIMPL and -11 for ENAVAIL. Both mean the
+  // candidate is unavailable for this radio/backend combination.
+  if (hamlibCodes.has(-3) || hamlibCodes.has(-11)) {
+    return true;
+  }
+
+  const explicitUnsupportedPatterns = [
+    /\b(?:rig_)?enimpl\b/,
+    /\b(?:rig_)?enavail\b/,
+    /\b(?:not implemented|unimplemented|feature not available)\b/,
+    /\b(?:unsupported mode|mode (?:is )?not supported|unsupported command)\b/,
+    /\binvalid mode\b/,
+  ];
+
+  if (explicitUnsupportedPatterns.some((pattern) => pattern.test(text))) {
+    return true;
+  }
+
+  // EINVAL can describe either the mode or its filter width. A generic
+  // "Invalid parameter" is only safe to attribute to the mode when no custom
+  // bandwidth was sent with the same call.
+  const usesSafeFallbackBandwidth = bandwidth === undefined || bandwidth === 'nochange';
+  return usesSafeFallbackBandwidth
+    && hamlibCodes.has(-1)
+    && /\binvalid parameter\b/.test(text);
+}
 
 function normalizePowerStateCode(code: number): string {
   switch (code) {
@@ -335,6 +476,13 @@ export class HamlibConnection
   private supportedModes: Set<string> = new Set();
 
   /**
+   * 当前 CAT 会话中由真实写入结果确认的模式能力。
+   * Hamlib 的 advertised modes 在部分 Icom 型号上会漏报 PKTUSB。
+   */
+  private empiricalModeSupport: Map<string, EmpiricalModeSupport> = new Map();
+  private empiricalModeSupportSessionId = 0;
+
+  /**
    * 电台支持的 function 集合（连接时检测）
    */
   private supportedFunctions: Set<string> = new Set();
@@ -352,6 +500,7 @@ export class HamlibConnection
   /**
    * Hamlib rig caps 中声明的 TX 频率/功率范围。
    */
+  private rxFrequencyRanges: RxFrequencyRange[] = [];
   private txFrequencyRanges: TxFrequencyRange[] = [];
 
   /**
@@ -483,6 +632,7 @@ export class HamlibConnection
     // 保存配置
     this.currentConfig = config;
     this.ioSessionId += 1;
+    this.resetEmpiricalModeSupport();
     this.backgroundTasksStarted = false;
 
     // 更新状态
@@ -643,7 +793,7 @@ export class HamlibConnection
     await this.detectSupportedFunctions();
     await this.detectSupportedParms();
     await this.detectSupportedVfoOps();
-    await this.detectTxFrequencyRanges();
+    await this.detectFrequencyRanges();
     await this.initializeRigStateSnapshot();
 
     // 触发连接成功事件
@@ -656,6 +806,7 @@ export class HamlibConnection
   async disconnect(reason?: string): Promise<void> {
     logger.info(`Disconnecting: ${reason || 'no reason'}`);
     this.ioSessionId += 1;
+    this.resetEmpiricalModeSupport();
     this.backgroundTasksStarted = false;
 
     // 停止数值表轮询
@@ -669,6 +820,7 @@ export class HamlibConnection
     this.supportedFunctions.clear();
     this.supportedParms.clear();
     this.supportedVfoOps.clear();
+    this.rxFrequencyRanges = [];
     this.txFrequencyRanges = [];
     this.currentRadioMode = null;
 
@@ -688,8 +840,8 @@ export class HamlibConnection
    * 设置电台频率
    */
   async setFrequency(frequency: number): Promise<void> {
-    await this.runSerializedTask('setFrequency', async () => {
-      await this.performFrequencyWrite(frequency);
+    await this.runSerializedTask('setFrequency', async (context) => {
+      await this.performFrequencyWrite(frequency, context);
     }, { critical: true });
   }
 
@@ -698,6 +850,16 @@ export class HamlibConnection
    */
   setKnownFrequency(frequencyHz: number): void {
     this.currentFrequencyHz = frequencyHz;
+  }
+
+  canTuneFrequency(frequencyHz: number): boolean | null {
+    if (this.rxFrequencyRanges.length === 0) {
+      return null;
+    }
+
+    return this.rxFrequencyRanges.some(
+      (range) => frequencyHz >= range.startFreq && frequencyHz <= range.endFreq,
+    );
   }
 
   /**
@@ -830,31 +992,40 @@ export class HamlibConnection
    * 设置模式
    */
   async setMode(mode: string, bandwidth?: RadioModeBandwidth, options?: SetRadioModeOptions): Promise<void> {
-    await this.runSerializedTask('setMode', async () => {
-      await this.performModeWrite(mode, bandwidth, options);
+    await this.runSerializedTask('setMode', async (context) => {
+      await this.performModeWrite(mode, context, bandwidth, options);
     }, { critical: true });
   }
 
   async applyOperatingState(request: ApplyOperatingStateRequest): Promise<ApplyOperatingStateResult> {
-    return this.runSerializedTask('applyOperatingState', async () => {
+    return this.runSerializedTask('applyOperatingState', async (context) => {
       this.checkConnected();
 
       let frequencyApplied = false;
       let modeApplied = false;
       let modeError: Error | undefined;
+      let modeWriteResult: ModeWriteResult | undefined;
 
       if (request.frequency !== undefined) {
-        await this.performFrequencyWrite(request.frequency);
+        await this.performFrequencyWrite(request.frequency, context);
+        this.ensureOperationContext(context);
         frequencyApplied = true;
       }
 
       if (request.mode) {
         try {
-          await this.performModeWrite(request.mode, request.bandwidth, request.options);
+          modeWriteResult = await this.performModeWrite(
+            request.mode,
+            context,
+            request.bandwidth,
+            request.options,
+          );
+          this.ensureOperationContext(context);
           modeApplied = true;
 
           if (request.frequency !== undefined) {
-            await this.performFrequencyWrite(request.frequency);
+            await this.performFrequencyWrite(request.frequency, context);
+            this.ensureOperationContext(context);
           }
         } catch (error) {
           if (!request.tolerateModeFailure) {
@@ -865,7 +1036,18 @@ export class HamlibConnection
         }
       }
 
-      return { frequencyApplied, modeApplied, modeError };
+      return {
+        frequencyApplied,
+        modeApplied,
+        modeError,
+        ...(modeWriteResult ? { appliedMode: modeWriteResult.appliedMode } : {}),
+        ...(modeWriteResult?.degraded
+          ? {
+            modeDegraded: true,
+            modeFallbackReason: modeWriteResult.fallbackReason,
+          }
+          : {}),
+      };
     }, { critical: true });
   }
 
@@ -873,36 +1055,41 @@ export class HamlibConnection
    * 获取当前模式
    */
   async getMode(): Promise<RadioModeInfo> {
-    return this.runSerializedTask('getMode', async () => {
-      return this.performModeRead();
+    return this.runSerializedTask('getMode', async (context) => {
+      return this.performModeRead(context);
     }, { id: 'getMode' });
   }
 
   async getModeBandwidth(): Promise<RadioModeReadBandwidth> {
-    return this.runSerializedTask('getModeBandwidth', async () => {
-      const modeInfo = await this.performModeRead();
+    return this.runSerializedTask('getModeBandwidth', async (context) => {
+      const modeInfo = await this.performModeRead(context);
+      this.ensureOperationContext(context);
       return modeInfo.bandwidth;
     }, { id: 'getModeBandwidth' });
   }
 
   async setModeBandwidth(bandwidth: RadioModeBandwidth): Promise<void> {
-    await this.runSerializedTask('setModeBandwidth', async () => {
-      const modeInfo = await this.performModeRead();
-      await this.performModeWrite(modeInfo.mode, bandwidth);
+    await this.runSerializedTask('setModeBandwidth', async (context) => {
+      const modeInfo = await this.performModeRead(context);
+      this.ensureOperationContext(context);
+      await this.performModeWrite(modeInfo.mode, context, bandwidth);
     }, { critical: true });
   }
 
   async getSupportedModeBandwidths(): Promise<RadioModeReadBandwidth[]> {
-    return this.runSerializedTask('getSupportedModeBandwidths', async () => {
+    return this.runSerializedTask('getSupportedModeBandwidths', async (context) => {
       this.checkConnected();
+      this.ensureOperationContext(context);
+      const rig = context.rig!;
 
-      const modeInfo = await this.performModeRead();
+      const modeInfo = await this.performModeRead(context);
+      this.ensureOperationContext(context);
       const candidates = this.getRangeMatchModeCandidates(modeInfo.mode);
 
       try {
         const widths = (await this.withHamlibOperationTimeout(
           'getSupportedModeBandwidths.getFilterList',
-          this.rig!.getFilterList(),
+          rig.getFilterList(),
         ))
           .filter((item) => item.modes.some((mode) => candidates.includes(normalizeModeName(mode))))
           .map((item) => item.width)
@@ -912,22 +1099,26 @@ export class HamlibConnection
           return Array.from(new Set(widths)).sort((a, b) => a - b);
         }
       } catch (error) {
+        this.ensureOperationContext(context);
         logger.debug('Failed to read Hamlib filter list for mode bandwidth options', error);
       }
 
       const fallbackWidths = [];
       fallbackWidths.push(await this.withHamlibOperationTimeout(
         'getSupportedModeBandwidths.getPassbandNarrow',
-        this.rig!.getPassbandNarrow(modeInfo.mode as any),
+        rig.getPassbandNarrow(modeInfo.mode as any),
       ));
+      this.ensureOperationContext(context);
       fallbackWidths.push(await this.withHamlibOperationTimeout(
         'getSupportedModeBandwidths.getPassbandNormal',
-        this.rig!.getPassbandNormal(modeInfo.mode as any),
+        rig.getPassbandNormal(modeInfo.mode as any),
       ));
+      this.ensureOperationContext(context);
       fallbackWidths.push(await this.withHamlibOperationTimeout(
         'getSupportedModeBandwidths.getPassbandWide',
-        this.rig!.getPassbandWide(modeInfo.mode as any),
+        rig.getPassbandWide(modeInfo.mode as any),
       ));
+      this.ensureOperationContext(context);
 
       return Array.from(new Set(fallbackWidths.filter((width) => Number.isFinite(width) && width > 0)))
         .sort((a, b) => a - b);
@@ -1046,23 +1237,29 @@ export class HamlibConnection
   }
 
 
-  private async detectTxFrequencyRanges(): Promise<void> {
+  private async detectFrequencyRanges(): Promise<void> {
     if (!this.rig || typeof this.rig.getFrequencyRanges !== 'function') {
+      this.rxFrequencyRanges = [];
       this.txFrequencyRanges = [];
-      logger.warn('Hamlib TX frequency range detection is not available on this build');
+      logger.warn('Hamlib frequency range detection is not available on this build');
       return;
     }
 
     try {
-      const { tx } = await this.withHamlibOperationTimeout(
-        'detectTxFrequencyRanges',
+      const { rx, tx } = await this.withHamlibOperationTimeout(
+        'detectFrequencyRanges',
         this.rig.getFrequencyRanges(),
       );
+      this.rxFrequencyRanges = Array.isArray(rx) ? rx : [];
       this.txFrequencyRanges = Array.isArray(tx) ? tx : [];
-      logger.info('TX frequency ranges detected', { count: this.txFrequencyRanges.length });
+      logger.info('Frequency ranges detected', {
+        rxCount: this.rxFrequencyRanges.length,
+        txCount: this.txFrequencyRanges.length,
+      });
     } catch (error) {
+      this.rxFrequencyRanges = [];
       this.txFrequencyRanges = [];
-      logger.warn('Failed to detect TX frequency ranges', error);
+      logger.warn('Failed to detect frequency ranges', error);
     }
   }
 
@@ -1093,12 +1290,37 @@ export class HamlibConnection
     }
   }
 
+  private resetEmpiricalModeSupport(): void {
+    this.empiricalModeSupport.clear();
+    this.empiricalModeSupportSessionId = this.ioSessionId;
+  }
+
+  private getEmpiricalModeSupport(mode: string): EmpiricalModeSupport | undefined {
+    if (this.empiricalModeSupportSessionId !== this.ioSessionId) {
+      this.resetEmpiricalModeSupport();
+    }
+    return this.empiricalModeSupport.get(mode);
+  }
+
+  private setEmpiricalModeSupport(mode: string, support: EmpiricalModeSupport): void {
+    if (this.empiricalModeSupportSessionId !== this.ioSessionId) {
+      this.resetEmpiricalModeSupport();
+    }
+    this.empiricalModeSupport.set(mode, support);
+  }
+
   private resolveModeForIntent(mode: string, options?: SetRadioModeOptions): string {
     const intent = options?.intent;
     const candidates = this.buildModeCandidates(mode, intent);
 
+    // Some Icom Hamlib backends accept PKTUSB but omit it from get_modes(). A
+    // digital intent is explicit user intent, so advertised modes stay advisory.
+    if (intent === 'digital') {
+      return candidates[0];
+    }
+
     if (this.supportedModes.size === 0) {
-      return intent === 'digital' ? candidates[candidates.length - 1] : candidates[0];
+      return candidates[0];
     }
 
     for (const candidate of candidates) {
@@ -1107,7 +1329,33 @@ export class HamlibConnection
       }
     }
 
-    return intent === 'digital' ? candidates[candidates.length - 1] : candidates[0];
+    return candidates[0];
+  }
+
+  private buildModeWritePlan(mode: string, options?: SetRadioModeOptions): ModeWritePlan {
+    const requestedMode = normalizeModeName(mode);
+    const preferredMode = this.resolveModeForIntent(requestedMode, options);
+    const intentCandidates = this.buildModeCandidates(requestedMode, options?.intent);
+    const supportsDataFallback = options?.intent === 'digital' && intentCandidates.length > 1;
+
+    if (!supportsDataFallback) {
+      return {
+        requestedMode,
+        preferredMode,
+        candidates: [preferredMode],
+        cachedFallback: false,
+      };
+    }
+
+    const [dataMode, fallbackMode] = intentCandidates;
+    const cachedFallback = this.getEmpiricalModeSupport(dataMode) === 'unsupported';
+    return {
+      requestedMode,
+      preferredMode,
+      candidates: cachedFallback ? [fallbackMode] : intentCandidates,
+      dataMode,
+      cachedFallback,
+    };
   }
 
   private buildModeCandidates(mode: string, intent?: SetRadioModeOptions['intent']): string[] {
@@ -2553,7 +2801,6 @@ export class HamlibConnection
       // CI-V ACK, which can take much longer than a simple read. Give it up
       // to 20s before declaring it timed out.
       const timeoutMs = normalized === 'on' ? 20_000 : 8_000;
-
       try {
         await Promise.race([
           this.rig!.setPowerstat(code),
@@ -2926,6 +3173,13 @@ export class HamlibConnection
     }
   }
 
+  private ensureOperationContext(context: HamlibOperationContext): void {
+    this.ensureSession(context.sessionId);
+    if (context.rig !== this.rig) {
+      throw new Error('radio session changed');
+    }
+  }
+
   private createRadioIoTaskOptions(
     taskName: string,
     options?: { critical?: boolean; id?: string },
@@ -2962,27 +3216,37 @@ export class HamlibConnection
 
   private async runSerializedTask<T>(
     taskName: string,
-    task: () => Promise<T>,
+    task: (context: HamlibOperationContext) => Promise<T>,
     options?: { critical?: boolean; id?: string },
   ): Promise<T> {
     return this.ioQueue.run(this.createRadioIoTaskOptions(taskName, options), async (activeSessionId) => {
       this.ensureSession(activeSessionId);
-      const result = await task();
-      this.ensureSession(activeSessionId);
+      const context: HamlibOperationContext = {
+        sessionId: activeSessionId,
+        rig: this.rig,
+      };
+      const result = await task(context);
+      this.ensureOperationContext(context);
       return result;
     });
   }
 
-  private async performFrequencyWrite(frequency: number): Promise<void> {
+  private async performFrequencyWrite(
+    frequency: number,
+    context: HamlibOperationContext,
+  ): Promise<void> {
     this.checkConnected();
+    this.ensureOperationContext(context);
+    const rig = context.rig!;
 
     try {
       await Promise.race([
-        this.rig!.setFrequency(frequency),
+        rig.setFrequency(frequency),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Set frequency timeout')), 5000)
         ),
       ]);
+      this.ensureOperationContext(context);
 
       this.lastSuccessfulOperation = Date.now();
       this.currentFrequencyHz = frequency;
@@ -2994,62 +3258,181 @@ export class HamlibConnection
 
   private async performModeWrite(
     mode: string,
+    context: HamlibOperationContext,
     bandwidth?: RadioModeBandwidth,
     options?: SetRadioModeOptions,
-  ): Promise<boolean> {
+  ): Promise<ModeWriteResult> {
     this.checkConnected();
+    const operationContext = context;
+    this.ensureOperationContext(operationContext);
+    const rig = operationContext.rig!;
 
-    try {
-      const requestedMode = normalizeModeName(mode);
-      const resolvedMode = this.resolveModeForIntent(requestedMode, options);
-      const previousMode = this.currentRadioMode;
+    const plan = this.buildModeWritePlan(mode, options);
+    let degraded = plan.cachedFallback;
+    let fallbackReason = plan.cachedFallback && plan.dataMode
+      ? `${plan.dataMode} was rejected earlier in this radio session`
+      : undefined;
 
+    for (let index = 0; index < plan.candidates.length; index += 1) {
+      this.ensureOperationContext(operationContext);
+      const resolvedMode = plan.candidates[index];
       await Promise.race([
-        this.rig!.setMode(resolvedMode, bandwidth as any),
-        new Promise((_, reject) =>
+        rig.setMode(resolvedMode, bandwidth as any),
+        new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('Set mode timeout')), 5000)
         ),
-      ]);
+      ]).catch((error: unknown) => {
+        // A response from an invalidated CAT session cannot establish mode
+        // support or authorize a fallback write on the replacement session.
+        this.ensureOperationContext(operationContext);
+        const nextMode = plan.candidates[index + 1];
+        const canFallback = Boolean(nextMode)
+          && resolvedMode === plan.dataMode
+          && isExplicitUnsupportedModeError(error, bandwidth);
+
+        if (!canFallback) {
+          throw this.convertOptionalOperationError(error, 'setMode');
+        }
+
+        this.setEmpiricalModeSupport(resolvedMode, 'unsupported');
+        degraded = true;
+        fallbackReason = `${resolvedMode} unsupported: ${this.getErrorMessage(error)}`;
+        logger.warn('Hamlib data mode unavailable; using the standard mode fallback', {
+          requestedMode: plan.requestedMode,
+          rejectedMode: resolvedMode,
+          fallbackMode: nextMode,
+          advertisedModes: Array.from(this.supportedModes).sort(),
+          error: this.getErrorMessage(error),
+        });
+      });
+      this.ensureOperationContext(operationContext);
+
+      if (resolvedMode === plan.dataMode && degraded) {
+        continue;
+      }
 
       this.lastSuccessfulOperation = Date.now();
-      this.currentRadioMode = normalizeModeName(resolvedMode);
-      logger.debug(`Mode set: ${requestedMode} -> ${resolvedMode}${bandwidth !== undefined ? ` (${bandwidth})` : ''}`, {
-        requestedMode,
+      let appliedMode = normalizeModeName(resolvedMode);
+      this.currentRadioMode = appliedMode;
+
+      if (resolvedMode === plan.dataMode) {
+        this.setEmpiricalModeSupport(resolvedMode, 'supported');
+      }
+
+      if (options?.intent === 'digital') {
+        const readbackMode = await this.readBackModeAfterWrite(resolvedMode, operationContext);
+        this.ensureOperationContext(operationContext);
+        if (readbackMode) {
+          appliedMode = readbackMode;
+          this.currentRadioMode = readbackMode;
+
+          if (readbackMode !== normalizeModeName(resolvedMode)) {
+            degraded = true;
+            fallbackReason = `Mode readback reported ${readbackMode} after writing ${resolvedMode}`;
+            if (resolvedMode === plan.dataMode) {
+              // A mismatch is not an explicit unsupported-mode error. Do not
+              // poison the session cache or issue another speculative write.
+              this.empiricalModeSupport.delete(resolvedMode);
+            }
+            logger.warn('Hamlib mode write readback mismatch', {
+              requestedMode: plan.requestedMode,
+              writtenMode: resolvedMode,
+              readbackMode,
+            });
+          }
+        }
+      }
+
+      logger.debug(`Mode set: ${plan.requestedMode} -> ${appliedMode}${bandwidth !== undefined ? ` (${bandwidth})` : ''}`, {
+        requestedMode: plan.requestedMode,
         resolvedMode,
+        appliedMode,
+        preferredMode: plan.preferredMode,
         intent: options?.intent ?? 'unspecified',
+        advertised: this.supportedModes.has(resolvedMode),
+        degraded,
       });
 
       // Split mode sync: keep TX VFO mode consistent with RX VFO
-      if (await this.isSplitEnabled()) {
+      const splitEnabled = await this.isSplitEnabled(operationContext);
+      this.ensureOperationContext(operationContext);
+      if (splitEnabled) {
         try {
           await Promise.race([
-            this.rig!.setSplitMode(resolvedMode as any),
+            rig.setSplitMode(appliedMode as any),
             new Promise((_, reject) =>
               setTimeout(() => reject(new Error('Set split mode timeout')), 5000)
             ),
           ]);
-          logger.debug(`Split TX mode synced to ${resolvedMode}`);
+          this.ensureOperationContext(operationContext);
+          logger.debug(`Split TX mode synced to ${appliedMode}`);
         } catch (syncError) {
+          this.ensureOperationContext(operationContext);
           logger.warn(`Split TX mode sync failed: ${this.getErrorMessage(syncError)}`);
         }
       }
 
-      return previousMode !== this.currentRadioMode;
+      return {
+        appliedMode,
+        degraded,
+        fallbackReason,
+      };
+    }
+
+    throw this.convertOptionalOperationError(
+      new Error(`No usable mode candidate for ${plan.requestedMode}`),
+      'setMode',
+    );
+  }
+
+  private async readBackModeAfterWrite(
+    expectedMode: string,
+    context: HamlibOperationContext,
+  ): Promise<string | null> {
+    this.ensureOperationContext(context);
+    const rig = context.rig!;
+    try {
+      const modeInfo = await this.withHamlibOperationTimeout(
+        'verifyModeWrite.getMode',
+        rig.getMode(),
+      );
+      this.ensureOperationContext(context);
+      if (!modeInfo || typeof modeInfo.mode !== 'string' || modeInfo.mode.trim().length === 0) {
+        return null;
+      }
+
+      this.lastSuccessfulOperation = Date.now();
+      const readbackMode = normalizeModeName(modeInfo.mode);
+      logger.debug('Hamlib mode write readback completed', {
+        expectedMode,
+        readbackMode,
+      });
+      return readbackMode;
     } catch (error) {
-      throw this.convertOptionalOperationError(error, 'setMode');
+      this.ensureOperationContext(context);
+      // A successful write remains successful when optional readback is not
+      // available. In particular, never turn a read timeout into a fallback.
+      logger.debug('Hamlib mode write readback unavailable', {
+        expectedMode,
+        error: this.getErrorMessage(error),
+      });
+      return null;
     }
   }
 
-  private async performModeRead(): Promise<RadioModeInfo> {
+  private async performModeRead(context: HamlibOperationContext): Promise<RadioModeInfo> {
     this.checkConnected();
+    this.ensureOperationContext(context);
+    const rig = context.rig!;
 
     try {
       const modeInfo = (await Promise.race([
-        this.rig!.getMode(),
+        rig.getMode(),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Get mode timeout')), 5000)
         ),
       ])) as RadioModeInfo;
+      this.ensureOperationContext(context);
 
       this.lastSuccessfulOperation = Date.now();
       this.currentRadioMode = normalizeModeName(modeInfo.mode);
@@ -3084,26 +3467,42 @@ export class HamlibConnection
     }
   }
 
-  private async isSplitEnabled(): Promise<boolean> {
+  private async isSplitEnabled(context?: HamlibOperationContext): Promise<boolean> {
+    if (context) {
+      this.ensureOperationContext(context);
+    }
     if (this.splitSupportState === 'unsupported') {
       return false;
     }
 
-    return (await this.readSplitStatus()).enabled;
+    const status = await this.readSplitStatus(context);
+    if (context) {
+      this.ensureOperationContext(context);
+    }
+    return status.enabled;
   }
 
-  private async readSplitStatus(): Promise<{ enabled: boolean; txVfo?: string }> {
-    if (!this.rig) {
+  private async readSplitStatus(
+    context?: HamlibOperationContext,
+  ): Promise<{ enabled: boolean; txVfo?: string }> {
+    if (context) {
+      this.ensureOperationContext(context);
+    }
+    const rig = context?.rig ?? this.rig;
+    if (!rig) {
       throw new Error('Radio instance not initialized');
     }
 
     try {
       const splitStatus = await Promise.race([
-        this.rig.getSplit(),
+        rig.getSplit(),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('Get split status timeout')), 5000)
         ),
       ]);
+      if (context) {
+        this.ensureOperationContext(context);
+      }
 
       this.lastSuccessfulOperation = Date.now();
       this.splitSupportState = 'supported';
@@ -3116,6 +3515,9 @@ export class HamlibConnection
       logger.debug(`Split status detected via getSplit: ${this.splitEnabled ? 'enabled' : 'disabled'}`);
       return { enabled: this.splitEnabled, txVfo };
     } catch (error) {
+      if (context) {
+        this.ensureOperationContext(context);
+      }
       if (isRecoverableOptionalRadioError(error)) {
         this.splitSupportState = 'unsupported';
         this.splitEnabled = false;
@@ -3389,9 +3791,11 @@ export class HamlibConnection
       this.meterReader = null;
       this.hasLoggedMeterStrategySample = false;
       this.supportedModes.clear();
+      this.resetEmpiricalModeSupport();
       this.supportedFunctions.clear();
       this.supportedParms.clear();
       this.supportedVfoOps.clear();
+      this.rxFrequencyRanges = [];
       this.txFrequencyRanges = [];
       this.currentRadioMode = null;
       this.splitSupportState = 'unknown';

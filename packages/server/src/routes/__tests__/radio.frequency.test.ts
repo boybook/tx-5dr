@@ -1,8 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('audify', () => ({
+  default: { RtAudio: class {} },
+}));
 
 import {
   buildFrequencyAuxControlPlan,
   buildFrequencyOperatingStateRequest,
+  projectAppliedFrequencyRadioMode,
   resolveFrequencyRadioMode,
 } from '../radio.js';
 
@@ -108,6 +113,50 @@ describe('resolveFrequencyRadioMode', () => {
       displayRadioMode: 'USB-DATA',
       writeRadioMode: 'USB',
       modeOptions: { intent: 'digital' },
+    });
+  });
+});
+
+describe('projectAppliedFrequencyRadioMode', () => {
+  it('keeps USB-DATA when Hamlib confirms PKTUSB', () => {
+    expect(projectAppliedFrequencyRadioMode('USB-DATA', {
+      modeApplied: true,
+      appliedMode: 'PKTUSB',
+    })).toEqual({
+      displayRadioMode: 'USB-DATA',
+    });
+  });
+
+  it('projects an explicit PKTUSB fallback as USB with degradation diagnostics', () => {
+    expect(projectAppliedFrequencyRadioMode('USB-DATA', {
+      modeApplied: true,
+      appliedMode: 'USB',
+      modeDegraded: true,
+      modeFallbackReason: 'PKTUSB unsupported: Feature not available',
+    })).toEqual({
+      displayRadioMode: 'USB',
+      modeDegraded: true,
+      modeFallbackReason: 'PKTUSB unsupported: Feature not available',
+    });
+  });
+
+  it('does not claim the requested mode when the radio mode write failed', () => {
+    expect(projectAppliedFrequencyRadioMode('USB-DATA', {
+      modeApplied: false,
+      modeError: new Error('Set mode timeout'),
+    })).toEqual({
+      modeDegraded: true,
+      modeFallbackReason: 'Set mode timeout',
+    });
+  });
+
+  it('does not claim the requested mode when degradation lacks an actual mode', () => {
+    expect(projectAppliedFrequencyRadioMode('USB-DATA', {
+      modeApplied: true,
+      modeDegraded: true,
+    })).toEqual({
+      modeDegraded: true,
+      modeFallbackReason: 'Radio mode degraded but the applied mode is unknown',
     });
   });
 });

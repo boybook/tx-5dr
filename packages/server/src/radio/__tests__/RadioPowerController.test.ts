@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { RadioProfile } from '@tx5dr/contracts';
-import { RadioPowerController } from '../RadioPowerController.js';
+import { RadioPowerController, type RadioPowerControllerDeps } from '../RadioPowerController.js';
 import { PhysicalRadioManager } from '../PhysicalRadioManager.js';
 import { ConfigManager } from '../../config/config-manager.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
@@ -15,7 +15,7 @@ type MockRadioManager = {
   withPowerOperation: <T>(reason: string, task: () => Promise<T>) => Promise<T>;
   wakeAndConnect: ReturnType<typeof vi.fn>;
   getActiveConnection: ReturnType<typeof vi.fn>;
-  markIntentionalDisconnect: ReturnType<typeof vi.fn>;
+  markIntentionalDisconnect: ReturnType<typeof vi.fn<[], { id: number; reason: string }>>;
   clearIntentionalDisconnect: ReturnType<typeof vi.fn>;
   isConnected: ReturnType<typeof vi.fn>;
   applyConfig: ReturnType<typeof vi.fn>;
@@ -41,13 +41,17 @@ function createProfile(): RadioProfile {
   };
 }
 
-function installConfig(profile = createProfile()): void {
+function installConfig(
+  profile = createProfile(),
+  activeProfileId = profile.id,
+  profiles: RadioProfile[] = [profile],
+): void {
   const cfg = ConfigManager.getInstance() as unknown as {
     config: { profiles: RadioProfile[]; activeProfileId: string };
   };
   cfg.config = {
-    profiles: [profile],
-    activeProfileId: profile.id,
+    profiles,
+    activeProfileId,
   };
 }
 
@@ -56,9 +60,12 @@ function createController(options?: {
   connected?: boolean;
   running?: boolean;
   wakeAndConnect?: ReturnType<typeof vi.fn>;
+  activeProfileId?: string;
 }) {
   resetControllerSingleton();
-  installConfig();
+  const profile = createProfile();
+  const otherProfile = { ...profile, id: 'profile-other', name: 'Other' };
+  installConfig(profile, options?.activeProfileId ?? profile.id, [profile, otherProfile]);
 
   const lifecycle: MockLifecycle = {
     getIsRunning: vi.fn().mockReturnValue(options?.running ?? false),
@@ -70,19 +77,29 @@ function createController(options?: {
     withPowerOperation: async <T>(_reason: string, task: () => Promise<T>) => task(),
     wakeAndConnect: options?.wakeAndConnect ?? vi.fn().mockResolvedValue(undefined),
     getActiveConnection: vi.fn().mockReturnValue(connection),
-    markIntentionalDisconnect: vi.fn(),
+    markIntentionalDisconnect: vi.fn(() => ({ id: 1, reason: 'power operation' })),
     clearIntentionalDisconnect: vi.fn(),
     isConnected: vi.fn().mockReturnValue(options?.connected ?? true),
     applyConfig: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn().mockResolvedValue(undefined),
   };
+  const runProfilePowerOperation = vi.fn(async <T>(
+    profileId: string,
+    _operationOptions: { refreshContext: boolean; allowProfileActivation: boolean },
+    task: (profile: RadioProfile) => Promise<T>,
+  ) => {
+    const currentProfile = ConfigManager.getInstance().getProfile(profileId);
+    if (!currentProfile) throw new Error(`Profile not found: ${profileId}`);
+    return task(structuredClone(currentProfile));
+  });
 
   const controller = RadioPowerController.create({
     radioManager: radioManager as never,
     getEngineLifecycle: () => lifecycle as never,
+    runProfilePowerOperation: runProfilePowerOperation as unknown as RadioPowerControllerDeps['runProfilePowerOperation'],
   });
 
-  return { controller, lifecycle, radioManager, connection };
+  return { controller, lifecycle, radioManager, connection, runProfilePowerOperation };
 }
 
 function unsupportedPowerError(): RadioError {
@@ -212,25 +229,22 @@ describe('RadioPowerController', () => {
     expect(radioManager.disconnect).toHaveBeenCalledWith('power off');
   });
 
-  it('treats an immediate CAT disconnect during off as a confirmed physical transition', async () => {
-    vi.useFakeTimers();
+  it('fails closed when CAT disconnects while the off command is pending', async () => {
     const setPowerState = vi.fn().mockRejectedValue(new Error('current state: disconnected'));
     const { controller, lifecycle, radioManager } = createController({
       connection: { setPowerState },
       running: true,
     });
 
-    const pending = controller.handleRequest({
+    await expect(controller.handleRequest({
       profileId: 'profile-ft710',
       state: 'off',
       autoEngine: true,
-    });
+    })).rejects.toThrow('current state: disconnected');
 
-    await vi.advanceTimersByTimeAsync(300);
-    await expect(pending).resolves.toBe('off');
-
-    expect(radioManager.clearIntentionalDisconnect).not.toHaveBeenCalled();
-    expect(lifecycle.stop).toHaveBeenCalledTimes(1);
+    expect(radioManager.clearIntentionalDisconnect).toHaveBeenCalledTimes(1);
+    expect(lifecycle.stop).not.toHaveBeenCalled();
+    expect(radioManager.disconnect).not.toHaveBeenCalled();
   });
 
   it('starts the software engine after physical power-on when autoEngine is true', async () => {
@@ -263,5 +277,102 @@ describe('RadioPowerController', () => {
 
     expect(radioManager.wakeAndConnect).toHaveBeenCalledTimes(1);
     expect(lifecycle.startAndWaitForRunning).not.toHaveBeenCalled();
+  });
+
+  it('routes power Profile changes through the shared activation coordinator', async () => {
+    const { controller, runProfilePowerOperation, lifecycle } = createController({
+      activeProfileId: 'profile-other',
+      connected: false,
+    });
+
+    await expect(controller.handleRequest({
+      profileId: 'profile-ft710',
+      state: 'on',
+      autoEngine: false,
+    }, { allowProfileActivation: true })).resolves.toBe('awake');
+
+    expect(runProfilePowerOperation).toHaveBeenCalledWith(
+      'profile-ft710',
+      { refreshContext: true, allowProfileActivation: true },
+      expect.any(Function),
+    );
+    expect(lifecycle.stop).not.toHaveBeenCalled();
+  });
+
+  it('does not mark an intentional disconnect without a live CAT session', async () => {
+    vi.useFakeTimers();
+    const { controller, radioManager } = createController({
+      connected: false,
+      running: false,
+    });
+
+    const pending = controller.handleRequest({
+      profileId: 'profile-ft710',
+      state: 'off',
+      autoEngine: false,
+    });
+    await vi.advanceTimersByTimeAsync(300);
+    await expect(pending).resolves.toBe('off');
+
+    expect(radioManager.markIntentionalDisconnect).not.toHaveBeenCalled();
+    expect(radioManager.clearIntentionalDisconnect).not.toHaveBeenCalled();
+  });
+
+  it('reports failure when engine cleanup fails and still attempts radio disconnect', async () => {
+    vi.useFakeTimers();
+    const { controller, lifecycle, radioManager } = createController({ running: true });
+    lifecycle.stop.mockRejectedValueOnce(new Error('engine stop failed'));
+    const events: Array<{ state?: string }> = [];
+    controller.on('powerState', (event) => events.push(event));
+
+    const pending = controller.handleRequest({
+      profileId: 'profile-ft710',
+      state: 'off',
+      autoEngine: false,
+    });
+    const rejection = expect(pending).rejects.toThrow('engine stop failed');
+    await vi.advanceTimersByTimeAsync(300);
+    await rejection;
+
+    expect(radioManager.disconnect).toHaveBeenCalledWith('power off');
+    expect(events).toContainEqual(expect.objectContaining({ state: 'failed' }));
+    expect(events).not.toContainEqual(expect.objectContaining({ state: 'off' }));
+  });
+
+  it('reports failure when radio disconnect cleanup fails', async () => {
+    vi.useFakeTimers();
+    const { controller, radioManager } = createController({ running: false });
+    radioManager.disconnect.mockRejectedValueOnce(new Error('radio disconnect failed'));
+    const events: Array<{ state?: string }> = [];
+    controller.on('powerState', (event) => events.push(event));
+
+    const pending = controller.handleRequest({
+      profileId: 'profile-ft710',
+      state: 'standby',
+      autoEngine: false,
+    });
+    const rejection = expect(pending).rejects.toThrow('radio disconnect failed');
+    await vi.advanceTimersByTimeAsync(300);
+    await rejection;
+
+    expect(events).toContainEqual(expect.objectContaining({ state: 'failed' }));
+    expect(events).not.toContainEqual(expect.objectContaining({ state: 'off' }));
+    expect(radioManager.clearIntentionalDisconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('requests a same-Profile context refresh only for power-on', async () => {
+    const { controller, runProfilePowerOperation } = createController();
+
+    await controller.handleRequest({
+      profileId: 'profile-ft710',
+      state: 'on',
+      autoEngine: false,
+    });
+
+    expect(runProfilePowerOperation).toHaveBeenCalledWith(
+      'profile-ft710',
+      { refreshContext: true, allowProfileActivation: false },
+      expect.any(Function),
+    );
   });
 });

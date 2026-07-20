@@ -44,7 +44,7 @@ import type {
   SetRadioModeOptions,
 } from './connections/IRadioConnection.js';
 import { RadioConnectionType, RadioConnectionState } from './connections/IRadioConnection.js';
-import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
+import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { RadioCapabilityManager } from './RadioCapabilityManager.js';
 import { isRecoverableOptionalRadioError } from './optionalRadioError.js';
 import {
@@ -153,13 +153,41 @@ function asError(error: unknown): Error {
 /**
  * PhysicalRadioManager 事件接口
  */
+export interface RadioFrequencyChangeContext {
+  profileId: string | null;
+  sessionGeneration: number;
+}
+
+interface RadioOperationContext {
+  connection: IRadioConnection;
+  sessionContext: RadioFrequencyChangeContext;
+  profileId: string | null;
+}
+
+function createRadioSessionChangedError(operation: string): RadioError {
+  return new RadioError({
+    code: RadioErrorCode.OPERATION_CANCELLED,
+    message: `radio session changed during ${operation}`,
+    userMessage: 'Radio connection changed while the operation was in progress. Please try again.',
+    severity: RadioErrorSeverity.WARNING,
+    suggestions: ['Retry the operation after the radio reconnects'],
+    context: { operation, reason: 'radio-session-changed', recoverable: true },
+  });
+}
+
+function isRadioSessionChangedError(error: unknown): error is RadioError {
+  return error instanceof RadioError
+    && error.code === RadioErrorCode.OPERATION_CANCELLED
+    && error.context?.reason === 'radio-session-changed';
+}
+
 interface PhysicalRadioManagerEvents {
   connecting: () => void;
   connected: () => void;
   disconnected: (reason?: string) => void;
   reconnecting: (attempt: number, maxAttempts: number, delayMs?: number) => void;
   error: (error: Error) => void;
-  radioFrequencyChanged: (frequency: number) => void;
+  radioFrequencyChanged: (frequency: number, context: RadioFrequencyChangeContext) => void;
   meterData: (data: MeterData) => void;
   tunerStatusChanged: (status: import('@tx5dr/contracts').TunerStatus) => void;
   coreCapabilitiesChanged: (capabilities: CoreRadioCapabilities) => void;
@@ -167,6 +195,11 @@ interface PhysicalRadioManagerEvents {
   capabilityList: (data: { descriptors: CapabilityDescriptor[]; capabilities: CapabilityState[] }) => void;
   /** 单个能力值变化 */
   capabilityChanged: (state: CapabilityState) => void;
+}
+
+export interface IntentionalDisconnectToken {
+  readonly id: number;
+  readonly reason?: string;
 }
 
 type CoreCapabilityKey = keyof CoreRadioCapabilities;
@@ -408,6 +441,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private activeFrequencyPollGeneration: number | null = null;
   private fastFrequencyPollingUntil = 0;
   private lastKnownFrequency: number | null = null;
+  private requireVerifiedSavedFrequencyRestore = false;
+  private radioSessionGeneration = 0;
+  private activeRadioSessionContext: RadioFrequencyChangeContext | null = null;
   private frequencyWriteEpoch = 0;
   private lastFrequencyWrite:
     | {
@@ -460,7 +496,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 主动断线意图标志（PowerController 进入 standby/off 前设置）
    * RadioBridge 遇到此标志触发的断线时跳过自动重连
    */
-  private intentionalDisconnectFlag: { active: boolean; reason?: string } = { active: false };
+  private intentionalDisconnectSequence = 0;
+  private intentionalDisconnectFlag:
+    | { active: false }
+    | { active: true; token: IntentionalDisconnectToken } = { active: false };
 
   /**
    * 电源事务标志：物理 power 操作期间抑制 reconnect 与 stale session 错误。
@@ -619,6 +658,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       const connection = RadioConnectionFactory.create(config);
       this.connection = connection;
+      this.beginRadioSessionContext();
       this.setupConnectionEventForwarding();
 
       try {
@@ -732,19 +772,27 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 标记即将发生的断线为"有意"（不触发自动重连）
    * PowerController 在 powerOff/powerStandby 前调用
    */
-  markIntentionalDisconnect(reason?: string): void {
-    this.intentionalDisconnectFlag = { active: true, reason };
+  markIntentionalDisconnect(reason?: string): IntentionalDisconnectToken {
+    const token: IntentionalDisconnectToken = {
+      id: ++this.intentionalDisconnectSequence,
+      reason,
+    };
+    this.intentionalDisconnectFlag = { active: true, token };
     logger.info(`Marked intentional disconnect: ${reason || 'no reason'}`);
+    return token;
   }
 
   /**
    * 清除尚未被 RadioBridge 消费的主动断线标志。
    * 仅在物理电源命令失败、需要保持当前连接/引擎时调用。
    */
-  clearIntentionalDisconnect(): void {
-    if (this.intentionalDisconnectFlag.active) {
-      logger.info(`Cleared intentional disconnect: ${this.intentionalDisconnectFlag.reason || 'no reason'}`);
-    }
+  clearIntentionalDisconnect(token?: IntentionalDisconnectToken): void {
+    if (!this.intentionalDisconnectFlag.active) return;
+    if (token && token.id !== this.intentionalDisconnectFlag.token.id) return;
+
+    logger.info(
+      `Cleared intentional disconnect: ${this.intentionalDisconnectFlag.token.reason || 'no reason'}`,
+    );
     this.intentionalDisconnectFlag = { active: false };
   }
 
@@ -770,7 +818,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 读取并清除 intentional disconnect 标志
    */
   consumeIntentionalDisconnect(): { active: boolean; reason?: string } {
-    const snapshot = this.intentionalDisconnectFlag;
+    const snapshot = this.intentionalDisconnectFlag.active
+      ? { active: true, reason: this.intentionalDisconnectFlag.token.reason }
+      : { active: false };
     this.intentionalDisconnectFlag = { active: false };
     return snapshot;
   }
@@ -795,6 +845,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       }
 
       this.isDisconnecting = true;
+      this.invalidateRadioSessionContext();
 
       try {
         const fastShutdown = isProcessShuttingDown();
@@ -1051,6 +1102,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       logger.error('Radio not connected, cannot set frequency');
       return false;
     }
+    const operationContext = this.captureRadioOperationContext();
+    if (!operationContext) {
+      logger.debug('Skipping setFrequency because the radio session is closing');
+      return false;
+    }
 
     if (this.isCoreCapabilityUnsupported('writeFrequency')) {
       logger.debug('Skipping setFrequency because write frequency is marked unsupported');
@@ -1059,13 +1115,18 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     const write = this.beginFrequencyWrite(freq);
     try {
-      await this.connection.setFrequency(freq);
+      await operationContext.connection.setFrequency(freq);
+      this.assertRadioOperationContextCurrent(operationContext, 'setFrequency');
       this.markCoreCapabilitySupported('writeFrequency');
       this.completeFrequencyWrite(write);
       this.queuePostFrequencyCapabilityRefresh('setFrequency');
       logger.debug(`Frequency set: ${(freq / 1000000).toFixed(3)} MHz`);
       return true;
     } catch (error) {
+      if (isRadioSessionChangedError(error) || !this.isRadioOperationContextCurrent(operationContext)) {
+        logger.debug(`Discarding stale frequency write result: ${(error as Error).message}`);
+        return false;
+      }
       if (isRecoverableOptionalRadioError(error)) {
         this.markCoreCapabilityUnsupported('writeFrequency', error);
         logger.warn(`Frequency write is unavailable for this radio: ${(error as Error).message}`);
@@ -1196,6 +1257,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     if (!this.connection) {
       throw new Error('radio not connected');
     }
+    const operationContext = this.captureRadioOperationContext();
+    if (!operationContext) {
+      throw createRadioSessionChangedError('applyOperatingState');
+    }
 
     if (request.frequency !== undefined && this.isCoreCapabilityUnsupported('writeFrequency')) {
       return {
@@ -1213,7 +1278,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       ? this.beginFrequencyWrite(request.frequency)
       : null;
     try {
-      const result = await this.connection.applyOperatingState(request);
+      const result = await operationContext.connection.applyOperatingState(request);
+      this.assertRadioOperationContextCurrent(operationContext, 'applyOperatingState');
 
       if (request.frequency !== undefined && result.frequencyApplied) {
         this.markCoreCapabilitySupported('writeFrequency');
@@ -1246,6 +1312,15 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       return result;
     } catch (error) {
+      if (isRadioSessionChangedError(error)) {
+        logger.debug(error.message);
+        throw error;
+      }
+      if (!this.isRadioOperationContextCurrent(operationContext)) {
+        const cancellation = createRadioSessionChangedError('applyOperatingState');
+        logger.debug(cancellation.message);
+        throw cancellation;
+      }
       if (request.mode && request.frequency === undefined && isRecoverableOptionalRadioError(error)) {
         this.markCoreCapabilityUnsupported('writeRadioMode', error);
         throw new Error(`set mode failed: ${(error as Error).message}`);
@@ -1282,8 +1357,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     return this.readFrequency({ updateKnownFrequency: true });
   }
 
-  private async readFrequency(options: { updateKnownFrequency: boolean }): Promise<number> {
-    if (!this.connection) {
+  private async readFrequency(
+    options: { updateKnownFrequency: boolean },
+    context = this.captureRadioOperationContext(),
+  ): Promise<number> {
+    if (!context) {
       logger.error('Radio not connected, cannot get frequency');
       return 0;
     }
@@ -1295,7 +1373,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     try {
       const observedWriteEpoch = this.frequencyWriteEpoch;
-      const frequency = await this.connection.getFrequency();
+      const frequency = await context.connection.getFrequency();
+      this.assertRadioOperationContextCurrent(context, 'readFrequency');
       this.markCoreCapabilitySupported('readFrequency');
       if (
         options.updateKnownFrequency
@@ -1306,6 +1385,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       }
       return frequency;
     } catch (error) {
+      if (isRadioSessionChangedError(error) || !this.isRadioOperationContextCurrent(context)) {
+        logger.debug('Discarding stale frequency read result');
+        return 0;
+      }
       if (isRecoverableOptionalRadioError(error)) {
         this.markCoreCapabilityUnsupported('readFrequency', error);
         logger.warn(`Frequency read is unavailable for this radio: ${(error as Error).message}`);
@@ -1321,30 +1404,27 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 设置 PTT
    */
   async setPTT(state: boolean): Promise<void> {
-    if (!this.connection) {
-      logger.error('Radio not connected, cannot set PTT');
-      return;
+    const context = this.captureRadioOperationContext();
+    if (!context) {
+      throw new Error('Radio not connected, cannot set PTT');
     }
 
     try {
       logger.debug(`PTT ${state ? 'TX' : 'RX'} start`);
 
-      await this.connection.setPTT(state);
+      await context.connection.setPTT(state);
+      this.assertRadioOperationContextCurrent(context, 'setPTT');
 
       logger.debug(`PTT set: ${state ? 'TX' : 'RX'}`);
     } catch (error) {
-      if (isRecoverableTciWriteTimeout(error)) {
-        logger.warn('TCI write timeout tolerated', {
-          operation: 'setPTT',
-          ptt: state,
-          error: (error as Error).message,
-        });
-        return;
+      if (isRadioSessionChangedError(error) || !this.isRadioOperationContextCurrent(context)) {
+        throw createRadioSessionChangedError('setPTT');
       }
       logger.error(
         `PTT ${state ? 'TX' : 'RX'} failed: ${(error as Error).message}`
       );
       this.handleConnectionError(error as Error);
+      throw error;
     }
   }
 
@@ -1393,13 +1473,18 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     if (!this.connection) {
       throw new Error('radio not connected');
     }
+    const operationContext = this.captureRadioOperationContext();
+    if (!operationContext) {
+      throw createRadioSessionChangedError('setMode');
+    }
 
     if (this.isCoreCapabilityUnsupported('writeRadioMode')) {
       throw new Error('set mode failed: radio mode control not supported');
     }
 
     try {
-      await this.connection.setMode(mode, bandwidth, options);
+      await operationContext.connection.setMode(mode, bandwidth, options);
+      this.assertRadioOperationContextCurrent(operationContext, 'setMode');
       this.markCoreCapabilitySupported('writeRadioMode');
       void this.refreshRfPowerDescriptor();
       void this.refreshModeBandwidthDescriptor();
@@ -1407,6 +1492,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         intent: options?.intent ?? 'unspecified',
       });
     } catch (error) {
+      if (isRadioSessionChangedError(error)) {
+        throw error;
+      }
+      if (!this.isRadioOperationContextCurrent(operationContext)) {
+        throw createRadioSessionChangedError('setMode');
+      }
       if (isRecoverableOptionalRadioError(error)) {
         this.markCoreCapabilityUnsupported('writeRadioMode', error);
         throw new Error(`set mode failed: ${(error as Error).message}`);
@@ -1614,6 +1705,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         message: 'radio not connected',
       };
     }
+    const operationContext = this.captureRadioOperationContext();
+    if (!operationContext) {
+      throw createRadioSessionChangedError('repeater duplex config');
+    }
 
     if (!this.isWritableCapabilityAvailable('repeater_shift')) {
       return {
@@ -1649,10 +1744,14 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     try {
       if (requested) {
+        this.assertRadioOperationContextCurrent(operationContext, 'repeater duplex config');
         await this.capabilityManager.writeCapability('repeater_offset', offsetHz);
+        this.assertRadioOperationContextCurrent(operationContext, 'repeater duplex config');
       }
 
+      this.assertRadioOperationContextCurrent(operationContext, 'repeater duplex config');
       await this.capabilityManager.writeCapability('repeater_shift', shift);
+      this.assertRadioOperationContextCurrent(operationContext, 'repeater duplex config');
 
       return {
         requested,
@@ -1660,6 +1759,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         skipped: false,
       };
     } catch (error) {
+      if (isRadioSessionChangedError(error)) {
+        throw error;
+      }
+      if (!this.isRadioOperationContextCurrent(operationContext)) {
+        throw createRadioSessionChangedError('repeater duplex config');
+      }
       const message = error instanceof Error ? error.message : String(error);
       logger.warn(`Failed to apply repeater duplex config: ${message}`, { shift, offsetHz });
       return {
@@ -1684,6 +1789,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         warning: requested ? 'unsupported' : undefined,
         message: 'radio not connected',
       };
+    }
+    const operationContext = this.captureRadioOperationContext();
+    if (!operationContext) {
+      throw createRadioSessionChangedError('tone squelch config');
     }
 
     const hasCtcss = this.isWritableCapabilityAvailable('ctcss_tone');
@@ -1736,27 +1845,39 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     try {
       if (toneMode === 'ctcss') {
         if (hasDcs) {
+          this.assertRadioOperationContextCurrent(operationContext, 'tone squelch config');
           await this.capabilityManager.writeCapability('dcs_code', 0);
+          this.assertRadioOperationContextCurrent(operationContext, 'tone squelch config');
         }
+        this.assertRadioOperationContextCurrent(operationContext, 'tone squelch config');
         await this.capabilityManager.writeCapability('ctcss_tone', config!.ctcssToneTenthsHz);
+        this.assertRadioOperationContextCurrent(operationContext, 'tone squelch config');
         return { requested, applied: true, skipped: false };
       }
 
       if (toneMode === 'dcs') {
         if (hasCtcss) {
+          this.assertRadioOperationContextCurrent(operationContext, 'tone squelch config');
           await this.capabilityManager.writeCapability('ctcss_tone', 0);
+          this.assertRadioOperationContextCurrent(operationContext, 'tone squelch config');
         }
+        this.assertRadioOperationContextCurrent(operationContext, 'tone squelch config');
         await this.capabilityManager.writeCapability('dcs_code', config!.dcsCode);
+        this.assertRadioOperationContextCurrent(operationContext, 'tone squelch config');
         return { requested, applied: true, skipped: false };
       }
 
       let writeCount = 0;
       if (hasCtcss) {
+        this.assertRadioOperationContextCurrent(operationContext, 'tone squelch config');
         await this.capabilityManager.writeCapability('ctcss_tone', 0);
+        this.assertRadioOperationContextCurrent(operationContext, 'tone squelch config');
         writeCount += 1;
       }
       if (hasDcs) {
+        this.assertRadioOperationContextCurrent(operationContext, 'tone squelch config');
         await this.capabilityManager.writeCapability('dcs_code', 0);
+        this.assertRadioOperationContextCurrent(operationContext, 'tone squelch config');
         writeCount += 1;
       }
 
@@ -1766,6 +1887,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         skipped: writeCount === 0,
       };
     } catch (error) {
+      if (isRadioSessionChangedError(error)) {
+        throw error;
+      }
+      if (!this.isRadioOperationContextCurrent(operationContext)) {
+        throw createRadioSessionChangedError('tone squelch config');
+      }
       const message = error instanceof Error ? error.message : String(error);
       logger.warn(`Failed to apply tone squelch config: ${message}`, { toneMode, config });
       try {
@@ -2324,8 +2451,71 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private createConnectionSession(config: HamlibConfig): IRadioConnection {
     const connection = RadioConnectionFactory.create(config);
     this.connection = connection;
+    this.beginRadioSessionContext();
     this.setupConnectionEventForwarding();
     return connection;
+  }
+
+  private beginRadioSessionContext(): void {
+    this.radioSessionGeneration += 1;
+    this.activeRadioSessionContext = {
+      profileId: this.configManager.getActiveProfileId(),
+      sessionGeneration: this.radioSessionGeneration,
+    };
+  }
+
+  private captureRadioOperationContext(): RadioOperationContext | null {
+    if (!this.connection || !this.activeRadioSessionContext) {
+      return null;
+    }
+    return {
+      connection: this.connection,
+      sessionContext: this.activeRadioSessionContext,
+      profileId: this.configManager.getActiveProfileId(),
+    };
+  }
+
+  private isRadioOperationContextCurrent(context: RadioOperationContext): boolean {
+    if (this.connection !== context.connection || this.configManager.getActiveProfileId() !== context.profileId) {
+      return false;
+    }
+    return this.isCurrentRadioSessionContext(context.sessionContext);
+  }
+
+  private assertRadioOperationContextCurrent(context: RadioOperationContext, operation: string): void {
+    if (!this.isRadioOperationContextCurrent(context)) {
+      throw createRadioSessionChangedError(operation);
+    }
+  }
+
+  private invalidateRadioSessionContext(): void {
+    this.activeRadioSessionContext = null;
+  }
+
+  public notifyRadioFrequencyChanged(
+    frequency: number,
+    capturedContext?: RadioFrequencyChangeContext,
+  ): void {
+    const context = capturedContext ?? this.activeRadioSessionContext ?? {
+      profileId: this.configManager.getActiveProfileId(),
+      sessionGeneration: this.radioSessionGeneration,
+    };
+    this.emit('radioFrequencyChanged', frequency, context);
+  }
+
+  public isCurrentRadioSessionContext(context: RadioFrequencyChangeContext): boolean {
+    const active = this.activeRadioSessionContext;
+    return active !== null
+      && context.profileId === active.profileId
+      && context.sessionGeneration === active.sessionGeneration
+      && context.profileId === this.configManager.getActiveProfileId();
+  }
+
+  public getCurrentRadioSessionContext(): RadioFrequencyChangeContext | null {
+    const context = this.activeRadioSessionContext;
+    return context && this.isCurrentRadioSessionContext(context)
+      ? { ...context }
+      : null;
   }
 
   private async openConnectionSession(connection: IRadioConnection, config: HamlibConfig): Promise<void> {
@@ -2352,26 +2542,35 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   private async bootstrapConnectedSession(connection: IRadioConnection): Promise<void> {
-    logger.debug('Bootstrap phase: settle');
-    await this.waitForConnectionSettle();
+    try {
+      logger.debug('Bootstrap phase: settle');
+      await this.waitForConnectionSettle();
 
-    logger.debug('Bootstrap phase: tuner capabilities');
-    this.cachedTunerCapabilities = await this.readTunerCapabilities(connection);
+      logger.debug('Bootstrap phase: tuner capabilities');
+      this.cachedTunerCapabilities = await this.readTunerCapabilities(connection);
 
-    logger.debug('Bootstrap phase: restore frequency');
-    const restoredFrequency = await this.restoreSavedFrequencyIfAvailable();
+      logger.debug('Bootstrap phase: restore frequency');
+      const restoredFrequency = await this.restoreSavedFrequencyIfAvailable();
 
-    logger.debug('Bootstrap phase: capability manager');
-    await this.capabilityManager.onConnected(connection);
+      logger.debug('Bootstrap phase: capability manager');
+      await this.capabilityManager.onConnected(connection);
 
-    if (restoredFrequency !== null) {
-      this.updateKnownFrequency(restoredFrequency);
-      this.emit('radioFrequencyChanged', restoredFrequency);
-      return;
+      if (restoredFrequency !== null) {
+        this.updateKnownFrequency(restoredFrequency);
+        this.notifyRadioFrequencyChanged(restoredFrequency);
+        return;
+      }
+
+      logger.debug('Bootstrap phase: capture initial frequency');
+      await this.captureInitialFrequency();
+    } finally {
+      this.requireVerifiedSavedFrequencyRestore = false;
     }
+  }
 
-    logger.debug('Bootstrap phase: capture initial frequency');
-    await this.captureInitialFrequency();
+  prepareForProfileActivation(): void {
+    this.requireVerifiedSavedFrequencyRestore = true;
+    this.lastKnownFrequency = null;
   }
 
   /**
@@ -2380,6 +2579,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private async doDisconnect(reason?: string): Promise<void> {
     logger.info(`Executing disconnect: ${reason || ''}`);
 
+    this.invalidateRadioSessionContext();
     this.preconnectedSessionToAdopt = null;
     this.stopFrequencyMonitoring();
     this.stopTunerMonitoring();
@@ -2426,11 +2626,25 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     if (!this.connection) return;
 
     logger.debug('Setting up connection event forwarding');
+    const sessionContext = this.activeRadioSessionContext ?? {
+      profileId: this.configManager.getActiveProfileId(),
+      sessionGeneration: this.radioSessionGeneration,
+    };
+    const eventConnection = this.connection;
+    const isEventSessionCurrent = () => (
+      this.connection === eventConnection
+      && this.isCurrentRadioSessionContext(sessionContext)
+    );
 
     // 监听 connection 的 disconnected 事件 → 通知状态机
     const onDisconnected = (...args: any[]) => {
+      if (!isEventSessionCurrent()) {
+        logger.debug('Ignoring disconnected event from a stale radio session');
+        return;
+      }
       const reason = args[0] as string | undefined;
       logger.warn(`Connection lost: ${reason || 'unknown'}`);
+      this.invalidateRadioSessionContext();
       // 用户主动切换电源（off/standby/operate）时已设置 intentional 标志，
       // 不要让状态机触发重连（flag 由 RadioBridge.handleRadioDisconnected 消费）
       if (this.intentionalDisconnectFlag.active) {
@@ -2450,6 +2664,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     // 错误 → 转发给上层（RadioBridge）+ 通知状态机
     const onError = (error: Error) => {
+      if (!isEventSessionCurrent()) {
+        logger.debug(`Ignoring error from a stale radio session: ${error.message}`);
+        return;
+      }
       if (this.shouldSuppressSessionCancellationError(error)) {
         logger.debug(`Suppressing stale session error during session mutation: ${error.message}`);
         return;
@@ -2484,18 +2702,25 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     // 频率变化（来自 IRadioConnection）
     const onFrequencyChanged = (frequency: number) => {
+      if (!isEventSessionCurrent()) {
+        logger.debug('Ignoring frequency event from a stale radio session');
+        return;
+      }
       if (this.shouldIgnoreFrequencyObservation(frequency, this.frequencyWriteEpoch, 'connection-event')) {
         return;
       }
       logger.debug(`Frequency changed: ${(frequency / 1000000).toFixed(3)} MHz`);
       this.updateKnownFrequency(frequency);
-      this.emit('radioFrequencyChanged', frequency);
+      this.emit('radioFrequencyChanged', frequency, sessionContext);
     };
     this.connection.on('frequencyChanged', onFrequencyChanged);
     this.connectionEventListeners.set('frequencyChanged', onFrequencyChanged);
 
     // 数值表数据
     const onMeterData = (data: MeterData) => {
+      if (!isEventSessionCurrent()) {
+        return;
+      }
       this.emit('meterData', data);
     };
     this.connection.on('meterData', onMeterData);
@@ -2553,6 +2778,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 被动断线后清理连接资源
    */
   private cleanupAfterDisconnect(): void {
+    this.invalidateRadioSessionContext();
     this.preconnectedSessionToAdopt = null;
     this.stopFrequencyMonitoring();
     this.stopTunerMonitoring();
@@ -2593,6 +2819,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     try {
       const voiceState = this.getSavedStartupVoiceState();
       if (voiceState) {
+        if (!this.canRestoreSavedFrequency(voiceState.frequency)) {
+          return null;
+        }
         const result = await this.applyOperatingState({
           frequency: voiceState.frequency,
           mode: voiceState.radioMode,
@@ -2619,6 +2848,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         logger.info('No valid saved frequency config, skipping bootstrap restore');
         return null;
       }
+      if (!this.canRestoreSavedFrequency(targetFrequency)) {
+        return null;
+      }
 
       const success = await this.setFrequency(targetFrequency);
       if (!success) {
@@ -2635,6 +2867,19 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       );
       return null;
     }
+  }
+
+  private canRestoreSavedFrequency(frequency: number): boolean {
+    const verdict = this.connection?.canTuneFrequency?.(frequency) ?? null;
+    if (verdict === false) {
+      logger.warn('Skipping saved frequency outside the connected radio RX ranges', { frequency });
+      return false;
+    }
+    if (verdict === null && this.requireVerifiedSavedFrequencyRestore) {
+      logger.warn('Skipping saved frequency because the new Profile radio range cannot be verified', { frequency });
+      return false;
+    }
+    return true;
   }
 
   private getSavedStartupFrequency(): number | null {
@@ -2704,6 +2949,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       if (currentFrequency > 0) {
         logger.debug(`Captured initial frequency during bootstrap: ${(currentFrequency / 1000000).toFixed(3)} MHz`);
         this.updateKnownFrequency(currentFrequency);
+        this.notifyRadioFrequencyChanged(currentFrequency);
       }
     } catch (error) {
       logger.debug(`Initial frequency capture skipped: ${(error as Error).message}`);
@@ -3047,10 +3293,19 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       return;
     }
 
+    const operationContext = this.captureRadioOperationContext();
+    if (!operationContext) {
+      return;
+    }
+
     try {
       const previousKnownFrequency = this.lastKnownFrequency;
       const observedWriteEpoch = this.frequencyWriteEpoch;
-      const currentFrequency = await this.readFrequency({ updateKnownFrequency: false });
+      const currentFrequency = await this.readFrequency(
+        { updateKnownFrequency: false },
+        operationContext,
+      );
+      this.assertRadioOperationContextCurrent(operationContext, 'frequency monitoring');
 
       // 容忍连接初始化期间的 0 返回（CIV 通道可能尚未完全就绪）
       if (currentFrequency === 0) {
@@ -3083,7 +3338,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         this.updateKnownFrequency(currentFrequency);
 
         // 发射频率变化事件
-        this.emit('radioFrequencyChanged', currentFrequency);
+        this.notifyRadioFrequencyChanged(currentFrequency, operationContext.sessionContext);
         this.queuePostFrequencyCapabilityRefresh('frequencyMonitor');
       } else if (previousKnownFrequency === null && currentFrequency > 0) {
         // 首次获取频率
@@ -3091,7 +3346,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         this.updateKnownFrequency(currentFrequency);
       }
     } catch (error) {
-      // 静默处理错误（getFrequency 已经有错误处理）
+      if (!isRadioSessionChangedError(error)) {
+        logger.debug('Frequency monitoring read failed', error);
+      }
     }
   }
 

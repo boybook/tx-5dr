@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
+import { buildAbility } from '../../auth/ability.js';
+import type { ApplyOperatingStateResult } from '../../radio/connections/IRadioConnection.js';
 
 const secretRadioConfig = {
   type: 'icom-wlan',
@@ -25,14 +27,21 @@ vi.mock('serialport', () => ({
   },
 }));
 
+const updateLastSelectedFrequency = vi.fn(async () => undefined);
+let activeProfileTokenCurrent = true;
+let radioSessionCurrent = true;
+
 vi.mock('../../config/config-manager.js', () => ({
   ConfigManager: {
     getInstance: () => ({
-      getRadioConfig: () => secretRadioConfig,
+      getRadioConfig: () => ({ ...secretRadioConfig, digitalModeRadioMode: 'usb-data' }),
       getCustomFrequencyPresets: () => [],
       getLastSelectedFrequency: () => null,
       getLastVoiceFrequency: () => null,
       getLastCWFrequency: () => null,
+      updateLastSelectedFrequency,
+      captureActiveProfileToken: () => ({ profileId: 'profile-a', generation: 1 }),
+      isActiveProfileTokenCurrent: () => activeProfileTokenCurrent,
     }),
   },
 }));
@@ -44,6 +53,27 @@ const radioManager = {
   getConnectionHealth: vi.fn(() => ({ connectionHealthy: false })),
   getCoreCapabilities: vi.fn(() => undefined),
   getCoreCapabilityDiagnostics: vi.fn(() => undefined),
+  applyOperatingState: vi.fn<[unknown], Promise<ApplyOperatingStateResult>>(async () => ({
+    frequencyApplied: true,
+    modeApplied: true,
+  })),
+  applyRepeaterDuplexConfig: vi.fn(async () => ({ warning: false })),
+  applyToneSquelchConfig: vi.fn(async () => ({ warning: false })),
+  getCurrentRadioSessionContext: vi.fn<[], { profileId: string; sessionGeneration: number } | null>(() => null),
+  isCurrentRadioSessionContext: vi.fn(() => radioSessionCurrent),
+};
+
+const emit = vi.fn();
+const clearInMemory = vi.fn();
+const digitalRadioEngine = {
+  getRadioManager: () => radioManager,
+  getExistingCWKeyerManager: () => existingCWKeyerManager,
+  getProfileActivationCoordinator: () => ({
+    runExclusive: <T>(task: () => Promise<T>) => task(),
+  }),
+  getEngineMode: () => 'digital',
+  getSlotPackManager: () => ({ clearInMemory }),
+  emit,
 };
 
 let existingCWKeyerManager: {
@@ -54,10 +84,7 @@ let existingCWKeyerManager: {
 
 vi.mock('../../DigitalRadioEngine.js', () => ({
   DigitalRadioEngine: {
-    getInstance: () => ({
-      getRadioManager: () => radioManager,
-      getExistingCWKeyerManager: () => existingCWKeyerManager,
-    }),
+    getInstance: () => digitalRadioEngine,
   },
 }));
 
@@ -73,6 +100,19 @@ describe('radioRoutes authorization', () => {
   let previousAndroidSerialFile: string | undefined;
 
   beforeEach(async () => {
+    vi.clearAllMocks();
+    activeProfileTokenCurrent = true;
+    radioSessionCurrent = true;
+    radioManager.isConnected.mockReturnValue(false);
+    radioManager.getCurrentRadioSessionContext.mockImplementation(() => (
+      radioManager.isConnected()
+        ? { profileId: 'profile-a', sessionGeneration: 1 }
+        : null
+    ));
+    radioManager.applyOperatingState.mockResolvedValue({
+      frequencyApplied: true,
+      modeApplied: true,
+    });
     existingCWKeyerManager = null;
     previousAndroidSerialFile = process.env.TX5DR_ANDROID_SERIAL_DEVICES_FILE;
     const { radioRoutes } = await import('../radio.js');
@@ -103,6 +143,9 @@ describe('radioRoutes authorization', () => {
           exp: 0,
         }
         : null;
+      request.ability = request.authUser
+        ? buildAbility({ role: request.authUser.role, operatorIds: request.authUser.operatorIds })
+        : buildAbility({ role: UserRole.VIEWER });
     });
     await fastify.register(radioRoutes, { prefix: '/api/radio' });
   });
@@ -194,6 +237,157 @@ describe('radioRoutes authorization', () => {
     });
 
     expect(response.statusCode).toBe(403);
+  });
+
+  it('uses the actual fallback mode for persistence, frequency events, and the HTTP response', async () => {
+    const fallbackReason = 'PKTUSB unsupported: Feature not available';
+    radioManager.isConnected.mockReturnValue(true);
+    radioManager.applyOperatingState.mockResolvedValue({
+      frequencyApplied: true,
+      modeApplied: true,
+      appliedMode: 'USB',
+      modeDegraded: true,
+      modeFallbackReason: fallbackReason,
+    });
+
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/api/radio/frequency',
+      headers: { 'x-role': UserRole.ADMIN },
+      payload: {
+        frequency: 14_074_000,
+        mode: 'FT8',
+        band: '20m',
+        radioMode: 'USB-DATA',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      success: true,
+      radioMode: 'USB',
+      modeDegraded: true,
+      modeFallbackReason: fallbackReason,
+    });
+    expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
+      frequency: 14_074_000,
+      mode: 'FT8',
+      radioMode: 'USB',
+    }), 'profile-a');
+    expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
+      frequency: 14_074_000,
+      radioMode: 'USB',
+      modeDegraded: true,
+      modeFallbackReason: fallbackReason,
+    }));
+  });
+
+  it('drops persistence and broadcasts when the active Profile changes during the radio write', async () => {
+    let resolveApply!: (result: ApplyOperatingStateResult) => void;
+    radioManager.isConnected.mockReturnValue(true);
+    radioManager.applyOperatingState.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveApply = resolve;
+    }));
+
+    const pendingResponse = fastify.inject({
+      method: 'POST',
+      url: '/api/radio/frequency',
+      headers: { 'x-role': UserRole.ADMIN },
+      payload: {
+        frequency: 14_074_000,
+        mode: 'FT8',
+        band: '20m',
+        radioMode: 'USB-DATA',
+      },
+    });
+    await vi.waitFor(() => {
+      expect(radioManager.applyOperatingState).toHaveBeenCalledOnce();
+    });
+
+    activeProfileTokenCurrent = false;
+    resolveApply({
+      frequencyApplied: true,
+      modeApplied: true,
+      appliedMode: 'PKTUSB',
+    });
+
+    const response = await pendingResponse;
+    expect(response.json()).toMatchObject({
+      success: false,
+      error: { code: 'OPERATION_CANCELLED' },
+    });
+    expect(updateLastSelectedFrequency).not.toHaveBeenCalled();
+    expect(clearInMemory).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalledWith('frequencyChanged', expect.anything());
+  });
+
+  it('drops global side effects when the radio reconnects during frequency persistence', async () => {
+    let resolvePersistence!: () => void;
+    radioManager.isConnected.mockReturnValue(true);
+    updateLastSelectedFrequency.mockImplementationOnce(() => new Promise<undefined>((resolve) => {
+      resolvePersistence = () => resolve(undefined);
+    }));
+
+    const pendingResponse = fastify.inject({
+      method: 'POST',
+      url: '/api/radio/frequency',
+      headers: { 'x-role': UserRole.ADMIN },
+      payload: {
+        frequency: 14_074_000,
+        mode: 'FT8',
+        band: '20m',
+        radioMode: 'USB-DATA',
+      },
+    });
+    await vi.waitFor(() => {
+      expect(updateLastSelectedFrequency).toHaveBeenCalledOnce();
+    });
+
+    radioSessionCurrent = false;
+    resolvePersistence();
+
+    const response = await pendingResponse;
+    expect(response.json()).toMatchObject({
+      success: false,
+      error: { code: 'OPERATION_CANCELLED' },
+    });
+    expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
+      frequency: 14_074_000,
+    }), 'profile-a');
+    expect(clearInMemory).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalledWith('frequencyChanged', expect.anything());
+  });
+
+  it('cancels an offline frequency record when a radio session starts during persistence', async () => {
+    let resolvePersistence!: () => void;
+    radioManager.isConnected.mockReturnValue(false);
+    updateLastSelectedFrequency.mockImplementationOnce(() => new Promise<undefined>((resolve) => {
+      resolvePersistence = () => resolve(undefined);
+    }));
+
+    const pendingResponse = fastify.inject({
+      method: 'POST',
+      url: '/api/radio/frequency',
+      headers: { 'x-role': UserRole.ADMIN },
+      payload: {
+        frequency: 14_074_000,
+        mode: 'FT8',
+        band: '20m',
+        radioMode: 'USB-DATA',
+      },
+    });
+    await vi.waitFor(() => expect(updateLastSelectedFrequency).toHaveBeenCalledOnce());
+
+    radioManager.isConnected.mockReturnValue(true);
+    resolvePersistence();
+
+    const response = await pendingResponse;
+    expect(response.json()).toMatchObject({
+      success: false,
+      error: { code: 'OPERATION_CANCELLED' },
+    });
+    expect(clearInMemory).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalledWith('frequencyChanged', expect.anything());
   });
 
   it('reuses an already-open CW keyer backend for CW hardware tests', async () => {

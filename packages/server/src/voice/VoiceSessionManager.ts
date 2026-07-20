@@ -5,6 +5,7 @@ import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { AudioStreamManager } from '../audio/AudioStreamManager.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { createLogger } from '../utils/logger.js';
+import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import {
   VoiceTxDiagnostics,
   type VoiceTxFrameMeta,
@@ -98,6 +99,19 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
     if (!this.isStarted) {
       return { success: false, reason: 'Voice mode not active' };
     }
+    const radioSessionContext = this.radioManager.getCurrentRadioSessionContext();
+    const assertRadioSessionCurrent = (): void => {
+      if (radioSessionContext && this.radioManager.isCurrentRadioSessionContext(radioSessionContext)) {
+        return;
+      }
+      throw new RadioError({
+        code: RadioErrorCode.OPERATION_CANCELLED,
+        message: 'radio session changed during voice PTT activation',
+        userMessage: 'Radio connection changed while transmit was starting. Please try again.',
+        severity: RadioErrorSeverity.WARNING,
+        context: { reason: 'radio-session-changed', recoverable: true },
+      });
+    };
 
     // 1. Acquire PTT lock (with associated voice audio client ID)
     const lockResult = this.pttLockManager.requestLock(clientId, label, voiceAudioClientId);
@@ -106,16 +120,20 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
     }
 
     try {
+      assertRadioSessionCurrent();
       this.audioStreamManager.clearVoicePlaybackQueue();
       this.audioStreamManager.setVoiceTxOutputEnabled(false);
       this.diagnostics.startSession(clientId, label);
 
       // 2. Activate radio PTT
       await this.deps.onBeforeStartPTT?.();
+      assertRadioSessionCurrent();
       await this.radioManager.setPTT(true);
+      assertRadioSessionCurrent();
       this.audioStreamManager.setVoiceTxOutputEnabled(true);
 
       // 3. Broadcast PTT status (frontend handles monitor muting via gain node)
+      assertRadioSessionCurrent();
       this.emit('pttStatusChanged', { isTransmitting: true, operatorIds: [], source: this.getPttSource(clientId) });
 
       logger.info('Voice transmission started', { clientId, label });
@@ -123,7 +141,9 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
     } catch (err) {
       // Rollback on failure
       logger.error('Failed to start voice transmission, rolling back', err);
-      try { await this.radioManager.setPTT(false); } catch { /* best effort */ }
+      if (radioSessionContext && this.radioManager.isCurrentRadioSessionContext(radioSessionContext)) {
+        try { await this.radioManager.setPTT(false); } catch { /* best effort */ }
+      }
       this.pttLockManager.releaseLock(clientId);
       this.audioStreamManager.setVoiceTxOutputEnabled(false);
       this.audioStreamManager.clearVoicePlaybackQueue();
@@ -159,6 +179,21 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
    * Set the radio modulation mode (USB/LSB/FM/AM).
    */
   async setRadioMode(mode: string): Promise<void> {
+    const configManager = ConfigManager.getInstance();
+    const profileToken = configManager.captureActiveProfileToken();
+    const radioSessionContext = this.radioManager.getCurrentRadioSessionContext();
+    const assertRadioSessionCurrent = (): void => {
+      if (radioSessionContext && this.radioManager.isCurrentRadioSessionContext(radioSessionContext)) {
+        return;
+      }
+      throw new RadioError({
+        code: RadioErrorCode.OPERATION_CANCELLED,
+        message: 'radio session changed during voice radio mode operation',
+        userMessage: 'Radio connection changed while the mode was being set. Please try again.',
+        severity: RadioErrorSeverity.WARNING,
+        context: { reason: 'radio-session-changed', recoverable: true },
+      });
+    };
     const normalizedMode = mode.trim().toUpperCase();
     if (!normalizedMode) {
       throw new Error('radio mode is required');
@@ -173,18 +208,47 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
       throw new Error(`Radio mode '${normalizedMode}' is not supported by the current radio`);
     }
 
+    assertRadioSessionCurrent();
     await this.radioManager.setMode(normalizedMode, undefined, { intent: 'voice' });
+    assertRadioSessionCurrent();
+    if (!configManager.isActiveProfileTokenCurrent(profileToken)) {
+      logger.info('Discarding stale voice radio mode result after Profile transition', profileToken);
+      return;
+    }
     if (normalizedMode !== 'FM') {
       try {
+        if (!configManager.isActiveProfileTokenCurrent(profileToken)) {
+          return;
+        }
         await this.radioManager.applyRepeaterDuplexConfig({ repeaterShift: 'none' });
+        assertRadioSessionCurrent();
+        if (!configManager.isActiveProfileTokenCurrent(profileToken)) {
+          return;
+        }
         await this.radioManager.applyToneSquelchConfig({ toneMode: 'none' });
+        assertRadioSessionCurrent();
+        if (!configManager.isActiveProfileTokenCurrent(profileToken)) {
+          return;
+        }
       } catch (error) {
+        if (
+          error instanceof RadioError
+          && error.code === RadioErrorCode.OPERATION_CANCELLED
+          && error.context?.reason === 'radio-session-changed'
+        ) {
+          throw error;
+        }
         logger.warn('Failed to clear FM-only voice settings after radio mode change', error);
       }
     }
 
-    const configManager = ConfigManager.getInstance();
-    const lastVoice = configManager.getLastVoiceFrequency();
+    if (!configManager.isActiveProfileTokenCurrent(profileToken)) {
+      logger.info('Discarding stale voice radio mode result after Profile transition', profileToken);
+      return;
+    }
+    const lastVoice = profileToken.profileId
+      ? configManager.getProfileOperatingState(profileToken.profileId)?.lastVoiceFrequency
+      : null;
     if (lastVoice?.frequency) {
       await configManager.updateLastVoiceFrequency({
         frequency: lastVoice.frequency,
@@ -203,7 +267,11 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
             repeaterShift: 'none',
             toneMode: 'none',
           }),
-      });
+      }, profileToken.profileId);
+      assertRadioSessionCurrent();
+    }
+    if (!configManager.isActiveProfileTokenCurrent(profileToken)) {
+      return;
     }
     this.emit('voiceRadioModeChanged', { radioMode: normalizedMode });
     logger.info('Radio mode changed', { mode: normalizedMode });

@@ -3,7 +3,17 @@ import { Card, CardBody } from '@heroui/react';
 import { api, ApiError, getBandFromFrequency } from '@tx5dr/core';
 import { useTranslation } from 'react-i18next';
 import { useAbility, useAuth, useCan } from '../../store/authStore';
-import { useConnection, useOperators, useRadioConnectionState, useRadioState, useSplitState } from '../../store/radioStore';
+import {
+  awaitProfileScoped,
+  useConnection,
+  useOperators,
+  useProfiles,
+  useProfileRequestScope,
+  useRadioConnectionState,
+  useRadioState,
+  useSplitState,
+  type ProfileRequestScope,
+} from '../../store/radioStore';
 import { createLogger } from '../../utils/logger';
 import { canExecuteRadioFrequency, canWriteRadioFrequency } from '../../utils/radioControl';
 import { resetOperatorsForOperatingStateChange } from '../../utils/operatorReset';
@@ -18,6 +28,12 @@ const DEFAULT_CW_FREQUENCY = 14_000_000;
 const FREQ_PENDING_TIMEOUT_MS = 1500;
 const FREQ_MATCH_TOLERANCE_HZ = 10;
 const FREQ_DEBOUNCE_MS = 50;
+
+interface PendingFrequencyIntent {
+  intendedFrequency: number;
+  sentAt: number;
+  requestScope: ProfileRequestScope;
+}
 
 type DigitEntry = { char: string; placeValue: number; isSeparator: false; isLeadingZero: boolean }
   | { char: string; isSeparator: true };
@@ -61,6 +77,12 @@ export const CWFrequencyControl: React.FC = () => {
   const { t } = useTranslation('voice');
   const connection = useConnection();
   const { operators } = useOperators();
+  const { activeProfileId, profileGeneration } = useProfiles();
+  const {
+    profileRequestScopeRef,
+    capture: captureProfileRequestScope,
+    isCurrent: isProfileRequestScopeCurrent,
+  } = useProfileRequestScope();
   const radioConnection = useRadioConnectionState();
   const radio = useRadioState();
   const { state: authState } = useAuth();
@@ -78,7 +100,7 @@ export const CWFrequencyControl: React.FC = () => {
   const [currentFrequency, setCurrentFrequency] = React.useState<number>(liveFrequency ?? DEFAULT_CW_FREQUENCY);
   const currentFrequencyRef = React.useRef(currentFrequency);
   currentFrequencyRef.current = currentFrequency;
-  const pendingFreqRef = React.useRef<{ intendedFrequency: number; sentAt: number } | null>(null);
+  const pendingFreqRef = React.useRef<PendingFrequencyIntent | null>(null);
   const freqDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Split state
@@ -90,8 +112,23 @@ export const CWFrequencyControl: React.FC = () => {
   const currentTxFrequencyRef = React.useRef(currentTxFrequency);
   currentTxFrequencyRef.current = currentTxFrequency;
   const canEditSplitTxFrequency = currentTxFrequency > 0;
-  const pendingTxFreqRef = React.useRef<{ intendedFrequency: number; sentAt: number } | null>(null);
+  const pendingTxFreqRef = React.useRef<PendingFrequencyIntent | null>(null);
   const txFreqDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (freqDebounceTimerRef.current) {
+      clearTimeout(freqDebounceTimerRef.current);
+      freqDebounceTimerRef.current = null;
+    }
+    if (txFreqDebounceTimerRef.current) {
+      clearTimeout(txFreqDebounceTimerRef.current);
+      txFreqDebounceTimerRef.current = null;
+    }
+    pendingFreqRef.current = null;
+    pendingTxFreqRef.current = null;
+    setCurrentFrequency(DEFAULT_CW_FREQUENCY);
+    setCurrentTxFrequency(0);
+  }, [activeProfileId, profileGeneration]);
 
   // Sync TX frequency from store when split state changes
   React.useEffect(() => {
@@ -114,17 +151,26 @@ export const CWFrequencyControl: React.FC = () => {
     if (typeof incoming !== 'number' || incoming <= 0) return;
     const pending = pendingFreqRef.current;
     if (pending) {
+      if (!isProfileRequestScopeCurrent(pending.requestScope)) {
+        pendingFreqRef.current = null;
+        setCurrentFrequency(incoming);
+        return;
+      }
       const withinWindow = Date.now() - pending.sentAt < FREQ_PENDING_TIMEOUT_MS;
       const matched = Math.abs(incoming - pending.intendedFrequency) < FREQ_MATCH_TOLERANCE_HZ;
       if (withinWindow && !matched) return;
       if (matched) pendingFreqRef.current = null;
     }
     setCurrentFrequency(incoming);
-  }, []);
+  }, [isProfileRequestScopeCurrent]);
 
   const flushPendingFrequency = useCallback(async () => {
     const pending = pendingFreqRef.current;
     if (!pending) return;
+    if (!isProfileRequestScopeCurrent(pending.requestScope)) {
+      pendingFreqRef.current = null;
+      return;
+    }
 
     if (!canWriteTargetFrequency(pending.intendedFrequency) || !connection.state.isConnected) {
       pendingFreqRef.current = null;
@@ -134,15 +180,21 @@ export const CWFrequencyControl: React.FC = () => {
     const freq = pending.intendedFrequency;
     const band = getBandFromFrequency(freq);
     const description = `${(freq / 1_000_000).toFixed(3)} MHz`;
-    pendingFreqRef.current = { intendedFrequency: freq, sentAt: Date.now() };
+    pendingFreqRef.current = { ...pending, sentAt: Date.now() };
 
     try {
-      const response = await setRadioFrequencyWithIntent({
-        frequency: freq,
-        mode: 'CW',
-        band,
-        description,
-      });
+      const scopedResponse = await awaitProfileScoped(
+        setRadioFrequencyWithIntent({
+          frequency: freq,
+          mode: 'CW',
+          band,
+          description,
+        }),
+        pending.requestScope,
+        profileRequestScopeRef,
+      );
+      if (scopedResponse.status === 'stale') return;
+      const response = scopedResponse.value;
       if (response.success) {
         resetOperatorsAfterOperatingStateChange();
       }
@@ -152,7 +204,13 @@ export const CWFrequencyControl: React.FC = () => {
         showErrorToast({ userMessage: error.userMessage, suggestions: error.suggestions, severity: error.severity, code: error.code });
       }
     }
-  }, [canWriteTargetFrequency, connection.state.isConnected, resetOperatorsAfterOperatingStateChange]);
+  }, [
+    canWriteTargetFrequency,
+    connection.state.isConnected,
+    isProfileRequestScopeCurrent,
+    profileRequestScopeRef,
+    resetOperatorsAfterOperatingStateChange,
+  ]);
 
   const applyFrequency = useCallback((newFreq: number) => {
     if (!canWriteTargetFrequency(newFreq) || !connection.state.isConnected) {
@@ -160,8 +218,9 @@ export const CWFrequencyControl: React.FC = () => {
       return;
     }
 
+    const requestScope = captureProfileRequestScope();
     setCurrentFrequency(newFreq);
-    pendingFreqRef.current = { intendedFrequency: newFreq, sentAt: Date.now() };
+    pendingFreqRef.current = { intendedFrequency: newFreq, sentAt: Date.now(), requestScope };
     if (freqDebounceTimerRef.current) {
       clearTimeout(freqDebounceTimerRef.current);
     }
@@ -169,7 +228,12 @@ export const CWFrequencyControl: React.FC = () => {
       freqDebounceTimerRef.current = null;
       void flushPendingFrequency();
     }, FREQ_DEBOUNCE_MS);
-  }, [canWriteTargetFrequency, connection.state.isConnected, flushPendingFrequency]);
+  }, [
+    canWriteTargetFrequency,
+    captureProfileRequestScope,
+    connection.state.isConnected,
+    flushPendingFrequency,
+  ]);
 
   useEffect(() => () => {
     if (freqDebounceTimerRef.current) {
@@ -192,18 +256,33 @@ export const CWFrequencyControl: React.FC = () => {
     if (liveFrequency !== null) return;
     if (!canUseAuthenticatedRest) return;
     let cancelled = false;
-    api.getLastFrequency()
-      .then((resp) => {
-        if (cancelled) return;
-        if (resp.lastCWFrequency?.frequency) {
-          setCurrentFrequency(resp.lastCWFrequency.frequency);
+    const requestScope = captureProfileRequestScope();
+    void (async () => {
+      try {
+        const scopedResponse = await awaitProfileScoped(
+          api.getLastFrequency(),
+          requestScope,
+          profileRequestScopeRef,
+        );
+        if (cancelled || scopedResponse.status === 'stale') return;
+        if (scopedResponse.value.lastCWFrequency?.frequency) {
+          setCurrentFrequency(scopedResponse.value.lastCWFrequency.frequency);
         }
-      })
-      .catch((error) => logger.warn('Failed to load last CW frequency:', error));
+      } catch (error) {
+        logger.warn('Failed to load last CW frequency:', error);
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [canUseAuthenticatedRest, liveFrequency]);
+  }, [
+    activeProfileId,
+    canUseAuthenticatedRest,
+    captureProfileRequestScope,
+    liveFrequency,
+    profileGeneration,
+    profileRequestScopeRef,
+  ]);
 
   useEffect(() => {
     const radioService = connection.state.radioService;
@@ -231,8 +310,9 @@ export const CWFrequencyControl: React.FC = () => {
       return;
     }
 
+    const requestScope = captureProfileRequestScope();
     setCurrentTxFrequency(newFreq);
-    pendingTxFreqRef.current = { intendedFrequency: newFreq, sentAt: Date.now() };
+    pendingTxFreqRef.current = { intendedFrequency: newFreq, sentAt: Date.now(), requestScope };
     if (txFreqDebounceTimerRef.current) {
       clearTimeout(txFreqDebounceTimerRef.current);
     }
@@ -240,13 +320,24 @@ export const CWFrequencyControl: React.FC = () => {
       txFreqDebounceTimerRef.current = null;
       const pending = pendingTxFreqRef.current;
       if (!pending) return;
-      pendingTxFreqRef.current = { intendedFrequency: pending.intendedFrequency, sentAt: Date.now() };
+      if (!isProfileRequestScopeCurrent(pending.requestScope)) {
+        pendingTxFreqRef.current = null;
+        return;
+      }
+      pendingTxFreqRef.current = { ...pending, sentAt: Date.now() };
       const wsClient = connection.state.radioService?.wsClientInstance;
       if (wsClient) {
         wsClient.setSplitFrequency(pending.intendedFrequency);
       }
     }, FREQ_DEBOUNCE_MS);
-  }, [canWriteFrequency, connection.state.isConnected, connection.state.radioService, splitTxFrequencyWritable]);
+  }, [
+    canWriteFrequency,
+    captureProfileRequestScope,
+    connection.state.isConnected,
+    connection.state.radioService,
+    isProfileRequestScopeCurrent,
+    splitTxFrequencyWritable,
+  ]);
 
   const changeDigitAtPlace = useCallback((placeValue: number, delta: number) => {
     const freq = currentFrequencyRef.current;

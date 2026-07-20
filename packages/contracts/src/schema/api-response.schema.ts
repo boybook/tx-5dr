@@ -144,6 +144,8 @@ export const SetFrequencyResponseSchema = z.object({
   mode: z.string().optional(),
   band: z.string().optional(),
   radioMode: z.string().optional(),
+  modeDegraded: z.boolean().optional(),
+  modeFallbackReason: z.string().optional(),
   repeaterShift: z.enum(['none', 'minus', 'plus']).optional(),
   repeaterOffsetHz: z.number().optional(),
   toneMode: z.enum(['none', 'ctcss', 'dcs']).optional(),

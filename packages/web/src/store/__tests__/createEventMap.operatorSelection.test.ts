@@ -76,6 +76,7 @@ function createEventMapForTest(authOverrides: Partial<AuthState> = {}) {
     radioStateRef: { current: initialRadioState },
     capabilitiesRef: { current: null },
     activeProfileIdRef: { current: null },
+    profileRequestScopeRef: { current: { profileId: null, generation: 0 } },
     spectrumNegotiation: {
       applySpectrumSelection: vi.fn(),
       applyProfileDrivenSpectrumNegotiation: vi.fn(),

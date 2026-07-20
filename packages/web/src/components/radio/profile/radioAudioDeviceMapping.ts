@@ -64,18 +64,20 @@ function getUsbAudioDeviceMatchScore(device: AudioDevice): number {
 export function matchUsbAudioDevice(
   devices: AudioDevice[],
 ): AudioDevice | null {
-  let bestMatch: AudioDevice | null = null;
+  let bestMatches: AudioDevice[] = [];
   let bestScore = 0;
 
   for (const device of devices) {
     const score = getUsbAudioDeviceMatchScore(device);
     if (score > bestScore) {
-      bestMatch = device;
+      bestMatches = [device];
       bestScore = score;
+    } else if (score > 0 && score === bestScore) {
+      bestMatches.push(device);
     }
   }
 
-  return bestMatch;
+  return bestMatches.length === 1 ? bestMatches[0] : null;
 }
 
 /**
@@ -123,6 +125,8 @@ export function selectBestSampleRate(
 export interface AudioMatchResult {
   inputDeviceName?: string;
   outputDeviceName?: string;
+  inputRouteKey?: string;
+  outputRouteKey?: string;
   inputSampleRate?: number;
   outputSampleRate?: number;
 }
@@ -153,6 +157,7 @@ export async function matchAudioDeviceForRig(
     ...(inputDevice
       ? {
           inputDeviceName: inputDevice.name,
+          ...(inputDevice.routeKey ? { inputRouteKey: inputDevice.routeKey } : {}),
           inputSampleRate: selectBestSampleRate(
             recommendedRate,
             inputDevice.sampleRates ?? [],
@@ -162,6 +167,7 @@ export async function matchAudioDeviceForRig(
     ...(outputDevice
       ? {
           outputDeviceName: outputDevice.name,
+          ...(outputDevice.routeKey ? { outputRouteKey: outputDevice.routeKey } : {}),
           outputSampleRate: selectBestSampleRate(
             recommendedRate,
             outputDevice.sampleRates ?? [],

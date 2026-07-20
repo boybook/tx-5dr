@@ -3,7 +3,10 @@ import type { CoreRadioCapabilities, DigitalRadioEngineEvents, EngineMode, Prese
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { getBandFromFrequency } from '@tx5dr/core';
 import { RadioError } from '../utils/errors/RadioError.js';
-import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
+import type {
+  PhysicalRadioManager,
+  RadioFrequencyChangeContext,
+} from '../radio/PhysicalRadioManager.js';
 import type { FrequencyManager } from '../radio/FrequencyManager.js';
 import type { SlotPackManager } from '../slot/SlotPackManager.js';
 import type { RadioOperatorManager } from '../operator/RadioOperatorManager.js';
@@ -152,11 +155,33 @@ export class RadioBridge {
     // 监听电台频率变化（自动同步）
     this.lm.listen(radioManager, 'radioFrequencyChanged', async (...args: unknown[]) => {
       const frequency = args[0] as number;
-      logger.debug(`Radio frequency changed: ${(frequency / 1000000).toFixed(3)} MHz`);
+      const sessionContext = args[1] as RadioFrequencyChangeContext | undefined;
+      if (!sessionContext || !radioManager.isCurrentRadioSessionContext(sessionContext)) {
+        logger.debug('Dropping stale radio frequency event', {
+          frequency,
+          profileId: sessionContext?.profileId,
+          sessionGeneration: sessionContext?.sessionGeneration,
+        });
+        return;
+      }
+      const profileId = sessionContext.profileId;
+      logger.debug(`Radio frequency changed: ${(frequency / 1000000).toFixed(3)} MHz`, {
+        profileId,
+        sessionGeneration: sessionContext?.sessionGeneration,
+      });
 
       try {
         const frequencyInfo = this.resolveFrequencyInfo(frequency, frequencyManager);
-        await this.persistFrequencyInfo(frequencyInfo);
+        await this.persistFrequencyInfo(frequencyInfo, profileId);
+
+        if (!radioManager.isCurrentRadioSessionContext(sessionContext)) {
+          logger.debug('Dropping radio frequency result after session changed during persistence', {
+            frequency,
+            profileId: sessionContext.profileId,
+            sessionGeneration: sessionContext.sessionGeneration,
+          });
+          return;
+        }
 
         slotPackManager.clearInMemory();
         logger.debug('Cleared historical decode data');
@@ -195,9 +220,16 @@ export class RadioBridge {
     logger.info('Radio connected');
 
     const { engineEmitter, radioManager } = this.deps;
+    const sessionContext = radioManager.getCurrentRadioSessionContext();
+    if (!sessionContext) {
+      logger.debug('Dropping connected event without an active radio session');
+      return;
+    }
     const radioInfo = await radioManager.getRadioInfo();
+    if (!radioManager.isCurrentRadioSessionContext(sessionContext)) return;
     const radioConfig = radioManager.getConfig();
     const tunerCapabilities = await radioManager.getTunerCapabilities();
+    if (!radioManager.isCurrentRadioSessionContext(sessionContext)) return;
 
     engineEmitter.emit('radioStatusChanged', buildRadioStatusPayload({
       connected: true,
@@ -208,6 +240,7 @@ export class RadioBridge {
       radioManager,
     }));
 
+    if (!radioManager.isCurrentRadioSessionContext(sessionContext)) return;
     await this.restoreRunningStateIfNeeded();
   }
 
@@ -317,10 +350,10 @@ export class RadioBridge {
     toneMode?: PresetFrequency['toneMode'];
     ctcssToneTenthsHz?: number;
     dcsCode?: number;
-  }): Promise<void> {
+  }, profileId: string | null): Promise<void> {
     const configManager = ConfigManager.getInstance();
     if (frequencyInfo.mode === 'VOICE') {
-      await configManager.updateLastVoiceFrequency({
+      const next = {
         frequency: frequencyInfo.frequency,
         radioMode: frequencyInfo.radioMode,
         band: frequencyInfo.band,
@@ -330,27 +363,30 @@ export class RadioBridge {
         toneMode: frequencyInfo.toneMode,
         ctcssToneTenthsHz: frequencyInfo.ctcssToneTenthsHz,
         dcsCode: frequencyInfo.dcsCode,
-      });
+      };
+      await configManager.updateLastVoiceFrequency(next, profileId);
       return;
     }
 
     if (frequencyInfo.mode === 'CW') {
-      await configManager.updateLastCWFrequency({
+      const next = {
         frequency: frequencyInfo.frequency,
         radioMode: frequencyInfo.radioMode,
         band: frequencyInfo.band,
         description: frequencyInfo.description,
-      });
+      };
+      await configManager.updateLastCWFrequency(next, profileId);
       return;
     }
 
-    await configManager.updateLastSelectedFrequency({
+    const next = {
       frequency: frequencyInfo.frequency,
       mode: frequencyInfo.mode,
       radioMode: frequencyInfo.radioMode,
       band: frequencyInfo.band,
       description: frequencyInfo.description,
-    });
+    };
+    await configManager.updateLastSelectedFrequency(next, profileId);
   }
 
   private async restoreRunningStateIfNeeded(): Promise<void> {

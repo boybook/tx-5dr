@@ -26,6 +26,7 @@ import { CWKeyerHardware } from '../cw/CWKeyerHardware.js';
 import { CWKeyerTestFailure, type CWSerialKeyerTestTarget } from '../cw/CWKeyerManager.js';
 import {
   buildFrequencyOperatingStateRequest,
+  projectAppliedFrequencyRadioMode,
   resolveFrequencyRadioMode,
 } from '../radio/frequencyRadioMode.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
@@ -36,6 +37,7 @@ import { canReadFullProfiles, redactHamlibConfigForRead } from '../security/prof
 
 export {
   buildFrequencyOperatingStateRequest,
+  projectAppliedFrequencyRadioMode,
   resolveFrequencyRadioMode,
 } from '../radio/frequencyRadioMode.js';
 
@@ -602,157 +604,319 @@ export async function radioRoutes(fastify: FastifyInstance) {
   fastify.post('/frequency', {
     preHandler: [requireAbilityFor('execute', 'RadioFrequency', (r) => ({ frequency: (r.body as any).frequency }))],
   }, async (req, reply) => {
-    const {
-      frequency,
-      radioMode,
-      mode,
-      band,
-      description,
-      repeaterShift,
-      repeaterOffsetHz,
-      toneMode,
-      ctcssToneTenthsHz,
-      dcsCode,
-    } = req.body as {
-      frequency: number;
-      radioMode?: string;
-      mode?: string;
-      band?: string;
-      description?: string;
-      repeaterShift?: string;
-      repeaterOffsetHz?: number;
-      toneMode?: string;
-      ctcssToneTenthsHz?: number;
-      dcsCode?: number;
-    };
-    if (!frequency || typeof frequency !== 'number') {
-      throw new RadioError({
-        code: RadioErrorCode.INVALID_CONFIG,
-        message: `Invalid frequency value: ${frequency}`,
-        userMessage: 'Please provide a valid frequency value',
-        severity: RadioErrorSeverity.WARNING,
-        suggestions: [
-          'Confirm frequency parameter is a number',
-          'Check if frequency is within radio supported range'
-        ],
+    const profileToken = configManager.captureActiveProfileToken();
+    return engine.getProfileActivationCoordinator().runExclusive(async () => {
+      const assertProfileContextCurrent = (): void => {
+        if (configManager.isActiveProfileTokenCurrent(profileToken)) return;
+        throw new RadioError({
+          code: RadioErrorCode.OPERATION_CANCELLED,
+          message: 'Frequency operation cancelled because the active Profile changed',
+          userMessage: 'The active radio Profile changed. Please retry the frequency operation.',
+          severity: RadioErrorSeverity.WARNING,
+          context: {
+            profileId: profileToken.profileId,
+            generation: profileToken.generation,
+          },
+        });
+      };
+      assertProfileContextCurrent();
+      const {
+        frequency,
+        radioMode,
+        mode,
+        band,
+        description,
+        repeaterShift,
+        repeaterOffsetHz,
+        toneMode,
+        ctcssToneTenthsHz,
+        dcsCode,
+      } = req.body as {
+        frequency: number;
+        radioMode?: string;
+        mode?: string;
+        band?: string;
+        description?: string;
+        repeaterShift?: string;
+        repeaterOffsetHz?: number;
+        toneMode?: string;
+        ctcssToneTenthsHz?: number;
+        dcsCode?: number;
+      };
+      if (!frequency || typeof frequency !== 'number') {
+        throw new RadioError({
+          code: RadioErrorCode.INVALID_CONFIG,
+          message: `Invalid frequency value: ${frequency}`,
+          userMessage: 'Please provide a valid frequency value',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: [
+            'Confirm frequency parameter is a number',
+            'Check if frequency is within radio supported range'
+          ],
+        });
+      }
+
+      const effectiveMode = mode
+        || (engine.getEngineMode() === 'voice' ? 'VOICE' : engine.getEngineMode() === 'cw' ? 'CW' : 'FT8');
+      const normalizedRadioMode = normalizeRadioMode(radioMode);
+      const activeRadioConfig = configManager.getRadioConfig();
+      const radioModeResolution = resolveFrequencyRadioMode({
+        effectiveMode,
+        requestedRadioMode: normalizedRadioMode,
+        engineMode: engine.getEngineMode(),
+        digitalModeRadioMode: activeRadioConfig.digitalModeRadioMode,
       });
-    }
+      const requestedDisplayRadioMode = radioModeResolution.displayRadioMode;
+      const operatingStateRequest = buildFrequencyOperatingStateRequest({
+        frequency,
+        radioMode: normalizedRadioMode,
+        effectiveMode,
+        engineMode: engine.getEngineMode(),
+        digitalModeRadioMode: activeRadioConfig.digitalModeRadioMode,
+      });
+      const modeWasRequested = Boolean(operatingStateRequest.mode);
+      const auxControlPlan = buildFrequencyAuxControlPlan({
+        effectiveMode,
+        radioMode: requestedDisplayRadioMode,
+        repeaterShift,
+        repeaterOffsetHz,
+        toneMode,
+        ctcssToneTenthsHz,
+        dcsCode,
+      });
+      const repeaterDuplexToApply = auxControlPlan.repeaterDuplex;
+      const toneSquelchToApply = auxControlPlan.toneSquelch;
 
-    const effectiveMode = mode
-      || (engine.getEngineMode() === 'voice' ? 'VOICE' : engine.getEngineMode() === 'cw' ? 'CW' : 'FT8');
-    const normalizedRadioMode = normalizeRadioMode(radioMode);
-    const activeRadioConfig = configManager.getRadioConfig();
-    const radioModeResolution = resolveFrequencyRadioMode({
-      effectiveMode,
-      requestedRadioMode: normalizedRadioMode,
-      engineMode: engine.getEngineMode(),
-      digitalModeRadioMode: activeRadioConfig.digitalModeRadioMode,
-    });
-    const effectiveRadioMode = radioModeResolution.displayRadioMode;
-    const auxControlPlan = buildFrequencyAuxControlPlan({
-      effectiveMode,
-      radioMode: effectiveRadioMode,
-      repeaterShift,
-      repeaterOffsetHz,
-      toneMode,
-      ctcssToneTenthsHz,
-      dcsCode,
-    });
-    const repeaterDuplexToApply = auxControlPlan.repeaterDuplex;
-    const toneSquelchToApply = auxControlPlan.toneSquelch;
+      // 获取当前频率配置，用于判断是否真正改变
+      const lastFrequency = effectiveMode === 'VOICE'
+        ? configManager.getLastVoiceFrequency()
+        : effectiveMode === 'CW'
+          ? configManager.getLastCWFrequency()
+          : configManager.getLastSelectedFrequency();
+      const lastMode = effectiveMode === 'VOICE' || effectiveMode === 'CW'
+        ? effectiveMode
+        : (lastFrequency as { mode?: string } | null | undefined)?.mode;
+      const isFrequencyChanged = !lastFrequency ||
+        lastFrequency.frequency !== frequency ||
+        lastMode !== effectiveMode;
 
-    // 获取当前频率配置，用于判断是否真正改变
-    const lastFrequency = effectiveMode === 'VOICE'
-      ? configManager.getLastVoiceFrequency()
-      : effectiveMode === 'CW'
-        ? configManager.getLastCWFrequency()
-        : configManager.getLastSelectedFrequency();
-    const lastMode = effectiveMode === 'VOICE' || effectiveMode === 'CW'
-      ? effectiveMode
-      : (lastFrequency as { mode?: string } | null | undefined)?.mode;
-    const isFrequencyChanged = !lastFrequency ||
-      lastFrequency.frequency !== frequency ||
-      lastMode !== effectiveMode;
+      if (isFrequencyChanged) {
+        logger.debug(`Frequency changed: ${lastFrequency?.frequency || 'null'} -> ${frequency}, mode: ${lastMode || 'null'} -> ${effectiveMode}`);
+      }
 
-    if (isFrequencyChanged) {
-      logger.debug(`Frequency changed: ${lastFrequency?.frequency || 'null'} -> ${frequency}, mode: ${lastMode || 'null'} -> ${effectiveMode}`);
-    } else {
-      logger.debug(`Frequency unchanged, skipping clear and broadcast: ${frequency} Hz, mode: ${effectiveMode}`);
-    }
+      const radioConnected = radioManager.isConnected();
+      const radioSessionContext = radioManager.getCurrentRadioSessionContext();
+      const assertRadioSessionCurrent = (): void => {
+        const connectionStateUnchanged = radioManager.isConnected() === radioConnected;
+        const sessionUnchanged = radioSessionContext
+          ? radioManager.isCurrentRadioSessionContext(radioSessionContext)
+          : radioManager.getCurrentRadioSessionContext() === null;
+        const sessionShapeValid = radioConnected
+          ? radioSessionContext !== null
+          : radioSessionContext === null;
+        if (connectionStateUnchanged && sessionUnchanged && sessionShapeValid) return;
+        throw new RadioError({
+          code: RadioErrorCode.OPERATION_CANCELLED,
+          message: 'radio session changed during frequency operation',
+          userMessage: 'The radio reconnected while changing frequency. Please retry the operation.',
+          severity: RadioErrorSeverity.WARNING,
+          context: { reason: 'radio-session-changed', recoverable: true },
+        });
+      };
+      assertRadioSessionCurrent();
 
-    // 保存到配置文件（无论电台是否连接都要保存）
-    // Voice mode saves to separate lastVoiceFrequency to avoid overwriting digital frequency
-    if (effectiveMode && band) {
-      try {
-        if (effectiveMode === 'VOICE') {
-          const previousVoiceFrequency = configManager.getLastVoiceFrequency();
-          await configManager.updateLastVoiceFrequency({
-            ...(previousVoiceFrequency ?? {}),
-            frequency,
-            band,
-            description,
-            ...(normalizedRadioMode ? { radioMode: normalizedRadioMode } : {}),
-            ...(repeaterDuplexToApply ? {
-              repeaterShift: repeaterDuplexToApply.repeaterShift,
-              repeaterOffsetHz: repeaterDuplexToApply.repeaterOffsetHz,
-            } : {}),
-            ...(toneSquelchToApply ? {
-              toneMode: toneSquelchToApply.toneMode,
-              ctcssToneTenthsHz: toneSquelchToApply.ctcssToneTenthsHz,
-              dcsCode: toneSquelchToApply.dcsCode,
-            } : {}),
-          });
-        } else if (effectiveMode === 'CW') {
-          const previousCWFrequency = configManager.getLastCWFrequency();
-          await configManager.updateLastCWFrequency({
-            ...(previousCWFrequency ?? {}),
-            frequency,
-            band,
-            description,
-            ...(normalizedRadioMode ? { radioMode: normalizedRadioMode } : {}),
-          });
-        } else {
-          const previousFrequency = configManager.getLastSelectedFrequency();
-          const nextFrequency: {
-            frequency: number;
-            mode: string;
-            band: string;
-            description?: string;
-            radioMode?: string;
-          } = {
-            ...(previousFrequency ?? {}),
+      const persistFrequencyState = async (appliedRadioMode: string | undefined): Promise<void> => {
+        if (!effectiveMode || !band) return;
+        assertProfileContextCurrent();
+        assertRadioSessionCurrent();
+
+        try {
+          if (effectiveMode === 'VOICE') {
+            const previousVoiceFrequency = configManager.getLastVoiceFrequency();
+            const nextVoiceFrequency = {
+              ...(previousVoiceFrequency ?? {}),
+              frequency,
+              band,
+              description,
+              radioMode: modeWasRequested ? appliedRadioMode : previousVoiceFrequency?.radioMode,
+              ...(repeaterDuplexToApply ? {
+                repeaterShift: repeaterDuplexToApply.repeaterShift,
+                repeaterOffsetHz: repeaterDuplexToApply.repeaterOffsetHz,
+              } : {}),
+              ...(toneSquelchToApply ? {
+                toneMode: toneSquelchToApply.toneMode,
+                ctcssToneTenthsHz: toneSquelchToApply.ctcssToneTenthsHz,
+                dcsCode: toneSquelchToApply.dcsCode,
+              } : {}),
+            };
+            if (!nextVoiceFrequency.radioMode) delete nextVoiceFrequency.radioMode;
+            await configManager.updateLastVoiceFrequency(nextVoiceFrequency, profileToken.profileId);
+          } else if (effectiveMode === 'CW') {
+            const previousCWFrequency = configManager.getLastCWFrequency();
+            const nextCWFrequency = {
+              ...(previousCWFrequency ?? {}),
+              frequency,
+              band,
+              description,
+              radioMode: modeWasRequested ? appliedRadioMode : previousCWFrequency?.radioMode,
+            };
+            if (!nextCWFrequency.radioMode) delete nextCWFrequency.radioMode;
+            await configManager.updateLastCWFrequency(nextCWFrequency, profileToken.profileId);
+          } else {
+            const previousFrequency = configManager.getLastSelectedFrequency();
+            const nextFrequency: {
+              frequency: number;
+              mode: string;
+              band: string;
+              description?: string;
+              radioMode?: string;
+            } = {
+              ...(previousFrequency ?? {}),
+              frequency,
+              mode: effectiveMode,
+              band,
+              description,
+              radioMode: appliedRadioMode,
+            };
+            if (!appliedRadioMode) {
+              delete nextFrequency.radioMode;
+            }
+            await configManager.updateLastSelectedFrequency(nextFrequency, profileToken.profileId);
+          }
+        } catch (configError) {
+          logger.warn(`Failed to save frequency config: ${(configError as Error).message}`);
+        }
+        assertProfileContextCurrent();
+        assertRadioSessionCurrent();
+      };
+
+      const hasOperatingStateChanged = (appliedRadioMode: string | undefined): boolean => {
+        const shouldCompareRadioMode = modeWasRequested
+          || (effectiveMode !== 'VOICE' && effectiveMode !== 'CW');
+        const previousRadioMode = (lastFrequency as { radioMode?: string } | null | undefined)?.radioMode;
+        return isFrequencyChanged || (shouldCompareRadioMode && previousRadioMode !== appliedRadioMode);
+      };
+
+      if (!radioConnected) {
+        assertRadioSessionCurrent();
+        const modeProjection = projectAppliedFrequencyRadioMode(requestedDisplayRadioMode);
+        const appliedRadioMode = modeProjection.displayRadioMode;
+        await persistFrequencyState(appliedRadioMode);
+        assertProfileContextCurrent();
+        assertRadioSessionCurrent();
+        const stateChanged = hasOperatingStateChanged(appliedRadioMode);
+
+        // 电台未连接时，只记录频率但不实际设置
+        logger.debug(`Radio not connected, recording frequency: ${(frequency / 1000000).toFixed(3)} MHz${appliedRadioMode ? ` (${appliedRadioMode})` : ''}`);
+
+        // 只有在频率真正改变时才广播
+        if (stateChanged) {
+          assertRadioSessionCurrent();
+          engine.emit('frequencyChanged', {
             frequency,
             mode: effectiveMode,
-            band,
-            description,
-            radioMode: effectiveRadioMode,
-          };
-          if (!effectiveRadioMode) {
-            delete nextFrequency.radioMode;
-          }
-          await configManager.updateLastSelectedFrequency(nextFrequency);
+            band: band || '',
+            description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
+            radioMode: appliedRadioMode,
+            radioConnected: false,
+            source: 'program',
+          });
         }
-      } catch (configError) {
-        logger.warn(`Failed to save frequency config: ${(configError as Error).message}`);
+
+        assertRadioSessionCurrent();
+        return reply.send({
+          success: true,
+          frequency,
+          radioMode: appliedRadioMode,
+          repeaterShift: repeaterDuplexToApply?.repeaterShift,
+          repeaterOffsetHz: repeaterDuplexToApply?.repeaterOffsetHz,
+          toneMode: toneSquelchToApply?.toneMode,
+          ctcssToneTenthsHz: toneSquelchToApply?.ctcssToneTenthsHz,
+          dcsCode: toneSquelchToApply?.dcsCode,
+          message: 'Frequency recorded (radio not connected)',
+          radioConnected: false
+        });
       }
-    }
 
-    // 检查电台是否已连接
-    const radioConnected = radioManager.isConnected();
+      // 在同一个关键区间内切换频率/模式，避免被后台轮询插入。
+      assertProfileContextCurrent();
+      assertRadioSessionCurrent();
+      const applyResult = await radioManager.applyOperatingState(operatingStateRequest);
+      assertProfileContextCurrent();
+      assertRadioSessionCurrent();
+      const frequencySuccess = applyResult.frequencyApplied;
 
-    if (!radioConnected) {
-      // 电台未连接时，只记录频率但不实际设置
-      logger.debug(`Radio not connected, recording frequency: ${(frequency / 1000000).toFixed(3)} MHz${effectiveRadioMode ? ` (${effectiveRadioMode})` : ''}`);
+      if (!frequencySuccess) {
+        throw new RadioError({
+          code: RadioErrorCode.INVALID_OPERATION,
+          message: 'Failed to set radio frequency',
+          userMessage: 'Cannot set radio frequency',
+          severity: RadioErrorSeverity.ERROR,
+          suggestions: [
+            'Check if radio connection is normal',
+            'Confirm frequency is within radio supported range',
+            'Try reconnecting to the radio'
+          ],
+        });
+      }
 
-      // 只有在频率真正改变时才广播
-      if (isFrequencyChanged) {
+      if (applyResult.modeError) {
+        logger.warn(`Failed to set radio mode: ${applyResult.modeError.message}`);
+        // 模式设置失败不影响频率设置的成功
+      }
+
+      const modeProjection = projectAppliedFrequencyRadioMode(requestedDisplayRadioMode, applyResult);
+      const appliedRadioMode = modeProjection.displayRadioMode;
+      await persistFrequencyState(appliedRadioMode);
+      assertProfileContextCurrent();
+      assertRadioSessionCurrent();
+      const stateChanged = hasOperatingStateChanged(appliedRadioMode);
+      const modeDiagnostics = {
+        ...(modeProjection.modeDegraded ? { modeDegraded: true } : {}),
+        ...(modeProjection.modeFallbackReason
+          ? { modeFallbackReason: modeProjection.modeFallbackReason }
+          : {}),
+      };
+
+      if (auxControlPlan.shouldApply && repeaterDuplexToApply && toneSquelchToApply) {
+        assertProfileContextCurrent();
+        assertRadioSessionCurrent();
+        const repeaterDuplexResult = await radioManager.applyRepeaterDuplexConfig(repeaterDuplexToApply);
+        assertProfileContextCurrent();
+        assertRadioSessionCurrent();
+        if (repeaterDuplexToApply.repeaterShift !== 'none') {
+          emitRepeaterDuplexWarning(engine, repeaterDuplexResult, frequency);
+        }
+
+        const toneSquelchResult = await radioManager.applyToneSquelchConfig(toneSquelchToApply);
+        assertProfileContextCurrent();
+        assertRadioSessionCurrent();
+        if (toneSquelchToApply.toneMode !== 'none') {
+          emitToneSquelchWarning(engine, toneSquelchResult, frequency);
+        }
+      }
+
+      // 只有在频率真正改变时才清空缓存和广播
+      if (stateChanged) {
+        assertProfileContextCurrent();
+        assertRadioSessionCurrent();
+        // 基础动作：立即清空服务端内存中的历史接收缓存
+        try {
+          engine.getSlotPackManager().clearInMemory();
+          logger.debug('Frequency switched: SlotPack memory cache cleared');
+        } catch (e) {
+          logger.warn('Frequency switched: failed to clear SlotPack cache (continuing broadcast):', e);
+        }
+
+        // 广播频率变化到所有客户端
         engine.emit('frequencyChanged', {
           frequency,
           mode: effectiveMode,
           band: band || '',
           description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
-          radioMode: effectiveRadioMode,
-          radioConnected: false,
+          radioMode: appliedRadioMode,
+          ...modeDiagnostics,
+          radioConnected: true,
           source: 'program',
         });
       }
@@ -760,93 +924,20 @@ export async function radioRoutes(fastify: FastifyInstance) {
       return reply.send({
         success: true,
         frequency,
-        radioMode: effectiveRadioMode,
+        radioMode: appliedRadioMode,
+        ...modeDiagnostics,
         repeaterShift: repeaterDuplexToApply?.repeaterShift,
         repeaterOffsetHz: repeaterDuplexToApply?.repeaterOffsetHz,
         toneMode: toneSquelchToApply?.toneMode,
         ctcssToneTenthsHz: toneSquelchToApply?.ctcssToneTenthsHz,
         dcsCode: toneSquelchToApply?.dcsCode,
-        message: 'Frequency recorded (radio not connected)',
-        radioConnected: false
+        message: modeProjection.modeDegraded
+          ? `Frequency set successfully; radio mode applied as ${appliedRadioMode ?? 'unknown'}`
+          : appliedRadioMode
+            ? `Frequency and mode set successfully (${appliedRadioMode})`
+            : 'Frequency set successfully',
+        radioConnected: true
       });
-    }
-
-    // 在同一个关键区间内切换频率/模式，避免被后台轮询插入。
-    const operatingStateRequest = buildFrequencyOperatingStateRequest({
-      frequency,
-      radioMode: normalizedRadioMode,
-      effectiveMode,
-      engineMode: engine.getEngineMode(),
-      digitalModeRadioMode: activeRadioConfig.digitalModeRadioMode,
-    });
-
-    const applyResult = await radioManager.applyOperatingState(operatingStateRequest);
-    const frequencySuccess = applyResult.frequencyApplied;
-
-    if (!frequencySuccess) {
-      throw new RadioError({
-        code: RadioErrorCode.INVALID_OPERATION,
-        message: 'Failed to set radio frequency',
-        userMessage: 'Cannot set radio frequency',
-        severity: RadioErrorSeverity.ERROR,
-        suggestions: [
-          'Check if radio connection is normal',
-          'Confirm frequency is within radio supported range',
-          'Try reconnecting to the radio'
-        ],
-      });
-    }
-
-    if (applyResult.modeError) {
-      logger.warn(`Failed to set radio mode: ${applyResult.modeError.message}`);
-      // 模式设置失败不影响频率设置的成功
-    }
-
-    if (auxControlPlan.shouldApply && repeaterDuplexToApply && toneSquelchToApply) {
-      const repeaterDuplexResult = await radioManager.applyRepeaterDuplexConfig(repeaterDuplexToApply);
-      if (repeaterDuplexToApply.repeaterShift !== 'none') {
-        emitRepeaterDuplexWarning(engine, repeaterDuplexResult, frequency);
-      }
-
-      const toneSquelchResult = await radioManager.applyToneSquelchConfig(toneSquelchToApply);
-      if (toneSquelchToApply.toneMode !== 'none') {
-        emitToneSquelchWarning(engine, toneSquelchResult, frequency);
-      }
-    }
-
-    // 只有在频率真正改变时才清空缓存和广播
-    if (isFrequencyChanged) {
-      // 基础动作：立即清空服务端内存中的历史接收缓存
-      try {
-        engine.getSlotPackManager().clearInMemory();
-        logger.debug('Frequency switched: SlotPack memory cache cleared');
-      } catch (e) {
-        logger.warn('Frequency switched: failed to clear SlotPack cache (continuing broadcast):', e);
-      }
-
-      // 广播频率变化到所有客户端
-      engine.emit('frequencyChanged', {
-        frequency,
-        mode: effectiveMode,
-        band: band || '',
-        description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
-        radioMode: effectiveRadioMode,
-        radioConnected: true,
-        source: 'program',
-      });
-    }
-
-    return reply.send({
-      success: true,
-      frequency,
-      radioMode: effectiveRadioMode,
-      repeaterShift: repeaterDuplexToApply?.repeaterShift,
-      repeaterOffsetHz: repeaterDuplexToApply?.repeaterOffsetHz,
-      toneMode: toneSquelchToApply?.toneMode,
-      ctcssToneTenthsHz: toneSquelchToApply?.ctcssToneTenthsHz,
-      dcsCode: toneSquelchToApply?.dcsCode,
-      message: effectiveRadioMode ? `Frequency and mode set successfully (${effectiveRadioMode})` : 'Frequency set successfully',
-      radioConnected: true
     });
   });
 

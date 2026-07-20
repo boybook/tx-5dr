@@ -56,10 +56,14 @@ jobs:
 
       - name: Install dependencies
         shell: bash
-        run: yarn install
+        run: yarn install --immutable
         env:
           YARN_NODE_LINKER: node-modules
           npm_config_build_from_source: false
+
+      - name: Verify patched Audify native binding
+        shell: bash
+        run: yarn verify:audify-native
 
       - name: Generate release info
         id: release_info

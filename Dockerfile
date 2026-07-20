@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y \
     python3 \
     python3-dev \
     pkg-config \
+    cmake \
     libasound2-dev \
     libpulse-dev \
     libx11-dev \
@@ -76,6 +77,8 @@ RUN echo "Installing dependencies for $(uname -m)..." && \
         echo "Immutable install failed, trying fallback..." && \
         yarn install --network-timeout 300000; \
     }
+
+RUN yarn verify:audify-native
 
 # 复制源代码
 COPY . .

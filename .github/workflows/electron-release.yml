@@ -101,7 +101,7 @@ jobs:
             libasound2-dev libpulse-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
             libopus-dev \
-            portaudio19-dev build-essential python3-dev pkg-config \
+            portaudio19-dev build-essential python3-dev pkg-config cmake \
             xz-utils rpm cpio
 
       - name: Verify Yarn version
@@ -139,6 +139,11 @@ jobs:
           CXX: ${{ matrix.platform != 'win32' && 'g++' || '' }}
           # Force Yarn to use node-modules linker (should be in .yarnrc.yml)
           YARN_NODE_LINKER: node-modules
+
+      - name: Verify patched Audify native binding
+        if: runner.os != 'macOS'
+        shell: bash
+        run: yarn verify:audify-native
 
       - name: Generate ICO file (Windows)
         if: matrix.os == 'windows-latest'

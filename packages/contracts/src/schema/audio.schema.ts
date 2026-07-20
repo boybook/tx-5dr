@@ -86,6 +86,14 @@ export const AudioDeviceSchema = z.object({
   routeState: AudioDeviceRouteStateSchema.optional(),
   failureReason: z.string().min(1).optional(),
   capabilities: AudioDeviceCapabilitiesSchema.optional(),
+  /** Secondary identity text used to distinguish otherwise identical endpoints. */
+  detail: z.string().min(1).optional(),
+  vendorId: z.string().min(1).optional(),
+  productId: z.string().min(1).optional(),
+  serialNumber: z.string().min(1).optional(),
+  usbPath: z.string().min(1).optional(),
+  alsaCard: z.number().int().nonnegative().optional(),
+  alsaCardId: z.string().min(1).optional(),
 });
 
 export const AudioDeviceResolutionStatusSchema = z.enum([

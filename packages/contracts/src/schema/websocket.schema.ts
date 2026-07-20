@@ -336,6 +336,8 @@ export const FrequencyStateSchema = z.object({
   band: z.string(),
   description: z.string(),
   radioMode: z.string().optional(),
+  modeDegraded: z.boolean().optional(),
+  modeFallbackReason: z.string().optional(),
   radioConnected: z.boolean(),
   source: z.enum(['program', 'radio']).optional(),
 });

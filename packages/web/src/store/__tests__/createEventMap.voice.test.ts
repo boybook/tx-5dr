@@ -45,6 +45,7 @@ describe('createRadioEventMap voice frequency sync', () => {
       radioStateRef: { current: initialRadioState },
       capabilitiesRef: { current: null },
       activeProfileIdRef: { current: null },
+      profileRequestScopeRef: { current: { profileId: null, generation: 0 } },
       spectrumNegotiation: {
         applySpectrumSelection: vi.fn(),
         applyProfileDrivenSpectrumNegotiation: vi.fn(),
@@ -113,6 +114,7 @@ describe('createRadioEventMap voice frequency sync', () => {
       radioStateRef: { current: initialRadioState },
       capabilitiesRef: { current: null },
       activeProfileIdRef: { current: null },
+      profileRequestScopeRef: { current: { profileId: null, generation: 0 } },
       spectrumNegotiation: {
         applySpectrumSelection: vi.fn(),
         applyProfileDrivenSpectrumNegotiation: vi.fn(),
