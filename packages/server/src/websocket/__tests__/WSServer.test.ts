@@ -3,7 +3,6 @@ import {
   SLOT_PACK_HISTORY_LIMIT,
   UserRole,
   WSMessageType,
-  type PluginSystemSnapshot,
   type SlotPack,
   type SystemStatus,
 } from '@tx5dr/contracts';
@@ -335,51 +334,6 @@ describe('WSServer security filtering', () => {
     expect(adminSent.find(message => message.type === WSMessageType.PTT_STATUS_CHANGED)?.data.operatorIds).toEqual(['op-a']);
   });
 
-  it('filters plugin snapshots to the current connection token', () => {
-    const { connection } = createTestConnection('conn-plugin');
-    Object.assign(connection as unknown as Record<string, unknown>, {
-      authenticated: true,
-      userRole: UserRole.OPERATOR,
-      tokenId: 'token-a',
-    });
-    connection.completeHandshake(['operator-1']);
-
-    const server = Object.create(WSServer.prototype) as any;
-    const snapshot: PluginSystemSnapshot = {
-      state: 'ready',
-      generation: 1,
-      plugins: [],
-      panelMeta: [
-        {
-          pluginName: 'operator-live-chat',
-          operatorId: '__global__',
-          panelId: 'chat-toolbar',
-          meta: { title: 'OP Chat' },
-        },
-        {
-          pluginName: 'operator-live-chat',
-          operatorId: '__global__',
-          panelId: 'chat-toolbar',
-          viewerTokenId: 'token-a',
-          meta: { tone: 'default' },
-        },
-        {
-          pluginName: 'operator-live-chat',
-          operatorId: '__global__',
-          panelId: 'chat-toolbar',
-          viewerTokenId: 'token-b',
-          meta: { tone: 'danger' },
-        },
-      ],
-      panelContributions: [],
-    };
-
-    expect((server as any).filterPluginSnapshotForConnection(snapshot, connection)).toEqual({
-      ...snapshot,
-      panelMeta: snapshot.panelMeta.filter((entry) => entry.viewerTokenId === undefined || entry.viewerTokenId === 'token-a'),
-    });
-  });
-
   it('does not forward user-scoped panel meta to other tokens', () => {
     const { connection } = createTestConnection('conn-plugin');
     Object.assign(connection as unknown as Record<string, unknown>, {
@@ -400,19 +354,21 @@ describe('WSServer security filtering', () => {
     }, connection)).toBeNull();
   });
 
-  it('checks current token validity, role and JWT expiry for plugin delivery', () => {
-    const currentPermissions: {
+  it('refreshes token permissions only after auth version changes or token expiry', () => {
+    let authorizationVersion = 1;
+    let currentPermissions: {
       role: UserRole;
       operatorIds: string[];
       permissionGrants?: undefined;
-    } = {
+      expiresAt?: number;
+    } | null = {
       role: UserRole.OPERATOR,
       operatorIds: ['operator-1'],
       permissionGrants: undefined,
     };
     const authManager = {
       getTokenCurrentPermissions: vi.fn(() => currentPermissions),
-      isTokenStillValid: vi.fn(() => true),
+      getAuthorizationVersion: vi.fn(() => authorizationVersion),
     };
     vi.spyOn(AuthManager, 'getInstance').mockReturnValue(authManager as unknown as AuthManager);
 
@@ -422,28 +378,68 @@ describe('WSServer security filtering', () => {
       ['operator-1'],
       'operator',
       'token-a',
-      Date.now() + 60_000,
     );
 
     expect(connection.hasCurrentMinRole(UserRole.OPERATOR)).toBe(true);
+    expect(authManager.getTokenCurrentPermissions).toHaveBeenCalledTimes(1);
 
-    currentPermissions.role = UserRole.VIEWER;
+    currentPermissions!.role = UserRole.VIEWER;
+    expect(connection.hasCurrentMinRole(UserRole.OPERATOR)).toBe(true);
+    authorizationVersion += 1;
     expect(connection.hasCurrentMinRole(UserRole.OPERATOR)).toBe(false);
 
-    currentPermissions.role = UserRole.OPERATOR;
-    authManager.isTokenStillValid.mockReturnValue(false);
+    currentPermissions = null;
+    authorizationVersion += 1;
     expect(connection.hasCurrentMinRole(UserRole.OPERATOR)).toBe(false);
+    expect(connection.takeAuthInvalidationReason()).toBe('token_revoked_or_expired');
 
-    authManager.isTokenStillValid.mockReturnValue(true);
     const expired = createTestConnection('conn-expired-auth').connection;
+    currentPermissions = {
+      role: UserRole.OPERATOR,
+      operatorIds: ['operator-1'],
+      expiresAt: Date.now() - 1,
+    };
+    authorizationVersion += 1;
     expired.setAuthenticated(
       UserRole.OPERATOR,
       ['operator-1'],
       'operator',
       'token-a',
-      Date.now() - 1,
     );
+    currentPermissions = null;
     expect(expired.hasCurrentMinRole(UserRole.OPERATOR)).toBe(false);
+  });
+
+  it('expires invalidated token connections before plugin delivery', () => {
+    let currentPermissions: { role: UserRole; operatorIds: string[] } | null = {
+      role: UserRole.OPERATOR,
+      operatorIds: ['operator-1'],
+    };
+    let authorizationVersion = 1;
+    vi.spyOn(AuthManager, 'getInstance').mockReturnValue({
+      getTokenCurrentPermissions: vi.fn(() => currentPermissions),
+      getAuthorizationVersion: vi.fn(() => authorizationVersion),
+    } as unknown as AuthManager);
+
+    const { connection, sent } = createTestConnection('conn-invalid-token');
+    connection.setAuthenticated(UserRole.OPERATOR, ['operator-1'], 'operator', 'token-a');
+    connection.completeHandshake(['operator-1']);
+    currentPermissions = null;
+    authorizationVersion += 1;
+
+    const server = Object.create(WSServer.prototype) as any;
+    server.removeConnection = vi.fn();
+
+    expect(server.canReceivePluginData(connection)).toBe(false);
+    expect(sent).toContainEqual({
+      type: WSMessageType.AUTH_EXPIRED,
+      data: { reason: 'token_revoked_or_expired' },
+    });
+    expect(server.removeConnection).toHaveBeenCalledWith('conn-invalid-token', {
+      closeSocket: true,
+      closeCode: 4003,
+      closeReason: 'authentication expired',
+    });
   });
 });
 
