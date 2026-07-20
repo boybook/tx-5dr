@@ -1,17 +1,12 @@
 import * as React from 'react';
-import type { PluginPanelMetaPayload } from '@tx5dr/contracts';
+import type { PluginPanelMeta, PluginPanelMetaPayload } from '@tx5dr/contracts';
 import { useConnection } from '../store/radioStore';
 import { useWSEvent } from './useWSEvent';
 
-export interface PanelMeta {
-  title?: string | null;
-  titleValues?: Record<string, unknown>;
-  visible?: boolean;
-  tone?: 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
-}
+export type PanelMeta = PluginPanelMeta;
 
 function getPanelMetaKey(payload: Pick<PluginPanelMetaPayload, 'pluginName' | 'operatorId' | 'panelId'>): string {
-  return `${payload.pluginName}:${payload.operatorId}:${payload.panelId}`;
+  return JSON.stringify([payload.pluginName, payload.operatorId, payload.panelId]);
 }
 
 interface PanelMetaLayers {
@@ -111,9 +106,15 @@ export function usePluginPanelMeta(initialEntries: PluginPanelMetaPayload[] = []
     },
   );
 
+  useWSEvent(
+    connection.state.radioService,
+    'authExpired',
+    () => setScopedMetaMap({}),
+  );
+
   const getMeta = React.useCallback(
     (pluginName: string, operatorId: string, panelId: string): PanelMeta => {
-      const key = `${pluginName}:${operatorId}:${panelId}`;
+      const key = JSON.stringify([pluginName, operatorId, panelId]);
       return {
         ...(globalMetaMap[key] ?? {}),
         ...(scopedMetaMap[key] ?? {}),

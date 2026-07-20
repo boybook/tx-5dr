@@ -26,7 +26,7 @@ describe('buildPanelMetaLayers', () => {
     ];
 
     const layers = buildPanelMetaLayers(entries);
-    const key = 'operator-live-chat:__global__:chat-toolbar';
+    const key = JSON.stringify(['operator-live-chat', '__global__', 'chat-toolbar']);
 
     expect(layers.globalMetaMap[key]).toEqual({
       title: 'OP Chat',
@@ -76,12 +76,34 @@ describe('buildPanelMetaLayers', () => {
     ];
 
     const layers = buildPanelMetaLayers(entries);
-    const key = 'operator-live-chat:__global__:chat-toolbar';
+    const key = JSON.stringify(['operator-live-chat', '__global__', 'chat-toolbar']);
 
     expect(layers.globalMetaMap[key]).toEqual({
       title: 'OP Chat',
       tone: 'danger',
     });
     expect(layers.scopedMetaMap[key]).toBeUndefined();
+  });
+
+  it('keeps colon-containing panel metadata keys isolated', () => {
+    const layers = buildPanelMetaLayers([
+      {
+        pluginName: 'demo:primary',
+        operatorId: 'operator',
+        panelId: 'toolbar',
+        meta: { title: 'First' },
+      },
+      {
+        pluginName: 'demo',
+        operatorId: 'primary:operator',
+        panelId: 'toolbar',
+        meta: { title: 'Second' },
+      },
+    ]);
+
+    expect(layers.globalMetaMap).toEqual({
+      [JSON.stringify(['demo:primary', 'operator', 'toolbar'])]: { title: 'First' },
+      [JSON.stringify(['demo', 'primary:operator', 'toolbar'])]: { title: 'Second' },
+    });
   });
 });

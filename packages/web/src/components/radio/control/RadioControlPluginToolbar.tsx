@@ -13,6 +13,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import type { IconDefinition, IconPack } from '@fortawesome/fontawesome-svg-core';
 import { faPuzzlePiece, fas } from '@fortawesome/free-solid-svg-icons';
 import { fab } from '@fortawesome/free-brands-svg-icons';
+import { useTranslation } from 'react-i18next';
 import type {
   PluginPanelDescriptor,
   PluginPanelMetaPayload,
@@ -71,13 +72,13 @@ const TOOLBAR_TONE_CLASS: Record<ToolbarTone, string> = {
   warning: 'text-warning',
   danger: 'text-danger',
 };
-const TOOLBAR_TONE_STATUS: Record<ToolbarTone, string | null> = {
+const TOOLBAR_TONE_STATUS_KEY: Record<ToolbarTone, string | null> = {
   default: null,
-  primary: 'Active status',
-  secondary: 'Secondary status',
-  success: 'Success status',
-  warning: 'Warning status',
-  danger: 'Alert status',
+  primary: 'radio:pluginToolbar.toneStatus.active',
+  secondary: 'radio:pluginToolbar.toneStatus.secondary',
+  success: 'radio:pluginToolbar.toneStatus.success',
+  warning: 'radio:pluginToolbar.toneStatus.warning',
+  danger: 'radio:pluginToolbar.toneStatus.alert',
 };
 const TOOLBAR_TONE_MARK: Record<ToolbarTone, string> = {
   default: '',
@@ -171,12 +172,14 @@ export function resolveRadioToolbarIcon(rawIcon: string | undefined): IconDefini
   return getIconFromPack(fas, icon) ?? getIconFromPack(fab, icon) ?? faPuzzlePiece;
 }
 
-export function resolveRadioToolbarTone(rawTone: PanelMeta['tone']): ToolbarTone {
-  return rawTone ?? DEFAULT_TOOLBAR_TONE;
+export function resolveRadioToolbarTone(rawTone: unknown): ToolbarTone {
+  return typeof rawTone === 'string' && Object.hasOwn(TOOLBAR_TONE_CLASS, rawTone)
+    ? rawTone as ToolbarTone
+    : DEFAULT_TOOLBAR_TONE;
 }
 
-export function getRadioToolbarToneStatus(tone: ToolbarTone): string | null {
-  return TOOLBAR_TONE_STATUS[tone];
+export function getRadioToolbarToneStatusKey(tone: ToolbarTone): string | null {
+  return TOOLBAR_TONE_STATUS_KEY[tone];
 }
 
 function pluginMatchesToolbar(plugin: PluginStatus): boolean {
@@ -291,10 +294,12 @@ export function getRadioControlToolbarEntries(params: {
 }
 
 const RadioControlToolbarButton: React.FC<{ entry: RadioControlToolbarEntry }> = ({ entry }) => {
+  const { t } = useTranslation();
   const [isModalOpen, setIsModalOpen] = React.useState(false);
   const icon = resolveRadioToolbarIcon(entry.icon);
   const tone = resolveRadioToolbarTone(entry.meta.tone);
-  const toneStatus = getRadioToolbarToneStatus(tone);
+  const toneStatusKey = getRadioToolbarToneStatusKey(tone);
+  const toneStatus = toneStatusKey ? t(toneStatusKey) : null;
   const ariaLabel = toneStatus ? `${entry.resolvedTitle} (${toneStatus})` : entry.resolvedTitle;
   const commonButton = (
     <Button

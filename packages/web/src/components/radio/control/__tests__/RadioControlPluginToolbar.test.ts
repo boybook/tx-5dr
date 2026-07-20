@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PluginStatus, PluginSystemSnapshot } from '@tx5dr/contracts';
 
 import {
-  getRadioToolbarToneStatus,
+  getRadioToolbarToneStatusKey,
   getRadioControlToolbarEntries,
   resolveRadioToolbarIcon,
   resolveRadioToolbarTone,
@@ -72,12 +72,13 @@ describe('RadioControlPluginToolbar helpers', () => {
     expect(resolveRadioToolbarTone(undefined)).toBe('default');
     expect(resolveRadioToolbarTone('warning')).toBe('warning');
     expect(resolveRadioToolbarTone('success')).toBe('success');
+    expect(resolveRadioToolbarTone('pink')).toBe('default');
   });
 
-  it('maps non-default toolbar tones to accessible status labels', () => {
-    expect(getRadioToolbarToneStatus('default')).toBeNull();
-    expect(getRadioToolbarToneStatus('warning')).toBe('Warning status');
-    expect(getRadioToolbarToneStatus('danger')).toBe('Alert status');
+  it('maps non-default toolbar tones to localized status keys', () => {
+    expect(getRadioToolbarToneStatusKey('default')).toBeNull();
+    expect(getRadioToolbarToneStatusKey('warning')).toBe('radio:pluginToolbar.toneStatus.warning');
+    expect(getRadioToolbarToneStatusKey('danger')).toBe('radio:pluginToolbar.toneStatus.alert');
   });
 
   it('only returns enabled global utility toolbar iframe panels', () => {
