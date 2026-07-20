@@ -735,8 +735,8 @@ interface UIBridge {
   /** 更新面板运行期 meta（标题、可见性等） */
   setPanelMeta(panelId: string, meta: PanelMeta): void;
 
-  /** 为指定登录 token 覆盖面板运行期 meta */
-  setPanelMetaForUser(panelId: string, tokenId: string, meta: PanelMeta): void;
+  /** 为指定登录 token 覆盖面板运行期 meta；宿主可能未提供 */
+  setPanelMetaForUser?(panelId: string, tokenId: string, meta: PanelMeta): void;
 
   /** 替换一个运行期 UI Contribution group */
   setPanelContributions(groupId: string, panels: PluginPanelDescriptor[]): void;
@@ -759,10 +759,10 @@ interface UIBridge {
 
 interface PanelMeta {
   title?: string | null;
-  titleValues?: Record<string, unknown>;
-  visible?: boolean;
+  titleValues?: Record<string, unknown> | null;
+  visible?: boolean | null;
   /** 工具栏按钮色调，用于信号状态（如告警、新消息） */
-  tone?: 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
+  tone?: 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger' | null;
 }
 
 interface PluginUIHandler {
@@ -775,9 +775,11 @@ interface PluginUIHandler {
 }
 ```
 
-`setPanelMeta()` 作用于当前插件实例的所有查看者；`setPanelMetaForUser()`
-只作用于指定 `tokenId`，并且会在前端覆盖同一面板的全局 meta。典型用法是：
-先设置全局告警/未读状态，再为某个已经处理该状态的用户清除高亮。
+`setPanelMeta()` 作用于当前插件实例的所有查看者；`setPanelMetaForUser?()`
+只作用于指定 `tokenId`，调用前应通过 `ctx.ui.setPanelMetaForUser?.(...)` 做能力检测。
+两者都采用逐字段 patch：`undefined` 不变，`null` 清除该运行期字段并恢复静态值；
+用户级字段清除后恢复对应 global 字段。典型用法是先设置全局告警/未读状态，
+再为已处理该状态的用户清除高亮。
 
 `requestContext` 由宿主基于页面 session 注入，包含：
 
@@ -1866,6 +1868,7 @@ interface PluginPanelMetaPayload {
 - `viewerTokenId` 存在时，表示用户级覆盖层，只会出现在对应用户的
   `pluginList` 初始快照和后续 `pluginPanelMeta` websocket 更新里。
 - 前端合并顺序固定为“全局 meta -> 用户级 meta”，后者覆盖前者的同名字段。
+- 无 viewer token 的快照只包含全局 meta；不存在公开的全量用户级 meta 快照。
 
 ---
 
