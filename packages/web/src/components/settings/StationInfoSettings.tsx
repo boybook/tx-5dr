@@ -110,6 +110,7 @@ export const StationInfoSettings = forwardRef<StationInfoSettingsRef, StationInf
           label={t('stationInfo.qthLatitude')}
           placeholder="39.9042"
           type="number"
+          step="any"
           value={localInfo.qth?.latitude != null ? String(localInfo.qth.latitude) : ''}
           onValueChange={v => updateQth('latitude', v)}
           isDisabled={isSaving}
@@ -119,6 +120,7 @@ export const StationInfoSettings = forwardRef<StationInfoSettingsRef, StationInf
           label={t('stationInfo.qthLongitude')}
           placeholder="116.4074"
           type="number"
+          step="any"
           value={localInfo.qth?.longitude != null ? String(localInfo.qth.longitude) : ''}
           onValueChange={v => updateQth('longitude', v)}
           isDisabled={isSaving}
