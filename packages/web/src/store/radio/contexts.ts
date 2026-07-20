@@ -33,6 +33,7 @@ import type {
   SlotPacksState,
 } from './types';
 import type { FrameDisplayMessage, FrameGroup } from '../../components/radio/digital/FramesTable';
+import type { ProfileRequestScopeRef } from './profileRequestScope';
 
 export const ConnectionContext = createContext<{
   state: ConnectionState;
@@ -64,7 +65,9 @@ export const OperatorsContext = createContext<{
 export const ProfilesContext = createContext<{
   profiles: RadioProfile[];
   activeProfileId: string | null;
+  profileGeneration: number;
   profilesLoaded: boolean;
+  profileRequestScopeRef: ProfileRequestScopeRef;
 } | undefined>(undefined);
 
 export const RadioConnectionContext = createContext<{

@@ -66,6 +66,16 @@ function getDescriptor(snapshot: CapabilityDescriptor[], id: string): Capability
   return descriptor;
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('RadioCapabilityManager', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -158,6 +168,85 @@ describe('RadioCapabilityManager', () => {
       value: 0.25,
     });
 
+    manager.onDisconnected();
+  });
+
+  it('drops a deferred capability value from a replaced radio connection', async () => {
+    const staleRead = createDeferred<number>();
+    const oldGetSQL = vi.fn()
+      .mockResolvedValueOnce(0.1)
+      .mockImplementationOnce(() => staleRead.promise);
+    const oldConnection = new MockConnection(RadioConnectionType.HAMLIB, {
+      isSupportedLevel: vi.fn((level: string) => level === 'SQL'),
+      getSQL: oldGetSQL,
+    });
+    const newConnection = new MockConnection(RadioConnectionType.HAMLIB, {
+      isSupportedLevel: vi.fn((level: string) => level === 'SQL'),
+      getSQL: vi.fn().mockResolvedValue(0.9),
+    });
+    const manager = new RadioCapabilityManager();
+    const sqlEvents: CapabilityState[] = [];
+    manager.on('capabilityChanged', (state) => {
+      if (state.id === 'sql') sqlEvents.push(state);
+    });
+
+    await manager.onConnected(oldConnection as never);
+    const stalePoll = (manager as any).runtime.pollCapabilityOnce('sql');
+    await vi.waitFor(() => expect(oldGetSQL).toHaveBeenCalledTimes(2));
+
+    manager.onDisconnected();
+    await manager.onConnected(newConnection as never);
+    sqlEvents.length = 0;
+    staleRead.resolve(0.2);
+    await stalePoll;
+
+    expect(getCapability(manager.getCapabilityStates(), 'sql')).toMatchObject({
+      availability: 'available',
+      value: 0.9,
+    });
+    expect(sqlEvents).toHaveLength(0);
+    manager.onDisconnected();
+  });
+
+  it('does not run stale split metadata reads on either radio connection', async () => {
+    const staleSplitRead = createDeferred<boolean>();
+    const oldGetSplitEnabled = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockImplementationOnce(() => staleSplitRead.promise);
+    const oldGetSplitFrequency = vi.fn().mockResolvedValue(14_275_000);
+    const oldConnection = new MockConnection(RadioConnectionType.HAMLIB, {
+      getSplitEnabled: oldGetSplitEnabled,
+      setSplitEnabled: vi.fn().mockResolvedValue(undefined),
+      getSplitFrequency: oldGetSplitFrequency,
+      setSplitFrequency: vi.fn().mockResolvedValue(undefined),
+    });
+    const newGetSplitFrequency = vi.fn().mockResolvedValue(7_100_000);
+    const newConnection = new MockConnection(RadioConnectionType.HAMLIB, {
+      getSplitEnabled: vi.fn().mockResolvedValue(true),
+      setSplitEnabled: vi.fn().mockResolvedValue(undefined),
+      getSplitFrequency: newGetSplitFrequency,
+      setSplitFrequency: vi.fn().mockResolvedValue(undefined),
+    });
+    const manager = new RadioCapabilityManager();
+
+    await manager.onConnected(oldConnection as never);
+    oldGetSplitFrequency.mockClear();
+    const stalePoll = (manager as any).runtime.pollCapabilityOnce('split_enabled');
+    await vi.waitFor(() => expect(oldGetSplitEnabled).toHaveBeenCalledTimes(3));
+
+    manager.onDisconnected();
+    await manager.onConnected(newConnection as never);
+    newGetSplitFrequency.mockClear();
+    staleSplitRead.resolve(true);
+    await stalePoll;
+
+    expect(oldGetSplitFrequency).not.toHaveBeenCalled();
+    expect(newGetSplitFrequency).not.toHaveBeenCalled();
+    expect(getCapability(manager.getCapabilityStates(), 'split_enabled')).toMatchObject({
+      value: true,
+      meta: { txFrequency: 7_100_000 },
+    });
     manager.onDisconnected();
   });
 

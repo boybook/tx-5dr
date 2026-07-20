@@ -47,6 +47,7 @@ function createHarness(paused: boolean) {
     },
     capabilitiesRef: { current: null },
     activeProfileIdRef: { current: null },
+    profileRequestScopeRef: { current: { profileId: null, generation: 0 } },
     spectrumNegotiation: {
       applySpectrumSelection: vi.fn(),
       applyProfileDrivenSpectrumNegotiation: vi.fn(),

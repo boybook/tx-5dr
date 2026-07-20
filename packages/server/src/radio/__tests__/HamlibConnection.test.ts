@@ -8,6 +8,7 @@ import { defaultHamlibProfile } from '../connections/meter/profiles/index.js';
 import { RadioErrorCode } from '../../utils/errors/RadioError.js';
 
 type MockRig = {
+  close: ReturnType<typeof vi.fn>;
   setFrequency: ReturnType<typeof vi.fn>;
   getSplit: ReturnType<typeof vi.fn>;
   setSplit: ReturnType<typeof vi.fn>;
@@ -57,6 +58,9 @@ type HamlibConnectionTestAccessor = {
   rig: MockRig;
   state: RadioConnectionState;
   supportedModes?: Set<string>;
+  empiricalModeSupport?: Map<string, 'supported' | 'unsupported'>;
+  ioSessionId?: number;
+  rxFrequencyRanges?: TestFrequencyRange[];
   supportedLevels?: Set<string>;
   supportedFunctions?: Set<string>;
   meterDecodeStrategy?: {
@@ -67,8 +71,8 @@ type HamlibConnectionTestAccessor = {
   };
   meterReader?: unknown;
   txFrequencyRanges?: TestFrequencyRange[];
-  currentFrequencyHz?: number;
-  currentRadioMode?: string;
+  currentFrequencyHz?: number | null;
+  currentRadioMode?: string | null;
   spectrumController?: MockSpectrumController;
   currentConfig?: unknown;
   resolveCurrentTxPowerMaxWatts: () => number | null;
@@ -95,6 +99,7 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
 } {
   const connection = new HamlibConnection();
   const rig: MockRig = {
+    close: vi.fn().mockResolvedValue(0),
     setFrequency: vi.fn().mockResolvedValue(0),
     getSplit: vi.fn().mockResolvedValue({ enabled: false }),
     setSplit: vi.fn().mockResolvedValue(0),
@@ -402,13 +407,16 @@ describe('HamlibConnection', () => {
     expect(rig.getFrequency).toHaveBeenCalledTimes(1);
   });
 
-  it('prefers DATA mode for digital intent when supported', async () => {
-    const { connection, rig } = createConnectedConnection();
+  it('prefers DATA mode for digital intent and verifies the applied mode', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getMode: vi.fn().mockResolvedValue({ mode: 'PKTUSB', bandwidth: 2400 }),
+    });
     asTestConnection(connection).supportedModes = new Set(['USB', 'PKTUSB']);
 
     await expect(connection.setMode('USB', undefined, { intent: 'digital' })).resolves.toBeUndefined();
 
     expect(rig.setMode).toHaveBeenCalledWith('PKTUSB', undefined);
+    expect(rig.getMode).toHaveBeenCalledTimes(1);
   });
 
   it('uses Hamlib-provided watt labels for discrete RF power steps without local correction', async () => {
@@ -448,13 +456,250 @@ describe('HamlibConnection', () => {
     ]);
   });
 
-  it('falls back to standard mode for digital intent when DATA mode is unsupported', async () => {
-    const { connection, rig } = createConnectedConnection();
+  it('treats advertised modes as advisory for explicit digital intent', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getMode: vi.fn().mockResolvedValue({ mode: 'PKTUSB', bandwidth: 2400 }),
+    });
     asTestConnection(connection).supportedModes = new Set(['USB']);
 
     await expect(connection.setMode('USB', undefined, { intent: 'digital' })).resolves.toBeUndefined();
 
-    expect(rig.setMode).toHaveBeenCalledWith('USB', undefined);
+    expect(rig.setMode).toHaveBeenCalledWith('PKTUSB', undefined);
+  });
+
+  it('falls back to USB only when Hamlib explicitly rejects PKTUSB', async () => {
+    const unsupportedError = Object.assign(new Error('Feature not available'), {
+      code: 'HAMLIB_ERROR',
+      hamlibCode: -11,
+    });
+    const { connection, rig } = createConnectedConnection({
+      setMode: vi.fn()
+        .mockRejectedValueOnce(unsupportedError)
+        .mockResolvedValueOnce(0),
+      getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 2400 }),
+    });
+    asTestConnection(connection).supportedModes = new Set(['USB']);
+
+    await expect(connection.applyOperatingState({
+      mode: 'USB',
+      options: { intent: 'digital' },
+    })).resolves.toMatchObject({
+      modeApplied: true,
+      appliedMode: 'USB',
+      modeDegraded: true,
+      modeFallbackReason: expect.stringContaining('PKTUSB unsupported'),
+    });
+
+    expect(rig.setMode).toHaveBeenNthCalledWith(1, 'PKTUSB', undefined);
+    expect(rig.setMode).toHaveBeenNthCalledWith(2, 'USB', undefined);
+  });
+
+  it('accepts Hamlib invalid-parameter evidence as a mode-specific fallback signal', async () => {
+    const invalidModeError = Object.assign(new Error('Invalid parameter'), {
+      code: 'HAMLIB_ERROR',
+      hamlibCode: -1,
+    });
+    const { connection, rig } = createConnectedConnection({
+      setMode: vi.fn()
+        .mockRejectedValueOnce(invalidModeError)
+        .mockResolvedValueOnce(0),
+    });
+
+    await expect(connection.setMode('USB', undefined, { intent: 'digital' })).resolves.toBeUndefined();
+
+    expect(rig.setMode).toHaveBeenNthCalledWith(1, 'PKTUSB', undefined);
+    expect(rig.setMode).toHaveBeenNthCalledWith(2, 'USB', undefined);
+  });
+
+  it('does not treat a generic invalid parameter as mode rejection without Hamlib EINVAL evidence', async () => {
+    const { connection, rig } = createConnectedConnection({
+      setMode: vi.fn().mockRejectedValue(new Error('Invalid parameter')),
+    });
+
+    await expect(connection.setMode('USB', undefined, { intent: 'digital' })).rejects.toThrow('Invalid parameter');
+
+    expect(rig.setMode).toHaveBeenCalledTimes(1);
+    expect(rig.setMode).toHaveBeenCalledWith('PKTUSB', undefined);
+  });
+
+  it('does not attribute Hamlib EINVAL to the mode when a custom bandwidth was sent', async () => {
+    const invalidParameter = Object.assign(new Error('Invalid parameter'), {
+      hamlibCode: -1,
+    });
+    const { connection, rig } = createConnectedConnection({
+      setMode: vi.fn().mockRejectedValue(invalidParameter),
+    });
+
+    await expect(connection.setMode('USB', 2400, { intent: 'digital' })).rejects.toThrow('Invalid parameter');
+
+    expect(rig.setMode).toHaveBeenCalledTimes(1);
+    expect(rig.setMode).toHaveBeenCalledWith('PKTUSB', 2400);
+  });
+
+  it('falls back with a custom bandwidth when Hamlib explicitly identifies the mode as invalid', async () => {
+    const { connection, rig } = createConnectedConnection({
+      setMode: vi.fn()
+        .mockRejectedValueOnce(new Error('Invalid mode: PKTUSB'))
+        .mockResolvedValueOnce(0),
+    });
+
+    await expect(connection.setMode('USB', 2400, { intent: 'digital' })).resolves.toBeUndefined();
+
+    expect(rig.setMode).toHaveBeenNthCalledWith(1, 'PKTUSB', 2400);
+    expect(rig.setMode).toHaveBeenNthCalledWith(2, 'USB', 2400);
+  });
+
+  it.each([
+    ['timeout', Object.assign(new Error('Set mode timeout'), { hamlibCode: -4 })],
+    ['disconnect', new Error('radio disconnected')],
+    ['session change', new Error('radio session changed')],
+    ['I/O failure', Object.assign(new Error('Input/output error'), { hamlibCode: -2 })],
+    ['protocol failure', Object.assign(new Error('Protocol error'), { hamlibCode: -8 })],
+  ])('does not fall back after a %s failure', async (_label, failure) => {
+    const { connection, rig } = createConnectedConnection({
+      setMode: vi.fn().mockRejectedValue(failure),
+    });
+
+    await expect(connection.setMode('USB', undefined, { intent: 'digital' })).rejects.toThrow();
+
+    expect(rig.setMode).toHaveBeenCalledTimes(1);
+    expect(rig.setMode).toHaveBeenCalledWith('PKTUSB', undefined);
+  });
+
+  it('does not carry an unsupported response or fallback write across CAT sessions', async () => {
+    const unsupported = createDeferred<never>();
+    const { connection, rig } = createConnectedConnection({
+      setMode: vi.fn()
+        .mockImplementationOnce(() => unsupported.promise)
+        .mockResolvedValue(0),
+    });
+
+    const setMode = connection.setMode('USB', undefined, { intent: 'digital' });
+    await vi.waitFor(() => expect(rig.setMode).toHaveBeenCalledWith('PKTUSB', undefined));
+
+    const testConnection = asTestConnection(connection);
+    testConnection.ioSessionId = (testConnection.ioSessionId ?? 0) + 1;
+    unsupported.reject(Object.assign(new Error('Feature not available'), { hamlibCode: -11 }));
+
+    await expect(setMode).rejects.toThrow('radio session changed');
+    expect(rig.setMode).toHaveBeenCalledTimes(1);
+    expect(testConnection.empiricalModeSupport?.has('PKTUSB')).toBe(false);
+  });
+
+  it('does not carry successful mode readback or split sync across CAT sessions', async () => {
+    const readback = createDeferred<{ mode: string; bandwidth: number }>();
+    const { connection, rig: oldRig } = createConnectedConnection({
+      getMode: vi.fn().mockReturnValue(readback.promise),
+    });
+    const { rig: replacementRig } = createConnectedConnection();
+
+    const setMode = connection.setMode('USB', undefined, { intent: 'digital' });
+    await vi.waitFor(() => expect(oldRig.getMode).toHaveBeenCalledTimes(1));
+
+    const testConnection = asTestConnection(connection);
+    testConnection.ioSessionId = (testConnection.ioSessionId ?? 0) + 1;
+    testConnection.rig = replacementRig;
+    testConnection.empiricalModeSupport = new Map();
+    testConnection.currentRadioMode = null;
+    readback.resolve({ mode: 'PKTUSB', bandwidth: 2400 });
+
+    await expect(setMode).rejects.toThrow('radio session changed');
+    expect(replacementRig.getSplit).not.toHaveBeenCalled();
+    expect(replacementRig.setMode).not.toHaveBeenCalled();
+    expect(testConnection.empiricalModeSupport.has('PKTUSB')).toBe(false);
+    expect(testConnection.currentRadioMode).toBeNull();
+  });
+
+  it('does not continue an operating-state transaction on a replacement CAT session', async () => {
+    const frequencyWrite = createDeferred<number>();
+    const { connection, rig: oldRig } = createConnectedConnection({
+      setFrequency: vi.fn().mockReturnValue(frequencyWrite.promise),
+    });
+    const { rig: replacementRig } = createConnectedConnection();
+
+    const apply = connection.applyOperatingState({
+      frequency: 14_074_000,
+      mode: 'USB',
+      options: { intent: 'digital' },
+    });
+    await vi.waitFor(() => expect(oldRig.setFrequency).toHaveBeenCalledTimes(1));
+
+    const testConnection = asTestConnection(connection);
+    testConnection.ioSessionId = (testConnection.ioSessionId ?? 0) + 1;
+    testConnection.rig = replacementRig;
+    testConnection.currentFrequencyHz = null;
+    frequencyWrite.resolve(0);
+
+    await expect(apply).rejects.toThrow('radio session changed');
+    expect(replacementRig.setFrequency).not.toHaveBeenCalled();
+    expect(replacementRig.setMode).not.toHaveBeenCalled();
+    expect(testConnection.currentFrequencyHz).toBeNull();
+  });
+
+  it('caches an explicit PKTUSB rejection only for the current connection session', async () => {
+    const unsupportedError = Object.assign(new Error('Feature not available'), {
+      hamlibCode: -11,
+    });
+    const { connection, rig } = createConnectedConnection({
+      setMode: vi.fn()
+        .mockRejectedValueOnce(unsupportedError)
+        .mockResolvedValue(0),
+      getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 2400 }),
+    });
+
+    await connection.setMode('USB', undefined, { intent: 'digital' });
+    await connection.setMode('USB', undefined, { intent: 'digital' });
+
+    expect(rig.setMode.mock.calls.map(([mode]) => mode)).toEqual(['PKTUSB', 'USB', 'USB']);
+    expect(asTestConnection(connection).empiricalModeSupport?.get('PKTUSB')).toBe('unsupported');
+
+    const testConnection = asTestConnection(connection);
+    testConnection.ioSessionId = (testConnection.ioSessionId ?? 0) + 1;
+    await connection.setMode('USB', undefined, { intent: 'digital' });
+
+    expect(rig.setMode.mock.calls.map(([mode]) => mode)).toEqual(['PKTUSB', 'USB', 'USB', 'PKTUSB']);
+  });
+
+  it('reports readback mismatch without issuing or caching a speculative fallback', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 2400 }),
+    });
+
+    const firstResult = await connection.applyOperatingState({
+      mode: 'USB',
+      options: { intent: 'digital' },
+    });
+    await connection.setMode('USB', undefined, { intent: 'digital' });
+
+    expect(firstResult).toMatchObject({
+      modeApplied: true,
+      appliedMode: 'USB',
+      modeDegraded: true,
+      modeFallbackReason: expect.stringContaining('readback reported USB'),
+    });
+    expect(rig.setMode.mock.calls.map(([mode]) => mode)).toEqual(['PKTUSB', 'PKTUSB']);
+    expect(asTestConnection(connection).empiricalModeSupport?.has('PKTUSB')).toBe(false);
+  });
+
+  it('keeps a successful data-mode write supported when optional readback fails', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getMode: vi.fn().mockRejectedValue(new Error('Get mode timeout')),
+    });
+
+    const result = await connection.applyOperatingState({
+      mode: 'USB',
+      options: { intent: 'digital' },
+    });
+
+    expect(result).toEqual({
+      frequencyApplied: false,
+      modeApplied: true,
+      modeError: undefined,
+      appliedMode: 'PKTUSB',
+    });
+    expect(rig.setMode).toHaveBeenCalledTimes(1);
+    expect(rig.setMode).toHaveBeenCalledWith('PKTUSB', undefined);
+    expect(asTestConnection(connection).empiricalModeSupport?.get('PKTUSB')).toBe('supported');
   });
 
   it('keeps standard mode for voice intent even when DATA mode is supported', async () => {
@@ -498,6 +743,49 @@ describe('HamlibConnection', () => {
 
     await expect(connection.getMode()).resolves.toEqual({ mode: 'USB', bandwidth: 2400 });
     await expect(connection.getModeBandwidth()).resolves.toBe(2400);
+  });
+
+  it('checks tune targets against inclusive Hamlib RX frequency ranges', () => {
+    const { connection } = createConnectedConnection();
+    asTestConnection(connection).rxFrequencyRanges = [{
+      startFreq: 144_000_000,
+      endFreq: 148_000_000,
+      modes: ['USB', 'FM'],
+      lowPower: 0,
+      highPower: 0,
+      vfo: 0,
+      antenna: 0,
+    }];
+
+    expect(connection.canTuneFrequency(144_000_000)).toBe(true);
+    expect(connection.canTuneFrequency(146_520_000)).toBe(true);
+    expect(connection.canTuneFrequency(148_000_000)).toBe(true);
+    expect(connection.canTuneFrequency(14_074_000)).toBe(false);
+  });
+
+  it('returns unknown tune support when Hamlib has no RX range metadata', () => {
+    const { connection } = createConnectedConnection();
+
+    expect(connection.canTuneFrequency(14_074_000)).toBeNull();
+  });
+
+  it('clears cached RX frequency ranges when the radio session disconnects', async () => {
+    const { connection, rig } = createConnectedConnection();
+    asTestConnection(connection).rxFrequencyRanges = [{
+      startFreq: 1_800_000,
+      endFreq: 30_000_000,
+      modes: ['USB'],
+      lowPower: 0,
+      highPower: 0,
+      vfo: 0,
+      antenna: 0,
+    }];
+
+    expect(connection.canTuneFrequency(14_074_000)).toBe(true);
+    await connection.disconnect('test session ended');
+
+    expect(connection.canTuneFrequency(14_074_000)).toBeNull();
+    expect(rig.close).toHaveBeenCalledTimes(1);
   });
 
   it('derives supported mode bandwidth options from hamlib filter list', async () => {
@@ -573,6 +861,7 @@ describe('HamlibConnection', () => {
       frequencyApplied: true,
       modeApplied: true,
       modeError: undefined,
+      appliedMode: 'USB',
     });
     expect(rig.setMode).toHaveBeenCalledTimes(1);
     expect(rig.setFrequency).toHaveBeenCalledTimes(2);

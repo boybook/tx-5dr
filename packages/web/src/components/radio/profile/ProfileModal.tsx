@@ -22,11 +22,12 @@ import { api } from '@tx5dr/core';
 import type { RadioProfile, HamlibConfig, AudioDeviceSettings as AudioDeviceSettingsType, SupportedRig } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { useHasMinRole } from '../../../store/authStore';
-import { useProfiles, useRadioConnectionState, useRadioState } from '../../../store/radioStore';
+import { useProfiles, useProfileRequestScope, useRadioConnectionState, useRadioState } from '../../../store/radioStore';
 import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceSettings';
 import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
 import { PowerControlButton } from './PowerControlButton';
 import { matchAudioDeviceForRig } from './radioAudioDeviceMapping';
+import { assessProfileActivation } from './profileActivationResult';
 
 const NEW_PROFILE_AUDIO_DEFAULTS: AudioDeviceSettingsType = {
   outputSampleFormat: 'int16',
@@ -57,6 +58,11 @@ function isRedactedProfile(profile: RadioProfile): boolean {
 export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   const { t } = useTranslation('radio');
   const { profiles, activeProfileId } = useProfiles();
+  const {
+    capture: captureProfileRequestScope,
+    isCurrent: isProfileRequestScopeCurrent,
+    synchronize: synchronizeProfileRequestScope,
+  } = useProfileRequestScope();
   const { dispatch: radioDispatch } = useRadioState();
   const radioConnection = useRadioConnectionState();
   const canManageProfiles = useHasMinRole(UserRole.ADMIN);
@@ -112,10 +118,12 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
+    const requestScope = captureProfileRequestScope();
 
     void api.getProfiles()
       .then((response) => {
-        if (cancelled) return;
+        if (cancelled || !isProfileRequestScopeCurrent(requestScope)) return;
+        synchronizeProfileRequestScope(response.activeProfileId);
         radioDispatch({
           type: 'setProfiles',
           payload: {
@@ -131,7 +139,13 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     return () => {
       cancelled = true;
     };
-  }, [isOpen, radioDispatch]);
+  }, [
+    captureProfileRequestScope,
+    isOpen,
+    isProfileRequestScopeCurrent,
+    radioDispatch,
+    synchronizeProfileRequestScope,
+  ]);
 
   // 如果运行时 fallback 在编辑页打开期间写回 Profile，且用户尚未手动改音频，
   // 同步最新后端音频配置到表单，避免继续显示旧的 48 kHz。
@@ -175,6 +189,8 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
           ...prev,
           ...(result.inputDeviceName ? { inputDeviceName: result.inputDeviceName } : {}),
           ...(result.outputDeviceName ? { outputDeviceName: result.outputDeviceName } : {}),
+          ...(result.inputRouteKey ? { inputRouteKey: result.inputRouteKey } : {}),
+          ...(result.outputRouteKey ? { outputRouteKey: result.outputRouteKey } : {}),
           ...(result.inputSampleRate ? { inputSampleRate: result.inputSampleRate } : {}),
           ...(result.outputSampleRate ? { outputSampleRate: result.outputSampleRate } : {}),
         }));
@@ -356,8 +372,18 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     setIsActivating(true);
     try {
       const result = await api.activateProfile(selectedProfileId);
-      const profileName = result.profile?.name || '';
+      const activation = assessProfileActivation(result);
+      const profileName = result.profile?.name || profile?.name || '';
       const isSameProfile = selectedProfileId === activeProfileId;
+      if (!activation.success) {
+        addToast({
+          title: isSameProfile ? t('connection.failed') : t('profile.switchFailed', { name: profileName }),
+          description: activation.error || t('profileModal.retry'),
+          color: 'danger',
+          timeout: 5000,
+        });
+        return;
+      }
       addToast({
         title: isSameProfile ? t('profile.reconnecting', { name: profileName }) : t('profile.switched', { name: profileName }),
         color: 'success',

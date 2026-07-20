@@ -3,7 +3,21 @@ import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, Pop
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faTowerBroadcast, faPowerOff, faCircleInfo, faTriangleExclamation, faRightLeft } from '@fortawesome/free-solid-svg-icons';
-import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState, useAudioSidecarState, useRadioState, useOperators } from '../../../store/radioStore';
+import {
+  awaitProfileScoped,
+  useConnection,
+  useProfiles,
+  useProfileRequestScope,
+  useRadioErrors,
+  useCapabilityState,
+  useRadioConnectionState,
+  useRadioModeState,
+  usePTTState,
+  useAudioSidecarState,
+  useRadioState,
+  useOperators,
+  type ProfileRequestScope,
+} from '../../../store/radioStore';
 import type { AudioSidecarStatusPayload } from '@tx5dr/contracts';
 import { AudioSidecarStatus } from '@tx5dr/contracts';
 import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
@@ -605,7 +619,12 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const radioMode = useRadioModeState();
   const { pttStatus, tuneToneStatus, voicePttLock } = usePTTState();
   const { state: radioState, dispatch: radioDispatch } = useRadioState();
-  const { activeProfile } = useProfiles();
+  const { activeProfile, activeProfileId, profileGeneration } = useProfiles();
+  const {
+    profileRequestScopeRef,
+    capture: captureProfileRequestScope,
+    isCurrent: isProfileRequestScopeCurrent,
+  } = useProfileRequestScope();
   const { latestError } = useRadioErrors();
   const { state: authState } = useAuth();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
@@ -669,6 +688,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const [availableFrequencies, setAvailableFrequencies] = useState<FrequencyOption[]>([]);
   const [isLoadingFrequencies, setIsLoadingFrequencies] = useState(false);
   const isRadioConnectedRef = React.useRef(connection.state.isConnected);
+  const currentRadioFrequencyRef = React.useRef(radioState.currentRadioFrequency);
+  currentRadioFrequencyRef.current = radioState.currentRadioFrequency;
 
   React.useEffect(() => {
     isRadioConnectedRef.current = connection.state.isConnected;
@@ -697,6 +718,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const [sdrConfirmPending, setSdrConfirmPending] = React.useState<{
     frequency: string; // selectedFrequencyKey
     count: number;
+    requestScope: ProfileRequestScope;
   } | null>(null);
 
   useWSEvent(connection.state.radioService, 'openwebrxClientCount', (data: { count: number }) => {
@@ -709,6 +731,18 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const [customFrequencyError, setCustomFrequencyError] = useState('');
   const [isSettingCustomFrequency, setIsSettingCustomFrequency] = useState(false);
   const [customFrequencyOption, setCustomFrequencyOption] = useState<FrequencyOption | null>(null); // 保存自定义频率选项
+  const customFrequencyScopeRef = React.useRef<ProfileRequestScope | null>(null);
+
+  React.useEffect(() => {
+    setCurrentFrequency('');
+    setCustomFrequencyOption(null);
+    setIsCustomFrequencyModalOpen(false);
+    setCustomFrequencyInput('');
+    setCustomFrequencyError('');
+    setIsSettingCustomFrequency(false);
+    setSdrConfirmPending(null);
+    customFrequencyScopeRef.current = null;
+  }, [activeProfileId, profileGeneration]);
 
   const resetOperatorsAfterOperatingStateChange = React.useCallback(() => {
     resetOperatorsForOperatingStateChange({
@@ -1149,52 +1183,62 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     loadFrequencies();
   }, [canUseAuthenticatedRest, connection.state.isConnected, formatBandLabel]);
 
-  // 加载并恢复上次选择的频率
+  // Profile memory may seed the selector while the new radio session is still
+  // connecting. A live server frequency always wins, and this path never writes
+  // to hardware.
   React.useEffect(() => {
-    const loadLastFrequency = async () => {
-      if (!isRadioConnectedRef.current || availableFrequencies.length === 0) {
-        return;
-      }
-      if (!canUseAuthenticatedRest) {
-        return;
-      }
+    if (!activeProfileId || !canUseAuthenticatedRest || availableFrequencies.length === 0) {
+      return;
+    }
 
+    let cancelled = false;
+    const requestScope = captureProfileRequestScope();
+    void (async () => {
       try {
-        const response = await api.getLastFrequency();
-
-        if (response.success && response.lastFrequency) {
-          const lastFreq = response.lastFrequency;
-
-          // 查找匹配的频率选项
-          const matchingFreq = availableFrequencies.find(freq =>
-            freq.frequency === lastFreq.frequency && freq.mode === lastFreq.mode
-          );
-
-          if (matchingFreq && (!radioMode.currentMode || radioMode.currentMode.name === lastFreq.mode)) {
-            logger.debug(`Restoring last frequency: ${matchingFreq.label}`);
-            setCurrentFrequency(matchingFreq.key);
-            if (canWriteFrequency) {
-              // 自动设置频率到电台
-              await autoSetFrequency(matchingFreq);
-            }
-          }
+        const scopedResponse = await awaitProfileScoped(
+          api.getLastFrequency(),
+          requestScope,
+          profileRequestScopeRef,
+        );
+        if (
+          cancelled
+          || scopedResponse.status === 'stale'
+          || (currentRadioFrequencyRef.current ?? 0) > 0
+        ) {
+          return;
+        }
+        const response = scopedResponse.value;
+        const lastFrequency = response.lastFrequency;
+        if (!lastFrequency) {
+          return;
+        }
+        const matchingFrequency = availableFrequencies.find((frequency) => (
+          frequency.frequency === lastFrequency.frequency
+          && frequency.mode === lastFrequency.mode
+        ));
+        if (
+          matchingFrequency
+          && (!radioMode.currentMode || radioMode.currentMode.name === lastFrequency.mode)
+        ) {
+          setCurrentFrequency(matchingFrequency.key);
         }
       } catch (error) {
-        logger.error('Failed to load last frequency:', error);
-        // 静默失败，不影响用户体验
+        logger.debug('Failed to load Profile frequency memory', error);
       }
+    })();
+
+    return () => {
+      cancelled = true;
     };
-
-    // 延迟执行，等待频率列表和模式都加载完成
-    if (availableFrequencies.length > 0) {
-      const timeoutId = window.setTimeout(() => {
-        void loadLastFrequency();
-      }, 500);
-      return () => window.clearTimeout(timeoutId);
-    }
-  }, [availableFrequencies, radioMode.currentMode, connection.state.isConnected, canUseAuthenticatedRest, canWriteFrequency]);
-
-
+  }, [
+    activeProfileId,
+    availableFrequencies,
+    canUseAuthenticatedRest,
+    captureProfileRequestScope,
+    profileGeneration,
+    profileRequestScopeRef,
+    radioMode.currentMode,
+  ]);
 
   // 简化的监听开关控制
   const handleListenToggle = async (isSelected: boolean) => {
@@ -1530,6 +1574,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   // 处理自定义频率确认
   const handleCustomFrequencyConfirm = async () => {
     if (!canWriteFrequency) return;
+    const requestScope = customFrequencyScopeRef.current ?? captureProfileRequestScope();
+    if (!isProfileRequestScopeCurrent(requestScope)) return;
 
     const result = parseFrequencyInput(customFrequencyInput);
     if (!result || result.error) {
@@ -1545,18 +1591,26 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     setIsSettingCustomFrequency(true);
 
     try {
-      const response = await setRadioFrequencyWithIntent({
-        frequency: frequency,
-        mode: radioMode.currentMode?.name || 'FT8',
-        band: t('frequency.custom'),
-        description: `${formatFrequencyDisplay(frequency)} MHz (${t('frequency.custom')})`
-      });
+      const scopedResponse = await awaitProfileScoped(
+        setRadioFrequencyWithIntent({
+          frequency: frequency,
+          mode: radioMode.currentMode?.name || 'FT8',
+          band: t('frequency.custom'),
+          description: `${formatFrequencyDisplay(frequency)} MHz (${t('frequency.custom')})`
+        }),
+        requestScope,
+        profileRequestScopeRef,
+      );
+      if (scopedResponse.status === 'stale') return;
+      const response = scopedResponse.value;
 
       if (response.success) {
+        const appliedRadioMode = response.radioMode?.trim() || undefined;
         // 关闭模态框
         setIsCustomFrequencyModalOpen(false);
         setCustomFrequencyInput('');
         setCustomFrequencyError('');
+        customFrequencyScopeRef.current = null;
         resetOperatorsAfterOperatingStateChange();
 
         // 更新当前频率显示
@@ -1565,6 +1619,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
           frequency,
           radioMode.currentMode?.name || 'FT8',
           t('frequency.custom'),
+          appliedRadioMode,
         ));
 
         const successMessage = t('frequency.switched', { freq: formatFrequencyDisplay(frequency) });
@@ -1572,10 +1627,17 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
         if (response.radioConnected) {
           logger.info(`Custom frequency set: ${formatFrequencyDisplay(frequency)} MHz`);
           addToast({
-            title: t('frequency.switchSuccess'),
-            description: successMessage,
-            color: 'success',
-            timeout: 3000
+            title: response.modeDegraded
+              ? t('frequency.switchDegraded')
+              : t('frequency.switchSuccess'),
+            description: response.modeDegraded
+              ? t('frequency.switchDegradedDetail', {
+                message: successMessage,
+                reason: response.modeFallbackReason || t('frequency.modeNotConfirmed'),
+              })
+              : successMessage,
+            color: response.modeDegraded ? 'warning' : 'success',
+            timeout: response.modeDegraded ? 5000 : 3000
           });
         } else {
           addToast({
@@ -1602,7 +1664,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
         setCustomFrequencyError(t('error.networkError'));
       }
     } finally {
-      setIsSettingCustomFrequency(false);
+      if (isProfileRequestScopeCurrent(requestScope)) {
+        setIsSettingCustomFrequency(false);
+      }
     }
   };
 
@@ -1684,34 +1748,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     MODE_SELECT_MAX_WIDTH_PX,
   );
 
-  // 自动设置频率到后端（避免递归调用）
-  const autoSetFrequency = async (frequency: FrequencyOption) => {
-    if (!isRadioConnectedRef.current || !canWriteTargetFrequency(frequency.frequency)) return;
-
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const params: any = {
-        frequency: frequency.frequency,
-        mode: frequency.mode,
-        band: frequency.band,
-        description: frequency.label
-      };
-      if (frequency.radioMode) {
-        params.radioMode = frequency.radioMode;
-      }
-
-      const response = await setRadioFrequencyWithIntent(params);
-
-      if (!response.success) {
-        logger.debug('Auto set frequency failed:', response.message);
-        return;
-      }
-    } catch (error) {
-      logger.debug('Auto set frequency failed:', error);
-      // 自动设置失败，静默处理，不影响用户体验
-    }
-  };
-
   // 处理频率切换
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleFrequencyChange = async (keys: any) => {
@@ -1727,6 +1763,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
     // 检查是否选择了自定义频率选项
     if (selectedFrequencyKey === CUSTOM_FREQUENCY_ACTION_KEY) {
+      customFrequencyScopeRef.current = captureProfileRequestScope();
       setIsCustomFrequencyModalOpen(true);
       setCustomFrequencyInput('');
       setCustomFrequencyError('');
@@ -1745,21 +1782,32 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
     // Multi-user SDR confirmation: if OpenWebRX has other users, confirm before switching
     if (openwebrxClientCountRef.current > 1) {
-      setSdrConfirmPending({ frequency: selectedFrequencyKey, count: openwebrxClientCountRef.current });
+      setSdrConfirmPending({
+        frequency: selectedFrequencyKey,
+        count: openwebrxClientCountRef.current,
+        requestScope: captureProfileRequestScope(),
+      });
       return;
     }
 
-    await executeFrequencySwitch(selectedFrequencyKey, selectedFrequency);
+    await executeFrequencySwitch(
+      selectedFrequencyKey,
+      selectedFrequency,
+      captureProfileRequestScope(),
+    );
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const executeFrequencySwitch = async (selectedFrequencyKey: string, selectedFrequency: any) => {
+  const executeFrequencySwitch = async (
+    selectedFrequencyKey: string,
+    selectedFrequency: FrequencyOption,
+    requestScope: ProfileRequestScope,
+  ) => {
+    if (!isProfileRequestScopeCurrent(requestScope)) return;
     if (!canWriteTargetFrequency(selectedFrequency.frequency)) return;
 
     try {
       // 设置频率和电台调制模式
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const params: any = {
+      const params: Parameters<typeof setRadioFrequencyWithIntent>[0] = {
         frequency: selectedFrequency.frequency,
         mode: selectedFrequency.mode,
         band: selectedFrequency.band,
@@ -1769,24 +1817,54 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
         params.radioMode = selectedFrequency.radioMode;
       }
 
-      const response = await setRadioFrequencyWithIntent(params);
+      const scopedResponse = await awaitProfileScoped(
+        setRadioFrequencyWithIntent(params),
+        requestScope,
+        profileRequestScopeRef,
+      );
+      if (scopedResponse.status === 'stale') return;
+      const response = scopedResponse.value;
 
       if (response.success) {
-        setCurrentFrequency(selectedFrequencyKey);
-        setCustomFrequencyOption(null);
+        const requestedRadioMode = typeof selectedFrequency.radioMode === 'string'
+          ? selectedFrequency.radioMode
+          : undefined;
+        const appliedRadioMode = response.radioMode?.trim() || undefined;
+        if (response.modeDegraded) {
+          setCurrentFrequency(CURRENT_CUSTOM_FREQUENCY_KEY);
+          setCustomFrequencyOption(buildCurrentCustomFrequencyOption(
+            selectedFrequency.frequency,
+            selectedFrequency.mode,
+            selectedFrequency.band,
+            appliedRadioMode,
+          ));
+        } else {
+          setCurrentFrequency(selectedFrequencyKey);
+          setCustomFrequencyOption(null);
+        }
         resetOperatorsAfterOperatingStateChange();
 
-        const successMessage = selectedFrequency.radioMode
-          ? t('frequency.switchedWithMode', { label: selectedFrequency.label, mode: selectedFrequency.radioMode })
+        const successMessage = appliedRadioMode || requestedRadioMode
+          ? t('frequency.switchedWithMode', {
+            label: selectedFrequency.label,
+            mode: appliedRadioMode || requestedRadioMode,
+          })
           : t('frequency.switchedLabel', { label: selectedFrequency.label });
 
         if (response.radioConnected) {
           logger.info(`Frequency switched to: ${selectedFrequency.label}`);
           addToast({
-            title: t('frequency.switchSuccess'),
-            description: successMessage,
-            color: 'success',
-            timeout: 3000
+            title: response.modeDegraded
+              ? t('frequency.switchDegraded')
+              : t('frequency.switchSuccess'),
+            description: response.modeDegraded
+              ? t('frequency.switchDegradedDetail', {
+                message: successMessage,
+                reason: response.modeFallbackReason || t('frequency.modeNotConfirmed'),
+              })
+              : successMessage,
+            color: response.modeDegraded ? 'warning' : 'success',
+            timeout: response.modeDegraded ? 5000 : 3000
           });
         } else {
           addToast({
@@ -2697,7 +2775,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
               if (sdrConfirmPending) {
                 const freq = filteredFrequencies.find(f => f.key === sdrConfirmPending.frequency);
                 if (freq) {
-                  executeFrequencySwitch(sdrConfirmPending.frequency, freq);
+                  void executeFrequencySwitch(
+                    sdrConfirmPending.frequency,
+                    freq,
+                    sdrConfirmPending.requestScope,
+                  );
                 }
               }
               setSdrConfirmPending(null);
@@ -2715,6 +2797,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
           setIsCustomFrequencyModalOpen(false);
           setCustomFrequencyInput('');
           setCustomFrequencyError('');
+          customFrequencyScopeRef.current = null;
         }}
         placement="center"
         size="sm"

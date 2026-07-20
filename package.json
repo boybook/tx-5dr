@@ -28,6 +28,7 @@
     "build:make": "yarn build && yarn make",
     "clean": "node scripts/clean-paths.mjs out packages/*/dist",
     "check:i18n": "node scripts/check-i18n.mjs",
+    "verify:audify-native": "node scripts/verify-audify-native-patch.mjs",
     "package:deb": "scripts/package-linux.sh deb",
     "package:rpm": "scripts/package-linux.sh rpm",
     "package:linux": "scripts/package-linux.sh both",

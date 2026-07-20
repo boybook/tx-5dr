@@ -7,7 +7,7 @@ index 0d29cad104cc40e79c67897054af96417a1ba409..3b4dc5924f077f378a751ed6a0d81a24
  		"docs": "typedoc index.d.ts --hideGenerator --name Audify.js",
  		"rebuild": "cmake-js compile",
 -		"install": "prebuild-install -r napi || npm run rebuild",
-+		"install": "node -e \"process.platform==='win32'&&process.exit(1)\" && prebuild-install -r napi || npm run rebuild",
++		"install": "node -e \"process.platform!=='darwin'&&process.exit(1)\" && prebuild-install -r napi || npm run rebuild",
  		"deploy": "np --yolo",
  		"build-binaries": "run-script-os",
  		"build-binaries:win32": "node ./node_modules/prebuild/bin.js --backend cmake-js --include-regex \"^.*\\.(node|dylib|dll|so(\\.[0-9])?)$\" -r napi --all --verbose -u %GITHUB_TOKEN%",
@@ -15,6 +15,12 @@ diff --git a/vendor/rtaudio/RtAudio.cpp b/vendor/rtaudio/RtAudio.cpp
 index 73cee2b7c3977ecc973d8370c75976b24ae6fe12..01b2a8051c88bd66716b6b9d62eb2349d6f0e62b 100644
 --- a/vendor/rtaudio/RtAudio.cpp
 +++ b/vendor/rtaudio/RtAudio.cpp
+@@ -362,4 +362,5 @@ public:
+   struct PaDeviceInfo {
+     std::string sinkName;
+     std::string sourceName;
++    uint32_t cardIndex = PA_INVALID_INDEX;
+   };
 @@ -5449,7 +5449,11 @@ bool RtApiWasapi::probeDeviceOpen( unsigned int deviceId, StreamMode mode, unsig
      }
  
@@ -46,3 +52,162 @@ index 73cee2b7c3977ecc973d8370c75976b24ae6fe12..01b2a8051c88bd66716b6b9d62eb2349
    }
  
    // Fill stream data
+@@ -8009,6 +8013,8 @@ void RtApiAlsa :: probeDevices( void )
+     RtAudio::DeviceInfo info;
+     info.name = d.second;
+     if ( probeDeviceInfo( info, d.first ) == false ) continue; // ignore if probe fails
++    if ( info.inputChannels > 0 ) info.inputNativeId = d.first;
++    if ( info.outputChannels > 0 ) info.outputNativeId = d.first;
+     info.ID = currentDeviceId_++;  // arbitrary internal device ID
+     if ( info.name == defaultDeviceName ) {
+       if ( info.outputChannels > 0 ) info.isDefaultOutput = true;
+@@ -8059,7 +8064,7 @@ bool RtApiAlsa :: probeDeviceInfo( RtAudio::DeviceInfo& info, std::string name )
+   stream = SND_PCM_STREAM_PLAYBACK;
+   result = snd_pcm_open( &phandle, name.c_str(), stream, openMode | SND_PCM_NONBLOCK );
+   if ( result < 0 ) {
+-    if ( result == -16 ) return false; // device busy ... can't probe or use
++    if ( result == -16 ) goto captureProbe; // playback busy; capture may still be usable
+     if ( result != -2 ) { // device doesn't support playback
+       errorStream_ << "RtApiAlsa::probeDeviceInfo: snd_pcm_open (playback) error for device (" << name << "), " << snd_strerror( result ) << ".";
+       errorText_ = errorStream_.str();
+@@ -9159,7 +9166,8 @@ struct PaDeviceProbeInfo {
+   std::string defaultSourceName;
+   int defaultRate;
+   unsigned int *currentDeviceId;
+-  std::vector< std::string > deviceNames;
++  std::vector< std::string > sinkNativeNames;
++  std::vector< std::string > sourceNativeNames;
+   std::vector< RtApiPulse::PaDeviceInfo > *paDeviceList;
+   std::vector< RtAudio::DeviceInfo > *rtDeviceList;
+ };
+@@ -9214,4 +9222,4 @@ static void rt_pa_set_sink_info( pa_context * /*c*/, const pa_sink_info *i,
+   std::string name = pa_proplist_gets( i->proplist, "device.description" );
+-  paProbeInfo->deviceNames.push_back( name );
++  paProbeInfo->sinkNativeNames.push_back( i->name );
+   for ( size_t n=0; n<paProbeInfo->rtDeviceList->size(); n++ )
+-    if ( paProbeInfo->rtDeviceList->at(n).name == name ) return; // we've already probed this one
++    if ( paProbeInfo->rtDeviceList->at(n).outputNativeId == i->name ) return;
+@@ -9220,5 +9228,6 @@ static void rt_pa_set_sink_info( pa_context * /*c*/, const pa_sink_info *i,
+   RtAudio::DeviceInfo info;
+   info.name = name;
++  info.outputNativeId = i->name;
+   info.outputChannels = i->sample_spec.channels;
+   info.preferredSampleRate = i->sample_spec.rate;
+   info.isDefaultOutput = ( paProbeInfo->defaultSinkName == i->name );
+@@ -9234,3 +9243,4 @@ static void rt_pa_set_sink_info( pa_context * /*c*/, const pa_sink_info *i,
+   RtApiPulse::PaDeviceInfo painfo;
+   painfo.sinkName = i->name;
++  painfo.cardIndex = i->card;
+   paProbeInfo->paDeviceList->push_back( painfo );
+@@ -9250,11 +9260,16 @@ static void rt_pa_set_source_info_and_quit( pa_context * /*c*/, const pa_source_
++  if ( i->monitor_of_sink != PA_INVALID_INDEX ) return;
+   std::string name = pa_proplist_gets( i->proplist, "device.description" );
+-  paProbeInfo->deviceNames.push_back( name );
++  paProbeInfo->sourceNativeNames.push_back( i->name );
+   for ( size_t n=0; n<paProbeInfo->rtDeviceList->size(); n++ ) {
+-    if ( paProbeInfo->rtDeviceList->at(n).name == name ) {
++    if ( paProbeInfo->rtDeviceList->at(n).inputNativeId == i->name ) return;
++    if ( paProbeInfo->rtDeviceList->at(n).inputNativeId.empty()
++         && paProbeInfo->paDeviceList->at(n).cardIndex == i->card
++         && i->card != PA_INVALID_INDEX ) {
+       // Check if we've already probed this as an output.
+       if ( !paProbeInfo->paDeviceList->at(n).sinkName.empty() ) {
+         // This must be a duplex device. Update the device info.
+         paProbeInfo->paDeviceList->at(n).sourceName = i->name;
++        paProbeInfo->rtDeviceList->at(n).inputNativeId = i->name;
+         paProbeInfo->rtDeviceList->at(n).inputChannels = i->sample_spec.channels;
+         paProbeInfo->rtDeviceList->at(n).isDefaultInput = ( paProbeInfo->defaultSourceName == i->name );
+         paProbeInfo->rtDeviceList->at(n).duplexChannels =
+@@ -9267,5 +9282,6 @@ static void rt_pa_set_source_info_and_quit( pa_context * /*c*/, const pa_source_
+   RtAudio::DeviceInfo info;
+   info.name = name;
++  info.inputNativeId = i->name;
+   info.inputChannels = i->sample_spec.channels;
+   info.preferredSampleRate = i->sample_spec.rate;
+   info.isDefaultInput = ( paProbeInfo->defaultSourceName == i->name );
+@@ -9280,3 +9296,4 @@ static void rt_pa_set_source_info_and_quit( pa_context * /*c*/, const pa_source_
+   RtApiPulse::PaDeviceInfo painfo;
+   painfo.sourceName = i->name;
++  painfo.cardIndex = i->card;
+   paProbeInfo->paDeviceList->push_back( painfo );
+@@ -9373,15 +9390,31 @@ void RtApiPulse :: probeDevices( void )
+   // Check for devices that have been unplugged.
+-  unsigned int m;
+-  for ( std::vector<RtAudio::DeviceInfo>::iterator it=deviceList_.begin(); it!=deviceList_.end(); ) {
+-    for ( m=0; m<paProbeInfo.deviceNames.size(); m++ ) {
+-      if ( (*it).name == paProbeInfo.deviceNames[m] ) {
+-        ++it;
+-        break;
+-      }
++  for ( size_t index=0; index<deviceList_.size(); ) {
++    RtAudio::DeviceInfo& device = deviceList_[index];
++    PaDeviceInfo& paDevice = paDeviceList_[index];
++    const bool inputAlive = !device.inputNativeId.empty()
++      && std::find(paProbeInfo.sourceNativeNames.begin(), paProbeInfo.sourceNativeNames.end(), device.inputNativeId)
++         != paProbeInfo.sourceNativeNames.end();
++    const bool outputAlive = !device.outputNativeId.empty()
++      && std::find(paProbeInfo.sinkNativeNames.begin(), paProbeInfo.sinkNativeNames.end(), device.outputNativeId)
++         != paProbeInfo.sinkNativeNames.end();
++    if ( !inputAlive ) {
++      device.inputNativeId.clear();
++      device.inputChannels = 0;
++      device.isDefaultInput = false;
++      paDevice.sourceName.clear();
+     }
+-    if ( m == paProbeInfo.deviceNames.size() ) { // not found so remove it from our list
+-      it = deviceList_.erase( it );
+-      paDeviceList_.erase( paDeviceList_.begin() + distance(deviceList_.begin(), it ) );
++    if ( !outputAlive ) {
++      device.outputNativeId.clear();
++      device.outputChannels = 0;
++      device.isDefaultOutput = false;
++      paDevice.sinkName.clear();
++    }
++    if ( !inputAlive && !outputAlive ) {
++      deviceList_.erase( deviceList_.begin() + index );
++      paDeviceList_.erase( paDeviceList_.begin() + index );
++      continue;
+     }
++    device.duplexChannels = std::min(device.inputChannels, device.outputChannels);
++    ++index;
+   }
+
+diff --git a/vendor/rtaudio/RtAudio.h b/vendor/rtaudio/RtAudio.h
+index 15979b0d13fa3a6fd0e9cedaac9535c572a45d52..b45828bfcab0a94a8c6763ff8efbc073d7a91d73 100644
+--- a/vendor/rtaudio/RtAudio.h
++++ b/vendor/rtaudio/RtAudio.h
+@@ -288,6 +288,8 @@ public:
+   struct DeviceInfo {
+     unsigned int ID{};              /*!< Device ID used to specify a device to RtAudio. */
+     std::string name;               /*!< Character string device name. */
++    std::string inputNativeId;      /*!< Backend-native input locator, when available. */
++    std::string outputNativeId;     /*!< Backend-native output locator, when available. */
+     unsigned int outputChannels{};  /*!< Maximum output channels supported by device. */
+     unsigned int inputChannels{};   /*!< Maximum input channels supported by device. */
+     unsigned int duplexChannels{};  /*!< Maximum simultaneous input/output channels supported by device. */
+diff --git a/src/rt_audio_converter.cpp b/src/rt_audio_converter.cpp
+index 8524dcc863f36e8c8bb880d67f94738e756f05f7..9ab4d25d7b27bdd90a215a559e9530f9faf26895 100644
+--- a/src/rt_audio_converter.cpp
++++ b/src/rt_audio_converter.cpp
+@@ -8,6 +8,8 @@ Napi::Value RtAudioConverter::ConvertDeviceInfo(
+     // Set all properties in the object
+     devInfo.Set("id", dev.ID);
+     devInfo.Set("name", dev.name);
++    devInfo.Set("inputNativeId", dev.inputNativeId);
++    devInfo.Set("outputNativeId", dev.outputNativeId);
+     devInfo.Set("outputChannels", dev.outputChannels);
+     devInfo.Set("inputChannels", dev.inputChannels);
+     devInfo.Set("duplexChannels", dev.duplexChannels);
+diff --git a/index.d.ts b/index.d.ts
+index d1c3430cadf56760875733188d84d1c714daab4a..f5db82ca9e96db30457d74ba3bacdf09e159be49 100644
+--- a/index.d.ts
++++ b/index.d.ts
+@@ -132,2 +132,8 @@ declare interface RtAudioDeviceInfo {
+   /** Character string device identifier. */
+   name: string;
++  /** Backend-native input locator, when available. */
++  inputNativeId?: string;
++
++  /** Backend-native output locator, when available. */
++  outputNativeId?: string;
++

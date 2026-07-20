@@ -190,6 +190,17 @@ describe('radioStore capability reducer', () => {
   it('resets meter visibility when the active profile changes', () => {
     const stateWithMeterData: RadioState = {
       ...initialRadioState,
+      currentRadioFrequency: 14_074_000,
+      currentRadioMode: 'PKTUSB',
+      currentMode: {
+        name: 'VOICE',
+        slotMs: 0,
+        toleranceMs: 0,
+        windowTiming: [],
+        transmitTiming: 0,
+        encodeAdvance: 0,
+      },
+      engineMode: 'voice',
       hasReceivedMeterData: true,
       meterData: {
         swr: null,
@@ -229,11 +240,26 @@ describe('radioStore capability reducer', () => {
         },
         previousProfileId: 'profile-a',
         wasRunning: false,
+        generation: 6,
+        engineMode: 'cw',
+        currentMode: {
+          name: 'CW',
+          slotMs: 0,
+          toleranceMs: 0,
+          windowTiming: [],
+          transmitTiming: 0,
+          encodeAdvance: 0,
+        },
       },
     });
 
     expect(nextState.hasReceivedMeterData).toBe(false);
     expect(nextState.meterData).toBeNull();
+    expect(nextState.currentRadioFrequency).toBeNull();
+    expect(nextState.currentRadioMode).toBeNull();
+    expect(nextState.profileGeneration).toBe(6);
+    expect(nextState.engineMode).toBe('cw');
+    expect(nextState.currentMode?.name).toBe('CW');
   });
 
   it('keeps meter capabilities during initial profile hydration after radio status sync', () => {

@@ -14,7 +14,7 @@ import { createLogger } from '../utils/logger.js';
 import type { VoiceTxFrameMeta, VoiceTxProcessedFrameStats } from '../voice/VoiceTxDiagnostics.js';
 import { VoiceTxOutputPipeline, type VoiceTxOutputSinkState } from './VoiceTxOutputPipeline.js';
 import { AndroidAudioInputSocket, AndroidAudioOutputSocket, type AndroidAudioOutputFormat } from './AndroidAudioSocketBackend.js';
-import { getAndroidAudioStartFailure, isAndroidAudioDeviceId, isAndroidBridgeRuntime, isLegacyAndroidAudioDeviceName } from './android-audio-devices.js';
+import { getAndroidAudioStartFailure, isAndroidBridgeRuntime, isLegacyAndroidAudioDeviceName } from './android-audio-devices.js';
 
 const logger = createLogger('AudioStreamManager');
 // RtAudioFormat 是 const enum，isolatedModules 下无法直接导入，使用数值常量
@@ -224,6 +224,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private outputDeviceId: string | null = null;
   private activeInputDeviceName: string | null = null;
   private activeOutputDeviceName: string | null = null;
+  private activeInputRouteKey: string | null = null;
+  private activeOutputRouteKey: string | null = null;
   private inputSampleRate: number;
   private inputProcessingSampleRate = DEFAULT_INPUT_PROCESSING_SAMPLE_RATE;
   private outputSampleRate: number;
@@ -388,7 +390,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   /**
    * 启动音频流
    */
-  async startStream(deviceId?: string): Promise<void> {
+  async startStream(): Promise<void> {
     if (this.isStreaming) {
       logger.warn('audio stream is already running');
       return;
@@ -404,7 +406,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       const configuredInputDeviceName = audioConfig.inputDeviceName;
       
       // 检测是否为 ICOM WLAN 虚拟设备
-      if (deviceId === 'icom-wlan-input' || audioConfig.inputDeviceName === 'ICOM WLAN') {
+      if (audioConfig.inputDeviceName === 'ICOM WLAN') {
         logger.info('ICOM WLAN virtual input device detected');
 
         if (!this.icomWlanAudioAdapter) {
@@ -450,7 +452,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       }
 
       // 检测是否为 TCI 虚拟设备
-      if (deviceId === 'tci-input' || audioConfig.inputDeviceName === TCI_AUDIO_DEVICE_NAME) {
+      if (audioConfig.inputDeviceName === TCI_AUDIO_DEVICE_NAME) {
         logger.info('TCI virtual input device detected');
 
         if (!this.tciAudioAdapter) {
@@ -490,12 +492,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       }
 
       // 检测是否为 OpenWebRX SDR 虚拟设备
-      if (deviceId?.startsWith('openwebrx-') || audioConfig.inputDeviceName?.startsWith('[SDR]')) {
+      if (audioConfig.inputDeviceName?.startsWith('[SDR]')) {
         logger.info('OpenWebRX virtual input device detected');
 
         if (!this.openwebrxAudioAdapter) {
           logger.warn('OpenWebRX audio adapter not set, skipping audio stream start');
-          this.deviceId = deviceId || 'openwebrx-unknown';
+          this.deviceId = 'openwebrx-unknown';
           this.activeInputDeviceName = audioConfig.inputDeviceName ?? null;
           this.usingOpenWebRXInput = false;
           this.isStreaming = true;
@@ -525,7 +527,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         openwebrxAdapter.on('audioData', this.openwebrxAudioDataHandler);
         openwebrxAdapter.on('error', this.openwebrxErrorHandler);
 
-        this.deviceId = deviceId || 'openwebrx-unknown';
+        this.deviceId = 'openwebrx-unknown';
         this.activeInputDeviceName = audioConfig.inputDeviceName ?? null;
         this.isStreaming = true;
         logger.info('OpenWebRX audio input started', {
@@ -536,16 +538,16 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         return;
       }
 
-      if (audioConfig.inputRouteKey || isAndroidAudioDeviceId(deviceId) || audioConfig.inputDeviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && (!audioConfig.inputDeviceName || isLegacyAndroidAudioDeviceName('input', audioConfig.inputDeviceName)))) {
+      if (audioConfig.inputRouteKey?.startsWith('android:') || audioConfig.inputDeviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && (!audioConfig.inputDeviceName || isLegacyAndroidAudioDeviceName('input', audioConfig.inputDeviceName)))) {
         const audioDeviceManager = AudioDeviceManager.getInstance();
         const androidDevice = audioDeviceManager.resolveAndroidDeviceForStream(
           'input',
           configuredInputDeviceName,
-          deviceId,
+          undefined,
           audioConfig.inputRouteKey ?? undefined,
         );
         if (!androidDevice) {
-          throw new Error(`Android audio input device is unavailable: ${configuredInputDeviceName ?? deviceId ?? 'default'}`);
+          throw new Error(`Android audio input device is unavailable: ${configuredInputDeviceName ?? 'default'}`);
         }
         const startFailure = getAndroidAudioStartFailure(androidDevice);
         if (startFailure) {
@@ -577,9 +579,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         inputStarted = true;
         this.deviceId = androidDevice.id;
         this.activeInputDeviceName = androidDevice.name;
+        this.activeInputRouteKey = androidDevice.routeKey ?? null;
         this.inputSampleRate = androidDevice.sampleRate || this.inputSampleRate;
         this.isStreaming = true;
-        audioDeviceManager.markDeviceActive('input', this.activeInputDeviceName, this.deviceId, this.inputSampleRate, 1);
+        audioDeviceManager.markDeviceActive('input', this.activeInputDeviceName, this.deviceId, this.inputSampleRate, 1, this.activeInputRouteKey ?? undefined);
         logger.info('Android audio input started', {
           device: androidDevice.name,
           socketPath: androidDevice.socketPath,
@@ -590,7 +593,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       }
 
       logger.info('audio input starting', {
-        deviceId,
+        routeKey: audioConfig.inputRouteKey,
+        deviceName: configuredInputDeviceName,
         channels: this.channels,
         sampleRate: this.inputSampleRate,
         frameSize: this.inputBufferSize,
@@ -598,7 +602,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       });
 
       // 创建和启动音频输入流（带超时保护）
-      await this.createAndStartInputWithTimeout(deviceId, configuredInputDeviceName);
+      await this.createAndStartInputWithTimeout(configuredInputDeviceName, audioConfig.inputRouteKey ?? undefined);
       
       this.isStreaming = true;
       logger.info('audio stream started', { sampleRate: this.inputSampleRate, bufferSize: this.inputBufferSize });
@@ -616,8 +620,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.usingAndroidInput = false;
       this.isStreaming = false;
       this.deviceId = null;
-      AudioDeviceManager.getInstance().clearActiveDevice('input', this.activeInputDeviceName);
+      AudioDeviceManager.getInstance().clearActiveDevice('input', this.activeInputDeviceName, this.activeInputRouteKey);
       this.activeInputDeviceName = null;
+      this.activeInputRouteKey = null;
       this.emit('error', error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
@@ -679,11 +684,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       // 清理重采样器缓存
       clearResamplerCache();
 
-      AudioDeviceManager.getInstance().clearActiveDevice('input', this.activeInputDeviceName);
+      AudioDeviceManager.getInstance().clearActiveDevice('input', this.activeInputDeviceName, this.activeInputRouteKey);
       this.androidInputRuntimeLossError = null;
       this.isStreaming = false;
       this.deviceId = null;
       this.activeInputDeviceName = null;
+      this.activeInputRouteKey = null;
 
       logger.info('audio stream stopped');
       this.emit('stopped');
@@ -859,7 +865,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   /**
    * 启动音频输出流
    */
-  async startOutput(outputDeviceId?: string): Promise<void> {
+  async startOutput(): Promise<void> {
     if (this.isOutputting) {
       logger.warn('audio output is already running');
       return;
@@ -877,14 +883,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       const configuredOutputDeviceName = audioConfig.outputDeviceName;
       
       // 检测是否为 ICOM WLAN 虚拟设备
-      if (outputDeviceId === 'icom-wlan-output' || audioConfig.outputDeviceName === 'ICOM WLAN') {
+      if (audioConfig.outputDeviceName === 'ICOM WLAN') {
         logger.info('ICOM WLAN virtual output device detected');
 
         if (!this.icomWlanAudioAdapter) {
           // ICOM 适配器未设置时，回退到默认声卡而不是抛出错误
           logger.warn('ICOM WLAN audio adapter not set, falling back to default audio device');
-          // 继续执行传统声卡初始化逻辑，使用系统默认设备
-          outputDeviceId = undefined;
           // 继续执行传统声卡初始化逻辑，不 return
         } else {
           // 标记使用 ICOM WLAN 输出
@@ -898,12 +902,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       }
 
       // 检测是否为 TCI 虚拟设备
-      if (outputDeviceId === 'tci-output' || audioConfig.outputDeviceName === TCI_AUDIO_DEVICE_NAME) {
+      if (audioConfig.outputDeviceName === TCI_AUDIO_DEVICE_NAME) {
         logger.info('TCI virtual output device detected');
 
         if (!this.tciAudioAdapter) {
           logger.warn('TCI audio adapter not set, falling back to default audio device');
-          outputDeviceId = undefined;
         } else {
           await this.tciAudioAdapter.startOutput();
           this.usingTciOutput = true;
@@ -915,16 +918,16 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
       }
 
-      if (audioConfig.outputRouteKey || isAndroidAudioDeviceId(outputDeviceId) || configuredOutputDeviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && (!configuredOutputDeviceName || isLegacyAndroidAudioDeviceName('output', configuredOutputDeviceName)))) {
+      if (audioConfig.outputRouteKey?.startsWith('android:') || configuredOutputDeviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && (!configuredOutputDeviceName || isLegacyAndroidAudioDeviceName('output', configuredOutputDeviceName)))) {
         const audioDeviceManager = AudioDeviceManager.getInstance();
         const androidDevice = audioDeviceManager.resolveAndroidDeviceForStream(
           'output',
           configuredOutputDeviceName,
-          outputDeviceId,
+          undefined,
           audioConfig.outputRouteKey ?? undefined,
         );
         if (!androidDevice) {
-          throw new Error(`Android audio output device is unavailable: ${configuredOutputDeviceName ?? outputDeviceId ?? 'default'}`);
+          throw new Error(`Android audio output device is unavailable: ${configuredOutputDeviceName ?? 'default'}`);
         }
         const startFailure = getAndroidAudioStartFailure(androidDevice);
         if (startFailure) {
@@ -961,9 +964,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         outputStarted = true;
         this.outputDeviceId = androidDevice.id;
         this.activeOutputDeviceName = androidDevice.name;
+        this.activeOutputRouteKey = androidDevice.routeKey ?? null;
         this.outputChannels = 1;
         this.isOutputting = true;
-        audioDeviceManager.markDeviceActive('output', this.activeOutputDeviceName, this.outputDeviceId, this.outputSampleRate, 1);
+        audioDeviceManager.markDeviceActive('output', this.activeOutputDeviceName, this.outputDeviceId, this.outputSampleRate, 1, this.activeOutputRouteKey ?? undefined);
         logger.info('Android audio output started', {
           device: androidDevice.name,
           socketPath: androidDevice.socketPath,
@@ -975,7 +979,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       }
 
       logger.info('audio output starting', {
-        deviceId: outputDeviceId,
+        routeKey: audioConfig.outputRouteKey,
+        deviceName: configuredOutputDeviceName,
         channels: this.outputChannels,
         sampleRate: this.outputSampleRate,
         frameSize: this.outputBufferSize,
@@ -983,7 +988,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         channelMode: this.outputChannelMode,
       });
 
-      await this.createAndStartOutputWithTimeout(outputDeviceId, configuredOutputDeviceName);
+      await this.createAndStartOutputWithTimeout(configuredOutputDeviceName, audioConfig.outputRouteKey ?? undefined);
 
       this.isOutputting = true;
       logger.info('audio output started', { sampleRate: this.outputSampleRate });
@@ -1000,8 +1005,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.usingAndroidOutput = false;
       this.isOutputting = false;
       this.outputDeviceId = null;
-      AudioDeviceManager.getInstance().clearActiveDevice('output', this.activeOutputDeviceName);
+      AudioDeviceManager.getInstance().clearActiveDevice('output', this.activeOutputDeviceName, this.activeOutputRouteKey);
       this.activeOutputDeviceName = null;
+      this.activeOutputRouteKey = null;
       const normalizedError = error instanceof Error ? error : new Error(String(error));
       if (normalizedError !== this.androidInputRuntimeLossError) {
         this.emit('error', normalizedError);
@@ -1014,8 +1020,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    * 带超时保护的音频输入创建和启动
    */
   private async createAndStartInputWithTimeout(
-    requestedDeviceId?: string,
     configuredDeviceName?: string,
+    configuredRouteKey?: string,
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -1034,14 +1040,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             const resolvedDevice = await audioDeviceManager.resolveInputDeviceForStream(
               configuredDeviceName,
               this.rtAudioInput,
-              requestedDeviceId,
+              configuredRouteKey,
             );
 
             this.openInputStream(resolvedDevice.actualDeviceId);
 
             logger.info('audio input stream created');
-            this.deviceId = resolvedDevice.persistedDeviceId;
+            this.deviceId = resolvedDevice.runtimeDeviceId;
             this.activeInputDeviceName = configuredDeviceName ?? resolvedDevice.deviceName;
+            this.activeInputRouteKey = resolvedDevice.routeKey ?? null;
 
             logger.info('starting audio input stream');
             this.rtAudioInput.start();
@@ -1051,6 +1058,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               this.deviceId,
               this.inputSampleRate,
               this.channels,
+              resolvedDevice.routeKey,
             );
 
             logger.info('audio input stream started');
@@ -1075,8 +1083,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    * 带超时保护的音频输出创建和启动
    */
   private async createAndStartOutputWithTimeout(
-    requestedOutputDeviceId?: string,
     configuredDeviceName?: string,
+    configuredRouteKey?: string,
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -1095,14 +1103,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             const resolvedDevice = await audioDeviceManager.resolveOutputDeviceForStream(
               configuredDeviceName,
               this.rtAudioOutput,
-              requestedOutputDeviceId,
+              configuredRouteKey,
             );
 
             this.openOutputStream(resolvedDevice.actualDeviceId);
 
             logger.info('audio output stream created');
-            this.outputDeviceId = resolvedDevice.persistedDeviceId;
+            this.outputDeviceId = resolvedDevice.runtimeDeviceId;
             this.activeOutputDeviceName = configuredDeviceName ?? resolvedDevice.deviceName;
+            this.activeOutputRouteKey = resolvedDevice.routeKey ?? null;
 
             logger.info('starting audio output stream');
             this.rtAudioOutput.start();
@@ -1112,6 +1121,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               this.outputDeviceId,
               this.outputSampleRate,
               this.outputChannels,
+              resolvedDevice.routeKey,
             );
 
             logger.info('audio output stream started');
@@ -1172,10 +1182,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.rtAudioOutput = null;
       }
 
-      AudioDeviceManager.getInstance().clearActiveDevice('output', this.activeOutputDeviceName);
+      AudioDeviceManager.getInstance().clearActiveDevice('output', this.activeOutputDeviceName, this.activeOutputRouteKey);
       this.isOutputting = false;
       this.outputDeviceId = null;
       this.activeOutputDeviceName = null;
+      this.activeOutputRouteKey = null;
       this.outputStreamOpenedAt = null;
       this.outputRuntimeLossEmitted = false;
       this.outputRtAudioIssueLogState.clear();

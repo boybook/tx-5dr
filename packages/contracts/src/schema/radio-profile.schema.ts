@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { HamlibConfigSchema } from './radio.schema.js';
 import { AudioDeviceSettingsSchema } from './audio.schema.js';
+import { ModeDescriptorSchema } from './mode.schema.js';
+import { EngineModeSchema } from './voice.schema.js';
 
 /**
  * Radio Profile Schema
@@ -74,6 +76,8 @@ export const ActivateProfileResponseSchema = z.object({
   success: z.boolean(),
   profile: RadioProfileSchema,
   wasRunning: z.boolean(),
+  engineRunning: z.boolean(),
+  error: z.string().optional(),
 });
 
 export type ActivateProfileResponse = z.infer<typeof ActivateProfileResponseSchema>;
@@ -86,6 +90,9 @@ export const ProfileChangedEventSchema = z.object({
   profile: RadioProfileSchema,
   previousProfileId: z.string().nullable(),
   wasRunning: z.boolean(),
+  generation: z.number().int().nonnegative().optional(),
+  engineMode: EngineModeSchema,
+  currentMode: ModeDescriptorSchema,
 });
 
 export type ProfileChangedEvent = z.infer<typeof ProfileChangedEventSchema>;

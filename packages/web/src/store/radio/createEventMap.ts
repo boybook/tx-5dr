@@ -34,6 +34,10 @@ import type {
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import type { RadioService } from '../../services/radioService';
 import {
+  advanceProfileRequestScope,
+  type ProfileRequestScopeRef,
+} from './profileRequestScope';
+import {
   getHandshakeOperatorIds,
   getHandshakeSelectedOperatorId,
   getHiddenOperatorIds,
@@ -126,6 +130,7 @@ interface CreateRadioEventMapDeps {
   radioStateRef: React.MutableRefObject<RadioState>;
   capabilitiesRef: React.MutableRefObject<SpectrumCapabilities | null>;
   activeProfileIdRef: React.MutableRefObject<string | null>;
+  profileRequestScopeRef: ProfileRequestScopeRef;
   spectrumNegotiation: SpectrumNegotiationBridge;
   logger: {
     debug: (message: string, ...args: unknown[]) => void;
@@ -147,6 +152,7 @@ export function createRadioEventMap({
   radioStateRef,
   capabilitiesRef,
   activeProfileIdRef,
+  profileRequestScopeRef,
   spectrumNegotiation,
   logger,
 }: CreateRadioEventMapDeps): Record<string, (data?: unknown) => void> {
@@ -154,6 +160,20 @@ export function createRadioEventMap({
   let operatorStatusFlushTimer: ReturnType<typeof setTimeout> | null = null;
   let handshakeCompleted = false;
   let pendingEnabledOperatorIds: string[] | null = null;
+
+  const syncProfileRequestScope = (
+    profileId: string | null,
+    serverGeneration?: number,
+    forceAdvance = false,
+  ) => {
+    profileRequestScopeRef.current = advanceProfileRequestScope(
+      profileRequestScopeRef.current,
+      profileId,
+      serverGeneration,
+      forceAdvance,
+    );
+    activeProfileIdRef.current = profileId;
+  };
 
   const flushPendingOperatorStatuses = () => {
     if (operatorStatusFlushTimer) {
@@ -586,6 +606,7 @@ export function createRadioEventMap({
         const { api } = await import('@tx5dr/core');
         const profilesResponse = await api.getProfiles();
         logger.info('Profile list synced', { count: profilesResponse.profiles.length });
+        syncProfileRequestScope(profilesResponse.activeProfileId);
         radioDispatch({
           type: 'setProfiles',
           payload: {
@@ -599,6 +620,7 @@ export function createRadioEventMap({
         );
       } catch (error) {
         logger.error('Failed to fetch profile list:', error);
+        syncProfileRequestScope(null);
         radioDispatch({
           type: 'setProfiles',
           payload: { profiles: [], activeProfileId: null },
@@ -709,14 +731,17 @@ export function createRadioEventMap({
     profileChanged: (data: unknown) => {
       const profileData = data as ProfileChangedEvent;
       logger.info('Profile switched', { profileId: profileData.profileId, name: profileData.profile.name });
+      syncProfileRequestScope(profileData.profileId, profileData.generation, true);
       radioDispatch({ type: 'profileChanged', payload: profileData });
       spectrumNegotiation.applyProfileDrivenSpectrumNegotiation(profileData.profileId, true);
     },
     profileListUpdated: (data: unknown) => {
       const listData = data as { profiles: RadioProfile[]; activeProfileId: string | null };
       logger.info('Profile list updated', { count: listData.profiles.length });
+      const activeProfileChanged = listData.activeProfileId !== activeProfileIdRef.current;
+      syncProfileRequestScope(listData.activeProfileId);
       radioDispatch({ type: 'profileListUpdated', payload: listData });
-      if (listData.activeProfileId !== activeProfileIdRef.current) {
+      if (activeProfileChanged) {
         spectrumNegotiation.applyProfileDrivenSpectrumNegotiation(
           listData.activeProfileId,
           capabilitiesRef.current?.profileId !== listData.activeProfileId,

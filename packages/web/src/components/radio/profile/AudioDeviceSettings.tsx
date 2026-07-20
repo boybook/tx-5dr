@@ -479,6 +479,11 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
             ? `${formatChannelText(t, option.device.channels)}, ${formatHertz(option.device.sampleRate)}`
             : t('audio.deviceMissingPreservedShort')}
         </span>
+        {option.device?.detail && (
+          <span className="max-w-[36rem] truncate text-xs text-default-500">
+            {option.device.detail}
+          </span>
+        )}
         {option.device?.failureReason && (
           <span className="text-xs text-danger-500">{option.device.failureReason}</span>
         )}

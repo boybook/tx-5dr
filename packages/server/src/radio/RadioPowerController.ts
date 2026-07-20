@@ -5,6 +5,7 @@ import type {
   RadioPowerStateEvent,
   RadioPowerSupportInfo,
   RadioPowerTarget,
+  RadioProfile,
 } from '@tx5dr/contracts';
 import { decidePowerSupport } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
@@ -13,7 +14,6 @@ import { createLogger } from '../utils/logger.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { PhysicalRadioManager } from './PhysicalRadioManager.js';
 import type { EngineLifecycle } from '../subsystems/EngineLifecycle.js';
-import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { isRecoverableOptionalRadioError } from './optionalRadioError.js';
 
 const logger = createLogger('RadioPowerController');
@@ -25,6 +25,18 @@ export interface RadioPowerControllerEvents {
 export interface RadioPowerControllerDeps {
   radioManager: PhysicalRadioManager;
   getEngineLifecycle: () => EngineLifecycle;
+  runProfilePowerOperation: <T>(
+    profileId: string,
+    options: {
+      refreshContext: boolean;
+      allowProfileActivation: boolean;
+    },
+    task: (profile: RadioProfile) => Promise<T>,
+  ) => Promise<T>;
+}
+
+export interface RadioPowerRequestContext {
+  allowProfileActivation?: boolean;
 }
 
 /**
@@ -56,18 +68,27 @@ export class RadioPowerController extends EventEmitter<RadioPowerControllerEvent
     return RadioPowerController.instance;
   }
 
-  async handleRequest(request: RadioPowerRequest): Promise<RadioPowerState> {
-    const profile = this.resolveProfile(request.profileId);
+  async handleRequest(
+    request: RadioPowerRequest,
+    context: RadioPowerRequestContext = {},
+  ): Promise<RadioPowerState> {
     return this.runExclusive(async () => {
-      return this.deps.radioManager.withPowerOperation(`power ${request.state}`, async () => {
-        if (request.state === 'on') {
-          return this.doPowerOn(profile.id, profile.radio, request.autoEngine ?? true);
-        }
-        if (request.state === 'operate') {
-          return this.doOperate(profile.id, profile.radio);
-        }
-        return this.doPowerDown(profile.id, profile.radio, request.state);
-      });
+      return this.deps.runProfilePowerOperation(
+        request.profileId,
+        {
+          refreshContext: request.state === 'on',
+          allowProfileActivation: context.allowProfileActivation === true,
+        },
+        (profile) => this.deps.radioManager.withPowerOperation(`power ${request.state}`, async () => {
+          if (request.state === 'on') {
+            return this.doPowerOn(profile.id, profile.radio, request.autoEngine ?? true);
+          }
+          if (request.state === 'operate') {
+            return this.doOperate(profile.id, profile.radio);
+          }
+          return this.doPowerDown(profile.id, profile.radio, request.state);
+        }),
+      );
     });
   }
 
@@ -93,8 +114,6 @@ export class RadioPowerController extends EventEmitter<RadioPowerControllerEvent
     const { radioManager } = this.deps;
 
     try {
-      await this.activateProfileForPowerOperation(profileId);
-
       this.broadcast({ profileId, state: 'waking', stage: 'waiting_ready' });
       await radioManager.wakeAndConnect(config);
 
@@ -150,42 +169,65 @@ export class RadioPowerController extends EventEmitter<RadioPowerControllerEvent
     try {
       await this.ensureCatLinkForPowerCommand(profileId, config, target);
 
-      // Mark before the command so an immediate CAT drop is projected as intentional.
-      radioManager.markIntentionalDisconnect(`power ${target}`);
+      // Only a live CAT session can produce the disconnect event this token scopes.
+      const disconnectIntent = radioManager.isConnected()
+        ? radioManager.markIntentionalDisconnect(`power ${target}`)
+        : null;
       try {
+        // A rejected command is never treated as success. Connection/session
+        // errors can also be raised before the hardware write is submitted.
         await this.sendConnectedPowerCommand(target);
-      } catch (error) {
-        if (this.isExpectedPowerDownDisconnect(error)) {
-          logger.info(`Power ${target} command observed expected CAT disconnect; continuing resource teardown`);
-        } else {
-          radioManager.clearIntentionalDisconnect();
-          throw error;
+
+        if (!radioManager.isConnected()) {
+          logger.info(`CAT link already disconnected after power ${target}; proceeding with resource teardown`);
+        }
+
+        // 让命令真正送达电台并让电台开始处理
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        const cleanupFailures: string[] = [];
+
+        // 3. 停引擎：audio/clock/slot 按逆序停止；radio 资源 stop 内部会
+        //    调用 radioManager.disconnect('Engine stopped') 触发 disconnected 事件
+        this.broadcast({ profileId, state: broadcastState, stage: 'stopping_engine' });
+        if (lifecycle.getIsRunning()) {
+          try {
+            await lifecycle.stop();
+          } catch (error) {
+            cleanupFailures.push(`engine stop: ${this.errorMessage(error)}`);
+          }
+        }
+
+        // 4. 即使引擎清理失败也继续尝试关闭 CAT，最后统一报告失败。
+        this.broadcast({ profileId, state: broadcastState, stage: 'disconnecting' });
+        if (radioManager.isConnected()) {
+          try {
+            await radioManager.disconnect(`power ${target}`);
+          } catch (error) {
+            cleanupFailures.push(`radio disconnect: ${this.errorMessage(error)}`);
+          }
+        }
+
+        if (cleanupFailures.length > 0) {
+          throw new RadioError({
+            code: RadioErrorCode.RESOURCE_CLEANUP_FAILED,
+            message: `Power ${target} command succeeded, but local cleanup failed: ${cleanupFailures.join('; ')}`,
+            userMessage: 'The radio power command succeeded, but TX-5DR could not finish local cleanup',
+            suggestions: ['Retry disconnecting the radio or restart the TX-5DR engine'],
+            context: { profileId, target, cleanupFailures, powerCommandSucceeded: true },
+          });
+        }
+
+        this.broadcast({ profileId, state: 'off', stage: 'idle' });
+        logger.info(`Physical power target ${target} complete for profile ${profileId}`);
+        return 'off';
+      } finally {
+        // If no disconnect event consumed this exact intent, do not let it leak
+        // into a later, unrelated radio session.
+        if (disconnectIntent) {
+          radioManager.clearIntentionalDisconnect(disconnectIntent);
         }
       }
-
-      if (!radioManager.isConnected()) {
-        logger.info(`CAT link already disconnected after power ${target}; proceeding with resource teardown`);
-      }
-
-      // 让命令真正送达电台并让电台开始处理
-      await new Promise((resolve) => setTimeout(resolve, 300));
-
-      // 3. 停引擎：audio/clock/slot 按逆序停止；radio 资源 stop 内部会
-      //    调用 radioManager.disconnect('Engine stopped') 触发 disconnected 事件
-      this.broadcast({ profileId, state: broadcastState, stage: 'stopping_engine' });
-      if (lifecycle.getIsRunning()) {
-        await lifecycle.stop().catch(() => undefined);
-      }
-
-      // 4. 兜底：若 engine 原本未运行，radio 资源没机会走 stop，直接 disconnect
-      this.broadcast({ profileId, state: broadcastState, stage: 'disconnecting' });
-      if (radioManager.isConnected()) {
-        await radioManager.disconnect(`power ${target}`).catch(() => undefined);
-      }
-
-      this.broadcast({ profileId, state: 'off', stage: 'idle' });
-      logger.info(`Physical power target ${target} complete for profile ${profileId}`);
-      return 'off';
     } catch (error) {
       this.broadcastFailure(profileId, error, `Power ${target} failed`);
       throw error;
@@ -195,49 +237,16 @@ export class RadioPowerController extends EventEmitter<RadioPowerControllerEvent
   // ─── helpers ───────────────────────────────────────────
 
   private async ensureCatLinkForPowerCommand(
-    profileId: string,
+    _profileId: string,
     config: HamlibConfig,
     target: 'off' | 'standby' | 'operate'
   ): Promise<void> {
-    await this.activateProfileForPowerOperation(profileId);
     if (this.deps.radioManager.isConnected()) {
       return;
     }
 
     logger.info(`Opening CAT link for physical power ${target}; engine may remain idle`);
     await this.deps.radioManager.applyConfig(config);
-  }
-
-  private async activateProfileForPowerOperation(profileId: string): Promise<void> {
-    const configManager = ConfigManager.getInstance();
-    const lifecycle = this.deps.getEngineLifecycle();
-    const { radioManager } = this.deps;
-    const currentActiveId = configManager.getActiveProfileId();
-    if (currentActiveId === profileId) {
-      return;
-    }
-
-    logger.info(`Switching active profile for power operation: ${currentActiveId ?? '(none)'} -> ${profileId}`);
-    if (lifecycle.getIsRunning()) {
-      radioManager.markIntentionalDisconnect('profile switch for power operation');
-      await lifecycle.stop().catch(() => undefined);
-    }
-    if (radioManager.isConnected()) {
-      radioManager.markIntentionalDisconnect('profile switch for power operation');
-      await radioManager.disconnect('profile switch for power operation').catch(() => undefined);
-    }
-    await configManager.setActiveProfileId(profileId);
-    const profile = configManager.getProfile(profileId);
-    if (profile) {
-      const engine = DigitalRadioEngine.getInstance();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (engine as any).emit('profileChanged', {
-        profileId,
-        profile,
-        previousProfileId: currentActiveId,
-        wasRunning: false,
-      });
-    }
   }
 
   private async sendConnectedPowerCommand(target: 'off' | 'standby' | 'operate'): Promise<void> {
@@ -253,13 +262,8 @@ export class RadioPowerController extends EventEmitter<RadioPowerControllerEvent
     await connection.setPowerState(target);
   }
 
-  private isExpectedPowerDownDisconnect(error: unknown): boolean {
-    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-    return message.includes('radio session changed')
-      || message.includes('current state: disconnected')
-      || message.includes('radio not connected')
-      || message.includes('connection lost')
-      || message.includes('disconnected');
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   private broadcastFailure(profileId: string, error: unknown, logMessage: string): void {

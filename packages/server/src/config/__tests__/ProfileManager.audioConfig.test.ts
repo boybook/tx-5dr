@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RadioProfile } from '@tx5dr/contracts';
 
-const { state, mockConfigManager, mockEngine, mockReloadAudioConfig } = vi.hoisted(() => {
+const {
+  state,
+  mockConfigManager,
+  mockEngine,
+  mockReloadAudioConfig,
+  mockActivateProfile,
+  mockRunExclusive,
+} = vi.hoisted(() => {
   const testState = {
     profiles: [] as RadioProfile[],
     activeProfileId: null as string | null,
@@ -42,16 +49,43 @@ const { state, mockConfigManager, mockEngine, mockReloadAudioConfig } = vi.hoist
   };
 
   const reloadAudioConfig = vi.fn();
+  const startEngine = vi.fn(async () => {});
+  const runExclusive = vi.fn(async <T>(task: () => Promise<T>) => task());
+  const activateProfile = vi.fn(async (id: string): Promise<{
+    profile: RadioProfile;
+    previousProfileId: string | null;
+    wasRunning: boolean;
+    engineRunning: boolean;
+    generation: number;
+    error?: string;
+  }> => {
+    const previousProfileId = testState.activeProfileId;
+    const profile = testState.profiles.find((item) => item.id === id)!;
+    await configManager.setActiveProfileId(id);
+    reloadAudioConfig();
+    await startEngine();
+    return {
+      profile,
+      previousProfileId,
+      wasRunning: false,
+      engineRunning: true,
+      generation: 1,
+    };
+  });
   const engine = {
     getStatus: vi.fn(() => ({ isRunning: false })),
     stop: vi.fn(async () => {}),
-    start: vi.fn(async () => {}),
+    start: startEngine,
     emit: vi.fn(),
     getAudioStreamManager: vi.fn(() => ({
       reloadAudioConfig,
     })),
     getRadioManager: vi.fn(() => ({
       getActiveConnection: vi.fn(() => null),
+    })),
+    getProfileActivationCoordinator: vi.fn(() => ({
+      activate: activateProfile,
+      runExclusive,
     })),
   };
 
@@ -60,6 +94,8 @@ const { state, mockConfigManager, mockEngine, mockReloadAudioConfig } = vi.hoist
     mockConfigManager: configManager,
     mockEngine: engine,
     mockReloadAudioConfig: reloadAudioConfig,
+    mockActivateProfile: activateProfile,
+    mockRunExclusive: runExclusive,
   };
 });
 
@@ -338,5 +374,34 @@ describe('ProfileManager audio runtime config application', () => {
     expect(mockReloadAudioConfig).toHaveBeenCalledTimes(1);
     expect(mockEngine.start).toHaveBeenCalledTimes(1);
     expect(mockReloadAudioConfig.mock.invocationCallOrder[0]).toBeLessThan(mockEngine.start.mock.invocationCallOrder[0]);
+  });
+
+  it('returns a partial failure when the Profile pointer changed but engine startup failed', async () => {
+    mockActivateProfile.mockResolvedValueOnce({
+      profile: state.profiles[0]!,
+      previousProfileId: 'profile-old',
+      wasRunning: true,
+      engineRunning: false,
+      generation: 2,
+      error: 'audio device unavailable',
+    });
+    const manager = ProfileManager.getInstance();
+
+    await expect(manager.activateProfile('profile-1')).resolves.toEqual({
+      success: false,
+      profile: state.profiles[0],
+      wasRunning: true,
+      engineRunning: false,
+      error: 'audio device unavailable',
+    });
+  });
+
+  it('serializes Profile updates through the shared activation coordinator', async () => {
+    const manager = ProfileManager.getInstance();
+
+    await manager.updateProfile('profile-1', { name: 'Updated radio' });
+
+    expect(mockRunExclusive).toHaveBeenCalledTimes(1);
+    expect(state.profiles[0]?.name).toBe('Updated radio');
   });
 });

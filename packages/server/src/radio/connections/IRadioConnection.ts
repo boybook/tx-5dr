@@ -206,6 +206,12 @@ export interface ApplyOperatingStateResult {
   frequencyApplied: boolean;
   modeApplied: boolean;
   modeError?: Error;
+  /** Actual mode selected or reported by the radio when the backend can determine it. */
+  appliedMode?: string;
+  /** True when the requested data mode was replaced or not retained. */
+  modeDegraded?: boolean;
+  /** Diagnostic explanation for a mode fallback or readback mismatch. */
+  modeFallbackReason?: string;
 }
 
 /**
@@ -500,6 +506,12 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * @param frequencyHz - 当前频率（Hz）
    */
   setKnownFrequency(frequencyHz: number): void;
+
+  /**
+   * Checks cached radio capability metadata before an automatic tune.
+   * `null` means the backend has no authoritative RX range metadata.
+   */
+  canTuneFrequency?(frequencyHz: number): boolean | null;
 
   // ===== Level 类控制（可选，由 RadioCapabilityManager 统一路由）=====
 

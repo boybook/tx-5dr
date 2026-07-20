@@ -2,6 +2,7 @@ import type {
   CapabilityDescriptor,
   CapabilityState,
   EngineMode,
+  ModeDescriptor,
   QSORecord,
   SlotPack,
   SystemStatus,
@@ -19,6 +20,7 @@ import type {
   SlotPacksAction,
   SlotPacksState,
 } from './types';
+import { advanceProfileRequestScope } from './profileRequestScope';
 
 const logger = createLogger('RadioStore');
 const MAX_VALID_DATE_MS = 8_640_000_000_000_000;
@@ -175,6 +177,7 @@ export const initialRadioState: RadioState = {
   coreCapabilityDiagnostics: null,
   profiles: [],
   activeProfileId: null,
+  profileGeneration: 0,
   profilesLoaded: false,
   engineMode: 'digital',
   voicePttLock: null,
@@ -436,10 +439,15 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
         action.payload.profiles,
         action.payload.activeProfileId
       );
+      const nextProfileScope = advanceProfileRequestScope(
+        { profileId: state.activeProfileId, generation: state.profileGeneration },
+        action.payload.activeProfileId,
+      );
       return {
         ...state,
         profiles: action.payload.profiles,
         activeProfileId: action.payload.activeProfileId,
+        profileGeneration: nextProfileScope.generation,
         profilesLoaded: true,
         meterData: shouldResetMeterTracking ? null : state.meterData,
         hasReceivedMeterData: shouldResetMeterTracking ? false : state.hasReceivedMeterData,
@@ -449,11 +457,26 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
 
     case 'profileChanged': {
       const { profileId, profile } = action.payload;
+      const runtimeSnapshot = action.payload as typeof action.payload & {
+        engineMode?: EngineMode;
+        currentMode?: ModeDescriptor | null;
+      };
+      const nextProfileScope = advanceProfileRequestScope(
+        { profileId: state.activeProfileId, generation: state.profileGeneration },
+        profileId,
+        action.payload.generation,
+        true,
+      );
       return {
         ...state,
         activeProfileId: profileId,
+        profileGeneration: nextProfileScope.generation,
         // 更新 radioConfig 为新 Profile 的配置
         radioConfig: profile.radio,
+        engineMode: runtimeSnapshot.engineMode ?? 'digital',
+        currentMode: runtimeSnapshot.currentMode ?? null,
+        currentRadioFrequency: null,
+        currentRadioMode: null,
         meterData: null,
         hasReceivedMeterData: false,
         meterCapabilities: null,
@@ -468,10 +491,15 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
         action.payload.profiles,
         action.payload.activeProfileId
       );
+      const nextProfileScope = advanceProfileRequestScope(
+        { profileId: state.activeProfileId, generation: state.profileGeneration },
+        action.payload.activeProfileId,
+      );
       return {
         ...state,
         profiles: action.payload.profiles,
         activeProfileId: action.payload.activeProfileId,
+        profileGeneration: nextProfileScope.generation,
         meterData: shouldResetMeterTracking ? null : state.meterData,
         hasReceivedMeterData: shouldResetMeterTracking ? false : state.hasReceivedMeterData,
         meterCapabilities: shouldResetMeterTracking ? null : state.meterCapabilities,

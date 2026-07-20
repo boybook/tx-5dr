@@ -76,12 +76,12 @@ describe('matchUsbAudioDevice', () => {
     expect(matchUsbAudioDevice(devices)).toBeNull();
   });
 
-  it('returns first match when multiple exist', () => {
+  it('fails closed when multiple equally good devices exist', () => {
     const devices = [
       makeDevice('USB Audio CODEC'),
       makeDevice('Another USB Audio CODEC'),
     ];
-    expect(matchUsbAudioDevice(devices)?.name).toBe('USB Audio CODEC');
+    expect(matchUsbAudioDevice(devices)).toBeNull();
   });
 
   it('prefers explicit codec devices over generic USB Audio Device matches', () => {
@@ -150,6 +150,24 @@ describe('matchAudioDeviceForRig', () => {
       inputSampleRate: 48000,
       outputDeviceName: 'USB Audio CODEC',
       outputSampleRate: 44100,
+    });
+  });
+
+  it('persists stable route keys returned by auto-match', async () => {
+    const result = await matchAudioDeviceForRig(1035, RIGS, async () => ({
+      inputDevices: [{
+        ...makeDevice('USB Audio CODEC', [48000], 'input'),
+        routeKey: 'rtaudio:pulse:icom-a:input',
+      }],
+      outputDevices: [{
+        ...makeDevice('USB Audio CODEC', [48000], 'output'),
+        routeKey: 'rtaudio:pulse:icom-a:output',
+      }],
+    }));
+
+    expect(result).toMatchObject({
+      inputRouteKey: 'rtaudio:pulse:icom-a:input',
+      outputRouteKey: 'rtaudio:pulse:icom-a:output',
     });
   });
 

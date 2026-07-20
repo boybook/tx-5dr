@@ -24,7 +24,11 @@ import { createLogger } from '../utils/logger.js';
 import { normalizeHamlibConfig, normalizeSerialConnectionConfig } from '../radio/hamlibConfigUtils.js';
 import { DEFAULT_NTP_SERVERS } from '../services/ntpServers.js';
 import { JsonFileStore, PersistenceCoordinator } from '../utils/persistence/index.js';
-import { RuntimeStateManager, type RuntimeState } from './RuntimeStateManager.js';
+import {
+  RuntimeStateManager,
+  type ProfileOperatingState,
+  type RuntimeState,
+} from './RuntimeStateManager.js';
 
 const logger = createLogger('ConfigManager');
 
@@ -361,6 +365,11 @@ export function validateAppConfigCandidate(value: unknown): Record<string, unkno
   return value;
 }
 
+export interface ActiveProfileToken {
+  profileId: string | null;
+  generation: number;
+}
+
 // 配置管理器
 export class ConfigManager {
   private static instance: ConfigManager;
@@ -369,6 +378,7 @@ export class ConfigManager {
   private configStore: JsonFileStore<Record<string, unknown>> | null = null;
   private runtimeState = RuntimeStateManager.getInstance();
   private unregisterPersistence: (() => void) | null = null;
+  private activeProfileGeneration = 0;
 
   private constructor() {
     this.config = { ...DEFAULT_CONFIG };
@@ -393,6 +403,7 @@ export class ConfigManager {
 
       await this.loadConfig();
       await this.runtimeState.initialize(this.extractRuntimeSeed(this.config));
+      await this.migrateLegacyOperatingState();
       this.unregisterPersistence?.();
       this.unregisterPersistence = PersistenceCoordinator.getInstance().register({
         name: 'config',
@@ -570,6 +581,84 @@ export class ConfigManager {
     if (this.configStore) {
       await this.saveConfig();
     }
+  }
+
+  private async migrateLegacyOperatingState(): Promise<void> {
+    if (this.getRuntimeValue('operatingStateByProfile') !== undefined) {
+      return;
+    }
+
+    const activeProfileId = this.getActiveProfileId();
+    const operatingStateByProfile: Record<string, ProfileOperatingState> = {};
+    if (activeProfileId) {
+      const lastSelectedFrequency = this.getRuntimeValue('lastSelectedFrequency');
+      const lastVoiceFrequency = this.getRuntimeValue('lastVoiceFrequency');
+      const lastCWFrequency = this.getRuntimeValue('lastCWFrequency');
+      operatingStateByProfile[activeProfileId] = {
+        lastSelectedFrequency: lastSelectedFrequency !== undefined
+          ? lastSelectedFrequency
+          : this.config.lastSelectedFrequency ?? null,
+        lastVoiceFrequency: lastVoiceFrequency !== undefined
+          ? lastVoiceFrequency
+          : this.config.lastVoiceFrequency ?? null,
+        lastCWFrequency: lastCWFrequency !== undefined
+          ? lastCWFrequency
+          : this.config.lastCWFrequency ?? null,
+        lastEngineMode: this.getRuntimeValue('lastEngineMode') ?? this.config.lastEngineMode ?? 'digital',
+        lastDigitalModeName: this.getRuntimeValue('lastDigitalModeName') ?? this.config.lastDigitalModeName ?? 'FT8',
+      };
+    }
+
+    await this.runtimeState.update((state) => {
+      if (state.operatingStateByProfile !== undefined) {
+        return state;
+      }
+      return { ...state, operatingStateByProfile };
+    });
+    logger.info('Migrated legacy operating state to active Profile', { activeProfileId });
+  }
+
+  getProfileOperatingState(profileId: string): ProfileOperatingState | null {
+    const state = this.getRuntimeValue('operatingStateByProfile')?.[profileId];
+    return state ? { ...state } : null;
+  }
+
+  private getActiveOperatingState(): ProfileOperatingState | null {
+    const profileId = this.getActiveProfileId();
+    return profileId ? this.getProfileOperatingState(profileId) : null;
+  }
+
+  private async patchProfileOperatingState(
+    patch: Partial<ProfileOperatingState>,
+    profileId = this.getActiveProfileId(),
+  ): Promise<void> {
+    if (!profileId) {
+      return;
+    }
+    PersistenceCoordinator.getInstance().assertMutationsAllowed('runtime-state:operatingStateByProfile');
+    if (!this.runtimeState.isInitialized()) {
+      return;
+    }
+    await this.runtimeState.update((state) => {
+      const map = { ...(state.operatingStateByProfile ?? {}) };
+      map[profileId] = { ...map[profileId], ...patch };
+      return { ...state, operatingStateByProfile: map };
+    });
+  }
+
+  async deleteProfileOperatingState(profileId: string): Promise<void> {
+    PersistenceCoordinator.getInstance().assertMutationsAllowed('runtime-state:operatingStateByProfile');
+    if (!this.runtimeState.isInitialized()) {
+      return;
+    }
+    await this.runtimeState.update((state) => {
+      const map = { ...(state.operatingStateByProfile ?? {}) };
+      if (!(profileId in map)) {
+        return state;
+      }
+      delete map[profileId];
+      return { ...state, operatingStateByProfile: map };
+    });
   }
 
   private migrateLegacyStandardQSOSettings(parsedConfig: any): boolean {
@@ -782,6 +871,18 @@ export class ConfigManager {
     return this.config.activeProfileId;
   }
 
+  captureActiveProfileToken(): ActiveProfileToken {
+    return {
+      profileId: this.config.activeProfileId,
+      generation: this.activeProfileGeneration,
+    };
+  }
+
+  isActiveProfileTokenCurrent(token: ActiveProfileToken): boolean {
+    return token.profileId === this.config.activeProfileId
+      && token.generation === this.activeProfileGeneration;
+  }
+
   /**
    * 获取当前激活的 Profile
    */
@@ -814,14 +915,21 @@ export class ConfigManager {
       throw new Error(`Profile ${id} does not exist`);
     }
 
-    this.config.profiles[index] = {
-      ...this.config.profiles[index],
+    const previousProfile = this.config.profiles[index];
+    const updatedProfile = {
+      ...previousProfile,
       ...updates,
       updatedAt: Date.now(),
     };
+    this.config.profiles[index] = updatedProfile;
 
-    await this.saveConfig();
-    return this.config.profiles[index];
+    try {
+      await this.saveConfig();
+    } catch (error) {
+      this.config.profiles[index] = previousProfile;
+      throw error;
+    }
+    return updatedProfile;
   }
 
   /**
@@ -835,6 +943,7 @@ export class ConfigManager {
 
     this.config.profiles.splice(index, 1);
     await this.saveConfig();
+    await this.deleteProfileOperatingState(id);
   }
 
   /**
@@ -861,8 +970,15 @@ export class ConfigManager {
     if (id !== null && !this.config.profiles.find(p => p.id === id)) {
       throw new Error(`Profile ${id} does not exist`);
     }
+    const previousActiveProfileId = this.config.activeProfileId;
     this.config.activeProfileId = id;
-    await this.saveConfig();
+    try {
+      await this.saveConfig();
+    } catch (error) {
+      this.config.activeProfileId = previousActiveProfileId;
+      throw error;
+    }
+    this.activeProfileGeneration += 1;
   }
 
   // ===== 配置派生方法（从 activeProfile 派生，签名不变） =====
@@ -1159,8 +1275,9 @@ export class ConfigManager {
    * 获取最后选择的频率
    */
   getLastSelectedFrequency(): AppConfig['lastSelectedFrequency'] {
-    const runtimeValue = this.getRuntimeValue('lastSelectedFrequency');
-    const value = runtimeValue !== undefined ? runtimeValue : this.config.lastSelectedFrequency;
+    const value = this.runtimeState.isInitialized()
+      ? this.getActiveOperatingState()?.lastSelectedFrequency
+      : this.config.lastSelectedFrequency;
     return value ? { ...value } : null;
   }
 
@@ -1173,8 +1290,8 @@ export class ConfigManager {
     radioMode?: string;
     band: string;
     description?: string;
-  }): Promise<void> {
-    await this.setRuntimeValue('lastSelectedFrequency', { ...frequencyConfig });
+  }, profileId = this.getActiveProfileId()): Promise<void> {
+    await this.patchProfileOperatingState({ lastSelectedFrequency: { ...frequencyConfig } }, profileId);
     logger.debug(`Last selected frequency saved: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);
   }
 
@@ -1182,8 +1299,9 @@ export class ConfigManager {
    * 获取最后选择的语音频率
    */
   getLastVoiceFrequency(): AppConfig['lastVoiceFrequency'] {
-    const runtimeValue = this.getRuntimeValue('lastVoiceFrequency');
-    const value = runtimeValue !== undefined ? runtimeValue : this.config.lastVoiceFrequency;
+    const value = this.runtimeState.isInitialized()
+      ? this.getActiveOperatingState()?.lastVoiceFrequency
+      : this.config.lastVoiceFrequency;
     return value ? { ...value } : null;
   }
 
@@ -1200,31 +1318,32 @@ export class ConfigManager {
     toneMode?: ToneSquelchMode;
     ctcssToneTenthsHz?: number;
     dcsCode?: number;
-  }): Promise<void> {
-    await this.setRuntimeValue('lastVoiceFrequency', { ...frequencyConfig });
+  }, profileId = this.getActiveProfileId()): Promise<void> {
+    await this.patchProfileOperatingState({ lastVoiceFrequency: { ...frequencyConfig } }, profileId);
     logger.debug(`Last voice frequency saved: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);
   }
 
   /**
    * 清除最后选择的频率
    */
-  async clearLastSelectedFrequency(): Promise<void> {
-    await this.setRuntimeValue('lastSelectedFrequency', null);
+  async clearLastSelectedFrequency(profileId = this.getActiveProfileId()): Promise<void> {
+    await this.patchProfileOperatingState({ lastSelectedFrequency: null }, profileId);
   }
 
   /**
    * 清除最后选择的语音频率
    */
-  async clearLastVoiceFrequency(): Promise<void> {
-    await this.setRuntimeValue('lastVoiceFrequency', null);
+  async clearLastVoiceFrequency(profileId = this.getActiveProfileId()): Promise<void> {
+    await this.patchProfileOperatingState({ lastVoiceFrequency: null }, profileId);
   }
 
   /**
    * 获取最后选择的 CW 频率
    */
   getLastCWFrequency(): AppConfig['lastCWFrequency'] {
-    const runtimeValue = this.getRuntimeValue('lastCWFrequency');
-    const value = runtimeValue !== undefined ? runtimeValue : this.config.lastCWFrequency;
+    const value = this.runtimeState.isInitialized()
+      ? this.getActiveOperatingState()?.lastCWFrequency
+      : this.config.lastCWFrequency;
     return value ? { ...value } : null;
   }
 
@@ -1236,16 +1355,16 @@ export class ConfigManager {
     radioMode?: string;
     band: string;
     description?: string;
-  }): Promise<void> {
-    await this.setRuntimeValue('lastCWFrequency', { ...frequencyConfig });
+  }, profileId = this.getActiveProfileId()): Promise<void> {
+    await this.patchProfileOperatingState({ lastCWFrequency: { ...frequencyConfig } }, profileId);
     logger.debug(`Last CW frequency saved: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);
   }
 
   /**
    * 清除最后选择的 CW 频率
    */
-  async clearLastCWFrequency(): Promise<void> {
-    await this.setRuntimeValue('lastCWFrequency', null);
+  async clearLastCWFrequency(profileId = this.getActiveProfileId()): Promise<void> {
+    await this.patchProfileOperatingState({ lastCWFrequency: null }, profileId);
   }
 
   /**
@@ -1489,19 +1608,28 @@ export class ConfigManager {
   // ==================== Engine mode persistence ====================
 
   getLastEngineMode(): 'digital' | 'voice' | 'cw' {
-    return this.getRuntimeValue('lastEngineMode') ?? this.config.lastEngineMode ?? 'digital';
+    if (!this.runtimeState.isInitialized()) {
+      return this.config.lastEngineMode ?? 'digital';
+    }
+    return this.getActiveOperatingState()?.lastEngineMode ?? 'digital';
   }
 
-  async setLastEngineMode(mode: 'digital' | 'voice' | 'cw'): Promise<void> {
-    await this.setRuntimeValue('lastEngineMode', mode);
+  async setLastEngineMode(
+    mode: 'digital' | 'voice' | 'cw',
+    profileId = this.getActiveProfileId(),
+  ): Promise<void> {
+    await this.patchProfileOperatingState({ lastEngineMode: mode }, profileId);
   }
 
   getLastDigitalModeName(): string {
-    return this.getRuntimeValue('lastDigitalModeName') ?? this.config.lastDigitalModeName ?? 'FT8';
+    if (!this.runtimeState.isInitialized()) {
+      return this.config.lastDigitalModeName ?? 'FT8';
+    }
+    return this.getActiveOperatingState()?.lastDigitalModeName ?? 'FT8';
   }
 
-  async setLastDigitalModeName(modeName: string): Promise<void> {
-    await this.setRuntimeValue('lastDigitalModeName', modeName);
+  async setLastDigitalModeName(modeName: string, profileId = this.getActiveProfileId()): Promise<void> {
+    await this.patchProfileOperatingState({ lastDigitalModeName: modeName }, profileId);
   }
 
   // ===== Voice mode config =====

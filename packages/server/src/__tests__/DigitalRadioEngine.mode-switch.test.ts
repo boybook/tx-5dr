@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MODES, type DigitalModeRadioModePreference } from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
+import type { ApplyOperatingStateResult } from '../radio/connections/IRadioConnection.js';
 import { EngineState } from '../state-machines/types.js';
+
+vi.mock('audify', () => ({
+  default: { RtAudio: class {} },
+}));
 
 describe('DigitalRadioEngine mode switching', () => {
   afterEach(() => {
@@ -15,6 +20,7 @@ describe('DigitalRadioEngine mode switching', () => {
     lastFrequency?: { frequency: number; mode?: string } | null;
     radioConnected?: boolean;
     digitalModeRadioMode?: DigitalModeRadioModePreference;
+    applyOperatingStateResult?: ApplyOperatingStateResult;
     customFrequencyPresets?: Array<{
       frequency: number;
       mode: string;
@@ -23,7 +29,7 @@ describe('DigitalRadioEngine mode switching', () => {
       description?: string;
     }> | null;
   } = {}) {
-    const applyOperatingState = vi.fn(async () => ({
+    const applyOperatingState = vi.fn(async () => options.applyOperatingStateResult ?? ({
       frequencyApplied: true,
       modeApplied: true,
     }));
@@ -32,6 +38,10 @@ describe('DigitalRadioEngine mode switching', () => {
     const emit = vi.fn();
     const clearInMemory = vi.fn();
     const operatorSetMode = vi.fn();
+    const isConnected = vi.fn(() => options.radioConnected ?? true);
+    const getCurrentRadioSessionContext = vi.fn(() => (
+      isConnected() ? { profileId: 'profile-a', sessionGeneration: 1 } : null
+    ));
 
     vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
       getCustomFrequencyPresets: vi.fn(() => options.customFrequencyPresets ?? null),
@@ -39,6 +49,8 @@ describe('DigitalRadioEngine mode switching', () => {
       getRadioConfig: vi.fn(() => ({ type: 'none', digitalModeRadioMode: options.digitalModeRadioMode })),
       updateLastSelectedFrequency,
       setLastDigitalModeName,
+      captureActiveProfileToken: vi.fn(() => ({ profileId: 'profile-a', generation: 1 })),
+      isActiveProfileTokenCurrent: vi.fn(() => true),
       getDecodeWindowSettings: vi.fn(() => ({})),
     } as unknown as ConfigManager);
 
@@ -49,7 +61,9 @@ describe('DigitalRadioEngine mode switching', () => {
       stopTuneTone: vi.fn(async () => undefined),
       radioManager: {
         getKnownFrequency: vi.fn(() => options.knownFrequency ?? null),
-        isConnected: vi.fn(() => options.radioConnected ?? true),
+        isConnected,
+        getCurrentRadioSessionContext,
+        isCurrentRadioSessionContext: vi.fn(() => true),
         applyOperatingState,
         applyRepeaterDuplexConfig: vi.fn(async () => ({ warning: false })),
         applyToneSquelchConfig: vi.fn(async () => ({ warning: false })),
@@ -89,6 +103,8 @@ describe('DigitalRadioEngine mode switching', () => {
     let engineState = EngineState.STARTING;
 
     vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+      captureActiveProfileToken: vi.fn(() => ({ profileId: 'profile-a', generation: 1 })),
+      isActiveProfileTokenCurrent: vi.fn(() => true),
       setLastEngineMode: vi.fn(async () => {
         sequence.push('setLastEngineMode');
       }),
@@ -181,6 +197,8 @@ describe('DigitalRadioEngine mode switching', () => {
     let engineState = EngineState.STARTING;
 
     vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+      captureActiveProfileToken: vi.fn(() => ({ profileId: 'profile-a', generation: 1 })),
+      isActiveProfileTokenCurrent: vi.fn(() => true),
       setLastEngineMode: vi.fn(async () => undefined),
       setLastDigitalModeName: vi.fn(async () => undefined),
     } as unknown as ConfigManager);
@@ -239,6 +257,8 @@ describe('DigitalRadioEngine mode switching', () => {
     const setLastDigitalModeName = vi.fn(async () => undefined);
 
     vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+      captureActiveProfileToken: vi.fn(() => ({ profileId: 'profile-a', generation: 1 })),
+      isActiveProfileTokenCurrent: vi.fn(() => true),
       setLastEngineMode,
       setLastDigitalModeName,
     } as unknown as ConfigManager);
@@ -313,7 +333,7 @@ describe('DigitalRadioEngine mode switching', () => {
     expect(fakeEngine.engineLifecycle.startAndWaitForRunning).toHaveBeenCalledOnce();
     expect(fakeEngine.emitStatusSnapshot).toHaveBeenCalledOnce();
     expect(fakeEngine.restoreLastCWOperatingState).toHaveBeenCalledOnce();
-    expect(setLastEngineMode).toHaveBeenCalledWith('cw');
+    expect(setLastEngineMode).toHaveBeenCalledWith('cw', 'profile-a');
     expect(fakeEngine.stopCWDecoderRuntime).not.toHaveBeenCalled();
     expect(sequence).toEqual(['stop', 'rebuildResourcePlan', 'startAndWaitForRunning']);
   });
@@ -353,7 +373,7 @@ describe('DigitalRadioEngine mode switching', () => {
     expect(fakeEngine.applyDecodeWindowOverrides).toHaveBeenCalledOnce();
     expect(fakeEngine.engineLifecycle.rebuildResourcePlan).toHaveBeenCalledOnce();
     expect(fakeEngine.engineLifecycle.startAndWaitForRunning).toHaveBeenCalledOnce();
-    expect(setLastDigitalModeName).toHaveBeenCalledWith('FT8');
+    expect(setLastDigitalModeName).toHaveBeenCalledWith('FT8', 'profile-a');
   });
 
   it('stops the CW decoder worker runtime when switching from running CW to voice', async () => {
@@ -525,6 +545,8 @@ describe('DigitalRadioEngine mode switching', () => {
     const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
       radioManager: {
         isConnected: vi.fn(() => true),
+        getCurrentRadioSessionContext: vi.fn(() => ({ profileId: 'profile-a', sessionGeneration: 1 })),
+        isCurrentRadioSessionContext: vi.fn(() => true),
         applyOperatingState,
         applyRepeaterDuplexConfig: vi.fn(async () => ({ warning: false })),
         applyToneSquelchConfig: vi.fn(async () => ({ warning: false })),
@@ -568,6 +590,8 @@ describe('DigitalRadioEngine mode switching', () => {
     const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
       radioManager: {
         isConnected: vi.fn(() => true),
+        getCurrentRadioSessionContext: vi.fn(() => ({ profileId: 'profile-a', sessionGeneration: 1 })),
+        isCurrentRadioSessionContext: vi.fn(() => true),
         applyOperatingState,
       },
       emit,
@@ -610,11 +634,15 @@ describe('DigitalRadioEngine mode switching', () => {
       getCustomFrequencyPresets: vi.fn(() => null),
       getRadioConfig: vi.fn(() => ({ type: 'none' })),
       updateLastSelectedFrequency,
+      captureActiveProfileToken: vi.fn(() => ({ profileId: 'profile-a', generation: 1 })),
+      isActiveProfileTokenCurrent: vi.fn(() => true),
     };
     vi.spyOn(ConfigManager, 'getInstance').mockReturnValue(configManager as unknown as ConfigManager);
     const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
       radioManager: {
         isConnected: vi.fn(() => true),
+        getCurrentRadioSessionContext: vi.fn(() => ({ profileId: 'profile-a', sessionGeneration: 1 })),
+        isCurrentRadioSessionContext: vi.fn(() => true),
         applyOperatingState,
         applyRepeaterDuplexConfig: vi.fn(async () => ({ warning: false })),
         applyToneSquelchConfig: vi.fn(async () => ({ warning: false })),
@@ -635,7 +663,7 @@ describe('DigitalRadioEngine mode switching', () => {
     expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 14074000,
       mode: 'FT8',
-    }));
+    }), 'profile-a');
     expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
       frequency: 14074000,
       mode: 'FT8',
@@ -659,11 +687,15 @@ describe('DigitalRadioEngine mode switching', () => {
       getCustomFrequencyPresets: vi.fn(() => null),
       getRadioConfig: vi.fn(() => ({ type: 'none' })),
       updateLastSelectedFrequency: vi.fn(async () => undefined),
+      captureActiveProfileToken: vi.fn(() => ({ profileId: 'profile-a', generation: 1 })),
+      isActiveProfileTokenCurrent: vi.fn(() => true),
     };
     vi.spyOn(ConfigManager, 'getInstance').mockReturnValue(configManager as unknown as ConfigManager);
     const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
       radioManager: {
         isConnected: vi.fn(() => true),
+        getCurrentRadioSessionContext: vi.fn(() => ({ profileId: 'profile-a', sessionGeneration: 1 })),
+        isCurrentRadioSessionContext: vi.fn(() => true),
         applyOperatingState,
         applyRepeaterDuplexConfig: vi.fn(async () => ({ warning: false })),
         applyToneSquelchConfig: vi.fn(async () => ({ warning: false })),
@@ -692,14 +724,19 @@ describe('DigitalRadioEngine mode switching', () => {
     vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
       getLastEngineMode: vi.fn(() => 'digital'),
       getLastDigitalModeName: vi.fn(() => 'FT4'),
+      getLastSelectedFrequency: vi.fn(() => null),
     } as unknown as ConfigManager);
 
     const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
-      engineMode: 'digital',
-      currentMode: MODES.FT8,
+      engineMode: 'voice',
+      currentMode: MODES.VOICE,
       applyDecodeWindowOverrides: vi.fn(() => undefined),
       slotClock: { setMode: slotClockSetMode },
-      slotPackManager: { setMode: slotPackSetMode },
+      slotPackManager: {
+        setMode: slotPackSetMode,
+        clearInMemory: vi.fn(),
+        setFrequencyContext: vi.fn(),
+      },
       clockCoordinator: { onModeChanged },
       _operatorManager: {
         getAllOperators: vi.fn(() => [{ setMode: operatorSetMode }]),
@@ -711,6 +748,7 @@ describe('DigitalRadioEngine mode switching', () => {
       restorePersistedModePhase: () => void;
     }).restorePersistedModePhase.call(fakeEngine);
 
+    expect(fakeEngine.engineMode).toBe('digital');
     expect(fakeEngine.currentMode.name).toBe('FT4');
     expect(slotClockSetMode).toHaveBeenCalledWith(MODES.FT4);
     expect(slotPackSetMode).toHaveBeenCalledWith(MODES.FT4);
@@ -803,7 +841,7 @@ describe('DigitalRadioEngine mode switching', () => {
     });
     expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
       radioMode: 'USB',
-    }));
+    }), 'profile-a');
     expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
       radioMode: 'USB',
     }));
@@ -830,10 +868,66 @@ describe('DigitalRadioEngine mode switching', () => {
     });
     expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
       radioMode: 'USB-DATA',
-    }));
+    }), 'profile-a');
     expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
       radioMode: 'USB-DATA',
     }));
+  });
+
+  it('persists and broadcasts the actual USB fallback when PKTUSB is rejected', async () => {
+    const fallbackReason = 'PKTUSB unsupported: Feature not available';
+    const { fakeEngine, updateLastSelectedFrequency, emit } = createDigitalSwitchHarness({
+      initialMode: MODES.FT8,
+      knownFrequency: 14_074_000,
+      radioConnected: true,
+      digitalModeRadioMode: 'usb-data',
+      applyOperatingStateResult: {
+        frequencyApplied: true,
+        modeApplied: true,
+        appliedMode: 'USB',
+        modeDegraded: true,
+        modeFallbackReason: fallbackReason,
+      },
+    });
+
+    await (DigitalRadioEngine.prototype as unknown as {
+      setMode: (mode: typeof MODES.FT4) => Promise<void>;
+    }).setMode.call(fakeEngine, MODES.FT4);
+
+    expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
+      radioMode: 'USB',
+    }), 'profile-a');
+    expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
+      radioMode: 'USB',
+      modeDegraded: true,
+      modeFallbackReason: fallbackReason,
+    }));
+  });
+
+  it('drops frequency side effects when the radio reconnects during persistence', async () => {
+    let releasePersistence!: () => void;
+    const persistenceGate = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const { fakeEngine, updateLastSelectedFrequency, emit, clearInMemory } = createDigitalSwitchHarness({
+      initialMode: MODES.FT8,
+      knownFrequency: 14_074_000,
+      radioConnected: true,
+    });
+    updateLastSelectedFrequency.mockReturnValueOnce(persistenceGate.then(() => undefined));
+
+    const pending = (DigitalRadioEngine.prototype as unknown as {
+      setMode: (mode: typeof MODES.FT4) => Promise<void>;
+    }).setMode.call(fakeEngine, MODES.FT4);
+    await vi.waitFor(() => {
+      expect(updateLastSelectedFrequency).toHaveBeenCalledTimes(1);
+    });
+    fakeEngine.radioManager.isCurrentRadioSessionContext.mockReturnValue(false);
+    releasePersistence();
+    await pending;
+
+    expect(clearInMemory).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalledWith('frequencyChanged', expect.anything());
   });
 
   it('chooses the nearest target-mode preset instead of the first FT4 preset', async () => {
@@ -889,12 +983,38 @@ describe('DigitalRadioEngine mode switching', () => {
       frequency: 14_080_000,
       mode: 'FT4',
       band: '20m',
-    }));
+    }), 'profile-a');
     expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
       frequency: 14_080_000,
       mode: 'FT4',
       radioConnected: false,
     }));
+  });
+
+  it('drops offline frequency side effects when a radio session starts during persistence', async () => {
+    let releasePersistence!: () => void;
+    const persistenceGate = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const { fakeEngine, updateLastSelectedFrequency, emit, clearInMemory } = createDigitalSwitchHarness({
+      initialMode: MODES.FT8,
+      knownFrequency: null,
+      lastFrequency: { frequency: 14_074_000, mode: 'FT8' },
+      radioConnected: false,
+    });
+    updateLastSelectedFrequency.mockReturnValueOnce(persistenceGate.then(() => undefined));
+
+    const pending = (DigitalRadioEngine.prototype as unknown as {
+      setMode: (mode: typeof MODES.FT4) => Promise<void>;
+    }).setMode.call(fakeEngine, MODES.FT4);
+    await vi.waitFor(() => expect(updateLastSelectedFrequency).toHaveBeenCalledTimes(1));
+
+    fakeEngine.radioManager.isConnected.mockReturnValue(true);
+    releasePersistence();
+    await pending;
+
+    expect(clearInMemory).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalledWith('frequencyChanged', expect.anything());
   });
 
   it('switches digital mode without applying frequency when target mode has no presets', async () => {
@@ -915,5 +1035,54 @@ describe('DigitalRadioEngine mode switching', () => {
     expect(updateLastSelectedFrequency).not.toHaveBeenCalled();
     expect(emit).not.toHaveBeenCalledWith('frequencyChanged', expect.anything());
     expect(fakeEngine.currentMode.name).toBe('FT4');
+  });
+
+  it('serializes fake-frequency persistence and resolves the active Profile inside the lock', async () => {
+    const order: string[] = [];
+    let insideLock = false;
+    const activeProfile = {
+      id: 'profile-a',
+      radio: { type: 'none' as const },
+    };
+    vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+      getActiveProfile: vi.fn(() => {
+        order.push(`resolve:${insideLock}`);
+        return activeProfile;
+      }),
+      updateProfile: vi.fn(async () => {
+        order.push('persist');
+        return activeProfile;
+      }),
+    } as unknown as ConfigManager);
+    const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
+      getProfileActivationCoordinator: () => ({
+        runExclusive: async <T>(task: () => Promise<T>) => {
+          insideLock = true;
+          order.push('lock');
+          try {
+            return await task();
+          } finally {
+            insideLock = false;
+          }
+        },
+      }),
+      radioManager: {
+        setFakeFrequencyEnabled: vi.fn(() => order.push('runtime')),
+        getRadioInfo: vi.fn(async () => null),
+        isConnected: vi.fn(() => false),
+        getConnectionStatus: vi.fn(() => 'disconnected'),
+        getConfig: vi.fn(() => activeProfile.radio),
+        getConnectionHealth: vi.fn(() => ({ connectionHealthy: false })),
+        getCoreCapabilities: vi.fn(() => undefined),
+        getCoreCapabilityDiagnostics: vi.fn(() => undefined),
+        getMeterCapabilities: vi.fn(() => undefined),
+      },
+      _operatorManager: { isFakeFrequencyEffective: vi.fn(() => true) },
+      emit: vi.fn(),
+    });
+
+    await DigitalRadioEngine.prototype.setFakeFrequencyEnabled.call(fakeEngine, true);
+
+    expect(order).toEqual(['lock', 'resolve:true', 'persist', 'runtime']);
   });
 });
