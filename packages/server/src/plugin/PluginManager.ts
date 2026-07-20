@@ -96,6 +96,8 @@ export class PluginManager {
   private readonly panelMetaState = new Map<string, PluginPanelMetaPayload>();
   private readonly panelMetaTokenIndex = new Map<string, Set<string>>();
   private readonly panelMetaTokenTouchedAt = new Map<string, number>();
+  private panelMetaAuthorizationVersion: number | null = null;
+  private panelMetaNextTokenExpiryAtMs: number | null = null;
   private readonly runtimePanelContributions = new Map<string, PluginUIPanelContributionGroup>();
   private readonly pluginEventBusHost: PluginEventBusHost;
   private pluginRuntimeLogHistory: PluginLogHistoryEntry[] = [];
@@ -1487,8 +1489,7 @@ export class PluginManager {
   }
 
   private broadcastPluginList(): void {
-    const snapshot = this.getSnapshot();
-    this.deps.eventEmitter.emit('pluginList', snapshot);
+    this.deps.eventEmitter.emit('pluginList', undefined);
   }
 
   private getPanelContributionSnapshot(): PluginUIPanelContributionGroup[] {
@@ -1695,14 +1696,15 @@ export class PluginManager {
     panelId: string,
     viewerTokenId?: string,
   ): string {
-    return `${pluginName}:${operatorId}:${panelId}:${viewerTokenId ?? '*'}`;
+    return JSON.stringify([pluginName, operatorId, panelId, viewerTokenId ?? null]);
   }
 
   private recordPanelMeta(payload: PluginPanelMetaPayload): void {
     this.prunePanelMetaTokens();
-    if (payload.viewerTokenId && !this.isPanelMetaTokenActive(payload.viewerTokenId)) {
-      return;
-    }
+    const tokenPermissions = payload.viewerTokenId
+      ? this.getPanelMetaTokenPermissions(payload.viewerTokenId)
+      : null;
+    if (payload.viewerTokenId && !tokenPermissions) return;
     const key = this.getPanelMetaKey(
       payload.pluginName,
       payload.operatorId,
@@ -1719,7 +1721,7 @@ export class PluginManager {
       meta,
     });
     if (payload.viewerTokenId) {
-      this.indexPanelMetaTokenEntry(payload.viewerTokenId, key);
+      this.indexPanelMetaTokenEntry(payload.viewerTokenId, key, tokenPermissions?.expiresAt);
     }
   }
 
@@ -1751,11 +1753,16 @@ export class PluginManager {
     return next;
   }
 
-  private indexPanelMetaTokenEntry(tokenId: string, key: string): void {
+  private indexPanelMetaTokenEntry(tokenId: string, key: string, expiresAt?: number): void {
     const keys = this.panelMetaTokenIndex.get(tokenId) ?? new Set<string>();
     keys.add(key);
     this.panelMetaTokenIndex.set(tokenId, keys);
     this.panelMetaTokenTouchedAt.set(tokenId, Date.now());
+    if (expiresAt !== undefined) {
+      this.panelMetaNextTokenExpiryAtMs = this.panelMetaNextTokenExpiryAtMs === null
+        ? expiresAt
+        : Math.min(this.panelMetaNextTokenExpiryAtMs, expiresAt);
+    }
     this.enforcePanelMetaTokenLimit();
   }
 
@@ -1777,23 +1784,66 @@ export class PluginManager {
     }
   }
 
-  private clearPanelMetaForToken(tokenId: string): void {
+  private clearPanelMetaForToken(tokenId: string, notifyClient = false): void {
     const keys = this.panelMetaTokenIndex.get(tokenId);
     if (!keys) {
       return;
     }
+    const clearedEntries = Array.from(keys)
+      .map((key) => this.panelMetaState.get(key))
+      .filter((entry): entry is PluginPanelMetaPayload => entry !== undefined);
     for (const key of Array.from(keys)) {
       this.deletePanelMetaEntry(key, tokenId);
+    }
+    if (!notifyClient) return;
+    for (const entry of clearedEntries) {
+      this.deps.eventEmitter.emit('pluginPanelMeta', {
+        ...entry,
+        meta: {
+          title: null,
+          titleValues: null,
+          visible: null,
+          tone: null,
+        },
+      });
     }
   }
 
   private prunePanelMetaTokens(): void {
-    for (const tokenId of Array.from(this.panelMetaTokenIndex.keys())) {
-      if (!this.isPanelMetaTokenActive(tokenId)) {
+    if (this.panelMetaTokenIndex.size === 0) return;
+    try {
+      const authManager = AuthManager.getInstance();
+      const authorizationVersion = authManager.getAuthorizationVersion();
+      const now = Date.now();
+      if (
+        this.panelMetaAuthorizationVersion === authorizationVersion
+        && (this.panelMetaNextTokenExpiryAtMs === null || now < this.panelMetaNextTokenExpiryAtMs)
+      ) {
+        return;
+      }
+      this.panelMetaAuthorizationVersion = authorizationVersion;
+      this.panelMetaNextTokenExpiryAtMs = null;
+      for (const tokenId of Array.from(this.panelMetaTokenIndex.keys())) {
+        const permissions = authManager.getTokenCurrentPermissions(tokenId);
+        if (!permissions) {
+          this.clearPanelMetaForToken(tokenId);
+          continue;
+        }
+        if (permissions.expiresAt !== undefined) {
+          this.panelMetaNextTokenExpiryAtMs = this.panelMetaNextTokenExpiryAtMs === null
+            ? permissions.expiresAt
+            : Math.min(this.panelMetaNextTokenExpiryAtMs, permissions.expiresAt);
+        }
+      }
+      this.enforcePanelMetaTokenLimit();
+    } catch (error) {
+      logger.warn('failed to validate scoped panel metadata tokens', error);
+      for (const tokenId of Array.from(this.panelMetaTokenIndex.keys())) {
         this.clearPanelMetaForToken(tokenId);
       }
+      this.panelMetaAuthorizationVersion = null;
+      this.panelMetaNextTokenExpiryAtMs = null;
     }
-    this.enforcePanelMetaTokenLimit();
   }
 
   private enforcePanelMetaTokenLimit(): void {
@@ -1808,21 +1858,28 @@ export class PluginManager {
       if (this.panelMetaTokenIndex.size <= PANEL_META_SCOPED_TOKEN_LIMIT) {
         return;
       }
-      this.clearPanelMetaForToken(tokenId);
+      this.clearPanelMetaForToken(tokenId, true);
     }
   }
 
-  private isPanelMetaTokenActive(tokenId: string): boolean {
-    return AuthManager.getInstance().isTokenStillValid(tokenId);
+  private getPanelMetaTokenPermissions(tokenId: string): ReturnType<AuthManager['getTokenCurrentPermissions']> {
+    try {
+      return AuthManager.getInstance().getTokenCurrentPermissions(tokenId);
+    } catch (error) {
+      logger.warn('failed to validate scoped panel metadata token', error);
+      return null;
+    }
   }
 
   private clearPanelMetaForInstance(instance: PluginInstance): void {
     const operatorId = instance.scope.kind === 'operator'
       ? instance.scope.operatorId
       : GLOBAL_PLUGIN_SCOPE_ID;
-    const prefix = `${instance.plugin.definition.name}:${operatorId}:`;
     for (const [key, entry] of this.panelMetaState) {
-      if (key.startsWith(prefix)) {
+      if (
+        entry.pluginName === instance.plugin.definition.name
+        && entry.operatorId === operatorId
+      ) {
         this.deletePanelMetaEntry(key, entry.viewerTokenId);
       }
     }

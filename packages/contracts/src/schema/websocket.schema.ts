@@ -1683,7 +1683,7 @@ export interface DigitalRadioEngineEvents {
   realtimeConnectivityIssue: (data: import('./realtime.schema.js').RealtimeConnectivityIssue) => void;
 
   // 插件系统事件
-  pluginList: (data: PluginSystemSnapshot) => void;
+  pluginList: (data: undefined) => void;
   pluginStatusChanged: (data: { generation: number; plugin: PluginStatus }) => void;
   pluginData: (data: PluginDataPayload) => void;
   pluginLog: (data: PluginLogEntry) => void;
