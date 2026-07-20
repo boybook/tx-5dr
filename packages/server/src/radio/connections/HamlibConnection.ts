@@ -1097,17 +1097,19 @@ export class HamlibConnection
     const intent = options?.intent;
     const candidates = this.buildModeCandidates(mode, intent);
 
+    // Digital intent prefers DATA modes (e.g. PKTUSB) even when Hamlib capability
+    // probing omitted them. Icom backends typically implement USB-D via
+    // set_mode(PKTUSB) rather than listing PKTUSB in get_modes().
+    if (intent === 'digital') {
+      return candidates[0];
+    }
+
     if (this.supportedModes.size === 0) {
-      return intent === 'digital' ? candidates[candidates.length - 1] : candidates[0];
+      return candidates[0];
     }
 
-    for (const candidate of candidates) {
-      if (this.supportedModes.has(candidate)) {
-        return candidate;
-      }
-    }
-
-    return intent === 'digital' ? candidates[candidates.length - 1] : candidates[0];
+    return candidates.find((candidate) => this.supportedModes.has(candidate))
+      ?? candidates[0];
   }
 
   private buildModeCandidates(mode: string, intent?: SetRadioModeOptions['intent']): string[] {
@@ -2999,45 +3001,70 @@ export class HamlibConnection
   ): Promise<boolean> {
     this.checkConnected();
 
-    try {
-      const requestedMode = normalizeModeName(mode);
-      const resolvedMode = this.resolveModeForIntent(requestedMode, options);
-      const previousMode = this.currentRadioMode;
+    const requestedMode = normalizeModeName(mode);
+    const intent = options?.intent;
+    const preferredMode = this.resolveModeForIntent(requestedMode, options);
+    const candidates = intent === 'digital'
+      ? this.buildModeCandidates(requestedMode, intent)
+      : [preferredMode];
+    const previousMode = this.currentRadioMode;
+    let lastError: unknown;
 
-      await Promise.race([
-        this.rig!.setMode(resolvedMode, bandwidth as any),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Set mode timeout')), 5000)
-        ),
-      ]);
+    for (let index = 0; index < candidates.length; index += 1) {
+      const resolvedMode = candidates[index];
 
-      this.lastSuccessfulOperation = Date.now();
-      this.currentRadioMode = normalizeModeName(resolvedMode);
-      logger.debug(`Mode set: ${requestedMode} -> ${resolvedMode}${bandwidth !== undefined ? ` (${bandwidth})` : ''}`, {
-        requestedMode,
-        resolvedMode,
-        intent: options?.intent ?? 'unspecified',
-      });
+      try {
+        await Promise.race([
+          this.rig!.setMode(resolvedMode, bandwidth as any),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Set mode timeout')), 5000)
+          ),
+        ]);
 
-      // Split mode sync: keep TX VFO mode consistent with RX VFO
-      if (await this.isSplitEnabled()) {
-        try {
-          await Promise.race([
-            this.rig!.setSplitMode(resolvedMode as any),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Set split mode timeout')), 5000)
-            ),
-          ]);
-          logger.debug(`Split TX mode synced to ${resolvedMode}`);
-        } catch (syncError) {
-          logger.warn(`Split TX mode sync failed: ${this.getErrorMessage(syncError)}`);
+        this.lastSuccessfulOperation = Date.now();
+        this.currentRadioMode = normalizeModeName(resolvedMode);
+        logger.debug(`Mode set: ${requestedMode} -> ${resolvedMode}${bandwidth !== undefined ? ` (${bandwidth})` : ''}`, {
+          requestedMode,
+          resolvedMode,
+          preferredMode,
+          intent: intent ?? 'unspecified',
+        });
+
+        // Split mode sync: keep TX VFO mode consistent with RX VFO
+        if (await this.isSplitEnabled()) {
+          try {
+            await Promise.race([
+              this.rig!.setSplitMode(resolvedMode as any),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Set split mode timeout')), 5000)
+              ),
+            ]);
+            logger.debug(`Split TX mode synced to ${resolvedMode}`);
+          } catch (syncError) {
+            logger.warn(`Split TX mode sync failed: ${this.getErrorMessage(syncError)}`);
+          }
+        }
+
+        return previousMode !== this.currentRadioMode;
+      } catch (error) {
+        lastError = error;
+
+        if (index < candidates.length - 1) {
+          logger.warn('Mode candidate failed, trying fallback', {
+            requestedMode,
+            resolvedMode,
+            nextCandidate: candidates[index + 1],
+            error: this.getErrorMessage(error),
+          });
+          continue;
         }
       }
-
-      return previousMode !== this.currentRadioMode;
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'setMode');
     }
+
+    throw this.convertOptionalOperationError(
+      lastError instanceof Error ? lastError : new Error(String(lastError)),
+      'setMode',
+    );
   }
 
   private async performModeRead(): Promise<RadioModeInfo> {
