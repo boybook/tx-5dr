@@ -28,6 +28,16 @@ function getLocalStorage(): Storage | null {
   return globalThis.localStorage ?? null;
 }
 
+export function hasStoredRightLayoutSplit(): boolean {
+  try {
+    const storage = getLocalStorage();
+    const raw = storage?.getItem(RIGHT_LAYOUT_SPLIT_STORAGE_KEY);
+    return raw != null && Number.isFinite(Number(raw));
+  } catch {
+    return false;
+  }
+}
+
 export function getStoredRightLayoutSplitPercent(): number {
   try {
     const storage = getLocalStorage();
@@ -51,22 +61,28 @@ export function saveRightLayoutSplitPercent(splitPercent: number): number {
   return normalized;
 }
 
+export function clearRightLayoutSplitPercent(): void {
+  try {
+    getLocalStorage()?.removeItem(RIGHT_LAYOUT_SPLIT_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures; the in-memory state is reset by the caller anyway.
+  }
+}
+
 export function shouldPersistRightLayoutSplit(params: {
-  isMobile: boolean;
   wasDraggingSplit: boolean;
   isDraggingSplit: boolean;
 }): boolean {
-  return !params.isMobile && params.wasDraggingSplit && !params.isDraggingSplit;
+  return params.wasDraggingSplit && !params.isDraggingSplit;
 }
 
 export function shouldStartRightLayoutSplitPointerDrag(params: {
-  isMobile: boolean;
   hasActivePointer: boolean;
   isPrimary: boolean;
   pointerType: string;
   button: number;
 }): boolean {
-  if (params.isMobile || params.hasActivePointer || !params.isPrimary) {
+  if (params.hasActivePointer || !params.isPrimary) {
     return false;
   }
 

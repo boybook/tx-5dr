@@ -22,8 +22,10 @@ import { useTranslation } from 'react-i18next';
 import { OPEN_ACCOUNT_SECURITY_MODAL_EVENT } from '../components/app/GlobalModalHost';
 import {
   clampRightLayoutSplitPercent,
+  clearRightLayoutSplitPercent,
   DEFAULT_RIGHT_LAYOUT_SPLIT_PERCENT,
   getStoredRightLayoutSplitPercent,
+  hasStoredRightLayoutSplit,
   isActiveRightLayoutSplitPointer,
   getRightLayoutPaneHeights,
   RIGHT_LAYOUT_SPLIT_DIVIDER_HEIGHT_PX,
@@ -35,9 +37,13 @@ import {
 function RightLayoutPaneDivider({
   isDragging,
   onPointerDown,
+  onDoubleClick,
+  resetHint,
 }: {
   isDragging: boolean;
   onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onDoubleClick: () => void;
+  resetHint: string;
 }) {
   return (
     <div
@@ -47,6 +53,8 @@ function RightLayoutPaneDivider({
       ].join(' ')}
       style={{ height: `${RIGHT_LAYOUT_SPLIT_DIVIDER_HEIGHT_PX}px` }}
       onPointerDown={onPointerDown}
+      onDoubleClick={onDoubleClick}
+      title={resetHint}
     >
       <div className="relative h-full w-full">
         <div
@@ -76,11 +84,15 @@ export const RightLayout: React.FC = () => {
   const { state: authState, logout } = useAuth();
   const [selectedMode, setSelectedMode] = useState<string>('auto5');
   const [loginPopoverOpen, setLoginPopoverOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
   const [splitPercent, setSplitPercent] = useState(() => getStoredRightLayoutSplitPercent());
+  // 用户未拖拽过分割条时保持 main 的经典布局（表格占据剩余空间、操作员区内容自然高度），
+  // 仅在用户手动拖拽后切换到固定比例分割模式。
+  const [hasCustomSplit, setHasCustomSplit] = useState(() => hasStoredRightLayoutSplit());
   const [workspaceHeight, setWorkspaceHeight] = useState(0);
   const [isDraggingSplit, setIsDraggingSplit] = useState(false);
   const splitWorkspaceRef = useRef<HTMLDivElement | null>(null);
+  const topPaneRef = useRef<HTMLDivElement | null>(null);
+  const pendingAutoConvertRef = useRef<number | null>(null);
   const activeSplitPointerIdRef = useRef<number | null>(null);
   const dragStartYRef = useRef(0);
   const dragStartSplitPercentRef = useRef(DEFAULT_RIGHT_LAYOUT_SPLIT_PERCENT);
@@ -115,25 +127,6 @@ export const RightLayout: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia('(max-width: 767px)');
-    setIsMobile(mediaQuery.matches);
-
-    const handleChange = (event: MediaQueryListEvent) => {
-      setIsMobile(event.matches);
-    };
-
-    mediaQuery.addEventListener('change', handleChange);
-    return () => {
-      mediaQuery.removeEventListener('change', handleChange);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (isMobile) {
-      setWorkspaceHeight(0);
-      return;
-    }
-
     const measureWorkspace = () => {
       const nextHeight = splitWorkspaceRef.current?.clientHeight ?? 0;
       setWorkspaceHeight((currentHeight) => currentHeight === nextHeight ? currentHeight : nextHeight);
@@ -156,10 +149,10 @@ export const RightLayout: React.FC = () => {
       resizeObserver?.disconnect();
       window.removeEventListener('resize', measureWorkspace);
     };
-  }, [isMobile]);
+  }, []);
 
   useEffect(() => {
-    if (isMobile) {
+    if (!hasCustomSplit) {
       return;
     }
 
@@ -173,11 +166,10 @@ export const RightLayout: React.FC = () => {
         containerHeight: workspaceHeight,
       });
     });
-  }, [isMobile, workspaceHeight]);
+  }, [hasCustomSplit, workspaceHeight]);
 
   const handleSplitPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!shouldStartRightLayoutSplitPointerDrag({
-      isMobile,
       hasActivePointer: activeSplitPointerIdRef.current !== null,
       isPrimary: event.isPrimary,
       pointerType: event.pointerType,
@@ -191,16 +183,43 @@ export const RightLayout: React.FC = () => {
     event.currentTarget.setPointerCapture(event.pointerId);
     activeSplitPointerIdRef.current = event.pointerId;
     dragStartYRef.current = event.clientY;
-    dragStartSplitPercentRef.current = splitPercent;
+
+    // 首次从自适应布局开始拖拽时，按当前实际像素高度换算起始比例；
+    // 仅当指针真正移动后才切换为手动模式（pendingAutoConvertRef 在 move 中消费），
+    // 避免单击分割条（零位移）就退出自适应并写入 localStorage
+    let startSplitPercent = splitPercent;
+    if (!hasCustomSplit) {
+      const containerHeight = splitWorkspaceRef.current?.clientHeight ?? 0;
+      const topPaneHeight = topPaneRef.current?.clientHeight ?? 0;
+      // 与 getRightLayoutPaneHeights 保持一致：以扣除分割条后的可用高度为基准换算
+      const usableHeight = containerHeight - RIGHT_LAYOUT_SPLIT_DIVIDER_HEIGHT_PX;
+      if (usableHeight > 0 && topPaneHeight > 0) {
+        startSplitPercent = clampRightLayoutSplitPercent({
+          splitPercent: (topPaneHeight / usableHeight) * 100,
+          containerHeight,
+        });
+      }
+      pendingAutoConvertRef.current = startSplitPercent;
+    }
+
+    dragStartSplitPercentRef.current = startSplitPercent;
     setIsDraggingSplit(true);
-  }, [isMobile, splitPercent]);
+  }, [hasCustomSplit, splitPercent]);
 
   const handleSplitPointerEnd = useCallback((event: PointerEvent) => {
     if (!isActiveRightLayoutSplitPointer(activeSplitPointerIdRef.current, event.pointerId)) {
       return;
     }
     activeSplitPointerIdRef.current = null;
+    pendingAutoConvertRef.current = null;
     setIsDraggingSplit(false);
+  }, []);
+
+  // 双击分割条：清除持久化的分割比例，恢复自适应（经典）布局
+  const handleSplitDividerDoubleClick = useCallback(() => {
+    clearRightLayoutSplitPercent();
+    setSplitPercent(DEFAULT_RIGHT_LAYOUT_SPLIT_PERCENT);
+    setHasCustomSplit(false);
   }, []);
 
   const handleSplitPointerMove = useCallback((event: PointerEvent) => {
@@ -218,6 +237,13 @@ export const RightLayout: React.FC = () => {
     const containerHeight = splitWorkspaceRef.current.clientHeight;
     if (containerHeight <= 0) {
       return;
+    }
+
+    // 指针真正移动时才从自适应切换为手动模式（单击不切换）
+    if (pendingAutoConvertRef.current !== null) {
+      setSplitPercent(pendingAutoConvertRef.current);
+      setHasCustomSplit(true);
+      pendingAutoConvertRef.current = null;
     }
 
     const deltaPercent = ((event.clientY - dragStartYRef.current) / containerHeight) * 100;
@@ -252,15 +278,19 @@ export const RightLayout: React.FC = () => {
     wasDraggingSplitRef.current = isDraggingSplit;
 
     if (!shouldPersistRightLayoutSplit({
-      isMobile,
       wasDraggingSplit,
       isDraggingSplit,
     })) {
       return;
     }
 
+    // 单击未拖动（未切换手动模式）时不落盘
+    if (!hasCustomSplit) {
+      return;
+    }
+
     saveRightLayoutSplitPercent(splitPercent);
-  }, [isDraggingSplit, isMobile, splitPercent]);
+  }, [isDraggingSplit, hasCustomSplit, splitPercent]);
 
   const desktopPaneHeights = getRightLayoutPaneHeights({
     splitPercent,
@@ -383,39 +413,58 @@ export const RightLayout: React.FC = () => {
         </div>
       </div>
       
-      {/* 主内容区域 */}
+      {/* 主内容区域（移动端与桌面端统一：自适应默认 + 可拖拽手动分割 + 双击恢复） */}
       <div className="flex-1 p-2 pt-0 md:p-5 md:pt-0 flex flex-col gap-2 md:gap-4 min-h-0 overflow-hidden">
-        {isMobile ? (
-          <>
-            <div className="relative z-0 min-h-0 flex-1 overflow-hidden">
-              <MyRelatedFramesTable className="h-full" />
-            </div>
-            <div className="relative z-10 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pt-1 pb-2">
-              <RadioOperatorList onCreateOperator={handleCreateOperator} />
-            </div>
-          </>
-        ) : (
-          <div ref={splitWorkspaceRef} className="flex-1 min-h-0 overflow-hidden">
-            <div className="flex h-full min-h-0 flex-col overflow-hidden">
-              <div
-                className="relative z-0 min-h-0 overflow-hidden"
-                style={workspaceHeight > 0 ? { height: `${desktopPaneHeights.topPaneHeightPx}px` } : { height: `${splitPercent}%` }}
-              >
-                <MyRelatedFramesTable className="h-full" />
-              </div>
-              <RightLayoutPaneDivider
-                isDragging={isDraggingSplit}
-                onPointerDown={handleSplitPointerDown}
-              />
-              <div className="relative z-10 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pt-1 pb-2 [scrollbar-gutter:stable]">
-                <RadioOperatorList onCreateOperator={handleCreateOperator} />
-              </div>
-            </div>
+        <div ref={splitWorkspaceRef} className="flex-1 min-h-0 overflow-hidden">
+          <div className="flex h-full min-h-0 flex-col overflow-hidden">
+            {hasCustomSplit ? (
+              <>
+                {/* 手动模式：分割比例即顶栏精确高度；底部容器（操作员区 + RadioControl）占据剩余空间 */}
+                {/* 拖拽可整体调整底部容器大小，卡片与 RadioControl 间距由拖拽决定，单个操作员时也可消除 */}
+                <div
+                  ref={topPaneRef}
+                  className="relative z-0 min-h-0 overflow-hidden"
+                  style={workspaceHeight > 0 ? { height: `${desktopPaneHeights.topPaneHeightPx}px` } : { height: `${splitPercent}%` }}
+                >
+                  <MyRelatedFramesTable className="h-full" />
+                </div>
+                <RightLayoutPaneDivider
+                  isDragging={isDraggingSplit}
+                  onPointerDown={handleSplitPointerDown}
+                  onDoubleClick={handleSplitDividerDoubleClick}
+                  resetHint={t('rightLayout.resetSplitToAuto')}
+                />
+                <div className="relative z-10 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pt-2 pb-4 [scrollbar-gutter:stable]">
+                  <RadioOperatorList onCreateOperator={handleCreateOperator} />
+                </div>
+                <div className="relative z-10 flex-shrink-0">
+                  <RadioControl onOpenRadioSettings={handleOpenRadioSettings} />
+                </div>
+              </>
+            ) : (
+              <>
+                {/* 默认自适应布局：表格占据剩余空间，底部容器（操作员区 + RadioControl）跟随内容自然高度（上限 70%），同 main 经典行为 */}
+                <div ref={topPaneRef} className="relative z-0 flex-1 min-h-0 overflow-hidden">
+                  <MyRelatedFramesTable className="h-full" />
+                </div>
+                <RightLayoutPaneDivider
+                  isDragging={isDraggingSplit}
+                  onPointerDown={handleSplitPointerDown}
+                  onDoubleClick={handleSplitDividerDoubleClick}
+                  resetHint={t('rightLayout.resetSplitToAuto')}
+                />
+                <div className="relative z-10 flex-shrink-0 min-h-0 max-h-[70%] flex flex-col overflow-hidden">
+                  {/* 间距与 main 对齐：分割条 8px + pt-2 8px = 16px（原 gap-4）；pb-4 16px 同理 */}
+                  <div className="min-h-0 overflow-y-auto overscroll-contain px-1 pt-2 pb-4 [scrollbar-gutter:stable]">
+                    <RadioOperatorList onCreateOperator={handleCreateOperator} />
+                  </div>
+                  <div className="relative z-10 flex-shrink-0">
+                    <RadioControl onOpenRadioSettings={handleOpenRadioSettings} />
+                  </div>
+                </div>
+              </>
+            )}
           </div>
-        )}
-
-        <div className="relative z-10 flex-shrink-0">
-          <RadioControl onOpenRadioSettings={handleOpenRadioSettings} />
         </div>
       </div>
       </div>
