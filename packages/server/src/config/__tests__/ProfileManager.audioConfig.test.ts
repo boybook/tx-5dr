@@ -34,6 +34,20 @@ const { state, mockConfigManager, mockEngine, mockReloadAudioConfig } = vi.hoist
     setActiveProfileId: vi.fn(async (id: string | null) => {
       testState.activeProfileId = id;
     }),
+    snapshotOperatingMemoryForProfile: vi.fn(async (_id: string) => {}),
+    loadOperatingMemoryForProfile: vi.fn(async (_id: string) => {}),
+    switchActiveProfile: vi.fn(async (id: string) => {
+      const previousProfileId = testState.activeProfileId;
+      if (previousProfileId && previousProfileId !== id) {
+        await configManager.snapshotOperatingMemoryForProfile(previousProfileId);
+      }
+      await configManager.setActiveProfileId(id);
+      if (previousProfileId !== id) {
+        await configManager.loadOperatingMemoryForProfile(id);
+      }
+      return { previousProfileId, profileId: id };
+    }),
+    deleteProfileOperatingMemory: vi.fn(async (_id: string) => {}),
     getProfiles: vi.fn(() => testState.profiles),
     getActiveProfile: vi.fn(() => testState.profiles.find((profile) => profile.id === testState.activeProfileId) ?? null),
     reorderProfiles: vi.fn(),
@@ -338,9 +352,22 @@ describe('ProfileManager audio runtime config application', () => {
 
     await manager.activateProfile('profile-1');
 
-    expect(mockConfigManager.setActiveProfileId).toHaveBeenCalledWith('profile-1');
+    expect(mockConfigManager.switchActiveProfile).toHaveBeenCalledWith('profile-1');
     expect(mockReloadAudioConfig).toHaveBeenCalledTimes(1);
     expect(mockEngine.start).toHaveBeenCalledTimes(1);
     expect(mockReloadAudioConfig.mock.invocationCallOrder[0]).toBeLessThan(mockEngine.start.mock.invocationCallOrder[0]);
+  });
+
+  it('delegates profile activation to ConfigManager.switchActiveProfile', async () => {
+    state.profiles = [
+      makeProfile({ id: 'profile-9700', name: 'IC-9700' }),
+      makeProfile({ id: 'profile-7610', name: 'IC-7610' }),
+    ];
+    state.activeProfileId = 'profile-9700';
+    const manager = ProfileManager.getInstance();
+
+    await manager.activateProfile('profile-7610');
+
+    expect(mockConfigManager.switchActiveProfile).toHaveBeenCalledWith('profile-7610');
   });
 });

@@ -226,15 +226,19 @@ export class RadioPowerController extends EventEmitter<RadioPowerControllerEvent
       radioManager.markIntentionalDisconnect('profile switch for power operation');
       await radioManager.disconnect('profile switch for power operation').catch(() => undefined);
     }
-    await configManager.setActiveProfileId(profileId);
+
+    // Same atomic snapshot / setActive / load path as ProfileManager.activateProfile.
+    const { previousProfileId } = await configManager.switchActiveProfile(profileId);
+    const engine = DigitalRadioEngine.getInstance();
+    engine.getAudioStreamManager().reloadAudioConfig();
+
     const profile = configManager.getProfile(profileId);
     if (profile) {
-      const engine = DigitalRadioEngine.getInstance();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (engine as any).emit('profileChanged', {
         profileId,
         profile,
-        previousProfileId: currentActiveId,
+        previousProfileId,
         wasRunning: false,
       });
     }
