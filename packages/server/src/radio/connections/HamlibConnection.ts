@@ -28,6 +28,11 @@ import { createLogger } from '../../utils/logger.js';
 import { isProcessShuttingDown } from '../../utils/process-shutdown.js';
 import { isRecoverableOptionalRadioError } from '../optionalRadioError.js';
 import { buildBackendConfig } from '../hamlibConfigUtils.js';
+import {
+  darwinCalloutPathFromDialin,
+  isSameDarwinSerialDevice,
+  looksLikeLocalSerialDevicePath,
+} from '../serialPortPath.js';
 import { RADIO_IO_SKIPPED, RadioIoQueue, type RadioIoTaskContext, type RadioIoTaskOptions } from './RadioIoQueue.js';
 import {
   type ApplyOperatingStateRequest,
@@ -576,39 +581,66 @@ export class HamlibConnection
       return config;
     }
 
+    // 防线：network（host:port）或自定义路径端点在数据模型上也是 type: 'serial'，
+    // 其中残留的 serialNumber 不应把端点"劫持"回本机 USB 设备
+    const configuredPath = config.serial.backendConfig?.rig_pathname ?? config.serial.path;
+    if (!looksLikeLocalSerialDevicePath(configuredPath)) {
+      return config;
+    }
+
     try {
       const ports = await SerialPort.list();
-      const exactMatch = ports.find((port) => port.serialNumber?.trim() === targetSerial);
       const normalizedTarget = targetSerial.toLowerCase();
-      const normalizedMatch = exactMatch
-        ?? ports.find((port) => port.serialNumber?.trim().toLowerCase() === normalizedTarget);
+      const matches = ports.filter((port) => port.serialNumber?.trim().toLowerCase() === normalizedTarget);
+      const exactMatches = matches.filter((port) => port.serialNumber?.trim() === targetSerial);
+      const candidates = exactMatches.length > 0 ? exactMatches : matches;
 
-      if (!normalizedMatch?.path) {
+      if (candidates.length === 0) {
         logger.warn('Configured serial number not found in current port list', {
           serialNumber: targetSerial,
-          configuredPath: config.serial.path,
+          configuredPath,
         });
         return config;
       }
 
-      if (normalizedMatch.path === config.serial.path) {
+      // 已配置路径仍在匹配集合中时保持不变——尤其避免把用户显式选择的
+      // macOS /dev/cu.* callout 端口改写为同一设备的 /dev/tty.* dialin 节点
+      if (candidates.some((port) => port.path === configuredPath || isSameDarwinSerialDevice(port.path, configuredPath))) {
         return config;
       }
 
+      // 多个设备共享同一 serialNumber（未烧录序列号的 FTDI/CH340 常见）时无法
+      // 确定目标设备，放弃重写、回退原配置
+      if (candidates.length > 1) {
+        logger.warn('Multiple serial ports share the configured serial number, keeping configured path', {
+          serialNumber: targetSerial,
+          configuredPath,
+          matchedPaths: candidates.map((port) => port.path),
+        });
+        return config;
+      }
+
+      const matchedPath = candidates[0]!.path;
+      // 设备重新枚举（端口名变化）需要重写时，优先映射回与配置相同的 cu/tty 形态
+      const calloutPath = configuredPath.startsWith('/dev/cu.')
+        ? darwinCalloutPathFromDialin(matchedPath)
+        : null;
+      const resolvedPath = calloutPath ?? matchedPath;
+
       logger.info('Resolved serial device path from serial number', {
         serialNumber: targetSerial,
-        previousPath: config.serial.path,
-        resolvedPath: normalizedMatch.path,
+        previousPath: configuredPath,
+        resolvedPath,
       });
 
       return {
         ...config,
         serial: {
           ...config.serial,
-          path: normalizedMatch.path,
+          path: resolvedPath,
           backendConfig: {
             ...(config.serial.backendConfig ?? {}),
-            rig_pathname: normalizedMatch.path,
+            rig_pathname: resolvedPath,
           },
         },
       };
