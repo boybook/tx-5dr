@@ -441,6 +441,65 @@ describe('WSServer security filtering', () => {
       closeReason: 'authentication expired',
     });
   });
+
+  it('expires JWT connections before every plugin delivery', async () => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.UTC(2026, 6, 21, 0, 0, 0);
+      const exp = Math.floor(now / 1000) + 1;
+      vi.setSystemTime(now);
+
+      const authManager = {
+        getJwtSecret: () => 'test-jwt-secret',
+        isTokenStillValid: () => true,
+        getTokenCurrentPermissions: vi.fn(() => ({
+          role: UserRole.OPERATOR,
+          operatorIds: ['operator-1'],
+        })),
+        getTokenById: () => ({ label: 'operator' }),
+        getAuthorizationVersion: () => 1,
+      };
+      vi.spyOn(AuthManager, 'getInstance').mockReturnValue(authManager as unknown as AuthManager);
+
+      const { createSigner } = await import('fast-jwt');
+      const jwt = createSigner({ key: 'test-jwt-secret' })({
+        tokenId: 'token-a',
+        role: UserRole.OPERATOR,
+        operatorIds: ['operator-1'],
+        iat: Math.floor(now / 1000),
+        exp,
+      });
+      const { connection, sent } = createTestConnection('conn-jwt-expired');
+      const server = Object.create(WSServer.prototype) as any;
+      server.getConnection = vi.fn(() => connection);
+      server.getActiveConnections = vi.fn(() => [connection]);
+      server.removeConnection = vi.fn();
+      server.sendInitialState = vi.fn();
+      server.sendCWDecoderStatus = vi.fn();
+
+      await server.handleAuthToken('conn-jwt-expired', { jwt });
+      connection.completeHandshake(['operator-1']);
+      vi.setSystemTime(exp * 1000);
+
+      server.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_DATA, { message: 'private' });
+
+      expect(sent).toContainEqual({
+        type: WSMessageType.AUTH_EXPIRED,
+        data: { reason: 'jwt_expired' },
+      });
+      expect(sent).not.toContainEqual({
+        type: WSMessageType.PLUGIN_DATA,
+        data: { message: 'private' },
+      });
+      expect(server.removeConnection).toHaveBeenCalledWith('conn-jwt-expired', {
+        closeSocket: true,
+        closeCode: 4003,
+        closeReason: 'authentication expired',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('WSServer slot pack history restore', () => {

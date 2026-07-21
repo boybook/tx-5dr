@@ -74,6 +74,7 @@ export class WSConnection extends WSMessageHandler {
   private authLabel: string = '';
   private tokenId: string | null = null; // 用于懒查询最新权限
   private tokenExpiresAtMs: number | null = null;
+  private jwtExpiresAtMs: number | null = null;
   private authorizationVersion: number | null = null;
   private authInvalidationReason: string | null = null;
   private ability: AppAbility = emptyAbility();
@@ -221,7 +222,13 @@ export class WSConnection extends WSMessageHandler {
   /**
    * 设置为已认证用户
    */
-  setAuthenticated(role: UserRole, operatorIds: string[], label: string, tokenId?: string): void {
+  setAuthenticated(
+    role: UserRole,
+    operatorIds: string[],
+    label: string,
+    tokenId?: string,
+    jwtExpiresAtMs?: number,
+  ): void {
     this.authenticated = true;
     this.userRole = role;
     this.authorizedOperatorIds = new Set(operatorIds);
@@ -232,6 +239,7 @@ export class WSConnection extends WSMessageHandler {
     const perms = tokenId ? authManager.getTokenCurrentPermissions(tokenId) : null;
     this.authorizationVersion = tokenId ? authManager.getAuthorizationVersion() : null;
     this.tokenExpiresAtMs = perms?.expiresAt ?? null;
+    this.jwtExpiresAtMs = jwtExpiresAtMs ?? null;
     this.ability = buildAbility({
       role,
       operatorIds,
@@ -290,6 +298,10 @@ export class WSConnection extends WSMessageHandler {
     if (!this.userRole) return null;
     if (!this.tokenId || this.tokenId === '__local__') {
       return this.userRole;
+    }
+    if (this.jwtExpiresAtMs !== null && this.jwtExpiresAtMs <= Date.now()) {
+      this.invalidateAuthentication('jwt_expired');
+      return null;
     }
     const authManager = AuthManager.getInstance();
     const currentVersion = authManager.getAuthorizationVersion();
@@ -1717,16 +1729,16 @@ export class WSServer extends WSMessageHandler {
 
   private broadcastToMinRole(minRole: UserRole, type: string, data?: any, id?: string): void {
     const activeConnections = this.getActiveConnections()
-      .filter(connection => connection.isHandshakeCompleted() && connection.hasMinRole(minRole));
+      .filter(connection => this.canReceivePluginData(connection, minRole));
 
     activeConnections.forEach(connection => {
       connection.send(type, data, id);
     });
   }
 
-  private canReceivePluginData(connection: WSConnection): boolean {
+  private canReceivePluginData(connection: WSConnection, minRole: UserRole = UserRole.OPERATOR): boolean {
     if (!connection.isHandshakeCompleted()) return false;
-    if (connection.hasCurrentMinRole(UserRole.OPERATOR)) return true;
+    if (connection.hasCurrentMinRole(minRole)) return true;
 
     const reason = connection.takeAuthInvalidationReason();
     if (reason) {
@@ -2903,7 +2915,13 @@ export class WSServer extends WSMessageHandler {
 
       // 更新连接的认证状态
       const wasAuthenticated = connection.isAuthenticated();
-      connection.setAuthenticated(perms.role, perms.operatorIds, label, decoded.tokenId);
+      connection.setAuthenticated(
+        perms.role,
+        perms.operatorIds,
+        label,
+        decoded.tokenId,
+        decoded.exp * 1000,
+      );
 
       connection.send(WSMessageType.AUTH_RESULT, {
         success: true,
