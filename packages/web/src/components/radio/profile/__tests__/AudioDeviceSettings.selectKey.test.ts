@@ -85,7 +85,7 @@ describe('AudioDeviceSettings select keys', () => {
 
     expect(options).toEqual([
       expect.objectContaining({
-        key: 'input::Built-in Mic',
+        key: 'input::input-1',
         deviceName: 'Built-in Mic',
         isMissing: false,
       }),
@@ -255,9 +255,25 @@ describe('AudioDeviceSettings select keys', () => {
 
     expect(options).toHaveLength(1);
     expect(options[0]).toMatchObject({
-      key: 'input::USB Audio CODEC',
+      key: 'input::input-1',
       deviceName: 'USB Audio CODEC',
       isMissing: false,
     });
+  });
+
+  it('keeps identical USB codec names selectable via distinct hardware identity keys', () => {
+    const options = buildAudioDeviceSelectOptions(
+      'input',
+      [
+        { ...builtInInput, id: 'input-3', name: 'USB Audio CODEC', hardwareId: 'usb:1-1' },
+        { ...builtInInput, id: 'input-5', name: 'USB Audio CODEC', hardwareId: 'usb:1-2' },
+      ],
+      'USB Audio CODEC',
+    );
+
+    expect(options.map((option) => option.key)).toEqual([
+      'input::usb:1-1',
+      'input::usb:1-2',
+    ]);
   });
 });
