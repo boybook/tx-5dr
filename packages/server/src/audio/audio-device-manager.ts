@@ -691,8 +691,16 @@ export class AudioDeviceManager {
           && registered?.name
           && rawDevice.name === registered.name,
         );
+        // If the live listing positively identifies the cached id as a *different*
+        // radio (conflicting hardwareId), never fall through to the name-only raw
+        // check — that id now belongs to another physical device, and same-name
+        // USB codecs make the name check useless.
+        const liveIdConflict = Boolean(
+          liveByCachedId?.hardwareId && liveByCachedId.hardwareId !== hardwareId,
+        );
         if (
           rawDevice
+          && !liveIdConflict
           && rawNameMatches
           && looksLikeUsbAudioDeviceName(rawDevice.name)
           && (registeredOtherDirection?.isActiveByTx5dr || registeredSameDirection?.isActiveByTx5dr)
@@ -732,10 +740,8 @@ export class AudioDeviceManager {
           const candidateInUse = candidateEntry?.isActiveByTx5dr === true
             || candidateEntry?.availability === 'active';
           const candidateClaimedByProfile = ConfigManager.getInstance().getProfiles().some((profile) => {
-            const profileHardwareId = direction === 'input'
-              ? profile.audio?.inputHardwareId
-              : profile.audio?.outputHardwareId;
-            return Boolean(profileHardwareId && profileHardwareId === uniqueByName.hardwareId);
+            const claimedHardwareIds = [profile.audio?.inputHardwareId, profile.audio?.outputHardwareId];
+            return claimedHardwareIds.some((id) => id && id === uniqueByName.hardwareId);
           });
           if (actualDeviceId !== null && (candidateInUse || candidateClaimedByProfile)) {
             logger.warn('Skipping unique same-name fallback: candidate appears to be a different radio', {

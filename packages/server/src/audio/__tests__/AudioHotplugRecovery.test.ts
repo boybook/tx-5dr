@@ -170,6 +170,8 @@ describe('audio hotplug recovery', () => {
     mockConfigManager.getAudioConfig.mockReset();
     mockConfigManager.getOpenWebRXStations.mockClear();
     mockConfigManager.getRadioConfig.mockClear();
+    mockConfigManager.getProfiles.mockReset();
+    mockConfigManager.getProfiles.mockReturnValue([]);
     mockConfigManager.getOpenWebRXStations.mockReturnValue([]);
     mockConfigManager.getRadioConfig.mockReturnValue({ type: 'serial' });
     delete process.env.TX5DR_RUNTIME_FLAVOR;
@@ -1087,6 +1089,44 @@ describe('audio hotplug recovery', () => {
     mockConfigManager.getAudioConfig.mockReturnValue({
       outputDeviceName: 'USB Audio CODEC',
       outputDeviceId: 'output-3',
+      outputHardwareId: 'usb:1-1',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    const streamManager = new AudioStreamManager();
+    await expect(streamManager.startOutput()).rejects.toMatchObject({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+    });
+    expect(mockState.openCalls).toHaveLength(0);
+  });
+
+  it('rejects the raw registry-cache path when the cached id is a different same-name radio', async () => {
+    // 双电台同名：input 已开在 usb:1-1（缓存数字 id 5），但该序号在重新枚举后
+    // 被另一台同名 CODEC（usb:1-2）占用——raw 名称检查无法区分，必须按 hardwareId 冲突拒绝
+    mockUsbIdentities([
+      makeUsbIdentity({ hardwareId: 'usb:1-2', alsaCard: 0 }),
+    ]);
+    const manager = AudioDeviceManager.getInstance();
+    manager.markDeviceActive(
+      'input',
+      'USB Audio CODEC',
+      'input-5',
+      48000,
+      1,
+      'usb:1-1',
+    );
+    // 同时阻止 unique-name fallback 接受这台候选（另一 profile 认领 usb:1-2）
+    mockConfigManager.getProfiles.mockReturnValue([
+      { id: 'profile-b', name: 'IC-9700', audio: { outputHardwareId: 'usb:1-2' } } as never,
+    ]);
+
+    mockState.devices = [
+      { id: 5, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+    ];
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      outputDeviceName: 'USB Audio CODEC',
+      outputDeviceId: 'output-9',
       outputHardwareId: 'usb:1-1',
       sampleRate: 48000,
       bufferSize: 1024,
