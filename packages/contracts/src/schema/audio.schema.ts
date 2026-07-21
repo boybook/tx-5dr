@@ -86,6 +86,16 @@ export const AudioDeviceSchema = z.object({
   routeState: AudioDeviceRouteStateSchema.optional(),
   failureReason: z.string().min(1).optional(),
   capabilities: AudioDeviceCapabilitiesSchema.optional(),
+  /** Human-readable secondary label (radio identity · VID:PID · USB path). */
+  detail: z.string().optional(),
+  /** Stable hardware identity when available (e.g. usb:1-7.2.4). */
+  hardwareId: z.string().optional(),
+  vendorId: z.string().optional(),
+  productId: z.string().optional(),
+  serialNumber: z.string().optional(),
+  usbPath: z.string().optional(),
+  alsaCard: z.number().int().nonnegative().optional(),
+  alsaCardId: z.string().optional(),
 });
 
 export const AudioDeviceResolutionStatusSchema = z.enum([
@@ -98,6 +108,8 @@ export const AudioDeviceResolutionStatusSchema = z.enum([
 export const AudioDeviceResolutionSchema = z.object({
   configuredDeviceName: z.string().nullable(),
   configuredRouteKey: z.string().nullable().optional(),
+  configuredDeviceId: z.string().nullable().optional(),
+  configuredHardwareId: z.string().nullable().optional(),
   configuredDevice: AudioDeviceSchema.nullable(),
   effectiveDevice: AudioDeviceSchema.nullable(),
   status: AudioDeviceResolutionStatusSchema,
@@ -123,9 +135,15 @@ export const AudioDevicesResponseSchema = z.object({
 // 音频设备设置请求
 export const AudioDeviceSettingsSchema = z.object({
   inputDeviceName: z.string().optional(),  // 使用设备名称而非ID
-  outputDeviceName: z.string().optional(), // 使用设备名称而非ID  
+  outputDeviceName: z.string().optional(), // 使用设备名称而非ID
   inputRouteKey: z.string().min(1).nullable().optional(),
   outputRouteKey: z.string().min(1).nullable().optional(),
+  /** Runtime device id (e.g. input-130). Preferred over name when unique. */
+  inputDeviceId: z.string().optional(),
+  outputDeviceId: z.string().optional(),
+  /** Stable hardware id when available (e.g. usb:1-7.2.4). Preferred over runtime id. */
+  inputHardwareId: z.string().optional(),
+  outputHardwareId: z.string().optional(),
   inputSampleRate: z.number().optional(),
   outputSampleRate: z.number().optional(),
   inputBufferSize: z.number().optional(),

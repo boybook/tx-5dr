@@ -17,6 +17,15 @@ import {
   type AndroidAudioDeviceDescriptor,
   type AndroidAudioDirection,
 } from './android-audio-devices.js';
+import {
+  assignBusyIdentitiesToActiveDevices,
+  attachLinuxUsbAudioIdentities,
+  buildSupplementalUsbAudioDevices,
+  dedupeAudioDevicesByHardwareId,
+  discoverLinuxUsbAudioIdentities,
+  identityToFields,
+  looksLikeUsbAudioDeviceName,
+} from './linux-usb-audio-identity.js';
 
 const logger = createLogger('AudioDeviceManager');
 type RadioType = 'none' | 'network' | 'serial' | 'icom-wlan' | 'tci';
@@ -34,6 +43,7 @@ type StreamDeviceResolution = {
   actualDeviceId: number;
   persistedDeviceId: string;
   deviceName: string;
+  hardwareId?: string;
 };
 
 const RTAUDIO_BUFFER_SIZE_OPTIONS = [128, 256, 512, 768, 1024, 2048, 4096];
@@ -87,8 +97,8 @@ export class AudioDeviceManager {
     this.registryInitialized = true;
   }
 
-  private getDeviceKey(direction: AudioDirection, name: string): string {
-    return `${direction}:${name.trim().toLocaleLowerCase()}`;
+  private getDeviceKey(direction: AudioDirection, deviceId: string): string {
+    return `${direction}:${deviceId}`;
   }
 
   private toPublicDevice(device: RegisteredAudioDevice): AudioDevice {
@@ -101,9 +111,19 @@ export class AudioDeviceManager {
 
   private parseNumericDeviceId(deviceId: string | undefined): number | null {
     if (!deviceId) return null;
+    if (deviceId.includes('usb:')) return null;
+    if (deviceId.includes('__held')) return null;
     const normalized = deviceId.replace(/^(input|output)-/, '');
+    if (!/^\d+$/.test(normalized)) return null;
     const parsed = Number.parseInt(normalized, 10);
     return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private extractHardwareId(deviceId?: string, hardwareId?: string): string | undefined {
+    if (hardwareId) return hardwareId;
+    if (!deviceId) return undefined;
+    const match = deviceId.match(/usb:[^/#]+/);
+    return match?.[0];
   }
 
   private fallbackDevice(direction: AudioDirection): AudioDevice {
@@ -147,32 +167,107 @@ export class AudioDeviceManager {
       devices.push(publicDevice);
     }
 
-    if (devices.length === 0) {
-      devices.push(this.fallbackDevice(direction));
+    const identities = discoverLinuxUsbAudioIdentities();
+    // Re-label TX5DR-owned busy cards (RtAudio hides them while open).
+    const reconciled = assignBusyIdentitiesToActiveDevices(devices, direction, identities);
+    for (let index = 0; index < devices.length; index++) {
+      const enriched = reconciled[index];
+      if (!enriched) continue;
+      devices[index] = { ...devices[index], ...enriched };
+      const registered = this.deviceRegistry[direction].get(this.getDeviceKey(direction, devices[index].id));
+      if (registered && enriched.hardwareId) {
+        Object.assign(registered, {
+          hardwareId: enriched.hardwareId,
+          detail: enriched.detail,
+          vendorId: enriched.vendorId,
+          productId: enriched.productId,
+          serialNumber: enriched.serialNumber,
+          usbPath: enriched.usbPath,
+          alsaCard: enriched.alsaCard,
+          alsaCardId: enriched.alsaCardId,
+        });
+      }
+    }
+
+    const existingHardwareIds = new Set(
+      devices.map((device) => device.hardwareId).filter((id): id is string => Boolean(id)),
+    );
+    devices.push(...buildSupplementalUsbAudioDevices(direction, existingHardwareIds, identities));
+
+    const deduped = dedupeAudioDevicesByHardwareId(devices);
+
+    if (deduped.length === 0) {
+      deduped.push(this.fallbackDevice(direction));
     }
 
     if (direction === 'input') {
       if (this.shouldShowIcomWlanDevice()) {
-        devices.unshift(this.createIcomWlanDevice('input'));
+        deduped.unshift(this.createIcomWlanDevice('input'));
       }
       if (this.shouldShowTciDevice()) {
-        devices.unshift(this.createTciDevice('input'));
+        deduped.unshift(this.createTciDevice('input'));
       }
 
       const openwebrxDevices = this.getOpenWebRXVirtualDevices();
       if (openwebrxDevices.length > 0) {
-        devices.push(...openwebrxDevices);
+        deduped.push(...openwebrxDevices);
       }
     } else {
       if (this.shouldShowIcomWlanDevice()) {
-        devices.unshift(this.createIcomWlanDevice('output'));
+        deduped.unshift(this.createIcomWlanDevice('output'));
       }
       if (this.shouldShowTciDevice()) {
-        devices.unshift(this.createTciDevice('output'));
+        deduped.unshift(this.createTciDevice('output'));
       }
     }
 
-    return devices;
+    return deduped;
+  }
+
+  /**
+   * RtAudio numeric ids are unstable: opening a USB codec often makes ALSA reuse
+   * that index for an unrelated device (e.g. HDMI) or the other identical CODEC.
+   * Only treat devices as the same physical endpoint when hardwareIds match.
+   * Non-Linux platforms never attach hardwareId, so fall back to name equality
+   * there to avoid permanently recreating ghost registry entries on every merge.
+   */
+  private isCompatibleLiveDevice(
+    existing: RegisteredAudioDevice,
+    liveDevice: AudioDevice,
+  ): boolean {
+    if (existing.hardwareId && liveDevice.hardwareId) {
+      return existing.hardwareId === liveDevice.hardwareId;
+    }
+    // Same product name (ICOM "USB Audio CODEC") must not imply same radio on Linux.
+    if (
+      process.platform === 'linux'
+      && (
+        looksLikeUsbAudioDeviceName(existing.name)
+        || looksLikeUsbAudioDeviceName(liveDevice.name)
+      )
+    ) {
+      return false;
+    }
+    return existing.name === liveDevice.name;
+  }
+
+  private relocateActiveDevice(
+    direction: AudioDirection,
+    existing: RegisteredAudioDevice,
+  ): void {
+    const stableId = existing.hardwareId
+      ? `${direction}-${existing.hardwareId}`
+      : `${existing.id}__held`;
+    if (stableId === existing.id) {
+      return;
+    }
+    this.deviceRegistry[direction].delete(this.getDeviceKey(direction, existing.id));
+    this.deviceRegistry[direction].set(this.getDeviceKey(direction, stableId), {
+      ...existing,
+      id: stableId,
+      availability: 'active',
+      isActiveByTx5dr: true,
+    });
   }
 
   private mergeLiveDevices(inputDevices: AudioDevice[], outputDevices: AudioDevice[], observedAt: number): void {
@@ -190,12 +285,58 @@ export class AudioDeviceManager {
       }
 
       for (const liveDevice of liveDevices[direction]) {
-        const key = this.getDeviceKey(direction, liveDevice.name);
-        const existing = this.deviceRegistry[direction].get(key);
+        const key = this.getDeviceKey(direction, liveDevice.id);
+        let existing = this.deviceRegistry[direction].get(key);
+        if (existing && !this.isCompatibleLiveDevice(existing, liveDevice)) {
+          if (existing.isActiveByTx5dr) {
+            this.relocateActiveDevice(direction, existing);
+          } else {
+            this.deviceRegistry[direction].delete(key);
+          }
+          existing = undefined;
+        }
+        if (!existing && liveDevice.hardwareId) {
+          const byHardware = this.findRegisteredDeviceByHardwareId(direction, liveDevice.hardwareId);
+          if (byHardware && this.isCompatibleLiveDevice(byHardware, liveDevice)) {
+            existing = byHardware;
+          }
+        }
+        // Non-USB devices can be renumbered by the OS (e.g. input-3 -> input-7)
+        // without any stable hardwareId. Migrate a unique same-name registered
+        // entry so the old key is dropped instead of lingering as a cached ghost.
+        // USB / same-name CODEC devices are excluded via isCompatibleLiveDevice.
+        if (!existing && !liveDevice.hardwareId) {
+          existing = this.findMigratableRegisteredDeviceByName(direction, liveDevice) ?? undefined;
+        }
         const isActive = existing?.isActiveByTx5dr === true;
+        // Drop stale duplicates if an older registry entry moved IDs.
+        if (existing && existing.id !== liveDevice.id) {
+          this.deviceRegistry[direction].delete(this.getDeviceKey(direction, existing.id));
+        }
+        const keepUsbIdentity = Boolean(
+          liveDevice.hardwareId
+          || (isActive && existing?.hardwareId && looksLikeUsbAudioDeviceName(liveDevice.name)),
+        );
         this.deviceRegistry[direction].set(key, {
-          ...existing,
-          ...liveDevice,
+          id: liveDevice.id,
+          name: liveDevice.name,
+          isDefault: liveDevice.isDefault,
+          channels: liveDevice.channels,
+          sampleRate: liveDevice.sampleRate,
+          ...(liveDevice.sampleRates ? { sampleRates: liveDevice.sampleRates } : {}),
+          type: liveDevice.type,
+          ...(keepUsbIdentity
+            ? {
+                hardwareId: liveDevice.hardwareId ?? existing?.hardwareId,
+                detail: liveDevice.detail ?? existing?.detail,
+                vendorId: liveDevice.vendorId ?? existing?.vendorId,
+                productId: liveDevice.productId ?? existing?.productId,
+                serialNumber: liveDevice.serialNumber ?? existing?.serialNumber,
+                usbPath: liveDevice.usbPath ?? existing?.usbPath,
+                alsaCard: liveDevice.alsaCard ?? existing?.alsaCard,
+                alsaCardId: liveDevice.alsaCardId ?? existing?.alsaCardId,
+              }
+            : {}),
           availability: isActive ? 'active' : 'available',
           isActiveByTx5dr: isActive,
           lastSeenAt: observedAt,
@@ -209,12 +350,18 @@ export class AudioDeviceManager {
     inputDevices: AudioDevice[];
     outputDevices: AudioDevice[];
   } {
-    const inputDevices = rawDevices
-      .filter((device: any) => device.inputChannels && device.inputChannels > 0)
-      .map((device: any) => this.convertAudifyDevice(device, 'input', Boolean(device.isDefaultInput)));
-    const outputDevices = rawDevices
-      .filter((device: any) => device.outputChannels && device.outputChannels > 0)
-      .map((device: any) => this.convertAudifyDevice(device, 'output', Boolean(device.isDefaultOutput)));
+    const inputDevices = attachLinuxUsbAudioIdentities(
+      rawDevices
+        .filter((device: any) => device.inputChannels && device.inputChannels > 0)
+        .map((device: any) => this.convertAudifyDevice(device, 'input', Boolean(device.isDefaultInput))),
+      'input',
+    );
+    const outputDevices = attachLinuxUsbAudioIdentities(
+      rawDevices
+        .filter((device: any) => device.outputChannels && device.outputChannels > 0)
+        .map((device: any) => this.convertAudifyDevice(device, 'output', Boolean(device.isDefaultOutput))),
+      'output',
+    );
 
     return { inputDevices, outputDevices };
   }
@@ -260,8 +407,153 @@ export class AudioDeviceManager {
     return liveDevices;
   }
 
+  private findRegisteredDeviceById(direction: AudioDirection, deviceId: string): RegisteredAudioDevice | null {
+    return this.deviceRegistry[direction].get(this.getDeviceKey(direction, deviceId)) ?? null;
+  }
+
+  private findRegisteredDeviceByHardwareId(
+    direction: AudioDirection,
+    hardwareId: string | undefined,
+  ): RegisteredAudioDevice | null {
+    if (!hardwareId) return null;
+    for (const device of this.deviceRegistry[direction].values()) {
+      if (device.hardwareId === hardwareId) {
+        return device;
+      }
+    }
+    return null;
+  }
+
+  private availabilityRank(device: RegisteredAudioDevice): number {
+    if (device.isActiveByTx5dr || device.availability === 'active') return 3;
+    if (device.availability === 'available') return 2;
+    if (device.availability === 'cached') return 1;
+    return 0;
+  }
+
   private findRegisteredDeviceByName(direction: AudioDirection, deviceName: string): RegisteredAudioDevice | null {
-    return this.deviceRegistry[direction].get(this.getDeviceKey(direction, deviceName)) ?? null;
+    let best: RegisteredAudioDevice | null = null;
+    for (const device of this.deviceRegistry[direction].values()) {
+      if (device.name !== deviceName) continue;
+      if (!best) {
+        best = device;
+        continue;
+      }
+      const rankDiff = this.availabilityRank(device) - this.availabilityRank(best);
+      if (rankDiff > 0 || (rankDiff === 0 && (device.lastSeenAt ?? 0) > (best.lastSeenAt ?? 0))) {
+        best = device;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Find a single registered device that shares the live device's name and is a
+   * safe migration target (same non-USB endpoint that was renumbered). Returns
+   * null when the match is ambiguous (more than one candidate) or when the name
+   * belongs to a USB CODEC where identical names must not imply the same radio.
+   */
+  private findMigratableRegisteredDeviceByName(
+    direction: AudioDirection,
+    liveDevice: AudioDevice,
+  ): RegisteredAudioDevice | null {
+    const matches: RegisteredAudioDevice[] = [];
+    for (const device of this.deviceRegistry[direction].values()) {
+      if (device.name !== liveDevice.name) continue;
+      if (!this.isCompatibleLiveDevice(device, liveDevice)) continue;
+      matches.push(device);
+    }
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  private findDevicesByName(devices: AudioDevice[], deviceName: string): AudioDevice[] {
+    return devices.filter((device) => device.name === deviceName);
+  }
+
+  /**
+   * RtAudio numeric ids are unstable: ALSA can reassign an index to a different
+   * but identical USB CODEC. Reusing a cached numeric/string id for such devices
+   * is only safe when the stable hardware identity is verifiable and matches the
+   * request. Non-USB devices without a hardwareId are treated as unambiguous.
+   */
+  private canReuseLiveDeviceId(liveDevice: AudioDevice, requestedHardwareId?: string): boolean {
+    const isAmbiguousUsb = looksLikeUsbAudioDeviceName(liveDevice.name) || Boolean(liveDevice.hardwareId);
+    if (!isAmbiguousUsb) {
+      return true;
+    }
+    return Boolean(requestedHardwareId) && liveDevice.hardwareId === requestedHardwareId;
+  }
+
+  /**
+   * Choose a live device from same-named candidates. A single match is always
+   * safe. When multiple candidates share a name (identical USB CODECs) we only
+   * accept an entry whose stable identity is verifiable; a non-USB group falls
+   * back to first-match for legacy name-only profiles.
+   */
+  private pickLiveDeviceByName(
+    namedDevices: AudioDevice[],
+    requestedDeviceId?: string,
+    requestedHardwareId?: string,
+  ): AudioDevice | undefined {
+    if (namedDevices.length <= 1) {
+      return namedDevices[0];
+    }
+    if (requestedHardwareId) {
+      const byHardware = namedDevices.find((device) => device.hardwareId === requestedHardwareId);
+      if (byHardware) return byHardware;
+    }
+    const byId = requestedDeviceId
+      ? namedDevices.find((device) => device.id === requestedDeviceId)
+      : undefined;
+    if (byId && this.canReuseLiveDeviceId(byId, requestedHardwareId)) {
+      return byId;
+    }
+    // Ambiguous identical USB codecs cannot be told apart without a hardwareId.
+    const isAmbiguousUsb = namedDevices.some(
+      (device) => looksLikeUsbAudioDeviceName(device.name) || device.hardwareId,
+    );
+    return isAmbiguousUsb ? undefined : namedDevices[0];
+  }
+
+  private findConfiguredDevice(
+    devices: AudioDevice[],
+    params: {
+      configuredDeviceId?: string | null;
+      configuredHardwareId?: string | null;
+      configuredDeviceName?: string | null;
+    },
+  ): AudioDevice | null {
+    const { configuredDeviceId, configuredHardwareId, configuredDeviceName } = params;
+
+    if (configuredHardwareId) {
+      const byHardwareId = devices.find((device) => device.hardwareId === configuredHardwareId);
+      if (byHardwareId) return byHardwareId;
+    }
+
+    if (configuredDeviceId) {
+      const byId = devices.find((device) => device.id === configuredDeviceId);
+      if (byId && (!configuredDeviceName || byId.name === configuredDeviceName)) {
+        return byId;
+      }
+    }
+
+    if (!configuredDeviceName) {
+      return null;
+    }
+
+    const byName = this.findDevicesByName(devices, configuredDeviceName);
+    if (byName.length === 1) {
+      return byName[0];
+    }
+    if (byName.length > 1) {
+      // Ambiguous identical USB codecs cannot be told apart by name alone —
+      // align with pickLiveDeviceByName so UI resolution and stream open agree.
+      const isAmbiguousUsb = byName.some(
+        (device) => looksLikeUsbAudioDeviceName(device.name) || device.hardwareId,
+      );
+      return isAmbiguousUsb ? null : byName[0];
+    }
+    return null;
   }
 
   private findDefaultDevice(devices: AudioDevice[]): AudioDevice | null {
@@ -278,6 +570,7 @@ export class AudioDeviceManager {
     deviceName: string | undefined,
     rtAudio: RtAudioInstance,
     requestedDeviceId?: string,
+    requestedHardwareId?: string,
     configuredRouteKey?: string,
   ): Promise<StreamDeviceResolution> {
     if (configuredRouteKey || isAndroidAudioDeviceId(requestedDeviceId) || deviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName('input', deviceName))) {
@@ -289,13 +582,14 @@ export class AudioDeviceManager {
       );
       return { actualDeviceId: -1, persistedDeviceId: device.id, deviceName: device.name };
     }
-    return this.resolveDeviceForStream('input', deviceName, rtAudio, requestedDeviceId);
+    return this.resolveDeviceForStream('input', deviceName, rtAudio, requestedDeviceId, requestedHardwareId);
   }
 
   async resolveOutputDeviceForStream(
     deviceName: string | undefined,
     rtAudio: RtAudioInstance,
     requestedDeviceId?: string,
+    requestedHardwareId?: string,
     configuredRouteKey?: string,
   ): Promise<StreamDeviceResolution> {
     if (configuredRouteKey || isAndroidAudioDeviceId(requestedDeviceId) || deviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName('output', deviceName))) {
@@ -307,7 +601,7 @@ export class AudioDeviceManager {
       );
       return { actualDeviceId: -1, persistedDeviceId: device.id, deviceName: device.name };
     }
-    return this.resolveDeviceForStream('output', deviceName, rtAudio, requestedDeviceId);
+    return this.resolveDeviceForStream('output', deviceName, rtAudio, requestedDeviceId, requestedHardwareId);
   }
 
   resolveAndroidDeviceForStream(
@@ -337,24 +631,194 @@ export class AudioDeviceManager {
     deviceName: string | undefined,
     rtAudio: RtAudioInstance,
     requestedDeviceId?: string,
+    requestedHardwareId?: string,
   ): Promise<StreamDeviceResolution> {
     const liveDevices = await this.observeRtAudioInstance(rtAudio);
     const directionalLiveDevices = direction === 'input' ? liveDevices.inputDevices : liveDevices.outputDevices;
+    const hardwareId = this.extractHardwareId(requestedDeviceId, requestedHardwareId);
     const requestedNumericId = this.parseNumericDeviceId(requestedDeviceId);
+
+    if (hardwareId) {
+      const byHardwareId = directionalLiveDevices.find((device) => device.hardwareId === hardwareId);
+      if (byHardwareId) {
+        const actualDeviceId = this.parseNumericDeviceId(byHardwareId.id);
+        if (actualDeviceId !== null) {
+          return {
+            actualDeviceId,
+            persistedDeviceId: byHardwareId.id,
+            deviceName: byHardwareId.name,
+            hardwareId,
+          };
+        }
+      }
+
+      // Opposite direction may already own this USB radio (e.g. capture open on
+      // IC-7610 while playback starts). Live listing often drops or mis-orders the
+      // busy card, so reuse the numeric RtAudio id we opened / registered earlier —
+      // but only after verifying the live endpoint still matches this hardwareId.
+      const registeredSameDirection = this.findRegisteredDeviceByHardwareId(direction, hardwareId);
+      const registeredOtherDirection = this.findRegisteredDeviceByHardwareId(
+        direction === 'input' ? 'output' : 'input',
+        hardwareId,
+      );
+      const registered = registeredSameDirection ?? registeredOtherDirection;
+      const cachedNumericId = this.parseNumericDeviceId(
+        registered?.lastRtAudioId ?? registered?.id,
+      );
+      if (cachedNumericId !== null) {
+        const liveByCachedId = directionalLiveDevices.find(
+          (device) => this.parseNumericDeviceId(device.id) === cachedNumericId,
+        );
+        if (
+          liveByCachedId
+          && looksLikeUsbAudioDeviceName(liveByCachedId.name)
+          && (!liveByCachedId.hardwareId || liveByCachedId.hardwareId === hardwareId)
+        ) {
+          return {
+            actualDeviceId: cachedNumericId,
+            persistedDeviceId: liveByCachedId.id.startsWith(`${direction}-`)
+              ? liveByCachedId.id
+              : `${direction}-${cachedNumericId}`,
+            deviceName: liveByCachedId.name || registered?.name || deviceName || hardwareId,
+            hardwareId,
+          };
+        }
+
+        const rawDevices = rtAudio.getDevices();
+        const rawDevice = rawDevices.find((device: { id?: number; name?: string }) => device.id === cachedNumericId);
+        const rawNameMatches = Boolean(
+          rawDevice?.name
+          && registered?.name
+          && rawDevice.name === registered.name,
+        );
+        // If the live listing positively identifies the cached id as a *different*
+        // radio (conflicting hardwareId), never fall through to the name-only raw
+        // check — that id now belongs to another physical device, and same-name
+        // USB codecs make the name check useless.
+        const liveIdConflict = Boolean(
+          liveByCachedId?.hardwareId && liveByCachedId.hardwareId !== hardwareId,
+        );
+        if (
+          rawDevice
+          && !liveIdConflict
+          && rawNameMatches
+          && looksLikeUsbAudioDeviceName(rawDevice.name)
+          && (registeredOtherDirection?.isActiveByTx5dr || registeredSameDirection?.isActiveByTx5dr)
+        ) {
+          logger.info('Resolving USB audio via registry cache for busy hardwareId', {
+            direction,
+            hardwareId,
+            cachedNumericId,
+            fromOtherDirection: Boolean(registeredOtherDirection?.isActiveByTx5dr),
+          });
+          return {
+            actualDeviceId: cachedNumericId,
+            persistedDeviceId: `${direction}-${cachedNumericId}`,
+            deviceName: registered?.name || deviceName || hardwareId,
+            hardwareId,
+          };
+        }
+      }
+
+      // USB port path can change after replug/hub move. If exactly one live
+      // device still shares the configured name, fall back so single-radio
+      // setups self-heal instead of retrying forever.
+      if (deviceName) {
+        const namedDevices = this.findDevicesByName(directionalLiveDevices, deviceName);
+        const uniqueByName = namedDevices.length === 1 ? namedDevices[0] : undefined;
+        if (uniqueByName) {
+          const actualDeviceId = this.parseNumericDeviceId(uniqueByName.id);
+          // Dual-radio guards: never silently open (and transmit on) the *other* radio.
+          // Reject the fallback when the unique same-name candidate is either
+          // (a) currently in use by TX5DR itself (active registry entry), or
+          // (b) claimed by another profile's persisted hardwareId — both indicate
+          // the configured radio was unplugged while a different radio stayed.
+          const otherDirection = direction === 'input' ? 'output' : 'input';
+          const candidateEntry =
+            this.findRegisteredDeviceByHardwareId(direction, uniqueByName.hardwareId)
+            ?? this.findRegisteredDeviceByHardwareId(otherDirection, uniqueByName.hardwareId);
+          const candidateInUse = candidateEntry?.isActiveByTx5dr === true
+            || candidateEntry?.availability === 'active';
+          const candidateClaimedByProfile = ConfigManager.getInstance().getProfiles().some((profile) => {
+            const claimedHardwareIds = [profile.audio?.inputHardwareId, profile.audio?.outputHardwareId];
+            return claimedHardwareIds.some((id) => id && id === uniqueByName.hardwareId);
+          });
+          if (actualDeviceId !== null && (candidateInUse || candidateClaimedByProfile)) {
+            logger.warn('Skipping unique same-name fallback: candidate appears to be a different radio', {
+              direction,
+              requestedHardwareId: hardwareId,
+              deviceName,
+              candidateId: uniqueByName.id,
+              candidateHardwareId: uniqueByName.hardwareId,
+              candidateInUse,
+              candidateClaimedByProfile,
+            });
+          } else if (actualDeviceId !== null) {
+            logger.info('Configured hardwareId not present; falling back to unique same-name device', {
+              direction,
+              requestedHardwareId: hardwareId,
+              deviceName,
+              resolvedId: uniqueByName.id,
+              resolvedHardwareId: uniqueByName.hardwareId,
+            });
+            return {
+              actualDeviceId,
+              persistedDeviceId: uniqueByName.id,
+              deviceName: uniqueByName.name,
+              hardwareId: uniqueByName.hardwareId,
+            };
+          }
+        }
+      }
+
+      const identities = discoverLinuxUsbAudioIdentities();
+      const identity = identities.find((item) => item.hardwareId === hardwareId);
+      const label = identity?.relatedRadioLabel || identity?.detail || hardwareId;
+      throw this.createUnavailableConfiguredDeviceError(
+        direction,
+        deviceName || label,
+        identity?.pcm[direction].busy ? 'cached' : undefined,
+      );
+    }
 
     if (requestedNumericId !== null) {
       const requestedLiveDevice = directionalLiveDevices.find((device) => this.parseNumericDeviceId(device.id) === requestedNumericId);
-      if (requestedLiveDevice && (!deviceName || requestedLiveDevice.name === deviceName)) {
+      if (
+        requestedLiveDevice
+        && (!deviceName || requestedLiveDevice.name === deviceName)
+        && this.canReuseLiveDeviceId(requestedLiveDevice, requestedHardwareId)
+      ) {
         return {
           actualDeviceId: requestedNumericId,
           persistedDeviceId: requestedLiveDevice.id,
           deviceName: requestedLiveDevice.name,
+          hardwareId: requestedLiveDevice.hardwareId,
         };
       }
     }
 
+    if (requestedDeviceId) {
+      const byExactId = directionalLiveDevices.find((device) => device.id === requestedDeviceId);
+      if (
+        byExactId
+        && (!deviceName || byExactId.name === deviceName)
+        && this.canReuseLiveDeviceId(byExactId, requestedHardwareId)
+      ) {
+        const actualDeviceId = this.parseNumericDeviceId(byExactId.id);
+        if (actualDeviceId !== null) {
+          return {
+            actualDeviceId,
+            persistedDeviceId: byExactId.id,
+            deviceName: byExactId.name,
+            hardwareId: byExactId.hardwareId,
+          };
+        }
+      }
+    }
+
     if (deviceName) {
-      const liveDevice = directionalLiveDevices.find((device) => device.name === deviceName);
+      const namedDevices = this.findDevicesByName(directionalLiveDevices, deviceName);
+      const liveDevice = this.pickLiveDeviceByName(namedDevices, requestedDeviceId, requestedHardwareId);
       if (liveDevice) {
         const actualDeviceId = this.parseNumericDeviceId(liveDevice.id);
         if (actualDeviceId !== null) {
@@ -362,11 +826,14 @@ export class AudioDeviceManager {
             actualDeviceId,
             persistedDeviceId: liveDevice.id,
             deviceName: liveDevice.name,
+            hardwareId: liveDevice.hardwareId,
           };
         }
       }
 
-      const registeredDevice = this.findRegisteredDeviceByName(direction, deviceName);
+      const registeredDevice = this.findRegisteredDeviceByHardwareId(direction, hardwareId)
+        ?? (requestedDeviceId ? this.findRegisteredDeviceById(direction, requestedDeviceId) : null)
+        ?? this.findRegisteredDeviceByName(direction, deviceName);
       throw this.createUnavailableConfiguredDeviceError(direction, deviceName, registeredDevice?.availability);
     }
 
@@ -383,16 +850,33 @@ export class AudioDeviceManager {
       actualDeviceId: defaultDeviceId,
       persistedDeviceId: defaultDevice?.id ?? `${direction}-${defaultDeviceId}`,
       deviceName: defaultDevice?.name ?? (direction === 'input' ? 'Default audio input device' : 'Default audio output device'),
+      hardwareId: defaultDevice?.hardwareId,
     };
   }
 
-  markDeviceActive(direction: AudioDirection, deviceName: string | undefined, deviceId: string | undefined, sampleRate: number, channels: number): void {
+  markDeviceActive(
+    direction: AudioDirection,
+    deviceName: string | undefined,
+    deviceId: string | undefined,
+    sampleRate: number,
+    channels: number,
+    hardwareId?: string,
+  ): void {
     if (!deviceName || !deviceId) {
       return;
     }
 
-    const key = this.getDeviceKey(direction, deviceName);
-    const existing = this.deviceRegistry[direction].get(key);
+    const key = this.getDeviceKey(direction, deviceId);
+    const existing = this.deviceRegistry[direction].get(key)
+      ?? this.findRegisteredDeviceByHardwareId(direction, hardwareId)
+      ?? undefined;
+    const resolvedHardwareId = hardwareId ?? existing?.hardwareId;
+    const identityFields = resolvedHardwareId
+      ? (() => {
+          const identity = discoverLinuxUsbAudioIdentities().find((item) => item.hardwareId === resolvedHardwareId);
+          return identity ? identityToFields(identity) : (resolvedHardwareId ? { hardwareId: resolvedHardwareId } : {});
+        })()
+      : {};
     this.deviceRegistry[direction].set(key, {
       ...(existing ?? {
         id: deviceId,
@@ -410,13 +894,16 @@ export class AudioDeviceManager {
       isActiveByTx5dr: true,
       lastSeenAt: existing?.lastSeenAt ?? Date.now(),
       lastRtAudioId: deviceId,
+      ...identityFields,
     });
   }
 
-  clearActiveDevice(direction: AudioDirection, deviceName?: string | null): void {
-    const entries = deviceName
-      ? [[this.getDeviceKey(direction, deviceName), this.findRegisteredDeviceByName(direction, deviceName)] as const]
-      : Array.from(this.deviceRegistry[direction].entries());
+  clearActiveDevice(direction: AudioDirection, deviceName?: string | null, deviceId?: string | null): void {
+    const entries = deviceId
+      ? [[this.getDeviceKey(direction, deviceId), this.findRegisteredDeviceById(direction, deviceId)] as const]
+      : deviceName
+        ? Array.from(this.deviceRegistry[direction].entries()).filter(([, device]) => device.name === deviceName)
+        : Array.from(this.deviceRegistry[direction].entries());
 
     for (const [key, device] of entries) {
       if (!device?.isActiveByTx5dr) continue;
@@ -614,6 +1101,8 @@ export class AudioDeviceManager {
       input: this.resolveDeviceDirection({
         configuredDeviceName: settings.inputDeviceName ?? null,
         configuredRouteKey: settings.inputRouteKey ?? null,
+        configuredDeviceId: settings.inputDeviceId ?? null,
+        configuredHardwareId: settings.inputHardwareId ?? null,
         devices: devices.inputDevices,
         direction: 'input',
         radioType: effectiveRadioType,
@@ -621,6 +1110,8 @@ export class AudioDeviceManager {
       output: this.resolveDeviceDirection({
         configuredDeviceName: settings.outputDeviceName ?? null,
         configuredRouteKey: settings.outputRouteKey ?? null,
+        configuredDeviceId: settings.outputDeviceId ?? null,
+        configuredHardwareId: settings.outputHardwareId ?? null,
         devices: devices.outputDevices,
         direction: 'output',
         radioType: effectiveRadioType,
@@ -630,12 +1121,22 @@ export class AudioDeviceManager {
 
   private resolveDeviceDirection(params: {
     configuredDeviceName: string | null;
-    configuredRouteKey: string | null;
+    configuredRouteKey?: string | null;
+    configuredDeviceId?: string | null;
+    configuredHardwareId?: string | null;
     devices: AudioDevice[];
     direction: 'input' | 'output';
     radioType: RadioType;
   }): AudioDeviceResolution {
-    const { configuredDeviceName, configuredRouteKey, devices, direction, radioType } = params;
+    const {
+      configuredDeviceName,
+      configuredRouteKey = null,
+      configuredDeviceId = null,
+      configuredHardwareId = null,
+      devices,
+      direction,
+      radioType,
+    } = params;
     const defaultDevice = devices.find((device) => device.isDefault) ?? devices[0] ?? null;
 
     if (configuredRouteKey) {
@@ -643,6 +1144,8 @@ export class AudioDeviceManager {
       return {
         configuredDeviceName,
         configuredRouteKey,
+        configuredDeviceId,
+        configuredHardwareId,
         configuredDevice,
         effectiveDevice: configuredDevice,
         status: configuredDevice ? 'selected' : 'missing',
@@ -650,10 +1153,12 @@ export class AudioDeviceManager {
       };
     }
 
-    if (!configuredDeviceName) {
+    if (!configuredDeviceName && !configuredDeviceId && !configuredHardwareId) {
       return {
         configuredDeviceName: null,
         configuredRouteKey: null,
+        configuredDeviceId: null,
+        configuredHardwareId: null,
         configuredDevice: null,
         effectiveDevice: defaultDevice,
         status: 'default',
@@ -661,7 +1166,7 @@ export class AudioDeviceManager {
       };
     }
 
-    if (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName(direction, configuredDeviceName)) {
+    if (configuredDeviceName && isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName(direction, configuredDeviceName)) {
       const legacyDevice = isLegacyAndroidUsbDeviceName(direction, configuredDeviceName)
         ? devices.find((device) => device.kind === 'usb' && device.isDefault)
           ?? devices.find((device) => device.kind === 'usb')
@@ -670,6 +1175,8 @@ export class AudioDeviceManager {
       return {
         configuredDeviceName,
         configuredRouteKey: null,
+        configuredDeviceId,
+        configuredHardwareId,
         configuredDevice: null,
         effectiveDevice: legacyDevice,
         status: 'default',
@@ -677,11 +1184,17 @@ export class AudioDeviceManager {
       };
     }
 
-    const configuredDevice = devices.find((device) => device.name === configuredDeviceName) ?? null;
+    const configuredDevice = this.findConfiguredDevice(devices, {
+      configuredDeviceId,
+      configuredHardwareId,
+      configuredDeviceName,
+    });
     if (configuredDevice) {
       return {
-        configuredDeviceName,
+        configuredDeviceName: configuredDeviceName ?? configuredDevice.name,
         configuredRouteKey: null,
+        configuredDeviceId: configuredDeviceId ?? configuredDevice.id,
+        configuredHardwareId: configuredHardwareId ?? configuredDevice.hardwareId ?? null,
         configuredDevice,
         effectiveDevice: configuredDevice,
         status: configuredDevice.id.startsWith('openwebrx-') || configuredDevice.id.startsWith('icom-wlan-') || configuredDevice.id.startsWith('tci-')
@@ -696,6 +1209,8 @@ export class AudioDeviceManager {
       return {
         configuredDeviceName,
         configuredRouteKey: null,
+        configuredDeviceId: configuredDeviceId ?? virtualDevice.id,
+        configuredHardwareId,
         configuredDevice: virtualDevice,
         effectiveDevice: virtualDevice,
         status: 'virtual-selected',
@@ -708,6 +1223,8 @@ export class AudioDeviceManager {
       return {
         configuredDeviceName,
         configuredRouteKey: null,
+        configuredDeviceId: configuredDeviceId ?? virtualDevice.id,
+        configuredHardwareId,
         configuredDevice: virtualDevice,
         effectiveDevice: virtualDevice,
         status: 'virtual-selected',
@@ -715,10 +1232,12 @@ export class AudioDeviceManager {
       };
     }
 
-    if (configuredDeviceName.startsWith('[SDR]')) {
+    if (configuredDeviceName?.startsWith('[SDR]')) {
       return {
         configuredDeviceName,
         configuredRouteKey: null,
+        configuredDeviceId,
+        configuredHardwareId,
         configuredDevice: null,
         effectiveDevice: null,
         status: 'missing',
@@ -727,8 +1246,10 @@ export class AudioDeviceManager {
     }
 
     return {
-      configuredDeviceName,
+      configuredDeviceName: configuredDeviceName ?? null,
       configuredRouteKey: null,
+      configuredDeviceId,
+      configuredHardwareId,
       configuredDevice: null,
       effectiveDevice: null,
       status: 'missing',

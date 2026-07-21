@@ -89,7 +89,10 @@ export function buildAudioDeviceSelectOptions(
   selectedRouteKey?: string,
 ): AudioDeviceSelectOption[] {
   const options: AudioDeviceSelectOption[] = devices.map((device) => ({
-    key: makeAudioDeviceSelectKey(direction, device.routeKey ?? device.name),
+    key: makeAudioDeviceSelectKey(
+      direction,
+      device.routeKey ?? device.hardwareId ?? device.id ?? device.name,
+    ),
     deviceName: device.name,
     routeKey: device.routeKey,
     device,
@@ -158,6 +161,10 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   const [selectedOutputDeviceName, setSelectedOutputDeviceName] = useState<string>(initialConfig?.outputDeviceName || '');
   const [selectedInputRouteKey, setSelectedInputRouteKey] = useState<string>(initialConfig?.inputRouteKey || '');
   const [selectedOutputRouteKey, setSelectedOutputRouteKey] = useState<string>(initialConfig?.outputRouteKey || '');
+  const [selectedInputDeviceId, setSelectedInputDeviceId] = useState<string>(initialConfig?.inputDeviceId || '');
+  const [selectedOutputDeviceId, setSelectedOutputDeviceId] = useState<string>(initialConfig?.outputDeviceId || '');
+  const [selectedInputHardwareId, setSelectedInputHardwareId] = useState<string>(initialConfig?.inputHardwareId || '');
+  const [selectedOutputHardwareId, setSelectedOutputHardwareId] = useState<string>(initialConfig?.outputHardwareId || '');
   const [inputSampleRate, setInputSampleRate] = useState<number>(resolveAudioSettingNumber(initialConfig, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
   const [outputSampleRate, setOutputSampleRate] = useState<number>(resolveAudioSettingNumber(initialConfig, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
   const [inputBufferSize, setInputBufferSize] = useState<number>(resolveAudioSettingNumber(initialConfig, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
@@ -191,6 +198,10 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     setSelectedOutputDeviceName(initialConfig.outputDeviceName || '');
     setSelectedInputRouteKey(initialConfig.inputRouteKey || '');
     setSelectedOutputRouteKey(initialConfig.outputRouteKey || '');
+    setSelectedInputDeviceId(initialConfig.inputDeviceId || '');
+    setSelectedOutputDeviceId(initialConfig.outputDeviceId || '');
+    setSelectedInputHardwareId(initialConfig.inputHardwareId || '');
+    setSelectedOutputHardwareId(initialConfig.outputHardwareId || '');
     setInputSampleRate(resolveAudioSettingNumber(initialConfig, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
     setOutputSampleRate(resolveAudioSettingNumber(initialConfig, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
     setInputBufferSize(resolveAudioSettingNumber(initialConfig, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
@@ -205,6 +216,10 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     outputDeviceName: resolveSelectedDeviceName('output') || undefined,
     inputRouteKey: resolveSelectedRouteKey('input') || null,
     outputRouteKey: resolveSelectedRouteKey('output') || null,
+    inputDeviceId: selectedInputDeviceId || undefined,
+    outputDeviceId: selectedOutputDeviceId || undefined,
+    inputHardwareId: selectedInputHardwareId || undefined,
+    outputHardwareId: selectedOutputHardwareId || undefined,
     inputSampleRate,
     outputSampleRate,
     inputBufferSize,
@@ -219,6 +234,10 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       resolveSelectedDeviceName('output') !== (currentSettings.outputDeviceName || '') ||
       resolveSelectedRouteKey('input') !== (currentSettings.inputRouteKey || '') ||
       resolveSelectedRouteKey('output') !== (currentSettings.outputRouteKey || '') ||
+      selectedInputDeviceId !== (currentSettings.inputDeviceId || '') ||
+      selectedOutputDeviceId !== (currentSettings.outputDeviceId || '') ||
+      selectedInputHardwareId !== (currentSettings.inputHardwareId || '') ||
+      selectedOutputHardwareId !== (currentSettings.outputHardwareId || '') ||
       inputSampleRate !== resolveAudioSettingNumber(currentSettings, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE) ||
       outputSampleRate !== resolveAudioSettingNumber(currentSettings, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE) ||
       inputBufferSize !== resolveAudioSettingNumber(currentSettings, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE) ||
@@ -232,11 +251,11 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     hasUnsavedChanges,
     getSettings: buildSettings,
     save: handleSubmit
-  }), [selectedInputDeviceName, selectedOutputDeviceName, selectedInputRouteKey, selectedOutputRouteKey, inputDevices, outputDevices, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, currentSettings]);
+  }), [selectedInputDeviceName, selectedOutputDeviceName, selectedInputRouteKey, selectedOutputRouteKey, selectedInputDeviceId, selectedOutputDeviceId, selectedInputHardwareId, selectedOutputHardwareId, inputDevices, outputDevices, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, currentSettings]);
 
   useEffect(() => {
     onUnsavedChanges?.(hasUnsavedChanges());
-  }, [selectedInputDeviceName, selectedOutputDeviceName, selectedInputRouteKey, selectedOutputRouteKey, inputDevices, outputDevices, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, currentSettings, onUnsavedChanges]);
+  }, [selectedInputDeviceName, selectedOutputDeviceName, selectedInputRouteKey, selectedOutputRouteKey, selectedInputDeviceId, selectedOutputDeviceId, selectedInputHardwareId, selectedOutputHardwareId, inputDevices, outputDevices, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, currentSettings, onUnsavedChanges]);
 
   useEffect(() => {
     if (!isControlled || loading) return;
@@ -251,7 +270,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       return;
     }
     onChange?.(settings);
-  }, [selectedInputDeviceName, selectedOutputDeviceName, selectedInputRouteKey, selectedOutputRouteKey, inputDevices, outputDevices, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, initialConfig]);
+  }, [selectedInputDeviceName, selectedOutputDeviceName, selectedInputRouteKey, selectedOutputRouteKey, selectedInputDeviceId, selectedOutputDeviceId, selectedInputHardwareId, selectedOutputHardwareId, inputDevices, outputDevices, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, initialConfig]);
 
   useEffect(() => {
     loadAudioData();
@@ -274,7 +293,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     return () => {
       active = false;
     };
-  }, [selectedInputDeviceName, selectedOutputDeviceName, selectedInputRouteKey, selectedOutputRouteKey, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, radioType, loading]);
+  }, [selectedInputDeviceName, selectedOutputDeviceName, selectedInputRouteKey, selectedOutputRouteKey, selectedInputDeviceId, selectedOutputDeviceId, selectedInputHardwareId, selectedOutputHardwareId, inputSampleRate, outputSampleRate, inputBufferSize, outputBufferSize, outputSampleFormat, outputChannelMode, radioType, loading]);
 
   const inputEffectiveDevice = getEffectiveDevice('input');
   const outputEffectiveDevice = getEffectiveDevice('output');
@@ -341,6 +360,10 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
         setSelectedOutputDeviceName(settings.outputDeviceName || '');
         setSelectedInputRouteKey(settings.inputRouteKey || '');
         setSelectedOutputRouteKey(settings.outputRouteKey || '');
+        setSelectedInputDeviceId(settings.inputDeviceId || '');
+        setSelectedOutputDeviceId(settings.outputDeviceId || '');
+        setSelectedInputHardwareId(settings.inputHardwareId || '');
+        setSelectedOutputHardwareId(settings.outputHardwareId || '');
         setInputSampleRate(resolveAudioSettingNumber(settings, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
         setOutputSampleRate(resolveAudioSettingNumber(settings, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE));
         setInputBufferSize(resolveAudioSettingNumber(settings, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE));
@@ -492,6 +515,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     const setSelectedName = isInput ? setSelectedInputDeviceName : setSelectedOutputDeviceName;
     const selectedRouteKey = isInput ? selectedInputRouteKey : selectedOutputRouteKey;
     const setSelectedRouteKey = isInput ? setSelectedInputRouteKey : setSelectedOutputRouteKey;
+    const setSelectedDeviceId = isInput ? setSelectedInputDeviceId : setSelectedOutputDeviceId;
+    const setSelectedHardwareId = isInput ? setSelectedInputHardwareId : setSelectedOutputHardwareId;
     const devices = isInput ? inputDevices : outputDevices;
     const resolution = isInput ? deviceResolution?.input : deviceResolution?.output;
     const effectiveDevice = isInput ? inputEffectiveDevice : outputEffectiveDevice;
@@ -500,10 +525,16 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     const bufferSize = isInput ? inputBufferSize : outputBufferSize;
     const setBufferSize = isInput ? setInputBufferSize : setOutputBufferSize;
     const bufferSizes = isInput ? inputBufferSizes : outputBufferSizes;
+    const selectedDeviceId = isInput ? selectedInputDeviceId : selectedOutputDeviceId;
+    const selectedHardwareId = isInput ? selectedInputHardwareId : selectedOutputHardwareId;
     const displayOptions = buildAudioDeviceSelectOptions(direction, devices, selectedName, resolution, selectedRouteKey);
     const selectedOption = selectedRouteKey
       ? displayOptions.find((option) => option.routeKey === selectedRouteKey)
-      : displayOptions.find((option) => option.deviceName === selectedName);
+      : displayOptions.find((option) => (
+          (selectedHardwareId && option.device?.hardwareId === selectedHardwareId)
+          || (selectedDeviceId && option.device?.id === selectedDeviceId)
+          || option.deviceName === selectedName
+        ));
     const sampleOptions = deriveSampleRateOptions(effectiveDevice, sampleRate);
     const bufferOptions = deriveBufferSizeOptions(effectiveDevice?.capabilities?.bufferSizes ?? bufferSizes, bufferSize);
     const sampleRateConfigurable = effectiveDevice
@@ -562,6 +593,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
             const option = displayOptions.find((item) => item.key === selected);
             setSelectedName(option?.deviceName ?? '');
             setSelectedRouteKey(option?.routeKey ?? '');
+            setSelectedDeviceId(option?.device?.id ?? '');
+            setSelectedHardwareId(option?.device?.hardwareId ?? '');
           }}
           isDisabled={saving}
           aria-label={isInput ? t('audio.selectInput') : t('audio.selectOutput')}
@@ -798,6 +831,10 @@ export function audioSettingsEqual(
     && (a.outputDeviceName || '') === (b?.outputDeviceName || '')
     && (a.inputRouteKey || '') === (b?.inputRouteKey || '')
     && (a.outputRouteKey || '') === (b?.outputRouteKey || '')
+    && (a.inputDeviceId || '') === (b?.inputDeviceId || '')
+    && (a.outputDeviceId || '') === (b?.outputDeviceId || '')
+    && (a.inputHardwareId || '') === (b?.inputHardwareId || '')
+    && (a.outputHardwareId || '') === (b?.outputHardwareId || '')
     && a.inputSampleRate === resolveAudioSettingNumber(b, 'inputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE)
     && a.outputSampleRate === resolveAudioSettingNumber(b, 'outputSampleRate', 'sampleRate', DEFAULT_SAMPLE_RATE)
     && a.inputBufferSize === resolveAudioSettingNumber(b, 'inputBufferSize', 'bufferSize', DEFAULT_BUFFER_SIZE)
