@@ -153,6 +153,10 @@ export interface AudioConfig {
   outputDeviceName?: string; // 存储的设备名称
   inputRouteKey?: string; // Android 稳定输入路由标识
   outputRouteKey?: string; // Android 稳定输出路由标识
+  inputDeviceId?: string;
+  outputDeviceId?: string;
+  inputHardwareId?: string;
+  outputHardwareId?: string;
   inputSampleRate?: number;
   outputSampleRate?: number;
   inputBufferSize?: number;
@@ -225,6 +229,10 @@ export function normalizeAudioDeviceSettings(audioConfig?: Partial<AudioDeviceSe
     outputDeviceName: audioConfig?.outputDeviceName,
     inputRouteKey: audioConfig?.inputRouteKey ?? undefined,
     outputRouteKey: audioConfig?.outputRouteKey ?? undefined,
+    inputDeviceId: audioConfig?.inputDeviceId,
+    outputDeviceId: audioConfig?.outputDeviceId,
+    inputHardwareId: audioConfig?.inputHardwareId,
+    outputHardwareId: audioConfig?.outputHardwareId,
     inputSampleRate: audioConfig?.inputSampleRate ?? legacySampleRate ?? 48000,
     outputSampleRate: audioConfig?.outputSampleRate ?? legacySampleRate ?? 48000,
     inputBufferSize: audioConfig?.inputBufferSize ?? legacyBufferSize ?? 1024,
@@ -814,9 +822,47 @@ export class ConfigManager {
       throw new Error(`Profile ${id} does not exist`);
     }
 
+    const existing = this.config.profiles[index];
+    let nextUpdates = { ...updates };
+    if (updates.audio) {
+      const nextAudio = { ...updates.audio };
+      if (
+        Object.prototype.hasOwnProperty.call(updates.audio, 'inputDeviceName')
+        && updates.audio.inputDeviceName !== existing.audio?.inputDeviceName
+      ) {
+        if (!Object.prototype.hasOwnProperty.call(updates.audio, 'inputDeviceId')) {
+          nextAudio.inputDeviceId = undefined;
+        }
+        if (!Object.prototype.hasOwnProperty.call(updates.audio, 'inputHardwareId')) {
+          nextAudio.inputHardwareId = undefined;
+        }
+        if (!Object.prototype.hasOwnProperty.call(updates.audio, 'inputRouteKey')) {
+          nextAudio.inputRouteKey = undefined;
+        }
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(updates.audio, 'outputDeviceName')
+        && updates.audio.outputDeviceName !== existing.audio?.outputDeviceName
+      ) {
+        if (!Object.prototype.hasOwnProperty.call(updates.audio, 'outputDeviceId')) {
+          nextAudio.outputDeviceId = undefined;
+        }
+        if (!Object.prototype.hasOwnProperty.call(updates.audio, 'outputHardwareId')) {
+          nextAudio.outputHardwareId = undefined;
+        }
+        if (!Object.prototype.hasOwnProperty.call(updates.audio, 'outputRouteKey')) {
+          nextAudio.outputRouteKey = undefined;
+        }
+      }
+      nextUpdates = {
+        ...nextUpdates,
+        audio: normalizeAudioDeviceSettings({ ...existing.audio, ...nextAudio }),
+      };
+    }
+
     this.config.profiles[index] = {
-      ...this.config.profiles[index],
-      ...updates,
+      ...existing,
+      ...nextUpdates,
       updatedAt: Date.now(),
     };
 
@@ -922,6 +968,26 @@ export class ConfigManager {
       && audioConfig.outputDeviceName !== profile.audio?.outputDeviceName
       && !Object.prototype.hasOwnProperty.call(audioConfig, 'outputRouteKey')) {
       nextAudioConfig.outputRouteKey = undefined;
+    }
+    if (Object.prototype.hasOwnProperty.call(audioConfig, 'inputDeviceName')
+      && audioConfig.inputDeviceName !== profile.audio?.inputDeviceName
+      && !Object.prototype.hasOwnProperty.call(audioConfig, 'inputDeviceId')) {
+      nextAudioConfig.inputDeviceId = undefined;
+    }
+    if (Object.prototype.hasOwnProperty.call(audioConfig, 'outputDeviceName')
+      && audioConfig.outputDeviceName !== profile.audio?.outputDeviceName
+      && !Object.prototype.hasOwnProperty.call(audioConfig, 'outputDeviceId')) {
+      nextAudioConfig.outputDeviceId = undefined;
+    }
+    if (Object.prototype.hasOwnProperty.call(audioConfig, 'inputDeviceName')
+      && audioConfig.inputDeviceName !== profile.audio?.inputDeviceName
+      && !Object.prototype.hasOwnProperty.call(audioConfig, 'inputHardwareId')) {
+      nextAudioConfig.inputHardwareId = undefined;
+    }
+    if (Object.prototype.hasOwnProperty.call(audioConfig, 'outputDeviceName')
+      && audioConfig.outputDeviceName !== profile.audio?.outputDeviceName
+      && !Object.prototype.hasOwnProperty.call(audioConfig, 'outputHardwareId')) {
+      nextAudioConfig.outputHardwareId = undefined;
     }
     this.config.profiles[index] = {
       ...profile,

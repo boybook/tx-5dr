@@ -60,15 +60,39 @@ function getUsbAudioDeviceMatchScore(device: AudioDevice): number {
 /**
  * Find a USB audio device from the device list by matching known patterns.
  * More explicit USB codec/PCM matches win over generic USB Audio Device names.
+ * When preferredRadioHint is provided (serial-port SN / model), prefer devices
+ * whose related radio identity contains that hint.
  */
 export function matchUsbAudioDevice(
   devices: AudioDevice[],
+  preferredRadioHint?: string | null,
 ): AudioDevice | null {
+  const hint = preferredRadioHint
+    ?.replace(/_/g, ' ')
+    .trim()
+    .toLowerCase();
+
   let bestMatch: AudioDevice | null = null;
   let bestScore = 0;
 
   for (const device of devices) {
-    const score = getUsbAudioDeviceMatchScore(device);
+    let score = getUsbAudioDeviceMatchScore(device);
+    if (score <= 0) continue;
+
+    if (hint) {
+      const identityText = [
+        device.serialNumber,
+        device.detail,
+        device.hardwareId,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      if (identityText.includes(hint) || hint.split(/\s+/).every((token) => token && identityText.includes(token))) {
+        score += 10;
+      }
+    }
+
     if (score > bestScore) {
       bestMatch = device;
       bestScore = score;
@@ -123,6 +147,10 @@ export function selectBestSampleRate(
 export interface AudioMatchResult {
   inputDeviceName?: string;
   outputDeviceName?: string;
+  inputDeviceId?: string;
+  outputDeviceId?: string;
+  inputHardwareId?: string;
+  outputHardwareId?: string;
   inputSampleRate?: number;
   outputSampleRate?: number;
 }
@@ -136,6 +164,7 @@ export async function matchAudioDeviceForRig(
   rigModel: number,
   rigs: SupportedRig[],
   getDevices: () => Promise<{ inputDevices: AudioDevice[]; outputDevices: AudioDevice[] }>,
+  preferredRadioHint?: string | null,
 ): Promise<AudioMatchResult | null> {
   const rigInfo = resolveRigInfo(rigModel, rigs);
   if (!rigInfo) return null;
@@ -144,8 +173,8 @@ export async function matchAudioDeviceForRig(
   if (recommendedRate === null) return null;
 
   const { inputDevices, outputDevices } = await getDevices();
-  const inputDevice = matchUsbAudioDevice(inputDevices);
-  const outputDevice = matchUsbAudioDevice(outputDevices);
+  const inputDevice = matchUsbAudioDevice(inputDevices, preferredRadioHint);
+  const outputDevice = matchUsbAudioDevice(outputDevices, preferredRadioHint);
 
   if (!inputDevice && !outputDevice) return null;
 
@@ -153,6 +182,8 @@ export async function matchAudioDeviceForRig(
     ...(inputDevice
       ? {
           inputDeviceName: inputDevice.name,
+          inputDeviceId: inputDevice.id,
+          ...(inputDevice.hardwareId ? { inputHardwareId: inputDevice.hardwareId } : {}),
           inputSampleRate: selectBestSampleRate(
             recommendedRate,
             inputDevice.sampleRates ?? [],
@@ -162,6 +193,8 @@ export async function matchAudioDeviceForRig(
     ...(outputDevice
       ? {
           outputDeviceName: outputDevice.name,
+          outputDeviceId: outputDevice.id,
+          ...(outputDevice.hardwareId ? { outputHardwareId: outputDevice.hardwareId } : {}),
           outputSampleRate: selectBestSampleRate(
             recommendedRate,
             outputDevice.sampleRates ?? [],

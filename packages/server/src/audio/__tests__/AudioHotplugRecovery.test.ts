@@ -76,6 +76,7 @@ const { mockState, mockConfigManager, MockRtAudio } = vi.hoisted(() => {
       getAudioConfig: vi.fn(),
       getOpenWebRXStations: vi.fn(() => []),
       getRadioConfig: vi.fn(() => ({ type: 'serial' })),
+      getProfiles: vi.fn(() => []),
     },
     MockRtAudio: HoistedMockRtAudio,
   };
@@ -98,9 +99,50 @@ vi.mock('../../utils/audioUtils.js', () => ({
   resampleAudioProfessional: vi.fn(),
 }));
 
+// Keep the real helper implementations, but stub Linux USB identity discovery so
+// USB sound cards present on the host /proc do not pollute enumeration results.
+// The helpers below rely on default parameters bound to the module-internal
+// discover function, so wrap them to consume the mocked discovery instead.
+vi.mock('../linux-usb-audio-identity.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../linux-usb-audio-identity.js')>();
+  const discoverMock = vi.fn<[], ReturnType<typeof actual.discoverLinuxUsbAudioIdentities>>(() => []);
+  return {
+    ...actual,
+    discoverLinuxUsbAudioIdentities: discoverMock,
+    attachLinuxUsbAudioIdentities: (devices: any, direction: any, identities = discoverMock()) =>
+      actual.attachLinuxUsbAudioIdentities(devices, direction, identities),
+    findOwnedUsbAudioHardwareId: (direction: any, identities = discoverMock(), ownerPid?: number) =>
+      actual.findOwnedUsbAudioHardwareId(direction, identities, ownerPid),
+    buildSupplementalUsbAudioDevices: (direction: any, existing: any, identities = discoverMock()) =>
+      actual.buildSupplementalUsbAudioDevices(direction, existing, identities),
+  };
+});
+
 import { AudioDeviceManager } from '../audio-device-manager.js';
 import { AudioStreamManager } from '../AudioStreamManager.js';
 import { RadioErrorCode } from '../../utils/errors/RadioError.js';
+import {
+  discoverLinuxUsbAudioIdentities,
+  type LinuxUsbAudioIdentity,
+} from '../linux-usb-audio-identity.js';
+
+function makeUsbIdentity(overrides: Partial<LinuxUsbAudioIdentity> & { hardwareId: string; alsaCard: number }): LinuxUsbAudioIdentity {
+  return {
+    productName: 'USB Audio CODEC',
+    usbPath: overrides.hardwareId.replace(/^usb:/, ''),
+    relatedSerials: [],
+    detail: overrides.hardwareId,
+    ...overrides,
+    pcm: {
+      input: overrides.pcm?.input ?? { busy: false },
+      output: overrides.pcm?.output ?? { busy: false },
+    },
+  };
+}
+
+function mockUsbIdentities(identities: LinuxUsbAudioIdentity[]): void {
+  vi.mocked(discoverLinuxUsbAudioIdentities).mockReturnValue(identities);
+}
 
 function setAudioConfig(overrides: Partial<{
   inputDeviceName?: string;
@@ -128,11 +170,14 @@ describe('audio hotplug recovery', () => {
     mockConfigManager.getAudioConfig.mockReset();
     mockConfigManager.getOpenWebRXStations.mockClear();
     mockConfigManager.getRadioConfig.mockClear();
+    mockConfigManager.getProfiles.mockReset();
+    mockConfigManager.getProfiles.mockReturnValue([]);
     mockConfigManager.getOpenWebRXStations.mockReturnValue([]);
     mockConfigManager.getRadioConfig.mockReturnValue({ type: 'serial' });
     delete process.env.TX5DR_RUNTIME_FLAVOR;
     delete process.env.TX5DR_ANDROID_AUDIO_DEVICES_FILE;
     setAudioConfig();
+    vi.mocked(discoverLinuxUsbAudioIdentities).mockReturnValue([]);
     (AudioDeviceManager as unknown as { instance?: AudioDeviceManager }).instance = undefined;
   });
 
@@ -567,6 +612,24 @@ describe('audio hotplug recovery', () => {
     expect(missing.input.status).toBe('missing');
   });
 
+  it('ignores a stale configured device id when the live name no longer matches', async () => {
+    mockState.devices = [
+      { id: 3, name: 'HDMI', inputChannels: 1, preferredSampleRate: 48000 },
+      { id: 7, name: 'IC-705', inputChannels: 1, preferredSampleRate: 48000 },
+    ];
+    const manager = AudioDeviceManager.getInstance();
+
+    const resolution = await manager.resolveAudioSettings({
+      inputDeviceName: 'IC-705',
+      inputDeviceId: 'input-3',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    expect(resolution.input.status).toBe('selected');
+    expect(resolution.input.effectiveDevice).toMatchObject({ id: 'input-7', name: 'IC-705' });
+  });
+
   it('uses the current live input device ID before opening the stream', async () => {
     mockState.devices = [
       { id: 7, name: 'IC-705', inputChannels: 1, outputChannels: 1, preferredSampleRate: 48000 },
@@ -785,5 +848,340 @@ describe('audio hotplug recovery', () => {
       }),
     });
     expect(mockState.openCalls).toHaveLength(0);
+  });
+
+  it('drops the stale registry entry when a non-USB device is renumbered input-3 -> input-7', async () => {
+    const manager = AudioDeviceManager.getInstance();
+
+    mockState.devices = [
+      { id: 3, name: 'IC-705', inputChannels: 1, outputChannels: 1, preferredSampleRate: 48000 },
+    ];
+    await expect(manager.resolveInputDeviceId('IC-705')).resolves.toBe('input-3');
+
+    mockState.devices = [
+      { id: 7, name: 'IC-705', inputChannels: 1, outputChannels: 1, preferredSampleRate: 48000 },
+    ];
+    await expect(manager.resolveInputDeviceId('IC-705')).resolves.toBe('input-7');
+
+    const devices = await manager.getAllDevices();
+    const named = devices.inputDevices.filter((device) => device.name === 'IC-705');
+    expect(named).toHaveLength(1);
+    expect(named[0]?.id).toBe('input-7');
+    expect(named[0]?.availability).toBe('available');
+  });
+
+  it('does not merge two same-named USB CODECs into a single entry', async () => {
+    mockUsbIdentities([
+      makeUsbIdentity({ hardwareId: 'usb:1-1', alsaCard: 0 }),
+      makeUsbIdentity({ hardwareId: 'usb:1-2', alsaCard: 1 }),
+    ]);
+    mockState.devices = [
+      { id: 3, name: 'USB Audio CODEC', inputChannels: 1, preferredSampleRate: 48000 },
+      { id: 5, name: 'USB Audio CODEC', inputChannels: 1, preferredSampleRate: 48000 },
+    ];
+    const manager = AudioDeviceManager.getInstance();
+
+    const devices = await manager.getAllDevices();
+    const codecs = devices.inputDevices.filter((device) => device.name === 'USB Audio CODEC');
+    expect(codecs).toHaveLength(2);
+    expect(new Set(codecs.map((device) => device.hardwareId))).toEqual(new Set(['usb:1-1', 'usb:1-2']));
+  });
+
+  it('reuses a cached numeric ID only when the requested hardwareId matches the live device', async () => {
+    mockUsbIdentities([
+      makeUsbIdentity({ hardwareId: 'usb:1-1', alsaCard: 0 }),
+      makeUsbIdentity({ hardwareId: 'usb:1-2', alsaCard: 1 }),
+    ]);
+    mockState.devices = [
+      { id: 3, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+      { id: 5, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+    ];
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      outputDeviceName: 'USB Audio CODEC',
+      outputDeviceId: 'output-3',
+      outputHardwareId: 'usb:1-2',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    const streamManager = new AudioStreamManager();
+    await streamManager.startOutput();
+
+    expect(mockState.openCalls).toContainEqual(expect.objectContaining({
+      direction: 'output',
+      deviceId: 5,
+      streamName: 'TX5DR-Output',
+    }));
+    expect(streamManager.getStatus().outputDeviceId).toBe('output-5');
+  });
+
+  it('rejects opening when the requested hardwareId is not present on any live device', async () => {
+    mockUsbIdentities([
+      makeUsbIdentity({ hardwareId: 'usb:1-1', alsaCard: 0 }),
+      makeUsbIdentity({ hardwareId: 'usb:1-2', alsaCard: 1 }),
+    ]);
+    mockState.devices = [
+      { id: 3, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+      { id: 5, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+    ];
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      outputDeviceName: 'USB Audio CODEC',
+      outputDeviceId: 'output-3',
+      outputHardwareId: 'usb:9-9',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    const streamManager = new AudioStreamManager();
+    await expect(streamManager.startOutput()).rejects.toMatchObject({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+    });
+    expect(mockState.openCalls).toHaveLength(0);
+  });
+
+  it('rejects reusing a cached numeric ID for ambiguous USB codecs without a hardwareId', async () => {
+    mockUsbIdentities([
+      makeUsbIdentity({ hardwareId: 'usb:1-1', alsaCard: 0 }),
+      makeUsbIdentity({ hardwareId: 'usb:1-2', alsaCard: 1 }),
+    ]);
+    mockState.devices = [
+      { id: 3, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+      { id: 5, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+    ];
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      outputDeviceName: 'USB Audio CODEC',
+      outputDeviceId: 'output-3',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    const streamManager = new AudioStreamManager();
+    await expect(streamManager.startOutput()).rejects.toMatchObject({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+    });
+    expect(mockState.openCalls).toHaveLength(0);
+  });
+
+  it('rejects opening when a cached exact device id now points at a different device name', async () => {
+    mockUsbIdentities([]);
+    mockState.devices = [
+      { id: 3, name: 'HDMI', outputChannels: 2, preferredSampleRate: 48000 },
+      { id: 7, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+    ];
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      outputDeviceName: 'USB Audio CODEC',
+      outputDeviceId: 'output-3',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    const streamManager = new AudioStreamManager();
+    await streamManager.startOutput();
+
+    expect(mockState.openCalls).toContainEqual(expect.objectContaining({
+      direction: 'output',
+      deviceId: 7,
+      streamName: 'TX5DR-Output',
+    }));
+    expect(streamManager.getStatus().outputDeviceId).toBe('output-7');
+  });
+
+  it('falls back to a unique same-name device when the configured hardwareId is gone', async () => {
+    mockUsbIdentities([
+      makeUsbIdentity({ hardwareId: 'usb:1-9', alsaCard: 0 }),
+    ]);
+    mockState.devices = [
+      { id: 4, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+    ];
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      outputDeviceName: 'USB Audio CODEC',
+      outputDeviceId: 'output-3',
+      outputHardwareId: 'usb:1-1',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    const streamManager = new AudioStreamManager();
+    await streamManager.startOutput();
+
+    expect(mockState.openCalls).toContainEqual(expect.objectContaining({
+      direction: 'output',
+      deviceId: 4,
+      streamName: 'TX5DR-Output',
+    }));
+    expect(streamManager.getStatus().outputDeviceId).toBe('output-4');
+  });
+
+  it('rejects the unique same-name fallback when the candidate is a different in-use radio', async () => {
+    mockUsbIdentities([
+      makeUsbIdentity({ hardwareId: 'usb:1-2', alsaCard: 0 }),
+    ]);
+    // 幸存的另一台电台（usb:1-2）正在被 TX5DR 使用：配置的 usb:1-1 被拔掉时不得误开它
+    const manager = AudioDeviceManager.getInstance();
+    manager.markDeviceActive(
+      'output',
+      'USB Audio CODEC',
+      'output-usb:1-2',
+      48000,
+      2,
+      'usb:1-2',
+    );
+
+    mockState.devices = [
+      { id: 4, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+    ];
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      outputDeviceName: 'USB Audio CODEC',
+      outputDeviceId: 'output-3',
+      outputHardwareId: 'usb:1-1',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    const streamManager = new AudioStreamManager();
+    await expect(streamManager.startOutput()).rejects.toMatchObject({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+    });
+    expect(mockState.openCalls).toHaveLength(0);
+  });
+
+  it('rejects the unique same-name fallback when another profile claims the candidate', async () => {
+    mockUsbIdentities([
+      makeUsbIdentity({ hardwareId: 'usb:1-2', alsaCard: 0 }),
+    ]);
+    mockConfigManager.getProfiles.mockReturnValue([
+      { id: 'profile-b', name: 'IC-9700', audio: { outputHardwareId: 'usb:1-2' } } as never,
+    ]);
+    mockState.devices = [
+      { id: 4, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+    ];
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      outputDeviceName: 'USB Audio CODEC',
+      outputDeviceId: 'output-3',
+      outputHardwareId: 'usb:1-1',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    const streamManager = new AudioStreamManager();
+    await expect(streamManager.startOutput()).rejects.toMatchObject({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+    });
+    expect(mockState.openCalls).toHaveLength(0);
+  });
+
+  it('rejects registry-cache reuse when the cached numeric id is now a non-USB device', async () => {
+    mockUsbIdentities([]);
+    const manager = AudioDeviceManager.getInstance();
+    manager.markDeviceActive(
+      'output',
+      'USB Audio CODEC',
+      'output-3',
+      48000,
+      2,
+      'usb:1-1',
+    );
+    manager.clearActiveDevice('output', 'USB Audio CODEC', 'output-3');
+
+    mockState.devices = [
+      { id: 3, name: 'HDMI', outputChannels: 2, preferredSampleRate: 48000 },
+    ];
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      outputDeviceName: 'USB Audio CODEC',
+      outputDeviceId: 'output-3',
+      outputHardwareId: 'usb:1-1',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    const streamManager = new AudioStreamManager();
+    await expect(streamManager.startOutput()).rejects.toMatchObject({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+    });
+    expect(mockState.openCalls).toHaveLength(0);
+  });
+
+  it('rejects the raw registry-cache path when the cached id is a different same-name radio', async () => {
+    // 双电台同名：input 已开在 usb:1-1（缓存数字 id 5），但该序号在重新枚举后
+    // 被另一台同名 CODEC（usb:1-2）占用——raw 名称检查无法区分，必须按 hardwareId 冲突拒绝
+    mockUsbIdentities([
+      makeUsbIdentity({ hardwareId: 'usb:1-2', alsaCard: 0 }),
+    ]);
+    const manager = AudioDeviceManager.getInstance();
+    manager.markDeviceActive(
+      'input',
+      'USB Audio CODEC',
+      'input-5',
+      48000,
+      1,
+      'usb:1-1',
+    );
+    // 同时阻止 unique-name fallback 接受这台候选（另一 profile 认领 usb:1-2）
+    mockConfigManager.getProfiles.mockReturnValue([
+      { id: 'profile-b', name: 'IC-9700', audio: { outputHardwareId: 'usb:1-2' } } as never,
+    ]);
+
+    mockState.devices = [
+      { id: 5, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+    ];
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      outputDeviceName: 'USB Audio CODEC',
+      outputDeviceId: 'output-9',
+      outputHardwareId: 'usb:1-1',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    const streamManager = new AudioStreamManager();
+    await expect(streamManager.startOutput()).rejects.toMatchObject({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+    });
+    expect(mockState.openCalls).toHaveLength(0);
+  });
+
+  it('reuses a verified registry-cache id when the opposite direction owns the radio', async () => {
+    mockUsbIdentities([
+      makeUsbIdentity({
+        hardwareId: 'usb:1-1',
+        alsaCard: 0,
+        pcm: {
+          input: { busy: true, ownerPid: process.pid },
+          output: { busy: false },
+        },
+      }),
+    ]);
+    const manager = AudioDeviceManager.getInstance();
+    manager.markDeviceActive(
+      'input',
+      'USB Audio CODEC',
+      'input-5',
+      48000,
+      1,
+      'usb:1-1',
+    );
+
+    // Live listing no longer exposes the hardwareId for this card (busy/mis-ordered),
+    // but the numeric id still points at the same USB codec name.
+    mockUsbIdentities([]);
+    mockState.devices = [
+      { id: 5, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+    ];
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      outputDeviceName: 'USB Audio CODEC',
+      outputDeviceId: 'output-9',
+      outputHardwareId: 'usb:1-1',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    const streamManager = new AudioStreamManager();
+    await streamManager.startOutput();
+
+    expect(mockState.openCalls).toContainEqual(expect.objectContaining({
+      direction: 'output',
+      deviceId: 5,
+      streamName: 'TX5DR-Output',
+    }));
+    expect(streamManager.getStatus().outputDeviceId).toBe('output-5');
   });
 });
