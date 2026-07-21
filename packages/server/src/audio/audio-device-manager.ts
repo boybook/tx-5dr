@@ -530,7 +530,9 @@ export class AudioDeviceManager {
 
     if (configuredDeviceId) {
       const byId = devices.find((device) => device.id === configuredDeviceId);
-      if (byId) return byId;
+      if (byId && (!configuredDeviceName || byId.name === configuredDeviceName)) {
+        return byId;
+      }
     }
 
     if (!configuredDeviceName) {

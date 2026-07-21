@@ -623,8 +623,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.androidAudioInput = null;
       this.usingAndroidInput = false;
       this.isStreaming = false;
-      this.deviceId = null;
       AudioDeviceManager.getInstance().clearActiveDevice('input', this.activeInputDeviceName, this.deviceId);
+      this.deviceId = null;
       this.activeInputDeviceName = null;
       this.emit('error', error instanceof Error ? error : new Error(String(error)));
       throw error;
@@ -1012,8 +1012,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.androidAudioOutput = null;
       this.usingAndroidOutput = false;
       this.isOutputting = false;
-      this.outputDeviceId = null;
       AudioDeviceManager.getInstance().clearActiveDevice('output', this.activeOutputDeviceName, this.outputDeviceId);
+      this.outputDeviceId = null;
       this.activeOutputDeviceName = null;
       const normalizedError = error instanceof Error ? error : new Error(String(error));
       if (normalizedError !== this.androidInputRuntimeLossError) {
