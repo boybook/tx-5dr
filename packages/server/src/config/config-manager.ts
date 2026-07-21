@@ -24,7 +24,11 @@ import { createLogger } from '../utils/logger.js';
 import { normalizeHamlibConfig, normalizeSerialConnectionConfig } from '../radio/hamlibConfigUtils.js';
 import { DEFAULT_NTP_SERVERS } from '../services/ntpServers.js';
 import { JsonFileStore, PersistenceCoordinator } from '../utils/persistence/index.js';
-import { RuntimeStateManager, type RuntimeState } from './RuntimeStateManager.js';
+import {
+  RuntimeStateManager,
+  type ProfileOperatingMemory,
+  type RuntimeState,
+} from './RuntimeStateManager.js';
 
 const logger = createLogger('ConfigManager');
 
@@ -377,6 +381,10 @@ export class ConfigManager {
   private configStore: JsonFileStore<Record<string, unknown>> | null = null;
   private runtimeState = RuntimeStateManager.getInstance();
   private unregisterPersistence: (() => void) | null = null;
+  /** Serializes profile switches so concurrent callers cannot corrupt memory buckets. */
+  private profileSwitchQueue: Promise<unknown> = Promise.resolve();
+  /** Suspends mirror-to-bucket while a switch is between setActive and load. */
+  private profileSwitchInProgress = false;
 
   private constructor() {
     this.config = { ...DEFAULT_CONFIG };
@@ -881,6 +889,7 @@ export class ConfigManager {
 
     this.config.profiles.splice(index, 1);
     await this.saveConfig();
+    await this.deleteProfileOperatingMemory(id);
   }
 
   /**
@@ -909,6 +918,59 @@ export class ConfigManager {
     }
     this.config.activeProfileId = id;
     await this.saveConfig();
+  }
+
+  /**
+   * Switch the active profile and its operating memory.
+   *
+   * Serialized across callers (ProfileManager, RadioPowerController, …) so
+   * concurrent switches cannot interleave snapshot → setActive → load.
+   * Mirror-to-bucket is suspended for the duration of each switch.
+   */
+  async switchActiveProfile(id: string): Promise<{ previousProfileId: string | null; profileId: string }> {
+    const run = this.profileSwitchQueue.then(() => this.performSwitchActiveProfile(id));
+    // Keep the queue alive even if a switch fails, so later callers still serialize.
+    this.profileSwitchQueue = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private async performSwitchActiveProfile(
+    id: string,
+  ): Promise<{ previousProfileId: string | null; profileId: string }> {
+    if (!this.config.profiles.find((profile) => profile.id === id)) {
+      throw new Error(`Profile ${id} does not exist`);
+    }
+
+    const previousProfileId = this.getActiveProfileId();
+    if (previousProfileId === id) {
+      await this.setActiveProfileId(id);
+      return { previousProfileId, profileId: id };
+    }
+
+    this.profileSwitchInProgress = true;
+    try {
+      if (previousProfileId) {
+        await this.snapshotOperatingMemoryForProfile(previousProfileId);
+      }
+      await this.setActiveProfileId(id);
+      try {
+        await this.loadOperatingMemoryForProfile(id);
+      } catch (error) {
+        logger.error('Failed to load operating memory after profile switch; clearing globals', {
+          profileId: id,
+          error,
+        });
+        await this.setRuntimeValue('lastSelectedFrequency', null);
+        await this.setRuntimeValue('lastVoiceFrequency', null);
+        await this.setRuntimeValue('lastCWFrequency', null);
+        await this.setRuntimeValue('lastEngineMode', 'digital');
+        await this.setRuntimeValue('lastDigitalModeName', 'FT8');
+      }
+    } finally {
+      this.profileSwitchInProgress = false;
+    }
+
+    return { previousProfileId, profileId: id };
   }
 
   // ===== 配置派生方法（从 activeProfile 派生，签名不变） =====
@@ -1240,7 +1302,9 @@ export class ConfigManager {
     band: string;
     description?: string;
   }): Promise<void> {
-    await this.setRuntimeValue('lastSelectedFrequency', { ...frequencyConfig });
+    const next = { ...frequencyConfig };
+    await this.setRuntimeValue('lastSelectedFrequency', next);
+    await this.mirrorOperatingFieldToActiveProfile({ lastSelectedFrequency: next });
     logger.debug(`Last selected frequency saved: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);
   }
 
@@ -1267,7 +1331,9 @@ export class ConfigManager {
     ctcssToneTenthsHz?: number;
     dcsCode?: number;
   }): Promise<void> {
-    await this.setRuntimeValue('lastVoiceFrequency', { ...frequencyConfig });
+    const next = { ...frequencyConfig };
+    await this.setRuntimeValue('lastVoiceFrequency', next);
+    await this.mirrorOperatingFieldToActiveProfile({ lastVoiceFrequency: next });
     logger.debug(`Last voice frequency saved: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);
   }
 
@@ -1276,6 +1342,7 @@ export class ConfigManager {
    */
   async clearLastSelectedFrequency(): Promise<void> {
     await this.setRuntimeValue('lastSelectedFrequency', null);
+    await this.mirrorOperatingFieldToActiveProfile({ lastSelectedFrequency: null });
   }
 
   /**
@@ -1283,6 +1350,7 @@ export class ConfigManager {
    */
   async clearLastVoiceFrequency(): Promise<void> {
     await this.setRuntimeValue('lastVoiceFrequency', null);
+    await this.mirrorOperatingFieldToActiveProfile({ lastVoiceFrequency: null });
   }
 
   /**
@@ -1303,7 +1371,9 @@ export class ConfigManager {
     band: string;
     description?: string;
   }): Promise<void> {
-    await this.setRuntimeValue('lastCWFrequency', { ...frequencyConfig });
+    const next = { ...frequencyConfig };
+    await this.setRuntimeValue('lastCWFrequency', next);
+    await this.mirrorOperatingFieldToActiveProfile({ lastCWFrequency: next });
     logger.debug(`Last CW frequency saved: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);
   }
 
@@ -1312,6 +1382,111 @@ export class ConfigManager {
    */
   async clearLastCWFrequency(): Promise<void> {
     await this.setRuntimeValue('lastCWFrequency', null);
+    await this.mirrorOperatingFieldToActiveProfile({ lastCWFrequency: null });
+  }
+
+  getProfileOperatingMemory(profileId: string): ProfileOperatingMemory | null {
+    const memory = this.getRuntimeValue('profileOperatingMemory')?.[profileId];
+    if (!memory) {
+      return null;
+    }
+    return {
+      ...memory,
+      lastSelectedFrequency: memory.lastSelectedFrequency
+        ? { ...memory.lastSelectedFrequency }
+        : memory.lastSelectedFrequency,
+      lastVoiceFrequency: memory.lastVoiceFrequency
+        ? { ...memory.lastVoiceFrequency }
+        : memory.lastVoiceFrequency,
+      lastCWFrequency: memory.lastCWFrequency
+        ? { ...memory.lastCWFrequency }
+        : memory.lastCWFrequency,
+    };
+  }
+
+  /**
+   * Snapshot current global last* values into a profile bucket (profile switch leave path).
+   */
+  async snapshotOperatingMemoryForProfile(profileId: string): Promise<void> {
+    await this.patchProfileOperatingMemory(profileId, {
+      lastSelectedFrequency: this.getLastSelectedFrequency(),
+      lastVoiceFrequency: this.getLastVoiceFrequency(),
+      lastCWFrequency: this.getLastCWFrequency(),
+      lastEngineMode: this.getLastEngineMode(),
+      lastDigitalModeName: this.getLastDigitalModeName(),
+    });
+  }
+
+  /**
+   * Load a profile bucket into global last* values. Missing memory clears globals so
+   * bootstrap does not restore another radio's band.
+   */
+  async loadOperatingMemoryForProfile(profileId: string): Promise<void> {
+    const memory = this.getRuntimeValue('profileOperatingMemory')?.[profileId];
+    if (!memory) {
+      await this.setRuntimeValue('lastSelectedFrequency', null);
+      await this.setRuntimeValue('lastVoiceFrequency', null);
+      await this.setRuntimeValue('lastCWFrequency', null);
+      await this.setRuntimeValue('lastEngineMode', 'digital');
+      await this.setRuntimeValue('lastDigitalModeName', 'FT8');
+      logger.info('No operating memory for profile; cleared global last-frequency state', { profileId });
+      return;
+    }
+
+    await this.setRuntimeValue('lastSelectedFrequency', memory.lastSelectedFrequency ?? null);
+    await this.setRuntimeValue('lastVoiceFrequency', memory.lastVoiceFrequency ?? null);
+    await this.setRuntimeValue('lastCWFrequency', memory.lastCWFrequency ?? null);
+    if (memory.lastEngineMode) {
+      await this.setRuntimeValue('lastEngineMode', memory.lastEngineMode);
+    } else {
+      await this.setRuntimeValue('lastEngineMode', 'digital');
+    }
+    if (memory.lastDigitalModeName) {
+      await this.setRuntimeValue('lastDigitalModeName', memory.lastDigitalModeName);
+    } else {
+      await this.setRuntimeValue('lastDigitalModeName', 'FT8');
+    }
+    logger.info('Loaded operating memory for profile', {
+      profileId,
+      engineMode: memory.lastEngineMode ?? 'digital',
+      digitalMHz: memory.lastSelectedFrequency
+        ? (memory.lastSelectedFrequency.frequency / 1_000_000).toFixed(3)
+        : null,
+    });
+  }
+
+  async deleteProfileOperatingMemory(profileId: string): Promise<void> {
+    const map = { ...(this.getRuntimeValue('profileOperatingMemory') ?? {}) };
+    if (!(profileId in map)) {
+      return;
+    }
+    delete map[profileId];
+    await this.setRuntimeValue('profileOperatingMemory', Object.keys(map).length > 0 ? map : null);
+  }
+
+  private async patchProfileOperatingMemory(
+    profileId: string,
+    patch: Partial<ProfileOperatingMemory>,
+  ): Promise<void> {
+    const map = { ...(this.getRuntimeValue('profileOperatingMemory') ?? {}) };
+    map[profileId] = {
+      ...map[profileId],
+      ...patch,
+    };
+    await this.setRuntimeValue('profileOperatingMemory', map);
+  }
+
+  private async mirrorOperatingFieldToActiveProfile(
+    patch: Partial<ProfileOperatingMemory>,
+  ): Promise<void> {
+    if (this.profileSwitchInProgress) {
+      return;
+    }
+    const profileId = this.getActiveProfileId();
+    if (!profileId) {
+      return;
+    }
+    await this.patchProfileOperatingMemory(profileId, patch);
   }
 
   /**
@@ -1560,6 +1735,7 @@ export class ConfigManager {
 
   async setLastEngineMode(mode: 'digital' | 'voice' | 'cw'): Promise<void> {
     await this.setRuntimeValue('lastEngineMode', mode);
+    await this.mirrorOperatingFieldToActiveProfile({ lastEngineMode: mode });
   }
 
   getLastDigitalModeName(): string {
@@ -1568,6 +1744,7 @@ export class ConfigManager {
 
   async setLastDigitalModeName(modeName: string): Promise<void> {
     await this.setRuntimeValue('lastDigitalModeName', modeName);
+    await this.mirrorOperatingFieldToActiveProfile({ lastDigitalModeName: modeName });
   }
 
   // ===== Voice mode config =====
