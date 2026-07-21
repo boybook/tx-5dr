@@ -178,7 +178,7 @@ export class ProfileManager {
       }
     }
 
-    // 阶段2：切换配置（原子操作：snapshot → setActive → load）
+    // 阶段2：切换配置（经 ConfigManager 串行化：snapshot → setActive → load）
     await configManager.switchActiveProfile(id);
     engine.getAudioStreamManager().reloadAudioConfig();
     logger.info(`Profile activated: "${profile.name}" (id: ${id})`);
