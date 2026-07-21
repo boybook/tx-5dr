@@ -210,6 +210,39 @@ describe('ConfigManager profile operating memory', () => {
     expect(configManager.getActiveProfileId()).toBe('profile-9700');
   });
 
+  it('loads target memory without snapshot when activating with no previous profile', async () => {
+    await configManager.updateLastSelectedFrequency({
+      frequency: 14_074_000,
+      mode: 'FT8',
+      band: '20m',
+    });
+    await configManager.setLastEngineMode('voice');
+    await configManager.snapshotOperatingMemoryForProfile('profile-7610');
+
+    // Simulate first activate: no active profile yet.
+    await configManager.setActiveProfileId(null);
+    await configManager.updateLastSelectedFrequency({
+      frequency: 144_460_000,
+      mode: 'FT8',
+      band: '2m',
+    });
+
+    const result = await configManager.switchActiveProfile('profile-7610');
+
+    expect(result).toEqual({ previousProfileId: null, profileId: 'profile-7610' });
+    expect(configManager.getActiveProfileId()).toBe('profile-7610');
+    expect(configManager.getLastSelectedFrequency()).toMatchObject({
+      frequency: 14_074_000,
+      band: '20m',
+    });
+    expect(configManager.getLastEngineMode()).toBe('voice');
+    // Orphan globals from the null-active window must not pollute the target bucket.
+    expect(configManager.getProfileOperatingMemory('profile-7610')).toMatchObject({
+      lastSelectedFrequency: expect.objectContaining({ frequency: 14_074_000 }),
+      lastEngineMode: 'voice',
+    });
+  });
+
   it('removes operating memory when a profile is deleted', async () => {
     await configManager.updateLastSelectedFrequency({
       frequency: 14_074_000,

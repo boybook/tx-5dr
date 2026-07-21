@@ -147,7 +147,7 @@ export class ProfileManager {
    * 激活 Profile（核心流程）
    *
    * 1. 安全停止引擎（如果运行中）
-   * 2. 切换配置（原子操作）
+   * 2. 经 ConfigManager 串行化切换配置（snapshot → setActive → load）
    * 3. 广播事件通知前端
    * 4. 如果之前在运行，自动重启引擎（使用新 Profile 配置）
    */
