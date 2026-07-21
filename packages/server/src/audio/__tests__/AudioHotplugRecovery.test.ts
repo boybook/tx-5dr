@@ -606,6 +606,24 @@ describe('audio hotplug recovery', () => {
     expect(missing.input.status).toBe('missing');
   });
 
+  it('ignores a stale configured device id when the live name no longer matches', async () => {
+    mockState.devices = [
+      { id: 3, name: 'HDMI', inputChannels: 1, preferredSampleRate: 48000 },
+      { id: 7, name: 'IC-705', inputChannels: 1, preferredSampleRate: 48000 },
+    ];
+    const manager = AudioDeviceManager.getInstance();
+
+    const resolution = await manager.resolveAudioSettings({
+      inputDeviceName: 'IC-705',
+      inputDeviceId: 'input-3',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    expect(resolution.input.status).toBe('selected');
+    expect(resolution.input.effectiveDevice).toMatchObject({ id: 'input-7', name: 'IC-705' });
+  });
+
   it('uses the current live input device ID before opening the stream', async () => {
     mockState.devices = [
       { id: 7, name: 'IC-705', inputChannels: 1, outputChannels: 1, preferredSampleRate: 48000 },
