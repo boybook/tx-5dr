@@ -38,8 +38,8 @@ export function usePluginSnapshot(): PluginSystemSnapshot {
       .catch((err: unknown) => logger.error('Failed to load plugin snapshot', err));
   }, [canLoadPluginSnapshot]);
 
-  useWSEvent(connection.state.radioService, 'pluginList', (data: PluginSystemSnapshot) => {
-    if (!canLoadPluginSnapshot) return;
+  useWSEvent(connection.state.radioService, 'pluginList', (data: PluginSystemSnapshot | undefined) => {
+    if (!canLoadPluginSnapshot || !data) return;
     data.plugins.forEach((plugin) => registerPluginLocales(plugin.name, plugin.locales));
     setSnapshot((prev) => data.generation >= prev.generation ? data : prev);
   }, [canLoadPluginSnapshot]);

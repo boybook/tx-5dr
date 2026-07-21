@@ -1683,7 +1683,9 @@ export interface DigitalRadioEngineEvents {
   realtimeConnectivityIssue: (data: import('./realtime.schema.js').RealtimeConnectivityIssue) => void;
 
   // 插件系统事件
-  pluginList: (data: undefined) => void;
+  // 引擎内部以 undefined 作为纯信号触发；WS 服务端收到后按连接计算快照再下发，
+  // 因此客户端实际收到的载荷始终是 PluginSystemSnapshot。
+  pluginList: (data: PluginSystemSnapshot | undefined) => void;
   pluginStatusChanged: (data: { generation: number; plugin: PluginStatus }) => void;
   pluginData: (data: PluginDataPayload) => void;
   pluginLog: (data: PluginLogEntry) => void;

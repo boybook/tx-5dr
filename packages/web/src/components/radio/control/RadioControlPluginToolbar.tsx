@@ -173,7 +173,7 @@ export function resolveRadioToolbarIcon(rawIcon: string | undefined): IconDefini
 }
 
 export function resolveRadioToolbarTone(rawTone: unknown): ToolbarTone {
-  return typeof rawTone === 'string' && Object.hasOwn(TOOLBAR_TONE_CLASS, rawTone)
+  return typeof rawTone === 'string' && rawTone in TOOLBAR_TONE_CLASS
     ? rawTone as ToolbarTone
     : DEFAULT_TOOLBAR_TONE;
 }

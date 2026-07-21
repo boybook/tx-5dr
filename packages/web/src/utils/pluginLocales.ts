@@ -22,7 +22,7 @@ export function resolvePluginLabel(label: string, pluginName: string): string {
 export function resolvePluginLabelWithValues(
   label: string,
   pluginName: string,
-  values?: Record<string, unknown>,
+  values?: Record<string, unknown> | null,
 ): string {
   const ns = `plugin:${pluginName}`;
   const options = values ? { ns, ...values } : { ns };
