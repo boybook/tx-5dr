@@ -112,7 +112,9 @@ export class AudioDeviceManager {
   private parseNumericDeviceId(deviceId: string | undefined): number | null {
     if (!deviceId) return null;
     if (deviceId.includes('usb:')) return null;
+    if (deviceId.includes('__held')) return null;
     const normalized = deviceId.replace(/^(input|output)-/, '');
+    if (!/^\d+$/.test(normalized)) return null;
     const parsed = Number.parseInt(normalized, 10);
     return Number.isFinite(parsed) ? parsed : null;
   }
@@ -226,6 +228,8 @@ export class AudioDeviceManager {
    * RtAudio numeric ids are unstable: opening a USB codec often makes ALSA reuse
    * that index for an unrelated device (e.g. HDMI) or the other identical CODEC.
    * Only treat devices as the same physical endpoint when hardwareIds match.
+   * Non-Linux platforms never attach hardwareId, so fall back to name equality
+   * there to avoid permanently recreating ghost registry entries on every merge.
    */
   private isCompatibleLiveDevice(
     existing: RegisteredAudioDevice,
@@ -234,10 +238,13 @@ export class AudioDeviceManager {
     if (existing.hardwareId && liveDevice.hardwareId) {
       return existing.hardwareId === liveDevice.hardwareId;
     }
-    // Same product name (ICOM "USB Audio CODEC") must not imply same radio.
+    // Same product name (ICOM "USB Audio CODEC") must not imply same radio on Linux.
     if (
-      looksLikeUsbAudioDeviceName(existing.name)
-      || looksLikeUsbAudioDeviceName(liveDevice.name)
+      process.platform === 'linux'
+      && (
+        looksLikeUsbAudioDeviceName(existing.name)
+        || looksLikeUsbAudioDeviceName(liveDevice.name)
+      )
     ) {
       return false;
     }
@@ -537,9 +544,12 @@ export class AudioDeviceManager {
       return byName[0];
     }
     if (byName.length > 1) {
-      // Legacy profiles only stored the name. Keep deterministic first-match
-      // so existing setups keep working until the user re-saves with an id.
-      return byName[0];
+      // Ambiguous identical USB codecs cannot be told apart by name alone —
+      // align with pickLiveDeviceByName so UI resolution and stream open agree.
+      const isAmbiguousUsb = byName.some(
+        (device) => looksLikeUsbAudioDeviceName(device.name) || device.hardwareId,
+      );
+      return isAmbiguousUsb ? null : byName[0];
     }
     return null;
   }
@@ -642,7 +652,8 @@ export class AudioDeviceManager {
 
       // Opposite direction may already own this USB radio (e.g. capture open on
       // IC-7610 while playback starts). Live listing often drops or mis-orders the
-      // busy card, so reuse the numeric RtAudio id we opened / registered earlier.
+      // busy card, so reuse the numeric RtAudio id we opened / registered earlier —
+      // but only after verifying the live endpoint still matches this hardwareId.
       const registeredSameDirection = this.findRegisteredDeviceByHardwareId(direction, hardwareId);
       const registeredOtherDirection = this.findRegisteredDeviceByHardwareId(
         direction === 'input' ? 'output' : 'input',
@@ -656,31 +667,72 @@ export class AudioDeviceManager {
         const liveByCachedId = directionalLiveDevices.find(
           (device) => this.parseNumericDeviceId(device.id) === cachedNumericId,
         );
-        if (liveByCachedId) {
+        if (
+          liveByCachedId
+          && looksLikeUsbAudioDeviceName(liveByCachedId.name)
+          && (!liveByCachedId.hardwareId || liveByCachedId.hardwareId === hardwareId)
+        ) {
           return {
             actualDeviceId: cachedNumericId,
-            persistedDeviceId: liveByCachedId.id,
+            persistedDeviceId: liveByCachedId.id.startsWith(`${direction}-`)
+              ? liveByCachedId.id
+              : `${direction}-${cachedNumericId}`,
             deviceName: liveByCachedId.name || registered?.name || deviceName || hardwareId,
             hardwareId,
           };
         }
 
         const rawDevices = rtAudio.getDevices();
-        const rawStillPresent = rawDevices.some((device: { id?: number }) => device.id === cachedNumericId);
-        if (rawStillPresent || registeredOtherDirection?.isActiveByTx5dr) {
+        const rawDevice = rawDevices.find((device: { id?: number; name?: string }) => device.id === cachedNumericId);
+        const rawNameMatches = Boolean(
+          rawDevice?.name
+          && registered?.name
+          && rawDevice.name === registered.name,
+        );
+        if (
+          rawDevice
+          && rawNameMatches
+          && looksLikeUsbAudioDeviceName(rawDevice.name)
+          && (registeredOtherDirection?.isActiveByTx5dr || registeredSameDirection?.isActiveByTx5dr)
+        ) {
           logger.info('Resolving USB audio via registry cache for busy hardwareId', {
             direction,
             hardwareId,
             cachedNumericId,
-            rawStillPresent,
             fromOtherDirection: Boolean(registeredOtherDirection?.isActiveByTx5dr),
           });
           return {
             actualDeviceId: cachedNumericId,
-            persistedDeviceId: registered?.id ?? `${direction}-${cachedNumericId}`,
+            persistedDeviceId: `${direction}-${cachedNumericId}`,
             deviceName: registered?.name || deviceName || hardwareId,
             hardwareId,
           };
+        }
+      }
+
+      // USB port path can change after replug/hub move. If exactly one live
+      // device still shares the configured name, fall back so single-radio
+      // setups self-heal instead of retrying forever.
+      if (deviceName) {
+        const namedDevices = this.findDevicesByName(directionalLiveDevices, deviceName);
+        const uniqueByName = namedDevices.length === 1 ? namedDevices[0] : undefined;
+        if (uniqueByName) {
+          const actualDeviceId = this.parseNumericDeviceId(uniqueByName.id);
+          if (actualDeviceId !== null) {
+            logger.info('Configured hardwareId not present; falling back to unique same-name device', {
+              direction,
+              requestedHardwareId: hardwareId,
+              deviceName,
+              resolvedId: uniqueByName.id,
+              resolvedHardwareId: uniqueByName.hardwareId,
+            });
+            return {
+              actualDeviceId,
+              persistedDeviceId: uniqueByName.id,
+              deviceName: uniqueByName.name,
+              hardwareId: uniqueByName.hardwareId,
+            };
+          }
         }
       }
 
@@ -712,7 +764,11 @@ export class AudioDeviceManager {
 
     if (requestedDeviceId) {
       const byExactId = directionalLiveDevices.find((device) => device.id === requestedDeviceId);
-      if (byExactId && this.canReuseLiveDeviceId(byExactId, requestedHardwareId)) {
+      if (
+        byExactId
+        && (!deviceName || byExactId.name === deviceName)
+        && this.canReuseLiveDeviceId(byExactId, requestedHardwareId)
+      ) {
         const actualDeviceId = this.parseNumericDeviceId(byExactId.id);
         if (actualDeviceId !== null) {
           return {

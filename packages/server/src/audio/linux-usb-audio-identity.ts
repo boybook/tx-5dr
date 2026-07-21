@@ -177,7 +177,10 @@ function collectSiblingRadioSerials(usbDeviceDir: string): string[] {
   return Array.from(new Set(serials)).sort((a, b) => a.localeCompare(b));
 }
 
-/** Read the capture (pcm0c) or playback (pcm0p) PCM status for a single card. */
+/** Read the capture (pcm0c) or playback (pcm0p) PCM status for a single card.
+ * Simplification: only pcm0{c,p}/sub0 is inspected. Multi-PCM or higher
+ * substream occupancy is not reported as busy.
+ */
 function readPcmDirectionStatus(cardIndex: number, direction: PcmDirection): PcmDirectionStatus {
   const stream = direction === 'input' ? 'pcm0c' : 'pcm0p';
   const statusPath = `/proc/asound/card${cardIndex}/${stream}/sub0/status`;
@@ -382,15 +385,19 @@ export function identityToFields(identity: LinuxUsbAudioIdentity): AudioDeviceId
 /**
  * Attach Linux USB/radio identity metadata onto enumerated RtAudio devices.
  *
- * Only cards FREE in this direction are claimed onto live RtAudio entries. Busy
- * cards that this process already opened must NOT be FIFO-matched onto the
- * remaining enumerated USB devices: RtAudio listing order is unrelated to which
- * card we opened, and attaching "owned" identities first mislabels the free peer
+ * Directional tradeoff (not a restoration of owned-first claiming): only cards
+ * FREE in this direction are claimed onto live RtAudio entries. Busy cards that
+ * this process already opened must NOT be FIFO-matched onto the remaining
+ * enumerated USB devices — RtAudio listing order is unrelated to which card we
+ * opened, and attaching "owned" identities first mislabels the free peer
  * (e.g. labels the IC-9700 device as IC-7610). Busy is evaluated per direction
- * so a capture-only open never hides the free playback side and vice versa. Busy
- * radios are rebound via {@link assignBusyIdentitiesToActiveDevices},
- * {@link findOwnedUsbAudioHardwareId}, or registry/hardwareId fallbacks when
- * opening the opposite stream direction.
+ * so a capture-only open never hides the free playback side and vice versa.
+ *
+ * Matching remains heuristic (enumeration order ≈ alsaCard ascending); crossed
+ * order can still mis-attach when only free cards remain. Busy radios are rebound
+ * via {@link assignBusyIdentitiesToActiveDevices},
+ * {@link findOwnedUsbAudioHardwareId}, or verified registry/hardwareId fallbacks
+ * when opening the opposite stream direction.
  */
 export function attachLinuxUsbAudioIdentities<T extends { name: string; hardwareId?: string }>(
   devices: T[],
