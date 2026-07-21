@@ -464,8 +464,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
               style={isMobile ? {} : usesModalFooterSave
                 ? { maxHeight: '616px' }
                 : activeTab === 'about'
-                  ? { maxHeight: '689px' }
-                  : { minHeight: '689px', maxHeight: '689px' }
+                  ? { maxHeight: 'min(689px, calc(100dvh - 213px))' }
+                  : { minHeight: 'min(689px, calc(100dvh - 213px))', maxHeight: 'min(689px, calc(100dvh - 213px))' }
               }
             >
               {/* 标签页菜单 */}
@@ -485,7 +485,6 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                 onWheel={isMobile ? (e) => {
                   const tabList = e.currentTarget.querySelector('[role="tablist"]');
                   if (tabList) {
-                    e.preventDefault();
                     tabList.scrollLeft += e.deltaY;
                   }
                 } : undefined}
