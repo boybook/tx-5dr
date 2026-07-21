@@ -76,6 +76,7 @@ const { mockState, mockConfigManager, MockRtAudio } = vi.hoisted(() => {
       getAudioConfig: vi.fn(),
       getOpenWebRXStations: vi.fn(() => []),
       getRadioConfig: vi.fn(() => ({ type: 'serial' })),
+      getProfiles: vi.fn(() => []),
     },
     MockRtAudio: HoistedMockRtAudio,
   };
@@ -1007,6 +1008,64 @@ describe('audio hotplug recovery', () => {
       streamName: 'TX5DR-Output',
     }));
     expect(streamManager.getStatus().outputDeviceId).toBe('output-4');
+  });
+
+  it('rejects the unique same-name fallback when the candidate is a different in-use radio', async () => {
+    mockUsbIdentities([
+      makeUsbIdentity({ hardwareId: 'usb:1-2', alsaCard: 0 }),
+    ]);
+    // 幸存的另一台电台（usb:1-2）正在被 TX5DR 使用：配置的 usb:1-1 被拔掉时不得误开它
+    const manager = AudioDeviceManager.getInstance();
+    manager.markDeviceActive(
+      'output',
+      'USB Audio CODEC',
+      'output-usb:1-2',
+      48000,
+      2,
+      'usb:1-2',
+    );
+
+    mockState.devices = [
+      { id: 4, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+    ];
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      outputDeviceName: 'USB Audio CODEC',
+      outputDeviceId: 'output-3',
+      outputHardwareId: 'usb:1-1',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    const streamManager = new AudioStreamManager();
+    await expect(streamManager.startOutput()).rejects.toMatchObject({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+    });
+    expect(mockState.openCalls).toHaveLength(0);
+  });
+
+  it('rejects the unique same-name fallback when another profile claims the candidate', async () => {
+    mockUsbIdentities([
+      makeUsbIdentity({ hardwareId: 'usb:1-2', alsaCard: 0 }),
+    ]);
+    mockConfigManager.getProfiles.mockReturnValue([
+      { id: 'profile-b', name: 'IC-9700', audio: { outputHardwareId: 'usb:1-2' } } as never,
+    ]);
+    mockState.devices = [
+      { id: 4, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+    ];
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      outputDeviceName: 'USB Audio CODEC',
+      outputDeviceId: 'output-3',
+      outputHardwareId: 'usb:1-1',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    const streamManager = new AudioStreamManager();
+    await expect(streamManager.startOutput()).rejects.toMatchObject({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+    });
+    expect(mockState.openCalls).toHaveLength(0);
   });
 
   it('rejects registry-cache reuse when the cached numeric id is now a non-USB device', async () => {

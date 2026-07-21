@@ -720,7 +720,34 @@ export class AudioDeviceManager {
         const uniqueByName = namedDevices.length === 1 ? namedDevices[0] : undefined;
         if (uniqueByName) {
           const actualDeviceId = this.parseNumericDeviceId(uniqueByName.id);
-          if (actualDeviceId !== null) {
+          // Dual-radio guards: never silently open (and transmit on) the *other* radio.
+          // Reject the fallback when the unique same-name candidate is either
+          // (a) currently in use by TX5DR itself (active registry entry), or
+          // (b) claimed by another profile's persisted hardwareId — both indicate
+          // the configured radio was unplugged while a different radio stayed.
+          const otherDirection = direction === 'input' ? 'output' : 'input';
+          const candidateEntry =
+            this.findRegisteredDeviceByHardwareId(direction, uniqueByName.hardwareId)
+            ?? this.findRegisteredDeviceByHardwareId(otherDirection, uniqueByName.hardwareId);
+          const candidateInUse = candidateEntry?.isActiveByTx5dr === true
+            || candidateEntry?.availability === 'active';
+          const candidateClaimedByProfile = ConfigManager.getInstance().getProfiles().some((profile) => {
+            const profileHardwareId = direction === 'input'
+              ? profile.audio?.inputHardwareId
+              : profile.audio?.outputHardwareId;
+            return Boolean(profileHardwareId && profileHardwareId === uniqueByName.hardwareId);
+          });
+          if (actualDeviceId !== null && (candidateInUse || candidateClaimedByProfile)) {
+            logger.warn('Skipping unique same-name fallback: candidate appears to be a different radio', {
+              direction,
+              requestedHardwareId: hardwareId,
+              deviceName,
+              candidateId: uniqueByName.id,
+              candidateHardwareId: uniqueByName.hardwareId,
+              candidateInUse,
+              candidateClaimedByProfile,
+            });
+          } else if (actualDeviceId !== null) {
             logger.info('Configured hardwareId not present; falling back to unique same-name device', {
               direction,
               requestedHardwareId: hardwareId,
