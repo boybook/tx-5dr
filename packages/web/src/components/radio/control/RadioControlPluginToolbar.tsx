@@ -288,7 +288,7 @@ const RadioControlToolbarButton: React.FC<{ entry: RadioControlToolbarEntry }> =
               <span>{entry.resolvedTitle}</span>
               <span className="text-xs font-normal text-default-400">{entry.pluginDisplayName}</span>
             </ModalHeader>
-            <ModalBody className="p-0 overflow-hidden">
+            <ModalBody className="p-0 overflow-hidden rounded-b-large">
               <PluginIframeHost
                 key={`${entry.pluginName}:${entry.pageId}:${entry.pluginGeneration}:modal`}
                 pluginName={entry.pluginName}

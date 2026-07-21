@@ -53,7 +53,7 @@ export const AboutPage: React.FC<AboutPageProps> = ({ embedded, showUpdateCard =
   }, [isEmbedded]);
 
   return (
-    <div className={`${isEmbedded ? 'h-full overflow-y-auto' : 'min-h-screen'} bg-default-100 text-foreground`}>
+    <div className={`${isEmbedded ? 'min-h-full' : 'min-h-screen'} bg-default-100 text-foreground`}>
       {showMacTitlebar && (
         <div
           className="fixed top-0 left-0 right-0 z-50 flex"
