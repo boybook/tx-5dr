@@ -8,6 +8,7 @@ import type {
   ModeDescriptor,
   EngineMode,
   PermissionGrant,
+  PluginPanelMeta,
   PluginPanelDescriptor,
   CapabilityList,
   CapabilityState,
@@ -598,39 +599,7 @@ export interface BandAccess {
 /**
  * Dynamic metadata for a plugin panel, sent via {@link UIBridge.setPanelMeta}.
  */
-export interface PanelMeta {
-  /**
-   * Overrides the panel title dynamically.
-   * - i18n key (e.g. `"statusActive"`): resolved from the plugin's locale namespace
-   * - literal string (e.g. `"Active: 5"`): displayed as-is
-   * - empty string `""`: hides the title bar entirely (immersive)
-   * - null / undefined: reverts to the statically declared title
-   */
-  title?: string | null;
-
-  /**
-   * Interpolation values for the title when it is an i18n key.
-   * For example, if the plugin locale defines `"statusActive": "Active: {{count}}"`,
-   * pass `{ count: 5 }` to render "Active: 5".
-   */
-  titleValues?: Record<string, unknown> | null;
-
-  /**
-   * Controls whether the panel is visible.
-   * - false: the host hides the panel entirely (it takes no layout space)
-   * - true / undefined: normal display
-   */
-  visible?: boolean | null;
-
-  /**
-   * Optional toolbar accent tone.
-   *
-   * The current host uses this on `radio-control-toolbar` iframe entries to
-   * tint the button when the plugin wants to signal status such as alerts or
-   * recent activity. Other panel hosts may ignore this field.
-   */
-  tone?: 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger' | null;
-}
+export interface PanelMeta extends PluginPanelMeta {}
 
 /**
  * Minimal bridge for sending structured data to plugin panels in the frontend.
