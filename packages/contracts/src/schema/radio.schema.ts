@@ -212,6 +212,7 @@ export const TciConfigSchema = z.object({
  */
 export const SerialConnectionConfigSchema = z.object({
   path: z.string(),
+  serialNumber: z.string().optional(),
   rigModel: z.number().int(),
   serialConfig: SerialConfigSchema.optional(),
   backendConfig: HamlibBackendConfigSchema.optional(),
