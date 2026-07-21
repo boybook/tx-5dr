@@ -373,6 +373,10 @@ export class ConfigManager {
   private configStore: JsonFileStore<Record<string, unknown>> | null = null;
   private runtimeState = RuntimeStateManager.getInstance();
   private unregisterPersistence: (() => void) | null = null;
+  /** Serializes profile switches so concurrent callers cannot corrupt memory buckets. */
+  private profileSwitchQueue: Promise<unknown> = Promise.resolve();
+  /** Suspends mirror-to-bucket while a switch is between setActive and load. */
+  private profileSwitchInProgress = false;
 
   private constructor() {
     this.config = { ...DEFAULT_CONFIG };
@@ -871,23 +875,53 @@ export class ConfigManager {
   }
 
   /**
-   * Atomically switch the active profile and its operating memory.
+   * Switch the active profile and its operating memory.
    *
-   * All profile-switch callers (ProfileManager, RadioPowerController, …) must
-   * use this entry so snapshot → setActive → load stays ordered and complete.
+   * Serialized across callers (ProfileManager, RadioPowerController, …) so
+   * concurrent switches cannot interleave snapshot → setActive → load.
+   * Mirror-to-bucket is suspended for the duration of each switch.
    */
   async switchActiveProfile(id: string): Promise<{ previousProfileId: string | null; profileId: string }> {
+    const run = this.profileSwitchQueue.then(() => this.performSwitchActiveProfile(id));
+    // Keep the queue alive even if a switch fails, so later callers still serialize.
+    this.profileSwitchQueue = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private async performSwitchActiveProfile(
+    id: string,
+  ): Promise<{ previousProfileId: string | null; profileId: string }> {
     if (!this.config.profiles.find((profile) => profile.id === id)) {
       throw new Error(`Profile ${id} does not exist`);
     }
 
     const previousProfileId = this.getActiveProfileId();
-    if (previousProfileId && previousProfileId !== id) {
-      await this.snapshotOperatingMemoryForProfile(previousProfileId);
+    if (previousProfileId === id) {
+      await this.setActiveProfileId(id);
+      return { previousProfileId, profileId: id };
     }
-    await this.setActiveProfileId(id);
-    if (previousProfileId !== id) {
-      await this.loadOperatingMemoryForProfile(id);
+
+    this.profileSwitchInProgress = true;
+    try {
+      if (previousProfileId) {
+        await this.snapshotOperatingMemoryForProfile(previousProfileId);
+      }
+      await this.setActiveProfileId(id);
+      try {
+        await this.loadOperatingMemoryForProfile(id);
+      } catch (error) {
+        logger.error('Failed to load operating memory after profile switch; clearing globals', {
+          profileId: id,
+          error,
+        });
+        await this.setRuntimeValue('lastSelectedFrequency', null);
+        await this.setRuntimeValue('lastVoiceFrequency', null);
+        await this.setRuntimeValue('lastCWFrequency', null);
+        await this.setRuntimeValue('lastEngineMode', 'digital');
+        await this.setRuntimeValue('lastDigitalModeName', 'FT8');
+      }
+    } finally {
+      this.profileSwitchInProgress = false;
     }
 
     return { previousProfileId, profileId: id };
@@ -1287,7 +1321,21 @@ export class ConfigManager {
 
   getProfileOperatingMemory(profileId: string): ProfileOperatingMemory | null {
     const memory = this.getRuntimeValue('profileOperatingMemory')?.[profileId];
-    return memory ? { ...memory } : null;
+    if (!memory) {
+      return null;
+    }
+    return {
+      ...memory,
+      lastSelectedFrequency: memory.lastSelectedFrequency
+        ? { ...memory.lastSelectedFrequency }
+        : memory.lastSelectedFrequency,
+      lastVoiceFrequency: memory.lastVoiceFrequency
+        ? { ...memory.lastVoiceFrequency }
+        : memory.lastVoiceFrequency,
+      lastCWFrequency: memory.lastCWFrequency
+        ? { ...memory.lastCWFrequency }
+        : memory.lastCWFrequency,
+    };
   }
 
   /**
@@ -1365,6 +1413,9 @@ export class ConfigManager {
   private async mirrorOperatingFieldToActiveProfile(
     patch: Partial<ProfileOperatingMemory>,
   ): Promise<void> {
+    if (this.profileSwitchInProgress) {
+      return;
+    }
     const profileId = this.getActiveProfileId();
     if (!profileId) {
       return;

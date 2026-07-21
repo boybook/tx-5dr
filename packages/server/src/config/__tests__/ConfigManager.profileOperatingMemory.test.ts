@@ -88,7 +88,7 @@ describe('ConfigManager profile operating memory', () => {
       band: '2m',
       description: '144.460 FT8',
     });
-    await configManager.setLastEngineMode('digital');
+    await configManager.setLastEngineMode('voice');
 
     await configManager.snapshotOperatingMemoryForProfile('profile-9700');
     await configManager.setActiveProfileId('profile-7610');
@@ -98,6 +98,7 @@ describe('ConfigManager profile operating memory', () => {
     expect(configManager.getLastEngineMode()).toBe('digital');
     expect(configManager.getProfileOperatingMemory('profile-9700')).toMatchObject({
       lastSelectedFrequency: expect.objectContaining({ frequency: 144_460_000 }),
+      lastEngineMode: 'voice',
     });
   });
 
@@ -142,7 +143,7 @@ describe('ConfigManager profile operating memory', () => {
     });
 
     // Put globals back on 9700 without going through switchActiveProfile,
-    // then exercise the atomic helper as RadioPowerController would.
+    // then exercise the helper as RadioPowerController would.
     await configManager.setActiveProfileId('profile-9700');
     await configManager.loadOperatingMemoryForProfile('profile-9700');
     await configManager.updateLastSelectedFrequency({
@@ -162,6 +163,51 @@ describe('ConfigManager profile operating memory', () => {
     expect(configManager.getProfileOperatingMemory('profile-9700')).toMatchObject({
       lastSelectedFrequency: expect.objectContaining({ frequency: 144_460_000 }),
     });
+  });
+
+  it('skips snapshot/load when switchActiveProfile targets the already-active profile', async () => {
+    await configManager.updateLastSelectedFrequency({
+      frequency: 144_460_000,
+      mode: 'FT8',
+      band: '2m',
+    });
+    await configManager.setLastEngineMode('voice');
+
+    const result = await configManager.switchActiveProfile('profile-9700');
+
+    expect(result).toEqual({ previousProfileId: 'profile-9700', profileId: 'profile-9700' });
+    expect(configManager.getLastSelectedFrequency()).toMatchObject({ frequency: 144_460_000 });
+    expect(configManager.getLastEngineMode()).toBe('voice');
+    expect(configManager.getActiveProfileId()).toBe('profile-9700');
+  });
+
+  it('serializes concurrent switchActiveProfile calls without corrupting buckets', async () => {
+    await configManager.updateLastSelectedFrequency({
+      frequency: 144_460_000,
+      mode: 'FT8',
+      band: '2m',
+    });
+    await configManager.setLastEngineMode('digital');
+
+    const first = configManager.switchActiveProfile('profile-7610');
+    const second = configManager.switchActiveProfile('profile-9700');
+    await Promise.all([first, second]);
+
+    expect(configManager.getActiveProfileId()).toBe('profile-9700');
+    expect(configManager.getLastSelectedFrequency()).toMatchObject({
+      frequency: 144_460_000,
+      band: '2m',
+    });
+    expect(configManager.getProfileOperatingMemory('profile-9700')).toMatchObject({
+      lastSelectedFrequency: expect.objectContaining({ frequency: 144_460_000 }),
+    });
+  });
+
+  it('throws when switchActiveProfile targets a missing profile', async () => {
+    await expect(configManager.switchActiveProfile('missing-profile')).rejects.toThrow(
+      'Profile missing-profile does not exist',
+    );
+    expect(configManager.getActiveProfileId()).toBe('profile-9700');
   });
 
   it('removes operating memory when a profile is deleted', async () => {
