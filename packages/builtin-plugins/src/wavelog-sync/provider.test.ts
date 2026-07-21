@@ -491,8 +491,9 @@ describe('WaveLogSyncProvider', () => {
         },
       ]),
     );
-    queryQSOs.mockImplementation(async (filter?: { callsign?: string }) => {
-      if (filter?.callsign?.toUpperCase() === 'JH0BBE') {
+    queryQSOs.mockImplementation(async (filter?: unknown) => {
+      const callsign = (filter as { callsign?: string } | undefined)?.callsign;
+      if (callsign?.toUpperCase() === 'JH0BBE') {
         return [alreadySynced];
       }
       return [];
@@ -522,6 +523,110 @@ describe('WaveLogSyncProvider', () => {
       callsign: 'JO1LVZ',
       lotwQslSent: 'Y',
     }));
+    expect(notifyUpdated).toHaveBeenCalledTimes(1);
+  });
+
+  it('download updates only the best-scored local match when multiple candidates exist', async () => {
+    const best = createQso('local-best', {
+      callsign: 'JQ1XGV',
+      frequency: 144_460_970,
+      startTime: Date.parse('2026-07-16T03:01:00.000Z'),
+      endTime: Date.parse('2026-07-16T03:01:00.000Z'),
+    });
+    // Same callsign/band/mode/station, but 10 minutes away from the remote record.
+    const other = createQso('local-other', {
+      callsign: 'JQ1XGV',
+      frequency: 144_460_970,
+      startTime: Date.parse('2026-07-16T03:11:00.000Z'),
+      endTime: Date.parse('2026-07-16T03:11:00.000Z'),
+    });
+    const { ctx, queryQSOs, addQSO, updateQSO, notifyUpdated } = createContext(async () =>
+      adifDownloadResponse([{
+        call: 'JQ1XGV',
+        qsoDate: '20260716',
+        timeOn: '030100',
+        freq: '144.46097',
+        mode: 'FT8',
+        lotwSent: 'Y',
+        lotwSentDate: '20260716',
+      }]),
+    );
+    // Return the worse candidate first to prove the score ranking is honored.
+    queryQSOs.mockResolvedValue([other, best]);
+
+    const provider = new WaveLogSyncProvider(ctx);
+    provider.setConfig('BG5DRB', {
+      url: 'https://wavelog.example.com',
+      apiKey: 'api-key',
+      stationId: 'station-1',
+      radioName: 'TX5DR',
+      autoUploadQSO: true,
+    });
+
+    const result = await provider.download('BG5DRB');
+
+    expect(result).toEqual({
+      downloaded: 1,
+      matched: 1,
+      updated: 1,
+      imported: 0,
+      failures: undefined,
+    });
+    expect(updateQSO).toHaveBeenCalledTimes(1);
+    expect(updateQSO).toHaveBeenCalledWith('local-best', expect.objectContaining({
+      lotwQslSent: 'Y',
+    }));
+    expect(addQSO).not.toHaveBeenCalled();
+    expect(notifyUpdated).toHaveBeenCalledTimes(1);
+  });
+
+  it('download matches a local QSO whose station callsign carries a /P suffix', async () => {
+    const local = createQso('local-portable', {
+      callsign: 'JQ1XGV',
+      myCallsign: 'BG5DRB/P',
+      frequency: 144_460_970,
+      startTime: Date.parse('2026-07-16T03:01:00.000Z'),
+      endTime: Date.parse('2026-07-16T03:01:00.000Z'),
+    });
+    const { ctx, queryQSOs, addQSO, updateQSO, notifyUpdated } = createContext(async () =>
+      adifDownloadResponse([{
+        call: 'JQ1XGV',
+        qsoDate: '20260716',
+        timeOn: '030100',
+        freq: '144.46097',
+        mode: 'FT8',
+        lotwSent: 'Y',
+        lotwSentDate: '20260716',
+        myCall: 'BG5DRB',
+      }]),
+    );
+    queryQSOs.mockResolvedValue([local]);
+
+    const provider = new WaveLogSyncProvider(ctx);
+    provider.setConfig('BG5DRB', {
+      url: 'https://wavelog.example.com',
+      apiKey: 'api-key',
+      stationId: 'station-1',
+      radioName: 'TX5DR',
+      autoUploadQSO: true,
+    });
+
+    const result = await provider.download('BG5DRB');
+
+    expect(result).toEqual({
+      downloaded: 1,
+      matched: 1,
+      updated: 1,
+      imported: 0,
+      failures: undefined,
+    });
+    expect(updateQSO).toHaveBeenCalledTimes(1);
+    expect(updateQSO).toHaveBeenCalledWith('local-portable', expect.objectContaining({
+      lotwQslSent: 'Y',
+    }));
+    // The /P station match must prevent the remote record from being
+    // imported as a duplicate.
+    expect(addQSO).not.toHaveBeenCalled();
     expect(notifyUpdated).toHaveBeenCalledTimes(1);
   });
 });
