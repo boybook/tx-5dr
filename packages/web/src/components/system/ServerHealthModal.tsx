@@ -996,6 +996,7 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
   return (
     <Modal isOpen={isOpen} onClose={onClose} size="2xl" scrollBehavior="inside"
       placement="center"
+      classNames={{ base: 'overflow-hidden' }}
     >
       <ModalContent>
         <ModalHeader className="flex flex-col gap-0 pb-2">
