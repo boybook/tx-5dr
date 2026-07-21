@@ -185,6 +185,20 @@ describe('audio hotplug recovery', () => {
           available: true,
           isDefault: true,
         },
+        {
+          id: 'android-output-22',
+          androidDeviceId: 22,
+          name: '[Android] USB Audio CODEC',
+          direction: 'output',
+          kind: 'usb',
+          channels: 1,
+          sampleRate: 48000,
+          sampleRates: [48000],
+          format: 's16le',
+          socketPath: '/opt/tx5dr-data/runtime/sockets/audio-output-22.sock',
+          available: true,
+          isDefault: false,
+        },
       ],
     }));
     process.env.TX5DR_RUNTIME_FLAVOR = 'android-bridge';
@@ -199,7 +213,7 @@ describe('audio hotplug recovery', () => {
     await expect(manager.resolveInputDeviceId()).resolves.toBe('android-input-11');
     await expect(manager.resolveInputDeviceId('TX5DRAndroidUsbInput')).resolves.toBe('android-input-11');
     await expect(manager.resolveOutputDeviceId()).resolves.toBe('android-output-21');
-    await expect(manager.resolveOutputDeviceId('TX5DRAndroidOutput')).resolves.toBe('android-output-21');
+    await expect(manager.resolveOutputDeviceId('TX5DRAndroidOutput')).resolves.toBe('android-output-22');
   });
 
   it('merges active Android socket devices into manifest devices without duplicating them', async () => {

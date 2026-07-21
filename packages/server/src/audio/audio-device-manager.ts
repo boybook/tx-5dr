@@ -12,6 +12,7 @@ import {
   isAndroidAudioDeviceId,
   isAndroidBridgeRuntime,
   isLegacyAndroidAudioDeviceName,
+  isLegacyAndroidUsbDeviceName,
   resolveAndroidAudioDevice,
   type AndroidAudioDeviceDescriptor,
   type AndroidAudioDirection,
@@ -127,7 +128,12 @@ export class AudioDeviceManager {
 
     for (const registered of this.deviceRegistry[direction].values()) {
       const publicDevice = this.toPublicDevice(registered);
-      const manifestDevice = devicesById.get(publicDevice.id);
+      const manifestDevice = devicesById.get(publicDevice.id)
+        ?? (isAndroidAudioDeviceId(publicDevice.id)
+          ? devices.find((device) => (
+              Boolean(publicDevice.routeKey) && device.routeKey === publicDevice.routeKey
+            ) || device.name === publicDevice.name)
+          : undefined);
       if (isAndroidAudioDeviceId(publicDevice.id) && manifestDevice) {
         if (publicDevice.isActiveByTx5dr || publicDevice.availability === 'active') {
           Object.assign(manifestDevice, {
@@ -272,12 +278,14 @@ export class AudioDeviceManager {
     deviceName: string | undefined,
     rtAudio: RtAudioInstance,
     requestedDeviceId?: string,
+    configuredRouteKey?: string,
   ): Promise<StreamDeviceResolution> {
-    if (isAndroidAudioDeviceId(requestedDeviceId) || deviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName('input', deviceName))) {
+    if (configuredRouteKey || isAndroidAudioDeviceId(requestedDeviceId) || deviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName('input', deviceName))) {
       const device = this.resolveAndroidDeviceOrThrow(
         'input',
-        isLegacyAndroidAudioDeviceName('input', deviceName) ? undefined : deviceName,
+        deviceName,
         requestedDeviceId,
+        configuredRouteKey,
       );
       return { actualDeviceId: -1, persistedDeviceId: device.id, deviceName: device.name };
     }
@@ -288,12 +296,14 @@ export class AudioDeviceManager {
     deviceName: string | undefined,
     rtAudio: RtAudioInstance,
     requestedDeviceId?: string,
+    configuredRouteKey?: string,
   ): Promise<StreamDeviceResolution> {
-    if (isAndroidAudioDeviceId(requestedDeviceId) || deviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName('output', deviceName))) {
+    if (configuredRouteKey || isAndroidAudioDeviceId(requestedDeviceId) || deviceName?.startsWith('[Android]') || (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName('output', deviceName))) {
       const device = this.resolveAndroidDeviceOrThrow(
         'output',
-        isLegacyAndroidAudioDeviceName('output', deviceName) ? undefined : deviceName,
+        deviceName,
         requestedDeviceId,
+        configuredRouteKey,
       );
       return { actualDeviceId: -1, persistedDeviceId: device.id, deviceName: device.name };
     }
@@ -304,18 +314,20 @@ export class AudioDeviceManager {
     direction: AndroidAudioDirection,
     deviceName?: string,
     requestedDeviceId?: string,
+    configuredRouteKey?: string,
   ): AndroidAudioDeviceDescriptor | null {
-    return resolveAndroidAudioDevice(direction, deviceName, requestedDeviceId);
+    return resolveAndroidAudioDevice(direction, deviceName, requestedDeviceId, configuredRouteKey);
   }
 
   private resolveAndroidDeviceOrThrow(
     direction: AndroidAudioDirection,
     deviceName?: string,
     requestedDeviceId?: string,
+    configuredRouteKey?: string,
   ): AndroidAudioDeviceDescriptor {
-    const device = resolveAndroidAudioDevice(direction, deviceName, requestedDeviceId);
+    const device = resolveAndroidAudioDevice(direction, deviceName, requestedDeviceId, configuredRouteKey);
     if (!device) {
-      throw this.createUnavailableConfiguredDeviceError(direction, deviceName ?? requestedDeviceId ?? `Android ${direction} device`);
+      throw this.createUnavailableConfiguredDeviceError(direction, deviceName ?? configuredRouteKey ?? requestedDeviceId ?? `Android ${direction} device`);
     }
     return device;
   }
@@ -601,12 +613,14 @@ export class AudioDeviceManager {
     return {
       input: this.resolveDeviceDirection({
         configuredDeviceName: settings.inputDeviceName ?? null,
+        configuredRouteKey: settings.inputRouteKey ?? null,
         devices: devices.inputDevices,
         direction: 'input',
         radioType: effectiveRadioType,
       }),
       output: this.resolveDeviceDirection({
         configuredDeviceName: settings.outputDeviceName ?? null,
+        configuredRouteKey: settings.outputRouteKey ?? null,
         devices: devices.outputDevices,
         direction: 'output',
         radioType: effectiveRadioType,
@@ -616,16 +630,30 @@ export class AudioDeviceManager {
 
   private resolveDeviceDirection(params: {
     configuredDeviceName: string | null;
+    configuredRouteKey: string | null;
     devices: AudioDevice[];
     direction: 'input' | 'output';
     radioType: RadioType;
   }): AudioDeviceResolution {
-    const { configuredDeviceName, devices, direction, radioType } = params;
+    const { configuredDeviceName, configuredRouteKey, devices, direction, radioType } = params;
     const defaultDevice = devices.find((device) => device.isDefault) ?? devices[0] ?? null;
+
+    if (configuredRouteKey) {
+      const configuredDevice = devices.find((device) => device.routeKey === configuredRouteKey) ?? null;
+      return {
+        configuredDeviceName,
+        configuredRouteKey,
+        configuredDevice,
+        effectiveDevice: configuredDevice,
+        status: configuredDevice ? 'selected' : 'missing',
+        reason: configuredDevice ? null : 'configured-route-missing',
+      };
+    }
 
     if (!configuredDeviceName) {
       return {
         configuredDeviceName: null,
+        configuredRouteKey: null,
         configuredDevice: null,
         effectiveDevice: defaultDevice,
         status: 'default',
@@ -634,12 +662,18 @@ export class AudioDeviceManager {
     }
 
     if (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName(direction, configuredDeviceName)) {
+      const legacyDevice = isLegacyAndroidUsbDeviceName(direction, configuredDeviceName)
+        ? devices.find((device) => device.kind === 'usb' && device.isDefault)
+          ?? devices.find((device) => device.kind === 'usb')
+          ?? null
+        : defaultDevice;
       return {
         configuredDeviceName,
+        configuredRouteKey: null,
         configuredDevice: null,
-        effectiveDevice: defaultDevice,
+        effectiveDevice: legacyDevice,
         status: 'default',
-        reason: defaultDevice ? 'legacy-android-audio-device' : 'no-default-device',
+        reason: legacyDevice ? 'legacy-android-audio-device' : 'no-default-device',
       };
     }
 
@@ -647,6 +681,7 @@ export class AudioDeviceManager {
     if (configuredDevice) {
       return {
         configuredDeviceName,
+        configuredRouteKey: null,
         configuredDevice,
         effectiveDevice: configuredDevice,
         status: configuredDevice.id.startsWith('openwebrx-') || configuredDevice.id.startsWith('icom-wlan-') || configuredDevice.id.startsWith('tci-')
@@ -660,6 +695,7 @@ export class AudioDeviceManager {
       const virtualDevice = this.createIcomWlanDevice(direction);
       return {
         configuredDeviceName,
+        configuredRouteKey: null,
         configuredDevice: virtualDevice,
         effectiveDevice: virtualDevice,
         status: 'virtual-selected',
@@ -671,6 +707,7 @@ export class AudioDeviceManager {
       const virtualDevice = this.createTciDevice(direction);
       return {
         configuredDeviceName,
+        configuredRouteKey: null,
         configuredDevice: virtualDevice,
         effectiveDevice: virtualDevice,
         status: 'virtual-selected',
@@ -681,6 +718,7 @@ export class AudioDeviceManager {
     if (configuredDeviceName.startsWith('[SDR]')) {
       return {
         configuredDeviceName,
+        configuredRouteKey: null,
         configuredDevice: null,
         effectiveDevice: null,
         status: 'missing',
@@ -690,6 +728,7 @@ export class AudioDeviceManager {
 
     return {
       configuredDeviceName,
+      configuredRouteKey: null,
       configuredDevice: null,
       effectiveDevice: null,
       status: 'missing',
@@ -770,7 +809,12 @@ export class AudioDeviceManager {
   /**
    * 根据设备名称解析为输入设备ID；空设备名使用默认设备，已配置设备缺失时交给 sidecar 重试。
    */
-  async resolveInputDeviceId(deviceName?: string): Promise<string | undefined> {
+  async resolveInputDeviceId(deviceName?: string, routeKey?: string): Promise<string | undefined> {
+    if (routeKey) {
+      const device = resolveAndroidAudioDevice('input', deviceName, undefined, routeKey);
+      if (!device) throw this.createMissingConfiguredDeviceError('input', deviceName ?? routeKey);
+      return device.id;
+    }
     if (!deviceName) {
       const defaultDevice = await this.getDefaultInputDevice();
       logger.debug(`Using default input device: ${defaultDevice?.name || 'none'}`);
@@ -778,9 +822,9 @@ export class AudioDeviceManager {
     }
 
     if (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName('input', deviceName)) {
-      const defaultDevice = await this.getDefaultInputDevice();
-      logger.debug(`Using default Android input device for legacy setting ${deviceName}: ${defaultDevice?.name || 'none'}`);
-      return defaultDevice?.id;
+      const legacyDevice = resolveAndroidAudioDevice('input', deviceName);
+      logger.debug(`Using compatible Android input device for legacy setting ${deviceName}: ${legacyDevice?.name || 'none'}`);
+      return legacyDevice?.id;
     }
 
     if (deviceName === 'ICOM WLAN') {
@@ -807,7 +851,12 @@ export class AudioDeviceManager {
   /**
    * 根据设备名称解析为输出设备ID；空设备名使用默认设备，已配置设备缺失时交给 sidecar 重试。
    */
-  async resolveOutputDeviceId(deviceName?: string): Promise<string | undefined> {
+  async resolveOutputDeviceId(deviceName?: string, routeKey?: string): Promise<string | undefined> {
+    if (routeKey) {
+      const device = resolveAndroidAudioDevice('output', deviceName, undefined, routeKey);
+      if (!device) throw this.createMissingConfiguredDeviceError('output', deviceName ?? routeKey);
+      return device.id;
+    }
     if (!deviceName) {
       const defaultDevice = await this.getDefaultOutputDevice();
       logger.debug(`Using default output device: ${defaultDevice?.name || 'none'}`);
@@ -815,9 +864,9 @@ export class AudioDeviceManager {
     }
 
     if (isAndroidBridgeRuntime() && isLegacyAndroidAudioDeviceName('output', deviceName)) {
-      const defaultDevice = await this.getDefaultOutputDevice();
-      logger.debug(`Using default Android output device for legacy setting ${deviceName}: ${defaultDevice?.name || 'none'}`);
-      return defaultDevice?.id;
+      const legacyDevice = resolveAndroidAudioDevice('output', deviceName);
+      logger.debug(`Using compatible Android output device for legacy setting ${deviceName}: ${legacyDevice?.name || 'none'}`);
+      return legacyDevice?.id;
     }
 
     if (deviceName === 'ICOM WLAN') {

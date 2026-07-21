@@ -395,9 +395,10 @@ export class DeviceUiProjectionService {
   }
 
   private applyPttStatus(data: Partial<PTTStatus> | null | undefined): void {
+    const operatorIds = data?.operatorIds;
     this.pttStatus = {
       isTransmitting: booleanOrDefault(data?.isTransmitting, false),
-      operatorIds: Array.isArray(data?.operatorIds) ? data.operatorIds.filter((id): id is string => typeof id === 'string') : [],
+      operatorIds: Array.isArray(operatorIds) ? operatorIds.filter((id): id is string => typeof id === 'string') : [],
     };
     this.snapshot.radio.ptt = this.pttStatus.isTransmitting;
     this.snapshot.radio.tx = this.pttStatus.isTransmitting;

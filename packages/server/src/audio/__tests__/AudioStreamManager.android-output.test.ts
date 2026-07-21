@@ -11,8 +11,15 @@ const { mockConfigManager, mockAndroidOutputState, MockAndroidAudioOutputSocket,
   };
 
   class HoistedMockAndroidAudioOutputSocket {
+    private readonly listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+
     constructor(device: unknown, streamConfig: unknown) {
-      androidOutputState.instances.push({ device, streamConfig });
+      androidOutputState.instances.push({ device, streamConfig, socket: this } as never);
+    }
+
+    on(event: string, listener: (...args: unknown[]) => void) {
+      this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
+      return this;
     }
 
     async start() {

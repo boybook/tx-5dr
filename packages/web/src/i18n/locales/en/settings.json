@@ -328,13 +328,29 @@
     "inputDevice": "Audio Input Device",
     "inputDevicePlaceholder": "Select input device",
     "selectInput": "Select audio input device",
+    "selectedDeviceStatus": "Selected audio device status",
     "deviceUnavailableShort": "not connected",
     "deviceUnavailable": "Device currently unavailable; audio will retry automatically",
     "deviceMissingPreserved": "This saved device is not connected or is not currently enumerated. Saving will keep this device; audio will retry when it reconnects.",
     "deviceMissingPreservedShort": "Saved, not connected",
+    "deviceRouteLostDescription": "The selected physical route was lost. TX-5DR will not fall back to another device.",
     "default": "default",
     "channels": "{{count}} ch",
     "deviceVirtualSelected": "Virtual audio device",
+    "deviceCategory": {
+      "usb": "USB",
+      "analog": "3.5 mm",
+      "builtin": "Built-in",
+      "network": "Network",
+      "other": "Other"
+    },
+    "deviceStatus": {
+      "available": "available",
+      "active": "in use",
+      "clientConnected": "bridge connected",
+      "routeVerified": "route verified",
+      "routeLost": "route lost"
+    },
     "outputDevice": "Audio Output Device",
     "outputDevicePlaceholder": "Select output device",
     "selectOutput": "Select audio output device",
@@ -376,6 +392,7 @@
     "bufferSizeFallback": "Common buffers; choose manually",
     "bufferSizeUnsupported": "This buffer may be less stable",
     "virtualAudioFixed": "This audio path uses fixed settings",
+    "deviceManagedFixed": "Managed by this device; no manual setting is required",
     "autoMatched": "USB audio device matched: {{device}} ({{rate}} Hz)"
   },
   "radioType": {

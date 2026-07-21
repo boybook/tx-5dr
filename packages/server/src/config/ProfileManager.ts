@@ -88,7 +88,18 @@ export class ProfileManager {
     }
 
     if (updates.audio) {
-      updates.audio = normalizeAudioDeviceSettings({ ...existingProfile?.audio, ...updates.audio });
+      const audioUpdates = { ...updates.audio };
+      if (Object.prototype.hasOwnProperty.call(audioUpdates, 'inputDeviceName')
+        && audioUpdates.inputDeviceName !== existingProfile?.audio?.inputDeviceName
+        && !Object.prototype.hasOwnProperty.call(audioUpdates, 'inputRouteKey')) {
+        audioUpdates.inputRouteKey = undefined;
+      }
+      if (Object.prototype.hasOwnProperty.call(audioUpdates, 'outputDeviceName')
+        && audioUpdates.outputDeviceName !== existingProfile?.audio?.outputDeviceName
+        && !Object.prototype.hasOwnProperty.call(audioUpdates, 'outputRouteKey')) {
+        audioUpdates.outputRouteKey = undefined;
+      }
+      updates.audio = normalizeAudioDeviceSettings({ ...existingProfile?.audio, ...audioUpdates });
     }
 
     const profile = await configManager.updateProfile(id, updates);

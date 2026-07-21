@@ -4,9 +4,11 @@ import {
   audioSettingsEqual,
   buildAudioDeviceSelectOptions,
   getDeviceNameFromSelectKey,
+  getSelectedAudioDeviceKey,
   makeAudioDeviceSelectKey,
   resolveOutputChannelMode,
   resolveOutputSampleFormat,
+  resolveUniqueRouteKey,
 } from '../AudioDeviceSettings';
 
 const builtInInput: AudioDevice = {
@@ -123,6 +125,119 @@ describe('AudioDeviceSettings select keys', () => {
     expect(outputOptions[0].key).toBe('output::C-Media Electronics Inc.: USB Audio Device');
     expect(getDeviceNameFromSelectKey('input', inputOptions[0].key)).toBe(deviceName);
     expect(getDeviceNameFromSelectKey('output', outputOptions[0].key)).toBe(deviceName);
+  });
+
+  it('uses a stable route key when an Android endpoint is enumerated', () => {
+    const endpoint: AudioDevice = {
+      ...builtInInput,
+      id: 'android-input-42',
+      name: 'Headset microphone',
+      backend: 'android',
+      kind: 'wired-headset',
+      connector: '3.5mm',
+      routeKey: 'android:wired-headset:input',
+    };
+    const options = buildAudioDeviceSelectOptions(
+      'input',
+      [endpoint],
+      endpoint.name,
+      undefined,
+      endpoint.routeKey,
+    );
+
+    expect(options).toEqual([expect.objectContaining({
+      key: 'input::android:wired-headset:input',
+      routeKey: 'android:wired-headset:input',
+      isMissing: false,
+    })]);
+    expect(getSelectedAudioDeviceKey('input', endpoint.name, endpoint.routeKey))
+      .toBe('input::android:wired-headset:input');
+  });
+
+  it('upgrades a legacy name only when it maps to one stable route', () => {
+    const endpoint = {
+      ...builtInInput,
+      name: 'Android audio',
+      routeKey: 'android:usb:input',
+    };
+    expect(resolveUniqueRouteKey([endpoint], endpoint.name)).toBe(endpoint.routeKey);
+    expect(resolveUniqueRouteKey([
+      endpoint,
+      { ...endpoint, id: 'input-2', routeKey: 'android:wired-headset:input' },
+    ], endpoint.name)).toBe('');
+  });
+
+  it('keeps a saved route key as missing instead of falling back by name', () => {
+    const routeKey = 'android:wired-headset:input';
+    const resolution: AudioDeviceResolution = {
+      configuredDeviceName: 'Headset microphone',
+      configuredRouteKey: routeKey,
+      configuredDevice: null,
+      effectiveDevice: null,
+      status: 'missing',
+    };
+    const options = buildAudioDeviceSelectOptions(
+      'input',
+      [{ ...builtInInput, name: 'Headset microphone' }],
+      'Headset microphone',
+      resolution,
+      routeKey,
+    );
+
+    expect(options).toContainEqual({
+      key: `input::${routeKey}`,
+      deviceName: 'Headset microphone',
+      routeKey,
+      device: null,
+      isMissing: true,
+    });
+  });
+
+  it('marks an enumerated but unavailable stable route as missing', () => {
+    const routeKey = 'android:wired-headset:output';
+    const options = buildAudioDeviceSelectOptions('output', [{
+      ...builtInInput,
+      id: 'android-output-9',
+      type: 'output',
+      name: 'Headset headphones',
+      routeKey,
+      availability: 'cached',
+      routeState: 'lost',
+    }], 'Headset headphones', undefined, routeKey);
+
+    expect(options).toEqual([expect.objectContaining({
+      key: `output::${routeKey}`,
+      routeKey,
+      isMissing: true,
+    })]);
+  });
+
+  it('treats route identity changes as real controlled changes', () => {
+    expect(audioSettingsEqual({
+      inputDeviceName: 'Headset microphone',
+      inputRouteKey: 'android:wired-headset:input',
+      inputSampleRate: 48000,
+      outputSampleRate: 48000,
+      inputBufferSize: 1024,
+      outputBufferSize: 1024,
+      outputSampleFormat: 'float32',
+      outputChannelMode: 'mono',
+    }, {
+      inputDeviceName: 'Headset microphone',
+    })).toBe(false);
+
+    expect(audioSettingsEqual({
+      inputDeviceName: 'Headset microphone',
+      inputRouteKey: null,
+      inputSampleRate: 48000,
+      outputSampleRate: 48000,
+      inputBufferSize: 1024,
+      outputBufferSize: 1024,
+      outputSampleFormat: 'float32',
+      outputChannelMode: 'mono',
+    }, {
+      inputDeviceName: 'Headset microphone',
+    })).toBe(true);
   });
 
   it('does not add a synthetic option when the saved device is currently enumerated', () => {
