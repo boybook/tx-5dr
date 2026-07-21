@@ -543,7 +543,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         const audioDeviceManager = AudioDeviceManager.getInstance();
         const androidDevice = audioDeviceManager.resolveAndroidDeviceForStream(
           'input',
-          isLegacyAndroidAudioDeviceName('input', configuredInputDeviceName) ? undefined : configuredInputDeviceName,
+          configuredInputDeviceName,
           configuredInputDeviceId,
           audioConfig.inputRouteKey ?? undefined,
         );
@@ -624,7 +624,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.usingAndroidInput = false;
       this.isStreaming = false;
       this.deviceId = null;
-      AudioDeviceManager.getInstance().clearActiveDevice('input', this.activeInputDeviceName);
+      AudioDeviceManager.getInstance().clearActiveDevice('input', this.activeInputDeviceName, this.deviceId);
       this.activeInputDeviceName = null;
       this.emit('error', error instanceof Error ? error : new Error(String(error)));
       throw error;
@@ -687,7 +687,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       // 清理重采样器缓存
       clearResamplerCache();
 
-      AudioDeviceManager.getInstance().clearActiveDevice('input', this.activeInputDeviceName);
+      AudioDeviceManager.getInstance().clearActiveDevice('input', this.activeInputDeviceName, this.deviceId);
       this.androidInputRuntimeLossError = null;
       this.isStreaming = false;
       this.deviceId = null;
@@ -927,7 +927,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         const audioDeviceManager = AudioDeviceManager.getInstance();
         const androidDevice = audioDeviceManager.resolveAndroidDeviceForStream(
           'output',
-          isLegacyAndroidAudioDeviceName('output', configuredOutputDeviceName) ? undefined : configuredOutputDeviceName,
+          configuredOutputDeviceName,
           resolvedOutputDeviceId,
           audioConfig.outputRouteKey ?? undefined,
         );
@@ -1013,7 +1013,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.usingAndroidOutput = false;
       this.isOutputting = false;
       this.outputDeviceId = null;
-      AudioDeviceManager.getInstance().clearActiveDevice('output', this.activeOutputDeviceName);
+      AudioDeviceManager.getInstance().clearActiveDevice('output', this.activeOutputDeviceName, this.outputDeviceId);
       this.activeOutputDeviceName = null;
       const normalizedError = error instanceof Error ? error : new Error(String(error));
       if (normalizedError !== this.androidInputRuntimeLossError) {
@@ -1193,7 +1193,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.rtAudioOutput = null;
       }
 
-      AudioDeviceManager.getInstance().clearActiveDevice('output', this.activeOutputDeviceName);
+      AudioDeviceManager.getInstance().clearActiveDevice('output', this.activeOutputDeviceName, this.outputDeviceId);
       this.isOutputting = false;
       this.outputDeviceId = null;
       this.activeOutputDeviceName = null;
