@@ -1,16 +1,18 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'eventemitter3';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { DigitalRadioEngineEvents } from '@tx5dr/contracts';
-import { MODES } from '@tx5dr/contracts';
+import { MODES, UserRole } from '@tx5dr/contracts';
 import { RadioOperator } from '@tx5dr/core';
+import { AuthManager } from '../../auth/AuthManager.js';
 import { PluginManager } from '../PluginManager.js';
 
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -52,12 +54,19 @@ function createOperator(id: string, callsign: string): RadioOperator {
 }
 
 describe('PluginManager panel meta snapshots', () => {
-  it('includes operator panel meta in the initial snapshot and refreshes it after config changes', async () => {
+  it('carries global and user-scoped panel meta from a plugin runtime into viewer snapshots', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-panel-meta-'));
     tempDirs.push(dataDir);
 
-    await writeUserPlugin(dataDir, 'panel-meta-test', `
-      const PANEL_ID = 'operator-webview';
+    vi.spyOn(AuthManager, 'getInstance').mockReturnValue({
+      getAuthorizationVersion: () => 1,
+      getTokenCurrentPermissions: (tokenId: string) => tokenId === 'viewer-1'
+        ? { role: UserRole.OPERATOR, operatorIds: [] }
+        : null,
+    } as unknown as AuthManager);
+
+    await writeUserPlugin(dataDir, 'operator-live-chat', `
+      const PANEL_ID = 'chat-toolbar';
 
       function sync(ctx) {
         ctx.ui.setPanelMeta(PANEL_ID, {
@@ -67,7 +76,7 @@ describe('PluginManager panel meta snapshots', () => {
       }
 
       export default {
-        name: 'panel-meta-test',
+        name: 'operator-live-chat',
         version: '1.0.0',
         type: 'utility',
         settings: {
@@ -80,6 +89,7 @@ describe('PluginManager panel meta snapshots', () => {
         },
         onLoad(ctx) {
           sync(ctx);
+          ctx.ui.setPanelMetaForUser?.(PANEL_ID, 'viewer-1', { tone: 'default' });
         },
         hooks: {
           onConfigChange(_changes, ctx) {
@@ -122,7 +132,8 @@ describe('PluginManager panel meta snapshots', () => {
 
     pluginManager.loadConfig({
       configs: {
-        'panel-meta-test': { enabled: true, settings: {} },
+        'operator-live-chat': { enabled: true, settings: {} },
+        'qso-udp-broadcast': { enabled: false, settings: {} },
       },
       operatorStrategies: {
         'operator-1': 'standard-qso',
@@ -138,7 +149,7 @@ describe('PluginManager panel meta snapshots', () => {
             maxQSOTimeoutCycles: 6,
             maxCallAttempts: 5,
           },
-          'panel-meta-test': {
+          'operator-live-chat': {
             operatorCardUrl: '',
           },
         },
@@ -148,23 +159,38 @@ describe('PluginManager panel meta snapshots', () => {
     await pluginManager.start();
 
     expect(pluginManager.getSnapshot().panelMeta).toContainEqual({
-      pluginName: 'panel-meta-test',
+      pluginName: 'operator-live-chat',
       operatorId: 'operator-1',
-      panelId: 'operator-webview',
+      panelId: 'chat-toolbar',
       meta: {
         visible: false,
         title: '',
       },
     });
 
-    pluginManager.setOperatorPluginSettings('operator-1', 'panel-meta-test', {
+    expect(pluginManager.getSnapshot('viewer-1').panelMeta).toContainEqual({
+      pluginName: 'operator-live-chat',
+      operatorId: 'operator-1',
+      panelId: 'chat-toolbar',
+      viewerTokenId: 'viewer-1',
+      meta: { tone: 'default' },
+    });
+    expect(pluginManager.getSnapshot('viewer-2').panelMeta).not.toContainEqual({
+      pluginName: 'operator-live-chat',
+      operatorId: 'operator-1',
+      panelId: 'chat-toolbar',
+      viewerTokenId: 'viewer-1',
+      meta: { tone: 'default' },
+    });
+
+    pluginManager.setOperatorPluginSettings('operator-1', 'operator-live-chat', {
       operatorCardUrl: 'https://example.com',
     });
 
     expect(pluginManager.getSnapshot().panelMeta).toContainEqual({
-      pluginName: 'panel-meta-test',
+      pluginName: 'operator-live-chat',
       operatorId: 'operator-1',
-      panelId: 'operator-webview',
+      panelId: 'chat-toolbar',
       meta: {
         visible: true,
         title: '',
