@@ -356,10 +356,18 @@ export function identityToFields(identity: LinuxUsbAudioIdentity): AudioDeviceId
 /**
  * Attach Linux USB/radio identity metadata onto enumerated RtAudio devices.
  *
- * Matching order matters: the same process can still enumerate a PCM it already
- * opened, while the free peer radio remains available. Claim "owned by us"
- * identities only when enumeration still exposes more USB devices than free cards
- * (the extras are almost certainly the open cards); otherwise attach free cards only.
+ * Matching is heuristic, not a guaranteed ALSA-card ↔ RtAudio-index correlation:
+ * RtAudio enumeration order is assumed to roughly follow alsaCard ascending, and
+ * owned-busy identities are claimed FIFO against unlabeled USB entries. Crossed
+ * order (non-contiguous cards, multi-hint entries, or mid-list occupied cards)
+ * can attach the wrong hardwareId — prefer verifying via /proc/asound when adding
+ * stronger correlation later.
+ *
+ * Matching order still matters for the owned-vs-free claim: the same process can
+ * still enumerate a PCM it already opened, while the free peer radio remains
+ * available. Claim "owned by us" identities only when enumeration still exposes
+ * more USB devices than free cards (the extras are almost certainly the open
+ * cards); otherwise attach free cards only.
  */
 export function attachLinuxUsbAudioIdentities<T extends { name: string; hardwareId?: string }>(
   devices: T[],
