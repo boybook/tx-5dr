@@ -78,8 +78,14 @@ const QRZ_PRIORITY: Record<string, number> = {
   Y: 2,
 };
 
-function normalizeQsoCallsign(value?: string): string {
-  return (value || '').trim().toUpperCase();
+/**
+ * Normalize the station (own) callsign for matching. Uses normalizeCallsign
+ * so portable/mobile suffixes are stripped ("BG5DRB/P" matches "BG5DRB"),
+ * consistent with configKey. Only used for the station side — the contacted
+ * callsign keeps its exact-match semantics in the logbook query filter.
+ */
+function normalizeStationCallsign(value?: string): string {
+  return normalizeCallsign(value || '');
 }
 
 function normalizeQsoMode(value?: string): string {
@@ -131,9 +137,15 @@ export function buildWavelogQslStatusUpdates(
 ): Partial<QSORecord> | null {
   const updates: Partial<QSORecord> = {};
 
+  // Dates are merged only together with a status set/upgrade, so a record
+  // never carries a QSL date that belongs to a different status value.
   const nextLotwSent = mergeStatusValue(local.lotwQslSent, remote.lotwQslSent, LOTW_SENT_PRIORITY);
   if (nextLotwSent !== local.lotwQslSent) {
     updates.lotwQslSent = nextLotwSent;
+    const nextLotwSentDate = mergeTimestampValue(local.lotwQslSentDate, remote.lotwQslSentDate);
+    if (nextLotwSentDate !== local.lotwQslSentDate) {
+      updates.lotwQslSentDate = nextLotwSentDate;
+    }
   }
 
   const nextLotwReceived = mergeStatusValue(
@@ -143,42 +155,34 @@ export function buildWavelogQslStatusUpdates(
   );
   if (nextLotwReceived !== local.lotwQslReceived) {
     updates.lotwQslReceived = nextLotwReceived;
+    const nextLotwReceivedDate = mergeTimestampValue(
+      local.lotwQslReceivedDate,
+      remote.lotwQslReceivedDate,
+    );
+    if (nextLotwReceivedDate !== local.lotwQslReceivedDate) {
+      updates.lotwQslReceivedDate = nextLotwReceivedDate;
+    }
   }
 
   const nextQrzSent = mergeStatusValue(local.qrzQslSent, remote.qrzQslSent, QRZ_PRIORITY);
   if (nextQrzSent !== local.qrzQslSent) {
     updates.qrzQslSent = nextQrzSent;
+    const nextQrzSentDate = mergeTimestampValue(local.qrzQslSentDate, remote.qrzQslSentDate);
+    if (nextQrzSentDate !== local.qrzQslSentDate) {
+      updates.qrzQslSentDate = nextQrzSentDate;
+    }
   }
 
   const nextQrzReceived = mergeStatusValue(local.qrzQslReceived, remote.qrzQslReceived, QRZ_PRIORITY);
   if (nextQrzReceived !== local.qrzQslReceived) {
     updates.qrzQslReceived = nextQrzReceived;
-  }
-
-  const nextLotwSentDate = mergeTimestampValue(local.lotwQslSentDate, remote.lotwQslSentDate);
-  if (nextLotwSentDate !== local.lotwQslSentDate) {
-    updates.lotwQslSentDate = nextLotwSentDate;
-  }
-
-  const nextLotwReceivedDate = mergeTimestampValue(
-    local.lotwQslReceivedDate,
-    remote.lotwQslReceivedDate,
-  );
-  if (nextLotwReceivedDate !== local.lotwQslReceivedDate) {
-    updates.lotwQslReceivedDate = nextLotwReceivedDate;
-  }
-
-  const nextQrzSentDate = mergeTimestampValue(local.qrzQslSentDate, remote.qrzQslSentDate);
-  if (nextQrzSentDate !== local.qrzQslSentDate) {
-    updates.qrzQslSentDate = nextQrzSentDate;
-  }
-
-  const nextQrzReceivedDate = mergeTimestampValue(
-    local.qrzQslReceivedDate,
-    remote.qrzQslReceivedDate,
-  );
-  if (nextQrzReceivedDate !== local.qrzQslReceivedDate) {
-    updates.qrzQslReceivedDate = nextQrzReceivedDate;
+    const nextQrzReceivedDate = mergeTimestampValue(
+      local.qrzQslReceivedDate,
+      remote.qrzQslReceivedDate,
+    );
+    if (nextQrzReceivedDate !== local.qrzQslReceivedDate) {
+      updates.qrzQslReceivedDate = nextQrzReceivedDate;
+    }
   }
 
   return Object.keys(updates).length > 0 ? updates : null;
@@ -365,15 +369,12 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
 
       for (const remoteQSO of records) {
         try {
-          const localMatches = await this.findLocalMatches(logbook, remoteQSO, callsign);
+          const localMatch = await this.findBestLocalMatch(logbook, remoteQSO, callsign);
 
-          if (localMatches.length > 0) {
+          if (localMatch) {
             matched++;
-            for (const localMatch of localMatches) {
-              const statusUpdates = buildWavelogQslStatusUpdates(localMatch, remoteQSO);
-              if (!statusUpdates) {
-                continue;
-              }
+            const statusUpdates = buildWavelogQslStatusUpdates(localMatch, remoteQSO);
+            if (statusUpdates) {
               await logbook.updateQSO(localMatch.id, statusUpdates);
               updated++;
             }
@@ -421,16 +422,17 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
   }
 
   /**
-   * Find all local QSO matches for a WaveLog download record.
-   * Returns every candidate that passes station/band/mode filters within the
-   * time window, ranked by score. Callers should merge QSL status into all of
-   * them so previously-imported duplicates and original locals both update.
+   * Find the single best local QSO match for a WaveLog download record.
+   * Candidates must pass station/band/mode filters within the time window and
+   * are ranked by score; only the top candidate is returned so one remote
+   * record never stamps QSL status onto multiple local QSOs (same convention
+   * as lotw-sync's findLotwLocalMatch).
    */
-  private async findLocalMatches(
+  private async findBestLocalMatch(
     logbook: ReturnType<PluginContext['logbook']['forCallsign']>,
     remote: QSORecord,
     fallbackCallsign: string,
-  ): Promise<QSORecord[]> {
+  ): Promise<QSORecord | null> {
     const candidates = await logbook.queryQSOs({
       callsign: remote.callsign,
       timeRange: {
@@ -441,17 +443,17 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
     });
 
     if (candidates.length === 0) {
-      return [];
+      return null;
     }
 
-    const remoteStation = normalizeQsoCallsign(remote.myCallsign || fallbackCallsign);
+    const remoteStation = normalizeStationCallsign(remote.myCallsign || fallbackCallsign);
     const remoteBand = matchBand(remote);
     const remoteMode = matchMode(remote);
 
-    return candidates
+    const scored = candidates
       .map((local) => {
         let score = 0;
-        const localStation = normalizeQsoCallsign(local.myCallsign || fallbackCallsign);
+        const localStation = normalizeStationCallsign(local.myCallsign || fallbackCallsign);
         if (remoteStation && localStation === remoteStation) score += 8;
         if (remoteBand && matchBand(local) === remoteBand) score += 5;
         if (remoteMode && matchMode(local) === remoteMode) score += 5;
@@ -464,14 +466,15 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
         return { local, score, timeDelta };
       })
       .filter(({ local }) => {
-        const localStation = normalizeQsoCallsign(local.myCallsign || fallbackCallsign);
+        const localStation = normalizeStationCallsign(local.myCallsign || fallbackCallsign);
         if (remoteStation && localStation && localStation !== remoteStation) return false;
         if (remoteBand && matchBand(local) && matchBand(local) !== remoteBand) return false;
         if (remoteMode && matchMode(local) && matchMode(local) !== remoteMode) return false;
         return true;
       })
-      .sort((left, right) => right.score - left.score || left.timeDelta - right.timeDelta)
-      .map(({ local }) => local);
+      .sort((left, right) => right.score - left.score || left.timeDelta - right.timeDelta);
+
+    return scored[0]?.local ?? null;
   }
 
   // ===== HTTP client methods (extracted from WaveLogService) =====
