@@ -31,6 +31,7 @@ import {
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { normalizeHamlibConfig } from '../radio/hamlibConfigUtils.js';
+import { darwinCalloutPathFromDialin } from '../radio/serialPortPath.js';
 import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
 import { canReadFullProfiles, redactHamlibConfigForRead } from '../security/profileRedaction.js';
 
@@ -42,12 +43,13 @@ export {
 type SerialPortInfo = Awaited<ReturnType<typeof SerialPort.list>>[number];
 
 function buildDarwinCalloutPortFromDialin(port: SerialPortInfo): SerialPortInfo | null {
-  if (!port.path.startsWith('/dev/tty.')) {
+  const calloutPath = darwinCalloutPathFromDialin(port.path);
+  if (!calloutPath) {
     return null;
   }
   return {
     ...port,
-    path: `/dev/cu.${port.path.slice('/dev/tty.'.length)}`,
+    path: calloutPath,
   };
 }
 

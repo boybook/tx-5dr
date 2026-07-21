@@ -13,6 +13,7 @@ import { HamLib } from 'hamlib';
 import type { PttType } from 'hamlib';
 import { SpectrumController } from 'hamlib/spectrum';
 import type { ManagedSpectrumConfig, SpectrumLine, SpectrumSupportSummary } from 'hamlib/spectrum';
+import serialport from 'serialport';
 import type { LevelMeterReading, MeterCapabilities, SerialConfig } from '@tx5dr/contracts';
 import {
   type MeterDecodeStrategy,
@@ -27,6 +28,11 @@ import { createLogger } from '../../utils/logger.js';
 import { isProcessShuttingDown } from '../../utils/process-shutdown.js';
 import { isRecoverableOptionalRadioError } from '../optionalRadioError.js';
 import { buildBackendConfig } from '../hamlibConfigUtils.js';
+import {
+  darwinCalloutPathFromDialin,
+  isSameDarwinSerialDevice,
+  looksLikeLocalSerialDevicePath,
+} from '../serialPortPath.js';
 import { RADIO_IO_SKIPPED, RadioIoQueue, type RadioIoTaskContext, type RadioIoTaskOptions } from './RadioIoQueue.js';
 import {
   type ApplyOperatingStateRequest,
@@ -47,6 +53,7 @@ import {
 
 const logger = createLogger('HamlibConnection');
 const HAMLIB_POLLING_OPERATION_TIMEOUT_MS = 5000;
+const { SerialPort } = serialport;
 
 // RigMetadata is imported from meter/types.ts
 
@@ -461,8 +468,12 @@ export class HamlibConnection
       });
     }
 
+    const effectiveConfig = config.type === 'serial'
+      ? await this.resolveSerialDevicePath(config)
+      : config;
+
     // 验证必需参数
-    if (config.type === 'network' && (!config.network || !config.network.host || !config.network.port)) {
+    if (effectiveConfig.type === 'network' && (!effectiveConfig.network || !effectiveConfig.network.host || !effectiveConfig.network.port)) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
         message: 'Hamlib network configuration missing required fields: network.host, network.port',
@@ -471,7 +482,7 @@ export class HamlibConnection
       });
     }
 
-    if (config.type === 'serial' && (!config.serial || !config.serial.path || !config.serial.rigModel)) {
+    if (effectiveConfig.type === 'serial' && (!effectiveConfig.serial || !effectiveConfig.serial.path || !effectiveConfig.serial.rigModel)) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
         message: 'Hamlib serial configuration missing required fields: serial.path, serial.rigModel',
@@ -481,7 +492,7 @@ export class HamlibConnection
     }
 
     // 保存配置
-    this.currentConfig = config;
+    this.currentConfig = effectiveConfig;
     this.ioSessionId += 1;
     this.backgroundTasksStarted = false;
 
@@ -490,15 +501,15 @@ export class HamlibConnection
 
     try {
       logger.debug(
-        `Connecting to Hamlib radio: ${config.type === 'network' ? `${config.network!.host}:${config.network!.port}` : config.serial!.path}`
+        `Connecting to Hamlib radio: ${effectiveConfig.type === 'network' ? `${effectiveConfig.network!.host}:${effectiveConfig.network!.port}` : effectiveConfig.serial!.path}`
       );
 
       // 确定连接参数
       const port =
-        config.type === 'network'
-          ? `${config.network!.host}:${config.network!.port}`
+        effectiveConfig.type === 'network'
+          ? `${effectiveConfig.network!.host}:${effectiveConfig.network!.port}`
           : undefined;
-      const model = config.type === 'network' ? 2 : config.serial!.rigModel;
+      const model = effectiveConfig.type === 'network' ? 2 : effectiveConfig.serial!.rigModel;
 
       // 创建 HamLib 实例
       const rig = new HamLib(model as any, port as any) as HamLib;
@@ -506,7 +517,7 @@ export class HamlibConnection
       this.spectrumController = new SpectrumController(rig);
 
       // 配置 PTT 类型（必须在 open() 前调用）
-      this.pttMethod = config.pttMethod || 'cat';
+      this.pttMethod = effectiveConfig.pttMethod || 'cat';
       const pttTypeMap: Record<string, PttType> = {
         'cat': 'RIG',
         'vox': 'NONE',
@@ -518,8 +529,8 @@ export class HamlibConnection
       await rig.setPttType(hamlibPttType);
 
       // 应用 Hamlib backend 配置（如果有）
-      if (config.type === 'serial' && config.serial) {
-        await this.applyBackendConfig(config.serial);
+      if (effectiveConfig.type === 'serial' && effectiveConfig.serial) {
+        await this.applyBackendConfig(effectiveConfig.serial);
       }
 
       // 打开连接（带超时保护）
@@ -557,6 +568,88 @@ export class HamlibConnection
 
       // 转换错误
       throw this.convertError(error, 'connect');
+    }
+  }
+
+  private async resolveSerialDevicePath(config: RadioConnectionConfig): Promise<RadioConnectionConfig> {
+    if (config.type !== 'serial' || !config.serial?.serialNumber) {
+      return config;
+    }
+
+    const targetSerial = config.serial.serialNumber.trim();
+    if (!targetSerial) {
+      return config;
+    }
+
+    // 防线：network（host:port）或自定义路径端点在数据模型上也是 type: 'serial'，
+    // 其中残留的 serialNumber 不应把端点"劫持"回本机 USB 设备
+    const configuredPath = config.serial.backendConfig?.rig_pathname ?? config.serial.path;
+    if (!looksLikeLocalSerialDevicePath(configuredPath)) {
+      return config;
+    }
+
+    try {
+      const ports = await SerialPort.list();
+      const normalizedTarget = targetSerial.toLowerCase();
+      const matches = ports.filter((port) => port.serialNumber?.trim().toLowerCase() === normalizedTarget);
+      const exactMatches = matches.filter((port) => port.serialNumber?.trim() === targetSerial);
+      const candidates = exactMatches.length > 0 ? exactMatches : matches;
+
+      if (candidates.length === 0) {
+        logger.warn('Configured serial number not found in current port list', {
+          serialNumber: targetSerial,
+          configuredPath,
+        });
+        return config;
+      }
+
+      // 已配置路径仍在匹配集合中时保持不变——尤其避免把用户显式选择的
+      // macOS /dev/cu.* callout 端口改写为同一设备的 /dev/tty.* dialin 节点
+      if (candidates.some((port) => port.path === configuredPath || isSameDarwinSerialDevice(port.path, configuredPath))) {
+        return config;
+      }
+
+      // 多个设备共享同一 serialNumber（未烧录序列号的 FTDI/CH340 常见）时无法
+      // 确定目标设备，放弃重写、回退原配置
+      if (candidates.length > 1) {
+        logger.warn('Multiple serial ports share the configured serial number, keeping configured path', {
+          serialNumber: targetSerial,
+          configuredPath,
+          matchedPaths: candidates.map((port) => port.path),
+        });
+        return config;
+      }
+
+      const matchedPath = candidates[0]!.path;
+      // 设备重新枚举（端口名变化）需要重写时，优先映射回与配置相同的 cu/tty 形态
+      const calloutPath = configuredPath.startsWith('/dev/cu.')
+        ? darwinCalloutPathFromDialin(matchedPath)
+        : null;
+      const resolvedPath = calloutPath ?? matchedPath;
+
+      logger.info('Resolved serial device path from serial number', {
+        serialNumber: targetSerial,
+        previousPath: configuredPath,
+        resolvedPath,
+      });
+
+      return {
+        ...config,
+        serial: {
+          ...config.serial,
+          path: resolvedPath,
+          backendConfig: {
+            ...(config.serial.backendConfig ?? {}),
+            rig_pathname: resolvedPath,
+          },
+        },
+      };
+    } catch (error) {
+      logger.warn('Failed to resolve serial path from serial number', {
+        serialNumber: targetSerial,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return config;
     }
   }
 

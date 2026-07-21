@@ -76,6 +76,7 @@ export function normalizeSerialConnectionConfig(serial?: Partial<SerialConnectio
 
   return {
     path: normalizedPath,
+    serialNumber: serial.serialNumber,
     rigModel: serial.rigModel ?? 0,
     serialConfig: serial.serialConfig,
     backendConfig,
