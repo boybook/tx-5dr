@@ -165,6 +165,8 @@ export interface AudioConfig {
   outputSampleRate?: number;
   inputBufferSize?: number;
   outputBufferSize?: number;
+  inputSignalType?: AudioDeviceSettings['inputSignalType'];
+  ifCenterHz?: number;
   sampleRate?: number;
   bufferSize?: number;
 }
@@ -222,11 +224,17 @@ const DEFAULT_AUDIO: AudioDeviceSettings = {
   outputBufferSize: 1024,
   outputSampleFormat: 'float32',
   outputChannelMode: 'mono',
+  inputSignalType: 'af',
+  ifCenterHz: 12000,
 };
 
 export function normalizeAudioDeviceSettings(audioConfig?: Partial<AudioDeviceSettings> | null): AudioDeviceSettings {
   const legacySampleRate = audioConfig?.sampleRate;
   const legacyBufferSize = audioConfig?.bufferSize;
+  const inputSignalType = audioConfig?.inputSignalType === 'icom-12k-if' ? 'icom-12k-if' : 'af';
+  const ifCenterHz = Number.isFinite(audioConfig?.ifCenterHz)
+    ? Math.min(24000, Math.max(1, Number(audioConfig?.ifCenterHz)))
+    : 12000;
 
   return {
     inputDeviceName: audioConfig?.inputDeviceName,
@@ -243,6 +251,8 @@ export function normalizeAudioDeviceSettings(audioConfig?: Partial<AudioDeviceSe
     outputBufferSize: audioConfig?.outputBufferSize ?? legacyBufferSize ?? 1024,
     outputSampleFormat: audioConfig?.outputSampleFormat ?? 'float32',
     outputChannelMode: audioConfig?.outputChannelMode ?? 'mono',
+    inputSignalType,
+    ifCenterHz,
   };
 }
 

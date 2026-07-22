@@ -145,6 +145,12 @@ interface WebGLWaterfallProps {
   isTransmitting?: boolean;
   /** 瀑布图颜色和强度曲线主题 */
   themeId?: SpectrumThemeId;
+  /**
+   * When true, sample the spectrum texture with NEAREST (pixel-hard edges).
+   * Used for IF audio waterfalls so strong tones look like SDR "thin lines"
+   * instead of bilinear-smoothed bloom. AF and radio SDR keep LINEAR.
+   */
+  sharpPixels?: boolean;
   /** 是否显示数字模式周期开始分割线 */
   showCycleMarkers?: boolean;
   /** 数字模式周期长度（毫秒），例如 FT8=15000、FT4=7500 */
@@ -688,6 +694,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   totalRows,
   isTransmitting = false,
   themeId = DEFAULT_SPECTRUM_THEME_ID,
+  sharpPixels = false,
   showCycleMarkers = false,
   cycleSlotMs = null,
   lowPowerWarningOperatorIds = [],
@@ -793,8 +800,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   useEffect(() => { heightRef.current = height; }, [height]);
   const minDbRef = useRef(minDb);
   const maxDbRef = useRef(maxDb);
+  const sharpPixelsRef = useRef(sharpPixels);
   useEffect(() => { minDbRef.current = minDb; }, [minDb]);
   useEffect(() => { maxDbRef.current = maxDb; }, [maxDb]);
+  useEffect(() => { sharpPixelsRef.current = sharpPixels; }, [sharpPixels]);
   const actualRangeRef = useRef<{min: number, max: number} | null>(null);
   const colorMapRef = useRef<Uint8Array>(buildSpectrumThemeColorLut(DEFAULT_SPECTRUM_THEME_ID));
   const themeCurveRef = useRef(getSafeSpectrumThemeCurve(DEFAULT_SPECTRUM_THEME_ID));
@@ -1134,6 +1143,22 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     gl.uniform1f(gl.getUniformLocation(program, 'u_themeBias'), curve.bias);
   }, []);
 
+  const applySpectrumTextureFilter = useCallback((
+    gl: WebGLRenderingContext,
+    texture: WebGLTexture | null,
+    useSharpPixels: boolean,
+  ) => {
+    if (!texture) {
+      return;
+    }
+    const filter = useSharpPixels ? gl.NEAREST : gl.LINEAR;
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }, []);
+
   // 初始化WebGL
   const initWebGL = useCallback(() => {
     const canvas = canvasRef.current;
@@ -1180,10 +1205,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         gl.bindTexture(gl.TEXTURE_2D, transitionTexture);
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array(1));
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        applySpectrumTextureFilter(gl, transitionTexture, sharpPixelsRef.current);
+      }
+      if (dataTexture) {
+        gl.activeTexture(gl.TEXTURE0);
+        applySpectrumTextureFilter(gl, dataTexture, sharpPixelsRef.current);
       }
 
       // 设置顶点数据
@@ -1273,7 +1299,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       setError(err instanceof Error ? err.message : 'INIT_FAILED');
       return false;
     }
-  }, [applyThemeCurveUniforms, createProgram, uploadColorMapTexture]);
+  }, [applySpectrumTextureFilter, applyThemeCurveUniforms, createProgram, uploadColorMapTexture]);
 
   // 渲染
   const render = useCallback(() => {
@@ -1303,6 +1329,18 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     applyThemeCurveUniforms(gl, program, themeCurve);
     render();
   }, [applyThemeCurveUniforms, colorMap, render, themeCurve, uploadColorMapTexture]);
+
+  useEffect(() => {
+    const gl = glRef.current;
+    if (!gl || gl.isContextLost()) {
+      return;
+    }
+    gl.activeTexture(gl.TEXTURE0);
+    applySpectrumTextureFilter(gl, textureRef.current, sharpPixels);
+    gl.activeTexture(gl.TEXTURE2);
+    applySpectrumTextureFilter(gl, transitionTextureRef.current, sharpPixels);
+    render();
+  }, [applySpectrumTextureFilter, render, sharpPixels]);
 
   const updateViewState = useCallback((nextAxis: SpectrumAxis | null, hasData: boolean) => {
     currentAxisRef.current = nextAxis;
@@ -1608,15 +1646,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, textureHeight, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureData);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    applySpectrumTextureFilter(gl, texture, sharpPixelsRef.current);
     lastDataLengthRef.current = dataSize;
 
     rowCountRef.current = actualHeight;
     updateTextureMetadata(textureHeight, 0);
   }, [
+    applySpectrumTextureFilter,
     autoRange,
     buildSegments,
     calculateDataRange,
@@ -3116,7 +3152,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         <canvas
           ref={canvasRef}
           className="relative z-0 w-full"
-          style={{ height: `${height}px` }}
+          style={{
+            height: `${height}px`,
+            // Keep CSS scaling from re-blurring IF hard pixels after NEAREST sampling.
+            imageRendering: sharpPixels ? 'pixelated' : 'auto',
+          }}
         />
       )}
 

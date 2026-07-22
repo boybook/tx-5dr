@@ -216,6 +216,20 @@ describe('audio device resolution schemas', () => {
     expect(() => AudioDeviceSettingsSchema.parse({ outputChannelMode: 'stereo' })).toThrow();
   });
 
+  it('accepts Icom USB IF input signal type and center frequency', () => {
+    expect(AudioDeviceSettingsSchema.parse({
+      inputSignalType: 'icom-12k-if',
+      ifCenterHz: 12000,
+    })).toMatchObject({
+      inputSignalType: 'icom-12k-if',
+      ifCenterHz: 12000,
+    });
+    expect(AudioDeviceSettingsSchema.parse({ inputSignalType: 'af' }).inputSignalType).toBe('af');
+    expect(() => AudioDeviceSettingsSchema.parse({ inputSignalType: 'wlan-if' })).toThrow();
+    expect(() => AudioDeviceSettingsSchema.parse({ ifCenterHz: 0 })).toThrow();
+    expect(() => AudioDeviceSettingsSchema.parse({ ifCenterHz: 25000 })).toThrow();
+  });
+
   it('accepts resolve responses with every supported status', () => {
     for (const status of ['selected', 'default', 'virtual-selected', 'missing'] as const) {
       expect(AudioSettingsResolveResponseSchema.parse({

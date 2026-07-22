@@ -98,6 +98,10 @@ vi.mock('../config-manager.js', () => ({
       outputBufferSize: config.outputBufferSize ?? config.bufferSize ?? 1024,
       outputSampleFormat: config.outputSampleFormat ?? 'float32',
       outputChannelMode: config.outputChannelMode ?? 'mono',
+      inputSignalType: config.inputSignalType === 'icom-12k-if' ? 'icom-12k-if' : 'af',
+      ifCenterHz: Number.isFinite(config.ifCenterHz)
+        ? Math.min(24000, Math.max(1, Number(config.ifCenterHz)))
+        : 12000,
     };
   },
 }));
