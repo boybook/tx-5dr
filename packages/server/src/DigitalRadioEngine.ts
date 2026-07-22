@@ -507,6 +507,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       enabled: DigitalRadioEngine.SPECTRUM_CONFIG.ENABLED,
       targetSampleRate: DigitalRadioEngine.SPECTRUM_CONFIG.TARGET_SAMPLE_RATE
     }, () => ConfigManager.getInstance().getFT8Config().spectrumWhileTransmitting ?? true);
+    // IF-mode audio waterfall uses Blackman + baseline flatten (decode path unchanged).
+    this.audioStreamManager.on('inputSignalTypeChanged', (inputSignalType) => {
+      this.spectrumScheduler.setInputSignalType(inputSignalType);
+    });
+    this.spectrumScheduler.setInputSignalType(this.audioStreamManager.getInputSignalType());
 
     // ─── 初始化子系统 ────────────────────────────────
 
@@ -1083,6 +1088,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.audioStreamManager.getAudioProvider(),
       this.audioStreamManager.getInternalSampleRate()
     );
+    this.spectrumScheduler.setInputSignalType(this.audioStreamManager.getInputSignalType());
     this.spectrumScheduler.setPTTActive(false);
   }
 

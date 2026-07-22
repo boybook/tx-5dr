@@ -83,6 +83,28 @@ export async function audioRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const settings = AudioDeviceSettingsSchema.parse(request.body);
+      const providedKeys = Object.keys(settings).filter((key) => {
+        return (settings as Record<string, unknown>)[key] !== undefined;
+      });
+      // IF/AF 解调开关只需热重载，避免无谓停启引擎打断解码。
+      const signalOnlyKeys = new Set(['inputSignalType', 'ifCenterHz']);
+      const isSignalTypeOnly = providedKeys.length > 0
+        && providedKeys.every((key) => signalOnlyKeys.has(key));
+
+      if (isSignalTypeOnly) {
+        await profileManager.updateActiveProfileAudioConfig(settings);
+        digitalRadioEngine.getAudioStreamManager().reloadAudioConfig();
+        fastify.log.info({ settings }, 'Audio input signal config updated (hot reload)');
+
+        const updatedSettings = configManager.getAudioConfig();
+        const deviceResolution = await audioManager.resolveAudioSettings(updatedSettings);
+        return reply.code(200).send(AudioDeviceSettingsResponseSchema.parse({
+          success: true,
+          message: 'Audio input signal settings updated',
+          currentSettings: updatedSettings,
+          deviceResolution,
+        }));
+      }
 
       // 检查引擎是否正在运行
       const wasRunning = digitalRadioEngine.getStatus().isRunning;

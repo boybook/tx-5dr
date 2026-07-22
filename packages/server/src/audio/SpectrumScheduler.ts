@@ -1,5 +1,5 @@
 import { EventEmitter } from 'eventemitter3';
-import type { SpectrumFrame } from '@tx5dr/contracts';
+import type { AudioInputSignalType, SpectrumFrame } from '@tx5dr/contracts';
 import type { AudioBufferProvider } from '@tx5dr/core';
 import { SpectrumAnalyzer } from './SpectrumAnalyzer.js';
 import { createLogger } from '../utils/logger.js';
@@ -20,6 +20,8 @@ export interface SpectrumConfig {
   enabled: boolean;
   /** 目标采样率，默认8000Hz */
   targetSampleRate: number;
+  /** Display-only IF halo reduction */
+  haloReduce: boolean;
 }
 
 /**
@@ -49,6 +51,9 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
 
   // 配置：是否允许发射时频谱分析
   private shouldSpectrumWhileTransmitting?: () => boolean;
+  private inputSignalType: AudioInputSignalType = 'af';
+  private readonly baseFftSize: number;
+  private readonly baseWindowFunction: SpectrumConfig['windowFunction'];
 
   // 性能统计
   private stats = {
@@ -65,13 +70,16 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     super();
 
     this.shouldSpectrumWhileTransmitting = shouldSpectrumWhileTransmitting;
+    this.baseFftSize = config.fftSize ?? 2048;
+    this.baseWindowFunction = config.windowFunction ?? 'hann';
 
     this.config = {
       analysisInterval: config.analysisInterval ?? 100, // 100ms间隔
-      fftSize: config.fftSize ?? 2048,
-      windowFunction: config.windowFunction ?? 'hann',
+      fftSize: this.baseFftSize,
+      windowFunction: this.baseWindowFunction,
       enabled: config.enabled ?? true,
-      targetSampleRate: config.targetSampleRate ?? 6000 // 12kHz降采样到6kHz，覆盖0-3kHz
+      targetSampleRate: config.targetSampleRate ?? 6000, // 12kHz降采样到6kHz，覆盖0-3kHz
+      haloReduce: config.haloReduce ?? false,
     };
   }
 
@@ -100,10 +108,47 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       fftSize: this.config.fftSize,
       windowFunction: this.config.windowFunction,
       targetSampleRate: this.config.targetSampleRate,
+      haloReduce: this.config.haloReduce,
     });
 
-    logger.info(`spectrum analyzer started: interval=${this.config.analysisInterval}ms fftSize=${this.config.fftSize} window=${this.config.windowFunction} sampleRate=${this.sampleRate}Hz`);
+    logger.info(`spectrum analyzer started: interval=${this.config.analysisInterval}ms fftSize=${this.config.fftSize} window=${this.config.windowFunction} haloReduce=${this.config.haloReduce} sampleRate=${this.sampleRate}Hz`);
     this.updateTimerState();
+  }
+
+  /**
+   * Tune audio waterfall FFT for IF demod mode (display only; decode path unchanged).
+   */
+  setInputSignalType(inputSignalType: AudioInputSignalType | undefined): void {
+    const nextType: AudioInputSignalType = inputSignalType === 'icom-12k-if' ? 'icom-12k-if' : 'af';
+    if (nextType === this.inputSignalType) {
+      return;
+    }
+    this.inputSignalType = nextType;
+
+    if (nextType === 'icom-12k-if') {
+      // Blackman has much lower sidelobes than Hann — reduces strong-tone "halo".
+      this.updateConfig({
+        windowFunction: 'blackman',
+        fftSize: this.baseFftSize,
+        haloReduce: true,
+      });
+      logger.info('IF audio waterfall tuning enabled', {
+        windowFunction: 'blackman',
+        fftSize: this.baseFftSize,
+        haloReduce: true,
+      });
+      return;
+    }
+
+    this.updateConfig({
+      windowFunction: this.baseWindowFunction,
+      fftSize: this.baseFftSize,
+      haloReduce: false,
+    });
+    logger.info('IF audio waterfall tuning disabled; restored AF spectrum settings', {
+      windowFunction: this.baseWindowFunction,
+      fftSize: this.baseFftSize,
+    });
   }
 
   /**
@@ -290,6 +335,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
         fftSize: this.config.fftSize,
         windowFunction: this.config.windowFunction,
         targetSampleRate: this.config.targetSampleRate,
+        haloReduce: this.config.haloReduce,
       });
     }
 
