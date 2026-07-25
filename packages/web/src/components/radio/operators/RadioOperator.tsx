@@ -128,8 +128,10 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       targetCall: operatorStatus.context.targetCall || '',
       targetGrid: operatorStatus.context.targetGrid || '',
       frequency: operatorStatus.context.frequency, // 频率可选，用于无电台模式设置完整的无线电频率（Hz）
-      reportSent: operatorStatus.context.reportSent ?? 0,
-      reportReceived: operatorStatus.context.reportReceived ?? 0,
+      // Keep unset reports as undefined. FT8 SNR of 0 is valid; defaulting to 0
+      // caused QSO logs to record a sentinel "0" (issue #70).
+      reportSent: operatorStatus.context.reportSent,
+      reportReceived: operatorStatus.context.reportReceived,
     };
   });
 
@@ -174,7 +176,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   const [cooldownSlotFields, setCooldownSlotFields] = React.useState<Set<OperatorRuntimeSlot>>(new Set());
 
   // 冷却期缓冲区：存储冷却期间服务端推送的最新值
-  const cooldownBufferRef = React.useRef<Record<string, string | number>>({});
+  const cooldownBufferRef = React.useRef<Record<string, string | number | undefined>>({});
   const cooldownSlotBufferRef = React.useRef<RuntimeSlotContents>({});
 
   // localContext ref，供回调函数读取最新值
@@ -336,13 +338,13 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     if (operatorStatus.context && operatorStatus.context.myCall) {
       const serverCtx = operatorStatus.context;
       const fields = ['myCall', 'myGrid', 'targetCall', 'targetGrid', 'frequency', 'reportSent'] as const;
-      const serverMap: Record<string, string | number> = {
+      const serverMap: Record<string, string | number | undefined> = {
         myCall: serverCtx.myCall || '',
         myGrid: serverCtx.myGrid || '',
         targetCall: serverCtx.targetCall || '',
         targetGrid: serverCtx.targetGrid || '',
         frequency: serverCtx.frequency ?? 0,
-        reportSent: serverCtx.reportSent ?? 0,
+        reportSent: serverCtx.reportSent,
       };
 
       // 冷却中的字段：更新缓冲区
@@ -359,7 +361,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             // 聚焦或冷却中 → 保留本地值
             continue;
           }
-          (newContext as Record<string, string | number>)[field] = serverMap[field];
+          (newContext as Record<string, string | number | undefined>)[field] = serverMap[field];
         }
 
         const hasChanged = fields.some(f =>
@@ -473,8 +475,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       targetCallsign: ctx.targetCall,
       targetGrid: ctx.targetGrid,
       frequency: ctx.frequency,
-      reportSent: ctx.reportSent,
-      reportReceived: ctx.reportReceived,
+      // Only send reportSent when explicitly set. Never echo a UI default of 0 for
+      // reportReceived — that field is driven by FT8 exchanges on the server.
+      ...(typeof ctx.reportSent === 'number' && Number.isFinite(ctx.reportSent)
+        ? { reportSent: ctx.reportSent }
+        : {}),
     });
   }, [setOperatorContext]);
 
@@ -541,7 +546,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
         });
         // 同步原始字符串显示
         if (field === 'reportSent') {
-          setReportSentRaw(bufferedValue.toString());
+          setReportSentRaw(
+            typeof bufferedValue === 'number' ? bufferedValue.toString() : '0',
+          );
         } else if (field === 'frequency') {
           setFrequencyRaw(bufferedValue.toString());
         }
