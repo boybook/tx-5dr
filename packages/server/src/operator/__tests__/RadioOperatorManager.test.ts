@@ -64,7 +64,10 @@ function createManager(options: {
   encodeQueue?: { push: ReturnType<typeof vi.fn> };
   getRadioFrequency?: () => Promise<number | null>;
   getKnownRadioFrequency?: () => number | null;
-  callsignTracker?: { getGrid: (callsign: string) => string | undefined };
+  callsignTracker?: {
+    getGrid: (callsign: string) => string | undefined;
+    getReport?: (senderCallsign: string, targetCallsign: string) => number | undefined;
+  };
   getFakeFrequencyEnabled?: () => boolean;
 }) {
   const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
@@ -873,7 +876,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     });
   });
 
-  it('preserves a legitimate FT8 report of 0 when merging QSO records', async () => {
+  it('preserves a legitimate FT8 report of +00 when merging QSO records', async () => {
     const base = Date.parse('2026-07-23T08:00:00.000Z');
     const provider = {
       addQSO: vi.fn(),
@@ -885,7 +888,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         mode: 'FT8',
         startTime: base - 30_000,
         endTime: base + MODES.FT8.slotMs,
-        reportSent: '0',
+        reportSent: '+00',
         reportReceived: '-09',
         messageHistory: [],
       }),
@@ -920,7 +923,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         mode: 'FT8',
         startTime: base,
         endTime: base + MODES.FT8.slotMs,
-        reportSent: '0',
+        reportSent: '+00',
         reportReceived: '-09',
         messageHistory: [],
         myCallsign: 'BG5DRB',
@@ -929,9 +932,60 @@ describe('RadioOperatorManager automatic QSO logging', () => {
 
     expect(provider.updateQSO).toHaveBeenCalledTimes(1);
     expect(provider.updateQSO.mock.calls[0]?.[1]).toMatchObject({
-      reportSent: '0',
+      reportSent: '+00',
       reportReceived: '-09',
-      comment: 'FT8  Sent: 0  Rcvd: -09',
+      comment: 'FT8  Sent: +00  Rcvd: -09',
+    });
+  });
+
+  it('treats bare sentinel "0" as missing when no air history is available', async () => {
+    const base = Date.parse('2026-07-23T09:00:00.000Z');
+    const provider = {
+      addQSO: vi.fn().mockResolvedValue(undefined),
+      updateQSO: vi.fn(),
+      getQSO: vi.fn(),
+      getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+      getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 0 }),
+    };
+    const callsignTracker = {
+      getGrid: vi.fn(() => undefined),
+      getReport: vi.fn((sender: string, target: string) => {
+        if (sender === 'RW9HSB' && target === 'BG5FRH') return -15;
+        if (sender === 'BG5FRH' && target === 'RW9HSB') return -2;
+        return undefined;
+      }),
+    };
+
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      callsign: 'BG5FRH',
+      activeSlotPacks: [],
+      storedRecords: [],
+      callsignTracker,
+    });
+    attachQSOHookSpy(manager);
+
+    await invokeRecordQSO(manager, {
+      operatorId: 'op1',
+      qsoRecord: {
+        id: 'temp-sentinel',
+        callsign: 'RW9HSB',
+        frequency: 21_076_000,
+        mode: 'FT8',
+        startTime: base,
+        endTime: base + MODES.FT8.slotMs,
+        reportSent: '0',
+        reportReceived: '0',
+        messageHistory: [],
+        myCallsign: 'BG5FRH',
+      },
+    });
+
+    expect(provider.addQSO).toHaveBeenCalledTimes(1);
+    expect(provider.addQSO.mock.calls[0]?.[0]).toMatchObject({
+      reportSent: '-2',
+      reportReceived: '-15',
+      comment: 'FT8  Sent: -2  Rcvd: -15',
     });
   });
 

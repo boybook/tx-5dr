@@ -174,12 +174,12 @@ const QSOFormModal: React.FC<QSOFormModalProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Input
                 label={t('editQso.reportSent')}
-                value={formData.reportSent || ''}
+                value={formData.reportSent ?? ''}
                 onChange={e => onChange({ ...formData, reportSent: e.target.value || undefined })}
               />
               <Input
                 label={t('editQso.reportReceived')}
-                value={formData.reportReceived || ''}
+                value={formData.reportReceived ?? ''}
                 onChange={e => onChange({ ...formData, reportReceived: e.target.value || undefined })}
               />
             </div>

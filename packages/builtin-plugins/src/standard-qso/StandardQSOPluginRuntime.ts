@@ -246,12 +246,16 @@ async function trySwitchToDirectedProtocol(
 
         if (msg.type === FT8MessageType.CALL) {
             strategy.logger.debug(`${prefix}: switching to direct call ${callsign} (SNR: ${directCall.snr})`);
-            if (!strategy.restoreContext(callsign)) {
-                strategy.context.reportSent = directCall.snr;
-                strategy.context.targetGrid = (msg as FT8MessageCall).grid;
-                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                    strategy.context.actualFrequency = strategy.context.config.frequency + directCall.df;
-                }
+            const callMsg = msg as FT8MessageCall;
+            // Restore grid/frequency cache, but always refresh SNR and clear stale received reports.
+            strategy.restoreContext(callsign);
+            if (callMsg.grid) {
+                strategy.context.targetGrid = callMsg.grid;
+            }
+            strategy.context.reportSent = directCall.snr;
+            strategy.context.reportReceived = undefined;
+            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                strategy.context.actualFrequency = strategy.context.config.frequency + directCall.df;
             }
             strategy.updateSlots();
             return { changeState: 'TX2' };
@@ -408,14 +412,15 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             // 切换到新呼号
                             strategy.context.targetCallsign = newCallsign;
 
-                            // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
-                            if (!strategy.restoreContext(newCallsign)) {
-                                strategy.context.reportSent = newCall.snr;
+                            // Restore grid/frequency cache, but always refresh SNR and clear stale received reports.
+                            strategy.restoreContext(newCallsign);
+                            if (callMsg.grid) {
                                 strategy.context.targetGrid = callMsg.grid;
-                                // 记录实际通联频率
-                                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                    strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
-                                }
+                            }
+                            strategy.context.reportSent = newCall.snr;
+                            strategy.context.reportReceived = undefined;
+                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
                             }
 
                             strategy.updateSlots();
@@ -984,15 +989,15 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             strategy.logger.debug(`TX6: replying to CQ from ${callsign} (not worked, SNR: ${cqCall.snr}dB, by signal strength)`);
                             strategy.context.targetCallsign = callsign;
 
-                            // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
-                            if (!strategy.restoreContext(callsign)) {
+                            // Restore grid/frequency cache, but always refresh SNR and clear stale received reports.
+                            strategy.restoreContext(callsign);
+                            if (msg.grid) {
                                 strategy.context.targetGrid = msg.grid;
-                                strategy.context.reportSent = cqCall.snr;
-                                // 记录实际通联频率 (基础频率 + CQ信号的频率偏移)
-                                // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
-                                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                    strategy.context.actualFrequency = strategy.context.config.frequency + cqCall.df;
-                                }
+                            }
+                            strategy.context.reportSent = cqCall.snr;
+                            strategy.context.reportReceived = undefined;
+                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                strategy.context.actualFrequency = strategy.context.config.frequency + cqCall.df;
                             }
 
                             strategy.updateSlots();
@@ -1338,10 +1343,22 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
 
     patchContext(patch: Partial<StrategyRuntimeContext>): void {
         this.syncOperatorConfig();
-        this._context = {
+        const next: QSOContext = {
             ...this._context,
-            ...patch,
         };
+        if (patch.targetCallsign !== undefined) next.targetCallsign = patch.targetCallsign;
+        if (patch.targetGrid !== undefined) next.targetGrid = patch.targetGrid;
+        if (patch.actualFrequency !== undefined) {
+            next.actualFrequency = patch.actualFrequency ?? undefined;
+        }
+        // JSON/WebSocket cannot omit-vs-clear cleanly; null means "clear this report".
+        if (patch.reportSent !== undefined) {
+            next.reportSent = patch.reportSent === null ? undefined : patch.reportSent;
+        }
+        if (patch.reportReceived !== undefined) {
+            next.reportReceived = patch.reportReceived === null ? undefined : patch.reportReceived;
+        }
+        this._context = next;
 
         const needsSlotUpdate =
             patch.targetCallsign !== undefined ||

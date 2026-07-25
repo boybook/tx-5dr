@@ -65,9 +65,11 @@ function normalizeOperatorContext(context: any): any {
   };
 }
 
-/** True when a logged RST/SNR field is absent. Note: "0" is a valid FT8 report. */
+/** True when a logged RST/SNR field is absent.
+ * Note: "+00" is a valid FT8 report of 0 dB from generateSignalReport.
+ * Bare "0" is treated as the legacy UI/runtime clear sentinel. */
 function isMissingSignalReport(value: string | undefined | null): boolean {
-  return value === undefined || value === null || value === '';
+  return value === undefined || value === null || value === '' || value === '0';
 }
 
 function preferSignalReport(
