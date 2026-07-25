@@ -149,8 +149,8 @@ export function GlobalShortcutBridge() {
       radioService.setOperatorContext(activeOperator.id, {
         targetCallsign: '',
         targetGrid: '',
-        reportSent: 0,
-        reportReceived: 0,
+        reportSent: null,
+        reportReceived: null,
       });
       radioService.setOperatorRuntimeState(activeOperator.id, 'TX6');
       dispatchOperatorSlotShortcutFeedback(activeOperator.id, 'TX6');

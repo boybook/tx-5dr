@@ -973,9 +973,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           </Chip>
         );
       case "reportSent":
-        return qso.reportSent || '-';
+        return qso.reportSent != null && qso.reportSent !== '' ? qso.reportSent : '-';
       case "reportReceived":
-        return qso.reportReceived || '-';
+        return qso.reportReceived != null && qso.reportReceived !== '' ? qso.reportReceived : '-';
       case "qslStatus": {
         const isLotwConfirmed = qso.lotwQslReceived === 'Y' || qso.lotwQslReceived === 'V';
         const isQrzConfirmed = qso.qrzQslReceived === 'Y';

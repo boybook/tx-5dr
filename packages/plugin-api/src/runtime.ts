@@ -21,10 +21,16 @@ export interface StrategyRuntimeContext {
   targetCallsign?: string;
   /** Grid locator reported by the target station, if known. */
   targetGrid?: string;
-  /** Signal report sent to the target station. */
-  reportSent?: number;
-  /** Signal report received from the target station. */
-  reportReceived?: number;
+  /**
+   * Signal report sent to the target station.
+   * Use `null` in {@link StrategyRuntime.patchContext} to clear a previously set value.
+   */
+  reportSent?: number | null;
+  /**
+   * Signal report received from the target station.
+   * Use `null` in {@link StrategyRuntime.patchContext} to clear a previously set value.
+   */
+  reportReceived?: number | null;
   /** Actual RF/audio frequency being used for the active QSO. */
   actualFrequency?: number;
 }

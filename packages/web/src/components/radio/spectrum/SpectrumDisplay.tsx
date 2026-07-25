@@ -1247,8 +1247,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       targetCallsign: operator.context.targetCall,
       targetGrid: operator.context.targetGrid,
       frequency: Math.round(frequency),
-      reportSent: operator.context.reportSent,
-      reportReceived: operator.context.reportReceived,
+      // Only forward finite reports; omit unset so a frequency drag cannot
+      // re-inject a missing/sentinel report into the runtime.
+      ...(typeof operator.context.reportSent === 'number' && Number.isFinite(operator.context.reportSent)
+        ? { reportSent: operator.context.reportSent }
+        : {}),
+      ...(typeof operator.context.reportReceived === 'number' && Number.isFinite(operator.context.reportReceived)
+        ? { reportReceived: operator.context.reportReceived }
+        : {}),
     });
   }, [connection.state.radioService, operators]);
 

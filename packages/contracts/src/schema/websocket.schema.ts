@@ -387,6 +387,9 @@ export const StrategyRuntimeContextSchema = z.object({
 });
 export type StrategyRuntimeContext = z.infer<typeof StrategyRuntimeContextSchema>;
 
+/** Null clears an unsettable runtime report field over JSON/WebSocket. */
+export const OperatorContextReportFieldSchema = z.number().nullish();
+
 export const StrategyRuntimeSnapshotSchema = z.object({
   currentState: z.string(),
   slots: z.object({
@@ -717,8 +720,8 @@ export const WSSetOperatorContextMessageSchema = WSBaseMessageSchema.extend({
       targetCallsign: z.string().optional(),
       targetGrid: z.string().optional(),
       frequency: z.number().optional(),
-      reportSent: z.number().optional(),
-      reportReceived: z.number().optional(),
+      reportSent: OperatorContextReportFieldSchema,
+      reportReceived: OperatorContextReportFieldSchema,
     }),
   }),
 });
