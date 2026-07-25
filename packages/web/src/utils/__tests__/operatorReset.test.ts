@@ -16,8 +16,8 @@ function createOperator(overrides: Partial<OperatorStatus> = {}): OperatorStatus
       targetCall: '',
       targetGrid: '',
       frequency: 1500,
-      reportSent: 0,
-      reportReceived: 0,
+      reportSent: undefined,
+      reportReceived: undefined,
     },
     strategy: {
       name: 'standard-qso',
@@ -65,8 +65,8 @@ describe('resetOperatorsForOperatingStateChange', () => {
     expect(radioService.setOperatorContext).toHaveBeenCalledWith('op-1', {
       targetCallsign: '',
       targetGrid: '',
-      reportSent: 0,
-      reportReceived: 0,
+      reportSent: null,
+      reportReceived: null,
     });
     expect(radioService.setOperatorRuntimeState).toHaveBeenCalledWith('op-1', 'TX6');
     expect(radioService.stopOperator).toHaveBeenCalledWith('op-1');
@@ -101,5 +101,33 @@ describe('resetOperatorsForOperatingStateChange', () => {
     expect(radioService.removeOperatorFromTransmission).not.toHaveBeenCalled();
     expect(radioService.setOperatorContext).not.toHaveBeenCalled();
     expect(radioService.setOperatorRuntimeState).not.toHaveBeenCalled();
+  });
+
+  it('clears a legitimate 0 dB report when resetting for an operating-state change', () => {
+    const radioService = createRadioService();
+    const operator = createOperator({
+      context: {
+        myCall: 'BG5DRB',
+        myGrid: 'PM01',
+        targetCall: '',
+        targetGrid: '',
+        frequency: 1500,
+        reportSent: 0,
+        reportReceived: undefined,
+      },
+    });
+
+    const result = resetOperatorsForOperatingStateChange({
+      operators: [operator],
+      radioService,
+    });
+
+    expect(result.operatorsChanged).toBe(1);
+    expect(radioService.setOperatorContext).toHaveBeenCalledWith('op-1', {
+      targetCallsign: '',
+      targetGrid: '',
+      reportSent: null,
+      reportReceived: null,
+    });
   });
 });

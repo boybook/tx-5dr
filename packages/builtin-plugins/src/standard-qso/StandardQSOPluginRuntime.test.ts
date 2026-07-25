@@ -401,7 +401,7 @@ describe('StandardQSOPluginRuntime nonstandard callsign slots', () => {
 
     await runtime.decide([
       createParsedMessage('BG5FRH RW9HSB -15', { snr: -2, slotId: 'slot-issue-70' }),
-    ]);
+    ], decisionMeta());
 
     const snapshot = runtime.getSnapshot();
     expect(snapshot.currentState).toBe('TX3');
@@ -424,12 +424,56 @@ describe('StandardQSOPluginRuntime nonstandard callsign slots', () => {
 
     await runtime.decide([
       createParsedMessage('BG5FRH RW9HSB R-15', { snr: -3, slotId: 'slot-roger-overwrite' }),
-    ]);
+    ], decisionMeta());
 
     const snapshot = runtime.getSnapshot();
     expect(snapshot.currentState).toBe('TX4');
     expect(snapshot.context?.reportReceived).toBe(-15);
     expect(snapshot.context?.reportSent).toBe(-3);
+  });
+
+  it('clears stale cached reports when answering a CALL after restoreContext', async () => {
+    const operator = createOperator({ myCallsign: 'BG5FRH', myGrid: 'PL09' });
+    const runtime = new StandardQSOPluginRuntime(operator);
+
+    runtime.patchContext({
+      targetCallsign: 'RW9HSB',
+      targetGrid: 'NO26',
+      reportSent: -8,
+      reportReceived: 0,
+    });
+    runtime.clearQSOContext();
+    runtime.setState('TX6');
+
+    await runtime.decide([
+      createParsedMessage('BG5FRH RW9HSB NO26', { snr: -5, slotId: 'slot-call-clear' }),
+    ], decisionMeta());
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.currentState).toBe('TX2');
+    expect(snapshot.context?.targetCallsign).toBe('RW9HSB');
+    expect(snapshot.context?.targetGrid).toBe('NO26');
+    expect(snapshot.context?.reportSent).toBe(-5);
+    expect(snapshot.context?.reportReceived).toBeUndefined();
+  });
+
+  it('clears reports when patchContext receives explicit undefined properties', () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator());
+    runtime.patchContext({
+      targetCallsign: 'RW9HSB',
+      reportSent: -12,
+      reportReceived: -8,
+    });
+    runtime.patchContext({
+      reportSent: undefined,
+      reportReceived: undefined,
+    });
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.context?.targetCallsign).toBe('RW9HSB');
+    expect(snapshot.context?.reportSent).toBeUndefined();
+    expect(snapshot.context?.reportReceived).toBeUndefined();
+    expect(snapshot.slots?.TX2).toBe('RW9HSB BG5DRB +00');
   });
 });
 

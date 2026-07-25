@@ -77,7 +77,7 @@ function normalizeOperatorContext(context: any): any {
   };
 }
 
-/** True when a logged RST/SNR field is absent. Note: "0" is a valid FT8 report. */
+/** True when a logged RST/SNR field is absent. "0" and "+00" are valid reports. */
 function isMissingSignalReport(value: string | undefined | null): boolean {
   return value === undefined || value === null || value === '';
 }
@@ -988,8 +988,12 @@ export class RadioOperatorManager {
     const runtimePatch: Record<string, unknown> = {};
     if (normalizedContext.targetCallsign !== undefined) runtimePatch.targetCallsign = normalizedContext.targetCallsign;
     if (normalizedContext.targetGrid !== undefined) runtimePatch.targetGrid = normalizedContext.targetGrid;
-    if (normalizedContext.reportSent !== undefined) runtimePatch.reportSent = normalizedContext.reportSent;
-    if (normalizedContext.reportReceived !== undefined) runtimePatch.reportReceived = normalizedContext.reportReceived;
+    if (normalizedContext.reportSent !== undefined) {
+      runtimePatch.reportSent = normalizedContext.reportSent ?? undefined;
+    }
+    if (normalizedContext.reportReceived !== undefined) {
+      runtimePatch.reportReceived = normalizedContext.reportReceived ?? undefined;
+    }
     if (Object.keys(runtimePatch).length > 0) {
       this._pluginManager?.patchOperatorRuntimeContext(operatorId, runtimePatch as any);
     }
@@ -2496,8 +2500,8 @@ export class RadioOperatorManager {
       endMs: historyEndMs,
     });
 
-    // Prefer reports decoded from the air messages; context may still hold a
-    // UI/default sentinel of "0" that would otherwise be logged as-is.
+    // Prefer physically confirmed air history over the speculative runtime
+    // context captured before Host-side persistence begins.
     const fromHistory = this.extractReportsFromMessageHistory(
       messageHistory,
       myCallsign,

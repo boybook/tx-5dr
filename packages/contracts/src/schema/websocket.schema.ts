@@ -443,6 +443,9 @@ export type AssistedQueueIcon = z.infer<typeof AssistedQueueIconSchema>;
 export type AssistedQueueRow = z.infer<typeof AssistedQueueRowSchema>;
 export type AssistedQueueSnapshot = z.infer<typeof AssistedQueueSnapshotSchema>;
 
+/** Null clears an unsettable runtime report field over JSON/WebSocket. */
+export const OperatorContextReportFieldSchema = z.number().nullish();
+
 export const StrategyRuntimeSnapshotSchema = z.object({
   currentState: z.string(),
   slots: z.object({
@@ -776,8 +779,8 @@ export const WSSetOperatorContextMessageSchema = WSBaseMessageSchema.extend({
       targetCallsign: z.string().optional(),
       targetGrid: z.string().optional(),
       frequency: z.number().optional(),
-      reportSent: z.number().optional(),
-      reportReceived: z.number().optional(),
+      reportSent: OperatorContextReportFieldSchema,
+      reportReceived: OperatorContextReportFieldSchema,
     }),
   }),
 });

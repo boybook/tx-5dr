@@ -135,9 +135,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     };
   });
 
-  // 报告字段的原始字符串（支持 ""、"-" 等中间态）
+  // 报告字段的原始字符串（支持 ""、"-" 等中间态；未设置时显示空而非哨兵 0）
   const [reportSentRaw, setReportSentRaw] = React.useState(() =>
-    (operatorStatus.context.reportSent ?? 0).toString()
+    operatorStatus.context.reportSent === undefined || operatorStatus.context.reportSent === null
+      ? ''
+      : operatorStatus.context.reportSent.toString()
   );
 
   // 频率字段的原始字符串（支持编辑中间态，失焦时 clamp）
@@ -370,7 +372,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
         // 同步原始字符串显示（仅非聚焦/冷却时）
         if (!focusedFields.has('reportSent') && !cooldownFields.has('reportSent')) {
-          const newVal = (newContext.reportSent ?? 0).toString();
+          const newVal = newContext.reportSent === undefined || newContext.reportSent === null
+            ? ''
+            : newContext.reportSent.toString();
           if (reportSentRaw !== newVal) {
             setReportSentRaw(newVal);
           }
@@ -475,16 +479,18 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       targetCallsign: ctx.targetCall,
       targetGrid: ctx.targetGrid,
       frequency: ctx.frequency,
-      // Only send reportSent when explicitly set. Never echo a UI default of 0 for
+      // Only send reportSent when explicitly set. Never echo a UI default for
       // reportReceived — that field is driven by FT8 exchanges on the server.
       ...(typeof ctx.reportSent === 'number' && Number.isFinite(ctx.reportSent)
         ? { reportSent: ctx.reportSent }
-        : {}),
+        : ctx.reportSent === null
+          ? { reportSent: null }
+          : {}),
     });
   }, [setOperatorContext]);
 
   // 处理上下文更新（用户每次击键）
-  const handleContextUpdate = (field: string, value: string | number) => {
+  const handleContextUpdate = (field: string, value: string | number | null) => {
     const newContext = { ...localContext, [field]: value };
     setLocalContext(newContext);
 
@@ -547,7 +553,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
         // 同步原始字符串显示
         if (field === 'reportSent') {
           setReportSentRaw(
-            typeof bufferedValue === 'number' ? bufferedValue.toString() : '0',
+            typeof bufferedValue === 'number' ? bufferedValue.toString() : '',
           );
         } else if (field === 'frequency') {
           setFrequencyRaw(bufferedValue.toString());
@@ -1297,8 +1303,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                     setOperatorContext({
                       targetCallsign: '',
                       targetGrid: '',
-                      reportSent: 0,
-                      reportReceived: 0,
+                      reportSent: null,
+                      reportReceived: null,
                     });
 
                     // 第2步：切换到 TX6 槽位
@@ -1357,11 +1363,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             }}
             onFocus={() => handleInputFocus('reportSent')}
             onBlur={() => {
-              // 失焦时修正中间态
+              // 失焦时修正中间态：空输入表示清除，不再写入哨兵 0
               const num = parseInt(reportSentRaw);
               if (isNaN(num)) {
-                setReportSentRaw('0');
-                handleContextUpdate('reportSent', 0);
+                setReportSentRaw('');
+                handleContextUpdate('reportSent', null);
               }
               handleInputBlur('reportSent');
             }}
