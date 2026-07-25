@@ -4,6 +4,19 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+// PluginManager pulls host hamlib; unit tests do not need the native binding.
+vi.mock('hamlib', () => ({
+  HamLib: class HamLib {},
+  Rotator: class Rotator {
+    static getSupportedRotators() { return []; }
+    static getHamlibVersion() { return 'mock-hamlib'; }
+  },
+  PASSBAND: {
+    NORMAL: 0,
+    NOCHANGE: -1,
+  },
+}));
+
 import type { DigitalRadioEngineEvents, FrameMessage, QSORecord, RadioOperatorConfig, SlotInfo, SlotPack } from '@tx5dr/contracts';
 import { FT8MessageType, MODES } from '@tx5dr/contracts';
 
@@ -640,7 +653,14 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       activeSlotPacks: [
         buildSlotPack(`ft8-${base}`, base, [
           {
-            message: 'BG5DRB N0CALL -12',
+            message: 'BG5DRB N0CALL -09',
+            snr: -12,
+            dt: 0,
+            freq: 1300,
+            confidence: 1,
+          },
+          {
+            message: 'N0CALL BG5DRB -12',
             snr: -999,
             dt: 0,
             freq: 1300,
@@ -679,7 +699,10 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     expect(provider.addQSO).toHaveBeenCalledTimes(1);
     expect(updatedSpy).not.toHaveBeenCalled();
     expect(addedSpy).toHaveBeenCalledTimes(1);
-    expect(provider.addQSO.mock.calls[0]?.[0]?.messageHistory).toEqual(['BG5DRB N0CALL -12']);
+    expect(provider.addQSO.mock.calls[0]?.[0]?.messageHistory).toEqual([
+      'BG5DRB N0CALL -09',
+      'N0CALL BG5DRB -12',
+    ]);
     expect(provider.addQSO.mock.calls[0]?.[0]?.comment).toBe('FT8  Sent: -12  Rcvd: -09');
     expect(autoSync).toHaveBeenCalledTimes(1);
     expect(notifyQSOComplete).toHaveBeenCalledTimes(1);
@@ -688,7 +711,10 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       expect.objectContaining({
         id: 'temp-2',
         callsign: 'N0CALL',
-        messageHistory: ['BG5DRB N0CALL -12'],
+        messageHistory: [
+          'BG5DRB N0CALL -09',
+          'N0CALL BG5DRB -12',
+        ],
         comment: 'FT8  Sent: -12  Rcvd: -09',
       }),
     );
@@ -770,6 +796,143 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         comment: 'FT8  Sent: -12  Rcvd: -09',
       }),
     );
+  });
+
+  it('recovers reportReceived from air history when the logged value is a sentinel 0', async () => {
+    // Issue #70: context may carry reportReceived "0" while the exchange contained -15.
+    const base = Date.parse('2026-07-23T07:43:00.000Z');
+    const provider = {
+      addQSO: vi.fn().mockResolvedValue(undefined),
+      updateQSO: vi.fn(),
+      getQSO: vi.fn(),
+      getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+      getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 0 }),
+    };
+
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      callsign: 'BG5FRH',
+      activeSlotPacks: [
+        buildSlotPack(`ft8-${base}`, base, [
+          {
+            message: 'BG5FRH RW9HSB -15',
+            snr: -2,
+            dt: 0.1,
+            freq: 2557,
+            confidence: 1,
+          },
+        ]),
+        buildSlotPack(`ft8-${base + MODES.FT8.slotMs}`, base + MODES.FT8.slotMs, [
+          {
+            message: 'RW9HSB BG5FRH R-02',
+            snr: -999,
+            dt: 0,
+            freq: 2386,
+            confidence: 1,
+            operatorId: 'op1',
+          },
+        ]),
+        buildSlotPack(`ft8-${base + MODES.FT8.slotMs * 2}`, base + MODES.FT8.slotMs * 2, [
+          {
+            message: 'BG5FRH RW9HSB RR73',
+            snr: -3,
+            dt: 0.2,
+            freq: 2559,
+            confidence: 1,
+          },
+        ]),
+      ],
+      storedRecords: [],
+    });
+    attachQSOHookSpy(manager);
+
+    await invokeRecordQSO(manager, {
+      operatorId: 'op1',
+      qsoRecord: {
+        id: 'temp-issue-70',
+        callsign: 'RW9HSB',
+        grid: 'NO26',
+        frequency: 21_076_000,
+        mode: 'FT8',
+        startTime: base,
+        endTime: base + MODES.FT8.slotMs * 2,
+        reportSent: '-2',
+        reportReceived: '0',
+        messageHistory: [],
+        myCallsign: 'BG5FRH',
+        myGrid: 'PL09',
+      },
+    });
+
+    expect(provider.addQSO).toHaveBeenCalledTimes(1);
+    expect(provider.addQSO.mock.calls[0]?.[0]).toMatchObject({
+      callsign: 'RW9HSB',
+      reportSent: '-02',
+      reportReceived: '-15',
+      comment: 'FT8  Sent: -02  Rcvd: -15',
+    });
+  });
+
+  it('preserves a legitimate FT8 report of 0 when merging QSO records', async () => {
+    const base = Date.parse('2026-07-23T08:00:00.000Z');
+    const provider = {
+      addQSO: vi.fn(),
+      updateQSO: vi.fn().mockResolvedValue(undefined),
+      getQSO: vi.fn().mockResolvedValue({
+        id: 'existing-zero',
+        callsign: 'N0CALL',
+        frequency: 14_074_000,
+        mode: 'FT8',
+        startTime: base - 30_000,
+        endTime: base + MODES.FT8.slotMs,
+        reportSent: '0',
+        reportReceived: '-09',
+        messageHistory: [],
+      }),
+      getLastQSOWithCallsign: vi.fn().mockResolvedValue({
+        id: 'existing-zero',
+        callsign: 'N0CALL',
+        frequency: 14_074_000,
+        mode: 'FT8',
+        startTime: base - 30_000,
+        endTime: base - 15_000,
+        reportSent: '-10',
+        reportReceived: '-08',
+        messageHistory: [],
+      }),
+      getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 1 }),
+    };
+
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      callsign: 'BG5DRB',
+      activeSlotPacks: [],
+      storedRecords: [],
+    });
+    attachQSOHookSpy(manager);
+
+    await invokeRecordQSO(manager, {
+      operatorId: 'op1',
+      qsoRecord: {
+        id: 'temp-zero',
+        callsign: 'N0CALL',
+        frequency: 14_074_000,
+        mode: 'FT8',
+        startTime: base,
+        endTime: base + MODES.FT8.slotMs,
+        reportSent: '0',
+        reportReceived: '-09',
+        messageHistory: [],
+        myCallsign: 'BG5DRB',
+      },
+    });
+
+    expect(provider.updateQSO).toHaveBeenCalledTimes(1);
+    expect(provider.updateQSO.mock.calls[0]?.[1]).toMatchObject({
+      reportSent: '0',
+      reportReceived: '-09',
+      comment: 'FT8  Sent: 0  Rcvd: -09',
+    });
   });
 
   it('replaces the queued transmission when a late decode advances standard-qso during the current TX slot', async () => {

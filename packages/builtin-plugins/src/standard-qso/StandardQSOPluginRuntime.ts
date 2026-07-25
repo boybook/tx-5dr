@@ -259,12 +259,13 @@ async function trySwitchToDirectedProtocol(
 
         if (msg.type === FT8MessageType.SIGNAL_REPORT) {
             strategy.logger.debug(`${prefix}: switching to direct signal report ${callsign} (SNR: ${directCall.snr})`);
-            if (!strategy.restoreContext(callsign)) {
-                strategy.context.reportReceived = (msg as FT8MessageSignalReport).report;
-                strategy.context.reportSent = directCall.snr;
-                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                    strategy.context.actualFrequency = strategy.context.config.frequency + directCall.df;
-                }
+            // Always apply the fresh report from the air message after restore.
+            // Cached context may still hold a UI/default sentinel of 0.
+            strategy.restoreContext(callsign);
+            strategy.context.reportReceived = (msg as FT8MessageSignalReport).report;
+            strategy.context.reportSent = directCall.snr;
+            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                strategy.context.actualFrequency = strategy.context.config.frequency + directCall.df;
             }
             strategy.updateSlots();
             return { changeState: 'TX3' };
@@ -453,14 +454,12 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             // 切换到新呼号
                             strategy.context.targetCallsign = newCallsign;
 
-                            // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
-                            if (!strategy.restoreContext(newCallsign)) {
-                                strategy.context.reportReceived = reportMsg.report;
-                                strategy.context.reportSent = newCall.snr;
-                                // 记录实际通联频率
-                                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                    strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
-                                }
+                            // Restore grid/frequency cache, but always take the fresh report from this message.
+                            strategy.restoreContext(newCallsign);
+                            strategy.context.reportReceived = reportMsg.report;
+                            strategy.context.reportSent = newCall.snr;
+                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
                             }
 
                             strategy.updateSlots();
@@ -534,12 +533,9 @@ const states: { [key in SlotsIndex]: StandardState } = {
             if (msgRogerReport) {
                 const msg = msgRogerReport.message as FT8MessageRogerReport;
                 strategy.logger.debug('TX2: received ROGER_REPORT, moving to TX4');
-                // 【修复】ROGER_REPORT也包含对方给我们的信号报告（msg.report）
-                // 如果之前没有设置reportReceived，从ROGER_REPORT中获取
-                if (strategy.context.reportReceived === undefined || strategy.context.reportReceived === null) {
-                    strategy.context.reportReceived = msg.report;
-                }
-                // 【修复】允许更新reportSent为当前SNR（移除过于保守的条件限制）
+                // Always take the report from the air message. A prior UI/default
+                // sentinel of 0 must not block updating to the real value.
+                strategy.context.reportReceived = msg.report;
                 strategy.context.reportSent = msgRogerReport.snr;
                 // 记录或更新实际通联频率 (基础频率 + 对方信号的频率偏移)
                 // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
@@ -566,11 +562,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
             if (msgSignalReport) {
                 const msg = msgSignalReport.message as FT8MessageSignalReport;
                 strategy.logger.debug('TX2: fallback - received SIGNAL_REPORT instead of ROGER_REPORT, treating as confirmation, moving to TX4');
-                // 【修复】提取对方告诉我们的信号报告值（msg.report）
-                if (strategy.context.reportReceived === undefined || strategy.context.reportReceived === null) {
-                    strategy.context.reportReceived = msg.report;
-                }
-                // 【修复】允许更新reportSent（移除过于保守的条件限制）
+                strategy.context.reportReceived = msg.report;
                 strategy.context.reportSent = msgSignalReport.snr;
                 // 记录或更新实际通联频率
                 if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
@@ -682,12 +674,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 const msg = msgSignalReport.message as FT8MessageSignalReport;
                 strategy.logger.debug(`TX3: fallback - received repeated SIGNAL_REPORT (SNR: ${msgSignalReport.snr}dB), updating report`);
 
-                // 更新接收的信号报告（如果之前没有设置）
-                if (strategy.context.reportReceived === undefined ||
-                    strategy.context.reportReceived === null) {
-                    strategy.context.reportReceived = msg.report;
-                }
-
+                strategy.context.reportReceived = msg.report;
                 // 更新我方准备发送的报告（使用最新的SNR）
                 strategy.context.reportSent = msgSignalReport.snr;
 
@@ -1287,10 +1274,8 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
                 } else if (msg.type === FT8MessageType.ROGER_REPORT) {
                     // 对方发了 ROGER_REPORT，回复 RR73
                     const rogerMsg = msg as FT8MessageRogerReport;
-                    // 从 ROGER_REPORT 中提取对方给我们的信号报告
-                    if (this.context.reportReceived === undefined || this.context.reportReceived === null) {
-                        this.context.reportReceived = rogerMsg.report;
-                    }
+                    // Always take the report from the air message.
+                    this.context.reportReceived = rogerMsg.report;
                     // 记录实际通联频率
                     if (this.context.config.frequency && this.context.config.frequency > 1000000) {
                         this.context.actualFrequency = this.context.config.frequency + parsedMessage.df;
