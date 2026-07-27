@@ -105,14 +105,6 @@ RUN node scripts/check-version-consistency.mjs && \
 RUN echo "Building application for $(uname -m)..." && \
     TX5DR_CLUBLOG_API_KEY="$TX5DR_CLUBLOG_API_KEY" yarn build
 
-# 清理不必要的文件但保留生产依赖
-RUN yarn cache clean && \
-    rm -rf .yarn/cache .yarn/unplugged && \
-    rm -rf packages/*/src packages/*/test && \
-    rm -rf scripts/generate-ico.js && \
-    rm -rf node_modules/.cache \
-    packages/*/node_modules/.cache
-
 # 运行时镜像
 FROM node:22-trixie-slim
 
@@ -158,6 +150,8 @@ WORKDIR /app
 
 # 从构建阶段复制构建产物和必要文件
 COPY --from=builder --parents \
+    --exclude=packages/*/src \
+    --exclude=packages/*/test \
     /app/./packages \
     /app/./node_modules \
     /app/./resources/models \
