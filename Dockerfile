@@ -62,9 +62,6 @@ COPY --parents \
     packages/client-tools/package.json \
     packages/contracts/package.json \
     packages/core/package.json \
-    packages/create-tx5dr-plugin/package.json \
-    packages/electron-main/package.json \
-    packages/electron-preload/package.json \
     packages/plugin-api/package.json \
     packages/rigctld-server/package.json \
     packages/server/package.json \
@@ -88,7 +85,8 @@ RUN echo "Installing dependencies for $(uname -m)..." && \
     }
 
 # 复制源代码
-COPY . .
+COPY --exclude=packages/electron-main --exclude=packages/electron-preload . .
+COPY --parents packages/electron-main/assets/AppIcon.* .
 
 # 生成ICO文件（如果需要）
 RUN node scripts/generate-ico.js || true
