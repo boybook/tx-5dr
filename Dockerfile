@@ -57,19 +57,20 @@ COPY .yarn/patches/ ./.yarn/patches/
 COPY scripts ./scripts/
 
 # 创建packages目录结构并复制package.json文件
-RUN mkdir -p packages/builtin-plugins packages/client-tools packages/contracts packages/core packages/create-tx5dr-plugin packages/electron-main packages/electron-preload packages/plugin-api packages/rigctld-server packages/server packages/shared-config packages/web
-COPY packages/builtin-plugins/package.json ./packages/builtin-plugins/
-COPY packages/client-tools/package.json ./packages/client-tools/
-COPY packages/contracts/package.json ./packages/contracts/
-COPY packages/core/package.json ./packages/core/
-COPY packages/create-tx5dr-plugin/package.json ./packages/create-tx5dr-plugin/
-COPY packages/electron-main/package.json ./packages/electron-main/
-COPY packages/electron-preload/package.json ./packages/electron-preload/
-COPY packages/plugin-api/package.json ./packages/plugin-api/
-COPY packages/rigctld-server/package.json ./packages/rigctld-server/
-COPY packages/server/package.json ./packages/server/
-COPY packages/shared-config/package.json ./packages/shared-config/
-COPY packages/web/package.json ./packages/web/
+COPY --parents \
+    packages/builtin-plugins/package.json \
+    packages/client-tools/package.json \
+    packages/contracts/package.json \
+    packages/core/package.json \
+    packages/create-tx5dr-plugin/package.json \
+    packages/electron-main/package.json \
+    packages/electron-preload/package.json \
+    packages/plugin-api/package.json \
+    packages/rigctld-server/package.json \
+    packages/server/package.json \
+    packages/shared-config/package.json \
+    packages/web/package.json \
+    ./
 
 # 安装依赖（多架构优化）
 RUN echo "Installing dependencies for $(uname -m)..." && \
@@ -156,16 +157,18 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # 从构建阶段复制构建产物和必要文件
-COPY --from=builder /app/packages ./packages/
-COPY --from=builder /app/node_modules ./node_modules/
-COPY --from=builder /app/resources/models ./resources/models/
-COPY --from=builder /app/resources/licenses ./resources/licenses/
-COPY --from=builder /app/resources/README.txt ./resources/README.txt
+COPY --from=builder --parents \
+    /app/./packages \
+    /app/./node_modules \
+    /app/./resources/models \
+    /app/./resources/licenses \
+    /app/./resources/README.txt \
+    /app/./package.json \
+    /app/./yarn.lock \
+    /app/./turbo.json \
+    ./
 RUN test -f resources/models/deepcw/en_tiny.onnx \
     && test -f resources/models/deepcw/en_small.onnx
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/yarn.lock ./yarn.lock
-COPY --from=builder /app/turbo.json ./turbo.json
 
 RUN node -e "const a=require('audify'); const e=new a.OpusEncoder(48000,1,a.OpusApplication.OPUS_APPLICATION_RESTRICTED_LOWDELAY); const d=new a.OpusDecoder(48000,1); const p=e.encode(Buffer.alloc(960*2),960); d.decode(p,960); console.log('audify Opus runtime ok');" \
     && node -e "import('wsjtx-lib').then(()=>console.log('wsjtx-lib runtime ok'))"
