@@ -74,6 +74,14 @@ COPY packages/web/package.json ./packages/web/
 
 # 安装依赖（多架构优化）
 RUN echo "Installing dependencies for $(uname -m)..." && \
+    if [ -n "$HTTP_PROXY" ]; then \
+        export YARN_HTTP_PROXY="$HTTP_PROXY"; \
+        export ELECTRON_GET_USE_PROXY=1; \
+    fi && \
+    if [ -n "$HTTPS_PROXY" ]; then \
+        export YARN_HTTPS_PROXY="$HTTPS_PROXY"; \
+        export ELECTRON_GET_USE_PROXY=1; \
+    fi && \
     yarn install --immutable --network-timeout 300000 || { \
         echo "Immutable install failed, trying fallback..." && \
         yarn install --network-timeout 300000; \
