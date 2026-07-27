@@ -212,4 +212,4 @@ EXPOSE 50110/udp
 ENTRYPOINT ["/entrypoint.sh"]
 
 # 默认启动supervisor
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"] 
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
