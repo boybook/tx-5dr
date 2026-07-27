@@ -1,6 +1,6 @@
 # TX-5DR Docker Image - Multi-Architecture Support
 # 使用多阶段构建来减小最终镜像大小
-FROM node:22-trixie-slim AS builder
+FROM node:22-trixie-slim AS builder-base
 
 # 设置环境变量
 ENV YARN_VERSION=4.9.1
@@ -85,6 +85,13 @@ RUN echo "Installing dependencies for $(uname -m)..." && \
         yarn install --network-timeout 300000; \
     }
 
+FROM builder-base AS build-production
+
+RUN echo "Removing development dependencies ..." && \
+    yarn workspaces focus --production @tx5dr/server
+
+FROM builder-base AS builder
+
 # 复制源代码
 COPY --exclude=packages/electron-main --exclude=packages/electron-preload . .
 COPY --parents packages/electron-main/assets/AppIcon.* .
@@ -153,13 +160,15 @@ COPY --from=builder --parents \
     --exclude=packages/*/src \
     --exclude=packages/*/test \
     /app/./packages \
-    /app/./node_modules \
     /app/./resources/models \
     /app/./resources/licenses \
     /app/./resources/README.txt \
     /app/./package.json \
     /app/./yarn.lock \
     /app/./turbo.json \
+    ./
+COPY --from=build-production --parents \
+    /app/./node_modules \
     ./
 RUN test -f resources/models/deepcw/model.onnx \
     && test -f resources/models/deepcw/model.onnx.json
