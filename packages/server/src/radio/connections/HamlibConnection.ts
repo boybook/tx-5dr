@@ -2787,7 +2787,9 @@ export class HamlibConnection
           'getAvailableCtcssTones.getAvailableCtcssTones',
           this.rig!.getAvailableCtcssTones(),
         ))
-          .filter((tone) => Number.isFinite(tone) && tone > 0);
+          .filter((tone) => Number.isFinite(tone) && tone > 0)
+          // Hamlib returns Hz; convert to 0.1Hz to honor IRadioConnection contract
+          .map((tone) => Math.round(tone * 10));
         return Array.from(new Set(tones)).sort((a, b) => a - b);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'getAvailableCtcssTones');
