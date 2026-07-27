@@ -13,6 +13,7 @@ import {
 } from '@heroui/react';
 import { getBandFromFrequency } from '@tx5dr/core';
 import type { PresetFrequency } from '@tx5dr/contracts';
+import { formatFrequencyMHz, formatMHz } from '@tx5dr/contracts';
 import {
   CTCSS_TONE_TENTHS_HZ_OPTIONS,
   DCS_CODE_OPTIONS,
@@ -73,9 +74,9 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
     setNewRadioMode(editingPreset?.radioMode ?? initialRadioMode);
     setNewFreqMHz(
       editingPreset?.frequency
-        ? (editingPreset.frequency / 1_000_000).toFixed(3)
+        ? formatFrequencyMHz(editingPreset.frequency)
         : initialFrequencyHz
-          ? (initialFrequencyHz / 1_000_000).toFixed(3)
+          ? formatFrequencyMHz(initialFrequencyHz)
           : '',
     );
     setNewRepeaterShift((editingPreset?.repeaterShift ?? 'none') as RepeaterShiftOption);
@@ -178,7 +179,7 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
     }
 
     const displayBand = normalizedBand === CUSTOM_BAND ? t('freqPresets.customBand') : normalizedBand;
-    const description = newDescription.trim() || `${freqValue.toFixed(3)} MHz ${displayBand}`;
+    const description = newDescription.trim() || `${formatMHz(freqValue)} MHz ${displayBand}`;
     const newPreset: PresetFrequency = {
       band: normalizedBand,
       mode: newMode,

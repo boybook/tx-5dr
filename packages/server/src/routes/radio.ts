@@ -13,7 +13,7 @@ const logger = createLogger('RadioRoute');
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { ProfileManager } from '../config/ProfileManager.js';
-import { HamlibConfigSchema, UserRole, WriteCapabilityPayloadSchema } from '@tx5dr/contracts';
+import { HamlibConfigSchema, UserRole, WriteCapabilityPayloadSchema, formatFrequencyMHz } from '@tx5dr/contracts';
 import { requireAbility, requireAbilityFor, requireRole } from '../auth/authPlugin.js';
 import type { HamlibConfig } from '@tx5dr/contracts';
 import serialport from 'serialport';
@@ -424,7 +424,7 @@ function emitRepeaterDuplexWarning(
     timeout: 5000,
     key: 'repeaterDuplexUnsupported',
     params: {
-      frequency: (frequency / 1_000_000).toFixed(3),
+      frequency: formatFrequencyMHz(frequency),
       reason: result.message || '',
     },
   });
@@ -496,7 +496,7 @@ function emitToneSquelchWarning(
     timeout: 5000,
     key: 'toneSquelchUnsupported',
     params: {
-      frequency: (frequency / 1_000_000).toFixed(3),
+      frequency: formatFrequencyMHz(frequency),
       reason: result.message || '',
     },
   });
@@ -779,7 +779,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
     if (!radioConnected) {
       // 电台未连接时，只记录频率但不实际设置
-      logger.debug(`Radio not connected, recording frequency: ${(frequency / 1000000).toFixed(3)} MHz${effectiveRadioMode ? ` (${effectiveRadioMode})` : ''}`);
+      logger.debug(`Radio not connected, recording frequency: ${formatFrequencyMHz(frequency)} MHz${effectiveRadioMode ? ` (${effectiveRadioMode})` : ''}`);
 
       // 只有在频率真正改变时才广播
       if (isFrequencyChanged) {
@@ -787,7 +787,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
           frequency,
           mode: effectiveMode,
           band: band || '',
-          description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
+          description: description || `${formatFrequencyMHz(frequency)} MHz`,
           radioMode: effectiveRadioMode,
           radioConnected: false,
           source: 'program',
@@ -866,7 +866,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
         frequency,
         mode: effectiveMode,
         band: band || '',
-        description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
+        description: description || `${formatFrequencyMHz(frequency)} MHz`,
         radioMode: effectiveRadioMode,
         radioConnected: true,
         source: 'program',

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
-import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, SetSplitFrequencyPayloadSchema, TuneToneStartPayloadSchema, SLOT_PACK_HISTORY_LIMIT, type AppAction, type AppSubject } from '@tx5dr/contracts';
+import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, SetSplitFrequencyPayloadSchema, TuneToneStartPayloadSchema, SLOT_PACK_HISTORY_LIMIT, formatFrequencyMHz, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type {
   ClockStatusSummary,
   DecodeErrorInfo,
@@ -1822,8 +1822,8 @@ export class WSServer extends WSMessageHandler {
       ? (savedFrequency.band || this.resolveBandLabel(frequency))
       : this.resolveBandLabel(frequency);
     const description = savedFrequency?.frequency === frequency
-      ? (savedFrequency.description || `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`)
-      : `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
+      ? (savedFrequency.description || `${formatFrequencyMHz(frequency)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`)
+      : `${formatFrequencyMHz(frequency)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
 
     return {
       frequency,
@@ -2413,7 +2413,7 @@ export class WSServer extends WSMessageHandler {
 
   private broadcastQSOToast(operatorId: string, qso: any, key: ServerMessageKey.QSO_LOGGED | ServerMessageKey.QSO_UPDATED): void {
     try {
-      const mhz = (qso.frequency / 1_000_000).toFixed(3);
+      const mhz = formatFrequencyMHz(qso.frequency);
       const reportSent = qso.reportSent || '--';
       const reportReceived = qso.reportReceived || '--';
       const summaryParts = [qso.callsign];

@@ -10,7 +10,7 @@ export * from './schema/qso.schema.js';
 export * from './schema/cycle.schema.js';
 
 // 显式导出slot-info.schema.js以避免与websocket.schema.js的冲突
-export { 
+export {
   SlotPackSchema,
   FrameMessageSchema,
   DecodeRequestSchema,
@@ -19,7 +19,7 @@ export {
 } from './schema/slot-info.schema.js';
 
 // 导出类型
-export type { 
+export type {
   SlotPack,
   FrameMessage,
   DecodeRequest,
@@ -80,7 +80,7 @@ export * from './schema/mode.schema.js';
 // Operator Schema
 export * from './schema/operator.schema.js';
 
-// QSO Schema  
+// QSO Schema
 export * from './schema/qso.schema.js';
 
 // Slot Info Schema
@@ -129,6 +129,9 @@ export * from './schema/station-info.schema.js';
 export * from './utils/grid.js';
 export * from './utils/callsign.js';
 export * from './utils/cwTiming.js';
+
+// Frequency Utils
+export * from './utils/frequency.js';
 
 // Process Monitor Schema
 export * from './schema/process-monitor.schema.js';

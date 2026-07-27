@@ -16,6 +16,7 @@ import {
   UpdateNtpServerListRequestSchema,
   sanitizeCallsignInput,
   sanitizeGridInput,
+  formatFrequencyMHz,
 } from '@tx5dr/contracts';
 import type { RadioProfile, DecodeWindowSettings, PresetFrequency, RepeaterShift, ToneSquelchMode, StationInfo, OpenWebRXStationConfig, PluginsConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
@@ -1497,7 +1498,7 @@ export class ConfigManager {
       profileId,
       engineMode: memory.lastEngineMode ?? 'digital',
       digitalMHz: memory.lastSelectedFrequency
-        ? (memory.lastSelectedFrequency.frequency / 1_000_000).toFixed(3)
+        ? formatFrequencyMHz(memory.lastSelectedFrequency.frequency)
         : null,
     });
   }

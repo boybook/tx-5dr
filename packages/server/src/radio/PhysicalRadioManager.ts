@@ -30,7 +30,7 @@ import type {
   ToneSquelchMode,
   TunerCapabilities,
 } from '@tx5dr/contracts';
-import { RadioConnectionStatus } from '@tx5dr/contracts';
+import { RadioConnectionStatus, formatFrequencyMHz } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { isProcessShuttingDown } from '../utils/process-shutdown.js';
 import { RadioConnectionFactory } from './connections/RadioConnectionFactory.js';
@@ -1074,7 +1074,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       this.markCoreCapabilitySupported('writeFrequency');
       this.completeFrequencyWrite(write);
       this.queuePostFrequencyCapabilityRefresh('setFrequency');
-      logger.debug(`Frequency set: ${(freq / 1000000).toFixed(3)} MHz`);
+      logger.debug(`Frequency set: ${formatFrequencyMHz(freq)} MHz`);
       return true;
     } catch (error) {
       if (isRecoverableOptionalRadioError(error)) {
@@ -1425,7 +1425,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     try {
       const currentFreq = await this.connection.getFrequency();
-      logger.info(`Connection test passed, current frequency: ${(currentFreq / 1000000).toFixed(3)} MHz`);
+      logger.info(`Connection test passed, current frequency: ${formatFrequencyMHz(currentFreq)} MHz`);
     } catch (error) {
       logger.error(`Connection test failed: ${(error as Error).message}`);
       this.handleConnectionError(error as Error);
@@ -2537,7 +2537,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       if (this.shouldIgnoreFrequencyObservation(frequency, this.frequencyWriteEpoch, 'connection-event')) {
         return;
       }
-      logger.debug(`Frequency changed: ${(frequency / 1000000).toFixed(3)} MHz`);
+      logger.debug(`Frequency changed: ${formatFrequencyMHz(frequency)} MHz`);
       this.updateKnownFrequency(frequency);
       this.emit('radioFrequencyChanged', frequency);
     };
@@ -2759,7 +2759,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     try {
       const currentFrequency = await this.getFrequency();
       if (currentFrequency > 0) {
-        logger.debug(`Captured initial frequency during bootstrap: ${(currentFrequency / 1000000).toFixed(3)} MHz`);
+        logger.debug(`Captured initial frequency during bootstrap: ${formatFrequencyMHz(currentFrequency)} MHz`);
         this.updateKnownFrequency(currentFrequency);
       }
     } catch (error) {
@@ -3141,9 +3141,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         logger.debug(
           `Frequency changed: ${
             previousKnownFrequency
-              ? (previousKnownFrequency / 1000000).toFixed(3)
+              ? formatFrequencyMHz(previousKnownFrequency)
               : 'N/A'
-          } MHz -> ${(currentFrequency / 1000000).toFixed(3)} MHz`
+          } MHz -> ${formatFrequencyMHz(currentFrequency)} MHz`
         );
 
         if (previousKnownFrequency !== null) {
@@ -3156,7 +3156,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         this.queuePostFrequencyCapabilityRefresh('frequencyMonitor');
       } else if (previousKnownFrequency === null && currentFrequency > 0) {
         // 首次获取频率
-        logger.debug(`Initial frequency: ${(currentFrequency / 1000000).toFixed(3)} MHz`);
+        logger.debug(`Initial frequency: ${formatFrequencyMHz(currentFrequency)} MHz`);
         this.updateKnownFrequency(currentFrequency);
       }
     } catch (error) {
