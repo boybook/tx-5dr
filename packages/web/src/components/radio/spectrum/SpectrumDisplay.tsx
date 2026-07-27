@@ -51,6 +51,7 @@ import {
   STRATEGY_FREQUENCY_PICK_EVENT,
   type StrategyFrequencyPickRequest,
 } from '../../../utils/strategyFrequencyPick';
+import { formatFrequencyMHz } from '../../../utils/frequencyMHz';
 
 const logger = createLogger('SpectrumDisplay');
 const SPECTRUM_NO_FRAME_STALE_MS = 10_000;
@@ -435,7 +436,7 @@ export function buildRadioSdrFrequencyRequest({
 }): SetRadioFrequencyParams | null {
   const snappedFrequency = snapFrequencyToStep(frequency, stepHz);
   const roundedFrequency = Math.round(snappedFrequency);
-  const description = `${(snappedFrequency / 1_000_000).toFixed(3)} MHz`;
+  const description = `${formatFrequencyMHz(snappedFrequency)} MHz`;
 
   if (engineMode === 'voice' || engineMode === 'image') {
     return {
@@ -1730,7 +1731,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       const response = await setRadioFrequencyWithIntent({
         frequency: roundedFrequency,
         band: getBandFromFrequency(roundedFrequency),
-        description: `${(roundedFrequency / 1_000_000).toFixed(3)} MHz`,
+        description: `${formatFrequencyMHz(roundedFrequency)} MHz`,
       });
       if (response.success) {
         resetOperatorsAfterOperatingStateChange();

@@ -39,6 +39,7 @@ import { projectSpectrumFrame } from '../spectrum/spectrumProjection.js';
 import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
 import { OperatorScopedSlotPackProjectionService } from './OperatorScopedSlotPackProjectionService.js';
 import { canReadFullProfiles, redactHamlibConfigForRead, redactProfileForRead, redactProfilesForRead } from '../security/profileRedaction.js';
+import { formatFrequencyMHz } from '../utils/frequencyMHz.js';
 
 const logger = createLogger('WSServer');
 const DECODE_WORKER_UNAVAILABLE_USER_MESSAGE_KEY = 'errors:code.DECODE_WORKER_UNAVAILABLE.userMessage';
@@ -2235,8 +2236,8 @@ export class WSServer extends WSMessageHandler {
       ? (savedFrequency.band || this.resolveBandLabel(frequency))
       : this.resolveBandLabel(frequency);
     const description = savedFrequency?.frequency === frequency
-      ? (savedFrequency.description || `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`)
-      : `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
+      ? (savedFrequency.description || `${formatFrequencyMHz(frequency)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`)
+      : `${formatFrequencyMHz(frequency)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
     const frequencyMetadata = radioManager.getFrequencyStateMetadata?.();
     const radioConnected = radioManager.isConnected();
     const confirmation = radioConnected
@@ -2865,7 +2866,7 @@ export class WSServer extends WSMessageHandler {
 
   private broadcastQSOToast(operatorId: string, qso: any, key: ServerMessageKey.QSO_LOGGED | ServerMessageKey.QSO_UPDATED): void {
     try {
-      const mhz = (qso.frequency / 1_000_000).toFixed(3);
+      const mhz = formatFrequencyMHz(qso.frequency);
       const reportSent = qso.reportSent != null && qso.reportSent !== '' ? qso.reportSent : '--';
       const reportReceived = qso.reportReceived != null && qso.reportReceived !== '' ? qso.reportReceived : '--';
       const summaryParts = [qso.callsign];
