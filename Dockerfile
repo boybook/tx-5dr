@@ -122,9 +122,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV NODE_ENV=production
 
 # 运行共享安装脚本（--docker 模式）修复 GLIBCXX 等兼容性问题
-COPY linux/lib/ /tmp/tx5dr-linux/lib/
-COPY linux/install.sh /tmp/tx5dr-linux/install.sh
-RUN bash /tmp/tx5dr-linux/install.sh --docker
+RUN --mount=dst=/tmp/tx5dr-linux,source=linux \
+ bash /tmp/tx5dr-linux/install.sh --docker
 
 # 安装运行时依赖
 RUN apt-get update && apt-get install -y \
@@ -170,7 +169,6 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/yarn.lock ./yarn.lock
 COPY --from=builder /app/turbo.json ./turbo.json
 
-RUN rm -rf /tmp/tx5dr-linux/
 RUN node -e "const a=require('audify'); const e=new a.OpusEncoder(48000,1,a.OpusApplication.OPUS_APPLICATION_RESTRICTED_LOWDELAY); const d=new a.OpusDecoder(48000,1); const p=e.encode(Buffer.alloc(960*2),960); d.decode(p,960); console.log('audify Opus runtime ok');" \
     && node -e "import('wsjtx-lib').then(()=>console.log('wsjtx-lib runtime ok'))" \
     && node -e "const {PNG}=require('pngjs'); if(typeof PNG.sync.read!=='function') throw new Error('pngjs unavailable'); const r=require('rasterwave-node'); if(r.sstvModes().length!==31) throw new Error('rasterwave mode catalog incomplete'); Promise.all([new r.SstvDecoder(12000,{outputMode:'continuousPaper',fallbackMode:'robot36',queueCapacitySamples:24000},()=>{}).dispose(),new r.FaxDecoder(12000,{outputMode:'continuousPaper',continuousAuto:true,queueCapacitySamples:24000},()=>{}).dispose()]).then(()=>console.log('Image Radio runtime ok')).catch(e=>{console.error(e);process.exit(1)});"
