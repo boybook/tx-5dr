@@ -74,6 +74,14 @@ COPY packages/web/package.json ./packages/web/
 
 # 安装依赖（多架构优化）
 RUN echo "Installing dependencies for $(uname -m)..." && \
+    if [ -n "$HTTP_PROXY" ]; then \
+        export YARN_HTTP_PROXY="$HTTP_PROXY"; \
+        export ELECTRON_GET_USE_PROXY=1; \
+    fi && \
+    if [ -n "$HTTPS_PROXY" ]; then \
+        export YARN_HTTPS_PROXY="$HTTPS_PROXY"; \
+        export ELECTRON_GET_USE_PROXY=1; \
+    fi && \
     YARN_HTTP_TIMEOUT=300000 yarn install --immutable
 
 # 复制源代码
