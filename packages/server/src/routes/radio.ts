@@ -876,13 +876,13 @@ export async function radioRoutes(fastify: FastifyInstance) {
     return reply.send({
       success: true,
       frequency,
-      radioMode: effectiveRadioMode,
+      radioMode: applyResult.modeError ? lastFrequency?.radioMode : effectiveRadioMode,
       repeaterShift: repeaterDuplexToApply?.repeaterShift,
       repeaterOffsetHz: repeaterDuplexToApply?.repeaterOffsetHz,
       toneMode: toneSquelchToApply?.toneMode,
       ctcssToneTenthsHz: toneSquelchToApply?.ctcssToneTenthsHz,
       dcsCode: toneSquelchToApply?.dcsCode,
-      message: effectiveRadioMode ? `Frequency and mode set successfully (${effectiveRadioMode})` : 'Frequency set successfully',
+      message: (effectiveRadioMode && !applyResult.modeError) ? `Frequency and mode set successfully (${effectiveRadioMode})` : 'Frequency set successfully',
       radioConnected: true
     });
   });
