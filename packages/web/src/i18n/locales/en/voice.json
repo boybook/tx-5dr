@@ -33,7 +33,9 @@
     "lsb": "LSB",
     "fm": "FM",
     "am": "AM",
-    "wfm": "WFM"
+    "wfm": "WFM",
+    "warningReverted": "Mode switch failed. The selection has reverted to the radio's current mode. You can retry by selecting again.",
+    "warningUnknown": "Mode switch failed and the current mode could not be read. You can retry by selecting again."
   },
   "ptt": {
     "title": "Voice PTT",
