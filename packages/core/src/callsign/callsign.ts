@@ -1183,6 +1183,32 @@ export function isValidCallsign(callsign: string): boolean {
 }
 
 /**
+ * 判断是否为 WSJT-X 部分解码的"未解码呼号"占位符（`<...>` / `...`）。
+ *
+ * 部分解码消息（如 `BG5DRB <...> RR73`）中的占位符不是真实呼号，
+ * 不得作为自动呼叫/回复目标。
+ */
+export function isUndecodedCallsignPlaceholder(callsign: string): boolean {
+  const c = typeof callsign === 'string' ? callsign.trim().toUpperCase() : '';
+  return c === '...' || c === '<...>';
+}
+
+/**
+ * 判断是否为一个"可呼叫的真实呼号"：排除未解码占位符，
+ * 且通过 {@link isValidCallsign} 基本格式校验。
+ *
+ * 注意：比解析器更严格（最长 6-7 字符），极端罕见的长呼号可能被保守拒绝。
+ */
+export function isCallableCallsign(callsign: string): boolean {
+  if (typeof callsign !== 'string' || isUndecodedCallsignPlaceholder(callsign)) {
+    return false;
+  }
+  const c = callsign.trim().toUpperCase();
+  const candidate = c.startsWith('<') && c.endsWith('>') ? c.slice(1, -1) : c;
+  return isValidCallsign(candidate);
+}
+
+/**
  * 根据频率获取频段
  * @param frequency 频率（Hz）
  * @returns 频段信息

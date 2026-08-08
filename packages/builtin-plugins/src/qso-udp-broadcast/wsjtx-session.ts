@@ -1,5 +1,6 @@
 import type { FrequencyChangeState, ParsedFT8Message, PluginContext, SlotActivityEvent, SlotInfo, QSORecord } from '@tx5dr/plugin-api';
 import { FT8MessageType } from '@tx5dr/plugin-api';
+import { isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import {
   buildAdifFile,
   buildRawAdifRecord,
@@ -280,6 +281,10 @@ export class WsjtUdpSession {
       this.ctx.log.info('WSJT-X UDP Reply modifiers noted; TX-5DR currently applies normal reply behavior', { modifiers: message.modifiers });
     }
     const callsign = 'senderCallsign' in match.message.message ? match.message.message.senderCallsign : undefined;
+    if (!callsign || isUndecodedCallsignPlaceholder(callsign)) {
+      this.ctx.log.warn('WSJT-X UDP Reply ignored: undecoded placeholder callsign', { message: message.message });
+      return;
+    }
     if (callsign) {
       this.ctx.operator.replyToDecode({
         callsign,

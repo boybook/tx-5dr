@@ -91,6 +91,16 @@ export function evaluateAutomaticTargetEligibility(
   myCallsign: string,
   parsedMessage: ParsedFT8Message,
 ): AutoTargetEligibilityDecision {
+  // 无发送者身份的不可解析消息（含 `<...>` 部分解码→UNKNOWN）不得作为自动目标候选
+  if (
+    parsedMessage.message.type === FT8MessageType.UNKNOWN
+    || parsedMessage.message.type === FT8MessageType.CUSTOM
+  ) {
+    return {
+      eligible: false,
+      reason: 'missing_callsign_identity',
+    };
+  }
   if (parsedMessage.message.type !== FT8MessageType.CQ) {
     return {
       eligible: true,

@@ -25,7 +25,7 @@ import {
     StrategyRuntimeSlotContentUpdate,
     QSOFailureInfo,
 } from '@tx5dr/plugin-api';
-import { FT8MessageParser } from '@tx5dr/core';
+import { FT8MessageParser, isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 
 export const STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING = 'tx6MessageOverride';
 
@@ -200,6 +200,9 @@ async function trySwitchToDirectedProtocol(
     const myCallsign = strategy.context.config.myCallsign;
     const directCalls = messages
         .filter((msg) => {
+            if (msg.isPartialDecode) {
+                return false;
+            }
             const message = msg.message;
             const isInitialDirectCall = message.type === FT8MessageType.CALL
                 || message.type === FT8MessageType.SIGNAL_REPORT;
@@ -224,6 +227,10 @@ async function trySwitchToDirectedProtocol(
             continue;
         }
         const callsign = msg.senderCallsign;
+        if (isUndecodedCallsignPlaceholder(callsign)) {
+            strategy.logger.debug(`${options?.logPrefix ?? 'direct call'}: skipping undecoded placeholder sender ${callsign}`);
+            continue;
+        }
         const hasWorked = await strategy.operator.hasWorkedCallsign(callsign);
         const prefix = options?.logPrefix ?? 'direct call';
 
@@ -955,10 +962,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 }
             }
 
-            // 收集所有CQ消息
+            // 收集所有CQ消息（部分解码的 `CQ <...>` 不参与回复）
             const cqCalls = messages
-                .filter((msg) => 
-                    msg.message.type === FT8MessageType.CQ && 
+                .filter((msg) =>
+                    !msg.isPartialDecode &&
+                    msg.message.type === FT8MessageType.CQ &&
                     strategy.operator.config.autoReplyToCQ)
                 .sort((a, b) => a.snr - b.snr);
 
@@ -979,6 +987,10 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 for (const cqCall of sortedCalls) {
                     const msg = cqCall.message as FT8MessageCQ;
                     const callsign = msg.senderCallsign;
+                    if (isUndecodedCallsignPlaceholder(callsign)) {
+                        strategy.logger.debug(`TX6: skipping CQ from undecoded placeholder ${callsign}`);
+                        continue;
+                    }
 
                     try {
                         // 检查是否已经通联过
@@ -1166,8 +1178,8 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     async handleReceivedAndDicideNext(messages: ParsedFT8Message[], options?: { isReDecision?: boolean }): Promise<StrategyDecision> {
         const currentState = states[this.state];
 
-        // 过滤掉发送者是我自己的消息
-        const filteredMessages = messages.filter((msg) => msg.message.type == FT8MessageType.CUSTOM || msg.message.type == FT8MessageType.UNKNOWN || msg.message.type == FT8MessageType.FOX_RR73 || !callsignMatches(msg.message.senderCallsign, this.operator.config.myCallsign));
+        // 过滤掉发送者是我自己的消息；部分解码消息（含 `<...>` 占位符）绝不参与 QSO 决策
+        const filteredMessages = messages.filter((msg) => !msg.isPartialDecode && (msg.message.type == FT8MessageType.CUSTOM || msg.message.type == FT8MessageType.UNKNOWN || msg.message.type == FT8MessageType.FOX_RR73 || !callsignMatches(msg.message.senderCallsign, this.operator.config.myCallsign)));
 
         // 处理接收到的消息
         const result = await currentState.handle(this, filteredMessages);
@@ -1232,6 +1244,10 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     }
 
     requestCall(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): void {
+        if (isUndecodedCallsignPlaceholder(callsign)) {
+            this.logger.warn(`requestCall: refusing undecoded placeholder callsign ${callsign}`);
+            return;
+        }
         this.syncOperatorConfig();
         this.logger.debug(`requestCall: myCallsign=${this.operator.config.myCallsign}, target=${callsign}`, lastMessage);
         this.clearPost73RetryContext('manual requestCall');
@@ -1353,6 +1369,10 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
 
     patchContext(patch: Partial<StrategyRuntimeContext>): void {
         this.syncOperatorConfig();
+        if (patch.targetCallsign && isUndecodedCallsignPlaceholder(patch.targetCallsign)) {
+            this.logger.warn(`patchContext: refusing undecoded placeholder callsign ${patch.targetCallsign}`);
+            return;
+        }
         this._context = {
             ...this._context,
             ...patch,
@@ -1466,6 +1486,16 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     }
     
     updateSlots() {
+        // 防御：占位符目标绝不生成发射槽位（避免把 `...` 包成 `<...>` 上射频）
+        if (this.context.targetCallsign && isUndecodedCallsignPlaceholder(this.context.targetCallsign)) {
+            this.slots.TX1 = '';
+            this.slots.TX2 = '';
+            this.slots.TX3 = '';
+            this.slots.TX4 = '';
+            this.slots.TX5 = '';
+            this.notifySlotsUpdated();
+            return;
+        }
         if (this.context.targetCallsign) {
             if (FT8MessageParser.isStandardCallsign(this.context.targetCallsign)) {
                 this.slots.TX1 = FT8MessageParser.generateMessage({

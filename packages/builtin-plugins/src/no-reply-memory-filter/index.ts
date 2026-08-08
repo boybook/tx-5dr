@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'url';
 import path from 'path';
 import { FT8MessageType } from '@tx5dr/contracts';
+import { isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import type { ParsedFT8Message, QSORecord } from '@tx5dr/contracts';
 import type { PluginDefinition, PluginContext, QSOFailureInfo } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
@@ -432,7 +433,8 @@ export const noReplyMemoryFilterPlugin: PluginDefinition = {
         }
 
         const callsign = getSenderCallsign(candidate.message);
-        if (!callsign) {
+        // 未解码占位符呼号不参与记忆过滤（也不写入记忆库）
+        if (!callsign || isUndecodedCallsignPlaceholder(callsign)) {
           return true;
         }
 
@@ -455,6 +457,7 @@ export const noReplyMemoryFilterPlugin: PluginDefinition = {
       const callsign = normalizeMemoryCallsign(info.targetCallsign);
       if (
         !callsign
+        || isUndecodedCallsignPlaceholder(callsign)
         || info.stage !== 'TX1'
         || info.hadTargetReply === true
       ) {
@@ -477,7 +480,7 @@ export const noReplyMemoryFilterPlugin: PluginDefinition = {
 
     onQSOComplete(record: QSORecord, ctx) {
       const callsign = normalizeMemoryCallsign(record.callsign);
-      if (!callsign) {
+      if (!callsign || isUndecodedCallsignPlaceholder(callsign)) {
         return;
       }
       getMemoryStore(ctx).delete(getStoreKey(callsign));
