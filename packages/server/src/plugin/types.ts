@@ -115,7 +115,6 @@ export interface DecisionOrchestratorDeps {
     callsign: string,
     lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo },
   ) => void;
-  notifyTransmissionQueued: (operatorId: string, transmission: string) => void;
   notifyQSOFail: (
     operatorId: string,
     info: import('@tx5dr/plugin-api').QSOFailureInfo,

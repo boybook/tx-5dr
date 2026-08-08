@@ -171,6 +171,12 @@ describe('PluginManager standard-qso late re-decision', () => {
       resetOperatorRuntime: () => {},
       dataDir,
     });
+    // This harness omits RadioOperatorManager, so emulate its post-validation acceptance callback.
+    eventEmitter.on('requestTransmit', ({ operatorId, transmission }) => {
+      if (!FT8MessageParser.rawContainsUndecodedCallsign(transmission)) {
+        pluginManager.notifyTransmissionQueued(operatorId, transmission);
+      }
+    });
     pluginManager.loadConfig({
       configs: options?.pluginConfigs ?? {},
       operatorStrategies: {
@@ -579,6 +585,37 @@ describe('PluginManager standard-qso late re-decision', () => {
 
     await pluginManager.shutdown();
     void requestTransmitSpy;
+  });
+
+  it('does not mark a rejected placeholder TX5 message as queued', async () => {
+    const { eventEmitter, operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      targetCallsign: 'BG5DRB',
+      autoResumeCQAfterSuccess: true,
+    });
+    const transmissions: Array<{ operatorId: string; transmission: string }> = [];
+    eventEmitter.on('requestTransmit', (payload) => {
+      transmissions.push(payload);
+    });
+
+    setRuntimeState(pluginManager, operator.config.id, 'TX5');
+    pluginManager.setOperatorRuntimeSlotContent(
+      operator.config.id,
+      'TX5',
+      'BG5DRB <...> 73',
+    );
+
+    (pluginManager as any).handleEncodeStart(createSlotInfo(60_000));
+    expect(transmissions).toHaveLength(1);
+
+    await (pluginManager as any).handleSlotStart(
+      createSlotInfo(75_000),
+      createSlotPack(createSlotInfo(60_000), []),
+    );
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX5');
+
+    await pluginManager.shutdown();
   });
 
   it('switches from TX4 to TX5 when an RRR is decoded alongside a bare callsign noise frame', async () => {
@@ -3428,6 +3465,77 @@ describe('PluginManager standard-qso late re-decision', () => {
     );
 
     expect(filtered.map((candidate) => getSenderCallsign(candidate.message))).toEqual(['JA1AAA']);
+
+    await pluginManager.shutdown();
+  });
+
+  it('does not wake a stopped operator for partial-decode direct messages', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      startOperator: false,
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      autoReplyToDirectCallWhenStopped: true,
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(createSlotInfo(15_000), [
+      { message: 'BG7XTV <...> RR73', snr: -8, freq: 1502 },
+      { message: 'BG7XTV <...> -01', snr: -10, freq: 1502 },
+    ]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(operator.isTransmitting).toBe(false);
+    expect(status.currentSlot).toBe('TX6');
+    expect(status.context?.targetCallsign).toBeUndefined();
+
+    await pluginManager.shutdown();
+  });
+
+  it('does not auto-reply to a partial-decode CQ', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      autoReplyToCQ: true,
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(createSlotInfo(15_000), [
+      { message: 'CQ <...> PL09', snr: -5, freq: 1300 },
+    ]));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(status.currentSlot).toBe('TX6');
+    expect(status.context?.targetCallsign).toBeUndefined();
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('CQ BG7XTV OL32');
+
+    await pluginManager.shutdown();
+  });
+
+  it('rejects autocall proposals with an undecoded placeholder callsign', async () => {
+    const { operator, pluginManager, dataDir } = await createRuntimeHarness({
+      startOperator: false,
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+    });
+
+    await writeUserPlugin(dataDir, 'placeholder-autocall', `
+      export default {
+        name: 'placeholder-autocall',
+        version: '1.0.0',
+        type: 'utility',
+        hooks: {
+          onAutoCallCandidate(slotInfo, messages, ctx) {
+            return { callsign: '...' };
+          },
+        },
+      };
+    `);
+    await pluginManager.rescanPlugins();
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(createSlotInfo(15_000), []));
+
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(operator.isTransmitting).toBe(false);
+    expect(status.currentSlot).toBe('TX6');
+    expect(status.context?.targetCallsign).toBeUndefined();
 
     await pluginManager.shutdown();
   });

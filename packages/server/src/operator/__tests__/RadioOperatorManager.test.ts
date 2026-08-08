@@ -1489,6 +1489,49 @@ describe('RadioOperatorManager operator status payloads', () => {
   });
 });
 
+describe('RadioOperatorManager transmission acceptance notification', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('notifies the strategy runtime only after a transmission passes validation and enters the encode queue', async () => {
+    mockMaxSameTransmissionCount(20);
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 0,
+      encodeQueue,
+    });
+    const notifyTransmissionQueued = vi.fn();
+    await addBasicOperator(manager, 'op1');
+    manager.setPluginManager({
+      notifyTransmissionQueued,
+      getOperatorRuntimeStatus: vi.fn(() => undefined),
+    } as any);
+    manager.start();
+
+    eventEmitter.emit('requestTransmit', {
+      operatorId: 'op1',
+      transmission: 'BG5DRB <...> 73',
+    });
+    manager.processPendingTransmissions(createSlotInfo(0));
+
+    expect(encodeQueue.push).not.toHaveBeenCalled();
+    expect(notifyTransmissionQueued).not.toHaveBeenCalled();
+
+    eventEmitter.emit('requestTransmit', {
+      operatorId: 'op1',
+      transmission: 'BG5DRB BG4IAJ 73',
+    });
+    manager.processPendingTransmissions(createSlotInfo(MODES.FT8.slotMs));
+
+    expect(encodeQueue.push).toHaveBeenCalledTimes(1);
+    expect(notifyTransmissionQueued).toHaveBeenCalledTimes(1);
+    expect(notifyTransmissionQueued).toHaveBeenCalledWith('op1', 'BG5DRB BG4IAJ 73');
+  });
+});
+
 describe('RadioOperatorManager fake frequency dial shift', () => {
   afterEach(() => {
     vi.restoreAllMocks();

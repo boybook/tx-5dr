@@ -15,6 +15,7 @@ import {
   shouldTriggerMessage,
   toFrameMessage,
 } from '../_shared/autocall-utils.js';
+import { isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import jaLocale from './locales/ja.json' with { type: 'json' };
@@ -60,7 +61,7 @@ function findMatchedTarget(
   const matches: Array<{ callsign: string; message: ParsedFT8Message; matchedKinds: string[]; order: number }> = [];
   for (const [order, parsedMessage] of messages.entries()) {
     const callsign = getSenderCallsign(parsedMessage.message);
-    if (!callsign || !shouldTriggerMessage(parsedMessage, ctx, triggerMode)) {
+    if (!callsign || isUndecodedCallsignPlaceholder(callsign) || !shouldTriggerMessage(parsedMessage, ctx, triggerMode)) {
       continue;
     }
 

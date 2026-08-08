@@ -8,6 +8,7 @@ import type {
 } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import { getFourCharacterGrid } from '@tx5dr/contracts';
+import { isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import {
   compileTextMatchRules,
   matchTextValue,
@@ -92,7 +93,7 @@ function findMatchedTarget(
     for (const [messageOrder, parsedMessage] of messages.entries()) {
       const callsign = getSenderCallsign(parsedMessage.message);
       const grid = getMessageGrid(parsedMessage.message);
-      if (!callsign || !grid || !matchTextValue(grid, [rule])) continue;
+      if (!callsign || isUndecodedCallsignPlaceholder(callsign) || !grid || !matchTextValue(grid, [rule])) continue;
       if (!shouldTriggerMessage(parsedMessage, ctx, triggerMode)) continue;
       matches.push({ callsign, grid, message: parsedMessage, rule, ruleOrder, messageOrder });
     }

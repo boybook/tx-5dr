@@ -1,4 +1,5 @@
 import { FT8Message, FT8MessageFoxRR73, FT8MessageType, getFourCharacterGrid } from '@tx5dr/contracts';
+import { isUndecodedCallsignPlaceholder as isUndecodedPlaceholder } from '../callsign/callsign.js';
 
 // 基础呼号正则表达式（更宽松的匹配）
 const MAX_CALLSIGN_TOKEN_LENGTH = 12;
@@ -16,6 +17,21 @@ const REPORT_REGEX = /^[+-]?\d{1,2}$/;
 // FT8消息解析器类
 export class FT8MessageParser {
   
+  /**
+   * 判断是否为 WSJT-X 部分解码的"未解码呼号"占位符（`<...>` / `...`）。
+   */
+  static isUndecodedCallsignPlaceholder(callsign: string): boolean {
+    return isUndecodedPlaceholder(callsign);
+  }
+
+  /**
+   * 判断原始消息文本中是否包含"未解码呼号"占位符（`<...>` 或独立 `...` token）。
+   * 用于在构造 ParsedFT8Message 时计算 isPartialDecode 标志。
+   */
+  static rawContainsUndecodedCallsign(raw: string): boolean {
+    return /<\.\.\.>/.test(raw) || /(^|\s)\.\.\.(\s|$)/.test(raw);
+  }
+
   /**
    * 判断是否为标准呼号
    *
@@ -476,11 +492,12 @@ export class FT8MessageParser {
     // 如果是<...>格式，支持特殊情况
     if (callsign.startsWith('<') && callsign.endsWith('>')) {
       const innerCallsign = callsign.slice(1, -1);
-      // 特殊情况：<...> 是FT8协议中的占位符
+      // `<...>` 是 WSJT-X 部分解码的"未解码呼号"占位符，不是合法呼号。
+      // 含占位符的消息应解析为 UNKNOWN，绝不产生 senderCallsign='...' 被下游当真实呼号。
       if (innerCallsign === '...') {
-        return true;
+        return false;
       }
-      // 其他尖括号包裹的呼号需要符合基本格式
+      // 其他尖括号包裹的呼号（如 Fox 哈希 <4G0G>）需要符合基本格式
       return innerCallsign.length > 0 && FULL_CALLSIGN_REGEX.test(innerCallsign);
     }
     

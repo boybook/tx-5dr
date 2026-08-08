@@ -31,6 +31,7 @@ import {
   validatePluginDefinition,
 } from './PluginLoader.js';
 import { ConfigManager } from '../config/config-manager.js';
+import { isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import { PluginDevWatcher } from './PluginDevWatcher.js';
 import { PluginHookDispatcher } from './PluginHookDispatcher.js';
 import { DecisionOrchestrator } from './DecisionOrchestrator.js';
@@ -165,7 +166,6 @@ export class PluginManager {
       dispatcher: this.dispatcher,
       eventEmitter: deps.eventEmitter,
       requestCall: (operatorId, callsign, lastMessage) => this.requestCall(operatorId, callsign, lastMessage),
-      notifyTransmissionQueued: (operatorId, transmission) => this.notifyTransmissionQueued(operatorId, transmission),
       notifyQSOFail: (operatorId, info) => this.notifyQSOFail(operatorId, info),
       triggerReEncode: deps.triggerReEncode,
     });
@@ -514,6 +514,12 @@ export class PluginManager {
     callsign: string,
     lastMessage?: { message: FrameMessage; slotInfo: SlotInfo },
   ): void {
+    // 呼叫收敛点：autocall / WS 命令 / ctx.operator.call / replyToDecode 全部汇入此处，
+    // 未解码占位符呼号（`<...>`/`...`）一律拒绝，避免向占位符发起呼叫。
+    if (isUndecodedCallsignPlaceholder(callsign)) {
+      logger.warn('Refusing requestCall with undecoded placeholder callsign', { operatorId, callsign });
+      return;
+    }
     const operator = this.deps.getOperatorById(operatorId);
     const runtime = this.getStrategyRuntime(operatorId);
     if (!operator || !runtime) return;

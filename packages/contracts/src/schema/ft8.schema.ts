@@ -285,6 +285,11 @@ export const ParsedFT8MessageSchema = z.object({
   message: FT8MessageSchema,
   slotId: z.string(),
   timestamp: z.number(),
+  /**
+   * 标记该消息为 WSJT-X 部分解码（含 `<...>` 未解码呼号占位符）。
+   * 部分解码消息不得作为自动呼叫/回复目标，仅供监控与防御使用。
+   */
+  isPartialDecode: z.boolean().optional(),
   logbookAnalysis: LogbookAnalysisSchema.optional(),
 });
 

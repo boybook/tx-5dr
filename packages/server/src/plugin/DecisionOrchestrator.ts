@@ -25,7 +25,7 @@ import type { AutoCallProposalResult } from './PluginHookDispatcher.js';
 import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
 import type { DecisionOrchestratorDeps, OperatorDecisionState } from './types.js';
 import { createLogger } from '../utils/logger.js';
-import { FT8MessageParser, CycleUtils } from '@tx5dr/core';
+import { FT8MessageParser, CycleUtils, isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 
 const logger = createLogger('DecisionOrchestrator');
 
@@ -83,6 +83,8 @@ export class DecisionOrchestrator {
       const parsedMessages = slotPack
         ? await this.parseSlotPackMessages(slotPack, operator.config.id)
         : [];
+      // 决策分水岭：部分解码消息仅供广播/监控观察，绝不进入任何自动决策路径
+      const actionableMessages = parsedMessages.filter((message) => !message.isPartialDecode);
 
       await this.deps.dispatcher.dispatchBroadcast(
         operator.config.id,
@@ -112,12 +114,12 @@ export class DecisionOrchestrator {
       );
 
       if (!operator.isTransmitting
-          && await this.tryWakeFromSilentDirectedCallGate(operator.config.id, parsedMessages, slotInfo, slotPack)) {
+          && await this.tryWakeFromSilentDirectedCallGate(operator.config.id, actionableMessages, slotInfo, slotPack)) {
         continue;
       }
 
       if (!operator.isTransmitting
-          && await this.tryWakeFromStoppedDirectCallAutoReply(operator.config.id, parsedMessages, slotInfo, slotPack)) {
+          && await this.tryWakeFromStoppedDirectCallAutoReply(operator.config.id, actionableMessages, slotInfo, slotPack)) {
         continue;
       }
 
@@ -125,7 +127,7 @@ export class DecisionOrchestrator {
       if (this.isOperatorPureStandby(operator.config.id)) {
         automaticTargetMessages = await this.getScoredAutomaticTargetMessages(
           operator.config.id,
-          parsedMessages,
+          actionableMessages,
         );
 
         const autoCallProposals = await this.deps.dispatcher.dispatchAutoCallCandidates(
@@ -145,7 +147,7 @@ export class DecisionOrchestrator {
       session.preDecisionEncodedTransmission = undefined;
       automaticTargetMessages ??= await this.getScoredAutomaticTargetMessages(
         operator.config.id,
-        parsedMessages,
+        actionableMessages,
       );
 
       let decision;
@@ -213,7 +215,6 @@ export class DecisionOrchestrator {
           operatorId: operator.config.id,
           transmission,
         });
-        this.deps.notifyTransmissionQueued(operator.config.id, transmission);
       } catch (err) {
         logger.error(`strategy runtime getTransmitText error: operator=${operator.config.id}`, err);
       }
@@ -229,10 +230,11 @@ export class DecisionOrchestrator {
     if (!operator.isTransmitting) {
       const slotInfo = this.buildSlotInfoFromSlotPack(slotPack);
       const parsedMessages = await this.parseSlotPackMessages(slotPack, operatorId);
-      if (await this.tryWakeFromSilentDirectedCallGate(operatorId, parsedMessages, slotInfo, slotPack)) {
+      const actionableMessages = parsedMessages.filter((message) => !message.isPartialDecode);
+      if (await this.tryWakeFromSilentDirectedCallGate(operatorId, actionableMessages, slotInfo, slotPack)) {
         return true;
       }
-      return this.tryWakeFromStoppedDirectCallAutoReply(operatorId, parsedMessages, slotInfo, slotPack);
+      return this.tryWakeFromStoppedDirectCallAutoReply(operatorId, actionableMessages, slotInfo, slotPack);
     }
 
     const session = this.getOrCreateDecisionState(operatorId);
@@ -249,9 +251,10 @@ export class DecisionOrchestrator {
     }
 
     const parsedMessages = await this.parseSlotPackMessages(slotPack, operatorId);
+    const actionableMessages = parsedMessages.filter((message) => !message.isPartialDecode);
     const automaticTargetMessages = await this.getScoredAutomaticTargetMessages(
       operatorId,
-      parsedMessages,
+      actionableMessages,
     );
 
     let decision: StrategyDecision | null = null;
@@ -362,6 +365,9 @@ export class DecisionOrchestrator {
         return null;
       }
 
+      // 部分解码消息（含 `<...>` 未解码呼号占位符）不得作为自动决策输入，
+      // 但需保留在 parsedMessages 中供广播/监控 hook 观察原始解码。
+      const isPartialDecode = FT8MessageParser.rawContainsUndecodedCallsign(frame.message);
       const parsedMessage: ParsedFT8Message = {
         message: FT8MessageParser.parseMessage(frame.message),
         snr: isLocalTxEcho ? LOCAL_OPERATOR_SIMULATED_SNR : frame.snr,
@@ -370,10 +376,12 @@ export class DecisionOrchestrator {
         rawMessage: frame.message,
         slotId: slotPack.slotId,
         timestamp: slotPack.startMs,
+        isPartialDecode,
         logbookAnalysis: frame.logbookAnalysis,
       };
 
-      if (frame.snr === -999) {
+      if (frame.snr === -999 || isPartialDecode) {
+        // 部分解码消息跳过日志本分析，避免以 `...` 查询产生 isNewCallsign 假象污染排序
         return parsedMessage;
       }
 
@@ -454,6 +462,10 @@ export class DecisionOrchestrator {
     }
 
     return messages.filter((message) => {
+      // 部分解码消息不可作为自动目标候选
+      if (message.isPartialDecode) {
+        return false;
+      }
       const decision = evaluateAutomaticTargetEligibility(operator.config.myCallsign, message);
       if (decision.eligible) {
         return true;
@@ -487,6 +499,10 @@ export class DecisionOrchestrator {
 
     const filteredKeys = new Set(filteredMessages.map(getParsedMessageKey));
     const preservedMessages = sourceMessages.filter((message) => {
+      // 部分解码消息（如 Fox `<...>` 哈希）不可作为进行中 QSO 的协议消息被抢救
+      if (message.isPartialDecode) {
+        return false;
+      }
       if (filteredKeys.has(getParsedMessageKey(message))) {
         return false;
       }
@@ -516,6 +532,9 @@ export class DecisionOrchestrator {
     message: ParsedFT8Message,
     myCallsign: string,
   ): boolean {
+    if (message.isPartialDecode) {
+      return false;
+    }
     const target = getParsedMessageTargetCallsign(message.message);
     if (!callsignMatches(target, myCallsign)) {
       return false;
@@ -529,6 +548,9 @@ export class DecisionOrchestrator {
     message: ParsedFT8Message,
     myCallsign: string,
   ): boolean {
+    if (message.isPartialDecode) {
+      return false;
+    }
     const target = getParsedMessageTargetCallsign(message.message);
     if (!callsignMatches(target, myCallsign)) {
       return false;
@@ -545,6 +567,9 @@ export class DecisionOrchestrator {
     targetCallsign: string,
     myCallsign: string,
   ): boolean {
+    if (message.isPartialDecode) {
+      return false;
+    }
     if (message.message.type === FT8MessageType.FOX_RR73) {
       const foxMessage = message.message as { completedCallsign?: unknown; senderCallsign?: unknown };
       const completedCallsign = typeof foxMessage.completedCallsign === 'string'
@@ -838,7 +863,9 @@ export class DecisionOrchestrator {
 
     const snrPriorityEnabled = this.deps.isSnrPriorityEnabled?.(operatorId) === true;
     const ranked = proposals
-      .filter((entry) => this.isAutoCallProposalEligible(operatorId, entry, messages))
+      .filter((entry) =>
+        !isUndecodedCallsignPlaceholder(entry.proposal.callsign)
+        && this.isAutoCallProposalEligible(operatorId, entry, messages))
       .map((entry) => this.normalizeAutoCallProposal(operatorId, slotInfo, messages, entry))
       .map((entry) => ({
         ...entry,
@@ -899,6 +926,16 @@ export class DecisionOrchestrator {
   ): boolean {
     const operator = this.deps.getOperatorById(operatorId);
     if (!operator) {
+      return false;
+    }
+
+    // 占位符呼号（`<...>`/`...`）的提案一律拒绝，即使找不到源消息（findProposalSourceMessage 兜底放行）
+    if (isUndecodedCallsignPlaceholder(entry.proposal.callsign)) {
+      logger.info('Auto call proposal rejected by undecoded placeholder callsign', {
+        operatorId,
+        pluginName: entry.pluginName,
+        callsign: entry.proposal.callsign,
+      });
       return false;
     }
 

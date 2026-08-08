@@ -2,7 +2,7 @@ import path from 'path';
 import { createSocket } from 'node:dgram';
 import * as hostHamlib from 'hamlib';
 import type { RemoteInfo, Socket, SocketType } from 'node:dgram';
-import { getBandFromFrequency, toAdifMode } from '@tx5dr/core';
+import { getBandFromFrequency, toAdifMode, isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import type {
   HostSettingsControl,
   HamlibHostDependency,
@@ -594,10 +594,14 @@ export class PluginContextFactory {
       },
       call(callsign: string, lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }) {
         assertTransmitControlAllowed('call a target station');
+        // 未解码占位符呼号拒绝呼叫（收敛点 PluginManager.requestCall 亦会拒绝）
+        if (isUndecodedCallsignPlaceholder(callsign)) return;
         deps.requestOperatorCall(operatorId, callsign, lastMessage);
       },
       replyToDecode(decode: { callsign: string; lastMessage: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }; modifiers?: number }) {
         assertTransmitControlAllowed('reply to a decode');
+        // 未解码占位符呼号拒绝回复（避免对远端产生副作用）
+        if (isUndecodedCallsignPlaceholder(decode.callsign)) return;
         deps.eventEmitter.emit('pluginRemoteReplyToDecode', { operatorId, callsign: decode.callsign, modifiers: decode.modifiers });
         deps.requestOperatorCall(operatorId, decode.callsign, decode.lastMessage);
       },

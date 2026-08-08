@@ -1,4 +1,5 @@
 import type { PluginDefinition, ScoredCandidate } from '@tx5dr/plugin-api';
+import { isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import jaLocale from './locales/ja.json' with { type: 'json' };
@@ -56,7 +57,8 @@ export const workedStationBiasPlugin: PluginDefinition = {
 
       const scored = await Promise.all(candidates.map(async (candidate) => {
         const callsign = getSenderCallsign(candidate.message);
-        if (!callsign) {
+        // 未解码占位符呼号不参与评分（避免被当"新台"加分）
+        if (!callsign || isUndecodedCallsignPlaceholder(callsign)) {
           return candidate;
         }
 

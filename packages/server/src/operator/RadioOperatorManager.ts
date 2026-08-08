@@ -1015,6 +1015,12 @@ export class RadioOperatorManager {
         continue;
       }
 
+      // 发射兜底：含未解码占位符（`<...>`/`...`）的文本绝不编码上射频
+      if (FT8MessageParser.rawContainsUndecodedCallsign(transmission)) {
+        logger.warn(`Refusing to transmit message containing undecoded placeholder: operator=${operatorId} text="${transmission}"`);
+        continue;
+      }
+
       const frequency = operator.config.frequency || 0;
 
       // 广播发射日志
@@ -1070,6 +1076,7 @@ export class RadioOperatorManager {
         requestId,
         txDialShiftHz: slotShiftHz
       });
+      this._pluginManager?.notifyTransmissionQueued?.(operatorId, transmission);
 
       logger.debug(`Processed transmit request for operator ${operatorId}: "${transmission}", requestId=${requestId}`);
     }
@@ -1169,7 +1176,6 @@ export class RadioOperatorManager {
       replaceExisting: options?.replaceExisting,
     };
     this.pendingTransmissions.push(request);
-    this._pluginManager?.notifyTransmissionQueued(operatorId, transmission);
 
     // 由统一的队列消费层处理：构造当前时隙信息并消费队列
     // 这样可以确保：

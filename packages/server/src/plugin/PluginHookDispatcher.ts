@@ -1,4 +1,5 @@
 import type { ParsedFT8Message } from '@tx5dr/contracts';
+import { isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import type {
   AutoCallExecutionPlan,
   AutoCallExecutionRequest,
@@ -84,7 +85,9 @@ export class PluginHookDispatcher {
           continue;
         }
 
-        if (typeof proposal.callsign !== 'string' || proposal.callsign.trim().length === 0) {
+        if (typeof proposal.callsign !== 'string'
+            || proposal.callsign.trim().length === 0
+            || isUndecodedCallsignPlaceholder(proposal.callsign)) {
           logger.warn(`Plugin ${instance.plugin.definition.name} onAutoCallCandidate returned an invalid callsign, skipping proposal`);
           this.errorTracker.resetErrors(instance, 'onAutoCallCandidate');
           continue;

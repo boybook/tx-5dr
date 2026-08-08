@@ -272,3 +272,73 @@ describe('StandardQSOPluginRuntime nonstandard callsign slots', () => {
     expect(snapshot.context?.reportSent).toBe(-16);
   });
 });
+
+describe('StandardQSOPluginRuntime partial-decode `<...>` handling', () => {
+  it('ignores a partial-decode RRR addressed to me (BG5DRB <...> RR73)', async () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator({ myCallsign: 'BG5DRB' }));
+    const parsedMessage = createParsedMessage('BG5DRB <...> RR73', {
+      isPartialDecode: true,
+      slotId: 'slot-partial-rrr',
+    });
+
+    await runtime.decide([parsedMessage]);
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.currentState).toBe('TX6');
+    expect(snapshot.context?.targetCallsign).toBeUndefined();
+  });
+
+  it('ignores a partial-decode CQ (CQ <...> PL09)', async () => {
+    const operator = createOperator({ myCallsign: 'BG5DRB', autoReplyToCQ: true });
+    const runtime = new StandardQSOPluginRuntime(operator);
+    const parsedMessage = createParsedMessage('CQ <...> PL09', {
+      isPartialDecode: true,
+      slotId: 'slot-partial-cq',
+    });
+
+    await runtime.decide([parsedMessage]);
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.currentState).toBe('TX6');
+    expect(snapshot.context?.targetCallsign).toBeUndefined();
+  });
+
+  it('refuses requestCall with an undecoded placeholder callsign', () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator({ myCallsign: 'BG5DRB' }));
+
+    runtime.requestCall('...', undefined);
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.currentState).toBe('TX6');
+    expect(snapshot.context?.targetCallsign).toBeUndefined();
+  });
+
+  it('rejects a placeholder context patch without replacing the active target or slots', () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator({ myCallsign: 'BG5DRB' }));
+    runtime.requestCall('JA1ABC', undefined);
+    const before = runtime.getSnapshot();
+
+    runtime.patchContext({ targetCallsign: '...' });
+
+    const after = runtime.getSnapshot();
+    expect(after.context?.targetCallsign).toBe('JA1ABC');
+    expect(after.slots).toEqual(before.slots);
+    expect(after.currentState).toBe('TX1');
+  });
+
+  it('clears active transmit slots if an invalid placeholder reaches the slot generator', () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator({ myCallsign: 'BG5DRB' }));
+    runtime.requestCall('JA1ABC', undefined);
+
+    runtime.context.targetCallsign = '<...>';
+    runtime.updateSlots();
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.context?.targetCallsign).toBe('<...>');
+    expect(snapshot.slots?.TX1).toBe('');
+    expect(snapshot.slots?.TX2).toBe('');
+    expect(snapshot.slots?.TX3).toBe('');
+    expect(snapshot.slots?.TX4).toBe('');
+    expect(snapshot.slots?.TX5).toBe('');
+  });
+});

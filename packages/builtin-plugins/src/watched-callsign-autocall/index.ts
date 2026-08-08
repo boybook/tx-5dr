@@ -13,6 +13,7 @@ import {
   compileTextMatchRules,
   matchTextValue,
   normalizeTextMatchMode,
+  isUndecodedCallsignPlaceholder,
   type TextMatchMode,
   type TextMatchRule,
 } from '@tx5dr/core';
@@ -105,7 +106,7 @@ function findMatchedTarget(
   for (const [ruleOrder, watchRule] of watchRules.entries()) {
     for (const [messageOrder, parsedMessage] of messages.entries()) {
       const senderCallsign = getSenderCallsign(parsedMessage.message);
-      if (!senderCallsign || !matchTextValue(senderCallsign, [watchRule])) {
+      if (!senderCallsign || isUndecodedCallsignPlaceholder(senderCallsign) || !matchTextValue(senderCallsign, [watchRule])) {
         continue;
       }
       if (!shouldTriggerMessage(parsedMessage, ctx, triggerMode)) {
