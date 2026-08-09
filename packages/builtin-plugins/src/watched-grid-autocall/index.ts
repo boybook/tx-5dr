@@ -213,6 +213,14 @@ export const watchedGridAutocallPlugin: PluginDefinition = {
       const matched = findMatchedTarget(messages, ctx);
       if (!matched) return null;
 
+      if (await ctx.logbook.hasWorked(matched.callsign, { anyBand: true })) {
+        ctx.log.debug('Watched grid skipped because callsign was already worked', {
+          callsign: matched.callsign,
+          grid: matched.grid,
+        });
+        return null;
+      }
+
       if (ctx.operator.isTargetBeingWorkedByOthers(matched.callsign)) {
         ctx.log.debug('Watched grid skipped because another operator is already working the station', {
           callsign: matched.callsign,
