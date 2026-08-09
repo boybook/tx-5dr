@@ -2004,8 +2004,10 @@ export class ADIFLogProvider implements ILogProvider {
     }
     const lastQSO = info?.lastQSO;
     const qsoCount = info?.count || 0;
+    const hasWorkedCallsign = qsoCount > 0;
     const gridKey = normalizeGridKey(grid);
     const isNewGrid = !!gridKey
+      && !hasWorkedCallsign
       && !!band
       && band !== 'Unknown'
       && !(idx.workedBandGrids.get(band)?.has(gridKey));

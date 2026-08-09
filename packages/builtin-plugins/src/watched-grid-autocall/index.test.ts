@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FT8MessageType } from '@tx5dr/plugin-api';
 import { createMockContext, createMockParsedMessage, createMockSlotInfo } from '@tx5dr/plugin-api/testing';
 import { watchedGridAutocallPlugin, watchedGridAutocallTestables } from './index.js';
@@ -54,6 +54,34 @@ describe('watched-grid-autocall', () => {
 
     const proposal = await watchedGridAutocallPlugin.hooks?.onAutoCallCandidate?.(createMockSlotInfo(), [message], ctx);
     expect(proposal).toBeNull();
+  });
+
+  it('skips callsigns worked on any band even when the previous QSO had no grid', async () => {
+    const hasWorked = vi.fn(async () => true);
+    const ctx = createMockContext({
+      config: {
+        gridWatchList: ['PM95'],
+        gridMatchMode: 'exact',
+        triggerMode: 'cq',
+        workedGridSkipEnabled: false,
+      },
+      logbook: {
+        hasWorked,
+        hasWorkedGrid: async () => false,
+      },
+    });
+    const message = createMockParsedMessage({
+      message: { type: FT8MessageType.CQ, senderCallsign: 'JA1AAA', grid: 'PM95' },
+    });
+
+    const proposal = await watchedGridAutocallPlugin.hooks?.onAutoCallCandidate?.(
+      createMockSlotInfo(),
+      [message],
+      ctx,
+    );
+
+    expect(proposal).toBeNull();
+    expect(hasWorked).toHaveBeenCalledWith('JA1AAA', { anyBand: true });
   });
 
   it('does not interrupt a non-idle operator', async () => {

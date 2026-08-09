@@ -955,6 +955,29 @@ describe('ADIFLogProvider import', () => {
     await provider.close();
   });
 
+  it('does not mark a grid as new when the callsign was already worked without grid data', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'worked-without-grid-1',
+      callsign: 'JA1AAA',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:00:00Z'),
+      messageHistory: [],
+    }, 'op1');
+
+    const sameBand = await provider.analyzeCallsign('JA1AAA', 'PM95', { operatorId: 'op1', band: '20m' });
+    const otherBand = await provider.analyzeCallsign('JA1AAA', 'PM95', { operatorId: 'op1', band: '40m' });
+
+    expect(sameBand.isNewCallsign).toBe(false);
+    expect(sameBand.isNewGrid).toBe(false);
+    expect(otherBand.isNewGrid).toBe(false);
+
+    await provider.close();
+  });
+
   it('treats 6-char worked grids as the same 4-char grid during analysis', async () => {
     const { provider, tempDir } = await createProvider();
     tempDirs.push(tempDir);
