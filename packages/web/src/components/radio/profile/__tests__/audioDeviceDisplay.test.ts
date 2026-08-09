@@ -3,6 +3,7 @@ import type { AudioDeviceResolution } from '@tx5dr/contracts';
 import type { TFunction } from 'i18next';
 import {
   formatChannelText,
+  formatDeviceDetail,
   formatDeviceText,
   getAudioDeviceCategory,
   getAudioDeviceStatusBadges,
@@ -111,5 +112,24 @@ describe('audio device display helpers', () => {
       routeVerified: false,
       failureReason: 'unplugged',
     }).map((badge) => badge.key)).toEqual(['routeLost']);
+  });
+
+  it('formats USB identity details so same-named CODECs stay distinguishable', () => {
+    expect(formatDeviceDetail({
+      ...defaultInput,
+      name: 'USB Audio CODEC',
+      detail: 'IC-9700 12010311',
+      serialNumber: '12010311',
+      hardwareId: 'usb:1-7.2.4',
+    })).toBe('IC-9700 12010311');
+
+    expect(formatDeviceDetail({
+      ...defaultInput,
+      name: 'USB Audio CODEC',
+      vendorId: '08bb',
+      productId: '2901',
+      usbPath: '1-7.4.4',
+      serialNumber: '11002034',
+    })).toBe('SN 11002034 · VID:PID 08bb:2901 · USB 1-7.4.4');
   });
 });

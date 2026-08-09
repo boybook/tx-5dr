@@ -30,6 +30,7 @@ import {
 } from './audioDeviceOptions';
 import {
   formatChannelText,
+  formatDeviceDetail,
   formatDeviceText,
   getAudioDeviceCategory,
   getAudioDeviceStatusBadges,
@@ -499,7 +500,11 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
         </span>
         <span className="text-xs text-default-400">
           {option.device
-            ? `${formatChannelText(t, option.device.channels)}, ${formatHertz(option.device.sampleRate)}`
+            ? (() => {
+                const detail = formatDeviceDetail(option.device);
+                const summary = `${formatChannelText(t, option.device.channels)}, ${formatHertz(option.device.sampleRate)}`;
+                return detail ? `${detail} · ${summary}` : summary;
+              })()
             : t('audio.deviceMissingPreservedShort')}
         </span>
         {option.device?.failureReason && (
@@ -530,11 +535,17 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     const displayOptions = buildAudioDeviceSelectOptions(direction, devices, selectedName, resolution, selectedRouteKey);
     const selectedOption = selectedRouteKey
       ? displayOptions.find((option) => option.routeKey === selectedRouteKey)
-      : displayOptions.find((option) => (
-          (selectedHardwareId && option.device?.hardwareId === selectedHardwareId)
-          || (selectedDeviceId && option.device?.id === selectedDeviceId)
-          || option.deviceName === selectedName
-        ));
+      : (
+          displayOptions.find((option) => (
+            Boolean(selectedHardwareId) && option.device?.hardwareId === selectedHardwareId
+          ))
+          ?? displayOptions.find((option) => (
+            Boolean(selectedDeviceId)
+            && option.device?.id === selectedDeviceId
+            && (!selectedName || option.deviceName === selectedName)
+          ))
+          ?? displayOptions.find((option) => option.deviceName === selectedName)
+        );
     const sampleOptions = deriveSampleRateOptions(effectiveDevice, sampleRate);
     const bufferOptions = deriveBufferSizeOptions(effectiveDevice?.capabilities?.bufferSizes ?? bufferSizes, bufferSize);
     const sampleRateConfigurable = effectiveDevice
