@@ -38,6 +38,8 @@ export class AuthManagerError extends Error {
 export class AuthManager {
   private static instance: AuthManager;
   private config!: AuthConfig;
+  private readonly tokensById = new Map<string, AuthToken>();
+  private authorizationVersion = 0;
   private configPath!: string;
   private jwtSecret!: string;
   private configStore: JsonFileStore<AuthConfig> | null = null;
@@ -80,6 +82,7 @@ export class AuthManager {
       backups: 3,
     });
     this.config = await this.configStore.load();
+    this.rebuildTokenIndex();
   }
 
   private async saveConfig(options: { defer?: boolean; internal?: boolean } = {}): Promise<void> {
@@ -90,6 +93,15 @@ export class AuthManager {
       PersistenceCoordinator.getInstance().assertMutationsAllowed('auth');
     }
     await this.configStore.set(this.config, options);
+    this.rebuildTokenIndex();
+  }
+
+  private rebuildTokenIndex(): void {
+    this.tokensById.clear();
+    for (const token of this.config.tokens) {
+      this.tokensById.set(token.id, token);
+    }
+    this.authorizationVersion += 1;
   }
 
   private async ensureJwtSecret(): Promise<void> {
@@ -441,7 +453,7 @@ export class AuthManager {
   }
 
   getTokenById(tokenId: string): TokenInfo | null {
-    const token = this.config.tokens.find(t => t.id === tokenId);
+    const token = this.tokensById.get(tokenId);
     return token ? this.toTokenInfo(token) : null;
   }
 
@@ -480,7 +492,7 @@ export class AuthManager {
    * 验证 JWT payload 中引用的 token 是否仍然有效
    */
   isTokenStillValid(tokenId: string): boolean {
-    const token = this.config.tokens.find(t => t.id === tokenId);
+    const token = this.tokensById.get(tokenId);
     if (!token) return false;
     if (token.revoked) return false;
     if (token.expiresAt && token.expiresAt < Date.now()) return false;
@@ -490,10 +502,27 @@ export class AuthManager {
   /**
    * 获取 token 的最新权限（token 可能被更新过）
    */
-  getTokenCurrentPermissions(tokenId: string): { role: UserRole; operatorIds: string[]; maxOperators?: number; permissionGrants?: PermissionGrant[] } | null {
-    const token = this.config.tokens.find(t => t.id === tokenId);
+  getTokenCurrentPermissions(tokenId: string): {
+    role: UserRole;
+    operatorIds: string[];
+    maxOperators?: number;
+    permissionGrants?: PermissionGrant[];
+    expiresAt?: number;
+  } | null {
+    const token = this.tokensById.get(tokenId);
     if (!token || token.revoked) return null;
-    return { role: token.role, operatorIds: token.operatorIds, maxOperators: token.maxOperators, permissionGrants: token.permissionGrants };
+    if (token.expiresAt && token.expiresAt < Date.now()) return null;
+    return {
+      role: token.role,
+      operatorIds: token.operatorIds,
+      maxOperators: token.maxOperators,
+      permissionGrants: token.permissionGrants,
+      expiresAt: token.expiresAt,
+    };
+  }
+
+  getAuthorizationVersion(): number {
+    return this.authorizationVersion;
   }
 
   // ===== 认证配置 =====
@@ -560,7 +589,7 @@ export class AuthManager {
    * @returns true 表示可以创建，false 表示已达上限
    */
   canAddOperator(tokenId: string): boolean {
-    const token = this.config.tokens.find(t => t.id === tokenId);
+    const token = this.tokensById.get(tokenId);
     if (!token) return false;
     if (token.role === UserRole.ADMIN) return true; // Admin 无限制
     if (token.maxOperators === undefined || token.maxOperators === 0) return true; // 0 或未设置表示不限制
@@ -571,7 +600,7 @@ export class AuthManager {
    * 获取 token 的 maxOperators 限制
    */
   getTokenMaxOperators(tokenId: string): number | undefined {
-    const token = this.config.tokens.find(t => t.id === tokenId);
+    const token = this.tokensById.get(tokenId);
     return token?.maxOperators;
   }
 

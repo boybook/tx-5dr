@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { PluginPanelDescriptorSchema, PluginPanelSlotSchema } from '../src/schema/plugin.schema';
+import {
+  PluginPanelDescriptorSchema,
+  PluginPanelMetaPayloadSchema,
+  PluginPanelMetaSchema,
+  PluginPanelSlotSchema,
+} from '../src/schema/plugin.schema';
 
 describe('PluginPanelSlotSchema', () => {
   it('accepts every supported plugin panel slot', () => {
@@ -87,5 +92,46 @@ describe('PluginPanelSlotSchema', () => {
       slot: 'radio-control-toolbar',
       uiSize: 'xl',
     })).toThrow();
+  });
+
+  it('accepts toolbar tone metadata for runtime panel updates', () => {
+    expect(PluginPanelMetaSchema.parse({
+      tone: 'warning',
+      title: 'alertTitle',
+    })).toMatchObject({
+      tone: 'warning',
+      title: 'alertTitle',
+    });
+  });
+
+  it('accepts null panel metadata fields as clear patches', () => {
+    expect(PluginPanelMetaSchema.parse({
+      tone: null,
+      title: null,
+      titleValues: null,
+      visible: null,
+    })).toEqual({
+      tone: null,
+      title: null,
+      titleValues: null,
+      visible: null,
+    });
+  });
+
+  it('accepts user-scoped runtime panel metadata payloads', () => {
+    expect(PluginPanelMetaPayloadSchema.parse({
+      pluginName: 'demo',
+      operatorId: '__global__',
+      panelId: 'toolbar',
+      viewerTokenId: 'token-1',
+      meta: {
+        tone: 'danger',
+      },
+    })).toMatchObject({
+      viewerTokenId: 'token-1',
+      meta: {
+        tone: 'danger',
+      },
+    });
   });
 });

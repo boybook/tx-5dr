@@ -67,6 +67,23 @@ export class PluginUIBridge implements UIBridge {
     this.eventEmitter.emit('pluginPanelMeta', payload);
   }
 
+  setPanelMetaForUser(
+    panelId: string,
+    tokenId: string,
+    meta: import('@tx5dr/plugin-api').PanelMeta,
+  ): void {
+    logger.debug(`Plugin UI user meta: plugin=${this.pluginName}, panel=${panelId}, token=${tokenId}`, meta);
+    const payload: PluginPanelMetaPayload = {
+      pluginName: this.pluginName,
+      operatorId: this.operatorId,
+      panelId,
+      viewerTokenId: tokenId,
+      meta,
+    };
+    this.onPanelMeta?.(payload);
+    this.eventEmitter.emit('pluginPanelMeta', payload);
+  }
+
   setPanelContributions(groupId: string, panels: PluginPanelDescriptor[]): void {
     logger.debug(`Plugin UI panel contributions: plugin=${this.pluginName}, group=${groupId}, count=${panels.length}`);
     if (!this.onPanelContributions) {

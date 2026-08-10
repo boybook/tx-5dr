@@ -562,8 +562,9 @@ export type PluginSystemState = z.infer<typeof PluginSystemStateSchema>;
  */
 export const PluginPanelMetaSchema = z.object({
   title: z.string().nullable().optional(),
-  titleValues: z.record(z.unknown()).optional(),
-  visible: z.boolean().optional(),
+  titleValues: z.record(z.unknown()).nullable().optional(),
+  visible: z.boolean().nullable().optional(),
+  tone: z.enum(['default', 'primary', 'secondary', 'success', 'warning', 'danger']).nullable().optional(),
 });
 export type PluginPanelMeta = z.infer<typeof PluginPanelMetaSchema>;
 
@@ -574,6 +575,7 @@ export const PluginPanelMetaPayloadSchema = z.object({
   pluginName: z.string(),
   operatorId: z.string(),
   panelId: z.string(),
+  viewerTokenId: z.string().optional(),
   meta: PluginPanelMetaSchema,
 });
 export type PluginPanelMetaPayload = z.infer<typeof PluginPanelMetaPayloadSchema>;

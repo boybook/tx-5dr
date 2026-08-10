@@ -968,5 +968,14 @@
       "cancel": "キャンセル",
       "save": "保存"
     }
+  },
+  "pluginToolbar": {
+    "toneStatus": {
+      "active": "アクティブ状態",
+      "secondary": "セカンダリ状態",
+      "success": "成功状態",
+      "warning": "警告状態",
+      "alert": "アラート状態"
+    }
   }
 }

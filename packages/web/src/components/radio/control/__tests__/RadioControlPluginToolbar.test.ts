@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { PluginStatus, PluginSystemSnapshot } from '@tx5dr/contracts';
 
 import {
+  getRadioToolbarToneStatusKey,
   getRadioControlToolbarEntries,
   resolveRadioToolbarIcon,
+  resolveRadioToolbarTone,
 } from '../RadioControlPluginToolbar';
 
 function buildPlugin(overrides: Partial<PluginStatus> = {}): PluginStatus {
@@ -64,6 +66,19 @@ describe('RadioControlPluginToolbar helpers', () => {
     expect(resolveRadioToolbarIcon('brands:github').iconName).toBe('github');
     expect(resolveRadioToolbarIcon('faGithub').iconName).toBe('github');
     expect(resolveRadioToolbarIcon('missing-icon-name').iconName).toBe('puzzle-piece');
+  });
+
+  it('resolves toolbar tones with a default fallback', () => {
+    expect(resolveRadioToolbarTone(undefined)).toBe('default');
+    expect(resolveRadioToolbarTone('warning')).toBe('warning');
+    expect(resolveRadioToolbarTone('success')).toBe('success');
+    expect(resolveRadioToolbarTone('pink')).toBe('default');
+  });
+
+  it('maps non-default toolbar tones to localized status keys', () => {
+    expect(getRadioToolbarToneStatusKey('default')).toBeNull();
+    expect(getRadioToolbarToneStatusKey('warning')).toBe('radio:pluginToolbar.toneStatus.warning');
+    expect(getRadioToolbarToneStatusKey('danger')).toBe('radio:pluginToolbar.toneStatus.alert');
   });
 
   it('only returns enabled global utility toolbar iframe panels', () => {

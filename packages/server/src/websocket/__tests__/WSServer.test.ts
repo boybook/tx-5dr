@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SLOT_PACK_HISTORY_LIMIT, UserRole, WSMessageType, type SlotPack, type SystemStatus } from '@tx5dr/contracts';
+import {
+  SLOT_PACK_HISTORY_LIMIT,
+  UserRole,
+  WSMessageType,
+  type SlotPack,
+  type SystemStatus,
+} from '@tx5dr/contracts';
 import { WSConnection, WSServer } from '../WSServer.js';
 import { ConfigManager } from '../../config/config-manager.js';
+import { AuthManager } from '../../auth/AuthManager.js';
 
 function createStatus(overrides: Partial<SystemStatus> = {}): SystemStatus {
   return {
@@ -234,6 +241,10 @@ function createTestConnection(id = 'conn-test'): { connection: WSConnection; sen
 }
 
 describe('WSServer security filtering', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('keeps public viewers from self-subscribing to operators', async () => {
     const { connection, sent } = createTestConnection('conn-public');
     connection.setPublicViewer();
@@ -392,6 +403,173 @@ describe('WSServer security filtering', () => {
     expect(adminSent.find(message => message.type === WSMessageType.RADIO_STATUS_CHANGED)?.data.radioConfig.icomWlan.password).toBe('radio-secret');
     expect(publicSent.find(message => message.type === WSMessageType.PTT_STATUS_CHANGED)?.data.operatorIds).toEqual([]);
     expect(adminSent.find(message => message.type === WSMessageType.PTT_STATUS_CHANGED)?.data.operatorIds).toEqual(['op-a']);
+  });
+
+  it('does not forward user-scoped panel meta to other tokens', () => {
+    const { connection } = createTestConnection('conn-plugin');
+    Object.assign(connection as unknown as Record<string, unknown>, {
+      authenticated: true,
+      userRole: UserRole.OPERATOR,
+      tokenId: 'token-a',
+    });
+    connection.completeHandshake(['operator-1']);
+
+    const server = Object.create(WSServer.prototype) as any;
+
+    expect((server as any).resolvePluginPanelMetaForConnection({
+      pluginName: 'operator-live-chat',
+      operatorId: '__global__',
+      panelId: 'chat-toolbar',
+      viewerTokenId: 'token-b',
+      meta: { tone: 'danger' },
+    }, connection)).toBeNull();
+  });
+
+  it('refreshes token permissions only after auth version changes or token expiry', () => {
+    let authorizationVersion = 1;
+    let currentPermissions: {
+      role: UserRole;
+      operatorIds: string[];
+      permissionGrants?: undefined;
+      expiresAt?: number;
+    } | null = {
+      role: UserRole.OPERATOR,
+      operatorIds: ['operator-1'],
+      permissionGrants: undefined,
+    };
+    const authManager = {
+      getTokenCurrentPermissions: vi.fn(() => currentPermissions),
+      getAuthorizationVersion: vi.fn(() => authorizationVersion),
+    };
+    vi.spyOn(AuthManager, 'getInstance').mockReturnValue(authManager as unknown as AuthManager);
+
+    const { connection } = createTestConnection('conn-current-auth');
+    connection.setAuthenticated(
+      UserRole.OPERATOR,
+      ['operator-1'],
+      'operator',
+      'token-a',
+    );
+
+    expect(connection.hasCurrentMinRole(UserRole.OPERATOR)).toBe(true);
+    expect(authManager.getTokenCurrentPermissions).toHaveBeenCalledTimes(1);
+
+    currentPermissions!.role = UserRole.VIEWER;
+    expect(connection.hasCurrentMinRole(UserRole.OPERATOR)).toBe(true);
+    authorizationVersion += 1;
+    expect(connection.hasCurrentMinRole(UserRole.OPERATOR)).toBe(false);
+
+    currentPermissions = null;
+    authorizationVersion += 1;
+    expect(connection.hasCurrentMinRole(UserRole.OPERATOR)).toBe(false);
+    expect(connection.takeAuthInvalidationReason()).toBe('token_revoked_or_expired');
+
+    const expired = createTestConnection('conn-expired-auth').connection;
+    currentPermissions = {
+      role: UserRole.OPERATOR,
+      operatorIds: ['operator-1'],
+      expiresAt: Date.now() - 1,
+    };
+    authorizationVersion += 1;
+    expired.setAuthenticated(
+      UserRole.OPERATOR,
+      ['operator-1'],
+      'operator',
+      'token-a',
+    );
+    currentPermissions = null;
+    expect(expired.hasCurrentMinRole(UserRole.OPERATOR)).toBe(false);
+  });
+
+  it('expires invalidated token connections before plugin delivery', () => {
+    let currentPermissions: { role: UserRole; operatorIds: string[] } | null = {
+      role: UserRole.OPERATOR,
+      operatorIds: ['operator-1'],
+    };
+    let authorizationVersion = 1;
+    vi.spyOn(AuthManager, 'getInstance').mockReturnValue({
+      getTokenCurrentPermissions: vi.fn(() => currentPermissions),
+      getAuthorizationVersion: vi.fn(() => authorizationVersion),
+    } as unknown as AuthManager);
+
+    const { connection, sent } = createTestConnection('conn-invalid-token');
+    connection.setAuthenticated(UserRole.OPERATOR, ['operator-1'], 'operator', 'token-a');
+    connection.completeHandshake(['operator-1']);
+    currentPermissions = null;
+    authorizationVersion += 1;
+
+    const server = Object.create(WSServer.prototype) as any;
+    server.removeConnection = vi.fn();
+
+    expect(server.canReceivePluginData(connection)).toBe(false);
+    expect(sent).toContainEqual({
+      type: WSMessageType.AUTH_EXPIRED,
+      data: { reason: 'token_revoked_or_expired' },
+    });
+    expect(server.removeConnection).toHaveBeenCalledWith('conn-invalid-token', {
+      closeSocket: true,
+      closeCode: 4003,
+      closeReason: 'authentication expired',
+    });
+  });
+
+  it('expires JWT connections before every plugin delivery', async () => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.UTC(2026, 6, 21, 0, 0, 0);
+      const exp = Math.floor(now / 1000) + 1;
+      vi.setSystemTime(now);
+
+      const authManager = {
+        getJwtSecret: () => 'test-jwt-secret',
+        isTokenStillValid: () => true,
+        getTokenCurrentPermissions: vi.fn(() => ({
+          role: UserRole.OPERATOR,
+          operatorIds: ['operator-1'],
+        })),
+        getTokenById: () => ({ label: 'operator' }),
+        getAuthorizationVersion: () => 1,
+      };
+      vi.spyOn(AuthManager, 'getInstance').mockReturnValue(authManager as unknown as AuthManager);
+
+      const { createSigner } = await import('fast-jwt');
+      const jwt = createSigner({ key: 'test-jwt-secret' })({
+        tokenId: 'token-a',
+        role: UserRole.OPERATOR,
+        operatorIds: ['operator-1'],
+        iat: Math.floor(now / 1000),
+        exp,
+      });
+      const { connection, sent } = createTestConnection('conn-jwt-expired');
+      const server = Object.create(WSServer.prototype) as any;
+      server.getConnection = vi.fn(() => connection);
+      server.getActiveConnections = vi.fn(() => [connection]);
+      server.removeConnection = vi.fn();
+      server.sendInitialState = vi.fn();
+      server.sendCWDecoderStatus = vi.fn();
+
+      await server.handleAuthToken('conn-jwt-expired', { jwt });
+      connection.completeHandshake(['operator-1']);
+      vi.setSystemTime(exp * 1000);
+
+      server.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_DATA, { message: 'private' });
+
+      expect(sent).toContainEqual({
+        type: WSMessageType.AUTH_EXPIRED,
+        data: { reason: 'jwt_expired' },
+      });
+      expect(sent).not.toContainEqual({
+        type: WSMessageType.PLUGIN_DATA,
+        data: { message: 'private' },
+      });
+      expect(server.removeConnection).toHaveBeenCalledWith('conn-jwt-expired', {
+        closeSocket: true,
+        closeCode: 4003,
+        closeReason: 'authentication expired',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

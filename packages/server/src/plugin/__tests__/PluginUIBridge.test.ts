@@ -117,4 +117,27 @@ describe('PluginUIBridge', () => {
       panels,
     );
   });
+
+  it('emits user-scoped panel metadata overrides', () => {
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const listener = vi.fn();
+    eventEmitter.on('pluginPanelMeta', listener);
+
+    const bridge = new PluginUIBridge(
+      'demo',
+      { kind: 'global' },
+      eventEmitter,
+      () => [],
+    );
+
+    bridge.setPanelMetaForUser('toolbar', 'token-1', { tone: 'danger' });
+
+    expect(listener).toHaveBeenCalledWith({
+      pluginName: 'demo',
+      operatorId: '__global__',
+      panelId: 'toolbar',
+      viewerTokenId: 'token-1',
+      meta: { tone: 'danger' },
+    });
+  });
 });
