@@ -55,6 +55,49 @@ test('FT8MessageParser.rawContainsUndecodedCallsign detects placeholders in raw 
   assert.equal(FT8MessageParser.rawContainsUndecodedCallsign('CQ BG5DRB OL32'), false);
 });
 
+test('parseDecodedSenderCallsign only exposes a decoded sender from supported partial messages', () => {
+  const decodedSenderCases: Array<[string, string]> = [
+    ['<...> BG5DRB', 'BG5DRB'],
+    ['<...> BG5DRB PL09', 'BG5DRB'],
+    ['<...> BG5DRB +01', 'BG5DRB'],
+    ['<...> BG5DRB R-01', 'BG5DRB'],
+    ['<...> BG5DRB RRR', 'BG5DRB'],
+    ['<...> BG5DRB RR73', 'BG5DRB'],
+    ['... BG5DRB -01', 'BG5DRB'],
+    ['<...> <SX100PAOK> 73', 'SX100PAOK'],
+    ['<...> E25XLD/M -11', 'E25XLD/M'],
+  ];
+  const unknownSenderCases = [
+    'BG5DRB <...> RR73',
+    'BG5DRB <...> -01',
+    'CQ <...> PL09',
+    '<...> BG5DRB RR73 EXTRA',
+    '<...> BG5DRB INVALID',
+    '<...> BG5DRB R12',
+    'TNX BG5DRB 73',
+    'BG5BNW RR73; RY3PAG <...> -20',
+    'JA0OAV RR73; JG1MPG <4>',
+  ];
+
+  for (const [raw, expected] of decodedSenderCases) {
+    assert.equal(FT8MessageParser.parseDecodedSenderCallsign(raw), expected, raw);
+  }
+
+  for (const raw of unknownSenderCases) {
+    assert.equal(FT8MessageParser.parseDecodedSenderCallsign(raw), undefined, raw);
+  }
+});
+
+test('parseDecodedSenderCallsign preserves structured sender parsing', () => {
+  assert.equal(FT8MessageParser.parseDecodedSenderCallsign('CQ EU BG2LNA PN42'), 'BG2LNA');
+  assert.equal(FT8MessageParser.parseDecodedSenderCallsign('CQ 290 K1ABC FN42'), 'K1ABC');
+  assert.equal(FT8MessageParser.parseDecodedSenderCallsign('CQ SX100PAOK KM18'), 'SX100PAOK');
+  assert.equal(
+    FT8MessageParser.parseDecodedSenderCallsign('BG5BNW RR73; RY3PAG <EX7CQ> -20'),
+    'EX7CQ',
+  );
+});
+
 test('isCallableCallsign excludes placeholders but keeps real callsigns', () => {
   assert.equal(isCallableCallsign('BG5DRB'), true);
   assert.equal(isCallableCallsign('E25XLD/M'), true);

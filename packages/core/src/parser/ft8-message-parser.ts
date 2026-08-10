@@ -33,6 +33,41 @@ export class FT8MessageParser {
   }
 
   /**
+   * 解析报文中已可靠解码的发送者呼号，仅供显示等被动信息使用。
+   *
+   * 普通报文直接使用结构化解析结果。部分解码报文仅支持目标呼号为
+   * `<...>`/`...`、发送者呼号完整可用的标准双呼号格式；其他未知报文
+   * 不会通过扫描 token 猜测发送者。
+   */
+  static parseDecodedSenderCallsign(raw: string): string | undefined {
+    const parsed = this.parseMessage(raw);
+    if ('senderCallsign' in parsed
+        && typeof parsed.senderCallsign === 'string'
+        && !this.isUndecodedCallsignPlaceholder(parsed.senderCallsign)) {
+      return parsed.senderCallsign;
+    }
+
+    const parts = raw.trim().toUpperCase().split(/\s+/);
+    if (parts.length < 2 || parts.length > 3) {
+      return undefined;
+    }
+
+    const [targetToken, senderToken, suffixToken] = parts;
+    if (!this.isUndecodedCallsignPlaceholder(targetToken)
+        || !senderToken
+        || this.isUndecodedCallsignPlaceholder(senderToken)
+        || !this.isValidCallsign(senderToken)) {
+      return undefined;
+    }
+
+    if (suffixToken && !this.isValidPartialDirectedSuffix(suffixToken)) {
+      return undefined;
+    }
+
+    return this.cleanCallsign(senderToken);
+  }
+
+  /**
    * 判断是否为标准呼号
    *
    * 根据 FT8 协议的 28-bit 编码规则：
@@ -150,20 +185,7 @@ export class FT8MessageParser {
    */
   static parseMessage(message: string): FT8Message {
     const trimmedMessage = message.trim().toUpperCase();
-    
-    // 首先处理<...>格式
     const parts = trimmedMessage.split(/\s+/);
-    const processedParts = parts.map(part => {
-      // 如果是<...>格式，保持原样
-      if (part.startsWith('<') && part.endsWith('>')) {
-        return part;
-      }
-      // 如果是普通呼号，检查是否需要包裹
-      if (this.isValidCallsign(part)) {
-        return part;
-      }
-      return part;
-    });
 
     // 检查 Fox/Hound DXpedition 模式消息（含 "RR73;" 分隔符，优先匹配）
     if (this.isFoxRR73Message(trimmedMessage)) {
@@ -171,28 +193,28 @@ export class FT8MessageParser {
     }
 
     // 检查CQ消息
-    if (this.isCQMessage(processedParts)) {
-      return this.parseCQMessage(processedParts, message);
+    if (this.isCQMessage(parts)) {
+      return this.parseCQMessage(parts, message);
     }
 
     // 检查73消息（优先于信号报告，避免73被误识别为报告）
-    if (this.is73Message(processedParts)) {
-      return this.parse73Message(processedParts, message);
+    if (this.is73Message(parts)) {
+      return this.parse73Message(parts, message);
     }
 
     // 检查信号报告消息（优先于响应消息，因为格式更具体）
-    if (this.isSignalReportMessage(processedParts)) {
-      return this.parseSignalReportMessage(processedParts, message);
+    if (this.isSignalReportMessage(parts)) {
+      return this.parseSignalReportMessage(parts, message);
     }
 
     // 检查确认消息（RRR/RR73，优先于响应消息）
-    if (this.isConfirmationMessage(processedParts)) {
-      return this.parseConfirmationMessage(processedParts, message);
+    if (this.isConfirmationMessage(parts)) {
+      return this.parseConfirmationMessage(parts, message);
     }
 
     // 检查响应消息（最后检查，因为格式最宽泛）
-    if (this.isResponseMessage(processedParts)) {
-      return this.parseResponseMessage(processedParts, message);
+    if (this.isResponseMessage(parts)) {
+      return this.parseResponseMessage(parts, message);
     }
 
     // 如果都不匹配，返回未知类型
@@ -595,6 +617,15 @@ export class FT8MessageParser {
    */
   private static isValidReport(report: string): boolean {
     return REPORT_REGEX.test(report);
+  }
+
+  private static isValidPartialDirectedSuffix(token: string): boolean {
+    return this.isValidGrid(token)
+      || this.isValidReport(token)
+      || /^R[+-]\d{1,2}$/.test(token)
+      || token === 'RRR'
+      || token === 'RR73'
+      || token === '73';
   }
 
   /**

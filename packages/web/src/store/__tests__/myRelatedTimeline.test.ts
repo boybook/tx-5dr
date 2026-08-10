@@ -175,6 +175,41 @@ describe('myRelatedTimelineReducer', () => {
     expect(rxMessages.map(message => message.message)).toEqual(['CQ JA1XXX PM95']);
   });
 
+  it('keeps partial-message location identity display-only', () => {
+    const slotStartMs = Date.UTC(2026, 4, 6, 6, 28, 30);
+    const state = reduce([
+      {
+        type: 'syncLiveContext',
+        payload: {
+          currentMode: mode,
+          liveSlotStartMs: slotStartMs,
+          visibleOperatorCallsigns: ['BG5DRB'],
+          targetCallsign: '',
+        },
+      },
+      {
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack: createSlotPack(slotStartMs, [
+            createRxFrame('<...> BG5DRB RR73', 1000),
+          ], createFrequencyContext()),
+          currentMode: mode,
+          liveSlotStartMs: slotStartMs,
+          visibleOperatorCallsigns: ['BG5DRB'],
+          targetCallsign: '',
+        },
+      },
+    ]);
+
+    const message = buildMyRelatedTimelineGroups(state)[0]?.messages[0];
+    expect(message).toMatchObject({
+      locationCallsign: 'BG5DRB',
+      country: 'China',
+      countryZh: '中国·浙江',
+    });
+    expect(message?.logbookAnalysis).toBeUndefined();
+  });
+
   it('reprojects the same live cycle immediately when target context changes', () => {
     const slotStartMs = Date.UTC(2026, 4, 6, 6, 28, 30);
     const state = reduce([

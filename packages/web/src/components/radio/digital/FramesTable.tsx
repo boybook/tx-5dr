@@ -28,6 +28,7 @@ export interface FrameDisplayMessage {
   countryEn?: string;
   countryCode?: string;
   flag?: string;
+  locationCallsign?: string;
   state?: string;
   stateConfidence?: 'high' | 'low';
   logbookAnalysis?: {
@@ -122,6 +123,23 @@ const isTargetRelated = (messageObj: FrameDisplayMessage, targetCallsign: string
     return messageObj.logbookAnalysis.callsign.toUpperCase().trim() === upperTarget;
   }
   return false;
+};
+
+export const resolveFrameLocationDisplay = (
+  message: FrameDisplayMessage,
+  isZh: boolean,
+  isNarrow: boolean,
+): { callsign: string; displayName: string; text: string } | null => {
+  const callsign = message.locationCallsign?.trim();
+  const displayName = isZh
+    ? (message.countryZh || message.countryEn || message.country)
+    : (message.countryEn || message.country);
+  if (!callsign || !displayName) return null;
+  return {
+    callsign,
+    displayName,
+    text: isNarrow ? (displayName.split('·')[1] || displayName) : displayName,
+  };
 };
 
 const formatGroupHeaderTime = (startMs: number): string => {
@@ -230,29 +248,21 @@ const MessageRow = React.memo<MessageRowProps>(({
 
   const formattedUtc = isNarrow ? message.utc.replace(/:/g, '') : message.utc;
 
-  // Format location - only show when there's a valid callsign
-  // (country/flag info from fallback scan without a real callsign should not be displayed)
   const locationNode = useMemo(() => {
-    const hasValidCallsign = message.logbookAnalysis?.callsign;
-    const displayName = isZh
-      ? (message.countryZh || message.countryEn || message.country)
-      : (message.countryEn || message.country);
-    if (!displayName) return null;
-    // Don't show country/flag if there's no valid callsign (avoid showing info from fallback scan)
-    if (!hasValidCallsign) return null;
-    const text = isNarrow ? (displayName.split('·')[1] || displayName) : displayName;
+    const location = resolveFrameLocationDisplay(message, isZh, isNarrow);
+    if (!location) return null;
     const inner = (
       <div className={`flex min-w-0 items-center justify-end gap-1 ${isNarrow ? 'max-w-[80px]' : 'max-w-[140px]'}`}>
-        <span className="min-w-0 truncate whitespace-nowrap text-xs" title={displayName}>
-          {text}
+        <span className="min-w-0 truncate whitespace-nowrap text-xs" title={location.displayName}>
+          {location.text}
         </span>
         <FlagDisplay flag={message.flag} countryCode={message.countryCode} />
       </div>
     );
-    if (enableCallsignPopover && hasValidCallsign) {
+    if (enableCallsignPopover) {
       return (
         <CallsignInfoPopover
-          callsign={message.logbookAnalysis!.callsign}
+          callsign={location.callsign}
           logbookAnalysis={message.logbookAnalysis}
           country={message.country}
           countryZh={message.countryZh}
@@ -267,7 +277,7 @@ const MessageRow = React.memo<MessageRowProps>(({
       );
     }
     return inner;
-  }, [isZh, isNarrow, message.countryZh, message.countryEn, message.country, message.flag, message.countryCode, message.logbookAnalysis, message.state, message.stateConfidence, enableCallsignPopover]);
+  }, [isZh, isNarrow, message, enableCallsignPopover]);
 
   // Chip for logbook analysis
   const chipNode = useMemo(() => {
