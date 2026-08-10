@@ -284,6 +284,25 @@ test('FT8 Fox/Hound RR73 消息在仅有短哈希时不应回退到 nextCallsign
   assert.equal(info.countryZh, undefined);
 });
 
+test('FT8 部分解码位置信息只使用已确认的发送者', () => {
+  const decodedSender = parseFT8LocationInfo('<...> BG5DRB RR73');
+  const standalonePlaceholder = parseFT8LocationInfo('... BG5DRB -01');
+
+  assert.equal(decodedSender.callsign, 'BG5DRB');
+  assert.equal(decodedSender.country, 'China');
+  assert.equal(decodedSender.countryZh, '中国·浙江');
+  assert.equal(standalonePlaceholder.callsign, 'BG5DRB');
+
+  for (const message of [
+    'BG5DRB <...> RR73',
+    'BG5DRB <...> -01',
+    'CQ <...> PL09',
+    'TNX BG5DRB 73',
+  ]) {
+    assert.deepEqual(parseFT8LocationInfo(message), {}, message);
+  }
+});
+
 test('前缀冲突优先级 - LU前缀应优先匹配阿根廷', () => {
   // LU 前缀被 5 个实体共享：
   // - Argentina (代码 100, 11个前缀) ← 应优先

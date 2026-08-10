@@ -4,7 +4,6 @@
  */
 
 import { FT8MessageParser } from '../parser/ft8-message-parser.js';
-import { FT8MessageType } from '@tx5dr/contracts';
 import ctyCsvText from './cty-data.js';
 import { CtyIndex, parseCTYCsv, type CtyLookupRecord } from './cty.js';
 import { CTY_ENTITY_METADATA } from './cty-metadata.js';
@@ -1369,48 +1368,14 @@ function toDegrees(radians: number): number {
   return radians * (180 / Math.PI);
 }
 
-// 网格定位正则表达式（从 ft8-message-parser 导入）
-const GRID_REGEX_LOCAL = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/;
-// 信号报告正则表达式
-const REPORT_REGEX_LOCAL = /^[+-]?\d{1,2}$/;
-
 /**
  * 从FT8消息中解析位置信息
  * @param message FT8消息文本
  * @returns 位置信息
  */
 export function parseFT8LocationInfo(message: string): FT8LocationInfo {
-  const msg = FT8MessageParser.parseMessage(message);
-  let callsignInfo;
-
-  // 尝试从解析后的消息中获取呼号信息
-  if ('senderCallsign' in msg && typeof msg.senderCallsign === 'string') {
-    callsignInfo = getCallsignInfo(msg.senderCallsign);
-  }
-
-  // 降级处理:如果FT8消息解析失败或无法识别发送者,尝试从原始消息中提取呼号
-  if (!callsignInfo && !message.includes('RR73;')) {
-    const words = message.trim().toUpperCase().split(/\s+/);
-    // 常见的 CQ 区域/活动标记，在降级扫描时应忽略，避免被误当作呼号
-    const CQ_FLAGS = new Set([
-      'DX','NA','EU','AS','AF','OC','SA','JA','RU','UP','TEST','POTA','WW'
-    ]);
-    const wordsToScan = msg.type === FT8MessageType.FOX_RR73 ? [] : words;
-
-    for (const word of wordsToScan) {
-      // 跳过网格坐标和信号报告
-      if (GRID_REGEX_LOCAL.test(word) || REPORT_REGEX_LOCAL.test(word)) continue;
-
-      // 跳过常见的FT8关键字
-      if (word === 'CQ' || word === 'RRR' || word === 'RR73' || word === 'RR73;' || word === '73' || CQ_FLAGS.has(word)) continue;
-
-      const info = getCallsignInfo(word);
-      if (info) {
-        callsignInfo = info;
-        break; // 找到第一个有效呼号即返回
-      }
-    }
-  }
+  const senderCallsign = FT8MessageParser.parseDecodedSenderCallsign(message);
+  const callsignInfo = senderCallsign ? getCallsignInfo(senderCallsign) : undefined;
 
   if (!callsignInfo) return {};
 

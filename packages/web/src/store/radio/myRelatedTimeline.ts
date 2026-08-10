@@ -842,6 +842,7 @@ function frameToDisplayMessage(frame: FrameMessage, slotStartMs: number): FrameD
     dt: frame.snr === -999 ? '-' : frame.dt,
     freq: Math.round(frame.freq),
     message: frame.message,
+    ...(locationInfo.callsign && { locationCallsign: locationInfo.callsign }),
     ...(locationInfo.country && { country: locationInfo.country }),
     ...(locationInfo.countryZh && { countryZh: locationInfo.countryZh }),
     ...(locationInfo.countryEn && { countryEn: locationInfo.countryEn }),

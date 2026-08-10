@@ -208,6 +208,37 @@ describe('DeviceUiProjectionService', () => {
     expect(listener).toHaveBeenCalledTimes(calls);
   });
 
+  it('projects location only for a reliably decoded partial-message sender', () => {
+    const engine = createEngine();
+    const service = new DeviceUiProjectionService(engine, { now: () => 1000 });
+
+    engine.emit('slotPackUpdated', {
+      slotId: 'FT8-partial',
+      startMs: 15_000,
+      endMs: 30_000,
+      frames: [
+        { snr: -10, freq: 1200, dt: 0.2, message: 'BG5DRB <...> RR73' },
+        { snr: -11, freq: 1300, dt: 0.3, message: '<...> BG5DRB RR73' },
+      ],
+      stats: {},
+      decodeHistory: [],
+    });
+
+    const frames = service.getSnapshot().ft8.recentFrames;
+    expect(frames[0]).toMatchObject({
+      message: 'BG5DRB <...> RR73',
+      country: null,
+      countryZh: null,
+      countryCode: null,
+    });
+    expect(frames[1]).toMatchObject({
+      message: '<...> BG5DRB RR73',
+      country: 'China',
+      countryZh: '中国·浙江',
+      countryCode: 'CN',
+    });
+  });
+
   it('projects voice summary without pairing state', () => {
     const engine = createEngine({
       getStatus: vi.fn(() => ({ isRunning: true, engineMode: 'voice', currentMode: { name: 'VOICE' }, currentRadioMode: 'USB' })),
