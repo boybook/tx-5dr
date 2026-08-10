@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import type { DigitalRadioEngineEvents, FrameMessage, QSORecord, RadioOperatorConfig, SlotInfo, SlotPack } from '@tx5dr/contracts';
 import { FT8MessageType, MODES } from '@tx5dr/contracts';
 
-import { FT8MessageParser } from '@tx5dr/core';
+import { FT8MessageParser, LogbookOperationError } from '@tx5dr/core';
 import { ConfigManager } from '../../config/config-manager.js';
 import { LogManager } from '../../log/LogManager.js';
 import { PluginManager } from '../../plugin/PluginManager.js';
@@ -74,6 +74,8 @@ function createManager(options: {
     registerOperatorCallsign: vi.fn(),
     connectOperatorToLogBook: vi.fn().mockResolvedValue(undefined),
     disconnectOperatorFromLogBook: vi.fn(),
+    getOperatorLogBookId: vi.fn().mockReturnValue(options.logBook.id),
+    setApplicationEventSink: vi.fn(),
     close: vi.fn().mockResolvedValue(undefined),
   };
 
@@ -617,7 +619,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
   it('creates a new record when the latest QSO is outside the merge window', async () => {
     const base = Date.parse('2026-04-05T13:00:00.000Z');
     const provider = {
-      addQSO: vi.fn().mockResolvedValue(undefined),
+      addQSO: vi.fn(async (record: QSORecord) => record),
       updateQSO: vi.fn(),
       getQSO: vi.fn(),
       getLastQSOWithCallsign: vi.fn().mockResolvedValue({
@@ -698,8 +700,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     const base = Date.parse('2026-04-05T13:00:00.000Z');
     const provider = {
       addQSO: vi.fn(),
-      updateQSO: vi.fn().mockResolvedValue(undefined),
-      getQSO: vi.fn().mockResolvedValue({
+      updateQSO: vi.fn().mockResolvedValue({
         id: 'existing-1',
         callsign: 'N0CALL',
         frequency: 14_074_000,
@@ -758,6 +759,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     expect(provider.updateQSO.mock.calls[0]?.[1]).toMatchObject({
       comment: 'FT8  Sent: -12  Rcvd: -09',
     });
+    expect(provider.updateQSO.mock.calls[0]?.[2]).toBe('op1');
     expect(addedSpy).not.toHaveBeenCalled();
     expect(updatedSpy).toHaveBeenCalledTimes(1);
     expect(autoSync).not.toHaveBeenCalled();
@@ -772,6 +774,144 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     );
   });
 
+  it('does not emit success effects when durable persistence fails', async () => {
+    const base = Date.parse('2026-04-05T13:00:00.000Z');
+    const provider = {
+      addQSO: vi.fn().mockRejectedValue(new Error('disk full')),
+      updateQSO: vi.fn(),
+      getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+      getStatistics: vi.fn(),
+    };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      callsign: 'BG5DRB',
+    });
+    const addedSpy = vi.fn();
+    const failedSpy = vi.fn();
+    eventEmitter.on('qsoRecordAdded', addedSpy);
+    eventEmitter.on('logbookWriteFailed', failedSpy);
+    const { notifyQSOComplete, autoSync } = attachQSOHookSpy(manager);
+
+    await invokeRecordQSO(manager, {
+      operatorId: 'op1',
+      qsoRecord: {
+        id: 'failed-1',
+        callsign: 'N0CALL',
+        frequency: 14_074_000,
+        mode: 'FT8',
+        startTime: base,
+        messageHistory: [],
+        myCallsign: 'BG5DRB',
+      },
+    });
+
+    expect(addedSpy).not.toHaveBeenCalled();
+    expect(autoSync).not.toHaveBeenCalled();
+    expect(notifyQSOComplete).not.toHaveBeenCalled();
+    expect(failedSpy).toHaveBeenCalledOnce();
+    expect(failedSpy).toHaveBeenCalledWith(expect.objectContaining({
+      logBookId: 'log-1',
+      operatorId: 'op1',
+      error: expect.objectContaining({ code: 'LOGBOOK_WRITE_FAILED', message: 'disk full' }),
+    }));
+  });
+
+  it.each([
+    'LOGBOOK_LOADING',
+    'LOGBOOK_UNAVAILABLE',
+  ] as const)('reports %s lookup failures before starting a provider mutation', async (code) => {
+    const base = Date.parse('2026-04-05T13:00:00.000Z');
+    const provider = {
+      addQSO: vi.fn(),
+      updateQSO: vi.fn(),
+      getLastQSOWithCallsign: vi.fn().mockRejectedValue(
+        new LogbookOperationError(code, `lookup blocked: ${code}`),
+      ),
+      getStatistics: vi.fn(),
+    };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      callsign: 'BG5DRB',
+    });
+    const addedSpy = vi.fn();
+    const updatedSpy = vi.fn();
+    const failedSpy = vi.fn();
+    eventEmitter.on('qsoRecordAdded', addedSpy);
+    eventEmitter.on('qsoRecordUpdated', updatedSpy);
+    eventEmitter.on('logbookWriteFailed', failedSpy);
+    const { notifyQSOComplete, autoSync } = attachQSOHookSpy(manager);
+
+    await invokeRecordQSO(manager, {
+      operatorId: 'op1',
+      qsoRecord: {
+        id: 'lookup-failed-1',
+        callsign: 'N0CALL',
+        frequency: 14_074_000,
+        mode: 'FT8',
+        startTime: base,
+        messageHistory: [],
+        myCallsign: 'BG5DRB',
+      },
+    });
+
+    expect(provider.addQSO).not.toHaveBeenCalled();
+    expect(provider.updateQSO).not.toHaveBeenCalled();
+    expect(addedSpy).not.toHaveBeenCalled();
+    expect(updatedSpy).not.toHaveBeenCalled();
+    expect(autoSync).not.toHaveBeenCalled();
+    expect(notifyQSOComplete).not.toHaveBeenCalled();
+    expect(failedSpy).toHaveBeenCalledOnce();
+    expect(failedSpy).toHaveBeenCalledWith(expect.objectContaining({
+      logBookId: 'log-1',
+      operatorId: 'op1',
+      error: expect.objectContaining({ code, message: `lookup blocked: ${code}` }),
+    }));
+  });
+
+  it('keeps a committed QSO successful when downstream hooks fail', async () => {
+    const base = Date.parse('2026-04-05T13:00:00.000Z');
+    const committed: QSORecord = {
+      id: 'committed-1',
+      callsign: 'N0CALL',
+      frequency: 14_074_000,
+      mode: 'FT8',
+      startTime: base,
+      messageHistory: [],
+      myCallsign: 'BG5DRB',
+    };
+    const provider = {
+      addQSO: vi.fn().mockResolvedValue(committed),
+      updateQSO: vi.fn(),
+      getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+      getStatistics: vi.fn().mockRejectedValue(new Error('statistics unavailable')),
+    };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      callsign: 'BG5DRB',
+    });
+    const addedSpy = vi.fn();
+    const failedSpy = vi.fn();
+    eventEmitter.on('qsoRecordAdded', addedSpy);
+    eventEmitter.on('logbookWriteFailed', failedSpy);
+    const autoSync = vi.fn(() => { throw new Error('sync unavailable'); });
+    const notifyQSOComplete = vi.fn().mockRejectedValue(new Error('plugin unavailable'));
+    manager.setPluginManager({
+      notifyQSOComplete,
+      logbookSyncHost: { onQSOComplete: autoSync },
+    } as any);
+
+    await invokeRecordQSO(manager, {
+      operatorId: 'op1',
+      qsoRecord: { ...committed, id: 'temporary-1' },
+    });
+
+    expect(addedSpy).toHaveBeenCalledOnce();
+    expect(addedSpy).toHaveBeenCalledWith(expect.objectContaining({ qsoRecord: committed }));
+    expect(autoSync).toHaveBeenCalledOnce();
+    expect(notifyQSOComplete).toHaveBeenCalledOnce();
+    expect(failedSpy).not.toHaveBeenCalled();
+  });
+
   it('replaces the queued transmission when a late decode advances standard-qso during the current TX slot', async () => {
     const encodeQueue = { push: vi.fn() };
     const { manager, eventEmitter } = createManager({
@@ -779,7 +919,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         id: 'log-1',
         name: 'Test Log',
         provider: {
-          addQSO: vi.fn().mockResolvedValue(undefined),
+          addQSO: vi.fn(async (record: QSORecord) => record),
           updateQSO: vi.fn(),
           getQSO: vi.fn(),
           getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
@@ -902,7 +1042,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         id: 'log-1',
         name: 'Test Log',
         provider: {
-          addQSO: vi.fn().mockResolvedValue(undefined),
+          addQSO: vi.fn(async (record: QSORecord) => record),
           updateQSO: vi.fn(),
           getQSO: vi.fn(),
           getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
@@ -980,7 +1120,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         id: 'log-1',
         name: 'Test Log',
         provider: {
-          addQSO: vi.fn().mockResolvedValue(undefined),
+          addQSO: vi.fn(async (record: QSORecord) => record),
           updateQSO: vi.fn(),
           getQSO: vi.fn(),
           getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
@@ -1038,7 +1178,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         id: 'log-1',
         name: 'Test Log',
         provider: {
-          addQSO: vi.fn().mockResolvedValue(undefined),
+          addQSO: vi.fn(async (record: QSORecord) => record),
           updateQSO: vi.fn(),
           getQSO: vi.fn(),
           getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
@@ -1148,7 +1288,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         id: 'log-1',
         name: 'Test Log',
         provider: {
-          addQSO: vi.fn().mockResolvedValue(undefined),
+          addQSO: vi.fn(async (record: QSORecord) => record),
           updateQSO: vi.fn(),
           getQSO: vi.fn(),
           getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
@@ -1291,6 +1431,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         registeredCallsigns.set(operatorId, callsign.toUpperCase());
       }),
       disconnectOperatorFromLogBook: vi.fn(),
+      setApplicationEventSink: vi.fn(),
       close: vi.fn().mockResolvedValue(undefined),
     };
 

@@ -1,6 +1,8 @@
-import { ILogProvider } from '@tx5dr/core';
+import type { LogbookHealth } from '@tx5dr/contracts';
+import type { ILogProvider, LogbookWriteFailure } from '@tx5dr/core';
 
 import { ADIFLogProvider } from './ADIFLogProvider.js';
+import { LegacyLogbookMaintenance } from './persistence/LegacyLogbookMaintenance.js';
 import { getDataFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
 import { normalizeCallsign } from '../utils/callsign.js';
@@ -43,9 +45,14 @@ export class LogManager {
   private logBooks: Map<string, LogBookInstance> = new Map();
   private callsignLogBookMap: Map<string, string> = new Map(); // callsign -> logBookId
   private callsignLogBookInFlight: Map<string, Promise<LogBookInstance>> = new Map();
+  private initializationById: Map<string, Promise<LogbookHealth>> = new Map();
+  private providerSubscriptions: Map<string, Array<() => void>> = new Map();
+  private applicationEventSink: ((event: 'logbookHealthChanged' | 'logbookWriteFailed', data: unknown) => void) | null = null;
   private bootstrapPrewarmCallsigns: Set<string> = new Set();
   private bootstrapPrewarmSettled: Set<string> = new Set();
   private operatorCallsignMap: Map<string, string> = new Map(); // operatorId -> callsign
+  private legacyMaintenance?: LegacyLogbookMaintenance;
+  private initializationPromise?: Promise<void>;
   private isInitialized: boolean = false;
   // 已移除默认日志本概念，只有基于呼号的日志本
   
@@ -65,11 +72,27 @@ export class LogManager {
    * 初始化日志管理器
    * 不再创建默认日志本，仅准备基础环境
    */
-  async initialize(): Promise<void> {
+  initialize(): Promise<void> {
     if (this.isInitialized) {
       logger.info('Already initialized');
-      return;
+      return Promise.resolve();
     }
+    if (this.initializationPromise) return this.initializationPromise;
+
+    const initialization = this.initializeInternal();
+    this.initializationPromise = initialization;
+    void initialization.then(
+      () => {
+        if (this.initializationPromise === initialization) this.initializationPromise = undefined;
+      },
+      () => {
+        if (this.initializationPromise === initialization) this.initializationPromise = undefined;
+      },
+    );
+    return initialization;
+  }
+
+  private async initializeInternal(): Promise<void> {
 
     logger.info('Initializing');
     
@@ -85,6 +108,8 @@ export class LogManager {
     }
 
     this.isInitialized = true;
+    this.legacyMaintenance = new LegacyLogbookMaintenance(logbookDir);
+    this.legacyMaintenance.start();
     logger.info('Initialization complete - callsign-based log system ready');
   }
 
@@ -139,21 +164,59 @@ export class LogManager {
       logFileName: config.logFileName ?? 'tx5dr.adi'
     });
     
-    await provider.initialize();
-    
     const logBook: LogBookInstance = {
       id: config.id,
       name: config.name,
       description: config.description,
-      filePath: (provider as ADIFLogProvider).getLogFilePath(),
+      filePath: logFilePath,
       provider,
       createdAt: Date.now(),
       lastUsed: Date.now(),
       isActive: true
     };
-    
+
+    // Register first so callers can observe loading/unavailable health without
+    // making the entire book look missing while its worker opens the file.
     this.logBooks.set(config.id, logBook);
-    logger.info(`Logbook created: ${config.name} -> ${logBook.filePath}`);
+
+    const unsubscribeHealth = provider.onHealthChanged((health) => {
+      this.applicationEventSink?.('logbookHealthChanged', {
+        logBookId: config.id,
+        health,
+      });
+    });
+    const unsubscribeWriteFailure = provider.onWriteFailed((failure: LogbookWriteFailure) => {
+      this.applicationEventSink?.('logbookWriteFailed', {
+        logBookId: config.id,
+        operatorId: failure.operatorId,
+        qsoRecord: failure.qsoRecord,
+        error: failure.error,
+      });
+    });
+    this.providerSubscriptions.set(config.id, [unsubscribeHealth, unsubscribeWriteFailure]);
+
+    const initialization = provider.initialize()
+      .then((health) => {
+        logger.info(`Logbook initialized: ${config.name} -> ${logBook.filePath}`, {
+          state: health.state,
+          issueCount: health.issues.length,
+        });
+        return health;
+      })
+      .catch((error) => {
+        // Provider content and expected I/O failures must resolve as health.
+        // A rejection here is therefore a programming defect, isolated from ready.
+        logger.error(`Unexpected logbook initialization failure: ${config.name}`, error);
+        return provider.getHealth();
+      });
+    this.initializationById.set(config.id, initialization);
+    void initialization.finally(() => {
+      if (this.initializationById.get(config.id) === initialization) {
+        this.initializationById.delete(config.id);
+      }
+    });
+
+    logger.info(`Logbook registered: ${config.name} -> ${logBook.filePath}`);
     
     return logBook;
   }
@@ -175,8 +238,20 @@ export class LogManager {
     if (usingCallsigns.length > 0) {
       throw new Error(`logbook ${logBookId} is in use by callsigns: ${usingCallsigns.join(', ')}`);
     }
-    
+
+    // A book becomes visible while its worker is still opening it. Do not close
+    // the provider underneath that initialization and leave an opened store
+    // detached from the manager.
+    await Promise.allSettled([
+      this.initializationById.get(logBookId) ?? Promise.resolve(),
+    ]);
+
     await logBook.provider.close();
+    for (const unsubscribe of this.providerSubscriptions.get(logBookId) ?? []) {
+      unsubscribe();
+    }
+    this.providerSubscriptions.delete(logBookId);
+    this.initializationById.delete(logBookId);
     this.logBooks.delete(logBookId);
     
     logger.info(`Logbook deleted: ${logBook.name}`);
@@ -273,7 +348,12 @@ export class LogManager {
     }
 
     const startedAt = Date.now();
-    const creation = this.getOrCreateLogBookByCallsign(normalizedCallsign);
+    const creation = this.getOrCreateLogBookByCallsign(normalizedCallsign)
+      .then(async (logBook) => {
+        const initialization = this.initializationById.get(logBook.id);
+        if (initialization) await initialization;
+        return logBook;
+      });
     let timedOut = false;
     let timeoutHandle: NodeJS.Timeout | null = null;
 
@@ -463,12 +543,13 @@ export class LogManager {
       return null;
     }
     
-    try {
-      return await this.getOrCreateLogBookByCallsign(callsign);
-    } catch (error) {
-      logger.error(`Failed to get logbook for operator ${operatorId} (callsign: ${callsign})`, error);
-      return null;
-    }
+    return this.getOrCreateLogBookByCallsign(callsign);
+  }
+
+  setApplicationEventSink(
+    sink: ((event: 'logbookHealthChanged' | 'logbookWriteFailed', data: unknown) => void) | null,
+  ): void {
+    this.applicationEventSink = sink;
   }
   
   /**
@@ -483,16 +564,52 @@ export class LogManager {
    * 关闭日志管理器
    */
   async close(): Promise<void> {
-    for (const logBook of this.logBooks.values()) {
+    const topLevelInitialization = this.initializationPromise;
+    if (topLevelInitialization) {
+      await topLevelInitialization.catch((error) => {
+        logger.error('LogManager initialization rejected during shutdown', error);
+      });
+    }
+
+    const maintenance = this.legacyMaintenance;
+    this.legacyMaintenance = undefined;
+    const maintenanceStop = maintenance
+      ? maintenance.stop()
+      : Promise.resolve();
+    const closeTasks = Array.from(this.logBooks.values(), async (logBook) => {
+      const initialization = this.initializationById.get(logBook.id);
+      if (initialization) {
+        await initialization.catch((error) => {
+          logger.error(`Logbook initialization rejected during shutdown: ${logBook.name}`, error);
+        });
+      }
       await logBook.provider.close();
+    });
+    const [maintenanceResult, ...closeResults] = await Promise.allSettled([
+      maintenanceStop,
+      ...closeTasks,
+    ]);
+    if (maintenanceResult.status === 'rejected') {
+      logger.error('Failed to stop legacy logbook maintenance', maintenanceResult.reason);
+    }
+    for (const result of closeResults) {
+      if (result.status === 'rejected') {
+        logger.error('Failed to drain logbook during shutdown', result.reason);
+      }
+    }
+    for (const unsubscribeList of this.providerSubscriptions.values()) {
+      for (const unsubscribe of unsubscribeList) unsubscribe();
     }
     
     this.logBooks.clear();
     this.callsignLogBookMap.clear();
     this.callsignLogBookInFlight.clear();
+    this.initializationById.clear();
+    this.providerSubscriptions.clear();
     this.bootstrapPrewarmCallsigns.clear();
     this.bootstrapPrewarmSettled.clear();
     this.operatorCallsignMap.clear();
+    this.applicationEventSink = null;
     this.isInitialized = false;
   }
   

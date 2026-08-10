@@ -144,6 +144,77 @@ describe('WSServer initial frequency snapshot', () => {
   });
 });
 
+describe('WSServer logbook event scoping', () => {
+  function createLogbookServer() {
+    const server = Object.create(WSServer.prototype) as any;
+    server.digitalRadioEngine = {
+      operatorManager: {
+        getLogManager: () => ({
+          getOperatorIdsForLogBook: (logBookId: string) => logBookId === 'logbook-N0CALL'
+            ? ['operator-1']
+            : [],
+        }),
+      },
+    };
+    return server;
+  }
+
+  function createConnection(operatorId: string, role = UserRole.OPERATOR) {
+    const send = vi.fn();
+    return {
+      connection: {
+        isHandshakeCompleted: () => true,
+        hasMinRole: () => true,
+        getUserRole: () => role,
+        isOperatorEnabled: (candidate: string) => candidate === operatorId,
+        hasOperatorAccess: (candidate: string) => candidate === operatorId,
+        send,
+      },
+      send,
+    };
+  }
+
+  it('sends health details only to clients that can observe the logbook', () => {
+    const server = createLogbookServer();
+    const allowed = createConnection('operator-1');
+    const unrelated = createConnection('operator-2');
+    server.getActiveConnections = () => [allowed.connection, unrelated.connection];
+
+    server.broadcastLogbookHealthChanged({
+      logBookId: 'logbook-N0CALL',
+      health: {
+        state: 'read_only',
+        readable: true,
+        writable: false,
+        issues: [],
+        updatedAt: 1,
+      },
+    });
+
+    expect(allowed.send).toHaveBeenCalledWith(WSMessageType.LOGBOOK_HEALTH_CHANGED, expect.any(Object));
+    expect(unrelated.send).not.toHaveBeenCalled();
+  });
+
+  it('scopes operator-less write failures by logbook ownership', () => {
+    const server = createLogbookServer();
+    const allowed = createConnection('operator-1');
+    const unrelated = createConnection('operator-2');
+    server.getActiveConnections = () => [allowed.connection, unrelated.connection];
+
+    server.broadcastLogbookWriteFailed({
+      logBookId: 'logbook-N0CALL',
+      error: {
+        code: 'LOGBOOK_WRITE_FAILED',
+        message: 'write failed',
+        occurredAt: 1,
+      },
+    });
+
+    expect(allowed.send).toHaveBeenCalledWith(WSMessageType.LOGBOOK_WRITE_FAILED, expect.any(Object));
+    expect(unrelated.send).not.toHaveBeenCalled();
+  });
+});
+
 function createTestConnection(id = 'conn-test'): { connection: WSConnection; sent: Array<{ type: string; data: any }> } {
   const sent: Array<{ type: string; data: any }> = [];
   const listeners = new Map<string, (...args: unknown[]) => void>();

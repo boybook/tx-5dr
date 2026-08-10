@@ -42,6 +42,24 @@
     "forbidden": "无访问权限",
     "retry": "重试"
   },
+  "health": {
+    "state": {
+      "loading": "日志本正在加载",
+      "degraded": "日志本已降级打开",
+      "read_only": "日志本当前只读",
+      "unavailable": "日志本暂不可用"
+    },
+    "description": {
+      "loading": "日志扫描仍在后台进行，电台和其他功能不受影响。",
+      "degraded": "可继续读写，但有部分记录或恢复步骤需要留意。",
+      "read_only": "为避免进一步损坏，写入已停止；现有可读记录仍被保留。",
+      "unavailable": "该日志本已被单独隔离，server 和其他日志本仍可正常工作。"
+    },
+    "affectedRecords": "受影响记录：{{count}} 条。",
+    "recoveryFile": "恢复文件：{{name}}。",
+    "retry": "重试打开",
+    "retryFailed": "重新打开日志本失败"
+  },
   "qslStatus": {
     "confirmed": "已确认",
     "uploaded": "已上传",

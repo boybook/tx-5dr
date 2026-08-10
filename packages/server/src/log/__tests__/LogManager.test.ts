@@ -1,11 +1,125 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { LogManager, type LogBookInstance } from '../LogManager.js';
+import { LegacyLogbookMaintenance } from '../persistence/LegacyLogbookMaintenance.js';
+import { tx5drPaths } from '../../utils/app-paths.js';
 
 describe('LogManager callsign logbook creation', () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await LogManager.getInstance().close();
+  });
+
+  it('shares concurrent initialization and starts one maintenance loop', async () => {
+    const manager = LogManager.getInstance();
+    const directory = await mkdtemp(path.join(tmpdir(), 'tx5dr-log-manager-'));
+    let releasePath: (() => void) | undefined;
+    const pathGate = new Promise<void>((resolve) => {
+      releasePath = resolve;
+    });
+    const getDataFile = vi.spyOn(tx5drPaths, 'getDataFile').mockImplementation(async (fileName) => {
+      await pathGate;
+      return path.join(directory, fileName);
+    });
+    const startMaintenance = vi
+      .spyOn(LegacyLogbookMaintenance.prototype, 'start')
+      .mockImplementation(() => undefined);
+
+    try {
+      const first = manager.initialize();
+      const second = manager.initialize();
+      await Promise.resolve();
+
+      expect(getDataFile).toHaveBeenCalledTimes(1);
+      expect(startMaintenance).not.toHaveBeenCalled();
+
+      releasePath!();
+      await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+      await manager.initialize();
+
+      expect(startMaintenance).toHaveBeenCalledTimes(1);
+    } finally {
+      await manager.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('clears a failed initialization so a later call can retry', async () => {
+    const manager = LogManager.getInstance();
+    const directory = await mkdtemp(path.join(tmpdir(), 'tx5dr-log-manager-retry-'));
+    const getDataFile = vi.spyOn(tx5drPaths, 'getDataFile')
+      .mockRejectedValueOnce(new Error('path lookup failed'))
+      .mockImplementation(async fileName => path.join(directory, fileName));
+    const startMaintenance = vi
+      .spyOn(LegacyLogbookMaintenance.prototype, 'start')
+      .mockImplementation(() => undefined);
+
+    try {
+      await expect(manager.initialize()).rejects.toThrow('path lookup failed');
+      await expect(manager.initialize()).resolves.toBeUndefined();
+
+      expect(getDataFile).toHaveBeenCalledTimes(2);
+      expect(startMaintenance).toHaveBeenCalledTimes(1);
+    } finally {
+      await manager.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('waits for top-level initialization before stopping maintenance', async () => {
+    const manager = LogManager.getInstance();
+    const directory = await mkdtemp(path.join(tmpdir(), 'tx5dr-log-manager-close-race-'));
+    let releasePath: (() => void) | undefined;
+    const pathGate = new Promise<void>((resolve) => {
+      releasePath = resolve;
+    });
+    vi.spyOn(tx5drPaths, 'getDataFile').mockImplementation(async (fileName) => {
+      await pathGate;
+      return path.join(directory, fileName);
+    });
+    const startMaintenance = vi
+      .spyOn(LegacyLogbookMaintenance.prototype, 'start')
+      .mockImplementation(() => undefined);
+    const stopMaintenance = vi
+      .spyOn(LegacyLogbookMaintenance.prototype, 'stop')
+      .mockResolvedValue(undefined);
+    const state = manager as unknown as {
+      isInitialized: boolean;
+      legacyMaintenance?: LegacyLogbookMaintenance;
+    };
+
+    try {
+      const initialization = manager.initialize();
+      const closing = manager.close();
+      let closeResolved = false;
+      void closing.then(() => {
+        closeResolved = true;
+      });
+      await Promise.resolve();
+
+      expect(closeResolved).toBe(false);
+      expect(startMaintenance).not.toHaveBeenCalled();
+      expect(stopMaintenance).not.toHaveBeenCalled();
+
+      releasePath!();
+      await expect(Promise.all([initialization, closing])).resolves.toEqual([undefined, undefined]);
+
+      expect(startMaintenance).toHaveBeenCalledTimes(1);
+      expect(stopMaintenance).toHaveBeenCalledTimes(1);
+      expect(state.legacyMaintenance).toBeUndefined();
+      expect(state.isInitialized).toBe(false);
+
+      await expect(manager.initialize()).resolves.toBeUndefined();
+      expect(startMaintenance).toHaveBeenCalledTimes(2);
+      expect(state.isInitialized).toBe(true);
+    } finally {
+      await manager.close();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('reuses one in-flight creation for concurrent callsign lookups', async () => {
@@ -38,5 +152,107 @@ describe('LogManager callsign logbook creation', () => {
 
     releaseCreation!();
     await expect(Promise.all([first, second])).resolves.toEqual([logBook, logBook]);
+  });
+
+  it('drains every registered logbook when one close fails', async () => {
+    const manager = LogManager.getInstance();
+    const failedClose = vi.fn().mockRejectedValue(new Error('first drain failed'));
+    const successfulClose = vi.fn().mockResolvedValue(undefined);
+    const books = (manager as unknown as { logBooks: Map<string, LogBookInstance> }).logBooks;
+    books.set('first', {
+      id: 'first',
+      name: 'First',
+      filePath: '/tmp/first.adi',
+      provider: { close: failedClose } as any,
+      createdAt: 1,
+      lastUsed: 1,
+      isActive: true,
+    });
+    books.set('second', {
+      id: 'second',
+      name: 'Second',
+      filePath: '/tmp/second.adi',
+      provider: { close: successfulClose } as any,
+      createdAt: 1,
+      lastUsed: 1,
+      isActive: true,
+    });
+
+    await expect(manager.close()).resolves.toBeUndefined();
+    expect(failedClose).toHaveBeenCalledOnce();
+    expect(successfulClose).toHaveBeenCalledOnce();
+  });
+
+  it('starts draining healthy logbooks without waiting for another initialization', async () => {
+    const manager = LogManager.getInstance();
+    let finishSlowInitialization: (() => void) | undefined;
+    const slowInitialization = new Promise<void>((resolve) => {
+      finishSlowInitialization = resolve;
+    });
+    const slowClose = vi.fn().mockResolvedValue(undefined);
+    const healthyClose = vi.fn().mockResolvedValue(undefined);
+    const books = (manager as unknown as { logBooks: Map<string, LogBookInstance> }).logBooks;
+    const initializations = (manager as unknown as {
+      initializationById: Map<string, Promise<unknown>>;
+    }).initializationById;
+    books.set('slow', {
+      id: 'slow',
+      name: 'Slow',
+      filePath: '/tmp/slow.adi',
+      provider: { close: slowClose } as any,
+      createdAt: 1,
+      lastUsed: 1,
+      isActive: true,
+    });
+    books.set('healthy', {
+      id: 'healthy',
+      name: 'Healthy',
+      filePath: '/tmp/healthy.adi',
+      provider: { close: healthyClose } as any,
+      createdAt: 1,
+      lastUsed: 1,
+      isActive: true,
+    });
+    initializations.set('slow', slowInitialization);
+
+    const closing = manager.close();
+    await vi.waitFor(() => expect(healthyClose).toHaveBeenCalledOnce());
+    expect(slowClose).not.toHaveBeenCalled();
+
+    finishSlowInitialization!();
+    await closing;
+    expect(slowClose).toHaveBeenCalledOnce();
+  });
+
+  it('waits for background initialization before deleting a logbook', async () => {
+    const manager = LogManager.getInstance();
+    let finishInitialization: (() => void) | undefined;
+    const initialization = new Promise<void>((resolve) => {
+      finishInitialization = resolve;
+    });
+    const close = vi.fn().mockResolvedValue(undefined);
+    const books = (manager as unknown as { logBooks: Map<string, LogBookInstance> }).logBooks;
+    const initializations = (manager as unknown as {
+      initializationById: Map<string, Promise<unknown>>;
+    }).initializationById;
+    books.set('loading', {
+      id: 'loading',
+      name: 'Loading',
+      filePath: '/tmp/loading.adi',
+      provider: { close } as any,
+      createdAt: 1,
+      lastUsed: 1,
+      isActive: true,
+    });
+    initializations.set('loading', initialization);
+
+    const deletion = manager.deleteLogBook('loading');
+    await Promise.resolve();
+    expect(close).not.toHaveBeenCalled();
+
+    finishInitialization!();
+    await deletion;
+    expect(close).toHaveBeenCalledOnce();
+    expect(books.has('loading')).toBe(false);
   });
 });

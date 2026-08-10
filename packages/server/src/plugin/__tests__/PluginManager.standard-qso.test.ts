@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'eventemitter3';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -9,6 +9,23 @@ import { FT8MessageParser, RadioOperator } from '@tx5dr/core';
 import type { ScoredCandidate } from '@tx5dr/plugin-api';
 import { STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING } from '@tx5dr/builtin-plugins';
 import { PluginManager } from '../PluginManager.js';
+import { LogManager } from '../../log/LogManager.js';
+
+function installInMemoryLogManager(): void {
+  const logBook = {
+    id: 'logbook-test',
+    provider: {
+      queryQSOs: vi.fn(async () => []),
+    },
+  };
+
+  vi.spyOn(LogManager, 'getInstance').mockReturnValue({
+    resolveLogBookId: vi.fn(() => logBook.id),
+    getLogBook: vi.fn(() => logBook),
+    getOrCreateLogBookByCallsign: vi.fn(async () => logBook),
+    getOperatorIdsForLogBook: vi.fn(() => []),
+  } as unknown as LogManager);
+}
 
 function createSlotInfo(startMs: number): SlotInfo {
   return {
@@ -87,7 +104,13 @@ async function writeUserPlugin(
 describe('PluginManager standard-qso late re-decision', () => {
   const tempDirs: string[] = [];
 
+  beforeEach(() => {
+    // Plugin logbook queries must remain isolated from the user's real logbook directory.
+    installInMemoryLogManager();
+  });
+
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 

@@ -1364,7 +1364,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
 
     // 清理操作员管理器
-    this.operatorManager.cleanup();
+    await this.operatorManager.cleanup();
 
     // 清理传输跟踪器
     if (this.transmissionTracker) {

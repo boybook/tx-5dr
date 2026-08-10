@@ -62,6 +62,12 @@ function isWatchedCallsignAutoCallEnabled(ctx: PluginContext): boolean {
   return hasActiveWatchEntries(ctx.config.watchList);
 }
 
+function isLogbookTemporarilyUnreadable(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || !('code' in error)) return false;
+  const code = (error as { code?: unknown }).code;
+  return code === 'LOGBOOK_LOADING' || code === 'LOGBOOK_UNAVAILABLE';
+}
+
 function buildWatchRules(ctx: PluginContext): WatchRule[] {
   const matchMode = getWatchMatchMode(ctx);
   const onInvalidRegex = (entry: string, error: unknown) => {
@@ -267,12 +273,22 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
       const skipDays = Number(ctx.config.workedCallsignSkipDays) || 0;
       if (skipDays > 0) {
         const cutoff = Date.now() - skipDays * 24 * 60 * 60 * 1000;
-        const count = await ctx.logbook.countQSOs({
-          callsign: matched.callsign,
-          band: ctx.radio.band,
-          mode: ctx.operator.mode.name,
-          timeRange: { start: cutoff, end: Date.now() },
-        });
+        let count: number;
+        try {
+          count = await ctx.logbook.countQSOs({
+            callsign: matched.callsign,
+            band: ctx.radio.band,
+            mode: ctx.operator.mode.name,
+            timeRange: { start: cutoff, end: Date.now() },
+          });
+        } catch (error) {
+          if (!isLogbookTemporarilyUnreadable(error)) throw error;
+          ctx.log.debug('Watched callsign deferred until the logbook becomes readable', {
+            callsign: matched.callsign,
+            code: (error as { code: string }).code,
+          });
+          return null;
+        }
         if (count > 0) {
           ctx.log.debug('Watched callsign skipped because already worked within time range', {
             callsign: matched.callsign,
@@ -313,4 +329,5 @@ export const watchedCallsignAutocallLocales: Record<string, Record<string, strin
 
 export const watchedCallsignAutocallTestables = {
   isWatchedCallsignAutoCallEnabled,
+  isLogbookTemporarilyUnreadable,
 };

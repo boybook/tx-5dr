@@ -30,6 +30,7 @@ export interface QSOFormModalProps {
   onChange: (data: Partial<QSORecord>) => void;
   onSave: () => void;
   isSaving: boolean;
+  isSaveDisabled?: boolean;
   /**
    * 'edit'（默认）：显示全部字段，含操作警告
    * 'add'：显示全部字段，隐藏操作警告
@@ -49,6 +50,7 @@ const QSOFormModal: React.FC<QSOFormModalProps> = ({
   onChange,
   onSave,
   isSaving,
+  isSaveDisabled: isSaveDisabledByParent = false,
   mode = 'edit',
 }) => {
   const { t } = useTranslation('logbook');
@@ -90,7 +92,7 @@ const QSOFormModal: React.FC<QSOFormModalProps> = ({
     onChange({ ...formData, startTime: val ? new Date(val + 'Z').getTime() : undefined });
   };
 
-  const isSaveDisabled = isAdd
+  const isFormInvalid = isAdd
     ? !formData.callsign?.trim() || !formData.frequency || !formData.mode || !formData.startTime
     : !formData.callsign || !formData.frequency;
 
@@ -324,7 +326,7 @@ const QSOFormModal: React.FC<QSOFormModalProps> = ({
             color="primary"
             onPress={onSave}
             isLoading={isSaving}
-            isDisabled={isSaveDisabled}
+            isDisabled={isSaveDisabledByParent || isFormInvalid}
           >
             {t('common:button.save')}
           </Button>

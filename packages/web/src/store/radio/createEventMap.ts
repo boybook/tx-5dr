@@ -472,6 +472,24 @@ export function createRadioEventMap({
       logger.debug('Logbook updated:', logbookData);
       logbookDispatch({ type: 'logbookUpdated', payload: logbookData });
     },
+    logbookHealthChanged: (data: unknown) => {
+      logger.warn('Logbook health changed:', data);
+    },
+    logbookWriteFailed: (data: unknown) => {
+      const failure = data as {
+        logBookId?: string;
+        error?: { code?: string; message?: string };
+      };
+      const message = failure.error?.message || i18n.t('logbook:health.description.read_only');
+      showErrorToast({
+        userMessage: message,
+        severity: 'error',
+        code: failure.error?.code || 'LOGBOOK_WRITE_FAILED',
+        suggestions: [i18n.t('logbook:health.retry')],
+        context: failure.logBookId ? { logBookId: failure.logBookId } : undefined,
+      });
+      radioDispatch({ type: 'error', payload: new Error(message) });
+    },
     operatorsList: (data: unknown) => {
       const operatorsData = data as { operators: OperatorStatus[] };
       radioDispatch({ type: 'operatorsList', payload: operatorsData.operators });
