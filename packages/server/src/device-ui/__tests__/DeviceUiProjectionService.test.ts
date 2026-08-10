@@ -234,7 +234,7 @@ describe('DeviceUiProjectionService', () => {
     expect(frames[1]).toMatchObject({
       message: '<...> BG5DRB RR73',
       country: 'China',
-      countryZh: '中国·浙江',
+      countryZh: '\u4e2d\u56fd\u00b7\u6d59\u6c5f',
       countryCode: 'CN',
     });
   });

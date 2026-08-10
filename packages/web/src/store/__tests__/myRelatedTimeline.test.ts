@@ -205,7 +205,7 @@ describe('myRelatedTimelineReducer', () => {
     expect(message).toMatchObject({
       locationCallsign: 'BG5DRB',
       country: 'China',
-      countryZh: '中国·浙江',
+      countryZh: '\u4e2d\u56fd\u00b7\u6d59\u6c5f',
     });
     expect(message?.logbookAnalysis).toBeUndefined();
   });

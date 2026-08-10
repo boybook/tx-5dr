@@ -16,21 +16,21 @@ describe('frame location display', () => {
   it('uses a reliable display-only callsign without logbook analysis', () => {
     const location = resolveFrameLocationDisplay(createMessage({
       locationCallsign: 'BG5DRB',
-      countryZh: '中国·浙江',
+      countryZh: '\u4e2d\u56fd\u00b7\u6d59\u6c5f',
       countryEn: 'China·Zhejiang',
       countryCode: 'CN',
     }), true, false);
 
     expect(location).toEqual({
       callsign: 'BG5DRB',
-      displayName: '中国·浙江',
-      text: '中国·浙江',
+      displayName: '\u4e2d\u56fd\u00b7\u6d59\u6c5f',
+      text: '\u4e2d\u56fd\u00b7\u6d59\u6c5f',
     });
   });
 
   it('does not display location fields without a reliable sender callsign', () => {
     const location = resolveFrameLocationDisplay(createMessage({
-      countryZh: '中国·浙江',
+      countryZh: '\u4e2d\u56fd\u00b7\u6d59\u6c5f',
       countryCode: 'CN',
     }), true, false);
 
@@ -40,11 +40,40 @@ describe('frame location display', () => {
   it('keeps narrow and translated labels deterministic', () => {
     const message = createMessage({
       locationCallsign: 'BG5DRB',
-      countryZh: '中国·浙江',
+      countryZh: '\u4e2d\u56fd\u00b7\u6d59\u6c5f',
       countryEn: 'China·Zhejiang',
     });
 
-    expect(resolveFrameLocationDisplay(message, true, true)?.text).toBe('浙江');
+    expect(resolveFrameLocationDisplay(message, true, true)?.text).toBe('\u6d59\u6c5f');
     expect(resolveFrameLocationDisplay(message, false, false)?.text).toBe('China·Zhejiang');
+  });
+
+  it('adds the Grid marker only for a high-confidence location conflict', () => {
+    const normal = createMessage({
+      locationCallsign: 'JA1ABC',
+      countryZh: 'Japan',
+      locationGrid: 'PM95',
+      gridLocation: {
+        grid: 'PM95',
+        status: 'compatible',
+        countries: [],
+      },
+    });
+    const conflict = createMessage({
+      locationCallsign: 'JA1ABC',
+      countryZh: 'Japan',
+      locationGrid: 'CN87',
+      gridLocation: {
+        grid: 'CN87',
+        status: 'conflict',
+        countries: [],
+      },
+    });
+
+    expect(resolveFrameLocationDisplay(normal, true, false)?.text).toBe('Japan');
+    expect(resolveFrameLocationDisplay(conflict, true, false)).toMatchObject({
+      text: 'Japan',
+      conflictGrid: 'CN87',
+    });
   });
 });

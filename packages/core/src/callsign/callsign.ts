@@ -546,7 +546,10 @@ export interface FT8LocationInfo {
   flag?: string;
   state?: string;
   stateConfidence?: 'high' | 'low';
+  /** DXCC entity used only for display-side Grid compatibility checks. */
+  entityCode?: number;
   callsign?: string;
+  /** Grid carried by this same reliably decoded FT8 message. */
   grid?: string;
 }
 
@@ -1379,6 +1382,12 @@ export function parseFT8LocationInfo(message: string): FT8LocationInfo {
 
   if (!callsignInfo) return {};
 
+  const parsedMessage = FT8MessageParser.parseMessage(message);
+  const grid = (parsedMessage.type === 'cq' || parsedMessage.type === 'call')
+    && parsedMessage.senderCallsign === senderCallsign
+    ? parsedMessage.grid
+    : undefined;
+
   return {
     callsign: callsignInfo.callsign,
     country: callsignInfo.country,
@@ -1388,6 +1397,8 @@ export function parseFT8LocationInfo(message: string): FT8LocationInfo {
     flag: callsignInfo.flag,
     state: callsignInfo.state,
     stateConfidence: callsignInfo.stateConfidence,
+    entityCode: callsignInfo.entityCode,
+    grid,
   };
 }
 

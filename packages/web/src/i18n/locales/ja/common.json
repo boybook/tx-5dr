@@ -133,6 +133,12 @@
   },
   "callsignPopover": {
     "grid": "グリッド",
+    "gridLocation": "グリッドの位置",
+    "gridLocationCurrent": "このメッセージ",
+    "gridLocationRecent": "最近の観測",
+    "gridLocationUnknown": "確認できる陸地がありません",
+    "gridLocationConflict": "コールサインの所在地と一致しません",
+    "gridLocationAmbiguous": "コールサイン所在地との一致は判断できません",
     "subdivision": "州/準州",
     "estimated": "(信頼度が低い)",
     "subdivisions": {

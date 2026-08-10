@@ -1,5 +1,5 @@
 import type { FrameMessage, ModeDescriptor, SlotPack, SlotPackFrequencyContext } from '@tx5dr/contracts';
-import { CycleUtils, parseFT8LocationInfo } from '@tx5dr/core';
+import { CycleUtils, parseFT8LocationInfo, resolveGridLocation } from '@tx5dr/core';
 import type { FrameDisplayMessage, FrameGroup } from '../../components/radio/digital/FramesTable';
 
 const MAX_GROUPS = 100;
@@ -848,6 +848,10 @@ function frameToDisplayMessage(frame: FrameMessage, slotStartMs: number): FrameD
     ...(locationInfo.countryEn && { countryEn: locationInfo.countryEn }),
     ...(locationInfo.countryCode && { countryCode: locationInfo.countryCode }),
     ...(locationInfo.flag && { flag: locationInfo.flag }),
+    ...(locationInfo.grid && {
+      locationGrid: locationInfo.grid,
+      gridLocation: resolveGridLocation(locationInfo.grid, locationInfo),
+    }),
     ...(locationInfo.state && { state: locationInfo.state }),
     ...(locationInfo.stateConfidence && { stateConfidence: locationInfo.stateConfidence }),
     ...(frame.logbookAnalysis && { logbookAnalysis: frame.logbookAnalysis }),
