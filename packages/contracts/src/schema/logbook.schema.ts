@@ -1,5 +1,40 @@
 import { z } from 'zod';
 
+export const LOGBOOK_OPERATION_ERROR_CODES = [
+  'LOGBOOK_LOADING',
+  'LOGBOOK_READ_ONLY',
+  'LOGBOOK_UNAVAILABLE',
+  'LOGBOOK_WRITE_FAILED',
+  'LOGBOOK_WRITE_STATE_UNCERTAIN',
+] as const;
+
+export const LogbookOperationErrorCodeSchema = z.enum(LOGBOOK_OPERATION_ERROR_CODES);
+
+export const LogbookHealthStateSchema = z.enum([
+  'loading',
+  'healthy',
+  'degraded',
+  'read_only',
+  'unavailable',
+]);
+
+export const LogbookHealthIssueSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+  affectedRecords: z.number().int().nonnegative().optional(),
+  affectedBytes: z.number().int().nonnegative().optional(),
+  recoveryFileName: z.string().optional(),
+  occurredAt: z.number(),
+});
+
+export const LogbookHealthSchema = z.object({
+  state: LogbookHealthStateSchema,
+  readable: z.boolean(),
+  writable: z.boolean(),
+  issues: z.array(LogbookHealthIssueSchema),
+  updatedAt: z.number(),
+});
+
 export const DxccCountSummarySchema = z.object({
   current: z.number().default(0),
   total: z.number().default(0),
@@ -31,6 +66,7 @@ export const LogBookInfoSchema = z.object({
   createdAt: z.number(),
   lastUsed: z.number(),
   isActive: z.boolean(),
+  health: LogbookHealthSchema,
 });
 
 /**
@@ -100,6 +136,14 @@ export const LogBookActionResponseSchema = z.object({
   success: z.boolean(),
   message: z.string(),
   data: LogBookInfoSchema.optional(),
+});
+
+export const LogbookRecoveryRetryResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({
+    logBookId: z.string(),
+    health: LogbookHealthSchema,
+  }),
 });
 
 /**
@@ -293,6 +337,10 @@ export const QSOActionResponseSchema = z.object({
 // ========== 类型导出 ==========
 
 export type LogBookInfo = z.infer<typeof LogBookInfoSchema>;
+export type LogbookOperationErrorCode = z.infer<typeof LogbookOperationErrorCodeSchema>;
+export type LogbookHealthState = z.infer<typeof LogbookHealthStateSchema>;
+export type LogbookHealthIssue = z.infer<typeof LogbookHealthIssueSchema>;
+export type LogbookHealth = z.infer<typeof LogbookHealthSchema>;
 export type CreateLogBookRequest = z.infer<typeof CreateLogBookRequestSchema>;
 export type UpdateLogBookRequest = z.infer<typeof UpdateLogBookRequestSchema>;
 export type ConnectOperatorToLogBookRequest = z.infer<typeof ConnectOperatorToLogBookRequestSchema>;
@@ -301,6 +349,7 @@ export type LogBookDxccSummary = z.infer<typeof LogBookDxccSummarySchema>;
 export type LogBookListResponse = z.infer<typeof LogBookListResponseSchema>;
 export type LogBookDetailResponse = z.infer<typeof LogBookDetailResponseSchema>;
 export type LogBookActionResponse = z.infer<typeof LogBookActionResponseSchema>;
+export type LogbookRecoveryRetryResponse = z.infer<typeof LogbookRecoveryRetryResponseSchema>;
 export type LogBookQSOQueryOptions = z.infer<typeof LogBookQSOQueryOptionsSchema>;
 export type LogBookRecentGlobeQuery = z.infer<typeof LogBookRecentGlobeQuerySchema>;
 export type LogBookRecentGlobeHomeSource = z.infer<typeof LogBookRecentGlobeHomeSourceSchema>;

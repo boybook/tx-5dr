@@ -32,7 +32,7 @@ import QSOFormModal from './QSOFormModal';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faSync, faDownload, faUpload, faEdit, faTrash, faFolderOpen, faCog, faPlus, faTableCells } from '@fortawesome/free-solid-svg-icons';
-import type { QSORecord, LogBookStatistics, CreateQSORequest, LogBookImportResult, LogBookExportOptions, OperatorStatus } from '@tx5dr/contracts';
+import type { QSORecord, LogBookStatistics, CreateQSORequest, LogBookImportResult, LogBookExportOptions, OperatorStatus, LogbookHealth } from '@tx5dr/contracts';
 import { api, WSClient, ApiError, getDisplayMode } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../../utils/config';
 import { isElectron } from '../../utils/config';
@@ -44,6 +44,10 @@ import { createLogger } from '../../utils/logger';
 import RecentQSOGlobeCard from './RecentQSOGlobeCard';
 import { getAuthHeaders, getStoredJwt } from '../../utils/authHeaders';
 import { QrzCallsignLink } from '../common/QrzCallsignLink';
+import {
+  isLogbookHealthOperationError,
+  resolveLogbookViewPolicy,
+} from './logbookViewPolicy';
 
 const logger = createLogger('LogbookViewer');
 
@@ -107,8 +111,11 @@ function formatDateValueForUtcExport(value: ExportDateValue): string {
 const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, operatorCallsign }) => {
   const { t } = useTranslation('logbook');
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
+  const refreshLogbookDataRef = useRef<() => Promise<void>>(async () => {});
   const [qsos, setQsos] = useState<QSORecord[]>([]);
   const [statistics, setStatistics] = useState<LogBookStatistics | null>(null);
+  const [health, setHealth] = useState<LogbookHealth | null>(null);
+  const [isRetryingHealth, setIsRetryingHealth] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<QSOFilters>({});
@@ -147,18 +154,16 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // 获取操作员连接的日志本
   // 日志本ID就是呼号，如果没有指定则使用操作员ID作为后备
   const effectiveLogBookId = logBookId || operatorId;
+  const viewPolicy = resolveLogbookViewPolicy(health, error);
 
   // 日志本专用WebSocket：只接收轻量通知，然后主动刷新
   useEffect(() => {
-    // 仅按 operatorId 订阅，避免 logBookId 不一致导致过滤失败
+    // Include both requested identifiers. The server projects canonical
+    // logbook-only health changes back onto the associated operatorId.
     // 浏览器 WebSocket 不支持自定义请求头，通过 token 参数传递 JWT
     const wsJwt = getStoredJwt() || undefined;
-    const url = getLogbookWebSocketUrl({ operatorId, token: wsJwt });
+    const url = getLogbookWebSocketUrl({ operatorId, logBookId: effectiveLogBookId, token: wsJwt });
     const client = new WSClient({ url, heartbeatInterval: 30000 });
-
-    const refresh = () => {
-      refreshLogbookData().catch(() => {});
-    };
 
     // 类型断言：logbookChangeNotice 是日志本专用事件
     const handleLogbookChange = (payload: unknown) => {
@@ -167,7 +172,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       // 以 operatorId 为主进行匹配；其次尝试 logBookId
       if (data.operatorId === operatorId || (data.logBookId && data.logBookId === effectiveLogBookId)) {
         logger.debug('Received logbook change notification, refreshing data');
-        refresh();
+        refreshLogbookDataRef.current().catch(() => {});
       }
     };
 
@@ -226,7 +231,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : t('error.loadQSOFailed');
       logger.error('Failed to load QSO records:', error);
-      setError(errorMessage);
+      setError(isLogbookHealthOperationError(error) ? null : errorMessage);
       setQsos([]); // 清空数据
     } finally {
       setLoading(false);
@@ -238,6 +243,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     try {
       const response = await api.getLogBook(effectiveLogBookId);
       setStatistics(response.data.statistics);
+      setHealth(response.data.health);
     } catch (error) {
       logger.error('Failed to load statistics:', error);
       // 统计信息加载失败不影响QSO记录的显示
@@ -248,6 +254,44 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const refreshLogbookData = async () => {
     await loadQSOs();
     await loadStatistics();
+  };
+  // Keep the socket connection stable while making notifications use the
+  // latest filters, page and page size from this render.
+  refreshLogbookDataRef.current = refreshLogbookData;
+
+  const reportMutationError = async (mutationError: unknown, fallbackMessage: string) => {
+    if (isLogbookHealthOperationError(mutationError)) {
+      await loadStatistics();
+    }
+
+    showErrorToast({
+      userMessage: mutationError instanceof ApiError
+        ? mutationError.userMessage
+        : mutationError instanceof Error ? mutationError.message : fallbackMessage,
+      suggestions: mutationError instanceof ApiError ? mutationError.suggestions : [],
+      severity: mutationError instanceof ApiError ? mutationError.severity : 'error',
+      code: mutationError instanceof ApiError ? mutationError.code : 'LOGBOOK_WRITE_FAILED',
+    });
+  };
+
+  const retryLogbookOpen = async () => {
+    try {
+      setIsRetryingHealth(true);
+      const response = await api.retryOpenLogBook(effectiveLogBookId);
+      setHealth(response.data.health);
+      await refreshLogbookData();
+    } catch (retryError) {
+      showErrorToast({
+        userMessage: retryError instanceof ApiError
+          ? retryError.userMessage
+          : retryError instanceof Error ? retryError.message : t('health.retryFailed'),
+        severity: 'error',
+        code: retryError instanceof ApiError ? retryError.code : 'LOGBOOK_UNAVAILABLE',
+        suggestions: retryError instanceof ApiError ? retryError.suggestions : [],
+      });
+    } finally {
+      setIsRetryingHealth(false);
+    }
   };
 
   // 初始加载与筛选/分页变化时加载
@@ -477,7 +521,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   };
 
   const triggerImportPicker = () => {
-    if (isImporting) {
+    if (isImporting || !viewPolicy.writable) {
       return;
     }
     setIsImportGuideOpen(true);
@@ -492,7 +536,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     const file = event.target.files?.[0];
     event.target.value = '';
 
-    if (!file || isImporting) {
+    if (!file || isImporting || !viewPolicy.writable) {
       return;
     }
 
@@ -534,7 +578,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
   // Plugin-based sync provider handler (generic for all providers)
   const handleProviderSync = async (providerId: string, operation: 'download' | 'upload' | 'full_sync') => {
-    if (syncingProviders[providerId]) return;
+    if (syncingProviders[providerId] || !viewPolicy.writable) return;
     const provider = syncProviders.find(p => p.id === providerId);
     const name = provider?.displayName ?? providerId;
 
@@ -744,6 +788,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
   // 打开编辑 Modal
   const handleEditClick = (qso: QSORecord) => {
+    if (!viewPolicy.writable) return;
+
     setEditingQSO(qso);
     setEditFormData({
       callsign: qso.callsign,
@@ -769,7 +815,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
   // 保存编辑
   const handleEditSave = async () => {
-    if (!editingQSO) return;
+    if (!editingQSO || !viewPolicy.writable) return;
 
     try {
       setIsEditSaving(true);
@@ -786,7 +832,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       logger.debug('QSO record updated successfully');
     } catch (error) {
       logger.error('Failed to update QSO record:', error);
-      setError(error instanceof Error ? error.message : t('error.updateQSOFailed'));
+      await reportMutationError(error, t('error.updateQSOFailed'));
     } finally {
       setIsEditSaving(false);
     }
@@ -794,13 +840,15 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
   // 打开删除确认 Modal
   const handleDeleteClick = (qso: QSORecord) => {
+    if (!viewPolicy.writable) return;
+
     setDeletingQSO(qso);
     setIsDeleteModalOpen(true);
   };
 
   // 确认删除
   const handleDeleteConfirm = async () => {
-    if (!deletingQSO) return;
+    if (!deletingQSO || !viewPolicy.writable) return;
 
     try {
       setIsDeleting(true);
@@ -816,7 +864,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       logger.debug('QSO record deleted successfully');
     } catch (error) {
       logger.error('Failed to delete QSO record:', error);
-      setError(error instanceof Error ? error.message : t('error.deleteQSOFailed'));
+      await reportMutationError(error, t('error.deleteQSOFailed'));
     } finally {
       setIsDeleting(false);
     }
@@ -824,6 +872,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
   // 补录：保存新 QSO 记录
   const handleAddSave = async () => {
+    if (!viewPolicy.writable) return;
+
     const { callsign, frequency, mode: qsoMode, startTime } = addFormData;
     if (!callsign?.trim() || !frequency || !qsoMode || !startTime) return;
 
@@ -849,7 +899,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       logger.debug('QSO record created manually');
     } catch (error) {
       logger.error('Failed to create QSO record:', error);
-      setError(error instanceof Error ? error.message : t('error.createQSOFailed'));
+      await reportMutationError(error, t('error.createQSOFailed'));
     } finally {
       setIsAddSaving(false);
     }
@@ -913,7 +963,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   ], [t]);
 
   // 渲染单元格内容
-  const renderCell = React.useCallback((qso: QSORecord, columnKey: React.Key) => {
+  const renderCell = (qso: QSORecord, columnKey: React.Key) => {
     const cellValue = qso[columnKey as keyof QSORecord];
 
     switch (columnKey) {
@@ -1029,6 +1079,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 size="sm"
                 variant="light"
                 isIconOnly
+                isDisabled={!viewPolicy.writable}
                 onPress={() => handleEditClick(qso)}
                 className="min-w-unit-8 w-8 h-8"
               >
@@ -1041,6 +1092,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 variant="light"
                 color="danger"
                 isIconOnly
+                isDisabled={!viewPolicy.writable}
                 onPress={() => handleDeleteClick(qso)}
                 className="min-w-unit-8 w-8 h-8"
               >
@@ -1052,7 +1104,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       default:
         return cellValue;
     }
-  }, [t]);
+  };
 
   const titleSection = React.useMemo(() => (
     <div className="flex items-center gap-3">
@@ -1670,7 +1722,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 onAction={(key) => {
                   if (key === 'settings') {
                     openSyncConfig(provider.id);
-                  } else {
+                  } else if (viewPolicy.writable) {
                     const action = providerActions.find(a => a.id === String(key));
                     if (action?.pageId) {
                       // Open iframe modal for this action
@@ -1689,6 +1741,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   ...providerActions.map((action) => (
                     <DropdownItem
                       key={action.id}
+                      isDisabled={!viewPolicy.writable}
                       startContent={<FontAwesomeIcon icon={actionIcon(action.icon)} className={action.icon === 'download' ? 'text-primary' : action.icon === 'upload' ? 'text-secondary' : 'text-warning'} />}
                       description={resolveDesc(action)}
                     >
@@ -1745,6 +1798,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           variant="bordered"
           size="sm"
           isLoading={isImporting}
+          isDisabled={!viewPolicy.writable}
           onPress={triggerImportPicker}
           className="min-w-0"
           startContent={!isImporting ? <FontAwesomeIcon icon={faUpload} className="md:hidden" /> : undefined}
@@ -1756,6 +1810,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           color="primary"
           variant="flat"
           size="sm"
+          isDisabled={!viewPolicy.writable}
           startContent={<FontAwesomeIcon icon={faPlus} />}
           onPress={() => {
             setAddFormData(createDefaultAddQSOFormData());
@@ -1965,33 +2020,64 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const isExportRangeIncomplete = exportRangeMode === 'range' && (!exportDateRange?.start || !exportDateRange.end);
   const pendingExportFormatLabel = pendingExportFormat === 'csv' ? t('export.csv') : t('export.adif');
 
-  // 如果有错误，显示错误信息
-  if (error) {
-    return (
-      <div className="h-full flex items-center justify-center p-6 max-w-7xl mx-auto">
-        <Alert
-          color="danger"
-          title={t('error.loadFailed')}
-          description={error}
-          endContent={
-            <Button
-              color="danger"
-              variant="light"
-              onPress={() => {
-                setError(null);
-                refreshLogbookData().catch(() => {});
-              }}
-            >
-              {t('error.retry')}
-            </Button>
-          }
-        />
-      </div>
-    );
-  }
-
   return (
     <div className="w-full">
+      {viewPolicy.showHealthBanner && health && (
+        <div className="p-2 md:px-4 lg:px-6 max-w-7xl mx-auto">
+          <Alert
+            color={health.state === 'loading' ? 'primary' : health.state === 'degraded' ? 'warning' : 'danger'}
+            variant="flat"
+            title={t(`health.state.${health.state}`)}
+            description={(
+              <div className="space-y-1">
+                <p>{t(`health.description.${health.state}`)}</p>
+                {health.issues.map((issue, index) => (
+                  <p key={`${issue.code}-${issue.occurredAt}-${index}`} className="text-xs">
+                    {issue.message}
+                    {issue.affectedRecords !== undefined
+                      ? ` ${t('health.affectedRecords', { count: issue.affectedRecords })}`
+                      : ''}
+                    {issue.recoveryFileName
+                      ? ` ${t('health.recoveryFile', { name: issue.recoveryFileName })}`
+                      : ''}
+                  </p>
+                ))}
+              </div>
+            )}
+            endContent={health.state !== 'loading' ? (
+              <Button
+                color={health.state === 'degraded' ? 'warning' : 'danger'}
+                variant="light"
+                isLoading={isRetryingHealth}
+                onPress={() => { void retryLogbookOpen(); }}
+              >
+                {t('health.retry')}
+              </Button>
+            ) : undefined}
+          />
+        </div>
+      )}
+      {viewPolicy.showLoadError && error && (
+        <div className="p-2 md:px-4 lg:px-6 max-w-7xl mx-auto">
+          <Alert
+            color="danger"
+            title={t('error.loadFailed')}
+            description={error}
+            endContent={
+              <Button
+                color="danger"
+                variant="light"
+                onPress={() => {
+                  setError(null);
+                  refreshLogbookDataRef.current().catch(() => {});
+                }}
+              >
+                {t('error.retry')}
+              </Button>
+            }
+          />
+        </div>
+      )}
       <RecentQSOGlobeCard
         logBookId={effectiveLogBookId}
         qsos={qsos}
@@ -2124,6 +2210,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         onChange={setEditFormData}
         onSave={handleEditSave}
         isSaving={isEditSaving}
+        isSaveDisabled={!viewPolicy.writable}
         mode="edit"
       />
 
@@ -2175,6 +2262,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               color="danger"
               onPress={handleDeleteConfirm}
               isLoading={isDeleting}
+              isDisabled={!viewPolicy.writable}
             >
               {t('deleteQso.confirmDelete')}
             </Button>
@@ -2194,6 +2282,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         onChange={setAddFormData}
         onSave={handleAddSave}
         isSaving={isAddSaving}
+        isSaveDisabled={!viewPolicy.writable}
         mode="add"
       />
 

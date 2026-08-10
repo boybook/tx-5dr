@@ -15,7 +15,9 @@ import type {
   SpectrumFrame,
   SpectrumKind,
   SubWindowInfo,
-  SystemStatus
+  SystemStatus,
+  WSLogbookHealthChangedMessage,
+  WSLogbookWriteFailedMessage,
 } from '@tx5dr/contracts';
 import { FT8MessageParser, WSMessageHandler } from '@tx5dr/core';
 import { getBandFromFrequency } from '@tx5dr/core';
@@ -602,6 +604,14 @@ export class WSServer extends WSMessageHandler {
     // 监听日志本更新事件
     this.digitalRadioEngine.on('logbookUpdated' as any, (data: { logBookId: string; statistics: any; operatorId?: string }) => {
       this.broadcastLogbookUpdated(data);
+    });
+
+    this.digitalRadioEngine.on('logbookHealthChanged' as any, (data: WSLogbookHealthChangedMessage['data']) => {
+      this.broadcastLogbookHealthChanged(data);
+    });
+
+    this.digitalRadioEngine.on('logbookWriteFailed' as any, (data: WSLogbookWriteFailedMessage['data']) => {
+      this.broadcastLogbookWriteFailed(data);
     });
 
     // 监听电台状态变化事件
@@ -2290,6 +2300,40 @@ export class WSServer extends WSMessageHandler {
     });
 
     logger.debug(`sent logbook updated event to ${activeConnections.length} clients`, { logBookId: data.logBookId });
+  }
+
+  broadcastLogbookHealthChanged(data: WSLogbookHealthChangedMessage['data']): void {
+    const activeConnections = this.getActiveConnections()
+      .filter(conn => conn.isHandshakeCompleted() && conn.hasMinRole(UserRole.OPERATOR));
+
+    activeConnections.forEach(connection => {
+      if (this.connectionCanObserveLogbook(connection, data.logBookId)) {
+        connection.send(WSMessageType.LOGBOOK_HEALTH_CHANGED, data);
+      }
+    });
+  }
+
+  broadcastLogbookWriteFailed(data: WSLogbookWriteFailedMessage['data']): void {
+    const activeConnections = this.getActiveConnections()
+      .filter(conn => conn.isHandshakeCompleted() && conn.hasMinRole(UserRole.OPERATOR));
+
+    activeConnections.forEach(connection => {
+      const canObserve = data.operatorId
+        ? connection.isOperatorEnabled(data.operatorId) && connection.hasOperatorAccess(data.operatorId)
+        : this.connectionCanObserveLogbook(connection, data.logBookId);
+      if (canObserve) {
+        connection.send(WSMessageType.LOGBOOK_WRITE_FAILED, data);
+      }
+    });
+  }
+
+  private connectionCanObserveLogbook(connection: WSConnection, logBookId: string): boolean {
+    if (connection.getUserRole() === UserRole.ADMIN) return true;
+    const operatorIds = this.digitalRadioEngine.operatorManager
+      .getLogManager()
+      .getOperatorIdsForLogBook(logBookId);
+    return operatorIds.some(operatorId =>
+      connection.isOperatorEnabled(operatorId) && connection.hasOperatorAccess(operatorId));
   }
 
   private broadcastQSOToast(operatorId: string, qso: any, key: ServerMessageKey.QSO_LOGGED | ServerMessageKey.QSO_UPDATED): void {

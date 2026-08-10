@@ -2,8 +2,44 @@ import type {
   DxccStatus,
   LogBookDxccSummary,
   LogBookImportResult,
+  LogbookHealth,
+  LogbookOperationErrorCode,
   QSORecord,
 } from '@tx5dr/contracts';
+export { LOGBOOK_OPERATION_ERROR_CODES } from '@tx5dr/contracts';
+export type { LogbookOperationErrorCode } from '@tx5dr/contracts';
+
+export interface LogbookWriteFailure {
+  operation: 'append' | 'rewrite' | 'import';
+  error: {
+    code: LogbookOperationErrorCode;
+    message: string;
+    systemCode?: string;
+    occurredAt: number;
+  };
+  qsoRecord?: QSORecord;
+  operatorId?: string;
+}
+
+/** A stable, transport-safe failure raised by logbook operations. */
+export class LogbookOperationError extends Error {
+  readonly code: LogbookOperationErrorCode;
+  readonly cause?: unknown;
+  readonly systemCode?: string;
+
+  constructor(
+    code: LogbookOperationErrorCode,
+    message: string,
+    options: { cause?: unknown; systemCode?: string } = {},
+  ) {
+    super(message);
+    this.name = 'LogbookOperationError';
+    this.code = code;
+    this.cause = options.cause;
+    this.systemCode = options.systemCode;
+    Object.setPrototypeOf(this, LogbookOperationError.prototype);
+  }
+}
 
 /**
  * 日志查询选项
@@ -257,21 +293,34 @@ export interface ILogProvider {
    * 初始化日志Provider
    * @param options 初始化选项
    */
-  initialize(options?: Record<string, unknown>): Promise<void>;
+  initialize(options?: Record<string, unknown>): Promise<LogbookHealth>;
+
+  /** Return the latest per-logbook availability and recovery status. */
+  getHealth(): LogbookHealth;
+
+  /** Subscribe to health changes. The returned function removes the listener. */
+  onHealthChanged(listener: (health: LogbookHealth) => void): () => void;
+
+  /** Subscribe to individual mutations that were not durably committed. */
+  onWriteFailed(listener: (failure: LogbookWriteFailure) => void): () => void;
+
+  /** Explicitly retry opening an unavailable or read-only logbook. */
+  retryOpen(): Promise<LogbookHealth>;
   
   /**
    * 添加QSO记录
    * @param record QSO记录
    * @param operatorId 操作员ID（可选，用于多操作员场景）
    */
-  addQSO(record: QSORecord, operatorId?: string): Promise<void>;
+  addQSO(record: QSORecord, operatorId?: string): Promise<QSORecord>;
   
   /**
    * 更新QSO记录
    * @param id 记录ID
    * @param updates 更新内容
+   * @param operatorId 发起自动记录的操作员ID（可选，用于定向失败通知）
    */
-  updateQSO(id: string, updates: Partial<QSORecord>): Promise<void>;
+  updateQSO(id: string, updates: Partial<QSORecord>, operatorId?: string): Promise<QSORecord>;
   
   /**
    * 删除QSO记录
@@ -354,7 +403,7 @@ export interface ILogProvider {
    * 导入日志（ADIF格式）
    * @param adifContent ADIF内容
    */
-  importADIF(adifContent: string): Promise<LogBookImportResult>;
+  importADIF(adifContent: string | Uint8Array): Promise<LogBookImportResult>;
 
   /**
    * 导入日志（TX-5DR CSV格式）

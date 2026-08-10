@@ -7,7 +7,11 @@ import { initializeConsoleLogger, ConsoleLogger } from './utils/console-logger.j
 import { setGlobalInspector } from './state-machines/inspector.js';
 import { createLogger, setLogLevel, getActiveLogLevel } from './utils/logger.js';
 import { ConfigManager } from './config/config-manager.js';
-import { blockNewMutations, markProcessShuttingDown } from './utils/process-shutdown.js';
+import {
+  awaitWithShutdownDeadline,
+  blockNewMutations,
+  markProcessShuttingDown,
+} from './utils/process-shutdown.js';
 import { createServerReadyState, resolveServerPortOptions, writeServerReadyFile } from './utils/server-ready.js';
 import { PersistenceCoordinator } from './utils/persistence/index.js';
 import { bootstrapCoordinator } from './services/BootstrapCoordinator.js';
@@ -197,8 +201,20 @@ async function start() {
     bootstrapCoordinator.completePhase('core-http');
     logger.info(`TX-5DR server listening on ${portOptions.listenHost}:${actualPort}`);
 
-    // 启动引擎（仅在有激活的 Profile 时）
     const clockManager = DigitalRadioEngine.getInstance();
+
+    // Logbook inventory is a post-ready maintenance concern and must not depend
+    // on an active radio profile. This also covers orphan legacy artifacts when
+    // no operator is currently configured.
+    try {
+      await clockManager.operatorManager.getLogManager().initialize();
+    } catch (error) {
+      logger.warn('logbook maintenance initialization failed; server remains available', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // 启动引擎（仅在有激活的 Profile 时）
     const hasActiveProfile = ConfigManager.getInstance().getActiveProfileId() !== null;
     if (hasActiveProfile) {
       logger.info('starting engine');
@@ -324,7 +340,11 @@ function startLogMaintenanceTasks(consoleLogger: ConsoleLogger): void {
 
       try {
         const engine = DigitalRadioEngine.getInstance();
-        await engine.operatorManager.getLogManager().close();
+        await awaitWithShutdownDeadline(
+          'logbook close',
+          engine.operatorManager.getLogManager().close(),
+          remainingShutdownBudgetMs(shutdownStartedAt),
+        );
         logger.info('logbook providers flushed');
       } catch (error) {
         logger.warn('logbook flush during shutdown failed', { error });

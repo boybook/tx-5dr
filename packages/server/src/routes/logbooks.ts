@@ -4,6 +4,7 @@ import {
   LogBookListResponseSchema,
   LogBookDetailResponseSchema,
   LogBookActionResponseSchema,
+  LogbookRecoveryRetryResponseSchema,
   LogBookImportResponseSchema,
   CreateLogBookRequestSchema,
   UpdateLogBookRequestSchema,
@@ -33,7 +34,7 @@ import {
 } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
-import { gridToCoordinates, LogQueryOptions } from "@tx5dr/core";
+import { gridToCoordinates, LogbookOperationError, LogQueryOptions } from "@tx5dr/core";
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { requireRole, requireLogbookAccess } from '../auth/authPlugin.js';
 import { normalizeCallsign } from '../utils/callsign.js';
@@ -42,6 +43,24 @@ import { detectLogImportFormat, normalizeImportText } from '../log/logImportUtil
 const logger = createLogger('LogbooksRoute');
 const LOGBOOK_IMPORT_FILE_SIZE_LIMIT_MB = 100;
 const LOGBOOK_IMPORT_FILE_SIZE_LIMIT_BYTES = LOGBOOK_IMPORT_FILE_SIZE_LIMIT_MB * 1024 * 1024;
+
+function toLogbookRouteError(error: unknown, fallbackCode: RadioErrorCode): RadioError {
+  if (error instanceof RadioError) return error;
+  if (error instanceof LogbookOperationError) {
+    return new RadioError({
+      code: error.code as RadioErrorCode,
+      message: error.message,
+      userMessage: error.message,
+      severity: RadioErrorSeverity.ERROR,
+      suggestions: error.code === 'LOGBOOK_WRITE_FAILED'
+        ? ['Free disk space or verify the logbook directory, then retry']
+        : ['Review the logbook status and use Retry after resolving the reported issue'],
+      cause: error,
+      context: error.systemCode ? { systemCode: error.systemCode } : undefined,
+    });
+  }
+  return RadioError.from(error, fallbackCode);
+}
 
 const BAND_FREQUENCY_RANGES: Record<string, { min: number; max: number }> = {
   '160m': { min: 1800000, max: 2000000 },
@@ -97,8 +116,8 @@ function getImportPayloadFromBody(body: unknown): {
   format: LogBookImportFormat;
 } {
   const payload = body as { adifContent?: string } | undefined;
-  const content = normalizeImportText(payload?.adifContent || '');
-  if (!content) {
+  const content = payload?.adifContent ?? '';
+  if (!normalizeImportText(content)) {
     throw new RadioError({
       code: RadioErrorCode.INVALID_OPERATION,
       message: 'Missing logbook import content',
@@ -109,6 +128,8 @@ function getImportPayloadFromBody(body: unknown): {
   }
 
   return {
+    // JSON has already decoded the text; preserve its exact UTF-8 content so
+    // untouched external records can be appended byte-for-byte by Provider.
     content,
     format: 'adif',
   };
@@ -202,7 +223,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         filePath: book.filePath,
         createdAt: book.createdAt,
         lastUsed: book.lastUsed,
-        isActive: book.isActive
+        isActive: book.isActive,
+        health: book.provider.getHealth(),
       }));
 
       const response = LogBookListResponseSchema.parse({
@@ -213,7 +235,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       return reply.send(response);
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
-      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -226,8 +248,16 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       const { id } = request.params;
       const logBook = await resolveLogBookOrThrow(id);
 
-      // 获取统计信息
-      const statistics = await logBook.provider.getStatistics();
+      const health = logBook.provider.getHealth();
+      const statistics = health.readable
+        ? await logBook.provider.getStatistics()
+        : {
+          totalQSOs: 0,
+          uniqueCallsigns: 0,
+          uniqueGrids: 0,
+          byMode: new Map<string, number>(),
+          byBand: new Map<string, number>(),
+        };
       
       // 获取连接的操作员
       const connectedOperators = digitalRadioEngine.operatorManager.getAllOperators()
@@ -247,6 +277,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
           createdAt: logBook.createdAt,
           lastUsed: logBook.lastUsed,
           isActive: logBook.isActive,
+          health,
           statistics: {
             totalQSOs: statistics.totalQSOs || 0,
             totalOperators: connectedOperators.length,
@@ -262,7 +293,20 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       return reply.send(response);
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
-      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  fastify.post<{ Params: { id: string } }>('/:id/recovery/retry', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+    try {
+      const logBook = await resolveLogBookOrThrow(request.params.id);
+      const health = await logBook.provider.retryOpen();
+      return reply.send(LogbookRecoveryRetryResponseSchema.parse({
+        success: true,
+        data: { logBookId: logBook.id, health },
+      }));
+    } catch (error) {
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -286,14 +330,15 @@ export async function logbookRoutes(fastify: FastifyInstance) {
           filePath: logBook.filePath,
           createdAt: logBook.createdAt,
           lastUsed: logBook.lastUsed,
-          isActive: logBook.isActive
+          isActive: logBook.isActive,
+          health: logBook.provider.getHealth(),
         }
       });
 
       return reply.status(201).send(response);
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
-      throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_CONFIG);
     }
   });
 
@@ -350,14 +395,15 @@ export async function logbookRoutes(fastify: FastifyInstance) {
           filePath: logBook.filePath,
           createdAt: logBook.createdAt,
           lastUsed: logBook.lastUsed,
-          isActive: logBook.isActive
+          isActive: logBook.isActive,
+          health: logBook.provider.getHealth(),
         }
       });
 
       return reply.send(response);
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
-      throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_CONFIG);
     }
   });
 
@@ -377,7 +423,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       });
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
-      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -398,7 +444,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       });
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
-      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -418,7 +464,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       });
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
-      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -516,7 +562,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       });
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
-      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -646,7 +692,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       return reply.send(response);
     } catch (error) {
       logger.error('Failed to build recent globe payload', error);
-      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -698,7 +744,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         },
       }));
     } catch (error) {
-      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -801,7 +847,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       return reply.send(exportedData);
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
-      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -812,7 +858,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: { id: string }; Body: { adifContent?: string } }>('/:id/import', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
     try {
       const { id } = request.params;
-      let content: string;
+      let content: string | Uint8Array;
       let format: LogBookImportFormat;
 
       if (request.isMultipart()) {
@@ -835,8 +881,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
           }
 
           const buffer = await file.toBuffer();
-          content = normalizeImportText(buffer.toString('utf-8'));
-          if (!content) {
+          const detectionText = normalizeImportText(buffer.toString('utf-8'));
+          if (!detectionText) {
             throw new RadioError({
               code: RadioErrorCode.INVALID_OPERATION,
               message: 'Import file is empty',
@@ -845,7 +891,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
               suggestions: ['Choose a non-empty ADI, ADIF, or CSV file'],
             });
           }
-          format = detectLogImportFormat(content, file.filename);
+          format = detectLogImportFormat(detectionText, file.filename);
+          content = format === 'adif' ? new Uint8Array(buffer) : detectionText;
         } catch (error) {
           if (isMultipartFileTooLargeError(error)) {
             throw createImportFileTooLargeError();
@@ -881,7 +928,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       }
 
       const result = format === 'csv'
-        ? await logBook.provider.importCSV(content)
+        ? await logBook.provider.importCSV(typeof content === 'string' ? content : Buffer.from(content).toString('utf8'))
         : await logBook.provider.importADIF(content);
 
       if (result.imported > 0 || result.merged > 0) {
@@ -906,7 +953,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       return reply.send(response);
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
-      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -956,9 +1003,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         messageHistory: body.messageHistory ?? [],
       };
 
-      await logBook.provider.addQSO(record);
-      const created = await logBook.provider.getQSO(newId);
-      const createdRecord = created ?? record;
+      const createdRecord = await logBook.provider.addQSO(record, operatorId);
 
       logger.info('QSO record created manually', { logBookId: logBook.id, callsign: body.callsign, operatorId });
 
@@ -991,10 +1036,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       return reply.status(201).send({
         success: true,
         message: 'QSO record created',
-        data: created,
+        data: createdRecord,
       });
     } catch (error) {
-      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -1029,21 +1074,27 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         });
       }
 
-      // 更新QSO记录
-      await logBook.provider.updateQSO(qsoId, updates);
+      const updatedQSO = await logBook.provider.updateQSO(qsoId, updates);
+      const operatorId = logManager.getOperatorIdsForLogBook(logBook.id)[0] ?? '';
 
-      // 获取更新后的记录
-      const updatedQSO = await logBook.provider.getQSO(qsoId);
-
-      if (!updatedQSO) {
-        // 📊 Day14：资源未找到使用 RadioError
-        throw new RadioError({
-          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `QSO record ${qsoId} does not exist`,
-          userMessage: 'QSO record not found',
-          severity: RadioErrorSeverity.WARNING,
-          suggestions: ['Check if QSO record ID is correct', 'Refresh logbook data'],
+      // Provider resolves only after the rewritten ADIF is durably committed.
+      // Keep every success notification strictly after that commit point.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      digitalRadioEngine.emit('qsoRecordUpdated' as any, {
+        operatorId,
+        logBookId: logBook.id,
+        qsoRecord: updatedQSO,
+      });
+      try {
+        const statistics = await logBook.provider.getStatistics();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        digitalRadioEngine.emit('logbookUpdated' as any, {
+          logBookId: logBook.id,
+          statistics,
+          operatorId,
         });
+      } catch (statsError) {
+        logger.warn('Failed to get logbook statistics after manual QSO update:', statsError);
       }
 
       return reply.send({
@@ -1053,7 +1104,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       });
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
-      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -1090,13 +1141,25 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       // 删除QSO记录
       await logBook.provider.deleteQSO(qsoId);
 
+      try {
+        const statistics = await logBook.provider.getStatistics();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        digitalRadioEngine.emit('logbookUpdated' as any, {
+          logBookId: logBook.id,
+          statistics,
+          operatorId: logManager.getOperatorIdsForLogBook(logBook.id)[0] ?? '',
+        });
+      } catch (statsError) {
+        logger.warn('Failed to get logbook statistics after manual QSO deletion:', statsError);
+      }
+
       return reply.send({
         success: true,
         message: 'QSO record deleted successfully'
       });
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
-      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -1115,7 +1178,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         path: logbookDir
       });
     } catch (error) {
-      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 }

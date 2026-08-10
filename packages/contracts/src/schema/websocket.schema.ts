@@ -21,7 +21,11 @@ import type {
 } from './plugin.schema.js';
 import { ModeDescriptorSchema } from './mode.schema.js';
 import { QSORecordSchema, TargetSelectionPriorityModeSchema } from './qso.schema.js';
-import { LogBookStatisticsSchema } from './logbook.schema.js';
+import {
+  LogBookStatisticsSchema,
+  LogbookHealthSchema,
+  LogbookOperationErrorCodeSchema,
+} from './logbook.schema.js';
 import { RadioInfoSchema, HamlibConfigSchema, TunerStatusSchema, TunerCapabilitiesSchema, RadioConnectionStatusSchema, ReconnectProgressSchema, CoreRadioCapabilitiesSchema, CoreCapabilityDiagnosticsSchema } from './radio.schema.js';
 import { RadioProfileSchema, ProfileChangedEventSchema } from './radio-profile.schema.js';
 import { UserRole } from './auth.schema.js';
@@ -103,6 +107,8 @@ export enum WSMessageType {
   QSO_RECORD_ADDED = 'qsoRecordAdded',
   QSO_RECORD_UPDATED = 'qsoRecordUpdated',
   LOGBOOK_UPDATED = 'logbookUpdated',
+  LOGBOOK_HEALTH_CHANGED = 'logbookHealthChanged',
+  LOGBOOK_WRITE_FAILED = 'logbookWriteFailed',
   // 仅通知的日志本变更事件（专用于日志本WS）
   LOGBOOK_CHANGE_NOTICE = 'logbookChangeNotice',
   
@@ -955,6 +961,33 @@ export const WSLogbookUpdatedMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSLogbookUpdatedMessage = z.infer<typeof WSLogbookUpdatedMessageSchema>;
 
+export const WSLogbookHealthChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.LOGBOOK_HEALTH_CHANGED),
+  data: z.object({
+    logBookId: z.string(),
+    health: LogbookHealthSchema,
+  }),
+});
+
+export type WSLogbookHealthChangedMessage = z.infer<typeof WSLogbookHealthChangedMessageSchema>;
+
+export const WSLogbookWriteFailedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.LOGBOOK_WRITE_FAILED),
+  data: z.object({
+    logBookId: z.string(),
+    operatorId: z.string().optional(),
+    qsoRecord: QSORecordSchema.optional(),
+    error: z.object({
+      code: LogbookOperationErrorCodeSchema,
+      message: z.string(),
+      systemCode: z.string().optional(),
+      occurredAt: z.number(),
+    }),
+  }),
+});
+
+export type WSLogbookWriteFailedMessage = z.infer<typeof WSLogbookWriteFailedMessageSchema>;
+
 /**
  * 电台状态变化消息
  */
@@ -1443,6 +1476,8 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSQSORecordAddedMessageSchema,
   WSQSORecordUpdatedMessageSchema,
   WSLogbookUpdatedMessageSchema,
+  WSLogbookHealthChangedMessageSchema,
+  WSLogbookWriteFailedMessageSchema,
   
   // 客户端启用操作员列表消息
   WSSetClientEnabledOperatorsMessageSchema,
@@ -1631,6 +1666,8 @@ export interface DigitalRadioEngineEvents {
   qsoRecordAdded: (data: { operatorId: string; logBookId: string; qsoRecord: z.infer<typeof QSORecordSchema> }) => void;
   qsoRecordUpdated: (data: { operatorId: string; logBookId: string; qsoRecord: z.infer<typeof QSORecordSchema> }) => void;
   logbookUpdated: (data: { logBookId: string; statistics: z.infer<typeof LogBookStatisticsSchema>; operatorId?: string }) => void;
+  logbookHealthChanged: (data: { logBookId: string; health: z.infer<typeof LogbookHealthSchema> }) => void;
+  logbookWriteFailed: (data: z.infer<typeof WSLogbookWriteFailedMessageSchema>['data']) => void;
   textMessage: (data: z.infer<typeof WSTextMessageSchema>['data']) => void;
 
   /** @deprecated Tuner state is now delivered via radioCapabilityChanged event (id='tuner_switch') */

@@ -72,3 +72,16 @@ test('encodes slash-containing logbook IDs when querying QSOs', async () => {
     restore();
   }
 });
+
+test('encodes slash-containing logbook IDs when retrying recovery', async () => {
+  const { calls, restore } = installFetchMock();
+  try {
+    await api.retryOpenLogBook('BG5/ABC', '/api');
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, '/api/logbooks/BG5%2FABC/recovery/retry');
+    assert.equal(calls[0].init?.method, 'POST');
+  } finally {
+    restore();
+  }
+});

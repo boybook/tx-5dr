@@ -6,6 +6,7 @@ import {
   RadioOperator,
   ClockSourceSystem,
   FT8MessageParser,
+  LogbookOperationError,
 } from '@tx5dr/core';
 import {
   type RadioOperatorConfig,
@@ -13,6 +14,7 @@ import {
   type TransmitRequest,
   type DigitalRadioEngineEvents,
   type ModeDescriptor,
+  type LogBookInfo,
   type QSORecord,
   type SlotPack,
   type FrameMessage,
@@ -31,6 +33,8 @@ import type { SlotPackManager } from '../slot/SlotPackManager.js';
 import type { CallsignContextTracker } from '../slot/CallsignContextTracker.js';
 import { MemoryLeakDetector } from '../utils/MemoryLeakDetector.js';
 import { createLogger } from '../utils/logger.js';
+import { normalizeCallsign } from '../utils/callsign.js';
+import { MutationBlockedError } from '../utils/persistence/PersistenceCoordinator.js';
 
 const logger = createLogger('RadioOperatorManager');
 
@@ -172,6 +176,9 @@ export class RadioOperatorManager {
     this.setRadioFrequency = options.setRadioFrequency;
     this.slotPackManager = options.slotPackManager;
     this.logManager = LogManager.getInstance();
+    this.logManager.setApplicationEventSink((event, data) => {
+      this.eventEmitter.emit(event as any, data as any);
+    });
     this.transmissionTracker = options.transmissionTracker;
     this.getRadioFrequency = options.getRadioFrequency;
     this.getKnownRadioFrequency = options.getKnownRadioFrequency;
@@ -187,6 +194,7 @@ export class RadioOperatorManager {
 
     // 监听记录QSO事件
     const handleRecordQSO = async (data: { operatorId: string; qsoRecord: QSORecord }) => {
+      let providerWriteAttempted = false;
       try {
         logger.debug(`Recording QSO: ${data.qsoRecord.callsign} (operator: ${data.operatorId})`);
 
@@ -194,13 +202,21 @@ export class RadioOperatorManager {
         const logBook = await this.logManager.getOperatorLogBook(data.operatorId);
         if (!logBook) {
           const callsign = this.logManager.getOperatorCallsign(data.operatorId);
-          if (!callsign) {
-            logger.error(`Cannot record QSO: operator ${data.operatorId} has no registered callsign`);
-            return;
-          } else {
-            logger.error(`Cannot record QSO: failed to create logbook for operator ${data.operatorId} (callsign: ${callsign})`);
-            return;
-          }
+          const message = !callsign
+            ? `Cannot record QSO: operator ${data.operatorId} has no registered callsign`
+            : `Cannot record QSO: failed to create logbook for operator ${data.operatorId} (callsign: ${callsign})`;
+          logger.error(message);
+          this.eventEmitter.emit('logbookWriteFailed' as any, {
+            logBookId: callsign ? `logbook-${normalizeCallsign(callsign)}` : `operator-${data.operatorId}`,
+            operatorId: data.operatorId,
+            qsoRecord: data.qsoRecord,
+            error: {
+              code: 'LOGBOOK_UNAVAILABLE',
+              message,
+              occurredAt: Date.now(),
+            },
+          });
+          return;
         }
         
         // 兜底校正频率：防止误将音频偏移(Hz)写入为绝对频率
@@ -242,37 +258,58 @@ export class RadioOperatorManager {
         const completedQSO = await this.completeAutomaticQSORecord(data.operatorId, normalizedQSO);
         const mergeCandidate = await this.findMergeCandidate(logBook.provider, completedQSO);
 
-        let persistedQSO = completedQSO;
+        let persistedQSO: QSORecord;
         let eventName: 'qsoRecordAdded' | 'qsoRecordUpdated' = 'qsoRecordAdded';
+        let shouldAutoSync = false;
 
         if (mergeCandidate) {
           const mergedQSO = this.mergeQSORecord(mergeCandidate, completedQSO);
           const { id: _id, ...updates } = mergedQSO;
 
           logger.debug(`Updating existing QSO ${mergeCandidate.id} in logbook ${logBook.name}: ${mergedQSO.callsign} @ ${new Date(mergedQSO.startTime).toISOString()} (${mergedQSO.frequency}Hz)`);
-          await logBook.provider.updateQSO(mergeCandidate.id, updates);
-          persistedQSO = await logBook.provider.getQSO(mergeCandidate.id) ?? { ...mergedQSO, id: mergeCandidate.id };
+          providerWriteAttempted = true;
+          persistedQSO = await logBook.provider.updateQSO(mergeCandidate.id, updates, data.operatorId);
           eventName = 'qsoRecordUpdated';
         } else {
           logger.debug(`Saving QSO to logbook ${logBook.name}: ${completedQSO.callsign} @ ${new Date(completedQSO.startTime).toISOString()} (${completedQSO.frequency}Hz)`);
-          await logBook.provider.addQSO(completedQSO, data.operatorId);
-          persistedQSO = completedQSO;
+          providerWriteAttempted = true;
+          persistedQSO = await logBook.provider.addQSO(completedQSO, data.operatorId);
+          shouldAutoSync = true;
+        }
 
-          // 自动上传到同步服务（WaveLog/QRZ/LoTW）仅在新增时触发，避免外部重复记录
+        if (!persistedQSO) {
+          throw new Error('Logbook provider completed without returning the durably committed QSO');
+        }
+
+        // Everything below is a post-commit side effect. A listener, sync plugin,
+        // or statistics failure must never turn a durable QSO into a write failure.
+        try {
+          this.eventEmitter.emit(eventName as any, {
+            operatorId: data.operatorId,
+            logBookId: logBook.id,
+            qsoRecord: persistedQSO
+          });
+          logger.debug(`Emitted ${eventName} event: ${persistedQSO.callsign}`);
+        } catch (eventError) {
+          logger.warn(`Failed to emit ${eventName} after QSO commit:`, eventError);
+        }
+
+        if (shouldAutoSync) {
           const operatorCallsign = this.logManager.getOperatorCallsign(data.operatorId);
           if (operatorCallsign) {
-            await this.handleAutoSync(persistedQSO, operatorCallsign);
+            try {
+              await this.handleAutoSync(persistedQSO, operatorCallsign);
+            } catch (syncError) {
+              logger.warn('Auto-sync failed after QSO commit:', syncError);
+            }
           }
         }
 
-        this.eventEmitter.emit(eventName as any, {
-          operatorId: data.operatorId,
-          logBookId: logBook.id,
-          qsoRecord: persistedQSO
-        });
-        logger.debug(`Emitted ${eventName} event: ${persistedQSO.callsign}`);
-
-        await this._pluginManager?.notifyQSOComplete(data.operatorId, persistedQSO);
+        try {
+          await this._pluginManager?.notifyQSOComplete(data.operatorId, persistedQSO);
+        } catch (pluginError) {
+          logger.warn('Plugin QSO completion notification failed after QSO commit:', pluginError);
+        }
         
         // 获取更新的统计信息并发射日志本更新事件
         try {
@@ -289,6 +326,25 @@ export class RadioOperatorManager {
 
       } catch (error) {
         logger.error(`Failed to record QSO:`, error);
+        // Provider mutations publish their own failure through LogManager. A
+        // lookup can raise the same domain error before any mutation starts,
+        // so it still needs one user-visible failure event here.
+        const providerPublishedFailure = providerWriteAttempted
+          && (error instanceof LogbookOperationError || error instanceof MutationBlockedError);
+        if (!providerPublishedFailure) {
+          const operationError = error instanceof LogbookOperationError ? error : undefined;
+          this.eventEmitter.emit('logbookWriteFailed' as any, {
+            logBookId: this.logManager.getOperatorLogBookId(data.operatorId) ?? `operator-${data.operatorId}`,
+            operatorId: data.operatorId,
+            qsoRecord: data.qsoRecord,
+            error: {
+              code: operationError?.code ?? 'LOGBOOK_WRITE_FAILED',
+              message: error instanceof Error ? error.message : String(error),
+              systemCode: operationError?.systemCode,
+              occurredAt: Date.now(),
+            },
+          });
+        }
       }
     };
     this.eventEmitter.on('recordQSO', handleRecordQSO);
@@ -555,7 +611,7 @@ export class RadioOperatorManager {
   /**
    * 获取操作员当前连接的日志本信息
    */
-  getOperatorLogBookInfo(operatorId: string): { logBookId: string | null; logBook: any } {
+  getOperatorLogBookInfo(operatorId: string): { logBookId: string | null; logBook: LogBookInfo | null } {
     const logBookId = this.logManager.getOperatorLogBookId(operatorId);
     const logBook = logBookId ? this.logManager.getLogBook(logBookId) : null;
     
@@ -566,8 +622,10 @@ export class RadioOperatorManager {
         name: logBook.name,
         description: logBook.description,
         filePath: logBook.filePath,
+        createdAt: logBook.createdAt,
         lastUsed: logBook.lastUsed,
-        isActive: logBook.isActive
+        isActive: logBook.isActive,
+        health: logBook.provider.getHealth(),
       } : null
     };
   }

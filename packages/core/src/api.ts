@@ -20,6 +20,7 @@ import type {
   LogBookDetailResponse,
   LogBookActionResponse,
   LogBookImportResponse,
+  LogbookRecoveryRetryResponse,
   CreateLogBookRequest,
   UpdateLogBookRequest,
   LogBookQSOQueryOptions,
@@ -1337,6 +1338,14 @@ export const api = {
     return apiRequest<LogBookDetailResponse>(`/logbooks/${encodePathSegment(id)}`, undefined, apiBase);
   },
 
+  async retryOpenLogBook(id: string, apiBase?: string): Promise<LogbookRecoveryRetryResponse> {
+    return apiRequest<LogbookRecoveryRetryResponse>(
+      `/logbooks/${encodePathSegment(id)}/recovery/retry`,
+      { method: 'POST' },
+      apiBase,
+    );
+  },
+
   /**
    * 创建新日志本
    */
@@ -2399,6 +2408,7 @@ export const {
   // 日志本管理函数
   getLogBooks,
   getLogBook,
+  retryOpenLogBook,
   createLogBook,
   updateLogBook,
   deleteLogBook,

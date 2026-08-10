@@ -29,7 +29,7 @@ import { profileRoutes } from './routes/profiles.js';
 import { systemRoutes } from './routes/system.js';
 import { WSServer } from './websocket/WSServer.js';
 import { ProcessMonitor } from './services/ProcessMonitor.js';
-import { LogbookWSServer } from './websocket/LogbookWSServer.js';
+import { LogbookWSServer, resolveLogbookConnectionParams } from './websocket/LogbookWSServer.js';
 import { DeviceUiWSServer } from './device-ui/DeviceUiWSServer.js';
 import { deviceUiRoutes } from './device-ui/routes.js';
 import { voiceRoutes } from './routes/voice.js';
@@ -44,7 +44,12 @@ import { RadioError, RadioErrorCode, RadioErrorSeverity } from './utils/errors/R
 import { createLogger } from './utils/logger.js';
 import { ConsoleLogger } from './utils/console-logger.js';
 import { PersistenceCoordinator } from './utils/persistence/index.js';
-import { areNewMutationsBlocked, blockNewMutations, markProcessShuttingDown } from './utils/process-shutdown.js';
+import {
+  areNewMutationsBlocked,
+  awaitWithShutdownDeadline,
+  blockNewMutations,
+  markProcessShuttingDown,
+} from './utils/process-shutdown.js';
 import { bootstrapCoordinator } from './services/BootstrapCoordinator.js';
 import { getNetworkAccessInfo } from './utils/network-access.js';
 
@@ -206,7 +211,7 @@ export async function registerRoleScope(
 /**
  * 📊 Day14：将 RadioErrorCode 映射到 HTTP 状态码
  */
-function getHttpStatusCode(code: RadioErrorCode): number {
+export function getHttpStatusCode(code: RadioErrorCode): number {
   switch (code) {
     // 4xx 客户端错误
     case RadioErrorCode.AUTH_FAILED:
@@ -233,6 +238,10 @@ function getHttpStatusCode(code: RadioErrorCode): number {
       return 404; // Not Found
 
     case RadioErrorCode.DEVICE_BUSY:
+    case RadioErrorCode.LOGBOOK_LOADING:
+    case RadioErrorCode.LOGBOOK_READ_ONLY:
+    case RadioErrorCode.LOGBOOK_UNAVAILABLE:
+    case RadioErrorCode.LOGBOOK_WRITE_STATE_UNCERTAIN:
       return 503; // Service Unavailable
 
     case RadioErrorCode.OPERATION_CANCELLED:
@@ -253,6 +262,7 @@ function getHttpStatusCode(code: RadioErrorCode): number {
       return 500; // Internal Server Error
 
     case RadioErrorCode.RESOURCE_CLEANUP_FAILED:
+    case RadioErrorCode.LOGBOOK_WRITE_FAILED:
       return 500; // Internal Server Error
 
     case RadioErrorCode.NETWORK_ERROR:
@@ -264,6 +274,63 @@ function getHttpStatusCode(code: RadioErrorCode): number {
     default:
       return 500; // Internal Server Error
   }
+}
+
+export function installApiErrorHandler(fastify: FastifyInstance): void {
+  fastify.setErrorHandler((error: FastifyError, _request: FastifyRequest, reply: FastifyReply) => {
+    fastify.log.error({ error }, 'API request error');
+
+    if (error instanceof RadioError) {
+      const statusCode = error.context?.systemCode === 'ENOSPC'
+        ? 507
+        : getHttpStatusCode(error.code);
+
+      reply.status(statusCode).send({
+        success: false,
+        error: {
+          code: error.code,
+          message: error.message,
+          userMessage: error.userMessage,
+          userMessageKey: error.userMessageKey,
+          userMessageParams: error.userMessageParams,
+          severity: error.severity,
+          suggestions: error.suggestions,
+          timestamp: error.timestamp,
+          context: error.context,
+        },
+      });
+      return;
+    }
+
+    if (error.validation) {
+      reply.status(400).send({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Request parameter validation failed',
+          userMessage: 'Please check if request parameters are correct',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['Check request parameter format', 'Refer to API documentation'],
+          details: error.validation,
+        },
+      });
+      return;
+    }
+
+    const statusCode = error.statusCode || 500;
+    reply.status(statusCode).send({
+      success: false,
+      error: {
+        code: RadioErrorCode.UNKNOWN_ERROR,
+        message: error.message || 'Internal server error',
+        userMessage: statusCode === 500 ? 'Server encountered an error, please try again later' : error.message,
+        severity: statusCode === 500 ? RadioErrorSeverity.CRITICAL : RadioErrorSeverity.ERROR,
+        suggestions: statusCode === 500
+          ? ['Please try again later', 'If the problem persists, contact technical support']
+          : [],
+      },
+    });
+  });
 }
 
 export async function createServer() {
@@ -399,63 +466,7 @@ export async function createServer() {
     }
   });
 
-  // 📊 Day14：Fastify 全局错误处理器
-  // 根据 RadioError.code 返回友好错误并添加用户指导信息
-  fastify.setErrorHandler((error: FastifyError, request: FastifyRequest, reply: FastifyReply) => {
-    fastify.log.error({ error }, 'API request error');
-
-    // 如果是 RadioError，返回详细的错误信息
-    if (error instanceof RadioError) {
-      const statusCode = getHttpStatusCode(error.code);
-
-      reply.status(statusCode).send({
-        success: false,
-        error: {
-          code: error.code,
-          message: error.message,
-          userMessage: error.userMessage,
-          userMessageKey: error.userMessageKey,
-          userMessageParams: error.userMessageParams,
-          severity: error.severity,
-          suggestions: error.suggestions,
-          timestamp: error.timestamp,
-          context: error.context,
-        },
-      });
-      return;
-    }
-
-    // 如果是 Fastify 验证错误
-    if (error.validation) {
-      reply.status(400).send({
-        success: false,
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: 'Request parameter validation failed',
-          userMessage: 'Please check if request parameters are correct',
-          severity: RadioErrorSeverity.WARNING,
-          suggestions: ['Check request parameter format', 'Refer to API documentation'],
-          details: error.validation,
-        },
-      });
-      return;
-    }
-
-    // 其他错误：转换为通用错误响应
-    const statusCode = error.statusCode || 500;
-    reply.status(statusCode).send({
-      success: false,
-      error: {
-        code: RadioErrorCode.UNKNOWN_ERROR,
-        message: error.message || 'Internal server error',
-        userMessage: statusCode === 500 ? 'Server encountered an error, please try again later' : error.message,
-        severity: statusCode === 500 ? RadioErrorSeverity.CRITICAL : RadioErrorSeverity.ERROR,
-        suggestions: statusCode === 500
-          ? ['Please try again later', 'If the problem persists, contact technical support']
-          : [],
-      },
-    });
-  });
+  installApiErrorHandler(fastify);
 
   // Try to load native addon (placeholder)
   try {
@@ -547,9 +558,15 @@ export async function createServer() {
       fastify.log.warn({ error }, 'engine stop failed during internal prepare-shutdown');
     }
 
+    let logbookCloseError: string | undefined;
     try {
-      await digitalRadioEngine.operatorManager.getLogManager().close();
+      await awaitWithShutdownDeadline(
+        'logbook close',
+        digitalRadioEngine.operatorManager.getLogManager().close(),
+        remainingDeadlineMs(startedAt, INTERNAL_PREPARE_SHUTDOWN_DEADLINE_MS),
+      );
     } catch (error) {
+      logbookCloseError = error instanceof Error ? error.message : String(error);
       fastify.log.warn({ error }, 'logbook close failed during internal prepare-shutdown');
     }
 
@@ -558,9 +575,13 @@ export async function createServer() {
       deadlineMs: remainingDeadlineMs(startedAt, INTERNAL_PREPARE_SHUTDOWN_DEADLINE_MS),
     });
 
-    return reply.code(flushResult.ok ? 200 : 500).send({
-      success: flushResult.ok,
-      errors: flushResult.errors,
+    const errors = logbookCloseError
+      ? [{ name: 'logbooks', error: logbookCloseError }, ...flushResult.errors]
+      : flushResult.errors;
+    const success = logbookCloseError === undefined && flushResult.ok;
+    return reply.code(success ? 200 : 500).send({
+      success,
+      errors,
     });
   });
 
@@ -646,11 +667,13 @@ export async function createServer() {
       const operatorId = url.searchParams.get('operatorId') || undefined;
       const logBookId = url.searchParams.get('logBookId') || undefined;
       const jwtToken = url.searchParams.get('token');
+      const wsLogManager = digitalRadioEngine.operatorManager.getLogManager();
+      const connectionParams = resolveLogbookConnectionParams(wsLogManager, { operatorId, logBookId });
 
       // 认证未启用时直接放行（向后兼容）
       if (!authManager.isAuthEnabled()) {
-        fastify.log.info(`Logbook WS client connected (no-auth mode): operatorId=${operatorId || ''}, logBookId=${logBookId || ''}`);
-        logbookWsServer.addConnection(socket, { operatorId, logBookId });
+        fastify.log.info(`Logbook WS client connected (no-auth mode): operatorId=${operatorId || ''}, logBookId=${connectionParams.logBookId || ''}`);
+        logbookWsServer.addConnection(socket, connectionParams);
         return;
       }
 
@@ -692,24 +715,23 @@ export async function createServer() {
         return;
       }
 
-      // 归属校验：若指定了 logBookId 且非 ADMIN，检查是否有权访问
-      if (logBookId && current.role !== UserRole.ADMIN) {
-        const wsLogManager = digitalRadioEngine.operatorManager.getLogManager();
-        const associated = wsLogManager.getOperatorIdsForLogBook(logBookId);
+      // 归属校验：按 canonical logbook id 验证，避免 HTTP 支持的呼号形式在 WS 被误拒。
+      if (connectionParams.logBookId && current.role !== UserRole.ADMIN) {
+        const associated = wsLogManager.getOperatorIdsForLogBook(connectionParams.logBookId);
         const hasAccess = associated.length > 0 &&
           associated.some(id => current.operatorIds.includes(id));
         if (!hasAccess) {
-          fastify.log.warn(`Logbook WS connection has no access to log book ${logBookId}, rejecting`);
+          fastify.log.warn(`Logbook WS connection has no access to log book ${connectionParams.logBookId}, rejecting`);
           socket.close(4003, 'No log book access permission');
           return;
         }
       }
 
-      fastify.log.info(`Logbook WS client connected: operatorId=${operatorId || ''}, logBookId=${logBookId || ''}`);
-      logbookWsServer.addConnection(socket, { operatorId, logBookId });
+      fastify.log.info(`Logbook WS client connected: operatorId=${operatorId || ''}, logBookId=${connectionParams.logBookId || ''}`);
+      logbookWsServer.addConnection(socket, connectionParams);
     } catch (e) {
-      fastify.log.warn('Logbook WS connection parameter parsing failed, connecting in unfiltered mode');
-      logbookWsServer.addConnection(socket);
+      fastify.log.warn('Logbook WS connection parameter parsing failed, rejecting');
+      socket.close(4002, 'Invalid connection parameters');
     }
   });
 

@@ -42,6 +42,24 @@
     "forbidden": "Access denied",
     "retry": "Retry"
   },
+  "health": {
+    "state": {
+      "loading": "Logbook is loading",
+      "degraded": "Logbook opened with warnings",
+      "read_only": "Logbook is read-only",
+      "unavailable": "Logbook is unavailable"
+    },
+    "description": {
+      "loading": "The logbook is still being scanned in the background; radio and other features remain available.",
+      "degraded": "Reading and writing remain available, but some records or recovery steps need attention.",
+      "read_only": "Writes are stopped to prevent further damage; readable records remain preserved.",
+      "unavailable": "This logbook is isolated. The server and other logbooks remain available."
+    },
+    "affectedRecords": "Affected records: {{count}}.",
+    "recoveryFile": "Recovery file: {{name}}.",
+    "retry": "Retry open",
+    "retryFailed": "Failed to reopen logbook"
+  },
   "qslStatus": {
     "confirmed": "Confirmed",
     "uploaded": "Uploaded",

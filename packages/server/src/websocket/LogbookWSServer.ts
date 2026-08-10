@@ -14,6 +14,23 @@ interface LogbookConnection {
   logBookId?: string;
 }
 
+interface LogBookIdResolver {
+  resolveLogBookId(idOrCallsign: string): string | null;
+}
+
+export function resolveLogbookConnectionParams(
+  resolver: LogBookIdResolver,
+  params: { operatorId?: string; logBookId?: string },
+): { operatorId?: string; logBookId?: string } {
+  const requestedId = params.logBookId;
+  return {
+    operatorId: params.operatorId,
+    logBookId: requestedId
+      ? (resolver.resolveLogBookId(requestedId) ?? requestedId)
+      : undefined,
+  };
+}
+
 /**
  * 日志本专用 WebSocket 服务器
  * - 仅发送轻量的日志本变更通知
@@ -37,6 +54,18 @@ export class LogbookWSServer {
     });
     this.engine.on('logbookUpdated' as any, (data: { logBookId: string; operatorId?: string }) => {
       this.broadcastChangeNotice({ logBookId: data.logBookId, operatorId: data.operatorId });
+    });
+    this.engine.on('logbookHealthChanged' as any, (data: { logBookId: string }) => {
+      const operatorIds = this.engine.operatorManager
+        .getLogManager()
+        .getOperatorIdsForLogBook(data.logBookId);
+      if (operatorIds.length === 0) {
+        this.broadcastChangeNotice({ logBookId: data.logBookId });
+        return;
+      }
+      for (const operatorId of operatorIds) {
+        this.broadcastChangeNotice({ logBookId: data.logBookId, operatorId });
+      }
     });
     // 推送操作员状态更新（用于通联日志页面的实时虚线渲染）
     this.engine.on('operatorStatusUpdate' as any, (status: OperatorStatus) => {
