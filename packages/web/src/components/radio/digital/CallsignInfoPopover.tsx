@@ -1,10 +1,11 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { Popover, PopoverTrigger, PopoverContent, Divider, Spinner } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
-import { api, calculateGridPath } from '@tx5dr/core';
+import { api, calculateGridPath, getCallsignInfo, resolveGridLocation, type GridLocation } from '@tx5dr/core';
 import { FlagDisplay } from '../../common/FlagDisplay';
 import { QrzCallsignLink } from '../../common/QrzCallsignLink';
 import { useCurrentOperatorId, useOperators, useStationInfo } from '../../../store/radioStore';
+import { formatGridLocation } from './gridLocationDisplay';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -18,6 +19,9 @@ interface CallsignInfoPopoverProps {
   countryEn?: string;
   countryCode?: string;
   flag?: string;
+  /** Grid decoded in the triggering frame, rather than a tracker fallback. */
+  directGrid?: string;
+  directGridLocation?: GridLocation;
   state?: string;
   stateConfidence?: 'high' | 'low';
   children: React.ReactNode;
@@ -29,6 +33,11 @@ interface TrackingData {
   snrHistory: { snr: number; timestamp: number }[];
   lastSeenMs: number;
 }
+
+const EMPTY_TRACKING_DATA: TrackingData = {
+  snrHistory: [],
+  lastSeenMs: 0,
+};
 
 // ─── SNR Sparkline ──────────────────────────────────────────────────────────
 
@@ -182,7 +191,7 @@ function SnrSparkline({ values, timestamps }: { values: number[]; timestamps: st
 
 // ─── Popover Content ────────────────────────────────────────────────────────
 
-function PopoverBody({ callsign, tracking, logbookAnalysis, country, countryZh, countryEn, countryCode, flag, state, stateConfidence }: {
+function PopoverBody({ callsign, tracking, logbookAnalysis, country, countryZh, countryEn, countryCode, flag, directGrid, directGridLocation, state, stateConfidence, loading }: {
   callsign: string;
   tracking: TrackingData;
   logbookAnalysis?: { grid?: string; dxccEntity?: string; state?: string; stateConfidence?: 'high' | 'low' };
@@ -191,10 +200,13 @@ function PopoverBody({ callsign, tracking, logbookAnalysis, country, countryZh, 
   countryEn?: string;
   countryCode?: string;
   flag?: string;
+  directGrid?: string;
+  directGridLocation?: GridLocation;
   state?: string;
   stateConfidence?: 'high' | 'low';
+  loading: boolean;
 }) {
-  const { t, i18n } = useTranslation('common');
+  const { t, i18n } = useTranslation(['common', 'gridRegions']);
   const isZh = i18n.language === 'zh';
   const stationInfo = useStationInfo();
   const { operators } = useOperators();
@@ -207,7 +219,14 @@ function PopoverBody({ callsign, tracking, logbookAnalysis, country, countryZh, 
   const stationGrid = stationInfo?.qth?.grid?.trim();
   const myGrid = operatorGrid || stationGrid;
 
-  const grid = tracking.grid || logbookAnalysis?.grid;
+  const grid = directGrid || tracking.grid || logbookAnalysis?.grid;
+  const gridIsCurrentMessage = Boolean(directGrid);
+  const gridLocation = useMemo(() => {
+    if (!grid) return undefined;
+    if (gridIsCurrentMessage && directGridLocation?.grid === grid) return directGridLocation;
+    return resolveGridLocation(grid, getCallsignInfo(callsign));
+  }, [callsign, directGridLocation, grid, gridIsCurrentMessage]);
+  const gridLocationText = formatGridLocation(gridLocation, i18n.language, t);
 
   const gridPath = useMemo(() => {
     if (!myGrid || !grid) return null;
@@ -274,6 +293,20 @@ function PopoverBody({ callsign, tracking, logbookAnalysis, country, countryZh, 
           </span>
         )}
       </div>
+      {grid && (
+        <div className="mt-1 text-xs text-default-400">
+          {t('callsignPopover.gridLocation')}: {gridLocationText || t('callsignPopover.gridLocationUnknown')}
+          <span className="ml-1 text-default-300">
+            ({t(gridIsCurrentMessage ? 'callsignPopover.gridLocationCurrent' : 'callsignPopover.gridLocationRecent')})
+          </span>
+          {gridLocation?.status === 'conflict' && (
+            <span className="ml-1 text-warning">{t('callsignPopover.gridLocationConflict')}</span>
+          )}
+          {gridLocation?.status === 'ambiguous' && (
+            <span className="ml-1 text-default-300">{t('callsignPopover.gridLocationAmbiguous')}</span>
+          )}
+        </div>
+      )}
       {subdivisionText && (
         <div className="mt-1 text-xs text-default-400">
           {t('callsignPopover.subdivision')}: {subdivisionText}
@@ -307,8 +340,9 @@ function PopoverBody({ callsign, tracking, logbookAnalysis, country, countryZh, 
       )}
 
       {/* Footer: Seen count */}
-      <div className="text-[10px] text-default-400 mt-1.5 text-right">
-        {t('callsignPopover.seenTimes', { count: tracking.snrHistory.length })}
+      <div className="flex items-center justify-end gap-1 text-[10px] text-default-400 mt-1.5">
+        {loading && <Spinner size="sm" className="scale-75" />}
+        <span>{t('callsignPopover.seenTimes', { count: tracking.snrHistory.length })}</span>
       </div>
     </div>
   );
@@ -324,6 +358,8 @@ export const CallsignInfoPopover: React.FC<CallsignInfoPopoverProps> = ({
   countryEn,
   countryCode,
   flag,
+  directGrid,
+  directGridLocation,
   state,
   stateConfidence,
   children,
@@ -401,29 +437,21 @@ export const CallsignInfoPopover: React.FC<CallsignInfoPopoverProps> = ({
         onClick={stopPopoverPointerEvent}
         onDoubleClick={stopPopoverPointerEvent}
       >
-        {loading ? (
-          <div className="p-3 flex items-center justify-center">
-            <Spinner size="sm" />
-          </div>
-        ) : tracking ? (
-          <PopoverBody
-            callsign={callsign}
-            tracking={tracking}
-            logbookAnalysis={logbookAnalysis}
-            country={country}
-            countryZh={countryZh}
-            countryEn={countryEn}
-            countryCode={countryCode}
-            flag={flag}
-            state={state}
-            stateConfidence={stateConfidence}
-          />
-        ) : (
-          <div className="p-2 text-xs text-default-400 flex items-center gap-1">
-            <span className="font-mono">{callsign}</span>
-            <QrzCallsignLink callsign={callsign} size="sm" />
-          </div>
-        )}
+        <PopoverBody
+          callsign={callsign}
+          tracking={tracking ?? EMPTY_TRACKING_DATA}
+          logbookAnalysis={logbookAnalysis}
+          country={country}
+          countryZh={countryZh}
+          countryEn={countryEn}
+          countryCode={countryCode}
+          flag={flag}
+          directGrid={directGrid}
+          directGridLocation={directGridLocation}
+          state={state}
+          stateConfidence={stateConfidence}
+          loading={loading}
+        />
       </PopoverContent>
     </Popover>
   );

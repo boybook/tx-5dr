@@ -133,6 +133,12 @@
   },
   "callsignPopover": {
     "grid": "Grid",
+    "gridLocation": "Grid location",
+    "gridLocationCurrent": "this message",
+    "gridLocationRecent": "recently observed",
+    "gridLocationUnknown": "No confirmed land region",
+    "gridLocationConflict": "differs from callsign location",
+    "gridLocationAmbiguous": "cannot determine a callsign-location match",
     "subdivision": "Subdivision",
     "estimated": "(low confidence)",
     "subdivisions": {

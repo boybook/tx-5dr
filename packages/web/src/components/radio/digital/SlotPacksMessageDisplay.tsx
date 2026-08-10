@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { FramesTable, FrameGroup, FrameDisplayMessage } from './FramesTable';
-import { parseFT8LocationInfo, FT8MessageParser, evaluateCallsignFilter, evaluateDxccBlocklist, getBandFromFrequency, CycleUtils } from '@tx5dr/core';
+import { parseFT8LocationInfo, FT8MessageParser, evaluateCallsignFilter, evaluateDxccBlocklist, getBandFromFrequency, CycleUtils, resolveGridLocation } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useMyRelatedTimeline, useRadioState, useSlotPacks } from '../../../store/radioStore';
 import type { FrameMessage, WSSelectedFrame } from '@tx5dr/contracts';
 import { useSplitLayoutActions } from '../../common/SplitLayout';
@@ -134,6 +134,10 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
           ...(locationInfo.countryEn && { countryEn: locationInfo.countryEn }),
           ...(locationInfo.countryCode && { countryCode: locationInfo.countryCode }),
           ...(locationInfo.flag && { flag: locationInfo.flag }),
+          ...(locationInfo.grid && {
+            locationGrid: locationInfo.grid,
+            gridLocation: resolveGridLocation(locationInfo.grid, locationInfo),
+          }),
           ...(locationInfo.state && { state: locationInfo.state }),
           ...(locationInfo.stateConfidence && { stateConfidence: locationInfo.stateConfidence }),
           ...(frame.logbookAnalysis && { logbookAnalysis: frame.logbookAnalysis })

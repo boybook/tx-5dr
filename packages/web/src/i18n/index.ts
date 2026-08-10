@@ -12,6 +12,7 @@ import zhAuth from './locales/zh/auth.json';
 import zhErrors from './locales/zh/errors.json';
 import zhVoice from './locales/zh/voice.json';
 import zhAbout from './locales/zh/about.json';
+import zhGridRegions from './locales/zh/grid-regions.json';
 
 // 日语语言包
 import jaCommon from './locales/ja/common.json';
@@ -23,6 +24,7 @@ import jaAuth from './locales/ja/auth.json';
 import jaErrors from './locales/ja/errors.json';
 import jaVoice from './locales/ja/voice.json';
 import jaAbout from './locales/ja/about.json';
+import jaGridRegions from './locales/ja/grid-regions.json';
 
 // 英文语言包
 import enCommon from './locales/en/common.json';
@@ -34,6 +36,7 @@ import enAuth from './locales/en/auth.json';
 import enErrors from './locales/en/errors.json';
 import enVoice from './locales/en/voice.json';
 import enAbout from './locales/en/about.json';
+import enGridRegions from './locales/en/grid-regions.json';
 
 i18n
   .use(initReactI18next)
@@ -42,7 +45,7 @@ i18n
     fallbackLng: 'zh',
     supportedLngs: [...SUPPORTED_LANGUAGES],
     defaultNS: 'common',
-    ns: ['common', 'toast', 'radio', 'settings', 'logbook', 'auth', 'errors', 'voice', 'about'],
+    ns: ['common', 'toast', 'radio', 'settings', 'logbook', 'auth', 'errors', 'voice', 'about', 'gridRegions'],
     resources: {
       zh: {
         common: zhCommon,
@@ -54,6 +57,7 @@ i18n
         errors: zhErrors,
         voice: zhVoice,
         about: zhAbout,
+        gridRegions: zhGridRegions,
       },
       ja: {
         common: jaCommon,
@@ -65,6 +69,7 @@ i18n
         errors: jaErrors,
         voice: jaVoice,
         about: jaAbout,
+        gridRegions: jaGridRegions,
       },
       en: {
         common: enCommon,
@@ -76,6 +81,7 @@ i18n
         errors: enErrors,
         voice: enVoice,
         about: enAbout,
+        gridRegions: enGridRegions,
       },
     },
     interpolation: {

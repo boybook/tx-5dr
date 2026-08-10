@@ -133,6 +133,12 @@
   },
   "callsignPopover": {
     "grid": "网格",
+    "gridLocation": "网格位置",
+    "gridLocationCurrent": "本报文",
+    "gridLocationRecent": "最近观测",
+    "gridLocationUnknown": "未能确认陆地区域",
+    "gridLocationConflict": "与呼号归属不一致",
+    "gridLocationAmbiguous": "无法据此判断是否与呼号归属一致",
     "subdivision": "州/属地",
     "estimated": "（低置信度）",
     "subdivisions": {

@@ -23,6 +23,7 @@ export type { WSClientConfig } from './websocket/WSClient.js';
 
 // 工具导出
 export * from './callsign/callsign.js';
+export * from './callsign/grid-location.js';
 export * from './callsign/dxcc-online-validator.js';
 export * from './utils/cycleUtils.js';
 

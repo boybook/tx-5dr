@@ -14,6 +14,7 @@ import { getBadgeColors, hexToRgba } from '../../../utils/colorUtils';
 import { FlagDisplay } from '../../common/FlagDisplay';
 import { CallsignInfoPopover } from './CallsignInfoPopover';
 import { BOTTOM_TOLERANCE_PX, TOP_TOLERANCE_PX, getBottomGroupSignature, shouldShowScrollToBottomButton } from './framesTableAutoScroll';
+import type { GridLocation } from '@tx5dr/core';
 
 export interface FrameDisplayMessage {
   utc: string;
@@ -29,6 +30,9 @@ export interface FrameDisplayMessage {
   countryCode?: string;
   flag?: string;
   locationCallsign?: string;
+  /** Grid decoded from this exact frame, never the callsign tracker fallback. */
+  locationGrid?: string;
+  gridLocation?: GridLocation;
   state?: string;
   stateConfidence?: 'high' | 'low';
   logbookAnalysis?: {
@@ -129,16 +133,19 @@ export const resolveFrameLocationDisplay = (
   message: FrameDisplayMessage,
   isZh: boolean,
   isNarrow: boolean,
-): { callsign: string; displayName: string; text: string } | null => {
+): { callsign: string; displayName: string; text: string; conflictGrid?: string } | null => {
   const callsign = message.locationCallsign?.trim();
   const displayName = isZh
     ? (message.countryZh || message.countryEn || message.country)
     : (message.countryEn || message.country);
   if (!callsign || !displayName) return null;
+  const gridLocation = message.gridLocation;
+  const isConflict = gridLocation?.status === 'conflict';
   return {
     callsign,
     displayName,
     text: isNarrow ? (displayName.split('·')[1] || displayName) : displayName,
+    conflictGrid: isConflict ? message.locationGrid : undefined,
   };
 };
 
@@ -253,6 +260,9 @@ const MessageRow = React.memo<MessageRowProps>(({
     if (!location) return null;
     const inner = (
       <div className={`flex min-w-0 items-center justify-end gap-1 ${isNarrow ? 'max-w-[80px]' : 'max-w-[140px]'}`}>
+        {location.conflictGrid && (
+          <span className="shrink-0 whitespace-nowrap text-xs">* {location.conflictGrid}</span>
+        )}
         <span className="min-w-0 truncate whitespace-nowrap text-xs" title={location.displayName}>
           {location.text}
         </span>
@@ -269,6 +279,8 @@ const MessageRow = React.memo<MessageRowProps>(({
           countryEn={message.countryEn}
           countryCode={message.countryCode}
           flag={message.flag}
+          directGrid={message.locationGrid}
+          directGridLocation={message.gridLocation}
           state={message.state}
           stateConfidence={message.stateConfidence}
         >
