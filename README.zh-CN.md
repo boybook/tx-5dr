@@ -140,6 +140,8 @@ docker compose up -d
 docker exec tx5dr cat /app/data/config/.admin-token
 ```
 
+管理员明文令牌会继续保存在仅当前用户可读的 `.admin-token` 中。Electron 创建的窗口改用短时、一次性浏览器授权码，不再把永久令牌放入 URL。升级不会自动轮换现有令牌，也不会重写历史日志；如果旧日志可能曾暴露令牌，请在 **设置 > Token 管理** 中重新生成系统令牌。
+
 以上命令会默认启用 `rtc-data-audio`，并以 `ws-compat` 作为回退路径。默认 compose 会暴露 `8076/tcp`、`8443/tcp` 和 `50110/udp`。如使用 FRP 或静态 NAT，将一个公网 UDP 端口转发到 `50110/udp`，再到实时音频设置页填写公网端点。
 
 完整部署指南（设备映射、串口配置、音频配置、故障排查）请参阅 **[docker/README.md](docker/README.md)**。

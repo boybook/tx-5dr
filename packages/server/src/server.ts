@@ -47,6 +47,7 @@ import { RealtimeRxAudioRouter } from './realtime/RealtimeRxAudioRouter.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from './utils/errors/RadioError.js';
 import { createLogger } from './utils/logger.js';
 import { ConsoleLogger } from './utils/console-logger.js';
+import { serializeRequestForLog } from './utils/sensitive-log.js';
 import { PersistenceCoordinator } from './utils/persistence/index.js';
 import {
   areNewMutationsBlocked,
@@ -346,16 +347,7 @@ export async function createServer() {
       // 减少健康检查请求的日志噪音
       serializers: {
         req(request) {
-          // 不记录健康检查请求的详细信息
-          if (request.url === '/' && request.method === 'HEAD') {
-            return { method: request.method, url: request.url };
-          }
-          return {
-            method: request.method,
-            url: request.url,
-            hostname: request.hostname,
-            remoteAddress: request.ip,
-          };
+          return serializeRequestForLog(request);
         },
       },
     },

@@ -3,6 +3,7 @@ import { appendFileSync } from 'fs';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { getLogFilePath } from './app-paths.js';
+import { redactSensitiveLogValue, redactSensitiveText } from './sensitive-log.js';
 
 /**
  * File logger with console interception.
@@ -69,27 +70,32 @@ export class ConsoleLogger {
     const orig = this.originalConsole;
 
     console.log = (...args: any[]) => {
-      orig.log(...args);
-      self.writeLogEntry('INFO', 'console', self.formatArgs(args));
+      const safeArgs = args.map(arg => redactSensitiveLogValue(arg));
+      orig.log(...safeArgs);
+      self.writeLogEntry('INFO', 'console', self.formatArgs(safeArgs));
     };
     console.debug = (...args: any[]) => {
       const debugEnabled = process.env.LOG_LEVEL === 'debug' || process.env.TX5DR_STDOUT_DEBUG === '1';
       if (debugEnabled) {
-        orig.debug(...args);
-        self.writeLogEntry('DEBUG', 'console', self.formatArgs(args));
+        const safeArgs = args.map(arg => redactSensitiveLogValue(arg));
+        orig.debug(...safeArgs);
+        self.writeLogEntry('DEBUG', 'console', self.formatArgs(safeArgs));
       }
     };
     console.warn = (...args: any[]) => {
-      orig.warn(...args);
-      self.writeLogEntry('WARN', 'console', self.formatArgs(args));
+      const safeArgs = args.map(arg => redactSensitiveLogValue(arg));
+      orig.warn(...safeArgs);
+      self.writeLogEntry('WARN', 'console', self.formatArgs(safeArgs));
     };
     console.error = (...args: any[]) => {
-      orig.error(...args);
-      self.writeLogEntry('ERROR', 'console', self.formatArgs(args));
+      const safeArgs = args.map(arg => redactSensitiveLogValue(arg));
+      orig.error(...safeArgs);
+      self.writeLogEntry('ERROR', 'console', self.formatArgs(safeArgs));
     };
     console.info = (...args: any[]) => {
-      orig.info(...args);
-      self.writeLogEntry('INFO', 'console', self.formatArgs(args));
+      const safeArgs = args.map(arg => redactSensitiveLogValue(arg));
+      orig.info(...safeArgs);
+      self.writeLogEntry('INFO', 'console', self.formatArgs(safeArgs));
     };
   }
 
@@ -122,7 +128,7 @@ export class ConsoleLogger {
 
   private writeLogEntry(level: string, category: string, message: string): void {
     if (!this.isInitialized) return;
-    const logEntry = this.formatLogEntry(level, category, message);
+    const logEntry = this.formatLogEntry(level, category, redactSensitiveText(message));
     this.logQueue.push(logEntry);
     this.processLogQueue();
   }

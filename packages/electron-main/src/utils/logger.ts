@@ -4,6 +4,7 @@
  */
 
 import log from 'electron-log/main';
+import { redactSensitiveLogValue, redactSensitiveText } from '../sensitiveLog.js';
 
 export interface Logger {
   debug: (msg: string, ctx?: unknown) => void;
@@ -15,16 +16,20 @@ export interface Logger {
 export function createLogger(module: string): Logger {
   return {
     debug: (msg, ctx) => {
-      ctx !== undefined ? log.debug(`[${module}] ${msg}`, ctx) : log.debug(`[${module}] ${msg}`);
+      const safeMessage = redactSensitiveText(`[${module}] ${msg}`);
+      ctx !== undefined ? log.debug(safeMessage, redactSensitiveLogValue(ctx)) : log.debug(safeMessage);
     },
     info: (msg, ctx) => {
-      ctx !== undefined ? log.info(`[${module}] ${msg}`, ctx) : log.info(`[${module}] ${msg}`);
+      const safeMessage = redactSensitiveText(`[${module}] ${msg}`);
+      ctx !== undefined ? log.info(safeMessage, redactSensitiveLogValue(ctx)) : log.info(safeMessage);
     },
     warn: (msg, err) => {
-      err !== undefined ? log.warn(`[${module}] ${msg}`, err) : log.warn(`[${module}] ${msg}`);
+      const safeMessage = redactSensitiveText(`[${module}] ${msg}`);
+      err !== undefined ? log.warn(safeMessage, redactSensitiveLogValue(err)) : log.warn(safeMessage);
     },
     error: (msg, err) => {
-      err !== undefined ? log.error(`[${module}] ${msg}`, err) : log.error(`[${module}] ${msg}`);
+      const safeMessage = redactSensitiveText(`[${module}] ${msg}`);
+      err !== undefined ? log.error(safeMessage, redactSensitiveLogValue(err)) : log.error(safeMessage);
     },
   };
 }

@@ -56,6 +56,8 @@ import type {
   CreateProfileRequest,
   UpdateProfileRequest,
   LoginResponse,
+  BrowserLoginCodeResponse,
+  ExchangeBrowserLoginCodeRequest,
   PasswordLoginRequest,
   AuthStatus,
   AuthMeResponse,
@@ -686,6 +688,34 @@ export const api = {
       {
         method: 'POST',
         body: JSON.stringify(credentials),
+      },
+      apiBase
+    );
+  },
+
+  /**
+   * 创建供 Electron 窗口或系统浏览器使用的一次性登录码（Admin）
+   */
+  async createBrowserLoginCode(apiBase?: string): Promise<BrowserLoginCodeResponse> {
+    return apiRequest<BrowserLoginCodeResponse>(
+      '/auth/browser-login-codes',
+      { method: 'POST' },
+      apiBase
+    );
+  },
+
+  /**
+   * 兑换一次性浏览器登录码
+   */
+  async exchangeBrowserLoginCode(
+    request: ExchangeBrowserLoginCodeRequest,
+    apiBase?: string
+  ): Promise<LoginResponse> {
+    return apiRequest<LoginResponse>(
+      '/auth/browser-login-codes/exchange',
+      {
+        method: 'POST',
+        body: JSON.stringify(request),
       },
       apiBase
     );
