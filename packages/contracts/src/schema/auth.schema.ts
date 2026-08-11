@@ -82,6 +82,19 @@ export const LoginResponseSchema = z.object({
 
 export type LoginResponse = z.infer<typeof LoginResponseSchema>;
 
+export const BrowserLoginCodeResponseSchema = z.object({
+  code: z.string().min(1),
+  expiresAt: z.number(),
+});
+
+export type BrowserLoginCodeResponse = z.infer<typeof BrowserLoginCodeResponseSchema>;
+
+export const ExchangeBrowserLoginCodeRequestSchema = z.object({
+  code: z.string().min(1),
+});
+
+export type ExchangeBrowserLoginCodeRequest = z.infer<typeof ExchangeBrowserLoginCodeRequestSchema>;
+
 // ===== Token 管理（Admin API） =====
 
 export const LoginCredentialSummarySchema = z.object({

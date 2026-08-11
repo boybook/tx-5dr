@@ -21,12 +21,26 @@ import { getConfigFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
 import { JsonFileStore, PersistenceCoordinator, safeWriteFile } from '../utils/persistence/index.js';
 import { RuntimeStateManager } from '../config/RuntimeStateManager.js';
+import {
+  BrowserLoginCodeStore,
+  type CreatedBrowserLoginCode,
+} from './BrowserLoginCodeStore.js';
+import { registerSensitiveLogValue } from '../utils/sensitive-log.js';
 
 const logger = createLogger('AuthManager');
 
 const BCRYPT_ROUNDS = 10;
 const TOKEN_PREFIX = 'txdr_';
 const TOKEN_BYTES = 32;
+
+export interface BrowserLoginIdentity {
+  tokenId: string;
+  role: UserRole;
+  label: string;
+  operatorIds: string[];
+  maxOperators?: number;
+  permissionGrants?: PermissionGrant[];
+}
 
 export class AuthManagerError extends Error {
   constructor(public readonly code: string, message?: string) {
@@ -42,6 +56,7 @@ export class AuthManager {
   private jwtSecret!: string;
   private configStore: JsonFileStore<AuthConfig> | null = null;
   private runtimeState = RuntimeStateManager.getInstance();
+  private browserLoginCodes = new BrowserLoginCodeStore();
   private unregisterPersistence: (() => void) | null = null;
 
   private constructor() {}
@@ -63,6 +78,7 @@ export class AuthManager {
     }
     await this.loadConfig();
     await this.ensureJwtSecret();
+    this.browserLoginCodes.clear();
     await this.ensureInitialAdminToken();
     this.unregisterPersistence?.();
     this.unregisterPersistence = PersistenceCoordinator.getInstance().register({
@@ -118,6 +134,14 @@ export class AuthManager {
     }
 
     if (plainToken) {
+      registerSensitiveLogValue(plainToken);
+      if (process.platform !== 'win32') {
+        try {
+          await fs.chmod(this.adminTokenFilePath, 0o600);
+        } catch (error) {
+          logger.warn('Failed to restrict .admin-token permissions', error);
+        }
+      }
       // 文件中有 token，检查是否已注册到 auth.json
       const existing = await this.findTokenByPlainText(plainToken);
       if (!existing) {
@@ -151,18 +175,13 @@ export class AuthManager {
         maxOperators: 0,
       }, null, undefined, true);
       plainToken = result.token;
+      registerSensitiveLogValue(plainToken);
       // 写入 .admin-token 文件供 Electron 等外部进程读取
       await safeWriteFile(this.adminTokenFilePath, plainToken, { backups: 1, mode: 0o600 });
       logger.info('Admin token generated and written to .admin-token file');
     }
 
-    // 每次启动都打印管理员令牌
-    logger.info('');
-    logger.info('╔══════════════════════════════════════════════════╗');
-    logger.info('║  Admin token:                                    ║');
-    logger.info(`║  ${plainToken}`);
-    logger.info('╚══════════════════════════════════════════════════╝');
-    logger.info('');
+    logger.info('Admin token file is ready');
   }
 
   // ===== Token CRUD =====
@@ -357,6 +376,7 @@ export class AuthManager {
     if (!token || !token.system) return null;
 
     const newPlainToken = this.generateToken();
+    registerSensitiveLogValue(newPlainToken);
     const newHash = await bcrypt.hash(newPlainToken, BCRYPT_ROUNDS);
 
     token.tokenHash = newHash;
@@ -494,6 +514,37 @@ export class AuthManager {
     const token = this.config.tokens.find(t => t.id === tokenId);
     if (!token || token.revoked) return null;
     return { role: token.role, operatorIds: token.operatorIds, maxOperators: token.maxOperators, permissionGrants: token.permissionGrants };
+  }
+
+  createBrowserLoginCode(tokenId: string): CreatedBrowserLoginCode {
+    if (!this.isAuthEnabled()) {
+      throw new AuthManagerError('AUTH_DISABLED', 'Authentication is disabled');
+    }
+
+    const token = this.config.tokens.find(t => t.id === tokenId);
+    if (!token || !this.isTokenStillValid(tokenId) || token.role !== UserRole.ADMIN) {
+      throw new AuthManagerError('FORBIDDEN', 'Administrator authentication is required');
+    }
+
+    return this.browserLoginCodes.create(tokenId);
+  }
+
+  consumeBrowserLoginCode(code: string): BrowserLoginIdentity | null {
+    const record = this.browserLoginCodes.consume(code);
+    if (!record || !this.isAuthEnabled() || !this.isTokenStillValid(record.issuerTokenId)) {
+      return null;
+    }
+
+    const token = this.config.tokens.find(t => t.id === record.issuerTokenId);
+    if (!token || token.role !== UserRole.ADMIN) return null;
+    return {
+      tokenId: token.id,
+      role: token.role,
+      label: token.label,
+      operatorIds: [...token.operatorIds],
+      maxOperators: token.maxOperators,
+      permissionGrants: token.permissionGrants,
+    };
   }
 
   // ===== 认证配置 =====

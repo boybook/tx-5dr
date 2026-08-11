@@ -140,6 +140,8 @@ docker compose up -d
 docker exec tx5dr cat /app/data/config/.admin-token
 ```
 
+The plaintext administrator token intentionally remains available in `.admin-token` with owner-only permissions. Electron-created windows use short-lived, single-use browser authorization codes instead of placing this permanent token in their URLs. Upgrading does not rotate the existing token or rewrite historical logs; if an older log may have exposed it, regenerate the system token from **Settings > Token Management**.
+
 This starts TX-5DR with `rtc-data-audio` enabled by default and `ws-compat` as fallback. The default compose file exposes `8076/tcp`, `8443/tcp`, and `50110/udp`. For FRP/static NAT, forward one UDP port to `50110/udp` and configure the public endpoint in the realtime settings page.
 
 For the full deployment guide — including device mapping, serial port setup, audio configuration, and troubleshooting — see **[docker/README.md](docker/README.md)**.

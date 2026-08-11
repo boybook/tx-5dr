@@ -13,6 +13,11 @@ import type { DesktopHttpsStatus } from '@tx5dr/contracts';
 import { DesktopUpdateService, type DesktopUpdateStatus } from './desktopUpdate.js';
 import { BUILD_INFO } from './generated/buildInfo.js';
 import { createLogger } from './utils/logger.js';
+import { BrowserLoginAuthService } from './browserLoginAuth.js';
+import {
+  installElectronLogRedaction,
+  redactSensitiveText,
+} from './sensitiveLog.js';
 import { getMessages } from './i18n.js';
 import {
   DEFAULT_DESKTOP_HTTPS_CONFIG,
@@ -55,6 +60,7 @@ import {
 // const __filename = fileURLToPath(import.meta.url);
 // const __dirname = dirname(__filename);
 
+installElectronLogRedaction(log);
 const logger = createLogger('ElectronMain');
 let desktopUpdateService: DesktopUpdateService | null = null;
 const DEFAULT_WEB_HTTP_PORT = 8076;
@@ -1155,7 +1161,7 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 
 // ===== 认证 Token 管理 =====
-let embeddedAdminToken: string | null = null;
+let browserLoginAuthService: BrowserLoginAuthService | null = null;
 
 /**
  * 与 Server AppPaths 保持一致的路径工具
@@ -1218,7 +1224,7 @@ function getStartupLogPath(fileName: string): string {
 }
 
 function sanitizeStartupLogLine(value: string): string {
-  return value.replace(/([?&]auth_token=)[^&\s]*/g, '$1<redacted>');
+  return redactSensitiveText(value);
 }
 
 function extractStartupLogTime(line: string, fallback: string): string {
@@ -1453,6 +1459,81 @@ function readAdminTokenFile(): string | null {
     return token || null;
   } catch {
     return null;
+  }
+}
+
+function getAdminTokenFileVersion(): string | null {
+  try {
+    const tokenStat = fs.statSync(path.join(getAppConfigDir(), '.admin-token'));
+    return `${tokenStat.mtimeMs}:${tokenStat.size}`;
+  } catch {
+    return null;
+  }
+}
+
+async function requestBackendJson(
+  requestPath: string,
+  options: { method?: string; body?: unknown; authorization?: string } = {},
+): Promise<{ statusCode: number; body: unknown }> {
+  if (!selectedServerPort) throw new Error('Backend server port is unavailable');
+
+  const payload = options.body === undefined ? null : JSON.stringify(options.body);
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      host: '127.0.0.1',
+      port: selectedServerPort!,
+      path: requestPath,
+      method: options.method ?? 'GET',
+      headers: {
+        Accept: 'application/json',
+        ...(payload ? {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        } : {}),
+        ...(options.authorization ? { Authorization: options.authorization } : {}),
+      },
+      timeout: 5_000,
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on('data', chunk => chunks.push(Buffer.from(chunk)));
+      response.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        let body: unknown = null;
+        if (text) {
+          try {
+            body = JSON.parse(text);
+          } catch {
+            return reject(new Error('Backend returned invalid JSON'));
+          }
+        }
+        resolve({ statusCode: response.statusCode ?? 0, body });
+      });
+    });
+
+    request.on('timeout', () => request.destroy(new Error('Backend request timed out')));
+    request.on('error', reject);
+    if (payload) request.write(payload);
+    request.end();
+  });
+}
+
+function getBrowserLoginAuthService(): BrowserLoginAuthService {
+  if (!browserLoginAuthService) {
+    browserLoginAuthService = new BrowserLoginAuthService({
+      requestJson: requestBackendJson,
+      readAdminToken: readAdminTokenFile,
+      getAdminTokenVersion: getAdminTokenFileVersion,
+    });
+  }
+  return browserLoginAuthService;
+}
+
+async function buildAuthenticatedRendererUrl(baseUrl: string): Promise<string> {
+  try {
+    return await getBrowserLoginAuthService().buildAuthenticatedUrl(baseUrl);
+  } catch (error) {
+    logger.warn('automatic browser authentication failed; opening clean login page', error);
+    return baseUrl;
   }
 }
 
@@ -2416,10 +2497,8 @@ async function loadMainAppInWindow(windowInstance: BrowserWindow): Promise<void>
   }
 
   const webUrl = getWebUrl();
-  const urlWithAuth = embeddedAdminToken
-    ? `${webUrl}?auth_token=${encodeURIComponent(embeddedAdminToken)}`
-    : webUrl;
-  logger.info(`loading URL: ${urlWithAuth}`);
+  const urlWithAuth = await buildAuthenticatedRendererUrl(webUrl);
+  logger.info(`loading URL: ${redactSensitiveText(urlWithAuth)}`);
   await windowInstance.loadURL(urlWithAuth);
 }
 
@@ -2776,14 +2855,12 @@ async function openInBrowser() {
     });
   }
 
-  const url = embeddedAdminToken
-    ? `${base}?auth_token=${encodeURIComponent(embeddedAdminToken)}`
-    : base;
+  const url = await buildAuthenticatedRendererUrl(base);
   await shell.openExternal(url);
 }
 
 function redactSensitiveUrl(value: string): string {
-  return value.replace(/([?&]auth_token=)[^&]*/g, '$1<redacted>');
+  return redactSensitiveText(value);
 }
 
 function formatMetricMemory(value: number | undefined): string | null {
@@ -3376,15 +3453,8 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
     return;
   }
 
-  // 从 Server 生成的 .admin-token 文件读取管理员令牌
-  for (let i = 0; i < 30; i++) {
-    embeddedAdminToken = readAdminTokenFile();
-    if (embeddedAdminToken) break;
-    logger.debug(`waiting for .admin-token file... (${i + 1}/30)`);
-    await new Promise(r => setTimeout(r, 1000));
-  }
-  if (embeddedAdminToken) {
-    logger.info(`admin token ready: ${embeddedAdminToken.slice(0, 15)}...`);
+  if (fs.existsSync(path.join(getAppConfigDir(), '.admin-token'))) {
+    logger.info('admin token file is ready');
   } else {
     logger.warn('admin token file not found, starting without authentication');
   }
@@ -3392,8 +3462,9 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
   logger.info('services ready, loading main app');
   mainAppReadyForWindow = true;
 
-  const targetWindow = mainWindowInstance && !mainWindowInstance.isDestroyed()
-    ? mainWindowInstance
+  const currentMainWindow = mainWindowInstance as BrowserWindow | null;
+  const targetWindow = currentMainWindow && !currentMainWindow.isDestroyed()
+    ? currentMainWindow
     : startupWindow && !startupWindow.isDestroyed()
       ? startupWindow
       : null;
@@ -3746,23 +3817,20 @@ function setupIpcHandlers() {
         logbookWindow.setMenuBarVisibility(false);
       }
 
-      // auth token 参数（通过 URL 参数传递，与主窗口一致）
-      const authParam = embeddedAdminToken ? `&auth_token=${encodeURIComponent(embeddedAdminToken)}` : '';
-
       // 加载通联日志页面
+      const logbookBaseUrl = `${getWebUrl()}/logbook.html?${queryString}`;
+      const logbookUrl = await buildAuthenticatedRendererUrl(logbookBaseUrl);
       if (process.env.NODE_ENV === 'development' && !app.isPackaged) {
         // 开发模式：使用 Vite
-        const logbookUrl = `${getWebUrl()}/logbook.html?${queryString}${authParam}`;
-        logger.info(`IPC window:openLogbook loading dev URL: ${logbookUrl}`);
+        logger.info(`IPC window:openLogbook loading dev URL: ${redactSensitiveText(logbookUrl)}`);
         await logbookWindow.loadURL(logbookUrl);
         if (shouldOpenDevTools()) {
           logbookWindow.webContents.openDevTools();
         }
       } else {
         // 生产模式：连接内置静态 web 服务
-        const fullUrl = `${getWebUrl()}/logbook.html?${queryString}${authParam}`;
-        logger.info(`IPC window:openLogbook loading prod URL: ${fullUrl}`);
-        await logbookWindow.loadURL(fullUrl);
+        logger.info(`IPC window:openLogbook loading prod URL: ${redactSensitiveText(logbookUrl)}`);
+        await logbookWindow.loadURL(logbookUrl);
       }
 
       // 聚焦新窗口
@@ -3809,21 +3877,17 @@ function setupIpcHandlers() {
         spectrumWindow.setMenuBarVisibility(false);
       }
 
-      // auth token 参数（通过 URL 参数传递，与主窗口一致）
-      const authParam = embeddedAdminToken ? `?auth_token=${encodeURIComponent(embeddedAdminToken)}` : '';
-
       // 加载频谱图页面
+      const spectrumUrl = await buildAuthenticatedRendererUrl(`${getWebUrl()}/spectrum.html`);
       if (process.env.NODE_ENV === 'development' && !app.isPackaged) {
-        const spectrumUrl = `${getWebUrl()}/spectrum.html${authParam}`;
-        logger.info(`IPC window:openSpectrumWindow loading dev URL: ${spectrumUrl}`);
+        logger.info(`IPC window:openSpectrumWindow loading dev URL: ${redactSensitiveText(spectrumUrl)}`);
         await spectrumWindow.loadURL(spectrumUrl);
         if (shouldOpenDevTools()) {
           spectrumWindow.webContents.openDevTools();
         }
       } else {
-        const fullUrl = `${getWebUrl()}/spectrum.html${authParam}`;
-        logger.info(`IPC window:openSpectrumWindow loading prod URL: ${fullUrl}`);
-        await spectrumWindow.loadURL(fullUrl);
+        logger.info(`IPC window:openSpectrumWindow loading prod URL: ${redactSensitiveText(spectrumUrl)}`);
+        await spectrumWindow.loadURL(spectrumUrl);
       }
 
       // 聚焦新窗口

@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   LoginRequestSchema,
   PasswordLoginRequestSchema,
+  ExchangeBrowserLoginCodeRequestSchema,
   CreateTokenRequestSchema,
   UpdateTokenRequestSchema,
   UpdateSelfLoginCredentialRequestSchema,
@@ -10,6 +11,7 @@ import {
 } from '@tx5dr/contracts';
 import { AuthManager, AuthManagerError } from '../auth/AuthManager.js';
 import { requireRole } from '../auth/authPlugin.js';
+import { BrowserLoginCodeCapacityError } from '../auth/BrowserLoginCodeStore.js';
 
 export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   const authManager = AuthManager.getInstance();
@@ -61,6 +63,76 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
     const jwt = await reply.jwtSign({
       tokenId: authToken.id,
+      role: authToken.role,
+      operatorIds: authToken.operatorIds,
+    });
+
+    return {
+      jwt,
+      role: authToken.role,
+      label: authToken.label,
+      operatorIds: authToken.operatorIds,
+      maxOperators: authToken.maxOperators,
+      permissionGrants: authToken.permissionGrants,
+    };
+  });
+
+  // POST /api/auth/browser-login-codes — Admin 创建短时一次性浏览器登录码
+  fastify.post('/browser-login-codes', {
+    onRequest: [async (_request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+    }],
+    preHandler: [requireRole(UserRole.ADMIN)],
+  }, async (request, reply) => {
+    const tokenId = request.authUser?.tokenId;
+    if (!tokenId) {
+      return reply.code(401).send({
+        success: false,
+        error: { code: 'UNAUTHORIZED', message: 'Authentication required', userMessage: 'Please login first' },
+      });
+    }
+
+    try {
+      return authManager.createBrowserLoginCode(tokenId);
+    } catch (error) {
+      if (error instanceof BrowserLoginCodeCapacityError) {
+        return reply.code(429).send({
+          success: false,
+          error: { code: 'TOO_MANY_BROWSER_LOGIN_CODES', message: 'Too many outstanding browser login codes', userMessage: 'Please try again shortly' },
+        });
+      }
+      if (error instanceof AuthManagerError && error.code === 'AUTH_DISABLED') {
+        return reply.code(409).send({
+          success: false,
+          error: { code: 'AUTH_DISABLED', message: 'Authentication is disabled', userMessage: 'Authentication is disabled' },
+        });
+      }
+      throw error;
+    }
+  });
+
+  // POST /api/auth/browser-login-codes/exchange — 公开、原子消费一次性登录码
+  fastify.post('/browser-login-codes/exchange', {
+    onRequest: [async (_request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+    }],
+  }, async (request, reply) => {
+    const body = ExchangeBrowserLoginCodeRequestSchema.parse(request.body);
+    const authToken = authManager.consumeBrowserLoginCode(body.code);
+
+    if (!authToken) {
+      return reply.code(401).send({
+        success: false,
+        error: {
+          code: 'INVALID_OR_EXPIRED_BROWSER_LOGIN_CODE',
+          message: 'Browser login code is invalid or expired',
+          userMessage: 'Browser login authorization expired. Please open the page again.',
+        },
+      });
+    }
+
+    const jwt = await reply.jwtSign({
+      tokenId: authToken.tokenId,
       role: authToken.role,
       operatorIds: authToken.operatorIds,
     });

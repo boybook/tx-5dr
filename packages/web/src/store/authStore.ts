@@ -2,7 +2,7 @@ import React, { createContext, useContext, useReducer, useEffect, useCallback, u
 import { createMongoAbility, type MongoAbility, type RawRuleOf, subject as caslSubject } from '@casl/ability';
 import { api, configureAuthToken } from '@tx5dr/core';
 import { buildAbilityRules, type PermissionGrant, type AppAction, type AppSubject } from '@tx5dr/contracts';
-import type { UserRole, AuthStatus, AuthMeResponse } from '@tx5dr/contracts';
+import type { UserRole, AuthStatus, AuthMeResponse, LoginResponse } from '@tx5dr/contracts';
 import i18n from '../i18n/index';
 import { createLogger } from '../utils/logger';
 
@@ -167,11 +167,56 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
   }
 }
 
-export function buildUrlWithoutAuthToken(location: Pick<Location, 'pathname' | 'search' | 'hash'>): string {
+export function getBrowserLoginCode(hash: string): string | null {
+  if (!hash.startsWith('#')) return null;
+  return new URLSearchParams(hash.slice(1)).get('browser_login_code');
+}
+
+export function buildUrlWithoutAuthCredentials(location: Pick<Location, 'pathname' | 'search' | 'hash'>): string {
   const params = new URLSearchParams(location.search);
   params.delete('auth_token');
   const query = params.toString();
-  return `${location.pathname}${query ? `?${query}` : ''}${location.hash}`;
+
+  let hash = location.hash;
+  if (getBrowserLoginCode(hash)) {
+    const hashParams = new URLSearchParams(hash.slice(1));
+    hashParams.delete('browser_login_code');
+    const cleanHash = hashParams.toString();
+    hash = cleanHash ? `#${cleanHash}` : '';
+  }
+
+  return `${location.pathname}${query ? `?${query}` : ''}${hash}`;
+}
+
+export function buildUrlWithoutAuthToken(location: Pick<Location, 'pathname' | 'search' | 'hash'>): string {
+  return buildUrlWithoutAuthCredentials(location);
+}
+
+interface UrlCredentialClient {
+  exchangeBrowserLoginCode: (request: { code: string }) => Promise<LoginResponse>;
+  login: (token: string) => Promise<LoginResponse>;
+}
+
+export async function authenticateUrlCredentials(
+  credentials: { browserLoginCode: string | null; legacyToken: string | null },
+  client: UrlCredentialClient = api,
+): Promise<LoginResponse | null> {
+  if (credentials.browserLoginCode) {
+    try {
+      return await client.exchangeBrowserLoginCode({ code: credentials.browserLoginCode });
+    } catch {
+      // A captured legacy sharing token remains the explicit compatibility fallback.
+    }
+  }
+
+  if (credentials.legacyToken) {
+    try {
+      return await client.login(credentials.legacyToken);
+    } catch {
+      // Continue into the normal login/public-view initialization flow.
+    }
+  }
+  return null;
 }
 
 // ===== JWT 本地存储 =====
@@ -245,41 +290,41 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     async function initialize() {
       try {
-        // 1. 检查 URL 参数 ?auth_token=xxx（Electron 浏览器模式）
+        // 1. Capture and remove URL credentials before making any network request.
         const urlParams = new URLSearchParams(window.location.search);
         const urlToken = urlParams.get('auth_token');
-        logger.info('Initializing auth, URL token present:', urlToken ? 'yes' : 'no');
+        const browserLoginCode = getBrowserLoginCode(window.location.hash);
+        logger.info('Initializing auth, URL credentials present:', {
+          browserLoginCode: browserLoginCode ? 'yes' : 'no',
+          legacyToken: urlToken ? 'yes' : 'no',
+        });
 
-        if (urlToken) {
-          // 清除 URL 参数
-          const cleanUrl = buildUrlWithoutAuthToken(window.location);
+        if (browserLoginCode || urlToken) {
+          const cleanUrl = buildUrlWithoutAuthCredentials(window.location);
           window.history.replaceState({}, '', cleanUrl);
+        }
 
-          // 直接用 URL token 登录
-          try {
-            logger.info('Logging in via URL token...');
-            const resp = await api.login(urlToken);
-            logger.info('URL token login succeeded', { role: resp.role, label: resp.label });
-            if (!cancelled) {
-              saveJwt(resp.jwt);
-              configureAuthToken(resp.jwt);
-              dispatch({
-                type: 'LOGIN_SUCCESS',
-                payload: {
-                  jwt: resp.jwt,
-                  role: resp.role,
-                  label: resp.label,
-                  operatorIds: resp.operatorIds,
-                  maxOperators: resp.maxOperators,
-                  permissionGrants: resp.permissionGrants,
-                },
-              });
-            }
-            return;
-          } catch (err) {
-            logger.error('URL token login failed:', err);
-            // URL token 无效，继续正常流程
-          }
+        const acceptLoginResponse = (resp: Awaited<ReturnType<typeof api.login>>) => {
+          saveJwt(resp.jwt);
+          configureAuthToken(resp.jwt);
+          dispatch({
+            type: 'LOGIN_SUCCESS',
+            payload: {
+              jwt: resp.jwt,
+              role: resp.role,
+              label: resp.label,
+              operatorIds: resp.operatorIds,
+              maxOperators: resp.maxOperators,
+              permissionGrants: resp.permissionGrants,
+            },
+          });
+        };
+
+        const urlLogin = await authenticateUrlCredentials({ browserLoginCode, legacyToken: urlToken });
+        if (urlLogin) {
+          logger.info('URL credential login succeeded', { role: urlLogin.role, label: urlLogin.label });
+          if (!cancelled) acceptLoginResponse(urlLogin);
+          return;
         }
 
         // 2. 获取服务器认证状态
