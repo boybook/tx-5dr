@@ -2,7 +2,7 @@
 // LogbookWSServer - WebSocket消息处理需要使用any
 
 import { WSMessageHandler } from '@tx5dr/core';
-import { WSMessageType } from '@tx5dr/contracts';
+import { UserRole, WSMessageType } from '@tx5dr/contracts';
 import type { OperatorStatus } from '@tx5dr/contracts';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 
@@ -12,22 +12,81 @@ interface LogbookConnection {
   handler: WSMessageHandler;
   operatorId?: string;
   logBookId?: string;
+  authorizedOperatorIds?: Set<string>;
 }
 
 interface LogBookIdResolver {
   resolveLogBookId(idOrCallsign: string): string | null;
 }
 
+interface LogBookAccessResolver extends LogBookIdResolver {
+  getOperatorIdsForLogBook(logBookId: string): string[];
+}
+
+export interface LogbookConnectionParams {
+  operatorId?: string;
+  logBookId?: string;
+  authorizedOperatorIds?: string[];
+}
+
+export type LogbookConnectionRejectionReason =
+  | 'Logbook filter required'
+  | 'No operator access permission'
+  | 'No log book access permission';
+
+export type LogbookConnectionAuthorization =
+  | { allowed: true; params: LogbookConnectionParams }
+  | { allowed: false; reason: LogbookConnectionRejectionReason };
+
 export function resolveLogbookConnectionParams(
   resolver: LogBookIdResolver,
   params: { operatorId?: string; logBookId?: string },
-): { operatorId?: string; logBookId?: string } {
+): LogbookConnectionParams {
   const requestedId = params.logBookId;
   return {
     operatorId: params.operatorId,
     logBookId: requestedId
       ? (resolver.resolveLogBookId(requestedId) ?? requestedId)
       : undefined,
+  };
+}
+
+export function authorizeLogbookConnectionParams(
+  resolver: LogBookAccessResolver,
+  params: LogbookConnectionParams,
+  identity: { role: UserRole; operatorIds: string[] },
+): LogbookConnectionAuthorization {
+  if (identity.role === UserRole.ADMIN) {
+    return { allowed: true, params };
+  }
+
+  if (!params.operatorId && !params.logBookId) {
+    return { allowed: false, reason: 'Logbook filter required' };
+  }
+
+  const tokenOperatorIds = new Set(identity.operatorIds);
+  if (params.operatorId && !tokenOperatorIds.has(params.operatorId)) {
+    return { allowed: false, reason: 'No operator access permission' };
+  }
+
+  let authorizedLogbookOperatorIds: string[] | undefined;
+  if (params.logBookId) {
+    authorizedLogbookOperatorIds = resolver
+      .getOperatorIdsForLogBook(params.logBookId)
+      .filter(operatorId => tokenOperatorIds.has(operatorId));
+    if (authorizedLogbookOperatorIds.length === 0) {
+      return { allowed: false, reason: 'No log book access permission' };
+    }
+  }
+
+  return {
+    allowed: true,
+    params: {
+      ...params,
+      authorizedOperatorIds: params.operatorId
+        ? [params.operatorId]
+        : Array.from(new Set(authorizedLogbookOperatorIds)),
+    },
   };
 }
 
@@ -76,7 +135,7 @@ export class LogbookWSServer {
     });
   }
 
-  addConnection(ws: any, params?: { operatorId?: string; logBookId?: string }) {
+  addConnection(ws: any, params?: LogbookConnectionParams) {
     const id = `log_${++this.idCounter}`;
     const handler = new WSMessageHandler();
 
@@ -97,6 +156,9 @@ export class LogbookWSServer {
       handler,
       operatorId: params?.operatorId,
       logBookId: params?.logBookId,
+      authorizedOperatorIds: params?.authorizedOperatorIds
+        ? new Set(params.authorizedOperatorIds)
+        : undefined,
     };
     this.connections.set(id, conn);
     return id;
@@ -138,6 +200,9 @@ export class LogbookWSServer {
 
   broadcastOperatorStatusUpdate(status: OperatorStatus) {
     for (const conn of this.connections.values()) {
+      if (conn.authorizedOperatorIds && !conn.authorizedOperatorIds.has(status.id)) {
+        continue;
+      }
       if (conn.operatorId && conn.operatorId !== status.id) {
         continue;
       }
@@ -147,11 +212,15 @@ export class LogbookWSServer {
 
   broadcastOperatorsList(operators: OperatorStatus[]) {
     for (const conn of this.connections.values()) {
+      const authorizedOperatorIds = conn.authorizedOperatorIds;
+      const authorizedOperators = authorizedOperatorIds
+        ? operators.filter(op => authorizedOperatorIds.has(op.id))
+        : operators;
       if (conn.operatorId) {
-        const filtered = operators.filter((op) => op.id === conn.operatorId);
+        const filtered = authorizedOperators.filter((op) => op.id === conn.operatorId);
         this.send(conn, WSMessageType.OPERATORS_LIST, { operators: filtered });
       } else {
-        this.send(conn, WSMessageType.OPERATORS_LIST, { operators });
+        this.send(conn, WSMessageType.OPERATORS_LIST, { operators: authorizedOperators });
       }
     }
   }

@@ -29,7 +29,11 @@ import { profileRoutes } from './routes/profiles.js';
 import { systemRoutes } from './routes/system.js';
 import { WSServer } from './websocket/WSServer.js';
 import { ProcessMonitor } from './services/ProcessMonitor.js';
-import { LogbookWSServer, resolveLogbookConnectionParams } from './websocket/LogbookWSServer.js';
+import {
+  LogbookWSServer,
+  authorizeLogbookConnectionParams,
+  resolveLogbookConnectionParams,
+} from './websocket/LogbookWSServer.js';
 import { DeviceUiWSServer } from './device-ui/DeviceUiWSServer.js';
 import { deviceUiRoutes } from './device-ui/routes.js';
 import { voiceRoutes } from './routes/voice.js';
@@ -715,20 +719,17 @@ export async function createServer() {
         return;
       }
 
-      // 归属校验：按 canonical logbook id 验证，避免 HTTP 支持的呼号形式在 WS 被误拒。
-      if (connectionParams.logBookId && current.role !== UserRole.ADMIN) {
-        const associated = wsLogManager.getOperatorIdsForLogBook(connectionParams.logBookId);
-        const hasAccess = associated.length > 0 &&
-          associated.some(id => current.operatorIds.includes(id));
-        if (!hasAccess) {
-          fastify.log.warn(`Logbook WS connection has no access to log book ${connectionParams.logBookId}, rejecting`);
-          socket.close(4003, 'No log book access permission');
-          return;
-        }
+      const authorization = authorizeLogbookConnectionParams(wsLogManager, connectionParams, current);
+      if (!authorization.allowed) {
+        fastify.log.warn(
+          `Logbook WS authorization rejected: reason=${authorization.reason}, operatorId=${operatorId || ''}, logBookId=${connectionParams.logBookId || ''}`,
+        );
+        socket.close(4003, authorization.reason);
+        return;
       }
 
       fastify.log.info(`Logbook WS client connected: operatorId=${operatorId || ''}, logBookId=${connectionParams.logBookId || ''}`);
-      logbookWsServer.addConnection(socket, connectionParams);
+      logbookWsServer.addConnection(socket, authorization.params);
     } catch (e) {
       fastify.log.warn('Logbook WS connection parameter parsing failed, rejecting');
       socket.close(4002, 'Invalid connection parameters');
