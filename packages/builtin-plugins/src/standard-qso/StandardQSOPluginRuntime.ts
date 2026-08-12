@@ -98,7 +98,7 @@ export interface StandardQSOPluginOperator {
     readonly config: StandardQSOOperatorConfig;
     hasWorkedCallsign(callsign: string, options?: { anyBand?: boolean }): Promise<boolean>;
     isTargetBeingWorkedByOthers(targetCallsign: string): boolean;
-    recordQSOLog(qsoRecord: QSORecord): void;
+    recordQSOLog(qsoRecord: QSORecord): Promise<QSORecord>;
     notifySlotsUpdated?(slots: OperatorSlots): void;
     notifyStateChanged?(state: string): void;
 }
@@ -106,7 +106,7 @@ export interface StandardQSOPluginOperator {
 interface StandardState {
     handle(strategy: StandardQSOPluginRuntime, messages: ParsedFT8Message[]): Promise<StateHandleResult>;
     onTimeout?(strategy: StandardQSOPluginRuntime): StateHandleResult;
-    onEnter?(strategy: StandardQSOPluginRuntime): void;
+    onEnter?(strategy: StandardQSOPluginRuntime): void | Promise<void>;
 }
 
 function getCandidatePriorityTuple(strategy: StandardQSOPluginRuntime, candidate: ParsedFT8Message): [number, number, number] {
@@ -728,7 +728,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
         }
     },
     TX4: {
-        onEnter(strategy: StandardQSOPluginRuntime) {
+        async onEnter(strategy: StandardQSOPluginRuntime) {
             // 记录QSO日志
             // 优先使用actualFrequency（包含音频偏移的精确频率）
             // 如果actualFrequency无效（< 1MHz），则使用config.frequency（基础频率）
@@ -751,9 +751,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 myCallsign: strategy.context.config.myCallsign,
                 myGrid: strategy.context.config.myGrid
             };
-            strategy.operator.recordQSOLog(qsoRecord);
-            // 清理QSO开始时间
-            strategy.qsoStartTime = undefined;
+            await strategy.persistCompletedQSO(qsoRecord);
         },
         async handle(strategy: StandardQSOPluginRuntime, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 首先检查是否收到对方的73
@@ -832,7 +830,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
         }
     },
     TX5: {
-        onEnter(strategy: StandardQSOPluginRuntime) {
+        async onEnter(strategy: StandardQSOPluginRuntime) {
             // 记录QSO日志
             // 优先使用actualFrequency（包含音频偏移的精确频率）
             // 如果actualFrequency无效（< 1MHz），则使用config.frequency（基础频率）
@@ -855,9 +853,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 myCallsign: strategy.context.config.myCallsign,
                 myGrid: strategy.context.config.myGrid
             };
-            strategy.operator.recordQSOLog(qsoRecord);
-            // 清理QSO开始时间
-            strategy.qsoStartTime = undefined;
+            await strategy.persistCompletedQSO(qsoRecord);
         },
         async handle(strategy: StandardQSOPluginRuntime, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 【修复】首先检查是否收到对方重发的RRR/RR73
@@ -1053,6 +1049,7 @@ interface Post73RetryContext {
     reportSent?: number;
     reportReceived?: number;
     actualFrequency?: number;
+    persistedQSO?: QSORecord;
     expiresAt: number;
 }
 
@@ -1074,6 +1071,9 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     public callAttempts: number = 0; // 呼叫尝试次数计数器（TX1状态专用）
     public qsoStartTime?: number; // QSO开始时间
     public tx5TransmissionQueued = false;
+    private qsoPersistencePromise?: Promise<QSORecord>;
+    private persistedQSO?: QSORecord;
+    private qsoPersistenceFailed = false;
     public post73RetryContext?: Post73RetryContext;
 
     // QSO上下文历史缓存（呼号 -> 上下文）
@@ -1147,7 +1147,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         };
     }
 
-    changeState(state: SlotsIndex) {
+    async changeState(state: SlotsIndex): Promise<void> {
         const oldState = this.state;
         this.state = state;
         this.timeoutCycles = 0;
@@ -1171,11 +1171,54 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         // 调用新状态的onEnter
         const newState = states[this.state];
         if (newState.onEnter) {
-            newState.onEnter(this);
+            try {
+                await newState.onEnter(this);
+            } catch (error) {
+                if (state === 'TX4' || state === 'TX5') {
+                    this.qsoPersistenceFailed = true;
+                    this.logger.error(`State ${state} failed to durably persist its completed QSO`, error);
+                }
+                throw error;
+            }
         }
     }
 
+    async persistCompletedQSO(qsoRecord: QSORecord): Promise<QSORecord> {
+        if (this.persistedQSO) {
+            this.logger.debug('Skipping duplicate QSO persistence within the current lifecycle', {
+                callsign: this.persistedQSO.callsign,
+                id: this.persistedQSO.id,
+            });
+            return this.persistedQSO;
+        }
+        if (this.qsoPersistencePromise) {
+            this.logger.debug('Joining the in-flight QSO persistence for the current lifecycle');
+            return this.qsoPersistencePromise;
+        }
+
+        const persistence = Promise.resolve()
+            .then(() => this.operator.recordQSOLog(qsoRecord))
+            .then((persisted) => {
+                this.persistedQSO = persisted;
+                this.qsoStartTime = undefined;
+                this.qsoPersistenceFailed = false;
+                return persisted;
+            })
+            .catch((error) => {
+                this.qsoPersistenceFailed = true;
+                throw error;
+            })
+            .finally(() => {
+                this.qsoPersistencePromise = undefined;
+            });
+        this.qsoPersistencePromise = persistence;
+        return persistence;
+    }
+
     async handleReceivedAndDicideNext(messages: ParsedFT8Message[], options?: { isReDecision?: boolean }): Promise<StrategyDecision> {
+        if (this.qsoPersistencePromise || this.qsoPersistenceFailed) {
+            return { stop: true };
+        }
         const currentState = states[this.state];
 
         // 过滤掉发送者是我自己的消息；部分解码消息（含 `<...>` 占位符）绝不参与 QSO 决策
@@ -1189,7 +1232,11 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             /* if (result.changeState !== 'TX6') {
                 this.operator.start();  // 启动发射
             } */
-            this.changeState(result.changeState);
+            try {
+                await this.changeState(result.changeState);
+            } catch {
+                return { stop: true };
+            }
         } else if (!options?.isReDecision) {
             // 增加超时计数（重决策时跳过，避免虚假超时累加）
             this.timeoutCycles++;
@@ -1203,7 +1250,11 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
                     // 使用 changeState() 方法进行状态转换，确保完整的状态转换流程
                     if (timeoutResult.changeState) {
                         this.logger.debug(`State transition after timeout: ${this.state} -> ${timeoutResult.changeState}`);
-                        this.changeState(timeoutResult.changeState);
+                        try {
+                            await this.changeState(timeoutResult.changeState);
+                        } catch {
+                            return { stop: true };
+                        }
                     }
                     if (timeoutResult.stop) {
                         this.logger.debug('Stopping operator after timeout');
@@ -1230,6 +1281,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     }
 
     handleTransmitSlot(): string | null {
+        if (this.qsoPersistencePromise || this.qsoPersistenceFailed) return null;
         return this.slots[this.state];
     }
 
@@ -1243,19 +1295,30 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         return this.operator.config.skipTx1 === true ? 'TX2' : 'TX1';
     }
 
-    requestCall(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): void {
+    requestCall(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): boolean {
+        if (this.qsoPersistencePromise || this.qsoPersistenceFailed) {
+            this.logger.warn('requestCall ignored while a completed QSO is not durably saved');
+            return false;
+        }
+        if (this.persistedQSO && callsignMatches(callsign, this.context.targetCallsign)) {
+            this.logger.warn('requestCall ignored for an already persisted QSO lifecycle', { callsign });
+            return false;
+        }
         if (isUndecodedCallsignPlaceholder(callsign)) {
             this.logger.warn(`requestCall: refusing undecoded placeholder callsign ${callsign}`);
-            return;
+            return false;
         }
         this.syncOperatorConfig();
         this.logger.debug(`requestCall: myCallsign=${this.operator.config.myCallsign}, target=${callsign}`, lastMessage);
         this.clearPost73RetryContext('manual requestCall');
+        if (this.persistedQSO) {
+            this.clearQSOContext();
+        }
         if (!lastMessage) {
             this.context.targetCallsign = callsign;
             this.updateSlots();
-            this.changeState(this.getInitialOutboundCallState());  // 呼叫他
-            return;
+            this.changeStateSafely(this.getInitialOutboundCallState());  // 呼叫他
+            return true;
         }
         this.context.targetCallsign = callsign;
         this.context.reportSent = lastMessage.message.snr;
@@ -1271,8 +1334,8 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         }
         if (msg.type === FT8MessageType.UNKNOWN || msg.type === FT8MessageType.CUSTOM) {
             this.updateSlots();
-            this.changeState(this.getInitialOutboundCallState());  // 呼叫他
-            return;
+            this.changeStateSafely(this.getInitialOutboundCallState());  // 呼叫他
+            return true;
         }
         // 包含 targetCallsign 的消息
         if (msg.type === FT8MessageType.SIGNAL_REPORT || msg.type === FT8MessageType.CALL || msg.type === FT8MessageType.ROGER_REPORT || msg.type === FT8MessageType.RRR || msg.type === FT8MessageType.SEVENTY_THREE) {
@@ -1287,7 +1350,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
                         this.context.actualFrequency = this.context.config.frequency + parsedMessage.df;
                     }
                     this.updateSlots();
-                    this.changeState('TX2');  // 下周期发送 SIGNAL_REPORT
+                    this.changeStateSafely('TX2');  // 下周期发送 SIGNAL_REPORT
                     this.logger.debug('requestCall: received CALL, switching to TX2');
                 } else if (msg.type === FT8MessageType.SIGNAL_REPORT) {
                     // 对方发了信号报告，回复 ROGER_REPORT
@@ -1298,7 +1361,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
                         this.context.actualFrequency = this.context.config.frequency + parsedMessage.df;
                     }
                     this.updateSlots();
-                    this.changeState('TX3');  // 下周期发送 ROGER_REPORT
+                    this.changeStateSafely('TX3');  // 下周期发送 ROGER_REPORT
                     this.logger.debug('requestCall: received SIGNAL_REPORT, switching to TX3');
                 } else if (msg.type === FT8MessageType.ROGER_REPORT) {
                     // 对方发了 ROGER_REPORT，回复 RR73
@@ -1312,31 +1375,32 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
                         this.context.actualFrequency = this.context.config.frequency + parsedMessage.df;
                     }
                     this.updateSlots();
-                    this.changeState('TX4');  // 下周期发送 RR73
+                    this.changeStateSafely('TX4');  // 下周期发送 RR73
                     this.logger.debug('requestCall: received ROGER_REPORT, switching to TX4');
                 } else if (msg.type === FT8MessageType.RRR) {
                     // 对方发了 RRR，回复 73
                     this.updateSlots();
-                    this.changeState('TX5');  // 下周期发送 73
+                    this.changeStateSafely('TX5');  // 下周期发送 73
                     this.logger.debug('requestCall: received RRR, switching to TX5');
                 } else if (msg.type === FT8MessageType.SEVENTY_THREE) {
                     // 对方发了 73，QSO 完成，转到待机
                     this.updateSlots();
-                    this.changeState('TX6');  // 待机
+                    this.changeStateSafely('TX6');  // 待机
                     this.logger.debug('requestCall: received 73, switching to TX6 (standby)');
                 }
                 // 不再调用 handleReceivedAndDicideNext，避免状态机二次处理
-                return;
+                return true;
             } else {
                 // 和我无关，那么就正常CQ他
                 this.updateSlots();
-                this.changeState(this.getInitialOutboundCallState());  // 呼叫他
+                this.changeStateSafely(this.getInitialOutboundCallState());  // 呼叫他
             }
-            return;
+            return true;
         }
         // 不包含 targetCallsign 的消息
         this.updateSlots();
-        this.changeState(this.getInitialOutboundCallState());  // 呼叫他
+        this.changeStateSafely(this.getInitialOutboundCallState());  // 呼叫他
+        return true;
     }
 
     decide(messages: ParsedFT8Message[], meta?: StrategyDecisionMeta): Promise<StrategyDecision> {
@@ -1608,6 +1672,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             reportSent: this.context.reportSent,
             reportReceived: this.context.reportReceived,
             actualFrequency: this.context.actualFrequency,
+            persistedQSO: this.persistedQSO,
             expiresAt: Date.now() + retryWindowMs,
         };
 
@@ -1642,6 +1707,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         this.context.reportSent = context.reportSent;
         this.context.reportReceived = context.reportReceived;
         this.context.actualFrequency = context.actualFrequency;
+        this.persistedQSO = context.persistedQSO;
         this.tx5TransmissionQueued = false;
         this.updateSlots();
     }
@@ -1663,6 +1729,8 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         this.context.reportReceived = undefined;
         this.context.actualFrequency = undefined;
         this.foxHash = undefined;
+        this.persistedQSO = undefined;
+        this.qsoPersistenceFailed = false;
 
         // 更新slots（TX1-TX5会变为空，只保留TX6的CQ）
         this.updateSlots();
@@ -1675,9 +1743,18 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         this.callAttempts = 0;
         this.qsoStartTime = undefined;
         this.tx5TransmissionQueued = false;
+        this.qsoPersistencePromise = undefined;
+        this.persistedQSO = undefined;
+        this.qsoPersistenceFailed = false;
         this.clearPost73RetryContext(`runtime reset${reason ? `: ${reason}` : ''}`);
         this.clearQSOContext();
-        this.changeState('TX6');
+        this.changeStateSafely('TX6');
+    }
+
+    private changeStateSafely(state: SlotsIndex): void {
+        void this.changeState(state).catch((error) => {
+            this.logger.error(`Asynchronous state transition to ${state} failed`, error);
+        });
     }
 
     /**

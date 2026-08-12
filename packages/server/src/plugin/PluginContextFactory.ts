@@ -2,7 +2,12 @@ import path from 'path';
 import { createSocket } from 'node:dgram';
 import * as hostHamlib from 'hamlib';
 import type { RemoteInfo, Socket, SocketType } from 'node:dgram';
-import { getBandFromFrequency, toAdifMode, isUndecodedCallsignPlaceholder } from '@tx5dr/core';
+import {
+  getBandFromFrequency,
+  isUndecodedCallsignPlaceholder,
+  LogbookOperationError,
+  toAdifMode,
+} from '@tx5dr/core';
 import type {
   HostSettingsControl,
   HamlibHostDependency,
@@ -33,6 +38,7 @@ import {
 } from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
+import type { LogBookInstance } from '../log/LogManager.js';
 import { PluginStorageProvider } from './PluginStorageProvider.js';
 import { PluginFileStoreProvider } from './PluginFileStoreProvider.js';
 import { PluginTimerManager } from './PluginTimerManager.js';
@@ -554,7 +560,7 @@ export class PluginContextFactory {
         highlightCallsign(_rule: { callsign: string; background?: string | null; foreground?: string | null; lastOnly?: boolean }) {},
         async hasWorkedCallsign(_callsign: string, _options?: { anyBand?: boolean }) { return false; },
         isTargetBeingWorkedByOthers(_targetCallsign: string) { return false; },
-        recordQSO(_record: import('@tx5dr/contracts').QSORecord) {},
+        async recordQSO(record: import('@tx5dr/contracts').QSORecord) { return record; },
         notifySlotsUpdated(_slots: import('@tx5dr/contracts').OperatorSlots) {},
         notifyStateChanged(_state: string) {},
       };
@@ -644,7 +650,9 @@ export class PluginContextFactory {
         return deps.getOperatorById(operatorId)?.isTargetBeingWorkedByOthers(targetCallsign) ?? false;
       },
       recordQSO(record: import('@tx5dr/contracts').QSORecord) {
-        deps.getOperatorById(operatorId)?.recordQSOLog(record);
+        const operator = deps.getOperatorById(operatorId);
+        if (!operator) return Promise.reject(new Error(`Operator ${operatorId} is unavailable`));
+        return operator.recordQSOLog(record);
       },
       notifySlotsUpdated(slots: import('@tx5dr/contracts').OperatorSlots) {
         deps.getOperatorById(operatorId)?.notifySlotsUpdated(slots);
@@ -889,11 +897,15 @@ export class PluginContextFactory {
         return logBookId ? logManager.getLogBook(logBookId) : null;
       };
 
-      const getOrCreateLogBook = async () => {
-        if (!normalizedCallsign) {
-          return null;
+      const getRequiredLogBook = (): LogBookInstance => {
+        const logBook = getExistingLogBook();
+        if (!logBook) {
+          throw new LogbookOperationError(
+            'LOGBOOK_UNAVAILABLE',
+            `Logbook for ${normalizedCallsign || 'the requested callsign'} is unavailable`,
+          );
         }
-        return logManager.getOrCreateLogBookByCallsign(normalizedCallsign);
+        return logBook;
       };
 
       const buildQuery = (filter?: QSOQueryFilter) => ({
@@ -908,7 +920,7 @@ export class PluginContextFactory {
         orderDirection: filter?.orderDirection,
       });
 
-      const toLogBookStatistics = async (logBook: Awaited<ReturnType<typeof getOrCreateLogBook>>): Promise<LogBookStatistics | null> => {
+      const toLogBookStatistics = async (logBook: LogBookInstance | null): Promise<LogBookStatistics | null> => {
         if (!logBook) {
           return null;
         }
@@ -933,32 +945,30 @@ export class PluginContextFactory {
           return getExistingLogBook()?.id ?? null;
         },
         async queryQSOs(filter: QSOQueryFilter) {
-          const logBook = await getOrCreateLogBook();
+          const logBook = getExistingLogBook();
           if (!logBook) return [];
           return logBook.provider.queryQSOs(buildQuery(filter));
         },
         async countQSOs(filter?: QSOQueryFilter) {
-          const logBook = await getOrCreateLogBook();
+          const logBook = getExistingLogBook();
           if (!logBook) return 0;
           const records = await logBook.provider.queryQSOs(buildQuery(filter));
           return records.length;
         },
         async addQSO(record: import('@tx5dr/contracts').QSORecord) {
-          const logBook = await getOrCreateLogBook();
-          if (!logBook) return;
-          await logBook.provider.addQSO(record, operatorId);
+          const logBook = getRequiredLogBook();
+          return logBook.provider.addQSO(record, operatorId);
         },
         async updateQSO(qsoId: string, updates: Partial<import('@tx5dr/contracts').QSORecord>) {
-          const logBook = await getOrCreateLogBook();
-          if (!logBook) return;
-          await logBook.provider.updateQSO(qsoId, updates);
+          const logBook = getRequiredLogBook();
+          return logBook.provider.updateQSO(qsoId, updates);
         },
         async getStatistics() {
-          const logBook = await getOrCreateLogBook();
+          const logBook = getExistingLogBook();
           return toLogBookStatistics(logBook);
         },
         async notifyUpdated(explicitOperatorId?: string) {
-          const logBook = await getOrCreateLogBook();
+          const logBook = getExistingLogBook();
           if (!logBook) return;
           const statistics = await toLogBookStatistics(logBook);
           if (!statistics) return;
@@ -1027,14 +1037,14 @@ export class PluginContextFactory {
 
       async addQSO(record: import('@tx5dr/contracts').QSORecord) {
         const callsign = getBoundCallsign();
-        if (!callsign) return;
-        await createCallsignAccess(callsign).addQSO(record);
+        if (!callsign) throw new Error('Operator logbook is unavailable');
+        return createCallsignAccess(callsign).addQSO(record);
       },
 
       async updateQSO(qsoId: string, updates: Partial<import('@tx5dr/contracts').QSORecord>) {
         const callsign = getBoundCallsign();
-        if (!callsign) return;
-        await createCallsignAccess(callsign).updateQSO(qsoId, updates);
+        if (!callsign) throw new Error('Operator logbook is unavailable');
+        return createCallsignAccess(callsign).updateQSO(qsoId, updates);
       },
 
       // === Notification ===

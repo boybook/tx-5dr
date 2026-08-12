@@ -12,6 +12,7 @@ import { useViewportHeightCssVar } from '../hooks/useViewportHeight';
 import { useLanguage } from '../hooks/useLanguage';
 import { AuthProvider, useAuth } from '../store/authStore';
 import { LoginPage } from './LoginPage';
+import { resolveLogbookPageParameters } from '../components/logbook/logbookRecoveryPolicy';
 
 const logger = createLogger('LogbookPage');
 const LOGBOOK_GLOBE_THEME_COLOR = '#020617';
@@ -40,12 +41,12 @@ const LogbookContent: React.FC = () => {
     configureAuthToken(savedJwt);
 
     // 从URL参数获取操作员ID和日志本ID
-    const urlParams = new URLSearchParams(window.location.search);
-    const opId = urlParams.get('operatorId');
-    const logId = urlParams.get('logBookId');
+    const parameters = resolveLogbookPageParameters(window.location.search);
+    const opId = parameters.operatorId;
+    const logId = parameters.logBookId;
 
-    if (!opId) {
-      logger.error('Missing operator ID parameter');
+    if (!parameters.valid) {
+      logger.error('Missing operator and logbook ID parameters');
       setLoading(false);
       return;
     }
@@ -60,9 +61,11 @@ const LogbookContent: React.FC = () => {
           const detail = await api.getOperator(opId);
           // 使用 myCallsign 而不是 context.myCall
           setOperatorCallsign(detail.data?.myCallsign || opId);
+        } else {
+          setOperatorCallsign(logId);
         }
       } catch (e) {
-        setOperatorCallsign(opId || '');
+        setOperatorCallsign(opId || logId);
       } finally {
         setLoading(false);
       }
@@ -80,7 +83,7 @@ const LogbookContent: React.FC = () => {
     );
   }
 
-  if (!operatorId) {
+  if (!operatorId && !logBookId) {
     return (
       <div className="app-viewport-min-height bg-background flex items-center justify-center">
         <div className="text-center max-w-md mx-auto p-8">

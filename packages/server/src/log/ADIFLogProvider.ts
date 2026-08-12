@@ -4,8 +4,10 @@ import path from 'node:path';
 import type {
   LogBookDxccSummary,
   LogBookImportResult,
+  LogbookBackupStatus,
   LogbookHealth,
   LogbookHealthIssue,
+  LogbookRestorePreflight,
   QSORecord,
 } from '@tx5dr/contracts';
 import {
@@ -31,6 +33,13 @@ import {
   normalizeQsoForPersistence,
 } from './LogbookRecordService.js';
 import {
+  AdifBackupService,
+  generationRevision,
+  type AdifBackupServiceOptions,
+  type BackupDownload,
+  LogbookBackupError,
+} from './backup/AdifBackupService.js';
+import {
   decodeAdifRecord,
   encodeAdifHeader,
   encodeAdifRecord,
@@ -55,26 +64,24 @@ import {
   type LogbookRewriteOperation,
   type PreparedLogbookMutation,
 } from './persistence/LogbookDocument.js';
-import {
-  type LegacyMigrationResult,
-} from './persistence/LegacyLogbookMigrator.js';
-import {
-  LegacyLogbookMigrationWorker,
-  type LegacyLogbookMigrationRunner,
-} from './persistence/LegacyLogbookMigrationWorker.js';
-import type { LegacyRetentionResult } from './persistence/LegacyLogbookRecovery.js';
 import type { GenerationToken } from './persistence/LogbookScanTypes.js';
 
 const logger = createLogger('ADIFLogProvider');
 
 export interface ADIFLogProviderOptions {
+  logBookId?: string;
   logFilePath?: string;
   autoCreateFile?: boolean;
   logFileName?: string;
   /** Test seam; production always uses the isolated worker-backed store. */
   fileStoreFactory?: (filePath: string, options: AdifFileStoreOptions) => AdifFileStore;
-  /** Test seam for deterministic legacy inventories. */
-  legacyMigrator?: LegacyLogbookMigrationRunner;
+  /** Test seam; production uses the isolated worker-backed backup service. */
+  backupServiceFactory?: (
+    logBookId: string,
+    filePath: string,
+    store: AdifFileStore,
+    options: AdifBackupServiceOptions,
+  ) => AdifBackupService;
 }
 
 interface ImportCandidate {
@@ -125,62 +132,16 @@ function dedupeIssues(issues: readonly LogbookHealthIssue[]): LogbookHealthIssue
 }
 
 function storeIssue(issue: AdifFileStoreIssue): LogbookHealthIssue {
+  const issueFileName = issue.path ? path.basename(issue.path) : undefined;
   return {
     code: issue.code,
     message: issue.message,
-    recoveryFileName: issue.path ? path.basename(issue.path) : undefined,
+    affectedBytes: issue.affectedBytes,
+    // Store diagnostics usually point at the formal ADIF or its directory.
+    // Only the fixed adjacent rewrite candidate is a user-recoverable artifact.
+    recoveryFileName: issueFileName?.endsWith('.rewrite.tmp') ? issueFileName : undefined,
     occurredAt: Date.now(),
   };
-}
-
-function migrationIssues(result: LegacyMigrationResult): LogbookHealthIssue[] {
-  const issues = result.issues.map<LogbookHealthIssue>(issue => ({
-    code: issue.code,
-    message: issue.message,
-    recoveryFileName: issue.path ? path.basename(issue.path) : undefined,
-    occurredAt: Date.now(),
-  }));
-  if (result.skippedTransactions > 0) {
-    issues.push({
-      code: 'LEGACY_TRANSACTIONS_SKIPPED',
-      message: `${result.skippedTransactions} legacy transaction(s) could not be safely replayed`,
-      affectedRecords: result.skippedTransactions,
-      occurredAt: Date.now(),
-    });
-  }
-  if (result.unappliedOperations > 0) {
-    issues.push({
-      code: 'LEGACY_OPERATIONS_UNAPPLIED',
-      message: `${result.unappliedOperations} legacy operation(s) could not be safely associated with a logbook record`,
-      affectedRecords: result.unappliedOperations,
-      occurredAt: Date.now(),
-    });
-  }
-  if (result.status === 'CLEANUP_PENDING' && !issues.some(issue => issue.code === 'CLEANUP_PENDING')) {
-    issues.push({
-      code: 'CLEANUP_PENDING',
-      message: 'The migrated logbook is usable, but legacy artifact cleanup is still pending',
-      recoveryFileName: result.recoveryPath ? path.basename(result.recoveryPath) : undefined,
-      occurredAt: Date.now(),
-    });
-  }
-  if (result.status === 'FAILED' && !issues.some(issue => issue.code === 'LEGACY_MIGRATION_FAILED')) {
-    issues.push({
-      code: 'LEGACY_MIGRATION_FAILED',
-      message: 'Legacy logbook artifacts could not be safely converged; writes are blocked until retry succeeds',
-      occurredAt: Date.now(),
-    });
-  }
-  return issues;
-}
-
-function retentionIssues(result: LegacyRetentionResult): LogbookHealthIssue[] {
-  return result.issues.map(issue => ({
-    code: issue.code,
-    message: issue.message,
-    recoveryFileName: issue.path ? path.basename(issue.path) : undefined,
-    occurredAt: Date.now(),
-  }));
 }
 
 function systemErrorCode(error: unknown): string | undefined {
@@ -239,6 +200,7 @@ export class ADIFLogProvider implements ILogProvider {
     & Omit<ADIFLogProviderOptions, 'autoCreateFile' | 'logFileName'>;
   private logFilePath = '';
   private store?: AdifFileStore;
+  private backup?: AdifBackupService;
   private document?: LogbookDocument;
   private records = new LogbookRecordService([]);
   private generation?: GenerationToken;
@@ -250,8 +212,7 @@ export class ADIFLogProvider implements ILogProvider {
   private mutationTail: Promise<void> = Promise.resolve();
   private initialized = false;
   private closing = false;
-  private migrationWriteBlocked = false;
-  private storeRecoveryWritesEnabled?: boolean;
+  private restoreQueued = false;
   private unsubscribeStore?: () => void;
   private unregisterPersistence?: () => void;
 
@@ -528,6 +489,12 @@ export class ADIFLogProvider implements ILogProvider {
     this.unregisterPersistence?.();
     this.unregisterPersistence = undefined;
     await this.flush();
+    await this.backup?.flushWithin(30_000).catch((error) => {
+      logger.warn('Logbook backup could not be refreshed before shutdown', {
+        logBookId: this.options.logBookId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     this.unsubscribeStore?.();
     this.unsubscribeStore = undefined;
     await this.store?.close();
@@ -535,6 +502,69 @@ export class ADIFLogProvider implements ILogProvider {
 
   getLogFilePath(): string {
     return this.logFilePath;
+  }
+
+  async getRevision(): Promise<string> {
+    return generationRevision(this.generation);
+  }
+
+  async getBackupStatus(
+    options: { admin: boolean; tokenId?: string; unsaved?: LogbookBackupStatus['unsaved'] },
+  ): Promise<LogbookBackupStatus> {
+    return this.requireBackup().getStatus(this.getHealth(), generationRevision(this.generation), options);
+  }
+
+  async createBackup(): Promise<LogbookBackupStatus> {
+    await this.requireBackup().createBackup();
+    return this.getBackupStatus({ admin: false });
+  }
+
+  async prepareBackupRestore(
+    tokenId: string,
+    expectedRevision: string,
+  ): Promise<LogbookRestorePreflight> {
+    const backup = this.requireBackup();
+    if (this.restoreQueued || backup.maintenanceActive) {
+      throw new LogbookBackupError('LOGBOOK_MAINTENANCE', 'A restore operation is already in progress');
+    }
+    return backup.prepareRestore(
+      tokenId,
+      expectedRevision,
+      this.getHealth(),
+      generationRevision(this.generation),
+      this.generation,
+    );
+  }
+
+  async restoreBackup(input: {
+    tokenId: string;
+    preflightToken: string;
+    expectedRevision: string;
+    beforeReplace?: () => Promise<void>;
+  }): Promise<LogbookBackupStatus> {
+    if (this.restoreQueued || this.requireBackup().maintenanceActive) {
+      throw new LogbookBackupError('LOGBOOK_MAINTENANCE', 'A restore operation is already in progress');
+    }
+    this.restoreQueued = true;
+    try {
+      return await this.enqueue(async () => {
+        const committed = await this.requireBackup().restore({
+          ...input,
+          currentRevision: generationRevision(this.generation),
+          beforeReplace: input.beforeReplace,
+        });
+        this.installScan(committed.scan, committed.generation, committed.recordProjections);
+        this.stickyIssues = [];
+        this.refreshHealth();
+        return this.getBackupStatus({ admin: true, tokenId: input.tokenId });
+      });
+    } finally {
+      this.restoreQueued = false;
+    }
+  }
+
+  openBackupDownload(kind: 'latest' | 'pre-restore'): Promise<BackupDownload> {
+    return this.requireBackup().openDownload(kind);
   }
 
   private async initializeInternal(): Promise<LogbookHealth> {
@@ -564,27 +594,21 @@ export class ADIFLogProvider implements ILogProvider {
   }
 
   private async openCurrentPath(retry: boolean): Promise<LogbookHealth> {
-    const migrator = this.options.legacyMigrator ?? new LegacyLogbookMigrationWorker();
-    const migration = await migrator.migrate(this.logFilePath);
-    this.migrationWriteBlocked = migration.status === 'FAILED';
-    const recoveryWritesEnabled = !this.migrationWriteBlocked;
-
+    const logBookId = this.options.logBookId?.trim()
+      || path.basename(this.logFilePath).replace(/\.adi$/i, '');
     if (
       !this.store
       || this.store.getState().status === 'closed'
-      || this.storeRecoveryWritesEnabled !== recoveryWritesEnabled
     ) {
       if (this.store && this.store.getState().status !== 'closed') {
         await this.store.close();
       }
       this.unsubscribeStore?.();
       const storeOptions: AdifFileStoreOptions = {
-        createIfMissing: this.options.autoCreateFile && migration.status !== 'FAILED',
-        recoveryWritesEnabled,
+        createIfMissing: this.options.autoCreateFile,
       };
       this.store = this.options.fileStoreFactory?.(this.logFilePath, storeOptions)
         ?? new AdifFileStore(this.logFilePath, storeOptions);
-      this.storeRecoveryWritesEnabled = recoveryWritesEnabled;
       this.unsubscribeStore = this.store.subscribeState((state, issues) => {
         if (!this.initialized) return;
         if (state === 'read-only' || state === 'uncertain' || state === 'unavailable') {
@@ -594,29 +618,28 @@ export class ADIFLogProvider implements ILogProvider {
     }
 
     const opened = retry ? await this.store.recoverOnOpen() : await this.store.open();
-    let expiredRecovery: LegacyRetentionResult = { removedRecoverySets: 0, issues: [] };
-    if (migration.status !== 'FAILED' && opened.scan && opened.generation) {
-      try {
-        expiredRecovery = await migrator.cleanupExpired(this.logFilePath, {
-          complete: opened.scan.incompleteTailRange === undefined
-            && opened.scan.safeEnd === opened.scan.byteLength,
-          recoveredDuringOpen: opened.recoveredFrom !== undefined,
-          recordCount: opened.scan.records.length,
-          generation: opened.generation,
-        });
-      } catch (error) {
-        expiredRecovery = {
-          removedRecoverySets: 0,
-          issues: [{
-            code: 'RECOVERY_RETENTION_FAILED',
-            path: this.logFilePath,
-            message: error instanceof Error ? error.message : String(error),
-          }],
-        };
-      }
-    }
-    this.stickyIssues = [...migrationIssues(migration), ...retentionIssues(expiredRecovery)];
+    this.stickyIssues = [];
     this.installOpenResult(opened);
+    if (!this.backup) {
+      const backupOptions: AdifBackupServiceOptions = {
+        onChanged: () => undefined,
+      };
+      this.backup = this.options.backupServiceFactory?.(
+        logBookId,
+        this.logFilePath,
+        this.store,
+        backupOptions,
+      ) ?? new AdifBackupService(logBookId, this.logFilePath, this.store, backupOptions);
+      await this.backup.initialize();
+    }
+    if (this.health.readable && !retry) {
+      void this.backup.createInitialBackupInBackground().catch((error) => {
+        logger.warn('Initial logbook backup failed without affecting the main ADIF', {
+          logBookId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
     this.initialized = true;
     if (!this.unregisterPersistence) {
       this.unregisterPersistence = PersistenceCoordinator.getInstance().register({
@@ -670,7 +693,7 @@ export class ADIFLogProvider implements ILogProvider {
     const readOnly = !unavailable && (
       status === 'read-only'
       || status === 'uncertain'
-      || this.migrationWriteBlocked
+      || this.backup?.maintenanceActive
     );
     const state = unavailable
       ? 'unavailable'
@@ -729,6 +752,15 @@ export class ADIFLogProvider implements ILogProvider {
       this.assertScanMatches(mutation.nextDocument, committed.scan, committed.recordProjections);
       this.installScan(committed.scan, committed.generation, committed.recordProjections);
     } else {
+      try {
+        await this.requireBackup().ensureBeforeRewrite();
+      } catch (error) {
+        throw new LogbookOperationError(
+          'LOGBOOK_BACKUP_FAILED',
+          'A valid backup is required before rewriting the main logbook',
+          { cause: error, systemCode: systemErrorCode(error) },
+        );
+      }
       const expected = mutation.nextDocument;
       const committed = await this.store!.commitRewrite(
         mutation.rewriteParts,
@@ -740,6 +772,7 @@ export class ADIFLogProvider implements ILogProvider {
       );
       this.installScan(committed.scan, committed.generation, committed.recordProjections);
     }
+    this.backup?.markMutationCommitted();
     this.refreshHealth();
   }
 
@@ -976,11 +1009,24 @@ export class ADIFLogProvider implements ILogProvider {
     if (this.health.state === 'read_only') {
       throw new LogbookOperationError('LOGBOOK_READ_ONLY', 'The logbook is read-only until it is reopened');
     }
+    if (this.restoreQueued || this.backup?.maintenanceActive) {
+      throw new LogbookOperationError('LOGBOOK_MAINTENANCE', 'The logbook is temporarily paused for restore');
+    }
     if (!this.health.writable) {
       throw new LogbookOperationError(
         'LOGBOOK_UNAVAILABLE',
         'The logbook is unavailable; the QSO was not saved',
       );
     }
+  }
+
+  private requireBackup(): AdifBackupService {
+    if (!this.backup) {
+      throw new LogbookOperationError(
+        'LOGBOOK_BACKUP_UNAVAILABLE',
+        'The logbook backup service is not ready',
+      );
+    }
+    return this.backup;
   }
 }

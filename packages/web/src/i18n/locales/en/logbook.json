@@ -60,6 +60,82 @@
     "retry": "Retry open",
     "retryFailed": "Failed to reopen logbook"
   },
+  "recovery": {
+    "title": "Logbook backup and recovery",
+    "loading": "Loading status",
+    "open": "Backup & recovery",
+    "refresh": "Refresh status",
+    "actionFailed": "Operation failed",
+    "revision": "Current revision: {{revision}}",
+    "unavailable": {
+      "title": "This logbook cannot be read safely",
+      "description": "It is not shown as an empty logbook, because that could falsely imply every record is gone. Retry opening it or inspect a verified copy in Backup & recovery."
+    },
+    "writeFailure": {
+      "title": "A QSO is not saved; automatic operation is paused",
+      "description": "The latest QSO could not be durably written. Resolve it before resuming automatic operation.",
+      "meta": "{{count}} unsaved · first detected at {{time}}",
+      "resolve": "Resolve now"
+    },
+    "operation": {
+      "kind": {
+        "backup": "Creating backup",
+        "restore-prepare": "Comparing recovery files",
+        "restore": "Restoring logbook"
+      },
+      "state": {
+        "queued": "Queued",
+        "running": "Running",
+        "succeeded": "Completed",
+        "failed": "Failed"
+      },
+      "phase": "Phase: {{phase}}",
+      "progress": "Backup or restore progress"
+    },
+    "unsaved": {
+      "title": "{{count}} QSO is not saved",
+      "description": "These details exist only in the current server process. Retry before exiting, and discard only when you are certain the QSO is not needed.",
+      "retry": "Retry save",
+      "discard": "Discard",
+      "discardConfirm": "Permanently discard this unsaved QSO? This cannot be undone."
+    },
+    "current": {
+      "title": "Current formal logbook",
+      "dirty": "Backup is behind",
+      "pending": "Changes since backup",
+      "state": "Availability"
+    },
+    "backup": {
+      "title": "Latest recovery backup",
+      "description": "One scanned and verified ADI copy is retained.",
+      "available": "Available",
+      "missing": "None yet",
+      "createdAt": "Created",
+      "size": "File size",
+      "records": "Complete records",
+      "opaque": "Raw preserved records",
+      "create": "Create backup now",
+      "download": "Download backup"
+    },
+    "preRestore": {
+      "download": "Download pre-restore original"
+    },
+    "restore": {
+      "title": "Restore from backup",
+      "description": "Restore replaces the formal ADI with the backup. A pre-restore original is preserved, but compare record counts and risk first.",
+      "compare": "Compare current logbook and backup",
+      "currentFile": "Current file",
+      "backupFile": "Backup file",
+      "fileSummary": "{{records}} records · {{size}}",
+      "highRisk": "High-risk restore: the backup may contain fewer records",
+      "previewReady": "Restore preflight is ready",
+      "delta": "Backup record delta {{delta}}, estimated loss up to {{loss}}; preview expires at {{expiresAt}}.",
+      "acceptRisk": "I understand the current formal logbook will be replaced and have reviewed the estimated loss",
+      "confirmLabel": "Enter the logbook ID to confirm",
+      "confirmDescription": "Enter {{id}} exactly, including letter case.",
+      "confirm": "Replace and restore"
+    }
+  },
   "qslStatus": {
     "confirmed": "Confirmed",
     "uploaded": "Uploaded",

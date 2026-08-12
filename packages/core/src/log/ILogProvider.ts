@@ -2,8 +2,11 @@ import type {
   DxccStatus,
   LogBookDxccSummary,
   LogBookImportResult,
+  LogbookBackupStatus,
   LogbookHealth,
   LogbookOperationErrorCode,
+  LogbookRestorePreflight,
+  LogbookUnsavedQsoSummary,
   QSORecord,
 } from '@tx5dr/contracts';
 export { LOGBOOK_OPERATION_ERROR_CODES } from '@tx5dr/contracts';
@@ -19,6 +22,14 @@ export interface LogbookWriteFailure {
   };
   qsoRecord?: QSORecord;
   operatorId?: string;
+}
+
+export interface LogbookBackupDownload {
+  stream: NodeJS.ReadableStream;
+  fileName: string;
+  size: number;
+  createdAt?: number;
+  close(): Promise<void>;
 }
 
 /** A stable, transport-safe failure raised by logbook operations. */
@@ -306,6 +317,33 @@ export interface ILogProvider {
 
   /** Explicitly retry opening an unavailable or read-only logbook. */
   retryOpen(): Promise<LogbookHealth>;
+
+  /** Stable content revision used by conditional backup and restore requests. */
+  getRevision(): Promise<string>;
+
+  /** Return backup state without exposing any filesystem path. */
+  getBackupStatus(options: {
+    admin: boolean;
+    tokenId?: string;
+    unsaved?: LogbookUnsavedQsoSummary[];
+  }): Promise<LogbookBackupStatus>;
+
+  /** Create or refresh the fixed latest backup. */
+  createBackup(): Promise<LogbookBackupStatus>;
+
+  /** Scan the fixed latest backup and bind a short-lived restore preview to a token. */
+  prepareBackupRestore(tokenId: string, expectedRevision: string): Promise<LogbookRestorePreflight>;
+
+  /** Atomically restore the fixed latest backup after preflight validation. */
+  restoreBackup(input: {
+    tokenId: string;
+    preflightToken: string;
+    expectedRevision: string;
+    beforeReplace?: () => Promise<void>;
+  }): Promise<LogbookBackupStatus>;
+
+  /** Open one fixed recovery artifact through a controlled read-only handle. */
+  openBackupDownload(kind: 'latest' | 'pre-restore'): Promise<LogbookBackupDownload>;
   
   /**
    * 添加QSO记录

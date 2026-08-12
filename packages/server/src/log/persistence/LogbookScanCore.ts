@@ -1,5 +1,5 @@
 import { createHash, type Hash } from 'node:crypto';
-import { createReadStream, promises as fs } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
 
 import {
   ADIF_MAX_TAG_HEADER_BYTES,
@@ -23,12 +23,16 @@ import type {
 const READ_CHUNK_BYTES = 64 * 1024;
 const READ_PROGRESS_BYTES = 1024 * 1024;
 
-export class LogbookFileChangedDuringScanError extends Error {
-  readonly code = 'LOGBOOK_FILE_CHANGED_DURING_SCAN';
+export class LogbookSnapshotIncompleteError extends Error {
+  readonly code = 'LOGBOOK_SNAPSHOT_INCOMPLETE';
 
-  constructor(public readonly filePath: string) {
-    super(`Logbook changed while it was being scanned: ${filePath}`);
-    this.name = 'LogbookFileChangedDuringScanError';
+  constructor(
+    public readonly filePath: string,
+    public readonly expectedBytes: number,
+    public readonly actualBytes: number,
+  ) {
+    super(`Logbook snapshot ended after ${actualBytes} of ${expectedBytes} bytes: ${filePath}`);
+    this.name = 'LogbookSnapshotIncompleteError';
   }
 }
 
@@ -507,68 +511,74 @@ class StreamingBodyScanner {
 export async function scanLogbookFileInline(
   filePath: string,
   onProgress?: (progress: LogbookScanProgress) => void,
+  onSourceOpened?: () => void,
 ): Promise<LogbookFileScanResult> {
-  const before = await fs.stat(filePath);
-  if (!before.isFile()) throw new LogbookScanNotAFileError(filePath);
+  const handle = await fs.open(filePath, constants.O_RDONLY);
+  try {
+    const before = await handle.stat();
+    if (!before.isFile()) throw new LogbookScanNotAFileError(filePath);
+    onSourceOpened?.();
 
-  const headerDetector = new StreamingHeaderDetector();
-  const contentHasher = createHash('sha256');
-  let headerEnd: number | undefined;
-  let bodyScanner = new StreamingBodyScanner(0, (recordsScanned) => {
-    onProgress?.({ phase: 'records', recordsScanned, totalRecords: recordsScanned });
-  });
-  const bytesRead = await streamFile(filePath, (chunk, absoluteStart) => {
-    contentHasher.update(chunk);
-    if (headerEnd !== undefined) {
-      bodyScanner.push(chunk, absoluteStart);
-      return;
-    }
-
-    headerDetector.push(chunk, absoluteStart);
-    const detectedHeaderEnd = headerDetector.finish();
-    if (detectedHeaderEnd === undefined) {
-      bodyScanner.push(chunk, absoluteStart);
-      return;
-    }
-
-    headerEnd = detectedHeaderEnd;
-    bodyScanner = new StreamingBodyScanner(headerEnd, (recordsScanned) => {
+    const headerDetector = new StreamingHeaderDetector();
+    const contentHasher = createHash('sha256');
+    let headerEnd: number | undefined;
+    let bodyScanner = new StreamingBodyScanner(0, (recordsScanned) => {
       onProgress?.({ phase: 'records', recordsScanned, totalRecords: recordsScanned });
     });
-    const chunkEnd = absoluteStart + chunk.length;
-    if (chunkEnd > headerEnd) {
-      const localStart = Math.max(0, headerEnd - absoluteStart);
-      bodyScanner.push(chunk.subarray(localStart), absoluteStart + localStart);
+    const bytesRead = await streamFile(handle, (chunk, absoluteStart) => {
+      contentHasher.update(chunk);
+      if (headerEnd !== undefined) {
+        bodyScanner.push(chunk, absoluteStart);
+        return;
+      }
+
+      headerDetector.push(chunk, absoluteStart);
+      const detectedHeaderEnd = headerDetector.finish();
+      if (detectedHeaderEnd === undefined) {
+        bodyScanner.push(chunk, absoluteStart);
+        return;
+      }
+
+      headerEnd = detectedHeaderEnd;
+      bodyScanner = new StreamingBodyScanner(headerEnd, (recordsScanned) => {
+        onProgress?.({ phase: 'records', recordsScanned, totalRecords: recordsScanned });
+      });
+      const chunkEnd = absoluteStart + chunk.length;
+      if (chunkEnd > headerEnd) {
+        const localStart = Math.max(0, headerEnd - absoluteStart);
+        bodyScanner.push(chunk.subarray(localStart), absoluteStart + localStart);
+      }
+    }, before.size, onProgress);
+    const contentHash = contentHasher.digest('hex');
+    if (bytesRead !== before.size) {
+      throw new LogbookSnapshotIncompleteError(filePath, before.size, bytesRead);
     }
-  }, before.size, onProgress);
-  const contentHash = contentHasher.digest('hex');
-  const after = await fs.stat(filePath);
-  if (!sameFileGeneration(before, after) || bytesRead !== after.size) {
-    throw new LogbookFileChangedDuringScanError(filePath);
+
+    const headerRange = headerEnd === undefined ? undefined : makeRange(0, headerEnd);
+    const scanned = bodyScanner.finish(before.size, headerRange);
+    const scanHash = hashStructuralScan(scanned.scan);
+    const generation = buildGenerationToken(
+      before.size,
+      before.mtimeMs,
+      contentHash,
+      scanHash,
+      before.dev,
+      before.ino,
+    );
+
+    return {
+      generation,
+      recordProjections: scanned.projections,
+      scan: scanned.scan,
+      warnings: scanned.warnings,
+    };
+  } finally {
+    await handle.close().catch(() => undefined);
   }
-
-  const headerRange = headerEnd === undefined ? undefined : makeRange(0, headerEnd);
-  const scanned = bodyScanner.finish(after.size, headerRange);
-  const scanHash = hashStructuralScan(scanned.scan);
-  const generation = buildGenerationToken(
-    after.size,
-    after.mtimeMs,
-    contentHash,
-    scanHash,
-    after.dev,
-    after.ino,
-  );
-
-  return {
-    generation,
-    recordProjections: scanned.projections,
-    scan: scanned.scan,
-    warnings: scanned.warnings,
-  };
 }
 
 async function streamFile(
-  filePath: string,
+  handle: Awaited<ReturnType<typeof fs.open>>,
   consume: (chunk: Buffer, absoluteStart: number) => void,
   totalBytes: number,
   onProgress?: (progress: LogbookScanProgress) => void,
@@ -584,8 +594,12 @@ async function streamFile(
 
   // Keep the public MiB milestones, but surface smaller real read advances so
   // the worker watchdog does not mistake a slow filesystem for a stalled scan.
-  for await (const value of createReadStream(filePath, { highWaterMark: READ_CHUNK_BYTES })) {
-    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+  const buffer = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+  while (bytesRead < totalBytes) {
+    const requested = Math.min(buffer.byteLength, totalBytes - bytesRead);
+    const { bytesRead: chunkLength } = await handle.read(buffer, 0, requested, bytesRead);
+    if (chunkLength <= 0) break;
+    const chunk = buffer.subarray(0, chunkLength);
     consume(chunk, bytesRead);
     bytesRead += chunk.length;
     while (bytesRead >= nextProgress) {
@@ -607,7 +621,7 @@ export function buildGenerationToken(
   ino?: number,
 ): GenerationToken {
   const token = createHash('sha256')
-    .update(JSON.stringify({ size, mtimeMs, dev, ino, contentHash, scanHash }))
+    .update(JSON.stringify({ size, contentHash, scanHash }))
     .digest('hex');
   return { size, mtimeMs, dev, ino, contentHash, scanHash, token };
 }
@@ -630,14 +644,4 @@ export function hashStructuralScan(scan: AdifScanResult): string {
     issues: scan.issues,
   };
   return createHash('sha256').update(JSON.stringify(structural)).digest('hex');
-}
-
-function sameFileGeneration(
-  before: { size: number; mtimeMs: number; dev: number; ino: number },
-  after: { size: number; mtimeMs: number; dev: number; ino: number },
-): boolean {
-  return before.size === after.size
-    && before.mtimeMs === after.mtimeMs
-    && before.dev === after.dev
-    && before.ino === after.ino;
 }

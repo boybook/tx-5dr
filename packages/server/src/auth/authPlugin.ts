@@ -5,12 +5,14 @@ import { UserRole, type JWTPayload, type PermissionGrant, type AppAction, type A
 import { AuthManager } from './AuthManager.js';
 import { buildAbility, emptyAbility, cannotWithData, type AppAbility } from './ability.js';
 import { normalizeCallsign } from '../utils/callsign.js';
+import type { LogBookInstance } from '../log/LogManager.js';
 
 // 扩展 Fastify Request 类型
 declare module 'fastify' {
   interface FastifyRequest {
     authUser: (JWTPayload & { permissionGrants?: PermissionGrant[] }) | null;
     ability: AppAbility;
+    logBookInstance?: LogBookInstance;
   }
 }
 
@@ -30,6 +32,7 @@ export const authPlugin = fp(async function authPluginInner(fastify: FastifyInst
   // 装饰 request，添加 authUser 和 ability
   fastify.decorateRequest('authUser', null);
   fastify.decorateRequest('ability', undefined as unknown as AppAbility);
+  fastify.decorateRequest('logBookInstance', undefined);
 
   // 全局 onRequest hook：提取并验证 JWT + 构建 CASL Ability
   fastify.addHook('onRequest', async (request: FastifyRequest, _reply: FastifyReply) => {
@@ -129,11 +132,14 @@ export function withRole(minRole: UserRole) {
   };
 }
 
+const SAFE_LOGBOOK_ROUTE_ID = /^[A-Za-z0-9._-]{1,128}$/;
+
 /**
- * 要求对指定日志本有访问权限（基于 operatorId → callsign → logBookId 归属链）
- * 孤儿日志本（无关联操作员）仅 ADMIN 可访问
+ * Resolve and authorize an already registered logbook, then bind the exact
+ * instance to the request so route handlers cannot accidentally create one or
+ * resolve a different instance later in the request.
  */
-export function requireLogbookAccess(logManager: import('../log/LogManager.js').LogManager) {
+export function requireExistingLogbookAccess(logManager: import('../log/LogManager.js').LogManager) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     if (!request.authUser) {
       return reply.code(401).send({
@@ -142,46 +148,30 @@ export function requireLogbookAccess(logManager: import('../log/LogManager.js').
       });
     }
 
-    // ADMIN 直接放行
-    if (request.authUser.role === UserRole.ADMIN) return;
-
-    const rawId = (request.params as Record<string, string>).id;
-    if (!rawId) return; // 无 id 参数，交由路由处理
-
-    // 解析为真实 logBookId（若日志本尚不存在则放行，由路由层处理）
-    const logBookId = logManager.resolveLogBookId(rawId);
-    if (!logBookId) return; // 日志本还不存在，放行让路由处理 404 或创建
-
-    // 获取日志本关联的归一化呼号
-    const logBookCallsigns = logManager.getCallsignsForLogBook(logBookId);
-
-    // 孤儿日志本（无关联呼号）：仅 ADMIN 可访问，此处直接拒绝
-    if (logBookCallsigns.length === 0) {
-      return reply.code(403).send({
-        success: false,
-        error: { code: 'FORBIDDEN', message: 'No logbook access', userMessage: 'You do not have permission to access this logbook' },
-      });
+    const rawId = (request.params as Record<string, string | undefined>).id;
+    if (!rawId || !SAFE_LOGBOOK_ROUTE_ID.test(rawId) || rawId.includes('..')) {
+      return sendLogbookNotFound(reply);
     }
 
-    // 获取用户操作员的归一化呼号集合
-    const { ConfigManager } = await import('../config/config-manager.js');
-    const operatorsConfig = ConfigManager.getInstance().getOperatorsConfig();
-    const userCallsigns = new Set<string>();
-    for (const op of operatorsConfig) {
-      if (request.authUser.operatorIds.includes(op.id)) {
-        userCallsigns.add(normalizeCallsign(op.myCallsign));
-      }
+    const resolvedId = logManager.resolveLogBookId(rawId);
+    const logBook = resolvedId ? logManager.getLogBook(resolvedId) : null;
+    if (!logBook) return sendLogbookNotFound(reply);
+
+    if (request.authUser.role !== UserRole.ADMIN) {
+      const operatorIds = new Set(logManager.getOperatorIdsForLogBook(logBook.id));
+      const hasAccess = request.authUser.operatorIds.some(operatorId => operatorIds.has(operatorId));
+      if (!hasAccess) return sendLogbookNotFound(reply);
     }
 
-    // 检查用户呼号与日志本呼号是否有交集
-    const hasAccess = logBookCallsigns.some(cs => userCallsigns.has(cs));
-    if (!hasAccess) {
-      return reply.code(403).send({
-        success: false,
-        error: { code: 'FORBIDDEN', message: 'No logbook access', userMessage: 'You do not have permission to access this logbook' },
-      });
-    }
+    request.logBookInstance = logBook;
   };
+}
+
+function sendLogbookNotFound(reply: FastifyReply) {
+  return reply.code(404).send({
+    success: false,
+    error: { code: 'RESOURCE_UNAVAILABLE', message: 'Logbook not found', userMessage: 'Logbook not found' },
+  });
 }
 
 /**

@@ -976,14 +976,15 @@ export const WSLogbookWriteFailedMessageSchema = WSBaseMessageSchema.extend({
   data: z.object({
     logBookId: z.string(),
     operatorId: z.string().optional(),
-    qsoRecord: QSORecordSchema.optional(),
+    attemptId: z.string().min(8).max(128).regex(/^[A-Za-z0-9._:-]+$/).optional(),
+    unsavedCount: z.number().int().positive().optional(),
     error: z.object({
       code: LogbookOperationErrorCodeSchema,
       message: z.string(),
       systemCode: z.string().optional(),
       occurredAt: z.number(),
     }),
-  }),
+  }).strict(),
 });
 
 export type WSLogbookWriteFailedMessage = z.infer<typeof WSLogbookWriteFailedMessageSchema>;
@@ -1756,7 +1757,13 @@ export interface DigitalRadioEngineEvents {
   operatorSlotContentChanged: (data: { operatorId: string; slot: string; content: string }) => void;
   operatorFrequencyChanged: (data: { operatorId: string; frequency: number }) => void;
   operatorTransmitCyclesChanged: (data: { operatorId: string; transmitCycles: number[] }) => void;
-  recordQSO: (data: { operatorId: string; qsoRecord: z.infer<typeof QSORecordSchema> }) => void;
+  recordQSO: (data: {
+    operatorId: string;
+    qsoRecord: z.infer<typeof QSORecordSchema>;
+    retryAttemptId?: string;
+    resolve?: (record: z.infer<typeof QSORecordSchema>) => void;
+    reject?: (error: unknown) => void;
+  }) => void;
   checkHasWorkedCallsign: (data: { operatorId: string; callsign: string; requestId: string }) => void;
   hasWorkedCallsignResponse: (data: { requestId: string; hasWorked: boolean }) => void;
 }

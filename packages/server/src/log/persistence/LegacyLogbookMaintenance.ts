@@ -1,40 +1,32 @@
+import { createHash } from 'node:crypto';
+import { createReadStream, promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { createLogger } from '../../utils/logger.js';
-import { AdifFileStore, type OpenResult } from './AdifFileStore.js';
-import type { LegacyMigrationResult } from './LegacyLogbookMigrator.js';
+import { LogbookScanWorker } from './LogbookScanWorker.js';
+import type { LogbookScanner } from './LogbookScanTypes.js';
 import {
-  LegacyLogbookMigrationWorker,
-  type LegacyLogbookMigrationRunner,
-} from './LegacyLogbookMigrationWorker.js';
-import {
-  NodeLegacyLogbookFileStore,
-  type LegacyLogbookFileStore,
-} from './LegacyLogbookFileStore.js';
-import type {
-  LegacyRetentionProof,
-} from './LegacyLogbookRecovery.js';
-import { inventoryOrphanLegacyLogbookArtifacts } from './legacyLogbookArtifacts.js';
+  classifyLegacyLogbookArtifactName,
+  inferLegacyMainBasename,
+  isKnownQuarantinedName,
+  LEGACY_DIRECTORY_NAME,
+  LEGACY_RECOVERY_DATA_NAMES,
+  LEGACY_RETENTION_MS,
+  LEGACY_UNRECOVERABLE_NAME,
+  OBSOLETE_RECOVERY_TEMP_NAMES,
+} from './legacyLogbookArtifacts.js';
 
 const logger = createLogger('LegacyLogbookMaintenance');
 const DEFAULT_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-export type LegacyLogbookMaintenanceMigrator = LegacyLogbookMigrationRunner;
-
-export interface LegacyLogbookMaintenanceStore {
-  open(): Promise<OpenResult>;
-  close(): Promise<void>;
-}
-
 export interface LegacyLogbookMaintenanceOptions {
   intervalMs?: number;
-  fileStore?: LegacyLogbookFileStore;
-  migrator?: LegacyLogbookMaintenanceMigrator;
-  storeFactory?: (mainPath: string) => LegacyLogbookMaintenanceStore;
+  scanner?: LogbookScanner;
+  now?: () => number;
 }
 
 export interface LegacyLogbookMaintenanceIssue {
-  stage: 'inventory' | 'migration' | 'open' | 'retention' | 'close';
+  stage: 'inventory' | 'quarantine' | 'retention';
   code: string;
   path?: string;
   message: string;
@@ -45,32 +37,93 @@ export interface LegacyLogbookMaintenanceResult {
   completedAt: number;
   discoveredPaths: number;
   processedPaths: number;
-  migratedOrphans: number;
-  removedRecoverySets: number;
+  quarantinedArtifacts: number;
+  quarantinedOrphans: number;
+  deletedObsoleteArtifacts: number;
+  preservedUnrecoverable: number;
+  removedLegacyDirectories: number;
   issues: LegacyLogbookMaintenanceIssue[];
+}
+
+interface DirectoryEntry {
+  name: string;
+  isFile: boolean;
+  isDirectory: boolean;
+}
+
+interface PassCounters {
+  quarantinedArtifacts: number;
+  quarantinedOrphans: number;
+  deletedObsoleteArtifacts: number;
+  preservedUnrecoverable: number;
+  removedLegacyDirectories: number;
 }
 
 function asMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function retentionProof(opened: OpenResult): LegacyRetentionProof | undefined {
-  if (!opened.scan || !opened.generation) return undefined;
-  return {
-    complete: opened.scan.incompleteTailRange === undefined
-      && opened.scan.safeEnd === opened.scan.byteLength,
-    recoveredDuringOpen: opened.recoveredFrom !== undefined,
-    recordCount: opened.scan.records.length,
-    generation: opened.generation,
-  };
+function legacyPathFingerprint(mainPath: string): string {
+  return createHash('sha256').update(path.resolve(mainPath)).digest('hex').slice(0, 24);
+}
+
+async function listDirectory(directory: string): Promise<DirectoryEntry[]> {
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  return entries.map(entry => ({
+    name: entry.name,
+    isFile: entry.isFile(),
+    isDirectory: entry.isDirectory(),
+  }));
+}
+
+async function pathIsDirectory(directory: string): Promise<boolean> {
+  try {
+    return (await fs.lstat(directory)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function pathIsFile(filePath: string): Promise<boolean> {
+  try {
+    return (await fs.lstat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function hashFile(filePath: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(filePath)) {
+    hash.update(chunk as Buffer);
+  }
+  return hash.digest('hex');
+}
+
+async function filesMatch(left: string, right: string): Promise<boolean> {
+  const [leftStat, rightStat] = await Promise.all([fs.stat(left), fs.stat(right)]);
+  if (leftStat.size !== rightStat.size) return false;
+  const [leftHash, rightHash] = await Promise.all([hashFile(left), hashFile(right)]);
+  return leftHash === rightHash;
+}
+
+async function removeDirectoryIfEmpty(directory: string): Promise<boolean> {
+  try {
+    await fs.rmdir(directory);
+    return true;
+  } catch (error) {
+    if (['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 export class LegacyLogbookMaintenance {
   private readonly logbookDir: string;
   private readonly intervalMs: number;
-  private readonly fileStore: LegacyLogbookFileStore;
-  private readonly migrator: LegacyLogbookMaintenanceMigrator;
-  private readonly storeFactory: (mainPath: string) => LegacyLogbookMaintenanceStore;
+  private readonly scanner: LogbookScanner;
+  private readonly now: () => number;
   private timer?: NodeJS.Timeout;
   private inFlight?: Promise<LegacyLogbookMaintenanceResult>;
 
@@ -80,9 +133,8 @@ export class LegacyLogbookMaintenance {
     if (!Number.isFinite(this.intervalMs) || this.intervalMs <= 0) {
       throw new RangeError('Legacy logbook maintenance interval must be positive');
     }
-    this.fileStore = options.fileStore ?? new NodeLegacyLogbookFileStore();
-    this.migrator = options.migrator ?? new LegacyLogbookMigrationWorker({ fileStore: this.fileStore });
-    this.storeFactory = options.storeFactory ?? (mainPath => new AdifFileStore(mainPath));
+    this.scanner = options.scanner ?? new LogbookScanWorker();
+    this.now = options.now ?? Date.now;
   }
 
   start(): void {
@@ -104,35 +156,36 @@ export class LegacyLogbookMaintenance {
 
   runNow(): Promise<LegacyLogbookMaintenanceResult> {
     if (this.inFlight) return this.inFlight;
-    const startedAt = Date.now();
-    const run = this.runPass(startedAt)
-      .catch((error): LegacyLogbookMaintenanceResult => ({
-        startedAt,
-        completedAt: Date.now(),
-        discoveredPaths: 0,
-        processedPaths: 0,
-        migratedOrphans: 0,
-        removedRecoverySets: 0,
-        issues: [{
-          stage: 'inventory',
-          code: 'LEGACY_MAINTENANCE_FAILED',
-          path: this.logbookDir,
-          message: asMessage(error),
-        }],
-      }));
+    const startedAt = this.now();
+    const run = this.runPass(startedAt).catch((error): LegacyLogbookMaintenanceResult => ({
+      startedAt,
+      completedAt: this.now(),
+      discoveredPaths: 0,
+      processedPaths: 0,
+      quarantinedArtifacts: 0,
+      quarantinedOrphans: 0,
+      deletedObsoleteArtifacts: 0,
+      preservedUnrecoverable: 0,
+      removedLegacyDirectories: 0,
+      issues: [{
+        stage: 'inventory',
+        code: 'LEGACY_MAINTENANCE_FAILED',
+        path: this.logbookDir,
+        message: asMessage(error),
+      }],
+    }));
     this.inFlight = run;
     void run.then((result) => {
       if (result.issues.length > 0) {
-        logger.warn('Logbook maintenance completed with isolated issues', {
-          discoveredPaths: result.discoveredPaths,
+        logger.warn('Legacy logbook cleanup completed with isolated issues', {
           processedPaths: result.processedPaths,
           issueCount: result.issues.length,
         });
       } else if (result.processedPaths > 0) {
-        logger.debug('Logbook maintenance completed', {
+        logger.debug('Legacy logbook cleanup completed', {
           processedPaths: result.processedPaths,
-          migratedOrphans: result.migratedOrphans,
-          removedRecoverySets: result.removedRecoverySets,
+          quarantinedArtifacts: result.quarantinedArtifacts,
+          removedLegacyDirectories: result.removedLegacyDirectories,
         });
       }
       if (this.inFlight === run) this.inFlight = undefined;
@@ -142,137 +195,294 @@ export class LegacyLogbookMaintenance {
 
   private async runPass(startedAt: number): Promise<LegacyLogbookMaintenanceResult> {
     const issues: LegacyLogbookMaintenanceIssue[] = [];
-    const entries = await this.fileStore.listDirectory(this.logbookDir);
-    const existingMainPaths = entries
-      .filter(entry => entry.isFile && entry.name.toLowerCase().endsWith('.adi'))
-      .map(entry => path.join(this.logbookDir, entry.name));
-    const orphanGroups = await inventoryOrphanLegacyLogbookArtifacts(this.logbookDir, this.fileStore);
-    const orphanPaths = new Set(orphanGroups.map(group => path.resolve(group.mainPath)));
-    const targets = [
-      ...orphanPaths,
-      ...existingMainPaths.map(mainPath => path.resolve(mainPath))
-        .filter(mainPath => !orphanPaths.has(mainPath)),
-    ];
+    const entries = await listDirectory(this.logbookDir);
+    const mainBasenames = await this.discoverMainBasenames(entries);
+    const counters: PassCounters = {
+      quarantinedArtifacts: 0,
+      quarantinedOrphans: 0,
+      deletedObsoleteArtifacts: 0,
+      preservedUnrecoverable: 0,
+      removedLegacyDirectories: 0,
+    };
     let processedPaths = 0;
-    let migratedOrphans = 0;
-    let removedRecoverySets = 0;
 
-    for (const mainPath of targets) {
+    for (const mainBasename of mainBasenames) {
+      const mainPath = path.join(this.logbookDir, mainBasename);
       processedPaths += 1;
-      const migration = await this.migrateOne(mainPath, issues);
-      if (!migration || migration.status === 'FAILED') continue;
-      if (!await this.fileStore.exists(mainPath)) {
-        issues.push({
-          stage: 'migration',
-          code: 'LEGACY_MIGRATION_MAIN_MISSING',
-          path: mainPath,
-          message: 'Legacy migration did not produce a formal ADIF file; empty-file recovery was deferred',
-        });
-        continue;
-      }
-      if (orphanPaths.has(mainPath)) {
-        migratedOrphans += 1;
-      }
-
-      let store: LegacyLogbookMaintenanceStore | undefined;
       try {
-        store = this.storeFactory(mainPath);
-        const opened = await store.open();
-        if (opened.status === 'unavailable' || opened.status === 'uncertain' || opened.status === 'read-only') {
-          issues.push({
-            stage: 'open',
-            code: 'LOGBOOK_MAINTENANCE_OPEN_DEGRADED',
-            path: mainPath,
-            message: `Inactive logbook opened as ${opened.status}; destructive retention was deferred`,
-          });
-        }
-        for (const issue of opened.issues) {
-          issues.push({
-            stage: 'open',
-            code: issue.code,
-            path: issue.path ?? mainPath,
-            message: issue.message,
-          });
-        }
-
-        const proof = retentionProof(opened);
-        if (proof) {
-          const cleanup = await this.migrator.cleanupExpired(mainPath, proof);
-          removedRecoverySets += cleanup.removedRecoverySets;
-          for (const issue of cleanup.issues) {
-            issues.push({
-              stage: 'retention',
-              code: issue.code,
-              path: issue.path ?? mainPath,
-              message: issue.message,
-            });
-          }
-        }
+        await this.processLogbook(mainPath, entries, counters, issues);
       } catch (error) {
         issues.push({
-          stage: 'open',
-          code: 'LOGBOOK_MAINTENANCE_OPEN_FAILED',
+          stage: 'quarantine',
+          code: 'LEGACY_LOGBOOK_CLEANUP_FAILED',
           path: mainPath,
           message: asMessage(error),
         });
-      } finally {
-        if (store) {
-          try {
-            await store.close();
-          } catch (error) {
-            issues.push({
-              stage: 'close',
-              code: 'LOGBOOK_MAINTENANCE_CLOSE_FAILED',
-              path: mainPath,
-              message: asMessage(error),
-            });
-          }
-        }
       }
     }
 
     return {
       startedAt,
-      completedAt: Date.now(),
-      discoveredPaths: targets.length,
+      completedAt: this.now(),
+      discoveredPaths: mainBasenames.length,
       processedPaths,
-      migratedOrphans,
-      removedRecoverySets,
+      ...counters,
       issues,
     };
   }
 
-  private async migrateOne(
+  private async discoverMainBasenames(entries: DirectoryEntry[]): Promise<string[]> {
+    const names = new Set<string>();
+    for (const entry of entries) {
+      if (!entry.isFile) continue;
+      if (/\.adi$/i.test(entry.name)) names.add(entry.name);
+      const inferred = inferLegacyMainBasename(entry.name);
+      if (inferred) names.add(inferred);
+    }
+
+    const backupBase = path.join(this.logbookDir, '.tx5dr-backups');
+    if (await pathIsDirectory(backupBase)) {
+      for (const entry of await listDirectory(backupBase).catch(() => [])) {
+        if (entry.isDirectory && /\.adi$/i.test(entry.name)) names.add(entry.name);
+      }
+    }
+    return [...names].sort((left, right) => left.localeCompare(right));
+  }
+
+  private async processLogbook(
     mainPath: string,
+    topLevelEntries: DirectoryEntry[],
+    counters: PassCounters,
     issues: LegacyLogbookMaintenanceIssue[],
-  ): Promise<LegacyMigrationResult | undefined> {
-    try {
-      const migration = await this.migrator.migrate(mainPath);
-      for (const issue of migration.issues) {
-        issues.push({
-          stage: 'migration',
-          code: issue.code,
-          path: issue.path ?? mainPath,
-          message: issue.message,
-        });
+  ): Promise<void> {
+    const mainBasename = path.basename(mainPath);
+    const backupDirectory = path.join(this.logbookDir, '.tx5dr-backups', mainBasename);
+    const legacyDirectory = path.join(backupDirectory, LEGACY_DIRECTORY_NAME);
+    const oldRecoveryBase = path.join(this.logbookDir, '.tx5dr-recovery');
+    const oldRecoveryRoot = path.join(oldRecoveryBase, legacyPathFingerprint(mainPath));
+    const mainExists = await pathIsFile(mainPath);
+    const artifacts = topLevelEntries.filter(entry => entry.isFile
+      && classifyLegacyLogbookArtifactName(mainBasename, entry.name));
+    const hasExistingLegacy = await pathIsDirectory(legacyDirectory);
+    const hasOldRecovery = await pathIsDirectory(oldRecoveryRoot);
+    if (artifacts.length === 0 && !hasExistingLegacy && !hasOldRecovery) return;
+
+    let quarantinedForOrphan = 0;
+    for (const artifact of artifacts) {
+      const moved = await this.moveToLegacy(
+        path.join(this.logbookDir, artifact.name),
+        artifact.name,
+        backupDirectory,
+        legacyDirectory,
+        issues,
+      );
+      if (moved) {
+        counters.quarantinedArtifacts += 1;
+        quarantinedForOrphan += 1;
       }
-      if (migration.status === 'FAILED' && migration.issues.length === 0) {
-        issues.push({
-          stage: 'migration',
-          code: 'LEGACY_MIGRATION_FAILED',
-          path: mainPath,
-          message: 'Legacy migration failed without a detailed issue',
-        });
+    }
+    if (!mainExists && quarantinedForOrphan > 0) counters.quarantinedOrphans += 1;
+
+    if (hasOldRecovery) {
+      await this.convergeOldRecovery(
+        mainBasename,
+        oldRecoveryRoot,
+        backupDirectory,
+        legacyDirectory,
+        counters,
+        issues,
+      );
+      await removeDirectoryIfEmpty(oldRecoveryRoot);
+      await removeDirectoryIfEmpty(oldRecoveryBase);
+    }
+
+    await this.applyRetention(mainPath, backupDirectory, legacyDirectory, counters, issues);
+  }
+
+  private async convergeOldRecovery(
+    mainBasename: string,
+    oldRecoveryRoot: string,
+    backupDirectory: string,
+    legacyDirectory: string,
+    counters: PassCounters,
+    issues: LegacyLogbookMaintenanceIssue[],
+  ): Promise<void> {
+    const entries = await listDirectory(oldRecoveryRoot).catch(() => []);
+    for (const entry of entries) {
+      const source = path.join(oldRecoveryRoot, entry.name);
+      if (entry.isFile && OBSOLETE_RECOVERY_TEMP_NAMES.has(entry.name)) {
+        await fs.unlink(source);
+        counters.deletedObsoleteArtifacts += 1;
+      } else if (entry.isFile && entry.name === LEGACY_UNRECOVERABLE_NAME) {
+        if (await this.preserveUnrecoverable(source, backupDirectory, issues)) {
+          counters.preservedUnrecoverable += 1;
+        }
+      } else if (entry.isFile && (
+        LEGACY_RECOVERY_DATA_NAMES.has(entry.name)
+        || classifyLegacyLogbookArtifactName(mainBasename, entry.name)
+      )) {
+        if (await this.moveToLegacy(
+          source,
+          entry.name,
+          backupDirectory,
+          legacyDirectory,
+          issues,
+        )) counters.quarantinedArtifacts += 1;
+      } else if (entry.isDirectory && entry.name === LEGACY_DIRECTORY_NAME) {
+        await this.convergeOldLegacyDirectory(
+          mainBasename,
+          source,
+          backupDirectory,
+          legacyDirectory,
+          counters,
+          issues,
+        );
       }
-      return migration;
-    } catch (error) {
+    }
+  }
+
+  private async convergeOldLegacyDirectory(
+    mainBasename: string,
+    oldLegacyDirectory: string,
+    backupDirectory: string,
+    legacyDirectory: string,
+    counters: PassCounters,
+    issues: LegacyLogbookMaintenanceIssue[],
+  ): Promise<void> {
+    for (const entry of await listDirectory(oldLegacyDirectory).catch(() => [])) {
+      if (!entry.isFile) continue;
+      const source = path.join(oldLegacyDirectory, entry.name);
+      if (entry.name === LEGACY_UNRECOVERABLE_NAME) {
+        if (await this.preserveUnrecoverable(source, backupDirectory, issues)) {
+          counters.preservedUnrecoverable += 1;
+        }
+      } else if (isKnownQuarantinedName(mainBasename, entry.name)) {
+        if (await this.moveToLegacy(
+          source,
+          entry.name,
+          backupDirectory,
+          legacyDirectory,
+          issues,
+        )) counters.quarantinedArtifacts += 1;
+      }
+    }
+    await removeDirectoryIfEmpty(oldLegacyDirectory);
+  }
+
+  private async ensureRecoveryDirectories(backupDirectory: string, legacyDirectory?: string): Promise<void> {
+    await fs.mkdir(backupDirectory, { recursive: true, mode: 0o700 });
+    await fs.chmod(backupDirectory, 0o700).catch(() => undefined);
+    if (legacyDirectory) {
+      await fs.mkdir(legacyDirectory, { recursive: true, mode: 0o700 });
+      await fs.chmod(legacyDirectory, 0o700).catch(() => undefined);
+    }
+  }
+
+  private async moveToLegacy(
+    source: string,
+    name: string,
+    backupDirectory: string,
+    legacyDirectory: string,
+    issues: LegacyLogbookMaintenanceIssue[],
+  ): Promise<boolean> {
+    if (!await pathIsFile(source)) return false;
+    await this.ensureRecoveryDirectories(backupDirectory, legacyDirectory);
+    const target = path.join(legacyDirectory, name);
+    if (await pathIsFile(target)) {
+      if (!await filesMatch(source, target)) {
+        issues.push({
+          stage: 'quarantine',
+          code: 'LEGACY_QUARANTINE_CONFLICT',
+          path: source,
+          message: `A different quarantined artifact already exists with the fixed name ${name}`,
+        });
+        return false;
+      }
+      await fs.unlink(source);
+      return true;
+    }
+    await fs.rename(source, target);
+    return true;
+  }
+
+  private async preserveUnrecoverable(
+    source: string,
+    backupDirectory: string,
+    issues: LegacyLogbookMaintenanceIssue[],
+  ): Promise<boolean> {
+    if (!await pathIsFile(source)) return false;
+    await this.ensureRecoveryDirectories(backupDirectory);
+    const target = path.join(backupDirectory, LEGACY_UNRECOVERABLE_NAME);
+    if (await pathIsFile(target)) {
+      if (await filesMatch(source, target)) {
+        await fs.unlink(source);
+        return true;
+      }
       issues.push({
-        stage: 'migration',
-        code: 'LEGACY_MIGRATION_FAILED',
-        path: mainPath,
-        message: asMessage(error),
+        stage: 'quarantine',
+        code: 'UNRECOVERABLE_ORIGINAL_CONFLICT',
+        path: source,
+        message: 'A different unrecoverable original is already preserved; neither file was overwritten',
       });
-      return undefined;
+      return false;
+    }
+    await fs.rename(source, target);
+    return true;
+  }
+
+  private async applyRetention(
+    mainPath: string,
+    backupDirectory: string,
+    legacyDirectory: string,
+    counters: PassCounters,
+    issues: LegacyLogbookMaintenanceIssue[],
+  ): Promise<void> {
+    if (!await pathIsDirectory(legacyDirectory)) return;
+    const latestPath = path.join(backupDirectory, 'latest.adi');
+    const [mainSafe, latestSafe] = await Promise.all([
+      this.isSafeAdif(mainPath),
+      this.isSafeAdif(latestPath),
+    ]);
+    if (!mainSafe || !latestSafe) {
+      const date = new Date(this.now());
+      await fs.utimes(legacyDirectory, date, date).catch((error) => {
+        issues.push({
+          stage: 'retention',
+          code: 'LEGACY_RETENTION_ANCHOR_FAILED',
+          path: legacyDirectory,
+          message: asMessage(error),
+        });
+      });
+      return;
+    }
+
+    const stat = await fs.stat(legacyDirectory);
+    if (this.now() - stat.mtimeMs < LEGACY_RETENTION_MS) return;
+
+    const mainBasename = path.basename(mainPath);
+    for (const entry of await listDirectory(legacyDirectory)) {
+      if (!entry.isFile || !isKnownQuarantinedName(mainBasename, entry.name)) continue;
+      await fs.unlink(path.join(legacyDirectory, entry.name));
+    }
+    if (await removeDirectoryIfEmpty(legacyDirectory)) {
+      counters.removedLegacyDirectories += 1;
+    } else {
+      issues.push({
+        stage: 'retention',
+        code: 'LEGACY_RETENTION_UNKNOWN_CONTENT',
+        path: legacyDirectory,
+        message: 'Unknown content remains in the legacy directory and was not deleted',
+      });
+    }
+  }
+
+  private async isSafeAdif(filePath: string): Promise<boolean> {
+    try {
+      const result = await this.scanner.scan(filePath);
+      return result.scan.incompleteTailRange === undefined
+        && result.scan.safeEnd === result.scan.byteLength;
+    } catch {
+      return false;
     }
   }
 }

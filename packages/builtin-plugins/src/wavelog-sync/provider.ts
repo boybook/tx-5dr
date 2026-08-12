@@ -397,6 +397,10 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
             callsign: remoteQSO.callsign,
             error: err instanceof Error ? err.message : String(err),
           });
+          // Local durability is the commit boundary. Once one record cannot be
+          // persisted, stop this download pass instead of continuing through a
+          // large remote set and presenting a misleading partial success.
+          break;
         }
       }
 

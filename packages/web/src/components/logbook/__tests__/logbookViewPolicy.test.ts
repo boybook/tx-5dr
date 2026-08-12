@@ -25,6 +25,10 @@ describe('logbook view policy', () => {
       writable: false,
       showHealthBanner: true,
       showLoadError: true,
+      showLogbookContent: true,
+      showUnavailableRecovery: false,
+      operationBusy: false,
+      canOpenRecovery: false,
     });
   });
 
@@ -32,6 +36,49 @@ describe('logbook view policy', () => {
     expect(resolveLogbookViewPolicy(health({ state: 'degraded' }), null).writable).toBe(true);
     expect(resolveLogbookViewPolicy(health({ state: 'unavailable', readable: false, writable: false }), null).writable).toBe(false);
     expect(resolveLogbookViewPolicy(null, null).writable).toBe(false);
+  });
+
+  it('blocks mutations while a recovery operation is queued or running', () => {
+    const queued = resolveLogbookViewPolicy(health(), null, {
+      operation: { state: 'queued' },
+      capabilities: { canCreate: true },
+    });
+    const running = resolveLogbookViewPolicy(health(), null, {
+      operation: { state: 'running' },
+      capabilities: { canCreate: true },
+    });
+
+    expect(queued).toMatchObject({ writable: false, operationBusy: true });
+    expect(running).toMatchObject({ writable: false, operationBusy: true });
+  });
+
+  it('projects recovery entry visibility only from server capabilities', () => {
+    expect(resolveLogbookViewPolicy(health(), null, {
+      capabilities: { canDownload: true },
+    }).canOpenRecovery).toBe(true);
+    expect(resolveLogbookViewPolicy(health(), null, {
+      capabilities: {
+        canCreate: false,
+        canDownload: false,
+        canRestore: false,
+        canDownloadPreRestore: false,
+      },
+    }).canOpenRecovery).toBe(false);
+    expect(resolveLogbookViewPolicy(health(), null, undefined).canOpenRecovery).toBe(false);
+  });
+
+  it('replaces unavailable logbook content with recovery state', () => {
+    const policy = resolveLogbookViewPolicy(
+      health({ state: 'unavailable', readable: false, writable: false }),
+      null,
+      { capabilities: { canRestore: true } },
+    );
+
+    expect(policy).toMatchObject({
+      showLogbookContent: false,
+      showUnavailableRecovery: true,
+      canOpenRecovery: true,
+    });
   });
 
   it.each([

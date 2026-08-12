@@ -201,8 +201,8 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
       isTargetBeingWorkedByOthers(targetCallsign: string): boolean {
         return ctx.operator.isTargetBeingWorkedByOthers(targetCallsign);
       },
-      recordQSOLog(record: QSORecord): void {
-        ctx.operator.recordQSO(record);
+      recordQSOLog(record: QSORecord): Promise<QSORecord> {
+        return ctx.operator.recordQSO(record);
       },
       notifySlotsUpdated(slots: OperatorSlots): void {
         ctx.operator.notifySlotsUpdated(slots);

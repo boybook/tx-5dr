@@ -32,7 +32,19 @@ import QSOFormModal from './QSOFormModal';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faSync, faDownload, faUpload, faEdit, faTrash, faFolderOpen, faCog, faPlus, faTableCells } from '@fortawesome/free-solid-svg-icons';
-import type { QSORecord, LogBookStatistics, CreateQSORequest, LogBookImportResult, LogBookExportOptions, OperatorStatus, LogbookHealth } from '@tx5dr/contracts';
+import type {
+  QSORecord,
+  LogBookStatistics,
+  CreateQSORequest,
+  LogBookImportResult,
+  LogBookExportOptions,
+  OperatorStatus,
+  LogbookHealth,
+  LogbookBackupStatus,
+  LogbookRestorePreflight,
+  DigitalRadioEngineEvents,
+} from '@tx5dr/contracts';
+import { UserRole } from '@tx5dr/contracts';
 import { api, WSClient, ApiError, getDisplayMode } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../../utils/config';
 import { isElectron } from '../../utils/config';
@@ -42,17 +54,30 @@ import { PluginIframeHost } from '../plugins/PluginIframeHost';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
 import RecentQSOGlobeCard from './RecentQSOGlobeCard';
+import LogbookRecoveryModal from './LogbookRecoveryModal';
 import { getAuthHeaders, getStoredJwt } from '../../utils/authHeaders';
 import { QrzCallsignLink } from '../common/QrzCallsignLink';
+import { useHasMinRole } from '../../store/authStore';
 import {
   isLogbookHealthOperationError,
   resolveLogbookViewPolicy,
 } from './logbookViewPolicy';
+import {
+  resolvePersistentWriteFailure,
+  shouldOpenLogbookRecovery,
+  type PersistentLogbookWriteFailure,
+} from './logbookRecoveryPolicy';
 
 const logger = createLogger('LogbookViewer');
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200] as const;
 const MODE_FILTER_OPTIONS = ['FT8', 'FT4', 'SSB', 'USB', 'LSB', 'AM', 'FM', 'CW', 'RTTY', 'PSK31', 'JS8', 'MSK144'] as const;
+
+function createIdempotencyKey(prefix: string): string {
+  const id = globalThis.crypto?.randomUUID?.()
+    ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${id}`;
+}
 
 interface LogbookViewerProps {
   operatorId: string;
@@ -110,11 +135,18 @@ function formatDateValueForUtcExport(value: ExportDateValue): string {
 
 const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, operatorCallsign }) => {
   const { t } = useTranslation('logbook');
+  const isAdmin = useHasMinRole(UserRole.ADMIN);
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
   const refreshLogbookDataRef = useRef<() => Promise<void>>(async () => {});
   const [qsos, setQsos] = useState<QSORecord[]>([]);
   const [statistics, setStatistics] = useState<LogBookStatistics | null>(null);
   const [health, setHealth] = useState<LogbookHealth | null>(null);
+  const [backupStatus, setBackupStatus] = useState<LogbookBackupStatus | null>(null);
+  const [restorePreflight, setRestorePreflight] = useState<LogbookRestorePreflight | null>(null);
+  const [isRecoveryOpen, setIsRecoveryOpen] = useState(false);
+  const [isRecoveryActionBusy, setIsRecoveryActionBusy] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [persistentWriteFailure, setPersistentWriteFailure] = useState<PersistentLogbookWriteFailure | null>(null);
   const [isRetryingHealth, setIsRetryingHealth] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -154,7 +186,98 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // 获取操作员连接的日志本
   // 日志本ID就是呼号，如果没有指定则使用操作员ID作为后备
   const effectiveLogBookId = logBookId || operatorId;
-  const viewPolicy = resolveLogbookViewPolicy(health, error);
+  const recoveryViewState = isRecoveryActionBusy
+    ? { capabilities: backupStatus?.capabilities, operation: { state: 'running' } }
+    : backupStatus;
+  const viewPolicy = resolveLogbookViewPolicy(health, error, recoveryViewState);
+
+  const getRecoveryErrorMessage = (recoveryActionError: unknown): string => (
+    recoveryActionError instanceof ApiError
+      ? recoveryActionError.userMessage
+      : recoveryActionError instanceof Error
+        ? recoveryActionError.message
+        : t('recovery.actionFailed')
+  );
+
+  const loadBackupStatus = async (): Promise<LogbookBackupStatus | null> => {
+    try {
+      const response = await api.getLogbookBackupStatus(effectiveLogBookId);
+      setBackupStatus(response.data);
+      setHealth(response.data.mainHealth);
+      setPersistentWriteFailure((current) => resolvePersistentWriteFailure(
+        current,
+        response.data,
+        t('recovery.writeFailure.description'),
+      ));
+      return response.data;
+    } catch (backupError) {
+      if (backupError instanceof ApiError && backupError.httpStatus === 403) {
+        setBackupStatus(null);
+        return null;
+      }
+      logger.warn('Failed to load logbook recovery status', backupError);
+      setRecoveryError(getRecoveryErrorMessage(backupError));
+      return null;
+    }
+  };
+
+  const runRecoveryAction = async <T,>(action: () => Promise<T>): Promise<T> => {
+    setIsRecoveryActionBusy(true);
+    setRecoveryError(null);
+    try {
+      return await action();
+    } catch (recoveryActionError) {
+      setRecoveryError(getRecoveryErrorMessage(recoveryActionError));
+      throw recoveryActionError;
+    } finally {
+      setIsRecoveryActionBusy(false);
+    }
+  };
+
+  const createBackup = async (): Promise<void> => {
+    const status = backupStatus ?? await loadBackupStatus();
+    if (!status) return;
+    const response = await runRecoveryAction(() => api.createLogbookBackup(effectiveLogBookId, {
+      idempotencyKey: createIdempotencyKey('backup'),
+    }));
+    setBackupStatus(response.data);
+  };
+
+  const prepareRestore = async (): Promise<void> => {
+    const status = backupStatus ?? await loadBackupStatus();
+    if (!status) return;
+    const response = await runRecoveryAction(() => api.prepareLogbookRestore(effectiveLogBookId, {
+      revision: status.revision,
+      idempotencyKey: createIdempotencyKey('restore-preview'),
+    }));
+    setRestorePreflight(response.data);
+    await loadBackupStatus();
+  };
+
+  const restoreBackup = async (preflightToken: string, expectedRevision: string): Promise<void> => {
+    const response = await runRecoveryAction(() => api.restoreLogbook(effectiveLogBookId, {
+      preflightToken,
+      confirmation: effectiveLogBookId,
+      revision: expectedRevision,
+      idempotencyKey: createIdempotencyKey('restore'),
+    }));
+    setBackupStatus(response.data);
+    setHealth(response.data.mainHealth);
+    setRestorePreflight(null);
+    await refreshLogbookDataRef.current();
+  };
+
+  const retryUnsavedQso = async (attemptId: string): Promise<void> => {
+    await runRecoveryAction(() => api.retryUnsavedQso(effectiveLogBookId, attemptId, {
+      idempotencyKey: createIdempotencyKey('unsaved-retry'),
+    }));
+    await Promise.all([loadBackupStatus(), refreshLogbookDataRef.current()]);
+  };
+
+  const discardUnsavedQso = async (attemptId: string): Promise<void> => {
+    await runRecoveryAction(() => api.discardUnsavedQso(effectiveLogBookId, attemptId));
+    await loadBackupStatus();
+  };
 
   // 日志本专用WebSocket：只接收轻量通知，然后主动刷新
   useEffect(() => {
@@ -172,8 +295,24 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       // 以 operatorId 为主进行匹配；其次尝试 logBookId
       if (data.operatorId === operatorId || (data.logBookId && data.logBookId === effectiveLogBookId)) {
         logger.debug('Received logbook change notification, refreshing data');
-        refreshLogbookDataRef.current().catch(() => {});
+        Promise.all([
+          refreshLogbookDataRef.current(),
+          loadBackupStatus(),
+        ]).catch(() => {});
       }
+    };
+
+    const handleLogbookWriteFailed = (
+      data: Parameters<DigitalRadioEngineEvents['logbookWriteFailed']>[0],
+    ) => {
+      if (data.logBookId && data.logBookId !== effectiveLogBookId) return;
+      setPersistentWriteFailure({
+        message: data.error?.message ?? t('recovery.writeFailure.description'),
+        occurredAt: data.error?.occurredAt ?? Date.now(),
+        unsavedCount: data.unsavedCount,
+      });
+      setIsRecoveryOpen(true);
+      loadBackupStatus().catch(() => {});
     };
 
     const handleOperatorStatusUpdate = (status: unknown) => {
@@ -199,6 +338,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     client.onWSEvent('logbookChangeNotice' as any, handleLogbookChange);
+    // Newer servers emit the detailed failure; older logbook sockets still
+    // cause a status refresh through logbookChangeNotice.
+    client.onWSEvent('logbookWriteFailed', handleLogbookWriteFailed);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     client.onWSEvent('operatorStatusUpdate' as any, handleOperatorStatusUpdate);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -208,7 +350,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     return () => {
       client.disconnect();
     };
-  }, [operatorId, effectiveLogBookId]);
+  }, [operatorId, effectiveLogBookId, t]);
 
   // 加载QSO记录
   const loadQSOs = async () => {
@@ -259,6 +401,36 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // latest filters, page and page size from this render.
   refreshLogbookDataRef.current = refreshLogbookData;
 
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      await loadBackupStatus();
+      if (cancelled) return;
+    };
+    void refresh();
+    return () => { cancelled = true; };
+  }, [effectiveLogBookId]);
+
+  useEffect(() => {
+    const syncHash = () => {
+      if (shouldOpenLogbookRecovery(window.location.hash)) {
+        setIsRecoveryOpen(true);
+        void loadBackupStatus();
+      }
+    };
+    syncHash();
+    window.addEventListener('hashchange', syncHash);
+    return () => window.removeEventListener('hashchange', syncHash);
+  }, [effectiveLogBookId]);
+
+  useEffect(() => {
+    if (!isRecoveryOpen || (!viewPolicy.operationBusy && !isRecoveryActionBusy)) return;
+    const timer = window.setInterval(() => {
+      void loadBackupStatus();
+    }, 1250);
+    return () => window.clearInterval(timer);
+  }, [isRecoveryOpen, viewPolicy.operationBusy, isRecoveryActionBusy, effectiveLogBookId]);
+
   const reportMutationError = async (mutationError: unknown, fallbackMessage: string) => {
     if (isLogbookHealthOperationError(mutationError)) {
       await loadStatistics();
@@ -277,7 +449,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const retryLogbookOpen = async () => {
     try {
       setIsRetryingHealth(true);
-      const response = await api.retryOpenLogBook(effectiveLogBookId);
+      const response = await api.retryOpenLogBook(effectiveLogBookId, {
+        idempotencyKey: createIdempotencyKey('recovery-retry'),
+      });
       setHealth(response.data.health);
       await refreshLogbookData();
     } catch (retryError) {
@@ -1821,7 +1995,19 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           <span className="hidden md:inline">{t('addQso.button')}</span>
         </Button>
 
-        {isElectron() && (
+        {viewPolicy.canOpenRecovery && (
+          <Button
+            color={backupStatus?.unsaved?.length ? 'danger' : 'warning'}
+            variant="flat"
+            size="sm"
+            onPress={() => setIsRecoveryOpen(true)}
+            className="min-w-0"
+          >
+            {t('recovery.open')}
+          </Button>
+        )}
+
+        {isAdmin && isElectron() && (
           <Tooltip content={t('action.openDataDir')}>
             <Button
               variant="flat"
@@ -1929,6 +2115,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     handleExport,
     openSyncConfig,
     mobileDxccSummary,
+    backupStatus,
+    isAdmin,
+    viewPolicy.canOpenRecovery,
+    viewPolicy.writable,
   ]);
 
   // 底部内容：分页
@@ -2049,6 +2239,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 color={health.state === 'degraded' ? 'warning' : 'danger'}
                 variant="light"
                 isLoading={isRetryingHealth}
+                isDisabled={viewPolicy.operationBusy}
                 onPress={() => { void retryLogbookOpen(); }}
               >
                 {t('health.retry')}
@@ -2078,19 +2269,74 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           />
         </div>
       )}
-      <RecentQSOGlobeCard
-        logBookId={effectiveLogBookId}
-        qsos={qsos}
-        loading={loading}
-        bandFilter={filters.band}
-        pageSize={itemsPerPage}
-        pageSizeOptions={[...PAGE_SIZE_OPTIONS]}
-        onPageSizeChange={handleItemsPerPageChange}
-        desktopLeftOverlay={desktopGlobeTitleOverlay}
-        desktopRightOverlay={desktopDxccOverlay}
-        operators={operators}
-      />
 
+      {persistentWriteFailure && (
+        <div className="p-2 md:px-4 lg:px-6 max-w-7xl mx-auto">
+          <Alert
+            color="danger"
+            variant="solid"
+            title={t('recovery.writeFailure.title')}
+            description={(
+              <div className="space-y-1">
+                <p>{persistentWriteFailure.message}</p>
+                <p className="text-xs opacity-85">
+                  {t('recovery.writeFailure.meta', {
+                    count: persistentWriteFailure.unsavedCount ?? backupStatus?.unsaved?.length ?? 0,
+                    time: new Date(persistentWriteFailure.occurredAt).toLocaleString(),
+                  })}
+                </p>
+              </div>
+            )}
+            endContent={viewPolicy.canOpenRecovery ? (
+              <Button color="danger" variant="flat" onPress={() => setIsRecoveryOpen(true)}>
+                {t('recovery.writeFailure.resolve')}
+              </Button>
+            ) : undefined}
+          />
+        </div>
+      )}
+
+      {viewPolicy.showUnavailableRecovery && (
+        <div className="mx-auto max-w-3xl p-4 md:p-8">
+          <div className="rounded-3xl border border-danger/25 bg-gradient-to-br from-danger/10 via-content1 to-warning/5 p-6 shadow-lg md:p-10">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-danger">{t('health.state.unavailable')}</p>
+            <h2 className="mt-3 text-2xl font-bold text-foreground">{t('recovery.unavailable.title')}</h2>
+            <p className="mt-3 text-default-600">{t('recovery.unavailable.description')}</p>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Button
+                color="danger"
+                isLoading={isRetryingHealth}
+                isDisabled={viewPolicy.operationBusy}
+                onPress={() => { void retryLogbookOpen(); }}
+              >
+                {t('health.retry')}
+              </Button>
+              {viewPolicy.canOpenRecovery && (
+                <Button color="warning" variant="flat" onPress={() => setIsRecoveryOpen(true)}>
+                  {t('recovery.open')}
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viewPolicy.showLogbookContent && (
+        <RecentQSOGlobeCard
+          logBookId={effectiveLogBookId}
+          qsos={qsos}
+          loading={loading}
+          bandFilter={filters.band}
+          pageSize={itemsPerPage}
+          pageSizeOptions={[...PAGE_SIZE_OPTIONS]}
+          onPageSizeChange={handleItemsPerPageChange}
+          desktopLeftOverlay={desktopGlobeTitleOverlay}
+          desktopRightOverlay={desktopDxccOverlay}
+          operators={operators}
+        />
+      )}
+
+      {viewPolicy.showLogbookContent && (
       <div className="p-2 md:p-4 lg:p-6 max-w-7xl mx-auto">
       {/* 通知区域 */}
       {/* Plugin-based sync provider messages */}
@@ -2459,6 +2705,32 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         </ModalContent>
       </Modal>
       </div>
+      )}
+
+      <LogbookRecoveryModal
+        isOpen={isRecoveryOpen}
+        logBookId={effectiveLogBookId}
+        status={backupStatus}
+        preflight={restorePreflight}
+        actionError={recoveryError}
+        localBusy={isRecoveryActionBusy}
+        onClose={() => {
+          setIsRecoveryOpen(false);
+          setRestorePreflight(null);
+          setRecoveryError(null);
+          if (shouldOpenLogbookRecovery(window.location.hash)) {
+            window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+          }
+        }}
+        onRefresh={async () => { await loadBackupStatus(); }}
+        onCreateBackup={createBackup}
+        onDownloadLatest={() => runRecoveryAction(() => api.downloadLogbookBackup(effectiveLogBookId))}
+        onDownloadPreRestore={() => runRecoveryAction(() => api.downloadPreRestore(effectiveLogBookId))}
+        onPrepareRestore={prepareRestore}
+        onRestore={restoreBackup}
+        onRetryUnsaved={retryUnsavedQso}
+        onDiscardUnsaved={discardUnsavedQso}
+      />
     </div>
   );
 };

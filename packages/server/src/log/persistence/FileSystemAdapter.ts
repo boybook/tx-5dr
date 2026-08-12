@@ -97,14 +97,32 @@ export async function fsyncFile(fileSystem: AdifFileSystem, filePath: string): P
   }
 }
 
-export async function fsyncDirectory(fileSystem: AdifFileSystem, dirPath: string): Promise<void> {
-  if (process.platform === 'win32') return;
-  const handle = await fileSystem.open(dirPath, 'r');
+export async function fsyncDirectory(
+  fileSystem: AdifFileSystem,
+  dirPath: string,
+): Promise<boolean> {
+  if (process.platform === 'win32') return false;
+  let handle: AdifFileHandle;
+  try {
+    handle = await fileSystem.open(dirPath, 'r');
+  } catch (error) {
+    if (isUnsupportedDirectorySyncError(error)) return false;
+    throw error;
+  }
   try {
     await handle.sync();
+    return true;
+  } catch (error) {
+    if (isUnsupportedDirectorySyncError(error)) return false;
+    throw error;
   } finally {
     await handle.close().catch(() => undefined);
   }
+}
+
+function isUnsupportedDirectorySyncError(error: unknown): boolean {
+  return ['EINVAL', 'ENOTSUP', 'EOPNOTSUPP', 'EISDIR', 'EBADF', 'EPERM']
+    .includes(errorCode(error) ?? '');
 }
 
 export function errorCode(error: unknown): string | undefined {

@@ -13,7 +13,13 @@ const logger = createLogger('RadioOperator');
 
 interface RadioOperatorEvents extends DigitalRadioEngineEvents {
     operatorTransmitCyclesChanged: (data: { operatorId: string; transmitCycles: number[] }) => void;
-    recordQSO: (data: { operatorId: string; qsoRecord: QSORecord }) => void;
+    recordQSO: (data: {
+        operatorId: string;
+        qsoRecord: QSORecord;
+        retryAttemptId?: string;
+        resolve?: (record: QSORecord) => void;
+        reject?: (error: unknown) => void;
+    }) => void;
     checkHasWorkedCallsign: (data: { operatorId: string; callsign: string; requestId: string }) => void;
     hasWorkedCallsignResponse: (data: { requestId: string; hasWorked: boolean }) => void;
     operatorSlotsUpdated: (data: { operatorId: string; slots: OperatorSlots }) => void;
@@ -26,6 +32,7 @@ export class RadioOperator {
     private _config: OperatorConfig;
     private _stopped = false;
     private _isTransmitting = false;
+    private _logbookPersistenceBlocked = false;
     private _checkTargetConflict?: (myCallsign: string, targetCallsign: string, operatorId: string) => boolean;
 
     private static readonly DEFAULT_CONFIG: OperatorConfig = {
@@ -66,6 +73,10 @@ export class RadioOperator {
         return this._isTransmitting;
     }
 
+    get isLogbookPersistenceBlocked(): boolean {
+        return this._logbookPersistenceBlocked;
+    }
+
     stop() {
         logger.info(`Stopping operator (${this._config.myCallsign}): stopped=${this._stopped}->true, isTransmitting=${this._isTransmitting}->false`);
         this._stopped = true;
@@ -74,9 +85,22 @@ export class RadioOperator {
     }
 
     start() {
+        if (this._logbookPersistenceBlocked) {
+            logger.warn(`Refusing to start operator (${this._config.myCallsign}) while an unsaved QSO is unresolved`);
+            return;
+        }
         this._stopped = false;
         this._isTransmitting = true;
         this.notifyStatusChanged();
+    }
+
+    blockForLogbookFailure(): void {
+        this._logbookPersistenceBlocked = true;
+        this.stop();
+    }
+
+    clearLogbookFailureBlock(): void {
+        this._logbookPersistenceBlocked = false;
     }
 
     /**
@@ -100,10 +124,15 @@ export class RadioOperator {
         return [...this._config.transmitCycles];
     }
 
-    recordQSOLog(qsoRecord: QSORecord): void {
-        this._eventEmitter.emit('recordQSO', {
-            operatorId: this._config.id,
-            qsoRecord,
+    recordQSOLog(qsoRecord: QSORecord, options?: { retryAttemptId?: string }): Promise<QSORecord> {
+        return new Promise<QSORecord>((resolve, reject) => {
+            this._eventEmitter.emit('recordQSO', {
+                operatorId: this._config.id,
+                qsoRecord,
+                retryAttemptId: options?.retryAttemptId,
+                resolve,
+                reject,
+            });
         });
     }
 

@@ -20,7 +20,9 @@
     "dev:check-native": "tsx src/scripts/check-native-modules.ts",
     "start": "node ../../scripts/run-with-env.mjs node dist/scripts/server-launcher.js dist/index.js",
     "lint": "eslint src/**/*.ts",
-    "test": "vitest run --maxWorkers=2 --minWorkers=1"
+    "test": "yarn test:unit && yarn test:logbook-performance",
+    "test:unit": "vitest run --maxWorkers=2 --minWorkers=1 --exclude src/log/__tests__/ADIFLogProvider.performance.test.ts",
+    "test:logbook-performance": "vitest run src/log/__tests__/ADIFLogProvider.performance.test.ts --maxWorkers=1 --minWorkers=1"
   },
   "dependencies": {
     "@casl/ability": "^6.8.0",

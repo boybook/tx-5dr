@@ -1,7 +1,5 @@
 import { fork } from 'node:child_process';
 import {
-  copyFile,
-  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -145,12 +143,12 @@ describe('AdifFileStore process-crash durability', () => {
   }, 30_000);
 
   it.each([
-    ['rewrite-after-last-good-rename', 'old'],
+    ['rewrite-after-temp-fsync', 'old'],
     ['rewrite-after-main-rename', 'new'],
   ] as const)('converges a SIGKILLed rewrite at %s to one complete version', async (point, expectedVersion) => {
     const original = `${adifRecord('BG5RA')}\n`;
     const replacement = `${adifRecord('BG5RB')}\n`;
-    const { filePath } = await createLogbook(original);
+    const { directory, filePath } = await createLogbook(original);
 
     await killChildAtFaultPoint(filePath, 'rewrite', point, Buffer.from(replacement));
 
@@ -166,19 +164,15 @@ describe('AdifFileStore process-crash durability', () => {
     await expect(converged.open()).resolves.toMatchObject({ status: 'ready' });
     await converged.close();
     expect(await readFile(filePath, 'utf8')).toBe(expected);
-    expect((await readdir(converged.recoveryDirectory)).sort()).toEqual(['last-good.adi']);
+    expect((await readdir(directory)).sort()).toEqual(['station.adi']);
   }, 30_000);
 
-  it('keeps artifacts bounded through 100 rewrite and interrupted-recovery cycles', async () => {
+  it('keeps 100 rewrites artifact-free and converges a pre-rename crash on next open', async () => {
     const first = `${adifRecord('BG5SA')}\n`;
     const second = `${adifRecord('BG5SB')}\n`;
     const { directory, filePath } = await createLogbook(first);
-    const paths = new AdifFileStore(filePath);
     const topLevelUnknown = path.join(directory, 'operator-notes.keep');
-    const recoveryUnknown = path.join(paths.recoveryDirectory, 'manual-recovery.keep');
     await writeFile(topLevelUnknown, 'operator-owned');
-    await mkdir(paths.recoveryDirectory, { recursive: true });
-    await writeFile(recoveryUnknown, 'operator-owned recovery note');
 
     for (let index = 0; index < 100; index += 1) {
       const next = index % 2 === 0 ? second : first;
@@ -186,37 +180,35 @@ describe('AdifFileStore process-crash durability', () => {
       const opened = await writer.open();
       await writer.commitRewrite([Buffer.from(next)], opened.generation, { recordCount: 1 });
       await writer.close();
-
-      await copyFile(filePath, paths.rewriteTempPath);
-      await writeFile(filePath, `interrupted-main-${index}`);
-      const recovery = new AdifFileStore(filePath);
-      await expect(recovery.open()).resolves.toMatchObject({
-        status: 'degraded',
-        recoveredFrom: 'rewrite.tmp',
-        scan: { records: [expect.any(Object)] },
-      });
-      await recovery.close();
-
       expect(await readFile(filePath, 'utf8')).toBe(next);
-      expect((await readdir(paths.recoveryDirectory)).sort()).toEqual([
-        'last-good.adi',
-        'manual-recovery.keep',
-      ]);
+      expect((await readdir(directory)).sort()).toEqual(['operator-notes.keep', 'station.adi']);
     }
 
-    const stable = new AdifFileStore(filePath);
-    await expect(stable.open()).resolves.toMatchObject({ status: 'ready' });
-    await stable.close();
+    const beforeCrash = await readFile(filePath, 'utf8');
+    const crashReplacement = beforeCrash === first ? second : first;
+    await killChildAtFaultPoint(
+      filePath,
+      'rewrite',
+      'rewrite-after-temp-fsync',
+      Buffer.from(crashReplacement),
+    );
 
     expect(await readFile(topLevelUnknown, 'utf8')).toBe('operator-owned');
-    expect(await readFile(recoveryUnknown, 'utf8')).toBe('operator-owned recovery note');
-    const topLevel = (await readdir(directory)).sort();
-    expect(topLevel).toEqual(['.tx5dr-recovery', 'operator-notes.keep', 'station.adi']);
-    expect(topLevel.filter(name => name !== '.tx5dr-recovery' && name !== 'operator-notes.keep'))
-      .toEqual(['station.adi']);
-    expect((await readdir(paths.recoveryDirectory)).sort()).toEqual([
-      'last-good.adi',
-      'manual-recovery.keep',
+    expect(await readFile(filePath, 'utf8')).toBe(beforeCrash);
+    expect((await readdir(directory)).sort()).toEqual([
+      'operator-notes.keep',
+      'station.adi',
+      'station.adi.rewrite.tmp',
+    ]);
+
+    const reopened = new AdifFileStore(filePath);
+    await expect(reopened.open()).resolves.toMatchObject({ status: 'ready' });
+    await reopened.close();
+    expect(await readFile(topLevelUnknown, 'utf8')).toBe('operator-owned');
+    expect(await readFile(filePath, 'utf8')).toBe(beforeCrash);
+    expect((await readdir(directory)).sort()).toEqual([
+      'operator-notes.keep',
+      'station.adi',
     ]);
   }, 60_000);
 });

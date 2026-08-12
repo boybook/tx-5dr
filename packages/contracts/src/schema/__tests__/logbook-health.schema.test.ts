@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CreateLogbookBackupRequestSchema,
   LogBookInfoSchema,
   LogbookHealthSchema,
+  RestoreLogbookRequestSchema,
   WSMessageSchema,
   WSMessageType,
 } from '../../index.js';
@@ -20,14 +22,28 @@ describe('logbook health contracts', () => {
     const info = {
       id: 'logbook-N0CALL',
       name: 'N0CALL QSO Log',
-      filePath: '/tmp/N0CALL.adi',
+      fileName: 'N0CALL.adi',
+      storageKind: 'managed' as const,
       createdAt: 1,
       lastUsed: 2,
       isActive: true,
     };
 
     expect(LogBookInfoSchema.safeParse(info).success).toBe(false);
-    expect(LogBookInfoSchema.parse({ ...info, health: loadingHealth }).health).toEqual(loadingHealth);
+    const parsed = LogBookInfoSchema.parse({ ...info, health: loadingHealth });
+    expect(parsed.health).toEqual(loadingHealth);
+    expect(parsed).not.toHaveProperty('filePath');
+  });
+
+  it('rejects path-bearing fields in backup and restore mutations', () => {
+    expect(CreateLogbookBackupRequestSchema.safeParse({
+      filePath: '/tmp/escape.adi',
+    }).success).toBe(false);
+    expect(RestoreLogbookRequestSchema.safeParse({
+      preflightToken: 'preflight-token-1',
+      confirmation: 'logbook-N0CALL',
+      artifactPath: '../another.adi',
+    }).success).toBe(false);
   });
 
   it('rejects negative affected record and byte counts', () => {
@@ -55,6 +71,8 @@ describe('logbook health contracts', () => {
       data: {
         logBookId: 'logbook-N0CALL',
         operatorId: 'operator-1',
+        attemptId: 'attempt-12345678',
+        unsavedCount: 1,
         error: {
           code: 'LOGBOOK_WRITE_FAILED',
           message: 'No space left on device',
@@ -63,6 +81,26 @@ describe('logbook health contracts', () => {
         },
       },
     }).success).toBe(true);
+    expect(WSMessageSchema.safeParse({
+      type: WSMessageType.LOGBOOK_WRITE_FAILED,
+      timestamp: new Date().toISOString(),
+      data: {
+        logBookId: 'logbook-N0CALL',
+        qsoRecord: {
+          id: 'private-qso',
+          callsign: 'N0CALL',
+          frequency: 14_074_000,
+          mode: 'FT8',
+          startTime: loadingHealth.updatedAt,
+          messageHistory: ['CQ N0CALL AA00'],
+        },
+        error: {
+          code: 'LOGBOOK_WRITE_FAILED',
+          message: 'write failed',
+          occurredAt: loadingHealth.updatedAt,
+        },
+      },
+    }).success).toBe(false);
     expect(WSMessageSchema.safeParse({
       type: WSMessageType.LOGBOOK_WRITE_FAILED,
       timestamp: new Date().toISOString(),

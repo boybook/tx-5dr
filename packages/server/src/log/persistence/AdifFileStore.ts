@@ -15,9 +15,7 @@ import {
   ADIF_REWRITE_FLAGS,
   errorCode,
   fsyncDirectory,
-  fsyncFile,
   nodeAdifFileSystem,
-  pathExists,
   writeAll,
   type AdifFileHandle,
   type AdifFileSystem,
@@ -30,15 +28,11 @@ import type {
   LogbookScanProgress,
 } from './LogbookScanTypes.js';
 import { buildGenerationToken, hashStructuralScan } from './LogbookScanCore.js';
-import { PathFileLock, type PathFileLockOptions } from './PathFileLock.js';
 import { globalLogbookPathQueue, type PerPathSerialQueue } from './PerPathSerialQueue.js';
-import { legacyLogbookPathHash } from './LegacyLogbookRecovery.js';
 import {
   LogbookRecordProjector,
   type LogbookRecordProjection,
 } from './LogbookDocument.js';
-
-export const LOGBOOK_TAIL_FRAGMENT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type AdifFileStoreHealth =
   | 'ready'
@@ -53,6 +47,7 @@ export interface AdifFileStoreIssue {
   message: string;
   path?: string;
   cause?: string;
+  affectedBytes?: number;
 }
 
 export interface OpenResult {
@@ -61,7 +56,6 @@ export interface OpenResult {
   generation?: GenerationToken;
   scan?: AdifScanResult;
   recordProjections?: readonly LogbookRecordProjection[];
-  recoveredFrom?: 'rewrite.tmp' | 'last-good.adi' | 'safe-prefix' | 'standard-empty';
 }
 
 export interface RewriteValidationExpectations {
@@ -106,13 +100,8 @@ export type AdifFileStoreFaultPoint =
   | 'rewrite-after-temp-write'
   | 'rewrite-after-temp-fsync'
   | 'rewrite-after-temp-validated'
-  | 'rewrite-after-last-good-copy'
-  | 'rewrite-after-last-good-fsync'
-  | 'rewrite-after-last-good-rename'
   | 'rewrite-after-main-rename'
-  | 'rewrite-after-directory-fsync'
-  | 'recovery-after-unrecoverable-preserved'
-  | 'recovery-after-main-rename';
+  | 'rewrite-after-directory-fsync';
 
 export interface AdifFileStoreFaultContext {
   filePath: string;
@@ -124,15 +113,11 @@ export interface AdifFileStoreOptions {
   fileSystem?: AdifFileSystem;
   scanner?: LogbookScanner;
   queue?: PerPathSerialQueue;
-  lockOptions?: PathFileLockOptions;
   onStateChanged?: (state: AdifFileStoreHealth, issues: readonly AdifFileStoreIssue[]) => void;
   onStateUncertain?: (issue: AdifFileStoreIssue) => void;
   onScanProgress?: (progress: LogbookScanProgress) => void;
   faultHook?: (context: AdifFileStoreFaultContext) => void | Promise<void>;
-  now?: () => number;
   createIfMissing?: boolean;
-  /** Disable every recovery mutation while unresolved legacy artifacts remain. */
-  recoveryWritesEnabled?: boolean;
 }
 
 export class AdifFileStoreError extends Error {
@@ -220,26 +205,16 @@ interface PreparedAppendScan {
 
 export class AdifFileStore {
   readonly filePath: string;
-  readonly recoveryBaseDirectory: string;
-  readonly recoveryDirectory: string;
   readonly rewriteTempPath: string;
-  readonly lastGoodPath: string;
-  readonly lastGoodTempPath: string;
-  readonly tailFragmentPath: string;
-  readonly unrecoverableOriginalPath: string;
-  readonly lockPath: string;
 
   private readonly fileSystem: AdifFileSystem;
   private readonly scanner: LogbookScanner;
   private readonly queue: PerPathSerialQueue;
-  private readonly lock: PathFileLock;
   private readonly onStateChanged?: AdifFileStoreOptions['onStateChanged'];
   private readonly onStateUncertain?: AdifFileStoreOptions['onStateUncertain'];
   private readonly onScanProgress?: AdifFileStoreOptions['onScanProgress'];
   private readonly faultHook?: AdifFileStoreOptions['faultHook'];
-  private readonly now: () => number;
   private readonly createIfMissing: boolean;
-  private readonly recoveryWritesEnabled: boolean;
   private readonly stateListeners = new Set<(
     state: AdifFileStoreHealth,
     issues: readonly AdifFileStoreIssue[],
@@ -251,28 +226,15 @@ export class AdifFileStore {
 
   constructor(filePath: string, options: AdifFileStoreOptions = {}) {
     this.filePath = path.resolve(filePath);
-    this.recoveryBaseDirectory = path.join(path.dirname(this.filePath), '.tx5dr-recovery');
-    this.recoveryDirectory = path.join(
-      this.recoveryBaseDirectory,
-      legacyLogbookPathHash(this.filePath),
-    );
-    this.rewriteTempPath = path.join(this.recoveryDirectory, 'rewrite.tmp');
-    this.lastGoodPath = path.join(this.recoveryDirectory, 'last-good.adi');
-    this.lastGoodTempPath = path.join(this.recoveryDirectory, 'last-good.tmp');
-    this.tailFragmentPath = path.join(this.recoveryDirectory, 'tail-fragment.bin');
-    this.unrecoverableOriginalPath = path.join(this.recoveryDirectory, 'unrecoverable-original.adi');
-    this.lockPath = path.join(this.recoveryDirectory, 'operation.lock');
+    this.rewriteTempPath = `${this.filePath}.rewrite.tmp`;
     this.fileSystem = options.fileSystem ?? nodeAdifFileSystem;
     this.scanner = options.scanner ?? new LogbookScanWorker();
     this.queue = options.queue ?? globalLogbookPathQueue;
-    this.lock = new PathFileLock(this.fileSystem, this.lockPath, options.lockOptions);
     this.onStateChanged = options.onStateChanged;
     this.onStateUncertain = options.onStateUncertain;
     this.onScanProgress = options.onScanProgress;
     this.faultHook = options.faultHook;
-    this.now = options.now ?? Date.now;
     this.createIfMissing = options.createIfMissing ?? true;
-    this.recoveryWritesEnabled = options.recoveryWritesEnabled ?? true;
   }
 
   getState(): { status: AdifFileStoreHealth; issues: readonly AdifFileStoreIssue[] } {
@@ -300,7 +262,7 @@ export class AdifFileStore {
 
     try {
       await this.fileSystem.mkdir(path.dirname(this.filePath), { recursive: true });
-      return await this.queue.run(this.filePath, () => this.runLocked(() => this.recoverLocked()));
+      return await this.queue.run(this.filePath, () => this.openLocked());
     } catch (error) {
       if (error instanceof AdifFileStateUncertainError) {
         return {
@@ -327,7 +289,7 @@ export class AdifFileStore {
     recordProjections: readonly LogbookRecordProjection[];
   }> {
     this.assertMutationAllowed();
-    return this.queue.run(this.filePath, () => this.runLocked(async () => {
+    return this.queue.run(this.filePath, async () => {
       this.assertMutationAllowed();
       const before = await this.scanMutationBaseline(expectedGeneration);
       this.assertExpectedGeneration(expectedGeneration, before.generation);
@@ -395,7 +357,7 @@ export class AdifFileStore {
         }
 
         const rollback = await this.rollbackAppend(handle, oldEof);
-        if (!rollback.ok) {
+        if (rollback.ok === false) {
           throw this.markUncertain(
             'append',
             appendError,
@@ -441,7 +403,7 @@ export class AdifFileStore {
       }
       if (!isCompleteScan(committed.scan)) {
         const rollback = await this.rollbackAppend(undefined, oldEof);
-        if (!rollback.ok) {
+        if (rollback.ok === false) {
           throw this.markUncertain(
             'append',
             new Error('The append produced an incomplete ADIF tail'),
@@ -470,7 +432,7 @@ export class AdifFileStore {
         await this.validateRewriteCandidate(committed, expectations);
       } catch (error) {
         const rollback = await this.rollbackAppend(undefined, oldEof);
-        if (!rollback.ok) {
+        if (rollback.ok === false) {
           throw this.markUncertain(
             'append',
             asError(error),
@@ -505,7 +467,7 @@ export class AdifFileStore {
         scan: committed.scan,
         recordProjections: committed.recordProjections,
       };
-    }));
+    });
   }
 
   async commitRewrite(
@@ -518,71 +480,71 @@ export class AdifFileStore {
     recordProjections: readonly LogbookRecordProjection[];
   }> {
     this.assertMutationAllowed();
-    return this.queue.run(this.filePath, () => this.runLocked(async () => {
+    return this.queue.run(this.filePath, async () => {
       this.assertMutationAllowed();
       const before = await this.scanMutationBaseline(expectedGeneration);
       this.assertExpectedGeneration(expectedGeneration, before.generation);
-      await this.ensureRecoveryDirectory();
-
-      const handle = await this.openRewriteTemp(await this.fileMode(this.filePath));
-      try {
-        await this.writeRewriteSource(handle, source, before.generation.size);
-        await this.injectFault('rewrite-after-temp-write');
-        await handle.sync();
-        await this.injectFault('rewrite-after-temp-fsync');
-      } finally {
-        await handle.close().catch(() => undefined);
-      }
-      await fsyncDirectory(this.fileSystem, this.recoveryDirectory);
-
-      const candidate = await this.scanRequired(this.rewriteTempPath);
-      await this.validateRewriteCandidate(candidate, expectations);
-      await this.injectFault('rewrite-after-temp-validated');
-
-      const immediatelyBeforeCommit = await this.scanRequired(this.filePath);
-      if (!sameGeneration(before.generation, immediatelyBeforeCommit.generation)) {
-        this.throwGenerationConflict(before.generation, immediatelyBeforeCommit.generation);
-      }
-
-      if (isCompleteScan(immediatelyBeforeCommit.scan)) {
-        await this.fileSystem.copyFile(this.filePath, this.lastGoodTempPath);
-        await this.injectFault('rewrite-after-last-good-copy');
-        await fsyncFile(this.fileSystem, this.lastGoodTempPath);
-        await this.injectFault('rewrite-after-last-good-fsync');
-        const backup = await this.scanRequired(this.lastGoodTempPath);
-        if (backup.generation.contentHash !== immediatelyBeforeCommit.generation.contentHash) {
-          throw new AdifFileCommitError(
-            'rewrite',
-            'The fixed last-good copy does not match the pre-rewrite ADIF file',
-            false,
-            immediatelyBeforeCommit.generation,
-          );
-        }
-        await this.fileSystem.rename(this.lastGoodTempPath, this.lastGoodPath);
-        await fsyncDirectory(this.fileSystem, this.recoveryDirectory);
-        await this.injectFault('rewrite-after-last-good-rename');
-      }
 
       let mainRenamed = false;
       try {
+        const handle = await this.openRewriteTemp(await this.fileMode(this.filePath));
+        try {
+          await this.writeRewriteSource(handle, source, before.generation.size);
+          await this.injectFault('rewrite-after-temp-write');
+          await handle.sync();
+          await this.injectFault('rewrite-after-temp-fsync');
+        } finally {
+          await handle.close().catch(() => undefined);
+        }
+
+        const candidate = await this.scanRequired(this.rewriteTempPath);
+        await this.validateRewriteCandidate(candidate, expectations);
+        await this.injectFault('rewrite-after-temp-validated');
+
+        const immediatelyBeforeCommit = await this.scanRequired(this.filePath);
+        if (!sameGeneration(before.generation, immediatelyBeforeCommit.generation)) {
+          this.throwGenerationConflict(before.generation, immediatelyBeforeCommit.generation);
+        }
+
         await this.fileSystem.rename(this.rewriteTempPath, this.filePath);
         mainRenamed = true;
         await this.injectFault('rewrite-after-main-rename');
-        await fsyncDirectory(this.fileSystem, path.dirname(this.filePath));
+        let directorySyncIssue: AdifFileStoreIssue | undefined;
+        try {
+          const synchronized = await fsyncDirectory(this.fileSystem, path.dirname(this.filePath));
+          if (!synchronized) {
+            directorySyncIssue = {
+              code: 'DIRECTORY_SYNC_UNSUPPORTED',
+              message: 'The ADIF content is committed, but this platform does not support directory synchronization',
+              path: path.dirname(this.filePath),
+            };
+          }
+        } catch (error) {
+          directorySyncIssue = toIssue(
+            'DIRECTORY_SYNC_FAILED',
+            path.dirname(this.filePath),
+            error,
+            'The ADIF content is committed, but directory metadata durability could not be confirmed',
+          );
+        }
         await this.injectFault('rewrite-after-directory-fsync');
 
         const committed = await this.scanRequired(this.filePath);
-        if (committed.generation.contentHash !== candidate.generation.contentHash) {
+        if (!sameContentGeneration(committed.generation, candidate.generation)) {
           throw new Error('Post-rename ADIF content hash differs from the validated rewrite candidate');
         }
-        this.publishScanState(committed);
+        this.publishCommittedScan(committed, directorySyncIssue);
         return {
           generation: committed.generation,
           scan: committed.scan,
           recordProjections: committed.recordProjections,
         };
       } catch (error) {
-        if (!mainRenamed || error instanceof AdifFileStateUncertainError) throw error;
+        if (!mainRenamed) {
+          await this.fileSystem.unlink(this.rewriteTempPath).catch(() => undefined);
+          throw error;
+        }
+        if (error instanceof AdifFileStateUncertainError) throw error;
         throw this.markUncertain(
           'rewrite',
           asError(error),
@@ -590,7 +552,157 @@ export class AdifFileStore {
           'The rewrite rename started, but final namespace durability could not be verified',
         );
       }
-    }));
+    });
+  }
+
+  /**
+   * Explicitly replaces the formal logbook with a validated ADIF file. The
+   * caller owns any pre-restore backup; this transaction never creates one.
+   */
+  async commitReplaceFromFile(
+    sourcePath: string,
+    expectedGeneration?: GenerationToken,
+    options: {
+      beforeReplace?: () => void | Promise<void>;
+    } = {},
+  ): Promise<{
+    generation: GenerationToken;
+    scan: AdifScanResult;
+    recordProjections: readonly LogbookRecordProjection[];
+  }> {
+    if (this.closing || this.state === 'closed') {
+      throw new AdifFileStoreReadOnlyError(this.state);
+    }
+
+    const resolvedSourcePath = path.resolve(sourcePath);
+    if (resolvedSourcePath === this.filePath) {
+      throw new AdifFileStoreError(
+        'The restore source must be different from the formal ADIF file',
+        'ADIF_RESTORE_SOURCE_INVALID',
+      );
+    }
+
+    return this.queue.run(this.filePath, async () => {
+      if (this.closing || this.state === 'closed') {
+        throw new AdifFileStoreReadOnlyError(this.state);
+      }
+
+      const source = await this.scanRequired(resolvedSourcePath);
+      if (!isCompleteScan(source.scan)) {
+        throw new AdifRewriteValidationError(['restore source has an incomplete tail']);
+      }
+
+      // Restoration is allowed from read-only/unavailable states, but never
+      // overwrites bytes whose current content revision cannot be established.
+      let before: LogbookFileScanResult | undefined;
+      try {
+        before = await this.scanRequired(this.filePath);
+      } catch (error) {
+        if (errorCode(error) === 'ENOENT' && expectedGeneration === undefined) {
+          before = undefined;
+        } else {
+          throw new AdifFileStoreReadOnlyError(this.state, {
+            cause: error,
+            message: 'The current ADIF content could not be verified before restore',
+          });
+        }
+      }
+      if (before) this.assertExpectedGeneration(expectedGeneration, before.generation);
+
+      let renamed = false;
+      try {
+        const handle = await this.openRewriteTemp(
+          before ? await this.fileMode(this.filePath) : await this.fileMode(resolvedSourcePath),
+        );
+        try {
+          await this.copyFileRangeToHandle(
+            resolvedSourcePath,
+            { start: 0, end: source.generation.size },
+            handle,
+          );
+          await handle.sync();
+        } finally {
+          await handle.close().catch(() => undefined);
+        }
+
+        const candidate = await this.scanRequired(this.rewriteTempPath);
+        if (!isCompleteScan(candidate.scan) || !sameContentGeneration(source.generation, candidate.generation)) {
+          throw new AdifRewriteValidationError([
+            'copied restore candidate differs from the validated source',
+          ]);
+        }
+
+        const immediatelyBeforeCommit = await this.tryScan(this.filePath);
+        if (before) {
+          if (immediatelyBeforeCommit.kind !== 'scanned') {
+            throw new AdifFileStoreReadOnlyError(this.state, {
+              cause: immediatelyBeforeCommit.error,
+              message: 'The current ADIF content could not be reverified before restore',
+            });
+          }
+          if (!sameContentGeneration(before.generation, immediatelyBeforeCommit.result!.generation)) {
+            this.throwGenerationConflict(before.generation, immediatelyBeforeCommit.result!.generation);
+          }
+        } else if (immediatelyBeforeCommit.kind !== 'missing') {
+          if (immediatelyBeforeCommit.kind === 'scanned') {
+            throw new AdifFileStoreError(
+              'The formal ADIF appeared while preparing restore; retry with its current revision',
+              'ADIF_GENERATION_CONFLICT',
+            );
+          }
+          throw new AdifFileStoreReadOnlyError(this.state, {
+            cause: immediatelyBeforeCommit.error,
+            message: 'The formal ADIF path could not be verified before restore',
+          });
+        }
+
+        await options.beforeReplace?.();
+        await this.fileSystem.rename(this.rewriteTempPath, this.filePath);
+        renamed = true;
+        let directorySyncIssue: AdifFileStoreIssue | undefined;
+        try {
+          const synchronized = await fsyncDirectory(this.fileSystem, path.dirname(this.filePath));
+          if (!synchronized) {
+            directorySyncIssue = {
+              code: 'DIRECTORY_SYNC_UNSUPPORTED',
+              message: 'The restored ADIF content is committed, but this platform does not support directory synchronization',
+              path: path.dirname(this.filePath),
+            };
+          }
+        } catch (error) {
+          directorySyncIssue = toIssue(
+            'DIRECTORY_SYNC_FAILED',
+            path.dirname(this.filePath),
+            error,
+            'The restored ADIF content is committed, but directory metadata durability could not be confirmed',
+          );
+        }
+
+        const committed = await this.scanRequired(this.filePath);
+        if (!sameContentGeneration(candidate.generation, committed.generation)) {
+          throw new Error('Post-rename ADIF content differs from the validated restore candidate');
+        }
+
+        this.publishCommittedScan(committed, directorySyncIssue);
+        return {
+          generation: committed.generation,
+          scan: committed.scan,
+          recordProjections: committed.recordProjections,
+        };
+      } catch (error) {
+        if (!renamed) {
+          await this.fileSystem.unlink(this.rewriteTempPath).catch(() => undefined);
+          throw error;
+        }
+        if (error instanceof AdifFileStateUncertainError) throw error;
+        throw this.markUncertain(
+          'rewrite',
+          asError(error),
+          undefined,
+          'The restore candidate was renamed, but the committed ADIF content could not be verified',
+        );
+      }
+    });
   }
 
   async readAll(expectedGeneration?: GenerationToken): Promise<{
@@ -626,6 +738,63 @@ export class AdifFileStore {
     }, expectedGeneration).then(({ value, generation }) => ({ data: value, generation }));
   }
 
+  /**
+   * Starts a reader while the per-path mutation queue is held, then releases
+   * the queue as soon as the reader confirms that it owns a fixed snapshot.
+   * The returned promise still follows the reader through completion.
+   */
+  async startConsistentRead<T>(
+    operation: (onSnapshotOpened: () => void) => Promise<T>,
+  ): Promise<T> {
+    if (this.closing || this.state === 'closed') {
+      throw new AdifFileStoreReadOnlyError(this.state);
+    }
+
+    let operationPromise: Promise<T> | undefined;
+    await this.queue.run(this.filePath, async () => {
+      if (this.closing || this.state === 'closed') {
+        throw new AdifFileStoreReadOnlyError(this.state);
+      }
+
+      let releaseSnapshot!: () => void;
+      const snapshotOpened = new Promise<void>((resolve) => {
+        releaseSnapshot = resolve;
+      });
+      let opened = false;
+      const onSnapshotOpened = () => {
+        if (opened) return;
+        opened = true;
+        releaseSnapshot();
+      };
+
+      operationPromise = Promise.resolve().then(() => operation(onSnapshotOpened));
+
+      // A failed operation may settle before it can open a snapshot. Release
+      // the queue in that case while leaving the failure for the outer await.
+      void operationPromise.then(onSnapshotOpened, onSnapshotOpened);
+      await snapshotOpened;
+    });
+
+    if (!operationPromise) {
+      throw new AdifFileStoreError(
+        'The consistent read did not start',
+        'ADIF_CONSISTENT_READ_NOT_STARTED',
+      );
+    }
+    return operationPromise;
+  }
+
+  /** Returns the most recently verified content generation without rescanning. */
+  getCurrentGeneration(): GenerationToken {
+    const generation = this.currentScanResult?.generation;
+    if (!generation) {
+      throw new AdifFileStoreReadOnlyError(this.state, {
+        message: 'The ADIF file store does not have a verified current generation',
+      });
+    }
+    return { ...generation };
+  }
+
   drain(): Promise<void> {
     return this.queue.drain(this.filePath);
   }
@@ -638,183 +807,66 @@ export class AdifFileStore {
     this.publishState('closed', []);
   }
 
-  private async recoverLocked(): Promise<OpenResult> {
+  private async openLocked(): Promise<OpenResult> {
+    const staleTempIssue = await this.removeStaleRewriteTemp();
+    const includeCleanupIssue = (result: OpenResult): OpenResult => staleTempIssue
+      ? {
+          ...result,
+          status: result.status === 'ready' ? 'degraded' : result.status,
+          issues: [...result.issues, staleTempIssue],
+        }
+      : result;
     const main = await this.tryScan(this.filePath);
 
-    if (main.kind === 'scanned' && isCompleteScan(main.result!.scan)) {
-      const cleanupIssues = this.recoveryWritesEnabled
-        ? await this.cleanupHealthyRecoveryArtifacts()
-        : [];
-      const opened = await this.resultWithPersistentRecoveryIssues(main.result!);
-      return this.publishOpenResult(this.withAdditionalOpenIssues(opened, cleanupIssues));
+    if (main.kind === 'scanned') {
+      // Complete opaque records remain usable. An incomplete tail stays in
+      // place and is readable, but writing behind it would make the boundary
+      // ambiguous, so only that book becomes read-only.
+      return this.publishOpenResult(includeCleanupIssue(resultFromScan(main.result!)));
     }
 
-    // A scanner, permission, or main-file read failure is not evidence that
-    // the formal ADIF is corrupt. Replacing it with an older fixed candidate
-    // could discard valid appends, so preserve every file and require retry.
     if (main.kind === 'error') {
-      return this.publishOpenResult({
+      return this.publishOpenResult(includeCleanupIssue({
         status: 'unavailable',
         issues: [toIssue('MAIN_SCAN_FAILED', this.filePath, main.error)],
-      });
+      }));
     }
 
-    if (!this.recoveryWritesEnabled) {
-      if (main.kind === 'scanned' && isSalvageableUnsafeTail(main.result!.scan)) {
-        return this.publishOpenResult({
-          ...resultFromScan(main.result!),
-          status: 'read-only',
-          issues: [
-            ...resultFromScan(main.result!).issues,
-            {
-              code: 'RECOVERY_WRITE_BLOCKED',
-              message: 'The complete ADIF prefix is readable, but recovery is blocked until legacy migration succeeds',
-              path: this.filePath,
-            },
-          ],
-        });
-      }
-      return this.publishOpenResult({
+    if (!this.createIfMissing) {
+      return this.publishOpenResult(includeCleanupIssue({
         status: 'unavailable',
         issues: [{
-          code: 'RECOVERY_WRITE_BLOCKED',
-          message: 'The formal ADIF cannot be safely opened without recovery, which is blocked until legacy migration succeeds',
+          code: 'MAIN_FILE_MISSING',
+          message: 'The formal ADIF file does not exist and automatic creation is disabled',
           path: this.filePath,
         }],
-      });
+      }));
     }
 
-    const retentionIssues = await this.refreshTailFragmentRetention();
-    const finish = (result: OpenResult): OpenResult => this.publishOpenResult(
-      this.withAdditionalOpenIssues(result, retentionIssues),
-    );
-
-    if (main.kind === 'scanned' && isSalvageableUnsafeTail(main.result!.scan)) {
-      return finish(await this.salvageUnsafeTail(main.result!));
-    }
-
-    const rewrite = await this.tryScan(this.rewriteTempPath);
-    const lastGood = await this.tryScan(this.lastGoodPath);
-
-    if (rewrite.kind === 'scanned' && isCompleteScan(rewrite.result!.scan)) {
-      const recovered = await this.finalizeRecoveryCandidate(this.rewriteTempPath);
-      return finish({
-        ...resultFromScan(recovered),
-        status: 'degraded',
-        issues: [
-          ...resultFromScan(recovered).issues,
-          { code: 'RECOVERED_REWRITE_TEMP', message: 'Finalized a validated interrupted rewrite', path: this.filePath },
-        ],
-        recoveredFrom: 'rewrite.tmp',
-      });
-    }
-
-    if (lastGood.kind === 'scanned' && isCompleteScan(lastGood.result!.scan)) {
-      await this.fileSystem.copyFile(this.lastGoodPath, this.rewriteTempPath);
-      await fsyncFile(this.fileSystem, this.rewriteTempPath);
-      await fsyncDirectory(this.fileSystem, this.recoveryDirectory);
-      const restoredCandidate = await this.scanRequired(this.rewriteTempPath);
-      if (restoredCandidate.generation.contentHash !== lastGood.result!.generation.contentHash) {
-        throw new Error('Restored rewrite candidate differs from last-good.adi');
-      }
-      const recovered = await this.finalizeRecoveryCandidate(this.rewriteTempPath);
-      return finish({
-        ...resultFromScan(recovered),
-        status: 'degraded',
-        issues: [
-          ...resultFromScan(recovered).issues,
-          { code: 'RESTORED_LAST_GOOD', message: 'Restored the fixed last-good ADIF snapshot', path: this.filePath },
-        ],
-        recoveredFrom: 'last-good.adi',
-      });
-    }
-
-    if (main.kind === 'missing' && rewrite.kind === 'missing' && lastGood.kind === 'missing') {
-      if (!this.createIfMissing) {
-        return finish({
-          status: 'unavailable',
-          issues: [{
-            code: 'MAIN_CREATION_DEFERRED',
-            message: 'The formal ADIF file is missing and automatic creation was deferred to preserve legacy recovery data',
-            path: this.filePath,
-          }],
-        });
-      }
-      await this.createEmptyMain();
-      const created = await this.scanRequired(this.filePath);
-      return finish(resultFromScan(created));
-    }
-
-    if (rewrite.kind === 'error' || lastGood.kind === 'error') {
-      const issues = [
-        rewrite.kind === 'error' ? toIssue('REWRITE_TEMP_SCAN_FAILED', this.rewriteTempPath, rewrite.error) : undefined,
-        lastGood.kind === 'error' ? toIssue('LAST_GOOD_SCAN_FAILED', this.lastGoodPath, lastGood.error) : undefined,
-      ].filter((issue): issue is AdifFileStoreIssue => issue !== undefined);
-      return finish({ status: 'unavailable', issues });
-    }
-
-    const unrecoverableSource = main.kind === 'scanned'
-      ? { path: this.filePath, result: main.result! }
-      : rewrite.kind === 'scanned'
-        ? { path: this.rewriteTempPath, result: rewrite.result! }
-        : lastGood.kind === 'scanned'
-          ? { path: this.lastGoodPath, result: lastGood.result! }
-          : undefined;
-
-    if (unrecoverableSource) {
-      return finish(await this.resetUnrecoverableSource(
-        unrecoverableSource.path,
-        unrecoverableSource.result,
-      ));
-    }
-
-    return finish({
-      status: 'unavailable',
-      issues: [{ code: 'NO_USABLE_LOGBOOK', message: 'No ADIF recovery source is available', path: this.filePath }],
-    });
+    const directorySyncIssue = await this.createEmptyMain();
+    const created = await this.scanRequired(this.filePath);
+    const result = resultFromScan(created);
+    return this.publishOpenResult(includeCleanupIssue(directorySyncIssue
+      ? { ...result, status: 'degraded', issues: [...result.issues, directorySyncIssue] }
+      : result));
   }
 
-  private withAdditionalOpenIssues(
-    result: OpenResult,
-    issues: readonly AdifFileStoreIssue[],
-  ): OpenResult {
-    if (issues.length === 0) return result;
-    return {
-      ...result,
-      status: result.status === 'ready' ? 'degraded' : result.status,
-      issues: [...result.issues, ...issues],
-    };
-  }
-
-  private async cleanupHealthyRecoveryArtifacts(): Promise<AdifFileStoreIssue[]> {
-    const issues: AdifFileStoreIssue[] = [];
-    for (const artifactPath of [this.rewriteTempPath, this.lastGoodTempPath]) {
-      try {
-        await this.removeRecoveryArtifact(artifactPath);
-      } catch (error) {
-        issues.push(toIssue('CLEANUP_PENDING', artifactPath, error));
-      }
-    }
+  private async removeStaleRewriteTemp(): Promise<AdifFileStoreIssue | undefined> {
     try {
-      await this.removeExpiredTailFragment();
+      await this.fileSystem.unlink(this.rewriteTempPath);
+      return undefined;
     } catch (error) {
-      issues.push(toIssue('CLEANUP_PENDING', this.tailFragmentPath, error));
-    }
-    return issues;
-  }
-
-  private async refreshTailFragmentRetention(): Promise<AdifFileStoreIssue[]> {
-    try {
-      const observedAt = new Date(this.now());
-      await this.fileSystem.utimes(this.tailFragmentPath, observedAt, observedAt);
-      return [];
-    } catch (error) {
-      if (errorCode(error) === 'ENOENT') return [];
-      return [toIssue('CLEANUP_PENDING', this.tailFragmentPath, error)];
+      if (errorCode(error) === 'ENOENT') return undefined;
+      return toIssue(
+        'STALE_REWRITE_TEMP_CLEANUP_FAILED',
+        this.rewriteTempPath,
+        error,
+        'A stale rewrite temp could not be removed; it is never used as a recovery source',
+      );
     }
   }
 
-  private async createEmptyMain(): Promise<void> {
+  private async createEmptyMain(): Promise<AdifFileStoreIssue | undefined> {
     const handle = await this.fileSystem.open(this.filePath, ADIF_EXCLUSIVE_CREATE_FLAGS, 0o600);
     try {
       await writeAll(handle, encodeAdifHeader());
@@ -822,183 +874,22 @@ export class AdifFileStore {
     } finally {
       await handle.close().catch(() => undefined);
     }
-    await fsyncDirectory(this.fileSystem, path.dirname(this.filePath));
-  }
-
-  private async resultWithPersistentRecoveryIssues(result: LogbookFileScanResult): Promise<OpenResult> {
-    const base = resultFromScan(result);
-    const persistentIssues: AdifFileStoreIssue[] = [];
-    if (await pathExists(this.fileSystem, this.tailFragmentPath)) {
-      persistentIssues.push({
-        code: 'TAIL_FRAGMENT_PRESERVED',
-        message: 'An unsafe trailing fragment is preserved for manual inspection',
-        path: this.tailFragmentPath,
-      });
-    }
-    if (await pathExists(this.fileSystem, this.unrecoverableOriginalPath)) {
-      persistentIssues.push({
-        code: 'UNRECOVERABLE_ORIGINAL_PRESERVED',
-        message: 'An unrecoverable original ADIF file is preserved for manual inspection',
-        path: this.unrecoverableOriginalPath,
-      });
-    }
-    return persistentIssues.length === 0
-      ? base
-      : { ...base, status: 'degraded', issues: [...base.issues, ...persistentIssues] };
-  }
-
-  private async removeExpiredTailFragment(): Promise<void> {
     try {
-      const stat = await this.fileSystem.stat(this.tailFragmentPath);
-      if (this.now() - stat.mtimeMs < LOGBOOK_TAIL_FRAGMENT_RETENTION_MS) return;
-      await this.removeRecoveryArtifact(this.tailFragmentPath);
+      const synchronized = await fsyncDirectory(this.fileSystem, path.dirname(this.filePath));
+      if (synchronized) return undefined;
+      return {
+        code: 'DIRECTORY_SYNC_UNSUPPORTED',
+        message: 'The new ADIF file is synced, but this platform does not support directory synchronization',
+        path: path.dirname(this.filePath),
+      };
     } catch (error) {
-      if (errorCode(error) !== 'ENOENT') throw error;
-    }
-  }
-
-  private async salvageUnsafeTail(main: LogbookFileScanResult): Promise<OpenResult> {
-    const tailRange = main.scan.incompleteTailRange!;
-    const preserved = await this.preserveFileRangeExclusive(
-      this.filePath,
-      tailRange,
-      this.tailFragmentPath,
-    );
-    if (!preserved) {
-      const [existingHash, currentHash] = await Promise.all([
-        this.hashFileRange(this.tailFragmentPath, {
-          start: 0,
-          end: (await this.fileSystem.stat(this.tailFragmentPath)).size,
-        }),
-        this.hashFileRange(this.filePath, tailRange),
-      ]);
-      if (existingHash !== currentHash) {
-        return {
-          ...resultFromScan(main),
-          status: 'read-only',
-          issues: [
-            ...resultFromScan(main).issues,
-            {
-              code: 'TAIL_FRAGMENT_CONFLICT',
-              message: 'A different fixed tail fragment already exists; the current unsafe tail was left untouched',
-              path: this.tailFragmentPath,
-            },
-          ],
-        };
-      }
-    }
-
-    await this.writeRecoveryCandidate(
-      [mainFileRange(0, main.scan.safeEnd)],
-      main.generation.size,
-    );
-    const candidate = await this.scanRequired(this.rewriteTempPath);
-    await this.validateRewriteCandidate(candidate, {});
-    const recovered = await this.finalizeRecoveryCandidate(this.rewriteTempPath);
-    return {
-      ...resultFromScan(recovered),
-      status: 'degraded',
-      issues: [
-        ...resultFromScan(recovered).issues,
-        {
-          code: 'TRUNCATED_UNSAFE_TAIL',
-          message: 'Preserved an unsafe trailing fragment and committed the complete ADIF prefix',
-          path: this.tailFragmentPath,
-        },
-      ],
-      recoveredFrom: 'safe-prefix',
-    };
-  }
-
-  private async resetUnrecoverableSource(
-    sourcePath: string,
-    source: LogbookFileScanResult,
-  ): Promise<OpenResult> {
-    const existingOriginal = await this.tryScan(this.unrecoverableOriginalPath);
-    if (
-      existingOriginal.kind === 'scanned'
-      && existingOriginal.result!.generation.contentHash !== source.generation.contentHash
-    ) {
-      return {
-        status: 'unavailable',
-        generation: sourcePath === this.filePath ? source.generation : undefined,
-        scan: sourcePath === this.filePath ? source.scan : undefined,
-        issues: [{
-          code: 'UNRECOVERABLE_ORIGINAL_CONFLICT',
-          message: 'The fixed unrecoverable-original.adi already exists and will not be overwritten',
-          path: this.unrecoverableOriginalPath,
-        }],
-      };
-    }
-    if (existingOriginal.kind === 'error') {
-      return {
-        status: 'unavailable',
-        generation: sourcePath === this.filePath ? source.generation : undefined,
-        scan: sourcePath === this.filePath ? source.scan : undefined,
-        issues: [toIssue(
-          'UNRECOVERABLE_ORIGINAL_SCAN_FAILED',
-          this.unrecoverableOriginalPath,
-          existingOriginal.error,
-        )],
-      };
-    }
-
-    if (existingOriginal.kind === 'missing') {
-      const preserved = await this.preserveFileRangeExclusive(
-        sourcePath,
-        { start: 0, end: source.generation.size },
-        this.unrecoverableOriginalPath,
+      return toIssue(
+        'DIRECTORY_SYNC_FAILED',
+        path.dirname(this.filePath),
+        error,
+        'The new ADIF file is synced, but directory metadata durability could not be confirmed',
       );
-      if (!preserved) {
-        const racedOriginal = await this.scanRequired(this.unrecoverableOriginalPath);
-        if (racedOriginal.generation.contentHash !== source.generation.contentHash) {
-          return {
-            status: 'unavailable',
-            generation: sourcePath === this.filePath ? source.generation : undefined,
-            scan: sourcePath === this.filePath ? source.scan : undefined,
-            issues: [{
-              code: 'UNRECOVERABLE_ORIGINAL_CONFLICT',
-              message: 'A different fixed unrecoverable-original.adi appeared during recovery',
-              path: this.unrecoverableOriginalPath,
-            }],
-          };
-        }
-      }
     }
-    await this.injectFault('recovery-after-unrecoverable-preserved');
-    await this.writeRecoveryCandidate(
-      [literalAdifBytes(encodeAdifHeader())],
-      source.generation.size,
-      sourcePath,
-    );
-    const candidate = await this.scanRequired(this.rewriteTempPath);
-    await this.validateRewriteCandidate(candidate, { recordCount: 0 });
-    const recovered = await this.finalizeRecoveryCandidate(this.rewriteTempPath);
-    return {
-      ...resultFromScan(recovered),
-      status: 'degraded',
-      issues: [{
-        code: 'RESET_UNRECOVERABLE_MAIN',
-        message: 'Preserved the unrecoverable source and created a standard empty ADIF logbook',
-        path: this.unrecoverableOriginalPath,
-      }],
-      recoveredFrom: 'standard-empty',
-    };
-  }
-
-  private async writeRecoveryCandidate(
-    source: Iterable<AdifRewriteChunk> | AsyncIterable<AdifRewriteChunk>,
-    mainSize: number,
-    modeSourcePath = this.filePath,
-  ): Promise<void> {
-    const handle = await this.openRewriteTemp(await this.fileMode(modeSourcePath));
-    try {
-      await this.writeRewriteSource(handle, source, mainSize);
-      await handle.sync();
-    } finally {
-      await handle.close().catch(() => undefined);
-    }
-    await fsyncDirectory(this.fileSystem, this.recoveryDirectory);
   }
 
   private async fileMode(filePath: string): Promise<number | undefined> {
@@ -1022,51 +913,6 @@ export class AdifFileStore {
       return handle;
     } catch (error) {
       await handle.close().catch(() => undefined);
-      throw error;
-    }
-  }
-
-  private async finalizeRecoveryCandidate(candidatePath: string): Promise<LogbookFileScanResult> {
-    let renamed = false;
-    try {
-      await this.fileSystem.rename(candidatePath, this.filePath);
-      renamed = true;
-      await this.injectFault('recovery-after-main-rename');
-      await fsyncDirectory(this.fileSystem, path.dirname(this.filePath));
-      await fsyncDirectory(this.fileSystem, this.recoveryDirectory);
-      const committed = await this.scanRequired(this.filePath);
-      if (!isCompleteScan(committed.scan)) {
-        throw new Error('The finalized recovery candidate is not a complete ADIF file');
-      }
-      return committed;
-    } catch (error) {
-      if (!renamed) throw error;
-      throw this.markUncertain(
-        'rewrite',
-        asError(error),
-        undefined,
-        'Recovery renamed the main ADIF file, but final durability could not be verified',
-      );
-    }
-  }
-
-  private async preserveFileRangeExclusive(
-    sourcePath: string,
-    range: AdifByteRange,
-    targetPath: string,
-  ): Promise<boolean> {
-    let handle: AdifFileHandle | undefined;
-    try {
-      handle = await this.fileSystem.open(targetPath, ADIF_EXCLUSIVE_CREATE_FLAGS, 0o600);
-      await this.copyFileRangeToHandle(sourcePath, range, handle);
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      await fsyncDirectory(this.fileSystem, this.recoveryDirectory);
-      return true;
-    } catch (error) {
-      await handle?.close().catch(() => undefined);
-      if (errorCode(error) === 'EEXIST') return false;
       throw error;
     }
   }
@@ -1256,10 +1102,10 @@ export class AdifFileStore {
 
     const contentHash = await this.hashFileRange(this.filePath, { start: 0, end: expectedSize });
     const statAfterHash = await this.fileSystem.stat(this.filePath);
-    if (!sameFileStat(statBeforeHash, statAfterHash)) {
+    if (!statAfterHash.isFile() || statAfterHash.size !== expectedSize) {
       throw this.markUncertain(
         'append',
-        new Error('The ADIF file changed while its committed generation was being hashed'),
+        new Error('The ADIF file size changed while its committed generation was being hashed'),
         undefined,
         'Append was fsynced, but the resulting generation did not remain stable',
       );
@@ -1361,7 +1207,7 @@ export class AdifFileStore {
     expectedGeneration?: GenerationToken,
   ): Promise<{ value: T; generation: GenerationToken; scan: AdifScanResult }> {
     if (this.closing || this.state === 'closed') throw new AdifFileStoreReadOnlyError(this.state);
-    return this.queue.run(this.filePath, () => this.runLocked(async () => {
+    return this.queue.run(this.filePath, async () => {
       const before = await this.scanRequired(this.filePath);
       this.assertExpectedGeneration(expectedGeneration, before.generation);
       const value = await reader(before);
@@ -1370,53 +1216,7 @@ export class AdifFileStore {
         this.throwGenerationConflict(before.generation, after.generation);
       }
       return { value, generation: after.generation, scan: after.scan };
-    }));
-  }
-
-  private async runLocked<T>(operation: () => Promise<T>): Promise<T> {
-    await this.ensureRecoveryDirectory();
-    try {
-      return await this.lock.run(operation);
-    } finally {
-      await this.cleanupEmptyRecoveryDirectories().catch(() => undefined);
-    }
-  }
-
-  private async ensureRecoveryDirectory(): Promise<void> {
-    const baseExisted = await pathExists(this.fileSystem, this.recoveryBaseDirectory);
-    const rootExisted = await pathExists(this.fileSystem, this.recoveryDirectory);
-    await this.fileSystem.mkdir(this.recoveryDirectory, { recursive: true, mode: 0o700 });
-    if (!baseExisted) await fsyncDirectory(this.fileSystem, path.dirname(this.recoveryBaseDirectory));
-    if (!rootExisted) await fsyncDirectory(this.fileSystem, this.recoveryBaseDirectory);
-  }
-
-  private async cleanupEmptyRecoveryDirectories(): Promise<void> {
-    try {
-      if ((await this.fileSystem.readdir(this.recoveryDirectory)).length === 0) {
-        await this.fileSystem.rmdir(this.recoveryDirectory);
-        await fsyncDirectory(this.fileSystem, this.recoveryBaseDirectory);
-      }
-    } catch (error) {
-      if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(errorCode(error) ?? '')) throw error;
-    }
-
-    try {
-      if ((await this.fileSystem.readdir(this.recoveryBaseDirectory)).length === 0) {
-        await this.fileSystem.rmdir(this.recoveryBaseDirectory);
-        await fsyncDirectory(this.fileSystem, path.dirname(this.recoveryBaseDirectory));
-      }
-    } catch (error) {
-      if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(errorCode(error) ?? '')) throw error;
-    }
-  }
-
-  private async removeRecoveryArtifact(filePath: string): Promise<void> {
-    try {
-      await this.fileSystem.unlink(filePath);
-      await fsyncDirectory(this.fileSystem, this.recoveryDirectory);
-    } catch (error) {
-      if (errorCode(error) !== 'ENOENT') throw error;
-    }
+    });
   }
 
   private async scanRequired(filePath: string): Promise<LogbookFileScanResult> {
@@ -1434,21 +1234,12 @@ export class AdifFileStore {
     const cached = this.currentScanResult;
     if (expected && cached && sameGeneration(expected, cached.generation)) {
       const stat = await this.fileSystem.stat(this.filePath);
-      if (
-        stat.isFile()
-        && stat.size === cached.generation.size
-        && stat.mtimeMs === cached.generation.mtimeMs
-        && (cached.generation.dev === undefined || stat.dev === cached.generation.dev)
-        && (cached.generation.ino === undefined || stat.ino === cached.generation.ino)
-      ) {
+      if (stat.isFile() && stat.size === cached.generation.size) {
         const contentHash = await this.hashFileRange(this.filePath, { start: 0, end: stat.size });
         const after = await this.fileSystem.stat(this.filePath);
         if (
           after.isFile()
           && after.size === stat.size
-          && after.mtimeMs === stat.mtimeMs
-          && (stat.dev === undefined || after.dev === stat.dev)
-          && (stat.ino === undefined || after.ino === stat.ino)
           && contentHash === cached.generation.contentHash
         ) {
           return cached;
@@ -1488,7 +1279,6 @@ export class AdifFileStore {
 
   private async tryScan(filePath: string): Promise<CandidateScan> {
     try {
-      if (!await pathExists(this.fileSystem, filePath)) return { kind: 'missing' };
       return { kind: 'scanned', result: await this.scanRequired(filePath) };
     } catch (error) {
       if (errorCode(error) === 'ENOENT') return { kind: 'missing' };
@@ -1551,9 +1341,22 @@ export class AdifFileStore {
     this.publishState(openResult.status, openResult.issues);
   }
 
+  private publishCommittedScan(
+    result: LogbookFileScanResult,
+    commitIssue?: AdifFileStoreIssue,
+  ): void {
+    if (!commitIssue) {
+      this.publishScanState(result);
+      return;
+    }
+    this.currentScanResult = result;
+    const openResult = resultFromScan(result);
+    this.publishState('degraded', [...openResult.issues, commitIssue]);
+  }
+
   private publishOpenResult(result: OpenResult): OpenResult {
     if (
-      (result.status === 'ready' || result.status === 'degraded')
+      (result.status === 'ready' || result.status === 'degraded' || result.status === 'read-only')
       && result.scan
       && result.generation
       && result.recordProjections
@@ -1668,31 +1471,29 @@ function isAsciiWhitespace(byte: number): boolean {
     || byte === 0x0c;
 }
 
-function sameFileStat(
-  left: { size: number; mtimeMs: number; dev?: number; ino?: number; isFile(): boolean },
-  right: { size: number; mtimeMs: number; dev?: number; ino?: number; isFile(): boolean },
-): boolean {
-  return left.isFile()
-    && right.isFile()
-    && left.size === right.size
-    && left.mtimeMs === right.mtimeMs
-    && left.dev === right.dev
-    && left.ino === right.ino;
-}
-
 function resultFromScan(result: LogbookFileScanResult): OpenResult {
-  const degraded = !isCompleteScan(result.scan)
-    || result.scan.issues.length > 0
+  const incomplete = !isCompleteScan(result.scan);
+  const degraded = result.scan.issues.length > 0
     || result.scan.records.some(record => !record.syntacticallyValid);
+  const incompleteTailBytes = result.scan.incompleteTailRange
+    ? result.scan.incompleteTailRange.end - result.scan.incompleteTailRange.start
+    : result.scan.byteLength - result.scan.safeEnd;
   return {
-    status: degraded ? 'degraded' : 'ready',
+    status: incomplete ? 'read-only' : degraded ? 'degraded' : 'ready',
     generation: result.generation,
     scan: result.scan,
     recordProjections: result.recordProjections,
-    issues: result.scan.issues.map(issue => ({
-      code: `ADIF_${issue.code.toUpperCase().replaceAll('-', '_')}`,
-      message: issue.message,
-    })),
+    issues: [
+      ...result.scan.issues.map(issue => ({
+        code: `ADIF_${issue.code.toUpperCase().replaceAll('-', '_')}`,
+        message: issue.message,
+      })),
+      ...(incomplete ? [{
+        code: 'ADIF_INCOMPLETE_TAIL',
+        message: 'The ADIF has an incomplete tail; complete records remain readable but writes are paused',
+        affectedBytes: incompleteTailBytes,
+      }] : []),
+    ],
   };
 }
 
@@ -1700,19 +1501,8 @@ function isCompleteScan(scan: AdifScanResult): boolean {
   return scan.incompleteTailRange === undefined && scan.safeEnd === scan.byteLength;
 }
 
-function isSalvageableUnsafeTail(scan: AdifScanResult): boolean {
-  return scan.incompleteTailRange !== undefined
-    && scan.incompleteTailRange.end > scan.incompleteTailRange.start
-    && scan.safeEnd > 0
-    && (scan.records.length > 0 || scan.headerRange !== undefined);
-}
-
 function sameGeneration(left: GenerationToken, right: GenerationToken): boolean {
-  return left.token === right.token
-    && left.size === right.size
-    && left.mtimeMs === right.mtimeMs
-    && left.dev === right.dev
-    && left.ino === right.ino
+  return left.size === right.size
     && left.contentHash === right.contentHash
     && left.scanHash === right.scanHash;
 }

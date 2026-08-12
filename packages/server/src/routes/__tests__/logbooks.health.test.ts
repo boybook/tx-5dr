@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => {
     issues: [{
       code: 'LOGBOOK_OPEN_FAILED',
       message: 'The logbook could not be opened',
-      recoveryFileName: 'unrecoverable-original.adi',
       occurredAt: 1_700_000_000_000,
     }],
     updatedAt: 1_700_000_000_000,
@@ -38,12 +37,15 @@ const mocks = vi.hoisted(() => {
     createdAt: 1_699_999_999_000,
     lastUsed: 1_700_000_000_000,
     isActive: true,
+    storageKind: 'managed',
   };
   const logManager = {
     getLogBooks: vi.fn(() => [logBook]),
     getLogBook: vi.fn(() => logBook),
-    getOrCreateLogBookByCallsign: vi.fn(async () => logBook),
     getOperatorLogBookId: vi.fn(() => null),
+    resolveLogBookId: vi.fn((id: string) => id === logBook.id ? id : null),
+    getOperatorIdsForLogBook: vi.fn(() => []),
+    getCallsignsForLogBook: vi.fn(() => []),
   };
   const engine = {
     operatorManager: {
@@ -70,7 +72,13 @@ vi.mock('../../DigitalRadioEngine.js', () => ({
 
 vi.mock('../../auth/authPlugin.js', () => ({
   requireRole: () => async () => undefined,
-  requireLogbookAccess: () => async () => undefined,
+  requireExistingLogbookAccess: () => async (request: FastifyRequest, reply: { code: (status: number) => { send: (body: unknown) => unknown } }) => {
+    const id = (request.params as { id?: string }).id;
+    if (id !== mocks.logBook.id) {
+      return reply.code(404).send({ success: false, error: { code: 'RESOURCE_UNAVAILABLE' } });
+    }
+    request.logBookInstance = mocks.logBook as never;
+  },
 }));
 
 describe('logbook health routes', () => {
@@ -131,6 +139,7 @@ describe('logbook health routes', () => {
     const response = await fastify.inject({
       method: 'POST',
       url: '/api/logbooks/logbook-N0CALL/recovery/retry',
+      headers: { 'Idempotency-Key': 'recovery-test-1' },
     });
 
     expect(response.statusCode).toBe(200);

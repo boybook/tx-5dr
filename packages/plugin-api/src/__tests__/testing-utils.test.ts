@@ -281,6 +281,33 @@ describe('plugin-api testing utilities', () => {
       expect(await logbook.hasWorked('W1AW')).toBe(true);
       expect(await logbook.hasWorked('K2ABC')).toBe(false);
     });
+
+    it('returns immutable committed records from mutation helpers', async () => {
+      const logbook = createMockLogbookAccess();
+      const input = {
+        id: 'mock-qso',
+        callsign: 'JA1ABC',
+        frequency: 14_074_000,
+        mode: 'FT8',
+        startTime: 1,
+        messageHistory: ['CQ JA1ABC PM95'],
+      };
+
+      const added = await logbook.addQSO(input);
+      const updateHistory = ['CQ JA1ABC PM95', 'JA1ABC W1AW -10'];
+      const updated = await logbook.updateQSO(input.id, {
+        id: 'must-not-replace-target-id',
+        notes: 'durable',
+        messageHistory: updateHistory,
+      });
+
+      expect(added).toEqual(input);
+      expect(added).not.toBe(input);
+      expect(added.messageHistory).not.toBe(input.messageHistory);
+      expect(updated).toMatchObject({ id: input.id, notes: 'durable' });
+      expect(updated.messageHistory).toEqual(updateHistory);
+      expect(updated.messageHistory).not.toBe(updateHistory);
+    });
   });
 
   describe('createMockBandAccess', () => {

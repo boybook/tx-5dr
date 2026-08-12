@@ -18,6 +18,7 @@ export interface LogBookInstance {
   name: string;
   description?: string;
   filePath: string;
+  storageKind: 'managed' | 'custom';
   provider: ILogProvider;
   createdAt: number;
   lastUsed: number;
@@ -98,7 +99,6 @@ export class LogManager {
     
     // 确保logbook目录存在
     const logbookDir = await getDataFilePath('logbook');
-    const _path = await import('path');
     const fs = await import('fs/promises');
     try {
       await fs.mkdir(logbookDir, { recursive: true });
@@ -159,6 +159,7 @@ export class LogManager {
     
     // 创建ADIF日志Provider
     const provider = new ADIFLogProvider({
+      logBookId: config.id,
       logFilePath,
       autoCreateFile: config.autoCreateFile ?? true,
       logFileName: config.logFileName ?? 'tx5dr.adi'
@@ -169,6 +170,7 @@ export class LogManager {
       name: config.name,
       description: config.description,
       filePath: logFilePath,
+      storageKind: config.filePath ? 'custom' : 'managed',
       provider,
       createdAt: Date.now(),
       lastUsed: Date.now(),
@@ -186,10 +188,13 @@ export class LogManager {
       });
     });
     const unsubscribeWriteFailure = provider.onWriteFailed((failure: LogbookWriteFailure) => {
+      // Automatic QSO failures are published by RadioOperatorManager after it
+      // has created the single retryable attempt. Manual mutations have no
+      // operator id and continue to surface directly from the provider.
+      if (failure.operatorId) return;
       this.applicationEventSink?.('logbookWriteFailed', {
         logBookId: config.id,
         operatorId: failure.operatorId,
-        qsoRecord: failure.qsoRecord,
         error: failure.error,
       });
     });
