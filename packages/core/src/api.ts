@@ -21,6 +21,15 @@ import type {
   LogBookActionResponse,
   LogBookImportResponse,
   LogbookRecoveryRetryResponse,
+  LogbookBackupStatusResponse,
+  LogbookRestorePreflightResponse,
+  LogbookUnsavedQsoRetryResponse,
+  LogbookUnsavedQsoDiscardResponse,
+  CreateLogbookBackupRequest,
+  PrepareLogbookRestoreRequest,
+  RestoreLogbookRequest,
+  LogbookConditionalMutationHeaders,
+  LogbookIdempotentMutationHeaders,
   CreateLogBookRequest,
   UpdateLogBookRequest,
   LogBookQSOQueryOptions,
@@ -1368,10 +1377,110 @@ export const api = {
     return apiRequest<LogBookDetailResponse>(`/logbooks/${encodePathSegment(id)}`, undefined, apiBase);
   },
 
-  async retryOpenLogBook(id: string, apiBase?: string): Promise<LogbookRecoveryRetryResponse> {
+  async retryOpenLogBook(
+    id: string,
+    request: LogbookIdempotentMutationHeaders,
+    apiBase?: string,
+  ): Promise<LogbookRecoveryRetryResponse> {
     return apiRequest<LogbookRecoveryRetryResponse>(
       `/logbooks/${encodePathSegment(id)}/recovery/retry`,
-      { method: 'POST' },
+      { method: 'POST', headers: { 'Idempotency-Key': request.idempotencyKey } },
+      apiBase,
+    );
+  },
+
+  async getLogbookBackupStatus(id: string, apiBase?: string): Promise<LogbookBackupStatusResponse> {
+    return apiRequest<LogbookBackupStatusResponse>(
+      `/logbooks/${encodePathSegment(id)}/backup`,
+      undefined,
+      apiBase,
+    );
+  },
+
+  async createLogbookBackup(
+    id: string,
+    request: CreateLogbookBackupRequest & LogbookIdempotentMutationHeaders,
+    apiBase?: string,
+  ): Promise<LogbookBackupStatusResponse> {
+    return apiRequest<LogbookBackupStatusResponse>(
+      `/logbooks/${encodePathSegment(id)}/backup`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': request.idempotencyKey },
+        body: JSON.stringify({}),
+      },
+      apiBase,
+    );
+  },
+
+  async downloadLogbookBackup(id: string, apiBase?: string): Promise<Blob> {
+    return apiBlobRequest(`/logbooks/${encodePathSegment(id)}/backup/download`, undefined, apiBase);
+  },
+
+  async prepareLogbookRestore(
+    id: string,
+    request: PrepareLogbookRestoreRequest & LogbookConditionalMutationHeaders,
+    apiBase?: string,
+  ): Promise<LogbookRestorePreflightResponse> {
+    return apiRequest<LogbookRestorePreflightResponse>(
+      `/logbooks/${encodePathSegment(id)}/backup/restore/prepare`,
+      {
+        method: 'POST',
+        headers: { 'If-Match': request.revision, 'Idempotency-Key': request.idempotencyKey },
+        body: JSON.stringify({}),
+      },
+      apiBase,
+    );
+  },
+
+  async restoreLogbook(
+    id: string,
+    request: RestoreLogbookRequest & LogbookConditionalMutationHeaders,
+    apiBase?: string,
+  ): Promise<LogbookBackupStatusResponse> {
+    return apiRequest<LogbookBackupStatusResponse>(
+      `/logbooks/${encodePathSegment(id)}/backup/restore`,
+      {
+        method: 'POST',
+        headers: { 'If-Match': request.revision, 'Idempotency-Key': request.idempotencyKey },
+        body: JSON.stringify({
+          preflightToken: request.preflightToken,
+          confirmation: request.confirmation,
+        }),
+      },
+      apiBase,
+    );
+  },
+
+  async downloadPreRestore(id: string, apiBase?: string): Promise<Blob> {
+    return apiBlobRequest(
+      `/logbooks/${encodePathSegment(id)}/backup/pre-restore/download`,
+      undefined,
+      apiBase,
+    );
+  },
+
+  async retryUnsavedQso(
+    id: string,
+    attemptId: string,
+    request: LogbookIdempotentMutationHeaders,
+    apiBase?: string,
+  ): Promise<LogbookUnsavedQsoRetryResponse> {
+    return apiRequest<LogbookUnsavedQsoRetryResponse>(
+      `/logbooks/${encodePathSegment(id)}/unsaved-qsos/${encodePathSegment(attemptId)}/retry`,
+      { method: 'POST', headers: { 'Idempotency-Key': request.idempotencyKey } },
+      apiBase,
+    );
+  },
+
+  async discardUnsavedQso(
+    id: string,
+    attemptId: string,
+    apiBase?: string,
+  ): Promise<LogbookUnsavedQsoDiscardResponse> {
+    return apiRequest<LogbookUnsavedQsoDiscardResponse>(
+      `/logbooks/${encodePathSegment(id)}/unsaved-qsos/${encodePathSegment(attemptId)}`,
+      { method: 'DELETE' },
       apiBase,
     );
   },

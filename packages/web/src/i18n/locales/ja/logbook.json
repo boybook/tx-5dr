@@ -60,6 +60,82 @@
     "retry": "再試行",
     "retryFailed": "ログブックを再度開けませんでした"
   },
+  "recovery": {
+    "title": "ログブックのバックアップと復旧",
+    "loading": "状態を読み込み中",
+    "open": "バックアップと復旧",
+    "refresh": "状態を更新",
+    "actionFailed": "操作に失敗しました",
+    "revision": "現在のリビジョン: {{revision}}",
+    "unavailable": {
+      "title": "このログブックを安全に読み取れません",
+      "description": "全記録が消えたと誤解させないよう、空のログとしては表示しません。再試行するか、バックアップと復旧で検証済みコピーを確認してください。"
+    },
+    "writeFailure": {
+      "title": "未保存の QSO があります。自動運用を停止しました",
+      "description": "最新の QSO を永続化できませんでした。自動運用を再開する前に処理してください。",
+      "meta": "未保存 {{count}} 件 · 初回検出 {{time}}",
+      "resolve": "今すぐ処理"
+    },
+    "operation": {
+      "kind": {
+        "backup": "バックアップを作成中",
+        "restore-prepare": "復旧ファイルを比較中",
+        "restore": "ログブックを復旧中"
+      },
+      "state": {
+        "queued": "待機中",
+        "running": "実行中",
+        "succeeded": "完了",
+        "failed": "失敗"
+      },
+      "phase": "フェーズ: {{phase}}",
+      "progress": "バックアップまたは復旧の進捗"
+    },
+    "unsaved": {
+      "title": "未保存の QSO が {{count}} 件あります",
+      "description": "この情報は現在の server プロセス内にのみあります。終了前に保存を再試行し、不要と確認できた場合だけ破棄してください。",
+      "retry": "保存を再試行",
+      "discard": "破棄",
+      "discardConfirm": "この未保存 QSO を完全に破棄しますか？元に戻せません。"
+    },
+    "current": {
+      "title": "現在の正式ログ",
+      "dirty": "バックアップ更新待ち",
+      "pending": "バックアップ後の変更",
+      "state": "利用状態"
+    },
+    "backup": {
+      "title": "最新の復旧バックアップ",
+      "description": "スキャン・検証済みの ADI コピーを1つ保持します。",
+      "available": "利用可能",
+      "missing": "まだありません",
+      "createdAt": "作成日時",
+      "size": "ファイルサイズ",
+      "records": "完全なレコード",
+      "opaque": "原文保持レコード",
+      "create": "今すぐバックアップ",
+      "download": "バックアップをダウンロード"
+    },
+    "preRestore": {
+      "download": "復旧前の原本をダウンロード"
+    },
+    "restore": {
+      "title": "バックアップから復旧",
+      "description": "正式 ADI をバックアップで置換します。復旧前の原本は保存されますが、先にレコード数とリスクを比較してください。",
+      "compare": "現在のログとバックアップを比較",
+      "currentFile": "現在のファイル",
+      "backupFile": "バックアップファイル",
+      "fileSummary": "{{records}} 件 · {{size}}",
+      "highRisk": "高リスク: バックアップのレコードが少ない可能性があります",
+      "previewReady": "復旧の事前確認が完了しました",
+      "delta": "バックアップ差分 {{delta}} 件、推定損失は最大 {{loss}} 件。確認の有効期限は {{expiresAt}} です。",
+      "acceptRisk": "現在の正式ログが置換されることを理解し、推定損失を確認しました",
+      "confirmLabel": "確認のためログブック ID を入力",
+      "confirmDescription": "大文字小文字を含め、{{id}} を正確に入力してください。",
+      "confirm": "置換して復旧"
+    }
+  },
   "qslStatus": {
     "confirmed": "確認済み",
     "uploaded": "アップロードされました",

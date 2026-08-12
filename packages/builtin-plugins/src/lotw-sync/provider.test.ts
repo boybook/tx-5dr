@@ -39,8 +39,15 @@ function createContext() {
   const store = new Map<string, unknown>();
   const files = new Map<string, Buffer>();
   const queryQSOs = vi.fn(async (_filter?: unknown) => [] as QSORecord[]);
-  const updateQSO = vi.fn(async () => undefined);
-  const addQSO = vi.fn(async () => undefined);
+  const updateQSO = vi.fn(async (id: string, updates: Partial<QSORecord>) => createQso(id, {
+    ...updates,
+    id,
+    messageHistory: [...(updates.messageHistory ?? [])],
+  }));
+  const addQSO = vi.fn(async (record: QSORecord) => ({
+    ...record,
+    messageHistory: [...record.messageHistory],
+  }));
   const notifyUpdated = vi.fn(async () => undefined);
 
   const ctx = {

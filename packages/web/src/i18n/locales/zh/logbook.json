@@ -60,6 +60,82 @@
     "retry": "重试打开",
     "retryFailed": "重新打开日志本失败"
   },
+  "recovery": {
+    "title": "日志备份与恢复",
+    "loading": "正在读取状态",
+    "open": "备份与恢复",
+    "refresh": "刷新状态",
+    "actionFailed": "操作失败",
+    "revision": "当前修订：{{revision}}",
+    "unavailable": {
+      "title": "无法安全读取这本日志",
+      "description": "这里不会显示成空日志，以免误导你认为记录已全部丢失；请重试打开，或进入备份与恢复检查可用副本。"
+    },
+    "writeFailure": {
+      "title": "有通联尚未保存，自动操作已暂停",
+      "description": "最近一次通联未能持久写入日志，请立即处理后再恢复自动通联。",
+      "meta": "未保存 {{count}} 条 · 首次发现于 {{time}}",
+      "resolve": "立即处理"
+    },
+    "operation": {
+      "kind": {
+        "backup": "正在创建备份",
+        "restore-prepare": "正在比较恢复内容",
+        "restore": "正在恢复日志"
+      },
+      "state": {
+        "queued": "排队中",
+        "running": "进行中",
+        "succeeded": "已完成",
+        "failed": "失败"
+      },
+      "phase": "阶段：{{phase}}",
+      "progress": "备份或恢复进度"
+    },
+    "unsaved": {
+      "title": "{{count}} 条通联尚未保存",
+      "description": "这些记录只保留在当前 server 进程内；请在退出程序前重试保存，确认确实不需要时才丢弃。",
+      "retry": "重试保存",
+      "discard": "丢弃",
+      "discardConfirm": "确定永久丢弃这条尚未保存的通联吗？此操作无法撤销。"
+    },
+    "current": {
+      "title": "当前正式日志",
+      "dirty": "备份待更新",
+      "pending": "备份后新增/修改",
+      "state": "可用状态"
+    },
+    "backup": {
+      "title": "最新恢复备份",
+      "description": "固定保留一份经过扫描验证的 ADI 副本。",
+      "available": "可用",
+      "missing": "暂无",
+      "createdAt": "创建时间",
+      "size": "文件大小",
+      "records": "完整记录",
+      "opaque": "原样保留记录",
+      "create": "立即创建备份",
+      "download": "下载备份"
+    },
+    "preRestore": {
+      "download": "下载恢复前原件"
+    },
+    "restore": {
+      "title": "从备份恢复",
+      "description": "恢复会用备份替换正式 ADI；系统会先保存恢复前原件，但仍应先比较记录数量和风险。",
+      "compare": "比较当前日志与备份",
+      "currentFile": "当前文件",
+      "backupFile": "备份文件",
+      "fileSummary": "{{records}} 条 · {{size}}",
+      "highRisk": "高风险恢复：备份可能少于当前日志",
+      "previewReady": "恢复预检已完成",
+      "delta": "备份记录差值 {{delta}}，预计最多丢失 {{loss}} 条；预检有效期至 {{expiresAt}}。",
+      "acceptRisk": "我理解恢复会替换当前正式日志，并已检查预计损失",
+      "confirmLabel": "输入日志本 ID 以确认",
+      "confirmDescription": "请完整输入 {{id}}，大小写必须一致。",
+      "confirm": "确认替换并恢复"
+    }
+  },
   "qslStatus": {
     "confirmed": "已确认",
     "uploaded": "已上传",

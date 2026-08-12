@@ -1,4 +1,5 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
+import { UserRole } from '@tx5dr/contracts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
@@ -25,11 +26,17 @@ const mocks = vi.hoisted(() => {
   const logBook = {
     id: 'logbook-N0CALL',
     provider,
+    name: 'N0CALL',
+    filePath: '/tmp/N0CALL.adi',
+    storageKind: 'managed',
+    createdAt: 1,
+    lastUsed: 1,
+    isActive: true,
   };
   const logManager = {
     getLogBook: vi.fn(),
-    getOrCreateLogBookByCallsign: vi.fn(),
     getOperatorIdsForLogBook: vi.fn(),
+    resolveLogBookId: vi.fn((id: string) => id === logBook.id ? id : null),
   };
   const engine = {
     emit: vi.fn(),
@@ -49,7 +56,13 @@ vi.mock('../../DigitalRadioEngine.js', () => ({
 
 vi.mock('../../auth/authPlugin.js', () => ({
   requireRole: () => async () => undefined,
-  requireLogbookAccess: () => async () => undefined,
+  requireExistingLogbookAccess: () => async (request: FastifyRequest, reply: { code: (status: number) => { send: (body: unknown) => unknown } }) => {
+    const id = (request.params as { id?: string }).id;
+    if (id !== mocks.logBook.id) {
+      return reply.code(404).send({ success: false, error: { code: 'RESOURCE_UNAVAILABLE' } });
+    }
+    request.logBookInstance = mocks.logBook as never;
+  },
 }));
 
 describe('logbook manual mutation events', () => {
@@ -61,11 +74,20 @@ describe('logbook manual mutation events', () => {
     mocks.provider.deleteQSO.mockReset().mockResolvedValue(undefined);
     mocks.provider.getStatistics.mockReset().mockResolvedValue(mocks.statistics);
     mocks.logManager.getLogBook.mockReset().mockReturnValue(mocks.logBook);
-    mocks.logManager.getOrCreateLogBookByCallsign.mockReset().mockResolvedValue(mocks.logBook);
     mocks.logManager.getOperatorIdsForLogBook.mockReset().mockReturnValue(['operator-1']);
 
     const { logbookRoutes } = await import('../logbooks.js');
     fastify = Fastify();
+    fastify.decorateRequest('authUser', null);
+    fastify.addHook('onRequest', async (request: FastifyRequest) => {
+      request.authUser = {
+        tokenId: '__test_admin__',
+        role: UserRole.ADMIN,
+        operatorIds: [],
+        iat: 0,
+        exp: Number.MAX_SAFE_INTEGER,
+      };
+    });
     await fastify.register(logbookRoutes, { prefix: '/api/logbooks' });
   });
 

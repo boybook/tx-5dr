@@ -76,11 +76,55 @@ test('encodes slash-containing logbook IDs when querying QSOs', async () => {
 test('encodes slash-containing logbook IDs when retrying recovery', async () => {
   const { calls, restore } = installFetchMock();
   try {
-    await api.retryOpenLogBook('BG5/ABC', '/api');
+    await api.retryOpenLogBook('BG5/ABC', { idempotencyKey: 'recovery-request-1' }, '/api');
 
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, '/api/logbooks/BG5%2FABC/recovery/retry');
     assert.equal(calls[0].init?.method, 'POST');
+    assert.deepEqual(calls[0].init?.headers, { 'Idempotency-Key': 'recovery-request-1' });
+  } finally {
+    restore();
+  }
+});
+
+test('backup and restore mutations send conditional and idempotency headers', async () => {
+  const { calls, restore } = installFetchMock();
+  try {
+    await api.createLogbookBackup('BG5/ABC', {
+      idempotencyKey: 'backup-request-1',
+    }, '/api');
+    await api.restoreLogbook('BG5/ABC', {
+      preflightToken: 'preflight-token-1',
+      confirmation: 'BG5/ABC',
+      revision: '"42-deadbeef"',
+      idempotencyKey: 'restore-request-1',
+    }, '/api');
+
+    assert.equal(calls[0].url, '/api/logbooks/BG5%2FABC/backup');
+    assert.equal(calls[0].init?.method, 'POST');
+    assert.deepEqual(calls[0].init?.headers, {
+      'Idempotency-Key': 'backup-request-1',
+      'Content-Type': 'application/json',
+    });
+    assert.equal(calls[1].url, '/api/logbooks/BG5%2FABC/backup/restore');
+    assert.deepEqual(calls[1].init?.headers, {
+      'If-Match': '"42-deadbeef"',
+      'Idempotency-Key': 'restore-request-1',
+      'Content-Type': 'application/json',
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('encodes logbook and unsaved attempt IDs in recovery actions', async () => {
+  const { calls, restore } = installFetchMock();
+  try {
+    await api.retryUnsavedQso('BG5/ABC', 'attempt/1', { idempotencyKey: 'unsaved-request-1' }, '/api');
+    await api.discardUnsavedQso('BG5/ABC', 'attempt/1', '/api');
+    assert.equal(calls[0].url, '/api/logbooks/BG5%2FABC/unsaved-qsos/attempt%2F1/retry');
+    assert.deepEqual(calls[0].init?.headers, { 'Idempotency-Key': 'unsaved-request-1' });
+    assert.equal(calls[1].url, '/api/logbooks/BG5%2FABC/unsaved-qsos/attempt%2F1');
   } finally {
     restore();
   }

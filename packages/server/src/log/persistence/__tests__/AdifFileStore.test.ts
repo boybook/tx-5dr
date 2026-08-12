@@ -1,11 +1,11 @@
 import {
   chmod,
   mkdtemp,
-  mkdir,
   readFile,
   readdir,
   rm,
   stat,
+  utimes,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -19,7 +19,6 @@ import {
   AdifFileStore,
   AdifGenerationConflictError,
   AdifRewriteValidationError,
-  LOGBOOK_TAIL_FRAGMENT_RETENTION_MS,
   literalAdifBytes,
   mainFileRange,
 } from '../AdifFileStore.js';
@@ -214,7 +213,7 @@ describe('AdifFileStore durability', () => {
     }
   });
 
-  it('detects an in-place same-stat content replacement before opening for append', async () => {
+  it('rejects a real same-stat content replacement for the current mutation epoch', async () => {
     const original = `${adifRecord('BG5AW')}\n`;
     const replacement = `${adifRecord('BG5AX')}\n`;
     const { filePath } = await createLogbook(original);
@@ -245,6 +244,11 @@ describe('AdifFileStore durability', () => {
     expect(appendOpened).toBe(false);
     expect(await readFile(filePath, 'utf8')).toBe(replacement);
     expect(store.getState().status).toBe('read-only');
+
+    const reopened = await store.open();
+    expect(reopened.status).toBe('ready');
+    expect(reopened.generation?.contentHash).not.toBe(opened.generation?.contentHash);
+    expect(store.getState().status).toBe('ready');
   });
 
   it('enters uncertain state when the fsynced suffix is replaced by same-length bytes', async () => {
@@ -272,6 +276,9 @@ describe('AdifFileStore durability', () => {
     });
     await expect(store.commitAppend([Buffer.from(appended)]))
       .rejects.toMatchObject({ code: 'ADIF_STORE_READ_ONLY' });
+
+    await expect(store.open()).resolves.toMatchObject({ status: 'ready' });
+    expect(store.getState().status).toBe('ready');
   });
 
   it('does not rescan 70K existing records after a successful append', async () => {
@@ -300,7 +307,7 @@ describe('AdifFileStore durability', () => {
     expect(committed.recordProjections.at(-1)?.qso?.id).toBe('tail-id');
   }, 20_000);
 
-  it('rejects a stale generation before writing anything', async () => {
+  it('rejects a stale content revision before writing anything', async () => {
     const original = `${adifRecord('BG5BA')}\n`;
     const { filePath } = await createLogbook(original);
     const store = new AdifFileStore(filePath);
@@ -317,6 +324,7 @@ describe('AdifFileStore durability', () => {
     await expect(store.commitRewrite([Buffer.from(original)]))
       .rejects.toMatchObject({ code: 'ADIF_STORE_READ_ONLY' });
     await expect(store.open()).resolves.toMatchObject({ status: 'ready' });
+    expect(store.getState().status).toBe('ready');
   });
 
   it('becomes read-only when the formal ADIF disappears before a mutation', async () => {
@@ -379,9 +387,13 @@ describe('AdifFileStore durability', () => {
       .rejects.toMatchObject({ code: 'ADIF_STORE_READ_ONLY' });
     expect(await readFile(filePath, 'utf8')).toBe(original);
     expect(await readdir(directory)).toEqual(['station.adi']);
+
+    denyMainStat = false;
+    await expect(store.open()).resolves.toMatchObject({ status: 'ready' });
+    expect(store.getState().status).toBe('ready');
   });
 
-  it('becomes read-only after a worker baseline scan fails and does not rescan on later writes', async () => {
+  it('blocks blind write retries after a worker failure until an explicit rescan succeeds', async () => {
     const original = `${adifRecord('BG5BH')}\n`;
     const appended = `${adifRecord('BG5BI')}\n`;
     const { directory, filePath } = await createLogbook(original);
@@ -416,6 +428,11 @@ describe('AdifFileStore durability', () => {
     expect(scans).toBe(scansAfterFailure);
     expect(await readFile(filePath, 'utf8')).toBe(original);
     expect(await readdir(directory)).toEqual(['station.adi']);
+
+    failMainScan = false;
+    await expect(store.open()).resolves.toMatchObject({ status: 'ready' });
+    expect(scans).toBeGreaterThan(scansAfterFailure);
+    expect(store.getState().status).toBe('ready');
   });
 
   it('loops partial writes until the entire append is durable', async () => {
@@ -609,163 +626,124 @@ describe('AdifFileStore durability', () => {
     expect(await readFile(filePath, 'utf8')).toBe(original);
   });
 
-  it('validates a rewrite before rename and removes stale temp on the next open', async () => {
+  it('rejects an invalid rewrite before rename and removes the fixed temp', async () => {
     const original = `${adifRecord('BG5GA')}\n`;
-    const { filePath } = await createLogbook(original);
+    const { directory, filePath } = await createLogbook(original);
     const store = new AdifFileStore(filePath);
     await store.open();
 
     await expect(store.commitRewrite([Buffer.from('<CALL:5>BG5GB')]))
       .rejects.toBeInstanceOf(AdifRewriteValidationError);
-    expect(await readFile(filePath, 'utf8')).toBe(original);
-    await expect(readFile(store.rewriteTempPath, 'utf8')).resolves.toContain('BG5GB');
 
-    await expect(store.open()).resolves.toMatchObject({ status: 'ready' });
+    expect(await readFile(filePath, 'utf8')).toBe(original);
     await expect(readFile(store.rewriteTempPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readdir(directory)).toEqual(['station.adi']);
   });
 
-  it('keeps only fixed rewrite artifacts and rotates one validated last-good snapshot', async () => {
-    const first = `${adifRecord('BG5HA')}\n`;
-    const second = `${adifRecord('BG5HB')}\n`;
-    const third = `${adifRecord('BG5HC')}\n`;
-    const { filePath } = await createLogbook(first);
+  it('uses one adjacent rewrite temp and never creates recovery artifacts', async () => {
+    const { directory, filePath } = await createLogbook(`${adifRecord('BG5HA')}\n`);
     const store = new AdifFileStore(filePath);
     await store.open();
 
-    await store.commitRewrite([Buffer.from(second)], undefined, { recordCount: 1 });
-    expect(await readFile(store.lastGoodPath, 'utf8')).toBe(first);
-    await store.commitRewrite([Buffer.from(third)], undefined, { recordCount: 1 });
+    for (const call of ['BG5HB', 'BG5HC', 'BG5HD']) {
+      await store.commitRewrite([Buffer.from(`${adifRecord(call)}\n`)], undefined, { recordCount: 1 });
+      expect(await readdir(directory)).toEqual(['station.adi']);
+    }
 
-    expect(await readFile(filePath, 'utf8')).toBe(third);
-    expect(await readFile(store.lastGoodPath, 'utf8')).toBe(second);
-    expect((await readdir(store.recoveryDirectory)).sort()).toEqual(['last-good.adi']);
+    expect(store.rewriteTempPath).toBe(`${filePath}.rewrite.tmp`);
+    expect(await readFile(filePath, 'utf8')).toBe(`${adifRecord('BG5HD')}\n`);
   });
 
-  it('converges interrupted rewrite and last-good recovery without growing artifacts', async () => {
-    const original = `${adifRecord('BG5IA')}\n`;
-    const replacement = `${adifRecord('BG5IB')}\n`;
-    const { filePath } = await createLogbook('not recoverable as ADIF');
-    const paths = new AdifFileStore(filePath);
-    const recoveryDirectory = paths.recoveryDirectory;
-    await mkdir(recoveryDirectory, { recursive: true });
-    await writeFile(paths.rewriteTempPath, replacement);
-    await writeFile(paths.lastGoodPath, original);
-
-    const firstOpen = await new AdifFileStore(filePath).open();
-    expect(firstOpen).toMatchObject({ recoveredFrom: 'rewrite.tmp', status: 'degraded' });
-    expect(await readFile(filePath, 'utf8')).toBe(replacement);
-    expect((await readdir(recoveryDirectory)).sort()).toEqual(['last-good.adi']);
-
-    await writeFile(filePath, 'still not recoverable as ADIF');
-    const secondOpen = await new AdifFileStore(filePath).open();
-    expect(secondOpen).toMatchObject({ recoveredFrom: 'last-good.adi', status: 'degraded' });
-    expect(await readFile(filePath, 'utf8')).toBe(original);
-    expect((await readdir(recoveryDirectory)).sort()).toEqual(['last-good.adi']);
-
-    await new AdifFileStore(filePath).open();
-    expect((await readdir(recoveryDirectory)).sort()).toEqual(['last-good.adi']);
-  });
-
-  it.each([
-    { artifact: 'rewrite.tmp' as const },
-    { artifact: 'last-good.adi' as const },
-  ])('does not replace main with complete $artifact when the initial main scan fails', async ({ artifact }) => {
-    const original = `${adifRecord('BG5IC')}\n`;
-    const recoveredContent = `${adifRecord('BG5ID')}\n`;
+  it('opens incomplete and opaque content as degraded without changing any byte', async () => {
+    const complete = `${adifRecord('BG5JA')}\n`;
+    const original = `${complete}<VENDOR:7>opaque!<EOR>\n<CALL:5>BG5JB`;
     const { directory, filePath } = await createLogbook(original);
-    const paths = new AdifFileStore(filePath);
-    const artifactPath = artifact === 'rewrite.tmp'
-      ? paths.rewriteTempPath
-      : paths.lastGoodPath;
-    await mkdir(paths.recoveryDirectory, { recursive: true });
-    await writeFile(artifactPath, recoveredContent);
-    const scannedPaths: string[] = [];
-    const scanner = {
-      scan: async (target: string) => {
-        scannedPaths.push(target);
-        if (target === filePath) {
-          throw Object.assign(new Error('injected initial main scan failure'), { code: 'EACCES' });
-        }
-        return scanLogbookFileInline(target);
-      },
-    };
+    const store = new AdifFileStore(filePath);
 
-    const opened = await new AdifFileStore(filePath, { scanner }).open();
+    const opened = await store.open();
 
     expect(opened).toMatchObject({
-      status: 'unavailable',
-      issues: expect.arrayContaining([expect.objectContaining({ code: 'MAIN_SCAN_FAILED' })]),
-    });
-    expect(scannedPaths).toEqual([filePath]);
-    expect(await readFile(filePath, 'utf8')).toBe(original);
-    expect(await readFile(artifactPath, 'utf8')).toBe(recoveredContent);
-    await expect(readFile(paths.unrecoverableOriginalPath))
-      .rejects.toMatchObject({ code: 'ENOENT' });
-    expect((await readdir(directory)).sort()).toEqual(['.tx5dr-recovery', 'station.adi']);
-  });
-
-  it('leaves all fixed files untouched when a corrupt main has no scannable recovery candidate', async () => {
-    const original = 'not a usable ADIF file';
-    const rewrite = `${adifRecord('BG5IF')}\n`;
-    const lastGood = `${adifRecord('BG5IG')}\n`;
-    const { filePath } = await createLogbook(original);
-    const paths = new AdifFileStore(filePath);
-    await mkdir(paths.recoveryDirectory, { recursive: true });
-    await writeFile(paths.rewriteTempPath, rewrite);
-    await writeFile(paths.lastGoodPath, lastGood);
-    const rejectedPaths = new Set([paths.rewriteTempPath, paths.lastGoodPath]);
-    const scanner = {
-      scan: async (target: string) => {
-        if (rejectedPaths.has(target)) {
-          throw Object.assign(new Error(`injected scan failure for ${path.basename(target)}`), {
-            code: 'EIO',
-          });
-        }
-        return scanLogbookFileInline(target);
-      },
-    };
-
-    const opened = await new AdifFileStore(filePath, { scanner }).open();
-
-    expect(opened).toMatchObject({
-      status: 'unavailable',
+      status: 'read-only',
+      scan: { records: expect.arrayContaining([expect.any(Object)]) },
       issues: expect.arrayContaining([
-        expect.objectContaining({ code: 'REWRITE_TEMP_SCAN_FAILED' }),
-        expect.objectContaining({ code: 'LAST_GOOD_SCAN_FAILED' }),
+        expect.objectContaining({
+          code: 'ADIF_INCOMPLETE_TAIL',
+          affectedBytes: Buffer.byteLength('<CALL:5>BG5JB'),
+        }),
       ]),
     });
     expect(await readFile(filePath, 'utf8')).toBe(original);
-    expect(await readFile(paths.rewriteTempPath, 'utf8')).toBe(rewrite);
-    expect(await readFile(paths.lastGoodPath, 'utf8')).toBe(lastGood);
-    await expect(readFile(paths.unrecoverableOriginalPath))
-      .rejects.toMatchObject({ code: 'ENOENT' });
-    expect((await readdir(paths.recoveryDirectory)).sort())
-      .toEqual(['last-good.adi', 'rewrite.tmp']);
-
-    const healthy = await createLogbook(`${adifRecord('BG5IH')}\n`);
-    const healthyStore = new AdifFileStore(healthy.filePath);
-    await expect(healthyStore.open()).resolves.toMatchObject({ status: 'ready' });
-    await expect(healthyStore.commitAppend([Buffer.from(`${adifRecord('BG5II')}\n`)]))
-      .resolves.toMatchObject({ scan: { records: [expect.any(Object), expect.any(Object)] } });
+    expect(await readdir(directory)).toEqual(['station.adi']);
+    await expect(store.commitAppend([Buffer.from(`${adifRecord('BG5JC')}\n`)]))
+      .rejects.toMatchObject({ code: 'ADIF_STORE_READ_ONLY' });
   });
 
-  it('preserves and removes only the unsafe tail when a complete prefix survives', async () => {
-    const complete = `${adifRecord('BG5JA')}\n`;
-    const unsafeTail = '<CALL:5>BG5JB';
-    const { filePath } = await createLogbook(`${complete}${unsafeTail}`);
+  it('deletes a stale rewrite temp without reading it even when main is unsafe', async () => {
+    const original = 'not a usable ADIF file';
+    const replacement = `${adifRecord('BG5IB')}\n`;
+    const { filePath } = await createLogbook(original);
     const store = new AdifFileStore(filePath);
+    await writeFile(store.rewriteTempPath, replacement);
+    const scanned: string[] = [];
+    const scanner = {
+      scan: async (target: string) => {
+        scanned.push(target);
+        return scanLogbookFileInline(target);
+      },
+    };
 
-    await expect(store.open()).resolves.toMatchObject({
-      status: 'degraded',
-      recoveredFrom: 'safe-prefix',
-      scan: { records: expect.arrayContaining([expect.any(Object)]) },
-      issues: expect.arrayContaining([expect.objectContaining({ code: 'TRUNCATED_UNSAFE_TAIL' })]),
-    });
-    expect(await readFile(filePath, 'utf8')).toBe(complete);
-    expect(await readFile(store.tailFragmentPath, 'utf8')).toBe(unsafeTail);
+    const opened = await new AdifFileStore(filePath, { scanner }).open();
+
+    expect(opened.status).toBe('read-only');
+    expect(scanned).toEqual([filePath]);
+    expect(await readFile(filePath, 'utf8')).toBe(original);
+    await expect(readFile(store.rewriteTempPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('creates a standard header for a missing logbook and removes empty lock directories', async () => {
+  it('removes a stale rewrite temp while leaving the authoritative main and unknown files untouched', async () => {
+    const original = `${adifRecord('BG5IC')}\n`;
+    const staleCandidate = `${adifRecord('BG5ID')}\n`;
+    const { directory, filePath } = await createLogbook(original);
+    const store = new AdifFileStore(filePath);
+    await writeFile(store.rewriteTempPath, staleCandidate);
+    await writeFile(path.join(directory, 'operator-notes.keep'), 'operator-owned');
+
+    const opened = await store.open();
+
+    expect(opened.status).toBe('ready');
+    expect(await readFile(filePath, 'utf8')).toBe(original);
+    await expect(readFile(store.rewriteTempPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(path.join(directory, 'operator-notes.keep'), 'utf8')).toBe('operator-owned');
+  });
+
+  it('keeps a safe main usable when stale rewrite-temp cleanup fails', async () => {
+    const original = `${adifRecord('BG5IE')}\n`;
+    const { filePath } = await createLogbook(original);
+    const rewriteTempPath = `${filePath}.rewrite.tmp`;
+    await writeFile(rewriteTempPath, `${adifRecord('BG5IF')}\n`);
+    const fileSystem: AdifFileSystem = {
+      ...nodeAdifFileSystem,
+      unlink: async (target) => {
+        if (target === rewriteTempPath) {
+          throw Object.assign(new Error('injected cleanup permission denial'), { code: 'EACCES' });
+        }
+        return nodeAdifFileSystem.unlink(target);
+      },
+    };
+
+    const opened = await new AdifFileStore(filePath, { fileSystem }).open();
+
+    expect(opened).toMatchObject({
+      status: 'degraded',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'STALE_REWRITE_TEMP_CLEANUP_FAILED' }),
+      ]),
+    });
+    expect(await readFile(filePath, 'utf8')).toBe(original);
+    expect(await readFile(rewriteTempPath, 'utf8')).toContain('BG5IF');
+  });
+
+  it('creates a standard header for a missing logbook without lock directories', async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'tx5dr-adif-store-'));
     tempDirectories.push(directory);
     const filePath = path.join(directory, 'new.adi');
@@ -780,56 +758,18 @@ describe('AdifFileStore durability', () => {
     expect(await readdir(directory)).toEqual(['new.adi']);
   });
 
-  it('does not create an empty main when legacy migration failed', async () => {
+  it('does not create a main when automatic creation is disabled', async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'tx5dr-adif-store-'));
     tempDirectories.push(directory);
-    const filePath = path.join(directory, 'legacy-pending.adi');
+    const filePath = path.join(directory, 'missing.adi');
     const store = new AdifFileStore(filePath, { createIfMissing: false });
 
     await expect(store.open()).resolves.toMatchObject({
       status: 'unavailable',
-      issues: [expect.objectContaining({ code: 'MAIN_CREATION_DEFERRED' })],
+      issues: [expect.objectContaining({ code: 'MAIN_FILE_MISSING' })],
     });
     await expect(readFile(filePath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readdir(directory)).toEqual([]);
-  });
-
-  it('does not repair a salvageable tail when recovery writes are disabled', async () => {
-    const complete = `${adifRecord('BG5KC')}\n`;
-    const unsafeTail = '<CALL:5>BG5KD';
-    const original = `${complete}${unsafeTail}`;
-    const { directory, filePath } = await createLogbook(original);
-    const store = new AdifFileStore(filePath, { recoveryWritesEnabled: false });
-
-    const opened = await store.open();
-
-    expect(opened).toMatchObject({
-      status: 'read-only',
-      scan: { records: [expect.any(Object)] },
-      issues: expect.arrayContaining([expect.objectContaining({ code: 'RECOVERY_WRITE_BLOCKED' })]),
-    });
-    expect(await readFile(filePath, 'utf8')).toBe(original);
-    expect(await readdir(directory)).toEqual(['station.adi']);
-  });
-
-  it('leaves an unrecoverable main and valid recovery candidate untouched when recovery writes are disabled', async () => {
-    const original = 'not a usable ADIF file';
-    const replacement = `${adifRecord('BG5KE')}\n`;
-    const { filePath } = await createLogbook(original);
-    const paths = new AdifFileStore(filePath);
-    await mkdir(paths.recoveryDirectory, { recursive: true });
-    await writeFile(paths.rewriteTempPath, replacement);
-    const store = new AdifFileStore(filePath, { recoveryWritesEnabled: false });
-
-    const opened = await store.open();
-
-    expect(opened).toMatchObject({
-      status: 'unavailable',
-      issues: expect.arrayContaining([expect.objectContaining({ code: 'RECOVERY_WRITE_BLOCKED' })]),
-    });
-    expect(await readFile(filePath, 'utf8')).toBe(original);
-    expect(await readFile(paths.rewriteTempPath, 'utf8')).toBe(replacement);
-    await expect(readFile(paths.unrecoverableOriginalPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('does not rewrite a whitespace-only existing file', async () => {
@@ -840,139 +780,66 @@ describe('AdifFileStore durability', () => {
     expect(await readFile(filePath, 'utf8')).toBe(whitespace);
   });
 
-  it('preserves a wholly unrecoverable source once and starts with a standard empty ADIF', async () => {
+  it('keeps a garbage file in place instead of treating it as an empty logbook', async () => {
     const garbage = 'this is not an ADIF file';
-    const { filePath } = await createLogbook(garbage);
-    const store = new AdifFileStore(filePath);
+    const { directory, filePath } = await createLogbook(garbage);
 
-    await expect(store.open()).resolves.toMatchObject({
-      status: 'degraded',
-      recoveredFrom: 'standard-empty',
-      issues: [expect.objectContaining({ code: 'RESET_UNRECOVERABLE_MAIN' })],
-    });
-    expect(await readFile(store.unrecoverableOriginalPath, 'utf8')).toBe(garbage);
-    expect(await readFile(filePath, 'utf8')).toContain('<EOH>');
-    await expect(readFile(store.tailFragmentPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    const opened = await new AdifFileStore(filePath).open();
 
-    const secondGarbage = 'a different broken source';
-    await writeFile(filePath, secondGarbage);
-    await expect(new AdifFileStore(filePath).open()).resolves.toMatchObject({
-      status: 'unavailable',
-      issues: [expect.objectContaining({ code: 'UNRECOVERABLE_ORIGINAL_CONFLICT' })],
-    });
-    expect(await readFile(filePath, 'utf8')).toBe(secondGarbage);
-    expect(await readFile(store.unrecoverableOriginalPath, 'utf8')).toBe(garbage);
-  });
-
-  it('resumes after a crash that preserved the unrecoverable original before reset', async () => {
-    const garbage = 'unrecoverable but preserved before the injected crash';
-    const { filePath } = await createLogbook(garbage);
-    const interrupted = new AdifFileStore(filePath, {
-      faultHook: ({ point }) => {
-        if (point === 'recovery-after-unrecoverable-preserved') {
-          throw new Error('injected crash after preserving original');
-        }
-      },
-    });
-
-    await expect(interrupted.open()).resolves.toMatchObject({
-      status: 'unavailable',
-      issues: [expect.objectContaining({ code: 'OPEN_FAILED' })],
-    });
-    expect(await readFile(interrupted.unrecoverableOriginalPath, 'utf8')).toBe(garbage);
+    expect(opened.status).toBe('read-only');
+    expect(opened.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'ADIF_INCOMPLETE_TAIL',
+        affectedBytes: Buffer.byteLength(garbage),
+      }),
+    ]));
     expect(await readFile(filePath, 'utf8')).toBe(garbage);
-
-    const resumed = new AdifFileStore(filePath);
-    await expect(resumed.open()).resolves.toMatchObject({
-      status: 'degraded',
-      recoveredFrom: 'standard-empty',
-      issues: [expect.objectContaining({ code: 'RESET_UNRECOVERABLE_MAIN' })],
-    });
-    expect(await readFile(resumed.unrecoverableOriginalPath, 'utf8')).toBe(garbage);
-    expect(await readFile(filePath, 'utf8')).toContain('<EOH>');
-  });
-
-  it('does not overwrite a different fixed tail fragment', async () => {
-    const complete = `${adifRecord('BG5MA')}\n`;
-    const { filePath } = await createLogbook(`${complete}first broken tail`);
-    const store = new AdifFileStore(filePath);
-    await store.open();
-    expect(await readFile(store.tailFragmentPath, 'utf8')).toBe('first broken tail');
-
-    const secondTail = 'second broken tail';
-    await writeFile(filePath, `${complete}${secondTail}`);
-    await expect(new AdifFileStore(filePath).open()).resolves.toMatchObject({
-      status: 'read-only',
-      issues: expect.arrayContaining([expect.objectContaining({ code: 'TAIL_FRAGMENT_CONFLICT' })]),
-    });
-    expect(await readFile(filePath, 'utf8')).toBe(`${complete}${secondTail}`);
-    expect(await readFile(store.tailFragmentPath, 'utf8')).toBe('first broken tail');
-  });
-
-  it('expires a fixed tail fragment after 30 days only when the main scan is complete', async () => {
-    const complete = `${adifRecord('BG5MQ')}\n`;
-    const { directory, filePath } = await createLogbook(complete);
-    const paths = new AdifFileStore(filePath);
-    await mkdir(paths.recoveryDirectory, { recursive: true });
-    await writeFile(paths.tailFragmentPath, 'old tail');
-    const fragmentMtime = (await nodeAdifFileSystem.stat(paths.tailFragmentPath)).mtimeMs;
-
-    await new AdifFileStore(filePath, {
-      now: () => fragmentMtime + LOGBOOK_TAIL_FRAGMENT_RETENTION_MS + 1,
-    }).open();
-
-    await expect(readFile(paths.tailFragmentPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readdir(directory)).toEqual(['station.adi']);
-
-    const unsafeTail = 'new unsafe tail';
-    await writeFile(filePath, `${complete}${unsafeTail}`);
-    await mkdir(paths.recoveryDirectory, { recursive: true });
-    await writeFile(paths.tailFragmentPath, unsafeTail);
-    const unsafeMtime = (await nodeAdifFileSystem.stat(paths.tailFragmentPath)).mtimeMs;
-    await new AdifFileStore(filePath, {
-      now: () => unsafeMtime + LOGBOOK_TAIL_FRAGMENT_RETENTION_MS + 1,
-    }).open();
-    expect(await readFile(paths.tailFragmentPath, 'utf8')).toBe(unsafeTail);
-
-    const unhealthyObservedAt = (await nodeAdifFileSystem.stat(paths.tailFragmentPath)).mtimeMs;
-    await writeFile(filePath, complete);
-    await new AdifFileStore(filePath, {
-      now: () => unhealthyObservedAt + LOGBOOK_TAIL_FRAGMENT_RETENTION_MS - 1,
-    }).open();
-    expect(await readFile(paths.tailFragmentPath, 'utf8')).toBe(unsafeTail);
-
-    await new AdifFileStore(filePath, {
-      now: () => unhealthyObservedAt + LOGBOOK_TAIL_FRAGMENT_RETENTION_MS + 1,
-    }).open();
-    await expect(readFile(paths.tailFragmentPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('reports recovery cleanup failure without making a readable main unavailable', async () => {
-    const complete = `${adifRecord('BG5MR')}\n`;
-    const { filePath } = await createLogbook(complete);
-    const paths = new AdifFileStore(filePath);
-    await mkdir(paths.recoveryDirectory, { recursive: true });
-    await writeFile(paths.rewriteTempPath, 'stale temp');
-    const fileSystem: AdifFileSystem = {
-      ...nodeAdifFileSystem,
-      unlink: async (target) => {
-        if (target === paths.rewriteTempPath) {
-          const error = new Error('injected cleanup denial') as NodeJS.ErrnoException;
-          error.code = 'EACCES';
-          throw error;
-        }
-        await nodeAdifFileSystem.unlink(target);
-      },
-    };
+  it('accepts metadata-only drift before append and rewrite', async () => {
+    const first = `${adifRecord('BG5MA')}\n`;
+    const second = `${adifRecord('BG5MB')}\n`;
+    const third = `${adifRecord('BG5MC')}\n`;
+    const { filePath } = await createLogbook(first);
+    const store = new AdifFileStore(filePath);
+    const opened = await store.open();
+    const future = new Date(Date.now() + 60_000);
+    await utimes(filePath, future, future);
 
-    const opened = await new AdifFileStore(filePath, { fileSystem }).open();
+    const appended = await store.commitAppend([Buffer.from(second)], opened.generation);
+    await utimes(filePath, new Date(future.getTime() + 1_000), new Date(future.getTime() + 1_000));
+    const rewritten = await store.commitRewrite([Buffer.from(third)], appended.generation);
 
-    expect(opened).toMatchObject({
-      status: 'degraded',
-      scan: { records: expect.any(Array) },
-      issues: expect.arrayContaining([expect.objectContaining({ code: 'CLEANUP_PENDING' })]),
+    expect(rewritten.scan.records).toHaveLength(1);
+    expect(await readFile(filePath, 'utf8')).toBe(third);
+    expect(store.getState().status).toBe('ready');
+  });
+
+  it.each([
+    { code: 'EINVAL', issue: 'DIRECTORY_SYNC_UNSUPPORTED' },
+    { code: 'EIO', issue: 'DIRECTORY_SYNC_FAILED' },
+  ])('commits a verified rewrite when directory fsync reports $code', async ({ code, issue }) => {
+    const original = `${adifRecord('BG5MD')}\n`;
+    const replacement = `${adifRecord('BG5ME')}\n`;
+    const { directory, filePath } = await createLogbook(original);
+    const fileSystem = withOpen(async (target, flags, mode) => {
+      if (target === directory && flags === 'r') {
+        throw Object.assign(new Error(`injected ${code}`), { code });
+      }
+      return nodeAdifFileSystem.open(target, flags, mode);
     });
-    expect(await readFile(filePath, 'utf8')).toBe(complete);
+    const store = new AdifFileStore(filePath, { fileSystem });
+    await store.open();
+
+    await expect(store.commitRewrite([Buffer.from(replacement)]))
+      .resolves.toMatchObject({ scan: { records: [expect.any(Object)] } });
+
+    expect(await readFile(filePath, 'utf8')).toBe(replacement);
+    expect(store.getState()).toMatchObject({
+      status: 'degraded',
+      issues: expect.arrayContaining([expect.objectContaining({ code: issue })]),
+    });
   });
 
   it('streams source ranges and literal bytes into a rewrite and offers consistent reads', async () => {
@@ -998,30 +865,48 @@ describe('AdifFileStore durability', () => {
     expect(all.scan.records).toHaveLength(2);
   });
 
-  it.each(['rewrite-after-main-rename', 'rewrite-after-directory-fsync'] as const)(
-    'marks state uncertain when %s fails',
-    async (failurePoint) => {
-      const { filePath } = await createLogbook(`${adifRecord('BG5OA')}\n`);
-      const store = new AdifFileStore(filePath, {
-        faultHook: ({ point }) => {
-          if (point === failurePoint) throw new Error(`injected ${failurePoint}`);
-        },
-      });
-      await store.open();
+  it('accepts post-rename metadata drift after content verification', async () => {
+    const replacement = `${adifRecord('BG5OB')}\n`;
+    const { filePath } = await createLogbook(`${adifRecord('BG5OA')}\n`);
+    const store = new AdifFileStore(filePath, {
+      faultHook: async ({ point }) => {
+        if (point === 'rewrite-after-main-rename') {
+          const future = new Date(Date.now() + 120_000);
+          await utimes(filePath, future, future);
+        }
+      },
+    });
+    await store.open();
 
-      await expect(store.commitRewrite([Buffer.from(`${adifRecord('BG5OB')}\n`)]))
-        .rejects.toBeInstanceOf(AdifFileStateUncertainError);
-      expect(store.getState().status).toBe('uncertain');
-    },
-  );
+    await expect(store.commitRewrite([Buffer.from(replacement)]))
+      .resolves.toMatchObject({ scan: { records: [expect.any(Object)] } });
+    expect(await readFile(filePath, 'utf8')).toBe(replacement);
+  });
+
+  it('marks rewrite uncertain only when post-rename content cannot be verified', async () => {
+    const replacement = `${adifRecord('BG5OC')}\n`;
+    const competing = `${adifRecord('BG5OD')}\n`;
+    const { filePath } = await createLogbook(`${adifRecord('BG5OE')}\n`);
+    const store = new AdifFileStore(filePath, {
+      faultHook: async ({ point }) => {
+        if (point === 'rewrite-after-main-rename') await writeFile(filePath, competing);
+      },
+    });
+    await store.open();
+
+    await expect(store.commitRewrite([Buffer.from(replacement)]))
+      .rejects.toBeInstanceOf(AdifFileStateUncertainError);
+    expect(store.getState().status).toBe('uncertain');
+    expect(await readFile(filePath, 'utf8')).toBe(competing);
+
+    await expect(store.open()).resolves.toMatchObject({ status: 'ready' });
+    expect(store.getState().status).toBe('ready');
+  });
 
   it.each([
     'rewrite-after-temp-write',
     'rewrite-after-temp-fsync',
     'rewrite-after-temp-validated',
-    'rewrite-after-last-good-copy',
-    'rewrite-after-last-good-fsync',
-    'rewrite-after-last-good-rename',
   ] as const)('keeps the old main authoritative when %s fails before rename', async (failurePoint) => {
     const original = `${adifRecord('BG5OQ')}\n`;
     const replacement = `${adifRecord('BG5OR')}\n`;
@@ -1039,26 +924,162 @@ describe('AdifFileStore durability', () => {
     const reopened = new AdifFileStore(filePath);
     await expect(reopened.open()).resolves.toMatchObject({ status: 'ready' });
     expect(await readFile(filePath, 'utf8')).toBe(original);
-    if (failurePoint === 'rewrite-after-last-good-rename') {
-      expect((await readdir(reopened.recoveryDirectory)).sort()).toEqual(['last-good.adi']);
-    } else {
-      await expect(readdir(reopened.recoveryDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
-    }
+    await expect(readFile(reopened.rewriteTempPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('returns uncertain health instead of throwing when recovery fails after rename', async () => {
-    const { filePath } = await createLogbook('garbage');
-    const paths = new AdifFileStore(filePath);
-    await mkdir(paths.recoveryDirectory, { recursive: true });
-    await writeFile(paths.rewriteTempPath, `${adifRecord('BG5PA')}\n`);
+  it('atomically replaces main from a complete validated source without creating a backup', async () => {
+    const original = `${adifRecord('BG5PA')}\n`;
+    const replacement = `${adifRecord('BG5PB')}\n`;
+    const { directory, filePath } = await createLogbook(original);
+    const sourcePath = path.join(directory, 'latest.adi');
+    await writeFile(sourcePath, replacement);
+    const store = new AdifFileStore(filePath);
+    const opened = await store.open();
+
+    const committed = await store.commitReplaceFromFile(sourcePath, opened.generation);
+
+    expect(committed.scan.records).toHaveLength(1);
+    expect(await readFile(filePath, 'utf8')).toBe(replacement);
+    expect((await readdir(directory)).sort()).toEqual(['latest.adi', 'station.adi']);
+  });
+
+  it('rejects an incomplete restore source and leaves main unchanged', async () => {
+    const original = `${adifRecord('BG5PC')}\n`;
+    const { directory, filePath } = await createLogbook(original);
+    const sourcePath = path.join(directory, 'broken.adi');
+    await writeFile(sourcePath, '<CALL:5>BG5PD');
+    const store = new AdifFileStore(filePath);
+    await store.open();
+
+    await expect(store.commitReplaceFromFile(sourcePath))
+      .rejects.toBeInstanceOf(AdifRewriteValidationError);
+    expect(await readFile(filePath, 'utf8')).toBe(original);
+    await expect(readFile(store.rewriteTempPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not replace main when the final restore authorization check rejects', async () => {
+    const original = `${adifRecord('BG5PU')}\n`;
+    const replacement = `${adifRecord('BG5PV')}\n`;
+    const { directory, filePath } = await createLogbook(original);
+    const sourcePath = path.join(directory, 'latest.adi');
+    await writeFile(sourcePath, replacement);
+    const store = new AdifFileStore(filePath);
+    const opened = await store.open();
+
+    await expect(store.commitReplaceFromFile(sourcePath, opened.generation, {
+      beforeReplace: () => {
+        throw new Error('administrator token was revoked');
+      },
+    })).rejects.toThrow('administrator token was revoked');
+
+    expect(await readFile(filePath, 'utf8')).toBe(original);
+    await expect(readFile(store.rewriteTempPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects restore against a stale expected generation', async () => {
+    const original = `${adifRecord('BG5PE')}\n`;
+    const replacement = `${adifRecord('BG5PF')}\n`;
+    const { directory, filePath } = await createLogbook(original);
+    const sourcePath = path.join(directory, 'latest.adi');
+    await writeFile(sourcePath, replacement);
+    const store = new AdifFileStore(filePath);
+    const opened = await store.open();
+    await writeFile(filePath, `${original}${adifRecord('BG5PG')}\n`);
+
+    await expect(store.commitReplaceFromFile(sourcePath, opened.generation))
+      .rejects.toBeInstanceOf(AdifGenerationConflictError);
+    expect(await readFile(filePath, 'utf8')).not.toBe(replacement);
+  });
+
+  it('allows explicit restore to recover a read-only store', async () => {
+    const original = `${adifRecord('BG5PH')}\n`;
+    const replacement = `${adifRecord('BG5PI')}\n`;
+    const { directory, filePath } = await createLogbook(original);
+    const sourcePath = path.join(directory, 'latest.adi');
+    await writeFile(sourcePath, replacement);
+    const store = new AdifFileStore(filePath);
+    const opened = await store.open();
+    await writeFile(filePath, `${original}${adifRecord('BG5PJ')}\n`);
+    await expect(store.commitAppend([Buffer.from(adifRecord('BG5PK'))], opened.generation))
+      .rejects.toBeInstanceOf(AdifGenerationConflictError);
+    expect(store.getState().status).toBe('read-only');
+
+    await store.commitReplaceFromFile(sourcePath);
+
+    expect(await readFile(filePath, 'utf8')).toBe(replacement);
+    expect(store.getState().status).toBe('ready');
+  });
+
+  it('restores a missing main only when no expected generation was supplied', async () => {
+    const original = `${adifRecord('BG5PL')}\n`;
+    const replacement = `${adifRecord('BG5PM')}\n`;
+    const { directory, filePath } = await createLogbook(original);
+    const sourcePath = path.join(directory, 'latest.adi');
+    await writeFile(sourcePath, replacement);
+    const store = new AdifFileStore(filePath);
+    const opened = await store.open();
+    await rm(filePath);
+
+    await expect(store.commitReplaceFromFile(sourcePath, opened.generation))
+      .rejects.toMatchObject({ code: 'ADIF_STORE_READ_ONLY' });
+    await store.commitReplaceFromFile(sourcePath);
+    expect(await readFile(filePath, 'utf8')).toBe(replacement);
+  });
+
+  it('rejects a restore when source bytes change between validation and copy', async () => {
+    const original = `${adifRecord('BG5PN')}\n`;
+    const replacement = `${adifRecord('BG5PO')}\n`;
+    const changed = `${adifRecord('BG5PP')}\n`;
+    const { directory, filePath } = await createLogbook(original);
+    const sourcePath = path.join(directory, 'latest.adi');
+    await writeFile(sourcePath, replacement);
+    let sourceScans = 0;
+    const scanner = {
+      scan: async (target: string) => {
+        const result = await scanLogbookFileInline(target);
+        if (target === sourcePath && sourceScans++ === 0) await writeFile(sourcePath, changed);
+        return result;
+      },
+    };
+    const store = new AdifFileStore(filePath, { scanner });
+    await store.open();
+
+    await expect(store.commitReplaceFromFile(sourcePath))
+      .rejects.toBeInstanceOf(AdifRewriteValidationError);
+    expect(await readFile(filePath, 'utf8')).toBe(original);
+  });
+
+  it('releases the path queue after a consistent reader opens its snapshot', async () => {
+    const { filePath } = await createLogbook(`${adifRecord('BG5PQ')}\n`);
+    const openedGate = deferred();
+    const finishRead = deferred();
+    const appendStarted = deferred();
     const store = new AdifFileStore(filePath, {
       faultHook: ({ point }) => {
-        if (point === 'recovery-after-main-rename') throw new Error('injected recovery crash');
+        if (point === 'append-before-open') appendStarted.resolve();
       },
     });
+    await store.open();
+    let markOpened!: () => void;
+    const reading = store.startConsistentRead(async (onSnapshotOpened) => {
+      markOpened = onSnapshotOpened;
+      openedGate.resolve();
+      await finishRead.promise;
+      return 'snapshot';
+    });
+    await openedGate.promise;
+    const appending = store.commitAppend([Buffer.from(`${adifRecord('BG5PR')}\n`)]);
+    await new Promise(resolve => setImmediate(resolve));
+    let appendStartedEarly = false;
+    void appendStarted.promise.then(() => { appendStartedEarly = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(appendStartedEarly).toBe(false);
 
-    await expect(store.open()).resolves.toMatchObject({ status: 'uncertain' });
-    expect(store.getState().status).toBe('uncertain');
+    markOpened();
+    await appendStarted.promise;
+    finishRead.resolve();
+    await expect(reading).resolves.toBe('snapshot');
+    await appending;
   });
 
   it('serializes same-path appends across store instances and close waits without rewriting', async () => {

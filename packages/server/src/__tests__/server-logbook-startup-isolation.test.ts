@@ -80,7 +80,13 @@ vi.mock('../auth/authPlugin.js', () => {
   return {
     authPlugin,
     requireRole: () => async () => undefined,
-    requireLogbookAccess: () => async () => undefined,
+    requireExistingLogbookAccess: (logManager: LogManager) => async (request: FastifyRequest) => {
+      const id = (request.params as { id?: string }).id;
+      const resolvedId = id ? logManager.resolveLogBookId(id) : null;
+      request.logBookInstance = resolvedId
+        ? (logManager.getLogBook(resolvedId) ?? undefined)
+        : undefined;
+    },
   };
 });
 

@@ -28,30 +28,31 @@ For each ADIF logbook:
 
 - `<CALL>.adi` is the sole formal data source and remains readable while TX-5DR is running.
 - A newly created QSO is written with `O_APPEND`, checked for a complete write, and `fsync`ed before the operation reports success.
-- Updates, deletes, and imports that merge existing records are the explicit append-only exception. They stream a complete candidate to a fixed temporary file, validate it, save a fixed last-good copy, and atomically replace the formal file.
+- Updates, deletes, and imports that merge existing records are the explicit append-only exception. They require a valid rolling backup when the backup is missing or stale, then stream and validate a complete candidate before atomically replacing the formal file.
 - Untouched records retain their physical order and original bytes. Unknown fields, duplicate records, headerless files, and complete opaque records are not normalized merely by opening or rewriting a logbook.
 
-Each mutation is prepared against an immutable in-memory document. The document and indexes change only after the file commit succeeds. If an append fails, TX-5DR attempts to truncate back to the previous EOF and sync it. A failed rollback or an unexpected file generation change puts only that logbook into read-only mode; it never creates an emergency log or reports an in-memory-only success.
+Each mutation is prepared against an immutable in-memory document. The document and indexes change only after the file commit succeeds. If an append fails, TX-5DR attempts to truncate back to the previous EOF and sync it. Only a failed rollback or content state that cannot be determined puts that logbook into read-only mode; it never creates an emergency log or reports an in-memory-only success.
 
-Loading and validation run in an isolated worker. Content and expected I/O failures become per-logbook health (`loading`, `healthy`, `degraded`, `read_only`, or `unavailable`) and never control server readiness. A complete but unparseable record is preserved with a warning. An unsafe non-whitespace tail is preserved once as `tail-fragment.bin` before repair.
+Loading and validation run in an isolated worker. Content and expected I/O failures become per-logbook health (`loading`, `healthy`, `degraded`, `read_only`, or `unavailable`) and never control server readiness. A complete but unparseable record is preserved with a warning. An unsafe non-whitespace tail is left untouched and opens read-only for explicit operator action.
 
-TX-5DR does not support another program writing the same `.adi` concurrently. A size, timestamp, or content-generation mismatch stops mutations with `LOGBOOK_WRITE_STATE_UNCERTAIN`; external read-only access is supported.
+TX-5DR does not support another program writing the same `.adi` concurrently. Size and content hashes define the revision used by prepared mutations; inode, device and mtime are diagnostic metadata only and never lock a healthy logbook. External read-only access is supported.
 
-## Logbook Recovery Artifacts
+## Logbook Backup And Manual Restore
 
-Normal stable logbook directories contain only `.adi` files. Recovery data lives under `.tx5dr-recovery/<path-hash>/` and is bounded:
+The main `.adi` remains the only source used for startup, queries and sync. A backup is an operator recovery point, never an automatic startup candidate. Each book has one bounded directory:
 
-- `rewrite.tmp` exists only during a rewrite and is deterministically resolved at startup.
-- `last-good.adi` is a single rolling pre-rewrite recovery copy.
-- `tail-fragment.bin` is a single copy and is removed after 30 continuously healthy days.
-- `unrecoverable-original.adi` is a single, never-overwritten user-recovery original and is never deleted automatically.
-- `legacy/` contains one quarantined set of recognized journal/meta/backup artifacts. It is removed after 30 days only while the current `.adi` still scans safely.
+- `.tx5dr-backups/<basename>/latest.adi` is the most recent validated fixed-EOF snapshot.
+- `latest.json` stores only integrity metadata, an internal path fingerprint, record counts and the source revision.
+- `pre-restore.adi` is the single raw main-file copy made immediately before an administrator commits a manual restore.
+- Fixed temporary files are replaced or removed deterministically and never accumulate generations.
 
-Legacy discovery uses exact names derived from a known `.adi` basename. Unknown files are never moved or deleted. Migration and cleanup failures remain visible as health issues but do not invalidate a successfully committed `.adi` or block server startup.
+The backup refreshes after 30 minutes or 100 successful mutations, whichever comes first, and is attempted during graceful shutdown. Backup failure never blocks append; it blocks only a rewrite that lacks the required safe snapshot. Restore requires administrator authorization, an `If-Match` revision, a ten-minute one-use preview token, revalidation of both main and backup, and a durable `pre-restore.adi`. TX-5DR never restores automatically.
+
+Legacy discovery uses exact names derived from a known `.adi` basename. Old journal/meta/last-good artifacts are quarantined without replay; unknown files are never moved or deleted. A legacy directory is removed after 30 days only while both main and latest backup still scan safely. A recognized `unrecoverable-original.adi` is kept at most once and never deleted automatically.
 
 ## Shutdown Coordination
 
-`PersistenceCoordinator` registers config, auth, runtime state, plugin storage, slotpack persistence, and logbook providers. For logbooks, flush/close only drains the per-file mutation queue; shutdown never creates a checkpoint or rewrites `.adi`. Shutdown flow blocks new mutating HTTP requests, stops the engine/operators, closes logbooks, and calls `flushAll` with a deadline. The server's existing 32-second prepare and 42-second signal budgets also bound logbook close, so a long legacy scan cannot hold process exit for its full worker deadline; any interrupted recovery transaction is resolved from its fixed artifacts on the next open.
+`PersistenceCoordinator` registers config, auth, runtime state, plugin storage, slotpack persistence, and logbook providers. For logbooks, flush drains the per-file mutation queue; close may spend the remaining 30-second deadline refreshing the optional backup but never rewrites `.adi`. Shutdown flow blocks new mutating HTTP requests, stops the engine/operators, closes logbooks, and calls `flushAll` with a deadline.
 
 - Server `SIGINT` / `SIGTERM`: block mutations, stop engine, close logbooks, flush coordinator, then exit.
 - Electron quit/restart: call `POST /api/system/internal/prepare-shutdown` with the random internal token before terminating the embedded server child.

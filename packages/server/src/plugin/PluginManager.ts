@@ -525,8 +525,12 @@ export class PluginManager {
     if (!operator || !runtime) return;
 
     this.orchestrator.invalidateDecisionMessageSet(operatorId);
+    const accepted = runtime.requestCall(callsign, lastMessage);
+    if (accepted === false) {
+      logger.warn('Strategy rejected requestCall without starting the operator', { operatorId, callsign });
+      return;
+    }
     operator.start();
-    runtime.requestCall(callsign, lastMessage);
     if (lastMessage) {
       operator.setTransmitCycles((lastMessage.slotInfo.cycleNumber + 1) % 2);
     }
@@ -535,6 +539,10 @@ export class PluginManager {
   notifyTransmissionQueued(operatorId: string, transmission: string): void {
     const runtime = this.getStrategyRuntime(operatorId);
     runtime?.onTransmissionQueued?.(transmission);
+  }
+
+  async interruptOperatorTransmission(operatorId: string): Promise<void> {
+    await this.deps.interruptOperatorTransmission(operatorId);
   }
 
   async notifyQSOComplete(operatorId: string, record: QSORecord): Promise<void> {

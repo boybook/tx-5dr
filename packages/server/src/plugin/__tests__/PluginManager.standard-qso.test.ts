@@ -22,7 +22,6 @@ function installInMemoryLogManager(): void {
   vi.spyOn(LogManager, 'getInstance').mockReturnValue({
     resolveLogBookId: vi.fn(() => logBook.id),
     getLogBook: vi.fn(() => logBook),
-    getOrCreateLogBookByCallsign: vi.fn(async () => logBook),
     getOperatorIdsForLogBook: vi.fn(() => []),
   } as unknown as LogManager);
 }
@@ -168,6 +167,11 @@ describe('PluginManager standard-qso late re-decision', () => {
     tempDirs.push(dataDir);
     const interruptOperatorTransmission = options?.interruptOperatorTransmission
       ?? (async () => undefined);
+
+    // This unit harness intentionally omits RadioOperatorManager. Acknowledge
+    // persistence requests so protocol tests do not hang on the production
+    // request/ack contract introduced for durable QSO writes.
+    eventEmitter.on('recordQSO', (data) => data.resolve?.(data.qsoRecord));
 
     let pluginManager!: PluginManager;
     pluginManager = new PluginManager({

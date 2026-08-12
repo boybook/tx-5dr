@@ -22,8 +22,15 @@ function createQso(id: string, overrides: Partial<QSORecord> = {}): QSORecord {
 function createContext(fetchImpl: (input: string, init?: RequestInit) => Promise<Response>) {
   const store = new Map<string, unknown>();
   const queryQSOs = vi.fn(async (_filter?: unknown) => [] as QSORecord[]);
-  const addQSO = vi.fn(async (_qso: QSORecord) => {});
-  const updateQSO = vi.fn(async (_id: string, _updates: Partial<QSORecord>) => {});
+  const addQSO = vi.fn(async (qso: QSORecord) => ({
+    ...qso,
+    messageHistory: [...qso.messageHistory],
+  }));
+  const updateQSO = vi.fn(async (id: string, updates: Partial<QSORecord>) => createQso(id, {
+    ...updates,
+    id,
+    messageHistory: [...(updates.messageHistory ?? [])],
+  }));
   const notifyUpdated = vi.fn(async () => {});
   const ctx = {
     store: {
@@ -524,6 +531,51 @@ describe('WaveLogSyncProvider', () => {
       lotwQslSent: 'Y',
     }));
     expect(notifyUpdated).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops a download pass at the first local durability failure', async () => {
+    const { ctx, addQSO, notifyUpdated } = createContext(async () =>
+      adifDownloadResponse([
+        {
+          call: 'JA1FAIL',
+          qsoDate: '20260716',
+          timeOn: '040000',
+          freq: '14.074000',
+          mode: 'FT8',
+        },
+        {
+          call: 'JA1NEXT',
+          qsoDate: '20260716',
+          timeOn: '040100',
+          freq: '14.074000',
+          mode: 'FT8',
+        },
+      ]),
+    );
+    addQSO.mockRejectedValueOnce(new Error('fsync failed'));
+    const provider = new WaveLogSyncProvider(ctx);
+    provider.setConfig('BG5DRB', {
+      url: 'https://wavelog.example.com',
+      apiKey: 'api-key',
+      stationId: 'station-1',
+      radioName: 'TX5DR',
+      autoUploadQSO: true,
+    });
+
+    const result = await provider.download('BG5DRB');
+
+    expect(result).toMatchObject({
+      downloaded: 2,
+      matched: 0,
+      updated: 0,
+      imported: 0,
+      failures: [expect.objectContaining({
+        code: 'wavelog_download_logbook_failed',
+        qsoCallsign: 'JA1FAIL',
+      })],
+    });
+    expect(addQSO).toHaveBeenCalledOnce();
+    expect(notifyUpdated).not.toHaveBeenCalled();
   });
 
   it('download updates only the best-scored local match when multiple candidates exist', async () => {

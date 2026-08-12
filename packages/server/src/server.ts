@@ -238,8 +238,22 @@ export function getHttpStatusCode(code: RadioErrorCode): number {
     case RadioErrorCode.ALREADY_RUNNING:
       return 409; // Conflict
 
+    case RadioErrorCode.LOGBOOK_IDEMPOTENCY_CONFLICT:
+      return 409; // Conflict
+
+    case RadioErrorCode.LOGBOOK_REVISION_MISMATCH:
+    case RadioErrorCode.LOGBOOK_RESTORE_PRECONDITION_FAILED:
+      return 412; // Precondition Failed
+
+    case RadioErrorCode.LOGBOOK_BACKUP_CHANGED:
+      return 409; // Conflict
+
+    case RadioErrorCode.LOGBOOK_PRECONDITION_REQUIRED:
+      return 428; // Precondition Required
+
     case RadioErrorCode.DEVICE_NOT_FOUND:
     case RadioErrorCode.RESOURCE_UNAVAILABLE:
+    case RadioErrorCode.LOGBOOK_UNSAVED_QSO_NOT_FOUND:
       return 404; // Not Found
 
     case RadioErrorCode.DEVICE_BUSY:
@@ -247,6 +261,8 @@ export function getHttpStatusCode(code: RadioErrorCode): number {
     case RadioErrorCode.LOGBOOK_READ_ONLY:
     case RadioErrorCode.LOGBOOK_UNAVAILABLE:
     case RadioErrorCode.LOGBOOK_WRITE_STATE_UNCERTAIN:
+    case RadioErrorCode.LOGBOOK_BACKUP_UNAVAILABLE:
+    case RadioErrorCode.LOGBOOK_MAINTENANCE:
       return 503; // Service Unavailable
 
     case RadioErrorCode.OPERATION_CANCELLED:
@@ -268,6 +284,7 @@ export function getHttpStatusCode(code: RadioErrorCode): number {
 
     case RadioErrorCode.RESOURCE_CLEANUP_FAILED:
     case RadioErrorCode.LOGBOOK_WRITE_FAILED:
+    case RadioErrorCode.LOGBOOK_BACKUP_FAILED:
       return 500; // Internal Server Error
 
     case RadioErrorCode.NETWORK_ERROR:

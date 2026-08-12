@@ -93,7 +93,7 @@ export interface StrategyRuntime {
   requestCall(
     callsign: string,
     lastMessage?: { message: FrameMessage; slotInfo: SlotInfo },
-  ): void;
+  ): boolean | void;
 
   /**
    * Produces a serializable runtime snapshot for diagnostics and UI.

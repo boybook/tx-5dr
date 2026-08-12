@@ -34,7 +34,8 @@ import type { CallsignContextTracker } from '../slot/CallsignContextTracker.js';
 import { MemoryLeakDetector } from '../utils/MemoryLeakDetector.js';
 import { createLogger } from '../utils/logger.js';
 import { normalizeCallsign } from '../utils/callsign.js';
-import { MutationBlockedError } from '../utils/persistence/PersistenceCoordinator.js';
+import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 
 const logger = createLogger('RadioOperatorManager');
 
@@ -73,6 +74,14 @@ interface SameTransmissionGuardState {
   canonicalMessage: string;
   count: number;
   lastCountedSlotStartMs: number;
+}
+
+export interface UnsavedQsoAttempt {
+  attemptId: string;
+  operatorId: string;
+  logBookId: string;
+  qsoRecord: QSORecord;
+  createdAt: number;
 }
 
 export interface RadioOperatorManagerOptions {
@@ -167,6 +176,10 @@ export class RadioOperatorManager {
 
   // 每操作员连续相同发射文本计数，用于防止插件/策略卡住后无限重复发射。
   private sameTransmissionGuardStates: Map<string, SameTransmissionGuardState> = new Map();
+  private readonly unsavedQsoAttempts = new Map<string, UnsavedQsoAttempt>();
+  private readonly qsoPersistenceInFlight = new Set<string>();
+  private readonly unsavedQsoRetryFlights = new Map<string, Promise<QSORecord>>();
+  private readonly preparedQsoCandidates = new Map<string, QSORecord>();
 
   constructor(options: RadioOperatorManagerOptions) {
     this.eventEmitter = options.eventEmitter;
@@ -193,10 +206,42 @@ export class RadioOperatorManager {
     this.eventListeners.set('requestTransmit', handleRequestTransmit);
 
     // 监听记录QSO事件
-    const handleRecordQSO = async (data: { operatorId: string; qsoRecord: QSORecord }) => {
-      let providerWriteAttempted = false;
+    const handleRecordQSO = async (data: {
+      operatorId: string;
+      qsoRecord: QSORecord;
+      retryAttemptId?: string;
+      resolve?: (record: QSORecord) => void;
+      reject?: (error: unknown) => void;
+    }) => {
+      if (this.qsoPersistenceInFlight.has(data.operatorId)) {
+        data.reject?.(new LogbookOperationError(
+          'LOGBOOK_MAINTENANCE',
+          'A QSO persistence operation is already in progress for this operator',
+        ));
+        return;
+      }
+      this.qsoPersistenceInFlight.add(data.operatorId);
       try {
         logger.debug(`Recording QSO: ${data.qsoRecord.callsign} (operator: ${data.operatorId})`);
+
+        const pendingAttempt = this.getUnsavedQsoForOperator(data.operatorId);
+        if (pendingAttempt && data.retryAttemptId !== pendingAttempt.attemptId) {
+          const error = new LogbookOperationError(
+            'LOGBOOK_MAINTENANCE',
+            'Resolve the existing unsaved QSO before recording another contact',
+          );
+          this.pauseOperatorAfterLogbookFailure(data.operatorId);
+          data.reject?.(error);
+          return;
+        }
+        if (data.retryAttemptId && data.retryAttemptId !== pendingAttempt?.attemptId) {
+          const error = new LogbookOperationError(
+            'LOGBOOK_UNSAVED_QSO_NOT_FOUND',
+            'The unsaved QSO retry attempt no longer exists',
+          );
+          data.reject?.(error);
+          return;
+        }
 
         // 获取操作员对应的日志本
         const logBook = await this.logManager.getOperatorLogBook(data.operatorId);
@@ -209,13 +254,17 @@ export class RadioOperatorManager {
           this.eventEmitter.emit('logbookWriteFailed' as any, {
             logBookId: callsign ? `logbook-${normalizeCallsign(callsign)}` : `operator-${data.operatorId}`,
             operatorId: data.operatorId,
-            qsoRecord: data.qsoRecord,
+            attemptId: this.rememberUnsavedQso(data.operatorId, callsign ? `logbook-${normalizeCallsign(callsign)}` : `operator-${data.operatorId}`, data.qsoRecord),
+            unsavedCount: 1,
             error: {
               code: 'LOGBOOK_UNAVAILABLE',
               message,
               occurredAt: Date.now(),
             },
           });
+          const error = new LogbookOperationError('LOGBOOK_UNAVAILABLE', message);
+          data.reject?.(error);
+          this.pauseOperatorAfterLogbookFailure(data.operatorId);
           return;
         }
         
@@ -256,6 +305,9 @@ export class RadioOperatorManager {
         };
 
         const completedQSO = await this.completeAutomaticQSORecord(data.operatorId, normalizedQSO);
+        // Retain the exact first candidate so an explicit retry cannot silently
+        // rebuild a different history, report, or frequency later.
+        this.preparedQsoCandidates.set(data.operatorId, completedQSO);
         const mergeCandidate = await this.findMergeCandidate(logBook.provider, completedQSO);
 
         let persistedQSO: QSORecord;
@@ -267,12 +319,10 @@ export class RadioOperatorManager {
           const { id: _id, ...updates } = mergedQSO;
 
           logger.debug(`Updating existing QSO ${mergeCandidate.id} in logbook ${logBook.name}: ${mergedQSO.callsign} @ ${new Date(mergedQSO.startTime).toISOString()} (${mergedQSO.frequency}Hz)`);
-          providerWriteAttempted = true;
           persistedQSO = await logBook.provider.updateQSO(mergeCandidate.id, updates, data.operatorId);
           eventName = 'qsoRecordUpdated';
         } else {
           logger.debug(`Saving QSO to logbook ${logBook.name}: ${completedQSO.callsign} @ ${new Date(completedQSO.startTime).toISOString()} (${completedQSO.frequency}Hz)`);
-          providerWriteAttempted = true;
           persistedQSO = await logBook.provider.addQSO(completedQSO, data.operatorId);
           shouldAutoSync = true;
         }
@@ -280,6 +330,12 @@ export class RadioOperatorManager {
         if (!persistedQSO) {
           throw new Error('Logbook provider completed without returning the durably committed QSO');
         }
+
+        this.clearUnsavedQsoForOperator(data.operatorId);
+        this.preparedQsoCandidates.delete(data.operatorId);
+        this.operators.get(data.operatorId)?.clearLogbookFailureBlock();
+        this.qsoPersistenceInFlight.delete(data.operatorId);
+        data.resolve?.(persistedQSO);
 
         // Everything below is a post-commit side effect. A listener, sync plugin,
         // or statistics failure must never turn a durable QSO into a write failure.
@@ -326,25 +382,29 @@ export class RadioOperatorManager {
 
       } catch (error) {
         logger.error(`Failed to record QSO:`, error);
-        // Provider mutations publish their own failure through LogManager. A
-        // lookup can raise the same domain error before any mutation starts,
-        // so it still needs one user-visible failure event here.
-        const providerPublishedFailure = providerWriteAttempted
-          && (error instanceof LogbookOperationError || error instanceof MutationBlockedError);
-        if (!providerPublishedFailure) {
-          const operationError = error instanceof LogbookOperationError ? error : undefined;
-          this.eventEmitter.emit('logbookWriteFailed' as any, {
-            logBookId: this.logManager.getOperatorLogBookId(data.operatorId) ?? `operator-${data.operatorId}`,
-            operatorId: data.operatorId,
-            qsoRecord: data.qsoRecord,
-            error: {
-              code: operationError?.code ?? 'LOGBOOK_WRITE_FAILED',
-              message: error instanceof Error ? error.message : String(error),
-              systemCode: operationError?.systemCode,
-              occurredAt: Date.now(),
-            },
-          });
-        }
+        const attemptId = this.rememberUnsavedQso(
+          data.operatorId,
+          this.logManager.getOperatorLogBookId(data.operatorId) ?? `operator-${data.operatorId}`,
+          this.preparedQsoCandidates.get(data.operatorId) ?? data.qsoRecord,
+        );
+        this.preparedQsoCandidates.delete(data.operatorId);
+        this.pauseOperatorAfterLogbookFailure(data.operatorId);
+        const operationError = error instanceof LogbookOperationError ? error : undefined;
+        this.eventEmitter.emit('logbookWriteFailed' as any, {
+          logBookId: this.logManager.getOperatorLogBookId(data.operatorId) ?? `operator-${data.operatorId}`,
+          operatorId: data.operatorId,
+          attemptId,
+          unsavedCount: 1,
+          error: {
+            code: operationError?.code ?? 'LOGBOOK_WRITE_FAILED',
+            message: error instanceof Error ? error.message : String(error),
+            systemCode: operationError?.systemCode,
+            occurredAt: Date.now(),
+          },
+        });
+        data.reject?.(error);
+      } finally {
+        this.qsoPersistenceInFlight.delete(data.operatorId);
       }
     };
     this.eventEmitter.on('recordQSO', handleRecordQSO);
@@ -621,7 +681,8 @@ export class RadioOperatorManager {
         id: logBook.id,
         name: logBook.name,
         description: logBook.description,
-        filePath: logBook.filePath,
+        fileName: path.basename(logBook.filePath),
+        storageKind: logBook.storageKind,
         createdAt: logBook.createdAt,
         lastUsed: logBook.lastUsed,
         isActive: logBook.isActive,
@@ -891,6 +952,12 @@ export class RadioOperatorManager {
     if (!operator) {
       throw new Error(`operator ${operatorId} not found`);
     }
+    if ([...this.unsavedQsoAttempts.values()].some(attempt => attempt.operatorId === operatorId)) {
+      throw new LogbookOperationError(
+        'LOGBOOK_MAINTENANCE',
+        'Resolve the unsaved QSO before restarting automatic operation',
+      );
+    }
     
     this.clearSameTransmissionGuard(operatorId);
     operator.start();
@@ -900,6 +967,146 @@ export class RadioOperatorManager {
     // 立即检查并触发发射（如果在发射周期内）
     this.checkAndTriggerTransmission(operatorId);
     
+  }
+
+  listUnsavedQsos(logBookId: string, operatorIds?: ReadonlySet<string>): Array<{
+    attemptId: string;
+    operatorId: string;
+    createdAt: number;
+    callsign: string;
+    mode: string;
+  }> {
+    return [...this.unsavedQsoAttempts.values()]
+      .filter(attempt => attempt.logBookId === logBookId
+        && (!operatorIds || operatorIds.has(attempt.operatorId)))
+      .map(attempt => ({
+        attemptId: attempt.attemptId,
+        operatorId: attempt.operatorId,
+        createdAt: attempt.createdAt,
+        callsign: attempt.qsoRecord.callsign,
+        mode: attempt.qsoRecord.mode,
+      }));
+  }
+
+  async retryUnsavedQso(
+    logBookId: string,
+    attemptId: string,
+    operatorIds?: ReadonlySet<string>,
+  ): Promise<QSORecord> {
+    const activeRetry = this.unsavedQsoRetryFlights.get(attemptId);
+    if (activeRetry) return activeRetry;
+
+    const attempt = this.requireUnsavedAttempt(logBookId, attemptId, operatorIds);
+    const operator = this.operators.get(attempt.operatorId);
+    if (!operator) {
+      throw new LogbookOperationError('LOGBOOK_UNSAVED_QSO_NOT_FOUND', 'The operator for this unsaved QSO is unavailable');
+    }
+    const retry = operator.recordQSOLog({
+        ...attempt.qsoRecord,
+        messageHistory: [...attempt.qsoRecord.messageHistory],
+      }, { retryAttemptId: attempt.attemptId })
+      .then((persisted) => {
+        this._pluginManager?.resetOperatorPluginRuntime(
+          attempt.operatorId,
+          'unsaved QSO durably persisted by explicit retry',
+        );
+        return persisted;
+      })
+      .finally(() => {
+        if (this.unsavedQsoRetryFlights.get(attemptId) === retry) {
+          this.unsavedQsoRetryFlights.delete(attemptId);
+        }
+      });
+    this.unsavedQsoRetryFlights.set(attemptId, retry);
+    return retry;
+  }
+
+  discardUnsavedQso(
+    logBookId: string,
+    attemptId: string,
+    operatorIds?: ReadonlySet<string>,
+  ): void {
+    const attempt = this.requireUnsavedAttempt(logBookId, attemptId, operatorIds);
+    if (this.unsavedQsoRetryFlights.has(attemptId)) {
+      throw new LogbookOperationError(
+        'LOGBOOK_MAINTENANCE',
+        'This unsaved QSO is currently being retried',
+      );
+    }
+    this.unsavedQsoAttempts.delete(attempt.attemptId);
+    this.operators.get(attempt.operatorId)?.clearLogbookFailureBlock();
+    this._pluginManager?.resetOperatorPluginRuntime(
+      attempt.operatorId,
+      'unsaved QSO explicitly discarded',
+    );
+  }
+
+  private requireUnsavedAttempt(
+    logBookId: string,
+    attemptId: string,
+    operatorIds?: ReadonlySet<string>,
+  ): UnsavedQsoAttempt {
+    const attempt = this.unsavedQsoAttempts.get(attemptId);
+    if (!attempt
+      || attempt.logBookId !== logBookId
+      || (operatorIds && !operatorIds.has(attempt.operatorId))) {
+      throw new LogbookOperationError('LOGBOOK_UNSAVED_QSO_NOT_FOUND', 'The unsaved QSO no longer exists');
+    }
+    return attempt;
+  }
+
+  private rememberUnsavedQso(operatorId: string, logBookId: string, record: QSORecord): string {
+    const existing = this.getUnsavedQsoForOperator(operatorId);
+    if (existing) return existing.attemptId;
+    const attemptId = randomUUID();
+    this.unsavedQsoAttempts.set(attemptId, {
+      attemptId,
+      operatorId,
+      logBookId,
+      qsoRecord: { ...record, messageHistory: [...record.messageHistory] },
+      createdAt: Date.now(),
+    });
+    return attemptId;
+  }
+
+  private getUnsavedQsoForOperator(operatorId: string): UnsavedQsoAttempt | undefined {
+    return [...this.unsavedQsoAttempts.values()].find(attempt => attempt.operatorId === operatorId);
+  }
+
+  private clearUnsavedQsoForOperator(operatorId: string): void {
+    for (const [attemptId, attempt] of this.unsavedQsoAttempts) {
+      if (attempt.operatorId === operatorId) this.unsavedQsoAttempts.delete(attemptId);
+    }
+  }
+
+  private pauseOperatorAfterLogbookFailure(operatorId: string): void {
+    const operator = this.operators.get(operatorId);
+    if (!operator) return;
+    this.clearSameTransmissionGuard(operatorId);
+    operator.blockForLogbookFailure();
+    const resetPluginRuntime = this._pluginManager?.resetOperatorPluginRuntime?.bind(this._pluginManager);
+    if (resetPluginRuntime) {
+      try {
+        resetPluginRuntime(operatorId, 'logbook durability failure');
+      } catch (error) {
+        logger.warn(`Failed to reset plugin runtime for ${operatorId} after a logbook failure`, error);
+        this.resetPluginRuntime(operatorId, 'logbook durability failure');
+      }
+    } else {
+      this.resetPluginRuntime(operatorId, 'logbook durability failure');
+    }
+    try {
+      const interruption = this._pluginManager?.interruptOperatorTransmission?.(operatorId);
+      if (interruption) {
+        void interruption.catch((error) => {
+          logger.warn(`Failed to interrupt active transmission for ${operatorId} after a logbook failure`, error);
+        });
+      }
+    } catch (error) {
+      logger.warn(`Failed to interrupt active transmission for ${operatorId} after a logbook failure`, error);
+    }
+    this.emitOperatorStatusUpdate(operatorId);
+    logger.error(`Paused operator ${operatorId} after a logbook durability failure`);
   }
 
   private canonicalizeTransmissionMessage(message: string): string {

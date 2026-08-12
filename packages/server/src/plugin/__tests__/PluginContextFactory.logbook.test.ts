@@ -3,7 +3,7 @@ import { EventEmitter } from 'eventemitter3';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { DigitalRadioEngineEvents } from '@tx5dr/contracts';
+import type { DigitalRadioEngineEvents, QSORecord } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import type { LoadedPlugin, PluginManagerDeps } from '../types.js';
 import { PluginContextFactory } from '../PluginContextFactory.js';
@@ -32,7 +32,7 @@ function createDeps(eventEmitter: EventEmitter<DigitalRadioEngineEvents>): Plugi
           },
           getTransmitCycles: () => [0],
           isTargetBeingWorkedByOthers: () => false,
-          recordQSOLog: () => {},
+          recordQSOLog: async (record: QSORecord) => record,
           notifySlotsUpdated: () => {},
           notifyStateChanged: () => {},
           start: () => {},
@@ -67,6 +67,65 @@ function createPlugin(): LoadedPlugin {
 }
 
 describe('PluginContextFactory logbook access', () => {
+  it('returns the provider committed record for operator-bound add and update', async () => {
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const committedAdd: QSORecord = {
+      id: 'provider-add-id',
+      callsign: 'BG2CM',
+      frequency: 14_074_000,
+      mode: 'SSB',
+      submode: 'USB',
+      startTime: 1,
+      messageHistory: ['committed add'],
+    };
+    const committedUpdate: QSORecord = {
+      ...committedAdd,
+      mode: 'FM',
+      submode: undefined,
+      messageHistory: ['committed update'],
+    };
+    const addQSO = vi.fn(async () => structuredClone(committedAdd));
+    const updateQSO = vi.fn(async () => structuredClone(committedUpdate));
+    const logBook = {
+      id: 'logbook-BG4IAJ',
+      provider: { addQSO, updateQSO },
+    };
+    vi.spyOn(LogManager, 'getInstance').mockReturnValue({
+      resolveLogBookId: vi.fn(() => logBook.id),
+      getLogBook: vi.fn(() => logBook),
+      getOperatorIdsForLogBook: vi.fn(() => ['operator-1']),
+    } as any);
+
+    const factory = new PluginContextFactory(createDeps(eventEmitter));
+    const storageDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-ctx-commit-'));
+    tempDirs.push(storageDir);
+    const ctx = await factory.create(
+      createPlugin(),
+      'operator-1',
+      'operator',
+      storageDir,
+      () => {},
+      () => ({}),
+    );
+    const input: QSORecord = {
+      id: 'caller-id',
+      callsign: 'bg2cm',
+      frequency: 14_074_000,
+      mode: 'USB',
+      startTime: 1,
+      messageHistory: ['caller add'],
+    };
+    const updates: Partial<QSORecord> = {
+      mode: 'FM',
+      messageHistory: ['caller update'],
+    };
+
+    await expect(ctx.logbook.addQSO(input)).resolves.toEqual(committedAdd);
+    await expect(ctx.logbook.updateQSO(input.id, updates)).resolves.toEqual(committedUpdate);
+    expect(addQSO).toHaveBeenCalledWith(input, 'operator-1');
+    expect(updateQSO).toHaveBeenCalledWith(input.id, updates);
+  });
+
   it('emits full logbookUpdated payload for operator-bound notifyUpdated', async () => {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     const events: Array<{ logBookId: string; statistics: unknown; operatorId?: string }> = [];
@@ -90,16 +149,12 @@ describe('PluginContextFactory logbook access', () => {
             byMode: [],
           },
         })),
-        queryQSOs: vi.fn(async () => []),
-        addQSO: vi.fn(async () => undefined),
-        updateQSO: vi.fn(async () => undefined),
       },
     };
 
     vi.spyOn(LogManager, 'getInstance').mockReturnValue({
       resolveLogBookId: vi.fn(() => logBook.id),
       getLogBook: vi.fn(() => logBook),
-      getOrCreateLogBookByCallsign: vi.fn(async () => logBook),
       getOperatorIdsForLogBook: vi.fn(() => []),
     } as any);
 
@@ -139,7 +194,7 @@ describe('PluginContextFactory logbook access', () => {
     });
   });
 
-  it('supports global plugins binding logbook access by callsign', async () => {
+  it('supports global plugins binding an existing logbook by callsign without creating one', async () => {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     const events: Array<{ logBookId: string; statistics: unknown; operatorId?: string }> = [];
     eventEmitter.on('logbookUpdated' as any, (payload) => {
@@ -156,16 +211,10 @@ describe('PluginContextFactory logbook access', () => {
           lastQSOTime: undefined,
           dxcc: undefined,
         })),
-        queryQSOs: vi.fn(async () => []),
-        addQSO: vi.fn(async () => undefined),
-        updateQSO: vi.fn(async () => undefined),
       },
     };
 
-    const getOrCreateLogBookByCallsign = vi.fn(async (callsign: string) => {
-      expect(callsign).toBe('BG5DRB');
-      return logBook;
-    });
+    const getOrCreateLogBookByCallsign = vi.fn();
 
     vi.spyOn(LogManager, 'getInstance').mockReturnValue({
       resolveLogBookId: vi.fn(() => logBook.id),
@@ -189,7 +238,7 @@ describe('PluginContextFactory logbook access', () => {
 
     await ctx.logbook.forCallsign('bg5drb').notifyUpdated();
 
-    expect(getOrCreateLogBookByCallsign).toHaveBeenCalledWith('BG5DRB');
+    expect(getOrCreateLogBookByCallsign).not.toHaveBeenCalled();
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual({
       logBookId: 'logbook-BG5DRB',
@@ -203,5 +252,47 @@ describe('PluginContextFactory logbook access', () => {
       },
       operatorId: 'operator-2',
     });
+  });
+
+  it('never creates a missing logbook through global callsign access', async () => {
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const getOrCreateLogBookByCallsign = vi.fn();
+    vi.spyOn(LogManager, 'getInstance').mockReturnValue({
+      resolveLogBookId: vi.fn(() => null),
+      getLogBook: vi.fn(() => null),
+      getOrCreateLogBookByCallsign,
+      getOperatorIdsForLogBook: vi.fn(() => []),
+    } as any);
+
+    const factory = new PluginContextFactory(createDeps(eventEmitter));
+    const storageDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-ctx-missing-'));
+    tempDirs.push(storageDir);
+    const ctx = await factory.create(
+      createPlugin(),
+      undefined,
+      'global',
+      storageDir,
+      () => {},
+      () => ({}),
+    );
+    const logbook = ctx.logbook.forCallsign('bg5drb');
+    const record: QSORecord = {
+      id: 'qso-1',
+      callsign: 'N0CALL',
+      frequency: 14_074_000,
+      mode: 'FT8',
+      startTime: 0,
+      messageHistory: [],
+    };
+
+    await expect(logbook.getLogBookId()).resolves.toBeNull();
+    await expect(logbook.queryQSOs({})).resolves.toEqual([]);
+    await expect(logbook.countQSOs()).resolves.toBe(0);
+    await expect(logbook.getStatistics()).resolves.toBeNull();
+    await expect(logbook.addQSO(record)).rejects.toMatchObject({ code: 'LOGBOOK_UNAVAILABLE' });
+    await expect(logbook.updateQSO(record.id, { notes: 'updated' }))
+      .rejects.toMatchObject({ code: 'LOGBOOK_UNAVAILABLE' });
+    await expect(logbook.notifyUpdated()).resolves.toBeUndefined();
+    expect(getOrCreateLogBookByCallsign).not.toHaveBeenCalled();
   });
 });

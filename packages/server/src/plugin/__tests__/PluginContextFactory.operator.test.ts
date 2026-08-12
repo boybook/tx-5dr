@@ -42,7 +42,7 @@ function createDeps(overrides: Partial<PluginManagerDeps> = {}): PluginManagerDe
       stop: vi.fn(),
       setTransmitCycles: vi.fn(),
       isTargetBeingWorkedByOthers: vi.fn(() => false),
-      recordQSOLog: vi.fn(),
+      recordQSOLog: vi.fn(async record => record),
       notifySlotsUpdated: vi.fn(),
       notifyStateChanged: vi.fn(),
     },

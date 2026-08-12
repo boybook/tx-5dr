@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { QSORecordSchema } from './qso.schema.js';
 
 export const LOGBOOK_OPERATION_ERROR_CODES = [
   'LOGBOOK_LOADING',
@@ -6,6 +7,15 @@ export const LOGBOOK_OPERATION_ERROR_CODES = [
   'LOGBOOK_UNAVAILABLE',
   'LOGBOOK_WRITE_FAILED',
   'LOGBOOK_WRITE_STATE_UNCERTAIN',
+  'LOGBOOK_UNSAVED_QSO_NOT_FOUND',
+  'LOGBOOK_BACKUP_FAILED',
+  'LOGBOOK_BACKUP_UNAVAILABLE',
+  'LOGBOOK_BACKUP_CHANGED',
+  'LOGBOOK_MAINTENANCE',
+  'LOGBOOK_REVISION_MISMATCH',
+  'LOGBOOK_RESTORE_PRECONDITION_FAILED',
+  'LOGBOOK_PRECONDITION_REQUIRED',
+  'LOGBOOK_IDEMPOTENCY_CONFLICT',
 ] as const;
 
 export const LogbookOperationErrorCodeSchema = z.enum(LOGBOOK_OPERATION_ERROR_CODES);
@@ -62,7 +72,8 @@ export const LogBookInfoSchema = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string().optional(),
-  filePath: z.string(),
+  fileName: z.string().min(1).max(255),
+  storageKind: z.enum(['managed', 'custom']),
   createdAt: z.number(),
   lastUsed: z.number(),
   isActive: z.boolean(),
@@ -145,6 +156,133 @@ export const LogbookRecoveryRetryResponseSchema = z.object({
     health: LogbookHealthSchema,
   }),
 });
+
+const LogbookRevisionSchema = z.string()
+  .min(1)
+  .max(256)
+  .regex(/^[A-Za-z0-9._:"-]+$/);
+const LogbookIdempotencyKeySchema = z.string()
+  .min(8)
+  .max(128)
+  .regex(/^[A-Za-z0-9._:-]+$/);
+const LogbookRecoveryTokenSchema = z.string()
+  .min(8)
+  .max(128)
+  .regex(/^[A-Za-z0-9._:-]+$/);
+const UnsavedQsoAttemptIdSchema = z.string()
+  .min(8)
+  .max(128)
+  .regex(/^[A-Za-z0-9._:-]+$/);
+
+export const LogbookUnsavedQsoSummarySchema = z.object({
+  attemptId: UnsavedQsoAttemptIdSchema,
+  operatorId: z.string().min(1).max(128),
+  createdAt: z.number(),
+  callsign: z.string().max(64),
+  mode: z.string().max(32),
+});
+
+export const LogbookBackupArtifactSchema = z.object({
+  createdAt: z.number(),
+  size: z.number().int().nonnegative(),
+  recordCount: z.number().int().nonnegative().optional(),
+  opaqueRecordCount: z.number().int().nonnegative().optional(),
+});
+
+export const LogbookBackupOperationSchema = z.object({
+  id: z.string().min(1).max(128),
+  kind: z.enum(['backup', 'restore-prepare', 'restore']),
+  state: z.enum(['queued', 'running', 'succeeded', 'failed']),
+  phase: z.string().min(1).max(128),
+  processedBytes: z.number().int().nonnegative().optional(),
+  totalBytes: z.number().int().nonnegative().optional(),
+  errorCode: z.string().min(1).max(128).optional(),
+});
+
+export const LogbookBackupStatusSchema = z.object({
+  logBookId: z.string(),
+  revision: LogbookRevisionSchema,
+  mainHealth: LogbookHealthSchema,
+  dirty: z.boolean(),
+  pendingMutations: z.number().int().nonnegative(),
+  latest: LogbookBackupArtifactSchema.optional(),
+  preRestore: LogbookBackupArtifactSchema.optional(),
+  operation: LogbookBackupOperationSchema.optional(),
+  unsaved: z.array(LogbookUnsavedQsoSummarySchema).optional(),
+  capabilities: z.object({
+    canCreate: z.boolean(),
+    canDownload: z.boolean(),
+    canRestore: z.boolean(),
+    canDownloadPreRestore: z.boolean(),
+  }),
+  error: z.object({
+    code: z.string().min(1).max(128),
+    message: z.string(),
+  }).optional(),
+});
+
+export const LogbookBackupStatusResponseSchema = z.object({
+  success: z.literal(true),
+  data: LogbookBackupStatusSchema,
+});
+
+export const CreateLogbookBackupRequestSchema = z.object({
+}).strict();
+
+export const PrepareLogbookRestoreRequestSchema = z.object({
+}).strict();
+
+export const RestoreLogbookRequestSchema = z.object({
+  preflightToken: LogbookRecoveryTokenSchema,
+  confirmation: z.string().min(1).max(128),
+}).strict();
+
+export const LogbookConditionalMutationHeadersSchema = z.object({
+  revision: LogbookRevisionSchema,
+  idempotencyKey: LogbookIdempotencyKeySchema,
+}).strict();
+
+export const LogbookIdempotentMutationHeadersSchema = z.object({
+  idempotencyKey: LogbookIdempotencyKeySchema,
+}).strict();
+
+export const LogbookRestoreFileSummarySchema = z.object({
+  size: z.number().int().nonnegative(),
+  recordCount: z.number().int().nonnegative(),
+  opaqueRecordCount: z.number().int().nonnegative(),
+  incompleteTail: z.boolean(),
+  issueCount: z.number().int().nonnegative(),
+});
+
+export const LogbookRestorePreflightSchema = z.object({
+  preflightToken: LogbookRecoveryTokenSchema,
+  expiresAt: z.number(),
+  revision: LogbookRevisionSchema,
+  main: LogbookRestoreFileSummarySchema,
+  backup: LogbookRestoreFileSummarySchema,
+  recordDelta: z.number().int(),
+  estimatedLoss: z.number().int().nonnegative(),
+  highRisk: z.boolean(),
+});
+
+export const LogbookRestorePreflightResponseSchema = z.object({
+  success: z.literal(true),
+  data: LogbookRestorePreflightSchema,
+});
+
+export const LogbookUnsavedQsoRetryResponseSchema = z.object({
+  success: z.literal(true),
+  data: QSORecordSchema,
+});
+
+export const LogbookUnsavedQsoDiscardResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({ attemptId: UnsavedQsoAttemptIdSchema }),
+});
+
+export const LogbookUnsavedQsoAttemptParamsSchema = z.object({
+  attemptId: UnsavedQsoAttemptIdSchema,
+}).strict();
 
 /**
  * 日志本QSO查询选项Schema
@@ -350,6 +488,22 @@ export type LogBookListResponse = z.infer<typeof LogBookListResponseSchema>;
 export type LogBookDetailResponse = z.infer<typeof LogBookDetailResponseSchema>;
 export type LogBookActionResponse = z.infer<typeof LogBookActionResponseSchema>;
 export type LogbookRecoveryRetryResponse = z.infer<typeof LogbookRecoveryRetryResponseSchema>;
+export type LogbookUnsavedQsoSummary = z.infer<typeof LogbookUnsavedQsoSummarySchema>;
+export type LogbookBackupArtifact = z.infer<typeof LogbookBackupArtifactSchema>;
+export type LogbookBackupOperation = z.infer<typeof LogbookBackupOperationSchema>;
+export type LogbookBackupStatus = z.infer<typeof LogbookBackupStatusSchema>;
+export type LogbookBackupStatusResponse = z.infer<typeof LogbookBackupStatusResponseSchema>;
+export type CreateLogbookBackupRequest = z.infer<typeof CreateLogbookBackupRequestSchema>;
+export type PrepareLogbookRestoreRequest = z.infer<typeof PrepareLogbookRestoreRequestSchema>;
+export type RestoreLogbookRequest = z.infer<typeof RestoreLogbookRequestSchema>;
+export type LogbookConditionalMutationHeaders = z.infer<typeof LogbookConditionalMutationHeadersSchema>;
+export type LogbookIdempotentMutationHeaders = z.infer<typeof LogbookIdempotentMutationHeadersSchema>;
+export type LogbookRestoreFileSummary = z.infer<typeof LogbookRestoreFileSummarySchema>;
+export type LogbookRestorePreflight = z.infer<typeof LogbookRestorePreflightSchema>;
+export type LogbookRestorePreflightResponse = z.infer<typeof LogbookRestorePreflightResponseSchema>;
+export type LogbookUnsavedQsoRetryResponse = z.infer<typeof LogbookUnsavedQsoRetryResponseSchema>;
+export type LogbookUnsavedQsoDiscardResponse = z.infer<typeof LogbookUnsavedQsoDiscardResponseSchema>;
+export type LogbookUnsavedQsoAttemptParams = z.infer<typeof LogbookUnsavedQsoAttemptParamsSchema>;
 export type LogBookQSOQueryOptions = z.infer<typeof LogBookQSOQueryOptionsSchema>;
 export type LogBookRecentGlobeQuery = z.infer<typeof LogBookRecentGlobeQuerySchema>;
 export type LogBookRecentGlobeHomeSource = z.infer<typeof LogBookRecentGlobeHomeSourceSchema>;

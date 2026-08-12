@@ -31,7 +31,7 @@ function createOperator(overrides: Partial<OperatorConfig> = {}): StandardQSOPlu
     },
     hasWorkedCallsign: vi.fn(async () => false),
     isTargetBeingWorkedByOthers: vi.fn(() => false),
-    recordQSOLog: vi.fn(),
+    recordQSOLog: vi.fn(async record => record),
     notifySlotsUpdated: vi.fn(),
     notifyStateChanged: vi.fn(),
   };
@@ -49,6 +49,80 @@ function createParsedMessage(rawMessage: string, overrides: Partial<ParsedFT8Mes
     ...overrides,
   };
 }
+
+function completedQSORecord(id = 'persisted-1') {
+  return {
+    id,
+    callsign: 'JA1AAA',
+    frequency: 7_074_000,
+    mode: 'FT8',
+    startTime: 1,
+    messageHistory: [],
+    myCallsign: 'BG5DRB',
+  };
+}
+
+describe('StandardQSOPluginRuntime durable QSO lifecycle', () => {
+  it('joins concurrent TX4/TX5 persistence and commits the lifecycle only once', async () => {
+    let resolvePersistence!: (record: ReturnType<typeof completedQSORecord>) => void;
+    const operator = createOperator();
+    operator.recordQSOLog = vi.fn(() => new Promise((resolve) => {
+      resolvePersistence = resolve;
+    }));
+    const runtime = new StandardQSOPluginRuntime(operator);
+
+    const first = runtime.persistCompletedQSO(completedQSORecord('temporary-1'));
+    const second = runtime.persistCompletedQSO(completedQSORecord('temporary-2'));
+    await Promise.resolve();
+
+    expect(operator.recordQSOLog).toHaveBeenCalledTimes(1);
+    expect(runtime.getTransmitText()).toBeNull();
+    resolvePersistence(completedQSORecord());
+
+    await expect(first).resolves.toMatchObject({ id: 'persisted-1' });
+    await expect(second).resolves.toMatchObject({ id: 'persisted-1' });
+    await expect(runtime.persistCompletedQSO(completedQSORecord('temporary-3')))
+      .resolves.toMatchObject({ id: 'persisted-1' });
+    expect(operator.recordQSOLog).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the failed lifecycle stopped without starting a second persistence attempt', async () => {
+    const operator = createOperator();
+    operator.recordQSOLog = vi.fn().mockRejectedValue(new Error('disk full'));
+    const runtime = new StandardQSOPluginRuntime(operator);
+
+    await expect(runtime.persistCompletedQSO(completedQSORecord())).rejects.toThrow('disk full');
+    expect(await runtime.decide([])).toEqual({ stop: true });
+    expect(runtime.getTransmitText()).toBeNull();
+
+    runtime.requestCall('JA2BBB', undefined);
+    expect(runtime.getSnapshot().context?.targetCallsign).toBeUndefined();
+    expect(operator.recordQSOLog).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a duplicate requestCall for the already committed target', async () => {
+    const operator = createOperator();
+    const runtime = new StandardQSOPluginRuntime(operator);
+    runtime.patchContext({ targetCallsign: 'JA1AAA' });
+
+    await runtime.persistCompletedQSO(completedQSORecord());
+
+    expect(runtime.requestCall('JA1AAA', undefined)).toBe(false);
+    expect(operator.recordQSOLog).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows a new lifecycle only after the previous QSO context is cleared', async () => {
+    const operator = createOperator();
+    const runtime = new StandardQSOPluginRuntime(operator);
+
+    await runtime.persistCompletedQSO(completedQSORecord('persisted-1'));
+    await runtime.persistCompletedQSO(completedQSORecord('duplicate'));
+    runtime.clearQSOContext();
+    await runtime.persistCompletedQSO(completedQSORecord('persisted-2'));
+
+    expect(operator.recordQSOLog).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('StandardQSOPluginRuntime TX6 override', () => {
   it('omits the TX6 grid for compound CQ callsigns by default', () => {

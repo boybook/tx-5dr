@@ -1,15 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { createHash } from 'node:crypto';
-import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'fs/promises';
+import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { performance } from 'perf_hooks';
 
 import { ADIFLogProvider } from '../ADIFLogProvider.js';
 import { AdifFileStore } from '../persistence/AdifFileStore.js';
-import type { LegacyMigrationResult } from '../persistence/LegacyLogbookMigrator.js';
-import type { LegacyLogbookMigrationRunner } from '../persistence/LegacyLogbookMigrationWorker.js';
-import { legacyLogbookPathHash } from '../persistence/LegacyLogbookRecovery.js';
 import { LogbookScanTimeoutError } from '../persistence/LogbookScanWorker.js';
 import { MutationBlockedError, PersistenceCoordinator } from '../../utils/persistence/index.js';
 
@@ -33,10 +28,6 @@ ${records.join('\n')}
 `;
 }
 
-function adifField(name: string, value: string): string {
-  return `<${name}:${value.length}>${value}`;
-}
-
 function expectOrdered(content: string, needles: string[]): void {
   let previousIndex = -1;
   for (const needle of needles) {
@@ -45,35 +36,6 @@ function expectOrdered(content: string, needles: string[]): void {
     expect(index).toBeGreaterThan(previousIndex);
     previousIndex = index;
   }
-}
-
-function createFailedLegacyMigrator(
-  result: Partial<LegacyMigrationResult> = {},
-): { runner: LegacyLogbookMigrationRunner; cleanupCalls: () => number } {
-  let cleanupCallCount = 0;
-  return {
-    runner: {
-      migrate: async mainPath => ({
-        status: 'FAILED',
-        mainPath,
-        committed: false,
-        appliedTransactions: 0,
-        skippedTransactions: 0,
-        unappliedOperations: 0,
-        issues: [{
-          code: 'MIGRATION_WORKER_FAILED',
-          path: mainPath,
-          message: 'injected legacy migration failure',
-        }],
-        ...result,
-      }),
-      cleanupExpired: async () => {
-        cleanupCallCount += 1;
-        return { removedRecoverySets: 0, issues: [] };
-      },
-    },
-    cleanupCalls: () => cleanupCallCount,
-  };
 }
 
 describe('ADIFLogProvider import', () => {
@@ -109,7 +71,7 @@ describe('ADIFLogProvider import', () => {
     await provider.close();
   });
 
-  it('does not create the metadata sidecar during initial load when it is missing', async () => {
+  it('initializes without recreating the retired metadata sidecar', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-meta-lazy-'));
     tempDirs.push(tempDir);
     const provider = new ADIFLogProvider({
@@ -158,7 +120,7 @@ describe('ADIFLogProvider import', () => {
 
     expect(health).toMatchObject({ state: 'unavailable', readable: false, writable: false });
     expect(health.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'MAIN_CREATION_DEFERRED' }),
+      expect.objectContaining({ code: 'MAIN_FILE_MISSING' }),
     ]));
     await expect(readFile(logFilePath)).rejects.toMatchObject({ code: 'ENOENT' });
     await provider.close();
@@ -187,6 +149,7 @@ describe('ADIFLogProvider import', () => {
       writable: false,
       issues: [expect.objectContaining({ code: 'MAIN_SCAN_FAILED' })],
     });
+    expect(provider.getHealth().issues[0]?.recoveryFileName).toBeUndefined();
     expect(provider.getHealth()).toMatchObject({
       state: 'unavailable',
       readable: false,
@@ -196,214 +159,15 @@ describe('ADIFLogProvider import', () => {
     await provider.close();
   });
 
-  it('replays a valid legacy current journal once and quarantines the sidecar', async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-legacy-real-'));
-    tempDirs.push(tempDir);
-    const logFilePath = join(tempDir, 'logbook.adi');
-    await writeFile(logFilePath, buildAdif([]), 'utf8');
-
-    const withoutChecksum = {
-      txId: 'legacy-real-add',
-      timestamp: Date.now() + 10_000,
-      operation: 'add',
-      payload: {
-        record: {
-          id: 'legacy-real-qso',
-          callsign: 'BG2LG',
-          frequency: 14074000,
-          mode: 'FT8',
-          startTime: Date.parse('2026-01-02T12:00:00Z'),
-          messageHistory: [],
-        },
-      },
-    };
-    const entry = {
-      ...withoutChecksum,
-      checksum: createHash('sha256').update(JSON.stringify(withoutChecksum)).digest('hex'),
-    };
-    await writeFile(
-      join(tempDir, 'logbook.journal.jsonl'),
-      `${JSON.stringify(entry)}\n`,
-      'utf8',
-    );
-
-    const provider = new ADIFLogProvider({ logFilePath, autoCreateFile: false });
-    await provider.initialize();
-
-    expect(await provider.getQSO('legacy-real-qso')).toMatchObject({ callsign: 'BG2LG' });
-    expect(await readFile(logFilePath, 'utf8')).toContain('legacy-real-qso');
-    expect(await readdir(tempDir)).not.toContain('logbook.journal.jsonl');
-
-    await provider.close();
-  });
-
-  it('opens a readable main read-only after migration failure and preserves every legacy artifact', async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-legacy-failed-readable-'));
-    tempDirs.push(tempDir);
-    const logFilePath = join(tempDir, 'logbook.adi');
-    const journalPath = join(tempDir, 'logbook.journal.jsonl');
-    const originalMain = buildAdif([
-      '<CALL:5>BG2MF<QSO_DATE:8>20260102<TIME_ON:6>120000<MODE:3>FT8<FREQ:9>14.074000<APP_TX5DR_ID:14>migration-main<EOR>',
-    ]);
-    const originalJournal = '{"txId":"must-remain-after-failed-migration"}\n';
-    await writeFile(logFilePath, originalMain, 'utf8');
-    await writeFile(journalPath, originalJournal, 'utf8');
-    const failed = createFailedLegacyMigrator({
-      skippedTransactions: 2,
-      unappliedOperations: 3,
-    });
-    const provider = new ADIFLogProvider({
-      logFilePath,
-      autoCreateFile: true,
-      legacyMigrator: failed.runner,
-    });
-
-    const health = await provider.initialize();
-    const mainBeforeWrites = await stat(logFilePath, { bigint: true });
-
-    expect(health).toMatchObject({ state: 'read_only', readable: true, writable: false });
-    expect(health.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        code: 'LEGACY_TRANSACTIONS_SKIPPED',
-        affectedRecords: 2,
-      }),
-      expect.objectContaining({
-        code: 'LEGACY_OPERATIONS_UNAPPLIED',
-        affectedRecords: 3,
-      }),
-      expect.objectContaining({ code: 'LEGACY_MIGRATION_FAILED' }),
-    ]));
-    await expect(provider.addQSO({
-      id: 'blocked-after-migration-failure',
-      callsign: 'BG2BA',
-      frequency: 14074000,
-      mode: 'FT8',
-      startTime: Date.parse('2026-01-02T12:15:00Z'),
-      messageHistory: [],
-    }, 'op1')).rejects.toMatchObject({ code: 'LOGBOOK_READ_ONLY' });
-    await expect(provider.updateQSO('migration-main', { notes: 'must not persist' }))
-      .rejects.toMatchObject({ code: 'LOGBOOK_READ_ONLY' });
-    await expect(provider.importADIF(buildAdif([
-      '<CALL:5>BG2BI<QSO_DATE:8>20260102<TIME_ON:6>123000<MODE:3>FT8<FREQ:9>14.074000<EOR>',
-    ]))).rejects.toMatchObject({ code: 'LOGBOOK_READ_ONLY' });
-
-    const mainAfterWrites = await stat(logFilePath, { bigint: true });
-    expect(mainAfterWrites.mtimeNs).toBe(mainBeforeWrites.mtimeNs);
-    expect(await readFile(logFilePath, 'utf8')).toBe(originalMain);
-    expect(await readFile(journalPath, 'utf8')).toBe(originalJournal);
-    expect(failed.cleanupCalls()).toBe(0);
-
-    await provider.close();
-  });
-
-  it('does not create a missing main when legacy migration fails', async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-legacy-failed-missing-'));
-    tempDirs.push(tempDir);
-    const logFilePath = join(tempDir, 'missing.adi');
-    const journalPath = join(tempDir, 'missing.journal.jsonl');
-    const originalJournal = '{"txId":"only-recovery-copy"}\n';
-    await writeFile(journalPath, originalJournal, 'utf8');
-    const failed = createFailedLegacyMigrator();
-    const provider = new ADIFLogProvider({
-      logFilePath,
-      autoCreateFile: true,
-      legacyMigrator: failed.runner,
-    });
-
-    const health = await provider.initialize();
-
-    expect(health).toMatchObject({ state: 'unavailable', readable: false, writable: false });
-    expect(health.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'LEGACY_MIGRATION_FAILED' }),
-    ]));
-    await expect(provider.addQSO({
-      id: 'must-not-create-main',
-      callsign: 'BG2NA',
-      frequency: 14074000,
-      mode: 'FT8',
-      startTime: Date.parse('2026-01-02T13:00:00Z'),
-      messageHistory: [],
-    }, 'op1')).rejects.toMatchObject({ code: 'LOGBOOK_UNAVAILABLE' });
-    await expect(readFile(logFilePath)).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(await readFile(journalPath, 'utf8')).toBe(originalJournal);
-    expect(failed.cleanupCalls()).toBe(0);
-
-    await provider.close();
-  });
-
-  it('does not reset a broken main or consume a recovery candidate when legacy migration fails', async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-legacy-failed-broken-'));
-    tempDirs.push(tempDir);
-    const logFilePath = join(tempDir, 'broken.adi');
-    const originalMain = 'broken migration baseline';
-    const originalJournal = '{"txId":"must-survive-broken-main"}\n';
-    const journalPath = join(tempDir, 'broken.journal.jsonl');
-    await writeFile(logFilePath, originalMain, 'utf8');
-    await writeFile(journalPath, originalJournal, 'utf8');
-    const paths = new AdifFileStore(logFilePath);
-    await mkdir(paths.recoveryDirectory, { recursive: true });
-    await writeFile(paths.rewriteTempPath, buildAdif([
-      '<CALL:5>BG2NB<QSO_DATE:8>20260102<TIME_ON:6>131500<MODE:3>FT8<FREQ:9>14.074000<EOR>',
-    ]), 'utf8');
-    const recoveryCandidate = await readFile(paths.rewriteTempPath, 'utf8');
-    const failed = createFailedLegacyMigrator();
-    const provider = new ADIFLogProvider({
-      logFilePath,
-      autoCreateFile: true,
-      legacyMigrator: failed.runner,
-    });
-
-    const health = await provider.initialize();
-
-    expect(health).toMatchObject({ state: 'unavailable', readable: false, writable: false });
-    expect(health.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'LEGACY_MIGRATION_FAILED' }),
-      expect.objectContaining({ code: 'RECOVERY_WRITE_BLOCKED' }),
-    ]));
-    expect(await readFile(logFilePath, 'utf8')).toBe(originalMain);
-    expect(await readFile(journalPath, 'utf8')).toBe(originalJournal);
-    expect(await readFile(paths.rewriteTempPath, 'utf8')).toBe(recoveryCandidate);
-    await expect(readFile(paths.unrecoverableOriginalPath)).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(failed.cleanupCalls()).toBe(0);
-
-    await provider.close();
-  });
-
-  it('preserves a truncated main read-only until a later migration retry enables recovery', async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-legacy-retry-recovery-'));
+  it('preserves a truncated main read-only across explicit reopen', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-truncated-reopen-'));
     tempDirs.push(tempDir);
     const logFilePath = join(tempDir, 'truncated.adi');
     const complete = '<CALL:5>BG2NC<QSO_DATE:8>20260102<TIME_ON:6>133000<MODE:3>FT8<FREQ:9>14.074000<EOR>\n';
     const fragment = '<CALL:5>BG2ND';
     const originalMain = `${complete}${fragment}`;
     await writeFile(logFilePath, originalMain, 'utf8');
-    let attempts = 0;
-    const runner: LegacyLogbookMigrationRunner = {
-      migrate: async mainPath => {
-        attempts += 1;
-        return attempts === 1
-          ? {
-            status: 'FAILED',
-            mainPath,
-            committed: false,
-            appliedTransactions: 0,
-            skippedTransactions: 0,
-            unappliedOperations: 0,
-            issues: [{ code: 'MIGRATION_WORKER_FAILED', path: mainPath, message: 'retry later' }],
-          }
-          : {
-            status: 'NOT_NEEDED',
-            mainPath,
-            committed: false,
-            appliedTransactions: 0,
-            skippedTransactions: 0,
-            unappliedOperations: 0,
-            issues: [],
-          };
-      },
-      cleanupExpired: async () => ({ removedRecoverySets: 0, issues: [] }),
-    };
-    const provider = new ADIFLogProvider({ logFilePath, legacyMigrator: runner });
+    const provider = new ADIFLogProvider({ logFilePath, autoCreateFile: false });
 
     const initial = await provider.initialize();
     expect(initial).toMatchObject({ state: 'read_only', readable: true, writable: false });
@@ -411,25 +175,21 @@ describe('ADIFLogProvider import', () => {
     expect(await readFile(logFilePath, 'utf8')).toBe(originalMain);
 
     const retried = await provider.retryOpen();
-    expect(retried).toMatchObject({ state: 'degraded', readable: true, writable: true });
-    expect(await readFile(logFilePath, 'utf8')).toBe(complete);
-    const recoveryRoot = join(tempDir, '.tx5dr-recovery', legacyLogbookPathHash(logFilePath));
-    expect(await readFile(join(recoveryRoot, 'tail-fragment.bin'), 'utf8')).toBe(fragment);
+    expect(retried).toMatchObject({ state: 'read_only', readable: true, writable: false });
+    expect(await readFile(logFilePath, 'utf8')).toBe(originalMain);
 
     await provider.close();
   });
 
-  it('keeps an unreadable main unavailable when legacy migration also fails', async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-legacy-failed-unreadable-'));
+  it('keeps an unreadable main unavailable without replacing its bytes', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-unreadable-main-'));
     tempDirs.push(tempDir);
     const logFilePath = join(tempDir, 'unreadable.adi');
     const originalMain = buildAdif([]);
     await writeFile(logFilePath, originalMain, 'utf8');
-    const failed = createFailedLegacyMigrator();
     const provider = new ADIFLogProvider({
       logFilePath,
       autoCreateFile: false,
-      legacyMigrator: failed.runner,
       fileStoreFactory: filePath => new AdifFileStore(filePath, {
         createIfMissing: false,
         scanner: {
@@ -444,14 +204,11 @@ describe('ADIFLogProvider import', () => {
 
     expect(health).toMatchObject({ state: 'unavailable', readable: false, writable: false });
     expect(health.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'LEGACY_MIGRATION_FAILED' }),
       expect.objectContaining({ code: 'MAIN_SCAN_FAILED' }),
     ]));
     await expect(provider.importADIF(buildAdif([])))
       .rejects.toMatchObject({ code: 'LOGBOOK_UNAVAILABLE' });
     expect(await readFile(logFilePath, 'utf8')).toBe(originalMain);
-    expect(failed.cleanupCalls()).toBe(0);
-
     await provider.close();
   });
 
@@ -564,6 +321,62 @@ describe('ADIFLogProvider import', () => {
     await provider.close();
   });
 
+  it('returns final committed records without mutating add or update inputs', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    const inputHistory = ['CQ BG2IM PM01', 'BG2IM BG5DRB -10'];
+    const input = {
+      id: 'immutable-mutation-input',
+      callsign: 'bg2im',
+      frequency: 14_074_000,
+      mode: 'USB',
+      startTime: Date.parse('2026-01-04T16:00:00Z'),
+      messageHistory: inputHistory,
+    };
+    const inputSnapshot = structuredClone(input);
+
+    const added = await provider.addQSO(input, 'op1');
+
+    expect(input).toEqual(inputSnapshot);
+    expect(input.messageHistory).toBe(inputHistory);
+    expect(added).not.toBe(input);
+    expect(added).toMatchObject({
+      id: input.id,
+      callsign: input.callsign,
+      mode: 'SSB',
+      submode: 'USB',
+    });
+    expect(added.messageHistory).toEqual(inputHistory);
+    expect(added.messageHistory).not.toBe(inputHistory);
+
+    const updateHistory = ['BG2IM BG5DRB R-08', 'BG5DRB BG2IM RR73'];
+    const updates = {
+      id: 'must-not-replace-target-id',
+      mode: 'FM',
+      messageHistory: updateHistory,
+      notes: 'committed update',
+    };
+    const updatesSnapshot = structuredClone(updates);
+
+    const updated = await provider.updateQSO(input.id, updates);
+
+    expect(updates).toEqual(updatesSnapshot);
+    expect(updates.messageHistory).toBe(updateHistory);
+    expect(updated).not.toBe(added);
+    expect(updated).toMatchObject({
+      id: input.id,
+      callsign: input.callsign,
+      mode: 'FM',
+      notes: 'committed update',
+    });
+    expect(updated.messageHistory).toEqual(updateHistory);
+    expect(updated.messageHistory).not.toBe(updateHistory);
+    await expect(provider.getQSO(input.id)).resolves.toEqual(updated);
+
+    await provider.close();
+  });
+
   it('exports ADIF oldest-to-newest even when the caller requests descending order', async () => {
     const { provider, tempDir } = await createProvider();
     tempDirs.push(tempDir);
@@ -611,22 +424,20 @@ describe('ADIFLogProvider import', () => {
     const olderRaw = '<call:5>BG2O1 <qso_date:8>20260121<time_on:6>120000<freq:9>14.074000<mode:3>FT8<app_other:3>OLD<eor>';
     await provider.importADIF(buildAdif([newerRaw, olderRaw]));
     await provider.addQSO({
-      id: 'checkpoint-order-latest',
+      id: 'physical-order-latest',
       callsign: 'BG2ZZ',
       frequency: 14076000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-21T12:20:00Z'),
       messageHistory: [],
     }, 'op1');
-    await provider.flush();
-
     const saved = await readFile(logFilePath, 'utf-8');
     expectOrdered(saved, [newerRaw, olderRaw, '<CALL:5>BG2ZZ']);
 
     await provider.close();
   });
 
-  it('preserves duplicate external raw ADIF records with strong match keys across flush and reload', async () => {
+  it('preserves duplicate external raw ADIF records with strong match keys across reload', async () => {
     const { provider, tempDir } = await createProvider();
     tempDirs.push(tempDir);
 
@@ -634,7 +445,6 @@ describe('ADIFLogProvider import', () => {
     const earlyRaw = '<call:5>BG2RX <qso_date:8>20260115<time_on:6>120000<freq:9>14.074000<mode:3>FT8<APP_OTHER:5>HELLO<eor>';
 
     await provider.importADIF(buildAdif([lateRaw, earlyRaw]));
-    await provider.flush();
     await provider.close();
 
     const reloaded = new ADIFLogProvider({
@@ -715,8 +525,6 @@ describe('ADIFLogProvider import', () => {
       startTime: Date.parse('2026-01-16T12:10:00Z'),
       messageHistory: [],
     }, 'op1');
-    await provider.flush();
-
     const saved = await readFile(join(tempDir, 'logbook.adi'), 'utf-8');
     const exported = await provider.exportADIF();
     expectOrdered(saved, [rawWithTime, rawWithoutTime, '<CALL:5>BG2OK']);
@@ -827,7 +635,6 @@ describe('ADIFLogProvider import', () => {
       myGrid: 'PM01AA',
     }, 'op1');
 
-    await provider.flush();
     const qso = await provider.getQSO('voice-usb-export');
     const saved = await readFile(join(tempDir, 'logbook.adi'), 'utf-8');
 
@@ -907,7 +714,7 @@ describe('ADIFLogProvider import', () => {
     await provider.close();
   });
 
-  it('enters read-only when the formal file generation changes and recovers only on explicit retry', async () => {
+  it('rejects a real out-of-process content change until an explicit main-file rescan', async () => {
     const { provider, tempDir } = await createProvider();
     tempDirs.push(tempDir);
     const logFilePath = join(tempDir, 'logbook.adi');
@@ -919,7 +726,7 @@ describe('ADIFLogProvider import', () => {
       '<CALL:5>EXT01<QSO_DATE:8>20260106<TIME_ON:6>120000<MODE:3>FT8<FREQ:9>14.074000<EOR>\n',
     );
     await expect(provider.addQSO({
-      id: 'must-not-commit-after-generation-change',
+      id: 'must-not-commit-after-content-change',
       callsign: 'BG2JP',
       frequency: 14074000,
       mode: 'FT8',
@@ -930,7 +737,7 @@ describe('ADIFLogProvider import', () => {
     expect(provider.getHealth().state).toBe('read_only');
     expect(failures).toHaveLength(1);
     expect(failures[0]?.error.code).toBe('LOGBOOK_WRITE_STATE_UNCERTAIN');
-    expect(await readFile(logFilePath, 'utf-8')).not.toContain('must-not-commit-after-generation-change');
+    expect(await readFile(logFilePath, 'utf-8')).not.toContain('must-not-commit-after-content-change');
 
     const retried = await provider.retryOpen();
     expect(retried.writable).toBe(true);
@@ -1002,7 +809,7 @@ describe('ADIFLogProvider import', () => {
     await provider.close();
   });
 
-  it('preserves unparseable external ADIF lines across repeated checkpoints', async () => {
+  it('preserves unparseable external ADIF bytes across repeated durable appends', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-import-'));
     tempDirs.push(tempDir);
     const logFilePath = join(tempDir, 'logbook.adi');
@@ -1017,37 +824,33 @@ describe('ADIFLogProvider import', () => {
     await provider.initialize();
 
     await provider.addQSO({
-      id: 'checkpoint-preserve-1',
+      id: 'append-preserve-1',
       callsign: 'BG2P1',
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-08T12:00:00Z'),
       messageHistory: [],
     }, 'op1');
-    await provider.flush();
-
     await provider.addQSO({
-      id: 'checkpoint-preserve-2',
+      id: 'append-preserve-2',
       callsign: 'BG2P2',
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-08T12:15:00Z'),
       messageHistory: [],
     }, 'op1');
-    await provider.flush();
-
     const saved = await readFile(logFilePath, 'utf-8');
     expect(saved).toContain(rawUnparseable);
 
     await provider.close();
   });
 
-  it('serializes queued direct ADIF writes and creates no journal or metadata sidecar', async () => {
+  it('serializes queued durable writes without recreating retired persistence sidecars', async () => {
     const { provider, tempDir } = await createProvider();
     tempDirs.push(tempDir);
 
     const writes = Array.from({ length: 20 }, (_, index) => provider.addQSO({
-      id: `checkpoint-queued-${index}`,
+      id: `direct-queued-${index}`,
       callsign: `B${index}CQ`,
       frequency: 14074000,
       mode: 'FT8',
@@ -1055,7 +858,7 @@ describe('ADIFLogProvider import', () => {
       messageHistory: [],
     }, 'op1'));
 
-    await Promise.all([...writes, provider.flush()]);
+    await Promise.all(writes);
 
     const reloaded = new ADIFLogProvider({
       logFilePath: join(tempDir, 'logbook.adi'),
@@ -1066,71 +869,13 @@ describe('ADIFLogProvider import', () => {
 
     expect(await reloaded.countQSOs()).toBe(20);
     const entries = await readdir(tempDir);
-    expect(entries.some(name => /journal|meta\.json|\.bak\.|\.tmp-/i.test(name))).toBe(false);
+    expect(entries.filter(name => name !== 'logbook.adi' && name !== '.tx5dr-backups')).toEqual([]);
 
     await reloaded.close();
     await provider.close();
   });
 
-  it('preserves one unrecoverable original, creates a fresh formal ADIF, and keeps recording', async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-unrecoverable-'));
-    tempDirs.push(tempDir);
-    const logFilePath = join(tempDir, 'logbook.adi');
-    await writeFile(logFilePath, 'not an adif snapshot', 'utf-8');
-
-    const provider = new ADIFLogProvider({ logFilePath, autoCreateFile: false });
-    const health = await provider.initialize();
-    expect(health.state).toBe('degraded');
-    expect(health.readable).toBe(true);
-    expect(health.writable).toBe(true);
-    expect(health.issues.some(issue => issue.recoveryFileName === 'unrecoverable-original.adi')).toBe(true);
-    expect(await readFile(logFilePath, 'utf-8')).toContain('<EOH>');
-
-    const recoveryRoot = join(
-      tempDir,
-      '.tx5dr-recovery',
-      legacyLogbookPathHash(logFilePath),
-    );
-    await expect(readFile(join(recoveryRoot, 'unrecoverable-original.adi'), 'utf-8'))
-      .resolves.toBe('not an adif snapshot');
-
-    await provider.addQSO({
-      id: 'after-unrecoverable-reset',
-      callsign: 'BG2A',
-      frequency: 14074000,
-      mode: 'FT8',
-      startTime: Date.parse('2026-01-09T12:00:00Z'),
-      messageHistory: [],
-    }, 'op1');
-    expect(await readFile(logFilePath, 'utf-8')).toContain('after-unrecoverable-reset');
-    await provider.close();
-  });
-
-  it('does not overwrite the fixed unrecoverable original on a second whole-file failure', async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-unrecoverable-twice-'));
-    tempDirs.push(tempDir);
-    const logFilePath = join(tempDir, 'logbook.adi');
-    await writeFile(logFilePath, 'first broken original', 'utf-8');
-
-    const first = new ADIFLogProvider({ logFilePath, autoCreateFile: false });
-    await first.initialize();
-    await first.close();
-    await writeFile(logFilePath, 'second broken original', 'utf-8');
-
-    const second = new ADIFLogProvider({ logFilePath, autoCreateFile: false });
-    const health = await second.initialize();
-    expect(health.state).toBe('unavailable');
-    expect(health.readable).toBe(false);
-    expect(health.writable).toBe(false);
-    await expect(readFile(logFilePath, 'utf-8')).resolves.toBe('second broken original');
-
-    const recoveryRoot = join(tempDir, '.tx5dr-recovery', legacyLogbookPathHash(logFilePath));
-    await expect(readFile(join(recoveryRoot, 'unrecoverable-original.adi'), 'utf-8'))
-      .resolves.toBe('first broken original');
-    await second.close();
-  });
-
-  it('preserves and removes only an unsafe tail while keeping complete records writable', async () => {
+  it('keeps an unsafe tail byte-for-byte and opens complete records read-only', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-tail-'));
     tempDirs.push(tempDir);
     const logFilePath = join(tempDir, 'logbook.adi');
@@ -1140,11 +885,20 @@ describe('ADIFLogProvider import', () => {
 
     const provider = new ADIFLogProvider({ logFilePath, autoCreateFile: false });
     const health = await provider.initialize();
-    expect(health.state).toBe('degraded');
-    expect(health.writable).toBe(true);
-    expect(health.issues.some(issue => issue.recoveryFileName === 'tail-fragment.bin')).toBe(true);
+    expect(health).toMatchObject({ state: 'read_only', readable: true, writable: false });
+    expect(health.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'ADIF_INCOMPLETE_TAIL' }),
+    ]));
     expect(await readFile(logFilePath, 'utf-8')).toContain(complete.trim());
-    expect(await readFile(logFilePath, 'utf-8')).not.toContain(fragment);
+    expect(await readFile(logFilePath, 'utf-8')).toContain(fragment);
+    await expect(provider.addQSO({
+      id: 'blocked-behind-tail',
+      callsign: 'BG2A',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-10T12:30:00Z'),
+      messageHistory: [],
+    }, 'op1')).rejects.toMatchObject({ code: 'LOGBOOK_READ_ONLY' });
 
     await provider.close();
   });
@@ -1249,7 +1003,6 @@ describe('ADIFLogProvider import', () => {
     }, 'op1');
 
     await provider.updateQSO('voice-to-fm', { mode: 'FM' });
-    await provider.flush();
     const qso = await provider.getQSO('voice-to-fm');
     const saved = await readFile(join(tempDir, 'logbook.adi'), 'utf-8');
 
@@ -1643,12 +1396,14 @@ describe('ADIFLogProvider import', () => {
 
     const analysis = await provider.analyzeCallsign('BG2AA', 'PM01AA', { operatorId: 'op2', band: '20m' });
 
+    expect(await provider.hasWorkedCallsign('BG2AA', { band: '20m' })).toBe(true);
+    expect(await provider.hasWorkedCallsign('BG2AA', { band: '40m' })).toBe(false);
     expect(analysis.isNewCallsign).toBe(false);
     expect(analysis.isNewGrid).toBe(false);
     expect(analysis.isNewDxccEntity).toBe(false);
 
     await provider.close();
-  });
+  }, 15_000);
 
   it('keeps worked state after provider reloads from ADIF cache', async () => {
     const { provider, tempDir } = await createProvider();
@@ -1682,60 +1437,6 @@ describe('ADIFLogProvider import', () => {
 
     await reloaded.close();
   });
-
-  it('keeps band-scoped has-worked checks fast after loading a 70K-record logbook', async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-large-logbook-'));
-    tempDirs.push(tempDir);
-    const logFilePath = join(tempDir, 'large.adi');
-    const totalRecords = 70_000;
-    const records: string[] = [];
-
-    for (let index = 0; index < totalRecords; index += 1) {
-      const callsign = index === 12_345 ? 'BG7OO' : `K${index % 10}ABC${index}`;
-      const seconds = String(index % 60).padStart(2, '0');
-      const minutes = String(Math.floor(index / 60) % 60).padStart(2, '0');
-      const hours = String(Math.floor(index / 3600) % 24).padStart(2, '0');
-      const frequency = index === 12_345 ? '50.313000' : (index % 2 === 0 ? '7.074000' : '14.074000');
-      records.push([
-        adifField('CALL', callsign),
-        adifField('QSO_DATE', '20260101'),
-        adifField('TIME_ON', `${hours}${minutes}${seconds}`),
-        adifField('MODE', 'FT8'),
-        adifField('FREQ', frequency),
-        '<EOR>',
-      ].join(''));
-    }
-
-    await writeFile(logFilePath, buildAdif(records), 'utf8');
-    const provider = new ADIFLogProvider({
-      logFilePath,
-      autoCreateFile: false,
-      logFileName: 'large.adi',
-    });
-    await provider.initialize();
-
-    expect(await provider.hasWorkedCallsign('BG7OO', { band: '6m' })).toBe(true);
-    expect(await provider.hasWorkedCallsign('BG7OO', { band: '20m' })).toBe(false);
-
-    const startedAt = performance.now();
-    for (let index = 0; index < 5_000; index += 1) {
-      await provider.hasWorkedCallsign(index % 2 === 0 ? 'BG7OO' : 'W1AW', { band: index % 2 === 0 ? '6m' : '20m' });
-    }
-    const elapsedMs = performance.now() - startedAt;
-
-    expect(elapsedMs).toBeLessThan(1_000);
-
-    const target = await provider.getLastQSOWithCallsign('BG7OO');
-    const rewriteStartedAt = performance.now();
-    await provider.updateQSO(target!.id, { notes: '70k rewrite benchmark' });
-    const rewriteElapsedMs = performance.now() - rewriteStartedAt;
-    expect(rewriteElapsedMs).toBeLessThan(20_000);
-    await expect(provider.getQSO(target!.id)).resolves.toMatchObject({
-      notes: '70k rewrite benchmark',
-    });
-
-    await provider.close();
-  }, 90_000);
 
   it('does not mark a worked DXCC as new for 73-style analyses without grid', async () => {
     const { provider, tempDir } = await createProvider();

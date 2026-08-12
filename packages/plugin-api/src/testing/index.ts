@@ -45,6 +45,7 @@ import type {
   PSKReporterConfig,
   RealtimeSettings,
   StationInfo,
+  QSORecord,
 } from '@tx5dr/contracts';
 import { FT8MessageType } from '../ft8-message-type.js';
 
@@ -244,7 +245,7 @@ export function createMockOperatorControl(
     highlightCallsign(): void {},
     hasWorkedCallsign: async () => false,
     isTargetBeingWorkedByOthers: () => false,
-    recordQSO(): void {},
+    async recordQSO(record: QSORecord): Promise<QSORecord> { return record; },
     notifySlotsUpdated(): void {},
     notifyStateChanged(): void {},
     ...overrides,
@@ -294,13 +295,29 @@ export function createMockRadioControl(
 export function createMockLogbookAccess(
   overrides?: Partial<LogbookAccess>,
 ): LogbookAccess {
+  const commit = async (record: QSORecord): Promise<QSORecord> => ({
+    ...record,
+    messageHistory: [...record.messageHistory],
+  });
+  const update = async (
+    qsoId: string,
+    updates: Partial<QSORecord>,
+  ): Promise<QSORecord> => commit({
+    callsign: updates.callsign ?? 'N0CALL',
+    frequency: updates.frequency ?? 14_074_000,
+    mode: updates.mode ?? 'FT8',
+    startTime: updates.startTime ?? 0,
+    messageHistory: updates.messageHistory ?? [],
+    ...updates,
+    id: qsoId,
+  });
   const callsignAccess = {
     callsign: 'N0CALL',
     getLogBookId: async () => 'logbook-N0CALL',
     queryQSOs: async () => [],
     countQSOs: async () => 0,
-    addQSO: async () => {},
-    updateQSO: async () => {},
+    addQSO: commit,
+    updateQSO: update,
     getStatistics: async () => null,
     notifyUpdated: async () => {},
   };
@@ -312,8 +329,8 @@ export function createMockLogbookAccess(
     queryQSOs: async () => [],
     countQSOs: async () => 0,
     forCallsign: () => callsignAccess,
-    addQSO: async () => {},
-    updateQSO: async () => {},
+    addQSO: commit,
+    updateQSO: update,
     notifyUpdated: async () => {},
     ...overrides,
   };

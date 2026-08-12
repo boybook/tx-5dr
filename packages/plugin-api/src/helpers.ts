@@ -309,7 +309,7 @@ export interface OperatorControl {
   /**
    * Records a completed QSO through the host logbook pipeline.
    */
-  recordQSO(record: QSORecord): void;
+  recordQSO(record: QSORecord): Promise<QSORecord>;
 
   /**
    * Pushes updated slot text content to the frontend operator view.
@@ -451,24 +451,27 @@ export interface QSOQueryFilter {
 /**
  * Callsign-bound view over a single logbook.
  *
- * The host resolves the concrete logbook lazily on each operation, which keeps
- * the handle valid even if the underlying logbook is created or reloaded later.
+ * The host resolves an already registered concrete logbook on each operation,
+ * which keeps the handle valid across reloads without implicitly creating data.
  */
 export interface CallsignLogbookAccess {
   /** Normalized callsign that scopes this accessor. */
   readonly callsign: string;
 
-  /** Returns the resolved logbook id, or null when no logbook exists yet. */
+  /** Returns the resolved logbook id, or null when no logbook is registered. */
   getLogBookId(): Promise<string | null>;
 
   /** Queries QSO records matching the given filter. */
   queryQSOs(filter: QSOQueryFilter): Promise<import('@tx5dr/contracts').QSORecord[]>;
   /** Counts QSO records matching the given filter. */
   countQSOs(filter?: QSOQueryFilter): Promise<number>;
-  /** Adds a new QSO record to this callsign's logbook. */
-  addQSO(record: import('@tx5dr/contracts').QSORecord): Promise<void>;
-  /** Updates partial fields of an existing QSO record. */
-  updateQSO(qsoId: string, updates: Partial<import('@tx5dr/contracts').QSORecord>): Promise<void>;
+  /** Adds a QSO and resolves with the final record after durable commit. */
+  addQSO(record: import('@tx5dr/contracts').QSORecord): Promise<import('@tx5dr/contracts').QSORecord>;
+  /** Updates a QSO and resolves with the final record after durable commit. */
+  updateQSO(
+    qsoId: string,
+    updates: Partial<import('@tx5dr/contracts').QSORecord>,
+  ): Promise<import('@tx5dr/contracts').QSORecord>;
   /** Returns current statistics for this callsign's logbook. */
   getStatistics(): Promise<import('@tx5dr/contracts').LogBookStatistics | null>;
   /** Notifies the frontend that this callsign's logbook changed. */
@@ -504,10 +507,13 @@ export interface LogbookAccess {
 
   // === Write ===
 
-  /** Adds a new QSO record. Deduplication is the caller's responsibility. */
-  addQSO(record: import('@tx5dr/contracts').QSORecord): Promise<void>;
-  /** Updates partial fields of an existing QSO record (e.g. QSL status). */
-  updateQSO(qsoId: string, updates: Partial<import('@tx5dr/contracts').QSORecord>): Promise<void>;
+  /** Adds a QSO and resolves with the final record after durable commit. */
+  addQSO(record: import('@tx5dr/contracts').QSORecord): Promise<import('@tx5dr/contracts').QSORecord>;
+  /** Updates a QSO and resolves with the final record after durable commit. */
+  updateQSO(
+    qsoId: string,
+    updates: Partial<import('@tx5dr/contracts').QSORecord>,
+  ): Promise<import('@tx5dr/contracts').QSORecord>;
 
   // === Notification ===
 

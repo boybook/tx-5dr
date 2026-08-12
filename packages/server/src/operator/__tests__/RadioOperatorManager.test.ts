@@ -110,16 +110,32 @@ async function invokeRecordQSO(manager: RadioOperatorManager, payload: { operato
   await handler!(payload);
 }
 
+function automaticQSO(id: string, callsign = 'N0CALL'): QSORecord {
+  return {
+    id,
+    callsign,
+    frequency: 14_074_000,
+    mode: 'FT8',
+    startTime: Date.parse('2026-04-05T13:00:00.000Z'),
+    messageHistory: [],
+    myCallsign: 'BG5DRB',
+  };
+}
+
 function attachQSOHookSpy(manager: RadioOperatorManager) {
   const notifyQSOComplete = vi.fn().mockResolvedValue(undefined);
   const autoSync = vi.fn();
+  const interruptOperatorTransmission = vi.fn().mockResolvedValue(undefined);
   manager.setPluginManager({
     notifyQSOComplete,
+    getOperatorRuntimeStatus: vi.fn(() => undefined),
+    resetOperatorPluginRuntime: vi.fn(),
+    interruptOperatorTransmission,
     logbookSyncHost: {
       onQSOComplete: autoSync,
     },
   } as any);
-  return { notifyQSOComplete, autoSync };
+  return { notifyQSOComplete, autoSync, interruptOperatorTransmission };
 }
 
 function mockMaxSameTransmissionCount(limit: number) {
@@ -814,6 +830,138 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       operatorId: 'op1',
       error: expect.objectContaining({ code: 'LOGBOOK_WRITE_FAILED', message: 'disk full' }),
     }));
+  });
+
+  it('pauses on the first failure and retains exactly one unsaved attempt', async () => {
+    const provider = {
+      addQSO: vi.fn().mockRejectedValue(new Error('disk full')),
+      updateQSO: vi.fn(),
+      getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+      getStatistics: vi.fn(),
+    };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      callsign: 'BG5DRB',
+    });
+    const operator = await addBasicOperator(manager, 'op1', 'BG5DRB');
+    const addedSpy = vi.fn();
+    const updatedSpy = vi.fn();
+    const failedSpy = vi.fn();
+    eventEmitter.on('qsoRecordAdded', addedSpy);
+    eventEmitter.on('qsoRecordUpdated', updatedSpy);
+    eventEmitter.on('logbookWriteFailed', failedSpy);
+    const { notifyQSOComplete, autoSync, interruptOperatorTransmission } = attachQSOHookSpy(manager);
+
+    await invokeRecordQSO(manager, { operatorId: 'op1', qsoRecord: automaticQSO('failed-1') });
+    expect(interruptOperatorTransmission).toHaveBeenCalledOnce();
+    expect(interruptOperatorTransmission).toHaveBeenCalledWith('op1');
+    await invokeRecordQSO(manager, { operatorId: 'op1', qsoRecord: automaticQSO('failed-2', 'JA1AAA') });
+
+    expect(operator.isTransmitting).toBe(false);
+    expect(operator.isLogbookPersistenceBlocked).toBe(true);
+    operator.start();
+    expect(operator.isTransmitting).toBe(false);
+    expect(provider.addQSO).toHaveBeenCalledTimes(1);
+    expect(manager.listUnsavedQsos('log-1')).toHaveLength(1);
+    expect(manager.listUnsavedQsos('log-1')[0]).toMatchObject({ callsign: 'N0CALL' });
+    expect(failedSpy).toHaveBeenCalledTimes(1);
+    expect(addedSpy).not.toHaveBeenCalled();
+    expect(updatedSpy).not.toHaveBeenCalled();
+    expect(autoSync).not.toHaveBeenCalled();
+    expect(notifyQSOComplete).not.toHaveBeenCalled();
+  });
+
+  it('retries the exact completed candidate captured by the first failed write', async () => {
+    const provider = {
+      addQSO: vi.fn()
+        .mockRejectedValueOnce(new Error('disk full'))
+        .mockImplementationOnce(async (record: QSORecord) => ({ ...record, id: 'persisted-1' })),
+      updateQSO: vi.fn(),
+      getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+      getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 1 }),
+    };
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      callsign: 'BG5DRB',
+    });
+    await addBasicOperator(manager, 'op1', 'BG5DRB');
+    attachQSOHookSpy(manager);
+
+    await invokeRecordQSO(manager, {
+      operatorId: 'op1',
+      qsoRecord: automaticQSO('failed-1', 'n0call'),
+    });
+    const firstCandidate = provider.addQSO.mock.calls[0]![0] as QSORecord;
+    const [attempt] = manager.listUnsavedQsos('log-1');
+
+    await manager.retryUnsavedQso('log-1', attempt!.attemptId);
+    const retriedCandidate = provider.addQSO.mock.calls[1]![0] as QSORecord;
+
+    expect(retriedCandidate).toEqual(firstCandidate);
+    expect(retriedCandidate).toMatchObject({ callsign: 'N0CALL' });
+  });
+
+  it('retries the retained attempt without creating a second pending record', async () => {
+    const provider = {
+      addQSO: vi.fn()
+        .mockRejectedValueOnce(new Error('disk full'))
+        .mockImplementation(async (record: QSORecord) => ({ ...record, id: 'persisted-1' })),
+      updateQSO: vi.fn(),
+      getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+      getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 1 }),
+    };
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      callsign: 'BG5DRB',
+    });
+    const operator = await addBasicOperator(manager, 'op1', 'BG5DRB');
+    attachQSOHookSpy(manager);
+
+    await invokeRecordQSO(manager, { operatorId: 'op1', qsoRecord: automaticQSO('failed-1') });
+    const [attempt] = manager.listUnsavedQsos('log-1');
+    expect(attempt).toBeDefined();
+
+    await expect(manager.retryUnsavedQso('log-1', attempt!.attemptId)).resolves.toMatchObject({ id: 'persisted-1' });
+    expect(manager.listUnsavedQsos('log-1')).toEqual([]);
+    expect(operator.isLogbookPersistenceBlocked).toBe(false);
+    expect(operator.isTransmitting).toBe(false);
+    expect(provider.addQSO).toHaveBeenCalledTimes(2);
+  });
+
+  it('coalesces concurrent explicit retries and keeps automatic operation stopped', async () => {
+    let resolveRetry!: (record: QSORecord) => void;
+    const provider = {
+      addQSO: vi.fn()
+        .mockRejectedValueOnce(new Error('disk full'))
+        .mockImplementationOnce(() => new Promise<QSORecord>((resolve) => {
+          resolveRetry = resolve;
+        })),
+      updateQSO: vi.fn(),
+      getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+      getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 1 }),
+    };
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      callsign: 'BG5DRB',
+    });
+    const operator = await addBasicOperator(manager, 'op1', 'BG5DRB');
+    attachQSOHookSpy(manager);
+
+    await invokeRecordQSO(manager, { operatorId: 'op1', qsoRecord: automaticQSO('failed-1') });
+    const [attempt] = manager.listUnsavedQsos('log-1');
+    const firstRetry = manager.retryUnsavedQso('log-1', attempt!.attemptId);
+    const secondRetry = manager.retryUnsavedQso('log-1', attempt!.attemptId);
+    await vi.waitFor(() => expect(provider.addQSO).toHaveBeenCalledTimes(2));
+    resolveRetry({ ...automaticQSO('persisted-1'), id: 'persisted-1' });
+
+    await expect(Promise.all([firstRetry, secondRetry])).resolves.toEqual([
+      expect.objectContaining({ id: 'persisted-1' }),
+      expect.objectContaining({ id: 'persisted-1' }),
+    ]);
+    expect(manager.listUnsavedQsos('log-1')).toEqual([]);
+    expect(operator.isLogbookPersistenceBlocked).toBe(false);
+    expect(operator.isTransmitting).toBe(false);
+    expect(provider.addQSO).toHaveBeenCalledTimes(2);
   });
 
   it.each([

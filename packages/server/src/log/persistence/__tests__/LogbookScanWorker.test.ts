@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
-import { appendFileSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFileSync, truncateSync, utimesSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -18,6 +18,24 @@ import {
 
 function adifRecord(call = 'BG5DR'): string {
   return `<CALL:${call.length}>${call}<QSO_DATE:8>20260810<TIME_ON:6>010203<MODE:3>FT8<FREQ:9>14.074000<EOR>`;
+}
+
+function incidentRegressionFixture(recordCount = 77): Buffer {
+  const lines = ['TX-5DR incident regression<ADIF_VER:5>3.1.4<EOH>'];
+  for (let index = 0; index < recordCount; index += 1) {
+    const callsign = `T${String(index).padStart(5, '0')}`;
+    const id = `incident-${String(index).padStart(3, '0')}`;
+    const comment = index % 9 === 0 ? `Android snapshot ${index} <EOR> text` : `snapshot-${index}`;
+    lines.push(
+      `<CALL:${callsign.length}>${callsign}`
+      + `<APP_TX5DR_ID:${id.length}>${id}`
+      + '<QSO_DATE:8>20260810'
+      + `<TIME_ON:6>${String(100000 + index).padStart(6, '0')}`
+      + '<MODE:3>FT8<FREQ:9>14.074000'
+      + `<COMMENT:${Buffer.byteLength(comment)}>${comment}<EOR>`,
+    );
+  }
+  return Buffer.from(`${lines.join('\r\n')}\r\n`);
 }
 
 function fakeProcess(): LogbookScanProcess {
@@ -65,6 +83,36 @@ describe('LogbookScanWorker', () => {
     expect(first.scan.records[0]?.fields).toEqual([]);
     expect(first.recordProjections[0]?.qso).toMatchObject({ callsign: 'BG5DR' });
     expect(containsBuffer(first)).toBe(false);
+  });
+
+  it('keeps the content generation stable across metadata-only changes', async () => {
+    const filePath = await tempFile(`${adifRecord()}\n`);
+    const first = await scanLogbookFileInline(filePath);
+    const future = new Date(Date.now() + 60_000);
+
+    await utimes(filePath, future, future);
+    const second = await scanLogbookFileInline(filePath);
+
+    expect(second.generation.mtimeMs).not.toBe(first.generation.mtimeMs);
+    expect(second.generation.token).toBe(first.generation.token);
+    expect(second.generation.contentHash).toBe(first.generation.contentHash);
+    expect(second.generation.scanHash).toBe(first.generation.scanHash);
+  });
+
+  it('keeps the desensitized 77-record production incident healthy across metadata drift', async () => {
+    const filePath = await tempFile(incidentRegressionFixture());
+    const first = await scanLogbookFileInline(filePath);
+    const past = new Date(Date.now() - 120_000);
+
+    await utimes(filePath, past, past);
+    const second = await scanLogbookFileInline(filePath);
+
+    expect(second.scan.records).toHaveLength(77);
+    expect(second.recordProjections).toHaveLength(77);
+    expect(second.scan.issues).toEqual([]);
+    expect(second.scan.incompleteTailRange).toBeUndefined();
+    expect(second.scan.safeEnd).toBe(second.scan.byteLength);
+    expect(second.generation.token).toBe(first.generation.token);
   });
 
   it('matches the byte codec across chunk boundaries without retaining the source file', async () => {
@@ -137,16 +185,60 @@ describe('LogbookScanWorker', () => {
     expect(recordProgress).toEqual([1000, 1001]);
   });
 
-  it('rejects a file that changes while its stream is being read', async () => {
-    const filePath = await tempFile(Buffer.alloc(2 * 1024 * 1024, 0x20));
+  it('keeps the fixed starting EOF snapshot when the open file grows during scanning', async () => {
+    const initial = Buffer.alloc(2 * 1024 * 1024, 0x20);
+    const appended = `${adifRecord()}\n`;
+    const filePath = await tempFile(initial);
+    let changed = false;
+
+    const scanned = await scanLogbookFileInline(filePath, (event) => {
+      if (!changed && event.phase === 'read' && event.bytesRead >= 1024 * 1024) {
+        changed = true;
+        appendFileSync(filePath, appended);
+      }
+    });
+
+    expect(scanned.scan.byteLength).toBe(initial.length);
+    expect(scanned.generation.size).toBe(initial.length);
+    expect(scanned.scan.records).toHaveLength(0);
+    await expect(scanLogbookFileInline(filePath)).resolves.toMatchObject({
+      scan: { records: [expect.any(Object)] },
+      generation: { size: initial.length + Buffer.byteLength(appended) },
+    });
+  });
+
+  it('rejects a fixed snapshot that is truncated before all starting bytes can be read', async () => {
+    const initialSize = 2 * 1024 * 1024;
+    const truncatedSize = 1024 * 1024;
+    const filePath = await tempFile(Buffer.alloc(initialSize, 0x20));
     let changed = false;
 
     await expect(scanLogbookFileInline(filePath, (event) => {
+      if (!changed && event.phase === 'read' && event.bytesRead >= truncatedSize) {
+        changed = true;
+        truncateSync(filePath, truncatedSize);
+      }
+    })).rejects.toMatchObject({
+      code: 'LOGBOOK_SNAPSHOT_INCOMPLETE',
+      expectedBytes: initialSize,
+      actualBytes: truncatedSize,
+    });
+  });
+
+  it('does not reject metadata drift while reading the same open file', async () => {
+    const filePath = await tempFile(Buffer.alloc(2 * 1024 * 1024, 0x20));
+    let changed = false;
+
+    const scanned = await scanLogbookFileInline(filePath, (event) => {
       if (!changed && event.phase === 'read' && event.bytesRead >= 1024 * 1024) {
         changed = true;
-        appendFileSync(filePath, adifRecord());
+        const future = new Date(Date.now() + 120_000);
+        utimesSync(filePath, future, future);
       }
-    })).rejects.toMatchObject({ code: 'LOGBOOK_FILE_CHANGED_DURING_SCAN' });
+    });
+
+    expect(scanned.scan.byteLength).toBe(2 * 1024 * 1024);
+    expect(scanned.generation.size).toBe(2 * 1024 * 1024);
   });
 
   it('kills a child that makes no progress for the configured timeout', async () => {

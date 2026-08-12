@@ -37,7 +37,7 @@ export interface LogbookSourceAdapter {
   read(range: AdifByteRange): Buffer;
 }
 
-/** Memory-only adapter used by tests, import parsing, and legacy migration. */
+/** Memory-only adapter used by tests and import parsing. */
 export class BufferLogbookSourceAdapter implements LogbookSourceAdapter {
   private readonly source: Buffer;
 

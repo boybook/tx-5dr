@@ -1,10 +1,21 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import type { Readable } from 'node:stream';
 import { createLogger } from '../utils/logger.js';
 import {
   LogBookListResponseSchema,
   LogBookDetailResponseSchema,
   LogBookActionResponseSchema,
   LogbookRecoveryRetryResponseSchema,
+  LogbookBackupStatusResponseSchema,
+  LogbookRestorePreflightResponseSchema,
+  LogbookUnsavedQsoRetryResponseSchema,
+  LogbookUnsavedQsoDiscardResponseSchema,
+  CreateLogbookBackupRequestSchema,
+  PrepareLogbookRestoreRequestSchema,
+  RestoreLogbookRequestSchema,
+  LogbookConditionalMutationHeadersSchema,
   LogBookImportResponseSchema,
   CreateLogBookRequestSchema,
   UpdateLogBookRequestSchema,
@@ -20,6 +31,7 @@ import {
   getFourCharacterGrid,
   UserRole,
   type LogBookInfo,
+  type LogbookBackupStatus,
   type CreateLogBookRequest,
   type UpdateLogBookRequest,
   type ConnectOperatorToLogBookRequest,
@@ -36,9 +48,11 @@ import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { gridToCoordinates, LogbookOperationError, LogQueryOptions } from "@tx5dr/core";
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
-import { requireRole, requireLogbookAccess } from '../auth/authPlugin.js';
+import { requireRole, requireExistingLogbookAccess } from '../auth/authPlugin.js';
+import { AuthManager } from '../auth/AuthManager.js';
 import { normalizeCallsign } from '../utils/callsign.js';
 import { detectLogImportFormat, normalizeImportText } from '../log/logImportUtils.js';
+import { safeBackupErrorMessage } from '../log/backup/AdifBackupService.js';
 
 const logger = createLogger('LogbooksRoute');
 const LOGBOOK_IMPORT_FILE_SIZE_LIMIT_MB = 100;
@@ -59,8 +73,347 @@ function toLogbookRouteError(error: unknown, fallbackCode: RadioErrorCode): Radi
       context: error.systemCode ? { systemCode: error.systemCode } : undefined,
     });
   }
+  if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+    && error.code.startsWith('LOGBOOK_')) {
+    const systemCode = findSystemErrorCode(error);
+    const message = isBackupOperationCode(error.code)
+      ? safeBackupErrorMessage(error.code)
+      : error instanceof Error ? error.message : error.code;
+    return new RadioError({
+      code: error.code as RadioErrorCode,
+      message,
+      userMessage: message,
+      severity: RadioErrorSeverity.ERROR,
+      suggestions: ['Refresh the logbook recovery status and retry'],
+      cause: error,
+      context: systemCode ? { systemCode } : undefined,
+    });
+  }
   return RadioError.from(error, fallbackCode);
 }
+
+function isBackupOperationCode(code: string): boolean {
+  return code === 'LOGBOOK_BACKUP_UNAVAILABLE'
+    || code === 'LOGBOOK_BACKUP_FAILED'
+    || code === 'LOGBOOK_BACKUP_CHANGED'
+    || code === 'LOGBOOK_RESTORE_PRECONDITION_FAILED'
+    || code === 'LOGBOOK_REVISION_MISMATCH'
+    || code === 'LOGBOOK_MAINTENANCE';
+}
+
+function toBackupRouteError(error: unknown): RadioError {
+  if (error instanceof Error && error.name === 'ZodError') {
+    return new RadioError({
+      code: RadioErrorCode.INVALID_OPERATION,
+      message: 'Invalid logbook backup request',
+      userMessage: 'Check the backup request and try again',
+      severity: RadioErrorSeverity.WARNING,
+      cause: error,
+    });
+  }
+
+  const routed = toLogbookRouteError(error, RadioErrorCode.LOGBOOK_BACKUP_FAILED);
+  if (
+    routed.code === RadioErrorCode.AUTH_FAILED
+    || routed.code === RadioErrorCode.LOGBOOK_PRECONDITION_REQUIRED
+    || routed.code === RadioErrorCode.LOGBOOK_IDEMPOTENCY_CONFLICT
+  ) return routed;
+
+  const code = isBackupOperationCode(routed.code)
+    ? routed.code
+    : RadioErrorCode.LOGBOOK_BACKUP_FAILED;
+  const systemCode = findSystemErrorCode(error) ?? (
+    typeof routed.context?.systemCode === 'string' ? routed.context.systemCode : undefined
+  );
+  const message = safeBackupErrorMessage(code);
+  return new RadioError({
+    code: code as RadioErrorCode,
+    message,
+    userMessage: message,
+    severity: RadioErrorSeverity.ERROR,
+    suggestions: ['Refresh the logbook recovery status and retry'],
+    cause: error,
+    context: systemCode ? { systemCode } : undefined,
+  });
+}
+
+function safeBackupStatusForClient(status: LogbookBackupStatus): LogbookBackupStatus {
+  return {
+    ...status,
+    mainHealth: {
+      ...status.mainHealth,
+      issues: status.mainHealth.issues.map(issue => ({
+        ...issue,
+        message: safeLogbookHealthIssueMessage(issue.code),
+      })),
+    },
+    error: status.error
+      ? {
+          code: status.error.code,
+          message: safeBackupErrorMessage(status.error.code),
+        }
+      : undefined,
+  };
+}
+
+function safeLogbookHealthIssueMessage(code: string): string {
+  switch (code) {
+    case 'ADIF_INCOMPLETE_TAIL':
+      return 'The ADIF has an incomplete tail; complete records remain readable but writes are paused.';
+    case 'MAIN_FILE_MISSING':
+      return 'The formal ADIF file is missing.';
+    case 'MAIN_SCAN_FAILED':
+      return 'The formal ADIF file could not be read safely.';
+    case 'GENERATION_CONFLICT':
+      return 'The ADIF content changed outside this process; reopen the logbook before writing.';
+    default:
+      return 'The logbook reported a persistence issue.';
+  }
+}
+
+function findSystemErrorCode(error: unknown): string | undefined {
+  let current = error;
+  const seen = new Set<object>();
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    const candidate = current as { code?: unknown; cause?: unknown };
+    if (typeof candidate.code === 'string' && !candidate.code.startsWith('LOGBOOK_')) {
+      return candidate.code;
+    }
+    current = candidate.cause;
+  }
+  return undefined;
+}
+
+function toLogBookInfo(logBook: NonNullable<FastifyRequest['logBookInstance']>): LogBookInfo {
+  return {
+    id: logBook.id,
+    name: logBook.name,
+    description: logBook.description,
+    fileName: path.basename(logBook.filePath),
+    storageKind: logBook.storageKind,
+    createdAt: logBook.createdAt,
+    lastUsed: logBook.lastUsed,
+    isActive: logBook.isActive,
+    health: logBook.provider.getHealth(),
+  };
+}
+
+function boundLogBook(request: FastifyRequest) {
+  if (!request.logBookInstance) {
+    throw new RadioError({
+      code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+      message: 'Logbook not found',
+      userMessage: 'Logbook not found',
+      severity: RadioErrorSeverity.WARNING,
+    });
+  }
+  return request.logBookInstance;
+}
+
+function requireConditionalHeaders(request: FastifyRequest) {
+  const revision = request.headers['if-match'];
+  const idempotencyKey = request.headers['idempotency-key'];
+  if (typeof revision !== 'string' || typeof idempotencyKey !== 'string') {
+    throw new RadioError({
+      code: RadioErrorCode.LOGBOOK_PRECONDITION_REQUIRED,
+      message: 'If-Match and Idempotency-Key headers are required',
+      userMessage: 'Refresh the logbook status before retrying this operation',
+      severity: RadioErrorSeverity.WARNING,
+    });
+  }
+  return LogbookConditionalMutationHeadersSchema.parse({ revision, idempotencyKey });
+}
+
+function requireIdempotencyKey(request: FastifyRequest): string {
+  const idempotencyKey = request.headers['idempotency-key'];
+  if (typeof idempotencyKey !== 'string') {
+    throw new RadioError({
+      code: RadioErrorCode.LOGBOOK_PRECONDITION_REQUIRED,
+      message: 'Idempotency-Key header is required',
+      userMessage: 'Retry this operation from the refreshed logbook page',
+      severity: RadioErrorSeverity.WARNING,
+    });
+  }
+  return LogbookConditionalMutationHeadersSchema.shape.idempotencyKey.parse(idempotencyKey);
+}
+
+function idempotencyScope(request: FastifyRequest, logBookId: string, operation: string): string {
+  return `${request.authUser?.tokenId ?? 'anonymous'}:${logBookId}:${operation}`;
+}
+
+function revisionSummary(revision?: string): string | undefined {
+  return revision
+    ? createHash('sha256').update(revision).digest('hex').slice(0, 16)
+    : undefined;
+}
+
+function auditLogbookOperation(
+  request: FastifyRequest,
+  logBookId: string,
+  operation: string,
+  outcome: 'requested' | 'succeeded' | 'failed',
+  details: {
+    startedAt: number;
+    revision?: string;
+    operationId?: string;
+    bytes?: number;
+    records?: number;
+    errorCode?: string;
+  },
+): void {
+  logger.info('Logbook recovery audit', {
+    requestId: request.id,
+    tokenId: request.authUser?.tokenId ?? null,
+    role: request.authUser?.role ?? null,
+    logBookId,
+    operation,
+    outcome,
+    operationId: details.operationId,
+    revision: revisionSummary(details.revision),
+    bytes: details.bytes,
+    records: details.records,
+    durationMs: Date.now() - details.startedAt,
+    remoteAddress: request.ip,
+    errorCode: details.errorCode,
+  });
+}
+
+function assertRestoreConfirmation(logBookId: string, confirmation: string, callsigns: string[]): void {
+  const confirmed = confirmation === logBookId || callsigns.includes(confirmation);
+  if (!confirmed) {
+    throw new RadioError({
+      code: RadioErrorCode.LOGBOOK_RESTORE_PRECONDITION_FAILED,
+      message: 'Restore confirmation does not match this logbook',
+      userMessage: 'Enter the exact logbook ID or associated callsign to confirm recovery',
+      severity: RadioErrorSeverity.WARNING,
+    });
+  }
+}
+
+function assertCurrentAdmin(tokenId: string): Promise<void> {
+  const authManager = AuthManager.getInstance();
+  if (!authManager.isAuthEnabled()) return Promise.resolve();
+  const permissions = authManager.getTokenCurrentPermissions(tokenId);
+  if (!authManager.isTokenStillValid(tokenId) || permissions?.role !== UserRole.ADMIN) {
+    return Promise.reject(new RadioError({
+      code: RadioErrorCode.AUTH_FAILED,
+      message: 'Administrator authorization changed before the logbook replace step',
+      userMessage: 'Administrator access is required to restore this logbook',
+      severity: RadioErrorSeverity.WARNING,
+    }));
+  }
+  return Promise.resolve();
+}
+
+function requireAdminPreHandler() {
+  const roleCheck = requireRole(UserRole.ADMIN);
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    if (request.authUser?.role !== UserRole.ADMIN) {
+      return roleCheck(request, reply);
+    }
+  };
+}
+
+function sendBackupDownload(reply: FastifyReply, download: {
+  stream: NodeJS.ReadableStream;
+  fileName: string;
+  size: number;
+  close(): Promise<void>;
+}, onSettled: (outcome: 'succeeded' | 'failed', error?: unknown) => void): FastifyReply {
+  const safeFileName = download.fileName.replace(/[^A-Za-z0-9._-]/g, '_');
+  let settled = false;
+  const settle = (outcome: 'succeeded' | 'failed', error?: unknown) => {
+    if (settled) return;
+    settled = true;
+    void download.close().catch(error => logger.warn('Failed to close logbook download handle', {
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    onSettled(outcome, error);
+  };
+  reply.raw.once('finish', () => settle('succeeded'));
+  reply.raw.once('close', () => {
+    if (!reply.raw.writableFinished) {
+      settle('failed', new Error('The backup download connection closed before completion'));
+    }
+  });
+  (download.stream as Readable).once('error', error => settle('failed', error));
+  reply.header('Content-Type', 'application/octet-stream');
+  reply.header('Content-Length', download.size);
+  reply.header('Content-Disposition', `attachment; filename="${safeFileName}"`);
+  reply.header('Cache-Control', 'no-store');
+  reply.header('X-Content-Type-Options', 'nosniff');
+  try {
+    return reply.send(download.stream);
+  } catch (error) {
+    settle('failed', error);
+    throw error;
+  }
+}
+
+function operatorScopeForRequest(request: FastifyRequest, logBookId: string): ReadonlySet<string> | undefined {
+  return request.authUser?.role === UserRole.ADMIN
+    ? undefined
+    : new Set(request.authUser?.operatorIds.filter(operatorId =>
+      DigitalRadioEngine.getInstance().operatorManager.getLogManager()
+        .getOperatorIdsForLogBook(logBookId).includes(operatorId)) ?? []);
+}
+
+type IdempotencyEntry = {
+  fingerprint: string;
+  expiresAt: number;
+  promise: Promise<unknown>;
+};
+
+const IDEMPOTENCY_TTL_MS = 10 * 60 * 1000;
+const IDEMPOTENCY_MAX_ENTRIES = 256;
+
+class LogbookIdempotencyCache {
+  private readonly entries = new Map<string, IdempotencyEntry>();
+
+  run<T>(scope: string, key: string, payload: unknown, operation: () => Promise<T>): Promise<T> {
+    this.prune();
+    const fingerprint = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+    const cacheKey = `${scope}:${key}`;
+    const existing = this.entries.get(cacheKey);
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) {
+        return Promise.reject(new RadioError({
+          code: RadioErrorCode.LOGBOOK_IDEMPOTENCY_CONFLICT,
+          message: 'The idempotency key was already used with a different request',
+          userMessage: 'Refresh the recovery status and retry',
+          severity: RadioErrorSeverity.WARNING,
+        }));
+      }
+      return existing.promise as Promise<T>;
+    }
+
+    // Cache rejected promises as well: a retry with the same key must replay
+    // the same result instead of executing a destructive operation again.
+    const promise = operation();
+    this.entries.set(cacheKey, {
+      fingerprint,
+      expiresAt: Date.now() + IDEMPOTENCY_TTL_MS,
+      promise,
+    });
+    this.prune();
+    return promise;
+  }
+
+  private prune(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.entries) {
+      if (entry.expiresAt <= now) this.entries.delete(key);
+    }
+    while (this.entries.size > IDEMPOTENCY_MAX_ENTRIES) {
+      const firstKey = this.entries.keys().next().value;
+      if (!firstKey) break;
+      this.entries.delete(firstKey);
+    }
+  }
+}
+
+const logbookIdempotency = new LogbookIdempotencyCache();
 
 const BAND_FREQUENCY_RANGES: Record<string, { min: number; max: number }> = {
   '160m': { min: 1800000, max: 2000000 },
@@ -162,35 +515,9 @@ function createImportFileTooLargeError(): RadioError {
 export async function logbookRoutes(fastify: FastifyInstance) {
   const digitalRadioEngine = DigitalRadioEngine.getInstance();
   const logManager = digitalRadioEngine.operatorManager.getLogManager();
-
-  const resolveLogBookOrThrow = async (id: string) => {
-    let logBook = logManager.getLogBook(id);
-
-    if (!logBook) {
-      try {
-        logBook = await logManager.getOrCreateLogBookByCallsign(id);
-      } catch (error) {
-        logger.warn(`Failed to create log book for callsign ${id}:`, error);
-      }
-    }
-
-    if (!logBook) {
-      throw new RadioError({
-        code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-        message: `Logbook ${id} does not exist`,
-        userMessage: 'Logbook not found',
-        severity: RadioErrorSeverity.WARNING,
-        suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
-      });
-    }
-
-    return logBook;
-  };
-
-  // 日志本归属校验 preHandler（复用于所有带 :id 的路由）
-  const logbookAccessCheck = requireLogbookAccess(logManager);
+  const existingLogbookAccess = requireExistingLogbookAccess(logManager);
   // ADMIN only preHandler
-  const adminOnly = requireRole(UserRole.ADMIN);
+  const adminOnly = requireAdminPreHandler();
 
   /**
    * 获取所有日志本列表（按角色过滤）
@@ -216,16 +543,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       }
 
       // 转换为API格式
-      const logBookInfos: LogBookInfo[] = logBooks.map(book => ({
-        id: book.id,
-        name: book.name,
-        description: book.description,
-        filePath: book.filePath,
-        createdAt: book.createdAt,
-        lastUsed: book.lastUsed,
-        isActive: book.isActive,
-        health: book.provider.getHealth(),
-      }));
+      const logBookInfos: LogBookInfo[] = logBooks.map(toLogBookInfo);
 
       const response = LogBookListResponseSchema.parse({
         success: true,
@@ -243,10 +561,9 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 获取特定日志本详情
    * GET /api/logbooks/:id
    */
-  fastify.get<{ Params: { id: string } }>('/:id', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+  fastify.get<{ Params: { id: string } }>('/:id', { preHandler: [existingLogbookAccess] }, async (request, reply) => {
     try {
-      const { id } = request.params;
-      const logBook = await resolveLogBookOrThrow(id);
+      const logBook = boundLogBook(request);
 
       const health = logBook.provider.getHealth();
       const statistics = health.readable
@@ -263,21 +580,14 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       const connectedOperators = digitalRadioEngine.operatorManager.getAllOperators()
         .filter(op => {
           const logBookId = logManager.getOperatorLogBookId(op.config.id);
-          return logBookId === id;
+          return logBookId === logBook.id;
         })
         .map(op => op.config.id);
 
       const response = LogBookDetailResponseSchema.parse({
         success: true,
         data: {
-          id: logBook.id,
-          name: logBook.name,
-          description: logBook.description,
-          filePath: logBook.filePath,
-          createdAt: logBook.createdAt,
-          lastUsed: logBook.lastUsed,
-          isActive: logBook.isActive,
-          health,
+          ...toLogBookInfo(logBook),
           statistics: {
             totalQSOs: statistics.totalQSOs || 0,
             totalOperators: connectedOperators.length,
@@ -297,13 +607,258 @@ export async function logbookRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.post<{ Params: { id: string } }>('/:id/recovery/retry', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+  fastify.post<{ Params: { id: string } }>('/:id/recovery/retry', { preHandler: [existingLogbookAccess] }, async (request, reply) => {
     try {
-      const logBook = await resolveLogBookOrThrow(request.params.id);
-      const health = await logBook.provider.retryOpen();
-      return reply.send(LogbookRecoveryRetryResponseSchema.parse({
+      const logBook = boundLogBook(request);
+      const idempotencyKey = requireIdempotencyKey(request);
+      const response = await logbookIdempotency.run(
+        idempotencyScope(request, logBook.id, 'recovery-retry'),
+        idempotencyKey,
+        {},
+        async () => {
+          const health = await logBook.provider.retryOpen();
+          return LogbookRecoveryRetryResponseSchema.parse({
+            success: true,
+            data: { logBookId: logBook.id, health },
+          });
+        },
+      );
+      return reply.send(response);
+    } catch (error) {
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  fastify.get<{ Params: { id: string } }>('/:id/backup', { preHandler: [existingLogbookAccess] }, async (request, reply) => {
+    try {
+      const logBook = boundLogBook(request);
+      const operatorScope = operatorScopeForRequest(request, logBook.id);
+      const unsaved = digitalRadioEngine.operatorManager.listUnsavedQsos(logBook.id, operatorScope);
+      const status = await logBook.provider.getBackupStatus({
+        admin: request.authUser?.role === UserRole.ADMIN,
+        tokenId: request.authUser?.tokenId,
+        unsaved,
+      });
+      return reply.send(LogbookBackupStatusResponseSchema.parse({
         success: true,
-        data: { logBookId: logBook.id, health },
+        data: safeBackupStatusForClient(status),
+      }));
+    } catch (error) {
+      throw toBackupRouteError(error);
+    }
+  });
+
+  fastify.post<{ Params: { id: string }; Body: unknown }>('/:id/backup', { preHandler: [existingLogbookAccess] }, async (request, reply) => {
+    const startedAt = Date.now();
+    const logBook = boundLogBook(request);
+    let idempotencyKey: string | undefined;
+    try {
+      const body = CreateLogbookBackupRequestSchema.parse(request.body ?? {});
+      idempotencyKey = requireIdempotencyKey(request);
+      auditLogbookOperation(request, logBook.id, 'backup-create', 'requested', { startedAt });
+      const response = await logbookIdempotency.run(
+        idempotencyScope(request, logBook.id, 'backup-create'),
+        idempotencyKey,
+        body,
+        async () => {
+          await logBook.provider.createBackup();
+          const operatorScope = operatorScopeForRequest(request, logBook.id);
+          const status = await logBook.provider.getBackupStatus({
+            admin: request.authUser?.role === UserRole.ADMIN,
+            tokenId: request.authUser?.tokenId,
+            unsaved: digitalRadioEngine.operatorManager.listUnsavedQsos(logBook.id, operatorScope),
+          });
+          return LogbookBackupStatusResponseSchema.parse({
+            success: true,
+            data: safeBackupStatusForClient(status),
+          });
+        },
+      );
+      auditLogbookOperation(request, logBook.id, 'backup-create', 'succeeded', {
+        startedAt,
+        revision: response.data.revision,
+        operationId: response.data.operation?.id,
+        bytes: response.data.latest?.size,
+        records: response.data.latest?.recordCount,
+      });
+      return reply.send(response);
+    } catch (error) {
+      const routed = toBackupRouteError(error);
+      auditLogbookOperation(request, logBook.id, 'backup-create', 'failed', {
+        startedAt,
+        errorCode: routed.code,
+      });
+      throw routed;
+    }
+  });
+
+  fastify.get<{ Params: { id: string } }>('/:id/backup/download', { preHandler: [existingLogbookAccess] }, async (request, reply) => {
+    const startedAt = Date.now();
+    const logBook = boundLogBook(request);
+    try {
+      auditLogbookOperation(request, logBook.id, 'backup-download', 'requested', { startedAt });
+      const download = await logBook.provider.openBackupDownload('latest');
+      return sendBackupDownload(reply, download, (outcome) => {
+        auditLogbookOperation(request, logBook.id, 'backup-download', outcome, {
+          startedAt,
+          bytes: download.size,
+          errorCode: outcome === 'failed' ? 'LOGBOOK_BACKUP_FAILED' : undefined,
+        });
+      });
+    } catch (error) {
+      const routed = toBackupRouteError(error);
+      auditLogbookOperation(request, logBook.id, 'backup-download', 'failed', {
+        startedAt,
+        errorCode: routed.code,
+      });
+      throw routed;
+    }
+  });
+
+  fastify.post<{ Params: { id: string }; Body: unknown }>('/:id/backup/restore/prepare', {
+    preHandler: [existingLogbookAccess, adminOnly],
+  }, async (request, reply) => {
+    const startedAt = Date.now();
+    const logBook = boundLogBook(request);
+    try {
+      const body = PrepareLogbookRestoreRequestSchema.parse(request.body ?? {});
+      const headers = requireConditionalHeaders(request);
+      const tokenId = request.authUser!.tokenId;
+      auditLogbookOperation(request, logBook.id, 'restore-prepare', 'requested', {
+        startedAt,
+        revision: headers.revision,
+      });
+      const preflight = await logbookIdempotency.run(
+        idempotencyScope(request, logBook.id, 'restore-prepare'),
+        headers.idempotencyKey,
+        { body, revision: headers.revision },
+        () => logBook.provider.prepareBackupRestore(tokenId, headers.revision),
+      );
+      auditLogbookOperation(request, logBook.id, 'restore-prepare', 'succeeded', {
+        startedAt,
+        revision: preflight.revision,
+        bytes: preflight.backup.size,
+        records: preflight.backup.recordCount,
+      });
+      return reply.send(LogbookRestorePreflightResponseSchema.parse({ success: true, data: preflight }));
+    } catch (error) {
+      const routed = toBackupRouteError(error);
+      auditLogbookOperation(request, logBook.id, 'restore-prepare', 'failed', {
+        startedAt,
+        errorCode: routed.code,
+      });
+      throw routed;
+    }
+  });
+
+  fastify.post<{ Params: { id: string }; Body: unknown }>('/:id/backup/restore', {
+    preHandler: [existingLogbookAccess, adminOnly],
+  }, async (request, reply) => {
+    const startedAt = Date.now();
+    const logBook = boundLogBook(request);
+    try {
+      const body = RestoreLogbookRequestSchema.parse(request.body ?? {});
+      const headers = requireConditionalHeaders(request);
+      const tokenId = request.authUser!.tokenId;
+      assertRestoreConfirmation(logBook.id, body.confirmation, logManager.getCallsignsForLogBook(logBook.id));
+      auditLogbookOperation(request, logBook.id, 'restore', 'requested', {
+        startedAt,
+        revision: headers.revision,
+      });
+      const status = await logbookIdempotency.run(
+        idempotencyScope(request, logBook.id, 'restore'),
+        headers.idempotencyKey,
+        { body, revision: headers.revision },
+        () => logBook.provider.restoreBackup({
+          tokenId,
+          preflightToken: body.preflightToken,
+          expectedRevision: headers.revision,
+          beforeReplace: () => assertCurrentAdmin(tokenId),
+        }),
+      );
+      auditLogbookOperation(request, logBook.id, 'restore', 'succeeded', {
+        startedAt,
+        revision: status.revision,
+        operationId: status.operation?.id,
+        bytes: status.latest?.size,
+        records: status.latest?.recordCount,
+      });
+      return reply.send(LogbookBackupStatusResponseSchema.parse({
+        success: true,
+        data: safeBackupStatusForClient(status),
+      }));
+    } catch (error) {
+      const routed = toBackupRouteError(error);
+      auditLogbookOperation(request, logBook.id, 'restore', 'failed', {
+        startedAt,
+        errorCode: routed.code,
+      });
+      throw routed;
+    }
+  });
+
+  fastify.get<{ Params: { id: string } }>('/:id/backup/pre-restore/download', {
+    preHandler: [existingLogbookAccess, adminOnly],
+  }, async (request, reply) => {
+    const startedAt = Date.now();
+    const logBook = boundLogBook(request);
+    try {
+      auditLogbookOperation(request, logBook.id, 'pre-restore-download', 'requested', { startedAt });
+      const download = await logBook.provider.openBackupDownload('pre-restore');
+      return sendBackupDownload(reply, download, (outcome) => {
+        auditLogbookOperation(request, logBook.id, 'pre-restore-download', outcome, {
+          startedAt,
+          bytes: download.size,
+          errorCode: outcome === 'failed' ? 'LOGBOOK_BACKUP_FAILED' : undefined,
+        });
+      });
+    } catch (error) {
+      const routed = toBackupRouteError(error);
+      auditLogbookOperation(request, logBook.id, 'pre-restore-download', 'failed', {
+        startedAt,
+        errorCode: routed.code,
+      });
+      throw routed;
+    }
+  });
+
+  fastify.post<{ Params: { id: string; attemptId: string } }>('/:id/unsaved-qsos/:attemptId/retry', {
+    preHandler: [existingLogbookAccess],
+  }, async (request, reply) => {
+    try {
+      const logBook = boundLogBook(request);
+      const idempotencyKey = requireIdempotencyKey(request);
+      const operatorScope = operatorScopeForRequest(request, logBook.id);
+      const record = await logbookIdempotency.run(
+        idempotencyScope(request, logBook.id, `unsaved-retry:${request.params.attemptId}`),
+        idempotencyKey,
+        { attemptId: request.params.attemptId },
+        () => digitalRadioEngine.operatorManager.retryUnsavedQso(
+          logBook.id,
+          request.params.attemptId,
+          operatorScope,
+        ),
+      );
+      return reply.send(LogbookUnsavedQsoRetryResponseSchema.parse({ success: true, data: record }));
+    } catch (error) {
+      throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  fastify.delete<{ Params: { id: string; attemptId: string } }>('/:id/unsaved-qsos/:attemptId', {
+    preHandler: [existingLogbookAccess],
+  }, async (request, reply) => {
+    try {
+      const logBook = boundLogBook(request);
+      const operatorScope = operatorScopeForRequest(request, logBook.id);
+      digitalRadioEngine.operatorManager.discardUnsavedQso(
+        logBook.id,
+        request.params.attemptId,
+        operatorScope,
+      );
+      return reply.send(LogbookUnsavedQsoDiscardResponseSchema.parse({
+        success: true,
+        data: { attemptId: request.params.attemptId },
       }));
     } catch (error) {
       throw toLogbookRouteError(error, RadioErrorCode.INVALID_OPERATION);
@@ -314,7 +869,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 创建新日志本
    * POST /api/logbooks
    */
-  fastify.post('/', async (request: FastifyRequest<{ Body: CreateLogBookRequest }>, reply: FastifyReply) => {
+  fastify.post<{ Body: CreateLogBookRequest }>('/', { preHandler: [adminOnly] }, async (request, reply) => {
     try {
       const requestData = CreateLogBookRequestSchema.parse(request.body);
       
@@ -323,16 +878,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       const response = LogBookActionResponseSchema.parse({
         success: true,
         message: 'Logbook created successfully',
-        data: {
-          id: logBook.id,
-          name: logBook.name,
-          description: logBook.description,
-          filePath: logBook.filePath,
-          createdAt: logBook.createdAt,
-          lastUsed: logBook.lastUsed,
-          isActive: logBook.isActive,
-          health: logBook.provider.getHealth(),
-        }
+        data: toLogBookInfo(logBook),
       });
 
       return reply.status(201).send(response);
@@ -346,33 +892,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 更新日志本信息
    * PUT /api/logbooks/:id
    */
-  fastify.put<{ Params: { id: string }; Body: UpdateLogBookRequest }>('/:id', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+  fastify.put<{ Params: { id: string }; Body: UpdateLogBookRequest }>('/:id', { preHandler: [existingLogbookAccess] }, async (request, reply) => {
     try {
-      const { id } = request.params;
       const updates = UpdateLogBookRequestSchema.parse(request.body);
-      
-      let logBook = logManager.getLogBook(id);
-      
-      // 如果直接ID查找失败，尝试按呼号查找或创建
-      if (!logBook) {
-        try {
-          logBook = await logManager.getOrCreateLogBookByCallsign(id);
-        } catch (error) {
-          logger.warn(`Failed to create log book for callsign ${id}:`, error);
-        }
-      }
-
-
-      if (!logBook) {
-        // 📊 Day14：资源未找到使用 RadioError
-        throw new RadioError({
-          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `Logbook ${id} does not exist`,
-          userMessage: 'Logbook not found',
-          severity: RadioErrorSeverity.WARNING,
-          suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
-        });
-      }
+      const logBook = boundLogBook(request);
 
       // 更新日志本属性
       if (updates.name !== undefined) {
@@ -388,16 +911,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       const response = LogBookActionResponseSchema.parse({
         success: true,
         message: 'Logbook updated successfully',
-        data: {
-          id: logBook.id,
-          name: logBook.name,
-          description: logBook.description,
-          filePath: logBook.filePath,
-          createdAt: logBook.createdAt,
-          lastUsed: logBook.lastUsed,
-          isActive: logBook.isActive,
-          health: logBook.provider.getHealth(),
-        }
+        data: toLogBookInfo(logBook),
       });
 
       return reply.send(response);
@@ -411,11 +925,9 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 删除日志本（仅 ADMIN）
    * DELETE /api/logbooks/:id
    */
-  fastify.delete<{ Params: { id: string } }>('/:id', { preHandler: [adminOnly] }, async (request, reply) => {
+  fastify.delete<{ Params: { id: string } }>('/:id', { preHandler: [existingLogbookAccess, adminOnly] }, async (request, reply) => {
     try {
-      const { id } = request.params;
-      
-      await logManager.deleteLogBook(id);
+      await logManager.deleteLogBook(boundLogBook(request).id);
 
       return reply.send({
         success: true,
@@ -431,9 +943,9 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 连接操作员到日志本（仅 ADMIN）
    * POST /api/logbooks/:id/connect
    */
-  fastify.post<{ Params: { id: string }; Body: ConnectOperatorToLogBookRequest }>('/:id/connect', { preHandler: [adminOnly] }, async (request, reply) => {
+  fastify.post<{ Params: { id: string }; Body: ConnectOperatorToLogBookRequest }>('/:id/connect', { preHandler: [existingLogbookAccess, adminOnly] }, async (request, reply) => {
     try {
-      const { id: logBookId } = request.params;
+      const logBookId = boundLogBook(request).id;
       const { operatorId } = ConnectOperatorToLogBookRequestSchema.parse(request.body);
       
       await digitalRadioEngine.operatorManager.connectOperatorToLogBook(operatorId, logBookId);
@@ -472,11 +984,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 查询日志本中的QSO记录
    * GET /api/logbooks/:id/qsos
    */
-  fastify.get<{ Params: { id: string }; Querystring: LogBookQSOQueryOptions }>('/:id/qsos', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+  fastify.get<{ Params: { id: string }; Querystring: LogBookQSOQueryOptions }>('/:id/qsos', { preHandler: [existingLogbookAccess] }, async (request, reply) => {
     try {
-      const { id } = request.params;
       const options = LogBookQSOQueryOptionsSchema.parse(request.query);
-      const logBook = await resolveLogBookOrThrow(id);
+      const logBook = boundLogBook(request);
 
       // 转换查询选项格式以匹配LogQueryOptions接口
       const queryOptions: LogQueryOptions = {
@@ -566,15 +1077,14 @@ export async function logbookRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.get<{ Params: { id: string }; Querystring: LogBookRecentGlobeQuery }>('/:id/recent-globe', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+  fastify.get<{ Params: { id: string }; Querystring: LogBookRecentGlobeQuery }>('/:id/recent-globe', { preHandler: [existingLogbookAccess] }, async (request, reply) => {
     try {
-      const { id } = request.params;
       const options = LogBookRecentGlobeQuerySchema.parse(request.query);
-      const logBook = await resolveLogBookOrThrow(id);
+      const logBook = boundLogBook(request);
       const startedAt = Date.now();
 
       logger.info('Building recent globe payload', {
-        logBookId: id,
+        logBookId: logBook.id,
         operatorId: options.operatorId || null,
         hours: options.hours,
         limit: options.limit,
@@ -680,7 +1190,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       });
 
       logger.info('Recent globe payload ready', {
-        logBookId: id,
+        logBookId: logBook.id,
         sourceQsoCount: recentQsos.length,
         returnedCount: items.length,
         droppedInvalidGrid,
@@ -696,11 +1206,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.get<{ Params: { id: string }; Querystring: LogBookWorkedGridQuery }>('/:id/worked-grids', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+  fastify.get<{ Params: { id: string }; Querystring: LogBookWorkedGridQuery }>('/:id/worked-grids', { preHandler: [existingLogbookAccess] }, async (request, reply) => {
     try {
-      const { id } = request.params;
       const options = LogBookWorkedGridQuerySchema.parse(request.query);
-      const logBook = await resolveLogBookOrThrow(id);
+      const logBook = boundLogBook(request);
 
       const queryOptions: LogQueryOptions = {
         orderBy: 'time',
@@ -752,33 +1261,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 导出日志本数据
    * GET /api/logbooks/:id/export
    */
-  fastify.get<{ Params: { id: string }; Querystring: LogBookExportOptions }>('/:id/export', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+  fastify.get<{ Params: { id: string }; Querystring: LogBookExportOptions }>('/:id/export', { preHandler: [existingLogbookAccess] }, async (request, reply) => {
     try {
-      const { id } = request.params;
       const options = LogBookExportOptionsSchema.parse(request.query);
-      
-      let logBook = logManager.getLogBook(id);
-      
-      // 如果直接ID查找失败，尝试按呼号查找或创建
-      if (!logBook) {
-        try {
-          logBook = await logManager.getOrCreateLogBookByCallsign(id);
-        } catch (error) {
-          logger.warn(`Failed to create log book for callsign ${id}:`, error);
-        }
-      }
-
-
-      if (!logBook) {
-        // 📊 Day14：资源未找到使用 RadioError
-        throw new RadioError({
-          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `Logbook ${id} does not exist`,
-          userMessage: 'Logbook not found',
-          severity: RadioErrorSeverity.WARNING,
-          suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
-        });
-      }
+      const logBook = boundLogBook(request);
 
       // 将LogBookExportOptions转换为LogQueryOptions
       const queryOptions: import('@tx5dr/core').LogQueryOptions = {
@@ -855,9 +1341,9 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 导入数据到日志本
    * POST /api/logbooks/:id/import
    */
-  fastify.post<{ Params: { id: string }; Body: { adifContent?: string } }>('/:id/import', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+  fastify.post<{ Params: { id: string }; Body: { adifContent?: string } }>('/:id/import', { preHandler: [existingLogbookAccess] }, async (request, reply) => {
     try {
-      const { id } = request.params;
+      const logBook = boundLogBook(request);
       let content: string | Uint8Array;
       let format: LogBookImportFormat;
 
@@ -905,28 +1391,6 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         format = payload.format;
       }
 
-      let logBook = logManager.getLogBook(id);
-
-      // 如果直接ID查找失败,尝试按呼号查找或创建
-      if (!logBook) {
-        try {
-          logBook = await logManager.getOrCreateLogBookByCallsign(id);
-        } catch (error) {
-          logger.warn(`Failed to create log book for callsign ${id}:`, error);
-        }
-      }
-
-      if (!logBook) {
-        // 📊 Day14：资源未找到使用 RadioError
-        throw new RadioError({
-          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `Logbook ${id} does not exist`,
-          userMessage: 'Logbook not found',
-          severity: RadioErrorSeverity.WARNING,
-          suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
-        });
-      }
-
       const result = format === 'csv'
         ? await logBook.provider.importCSV(typeof content === 'string' ? content : Buffer.from(content).toString('utf8'))
         : await logBook.provider.importADIF(content);
@@ -961,26 +1425,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 手动补录 QSO 记录
    * POST /api/logbooks/:id/qsos
    */
-  fastify.post<{ Params: { id: string }; Body: CreateQSORequest }>('/:id/qsos', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+  fastify.post<{ Params: { id: string }; Body: CreateQSORequest }>('/:id/qsos', { preHandler: [existingLogbookAccess] }, async (request, reply) => {
     try {
-      const { id } = request.params;
       const body = CreateQSORequestSchema.parse(request.body);
-
-      // 支持以呼号作为 id 参数（同 PUT 路由）
-      let logBook = logManager.getLogBook(id);
-      if (!logBook) {
-        try {
-          logBook = await logManager.getOrCreateLogBookByCallsign(id);
-        } catch {
-          throw new RadioError({
-            code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-            message: `Logbook ${id} does not exist`,
-            userMessage: 'Logbook not found',
-            severity: RadioErrorSeverity.WARNING,
-            suggestions: ['Check if logbook ID is correct'],
-          });
-        }
-      }
+      const logBook = boundLogBook(request);
 
       const logbookCallsign = logManager.getCallsignsForLogBook(logBook.id)[0];
       const linkedOperator = logbookCallsign
@@ -1047,32 +1495,11 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 更新单条QSO记录
    * PUT /api/logbooks/:id/qsos/:qsoId
    */
-  fastify.put<{ Params: { id: string; qsoId: string }; Body: UpdateQSORequest }>('/:id/qsos/:qsoId', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+  fastify.put<{ Params: { id: string; qsoId: string }; Body: UpdateQSORequest }>('/:id/qsos/:qsoId', { preHandler: [existingLogbookAccess] }, async (request, reply) => {
     try {
-      const { id, qsoId } = request.params;
+      const { qsoId } = request.params;
       const updates = UpdateQSORequestSchema.parse(request.body);
-
-      let logBook = logManager.getLogBook(id);
-
-      // 如果直接ID查找失败,尝试按呼号查找或创建
-      if (!logBook) {
-        try {
-          logBook = await logManager.getOrCreateLogBookByCallsign(id);
-        } catch (error) {
-          logger.warn(`Failed to create log book for callsign ${id}:`, error);
-        }
-      }
-
-      if (!logBook) {
-        // 📊 Day14：资源未找到使用 RadioError
-        throw new RadioError({
-          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `Logbook ${id} does not exist`,
-          userMessage: 'Logbook not found',
-          severity: RadioErrorSeverity.WARNING,
-          suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
-        });
-      }
+      const logBook = boundLogBook(request);
 
       const updatedQSO = await logBook.provider.updateQSO(qsoId, updates);
       const operatorId = logManager.getOperatorIdsForLogBook(logBook.id)[0] ?? '';
@@ -1112,31 +1539,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 删除单条QSO记录
    * DELETE /api/logbooks/:id/qsos/:qsoId
    */
-  fastify.delete<{ Params: { id: string; qsoId: string } }>('/:id/qsos/:qsoId', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+  fastify.delete<{ Params: { id: string; qsoId: string } }>('/:id/qsos/:qsoId', { preHandler: [existingLogbookAccess] }, async (request, reply) => {
     try {
-      const { id, qsoId } = request.params;
-
-      let logBook = logManager.getLogBook(id);
-
-      // 如果直接ID查找失败,尝试按呼号查找或创建
-      if (!logBook) {
-        try {
-          logBook = await logManager.getOrCreateLogBookByCallsign(id);
-        } catch (error) {
-          logger.warn(`Failed to create log book for callsign ${id}:`, error);
-        }
-      }
-
-      if (!logBook) {
-        // 📊 Day14：资源未找到使用 RadioError
-        throw new RadioError({
-          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `Logbook ${id} does not exist`,
-          userMessage: 'Logbook not found',
-          severity: RadioErrorSeverity.WARNING,
-          suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
-        });
-      }
+      const { qsoId } = request.params;
+      const logBook = boundLogBook(request);
 
       // 删除QSO记录
       await logBook.provider.deleteQSO(qsoId);
