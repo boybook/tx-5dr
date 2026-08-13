@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { getRadioServiceBootstrapAction } from '../radio/bootstrap';
 import { connectionReducer, initialConnectionState, initialRadioState, radioReducer } from '../radioStore';
 import type { BootstrapStatus, SystemStatus } from '@tx5dr/contracts';
+import { shouldShowServerStatusPage } from '../radio/connectionView';
 
 describe('radioStore connection reducer', () => {
   it('enters reconnecting state without clearing prior successful connection history', () => {
@@ -43,6 +44,42 @@ describe('radioStore connection reducer', () => {
     expect(disconnectedState.isReady).toBe(false);
     expect(disconnectedState.wasEverConnected).toBe(true);
     expect(disconnectedState.wasEverReady).toBe(true);
+  });
+
+  it('preserves an admission denial when the socket subsequently reports disconnected', () => {
+    const denial = {
+      reason: 'capacity_reached' as const,
+      current: 32,
+      limit: 32,
+      retryAfterMs: 15_000,
+    };
+    const deniedState = connectionReducer(initialConnectionState, {
+      type: 'disconnected',
+      payload: denial,
+    });
+
+    const finalState = connectionReducer(deniedState, { type: 'disconnected' });
+
+    expect(finalState.accessDenied).toEqual(denial);
+  });
+
+  it('shows the capacity page even after the client was previously ready', () => {
+    const readyState = connectionReducer(
+      connectionReducer(initialConnectionState, { type: 'connected' }),
+      { type: 'handshakeComplete' },
+    );
+    const deniedState = connectionReducer(readyState, {
+      type: 'disconnected',
+      payload: {
+        reason: 'ip_limit_reached',
+        current: 16,
+        limit: 16,
+        retryAfterMs: 15_000,
+      },
+    });
+
+    expect(readyState.wasEverReady).toBe(true);
+    expect(shouldShowServerStatusPage(deniedState)).toBe(true);
   });
 
   it('force reconnects when reusing an already open singleton service', () => {

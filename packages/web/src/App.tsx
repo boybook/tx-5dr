@@ -26,6 +26,7 @@ import { GlobalShortcutBridge } from './components/app/GlobalShortcutBridge';
 import { UpdateNotificationProvider } from './components/app/UpdateNotificationProvider';
 import { BootstrapStatusChip } from './components/app/BootstrapStatusChip';
 import { useLanguage } from './hooks/useLanguage';
+import { shouldShowServerStatusPage } from './store/radio/connectionView';
 
 function AppContent() {
   const { state } = useRadioState();
@@ -37,14 +38,15 @@ function AppContent() {
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const activeOperatorId = currentOperatorId || operators[0]?.id || null;
   const mainRightPanels = useVisiblePluginPanelsForSlot(activeOperatorId, 'main-right');
-
-  // 首次业务握手完成前不渲染主界面，避免组件在仅 WS open 时抢先发受保护命令。
-  if (!connectionState.wasEverReady) {
+  // 容量拒绝始终使用稳定的状态页，避免已连接过的客户端退回到通用断线蒙层。
+  // 首次业务握手完成前也不渲染主界面，避免组件抢先发受保护命令。
+  if (shouldShowServerStatusPage(connectionState)) {
     return (
       <ServerStatusPage
         isConnecting={connectionState.isConnecting || connectionState.isConnected}
         connectError={connectionState.connectError}
         radioService={connectionState.radioService}
+        accessDenied={connectionState.accessDenied}
       />
     );
   }

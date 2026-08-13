@@ -295,6 +295,7 @@ const ELECTRON_SETTINGS_FILE = 'electron-settings.json';
 interface ElectronSettings {
   closeBehavior: 'ask' | 'tray' | 'quit';
   desktopHttps?: PersistentDesktopHttpsConfig;
+  remoteAccessPreset?: 'local' | 'lan' | 'public';
   shortcuts?: ShortcutConfig;
 }
 
@@ -349,7 +350,8 @@ interface ShortcutRecordingCancelledPayload {
 
 const DEFAULT_ELECTRON_SETTINGS: ElectronSettings = {
   closeBehavior: 'ask',
-  desktopHttps: DEFAULT_DESKTOP_HTTPS_CONFIG,
+  desktopHttps: { ...DEFAULT_DESKTOP_HTTPS_CONFIG, enabled: false },
+  remoteAccessPreset: 'local',
   shortcuts: createDefaultShortcutConfig(),
 };
 
@@ -762,7 +764,11 @@ function loadElectronSettings(): ElectronSettings {
       return {
         ...DEFAULT_ELECTRON_SETTINGS,
         ...settings,
-        desktopHttps: sanitizeDesktopHttpsConfig(settings.desktopHttps),
+        desktopHttps: sanitizeDesktopHttpsConfig(settings.desktopHttps ?? DEFAULT_ELECTRON_SETTINGS.desktopHttps),
+        remoteAccessPreset: settings.remoteAccessPreset
+          // A recovered legacy object predates this preset and used the old
+          // LAN-exposed gateway defaults. Preserve that effective behavior.
+          ?? 'lan',
         shortcuts: normalizeShortcutConfig(settings.shortcuts),
       };
     },
@@ -985,12 +991,15 @@ async function ensureDesktopHttpsBeforeGatewayLaunch(context: string): Promise<v
 
 function buildWebChildEnv(serverPort: number): Record<string, string> {
   const httpsConfig = getDesktopHttpsConfig();
+  const remoteAccessPreset = loadElectronSettings().remoteAccessPreset ?? 'local';
   const env: Record<string, string> = {
     PORT: String(selectedWebPort || DEFAULT_WEB_HTTP_PORT),
     TARGET: `http://127.0.0.1:${serverPort}`,
-    PUBLIC: '1',
+    PUBLIC: remoteAccessPreset === 'local' ? '0' : '1',
+    HOST: remoteAccessPreset === 'local' ? '127.0.0.1' : '0.0.0.0',
     TX5DR_CLIENT_TOOLS_LOG_FILE: getClientToolsLogPath(),
     TX5DR_CLIENT_TOOLS_READY_FILE: getClientToolsReadyPath(),
+    TX5DR_NETWORK_ACCESS_FILE: getClientToolsReadyPath(),
     TX5DR_PORT_SCAN_STEPS: String(DEFAULT_PORT_SCAN_STEPS),
   };
 
@@ -3338,7 +3347,10 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
         TX5DR_CACHE_DIR: getAppCacheDir(),
         TX5DR_SERVER_PORT_AUTO: '1',
         TX5DR_SERVER_PORT_SCAN_STEPS: String(DEFAULT_PORT_SCAN_STEPS),
+        // The managed gateway remains the only browser-facing entrypoint.
+        TX5DR_SERVER_HOST: '127.0.0.1',
         TX5DR_SERVER_READY_FILE: getServerReadyPath(),
+        TX5DR_RUNTIME_MANAGEMENT: 'electron',
         RTC_DATA_AUDIO_UDP_PORT: process.env.RTC_DATA_AUDIO_UDP_PORT || '50110',
         RTC_DATA_AUDIO_ICE_UDP_MUX: process.env.RTC_DATA_AUDIO_ICE_UDP_MUX || '1',
       });
@@ -4103,6 +4115,45 @@ function setupIpcHandlers() {
     const settings = loadElectronSettings();
     const nextConfig = await disableDesktopHttps(settings.desktopHttps);
     return persistDesktopHttpsConfig(nextConfig);
+  });
+
+  ipcMain.handle('remoteAccess:getPreset', () => {
+    return loadElectronSettings().remoteAccessPreset ?? 'local';
+  });
+
+  ipcMain.handle('remoteAccess:applyPreset', async (_event, preset: 'local' | 'lan' | 'public') => {
+    if (!['local', 'lan', 'public'].includes(preset)) throw new Error('invalid_remote_access_preset');
+    const previous = loadElectronSettings();
+    const next: ElectronSettings = {
+      ...previous,
+      remoteAccessPreset: preset,
+      desktopHttps: sanitizeDesktopHttpsConfig({
+        ...previous.desktopHttps,
+        enabled: preset !== 'local',
+        mode: preset === 'public' && previous.desktopHttps?.mode === 'imported-pem' ? 'imported-pem' : 'self-signed',
+        redirectExternalHttp: preset !== 'local',
+      }),
+    };
+    saveElectronSettings(next);
+    try {
+      if (preset !== 'local' && next.desktopHttps?.mode === 'self-signed') {
+        const ensured = await ensureDefaultSelfSignedCertificate({
+          configDir: getAppConfigDir(),
+          hostname: getHostname(),
+          lanAddresses: getLanIpv4Addresses(),
+          existingConfig: next.desktopHttps,
+        });
+        saveElectronSettings({ ...next, desktopHttps: ensured.config });
+      }
+      if (webProcess && selectedServerPort && selectedWebPort) await restartWebGateway();
+      return { preset, https: await getDesktopHttpsStatus() };
+    } catch (error) {
+      saveElectronSettings(previous);
+      if (webProcess && selectedServerPort && selectedWebPort) {
+        try { await restartWebGateway(); } catch (rollbackError) { logger.error('remote access rollback failed', rollbackError); }
+      }
+      throw error;
+    }
   });
 
   ipcMain.handle('shortcuts:getConfig', () => {

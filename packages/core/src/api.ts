@@ -76,6 +76,8 @@ import type {
   UpdateTokenRequest,
   UpdateSelfLoginCredentialRequest,
   UpdateAuthConfigRequest,
+  RemoteAccessSecurityStatus,
+  UpdateRemoteAccessSecurityRequest,
   NetworkInfo,
   SystemLoggingSettings,
   UpdateSystemLoggingSettingsRequest,
@@ -806,6 +808,21 @@ export const api = {
         body: JSON.stringify(updates),
       },
       apiBase
+    );
+  },
+
+  async getRemoteAccessSettings(apiBase?: string): Promise<RemoteAccessSecurityStatus> {
+    return apiRequest<RemoteAccessSecurityStatus>('/auth/remote-access', undefined, apiBase);
+  },
+
+  async updateRemoteAccessSettings(
+    updates: UpdateRemoteAccessSecurityRequest,
+    apiBase?: string,
+  ): Promise<RemoteAccessSecurityStatus> {
+    return apiRequest<RemoteAccessSecurityStatus>(
+      '/auth/remote-access',
+      { method: 'PATCH', body: JSON.stringify(updates) },
+      apiBase,
     );
   },
 

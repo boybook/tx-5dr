@@ -233,6 +233,10 @@ interface ElectronAPI {
     }): Promise<DesktopHttpsStatus>;
     disable(): Promise<DesktopHttpsStatus>;
   };
+  remoteAccess?: {
+    getPreset(): Promise<'local' | 'lan' | 'public'>;
+    applyPreset(preset: 'local' | 'lan' | 'public'): Promise<{ preset: 'local' | 'lan' | 'public'; https: DesktopHttpsStatus }>;
+  };
 }
 
 declare global {

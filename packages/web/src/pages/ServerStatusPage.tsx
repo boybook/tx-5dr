@@ -4,14 +4,16 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faServer, faRotateRight, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import type { RadioService } from '../services/radioService';
+import type { WSAccessDeniedData } from '@tx5dr/contracts';
 
 interface ServerStatusPageProps {
   isConnecting: boolean;
   connectError: string | null;
   radioService: RadioService | null;
+  accessDenied?: WSAccessDeniedData | null;
 }
 
-export function ServerStatusPage({ isConnecting, connectError, radioService }: ServerStatusPageProps) {
+export function ServerStatusPage({ isConnecting, connectError, radioService, accessDenied }: ServerStatusPageProps) {
   const { t } = useTranslation();
   const [isRetrying, setIsRetrying] = useState(false);
   const [retryError, setRetryError] = useState(false);
@@ -35,6 +37,7 @@ export function ServerStatusPage({ isConnecting, connectError, radioService }: S
   };
 
   const hints: { label: string; items: string[] }[] = [];
+  const isCapacityReached = accessDenied?.reason === 'capacity_reached' || accessDenied?.reason === 'ip_limit_reached';
   if (isDev) {
     hints.push({
       label: t('common:serverStatus.hints.devTitle'),
@@ -82,10 +85,12 @@ export function ServerStatusPage({ isConnecting, connectError, radioService }: S
         {/* 标题 */}
         <div>
           <h1 className="text-xl font-semibold text-foreground">
-            {t('common:serverStatus.errorTitle')}
+            {isCapacityReached ? t('common:serverStatus.capacityTitle') : t('common:serverStatus.errorTitle')}
           </h1>
           <p className="text-default-500 text-sm mt-1">
-            {t('common:serverStatus.errorSubtitle')}
+            {isCapacityReached
+              ? t('common:serverStatus.capacitySubtitle', { current: accessDenied?.current, limit: accessDenied?.limit })
+              : t('common:serverStatus.errorSubtitle')}
           </p>
         </div>
 

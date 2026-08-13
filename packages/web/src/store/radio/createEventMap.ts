@@ -224,6 +224,9 @@ export function createRadioEventMap({
         radioService.sendHandshake(handshakeOperatorIds, handshakeSelectedOperatorId, clientInstanceId);
       }
     },
+    accessDenied: (data: unknown) => {
+      connectionDispatch({ type: 'disconnected', payload: data as import('@tx5dr/contracts').WSAccessDeniedData });
+    },
     reconnecting: (data: unknown) => {
       handshakeCompleted = false;
       pendingEnabledOperatorIds = null;

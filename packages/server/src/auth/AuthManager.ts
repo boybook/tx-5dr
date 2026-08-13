@@ -12,10 +12,14 @@ import {
   type UpdateSelfLoginCredentialRequest,
   type UpdateTokenRequest,
   type UpdateAuthConfigRequest,
+  type UpdateRemoteAccessSecurityRequest,
   type PermissionGrant,
   UserRole,
   USER_ROLE_LEVEL,
   AuthConfigSchema,
+  isSecureRemoteAccessOrigin,
+  normalizeRemoteAccessOrigin,
+  RemoteAccessSecurityConfigSchema,
 } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
@@ -90,12 +94,52 @@ export class AuthManager {
   // ===== 配置持久化 =====
 
   private async loadConfig(): Promise<void> {
+    let legacyConfigWithoutPublicViewerField = false;
+    let isNewElectronInstallation = false;
+    try {
+      const raw = JSON.parse(await fs.readFile(this.configPath, 'utf-8')) as Record<string, unknown>;
+      // Only migrate a structurally valid legacy file. A corrupt file must not
+      // turn public viewing on while JsonFileStore falls back to safe defaults.
+      AuthConfigSchema.parse(raw);
+      legacyConfigWithoutPublicViewerField = !Object.prototype.hasOwnProperty.call(raw, 'allowPublicViewing');
+    } catch (error) {
+      // A missing file is a new installation and must use the secure default.
+      isNewElectronInstallation = (error as NodeJS.ErrnoException).code === 'ENOENT'
+        && process.env.TX5DR_RUNTIME_MANAGEMENT === 'electron';
+    }
     this.configStore = new JsonFileStore<AuthConfig>(this.configPath, {
       defaultValue: () => AuthConfigSchema.parse({}),
       validate: (value) => AuthConfigSchema.parse(value),
       backups: 3,
     });
     this.config = await this.configStore.load();
+    if (isNewElectronInstallation) {
+      this.config.remoteAccess = RemoteAccessSecurityConfigSchema.parse({
+        preset: 'local',
+        maxConnections: 8,
+        maxConnectionsPerIp: 8,
+        maxPendingAuth: 8,
+      });
+      await this.saveConfig({ internal: true });
+    }
+    // Server deployments are always reachable through an external web entrypoint.
+    // A persisted local preset from an older build cannot make nginx, Docker, or
+    // the Android bridge loopback-only, so migrate it to the honest LAN preset.
+    if (process.env.TX5DR_RUNTIME_MANAGEMENT !== 'electron' && this.config.remoteAccess.preset === 'local') {
+      this.config.remoteAccess = RemoteAccessSecurityConfigSchema.parse({
+        ...this.config.remoteAccess,
+        preset: 'lan',
+        maxConnections: 32,
+        maxConnectionsPerIp: 16,
+        maxPendingAuth: 32,
+      });
+      await this.saveConfig({ internal: true });
+    }
+    if (legacyConfigWithoutPublicViewerField) {
+      this.config.allowPublicViewing = true;
+      await this.saveConfig({ internal: true });
+      logger.info('Migrated legacy public viewer default without changing effective access');
+    }
   }
 
   private async saveConfig(options: { defer?: boolean; internal?: boolean } = {}): Promise<void> {
@@ -560,6 +604,55 @@ export class AuthManager {
   getAuthConfig() {
     return {
       enabled: this.isAuthEnabled(),
+      allowPublicViewing: this.config.allowPublicViewing,
+    };
+  }
+
+  getRemoteAccessConfig() {
+    return this.config?.remoteAccess ?? RemoteAccessSecurityConfigSchema.parse({});
+  }
+
+  async updateRemoteAccessConfig(updates: UpdateRemoteAccessSecurityRequest) {
+    const { allowPublicViewing, ...securityUpdates } = updates;
+    const requestedPreset = securityUpdates.preset === 'local'
+      && process.env.TX5DR_RUNTIME_MANAGEMENT !== 'electron'
+      ? 'lan'
+      : securityUpdates.preset;
+    const effectiveSecurityUpdates = requestedPreset
+      ? { ...securityUpdates, preset: requestedPreset }
+      : securityUpdates;
+    const presetDefaults = effectiveSecurityUpdates.preset
+      ? {
+          local: { maxConnections: 8, maxConnectionsPerIp: 8, maxPendingAuth: 8 },
+          lan: { maxConnections: 32, maxConnectionsPerIp: 16, maxPendingAuth: 32 },
+          public: { maxConnections: 128, maxConnectionsPerIp: 32, maxPendingAuth: 32 },
+        }[effectiveSecurityUpdates.preset]
+      : {};
+    const nextRemoteAccess = RemoteAccessSecurityConfigSchema.parse({
+      ...this.config.remoteAccess,
+      ...presetDefaults,
+      ...effectiveSecurityUpdates,
+    });
+    if (nextRemoteAccess.preset === 'public') {
+      const normalizedOrigins = [...new Set(nextRemoteAccess.allowedOrigins.flatMap(value => {
+        const normalized = normalizeRemoteAccessOrigin(value);
+        return normalized ? [normalized] : [];
+      }))];
+      if (normalizedOrigins.length === 0) {
+        throw new AuthManagerError('PUBLIC_ORIGIN_REQUIRED', 'Managed public deployment requires at least one allowed web origin');
+      }
+      if (nextRemoteAccess.allowedOrigins.some(value => !isSecureRemoteAccessOrigin(value))) {
+        throw new AuthManagerError('PUBLIC_ORIGIN_INSECURE', 'Public web origins must use HTTPS; HTTP is limited to private or loopback addresses');
+      }
+      nextRemoteAccess.allowedOrigins = normalizedOrigins;
+    }
+    this.config.remoteAccess = nextRemoteAccess;
+    if (allowPublicViewing !== undefined) {
+      this.config.allowPublicViewing = allowPublicViewing;
+    }
+    await this.saveConfig();
+    return {
+      ...this.config.remoteAccess,
       allowPublicViewing: this.config.allowPublicViewing,
     };
   }

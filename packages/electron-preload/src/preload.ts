@@ -496,6 +496,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       redirectExternalHttp?: boolean;
     }): Promise<DesktopHttpsStatus> => ipcRenderer.invoke('https:applySettings', update),
     disable: (): Promise<DesktopHttpsStatus> => ipcRenderer.invoke('https:disable'),
+  },
+  remoteAccess: {
+    getPreset: (): Promise<'local' | 'lan' | 'public'> => ipcRenderer.invoke('remoteAccess:getPreset'),
+    applyPreset: (preset: 'local' | 'lan' | 'public') => ipcRenderer.invoke('remoteAccess:applyPreset', preset),
   }
 });
 
@@ -585,6 +589,10 @@ declare global {
           redirectExternalHttp?: boolean;
         }): Promise<DesktopHttpsStatus>;
         disable(): Promise<DesktopHttpsStatus>;
+      };
+      remoteAccess: {
+        getPreset(): Promise<'local' | 'lan' | 'public'>;
+        applyPreset(preset: 'local' | 'lan' | 'public'): Promise<{ preset: 'local' | 'lan' | 'public'; https: DesktopHttpsStatus }>;
       };
     };
   }

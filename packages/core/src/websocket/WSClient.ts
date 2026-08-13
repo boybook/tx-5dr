@@ -1,4 +1,4 @@
-import { WSMessageType, ModeDescriptor, type SpectrumKind, type WSSelectedFrame } from '@tx5dr/contracts';
+import { WSMessageType, ModeDescriptor, type SpectrumKind, type WSSelectedFrame, type WSAccessDeniedData } from '@tx5dr/contracts';
 import { WSMessageHandler } from './WSMessageHandler.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -27,6 +27,7 @@ export class WSClient extends WSMessageHandler {
   private reconnectAttempt = 0;
   private manualDisconnect = false;
   private connectPromise: Promise<void> | null = null;
+  private lastAccessDenied: WSAccessDeniedData | null = null;
 
   private static readonly RECONNECT_BASE_DELAY_MS = 1000;
   private static readonly RECONNECT_MAX_DELAY_MS = 8000;
@@ -54,6 +55,9 @@ export class WSClient extends WSMessageHandler {
     });
     this.onWSEvent('disconnected', () => {
       this.sessionReady = false;
+    });
+    this.onWSEvent('accessDenied', (data: WSAccessDeniedData) => {
+      this.lastAccessDenied = data;
     });
   }
 
@@ -140,6 +144,7 @@ export class WSClient extends WSMessageHandler {
         this.isConnecting = false;
         this.connectPromise = null;
         this.reconnectAttempt = 0;
+        this.lastAccessDenied = null;
         this.startHeartbeat();
         this.emitWSEvent('connected');
         resolve();
@@ -169,11 +174,11 @@ export class WSClient extends WSMessageHandler {
         // Only the current socket's close should drive global reconnect state.
         if (!isCurrent) return;
 
-        if (this.manualDisconnect || replacedBySelf || event.code === 4001) {
+        if (this.manualDisconnect || replacedBySelf || event.code === 4001 || event.code === 4403 || event.code === 4408 || event.code === 4429) {
           if (replacedBySelf || event.code === 4001) {
             logger.info('Connection replaced by newer connection, will not reconnect');
           }
-          this.emitWSEvent('disconnected');
+          this.emitWSEvent('disconnected', this.lastAccessDenied ?? undefined);
           return;
         }
 
@@ -513,6 +518,10 @@ export class WSClient extends WSMessageHandler {
    */
   getAuthToken(): string | null {
     return this.jwt;
+  }
+
+  getLastAccessDenied(): WSAccessDeniedData | null {
+    return this.lastAccessDenied;
   }
 
   /**

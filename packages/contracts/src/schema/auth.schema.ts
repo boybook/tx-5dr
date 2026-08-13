@@ -224,11 +224,76 @@ export const UpdateAuthConfigRequestSchema = z.object({
 
 export type UpdateAuthConfigRequest = z.infer<typeof UpdateAuthConfigRequestSchema>;
 
+export const RemoteAccessPresetSchema = z.enum(['local', 'lan', 'public']);
+export type RemoteAccessPreset = z.infer<typeof RemoteAccessPresetSchema>;
+
+export function isPrivateRemoteAccessHostname(hostname: string): boolean {
+  if (['localhost', '127.0.0.1', '::1'].includes(hostname)) return true;
+  if (hostname.includes(':')) {
+    const normalized = hostname.toLowerCase();
+    return normalized.startsWith('fc') || normalized.startsWith('fd') || normalized.startsWith('fe8')
+      || normalized.startsWith('fe9') || normalized.startsWith('fea') || normalized.startsWith('feb');
+  }
+  const parts = hostname.split('.').map(Number);
+  if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  return parts[0] === 10
+    || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
+    || (parts[0] === 192 && parts[1] === 168)
+    || (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127)
+    || (parts[0] === 169 && parts[1] === 254);
+}
+
+export function normalizeRemoteAccessOrigin(value: string): string | null {
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+export function isSecureRemoteAccessOrigin(value: string): boolean {
+  const normalized = normalizeRemoteAccessOrigin(value);
+  if (!normalized) return false;
+  const parsed = new URL(normalized);
+  return parsed.protocol === 'https:' || isPrivateRemoteAccessHostname(parsed.hostname);
+}
+
+export const RemoteAccessSecurityConfigSchema = z.object({
+  preset: RemoteAccessPresetSchema.default('lan'),
+  allowedOrigins: z.array(z.string().url().refine(
+    value => normalizeRemoteAccessOrigin(value) !== null,
+    'Expected a complete HTTP(S) origin without a path',
+  )).max(32).default([]),
+  maxConnections: z.number().int().min(1).max(512).default(32),
+  maxConnectionsPerIp: z.number().int().min(1).max(128).default(16),
+  maxPendingAuth: z.number().int().min(1).max(128).default(32),
+  authTimeoutMs: z.number().int().min(3_000).max(60_000).default(10_000),
+  handshakeTimeoutMs: z.number().int().min(3_000).max(60_000).default(10_000),
+});
+export type RemoteAccessSecurityConfig = z.infer<typeof RemoteAccessSecurityConfigSchema>;
+
+export const UpdateRemoteAccessSecurityRequestSchema = RemoteAccessSecurityConfigSchema.partial().extend({
+  allowPublicViewing: z.boolean().optional(),
+});
+export type UpdateRemoteAccessSecurityRequest = z.infer<typeof UpdateRemoteAccessSecurityRequestSchema>;
+
+export const RemoteAccessSecurityStatusSchema = RemoteAccessSecurityConfigSchema.extend({
+  allowPublicViewing: z.boolean(),
+  activeConnections: z.number().int().nonnegative(),
+  pendingConnections: z.number().int().nonnegative(),
+});
+export type RemoteAccessSecurityStatus = z.infer<typeof RemoteAccessSecurityStatusSchema>;
+
 // ===== 认证配置（持久化到 auth.json） =====
 
 export const AuthConfigSchema = z.object({
   enabled: z.boolean().default(true),
-  allowPublicViewing: z.boolean().default(true),
+  // Existing installations persist their explicit value; new installations opt in.
+  allowPublicViewing: z.boolean().default(false),
+  remoteAccess: RemoteAccessSecurityConfigSchema.default({}),
   jwtSecret: z.string().optional(),
   jwtExpiresInSeconds: z.number().default(7 * 24 * 3600), // 7 days
   tokens: z.array(AuthTokenSchema).default([]),

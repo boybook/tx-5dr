@@ -16,10 +16,31 @@ describe('getNetworkAccessInfo', () => {
       },
     });
 
-    expect(info).toEqual({
+    expect(info).toMatchObject({
       addresses: [{ ip: '192.168.1.10', url: 'http://192.168.1.10:8076' }],
       hostname: 'tx5dr',
       webPort: 8076,
+      supportsLocalOnly: false,
+      supportedPresets: ['lan', 'public'],
+    });
+  });
+
+  it('advertises local-only capability only for Electron-managed gateways', () => {
+    const info = getNetworkAccessInfo({
+      env: {
+        APP_RESOURCES: '/Applications/TX-5DR.app/Contents/Resources',
+        TX5DR_RUNTIME_MANAGEMENT: 'electron',
+        TX5DR_DATA_DIR: '/tmp/tx5dr-electron',
+        HOST: '127.0.0.1',
+      } as NodeJS.ProcessEnv,
+      networkInterfaces: {},
+    });
+
+    expect(info).toMatchObject({
+      distribution: 'electron',
+      exposure: 'local',
+      supportsLocalOnly: true,
+      supportedPresets: ['local', 'lan', 'public'],
     });
   });
 
@@ -61,7 +82,7 @@ describe('getNetworkAccessInfo', () => {
       });
 
       expect(spy).not.toHaveBeenCalled();
-      expect(info).toEqual({
+      expect(info).toMatchObject({
         addresses: [{ ip: '192.168.1.23', url: 'http://192.168.1.23:8076' }],
         hostname: 'android',
         webPort: 8076,
@@ -91,6 +112,34 @@ describe('getNetworkAccessInfo', () => {
       expect(info.webPort).toBe(8076);
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it('reads an Electron gateway ready file and hides LAN addresses in local mode', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'tx5dr-electron-network-access-'));
+    const file = path.join(dir, 'client-tools-ready.json');
+    writeFileSync(file, JSON.stringify({
+      httpPort: 8077,
+      listenHost: '127.0.0.1',
+      publicUrls: ['http://192.168.1.23:8077'],
+    }), 'utf-8');
+
+    try {
+      const info = getNetworkAccessInfo({
+        env: {
+          TX5DR_NETWORK_ACCESS_FILE: file,
+          TX5DR_RUNTIME_MANAGEMENT: 'electron',
+        } as NodeJS.ProcessEnv,
+      });
+      expect(info).toMatchObject({
+        addresses: [],
+        webPort: 8077,
+        exposure: 'local',
+        listenHost: '127.0.0.1',
+        runtimeManagement: 'electron',
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

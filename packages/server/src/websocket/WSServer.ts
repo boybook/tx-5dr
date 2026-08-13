@@ -362,6 +362,9 @@ export class WSServer extends WSMessageHandler {
   private connections = new Map<string, WSConnection>();
   private clientInstanceConnections = new Map<string, string>();
   private connectionIdCounter = 0;
+  private connectionIps = new Map<string, string>();
+  private authTimers = new Map<string, NodeJS.Timeout>();
+  private handshakeTimers = new Map<string, NodeJS.Timeout>();
   private digitalRadioEngine: DigitalRadioEngine;
   private processMonitor: ProcessMonitor | null = null;
   private spectrumCoordinator: SpectrumCoordinator;
@@ -1530,7 +1533,25 @@ export class WSServer extends WSMessageHandler {
   /**
    * 添加新的客户端连接
    */
-  addConnection(ws: any): WSConnection {
+  addConnection(ws: any, clientIp = 'unknown'): WSConnection | null {
+    const access = AuthManager.getInstance().getRemoteAccessConfig();
+    const pendingCount = Array.from(this.connections.values()).filter(connection => !connection.isHandshakeCompleted()).length;
+    const ipCount = Array.from(this.connectionIps.values()).filter(ip => ip === clientIp).length;
+    if (pendingCount >= access.maxPendingAuth || ipCount >= access.maxConnectionsPerIp) {
+      const reason = pendingCount >= access.maxPendingAuth ? 'capacity_reached' : 'ip_limit_reached';
+      const current = reason === 'capacity_reached' ? pendingCount : ipCount;
+      const limit = reason === 'capacity_reached' ? access.maxPendingAuth : access.maxConnectionsPerIp;
+      try {
+        ws.send(JSON.stringify({
+          type: WSMessageType.ACCESS_DENIED,
+          data: { reason, current, limit, retryAfterMs: 15_000 },
+          timestamp: new Date().toISOString(),
+        }));
+        ws.close(4429, reason);
+      } catch { /* socket may already be closed */ }
+      return null;
+    }
+
     const id = `conn_${++this.connectionIdCounter}`;
     const connection = new WSConnection(ws, id);
 
@@ -1545,6 +1566,7 @@ export class WSServer extends WSMessageHandler {
     });
 
     this.connections.set(id, connection);
+    this.connectionIps.set(id, clientIp);
     logger.info('new connection', { id });
 
     // 认证流程
@@ -1552,6 +1574,7 @@ export class WSServer extends WSMessageHandler {
     if (!authManager.isAuthEnabled()) {
       // 认证未启用 → 直接作为 Admin（向后兼容）
       connection.setAdminBypass();
+      this.startHandshakeTimer(id);
       this.sendInitialState(connection);
       this.sendCWDecoderStatus(connection);
       logger.info(`connection ${id} basic state sent (auth disabled, Admin mode), waiting for client handshake`);
@@ -1561,6 +1584,12 @@ export class WSServer extends WSMessageHandler {
         allowPublicViewing: authManager.isPublicViewingAllowed(),
       });
       logger.info(`connection ${id} AUTH_REQUIRED sent, waiting for client authentication`);
+      this.authTimers.set(id, setTimeout(() => {
+        const pending = this.connections.get(id);
+        if (!pending || pending.hasResolvedIdentity()) return;
+        pending.send(WSMessageType.ACCESS_DENIED, { reason: 'authentication_timeout', retryAfterMs: 15_000 });
+        this.removeConnection(id, { closeSocket: true, closeCode: 4408, closeReason: 'authentication_timeout' });
+      }, access.authTimeoutMs));
     }
 
     return connection;
@@ -1631,6 +1660,8 @@ export class WSServer extends WSMessageHandler {
 
       connection.removeAllListeners();
       this.connections.delete(id);
+      this.connectionIps.delete(id);
+      this.clearConnectionTimers(id);
       void this.spectrumCoordinator.removeConnection(id);
       logger.info('connection disconnected', {
         id,
@@ -1672,6 +1703,36 @@ export class WSServer extends WSMessageHandler {
       // 广播客户端数量变化（客户端断开连接）
       this.broadcastClientCount();
     }
+  }
+
+  private clearConnectionTimers(id: string): void {
+    const authTimer = this.authTimers.get(id);
+    if (authTimer) clearTimeout(authTimer);
+    this.authTimers.delete(id);
+    const handshakeTimer = this.handshakeTimers.get(id);
+    if (handshakeTimer) clearTimeout(handshakeTimer);
+    this.handshakeTimers.delete(id);
+  }
+
+  private resolveIdentity(id: string): void {
+    const authTimer = this.authTimers.get(id);
+    if (authTimer) clearTimeout(authTimer);
+    this.authTimers.delete(id);
+    if (!this.connections.get(id)?.isHandshakeCompleted()) {
+      this.startHandshakeTimer(id);
+    }
+  }
+
+  private startHandshakeTimer(id: string): void {
+    const timeoutMs = AuthManager.getInstance().getRemoteAccessConfig().handshakeTimeoutMs;
+    const existing = this.handshakeTimers.get(id);
+    if (existing) clearTimeout(existing);
+    this.handshakeTimers.set(id, setTimeout(() => {
+      const connection = this.connections.get(id);
+      if (!connection || connection.isHandshakeCompleted()) return;
+      connection.send(WSMessageType.ACCESS_DENIED, { reason: 'handshake_timeout', retryAfterMs: 15_000 });
+      this.removeConnection(id, { closeSocket: true, closeCode: 4408, closeReason: 'handshake_timeout' });
+    }, timeoutMs));
   }
 
   /**
@@ -2703,6 +2764,18 @@ export class WSServer extends WSMessageHandler {
         }
         this.removeConnection(existingConnectionId, { closeSocket: true, closeCode: 4001, closeReason: 'replaced' });
       }
+      const access = AuthManager.getInstance().getRemoteAccessConfig();
+      const currentCount = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted()).length;
+      if (currentCount >= access.maxConnections) {
+        connection.send(WSMessageType.ACCESS_DENIED, {
+          reason: 'capacity_reached',
+          current: currentCount,
+          limit: access.maxConnections,
+          retryAfterMs: 15_000,
+        });
+        this.removeConnection(connectionId, { closeSocket: true, closeCode: 4429, closeReason: 'capacity_reached' });
+        return;
+      }
       this.clientInstanceConnections.set(clientInstanceId, connectionId);
 
       // 处理客户端发送的操作员偏好设置
@@ -2725,6 +2798,9 @@ export class WSServer extends WSMessageHandler {
 
       // 完成握手（每次都按当前 token/public-viewer 权限过滤）
       connection.completeHandshake(this.filterRequestedOperatorIds(connection, requestedOperatorIds));
+      const handshakeTimer = this.handshakeTimers.get(connectionId);
+      if (handshakeTimer) clearTimeout(handshakeTimer);
+      this.handshakeTimers.delete(connectionId);
       const finalEnabledOperatorIds = connection.getEnabledOperatorIds();
       const finalSelectedOperatorId = this.resolveSelectedOperatorId(connection, selectedOperatorId);
       connection.setSelectedOperatorId(finalSelectedOperatorId);
@@ -2878,6 +2954,7 @@ export class WSServer extends WSMessageHandler {
       // 更新连接的认证状态
       const wasAuthenticated = connection.isAuthenticated();
       connection.setAuthenticated(perms.role, perms.operatorIds, label, decoded.tokenId);
+      this.resolveIdentity(connectionId);
 
       connection.send(WSMessageType.AUTH_RESULT, {
         success: true,
@@ -2920,6 +2997,7 @@ export class WSServer extends WSMessageHandler {
     }
 
     connection.setPublicViewer();
+    this.resolveIdentity(connectionId);
     connection.send(WSMessageType.AUTH_RESULT, {
       success: true,
       role: UserRole.VIEWER,
@@ -2941,6 +3019,10 @@ export class WSServer extends WSMessageHandler {
       connection.close();
     });
     this.connections.clear();
+    for (const id of new Set([...this.authTimers.keys(), ...this.handshakeTimers.keys()])) {
+      this.clearConnectionTimers(id);
+    }
+    this.connectionIps.clear();
   }
 
   /**
@@ -2953,6 +3035,13 @@ export class WSServer extends WSMessageHandler {
       total,
       active,
       inactive: total - active
+    };
+  }
+
+  getCapacityStats() {
+    return {
+      active: this.getActiveConnections().filter(connection => connection.isHandshakeCompleted()).length,
+      pending: this.getActiveConnections().filter(connection => !connection.isHandshakeCompleted()).length,
     };
   }
 }

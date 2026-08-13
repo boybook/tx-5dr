@@ -48,9 +48,17 @@ export async function systemRoutes(fastify: FastifyInstance) {
 
   // 获取网络访问地址
   fastify.get('/network-info', async (request, reply) => {
-    return reply.send(getNetworkAccessInfo({
+    const info = getNetworkAccessInfo({
       forwardedPort: request.headers['x-forwarded-port'],
-    }));
+    });
+    const remoteAccess = (await import('../auth/AuthManager.js')).AuthManager.getInstance().getRemoteAccessConfig();
+    const capacity = (await import('../websocket/WSServer.js')).WSServer.getInstance()?.getCapacityStats() ?? { active: 0 };
+    return reply.send({
+      ...info,
+      exposure: info.exposure,
+      activeConnections: capacity.active,
+      maxConnections: remoteAccess.maxConnections,
+    });
   });
 
   fastify.get('/logging', {
