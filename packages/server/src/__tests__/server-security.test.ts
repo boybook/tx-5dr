@@ -4,14 +4,45 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { UserRole } from '@tx5dr/contracts';
-import { isAllowedCorsOrigin, registerRoleScope } from '../server.js';
+import { isAllowedCorsOrigin, isAllowedWebSocketOrigin, registerRoleScope } from '../server.js';
+import { AuthManager } from '../auth/AuthManager.js';
 
 describe('server security helpers', () => {
   it('allows loopback and same-host browser origins but rejects arbitrary origins', () => {
     expect(isAllowedCorsOrigin(undefined)).toBe(true);
     expect(isAllowedCorsOrigin('http://localhost:8076')).toBe(true);
     expect(isAllowedCorsOrigin('http://127.0.0.1:5173')).toBe(true);
-    expect(isAllowedCorsOrigin('https://evil.example')).toBe(false);
+    expect(isAllowedCorsOrigin('https://other.example')).toBe(false);
+  });
+
+  it('requires an exact websocket origin while still supporting origin-less native clients', () => {
+    expect(isAllowedWebSocketOrigin(undefined)).toBe(true);
+    expect(isAllowedWebSocketOrigin('http://localhost:8076')).toBe(true);
+    expect(isAllowedWebSocketOrigin('http://localhost:9090')).toBe(false);
+    expect(isAllowedWebSocketOrigin('https://other.example')).toBe(false);
+    expect(isAllowedWebSocketOrigin('not an origin')).toBe(false);
+  });
+
+  it('uses only explicit browser origins for managed public deployment', () => {
+    const manager = AuthManager.getInstance();
+    const originalGetter = manager.getRemoteAccessConfig.bind(manager);
+    manager.getRemoteAccessConfig = () => ({
+      preset: 'public',
+      allowedOrigins: ['https://radio.example.test'],
+      maxConnections: 128,
+      maxConnectionsPerIp: 32,
+      maxPendingAuth: 32,
+      authTimeoutMs: 10_000,
+      handshakeTimeoutMs: 10_000,
+    });
+    try {
+      expect(isAllowedWebSocketOrigin('https://radio.example.test')).toBe(true);
+      expect(isAllowedWebSocketOrigin('https://unlisted.example.test')).toBe(false);
+      expect(isAllowedWebSocketOrigin('http://localhost:8076')).toBe(true);
+      expect(isAllowedWebSocketOrigin(undefined)).toBe(true);
+    } finally {
+      manager.getRemoteAccessConfig = originalGetter;
+    }
   });
 
   it('allows Android-injected LAN browser origins without relying on Node interface enumeration', () => {

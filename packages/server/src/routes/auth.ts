@@ -7,11 +7,13 @@ import {
   UpdateTokenRequestSchema,
   UpdateSelfLoginCredentialRequestSchema,
   UpdateAuthConfigRequestSchema,
+  UpdateRemoteAccessSecurityRequestSchema,
   UserRole,
 } from '@tx5dr/contracts';
 import { AuthManager, AuthManagerError } from '../auth/AuthManager.js';
 import { requireRole } from '../auth/authPlugin.js';
 import { BrowserLoginCodeCapacityError } from '../auth/BrowserLoginCodeStore.js';
+import { WSServer } from '../websocket/WSServer.js';
 
 export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   const authManager = AuthManager.getInstance();
@@ -219,6 +221,38 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   }, async (request) => {
     const body = UpdateAuthConfigRequestSchema.parse(request.body);
     return authManager.updateAuthConfig(body);
+  });
+
+  fastify.get('/remote-access', {
+    preHandler: [requireRole(UserRole.ADMIN)],
+  }, async () => {
+    const capacity = WSServer.getInstance()?.getCapacityStats() ?? { active: 0, pending: 0 };
+    return {
+      ...authManager.getRemoteAccessConfig(),
+      allowPublicViewing: authManager.isPublicViewingAllowed(),
+      activeConnections: capacity.active,
+      pendingConnections: capacity.pending,
+    };
+  });
+
+  fastify.patch('/remote-access', {
+    preHandler: [requireRole(UserRole.ADMIN)],
+  }, async (request, reply) => {
+    const body = UpdateRemoteAccessSecurityRequestSchema.parse(request.body);
+    let updated;
+    try {
+      updated = await authManager.updateRemoteAccessConfig(body);
+    } catch (error) {
+      if (error instanceof AuthManagerError && ['PUBLIC_ORIGIN_REQUIRED', 'PUBLIC_ORIGIN_INSECURE'].includes(error.code)) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: error.code, message: error.message, userMessage: error.message },
+        });
+      }
+      throw error;
+    }
+    const capacity = WSServer.getInstance()?.getCapacityStats() ?? { active: 0, pending: 0 };
+    return { ...updated, activeConnections: capacity.active, pendingConnections: capacity.pending };
   });
 
   // GET /api/auth/tokens — Admin 列出所有 Token

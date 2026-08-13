@@ -12,7 +12,7 @@ describe('server Device UI websocket wiring', () => {
     expect(deviceWsRoute).toContain('deviceUiWsServer.acceptConnection(socket, req)');
     expect(deviceWsRoute).not.toContain('wsServer.addConnection');
     expect(deviceWsRoute).not.toContain('clientHandshake');
-    expect(browserWsRoute).toContain('wsServer.addConnection(socket)');
+    expect(browserWsRoute).toContain('wsServer.addConnection(socket, admission.clientIp)');
   });
 });
 

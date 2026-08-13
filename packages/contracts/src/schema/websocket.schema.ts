@@ -177,6 +177,7 @@ export enum WSMessageType {
   AUTH_PUBLIC_VIEWER = 'authPublicViewer',
   AUTH_RESULT = 'authResult',
   AUTH_EXPIRED = 'authExpired',
+  ACCESS_DENIED = 'accessDenied',
 
   // ===== 语音模式 =====
   VOICE_PTT_REQUEST = 'voicePttRequest',
@@ -1346,6 +1347,20 @@ export const WSAuthPublicViewerMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSAuthPublicViewerMessage = z.infer<typeof WSAuthPublicViewerMessageSchema>;
 
+export const WSAccessDeniedDataSchema = z.object({
+  reason: z.enum([
+    'capacity_reached',
+    'origin_not_allowed',
+    'authentication_timeout',
+    'handshake_timeout',
+    'ip_limit_reached',
+  ]),
+  current: z.number().int().nonnegative().optional(),
+  limit: z.number().int().positive().optional(),
+  retryAfterMs: z.number().int().nonnegative().optional(),
+});
+export type WSAccessDeniedData = z.infer<typeof WSAccessDeniedDataSchema>;
+
 /**
  * 认证结果（服务端到客户端）
  */
@@ -1642,7 +1657,7 @@ export interface DigitalRadioEngineEvents {
   // 连接事件
   connected: () => void;
   reconnecting: (data: { attempt: number; delayMs: number }) => void;
-  disconnected: () => void;
+  disconnected: (data?: WSAccessDeniedData) => void;
   handshakeComplete: (data: z.infer<typeof WSServerHandshakeCompleteMessageSchema>['data']) => void;
   connectionReplaced: (data: { reason: string }) => void;
   error: (error: Error) => void;
@@ -1696,6 +1711,7 @@ export interface DigitalRadioEngineEvents {
   authRequired: (data: { allowPublicViewing: boolean }) => void;
   authResult: (data: { success: boolean; role?: UserRole; label?: string; operatorIds?: string[]; error?: string }) => void;
   authExpired: (data: { reason?: string }) => void;
+  accessDenied: (data: WSAccessDeniedData) => void;
 
   // 语音模式事件
   voicePttLockChanged: (data: VoicePTTLock) => void;

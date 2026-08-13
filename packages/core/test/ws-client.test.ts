@@ -224,3 +224,34 @@ test('allows authentication protocol commands before session readiness', async (
     restoreWebSocket();
   }
 });
+
+test('surfaces capacity denial and does not start an automatic reconnect storm', async () => {
+  const restoreWebSocket = installFakeWebSocket();
+  try {
+    const client = new WSClient({ url: 'ws://example.test/ws' });
+    let disconnected: unknown;
+    client.onWSEvent('disconnected', (data) => {
+      disconnected = data;
+    });
+
+    const connectPromise = client.connect();
+    const socket = FakeWebSocket.sockets[0];
+    socket.open();
+    await connectPromise;
+
+    const denial = {
+      reason: 'capacity_reached' as const,
+      current: 32,
+      limit: 32,
+      retryAfterMs: 15_000,
+    };
+    emitServerMessage(socket, WSMessageType.ACCESS_DENIED, denial);
+    socket.close(4429, 'capacity_reached');
+
+    assert.deepEqual(disconnected, denial);
+    assert.deepEqual(client.getLastAccessDenied(), denial);
+    assert.equal(FakeWebSocket.sockets.length, 1);
+  } finally {
+    restoreWebSocket();
+  }
+});

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SLOT_PACK_HISTORY_LIMIT, UserRole, WSMessageType, type SlotPack, type SystemStatus } from '@tx5dr/contracts';
 import { WSConnection, WSServer } from '../WSServer.js';
 import { ConfigManager } from '../../config/config-manager.js';
+import { AuthManager } from '../../auth/AuthManager.js';
 
 function createStatus(overrides: Partial<SystemStatus> = {}): SystemStatus {
   return {
@@ -392,6 +393,91 @@ describe('WSServer security filtering', () => {
     expect(adminSent.find(message => message.type === WSMessageType.RADIO_STATUS_CHANGED)?.data.radioConfig.icomWlan.password).toBe('radio-secret');
     expect(publicSent.find(message => message.type === WSMessageType.PTT_STATUS_CHANGED)?.data.operatorIds).toEqual([]);
     expect(adminSent.find(message => message.type === WSMessageType.PTT_STATUS_CHANGED)?.data.operatorIds).toEqual(['op-a']);
+  });
+});
+
+describe('WSServer remote access admission', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function createAdmissionServer() {
+    const server = Object.create(WSServer.prototype) as any;
+    server.connections = new Map();
+    server.clientInstanceConnections = new Map();
+    server.connectionIps = new Map();
+    server.authTimers = new Map();
+    server.handshakeTimers = new Map();
+    server.connectionIdCounter = 0;
+    server.sendInitialState = vi.fn();
+    server.sendCWDecoderStatus = vi.fn();
+    return server;
+  }
+
+  function createAdmissionSocket() {
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    return {
+      readyState: 1,
+      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => listeners.set(event, listener)),
+      off: vi.fn(),
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+  }
+
+  it('closes connections that do not authenticate within the configured timeout', () => {
+    vi.useFakeTimers();
+    const server = createAdmissionServer();
+    const socket = createAdmissionSocket();
+    const removeConnection = vi.fn();
+    server.removeConnection = removeConnection;
+    vi.spyOn(AuthManager, 'getInstance').mockReturnValue({
+      getRemoteAccessConfig: () => ({
+        maxConnections: 32,
+        maxConnectionsPerIp: 16,
+        maxPendingAuth: 32,
+        authTimeoutMs: 3_000,
+        handshakeTimeoutMs: 3_000,
+      }),
+      isAuthEnabled: () => true,
+      isPublicViewingAllowed: () => false,
+    } as AuthManager);
+
+    server.addConnection(socket, '192.0.2.1');
+    vi.advanceTimersByTime(3_000);
+
+    expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('authentication_timeout'));
+    expect(removeConnection).toHaveBeenCalledWith('conn_1', expect.objectContaining({
+      closeCode: 4408,
+      closeReason: 'authentication_timeout',
+    }));
+  });
+
+  it('rejects excess pending and per-IP connections with a structured capacity message', () => {
+    const server = createAdmissionServer();
+    const unresolved = { isHandshakeCompleted: () => false };
+    server.connections.set('existing', unresolved);
+    server.connectionIps.set('existing', '192.0.2.1');
+    vi.spyOn(AuthManager, 'getInstance').mockReturnValue({
+      getRemoteAccessConfig: () => ({
+        maxConnections: 8,
+        maxConnectionsPerIp: 1,
+        maxPendingAuth: 8,
+        authTimeoutMs: 3_000,
+        handshakeTimeoutMs: 3_000,
+      }),
+    } as AuthManager);
+    const socket = createAdmissionSocket();
+
+    expect(server.addConnection(socket, '192.0.2.1')).toBeNull();
+    const denial = JSON.parse(socket.send.mock.calls[0][0]);
+    expect(denial).toMatchObject({
+      type: WSMessageType.ACCESS_DENIED,
+      data: { reason: 'ip_limit_reached', current: 1, limit: 1 },
+    });
+    expect(denial.timestamp).toEqual(expect.any(String));
+    expect(socket.close).toHaveBeenCalledWith(4429, 'ip_limit_reached');
   });
 });
 

@@ -1,6 +1,6 @@
 import React, { memo, useEffect, useState } from 'react';
 import { useHasMinRole } from '../../store/authStore';
-import { UserRole } from '@tx5dr/contracts';
+import { UserRole, type RemoteAccessPreset } from '@tx5dr/contracts';
 import { SettingsModal, type SettingsTab } from '../settings/SettingsModal';
 import { ProfileModal } from '../radio/profile/ProfileModal';
 import { AccountSecurityModal } from '../auth/AccountSecurityModal';
@@ -12,6 +12,7 @@ function GlobalModalHostInner() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('radio');
   const [settingsInitialFrequencyPresetMode, setSettingsInitialFrequencyPresetMode] = useState<string | undefined>(undefined);
+  const [settingsInitialRemoteAccessPreset, setSettingsInitialRemoteAccessPreset] = useState<RemoteAccessPreset | undefined>(undefined);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isAccountSecurityOpen, setIsAccountSecurityOpen] = useState(false);
 
@@ -23,7 +24,11 @@ function GlobalModalHostInner() {
     };
 
     const handleOpenSettingsModal = (event: Event) => {
-      const customEvent = event as CustomEvent<{ tab?: SettingsTab; frequencyPresetMode?: string }>;
+      const customEvent = event as CustomEvent<{
+        tab?: SettingsTab;
+        frequencyPresetMode?: string;
+        remoteAccessPreset?: RemoteAccessPreset;
+      }>;
       const tab = customEvent.detail?.tab;
       const frequencyPresetMode = customEvent.detail?.frequencyPresetMode;
       if (tab) {
@@ -33,6 +38,7 @@ function GlobalModalHostInner() {
       setSettingsInitialFrequencyPresetMode(
         typeof frequencyPresetMode === 'string' ? frequencyPresetMode : undefined,
       );
+      setSettingsInitialRemoteAccessPreset(customEvent.detail?.remoteAccessPreset);
       setIsSettingsOpen(true);
     };
 
@@ -59,6 +65,7 @@ function GlobalModalHostInner() {
           onClose={() => setIsSettingsOpen(false)}
           initialTab={settingsInitialTab}
           initialFrequencyPresetMode={settingsInitialFrequencyPresetMode}
+          initialRemoteAccessPreset={settingsInitialRemoteAccessPreset}
         />
       )}
 

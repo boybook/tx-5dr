@@ -1,6 +1,8 @@
 import os, { type NetworkInterfaceInfo } from 'node:os';
 import { readFileSync } from 'node:fs';
 import { createLogger } from './logger.js';
+import type { PluginDistribution, RemoteAccessPreset } from '@tx5dr/contracts';
+import { resolveRuntimeDistribution } from './runtime-distribution.js';
 
 const DEFAULT_WEB_PORT = 8076;
 const logger = createLogger('NetworkAccess');
@@ -14,6 +16,14 @@ export interface NetworkAccessInfo {
   addresses: NetworkAccessAddress[];
   hostname: string;
   webPort: number;
+  exposure: RemoteAccessPreset;
+  listenHost: string;
+  runtimeManagement: 'electron' | 'external';
+  distribution: PluginDistribution;
+  supportsLocalOnly: boolean;
+  supportedPresets: RemoteAccessPreset[];
+  activeConnections: number;
+  maxConnections: number;
 }
 
 export interface NetworkAccessInfoOptions {
@@ -48,6 +58,28 @@ export function getNetworkAccessInfo(options: NetworkAccessInfoOptions = {}): Ne
     addresses,
     hostname: options.hostname ?? safeHostname(),
     webPort,
+    ...getRuntimeMetadata(options.env),
+  };
+}
+
+function getRuntimeMetadata(envInput?: NodeJS.ProcessEnv) {
+  const env = envInput ?? process.env;
+  const listenHost = env.TX5DR_WEB_LISTEN_HOST?.trim() || env.HOST?.trim() || '0.0.0.0';
+  const distribution = resolveRuntimeDistribution(env.TX5DR_DATA_DIR || '', {
+    env: env.TX5DR_RUNTIME_MANAGEMENT === 'electron'
+      ? { ...env, APP_RESOURCES: env.APP_RESOURCES || 'electron-runtime' }
+      : env,
+  });
+  const supportsLocalOnly = distribution === 'electron';
+  return {
+    exposure: (listenHost === '127.0.0.1' || listenHost === '::1' || listenHost === 'localhost' ? 'local' : 'lan') as RemoteAccessPreset,
+    listenHost,
+    runtimeManagement: env.TX5DR_RUNTIME_MANAGEMENT === 'electron' ? 'electron' as const : 'external' as const,
+    distribution,
+    supportsLocalOnly,
+    supportedPresets: (supportsLocalOnly ? ['local', 'lan', 'public'] : ['lan', 'public']) as RemoteAccessPreset[],
+    activeConnections: 0,
+    maxConnections: 32,
   };
 }
 
@@ -60,19 +92,43 @@ function getInjectedNetworkAccessInfo(options: NetworkAccessInfoOptions, fallbac
     const parsed = JSON.parse(readFileSync(filePath, 'utf-8')) as {
       hostname?: unknown;
       webPort?: unknown;
+      httpPort?: unknown;
+      listenHost?: unknown;
       addresses?: Array<{ ip?: unknown }>;
+      publicUrls?: unknown;
     };
-    const webPort = parsePort(parsed.webPort) ?? fallbackWebPort;
-    const addresses = Array.isArray(parsed.addresses)
+    const webPort = parsePort(parsed.webPort ?? parsed.httpPort) ?? fallbackWebPort;
+    const parsedAddresses = Array.isArray(parsed.addresses)
       ? parsed.addresses
         .map(address => typeof address?.ip === 'string' ? address.ip.trim() : '')
-        .filter(isUsableIpv4)
-        .map(ip => ({ ip, url: `http://${ip}:${webPort}` }))
       : [];
+    const publicUrlAddresses = Array.isArray(parsed.publicUrls)
+      ? parsed.publicUrls.flatMap(value => {
+          if (typeof value !== 'string') return [];
+          try { return [new URL(value).hostname]; } catch { return []; }
+        })
+      : [];
+    const listenHost = typeof parsed.listenHost === 'string' ? parsed.listenHost : undefined;
+    const enumeratedAddresses = parsedAddresses.length === 0
+      && publicUrlAddresses.length === 0
+      && listenHost
+      && !['127.0.0.1', '::1', 'localhost'].includes(listenHost)
+      ? Object.values(options.networkInterfaces ?? safeNetworkInterfaces())
+        .flatMap(nets => nets ?? [])
+        .filter(net => net.family === 'IPv4' && !net.internal)
+        .map(net => net.address)
+      : [];
+    const runtime = getRuntimeMetadata({
+      ...(options.env ?? process.env),
+      ...(listenHost ? { TX5DR_WEB_LISTEN_HOST: listenHost } : {}),
+    });
+    const addresses = (runtime.exposure === 'local' ? [] : [...new Set([...parsedAddresses, ...publicUrlAddresses, ...enumeratedAddresses])])
+      .filter(isUsableIpv4)
+      .map(ip => ({ ip, url: `http://${ip}:${webPort}` }));
     const hostname = typeof parsed.hostname === 'string' && parsed.hostname.trim()
       ? parsed.hostname.trim()
       : (options.hostname ?? 'android');
-    return { addresses, hostname, webPort };
+    return { addresses, hostname, webPort, ...runtime };
   } catch (error) {
     logger.warn('Failed to read injected network access file', {
       filePath,
@@ -82,6 +138,7 @@ function getInjectedNetworkAccessInfo(options: NetworkAccessInfoOptions, fallbac
       addresses: [],
       hostname: options.hostname ?? 'android',
       webPort: fallbackWebPort,
+      ...getRuntimeMetadata(options.env),
     };
   }
 }

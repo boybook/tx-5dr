@@ -26,7 +26,7 @@ import { OpenWebRXSettings } from './OpenWebRXSettings';
 import { ShortcutSettings, type ShortcutSettingsRef } from './ShortcutSettings';
 import { AboutPage } from '../../pages/AboutPage';
 import { useHasMinRole, useCan } from '../../store/authStore';
-import { UserRole } from '@tx5dr/contracts';
+import { UserRole, type RemoteAccessPreset } from '@tx5dr/contracts';
 import type { PluginSettingsTabRef } from '../plugins/PluginSettingsTab';
 
 const PluginSettingsTab = React.lazy(() =>
@@ -38,6 +38,7 @@ interface SettingsModalProps {
   onClose: () => void;
   initialTab?: SettingsTab; // 可选的初始标签页
   initialFrequencyPresetMode?: string;
+  initialRemoteAccessPreset?: RemoteAccessPreset;
 }
 
 // 设置标签页类型（radio 和 audio 已迁移到 ProfileModal，logbook_sync 已迁移到 SyncConfigModal）
@@ -60,7 +61,7 @@ const DEFAULT_USES_MODAL_FOOTER_SAVE: Record<SettingsTab, boolean> = {
   about: false,
 };
 
-export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPresetMode }: SettingsModalProps) {
+export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPresetMode, initialRemoteAccessPreset }: SettingsModalProps) {
   const { t } = useTranslation('settings');
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const isOperator = useHasMinRole(UserRole.OPERATOR);
@@ -231,9 +232,10 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
       }
       
       setHasUnsavedChanges(false);
+      return true;
     } catch (error) {
       logger.error('Failed to save settings:', error);
-      // 这里可以添加错误提示
+      return false;
     }
   }, [activeTab]);
 
@@ -241,7 +243,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
   const handleConfirmSave = useCallback(async () => {
     try {
       // 先保存当前设置
-      await handleSave();
+      const saved = await handleSave();
+      if (!saved) return;
       
       setIsConfirmDialogOpen(false);
       
@@ -371,6 +374,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
           <SystemSettings
             ref={systemSettingsRef}
             onUnsavedChanges={setHasUnsavedChanges}
+            initialRemoteAccessPreset={initialRemoteAccessPreset}
           />
         );
       case 'rigctld':
@@ -597,7 +601,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                 <div className="flex gap-3">
                   <Button
                     variant="flat"
-                    onPress={handleSave}
+                    onPress={() => void handleSave()}
                     isDisabled={!hasUnsavedChanges}
                     className="bg-content1 border border-divider hover:bg-content2"
                   >

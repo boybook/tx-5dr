@@ -7,7 +7,7 @@ import websocket from '@fastify/websocket';
 import multipart from '@fastify/multipart';
 import { timingSafeEqual } from 'node:crypto';
 import type { WebSocket } from 'ws';
-import type { BootstrapPhaseId, HelloResponse } from '@tx5dr/contracts';
+import { WSMessageType, type BootstrapPhaseId, type HelloResponse } from '@tx5dr/contracts';
 import type { FastifyRequest, FastifyReply, FastifyError } from 'fastify';
 import { ConfigManager } from './config/config-manager.js';
 import { AudioDeviceManager } from './audio/audio-device-manager.js';
@@ -200,6 +200,66 @@ export function isAllowedCorsOrigin(origin: string | undefined): boolean {
   } catch {
     return false;
   }
+}
+
+export function isAllowedWebSocketOrigin(
+  origin: string | undefined,
+  request?: Pick<FastifyRequest, 'headers' | 'raw'>,
+): boolean {
+  if (!origin) return true;
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+
+  const remoteAccess = AuthManager.getInstance().getRemoteAccessConfig();
+  const explicitOriginAllowed = remoteAccess.allowedOrigins.some(candidate => {
+    try { return new URL(candidate).origin === parsed.origin; } catch { return false; }
+  });
+  if (remoteAccess.preset === 'public') {
+    return isLoopbackHostname(parsed.hostname) || explicitOriginAllowed;
+  }
+
+  const directAddress = request?.raw.socket.remoteAddress?.replace(/^::ffff:/, '');
+  const trustForwarded = directAddress ? isLoopbackHostname(directAddress) : false;
+  const forwardedHost = trustForwarded ? request?.headers['x-forwarded-host'] : undefined;
+  const requestHost = (Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost) || request?.headers.host;
+  const forwardedProto = trustForwarded ? request?.headers['x-forwarded-proto'] : undefined;
+  const requestProto = (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto)
+    || ((request?.raw.socket as { encrypted?: boolean } | undefined)?.encrypted ? 'https' : 'http');
+  if (requestHost && parsed.origin === `${requestProto}://${requestHost}`) return true;
+
+  return explicitOriginAllowed || buildAllowedBrowserOrigins().has(parsed.origin);
+}
+
+function getWebSocketClientIp(request: FastifyRequest): string {
+  const direct = request.raw.socket.remoteAddress || 'unknown';
+  if (!isLoopbackHostname(direct.replace(/^::ffff:/, ''))) return direct;
+  const forwarded = request.headers['x-forwarded-for'];
+  const value = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  return value?.split(',')[0]?.trim() || direct;
+}
+
+function acceptBrowserWebSocket(
+  socket: WebSocket,
+  request: FastifyRequest,
+): { allowed: true; clientIp: string } | { allowed: false } {
+  const origin = Array.isArray(request.headers.origin) ? request.headers.origin[0] : request.headers.origin;
+  if (isAllowedWebSocketOrigin(origin, request)) {
+    return { allowed: true, clientIp: getWebSocketClientIp(request) };
+  }
+  try {
+    socket.send(JSON.stringify({
+      type: WSMessageType.ACCESS_DENIED,
+      data: { reason: 'origin_not_allowed' },
+      timestamp: new Date().toISOString(),
+    }));
+    socket.close(4403, 'origin_not_allowed');
+  } catch { /* socket may already be closed */ }
+  return { allowed: false };
 }
 
 export async function registerRoleScope(
@@ -665,16 +725,19 @@ export async function createServer() {
   fastify.log.info('Station routes registered');
 
   // WebSocket endpoint for real-time communication
-  fastify.get('/api/ws', { websocket: true }, (socket: WebSocket, _req: FastifyRequest) => {
+  fastify.get('/api/ws', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
+    const admission = acceptBrowserWebSocket(socket, req);
+    if (!admission.allowed) return;
     fastify.log.info('WebSocket client connected');
     
     // 添加连接到WebSocket服务器（业务逻辑已集成在WSServer中）
-    wsServer.addConnection(socket);
+    wsServer.addConnection(socket, admission.clientIp);
   });
 
   // Logbook 专用 WebSocket endpoint（仅轻量通知）
   // 注意：浏览器 WebSocket 无法设置 Authorization 头，JWT 通过 ?token= 参数传递
   fastify.get('/api/ws/logbook', { websocket: true }, async (socket: WebSocket, req: FastifyRequest) => {
+    if (!acceptBrowserWebSocket(socket, req).allowed) return;
     try {
       const url = new URL(req.url, 'http://localhost');
       const operatorId = url.searchParams.get('operatorId') || undefined;
@@ -747,6 +810,7 @@ export async function createServer() {
 
   // Device UI 专用 WebSocket：使用 device JWT，独立于普通浏览器 WSServer/clientHandshake。
   fastify.get('/api/device-ui/ws', { websocket: true }, async (socket: WebSocket, req: FastifyRequest) => {
+    if (!acceptBrowserWebSocket(socket, req).allowed) return;
     await deviceUiWsServer.acceptConnection(socket, req);
   });
 
@@ -759,10 +823,12 @@ export async function createServer() {
   });
 
   fastify.get('/api/realtime/ws-compat', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
+    if (!acceptBrowserWebSocket(socket, req).allowed) return;
     realtimeTransportManager.acceptCompatConnection(socket, req.url);
   });
 
   fastify.get('/api/realtime/rtc-data-audio', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
+    if (!acceptBrowserWebSocket(socket, req).allowed) return;
     realtimeTransportManager.acceptRtcDataAudioConnection(socket, req.url);
   });
 

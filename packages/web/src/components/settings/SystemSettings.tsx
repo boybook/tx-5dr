@@ -21,12 +21,13 @@ import type {
   DecodeWindowSettings,
   PSKReporterConfig,
   PSKReporterStatus,
-  AuthStatus,
-  NetworkInfo,
   RealtimeSettingsResponseData,
   RealtimeTransportPolicy,
   DesktopHttpsStatus,
   DesktopHttpsMode,
+  NetworkInfo,
+  RemoteAccessPreset,
+  RemoteAccessSecurityStatus,
   ServerCpuProfileStatus,
   SystemLogLevel,
   SystemLoggingSettings,
@@ -36,6 +37,8 @@ import { showErrorToast } from '../../utils/errorToast';
 import { createLogger } from '../../utils/logger';
 import { useConnection } from '../../store/radioStore';
 import { useWSEvent } from '../../hooks/useWSEvent';
+import { RemoteAccessSettingsCard } from './RemoteAccessSettingsCard';
+import { applyRemoteAccessPreset, normalizeRemoteAccessOrigins, validateRemoteAccessDraft } from './remoteAccessDraft';
 
 interface DecodeWindowState {
   ft8Preset: string;
@@ -82,6 +85,21 @@ function getNtpServerValues(items: NtpServerDraftItem[]): string[] {
 
 function areStringArraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function remoteAccessSettingsEqual(
+  left: RemoteAccessSecurityStatus | null,
+  right: RemoteAccessSecurityStatus | null,
+): boolean {
+  if (!left || !right) return left === right;
+  return left.preset === right.preset
+    && left.maxConnections === right.maxConnections
+    && left.maxConnectionsPerIp === right.maxConnectionsPerIp
+    && left.maxPendingAuth === right.maxPendingAuth
+    && left.authTimeoutMs === right.authTimeoutMs
+    && left.handshakeTimeoutMs === right.handshakeTimeoutMs
+    && left.allowPublicViewing === right.allowPublicViewing
+    && areStringArraysEqual(left.allowedOrigins, right.allowedOrigins);
 }
 
 const DEFAULT_MAX_SAME_TRANSMISSION_COUNT = 20;
@@ -318,6 +336,7 @@ export interface SystemSettingsRef {
 
 interface SystemSettingsProps {
   onUnsavedChanges?: (hasChanges: boolean) => void;
+  initialRemoteAccessPreset?: RemoteAccessPreset;
 }
 
 function getReportIntervalOptions(t: (key: string) => string) {
@@ -332,7 +351,7 @@ function getReportIntervalOptions(t: (key: string) => string) {
 export const SystemSettings = forwardRef<
   SystemSettingsRef,
   SystemSettingsProps
->(({ onUnsavedChanges }, ref) => {
+>(({ onUnsavedChanges, initialRemoteAccessPreset }, ref) => {
   const { t } = useTranslation();
   const connection = useConnection();
   const REPORT_INTERVAL_OPTIONS = useMemo(() => getReportIntervalOptions(t), [t]);
@@ -346,10 +365,6 @@ export const SystemSettings = forwardRef<
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string>('');
 
-  // 认证配置
-  const [authConfig, setAuthConfig] = useState<AuthStatus | null>(null);
-  const [originalAuthConfig, setOriginalAuthConfig] = useState<AuthStatus | null>(null);
-
   // PSKReporter 状态
   const [pskrConfig, setPskrConfig] = useState<PSKReporterConfig | null>(null);
   const [originalPskrConfig, setOriginalPskrConfig] = useState<PSKReporterConfig | null>(null);
@@ -357,8 +372,6 @@ export const SystemSettings = forwardRef<
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_pskrStatusLoading, setPskrStatusLoading] = useState(false);
 
-  // 网络信息
-  const [networkInfo, setNetworkInfo] = useState<NetworkInfo | null>(null);
   const [realtimeTransportPolicy, setRealtimeTransportPolicy] = useState<RealtimeTransportPolicy>('auto');
   const [originalRealtimeTransportPolicy, setOriginalRealtimeTransportPolicy] = useState<RealtimeTransportPolicy>('auto');
   const [rtcDataAudioPublicHost, setRtcDataAudioPublicHost] = useState('');
@@ -366,7 +379,6 @@ export const SystemSettings = forwardRef<
   const [rtcDataAudioPublicUdpPort, setRtcDataAudioPublicUdpPort] = useState('');
   const [originalRtcDataAudioPublicUdpPort, setOriginalRtcDataAudioPublicUdpPort] = useState('');
   const [realtimeRuntime, setRealtimeRuntime] = useState<RealtimeRuntimeView | null>(null);
-  const [urlCopied, setUrlCopied] = useState(false);
   const [ntpServers, setNtpServers] = useState<NtpServerDraftItem[]>([]);
   const [originalNtpServers, setOriginalNtpServers] = useState<string[]>([]);
   const [defaultNtpServers, setDefaultNtpServers] = useState<string[]>([]);
@@ -400,18 +412,20 @@ export const SystemSettings = forwardRef<
   const [logLevel, setLogLevel] = useState<SystemLogLevel>('info');
   const [originalLogLevel, setOriginalLogLevel] = useState<SystemLogLevel>('info');
   const [logsDirCopied, setLogsDirCopied] = useState(false);
+  const [remoteAccessSettings, setRemoteAccessSettings] = useState<RemoteAccessSecurityStatus | null>(null);
+  const [originalRemoteAccessSettings, setOriginalRemoteAccessSettings] = useState<RemoteAccessSecurityStatus | null>(null);
+  const [remoteAccessNetwork, setRemoteAccessNetwork] = useState<NetworkInfo | null>(null);
 
   // 加载配置
   useEffect(() => {
     loadSettings();
-    loadAuthConfig();
     loadPSKReporterConfig();
     loadPSKReporterStatus();
     loadDecodeWindowSettings();
     loadRealtimeSettings();
     loadNtpServerListSettings();
     loadSystemLoggingSettings();
-    api.getNetworkInfo().then(setNetworkInfo).catch(() => {});
+    loadRemoteAccessSettings();
     loadElectronCloseBehavior();
     if (isElectron) {
       void loadDesktopHttpsSettings();
@@ -453,14 +467,26 @@ export const SystemSettings = forwardRef<
     }
   };
 
-  // 加载认证配置
-  const loadAuthConfig = async () => {
+  const loadRemoteAccessSettings = async () => {
     try {
-      const status = await api.getAuthStatus();
-      setAuthConfig(status);
-      setOriginalAuthConfig(status);
+      const [loadedSettings, network] = await Promise.all([
+        api.getRemoteAccessSettings(),
+        api.getNetworkInfo(),
+      ]);
+      const electronPreset = await window.electronAPI?.remoteAccess?.getPreset().catch(() => undefined);
+      const nextSettings = {
+        ...loadedSettings,
+        ...(electronPreset ? { preset: electronPreset } : {}),
+        allowedOrigins: [...loadedSettings.allowedOrigins],
+      };
+      setRemoteAccessSettings(initialRemoteAccessPreset
+        ? applyRemoteAccessPreset(nextSettings, initialRemoteAccessPreset)
+        : nextSettings);
+      setOriginalRemoteAccessSettings({ ...nextSettings, allowedOrigins: [...nextSettings.allowedOrigins] });
+      setRemoteAccessNetwork(network);
     } catch (err) {
-      logger.error('Failed to load auth config:', err);
+      logger.error('Failed to load remote access settings:', err);
+      setError(t('system.remoteAccessLoadFailed'));
     }
   };
 
@@ -912,12 +938,6 @@ export const SystemSettings = forwardRef<
     );
   };
 
-  // 检查认证配置是否有变化
-  const hasAuthChanges = () => {
-    if (!authConfig || !originalAuthConfig) return false;
-    return authConfig.allowPublicViewing !== originalAuthConfig.allowPublicViewing;
-  };
-
   // 检查解码窗口设置是否有变化
   const hasDecodeWindowChanges = () => {
     return (
@@ -960,10 +980,10 @@ export const SystemSettings = forwardRef<
       decodeWhileTransmitting !== originalDecodeValue ||
       spectrumWhileTransmitting !== originalSpectrumValue ||
       maxSameTransmissionCount !== originalMaxSameTransmissionCount ||
-      hasAuthChanges() ||
       hasPskrChanges() ||
       hasDecodeWindowChanges() ||
       hasNtpServerChanges() ||
+      !remoteAccessSettingsEqual(remoteAccessSettings, originalRemoteAccessSettings) ||
       logLevel !== originalLogLevel ||
       realtimeTransportPolicy !== originalRealtimeTransportPolicy ||
       rtcDataAudioPublicHost !== originalRtcDataAudioPublicHost ||
@@ -1031,6 +1051,62 @@ export const SystemSettings = forwardRef<
         throw new Error(message);
       }
 
+      if (!remoteAccessSettingsEqual(remoteAccessSettings, originalRemoteAccessSettings)) {
+        if (!remoteAccessSettings || !originalRemoteAccessSettings) {
+          throw new Error(t('system.remoteAccessLoadFailed'));
+        }
+        const remoteAccessValidationError = validateRemoteAccessDraft(remoteAccessSettings);
+        if (remoteAccessValidationError) {
+          const message = t(`system.remoteAccess${remoteAccessValidationError === 'originRequired' ? 'OriginRequired' : 'OriginInvalid'}`);
+          setError(message);
+          throw new Error(message);
+        }
+        const remoteAccessToSave = remoteAccessSettings.preset === 'public'
+          ? { ...remoteAccessSettings, allowedOrigins: normalizeRemoteAccessOrigins(remoteAccessSettings.allowedOrigins) }
+          : remoteAccessSettings;
+
+        let backendUpdated = false;
+        try {
+          const updated = await api.updateRemoteAccessSettings({
+            preset: remoteAccessToSave.preset,
+            allowedOrigins: remoteAccessToSave.allowedOrigins,
+            maxConnections: remoteAccessToSave.maxConnections,
+            maxConnectionsPerIp: remoteAccessToSave.maxConnectionsPerIp,
+            maxPendingAuth: remoteAccessToSave.maxPendingAuth,
+            authTimeoutMs: remoteAccessToSave.authTimeoutMs,
+            handshakeTimeoutMs: remoteAccessToSave.handshakeTimeoutMs,
+            allowPublicViewing: remoteAccessToSave.allowPublicViewing,
+          });
+          backendUpdated = true;
+
+          const isElectronManaged = remoteAccessNetwork?.runtimeManagement === 'electron'
+            && Boolean(window.electronAPI?.remoteAccess);
+          if (isElectronManaged && remoteAccessToSave.preset !== originalRemoteAccessSettings.preset) {
+            await window.electronAPI!.remoteAccess!.applyPreset(remoteAccessToSave.preset);
+          }
+
+          const committed = { ...updated, allowedOrigins: [...updated.allowedOrigins] };
+          setRemoteAccessSettings(committed);
+          setOriginalRemoteAccessSettings({ ...committed, allowedOrigins: [...committed.allowedOrigins] });
+          const refreshedNetwork = await api.getNetworkInfo().catch(() => null);
+          if (refreshedNetwork) setRemoteAccessNetwork(refreshedNetwork);
+        } catch (err) {
+          if (backendUpdated) {
+            await api.updateRemoteAccessSettings({
+              preset: originalRemoteAccessSettings.preset,
+              allowedOrigins: originalRemoteAccessSettings.allowedOrigins,
+              maxConnections: originalRemoteAccessSettings.maxConnections,
+              maxConnectionsPerIp: originalRemoteAccessSettings.maxConnectionsPerIp,
+              maxPendingAuth: originalRemoteAccessSettings.maxPendingAuth,
+              authTimeoutMs: originalRemoteAccessSettings.authTimeoutMs,
+              handshakeTimeoutMs: originalRemoteAccessSettings.handshakeTimeoutMs,
+              allowPublicViewing: originalRemoteAccessSettings.allowPublicViewing,
+            }).catch(() => undefined);
+          }
+          throw new Error(t('system.remoteAccessSaveFailed'), { cause: err });
+        }
+      }
+
       // 保存 FT8 设置
       const committedMaxSameTransmissionCount = commitMaxSameTransmissionCountDraft();
       const ft8Updates: Parameters<typeof api.updateFT8Settings>[0] = {
@@ -1048,15 +1124,6 @@ export const SystemSettings = forwardRef<
         setOriginalMaxSameTransmissionCount(committedMaxSameTransmissionCount);
       } else {
         throw new Error(result.message || t('system.saveFailed'));
-      }
-
-      // 保存认证配置
-      if (authConfig && hasAuthChanges()) {
-        const authResult = await api.updateAuthConfig({
-          allowPublicViewing: authConfig.allowPublicViewing,
-        });
-        setAuthConfig(authResult);
-        setOriginalAuthConfig(authResult);
       }
 
       // 保存 PSKReporter 设置
@@ -1187,7 +1254,7 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, maxSameTransmissionCount, originalDecodeValue, originalSpectrumValue, originalMaxSameTransmissionCount, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, ntpServers, originalNtpServers, logLevel, originalLogLevel, realtimeTransportPolicy, originalRealtimeTransportPolicy, rtcDataAudioPublicHost, originalRtcDataAudioPublicHost, rtcDataAudioPublicUdpPort, originalRtcDataAudioPublicUdpPort, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, maxSameTransmissionCount, originalDecodeValue, originalSpectrumValue, originalMaxSameTransmissionCount, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, ntpServers, originalNtpServers, remoteAccessSettings, originalRemoteAccessSettings, logLevel, originalLogLevel, realtimeTransportPolicy, originalRealtimeTransportPolicy, rtcDataAudioPublicHost, originalRtcDataAudioPublicHost, rtcDataAudioPublicUdpPort, originalRtcDataAudioPublicUdpPort, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
 
   const runtimeHints = realtimeRuntime?.connectivityHints ?? null;
   const rtcDataAudioRuntime = realtimeRuntime?.rtcDataAudio ?? null;
@@ -1572,6 +1639,13 @@ export const SystemSettings = forwardRef<
         </div>
       )}
 
+      <RemoteAccessSettingsCard
+        settings={remoteAccessSettings}
+        network={remoteAccessNetwork}
+        isSaving={isSaving}
+        onChange={setRemoteAccessSettings}
+      />
+
       <Card shadow="none" radius="lg" className="order-[9]" classNames={SETTINGS_CARD_CLASS_NAMES}>
         <CardBody className={SETTINGS_CARD_BODY_CLASS}>
           <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
@@ -1632,67 +1706,12 @@ export const SystemSettings = forwardRef<
         </CardBody>
       </Card>
 
-      {/* 公开查看权限 */}
-      {authConfig && (
-        <Card shadow="none" radius="lg" className="order-2" classNames={SETTINGS_CARD_CLASS_NAMES}>
-          <CardBody className={SETTINGS_CARD_BODY_CLASS}>
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1">
-                <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.allowPublicViewing')}</h4>
-                <div className={`${SETTINGS_CARD_DESC_CLASS} mt-1 space-y-1`}>
-                  <p>
-                    <strong>{t('system.on')}</strong>：{t('system.allowPublicViewingOnDesc')}
-                  </p>
-                  <p>
-                    <strong>{t('system.off')}</strong>：{t('system.allowPublicViewingOffDesc')}
-                  </p>
-                </div>
-              </div>
-              <Switch
-                isSelected={authConfig.allowPublicViewing}
-                onValueChange={(v) => setAuthConfig({ ...authConfig, allowPublicViewing: v })}
-                isDisabled={isSaving}
-                size="lg"
-              />
-            </div>
-            {/* 网络访问地址 */}
-            {networkInfo && networkInfo.addresses.length > 0 && (
-              <div className="mt-3 pt-3 border-t border-divider">
-                <p className={`${SETTINGS_MUTED_CLASS} mb-1.5`}>
-                  {t('common:remoteAccess.networkAddress')}
-                </p>
-                {networkInfo.addresses.map((addr) => (
-                  <div key={addr.ip} className="flex items-center gap-1.5 bg-default-100 rounded-md px-2 py-1 mb-1">
-                    <code className="flex-1 text-xs text-default-500 truncate">{addr.url}</code>
-                    <Button
-                      size="sm"
-                      variant="light"
-                      isIconOnly
-                      className="min-w-6 w-6 h-6"
-                      onPress={async () => {
-                        try {
-                          await navigator.clipboard.writeText(addr.url);
-                          setUrlCopied(true);
-                          setTimeout(() => setUrlCopied(false), 2000);
-                        } catch { /* ignore */ }
-                      }}
-                      title={t('common:remoteAccess.copyLink')}
-                    >
-                      <FontAwesomeIcon
-                        icon={urlCopied ? faCheck : faCopy}
-                        className={urlCopied ? 'text-success text-xs' : 'text-default-400 text-xs'}
-                      />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardBody>
-        </Card>
-      )}
-
       {isElectron && (
-        <Card shadow="none" radius="lg" className="order-3" classNames={SETTINGS_CARD_CLASS_NAMES}>
+        <details className="order-3 rounded-lg border border-divider bg-content1">
+          <summary className="cursor-pointer list-none px-5 py-4 text-sm font-medium text-default-700">
+            {t('system.desktopHttpsAdvancedTitle')}
+          </summary>
+          <Card shadow="none" radius="none" className="border-0" classNames={SETTINGS_CARD_CLASS_NAMES}>
           <CardBody className={SETTINGS_CARD_BODY_CLASS}>
             <div>
               <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.desktopHttpsTitle')}</h4>
@@ -1887,8 +1906,8 @@ export const SystemSettings = forwardRef<
                   {desktopHttpsStatus && (
                     <p className={SETTINGS_SUBDESC_CLASS}>
                       {t('system.desktopHttpsEffectivePorts', {
-                        httpPort: desktopHttpsStatus.httpPort,
-                        httpsPort: desktopHttpsStatus.effectiveHttpsPort ?? t('system.desktopHttpsPortInactive'),
+                        httpPort: desktopHttpsStatus!.httpPort,
+                        httpsPort: desktopHttpsStatus!.effectiveHttpsPort ?? t('system.desktopHttpsPortInactive'),
                       })}
                     </p>
                   )}
@@ -1915,7 +1934,8 @@ export const SystemSettings = forwardRef<
               </div>
             </div>
           </CardBody>
-        </Card>
+          </Card>
+        </details>
       )}
 
       <Card shadow="none" radius="lg" className="order-8" classNames={SETTINGS_CARD_CLASS_NAMES}>
@@ -2179,7 +2199,7 @@ export const SystemSettings = forwardRef<
       </Card>
 
       {/* 连续相同发射兜底 */}
-      <Card shadow="none" radius="lg" className="order-1" classNames={SETTINGS_CARD_CLASS_NAMES}>
+      <Card shadow="none" radius="lg" className="order-2" classNames={SETTINGS_CARD_CLASS_NAMES}>
         <CardBody className={SETTINGS_CARD_BODY_CLASS}>
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div className="flex-1">

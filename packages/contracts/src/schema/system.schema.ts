@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { RemoteAccessPresetSchema } from './auth.schema.js';
+import { PluginDistributionSchema } from './plugin.schema.js';
 
 // ===== 网络信息 =====
 
@@ -13,6 +15,14 @@ export const NetworkInfoSchema = z.object({
   addresses: z.array(NetworkAddressSchema),
   hostname: z.string(),
   webPort: z.number(),
+  exposure: RemoteAccessPresetSchema.default('lan'),
+  listenHost: z.string().default('0.0.0.0'),
+  runtimeManagement: z.enum(['electron', 'external']).default('external'),
+  distribution: PluginDistributionSchema.default('generic-server'),
+  supportsLocalOnly: z.boolean().default(false),
+  supportedPresets: z.array(RemoteAccessPresetSchema).min(1).default(['lan', 'public']),
+  activeConnections: z.number().int().nonnegative().default(0),
+  maxConnections: z.number().int().positive().default(32),
 });
 
 export type NetworkInfo = z.infer<typeof NetworkInfoSchema>;

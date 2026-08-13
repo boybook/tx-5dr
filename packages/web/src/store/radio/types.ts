@@ -46,13 +46,14 @@ export interface ConnectionState {
   wasEverReady: boolean;
   radioService: RadioService | null;
   connectError: string | null;
+  accessDenied: import('@tx5dr/contracts').WSAccessDeniedData | null;
 }
 
 export type ConnectionAction =
   | { type: 'connected' }
   | { type: 'handshakeComplete' }
   | { type: 'reconnecting' }
-  | { type: 'disconnected' }
+  | { type: 'disconnected'; payload?: import('@tx5dr/contracts').WSAccessDeniedData }
   | { type: 'SET_RADIO_SERVICE'; payload: RadioService }
   | { type: 'connectFailed' };
 
