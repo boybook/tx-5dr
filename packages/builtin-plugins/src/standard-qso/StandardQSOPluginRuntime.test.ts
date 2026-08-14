@@ -294,6 +294,9 @@ describe('StandardQSOPluginRuntime nonstandard callsign slots', () => {
     const snapshot = runtime.getSnapshot();
     expect(snapshot.currentState).toBe('TX5');
     expect(snapshot.slots?.TX5).toBe('EX8ABR BD4XYR 73');
+    // 方案 B：持久化在 73 入队后触发（onTransmissionQueued），而非 onEnter
+    runtime.onTransmissionQueued(snapshot.slots!.TX5!);
+    await new Promise(resolve => setTimeout(resolve, 0));
     expect(operator.recordQSOLog).toHaveBeenCalledWith(expect.objectContaining({
       callsign: 'EX8ABR',
       myCallsign: 'BD4XYR',
@@ -318,6 +321,9 @@ describe('StandardQSOPluginRuntime nonstandard callsign slots', () => {
     const snapshot = runtime.getSnapshot();
     expect(snapshot.currentState).toBe('TX5');
     expect(snapshot.slots?.TX5).toBe('EX8ABR BH5HIE 73');
+    // 方案 B：持久化在 73 入队后触发（onTransmissionQueued），而非 onEnter
+    runtime.onTransmissionQueued(snapshot.slots!.TX5!);
+    await new Promise(resolve => setTimeout(resolve, 0));
     expect(operator.recordQSOLog).toHaveBeenCalledWith(expect.objectContaining({
       callsign: 'EX8ABR',
       myCallsign: 'BH5HIE',

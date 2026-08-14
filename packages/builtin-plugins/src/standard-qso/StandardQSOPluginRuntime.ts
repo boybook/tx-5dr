@@ -729,29 +729,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
     },
     TX4: {
         async onEnter(strategy: StandardQSOPluginRuntime) {
-            // 记录QSO日志
-            // 优先使用actualFrequency（包含音频偏移的精确频率）
-            // 如果actualFrequency无效（< 1MHz），则使用config.frequency（基础频率）
-            const frequency = (strategy.context.actualFrequency && strategy.context.actualFrequency > 1000000)
-                ? strategy.context.actualFrequency
-                : (strategy.context.config.frequency || 0);
-
-            const qsoRecord: QSORecord = {
-                id: Date.now().toString(),
-                callsign: strategy.context.targetCallsign!,
-                grid: strategy.context.targetGrid,
-                frequency: frequency,
-                mode: strategy.context.config.mode.name,
-                startTime: strategy.qsoStartTime || Date.now(),
-                endTime: Date.now(),
-                reportSent: strategy.context.reportSent?.toString(),
-                reportReceived: strategy.context.reportReceived?.toString(),
-                messageHistory: [],
-                comment: undefined,
-                myCallsign: strategy.context.config.myCallsign,
-                myGrid: strategy.context.config.myGrid
-            };
-            await strategy.persistCompletedQSO(qsoRecord);
+            // QSO 日志持久化已移至 onTransmissionQueued（RR73 入队后），避免阻塞 RR73 发射
         },
         async handle(strategy: StandardQSOPluginRuntime, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 首先检查是否收到对方的73
@@ -831,29 +809,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
     },
     TX5: {
         async onEnter(strategy: StandardQSOPluginRuntime) {
-            // 记录QSO日志
-            // 优先使用actualFrequency（包含音频偏移的精确频率）
-            // 如果actualFrequency无效（< 1MHz），则使用config.frequency（基础频率）
-            const frequency = (strategy.context.actualFrequency && strategy.context.actualFrequency > 1000000)
-                ? strategy.context.actualFrequency
-                : (strategy.context.config.frequency || 0);
-
-            const qsoRecord: QSORecord = {
-                id: Date.now().toString(),
-                callsign: strategy.context.targetCallsign!,
-                grid: strategy.context.targetGrid,
-                frequency: frequency,
-                mode: strategy.context.config.mode.name,
-                startTime: strategy.qsoStartTime || Date.now(),
-                endTime: Date.now(),
-                reportSent: strategy.context.reportSent?.toString(),
-                reportReceived: strategy.context.reportReceived?.toString(),
-                messageHistory: [],
-                comment: undefined,
-                myCallsign: strategy.context.config.myCallsign,
-                myGrid: strategy.context.config.myGrid
-            };
-            await strategy.persistCompletedQSO(qsoRecord);
+            // QSO 日志持久化已移至 onTransmissionQueued（73 入队后），避免阻塞 73 发射
         },
         async handle(strategy: StandardQSOPluginRuntime, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 【修复】首先检查是否收到对方重发的RRR/RR73
@@ -1183,6 +1139,38 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         }
     }
 
+    private buildQSORecord(): QSORecord {
+        // 优先使用actualFrequency（包含音频偏移的精确频率）
+        // 如果actualFrequency无效（< 1MHz），则使用config.frequency（基础频率）
+        const frequency = (this.context.actualFrequency && this.context.actualFrequency > 1000000)
+            ? this.context.actualFrequency
+            : (this.context.config.frequency || 0);
+        return {
+            id: Date.now().toString(),
+            callsign: this.context.targetCallsign!,
+            grid: this.context.targetGrid,
+            frequency: frequency,
+            mode: this.context.config.mode.name,
+            startTime: this.qsoStartTime || Date.now(),
+            endTime: Date.now(),
+            reportSent: this.context.reportSent?.toString(),
+            reportReceived: this.context.reportReceived?.toString(),
+            messageHistory: [],
+            comment: undefined,
+            myCallsign: this.context.config.myCallsign,
+            myGrid: this.context.config.myGrid
+        };
+    }
+
+    private scheduleQsoPersistence(): void {
+        // QSO 日志持久化在 73/RR73 入队后后台执行，不阻塞发射。
+        // 去重由 persistCompletedQSO 内部保证（persistedQSO / qsoPersistencePromise）。
+        if (this.persistedQSO || this.qsoPersistencePromise || this.qsoPersistenceFailed) return;
+        this.persistCompletedQSO(this.buildQSORecord()).catch((error) => {
+            this.logger.error('QSO persistence failed after transmission queued', error);
+        });
+    }
+
     async persistCompletedQSO(qsoRecord: QSORecord): Promise<QSORecord> {
         if (this.persistedQSO) {
             this.logger.debug('Skipping duplicate QSO persistence within the current lifecycle', {
@@ -1288,6 +1276,13 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     onTransmissionQueued(transmission: string): void {
         if (this.state === 'TX5' && transmission === this.slots.TX5) {
             this.tx5TransmissionQueued = true;
+            // 73 已入队即将发射，后台持久化 QSO 日志（不阻塞发射）
+            this.scheduleQsoPersistence();
+            return;
+        }
+        if (this.state === 'TX4' && transmission === this.slots.TX4) {
+            // RR73 已入队即将发射，后台持久化 QSO 日志（不阻塞发射）
+            this.scheduleQsoPersistence();
         }
     }
 
