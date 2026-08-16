@@ -1281,7 +1281,9 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     }
 
     handleTransmitSlot(): string | null {
-        if (this.qsoPersistencePromise || this.qsoPersistenceFailed) return null;
+        // Durability gates completion side effects and future QSOs, not the
+        // time-critical final frame that is already due in this RF slot.
+        if (this.qsoPersistenceFailed) return null;
         return this.slots[this.state];
     }
 

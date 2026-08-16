@@ -711,7 +711,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       return 'var(--ft8-cycle-even-bg)';
     }
 
-    const isActuallyTransmitting = operatorStatus.isTransmitting && isCurrentTransmitCycle;
+    const isActuallyTransmitting = operatorStatus.isInActivePTT === true;
 
     if (isActuallyTransmitting) {
       return 'hsl(var(--heroui-danger) / 0.15)';
@@ -966,11 +966,16 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 );
               }
 
-              const isActuallyTransmitting = operatorStatus.isTransmitting && isCurrentTransmitCycle;
+              const isActuallyTransmitting = operatorStatus.isInActivePTT === true;
+              const isPreparingTransmission = operatorStatus.isTransmitting && isCurrentTransmitCycle;
 
               return isActuallyTransmitting ? (
                 <div className="font-bold font-mono text-lg text-danger">
                   {getCurrentTransmissionContent() || t('operator.preparingTx')}
+                </div>
+              ) : isPreparingTransmission ? (
+                <div className="font-bold font-mono text-lg text-foreground opacity-65">
+                  {t('operator.preparingTx')}
                 </div>
               ) : (
                 <div className="text-foreground opacity-65 font-bold font-mono text-lg">

@@ -386,7 +386,7 @@ function getProtectedEventPhases(mode: ModeDescriptor): number[] {
   phases.add(0);
 
   const transmitTiming = mode.transmitTiming || 0;
-  const encodeAdvance = mode.encodeAdvance || 400;
+  const encodeAdvance = mode.encodeAdvance ?? 400;
   phases.add(normalizePhase(transmitTiming, slotMs));
   phases.add(normalizePhase(transmitTiming - encodeAdvance, slotMs));
 

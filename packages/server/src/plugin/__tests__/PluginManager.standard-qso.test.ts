@@ -11,6 +11,8 @@ import { STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING } from '@tx5dr/builtin-plugin
 import { PluginManager } from '../PluginManager.js';
 import { LogManager } from '../../log/LogManager.js';
 
+type RecordQSORequest = Parameters<DigitalRadioEngineEvents['recordQSO']>[0];
+
 function installInMemoryLogManager(): void {
   const logBook = {
     id: 'logbook-test',
@@ -132,6 +134,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     operatorPluginSettings?: Record<string, Record<string, unknown>>;
     interruptOperatorTransmission?: (operatorId: string) => Promise<void>;
     radioBand?: string;
+    recordQSOHandler?: (data: RecordQSORequest) => void;
   }) {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string; callsign: string }) => {
@@ -171,7 +174,13 @@ describe('PluginManager standard-qso late re-decision', () => {
     // This unit harness intentionally omits RadioOperatorManager. Acknowledge
     // persistence requests so protocol tests do not hang on the production
     // request/ack contract introduced for durable QSO writes.
-    eventEmitter.on('recordQSO', (data) => data.resolve?.(data.qsoRecord));
+    eventEmitter.on('recordQSO', (data) => {
+      if (options?.recordQSOHandler) {
+        options.recordQSOHandler(data);
+        return;
+      }
+      data.resolve?.(data.qsoRecord);
+    });
 
     let pluginManager!: PluginManager;
     pluginManager = new PluginManager({
@@ -612,6 +621,86 @@ describe('PluginManager standard-qso late re-decision', () => {
 
     await pluginManager.shutdown();
     void requestTransmitSpy;
+  });
+
+  it.each([
+    {
+      finalMessage: 'RR73',
+      initialState: 'TX2' as const,
+      incomingMessage: FT8MessageParser.generateMessage({
+        type: FT8MessageType.ROGER_REPORT,
+        senderCallsign: 'BG5DRB',
+        targetCallsign: 'BG7XTV',
+        report: -5,
+      }),
+      expectedState: 'TX4',
+      expectedTransmission: 'BG5DRB BG7XTV RR73',
+    },
+    {
+      finalMessage: '73',
+      initialState: 'TX3' as const,
+      incomingMessage: FT8MessageParser.generateMessage({
+        type: FT8MessageType.RRR,
+        senderCallsign: 'BG5DRB',
+        targetCallsign: 'BG7XTV',
+      }),
+      expectedState: 'TX5',
+      expectedTransmission: 'BG5DRB BG7XTV 73',
+    },
+  ])('queues $finalMessage while durable persistence overlaps encodeStart', async ({
+    initialState,
+    incomingMessage,
+    expectedState,
+    expectedTransmission,
+  }) => {
+    let persistenceRequest: RecordQSORequest | undefined;
+    let notifyPersistenceStarted!: () => void;
+    const persistenceStarted = new Promise<void>((resolve) => {
+      notifyPersistenceStarted = resolve;
+    });
+    const { eventEmitter, operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      targetCallsign: 'BG5DRB',
+      recordQSOHandler: (data) => {
+        persistenceRequest = data;
+        notifyPersistenceStarted();
+      },
+    });
+    const transmissions: Array<{ operatorId: string; transmission: string }> = [];
+    eventEmitter.on('requestTransmit', (payload) => transmissions.push(payload));
+
+    setRuntimeState(pluginManager, operator.config.id, initialState);
+    const decisionPromise = (pluginManager as any).handleSlotStart(
+      createSlotInfo(60_000),
+      createSlotPack(createSlotInfo(45_000), [{
+        message: incomingMessage,
+        snr: -4,
+        freq: 1502,
+      }]),
+    );
+    await persistenceStarted;
+
+    // The final RF frame remains available while durability controls later success side effects.
+    expect(operator.isTransmitting).toBe(true);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe(expectedState);
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe(expectedTransmission);
+
+    (pluginManager as any).handleEncodeStart(createSlotInfo(60_000));
+    expect(transmissions).toEqual([{
+      operatorId: operator.config.id,
+      transmission: expectedTransmission,
+    }]);
+
+    const pending = persistenceRequest;
+    expect(pending).toBeDefined();
+    pending?.resolve?.({ ...pending.qsoRecord, id: 'persisted-test' });
+    await decisionPromise;
+
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe(expectedTransmission);
+    expect(transmissions).toHaveLength(1);
+
+    await pluginManager.shutdown();
   });
 
   it('does not mark a rejected placeholder TX5 message as queued', async () => {

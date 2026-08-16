@@ -63,20 +63,22 @@ function completedQSORecord(id = 'persisted-1') {
 }
 
 describe('StandardQSOPluginRuntime durable QSO lifecycle', () => {
-  it('joins concurrent TX4/TX5 persistence and commits the lifecycle only once', async () => {
+  it('keeps the final frame available while joining concurrent QSO persistence', async () => {
     let resolvePersistence!: (record: ReturnType<typeof completedQSORecord>) => void;
     const operator = createOperator();
     operator.recordQSOLog = vi.fn(() => new Promise((resolve) => {
       resolvePersistence = resolve;
     }));
     const runtime = new StandardQSOPluginRuntime(operator);
+    runtime.patchContext({ targetCallsign: 'JA1AAA' });
+    runtime.setState('TX4');
 
     const first = runtime.persistCompletedQSO(completedQSORecord('temporary-1'));
     const second = runtime.persistCompletedQSO(completedQSORecord('temporary-2'));
     await Promise.resolve();
 
     expect(operator.recordQSOLog).toHaveBeenCalledTimes(1);
-    expect(runtime.getTransmitText()).toBeNull();
+    expect(runtime.getTransmitText()).toBe('JA1AAA BG5DRB RR73');
     resolvePersistence(completedQSORecord());
 
     await expect(first).resolves.toMatchObject({ id: 'persisted-1' });
