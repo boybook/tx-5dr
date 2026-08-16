@@ -222,6 +222,46 @@ test('SlotClock stop clears pending sub-events for the active slot', async () =>
   });
 });
 
+test('SlotClock honors an explicit zero encode advance', async () => {
+  const mode: ModeDescriptor = {
+    name: 'ZERO_ENCODE_ADVANCE',
+    slotMs: 200,
+    toleranceMs: 0,
+    windowTiming: [],
+    transmitTiming: 80,
+    encodeAdvance: 0,
+  };
+  const clock = new SlotClock(createSystemClockSource(), mode);
+  let slotStartedAt = 0;
+  let encodeStartedAt = 0;
+
+  const timings = new Promise<{ encodeDelay: number; transmitDelay: number }>((resolve) => {
+    clock.once('slotStart', () => {
+      slotStartedAt = Date.now();
+    });
+    clock.once('encodeStart', () => {
+      encodeStartedAt = Date.now();
+    });
+    clock.once('transmitStart', () => {
+      const transmitStartedAt = Date.now();
+      clock.stop();
+      resolve({
+        encodeDelay: encodeStartedAt - slotStartedAt,
+        transmitDelay: transmitStartedAt - slotStartedAt,
+      });
+    });
+  });
+
+  clock.start();
+  const result = await timings;
+
+  assert.ok(result.encodeDelay >= 50, `encodeStart fired too early: ${result.encodeDelay}ms`);
+  assert.ok(
+    Math.abs(result.transmitDelay - result.encodeDelay) <= 30,
+    `encodeStart and transmitStart diverged: ${result.encodeDelay}ms vs ${result.transmitDelay}ms`,
+  );
+});
+
 test('SlotClock drops old mode timers after setMode restart', async () => {
   const modeA: ModeDescriptor = {
     name: 'MODE_A',

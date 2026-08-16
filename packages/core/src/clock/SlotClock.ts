@@ -172,7 +172,7 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
 
     // 计算编码和发射时机
     const transmitDelay = this.mode.transmitTiming || 0;
-    const encodeAdvance = this.mode.encodeAdvance || 400; // 默认提前400ms
+    const encodeAdvance = this.mode.encodeAdvance ?? 400; // 0 表示与 transmitStart 同时触发
     const encodeDelay = transmitDelay - encodeAdvance; // 原始编码延迟
 
     // 应用时序补偿（正值表示提前发射，负值表示延后发射）
