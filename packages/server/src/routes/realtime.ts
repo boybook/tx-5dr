@@ -15,6 +15,7 @@ import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { OpenWebRXStationManager } from '../openwebrx/OpenWebRXStationManager.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { RealtimeTransportManager } from '../realtime/RealtimeTransportManager.js';
+import { requireRole } from '../auth/authPlugin.js';
 
 type ParsedRealtimeSessionRequest = {
   scope: 'radio' | 'openwebrx-preview';
@@ -152,7 +153,9 @@ export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
     }));
   });
 
-  fastify.get('/tx-stats', async (_request: FastifyRequest, reply) => {
+  fastify.get('/tx-stats', {
+    preHandler: [requireRole(UserRole.VIEWER)],
+  }, async (_request: FastifyRequest, reply) => {
     const voiceSessionManager = digitalRadioEngine.getVoiceSessionManager();
     const snapshot = voiceSessionManager?.getTxDiagnosticsSnapshot();
 

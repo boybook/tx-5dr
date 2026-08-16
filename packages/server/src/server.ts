@@ -57,6 +57,7 @@ import {
 } from './utils/process-shutdown.js';
 import { bootstrapCoordinator } from './services/BootstrapCoordinator.js';
 import { getNetworkAccessInfo } from './utils/network-access.js';
+import { getTrustedClientIp, isIpLiteralHostname } from './security/trusted-client.js';
 
 const bootLogger = createLogger('ServerBoot');
 const logger = createLogger('Server');
@@ -230,17 +231,20 @@ export function isAllowedWebSocketOrigin(
   const forwardedProto = trustForwarded ? request?.headers['x-forwarded-proto'] : undefined;
   const requestProto = (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto)
     || ((request?.raw.socket as { encrypted?: boolean } | undefined)?.encrypted ? 'https' : 'http');
-  if (requestHost && parsed.origin === `${requestProto}://${requestHost}`) return true;
+  if (requestHost) {
+    try {
+      const requestOrigin = new URL(`${requestProto}://${requestHost}`);
+      if (isIpLiteralHostname(requestOrigin.hostname) && parsed.origin === requestOrigin.origin) return true;
+    } catch {
+      // Invalid Host values are never trusted as browser origins.
+    }
+  }
 
   return explicitOriginAllowed || buildAllowedBrowserOrigins().has(parsed.origin);
 }
 
 function getWebSocketClientIp(request: FastifyRequest): string {
-  const direct = request.raw.socket.remoteAddress || 'unknown';
-  if (!isLoopbackHostname(direct.replace(/^::ffff:/, ''))) return direct;
-  const forwarded = request.headers['x-forwarded-for'];
-  const value = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-  return value?.split(',')[0]?.trim() || direct;
+  return getTrustedClientIp(request);
 }
 
 function acceptBrowserWebSocket(
@@ -564,7 +568,9 @@ export async function createServer() {
     return { message: 'Hello World' };
   });
 
-  fastify.get('/api/system/bootstrap-status', async (_request, reply) => {
+  fastify.get('/api/system/bootstrap-status', {
+    preHandler: [requireRole(UserRole.VIEWER)],
+  }, async (_request, reply) => {
     return reply.send(bootstrapCoordinator.getStatus());
   });
 
