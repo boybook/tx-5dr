@@ -144,9 +144,7 @@ const MIME = new Map(Object.entries({
 }));
 
 function addCors(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
 }
 
 function serveFile(res, absPath) {
@@ -212,6 +210,7 @@ function buildForwardedHeaders(req, entryScheme, targetBase = TARGET) {
   return {
     ...req.headers,
     host: targetUrl.host,
+    'x-real-ip': req.socket.remoteAddress || '',
     'x-forwarded-for': (req.socket.remoteAddress || '') + (req.headers['x-forwarded-for'] ? `, ${req.headers['x-forwarded-for']}` : ''),
     'x-forwarded-proto': entryScheme,
     'x-forwarded-host': hostHeader,
@@ -240,7 +239,6 @@ function proxyHttp(req, res, entryScheme, targetBase = TARGET, rewritePath = nul
     for (const [k, v] of Object.entries(proxyRes.headers)) {
       if (typeof v !== 'undefined') res.setHeader(k, v);
     }
-    addCors(res);
     res.writeHead(proxyRes.statusCode || 500);
     proxyRes.pipe(res, { end: true });
   });
@@ -259,9 +257,7 @@ function proxyHttp(req, res, entryScheme, targetBase = TARGET, rewritePath = nul
     const headers = {
       'Content-Type': 'application/json; charset=utf-8',
       'x-proxy-error': isOffline ? 'backend_offline' : 'proxy_error',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+      'Cross-Origin-Resource-Policy': 'same-origin',
     };
     res.writeHead(status, headers);
     const body = {
@@ -301,14 +297,13 @@ function handleRequest(req, res, entryScheme) {
       return res.end();
     }
 
-    if (req.method === 'OPTIONS') {
-      addCors(res);
-      res.statusCode = 204;
-      return res.end();
-    }
-
     if (pathname === '/api' || pathname.startsWith('/api/')) {
       return proxyHttp(req, res, entryScheme);
+    }
+
+    if (req.method === 'OPTIONS') {
+      res.statusCode = 204;
+      return res.end();
     }
 
     if (DEV_WEB_TARGET) {

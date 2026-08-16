@@ -36,6 +36,7 @@ const logger = createLogger('AuthManager');
 const BCRYPT_ROUNDS = 10;
 const TOKEN_PREFIX = 'txdr_';
 const TOKEN_BYTES = 32;
+const DUMMY_PASSWORD_HASH = '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi';
 
 export interface BrowserLoginIdentity {
   tokenId: string;
@@ -376,23 +377,24 @@ export class AuthManager {
 
   async validatePasswordLogin(username: string, password: string): Promise<AuthToken | null> {
     const token = this.findTokenByUsernameNormalized(this.normalizeUsername(username));
-    if (!token?.loginCredential) return null;
-    if (token.revoked) return null;
-    if (token.expiresAt && token.expiresAt < Date.now()) return null;
-
-    const match = await bcrypt.compare(password, token.loginCredential.passwordHash);
-    if (!match) return null;
+    const usableToken = token?.loginCredential
+      && !token.revoked
+      && (!token.expiresAt || token.expiresAt >= Date.now())
+      ? token
+      : null;
+    const match = await bcrypt.compare(password, usableToken?.loginCredential?.passwordHash ?? DUMMY_PASSWORD_HASH);
+    if (!usableToken || !match) return null;
 
     const lastUsedAt = Date.now();
     if (PersistenceCoordinator.getInstance().areMutationsBlocked()) {
-      logger.debug('auth lastUsedAt update skipped during shutdown', { tokenId: token.id });
+      logger.debug('auth lastUsedAt update skipped during shutdown', { tokenId: usableToken.id });
     } else {
       this.runtimeState.set('authLastUsedAt', {
         ...(this.runtimeState.get('authLastUsedAt') ?? {}),
-        [token.id]: lastUsedAt,
+        [usableToken.id]: lastUsedAt,
       }, { defer: true }).catch(() => {});
     }
-    return { ...token, lastUsedAt };
+    return { ...usableToken, lastUsedAt };
   }
 
   private async findTokenByPlainText(plainToken: string): Promise<AuthToken | null> {

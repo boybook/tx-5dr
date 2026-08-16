@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   LoginRequestSchema,
   PasswordLoginRequestSchema,
@@ -14,9 +14,28 @@ import { AuthManager, AuthManagerError } from '../auth/AuthManager.js';
 import { requireRole } from '../auth/authPlugin.js';
 import { BrowserLoginCodeCapacityError } from '../auth/BrowserLoginCodeStore.js';
 import { WSServer } from '../websocket/WSServer.js';
+import { LoginAttemptLimiter } from '../auth/LoginAttemptLimiter.js';
+import { getTrustedClientIp } from '../security/trusted-client.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('AuthRoutes');
+
+function sendLoginThrottled(reply: FastifyReply, retryAfterMs: number) {
+  const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  reply.header('Retry-After', String(retryAfterSeconds));
+  return reply.code(429).send({
+    success: false,
+    error: {
+      code: 'TOO_MANY_LOGIN_ATTEMPTS',
+      message: 'Too many login attempts',
+      userMessage: 'Too many login attempts. Please try again later.',
+    },
+  });
+}
 
 export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   const authManager = AuthManager.getInstance();
+  const loginLimiter = new LoginAttemptLimiter();
 
   // GET /api/auth/status — 公开，返回认证模式信息
   fastify.get('/status', async () => {
@@ -26,7 +45,18 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /api/auth/login — 公开，Token 登录
   fastify.post('/login', async (request, reply) => {
     const body = LoginRequestSchema.parse(request.body);
-    const authToken = await authManager.validateToken(body.token);
+    const clientIp = getTrustedClientIp(request);
+    const admission = loginLimiter.acquire(clientIp);
+    if (!admission.allowed) {
+      logger.warn('Token login throttled', { clientIp, reason: admission.reason });
+      return sendLoginThrottled(reply, admission.retryAfterMs);
+    }
+    let authToken;
+    try {
+      authToken = await authManager.validateToken(body.token);
+    } finally {
+      admission.release();
+    }
 
     if (!authToken) {
       return reply.code(401).send({
@@ -54,7 +84,19 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /api/auth/login-password — 公开，用户名密码登录
   fastify.post('/login-password', async (request, reply) => {
     const body = PasswordLoginRequestSchema.parse(request.body);
-    const authToken = await authManager.validatePasswordLogin(body.username, body.password);
+    const clientIp = getTrustedClientIp(request);
+    const accountKey = body.username.trim().toLocaleLowerCase('en-US');
+    const admission = loginLimiter.acquire(clientIp, accountKey);
+    if (!admission.allowed) {
+      logger.warn('Password login throttled', { clientIp, reason: admission.reason });
+      return sendLoginThrottled(reply, admission.retryAfterMs);
+    }
+    let authToken;
+    try {
+      authToken = await authManager.validatePasswordLogin(body.username, body.password);
+    } finally {
+      admission.release();
+    }
 
     if (!authToken) {
       return reply.code(401).send({

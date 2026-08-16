@@ -174,7 +174,7 @@ export class WSClient extends WSMessageHandler {
         // Only the current socket's close should drive global reconnect state.
         if (!isCurrent) return;
 
-        if (this.manualDisconnect || replacedBySelf || event.code === 4001 || event.code === 4403 || event.code === 4408 || event.code === 4429) {
+        if (this.manualDisconnect || replacedBySelf || event.code === 4001 || event.code === 4003 || event.code === 4403 || event.code === 4408 || event.code === 4429) {
           if (replacedBySelf || event.code === 4001) {
             logger.info('Connection replaced by newer connection, will not reconnect');
           }

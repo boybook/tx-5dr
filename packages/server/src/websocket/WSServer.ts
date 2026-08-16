@@ -365,6 +365,8 @@ export class WSServer extends WSMessageHandler {
   private connectionIps = new Map<string, string>();
   private authTimers = new Map<string, NodeJS.Timeout>();
   private handshakeTimers = new Map<string, NodeJS.Timeout>();
+  private androidAudioBroadcastTimer: NodeJS.Timeout | null = null;
+  private pendingAndroidAudioStatus: unknown = null;
   private digitalRadioEngine: DigitalRadioEngine;
   private processMonitor: ProcessMonitor | null = null;
   private spectrumCoordinator: SpectrumCoordinator;
@@ -757,7 +759,14 @@ export class WSServer extends WSMessageHandler {
     });
 
     this.digitalRadioEngine.on('androidOperatorAudioStatusChanged', (data) => {
-      this.broadcast(WSMessageType.ANDROID_OPERATOR_AUDIO_STATUS_CHANGED, data);
+      this.pendingAndroidAudioStatus = data;
+      if (this.androidAudioBroadcastTimer) return;
+      this.androidAudioBroadcastTimer = setTimeout(() => {
+        this.androidAudioBroadcastTimer = null;
+        const latest = this.pendingAndroidAudioStatus;
+        this.pendingAndroidAudioStatus = null;
+        this.broadcast(WSMessageType.ANDROID_OPERATOR_AUDIO_STATUS_CHANGED, latest);
+      }, 500);
     });
 
     this.digitalRadioEngine.on('cwKeyerStatusChanged', (data) => {
@@ -1753,7 +1762,8 @@ export class WSServer extends WSMessageHandler {
    * 广播消息到所有客户端
    */
   broadcast(type: string, data?: any, id?: string): void {
-    const activeConnections = this.getActiveConnections();
+    const activeConnections = this.getActiveConnections()
+      .filter(connection => connection.hasResolvedIdentity());
 
     activeConnections.forEach(connection => {
       connection.send(type, data, id);
@@ -3023,6 +3033,9 @@ export class WSServer extends WSMessageHandler {
       this.clearConnectionTimers(id);
     }
     this.connectionIps.clear();
+    if (this.androidAudioBroadcastTimer) clearTimeout(this.androidAudioBroadcastTimer);
+    this.androidAudioBroadcastTimer = null;
+    this.pendingAndroidAudioStatus = null;
   }
 
   /**
