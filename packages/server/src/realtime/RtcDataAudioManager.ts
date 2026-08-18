@@ -24,7 +24,11 @@ import { resolveBrowserFacingRequestOrigin } from './requestOrigin.js';
 import { handleRealtimeClockSyncControlMessage } from './RealtimeClockSyncControl.js';
 import { RealtimeDownlinkAudioEncoder, RealtimeUplinkAudioDecoder } from './RealtimeAudioCodecPipeline.js';
 import type { RealtimeRxAudioRouter } from './RealtimeRxAudioRouter.js';
-import type { RealtimeAudioFrame, RealtimeRxAudioSource } from './RealtimeRxAudioSource.js';
+import type {
+  RealtimeAudioFrame,
+  RealtimeRxAudioSource,
+  RealtimeRxAudioSourceUnavailableReason,
+} from './RealtimeRxAudioSource.js';
 import {
   appendPublicIceCandidatesToSdp,
   createPublicIceCandidateVariants,
@@ -333,7 +337,16 @@ export class RtcDataAudioManager {
       unordered: true,
       maxRetransmits: 0,
     });
-    cleanupChannelBinding = this.bindDataChannel(dataChannel, session, sendJson);
+    cleanupChannelBinding = this.bindDataChannel(dataChannel, session, sendJson, (reason) => {
+      logger.info('Closing rtc data audio monitor because its source became unavailable', {
+        scope: session.scope,
+        reason,
+      });
+      cleanup();
+      if (socket.readyState === 1) {
+        socket.close(4004, 'Realtime audio source is not available');
+      }
+    });
 
     socket.on('message', (payload: Buffer | ArrayBuffer | Buffer[]) => {
       const buffer = Array.isArray(payload)
@@ -416,6 +429,7 @@ export class RtcDataAudioManager {
     dataChannel: DataChannel,
     session: RtcDataAudioSessionRecord,
     sendJson: (payload: Record<string, unknown>) => void,
+    onSourceUnavailable: (reason: RealtimeRxAudioSourceUnavailableReason) => void,
   ): () => void {
     let cleanupSource: (() => void) | null = null;
     let source: RealtimeRxAudioSource | null = null;
@@ -450,6 +464,7 @@ export class RtcDataAudioManager {
       source = this.rxAudioRouter.resolveSource(session.scope, session.previewSessionId);
       if (!source) {
         logger.warn('Rtc data audio source is not available', { scope: session.scope, previewSessionId: session.previewSessionId });
+        onSourceUnavailable('if-input-monitor-disabled');
         return;
       }
 
@@ -492,9 +507,15 @@ export class RtcDataAudioManager {
         }
       };
 
+      const handleSourceUnavailable = (reason: RealtimeRxAudioSourceUnavailableReason): void => {
+        onSourceUnavailable(reason);
+      };
+
       source.on('audioFrame', handleAudioFrame);
+      source.on('unavailable', handleSourceUnavailable);
       cleanupSource = () => {
         source?.off('audioFrame', handleAudioFrame);
+        source?.off('unavailable', handleSourceUnavailable);
       };
     });
 

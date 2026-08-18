@@ -4,8 +4,6 @@ import { createLogger } from './logger';
 const logger = createLogger('SpectrumPrefs');
 
 const STORAGE_KEY = 'tx5dr_spectrum_preferences';
-/** Fallback bucket when no active profile id is available yet. */
-const GLOBAL_SELECTION_KEY = '__global__';
 
 const VALID_KINDS = new Set<SpectrumKind>(['audio', 'radio-sdr', 'openwebrx-sdr']);
 
@@ -55,24 +53,19 @@ function writeStore(store: SpectrumPreferenceStore): void {
   }
 }
 
-function selectionKey(profileId: string | null): string {
-  return profileId ?? GLOBAL_SELECTION_KEY;
-}
-
 export function getPreferredSpectrumKind(profileId: string | null): SpectrumKind | null {
+  if (!profileId) {
+    return null;
+  }
   const store = readStore();
-  const key = selectionKey(profileId);
-  return store.profileSelections[key]
-    ?? (profileId ? store.profileSelections[GLOBAL_SELECTION_KEY] ?? null : null);
+  return store.profileSelections[profileId] ?? null;
 }
 
 export function setPreferredSpectrumKind(profileId: string | null, kind: SpectrumKind): void {
-  if (!isSpectrumKind(kind)) {
+  if (!profileId || !isSpectrumKind(kind)) {
     return;
   }
   const store = readStore();
-  store.profileSelections[selectionKey(profileId)] = kind;
-  // Keep a global fallback so refresh still works before profile id is known.
-  store.profileSelections[GLOBAL_SELECTION_KEY] = kind;
+  store.profileSelections[profileId] = kind;
   writeStore(store);
 }

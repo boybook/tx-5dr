@@ -89,6 +89,19 @@ export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
       }
     }
 
+    if (
+      body.scope === 'radio'
+      && body.direction === 'recv'
+      && !transportManager.isSourceAvailable(body.scope)
+    ) {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_OPERATION,
+        message: 'Radio audio monitoring is disabled while the input signal type is Icom 12 kHz IF',
+        userMessage: 'Audio monitoring is unavailable in IF input mode. Switch the audio input signal type to AF to listen.',
+        userMessageKey: 'radio:monitor.disabledForIfInput',
+      });
+    }
+
     const response = await transportManager.issueSession({
       scope: body.scope,
       direction: body.direction,

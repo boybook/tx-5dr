@@ -5,6 +5,7 @@ import {
   canWriteRadioFrequency,
   deriveMonitorActivationCtaState,
   filterDigitalFrequencyOptions,
+  isAudioMonitorAvailableForInputSignal,
   isFakeFrequencySupportedMode,
   isCoreCapabilityAvailable,
   shouldShowAntennaTuneEntry,
@@ -14,6 +15,12 @@ import {
 } from '../radioControl';
 
 describe('radioControl utils', () => {
+  it('allows audio monitoring for AF or legacy profiles but disables it for IF input', () => {
+    expect(isAudioMonitorAvailableForInputSignal('af')).toBe(true);
+    expect(isAudioMonitorAvailableForInputSignal(undefined)).toBe(true);
+    expect(isAudioMonitorAvailableForInputSignal('icom-12k-if')).toBe(false);
+  });
+
   it('keeps digital presets available when current mode is unknown', () => {
     const frequencies = [
       { key: 'ft8', mode: 'FT8' },

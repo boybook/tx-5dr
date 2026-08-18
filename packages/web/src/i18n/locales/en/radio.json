@@ -105,6 +105,7 @@
   "monitor": {
     "audioMonitor": "Audio monitor",
     "activateAudioMonitor": "Enable monitor",
+    "disabledForIfInput": "Audio monitoring is unavailable in IF input mode. Switch the audio input signal type to AF to listen.",
     "monitorVolume": "Monitor volume",
     "latency": "Delay",
     "buffer": "Playback buffer",

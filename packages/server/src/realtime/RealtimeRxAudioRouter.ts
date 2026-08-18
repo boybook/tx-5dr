@@ -20,8 +20,9 @@ export class RealtimeRxAudioRouter {
 
   resolveSource(scope: RealtimeScope, previewSessionId?: string): RealtimeRxAudioSource | null {
     if (scope === 'radio') {
-      this.logSourceResolution('radio', this.nativeRadioSource);
-      return this.nativeRadioSource;
+      const source = this.nativeRadioSource.isAvailable() ? this.nativeRadioSource : null;
+      this.logSourceResolution('radio', source);
+      return source;
     }
 
     const status = this.stationManager.getListenStatus();
@@ -34,6 +35,10 @@ export class RealtimeRxAudioRouter {
     const source = monitor ? this.getBufferedSource(monitor, 'openwebrx-monitor', `openwebrx:${status.previewSessionId}`) : null;
     this.logSourceResolution(`openwebrx-preview:${previewSessionId ?? 'none'}`, source);
     return source;
+  }
+
+  isSourceAvailable(scope: RealtimeScope, previewSessionId?: string): boolean {
+    return this.resolveSource(scope, previewSessionId) !== null;
   }
 
   getLatestStats(scope: RealtimeScope, previewSessionId?: string): RealtimeRxAudioSourceStats | null {

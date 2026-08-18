@@ -106,7 +106,10 @@ describe('RealtimeTransportManager', () => {
     const { RealtimeTransportManager } = await import('../RealtimeTransportManager.js');
     return RealtimeTransportManager.initialize(
       {} as never,
-      { resolveSource: mockResolveSource } as never,
+      {
+        resolveSource: mockResolveSource,
+        isSourceAvailable: (...args: unknown[]) => mockResolveSource(...args) !== null,
+      } as never,
     );
   }
 
@@ -276,6 +279,7 @@ describe('RealtimeTransportManager', () => {
     const source = Object.assign(new EventEmitter(), {
       id: 'native-radio:radio',
       sourcePath: 'native-radio',
+      isAvailable: () => true,
       getLatestStats: () => null,
     });
     mockResolveSource.mockReturnValue(source);
@@ -329,5 +333,35 @@ describe('RealtimeTransportManager', () => {
     const float32 = int16ToFloat32Pcm(decoded.pcm);
     expect(float32[0]).toBeCloseTo(0.5, 3);
     expect(float32[float32.length - 1]).toBeCloseTo(0.5, 3);
+  });
+
+  it('closes an active ws-compat monitor when its source becomes unavailable', async () => {
+    const source = Object.assign(new EventEmitter(), {
+      id: 'native-radio:radio',
+      sourcePath: 'native-radio',
+      isAvailable: () => true,
+      getLatestStats: () => null,
+    });
+    mockResolveSource.mockReturnValue(source);
+
+    const manager = await createManager();
+    const session = await manager.issueSession(createIssueSessionParams({
+      transportOverride: 'ws-compat',
+    }));
+    const offer = session.offers[0];
+    const socket = {
+      readyState: 1,
+      send: vi.fn(),
+      close: vi.fn(),
+      once: vi.fn(),
+      on: vi.fn(),
+    };
+
+    manager.acceptCompatConnection(socket as never, `/api/realtime/ws-compat?token=${offer?.token}`);
+    source.emit('unavailable', 'if-input-monitor-disabled');
+
+    expect(socket.close).toHaveBeenCalledWith(4004, 'Realtime audio source is not available');
+    expect(source.listenerCount('audioFrame')).toBe(0);
+    expect(source.listenerCount('unavailable')).toBe(0);
   });
 });
