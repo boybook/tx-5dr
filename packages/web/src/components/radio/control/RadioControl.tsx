@@ -28,6 +28,7 @@ import {
   canWriteRadioFrequency,
   deriveMonitorActivationCtaState,
   filterDigitalFrequencyOptions,
+  isAudioMonitorAvailableForInputSignal,
   shouldShowFakeFrequencyEntry,
   shouldShowAntennaTuneEntry,
   shouldShowRadioControlEntry,
@@ -687,10 +688,19 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   // 音频监听 (reusable hook)
   const audioMonitor = useAudioMonitorPlayback({ scope: 'radio' });
+  const isAudioMonitorDisabledForIf = !isAudioMonitorAvailableForInputSignal(activeProfile?.audio?.inputSignalType);
   const [monitorVolume, setMonitorVolume] = useState(1.0); // 监听音量（线性增益）
   const [hasActivatedMonitorPlayback, setHasActivatedMonitorPlayback] = useState(false);
   const [monitorAudioCodecPreference, setMonitorAudioCodecPreference] = useState<RealtimeAudioCodecPreference>(() => loadRealtimeAudioCodecPreference());
   const monitorWheelPixelRemainderRef = React.useRef(0);
+
+  useEffect(() => {
+    if (!isAudioMonitorDisabledForIf) {
+      return;
+    }
+    audioMonitor.stop();
+    setHasActivatedMonitorPlayback(false);
+  }, [audioMonitor.stop, isAudioMonitorDisabledForIf]);
 
   // OpenWebRX client count (for multi-user confirmation)
   const openwebrxClientCountRef = React.useRef(0);
@@ -1344,6 +1354,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   // 切换监听状态
   const toggleMonitoring = async () => {
+    if (isAudioMonitorDisabledForIf) {
+      audioMonitor.stop();
+      return;
+    }
     if (audioMonitor.isPlaying) {
       audioMonitor.stop();
     } else {
@@ -1953,20 +1967,27 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
               </ToolbarIconTooltip>
             )}
             {monitorActivationCta.shouldShowActivationCta ? (
-              <Button
-                size="sm"
-                variant="flat"
-                color="primary"
-                className="h-6 min-w-0 px-2 text-xs font-medium"
-                onPress={toggleMonitoring}
-                isDisabled={!connection.state.isConnected}
-                aria-label={t('monitor.activateAudioMonitor')}
+              <Tooltip
+                content={t('monitor.disabledForIfInput')}
+                isDisabled={!isAudioMonitorDisabledForIf}
               >
-                <FontAwesomeIcon icon={faHeadphones} className="text-xs" />
-                {t('monitor.activateAudioMonitor')}
-              </Button>
+                <span className="inline-flex">
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    color="primary"
+                    className="h-6 min-w-0 px-2 text-xs font-medium"
+                    onPress={toggleMonitoring}
+                    isDisabled={!connection.state.isConnected || isAudioMonitorDisabledForIf}
+                    aria-label={t('monitor.activateAudioMonitor')}
+                  >
+                    <FontAwesomeIcon icon={faHeadphones} className="text-xs" />
+                    {t('monitor.activateAudioMonitor')}
+                  </Button>
+                </span>
+              </Tooltip>
             ) : (
-              <ToolbarIconTooltip label={t('monitor.audioMonitor')}>
+              <ToolbarIconTooltip label={isAudioMonitorDisabledForIf ? t('monitor.disabledForIfInput') : t('monitor.audioMonitor')}>
                 <Popover>
                   <PopoverTrigger>
                     <Button
@@ -1975,6 +1996,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                       size="sm"
                       className={`min-w-unit-6 min-w-6 w-6 h-6 ${audioMonitor.isPlaying ? 'text-success' : 'text-default-400'}`}
                       aria-label={t('monitor.audioMonitor')}
+                      isDisabled={isAudioMonitorDisabledForIf}
                     >
                       <FontAwesomeIcon icon={faHeadphones} className="text-xs" />
                     </Button>
@@ -2207,7 +2229,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                             className="w-full h-7"
                             onPress={handleSwitchMonitorTransport}
                             isLoading={isSwitchingMonitorTransport}
-                            isDisabled={!audioMonitor.transportKind || audioMonitor.transportKind === 'android-native' || isSwitchingMonitorTransport}
+                            isDisabled={isAudioMonitorDisabledForIf || !audioMonitor.transportKind || audioMonitor.transportKind === 'android-native' || isSwitchingMonitorTransport}
                           >
                             {audioMonitor.transportKind === 'android-native'
                               ? t('monitor.androidNativeAudioShort')
@@ -2224,6 +2246,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                           size="sm"
                           isSelected={audioMonitor.isPlaying}
                           onValueChange={toggleMonitoring}
+                          isDisabled={isAudioMonitorDisabledForIf}
                           aria-label={t('monitor.monitorSwitch')}
                         />
                       </div>

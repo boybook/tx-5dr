@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SpectrumCapabilities } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { createSpectrumNegotiator } from '../radio/spectrumNegotiation';
 import { initialRadioState, radioReducer, type RadioState } from '../radioStore';
 import { setSpectrumSubscriptionPaused } from '../../utils/spectrumSubscriptionPause';
+import { getPreferredSpectrumKind, setPreferredSpectrumKind } from '../../utils/spectrumPreferences';
 
 function createCapabilities(options: {
   audioAvailable?: boolean;
@@ -60,7 +61,7 @@ function createCapabilities(options: {
   };
 }
 
-function createHarness() {
+function createHarness(profileId: string | null = null) {
   const radioService = {
     subscribeSpectrum: vi.fn(),
     invokeSpectrumControl: vi.fn(),
@@ -73,7 +74,7 @@ function createHarness() {
     },
   };
   const capabilitiesRef = { current: null as SpectrumCapabilities | null };
-  const activeProfileIdRef = { current: null as string | null };
+  const activeProfileIdRef = { current: profileId };
   const spectrumAutoPriorityPendingRef = { current: true };
   const pendingDefaultOpenWebRXDetailProfileRef = { current: null as string | null };
 
@@ -106,12 +107,24 @@ function createHarness() {
     radioStateRef,
     capabilitiesRef,
     spectrumAutoPriorityPendingRef,
+    activeProfileIdRef,
   };
 }
 
 describe('spectrum negotiation', () => {
   beforeEach(() => {
     setSpectrumSubscriptionPaused(false);
+    const memory = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => memory.get(key) ?? null,
+      setItem: (key: string, value: string) => { memory.set(key, value); },
+      removeItem: (key: string) => { memory.delete(key); },
+      clear: () => { memory.clear(); },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('auto-upgrades from audio to radio SDR when radio SDR becomes available later', () => {
@@ -188,6 +201,75 @@ describe('spectrum negotiation', () => {
     expect(harness.radioStateRef.current.selectedSpectrumKind).toBe('audio');
     expect(harness.radioStateRef.current.subscribedSpectrumKind).toBe('audio');
     expect(harness.radioService.subscribeSpectrum).toHaveBeenLastCalledWith('audio');
+  });
+
+  it('restores a persisted audio preference instead of auto-picking radio SDR', () => {
+    const profileId = 'profile-1';
+    setPreferredSpectrumKind(profileId, 'audio');
+    const harness = createHarness(profileId);
+
+    harness.negotiator.applySpectrumSelection(createCapabilities({
+      profileId,
+      radioSupported: true,
+      radioAvailable: true,
+    }));
+
+    expect(harness.radioStateRef.current.selectedSpectrumKind).toBe('audio');
+    expect(harness.radioStateRef.current.subscribedSpectrumKind).toBe('audio');
+    expect(harness.spectrumAutoPriorityPendingRef.current).toBe(false);
+    expect(harness.radioService.subscribeSpectrum).toHaveBeenLastCalledWith('audio');
+  });
+
+  it('keeps spectrum preferences strictly isolated by Profile', () => {
+    setPreferredSpectrumKind('profile-a', 'audio');
+    setPreferredSpectrumKind('profile-b', 'radio-sdr');
+
+    expect(getPreferredSpectrumKind('profile-a')).toBe('audio');
+    expect(getPreferredSpectrumKind('profile-b')).toBe('radio-sdr');
+    expect(getPreferredSpectrumKind('profile-c')).toBeNull();
+  });
+
+  it('does not persist or restore a preference without a Profile id', () => {
+    setPreferredSpectrumKind(null, 'audio');
+
+    expect(getPreferredSpectrumKind(null)).toBeNull();
+    expect(localStorage.getItem('tx5dr_spectrum_preferences')).toBeNull();
+  });
+
+  it('ignores the legacy global preference bucket', () => {
+    localStorage.setItem('tx5dr_spectrum_preferences', JSON.stringify({
+      profileSelections: { __global__: 'audio' },
+      lastUpdated: Date.now(),
+    }));
+
+    expect(getPreferredSpectrumKind('new-profile')).toBeNull();
+    const harness = createHarness('new-profile');
+    harness.negotiator.applySpectrumSelection(createCapabilities({
+      profileId: 'new-profile',
+      radioSupported: true,
+      radioAvailable: true,
+    }));
+    expect(harness.radioStateRef.current.selectedSpectrumKind).toBe('radio-sdr');
+  });
+
+  it('keeps a persisted audio preference across mode-driven reset', () => {
+    const profileId = 'profile-1';
+    setPreferredSpectrumKind(profileId, 'audio');
+    const harness = createHarness(profileId);
+    const capabilities = createCapabilities({
+      profileId,
+      radioSupported: true,
+      radioAvailable: true,
+    });
+
+    harness.capabilitiesRef.current = capabilities;
+    harness.negotiator.applyModeDrivenSpectrumNegotiation();
+
+    expect(harness.radioStateRef.current.selectedSpectrumKind).toBe('audio');
+    expect(harness.spectrumAutoPriorityPendingRef.current).toBe(false);
+
+    harness.negotiator.applySpectrumSelection(capabilities);
+    expect(harness.radioStateRef.current.selectedSpectrumKind).toBe('audio');
   });
 
   it('re-enables auto priority after mode-driven reset', () => {

@@ -57,6 +57,33 @@ function _generateWhiteNoise(sampleRate: number, duration: number, amplitude = 0
   return data;
 }
 
+/** Generate brown (1/f^2) noise: a strongly low-frequency-tilted floor for flatten tests. */
+function generateBrownNoise(sampleRate: number, duration: number, amplitude = 0.3): Float32Array {
+  const numSamples = Math.floor(sampleRate * duration);
+  const data = new Float32Array(numSamples);
+  let acc = 0;
+  for (let i = 0; i < numSamples; i++) {
+    acc += (Math.random() * 2 - 1) * 0.02;
+    acc *= 0.999; // leak to keep the walk bounded
+    data[i] = acc;
+  }
+  let peak = 0;
+  for (let i = 0; i < numSamples; i++) {
+    peak = Math.max(peak, Math.abs(data[i]));
+  }
+  if (peak > 0) {
+    for (let i = 0; i < numSamples; i++) {
+      data[i] = (data[i] / peak) * amplitude;
+    }
+  }
+  return data;
+}
+
+function medianOf(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
 describe('SpectrumAnalyzer', () => {
   const defaultConfig = {
     sampleRate: 12000,
@@ -139,6 +166,52 @@ describe('SpectrumAnalyzer', () => {
       const specSilence = await analyzer.analyze(silence);
 
       expect(getPeakInfo(specSine).peakMagnitude).toBeGreaterThan(getPeakInfo(specSilence).peakMagnitude + 30);
+    });
+
+    it('IF baseline flatten keeps the tone peak prominent above its skirt', async () => {
+      const analyzerFlat = new SpectrumAnalyzer({
+        sampleRate: 6000,
+        fftSize: 4096,
+        targetSampleRate: 6000,
+        windowFunction: 'blackman',
+        haloReduce: true,
+      });
+      const audio = generateSineWave(1000, 6000, 2.0, 0.9);
+      const flat = await analyzerFlat.analyze(audio);
+      const flatDb = decodeDbValues(flat);
+      const step = (flat.frequencyRange.max - flat.frequencyRange.min) / Math.max(flatDb.length - 1, 1);
+      const peakIndex = Math.round((1000 - flat.frequencyRange.min) / step);
+      const skirtIndex = Math.min(flatDb.length - 1, peakIndex + 8);
+
+      // The real tone is preserved and clearly stands out from the nearby skirt.
+      expect(flatDb[peakIndex]).toBeGreaterThan(flatDb[skirtIndex] + 10);
+    });
+
+    it('IF baseline flatten flattens a colored (tilted) noise floor', async () => {
+      const analyzerPlain = new SpectrumAnalyzer({
+        sampleRate: 6000,
+        fftSize: 4096,
+        targetSampleRate: 6000,
+        windowFunction: 'blackman',
+      });
+      const analyzerFlat = new SpectrumAnalyzer({
+        sampleRate: 6000,
+        fftSize: 4096,
+        targetSampleRate: 6000,
+        windowFunction: 'blackman',
+        haloReduce: true,
+      });
+      const brown = generateBrownNoise(6000, 2.0);
+      const plainDb = decodeDbValues(await analyzerPlain.analyze(brown));
+      const flatDb = decodeDbValues(await analyzerFlat.analyze(brown));
+
+      const lowBand = (arr: number[]) => medianOf(arr.slice(20, 80));
+      const highBand = (arr: number[]) => medianOf(arr.slice(arr.length - 120, arr.length - 60));
+      const plainTilt = Math.abs(lowBand(plainDb) - highBand(plainDb));
+      const flatTilt = Math.abs(lowBand(flatDb) - highBand(flatDb));
+
+      // Flattening should collapse most of the low-vs-high noise-floor tilt.
+      expect(flatTilt).toBeLessThan(plainTilt * 0.7);
     });
   });
 

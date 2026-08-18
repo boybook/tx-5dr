@@ -32,7 +32,11 @@ import {
   resolveRealtimeAudioCodecPolicy,
 } from './RealtimeAudioCodecPipeline.js';
 import type { RealtimeRxAudioRouter } from './RealtimeRxAudioRouter.js';
-import type { RealtimeAudioFrame, RealtimeRxAudioSourceStats } from './RealtimeRxAudioSource.js';
+import type {
+  RealtimeAudioFrame,
+  RealtimeRxAudioSourceStats,
+  RealtimeRxAudioSourceUnavailableReason,
+} from './RealtimeRxAudioSource.js';
 import { buildRtcDataAudioConnectivityHints, RtcDataAudioManager } from './RtcDataAudioManager.js';
 
 const logger = createLogger('RealtimeTransportManager');
@@ -207,6 +211,10 @@ export class RealtimeTransportManager {
     return this.rxAudioRouter.getLatestStats(scope, previewSessionId);
   }
 
+  isSourceAvailable(scope: RealtimeScope, previewSessionId?: string): boolean {
+    return this.rxAudioRouter.isSourceAvailable(scope, previewSessionId);
+  }
+
   acceptRtcDataAudioConnection(socket: WebSocket, rawUrl: string): void {
     this.rtcDataAudioManager.acceptConnection(socket, rawUrl);
   }
@@ -279,11 +287,28 @@ export class RealtimeTransportManager {
         }
       };
 
-      source.on('audioFrame', handleAudioData);
-      context.cleanup = () => {
+      let sourceCleanedUp = false;
+      const cleanupSource = () => {
+        if (sourceCleanedUp) {
+          return;
+        }
+        sourceCleanedUp = true;
         clearInterval(probeTimer);
         source.off('audioFrame', handleAudioData);
+        source.off('unavailable', handleSourceUnavailable);
       };
+      const handleSourceUnavailable = (reason: RealtimeRxAudioSourceUnavailableReason) => {
+        logger.info('Closing compatibility audio monitor because its source became unavailable', {
+          scope: session.scope,
+          reason,
+        });
+        cleanupSource();
+        socket.close(4004, 'Realtime audio source is not available');
+      };
+
+      source.on('audioFrame', handleAudioData);
+      source.on('unavailable', handleSourceUnavailable);
+      context.cleanup = cleanupSource;
       socket.on('message', (payload: Buffer | ArrayBuffer | Buffer[]) => {
         handleRealtimeClockSyncControlMessage(payload, sendClockSyncJson);
       });

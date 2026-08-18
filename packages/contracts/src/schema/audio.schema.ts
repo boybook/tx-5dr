@@ -124,6 +124,13 @@ export const AudioDeviceResolutionSetSchema = z.object({
 export const AudioOutputSampleFormatSchema = z.enum(['float32', 'int16']);
 export const AudioOutputChannelModeSchema = z.enum(['mono', 'left', 'right', 'both']);
 
+/**
+ * How USB/ACC capture PCM should be interpreted before the internal 12 kHz AF ring.
+ * - af: already-demodulated SSB baseband (default)
+ * - icom-12k-if: Icom ACC/USB Output Select=IF (~12 kHz IF); software SSB demod required
+ */
+export const AudioInputSignalTypeSchema = z.enum(['af', 'icom-12k-if']);
+
 // 音频设备列表响应
 export const AudioDevicesResponseSchema = z.object({
   inputDevices: z.array(AudioDeviceSchema),
@@ -150,6 +157,10 @@ export const AudioDeviceSettingsSchema = z.object({
   outputBufferSize: z.number().optional(),
   outputSampleFormat: AudioOutputSampleFormatSchema.optional(),
   outputChannelMode: AudioOutputChannelModeSchema.optional(),
+  /** Capture signal interpretation. Defaults to demodulated AF baseband. */
+  inputSignalType: AudioInputSignalTypeSchema.optional(),
+  /** IF center frequency in Hz when inputSignalType is icom-12k-if (default 12000). */
+  ifCenterHz: z.number().positive().max(24000).optional(),
   sampleRate: z.number().optional(),
   bufferSize: z.number().optional(),
 });
@@ -216,6 +227,7 @@ export type AudioDeviceResolution = z.infer<typeof AudioDeviceResolutionSchema>;
 export type AudioDeviceResolutionSet = z.infer<typeof AudioDeviceResolutionSetSchema>;
 export type AudioOutputSampleFormat = z.infer<typeof AudioOutputSampleFormatSchema>;
 export type AudioOutputChannelMode = z.infer<typeof AudioOutputChannelModeSchema>;
+export type AudioInputSignalType = z.infer<typeof AudioInputSignalTypeSchema>;
 export type AudioDevicesResponse = z.infer<typeof AudioDevicesResponseSchema>;
 export type AudioDeviceSettings = z.infer<typeof AudioDeviceSettingsSchema>;
 export type AudioDeviceSettingsResponse = z.infer<typeof AudioDeviceSettingsResponseSchema>;

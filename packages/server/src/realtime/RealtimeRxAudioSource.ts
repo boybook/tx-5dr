@@ -4,6 +4,7 @@ import type { BufferedPreviewAudioService } from '../audio/BufferedPreviewAudioS
 
 export type RealtimeRxAudioSourcePath = 'native-radio' | 'buffered-preview';
 export type RealtimeRxNativeSourceKind = NativeAudioInputSourceKind | 'voice-tx-monitor' | 'openwebrx-monitor';
+export type RealtimeRxAudioSourceUnavailableReason = 'if-input-monitor-disabled';
 
 export interface RealtimeAudioFrame {
   samples: Float32Array;
@@ -31,11 +32,13 @@ export interface RealtimeRxAudioSourceStats {
 
 export interface RealtimeRxAudioSourceEvents {
   audioFrame: (frame: RealtimeAudioFrame) => void;
+  unavailable: (reason: RealtimeRxAudioSourceUnavailableReason) => void;
 }
 
 export interface RealtimeRxAudioSource extends EventEmitter<RealtimeRxAudioSourceEvents> {
   readonly id: string;
   readonly sourcePath: RealtimeRxAudioSourcePath;
+  isAvailable(): boolean;
   getLatestStats(): RealtimeRxAudioSourceStats | null;
   dispose?(): void;
 }
@@ -52,15 +55,22 @@ export class NativeRadioRxSource
   private receivedFrames = 0;
   private sequence = 0;
   private txMonitorActiveUntil = 0;
+  private available: boolean;
 
   constructor(private readonly audioStreamManager: AudioStreamManager) {
     super();
+    this.available = audioStreamManager.getInputSignalType() !== 'icom-12k-if';
     this.audioStreamManager.on('nativeAudioInputData', this.handleNativeFrame);
     this.audioStreamManager.on('txMonitorAudioData', this.handleTxMonitorFrame);
+    this.audioStreamManager.on('inputSignalTypeChanged', this.handleInputSignalTypeChanged);
+  }
+
+  isAvailable(): boolean {
+    return this.available;
   }
 
   getLatestStats(): RealtimeRxAudioSourceStats | null {
-    if (!this.latestStats) {
+    if (!this.available || !this.latestStats) {
       return null;
     }
     return {
@@ -72,11 +82,25 @@ export class NativeRadioRxSource
   dispose(): void {
     this.audioStreamManager.off('nativeAudioInputData', this.handleNativeFrame);
     this.audioStreamManager.off('txMonitorAudioData', this.handleTxMonitorFrame);
+    this.audioStreamManager.off('inputSignalTypeChanged', this.handleInputSignalTypeChanged);
     this.removeAllListeners();
   }
 
+  private readonly handleInputSignalTypeChanged = (inputSignalType: 'af' | 'icom-12k-if'): void => {
+    const available = inputSignalType !== 'icom-12k-if';
+    if (available === this.available) {
+      return;
+    }
+
+    this.available = available;
+    this.latestStats = null;
+    if (!available) {
+      this.emit('unavailable', 'if-input-monitor-disabled');
+    }
+  };
+
   private readonly handleNativeFrame = (frame: NativeAudioInputFrame): void => {
-    if (frame.samples.length === 0) {
+    if (!this.available || frame.samples.length === 0) {
       return;
     }
     if (Date.now() < this.txMonitorActiveUntil) {
@@ -111,7 +135,7 @@ export class NativeRadioRxSource
   };
 
   private readonly handleTxMonitorFrame = (data: { samples: Float32Array; sampleRate: number }): void => {
-    if (data.samples.length === 0 || data.sampleRate <= 0) {
+    if (!this.available || data.samples.length === 0 || data.sampleRate <= 0) {
       return;
     }
 
@@ -162,6 +186,10 @@ export class BufferedPreviewRxSource
   ) {
     super();
     this.bufferedPreviewAudioService.on('audioData', this.handleMonitorFrame);
+  }
+
+  isAvailable(): boolean {
+    return true;
   }
 
   getLatestStats(): RealtimeRxAudioSourceStats | null {
