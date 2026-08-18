@@ -36,11 +36,15 @@ function createMonitor(): EventEmitter & {
 }
 
 describe('RealtimeRxAudioRouter', () => {
-  let audioStreamManager: EventEmitter;
+  let audioStreamManager: EventEmitter & { getInputSignalType: () => 'af' | 'icom-12k-if' };
+  let inputSignalType: 'af' | 'icom-12k-if';
 
   beforeEach(() => {
     vi.useRealTimers();
-    audioStreamManager = new EventEmitter();
+    inputSignalType = 'af';
+    audioStreamManager = Object.assign(new EventEmitter(), {
+      getInputSignalType: () => inputSignalType,
+    });
     stationState.listenStatus = null;
     stationState.monitor = null;
   });
@@ -56,6 +60,50 @@ describe('RealtimeRxAudioRouter', () => {
 
     expect(source?.sourcePath).toBe('native-radio');
     expect(source?.id).toBe('native-radio:radio');
+  });
+
+  it('disables radio monitoring in IF mode and restores it after switching back to AF', () => {
+    const router = createRouter();
+    const source = router.resolveSource('radio');
+    const frames: unknown[] = [];
+    const unavailableReasons: string[] = [];
+    source?.on('audioFrame', frame => frames.push(frame));
+    source?.on('unavailable', reason => unavailableReasons.push(reason));
+
+    inputSignalType = 'icom-12k-if';
+    audioStreamManager.emit('inputSignalTypeChanged', inputSignalType);
+    audioStreamManager.emit('nativeAudioInputData', {
+      samples: new Float32Array([0.1, 0.2]),
+      sampleRate: 48000,
+      channels: 1,
+      timestamp: 123,
+      sequence: 1,
+      sourceKind: 'audio-device',
+    });
+    audioStreamManager.emit('txMonitorAudioData', {
+      samples: new Float32Array([0.3, 0.4]),
+      sampleRate: 16000,
+    });
+
+    expect(unavailableReasons).toEqual(['if-input-monitor-disabled']);
+    expect(router.resolveSource('radio')).toBeNull();
+    expect(router.getLatestStats('radio')).toBeNull();
+    expect(frames).toHaveLength(0);
+
+    inputSignalType = 'af';
+    audioStreamManager.emit('inputSignalTypeChanged', inputSignalType);
+    expect(router.resolveSource('radio')).toBe(source);
+
+    audioStreamManager.emit('nativeAudioInputData', {
+      samples: new Float32Array([0.5, 0.6]),
+      sampleRate: 48000,
+      channels: 1,
+      timestamp: 456,
+      sequence: 2,
+      sourceKind: 'audio-device',
+    });
+    expect(frames).toHaveLength(1);
+    router.dispose();
   });
 
   it('keeps radio recv on native source even when a buffered monitor exists', () => {

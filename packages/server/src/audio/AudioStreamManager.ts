@@ -16,6 +16,8 @@ import { VoiceTxOutputPipeline, type VoiceTxOutputSinkState } from './VoiceTxOut
 import { AndroidAudioInputSocket, AndroidAudioOutputSocket, type AndroidAudioOutputFormat } from './AndroidAudioSocketBackend.js';
 import { getAndroidAudioStartFailure, isAndroidAudioDeviceId, isAndroidBridgeRuntime, isLegacyAndroidAudioDeviceName } from './android-audio-devices.js';
 import { findOwnedUsbAudioHardwareId } from './linux-usb-audio-identity.js';
+import { IcomIfSsbDemodulator } from './IcomIfSsbDemodulator.js';
+import type { AudioInputSignalType } from '@tx5dr/contracts';
 
 const logger = createLogger('AudioStreamManager');
 // RtAudioFormat 是 const enum，isolatedModules 下无法直接导入，使用数值常量
@@ -58,6 +60,7 @@ export interface AudioStreamEvents {
   'audioData': (samples: Float32Array, sampleRate: number) => void;
   'nativeAudioInputData': (frame: NativeAudioInputFrame) => void;
   'txMonitorAudioData': (data: { samples: Float32Array; sampleRate: number }) => void;
+  'inputSignalTypeChanged': (inputSignalType: AudioInputSignalType) => void;
   'error': (error: Error) => void;
   'started': () => void;
   'stopped': () => void;
@@ -281,6 +284,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private outputWatchdogGeneration = 0;
   private playbackSequence = 0;
   private readonly now: AudioClock;
+  private inputSignalType: AudioInputSignalType = 'af';
+  private ifCenterHz = 12000;
+  private ifDemodulator: IcomIfSsbDemodulator | null = null;
 
   constructor(options: AudioStreamManagerOptions = {}) {
     super();
@@ -298,6 +304,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.outputChannelMode = this.normalizeOutputChannelMode(audioConfig.outputChannelMode);
     this.outputChannels = this.getOutputChannelCount(this.outputChannelMode);
     this.currentSampleRate = this.outputSampleRate;
+    this.applyInputSignalConfig(audioConfig.inputSignalType, audioConfig.ifCenterHz);
 
     // 创建音频缓冲区提供者，使用统一的内部处理采样率，保留 60 秒 RX/input 历史。
     this.audioProvider = new RingBufferAudioProvider(this.inputProcessingSampleRate, INPUT_RING_BUFFER_DURATION_MS, this.now);
@@ -741,6 +748,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.outputChannelMode = this.normalizeOutputChannelMode(audioConfig.outputChannelMode);
     this.outputChannels = this.getOutputChannelCount(this.outputChannelMode);
     this.currentSampleRate = this.outputSampleRate;
+    this.applyInputSignalConfig(audioConfig.inputSignalType, audioConfig.ifCenterHz);
 
     logger.info('audio config reloaded (restart required)', {
       inputSampleRate: `${oldInputSampleRate}Hz -> ${this.inputSampleRate}Hz`,
@@ -750,7 +758,47 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       outputSampleFormat: `${oldOutputSampleFormat} -> ${this.outputSampleFormat}`,
       outputChannelMode: `${oldOutputChannelMode} -> ${this.outputChannelMode}`,
       outputChannels: `${oldOutputChannels} -> ${this.outputChannels}`,
+      inputSignalType: this.inputSignalType,
+      ifCenterHz: this.ifCenterHz,
     });
+  }
+
+  getInputSignalType(): AudioInputSignalType {
+    return this.inputSignalType;
+  }
+
+  private applyInputSignalConfig(
+    inputSignalType: AudioInputSignalType | undefined,
+    ifCenterHz: number | undefined,
+  ): void {
+    const nextType: AudioInputSignalType = inputSignalType === 'icom-12k-if' ? 'icom-12k-if' : 'af';
+    const nextCenter = Number.isFinite(ifCenterHz)
+      ? Math.min(24000, Math.max(1, Number(ifCenterHz)))
+      : 12000;
+    const typeChanged = nextType !== this.inputSignalType;
+    const changed = typeChanged || nextCenter !== this.ifCenterHz;
+    this.inputSignalType = nextType;
+    this.ifCenterHz = nextCenter;
+
+    if (nextType === 'icom-12k-if') {
+      if (!this.ifDemodulator) {
+        this.ifDemodulator = new IcomIfSsbDemodulator({
+          centerHz: nextCenter,
+          sideband: 'usb',
+        });
+        logger.info('IF demod enabled', { centerHz: nextCenter, sideband: 'usb' });
+      } else if (changed) {
+        this.ifDemodulator.configure({ centerHz: nextCenter, sideband: 'usb' });
+        logger.info('IF demod reconfigured', { centerHz: nextCenter, sideband: 'usb' });
+      }
+    } else if (this.ifDemodulator) {
+      this.ifDemodulator = null;
+      logger.info('IF demod disabled; using AF baseband input');
+    }
+
+    if (typeChanged) {
+      this.emit('inputSignalTypeChanged', nextType);
+    }
   }
 
   private normalizeOutputSampleFormat(value: unknown): OutputSampleFormat {
@@ -1326,15 +1374,25 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       : this.inputProcessingSampleRate;
     this.emitNativeAudioInputData(samples, sourceSampleRate, sourceKind);
 
+    // USB/ACC IF capture only: virtual AF sources (WLAN/TCI/OpenWebRX) stay baseband.
+    let basebandSamples = samples;
+    if (
+      sourceKind === 'audio-device'
+      && this.inputSignalType === 'icom-12k-if'
+      && this.ifDemodulator
+    ) {
+      basebandSamples = this.ifDemodulator.process(samples, sourceSampleRate);
+    }
+
     const targetSampleRate = this.inputProcessingSampleRate;
     if (sourceSampleRate === targetSampleRate) {
       if (generation !== this.inputIngestGeneration) return;
-      this.writeProcessedInputAudio(samples, targetSampleRate, arrivalTimeMs, seq);
+      this.writeProcessedInputAudio(basebandSamples, targetSampleRate, arrivalTimeMs, seq);
       return;
     }
 
     try {
-      const resampled = await resampleAudioProfessional(samples, sourceSampleRate, targetSampleRate, 1);
+      const resampled = await resampleAudioProfessional(basebandSamples, sourceSampleRate, targetSampleRate, 1);
       if (generation !== this.inputIngestGeneration || this.inputProcessingSampleRate !== targetSampleRate) {
         logger.debug('dropping stale input resample result after processing rate change', {
           sourceSampleRate,

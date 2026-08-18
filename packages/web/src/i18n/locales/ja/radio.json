@@ -98,6 +98,7 @@
   "monitor": {
     "audioMonitor": "音声モニター",
     "activateAudioMonitor": "モニターを有効化",
+    "disabledForIfInput": "IF 入力モードでは音声モニターを使用できません。音声入力信号タイプを AF に切り替えてください。",
     "monitorVolume": "モニター音量",
     "latency": "遅延",
     "buffer": "再生バッファ",

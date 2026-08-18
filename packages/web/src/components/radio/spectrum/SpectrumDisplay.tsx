@@ -3,10 +3,11 @@ import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Switch,
 import { addToast } from '@heroui/toast';
 import { ArrowsPointingOutIcon, ChevronDownIcon, ChevronUpIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
-import type { EngineMode, SpectrumFrame, SpectrumKind, SpectrumSessionVoiceState, SystemStatus } from '@tx5dr/contracts';
+import type { AudioInputSignalType, EngineMode, SpectrumFrame, SpectrumKind, SpectrumSessionVoiceState, SystemStatus } from '@tx5dr/contracts';
+import { UserRole } from '@tx5dr/contracts';
 import { api, getBandFromFrequency } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useRadioState, useCapabilityState, useCapabilityDescriptor, useSpectrum, useSplitState } from '../../../store/radioStore';
-import { useAbility, useCan } from '../../../store/authStore';
+import { useAbility, useCan, useHasMinRole } from '../../../store/authStore';
 import { createLogger } from '../../../utils/logger';
 import { setPreferredSpectrumKind } from '../../../utils/spectrumPreferences';
 import { useTargetRxFrequencies, type RxFrequency } from '../../../hooks/useTargetRxFrequencies';
@@ -953,14 +954,19 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const { t } = useTranslation('common');
   const connection = useConnection();
   const { operators } = useOperators();
-  const { activeProfileId } = useProfiles();
+  const { activeProfileId, activeProfile } = useProfiles();
   const radioConnection = useRadioConnectionState();
   const { currentMode, currentRadioFrequency, engineMode, isEngineRunning, engineState } = useRadioModeState();
   const { pttStatus } = usePTTState();
   const { splitEnabled, splitTxFrequency } = useSplitState();
   const canSetFrequency = useCan('execute', 'RadioFrequency');
   const canControlRadio = useCan('execute', 'RadioControl');
+  const canToggleInputSignal = useHasMinRole(UserRole.ADMIN);
   const ability = useAbility();
+  const [inputSignalTogglePending, setInputSignalTogglePending] = useState(false);
+  const inputSignalType: AudioInputSignalType =
+    activeProfile?.audio?.inputSignalType === 'icom-12k-if' ? 'icom-12k-if' : 'af';
+  const isIfInputSignal = inputSignalType === 'icom-12k-if';
   const canWriteFrequency = canWriteRadioFrequency(canSetFrequency, radioConnection.coreCapabilities);
   const canWriteTargetFrequency = useCallback((frequency: number) => (
     canWriteFrequency && canExecuteRadioFrequency(ability, frequency)
@@ -2045,6 +2051,59 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     </Button>
   );
 
+  const handleToggleInputSignal = useCallback(async () => {
+    if (!canToggleInputSignal || inputSignalTogglePending) return;
+    const nextType: AudioInputSignalType = isIfInputSignal ? 'af' : 'icom-12k-if';
+    setInputSignalTogglePending(true);
+    try {
+      await api.updateAudioSettings({ inputSignalType: nextType });
+      addToast({
+        title: nextType === 'icom-12k-if'
+          ? t('spectrum.inputSignalSwitchedToIf')
+          : t('spectrum.inputSignalSwitchedToAf'),
+        description: nextType === 'icom-12k-if'
+          ? t('spectrum.inputSignalIfHint')
+          : undefined,
+        color: 'success',
+      });
+    } catch (error) {
+      logger.error('Failed to toggle AF/IF input signal', error);
+      addToast({
+        title: t('spectrum.inputSignalToggleFailed'),
+        color: 'danger',
+      });
+    } finally {
+      setInputSignalTogglePending(false);
+    }
+  }, [canToggleInputSignal, inputSignalTogglePending, isIfInputSignal, t]);
+
+  const inputSignalToggleRightClass = canPopOut ? 'right-[5.5rem]' : 'right-[3.75rem]';
+
+  const renderInputSignalToggle = (rightClassName = inputSignalToggleRightClass) => {
+    if (!canToggleInputSignal) return null;
+    return (
+      <Tooltip
+        content={isIfInputSignal ? t('spectrum.inputSignalIfTooltip') : t('spectrum.inputSignalAfTooltip')}
+        delay={250}
+      >
+        <Button
+          size="sm"
+          variant="light"
+          onPress={() => { void handleToggleInputSignal(); }}
+          isDisabled={inputSignalTogglePending}
+          className={`absolute top-1 ${rightClassName} z-30 h-6 min-w-7 px-1.5 text-[11px] font-semibold tracking-wide ${
+            isIfInputSignal
+              ? 'bg-primary/25 text-primary-700 hover:bg-primary/35 dark:text-primary-300'
+              : 'text-default-600 hover:bg-black/30 hover:text-default-900 dark:text-default-300 dark:hover:bg-white/15 dark:hover:text-default-50'
+          }`}
+          aria-label={isIfInputSignal ? t('spectrum.inputSignalIfTooltip') : t('spectrum.inputSignalAfTooltip')}
+        >
+          {isIfInputSignal ? t('spectrum.inputSignalIfLabel') : t('spectrum.inputSignalAfLabel')}
+        </Button>
+      </Tooltip>
+    );
+  };
+
   if (isCollapsed) {
     return (
       <CollapsedSpectrumBar
@@ -2111,6 +2170,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         )}
         {renderBottomRightControls()}
         {renderCollapseButton()}
+        {renderInputSignalToggle(canPopOut ? 'right-[3.75rem]' : 'right-8')}
         {canPopOut && (
           <Button
             isIconOnly
@@ -2146,6 +2206,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         autoRange={!isRadioSdrSelected && !isOpenWebRXSdrSelected && audioRangeSettings.mode === 'auto'}
         autoRangeConfig={audioRangeSettings.auto}
         themeId={selectedSpectrumThemeId}
+        sharpPixels={isAudioSpectrumSelected && isIfInputSignal}
         showCycleMarkers={showCycleMarkers}
         cycleSlotMs={cycleSlotMs}
         totalRows={WATERFALL_HISTORY_ROWS}
@@ -2242,6 +2303,8 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       {renderBottomRightControls()}
 
       {renderCollapseButton()}
+
+      {renderInputSignalToggle()}
 
       {canPopOut && (
         <Button

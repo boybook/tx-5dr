@@ -8,6 +8,7 @@ import type { RadioService } from '../../services/radioService';
 import type { RadioAction, RadioState } from './types';
 import type { createLogger } from '../../utils/logger';
 import { isSpectrumSubscriptionPaused } from '../../utils/spectrumSubscriptionPause';
+import { getPreferredSpectrumKind } from '../../utils/spectrumPreferences';
 
 type Logger = ReturnType<typeof createLogger>;
 
@@ -44,6 +45,19 @@ export function createSpectrumNegotiator({
 
   const pickSpectrumKindByPriority = (capabilities: SpectrumCapabilities): SpectrumKind => {
     return SPECTRUM_PRIORITY.find((kind) => isSpectrumKindAvailable(capabilities, kind)) ?? 'audio';
+  };
+
+  const pickPreferredOrPriorityKind = (capabilities: SpectrumCapabilities): {
+    kind: SpectrumKind;
+    usedPreference: boolean;
+  } => {
+    const preferredKind = getPreferredSpectrumKind(
+      capabilities.profileId ?? activeProfileIdRef.current,
+    );
+    if (isSpectrumKindAvailable(capabilities, preferredKind)) {
+      return { kind: preferredKind as SpectrumKind, usedPreference: true };
+    }
+    return { kind: pickSpectrumKindByPriority(capabilities), usedPreference: false };
   };
 
   const shouldContinueAutoPriority = (
@@ -95,15 +109,20 @@ export function createSpectrumNegotiator({
     const profileId = capabilities.profileId;
     const currentSelectedKind = radioStateRef.current.selectedSpectrumKind;
     const shouldAutoApplyPriority = spectrumAutoPriorityPendingRef.current;
-    const effectiveKind = shouldAutoApplyPriority
-      ? pickSpectrumKindByPriority(capabilities)
-      : (
-          isSpectrumKindAvailable(capabilities, currentSelectedKind)
-            ? currentSelectedKind as SpectrumKind
-            : pickSpectrumKindByPriority(capabilities)
-        );
+    let usedPreference = false;
+    let effectiveKind: SpectrumKind;
+    if (shouldAutoApplyPriority) {
+      const picked = pickPreferredOrPriorityKind(capabilities);
+      effectiveKind = picked.kind;
+      usedPreference = picked.usedPreference;
+    } else {
+      effectiveKind = isSpectrumKindAvailable(capabilities, currentSelectedKind)
+        ? currentSelectedKind as SpectrumKind
+        : pickSpectrumKindByPriority(capabilities);
+    }
     const currentModeName = radioStateRef.current.currentMode?.name ?? null;
     const shouldAutoEnableOpenWebRXDetail = shouldAutoApplyPriority
+      && !usedPreference
       && effectiveKind === 'openwebrx-sdr'
       && profileId !== null
       && (currentModeName === 'FT8' || currentModeName === 'FT4');
@@ -121,7 +140,10 @@ export function createSpectrumNegotiator({
       : null;
 
     if (shouldAutoApplyPriority) {
-      spectrumAutoPriorityPendingRef.current = shouldContinueAutoPriority(capabilities, effectiveKind);
+      // A stored preference is an explicit user choice — do not keep auto-upgrading away from it.
+      spectrumAutoPriorityPendingRef.current = usedPreference
+        ? false
+        : shouldContinueAutoPriority(capabilities, effectiveKind);
     }
   };
 
@@ -143,12 +165,18 @@ export function createSpectrumNegotiator({
     // to avoid a "waiting for spectrum data" flash during mode switch.
     const currentCapabilities = capabilitiesRef.current;
     if (currentCapabilities && shouldAcceptSpectrumProfile(currentCapabilities.profileId)) {
-      const effectiveKind = pickSpectrumKindByPriority(currentCapabilities);
+      const preferred = pickPreferredOrPriorityKind(currentCapabilities);
+      const effectiveKind = preferred.kind;
       radioDispatch({ type: 'setSpectrumCapabilities', payload: currentCapabilities });
       radioDispatch({ type: 'setSelectedSpectrumKind', payload: effectiveKind });
       radioDispatch({ type: 'setSubscribedSpectrumKind', payload: isSpectrumSubscriptionPaused() ? null : effectiveKind });
       if (!isSpectrumSubscriptionPaused()) {
         radioService.subscribeSpectrum(effectiveKind);
+      }
+      // Preference already encodes the user's choice; skip priority upgrade after mode switch.
+      if (preferred.usedPreference) {
+        spectrumAutoPriorityPendingRef.current = false;
+        return;
       }
     }
 
