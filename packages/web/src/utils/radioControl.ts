@@ -1,4 +1,4 @@
-import type { CapabilityState, CoreRadioCapabilities, EngineMode } from '@tx5dr/contracts';
+import type { AudioInputSignalType, CapabilityState, CoreRadioCapabilities, EngineMode } from '@tx5dr/contracts';
 import { subject as caslSubject } from '@casl/ability';
 
 export interface FrequencyOptionLike {
@@ -9,6 +9,12 @@ export interface FrequencyOptionLike {
 export interface MonitorActivationCtaState {
   shouldShowActivationCta: boolean;
   hasUserActivation: boolean;
+}
+
+export function isAudioMonitorAvailableForInputSignal(
+  inputSignalType: AudioInputSignalType | undefined,
+): boolean {
+  return inputSignalType !== 'icom-12k-if';
 }
 
 export function isCoreCapabilityAvailable(

@@ -4,7 +4,7 @@ import { MODES } from '@tx5dr/contracts';
 import { createSpectrumNegotiator } from '../radio/spectrumNegotiation';
 import { initialRadioState, radioReducer, type RadioState } from '../radioStore';
 import { setSpectrumSubscriptionPaused } from '../../utils/spectrumSubscriptionPause';
-import { setPreferredSpectrumKind } from '../../utils/spectrumPreferences';
+import { getPreferredSpectrumKind, setPreferredSpectrumKind } from '../../utils/spectrumPreferences';
 
 function createCapabilities(options: {
   audioAvailable?: boolean;
@@ -218,6 +218,38 @@ describe('spectrum negotiation', () => {
     expect(harness.radioStateRef.current.subscribedSpectrumKind).toBe('audio');
     expect(harness.spectrumAutoPriorityPendingRef.current).toBe(false);
     expect(harness.radioService.subscribeSpectrum).toHaveBeenLastCalledWith('audio');
+  });
+
+  it('keeps spectrum preferences strictly isolated by Profile', () => {
+    setPreferredSpectrumKind('profile-a', 'audio');
+    setPreferredSpectrumKind('profile-b', 'radio-sdr');
+
+    expect(getPreferredSpectrumKind('profile-a')).toBe('audio');
+    expect(getPreferredSpectrumKind('profile-b')).toBe('radio-sdr');
+    expect(getPreferredSpectrumKind('profile-c')).toBeNull();
+  });
+
+  it('does not persist or restore a preference without a Profile id', () => {
+    setPreferredSpectrumKind(null, 'audio');
+
+    expect(getPreferredSpectrumKind(null)).toBeNull();
+    expect(localStorage.getItem('tx5dr_spectrum_preferences')).toBeNull();
+  });
+
+  it('ignores the legacy global preference bucket', () => {
+    localStorage.setItem('tx5dr_spectrum_preferences', JSON.stringify({
+      profileSelections: { __global__: 'audio' },
+      lastUpdated: Date.now(),
+    }));
+
+    expect(getPreferredSpectrumKind('new-profile')).toBeNull();
+    const harness = createHarness('new-profile');
+    harness.negotiator.applySpectrumSelection(createCapabilities({
+      profileId: 'new-profile',
+      radioSupported: true,
+      radioAvailable: true,
+    }));
+    expect(harness.radioStateRef.current.selectedSpectrumKind).toBe('radio-sdr');
   });
 
   it('keeps a persisted audio preference across mode-driven reset', () => {

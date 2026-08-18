@@ -6,7 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { VoicePTTLock } from '@tx5dr/contracts';
 import type { AndroidAudioDeviceDescriptor } from '../../audio/android-audio-devices.js';
 import type { AndroidAudioInputSocket, AndroidAudioOutputSocket } from '../../audio/AndroidAudioSocketBackend.js';
-import type { RealtimeAudioFrame, RealtimeRxAudioSource, RealtimeRxAudioSourceStats } from '../../realtime/RealtimeRxAudioSource.js';
+import type {
+  RealtimeRxAudioSource,
+  RealtimeRxAudioSourceEvents,
+  RealtimeRxAudioSourceStats,
+} from '../../realtime/RealtimeRxAudioSource.js';
 import { AndroidOperatorAudioService } from '../AndroidOperatorAudioService.js';
 
 class FakeInputSocket extends EventEmitter<{ audioData: (samples: Float32Array, sampleRate: number) => void; error: (error: Error) => void; close: () => void }> {
@@ -30,9 +34,10 @@ class FakeOutputSocket {
   }
 }
 
-class FakeRxSource extends EventEmitter<{ audioFrame: (frame: RealtimeAudioFrame) => void }> implements RealtimeRxAudioSource {
+class FakeRxSource extends EventEmitter<RealtimeRxAudioSourceEvents> implements RealtimeRxAudioSource {
   readonly id = 'fake-radio';
   readonly sourcePath = 'native-radio' as const;
+  isAvailable(): boolean { return true; }
   getLatestStats(): RealtimeRxAudioSourceStats | null { return null; }
 }
 
@@ -222,5 +227,20 @@ describe('AndroidOperatorAudioService', () => {
     expect(output.gains[0]).toBeCloseTo(Math.pow(10, 6 / 20), 5);
     expect(service.setMonitorGainDb(99).monitorGainDb).toBe(20);
     expect(service.setMonitorGainDb(-99).monitorGainDb).toBe(-60);
+  });
+
+  it('stops an active native monitor when the radio source becomes unavailable', async () => {
+    const { service, output, source } = createHarness();
+    await service.startMonitor();
+
+    source.emit('unavailable', 'if-input-monitor-disabled');
+
+    await vi.waitFor(() => expect(output.stopped).toBe(true));
+    expect(service.getStatus()).toMatchObject({
+      monitorState: 'idle',
+      lastError: 'Radio audio monitoring is disabled in IF input mode',
+    });
+    expect(source.listenerCount('audioFrame')).toBe(0);
+    expect(source.listenerCount('unavailable')).toBe(0);
   });
 });

@@ -7,7 +7,11 @@ import {
   type AndroidAudioDeviceDescriptor,
 } from '../audio/android-audio-devices.js';
 import type { RealtimeRxAudioRouter } from '../realtime/RealtimeRxAudioRouter.js';
-import type { RealtimeAudioFrame, RealtimeRxAudioSource } from '../realtime/RealtimeRxAudioSource.js';
+import type {
+  RealtimeAudioFrame,
+  RealtimeRxAudioSource,
+  RealtimeRxAudioSourceUnavailableReason,
+} from '../realtime/RealtimeRxAudioSource.js';
 import { FixedFrameAudioBuffer, StreamingLinearResampler } from '../realtime/StreamingAudioResampler.js';
 import { createLogger } from '../utils/logger.js';
 import type { VoiceSessionManager } from './VoiceSessionManager.js';
@@ -244,11 +248,13 @@ export class AndroidOperatorAudioService extends EventEmitter<AndroidOperatorAud
       const source = this.deps.rxAudioRouter.resolveSource('radio');
       if (!source) {
         output.stop();
+        this.monitorRequested = false;
         return this.failMonitor('Radio monitor audio source is not available');
       }
       this.outputSocket = output;
       this.monitorSource = source;
       source.on('audioFrame', this.handleMonitorAudioFrame);
+      source.on('unavailable', this.handleMonitorSourceUnavailable);
       this.updateMonitorStateForPtt();
       logger.info('Android native operator monitor started', {
         device: devices.speaker.name,
@@ -287,6 +293,7 @@ export class AndroidOperatorAudioService extends EventEmitter<AndroidOperatorAud
   private async stopMonitorInternal(): Promise<void> {
     if (this.monitorSource) {
       this.monitorSource.off('audioFrame', this.handleMonitorAudioFrame);
+      this.monitorSource.off('unavailable', this.handleMonitorSourceUnavailable);
       this.monitorSource = null;
     }
     this.outputSocket?.stop();
@@ -376,6 +383,15 @@ export class AndroidOperatorAudioService extends EventEmitter<AndroidOperatorAud
         this.failMonitor('Android native speaker socket write failed');
       }
     });
+  };
+
+  private readonly handleMonitorSourceUnavailable = (reason: RealtimeRxAudioSourceUnavailableReason): void => {
+    this.monitorRequested = false;
+    this.lastError = reason === 'if-input-monitor-disabled'
+      ? 'Radio audio monitoring is disabled in IF input mode'
+      : 'Radio monitor audio source is not available';
+    logger.info('Stopping Android native operator monitor because its source became unavailable', { reason });
+    void this.stopMonitorInternal().then(() => this.emitStatus(true));
   };
 
   private resampleMonitorFrame(samples: Float32Array, inputRate: number, outputRate: number): Float32Array {
