@@ -71,6 +71,16 @@ afterEach(async () => {
 });
 
 describe('TelemetryService', () => {
+  it('uses the production gateway when no endpoint override is set', async () => {
+    delete process.env.TX5DR_OBSERVABILITY_ENDPOINT;
+    const service = new TelemetryService();
+    services.push(service);
+    await service.initialize();
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(service.getStatus()).toMatchObject({ endpointConfigured: true });
+  });
+
   it('does not make a request before the privacy notice is acknowledged', async () => {
     const service = new TelemetryService();
     services.push(service);
