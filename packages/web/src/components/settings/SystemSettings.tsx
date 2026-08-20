@@ -1002,7 +1002,6 @@ export const SystemSettings = forwardRef<
       !remoteAccessSettingsEqual(remoteAccessSettings, originalRemoteAccessSettings) ||
       logLevel !== originalLogLevel ||
       observabilityEnabled !== originalObservabilityEnabled ||
-      Boolean(observabilityStatus?.noticeRequired) ||
       realtimeTransportPolicy !== originalRealtimeTransportPolicy ||
       rtcDataAudioPublicHost !== originalRtcDataAudioPublicHost ||
       rtcDataAudioPublicUdpPort !== originalRtcDataAudioPublicUdpPort ||
@@ -1198,7 +1197,7 @@ export const SystemSettings = forwardRef<
         setOriginalLogLevel(committedLevel);
       }
 
-      if (observabilityEnabled !== originalObservabilityEnabled || observabilityStatus?.noticeRequired) {
+      if (observabilityEnabled !== originalObservabilityEnabled) {
         const status = await api.updateObservabilitySettings({
           enabled: observabilityEnabled,
           noticeVersion: OBSERVABILITY_NOTICE_VERSION,
@@ -1282,7 +1281,7 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, maxSameTransmissionCount, originalDecodeValue, originalSpectrumValue, originalMaxSameTransmissionCount, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, ntpServers, originalNtpServers, remoteAccessSettings, originalRemoteAccessSettings, logLevel, originalLogLevel, observabilityEnabled, originalObservabilityEnabled, observabilityStatus?.noticeRequired, realtimeTransportPolicy, originalRealtimeTransportPolicy, rtcDataAudioPublicHost, originalRtcDataAudioPublicHost, rtcDataAudioPublicUdpPort, originalRtcDataAudioPublicUdpPort, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, maxSameTransmissionCount, originalDecodeValue, originalSpectrumValue, originalMaxSameTransmissionCount, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, ntpServers, originalNtpServers, remoteAccessSettings, originalRemoteAccessSettings, logLevel, originalLogLevel, observabilityEnabled, originalObservabilityEnabled, realtimeTransportPolicy, originalRealtimeTransportPolicy, rtcDataAudioPublicHost, originalRtcDataAudioPublicHost, rtcDataAudioPublicUdpPort, originalRtcDataAudioPublicUdpPort, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
 
   const runtimeHints = realtimeRuntime?.connectivityHints ?? null;
   const rtcDataAudioRuntime = realtimeRuntime?.rtcDataAudio ?? null;
@@ -1678,9 +1677,9 @@ export const SystemSettings = forwardRef<
         <CardBody className={SETTINGS_CARD_BODY_CLASS}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="max-w-3xl">
-              <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.anonymousTelemetryTitle', 'Anonymous usage statistics')}</h4>
+              <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.anonymousTelemetryConsentTitle')}</h4>
               <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>
-                {t('system.anonymousTelemetryDesc', 'Help improve TX-5DR by reporting the app version, release channel, runtime type, operating-system family, CPU architecture, process lifecycle, uptime, and completed WebSocket connection count.')}
+                {t('system.anonymousTelemetryBannerSummary')}
               </p>
             </div>
             <Switch
@@ -1700,28 +1699,22 @@ export const SystemSettings = forwardRef<
             </Alert>
           )}
 
-          <div className={`grid gap-4 md:grid-cols-2 ${SETTINGS_SOFT_PANEL_CLASS}`}>
-            <div>
-              <p className={SETTINGS_SUBTITLE_CLASS}>
+          <div className={`space-y-2 ${SETTINGS_SOFT_PANEL_CLASS}`}>
+            <p className={SETTINGS_CARD_DESC_CLASS}>
+              <span className="font-medium text-default-900">
                 {t('system.anonymousTelemetryCollectedTitle')}
-              </p>
-              <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>
-                {t('system.anonymousTelemetryCollected')}
-              </p>
-            </div>
-            <div>
-              <p className={SETTINGS_SUBTITLE_CLASS}>
+              </span>{' '}
+              {t('system.anonymousTelemetryCollected')}
+            </p>
+            <p className={SETTINGS_CARD_DESC_CLASS}>
+              <span className="font-medium text-default-900">
                 {t('system.anonymousTelemetryNeverCollectedTitle')}
-              </p>
-              <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>
-                {t('system.anonymousTelemetryNeverCollected')}
-              </p>
-            </div>
-            <div className="md:col-span-2">
-              <p className="text-sm leading-6 text-default-500">
-                {t('system.anonymousTelemetryMeasurementNote')}
-              </p>
-            </div>
+              </span>{' '}
+              {t('system.anonymousTelemetryNeverCollected')}
+            </p>
+            <p className="text-sm leading-6 text-default-500">
+              {t('system.anonymousTelemetryMeasurementNote')}
+            </p>
           </div>
 
           {observabilityStatus && !observabilityStatus.endpointConfigured && (
