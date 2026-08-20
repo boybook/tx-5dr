@@ -1688,7 +1688,9 @@ export const SystemSettings = forwardRef<
               onValueChange={setObservabilityEnabled}
               isDisabled={!observabilityStatus}
             >
-              {observabilityEnabled ? t('common.enabled', 'Enabled') : t('common.disabled', 'Disabled')}
+              {observabilityEnabled
+                ? t('system.anonymousTelemetryEnabled')
+                : t('system.anonymousTelemetryDisabled')}
             </Switch>
           </div>
 
@@ -1698,10 +1700,28 @@ export const SystemSettings = forwardRef<
             </Alert>
           )}
 
-          <div className={SETTINGS_SOFT_PANEL_CLASS}>
-            <p className={SETTINGS_SUBDESC_CLASS}>
-              {t('system.anonymousTelemetryPrivacy', 'Never included: callsign, grid locator, QSO records, frequency, audio, radio model, device serial number, host name, user name, file paths, URLs, tokens, raw IP address, user agent, or log content. Installation totals represent participating installations; connection totals are not a count of natural persons.')}
-            </p>
+          <div className={`grid gap-4 md:grid-cols-2 ${SETTINGS_SOFT_PANEL_CLASS}`}>
+            <div>
+              <p className={SETTINGS_SUBTITLE_CLASS}>
+                {t('system.anonymousTelemetryCollectedTitle')}
+              </p>
+              <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>
+                {t('system.anonymousTelemetryCollected')}
+              </p>
+            </div>
+            <div>
+              <p className={SETTINGS_SUBTITLE_CLASS}>
+                {t('system.anonymousTelemetryNeverCollectedTitle')}
+              </p>
+              <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>
+                {t('system.anonymousTelemetryNeverCollected')}
+              </p>
+            </div>
+            <div className="md:col-span-2">
+              <p className="text-sm leading-6 text-default-500">
+                {t('system.anonymousTelemetryMeasurementNote')}
+              </p>
+            </div>
           </div>
 
           {observabilityStatus && !observabilityStatus.endpointConfigured && (
