@@ -256,6 +256,11 @@
   "system": {
     "title": "系统设置",
     "description": "配置系统级别的功能选项。",
+    "anonymousTelemetryTitle": "匿名使用情况统计",
+    "anonymousTelemetryDesc": "帮助改进 TX-5DR：仅上报应用版本、发布渠道、运行形态、操作系统类别、CPU 架构、程序启停与在线状态、运行时长，以及已完成握手的 WebSocket 连接数。",
+    "anonymousTelemetryConsent": "保存此选择前不会发送任何数据。开关默认开启；您可以在保存前关闭，也可以随时在这里停用。",
+    "anonymousTelemetryPrivacy": "绝不包含：呼号、网格坐标、QSO 记录、频率、音频、电台型号、设备序列号、主机名、用户名、文件路径、URL、令牌、原始 IP 地址、User-Agent 或日志内容。安装量仅表示参与统计的安装实例；连接数不代表自然人数。",
+    "anonymousTelemetryUnavailable": "当前构建未配置统计服务地址，因此不会发送任何数据。",
     "loadFailed": "加载配置失败",
     "saveFailed": "保存配置失败",
     "pskrSaveFailed": "保存 PSKReporter 配置失败",

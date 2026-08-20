@@ -149,6 +149,10 @@ export interface AppConfig {
     servers?: string[];
     autoApplyOffset?: boolean;
   };
+  observability: {
+    enabled: boolean;
+    noticeVersion: number;
+  };
 }
 
 // 音频处理配置接口
@@ -214,6 +218,10 @@ const DEFAULT_CONFIG: AppConfig = {
   rtcDataAudioPublicUdpPort: null,
   rigctld: { ...DEFAULT_RIGCTLD_BRIDGE_CONFIG },
   cwDecoder: CWDecoderConfigSchema.parse({}),
+  observability: {
+    enabled: true,
+    noticeVersion: 0,
+  },
 };
 
 // 默认音频配置（无 Profile 时的兜底值）
@@ -311,6 +319,7 @@ export function validateAppConfigCandidate(value: unknown): Record<string, unkno
   assertOptionalObject(value, 'rigctld');
   assertOptionalObject(value, 'cwDecoder');
   assertOptionalObject(value, 'ntp');
+  assertOptionalObject(value, 'observability');
   assertOptionalObjectOrNull(value, 'lastSelectedFrequency');
   assertOptionalObjectOrNull(value, 'lastVoiceFrequency');
   assertOptionalObjectOrNull(value, 'lastCWFrequency');
@@ -325,6 +334,17 @@ export function validateAppConfigCandidate(value: unknown): Record<string, unkno
   }
   if (value.logLevel !== undefined && !['debug', 'info', 'warn', 'error'].includes(String(value.logLevel))) {
     throw new Error('config.logLevel must be debug, info, warn, or error');
+  }
+  if (isPlainObject(value.observability)) {
+    if (value.observability.enabled !== undefined && typeof value.observability.enabled !== 'boolean') {
+      throw new Error('config.observability.enabled must be a boolean');
+    }
+    if (
+      value.observability.noticeVersion !== undefined
+      && (!Number.isInteger(value.observability.noticeVersion) || Number(value.observability.noticeVersion) < 0)
+    ) {
+      throw new Error('config.observability.noticeVersion must be a non-negative integer');
+    }
   }
 
   if (isPlainObject(value.ft8)) {
@@ -1029,6 +1049,14 @@ export class ConfigManager {
       throw new Error('config.logLevel must be debug, info, warn, or error');
     }
     this.config.logLevel = level;
+    await this.saveConfig();
+  }
+
+  async updateObservabilitySettings(settings: AppConfig['observability']): Promise<void> {
+    if (!Number.isInteger(settings.noticeVersion) || settings.noticeVersion < 0) {
+      throw new Error('config.observability.noticeVersion must be a non-negative integer');
+    }
+    this.config.observability = { ...settings };
     await this.saveConfig();
   }
 
