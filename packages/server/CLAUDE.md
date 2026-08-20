@@ -13,7 +13,9 @@ TX-5DR 数字电台核心后端：Fastify + 数字电台引擎 + 音频处理 + 
 
 | 子系统 | 文件 | 职责 |
 |--------|------|------|
-| `TransmissionPipeline` | `subsystems/TransmissionPipeline.ts` | encode→mix→PTT→play 全流程、编码跟踪 |
+| `TransmissionPipeline` | `subsystems/TransmissionPipeline.ts` | 数字帧事件适配、编码/混音结果路由、终态事件 |
+| `DigitalFrameCoordinator` | `transmission/DigitalFrameCoordinator.ts` | FT8/FT4 intent、epoch、整帧替换与时隙预算 |
+| `PhysicalTxCoordinator` | `transmission/PhysicalTxCoordinator.ts` | 唯一物理 PTT/audio lease、drain、硬中断与迟到操作 fence |
 | `RadioBridge` | `subsystems/RadioBridge.ts` | 电台事件转发、频率同步、断线恢复、健康检查 |
 | `ClockCoordinator` | `subsystems/ClockCoordinator.ts` | 时钟/解码/频谱/SlotPack 事件桥接、PSKReporter 转发 |
 | `AudioVolumeController` | `subsystems/AudioVolumeController.ts` | 音量读写 + ConfigManager 持久化 + 事件广播 |
@@ -29,7 +31,8 @@ TX-5DR 数字电台核心后端：Fastify + 数字电台引擎 + 音频处理 + 
 
 #### 添加新功能指南
 
-- 发射相关逻辑 → `TransmissionPipeline`
+- 数字帧生命周期 → `DigitalFrameCoordinator`；物理 PTT/播放生命周期 → `PhysicalTxCoordinator`
+- encode/mix 事件适配 → `TransmissionPipeline`；插件只提交高层 intent
 - 电台连接/断线处理 → `RadioBridge`
 - 新的时钟/解码事件 → `ClockCoordinator`
 - 音量控制 → `AudioVolumeController`
@@ -80,216 +83,65 @@ routes/
   └─ profiles.ts               ← Profile REST API
 ```
 
-### 发射时序系统 ⭐
+### 发射时序系统
 
-**核心原则**:
-1. **WSJT-X 标准对齐**: 通过 `transmitTiming` 让信号在时隙边界后 ~0.5s 起始（FT8/FT4 都按 500ms）
-2. **提前编码**: 通过 `encodeAdvance` 提前触发编码，补偿编码+混音时间（FT8=0；FT4=300，FT4 时隙短必须提前）
-3. **周期判断**: RadioOperator 在 `encodeStart` 事件中判断周期并加入队列
-4. **子系统编排**: ClockCoordinator 桥接时钟事件，TransmissionPipeline 编排发射管线
-5. **智能调度**: AudioMixer 根据目标播放时间动态调整混音窗口
-
-#### 时间线图解
+发射控制分成数字帧与物理发射两层。`DigitalFrameCoordinator` 管理 intent、frame epoch、不可变混音快照和晚到纠正；`PhysicalTxCoordinator` 是唯一可操作共享 PTT 和播放生命周期的 owner。日志写入、同步和插件 completion 不得控制物理 lease。
 
 ```mermaid
 sequenceDiagram
     participant Clock as SlotClock
-    participant Coord as ClockCoordinator
-    participant Pipeline as TransmissionPipeline
-    participant Operator as RadioOperator
     participant Manager as RadioOperatorManager
-    participant EncQueue as WSJTXEncodeWorkQueue
+    participant Frame as DigitalFrameCoordinator
+    participant Encode as EncodeQueue
     participant Mixer as AudioMixer
-    participant PTT as PhysicalRadioManager
+    participant Pipeline as TransmissionPipeline
+    participant Physical as PhysicalTxCoordinator
+    participant Radio as PhysicalRadioManager
     participant Audio as AudioStreamManager
 
-    Note over Clock,Audio: ═══ 时隙开始 (T0) ═══
-    Clock->>Coord: slotStart 事件
-    Coord->>Pipeline: forceStopPTT() + onSlotStart()
-    Pipeline->>Mixer: clearSlotCache()
-    Coord->>Manager: broadcastAllOperatorStatusUpdates()
-    Coord->>Coord: engineEmitter.emit('slotStart', slotInfo, slotPack)
-
-    Note over Clock,Audio: ═══ 编码时机 (T0 + transmitTiming - encodeAdvance) ═══
-    Clock->>Coord: encodeStart(slotInfo)
-    Coord->>Coord: engineEmitter.emit('encodeStart', slotInfo)
-    Coord->>Pipeline: onEncodeStart(slotInfo)
-
-    Note over Operator,Manager: RadioOperator 监听 engineEmitter 的 encodeStart
-    Operator->>Operator: isTransmitSlot(slotInfo) via CycleUtils
-
-    alt 在发射周期
-        Operator->>Operator: transmissionStrategy.handleTransmitSlot()
-        Operator->>Manager: emit('requestTransmit', {operatorId, transmission})
-        Note right of Manager: pendingTransmissions.push()
-    else 非发射周期
-        Operator->>Operator: isTransmitSlot() ✗ → 跳过
+    Clock->>Manager: encodeStart(slotInfo)
+    Manager->>Frame: prepareFrame(intents, slot budget)
+    Frame-->>Manager: frameId + decisionEpoch + revision
+    Manager->>Encode: encode(frame identity)
+    Encode-->>Pipeline: encodeComplete(frame identity)
+    Pipeline->>Frame: acceptEncodeResult()
+    Pipeline->>Mixer: addOperatorAudio(frame identity)
+    Mixer-->>Pipeline: mixedAudioReady(immutable frame)
+    Pipeline->>Frame: validate budget + commitFrame()
+    Pipeline->>Physical: transmitAudio(frame lease)
+    Physical->>Radio: setTxDialOffset + setPTT(true)
+    Physical->>Physical: validate budget again after each delayed start stage
+    Physical->>Audio: playAudio(playbackId)
+    Physical-->>Pipeline: phase=active only after PTT and audio start
+    alt late correction or one participant removed
+        Pipeline->>Mixer: mix complete replacement snapshot
+        Mixer-->>Pipeline: prepared replacement waveform
+        Pipeline->>Physical: commitAudioReplacement(prepared waveform)
+        Physical->>Audio: stop old playback generation + wait for drain
+        Physical->>Audio: slice at current slot cursor + play new generation
+        Note over Physical,Radio: PTT remains asserted
+    else final playback or last participant removed
+        Audio-->>Physical: playback drained
+        Physical->>Radio: setPTT(false) + clearTxDialOffset
+        Physical-->>Pipeline: exactly-once physical terminal
     end
-
-    Pipeline->>Manager: processPendingTransmissions(slotInfo)
-    Manager->>Manager: 去重 + 使用 slotInfo.startMs 计算时间戳
-
-    loop 处理队列中的每个请求
-        Manager->>EncQueue: push({message, frequency, slotStartMs, requestId})
-    end
-
-    Note over Clock,Audio: ═══ 音频编码 (100-200ms) ═══
-    EncQueue->>EncQueue: wsjtx-lib 生成 FT8 音频 + 重采样到 12kHz
-    EncQueue->>Pipeline: encodeComplete 事件
-    Pipeline->>Pipeline: transmissionTracker 记录编码完成
-    Pipeline->>Mixer: addOperatorAudio(operatorId, audioData, sampleRate, slotStartMs)
-    Pipeline->>Mixer: scheduleMixing(targetPlaybackTime = T0 + transmitTiming)
-
-    Note over Clock,Audio: ═══ 目标播放时机 (T0 + transmitTiming) ═══
-    Clock->>Coord: transmitStart(slotInfo)
-    Coord->>Pipeline: onTransmitStart(slotInfo)
-    Pipeline->>Pipeline: 检查编码是否超时（未完成则发出 timingWarning）
-
-    Note over Clock,Audio: ═══ 混音器智能调度 (动态窗口) ═══
-    Mixer->>Mixer: 定时器触发 triggerMixing()
-    Mixer->>Mixer: mixAllOperatorAudios() → 重采样/裁剪/合并/归一化
-    Mixer->>Pipeline: emit('mixedAudioReady', {audioData, sampleRate, duration, operatorIds})
-
-    Note over Clock,Audio: ═══ 并行启动发射 ═══
-    par PTT 激活
-        Pipeline->>PTT: setPTT(true)
-        Pipeline->>Pipeline: spectrumScheduler.setPTTActive(true)
-        Pipeline->>Pipeline: emit('pttStatusChanged', {isTransmitting: true})
-        PTT-->>Pipeline: PTT 激活完成
-    and 音频播放
-        Pipeline->>Audio: playAudio(mixedAudio)
-        Audio-->>Audio: 分块写入 RtAudio/ICOM（FT8≈12.64s，FT4≈6.0s）
-    end
-    Pipeline->>Pipeline: schedulePTTStop(duration + 200ms)
-
-    Note over Clock,Audio: ═══ 发射完成 ═══
-    Audio-->>Pipeline: playAudio() Promise 完成
-    Pipeline->>PTT: setPTT(false) (定时器延迟停止)
-    Pipeline->>Pipeline: spectrumScheduler.setPTTActive(false)
-    Pipeline->>Pipeline: emit('pttStatusChanged', {isTransmitting: false})
-    Pipeline->>Pipeline: emit('transmissionComplete', {operatorId, success, duration})
 ```
 
-#### 时序配置参数 (mode.schema.ts)
+生命周期固定为 `requested -> encoding -> ready -> committed -> on_air -> draining -> terminal`。普通策略停止、日志失败和插件异常只能取消 commit 前的 frame 或阻止下一次自动化；只有人工强停、设备断连和 shutdown 可以调用 `forceInterrupt()`。
 
-**FT8 模式** (WSJT-X 标准):
-- `slotMs: 15000` - 时隙长度 15 秒
-- `transmitTiming: 500` - 信号在 T+0.5s 起，12.64s 长，T+13.14s 结束
-- `encodeAdvance: 0` - encodeStart 与 transmitStart 同时触发；编码 100-200ms 完成后由 AudioMixer 智能调度
-- `windowTiming: [-3200, -1500, -300]` - 三轮解码（balanced 预设）
-- **时间线**: T0 → T0+500ms(编码开始 + 目标播放) → T0+13140ms(播放结束) → T0+11800/13500/14700ms(三轮解码) → T0+15000ms(时隙结束)
+晚到解码或人工编辑在 commit 前替换并 tombstone 旧 encode callback；已 on-air 时，重新编码完成后在同一个物理 PTT lease 内停止旧音频 generation、等待输出收敛，再按当前时隙位置播放新 generation，不能通过 `setPTT(false/true)` 实现内容替换。若剩余预算不足以容纳完整剩余波形和 tail hold，intent 延期到下一合法 TX cycle。
 
-**FT4 模式** (WSJT-X 标准 + 双 pass 解码):
-- `slotMs: 7500` - 时隙长度 7.5 秒
-- `transmitTiming: 500` - 信号在 T+0.5s 起，6.0s 长，T+6.5s 结束（与 WSJT-X/JTDX 对齐）
-- `encodeAdvance: 300` - encodeStart 在 T+200ms 触发，给编码 ~300ms 完成；FT4 时隙短，必须提前编码避免错过 transmitStart
-- `windowTiming: [-1500, 0]` - 双 pass 解码：T+6000ms 早 pass + T+7500ms 末 pass。早 pass 让下一周期 encodeStart 之前能拿到对端消息（自动 QSO 必需）
-- **时间线**: T0 → T0+200ms(编码开始) → T0+500ms(目标播放) → T0+6000ms(早 pass 解码) → T0+6500ms(播放结束) → T0+7500ms(末 pass 解码 + 时隙结束)
+多操作员始终生成新的不可变 mixed frame：显式移除一个操作员时复用其他操作员的原始编码音频并重混，PTT 保持开启；只有参与者集合变空时才释放 PTT。连续纠正和连续移除通过 playback generation fence 串行切换，旧播放 Promise 只能结束旧 frame，不能释放当前 lease。
 
-**调优建议**:
-- 如果经常出现编码超时告警，增大 `encodeAdvance`
-- 如果音频播放偏早/偏晚，微调 `transmitTiming` (±50ms)
-- 自动 QSO 在 FT4 上不响应：检查 `windowTiming` 是否包含早 pass（如 -1500）
-- TransmissionTracker 会记录详细时序统计，用于性能分析
+所有启动阶段都可能迟到：pre-start cleanup、dial offset、PTT ACK 后都必须重新检查完整帧预算。超时的 PTT stop、音频 cleanup 或 CAT cleanup 会留下 operation fence；底层 Promise 真正 settlement 前不得建立新 lease，防止旧 `PTT(false)` 或旧播放收尾关闭新发射。
 
-#### 关键事件流
+模式切换先进入 transmission maintenance gate，撤销所有未提交 candidate 和旧 decision，再硬中断当前物理 lease；只有 Coordinator 明确回到 `idle` 后才允许修改模式、频率和 SlotClock，`unknown` 必须拒绝切换。
 
-**1. 正常周期发射** (偶数周期操作员在偶数时隙发射)
-
-```
-SlotClock.encodeStart (T0 + 780ms)
-    ↓
-DigitalRadioEngine.emit('encodeStart', slotInfo)
-    ↓
-RadioOperator.onEncodeStart(slotInfo)
-    ├─ 计算周期: isTransmitCycle(slotInfo.utcSeconds)
-    ├─ ✓ 是发射周期
-    └─ emit('requestTransmit', { operatorId, transmission })
-        ↓
-RadioOperatorManager.pendingTransmissions.push(request)
-    ↓
-RadioOperatorManager.processPendingTransmissions(slotInfo)
-    ├─ 使用 slotInfo.startMs (准确时间戳)
-    ├─ 计算 targetTime = slotInfo.startMs + mode.transmitTiming
-    ├─ 处理队列中所有请求
-    └─ encodeQueue.push() → 开始编码
-        ↓
-编码完成 (通常100-200ms后)
-    ↓
-AudioMixer.addAudio(audioData, targetPlaybackTime)
-    ├─ 计算到目标时间的延迟
-    ├─ 如果距离目标>100ms: 等待到目标时间-50ms
-    └─ 如果距离目标<100ms: 立即混音
-        ↓
-混音完成 → 在目标时间 (T0 + mode.transmitTiming) 准确播放
-```
-
-**2. 非发射周期** (奇数周期操作员在偶数时隙)
-
-```
-SlotClock.encodeStart (T0 + 780ms)
-    ↓
-RadioOperator.onEncodeStart(slotInfo)
-    ├─ 计算周期: isTransmitCycle(slotInfo.utcSeconds)
-    ├─ ✗ 不是发射周期
-    └─ 输出日志，不发射 requestTransmit
-        ↓
-RadioOperatorManager.processPendingTransmissions(slotInfo)
-    └─ 队列为空，无操作
-```
-
-**3. 多操作员同周期发射** (2个操作员都在偶数周期)
-
-```
-encodeStart 事件 (T0 + 780ms)
-    ↓
-RadioOperator A → requestTransmit → 加入队列
-RadioOperator B → requestTransmit → 加入队列
-    ↓
-processPendingTransmissions()
-    ├─ 处理 Operator A 请求 → encodeQueue (目标时间: T0 + mode.transmitTiming)
-    ├─ 处理 Operator B 请求 → encodeQueue (目标时间: T0 + mode.transmitTiming)
-    └─ 两个编码并行进行
-        ↓
-AudioMixer 智能调度
-    ├─ 第一个编码完成 → addAudio(A, targetTime)
-    ├─ 等待第二个或超时 (基于targetTime计算)
-    ├─ 第二个编码完成 → addAudio(B, targetTime)
-    ├─ 触发混音窗口结束
-    └─ 合并两路音频 → 单次 PTT 发射混音结果
-```
-
-**4. 时隙中间切换** (用户手动切换发射内容)
-
-```
-用户操作 (切换槽位/修改内容/改变周期)
-    ↓
-operatorSlotChanged / operatorSlotContentChanged / operatorTransmitCyclesChanged
-    ↓
-RadioOperatorManager.checkAndTriggerTransmission(operatorId)
-    ├─ 检查当前是否在发射周期
-    ├─ ✓ 是 → 立即生成发射内容
-    └─ processPendingTransmissions(基于当前时隙startMs)
-        └─ 统一入队并消费，正确计算 timeSinceSlotStartMs（标记中途发射/重新混音）
-```
-
-#### 时间戳一致性保证
-
-**核心要点**: 所有时间计算使用同一个 `slotInfo.startMs`（中途触发时由管理器基于当前时隙计算得到），避免跨时隙边界错误；队列在消费层统一清空，防止请求残留导致下一个非发射周期误发。
-
-```
-    transmitStart(slotInfo) 触发 → processPendingTransmissions(slotInfo)
-        ↓
-    使用 slotInfo.startMs (事件产生时的准确时间)
-        ↓
-    所有操作基于同一时间戳
-        ↓
-    周期判断准确无误
-```
+UI 的 `on_air` 只来自 `PhysicalTxCoordinator` 的 `active` phase；`starting`、`committed` 不能显示为正在发射，`unknown` 不能显示为 RX。`transmissionComplete` 每个 frame/operator 只发一次，并携带 `frameId`、`physicalConfirmed` 与 terminal reason。
 
 ### 音频链路
 - **AudioStreamManager**: Audify (RtAudio) 低延迟 I/O，多设备动态切换，实时状态监控
-- **AudioMixer**: 多操作员混音，独立音量控制，PTT 逻辑
+- **AudioMixer**: 按不可变 frame identity 进行多操作员混音，不控制 PTT 或播放停止
 - **SpectrumAnalyzer**: WebWorker 并行 FFT，瀑布图数据，自适应调度
 
 ### 解码链路

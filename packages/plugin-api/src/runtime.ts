@@ -1,5 +1,5 @@
-import type { ParsedFT8Message, FrameMessage, SlotInfo } from '@tx5dr/contracts';
-import type { StrategyDecision, StrategyDecisionMeta } from './hooks.js';
+import type { ParsedFT8Message, FrameMessage, SlotInfo, QSORecord } from '@tx5dr/contracts';
+import type { StrategyDecision } from './hooks.js';
 
 /**
  * Logical FT8 transmit slot identifiers used by the built-in automation model.
@@ -44,6 +44,8 @@ export interface StrategyRuntimeSnapshot {
   context?: StrategyRuntimeContext;
   /** Optional list of user-visible next states, modes or branch hints. */
   availableSlots?: string[];
+  /** Host correlation token for QSO persistence; it is not an RF decision epoch. */
+  qsoLifecycleEpoch?: number;
 }
 
 /**
@@ -56,6 +58,35 @@ export interface StrategyRuntimeSlotContentUpdate {
   content: string;
 }
 
+export type StrategyDecisionSource = 'slot-auto' | 'late-decode';
+
+export interface StrategyDecisionMetaV2 {
+  epoch: number;
+  source: StrategyDecisionSource;
+  isReDecision: boolean;
+  signal: AbortSignal;
+}
+
+export type StrategyRuntimeCheckpoint = unknown;
+
+export interface StrategyQSOCompletionEffect {
+  record: QSORecord;
+  /** Stable within one strategy runtime generation; distinct from RF decision epochs. */
+  lifecycleEpoch: number;
+}
+
+export interface StrategyQSOCompletionSettlement {
+  lifecycleEpoch: number;
+  recordId: string;
+  status: 'committed' | 'failed';
+}
+
+export interface StrategyDecisionResult extends StrategyDecision {
+  transmission: string | null;
+  snapshot: StrategyRuntimeSnapshot;
+  qsoCompletion?: StrategyQSOCompletionEffect;
+}
+
 /**
  * Active controller for a `strategy` plugin.
  *
@@ -64,19 +95,29 @@ export interface StrategyRuntimeSlotContentUpdate {
  * respect to the incoming slot/decode stream.
  */
 export interface StrategyRuntime {
+  checkpoint(): StrategyRuntimeCheckpoint;
+
+  restore(checkpoint: StrategyRuntimeCheckpoint): void;
+
+  /**
+   * Optional acknowledgement for a declarative QSO effect. Implementations may
+   * use it to prevent a completed contact from leaking into the next lifecycle.
+   */
+  settleQSOCompletion?(settlement: StrategyQSOCompletionSettlement): void;
+
   /**
    * Re-evaluates the current automation state using the latest decoded messages.
    *
-   * Return `{ stop: true }` to ask the host to stop transmitting. During a
-   * late re-decision (`meta.isReDecision === true`), the host also immediately
-   * aborts the operator's current live transmission contribution. Any other
-   * decision fields can be added in future API revisions, so plugins should
-   * return an object rather than a bare boolean.
+   * Return `{ stop: true }` to stop this operator's automation and prevent new
+   * frames. It never grants an RF interrupt: an already committed/on-air frame
+   * is allowed to finish. Explicit operator contribution removal is available
+   * only through the invocation-guarded `operator:transmit-control` command
+   * port outside speculative strategy execution.
    */
   decide(
     messages: ParsedFT8Message[],
-    meta?: StrategyDecisionMeta,
-  ): Promise<StrategyDecision> | StrategyDecision;
+    meta: StrategyDecisionMetaV2,
+  ): Promise<StrategyDecisionResult> | StrategyDecisionResult;
 
   /**
    * Returns the exact text that should be transmitted next, or `null` when no

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TuneToneController } from '../TuneToneController.js';
+import { PhysicalTxCoordinator } from '../../transmission/PhysicalTxCoordinator.js';
 import type { TuneToneStatus } from '@tx5dr/contracts';
 
 function deferred<T = void>() {
@@ -24,37 +25,44 @@ function createController(options: { busy?: boolean; connected?: boolean } = {})
     playAudio: vi.fn(() => playback.promise),
     stopCurrentPlayback: vi.fn().mockResolvedValue(0),
   };
-  const setSoftwarePttActive = vi.fn();
+  const physicalTxCoordinator = new PhysicalTxCoordinator({
+    isRadioConnected: radioManager.isConnected,
+    setPTT: radioManager.setPTT,
+    playAudio: audioStreamManager.playAudio,
+    stopCurrentPlayback: audioStreamManager.stopCurrentPlayback,
+    isAudioPlaying: audioStreamManager.isPlaying,
+    sleep: async () => undefined,
+  });
   const controller = new TuneToneController({
     radioManager: radioManager as never,
-    audioStreamManager: audioStreamManager as never,
+    physicalTxCoordinator,
     isTransmitBusy: () => options.busy ?? false,
     getOperatorToneHz: () => 1234,
-    setSoftwarePttActive,
     emitStatus: (status) => statuses.push(status),
   });
 
-  return { controller, radioManager, audioStreamManager, setSoftwarePttActive, statuses, playback };
+  return { controller, radioManager, audioStreamManager, statuses, playback };
 }
 
 describe('TuneToneController', () => {
   it('starts PTT, plays a generated tone, and emits active status', async () => {
-    const { controller, radioManager, audioStreamManager, setSoftwarePttActive, statuses } = createController();
+    const { controller, radioManager, audioStreamManager, statuses } = createController();
 
     await controller.start({ operatorId: 'op1' });
 
     expect(radioManager.setPTT).toHaveBeenCalledWith(true);
-    expect(setSoftwarePttActive).toHaveBeenCalledWith(true);
-    expect(audioStreamManager.playAudio).toHaveBeenCalledWith(
-      expect.any(Float32Array),
-      12000,
-      expect.objectContaining({ injectIntoMonitor: true, playbackKind: 'tune-tone' }),
-    );
+    await vi.waitFor(() => {
+      expect(audioStreamManager.playAudio).toHaveBeenCalledWith(
+        expect.any(Float32Array),
+        12000,
+        expect.objectContaining({ injectIntoMonitor: true, playbackKind: 'tune-tone' }),
+      );
+    });
     expect(statuses[0]).toMatchObject({ active: true, toneHz: 1234 });
   });
 
   it('stops playback and releases PTT idempotently', async () => {
-    const { controller, radioManager, audioStreamManager, setSoftwarePttActive, statuses } = createController();
+    const { controller, radioManager, audioStreamManager, statuses } = createController();
 
     await controller.start({ toneHz: 1600 });
     await controller.stop('manual');
@@ -62,12 +70,29 @@ describe('TuneToneController', () => {
 
     expect(audioStreamManager.stopCurrentPlayback).toHaveBeenCalledWith({ kind: 'tune-tone' });
     expect(radioManager.setPTT).toHaveBeenCalledWith(false);
-    expect(setSoftwarePttActive).toHaveBeenLastCalledWith(false);
     expect(statuses[statuses.length - 1]).toMatchObject({ active: false, toneHz: null });
   });
 
+  it('keeps an uncertain PTT release retryable and visible', async () => {
+    const { controller, radioManager, statuses } = createController();
+
+    await controller.start({ toneHz: 1600 });
+    radioManager.setPTT.mockRejectedValueOnce(new Error('USB write failed'));
+    await controller.stop('manual');
+
+    expect(statuses[statuses.length - 1]).toMatchObject({
+      active: false,
+      error: 'PTT release unconfirmed',
+    });
+
+    await controller.stop('manual retry');
+    expect(radioManager.setPTT).toHaveBeenLastCalledWith(false);
+    expect(statuses[statuses.length - 1]).toMatchObject({ active: false, toneHz: null });
+    expect(statuses[statuses.length - 1].error).toBeUndefined();
+  });
+
   it('releases PTT if tune tone playback is interrupted externally', async () => {
-    const { controller, radioManager, setSoftwarePttActive, statuses, playback } = createController();
+    const { controller, radioManager, statuses, playback } = createController();
 
     await controller.start({ toneHz: 1600 });
     playback.reject(new Error('playback interrupted'));
@@ -76,7 +101,6 @@ describe('TuneToneController', () => {
       expect(radioManager.setPTT).toHaveBeenCalledWith(false);
     });
 
-    expect(setSoftwarePttActive).toHaveBeenLastCalledWith(false);
     expect(statuses[statuses.length - 1]).toMatchObject({ active: false, toneHz: null });
   });
 

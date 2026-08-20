@@ -51,6 +51,9 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   private lastKnownFrequency: number | null = null;
   private lastKnownMode: string | null = null;
   private lastKnownPtt: boolean | null = null;
+  // A state-ack timeout means the TRX command may already be in flight. Do
+  // not allow a later lease to reuse this session and apply an old ON/OFF.
+  private pttWriteUncertain = false;
   private lastRxLevelDbm: number | null = null;
   private lastTxPowerW: number | null = null;
   private lastTxPeakPowerW: number | null = null;
@@ -62,6 +65,12 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   private txAudioChunkOffset = 0;
   private txAudioQueuedSamples = 0;
   private txDrainWaiters: TxDrainWaiter[] = [];
+  private readonly options: { writeTimeoutMs?: number };
+
+  constructor(options: { writeTimeoutMs?: number } = {}) {
+    super();
+    this.options = options;
+  }
 
   getType(): RadioConnectionType {
     return RadioConnectionType.TCI;
@@ -72,7 +81,9 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   }
 
   isHealthy(): boolean {
-    return this.state === RadioConnectionState.CONNECTED && Boolean(this.client?.isConnected());
+    return this.state === RadioConnectionState.CONNECTED
+      && !this.pttWriteUncertain
+      && Boolean(this.client?.isConnected());
   }
 
   isConnected(): boolean {
@@ -116,6 +127,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     this.lastKnownFrequency = null;
     this.lastKnownMode = null;
     this.lastKnownPtt = null;
+    this.pttWriteUncertain = false;
     this.audioRunning = false;
     this.audioStreamOwners.clear();
     this.txTransmissionActive = false;
@@ -131,7 +143,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       connectTimeoutMs: TCI_CONNECT_TIMEOUT_MS,
       commandTimeoutMs: TCI_COMMAND_TIMEOUT_MS,
       writeAckMode: 'state',
-      writeTimeoutMs: TCI_WRITE_TIMEOUT_MS,
+      writeTimeoutMs: this.options.writeTimeoutMs ?? TCI_WRITE_TIMEOUT_MS,
       frequencyWriteSettleMs: TCI_FREQUENCY_WRITE_SETTLE_MS,
     });
     this.client = client;
@@ -174,6 +186,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     logger.info(`Disconnecting TCI radio: ${reason || 'no reason'}`);
     this.ioSessionId += 1;
     await this.cleanup();
+    this.pttWriteUncertain = false;
     this.setState(RadioConnectionState.DISCONNECTED);
     this.emit('disconnected', reason);
   }
@@ -210,6 +223,15 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
 
   async setPTT(enabled: boolean): Promise<void> {
     await this.runTask('setPTT', async () => {
+      if (this.pttWriteUncertain) {
+        throw new RadioError({
+          code: RadioErrorCode.OPERATION_TIMEOUT,
+          message: 'TCI PTT state is uncertain; reconnect before issuing another PTT command',
+          userMessage: 'TCI PTT state is uncertain. Reconnect the radio before transmitting again.',
+          severity: RadioErrorSeverity.CRITICAL,
+          context: { operation: 'setPTT', protocol: 'tci', stateUncertain: true },
+        });
+      }
       this.checkConnected();
       if (!enabled) {
         this.clearTxAudioQueue('ptt-off');
@@ -219,7 +241,20 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
         this.lastKnownPtt = enabled;
         return;
       }
-      await this.client!.setPtt(enabled, { source: enabled ? 'tci' : undefined });
+      try {
+        await this.client!.setPtt(enabled, { source: enabled ? 'tci' : undefined });
+      } catch (error) {
+        if (isTciCommandTimeout(error)) {
+          this.pttWriteUncertain = true;
+          this.lastKnownPtt = null;
+          this.setState(RadioConnectionState.ERROR);
+          logger.error('TCI PTT state acknowledgement timed out; poisoning session', {
+            enabled,
+            operation: 'setPTT',
+          });
+        }
+        throw error;
+      }
       this.lastKnownPtt = enabled;
       if (!enabled) {
         this.clearTxAudioQueue('ptt-off-applied');
@@ -792,7 +827,13 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
         'Avoid connecting multiple TCI clients if the radio rejects them',
       ],
       cause: error,
-      context: { operation, protocol: 'tci', writeTimeout: isWriteTimeout, recoverable: isWriteTimeout },
+      context: {
+        operation,
+        protocol: 'tci',
+        writeTimeout: isWriteTimeout,
+        recoverable: isWriteTimeout,
+        stateUncertain: operation === 'setPTT' && this.pttWriteUncertain,
+      },
     });
   }
 }

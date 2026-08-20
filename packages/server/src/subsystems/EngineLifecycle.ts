@@ -29,6 +29,7 @@ import type { AudioVolumeController } from './AudioVolumeController.js';
 import { RadioError } from '../utils/errors/RadioError.js';
 import { createLogger } from '../utils/logger.js';
 import type { WSJTXDecodeWorkQueue } from '../decode/WSJTXDecodeWorkQueue.js';
+import type { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
 
 const logger = createLogger('EngineLifecycle');
 
@@ -42,6 +43,7 @@ export interface EngineLifecycleDeps {
   spectrumScheduler: SpectrumScheduler;
   decodeQueue: WSJTXDecodeWorkQueue;
   operatorManager: RadioOperatorManager;
+  physicalTxCoordinator: PhysicalTxCoordinator;
   audioMixer: AudioMixer;
   clockSource: ClockSourceSystem;
   subsystems: {
@@ -74,8 +76,7 @@ export interface EngineLifecycleDeps {
 export class EngineLifecycle {
   private isRunning = false;
   private audioStarted = false;
-  /** When true, radio stop handler skips disconnect (used for CW transitions). */
-  preserveRadioConnection = false;
+  private requestedStopScope: 'full' | 'mode-runtime' = 'full';
 
   // ICOM WLAN 音频适配器
   private icomWlanAudioAdapter: IcomWlanAudioAdapter | null = null;
@@ -158,7 +159,7 @@ export class EngineLifecycle {
     const configManager = ConfigManager.getInstance();
     const mode = this.deps.getCurrentMode();
     const resources = [
-      ...this.buildCoreResourcePlan(configManager),
+      ...this.buildConnectionAdapterResourcePlan(configManager),
       ...(mode.name === 'VOICE'
         ? this.buildVoiceModeResourcePlan()
         : mode.name === 'CW'
@@ -170,40 +171,10 @@ export class EngineLifecycle {
     return resources;
   }
 
-  private buildCoreResourcePlan(configManager: ConfigManager): SimplifiedResourceConfig[] {
+  private buildConnectionAdapterResourcePlan(configManager: ConfigManager): SimplifiedResourceConfig[] {
     const { radioManager, audioStreamManager } = this.deps;
-    const isCWMode = this.deps.getCurrentMode().name === 'CW';
 
     return [
-      {
-        name: 'radio',
-        start: async () => {
-          const radioConfig = configManager.getRadioConfig();
-          if (radioConfig.type === 'icom-wlan') {
-            if (!radioConfig.icomWlan?.ip || !radioConfig.icomWlan?.port) {
-              logger.error('ICOM WLAN config incomplete:', radioConfig.icomWlan);
-              throw new Error('ICOM WLAN IP or port missing');
-            }
-            logger.debug(`ICOM WLAN config validated: IP=${radioConfig.icomWlan.ip}, Port=${radioConfig.icomWlan.port}`);
-          } else if (radioConfig.type === 'tci') {
-            if (!radioConfig.tci?.host || !radioConfig.tci?.port) {
-              logger.error('TCI config incomplete:', radioConfig.tci);
-              throw new Error('TCI host or port missing');
-            }
-            logger.debug(`TCI config validated: ${radioConfig.tci.host}:${radioConfig.tci.port}`);
-          }
-          logger.debug('Applying radio config:', radioConfig);
-          await radioManager.applyConfig(radioConfig);
-        },
-        stop: async () => {
-          if (this.preserveRadioConnection) return;
-          if (radioManager.isConnected()) {
-            await radioManager.disconnect('Engine stopped');
-          }
-        },
-        priority: 1,
-        optional: isCWMode,
-      },
       {
         name: 'icomWlanAudioAdapter',
         start: async () => {
@@ -659,18 +630,34 @@ export class EngineLifecycle {
    * 停止引擎（外部 API，委托给状态机）
    */
   async stop(): Promise<void> {
+    return this.stopWithScope('full');
+  }
+
+  /** Stops mode-specific resources while preserving the active CAT session. */
+  async stopModeRuntime(): Promise<void> {
+    return this.stopWithScope('mode-runtime');
+  }
+
+  private async stopWithScope(scope: 'full' | 'mode-runtime'): Promise<void> {
     if (!this.engineStateMachineActor) {
       throw new Error('Engine state machine not initialized');
     }
 
     if (isEngineState(this.engineStateMachineActor, EngineState.IDLE)) {
       logger.info('Engine already stopped, sending status sync');
+      if (scope === 'full' && this.deps.radioManager.isConnected()) {
+        await this.deps.radioManager.disconnect('Engine stopped');
+      }
       const status = this.deps.getStatus();
       this.deps.engineEmitter.emit('systemStatus', status);
       return;
     }
 
     if (isEngineState(this.engineStateMachineActor, EngineState.STOPPING)) {
+      // A full stop may upgrade a mode-only stop that is already draining.
+      if (scope === 'full') {
+        this.requestedStopScope = 'full';
+      }
       logger.info('Engine already stopping, waiting for completion...');
       try {
         await waitForEngineState(this.engineStateMachineActor, EngineState.IDLE, 10000);
@@ -682,8 +669,15 @@ export class EngineLifecycle {
       return;
     }
 
-    logger.info('Delegating to state machine: STOP');
-    this.engineStateMachineActor.send({ type: 'STOP' });
+    this.requestedStopScope = scope;
+
+    const stoppingDuringStart = isEngineState(this.engineStateMachineActor, EngineState.STARTING);
+    logger.info(`Delegating to state machine: ${stoppingDuringStart ? 'FORCE_STOP' : 'STOP'}`);
+    this.engineStateMachineActor.send(
+      stoppingDuringStart
+        ? { type: 'FORCE_STOP', reason: `${scope} stop while starting` }
+        : { type: 'STOP' },
+    );
 
     // Wait for engine to reach IDLE state after sending STOP
     try {
@@ -701,6 +695,9 @@ export class EngineLifecycle {
   sendRadioDisconnected(reason: string): void {
     if (this.engineStateMachineActor && isEngineState(this.engineStateMachineActor, EngineState.RUNNING)) {
       logger.info('Sending RADIO_DISCONNECTED event');
+      // A real connection loss is always a full lifecycle boundary. Do not
+      // inherit a stale mode-only scope from a previous switch.
+      this.requestedStopScope = 'full';
       this.engineStateMachineActor.send({
         type: 'RADIO_DISCONNECTED',
         reason
@@ -729,8 +726,21 @@ export class EngineLifecycle {
 
     const mode = this.deps.getCurrentMode();
     logger.info(`Starting engine, mode: ${mode.name}`);
+    const radioWasConnected = this.deps.radioManager.isConnected();
 
     try {
+      const radioConfig = ConfigManager.getInstance().getRadioConfig();
+      try {
+        await this.deps.radioManager.applyConfig(radioConfig);
+      } catch (error) {
+        if (mode.name !== 'CW') {
+          throw error;
+        }
+        logger.warn('CW mode starting without a confirmed CAT session', {
+          error: (error as Error).message,
+        });
+      }
+
       // 1. 注册时钟/解码/频谱事件
       this.deps.subsystems.clockCoordinator.setup();
 
@@ -752,6 +762,9 @@ export class EngineLifecycle {
       logger.info('Engine started successfully');
     } catch (error) {
       logger.error('Engine start failed:', error);
+      if (!radioWasConnected && this.deps.radioManager.isConnected()) {
+        await this.deps.radioManager.disconnect('Engine start rollback').catch(() => undefined);
+      }
       // Clean up event listeners registered by setup() that won't be cleaned by rollback
       this.deps.subsystems.transmissionPipeline.teardown();
       this.deps.subsystems.clockCoordinator.teardown();
@@ -776,10 +789,18 @@ export class EngineLifecycle {
       // 3. 清除时钟/解码/频谱监听器
       this.deps.subsystems.clockCoordinator.teardown();
 
-      // 4. 按逆序停止资源
+      // 4. Shutdown is a hard-interrupt boundary. Release the single physical
+      // lease before audio/radio resources disappear underneath it.
+      await this.deps.physicalTxCoordinator.forceInterrupt('engine stopping');
+
+      // 5. 按逆序停止资源
       await this.deps.resourceManager.stopAll();
 
-      // 5. 清除状态标志
+      if (this.requestedStopScope === 'full' && this.deps.radioManager.isConnected()) {
+        await this.deps.radioManager.disconnect('Engine stopped');
+      }
+
+      // 6. 清除状态标志
       this.isRunning = false;
       this.audioStarted = false;
 
@@ -789,6 +810,8 @@ export class EngineLifecycle {
       this.isRunning = false;
       this.audioStarted = false;
       throw error;
+    } finally {
+      this.requestedStopScope = 'full';
     }
   }
 }

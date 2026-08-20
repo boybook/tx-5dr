@@ -1,9 +1,4 @@
-import type {
-  OperatorSlots,
-  PluginDefinition,
-  QSORecord,
-  TargetSelectionPriorityMode,
-} from '@tx5dr/plugin-api';
+import { definePlugin, type TargetSelectionPriorityMode } from '@tx5dr/plugin-api';
 import type {
   OperatorConfig,
 } from '@tx5dr/contracts';
@@ -72,7 +67,8 @@ function getStandardQSOConfig(ctx: {
   };
 }
 
-export const standardQSOStrategyPlugin: PluginDefinition = {
+export const standardQSOStrategyPlugin = definePlugin({
+  apiVersion: 2,
   name: BUILTIN_STANDARD_QSO_PLUGIN_NAME,
   version: '1.0.0',
   type: 'strategy',
@@ -201,15 +197,6 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
       isTargetBeingWorkedByOthers(targetCallsign: string): boolean {
         return ctx.operator.isTargetBeingWorkedByOthers(targetCallsign);
       },
-      recordQSOLog(record: QSORecord): Promise<QSORecord> {
-        return ctx.operator.recordQSO(record);
-      },
-      notifySlotsUpdated(slots: OperatorSlots): void {
-        ctx.operator.notifySlotsUpdated(slots);
-      },
-      notifyStateChanged(state: string): void {
-        ctx.operator.notifyStateChanged(state);
-      },
     };
     const strategy = new StandardQSOPluginRuntime(runtime, ctx.log);
     ctx.log.info('Standard QSO strategy initialized', { operatorId });
@@ -221,7 +208,7 @@ export const standardQSOStrategyPlugin: PluginDefinition = {
       ctx.log.debug('Standard QSO config changed');
     },
   },
-};
+});
 
 /** 内置翻译，随插件一起编译进 bundle */
 export const standardQSOLocales: Record<string, Record<string, string>> = {

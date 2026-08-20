@@ -1,11 +1,13 @@
-import type {
-  AutoCallProposal,
-  LastMessageInfo,
-  ParsedFT8Message,
-  PluginContext,
-  PluginDefinition,
-  SlotInfo,
+import {
+  definePlugin,
+  type AutoCallProposal,
+  type LastMessageInfo,
+  type ParsedFT8Message,
+  type PluginContextFor,
+  type SlotInfo,
 } from '@tx5dr/plugin-api';
+
+type PluginContext = PluginContextFor<readonly ['operator:transmit-control', 'logbook:read']>;
 import type { QSORecord } from '@tx5dr/contracts';
 import { getFourCharacterGrid } from '@tx5dr/contracts';
 import { isUndecodedCallsignPlaceholder } from '@tx5dr/core';
@@ -108,12 +110,13 @@ function findMatchedTarget(
   return matches[0] ?? null;
 }
 
-export const watchedGridAutocallPlugin: PluginDefinition = {
+export const watchedGridAutocallPlugin = definePlugin({
+  apiVersion: 2,
   name: 'watched-grid-autocall',
   version: '1.0.0',
   type: 'utility',
   description: 'Automatically call stations from watched Maidenhead grids while the operator is idle',
-  permissions: ['operator:transmit-control'],
+  permissions: ['operator:transmit-control', 'logbook:read'],
 
   settings: {
     gridWatchOverview: {
@@ -258,7 +261,7 @@ export const watchedGridAutocallPlugin: PluginDefinition = {
       };
     },
   },
-};
+});
 
 export const watchedGridAutocallLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,

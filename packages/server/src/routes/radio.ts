@@ -21,6 +21,7 @@ const { SerialPort } = serialport;
 
 import { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { RepeaterDuplexApplyResult, RepeaterDuplexConfig, ToneSquelchApplyResult, ToneSquelchConfig } from '../radio/PhysicalRadioManager.js';
+import { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
 import { CWKeyerHardware } from '../cw/CWKeyerHardware.js';
 import { CWKeyerTestFailure, type CWSerialKeyerTestTarget } from '../cw/CWKeyerManager.js';
@@ -115,6 +116,40 @@ async function listAndroidBridgeSerialPorts(): Promise<unknown[] | null> {
 }
 
 type CWKeyerTestPhase = 'open' | 'keyDown' | 'keyUp';
+
+export async function runTemporaryPhysicalPttTest(
+  manager: Pick<PhysicalRadioManager, 'isConnected' | 'setPTT'>,
+  durationMs = 500,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<void> {
+  const coordinator = new PhysicalTxCoordinator({
+    isRadioConnected: () => manager.isConnected(),
+    setPTT: (active) => manager.setPTT(active),
+    playAudio: async () => { throw new Error('PTT test does not support audio playback'); },
+    stopCurrentPlayback: async () => 0,
+    sleep,
+  });
+
+  try {
+    const leaseId = await coordinator.acquireLease({
+      source: 'test',
+      reason: 'authenticated temporary PTT test',
+    });
+    await sleep(durationMs);
+    const result = await coordinator.releaseLease(leaseId, 'PTT test complete');
+    if (!result.success) {
+      throw new Error(result.error ?? result.reason);
+    }
+  } catch (error) {
+    const snapshot = coordinator.getSnapshot();
+    if (snapshot.phase === 'unknown') {
+      await coordinator.retryUnknownStop('PTT test cleanup retry');
+    } else if (snapshot.phase !== 'idle') {
+      await coordinator.forceInterrupt('PTT test failed');
+    }
+    throw error;
+  }
+}
 
 function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -919,21 +954,6 @@ export async function radioRoutes(fastify: FastifyInstance) {
       });
     }
 
-    // PTT 测试辅助：开启 → 等 500ms → 关闭，确保异常时 PTT 关闭
-    const doPttTest = async (manager: PhysicalRadioManager) => {
-      try {
-        await manager.setPTT(true);
-        logger.debug('PTT enabled, radio in transmit state');
-        await new Promise(resolve => setTimeout(resolve, 500));
-        await manager.setPTT(false);
-        logger.info('PTT test complete, returned to receive state');
-      } catch (error) {
-        // 确保 PTT 关闭
-        try { await manager.setPTT(false); } catch { /* ignore */ }
-        throw error;
-      }
-    };
-
     // 智能复用：检查引擎是否已连接同一硬件
     if (radioManager.isConnected()) {
       const activeConfig = radioManager.getConfig();
@@ -941,7 +961,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       if (isHardwareSameTarget(activeConfig, config)) {
         logger.debug('Reusing existing connection for PTT test');
         try {
-          await doPttTest(radioManager);
+          await engine.testPhysicalPTT(500);
           return reply.send({ success: true, message: 'PTT test successful! Transmit state toggled for 0.5 seconds.' });
         } catch (error) {
           throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
@@ -961,7 +981,8 @@ export async function radioRoutes(fastify: FastifyInstance) {
     const tester = new PhysicalRadioManager();
     try {
       await tester.applyConfig(config);
-      await doPttTest(tester);
+      await runTemporaryPhysicalPttTest(tester);
+      logger.info('PTT test complete, returned to receive state');
       return reply.send({ success: true, message: 'PTT test successful! Transmit state toggled for 0.5 seconds.' });
     } catch (e) {
       logger.error('PTT test failed:', e);
@@ -1141,6 +1162,16 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
   // 断开电台连接
   fastify.post('/disconnect', { preHandler: [requireAbility('execute', 'RadioReconnect')] }, async (_req, reply) => {
+    // Release the shared physical lease before closing CAT. Closing the
+    // connection first makes a pending PTT-off impossible to confirm and can
+    // leave the radio keyed while the coordinator is still on-air.
+    try {
+      await engine.forceStopTransmission();
+    } catch (error) {
+      logger.warn('Failed to force-stop transmission before radio disconnect', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     await radioManager.disconnect();
 
     return reply.send({

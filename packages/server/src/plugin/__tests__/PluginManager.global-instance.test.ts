@@ -307,8 +307,10 @@ describe('PluginManager global instance scope', () => {
       export default {
         name: 'global-sync-test',
         version: '1.0.0',
+        apiVersion: 2,
         type: 'utility',
         instanceScope: 'global',
+        permissions: ['logbook:sync'],
         ui: {
           pages: [
             {

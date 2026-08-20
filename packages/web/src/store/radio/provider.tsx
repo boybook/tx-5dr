@@ -446,6 +446,14 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
 
     const wsClient = radioService.wsClientInstance;
     const handleTransmissionLog = (data: MyRelatedTransmissionLog) => {
+      if (data?.phase !== 'on_air' || data?.physicalConfirmed !== true) {
+        logger.warn('Ignoring transmissionLog without physical on-air confirmation', {
+          operatorId: data?.operatorId,
+          frameId: data?.frameId,
+          phase: data?.phase,
+        });
+        return;
+      }
       if (!isValidTimestampMs(data?.slotStartMs)) {
         logger.warn('Ignoring invalid transmissionLog payload', {
           operatorId: data?.operatorId,

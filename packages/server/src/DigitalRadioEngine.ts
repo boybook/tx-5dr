@@ -57,6 +57,10 @@ import {
   resolveFrequencyRadioMode,
 } from './radio/frequencyRadioMode.js';
 import { TransmissionTracker } from './transmission/TransmissionTracker.js';
+import { DigitalFrameCoordinator } from './transmission/DigitalFrameCoordinator.js';
+import { PhysicalTxCoordinator } from './transmission/PhysicalTxCoordinator.js';
+import { OperatorIntentCoordinator } from './transmission/OperatorIntentCoordinator.js';
+import type { PhysicalTxSnapshot } from './transmission/TransmissionIntent.js';
 import type { OpenWebRXAudioAdapter } from './openwebrx/OpenWebRXAudioAdapter.js';
 import { MemoryLeakDetector } from './utils/MemoryLeakDetector.js';
 import { ResourceManager } from './utils/ResourceManager.js';
@@ -74,6 +78,13 @@ type DecodeWorkerEngineEmitter = EventEmitter<{
   decodeWorkerUnavailable: (status: DecodeWorkerPoolHealthSnapshot) => void;
   decodeWorkerRecovered: (status: DecodeWorkerPoolHealthSnapshot) => void;
 }>;
+
+type OperatingStateSyncStatus = 'applied' | 'skipped-offline' | 'partially-applied' | 'failed';
+
+interface OperatingStateSyncResult {
+  status: OperatingStateSyncStatus;
+  detail?: string;
+}
 
 // 子系统
 import { AudioVolumeController } from './subsystems/AudioVolumeController.js';
@@ -100,6 +111,7 @@ import { RadioPowerController } from './radio/RadioPowerController.js';
 import { TuneToneController } from './radio/TuneToneController.js';
 import { buildRadioStatusPayload } from './radio/buildRadioStatusPayload.js';
 import type { RealtimeRxAudioRouter } from './realtime/RealtimeRxAudioRouter.js';
+import type { PluginRadioCommand, PluginRadioTunerCommand } from '@tx5dr/plugin-api';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -221,6 +233,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private frequencyManager: FrequencyManager;
   private _operatorManager: RadioOperatorManager;
   private transmissionTracker: TransmissionTracker;
+  private digitalFrameCoordinator: DigitalFrameCoordinator;
+  private physicalTxCoordinator: PhysicalTxCoordinator;
+  private operatorIntentCoordinator: OperatorIntentCoordinator;
   private resourceManager: ResourceManager;
 
   // 语音模式
@@ -234,6 +249,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private cwDecoderManager: CWDecoderManager | null = null;
   private cwDecoderStartedEngine = false;
   private modeSwitchTail: Promise<void> = Promise.resolve();
+  private operatingStateWarningActive = false;
 
   // 子系统
   private audioVolumeController: AudioVolumeController;
@@ -296,6 +312,22 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     });
     this.audioMixer = new AudioMixer(100);
     this.radioManager = new PhysicalRadioManager();
+    this.digitalFrameCoordinator = new DigitalFrameCoordinator({ now: () => this.clockSource.now() });
+    this.operatorIntentCoordinator = new OperatorIntentCoordinator();
+    this.physicalTxCoordinator = new PhysicalTxCoordinator({
+      isRadioConnected: () => this.radioManager.isConnected(),
+      setPTT: (active) => this.radioManager.setPTT(active),
+      playAudio: (audioData, sampleRate, options) => this.audioStreamManager.playAudio(audioData, sampleRate, options),
+      stopCurrentPlayback: (options) => this.audioStreamManager.stopCurrentPlayback(options),
+      prepareAudioPlayback: () => this.audioStreamManager.waitForOutputDrain(),
+      isAudioPlaying: (kind) => this.audioStreamManager.isPlaying(kind),
+      setTxDialOffset: (shiftHz) => this.radioManager.setTxDialOffset(shiftHz),
+      clearTxDialOffset: () => this.radioManager.clearTxDialOffset(),
+      now: () => this.clockSource.now(),
+    });
+    this.physicalTxCoordinator.on('phaseChanged', (snapshot) => {
+      this.handleCoordinatedPhysicalTxChanged(snapshot);
+    });
     this.frequencyManager = new FrequencyManager(ConfigManager.getInstance().getCustomFrequencyPresets());
     this.transmissionTracker = new TransmissionTracker();
     this.resourceManager = new ResourceManager();
@@ -348,6 +380,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       },
       transmissionTracker: this.transmissionTracker,
       callsignTracker: this._callsignTracker,
+      digitalFrameCoordinator: this.digitalFrameCoordinator,
+      getTransmitCompensationMs: () => this.slotClock?.getCompensation() ?? 0,
+      intentCoordinator: this.operatorIntentCoordinator,
     });
 
     // 初始化插件管理器（在操作员管理器之后）
@@ -382,6 +417,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           return false;
         }
       },
+      submitRadioMaintenanceCommand: (command) => this.submitPluginRadioMaintenanceCommand(command),
       getRadioBand: () => ConfigManager.getInstance().getLastSelectedFrequency()?.band ?? '',
       getRadioConnected: () => this.radioManager.isConnected(),
       getRadioCapabilitySnapshot: () => this.radioManager.getCapabilitySnapshot(),
@@ -407,12 +443,34 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           additionalOccupiedFrequenciesHz,
         )
       ),
-      setOperatorAudioFrequency: async (operatorId, frequency) => {
-        await this._operatorManager.updateOperatorContext(operatorId, { frequency });
+      setOperatorAudioFrequency: async (operatorId, frequency, commandToken) => {
+        await this._operatorManager.updateOperatorContext(operatorId, { frequency }, {
+          commandEpoch: commandToken?.epoch,
+          source: commandToken?.source,
+          reason: 'auto-call execution plan changed audio frequency',
+        });
       },
       interruptOperatorTransmission: async (operatorId) => {
-        await this.removeOperatorFromTransmission(operatorId);
+        this._operatorManager.getOperatorById(operatorId)?.stop();
+        await this.physicalTxCoordinator.forceInterrupt(`manual plugin halt: ${operatorId}`);
       },
+      requestOperatorStrategyStop: (operatorId, reason) => {
+        this._operatorManager.requestStrategyStop(operatorId, reason);
+      },
+      transitionTargetReservation: (operatorId, epoch, targetCallsign) => (
+        this._operatorManager.transitionTargetReservation(operatorId, epoch, targetCallsign)
+      ),
+      releaseTargetReservation: (operatorId, epoch) => {
+        this._operatorManager.releaseTargetReservation(operatorId, epoch);
+      },
+      removeOperatorContribution: (operatorId, options) => this.transmissionPipeline.removeOperatorFromTransmission(
+        operatorId,
+        {
+          commandAlreadyAllocated: true,
+          signal: options.signal,
+          commandToken: options.commandToken,
+        },
+      ),
       hasWorkedCallsign: async (operatorId, callsign, options) => {
         return this._operatorManager.hasWorkedCallsign(operatorId, callsign, options);
       },
@@ -493,9 +551,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       resetOperatorRuntime: (operatorId, reason) => {
         this._operatorManager.resetPluginRuntime(operatorId, reason);
       },
-      triggerReEncode: (operatorId) => {
-        this._operatorManager.triggerPostDecisionReEncode(operatorId);
+      triggerReEncode: (operatorId, options) => {
+        this._operatorManager.triggerPostDecisionReEncode(operatorId, options);
       },
+      intentCoordinator: this.operatorIntentCoordinator,
       dataDir: '', // 将在 initialize() 中更新
     });
 
@@ -532,11 +591,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       engineEmitter: this,
       audioMixer: this.audioMixer,
       audioStreamManager: this.audioStreamManager,
-      radioManager: this.radioManager,
       spectrumScheduler: this.spectrumScheduler,
       transmissionTracker: this.transmissionTracker,
       encodeQueue: this.realEncodeQueue,
       operatorManager: this._operatorManager,
+      digitalFrameCoordinator: this.digitalFrameCoordinator,
+      physicalTxCoordinator: this.physicalTxCoordinator,
+      intentCoordinator: this.operatorIntentCoordinator,
       clockSource: this.clockSource,
       getCurrentMode: () => this.currentMode,
       getCompensationMs: () => this.slotClock?.getCompensation() ?? 0,
@@ -549,6 +610,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       frequencyManager: this.frequencyManager,
       slotPackManager: this.slotPackManager,
       operatorManager: this._operatorManager,
+      physicalTxCoordinator: this.physicalTxCoordinator,
       getTransmissionPipeline: () => this.transmissionPipeline,
       getEngineLifecycle: () => this.engineLifecycle,
       getEngineMode: () => this.engineMode,
@@ -567,15 +629,16 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       // CAT PTT reads report the radio's TX/RX state, not who caused TX.
       // Keep polling paused while tx5dr or the keyer is holding PTT so our own
       // keyer transmission is not misclassified as a physical manual override.
-      isSoftwarePttActive: () => this.voiceManualPttActive || this.voiceKeyerPttActive,
+      isSoftwarePttActive: () => this.physicalTxCoordinator.getSnapshot().phase !== 'idle'
+        || this.voiceManualPttActive
+        || this.voiceKeyerPttActive,
       emitStatus: (active) => this.handlePhysicalPttChanged(active),
     });
     this.tuneToneController = new TuneToneController({
       radioManager: this.radioManager,
-      audioStreamManager: this.audioStreamManager,
+      physicalTxCoordinator: this.physicalTxCoordinator,
       isTransmitBusy: () => this.isTransmitBusyForTuneTone(),
       getOperatorToneHz: (operatorId) => this.resolveTuneToneFrequency(operatorId),
-      setSoftwarePttActive: (active) => this.setTuneTonePttActive(active),
       emitStatus: (status) => this.emit('tuneToneStatusChanged', status),
     });
     this.on('radioStatusChanged', () => {
@@ -591,7 +654,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       }
     });
 
-    this.rigctldBridge = new RigctldBridge(this.radioManager);
+    this.rigctldBridge = new RigctldBridge(this.radioManager, this.physicalTxCoordinator);
     this.rigctldBridge.on('statusChanged', (status) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.emit('rigctldStatus' as any, status);
@@ -834,7 +897,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public getCWKeyerManager(): CWKeyerManager {
     if (!this.cwKeyerManager) {
-      this.cwKeyerManager = new CWKeyerManager(() => this.radioManager);
+      this.cwKeyerManager = new CWKeyerManager(
+        () => this.radioManager,
+        this.physicalTxCoordinator,
+      );
       this.cwKeyerManager.on('cwKeyerStatusChanged', (status) => {
         this.handleCWKeyerStatusChanged(status);
         this.emit('cwKeyerStatusChanged', status);
@@ -1140,6 +1206,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.voiceSessionManager = new VoiceSessionManager({
       radioManager: this.radioManager,
       audioStreamManager: this.audioStreamManager,
+      physicalTxCoordinator: this.physicalTxCoordinator,
       onBeforeStartPTT: () => this.stopTuneTone('voice transmission started'),
     });
     this.voiceKeyerManager = new VoiceKeyerManager({
@@ -1159,6 +1226,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       spectrumScheduler: this.spectrumScheduler,
       decodeQueue: this.realDecodeQueue,
       operatorManager: this._operatorManager,
+      physicalTxCoordinator: this.physicalTxCoordinator,
       audioMixer: this.audioMixer,
       clockSource: this.clockSource,
       subsystems: {
@@ -1207,9 +1275,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.voiceSessionManager.on('voicePttLockChanged', (lock) => {
       this.emit('voicePttLockChanged', lock);
     });
-    this.voiceSessionManager.on('pttStatusChanged', (data) => {
-      this.handleVoiceSoftwarePttChanged(data);
-    });
+    // Physical PTT state is projected exclusively from PhysicalTxCoordinator.
+    // Voice session events remain session-local and are not a second RF truth.
     this.voiceSessionManager.on('voiceRadioModeChanged', (data) => {
       this.emit('voiceRadioModeChanged', data);
     });
@@ -1292,6 +1359,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   async stop(): Promise<void> {
+    // Profile/power/shutdown stops are full session boundaries. Let an
+    // already-serialized mode transaction settle before disconnecting CAT.
+    await this.modeSwitchTail.catch(() => undefined);
     await this.stopTuneTone('engine stopped');
     return this.engineLifecycle.stop();
   }
@@ -1333,7 +1403,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     // 清理音频混音器
     if (this.audioMixer) {
-      this.audioMixer.clear();
+      this.audioMixer.clearSlotCache();
       this.audioMixer.removeAllListeners();
       logger.info('Audio mixer cleaned up');
     }
@@ -1408,6 +1478,18 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.transmissionPipeline.forceStopTransmission();
   }
 
+  public async testPhysicalPTT(durationMs = 500): Promise<void> {
+    const leaseId = await this.physicalTxCoordinator.acquireLease({
+      source: 'test',
+      reason: 'authenticated PTT test',
+    });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, durationMs));
+    } finally {
+      await this.physicalTxCoordinator.releaseLease(leaseId, 'PTT test complete');
+    }
+  }
+
   public async removeOperatorFromTransmission(operatorId: string): Promise<void> {
     return this.transmissionPipeline.removeOperatorFromTransmission(operatorId);
   }
@@ -1435,26 +1517,27 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   async setMode(mode: ModeDescriptor | string): Promise<void> {
     const runSwitch = async () => {
-      await this.stopTuneTone('mode changed');
       // Handle CW mode
       if (typeof mode === 'object' && mode.name === 'CW') {
         if (this.engineMode === 'cw') {
+          await this.stopTuneTone('mode unchanged');
           logger.info('Already in CW mode');
           this.emitStatusSnapshot();
           return;
         }
-        await this.switchEngineMode('cw', MODES.CW);
+        await this.runWithModeChangeGate(() => this.switchEngineMode('cw', MODES.CW));
         return;
       }
 
       // Handle voice mode (string 'VOICE')
       if (mode === 'VOICE' || (typeof mode === 'object' && mode.name === 'VOICE')) {
         if (this.engineMode === 'voice') {
+          await this.stopTuneTone('mode unchanged');
           logger.info('Already in voice mode');
           this.emitStatusSnapshot();
           return;
         }
-        await this.switchEngineMode('voice', MODES.VOICE);
+        await this.runWithModeChangeGate(() => this.switchEngineMode('voice', MODES.VOICE));
         return;
       }
 
@@ -1462,38 +1545,132 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
       // If switching from voice to digital
       if (this.engineMode === 'voice') {
-        await this.switchEngineMode('digital', digitalMode);
+        await this.runWithModeChangeGate(() => this.switchEngineMode('digital', digitalMode));
         return;
       }
 
       // If switching from CW to digital
       if (this.engineMode === 'cw') {
-        await this.switchEngineMode('digital', digitalMode);
+        await this.runWithModeChangeGate(() => this.switchEngineMode('digital', digitalMode));
         return;
       }
 
       // Normal digital mode switch (FT8 <-> FT4)
       if (this.currentMode.name === digitalMode.name) {
+        await this.stopTuneTone('mode unchanged');
         logger.info(`Already in mode: ${digitalMode.name}`);
         this.syncCurrentModeToRuntimeComponents('already-in-mode');
         this.emitStatusSnapshot();
         return;
       }
 
-      logger.info(`Switching mode: ${this.currentMode.name} -> ${digitalMode.name}`);
-      await this.applyNearestPresetForDigitalMode(digitalMode);
+      await this.runWithModeChangeGate(async () => {
+        logger.info(`Switching mode: ${this.currentMode.name} -> ${digitalMode.name}`);
+        await this.applyNearestPresetForDigitalMode(digitalMode);
 
-      this.currentMode = digitalMode;
-      this.applyDecodeWindowOverrides();
-      this.syncCurrentModeToRuntimeComponents('digital-mode-switch');
+        this.currentMode = digitalMode;
+        this.applyDecodeWindowOverrides();
+        this.syncCurrentModeToRuntimeComponents('digital-mode-switch');
 
-      await ConfigManager.getInstance().setLastDigitalModeName(digitalMode.name);
-      this.emitModeAndStatusSnapshot();
+        await ConfigManager.getInstance().setLastDigitalModeName(digitalMode.name);
+        this.emitModeAndStatusSnapshot();
+      });
     };
 
     const queuedSwitch = this.modeSwitchTail.then(runSwitch, runSwitch);
     this.modeSwitchTail = queuedSwitch.catch(() => undefined);
     await queuedSwitch;
+  }
+
+  private async runWithModeChangeGate(operation: () => Promise<void>): Promise<void> {
+    this._operatorManager.enterTransmissionMaintenance('mode change');
+    try {
+      await this.stopTuneTone('mode changed');
+      const snapshot = this.physicalTxCoordinator.getSnapshot();
+      if (snapshot.phase === 'unknown') {
+        await this.physicalTxCoordinator.retryUnknownStop('mode change PTT recovery');
+      } else if (snapshot.phase !== 'idle') {
+        await this.physicalTxCoordinator.forceInterrupt('mode change');
+      }
+
+      const stopped = this.physicalTxCoordinator.getSnapshot();
+      if (stopped.phase !== 'idle') {
+        throw new Error(`Cannot switch mode while physical PTT is ${stopped.phase}`);
+      }
+      await operation();
+    } finally {
+      this._operatorManager.exitTransmissionMaintenance();
+    }
+  }
+
+  /**
+   * Serializes plugin-originated CAT/tuner mutations with every physical TX
+   * source. This is deliberately narrower than mode switching: background
+   * plugins reject a busy radio and never interrupt an existing lease.
+   */
+  private async submitPluginRadioMaintenanceCommand(
+    command: PluginRadioCommand | PluginRadioTunerCommand,
+  ): Promise<void> {
+    const reason = command.type === 'switch-band'
+      ? 'plugin scheduled band switch'
+      : command.type === 'set-frequency'
+        ? 'plugin frequency change'
+        : 'plugin tuner command';
+
+    await this.physicalTxCoordinator.runIdleMaintenance({ reason, busyPolicy: 'reject' }, async () => {
+      this._operatorManager.enterTransmissionMaintenance(reason);
+      try {
+        if (!this.radioManager.isConnected()) {
+          throw new Error('Radio is not connected');
+        }
+
+        if (command.type === 'set-frequency' || command.type === 'switch-band') {
+          if (!Number.isFinite(command.frequency) || command.frequency <= 0) {
+            throw new Error('Radio frequency must be a positive finite number');
+          }
+          let tunerSwitchEnabled = false;
+          if (command.type === 'switch-band' && command.autoTune === true) {
+            this.assertWritableRadioCapability('tuner_switch');
+            this.assertWritableRadioCapability('tuner_tune');
+            tunerSwitchEnabled = this.radioManager.getCapabilitySnapshot().capabilities
+              .find((capability) => capability.id === 'tuner_switch')?.value === true;
+          }
+
+          const success = await this.radioManager.setFrequency(command.frequency);
+          if (!success) throw new Error('Failed to set radio frequency');
+          this.radioManager.emit('radioFrequencyChanged', command.frequency);
+          if (command.type === 'set-frequency' || command.autoTune !== true) return;
+
+          if (!tunerSwitchEnabled) {
+            await this.radioManager.writeCapability('tuner_switch', true, undefined);
+          }
+          await this.radioManager.writeCapability('tuner_tune', undefined, true);
+          return;
+        }
+
+        if (command.type === 'set-enabled') {
+          this.assertWritableRadioCapability('tuner_switch');
+          await this.radioManager.writeCapability('tuner_switch', command.enabled, undefined);
+          return;
+        }
+
+        this.assertWritableRadioCapability('tuner_tune');
+        await this.radioManager.writeCapability('tuner_tune', undefined, true);
+      } finally {
+        this._operatorManager.exitTransmissionMaintenance();
+      }
+    });
+  }
+
+  private assertWritableRadioCapability(capabilityId: 'tuner_switch' | 'tuner_tune'): void {
+    const snapshot = this.radioManager.getCapabilitySnapshot();
+    const descriptor = snapshot.descriptors.find((item) => item.id === capabilityId);
+    const state = snapshot.capabilities.find((item) => item.id === capabilityId);
+    if (descriptor?.writable !== true
+        || state?.supported !== true
+        || state.availability === 'unavailable') {
+      throw new Error(`Radio capability ${capabilityId} is unavailable`);
+    }
   }
 
   private async applyNearestPresetForDigitalMode(targetMode: ModeDescriptor): Promise<void> {
@@ -1554,7 +1731,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return nearestPreset;
   }
 
-  private async applyDigitalPresetFrequency(preset: PresetFrequency): Promise<void> {
+  private async applyDigitalPresetFrequency(
+    preset: PresetFrequency,
+    expectedConnectionGeneration?: number,
+  ): Promise<OperatingStateSyncResult> {
     const configManager = ConfigManager.getInstance();
     const description = preset.description
       || `${(preset.frequency / 1000000).toFixed(3)} MHz${preset.band ? ` ${preset.band}` : ''}`;
@@ -1568,21 +1748,31 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     });
     const effectiveRadioMode = radioModeResolution.displayRadioMode;
 
+    let syncResult: OperatingStateSyncResult = { status: 'skipped-offline' };
     if (radioConnected) {
-      const applyResult = await this.radioManager.applyOperatingState(buildFrequencyOperatingStateRequest({
+      const request = buildFrequencyOperatingStateRequest({
         frequency: preset.frequency,
         radioMode: preset.radioMode,
         effectiveMode: preset.mode,
         engineMode: 'digital',
         digitalModeRadioMode: activeRadioConfig.digitalModeRadioMode,
-      }));
+      });
+      const applyResult = await this.applyModeOperatingState(request, expectedConnectionGeneration);
 
       if (!applyResult.frequencyApplied) {
         throw new Error(`Failed to switch radio frequency to ${description}`);
       }
 
-      if (applyResult.modeError) {
-        logger.warn(`Switched digital frequency but failed to set radio mode: ${applyResult.modeError.message}`);
+      if (request.mode && (!applyResult.modeApplied || applyResult.modeError)) {
+        logger.warn(
+          `Switched digital frequency but failed to set radio mode: ${applyResult.modeError?.message || 'not confirmed'}`,
+        );
+        syncResult = {
+          status: 'partially-applied',
+          detail: applyResult.modeError?.message || 'radio mode write was not confirmed',
+        };
+      } else {
+        syncResult = { status: 'applied' };
       }
 
       await this.applyRepeaterDuplexConfigWithWarning(
@@ -1627,12 +1817,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       radioConnected,
       source: 'program',
     });
+    return syncResult;
   }
 
-  private async restoreLastDigitalOperatingState(configManager: ConfigManager, targetMode: ModeDescriptor): Promise<void> {
+  private async restoreLastDigitalOperatingState(
+    configManager: ConfigManager,
+    targetMode: ModeDescriptor,
+    expectedConnectionGeneration?: number,
+  ): Promise<OperatingStateSyncResult | null> {
     const lastDigital = configManager.getLastSelectedFrequency();
     if (!lastDigital?.frequency) {
-      return;
+      return null;
     }
 
     let targetFrequency: PresetFrequency = {
@@ -1655,10 +1850,16 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
 
     try {
-      await this.applyDigitalPresetFrequency(targetFrequency);
-      logger.info(`Restored digital operating state: ${(targetFrequency.frequency / 1000000).toFixed(3)} MHz (${targetFrequency.mode})`);
+      const result = await this.applyDigitalPresetFrequency(targetFrequency, expectedConnectionGeneration);
+      logger.info(`Digital operating state ${result.status}`, {
+        frequencyHz: targetFrequency.frequency,
+        mode: targetFrequency.mode,
+        detail: result.detail,
+      });
+      return result;
     } catch (error) {
       logger.warn(`Failed to restore digital operating state: ${(error as Error).message}`);
+      return { status: 'failed', detail: (error as Error).message };
     }
   }
 
@@ -1750,12 +1951,24 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   private async switchEngineMode(targetEngineMode: EngineMode, targetMode: ModeDescriptor): Promise<void> {
+    const previousEngineMode = this.engineMode;
+    const previousMode = this.currentMode;
+    const configManager = ConfigManager.getInstance();
+    const expectedProfileId = configManager.getActiveProfileId?.();
+    const radioWasConnected = this.radioManager.isConnected();
+    const expectedConnectionGeneration = this.radioManager.getConnectionGeneration?.();
+    const previousCWDecoderRuntime = previousEngineMode === 'cw'
+      && this.cwDecoderManager?.getStatus().state === 'running'
+      ? {
+          config: configManager.getCWDecoderConfig(),
+          startedEngine: this.cwDecoderStartedEngine,
+        }
+      : null;
     let engineState = this.engineLifecycle?.getEngineState() ?? EngineState.IDLE;
     let shouldResumeAfterSwitch = engineState === EngineState.RUNNING || engineState === EngineState.STARTING;
     // CW keying can lazy-init its own manager, but RX monitor/decoder still
     // need the engine audio chain. Preserve the user's running/idle intent.
     const comingFromCW = this.engineMode === 'cw';
-    const goingToCW = targetEngineMode === 'cw';
     logger.info(`Switching engine mode: ${this.engineMode}/${this.currentMode.name} -> ${targetEngineMode}/${targetMode.name}`);
 
     if (this.engineMode === 'voice' && targetEngineMode !== 'voice') {
@@ -1786,79 +1999,250 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     if (engineState === EngineState.RUNNING) {
       this.radioBridge.wasRunningBeforeDisconnect = false;
-      if (goingToCW && this.engineLifecycle) {
-        // Digital→CW: stop engine but keep radio connected (CW has its own serial port).
-        this.engineLifecycle.preserveRadioConnection = true;
+      await this.stopTuneTone('mode runtime stopped');
+      await this.engineLifecycle.stopModeRuntime();
+    }
+
+    let targetModeStaged = false;
+    try {
+      this.assertModeSwitchProfile(configManager, expectedProfileId);
+      this.engineMode = targetEngineMode;
+      this.currentMode = targetMode;
+      targetModeStaged = true;
+      this.configureAudioProcessingForCurrentMode?.('mode-switch');
+
+      if (targetEngineMode === 'digital') {
+        this.applyDecodeWindowOverrides();
       }
-      try {
-        await this.stop();
-      } finally {
-        if (this.engineLifecycle) {
-          this.engineLifecycle.preserveRadioConnection = false;
-        }
+
+      this.syncCurrentModeToRuntimeComponents('engine-mode-switch');
+      await this.engineLifecycle.rebuildResourcePlan();
+      const operatingStateResult = await this.restoreOperatingStateForEngineMode(
+        configManager,
+        targetEngineMode,
+        targetMode,
+        radioWasConnected ? expectedConnectionGeneration : undefined,
+      );
+      this.reportOperatingStateSync(targetEngineMode, targetMode, operatingStateResult);
+      this.assertModeSwitchProfile(configManager, expectedProfileId);
+      this.assertModeSwitchRadioSession(
+        targetEngineMode,
+        radioWasConnected,
+        expectedConnectionGeneration,
+      );
+
+      if (shouldResumeAfterSwitch) {
+        await this.engineLifecycle.startAndWaitForRunning();
       }
+
+      this.assertModeSwitchProfile(configManager, expectedProfileId);
+      this.assertModeSwitchRadioSession(
+        targetEngineMode,
+        radioWasConnected,
+        expectedConnectionGeneration,
+      );
+
+      await configManager.setLastEngineMode(targetEngineMode);
+      if (targetEngineMode === 'digital') {
+        await configManager.setLastDigitalModeName(targetMode.name);
+      }
+
+      this.emitModeAndStatusSnapshot();
+      if (shouldResumeAfterSwitch) {
+        this.emitStatusSnapshot();
+      }
+
+      // Refresh split capability after mode switch (some radios support split only in certain modes)
+      void this.radioManager?.refreshSplitCapability?.();
+
+      this.resetVoicePttState();
+      this.squelchStatusMonitor.reevaluate();
+      this.physicalPttMonitor.reevaluate();
+      logger.info(`Engine mode switched to ${targetEngineMode}/${targetMode.name}`);
+    } catch (error) {
+      const profileChanged = expectedProfileId !== undefined
+        && configManager.getActiveProfileId() !== expectedProfileId;
+      if (targetModeStaged && !profileChanged) {
+        await this.rollbackEngineModeSwitch(
+          previousEngineMode,
+          previousMode,
+          shouldResumeAfterSwitch,
+          configManager,
+          error,
+          previousCWDecoderRuntime,
+        );
+      }
+      throw error;
     }
-
-    this.engineMode = targetEngineMode;
-    this.currentMode = targetMode;
-    this.configureAudioProcessingForCurrentMode?.('mode-switch');
-
-    if (targetEngineMode === 'digital') {
-      this.applyDecodeWindowOverrides();
-    }
-
-    this.syncCurrentModeToRuntimeComponents('engine-mode-switch');
-    await this.engineLifecycle.rebuildResourcePlan();
-
-    const configManager = ConfigManager.getInstance();
-    await configManager.setLastEngineMode(targetEngineMode);
-    if (targetEngineMode === 'digital') {
-      await configManager.setLastDigitalModeName(targetMode.name);
-    }
-
-    if (targetEngineMode === 'voice') {
-      await this.restoreLastVoiceOperatingState(configManager);
-    } else if (goingToCW) {
-      await this.restoreLastCWOperatingState(configManager);
-    } else if (targetEngineMode === 'digital') {
-      await this.restoreLastDigitalOperatingState(configManager, targetMode);
-    }
-    this.emitModeAndStatusSnapshot();
-
-    // Refresh split capability after mode switch (some radios support split only in certain modes)
-    void this.radioManager?.refreshSplitCapability?.();
-
-    this.resetVoicePttState();
-    this.squelchStatusMonitor.reevaluate();
-    this.physicalPttMonitor.reevaluate();
-
-    // Keep the engine running across mode switches only if it was running before.
-    if (shouldResumeAfterSwitch) {
-      await this.engineLifecycle.startAndWaitForRunning();
-      this.emitStatusSnapshot();
-    }
-
-    logger.info(`Engine mode switched to ${targetEngineMode}/${targetMode.name}`);
   }
 
-  private async restoreLastVoiceOperatingState(configManager: ConfigManager): Promise<void> {
-    const lastVoice = configManager.getLastVoiceFrequency();
-    if (!lastVoice?.frequency || !this.radioManager.isConnected()) {
+  private assertModeSwitchProfile(
+    configManager: ConfigManager,
+    expectedProfileId: string | null | undefined,
+  ): void {
+    if (
+      expectedProfileId !== undefined
+      && configManager.getActiveProfileId() !== expectedProfileId
+    ) {
+      throw new Error('Active radio profile changed during mode switch');
+    }
+  }
+
+  private assertModeSwitchRadioSession(
+    targetEngineMode: EngineMode,
+    radioWasConnected: boolean,
+    expectedConnectionGeneration: number | undefined,
+  ): void {
+    if (!radioWasConnected || expectedConnectionGeneration === undefined) {
       return;
     }
 
+    const sessionUnchanged = this.radioManager.isConnected()
+      && this.radioManager.getConnectionGeneration() === expectedConnectionGeneration;
+    if (sessionUnchanged) {
+      return;
+    }
+
+    if (targetEngineMode === 'cw') {
+      this.reportOperatingStateSync(targetEngineMode, MODES.CW, {
+        status: 'skipped-offline',
+        detail: 'CAT session changed during mode switch',
+      });
+      return;
+    }
+
+    throw new Error('Physical radio connection changed during mode switch');
+  }
+
+  private reportOperatingStateSync(
+    engineMode: EngineMode,
+    mode: ModeDescriptor,
+    result: OperatingStateSyncResult | null,
+  ): void {
+    if (!result) {
+      return;
+    }
+
+    if (result.status === 'applied') {
+      if (this.operatingStateWarningActive) {
+        logger.info('Radio operating-state warning cleared after confirmed synchronization');
+      }
+      this.operatingStateWarningActive = false;
+      return;
+    }
+
+    this.operatingStateWarningActive = true;
+    const detail = result.detail || (
+      result.status === 'skipped-offline'
+        ? 'The physical radio is offline.'
+        : 'The radio did not confirm every requested CAT setting.'
+    );
+    this.emit('textMessage', {
+      title: 'Radio mode not confirmed',
+      text: `${mode.name} is active in TX-5DR, but the physical radio operating state was ${result.status}. ${detail} Please verify the radio manually.`,
+      color: 'warning',
+      timeout: null,
+      key: 'radioOperatingStateNotConfirmed',
+      params: {
+        engineMode,
+        mode: mode.name,
+        status: result.status,
+        reason: detail,
+      },
+    });
+  }
+
+  private async restoreOperatingStateForEngineMode(
+    configManager: ConfigManager,
+    engineMode: EngineMode,
+    mode: ModeDescriptor,
+    expectedConnectionGeneration?: number,
+  ): Promise<OperatingStateSyncResult | null> {
+    if (engineMode === 'voice') {
+      return this.restoreLastVoiceOperatingState(configManager, expectedConnectionGeneration);
+    } else if (engineMode === 'cw') {
+      return this.restoreLastCWOperatingState(configManager, expectedConnectionGeneration);
+    }
+    return this.restoreLastDigitalOperatingState(configManager, mode, expectedConnectionGeneration);
+  }
+
+  private applyModeOperatingState(
+    request: Parameters<PhysicalRadioManager['applyOperatingState']>[0],
+    expectedConnectionGeneration?: number,
+  ): ReturnType<PhysicalRadioManager['applyOperatingState']> {
+    return expectedConnectionGeneration === undefined
+      ? this.radioManager.applyOperatingState(request)
+      : this.radioManager.applyOperatingState(request, { expectedConnectionGeneration });
+  }
+
+  private async rollbackEngineModeSwitch(
+    previousEngineMode: EngineMode,
+    previousMode: ModeDescriptor,
+    shouldResume: boolean,
+    configManager: ConfigManager,
+    cause: unknown,
+    previousCWDecoderRuntime: { config: CWDecoderConfig; startedEngine: boolean } | null,
+  ): Promise<void> {
+    logger.error('Mode runtime switch failed; restoring previous runtime', {
+      previousEngineMode,
+      previousMode: previousMode.name,
+      error: cause instanceof Error ? cause.message : String(cause),
+    });
+
     try {
-      const applyResult = await this.radioManager.applyOperatingState({
+      if (this.engineLifecycle.getEngineState() !== EngineState.IDLE) {
+        await this.engineLifecycle.stopModeRuntime();
+      }
+      this.engineMode = previousEngineMode;
+      this.currentMode = previousMode;
+      this.configureAudioProcessingForCurrentMode?.('mode-switch-rollback');
+      if (previousEngineMode === 'digital') {
+        this.applyDecodeWindowOverrides();
+      }
+      this.syncCurrentModeToRuntimeComponents('engine-mode-switch-rollback');
+      await this.engineLifecycle.rebuildResourcePlan();
+      await this.restoreOperatingStateForEngineMode(configManager, previousEngineMode, previousMode);
+      if (shouldResume) {
+        await this.engineLifecycle.startAndWaitForRunning();
+      }
+      if (previousEngineMode === 'cw' && previousCWDecoderRuntime) {
+        await this.getCWDecoderManager().start(this.toServerCWDecoderConfig({
+          ...previousCWDecoderRuntime.config,
+          enabled: true,
+        }));
+        this.cwDecoderStartedEngine = previousCWDecoderRuntime.startedEngine;
+      }
+      this.emitModeAndStatusSnapshot();
+    } catch (rollbackError) {
+      logger.error('Failed to restore previous mode runtime', rollbackError);
+    }
+  }
+
+  private async restoreLastVoiceOperatingState(
+    configManager: ConfigManager,
+    expectedConnectionGeneration?: number,
+  ): Promise<OperatingStateSyncResult | null> {
+    const lastVoice = configManager.getLastVoiceFrequency();
+    if (!lastVoice?.frequency) {
+      return null;
+    }
+    if (!this.radioManager.isConnected()) {
+      logger.info('Voice operating state skipped-offline', { frequencyHz: lastVoice.frequency });
+      return { status: 'skipped-offline' };
+    }
+
+    try {
+      const applyResult = await this.applyModeOperatingState({
         frequency: lastVoice.frequency,
         mode: lastVoice.radioMode,
         bandwidth: lastVoice.radioMode ? 'nochange' : undefined,
         options: lastVoice.radioMode ? { intent: 'voice' } : undefined,
         tolerateModeFailure: true,
-      });
+      }, expectedConnectionGeneration);
 
       if (!applyResult.frequencyApplied) {
         logger.warn(`Failed to restore last voice frequency: ${(lastVoice.frequency / 1000000).toFixed(3)} MHz`);
-        return;
+        return { status: 'failed', detail: 'frequency write was not confirmed' };
       }
 
       if (applyResult.modeError) {
@@ -1888,14 +2272,22 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         source: 'program',
       });
       logger.info(`Restored last voice operating state: ${description}${lastVoice.radioMode ? ` (${lastVoice.radioMode})` : ''}`);
+      return applyResult.modeError
+        ? { status: 'partially-applied', detail: applyResult.modeError.message }
+        : { status: 'applied' };
     } catch (error) {
       logger.warn(`Failed to restore last voice operating state: ${(error as Error).message}`);
+      return { status: 'failed', detail: (error as Error).message };
     }
   }
 
-  private async restoreLastCWOperatingState(configManager: ConfigManager): Promise<void> {
+  private async restoreLastCWOperatingState(
+    configManager: ConfigManager,
+    expectedConnectionGeneration?: number,
+  ): Promise<OperatingStateSyncResult | null> {
     if (!this.radioManager.isConnected()) {
-      return;
+      logger.info('CW operating state skipped-offline');
+      return { status: 'skipped-offline' };
     }
 
     const lastCW = configManager.getLastCWFrequency();
@@ -1910,7 +2302,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       const currentFreq = await this.radioManager.getFrequency();
       if (!currentFreq || currentFreq <= 0) {
         logger.warn('Cannot restore CW operating state: no saved frequency and failed to read current frequency');
-        return;
+        return { status: 'failed', detail: 'current radio frequency is unavailable' };
       }
       targetFrequency = currentFreq;
       targetRadioMode = 'CW';
@@ -1918,17 +2310,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
 
     try {
-      const applyResult = await this.radioManager.applyOperatingState({
+      const applyResult = await this.applyModeOperatingState({
         frequency: targetFrequency,
         mode: targetRadioMode,
         bandwidth: targetRadioMode ? 'nochange' : undefined,
         options: targetRadioMode ? { intent: 'cw' } : undefined,
         tolerateModeFailure: true,
-      });
+      }, expectedConnectionGeneration);
 
       if (!applyResult.frequencyApplied) {
         logger.warn(`Failed to restore CW frequency: ${(targetFrequency / 1000000).toFixed(3)} MHz`);
-        return;
+        return { status: 'failed', detail: 'frequency write was not confirmed' };
       }
 
       if (applyResult.modeError) {
@@ -1947,8 +2339,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         source: 'program',
       });
       logger.info(`Restored CW operating state: ${description}${targetRadioMode ? ` (${targetRadioMode})` : ''}`);
+      return applyResult.modeError
+        ? { status: 'partially-applied', detail: applyResult.modeError.message }
+        : { status: 'applied' };
     } catch (error) {
       logger.warn(`Failed to restore CW operating state: ${(error as Error).message}`);
+      return { status: 'failed', detail: (error as Error).message };
     }
   }
 
@@ -1977,32 +2373,47 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       || this.physicalPttActive;
   }
 
-  private setTuneTonePttActive(active: boolean): void {
-    this.radioManager.setPTTActive(active);
-    this.spectrumScheduler.setPTTActive(active);
-    this.squelchStatusMonitor.setPTTActive(active);
-    this.physicalPttMonitor.setSoftwarePttActive(active || this.voiceManualPttActive || this.voiceKeyerPttActive);
-    this.emit('pttStatusChanged', {
-      isTransmitting: active,
-      operatorIds: [],
-    });
-  }
-
-  private handleVoiceSoftwarePttChanged(data: { isTransmitting: boolean; operatorIds: string[]; source?: 'manual' | 'voice-keyer' }): void {
-    if (data.source === 'voice-keyer') {
-      this.voiceKeyerPttActive = data.isTransmitting;
-    } else {
-      this.voiceManualPttActive = data.isTransmitting;
-    }
-
-    this.physicalPttMonitor.setSoftwarePttActive(this.voiceManualPttActive || this.voiceKeyerPttActive);
-    this.applyUnifiedVoicePttState(data.operatorIds ?? []);
-  }
-
   private handlePhysicalPttChanged(active: boolean): void {
     this.physicalPttActive = active;
     this.voiceKeyerManager?.setManualPttActive(this.voiceManualPttActive || this.physicalPttActive);
     this.applyUnifiedVoicePttState([]);
+  }
+
+  private handleCoordinatedPhysicalTxChanged(snapshot: PhysicalTxSnapshot): void {
+    const uncertain = snapshot.phase === 'unknown';
+    const pttConfirmed = snapshot.pttConfirmed || uncertain;
+    const operatorIds = pttConfirmed && snapshot.source === 'digital'
+      ? snapshot.operatorIds
+      : [];
+
+    this.radioManager.setPTTActive(pttConfirmed);
+    this.spectrumScheduler.setPTTActive(pttConfirmed);
+    this.squelchStatusMonitor?.setPTTActive(pttConfirmed);
+    this.physicalPttMonitor?.setSoftwarePttActive(snapshot.phase !== 'idle');
+
+    if (snapshot.source === 'voice') {
+      this.voiceManualPttActive = snapshot.phase !== 'idle';
+    } else if (snapshot.source === 'voice-keyer') {
+      this.voiceKeyerPttActive = snapshot.phase !== 'idle';
+    } else if (snapshot.phase === 'idle') {
+      this.voiceManualPttActive = false;
+      this.voiceKeyerPttActive = false;
+    }
+    this.voiceKeyerManager?.setManualPttActive(
+      this.voiceManualPttActive || this.physicalPttActive,
+    );
+    this.unifiedVoicePttActive = this.voiceManualPttActive
+      || this.voiceKeyerPttActive
+      || this.physicalPttActive;
+
+    this._operatorManager.updateActiveTransmissionOperators(operatorIds);
+    this.emit('pttStatusChanged', {
+      isTransmitting: pttConfirmed,
+      operatorIds,
+      phase: snapshot.phase === 'active' ? 'on_air' : snapshot.phase,
+      frameId: snapshot.frameId,
+      source: snapshot.source,
+    });
   }
 
   private handleCWKeyerStatusChanged(status: CWKeyerStatus): void {

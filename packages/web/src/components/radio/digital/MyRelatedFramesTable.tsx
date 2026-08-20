@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import type { WSSelectedFrame } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
 import { FramesTable, type FrameDisplayMessage, type FrameGroup } from './FramesTable';
+import { resolveFrameCallsign } from './frameCallsign';
 import {
   useConnection,
   useCurrentOperatorId,
@@ -81,8 +82,9 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
   };
 
   const handleRowDoubleClick = (message: FrameDisplayMessage, group: FrameGroup) => {
-    const callsign = message.logbookAnalysis?.callsign;
-    if (!currentOperatorId || !callsign || activeOperatorCallsigns.includes(callsign)) {
+    const callsign = resolveFrameCallsign(message);
+    const ownCallsigns = new Set(activeOperatorCallsigns.map((call) => call.toUpperCase()));
+    if (!currentOperatorId || !callsign || ownCallsigns.has(callsign.toUpperCase())) {
       return;
     }
 

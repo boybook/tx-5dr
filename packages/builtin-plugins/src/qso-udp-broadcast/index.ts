@@ -1,4 +1,7 @@
-import type { PluginContext, PluginDefinition } from '@tx5dr/plugin-api';
+import {
+  definePlugin,
+  type PluginContextFor,
+} from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import jaLocale from './locales/ja.json' with { type: 'json' };
@@ -7,7 +10,10 @@ import { WsjtUdpSession, type UdpTarget, type WsjtUdpSettings } from './wsjtx-se
 export const BUILTIN_QSO_UDP_BROADCAST_PLUGIN_NAME = 'qso-udp-broadcast';
 
 const DEFAULT_TARGETS: UdpTarget[] = [{ host: '127.0.0.1', port: 2237 }];
-const sessions = new WeakMap<PluginContext, WsjtUdpSession>();
+type QsoUdpContext = PluginContextFor<readonly ['network', 'operator:transmit-control']>;
+// Cleanup receives the same context identity through a deliberately narrower
+// type, so session ownership is keyed by object identity rather than capability shape.
+const sessions = new WeakMap<object, WsjtUdpSession>();
 
 function readBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
@@ -54,7 +60,7 @@ function readTargets(config: Readonly<Record<string, unknown>>): UdpTarget[] {
   }];
 }
 
-function readSettings(ctx: PluginContext): WsjtUdpSettings {
+function readSettings(ctx: QsoUdpContext): WsjtUdpSettings {
   const config = ctx.config;
   return {
     targets: readTargets(config),
@@ -77,7 +83,15 @@ function readSettings(ctx: PluginContext): WsjtUdpSettings {
   };
 }
 
-async function getOrStartSession(ctx: PluginContext): Promise<WsjtUdpSession> {
+function isRemoteTransmitControlEnabled(ctx: QsoUdpContext): boolean {
+  const settings = readSettings(ctx);
+  return settings.allowReplyRequests
+    || settings.allowHaltTxRequests
+    || settings.allowFreeTextRequests
+    || settings.allowConfigureRequests;
+}
+
+async function getOrStartSession(ctx: QsoUdpContext): Promise<WsjtUdpSession> {
   const existing = sessions.get(ctx);
   if (existing) return existing;
   const session = new WsjtUdpSession(ctx, readSettings(ctx));
@@ -86,12 +100,13 @@ async function getOrStartSession(ctx: PluginContext): Promise<WsjtUdpSession> {
   return session;
 }
 
-export const qsoUdpBroadcastPlugin: PluginDefinition = {
+export const qsoUdpBroadcastPlugin = definePlugin({
+  apiVersion: 2,
   name: BUILTIN_QSO_UDP_BROADCAST_PLUGIN_NAME,
   version: '2.0.0',
   type: 'utility',
   description: 'pluginDescription',
-  permissions: ['network'],
+  permissions: ['network', 'operator:transmit-control'],
 
   settings: {
     targets: {
@@ -232,35 +247,38 @@ export const qsoUdpBroadcastPlugin: PluginDefinition = {
   },
 
   async onUnload(ctx) {
-    const session = sessions.get(ctx);
+    // Timers and UDP sockets are host-owned and are already closed before this
+    // cleanup hook. Dropping the identity releases the remaining session state
+    // without reacquiring a revoked network capability.
     sessions.delete(ctx);
-    await session?.stop();
   },
+
+  isTransmitControlEnabled: isRemoteTransmitControlEnabled,
 
   hooks: {
     onConfigChange(_changes, ctx) {
       sessions.get(ctx)?.updateSettings(readSettings(ctx));
     },
     onTimer(timerId, ctx) {
-      void sessions.get(ctx)?.onTimer(timerId);
+      return sessions.get(ctx)?.onTimer(timerId);
     },
     onSlotActivity(event, ctx) {
-      void getOrStartSession(ctx)
+      return getOrStartSession(ctx)
         .then((session) => session.onSlotActivity(event))
         .catch((error) => ctx.log.error('WSJT-X UDP decode broadcast failed', error));
     },
     onFrequencyChange(state, ctx) {
-      void getOrStartSession(ctx)
+      return getOrStartSession(ctx)
         .then((session) => session.onFrequencyChange(state))
         .catch((error) => ctx.log.error('WSJT-X UDP frequency status broadcast failed', error));
     },
     onQSOComplete(record, ctx) {
-      void getOrStartSession(ctx)
+      return getOrStartSession(ctx)
         .then((session) => session.onQSOComplete(record))
         .catch((error) => ctx.log.error('WSJT-X UDP QSO broadcast failed', error));
     },
   },
-};
+});
 
 export const qsoUdpBroadcastLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,

@@ -2,8 +2,15 @@ import type {
   KVStore,
   PluginLogger,
   PluginTimers,
-  OperatorControl,
-  RadioControl,
+  OperatorSnapshot,
+  OperatorCommandPort,
+  RadioView,
+  RadioCapabilitiesView,
+  RadioCommandPort,
+  RadioTunerCommandPort,
+  RadioPowerView,
+  RadioPowerCommandPort,
+  LogbookReadAccess,
   LogbookAccess,
   BandAccess,
   UIBridge,
@@ -11,6 +18,7 @@ import type {
   PluginNetworkControl,
   PluginEventBus,
 } from './helpers.js';
+import type { PluginPermission } from '@tx5dr/contracts';
 import type { LogbookSyncRegistrar } from './sync.js';
 import type { HostSettingsControl } from './settings.js';
 import type { HostDependencies } from './host-dependencies.js';
@@ -28,7 +36,7 @@ import type { HostDependencies } from './host-dependencies.js';
  * here, plugin code should treat it as unavailable rather than reaching into
  * TX-5DR internals.
  */
-export interface PluginContext {
+export interface PluginContextBase {
   /**
    * Resolved plugin configuration values.
    *
@@ -83,26 +91,13 @@ export interface PluginContext {
    */
   readonly timers: PluginTimers;
 
-  /**
-   * Control surface for the current operator.
-   */
-  readonly operator: OperatorControl;
+  /** Read-only snapshot and query surface for the current operator. */
+  readonly operator: OperatorSnapshot;
 
   /**
-   * Access to the physical radio state and tuning controls.
+   * Read-only projection of the physical radio state.
    */
-  readonly radio: RadioControl;
-
-  /**
-   * Full logbook access — read-only queries, record writes and UI notifications.
-   *
-   * Provides the original read-only helpers (`hasWorked`, `hasWorkedDXCC`,
-   * `hasWorkedGrid`) plus advanced query (`queryQSOs`, `countQSOs`), write
-   * (`addQSO`, `updateQSO`) and notification (`notifyUpdated`) capabilities.
-   * Sync providers and other data-oriented plugins use the write methods to
-   * self-orchestrate their flow without host-side special handling.
-   */
-  readonly logbook: LogbookAccess;
+  readonly radio: RadioView;
 
   /**
    * Read-only access to current-band and slot decode data.
@@ -124,53 +119,123 @@ export interface PluginContext {
    */
   readonly files: PluginFileStore;
 
-  /**
-   * Logbook sync registration entry point.
-   *
-   * Utility plugins that implement logbook synchronization call
-   * `ctx.logbookSync.register(provider)` during `onLoad` to register their
-   * sync provider. The host manages the provider lifecycle and UI integration.
-   */
-  readonly logbookSync: LogbookSyncRegistrar;
+}
 
-  /**
-   * Permission-gated host settings control surface.
-   *
-   * Each namespace requires the matching `settings:*` manifest permission.
-   */
-  readonly settings: HostSettingsControl;
+type CapabilityProperty<
+  Permissions extends readonly PluginPermission[],
+  Permission extends PluginPermission,
+  Property extends object,
+> = number extends Permissions['length']
+  ? object
+  : Permission extends Permissions[number] ? Property : object;
 
-  /**
-   * Permission-gated network capabilities.
-   *
-   * UDP sockets are host-managed and automatically closed when the plugin
-   * instance unloads. This is intentionally protocol-agnostic; protocol codecs
-   * such as WSJT-X UDP belong inside plugins.
-   */
-  readonly network?: PluginNetworkControl;
+type SettingsCapability<Permissions extends readonly PluginPermission[]> =
+  number extends Permissions['length']
+    ? object
+    : Extract<Permissions[number], `settings:${string}`> extends never
+      ? object
+      : {
+          readonly settings:
+            CapabilityProperty<Permissions, 'settings:ft8', Pick<HostSettingsControl, 'ft8'>>
+            & CapabilityProperty<Permissions, 'settings:decode-windows', Pick<HostSettingsControl, 'decodeWindows'>>
+            & CapabilityProperty<Permissions, 'settings:realtime', Pick<HostSettingsControl, 'realtime'>>
+            & CapabilityProperty<Permissions, 'settings:frequency-presets', Pick<HostSettingsControl, 'frequencyPresets'>>
+            & CapabilityProperty<Permissions, 'settings:station', Pick<HostSettingsControl, 'station'>>
+            & CapabilityProperty<Permissions, 'settings:psk-reporter', Pick<HostSettingsControl, 'pskReporter'>>
+            & CapabilityProperty<Permissions, 'settings:ntp', Pick<HostSettingsControl, 'ntp'>>;
+        };
 
-  /**
-   * Permission-gated plugin-to-plugin event bus.
-   *
-   * Topics are shared across plugin instances within the same host process.
-   * Treat this capability as optional and feature-detect before use.
-   */
-  readonly eventBus?: PluginEventBus;
+type LogbookCapability<Permissions extends readonly PluginPermission[]> =
+  number extends Permissions['length']
+    ? object
+    : 'logbook:write' extends Permissions[number]
+      ? { readonly logbook: LogbookAccess }
+      : 'logbook:read' extends Permissions[number]
+        ? { readonly logbook: LogbookReadAccess }
+        : object;
 
-  /**
-   * Host-owned runtime dependencies exposed to plugins.
-   *
-   * Native dependencies such as Hamlib are loaded by the host process. Each
-   * dependency is optional and requires its own manifest permission; feature
-   * detect before use.
-   */
-  readonly hostDependencies: HostDependencies;
+/**
+ * Plugin context whose privileged ports are derived from literal manifest
+ * permissions. Capabilities that were not declared do not exist in the type.
+ */
+export type PluginContextFor<Permissions extends readonly PluginPermission[]> =
+  PluginContextBase
+  & CapabilityProperty<Permissions, 'operator:transmit-control', {
+    readonly operatorCommands: OperatorCommandPort;
+  }>
+  & CapabilityProperty<Permissions, 'radio:read', {
+    readonly radioCapabilities: RadioCapabilitiesView;
+    readonly radioPower: RadioPowerView;
+  }>
+  & CapabilityProperty<Permissions, 'radio:control', {
+    readonly radioCommands: RadioCommandPort;
+  }>
+  & CapabilityProperty<Permissions, 'radio:tuner-control', {
+    readonly radioTunerCommands: RadioTunerCommandPort;
+  }>
+  & CapabilityProperty<Permissions, 'radio:power', {
+    readonly radioPowerCommands: RadioPowerCommandPort;
+  }>
+  & LogbookCapability<Permissions>
+  & CapabilityProperty<Permissions, 'logbook:sync', {
+    readonly logbookSync: LogbookSyncRegistrar;
+  }>
+  & SettingsCapability<Permissions>
+  & CapabilityProperty<Permissions, 'network', {
+    readonly network: PluginNetworkControl;
+    readonly fetch: (url: string, init?: RequestInit) => Promise<Response>;
+  }>
+  & CapabilityProperty<Permissions, 'plugin:event-bus', {
+    readonly eventBus: PluginEventBus;
+  }>
+  & CapabilityProperty<Permissions, 'host:hamlib', {
+    readonly hostDependencies: HostDependencies & Required<Pick<HostDependencies, 'hamlib'>>;
+  }>;
 
-  /**
-   * Permission-gated HTTP client.
-   *
-   * This method is only available when the plugin declares the corresponding
-   * network permission. Treat it as optional and feature-detect before calling.
-   */
-  readonly fetch?: (url: string, init?: RequestInit) => Promise<Response>;
+/** Safe default context for code that has not declared literal permissions. */
+export type PluginContext = PluginContextFor<readonly []>;
+
+/**
+ * Teardown-only context passed to `onUnload`.
+ *
+ * Cleanup may flush plugin-owned state and release plugin-owned files, but it
+ * cannot retain or acquire operator, radio, network, UI, event-bus or logbook
+ * command capabilities while the instance is being revoked.
+ */
+export type PluginCleanupContext = Pick<
+  PluginContextBase,
+  'store' | 'log' | 'timers' | 'files'
+>;
+
+/** Host-side erased runtime shape. Public plugin definitions should use `definePlugin()`. */
+export type RuntimePluginContext = PluginContextBase & Partial<{
+  operatorCommands: OperatorCommandPort;
+  radioCapabilities: RadioCapabilitiesView;
+  radioCommands: RadioCommandPort;
+  radioTunerCommands: RadioTunerCommandPort;
+  radioPower: RadioPowerView;
+  radioPowerCommands: RadioPowerCommandPort;
+  logbook: LogbookReadAccess | LogbookAccess;
+  logbookSync: LogbookSyncRegistrar;
+  settings: Partial<HostSettingsControl>;
+  network: PluginNetworkControl;
+  eventBus: PluginEventBus;
+  hostDependencies: HostDependencies;
+  fetch: (url: string, init?: RequestInit) => Promise<Response>;
+}>;
+
+/**
+ * Deliberately narrow context captured by a speculative strategy runtime.
+ * Decisions can inspect operator state and emit a result, but cannot retain a
+ * command, radio, logbook-write, network, timer or UI capability.
+ */
+export interface StrategyPluginContext {
+  readonly config: Readonly<Record<string, unknown>>;
+  readonly log: PluginLogger;
+  readonly operator: OperatorSnapshot;
+}
+
+/** Minimal context used to evaluate a transmit-control eligibility predicate. */
+export interface PluginEligibilityContext {
+  readonly config: Readonly<Record<string, unknown>>;
 }

@@ -4,30 +4,29 @@ import type {
   AutoCallExecutionPlan,
   AutoCallExecutionRequest,
   AutoCallProposal,
-  PluginContext,
+  RuntimePluginContext,
   PluginHooks,
   ScoredCandidate,
 } from '@tx5dr/plugin-api';
 import type { PluginInstance } from './types.js';
 import { PluginErrorTracker } from './PluginErrorTracker.js';
 import { createLogger } from '../utils/logger.js';
+import { PluginInvocationExpiredError, PluginInvocationGuard } from './PluginInvocationGuard.js';
 
 const logger = createLogger('PluginHookDispatcher');
 
-const HOOK_TIMEOUT_MS = 200;
+const DECISION_HOOK_TIMEOUT_MS = 200;
+// Observation hooks may legitimately flush network telemetry. They remain
+// revocable, but their I/O must not inherit the decision-path latency budget.
+const BROADCAST_HOOK_TIMEOUT_MS = 5_000;
+
+function isExpectedInvocationCancellation(error: unknown): boolean {
+  return error instanceof PluginInvocationExpiredError
+    || (error instanceof Error && error.message.startsWith('PLUGIN_INVOCATION_EXPIRED:'));
+}
 
 /** Extracts the non-undefined hook function type for a given hook name. */
 type HookFn<K extends keyof PluginHooks> = NonNullable<PluginHooks[K]>;
-
-function withTimeout<T>(promise: Promise<T> | T, ms: number): Promise<T> {
-  if (!(promise instanceof Promise)) return Promise.resolve(promise);
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`Hook timeout after ${ms}ms`)), ms)
-    ),
-  ]);
-}
 
 export interface AutoCallProposalResult {
   pluginName: string;
@@ -49,6 +48,7 @@ export class PluginHookDispatcher {
     private getActiveInstances: (operatorId: string) => PluginInstance[],
     private getStrategyInstance: (operatorId: string) => PluginInstance | undefined,
     onAutoDisable: (pluginName: string, reason: string) => void,
+    private readonly invocationGuard = new PluginInvocationGuard(),
   ) {
     this.errorTracker = new PluginErrorTracker(onAutoDisable);
   }
@@ -59,7 +59,7 @@ export class PluginHookDispatcher {
     operatorId: string,
     slotInfo: import('@tx5dr/contracts').SlotInfo,
     messages: ParsedFT8Message[],
-    getCtx: (instance: PluginInstance) => PluginContext,
+    getCtx: (instance: PluginInstance) => RuntimePluginContext,
   ): Promise<AutoCallProposalResult[]> {
     const proposals: AutoCallProposalResult[] = [];
 
@@ -75,9 +75,11 @@ export class PluginHookDispatcher {
 
       try {
         const ctx = getCtx(instance);
-        const proposal = await withTimeout(
-          Promise.resolve(hook(slotInfo, messages, ctx)),
-          HOOK_TIMEOUT_MS,
+        const proposal = await this.invocationGuard.invoke(
+          instance,
+          'onAutoCallCandidate',
+          () => hook(slotInfo, messages, ctx as never),
+          { timeoutMs: DECISION_HOOK_TIMEOUT_MS },
         );
 
         if (proposal == null) {
@@ -113,7 +115,7 @@ export class PluginHookDispatcher {
     operatorId: string,
     request: AutoCallExecutionRequest,
     initialPlan: AutoCallExecutionPlan,
-    getCtx: (instance: PluginInstance) => PluginContext,
+    getCtx: (instance: PluginInstance) => RuntimePluginContext,
   ): Promise<AutoCallExecutionPlan> {
     let plan = initialPlan;
 
@@ -129,9 +131,11 @@ export class PluginHookDispatcher {
 
       try {
         const ctx = getCtx(instance);
-        const output = await withTimeout(
-          Promise.resolve(hook(request, plan, ctx)),
-          HOOK_TIMEOUT_MS,
+        const output = await this.invocationGuard.invoke(
+          instance,
+          'onConfigureAutoCallExecution',
+          () => hook(request, plan, ctx as never),
+          { timeoutMs: DECISION_HOOK_TIMEOUT_MS },
         );
 
         if (output == null) {
@@ -158,7 +162,7 @@ export class PluginHookDispatcher {
   async dispatchFilterCandidates(
     operatorId: string,
     candidates: ParsedFT8Message[],
-    getCtx: (instance: PluginInstance) => PluginContext,
+    getCtx: (instance: PluginInstance) => RuntimePluginContext,
   ): Promise<ParsedFT8Message[]> {
     let result = candidates;
     for (const instance of this.getActiveInstances(operatorId)) {
@@ -166,9 +170,11 @@ export class PluginHookDispatcher {
       if (!hook || this.errorTracker.isDisabled(instance)) continue;
       try {
         const ctx = getCtx(instance);
-        const output = await withTimeout(
-          Promise.resolve(hook(result, ctx)),
-          HOOK_TIMEOUT_MS,
+        const output = await this.invocationGuard.invoke(
+          instance,
+          'onFilterCandidates',
+          () => hook(result, ctx as never),
+          { timeoutMs: DECISION_HOOK_TIMEOUT_MS },
         );
         if (!Array.isArray(output)) {
           logger.warn(`Plugin ${instance.plugin.definition.name} onFilterCandidates returned a non-array value, keeping previous candidates`);
@@ -189,7 +195,7 @@ export class PluginHookDispatcher {
   async dispatchScoreCandidates(
     operatorId: string,
     candidates: ScoredCandidate[],
-    getCtx: (instance: PluginInstance) => PluginContext,
+    getCtx: (instance: PluginInstance) => RuntimePluginContext,
   ): Promise<ScoredCandidate[]> {
     let result = candidates;
     for (const instance of this.getActiveInstances(operatorId)) {
@@ -197,9 +203,11 @@ export class PluginHookDispatcher {
       if (!hook || this.errorTracker.isDisabled(instance)) continue;
       try {
         const ctx = getCtx(instance);
-        const output = await withTimeout(
-          Promise.resolve(hook(result, ctx)),
-          HOOK_TIMEOUT_MS,
+        const output = await this.invocationGuard.invoke(
+          instance,
+          'onScoreCandidates',
+          () => hook(result, ctx as never),
+          { timeoutMs: DECISION_HOOK_TIMEOUT_MS },
         );
         if (Array.isArray(output)) {
           result = output;
@@ -217,8 +225,8 @@ export class PluginHookDispatcher {
   async dispatchExclusive<K extends keyof PluginHooks, R>(
     operatorId: string,
     hookName: K,
-    executor: (hook: HookFn<K>, ctx: PluginContext) => Promise<R>,
-    getCtx: (instance: PluginInstance) => PluginContext,
+    executor: (hook: HookFn<K>, ctx: RuntimePluginContext) => Promise<R>,
+    getCtx: (instance: PluginInstance) => RuntimePluginContext,
   ): Promise<R | null> {
     const instance = this.getStrategyInstance(operatorId);
     if (!instance || this.errorTracker.isDisabled(instance)) return null;
@@ -228,7 +236,12 @@ export class PluginHookDispatcher {
 
     try {
       const ctx = getCtx(instance);
-      const result = await withTimeout(executor(hook, ctx), HOOK_TIMEOUT_MS);
+      const result = await this.invocationGuard.invoke(
+        instance,
+        String(hookName),
+        () => executor(hook, ctx),
+        { timeoutMs: DECISION_HOOK_TIMEOUT_MS },
+      );
       this.errorTracker.resetErrors(instance, hookName as string);
       return result;
     } catch (err) {
@@ -242,8 +255,8 @@ export class PluginHookDispatcher {
   async dispatchBroadcast<K extends keyof PluginHooks>(
     operatorId: string,
     hookName: K,
-    executor: (hook: HookFn<K>, ctx: PluginContext) => void | Promise<void>,
-    getCtx: (instance: PluginInstance) => PluginContext,
+    executor: (hook: HookFn<K>, ctx: RuntimePluginContext) => void | Promise<void>,
+    getCtx: (instance: PluginInstance) => RuntimePluginContext,
   ): Promise<void> {
     const instances = this.getActiveInstances(operatorId);
     await Promise.allSettled(
@@ -253,12 +266,44 @@ export class PluginHookDispatcher {
         if (!hook) return;
         try {
           const ctx = getCtx(instance);
-          await withTimeout(Promise.resolve(executor(hook, ctx)), HOOK_TIMEOUT_MS);
+          await this.invocationGuard.invoke(
+            instance,
+            String(hookName),
+            () => executor(hook, ctx),
+            { timeoutMs: BROADCAST_HOOK_TIMEOUT_MS },
+          );
           this.errorTracker.resetErrors(instance, hookName as string);
         } catch (err) {
-          this.errorTracker.recordError(instance, hookName as string, err);
+          if (!isExpectedInvocationCancellation(err)) {
+            this.errorTracker.recordError(instance, hookName as string, err);
+          }
         }
       }),
     );
+  }
+
+  async dispatchInstance<K extends keyof PluginHooks, R>(
+    instance: PluginInstance,
+    hookName: K,
+    executor: (hook: HookFn<K>, ctx: RuntimePluginContext) => R | Promise<R>,
+  ): Promise<R | null> {
+    if (instance.lifecycle !== 'active' || this.errorTracker.isDisabled(instance)) return null;
+    const hook = instance.plugin.definition.hooks?.[hookName] as HookFn<K> | undefined;
+    if (!hook) return null;
+    try {
+      const result = await this.invocationGuard.invoke(
+        instance,
+        String(hookName),
+        () => executor(hook, instance.ctx),
+        { timeoutMs: BROADCAST_HOOK_TIMEOUT_MS },
+      );
+      this.errorTracker.resetErrors(instance, String(hookName));
+      return result;
+    } catch (error) {
+      if (!isExpectedInvocationCancellation(error)) {
+        this.errorTracker.recordError(instance, String(hookName), error);
+      }
+      return null;
+    }
   }
 }

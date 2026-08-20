@@ -1,5 +1,5 @@
-import type { ParsedFT8Message, SlotInfo, SlotPack, QSORecord, FrameMessage, FrequencyState } from '@tx5dr/contracts';
-import type { PluginContext } from './context.js';
+import type { ParsedFT8Message, SlotInfo, SlotPack, QSORecord, FrameMessage, FrequencyState, PluginPermission } from '@tx5dr/contracts';
+import type { PluginContextFor } from './context.js';
 
 /**
  * Candidate message plus an accumulated ranking score.
@@ -35,13 +35,9 @@ export interface QSOFailureInfo {
  */
 export interface StrategyDecision {
   /**
-   * Requests that the host stop transmitting and leave the active QSO flow.
-   *
-   * During a late re-decision (`meta.isReDecision === true`), the host treats
-   * this as an immediate abort request for the operator's in-flight
-   * transmission. In other words, `stop: true` means both:
-   * - stop the operator's automation/runtime state; and
-   * - interrupt the operator's current audio/PTT contribution right away.
+   * Requests that the host stop this operator's automation and leave the
+   * active QSO flow. This is a policy stop, not a physical RF interrupt: any
+   * committed/on-air frame is allowed to finish.
    */
   stop?: boolean;
   /**
@@ -169,7 +165,7 @@ export type FrequencyChangeState = FrequencyState;
  * Hooks should be quick and defensive. A misbehaving plugin can delay the whole
  * decode pipeline, so expensive work should be throttled, cached or deferred.
  */
-export interface PluginHooks {
+export interface PluginHooks<Permissions extends readonly PluginPermission[] = readonly []> {
   /**
    * Proposes an automatic call target while the operator is idle.
    *
@@ -180,7 +176,7 @@ export interface PluginHooks {
   onAutoCallCandidate?(
     slotInfo: SlotInfo,
     messages: ParsedFT8Message[],
-    ctx: PluginContext,
+    ctx: PluginContextFor<Permissions>,
   ): AutoCallProposal | null | undefined | Promise<AutoCallProposal | null | undefined>;
 
   /**
@@ -194,7 +190,7 @@ export interface PluginHooks {
   onConfigureAutoCallExecution?(
     request: AutoCallExecutionRequest,
     plan: AutoCallExecutionPlan,
-    ctx: PluginContext,
+    ctx: PluginContextFor<Permissions>,
   ): AutoCallExecutionPlan | null | undefined | Promise<AutoCallExecutionPlan | null | undefined>;
 
   /**
@@ -206,7 +202,7 @@ export interface PluginHooks {
    */
   onFilterCandidates?(
     candidates: ParsedFT8Message[],
-    ctx: PluginContext,
+    ctx: PluginContextFor<Permissions>,
   ): ParsedFT8Message[] | Promise<ParsedFT8Message[]>;
 
   /**
@@ -217,14 +213,14 @@ export interface PluginHooks {
    */
   onScoreCandidates?(
     candidates: ScoredCandidate[],
-    ctx: PluginContext,
+    ctx: PluginContextFor<Permissions>,
   ): ScoredCandidate[] | Promise<ScoredCandidate[]>;
 
   /**
    * Broadcast at the start of every slot with the slot metadata and decoded
    * messages already associated with that slot.
    */
-  onSlotStart?(slotInfo: SlotInfo, messages: ParsedFT8Message[], ctx: PluginContext): void;
+  onSlotStart?(slotInfo: SlotInfo, messages: ParsedFT8Message[], ctx: PluginContextFor<Permissions>): void | Promise<void>;
 
   /**
    * Broadcast with raw slot/frame context plus parsed messages.
@@ -232,7 +228,7 @@ export interface PluginHooks {
    * Prefer this hook when a plugin needs full decoder metadata or wants to
    * preserve a cache suitable for replay/status integrations.
    */
-  onSlotActivity?(event: SlotActivityEvent, ctx: PluginContext): void;
+  onSlotActivity?(event: SlotActivityEvent, ctx: PluginContextFor<Permissions>): void | Promise<void>;
 
   /**
    * Broadcast whenever decoded messages become available.
@@ -240,38 +236,38 @@ export interface PluginHooks {
    * This fires even when the operator is idle, which makes it a good place for
    * monitoring, trigger detection and passive analytics.
    */
-  onDecode?(messages: ParsedFT8Message[], ctx: PluginContext): void;
+  onDecode?(messages: ParsedFT8Message[], ctx: PluginContextFor<Permissions>): void | Promise<void>;
 
   /**
    * Broadcast when the host operating frequency or band changes.
    */
-  onFrequencyChange?(state: FrequencyChangeState, ctx: PluginContext): void | Promise<void>;
+  onFrequencyChange?(state: FrequencyChangeState, ctx: PluginContextFor<Permissions>): void | Promise<void>;
 
   /**
    * Broadcast when the host locks onto a target and a QSO officially starts.
    */
-  onQSOStart?(info: { targetCallsign: string; grid?: string }, ctx: PluginContext): void;
+  onQSOStart?(info: { targetCallsign: string; grid?: string }, ctx: PluginContextFor<Permissions>): void | Promise<void>;
 
   /**
    * Broadcast after a QSO has been completed and recorded.
    */
-  onQSOComplete?(record: QSORecord, ctx: PluginContext): void;
+  onQSOComplete?(record: QSORecord, ctx: PluginContextFor<Permissions>): void | Promise<void>;
 
   /**
    * Broadcast when an in-progress QSO terminates unsuccessfully.
    */
-  onQSOFail?(info: QSOFailureInfo, ctx: PluginContext): void;
+  onQSOFail?(info: QSOFailureInfo, ctx: PluginContextFor<Permissions>): void | Promise<void>;
 
   /**
    * Broadcast when a named timer created through {@link PluginContext.timers}
    * fires.
    */
-  onTimer?(timerId: string, ctx: PluginContext): void;
+  onTimer?(timerId: string, ctx: PluginContextFor<Permissions>): void | Promise<void>;
 
   /**
    * Broadcast when the user clicks one of the plugin's declared quick actions.
    */
-  onUserAction?(actionId: string, payload: unknown, ctx: PluginContext): void;
+  onUserAction?(actionId: string, payload: unknown, ctx: PluginContextFor<Permissions>): void | Promise<void>;
 
   /**
    * Broadcast after one or more persisted plugin settings have changed.
@@ -279,5 +275,5 @@ export interface PluginHooks {
    * The `changes` object contains only the updated keys and their new resolved
    * values.
    */
-  onConfigChange?(changes: Record<string, unknown>, ctx: PluginContext): void;
+  onConfigChange?(changes: Record<string, unknown>, ctx: PluginContextFor<Permissions>): void | Promise<void>;
 }

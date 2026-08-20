@@ -46,9 +46,12 @@ type PhysicalRadioManagerTestAccessor = {
   radioActor: TestRadioActor | null;
   connection: TestRadioConnection;
   preconnectedSessionToAdopt?: TestRadioConnection | null;
+  connectionGeneration: number;
   lastKnownFrequency: number | null;
   configManager: {
     getLastEngineMode: ReturnType<typeof vi.fn>;
+    getLastDigitalModeName: ReturnType<typeof vi.fn>;
+    getRadioConfig: ReturnType<typeof vi.fn>;
     getLastSelectedFrequency: ReturnType<typeof vi.fn>;
     getLastVoiceFrequency: ReturnType<typeof vi.fn>;
   };
@@ -758,6 +761,22 @@ describe('PhysicalRadioManager', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('rejects an operating-state write when the physical session generation changed', async () => {
+    const applyOperatingState = vi.fn().mockResolvedValue({
+      frequencyApplied: true,
+      modeApplied: true,
+    });
+    asTestManager(manager).connection = { applyOperatingState };
+    asTestManager(manager).connectionGeneration = 4;
+
+    await expect(manager.applyOperatingState(
+      { frequency: 14_074_000, tolerateModeFailure: true },
+      { expectedConnectionGeneration: 3 },
+    )).rejects.toThrow('radio connection changed before operating state could be applied');
+
+    expect(applyOperatingState).not.toHaveBeenCalled();
+  });
+
   it('does not treat tolerated mode failures as connection health failures', async () => {
     const applyOperatingState = vi.fn().mockResolvedValue({
       frequencyApplied: true,
@@ -1319,14 +1338,21 @@ describe('PhysicalRadioManager', () => {
         order.push('tuner');
         return { supported: true, hasSwitch: true, hasManualTune: true };
       }),
-      setFrequency: vi.fn().mockImplementation(async () => {
+      applyOperatingState: vi.fn().mockImplementation(async () => {
         order.push('restore');
+        return { frequencyApplied: true, modeApplied: true };
       }),
       getFrequency: vi.fn().mockResolvedValue(14074000),
     };
 
     vi.spyOn(RadioConnectionFactory, 'create').mockReturnValue(connection as never);
     vi.spyOn(testManager.configManager, 'getLastEngineMode').mockReturnValue('digital');
+    vi.spyOn(testManager.configManager, 'getLastDigitalModeName').mockReturnValue('FT8');
+    vi.spyOn(testManager.configManager, 'getRadioConfig').mockReturnValue({
+      type: 'network',
+      network: { host: '127.0.0.1', port: 4532 },
+      digitalModeRadioMode: 'usb-data',
+    } as HamlibConfig);
     vi.spyOn(testManager.configManager, 'getLastSelectedFrequency').mockReturnValue({
       frequency: 14074000,
       mode: 'FT8',
@@ -1367,7 +1393,12 @@ describe('PhysicalRadioManager', () => {
     ]);
     expect(connection.startBackgroundTasks).toHaveBeenCalledTimes(1);
     expect(connection.setPTT).toHaveBeenCalledWith(false);
-    expect(connection.setFrequency).toHaveBeenCalledWith(14074000);
+    expect(connection.applyOperatingState).toHaveBeenCalledWith(expect.objectContaining({
+      frequency: 14074000,
+      mode: 'USB',
+      bandwidth: 'nochange',
+      options: { intent: 'digital' },
+    }));
     expect(testManager.capabilityManager.onConnected).toHaveBeenCalledTimes(1);
 
     await manager.disconnect('test cleanup');
@@ -1397,8 +1428,9 @@ describe('PhysicalRadioManager', () => {
         order.push('tuner');
         return { supported: true, hasSwitch: true, hasManualTune: true };
       }),
-      setFrequency: vi.fn().mockImplementation(async () => {
+      applyOperatingState: vi.fn().mockImplementation(async () => {
         order.push('restore');
+        return { frequencyApplied: true, modeApplied: true };
       }),
       getFrequency: vi.fn().mockResolvedValue(21074000),
     };
@@ -1626,7 +1658,7 @@ describe('PhysicalRadioManager', () => {
 
     it('restores the RX dial on clear and allows a fresh offset afterward', async () => {
       const setFrequency = vi.fn().mockResolvedValue(undefined);
-      asTestManager(manager).connection = { setFrequency };
+      asTestManager(manager).connection = { setFrequency, setKnownFrequency: vi.fn() };
       asTestManager(manager).lastKnownFrequency = 7074000;
 
       await manager.setTxDialOffset(681);
@@ -1640,6 +1672,26 @@ describe('PhysicalRadioManager', () => {
       setFrequency.mockClear();
       await expect(manager.setTxDialOffset(900)).resolves.toBe(true);
       expect(setFrequency).toHaveBeenCalledWith(7074900);
+    });
+
+    it('keeps the dial guard after a failed restore so retry can repair the same offset', async () => {
+      const connectionSetFrequency = vi.fn().mockResolvedValue(undefined);
+      asTestManager(manager).connection = { setFrequency: connectionSetFrequency };
+      asTestManager(manager).lastKnownFrequency = 7074000;
+
+      await expect(manager.setTxDialOffset(681)).resolves.toBe(true);
+      const restore = vi.spyOn(manager, 'setFrequency')
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true);
+
+      await expect(manager.clearTxDialOffset()).rejects.toThrow('Failed to restore RX dial');
+      expect(manager.isTxDialOffsetActive()).toBe(true);
+
+      await expect(manager.clearTxDialOffset()).resolves.toBeUndefined();
+      expect(restore).toHaveBeenCalledTimes(2);
+      expect(restore).toHaveBeenNthCalledWith(1, 7074000);
+      expect(restore).toHaveBeenNthCalledWith(2, 7074000);
+      expect(manager.isTxDialOffsetActive()).toBe(false);
     });
   });
 });

@@ -19,6 +19,9 @@ export interface EncodeRequest {
   timeSinceSlotStartMs?: number; // 从时隙开始到现在经过的时间（毫秒）
   requestId?: string; // 编码请求唯一ID（用于去重和追踪）
   txDialShiftHz?: number; // 虚拟频率：本时隙冻结的 dial 平移量（Hz），随音频负载流转到 PTT 时点
+  frameId?: string;
+  frameRevision?: number;
+  decisionEpoch?: number;
 }
 
 export interface EncodeResult {

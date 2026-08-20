@@ -3,6 +3,7 @@ import type { VoicePTTLock } from '@tx5dr/contracts';
 import { VoicePTTLockManager } from './VoicePTTLockManager.js';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { AudioStreamManager } from '../audio/AudioStreamManager.js';
+import type { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { createLogger } from '../utils/logger.js';
 import {
@@ -24,6 +25,7 @@ export interface VoiceSessionManagerDeps {
   radioManager: PhysicalRadioManager;
   audioStreamManager: AudioStreamManager;
   onBeforeStartPTT?: () => Promise<void>;
+  physicalTxCoordinator: PhysicalTxCoordinator;
 }
 
 /**
@@ -36,6 +38,8 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
   private audioStreamManager: AudioStreamManager;
   private isStarted = false;
   private diagnostics = new VoiceTxDiagnostics();
+  private physicalLeaseId: string | null = null;
+  private transmitGeneration = 0;
 
   constructor(private readonly deps: VoiceSessionManagerDeps) {
     super();
@@ -106,14 +110,36 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
     }
 
     try {
+      const transmitGeneration = ++this.transmitGeneration;
       this.audioStreamManager.clearVoicePlaybackQueue();
       this.audioStreamManager.setVoiceTxOutputEnabled(false);
       this.diagnostics.startSession(clientId, label);
 
-      // 2. Activate radio PTT
-      await this.deps.onBeforeStartPTT?.();
-      await this.radioManager.setPTT(true);
+      // 2. Acquire the single physical PTT lease.
+      const leaseId = await this.deps.physicalTxCoordinator.acquireLease({
+        source: this.getPttSource(clientId),
+        reason: `voice transmit: ${label}`,
+        beforeStart: this.deps.onBeforeStartPTT,
+        deferActiveUntilAudio: true,
+        interrupt: async () => {
+          this.audioStreamManager.setVoiceTxOutputEnabled(false);
+          this.audioStreamManager.clearVoicePlaybackQueue();
+          if (this.getPttSource(clientId) === 'voice-keyer') {
+            await this.audioStreamManager.stopCurrentPlayback({ kind: 'voice-keyer' });
+          }
+        },
+      });
+      if (this.transmitGeneration !== transmitGeneration
+        || this.pttLockManager.getLockHolder() !== clientId) {
+        await this.deps.physicalTxCoordinator.forceInterruptLease(
+          leaseId,
+          'voice transmission cancelled while starting',
+        );
+        return { success: false, reason: 'Voice transmission was cancelled while starting' };
+      }
+      this.physicalLeaseId = leaseId;
       this.audioStreamManager.setVoiceTxOutputEnabled(true);
+      this.deps.physicalTxCoordinator.markStreamingLeaseActive(leaseId);
 
       // 3. Broadcast PTT status (frontend handles monitor muting via gain node)
       this.emit('pttStatusChanged', { isTransmitting: true, operatorIds: [], source: this.getPttSource(clientId) });
@@ -123,7 +149,13 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
     } catch (err) {
       // Rollback on failure
       logger.error('Failed to start voice transmission, rolling back', err);
-      try { await this.radioManager.setPTT(false); } catch { /* best effort */ }
+      if (this.physicalLeaseId) {
+        await this.deps.physicalTxCoordinator.forceInterruptLease(
+          this.physicalLeaseId,
+          'voice start rollback',
+        ).catch(() => undefined);
+        this.physicalLeaseId = null;
+      }
       this.pttLockManager.releaseLock(clientId);
       this.audioStreamManager.setVoiceTxOutputEnabled(false);
       this.audioStreamManager.clearVoicePlaybackQueue();
@@ -274,11 +306,19 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
   // ---- Private helpers ----
 
   private async stopTransmitInternal(reason: string): Promise<void> {
-    // 1. Deactivate radio PTT
-    try {
-      await this.radioManager.setPTT(false);
-    } catch (err) {
-      logger.error('Failed to deactivate radio PTT', err);
+    ++this.transmitGeneration;
+    // 1. Release only the lease owned by this voice session.
+    let pttStillUncertain = false;
+    if (this.physicalLeaseId) {
+      try {
+        const result = await this.deps.physicalTxCoordinator.releaseLease(this.physicalLeaseId, reason);
+        pttStillUncertain = !result.success
+          && this.deps.physicalTxCoordinator.getSnapshot().phase === 'unknown';
+        if (!pttStillUncertain) this.physicalLeaseId = null;
+      } catch (err) {
+        pttStillUncertain = this.deps.physicalTxCoordinator.getSnapshot().phase === 'unknown';
+        logger.error('Failed to release voice PTT lease', err);
+      }
     }
 
     this.audioStreamManager.setVoiceTxOutputEnabled(false);
@@ -287,7 +327,7 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
 
     // 2. Broadcast PTT status (frontend handles monitor unmuting via gain node)
     this.emit('pttStatusChanged', {
-      isTransmitting: false,
+      isTransmitting: pttStillUncertain,
       operatorIds: [],
       source: this.getPttSource(this.pttLockManager.getLockHolder()),
     });

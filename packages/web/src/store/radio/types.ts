@@ -33,6 +33,7 @@ import type {
   SlotInfo,
   TuneToneStatus,
   CWKeyerStatus,
+  PTTStatus,
   CWKeyerConfig,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
@@ -69,10 +70,7 @@ export interface RadioState {
   radioConnectionStatus: RadioConnectionStatus;
   radioInfo: RadioInfo | null;
   radioConfig: HamlibConfig;
-  pttStatus: {
-    isTransmitting: boolean;
-    operatorIds: string[];
-  };
+  pttStatus: PTTStatus;
   tuneToneStatus: TuneToneStatus;
   meterData: MeterData | null;
   hasReceivedMeterData: boolean;
@@ -169,7 +167,7 @@ export type RadioAction =
   | { type: 'operatorStatusUpdate'; payload: OperatorStatus }
   | { type: 'setCurrentOperator'; payload: string | null }
   | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; status: RadioConnectionStatus; radioInfo: RadioInfo | null; radioConfig?: HamlibConfig; radioConnectionHealth?: ConnectionHealthInfo; reconnectProgress?: ReconnectProgress | null; coreCapabilities?: CoreRadioCapabilities; coreCapabilityDiagnostics?: CoreCapabilityDiagnostics; meterCapabilities?: MeterCapabilities; tunerCapabilities?: TunerCapabilities } }
-  | { type: 'pttStatusChanged'; payload: { isTransmitting: boolean; operatorIds: string[] } }
+  | { type: 'pttStatusChanged'; payload: PTTStatus }
   | { type: 'tuneToneStatusChanged'; payload: TuneToneStatus }
   | { type: 'meterData'; payload: MeterData }
   | { type: 'squelchStatusChanged'; payload: SquelchStatus }

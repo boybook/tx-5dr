@@ -35,7 +35,9 @@ const ICOM_WLAN_TX_MAX_WAIT_SLICE_MS = 20;
 const TCI_AUDIO_DEVICE_NAME = 'TCI Audio';
 const RTAUDIO_TX_CONSUME_WATCHDOG_MS = 750;
 const RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS = 1000;
+const RTAUDIO_TX_START_ACK_TIMEOUT_MS = 2000;
 const RTAUDIO_TX_WATCHDOG_MIN_SUBMITTED_CHUNKS = 3;
+const RTAUDIO_TX_MAX_CONSECUTIVE_WRITE_FAILURES = 20;
 const RTAUDIO_OUTPUT_WARNING_LOG_WINDOW_MS = 5000;
 const MAX_SERIALIZED_INPUT_INGEST_DEPTH = 3;
 
@@ -119,6 +121,24 @@ interface RtAudioIssueLogState {
   suppressedCount: number;
 }
 
+interface RtAudioPlaybackStartWaiter {
+  playbackId: number;
+  submittedChunks: number;
+  consumedChunks: number;
+  finishedSubmitting: boolean;
+  started: boolean;
+  onStarted: () => void;
+}
+
+interface RtAudioOutputDrainWaiter {
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
+export interface WaitForOutputDrainOptions {
+  timeoutMs?: number;
+}
+
 export type RtAudioRuntimeIssueDirection = 'input' | 'output';
 export type RtAudioRuntimeIssuePhase = 'start' | 'runtime';
 
@@ -190,6 +210,8 @@ export interface PlayAudioOptions {
   injectIntoMonitor?: boolean;
   playbackKind?: PlaybackKind;
   diagnosticContext?: Record<string, unknown>;
+  /** Called once the first output frame has been consumed by the active sink. */
+  onPlaybackStarted?: () => void;
 }
 
 export type PlaybackKind = 'digital' | 'voice-keyer' | 'tune-tone';
@@ -265,7 +287,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private playbackStartTime: number = 0;        // 播放开始时间戳
   private currentPlaybackPromise: Promise<void> | null = null;  // 当前播放的Promise
   private currentPlaybackKind: PlaybackKind | null = null;
-  private shouldStopPlayback: boolean = false;  // 停止播放标志
+  /**
+   * Playback is allowed to overlap briefly while a timed-out cleanup settles.
+   * Keep cancellation scoped to the playback that requested it; a global flag
+   * lets an old stop cancel a newer frame after the coordinator has advanced.
+   */
+  private readonly stopRequestedPlaybackIds = new Set<number>();
   private voiceOutputObserver: VoiceTxOutputObserver | null = null;
   private voiceTxOutputPipeline: VoiceTxOutputPipeline;
   private nativeAudioInputSequence = 0;
@@ -283,6 +310,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private readonly inputIngestQueues = new Map<NativeAudioInputSourceKind, SerializedInputIngestQueue>();
   private outputWatchdogGeneration = 0;
   private playbackSequence = 0;
+  /**
+   * RtAudio's output callback has no playback id. Keep submitted playback
+   * chunks in FIFO order so a late callback from an older clip cannot confirm
+   * a newer lease before the older queued audio has drained.
+   */
+  private readonly rtAudioPlaybackStartWaiters: RtAudioPlaybackStartWaiter[] = [];
+  private readonly rtAudioOutputDrainWaiters = new Set<RtAudioOutputDrainWaiter>();
   private readonly now: AudioClock;
   private inputSignalType: AudioInputSignalType = 'af';
   private ifCenterHz = 12000;
@@ -1240,6 +1274,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.cleanupRtAudioStream('output', this.rtAudioOutput, 'stop-request');
         this.rtAudioOutput = null;
       }
+      this.rtAudioPlaybackStartWaiters.length = 0;
+      this.rejectRtAudioOutputDrainWaiters(
+        new Error('RtAudio output stopped before previous playback drained'),
+      );
 
       AudioDeviceManager.getInstance().clearActiveDevice('output', this.activeOutputDeviceName, this.outputDeviceId);
       this.isOutputting = false;
@@ -1592,6 +1630,85 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.outputFirstFrameConsumedAt = now;
     }
     this.outputLastFrameConsumedAt = now;
+
+    const waiter = this.rtAudioPlaybackStartWaiters.find((candidate) =>
+      candidate.consumedChunks < candidate.submittedChunks,
+    );
+    if (!waiter) return;
+
+    waiter.consumedChunks++;
+    if (!waiter.started) {
+      waiter.started = true;
+      try {
+        waiter.onStarted();
+      } catch (error) {
+        logger.warn('RtAudio playback start observer failed', {
+          playbackId: waiter.playbackId,
+          error: this.describeError(error),
+        });
+      }
+    }
+    this.pruneRtAudioPlaybackStartWaiters();
+  }
+
+  private beginRtAudioPlaybackStartWaiter(
+    playbackId: number,
+    onStarted: () => void,
+  ): RtAudioPlaybackStartWaiter {
+    const waiter: RtAudioPlaybackStartWaiter = {
+      playbackId,
+      submittedChunks: 0,
+      consumedChunks: 0,
+      finishedSubmitting: false,
+      started: false,
+      onStarted,
+    };
+    this.rtAudioPlaybackStartWaiters.push(waiter);
+    return waiter;
+  }
+
+  private noteRtAudioChunkPending(waiter: RtAudioPlaybackStartWaiter): void {
+    waiter.submittedChunks++;
+  }
+
+  private rollbackRtAudioChunkPending(waiter: RtAudioPlaybackStartWaiter): void {
+    waiter.submittedChunks = Math.max(waiter.consumedChunks, waiter.submittedChunks - 1);
+    this.pruneRtAudioPlaybackStartWaiters();
+  }
+
+  private finishRtAudioPlaybackStartWaiter(waiter: RtAudioPlaybackStartWaiter): void {
+    waiter.finishedSubmitting = true;
+    this.pruneRtAudioPlaybackStartWaiters();
+  }
+
+  private pruneRtAudioPlaybackStartWaiters(): void {
+    while (this.rtAudioPlaybackStartWaiters.length > 0) {
+      const first = this.rtAudioPlaybackStartWaiters[0]!;
+      if (!first.finishedSubmitting || first.consumedChunks < first.submittedChunks) {
+        return;
+      }
+      this.rtAudioPlaybackStartWaiters.shift();
+    }
+    this.notifyRtAudioOutputDrained();
+  }
+
+  private hasPendingRtAudioPlayback(): boolean {
+    return this.rtAudioPlaybackStartWaiters.some((waiter) =>
+      !waiter.finishedSubmitting || waiter.consumedChunks < waiter.submittedChunks,
+    );
+  }
+
+  private notifyRtAudioOutputDrained(): void {
+    if (this.hasPendingRtAudioPlayback()) return;
+    const waiters = [...this.rtAudioOutputDrainWaiters];
+    this.rtAudioOutputDrainWaiters.clear();
+    for (const waiter of waiters) waiter.resolve();
+  }
+
+  private rejectRtAudioOutputDrainWaiters(error: Error): void {
+    const waiters = [...this.rtAudioOutputDrainWaiters];
+    this.rtAudioOutputDrainWaiters.clear();
+    for (const waiter of waiters) waiter.reject(error);
   }
 
   private recordOutputRtAudioIssue(type: number, message: string): void {
@@ -1977,30 +2094,86 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     const now = Date.now();
     const elapsedTime = now - this.playbackStartTime;
+    const playbackId = this.playbackSequence;
+    const playbackPromise = this.currentPlaybackPromise;
 
     logger.debug(`stopping current playback, elapsed: ${elapsedTime}ms`);
 
     // 设置停止标志,让播放循环自动退出
-    this.shouldStopPlayback = true;
+    this.stopRequestedPlaybackIds.add(playbackId);
 
     // 等待当前播放完全停止
-    if (this.currentPlaybackPromise) {
+    if (playbackPromise) {
       try {
-        await this.currentPlaybackPromise;
+        await playbackPromise;
       } catch (error) {
         // 播放被中断是预期的行为
         logger.debug('playback interrupted');
       }
     }
 
-    this.playing = false;
-    this.shouldStopPlayback = false;
-    this.currentPlaybackPromise = null;
-    this.currentPlaybackKind = null;
+    this.stopRequestedPlaybackIds.delete(playbackId);
+    if (this.playbackSequence === playbackId && this.currentPlaybackPromise === playbackPromise) {
+      this.playing = false;
+      this.currentPlaybackPromise = null;
+      this.currentPlaybackKind = null;
+    }
 
     logger.debug(`playback stopped, elapsed: ${elapsedTime}ms`);
 
     return elapsedTime;
+  }
+
+  /** Wait until the local RtAudio FIFO no longer contains an older playback. */
+  public async waitForOutputDrain(options: WaitForOutputDrainOptions = {}): Promise<boolean> {
+    if (this.usingIcomWlanOutput || this.usingTciOutput || this.usingAndroidOutput) {
+      return false;
+    }
+    if (!this.hasPendingRtAudioPlayback()) {
+      return false;
+    }
+
+    const requestedTimeoutMs = options.timeoutMs ?? 2_000;
+    const timeoutMs = Number.isFinite(requestedTimeoutMs)
+      ? Math.max(1, requestedTimeoutMs)
+      : 2_000;
+    const startedAt = this.now();
+    logger.info('waiting for previous RtAudio playback to drain', {
+      pendingPlaybacks: this.rtAudioPlaybackStartWaiters.length,
+      timeoutMs,
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const waiter = {} as RtAudioOutputDrainWaiter;
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        this.rtAudioOutputDrainWaiters.delete(waiter);
+        clearTimeout(timer);
+        if (error) reject(error);
+        else resolve();
+      };
+      waiter.resolve = () => finish();
+      waiter.reject = (error) => finish(error);
+      const timer = setTimeout(() => {
+        finish(new Error(`RtAudio output drain timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.rtAudioOutputDrainWaiters.add(waiter);
+
+      // The callback may have drained the final chunk between the initial
+      // check and waiter registration.
+      if (!this.hasPendingRtAudioPlayback()) waiter.resolve();
+    });
+
+    logger.info('previous RtAudio playback drained', {
+      elapsedMs: Math.max(0, this.now() - startedAt),
+    });
+    return true;
+  }
+
+  private isPlaybackStopRequested(playbackId: number): boolean {
+    return this.stopRequestedPlaybackIds.has(playbackId);
   }
 
   /**
@@ -2033,7 +2206,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.playing = true;
       this.playbackStartTime = playStartTime;
       this.currentPlaybackKind = playbackKind;
-      this.shouldStopPlayback = false;
 
       const playbackPromise = (async () => {
         const chunkSize = ICOM_WLAN_TX_CHUNK_SIZE;
@@ -2044,9 +2216,19 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         const hrStart = performance.now();
         let samplesWritten = 0;
         let tciTransmissionStarted = false;
+        let playbackStarted = false;
+        const signalPlaybackStarted = () => {
+          if (playbackStarted) return;
+          playbackStarted = true;
+          try {
+            options.onPlaybackStarted?.();
+          } catch (error) {
+            logger.warn(`${radioAudioOutput.label} playback start observer failed`, error);
+          }
+        };
 
         const assertNotStopped = () => {
-          if (this.shouldStopPlayback) {
+          if (this.isPlaybackStopRequested(playbackId)) {
             throw new Error('playback interrupted');
           }
         };
@@ -2098,6 +2280,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             }
 
             await radioAudioAdapter.sendAudio(chunk);
+            signalPlaybackStarted();
             if (options.injectIntoMonitor) {
               this.emit('txMonitorAudioData', { samples: chunk, sampleRate: targetSampleRate });
             }
@@ -2131,7 +2314,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
         throw error;
       } finally {
-        if (this.currentPlaybackPromise === playbackPromise) {
+        this.stopRequestedPlaybackIds.delete(playbackId);
+        if (this.playbackSequence === playbackId && this.currentPlaybackPromise === playbackPromise) {
           this.playing = false;
           this.currentPlaybackPromise = null;
           this.currentPlaybackKind = null;
@@ -2149,7 +2333,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.playing = true;
       this.playbackStartTime = playStartTime;
       this.currentPlaybackKind = playbackKind;
-      this.shouldStopPlayback = false;
       const playbackPromise = (async () => {
         const playbackData = targetSampleRate === this.outputSampleRate
           ? audioData
@@ -2157,12 +2340,21 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         const chunkSize = Math.max(64, this.outputBufferSize || 1024);
         const hrStart = performance.now();
         let samplesWritten = 0;
+        let playbackStarted = false;
         for (let offset = 0; offset < playbackData.length; offset += chunkSize) {
-          if (this.shouldStopPlayback) throw new Error('playback interrupted');
+          if (this.isPlaybackStopRequested(playbackId)) throw new Error('playback interrupted');
           const chunk = playbackData.subarray(offset, Math.min(offset + chunkSize, playbackData.length));
           const wrote = await this.androidAudioOutput?.write(chunk, this.volumeGain);
           if (!wrote) {
             throw new Error('Android audio output write failed');
+          }
+          if (!playbackStarted) {
+            playbackStarted = true;
+            try {
+              options.onPlaybackStarted?.();
+            } catch (error) {
+              logger.warn('Android playback start observer failed', error);
+            }
           }
           if (options.injectIntoMonitor) {
             this.emit('txMonitorAudioData', { samples: chunk, sampleRate: this.outputSampleRate });
@@ -2177,7 +2369,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       try {
         await playbackPromise;
       } finally {
-        if (this.currentPlaybackPromise === playbackPromise) {
+        this.stopRequestedPlaybackIds.delete(playbackId);
+        if (this.playbackSequence === playbackId && this.currentPlaybackPromise === playbackPromise) {
           this.playing = false;
           this.currentPlaybackPromise = null;
           this.currentPlaybackKind = null;
@@ -2191,12 +2384,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     if (!this.isOutputting || !this.rtAudioOutput) {
       throw new Error('audio output stream not started');
     }
+    if (this.hasPendingRtAudioPlayback()) {
+      throw new Error('RtAudio output has undrained audio from a previous playback');
+    }
 
     // 保存播放状态
     this.playing = true;
     this.playbackStartTime = playStartTime;
     this.currentPlaybackKind = playbackKind;
-    this.shouldStopPlayback = false;
 
     logger.info('starting audio playback', {
       playbackId,
@@ -2214,6 +2409,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     // 保存当前播放的Promise
     let playbackPromise: Promise<void> | null = null;
+    let playbackStartWaiter: RtAudioPlaybackStartWaiter | null = null;
     playbackPromise = (async () => {
       try {
       let playbackData: Float32Array;
@@ -2272,6 +2468,21 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       let submittedChunks = 0;
       let submittedSamples = 0;
       let writeFailCount = 0;
+      let consecutiveWriteFailCount = 0;
+      let resolvePlaybackStarted!: () => void;
+      const playbackStartedPromise = new Promise<void>((resolve) => {
+        resolvePlaybackStarted = resolve;
+      });
+      playbackStartWaiter = this.beginRtAudioPlaybackStartWaiter(
+        playbackId,
+        () => {
+          try {
+            options.onPlaybackStarted?.();
+          } finally {
+            resolvePlaybackStarted();
+          }
+        },
+      );
       let postGainPeak = 0;
       let postGainSumSquares = 0;
       let postGainSampleCount = 0;
@@ -2344,7 +2555,18 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               this.volumeGain,
               Boolean(options.injectIntoMonitor),
             );
-            this.rtAudioOutput.write(encoded.buffer);
+            // The RtAudio callback is the first reliable indication that the
+            // device consumed a frame. Count the in-flight write before
+            // entering native code because some backends invoke the callback
+            // synchronously from write().
+            this.noteRtAudioChunkPending(playbackStartWaiter!);
+            try {
+              this.rtAudioOutput.write(encoded.buffer);
+            } catch (error) {
+              this.rollbackRtAudioChunkPending(playbackStartWaiter!);
+              throw error;
+            }
+            consecutiveWriteFailCount = 0;
             if (encoded.monitorChunk && encoded.monitorChunk.length > 0) {
               this.emit('txMonitorAudioData', { samples: encoded.monitorChunk, sampleRate: this.outputSampleRate });
             }
@@ -2359,6 +2581,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             return true;
           } catch (error) {
             writeFailCount++;
+            consecutiveWriteFailCount++;
             if (writeFailCount <= 3 || writeFailCount % 100 === 0) {
               logger.warn('audio output write failed', {
                 playbackId,
@@ -2371,6 +2594,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
                 error: this.describeError(error),
               });
             }
+            if (consecutiveWriteFailCount >= RTAUDIO_TX_MAX_CONSECUTIVE_WRITE_FAILURES) {
+              throw new Error(
+                `audio output write failed ${consecutiveWriteFailCount} consecutive times: ${this.describeError(error)}`,
+              );
+            }
             return false;
           }
         };
@@ -2378,7 +2606,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         const interval = setInterval(() => {
           try {
             // Check stop signal
-            if (this.shouldStopPlayback) {
+            if (this.isPlaybackStopRequested(playbackId)) {
               clearInterval(interval);
               logger.debug(`stop signal received, aborting playback (submitted ${cursor}/${totalChunks} chunks)`);
               reject(new Error('playback interrupted'));
@@ -2422,7 +2650,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
             // Catch-up write: write multiple chunks in one tick if behind schedule
             while (cursor < totalChunks && samplesWritten < targetSamples) {
-              if (this.shouldStopPlayback) break;
+              if (this.isPlaybackStopRequested(playbackId)) break;
               if (!writeChunk(cursor)) break;
               cursor++;
             }
@@ -2458,11 +2686,27 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }, TICK_MS);
       });
 
+      if (options.onPlaybackStarted) {
+        let timer: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([
+            playbackStartedPromise,
+            new Promise<void>((_, reject) => {
+              timer = setTimeout(() => {
+                reject(new Error('RtAudio playback did not reach device consumption in time'));
+              }, RTAUDIO_TX_START_ACK_TIMEOUT_MS);
+            }),
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      }
+
       if (consumeDiagnosticsEnabled) {
         const drainTimeoutMs = Math.max(RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS, prebufferMs + 500);
         const drainDeadline = Date.now() + drainTimeoutMs;
         while (
-          !this.shouldStopPlayback &&
+          !this.isPlaybackStopRequested(playbackId) &&
           this.outputFramesConsumed < submittedChunks &&
           Date.now() < drainDeadline
         ) {
@@ -2519,10 +2763,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
         throw error;
       } finally {
+        this.stopRequestedPlaybackIds.delete(playbackId);
+        if (playbackStartWaiter) {
+          this.finishRtAudioPlaybackStartWaiter(playbackStartWaiter);
+        }
         // Safe if the playback failed before the watchdog was created.
         this.outputWatchdogGeneration++;
         // 清理播放状态
-        if (this.currentPlaybackPromise === playbackPromise) {
+        if (this.playbackSequence === playbackId && this.currentPlaybackPromise === playbackPromise) {
           this.playing = false;
           this.currentAudioData = null;
           this.currentPlaybackPromise = null;

@@ -61,7 +61,7 @@ async function createContext(
 describe('PluginContextFactory event bus access', () => {
   it('does not expose ctx.eventBus without permission', async () => {
     const ctx = await createContext(createPlugin());
-    expect(ctx.eventBus).toBeUndefined();
+    expect('eventBus' in ctx).toBe(false);
   });
 
   it('exposes ctx.eventBus with permission and forwards publisher metadata', async () => {

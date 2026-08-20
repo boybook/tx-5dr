@@ -11,6 +11,7 @@ import { ConfigManager } from '../config/config-manager.js';
 import { ListenerManager } from './ListenerManager.js';
 import type { TransmissionPipeline } from './TransmissionPipeline.js';
 import type { EngineLifecycle } from './EngineLifecycle.js';
+import type { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
 import { createLogger } from '../utils/logger.js';
 import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
 
@@ -23,6 +24,7 @@ export interface RadioBridgeDeps {
   slotPackManager: SlotPackManager;
   operatorManager: RadioOperatorManager;
   getTransmissionPipeline: () => TransmissionPipeline;
+  physicalTxCoordinator?: PhysicalTxCoordinator;
   getEngineLifecycle: () => EngineLifecycle;
   getEngineMode: () => EngineMode;
   getCurrentModeName?: () => string;
@@ -195,6 +197,20 @@ export class RadioBridge {
     logger.info('Radio connected');
 
     const { engineEmitter, radioManager } = this.deps;
+    // A disconnect can happen after the old CAT session has already gone
+    // away, so the previous lease may be left in `unknown` rather than being
+    // released by the normal force-stop path.  The PhysicalRadioManager
+    // performs its post-connect PTT-off safety write before emitting
+    // `connected`; retry the coordinator's release against this new session
+    // now.  Failure deliberately leaves the lease unknown and blocks TX.
+    const recovered = await this.deps.physicalTxCoordinator?.retryUnknownStop('radio reconnected');
+    const recoverySnapshot = this.deps.physicalTxCoordinator?.getSnapshot?.();
+    if (recovered && !recovered.success && recoverySnapshot?.phase !== 'idle') {
+      logger.warn('Physical TX lease remains unknown after radio reconnect', {
+        reason: recovered.reason,
+        error: recovered.error,
+      });
+    }
     const radioInfo = await radioManager.getRadioInfo();
     const radioConfig = radioManager.getConfig();
     const tunerCapabilities = await radioManager.getTunerCapabilities();
@@ -207,6 +223,16 @@ export class RadioBridge {
       tunerCapabilities,
       radioManager,
     }));
+
+    // A failed physical PTT release is a hardware-safety condition, not a
+    // transient automation error. Keep the previous running intent pending,
+    // but do not restart the engine while the coordinator is still unknown;
+    // otherwise it can keep producing deferred TX requests against a radio
+    // whose physical lease is not safe to use.
+    if (recoverySnapshot?.phase === 'unknown') {
+      logger.warn('Radio connected but physical TX recovery is still unknown; keeping automation stopped');
+      return;
+    }
 
     await this.restoreRunningStateIfNeeded();
   }

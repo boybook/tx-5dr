@@ -17,6 +17,29 @@ async function createPluginRoot(): Promise<string> {
 }
 
 describe('PluginLoader runtime logs', () => {
+  it('canonicalizes and freezes loaded permission declarations', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'frozen-plugin');
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        apiVersion: 2,
+        name: 'frozen-plugin',
+        version: '1.0.0',
+        type: 'utility',
+        permissions: ['radio:read', 'radio:read'],
+      };
+    `, 'utf8');
+
+    const [loaded] = await new PluginLoader().scanAndLoad(pluginRoot);
+
+    expect(loaded?.definition.permissions).toEqual(['radio:read']);
+    expect(Object.isFrozen(loaded?.definition)).toBe(true);
+    expect(Object.isFrozen(loaded?.definition.permissions)).toBe(true);
+    expect(() => loaded?.definition.permissions?.push('radio:control')).toThrow();
+    expect(loaded?.definition.permissions).toEqual(['radio:read']);
+  });
+
   it('emits load attempt and success logs for a valid plugin', async () => {
     const pluginRoot = await createPluginRoot();
     const pluginDir = join(pluginRoot, 'hello-plugin');
@@ -144,12 +167,13 @@ describe('PluginLoader runtime logs', () => {
     expect(errorLog?.message).toContain('Plugin definition validation failed');
   });
 
-  it('rejects transmit-control plugins without auto-call state declaration', async () => {
+  it('rejects transmit-control plugins without an eligibility declaration', async () => {
     const pluginRoot = await createPluginRoot();
     const pluginDir = join(pluginRoot, 'missing-autocall-state');
     await mkdir(pluginDir, { recursive: true });
     await writeFile(join(pluginDir, 'index.mjs'), `
       export default {
+        apiVersion: 2,
         name: 'missing-autocall-state',
         version: '1.0.0',
         type: 'utility',
@@ -167,7 +191,7 @@ describe('PluginLoader runtime logs', () => {
       && entry.level === 'error'
       && entry.directoryName === 'missing-autocall-state');
     expect(errorLog).toBeDefined();
-    expect(JSON.stringify(errorLog?.details)).toContain('isAutoCallEnabled');
+    expect(JSON.stringify(errorLog?.details)).toContain('isTransmitControlEnabled');
   });
 
   it('rejects global transmit-control plugins', async () => {
@@ -176,6 +200,7 @@ describe('PluginLoader runtime logs', () => {
     await mkdir(pluginDir, { recursive: true });
     await writeFile(join(pluginDir, 'index.mjs'), `
       export default {
+        apiVersion: 2,
         name: 'global-transmit-control',
         version: '1.0.0',
         type: 'utility',
@@ -198,17 +223,18 @@ describe('PluginLoader runtime logs', () => {
     expect(JSON.stringify(errorLog?.details)).toContain('operator instance scope');
   });
 
-  it('loads operator-scoped transmit-control plugins with auto-call state declaration', async () => {
+  it('loads operator-scoped transmit-control integrations without classifying them as auto-call', async () => {
     const pluginRoot = await createPluginRoot();
     const pluginDir = join(pluginRoot, 'valid-transmit-control');
     await mkdir(pluginDir, { recursive: true });
     await writeFile(join(pluginDir, 'index.mjs'), `
       export default {
+        apiVersion: 2,
         name: 'valid-transmit-control',
         version: '1.0.0',
         type: 'utility',
         permissions: ['operator:transmit-control'],
-        isAutoCallEnabled() { return true; },
+        isTransmitControlEnabled() { return true; },
       };
     `, 'utf8');
 
@@ -217,6 +243,8 @@ describe('PluginLoader runtime logs', () => {
 
     expect(loaded).toHaveLength(1);
     expect(loaded[0]?.definition.name).toBe('valid-transmit-control');
+    expect(loaded[0]?.definition.isAutoCallEnabled).toBeUndefined();
+    expect(loaded[0]?.definition.isTransmitControlEnabled?.({ config: {} })).toBe(true);
   });
 
   it('rejects global plugins that implement the frequency-change hook', async () => {

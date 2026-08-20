@@ -2,11 +2,13 @@ import {
   type AutoCallProposal,
   type LastMessageInfo,
   type ParsedFT8Message,
-  type PluginContext,
-  type PluginDefinition,
+  type PluginContextFor,
   type SlotInfo,
+  definePlugin,
   normalizeCallsign,
 } from '@tx5dr/plugin-api';
+
+type PluginContext = PluginContextFor<readonly ['operator:transmit-control', 'logbook:read']>;
 import type { QSORecord } from '@tx5dr/contracts';
 import {
   compileLegacyAutoRegexTextMatchRules,
@@ -137,12 +139,13 @@ function findMatchedTarget(
   return matches[0] ?? null;
 }
 
-export const watchedCallsignAutocallPlugin: PluginDefinition = {
+export const watchedCallsignAutocallPlugin = definePlugin({
+  apiVersion: 2,
   name: 'watched-callsign-autocall',
   version: '1.0.0',
   type: 'utility',
   description: 'Automatically start calling watched callsigns when they appear while the operator is idle',
-  permissions: ['operator:transmit-control'],
+  permissions: ['operator:transmit-control', 'logbook:read'],
 
   settings: {
     watchOverview: {
@@ -319,7 +322,7 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
       };
     },
   },
-};
+});
 
 export const watchedCallsignAutocallLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,

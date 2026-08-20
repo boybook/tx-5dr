@@ -55,6 +55,7 @@ import {
 } from '../state-machines/radioStateMachine.js';
 import { RadioState, type RadioInput } from '../state-machines/types.js';
 import { ConfigManager } from '../config/config-manager.js';
+import { buildFrequencyOperatingStateRequest } from './frequencyRadioMode.js';
 
 const logger = createLogger('PhysicalRadioManager');
 const NORMAL_FREQUENCY_POLL_MS = 2000;
@@ -138,7 +139,10 @@ function isRecoverableTciWriteTimeout(error: unknown): boolean {
     return false;
   }
   if (error.context?.writeTimeout === true || error.context?.recoverable === true) {
-    return true;
+    // A PTT state acknowledgement timeout is different from an optional
+    // frequency/mode confirmation timeout: the TRX command may still arrive
+    // after this promise rejects, so the session must be treated as poisoned.
+    return error.context?.stateUncertain !== true;
   }
   return collectErrorMessages(error).some((message) => {
     const lowerMessage = message.toLowerCase();
@@ -479,6 +483,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   private sessionMutationTail: Promise<unknown> = Promise.resolve();
   private sessionMutationActive = false;
+  private connectionGeneration = 0;
 
   /**
    * 连接事件清理器列表（用于断开时清理）
@@ -517,6 +522,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   getConfig(): HamlibConfig {
     return { ...this.currentConfig };
+  }
+
+  /** Monotonic identity for the currently adopted physical CAT session. */
+  getConnectionGeneration(): number {
+    return this.connectionGeneration;
   }
 
   /**
@@ -808,6 +818,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
           try { await this.connection.disconnect(reason); } catch {}
           this.cleanupConnectionListeners();
           this.connection = null;
+          this.connectionGeneration += 1;
         }
 
         // 然后通知状态机
@@ -1165,34 +1176,70 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
   /**
    * 虚拟频率：发射结束后把 dial 频率恢复到接收频点。
-   * 兜底保证——即使恢复写入失败也清除平移守卫并记录 error，避免接收 dial 永久跑偏。
+   * 恢复写入未确认前保留平移守卫，确保一次失败的恢复不会被误判为安全；
+   * 后续 retry 可以重新提交同一个恢复目标。
    */
   async clearTxDialOffset(): Promise<void> {
     if (!this.txDialOffsetActive) {
       return;
     }
     const restore = this.txDialRestoreFrequency;
-    // 释放守卫后走标准 setFrequency 恢复：重建 settle 窗口与频率写跟踪，
-    // 因恢复目标 == 原接收 dial == 当前 lastKnownFrequency，前端不会产生跳变。
-    this.txDialOffsetActive = false;
-    this.txDialRestoreFrequency = null;
-    this.txDialCurrentOffsetHz = 0;
     if (restore === null || restore <= 0) {
+      this.txDialOffsetActive = false;
+      this.txDialRestoreFrequency = null;
+      this.txDialCurrentOffsetHz = 0;
       return;
     }
     try {
+      // 保持守卫直到硬件确认恢复成功，避免频率监测或新发射进入不确定窗口。
       const ok = await this.setFrequency(restore);
       if (!ok) {
-        logger.error('Failed to restore RX dial after TX dial offset', { restoreHz: restore });
+        throw new Error(`Failed to restore RX dial after TX dial offset: ${restore} Hz`);
       } else {
+        this.txDialOffsetActive = false;
+        this.txDialRestoreFrequency = null;
+        this.txDialCurrentOffsetHz = 0;
         logger.debug('TX dial offset cleared, RX dial restored', { rxDialHz: restore });
       }
     } catch (error) {
       logger.error(`Failed to restore RX dial after TX dial offset: ${(error as Error).message}`);
+      throw error;
     }
   }
 
-  async applyOperatingState(request: ApplyOperatingStateRequest): Promise<ApplyOperatingStateResult> {
+  async applyOperatingState(
+    request: ApplyOperatingStateRequest,
+    options: { expectedConnectionGeneration?: number } = {},
+  ): Promise<ApplyOperatingStateResult> {
+    return this.runSessionMutation('applyOperatingState', async () => {
+      if (
+        options.expectedConnectionGeneration !== undefined
+        && options.expectedConnectionGeneration !== this.connectionGeneration
+      ) {
+        throw new Error('radio connection changed before operating state could be applied');
+      }
+
+      const resumeFrequencyMonitoring = this.pauseFrequencyMonitoringForMutation();
+      try {
+        const result = await this.applyOperatingStateInternal(request);
+        if (
+          options.expectedConnectionGeneration !== undefined
+          && options.expectedConnectionGeneration !== this.connectionGeneration
+        ) {
+          throw new Error('radio connection changed while operating state was being applied');
+        }
+        return result;
+      } finally {
+        if (resumeFrequencyMonitoring && this.connection) {
+          this.startFrequencyMonitoring();
+        }
+      }
+    });
+  }
+
+  private async applyOperatingStateInternal(
+    request: ApplyOperatingStateRequest,
+  ): Promise<ApplyOperatingStateResult> {
     if (!this.connection) {
       throw new Error('radio not connected');
     }
@@ -1322,8 +1369,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   async setPTT(state: boolean): Promise<void> {
     if (!this.connection) {
-      logger.error('Radio not connected, cannot set PTT');
-      return;
+      throw new Error('Radio not connected, cannot set PTT');
     }
 
     try {
@@ -1334,17 +1380,18 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       logger.debug(`PTT set: ${state ? 'TX' : 'RX'}`);
     } catch (error) {
       if (isRecoverableTciWriteTimeout(error)) {
-        logger.warn('TCI write timeout tolerated', {
+        logger.warn('TCI PTT write result is uncertain', {
           operation: 'setPTT',
           ptt: state,
           error: (error as Error).message,
         });
-        return;
+        throw new Error(`PTT ${state ? 'start' : 'stop'} result is uncertain: ${(error as Error).message}`);
       }
       logger.error(
         `PTT ${state ? 'TX' : 'RX'} failed: ${(error as Error).message}`
       );
       this.handleConnectionError(error as Error);
+      throw error;
     }
   }
 
@@ -2314,6 +2361,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     this.cleanupConnectionListeners();
     try { await this.connection.disconnect('preparing new connection'); } catch {}
     this.connection = null;
+    this.connectionGeneration += 1;
 
     if (config.type === 'icom-wlan') {
       logger.debug('Waiting for ICOM radio to release old connection');
@@ -2346,6 +2394,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   private activateConnectedSession(connection: IRadioConnection): void {
+    this.connectionGeneration += 1;
     connection.startBackgroundTasks?.();
     this.startFrequencyMonitoring();
     void this.startTunerMonitoring();
@@ -2396,6 +2445,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       this.cleanupConnectionListeners();
       this.connection = null;
+      this.connectionGeneration += 1;
     }
 
     logger.info('Disconnected');
@@ -2563,6 +2613,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       this.cleanupConnectionListeners();
       // 不调用 connection.disconnect()，因为连接已断（被动断线）
       this.connection = null;
+      this.connectionGeneration += 1;
     }
   }
 
@@ -2591,107 +2642,113 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
   private async restoreSavedFrequencyIfAvailable(): Promise<number | null> {
     try {
-      const voiceState = this.getSavedStartupVoiceState();
-      if (voiceState) {
-        const result = await this.applyOperatingState({
-          frequency: voiceState.frequency,
-          mode: voiceState.radioMode,
-          bandwidth: voiceState.radioMode ? 'nochange' : undefined,
-          options: voiceState.radioMode ? { intent: 'voice' } : undefined,
-          tolerateModeFailure: true,
+      const saved = await this.getSavedStartupOperatingState();
+      if (!saved) {
+        logger.info('Bootstrap operating state skipped: no valid saved state');
+        return null;
+      }
+
+      const result = await this.applyOperatingStateInternal(saved.request);
+      if (!result.frequencyApplied) {
+        logger.warn('Bootstrap operating state failed', {
+          engineMode: saved.engineMode,
+          frequencyHz: saved.frequency,
+          radioMode: saved.request.mode,
         });
-
-        if (!result.frequencyApplied) {
-          logger.warn(`Bootstrap voice frequency restore failed: ${(voiceState.frequency / 1000000).toFixed(3)} MHz`);
-          return null;
-        }
-
-        if (result.modeError) {
-          logger.warn(`Bootstrap voice frequency restored but radio mode restore failed: ${result.modeError.message}`);
-        }
-
-        logger.info(`Bootstrap voice operating state restored: ${(voiceState.frequency / 1000000).toFixed(3)} MHz${voiceState.radioMode ? ` (${voiceState.radioMode})` : ''}`);
-        return voiceState.frequency;
-      }
-
-      const targetFrequency = this.getSavedStartupFrequency();
-      if (!targetFrequency) {
-        logger.info('No valid saved frequency config, skipping bootstrap restore');
         return null;
       }
 
-      const success = await this.setFrequency(targetFrequency);
-      if (!success) {
-        logger.warn(`Bootstrap frequency restore failed: ${(targetFrequency / 1000000).toFixed(3)} MHz`);
-        return null;
-      }
-
-      logger.info(`Bootstrap frequency restored: ${(targetFrequency / 1000000).toFixed(3)} MHz`);
-      return targetFrequency;
+      const status = saved.request.mode && !result.modeApplied
+        ? 'partially-applied'
+        : 'applied';
+      logger.info(`Bootstrap operating state ${status}`, {
+        engineMode: saved.engineMode,
+        frequencyHz: saved.frequency,
+        radioMode: saved.request.mode,
+        modeError: result.modeError?.message,
+      });
+      return saved.frequency;
     } catch (error) {
       logger.warn(
-        `Bootstrap frequency restore failed, will fall through to captureInitialFrequency: ` +
+        `Bootstrap operating state failed, will fall through to captureInitialFrequency: ` +
         `${(error as Error).message}`
       );
       return null;
     }
   }
 
-  private getSavedStartupFrequency(): number | null {
+  private async getSavedStartupOperatingState(): Promise<{
+    engineMode: 'digital' | 'voice' | 'cw';
+    frequency: number;
+    request: ApplyOperatingStateRequest;
+  } | null> {
     const engineMode = this.configManager.getLastEngineMode();
 
     if (engineMode === 'voice') {
-      return null;
+      const lastVoice = this.configManager.getLastVoiceFrequency();
+      if (!lastVoice || !this.validateSavedStartupFrequency(lastVoice.frequency, 'voice')) {
+        return null;
+      }
+      return {
+        engineMode,
+        frequency: lastVoice.frequency,
+        request: {
+          frequency: lastVoice.frequency,
+          mode: lastVoice.radioMode,
+          bandwidth: lastVoice.radioMode ? 'nochange' : undefined,
+          options: lastVoice.radioMode ? { intent: 'voice' } : undefined,
+          tolerateModeFailure: true,
+        },
+      };
+    }
+
+    if (engineMode === 'cw') {
+      const lastCW = this.configManager.getLastCWFrequency();
+      const frequency = lastCW?.frequency || await this.getFrequency().catch(() => 0);
+      if (!this.validateSavedStartupFrequency(frequency, 'cw')) {
+        return null;
+      }
+      const radioMode = lastCW?.radioMode || 'CW';
+      return {
+        engineMode,
+        frequency,
+        request: {
+          frequency,
+          mode: radioMode,
+          bandwidth: 'nochange',
+          options: { intent: 'cw' },
+          tolerateModeFailure: true,
+        },
+      };
     }
 
     const lastDigital = this.configManager.getLastSelectedFrequency();
-    if (!lastDigital) {
+    if (!lastDigital || !this.validateSavedStartupFrequency(lastDigital.frequency, 'digital')) {
       return null;
     }
-
-    if (!isFrequencyInHamlibRange(lastDigital.frequency)) {
-      logger.warn(
-        `Invalid saved digital frequency detected: ${lastDigital.frequency} Hz ` +
-        `(valid range: ${HAMLIB_MIN_FREQUENCY_HZ}-${HAMLIB_MAX_FREQUENCY_HZ} Hz). ` +
-        'Clearing saved digital config to prevent recurrence.'
-      );
-      void this.configManager.clearLastSelectedFrequency().catch(err =>
-        logger.warn('Failed to clear invalid digital frequency from config:', err)
-      );
-      return null;
-    }
-
-    logger.info(`Restoring digital frequency during bootstrap: ${(lastDigital.frequency / 1000000).toFixed(3)} MHz (${lastDigital.description || lastDigital.mode})`);
-    return lastDigital.frequency;
+    const effectiveMode = this.configManager.getLastDigitalModeName() || lastDigital.mode;
+    return {
+      engineMode,
+      frequency: lastDigital.frequency,
+      request: buildFrequencyOperatingStateRequest({
+        frequency: lastDigital.frequency,
+        radioMode: lastDigital.radioMode,
+        effectiveMode,
+        engineMode: 'digital',
+        digitalModeRadioMode: this.configManager.getRadioConfig().digitalModeRadioMode,
+      }),
+    };
   }
 
-  private getSavedStartupVoiceState(): { frequency: number; radioMode?: string } | null {
-    if (this.configManager.getLastEngineMode() !== 'voice') {
-      return null;
-    }
-
-    const lastVoice = this.configManager.getLastVoiceFrequency();
-    if (!lastVoice) {
-      return null;
-    }
-
-    if (!isFrequencyInHamlibRange(lastVoice.frequency)) {
+  private validateSavedStartupFrequency(frequency: number, engineMode: 'digital' | 'voice' | 'cw'): boolean {
+    if (!isFrequencyInHamlibRange(frequency)) {
       logger.warn(
-        `Invalid saved voice frequency detected: ${lastVoice.frequency} Hz ` +
-        `(valid range: ${HAMLIB_MIN_FREQUENCY_HZ}-${HAMLIB_MAX_FREQUENCY_HZ} Hz). ` +
-        'Clearing saved voice config to prevent recurrence.'
+        `Invalid saved ${engineMode} frequency detected: ${frequency} Hz `
+        + `(valid range: ${HAMLIB_MIN_FREQUENCY_HZ}-${HAMLIB_MAX_FREQUENCY_HZ} Hz)`,
       );
-      void this.configManager.clearLastVoiceFrequency().catch(err =>
-        logger.warn('Failed to clear invalid voice frequency from config:', err)
-      );
-      return null;
+      return false;
     }
-
-    logger.info(`Restoring voice operating state during bootstrap: ${(lastVoice.frequency / 1000000).toFixed(3)} MHz (${lastVoice.description || lastVoice.radioMode || 'voice'})`);
-    return {
-      frequency: lastVoice.frequency,
-      radioMode: lastVoice.radioMode,
-    };
+    return true;
   }
 
   private async captureInitialFrequency(): Promise<void> {
@@ -2959,6 +3016,18 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     this.frequencyMonitoringActive = true;
     this.frequencyMonitoringGeneration += 1;
     this.scheduleNextFrequencyPoll();
+  }
+
+  /** Pause polling without discarding the last confirmed projection. */
+  private pauseFrequencyMonitoringForMutation(): boolean {
+    const wasActive = this.frequencyMonitoringActive;
+    this.frequencyMonitoringActive = false;
+    this.frequencyMonitoringGeneration += 1;
+    if (this.frequencyPollingInterval) {
+      clearTimeout(this.frequencyPollingInterval);
+      this.frequencyPollingInterval = null;
+    }
+    return wasActive;
   }
 
   /**

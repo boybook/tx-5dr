@@ -1,5 +1,5 @@
-import type { AudioStreamManager } from '../audio/AudioStreamManager.js';
 import type { PhysicalRadioManager } from './PhysicalRadioManager.js';
+import type { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
 import { createLogger } from '../utils/logger.js';
 import type { TuneToneStatus } from '@tx5dr/contracts';
 
@@ -15,10 +15,9 @@ const RAMP_MS = 20;
 
 export interface TuneToneControllerDeps {
   radioManager: PhysicalRadioManager;
-  audioStreamManager: AudioStreamManager;
+  physicalTxCoordinator: PhysicalTxCoordinator;
   isTransmitBusy: () => boolean;
   getOperatorToneHz: (operatorId?: string | null) => number | null;
-  setSoftwarePttActive: (active: boolean) => void;
   emitStatus: (status: TuneToneStatus) => void;
 }
 
@@ -35,6 +34,7 @@ export class TuneToneController {
   private maxDurationMs = DEFAULT_MAX_DURATION_MS;
   private timeout: NodeJS.Timeout | null = null;
   private generation = 0;
+  private physicalLeaseId: string | null = null;
 
   constructor(private readonly deps: TuneToneControllerDeps) {}
 
@@ -69,34 +69,46 @@ export class TuneToneController {
     this.deps.emitStatus(this.getStatus());
 
     try {
-      await this.deps.radioManager.setPTT(true);
+      const leaseId = await this.deps.physicalTxCoordinator.acquireLease({
+        source: 'tune-tone',
+        reason: 'tune tone',
+        playbackKind: 'tune-tone',
+        deferActiveUntilAudio: true,
+      });
+      this.physicalLeaseId = leaseId;
+      if (this.generation !== currentGeneration || !this.active) {
+        await this.deps.physicalTxCoordinator.forceInterruptLease(
+          leaseId,
+          'tune tone cancelled while starting',
+        );
+        this.physicalLeaseId = null;
+        return;
+      }
       this.pttAsserted = true;
-      this.deps.setSoftwarePttActive(true);
       this.timeout = setTimeout(() => {
         void this.stop('timeout').catch((error) => {
           logger.error('Failed to auto-stop tune tone', error);
         });
-      }, this.maxDurationMs);
+      }, this.maxDurationMs + 1000);
 
       const audio = generateTone(toneHz, this.maxDurationMs, TONE_SAMPLE_RATE);
-      void this.deps.audioStreamManager.playAudio(audio, TONE_SAMPLE_RATE, {
-        injectIntoMonitor: true,
+      const completion = this.deps.physicalTxCoordinator.playAudioOnLease(this.physicalLeaseId, {
+        audioData: audio,
+        sampleRate: TONE_SAMPLE_RATE,
         playbackKind: 'tune-tone',
-      })
-        .then(() => {
+        playbackOptions: { injectIntoMonitor: true },
+      });
+      await Promise.resolve();
+      void completion
+        .then((result) => {
           if (this.generation === currentGeneration && this.active) {
-            void this.stop('complete');
+            this.finishAfterPhysicalCompletion(result.error);
           }
         })
         .catch((error) => {
-          const interrupted = error instanceof Error && error.message === 'playback interrupted';
           if (this.generation === currentGeneration && this.active) {
-            if (interrupted) {
-              void this.stop('playback-interrupted');
-            } else {
-              logger.error('Tune tone playback failed', error);
-              void this.stop('playback-error', error instanceof Error ? error.message : String(error));
-            }
+            logger.error('Tune tone playback failed', error);
+            this.finishAfterPhysicalCompletion(error instanceof Error ? error.message : String(error));
           }
         });
     } catch (error) {
@@ -106,7 +118,7 @@ export class TuneToneController {
   }
 
   async stop(_reason = 'manual', error?: string): Promise<void> {
-    if (!this.active && !this.pttAsserted) {
+    if (!this.active && !this.pttAsserted && !this.physicalLeaseId) {
       if (error) {
         this.deps.emitStatus(this.getStatus(error));
       }
@@ -116,30 +128,38 @@ export class TuneToneController {
     ++this.generation;
     this.clearTimeout();
 
-    const shouldStopPlayback = this.deps.audioStreamManager.isPlaying('tune-tone');
     const shouldReleasePtt = this.pttAsserted;
     this.active = false;
     this.toneHz = null;
     this.startedAt = null;
 
-    if (shouldStopPlayback) {
-      try {
-        await this.deps.audioStreamManager.stopCurrentPlayback({ kind: 'tune-tone' });
-      } catch (stopError) {
-        logger.warn('Stopping tune tone playback failed', stopError);
-      }
-    }
-
     if (shouldReleasePtt) {
       try {
-        await this.deps.radioManager.setPTT(false);
+        if (this.physicalLeaseId) {
+          const snapshot = this.deps.physicalTxCoordinator.getSnapshot();
+          if (snapshot.leaseId === this.physicalLeaseId && snapshot.phase === 'unknown') {
+            await this.deps.physicalTxCoordinator.retryUnknownStop(`tune tone stop retry: ${_reason}`);
+          } else {
+            await this.deps.physicalTxCoordinator.forceInterruptLease(
+              this.physicalLeaseId,
+              `tune tone stop: ${_reason}`,
+            );
+          }
+        }
       } catch (pttError) {
         logger.warn('Releasing tune tone PTT failed', pttError);
       }
-      this.pttAsserted = false;
+      const snapshot = this.deps.physicalTxCoordinator.getSnapshot();
+      const releaseUncertain = snapshot.leaseId === this.physicalLeaseId
+        && snapshot.phase === 'unknown';
+      if (!releaseUncertain) {
+        this.pttAsserted = false;
+        this.physicalLeaseId = null;
+      } else {
+        error = error ?? 'PTT release unconfirmed';
+      }
     }
 
-    this.deps.setSoftwarePttActive(false);
     this.deps.emitStatus(this.getStatus(error));
   }
 
@@ -156,6 +176,16 @@ export class TuneToneController {
       clearTimeout(this.timeout);
       this.timeout = null;
     }
+  }
+
+  private finishAfterPhysicalCompletion(error?: string): void {
+    this.clearTimeout();
+    this.active = false;
+    this.pttAsserted = false;
+    this.physicalLeaseId = null;
+    this.toneHz = null;
+    this.startedAt = null;
+    this.deps.emitStatus(this.getStatus(error));
   }
 }
 

@@ -196,6 +196,35 @@ describe('radioRoutes authorization', () => {
     expect(response.statusCode).toBe(403);
   });
 
+  it('runs temporary PTT tests through a complete physical lease', async () => {
+    const { runTemporaryPhysicalPttTest } = await import('../radio.js');
+    const setPTT = vi.fn().mockResolvedValue(undefined);
+
+    await runTemporaryPhysicalPttTest(
+      { isConnected: () => true, setPTT } as any,
+      500,
+      vi.fn().mockResolvedValue(undefined),
+    );
+
+    expect(setPTT.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it('retries an unconfirmed temporary PTT stop without reporting success', async () => {
+    const { runTemporaryPhysicalPttTest } = await import('../radio.js');
+    const setPTT = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('USB write failed'))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(runTemporaryPhysicalPttTest(
+      { isConnected: () => true, setPTT } as any,
+      500,
+      vi.fn().mockResolvedValue(undefined),
+    )).rejects.toThrow('USB write failed');
+
+    expect(setPTT.mock.calls).toEqual([[true], [false], [false]]);
+  });
+
   it('reuses an already-open CW keyer backend for CW hardware tests', async () => {
     existingCWKeyerManager = {
       getStatus: vi.fn(() => ({ active: false })),

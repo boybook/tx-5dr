@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { QSORecord } from '@tx5dr/contracts';
 import type { LogbookSyncProvider, SyncUploadOptions, SyncUploadResult } from '@tx5dr/plugin-api';
-import { LogbookSyncHost } from '../LogbookSyncHost.js';
+import { LogbookSyncHost, type LogbookSyncProviderOwner } from '../LogbookSyncHost.js';
 
 function createQso(id: string): QSORecord {
   return {
@@ -51,6 +51,24 @@ function createProvider(
   } as LogbookSyncProvider & { upload: ReturnType<typeof vi.fn> };
 }
 
+function createOwner(generation = 1): LogbookSyncProviderOwner & { active: boolean } {
+  return {
+    generation,
+    active: true,
+    isCurrent() {
+      return this.active;
+    },
+    async invoke(_operation, callback) {
+      if (!this.active) throw new Error('PLUGIN_INVOCATION_EXPIRED');
+      return callback();
+    },
+    invokeSync(_operation, callback) {
+      if (!this.active) throw new Error('PLUGIN_INVOCATION_EXPIRED');
+      return callback();
+    },
+  };
+}
+
 describe('LogbookSyncHost', () => {
   it('returns structured failures when a provider is not registered', async () => {
     const host = new LogbookSyncHost();
@@ -79,7 +97,7 @@ describe('LogbookSyncHost', () => {
   it('passes only the completed QSO record to auto-upload providers', async () => {
     const host = new LogbookSyncHost();
     const provider = createProvider();
-    host.register('wavelog-sync', provider);
+    host.register('wavelog-sync', provider, createOwner());
 
     const qso = createQso('qso-1');
     host.onQSOComplete('BG5DRB', qso);
@@ -105,7 +123,7 @@ describe('LogbookSyncHost', () => {
         failed: 0,
       };
     });
-    host.register('wavelog-sync', provider);
+    host.register('wavelog-sync', provider, createOwner());
 
     const qso1 = createQso('qso-1');
     const qso2 = createQso('qso-2');
@@ -138,7 +156,7 @@ describe('LogbookSyncHost', () => {
       }
       return { uploaded: 0, skipped: 0, failed: 0 };
     });
-    host.register('wavelog-sync', provider);
+    host.register('wavelog-sync', provider, createOwner());
 
     host.onQSOComplete('BG5DRB', createQso('qso-1'));
     await flushAsyncWork();
@@ -154,5 +172,27 @@ describe('LogbookSyncHost', () => {
 
     expect(provider.upload).toHaveBeenCalledTimes(2);
     expect(provider.upload.mock.calls[1]?.[1]).toEqual({ trigger: 'manual' });
+  });
+
+  it('does not run queued provider work after its plugin generation is revoked', async () => {
+    const host = new LogbookSyncHost();
+    const firstUpload = deferred<SyncUploadResult>();
+    const provider = createProvider(async () => firstUpload.promise);
+    const owner = createOwner(7);
+    host.register('wavelog-sync', provider, owner);
+
+    host.onQSOComplete('BG5DRB', createQso('qso-1'));
+    await flushAsyncWork();
+    host.onQSOComplete('BG5DRB', createQso('qso-2'));
+    await flushAsyncWork();
+    expect(provider.upload).toHaveBeenCalledTimes(1);
+
+    owner.active = false;
+    host.unregisterByPlugin('wavelog-sync', 7);
+    firstUpload.resolve({ uploaded: 1, skipped: 0, failed: 0 });
+    await flushAsyncWork();
+
+    expect(provider.upload).toHaveBeenCalledTimes(1);
+    expect(host.getProviderInfo('wavelog')).toBeNull();
   });
 });
