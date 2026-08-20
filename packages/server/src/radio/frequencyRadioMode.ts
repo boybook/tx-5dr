@@ -21,6 +21,9 @@ function isDigitalAppMode(mode: string | undefined): boolean {
 export function normalizeDigitalModeRadioModePreference(
   value: unknown,
 ): DigitalModeRadioModePreference {
+  if (value === undefined || value === null) {
+    return 'usb';
+  }
   return value === 'usb' || value === 'usb-data' ? value : 'none';
 }
 

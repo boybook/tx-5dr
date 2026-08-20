@@ -115,20 +115,20 @@ async function createContext(plugin: LoadedPlugin, deps: PluginManagerDeps = cre
 }
 
 describe('PluginContextFactory host settings access', () => {
-  it('rejects settings namespaces when plugin permissions are missing', async () => {
+  it('does not expose settings when plugin permissions are missing', async () => {
     mockConfigManager();
     const ctx = await createContext(createPlugin());
 
-    await expect(ctx.settings.ft8.get()).rejects.toThrow("requires permission 'settings:ft8'");
-    await expect(ctx.settings.ntp.update({ servers: ['time.cloudflare.com'] })).rejects.toThrow("requires permission 'settings:ntp'");
+    expect(ctx.settings).toBeUndefined();
+    expect('settings' in ctx).toBe(false);
   });
 
   it('allows an ft8-permitted plugin to set guard backdoor values', async () => {
     const configManager = mockConfigManager();
     const ctx = await createContext(createPlugin(['settings:ft8']));
 
-    await expect(ctx.settings.ft8.update({ maxSameTransmissionCount: 0 })).resolves.toMatchObject({ maxSameTransmissionCount: 0 });
-    await expect(ctx.settings.ft8.update({ maxSameTransmissionCount: 999 })).resolves.toMatchObject({ maxSameTransmissionCount: 999 });
+    await expect(ctx.settings!.ft8!.update({ maxSameTransmissionCount: 0 })).resolves.toMatchObject({ maxSameTransmissionCount: 0 });
+    await expect(ctx.settings!.ft8!.update({ maxSameTransmissionCount: 999 })).resolves.toMatchObject({ maxSameTransmissionCount: 999 });
     expect(configManager.updateFT8Config).toHaveBeenCalledWith({ maxSameTransmissionCount: 0 });
     expect(configManager.updateFT8Config).toHaveBeenCalledWith({ maxSameTransmissionCount: 999 });
   });
@@ -137,10 +137,10 @@ describe('PluginContextFactory host settings access', () => {
     mockConfigManager();
     const ctx = await createContext(createPlugin(['settings:decode-windows', 'settings:ntp']));
 
-    await expect(ctx.settings.decodeWindows.update({ ft8: { preset: 'custom', customWindowTiming: [-1000] } })).resolves.toBeDefined();
-    await expect(ctx.settings.decodeWindows.update({ ft8: { preset: 'custom', customWindowTiming: [-99999] } })).rejects.toThrow();
-    await expect(ctx.settings.ntp.update({ servers: ['time.cloudflare.com'] })).resolves.toMatchObject({ servers: ['time.cloudflare.com'] });
-    await expect(ctx.settings.ntp.update({ servers: [] })).rejects.toThrow();
+    await expect(ctx.settings!.decodeWindows!.update({ ft8: { preset: 'custom', customWindowTiming: [-1000] } })).resolves.toBeDefined();
+    await expect(ctx.settings!.decodeWindows!.update({ ft8: { preset: 'custom', customWindowTiming: [-99999] } })).rejects.toThrow();
+    await expect(ctx.settings!.ntp!.update({ servers: ['time.cloudflare.com'] })).resolves.toMatchObject({ servers: ['time.cloudflare.com'] });
+    await expect(ctx.settings!.ntp!.update({ servers: [] })).rejects.toThrow();
   });
 
   it('emits realtimeSettingsChanged after realtime updates', async () => {
@@ -150,7 +150,7 @@ describe('PluginContextFactory host settings access', () => {
     deps.eventEmitter.on('realtimeSettingsChanged', realtimeSpy);
     const ctx = await createContext(createPlugin(['settings:realtime']), deps);
 
-    await ctx.settings.realtime.update({
+    await ctx.settings!.realtime!.update({
       transportPolicy: 'force-compat',
       rtcDataAudioPublicHost: 'radio.example.com',
       rtcDataAudioPublicUdpPort: 50110,

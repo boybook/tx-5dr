@@ -15,6 +15,7 @@ import type { CWKeyerBackend } from './CWKeyerBackend.js';
 import { getDataFilePath } from '../utils/app-paths.js';
 import { ConfigManager } from '../config/config-manager.js';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
+import type { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('CWKeyerManager');
@@ -134,6 +135,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
   private _startingPromise: Promise<void> | null = null;
   private configLoaded = false;
   private configLoadPromise: Promise<void> | null = null;
+  private physicalLeaseId: string | null = null;
   private rootDir: string | null = null;
   private config: CWKeyerConfig = {
     backend: 'cat',
@@ -158,7 +160,10 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     lastText: null,
   };
 
-  constructor(getRadioManager?: () => PhysicalRadioManager) {
+  constructor(
+    getRadioManager?: () => PhysicalRadioManager,
+    private readonly physicalTxCoordinator?: PhysicalTxCoordinator,
+  ) {
     super();
     this.backends = {
       cat: new RadioCatCWKeyerBackend(() => {
@@ -290,8 +295,10 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     try {
       await this.ensureStarted();
       phase = 'keyDown';
+      await this.acquirePhysicalLease('CW keyer test', () => backend.keyUp!());
       await backend.keyDown();
       keyDown = true;
+      this.confirmPhysicalLease();
       this.setStatus(this.statusFor(active.clientId, active.label, 'keying', null));
 
       await this.delay(Math.max(0, Math.round(durationMs)), active);
@@ -300,6 +307,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
         phase = 'keyUp';
         await backend.keyUp();
         keyDown = false;
+        await this.releasePhysicalLease('CW keyer test complete');
       }
     } catch (error) {
       if (keyDown) {
@@ -313,6 +321,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
           );
         }
       }
+      await this.releasePhysicalLease('CW keyer test failed').catch(() => undefined);
       throw new CWKeyerTestFailure(
         phase,
         error instanceof Error ? error.message : String(error),
@@ -359,8 +368,11 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
 
     if (action === 'key-down') {
       // 独占锁：同一时间只能一个客户端手键
-      if (this.active && this.active.mode === 'manual' && this.active.clientId !== clientId) {
-        logger.debug('Manual key rejected: already keying by another client');
+      if (this.active?.mode === 'manual') {
+        if (this.active.clientId !== clientId) {
+          logger.debug('Manual key rejected: already keying by another client');
+        }
+        // Browser/WS key repeat must not acquire a second physical lease.
         return;
       }
 
@@ -382,9 +394,12 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
 
       try {
         await this.ensureStarted();
+        await this.acquirePhysicalLease('CW manual key', () => backend.keyUp!());
         await backend.keyDown();
+        this.confirmPhysicalLease();
         this.setStatus(this.statusFor(clientId, label, 'keying', null));
       } catch (error) {
+        await this.abortPhysicalLease('CW manual key failed');
         this.active = null;
         throw error;
       }
@@ -394,8 +409,14 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
         return;
       }
 
-      await this.ensureStarted();
-      await backend.keyUp();
+      try {
+        await this.ensureStarted();
+        await backend.keyUp();
+        await this.releasePhysicalLease('CW manual key released');
+      } catch (error) {
+        await this.abortPhysicalLease('CW manual key release failed');
+        throw error;
+      }
       this.active = null;
       this.setStatus(this.idleStatus());
     }
@@ -609,7 +630,13 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     active.stopRequested = true;
     this.clearActiveDelay(active);
 
-    await this.getBackend().stopActive();
+    try {
+      await this.getBackend().stopActive();
+      await this.releasePhysicalLease(reason);
+    } catch (error) {
+      await this.abortPhysicalLease(reason);
+      throw error;
+    }
 
     this.active = null;
     logger.info('CW keying stopped', { reason });
@@ -630,18 +657,28 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     }
 
     const backend = this.getBackend();
-    await backend.sendText(text, this.config.wpm, {
-      isStopped: () => active.stopRequested || this.active !== active,
-      wait: async (ms) => {
-        await this.delay(ms, active);
-        return !active.stopRequested && this.active === active;
-      },
-      onKeyDown: () => {
-        if (!active.stopRequested && this.active === active) {
-          this.setStatus(this.statusFor(active.clientId, active.label, 'playing', active.messageId, null, active.currentText));
-        }
-      },
-    });
+    await this.acquirePhysicalLease('CW message', () => backend.stopActive());
+    if (active.stopRequested || this.active !== active) {
+      await this.abortPhysicalLease('CW message cancelled while starting');
+      return;
+    }
+    try {
+      await backend.sendText(text, this.config.wpm, {
+        isStopped: () => active.stopRequested || this.active !== active,
+        wait: async (ms) => {
+          await this.delay(ms, active);
+          return !active.stopRequested && this.active === active;
+        },
+        onKeyDown: () => {
+          if (!active.stopRequested && this.active === active) {
+            this.confirmPhysicalLease();
+            this.setStatus(this.statusFor(active.clientId, active.label, 'playing', active.messageId, null, active.currentText));
+          }
+        },
+      });
+    } finally {
+      await this.releasePhysicalLease('CW message complete');
+    }
 
     if (active.stopRequested || this.active !== active) {
       return;
@@ -707,6 +744,37 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       logger.warn('Failed to read active CW slot', { error: (error as Error).message });
       return null;
     }
+  }
+
+  private async acquirePhysicalLease(reason: string, interrupt: () => Promise<void>): Promise<void> {
+    if (!this.physicalTxCoordinator) return;
+    this.physicalLeaseId = await this.physicalTxCoordinator.acquireLease({
+      source: 'cw',
+      reason,
+      assertPtt: false,
+      deferActiveUntilAudio: true,
+      interrupt,
+    });
+  }
+
+  private confirmPhysicalLease(): void {
+    if (this.physicalTxCoordinator && this.physicalLeaseId) {
+      this.physicalTxCoordinator.markSelfKeyedLeaseActive(this.physicalLeaseId);
+    }
+  }
+
+  private async releasePhysicalLease(reason: string): Promise<void> {
+    if (!this.physicalTxCoordinator || !this.physicalLeaseId) return;
+    const leaseId = this.physicalLeaseId;
+    this.physicalLeaseId = null;
+    await this.physicalTxCoordinator.releaseLease(leaseId, reason);
+  }
+
+  private async abortPhysicalLease(reason: string): Promise<void> {
+    if (!this.physicalTxCoordinator || !this.physicalLeaseId) return;
+    const leaseId = this.physicalLeaseId;
+    this.physicalLeaseId = null;
+    await this.physicalTxCoordinator.forceInterruptLease(leaseId, reason).catch(() => undefined);
   }
 
   private delay(ms: number, active: ActiveKeying): Promise<void> {

@@ -15,12 +15,14 @@ npm install --save-dev @tx5dr/plugin-api
 ### TypeScript
 
 ```typescript
-import type { PluginDefinition, PluginContext } from '@tx5dr/plugin-api';
+import { definePlugin } from '@tx5dr/plugin-api';
 
-const plugin: PluginDefinition = {
+const plugin = definePlugin({
+  apiVersion: 2,
   name: 'my-plugin',
   version: '1.0.0',
   type: 'utility',
+  permissions: [],
   hooks: {
     onDecode(messages, ctx) {
       for (const msg of messages) {
@@ -28,7 +30,7 @@ const plugin: PluginDefinition = {
       }
     },
   },
-};
+});
 
 export default plugin;
 ```
@@ -36,11 +38,14 @@ export default plugin;
 ### JavaScript (with JSDoc types)
 
 ```javascript
-/** @type {import('@tx5dr/plugin-api').PluginDefinition} */
-export default {
+import { definePlugin } from '@tx5dr/plugin-api';
+
+export default definePlugin({
+  apiVersion: 2,
   name: 'my-plugin',
   version: '1.0.0',
   type: 'utility',
+  permissions: [],
   hooks: {
     onDecode(messages, ctx) {
       for (const msg of messages) {
@@ -48,31 +53,111 @@ export default {
       }
     },
   },
-};
+});
 ```
 
 ## Exports
 
 | Subpath | Description |
 |---------|-------------|
-| `@tx5dr/plugin-api` | Core types: `PluginDefinition`, `PluginContext`, `PluginHooks`, helper interfaces, radio/message types |
+| `@tx5dr/plugin-api` | `definePlugin()`, capability-derived contexts, hooks, structured command ports, and radio/message types |
 | `@tx5dr/plugin-api/testing` | Mock factories for unit testing: `createMockContext()`, `createMockSlotInfo()`, `createMockParsedMessage()`, `createMockEventBus()` |
 | `@tx5dr/plugin-api/bridge` | Ambient type declarations for the iframe Bridge SDK (`window.tx5dr`) |
 
-## Radio Permissions
+## Capability Model
 
-Server-side plugins can use `ctx.radio` to inspect negotiated radio capabilities and, when explicitly permitted, control radio capabilities or physical power:
+Privileged Host APIs use an allowlist model. A plugin must declare every
+capability in `permissions`; the Host then projects only those properties into
+that plugin's context. Undeclared properties are absent from both the inferred
+TypeScript type and the runtime object. Use `definePlugin()` without manually
+widening callbacks to `PluginContext`, otherwise TypeScript cannot preserve the
+literal permission tuple.
+
+Capabilities grant structured Host ports, not physical device ownership. The
+capability-derived context does not directly expose raw PTT, audio playback,
+the mixer, encoder, physical frame lease, arbitrary radio capability writes,
+or global emergency stop. Strategy runtimes receive a narrower speculative
+context and return declarative decisions; they never receive command ports.
+
+For a strategy plugin, `type: 'strategy'` plus `apiVersion: 2` is the explicit
+declaration that it may produce RF decisions when selected by an operator. It
+does not need `operator:transmit-control`. That permission is reserved for
+utility plugins that need the imperative, Host-coordinated
+`ctx.operatorCommands` port.
+
+API v2 is required for strategy plugins and any plugin requesting a mutation
+capability. The Host validates and freezes the loaded definition so permissions
+cannot be expanded after load.
+
+This is a Host API contract, not a sandbox for hostile Node.js code. Third-party
+plugins currently execute in the server process; process isolation is a
+separate security boundary.
+
+## Operator Transmit Control
+
+Utility plugins that need to submit operator commands must declare
+`operator:transmit-control` and submit one of the high-level commands accepted
+by `ctx.operatorCommands`. The permission grants API access; it does not by
+itself classify the plugin as an automatic caller.
+
+Automatic calling plugins implement `isAutoCallEnabled()`. This both gates the
+command port and opts the plugin into the operator auto-call indicator and pause
+controls:
 
 ```ts
-permissions: ['radio:read', 'radio:control', 'radio:power']
+const plugin = definePlugin({
+  apiVersion: 2,
+  name: 'scheduled-caller',
+  version: '1.0.0',
+  type: 'utility',
+  permissions: ['operator:transmit-control'],
+  isAutoCallEnabled: (ctx) => ctx.config.enabled === true,
+  hooks: {
+    async onTimer(_timerId, ctx) {
+      await ctx.operatorCommands.submit({
+        type: 'request-call',
+        callsign: 'W1AW',
+      });
+    },
+  },
+});
 ```
 
-- `radio:read` enables `ctx.radio.capabilities.getSnapshot()` and `ctx.radio.power.getSupport()`.
-- `radio:control` enables `ctx.radio.setFrequency()` and `ctx.radio.capabilities.write()`.
-- `radio:power` enables `ctx.radio.power.set('on' | 'off' | 'standby' | 'operate')`.
-- `ctx.radio.mode` is always readable and exposes the current best-known operating mode using ADIF `MODE`/`SUBMODE` semantics, for example `SSB` + `USB` in voice USB.
+Integrations such as remote-control protocol bridges that may submit occasional
+commands but do not autonomously originate calls implement
+`isTransmitControlEnabled()` instead. They receive the same guarded command
+port but are not shown or paused as auto-call plugins.
+
+The Host allocates an operator command epoch and routes the request through the
+operator/frame coordinators. Plugins cannot directly key or unkey the radio.
+
+## Radio Permissions
+
+`ctx.radio` always exposes a small read-only operating snapshot. Additional
+radio capabilities require explicit declarations:
+
+```ts
+permissions: ['radio:read', 'radio:control', 'radio:tuner-control', 'radio:power']
+```
+
+- `radio:read` exposes `ctx.radioCapabilities` and the read-only `ctx.radioPower` view.
+- `radio:control` exposes Host-arbitrated `set-frequency` and `switch-band` commands.
+- `switch-band` can include `autoTune: true` when `radio:tuner-control` is also declared; the Host keeps the complete operation inside one physical-idle fence.
+- `radio:tuner-control` exposes only `set-enabled` and `start-manual-tune` through `ctx.radioTunerCommands`.
+- Radio writes reject while Digital, Voice, CW, Tune or manual PTT owns the physical transmitter; they never interrupt that transmission.
+- `radio:power` exposes `ctx.radioPowerCommands.submit({ type: 'set-power', state })`.
+- `ctx.radio.mode` remains read-only and uses ADIF `MODE`/`SUBMODE` semantics.
 
 These APIs are not exposed directly to iframe pages; custom UI should call a server-side page handler.
+
+## Logbook Permissions
+
+- `logbook:read` exposes only query and worked-status methods on `ctx.logbook`.
+- `logbook:write` exposes durable `addQSO()`/`updateQSO()` mutations in addition to reads.
+- `logbook:sync` exposes `ctx.logbookSync` for registering a Host-managed sync provider.
+
+Write completion means the Host logbook durability contract has completed.
+Logbook APIs never grant PTT or frame lifecycle control.
 
 ## Host Settings Permissions
 
@@ -89,9 +174,10 @@ Server-side plugins can use `ctx.settings` to read or update a safe whitelist of
 | `ctx.settings.ntp` | `settings:ntp` | `get()`, `update({ servers })` |
 
 ```ts
-import type { PluginDefinition } from '@tx5dr/plugin-api';
+import { definePlugin } from '@tx5dr/plugin-api';
 
-const plugin: PluginDefinition = {
+const plugin = definePlugin({
+  apiVersion: 2,
   name: 'station-policy',
   version: '1.0.0',
   type: 'utility',
@@ -102,7 +188,7 @@ const plugin: PluginDefinition = {
       await ctx.settings.station.update({ callsign: 'W1AW' });
     },
   },
-};
+});
 
 export default plugin;
 ```
@@ -163,10 +249,11 @@ Avoid generic names like `update` or `message` — they will collide.
 ### Basic Usage
 
 ```ts
-import type { PluginDefinition } from '@tx5dr/plugin-api';
+import { definePlugin } from '@tx5dr/plugin-api';
 
 // Publisher plugin
-const publisher: PluginDefinition = {
+const publisher = definePlugin({
+  apiVersion: 2,
   name: 'spot-monitor',
   version: '1.0.0',
   type: 'utility',
@@ -174,24 +261,25 @@ const publisher: PluginDefinition = {
   hooks: {
     onDecode(messages, ctx) {
       for (const msg of messages) {
-        ctx.eventBus?.publish('spot-monitor.new-spot', {
+        ctx.eventBus.publish('spot-monitor.new-spot', {
           callsign: msg.callsign,
           frequency: msg.frequencyHz,
         });
       }
     },
   },
-};
+});
 
 // Subscriber plugin
-const subscriber: PluginDefinition = {
+const subscriber = definePlugin({
+  apiVersion: 2,
   name: 'spot-logger',
   version: '1.0.0',
   type: 'utility',
   permissions: ['plugin:event-bus'],
   hooks: {
     onLoad(ctx) {
-      ctx.eventBus?.subscribe('spot-monitor.new-spot', (message) => {
+      ctx.eventBus.subscribe('spot-monitor.new-spot', (message) => {
         ctx.log.info('received spot', {
           from: message.publisher.pluginName,
           callsign: (message.payload as any).callsign,
@@ -199,7 +287,7 @@ const subscriber: PluginDefinition = {
       });
     },
   },
-};
+});
 ```
 
 ### Cross-Operator Communication
@@ -207,7 +295,7 @@ const subscriber: PluginDefinition = {
 Operator-scoped plugins can communicate across operators on the same host. The `publisher` metadata lets subscribers identify which operator sent the message:
 
 ```ts
-ctx.eventBus?.subscribe('qso-monitor.qso-complete', (message) => {
+ctx.eventBus.subscribe('qso-monitor.qso-complete', (message) => {
   const { callsign, band } = message.payload as any;
   ctx.log.info('QSO completed by another operator', {
     operator: message.publisher.operatorId,

@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'url';
 import path from 'path';
-import type { PluginDefinition, PluginUIRequestContext } from '@tx5dr/plugin-api';
+import { definePlugin, type PluginUIRequestContext } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import jaLocale from './locales/ja.json' with { type: 'json' };
@@ -103,14 +103,15 @@ function mergeDraftConfig(
  * Configuration is stored in the plugin's global KVStore keyed by callsign.
  * Certificate files are stored as JSON via ctx.files under certificates/.
  */
-export const lotwSyncPlugin: PluginDefinition = {
+export const lotwSyncPlugin = definePlugin({
+  apiVersion: 2,
   name: BUILTIN_LOTW_SYNC_PLUGIN_NAME,
   version: '1.0.0',
   type: 'utility',
   instanceScope: 'global',
   description: 'Sync QSO records with ARRL Logbook of The World',
 
-  permissions: ['network'],
+  permissions: ['network', 'logbook:read', 'logbook:write', 'logbook:sync'],
 
   ui: {
     dir: 'ui',
@@ -319,7 +320,7 @@ export const lotwSyncPlugin: PluginDefinition = {
 
     ctx.log.info('LoTW sync provider registered');
   },
-};
+});
 
 export const lotwSyncLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,

@@ -6,13 +6,14 @@ import { watchedGridAutocallPlugin, watchedGridAutocallTestables } from './index
 describe('watched-grid-autocall', () => {
   it('proposes an autocall when a watched grid appears', async () => {
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control', 'logbook:read'],
       config: {
         gridWatchList: ['PM95'],
         gridMatchMode: 'exact',
         triggerMode: 'cq',
         workedGridSkipEnabled: false,
       },
-      operator: { automation: { currentState: 'TX6', slots: {}, context: {} } as any },
+      operator: { automation: { currentState: 'TX6', slots: {}, context: {} } },
     });
     const message = createMockParsedMessage({
       message: { type: FT8MessageType.CQ, senderCallsign: 'JA1AAA', grid: 'PM95AB' },
@@ -25,8 +26,9 @@ describe('watched-grid-autocall', () => {
 
   it('ignores messages without a grid', async () => {
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control', 'logbook:read'],
       config: { gridWatchList: ['PM95'], gridMatchMode: 'exact', triggerMode: 'cq' },
-      operator: { automation: { currentState: 'TX6', slots: {}, context: {} } as any },
+      operator: { automation: { currentState: 'TX6', slots: {}, context: {} } },
     });
     const message = createMockParsedMessage({
       message: { type: FT8MessageType.CQ, senderCallsign: 'JA1AAA' },
@@ -39,13 +41,14 @@ describe('watched-grid-autocall', () => {
 
   it('skips already worked grids when enabled', async () => {
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control', 'logbook:read'],
       config: {
         gridWatchList: ['PM95'],
         gridMatchMode: 'exact',
         triggerMode: 'cq',
         workedGridSkipEnabled: true,
       },
-      operator: { automation: { currentState: 'TX6', slots: {}, context: {} } as any },
+      operator: { automation: { currentState: 'TX6', slots: {}, context: {} } },
       logbook: { hasWorkedGrid: async () => true },
     });
     const message = createMockParsedMessage({
@@ -59,6 +62,7 @@ describe('watched-grid-autocall', () => {
   it('skips callsigns worked on any band even when the previous QSO had no grid', async () => {
     const hasWorked = vi.fn(async () => true);
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control', 'logbook:read'],
       config: {
         gridWatchList: ['PM95'],
         gridMatchMode: 'exact',
@@ -86,6 +90,7 @@ describe('watched-grid-autocall', () => {
 
   it('does not interrupt a non-idle operator', async () => {
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control', 'logbook:read'],
       config: { gridWatchList: ['PM95'], gridMatchMode: 'exact', triggerMode: 'cq' },
       operator: { isTransmitting: true },
     });
@@ -99,9 +104,11 @@ describe('watched-grid-autocall', () => {
 
   it('reports auto-call enabled only when grid watch list has active entries', () => {
     expect(watchedGridAutocallTestables.isWatchedGridAutoCallEnabled(createMockContext({
+      permissions: ['operator:transmit-control', 'logbook:read'],
       config: { gridWatchList: ['PM95'] },
     }))).toBe(true);
     expect(watchedGridAutocallTestables.isWatchedGridAutoCallEnabled(createMockContext({
+      permissions: ['operator:transmit-control', 'logbook:read'],
       config: { gridWatchList: ['  ', '# PM95'] },
     }))).toBe(false);
   });

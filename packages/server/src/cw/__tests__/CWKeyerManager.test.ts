@@ -7,7 +7,12 @@ import type { CWKeyerBackend } from '../CWKeyerBackend.js';
 
 const tempDirs: string[] = [];
 
-async function createManager(options: { catAvailable?: boolean; catError?: string | null; keyPort?: string } = {}) {
+async function createManager(options: {
+  catAvailable?: boolean;
+  catError?: string | null;
+  keyPort?: string;
+  physicalTxCoordinator?: any;
+} = {}) {
   const root = await mkdtemp(join(tmpdir(), 'tx5dr-cw-keyer-'));
   tempDirs.push(root);
 
@@ -35,7 +40,7 @@ async function createManager(options: { catAvailable?: boolean; catError?: strin
     keyUp: vi.fn().mockResolvedValue(undefined),
   };
 
-  const manager = new CWKeyerManager();
+  const manager = new CWKeyerManager(undefined, options.physicalTxCoordinator);
   (manager as unknown as { rootDir: string }).rootDir = root;
   const managerBackends = (manager as unknown as { backends: Record<string, CWKeyerBackend> }).backends;
   managerBackends.cat = backend;
@@ -235,6 +240,59 @@ describe('CWKeyerManager', () => {
       currentMethod: 'rts',
       currentActiveLevel: 'high',
     });
+  });
+
+  it('treats repeated manual key-down from the same client as idempotent', async () => {
+    const { manager, serialBackend } = await createManager({
+      catAvailable: false,
+      keyPort: '/dev/cw',
+    });
+    await manager.start({
+      backend: 'serial',
+      keyPort: '/dev/cw',
+      keyMethod: 'rts',
+      keyActiveLevel: 'high',
+      wpm: 20,
+    });
+
+    await manager.handleKeyAction('client-1', 'Operator', 'key-down');
+    await manager.handleKeyAction('client-1', 'Operator', 'key-down');
+    await manager.handleKeyAction('client-1', 'Operator', 'key-up');
+
+    expect(serialBackend.keyDown).toHaveBeenCalledTimes(1);
+    expect(serialBackend.keyUp).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts the physical lease when manual key-up fails', async () => {
+    const physicalTxCoordinator = {
+      acquireLease: vi.fn().mockResolvedValue('cw-lease'),
+      markSelfKeyedLeaseActive: vi.fn(),
+      releaseLease: vi.fn(),
+      forceInterruptLease: vi.fn().mockResolvedValue(null),
+    };
+    const { manager, serialBackend } = await createManager({
+      catAvailable: false,
+      keyPort: '/dev/cw',
+      physicalTxCoordinator,
+    });
+    await manager.start({
+      backend: 'serial',
+      keyPort: '/dev/cw',
+      keyMethod: 'rts',
+      keyActiveLevel: 'high',
+      wpm: 20,
+    });
+    await manager.handleKeyAction('client-1', 'Operator', 'key-down');
+    vi.mocked(serialBackend.keyUp!).mockRejectedValueOnce(new Error('serial key-up failed'));
+
+    await expect(manager.handleKeyAction('client-1', 'Operator', 'key-up'))
+      .rejects.toThrow('serial key-up failed');
+
+    expect(physicalTxCoordinator.forceInterruptLease).toHaveBeenCalledWith(
+      'cw-lease',
+      'CW manual key release failed',
+    );
+    expect(physicalTxCoordinator.releaseLease).not.toHaveBeenCalled();
   });
 
   it('rejects hardware tests while CW keying is already active', async () => {

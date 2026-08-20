@@ -7,8 +7,11 @@ import {
   createMockContext,
   createMockSlotInfo,
   createMockParsedMessage,
-  createMockOperatorControl,
-  createMockRadioControl,
+  createMockOperatorSnapshot,
+  createMockOperatorCommandPort,
+  createMockRadioView,
+  createMockRadioCapabilitiesView,
+  createMockRadioPowerView,
   createMockLogbookAccess,
   createMockBandAccess,
   createMockHostSettingsControl,
@@ -74,24 +77,32 @@ describe('plugin-api testing utilities', () => {
   });
 
   describe('createMockContext', () => {
-    it('creates a full context with defaults', () => {
+    it('creates a safe context with defaults', () => {
       const ctx = createMockContext();
       expect(ctx.operator.callsign).toBe('W1AW');
       expect(ctx.operator.grid).toBe('FN31');
       expect(ctx.radio.isConnected).toBe(true);
       expect(ctx.config).toEqual({});
-      expect(typeof ctx.eventBus.publish).toBe('function');
+      expect('eventBus' in ctx).toBe(false);
     });
 
     it('does not expose mock host dependencies without permissions', () => {
       const ctx = createMockContext();
-      expect(ctx.hostDependencies.hamlib).toBeUndefined();
+      expect('hostDependencies' in ctx).toBe(false);
+      expect('operatorCommands' in ctx).toBe(false);
+    });
+
+    it('exposes only the host-arbitrated command port with transmit-control permission', async () => {
+      const ctx = createMockContext({ permissions: ['operator:transmit-control'] });
+      expect(ctx.operatorCommands).toBeDefined();
+      expect('startTransmitting' in ctx.operator).toBe(false);
+      await ctx.operatorCommands?.submit({ type: 'start-automation' });
     });
 
     it('provides mock host dependencies with host permissions', () => {
       const ctx = createMockContext({ permissions: ['host:hamlib'] });
-      expect(ctx.hostDependencies.hamlib?.Rotator.getHamlibVersion()).toBe('mock-hamlib');
-      expect(ctx.hostDependencies.hamlib?.Rotator.getSupportedRotators()).toEqual([]);
+      expect(ctx.hostDependencies?.hamlib?.Rotator.getHamlibVersion()).toBe('mock-hamlib');
+      expect(ctx.hostDependencies?.hamlib?.Rotator.getSupportedRotators()).toEqual([]);
     });
 
     it('accepts overrides', () => {
@@ -117,7 +128,7 @@ describe('plugin-api testing utilities', () => {
     });
 
     it('includes host settings mocks', async () => {
-      const ctx = createMockContext();
+      const ctx = createMockContext({ permissions: ['settings:ft8'] });
       await expect(ctx.settings.ft8.update({ maxSameTransmissionCount: 0 })).resolves.toMatchObject({
         maxSameTransmissionCount: 0,
       });
@@ -125,7 +136,7 @@ describe('plugin-api testing utilities', () => {
 
     it('accepts an event bus override', () => {
       const eventBus = createMockEventBus();
-      const ctx = createMockContext({ eventBus });
+      const ctx = createMockContext({ permissions: ['plugin:event-bus'], eventBus });
       expect(ctx.eventBus).toBe(eventBus);
     });
   });
@@ -221,17 +232,17 @@ describe('plugin-api testing utilities', () => {
     });
   });
 
-  describe('createMockOperatorControl', () => {
+  describe('createMockOperatorSnapshot', () => {
     it('has reasonable defaults', () => {
-      const op = createMockOperatorControl();
+      const op = createMockOperatorSnapshot();
       expect(op.isTransmitting).toBe(false);
       expect(op.mode.name).toBe('FT8');
       expect(op.getOtherOperators()).toEqual([]);
     });
 
     it('supports partial overrides', () => {
-      const otherMode = createMockOperatorControl().mode;
-      const op = createMockOperatorControl({
+      const otherMode = createMockOperatorSnapshot().mode;
+      const op = createMockOperatorSnapshot({
         isTransmitting: true,
         callsign: 'K1ABC',
         getOtherOperators: () => [{
@@ -254,14 +265,22 @@ describe('plugin-api testing utilities', () => {
     });
   });
 
-  describe('createMockRadioControl', () => {
+  describe('createMockOperatorCommandPort', () => {
+    it('records declarative commands', async () => {
+      const port = createMockOperatorCommandPort();
+      await port.submit({ type: 'stop-automation' });
+      expect(port._commands).toEqual([{ type: 'stop-automation' }]);
+    });
+  });
+
+  describe('radio capability mocks', () => {
     it('provides connected radio by default', () => {
-      const radio = createMockRadioControl();
+      const radio = createMockRadioView();
       expect(radio.isConnected).toBe(true);
       expect(radio.frequency).toBe(14074000);
       expect(radio.mode).toMatchObject({ engineMode: 'digital', mode: 'FT8', radioMode: 'USB' });
-      expect(radio.capabilities.getSnapshot()).toEqual({ descriptors: [], capabilities: [] });
-      expect(radio.power.getState()).toMatchObject({ state: 'awake', stage: 'idle' });
+      expect(createMockRadioCapabilitiesView().getSnapshot()).toEqual({ descriptors: [], capabilities: [] });
+      expect(createMockRadioPowerView().getState()).toMatchObject({ state: 'awake', stage: 'idle' });
     });
   });
 

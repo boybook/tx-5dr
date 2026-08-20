@@ -3,25 +3,42 @@ import type { DigitalRadioEngineEvents, ModeDescriptor } from '@tx5dr/contracts'
 import type { ClockSourceSystem } from '@tx5dr/core';
 import type { AudioStreamManager } from '../audio/AudioStreamManager.js';
 import type { AudioMixer, MixedAudio } from '../audio/AudioMixer.js';
-import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { SpectrumScheduler } from '../audio/SpectrumScheduler.js';
 import { TransmissionTracker, TransmissionPhase } from '../transmission/TransmissionTracker.js';
-import type { WSJTXEncodeWorkQueue } from '../decode/WSJTXEncodeWorkQueue.js';
+import type { WSJTXEncodeWorkQueue, EncodeRequest } from '../decode/WSJTXEncodeWorkQueue.js';
 import type { RadioOperatorManager } from '../operator/RadioOperatorManager.js';
+import type { DigitalFrameCoordinator } from '../transmission/DigitalFrameCoordinator.js';
+import {
+  PhysicalTxBusyError,
+  PhysicalTxPreparationError,
+  type PhysicalTxCoordinator,
+} from '../transmission/PhysicalTxCoordinator.js';
+import type { PhysicalTxSnapshot } from '../transmission/TransmissionIntent.js';
+import type { OperatorIntentCoordinator } from '../transmission/OperatorIntentCoordinator.js';
 import { ListenerManager } from './ListenerManager.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('TransmissionPipeline');
+const DIGITAL_TAIL_HOLD_MS = 500;
+
+class CompleteFrameBudgetExceededError extends Error {
+  constructor(message = 'complete frame no longer fits before PTT start') {
+    super(message);
+    this.name = 'CompleteFrameBudgetExceededError';
+  }
+}
 
 export interface TransmissionPipelineDeps {
   engineEmitter: EventEmitter<DigitalRadioEngineEvents>;
   audioMixer: AudioMixer;
   audioStreamManager: AudioStreamManager;
-  radioManager: PhysicalRadioManager;
   spectrumScheduler: SpectrumScheduler;
   transmissionTracker: TransmissionTracker;
   encodeQueue: WSJTXEncodeWorkQueue;
   operatorManager: RadioOperatorManager;
+  digitalFrameCoordinator: DigitalFrameCoordinator;
+  physicalTxCoordinator: PhysicalTxCoordinator;
+  intentCoordinator: OperatorIntentCoordinator;
   clockSource: ClockSourceSystem;
   getCurrentMode: () => ModeDescriptor;
   getCompensationMs: () => number;
@@ -29,351 +46,298 @@ export interface TransmissionPipelineDeps {
 }
 
 /**
- * 发射管线子系统
- *
- * 职责：encode→mix→PTT→play 全流程、编码跟踪
+ * Adapts existing encode and mixer events to the digital-frame and physical-TX
+ * lifecycle owners. It does not own PTT state or decide whether to truncate RF.
  */
 export class TransmissionPipeline {
-  private lm = new ListenerManager();
+  private readonly lm = new ListenerManager();
+  private currentSlotExpectedEncodes = 0;
+  private currentSlotCompletedEncodes = 0;
+  private currentSlotId = '';
+  private readonly terminalOperatorsByFrame = new Map<string, Set<string>>();
+  private readonly onAirTransmissionKeys = new Set<string>();
+  private operatorRemovalTransition: Promise<void> = Promise.resolve();
 
-  // PTT状态管理
-  private _isPTTActive = false;
-  private _isRemixing = false;
-
-  // PTT 轮询（替代 setTimeout，在高负载 CPU 上更精确）
-  private pttPollInterval: NodeJS.Timeout | null = null;
-  private pttAudioStoppedAt: number | null = null;
-  private static readonly PTT_POLL_INTERVAL_MS = 50;
-  private static readonly PTT_HOLD_AFTER_AUDIO_MS = 500;
-
-  // 编码状态跟踪
-  private currentSlotExpectedEncodes: number = 0;
-  private currentSlotCompletedEncodes: number = 0;
-  private currentSlotId: string = '';
-  private txSequence = 0;
-
-  constructor(private deps: TransmissionPipelineDeps) {}
+  constructor(private readonly deps: TransmissionPipelineDeps) {}
 
   getIsPTTActive(): boolean {
-    return this._isPTTActive;
+    return this.deps.physicalTxCoordinator.getSnapshot().phase !== 'idle';
   }
 
-  /**
-   * 注册编码/混音事件监听器（doStart 时调用）
-   */
   setup(): void {
-    const { encodeQueue, audioMixer } = this.deps;
+    const { encodeQueue, audioMixer, physicalTxCoordinator } = this.deps;
 
-    // 编码完成事件
     this.lm.listen(encodeQueue, 'encodeComplete', async (result: {
       operatorId: string;
       audioData: Float32Array;
       sampleRate: number;
       duration: number;
-      request?: { timeSinceSlotStartMs?: number; requestId?: string };
+      request?: EncodeRequest;
     }) => {
       await this.handleEncodeComplete(result);
     });
-
-    // 编码错误事件
-    this.lm.listen(encodeQueue, 'encodeError', (error: Error, request: { operatorId: string }) => {
-      logger.error(`encode failed: operatorId=${request.operatorId}: ${error.message}`);
-      this.deps.engineEmitter.emit('transmissionComplete', {
-        operatorId: request.operatorId,
-        success: false,
-        error: error.message
-      });
+    this.lm.listen(encodeQueue, 'encodeError', (error: Error, request: EncodeRequest) => {
+      this.handleEncodeError(error, request);
     });
-
-    // 混音完成事件
     this.lm.listen(audioMixer, 'mixedAudioReady', async (mixedAudio: MixedAudio) => {
       await this.handleMixedAudioReady(mixedAudio);
+    });
+    this.lm.listen(physicalTxCoordinator, 'phaseChanged', (snapshot: PhysicalTxSnapshot) => {
+      this.handlePhysicalPhaseChanged(snapshot);
+    });
+    this.lm.listen(this.deps.digitalFrameCoordinator, 'frameChanged', (frame) => {
+      if (frame.phase === 'committed' || frame.phase === 'on_air' || frame.phase === 'draining') {
+        this.deps.audioMixer.retainFrame(frame.frameId, frame.revision);
+      }
+      if (frame.phase === 'cancelled') {
+        this.deps.audioMixer.clearFrame(frame.frameId, frame.revision);
+      } else if (frame.phase === 'terminal') {
+        this.deps.audioMixer.releaseFrame(frame.frameId, frame.revision);
+        this.deps.audioMixer.clearFrame(frame.frameId, frame.revision);
+      }
     });
 
     logger.info(`event listeners registered (${this.lm.count})`);
   }
 
-  /**
-   * 清理监听器和 PTT 轮询（doStop 时调用）
-   */
   teardown(): void {
-    this.stopPTTPoll();
-
     this.lm.disposeAll();
     logger.info('event listeners cleaned up');
   }
 
-  /**
-   * 时隙开始时调用：停止残留音频播放 + 清空混音缓存
-   */
-  async onSlotStart(): Promise<void> {
-    // 停止上一时隙的残留音频播放，防止 isPlaying 状态泄漏到新时隙
-    if (this.isDigitalPlaybackInProgress()) {
-      await this.deps.audioStreamManager.stopCurrentPlayback();
-      logger.debug('stopped residual audio playback from previous slot');
-    } else if (this.deps.audioStreamManager.isPlaying()) {
-      logger.debug('preserved non-digital playback across slot start', {
-        kind: this.deps.audioStreamManager.getCurrentPlaybackKind(),
+  async onSlotStart(slotInfo?: { id: string }): Promise<void> {
+    if (slotInfo) {
+      this.deps.digitalFrameCoordinator.cancelPreCommitFramesOutsideSlot(
+        slotInfo.id,
+        'pre-commit frame expired at slot boundary',
+      );
+    }
+    const physical = this.deps.physicalTxCoordinator.getSnapshot();
+    if (physical.phase === 'idle') {
+      this.deps.audioMixer.clearSlotCache();
+      return;
+    }
+    logger.debug('preserving in-flight physical frame across slot boundary', {
+      leaseId: physical.leaseId,
+      frameId: physical.frameId,
+      phase: physical.phase,
+    });
+  }
+
+  onEncodeStart(slotInfo: { id: string; startMs?: number }): void {
+    this.currentSlotId = slotInfo.id;
+    this.currentSlotExpectedEncodes = this.deps.operatorManager.getPendingTransmissionsCount();
+    this.currentSlotCompletedEncodes = 0;
+    this.deps.operatorManager.processPendingTransmissions(slotInfo);
+  }
+
+  onTransmitStart(_slotInfo: { id: string }): void {
+    if (this.currentSlotExpectedEncodes > this.currentSlotCompletedEncodes) {
+      logger.warn('encode deadline reached before all frame members completed', {
+        slotId: this.currentSlotId,
+        expected: this.currentSlotExpectedEncodes,
+        completed: this.currentSlotCompletedEncodes,
       });
     }
+  }
+
+  async forceStopPTT(): Promise<void> {
+    await this.deps.physicalTxCoordinator.forceInterrupt('force stop PTT');
+  }
+
+  async forceStopTransmission(): Promise<void> {
+    await this.deps.physicalTxCoordinator.forceInterrupt('manual force stop transmission');
     this.deps.audioMixer.clearSlotCache();
   }
 
-  /**
-   * encodeStart 事件中调用
-   */
-  onEncodeStart(slotInfo: { id: string }): void {
-    this.currentSlotId = slotInfo.id;
-    this.currentSlotExpectedEncodes = 0;
-    this.currentSlotCompletedEncodes = 0;
-
-    const pendingCount = this.deps.operatorManager.getPendingTransmissionsCount();
-    this.deps.operatorManager.processPendingTransmissions(slotInfo);
-    this.currentSlotExpectedEncodes = pendingCount;
-
-    if (this.currentSlotExpectedEncodes > 0) {
-      logger.debug(`slot ${slotInfo.id}: expected ${this.currentSlotExpectedEncodes} encode tasks`);
+  async removeOperatorFromTransmission(
+    operatorId: string,
+    options: {
+      commandAlreadyAllocated?: boolean;
+      signal?: AbortSignal;
+      commandToken?: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken;
+    } = {},
+  ): Promise<void> {
+    if (!options.commandAlreadyAllocated) {
+      const outcome = await this.deps.intentCoordinator.submit(
+        operatorId,
+        'manual',
+        async (token, signal) => {
+          if (signal.aborted || !this.deps.intentCoordinator.isCurrent(token)) return;
+          this.deps.operatorManager.getOperatorById(operatorId)?.stop();
+          this.deps.operatorManager.releaseTargetReservation(operatorId);
+          await this.removeOperatorFromTransmission(operatorId, {
+            commandAlreadyAllocated: true,
+            signal,
+            commandToken: token,
+          });
+        },
+      );
+      if (outcome.status === 'superseded') {
+        logger.info('operator removal superseded by a newer command', { operatorId });
+      }
+      return;
     }
-  }
 
-  /**
-   * transmitStart 事件中调用
-   */
-  onTransmitStart(_slotInfo: { id: string }): void {
-    if (this.currentSlotExpectedEncodes > 0 &&
-        this.currentSlotCompletedEncodes < this.currentSlotExpectedEncodes) {
-      const missingCount = this.currentSlotExpectedEncodes - this.currentSlotCompletedEncodes;
-      logger.warn(`encode timeout: expected ${this.currentSlotExpectedEncodes}, completed ${this.currentSlotCompletedEncodes}, missing ${missingCount}`);
-    } else if (this.currentSlotExpectedEncodes > 0) {
-      logger.debug(`all encode tasks completed on time (${this.currentSlotCompletedEncodes}/${this.currentSlotExpectedEncodes})`);
+    const previous = this.operatorRemovalTransition;
+    let releaseTransition!: () => void;
+    const current = new Promise<void>((resolve) => { releaseTransition = resolve; });
+    this.operatorRemovalTransition = previous.then(() => current, () => current);
+    await previous.catch(() => undefined);
+    if (!this.isRemovalCommandCurrent(options)) {
+      releaseTransition();
+      return;
     }
-  }
-
-  /**
-   * 强制停止PTT
-   */
-  async forceStopPTT(): Promise<void> {
-    this.stopPTTPoll();
-    if (this._isPTTActive) {
-      await this.stopPTT();
-    }
-  }
-
-  /**
-   * 强制停止当前发射（公开方法）
-   */
-  async forceStopTransmission(): Promise<void> {
+    let released = false;
+    const releaseOnce = () => {
+      if (released) return;
+      released = true;
+      releaseTransition();
+    };
     try {
-      const stoppedBytes = await this.deps.audioStreamManager.stopCurrentPlayback();
-      await this.forceStopPTT();
-      this.deps.audioMixer.clear();
-      logger.info('force stop transmission', { stoppedBytes });
-    } catch (error) {
-      logger.error(`force stop transmission failed: ${error}`);
-      throw error;
-    }
-  }
-
-  /**
-   * 从当前发射中移除单个操作员的音频并重混音
-   * 如果移除后还有其他操作员，继续播放重混音后的音频
-   * 如果移除后没有操作员了，停止播放和PTT
-   */
-  async removeOperatorFromTransmission(operatorId: string): Promise<void> {
-    const { audioMixer, audioStreamManager } = this.deps;
-
-    const removed = audioMixer.clearOperatorAudio(operatorId);
-    if (!removed) {
-      logger.debug(`operator ${operatorId} not in mixer cache, skipping`);
-      return;
-    }
-
-    const remainingCount = audioMixer.getStatus().cacheCount;
-
-    if (remainingCount === 0) {
-      logger.info(`last operator ${operatorId} removed, stopping transmission`);
-      const stoppedBytes = await audioStreamManager.stopCurrentPlayback();
-      await this.forceStopPTT();
-      audioMixer.clear();
-      logger.info('transmission fully stopped after last operator removed', { stoppedBytes });
-      return;
-    }
-
-    if (audioStreamManager.isPlaying()) {
-      if (this._isRemixing) {
-        logger.debug(`operator ${operatorId} removed from cache, remix already in progress`);
-        return;
-      }
-
-      logger.info(`operator ${operatorId} removed, remixing with ${remainingCount} remaining`);
-      this._isRemixing = true;
-      try {
-        const elapsedTimeMs = await audioStreamManager.stopCurrentPlayback();
-        audioMixer.markPlaybackStop();
-
-        const remixedAudio = await audioMixer.remixAfterUpdate(elapsedTimeMs);
-        if (remixedAudio) {
-          const txId = this.nextTxId('digital-remix-remove');
-          this.deps.engineEmitter.emit('pttStatusChanged', {
-            isTransmitting: true,
-            operatorIds: remixedAudio.operatorIds,
-          });
-          this.deps.operatorManager.updateActiveTransmissionOperators(remixedAudio.operatorIds);
-          audioMixer.markPlaybackStart();
-          await audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate, {
-            playbackKind: 'digital',
-            diagnosticContext: { txId, operatorIds: remixedAudio.operatorIds, reason: 'operator-removed-remix' },
-          });
-          this.startPTTPoll();
-        } else {
-          logger.info('remix returned null after operator removal, stopping PTT');
-          await this.forceStopPTT();
-        }
-      } catch (error) {
-        logger.error(`remix after operator removal failed: ${error}`);
-      } finally {
-        this._isRemixing = false;
-      }
-    } else {
-      logger.debug(`operator ${operatorId} removed from cache, not currently playing`);
-    }
-  }
-
-  // ─── 内部方法 ────────────────────────────────────
-
-  private nextTxId(reason: string): string {
-    this.txSequence += 1;
-    return `${reason}-${Date.now()}-${this.txSequence}`;
-  }
-
-  private async startPTT(operatorIds: string[], txId?: string): Promise<void> {
-    if (this._isPTTActive) {
-      logger.info('PTT already active, skipping start request', { txId, operatorIds });
-      return;
-    }
-
-    if (this.deps.radioManager.isConnected()) {
-      try {
-        const pttStartTime = Date.now();
-        logger.info('PTT start requested', {
-          txId,
-          operatorIds,
-          requestedAt: new Date(pttStartTime).toISOString(),
-        });
-        await this.deps.radioManager.setPTT(true);
-        const durationMs = Date.now() - pttStartTime;
-
-        this._isPTTActive = true;
-
-        this.deps.spectrumScheduler.setPTTActive(true);
-        this.deps.radioManager.setPTTActive(true);
-
-        this.deps.engineEmitter.emit('pttStatusChanged', {
-          isTransmitting: true,
-          operatorIds
-        });
-
-        this.deps.operatorManager.updateActiveTransmissionOperators(operatorIds);
-
-        logger.info('PTT started', { txId, operatorIds, durationMs });
-      } catch (error) {
-        logger.error(`PTT start failed: ${error}`, { txId, operatorIds });
-        throw error;
-      }
-    } else {
-      logger.warn('radio not connected, skipping PTT start', { txId, operatorIds });
-    }
-  }
-
-  private async stopPTT(): Promise<void> {
-    if (!this._isPTTActive) {
-      logger.debug('PTT already stopped, skipping');
-      // 兜底清除可能残留的虚拟频率平移（如 startPTT 失败导致 PTT 未真正激活的场景）
-      await this.deps.radioManager.clearTxDialOffset();
-      return;
-    }
-
-    try {
-      if (this.deps.radioManager.isConnected()) {
-        try {
-          await this.deps.radioManager.setPTT(false);
-          this._isPTTActive = false;
-
-          this.deps.spectrumScheduler.setPTTActive(false);
-          this.deps.radioManager.setPTTActive(false);
-
-          this.deps.engineEmitter.emit('pttStatusChanged', {
-            isTransmitting: false,
-            operatorIds: []
-          });
-
-          this.deps.operatorManager.updateActiveTransmissionOperators([]);
-
-          logger.debug('PTT stopped');
-        } catch (error) {
-          logger.error(`PTT stop failed: ${error}`);
-          this._isPTTActive = false;
-          this.deps.spectrumScheduler.setPTTActive(false);
-          this.deps.radioManager.setPTTActive(false);
-          this.deps.operatorManager.updateActiveTransmissionOperators([]);
-        }
-      } else {
-        this._isPTTActive = false;
-        this.deps.spectrumScheduler.setPTTActive(false);
-        this.deps.radioManager.setPTTActive(false);
-        this.deps.operatorManager.updateActiveTransmissionOperators([]);
-        logger.debug('radio not connected, PTT state set to stopped');
-      }
+      await this.performOperatorRemoval(operatorId, releaseOnce, options);
     } finally {
-      // 虚拟频率：PTT 关闭后恢复接收 dial（在 PTT 真正关闭之后执行，避免发射期间提前回频）
-      await this.deps.radioManager.clearTxDialOffset();
+      releaseOnce();
     }
   }
 
-  /**
-   * 启动 PTT 状态轮询（替代 setTimeout 预测计时）。
-   * 轮询检测音频是否仍在播放/remix，停止后等待 hold 时间再关闭 PTT。
-   */
-  private startPTTPoll(): void {
-    if (this.pttPollInterval) return;
-    this.pttAudioStoppedAt = null;
-    this.pttPollInterval = setInterval(() => this.pollPTTState(), TransmissionPipeline.PTT_POLL_INTERVAL_MS);
-  }
-
-  private stopPTTPoll(): void {
-    if (this.pttPollInterval) {
-      clearInterval(this.pttPollInterval);
-      this.pttPollInterval = null;
-    }
-    this.pttAudioStoppedAt = null;
-  }
-
-  private pollPTTState(): void {
-    if (!this._isPTTActive) {
-      this.stopPTTPoll();
+  private async performOperatorRemoval(
+    operatorId: string,
+    onTransitionCommitted: () => void,
+    command: {
+      signal?: AbortSignal;
+      commandToken?: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken;
+    },
+  ): Promise<void> {
+    if (!this.isRemovalCommandCurrent(command)) return;
+    const physical = this.deps.physicalTxCoordinator.getSnapshot();
+    if (physical.source !== 'digital'
+      || !physical.frameId
+      || !physical.leaseId
+      || !physical.operatorIds.includes(operatorId)) {
+      const outcome = this.deps.operatorManager.requestStrategyStop(
+        operatorId,
+        'operator removed from transmission',
+      );
+      logger.info('operator transmission stop requested', { operatorId, outcome });
       return;
     }
 
-    const isPlaying = this.deps.audioStreamManager.isPlaying();
-    const isRemixing = this._isRemixing;
-
-    if (isPlaying || isRemixing) {
-      this.pttAudioStoppedAt = null;
-    } else if (!this.pttAudioStoppedAt) {
-      this.pttAudioStoppedAt = Date.now();
-      logger.debug('PTT poll: audio stopped, starting hold countdown');
-    } else {
-      const holdElapsed = Date.now() - this.pttAudioStoppedAt;
-      if (holdElapsed >= TransmissionPipeline.PTT_HOLD_AFTER_AUDIO_MS) {
-        logger.debug(`PTT poll: hold expired (${holdElapsed}ms), stopping PTT`);
-        this.stopPTT();
-        this.stopPTTPoll();
+    const removal = this.deps.digitalFrameCoordinator.prepareParticipantRemoval(
+      physical.frameId,
+      operatorId,
+      'operator explicitly removed from active transmission',
+    );
+    if (!this.isRemovalCommandCurrent(command)) {
+      if (removal.frame) {
+        this.deps.digitalFrameCoordinator.cancelFrame(
+          removal.frame.frameId,
+          'participant removal superseded before physical handover',
+        );
       }
+      return;
     }
+    if (removal.action === 'stop-physical') {
+      await this.deps.physicalTxCoordinator.forceInterruptLease(
+        physical.leaseId,
+        'last operator explicitly removed from transmission',
+      );
+      logger.info('last digital frame participant removed; physical PTT stopped', {
+        operatorId,
+        frameId: physical.frameId,
+      });
+      return;
+    }
+    if (removal.action !== 'replace-current' || !removal.frame || !removal.replacedFrame) {
+      logger.info('operator removal did not replace active audio', {
+        operatorId,
+        frameId: physical.frameId,
+        outcome: removal.action,
+        reason: removal.reason,
+      });
+      return;
+    }
+
+    const replacementSnapshot = this.deps.audioMixer.cloneFrameTracks(
+      {
+        frameId: removal.replacedFrame.frameId,
+        frameRevision: removal.replacedFrame.revision,
+      },
+      {
+        frameId: removal.frame.frameId,
+        frameRevision: removal.frame.revision,
+        slotId: removal.frame.slotId,
+      },
+      removal.remainingOperatorIds,
+    );
+    const expected = [...removal.remainingOperatorIds].sort();
+    const actual = replacementSnapshot
+      ? Array.from(replacementSnapshot.tracks.keys()).sort()
+      : [];
+    if (actual.length !== expected.length
+      || actual.some((id, index) => id !== expected[index])) {
+      const reason = 'retained operator audio is unavailable for active-frame removal';
+      this.deps.operatorManager.deferPreparedFrameToNextSlot(removal.frame.frameId, reason);
+      logger.warn(reason, {
+        operatorId,
+        frameId: physical.frameId,
+        expected,
+        actual,
+      });
+      return;
+    }
+
+    const offsetMs = this.deps.digitalFrameCoordinator.getPlaybackOffsetMs(
+      removal.frame.frameId,
+      this.deps.clockSource.now(),
+    );
+    const remixed = replacementSnapshot
+      ? await this.deps.audioMixer.mixFrame(replacementSnapshot, offsetMs)
+      : null;
+    if (!this.isRemovalCommandCurrent(command)) {
+      this.deps.digitalFrameCoordinator.cancelFrame(
+        removal.frame.frameId,
+        'participant removal superseded after remix',
+      );
+      return;
+    }
+    if (!remixed) {
+      const reason = 'no retained operator waveform remains after participant removal';
+      this.deps.operatorManager.deferPreparedFrameToNextSlot(removal.frame.frameId, reason);
+      logger.info(reason, { operatorId, frameId: physical.frameId });
+      return;
+    }
+    await this.handleMixedAudioReady(remixed, onTransitionCommitted);
   }
 
-  private shouldReleasePTTImmediatelyAfterAudio(): boolean {
-    return this.deps.radioManager.getConfig().type === 'icom-wlan' || this.deps.radioManager.getConfig().type === 'tci';
+  private isRemovalCommandCurrent(command: {
+    signal?: AbortSignal;
+    commandToken?: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken;
+  }): boolean {
+    return !command.signal?.aborted
+      && (!command.commandToken || this.deps.intentCoordinator.isCurrent(command.commandToken));
+  }
+
+  private handleEncodeError(error: Error, request: EncodeRequest): void {
+    logger.error('frame encode failed', {
+      frameId: request.frameId,
+      operatorId: request.operatorId,
+      error: error.message,
+    });
+    if (!request.frameId || request.frameRevision === undefined || request.decisionEpoch === undefined) return;
+    const failedFrame = this.deps.digitalFrameCoordinator.failEncodeResult({
+      frameId: request.frameId,
+      operatorId: request.operatorId,
+      decisionEpoch: request.decisionEpoch,
+      revision: request.frameRevision,
+    }, 'encode failed');
+    if (!failedFrame) return;
+    this.emitFrameTerminal(failedFrame.frameId, failedFrame.participantOperatorIds, {
+      physicalConfirmed: false,
+      terminalReason: 'encode failed',
+      success: false,
+      error: error.message,
+    });
   }
 
   private async handleEncodeComplete(result: {
@@ -381,236 +345,592 @@ export class TransmissionPipeline {
     audioData: Float32Array;
     sampleRate: number;
     duration: number;
-    request?: { timeSinceSlotStartMs?: number; requestId?: string; txDialShiftHz?: number };
+    request?: EncodeRequest;
   }): Promise<void> {
-    try {
-      const request = result.request;
-      const requestId = request?.requestId;
-      const timeSinceSlotStartMs = request?.timeSinceSlotStartMs || 0;
-      const mode = this.deps.getCurrentMode();
+    const request = result.request;
+    if (!request?.frameId || request.frameRevision === undefined || request.decisionEpoch === undefined) {
+      logger.warn('discarding encode callback without frame identity', { operatorId: result.operatorId });
+      return;
+    }
 
-      logger.debug('encode complete', {
-        operatorId: result.operatorId,
-        duration: result.duration,
-        requestId: requestId || 'N/A'
+    const accepted = this.deps.digitalFrameCoordinator.acceptEncodeResult({
+      frameId: request.frameId,
+      operatorId: result.operatorId,
+      decisionEpoch: request.decisionEpoch,
+      revision: request.frameRevision,
+    });
+    if (!accepted) return;
+
+    this.currentSlotCompletedEncodes += 1;
+    this.deps.transmissionTracker.updatePhase(result.operatorId, TransmissionPhase.MIXING, {});
+    this.deps.transmissionTracker.updatePhase(result.operatorId, TransmissionPhase.READY, {
+      audioData: result.audioData,
+      sampleRate: result.sampleRate,
+      duration: result.duration,
+    });
+
+    const mode = this.deps.getCurrentMode();
+    const now = this.deps.clockSource.now();
+    const currentSlotStartMs = Math.floor(now / mode.slotMs) * mode.slotMs;
+    const slotStartMs = request.slotStartMs ?? currentSlotStartMs;
+    this.deps.audioMixer.addOperatorAudio(
+      result.operatorId,
+      result.audioData,
+      result.sampleRate,
+      slotStartMs,
+      request.requestId,
+      request.txDialShiftHz ?? 0,
+      {
+        frameId: request.frameId,
+        frameRevision: request.frameRevision,
+        slotId: `slot-${slotStartMs}`,
+      },
+    );
+    this.deps.transmissionTracker.recordAudioAddedToMixer(result.operatorId);
+
+    const frame = this.deps.digitalFrameCoordinator.getFrame(request.frameId);
+    if (frame?.phase !== 'ready') return;
+
+    const playbackOffsetMs = this.deps.digitalFrameCoordinator.getPlaybackOffsetMs(
+      request.frameId,
+      now,
+    );
+
+    if (this.deps.digitalFrameCoordinator.getPreparationAction(request.frameId) === 'restart-current') {
+      const replacement = await this.deps.audioMixer.mixFrameById(
+        request.frameId,
+        request.frameRevision,
+        playbackOffsetMs,
+      );
+      if (replacement) await this.handleMixedAudioReady(replacement);
+      return;
+    }
+
+    const transmitStartMs = Math.max(0, (mode.transmitTiming || 0) - this.deps.getCompensationMs());
+    const targetPlaybackTime = currentSlotStartMs + transmitStartMs;
+    if (now >= targetPlaybackTime) {
+      const mixedAudio = await this.deps.audioMixer.mixFrameById(
+        request.frameId,
+        request.frameRevision,
+        playbackOffsetMs,
+      );
+      if (mixedAudio) await this.handleMixedAudioReady(mixedAudio);
+    } else {
+      this.deps.audioMixer.scheduleFrameMixing(
+        { frameId: request.frameId, revision: request.frameRevision },
+        targetPlaybackTime,
+        targetPlaybackTime,
+      );
+    }
+  }
+
+  private async handleMixedAudioReady(
+    mixedAudio: MixedAudio,
+    onReplacementStarted?: () => void,
+  ): Promise<void> {
+    if (!mixedAudio.frameId) {
+      logger.warn('discarding mixed audio without frame identity');
+      return;
+    }
+
+    const readyFrame = this.deps.digitalFrameCoordinator.getFrame(mixedAudio.frameId);
+    if (readyFrame?.phase !== 'ready') return;
+    const expectedOperators = [...readyFrame.participantOperatorIds].sort();
+    const mixedOperators = [...mixedAudio.operatorIds].sort();
+    if (expectedOperators.length !== mixedOperators.length
+      || expectedOperators.some((operatorId, index) => operatorId !== mixedOperators[index])) {
+      this.failCommittedFrame(readyFrame.frameId, mixedAudio, 'mixed frame participants are incomplete');
+      return;
+    }
+    if (!this.deps.digitalFrameCoordinator.hasCompleteFrameBudget(
+      readyFrame.frameId,
+      this.deps.clockSource.now(),
+      mixedAudio.duration * 1_000,
+    )) {
+      const reason = 'complete frame no longer fits current slot after encode/mix';
+      this.deps.operatorManager.deferPreparedFrameToNextSlot(readyFrame.frameId, reason);
+      logger.info('Deferring ready digital frame before physical commit', {
+        frameId: readyFrame.frameId,
+        operatorIds: mixedAudio.operatorIds,
+        reason,
       });
+      return;
+    }
+    const action = this.deps.digitalFrameCoordinator.getPreparationAction(readyFrame.frameId);
+    const physicalBefore = this.deps.physicalTxCoordinator.getSnapshot();
+    const replacedFrameId = this.deps.digitalFrameCoordinator.getReplacedFrameId(readyFrame.frameId);
+    if (physicalBefore.phase !== 'idle'
+      && (action !== 'restart-current'
+        || physicalBefore.source !== 'digital'
+        || physicalBefore.frameId !== replacedFrameId)) {
+      const reason = `physical transmitter busy (${physicalBefore.phase})`;
+      this.deps.operatorManager.deferPreparedFrameToNextSlot(readyFrame.frameId, reason);
+      logger.info('Deferring digital frame until the physical transmitter is idle', {
+        frameId: readyFrame.frameId,
+        physicalLeaseId: physicalBefore.leaseId,
+        physicalPhase: physicalBefore.phase,
+      });
+      return;
+    }
 
-      // 检查是否为该操作员的最新编码请求（丢弃过期编码，防止双重编码竞态）
-      const latestRequestId = this.deps.operatorManager.getLatestEncodeRequestId(result.operatorId);
-      if (requestId && latestRequestId && requestId !== latestRequestId) {
-        logger.debug(`Skipping stale encode result: operatorId=${result.operatorId}, requestId=${requestId}, latest=${latestRequestId}`);
+    const prepared = this.deps.digitalFrameCoordinator.prepareFrameForHandover(
+      mixedAudio.frameId,
+      mixedAudio.operatorIds,
+    );
+    if (!prepared || prepared.phase !== 'prepared') return;
+
+    let audioForTransmission = mixedAudio;
+    let activeLeaseId: string | null = null;
+
+    try {
+      if (physicalBefore.phase !== 'idle') {
+        await this.replaceCommittedFrameAudio(
+          prepared.frameId,
+          prepared.participantOperatorIds,
+          physicalBefore,
+          audioForTransmission,
+          onReplacementStarted,
+        );
         return;
       }
 
-      this.currentSlotCompletedEncodes++;
-      logger.debug(`slot ${this.currentSlotId}: completed ${this.currentSlotCompletedEncodes}/${this.currentSlotExpectedEncodes}`);
+      const committed = this.deps.digitalFrameCoordinator.commitFrame(prepared.frameId);
+      if (!committed || committed.phase !== 'committed') return;
 
-      this.deps.transmissionTracker.updatePhase(result.operatorId, TransmissionPhase.MIXING, {});
-      this.deps.transmissionTracker.updatePhase(result.operatorId, TransmissionPhase.READY, {
-        audioData: result.audioData,
-        sampleRate: result.sampleRate,
-        duration: result.duration
-      });
-
-      const now = this.deps.clockSource.now();
-      const currentSlotStartMs = Math.floor(now / mode.slotMs) * mode.slotMs;
-      const currentTimeSinceSlotStartMs = now - currentSlotStartMs;
-      const transmitStartFromSlotMs = mode.transmitTiming || 0;
-      const compensationMs = this.deps.getCompensationMs();
-      const compensatedTransmitStart = Math.max(0, transmitStartFromSlotMs - compensationMs);
-
-      if (compensationMs !== 0) {
-        logger.debug(`transmit compensation applied: ${compensationMs}ms, target=${compensatedTransmitStart}ms (original=${transmitStartFromSlotMs}ms)`);
-      }
-
-      this.deps.audioMixer.addOperatorAudio(
-        result.operatorId,
-        result.audioData,
-        result.sampleRate,
-        currentSlotStartMs,
-        requestId,
-        result.request?.txDialShiftHz ?? 0
-      );
-
-      this.deps.transmissionTracker.recordAudioAddedToMixer(result.operatorId);
-
-      const isMidSlotSwitch = timeSinceSlotStartMs > 0 &&
-                              Math.abs(timeSinceSlotStartMs - compensatedTransmitStart) > 100;
-
-      const isCurrentlyPlaying = this.isDigitalPlaybackInProgress();
-
-      if (isCurrentlyPlaying) {
-        logger.debug('playback in progress, triggering remix');
-        this._isRemixing = true;
-        try {
-          const elapsedTimeMs = await this.deps.audioStreamManager.stopCurrentPlayback();
-          this.deps.audioMixer.markPlaybackStop();
-
-          const remixedAudio = await this.deps.audioMixer.remixAfterUpdate(elapsedTimeMs);
-          if (remixedAudio) {
-            const txId = this.nextTxId('digital-remix-update');
-            logger.debug('remix complete', {
-              operators: remixedAudio.operatorIds,
-              duration: remixedAudio.duration
-            });
-            // 重混音后操作者列表可能变化，更新前端
-            this.deps.engineEmitter.emit('pttStatusChanged', {
-              isTransmitting: true,
-              operatorIds: remixedAudio.operatorIds
-            });
-            this.deps.operatorManager.updateActiveTransmissionOperators(remixedAudio.operatorIds);
-            this.deps.audioMixer.markPlaybackStart();
-            await this.deps.audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate, {
-              playbackKind: 'digital',
-              diagnosticContext: { txId, operatorIds: remixedAudio.operatorIds, reason: 'encode-update-remix' },
-            });
-            this.startPTTPoll();
-          }
-        } catch (remixError) {
-          logger.error(`remix failed: ${remixError}`);
-        } finally {
-          this._isRemixing = false;
-        }
-      } else if (isMidSlotSwitch && currentTimeSinceSlotStartMs >= compensatedTransmitStart) {
-        logger.debug('mid-slot switch, mixing immediately');
-        const elapsedFromTransmitStart = currentTimeSinceSlotStartMs - compensatedTransmitStart;
-        const mixedAudio = await this.deps.audioMixer.mixAllOperatorAudios(elapsedFromTransmitStart);
-        if (mixedAudio) {
-          this.deps.audioMixer.emit('mixedAudioReady', mixedAudio);
-        }
-      } else {
-        const targetPlaybackTime = currentSlotStartMs + compensatedTransmitStart;
-        this.deps.audioMixer.scheduleMixing(targetPlaybackTime);
-      }
-    } catch (error) {
-      logger.error(`encode result handling failed: ${error}`);
-      this.deps.engineEmitter.emit('transmissionComplete', {
-        operatorId: result.operatorId,
-        success: false,
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
-  }
-
-  private async handleMixedAudioReady(mixedAudio: MixedAudio): Promise<void> {
-    try {
-      const txId = this.nextTxId('digital-tx');
-      logger.debug('mixed audio ready', {
-        txId,
-        operators: mixedAudio.operatorIds,
-        duration: mixedAudio.duration,
-        sampleRate: mixedAudio.sampleRate
-      });
-
-      for (const operatorId of mixedAudio.operatorIds) {
-        this.deps.transmissionTracker.recordMixedAudioReady(operatorId);
-      }
-
-      await this.deps.onBeforeStartPTT?.();
-
-      // 虚拟频率：在 PTT 之前临时把电台 dial 反向平移到本次发射的 shift。
-      // shift 与音频同源（随 mixedAudio 负载流转），保证施加到 dial 的平移量恒等于编码所用 shift。
-      // 音频已按 (origFreq - shift) 编码，dial +shift 后打到空中的绝对 RF 不变。
-      // clearTxDialOffset() 在 stopPTT 的 finally 中兜底恢复。
-      const txDialShiftHz = mixedAudio.txDialShiftHz ?? 0;
-      if (txDialShiftHz !== 0) {
-        await this.deps.radioManager.setTxDialOffset(txDialShiftHz);
-      }
-
-      const startSequenceAt = Date.now();
-      logger.info('starting PTT and audio playback in parallel', {
-        txId,
-        operatorIds: mixedAudio.operatorIds,
-        mixedSamples: mixedAudio.audioData.length,
-        sampleRate: mixedAudio.sampleRate,
-        durationMs: Math.round(mixedAudio.duration * 1000),
-        startSequenceAt: new Date(startSequenceAt).toISOString(),
-      });
-
-      for (const operatorId of mixedAudio.operatorIds) {
-        this.deps.transmissionTracker.recordAudioPlaybackStart(operatorId);
-      }
-
-      const pttPromise = this.startPTT(mixedAudio.operatorIds, txId).then(() => {
-        for (const operatorId of mixedAudio.operatorIds) {
-          this.deps.transmissionTracker.recordPTTStart(operatorId);
-        }
-      });
-
-      this.deps.audioMixer.markPlaybackStart();
-      logger.info('audio playback request issued', {
-        txId,
-        operatorIds: mixedAudio.operatorIds,
-        msAfterStartSequence: Date.now() - startSequenceAt,
-      });
-      const audioPromise = this.deps.audioStreamManager.playAudio(mixedAudio.audioData, mixedAudio.sampleRate, {
+      activeLeaseId = await this.deps.physicalTxCoordinator.acquireLease({
+        source: 'digital',
+        frameId: committed.frameId,
+        frameRevision: committed.revision,
+        operatorIds: audioForTransmission.operatorIds,
+        reason: action === 'restart-current' ? 'late correction restart' : 'digital slot frame',
+        beforeStart: this.deps.onBeforeStartPTT,
         playbackKind: 'digital',
-        diagnosticContext: { txId, operatorIds: mixedAudio.operatorIds },
-      });
-
-      logger.debug('PTT timing', {
-        txId,
-        audioMs: Math.round(mixedAudio.duration * 1000),
-        pollIntervalMs: TransmissionPipeline.PTT_POLL_INTERVAL_MS,
-        holdMs: TransmissionPipeline.PTT_HOLD_AFTER_AUDIO_MS
-      });
-
-      this.startPTTPoll();
-      await Promise.all([pttPromise, audioPromise]);
-
-      this.deps.audioMixer.markPlaybackStop();
-      logger.info('audio playback and PTT start promises completed', {
-        txId,
-        operatorIds: mixedAudio.operatorIds,
-        elapsedMs: Date.now() - startSequenceAt,
-        pttActive: this._isPTTActive,
-      });
-
-      if (this.shouldReleasePTTImmediatelyAfterAudio()) {
-        logger.debug('Radio audio output complete, stopping PTT without post-audio hold');
-        this.stopPTTPoll();
-        await this.stopPTT();
-      }
-
-      for (const operatorId of mixedAudio.operatorIds) {
-        this.deps.engineEmitter.emit('transmissionComplete', {
-          operatorId,
-          success: true,
-          duration: mixedAudio.duration,
-          mixedWith: mixedAudio.operatorIds.filter(id => id !== operatorId)
-        });
-      }
-    } catch (error) {
-      const isInterrupted = error instanceof Error && error.message === 'playback interrupted';
-      if (isInterrupted) {
-        // 播放被 stopCurrentPlayback 正常中断（中途内容切换），不关闭 PTT
-        // 停止旧轮询，后续 remix 路径会启动新轮询
-        logger.debug('audio playback interrupted by content switch (expected)');
-        this.stopPTTPoll();
-        this.deps.audioMixer.markPlaybackStop();
-      } else {
-        // 真正的播放错误，需要清理 PTT
-        logger.error(`mixed audio playback failed: ${error}`);
-        this.stopPTTPoll();
-        this.deps.audioMixer.markPlaybackStop();
-        await this.stopPTT();
-        for (const operatorId of mixedAudio.operatorIds) {
-          this.deps.engineEmitter.emit('transmissionComplete', {
-            operatorId,
-            success: false,
-            error: error instanceof Error ? error.message : String(error)
+        afterAudioDrain: async () => {
+          const refreshedOffsetMs = this.deps.digitalFrameCoordinator.getPlaybackOffsetMs(
+            committed.frameId,
+            this.deps.clockSource.now(),
+          );
+          const refreshedMix = await this.deps.audioMixer.mixFrameById(
+            committed.frameId,
+            committed.revision,
+            refreshedOffsetMs,
+          );
+          const refreshedAudio = refreshedMix
+            ? this.alignMixedAudioToCurrentCursor(committed.frameId, refreshedMix, refreshedOffsetMs)
+            : null;
+          if (!refreshedAudio) {
+            throw new CompleteFrameBudgetExceededError(
+              'digital waveform fully consumed while previous audio drained',
+            );
+          }
+          const refreshedOperators = [...refreshedAudio.operatorIds].sort();
+          const committedOperators = [...committed.participantOperatorIds].sort();
+          if (refreshedOperators.length !== committedOperators.length
+            || refreshedOperators.some((operatorId, index) => operatorId !== committedOperators[index])) {
+            throw new Error('digital frame participants changed while previous audio drained');
+          }
+          audioForTransmission = refreshedAudio;
+          logger.info('Refreshed digital frame after previous audio drained', {
+            frameId: prepared.frameId,
+            playbackOffsetMs: refreshedOffsetMs,
+            durationMs: Math.round(refreshedAudio.duration * 1_000),
           });
-        }
+        },
+        deferActiveUntilAudio: true,
+        validateStart: () => {
+          if (!this.deps.digitalFrameCoordinator.hasCompleteFrameBudget(
+            committed.frameId,
+            this.deps.clockSource.now(),
+            audioForTransmission.duration * 1_000,
+          )) {
+            throw new CompleteFrameBudgetExceededError();
+          }
+        },
+        txDialShiftHz: audioForTransmission.txDialShiftHz,
+      });
+
+      const physicalAfterAcquire = this.deps.physicalTxCoordinator.getSnapshot();
+      if (physicalAfterAcquire.leaseId === activeLeaseId
+        && physicalAfterAcquire.frameId
+        && physicalAfterAcquire.frameId !== committed.frameId) {
+        const supersededResult = await this.deps.physicalTxCoordinator.playAudioOnLease(activeLeaseId, {
+          audioData: audioForTransmission.audioData,
+          sampleRate: audioForTransmission.sampleRate,
+          playbackKind: 'digital',
+          frameId: committed.frameId,
+          operatorIds: audioForTransmission.operatorIds,
+          reason: 'superseded before initial audio start',
+        });
+        activeLeaseId = null;
+        this.finishDigitalFramePlayback(committed.frameId, audioForTransmission, supersededResult);
+        return;
       }
+
+      // PTT acknowledgement can itself be delayed. Freeze the actual playback
+      // bytes only after it succeeds, so a mid-slot start or correction begins
+      // at the waveform position visible to the operator at that moment.
+      const finalPlaybackOffsetMs = this.deps.digitalFrameCoordinator.getPlaybackOffsetMs(
+        committed.frameId,
+        this.deps.clockSource.now(),
+      );
+      const mixedAtPtt = await this.deps.audioMixer.mixFrameById(
+        committed.frameId,
+        committed.revision,
+        finalPlaybackOffsetMs,
+      );
+      const finalAudio = mixedAtPtt
+        ? this.alignMixedAudioToCurrentCursor(committed.frameId, mixedAtPtt, finalPlaybackOffsetMs)
+        : null;
+      if (!finalAudio) {
+        await this.deps.physicalTxCoordinator.forceInterruptLease(
+          activeLeaseId,
+          'digital waveform fully consumed before audio start',
+        );
+        activeLeaseId = null;
+        const reason = 'digital waveform fully consumed before audio start';
+        this.deps.operatorManager.deferPreparedFrameToNextSlot(committed.frameId, reason);
+        return;
+      }
+      const finalOperators = [...finalAudio.operatorIds].sort();
+      const committedOperators = [...committed.participantOperatorIds].sort();
+      if (finalOperators.length !== committedOperators.length
+        || finalOperators.some((operatorId, index) => operatorId !== committedOperators[index])) {
+        await this.deps.physicalTxCoordinator.forceInterruptLease(
+          activeLeaseId,
+          'digital frame participants changed before audio start',
+        );
+        activeLeaseId = null;
+        this.failCommittedFrame(committed.frameId, finalAudio, 'digital frame participants changed before audio start');
+        return;
+      }
+      audioForTransmission = finalAudio;
+      if (!this.deps.digitalFrameCoordinator.hasCompleteFrameBudget(
+        committed.frameId,
+        this.deps.clockSource.now(),
+        audioForTransmission.duration * 1_000,
+      )) {
+        await this.deps.physicalTxCoordinator.forceInterruptLease(
+          activeLeaseId,
+          'complete frame no longer fits after PTT acknowledgement',
+        );
+        activeLeaseId = null;
+        const reason = 'complete frame no longer fits after PTT acknowledgement';
+        this.deps.operatorManager.deferPreparedFrameToNextSlot(committed.frameId, reason);
+        return;
+      }
+
+      const result = await this.deps.physicalTxCoordinator.playAudioOnLease(activeLeaseId, {
+        audioData: audioForTransmission.audioData,
+        sampleRate: audioForTransmission.sampleRate,
+        playbackKind: 'digital',
+        frameId: committed.frameId,
+        operatorIds: audioForTransmission.operatorIds,
+        reason: 'digital slot frame audio',
+        playbackOptions: {
+          diagnosticContext: {
+            frameId: prepared.frameId,
+            operatorIds: audioForTransmission.operatorIds,
+          },
+        },
+        tailHoldMs: DIGITAL_TAIL_HOLD_MS,
+      });
+      activeLeaseId = null;
+      this.finishDigitalFramePlayback(committed.frameId, audioForTransmission, result);
+    } catch (error) {
+      if (activeLeaseId) {
+        await this.deps.physicalTxCoordinator.forceInterruptLease(
+          activeLeaseId,
+          'digital frame start failed',
+        ).catch((cleanupError) => {
+          logger.warn('Failed to clean up digital physical lease after start failure', {
+            frameId: prepared.frameId,
+            cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          });
+        });
+        activeLeaseId = null;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof CompleteFrameBudgetExceededError) {
+        this.deps.operatorManager.deferPreparedFrameToNextSlot(prepared.frameId, message);
+        logger.info('Deferring committed frame after pre-PTT work exceeded slot budget', {
+          frameId: prepared.frameId,
+        });
+        return;
+      }
+      if (error instanceof PhysicalTxPreparationError) {
+        this.deps.operatorManager.deferPreparedFrameToNextSlot(prepared.frameId, message);
+        logger.warn('Deferring committed frame because physical audio output is not ready', {
+          frameId: prepared.frameId,
+          error: message,
+        });
+        return;
+      }
+      if (error instanceof PhysicalTxBusyError) {
+        this.deps.operatorManager.deferPreparedFrameToNextSlot(prepared.frameId, message);
+        logger.info('Deferring committed frame while physical cleanup is fenced', {
+          frameId: prepared.frameId,
+        });
+        return;
+      }
+      logger.error('physical digital transmission failed', {
+        frameId: prepared.frameId,
+        error: message,
+      });
+      this.failCommittedFrame(prepared.frameId, audioForTransmission, message);
     }
   }
 
-  private isDigitalPlaybackInProgress(): boolean {
-    if (!this.deps.audioStreamManager.isPlaying()) {
-      return false;
+  private async replaceCommittedFrameAudio(
+    frameId: string,
+    participantOperatorIds: string[],
+    physical: PhysicalTxSnapshot,
+    initialAudio: MixedAudio,
+    onReplacementStarted?: () => void,
+  ): Promise<void> {
+    if (!physical.leaseId) {
+      this.failCommittedFrame(frameId, initialAudio, 'physical lease disappeared before audio replacement');
+      return;
     }
 
-    const kind = this.deps.audioStreamManager.getCurrentPlaybackKind();
-    return kind === null || kind === 'digital';
+    const mixStartedAtMs = this.deps.clockSource.now();
+    const replacementOffsetMs = this.deps.digitalFrameCoordinator.getPlaybackOffsetMs(
+      frameId,
+      mixStartedAtMs,
+    );
+    const frame = this.deps.digitalFrameCoordinator.getFrame(frameId);
+    const remixed = frame
+      ? await this.deps.audioMixer.mixFrameById(frame.frameId, frame.revision, replacementOffsetMs)
+      : null;
+    const waveformStartMs = this.deps.clockSource.now();
+    const aligned = remixed
+      ? this.alignMixedAudioToCurrentCursor(frameId, remixed, replacementOffsetMs, waveformStartMs)
+      : null;
+    if (!aligned) {
+      const reason = 'replacement audio was fully consumed before handover preparation';
+      this.deps.operatorManager.deferPreparedFrameToNextSlot(frameId, reason);
+      return;
+    }
+    const actualOperators = [...aligned.operatorIds].sort();
+    const expectedOperators = [...participantOperatorIds].sort();
+    if (actualOperators.length !== expectedOperators.length
+      || actualOperators.some((operatorId, index) => operatorId !== expectedOperators[index])) {
+      this.failCommittedFrame(frameId, aligned, 'replacement mix lost one or more frame participants');
+      return;
+    }
+    if (!this.deps.digitalFrameCoordinator.hasCompleteFrameBudget(
+      frameId,
+      waveformStartMs,
+      aligned.duration * 1_000,
+    )) {
+      const reason = 'complete replacement no longer fits before handover preparation';
+      this.deps.operatorManager.deferPreparedFrameToNextSlot(frameId, reason);
+      return;
+    }
+
+    const currentPhysical = this.deps.physicalTxCoordinator.getSnapshot();
+    if (currentPhysical.leaseId !== physical.leaseId
+      || currentPhysical.epoch !== physical.epoch
+      || currentPhysical.playbackGeneration !== physical.playbackGeneration) {
+      this.deps.operatorManager.deferPreparedFrameToNextSlot(
+        frameId,
+        'physical replacement precondition changed before handover',
+      );
+      return;
+    }
+
+    const audioForTransmission = aligned;
+    const result = await this.deps.physicalTxCoordinator.replaceAudioOnLease(physical.leaseId, {
+      frameId,
+      frameRevision: this.deps.digitalFrameCoordinator.getFrame(frameId)?.revision,
+      operatorIds: participantOperatorIds,
+      reason: 'digital frame audio replacement',
+      playbackKind: 'digital',
+      audioData: aligned.audioData,
+      sampleRate: aligned.sampleRate,
+      playbackOptions: {
+        diagnosticContext: { frameId, operatorIds: aligned.operatorIds },
+      },
+      tailHoldMs: DIGITAL_TAIL_HOLD_MS,
+      waveformStartMs,
+      slotEndMs: this.deps.digitalFrameCoordinator.getSlotEndMs(frameId),
+      expectedLeaseEpoch: physical.epoch,
+      expectedPlaybackGeneration: physical.playbackGeneration,
+      expectedFrameId: physical.frameId,
+      onHandoverCommitted: () => {
+        const committed = this.deps.digitalFrameCoordinator.commitFrame(frameId);
+        if (committed?.phase !== 'committed') {
+          return {
+            status: 'superseded' as const,
+            reason: 'digital replacement candidate is no longer prepared',
+          };
+        }
+        return { status: 'committed' as const };
+      },
+      onPlaybackStarted: onReplacementStarted,
+    });
+
+    if (!result.success && result.leaseContinues) {
+      this.deps.operatorManager.deferPreparedFrameToNextSlot(frameId, result.reason);
+    }
+    this.finishDigitalFramePlayback(frameId, audioForTransmission, result);
+  }
+
+  private finishDigitalFramePlayback(
+    frameId: string,
+    audio: MixedAudio,
+    result: {
+      success: boolean;
+      reason: string;
+      error?: string;
+      physicalConfirmed: boolean;
+      leaseContinues?: boolean;
+    },
+  ): void {
+    if (result.leaseContinues) {
+      logger.info('Digital frame audio was superseded within the active PTT lease', {
+        frameId,
+        reason: result.reason,
+        physicalConfirmed: result.physicalConfirmed,
+      });
+    } else if (!result.success) {
+      logger.warn('Physical digital playback completed unsuccessfully', {
+        frameId,
+        reason: result.reason,
+        error: result.error,
+        physicalConfirmed: result.physicalConfirmed,
+        leaseContinues: result.leaseContinues,
+      });
+    }
+    this.deps.digitalFrameCoordinator.completeFrame(frameId, result.reason);
+    if (result.success) {
+      for (const operatorId of audio.operatorIds) {
+        const text = this.deps.digitalFrameCoordinator.getIntentText(frameId, operatorId);
+        if (text) this.deps.operatorManager.notifyPhysicalTransmissionComplete(operatorId, text);
+      }
+    }
+    this.emitFrameTerminal(frameId, audio.operatorIds, {
+      physicalConfirmed: result.physicalConfirmed,
+      terminalReason: result.reason,
+      success: result.success,
+      duration: audio.duration,
+      error: result.error,
+    });
+  }
+
+  private alignMixedAudioToCurrentCursor(
+    frameId: string,
+    mixedAudio: MixedAudio,
+    mixedAtOffsetMs: number,
+    currentTimeMs = this.deps.clockSource.now(),
+  ): MixedAudio | null {
+    const currentOffsetMs = this.deps.digitalFrameCoordinator.getPlaybackOffsetMs(
+      frameId,
+      currentTimeMs,
+    );
+    const additionalOffsetMs = Math.max(0, currentOffsetMs - mixedAtOffsetMs);
+    if (additionalOffsetMs === 0) return mixedAudio;
+
+    const skipSamples = Math.floor((additionalOffsetMs / 1_000) * mixedAudio.sampleRate);
+    if (skipSamples >= mixedAudio.audioData.length) return null;
+    const audioData = mixedAudio.audioData.subarray(skipSamples);
+    return {
+      ...mixedAudio,
+      audioData,
+      duration: audioData.length / mixedAudio.sampleRate,
+    };
+  }
+
+  private failCommittedFrame(frameId: string, mixedAudio: MixedAudio, reason: string): void {
+    const frame = this.deps.digitalFrameCoordinator.completeFrame(frameId, reason);
+    this.emitFrameTerminal(frameId, frame?.participantOperatorIds ?? mixedAudio.operatorIds, {
+      physicalConfirmed: false,
+      terminalReason: reason,
+      success: false,
+      error: reason,
+    });
+  }
+
+  private emitFrameTerminal(
+    frameId: string,
+    operatorIds: string[],
+    result: {
+      physicalConfirmed: boolean;
+      terminalReason: string;
+      success: boolean;
+      duration?: number;
+      error?: string;
+    },
+  ): void {
+    let emitted = this.terminalOperatorsByFrame.get(frameId);
+    if (!emitted) {
+      emitted = new Set();
+      this.terminalOperatorsByFrame.set(frameId, emitted);
+    }
+    for (const operatorId of operatorIds) {
+      if (emitted.has(operatorId)) continue;
+      emitted.add(operatorId);
+      this.deps.engineEmitter.emit('transmissionComplete', {
+        operatorId,
+        frameId,
+        ...result,
+        mixedWith: operatorIds.filter((id) => id !== operatorId),
+      });
+    }
+    if (this.terminalOperatorsByFrame.size > 256) {
+      const oldestFrameId = this.terminalOperatorsByFrame.keys().next().value as string | undefined;
+      if (oldestFrameId) this.terminalOperatorsByFrame.delete(oldestFrameId);
+    }
+  }
+
+  private handlePhysicalPhaseChanged(snapshot: PhysicalTxSnapshot): void {
+    if (snapshot.source && snapshot.source !== 'digital') return;
+    if (snapshot.frameId) {
+      if (snapshot.phase === 'active') {
+        const frame = this.deps.digitalFrameCoordinator.markOnAir(snapshot.frameId);
+        if (frame) this.emitPhysicalTransmissionFacts(frame, snapshot);
+      } else if (snapshot.phase === 'draining') {
+        this.deps.digitalFrameCoordinator.markDraining(snapshot.frameId);
+      }
+    }
+
+  }
+
+  private emitPhysicalTransmissionFacts(
+    frame: import('../transmission/TransmissionIntent.js').FrameLease,
+    snapshot: PhysicalTxSnapshot,
+  ): void {
+    const slotStartMs = Number(frame.slotId.replace(/^slot-/, ''));
+    if (!Number.isFinite(slotStartMs)) {
+      logger.warn('Cannot publish physical transmission fact for an unparseable slot id', {
+        frameId: frame.frameId,
+        slotId: frame.slotId,
+      });
+      return;
+    }
+    for (const operatorId of frame.participantOperatorIds) {
+      const key = `${frame.frameId}:${snapshot.playbackGeneration}:${operatorId}`;
+      if (this.onAirTransmissionKeys.has(key)) continue;
+      const message = this.deps.digitalFrameCoordinator.getIntentText(frame.frameId, operatorId);
+      const context = this.deps.operatorManager.getTransmissionFactContext(operatorId);
+      if (!message || !context) continue;
+      this.onAirTransmissionKeys.add(key);
+      this.deps.engineEmitter.emit('transmissionLog', {
+        operatorId,
+        frameId: frame.frameId,
+        revision: frame.revision,
+        playbackGeneration: snapshot.playbackGeneration,
+        phase: 'on_air',
+        physicalConfirmed: true,
+        time: new Date(slotStartMs).toISOString().slice(11, 19).replace(/:/g, ''),
+        message,
+        frequency: context.frequency,
+        slotStartMs,
+        replaceExisting: this.deps.digitalFrameCoordinator.getReplacedFrameId(frame.frameId) !== undefined,
+        frequencyContext: context.frequencyContext,
+      });
+    }
+    if (this.onAirTransmissionKeys.size > 1_024) {
+      this.onAirTransmissionKeys.clear();
+    }
   }
 }

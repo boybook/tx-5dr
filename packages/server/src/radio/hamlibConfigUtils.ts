@@ -84,12 +84,17 @@ export function normalizeSerialConnectionConfig(serial?: Partial<SerialConnectio
 }
 
 export function normalizeHamlibConfig(config: HamlibConfig): HamlibConfig {
+  const normalizedConfig: HamlibConfig = {
+    ...config,
+    digitalModeRadioMode: config.digitalModeRadioMode ?? 'usb',
+  };
+
   if (config.type !== 'serial') {
-    return config;
+    return normalizedConfig;
   }
 
   return {
-    ...config,
+    ...normalizedConfig,
     serial: normalizeSerialConnectionConfig(config.serial),
   };
 }

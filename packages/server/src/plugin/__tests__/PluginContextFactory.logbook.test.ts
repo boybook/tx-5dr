@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import type { DigitalRadioEngineEvents, QSORecord } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import type { LoadedPlugin, PluginManagerDeps } from '../types.js';
+import type { LogbookAccess } from '@tx5dr/plugin-api';
 import { PluginContextFactory } from '../PluginContextFactory.js';
 import { LogManager } from '../../log/LogManager.js';
 
@@ -55,18 +56,50 @@ function createDeps(eventEmitter: EventEmitter<DigitalRadioEngineEvents>): Plugi
   };
 }
 
-function createPlugin(): LoadedPlugin {
+function createPlugin(permissions: LoadedPlugin['definition']['permissions'] = ['logbook:write']): LoadedPlugin {
   return {
     definition: {
       name: 'test-plugin',
       version: '1.0.0',
       type: 'utility',
+      permissions,
     },
     isBuiltIn: false,
   };
 }
 
 describe('PluginContextFactory logbook access', () => {
+  it('only exposes the declared logbook projection', async () => {
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const factory = new PluginContextFactory(createDeps(eventEmitter));
+    const storageDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-ctx-projection-'));
+    tempDirs.push(storageDir);
+
+    const noAccess = await factory.create(
+      createPlugin([]),
+      'operator-1',
+      'operator',
+      storageDir,
+      () => {},
+      () => ({}),
+    );
+    expect('logbook' in noAccess).toBe(false);
+
+    const readOnly = await factory.create(
+      createPlugin(['logbook:read']),
+      'operator-1',
+      'operator',
+      storageDir,
+      () => {},
+      () => ({}),
+    );
+    expect(readOnly.logbook).toBeDefined();
+    expect('queryQSOs' in readOnly.logbook!).toBe(true);
+    expect('addQSO' in readOnly.logbook!).toBe(false);
+    expect('updateQSO' in readOnly.logbook!).toBe(false);
+    expect('notifyUpdated' in readOnly.logbook!).toBe(false);
+  });
+
   it('returns the provider committed record for operator-bound add and update', async () => {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     const committedAdd: QSORecord = {
@@ -120,8 +153,9 @@ describe('PluginContextFactory logbook access', () => {
       messageHistory: ['caller update'],
     };
 
-    await expect(ctx.logbook.addQSO(input)).resolves.toEqual(committedAdd);
-    await expect(ctx.logbook.updateQSO(input.id, updates)).resolves.toEqual(committedUpdate);
+    const logbook = ctx.logbook as LogbookAccess;
+    await expect(logbook.addQSO(input)).resolves.toEqual(committedAdd);
+    await expect(logbook.updateQSO(input.id, updates)).resolves.toEqual(committedUpdate);
     expect(addQSO).toHaveBeenCalledWith(input, 'operator-1');
     expect(updateQSO).toHaveBeenCalledWith(input.id, updates);
   });
@@ -171,7 +205,7 @@ describe('PluginContextFactory logbook access', () => {
       () => ({}),
     );
 
-    await ctx.logbook.notifyUpdated();
+    await (ctx.logbook as LogbookAccess).notifyUpdated();
 
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual({
@@ -236,7 +270,7 @@ describe('PluginContextFactory logbook access', () => {
       () => ({}),
     );
 
-    await ctx.logbook.forCallsign('bg5drb').notifyUpdated();
+    await (ctx.logbook as LogbookAccess).forCallsign('bg5drb').notifyUpdated();
 
     expect(getOrCreateLogBookByCallsign).not.toHaveBeenCalled();
     expect(events).toHaveLength(1);
@@ -275,7 +309,7 @@ describe('PluginContextFactory logbook access', () => {
       () => {},
       () => ({}),
     );
-    const logbook = ctx.logbook.forCallsign('bg5drb');
+    const logbook = (ctx.logbook as LogbookAccess).forCallsign('bg5drb');
     const record: QSORecord = {
       id: 'qso-1',
       callsign: 'N0CALL',

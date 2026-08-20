@@ -1,10 +1,13 @@
 import { EventEmitter } from 'eventemitter3';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { DigitalFrameCoordinator } from '../../transmission/DigitalFrameCoordinator.js';
+import { OperatorIntentCoordinator } from '../../transmission/OperatorIntentCoordinator.js';
+import { PhysicalTxCoordinator } from '../../transmission/PhysicalTxCoordinator.js';
 import { TransmissionPipeline } from '../TransmissionPipeline.js';
 
-function createDeferred<T = void>() {
+function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
+  let reject!: (error?: unknown) => void;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
@@ -12,196 +15,707 @@ function createDeferred<T = void>() {
   return { promise, resolve, reject };
 }
 
-function createPipeline(configType: 'icom-wlan' | 'hamlib') {
+function createHarness(options: {
+  pttStart?: Promise<void>;
+  nowMs?: number;
+  slotEndMs?: number;
+  expectedDurationMs?: number;
+  beforeStart?: Promise<void>;
+  dialOffset?: Promise<void>;
+  stopPlayback?: Promise<void>;
+  playbackStartMs?: number;
+  operatorIds?: string[];
+} = {}) {
   const engineEmitter = new EventEmitter();
-  const audioDone = createDeferred<void>();
-  const setPTT = vi.fn<[boolean], Promise<void>>(async () => undefined);
-
+  const encodeQueue = new EventEmitter();
+  const mixerEmitter = new EventEmitter();
+  const audioDones = [deferred<void>()];
+  let playbackIndex = 0;
+  let playing = false;
+  let nowMs = options.nowMs ?? 1_000;
+  const setPTT = vi.fn(async (active: boolean) => {
+    if (active && options.pttStart) await options.pttStart;
+  });
+  const playAudio = vi.fn((_audioData: Float32Array, _sampleRate: number, options?: { onPlaybackStarted?: () => void }) => {
+    const audioDone = audioDones[playbackIndex] ?? (audioDones[playbackIndex] = deferred<void>());
+    playbackIndex += 1;
+    playing = true;
+    options?.onPlaybackStarted?.();
+    return audioDone.promise.finally(() => {
+      playing = false;
+    });
+  });
+  const stopCurrentPlayback = vi.fn(async () => {
+    playing = false;
+    audioDones[Math.max(0, playbackIndex - 1)].reject(new Error('playback interrupted'));
+    if (options.stopPlayback) await options.stopPlayback;
+    return 0;
+  });
+  const prepareAudioPlayback = vi.fn(async () => false);
+  let frameSequence = 0;
+  const digitalFrameCoordinator = new DigitalFrameCoordinator({ idFactory: () => `frame-${++frameSequence}` });
+  const frameMixes = new Map<string, Record<string, any>>();
+  const physicalTxCoordinator = new PhysicalTxCoordinator({
+    isRadioConnected: () => true,
+    setPTT,
+    playAudio,
+    stopCurrentPlayback,
+    prepareAudioPlayback,
+    isAudioPlaying: () => playing,
+    setTxDialOffset: vi.fn(async () => {
+      if (options.dialOffset) await options.dialOffset;
+    }),
+    clearTxDialOffset: vi.fn(async () => undefined),
+    now: () => nowMs,
+    sleep: vi.fn(async () => undefined),
+  }, { idFactory: () => 'lease-1' });
+  const audioMixer = Object.assign(mixerEmitter, {
+    addOperatorAudio: vi.fn(),
+    mixFrameById: vi.fn(async (frameId: string, revision: number) => frameMixes.get(`${frameId}:${revision}`) ?? null),
+    mixFrame: vi.fn(async (snapshot: { frameId: string; revision: number }) => frameMixes.get(`${snapshot.frameId}:${snapshot.revision}`) ?? null),
+    scheduleFrameMixing: vi.fn(),
+    retainFrame: vi.fn(),
+    releaseFrame: vi.fn(),
+    clearSlotCache: vi.fn(),
+    cloneFrameTracks: vi.fn((
+      _source: unknown,
+      target: { frameId: string; frameRevision: number; slotId: string },
+      retainedOperatorIds: string[],
+    ) => ({
+      frameId: target.frameId,
+      revision: target.frameRevision,
+      slotId: target.slotId,
+      txDialShiftHz: 0,
+      tracks: new Map(retainedOperatorIds.map((operatorId) => [operatorId, { operatorId }])),
+    })),
+    clearFrame: vi.fn(),
+    clear: vi.fn(),
+  });
+  const operatorManager = {
+    getPendingTransmissionsCount: vi.fn(() => 0),
+    processPendingTransmissions: vi.fn(),
+    updateActiveTransmissionOperators: vi.fn(),
+    notifyPhysicalTransmissionComplete: vi.fn(),
+    requestStrategyStop: vi.fn(() => 'not-found'),
+    getOperatorById: vi.fn(() => ({ stop: vi.fn() })),
+    getTransmissionFactContext: vi.fn(() => ({
+      frequency: 7_074_000,
+      frequencyContext: { mode: 'FT8', radioMode: 'USB', frequency: 7_074_000 },
+    })),
+    releaseTargetReservation: vi.fn(),
+    deferPreparedFrameToNextSlot: vi.fn((frameId: string, reason: string) => {
+      return digitalFrameCoordinator.deferFrame(frameId, reason)?.phase === 'cancelled';
+    }),
+  };
+  const intentCoordinator = new OperatorIntentCoordinator();
+  const transmissionTracker = {
+    updatePhase: vi.fn(),
+    recordAudioAddedToMixer: vi.fn(),
+  };
   const deps = {
     engineEmitter,
-    audioMixer: {
-      markPlaybackStart: vi.fn(),
-      markPlaybackStop: vi.fn(),
-      clearSlotCache: vi.fn(),
-    },
-    audioStreamManager: {
-      playAudio: vi.fn(() => audioDone.promise),
-      isPlaying: vi.fn(() => false),
-      getCurrentPlaybackKind: vi.fn<[], 'digital' | 'voice-keyer' | 'tune-tone' | null>(() => null),
-      stopCurrentPlayback: vi.fn(),
-    },
-    radioManager: {
-      isConnected: vi.fn(() => true),
-      setPTT,
-      setPTTActive: vi.fn(),
-      getConfig: vi.fn(() => ({ type: configType })),
-      setTxDialOffset: vi.fn(async () => true),
-      clearTxDialOffset: vi.fn(async () => undefined),
-    },
-    spectrumScheduler: {
-      setPTTActive: vi.fn(),
-    },
-    transmissionTracker: {
-      recordMixedAudioReady: vi.fn(),
-      recordPTTStart: vi.fn(),
-      recordAudioPlaybackStart: vi.fn(),
-    },
-    encodeQueue: new EventEmitter(),
-    operatorManager: {
-      updateActiveTransmissionOperators: vi.fn(),
-    },
-    clockSource: {
-      now: vi.fn(() => Date.now()),
-    },
-    getCurrentMode: vi.fn(() => ({ name: 'FT8', slotMs: 15000, transmitTiming: 500 })),
-    getCompensationMs: vi.fn(() => 0),
-    onBeforeStartPTT: vi.fn().mockResolvedValue(undefined),
+    audioMixer,
+    audioStreamManager: { playAudio, stopCurrentPlayback },
+    spectrumScheduler: { setPTTActive: vi.fn() },
+    transmissionTracker,
+    encodeQueue,
+    operatorManager,
+    digitalFrameCoordinator,
+    physicalTxCoordinator,
+    intentCoordinator,
+    clockSource: { now: () => nowMs },
+    getCurrentMode: () => ({ name: 'FT8', slotMs: 15_000, transmitTiming: 500 }),
+    getCompensationMs: () => 0,
+    onBeforeStartPTT: vi.fn(async () => {
+      if (options.beforeStart) await options.beforeStart;
+    }),
   };
-
   const pipeline = new TransmissionPipeline(deps as never);
-  const mixedAudio = {
-    operatorIds: ['operator-a'],
-    audioData: new Float32Array(12000),
-    sampleRate: 12000,
-    duration: 1,
-    txDialShiftHz: 0,
-  };
+  pipeline.setup();
 
-  return { pipeline, deps, audioDone, mixedAudio };
+  const operatorIds = options.operatorIds ?? ['operator-a'];
+  const prepared = digitalFrameCoordinator.prepareFrame({
+    slotId: 'slot-0',
+    intents: operatorIds.map((operatorId) => ({
+      operatorId,
+      source: 'standard-qso' as const,
+      reason: 'test',
+      text: operatorId === 'operator-a' ? 'A B 73' : `${operatorId} TEST 73`,
+      decisionEpoch: 1,
+    })),
+    slotEndMs: options.slotEndMs,
+    expectedDurationMs: options.expectedDurationMs,
+    playbackStartMs: options.playbackStartMs,
+  });
+  digitalFrameCoordinator.beginEncoding(prepared.frame!.frameId);
+  prepared.intents.forEach((intent) => {
+    digitalFrameCoordinator.acceptEncodeResult({
+      frameId: prepared.frame!.frameId,
+      operatorId: intent.operatorId!,
+      decisionEpoch: intent.decisionEpoch,
+      revision: prepared.frame!.revision,
+    });
+  });
+  const mixedAudio = {
+    operatorIds,
+    audioData: new Float32Array(12_000),
+    sampleRate: 12_000,
+    duration: 1,
+    txDialShiftHz: 681,
+    frameId: prepared.frame!.frameId,
+    frameRevision: prepared.frame!.revision,
+    slotId: 'slot-0',
+  };
+  frameMixes.set(`${prepared.frame!.frameId}:${prepared.frame!.revision}`, mixedAudio);
+
+  return {
+    pipeline,
+    deps,
+    setPTT,
+    playAudio,
+    prepareAudioPlayback,
+    audioDone: audioDones[0],
+    getAudioDone: (index: number) => audioDones[index] ?? (audioDones[index] = deferred<void>()),
+    mixedAudio,
+    prepared,
+    setFrameMix: (frameId: string, revision: number, audio: Record<string, any>) => {
+      frameMixes.set(`${frameId}:${revision}`, audio);
+    },
+    setNow: (value: number) => { nowMs = value; },
+  };
 }
 
-describe('TransmissionPipeline PTT release timing', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+describe('TransmissionPipeline lifecycle integration', () => {
+  it('reports on-air only after PTT confirmation and audio start, then completes once', async () => {
+    const harness = createHarness();
+    const physicalPhases: Array<{ phase: string; pttConfirmed: boolean }> = [];
+    const completions: Array<Record<string, unknown>> = [];
+    const transmissionLogs: Array<Record<string, unknown>> = [];
+    harness.deps.physicalTxCoordinator.on('phaseChanged', (event) => physicalPhases.push(event));
+    harness.deps.engineEmitter.on('transmissionComplete', (event) => completions.push(event));
+    harness.deps.engineEmitter.on('transmissionLog', (event) => transmissionLogs.push(event));
 
-  it('stops ICOM WLAN PTT as soon as the paced audio write resolves', async () => {
-    vi.useFakeTimers();
-    const { pipeline, deps, audioDone, mixedAudio } = createPipeline('icom-wlan');
+    const handling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(1));
+    expect(physicalPhases.some((event) => event.phase === 'active' && event.pttConfirmed === true)).toBe(true);
+    expect(transmissionLogs).toEqual([expect.objectContaining({
+      frameId: 'frame-1',
+      revision: 1,
+      playbackGeneration: 1,
+      phase: 'on_air',
+      physicalConfirmed: true,
+      operatorId: 'operator-a',
+      message: 'A B 73',
+    })]);
 
-    const handling = (pipeline as unknown as {
-      handleMixedAudioReady: (mixedAudio: unknown) => Promise<void>;
-    }).handleMixedAudioReady(mixedAudio);
-
-    await vi.waitFor(() => {
-      expect(deps.radioManager.setPTT).toHaveBeenCalledWith(true);
-    });
-
-    audioDone.resolve();
+    harness.audioDone.resolve();
     await handling;
 
-    expect(deps.radioManager.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
+    expect(completions).toHaveLength(1);
+    expect(completions[0]).toMatchObject({
+      frameId: 'frame-1',
+      success: true,
+      physicalConfirmed: true,
+    });
+    expect(harness.deps.operatorManager.notifyPhysicalTransmissionComplete)
+      .toHaveBeenCalledWith('operator-a', 'A B 73');
   });
 
-  it('keeps Hamlib on the existing post-audio hold path', async () => {
-    vi.useFakeTimers();
-    const { pipeline, deps, audioDone, mixedAudio } = createPipeline('hamlib');
+  it('does not display on-air or start audio while PTT is still starting', async () => {
+    const pttStart = deferred<void>();
+    const harness = createHarness({ pttStart: pttStart.promise });
+    const physicalPhases: Array<{ phase: string; pttConfirmed: boolean }> = [];
+    harness.deps.physicalTxCoordinator.on('phaseChanged', (event) => physicalPhases.push(event));
 
-    const handling = (pipeline as unknown as {
-      handleMixedAudioReady: (mixedAudio: unknown) => Promise<void>;
-    }).handleMixedAudioReady(mixedAudio);
+    const handling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+    await vi.waitFor(() => expect(harness.setPTT).toHaveBeenCalledWith(true));
+    expect(harness.playAudio).not.toHaveBeenCalled();
+    expect(physicalPhases.some((event) => event.phase === 'active' && event.pttConfirmed === true)).toBe(false);
 
+    pttStart.resolve();
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(1));
+    harness.audioDone.resolve();
+    await handling;
+  });
+
+  it('keeps the predecessor lease when a starting replacement is superseded before handover', async () => {
+    const pttStart = deferred<void>();
+    const harness = createHarness({
+      pttStart: pttStart.promise,
+      nowMs: 1_000,
+      slotEndMs: 15_000,
+      expectedDurationMs: 1_000,
+      playbackStartMs: 500,
+    });
+    const initialHandling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+    await vi.waitFor(() => expect(harness.setPTT).toHaveBeenCalledWith(true));
+
+    const frame2 = harness.deps.digitalFrameCoordinator.prepareFrame({
+      slotId: 'slot-0',
+      intents: [{
+        operatorId: 'operator-a',
+        source: 'operator-edit',
+        reason: 'first edit while PTT starts',
+        text: 'A B RR73',
+        decisionEpoch: 2,
+      }],
+      nowMs: 1_000,
+      slotEndMs: 15_000,
+      expectedDurationMs: 1_000,
+      playbackStartMs: 500,
+    });
+    expect(frame2.action).toBe('restart-current');
+    harness.deps.digitalFrameCoordinator.beginEncoding(frame2.frame!.frameId);
+    harness.deps.digitalFrameCoordinator.acceptEncodeResult({
+      frameId: frame2.frame!.frameId,
+      operatorId: 'operator-a',
+      decisionEpoch: frame2.intents[0].decisionEpoch,
+      revision: frame2.frame!.revision,
+    });
+    const frame2Audio = {
+      ...harness.mixedAudio,
+      frameId: frame2.frame!.frameId,
+      frameRevision: frame2.frame!.revision,
+    };
+    harness.setFrameMix(frame2.frame!.frameId, frame2.frame!.revision, frame2Audio);
+    const frame2Handling = (harness.pipeline as any).handleMixedAudioReady(frame2Audio);
     await vi.waitFor(() => {
-      expect(deps.radioManager.setPTT).toHaveBeenCalledWith(true);
+      expect(harness.deps.digitalFrameCoordinator.getFrame(frame2.frame!.frameId)?.phase).toBe('prepared');
     });
 
-    audioDone.resolve();
+    const frame3 = harness.deps.digitalFrameCoordinator.prepareFrame({
+      slotId: 'slot-0',
+      intents: [{
+        operatorId: 'operator-a',
+        source: 'operator-edit',
+        reason: 'newer edit supersedes pending handover',
+        text: 'A B 73',
+        decisionEpoch: 3,
+      }],
+      nowMs: 1_100,
+      slotEndMs: 15_000,
+      expectedDurationMs: 1_000,
+      playbackStartMs: 500,
+    });
+    expect(frame3.frame).not.toBeNull();
+    expect(harness.deps.digitalFrameCoordinator.getFrame(frame2.frame!.frameId)).toMatchObject({
+      phase: 'cancelled',
+      superseded: true,
+    });
+
+    pttStart.resolve();
+    await frame2Handling;
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(1));
+
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true]);
+    expect(harness.deps.audioStreamManager.stopCurrentPlayback).not.toHaveBeenCalled();
+    expect(harness.deps.physicalTxCoordinator.getSnapshot()).toMatchObject({
+      frameId: harness.prepared.frame!.frameId,
+      phase: 'active',
+      pttConfirmed: true,
+    });
+
+    harness.audioDone.resolve();
+    await initialHandling;
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
+  });
+
+  it('preserves an active lease at the next slot boundary', async () => {
+    const harness = createHarness();
+    const handling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(1));
+
+    await harness.pipeline.onSlotStart();
+    expect(harness.deps.audioMixer.clearSlotCache).not.toHaveBeenCalled();
+    expect(harness.deps.audioStreamManager.stopCurrentPlayback).not.toHaveBeenCalled();
+
+    harness.audioDone.resolve();
+    await handling;
+  });
+
+  it('defers a fully encoded frame when delay consumes the physical slot budget', async () => {
+    const harness = createHarness({
+      nowMs: 14_000,
+      slotEndMs: 15_000,
+      expectedDurationMs: 1_000,
+    });
+
+    await (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+
+    expect(harness.deps.operatorManager.deferPreparedFrameToNextSlot)
+      .toHaveBeenCalledWith('frame-1', expect.stringContaining('no longer fits'));
+    expect(harness.deps.audioMixer.clearFrame).toHaveBeenCalledWith('frame-1', 1);
+    expect(harness.setPTT).not.toHaveBeenCalled();
+    expect(harness.playAudio).not.toHaveBeenCalled();
+  });
+
+  it('defers a ready frame instead of dropping it while another physical lease is active', async () => {
+    const harness = createHarness();
+    const leaseId = await harness.deps.physicalTxCoordinator.acquireLease({
+      source: 'voice',
+      reason: 'voice drain overlaps next digital slot',
+    });
+
+    await (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+
+    expect(harness.deps.operatorManager.deferPreparedFrameToNextSlot)
+      .toHaveBeenCalledWith('frame-1', expect.stringContaining('physical transmitter busy'));
+    expect(harness.deps.digitalFrameCoordinator.getFrame('frame-1')).toMatchObject({ phase: 'cancelled' });
+    expect(harness.playAudio).not.toHaveBeenCalled();
+    await harness.deps.physicalTxCoordinator.releaseLease(leaseId, 'voice complete');
+  });
+
+  it('rechecks the complete-frame budget after delayed PTT acknowledgement', async () => {
+    const pttStart = deferred<void>();
+    const harness = createHarness({
+      pttStart: pttStart.promise,
+      nowMs: 1_000,
+      slotEndMs: 3_000,
+      expectedDurationMs: 1_000,
+    });
+
+    const handling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+    await vi.waitFor(() => expect(harness.setPTT).toHaveBeenCalledWith(true));
+    harness.setNow(2_000);
+    pttStart.resolve();
     await handling;
 
-    expect(deps.radioManager.setPTT.mock.calls.map(([active]) => active)).toEqual([true]);
-
-    await pipeline.forceStopPTT();
+    expect(harness.deps.operatorManager.deferPreparedFrameToNextSlot)
+      .toHaveBeenCalledWith('frame-1', expect.stringContaining('before PTT start'));
+    expect(harness.setPTT).toHaveBeenCalledWith(false);
+    expect(harness.playAudio).not.toHaveBeenCalled();
   });
 
-  it('does not stop tune tone playback at slot boundaries', async () => {
-    const { pipeline, deps } = createPipeline('hamlib');
-    deps.audioStreamManager.isPlaying.mockReturnValue(true);
-    deps.audioStreamManager.getCurrentPlaybackKind.mockReturnValue('tune-tone');
-
-    await pipeline.onSlotStart();
-
-    expect(deps.audioStreamManager.stopCurrentPlayback).not.toHaveBeenCalled();
-    expect(deps.audioMixer.clearSlotCache).toHaveBeenCalled();
-  });
-
-  it('stops tune tone before starting digital PTT and playback', async () => {
-    const { pipeline, deps, audioDone, mixedAudio } = createPipeline('hamlib');
-    const cleanup = createDeferred<void>();
-    deps.onBeforeStartPTT.mockReturnValueOnce(cleanup.promise);
-
-    const handling = (pipeline as unknown as {
-      handleMixedAudioReady: (mixedAudio: unknown) => Promise<void>;
-    }).handleMixedAudioReady(mixedAudio);
-
-    await vi.waitFor(() => {
-      expect(deps.onBeforeStartPTT).toHaveBeenCalled();
+  it('recomputes the waveform offset after a delayed PTT acknowledgement', async () => {
+    const pttStart = deferred<void>();
+    const harness = createHarness({
+      pttStart: pttStart.promise,
+      nowMs: 1_000,
+      slotEndMs: 15_000,
+      expectedDurationMs: 12_640,
+      playbackStartMs: 500,
     });
-    expect(deps.radioManager.setPTT).not.toHaveBeenCalled();
-    expect(deps.audioStreamManager.playAudio).not.toHaveBeenCalled();
+    const finalAudio = {
+      ...harness.mixedAudio,
+      audioData: new Float32Array([2, 3, 4]),
+      sampleRate: 1_000,
+      duration: 10.64,
+    };
+    harness.setFrameMix('frame-1', 1, finalAudio);
 
-    cleanup.resolve();
-    await vi.waitFor(() => {
-      expect(deps.radioManager.setPTT).toHaveBeenCalledWith(true);
-      expect(deps.audioStreamManager.playAudio).toHaveBeenCalled();
-    });
+    const handling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+    await vi.waitFor(() => expect(harness.setPTT).toHaveBeenCalledWith(true));
+    harness.setNow(2_500);
+    pttStart.resolve();
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(1));
 
-    audioDone.resolve();
+    expect(harness.deps.audioMixer.mixFrameById).toHaveBeenCalledWith('frame-1', 1, 2_000);
+    expect(harness.playAudio).toHaveBeenCalledWith(
+      finalAudio.audioData,
+      finalAudio.sampleRate,
+      expect.any(Object),
+    );
+    harness.audioDone.resolve();
     await handling;
-    await pipeline.forceStopPTT();
-  });
-});
-
-describe('TransmissionPipeline fake frequency dial offset', () => {
-  afterEach(() => {
-    vi.useRealTimers();
   });
 
-  it('applies the slot dial offset before PTT and restores it after stop', async () => {
-    const { pipeline, deps, audioDone, mixedAudio } = createPipeline('hamlib');
-    // shift 随音频负载流转：在 mixedAudio 上携带，PTT 时点据此平移 dial
-    mixedAudio.txDialShiftHz = 681;
+  it('replaces an on-air correction without toggling the physical PTT lease', async () => {
+    const stopPlayback = deferred<void>();
+    const harness = createHarness({ stopPlayback: stopPlayback.promise });
+    const completions: Array<Record<string, unknown>> = [];
+    harness.deps.engineEmitter.on('transmissionComplete', (event) => completions.push(event));
+    const oldHandling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(1));
+    const replacement = harness.deps.digitalFrameCoordinator.prepareFrame({
+      slotId: 'slot-0',
+      intents: [{
+        operatorId: 'operator-a',
+        source: 'late-decode',
+        reason: 'late RR73 correction',
+        text: 'A B RR73',
+        decisionEpoch: 2,
+      }],
+      nowMs: 1_000,
+      slotEndMs: 15_000,
+      expectedDurationMs: 1_000,
+      playbackStartMs: 500,
+    });
+    expect(replacement.action).toBe('restart-current');
+    harness.deps.digitalFrameCoordinator.beginEncoding(replacement.frame!.frameId);
+    harness.deps.digitalFrameCoordinator.acceptEncodeResult({
+      frameId: replacement.frame!.frameId,
+      operatorId: 'operator-a',
+      decisionEpoch: replacement.intents[0].decisionEpoch,
+      revision: replacement.frame!.revision,
+    });
+    const replacementAudio = {
+      ...harness.mixedAudio,
+      frameId: replacement.frame!.frameId,
+      frameRevision: replacement.frame!.revision,
+    };
+    harness.setFrameMix(replacement.frame!.frameId, replacement.frame!.revision, replacementAudio);
 
-    const handling = (pipeline as unknown as {
-      handleMixedAudioReady: (mixedAudio: unknown) => Promise<void>;
-    }).handleMixedAudioReady(mixedAudio);
+    const replacementHandling = (harness.pipeline as any).handleMixedAudioReady(replacementAudio);
+    await vi.waitFor(() => expect(harness.deps.audioStreamManager.stopCurrentPlayback).toHaveBeenCalled());
+    harness.setNow(1_100);
+    stopPlayback.resolve();
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(2));
+    expect(harness.prepareAudioPlayback).toHaveBeenCalledTimes(2);
+    expect(harness.deps.audioMixer.mixFrameById).toHaveBeenCalledWith('frame-2', 2, 500);
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true]);
+    harness.getAudioDone(1).resolve();
+    await Promise.all([oldHandling, replacementHandling]);
 
-    await vi.waitFor(() => {
-      expect(deps.radioManager.setPTT).toHaveBeenCalledWith(true);
+    expect(completions.filter((event) => event.frameId === 'frame-1')).toEqual([
+      expect.objectContaining({ success: false, physicalConfirmed: true }),
+    ]);
+    expect(completions.filter((event) => event.frameId === 'frame-2')).toEqual([
+      expect.objectContaining({ success: true, physicalConfirmed: true }),
+    ]);
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
+  });
+
+  it('does not double-trim replacement audio across delayed mix and output drain stages', async () => {
+    const harness = createHarness({ nowMs: 1_000 });
+    const oldHandling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(1));
+
+    const replacement = harness.deps.digitalFrameCoordinator.prepareFrame({
+      slotId: 'slot-0',
+      intents: [{
+        operatorId: 'operator-a',
+        source: 'operator-edit',
+        reason: 'frequency changed on air',
+        text: 'A B 73',
+        decisionEpoch: 2,
+      }],
+      nowMs: 1_000,
+      slotEndMs: 15_000,
+      expectedDurationMs: 3_000,
+      playbackStartMs: 500,
+    });
+    harness.deps.digitalFrameCoordinator.beginEncoding(replacement.frame!.frameId);
+    harness.deps.digitalFrameCoordinator.acceptEncodeResult({
+      frameId: replacement.frame!.frameId,
+      operatorId: 'operator-a',
+      decisionEpoch: replacement.intents[0].decisionEpoch,
+      revision: replacement.frame!.revision,
     });
 
-    // dial offset applied before PTT start, with the frozen slot shift
-    expect(deps.radioManager.setTxDialOffset).toHaveBeenCalledWith(681);
-    const offsetOrder = deps.radioManager.setTxDialOffset.mock.invocationCallOrder[0];
-    const pttOnOrder = deps.radioManager.setPTT.mock.invocationCallOrder[0];
-    expect(offsetOrder).toBeLessThan(pttOnOrder);
-
-    audioDone.resolve();
-    await handling;
-    await pipeline.forceStopPTT();
-
-    // dial restored after PTT stop
-    expect(deps.radioManager.clearTxDialOffset).toHaveBeenCalled();
-  });
-
-  it('does not touch the dial when the slot shift is zero', async () => {
-    const { pipeline, deps, audioDone, mixedAudio } = createPipeline('hamlib');
-    mixedAudio.txDialShiftHz = 0;
-
-    const handling = (pipeline as unknown as {
-      handleMixedAudioReady: (mixedAudio: unknown) => Promise<void>;
-    }).handleMixedAudioReady(mixedAudio);
-
-    await vi.waitFor(() => {
-      expect(deps.radioManager.setPTT).toHaveBeenCalledWith(true);
+    const delayedMix = deferred<Record<string, any>>();
+    const outputDrain = deferred<boolean>();
+    harness.deps.audioMixer.mixFrameById.mockReturnValueOnce(delayedMix.promise);
+    harness.prepareAudioPlayback.mockReturnValueOnce(outputDrain.promise);
+    const replacementHandling = (harness.pipeline as any).handleMixedAudioReady({
+      ...harness.mixedAudio,
+      frameId: replacement.frame!.frameId,
+      frameRevision: replacement.frame!.revision,
     });
 
-    expect(deps.radioManager.setTxDialOffset).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(harness.deps.audioMixer.mixFrameById).toHaveBeenCalledTimes(2));
+    harness.setNow(1_500);
+    delayedMix.resolve({
+      ...harness.mixedAudio,
+      frameId: replacement.frame!.frameId,
+      frameRevision: replacement.frame!.revision,
+      audioData: new Float32Array(3_000),
+      sampleRate: 1_000,
+      duration: 3,
+    });
+    await vi.waitFor(() => expect(harness.prepareAudioPlayback).toHaveBeenCalledTimes(2));
 
-    audioDone.resolve();
+    harness.setNow(1_750);
+    outputDrain.resolve(true);
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(2));
+    expect(harness.playAudio.mock.calls[1]?.[0]).toHaveLength(2_250);
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true]);
+
+    harness.getAudioDone(1).resolve();
+    await Promise.all([oldHandling, replacementHandling]);
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
+  });
+
+  it('removes one mixed-frame operator by replacing audio while keeping PTT asserted', async () => {
+    const harness = createHarness({ operatorIds: ['operator-a', 'operator-b'] });
+    const initialHandling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(1));
+
+    const replacementAudio = {
+      ...harness.mixedAudio,
+      frameId: 'frame-2',
+      frameRevision: 2,
+      operatorIds: ['operator-b'],
+      audioData: new Float32Array(10_000),
+      duration: 10_000 / 12_000,
+    };
+    harness.setFrameMix('frame-2', 2, replacementAudio);
+
+    const removal = harness.pipeline.removeOperatorFromTransmission('operator-a');
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(2));
+
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true]);
+    expect(harness.deps.physicalTxCoordinator.getSnapshot()).toMatchObject({
+      frameId: 'frame-2',
+      operatorIds: ['operator-b'],
+      phase: 'active',
+      pttConfirmed: true,
+    });
+    expect(harness.deps.audioMixer.cloneFrameTracks).toHaveBeenCalledWith(
+      { frameId: 'frame-1', frameRevision: 1 },
+      { frameId: 'frame-2', frameRevision: 2, slotId: 'slot-0' },
+      ['operator-b'],
+    );
+
+    harness.getAudioDone(1).resolve();
+    await Promise.all([initialHandling, removal]);
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
+  });
+
+  it('releases PTT when the last active frame operator is explicitly removed', async () => {
+    const harness = createHarness();
+    const initialHandling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(1));
+
+    await harness.pipeline.removeOperatorFromTransmission('operator-a');
+    await initialHandling;
+
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
+    expect(harness.deps.physicalTxCoordinator.getSnapshot().phase).toBe('idle');
+  });
+
+  it('stops shared PTT only after every mixed-frame operator is removed', async () => {
+    const harness = createHarness({ operatorIds: ['operator-a', 'operator-b'] });
+    const initialHandling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(1));
+
+    const replacementAudio = {
+      ...harness.mixedAudio,
+      frameId: 'frame-2',
+      frameRevision: 2,
+      operatorIds: ['operator-b'],
+      audioData: new Float32Array(10_000),
+      duration: 10_000 / 12_000,
+    };
+    harness.setFrameMix('frame-2', 2, replacementAudio);
+
+    const removeA = harness.pipeline.removeOperatorFromTransmission('operator-a');
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(2));
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true]);
+    expect(harness.deps.physicalTxCoordinator.getSnapshot().operatorIds).toEqual(['operator-b']);
+
+    const removeB = harness.pipeline.removeOperatorFromTransmission('operator-b');
+    await Promise.all([initialHandling, removeA, removeB]);
+
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
+    expect(harness.deps.physicalTxCoordinator.getSnapshot().phase).toBe('idle');
+  });
+
+  it('hands a starting PTT lease directly to the retained operator mix', async () => {
+    const pttStart = deferred<void>();
+    const harness = createHarness({
+      operatorIds: ['operator-a', 'operator-b'],
+      pttStart: pttStart.promise,
+    });
+    const initialHandling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+    await vi.waitFor(() => expect(harness.setPTT).toHaveBeenCalledWith(true));
+
+    const replacementAudio = {
+      ...harness.mixedAudio,
+      frameId: 'frame-2',
+      frameRevision: 2,
+      operatorIds: ['operator-b'],
+      audioData: new Float32Array(10_000),
+      duration: 10_000 / 12_000,
+    };
+    harness.setFrameMix('frame-2', 2, replacementAudio);
+    const removal = harness.pipeline.removeOperatorFromTransmission('operator-a');
+    expect(harness.playAudio).not.toHaveBeenCalled();
+
+    pttStart.resolve();
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(1));
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true]);
+    expect(harness.deps.physicalTxCoordinator.getSnapshot()).toMatchObject({
+      frameId: 'frame-2',
+      operatorIds: ['operator-b'],
+      phase: 'active',
+    });
+
+    harness.audioDone.resolve();
+    await Promise.all([initialHandling, removal]);
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
+  });
+
+  it('defers without asserting PTT when previous audio cannot be drained', async () => {
+    const harness = createHarness();
+    harness.prepareAudioPlayback.mockRejectedValueOnce(
+      new Error('RtAudio output drain timed out after 20ms'),
+    );
+
+    await (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+
+    expect(harness.deps.operatorManager.deferPreparedFrameToNextSlot)
+      .toHaveBeenCalledWith('frame-1', expect.stringContaining('audio output preparation failed'));
+    expect(harness.setPTT).not.toHaveBeenCalled();
+    expect(harness.playAudio).not.toHaveBeenCalled();
+  });
+
+  it('rechecks waveform position and slot budget after a delayed output drain', async () => {
+    const outputDrain = deferred<boolean>();
+    const harness = createHarness({
+      nowMs: 1_000,
+      slotEndMs: 3_000,
+      expectedDurationMs: 1_000,
+      playbackStartMs: 500,
+    });
+    harness.prepareAudioPlayback.mockReturnValueOnce(outputDrain.promise);
+
+    const handling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+    await vi.waitFor(() => expect(harness.prepareAudioPlayback).toHaveBeenCalledOnce());
+    harness.setNow(2_500);
+    outputDrain.resolve(true);
     await handling;
-    await pipeline.forceStopPTT();
 
-    // clear is still called as an idempotent safety net
-    expect(deps.radioManager.clearTxDialOffset).toHaveBeenCalled();
+    expect(harness.deps.audioMixer.mixFrameById).toHaveBeenCalledWith('frame-1', 1, 2_000);
+    expect(harness.deps.operatorManager.deferPreparedFrameToNextSlot)
+      .toHaveBeenCalledWith('frame-1', expect.stringContaining('before PTT start'));
+    expect(harness.setPTT).not.toHaveBeenCalled();
+    expect(harness.playAudio).not.toHaveBeenCalled();
+  });
+
+  it('tombstones an old-slot encode without interrupting an active physical lease', async () => {
+    const harness = createHarness();
+    const leaseId = await harness.deps.physicalTxCoordinator.acquireLease({
+      source: 'voice',
+      reason: 'voice remains active across slot boundary',
+    });
+    const completions: Array<Record<string, unknown>> = [];
+    harness.deps.engineEmitter.on('transmissionComplete', (event) => completions.push(event));
+
+    await harness.pipeline.onSlotStart({ id: 'slot-2' });
+    expect(harness.deps.digitalFrameCoordinator.getFrame('frame-1')).toMatchObject({ phase: 'cancelled' });
+    expect(harness.deps.audioMixer.clearFrame).toHaveBeenCalledWith('frame-1', 1);
+    expect(harness.deps.audioMixer.clearSlotCache).not.toHaveBeenCalled();
+    expect(harness.setPTT).not.toHaveBeenCalledWith(false);
+
+    await (harness.pipeline as any).handleEncodeComplete({
+      operatorId: 'operator-a',
+      audioData: new Float32Array(12),
+      sampleRate: 12_000,
+      duration: 1,
+      request: {
+        frameId: 'frame-1',
+        frameRevision: 1,
+        decisionEpoch: harness.prepared.intents[0].decisionEpoch,
+        requestId: 'late-frame-1',
+      },
+    });
+    expect(harness.deps.audioMixer.addOperatorAudio).not.toHaveBeenCalled();
+    expect(completions).toEqual([]);
+    expect(harness.deps.physicalTxCoordinator.getSnapshot()).toMatchObject({
+      leaseId,
+      phase: 'active',
+    });
+    await harness.deps.physicalTxCoordinator.releaseLease(leaseId, 'voice complete');
   });
 });

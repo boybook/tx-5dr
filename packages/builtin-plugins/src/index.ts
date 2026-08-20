@@ -10,7 +10,7 @@
  * host before calling each plugin's onLoad hook.
  */
 
-import type { PluginDefinition } from '@tx5dr/plugin-api';
+import type { AnyPluginDefinition } from '@tx5dr/plugin-api';
 
 // ===== Individual plugin imports =====
 
@@ -114,7 +114,7 @@ import {
 // ===== Shared types =====
 
 export interface BuiltinPluginEntry {
-  definition: PluginDefinition;
+  definition: AnyPluginDefinition;
   locales: Record<string, Record<string, string>>;
   /** standard-qso is always enabled; other built-ins default to disabled unless overridden */
   enabledByDefault: boolean;

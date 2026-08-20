@@ -13,8 +13,15 @@ import type {
   KVStore,
   PluginLogger,
   PluginTimers,
-  OperatorControl,
-  RadioControl,
+  OperatorSnapshot,
+  OperatorCommandPort,
+  PluginOperatorCommand,
+  RadioView,
+  RadioCapabilitiesView,
+  RadioCommandPort,
+  RadioTunerCommandPort,
+  RadioPowerView,
+  RadioPowerCommandPort,
   LogbookAccess,
   BandAccess,
   UIBridge,
@@ -30,7 +37,7 @@ import type {
   HostFrequencyPresetsSettings,
   HostSettingsControl,
 } from '../settings.js';
-import type { PluginContext } from '../context.js';
+import type { PluginContextFor } from '../context.js';
 import type { HostDependencies } from '../host-dependencies.js';
 // Type-only imports from contracts (devDependency — erased at compile time)
 import type {
@@ -72,7 +79,7 @@ export interface MockUIBridge extends UIBridge {
 }
 
 /** Full mock context with typed access to all sub-mocks. */
-export interface MockPluginContext extends PluginContext {
+interface MockPluginContextDecorations {
   readonly store: {
     readonly global: MockKVStore;
     readonly operator: MockKVStore;
@@ -81,9 +88,15 @@ export interface MockPluginContext extends PluginContext {
   readonly timers: MockTimers;
   readonly ui: MockUIBridge;
   readonly settings: HostSettingsControl;
-  readonly hostDependencies: HostDependencies;
-  readonly network: PluginNetworkControl;
-  readonly eventBus: PluginEventBus;
+}
+
+export type MockPluginContextFor<Permissions extends readonly PluginPermission[]> =
+  PluginContextFor<Permissions> & MockPluginContextDecorations;
+
+export type MockPluginContext = MockPluginContextFor<readonly []>;
+
+export interface MockOperatorCommandPort extends OperatorCommandPort {
+  readonly _commands: PluginOperatorCommand[];
 }
 
 export interface MockUdpSocket extends PluginUdpSocket {
@@ -208,7 +221,7 @@ export function createMockTimers(): MockTimers {
   };
 }
 
-// ===== Factory: OperatorControl =====
+// ===== Factory: Operator snapshot and commands =====
 
 const DEFAULT_MODE: ModeDescriptor = {
   name: 'FT8',
@@ -219,9 +232,9 @@ const DEFAULT_MODE: ModeDescriptor = {
   encodeAdvance: 400,
 };
 
-export function createMockOperatorControl(
-  overrides?: Partial<OperatorControl>,
-): OperatorControl {
+export function createMockOperatorSnapshot(
+  overrides?: Partial<OperatorSnapshot>,
+): OperatorSnapshot {
   return {
     id: 'operator-0',
     isTransmitting: false,
@@ -232,33 +245,31 @@ export function createMockOperatorControl(
     transmitCycles: [0],
     automation: null,
     getOtherOperators: () => [],
-    startTransmitting(): void {},
-    stopTransmitting(): void {},
-    call(): void {},
-    replyToDecode(): void {},
-    setTransmitCycles(): void {},
-    clearDecodes(): void {},
-    haltTransmission(): void {},
-    setFreeText(): void {},
-    sendFreeText(): void {},
-    setTemporaryLocation(): void {},
-    highlightCallsign(): void {},
     hasWorkedCallsign: async () => false,
     isTargetBeingWorkedByOthers: () => false,
-    async recordQSO(record: QSORecord): Promise<QSORecord> { return record; },
-    notifySlotsUpdated(): void {},
-    notifyStateChanged(): void {},
     ...overrides,
+  };
+}
+
+export function createMockOperatorCommandPort(
+  submit?: (command: PluginOperatorCommand) => void | Promise<void>,
+): MockOperatorCommandPort {
+  const commands: PluginOperatorCommand[] = [];
+  return {
+    _commands: commands,
+    async submit(command) {
+      commands.push(command);
+      await submit?.(command);
+      return { epoch: commands.length, outcome: 'completed' };
+    },
   };
 }
 
 // ===== Factory: RadioControl =====
 
-export function createMockRadioControl(
-  overrides?: Partial<RadioControl>,
-): RadioControl {
-  const capabilitySnapshot: CapabilityList = { descriptors: [], capabilities: [] };
-  const powerState: RadioPowerStateEvent = { state: 'awake', stage: 'idle' };
+export function createMockRadioView(
+  overrides?: Partial<RadioView>,
+): RadioView {
   return {
     frequency: 14074000,
     band: '20m',
@@ -269,24 +280,47 @@ export function createMockRadioControl(
       descriptor: DEFAULT_MODE,
     },
     isConnected: true,
-    capabilities: {
-      getSnapshot: () => capabilitySnapshot,
-      getState: (id) => capabilitySnapshot.capabilities.find((capability) => capability.id === id) ?? null,
-      refresh: async () => capabilitySnapshot,
-      write: async () => {},
-    },
-    power: {
-      getSupport: async (profileId = 'mock-profile') => ({
-        profileId,
-        canPowerOn: true,
-        canPowerOff: true,
-        supportedStates: ['off', 'standby', 'operate'],
-      }),
-      getState: () => powerState,
-      set: async (state) => ({ success: true, target: state, state: state === 'off' ? 'off' : 'awake' }),
-    },
-    setFrequency: async () => {},
     ...overrides,
+  };
+}
+
+export function createMockRadioCapabilitiesView(): RadioCapabilitiesView {
+  const snapshot: CapabilityList = { descriptors: [], capabilities: [] };
+  return {
+    getSnapshot: () => snapshot,
+    getState: (id: string) => snapshot.capabilities.find((capability) => capability.id === id) ?? null,
+    refresh: async () => snapshot,
+  };
+}
+
+export function createMockRadioCommandPort(): RadioCommandPort {
+  return { submit: async () => {} };
+}
+
+export function createMockRadioTunerCommandPort(): RadioTunerCommandPort {
+  return { submit: async () => {} };
+}
+
+export function createMockRadioPowerView(): RadioPowerView {
+  const state: RadioPowerStateEvent = { state: 'awake', stage: 'idle' };
+  return {
+    getSupport: async (profileId = 'mock-profile') => ({
+      profileId,
+      canPowerOn: true,
+      canPowerOff: true,
+      supportedStates: ['off', 'standby', 'operate'],
+    }),
+    getState: () => state,
+  };
+}
+
+export function createMockRadioPowerCommandPort(): RadioPowerCommandPort {
+  return {
+    submit: async (command) => ({
+      success: true,
+      target: command.state,
+      state: command.state === 'off' ? 'off' : 'awake',
+    }),
   };
 }
 
@@ -614,7 +648,9 @@ export function createMockHostSettingsControl(overrides?: Partial<HostSettingsCo
 
 // ===== Factory: PluginContext =====
 
-export interface MockPluginContextOptions {
+export interface MockPluginContextOptions<
+  Permissions extends readonly PluginPermission[] = readonly [],
+> {
   /** Initial config values (default: empty). */
   config?: Record<string, unknown>;
   /** Operator identifier (default: `'operator-0'`). */
@@ -628,11 +664,18 @@ export interface MockPluginContextOptions {
   /** Partial mode descriptor overrides. */
   mode?: Partial<ModeDescriptor>;
   /** Additional operator control overrides. */
-  operator?: Partial<OperatorControl>;
+  operator?: Partial<OperatorSnapshot>;
+  /** Optional command-port override. Otherwise created only with `operator:transmit-control`. */
+  operatorCommands?: OperatorCommandPort;
   /** Network control override. */
   network?: PluginNetworkControl;
   /** Radio control overrides. */
-  radio?: Partial<RadioControl>;
+  radio?: Partial<RadioView>;
+  radioCapabilities?: RadioCapabilitiesView;
+  radioCommands?: RadioCommandPort;
+  radioTunerCommands?: RadioTunerCommandPort;
+  radioPower?: RadioPowerView;
+  radioPowerCommands?: RadioPowerCommandPort;
   /** Logbook access overrides. */
   logbook?: Partial<LogbookAccess>;
   /** Band access overrides. */
@@ -644,12 +687,14 @@ export interface MockPluginContextOptions {
   /** Host dependency overrides. */
   hostDependencies?: HostDependencies;
   /** Manifest permissions to model permission-gated optional host dependencies. */
-  permissions?: PluginPermission[];
+  permissions?: Permissions;
   /** Pre-constructed stores (uses fresh empty stores when omitted). */
   store?: { global?: MockKVStore; operator?: MockKVStore };
 }
 
-export function createMockContext(options?: MockPluginContextOptions): MockPluginContext {
+export function createMockContext<
+  const Permissions extends readonly PluginPermission[] = readonly [],
+>(options?: MockPluginContextOptions<Permissions>): MockPluginContextFor<Permissions> {
   const opts = options ?? {};
   const log = createMockLogger();
   const timers = createMockTimers();
@@ -661,7 +706,7 @@ export function createMockContext(options?: MockPluginContextOptions): MockPlugi
     ? { ...DEFAULT_MODE, ...opts.mode }
     : DEFAULT_MODE;
 
-  const operator = createMockOperatorControl({
+  const operator = createMockOperatorSnapshot({
     id: opts.operatorId ?? 'operator-0',
     callsign: opts.callsign ?? 'W1AW',
     grid: opts.grid ?? 'FN31',
@@ -670,8 +715,25 @@ export function createMockContext(options?: MockPluginContextOptions): MockPlugi
     ...opts.operator,
   });
 
-  const radio = createMockRadioControl(opts.radio);
+  const radio = createMockRadioView(opts.radio);
   const logbook = createMockLogbookAccess(opts.logbook);
+  const readOnlyLogbook = {
+    hasWorked: logbook.hasWorked,
+    hasWorkedDXCC: logbook.hasWorkedDXCC,
+    hasWorkedGrid: logbook.hasWorkedGrid,
+    queryQSOs: logbook.queryQSOs,
+    countQSOs: logbook.countQSOs,
+    forCallsign(callsign: string) {
+      const access = logbook.forCallsign(callsign);
+      return {
+        callsign: access.callsign,
+        getLogBookId: access.getLogBookId,
+        queryQSOs: access.queryQSOs,
+        countQSOs: access.countQSOs,
+        getStatistics: access.getStatistics,
+      };
+    },
+  };
   const band = createMockBandAccess(opts.band);
 
   const settings = createMockHostSettingsControl(opts.settings);
@@ -692,16 +754,44 @@ export function createMockContext(options?: MockPluginContextOptions): MockPlugi
     timers,
     operator,
     radio,
-    logbook,
     band,
     ui,
-    settings,
-    hostDependencies,
     files,
-    network,
-    eventBus,
-    logbookSync,
-  };
+    ...((opts.permissions?.includes('logbook:read') || opts.permissions?.includes('logbook:write')) ? {
+      logbook: opts.permissions?.includes('logbook:write') ? logbook : readOnlyLogbook,
+    } : {}),
+    ...(opts.permissions?.includes('logbook:sync') ? { logbookSync } : {}),
+    ...((opts.permissions ?? []).some(permission => permission.startsWith('settings:')) ? {
+      settings: {
+        ...(opts.permissions?.includes('settings:ft8') ? { ft8: settings.ft8 } : {}),
+        ...(opts.permissions?.includes('settings:decode-windows') ? { decodeWindows: settings.decodeWindows } : {}),
+        ...(opts.permissions?.includes('settings:realtime') ? { realtime: settings.realtime } : {}),
+        ...(opts.permissions?.includes('settings:frequency-presets') ? { frequencyPresets: settings.frequencyPresets } : {}),
+        ...(opts.permissions?.includes('settings:station') ? { station: settings.station } : {}),
+        ...(opts.permissions?.includes('settings:psk-reporter') ? { pskReporter: settings.pskReporter } : {}),
+        ...(opts.permissions?.includes('settings:ntp') ? { ntp: settings.ntp } : {}),
+      },
+    } : {}),
+    ...(opts.permissions?.includes('operator:transmit-control') ? {
+      operatorCommands: opts.operatorCommands ?? createMockOperatorCommandPort(),
+    } : {}),
+    ...(opts.permissions?.includes('radio:read') ? {
+      radioCapabilities: opts.radioCapabilities ?? createMockRadioCapabilitiesView(),
+      radioPower: opts.radioPower ?? createMockRadioPowerView(),
+    } : {}),
+    ...(opts.permissions?.includes('radio:control') ? {
+      radioCommands: opts.radioCommands ?? createMockRadioCommandPort(),
+    } : {}),
+    ...(opts.permissions?.includes('radio:tuner-control') ? {
+      radioTunerCommands: opts.radioTunerCommands ?? createMockRadioTunerCommandPort(),
+    } : {}),
+    ...(opts.permissions?.includes('radio:power') ? {
+      radioPowerCommands: opts.radioPowerCommands ?? createMockRadioPowerCommandPort(),
+    } : {}),
+    ...(opts.permissions?.includes('host:hamlib') ? { hostDependencies } : {}),
+    ...(opts.permissions?.includes('network') ? { network, fetch: globalThis.fetch } : {}),
+    ...(opts.permissions?.includes('plugin:event-bus') ? { eventBus } : {}),
+  } as MockPluginContextFor<Permissions>;
 }
 
 // ===== Data factories =====

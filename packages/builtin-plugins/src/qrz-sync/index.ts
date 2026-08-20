@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'url';
 import path from 'path';
-import type { PluginDefinition, PluginUIRequestContext } from '@tx5dr/plugin-api';
+import { definePlugin, type PluginUIRequestContext } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import jaLocale from './locales/ja.json' with { type: 'json' };
@@ -35,14 +35,15 @@ function requireBoundCallsign(
  *
  * Configuration is stored in the plugin's global KVStore keyed by callsign.
  */
-export const qrzSyncPlugin: PluginDefinition = {
+export const qrzSyncPlugin = definePlugin({
+  apiVersion: 2,
   name: BUILTIN_QRZ_SYNC_PLUGIN_NAME,
   version: '1.0.0',
   type: 'utility',
   instanceScope: 'global',
   description: 'Sync QSO records with QRZ.com Logbook',
 
-  permissions: ['network'],
+  permissions: ['network', 'logbook:read', 'logbook:write', 'logbook:sync'],
 
   ui: {
     dir: 'ui',
@@ -103,7 +104,7 @@ export const qrzSyncPlugin: PluginDefinition = {
 
     ctx.log.info('QRZ.com sync provider registered');
   },
-};
+});
 
 export const qrzSyncLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,

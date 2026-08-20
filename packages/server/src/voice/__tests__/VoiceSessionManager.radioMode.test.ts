@@ -15,6 +15,7 @@ function createManager(supportedModes: string[]) {
   const manager = new VoiceSessionManager({
     radioManager: radioManager as never,
     audioStreamManager: audioStreamManager as never,
+    physicalTxCoordinator: {} as never,
   });
 
   return { manager, radioManager };

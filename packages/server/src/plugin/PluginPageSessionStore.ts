@@ -73,6 +73,21 @@ export class PluginPageSessionStore {
     this.sessions.delete(sessionId);
   }
 
+  deleteByPluginInstance(
+    pluginName: string,
+    instanceTarget: PluginUIInstanceTarget,
+  ): string[] {
+    const deleted: string[] = [];
+    for (const [sessionId, session] of this.sessions) {
+      if (session.pluginName === pluginName
+          && sameInstanceTarget(session.instanceTarget, instanceTarget)) {
+        this.sessions.delete(sessionId);
+        deleted.push(sessionId);
+      }
+    }
+    return deleted;
+  }
+
   private pruneExpired(): void {
     const now = Date.now();
     for (const [sessionId, session] of this.sessions.entries()) {

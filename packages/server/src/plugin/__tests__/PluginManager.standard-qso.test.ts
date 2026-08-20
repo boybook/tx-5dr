@@ -10,6 +10,7 @@ import type { ScoredCandidate } from '@tx5dr/plugin-api';
 import { STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING } from '@tx5dr/builtin-plugins';
 import { PluginManager } from '../PluginManager.js';
 import { LogManager } from '../../log/LogManager.js';
+import { TargetReservationCoordinator } from '../../transmission/TargetReservationCoordinator.js';
 
 type RecordQSORequest = Parameters<DigitalRadioEngineEvents['recordQSO']>[0];
 
@@ -133,6 +134,10 @@ describe('PluginManager standard-qso late re-decision', () => {
     pluginConfigs?: Record<string, { enabled: boolean; settings: Record<string, unknown> }>;
     operatorPluginSettings?: Record<string, Record<string, unknown>>;
     interruptOperatorTransmission?: (operatorId: string) => Promise<void>;
+    triggerReEncode?: (
+      operatorId: string,
+      options?: { source?: 'late-decode' | 'operator-edit' | 'plugin'; reason?: string },
+    ) => void;
     radioBand?: string;
     recordQSOHandler?: (data: RecordQSORequest) => void;
   }) {
@@ -170,6 +175,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     tempDirs.push(dataDir);
     const interruptOperatorTransmission = options?.interruptOperatorTransmission
       ?? (async () => undefined);
+    const requestOperatorStrategyStop = vi.fn();
 
     // This unit harness intentionally omits RadioOperatorManager. Acknowledge
     // persistence requests so protocol tests do not hang on the production
@@ -198,6 +204,7 @@ describe('PluginManager standard-qso late re-decision', () => {
       getRadioConnected: () => true,
       getLatestSlotPack: () => null,
       interruptOperatorTransmission,
+      requestOperatorStrategyStop,
       hasWorkedCallsign: async (_operatorId, callsign, hasWorkedOptions) => {
         if (typeof options?.hasWorkedCallsign === 'function') {
           return options.hasWorkedCallsign(callsign, hasWorkedOptions);
@@ -205,6 +212,7 @@ describe('PluginManager standard-qso late re-decision', () => {
         return options?.hasWorkedCallsign ?? false;
       },
       resetOperatorRuntime: () => {},
+      triggerReEncode: options?.triggerReEncode,
       dataDir,
     });
     // This harness omits RadioOperatorManager, so emulate its post-validation acceptance callback.
@@ -255,6 +263,7 @@ describe('PluginManager standard-qso late re-decision', () => {
       dataDir,
       eventEmitter,
       interruptOperatorTransmission,
+      requestOperatorStrategyStop,
       operator,
       pluginManager,
     };
@@ -284,6 +293,7 @@ describe('PluginManager standard-qso late re-decision', () => {
 
     let pluginManager!: PluginManager;
     const operators: RadioOperator[] = [];
+    const targetReservations = new TargetReservationCoordinator();
     const isTargetBeingWorkedByOtherOperators = (
       myCallsign: string,
       targetCallsign: string,
@@ -291,6 +301,9 @@ describe('PluginManager standard-qso late re-decision', () => {
     ): boolean => {
       const normalizedMyCall = myCallsign.toUpperCase();
       const normalizedTarget = targetCallsign.toUpperCase();
+      if (targetReservations.isReservedByOther(normalizedMyCall, normalizedTarget, currentOperatorId)) {
+        return true;
+      }
       return operators.some((operator) => {
         if (operator.config.id === currentOperatorId) return false;
         if (operator.config.myCallsign.toUpperCase() !== normalizedMyCall) return false;
@@ -337,6 +350,17 @@ describe('PluginManager standard-qso late re-decision', () => {
       getRadioConnected: () => true,
       getLatestSlotPack: () => null,
       interruptOperatorTransmission: async () => undefined,
+      transitionTargetReservation: (operatorId, epoch, targetCallsign) => {
+        const operator = operators.find((candidate) => candidate.config.id === operatorId);
+        if (!operator) return false;
+        return targetReservations.tryTransition({
+          stationCallsign: operator.config.myCallsign,
+          targetCallsign,
+          operatorId,
+          epoch,
+        });
+      },
+      releaseTargetReservation: (operatorId, epoch) => targetReservations.releaseOperator(operatorId, epoch),
       hasWorkedCallsign: async (_operatorId, callsign, hasWorkedOptions) => {
         if (typeof options?.hasWorkedCallsign === 'function') {
           return options.hasWorkedCallsign(callsign, hasWorkedOptions);
@@ -472,45 +496,65 @@ describe('PluginManager standard-qso late re-decision', () => {
   });
 
   it('starts manual CQ calls at TX2 when skipTx1 is enabled', async () => {
+    const triggerReEncode = vi.fn();
     const { operator, pluginManager } = await createRuntimeHarness({
       myCallsign: 'BG5DRB',
       myGrid: 'PM01',
       skipTx1: true,
+      triggerReEncode,
     });
 
-    pluginManager.requestCall(operator.config.id, 'JA1AAA', {
-      message: {
-        message: 'CQ JA1AAA PM95',
-        snr: -7,
-        dt: 0,
-        freq: 1300,
-        confidence: 0.9,
+    pluginManager.requestCall(
+      operator.config.id,
+      'JA1AAA',
+      {
+        message: {
+          message: 'CQ JA1AAA PM95',
+          snr: -7,
+          dt: 0,
+          freq: 1300,
+          confidence: 0.9,
+        },
+        slotInfo: createSlotInfo(45_000),
       },
-      slotInfo: createSlotInfo(45_000),
-    });
+      { submitCurrentFrame: true, source: 'operator-edit' },
+    );
 
     const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
     expect(status.currentSlot).toBe('TX2');
     expect(status.context?.targetCallsign).toBe('JA1AAA');
     expect(status.slots?.TX1).toBe('JA1AAA BG5DRB PM01');
     expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG5DRB -07');
+    expect(triggerReEncode).not.toHaveBeenCalled();
 
     await pluginManager.shutdown();
   });
 
   it('starts calls without a source message at TX2 with the default report when skipTx1 is enabled', async () => {
+    const triggerReEncode = vi.fn();
     const { operator, pluginManager } = await createRuntimeHarness({
       myCallsign: 'BG5DRB',
       myGrid: 'PM01',
       skipTx1: true,
+      triggerReEncode,
     });
 
-    pluginManager.requestCall(operator.config.id, 'JA1AAA');
+    pluginManager.requestCall(
+      operator.config.id,
+      'JA1AAA',
+      undefined,
+      { submitCurrentFrame: true, source: 'operator-edit' },
+    );
 
     const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
     expect(status.currentSlot).toBe('TX2');
     expect(status.context?.targetCallsign).toBe('JA1AAA');
     expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('JA1AAA BG5DRB +00');
+    expect(triggerReEncode).toHaveBeenCalledWith(operator.config.id, {
+      source: 'operator-edit',
+      reason: 'requestCall updated operator context',
+      decisionEpoch: expect.any(Number),
+    });
 
     await pluginManager.shutdown();
   });
@@ -574,7 +618,7 @@ describe('PluginManager standard-qso late re-decision', () => {
       autoResumeCQAfterSuccess: true,
     });
     const requestTransmitSpy = (payload: { operatorId: string; transmission: string }) => payload;
-    const transmissions: Array<{ operatorId: string; transmission: string }> = [];
+    const transmissions: Array<{ operatorId: string; transmission: string; decisionEpoch?: number }> = [];
     eventEmitter.on('requestTransmit', (payload) => {
       transmissions.push(payload);
     });
@@ -690,6 +734,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     expect(transmissions).toEqual([{
       operatorId: operator.config.id,
       transmission: expectedTransmission,
+      decisionEpoch: expect.any(Number),
     }]);
 
     const pending = persistenceRequest;
@@ -1621,9 +1666,9 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
-  it('immediately interrupts the active transmission when a late re-decision stops the operator', async () => {
+  it('stops future automation without interrupting committed RF when a late re-decision stops the operator', async () => {
     const interruptOperatorTransmission = vi.fn(async () => undefined);
-    const { operator, pluginManager } = await createRuntimeHarness({
+    const { operator, pluginManager, requestOperatorStrategyStop } = await createRuntimeHarness({
       myCallsign: 'BG7XTV',
       myGrid: 'OL32',
       targetCallsign: 'BG5DRB',
@@ -1655,8 +1700,8 @@ describe('PluginManager standard-qso late re-decision', () => {
     expect(stopped).toBe(false);
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
     expect(operator.isTransmitting).toBe(false);
-    expect(interruptOperatorTransmission).toHaveBeenCalledTimes(1);
-    expect(interruptOperatorTransmission).toHaveBeenCalledWith(operator.config.id);
+    expect(requestOperatorStrategyStop).toHaveBeenCalledWith(operator.config.id, 'strategy stop');
+    expect(interruptOperatorTransmission).not.toHaveBeenCalled();
 
     await pluginManager.shutdown();
   });

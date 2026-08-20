@@ -18,8 +18,10 @@ import {
     normalizeCallsign,
     type PluginLogger,
     StrategyDecision,
-    StrategyDecisionMeta,
+    StrategyDecisionMetaV2,
+    StrategyDecisionResult,
     StrategyRuntime,
+    StrategyRuntimeCheckpoint,
     StrategyRuntimeContext,
     StrategyRuntimeSnapshot,
     StrategyRuntimeSlotContentUpdate,
@@ -98,7 +100,6 @@ export interface StandardQSOPluginOperator {
     readonly config: StandardQSOOperatorConfig;
     hasWorkedCallsign(callsign: string, options?: { anyBand?: boolean }): Promise<boolean>;
     isTargetBeingWorkedByOthers(targetCallsign: string): boolean;
-    recordQSOLog(qsoRecord: QSORecord): Promise<QSORecord>;
     notifySlotsUpdated?(slots: OperatorSlots): void;
     notifyStateChanged?(state: string): void;
 }
@@ -195,6 +196,10 @@ async function trySwitchToDirectedProtocol(
         acceptFollowUpProtocol?: boolean;
     },
 ): Promise<StateHandleResult | null> {
+    if (strategy.hasUnsettledQSOCompletion()) {
+        strategy.logger.debug(`${options?.logPrefix ?? 'direct call'}: waiting for QSO durability before starting another lifecycle`);
+        return null;
+    }
     const excluded = (options?.excludeCallsigns ?? [])
         .filter((callsign): callsign is string => typeof callsign === 'string' && callsign.trim().length > 0);
     const myCallsign = strategy.context.config.myCallsign;
@@ -249,7 +254,7 @@ async function trySwitchToDirectedProtocol(
             strategy.clearPost73RetryContext(options.clearPost73Reason);
         }
         strategy.clearQSOContext();
-        strategy.context.targetCallsign = callsign;
+        strategy.beginQsoWithTarget(callsign, `${prefix}: directed protocol handoff`);
 
         if (msg.type === FT8MessageType.CALL) {
             strategy.logger.debug(`${prefix}: switching to direct call ${callsign} (SNR: ${directCall.snr})`);
@@ -412,7 +417,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             strategy.clearQSOContext();
 
                             // 切换到新呼号
-                            strategy.context.targetCallsign = newCallsign;
+                            strategy.beginQsoWithTarget(newCallsign, 'TX1 direct-call handoff');
 
                             // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
                             if (!strategy.restoreContext(newCallsign)) {
@@ -458,7 +463,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             strategy.clearQSOContext();
 
                             // 切换到新呼号
-                            strategy.context.targetCallsign = newCallsign;
+                            strategy.beginQsoWithTarget(newCallsign, 'TX1 signal-report handoff');
 
                             // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
                             if (!strategy.restoreContext(newCallsign)) {
@@ -728,30 +733,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
         }
     },
     TX4: {
-        async onEnter(strategy: StandardQSOPluginRuntime) {
-            // 记录QSO日志
-            // 优先使用actualFrequency（包含音频偏移的精确频率）
-            // 如果actualFrequency无效（< 1MHz），则使用config.frequency（基础频率）
-            const frequency = (strategy.context.actualFrequency && strategy.context.actualFrequency > 1000000)
-                ? strategy.context.actualFrequency
-                : (strategy.context.config.frequency || 0);
-
-            const qsoRecord: QSORecord = {
-                id: Date.now().toString(),
-                callsign: strategy.context.targetCallsign!,
-                grid: strategy.context.targetGrid,
-                frequency: frequency,
-                mode: strategy.context.config.mode.name,
-                startTime: strategy.qsoStartTime || Date.now(),
-                endTime: Date.now(),
-                reportSent: strategy.context.reportSent?.toString(),
-                reportReceived: strategy.context.reportReceived?.toString(),
-                messageHistory: [],
-                comment: undefined,
-                myCallsign: strategy.context.config.myCallsign,
-                myGrid: strategy.context.config.myGrid
-            };
-            await strategy.persistCompletedQSO(qsoRecord);
+        onEnter(strategy: StandardQSOPluginRuntime) {
+            strategy.prepareCompletedQSOEffect();
         },
         async handle(strategy: StandardQSOPluginRuntime, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 首先检查是否收到对方的73
@@ -830,30 +813,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
         }
     },
     TX5: {
-        async onEnter(strategy: StandardQSOPluginRuntime) {
-            // 记录QSO日志
-            // 优先使用actualFrequency（包含音频偏移的精确频率）
-            // 如果actualFrequency无效（< 1MHz），则使用config.frequency（基础频率）
-            const frequency = (strategy.context.actualFrequency && strategy.context.actualFrequency > 1000000)
-                ? strategy.context.actualFrequency
-                : (strategy.context.config.frequency || 0);
-
-            const qsoRecord: QSORecord = {
-                id: Date.now().toString(),
-                callsign: strategy.context.targetCallsign!,
-                grid: strategy.context.targetGrid,
-                frequency: frequency,
-                mode: strategy.context.config.mode.name,
-                startTime: strategy.qsoStartTime || Date.now(),
-                endTime: Date.now(),
-                reportSent: strategy.context.reportSent?.toString(),
-                reportReceived: strategy.context.reportReceived?.toString(),
-                messageHistory: [],
-                comment: undefined,
-                myCallsign: strategy.context.config.myCallsign,
-                myGrid: strategy.context.config.myGrid
-            };
-            await strategy.persistCompletedQSO(qsoRecord);
+        onEnter(strategy: StandardQSOPluginRuntime) {
+            strategy.prepareCompletedQSOEffect();
         },
         async handle(strategy: StandardQSOPluginRuntime, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 【修复】首先检查是否收到对方重发的RRR/RR73
@@ -1003,7 +964,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             }
 
                             strategy.logger.debug(`TX6: replying to CQ from ${callsign} (not worked, SNR: ${cqCall.snr}dB, by signal strength)`);
-                            strategy.context.targetCallsign = callsign;
+                            if (strategy.hasUnsettledQSOCompletion()) {
+                                strategy.logger.debug(`TX6: delaying CQ reply to ${callsign} until QSO durability settles`);
+                                continue;
+                            }
+                            strategy.beginQsoWithTarget(callsign, 'TX6 CQ reply');
 
                             // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
                             if (!strategy.restoreContext(callsign)) {
@@ -1049,8 +1014,29 @@ interface Post73RetryContext {
     reportSent?: number;
     reportReceived?: number;
     actualFrequency?: number;
-    persistedQSO?: QSORecord;
+    completedQSO?: QSORecord;
     expiresAt: number;
+}
+
+interface StandardQSOCheckpoint {
+    state: SlotsIndex;
+    slots: Slots;
+    context: Omit<QSOContext, 'config'>;
+    tx6MessageOverride: string;
+    lastConfigTx6MessageOverride?: string;
+    timeoutCycles: number;
+    callAttempts: number;
+    qsoStartTime?: number;
+    tx5TransmissionQueued: boolean;
+    completedQSORecord?: QSORecord;
+    pendingQSOCompletion?: {
+        record: QSORecord;
+        lifecycleEpoch: number;
+    };
+    qsoLifecycleEpoch: number;
+    post73RetryContext?: Post73RetryContext;
+    qsoContextHistory: Array<[string, CachedQSOContext]>;
+    foxHash?: string;
 }
 
 export class StandardQSOPluginRuntime implements StrategyRuntime {
@@ -1071,9 +1057,13 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     public callAttempts: number = 0; // 呼叫尝试次数计数器（TX1状态专用）
     public qsoStartTime?: number; // QSO开始时间
     public tx5TransmissionQueued = false;
-    private qsoPersistencePromise?: Promise<QSORecord>;
-    private persistedQSO?: QSORecord;
-    private qsoPersistenceFailed = false;
+    private completedQSORecord?: QSORecord;
+    private pendingQSOCompletion?: {
+        record: QSORecord;
+        lifecycleEpoch: number;
+    };
+    private qsoLifecycleEpoch = 0;
+    private speculativeDecisionDepth = 0;
     public post73RetryContext?: Post73RetryContext;
 
     // QSO上下文历史缓存（呼号 -> 上下文）
@@ -1171,54 +1161,78 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         // 调用新状态的onEnter
         const newState = states[this.state];
         if (newState.onEnter) {
-            try {
-                await newState.onEnter(this);
-            } catch (error) {
-                if (state === 'TX4' || state === 'TX5') {
-                    this.qsoPersistenceFailed = true;
-                    this.logger.error(`State ${state} failed to durably persist its completed QSO`, error);
-                }
-                throw error;
-            }
+            await newState.onEnter(this);
         }
     }
 
-    async persistCompletedQSO(qsoRecord: QSORecord): Promise<QSORecord> {
-        if (this.persistedQSO) {
-            this.logger.debug('Skipping duplicate QSO persistence within the current lifecycle', {
-                callsign: this.persistedQSO.callsign,
-                id: this.persistedQSO.id,
-            });
-            return this.persistedQSO;
-        }
-        if (this.qsoPersistencePromise) {
-            this.logger.debug('Joining the in-flight QSO persistence for the current lifecycle');
-            return this.qsoPersistencePromise;
+    prepareCompletedQSOEffect(): void {
+        if (this.completedQSORecord || !this.context.targetCallsign) {
+            return;
         }
 
-        const persistence = Promise.resolve()
-            .then(() => this.operator.recordQSOLog(qsoRecord))
-            .then((persisted) => {
-                this.persistedQSO = persisted;
-                this.qsoStartTime = undefined;
-                this.qsoPersistenceFailed = false;
-                return persisted;
-            })
-            .catch((error) => {
-                this.qsoPersistenceFailed = true;
-                throw error;
-            })
-            .finally(() => {
-                this.qsoPersistencePromise = undefined;
+        const now = Date.now();
+        const frequency = (this.context.actualFrequency && this.context.actualFrequency > 1_000_000)
+            ? this.context.actualFrequency
+            : (this.context.config.frequency || 0);
+        const record: QSORecord = {
+            id: now.toString(),
+            callsign: this.context.targetCallsign,
+            grid: this.context.targetGrid,
+            frequency,
+            mode: this.context.config.mode.name,
+            startTime: this.qsoStartTime || now,
+            endTime: now,
+            reportSent: this.context.reportSent?.toString(),
+            reportReceived: this.context.reportReceived?.toString(),
+            messageHistory: [],
+            comment: undefined,
+            myCallsign: this.context.config.myCallsign,
+            myGrid: this.context.config.myGrid,
+        };
+        this.completedQSORecord = record;
+        this.pendingQSOCompletion = {
+            record,
+            lifecycleEpoch: this.qsoLifecycleEpoch,
+        };
+    }
+
+    private beginQsoLifecycle(reason: string): void {
+        this.qsoLifecycleEpoch += 1;
+        this.completedQSORecord = undefined;
+        this.logger.debug('Started QSO lifecycle', {
+            epoch: this.qsoLifecycleEpoch,
+            reason,
+        });
+    }
+
+    hasUnsettledQSOCompletion(): boolean {
+        return this.completedQSORecord !== undefined;
+    }
+
+    beginQsoWithTarget(callsign: string, reason: string): void {
+        if (!callsignMatches(callsign, this.context.targetCallsign)) {
+            this.beginQsoLifecycle(reason);
+        }
+        this.context.targetCallsign = callsign;
+    }
+
+    settleQSOCompletion(settlement: import('@tx5dr/plugin-api').StrategyQSOCompletionSettlement): void {
+        if (settlement.lifecycleEpoch !== this.qsoLifecycleEpoch
+            || settlement.recordId !== this.completedQSORecord?.id) {
+            this.logger.debug('Ignored stale QSO completion settlement', {
+                currentEpoch: this.qsoLifecycleEpoch,
+                settledEpoch: settlement.lifecycleEpoch,
+                recordId: settlement.recordId,
+                status: settlement.status,
             });
-        this.qsoPersistencePromise = persistence;
-        return persistence;
+            return;
+        }
+        if (settlement.status === 'committed') {
+            this.completedQSORecord = undefined;
+        }
     }
 
     async handleReceivedAndDicideNext(messages: ParsedFT8Message[], options?: { isReDecision?: boolean }): Promise<StrategyDecision> {
-        if (this.qsoPersistencePromise || this.qsoPersistenceFailed) {
-            return { stop: true };
-        }
         const currentState = states[this.state];
 
         // 过滤掉发送者是我自己的消息；部分解码消息（含 `<...>` 占位符）绝不参与 QSO 决策
@@ -1281,13 +1295,12 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     }
 
     handleTransmitSlot(): string | null {
-        // Durability gates completion side effects and future QSOs, not the
-        // time-critical final frame that is already due in this RF slot.
-        if (this.qsoPersistenceFailed) return null;
         return this.slots[this.state];
     }
 
     onTransmissionQueued(transmission: string): void {
+        // The host invokes this compatibility hook only after the physical
+        // frame reaches terminal success, never when encoding is merely queued.
         if (this.state === 'TX5' && transmission === this.slots.TX5) {
             this.tx5TransmissionQueued = true;
         }
@@ -1298,12 +1311,8 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     }
 
     requestCall(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): boolean {
-        if (this.qsoPersistencePromise || this.qsoPersistenceFailed) {
-            this.logger.warn('requestCall ignored while a completed QSO is not durably saved');
-            return false;
-        }
-        if (this.persistedQSO && callsignMatches(callsign, this.context.targetCallsign)) {
-            this.logger.warn('requestCall ignored for an already persisted QSO lifecycle', { callsign });
+        if (this.hasUnsettledQSOCompletion()) {
+            this.logger.warn('requestCall ignored while QSO durability is unsettled', { callsign });
             return false;
         }
         if (isUndecodedCallsignPlaceholder(callsign)) {
@@ -1313,16 +1322,13 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         this.syncOperatorConfig();
         this.logger.debug(`requestCall: myCallsign=${this.operator.config.myCallsign}, target=${callsign}`, lastMessage);
         this.clearPost73RetryContext('manual requestCall');
-        if (this.persistedQSO) {
-            this.clearQSOContext();
-        }
         if (!lastMessage) {
-            this.context.targetCallsign = callsign;
+            this.beginQsoWithTarget(callsign, 'manual requestCall');
             this.updateSlots();
             this.changeStateSafely(this.getInitialOutboundCallState());  // 呼叫他
             return true;
         }
-        this.context.targetCallsign = callsign;
+        this.beginQsoWithTarget(callsign, 'manual requestCall with decoded message');
         this.context.reportSent = lastMessage.message.snr;
         const msg = FT8MessageParser.parseMessage(lastMessage.message.message);
         const parsedMessage: ParsedFT8Message = {
@@ -1405,11 +1411,99 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         return true;
     }
 
-    decide(messages: ParsedFT8Message[], meta?: StrategyDecisionMeta): Promise<StrategyDecision> {
+    checkpoint(): StrategyRuntimeCheckpoint {
+        const { config: _config, ...context } = this._context;
+        const checkpoint: StandardQSOCheckpoint = {
+            state: this.state,
+            slots: { ...this.slots },
+            context: { ...context },
+            tx6MessageOverride: this.tx6MessageOverride,
+            lastConfigTx6MessageOverride: this.lastConfigTx6MessageOverride,
+            timeoutCycles: this.timeoutCycles,
+            callAttempts: this.callAttempts,
+            qsoStartTime: this.qsoStartTime,
+            tx5TransmissionQueued: this.tx5TransmissionQueued,
+            completedQSORecord: this.completedQSORecord ? { ...this.completedQSORecord } : undefined,
+            pendingQSOCompletion: this.pendingQSOCompletion ? {
+                lifecycleEpoch: this.pendingQSOCompletion.lifecycleEpoch,
+                record: { ...this.pendingQSOCompletion.record },
+            } : undefined,
+            qsoLifecycleEpoch: this.qsoLifecycleEpoch,
+            post73RetryContext: this.post73RetryContext ? { ...this.post73RetryContext } : undefined,
+            qsoContextHistory: Array.from(this.qsoContextHistory.entries(), ([callsign, cached]) => [
+                callsign,
+                { ...cached },
+            ]),
+            foxHash: this.foxHash,
+        };
+        return checkpoint;
+    }
+
+    restore(checkpoint: StrategyRuntimeCheckpoint): void {
+        if (!checkpoint || typeof checkpoint !== 'object') {
+            throw new Error('Invalid Standard QSO strategy checkpoint');
+        }
+        const state = checkpoint as StandardQSOCheckpoint;
+        if (!Object.prototype.hasOwnProperty.call(states, state.state)) {
+            throw new Error(`Invalid Standard QSO strategy checkpoint state: ${String(state.state)}`);
+        }
+
+        this.state = state.state;
+        this.slots = { ...state.slots };
+        this._context = {
+            config: this.operator.config,
+            ...state.context,
+        };
+        this.tx6MessageOverride = state.tx6MessageOverride;
+        this.lastConfigTx6MessageOverride = state.lastConfigTx6MessageOverride;
+        this.timeoutCycles = state.timeoutCycles;
+        this.callAttempts = state.callAttempts;
+        this.qsoStartTime = state.qsoStartTime;
+        this.tx5TransmissionQueued = state.tx5TransmissionQueued;
+        this.completedQSORecord = state.completedQSORecord ? { ...state.completedQSORecord } : undefined;
+        this.pendingQSOCompletion = state.pendingQSOCompletion ? {
+            lifecycleEpoch: state.pendingQSOCompletion.lifecycleEpoch,
+            record: { ...state.pendingQSOCompletion.record },
+        } : undefined;
+        this.qsoLifecycleEpoch = state.qsoLifecycleEpoch;
+        this.post73RetryContext = state.post73RetryContext ? { ...state.post73RetryContext } : undefined;
+        this.qsoContextHistory = new Map(
+            state.qsoContextHistory.map(([callsign, cached]) => [callsign, { ...cached }]),
+        );
+        this.foxHash = state.foxHash;
+    }
+
+    async decide(messages: ParsedFT8Message[], meta: StrategyDecisionMetaV2): Promise<StrategyDecisionResult> {
         this.syncOperatorConfig();
-        return this.handleReceivedAndDicideNext(messages, {
-            isReDecision: meta?.isReDecision,
-        });
+        if (meta.signal.aborted) {
+            throw new DOMException('Strategy decision aborted', 'AbortError');
+        }
+
+        this.speculativeDecisionDepth += 1;
+        try {
+            const decision = await this.handleReceivedAndDicideNext(messages, {
+                isReDecision: meta.isReDecision,
+            });
+            if (meta.signal.aborted) {
+                throw new DOMException('Strategy decision aborted', 'AbortError');
+            }
+
+            const qsoCompletion = this.pendingQSOCompletion
+                ? {
+                    lifecycleEpoch: this.pendingQSOCompletion.lifecycleEpoch,
+                    record: { ...this.pendingQSOCompletion.record },
+                }
+                : undefined;
+            this.pendingQSOCompletion = undefined;
+            return {
+                ...decision,
+                transmission: this.handleTransmitSlot(),
+                snapshot: this.getSnapshot(),
+                qsoCompletion,
+            };
+        } finally {
+            this.speculativeDecisionDepth -= 1;
+        }
     }
 
     getTransmitText(): string | null {
@@ -1430,6 +1524,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
                 actualFrequency: this.context.actualFrequency,
             },
             availableSlots: ['TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'TX6'],
+            qsoLifecycleEpoch: this.qsoLifecycleEpoch,
         };
     }
 
@@ -1438,6 +1533,10 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         if (patch.targetCallsign && isUndecodedCallsignPlaceholder(patch.targetCallsign)) {
             this.logger.warn(`patchContext: refusing undecoded placeholder callsign ${patch.targetCallsign}`);
             return;
+        }
+        if (patch.targetCallsign
+            && !callsignMatches(patch.targetCallsign, this._context.targetCallsign)) {
+            this.beginQsoLifecycle('context target changed');
         }
         this._context = {
             ...this._context,
@@ -1674,7 +1773,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             reportSent: this.context.reportSent,
             reportReceived: this.context.reportReceived,
             actualFrequency: this.context.actualFrequency,
-            persistedQSO: this.persistedQSO,
+            completedQSO: this.completedQSORecord,
             expiresAt: Date.now() + retryWindowMs,
         };
 
@@ -1709,7 +1808,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         this.context.reportSent = context.reportSent;
         this.context.reportReceived = context.reportReceived;
         this.context.actualFrequency = context.actualFrequency;
-        this.persistedQSO = context.persistedQSO;
+        this.completedQSORecord = context.completedQSO;
         this.tx5TransmissionQueued = false;
         this.updateSlots();
     }
@@ -1731,9 +1830,6 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         this.context.reportReceived = undefined;
         this.context.actualFrequency = undefined;
         this.foxHash = undefined;
-        this.persistedQSO = undefined;
-        this.qsoPersistenceFailed = false;
-
         // 更新slots（TX1-TX5会变为空，只保留TX6的CQ）
         this.updateSlots();
 
@@ -1741,13 +1837,13 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     }
 
     resetRuntime(reason?: string): void {
+        this.qsoLifecycleEpoch += 1;
         this.timeoutCycles = 0;
         this.callAttempts = 0;
         this.qsoStartTime = undefined;
         this.tx5TransmissionQueued = false;
-        this.qsoPersistencePromise = undefined;
-        this.persistedQSO = undefined;
-        this.qsoPersistenceFailed = false;
+        this.completedQSORecord = undefined;
+        this.pendingQSOCompletion = undefined;
         this.clearPost73RetryContext(`runtime reset${reason ? `: ${reason}` : ''}`);
         this.clearQSOContext();
         this.changeStateSafely('TX6');
@@ -1763,6 +1859,9 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
      * 通知slots更新
      */
     private notifySlotsUpdated(): void {
+        if (this.speculativeDecisionDepth > 0) {
+            return;
+        }
         // 通过operator通知slots更新
         this.operator.notifySlotsUpdated?.(this.getSlots());
     }
@@ -1771,6 +1870,9 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
      * 通知状态变化
      */
     private notifyStateChanged(): void {
+        if (this.speculativeDecisionDepth > 0) {
+            return;
+        }
         // 通过operator通知状态变化
         this.operator.notifyStateChanged?.(this.state);
     }

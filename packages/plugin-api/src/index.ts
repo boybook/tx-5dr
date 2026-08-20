@@ -21,8 +21,26 @@
  */
 
 /** Core plugin definition and lifecycle interfaces. */
-export type { PluginDefinition } from './definition.js';
-export type { PluginContext } from './context.js';
+export { definePlugin } from './definition.js';
+export {
+  PLUGIN_COMMAND_CAPABILITY_PERMISSIONS,
+  PLUGIN_CONTEXT_CAPABILITY_KEYS,
+  getPluginContextCapabilityKeys,
+} from './capabilities.js';
+export type {
+  PluginContextCapabilityKey,
+  PluginContextCapabilityPermission,
+} from './capabilities.js';
+export type { PluginDefinition, AnyPluginDefinition } from './definition.js';
+export type {
+  PluginContext,
+  PluginContextBase,
+  PluginCleanupContext,
+  PluginContextFor,
+  RuntimePluginContext,
+  StrategyPluginContext,
+  PluginEligibilityContext,
+} from './context.js';
 export type {
   HostDependencies,
   HamlibHostDependency,
@@ -57,6 +75,12 @@ export type {
   StrategyRuntimeSnapshot,
   StrategyRuntimeSlot,
   StrategyRuntimeSlotContentUpdate,
+  StrategyRuntimeCheckpoint,
+  StrategyDecisionMetaV2,
+  StrategyDecisionResult,
+  StrategyDecisionSource,
+  StrategyQSOCompletionEffect,
+  StrategyQSOCompletionSettlement,
 } from './runtime.js';
 export type {
   HostSettingsControl,
@@ -75,14 +99,27 @@ export type {
   PluginLogger,
   PluginTimers,
   OtherOperatorSnapshot,
-  OperatorControl,
-  RadioControl,
+  OperatorSnapshot,
+  OperatorCommandPort,
+  PluginOperatorCommand,
+  PluginOperatorCommandResult,
+  RadioView,
   RadioOperatingMode,
-  RadioCapabilitiesControl,
-  RadioPowerControl,
+  RadioCapabilitiesView,
+  RadioCommandPort,
+  PluginRadioCommand,
+  RadioTunerCommandPort,
+  PluginRadioTunerCommand,
+  RadioPowerView,
+  RadioPowerCommandPort,
+  PluginRadioPowerCommand,
   RadioPowerSetOptions,
   LogbookAccess,
+  LogbookReadAccess,
+  LogbookCommandPort,
   CallsignLogbookAccess,
+  CallsignLogbookReadAccess,
+  CallsignLogbookCommandPort,
   QSOQueryFilter,
   BandAccess,
   IdleTransmitFrequencyOptions,

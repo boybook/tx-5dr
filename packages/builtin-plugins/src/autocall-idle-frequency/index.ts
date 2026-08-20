@@ -1,8 +1,8 @@
-import type {
-  AutoCallExecutionPlan,
-  AutoCallExecutionRequest,
-  PluginContext,
-  PluginDefinition,
+import {
+  definePlugin,
+  type AutoCallExecutionPlan,
+  type AutoCallExecutionRequest,
+  type PluginContext,
 } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
@@ -96,7 +96,7 @@ function configureIdleFrequency(
   };
 }
 
-export const autocallIdleFrequencyPlugin: PluginDefinition = {
+export const autocallIdleFrequencyPlugin = definePlugin({
   name: BUILTIN_AUTOCALL_IDLE_FREQUENCY_PLUGIN_NAME,
   version: '1.0.0',
   type: 'utility',
@@ -139,7 +139,7 @@ export const autocallIdleFrequencyPlugin: PluginDefinition = {
       return configureIdleFrequency(request, plan, ctx);
     },
   },
-};
+});
 
 export const autocallIdleFrequencyLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,

@@ -7,7 +7,8 @@ export function pluginMatchesAutomationFilter(
   filter: AutomationPanelFilter = 'all',
 ): boolean {
   if (filter === 'transmit-control') {
-    return plugin.permissions?.includes('operator:transmit-control') ?? false;
+    return (plugin.permissions?.includes('operator:transmit-control') ?? false)
+      && (plugin.capabilities?.includes('auto_call_control') ?? false);
   }
   return true;
 }

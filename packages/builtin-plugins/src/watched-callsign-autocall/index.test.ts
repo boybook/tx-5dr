@@ -6,9 +6,11 @@ import { watchedCallsignAutocallPlugin, watchedCallsignAutocallTestables } from 
 describe('watched-callsign-autocall', () => {
   it('reports auto-call enabled only when watch list has active entries', () => {
     expect(watchedCallsignAutocallTestables.isWatchedCallsignAutoCallEnabled(createMockContext({
+      permissions: ['operator:transmit-control', 'logbook:read'],
       config: { watchList: ['JA1AAA'] },
     }))).toBe(true);
     expect(watchedCallsignAutocallTestables.isWatchedCallsignAutoCallEnabled(createMockContext({
+      permissions: ['operator:transmit-control', 'logbook:read'],
       config: { watchList: ['  ', '# JA1AAA'] },
     }))).toBe(false);
   });
@@ -19,6 +21,7 @@ describe('watched-callsign-autocall', () => {
   ])('defers the current slot when history is %s', async (code) => {
     const countQSOs = vi.fn().mockRejectedValue(Object.assign(new Error(code), { code }));
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control', 'logbook:read'],
       config: {
         watchList: ['JA1AAA'],
         watchMatchMode: 'exact',
@@ -42,6 +45,7 @@ describe('watched-callsign-autocall', () => {
   it('does not hide unexpected logbook query failures', async () => {
     const error = new Error('query invariant failed');
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control', 'logbook:read'],
       config: {
         watchList: ['JA1AAA'],
         watchMatchMode: 'exact',

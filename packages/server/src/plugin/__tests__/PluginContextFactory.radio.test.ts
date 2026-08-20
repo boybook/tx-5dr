@@ -239,26 +239,65 @@ describe('PluginContextFactory radio access', () => {
     });
   });
 
-  it('rejects protected radio APIs when plugin permissions are missing', async () => {
+  it('omits protected radio capabilities when permissions are missing', async () => {
     const ctx = await createContext(createPlugin(), createDeps());
 
-    expect(() => ctx.radio.capabilities.getSnapshot()).toThrow("requires permission 'radio:read'");
-    await expect(ctx.radio.setFrequency(14_074_000)).rejects.toThrow("requires permission 'radio:control'");
-    await expect(ctx.radio.power.set('off')).rejects.toThrow("requires permission 'radio:power'");
+    expect('radioCapabilities' in ctx).toBe(false);
+    expect('radioCommands' in ctx).toBe(false);
+    expect('radioTunerCommands' in ctx).toBe(false);
+    expect('radioPower' in ctx).toBe(false);
+    expect('radioPowerCommands' in ctx).toBe(false);
+    expect('setFrequency' in ctx.radio).toBe(false);
   });
 
-  it('awaits host radio frequency writes and reports rejected writes', async () => {
-    const setRadioFrequency = vi.fn(async () => false);
+  it('routes radio frequency writes through the host maintenance coordinator', async () => {
+    const submitRadioMaintenanceCommand = vi.fn(async () => {
+      throw new Error('Failed to set radio frequency');
+    });
     const ctx = await createContext(
       createPlugin(['radio:control']),
-      createDeps({ setRadioFrequency }),
+      createDeps({ submitRadioMaintenanceCommand }),
     );
 
-    await expect(ctx.radio.setFrequency(7_074_000)).rejects.toThrow('Failed to set radio frequency');
-    expect(setRadioFrequency).toHaveBeenCalledWith(7_074_000);
+    await expect(ctx.radioCommands!.submit({ type: 'set-frequency', frequency: 7_074_000 }))
+      .rejects.toThrow('Failed to set radio frequency');
+    expect(submitRadioMaintenanceCommand).toHaveBeenCalledWith({
+      type: 'set-frequency',
+      frequency: 7_074_000,
+    });
   });
 
-  it('exposes capability read/write APIs with radio permissions', async () => {
+  it('requires tuner permission before requesting an auto-tuned band switch', async () => {
+    const submitRadioMaintenanceCommand = vi.fn(async () => undefined);
+    const ctx = await createContext(
+      createPlugin(['radio:control']),
+      createDeps({ submitRadioMaintenanceCommand }),
+    );
+
+    await expect(ctx.radioCommands!.submit({
+      type: 'switch-band',
+      frequency: 14_074_000,
+      autoTune: true,
+    })).rejects.toThrow('requires radio:tuner-control');
+    expect(submitRadioMaintenanceCommand).not.toHaveBeenCalled();
+
+    const tunerCtx = await createContext(
+      createPlugin(['radio:control', 'radio:tuner-control']),
+      createDeps({ submitRadioMaintenanceCommand }),
+    );
+    await tunerCtx.radioCommands!.submit({
+      type: 'switch-band',
+      frequency: 14_074_000,
+      autoTune: true,
+    });
+    expect(submitRadioMaintenanceCommand).toHaveBeenCalledWith({
+      type: 'switch-band',
+      frequency: 14_074_000,
+      autoTune: true,
+    });
+  });
+
+  it('keeps generic radio control separate from explicit tuner control', async () => {
     const snapshot: CapabilityList = {
       descriptors: [],
       capabilities: [{
@@ -269,24 +308,36 @@ describe('PluginContextFactory radio access', () => {
         updatedAt: 123,
       }],
     };
-    const writeRadioCapability = vi.fn(async () => undefined);
+    const submitRadioMaintenanceCommand = vi.fn(async () => undefined);
     const ctx = await createContext(
       createPlugin(['radio:read', 'radio:control']),
       createDeps({
         getRadioCapabilitySnapshot: () => snapshot,
         refreshRadioCapabilities: async () => snapshot,
-        writeRadioCapability,
+        submitRadioMaintenanceCommand,
       }),
     );
 
-    expect(ctx.radio.capabilities.getSnapshot()).toBe(snapshot);
-    expect(ctx.radio.capabilities.getState('agc_mode')).toEqual(snapshot.capabilities[0]);
-    await expect(ctx.radio.capabilities.refresh()).resolves.toBe(snapshot);
+    expect(ctx.radioCapabilities!.getSnapshot()).toBe(snapshot);
+    expect(ctx.radioCapabilities!.getState('agc_mode')).toEqual(snapshot.capabilities[0]);
+    await expect(ctx.radioCapabilities!.refresh()).resolves.toBe(snapshot);
 
-    await ctx.radio.capabilities.write({ id: 'agc_mode', value: 'fast' });
-    await ctx.radio.capabilities.write({ id: 'tuner_tune', action: true });
-    expect(writeRadioCapability).toHaveBeenNthCalledWith(1, { id: 'agc_mode', value: 'fast' });
-    expect(writeRadioCapability).toHaveBeenNthCalledWith(2, { id: 'tuner_tune', action: true });
+    expect('radioTunerCommands' in ctx).toBe(false);
+    expect(submitRadioMaintenanceCommand).not.toHaveBeenCalled();
+
+    const tunerCtx = await createContext(
+      createPlugin(['radio:tuner-control']),
+      createDeps({ submitRadioMaintenanceCommand }),
+    );
+    await tunerCtx.radioTunerCommands!.submit({ type: 'set-enabled', enabled: true });
+    await tunerCtx.radioTunerCommands!.submit({ type: 'start-manual-tune' });
+    expect(submitRadioMaintenanceCommand).toHaveBeenNthCalledWith(1, {
+      type: 'set-enabled',
+      enabled: true,
+    });
+    expect(submitRadioMaintenanceCommand).toHaveBeenNthCalledWith(2, {
+      type: 'start-manual-tune',
+    });
   });
 
   it('exposes power support/state/set APIs with defaults and overrides', async () => {
@@ -303,10 +354,14 @@ describe('PluginContextFactory radio access', () => {
       createDeps({ getRadioPowerSupport, getRadioPowerState, setRadioPower }),
     );
 
-    await expect(ctx.radio.power.getSupport()).resolves.toMatchObject({ profileId: 'active-profile' });
-    expect(ctx.radio.power.getState()).toMatchObject({ state: 'awake' });
-    await ctx.radio.power.set('on');
-    await ctx.radio.power.set('standby', { profileId: 'profile-2', autoEngine: false });
+    await expect(ctx.radioPower!.getSupport()).resolves.toMatchObject({ profileId: 'active-profile' });
+    expect(ctx.radioPower!.getState()).toMatchObject({ state: 'awake' });
+    await ctx.radioPowerCommands!.submit({ type: 'set-power', state: 'on' });
+    await ctx.radioPowerCommands!.submit({
+      type: 'set-power',
+      state: 'standby',
+      options: { profileId: 'profile-2', autoEngine: false },
+    });
 
     expect(setRadioPower).toHaveBeenNthCalledWith(1, 'on', undefined);
     expect(setRadioPower).toHaveBeenNthCalledWith(2, 'standby', { profileId: 'profile-2', autoEngine: false });
@@ -316,17 +371,17 @@ describe('PluginContextFactory radio access', () => {
   it('does not expose host-owned hamlib dependency without host permission', async () => {
     const ctx = await createContext(createPlugin(), createDeps());
 
-    expect(ctx.hostDependencies.hamlib).toBeUndefined();
+    expect('hostDependencies' in ctx).toBe(false);
   });
 
   it('exposes allow-listed host-owned hamlib dependency to permitted plugins', async () => {
     const ctx = await createContext(createPlugin(['host:hamlib']), createDeps());
 
-    expect(ctx.hostDependencies.hamlib).toBeDefined();
-    expect(typeof ctx.hostDependencies.hamlib?.Rotator).toBe('function');
-    expect(typeof ctx.hostDependencies.hamlib?.Rotator.getSupportedRotators).toBe('function');
-    expect(typeof ctx.hostDependencies.hamlib?.Rotator.getHamlibVersion()).toBe('string');
-    expect(ctx.hostDependencies.hamlib).not.toHaveProperty('HamLib');
-    expect(ctx.hostDependencies.hamlib).not.toHaveProperty('default');
+    expect(ctx.hostDependencies?.hamlib).toBeDefined();
+    expect(typeof ctx.hostDependencies?.hamlib?.Rotator).toBe('function');
+    expect(typeof ctx.hostDependencies?.hamlib?.Rotator.getSupportedRotators).toBe('function');
+    expect(typeof ctx.hostDependencies?.hamlib?.Rotator.getHamlibVersion()).toBe('string');
+    expect(ctx.hostDependencies?.hamlib).not.toHaveProperty('HamLib');
+    expect(ctx.hostDependencies?.hamlib).not.toHaveProperty('default');
   });
 });

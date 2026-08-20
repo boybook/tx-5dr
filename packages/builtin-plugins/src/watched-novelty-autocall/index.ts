@@ -3,8 +3,8 @@ import {
   type LastMessageInfo,
   type ParsedFT8Message,
   type PluginContext,
-  type PluginDefinition,
   type SlotInfo,
+  definePlugin,
 } from '@tx5dr/plugin-api';
 import {
   getSenderCallsign,
@@ -83,7 +83,8 @@ function findMatchedTarget(
   return matches[0] ?? null;
 }
 
-export const watchedNoveltyAutocallPlugin: PluginDefinition = {
+export const watchedNoveltyAutocallPlugin = definePlugin({
+  apiVersion: 2,
   name: 'watched-novelty-autocall',
   version: '1.0.0',
   type: 'utility',
@@ -188,7 +189,7 @@ export const watchedNoveltyAutocallPlugin: PluginDefinition = {
       };
     },
   },
-};
+});
 
 export const watchedNoveltyAutocallLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,

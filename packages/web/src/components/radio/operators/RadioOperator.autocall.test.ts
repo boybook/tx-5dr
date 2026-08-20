@@ -27,6 +27,7 @@ describe('RadioOperator auto-call indicator', () => {
     expect(hasActiveTransmitControlPlugin([
       createPlugin({
         permissions: ['operator:transmit-control'],
+        capabilities: ['auto_call_control'],
         autoCallEnabledOperatorIds: ['operator-1'],
       }),
     ], 'operator-1')).toBe(true);
@@ -34,6 +35,7 @@ describe('RadioOperator auto-call indicator', () => {
     expect(hasActiveTransmitControlPlugin([
       createPlugin({
         permissions: ['operator:transmit-control'],
+        capabilities: ['auto_call_control'],
         autoCallEnabledOperatorIds: ['operator-2'],
       }),
     ], 'operator-1')).toBe(false);
@@ -50,6 +52,7 @@ describe('RadioOperator auto-call indicator', () => {
     const activePlugin = createPlugin({
       name: 'active-autocall',
       permissions: ['operator:transmit-control'],
+      capabilities: ['auto_call_control'],
       autoCallEnabledOperatorIds: ['operator-1'],
     });
     const plugins = [
@@ -57,6 +60,7 @@ describe('RadioOperator auto-call indicator', () => {
       createPlugin({
         name: 'other-operator',
         permissions: ['operator:transmit-control'],
+        capabilities: ['auto_call_control'],
         autoCallEnabledOperatorIds: ['operator-2'],
       }),
       createPlugin({
@@ -73,6 +77,7 @@ describe('RadioOperator auto-call indicator', () => {
     const pausedPlugin = createPlugin({
       name: 'paused-autocall',
       permissions: ['operator:transmit-control'],
+      capabilities: ['auto_call_control'],
       autoCallEnabledOperatorIds: ['operator-1'],
       pausedOperatorIds: ['operator-1'],
     });
@@ -80,5 +85,17 @@ describe('RadioOperator auto-call indicator', () => {
     expect(getActiveTransmitControlPlugins([pausedPlugin], 'operator-1')).toEqual([]);
     expect(hasActiveTransmitControlPlugin([pausedPlugin], 'operator-1')).toBe(false);
     expect(getPausedTransmitControlPlugins([pausedPlugin], 'operator-1')).toEqual([pausedPlugin]);
+  });
+
+  it('does not classify an integration with operator commands as an auto-call plugin', () => {
+    const udpIntegration = createPlugin({
+      name: 'qso-udp-broadcast',
+      permissions: ['network', 'operator:transmit-control'],
+      autoCallEnabledOperatorIds: ['operator-1'],
+      pausedOperatorIds: ['operator-1'],
+    });
+
+    expect(getActiveTransmitControlPlugins([udpIntegration], 'operator-1')).toEqual([]);
+    expect(getPausedTransmitControlPlugins([udpIntegration], 'operator-1')).toEqual([]);
   });
 });

@@ -2,7 +2,7 @@
 // QRZSyncProvider — HTTP response handling requires any
 
 import type {
-  PluginContext,
+  PluginContextFor,
   LogbookSyncProvider,
   SyncAction,
   SyncTestResult,
@@ -12,6 +12,8 @@ import type {
   SyncUploadOptions,
   SyncFailure,
 } from '@tx5dr/plugin-api';
+
+type PluginContext = PluginContextFor<readonly ['network', 'logbook:read', 'logbook:write']>;
 import type { QSORecord } from '@tx5dr/contracts';
 import {
   convertQSOToADIF,
