@@ -81,6 +81,8 @@ import type {
   NetworkInfo,
   SystemLoggingSettings,
   UpdateSystemLoggingSettingsRequest,
+  ObservabilityStatus,
+  UpdateObservabilitySettingsRequest,
   ClockStatusDetail,
   NtpServerListSettings,
   SetClockAutoApplyRequest,
@@ -2001,6 +2003,21 @@ export const api = {
     );
   },
 
+  async getObservabilityStatus(apiBase?: string): Promise<ObservabilityStatus> {
+    return apiRequest<ObservabilityStatus>('/settings/observability', undefined, apiBase);
+  },
+
+  async updateObservabilitySettings(
+    data: UpdateObservabilitySettingsRequest,
+    apiBase?: string,
+  ): Promise<ObservabilityStatus> {
+    return apiRequest<ObservabilityStatus>(
+      '/settings/observability',
+      { method: 'PUT', body: JSON.stringify(data) },
+      apiBase,
+    );
+  },
+
   async getClockStatus(apiBase?: string): Promise<ClockStatusDetail> {
     return apiRequest<ClockStatusDetail>('/system/clock', undefined, apiBase);
   },
@@ -2655,6 +2672,8 @@ export const {
   ,reloadPlugins
   ,getSystemLoggingSettings
   ,updateSystemLoggingSettings
+  ,getObservabilityStatus
+  ,updateObservabilitySettings
   ,getNtpServerListSettings
   ,updateNtpServerListSettings
   ,setClockAutoApply

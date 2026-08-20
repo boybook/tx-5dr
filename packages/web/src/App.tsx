@@ -25,6 +25,7 @@ import { useViewportHeightCssVar } from './hooks/useViewportHeight';
 import { GlobalShortcutBridge } from './components/app/GlobalShortcutBridge';
 import { UpdateNotificationProvider } from './components/app/UpdateNotificationProvider';
 import { BootstrapStatusChip } from './components/app/BootstrapStatusChip';
+import { ObservabilityConsentBanner } from './components/app/ObservabilityConsentBanner';
 import { useLanguage } from './hooks/useLanguage';
 import { shouldShowServerStatusPage } from './store/radio/connectionView';
 
@@ -61,7 +62,7 @@ function AppContent() {
   const isCWMode = engineMode === 'cw';
 
   return (
-    <div className="App app-viewport-height w-full overflow-hidden relative">
+    <div className="App app-viewport-height relative flex w-full flex-col overflow-hidden">
       {/* PTT发射状态全局红色内描边 */}
       {pttStatus.isTransmitting && (
         <div
@@ -90,7 +91,10 @@ function AppContent() {
         defaultExtraWidth={26}
         minExtraWidth={18}
         maxExtraWidth={38}
+        className="!h-auto min-h-0 flex-1"
       />
+
+      <ObservabilityConsentBanner enabled={isAdmin && !showSetupOverlay} />
 
       <BootstrapStatusChip />
 
