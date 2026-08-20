@@ -93,11 +93,13 @@ describe('plugin market schema', () => {
       enabled: true,
       errorCount: 0,
       permissions: ['operator:transmit-control'],
+      capabilities: ['auto_call_control'],
       autoCallEnabledOperatorIds: ['operator-1'],
       pausedOperatorIds: ['operator-2'],
     });
     expect(status.autoCallEnabledOperatorIds).toEqual(['operator-1']);
     expect(status.pausedOperatorIds).toEqual(['operator-2']);
+    expect(status.capabilities).toContain('auto_call_control');
   });
 
   it('accepts persisted operator plugin pause state with defaults', () => {

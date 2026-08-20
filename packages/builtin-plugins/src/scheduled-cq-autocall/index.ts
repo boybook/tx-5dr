@@ -1,4 +1,4 @@
-import type { PluginContext, PluginDefinition } from '@tx5dr/plugin-api';
+import { definePlugin, type PluginContextFor } from '@tx5dr/plugin-api';
 import { isPureStandby } from '../_shared/autocall-utils.js';
 import {
   isSameScheduleMinute,
@@ -15,6 +15,7 @@ const TIMER_INTERVAL_MS = 15_000;
 const LAST_TRIGGER_KEY = 'lastScheduledCqTriggerKey';
 const LAST_INTERVAL_TRIGGER_MS_KEY = 'lastScheduledCqIntervalTriggerMs';
 const DEFAULT_INTERVAL_MINUTES = 30;
+type ScheduledCqContext = PluginContextFor<readonly ['operator:transmit-control']>;
 const SCHEDULED_CQ_BANDS = [
   '160m',
   '80m',
@@ -113,7 +114,7 @@ function getDueScheduleKeyForRows(
   return null;
 }
 
-function resolveScheduledCqConfig(ctx: PluginContext): ResolvedScheduledCqConfig {
+function resolveScheduledCqConfig(ctx: ScheduledCqContext): ResolvedScheduledCqConfig {
   if (ctx.config.scheduledCqPerBandEnabled === true) {
     const band = normalizeBandKey(ctx.radio.band);
     if (!band || band === 'unknown') {
@@ -142,7 +143,7 @@ function resolveScheduledCqConfig(ctx: PluginContext): ResolvedScheduledCqConfig
   };
 }
 
-function getDueScheduleKey(ctx: PluginContext, now = new Date()): string | null {
+function getDueScheduleKey(ctx: ScheduledCqContext, now = new Date()): string | null {
   const config = resolveScheduledCqConfig(ctx);
   return getDueScheduleKeyForRows(config.scheduleRows, config.scopeKey, now);
 }
@@ -154,7 +155,7 @@ function getIntervalStoreKey(config: ResolvedScheduledCqConfig): string {
 }
 
 function getDueIntervalKeyForConfig(
-  ctx: PluginContext,
+  ctx: ScheduledCqContext,
   config: ResolvedScheduledCqConfig,
   now = new Date(),
 ): string | null {
@@ -166,16 +167,16 @@ function getDueIntervalKeyForConfig(
   return `${config.scopeKey}:interval:${config.intervalMinutes}:${Math.floor(now.getTime() / intervalMs)}`;
 }
 
-function getDueIntervalKey(ctx: PluginContext, now = new Date()): string | null {
+function getDueIntervalKey(ctx: ScheduledCqContext, now = new Date()): string | null {
   return getDueIntervalKeyForConfig(ctx, resolveScheduledCqConfig(ctx), now);
 }
 
-function markIntervalBaseline(ctx: PluginContext, config: ResolvedScheduledCqConfig, now = new Date()): void {
+function markIntervalBaseline(ctx: ScheduledCqContext, config: ResolvedScheduledCqConfig, now = new Date()): void {
   if (!config.intervalEnabled) return;
   ctx.store.operator.set(getIntervalStoreKey(config), now.getTime());
 }
 
-function ensureIntervalBaseline(ctx: PluginContext, config: ResolvedScheduledCqConfig, now = new Date()): void {
+function ensureIntervalBaseline(ctx: ScheduledCqContext, config: ResolvedScheduledCqConfig, now = new Date()): void {
   if (!config.intervalEnabled) return;
   const lastTriggerMs = ctx.store.operator.get<number>(getIntervalStoreKey(config), 0);
   if (!Number.isFinite(lastTriggerMs) || lastTriggerMs <= 0) {
@@ -183,7 +184,7 @@ function ensureIntervalBaseline(ctx: PluginContext, config: ResolvedScheduledCqC
   }
 }
 
-function configureTimer(ctx: PluginContext): void {
+function configureTimer(ctx: ScheduledCqContext): void {
   if (ctx.config.scheduledCqEnabled === true) {
     ctx.timers.set(TIMER_ID, TIMER_INTERVAL_MS);
     return;
@@ -191,7 +192,7 @@ function configureTimer(ctx: PluginContext): void {
   ctx.timers.clear(TIMER_ID);
 }
 
-function runScheduledCqCheck(ctx: PluginContext, now = new Date()): void {
+async function runScheduledCqCheck(ctx: ScheduledCqContext, now = new Date()): Promise<void> {
   if (ctx.config.scheduledCqEnabled !== true) return;
 
   const resolvedConfig = resolveScheduledCqConfig(ctx);
@@ -207,7 +208,7 @@ function runScheduledCqCheck(ctx: PluginContext, now = new Date()): void {
     }
 
     ctx.log.info('Scheduled CQ starting transmit automation', { dueKey: dueScheduleKey });
-    ctx.operator.startTransmitting();
+    await ctx.operatorCommands?.submit({ type: 'start-automation' });
     return;
   }
 
@@ -224,14 +225,15 @@ function runScheduledCqCheck(ctx: PluginContext, now = new Date()): void {
   }
 
   ctx.log.info('Scheduled CQ starting transmit automation', { dueKey: dueIntervalKey });
-  ctx.operator.startTransmitting();
+  await ctx.operatorCommands?.submit({ type: 'start-automation' });
 }
 
-function isScheduledCqAutoCallEnabled(ctx: PluginContext): boolean {
+function isScheduledCqAutoCallEnabled(ctx: { config: Readonly<Record<string, unknown>> }): boolean {
   return ctx.config.scheduledCqEnabled === true;
 }
 
-export const scheduledCqAutocallPlugin: PluginDefinition = {
+export const scheduledCqAutocallPlugin = definePlugin({
+  apiVersion: 2,
   name: 'scheduled-cq-autocall',
   version: '1.0.0',
   type: 'utility',
@@ -352,12 +354,12 @@ export const scheduledCqAutocallPlugin: PluginDefinition = {
     onConfigChange(_changes, ctx) {
       configureTimer(ctx);
     },
-    onTimer(timerId, ctx) {
+    async onTimer(timerId, ctx) {
       if (timerId !== TIMER_ID) return;
-      runScheduledCqCheck(ctx);
+      await runScheduledCqCheck(ctx);
     },
   },
-};
+});
 
 export const scheduledCqAutocallLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,

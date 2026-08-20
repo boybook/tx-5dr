@@ -16,6 +16,7 @@ import {
   getRadioOperatorProgressAnimation,
   shouldRadioOperatorPropsBeEqual,
 } from './radioOperatorProgress';
+import { resolveRadioOperatorCyclePresentation } from './radioOperatorPresentation';
 import {
   OPERATOR_FORCE_STOP_REQUESTED_EVENT,
   type OperatorForceStopRequestedDetail,
@@ -688,13 +689,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     setOperatorTransmitCycles(transmitCycles);
   };
 
-  // 获取当前发射内容
-  const getCurrentTransmissionContent = () => {
-    if (operatorStatus.slots && operatorStatus.currentSlot) {
-      return operatorStatus.slots[operatorStatus.currentSlot as keyof typeof operatorStatus.slots] || '';
-    }
-    return '';
-  };
+  const cyclePresentation = resolveRadioOperatorCyclePresentation(
+    operatorStatus,
+    currentSlotInfo,
+    isCurrentTransmitCycle,
+  );
 
   // 处理立即停止发射：移除当前操作员的音频并重混音
   const handleForceStop = () => {
@@ -703,22 +702,6 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       connection.state.radioService.removeOperatorFromTransmission(operatorStatus.id);
       setIsForceStopPopoverOpen(false);
     }
-  };
-
-  // 获取进度条颜色 - 颜色变化用 CSS transition 平滑过渡
-  const getProgressColor = (): string => {
-    if (!currentSlotInfo) {
-      return 'var(--ft8-cycle-even-bg)';
-    }
-
-    const isActuallyTransmitting = operatorStatus.isInActivePTT === true;
-
-    if (isActuallyTransmitting) {
-      return 'hsl(var(--heroui-danger) / 0.15)';
-    }
-
-    const isEvenCycle = CycleUtils.isEvenCycle(currentSlotInfo.cycleNumber);
-    return isEvenCycle ? 'var(--ft8-cycle-even-bg)' : 'var(--ft8-cycle-odd-bg)';
   };
 
   // 进度条动画由全局 slotStart 驱动，operatorStatusUpdate 不会重置周期进度。
@@ -933,7 +916,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
         {radio.state.isDecoding && (
           <div
             className="absolute inset-0 transition-colors duration-200"
-            style={{ backgroundColor: getProgressColor() }}
+            style={{ backgroundColor: cyclePresentation.progressColor }}
           />
         )}
         {/* 进度条遮罩层 - 仅在解码时显示 */}
@@ -966,16 +949,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 );
               }
 
-              const isActuallyTransmitting = operatorStatus.isInActivePTT === true;
-              const isPreparingTransmission = operatorStatus.isTransmitting && isCurrentTransmitCycle;
-
-              return isActuallyTransmitting ? (
+              return cyclePresentation.isTransmit ? (
                 <div className="font-bold font-mono text-lg text-danger">
-                  {getCurrentTransmissionContent() || t('operator.preparingTx')}
-                </div>
-              ) : isPreparingTransmission ? (
-                <div className="font-bold font-mono text-lg text-foreground opacity-65">
-                  {t('operator.preparingTx')}
+                  {cyclePresentation.transmitContent || t('operator.preparingTx')}
                 </div>
               ) : (
                 <div className="text-foreground opacity-65 font-bold font-mono text-lg">

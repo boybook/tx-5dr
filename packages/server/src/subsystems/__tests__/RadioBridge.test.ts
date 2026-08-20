@@ -72,6 +72,77 @@ describe('RadioBridge', () => {
     }));
   });
 
+  it('retries an unknown physical TX release after the radio session reconnects', async () => {
+    const radioManager = createRadioManagerStub();
+    const retryUnknownStop = vi.fn().mockResolvedValue({
+      success: true,
+      reason: 'radio reconnected',
+      physicalConfirmed: false,
+    });
+
+    const bridge = new RadioBridge({
+      engineEmitter: new EventEmitter() as any,
+      radioManager: radioManager as any,
+      frequencyManager: { findMatchingPreset: vi.fn() } as any,
+      slotPackManager: { clearInMemory: vi.fn() } as any,
+      operatorManager: { stopAllOperators: vi.fn() } as any,
+      getTransmissionPipeline: () => ({ getIsPTTActive: vi.fn().mockReturnValue(true) } as any),
+      physicalTxCoordinator: { retryUnknownStop } as any,
+      getEngineLifecycle: () => ({
+        getIsRunning: vi.fn().mockReturnValue(false),
+        getEngineState: vi.fn().mockReturnValue('idle'),
+        start: vi.fn(),
+        sendRadioDisconnected: vi.fn(),
+      } as any),
+      getEngineMode: () => 'digital',
+    });
+
+    bridge.setupListeners();
+    radioManager.emit('connected');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(retryUnknownStop).toHaveBeenCalledWith('radio reconnected');
+  });
+
+  it('does not restore automation while the physical TX lease remains unknown', async () => {
+    const radioManager = createRadioManagerStub();
+    const start = vi.fn();
+    const retryUnknownStop = vi.fn().mockResolvedValue({
+      success: false,
+      reason: 'radio reconnected: PTT release unconfirmed',
+      physicalConfirmed: true,
+    });
+
+    const bridge = new RadioBridge({
+      engineEmitter: new EventEmitter() as any,
+      radioManager: radioManager as any,
+      frequencyManager: { findMatchingPreset: vi.fn() } as any,
+      slotPackManager: { clearInMemory: vi.fn() } as any,
+      operatorManager: { stopAllOperators: vi.fn() } as any,
+      getTransmissionPipeline: () => ({ getIsPTTActive: vi.fn().mockReturnValue(true) } as any),
+      physicalTxCoordinator: {
+        retryUnknownStop,
+        getSnapshot: vi.fn().mockReturnValue({ phase: 'unknown' }),
+      } as any,
+      getEngineLifecycle: () => ({
+        getIsRunning: vi.fn().mockReturnValue(false),
+        getEngineState: vi.fn().mockReturnValue('idle'),
+        start,
+        sendRadioDisconnected: vi.fn(),
+      } as any),
+      getEngineMode: () => 'digital',
+    });
+
+    bridge.wasRunningBeforeDisconnect = true;
+    bridge.setupListeners();
+    radioManager.emit('connected');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(retryUnknownStop).toHaveBeenCalledWith('radio reconnected');
+    expect(start).not.toHaveBeenCalled();
+    expect(bridge.wasRunningBeforeDisconnect).toBe(true);
+  });
+
   it('does not retry engine restore on audio failure (handled by AudioSidecarController)', async () => {
     vi.useFakeTimers();
 

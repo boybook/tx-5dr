@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'eventemitter3';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -168,5 +168,92 @@ describe('PluginManager page handler routing', () => {
     await expect(invoke('operator-2')).resolves.toEqual({ operatorId: 'operator-2' });
 
     await pluginManager.shutdown();
+  });
+
+  it('revokes page files and push capabilities after their request invocation ends', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-page-revoke-'));
+    tempDirs.push(dataDir);
+    await writeUserPlugin(dataDir, 'page-revoke-test', `
+      let retained;
+      export default {
+        name: 'page-revoke-test',
+        version: '1.0.0',
+        type: 'utility',
+        instanceScope: 'global',
+        ui: { pages: [{ id: 'settings', title: 'Settings', entry: 'settings.html' }] },
+        onLoad(ctx) {
+          ctx.ui.registerPageHandler({
+            async onMessage(_pageId, action, _data, requestContext) {
+              if (action === 'retain') {
+                retained = requestContext;
+                return 'retained';
+              }
+              if (action === 'reuse-files') {
+                await retained.files.write('late.bin', Buffer.from('late'));
+              }
+              if (action === 'reuse-push') {
+                retained.page.push('late');
+              }
+              return 'ok';
+            },
+          });
+        },
+      };
+    `);
+    await mkdir(join(dataDir, 'plugins', 'page-revoke-test', 'ui'), { recursive: true });
+    await writeFile(
+      join(dataDir, 'plugins', 'page-revoke-test', 'ui', 'settings.html'),
+      '<!doctype html><html><body>settings</body></html>',
+      'utf8',
+    );
+
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const manager = new PluginManager({
+      eventEmitter,
+      getOperators: () => [],
+      getOperatorById: () => undefined,
+      getCurrentMode: () => MODES.FT8,
+      getOperatorAutomationSnapshot: () => null,
+      requestOperatorCall: () => {},
+      getRadioFrequency: async () => null,
+      setRadioFrequency: () => {},
+      getRadioBand: () => '40m',
+      getRadioConnected: () => true,
+      getLatestSlotPack: () => null,
+      interruptOperatorTransmission: async () => {},
+      hasWorkedCallsign: async () => false,
+      resetOperatorRuntime: () => {},
+      dataDir,
+    });
+    manager.loadConfig({
+      configs: { 'page-revoke-test': { enabled: true, settings: {} } },
+      operatorStrategies: {},
+      operatorSettings: {},
+    });
+    await manager.start();
+
+    const write = vi.fn(async () => undefined);
+    const push = vi.fn();
+    const context = {
+      pageSessionId: 'session-1',
+      user: { tokenId: 'token-1', role: 'admin' as const, operatorIds: [] },
+      instanceTarget: { kind: 'global' as const },
+      files: { write, read: async () => null, delete: async () => false, list: async () => [] },
+      page: { sessionId: 'session-1', pageId: 'settings', push },
+    };
+
+    await expect(manager.invokePluginPageHandler(
+      'page-revoke-test', 'settings', 'retain', null, context,
+    )).resolves.toBe('retained');
+    await expect(manager.invokePluginPageHandler(
+      'page-revoke-test', 'settings', 'reuse-files', null, context,
+    )).rejects.toThrow('Plugin invocation-scoped capability has expired');
+    await expect(manager.invokePluginPageHandler(
+      'page-revoke-test', 'settings', 'reuse-push', null, context,
+    )).rejects.toThrow('Plugin invocation-scoped capability has expired');
+    expect(write).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+
+    await manager.shutdown();
   });
 });

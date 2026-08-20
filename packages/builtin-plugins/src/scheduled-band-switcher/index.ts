@@ -1,5 +1,9 @@
 import type { CapabilityList, CapabilityState } from '@tx5dr/contracts';
-import type { OtherOperatorSnapshot, PluginContext, PluginDefinition } from '@tx5dr/plugin-api';
+import {
+  definePlugin,
+  type OtherOperatorSnapshot,
+  type PluginContextFor,
+} from '@tx5dr/plugin-api';
 import {
   isScheduleDayActive,
   isTimeInScheduleRange,
@@ -32,8 +36,13 @@ type RotationState = {
   index: number;
   lastSwitchMs: number;
 };
+type BandSwitcherContext = PluginContextFor<readonly [
+  'radio:read',
+  'radio:control',
+  'radio:tuner-control',
+]>;
 
-function getSwitchMode(ctx: PluginContext): SwitchMode {
+function getSwitchMode(ctx: BandSwitcherContext): SwitchMode {
   return ctx.config.bandSwitchMode === 'rotation' ? 'rotation' : 'schedule';
 }
 
@@ -58,7 +67,7 @@ function getRotationFrequencies(value: unknown): number[] {
   return frequencies;
 }
 
-function getScheduledTargetFrequency(ctx: PluginContext, now = new Date()): number | null {
+function getScheduledTargetFrequency(ctx: BandSwitcherContext, now = new Date()): number | null {
   for (const row of getScheduleEntries(ctx.config.bandScheduleEntries)) {
     if (row.enabled === false) continue;
     const days = parseScheduleDays(row.days);
@@ -73,7 +82,7 @@ function getScheduledTargetFrequency(ctx: PluginContext, now = new Date()): numb
   return null;
 }
 
-function getRotationTargetFrequency(ctx: PluginContext, now = new Date()): number | null {
+function getRotationTargetFrequency(ctx: BandSwitcherContext, now = new Date()): number | null {
   const frequencies = getRotationFrequencies(ctx.config.rotationFrequenciesMhz);
   if (frequencies.length === 0) return null;
 
@@ -87,11 +96,14 @@ function getRotationTargetFrequency(ctx: PluginContext, now = new Date()): numbe
   }
 
   const nextIndex = (Number.isInteger(state.index) ? state.index + 1 : 0) % frequencies.length;
-  ctx.store.global.set(ROTATION_STATE_KEY, {
-    index: nextIndex,
-    lastSwitchMs: now.getTime(),
-  });
   return frequencies[nextIndex] ?? null;
+}
+
+function commitRotationTarget(ctx: BandSwitcherContext, frequency: number, now: Date): void {
+  const frequencies = getRotationFrequencies(ctx.config.rotationFrequenciesMhz);
+  const index = frequencies.indexOf(frequency);
+  if (index < 0) return;
+  ctx.store.global.set(ROTATION_STATE_KEY, { index, lastSwitchMs: now.getTime() });
 }
 
 function isOperatorBusy(operator: OtherOperatorSnapshot): boolean {
@@ -104,7 +116,7 @@ function isOperatorBusy(operator: OtherOperatorSnapshot): boolean {
   return automation.currentState !== 'TX6' || targetCallsign.length > 0;
 }
 
-function canSwitchRadio(ctx: PluginContext): boolean {
+function canSwitchRadio(ctx: BandSwitcherContext): boolean {
   if (!ctx.radio.isConnected) {
     ctx.log.debug('Scheduled band switch skipped because radio is not connected');
     return false;
@@ -136,22 +148,17 @@ function isWritableCapabilityAvailable(snapshot: CapabilityList, id: string): bo
     && state.availability !== 'unavailable';
 }
 
-async function autoTuneAfterSwitch(ctx: PluginContext): Promise<void> {
-  if (ctx.config.autoTuneAfterSwitchEnabled !== true) return;
+async function shouldAutoTuneAfterSwitch(ctx: BandSwitcherContext): Promise<boolean> {
+  if (ctx.config.autoTuneAfterSwitchEnabled !== true) return false;
   if (!ctx.radio.isConnected) {
     ctx.log.debug('Scheduled band switch auto tune skipped because radio is not connected');
-    return;
+    return false;
   }
 
-  let snapshot: CapabilityList;
-  try {
-    snapshot = await ctx.radio.capabilities.refresh();
-  } catch (error) {
-    ctx.log.warn('Scheduled band switch auto tune skipped because radio capabilities could not be refreshed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return;
-  }
+  // Capability refresh performs radio I/O and must not run outside the Host's
+  // physical-idle fence. Use the cached projection here; the Host revalidates
+  // the writable capabilities inside the composite switch-band transaction.
+  const snapshot: CapabilityList = ctx.radioCapabilities.getSnapshot();
 
   const hasTunerSwitch = isWritableCapabilityAvailable(snapshot, TUNER_SWITCH_CAPABILITY_ID);
   const hasManualTune = isWritableCapabilityAvailable(snapshot, TUNER_TUNE_CAPABILITY_ID);
@@ -160,24 +167,12 @@ async function autoTuneAfterSwitch(ctx: PluginContext): Promise<void> {
       tunerSwitch: hasTunerSwitch,
       tunerTune: hasManualTune,
     });
-    return;
+    return false;
   }
-
-  try {
-    const tunerSwitch = getCapabilityState(snapshot, TUNER_SWITCH_CAPABILITY_ID);
-    if (tunerSwitch?.value !== true) {
-      await ctx.radio.capabilities.write({ id: TUNER_SWITCH_CAPABILITY_ID, value: true });
-    }
-    await ctx.radio.capabilities.write({ id: TUNER_TUNE_CAPABILITY_ID, action: true });
-    ctx.log.info('Scheduled band switch auto tune triggered');
-  } catch (error) {
-    ctx.log.warn('Scheduled band switch auto tune failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  return true;
 }
 
-function configureTimer(ctx: PluginContext): void {
+function configureTimer(ctx: BandSwitcherContext): void {
   if (ctx.config.bandSwitchEnabled === true) {
     ctx.timers.set(TIMER_ID, TIMER_INTERVAL_MS);
     return;
@@ -185,16 +180,18 @@ function configureTimer(ctx: PluginContext): void {
   ctx.timers.clear(TIMER_ID);
 }
 
-async function runBandSwitchCheck(ctx: PluginContext, now = new Date()): Promise<void> {
+async function runBandSwitchCheck(ctx: BandSwitcherContext, now = new Date()): Promise<void> {
   if (ctx.config.bandSwitchEnabled !== true) return;
   if (!canSwitchRadio(ctx)) return;
 
-  const targetFrequency = getSwitchMode(ctx) === 'rotation'
+  const switchMode = getSwitchMode(ctx);
+  const targetFrequency = switchMode === 'rotation'
     ? getRotationTargetFrequency(ctx, now)
     : getScheduledTargetFrequency(ctx, now);
   if (!targetFrequency) return;
 
   if (Math.abs(ctx.radio.frequency - targetFrequency) <= FREQUENCY_TOLERANCE_HZ) {
+    if (switchMode === 'rotation') commitRotationTarget(ctx, targetFrequency, now);
     return;
   }
 
@@ -203,16 +200,23 @@ async function runBandSwitchCheck(ctx: PluginContext, now = new Date()): Promise
     targetFrequency,
     mode: getSwitchMode(ctx),
   });
-  await ctx.radio.setFrequency(targetFrequency);
-  await autoTuneAfterSwitch(ctx);
+  const autoTune = await shouldAutoTuneAfterSwitch(ctx);
+  await ctx.radioCommands.submit({
+    type: 'switch-band',
+    frequency: targetFrequency,
+    autoTune,
+  });
+  if (switchMode === 'rotation') commitRotationTarget(ctx, targetFrequency, now);
+  if (autoTune) ctx.log.info('Scheduled band switch auto tune triggered');
 }
 
-export const scheduledBandSwitcherPlugin: PluginDefinition = {
+export const scheduledBandSwitcherPlugin = definePlugin({
+  apiVersion: 2,
   name: 'scheduled-band-switcher',
   version: '1.0.0',
   type: 'utility',
   instanceScope: 'global',
-  permissions: ['radio:read', 'radio:control'],
+  permissions: ['radio:read', 'radio:control', 'radio:tuner-control'],
   description: 'Switch the station radio frequency from a global schedule or rotation list',
 
   settings: {
@@ -291,7 +295,7 @@ export const scheduledBandSwitcherPlugin: PluginDefinition = {
       });
     },
   },
-};
+});
 
 export const scheduledBandSwitcherLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,
@@ -302,7 +306,8 @@ export const scheduledBandSwitcherLocales: Record<string, Record<string, string>
 export const scheduledBandSwitcherTestables = {
   getScheduledTargetFrequency,
   getRotationTargetFrequency,
+  commitRotationTarget,
   isOperatorBusy,
   runBandSwitchCheck,
-  autoTuneAfterSwitch,
+  shouldAutoTuneAfterSwitch,
 };

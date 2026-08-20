@@ -147,4 +147,9 @@ export class PluginUIBridge implements UIBridge {
   hasPageHandler(): boolean {
     return this.pageHandler !== null;
   }
+
+  /** @internal Stops accepting page messages before plugin teardown begins. */
+  clearPageHandler(): void {
+    this.pageHandler = null;
+  }
 }

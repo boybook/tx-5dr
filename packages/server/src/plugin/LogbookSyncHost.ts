@@ -17,6 +17,15 @@ const logger = createLogger('LogbookSyncHost');
 interface RegisteredProvider {
   pluginName: string;
   provider: LogbookSyncProvider;
+  owner: LogbookSyncProviderOwner;
+  info: LogbookSyncProviderInfo;
+}
+
+export interface LogbookSyncProviderOwner {
+  generation: number;
+  isCurrent(): boolean;
+  invoke<T>(operation: string, callback: () => T | Promise<T>): Promise<T>;
+  invokeSync<T>(operation: string, callback: () => T): T;
 }
 
 /**
@@ -61,7 +70,11 @@ export class LogbookSyncHost {
    * Registers a sync provider. Called from PluginContextFactory when a plugin
    * invokes `ctx.logbookSync.register()`.
    */
-  register(pluginName: string, provider: LogbookSyncProvider): void {
+  register(
+    pluginName: string,
+    provider: LogbookSyncProvider,
+    owner: LogbookSyncProviderOwner,
+  ): void {
     if (this.providers.has(provider.id)) {
       logger.warn('Overwriting existing sync provider', {
         id: provider.id,
@@ -69,7 +82,22 @@ export class LogbookSyncHost {
         newPlugin: pluginName,
       });
     }
-    this.providers.set(provider.id, { pluginName, provider });
+    const entry: RegisteredProvider = {
+      pluginName,
+      provider,
+      owner,
+      info: {
+        id: provider.id,
+        pluginName,
+        displayName: provider.displayName,
+        icon: provider.icon,
+        color: provider.color,
+        settingsPageId: provider.settingsPageId,
+        accessScope: provider.accessScope ?? 'admin',
+        actions: provider.actions ? structuredClone(provider.actions) : undefined,
+      },
+    };
+    this.providers.set(provider.id, entry);
     logger.info('Logbook sync provider registered', {
       id: provider.id,
       pluginName,
@@ -81,9 +109,10 @@ export class LogbookSyncHost {
    * Unregisters all providers from a specific plugin. Called during plugin
    * unload/reload.
    */
-  unregisterByPlugin(pluginName: string): void {
+  unregisterByPlugin(pluginName: string, generation?: number): void {
     for (const [id, entry] of this.providers) {
-      if (entry.pluginName === pluginName) {
+      if (entry.pluginName === pluginName
+          && (generation === undefined || entry.owner.generation === generation)) {
         this.providers.delete(id);
         // Clean up any active upload entries for this provider to avoid dangling references.
         for (const key of this.activeUploads.keys()) {
@@ -100,17 +129,34 @@ export class LogbookSyncHost {
   }
 
   private toProviderInfo(entry: RegisteredProvider): LogbookSyncProviderInfo {
-    const { pluginName, provider } = entry;
-    return {
-      id: provider.id,
-      pluginName,
-      displayName: provider.displayName,
-      icon: provider.icon,
-      color: provider.color,
-      settingsPageId: provider.settingsPageId,
-      accessScope: provider.accessScope ?? 'admin',
-      actions: provider.actions,
-    };
+    return structuredClone(entry.info);
+  }
+
+  private isCurrent(entry: RegisteredProvider): boolean {
+    return entry.owner.isCurrent()
+      && this.providers.get(entry.info.id) === entry;
+  }
+
+  private async invoke<T>(
+    entry: RegisteredProvider,
+    operation: string,
+    callback: () => T | Promise<T>,
+  ): Promise<T> {
+    if (!this.isCurrent(entry)) {
+      throw new Error('PLUGIN_INVOCATION_EXPIRED: logbook sync provider is no longer active');
+    }
+    const result = await entry.owner.invoke(`logbook-sync:${operation}`, callback);
+    if (!this.isCurrent(entry)) {
+      throw new Error('PLUGIN_INVOCATION_EXPIRED: stale logbook sync result discarded');
+    }
+    return result;
+  }
+
+  private invokeSync<T>(entry: RegisteredProvider, operation: string, callback: () => T): T {
+    if (!this.isCurrent(entry)) {
+      throw new Error('PLUGIN_INVOCATION_EXPIRED: logbook sync provider is no longer active');
+    }
+    return entry.owner.invokeSync(`logbook-sync:${operation}`, callback);
   }
 
   /** Returns info about all registered providers for the frontend. */
@@ -143,7 +189,7 @@ export class LogbookSyncHost {
       });
       return { success: false, message: failure.message, failures: [failure] };
     }
-    return entry.provider.testConnection(callsign);
+    return this.invoke(entry, 'test-connection', () => entry.provider.testConnection(callsign));
   }
 
   /**
@@ -176,13 +222,13 @@ export class LogbookSyncHost {
     }
 
     const key = LogbookSyncHost.uploadKey(providerId, callsign);
-    return this.enqueueUpload(key, () => entry.provider.upload(callsign, {
+    return this.enqueueUpload(key, () => this.invoke(entry, 'upload', () => entry.provider.upload(callsign, {
       trigger: 'manual',
       since: options?.since,
       until: options?.until,
       includeAlreadyUploaded: options?.includeAlreadyUploaded,
       skipBlockedQsos: options?.skipBlockedQsos,
-    }));
+    })));
   }
 
   async getUploadPreflight(
@@ -194,7 +240,7 @@ export class LogbookSyncHost {
     if (!entry?.provider.getUploadPreflight) {
       return null;
     }
-    return entry.provider.getUploadPreflight(callsign, options);
+    return this.invoke(entry, 'upload-preflight', () => entry.provider.getUploadPreflight!(callsign, options));
   }
 
   /**
@@ -224,7 +270,7 @@ export class LogbookSyncHost {
         ],
       };
     }
-    return entry.provider.download(callsign, options);
+    return this.invoke(entry, 'download', () => entry.provider.download(callsign, options));
   }
 
   /**
@@ -236,9 +282,10 @@ export class LogbookSyncHost {
    * buffered and drained in the next serialized auto batch.
    */
   onQSOComplete(callsign: string, qsoRecord: QSORecord): void {
-    for (const [id, { provider, pluginName }] of this.providers) {
+    for (const [id, entry] of this.providers) {
+      const { provider, pluginName } = entry;
       try {
-        if (!provider.isAutoUploadEnabled(callsign)) {
+        if (!this.invokeSync(entry, 'is-auto-upload-enabled', () => provider.isAutoUploadEnabled(callsign))) {
           continue;
         }
 
@@ -246,7 +293,7 @@ export class LogbookSyncHost {
         const queuedRecords = this.pendingAutoRecords.get(key) ?? new Map<string, QSORecord>();
         queuedRecords.set(qsoRecord.id, qsoRecord);
         this.pendingAutoRecords.set(key, queuedRecords);
-        this.scheduleAutoDrain(key, provider, callsign, pluginName);
+        this.scheduleAutoDrain(key, entry, callsign);
       } catch (err) {
         logger.warn('Auto-upload check failed', {
           providerId: id,
@@ -293,9 +340,8 @@ export class LogbookSyncHost {
 
   private scheduleAutoDrain(
     key: string,
-    provider: LogbookSyncProvider,
+    entry: RegisteredProvider,
     callsign: string,
-    pluginName: string,
   ): void {
     if (this.scheduledAutoDrains.has(key)) {
       return;
@@ -309,22 +355,22 @@ export class LogbookSyncHost {
       }
 
       this.pendingAutoRecords.delete(key);
-      return provider.upload(callsign, {
+      return this.invoke(entry, 'auto-upload', () => entry.provider.upload(callsign, {
         trigger: 'auto',
         records: Array.from(queuedRecords.values()),
-      });
+      }));
     }).catch((err) => {
       logger.warn('Auto-upload failed', {
-        providerId: provider.id,
-        pluginName,
+        providerId: entry.info.id,
+        pluginName: entry.pluginName,
         callsign,
         error: err instanceof Error ? err.message : String(err),
       });
     }).finally(() => {
       this.scheduledAutoDrains.delete(key);
       const remainingRecords = this.pendingAutoRecords.get(key);
-      if (remainingRecords && remainingRecords.size > 0) {
-        this.scheduleAutoDrain(key, provider, callsign, pluginName);
+      if (remainingRecords && remainingRecords.size > 0 && this.isCurrent(entry)) {
+        this.scheduleAutoDrain(key, entry, callsign);
       } else {
         this.pendingAutoRecords.delete(key);
       }
@@ -334,14 +380,23 @@ export class LogbookSyncHost {
   /** Checks if a specific provider is configured for the given callsign. */
   isConfigured(providerId: string, callsign: string): boolean {
     const entry = this.providers.get(providerId);
-    return entry?.provider.isConfigured(callsign) ?? false;
+    if (!entry) return false;
+    try {
+      return this.invokeSync(entry, 'is-configured', () => entry.provider.isConfigured(callsign));
+    } catch {
+      return false;
+    }
   }
 
   /** Returns configuration status for all providers (provider.isConfigured). */
   getConfiguredStatus(callsign: string): Record<string, boolean> {
     const result: Record<string, boolean> = {};
-    for (const [id, { provider }] of this.providers) {
-      result[id] = provider.isConfigured(callsign);
+    for (const [id, entry] of this.providers) {
+      try {
+        result[id] = this.invokeSync(entry, 'is-configured', () => entry.provider.isConfigured(callsign));
+      } catch {
+        result[id] = false;
+      }
     }
     return result;
   }

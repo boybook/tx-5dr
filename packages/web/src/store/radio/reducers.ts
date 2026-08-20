@@ -409,7 +409,10 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
         ...state,
         pttStatus: {
           isTransmitting: action.payload.isTransmitting,
-          operatorIds: action.payload.operatorIds
+          operatorIds: action.payload.operatorIds,
+          phase: action.payload.phase,
+          frameId: action.payload.frameId,
+          source: action.payload.source,
         }
       };
 

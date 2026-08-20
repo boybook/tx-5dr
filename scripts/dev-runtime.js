@@ -78,7 +78,15 @@ async function startTurbo() {
   console.log(`[dev-runtime] Server ready file: ${serverReadyFile}`);
   console.log(`[dev-runtime] rtc-data-audio UDP port: ${process.env.RTC_DATA_AUDIO_UDP_PORT || '50110'}`);
 
-  const args = ['turbo', 'run', 'dev', '--parallel', '--filter=!@tx5dr/client-tools'];
+  // Preserve Turbo's dependency graph so workspace packages are built before
+  // the server imports their dist entrypoints.
+  const args = [
+    'turbo',
+    'run',
+    'dev',
+    '--concurrency=20',
+    '--filter=!@tx5dr/client-tools',
+  ];
   if (mode === 'web') {
     args.push('--filter=!@tx5dr/electron-main');
   }

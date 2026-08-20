@@ -226,32 +226,39 @@ dist/
 function generateLocaleZh(config: PluginConfig): string {
   return JSON.stringify({
     pluginDescription: `${config.name} plugin`,
+    enabled: '启用自动发射控制',
+    enabledDesc: '允许此插件通过宿主发射协调器影响当前操作员的自动通联',
   }, null, 2) + '\n';
 }
 
 function generateLocaleEn(config: PluginConfig): string {
   return JSON.stringify({
     pluginDescription: `${config.name} plugin`,
+    enabled: 'Enable automatic transmit control',
+    enabledDesc: 'Allow this plugin to influence operator automation through the host coordinator',
   }, null, 2) + '\n';
 }
 
 // ===== Server-side plugin definition templates =====
 
 function generateTsUtilityPlugin(config: PluginConfig): string {
-  return `import type {
-  PluginDefinition,
-  PluginContext,
-  ParsedFT8Message,
-  SlotInfo,
+  return `import {
+  definePlugin,
+  type ParsedFT8Message,
+  type SlotInfo,
 } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 
-export const plugin: PluginDefinition = {
+export const plugin = definePlugin({
+  apiVersion: 2,
   name: '${config.name}',
   version: '0.1.0',
   type: 'utility',
   description: 'pluginDescription',
+  // Add only the capabilities this plugin actually uses. The host omits all
+  // undeclared privileged APIs from both the TypeScript type and runtime context.
+  permissions: [],
 
   settings: {
     // Define your plugin settings here
@@ -265,18 +272,18 @@ export const plugin: PluginDefinition = {
   },
 
   hooks: {
-    onSlotStart(slotInfo: SlotInfo, messages: ParsedFT8Message[], ctx: PluginContext): void {
+    onSlotStart(slotInfo: SlotInfo, messages: ParsedFT8Message[], ctx): void {
       ctx.log.debug('Slot started', { slotId: slotInfo.id, messageCount: messages.length });
     },
 
-    onDecode(messages: ParsedFT8Message[], ctx: PluginContext): void {
+    onDecode(messages: ParsedFT8Message[], ctx): void {
       // Process decoded messages
       for (const msg of messages) {
         ctx.log.debug('Decoded message', { raw: msg.rawMessage, snr: msg.snr });
       }
     },
   },
-};
+});
 
 export const locales: Record<string, Record<string, string>> = {
   zh: zhLocale,
@@ -288,19 +295,20 @@ export default plugin;
 }
 
 function generateTsStrategyPlugin(config: PluginConfig): string {
-  return `import type {
-  PluginDefinition,
-  PluginContext,
-  StrategyRuntime,
-  StrategyRuntimeSnapshot,
-  StrategyRuntimeSlot,
-  StrategyRuntimeSlotContentUpdate,
-  StrategyRuntimeContext,
-  ParsedFT8Message,
-  StrategyDecision,
-  StrategyDecisionMeta,
-  FrameMessage,
-  SlotInfo,
+  return `import {
+  definePlugin,
+  type StrategyPluginContext,
+  type StrategyRuntime,
+  type StrategyRuntimeSnapshot,
+  type StrategyRuntimeSlot,
+  type StrategyRuntimeSlotContentUpdate,
+  type StrategyRuntimeContext,
+  type StrategyRuntimeCheckpoint,
+  type ParsedFT8Message,
+  type StrategyDecisionResult,
+  type StrategyDecisionMetaV2,
+  type FrameMessage,
+  type SlotInfo,
 } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
@@ -310,11 +318,32 @@ class PluginRuntime implements StrategyRuntime {
   private slots: Partial<Record<StrategyRuntimeSlot, string>> = {};
   private context: StrategyRuntimeContext = {};
 
-  constructor(private ctx: PluginContext) {}
+  constructor(private ctx: StrategyPluginContext) {}
 
-  decide(messages: ParsedFT8Message[], meta?: StrategyDecisionMeta): StrategyDecision {
+  checkpoint(): StrategyRuntimeCheckpoint {
+    return structuredClone({ state: this.state, slots: this.slots, context: this.context });
+  }
+
+  restore(checkpoint: StrategyRuntimeCheckpoint): void {
+    const saved = checkpoint as {
+      state: StrategyRuntimeSlot;
+      slots: Partial<Record<StrategyRuntimeSlot, string>>;
+      context: StrategyRuntimeContext;
+    };
+    this.state = saved.state;
+    this.slots = { ...saved.slots };
+    this.context = { ...saved.context };
+  }
+
+  decide(messages: ParsedFT8Message[], meta: StrategyDecisionMetaV2): StrategyDecisionResult {
+    if (meta.signal.aborted) {
+      throw meta.signal.reason ?? new Error('Strategy decision aborted');
+    }
     // Implement your QSO strategy logic here
-    return {};
+    return {
+      transmission: this.getTransmitText(),
+      snapshot: this.getSnapshot(),
+    };
   }
 
   getTransmitText(): string | null {
@@ -356,15 +385,16 @@ class PluginRuntime implements StrategyRuntime {
   }
 }
 
-export const plugin: PluginDefinition = {
+export const plugin = definePlugin({
+  apiVersion: 2,
   name: '${config.name}',
   version: '0.1.0',
   type: 'strategy',
   description: 'pluginDescription',
+  // Selecting a strategy is the explicit grant for declarative RF decisions.
+  // Add operator:transmit-control only to utility plugins that submit commands.
 
-  settings: {},
-
-  createStrategyRuntime(ctx: PluginContext): StrategyRuntime {
+  createStrategyRuntime(ctx: StrategyPluginContext): StrategyRuntime {
     return new PluginRuntime(ctx);
   },
 
@@ -373,7 +403,7 @@ export const plugin: PluginDefinition = {
       ctx.log.debug('Slot started', { slotId: slotInfo.id });
     },
   },
-};
+});
 
 export const locales: Record<string, Record<string, string>> = {
   zh: zhLocale,
@@ -385,20 +415,22 @@ export default plugin;
 }
 
 function generateTsUtilityPluginWithUI(config: PluginConfig): string {
-  return `import type {
-  PluginDefinition,
-  PluginContext,
-  ParsedFT8Message,
-  SlotInfo,
+  return `import {
+  definePlugin,
+  type ParsedFT8Message,
+  type SlotInfo,
 } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 
-export const plugin: PluginDefinition = {
+export const plugin = definePlugin({
+  apiVersion: 2,
   name: '${config.name}',
   version: '0.1.0',
   type: 'utility',
   description: 'pluginDescription',
+  // Add only the capabilities this plugin actually uses.
+  permissions: [],
 
   settings: {
     // Define your plugin settings here
@@ -416,7 +448,7 @@ export const plugin: PluginDefinition = {
     ],
   },
 
-  onLoad(ctx: PluginContext): void {
+  onLoad(ctx): void {
     ctx.ui.registerPageHandler({
       async onMessage(pageId, action, data) {
         if (action === 'getSettings') {
@@ -436,17 +468,17 @@ export const plugin: PluginDefinition = {
   },
 
   hooks: {
-    onSlotStart(slotInfo: SlotInfo, messages: ParsedFT8Message[], ctx: PluginContext): void {
+    onSlotStart(slotInfo: SlotInfo, messages: ParsedFT8Message[], ctx): void {
       ctx.log.debug('Slot started', { slotId: slotInfo.id, messageCount: messages.length });
     },
 
-    onDecode(messages: ParsedFT8Message[], ctx: PluginContext): void {
+    onDecode(messages: ParsedFT8Message[], ctx): void {
       for (const msg of messages) {
         ctx.log.debug('Decoded message', { raw: msg.rawMessage, snr: msg.snr });
       }
     },
   },
-};
+});
 
 export const locales: Record<string, Record<string, string>> = {
   zh: zhLocale,
@@ -458,12 +490,15 @@ export default plugin;
 }
 
 function generateJsUtilityPlugin(config: PluginConfig): string {
-  return `/** @type {import('@tx5dr/plugin-api').PluginDefinition} */
-export const plugin = {
+  return `import { definePlugin } from '@tx5dr/plugin-api';
+
+export const plugin = definePlugin({
+  apiVersion: 2,
   name: '${config.name}',
   version: '0.1.0',
   type: 'utility',
   description: 'pluginDescription',
+  permissions: [],
 
   settings: {
     // Define your plugin settings here
@@ -480,19 +515,22 @@ export const plugin = {
       }
     },
   },
-};
+});
 
 export default plugin;
 `;
 }
 
 function generateJsUtilityPluginWithUI(config: PluginConfig): string {
-  return `/** @type {import('@tx5dr/plugin-api').PluginDefinition} */
-export const plugin = {
+  return `import { definePlugin } from '@tx5dr/plugin-api';
+
+export const plugin = definePlugin({
+  apiVersion: 2,
   name: '${config.name}',
   version: '0.1.0',
   type: 'utility',
   description: 'pluginDescription',
+  permissions: [],
 
   settings: {},
 
@@ -537,7 +575,7 @@ export const plugin = {
       }
     },
   },
-};
+});
 
 export default plugin;
 `;

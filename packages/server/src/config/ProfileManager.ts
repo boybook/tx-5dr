@@ -3,6 +3,7 @@ import type { AudioDeviceSettings } from '@tx5dr/contracts';
 import { ConfigManager, normalizeAudioDeviceSettings } from './config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { createLogger } from '../utils/logger.js';
+import { normalizeHamlibConfig } from '../radio/hamlibConfigUtils.js';
 
 const logger = createLogger('ProfileManager');
 
@@ -47,7 +48,7 @@ export class ProfileManager {
     const profile: RadioProfile = {
       id: `profile-${now}-${Math.random().toString(36).substr(2, 9)}`,
       name: data.name,
-      radio: data.radio,
+      radio: normalizeHamlibConfig(data.radio),
       audio,
       audioLockedToRadio,
       createdAt: now,

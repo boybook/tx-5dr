@@ -187,6 +187,7 @@ describe('PluginManager runtime logs', () => {
 
     await writeUserPlugin(dataDir, 'tx-control-test', `
       export default {
+        apiVersion: 2,
         name: 'tx-control-test',
         version: '1.0.0',
         type: 'utility',
@@ -242,12 +243,90 @@ describe('PluginManager runtime logs', () => {
     await pluginManager.shutdown();
   });
 
+  it('does not expose generic operator-command integrations as auto-call controllers', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-runtime-log-'));
+    tempDirs.push(dataDir);
+
+    await writeUserPlugin(dataDir, 'remote-control-integration', `
+      export default {
+        apiVersion: 2,
+        name: 'remote-control-integration',
+        version: '1.0.0',
+        type: 'utility',
+        permissions: ['operator:transmit-control'],
+        isTransmitControlEnabled() { return true; },
+      };
+    `);
+
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const operator = createOperator(eventEmitter);
+    const pluginManager = createPluginManager(dataDir, eventEmitter, operator);
+    pluginManager.loadConfig({
+      configs: {
+        'remote-control-integration': { enabled: true, settings: {} },
+      },
+      operatorStrategies: {
+        [operator.config.id]: 'standard-qso',
+      },
+      operatorSettings: {},
+    });
+
+    await pluginManager.start();
+    const status = pluginManager.getSnapshot().plugins.find((plugin) => (
+      plugin.name === 'remote-control-integration'
+    ));
+    expect(status?.permissions).toContain('operator:transmit-control');
+    expect(status?.capabilities ?? []).not.toContain('auto_call_control');
+    expect(status?.autoCallEnabledOperatorIds).toBeUndefined();
+    expect(status?.pausedOperatorIds).toBeUndefined();
+    await expect(pluginManager.setOperatorPluginPaused(
+      operator.config.id,
+      'remote-control-integration',
+      true,
+    )).rejects.toThrow('not an automatic calling controller');
+
+    await pluginManager.shutdown();
+  });
+
+  it('does not expose QSO UDP broadcast as an auto-call controller', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-runtime-log-'));
+    tempDirs.push(dataDir);
+
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const operator = createOperator(eventEmitter);
+    const pluginManager = createPluginManager(dataDir, eventEmitter, operator);
+    pluginManager.loadConfig({
+      configs: {
+        'qso-udp-broadcast': { enabled: false, settings: {} },
+      },
+      operatorStrategies: {
+        [operator.config.id]: 'standard-qso',
+      },
+      operatorSettings: {},
+      operatorPluginPauses: {
+        [operator.config.id]: ['qso-udp-broadcast'],
+      },
+    });
+
+    await pluginManager.start();
+    const status = pluginManager.getSnapshot().plugins.find((plugin) => (
+      plugin.name === 'qso-udp-broadcast'
+    ));
+    expect(status?.permissions).toContain('operator:transmit-control');
+    expect(status?.capabilities ?? []).not.toContain('auto_call_control');
+    expect(status?.autoCallEnabledOperatorIds).toBeUndefined();
+    expect(status?.pausedOperatorIds).toBeUndefined();
+
+    await pluginManager.shutdown();
+  });
+
   it('persists operator plugin pauses and gates transmit-control hooks and actions', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-pause-'));
     tempDirs.push(dataDir);
 
     await writeUserPlugin(dataDir, 'pausable-tx-control', `
       export default {
+        apiVersion: 2,
         name: 'pausable-tx-control',
         version: '1.0.0',
         type: 'utility',
@@ -304,7 +383,7 @@ describe('PluginManager runtime logs', () => {
     vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
       setOperatorPluginPauses,
     } as unknown as ConfigManager);
-    const timerManager = (pluginManager as any).instances.get(operator.config.id).get('pausable-tx-control').ctx.timers;
+    const timerManager = (pluginManager as any).instances.get(operator.config.id).get('pausable-tx-control').rawCtx.timers;
     timerManager.onTimerFired('poll');
     await (pluginManager as any).handleSlotStart({ id: 'slot-1', startMs: 0, window: 0 }, null);
     pluginManager.handlePluginUserAction('pausable-tx-control', 'ping', operator.config.id);
@@ -449,20 +528,10 @@ describe('PluginManager runtime logs', () => {
     tempDirs.push(dataDir);
     await writeUserPlugin(dataDir, 'user-standard-qso', `
       export default {
+        apiVersion: 2,
         name: 'standard-qso',
         version: '9.9.9',
-        type: 'strategy',
-        createStrategyRuntime() {
-          return {
-            getCurrentTransmission() { return null; },
-            onSlotStart() { return null; },
-            getStatus() { return { currentSlot: 'TX1', context: {}, slots: {} }; },
-            reset() {},
-            setContext() {},
-            setCurrentSlot() {},
-            setCurrentSlotContent() {},
-          };
-        },
+        type: 'utility',
       };
     `);
 

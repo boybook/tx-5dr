@@ -5,7 +5,7 @@ import { constants, createHash, privateEncrypt, randomUUID, X509Certificate } fr
 import { gzipSync } from 'zlib';
 import forge from 'node-forge';
 import type {
-  PluginContext,
+  PluginContextFor,
   LogbookSyncProvider,
   SyncAction,
   SyncTestResult,
@@ -19,6 +19,8 @@ import type {
   SyncUploadProgress,
   SyncDownloadProgress,
 } from '@tx5dr/plugin-api';
+
+type PluginContext = PluginContextFor<readonly ['network', 'logbook:read', 'logbook:write']>;
 import type { QSORecord } from '@tx5dr/contracts';
 import {
   getBandFromFrequency,

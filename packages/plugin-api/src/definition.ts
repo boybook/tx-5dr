@@ -8,7 +8,12 @@ import type {
   PluginInstanceScope,
   PluginUIPageDescriptor,
 } from '@tx5dr/contracts';
-import type { PluginContext } from './context.js';
+import type {
+  PluginCleanupContext,
+  PluginContextFor,
+  PluginEligibilityContext,
+  StrategyPluginContext,
+} from './context.js';
 import type { PluginHooks } from './hooks.js';
 import type { StrategyRuntime } from './runtime.js';
 
@@ -76,7 +81,12 @@ import type { StrategyRuntime } from './runtime.js';
  * export default plugin;
  * ```
  */
-export interface PluginDefinition {
+export interface PluginDefinition<
+  Permissions extends readonly PluginPermission[] = readonly [],
+> {
+  /** Required for strategy and transmit-control plugins. */
+  apiVersion?: 2;
+
   /**
    * Stable machine-readable plugin identifier.
    *
@@ -126,7 +136,7 @@ export interface PluginDefinition {
    * Permissions allow the host to gate sensitive features such as network
    * access. Always declare the smallest set that the plugin truly needs.
    */
-  permissions?: PluginPermission[];
+  permissions?: Permissions;
 
   /**
    * Declarative settings schema for generated configuration forms.
@@ -215,7 +225,7 @@ export interface PluginDefinition {
    * should be omitted for utility plugins. The returned runtime becomes the
    * operator's active automation controller.
    */
-  createStrategyRuntime?(ctx: PluginContext): StrategyRuntime;
+  createStrategyRuntime?(ctx: StrategyPluginContext): StrategyRuntime;
 
   /**
    * Runs after the plugin instance has been loaded and the context is ready.
@@ -224,7 +234,7 @@ export interface PluginDefinition {
    * sending initial panel data. Keep it fast; long-running work should be
    * deferred or done asynchronously.
    */
-  onLoad?(ctx: PluginContext): void | Promise<void>;
+  onLoad?(ctx: PluginContextFor<Permissions>): void | Promise<void>;
 
   /**
    * Runs before the plugin instance is unloaded.
@@ -233,7 +243,7 @@ export interface PluginDefinition {
    * handled through the host abstractions. Any timers created via
    * {@link PluginContext.timers} are cleared automatically by the host.
    */
-  onUnload?(ctx: PluginContext): void | Promise<void>;
+  onUnload?(ctx: PluginCleanupContext): void | Promise<void>;
 
   /**
    * Event and pipeline hooks implemented by the plugin.
@@ -241,17 +251,44 @@ export interface PluginDefinition {
    * Hooks let utility plugins observe or transform the message flow, and let the
    * active strategy participate in decision making.
    */
-  hooks?: PluginHooks;
+  hooks?: PluginHooks<Permissions>;
 
   /**
-   * Reports whether this operator-scoped plugin currently has automatic
-   * calling/transmit-control behavior enabled for its operator instance.
+   * Safety gate for the operator command port.
    *
-   * Plugins that declare `operator:transmit-control` must implement this
-   * function. The host uses it both for operator-card status indicators and as
-   * a safety gate before allowing plugin code to call operator transmit-control
-   * APIs such as `startTransmitting`, `call`, `replyToDecode` or
-   * `sendFreeText`.
+   * Plugins that declare `operator:transmit-control` must implement this or
+   * {@link isAutoCallEnabled}. The host evaluates it immediately before each
+   * command so disabled remote-control or integration features cannot retain
+   * command authority.
    */
-  isAutoCallEnabled?(ctx: PluginContext): boolean;
+  isTransmitControlEnabled?(ctx: PluginEligibilityContext): boolean;
+
+  /**
+   * Marks an operator-scoped plugin as an automatic calling controller and
+   * reports whether that behavior is currently enabled.
+   *
+   * The host uses this declaration for the auto-call indicator and pause UI.
+   * It also acts as the command-port safety gate when
+   * {@link isTransmitControlEnabled} is omitted. Integrations that can submit
+   * occasional external commands but are not auto-call controllers should
+   * implement only {@link isTransmitControlEnabled}.
+   */
+  isAutoCallEnabled?(ctx: PluginEligibilityContext): boolean;
+}
+
+/** Type-erased plugin definition used by the host after module loading. */
+// Permission tuples are invariant because callback contexts depend on their
+// exact literals, so the host registry needs a deliberate existential erasure.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyPluginDefinition = PluginDefinition<any>;
+
+/**
+ * Defines a plugin while preserving literal permissions for capability-aware
+ * callback context inference. New plugins should use this helper instead of
+ * widening their definition to `PluginDefinition`.
+ */
+export function definePlugin<
+  const Permissions extends readonly PluginPermission[] = readonly [],
+>(definition: PluginDefinition<Permissions>): PluginDefinition<Permissions> {
+  return definition;
 }

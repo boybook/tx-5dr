@@ -6,6 +6,7 @@ import {
   shouldRadioOperatorPropsBeEqual,
 } from '../radioOperatorProgress';
 import { pickManualIdleFrequency } from '../radioOperatorIdleFrequency';
+import { resolveRadioOperatorCyclePresentation } from '../radioOperatorPresentation';
 
 function createOperatorStatus(overrides: Partial<OperatorStatus> = {}): OperatorStatus {
   return {
@@ -113,6 +114,51 @@ describe('RadioOperator memo comparison', () => {
     const next = createOperatorStatus({ transmitCycles: [1] });
 
     expect(shouldRadioOperatorPropsBeEqual(prev, next)).toBe(false);
+  });
+});
+
+describe('RadioOperator transmit content', () => {
+  it('uses one TX presentation before physical PTT becomes active', () => {
+    const operator = createOperatorStatus({
+      isTransmitting: true,
+      isInActivePTT: false,
+      currentSlot: 'TX6',
+      slots: { TX6: 'CQ BG5DRB PM01' },
+    });
+    const presentation = resolveRadioOperatorCyclePresentation(
+      operator,
+      createSlotInfo({ cycleNumber: 42 }),
+      true,
+    );
+
+    expect(presentation).toEqual({
+      isTransmit: true,
+      transmitContent: 'CQ BG5DRB PM01',
+      progressColor: 'hsl(var(--heroui-danger) / 0.15)',
+    });
+  });
+
+  it('keeps the preparing fallback available when no transmit text exists', () => {
+    const operator = createOperatorStatus({
+      currentSlot: 'TX5',
+      slots: { TX5: '' },
+    });
+
+    expect(resolveRadioOperatorCyclePresentation(operator, createSlotInfo(), true).transmitContent)
+      .toBe('');
+  });
+
+  it('uses the normal cycle presentation outside the operator TX cycle', () => {
+    const operator = createOperatorStatus({
+      isTransmitting: true,
+      isInActivePTT: false,
+    });
+    const slotInfo = createSlotInfo({ cycleNumber: 42 });
+
+    expect(resolveRadioOperatorCyclePresentation(operator, slotInfo, false)).toMatchObject({
+      isTransmit: false,
+      progressColor: 'var(--ft8-cycle-even-bg)',
+    });
   });
 });
 

@@ -43,7 +43,11 @@ export const PluginPermissionSchema = z.enum([
   'operator:transmit-control',
   'radio:read',
   'radio:control',
+  'radio:tuner-control',
   'radio:power',
+  'logbook:read',
+  'logbook:write',
+  'logbook:sync',
   'settings:ft8',
   'settings:decode-windows',
   'settings:realtime',
@@ -244,6 +248,7 @@ export type PluginQuickSetting = z.infer<typeof PluginQuickSettingSchema>;
  * about plugin roles without hard-coding specific plugin names.
  */
 export const PluginCapabilitySchema = z.enum([
+  'auto_call_control',
   'auto_call_candidate',
   'auto_call_execution',
 ]);
@@ -468,6 +473,7 @@ export type PluginStorageConfig = z.infer<typeof PluginStorageConfigSchema>;
  * host can expose to management UI and diagnostics.
  */
 export const PluginManifestSchema = z.object({
+  apiVersion: z.literal(2).optional(),
   name: z.string(),
   version: z.string(),
   type: PluginTypeSchema,

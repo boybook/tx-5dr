@@ -1,4 +1,7 @@
-import type { PluginDefinition } from '@tx5dr/plugin-api';
+import {
+  PLUGIN_COMMAND_CAPABILITY_PERMISSIONS,
+  type AnyPluginDefinition,
+} from '@tx5dr/plugin-api';
 import type { PluginPanelDescriptor, PluginRuntimeLogEntry, PluginUIPageDescriptor } from '@tx5dr/contracts';
 import { PluginManifestSchema } from '@tx5dr/contracts';
 import type { LoadedPlugin } from './types.js';
@@ -38,8 +41,9 @@ class PluginLoadError extends Error {
   }
 }
 
-export function validatePluginDefinition(def: PluginDefinition): void {
+export function validatePluginDefinition(def: AnyPluginDefinition): void {
   const manifest = PluginManifestSchema.parse({
+    apiVersion: def.apiVersion,
     name: def.name,
     version: def.version,
     type: def.type,
@@ -57,6 +61,15 @@ export function validatePluginDefinition(def: PluginDefinition): void {
   if (manifest.type === 'strategy' && typeof def.createStrategyRuntime !== 'function') {
     throw new Error('Strategy plugins must provide createStrategyRuntime(ctx)');
   }
+  const requiresCapabilityApiV2 = manifest.permissions?.some((permission) => (
+    PLUGIN_COMMAND_CAPABILITY_PERMISSIONS.includes(
+      permission as (typeof PLUGIN_COMMAND_CAPABILITY_PERMISSIONS)[number],
+    )
+  )) === true;
+  if ((manifest.type === 'strategy' || requiresCapabilityApiV2)
+      && manifest.apiVersion !== 2) {
+    throw new Error('PLUGIN_API_INCOMPATIBLE: strategy and privileged command plugins require apiVersion: 2');
+  }
   if (manifest.type === 'utility' && def.createStrategyRuntime !== undefined) {
     throw new Error('Utility plugins must not provide createStrategyRuntime(ctx)');
   }
@@ -64,8 +77,9 @@ export function validatePluginDefinition(def: PluginDefinition): void {
     if (manifest.instanceScope === 'global') {
       throw new Error('Plugins with permission "operator:transmit-control" must use operator instance scope');
     }
-    if (typeof def.isAutoCallEnabled !== 'function') {
-      throw new Error('Plugins with permission "operator:transmit-control" must implement isAutoCallEnabled(ctx): boolean');
+    if (typeof def.isTransmitControlEnabled !== 'function'
+        && typeof def.isAutoCallEnabled !== 'function') {
+      throw new Error('Plugins with permission "operator:transmit-control" must implement isTransmitControlEnabled(ctx) or isAutoCallEnabled(ctx)');
     }
   }
 
@@ -116,7 +130,7 @@ export function validatePluginDefinition(def: PluginDefinition): void {
     }
 
     const hooks = def.hooks;
-    const unsupportedGlobalHooks: Array<keyof NonNullable<PluginDefinition['hooks']>> = [
+    const unsupportedGlobalHooks: Array<keyof NonNullable<AnyPluginDefinition['hooks']>> = [
       'onAutoCallCandidate',
       'onConfigureAutoCallExecution',
       'onFilterCandidates',
@@ -134,6 +148,50 @@ export function validatePluginDefinition(def: PluginDefinition): void {
       throw new Error(`Global plugin instances must not implement hook "${activeUnsupportedGlobalHook}"`);
     }
   }
+}
+
+function deepFreezeDefinition<T>(value: T, seen = new WeakSet<object>()): T {
+  if (!value || typeof value !== 'object' || seen.has(value as object)) {
+    return value;
+  }
+  seen.add(value as object);
+  for (const child of Object.values(value as Record<string, unknown>)) {
+    deepFreezeDefinition(child, seen);
+  }
+  return Object.freeze(value);
+}
+
+/** Creates the immutable, host-owned definition used after validation. */
+export function canonicalizePluginDefinition(def: AnyPluginDefinition): AnyPluginDefinition {
+  validatePluginDefinition(def);
+  const manifest = PluginManifestSchema.parse({
+    apiVersion: def.apiVersion,
+    name: def.name,
+    version: def.version,
+    type: def.type,
+    instanceScope: def.instanceScope,
+    description: def.description,
+    permissions: def.permissions,
+    settings: def.settings,
+    quickActions: def.quickActions,
+    quickSettings: def.quickSettings,
+    panels: def.panels,
+    storage: def.storage,
+    ui: def.ui,
+  });
+  const canonical: AnyPluginDefinition = {
+    ...manifest,
+    permissions: manifest.permissions
+      ? [...new Set(manifest.permissions)]
+      : undefined,
+    createStrategyRuntime: def.createStrategyRuntime,
+    onLoad: def.onLoad,
+    onUnload: def.onUnload,
+    hooks: def.hooks ? { ...def.hooks } : undefined,
+    isTransmitControlEnabled: def.isTransmitControlEnabled,
+    isAutoCallEnabled: def.isAutoCallEnabled,
+  };
+  return deepFreezeDefinition(canonical);
 }
 
 function validatePluginUiPaths(manifest: ReturnType<typeof PluginManifestSchema.parse>): void {
@@ -312,12 +370,12 @@ export class PluginLoader {
         },
       );
     }
-    const definition: PluginDefinition = mod.default ?? mod;
-    const definitionName = definition && typeof definition === 'object' && typeof (definition as { name?: unknown }).name === 'string'
-      ? (definition as { name: string }).name
+    const exportedDefinition: AnyPluginDefinition = mod.default ?? mod;
+    const definitionName = exportedDefinition && typeof exportedDefinition === 'object' && typeof (exportedDefinition as { name?: unknown }).name === 'string'
+      ? (exportedDefinition as { name: string }).name
       : undefined;
 
-    if (!definition || typeof definition !== 'object') {
+    if (!exportedDefinition || typeof exportedDefinition !== 'object') {
       throw new PluginLoadError(
         'invalid_export',
         'Plugin entry must export a default PluginDefinition object',
@@ -329,8 +387,9 @@ export class PluginLoader {
       );
     }
 
+    let definition: AnyPluginDefinition;
     try {
-      validatePluginDefinition(definition);
+      definition = canonicalizePluginDefinition(exportedDefinition);
     } catch (err) {
       throw new PluginLoadError(
         'validate_error',
@@ -409,7 +468,7 @@ export class PluginLoader {
   }
 
   private async validatePluginUiAssets(
-    definition: PluginDefinition,
+    definition: AnyPluginDefinition,
     dirPath: string,
   ): Promise<void> {
     const pages = definition.ui?.pages ?? [];

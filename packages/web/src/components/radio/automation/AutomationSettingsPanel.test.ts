@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { PluginStatus } from '@tx5dr/contracts';
 import { pluginMatchesAutomationFilter } from './automationFilters';
 
-function createPlugin(permissions: PluginStatus['permissions'] = []): PluginStatus {
+function createPlugin(
+  permissions: PluginStatus['permissions'] = [],
+  capabilities: PluginStatus['capabilities'] = [],
+): PluginStatus {
   return {
     name: 'test-plugin',
     type: 'utility',
@@ -14,6 +17,7 @@ function createPlugin(permissions: PluginStatus['permissions'] = []): PluginStat
     autoDisabled: false,
     errorCount: 0,
     permissions,
+    capabilities,
   };
 }
 
@@ -23,7 +27,14 @@ describe('AutomationSettingsPanel filtering', () => {
   });
 
   it('keeps only transmit-control plugins in the operator auto-call popover', () => {
-    expect(pluginMatchesAutomationFilter(createPlugin(['operator:transmit-control']), 'transmit-control')).toBe(true);
+    expect(pluginMatchesAutomationFilter(
+      createPlugin(['operator:transmit-control'], ['auto_call_control']),
+      'transmit-control',
+    )).toBe(true);
+    expect(pluginMatchesAutomationFilter(
+      createPlugin(['network', 'operator:transmit-control']),
+      'transmit-control',
+    )).toBe(false);
     expect(pluginMatchesAutomationFilter(createPlugin(['network']), 'transmit-control')).toBe(false);
     expect(pluginMatchesAutomationFilter(createPlugin(), 'transmit-control')).toBe(false);
   });

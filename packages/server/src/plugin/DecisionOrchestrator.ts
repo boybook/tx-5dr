@@ -19,13 +19,15 @@ import {
   type AutoCallExecutionRequest,
   type ScoredCandidate,
   type StrategyDecision,
-  type StrategyDecisionMeta,
+  type StrategyDecisionResult,
+  type StrategyDecisionSource,
 } from '@tx5dr/plugin-api';
 import type { AutoCallProposalResult } from './PluginHookDispatcher.js';
 import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
 import type { DecisionOrchestratorDeps, OperatorDecisionState } from './types.js';
 import { createLogger } from '../utils/logger.js';
 import { FT8MessageParser, CycleUtils, isUndecodedCallsignPlaceholder } from '@tx5dr/core';
+import type { OperatorCommandToken } from '../transmission/OperatorIntentCoordinator.js';
 
 const logger = createLogger('DecisionOrchestrator');
 
@@ -79,15 +81,34 @@ export class DecisionOrchestrator {
   // ===== Public API =====
 
   async handleSlotStart(slotInfo: SlotInfo, slotPack: SlotPack | null): Promise<void> {
-    for (const operator of this.deps.getOperators()) {
+    await Promise.all(this.deps.getOperators().map(async (operator) => {
+      await this.deps.intentCoordinator.submit(
+        operator.config.id,
+        'slot-auto',
+        (token, signal) => this.handleOperatorSlotStart(operator.config.id, slotInfo, slotPack, token, signal),
+      );
+    }));
+  }
+
+  private async handleOperatorSlotStart(
+    operatorId: string,
+    slotInfo: SlotInfo,
+    slotPack: SlotPack | null,
+    token: OperatorCommandToken,
+    signal: AbortSignal,
+  ): Promise<void> {
+      const operator = this.deps.getOperatorById(operatorId);
+      if (!operator) return;
       const parsedMessages = slotPack
-        ? await this.parseSlotPackMessages(slotPack, operator.config.id)
+        ? await this.parseSlotPackMessages(slotPack, operatorId)
         : [];
+      if (!this.isCommandCurrent(token, signal)) return;
       // 决策分水岭：部分解码消息仅供广播/监控观察，绝不进入任何自动决策路径
       const actionableMessages = parsedMessages.filter((message) => !message.isPartialDecode);
 
-      await this.deps.dispatcher.dispatchBroadcast(
-        operator.config.id,
+      // Passive hooks are guarded and observed, but never hold the RF decision lane.
+      void this.deps.dispatcher.dispatchBroadcast(
+        operatorId,
         'onSlotActivity',
         (hook, ctx) => hook({
           slotInfo,
@@ -99,71 +120,77 @@ export class DecisionOrchestrator {
         (instance) => this.deps.getCtxForInstance(instance),
       );
 
-      await this.deps.dispatcher.dispatchBroadcast(
-        operator.config.id,
+      void this.deps.dispatcher.dispatchBroadcast(
+        operatorId,
         'onSlotStart',
         (hook, ctx) => hook(slotInfo, parsedMessages, ctx),
         (instance) => this.deps.getCtxForInstance(instance),
       );
 
-      await this.deps.dispatcher.dispatchBroadcast(
-        operator.config.id,
+      void this.deps.dispatcher.dispatchBroadcast(
+        operatorId,
         'onDecode',
         (hook, ctx) => hook(parsedMessages, ctx),
         (instance) => this.deps.getCtxForInstance(instance),
       );
 
       if (!operator.isTransmitting
-          && await this.tryWakeFromSilentDirectedCallGate(operator.config.id, actionableMessages, slotInfo, slotPack)) {
-        continue;
+          && await this.tryWakeFromSilentDirectedCallGate(operatorId, actionableMessages, slotInfo, slotPack, token, signal)) {
+        return;
       }
+      if (!this.isCommandCurrent(token, signal)) return;
 
       if (!operator.isTransmitting
-          && await this.tryWakeFromStoppedDirectCallAutoReply(operator.config.id, actionableMessages, slotInfo, slotPack)) {
-        continue;
+          && await this.tryWakeFromStoppedDirectCallAutoReply(operatorId, actionableMessages, slotInfo, slotPack, token, signal)) {
+        return;
       }
+      if (!this.isCommandCurrent(token, signal)) return;
 
       let automaticTargetMessages: ParsedFT8Message[] | undefined;
-      if (this.isOperatorPureStandby(operator.config.id)) {
+      if (this.isOperatorPureStandby(operatorId)) {
         automaticTargetMessages = await this.getScoredAutomaticTargetMessages(
-          operator.config.id,
+          operatorId,
           actionableMessages,
         );
+        if (!this.isCommandCurrent(token, signal)) return;
 
         const autoCallProposals = await this.deps.dispatcher.dispatchAutoCallCandidates(
-          operator.config.id,
+          operatorId,
           slotInfo,
           automaticTargetMessages,
           (instance) => this.deps.getCtxForInstance(instance),
         );
-        await this.applyAutoCallProposal(operator.config.id, slotInfo, automaticTargetMessages, autoCallProposals);
+        if (!this.isCommandCurrent(token, signal)) return;
+        await this.applyAutoCallProposal(operatorId, slotInfo, automaticTargetMessages, autoCallProposals, token);
       }
 
-      if (!operator.isTransmitting) continue;
+      if (!operator.isTransmitting || !this.isCommandCurrent(token, signal)) return;
 
-      const session = this.getOrCreateDecisionState(operator.config.id);
+      const session = this.getOrCreateDecisionState(operatorId);
       session.lastDecisionTransmission = null;
       session.lastDecisionMessageSet = null;
       session.preDecisionEncodedTransmission = undefined;
       automaticTargetMessages ??= await this.getScoredAutomaticTargetMessages(
-        operator.config.id,
+        operatorId,
         actionableMessages,
       );
+      if (!this.isCommandCurrent(token, signal)) return;
 
-      let decision;
-      session.decisionInProgress = true;
-      try {
-        decision = await this.invokeStrategyDecision(operator.config.id, automaticTargetMessages, { isReDecision: false });
-      } finally {
-        session.decisionInProgress = false;
-      }
+      const decision = await this.invokeStrategyDecision(
+        operatorId,
+        automaticTargetMessages,
+        { isReDecision: false },
+        token,
+        signal,
+      );
+      if (!this.isCommandCurrent(token, signal)) return;
 
       if (slotPack) {
-        session.lastDecisionMessageSet = this.buildDecisionMessageSet(slotPack, operator.config.id);
+        session.lastDecisionMessageSet = this.buildDecisionMessageSet(slotPack, operatorId);
       }
-      session.lastDecisionTransmission = this.readCurrentTransmission(operator.config.id);
-      await this.notifyQSOFailIfPresent(operator.config.id, decision);
-      this.updateSilentDirectedCallGate(operator.config.id, decision, slotInfo, slotPack);
+      session.lastDecisionTransmission = this.readCurrentTransmission(operatorId);
+      await this.notifyQSOFailIfPresent(operatorId, decision);
+      this.updateSilentDirectedCallGate(operatorId, decision, slotInfo, slotPack);
 
       // 竞态检测：如果 handleEncodeStart 在决策完成前已排队了发射内容，
       // 且决策结果与之不同，触发替换编码以纠正过时的发射
@@ -171,18 +198,24 @@ export class DecisionOrchestrator {
           && session.lastDecisionTransmission !== null
           && session.lastDecisionTransmission !== session.preDecisionEncodedTransmission) {
         logger.info('Stale encode corrected after decision', {
-          operatorId: operator.config.id,
+          operatorId,
           stale: session.preDecisionEncodedTransmission,
           correct: session.lastDecisionTransmission,
         });
-        this.deps.triggerReEncode?.(operator.config.id);
+        this.deps.triggerReEncode?.(operatorId, {
+          source: 'late-decode',
+          reason: 'slot decision corrected an already encoded frame',
+        });
       }
       session.preDecisionEncodedTransmission = undefined;
 
       if (decision?.stop) {
-        await this.applyStrategyStop(operator.config.id);
+        await this.applyStrategyStop(operatorId);
       }
-    }
+  }
+
+  private isCommandCurrent(token: OperatorCommandToken, signal: AbortSignal): boolean {
+    return !signal.aborted && this.deps.intentCoordinator.isCurrent(token);
   }
 
   handleEncodeStart(slotInfo: SlotInfo): void {
@@ -200,11 +233,12 @@ export class DecisionOrchestrator {
       );
       if (!isTransmitSlot) continue;
 
-      const runtime = this.deps.getStrategyRuntime(operator.config.id);
-      if (!runtime) continue;
-
       try {
-        const transmission = runtime.getTransmitText();
+        const transmission = this.deps.invokeStrategyRuntimeSync(
+          operator.config.id,
+          'getTransmitText:encode-start',
+          (runtime) => runtime.getTransmitText(),
+        );
         if (!transmission) continue;
 
         // 记录即将编码的内容，供 handleSlotStart 检测竞态
@@ -214,6 +248,7 @@ export class DecisionOrchestrator {
         this.deps.eventEmitter.emit('requestTransmit', {
           operatorId: operator.config.id,
           transmission,
+          decisionEpoch: this.deps.intentCoordinator.getCurrentEpoch(operator.config.id),
         });
       } catch (err) {
         logger.error(`strategy runtime getTransmitText error: operator=${operator.config.id}`, err);
@@ -222,6 +257,20 @@ export class DecisionOrchestrator {
   }
 
   async reDecideOperator(operatorId: string, slotPack: SlotPack): Promise<boolean> {
+    const outcome = await this.deps.intentCoordinator.submit(
+      operatorId,
+      'late-decode',
+      (token, signal) => this.reDecideOperatorInLane(operatorId, slotPack, token, signal),
+    );
+    return outcome.status === 'completed' ? outcome.value : false;
+  }
+
+  private async reDecideOperatorInLane(
+    operatorId: string,
+    slotPack: SlotPack,
+    token: OperatorCommandToken,
+    signal: AbortSignal,
+  ): Promise<boolean> {
     const operator = this.deps.getOperatorById(operatorId);
     if (!operator) {
       return false;
@@ -230,18 +279,29 @@ export class DecisionOrchestrator {
     if (!operator.isTransmitting) {
       const slotInfo = this.buildSlotInfoFromSlotPack(slotPack);
       const parsedMessages = await this.parseSlotPackMessages(slotPack, operatorId);
+      if (!this.isCommandCurrent(token, signal)) return false;
       const actionableMessages = parsedMessages.filter((message) => !message.isPartialDecode);
-      if (await this.tryWakeFromSilentDirectedCallGate(operatorId, actionableMessages, slotInfo, slotPack)) {
+      if (await this.tryWakeFromSilentDirectedCallGate(
+        operatorId,
+        actionableMessages,
+        slotInfo,
+        slotPack,
+        token,
+        signal,
+      )) {
         return true;
       }
-      return this.tryWakeFromStoppedDirectCallAutoReply(operatorId, actionableMessages, slotInfo, slotPack);
+      return this.tryWakeFromStoppedDirectCallAutoReply(
+        operatorId,
+        actionableMessages,
+        slotInfo,
+        slotPack,
+        token,
+        signal,
+      );
     }
 
     const session = this.getOrCreateDecisionState(operatorId);
-    if (session.decisionInProgress) {
-      return false;
-    }
-
     const newMessageSet = this.buildDecisionMessageSet(slotPack, operatorId);
     if (session.lastDecisionMessageSet) {
       const hasNewMessage = Array.from(newMessageSet).some((message) => !session.lastDecisionMessageSet?.has(message));
@@ -251,25 +311,28 @@ export class DecisionOrchestrator {
     }
 
     const parsedMessages = await this.parseSlotPackMessages(slotPack, operatorId);
+    if (!this.isCommandCurrent(token, signal)) return false;
     const actionableMessages = parsedMessages.filter((message) => !message.isPartialDecode);
     const automaticTargetMessages = await this.getScoredAutomaticTargetMessages(
       operatorId,
       actionableMessages,
     );
+    if (!this.isCommandCurrent(token, signal)) return false;
 
-    let decision: StrategyDecision | null = null;
-    session.decisionInProgress = true;
-    try {
-      decision = await this.invokeStrategyDecision(operatorId, automaticTargetMessages, { isReDecision: true });
-    } finally {
-      session.decisionInProgress = false;
-    }
+    const decision = await this.invokeStrategyDecision(
+      operatorId,
+      automaticTargetMessages,
+      { isReDecision: true },
+      token,
+      signal,
+    );
+    if (!this.isCommandCurrent(token, signal)) return false;
 
     await this.notifyQSOFailIfPresent(operatorId, decision);
     this.updateSilentDirectedCallGate(operatorId, decision, this.buildSlotInfoFromSlotPack(slotPack), slotPack);
 
     if (decision?.stop) {
-      await this.applyStrategyStop(operatorId, { interruptActiveTransmission: true });
+      await this.applyStrategyStop(operatorId);
       return false;
     }
 
@@ -288,13 +351,12 @@ export class DecisionOrchestrator {
   }
 
   readCurrentTransmission(operatorId: string): string | null {
-    const runtime = this.deps.getStrategyRuntime(operatorId);
-    if (!runtime) {
-      return null;
-    }
-
     try {
-      return runtime.getTransmitText() ?? null;
+      return this.deps.invokeStrategyRuntimeSync(
+        operatorId,
+        'getTransmitText:read-current',
+        (runtime) => runtime.getTransmitText(),
+      ) ?? null;
     } catch (err) {
       logger.error(`Failed to read current transmission: operator=${operatorId}`, err);
       return null;
@@ -319,7 +381,6 @@ export class DecisionOrchestrator {
 
   clearDecisionState(operatorId: string): void {
     this.decisionStates.set(operatorId, {
-      decisionInProgress: false,
       lastDecisionTransmission: null,
       lastDecisionMessageSet: null,
     });
@@ -604,15 +665,179 @@ export class DecisionOrchestrator {
   private async invokeStrategyDecision(
     operatorId: string,
     messages: ParsedFT8Message[],
-    meta: StrategyDecisionMeta,
-  ): Promise<StrategyDecision | null> {
-    const runtime = this.deps.getStrategyRuntime(operatorId);
-    if (!runtime) {
+    meta: { isReDecision: boolean },
+    token: OperatorCommandToken,
+    signal: AbortSignal,
+  ): Promise<StrategyDecisionResult | null> {
+    if (!this.deps.getStrategyRuntime(operatorId)) {
       return null;
     }
+    const runtimeGeneration = this.deps.getStrategyRuntimeGeneration(operatorId);
+    if (runtimeGeneration === undefined) return null;
 
-    const result = runtime.decide(messages, meta);
-    return result instanceof Promise ? await result : result;
+    const checkpoint = this.deps.invokeStrategyRuntimeSync(
+      operatorId,
+      'checkpoint:decision',
+      (runtime) => structuredClone(runtime.checkpoint()),
+    );
+    if (checkpoint === undefined) return null;
+    const source: StrategyDecisionSource = meta.isReDecision ? 'late-decode' : 'slot-auto';
+    const rejectedTargets = new Set<string>();
+    const maxAttempts = Math.max(
+      1,
+      new Set(messages.map((message) => getParsedMessageSenderCallsign(message.message)).filter(Boolean)).size + 1,
+    );
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const result = await this.deps.invokeStrategyRuntime(
+          operatorId,
+          `decide:${source}`,
+          (runtime) => runtime.decide(messages, {
+            epoch: token.epoch,
+            source,
+            isReDecision: meta.isReDecision,
+            signal,
+          }),
+          { signal },
+        );
+        if (!result) return null;
+        if (!this.isCommandCurrent(token, signal)) {
+          this.deps.invokeStrategyRuntimeSync(
+            operatorId,
+            'restore:superseded-decision',
+            (runtime) => runtime.restore(checkpoint),
+          );
+          return null;
+        }
+
+        const nextTarget = result.snapshot.context?.targetCallsign?.trim().toUpperCase();
+        if (this.deps.transitionTargetReservation
+            && !this.deps.transitionTargetReservation(operatorId, token.epoch, nextTarget)) {
+          this.deps.invokeStrategyRuntimeSync(
+            operatorId,
+            'restore:target-reservation-conflict',
+            (runtime) => runtime.restore(checkpoint),
+          );
+          if (!nextTarget || rejectedTargets.has(nextTarget)) {
+            logger.warn('Strategy repeatedly selected a target reserved by another operator', {
+              operatorId,
+              epoch: token.epoch,
+              targetCallsign: nextTarget ?? null,
+            });
+            return null;
+          }
+          rejectedTargets.add(nextTarget);
+          continue;
+        }
+
+        const operator = this.deps.getOperatorById(operatorId);
+        if (operator) {
+          if (result.snapshot.slots) {
+            operator.notifySlotsUpdated(result.snapshot.slots as import('@tx5dr/contracts').OperatorSlots);
+          }
+          operator.notifyStateChanged(result.snapshot.currentState);
+        }
+        if (result.snapshot.qsoLifecycleEpoch !== undefined) {
+          this.deps.eventEmitter.emit('qsoLifecycleChanged', {
+            operatorId,
+            lifecycleEpoch: result.snapshot.qsoLifecycleEpoch,
+            runtimeGeneration,
+          });
+        }
+        if (result.qsoCompletion) {
+          this.commitQSOCompletionEffect(operatorId, runtimeGeneration, result.qsoCompletion);
+        }
+        return result;
+      } catch (error) {
+        this.deps.invokeStrategyRuntimeSync(
+          operatorId,
+          'restore:failed-decision',
+          (runtime) => runtime.restore(checkpoint),
+        );
+        if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
+          logger.debug('Discarded aborted strategy decision', { operatorId, epoch: token.epoch, source });
+          return null;
+        }
+        throw error;
+      }
+    }
+    return null;
+  }
+
+  private commitQSOCompletionEffect(
+    operatorId: string,
+    runtimeGeneration: number,
+    effect: import('@tx5dr/plugin-api').StrategyQSOCompletionEffect,
+  ): void {
+    const { record: qsoRecord, lifecycleEpoch } = effect;
+    const qsoLifecycleId = `${operatorId}:runtime:${runtimeGeneration}:qso:${lifecycleEpoch}:${qsoRecord.id}`;
+    void new Promise<import('@tx5dr/contracts').QSORecord>((resolve, reject) => {
+      this.deps.eventEmitter.emit('recordQSO', {
+        operatorId,
+        qsoLifecycleId,
+        qsoLifecycleEpoch: lifecycleEpoch,
+        qsoRuntimeGeneration: runtimeGeneration,
+        qsoRecord,
+        resolve,
+        reject,
+      });
+    }).then(() => {
+      this.settleStrategyQSOCompletion(
+        operatorId,
+        runtimeGeneration,
+        lifecycleEpoch,
+        qsoRecord.id,
+        'committed',
+      );
+    }).catch((error) => {
+      this.settleStrategyQSOCompletion(
+        operatorId,
+        runtimeGeneration,
+        lifecycleEpoch,
+        qsoRecord.id,
+        'failed',
+      );
+      logger.warn('Declarative QSO completion failed after decision commit', {
+        operatorId,
+        qsoLifecycleId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  private settleStrategyQSOCompletion(
+    operatorId: string,
+    runtimeGeneration: number,
+    lifecycleEpoch: number,
+    recordId: string,
+    status: 'committed' | 'failed',
+  ): void {
+    if (this.deps.getStrategyRuntimeGeneration(operatorId) !== runtimeGeneration) {
+      logger.debug('Skipped QSO settlement for a replaced strategy runtime', {
+        operatorId,
+        runtimeGeneration,
+        lifecycleEpoch,
+        recordId,
+        status,
+      });
+      return;
+    }
+    try {
+      this.deps.invokeStrategyRuntimeSync(
+        operatorId,
+        `settle-qso:${status}`,
+        (runtime) => runtime.settleQSOCompletion?.({ lifecycleEpoch, recordId, status }),
+      );
+    } catch (error) {
+      logger.warn('Failed to settle strategy QSO lifecycle', {
+        operatorId,
+        lifecycleEpoch,
+        recordId,
+        status,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async notifyQSOFailIfPresent(
@@ -695,6 +920,8 @@ export class DecisionOrchestrator {
     parsedMessages: ParsedFT8Message[],
     slotInfo: SlotInfo,
     slotPack: SlotPack | null,
+    token: OperatorCommandToken,
+    signal: AbortSignal,
   ): Promise<boolean> {
     const operator = this.deps.getOperatorById(operatorId);
     const gate = this.getActiveSilentDirectedCallGate(operatorId, slotPack?.startMs);
@@ -714,7 +941,14 @@ export class DecisionOrchestrator {
     }
 
     const before = this.deps.getOperatorAutomationSnapshot(operatorId);
-    const decision = await this.invokeStrategyDecision(operatorId, directedMessages, { isReDecision: true });
+    const decision = await this.invokeStrategyDecision(
+      operatorId,
+      directedMessages,
+      { isReDecision: true },
+      token,
+      signal,
+    );
+    if (!this.isCommandCurrent(token, signal)) return false;
     await this.notifyQSOFailIfPresent(operatorId, decision);
     if (decision?.stop) {
       this.updateSilentDirectedCallGate(operatorId, decision, slotInfo, slotPack);
@@ -736,7 +970,11 @@ export class DecisionOrchestrator {
 
     this.silentDirectedCallGates.delete(operatorId);
     operator.start();
-    operator.setTransmitCycles((sourceSlotInfo.cycleNumber + 1) % 2);
+    operator.setTransmitCycles((sourceSlotInfo.cycleNumber + 1) % 2, {
+      commandEpoch: token.epoch,
+      source: 'late-decode',
+      reason: 'silent directed call selected transmit cycle',
+    });
 
     logger.info('Silent directed-call gate woke stopped operator', {
       operatorId,
@@ -754,6 +992,8 @@ export class DecisionOrchestrator {
     parsedMessages: ParsedFT8Message[],
     slotInfo: SlotInfo,
     slotPack: SlotPack | null,
+    token: OperatorCommandToken,
+    signal: AbortSignal,
   ): Promise<boolean> {
     const operator = this.deps.getOperatorById(operatorId);
     if (!operator
@@ -773,7 +1013,14 @@ export class DecisionOrchestrator {
     }
 
     const before = this.deps.getOperatorAutomationSnapshot(operatorId);
-    const decision = await this.invokeStrategyDecision(operatorId, directedMessages, { isReDecision: true });
+    const decision = await this.invokeStrategyDecision(
+      operatorId,
+      directedMessages,
+      { isReDecision: true },
+      token,
+      signal,
+    );
+    if (!this.isCommandCurrent(token, signal)) return false;
     await this.notifyQSOFailIfPresent(operatorId, decision);
     if (decision?.stop) {
       return false;
@@ -795,7 +1042,11 @@ export class DecisionOrchestrator {
     const sourceSlotInfo = this.buildSourceSlotInfoFromParsedMessage(operatorId, sourceMessage, slotInfo);
 
     operator.start();
-    operator.setTransmitCycles((sourceSlotInfo.cycleNumber + 1) % 2);
+    operator.setTransmitCycles((sourceSlotInfo.cycleNumber + 1) % 2, {
+      commandEpoch: token.epoch,
+      source: 'late-decode',
+      reason: 'stopped direct call selected transmit cycle',
+    });
 
     logger.info('Stopped direct-call auto-reply woke operator', {
       operatorId,
@@ -809,27 +1060,14 @@ export class DecisionOrchestrator {
     return true;
   }
 
-  private async applyStrategyStop(
-    operatorId: string,
-    options?: { interruptActiveTransmission?: boolean },
-  ): Promise<void> {
+  private async applyStrategyStop(operatorId: string): Promise<void> {
     const operator = this.deps.getOperatorById(operatorId);
     if (!operator) {
       return;
     }
 
     operator.stop();
-
-    if (!options?.interruptActiveTransmission) {
-      return;
-    }
-
-    try {
-      await this.deps.interruptOperatorTransmission(operatorId);
-    } catch (error) {
-      logger.error(`Failed to interrupt active transmission after strategy stop: operator=${operatorId}`, error);
-      throw error;
-    }
+    this.deps.requestOperatorStrategyStop?.(operatorId, 'strategy stop');
   }
 
   private isOperatorPureStandby(operatorId: string): boolean {
@@ -856,6 +1094,7 @@ export class DecisionOrchestrator {
     slotInfo: SlotInfo,
     messages: ParsedFT8Message[],
     proposals: AutoCallProposalResult[],
+    token: OperatorCommandToken,
   ): Promise<void> {
     if (proposals.length === 0 || !this.isOperatorPureStandby(operatorId)) {
       return;
@@ -915,8 +1154,8 @@ export class DecisionOrchestrator {
       lastMessage: winner.proposal.lastMessage,
     };
     const executionPlan = await this.resolveAutoCallExecutionPlan(operatorId, request);
-    await this.applyAutoCallExecutionPlan(operatorId, request, executionPlan);
-    this.deps.requestCall(operatorId, request.callsign, request.lastMessage);
+    await this.applyAutoCallExecutionPlan(operatorId, request, executionPlan, token);
+    this.deps.requestCall(operatorId, request.callsign, request.lastMessage, { commandToken: token });
   }
 
   private isAutoCallProposalEligible(
@@ -1098,6 +1337,7 @@ export class DecisionOrchestrator {
     operatorId: string,
     request: AutoCallExecutionRequest,
     plan: AutoCallExecutionPlan,
+    token: OperatorCommandToken,
   ): Promise<void> {
     if (!this.deps.setOperatorAudioFrequency) {
       return;
@@ -1114,7 +1354,7 @@ export class DecisionOrchestrator {
     }
 
     try {
-      await this.deps.setOperatorAudioFrequency(operatorId, requestedFrequency);
+      await this.deps.setOperatorAudioFrequency(operatorId, requestedFrequency, token);
       logger.info('Auto call execution plan applied audio frequency', {
         operatorId,
         slotId: request.slotInfo.id,
@@ -1168,7 +1408,6 @@ export class DecisionOrchestrator {
     let state = this.decisionStates.get(operatorId);
     if (!state) {
       state = {
-        decisionInProgress: false,
         lastDecisionTransmission: null,
         lastDecisionMessageSet: null,
       };

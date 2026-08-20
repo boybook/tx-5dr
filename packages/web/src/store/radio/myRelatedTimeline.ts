@@ -54,6 +54,11 @@ export interface MyRelatedTimelineState {
 
 export interface MyRelatedTransmissionLog {
   operatorId: string;
+  frameId?: string;
+  revision?: number;
+  playbackGeneration?: number;
+  phase?: 'on_air';
+  physicalConfirmed?: true;
   myCallsign?: string;
   headerContextKey?: string;
   time: string;

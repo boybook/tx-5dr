@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'url';
 import path from 'path';
-import type { PluginDefinition, PluginUIRequestContext } from '@tx5dr/plugin-api';
+import { definePlugin, type PluginUIRequestContext } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import jaLocale from './locales/ja.json' with { type: 'json' };
@@ -35,14 +35,15 @@ function requireBoundCallsign(
  *
  * Configuration is stored in the plugin's global KVStore keyed by callsign.
  */
-export const wavelogSyncPlugin: PluginDefinition = {
+export const wavelogSyncPlugin = definePlugin({
+  apiVersion: 2,
   name: BUILTIN_WAVELOG_SYNC_PLUGIN_NAME,
   version: '1.0.0',
   type: 'utility',
   instanceScope: 'global',
   description: 'Sync QSO records with a WaveLog server',
 
-  permissions: ['network'],
+  permissions: ['network', 'logbook:read', 'logbook:write', 'logbook:sync'],
 
   ui: {
     dir: 'ui',
@@ -116,7 +117,7 @@ export const wavelogSyncPlugin: PluginDefinition = {
 
     ctx.log.info('WaveLog sync provider registered');
   },
-};
+});
 
 export const wavelogSyncLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,

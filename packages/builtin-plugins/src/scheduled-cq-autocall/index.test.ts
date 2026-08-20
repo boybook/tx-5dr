@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { createMockContext } from '@tx5dr/plugin-api/testing';
+import { createMockContext, createMockOperatorCommandPort } from '@tx5dr/plugin-api/testing';
 import { scheduledCqAutocallTestables } from './index.js';
 
 describe('scheduled-cq-autocall', () => {
+  const startCommands = (onStart: () => void) => createMockOperatorCommandPort((command) => {
+    if (command.type === 'start-automation') onStart();
+  });
+
   it('finds a due schedule key for a matching local minute', () => {
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control'],
       config: {
         scheduledCqTasks: [{ id: 'morning', enabled: true, days: 'thu', time: '08:30' }],
       },
@@ -15,14 +20,15 @@ describe('scheduled-cq-autocall', () => {
   it('starts transmitting once per matching schedule minute', () => {
     const starts: string[] = [];
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control'],
       config: {
         scheduledCqEnabled: true,
         scheduledCqTasks: [{ id: 'morning', enabled: true, days: 'thu', time: '08:30' }],
       },
       operator: {
-        automation: { currentState: 'TX6', slots: {}, context: {} } as any,
-        startTransmitting: () => starts.push('start'),
+        automation: { currentState: 'TX6', slots: {}, context: {} },
       },
+      operatorCommands: startCommands(() => { starts.push('start'); }),
     });
     const now = new Date(2026, 0, 1, 8, 30);
     scheduledCqAutocallTestables.runScheduledCqCheck(ctx, now);
@@ -33,6 +39,7 @@ describe('scheduled-cq-autocall', () => {
   it('uses only the current band schedule when per-band mode is enabled', () => {
     const starts: string[] = [];
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control'],
       config: {
         scheduledCqEnabled: true,
         scheduledCqPerBandEnabled: true,
@@ -44,9 +51,9 @@ describe('scheduled-cq-autocall', () => {
       },
       radio: { band: '20m' },
       operator: {
-        automation: { currentState: 'TX6', slots: {}, context: {} } as any,
-        startTransmitting: () => starts.push('start'),
+        automation: { currentState: 'TX6', slots: {}, context: {} },
       },
+      operatorCommands: startCommands(() => { starts.push('start'); }),
     });
 
     expect(scheduledCqAutocallTestables.getDueScheduleKey(ctx, new Date(2026, 0, 1, 8, 30))).toContain('band:20m');
@@ -58,6 +65,7 @@ describe('scheduled-cq-autocall', () => {
   it('does not inherit common schedules for an empty band in per-band mode', () => {
     const starts: string[] = [];
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control'],
       config: {
         scheduledCqEnabled: true,
         scheduledCqPerBandEnabled: true,
@@ -68,9 +76,9 @@ describe('scheduled-cq-autocall', () => {
       },
       radio: { band: '20m' },
       operator: {
-        automation: { currentState: 'TX6', slots: {}, context: {} } as any,
-        startTransmitting: () => starts.push('start'),
+        automation: { currentState: 'TX6', slots: {}, context: {} },
       },
+      operatorCommands: startCommands(() => { starts.push('start'); }),
     });
 
     scheduledCqAutocallTestables.runScheduledCqCheck(ctx, new Date(2026, 0, 1, 8, 30));
@@ -81,15 +89,16 @@ describe('scheduled-cq-autocall', () => {
   it('starts transmitting at a fixed interval after the first full interval elapses', () => {
     const starts: string[] = [];
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control'],
       config: {
         scheduledCqEnabled: true,
         scheduledCqIntervalEnabled: true,
         scheduledCqIntervalMinutes: 10,
       },
       operator: {
-        automation: { currentState: 'TX6', slots: {}, context: {} } as any,
-        startTransmitting: () => starts.push('start'),
+        automation: { currentState: 'TX6', slots: {}, context: {} },
       },
+      operatorCommands: startCommands(() => { starts.push('start'); }),
     });
 
     scheduledCqAutocallTestables.runScheduledCqCheck(ctx, new Date(2026, 0, 1, 8, 0));
@@ -104,6 +113,7 @@ describe('scheduled-cq-autocall', () => {
     const starts: string[] = [];
     let currentBand = '20m';
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control'],
       config: {
         scheduledCqEnabled: true,
         scheduledCqPerBandEnabled: true,
@@ -116,15 +126,15 @@ describe('scheduled-cq-autocall', () => {
       },
       radio: { band: currentBand },
       operator: {
-        automation: { currentState: 'TX6', slots: {}, context: {} } as any,
-        startTransmitting: () => starts.push(`${currentBand}:start`),
+        automation: { currentState: 'TX6', slots: {}, context: {} },
       },
+      operatorCommands: startCommands(() => { starts.push(`${currentBand}:start`); }),
     });
 
     scheduledCqAutocallTestables.runScheduledCqCheck(ctx, new Date(2026, 0, 1, 8, 0));
     scheduledCqAutocallTestables.runScheduledCqCheck(ctx, new Date(2026, 0, 1, 8, 10));
     currentBand = '40m';
-    (ctx.radio as any).band = currentBand;
+    (ctx.radio as { band: string }).band = currentBand;
     scheduledCqAutocallTestables.runScheduledCqCheck(ctx, new Date(2026, 0, 1, 8, 10));
     scheduledCqAutocallTestables.runScheduledCqCheck(ctx, new Date(2026, 0, 1, 8, 15));
 
@@ -134,6 +144,7 @@ describe('scheduled-cq-autocall', () => {
   it('skips per-band CQ when the current band is unknown', () => {
     const starts: string[] = [];
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control'],
       config: {
         scheduledCqEnabled: true,
         scheduledCqPerBandEnabled: true,
@@ -146,9 +157,9 @@ describe('scheduled-cq-autocall', () => {
       },
       radio: { band: 'unknown' },
       operator: {
-        automation: { currentState: 'TX6', slots: {}, context: {} } as any,
-        startTransmitting: () => starts.push('start'),
+        automation: { currentState: 'TX6', slots: {}, context: {} },
       },
+      operatorCommands: startCommands(() => { starts.push('start'); }),
     });
 
     scheduledCqAutocallTestables.runScheduledCqCheck(ctx, new Date(2026, 0, 1, 8, 30));
@@ -160,6 +171,7 @@ describe('scheduled-cq-autocall', () => {
   it('supports fixed time and interval CQ together without double-starting at the same moment', () => {
     const starts: string[] = [];
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control'],
       config: {
         scheduledCqEnabled: true,
         scheduledCqTasks: [{ id: 'morning', enabled: true, days: 'thu', time: '08:30' }],
@@ -167,9 +179,9 @@ describe('scheduled-cq-autocall', () => {
         scheduledCqIntervalMinutes: 10,
       },
       operator: {
-        automation: { currentState: 'TX6', slots: {}, context: {} } as any,
-        startTransmitting: () => starts.push('start'),
+        automation: { currentState: 'TX6', slots: {}, context: {} },
       },
+      operatorCommands: startCommands(() => { starts.push('start'); }),
     });
 
     scheduledCqAutocallTestables.runScheduledCqCheck(ctx, new Date(2026, 0, 1, 8, 20));
@@ -183,14 +195,15 @@ describe('scheduled-cq-autocall', () => {
   it('skips when the operator is not in pure standby', () => {
     const starts: string[] = [];
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control'],
       config: {
         scheduledCqEnabled: true,
         scheduledCqTasks: [{ id: 'morning', enabled: true, days: 'thu', time: '08:30' }],
       },
       operator: {
         isTransmitting: true,
-        startTransmitting: () => starts.push('start'),
       },
+      operatorCommands: startCommands(() => { starts.push('start'); }),
     });
     scheduledCqAutocallTestables.runScheduledCqCheck(ctx, new Date(2026, 0, 1, 8, 30));
     expect(starts).toEqual([]);
@@ -199,6 +212,7 @@ describe('scheduled-cq-autocall', () => {
   it('skips interval CQ when the operator is not in pure standby', () => {
     const starts: string[] = [];
     const ctx = createMockContext({
+      permissions: ['operator:transmit-control'],
       config: {
         scheduledCqEnabled: true,
         scheduledCqIntervalEnabled: true,
@@ -206,8 +220,8 @@ describe('scheduled-cq-autocall', () => {
       },
       operator: {
         isTransmitting: true,
-        startTransmitting: () => starts.push('start'),
       },
+      operatorCommands: startCommands(() => { starts.push('start'); }),
     });
 
     scheduledCqAutocallTestables.runScheduledCqCheck(ctx, new Date(2026, 0, 1, 8, 0));

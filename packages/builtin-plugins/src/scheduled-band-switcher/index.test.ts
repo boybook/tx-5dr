@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createMockContext } from '@tx5dr/plugin-api/testing';
-import type { CapabilityList, WriteCapabilityPayload } from '@tx5dr/contracts';
+import type { PluginRadioCommand } from '@tx5dr/plugin-api';
+import type { CapabilityList } from '@tx5dr/contracts';
 import { scheduledBandSwitcherTestables } from './index.js';
 
 function createTunerCapabilitySnapshot(options: {
@@ -55,6 +56,7 @@ function createTunerCapabilitySnapshot(options: {
 describe('scheduled-band-switcher', () => {
   it('selects a frequency from an active schedule window', () => {
     const ctx = createMockContext({
+      permissions: ['radio:read', 'radio:control', 'radio:tuner-control'],
       config: {
         bandScheduleEntries: [
           { enabled: true, days: 'thu', startTime: '08:00', endTime: '10:00', frequencyMhz: 14.074 },
@@ -66,16 +68,40 @@ describe('scheduled-band-switcher', () => {
 
   it('rotates through configured frequencies by interval', () => {
     const ctx = createMockContext({
+      permissions: ['radio:read', 'radio:control', 'radio:tuner-control'],
       config: { rotationFrequenciesMhz: ['14.074', '7.074'], rotationIntervalMinutes: 30 },
     });
-    expect(scheduledBandSwitcherTestables.getRotationTargetFrequency(ctx, new Date(2026, 0, 1, 8, 0))).toBe(14_074_000);
+    const first = new Date(2026, 0, 1, 8, 0);
+    expect(scheduledBandSwitcherTestables.getRotationTargetFrequency(ctx, first)).toBe(14_074_000);
+    scheduledBandSwitcherTestables.commitRotationTarget(ctx, 14_074_000, first);
     expect(scheduledBandSwitcherTestables.getRotationTargetFrequency(ctx, new Date(2026, 0, 1, 8, 10))).toBeNull();
     expect(scheduledBandSwitcherTestables.getRotationTargetFrequency(ctx, new Date(2026, 0, 1, 8, 31))).toBe(7_074_000);
   });
 
-  it('skips frequency changes while an operator is busy', async () => {
-    const setCalls: number[] = [];
+  it('does not advance rotation state when the host rejects a busy radio', async () => {
     const ctx = createMockContext({
+      permissions: ['radio:read', 'radio:control', 'radio:tuner-control'],
+      config: {
+        bandSwitchEnabled: true,
+        bandSwitchMode: 'rotation',
+        rotationFrequenciesMhz: ['14.074', '7.074'],
+        rotationIntervalMinutes: 30,
+      },
+      radio: { frequency: 3_573_000, isConnected: true },
+      radioCommands: { submit: async () => { throw new Error('physical transmitter is active'); } },
+      operator: { getOtherOperators: () => [] },
+    });
+    const now = new Date(2026, 0, 1, 8, 0);
+
+    await expect(scheduledBandSwitcherTestables.runBandSwitchCheck(ctx, now))
+      .rejects.toThrow('physical transmitter is active');
+    expect(scheduledBandSwitcherTestables.getRotationTargetFrequency(ctx, now)).toBe(14_074_000);
+  });
+
+  it('skips frequency changes while an operator is busy', async () => {
+    const commands: PluginRadioCommand[] = [];
+    const ctx = createMockContext({
+      permissions: ['radio:read', 'radio:control', 'radio:tuner-control'],
       config: {
         bandSwitchEnabled: true,
         bandSwitchMode: 'schedule',
@@ -83,7 +109,8 @@ describe('scheduled-band-switcher', () => {
           { enabled: true, days: 'thu', startTime: '08:00', endTime: '10:00', frequencyMhz: 14.074 },
         ],
       },
-      radio: { frequency: 7_074_000, isConnected: true, setFrequency: async (freq) => { setCalls.push(freq); } },
+      radio: { frequency: 7_074_000, isConnected: true },
+      radioCommands: { submit: async (command) => { commands.push(command); } },
       operator: {
         getOtherOperators: () => [{
           id: 'op-1',
@@ -98,12 +125,13 @@ describe('scheduled-band-switcher', () => {
     });
 
     await scheduledBandSwitcherTestables.runBandSwitchCheck(ctx, new Date(2026, 0, 1, 9, 0));
-    expect(setCalls).toEqual([]);
+    expect(commands).toEqual([]);
   });
 
   it('sets the radio frequency when idle and connected', async () => {
-    const setCalls: number[] = [];
+    const commands: PluginRadioCommand[] = [];
     const ctx = createMockContext({
+      permissions: ['radio:read', 'radio:control', 'radio:tuner-control'],
       config: {
         bandSwitchEnabled: true,
         bandSwitchMode: 'schedule',
@@ -111,19 +139,20 @@ describe('scheduled-band-switcher', () => {
           { enabled: true, days: 'thu', startTime: '08:00', endTime: '10:00', frequencyMhz: 14.074 },
         ],
       },
-      radio: { frequency: 7_074_000, isConnected: true, setFrequency: async (freq) => { setCalls.push(freq); } },
+      radio: { frequency: 7_074_000, isConnected: true },
+      radioCommands: { submit: async (command) => { commands.push(command); } },
       operator: { getOtherOperators: () => [] },
     });
 
     await scheduledBandSwitcherTestables.runBandSwitchCheck(ctx, new Date(2026, 0, 1, 9, 0));
-    expect(setCalls).toEqual([14_074_000]);
+    expect(commands).toEqual([{ type: 'switch-band', frequency: 14_074_000, autoTune: false }]);
   });
 
   it('enables the tuner and triggers one tune after a successful switch when configured', async () => {
-    const setCalls: number[] = [];
-    const writes: WriteCapabilityPayload[] = [];
+    const commands: PluginRadioCommand[] = [];
     const snapshot = createTunerCapabilitySnapshot({ tunerEnabled: false });
     const ctx = createMockContext({
+      permissions: ['radio:read', 'radio:control', 'radio:tuner-control'],
       config: {
         bandSwitchEnabled: true,
         bandSwitchMode: 'schedule',
@@ -135,31 +164,26 @@ describe('scheduled-band-switcher', () => {
       radio: {
         frequency: 7_074_000,
         isConnected: true,
-        setFrequency: async (freq) => { setCalls.push(freq); },
-        capabilities: {
-          getSnapshot: () => snapshot,
-          getState: (id) => snapshot.capabilities.find((capability) => capability.id === id) ?? null,
-          refresh: async () => snapshot,
-          write: async (payload) => { writes.push(payload); },
-        },
       },
+      radioCapabilities: {
+        getSnapshot: () => snapshot,
+        getState: (id) => snapshot.capabilities.find((capability) => capability.id === id) ?? null,
+        refresh: async () => snapshot,
+      },
+      radioCommands: { submit: async (command) => { commands.push(command); } },
       operator: { getOtherOperators: () => [] },
     });
 
     await scheduledBandSwitcherTestables.runBandSwitchCheck(ctx, new Date(2026, 0, 1, 9, 0));
 
-    expect(setCalls).toEqual([14_074_000]);
-    expect(writes).toEqual([
-      { id: 'tuner_switch', value: true },
-      { id: 'tuner_tune', action: true },
-    ]);
+    expect(commands).toEqual([{ type: 'switch-band', frequency: 14_074_000, autoTune: true }]);
   });
 
   it('skips auto tuning when tuner capabilities are unavailable', async () => {
-    const setCalls: number[] = [];
-    const writes: WriteCapabilityPayload[] = [];
+    const commands: PluginRadioCommand[] = [];
     const snapshot = createTunerCapabilitySnapshot({ tuneSupported: false });
     const ctx = createMockContext({
+      permissions: ['radio:read', 'radio:control', 'radio:tuner-control'],
       config: {
         bandSwitchEnabled: true,
         bandSwitchMode: 'schedule',
@@ -171,27 +195,26 @@ describe('scheduled-band-switcher', () => {
       radio: {
         frequency: 7_074_000,
         isConnected: true,
-        setFrequency: async (freq) => { setCalls.push(freq); },
-        capabilities: {
-          getSnapshot: () => snapshot,
-          getState: (id) => snapshot.capabilities.find((capability) => capability.id === id) ?? null,
-          refresh: async () => snapshot,
-          write: async (payload) => { writes.push(payload); },
-        },
       },
+      radioCapabilities: {
+        getSnapshot: () => snapshot,
+        getState: (id) => snapshot.capabilities.find((capability) => capability.id === id) ?? null,
+        refresh: async () => snapshot,
+      },
+      radioCommands: { submit: async (command) => { commands.push(command); } },
       operator: { getOtherOperators: () => [] },
     });
 
     await scheduledBandSwitcherTestables.runBandSwitchCheck(ctx, new Date(2026, 0, 1, 9, 0));
 
-    expect(setCalls).toEqual([14_074_000]);
-    expect(writes).toEqual([]);
+    expect(commands).toEqual([{ type: 'switch-band', frequency: 14_074_000, autoTune: false }]);
   });
 
   it('does not auto tune when no frequency switch is needed', async () => {
-    const writes: WriteCapabilityPayload[] = [];
+    const commands: PluginRadioCommand[] = [];
     const snapshot = createTunerCapabilitySnapshot();
     const ctx = createMockContext({
+      permissions: ['radio:read', 'radio:control', 'radio:tuner-control'],
       config: {
         bandSwitchEnabled: true,
         bandSwitchMode: 'schedule',
@@ -203,19 +226,20 @@ describe('scheduled-band-switcher', () => {
       radio: {
         frequency: 14_074_000,
         isConnected: true,
-        setFrequency: async () => { throw new Error('setFrequency should not be called'); },
-        capabilities: {
-          getSnapshot: () => snapshot,
-          getState: (id) => snapshot.capabilities.find((capability) => capability.id === id) ?? null,
-          refresh: async () => snapshot,
-          write: async (payload) => { writes.push(payload); },
-        },
       },
+      radioCapabilities: {
+        getSnapshot: () => snapshot,
+        getState: (id) => snapshot.capabilities.find((capability) => capability.id === id) ?? null,
+        refresh: async () => snapshot,
+      },
+      radioCommands: { submit: async (command) => {
+        commands.push(command);
+      } },
       operator: { getOtherOperators: () => [] },
     });
 
     await scheduledBandSwitcherTestables.runBandSwitchCheck(ctx, new Date(2026, 0, 1, 9, 0));
 
-    expect(writes).toEqual([]);
+    expect(commands).toEqual([]);
   });
 });

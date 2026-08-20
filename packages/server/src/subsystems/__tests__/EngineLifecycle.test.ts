@@ -7,8 +7,14 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' | 'CW' = 'FT8') {
   let currentModeName = initialModeName;
   const resourceManager = {
     stopAll: vi.fn(async () => undefined),
+    startAll: vi.fn(async () => undefined),
     clear: vi.fn(),
     register: vi.fn(),
+  };
+  const radioManager = {
+    isConnected: vi.fn(() => true),
+    applyConfig: vi.fn(async () => undefined),
+    disconnect: vi.fn(async () => undefined),
   };
   const voiceSessionManager = {
     start: vi.fn(),
@@ -17,6 +23,9 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' | 'CW' = 'FT8') {
   const decodeQueue = {
     start: vi.fn(async () => undefined),
     stop: vi.fn(async () => undefined),
+  };
+  const physicalTxCoordinator = {
+    forceInterrupt: vi.fn(async () => null),
   };
 
   const audioSidecar = {
@@ -45,15 +54,20 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' | 'CW' = 'FT8') {
     slotClock: {} as any,
     slotScheduler: {} as any,
     audioStreamManager: {} as any,
-    radioManager: {} as any,
+    radioManager: radioManager as any,
     spectrumScheduler: {} as any,
     decodeQueue: decodeQueue as any,
     operatorManager: {} as any,
+    physicalTxCoordinator: physicalTxCoordinator as any,
     audioMixer: {} as any,
     clockSource: {} as any,
     subsystems: {
-      transmissionPipeline: { forceStopPTT: vi.fn() } as any,
-      clockCoordinator: {} as any,
+      transmissionPipeline: {
+        forceStopPTT: vi.fn(),
+        setup: vi.fn(),
+        teardown: vi.fn(),
+      } as any,
+      clockCoordinator: { setup: vi.fn(), teardown: vi.fn() } as any,
     },
     getCurrentMode: () => ({ name: currentModeName } as any),
     getVoiceSessionManager: () => voiceSessionManager as any,
@@ -68,6 +82,8 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' | 'CW' = 'FT8') {
     lifecycle,
     resourceManager,
     decodeQueue,
+    radioManager,
+    physicalTxCoordinator,
     setModeName: (modeName: 'FT8' | 'VOICE' | 'CW') => {
       currentModeName = modeName;
     },
@@ -87,7 +103,6 @@ describe('EngineLifecycle', () => {
     expect(resourceManager.stopAll).toHaveBeenCalledTimes(1);
     expect(resourceManager.clear).toHaveBeenCalledTimes(1);
     expect(resourceManager.register.mock.calls.map(([config]) => config.name)).toEqual([
-      'radio',
       'icomWlanAudioAdapter',
       'tciAudioAdapter',
       'openwebrxAudioAdapter',
@@ -108,13 +123,12 @@ describe('EngineLifecycle', () => {
 
     expect(resourceManager.stopAll).toHaveBeenCalledTimes(2);
     expect(resourceManager.clear).toHaveBeenCalledTimes(2);
-    const firstPlanCount = 9; // radio + icom + tci + openwebrx + decodeWorkerPool + clock + slotScheduler + spectrumScheduler + operatorManager
+    const firstPlanCount = 8;
     const secondPlanNames = resourceManager.register.mock.calls
       .slice(firstPlanCount)
       .map(([config]) => config.name);
 
     expect(secondPlanNames).toEqual([
-      'radio',
       'icomWlanAudioAdapter',
       'tciAudioAdapter',
       'openwebrxAudioAdapter',
@@ -157,7 +171,6 @@ describe('EngineLifecycle', () => {
     const names = resourceManager.register.mock.calls.map(([config]) => config.name);
     expect(names).not.toContain('decodeWorkerPool');
     expect(names).toEqual([
-      'radio',
       'icomWlanAudioAdapter',
       'tciAudioAdapter',
       'openwebrxAudioAdapter',
@@ -173,7 +186,6 @@ describe('EngineLifecycle', () => {
 
     const names = resourceManager.register.mock.calls.map(([config]) => config.name);
     expect(names).toEqual([
-      'radio',
       'icomWlanAudioAdapter',
       'tciAudioAdapter',
       'openwebrxAudioAdapter',
@@ -184,5 +196,24 @@ describe('EngineLifecycle', () => {
     expect(names).not.toContain('clock');
     expect(names).not.toContain('slotScheduler');
     expect(names).not.toContain('operatorManager');
+  });
+
+  it('stops only mode runtime resources without disconnecting the CAT session', async () => {
+    const { lifecycle, radioManager, resourceManager } = createLifecycle('FT8');
+    (lifecycle as any).requestedStopScope = 'mode-runtime';
+
+    await (lifecycle as any).doStop();
+
+    expect(resourceManager.stopAll).toHaveBeenCalledOnce();
+    expect(radioManager.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('disconnects the CAT session during a full engine stop', async () => {
+    const { lifecycle, radioManager } = createLifecycle('FT8');
+    (lifecycle as any).requestedStopScope = 'full';
+
+    await (lifecycle as any).doStop();
+
+    expect(radioManager.disconnect).toHaveBeenCalledWith('Engine stopped');
   });
 });
