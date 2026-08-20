@@ -25,6 +25,7 @@ import { useViewportHeightCssVar } from './hooks/useViewportHeight';
 import { GlobalShortcutBridge } from './components/app/GlobalShortcutBridge';
 import { UpdateNotificationProvider } from './components/app/UpdateNotificationProvider';
 import { BootstrapStatusChip } from './components/app/BootstrapStatusChip';
+import { ObservabilityConsentModal } from './components/app/ObservabilityConsentModal';
 import { useLanguage } from './hooks/useLanguage';
 import { shouldShowServerStatusPage } from './store/radio/connectionView';
 
@@ -106,6 +107,7 @@ function AppContent() {
       {/* 首次使用引导（Admin）/ 观看者欢迎蒙层 */}
       <ProfileSetupOverlay isOpen={showSetupOverlay} />
       <ViewerWelcomeOverlay isOpen={showViewerWelcome} />
+      <ObservabilityConsentModal enabled={isAdmin && !showSetupOverlay} />
 
       {/* OpenWebRX SDR Profile 手动选择弹窗 */}
       <OpenWebRXProfileSelectModal />
