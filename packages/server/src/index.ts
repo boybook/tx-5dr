@@ -15,6 +15,7 @@ import {
 import { createServerReadyState, resolveServerPortOptions, writeServerReadyFile } from './utils/server-ready.js';
 import { PersistenceCoordinator } from './utils/persistence/index.js';
 import { bootstrapCoordinator } from './services/BootstrapCoordinator.js';
+import { TelemetryService } from './observability/TelemetryService.js';
 
 const logger = createLogger('Server');
 
@@ -201,6 +202,12 @@ async function start() {
     bootstrapCoordinator.completePhase('core-http');
     logger.info(`TX-5DR server listening on ${portOptions.listenHost}:${actualPort}`);
 
+    await TelemetryService.getInstance().initialize().catch((error) => {
+      logger.warn('anonymous usage statistics service could not initialize; server remains available', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+
     const clockManager = DigitalRadioEngine.getInstance();
 
     // Logbook inventory is a post-ready maintenance concern and must not depend
@@ -301,6 +308,12 @@ function startLogMaintenanceTasks(consoleLogger: ConsoleLogger): void {
       markProcessShuttingDown();
       blockNewMutations();
       PersistenceCoordinator.getInstance().blockNewMutations();
+
+      await TelemetryService.getInstance().shutdown().catch((error) => {
+        logger.debug('anonymous usage statistics shutdown was not delivered', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
 
       try {
         const engine = DigitalRadioEngine.getInstance();
