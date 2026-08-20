@@ -10,7 +10,7 @@ import type {
   PluginMarketInstallRecord,
   PluginMarketInstallResult,
 } from '@tx5dr/contracts';
-import { validatePluginDefinition } from './PluginLoader.js';
+import { canonicalizePluginDefinition } from './PluginLoader.js';
 import { fetchPluginMarketCatalog } from './marketplace.js';
 import { writePluginSource } from './plugin-source.js';
 import {
@@ -125,16 +125,26 @@ async function resolvePluginEntryPath(pluginRoot: string): Promise<string> {
   throw new Error(`Plugin archive is missing an entry file (${ENTRY_FILE_CANDIDATES.join(', ')})`);
 }
 
-async function validateExtractedPlugin(pluginRoot: string, expectedPluginName: string): Promise<void> {
+async function validateExtractedPlugin(
+  pluginRoot: string,
+  expectedPluginName: string,
+  expectedPermissions: readonly string[],
+): Promise<void> {
   const entryPath = await resolvePluginEntryPath(pluginRoot);
   const entryUrl = pathToFileURL(path.resolve(entryPath));
   entryUrl.searchParams.set('tx5dr_market_validate', `${Date.now()}`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mod: any = await import(entryUrl.href);
-  const definition = mod.default ?? mod;
-  validatePluginDefinition(definition);
+  const definition = canonicalizePluginDefinition(mod.default ?? mod);
   if (definition.name !== expectedPluginName) {
     throw new Error(`Plugin archive name mismatch: expected ${expectedPluginName}, received ${definition.name}`);
+  }
+  const actualPermissions = [...(definition.permissions ?? [])].sort();
+  const catalogPermissions = [...expectedPermissions].sort();
+  if (JSON.stringify(actualPermissions) !== JSON.stringify(catalogPermissions)) {
+    throw new Error(
+      `Plugin archive permission mismatch for ${expectedPluginName}: catalog and archive declarations differ`,
+    );
   }
 }
 
@@ -225,7 +235,7 @@ export async function installPluginFromMarketplace(
     const extractDir = path.join(tempRoot, 'extract');
     await extractZipArchive(archivePath, extractDir);
     const extractedRoot = await resolveExtractedPluginRoot(extractDir);
-    await validateExtractedPlugin(extractedRoot, pluginName);
+    await validateExtractedPlugin(extractedRoot, pluginName, artifact.permissions);
 
     const destinationDir = resolveSafeRelativePath(pluginDir, pluginName);
     if (!destinationDir) {

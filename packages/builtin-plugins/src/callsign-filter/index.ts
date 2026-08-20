@@ -1,4 +1,4 @@
-import type { PluginDefinition } from '@tx5dr/plugin-api';
+import { definePlugin } from '@tx5dr/plugin-api';
 import {
   evaluateCallsignFilter,
   evaluateDxccBlocklist,
@@ -48,7 +48,7 @@ const dxccEntityOptions = listDXCCEntities()
     value: String(entity.entityCode),
   }));
 
-export const callsignFilterPlugin: PluginDefinition = {
+export const callsignFilterPlugin = definePlugin({
   name: 'callsign-filter',
   version: '1.0.0',
   type: 'utility',
@@ -223,7 +223,7 @@ export const callsignFilterPlugin: PluginDefinition = {
       return filtered;
     },
   },
-};
+});
 
 export const callsignFilterLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,

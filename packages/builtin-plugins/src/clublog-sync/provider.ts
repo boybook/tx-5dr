@@ -1,6 +1,6 @@
 import type {
   LogbookSyncProvider,
-  PluginContext,
+  PluginContextFor,
   SyncAction,
   SyncDownloadResult,
   SyncFailure,
@@ -12,6 +12,8 @@ import type {
   SyncUploadProgress,
   SyncUploadResult,
 } from '@tx5dr/plugin-api';
+
+type PluginContext = PluginContextFor<readonly ['network', 'logbook:read', 'logbook:write']>;
 import type { QSORecord } from '@tx5dr/contracts';
 import {
   convertQSOToADIF,

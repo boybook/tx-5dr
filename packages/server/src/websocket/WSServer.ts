@@ -1374,7 +1374,11 @@ export class WSServer extends WSMessageHandler {
             } as SlotInfo,
           }
         : this.digitalRadioEngine.getSlotPackManager().getLastMessageFromCallsign(callsign, operatorId);
-      this.digitalRadioEngine.pluginManager.requestCall(operatorId, callsign, lastMessage);
+      this.digitalRadioEngine.pluginManager.requestCall(operatorId, callsign, lastMessage, {
+        submitCurrentFrame: true,
+        source: 'operator-edit',
+        reason: 'UI requestCall updated operator context',
+      });
       this.digitalRadioEngine.operatorManager.emitOperatorStatusUpdate(operatorId);
     } catch (error) {
       this.handleCommandError(error, 'operatorRequestCall');

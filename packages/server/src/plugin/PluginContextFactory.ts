@@ -4,16 +4,17 @@ import * as hostHamlib from 'hamlib';
 import type { RemoteInfo, Socket, SocketType } from 'node:dgram';
 import {
   getBandFromFrequency,
-  isUndecodedCallsignPlaceholder,
   LogbookOperationError,
   toAdifMode,
 } from '@tx5dr/core';
+import { getPluginContextCapabilityKeys } from '@tx5dr/plugin-api';
 import type {
   HostSettingsControl,
   HamlibHostDependency,
   LogbookSyncProvider,
   OtherOperatorSnapshot,
-  PluginContext,
+  PluginContextBase,
+  RuntimePluginContext,
   RadioOperatingMode,
   PluginUIInstanceTarget,
   QSOQueryFilter,
@@ -27,14 +28,11 @@ import type {
   PluginUIPageDescriptor,
   PluginPermission,
   EngineMode,
-  RadioPowerTarget,
-  WriteCapabilityPayload,
 } from '@tx5dr/contracts';
 import {
   MODES,
   RealtimeSettingsResponseDataSchema,
   RadioPowerTargetSchema,
-  WriteCapabilityPayloadSchema,
 } from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
@@ -55,16 +53,14 @@ type HostHamlibModule = {
 };
 
 function createAllowedHamlibDependency(source: HostHamlibModule): HamlibHostDependency {
-  return Object.freeze({
+  return {
     Rotator: source.Rotator,
-    PASSBAND: Object.freeze({
+    PASSBAND: {
       NORMAL: source.PASSBAND.NORMAL,
       NOCHANGE: source.PASSBAND.NOCHANGE,
-    }),
-  });
+    },
+  };
 }
-
-const HOST_HAMLIB_DEPENDENCY = createAllowedHamlibDependency(hostHamlib as unknown as HostHamlibModule);
 
 type SavedPluginFrequency = {
   frequency: number;
@@ -93,6 +89,8 @@ function cloneModeDescriptor(mode: ModeDescriptor): ModeDescriptor {
  * 为插件实例创建 PluginContext。
  */
 export class PluginContextFactory {
+  private readonly audioFrequencyReservationsBySlot = new Map<string, Map<string, number>>();
+
   constructor(
     private deps: PluginManagerDeps,
     private readonly onPanelMeta?: (payload: PluginPanelMetaPayload) => void,
@@ -113,7 +111,8 @@ export class PluginContextFactory {
     onTimer: (timerId: string) => void,
     getPluginSettings: () => Record<string, unknown>,
     updatePluginSettings?: (patch: Record<string, unknown>) => Promise<void>,
-  ): Promise<PluginContext> {
+    invokeResourceCallback?: <T>(operation: string, callback: () => T | Promise<T>) => Promise<T>,
+  ): Promise<RuntimePluginContext> {
     const globalStorage = new PluginStorageProvider(`${pluginStorageDir}/global.json`);
     const operatorStorageName = operatorId ? `operator-${operatorId}.json` : 'instance-global.json';
     const operatorStorage = new PluginStorageProvider(`${pluginStorageDir}/${operatorStorageName}`);
@@ -133,20 +132,31 @@ export class PluginContextFactory {
       this.onPanelMeta,
       this.onPanelContributions,
     );
-    let ctx: PluginContext | undefined;
+    const contextRef: { current?: RuntimePluginContext } = {};
     const pluginLogger = this.createLogger(plugin.definition.name);
-    const operatorControl = this.createOperatorControl(plugin, operatorId, instanceScope, () => ctx);
-    const radioControl = this.createRadioControl(plugin);
+    const operatorSnapshot = this.createOperatorSnapshot(operatorId, instanceScope);
+    const operatorCommands = this.createOperatorCommandPort(
+      plugin,
+      operatorId,
+      instanceScope,
+      () => contextRef.current,
+    );
+    const radioContext = this.createRadioContext(plugin);
     const logbookAccess = this.createLogbookAccess(operatorId, instanceScope);
     const bandAccess = this.createBandAccess(operatorId);
     const settingsControl = this.createSettingsControl(plugin);
     const fileStore = new PluginFileStoreProvider(
       path.join(pluginStorageDir, 'files'),
     );
-    const networkControl = this.createNetworkControl(plugin);
-    const eventBusControl = this.createEventBusControl(plugin, operatorId, instanceScope);
+    const networkControl = this.createNetworkControl(plugin, invokeResourceCallback);
+    const eventBusControl = this.createEventBusControl(
+      plugin,
+      operatorId,
+      instanceScope,
+      invokeResourceCallback,
+    );
 
-    ctx = {
+    const baseContext: PluginContextBase = {
       get config() {
         return Object.freeze({ ...getPluginSettings() });
       },
@@ -162,28 +172,47 @@ export class PluginContextFactory {
       },
       log: pluginLogger,
       timers: timerManager,
-      operator: operatorControl,
-      radio: radioControl,
-      logbook: logbookAccess,
+      operator: operatorSnapshot,
+      radio: radioContext.radio,
       band: bandAccess,
       ui: uiBridge,
       files: fileStore,
+    };
+
+    const capabilityCandidates: Partial<RuntimePluginContext> = {
+      ...radioContext.capabilities,
+      ...(operatorCommands ? { operatorCommands } : {}),
+      ...(networkControl ? {
+        network: networkControl,
+        fetch: (url: string, init?: RequestInit) => globalThis.fetch(url, init),
+      } : {}),
+      ...(eventBusControl ? { eventBus: eventBusControl } : {}),
+      logbook: plugin.definition.permissions?.includes('logbook:write')
+        ? logbookAccess.full
+        : logbookAccess.read,
       settings: settingsControl,
-      hostDependencies: plugin.definition.permissions?.includes('host:hamlib')
-        ? { hamlib: HOST_HAMLIB_DEPENDENCY }
-        : {},
-      network: networkControl,
-      eventBus: eventBusControl,
       logbookSync: {
-        register: (provider) => {
+        register: (provider: LogbookSyncProvider) => {
           this.validateLogbookSyncProvider(plugin, provider);
           this.deps.registerLogbookSyncProvider?.(plugin.definition.name, provider);
         },
       },
-      fetch: plugin.definition.permissions?.includes('network')
-        ? (url, init) => globalThis.fetch(url, init)
-        : undefined,
+      hostDependencies: {
+        hamlib: createAllowedHamlibDependency(hostHamlib as unknown as HostHamlibModule),
+      },
     };
+    const declaredCapabilities: Record<string, unknown> = {};
+    for (const key of getPluginContextCapabilityKeys(plugin.definition.permissions)) {
+      const value = capabilityCandidates[key];
+      if (value !== undefined) {
+        declaredCapabilities[key] = value;
+      }
+    }
+
+    const ctx = Object.create(null) as RuntimePluginContext;
+    Object.defineProperties(ctx, Object.getOwnPropertyDescriptors(baseContext));
+    Object.assign(ctx, declaredCapabilities);
+    contextRef.current = ctx;
 
     return ctx;
   }
@@ -192,11 +221,8 @@ export class PluginContextFactory {
     plugin: LoadedPlugin,
     operatorId: string | undefined,
     instanceScope: 'operator' | 'global',
-  ): PluginContext['eventBus'] {
-    if (!plugin.definition.permissions?.includes('plugin:event-bus')) {
-      return undefined;
-    }
-
+    invokeResourceCallback?: <T>(operation: string, callback: () => T | Promise<T>) => Promise<T>,
+  ): RuntimePluginContext['eventBus'] {
     const host = this.deps.pluginEventBusHost;
     if (!host) {
       return undefined;
@@ -213,26 +239,28 @@ export class PluginContextFactory {
         host.publish(owner, topic, payload);
       },
       subscribe(topic, handler) {
-        return host.subscribe(owner, topic, handler);
+        return host.subscribe(owner, topic, (message) => {
+          if (!invokeResourceCallback) {
+            return handler(message);
+          }
+          return invokeResourceCallback('event-bus:message', () => handler(message));
+        });
       },
     };
   }
 
 
-  private createNetworkControl(plugin: LoadedPlugin) {
+  private createNetworkControl(
+    _plugin: LoadedPlugin,
+    invokeResourceCallback?: <T>(operation: string, callback: () => T | Promise<T>) => Promise<T>,
+  ): RuntimePluginContext['network'] {
     const sockets = new Set<Socket>();
-    const assertNetworkPermission = () => {
-      if (!plugin.definition.permissions?.includes('network')) {
-        throw new Error(`Plugin '${plugin.definition.name}' requires permission 'network' to use UDP sockets`);
-      }
-    };
 
     const toError = (error: unknown): Error => error instanceof Error ? error : new Error(String(error));
 
     return {
       udp: {
         createSocket: (options?: import('@tx5dr/plugin-api').PluginUdpSocketOptions) => {
-          assertNetworkPermission();
           const socket = createSocket({
             type: (options?.type ?? 'udp4') as SocketType,
             reuseAddr: options?.reuseAddr ?? false,
@@ -242,18 +270,44 @@ export class PluginContextFactory {
           let closed = false;
           let messageHandler: ((data: Uint8Array, remote: import('@tx5dr/plugin-api').PluginUdpRemoteInfo) => void | Promise<void>) | undefined;
           let errorHandler: ((error: Error) => void) | undefined;
+          let pendingMessages = 0;
+          let messageQueue = Promise.resolve();
+          const MAX_PENDING_MESSAGES = 100;
+          const reportError = (error: Error) => {
+            if (!errorHandler) return;
+            if (invokeResourceCallback) {
+              void invokeResourceCallback('network:udp-error', () => errorHandler!(error)).catch(() => undefined);
+            } else {
+              errorHandler(error);
+            }
+          };
 
           socket.on('message', (message: Buffer, remote: RemoteInfo) => {
             if (!messageHandler) return;
-            Promise.resolve(messageHandler(new Uint8Array(message), {
+            if (pendingMessages >= MAX_PENDING_MESSAGES) {
+              reportError(new Error('Plugin UDP receive queue is full'));
+              return;
+            }
+            pendingMessages += 1;
+            const payload = new Uint8Array(message);
+            const remoteInfo = {
               address: remote.address,
               port: remote.port,
               family: remote.family,
               size: remote.size,
-            })).catch((error) => errorHandler?.(toError(error)));
+            };
+            messageQueue = messageQueue.then(async () => {
+              if (invokeResourceCallback) {
+                await invokeResourceCallback('network:udp-message', () => messageHandler!(payload, remoteInfo));
+              } else {
+                await messageHandler!(payload, remoteInfo);
+              }
+            }).catch((error) => reportError(toError(error))).finally(() => {
+              pendingMessages -= 1;
+            });
           });
           socket.on('error', (error) => {
-            errorHandler?.(error);
+            reportError(error);
           });
           socket.on('close', () => {
             closed = true;
@@ -334,7 +388,7 @@ export class PluginContextFactory {
   }
 
 
-  private createSettingsControl(plugin: LoadedPlugin): HostSettingsControl {
+  private createSettingsControl(plugin: LoadedPlugin): Partial<HostSettingsControl> {
     const service = new HostSettingsService();
     const thisDeps = this.deps;
     const assertPermission = (permission: PluginPermission, action: string) => {
@@ -345,7 +399,7 @@ export class PluginContextFactory {
       }
     };
 
-    return {
+    const controls: HostSettingsControl = {
       ft8: {
         async get() {
           assertPermission('settings:ft8', 'read FT8 settings');
@@ -424,12 +478,25 @@ export class PluginContextFactory {
         },
       },
     };
+    const permissions = new Set(plugin.definition.permissions ?? []);
+    return Object.freeze({
+      ...(permissions.has('settings:ft8') ? { ft8: controls.ft8 } : {}),
+      ...(permissions.has('settings:decode-windows') ? { decodeWindows: controls.decodeWindows } : {}),
+      ...(permissions.has('settings:realtime') ? { realtime: controls.realtime } : {}),
+      ...(permissions.has('settings:frequency-presets') ? { frequencyPresets: controls.frequencyPresets } : {}),
+      ...(permissions.has('settings:station') ? { station: controls.station } : {}),
+      ...(permissions.has('settings:psk-reporter') ? { pskReporter: controls.pskReporter } : {}),
+      ...(permissions.has('settings:ntp') ? { ntp: controls.ntp } : {}),
+    });
   }
 
   private validateLogbookSyncProvider(
     plugin: LoadedPlugin,
     provider: LogbookSyncProvider,
   ): void {
+    if (!plugin.definition.permissions?.includes('logbook:sync')) {
+      throw new Error(`Plugin must declare logbook:sync to register a sync provider: ${plugin.definition.name}`);
+    }
     if (plugin.definition.type !== 'utility') {
       throw new Error(`Logbook sync provider must come from a utility plugin: ${plugin.definition.name}`);
     }
@@ -489,22 +556,30 @@ export class PluginContextFactory {
     };
   }
 
-  private createOperatorControl(
+  private createOperatorCommandPort(
     plugin: LoadedPlugin,
     operatorId: string | undefined,
     instanceScope: 'operator' | 'global',
-    getContext: () => PluginContext | undefined,
-  ) {
+    getContext: () => RuntimePluginContext | undefined,
+  ): RuntimePluginContext['operatorCommands'] {
+    if (instanceScope === 'global'
+        || !operatorId
+        || plugin.definition.apiVersion !== 2) {
+      return undefined;
+    }
+
     const deps = this.deps;
     const assertTransmitControlAllowed = (action: string): void => {
       if (!plugin.definition.permissions?.includes('operator:transmit-control')) {
         throw new Error(
-          `Plugin '${plugin.definition.name}' cannot ${action}. Add permissions: ['operator:transmit-control'] and implement isAutoCallEnabled(ctx) before using operator transmit-control APIs.`,
+          `Plugin '${plugin.definition.name}' cannot ${action}. Add permissions: ['operator:transmit-control'] and a transmit-control eligibility predicate before using operator commands.`,
         );
       }
-      if (typeof plugin.definition.isAutoCallEnabled !== 'function') {
+      const isTransmitControlEnabled = plugin.definition.isTransmitControlEnabled
+        ?? plugin.definition.isAutoCallEnabled;
+      if (typeof isTransmitControlEnabled !== 'function') {
         throw new Error(
-          `Plugin '${plugin.definition.name}' must implement isAutoCallEnabled(ctx): boolean before using operator transmit-control APIs.`,
+          `Plugin '${plugin.definition.name}' must implement isTransmitControlEnabled(ctx) or isAutoCallEnabled(ctx) before using operator commands.`,
         );
       }
 
@@ -521,21 +596,38 @@ export class PluginContextFactory {
 
       let enabled = false;
       try {
-        enabled = plugin.definition.isAutoCallEnabled(ctx) === true;
+        const eligibilityContext = Object.freeze({ config: ctx.config });
+        enabled = isTransmitControlEnabled(eligibilityContext) === true;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         throw new Error(
-          `Plugin '${plugin.definition.name}' failed to evaluate isAutoCallEnabled(ctx) before ${action}: ${message}`,
+          `Plugin '${plugin.definition.name}' failed to evaluate its transmit-control eligibility before ${action}: ${message}`,
         );
       }
 
       if (!enabled) {
         throw new Error(
-          `Plugin '${plugin.definition.name}' cannot ${action} because isAutoCallEnabled(ctx) returned false. Only call operator transmit-control APIs while your automatic calling feature is enabled, or update isAutoCallEnabled(ctx) to reflect the active state.`,
+          `Plugin '${plugin.definition.name}' cannot ${action} because its transmit-control eligibility predicate returned false.`,
         );
       }
     };
 
+    return {
+      async submit(command) {
+        assertTransmitControlAllowed(`submit operator command '${command.type}'`);
+        if (!deps.submitOperatorCommand) {
+          throw new Error('Host operator command coordinator is unavailable');
+        }
+        return deps.submitOperatorCommand(operatorId, command, plugin.definition.name);
+      },
+    };
+  }
+
+  private createOperatorSnapshot(
+    operatorId: string | undefined,
+    instanceScope: 'operator' | 'global',
+  ): PluginContextBase['operator'] {
+    const deps = this.deps;
     if (instanceScope === 'global' || !operatorId) {
       return {
         get id() { return '__global__'; },
@@ -547,22 +639,8 @@ export class PluginContextFactory {
         get transmitCycles() { return []; },
         get automation() { return null; },
         getOtherOperators: () => this.createOtherOperatorSnapshots(undefined),
-        startTransmitting() { assertTransmitControlAllowed('start transmitting'); },
-        stopTransmitting() { assertTransmitControlAllowed('stop transmitting'); },
-        call(_callsign: string, _lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }) { assertTransmitControlAllowed('call a target station'); },
-        replyToDecode(_decode: { callsign: string; lastMessage: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }; modifiers?: number }) { assertTransmitControlAllowed('reply to a decode'); },
-        setTransmitCycles(_cycles: number | number[]) {},
-        clearDecodes(_window?: number) {},
-        haltTransmission(_options?: { autoOnly?: boolean }) { assertTransmitControlAllowed('halt transmission'); },
-        setFreeText(_text: string) {},
-        sendFreeText(_text?: string) { assertTransmitControlAllowed('send free text'); },
-        setTemporaryLocation(_location: string) {},
-        highlightCallsign(_rule: { callsign: string; background?: string | null; foreground?: string | null; lastOnly?: boolean }) {},
         async hasWorkedCallsign(_callsign: string, _options?: { anyBand?: boolean }) { return false; },
         isTargetBeingWorkedByOthers(_targetCallsign: string) { return false; },
-        async recordQSO(record: import('@tx5dr/contracts').QSORecord) { return record; },
-        notifySlotsUpdated(_slots: import('@tx5dr/contracts').OperatorSlots) {},
-        notifyStateChanged(_state: string) {},
       };
     }
 
@@ -590,75 +668,11 @@ export class PluginContextFactory {
         return deps.getOperatorAutomationSnapshot(operatorId);
       },
       getOtherOperators: () => this.createOtherOperatorSnapshots(operatorId),
-      startTransmitting() {
-        assertTransmitControlAllowed('start transmitting');
-        deps.getOperatorById(operatorId)?.start();
-      },
-      stopTransmitting() {
-        assertTransmitControlAllowed('stop transmitting');
-        deps.getOperatorById(operatorId)?.stop();
-      },
-      call(callsign: string, lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }) {
-        assertTransmitControlAllowed('call a target station');
-        // 未解码占位符呼号拒绝呼叫（收敛点 PluginManager.requestCall 亦会拒绝）
-        if (isUndecodedCallsignPlaceholder(callsign)) return;
-        deps.requestOperatorCall(operatorId, callsign, lastMessage);
-      },
-      replyToDecode(decode: { callsign: string; lastMessage: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }; modifiers?: number }) {
-        assertTransmitControlAllowed('reply to a decode');
-        // 未解码占位符呼号拒绝回复（避免对远端产生副作用）
-        if (isUndecodedCallsignPlaceholder(decode.callsign)) return;
-        deps.eventEmitter.emit('pluginRemoteReplyToDecode', { operatorId, callsign: decode.callsign, modifiers: decode.modifiers });
-        deps.requestOperatorCall(operatorId, decode.callsign, decode.lastMessage);
-      },
-      setTransmitCycles(cycles: number | number[]) {
-        deps.getOperatorById(operatorId)?.setTransmitCycles(cycles);
-      },
-      clearDecodes(window?: number) {
-        deps.eventEmitter.emit('pluginRemoteClearDecodes', { operatorId, window });
-      },
-      haltTransmission(options?: { autoOnly?: boolean }) {
-        assertTransmitControlAllowed('halt transmission');
-        if (options?.autoOnly) {
-          deps.getOperatorById(operatorId)?.stop();
-        } else {
-          void deps.interruptOperatorTransmission(operatorId).catch(() => {
-            deps.getOperatorById(operatorId)?.stop();
-          });
-        }
-      },
-      setFreeText(text: string) {
-        deps.eventEmitter.emit('pluginRemoteFreeText', { operatorId, text, send: false });
-      },
-      sendFreeText(text?: string) {
-        assertTransmitControlAllowed('send free text');
-        deps.eventEmitter.emit('pluginRemoteFreeText', { operatorId, text, send: true });
-        if (text && text.trim()) {
-          deps.eventEmitter.emit('requestTransmit', { operatorId, transmission: text });
-        }
-      },
-      setTemporaryLocation(location: string) {
-        deps.eventEmitter.emit('pluginRemoteLocation', { operatorId, location });
-      },
-      highlightCallsign(rule: { callsign: string; background?: string | null; foreground?: string | null; lastOnly?: boolean }) {
-        deps.eventEmitter.emit('pluginRemoteHighlightCallsign', { operatorId, ...rule });
-      },
       async hasWorkedCallsign(callsign: string, options?: { anyBand?: boolean }) {
         return deps.hasWorkedCallsign(operatorId, callsign, options);
       },
       isTargetBeingWorkedByOthers(targetCallsign: string) {
         return deps.getOperatorById(operatorId)?.isTargetBeingWorkedByOthers(targetCallsign) ?? false;
-      },
-      recordQSO(record: import('@tx5dr/contracts').QSORecord) {
-        const operator = deps.getOperatorById(operatorId);
-        if (!operator) return Promise.reject(new Error(`Operator ${operatorId} is unavailable`));
-        return operator.recordQSOLog(record);
-      },
-      notifySlotsUpdated(slots: import('@tx5dr/contracts').OperatorSlots) {
-        deps.getOperatorById(operatorId)?.notifySlotsUpdated(slots);
-      },
-      notifyStateChanged(state: string) {
-        deps.getOperatorById(operatorId)?.notifyStateChanged(state);
       },
     };
   }
@@ -678,9 +692,15 @@ export class PluginContextFactory {
       }));
   }
 
-  private getOtherOperatorAudioFrequenciesHz(operatorId: string | undefined): number[] {
+  private getOtherOperatorAudioFrequenciesHz(
+    operatorId: string | undefined,
+    slotId?: string,
+  ): number[] {
+    const reservations = slotId
+      ? this.audioFrequencyReservationsBySlot.get(slotId)
+      : undefined;
     return this.createOtherOperatorSnapshots(operatorId)
-      .map((operator) => operator.audioFrequencyHz)
+      .map((operator) => reservations?.get(operator.id) ?? operator.audioFrequencyHz)
       .filter((frequency) => (
         typeof frequency === 'number'
         && Number.isFinite(frequency)
@@ -689,16 +709,36 @@ export class PluginContextFactory {
       ));
   }
 
-  private createRadioControl(plugin: LoadedPlugin) {
+  private reserveOperatorAudioFrequency(
+    operatorId: string | undefined,
+    slotId: string,
+    frequency: number,
+  ): void {
+    if (!operatorId) {
+      return;
+    }
+
+    let reservations = this.audioFrequencyReservationsBySlot.get(slotId);
+    if (!reservations) {
+      reservations = new Map();
+      this.audioFrequencyReservationsBySlot.set(slotId, reservations);
+      while (this.audioFrequencyReservationsBySlot.size > 4) {
+        const oldestSlotId = this.audioFrequencyReservationsBySlot.keys().next().value;
+        if (oldestSlotId === undefined) {
+          break;
+        }
+        this.audioFrequencyReservationsBySlot.delete(oldestSlotId);
+      }
+    }
+    reservations.set(operatorId, frequency);
+  }
+
+  private createRadioContext(plugin: LoadedPlugin): {
+    radio: PluginContextBase['radio'];
+    capabilities: Omit<RuntimePluginContext, keyof PluginContextBase>;
+  } {
     const deps = this.deps;
     const configManager = ConfigManager.getInstance();
-    const assertPermission = (permission: PluginPermission, action: string) => {
-      if (!plugin.definition.permissions?.includes(permission)) {
-        throw new Error(
-          `Plugin '${plugin.definition.name}' requires permission '${permission}' to ${action}`,
-        );
-      }
-    };
 
     const requireRadioCapabilitySnapshot = () => {
       if (!deps.getRadioCapabilitySnapshot) {
@@ -810,7 +850,7 @@ export class PluginContextFactory {
       }
     };
 
-    return {
+    const radio: PluginContextBase['radio'] = Object.freeze({
       get frequency() {
         return getEffectiveFrequency();
       },
@@ -828,58 +868,68 @@ export class PluginContextFactory {
       get isConnected() {
         return deps.getRadioConnected();
       },
-      async setFrequency(freq: number) {
-        assertPermission('radio:control', 'set radio frequency');
-        const result = await deps.setRadioFrequency(freq);
-        if (result === false) {
-          throw new Error('Failed to set radio frequency');
-        }
-      },
-      capabilities: {
+    });
+
+    const capabilities: Omit<RuntimePluginContext, keyof PluginContextBase> = {};
+    capabilities.radioCapabilities = {
         getSnapshot() {
-          assertPermission('radio:read', 'read radio capabilities');
           return requireRadioCapabilitySnapshot()();
         },
         getState(id: string) {
-          assertPermission('radio:read', 'read radio capability state');
           return requireRadioCapabilitySnapshot()().capabilities.find((capability) => capability.id === id) ?? null;
         },
         async refresh() {
-          assertPermission('radio:read', 'refresh radio capabilities');
           if (!deps.refreshRadioCapabilities) {
             throw new Error('Radio capability refresh API is unavailable in this host');
           }
           return deps.refreshRadioCapabilities();
         },
-        async write(payload: WriteCapabilityPayload) {
-          assertPermission('radio:control', 'write radio capabilities');
-          if (!deps.writeRadioCapability) {
-            throw new Error('Radio capability write API is unavailable in this host');
-          }
-          await deps.writeRadioCapability(WriteCapabilityPayloadSchema.parse(payload));
-        },
-      },
-      power: {
+    };
+    capabilities.radioPower = {
         async getSupport(profileId?: string) {
-          assertPermission('radio:read', 'read radio power support');
           if (!deps.getRadioPowerSupport) {
             throw new Error('Radio power support API is unavailable in this host');
           }
           return deps.getRadioPowerSupport(profileId);
         },
         getState(profileId?: string) {
-          assertPermission('radio:read', 'read radio power state');
           return resolvePowerStateGetter()(profileId);
         },
-        async set(state: RadioPowerTarget, options?: { profileId?: string; autoEngine?: boolean }) {
-          assertPermission('radio:power', 'control radio power');
+    };
+    capabilities.radioCommands = {
+        async submit(command) {
+          if (!deps.submitRadioMaintenanceCommand) {
+            throw new Error('Host radio maintenance coordinator is unavailable');
+          }
+          if (command.type === 'switch-band'
+              && command.autoTune === true
+              && !plugin.definition.permissions?.includes('radio:tuner-control')) {
+            throw new Error('switch-band autoTune requires radio:tuner-control');
+          }
+          await deps.submitRadioMaintenanceCommand(command);
+        },
+    };
+    capabilities.radioTunerCommands = {
+        async submit(command) {
+          if (!deps.submitRadioMaintenanceCommand) {
+            throw new Error('Host radio maintenance coordinator is unavailable');
+          }
+          await deps.submitRadioMaintenanceCommand(command);
+        },
+    };
+    capabilities.radioPowerCommands = {
+        async submit(command) {
           if (!deps.setRadioPower) {
             throw new Error('Radio power control API is unavailable in this host');
           }
-          return deps.setRadioPower(RadioPowerTargetSchema.parse(state), options);
+          return deps.setRadioPower(
+            RadioPowerTargetSchema.parse(command.state),
+            command.options,
+          );
         },
-      },
     };
+
+    return { radio, capabilities };
   }
 
   private createLogbookAccess(
@@ -993,7 +1043,7 @@ export class PluginContextFactory {
       return callsign?.trim() ? callsign : null;
     };
 
-    return {
+    const fullAccess = {
       // === Original read-only helpers ===
 
       async hasWorked(callsign: string, options?: { anyBand?: boolean }) {
@@ -1055,11 +1105,51 @@ export class PluginContextFactory {
         await createCallsignAccess(callsign).notifyUpdated(operatorId);
       },
     };
+
+    return {
+      full: fullAccess,
+      read: {
+        hasWorked: fullAccess.hasWorked,
+        hasWorkedDXCC: fullAccess.hasWorkedDXCC,
+        hasWorkedGrid: fullAccess.hasWorkedGrid,
+        queryQSOs: fullAccess.queryQSOs,
+        countQSOs: fullAccess.countQSOs,
+        forCallsign(callsign: string) {
+          const access = createCallsignAccess(callsign);
+          return {
+            callsign: access.callsign,
+            getLogBookId: access.getLogBookId,
+            queryQSOs: access.queryQSOs,
+            countQSOs: access.countQSOs,
+            getStatistics: access.getStatistics,
+          };
+        },
+      },
+      commands: {
+        addQSO: fullAccess.addQSO,
+        updateQSO: fullAccess.updateQSO,
+        notifyUpdated: fullAccess.notifyUpdated,
+        forCallsign(callsign: string) {
+          const access = createCallsignAccess(callsign);
+          return {
+            callsign: access.callsign,
+            addQSO: access.addQSO,
+            updateQSO: access.updateQSO,
+            notifyUpdated: access.notifyUpdated,
+          };
+        },
+      },
+    };
   }
 
   private createBandAccess(operatorId: string | undefined) {
     const deps = this.deps;
-    const getOtherOperatorAudioFrequenciesHz = () => this.getOtherOperatorAudioFrequenciesHz(operatorId);
+    const getOtherOperatorAudioFrequenciesHz = (slotId: string) => (
+      this.getOtherOperatorAudioFrequenciesHz(operatorId, slotId)
+    );
+    const reserveOperatorAudioFrequency = (slotId: string, frequency: number) => {
+      this.reserveOperatorAudioFrequency(operatorId, slotId, frequency);
+    };
     return {
       getActiveCallers() {
         // 从最新 SlotPack 中提取 CQ 消息
@@ -1091,9 +1181,13 @@ export class PluginContextFactory {
           options?.minHz,
           options?.maxHz,
           options?.guardHz,
-          getOtherOperatorAudioFrequenciesHz(),
+          getOtherOperatorAudioFrequenciesHz(slotId),
         );
-        return typeof result === 'number' && Number.isFinite(result) ? result : null;
+        if (typeof result !== 'number' || !Number.isFinite(result)) {
+          return null;
+        }
+        reserveOperatorAudioFrequency(slotId, result);
+        return result;
       },
       evaluateAutoTargetEligibility(message: import('@tx5dr/contracts').ParsedFT8Message) {
         const operatorCallsign = operatorId

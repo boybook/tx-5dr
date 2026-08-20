@@ -357,6 +357,9 @@ export type SpectrumControlInvocation = z.infer<typeof SpectrumControlInvocation
 export const PTTStatusSchema = z.object({
   isTransmitting: z.boolean(),
   operatorIds: z.array(z.string()),
+  phase: z.enum(['idle', 'starting', 'on_air', 'draining', 'stopping', 'unknown']).optional(),
+  frameId: z.string().optional(),
+  source: z.enum(['digital', 'voice', 'voice-keyer', 'cw', 'tune-tone', 'manual', 'test']).optional(),
 });
 
 export const TuneToneStartPayloadSchema = z.object({
@@ -886,6 +889,11 @@ export const WSTransmissionLogMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.TRANSMISSION_LOG),
   data: z.object({
     operatorId: z.string(),
+    frameId: z.string(),
+    revision: z.number().int().nonnegative(),
+    playbackGeneration: z.number().int().positive(),
+    phase: z.literal('on_air'),
+    physicalConfirmed: z.literal(true),
     time: z.string(),
     message: z.string(),
     frequency: z.number(),
@@ -1591,6 +1599,10 @@ export const TransmitRequestSchema = z.object({
   transmission: z.string(),
   /** 是否覆盖同一操作员在同一时隙的现有 TX 帧（自动重决策时为 true） */
   replaceExisting: z.boolean().optional(),
+  source: z.enum(['standard-qso', 'plugin', 'late-decode', 'operator-edit', 'manual']).optional(),
+  reason: z.string().optional(),
+  /** Host command epoch used to tombstone stale encode/mix callbacks. */
+  decisionEpoch: z.number().int().nonnegative().optional(),
 });
 
 export type TransmitRequest = z.infer<typeof TransmitRequestSchema>;
@@ -1603,6 +1615,9 @@ export type TransmitRequest = z.infer<typeof TransmitRequestSchema>;
 export const TransmissionCompleteInfoSchema = z.object({
   operatorId: z.string(),
   success: z.boolean(),
+  frameId: z.string().optional(),
+  physicalConfirmed: z.boolean().optional(),
+  terminalReason: z.string().optional(),
   duration: z.number().optional(),
   error: z.string().optional(),
   mixedWith: z.array(z.string()).optional(), // 与其他操作员混音的ID列表
@@ -1635,6 +1650,11 @@ export interface DigitalRadioEngineEvents {
   transmissionComplete: (info: TransmissionCompleteInfo) => void;
   transmissionLog: (data: {
     operatorId: string;
+    frameId: string;
+    revision: number;
+    playbackGeneration: number;
+    phase: 'on_air';
+    physicalConfirmed: true;
     time: string;
     message: string;
     frequency: number;
@@ -1772,9 +1792,23 @@ export interface DigitalRadioEngineEvents {
   operatorSlotChanged: (data: { operatorId: string; slot: string }) => void;
   operatorSlotContentChanged: (data: { operatorId: string; slot: string; content: string }) => void;
   operatorFrequencyChanged: (data: { operatorId: string; frequency: number }) => void;
-  operatorTransmitCyclesChanged: (data: { operatorId: string; transmitCycles: number[] }) => void;
+  operatorTransmitCyclesChanged: (data: {
+    operatorId: string;
+    transmitCycles: number[];
+    commandEpoch?: number;
+    source?: 'manual' | 'plugin' | 'late-decode' | 'slot-auto';
+    reason?: string;
+  }) => void;
+  qsoLifecycleChanged: (data: {
+    operatorId: string;
+    lifecycleEpoch: number;
+    runtimeGeneration?: number;
+  }) => void;
   recordQSO: (data: {
     operatorId: string;
+    qsoLifecycleId?: string;
+    qsoLifecycleEpoch?: number;
+    qsoRuntimeGeneration?: number;
     qsoRecord: z.infer<typeof QSORecordSchema>;
     retryAttemptId?: string;
     resolve?: (record: z.infer<typeof QSORecordSchema>) => void;

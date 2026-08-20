@@ -2,9 +2,7 @@ import type {
   ParsedFT8Message,
   SlotInfo,
   SlotPack,
-  QSORecord,
   FrameMessage,
-  OperatorSlots,
   ModeDescriptor,
   EngineMode,
   PermissionGrant,
@@ -15,7 +13,6 @@ import type {
   RadioPowerStateEvent,
   RadioPowerSupportInfo,
   RadioPowerTarget,
-  WriteCapabilityPayload,
 } from '@tx5dr/contracts';
 import type { StrategyRuntimeSnapshot } from './runtime.js';
 
@@ -228,7 +225,7 @@ export interface OtherOperatorSnapshot {
   readonly automation?: StrategyRuntimeSnapshot | null;
 }
 
-export interface OperatorControl {
+export interface OperatorSnapshot {
   /** Unique operator identifier used by the host. */
   readonly id: string;
   /** Whether this operator is currently transmitting or otherwise armed. */
@@ -249,34 +246,6 @@ export interface OperatorControl {
   /** Returns read-only snapshots for operators other than the current instance. */
   getOtherOperators(): OtherOperatorSnapshot[];
 
-  /** Enables transmission/automation for the current operator. */
-  startTransmitting(): void;
-
-  /** Disables transmission/automation for the current operator. */
-  stopTransmitting(): void;
-
-  /**
-   * Requests that the operator call the specified target station.
-   *
-   * Passing `lastMessage` helps the host preserve the triggering context.
-   */
-  call(callsign: string, lastMessage?: { message: FrameMessage; slotInfo: SlotInfo }): void;
-
-  /**
-   * Requests host-managed reply behavior for a decoded message.
-   *
-   * This is equivalent to an operator selecting a decode in the RX view while
-   * keeping the API independent from any specific UDP/control protocol.
-   */
-  replyToDecode(decode: { callsign: string; lastMessage: { message: FrameMessage; slotInfo: SlotInfo }; modifiers?: number }): void;
-
-  /**
-   * Updates the operator's transmit cycle preference.
-   *
-   * Pass a single value or an array to support alternating or multi-cycle modes.
-   */
-  setTransmitCycles(cycles: number | number[]): void;
-
   /**
    * Checks whether this operator has previously worked the given callsign.
    */
@@ -288,38 +257,59 @@ export interface OperatorControl {
    */
   isTargetBeingWorkedByOthers(targetCallsign: string): boolean;
 
-  /** Clears host-managed decoded-message views when available. */
-  clearDecodes(window?: number): void;
+}
 
-  /** Stops current transmission/automation. */
-  haltTransmission(options?: { autoOnly?: boolean }): void;
+/**
+ * Declarative operator mutations accepted by the host transmission framework.
+ *
+ * The command set deliberately contains no PTT, audio, mixer, encoder, raw
+ * transmit or emergency-stop primitive. Plugins can request product actions;
+ * only the host coordinators may translate them into a physical RF lifecycle.
+ */
+export type PluginOperatorCommand =
+  | { type: 'start-automation' }
+  | { type: 'stop-automation' }
+  | {
+      type: 'request-call';
+      callsign: string;
+      lastMessage?: { message: FrameMessage; slotInfo: SlotInfo };
+    }
+  | {
+      type: 'reply-to-decode';
+      callsign: string;
+      lastMessage: { message: FrameMessage; slotInfo: SlotInfo };
+      modifiers?: number;
+    }
+  | { type: 'set-transmit-cycles'; cycles: number | number[] }
+  | { type: 'remove-contribution' }
+  | { type: 'clear-decodes'; window?: number }
+  | { type: 'set-free-text'; text: string }
+  | { type: 'send-free-text'; text?: string }
+  | { type: 'set-temporary-location'; location: string }
+  | {
+      type: 'highlight-callsign';
+      callsign: string;
+      background?: string | null;
+      foreground?: string | null;
+      lastOnly?: boolean;
+    };
 
-  /** Stores the current free-text message without necessarily transmitting it. */
-  setFreeText(text: string): void;
+export interface PluginOperatorCommandResult {
+  /** Host command epoch allocated before any asynchronous work begins. */
+  epoch: number;
+  /** `superseded` means a newer host command revoked this request. */
+  outcome: 'completed' | 'superseded';
+}
 
-  /** Requests transmission of free text. If text is provided it is stored first. */
-  sendFreeText(text?: string): void;
-
-  /** Applies a temporary session grid/location override when the host supports it. */
-  setTemporaryLocation(location: string): void;
-
-  /** Requests callsign highlighting in host decode views when available. */
-  highlightCallsign(rule: { callsign: string; background?: string | null; foreground?: string | null; lastOnly?: boolean }): void;
-
-  /**
-   * Records a completed QSO through the host logbook pipeline.
-   */
-  recordQSO(record: QSORecord): Promise<QSORecord>;
-
-  /**
-   * Pushes updated slot text content to the frontend operator view.
-   */
-  notifySlotsUpdated(slots: OperatorSlots): void;
-
-  /**
-   * Pushes a strategy state change notification to the frontend operator view.
-   */
-  notifyStateChanged(state: string): void;
+/**
+ * Capability-scoped command port for plugins with
+ * `operator:transmit-control` and API v2.
+ *
+ * The property is omitted from contexts without that capability. Every submit
+ * is invocation-guarded and enters the host's per-operator intent lane.
+ */
+export interface OperatorCommandPort {
+  submit(command: PluginOperatorCommand): Promise<PluginOperatorCommandResult>;
 }
 
 /**
@@ -352,7 +342,7 @@ export interface RadioOperatingMode {
   readonly descriptor: ModeDescriptor;
 }
 
-export interface RadioControl {
+export interface RadioView {
   /** Current tuned radio frequency in Hz. */
   readonly frequency: number;
   /** Human-readable current band label, for example `20m`. */
@@ -362,36 +352,50 @@ export interface RadioControl {
   /** Whether the radio transport is currently connected. */
   readonly isConnected: boolean;
 
-  /** Negotiated radio capability controls. Requires radio plugin permissions. */
-  readonly capabilities: RadioCapabilitiesControl;
-
-  /** Physical radio power controls. Requires radio plugin permissions. */
-  readonly power: RadioPowerControl;
-
-  /**
-   * Requests a frequency change.
-   *
-   * The host remains responsible for serializing hardware access and enforcing
-   * any safety or capability constraints.
-   */
-  setFrequency(freq: number): Promise<void>;
 }
 
 /**
  * Access to the host-managed radio capability negotiation system.
  */
-export interface RadioCapabilitiesControl {
-  /** Returns the current capability descriptor/state snapshot. Requires `radio:read`. */
+export interface RadioCapabilitiesView {
+  /** Returns the current capability descriptor/state snapshot. */
   getSnapshot(): CapabilityList;
 
-  /** Returns a single capability state from the current snapshot, or null. Requires `radio:read`. */
+  /** Returns a single capability state from the current snapshot, or null. */
   getState(id: string): CapabilityState | null;
 
-  /** Refreshes readable capability values and returns the updated snapshot. Requires `radio:read`. */
+  /** Refreshes readable capability values and returns the updated snapshot. */
   refresh(): Promise<CapabilityList>;
+}
 
-  /** Writes a capability value or triggers an action capability. Requires `radio:control`. */
-  write(payload: WriteCapabilityPayload): Promise<void>;
+/** Declarative radio mutations accepted by the host radio coordinator. */
+export type PluginRadioCommand =
+  | { type: 'set-frequency'; frequency: number }
+  | {
+      /** Atomically changes band and optionally starts the radio's tuner while RF is idle. */
+      type: 'switch-band';
+      frequency: number;
+      autoTune?: boolean;
+    };
+
+/**
+ * Capability-scoped radio command port.
+ *
+ * This port exists only for plugins with `radio:control`. It deliberately does
+ * not expose a radio connection, PTT primitive, mode switch, audio output or
+ * any other physical device object.
+ */
+export interface RadioCommandPort {
+  submit(command: PluginRadioCommand): Promise<void>;
+}
+
+/** Explicit tuner operations; no arbitrary capability identifier is accepted. */
+export type PluginRadioTunerCommand =
+  | { type: 'set-enabled'; enabled: boolean }
+  | { type: 'start-manual-tune' };
+
+export interface RadioTunerCommandPort {
+  submit(command: PluginRadioTunerCommand): Promise<void>;
 }
 
 export interface RadioPowerSetOptions {
@@ -404,15 +408,23 @@ export interface RadioPowerSetOptions {
 /**
  * Access to physical radio power management.
  */
-export interface RadioPowerControl {
-  /** Returns power support information for the active or specified profile. Requires `radio:read`. */
+export interface RadioPowerView {
+  /** Returns power support information for the active or specified profile. */
   getSupport(profileId?: string): Promise<RadioPowerSupportInfo>;
 
-  /** Returns the last known power transition state for the active or specified profile. Requires `radio:read`. */
+  /** Returns the last known power transition state for the active or specified profile. */
   getState(profileId?: string): RadioPowerStateEvent | null;
+}
 
-  /** Requests a physical power transition. Requires `radio:power`. */
-  set(state: RadioPowerTarget, options?: RadioPowerSetOptions): Promise<RadioPowerResponse>;
+export type PluginRadioPowerCommand = {
+  type: 'set-power';
+  state: RadioPowerTarget;
+  options?: RadioPowerSetOptions;
+};
+
+/** Capability-scoped physical power command port for `radio:power` plugins. */
+export interface RadioPowerCommandPort {
+  submit(command: PluginRadioPowerCommand): Promise<RadioPowerResponse>;
 }
 
 /**
@@ -454,7 +466,7 @@ export interface QSOQueryFilter {
  * The host resolves an already registered concrete logbook on each operation,
  * which keeps the handle valid across reloads without implicitly creating data.
  */
-export interface CallsignLogbookAccess {
+export interface CallsignLogbookReadAccess {
   /** Normalized callsign that scopes this accessor. */
   readonly callsign: string;
 
@@ -465,6 +477,13 @@ export interface CallsignLogbookAccess {
   queryQSOs(filter: QSOQueryFilter): Promise<import('@tx5dr/contracts').QSORecord[]>;
   /** Counts QSO records matching the given filter. */
   countQSOs(filter?: QSOQueryFilter): Promise<number>;
+  /** Returns current statistics for this callsign's logbook. */
+  getStatistics(): Promise<import('@tx5dr/contracts').LogBookStatistics | null>;
+}
+
+export interface CallsignLogbookCommandPort {
+  /** Normalized callsign that scopes this accessor. */
+  readonly callsign: string;
   /** Adds a QSO and resolves with the final record after durable commit. */
   addQSO(record: import('@tx5dr/contracts').QSORecord): Promise<import('@tx5dr/contracts').QSORecord>;
   /** Updates a QSO and resolves with the final record after durable commit. */
@@ -472,11 +491,12 @@ export interface CallsignLogbookAccess {
     qsoId: string,
     updates: Partial<import('@tx5dr/contracts').QSORecord>,
   ): Promise<import('@tx5dr/contracts').QSORecord>;
-  /** Returns current statistics for this callsign's logbook. */
-  getStatistics(): Promise<import('@tx5dr/contracts').LogBookStatistics | null>;
   /** Notifies the frontend that this callsign's logbook changed. */
   notifyUpdated(operatorId?: string): Promise<void>;
 }
+
+export interface CallsignLogbookAccess
+  extends CallsignLogbookReadAccess, CallsignLogbookCommandPort {}
 
 /**
  * Full logbook access for plugins.
@@ -485,7 +505,7 @@ export interface CallsignLogbookAccess {
  * capabilities so that sync providers can self-orchestrate their entire flow
  * without host-side special handling.
  */
-export interface LogbookAccess {
+export interface LogbookReadAccess {
   // === Read-only helpers (original) ===
 
   /** Checks whether the callsign has already been worked. */
@@ -502,11 +522,11 @@ export interface LogbookAccess {
   /** Counts QSO records matching the given filter. */
   countQSOs(filter?: QSOQueryFilter): Promise<number>;
 
-  /** Returns a callsign-bound accessor suitable for global plugin instances. */
-  forCallsign(callsign: string): CallsignLogbookAccess;
+  /** Returns a read-only callsign-bound accessor suitable for global plugin instances. */
+  forCallsign(callsign: string): CallsignLogbookReadAccess;
+}
 
-  // === Write ===
-
+export interface LogbookCommandPort {
   /** Adds a QSO and resolves with the final record after durable commit. */
   addQSO(record: import('@tx5dr/contracts').QSORecord): Promise<import('@tx5dr/contracts').QSORecord>;
   /** Updates a QSO and resolves with the final record after durable commit. */
@@ -519,6 +539,14 @@ export interface LogbookAccess {
 
   /** Notifies the frontend to refresh logbook data (call after batch writes). */
   notifyUpdated(): Promise<void>;
+
+  /** Returns a callsign-bound durable mutation port for global plugin instances. */
+  forCallsign(callsign: string): CallsignLogbookCommandPort;
+}
+
+/** @deprecated Prefer capability-specific LogbookReadAccess and LogbookCommandPort. */
+export interface LogbookAccess extends LogbookReadAccess, LogbookCommandPort {
+  forCallsign(callsign: string): CallsignLogbookAccess;
 }
 
 /**

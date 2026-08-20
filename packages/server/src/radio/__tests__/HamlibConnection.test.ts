@@ -190,6 +190,27 @@ describe('HamlibConnection', () => {
     await writePromise;
   });
 
+  it('keeps later PTT writes fenced until the native command really settles', async () => {
+    const firstStop = createDeferred<number>();
+    const { connection, rig } = createConnectedConnection({
+      setPtt: vi.fn()
+        .mockReturnValueOnce(firstStop.promise)
+        .mockResolvedValueOnce(0),
+    });
+
+    const oldStop = connection.setPTT(false);
+    await Promise.resolve();
+    const newStart = connection.setPTT(true);
+    await Promise.resolve();
+
+    expect(rig.setPtt).toHaveBeenCalledTimes(1);
+    expect(rig.setPtt).toHaveBeenNthCalledWith(1, false);
+    firstStop.resolve(0);
+    await oldStop;
+    await newStart;
+    expect(rig.setPtt).toHaveBeenNthCalledWith(2, true);
+  });
+
   it('skips DCD polling while a critical CAT write is active', async () => {
     const firstWrite = createDeferred<number>();
     const { connection, rig } = createConnectedConnection({

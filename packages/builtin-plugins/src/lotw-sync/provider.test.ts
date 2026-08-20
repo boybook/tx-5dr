@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { constants, createHash, generateKeyPairSync, publicDecrypt } from 'crypto';
 
-import type { PluginContext } from '@tx5dr/plugin-api';
+import type { PluginContextFor } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import { LoTWSyncProvider } from './provider.js';
 
@@ -1126,3 +1126,4 @@ describe('LoTWSyncProvider', () => {
     ]);
   });
 });
+type PluginContext = PluginContextFor<readonly ['network', 'logbook:read', 'logbook:write']>;

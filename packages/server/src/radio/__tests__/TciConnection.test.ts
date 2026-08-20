@@ -201,6 +201,39 @@ describe('TciConnection', () => {
     await connection.disconnect('test complete');
   });
 
+  it('poisons the session after an unconfirmed PTT write and rejects the opposite write', async () => {
+    server = new MockTciServer();
+    // Suppress the TRX state echo: the command has been sent, but its
+    // physical result is intentionally unknown to the client.
+    server.onCommand(({ command }) => command.name === 'trx');
+    await server.start();
+    const endpoint = new URL(server.url());
+    const connection = new TciConnection({ writeTimeoutMs: 25 });
+
+    await connection.connect({
+      type: 'tci',
+      tci: {
+        host: endpoint.hostname,
+        port: Number(endpoint.port),
+        receiver: 0,
+        trx: 0,
+        vfo: 0,
+        audioEnabled: true,
+        audioSampleRate: 12000,
+      },
+    });
+
+    await expect(connection.setPTT(true)).rejects.toThrow(/timed out|uncertain/i);
+    expect(connection.getState()).toBe(RadioConnectionState.ERROR);
+    expect(connection.isHealthy()).toBe(false);
+
+    const trxWritesAfterTimeout = server.receivedCommands.filter((command) => command.name === 'trx');
+    await expect(connection.setPTT(false)).rejects.toThrow(/uncertain|not connected/i);
+    expect(server.receivedCommands.filter((command) => command.name === 'trx')).toEqual(trxWritesAfterTimeout);
+
+    await connection.disconnect('test complete');
+  });
+
   it('downgrades operating-state TCI frequency confirmation timeouts without disconnecting', async () => {
     server = new MockTciServer();
     server.onCommand(({ command }) => command.name === 'vfo');

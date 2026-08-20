@@ -1,4 +1,4 @@
-import type { FrequencyChangeState, ParsedFT8Message, PluginContext, SlotActivityEvent, SlotInfo, QSORecord } from '@tx5dr/plugin-api';
+import type { FrequencyChangeState, ParsedFT8Message, PluginContextFor, SlotActivityEvent, SlotInfo, QSORecord } from '@tx5dr/plugin-api';
 import { FT8MessageType } from '@tx5dr/plugin-api';
 import { isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import {
@@ -12,6 +12,8 @@ import {
 import { decodeWsjtMessage, encodeWsjtMessage } from './wsjtx-codec.js';
 import { WSJTX_HEARTBEAT_SECONDS, WSJTX_UDP_SCHEMA, type WsjtDecodeMessage, type WsjtMessage, type WsjtStatusMessage } from './wsjtx-types.js';
 import { isRemoteMessageAllowed, logRemoteDenied, type RemotePolicySettings } from './remote-policy.js';
+
+type PluginContext = PluginContextFor<readonly ['network', 'operator:transmit-control']>;
 
 export interface UdpTarget {
   host: string;
@@ -50,10 +52,6 @@ export class WsjtUdpSession {
   }
 
   async start(): Promise<void> {
-    if (!this.ctx.network?.udp) {
-      this.ctx.log.warn('WSJT-X UDP disabled: host network UDP API is unavailable');
-      return;
-    }
     this.socket = this.ctx.network.udp.createSocket({ type: 'udp4', reuseAddr: true, broadcast: true });
     this.socket.onError((error) => this.ctx.log.warn('WSJT-X UDP socket error', { error: error.message }));
     this.socket.onMessage((data, remote) => this.handleDatagram(data, remote).catch((error) => {
@@ -221,33 +219,38 @@ export class WsjtUdpSession {
     switch (message.kind) {
       case 'clear':
         this.decodeHistory = [];
-        this.ctx.operator.clearDecodes(message.window);
+        await this.submitOperatorCommand({ type: 'clear-decodes', window: message.window });
         break;
       case 'replay':
         await this.replayDecodes();
         break;
       case 'reply':
-        this.handleReply(message);
+        await this.handleReply(message);
         break;
       case 'halt-tx':
-        this.ctx.operator.haltTransmission({ autoOnly: message.autoTxOnly });
+        await this.submitOperatorCommand({
+          type: message.autoTxOnly ? 'stop-automation' : 'remove-contribution',
+        });
         break;
       case 'free-text':
-        if (message.send) this.ctx.operator.sendFreeText(message.text || undefined);
-        else this.ctx.operator.setFreeText(message.text);
+        await this.submitOperatorCommand(message.send
+          ? { type: 'send-free-text', text: message.text || undefined }
+          : { type: 'set-free-text', text: message.text });
         break;
       case 'location':
-        this.ctx.operator.setTemporaryLocation(message.location);
+        await this.submitOperatorCommand({ type: 'set-temporary-location', location: message.location });
         break;
       case 'highlight-callsign':
-        this.handleHighlight(message);
+        await this.handleHighlight(message);
         break;
       case 'switch-configuration':
         this.ctx.log.warn('WSJT-X UDP SwitchConfiguration is parsed but unsupported by TX-5DR host', { configurationName: message.configurationName });
         break;
       case 'configure':
         this.ctx.log.info('WSJT-X UDP Configure received; applying supported fields only', { mode: message.mode, rxDf: message.rxDf, dxCall: message.dxCall, dxGrid: message.dxGrid, generateMessages: message.generateMessages });
-        if (message.dxCall) this.ctx.operator.call(message.dxCall);
+        if (message.dxCall) {
+          await this.submitOperatorCommand({ type: 'request-call', callsign: message.dxCall });
+        }
         break;
       case 'close':
         this.ctx.log.warn('WSJT-X UDP Close request received; closing only the plugin UDP session');
@@ -265,7 +268,7 @@ export class WsjtUdpSession {
     }
   }
 
-  private handleReply(message: Extract<WsjtMessage, { kind: 'reply' }>): void {
+  private async handleReply(message: Extract<WsjtMessage, { kind: 'reply' }>): Promise<void> {
     const match = this.decodeHistory.find((entry) => isDecodeMatch(entry.wsjt, message));
     if (!match) {
       this.ctx.log.warn('WSJT-X UDP Reply ignored: no matching decode in history', { message: message.message });
@@ -286,7 +289,8 @@ export class WsjtUdpSession {
       return;
     }
     if (callsign) {
-      this.ctx.operator.replyToDecode({
+      await this.submitOperatorCommand({
+        type: 'reply-to-decode',
         callsign,
         lastMessage: {
           message: { snr: match.wsjt.snr, dt: match.wsjt.deltaTime, freq: match.wsjt.deltaFrequency, message: match.wsjt.message, confidence: match.wsjt.lowConfidence ? 0.5 : 1 },
@@ -297,7 +301,7 @@ export class WsjtUdpSession {
     }
   }
 
-  private handleHighlight(message: Extract<WsjtMessage, { kind: 'highlight-callsign' }>): void {
+  private async handleHighlight(message: Extract<WsjtMessage, { kind: 'highlight-callsign' }>): Promise<void> {
     if (message.callsign === 'CLEARALL!') {
       this.highlightRules.clear();
     } else if (this.highlightRules.size >= this.settings.maxHighlightRules && !this.highlightRules.has(message.callsign)) {
@@ -306,12 +310,23 @@ export class WsjtUdpSession {
     } else {
       this.highlightRules.set(message.callsign, message);
     }
-    this.ctx.operator.highlightCallsign({
+    await this.submitOperatorCommand({
+      type: 'highlight-callsign',
       callsign: message.callsign,
       background: colorToCss(message.backgroundColor),
       foreground: colorToCss(message.foregroundColor),
       lastOnly: message.highlightLast,
     });
+  }
+
+  private async submitOperatorCommand(
+    command: import('@tx5dr/plugin-api').PluginOperatorCommand,
+  ): Promise<void> {
+    const port = this.ctx.operatorCommands;
+    if (!port) {
+      throw new Error('Host operator command capability is unavailable');
+    }
+    await port.submit(command);
   }
 
   private async replayDecodes(): Promise<void> {

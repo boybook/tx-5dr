@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { PluginContext } from '@tx5dr/plugin-api';
+import type { PluginContextFor } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import { ClubLogSyncProvider } from './provider.js';
 
@@ -218,3 +218,4 @@ describe('ClubLogSyncProvider', () => {
     ]);
   });
 });
+type PluginContext = PluginContextFor<readonly ['network', 'logbook:read', 'logbook:write']>;

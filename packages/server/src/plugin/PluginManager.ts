@@ -16,7 +16,10 @@ import type {
   StrategyRuntimeContext,
 } from '@tx5dr/contracts';
 import type {
-  PluginContext,
+  RuntimePluginContext,
+  StrategyPluginContext,
+  PluginOperatorCommand,
+  PluginOperatorCommandResult,
   PluginUIRequestContext,
   PluginUIInstanceTarget,
   QSOFailureInfo,
@@ -27,13 +30,14 @@ import type {
 import type { EventEmitter } from 'eventemitter3';
 import {
   PluginLoader,
+  canonicalizePluginDefinition,
   type PluginLoaderRuntimeLogEvent,
-  validatePluginDefinition,
 } from './PluginLoader.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import { PluginDevWatcher } from './PluginDevWatcher.js';
 import { PluginHookDispatcher } from './PluginHookDispatcher.js';
+import { PluginInvocationGuard } from './PluginInvocationGuard.js';
 import { DecisionOrchestrator } from './DecisionOrchestrator.js';
 import { PluginContextFactory } from './PluginContextFactory.js';
 import { PluginEventBusHost } from './PluginEventBusHost.js';
@@ -54,6 +58,7 @@ import { readPluginSource } from './plugin-source.js';
 import { createLogger } from '../utils/logger.js';
 import { resolvePluginPaths } from './paths.js';
 import path from 'path';
+import { OperatorIntentCoordinator } from '../transmission/OperatorIntentCoordinator.js';
 
 const logger = createLogger('PluginManager');
 const GLOBAL_PLUGIN_SCOPE_ID = '__global__';
@@ -72,11 +77,14 @@ const PLUGIN_RUNTIME_LOG_HISTORY_LIMIT = 1000;
  */
 export class PluginManager {
   private static readonly MAX_PAGE_PUSH_QUEUE = 500;
+  private nextInstanceGeneration = 0;
   private loadedPlugins = new Map<string, LoadedPlugin>();
   // operatorId → Map<pluginName, PluginInstance>
   private instances = new Map<string, Map<string, PluginInstance>>();
   private globalInstances = new Map<string, PluginInstance>();
   private dispatcher!: PluginHookDispatcher;
+  private readonly invocationGuard: PluginInvocationGuard;
+  private readonly intentCoordinator: OperatorIntentCoordinator;
   private orchestrator!: DecisionOrchestrator;
   private contextFactory: PluginContextFactory;
   private loader: PluginLoader;
@@ -114,6 +122,15 @@ export class PluginManager {
   };
 
   constructor(private deps: PluginManagerDeps) {
+    this.intentCoordinator = deps.intentCoordinator ?? new OperatorIntentCoordinator({
+      abortGraceMs: 1_000,
+      onAbortTimeout: (token) => {
+        logger.error('Operator command did not stop after abort; automation remains blocked', token);
+      },
+    });
+    this.invocationGuard = new PluginInvocationGuard(({ instance, operation, elapsedAfterAbortMs }) => {
+      this.quarantineHungPluginInstance(instance, operation, elapsedAfterAbortMs);
+    });
     this.loader = new PluginLoader((event) => this.emitPluginRuntimeLog(event));
     this._logbookSyncHost = new LogbookSyncHost();
     this.pluginEventBusHost = new PluginEventBusHost(({ subscriber, message, error }) => {
@@ -130,10 +147,31 @@ export class PluginManager {
       });
     });
     deps.pluginEventBusHost = this.pluginEventBusHost;
+    deps.submitOperatorCommand = (operatorId, command, pluginName) => {
+      const instance = this.instances.get(operatorId)?.get(pluginName);
+      if (!instance
+          || instance.lifecycle !== 'active'
+          || instance.desiredLifecycle !== 'active') {
+        throw new Error('PLUGIN_INVOCATION_EXPIRED: plugin instance is not active');
+      }
+      return this.submitPluginOperatorCommand(instance, operatorId, command);
+    };
     // Wire the logbook sync registration callback so plugins can register
     // providers via ctx.logbookSync.register().
     deps.registerLogbookSyncProvider = (pluginName, provider) => {
-      this._logbookSyncHost.register(pluginName, provider);
+      const instance = this.globalInstances.get(pluginName);
+      if (!instance || instance.scope.kind !== 'global') {
+        throw new Error('PLUGIN_INVOCATION_EXPIRED: sync provider owner is unavailable');
+      }
+      this.invocationGuard.assertCurrent(instance, 'logbookSync');
+      this._logbookSyncHost.register(pluginName, provider, {
+        generation: instance.generation,
+        isCurrent: () => this.globalInstances.get(pluginName) === instance
+          && instance.desiredLifecycle === 'active'
+          && (instance.lifecycle === 'starting' || instance.lifecycle === 'active'),
+        invoke: (operation, callback) => this.invocationGuard.invoke(instance, operation, callback),
+        invokeSync: (operation, callback) => this.invocationGuard.invokeSync(instance, operation, callback),
+      });
     };
     deps.listPluginPageSessions = (pluginName, instanceTarget, pageId) =>
       this.pageSessions.listByPluginInstance(pluginName, instanceTarget, pageId);
@@ -149,6 +187,7 @@ export class PluginManager {
       (operatorId) => this.getActiveInstances(operatorId),
       (operatorId) => this.getStrategyInstance(operatorId),
       (pluginName, reason) => this.handleAutoDisable(pluginName, reason),
+      this.invocationGuard,
     );
     this.orchestrator = new DecisionOrchestrator({
       getOperators: deps.getOperators,
@@ -156,23 +195,72 @@ export class PluginManager {
       getCurrentMode: deps.getCurrentMode,
       getOperatorAutomationSnapshot: deps.getOperatorAutomationSnapshot,
       interruptOperatorTransmission: deps.interruptOperatorTransmission,
+      requestOperatorStrategyStop: deps.requestOperatorStrategyStop ?? (() => undefined),
+      transitionTargetReservation: deps.transitionTargetReservation,
+      releaseTargetReservation: deps.releaseTargetReservation,
       analyzeCallsignForOperator: deps.analyzeCallsignForOperator,
       resolveGrid: deps.resolveGrid,
       setOperatorAudioFrequency: deps.setOperatorAudioFrequency,
       isSnrPriorityEnabled: (operatorId) => this.isSnrPriorityEnabled(operatorId),
       isStoppedDirectCallAutoReplyEnabled: (operatorId) => this.isStoppedDirectCallAutoReplyEnabled(operatorId),
       getStrategyRuntime: (operatorId) => this.getStrategyRuntime(operatorId),
+      getStrategyRuntimeGeneration: (operatorId) => this.getStrategyInstance(operatorId)?.generation,
+      invokeStrategyRuntime: (operatorId, operation, callback, options) =>
+        this.invokeStrategyRuntime(operatorId, operation, callback, options),
+      invokeStrategyRuntimeSync: (operatorId, operation, callback) =>
+        this.invokeStrategyRuntimeSync(operatorId, operation, callback),
       getCtxForInstance: (instance) => this.getCtxForInstance(instance),
       dispatcher: this.dispatcher,
       eventEmitter: deps.eventEmitter,
-      requestCall: (operatorId, callsign, lastMessage) => this.requestCall(operatorId, callsign, lastMessage),
+      requestCall: (operatorId, callsign, lastMessage, options) => this.requestCall(
+        operatorId,
+        callsign,
+        lastMessage,
+        { commandToken: options?.commandToken },
+      ),
       notifyQSOFail: (operatorId, info) => this.notifyQSOFail(operatorId, info),
       triggerReEncode: deps.triggerReEncode,
+      intentCoordinator: this.intentCoordinator,
     });
   }
 
   private get eventEmitter(): EventEmitter<DigitalRadioEngineEvents> {
     return this.deps.eventEmitter;
+  }
+
+  private quarantineHungPluginInstance(
+    instance: PluginInstance,
+    operation: string,
+    elapsedAfterAbortMs: number,
+  ): void {
+    if (instance.autoDisabled) return;
+    instance.autoDisabled = true;
+    instance.desiredLifecycle = 'inactive';
+    instance.lifecycleRevision += 1;
+    instance.lifecycle = 'quarantined';
+    instance.lastError = `Invocation ${operation} did not stop within ${elapsedAfterAbortMs}ms after abort`;
+    this.closeInstanceIngress(instance);
+    this.invocationGuard.revokeInstance(instance, 'plugin instance quarantined after abort timeout');
+    void instance.rawCtx.network?.udp.closeAll().catch(() => undefined);
+    if (instance.scope.kind === 'operator') {
+      this.deps.requestOperatorStrategyStop?.(
+        instance.scope.operatorId,
+        `plugin ${instance.plugin.definition.name} ignored abort`,
+      );
+    }
+    this.emitPluginRuntimeLog({
+      stage: 'activate',
+      level: 'error',
+      message: 'Plugin instance quarantined after ignoring AbortSignal',
+      pluginName: instance.plugin.definition.name,
+      details: {
+        operatorId: instance.scope.kind === 'operator' ? instance.scope.operatorId : undefined,
+        operation,
+        elapsedAfterAbortMs,
+        generation: instance.generation,
+      },
+    });
+    this.broadcastPluginList();
   }
 
   /** 允许在 initialize() 阶段设置正确的数据目录 */
@@ -264,8 +352,14 @@ export class PluginManager {
       const instance: PluginInstance = {
         plugin,
         scope: { kind: 'operator', operatorId },
-        ctx: null as unknown as PluginContext, // 先占位，下面赋值
+        ctx: null as unknown as RuntimePluginContext, // 先占位，下面赋值
+        rawCtx: null as unknown as RuntimePluginContext,
         runtime: undefined,
+        generation: ++this.nextInstanceGeneration,
+        lifecycle: 'inactive',
+        lifecycleTail: Promise.resolve(),
+        desiredLifecycle: 'inactive',
+        lifecycleRevision: 0,
         enabled,
         errorCounts: new Map(),
         autoDisabled: false,
@@ -277,8 +371,12 @@ export class PluginManager {
         'operator',
         pluginStorageDir,
         (timerId) => {
-          if (instance.ctx && !this.isInstancePaused(instance)) {
-            plugin.definition.hooks?.onTimer?.(timerId, instance.ctx);
+          if (instance.ctx && instance.lifecycle === 'active' && !this.isInstancePaused(instance)) {
+            void this.dispatcher.dispatchInstance(
+              instance,
+              'onTimer',
+              (hook, guardedCtx) => hook(timerId, guardedCtx),
+            );
           }
         },
         () => this.buildMergedSettings(plugin, pluginName, operatorId),
@@ -288,16 +386,54 @@ export class PluginManager {
           this.setOperatorPluginSettings(operatorId, pluginName, mergedSettings);
           await ConfigManager.getInstance().setOperatorPluginSettings(operatorId, pluginName, mergedSettings);
         },
+        (operation, callback) => {
+          if (!instance.enabled
+              || instance.autoDisabled
+              || instance.desiredLifecycle !== 'active'
+              || (instance.lifecycle !== 'active' && instance.lifecycle !== 'starting')) {
+            return Promise.reject(new Error('PLUGIN_INVOCATION_EXPIRED: plugin instance is not active'));
+          }
+          return this.invocationGuard.invoke(instance, operation, callback);
+        },
       );
-      instance.ctx = ctx;
+      instance.rawCtx = ctx;
+      instance.ctx = this.invocationGuard.wrapContext(ctx, instance);
       if (plugin.definition.type === 'strategy') {
-        instance.runtime = plugin.definition.createStrategyRuntime?.(ctx);
+        try {
+          const runtime = this.invocationGuard.invokeSync(
+            instance,
+            'createStrategyRuntime',
+            () => {
+              const candidate = plugin.definition.createStrategyRuntime?.(
+                this.createStrategyPluginContext(instance.ctx),
+              );
+              this.assertStrategyRuntimeV2(pluginName, candidate);
+              return candidate;
+            },
+          );
+          instance.runtime = runtime;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          instance.enabled = false;
+          instance.autoDisabled = true;
+          instance.lastError = message;
+          logger.error(`Strategy runtime rejected: plugin=${pluginName}, operator=${operatorId}`, error);
+          this.emitPluginRuntimeLog({
+            stage: 'validate',
+            level: 'error',
+            message: `PLUGIN_API_INCOMPATIBLE: ${message}`,
+            pluginName,
+            details: { operatorId },
+          });
+        }
       }
       operatorInstances.set(pluginName, instance);
 
       // 调用 onLoad（仅 enabled 的插件）
-      if (enabled) {
+      if (instance.enabled && !instance.autoDisabled) {
         await this.activateInstance(operatorId, instance);
+      } else {
+        instance.lifecycle = 'inactive';
       }
     }
   }
@@ -317,8 +453,14 @@ export class PluginManager {
       const instance: PluginInstance = {
         plugin,
         scope: { kind: 'global' },
-        ctx: null as unknown as PluginContext,
+        ctx: null as unknown as RuntimePluginContext,
+        rawCtx: null as unknown as RuntimePluginContext,
         runtime: undefined,
+        generation: ++this.nextInstanceGeneration,
+        lifecycle: 'inactive',
+        lifecycleTail: Promise.resolve(),
+        desiredLifecycle: 'inactive',
+        lifecycleRevision: 0,
         enabled,
         errorCounts: new Map(),
         autoDisabled: false,
@@ -330,8 +472,12 @@ export class PluginManager {
         'global',
         pluginStorageDir,
         (timerId) => {
-          if (instance.ctx && !this.isInstancePaused(instance)) {
-            plugin.definition.hooks?.onTimer?.(timerId, instance.ctx);
+          if (instance.ctx && instance.lifecycle === 'active' && !this.isInstancePaused(instance)) {
+            void this.dispatcher.dispatchInstance(
+              instance,
+              'onTimer',
+              (hook, guardedCtx) => hook(timerId, guardedCtx),
+            );
           }
         },
         () => this.buildMergedSettings(plugin, pluginName, GLOBAL_PLUGIN_SCOPE_ID),
@@ -344,18 +490,34 @@ export class PluginManager {
           this.pluginsConfig.configs[pluginName] = mergedConfig;
           const globalInstance = this.globalInstances.get(pluginName);
           if (globalInstance?.enabled) {
-            globalInstance.plugin.definition.hooks?.onConfigChange?.(mergedSettings, globalInstance.ctx);
+            void this.dispatcher.dispatchInstance(
+              globalInstance,
+              'onConfigChange',
+              (hook, guardedCtx) => hook(mergedSettings, guardedCtx),
+            );
           }
           this.bumpGeneration();
           this.broadcastStatusChanged(pluginName);
           await ConfigManager.getInstance().setPluginConfig(pluginName, mergedConfig);
         },
+        (operation, callback) => {
+          if (!instance.enabled
+              || instance.autoDisabled
+              || instance.desiredLifecycle !== 'active'
+              || (instance.lifecycle !== 'active' && instance.lifecycle !== 'starting')) {
+            return Promise.reject(new Error('PLUGIN_INVOCATION_EXPIRED: plugin instance is not active'));
+          }
+          return this.invocationGuard.invoke(instance, operation, callback);
+        },
       );
-      instance.ctx = ctx;
+      instance.rawCtx = ctx;
+      instance.ctx = this.invocationGuard.wrapContext(ctx, instance);
       this.globalInstances.set(pluginName, instance);
 
-      if (enabled) {
+      if (instance.enabled && !instance.autoDisabled) {
         await this.activateInstance(GLOBAL_PLUGIN_SCOPE_ID, instance);
+      } else {
+        instance.lifecycle = 'inactive';
       }
     }
   }
@@ -367,8 +529,7 @@ export class PluginManager {
     }
 
     for (const instance of operatorInstances.values()) {
-      if (!instance.enabled) continue;
-      void this.deactivateInstance(operatorId, instance);
+      void this.deactivateInstance(operatorId, instance, true);
     }
     this.instances.delete(operatorId);
     this.orchestrator.removeDecisionState(operatorId);
@@ -384,8 +545,18 @@ export class PluginManager {
     return this.getStrategyInstance(operatorId);
   }
 
-  getCtxForInstance(instance: PluginInstance): PluginContext {
+  getCtxForInstance(instance: PluginInstance): RuntimePluginContext {
     return instance.ctx;
+  }
+
+  private createStrategyPluginContext(ctx: RuntimePluginContext): StrategyPluginContext {
+    return Object.freeze({
+      get config() {
+        return ctx.config;
+      },
+      log: ctx.log,
+      operator: ctx.operator,
+    });
   }
 
   getOperatorRuntimeStatus(operatorId: string): {
@@ -420,13 +591,12 @@ export class PluginManager {
   }
 
   getOperatorAutomationSnapshot(operatorId: string): StrategyRuntimeSnapshot | null {
-    const runtime = this.getStrategyRuntime(operatorId);
-    if (!runtime) {
-      return null;
-    }
-
     try {
-      return runtime.getSnapshot();
+      return this.invokeStrategyRuntimeSync(
+        operatorId,
+        'getSnapshot',
+        (runtime) => runtime.getSnapshot(),
+      ) ?? null;
     } catch (err) {
       logger.error(`Failed to read strategy snapshot: operator=${operatorId}`, err);
       return null;
@@ -437,18 +607,23 @@ export class PluginManager {
     operatorId: string,
     patch: Partial<StrategyRuntimeContext>,
   ): void {
-    const runtime = this.getStrategyRuntime(operatorId);
-    if (!runtime) return;
-    runtime.patchContext(patch);
+    this.invokeStrategyRuntimeSync(
+      operatorId,
+      'patchContext',
+      (runtime) => runtime.patchContext(patch),
+    );
   }
 
   setOperatorRuntimeState(operatorId: string, state: StrategyRuntimeSlot): void {
-    const runtime = this.getStrategyRuntime(operatorId);
-    if (!runtime) return;
     let beforeState: string = 'unknown';
     let beforeTargetCallsign: string | undefined;
     try {
-      const snapshot = runtime.getSnapshot();
+      const snapshot = this.invokeStrategyRuntimeSync(
+        operatorId,
+        'getSnapshot:before-set-state',
+        (runtime) => runtime.getSnapshot(),
+      );
+      if (!snapshot) return;
       beforeState = snapshot.currentState;
       beforeTargetCallsign = snapshot.context?.targetCallsign;
     } catch {
@@ -460,7 +635,7 @@ export class PluginManager {
       after: state,
       beforeTargetCallsign: beforeTargetCallsign ?? null,
     });
-    runtime.setState(state);
+    this.invokeStrategyRuntimeSync(operatorId, 'setState', (runtime) => runtime.setState(state));
     this.orchestrator.invalidateDecisionMessageSet(operatorId);
     this.eventEmitter.emit('operatorSlotChanged', { operatorId, slot: state });
   }
@@ -470,14 +645,17 @@ export class PluginManager {
     slot: StrategyRuntimeSlot,
     content: string,
   ): Record<string, unknown> | undefined {
-    const runtime = this.getStrategyRuntime(operatorId);
-    if (!runtime) return undefined;
+    if (!this.getStrategyRuntime(operatorId)) return undefined;
     const activeStrategy = this.pluginsConfig.operatorStrategies?.[operatorId] ?? BUILTIN_STANDARD_QSO_PLUGIN_NAME;
     let persistedSettings: Record<string, unknown> | undefined;
     if (activeStrategy === BUILTIN_STANDARD_QSO_PLUGIN_NAME && slot === 'TX6') {
       persistedSettings = this.updateStandardQSOTx6OverrideSetting(operatorId, content);
     }
-    runtime.setSlotContent({ slot, content });
+    this.invokeStrategyRuntimeSync(
+      operatorId,
+      'setSlotContent',
+      (runtime) => runtime.setSlotContent({ slot, content }),
+    );
     this.orchestrator.invalidateDecisionMessageSet(operatorId);
     this.eventEmitter.emit('operatorSlotContentChanged', { operatorId, slot, content });
     return persistedSettings;
@@ -502,17 +680,23 @@ export class PluginManager {
       throw new Error(`Plugin action is paused for operator: plugin=${pluginName}${pausedOperatorId ? `, operator=${pausedOperatorId}` : ''}`);
     }
 
-    const hook = instance.plugin.definition.hooks?.onUserAction;
-    if (!hook) {
-      return;
-    }
-    hook(actionId, payload, instance.ctx);
+    void this.dispatcher.dispatchInstance(
+      instance,
+      'onUserAction',
+      (hook, guardedCtx) => hook(actionId, payload, guardedCtx),
+    );
   }
 
   requestCall(
     operatorId: string,
     callsign: string,
     lastMessage?: { message: FrameMessage; slotInfo: SlotInfo },
+    options?: {
+      submitCurrentFrame?: boolean;
+      source?: 'operator-edit' | 'plugin';
+      reason?: string;
+      commandToken?: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken;
+    },
   ): void {
     // 呼叫收敛点：autocall / WS 命令 / ctx.operator.call / replyToDecode 全部汇入此处，
     // 未解码占位符呼号（`<...>`/`...`）一律拒绝，避免向占位符发起呼叫。
@@ -520,25 +704,212 @@ export class PluginManager {
       logger.warn('Refusing requestCall with undecoded placeholder callsign', { operatorId, callsign });
       return;
     }
+    const apply = (token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken) => {
+      if (!this.intentCoordinator.isCurrent(token)) return;
+      this.applyRequestCall(operatorId, callsign, lastMessage, options, token);
+    };
+    if (options?.commandToken) {
+      apply(options.commandToken);
+      return;
+    }
+    const source = options?.source === 'plugin' ? 'plugin' : 'manual';
+    void this.intentCoordinator.submit(operatorId, source, (token, signal) => {
+      if (!signal.aborted) apply(token);
+    }).catch((error) => {
+      logger.warn('Operator requestCall command failed', {
+        operatorId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  private async submitPluginOperatorCommand(
+    instance: PluginInstance,
+    operatorId: string,
+    command: PluginOperatorCommand,
+  ): Promise<PluginOperatorCommandResult> {
+    const invocation = this.invocationGuard.captureCurrent(instance);
+    const isInvocationCurrent = () => (
+      !invocation.signal.aborted
+      && instance.generation === invocation.instanceGeneration
+      && instance.lifecycle === 'active'
+      && this.instances.get(operatorId)?.get(instance.plugin.definition.name) === instance
+    );
+    const outcome = await this.intentCoordinator.submit(
+      operatorId,
+      'plugin',
+      async (token, signal) => {
+        if (signal.aborted || !this.intentCoordinator.isCurrent(token) || !isInvocationCurrent()) return;
+        const operator = this.deps.getOperatorById(operatorId);
+        if (!operator) throw new Error(`Operator not found: ${operatorId}`);
+
+        switch (command.type) {
+          case 'start-automation':
+            operator.start();
+            break;
+          case 'stop-automation':
+            operator.stop();
+            this.deps.requestOperatorStrategyStop?.(operatorId, 'plugin automation stop');
+            break;
+          case 'request-call':
+            this.applyRequestCall(operatorId, command.callsign, command.lastMessage, {
+              source: 'plugin',
+            }, token);
+            break;
+          case 'reply-to-decode':
+            this.eventEmitter.emit('pluginRemoteReplyToDecode', {
+              operatorId,
+              callsign: command.callsign,
+              modifiers: command.modifiers,
+            });
+            this.applyRequestCall(operatorId, command.callsign, command.lastMessage, {
+              source: 'plugin',
+            }, token);
+            break;
+          case 'set-transmit-cycles':
+            operator.setTransmitCycles(command.cycles, {
+              commandEpoch: token.epoch,
+              source: 'plugin',
+              reason: `plugin ${instance.plugin.definition.name} changed transmit cycles`,
+            });
+            break;
+          case 'remove-contribution':
+            operator.stop();
+            this.deps.releaseTargetReservation?.(operatorId);
+            if (!this.deps.removeOperatorContribution) {
+              throw new Error('Host participant-removal coordinator is unavailable');
+            }
+            await this.deps.removeOperatorContribution(operatorId, {
+              signal: AbortSignal.any([signal, invocation.signal]),
+              commandToken: token,
+            });
+            break;
+          case 'clear-decodes':
+            this.eventEmitter.emit('pluginRemoteClearDecodes', { operatorId, window: command.window });
+            break;
+          case 'set-free-text':
+            this.eventEmitter.emit('pluginRemoteFreeText', { operatorId, text: command.text, send: false });
+            break;
+          case 'send-free-text':
+            this.eventEmitter.emit('pluginRemoteFreeText', { operatorId, text: command.text, send: true });
+            if (command.text?.trim()) {
+              this.eventEmitter.emit('requestTransmit', {
+                operatorId,
+                transmission: command.text,
+                decisionEpoch: token.epoch,
+              });
+            }
+            break;
+          case 'set-temporary-location':
+            this.eventEmitter.emit('pluginRemoteLocation', { operatorId, location: command.location });
+            break;
+          case 'highlight-callsign':
+            this.eventEmitter.emit('pluginRemoteHighlightCallsign', {
+              operatorId,
+              callsign: command.callsign,
+              background: command.background,
+              foreground: command.foreground,
+              lastOnly: command.lastOnly,
+            });
+            break;
+        }
+        if (signal.aborted || !this.intentCoordinator.isCurrent(token) || !isInvocationCurrent()) {
+          return;
+        }
+      },
+    );
+    return {
+      epoch: outcome.token.epoch,
+      outcome: outcome.status,
+    };
+  }
+
+  private applyRequestCall(
+    operatorId: string,
+    callsign: string,
+    lastMessage: { message: FrameMessage; slotInfo: SlotInfo } | undefined,
+    options: {
+      submitCurrentFrame?: boolean;
+      source?: 'operator-edit' | 'plugin';
+      reason?: string;
+    } | undefined,
+    token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken,
+  ): void {
     const operator = this.deps.getOperatorById(operatorId);
-    const runtime = this.getStrategyRuntime(operatorId);
-    if (!operator || !runtime) return;
+    if (!operator || !this.getStrategyRuntime(operatorId)) return;
 
     this.orchestrator.invalidateDecisionMessageSet(operatorId);
-    const accepted = runtime.requestCall(callsign, lastMessage);
+    const checkpoint = this.invokeStrategyRuntimeSync(
+      operatorId,
+      'checkpoint:request-call',
+      (runtime) => structuredClone(runtime.checkpoint()),
+    );
+    const accepted = this.invokeStrategyRuntimeSync(
+      operatorId,
+      'requestCall',
+      (runtime) => runtime.requestCall(callsign, lastMessage),
+    );
     if (accepted === false) {
       logger.warn('Strategy rejected requestCall without starting the operator', { operatorId, callsign });
       return;
     }
+    const nextSnapshot = this.invokeStrategyRuntimeSync(
+      operatorId,
+      'getSnapshot:request-call',
+      (runtime) => runtime.getSnapshot(),
+    );
+    const nextTarget = nextSnapshot?.context?.targetCallsign;
+    if (this.deps.transitionTargetReservation
+        && !this.deps.transitionTargetReservation(operatorId, token.epoch, nextTarget)) {
+      if (checkpoint !== undefined) {
+        this.invokeStrategyRuntimeSync(
+          operatorId,
+          'restore:request-call-target-conflict',
+          (runtime) => runtime.restore(checkpoint),
+        );
+      }
+      logger.warn('Manual/plugin requestCall target is reserved by another same-station operator', {
+        operatorId,
+        callsign,
+        epoch: token.epoch,
+      });
+      return;
+    }
+    if (nextSnapshot?.qsoLifecycleEpoch !== undefined) {
+      this.eventEmitter.emit('qsoLifecycleChanged', {
+        operatorId,
+        lifecycleEpoch: nextSnapshot.qsoLifecycleEpoch,
+        runtimeGeneration: this.getStrategyInstance(operatorId)?.generation,
+      });
+    }
     operator.start();
     if (lastMessage) {
-      operator.setTransmitCycles((lastMessage.slotInfo.cycleNumber + 1) % 2);
+      operator.setTransmitCycles((lastMessage.slotInfo.cycleNumber + 1) % 2, {
+        commandEpoch: token.epoch,
+        source: options?.source === 'plugin' ? 'plugin' : 'manual',
+        reason: options?.reason ?? 'requestCall selected transmit cycle',
+      });
+    }
+    if (options?.submitCurrentFrame && !lastMessage) {
+      // Manual in-slot edits must enter the frame coordinator immediately.
+      // A selected frame already causes setTransmitCycles() to emit the
+      // authoritative refresh event, so only the no-frame path needs this
+      // explicit bridge. Automatic requestCall paths still wait for the normal
+      // encode boundary.
+      this.deps.triggerReEncode?.(operatorId, {
+        source: options.source ?? 'operator-edit',
+        reason: options.reason ?? 'requestCall updated operator context',
+        decisionEpoch: token.epoch,
+      });
     }
   }
 
   notifyTransmissionQueued(operatorId: string, transmission: string): void {
-    const runtime = this.getStrategyRuntime(operatorId);
-    runtime?.onTransmissionQueued?.(transmission);
+    this.invokeStrategyRuntimeSync(
+      operatorId,
+      'onTransmissionQueued',
+      (runtime) => runtime.onTransmissionQueued?.(transmission),
+    );
   }
 
   async interruptOperatorTransmission(operatorId: string): Promise<void> {
@@ -686,13 +1057,21 @@ export class PluginManager {
     this.pluginsConfig.configs[name] = { ...existing, settings };
     const globalInstance = this.globalInstances.get(name);
     if (globalInstance?.enabled) {
-      globalInstance.plugin.definition.hooks?.onConfigChange?.(settings, globalInstance.ctx);
+      void this.dispatcher.dispatchInstance(
+        globalInstance,
+        'onConfigChange',
+        (hook, guardedCtx) => hook(settings, guardedCtx),
+      );
     }
     // 通知所有操作员实例配置变更（仅 global scope 键）
     for (const operatorInstances of this.instances.values()) {
       const instance = operatorInstances.get(name);
       if (instance?.enabled) {
-        instance.plugin.definition.hooks?.onConfigChange?.(settings, instance.ctx);
+        void this.dispatcher.dispatchInstance(
+          instance,
+          'onConfigChange',
+          (hook, guardedCtx) => hook(settings, guardedCtx),
+        );
       }
     }
     this.bumpGeneration();
@@ -705,7 +1084,8 @@ export class PluginManager {
   }
 
   isOperatorPluginPaused(operatorId: string, pluginName: string): boolean {
-    return this.pluginsConfig.operatorPluginPauses?.[operatorId]?.includes(pluginName) ?? false;
+    return this.isTransmitControlOperatorPlugin(pluginName)
+      && (this.pluginsConfig.operatorPluginPauses?.[operatorId]?.includes(pluginName) ?? false);
   }
 
   async setOperatorPluginPaused(operatorId: string, pluginName: string, paused: boolean): Promise<string[]> {
@@ -897,16 +1277,75 @@ export class PluginManager {
       ? this.globalInstances.get(pluginName)
       : this.instances.get(requestContext.instanceTarget.operatorId)?.get(pluginName);
 
-    if (!instance) {
+    if (!instance || instance.lifecycle !== 'active') {
       throw new Error(`Plugin instance not found: ${pluginName}`);
     }
 
-    const bridge = instance.ctx.ui as import('./PluginUIBridge.js').PluginUIBridge;
+    const bridge = instance.rawCtx.ui as import('./PluginUIBridge.js').PluginUIBridge;
     if (bridge.hasPageHandler()) {
-      return bridge.handlePageInvoke(pageId, action, data, requestContext);
+      return this.invocationGuard.invoke(
+        instance,
+        'ui:onMessage',
+        () => bridge.handlePageInvoke(
+          pageId,
+          action,
+          data,
+          this.createInvocationScopedPageContext(instance, requestContext),
+        ),
+      );
     }
 
     throw new Error(`No page handler registered for plugin: ${pluginName}`);
+  }
+
+  private createInvocationScopedPageContext(
+    instance: PluginInstance,
+    requestContext: PluginUIRequestContext,
+  ): PluginUIRequestContext {
+    const invocation = this.invocationGuard.captureCurrent(instance);
+    const assertCurrent = () => this.invocationGuard.assertCaptured(instance, invocation);
+    const files = requestContext.files;
+    const page = requestContext.page;
+
+    return Object.freeze({
+      pageSessionId: requestContext.pageSessionId,
+      user: Object.freeze({
+        ...requestContext.user,
+        operatorIds: [...requestContext.user.operatorIds],
+        permissionGrants: requestContext.user.permissionGrants
+          ? structuredClone(requestContext.user.permissionGrants)
+          : undefined,
+      }),
+      resource: requestContext.resource ? Object.freeze({ ...requestContext.resource }) : undefined,
+      instanceTarget: Object.freeze({ ...requestContext.instanceTarget }),
+      files: Object.freeze({
+        async write(filePath: string, contents: Buffer) {
+          assertCurrent();
+          return files.write(filePath, contents);
+        },
+        async read(filePath: string) {
+          assertCurrent();
+          return files.read(filePath);
+        },
+        async delete(filePath: string) {
+          assertCurrent();
+          return files.delete(filePath);
+        },
+        async list(prefix?: string) {
+          assertCurrent();
+          return files.list(prefix);
+        },
+      }),
+      page: Object.freeze({
+        sessionId: page.sessionId,
+        pageId: page.pageId,
+        resource: page.resource ? Object.freeze({ ...page.resource }) : undefined,
+        push(action: string, payload?: unknown) {
+          assertCurrent();
+          page.push(action, payload);
+        },
+      }),
+    });
   }
 
   /** 更新 operator scope 插件设置，并通知相关实例 */
@@ -925,7 +1364,11 @@ export class PluginManager {
     // 通知该操作员的实例配置变更
     const instance = this.instances.get(operatorId)?.get(pluginName);
     if (instance?.enabled) {
-      instance.plugin.definition.hooks?.onConfigChange?.(mergedSettings, instance.ctx);
+      void this.dispatcher.dispatchInstance(
+        instance,
+        'onConfigChange',
+        (hook, guardedCtx) => hook(mergedSettings, guardedCtx),
+      );
     }
     this.bumpGeneration();
     this.broadcastStatusChanged(pluginName);
@@ -1100,7 +1543,8 @@ export class PluginManager {
     return Boolean(
       plugin
       && (plugin.definition.instanceScope ?? 'operator') === 'operator'
-      && plugin.definition.permissions?.includes('operator:transmit-control'),
+      && plugin.definition.permissions?.includes('operator:transmit-control')
+      && typeof plugin.definition.isAutoCallEnabled === 'function',
     );
   }
 
@@ -1115,6 +1559,9 @@ export class PluginManager {
     }
     if (!plugin.definition.permissions?.includes('operator:transmit-control')) {
       throw new Error(`Plugin does not declare operator:transmit-control: ${pluginName}`);
+    }
+    if (typeof plugin.definition.isAutoCallEnabled !== 'function') {
+      throw new Error(`Plugin is not an automatic calling controller: ${pluginName}`);
     }
     if (!this.instances.get(operatorId)?.has(pluginName)) {
       throw new Error(`Plugin instance not found for operator: plugin=${pluginName}, operator=${operatorId}`);
@@ -1171,32 +1618,92 @@ export class PluginManager {
     const operatorInstances = this.instances.get(operatorId);
     const scopedInstances = operatorInstances ? Array.from(operatorInstances.values()) : [];
     const globalInstances = Array.from(this.globalInstances.values()).filter(
-      (instance) => instance.enabled && !instance.autoDisabled,
+      (instance) => instance.enabled && !instance.autoDisabled && instance.lifecycle === 'active',
     );
     return [...globalInstances, ...scopedInstances].filter(
       (instance) => instance.plugin.definition.type === 'strategy'
         ? instance === this.getStrategyInstance(operatorId)
-        : instance.enabled && !instance.autoDisabled && !this.isInstancePaused(instance),
+        : instance.enabled
+          && !instance.autoDisabled
+          && instance.lifecycle === 'active'
+          && !this.isInstancePaused(instance),
     );
   }
 
   private getStrategyInstance(operatorId: string): PluginInstance | undefined {
     const strategyName = this.getResolvedStrategyName(operatorId);
     const instance = this.instances.get(operatorId)?.get(strategyName);
-    if (instance?.enabled && !instance.autoDisabled && !this.isInstancePaused(instance)) {
+    if (instance?.enabled
+        && !instance.autoDisabled
+        && instance.lifecycle === 'active'
+        && !this.isInstancePaused(instance)) {
       return instance;
-    }
-
-    const fallback = this.instances.get(operatorId)?.get(BUILTIN_STANDARD_QSO_PLUGIN_NAME);
-    if (fallback?.enabled && !fallback.autoDisabled && !this.isInstancePaused(fallback)) {
-      return fallback;
     }
 
     return undefined;
   }
 
+  private assertStrategyRuntimeV2(pluginName: string, runtime: StrategyRuntime | undefined): asserts runtime is StrategyRuntime {
+    if (!runtime) {
+      throw new Error(`${pluginName} did not create a strategy runtime`);
+    }
+    const requiredMethods: Array<keyof StrategyRuntime> = [
+      'checkpoint',
+      'restore',
+      'decide',
+      'getTransmitText',
+      'getSnapshot',
+      'requestCall',
+      'patchContext',
+      'setState',
+      'setSlotContent',
+      'reset',
+    ];
+    const missing = requiredMethods.filter((name) => typeof runtime[name] !== 'function');
+    if (missing.length > 0) {
+      throw new Error(`${pluginName} strategy runtime is missing v2 methods: ${missing.join(', ')}`);
+    }
+    try {
+      structuredClone(runtime.checkpoint());
+    } catch (error) {
+      throw new Error(
+        `${pluginName} strategy checkpoint is not structured-cloneable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   private getStrategyRuntime(operatorId: string): StrategyRuntime | undefined {
     return this.getStrategyInstance(operatorId)?.runtime;
+  }
+
+  private async invokeStrategyRuntime<T>(
+    operatorId: string,
+    operation: string,
+    callback: (runtime: StrategyRuntime) => T | Promise<T>,
+    options?: { signal?: AbortSignal },
+  ): Promise<T | undefined> {
+    const instance = this.getStrategyInstance(operatorId);
+    if (!instance?.runtime) return undefined;
+    return this.invocationGuard.invoke(
+      instance,
+      operation,
+      () => callback(instance.runtime!),
+      { signal: options?.signal, drainOnExternalAbortMs: 1_000 },
+    );
+  }
+
+  private invokeStrategyRuntimeSync<T>(
+    operatorId: string,
+    operation: string,
+    callback: (runtime: StrategyRuntime) => T,
+  ): T | undefined {
+    const instance = this.getStrategyInstance(operatorId);
+    if (!instance?.runtime) return undefined;
+    return this.invocationGuard.invokeSync(
+      instance,
+      operation,
+      () => callback(instance.runtime!),
+    );
   }
 
   private getRepresentativeInstance(pluginName: string): PluginInstance | undefined {
@@ -1261,7 +1768,7 @@ export class PluginManager {
 
   private getAutoCallEnabledOperatorIds(pluginName: string): string[] | undefined {
     const plugin = this.loadedPlugins.get(pluginName);
-    if (!plugin?.definition.permissions?.includes('operator:transmit-control')) {
+    if (!this.isTransmitControlOperatorPlugin(pluginName) || !plugin) {
       return undefined;
     }
 
@@ -1271,11 +1778,9 @@ export class PluginManager {
       if (!instance?.enabled || instance.autoDisabled) {
         continue;
       }
-      if (typeof plugin.definition.isAutoCallEnabled !== 'function') {
-        continue;
-      }
       try {
-        if (plugin.definition.isAutoCallEnabled(instance.ctx) === true) {
+        const eligibilityContext = Object.freeze({ config: instance.rawCtx.config });
+        if (plugin.definition.isAutoCallEnabled!(eligibilityContext) === true) {
           ids.push(operatorId);
         }
       } catch (err) {
@@ -1341,9 +1846,9 @@ export class PluginManager {
 
     const discoveredPlugins = new Map<string, LoadedPlugin>();
     for (const builtin of BUILTIN_PLUGINS) {
-      validatePluginDefinition(builtin.definition);
-      discoveredPlugins.set(builtin.definition.name, {
-        definition: builtin.definition,
+      const definition = canonicalizePluginDefinition(builtin.definition);
+      discoveredPlugins.set(definition.name, {
+        definition,
         isBuiltIn: true,
         locales: builtin.locales,
         dirPath: builtin.dirPath,
@@ -1386,15 +1891,13 @@ export class PluginManager {
   private async teardownAllInstances(): Promise<void> {
     for (const [operatorId, operatorInstances] of this.instances) {
       for (const [pluginName, instance] of operatorInstances) {
-        if (!instance.enabled) continue;
-        await this.deactivateInstance(operatorId, instance).catch((err) => {
+        await this.deactivateInstance(operatorId, instance, true).catch((err) => {
           logger.warn(`Failed to deactivate plugin instance: plugin=${pluginName}, operator=${operatorId}`, err);
         });
       }
     }
     for (const [pluginName, instance] of this.globalInstances) {
-      if (!instance.enabled) continue;
-      await this.deactivateInstance(GLOBAL_PLUGIN_SCOPE_ID, instance).catch((err) => {
+      await this.deactivateInstance(GLOBAL_PLUGIN_SCOPE_ID, instance, true).catch((err) => {
         logger.warn(`Failed to deactivate global plugin instance: plugin=${pluginName}`, err);
       });
     }
@@ -1473,13 +1976,15 @@ export class PluginManager {
   }
 
   resetOperatorPluginRuntime(operatorId: string, reason: string): void {
-    const runtime = this.getStrategyRuntime(operatorId);
-    if (runtime) {
-      try {
-        runtime.reset(reason);
-      } catch (err) {
-        logger.warn(`Failed to reset strategy runtime: operator=${operatorId}`, err);
-      }
+    this.deps.releaseTargetReservation?.(operatorId);
+    try {
+      this.invokeStrategyRuntimeSync(
+        operatorId,
+        'reset',
+        (runtime) => runtime.reset(reason),
+      );
+    } catch (err) {
+      logger.warn(`Failed to reset strategy runtime: operator=${operatorId}`, err);
     }
     this.orchestrator.clearDecisionState(operatorId);
     this.deps.resetOperatorRuntime(operatorId, reason);
@@ -1491,6 +1996,18 @@ export class PluginManager {
     }
     const existing = this.pluginsConfig.configs[pluginName] ?? { enabled: true, settings: {} };
     this.pluginsConfig.configs[pluginName] = { ...existing, enabled: false };
+    const affectedInstances = [
+      this.globalInstances.get(pluginName),
+      ...Array.from(this.instances.values()).map((entries) => entries.get(pluginName)),
+    ].filter((instance): instance is PluginInstance => Boolean(instance));
+    for (const instance of affectedInstances) {
+      instance.enabled = false;
+      instance.autoDisabled = true;
+      const operatorId = instance.scope.kind === 'operator'
+        ? instance.scope.operatorId
+        : GLOBAL_PLUGIN_SCOPE_ID;
+      void this.deactivateInstance(operatorId, instance);
+    }
     logger.warn(`Plugin auto-disabled: ${pluginName}, reason: ${reason}`);
     this.bumpGeneration();
     this.broadcastStatusChanged(pluginName);
@@ -1738,10 +2255,75 @@ export class PluginManager {
     });
   }
 
-  private async activateInstance(operatorId: string, instance: PluginInstance): Promise<void> {
+  private activateInstance(operatorId: string, instance: PluginInstance): Promise<void> {
+    if (instance.lifecycle === 'disposed' || instance.desiredLifecycle === 'disposed') {
+      return Promise.reject(new Error(
+        `Cannot reactivate disposed plugin instance: ${instance.plugin.definition.name}`,
+      ));
+    }
+    instance.desiredLifecycle = 'active';
+    const revision = ++instance.lifecycleRevision;
+    const transition = instance.lifecycleTail.then(() => (
+      this.reconcileInstanceLifecycle(operatorId, instance, revision)
+    ));
+    instance.lifecycleTail = transition.catch(() => undefined);
+    return transition;
+  }
+
+  private async reconcileInstanceLifecycle(
+    operatorId: string,
+    instance: PluginInstance,
+    revision: number,
+  ): Promise<void> {
+    if (revision !== instance.lifecycleRevision) {
+      return;
+    }
+    if (instance.desiredLifecycle === 'active') {
+      if (!instance.enabled || instance.autoDisabled) {
+        return;
+      }
+      await this.activateInstanceNow(operatorId, instance, revision);
+      return;
+    }
+    await this.deactivateInstanceNow(operatorId, instance);
+  }
+
+  private isCurrentActivation(instance: PluginInstance, revision: number): boolean {
+    return instance.lifecycleRevision === revision
+      && instance.desiredLifecycle === 'active'
+      && instance.enabled
+      && !instance.autoDisabled;
+  }
+
+  private async activateInstanceNow(
+    operatorId: string,
+    instance: PluginInstance,
+    revision: number,
+  ): Promise<void> {
+    if (!this.isCurrentActivation(instance, revision)) {
+      return;
+    }
+    if (instance.lifecycle === 'active') {
+      return;
+    }
+    if (instance.lifecycle === 'disposed') {
+      throw new Error(`Cannot activate disposed plugin: ${instance.plugin.definition.name}`);
+    }
+    if (instance.lifecycle === 'stopping' || instance.lifecycle === 'quarantined') {
+      await this.deactivateInstanceNow(operatorId, instance);
+      if (!this.isCurrentActivation(instance, revision)) {
+        return;
+      }
+    }
+    instance.lifecycle = 'starting';
     const hook = instance.plugin.definition.onLoad;
     this.clearRuntimePanelContributionsForInstance(instance);
-    if (!hook) return;
+    if (!hook) {
+      if (this.isCurrentActivation(instance, revision)) {
+        instance.lifecycle = 'active';
+      }
+      return;
+    }
     try {
       this.clearPanelMetaForInstance(instance);
       this._logbookSyncHost.unregisterByPlugin(instance.plugin.definition.name);
@@ -1749,11 +2331,35 @@ export class PluginManager {
       if (instance.plugin.isBuiltIn) {
         const migrationFn = BUILTIN_MIGRATIONS[instance.plugin.definition.name];
         if (migrationFn) {
-          await migrationFn(instance.ctx);
+          await this.invocationGuard.invoke(
+            instance,
+            'builtin:migration',
+            () => migrationFn(instance.ctx),
+          );
+          if (!this.isCurrentActivation(instance, revision)) {
+            await this.deactivateInstanceNow(operatorId, instance);
+            return;
+          }
         }
       }
-      await hook(instance.ctx);
+      await this.invocationGuard.invoke(instance, 'onLoad', () => hook(instance.ctx as never));
+      if (!this.isCurrentActivation(instance, revision)) {
+        await this.deactivateInstanceNow(operatorId, instance);
+        return;
+      }
+      instance.lifecycle = 'active';
     } catch (err) {
+      if (!this.isCurrentActivation(instance, revision)) {
+        await this.deactivateInstanceNow(operatorId, instance);
+        return;
+      }
+      instance.desiredLifecycle = 'inactive';
+      instance.lifecycleRevision += 1;
+      instance.lifecycle = 'quarantined';
+      instance.autoDisabled = true;
+      this.closeInstanceIngress(instance);
+      this.invocationGuard.revokeInstance(instance, 'plugin onLoad failed');
+      await instance.rawCtx.network?.udp.closeAll().catch(() => undefined);
       this.emitPluginRuntimeLog({
         stage: 'activate',
         level: 'error',
@@ -1769,11 +2375,53 @@ export class PluginManager {
     }
   }
 
-  private async deactivateInstance(operatorId: string, instance: PluginInstance): Promise<void> {
+  private deactivateInstance(
+    operatorId: string,
+    instance: PluginInstance,
+    dispose = false,
+  ): Promise<void> {
+    if (instance.lifecycle === 'disposed') {
+      return Promise.resolve();
+    }
+    instance.desiredLifecycle = dispose ? 'disposed' : 'inactive';
+    const revision = ++instance.lifecycleRevision;
+    // Revoke ingress synchronously; queued or hung onLoad work must not gain a
+    // command-capable window after disable has already been requested.
+    if (instance.lifecycle !== 'inactive') {
+      instance.lifecycle = 'stopping';
+    }
+    this.closeInstanceIngress(instance);
+    this.invocationGuard.revokeInstance(instance, 'plugin instance deactivation requested');
+    const transition = instance.lifecycleTail.then(() => (
+      this.reconcileInstanceLifecycle(operatorId, instance, revision)
+    ));
+    instance.lifecycleTail = transition.catch(() => undefined);
+    return transition;
+  }
+
+  private async deactivateInstanceNow(
+    operatorId: string,
+    instance: PluginInstance,
+  ): Promise<void> {
+    if (instance.lifecycle === 'disposed') {
+      return;
+    }
+    const wasLoaded = instance.lifecycle !== 'inactive';
+    if (!wasLoaded && instance.desiredLifecycle !== 'disposed') return;
+    instance.lifecycle = 'stopping';
+    this.closeInstanceIngress(instance);
+    await instance.rawCtx.network?.udp.closeAll().catch(() => undefined);
+    this.invocationGuard.revokeInstance(instance, 'plugin instance stopping');
+
     const hook = instance.plugin.definition.onUnload;
-    if (hook) {
+    if (wasLoaded && hook) {
       try {
-        await hook(instance.ctx);
+        await this.invocationGuard.invoke(
+          instance,
+          'onUnload',
+          () => hook(instance.ctx as never),
+          { allowedContextRoots: new Set(['store', 'timers', 'files']) },
+        );
       } catch (err) {
         this.emitPluginRuntimeLog({
           stage: 'activate',
@@ -1789,23 +2437,43 @@ export class PluginManager {
         logger.warn(`onUnload error: plugin=${instance.plugin.definition.name}, operator=${operatorId}`, err);
       }
     }
+    this.closeInstanceIngress(instance);
+    this.invocationGuard.revokeInstance(instance, 'plugin instance unloaded');
     this.clearPanelMetaForInstance(instance);
     this.clearRuntimePanelContributionsForInstance(instance);
+    this._logbookSyncHost.unregisterByPlugin(instance.plugin.definition.name, instance.generation);
+    // PluginContextFactory 总是创建 PluginStorageProvider 实例（实现 FlushableKVStore）
+    const globalStore = instance.rawCtx.store.global as FlushableKVStore;
+    const operatorStore = instance.rawCtx.store.operator as FlushableKVStore;
+    await globalStore.flush().catch(() => {});
+    await operatorStore.flush().catch(() => {});
+    if (instance.desiredLifecycle === 'disposed') {
+      globalStore.dispose?.();
+      operatorStore.dispose?.();
+      instance.lifecycle = 'disposed';
+    } else {
+      instance.lifecycle = 'inactive';
+    }
+  }
+
+  private closeInstanceIngress(instance: PluginInstance): void {
+    instance.rawCtx.timers.clearAll();
+    const bridge = instance.rawCtx.ui as import('./PluginUIBridge.js').PluginUIBridge;
+    bridge.clearPageHandler();
+    const instanceTarget: PluginUIInstanceTarget = instance.scope.kind === 'global'
+      ? { kind: 'global' }
+      : { kind: 'operator', operatorId: instance.scope.operatorId };
+    for (const sessionId of this.pageSessions.deleteByPluginInstance(
+      instance.plugin.definition.name,
+      instanceTarget,
+    )) {
+      this.pageSessionPushQueues.delete(sessionId);
+    }
     this.pluginEventBusHost.unsubscribeAll({
       pluginName: instance.plugin.definition.name,
       instanceScope: instance.scope.kind,
       operatorId: instance.scope.kind === 'operator' ? instance.scope.operatorId : undefined,
     });
-    this._logbookSyncHost.unregisterByPlugin(instance.plugin.definition.name);
-    instance.ctx.timers.clearAll();
-    await instance.ctx.network?.udp.closeAll().catch(() => {});
-    // PluginContextFactory 总是创建 PluginStorageProvider 实例（实现 FlushableKVStore）
-    const globalStore = instance.ctx.store.global as FlushableKVStore;
-    const operatorStore = instance.ctx.store.operator as FlushableKVStore;
-    await globalStore.flush().catch(() => {});
-    await operatorStore.flush().catch(() => {});
-    globalStore.dispose?.();
-    operatorStore.dispose?.();
   }
 
   private registerEngineListeners(): void {

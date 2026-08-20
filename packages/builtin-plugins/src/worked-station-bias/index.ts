@@ -1,4 +1,4 @@
-import type { PluginDefinition, ScoredCandidate } from '@tx5dr/plugin-api';
+import { definePlugin, type ScoredCandidate } from '@tx5dr/plugin-api';
 import { isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
@@ -12,11 +12,12 @@ function getSenderCallsign(message: unknown): string {
   return '';
 }
 
-export const workedStationBiasPlugin: PluginDefinition = {
+export const workedStationBiasPlugin = definePlugin({
   name: 'worked-station-bias',
   version: '1.0.0',
   type: 'utility',
   description: 'Bias candidate scores based on whether the callsign was already worked',
+  permissions: ['logbook:read'],
 
   settings: {
     biasOverview: {
@@ -79,7 +80,7 @@ export const workedStationBiasPlugin: PluginDefinition = {
       return scored;
     },
   },
-};
+});
 
 export const workedStationBiasLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,

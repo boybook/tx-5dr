@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { PluginContext } from '@tx5dr/plugin-api';
+import type { PluginContextFor } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import { WaveLogSyncProvider, buildWavelogQslStatusUpdates } from './provider.js';
 
@@ -682,3 +682,4 @@ describe('WaveLogSyncProvider', () => {
     expect(notifyUpdated).toHaveBeenCalledTimes(1);
   });
 });
+type PluginContext = PluginContextFor<readonly ['network', 'logbook:read', 'logbook:write']>;

@@ -31,7 +31,6 @@ function createOperator(overrides: Partial<OperatorConfig> = {}): StandardQSOPlu
     },
     hasWorkedCallsign: vi.fn(async () => false),
     isTargetBeingWorkedByOthers: vi.fn(() => false),
-    recordQSOLog: vi.fn(async record => record),
     notifySlotsUpdated: vi.fn(),
     notifyStateChanged: vi.fn(),
   };
@@ -50,79 +49,117 @@ function createParsedMessage(rawMessage: string, overrides: Partial<ParsedFT8Mes
   };
 }
 
-function completedQSORecord(id = 'persisted-1') {
+function decisionMeta(overrides: Partial<{
+  epoch: number;
+  source: 'slot-auto' | 'late-decode';
+  isReDecision: boolean;
+  signal: AbortSignal;
+}> = {}) {
   return {
-    id,
-    callsign: 'JA1AAA',
-    frequency: 7_074_000,
-    mode: 'FT8',
-    startTime: 1,
-    messageHistory: [],
-    myCallsign: 'BG5DRB',
+    epoch: 1,
+    source: 'slot-auto' as const,
+    isReDecision: false,
+    signal: new AbortController().signal,
+    ...overrides,
   };
 }
 
-describe('StandardQSOPluginRuntime durable QSO lifecycle', () => {
-  it('keeps the final frame available while joining concurrent QSO persistence', async () => {
-    let resolvePersistence!: (record: ReturnType<typeof completedQSORecord>) => void;
+describe('StandardQSOPluginRuntime v2 decision lifecycle', () => {
+  it('returns QSO completion as a declarative effect without blocking the final frame', async () => {
     const operator = createOperator();
-    operator.recordQSOLog = vi.fn(() => new Promise((resolve) => {
-      resolvePersistence = resolve;
-    }));
     const runtime = new StandardQSOPluginRuntime(operator);
-    runtime.patchContext({ targetCallsign: 'JA1AAA' });
-    runtime.setState('TX4');
+    runtime.patchContext({
+      targetCallsign: 'JA1AAA',
+      targetGrid: 'PM95',
+      reportSent: -10,
+      reportReceived: -8,
+    });
+    await runtime.changeState('TX4');
 
-    const first = runtime.persistCompletedQSO(completedQSORecord('temporary-1'));
-    const second = runtime.persistCompletedQSO(completedQSORecord('temporary-2'));
-    await Promise.resolve();
+    const result = await runtime.decide([], decisionMeta());
 
-    expect(operator.recordQSOLog).toHaveBeenCalledTimes(1);
-    expect(runtime.getTransmitText()).toBe('JA1AAA BG5DRB RR73');
-    resolvePersistence(completedQSORecord());
-
-    await expect(first).resolves.toMatchObject({ id: 'persisted-1' });
-    await expect(second).resolves.toMatchObject({ id: 'persisted-1' });
-    await expect(runtime.persistCompletedQSO(completedQSORecord('temporary-3')))
-      .resolves.toMatchObject({ id: 'persisted-1' });
-    expect(operator.recordQSOLog).toHaveBeenCalledTimes(1);
+    expect(result.transmission).toBe('JA1AAA BG5DRB RR73');
+    expect(result.snapshot.currentState).toBe('TX4');
+    expect(result.qsoCompletion?.record).toMatchObject({
+      callsign: 'JA1AAA',
+      grid: 'PM95',
+      reportSent: '-10',
+      reportReceived: '-8',
+    });
+    expect(result.qsoCompletion?.lifecycleEpoch).toBe(
+      result.snapshot.qsoLifecycleEpoch,
+    );
   });
 
-  it('keeps the failed lifecycle stopped without starting a second persistence attempt', async () => {
-    const operator = createOperator();
-    operator.recordQSOLog = vi.fn().mockRejectedValue(new Error('disk full'));
-    const runtime = new StandardQSOPluginRuntime(operator);
+  it('holds a direct handoff until the previous QSO is durable, then starts a distinct lifecycle', async () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator());
+    expect(runtime.requestCall('JA1AAA', undefined)).toBe(true);
+    runtime.patchContext({ reportSent: -10, reportReceived: -8 });
+    await runtime.changeState('TX4');
 
-    await expect(runtime.persistCompletedQSO(completedQSORecord())).rejects.toThrow('disk full');
-    expect(await runtime.decide([])).toEqual({ stop: true });
-    expect(runtime.getTransmitText()).toBeNull();
+    const first = await runtime.decide([
+      createParsedMessage('BG5DRB JA1AAA 73'),
+      createParsedMessage('BG5DRB JA2BBB PM95', { snr: -3 }),
+    ], decisionMeta());
 
-    runtime.requestCall('JA2BBB', undefined);
-    expect(runtime.getSnapshot().context?.targetCallsign).toBeUndefined();
-    expect(operator.recordQSOLog).toHaveBeenCalledTimes(1);
+    expect(first.qsoCompletion?.record.callsign).toBe('JA1AAA');
+    expect(first.snapshot.currentState).toBe('TX6');
+    expect(first.snapshot.context?.targetCallsign).toBeUndefined();
+
+    const blocked = await runtime.decide([
+      createParsedMessage('BG5DRB JA2BBB PM95', { snr: -3 }),
+    ], decisionMeta({ epoch: 2 }));
+    expect(blocked.snapshot.currentState).toBe('TX6');
+    expect(blocked.snapshot.context?.targetCallsign).toBeUndefined();
+
+    runtime.settleQSOCompletion({
+      lifecycleEpoch: first.qsoCompletion!.lifecycleEpoch,
+      recordId: first.qsoCompletion!.record.id,
+      status: 'committed',
+    });
+    const second = await runtime.decide([
+      createParsedMessage('BG5DRB JA2BBB PM95', { snr: -3 }),
+    ], decisionMeta({ epoch: 3 }));
+
+    expect(second.snapshot.currentState).toBe('TX2');
+    expect(second.snapshot.context?.targetCallsign).toBe('JA2BBB');
+    expect(second.snapshot.qsoLifecycleEpoch).toBeGreaterThan(
+      first.qsoCompletion!.lifecycleEpoch,
+    );
+
+    runtime.patchContext({ reportSent: -3, reportReceived: -6 });
+    await runtime.changeState('TX4');
+    const secondCompletion = await runtime.decide([], decisionMeta({ epoch: 4 }));
+    expect(secondCompletion.qsoCompletion?.record.callsign).toBe('JA2BBB');
+    expect(secondCompletion.qsoCompletion?.lifecycleEpoch).toBe(
+      second.snapshot.qsoLifecycleEpoch,
+    );
   });
 
-  it('rejects a duplicate requestCall for the already committed target', async () => {
-    const operator = createOperator();
-    const runtime = new StandardQSOPluginRuntime(operator);
-    runtime.patchContext({ targetCallsign: 'JA1AAA' });
+  it('produces a structured-cloneable checkpoint and restores speculative state', async () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator());
+    runtime.requestCall('JA1AAA', undefined);
+    const checkpoint = structuredClone(runtime.checkpoint());
 
-    await runtime.persistCompletedQSO(completedQSORecord());
+    runtime.patchContext({ targetCallsign: 'JA2BBB', reportSent: -4 });
+    runtime.setState('TX5');
+    runtime.restore(checkpoint);
 
-    expect(runtime.requestCall('JA1AAA', undefined)).toBe(false);
-    expect(operator.recordQSOLog).toHaveBeenCalledTimes(1);
+    expect(runtime.getSnapshot()).toMatchObject({
+      currentState: 'TX1',
+      context: { targetCallsign: 'JA1AAA' },
+    });
   });
 
-  it('allows a new lifecycle only after the previous QSO context is cleared', async () => {
-    const operator = createOperator();
-    const runtime = new StandardQSOPluginRuntime(operator);
+  it('rejects an already-aborted decision before mutating runtime state', async () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator());
+    const checkpoint = structuredClone(runtime.checkpoint());
+    const controller = new AbortController();
+    controller.abort();
 
-    await runtime.persistCompletedQSO(completedQSORecord('persisted-1'));
-    await runtime.persistCompletedQSO(completedQSORecord('duplicate'));
-    runtime.clearQSOContext();
-    await runtime.persistCompletedQSO(completedQSORecord('persisted-2'));
-
-    expect(operator.recordQSOLog).toHaveBeenCalledTimes(2);
+    await expect(runtime.decide([], decisionMeta({ signal: controller.signal })))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(runtime.checkpoint()).toEqual(checkpoint);
   });
 });
 
@@ -291,15 +328,15 @@ describe('StandardQSOPluginRuntime nonstandard callsign slots', () => {
     });
     runtime.setState('TX3');
 
-    await runtime.decide([parsedMessage]);
+    const decision = await runtime.decide([parsedMessage], decisionMeta());
 
     const snapshot = runtime.getSnapshot();
     expect(snapshot.currentState).toBe('TX5');
     expect(snapshot.slots?.TX5).toBe('EX8ABR BD4XYR 73');
-    expect(operator.recordQSOLog).toHaveBeenCalledWith(expect.objectContaining({
+    expect(decision.qsoCompletion?.record).toMatchObject({
       callsign: 'EX8ABR',
       myCallsign: 'BD4XYR',
-    }));
+    });
   });
 
   it('advances from TX3 when a portable Fox/Hound RR73 is clipped after the Fox callsign', async () => {
@@ -315,15 +352,15 @@ describe('StandardQSOPluginRuntime nonstandard callsign slots', () => {
     });
     runtime.setState('TX3');
 
-    await runtime.decide([parsedMessage]);
+    const decision = await runtime.decide([parsedMessage], decisionMeta());
 
     const snapshot = runtime.getSnapshot();
     expect(snapshot.currentState).toBe('TX5');
     expect(snapshot.slots?.TX5).toBe('EX8ABR BH5HIE 73');
-    expect(operator.recordQSOLog).toHaveBeenCalledWith(expect.objectContaining({
+    expect(decision.qsoCompletion?.record).toMatchObject({
       callsign: 'EX8ABR',
       myCallsign: 'BH5HIE',
-    }));
+    });
   });
 
   it('matches a portable Fox callsign response against a base target callsign', async () => {
@@ -338,7 +375,7 @@ describe('StandardQSOPluginRuntime nonstandard callsign slots', () => {
     });
     runtime.setState('TX1');
 
-    await runtime.decide([parsedMessage]);
+    await runtime.decide([parsedMessage], decisionMeta());
 
     const snapshot = runtime.getSnapshot();
     expect(snapshot.currentState).toBe('TX3');
@@ -357,7 +394,7 @@ describe('StandardQSOPluginRuntime partial-decode `<...>` handling', () => {
       slotId: 'slot-partial-rrr',
     });
 
-    await runtime.decide([parsedMessage]);
+    await runtime.decide([parsedMessage], decisionMeta());
 
     const snapshot = runtime.getSnapshot();
     expect(snapshot.currentState).toBe('TX6');
@@ -372,7 +409,7 @@ describe('StandardQSOPluginRuntime partial-decode `<...>` handling', () => {
       slotId: 'slot-partial-cq',
     });
 
-    await runtime.decide([parsedMessage]);
+    await runtime.decide([parsedMessage], decisionMeta());
 
     const snapshot = runtime.getSnapshot();
     expect(snapshot.currentState).toBe('TX6');

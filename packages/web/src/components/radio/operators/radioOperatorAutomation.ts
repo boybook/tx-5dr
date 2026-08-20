@@ -1,7 +1,8 @@
 import type { PluginStatus } from '@tx5dr/contracts';
 
 export function isTransmitControlPlugin(plugin: PluginStatus): boolean {
-  return plugin.permissions?.includes('operator:transmit-control') ?? false;
+  return (plugin.permissions?.includes('operator:transmit-control') ?? false)
+    && (plugin.capabilities?.includes('auto_call_control') ?? false);
 }
 
 export function isTransmitControlPluginAutoCallEnabled(plugin: PluginStatus, operatorId: string): boolean {

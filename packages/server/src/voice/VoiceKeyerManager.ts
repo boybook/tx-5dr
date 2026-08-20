@@ -222,7 +222,7 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
     });
 
     try {
-      await this.deps.audioStreamManager.stopCurrentPlayback();
+      await this.deps.audioStreamManager.stopCurrentPlayback({ kind: 'voice-keyer' });
     } catch {
       // stopCurrentPlayback may report that no complete clip is active; PTT cleanup below is authoritative.
     }
@@ -356,7 +356,7 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
     this.setStatus(this.statusFor(active, 'repeat-waiting', null));
 
     try {
-      await this.deps.audioStreamManager.stopCurrentPlayback();
+      await this.deps.audioStreamManager.stopCurrentPlayback({ kind: 'voice-keyer' });
     } catch {
       // The lead-in/tail path may not have an audio clip in flight yet.
     }

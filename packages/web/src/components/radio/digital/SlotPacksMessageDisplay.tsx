@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { FramesTable, FrameGroup, FrameDisplayMessage } from './FramesTable';
+import { resolveFrameCallsign } from './frameCallsign';
 import { parseFT8LocationInfo, FT8MessageParser, evaluateCallsignFilter, evaluateDxccBlocklist, getBandFromFrequency, CycleUtils, resolveGridLocation } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useMyRelatedTimeline, useRadioState, useSlotPacks } from '../../../store/radioStore';
 import type { FrameMessage, WSSelectedFrame } from '@tx5dr/contracts';
@@ -187,8 +188,9 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
   };
 
   const handleRowDoubleClick = (message: FrameDisplayMessage, _group: FrameGroup) => {
-    const callsign = message.logbookAnalysis?.callsign;
-    if (currentOperatorId && callsign && !getMyCallsigns().includes(callsign)) {
+    const callsign = resolveFrameCallsign(message);
+    const ownCallsigns = new Set(getMyCallsigns().map((call) => call.toUpperCase()));
+    if (currentOperatorId && callsign && !ownCallsigns.has(callsign.toUpperCase())) {
       myRelatedTimeline.seedSelectedRx({
         message,
         group: _group,

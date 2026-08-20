@@ -70,15 +70,11 @@ export class ClockCoordinator {
       // 处理器在 await 间隙通过 addTransmissionFrame 覆盖 lastSlotPack
       const latestSlotPack = slotPackManager.getLatestSlotPack();
 
-      // 确保PTT在新时隙开始时被停止
-      await getTransmissionPipeline().forceStopPTT();
-
-      // 停止残留音频 + 清空时隙缓存
-      await getTransmissionPipeline().onSlotStart();
+      // A physical lease may still be starting or draining at the boundary.
+      // The pipeline only clears a terminal/idle slot; it never truncates RF.
+      await getTransmissionPipeline().onSlotStart(slotInfo);
 
       // 时隙边界清理：取消重决策 debounce + 清空编码请求ID映射
-      operatorManager.onSlotBoundary();
-
       engineEmitter.emit('slotStart', slotInfo, latestSlotPack);
 
       // 广播所有操作员的状态更新

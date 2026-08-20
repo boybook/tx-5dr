@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createMockContext,
   createMockNetworkControl,
+  createMockOperatorCommandPort,
   createMockParsedMessage,
   createMockSlotInfo,
   type MockNetworkControl,
@@ -10,6 +11,7 @@ import type { QSORecord } from '@tx5dr/plugin-api';
 import { decodeWsjtMessage, encodeWsjtMessage } from './wsjtx-codec.js';
 import { WsjtMessageType } from './wsjtx-types.js';
 import { WsjtUdpSession, type WsjtUdpSettings } from './wsjtx-session.js';
+import { qsoUdpBroadcastPlugin } from './index.js';
 
 function settings(overrides: Partial<WsjtUdpSettings> = {}): WsjtUdpSettings {
   return {
@@ -39,9 +41,19 @@ function sentBuffer(network: MockNetworkControl, index: number): Buffer {
 }
 
 describe('WSJT-X UDP session', () => {
+  it('uses generic transmit-control gating without declaring automatic calling', () => {
+    expect(qsoUdpBroadcastPlugin.isAutoCallEnabled).toBeUndefined();
+    expect(qsoUdpBroadcastPlugin.isTransmitControlEnabled?.({
+      config: { allowReplyRequests: true },
+    })).toBe(true);
+    expect(qsoUdpBroadcastPlugin.isTransmitControlEnabled?.({
+      config: { allowReplyRequests: false },
+    })).toBe(false);
+  });
+
   it('sends initial heartbeat/status and registers heartbeat timer', async () => {
     const network = createMockNetworkControl();
-    const ctx = createMockContext({ network });
+    const ctx = createMockContext({ permissions: ['network', 'operator:transmit-control'], network });
     const session = new WsjtUdpSession(ctx, settings());
 
     await session.start();
@@ -55,7 +67,7 @@ describe('WSJT-X UDP session', () => {
 
   it('negotiates schema from server heartbeat per target', async () => {
     const network = createMockNetworkControl();
-    const ctx = createMockContext({ network });
+    const ctx = createMockContext({ permissions: ['network', 'operator:transmit-control'], network });
     const session = new WsjtUdpSession(ctx, settings());
     await session.start();
 
@@ -73,7 +85,7 @@ describe('WSJT-X UDP session', () => {
 
   it('broadcasts decodes with raw frame confidence and replays them as old decodes', async () => {
     const network = createMockNetworkControl();
-    const ctx = createMockContext({ network });
+    const ctx = createMockContext({ permissions: ['network', 'operator:transmit-control'], network });
     const session = new WsjtUdpSession(ctx, settings());
     await session.start();
     network._sockets[0]._sent.length = 0;
@@ -103,9 +115,13 @@ describe('WSJT-X UDP session', () => {
   });
 
   it('keeps risky inbound commands denied until explicitly enabled', async () => {
-    const haltTransmission = vi.fn();
+    const submitCommand = vi.fn();
     const network = createMockNetworkControl();
-    const ctx = createMockContext({ network, operator: { haltTransmission } });
+    const ctx = createMockContext({
+      permissions: ['network', 'operator:transmit-control'],
+      network,
+      operatorCommands: createMockOperatorCommandPort(submitCommand),
+    });
     const session = new WsjtUdpSession(ctx, settings());
     await session.start();
 
@@ -114,13 +130,17 @@ describe('WSJT-X UDP session', () => {
       { address: '127.0.0.1', port: 2237 },
     );
 
-    expect(haltTransmission).not.toHaveBeenCalled();
+    expect(submitCommand).not.toHaveBeenCalled();
   });
 
   it('maps allowed FreeText requests to operator control', async () => {
-    const sendFreeText = vi.fn();
+    const submitCommand = vi.fn();
     const network = createMockNetworkControl();
-    const ctx = createMockContext({ network, operator: { sendFreeText } });
+    const ctx = createMockContext({
+      permissions: ['network', 'operator:transmit-control'],
+      network,
+      operatorCommands: createMockOperatorCommandPort(submitCommand),
+    });
     const session = new WsjtUdpSession(ctx, settings({ allowFreeTextRequests: true }));
     await session.start();
 
@@ -129,13 +149,17 @@ describe('WSJT-X UDP session', () => {
       { address: '127.0.0.1', port: 2237 },
     );
 
-    expect(sendFreeText).toHaveBeenCalledWith('TNX 73');
+    expect(submitCommand).toHaveBeenCalledWith({ type: 'send-free-text', text: 'TNX 73' });
   });
 
   it('uses the decoded slotPack cycle when handling remote Reply requests', async () => {
-    const replyToDecode = vi.fn();
+    const submitCommand = vi.fn();
     const network = createMockNetworkControl();
-    const ctx = createMockContext({ network, operator: { replyToDecode } });
+    const ctx = createMockContext({
+      permissions: ['network', 'operator:transmit-control'],
+      network,
+      operatorCommands: createMockOperatorCommandPort(submitCommand),
+    });
     const session = new WsjtUdpSession(ctx, settings({ allowReplyRequests: true }));
     await session.start();
 
@@ -175,17 +199,21 @@ describe('WSJT-X UDP session', () => {
       { address: '127.0.0.1', port: 2237 },
     );
 
-    expect(replyToDecode).toHaveBeenCalledTimes(1);
-    expect(replyToDecode.mock.calls[0][0].lastMessage.slotInfo).toMatchObject({
+    expect(submitCommand).toHaveBeenCalledTimes(1);
+    expect(submitCommand.mock.calls[0][0]).toMatchObject({
+      type: 'reply-to-decode',
+      lastMessage: { slotInfo: {
       id: 'slot-15000',
       startMs: 15_000,
       cycleNumber: 1,
+      } },
     });
   });
 
   it('sends Clear then Status with the new dial frequency on frequency changes', async () => {
     const network = createMockNetworkControl();
     const ctx = createMockContext({
+      permissions: ['network', 'operator:transmit-control'],
       network,
       radio: { frequency: 14_074_000 },
     });
@@ -215,7 +243,7 @@ describe('WSJT-X UDP session', () => {
 
   it('clears old decode history and deduplicates repeated frequency changes', async () => {
     const network = createMockNetworkControl();
-    const ctx = createMockContext({ network });
+    const ctx = createMockContext({ permissions: ['network', 'operator:transmit-control'], network });
     const session = new WsjtUdpSession(ctx, settings());
     await session.start();
     network._sockets[0]._sent.length = 0;
@@ -257,7 +285,7 @@ describe('WSJT-X UDP session', () => {
 
   it('sends Type 5, Type 12 and legacy raw ADIF on QSO completion', async () => {
     const network = createMockNetworkControl();
-    const ctx = createMockContext({ network });
+    const ctx = createMockContext({ permissions: ['network', 'operator:transmit-control'], network });
     const session = new WsjtUdpSession(ctx, settings());
     await session.start();
     network._sockets[0]._sent.length = 0;

@@ -1,6 +1,8 @@
 import type {
-  PluginDefinition,
-  PluginContext,
+  AnyPluginDefinition,
+  RuntimePluginContext,
+  PluginOperatorCommand,
+  PluginOperatorCommandResult,
   StrategyRuntime,
   KVStore,
   PluginUIInstanceTarget,
@@ -36,7 +38,7 @@ export interface FlushableKVStore extends KVStore {
  * 已加载的插件（内存中的运行时表示）
  */
 export interface LoadedPlugin {
-  definition: PluginDefinition;
+  definition: AnyPluginDefinition;
   /** 是否为内置插件（不可禁用、不来自文件系统） */
   isBuiltIn: boolean;
   /** 插件目录路径（内置插件若有 UI 文件也需提供） */
@@ -54,9 +56,21 @@ export interface PluginInstance {
   plugin: LoadedPlugin;
   scope: { kind: 'operator'; operatorId: string } | { kind: 'global' };
   /** 当前操作员的 PluginContext */
-  ctx: PluginContext;
+  ctx: RuntimePluginContext;
+  /** Unguarded context retained only for host-owned teardown. */
+  rawCtx: RuntimePluginContext;
   /** strategy 插件的显式运行时 */
   runtime?: StrategyRuntime;
+  /** Monotonic host generation used to revoke stale async continuations. */
+  generation: number;
+  /** Host-owned lifecycle gate. Only `active` instances may accept new ingress. */
+  lifecycle: 'inactive' | 'starting' | 'active' | 'stopping' | 'quarantined' | 'disposed';
+  /** Serializes enable, disable, reload and teardown for this instance. */
+  lifecycleTail: Promise<void>;
+  /** Latest requested lifecycle state; queued transitions reconcile to this value. */
+  desiredLifecycle: 'active' | 'inactive' | 'disposed';
+  /** Monotonic request generation used to tombstone obsolete transitions. */
+  lifecycleRevision: number;
   /** 是否已启用（enabled in config） */
   enabled: boolean;
   /** 连续错误计数（按 hook 名统计） */
@@ -77,11 +91,16 @@ export interface PluginSystemRuntimeState {
  * 操作员决策状态 — 由 DecisionOrchestrator 管理
  */
 export interface OperatorDecisionState {
-  decisionInProgress: boolean;
   lastDecisionTransmission: string | null;
   lastDecisionMessageSet: Set<string> | null;
   /** handleEncodeStart 已排队的发射文本（用于检测 slotStart/encodeStart 竞态） */
   preDecisionEncodedTransmission?: string;
+}
+
+export interface TransmissionRefreshOptions {
+  source?: 'late-decode' | 'operator-edit' | 'plugin';
+  reason?: string;
+  decisionEpoch?: number;
 }
 
 /**
@@ -97,30 +116,51 @@ export interface DecisionOrchestratorDeps {
   getCurrentMode: () => import('@tx5dr/contracts').ModeDescriptor;
   getOperatorAutomationSnapshot: (id: string) => import('@tx5dr/plugin-api').StrategyRuntimeSnapshot | null;
   interruptOperatorTransmission: (operatorId: string) => Promise<void>;
+  requestOperatorStrategyStop?: (operatorId: string, reason: string) => void;
+  transitionTargetReservation?: (operatorId: string, epoch: number, targetCallsign?: string) => boolean;
+  releaseTargetReservation?: (operatorId: string, epoch?: number) => void;
   analyzeCallsignForOperator?: (
     operatorId: string,
     callsign: string,
     grid?: string,
   ) => Promise<import('@tx5dr/contracts').LogbookAnalysis | null>;
   resolveGrid?: (callsign: string) => string | undefined;
-  setOperatorAudioFrequency?: (operatorId: string, frequency: number) => Promise<void>;
+  setOperatorAudioFrequency?: (
+    operatorId: string,
+    frequency: number,
+    commandToken?: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken,
+  ) => Promise<void>;
   isSnrPriorityEnabled?: (operatorId: string) => boolean;
   isStoppedDirectCallAutoReplyEnabled?: (operatorId: string) => boolean;
   getStrategyRuntime: (operatorId: string) => import('@tx5dr/plugin-api').StrategyRuntime | undefined;
-  getCtxForInstance: (instance: PluginInstance) => PluginContext;
+  getStrategyRuntimeGeneration: (operatorId: string) => number | undefined;
+  invokeStrategyRuntime: <T>(
+    operatorId: string,
+    operation: string,
+    callback: (runtime: import('@tx5dr/plugin-api').StrategyRuntime) => T | Promise<T>,
+    options?: { signal?: AbortSignal },
+  ) => Promise<T | undefined>;
+  invokeStrategyRuntimeSync: <T>(
+    operatorId: string,
+    operation: string,
+    callback: (runtime: import('@tx5dr/plugin-api').StrategyRuntime) => T,
+  ) => T | undefined;
+  getCtxForInstance: (instance: PluginInstance) => RuntimePluginContext;
   dispatcher: import('./PluginHookDispatcher.js').PluginHookDispatcher;
   eventEmitter: import('eventemitter3').EventEmitter<import('@tx5dr/contracts').DigitalRadioEngineEvents>;
   requestCall: (
     operatorId: string,
     callsign: string,
     lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo },
+    options?: { commandToken?: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken },
   ) => void;
   notifyQSOFail: (
     operatorId: string,
     info: import('@tx5dr/plugin-api').QSOFailureInfo,
   ) => Promise<void>;
   /** 触发操作员重新编码（用于 slotStart/encodeStart 竞态修正） */
-  triggerReEncode?: (operatorId: string) => void;
+  triggerReEncode?: (operatorId: string, options?: TransmissionRefreshOptions) => void;
+  intentCoordinator: import('../transmission/OperatorIntentCoordinator.js').OperatorIntentCoordinator;
 }
 
 /**
@@ -143,6 +183,10 @@ export interface PluginManagerDeps {
   getEngineMode?: () => EngineMode;
   getCurrentRadioMode?: () => string | null;
   setRadioFrequency: (freq: number) => void | boolean | Promise<boolean | void>;
+  submitRadioMaintenanceCommand?: (
+    command: import('@tx5dr/plugin-api').PluginRadioCommand
+      | import('@tx5dr/plugin-api').PluginRadioTunerCommand,
+  ) => Promise<void>;
   getRadioBand: () => string;
   getRadioConnected: () => boolean;
   getRadioCapabilitySnapshot?: () => CapabilityList;
@@ -162,8 +206,27 @@ export interface PluginManagerDeps {
     guardBandwidth?: number,
     additionalOccupiedFrequenciesHz?: readonly number[],
   ) => number | undefined;
-  setOperatorAudioFrequency?: (operatorId: string, frequency: number) => Promise<void>;
+  setOperatorAudioFrequency?: (
+    operatorId: string,
+    frequency: number,
+    commandToken?: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken,
+  ) => Promise<void>;
   interruptOperatorTransmission: (operatorId: string) => Promise<void>;
+  requestOperatorStrategyStop?: (operatorId: string, reason: string) => void;
+  transitionTargetReservation?: (operatorId: string, epoch: number, targetCallsign?: string) => boolean;
+  releaseTargetReservation?: (operatorId: string, epoch?: number) => void;
+  removeOperatorContribution?: (
+    operatorId: string,
+    options: {
+      signal: AbortSignal;
+      commandToken: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken;
+    },
+  ) => Promise<void>;
+  submitOperatorCommand?: (
+    operatorId: string,
+    command: PluginOperatorCommand,
+    pluginName: string,
+  ) => Promise<PluginOperatorCommandResult>;
   hasWorkedCallsign: (operatorId: string, callsign: string, options?: { anyBand?: boolean }) => Promise<boolean>;
   hasWorkedDXCC?: (operatorId: string, dxccEntity: string) => Promise<boolean>;
   hasWorkedGrid?: (operatorId: string, grid: string) => Promise<boolean>;
@@ -174,8 +237,9 @@ export interface PluginManagerDeps {
   ) => Promise<import('@tx5dr/contracts').LogbookAnalysis | null>;
   resolveGrid?: (callsign: string) => string | undefined;
   resetOperatorRuntime: (operatorId: string, reason: string) => void;
-  /** 触发操作员替换编码（DecisionOrchestrator 竞态修正用） */
-  triggerReEncode?: (operatorId: string) => void;
+  /** 将已更新的操作员上下文提交给当前数字帧。 */
+  triggerReEncode?: (operatorId: string, options?: TransmissionRefreshOptions) => void;
+  intentCoordinator?: import('../transmission/OperatorIntentCoordinator.js').OperatorIntentCoordinator;
   dataDir: string;
   /** Optional callback for logbook sync provider registration. */
   registerLogbookSyncProvider?: (
@@ -195,6 +259,9 @@ export interface PluginManagerDeps {
  */
 export function toPluginStatus(plugin: LoadedPlugin, instance?: PluginInstance): PluginStatus {
   const capabilities: PluginStatus['capabilities'] = [];
+  if (plugin.definition.isAutoCallEnabled) {
+    capabilities.push('auto_call_control');
+  }
   if (plugin.definition.hooks?.onAutoCallCandidate) {
     capabilities.push('auto_call_candidate');
   }
@@ -220,7 +287,7 @@ export function toPluginStatus(plugin: LoadedPlugin, instance?: PluginInstance):
     quickActions: plugin.definition.quickActions,
     quickSettings: plugin.definition.quickSettings,
     panels: plugin.definition.panels,
-    permissions: plugin.definition.permissions,
+    permissions: plugin.definition.permissions ? [...plugin.definition.permissions] : undefined,
     capabilities: capabilities.length > 0 ? capabilities : undefined,
     ui: plugin.definition.ui ? {
       dir: plugin.definition.ui.dir ?? 'ui',

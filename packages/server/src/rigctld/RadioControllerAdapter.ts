@@ -27,6 +27,7 @@ import {
   type RigctlVfo,
 } from '@tx5dr/rigctld-server';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
+import type { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
 import type { IRadioConnection, RadioModeBandwidth } from '../radio/connections/IRadioConnection.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { RadioPowerController } from '../radio/RadioPowerController.js';
@@ -84,7 +85,12 @@ function hzToBandwidth(hz: number): RadioModeBandwidth {
 }
 
 export class RadioControllerAdapter implements RadioController {
-  constructor(private readonly pm: PhysicalRadioManager) {}
+  private pttLeaseId: string | null = null;
+
+  constructor(
+    private readonly pm: PhysicalRadioManager,
+    private readonly physicalTxCoordinator: PhysicalTxCoordinator,
+  ) {}
 
   private requireConnected(): void {
     if (!this.pm.isConnected()) {
@@ -146,8 +152,55 @@ export class RadioControllerAdapter implements RadioController {
 
   async setPTT(on: boolean): Promise<void> {
     this.requireConnected();
-    this.pm.setPTTActive(on);
-    await this.pm.setPTT(on);
+    try {
+      if (on) {
+        const snapshot = this.physicalTxCoordinator.getSnapshot();
+        if (this.pttLeaseId
+          && snapshot.leaseId === this.pttLeaseId
+          && snapshot.source === 'manual'
+          && snapshot.phase !== 'idle') {
+          return;
+        }
+        // The lease may have been cleared by a disconnect/recovery path while
+        // this adapter still held its local handle.  Never treat that stale
+        // handle as proof that PTT is active.
+        this.pttLeaseId = null;
+        this.pttLeaseId = await this.physicalTxCoordinator.acquireLease({
+          source: 'manual',
+          reason: 'rigctld PTT',
+        });
+        return;
+      }
+      if (this.pttLeaseId) {
+        const leaseId = this.pttLeaseId;
+        let result = await this.physicalTxCoordinator.releaseLease(leaseId, 'rigctld PTT release');
+        let snapshot = this.physicalTxCoordinator.getSnapshot();
+        if (!result.success && snapshot.leaseId === leaseId && snapshot.phase === 'unknown') {
+          // releaseLease is intentionally idempotent once a release promise is
+          // cached; an unknown stop needs the coordinator's explicit retry
+          // path so a late CAT acknowledgement cannot be mistaken for RX.
+          result = await this.physicalTxCoordinator.retryUnknownStop('rigctld PTT release retry')
+            ?? result;
+          snapshot = this.physicalTxCoordinator.getSnapshot();
+        }
+        if (snapshot.leaseId !== leaseId || snapshot.phase === 'idle') {
+          this.pttLeaseId = null;
+        }
+        // A retry result intentionally reports `success: false` because no RF
+        // frame was transmitted; once the coordinator is idle, the safety
+        // recovery itself succeeded and rigctld should observe RX normally.
+        if (!result.success && snapshot.phase !== 'idle') {
+          throw new Error(result.error ?? result.reason);
+        }
+      } else if (this.physicalTxCoordinator.getSnapshot().source === 'manual') {
+        const result = await this.physicalTxCoordinator.retryUnknownStop('rigctld PTT release retry');
+        if (result && !result.success && this.physicalTxCoordinator.getSnapshot().phase !== 'idle') {
+          throw new Error(result.error ?? result.reason);
+        }
+      }
+    } catch (error) {
+      throw new RigctldProtocolError(RigErr.EIO, (error as Error).message);
+    }
   }
 
   async getLevel(name: RigctlLevel): Promise<number> {

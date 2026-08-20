@@ -20,6 +20,7 @@ import {
 } from '@tx5dr/rigctld-server';
 import type { RigctldBridgeConfig, RigctldStatus } from '@tx5dr/contracts';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
+import type { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { createLogger } from '../utils/logger.js';
 import { RadioControllerAdapter } from './RadioControllerAdapter.js';
@@ -36,7 +37,10 @@ export class RigctldBridge extends EventEmitter<RigctldBridgeEvents> {
   private lastError: string | undefined;
   private clients = new Map<number, RigctldClientInfo>();
 
-  constructor(private readonly radioManager: PhysicalRadioManager) {
+  constructor(
+    private readonly radioManager: PhysicalRadioManager,
+    private readonly physicalTxCoordinator: PhysicalTxCoordinator,
+  ) {
     super();
   }
 
@@ -74,7 +78,7 @@ export class RigctldBridge extends EventEmitter<RigctldBridgeEvents> {
     }
 
     const server = new RigctldServer({
-      controller: new RadioControllerAdapter(this.radioManager),
+      controller: new RadioControllerAdapter(this.radioManager, this.physicalTxCoordinator),
       host: next.bindAddress,
       port: next.port,
       readOnly: next.readOnly,

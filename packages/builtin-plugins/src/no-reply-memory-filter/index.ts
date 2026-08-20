@@ -3,7 +3,7 @@ import path from 'path';
 import { FT8MessageType } from '@tx5dr/contracts';
 import { isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import type { ParsedFT8Message, QSORecord } from '@tx5dr/contracts';
-import type { PluginDefinition, PluginContext, QSOFailureInfo } from '@tx5dr/plugin-api';
+import { definePlugin, type PluginContext, type QSOFailureInfo } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import jaLocale from './locales/ja.json' with { type: 'json' };
@@ -331,7 +331,7 @@ export function clearNoReplyMemoryEntry(ctx: PluginContext, callsignInput: unkno
   return { success: true };
 }
 
-export const noReplyMemoryFilterPlugin: PluginDefinition = {
+export const noReplyMemoryFilterPlugin = definePlugin({
   name: BUILTIN_NO_REPLY_MEMORY_FILTER_PLUGIN_NAME,
   version: '1.0.0',
   type: 'utility',
@@ -487,7 +487,7 @@ export const noReplyMemoryFilterPlugin: PluginDefinition = {
       ctx.log.debug('No-reply memory score cleared after QSO completion', { callsign });
     },
   },
-};
+});
 
 export const noReplyMemoryFilterLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,

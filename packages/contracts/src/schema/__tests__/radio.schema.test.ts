@@ -5,7 +5,7 @@ describe('HamlibConfigSchema digital mode radio mode preference', () => {
   it('accepts legacy configs without a digital mode radio mode preference', () => {
     const parsed = HamlibConfigSchema.parse({ type: 'none' });
 
-    expect(parsed.digitalModeRadioMode ?? 'none').toBe('none');
+    expect(parsed.digitalModeRadioMode).toBeUndefined();
   });
 
   it('accepts supported FT8/FT4 radio mode preferences', () => {

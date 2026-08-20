@@ -1,4 +1,4 @@
-import type { PluginDefinition, ScoredCandidate } from '@tx5dr/plugin-api';
+import { definePlugin, type ScoredCandidate } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import jaLocale from './locales/ja.json' with { type: 'json' };
@@ -18,7 +18,7 @@ const SNR_PRIORITY_SCORE_MULTIPLIER = 1000;
  *
  * 用户可以将此插件作为编写工具插件的参考范本。
  */
-export const snrFilterPlugin: PluginDefinition = {
+export const snrFilterPlugin = definePlugin({
   name: BUILTIN_SNR_FILTER_PLUGIN_NAME,
   version: '1.0.0',
   type: 'utility',
@@ -84,7 +84,7 @@ export const snrFilterPlugin: PluginDefinition = {
       return scored;
     },
   },
-};
+});
 
 /** 内置翻译，随插件一起编译进 bundle */
 export const snrFilterLocales: Record<string, Record<string, string>> = {

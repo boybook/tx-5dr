@@ -66,6 +66,16 @@ type MockOpenWebRXAdapter = EventEmitter & {
   stopReceiving: ReturnType<typeof vi.fn>;
 };
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function createIcomManager(adapter: MockIcomAdapter): AudioStreamManager {
   const manager = new AudioStreamManager();
   manager.setIcomWlanAudioAdapter(adapter as never);
@@ -120,6 +130,24 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
     expect(adapter.sendAudio).toHaveBeenCalledTimes(10);
   });
 
+  it('acknowledges playback start only after the first ICOM audio write succeeds', async () => {
+    const firstWrite = deferred<void>();
+    const adapter: MockIcomAdapter = {
+      sendAudio: vi.fn().mockImplementation(() => firstWrite.promise),
+      getSampleRate: vi.fn().mockReturnValue(12000),
+    };
+    const manager = createIcomManager(adapter);
+    const onPlaybackStarted = vi.fn();
+
+    const playback = manager.playAudio(new Float32Array(1024), 12000, { onPlaybackStarted });
+    await vi.waitFor(() => expect(adapter.sendAudio).toHaveBeenCalledTimes(1));
+    expect(onPlaybackStarted).not.toHaveBeenCalled();
+
+    firstWrite.resolve();
+    await expect(playback).resolves.toBeUndefined();
+    expect(onPlaybackStarted).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps stopCurrentPlayback responsive while ICOM WLAN pacing waits', async () => {
     const adapter: MockIcomAdapter = {
       sendAudio: vi.fn().mockResolvedValue(undefined),
@@ -141,6 +169,33 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
     const playbackError = await playbackResult;
     expect(playbackError).toBeInstanceOf(Error);
     expect(playbackError.message).toBe('playback interrupted');
+  });
+
+  it('does not let a late stop cleanup clear a newer playback', async () => {
+    const oldSend = deferred<void>();
+    const newSend = deferred<void>();
+    const adapter: MockIcomAdapter = {
+      sendAudio: vi.fn()
+        .mockImplementationOnce(() => oldSend.promise)
+        .mockImplementationOnce(() => newSend.promise),
+      getSampleRate: vi.fn().mockReturnValue(12000),
+    };
+    const manager = createIcomManager(adapter);
+    const clip = new Float32Array(1024);
+
+    const oldPlayback = manager.playAudio(clip, 12000).catch((error) => error);
+    await vi.waitFor(() => expect(adapter.sendAudio).toHaveBeenCalledTimes(1));
+    const stoppingOldPlayback = manager.stopCurrentPlayback({ kind: 'digital' });
+
+    const newPlayback = manager.playAudio(clip, 12000);
+    await vi.waitFor(() => expect(adapter.sendAudio).toHaveBeenCalledTimes(2));
+    oldSend.resolve();
+    await stoppingOldPlayback;
+
+    expect(manager.isPlaying('digital')).toBe(true);
+    newSend.resolve();
+    await expect(newPlayback).resolves.toBeUndefined();
+    await expect(oldPlayback).resolves.toBeInstanceOf(Error);
   });
 
   it('paces TCI chunks through the same radio-audio output path', async () => {

@@ -3074,12 +3074,10 @@ export class HamlibConnection
     this.checkConnected();
 
     try {
-      await Promise.race([
-        this.rig!.setFrequency(frequency),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Set frequency timeout')), 5000)
-        ),
-      ]);
+      // Critical writes must keep the RadioIoQueue occupied until the native
+      // operation really settles. A local Promise.race timeout would let a
+      // stale frequency write land during a newer transmission.
+      await this.rig!.setFrequency(frequency);
 
       this.lastSuccessfulOperation = Date.now();
       this.currentFrequencyHz = frequency;
@@ -3189,12 +3187,10 @@ export class HamlibConnection
     }
 
     try {
-      await Promise.race([
-        this.rig!.setPtt(enabled),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('PTT operation timeout')), 3000)
-        ),
-      ]);
+      // The coordinator owns the user-visible timeout. Keep this critical
+      // queue fenced until Hamlib's actual command settles so an old PTT-off
+      // cannot arrive after a newer PTT-on.
+      await this.rig!.setPtt(enabled);
 
       this.lastSuccessfulOperation = Date.now();
       logger.debug(`PTT set: ${enabled ? 'TX' : 'RX'}`);

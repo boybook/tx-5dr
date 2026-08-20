@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "node ../../scripts/clean-paths.mjs dist && tsc",
-    "dev": "node ../../scripts/run-with-env.mjs --node-env=development tsx watch --watch-path=src src/index.ts",
+    "dev": "node ../../scripts/run-with-env.mjs --node-env=development tsx watch --watch-path=src --include='../builtin-plugins/dist/**/*.js' src/index.ts",
     "dev:prof": "node ../../scripts/run-with-env.mjs --node-env=development tsx --prof src/index.ts",
     "clinic:doctor": "yarn build && clinic doctor -- node dist/index.js",
     "clinic:flame": "yarn build && clinic flame -- node dist/index.js",
