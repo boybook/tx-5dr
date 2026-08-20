@@ -31,8 +31,9 @@ import type {
   ServerCpuProfileStatus,
   SystemLogLevel,
   SystemLoggingSettings,
+  ObservabilityStatus,
 } from '@tx5dr/contracts';
-import { DEFAULT_DECODE_WINDOW_SETTINGS, FT8_WINDOW_PRESETS, FT4_WINDOW_PRESETS, isValidNtpServerHost } from '@tx5dr/contracts';
+import { DEFAULT_DECODE_WINDOW_SETTINGS, FT8_WINDOW_PRESETS, FT4_WINDOW_PRESETS, isValidNtpServerHost, OBSERVABILITY_NOTICE_VERSION } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
 import { createLogger } from '../../utils/logger';
 import { useConnection } from '../../store/radioStore';
@@ -415,6 +416,9 @@ export const SystemSettings = forwardRef<
   const [remoteAccessSettings, setRemoteAccessSettings] = useState<RemoteAccessSecurityStatus | null>(null);
   const [originalRemoteAccessSettings, setOriginalRemoteAccessSettings] = useState<RemoteAccessSecurityStatus | null>(null);
   const [remoteAccessNetwork, setRemoteAccessNetwork] = useState<NetworkInfo | null>(null);
+  const [observabilityStatus, setObservabilityStatus] = useState<ObservabilityStatus | null>(null);
+  const [observabilityEnabled, setObservabilityEnabled] = useState(true);
+  const [originalObservabilityEnabled, setOriginalObservabilityEnabled] = useState(true);
 
   // 加载配置
   useEffect(() => {
@@ -426,6 +430,7 @@ export const SystemSettings = forwardRef<
     loadNtpServerListSettings();
     loadSystemLoggingSettings();
     loadRemoteAccessSettings();
+    loadObservabilityStatus();
     loadElectronCloseBehavior();
     if (isElectron) {
       void loadDesktopHttpsSettings();
@@ -578,6 +583,17 @@ export const SystemSettings = forwardRef<
       logger.error('Failed to load logging settings:', err);
     }
   }, []);
+
+  const loadObservabilityStatus = async () => {
+    try {
+      const status = await api.getObservabilityStatus();
+      setObservabilityStatus(status);
+      setObservabilityEnabled(status.settings.enabled);
+      setOriginalObservabilityEnabled(status.settings.enabled);
+    } catch (err) {
+      logger.error('Failed to load anonymous usage statistics settings:', err);
+    }
+  };
 
   const handleCopyLogsDir = useCallback(async () => {
     if (!loggingSettings?.logsDir) return;
@@ -985,6 +1001,8 @@ export const SystemSettings = forwardRef<
       hasNtpServerChanges() ||
       !remoteAccessSettingsEqual(remoteAccessSettings, originalRemoteAccessSettings) ||
       logLevel !== originalLogLevel ||
+      observabilityEnabled !== originalObservabilityEnabled ||
+      Boolean(observabilityStatus?.noticeRequired) ||
       realtimeTransportPolicy !== originalRealtimeTransportPolicy ||
       rtcDataAudioPublicHost !== originalRtcDataAudioPublicHost ||
       rtcDataAudioPublicUdpPort !== originalRtcDataAudioPublicUdpPort ||
@@ -1180,6 +1198,16 @@ export const SystemSettings = forwardRef<
         setOriginalLogLevel(committedLevel);
       }
 
+      if (observabilityEnabled !== originalObservabilityEnabled || observabilityStatus?.noticeRequired) {
+        const status = await api.updateObservabilitySettings({
+          enabled: observabilityEnabled,
+          noticeVersion: OBSERVABILITY_NOTICE_VERSION,
+        });
+        setObservabilityStatus(status);
+        setObservabilityEnabled(status.settings.enabled);
+        setOriginalObservabilityEnabled(status.settings.enabled);
+      }
+
       if (
         realtimeTransportPolicy !== originalRealtimeTransportPolicy
         || rtcDataAudioPublicHost !== originalRtcDataAudioPublicHost
@@ -1254,7 +1282,7 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, maxSameTransmissionCount, originalDecodeValue, originalSpectrumValue, originalMaxSameTransmissionCount, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, ntpServers, originalNtpServers, remoteAccessSettings, originalRemoteAccessSettings, logLevel, originalLogLevel, realtimeTransportPolicy, originalRealtimeTransportPolicy, rtcDataAudioPublicHost, originalRtcDataAudioPublicHost, rtcDataAudioPublicUdpPort, originalRtcDataAudioPublicUdpPort, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, maxSameTransmissionCount, originalDecodeValue, originalSpectrumValue, originalMaxSameTransmissionCount, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, ntpServers, originalNtpServers, remoteAccessSettings, originalRemoteAccessSettings, logLevel, originalLogLevel, observabilityEnabled, originalObservabilityEnabled, observabilityStatus?.noticeRequired, realtimeTransportPolicy, originalRealtimeTransportPolicy, rtcDataAudioPublicHost, originalRtcDataAudioPublicHost, rtcDataAudioPublicUdpPort, originalRtcDataAudioPublicUdpPort, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
 
   const runtimeHints = realtimeRuntime?.connectivityHints ?? null;
   const rtcDataAudioRuntime = realtimeRuntime?.rtcDataAudio ?? null;
@@ -1645,6 +1673,44 @@ export const SystemSettings = forwardRef<
         isSaving={isSaving}
         onChange={setRemoteAccessSettings}
       />
+
+      <Card shadow="none" radius="lg" className="order-2" classNames={SETTINGS_CARD_CLASS_NAMES}>
+        <CardBody className={SETTINGS_CARD_BODY_CLASS}>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="max-w-3xl">
+              <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.anonymousTelemetryTitle', 'Anonymous usage statistics')}</h4>
+              <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>
+                {t('system.anonymousTelemetryDesc', 'Help improve TX-5DR by reporting the app version, release channel, runtime type, operating-system family, CPU architecture, process lifecycle, uptime, and completed WebSocket connection count.')}
+              </p>
+            </div>
+            <Switch
+              isSelected={observabilityEnabled}
+              onValueChange={setObservabilityEnabled}
+              isDisabled={!observabilityStatus}
+            >
+              {observabilityEnabled ? t('common.enabled', 'Enabled') : t('common.disabled', 'Disabled')}
+            </Switch>
+          </div>
+
+          {observabilityStatus?.noticeRequired && (
+            <Alert color="warning" variant="flat">
+              {t('system.anonymousTelemetryConsent', 'Nothing is sent until you save this choice. The switch is enabled by default, and you may turn it off before saving or at any time later.')}
+            </Alert>
+          )}
+
+          <div className={SETTINGS_SOFT_PANEL_CLASS}>
+            <p className={SETTINGS_SUBDESC_CLASS}>
+              {t('system.anonymousTelemetryPrivacy', 'Never included: callsign, grid locator, QSO records, frequency, audio, radio model, device serial number, host name, user name, file paths, URLs, tokens, raw IP address, user agent, or log content. Installation totals represent participating installations; connection totals are not a count of natural persons.')}
+            </p>
+          </div>
+
+          {observabilityStatus && !observabilityStatus.endpointConfigured && (
+            <p className={SETTINGS_MUTED_CLASS}>
+              {t('system.anonymousTelemetryUnavailable', 'The statistics endpoint is not configured in this build, so no data can be sent.')}
+            </p>
+          )}
+        </CardBody>
+      </Card>
 
       <Card shadow="none" radius="lg" className="order-[9]" classNames={SETTINGS_CARD_CLASS_NAMES}>
         <CardBody className={SETTINGS_CARD_BODY_CLASS}>

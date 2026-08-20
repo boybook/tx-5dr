@@ -256,6 +256,11 @@
   "system": {
     "title": "システム設定",
     "description": "システムレベルの機能オプションを構成します。",
+    "anonymousTelemetryTitle": "匿名利用統計",
+    "anonymousTelemetryDesc": "TX-5DR の改善のため、アプリのバージョン、リリースチャネル、実行形態、OS の種類、CPU アーキテクチャ、プロセスの開始・終了とオンライン状態、稼働時間、ハンドシェイク済み WebSocket 接続数のみを送信します。",
+    "anonymousTelemetryConsent": "この選択を保存するまでデータは送信されません。スイッチは初期状態で有効ですが、保存前に無効化でき、後からいつでも変更できます。",
+    "anonymousTelemetryPrivacy": "コールサイン、グリッドロケーター、QSO 記録、周波数、音声、無線機モデル、シリアル番号、ホスト名、ユーザー名、ファイルパス、URL、トークン、生の IP アドレス、User-Agent、ログ内容は送信しません。インストール数は統計参加インスタンス数であり、接続数は個人の人数ではありません。",
+    "anonymousTelemetryUnavailable": "このビルドには統計サービスの接続先が設定されていないため、データは送信されません。",
     "loadFailed": "構成のロードに失敗しました",
     "saveFailed": "設定の保存に失敗しました",
     "pskrSaveFailed": "PSKReporter 構成の保存に失敗しました",

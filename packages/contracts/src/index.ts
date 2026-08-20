@@ -165,3 +165,4 @@ export * from './schema/device-ui.schema.js';
 // Plugin Schema
 export * from './schema/plugin.schema.js';
 export * from './schema/update.schema.js';
+export * from './schema/observability.schema.js';

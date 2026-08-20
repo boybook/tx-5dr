@@ -256,6 +256,11 @@
   "system": {
     "title": "System Settings",
     "description": "Configure system-level feature options.",
+    "anonymousTelemetryTitle": "Anonymous usage statistics",
+    "anonymousTelemetryDesc": "Help improve TX-5DR by reporting the app version, release channel, runtime type, operating-system family, CPU architecture, process lifecycle, uptime, and completed WebSocket connection count.",
+    "anonymousTelemetryConsent": "Nothing is sent until you save this choice. The switch is enabled by default, and you may turn it off before saving or at any time later.",
+    "anonymousTelemetryPrivacy": "Never included: callsign, grid locator, QSO records, frequency, audio, radio model, device serial number, host name, user name, file paths, URLs, tokens, raw IP address, user agent, or log content. Installation totals represent participating installations; connection totals are not a count of natural persons.",
+    "anonymousTelemetryUnavailable": "The statistics endpoint is not configured in this build, so no data can be sent.",
     "loadFailed": "Failed to load configuration",
     "saveFailed": "Failed to save configuration",
     "pskrSaveFailed": "Failed to save PSKReporter configuration",

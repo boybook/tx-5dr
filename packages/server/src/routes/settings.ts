@@ -8,6 +8,7 @@ import {
   resolveWindowTiming,
   CustomFrequencyPresetsSchema,
   RealtimeSettingsSchema,
+  UpdateObservabilitySettingsSchema,
 } from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
 import { HostSettingsService } from '../plugin/HostSettingsService.js';
@@ -18,6 +19,7 @@ import { buildRtcDataAudioConnectivityHints, getRtcDataAudioLocalUdpPort } from 
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { WSServer } from '../websocket/WSServer.js';
 import { WSMessageType } from '@tx5dr/contracts';
+import { TelemetryService } from '../observability/TelemetryService.js';
 
 /**
  * 设置管理API路由
@@ -27,6 +29,17 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   const configManager = ConfigManager.getInstance();
   const hostSettings = new HostSettingsService(configManager);
   const transportManager = RealtimeTransportManager.getInstance();
+
+  fastify.get('/observability', async (_request, reply) => {
+    return reply.send(TelemetryService.getInstance().getStatus());
+  });
+
+  fastify.put('/observability', async (request, reply) => {
+    const settings = UpdateObservabilitySettingsSchema.parse(request.body);
+    await configManager.updateObservabilitySettings(settings);
+    await TelemetryService.getInstance().applySettings();
+    return reply.send(TelemetryService.getInstance().getStatus());
+  });
 
   const buildRealtimeSettingsData = (request: FastifyRequest) => {
     const transportPolicy = configManager.getRealtimeTransportPolicy();
