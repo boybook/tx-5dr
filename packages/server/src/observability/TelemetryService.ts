@@ -19,6 +19,7 @@ const MAX_QUEUE = 200;
 const MAX_EVENT_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PRESENCE_REPLAY_AGE_MS = 10 * 60 * 1000;
 const TOKEN_REFRESH_MARGIN_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_OBSERVABILITY_ENDPOINT = 'https://txdr-obod-decab-snwtlsoajk.cn-hangzhou.fcapp.run';
 
 type TelemetryEventName = 'session_started' | 'presence_snapshot' | 'session_ended';
 type TelemetryReason = 'startup' | 'heartbeat' | 'connection_change' | 'shutdown';
@@ -98,7 +99,7 @@ export class TelemetryService {
   }
 
   private get endpoint(): string {
-    return (process.env.TX5DR_OBSERVABILITY_ENDPOINT ?? '').replace(/\/$/, '');
+    return (process.env.TX5DR_OBSERVABILITY_ENDPOINT || DEFAULT_OBSERVABILITY_ENDPOINT).replace(/\/$/, '');
   }
 
   async initialize(): Promise<void> {
