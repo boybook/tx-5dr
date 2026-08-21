@@ -21,6 +21,7 @@ import type {
 } from '@tx5dr/contracts';
 import { FT8MessageParser, WSMessageHandler } from '@tx5dr/core';
 import { getBandFromFrequency } from '@tx5dr/core';
+import type { QueuedStrategyMutationResult } from '@tx5dr/plugin-api';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import type { ProcessMonitor } from '../services/ProcessMonitor.js';
 import { globalEventBus } from '../utils/EventBus.js';
@@ -414,6 +415,11 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.START_OPERATOR]: (data, id) => this.handleStartOperator(data, id),
       [WSMessageType.STOP_OPERATOR]: (data, id) => this.handleStopOperator(data, id),
       [WSMessageType.OPERATOR_REQUEST_CALL]: (data, id) => this.handleOperatorRequestCall(data, id),
+      [WSMessageType.OPERATOR_QUEUE_ENQUEUE]: (data, id) => this.handleOperatorQueueEnqueue(data, id),
+      [WSMessageType.OPERATOR_QUEUE_REORDER]: (data, id) => this.handleOperatorQueueReorder(data, id),
+      [WSMessageType.OPERATOR_QUEUE_RETRY]: (data, id) => this.handleOperatorQueueRetry(data, id),
+      [WSMessageType.OPERATOR_QUEUE_REMOVE]: (data, id) => this.handleOperatorQueueRemove(data, id),
+      [WSMessageType.OPERATOR_QUEUE_CLEAR]: (data, id) => this.handleOperatorQueueClear(data, id),
       [WSMessageType.PLUGIN_USER_ACTION]: (data, id) => this.handlePluginUserAction(data, id),
       [WSMessageType.PING]: (_data, id) => { this.sendToConnection(id, WSMessageType.PONG); },
       [WSMessageType.SET_VOLUME_GAIN]: (data) => this.handleSetVolumeGain(data),
@@ -844,6 +850,11 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.OPERATOR_REQUEST_CALL]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.OPERATOR_QUEUE_ENQUEUE]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.OPERATOR_QUEUE_REORDER]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.OPERATOR_QUEUE_RETRY]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.OPERATOR_QUEUE_REMOVE]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.OPERATOR_QUEUE_CLEAR]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION]: { ability: { action: 'manage', subject: 'Transmission' } },
     [WSMessageType.PLUGIN_USER_ACTION]: { ability: { action: 'manage', subject: 'Operator' } },
   };
@@ -857,6 +868,11 @@ export class WSServer extends WSMessageHandler {
     WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT,
     WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES,
     WSMessageType.OPERATOR_REQUEST_CALL,
+    WSMessageType.OPERATOR_QUEUE_ENQUEUE,
+    WSMessageType.OPERATOR_QUEUE_REORDER,
+    WSMessageType.OPERATOR_QUEUE_RETRY,
+    WSMessageType.OPERATOR_QUEUE_REMOVE,
+    WSMessageType.OPERATOR_QUEUE_CLEAR,
     WSMessageType.VOICE_PTT_REQUEST,
     WSMessageType.VOICE_KEYER_PLAY,
     WSMessageType.CW_KEY_ACTION,
@@ -1382,6 +1398,126 @@ export class WSServer extends WSMessageHandler {
       this.digitalRadioEngine.operatorManager.emitOperatorStatusUpdate(operatorId);
     } catch (error) {
       this.handleCommandError(error, 'operatorRequestCall');
+    }
+  }
+
+  private buildSelectedFrameLastMessage(selectedFrame: any): { message: FrameMessage; slotInfo: SlotInfo } | undefined {
+    if (!selectedFrame) return undefined;
+    const currentMode = this.digitalRadioEngine.getStatus().currentMode;
+    return {
+      message: {
+        message: selectedFrame.message,
+        snr: selectedFrame.snr,
+        dt: selectedFrame.dt,
+        freq: selectedFrame.freq,
+        confidence: 1,
+      } as FrameMessage,
+      slotInfo: {
+        id: `manual-${selectedFrame.slotStartMs}`,
+        startMs: selectedFrame.slotStartMs,
+        phaseMs: 0,
+        driftMs: 0,
+        cycleNumber: Math.floor(selectedFrame.slotStartMs / currentMode.slotMs) % 2,
+        utcSeconds: Math.floor(selectedFrame.slotStartMs / 1000),
+        mode: currentMode.name,
+      } as SlotInfo,
+    };
+  }
+
+  private handleQueueMutationRejection(
+    connectionId: string,
+    command: string,
+    result: QueuedStrategyMutationResult,
+  ): boolean {
+    if (result.outcome !== 'rejected') return false;
+    const messageKey = result.reason ? {
+      queue_full: 'queueFull',
+      invalid_target: 'invalidTarget',
+      entry_not_found: 'entryNotFound',
+      entry_not_retryable: 'entryNotRetryable',
+      active_entry: 'activeEntry',
+      version_conflict: 'versionConflict',
+    }[result.reason] : undefined;
+    this.sendToConnection(connectionId, WSMessageType.ERROR, {
+      message: result.reason ?? 'queue_command_rejected',
+      userMessageKey: messageKey ? `radio:operator.queueErrors.${messageKey}` : undefined,
+      code: RadioErrorCode.INVALID_OPERATION,
+      context: { command },
+      details: { queue: result.snapshot },
+    });
+    return true;
+  }
+
+  private async handleOperatorQueueEnqueue(data: any, connectionId: string): Promise<void> {
+    try {
+      const { operatorId, callsign, selectedFrame, startIfIdle } = data;
+      this.logOperatorCommand('operatorQueueEnqueue', connectionId, {
+        operatorId,
+        callsign,
+        startIfIdle: startIfIdle === true,
+      });
+      const result = await this.digitalRadioEngine.pluginManager.enqueueQueueTarget(operatorId, {
+        callsign,
+        lastMessage: this.buildSelectedFrameLastMessage(selectedFrame),
+      }, {
+        startIfIdle: startIfIdle === true,
+      });
+      this.handleQueueMutationRejection(connectionId, 'operatorQueueEnqueue', result);
+    } catch (error) {
+      this.handleCommandError(error, 'operatorQueueEnqueue');
+    }
+  }
+
+  private async handleOperatorQueueReorder(data: any, connectionId: string): Promise<void> {
+    try {
+      const { operatorId, entryId, beforeEntryId, expectedVersion } = data;
+      this.logOperatorCommand('operatorQueueReorder', connectionId, { operatorId, entryId, beforeEntryId });
+      const result = await this.digitalRadioEngine.pluginManager.reorderQueueTarget(
+        operatorId,
+        entryId,
+        beforeEntryId,
+        expectedVersion,
+      );
+      this.handleQueueMutationRejection(connectionId, 'operatorQueueReorder', result);
+    } catch (error) {
+      this.handleCommandError(error, 'operatorQueueReorder');
+    }
+  }
+
+  private async handleOperatorQueueRetry(data: any, connectionId: string): Promise<void> {
+    try {
+      const { operatorId, entryId, expectedVersion } = data;
+      this.logOperatorCommand('operatorQueueRetry', connectionId, { operatorId, entryId });
+      const result = await this.digitalRadioEngine.pluginManager.retryQueueTarget(
+        operatorId,
+        entryId,
+        expectedVersion,
+      );
+      this.handleQueueMutationRejection(connectionId, 'operatorQueueRetry', result);
+    } catch (error) {
+      this.handleCommandError(error, 'operatorQueueRetry');
+    }
+  }
+
+  private async handleOperatorQueueRemove(data: any, connectionId: string): Promise<void> {
+    try {
+      const { operatorId, entryId, expectedVersion } = data;
+      this.logOperatorCommand('operatorQueueRemove', connectionId, { operatorId, entryId });
+      const result = await this.digitalRadioEngine.pluginManager.removeQueueTarget(operatorId, entryId, expectedVersion);
+      this.handleQueueMutationRejection(connectionId, 'operatorQueueRemove', result);
+    } catch (error) {
+      this.handleCommandError(error, 'operatorQueueRemove');
+    }
+  }
+
+  private async handleOperatorQueueClear(data: any, connectionId: string): Promise<void> {
+    try {
+      const { operatorId, expectedVersion } = data;
+      this.logOperatorCommand('operatorQueueClear', connectionId, { operatorId });
+      const result = await this.digitalRadioEngine.pluginManager.clearQueueTargets(operatorId, expectedVersion);
+      this.handleQueueMutationRejection(connectionId, 'operatorQueueClear', result);
+    } catch (error) {
+      this.handleCommandError(error, 'operatorQueueClear');
     }
   }
 

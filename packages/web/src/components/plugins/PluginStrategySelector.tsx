@@ -16,12 +16,14 @@ interface PluginStrategySelectorProps {
   operatorId: string;
   currentStrategy?: string;
   onStrategyChange?: (pluginName: string) => void;
+  compact?: boolean;
 }
 
 export const PluginStrategySelector: React.FC<PluginStrategySelectorProps> = ({
   operatorId,
   currentStrategy = 'standard-qso',
   onStrategyChange,
+  compact = false,
 }) => {
   const { t } = useTranslation('settings');
   const snapshot = usePluginSnapshot();
@@ -53,14 +55,20 @@ export const PluginStrategySelector: React.FC<PluginStrategySelectorProps> = ({
   return (
     <Select
       size="sm"
-      label={t('plugins.automationStrategy', 'Automation Strategy')}
+      label={compact ? undefined : t('plugins.automationStrategy', 'Automation Strategy')}
+      aria-label={t('plugins.automationStrategy', 'Automation Strategy')}
       selectedKeys={[selected]}
       isDisabled={saving}
       onSelectionChange={(keys) => {
         const val = Array.from(keys as Set<string>)[0];
         if (val) handleChange(val);
       }}
-      variant="bordered"
+      variant={compact ? 'flat' : 'bordered'}
+      classNames={compact ? {
+        trigger: 'min-h-8 h-8 rounded-md px-2.5',
+        value: 'text-xs',
+        popoverContent: 'min-w-[180px]',
+      } : undefined}
       >
         {strategies.map(strategy => (
           <SelectItem key={strategy.name}>

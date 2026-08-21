@@ -85,6 +85,11 @@ export enum WSMessageType {
   START_OPERATOR = 'startOperator',
   STOP_OPERATOR = 'stopOperator',
   OPERATOR_REQUEST_CALL = 'operatorRequestCall',
+  OPERATOR_QUEUE_ENQUEUE = 'operatorQueueEnqueue',
+  OPERATOR_QUEUE_REORDER = 'operatorQueueReorder',
+  OPERATOR_QUEUE_RETRY = 'operatorQueueRetry',
+  OPERATOR_QUEUE_REMOVE = 'operatorQueueRemove',
+  OPERATOR_QUEUE_CLEAR = 'operatorQueueClear',
   
   // ===== 客户端操作员过滤 =====
   SET_CLIENT_ENABLED_OPERATORS = 'setClientEnabledOperators',
@@ -397,6 +402,40 @@ export const StrategyRuntimeContextSchema = z.object({
 });
 export type StrategyRuntimeContext = z.infer<typeof StrategyRuntimeContextSchema>;
 
+export const AssistedQueueDisplayStateSchema = z.enum([
+  'TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'engaged', 'closing', 'paused', 'no-response', 'later', 'review',
+]);
+export const AssistedQueuePauseReasonSchema = z.enum(['target-busy', 'stale']);
+export const AssistedQueueToneSchema = z.enum(['neutral', 'active', 'success', 'warning', 'danger']);
+export const AssistedQueueIconSchema = z.enum([
+  'circle', 'radio', 'check-circle', 'loader-circle', 'clock', 'pause', 'triangle-alert',
+]);
+export const AssistedQueueRowSchema = z.object({
+  entryId: z.string(),
+  callsign: z.string(),
+  order: z.number().int().nonnegative(),
+  draggable: z.boolean(),
+  displayState: AssistedQueueDisplayStateSchema,
+  tone: AssistedQueueToneSchema,
+  icon: AssistedQueueIconSchema,
+  pauseReason: AssistedQueuePauseReasonSchema.optional(),
+  noResponseCycles: z.number().int().nonnegative().optional(),
+  targetGrid: z.string().optional(),
+  lastSnr: z.number().optional(),
+  lastHeardCyclesAgo: z.number().int().nonnegative().optional(),
+});
+export const AssistedQueueSnapshotSchema = z.object({
+  version: z.number().int().nonnegative(),
+  activeEntryId: z.string().optional(),
+  rows: z.array(AssistedQueueRowSchema),
+});
+export type AssistedQueueDisplayState = z.infer<typeof AssistedQueueDisplayStateSchema>;
+export type AssistedQueuePauseReason = z.infer<typeof AssistedQueuePauseReasonSchema>;
+export type AssistedQueueTone = z.infer<typeof AssistedQueueToneSchema>;
+export type AssistedQueueIcon = z.infer<typeof AssistedQueueIconSchema>;
+export type AssistedQueueRow = z.infer<typeof AssistedQueueRowSchema>;
+export type AssistedQueueSnapshot = z.infer<typeof AssistedQueueSnapshotSchema>;
+
 export const StrategyRuntimeSnapshotSchema = z.object({
   currentState: z.string(),
   slots: z.object({
@@ -409,6 +448,8 @@ export const StrategyRuntimeSnapshotSchema = z.object({
   }).optional(),
   context: StrategyRuntimeContextSchema.optional(),
   availableSlots: z.array(z.string()).optional(),
+  qsoLifecycleEpoch: z.number().int().nonnegative().optional(),
+  queue: AssistedQueueSnapshotSchema.optional(),
 });
 export type StrategyRuntimeSnapshot = z.infer<typeof StrategyRuntimeSnapshotSchema>;
 
@@ -656,8 +697,9 @@ export const WSGetStatusMessageSchema = WSBaseMessageSchema.extend({
 export const OperatorStatusSchema = z.object({
   id: z.string(),
   isActive: z.boolean(),
-  isTransmitting: z.boolean(), // 是否正在发射（发射开关状态）
+  isTransmitting: z.boolean(), // 是否已授予策略自动发射许可（发射开关状态）
   isInActivePTT: z.boolean().optional(), // 该操作员的音频是否正在被实际播放
+  hasTransmitIntent: z.boolean().optional(), // 当前策略是否有可在合法周期发射的有效内容
   currentSlot: z.string().optional(),
   context: z.object({
     myCall: z.string(),
@@ -807,6 +849,52 @@ export const WSOperatorRequestCallMessageSchema = WSBaseMessageSchema.extend({
     operatorId: z.string(),
     callsign: z.string(),
     selectedFrame: WSSelectedFrameSchema.optional(),
+  }),
+});
+
+export const WSOperatorQueueEnqueueMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.OPERATOR_QUEUE_ENQUEUE),
+  data: z.object({
+    operatorId: z.string(),
+    callsign: z.string(),
+    selectedFrame: WSSelectedFrameSchema.optional(),
+    startIfIdle: z.boolean().optional(),
+  }),
+});
+
+export const WSOperatorQueueReorderMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.OPERATOR_QUEUE_REORDER),
+  data: z.object({
+    operatorId: z.string(),
+    entryId: z.string(),
+    beforeEntryId: z.string().nullable(),
+    expectedVersion: z.number().int().nonnegative(),
+  }),
+});
+
+export const WSOperatorQueueRetryMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.OPERATOR_QUEUE_RETRY),
+  data: z.object({
+    operatorId: z.string(),
+    entryId: z.string(),
+    expectedVersion: z.number().int().nonnegative(),
+  }),
+});
+
+export const WSOperatorQueueRemoveMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.OPERATOR_QUEUE_REMOVE),
+  data: z.object({
+    operatorId: z.string(),
+    entryId: z.string(),
+    expectedVersion: z.number().int().nonnegative(),
+  }),
+});
+
+export const WSOperatorQueueClearMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.OPERATOR_QUEUE_CLEAR),
+  data: z.object({
+    operatorId: z.string(),
+    expectedVersion: z.number().int().nonnegative(),
   }),
 });
 
@@ -1491,6 +1579,11 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSStartOperatorMessageSchema,
   WSStopOperatorMessageSchema,
   WSOperatorRequestCallMessageSchema,
+  WSOperatorQueueEnqueueMessageSchema,
+  WSOperatorQueueReorderMessageSchema,
+  WSOperatorQueueRetryMessageSchema,
+  WSOperatorQueueRemoveMessageSchema,
+  WSOperatorQueueClearMessageSchema,
   
   // 音量控制消息
   WSSetVolumeGainMessageSchema,

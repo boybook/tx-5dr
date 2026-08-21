@@ -519,7 +519,8 @@ export function createRadioEventMap({
         const current = radioStateRef.current.operators.find((op) => op.id === status.id);
         const isHighPriority = !current ||
           current.isTransmitting !== status.isTransmitting ||
-          current.isInActivePTT !== status.isInActivePTT;
+          current.isInActivePTT !== status.isInActivePTT ||
+          current.strategy.name !== status.strategy.name;
 
         if (isHighPriority) {
           pendingOperatorStatuses.delete(status.id);

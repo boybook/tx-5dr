@@ -14,7 +14,8 @@ import { getBadgeColors, hexToRgba } from '../../../utils/colorUtils';
 import { FlagDisplay } from '../../common/FlagDisplay';
 import { CallsignInfoPopover } from './CallsignInfoPopover';
 import { BOTTOM_TOLERANCE_PX, TOP_TOLERANCE_PX, getBottomGroupSignature, shouldShowScrollToBottomButton } from './framesTableAutoScroll';
-import type { GridLocation } from '@tx5dr/core';
+import { extractBaseCallsign, type GridLocation } from '@tx5dr/core';
+import { resolveFrameCallsign } from './frameCallsign';
 
 export interface FrameDisplayMessage {
   utc: string;
@@ -83,7 +84,10 @@ interface FramesTableProps {
   shouldShowGroupHeader?: (group: FrameGroup, index: number, groups: FrameGroup[]) => boolean;
   groupHeaderBand?: string | null; // 当前波段，用于截图上下文
   groupHeaderMode?: string | null; // 当前模式名，如 "FT8"
+  queueCallsignOrder?: Readonly<Record<string, number>>; // 服务端队列投影中的呼号顺序
 }
+
+const EMPTY_QUEUE_CALLSIGN_ORDER: Readonly<Record<string, number>> = {};
 
 // ─── 纯函数工具（提取到组件外避免重复创建）────────
 
@@ -128,6 +132,15 @@ const isTargetRelated = (messageObj: FrameDisplayMessage, targetCallsign: string
   }
   return false;
 };
+
+export function resolveQueuedFrameOrder(
+  message: FrameDisplayMessage,
+  queueCallsignOrder: Readonly<Record<string, number>>,
+): number | undefined {
+  if (Object.keys(queueCallsignOrder).length === 0) return undefined;
+  const callsign = extractBaseCallsign(resolveFrameCallsign(message) ?? '');
+  return callsign ? queueCallsignOrder[callsign] : undefined;
+}
 
 export const resolveFrameLocationDisplay = (
   message: FrameDisplayMessage,
@@ -186,12 +199,15 @@ const formatGroupHeaderLabel = (
 interface MessageRowProps {
   message: FrameDisplayMessage;
   group: FrameGroup;
+  isFirstInGroup: boolean;
+  isLastInGroup: boolean;
   gridCols: string;
   isNarrow: boolean;
   myCallsigns: string[];
   targetCallsign: string;
   showLogbookAnalysisVisuals: boolean;
   enableCallsignPopover: boolean;
+  queueCallsignOrder: Readonly<Record<string, number>>;
   cycleBackgrounds: FrameTableCycleBackgrounds['light'];
   isZh: boolean;
   highlightTypeLabels: Record<string, string>;
@@ -203,8 +219,8 @@ interface MessageRowProps {
 }
 
 const MessageRow = React.memo<MessageRowProps>(({
-  message, group, gridCols, isNarrow, myCallsigns, targetCallsign,
-  showLogbookAnalysisVisuals, enableCallsignPopover, cycleBackgrounds, isZh, highlightTypeLabels,
+  message, group, isFirstInGroup, isLastInGroup, gridCols, isNarrow, myCallsigns, targetCallsign,
+  showLogbookAnalysisVisuals, enableCallsignPopover, queueCallsignOrder, cycleBackgrounds, isZh, highlightTypeLabels,
   getHighestPriorityHighlight, getHighlightColor,
   onDoubleClick, onMouseEnter, onMouseLeave,
 }) => {
@@ -215,6 +231,10 @@ const MessageRow = React.memo<MessageRowProps>(({
   const hasMyCallsign = containsMyCallsign(message.message, emphasisCallsigns);
   const isWorkedCallsign = showLogbookAnalysisVisuals && message.logbookAnalysis?.isNewCallsign === false;
   const isTarget = isTargetRelated(message, targetCallsign);
+  const queuedOrder = useMemo(
+    () => resolveQueuedFrameOrder(message, queueCallsignOrder),
+    [message, queueCallsignOrder],
+  );
   const showChips = showLogbookAnalysisVisuals && message.db !== 'TX' && message.logbookAnalysis && isSpecialMessageType(message.message);
 
   // Hover style
@@ -334,6 +354,17 @@ const MessageRow = React.memo<MessageRowProps>(({
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
+      {queuedOrder !== undefined && (
+        <div
+          aria-hidden="true"
+          data-queue-order={queuedOrder}
+          className={`pointer-events-none absolute -left-1 z-[1] flex w-3 items-center justify-center bg-primary pl-1 text-[7px] font-semibold leading-none tabular-nums text-primary-foreground ${
+            isFirstInGroup ? '-top-1' : 'top-0'
+          } ${isLastInGroup ? '-bottom-1' : 'bottom-0'}`}
+        >
+          {queuedOrder}
+        </div>
+      )}
       {/* 右侧颜色条（非特殊消息类型时显示） */}
       {rightBorderColor && (
         <div
@@ -386,7 +417,7 @@ MessageRow.displayName = 'MessageRow';
 
 // ─── 主组件 ─────────────────────────────────
 
-export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger, showGroupHeader = false, shouldShowGroupHeader: shouldShowGroupHeaderPredicate, groupHeaderBand = null, groupHeaderMode = null }) => {
+export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger, showGroupHeader = false, shouldShowGroupHeader: shouldShowGroupHeaderPredicate, groupHeaderBand = null, groupHeaderMode = null, queueCallsignOrder = EMPTY_QUEUE_CALLSIGN_ORDER }) => {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language === 'zh';
   const highlightTypeLabels = useMemo(() => getHighlightTypeLabels(t), [t]);
@@ -649,7 +680,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                     >
                       {/* 左侧装饰条：与原始完全一致 */}
                       <div
-                        className="absolute left-0 top-1 bottom-1 w-1 rounded-sm"
+                        className="absolute left-0 top-1 bottom-1 z-[2] w-1 rounded-sm"
                         style={{
                           backgroundColor: getBorderColor(group.cycle, group.type)
                         }}
@@ -660,12 +691,15 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                           key={`${message.utc}-${messageIndex}`}
                           message={message}
                           group={group}
+                          isFirstInGroup={messageIndex === 0}
+                          isLastInGroup={messageIndex === group.messages.length - 1}
                           gridCols={gridCols}
                           isNarrow={isNarrow}
                           myCallsigns={myCallsigns}
                           targetCallsign={targetCallsign}
                           showLogbookAnalysisVisuals={showLogbookAnalysisVisuals}
                           enableCallsignPopover={enableCallsignPopover}
+                          queueCallsignOrder={queueCallsignOrder}
                           cycleBackgrounds={cycleBackgrounds}
                           isZh={isZh}
                           highlightTypeLabels={highlightTypeLabels}

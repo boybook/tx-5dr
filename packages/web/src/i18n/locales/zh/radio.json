@@ -448,7 +448,41 @@
     "pauseAllAutoCall": "全部暂停自动起呼",
     "resumeAllAutoCall": "全部恢复自动起呼",
     "autoCallPauseFailed": "暂停自动起呼失败",
-    "autoCallResumeFailed": "恢复自动起呼失败"
+    "autoCallResumeFailed": "恢复自动起呼失败",
+    "queue": {
+      "title": "通联队列",
+      "callsign": "目标呼号",
+      "status": "当前状态",
+      "remove": "移出队列",
+      "interruptAndRemove": "中断并移出",
+      "retry": "重新呼叫",
+      "clear": "清空队列",
+      "emptyHint": "双击左侧呼号加入队列"
+    },
+    "queueStatus": {
+      "engaged": "通联中",
+      "closing": "收尾",
+      "paused": "暂停",
+      "no-response": "不活跃",
+      "noResponseCycles": "不活跃 · {{count}} 回合无响应",
+      "later": "稍后",
+      "review": "复核"
+    },
+    "queuePauseReason": {
+      "targetBusy": "对方正忙",
+      "stale": "已消失"
+    },
+    "queueMeta": {
+      "cyclesAgo": "{{count}} 回合前"
+    },
+    "queueErrors": {
+      "queueFull": "队列已满",
+      "invalidTarget": "无法将该呼号加入队列",
+      "entryNotFound": "队列条目已发生变化，请重试",
+      "entryNotRetryable": "该条目当前不需要重新呼叫",
+      "activeEntry": "当前通联目标不能移动",
+      "versionConflict": "队列已在其他位置更新，请按最新顺序重试"
+    }
   },
   "profile": {
     "reconnecting": "正在重新连接「{{name}}」",

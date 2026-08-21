@@ -17,6 +17,11 @@ export const PluginTypeSchema = z.enum(['strategy', 'utility']);
  */
 export type PluginType = z.infer<typeof PluginTypeSchema>;
 
+export const StrategyFeaturesSchema = z.object({
+  targetQueue: z.literal(1).optional(),
+}).optional();
+export type StrategyFeatures = z.infer<typeof StrategyFeaturesSchema>;
+
 /**
  * Runtime instance scope for a plugin.
  *
@@ -477,6 +482,7 @@ export const PluginManifestSchema = z.object({
   name: z.string(),
   version: z.string(),
   type: PluginTypeSchema,
+  strategyFeatures: StrategyFeaturesSchema,
   instanceScope: PluginInstanceScopeSchema.optional().default('operator'),
   description: z.string().optional(),
   permissions: z.array(PluginPermissionSchema).optional(),
@@ -522,6 +528,7 @@ export type PluginLocales = z.infer<typeof PluginLocalesSchema>;
 export const PluginStatusSchema = z.object({
   name: z.string(),
   type: PluginTypeSchema,
+  strategyFeatures: StrategyFeaturesSchema,
   instanceScope: PluginInstanceScopeSchema.optional().default('operator'),
   version: z.string(),
   description: z.string().optional(),

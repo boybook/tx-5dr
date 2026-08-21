@@ -7,6 +7,12 @@ import type { FrameMessage, WSSelectedFrame } from '@tx5dr/contracts';
 import { useSplitLayoutActions } from '../../common/SplitLayout';
 import { useTranslation } from 'react-i18next';
 import { useCallsignFilterRules } from '../../../hooks/useCallsignFilterRules';
+import { usePluginSnapshot } from '../../../hooks/usePluginSnapshot';
+import {
+  buildQueueCallsignOrder,
+  resolveOperatorTargetAction,
+  submitOperatorTarget,
+} from '../operators/operatorQueuePresentation';
 
 interface SlotPacksMessageDisplayProps {
   className?: string;
@@ -24,6 +30,21 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
   const splitLayoutActions = useSplitLayoutActions();
   const [scrollToBottomTrigger, setScrollToBottomTrigger] = useState(0);
   const callsignFilter = useCallsignFilterRules(currentOperatorId ?? undefined);
+  const pluginSnapshot = usePluginSnapshot();
+  const selectedOperator = useMemo(
+    () => radio.state.operators.find((operator) => operator.id === currentOperatorId),
+    [currentOperatorId, radio.state.operators],
+  );
+  const targetAction = useMemo(
+    () => resolveOperatorTargetAction(selectedOperator, pluginSnapshot.plugins),
+    [pluginSnapshot.plugins, selectedOperator],
+  );
+  const queueCallsignOrder = useMemo(
+    () => targetAction === 'enqueue'
+      ? buildQueueCallsignOrder(selectedOperator?.runtime?.queue)
+      : {},
+    [selectedOperator?.runtime?.queue, targetAction],
+  );
   const displayFilterRules = useMemo(
     () => callsignFilter.filterScope === 'auto-reply-and-display' ? callsignFilter.rules : [],
     [callsignFilter.rules, callsignFilter.filterScope],
@@ -196,7 +217,13 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
         group: _group,
       });
       if (connection.state.radioService) {
-        connection.state.radioService.sendRequestCall(currentOperatorId, callsign, buildSelectedFrame(message, _group));
+        submitOperatorTarget(
+          connection.state.radioService,
+          targetAction,
+          currentOperatorId,
+          callsign,
+          buildSelectedFrame(message, _group),
+        );
         // 在移动端双击后自动切换到"呼叫"tab
         splitLayoutActions?.switchToRight();
       }
@@ -225,6 +252,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       className={className}
       myCallsigns={getMyCallsigns()}
       targetCallsign={getTargetCallsign()}
+      queueCallsignOrder={queueCallsignOrder}
       onRowDoubleClick={handleRowDoubleClick}
       onMessageHover={onMessageHover}
       enableCallsignPopover

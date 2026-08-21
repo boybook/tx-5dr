@@ -680,7 +680,7 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
       if (!await requireOperatorBindingAccess(fastify, req, reply, operatorId)) {
         return;
       }
-      const settings = engine.pluginManager.getOperatorPluginSettings(operatorId, name);
+      const settings = engine.pluginManager.getOperatorPluginSettingsProjection(operatorId, name);
       return reply.send({ settings });
     },
   );
@@ -695,7 +695,12 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
 
       const pluginSnapshot = engine.pluginManager.getSnapshot();
       const runtimeState = engine.pluginManager.getOperatorRuntimeStatus(operatorId);
-      const operatorSettings = configManager.getPluginsConfig().operatorSettings?.[operatorId] ?? {};
+      const operatorSettings = Object.fromEntries(
+        pluginSnapshot.plugins.map((plugin) => [
+          plugin.name,
+          engine.pluginManager.getOperatorPluginSettingsProjection(operatorId, plugin.name),
+        ]),
+      );
 
       return reply.send({
         operatorId,
@@ -707,7 +712,7 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
         pluginSnapshot,
         plugins: pluginSnapshot.plugins.map((plugin) => ({
           ...plugin,
-          currentSettings: operatorSettings[plugin.name] ?? {},
+          currentSettings: engine.pluginManager.getOperatorPluginSettingsProjection(operatorId, plugin.name),
         })),
       });
     },
@@ -729,7 +734,11 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
         return reply.status(400).send({ error: 'settings must be an object' });
       }
       const mergedSettings = engine.pluginManager.setOperatorPluginSettings(operatorId, name, settings);
-      await configManager.setOperatorPluginSettings(operatorId, name, mergedSettings);
+      await configManager.setOperatorPluginSettings(
+        operatorId,
+        engine.pluginManager.getOperatorSettingsNamespace(name),
+        mergedSettings,
+      );
       logger.info(`Plugin operator settings updated: plugin=${name}, operator=${operatorId}`);
       return reply.send({ success: true });
     },
@@ -831,11 +840,11 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.put<{ Params: { id: string }; Body: { pluginName: string } }>(
     '/operators/:id/strategy',
     async (req, reply) => {
-      if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
+      const { id } = req.params;
+      if (!await requireOperatorBindingAccess(fastify, req, reply, id)) {
         return;
       }
 
-      const { id } = req.params;
       const { pluginName } = req.body ?? {};
       if (!pluginName) {
         return reply.status(400).send({ error: 'pluginName is required' });
