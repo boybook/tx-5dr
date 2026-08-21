@@ -573,13 +573,6 @@ fix_glibcxx() {
     case "$(os_family)" in
         debian)
             case "$OS_ID" in
-                debian)
-                    echo "deb http://deb.debian.org/debian trixie main" > /etc/apt/sources.list.d/trixie-temp.list
-                    apt-get update -qq 2>&1 || true
-                    apt-get install -y -t trixie libstdc++6 2>&1 || true
-                    rm -f /etc/apt/sources.list.d/trixie-temp.list
-                    apt-get update -qq 2>&1 || true
-                    ;;
                 *)
                     # Ubuntu 22.04 may need PPA or manual install
                     # Ubuntu 24.04+ already has GLIBCXX_3.4.32
