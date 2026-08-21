@@ -26,7 +26,11 @@ import type {
   StrategyRuntime,
   StrategyRuntimeSlot,
   StrategyRuntimeSnapshot,
+  AssistedQueueSnapshot,
+  QueuedStrategyMutationResult,
+  QueuedStrategyTargetRequest,
 } from '@tx5dr/plugin-api';
+import { isQueuedStrategyRuntime } from '@tx5dr/plugin-api';
 import type { EventEmitter } from 'eventemitter3';
 import {
   PluginLoader,
@@ -85,6 +89,8 @@ export class PluginManager {
   private dispatcher!: PluginHookDispatcher;
   private readonly invocationGuard: PluginInvocationGuard;
   private readonly intentCoordinator: OperatorIntentCoordinator;
+  private readonly suspendedQueueExecutions = new Set<string>();
+  private readonly queueMutationTails = new Map<string, Promise<void>>();
   private orchestrator!: DecisionOrchestrator;
   private contextFactory: PluginContextFactory;
   private loader: PluginLoader;
@@ -219,6 +225,12 @@ export class PluginManager {
         { commandToken: options?.commandToken },
       ),
       notifyQSOFail: (operatorId, info) => this.notifyQSOFail(operatorId, info),
+      hasTargetQueue: (operatorId) => this.hasTargetQueue(operatorId),
+      observeStrategyMessages: (operatorId, messages, slotInfo, source, token, signal) =>
+        this.observeStrategyMessages(operatorId, messages, slotInfo, source, token, signal),
+      notifyOperatorStatusChanged: (operatorId) => this.deps.notifyOperatorStatusChanged?.(operatorId),
+      isQueueExecutionSuspended: (operatorId) => this.suspendedQueueExecutions.has(operatorId),
+      markQueueExecutionValidated: (operatorId) => this.suspendedQueueExecutions.delete(operatorId),
       triggerReEncode: deps.triggerReEncode,
       intentCoordinator: this.intentCoordinator,
     });
@@ -381,10 +393,11 @@ export class PluginManager {
         },
         () => this.buildMergedSettings(plugin, pluginName, operatorId),
         async (patch) => {
-          const currentSettings = this.pluginsConfig.operatorSettings?.[operatorId]?.[pluginName] ?? {};
+          const settingsNamespace = this.getOperatorSettingsNamespace(pluginName);
+          const currentSettings = this.pluginsConfig.operatorSettings?.[operatorId]?.[settingsNamespace] ?? {};
           const mergedSettings = { ...currentSettings, ...patch };
           this.setOperatorPluginSettings(operatorId, pluginName, mergedSettings);
-          await ConfigManager.getInstance().setOperatorPluginSettings(operatorId, pluginName, mergedSettings);
+          await ConfigManager.getInstance().setOperatorPluginSettings(operatorId, settingsNamespace, mergedSettings);
         },
         (operation, callback) => {
           if (!instance.enabled
@@ -523,6 +536,8 @@ export class PluginManager {
   }
 
   removeInstancesForOperator(operatorId: string): void {
+    this.suspendedQueueExecutions.delete(operatorId);
+    this.queueMutationTails.delete(operatorId);
     const operatorInstances = this.instances.get(operatorId);
     if (!operatorInstances) {
       return;
@@ -565,6 +580,7 @@ export class PluginManager {
     slots?: Record<string, string>;
     context?: Record<string, unknown>;
     availableSlots?: string[];
+    queue?: import('@tx5dr/plugin-api').AssistedQueueSnapshot;
   } {
     const strategyName = this.getResolvedStrategyName(operatorId);
     const snapshot = this.getOperatorAutomationSnapshot(operatorId);
@@ -583,6 +599,7 @@ export class PluginManager {
           ? snapshot.context as Record<string, unknown>
           : undefined,
         availableSlots: snapshot.availableSlots,
+        queue: snapshot.queue,
       };
     } catch (err) {
       logger.error(`Failed to read strategy status: operator=${operatorId}`, err);
@@ -601,6 +618,249 @@ export class PluginManager {
       logger.error(`Failed to read strategy snapshot: operator=${operatorId}`, err);
       return null;
     }
+  }
+
+  hasTargetQueue(operatorId: string): boolean {
+    return this.getStrategyInstance(operatorId)?.plugin.definition.strategyFeatures?.targetQueue === 1;
+  }
+
+  observeStrategyMessages(
+    operatorId: string,
+    messages: import('@tx5dr/contracts').ParsedFT8Message[],
+    slotInfo: SlotInfo,
+    source: import('@tx5dr/plugin-api').StrategyDecisionSource,
+    token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken,
+    signal: AbortSignal,
+  ): boolean {
+    if (!this.hasTargetQueue(operatorId) || signal.aborted || !this.intentCoordinator.isCurrent(token)) return false;
+    const checkpoint = this.invokeStrategyRuntimeSync(
+      operatorId,
+      'checkpoint:queue-observation',
+      (runtime) => structuredClone(runtime.checkpoint()),
+    );
+    const changed = this.invokeStrategyRuntimeSync(operatorId, `observe:${source}`, (runtime) => (
+      isQueuedStrategyRuntime(runtime)
+        ? runtime.observeDecodedMessages(messages, { slotInfo, source, signal })
+        : false
+    )) ?? false;
+    if (signal.aborted || !this.intentCoordinator.isCurrent(token)) {
+      if (checkpoint !== undefined) {
+        this.invokeStrategyRuntimeSync(operatorId, 'restore:superseded-queue-observation', (runtime) => runtime.restore(checkpoint));
+      }
+      return false;
+    }
+    if (changed) this.deps.notifyOperatorStatusChanged?.(operatorId);
+    return changed;
+  }
+
+  async enqueueQueueTarget(
+    operatorId: string,
+    request: QueuedStrategyTargetRequest,
+    options?: { startIfIdle?: boolean },
+  ): Promise<QueuedStrategyMutationResult> {
+    return this.submitQueueMutation(
+      operatorId,
+      'enqueue',
+      (runtime) => runtime.enqueueTarget(request),
+      async ({ beforeSnapshot, result, token, signal }) => {
+        if (options?.startIfIdle !== true
+            || beforeSnapshot.rows.length !== 0
+            || result.outcome !== 'accepted') {
+          return;
+        }
+        const operator = this.deps.getOperatorById(operatorId);
+        if (!operator || operator.isTransmitting) return;
+
+        operator.start();
+        if (!operator.isTransmitting) return;
+        const decision = await this.orchestrator.revalidateQueueExecutionInLane(
+          operatorId,
+          token,
+          signal,
+        );
+        if (!decision || request.lastMessage || signal.aborted || !this.intentCoordinator.isCurrent(token)) return;
+        this.deps.triggerReEncode?.(operatorId, {
+          source: 'operator-edit',
+          reason: 'manual first queue target started assisted operation',
+          decisionEpoch: token.epoch,
+        });
+      },
+    );
+  }
+
+  async reorderQueueTarget(
+    operatorId: string,
+    entryId: string,
+    beforeEntryId: string | null,
+    expectedVersion: number,
+  ): Promise<QueuedStrategyMutationResult> {
+    return this.submitQueueMutation(operatorId, 'reorder', (runtime) => (
+      runtime.reorderTarget(entryId, beforeEntryId, expectedVersion)
+    ));
+  }
+
+  async retryQueueTarget(
+    operatorId: string,
+    entryId: string,
+    expectedVersion: number,
+  ): Promise<QueuedStrategyMutationResult> {
+    return this.submitQueueMutation(
+      operatorId,
+      'retry',
+      (runtime) => {
+        if (!runtime.retryTarget) throw new Error('strategy_queue_retry_unsupported');
+        return runtime.retryTarget(entryId, expectedVersion);
+      },
+      async ({ beforeSnapshot, result, token, signal }) => {
+        const operator = this.deps.getOperatorById(operatorId);
+        if (result.outcome !== 'accepted'
+            || beforeSnapshot.activeEntryId
+            || !operator?.isTransmitting) {
+          return;
+        }
+        const decision = await this.orchestrator.revalidateQueueExecutionInLane(
+          operatorId,
+          token,
+          signal,
+        );
+        if (!decision?.transmission
+            || decision.requestedTransmitCycle !== undefined
+            || signal.aborted
+            || !this.intentCoordinator.isCurrent(token)) {
+          return;
+        }
+        this.deps.triggerReEncode?.(operatorId, {
+          source: 'operator-edit',
+          reason: 'manual assisted queue retry became executable',
+          decisionEpoch: token.epoch,
+        });
+      },
+    );
+  }
+
+  async removeQueueTarget(
+    operatorId: string,
+    entryId: string,
+    expectedVersion: number,
+  ): Promise<QueuedStrategyMutationResult> {
+    return this.submitQueueMutation(
+      operatorId,
+      'remove',
+      (runtime) => runtime.removeTarget(entryId, expectedVersion),
+      async ({ beforeSnapshot, result, token, signal }) => {
+        if (result.outcome !== 'accepted' || beforeSnapshot.activeEntryId !== entryId) return;
+        await this.removeActiveQueueContribution(operatorId, entryId, token, signal, 'removed');
+      },
+    );
+  }
+
+  async clearQueueTargets(
+    operatorId: string,
+    expectedVersion: number,
+  ): Promise<QueuedStrategyMutationResult> {
+    return this.submitQueueMutation(
+      operatorId,
+      'clear',
+      (runtime) => {
+        if (!runtime.clearTargets) throw new Error('strategy_queue_clear_unsupported');
+        return runtime.clearTargets(expectedVersion);
+      },
+      async ({ beforeSnapshot, result, token, signal }) => {
+        if (result.outcome !== 'accepted' || !beforeSnapshot.activeEntryId) return;
+        await this.removeActiveQueueContribution(
+          operatorId,
+          beforeSnapshot.activeEntryId,
+          token,
+          signal,
+          'cleared',
+        );
+      },
+    );
+  }
+
+  private async removeActiveQueueContribution(
+    operatorId: string,
+    entryId: string,
+    token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken,
+    signal: AbortSignal,
+    operation: 'removed' | 'cleared',
+  ): Promise<void> {
+    this.deps.releaseTargetReservation?.(operatorId);
+    const reason = `active assisted queue target ${operation} by operator`;
+    try {
+      if (this.deps.removeOperatorContribution) {
+        await this.deps.removeOperatorContribution(operatorId, { signal, commandToken: token });
+      } else {
+        this.deps.requestOperatorStrategyStop?.(operatorId, reason);
+      }
+    } catch (error) {
+      logger.warn('Failed to remove active assisted queue target from physical frame', {
+        operatorId,
+        entryId,
+        operation,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.deps.requestOperatorStrategyStop?.(operatorId, reason);
+    }
+  }
+
+  private async submitQueueMutation(
+    operatorId: string,
+    operation: string,
+    mutate: (runtime: import('@tx5dr/plugin-api').QueuedStrategyRuntime) => QueuedStrategyMutationResult,
+    afterMutation?: (context: {
+      beforeSnapshot: AssistedQueueSnapshot;
+      result: QueuedStrategyMutationResult;
+      token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken;
+      signal: AbortSignal;
+    }) => void | Promise<void>,
+  ): Promise<QueuedStrategyMutationResult> {
+    if (!this.hasTargetQueue(operatorId)) throw new Error('strategy_not_queue_capable');
+    const previous = this.queueMutationTails.get(operatorId) ?? Promise.resolve();
+    const task = previous.catch(() => undefined).then(() => (
+      this.submitQueueMutationInLane(operatorId, operation, mutate, afterMutation)
+    ));
+    const tail = task.then(() => undefined, () => undefined);
+    this.queueMutationTails.set(operatorId, tail);
+    try {
+      return await task;
+    } finally {
+      if (this.queueMutationTails.get(operatorId) === tail) this.queueMutationTails.delete(operatorId);
+    }
+  }
+
+  private async submitQueueMutationInLane(
+    operatorId: string,
+    operation: string,
+    mutate: (runtime: import('@tx5dr/plugin-api').QueuedStrategyRuntime) => QueuedStrategyMutationResult,
+    afterMutation?: (context: {
+      beforeSnapshot: AssistedQueueSnapshot;
+      result: QueuedStrategyMutationResult;
+      token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken;
+      signal: AbortSignal;
+    }) => void | Promise<void>,
+  ): Promise<QueuedStrategyMutationResult> {
+    const outcome = await this.intentCoordinator.submit(operatorId, 'manual', async (token, signal) => {
+      const mutation = this.invokeStrategyRuntimeSync(operatorId, `queue:${operation}`, (runtime) => {
+        if (!isQueuedStrategyRuntime(runtime)) throw new Error('strategy_not_queue_capable');
+        const beforeSnapshot = runtime.getQueueSnapshot();
+        const beforeVersion = beforeSnapshot.version;
+        const result = mutate(runtime);
+        return { beforeSnapshot, beforeVersion, result };
+      });
+      if (!mutation) throw new Error('strategy_not_queue_capable');
+      const { beforeSnapshot, beforeVersion, result } = mutation;
+      if (result.snapshot.version !== beforeVersion) {
+        this.orchestrator.invalidateDecisionMessageSet(operatorId);
+      }
+      await afterMutation?.({ beforeSnapshot, result, token, signal });
+      if (result.snapshot.version !== beforeVersion || result.reason === 'version_conflict') {
+        this.deps.notifyOperatorStatusChanged?.(operatorId);
+      }
+      return result;
+    });
+    if (outcome.status === 'completed') return outcome.value;
+    throw new Error('queue_command_superseded');
   }
 
   patchOperatorRuntimeContext(
@@ -698,6 +958,10 @@ export class PluginManager {
       commandToken?: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken;
     },
   ): void {
+    if (this.hasTargetQueue(operatorId)) {
+      logger.debug('Ignoring direct requestCall while a target-queue strategy is active', { operatorId, callsign });
+      return;
+    }
     // 呼叫收敛点：autocall / WS 命令 / ctx.operator.call / replyToDecode 全部汇入此处，
     // 未解码占位符呼号（`<...>`/`...`）一律拒绝，避免向占位符发起呼叫。
     if (isUndecodedCallsignPlaceholder(callsign)) {
@@ -938,8 +1202,23 @@ export class PluginManager {
     return this.orchestrator.reDecideOperator(operatorId, slotPack);
   }
 
+  suspendQueueExecution(operatorId: string): void {
+    if (this.hasTargetQueue(operatorId)) this.suspendedQueueExecutions.add(operatorId);
+  }
+
+  isQueueExecutionSuspended(operatorId: string): boolean {
+    return this.suspendedQueueExecutions.has(operatorId);
+  }
+
+  async resumeQueueExecution(operatorId: string): Promise<boolean> {
+    if (!this.hasTargetQueue(operatorId)) return true;
+    await this.orchestrator.revalidateQueueExecution(operatorId);
+    return !this.suspendedQueueExecutions.has(operatorId);
+  }
+
   shouldProcessStoppedOperatorReDecision(operatorId: string, slotPack: SlotPack): boolean {
-    return this.orchestrator.hasActiveSilentDirectedCallGate(operatorId, slotPack);
+    return this.hasTargetQueue(operatorId)
+      || this.orchestrator.hasActiveSilentDirectedCallGate(operatorId, slotPack);
   }
 
   // ===== 策略管理 =====
@@ -954,7 +1233,8 @@ export class PluginManager {
       throw new Error(`Invalid strategy plugin: ${pluginName}`);
     }
 
-    const previousStrategy = this.pluginsConfig.operatorStrategies?.[operatorId];
+    const previousStrategy = this.getResolvedStrategyName(operatorId);
+    if (previousStrategy === pluginName) return;
     if (!this.pluginsConfig.operatorStrategies) {
       this.pluginsConfig.operatorStrategies = {};
     }
@@ -964,20 +1244,37 @@ export class PluginManager {
     const previousInstance = previousStrategy ? operatorInstances?.get(previousStrategy) : undefined;
     const nextInstance = operatorInstances?.get(pluginName);
 
+    const resetReason = `strategy switched from ${previousStrategy} to ${pluginName}`;
+    this.resetStrategyInstanceRuntime(previousInstance, resetReason);
+    this.resetStrategyInstanceRuntime(nextInstance, resetReason);
+
     if (previousInstance && previousInstance !== nextInstance) {
       void this.deactivateInstance(operatorId, previousInstance);
     }
+    let activation: Promise<void> | undefined;
     if (nextInstance) {
       nextInstance.enabled = true;
-      void this.activateInstance(operatorId, nextInstance);
+      activation = this.activateInstance(operatorId, nextInstance);
     }
-    this.resetOperatorPluginRuntime(operatorId, `strategy switched to ${pluginName}`);
+    this.deps.releaseTargetReservation?.(operatorId);
+    this.suspendedQueueExecutions.delete(operatorId);
+    this.orchestrator.clearDecisionState(operatorId);
+    this.deps.resetOperatorRuntime(operatorId, resetReason);
     this.bumpGeneration();
     this.broadcastStatusChanged(pluginName);
     if (previousStrategy && previousStrategy !== pluginName) {
       this.broadcastStatusChanged(previousStrategy);
     }
     this.broadcastPluginList();
+    void activation?.then(() => {
+      this.deps.notifyOperatorStatusChanged?.(operatorId);
+    }).catch((error) => {
+      logger.warn('Failed to activate switched operator strategy', {
+        operatorId,
+        pluginName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   // ===== 配置 API =====
@@ -1080,7 +1377,25 @@ export class PluginManager {
 
   /** 获取操作员维度的插件设置 */
   getOperatorPluginSettings(operatorId: string, pluginName: string): Record<string, unknown> {
-    return this.pluginsConfig.operatorSettings?.[operatorId]?.[pluginName] ?? {};
+    const namespace = this.getOperatorSettingsNamespace(pluginName);
+    return this.pluginsConfig.operatorSettings?.[operatorId]?.[namespace] ?? {};
+  }
+
+  getOperatorPluginSettingsProjection(operatorId: string, pluginName: string): Record<string, unknown> {
+    const storedSettings = this.getOperatorPluginSettings(operatorId, pluginName);
+    const descriptors = this.loadedPlugins.get(pluginName)?.definition.settings;
+    if (!descriptors) return storedSettings;
+
+    return Object.fromEntries(
+      Object.entries(descriptors)
+        .filter(([, descriptor]) => descriptor.type !== 'info' && !descriptor.hidden)
+        .filter(([key]) => key in storedSettings)
+        .map(([key]) => [key, storedSettings[key]]),
+    );
+  }
+
+  getOperatorSettingsNamespace(pluginName: string): string {
+    return BUILTIN_PLUGINS.find((builtin) => builtin.definition.name === pluginName)?.settingsNamespace ?? pluginName;
   }
 
   isOperatorPluginPaused(operatorId: string, pluginName: string): boolean {
@@ -1354,21 +1669,20 @@ export class PluginManager {
     pluginName: string,
     settings: Record<string, unknown>,
   ): Record<string, unknown> {
+    const settingsNamespace = this.getOperatorSettingsNamespace(pluginName);
     const mergedSettings = this.mergePreservedHiddenOperatorSettings(operatorId, pluginName, settings);
     if (!this.pluginsConfig.operatorSettings) this.pluginsConfig.operatorSettings = {};
     if (!this.pluginsConfig.operatorSettings[operatorId]) {
       this.pluginsConfig.operatorSettings[operatorId] = {};
     }
-    this.pluginsConfig.operatorSettings[operatorId][pluginName] = mergedSettings;
+    this.pluginsConfig.operatorSettings[operatorId][settingsNamespace] = mergedSettings;
 
-    // 通知该操作员的实例配置变更
-    const instance = this.instances.get(operatorId)?.get(pluginName);
-    if (instance?.enabled) {
-      void this.dispatcher.dispatchInstance(
-        instance,
-        'onConfigChange',
-        (hook, guardedCtx) => hook(mergedSettings, guardedCtx),
-      );
+    // Notify every built-in strategy sharing the canonical settings namespace.
+    for (const [instanceName, instance] of this.instances.get(operatorId) ?? []) {
+      if (!instance.enabled || this.getOperatorSettingsNamespace(instanceName) !== settingsNamespace) continue;
+      void this.dispatcher.dispatchInstance(instance, 'onConfigChange', (hook, guardedCtx) => (
+        hook(mergedSettings, guardedCtx)
+      ));
     }
     this.bumpGeneration();
     this.broadcastStatusChanged(pluginName);
@@ -1381,9 +1695,18 @@ export class PluginManager {
     settings: Record<string, unknown>,
   ): Record<string, unknown> {
     const plugin = this.loadedPlugins.get(pluginName);
-    const existing = this.pluginsConfig.operatorSettings?.[operatorId]?.[pluginName] ?? {};
+    const settingsNamespace = this.getOperatorSettingsNamespace(pluginName);
+    const existing = this.pluginsConfig.operatorSettings?.[operatorId]?.[settingsNamespace] ?? {};
     const merged = { ...settings };
-    for (const [key, descriptor] of Object.entries(plugin?.definition.settings ?? {})) {
+    const declaredSettings = plugin?.definition.settings ?? {};
+    if (settingsNamespace !== pluginName) {
+      for (const [key, value] of Object.entries(existing)) {
+        if (!(key in declaredSettings) && !(key in merged)) {
+          merged[key] = value;
+        }
+      }
+    }
+    for (const [key, descriptor] of Object.entries(declaredSettings)) {
       if (!descriptor.hidden || key in merged || !(key in existing)) {
         continue;
       }
@@ -1428,8 +1751,9 @@ export class PluginManager {
     operatorId: string,
   ): Record<string, unknown> {
     const defaults = this.getDefaultSettings(plugin);
-    const globalSettings = this.pluginsConfig.configs?.[pluginName]?.settings ?? {};
-    const operatorSettings = this.pluginsConfig.operatorSettings?.[operatorId]?.[pluginName] ?? {};
+    const settingsNamespace = this.getOperatorSettingsNamespace(pluginName);
+    const globalSettings = this.pluginsConfig.configs?.[settingsNamespace]?.settings ?? {};
+    const operatorSettings = this.pluginsConfig.operatorSettings?.[operatorId]?.[settingsNamespace] ?? {};
 
     // 分别按 scope 合并
     const merged: Record<string, unknown> = { ...defaults };
@@ -1977,6 +2301,7 @@ export class PluginManager {
 
   resetOperatorPluginRuntime(operatorId: string, reason: string): void {
     this.deps.releaseTargetReservation?.(operatorId);
+    this.suspendedQueueExecutions.delete(operatorId);
     try {
       this.invokeStrategyRuntimeSync(
         operatorId,
@@ -1988,6 +2313,15 @@ export class PluginManager {
     }
     this.orchestrator.clearDecisionState(operatorId);
     this.deps.resetOperatorRuntime(operatorId, reason);
+  }
+
+  private resetStrategyInstanceRuntime(instance: PluginInstance | undefined, reason: string): void {
+    if (!instance?.runtime) return;
+    try {
+      this.invocationGuard.invokeSync(instance, 'reset:strategy-switch', () => instance.runtime!.reset(reason));
+    } catch (err) {
+      logger.warn(`Failed to reset strategy runtime: plugin=${instance.plugin.definition.name}`, err);
+    }
   }
 
   private handleAutoDisable(pluginName: string, reason: string): void {

@@ -364,6 +364,7 @@ export const CallsignInfoPopover: React.FC<CallsignInfoPopoverProps> = ({
   stateConfidence,
   children,
 }) => {
+  const callsignInfo = useMemo(() => getCallsignInfo(callsign), [callsign]);
   const [isOpen, setIsOpen] = useState(false);
   const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -424,6 +425,7 @@ export const CallsignInfoPopover: React.FC<CallsignInfoPopoverProps> = ({
     >
       <PopoverTrigger>
         <div
+          className="min-w-0"
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >
@@ -441,11 +443,11 @@ export const CallsignInfoPopover: React.FC<CallsignInfoPopoverProps> = ({
           callsign={callsign}
           tracking={tracking ?? EMPTY_TRACKING_DATA}
           logbookAnalysis={logbookAnalysis}
-          country={country}
-          countryZh={countryZh}
-          countryEn={countryEn}
-          countryCode={countryCode}
-          flag={flag}
+          country={country ?? callsignInfo?.country}
+          countryZh={countryZh ?? callsignInfo?.countryZh}
+          countryEn={countryEn ?? callsignInfo?.countryEn}
+          countryCode={countryCode ?? callsignInfo?.countryCode}
+          flag={flag ?? callsignInfo?.flag}
           directGrid={directGrid}
           directGridLocation={directGridLocation}
           state={state}

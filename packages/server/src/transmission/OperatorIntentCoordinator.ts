@@ -1,4 +1,4 @@
-export type OperatorCommandSource = 'manual' | 'plugin' | 'late-decode' | 'slot-auto';
+export type OperatorCommandSource = 'manual' | 'assisted-queue' | 'plugin' | 'late-decode' | 'slot-auto';
 
 export interface OperatorCommandToken {
   operatorId: string;
@@ -31,6 +31,7 @@ interface OperatorLane {
 const PRIORITY: Record<OperatorCommandSource, number> = {
   'slot-auto': 10,
   'late-decode': 20,
+  'assisted-queue': 80,
   plugin: 90,
   manual: 100,
 };

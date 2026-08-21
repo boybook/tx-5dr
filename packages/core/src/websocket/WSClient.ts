@@ -504,6 +504,41 @@ export class WSClient extends WSMessageHandler {
     this.send(WSMessageType.OPERATOR_REQUEST_CALL, { operatorId, callsign, selectedFrame });
   }
 
+  enqueueOperatorQueueTarget(
+    operatorId: string,
+    callsign: string,
+    selectedFrame?: WSSelectedFrame,
+    options?: { startIfIdle?: boolean },
+  ): void {
+    this.send(WSMessageType.OPERATOR_QUEUE_ENQUEUE, {
+      operatorId,
+      callsign,
+      selectedFrame,
+      startIfIdle: options?.startIfIdle,
+    });
+  }
+
+  reorderOperatorQueueTarget(
+    operatorId: string,
+    entryId: string,
+    beforeEntryId: string | null,
+    expectedVersion: number,
+  ): void {
+    this.send(WSMessageType.OPERATOR_QUEUE_REORDER, { operatorId, entryId, beforeEntryId, expectedVersion });
+  }
+
+  retryOperatorQueueTarget(operatorId: string, entryId: string, expectedVersion: number): void {
+    this.send(WSMessageType.OPERATOR_QUEUE_RETRY, { operatorId, entryId, expectedVersion });
+  }
+
+  removeOperatorQueueTarget(operatorId: string, entryId: string, expectedVersion: number): void {
+    this.send(WSMessageType.OPERATOR_QUEUE_REMOVE, { operatorId, entryId, expectedVersion });
+  }
+
+  clearOperatorQueue(operatorId: string, expectedVersion: number): void {
+    this.send(WSMessageType.OPERATOR_QUEUE_CLEAR, { operatorId, expectedVersion });
+  }
+
   // ===== 认证相关方法 =====
 
   /**

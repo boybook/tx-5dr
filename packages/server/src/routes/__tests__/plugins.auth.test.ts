@@ -31,6 +31,8 @@ const getLoadedPlugin = vi.fn();
 const setOperatorPluginPaused = vi.fn();
 const pauseActiveTransmitControlPlugins = vi.fn();
 const resumeTransmitControlPlugins = vi.fn();
+const setOperatorStrategy = vi.fn();
+const persistOperatorStrategy = vi.fn();
 const logbookSyncHost = {
   getProviderInfo: vi.fn(),
   upload: vi.fn(),
@@ -50,6 +52,7 @@ vi.mock('../../DigitalRadioEngine.js', () => ({
         setOperatorPluginPaused,
         pauseActiveTransmitControlPlugins,
         resumeTransmitControlPlugins,
+        setOperatorStrategy,
         logbookSyncHost,
       },
     }),
@@ -58,7 +61,7 @@ vi.mock('../../DigitalRadioEngine.js', () => ({
 
 vi.mock('../../config/config-manager.js', () => ({
   ConfigManager: {
-    getInstance: () => ({}),
+    getInstance: () => ({ setOperatorStrategy: persistOperatorStrategy }),
   },
 }));
 
@@ -87,6 +90,8 @@ describe('pluginRoutes auth', () => {
     setOperatorPluginPaused.mockReset().mockResolvedValue(['automation-demo']);
     pauseActiveTransmitControlPlugins.mockReset().mockResolvedValue(['automation-demo']);
     resumeTransmitControlPlugins.mockReset().mockResolvedValue([]);
+    setOperatorStrategy.mockReset();
+    persistOperatorStrategy.mockReset().mockResolvedValue(undefined);
     logbookSyncHost.getProviderInfo.mockReset();
     logbookSyncHost.upload.mockReset();
     logbookSyncHost.download.mockReset();
@@ -127,6 +132,28 @@ describe('pluginRoutes auth', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual(snapshot);
     expect(getSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows an operator to switch only their own strategy', async () => {
+    const allowed = await fastify.inject({
+      method: 'PUT',
+      url: '/api/plugins/operators/operator-1/strategy',
+      headers: { 'x-role': UserRole.OPERATOR },
+      payload: { pluginName: 'assisted-qso-queue' },
+    });
+    const denied = await fastify.inject({
+      method: 'PUT',
+      url: '/api/plugins/operators/operator-2/strategy',
+      headers: { 'x-role': UserRole.OPERATOR },
+      payload: { pluginName: 'assisted-qso-queue' },
+    });
+
+    expect(allowed.statusCode).toBe(200);
+    expect(denied.statusCode).toBe(403);
+    expect(setOperatorStrategy).toHaveBeenCalledOnce();
+    expect(setOperatorStrategy).toHaveBeenCalledWith('operator-1', 'assisted-qso-queue');
+    expect(persistOperatorStrategy).toHaveBeenCalledOnce();
+    expect(persistOperatorStrategy).toHaveBeenCalledWith('operator-1', 'assisted-qso-queue');
   });
 
   it('keeps plugin snapshots unavailable to viewers', async () => {

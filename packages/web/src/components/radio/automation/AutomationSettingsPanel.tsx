@@ -9,7 +9,7 @@ import {
   Textarea,
   Tooltip,
 } from '@heroui/react';
-import { useConnection } from '../../../store/radioStore';
+import { useConnection, useOperators } from '../../../store/radioStore';
 import { api } from '@tx5dr/core';
 import type {
   PluginQuickAction,
@@ -39,6 +39,7 @@ import {
 import { pluginMatchesAutomationFilter, type AutomationPanelFilter } from './automationFilters';
 import { PluginSettingField } from '../../settings/PluginSettingField';
 import { PluginSettingLabelWithHelp } from '../../settings/PluginSettingHelp';
+import { PluginStrategySelector } from '../../plugins/PluginStrategySelector';
 import { isTransmitControlPlugin, isTransmitControlPluginPaused } from '../operators/radioOperatorAutomation';
 
 const logger = createLogger('AutomationSettingsPanel');
@@ -66,12 +67,13 @@ const QUICK_ACTION_SPINNER = (
   />
 );
 
-function hasOperatorQuickSetting(
+export function getOperatorQuickSettings(
   plugin: PluginStatus,
-  quickSetting: PluginQuickSetting,
-): boolean {
-  const descriptor = plugin.settings?.[quickSetting.settingKey];
-  return Boolean(descriptor && descriptor.scope === 'operator' && descriptor.type !== 'info');
+): PluginQuickSetting[] {
+  return (plugin.quickSettings ?? []).filter((quickSetting) => {
+    const descriptor = plugin.settings?.[quickSetting.settingKey];
+    return Boolean(descriptor && descriptor.scope === 'operator' && descriptor.type !== 'info');
+  });
 }
 
 function getQuickGroupRank(plugin: PluginStatus): number {
@@ -88,6 +90,13 @@ function getQuickGroupRank(plugin: PluginStatus): number {
   }
 
   return 3;
+}
+
+export function shouldShowAutomationStrategySelector(
+  plugins: PluginStatus[],
+  filter: AutomationPanelFilter,
+): boolean {
+  return filter === 'all' && plugins.filter((plugin) => plugin.type === 'strategy').length > 1;
 }
 
 function usesGeneratedSettingEditor(descriptor: PluginSettingDescriptor): boolean {
@@ -141,6 +150,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
 }) => {
   const { t } = useTranslation('settings');
   const connection = useConnection();
+  const { operators } = useOperators();
   const pluginSnapshot = usePluginSnapshot();
   const getMeta = usePluginPanelMeta(pluginSnapshot.panelMeta);
   const [loading, setLoading] = React.useState(true);
@@ -150,6 +160,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
   const [savingSettingKey, setSavingSettingKey] = React.useState<string | null>(null);
   const [runningButtonKey, setRunningButtonKey] = React.useState<string | null>(null);
   const [pausingPluginName, setPausingPluginName] = React.useState<string | null>(null);
+  const [currentStrategy, setCurrentStrategy] = React.useState('standard-qso');
   const visibleSavingSettingKey = useDelayedBusyKey(savingSettingKey);
   const visibleRunningButtonKey = useDelayedBusyKey(runningButtonKey);
 
@@ -180,6 +191,13 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
     () => pluginSnapshot.plugins,
     [operatorSettingsSchemaSignature],
   );
+  const liveStrategy = operators
+    .find((operator) => operator.id === operatorId)?.strategy.name;
+  const showStrategySelector = shouldShowAutomationStrategySelector(pluginSnapshot.plugins, filter);
+
+  React.useEffect(() => {
+    if (liveStrategy) setCurrentStrategy(liveStrategy);
+  }, [liveStrategy]);
 
   const buildSettingsWithDefaults = React.useCallback((
     remoteMap: Record<string, Record<string, unknown>>,
@@ -224,7 +242,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
       .map((plugin, index) => ({ plugin, index }))
       .filter(({ plugin }) => pluginMatchesAutomationFilter(plugin, filter))
       .filter((plugin) => {
-        const settings = (plugin.plugin.quickSettings ?? []).filter((entry) => hasOperatorQuickSetting(plugin.plugin, entry));
+        const settings = getOperatorQuickSettings(plugin.plugin);
         const actions = plugin.plugin.quickActions ?? [];
         const panels = panelsByPlugin.get(plugin.plugin.name) ?? [];
         if (settings.length === 0 && actions.length === 0 && panels.length === 0) {
@@ -245,7 +263,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
       })
       .map((plugin) => ({
         plugin: plugin.plugin,
-        settings: (plugin.plugin.quickSettings ?? []).filter((entry) => hasOperatorQuickSetting(plugin.plugin, entry)),
+        settings: getOperatorQuickSettings(plugin.plugin),
         actions: plugin.plugin.quickActions ?? [],
         panels: panelsByPlugin.get(plugin.plugin.name) ?? [],
       }));
@@ -270,6 +288,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
           return;
         }
         const remoteMap = res?.operatorSettings ?? {};
+        setCurrentStrategy(res?.currentStrategy ?? 'standard-qso');
         const nextMap = buildSettingsWithDefaults(remoteMap);
         setDraftSettingsMap(nextMap);
         setSavedSettingsMap(nextMap);
@@ -441,7 +460,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
     return <AutomationSettingsPanelSkeleton className={className} paddingClassName={paddingClassName} />;
   }
 
-  if (activeGroups.length === 0) {
+  if (!showStrategySelector && activeGroups.length === 0) {
     return (
       <div className="py-2 text-xs text-default-400">
         {t('automation.empty', 'No quick automation actions are available for this operator.')}
@@ -455,6 +474,20 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
         <div className="rounded-md border border-danger-200 bg-danger-50 px-2.5 py-2 text-[11px] leading-5 text-danger-700">
           {error}
         </div>
+      )}
+
+      {showStrategySelector && (
+        <section className="space-y-1.5">
+          <div className="px-1 text-[10px] uppercase tracking-[0.12em] text-default-400">
+            {t('plugins.automationStrategy', 'Automation Strategy')}
+          </div>
+          <PluginStrategySelector
+            operatorId={operatorId}
+            currentStrategy={currentStrategy}
+            onStrategyChange={setCurrentStrategy}
+            compact
+          />
+        </section>
       )}
 
       {activeGroups.map(({ plugin, settings, actions, panels }) => {

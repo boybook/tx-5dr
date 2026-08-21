@@ -272,14 +272,20 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
             const hasSlotChanged = op.currentSlot !== action.payload.currentSlot;
             const hasTransmittingChanged = op.isTransmitting !== action.payload.isTransmitting;
             const hasActivePTTChanged = op.isInActivePTT !== action.payload.isInActivePTT;
+            const hasTransmitIntentChanged = op.hasTransmitIntent !== action.payload.hasTransmitIntent;
             const hasSlotsChanged =
               JSON.stringify(op.slots) !== JSON.stringify(action.payload.slots);
             const hasTransmitCyclesChanged =
               JSON.stringify(op.transmitCycles) !== JSON.stringify(action.payload.transmitCycles);
+            const hasStrategyChanged =
+              JSON.stringify(op.strategy) !== JSON.stringify(action.payload.strategy);
+            const hasRuntimeChanged =
+              JSON.stringify(op.runtime) !== JSON.stringify(action.payload.runtime);
 
             // 如果没有实质性变化，返回原对象（避免重新渲染）
             if (!hasContextChanged && !hasSlotChanged && !hasTransmittingChanged &&
-                !hasActivePTTChanged && !hasSlotsChanged && !hasTransmitCyclesChanged) {
+                !hasActivePTTChanged && !hasTransmitIntentChanged && !hasSlotsChanged && !hasTransmitCyclesChanged &&
+                !hasStrategyChanged && !hasRuntimeChanged) {
               return op;
             }
 

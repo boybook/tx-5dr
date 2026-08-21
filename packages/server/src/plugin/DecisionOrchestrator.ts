@@ -84,7 +84,7 @@ export class DecisionOrchestrator {
     await Promise.all(this.deps.getOperators().map(async (operator) => {
       await this.deps.intentCoordinator.submit(
         operator.config.id,
-        'slot-auto',
+        this.deps.hasTargetQueue?.(operator.config.id) === true ? 'assisted-queue' : 'slot-auto',
         (token, signal) => this.handleOperatorSlotStart(operator.config.id, slotInfo, slotPack, token, signal),
       );
     }));
@@ -105,6 +105,16 @@ export class DecisionOrchestrator {
       if (!this.isCommandCurrent(token, signal)) return;
       // 决策分水岭：部分解码消息仅供广播/监控观察，绝不进入任何自动决策路径
       const actionableMessages = parsedMessages.filter((message) => !message.isPartialDecode);
+      const hasTargetQueue = this.deps.hasTargetQueue?.(operatorId) === true;
+      this.deps.observeStrategyMessages?.(
+        operatorId,
+        actionableMessages,
+        slotInfo,
+        'slot-auto',
+        token,
+        signal,
+      );
+      if (!this.isCommandCurrent(token, signal)) return;
 
       // Passive hooks are guarded and observed, but never hold the RF decision lane.
       void this.deps.dispatcher.dispatchBroadcast(
@@ -134,20 +144,20 @@ export class DecisionOrchestrator {
         (instance) => this.deps.getCtxForInstance(instance),
       );
 
-      if (!operator.isTransmitting
+      if (!hasTargetQueue && !operator.isTransmitting
           && await this.tryWakeFromSilentDirectedCallGate(operatorId, actionableMessages, slotInfo, slotPack, token, signal)) {
         return;
       }
       if (!this.isCommandCurrent(token, signal)) return;
 
-      if (!operator.isTransmitting
+      if (!hasTargetQueue && !operator.isTransmitting
           && await this.tryWakeFromStoppedDirectCallAutoReply(operatorId, actionableMessages, slotInfo, slotPack, token, signal)) {
         return;
       }
       if (!this.isCommandCurrent(token, signal)) return;
 
       let automaticTargetMessages: ParsedFT8Message[] | undefined;
-      if (this.isOperatorPureStandby(operatorId)) {
+      if (!hasTargetQueue && this.isOperatorPureStandby(operatorId)) {
         automaticTargetMessages = await this.getScoredAutomaticTargetMessages(
           operatorId,
           actionableMessages,
@@ -225,6 +235,7 @@ export class DecisionOrchestrator {
     const currentMode = this.deps.getCurrentMode();
     for (const operator of this.deps.getOperators()) {
       if (!operator.isTransmitting) continue;
+      if (this.deps.isQueueExecutionSuspended?.(operator.config.id) === true) continue;
 
       const isTransmitSlot = CycleUtils.isOperatorTransmitCycleFromMs(
         operator.getTransmitCycles(),
@@ -265,6 +276,37 @@ export class DecisionOrchestrator {
     return outcome.status === 'completed' ? outcome.value : false;
   }
 
+  async revalidateQueueExecution(operatorId: string): Promise<void> {
+    const outcome = await this.deps.intentCoordinator.submit(
+      operatorId,
+      'assisted-queue',
+      (token, signal) => this.revalidateQueueExecutionInLane(operatorId, token, signal),
+    );
+    if (outcome.status === 'superseded') {
+      logger.debug('Queue execution resume was superseded', { operatorId });
+    }
+  }
+
+  async revalidateQueueExecutionInLane(
+    operatorId: string,
+    token: OperatorCommandToken,
+    signal: AbortSignal,
+  ): Promise<StrategyDecisionResult | null> {
+    const operator = this.deps.getOperatorById(operatorId);
+    if (!operator?.isTransmitting || this.deps.hasTargetQueue?.(operatorId) !== true) return null;
+    const decision = await this.invokeStrategyDecision(
+      operatorId,
+      [],
+      { isReDecision: true },
+      token,
+      signal,
+    );
+    if (!this.isCommandCurrent(token, signal)) return null;
+    await this.notifyQSOFailIfPresent(operatorId, decision);
+    if (decision?.stop) await this.applyStrategyStop(operatorId);
+    return decision;
+  }
+
   private async reDecideOperatorInLane(
     operatorId: string,
     slotPack: SlotPack,
@@ -281,6 +323,16 @@ export class DecisionOrchestrator {
       const parsedMessages = await this.parseSlotPackMessages(slotPack, operatorId);
       if (!this.isCommandCurrent(token, signal)) return false;
       const actionableMessages = parsedMessages.filter((message) => !message.isPartialDecode);
+      this.deps.observeStrategyMessages?.(
+        operatorId,
+        actionableMessages,
+        slotInfo,
+        'late-decode',
+        token,
+        signal,
+      );
+      if (!this.isCommandCurrent(token, signal)) return false;
+      if (this.deps.hasTargetQueue?.(operatorId) === true) return false;
       if (await this.tryWakeFromSilentDirectedCallGate(
         operatorId,
         actionableMessages,
@@ -313,6 +365,15 @@ export class DecisionOrchestrator {
     const parsedMessages = await this.parseSlotPackMessages(slotPack, operatorId);
     if (!this.isCommandCurrent(token, signal)) return false;
     const actionableMessages = parsedMessages.filter((message) => !message.isPartialDecode);
+    this.deps.observeStrategyMessages?.(
+      operatorId,
+      actionableMessages,
+      this.buildSlotInfoFromSlotPack(slotPack),
+      'late-decode',
+      token,
+      signal,
+    );
+    if (!this.isCommandCurrent(token, signal)) return false;
     const automaticTargetMessages = await this.getScoredAutomaticTargetMessages(
       operatorId,
       actionableMessages,
@@ -733,6 +794,16 @@ export class DecisionOrchestrator {
 
         const operator = this.deps.getOperatorById(operatorId);
         if (operator) {
+          this.deps.markQueueExecutionValidated?.(operatorId);
+          if (Number.isInteger(result.requestedTransmitCycle)
+              && result.requestedTransmitCycle! >= 0
+              && result.requestedTransmitCycle! <= 1) {
+            operator.setTransmitCycles(result.requestedTransmitCycle!, {
+              commandEpoch: token.epoch,
+              source: 'slot-auto',
+              reason: 'queue activation selected transmit cycle from source frame',
+            });
+          }
           if (result.snapshot.slots) {
             operator.notifySlotsUpdated(result.snapshot.slots as import('@tx5dr/contracts').OperatorSlots);
           }
@@ -824,11 +895,24 @@ export class DecisionOrchestrator {
       return;
     }
     try {
+      const beforeQueueVersion = this.deps.invokeStrategyRuntimeSync(
+        operatorId,
+        'snapshot:before-qso-settlement',
+        (runtime) => runtime.getSnapshot().queue?.version,
+      );
       this.deps.invokeStrategyRuntimeSync(
         operatorId,
         `settle-qso:${status}`,
         (runtime) => runtime.settleQSOCompletion?.({ lifecycleEpoch, recordId, status }),
       );
+      const afterQueueVersion = this.deps.invokeStrategyRuntimeSync(
+        operatorId,
+        'snapshot:after-qso-settlement',
+        (runtime) => runtime.getSnapshot().queue?.version,
+      );
+      if (afterQueueVersion !== beforeQueueVersion) {
+        this.deps.notifyOperatorStatusChanged?.(operatorId);
+      }
     } catch (error) {
       logger.warn('Failed to settle strategy QSO lifecycle', {
         operatorId,

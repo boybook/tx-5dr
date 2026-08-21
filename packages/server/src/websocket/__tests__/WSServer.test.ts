@@ -235,6 +235,94 @@ function createTestConnection(id = 'conn-test'): { connection: WSConnection; sen
 }
 
 describe('WSServer security filtering', () => {
+  it('guards all queue mutations as operator-scoped manage commands', () => {
+    const commandAccess = (WSServer as any).COMMAND_ACCESS;
+    const operatorCommands = (WSServer as any).OPERATOR_DATA_COMMANDS as Set<WSMessageType>;
+    for (const type of [
+      WSMessageType.OPERATOR_QUEUE_ENQUEUE,
+      WSMessageType.OPERATOR_QUEUE_REORDER,
+      WSMessageType.OPERATOR_QUEUE_RETRY,
+      WSMessageType.OPERATOR_QUEUE_REMOVE,
+      WSMessageType.OPERATOR_QUEUE_CLEAR,
+    ]) {
+      expect(commandAccess[type]).toMatchObject({ ability: { action: 'manage', subject: 'Operator' } });
+      expect(operatorCommands.has(type)).toBe(true);
+    }
+  });
+
+  it('returns the latest authoritative queue snapshot on a version conflict', () => {
+    const sendToConnection = vi.fn();
+    const server = Object.create(WSServer.prototype) as any;
+    server.sendToConnection = sendToConnection;
+    const queue = {
+      version: 5,
+      rows: [{
+        entryId: 'queue-1',
+        callsign: 'JA1AAA',
+        order: 0,
+        draggable: true,
+        displayState: 'TX1',
+        tone: 'neutral',
+        icon: 'circle',
+      }],
+    };
+
+    expect(server.handleQueueMutationRejection('conn-1', 'operatorQueueReorder', {
+      outcome: 'rejected',
+      reason: 'version_conflict',
+      snapshot: queue,
+    })).toBe(true);
+    expect(sendToConnection).toHaveBeenCalledWith('conn-1', WSMessageType.ERROR, expect.objectContaining({
+      message: 'version_conflict',
+      details: { queue },
+      context: { command: 'operatorQueueReorder' },
+    }));
+  });
+
+  it('forwards the manual first-target start intent with an enqueue command', async () => {
+    const enqueueQueueTarget = vi.fn(async () => ({
+      outcome: 'accepted' as const,
+      snapshot: { version: 1, rows: [] },
+    }));
+    const server = Object.create(WSServer.prototype) as any;
+    server.digitalRadioEngine = { pluginManager: { enqueueQueueTarget } };
+    server.logOperatorCommand = vi.fn();
+    server.handleQueueMutationRejection = vi.fn();
+    server.handleCommandError = vi.fn();
+
+    await server.handleOperatorQueueEnqueue({
+      operatorId: 'operator-1',
+      callsign: 'JA1AAA',
+      startIfIdle: true,
+    }, 'conn-1');
+
+    expect(enqueueQueueTarget).toHaveBeenCalledWith(
+      'operator-1',
+      { callsign: 'JA1AAA', lastMessage: undefined },
+      { startIfIdle: true },
+    );
+  });
+
+  it('forwards a versioned retry command to the queue host', async () => {
+    const retryQueueTarget = vi.fn(async () => ({
+      outcome: 'accepted' as const,
+      snapshot: { version: 4, rows: [] },
+    }));
+    const server = Object.create(WSServer.prototype) as any;
+    server.digitalRadioEngine = { pluginManager: { retryQueueTarget } };
+    server.logOperatorCommand = vi.fn();
+    server.handleQueueMutationRejection = vi.fn();
+    server.handleCommandError = vi.fn();
+
+    await server.handleOperatorQueueRetry({
+      operatorId: 'operator-1',
+      entryId: 'queue-2',
+      expectedVersion: 3,
+    }, 'conn-1');
+
+    expect(retryQueueTarget).toHaveBeenCalledWith('operator-1', 'queue-2', 3);
+  });
+
   it('keeps public viewers from self-subscribing to operators', async () => {
     const { connection, sent } = createTestConnection('conn-public');
     connection.setPublicViewer();

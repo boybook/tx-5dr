@@ -14,6 +14,7 @@ function createOperatorStatus(overrides: Partial<OperatorStatus> = {}): Operator
     isActive: true,
     isTransmitting: true,
     isInActivePTT: false,
+    hasTransmitIntent: true,
     currentSlot: 'TX6',
     context: {
       myCall: 'BG5DRB',
@@ -109,9 +110,46 @@ describe('RadioOperator memo comparison', () => {
     expect(shouldRadioOperatorPropsBeEqual(prev, next)).toBe(false);
   });
 
+  it('treats transmit intent changes as a meaningful update', () => {
+    const prev = createOperatorStatus({ hasTransmitIntent: false });
+    const next = createOperatorStatus({ hasTransmitIntent: true });
+
+    expect(shouldRadioOperatorPropsBeEqual(prev, next)).toBe(false);
+  });
+
   it('treats transmit cycle changes as a meaningful update', () => {
     const prev = createOperatorStatus({ transmitCycles: [0] });
     const next = createOperatorStatus({ transmitCycles: [1] });
+
+    expect(shouldRadioOperatorPropsBeEqual(prev, next)).toBe(false);
+  });
+
+  it('treats authoritative queue snapshot changes as a meaningful update', () => {
+    const prev = createOperatorStatus({
+      runtime: {
+        currentState: 'idle',
+        queue: { version: 1, rows: [] },
+      },
+    });
+    const next = createOperatorStatus({
+      runtime: {
+        currentState: 'idle',
+        queue: { version: 2, rows: [] },
+      },
+    });
+
+    expect(shouldRadioOperatorPropsBeEqual(prev, next)).toBe(false);
+  });
+
+  it('treats an active strategy change as a meaningful update', () => {
+    const prev = createOperatorStatus();
+    const next = createOperatorStatus({
+      strategy: {
+        name: 'assisted-qso-queue',
+        state: 'TX6',
+        availableSlots: ['TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'TX6'],
+      },
+    });
 
     expect(shouldRadioOperatorPropsBeEqual(prev, next)).toBe(false);
   });
@@ -146,6 +184,22 @@ describe('RadioOperator transmit content', () => {
 
     expect(resolveRadioOperatorCyclePresentation(operator, createSlotInfo(), true).transmitContent)
       .toBe('');
+  });
+
+  it('stays in the listening presentation when TX is enabled without a transmit intent', () => {
+    const operator = createOperatorStatus({
+      isTransmitting: true,
+      isInActivePTT: false,
+      hasTransmitIntent: false,
+      currentSlot: 'TX6',
+      slots: { TX6: 'CQ BG5DRB PM01' },
+    });
+
+    expect(resolveRadioOperatorCyclePresentation(operator, createSlotInfo(), true)).toMatchObject({
+      isTransmit: false,
+      transmitContent: 'CQ BG5DRB PM01',
+      progressColor: 'var(--ft8-cycle-even-bg)',
+    });
   });
 
   it('uses the normal cycle presentation outside the operator TX cycle', () => {
