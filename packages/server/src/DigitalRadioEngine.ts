@@ -392,6 +392,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       eventEmitter: this,
       getOperators: () => this._operatorManager.getAllOperators(),
       getOperatorById: (id) => this._operatorManager.getOperatorById(id),
+      notifyOperatorStatusChanged: (id) => this._operatorManager.emitOperatorStatusUpdate(id),
       getCurrentMode: () => this.currentMode,
       getOperatorAutomationSnapshot: (id) => this._pluginManager.getOperatorAutomationSnapshot(id),
       requestOperatorCall: (operatorId, callsign, lastMessage) => {
@@ -447,7 +448,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       setOperatorAudioFrequency: async (operatorId, frequency, commandToken) => {
         await this._operatorManager.updateOperatorContext(operatorId, { frequency }, {
           commandEpoch: commandToken?.epoch,
-          source: commandToken?.source,
+          source: commandToken?.source === 'assisted-queue' ? 'slot-auto' : commandToken?.source,
           reason: 'auto-call execution plan changed audio frequency',
         });
       },

@@ -28,6 +28,8 @@ import {
 import { pickManualIdleFrequency } from './radioOperatorIdleFrequency';
 import { getActiveTransmitControlPlugins, getPausedTransmitControlPlugins } from './radioOperatorAutomation';
 import { pluginApi } from '../../../utils/pluginApi';
+import { OperatorQueueTable } from './OperatorQueueTable';
+import { shouldRenderOperatorQueue } from './operatorQueuePresentation';
 
 const logger = createLogger('RadioOperator');
 
@@ -1443,6 +1445,10 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             </span>
           </Button>
         </div>
+
+        {shouldRenderOperatorQueue(operatorStatus, pluginStatuses) && (
+          <OperatorQueueTable operatorId={operatorStatus.id} queue={operatorStatus.runtime.queue} />
+        )}
         
         {/* 时隙内容（展开时显示） */}
         <div 

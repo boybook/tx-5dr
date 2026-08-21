@@ -25,6 +25,7 @@ export function shouldRadioOperatorPropsBeEqual(prev: OperatorStatus, next: Oper
       prev.isActive !== next.isActive ||
       prev.isTransmitting !== next.isTransmitting ||
       prev.isInActivePTT !== next.isInActivePTT ||
+      prev.hasTransmitIntent !== next.hasTransmitIntent ||
       prev.currentSlot !== next.currentSlot) {
     return false;
   }
@@ -38,6 +39,14 @@ export function shouldRadioOperatorPropsBeEqual(prev: OperatorStatus, next: Oper
   }
 
   if (JSON.stringify(prev.transmitCycles) !== JSON.stringify(next.transmitCycles)) {
+    return false;
+  }
+
+  if (JSON.stringify(prev.strategy) !== JSON.stringify(next.strategy)) {
+    return false;
+  }
+
+  if (JSON.stringify(prev.runtime?.queue) !== JSON.stringify(next.runtime?.queue)) {
     return false;
   }
 

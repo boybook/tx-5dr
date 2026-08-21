@@ -114,6 +114,11 @@ export interface PluginDefinition<
    */
   type: PluginType;
 
+  /** Optional, backwards-compatible strategy capability declarations. */
+  strategyFeatures?: {
+    targetQueue?: 1;
+  };
+
   /**
    * Controls whether the host creates one instance per operator or a single
    * shared instance for the whole station.

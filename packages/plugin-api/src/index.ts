@@ -81,7 +81,18 @@ export type {
   StrategyDecisionSource,
   StrategyQSOCompletionEffect,
   StrategyQSOCompletionSettlement,
+  AssistedQueueDisplayState,
+  AssistedQueuePauseReason,
+  AssistedQueueTone,
+  AssistedQueueIcon,
+  AssistedQueueRow,
+  AssistedQueueSnapshot,
+  QueuedStrategyObservationMeta,
+  QueuedStrategyTargetRequest,
+  QueuedStrategyMutationResult,
+  QueuedStrategyRuntime,
 } from './runtime.js';
+export { isQueuedStrategyRuntime } from './runtime.js';
 export type {
   HostSettingsControl,
   HostSettingsNamespace,

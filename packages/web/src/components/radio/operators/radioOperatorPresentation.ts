@@ -12,13 +12,14 @@ export function resolveRadioOperatorCyclePresentation(
   slotInfo: SlotInfo | null | undefined,
   isCurrentTransmitCycle: boolean,
 ): RadioOperatorCyclePresentation {
-  const isTransmit = operatorStatus.isInActivePTT === true
-    || (operatorStatus.isTransmitting && isCurrentTransmitCycle);
   const transmitContent = operatorStatus.slots && operatorStatus.currentSlot
     ? operatorStatus.slots[
       operatorStatus.currentSlot as keyof NonNullable<OperatorStatus['slots']>
     ] || ''
     : '';
+  const hasTransmitIntent = operatorStatus.hasTransmitIntent ?? Boolean(transmitContent);
+  const isTransmit = operatorStatus.isInActivePTT === true
+    || (operatorStatus.isTransmitting && isCurrentTransmitCycle && hasTransmitIntent);
 
   if (isTransmit) {
     return {

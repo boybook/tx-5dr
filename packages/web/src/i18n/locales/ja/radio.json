@@ -436,7 +436,41 @@
     "pauseAllAutoCall": "すべて一時停止",
     "resumeAllAutoCall": "すべて再開",
     "autoCallPauseFailed": "自動呼び出しを一時停止できませんでした",
-    "autoCallResumeFailed": "自動呼び出しを再開できませんでした"
+    "autoCallResumeFailed": "自動呼び出しを再開できませんでした",
+    "queue": {
+      "title": "交信キュー",
+      "callsign": "コールサイン",
+      "status": "状態",
+      "remove": "キューから削除",
+      "interruptAndRemove": "中断して削除",
+      "retry": "再呼び出し",
+      "clear": "キューをクリア",
+      "emptyHint": "左側のコールサインをダブルクリックして追加"
+    },
+    "queueStatus": {
+      "engaged": "交信中",
+      "closing": "終了中",
+      "paused": "一時停止",
+      "no-response": "非アクティブ",
+      "noResponseCycles": "非アクティブ · {{count}} 周期応答なし",
+      "later": "後で",
+      "review": "確認"
+    },
+    "queuePauseReason": {
+      "targetBusy": "相手局が交信中",
+      "stale": "受信なし"
+    },
+    "queueMeta": {
+      "cyclesAgo": "{{count}} 周期前"
+    },
+    "queueErrors": {
+      "queueFull": "キューがいっぱいです",
+      "invalidTarget": "このコールサインはキューに追加できません",
+      "entryNotFound": "キューが更新されました。もう一度お試しください",
+      "entryNotRetryable": "この項目は現在再呼び出しできません",
+      "activeEntry": "現在の交信相手は移動できません",
+      "versionConflict": "別の場所でキューが更新されました。最新の順序で再試行してください"
+    }
   },
   "profile": {
     "reconnecting": "「{{name}}」を再接続しています",

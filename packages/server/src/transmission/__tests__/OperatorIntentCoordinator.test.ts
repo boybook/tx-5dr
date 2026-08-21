@@ -54,6 +54,24 @@ describe('OperatorIntentCoordinator', () => {
     expect(automaticTokenCurrent).toBe(false);
   });
 
+  it('places assisted queue work below manual and above decode automation', async () => {
+    const coordinator = new OperatorIntentCoordinator();
+    const first = deferred<void>();
+    const late = coordinator.submit('a', 'late-decode', () => first.promise);
+    const assisted = coordinator.submit('a', 'assisted-queue', () => 'assisted');
+
+    first.resolve();
+    await expect(late).resolves.toMatchObject({ status: 'superseded' });
+    await expect(assisted).resolves.toMatchObject({ status: 'completed', value: 'assisted' });
+
+    const held = deferred<void>();
+    const activeAssisted = coordinator.submit('a', 'assisted-queue', () => held.promise);
+    const queuedLate = coordinator.submit('a', 'late-decode', () => 'late');
+    held.resolve();
+    await expect(activeAssisted).resolves.toMatchObject({ status: 'completed' });
+    await expect(queuedLate).resolves.toMatchObject({ status: 'completed', value: 'late' });
+  });
+
   it('continues after quarantining work that ignores abort', async () => {
     vi.useFakeTimers();
     const onAbortTimeout = vi.fn();

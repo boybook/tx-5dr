@@ -30,6 +30,12 @@ import {
 } from './standard-qso/index.js';
 
 import {
+  assistedQSOQueueStrategyPlugin,
+  assistedQSOQueueLocales,
+  BUILTIN_ASSISTED_QSO_QUEUE_PLUGIN_NAME,
+} from './assisted-qso-queue/index.js';
+
+import {
   snrFilterPlugin,
   snrFilterLocales,
   BUILTIN_SNR_FILTER_PLUGIN_NAME,
@@ -120,12 +126,19 @@ export interface BuiltinPluginEntry {
   enabledByDefault: boolean;
   /** Plugin directory path (built-in plugins with UI static files must provide this via import.meta.url) */
   dirPath?: string;
+  /**
+   * Optional canonical settings namespace shared by closely related built-ins.
+   * Each plugin may expose a narrower settings schema; the host preserves keys
+   * outside that projection when saving through the shared namespace.
+   */
+  settingsNamespace?: string;
 }
 
 // ===== Named exports =====
 
 export {
   BUILTIN_STANDARD_QSO_PLUGIN_NAME,
+  BUILTIN_ASSISTED_QSO_QUEUE_PLUGIN_NAME,
   BUILTIN_SNR_FILTER_PLUGIN_NAME,
   STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING,
   buildStandardQSODefaultTx6Message,
@@ -149,6 +162,12 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
     definition: standardQSOStrategyPlugin,
     locales: standardQSOLocales,
     enabledByDefault: true,
+  },
+  {
+    definition: assistedQSOQueueStrategyPlugin,
+    locales: assistedQSOQueueLocales,
+    enabledByDefault: false,
+    settingsNamespace: BUILTIN_STANDARD_QSO_PLUGIN_NAME,
   },
   {
     definition: snrFilterPlugin,

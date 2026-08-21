@@ -866,6 +866,9 @@ export class RadioOperatorManager {
     const operators = [];
     for (const [id, operator] of this.operators.entries()) {
       const runtimeState = this._pluginManager?.getOperatorRuntimeStatus(id);
+      const hasTransmitIntent = operator.isTransmitting
+        && this._pluginManager?.isQueueExecutionSuspended?.(id) !== true
+        && Boolean(this._pluginManager?.getCurrentTransmission?.(id));
       const currentSlot = runtimeState?.currentSlot ?? 'TX6';
       const slots = runtimeState?.slots;
       let targetGrid = String(runtimeState?.context?.targetGrid ?? '');
@@ -886,6 +889,7 @@ export class RadioOperatorManager {
         isActive: this.isRunning,
         isTransmitting: operator.isTransmitting,
         isInActivePTT: this.activeTransmissionOperatorIds.has(id),
+        hasTransmitIntent,
         currentSlot,
         context: {
           myCall: operator.config.myCallsign,
@@ -906,6 +910,7 @@ export class RadioOperatorManager {
           slots,
           context: runtimeState.context as any,
           availableSlots: runtimeState.availableSlots,
+          queue: runtimeState.queue,
         } : undefined,
         slots,
         transmitCycles: operator.getTransmitCycles(),
@@ -1097,6 +1102,15 @@ export class RadioOperatorManager {
     logger.info(`Started transmitting for operator ${operatorId}`);
     this.emitOperatorStatusUpdate(operatorId);
 
+    if (this._pluginManager?.hasTargetQueue?.(operatorId)) {
+      void this._pluginManager.resumeQueueExecution(operatorId).then((validated) => {
+        if (validated && operator.isTransmitting) this.checkAndTriggerTransmission(operatorId);
+      }).catch((error) => {
+        logger.warn(`Failed to revalidate assisted queue execution for ${operatorId}`, error);
+      });
+      return;
+    }
+
     // 立即检查并触发发射（如果在发射周期内）
     this.checkAndTriggerTransmission(operatorId);
     
@@ -1256,16 +1270,18 @@ export class RadioOperatorManager {
     this.clearSameTransmissionGuard(operatorId);
     operator.blockForLogbookFailure();
     const frameStop = this.requestStrategyStop(operatorId, 'logbook durability failure');
-    const resetPluginRuntime = this._pluginManager?.resetOperatorPluginRuntime?.bind(this._pluginManager);
-    if (resetPluginRuntime) {
-      try {
-        resetPluginRuntime(operatorId, 'logbook durability failure');
-      } catch (error) {
-        logger.warn(`Failed to reset plugin runtime for ${operatorId} after a logbook failure`, error);
+    if (this._pluginManager?.hasTargetQueue?.(operatorId) !== true) {
+      const resetPluginRuntime = this._pluginManager?.resetOperatorPluginRuntime?.bind(this._pluginManager);
+      if (resetPluginRuntime) {
+        try {
+          resetPluginRuntime(operatorId, 'logbook durability failure');
+        } catch (error) {
+          logger.warn(`Failed to reset plugin runtime for ${operatorId} after a logbook failure`, error);
+          this.resetPluginRuntime(operatorId, 'logbook durability failure');
+        }
+      } else {
         this.resetPluginRuntime(operatorId, 'logbook durability failure');
       }
-    } else {
-      this.resetPluginRuntime(operatorId, 'logbook durability failure');
     }
     this.emitOperatorStatusUpdate(operatorId);
     logger.error(`Paused operator ${operatorId} after a logbook durability failure`, { frameStop });
@@ -1604,6 +1620,7 @@ export class RadioOperatorManager {
     },
   ): void {
     if (this.transmissionMaintenanceReason) return;
+    if (this._pluginManager?.isQueueExecutionSuspended?.(operatorId)) return;
 
     if (mutation.kind === 'frequency' && this.isFakeFrequencyCommittedForCurrentSlot()) {
       logger.debug('Deferring operator frequency mutation to next slot because fake frequency is committed', {
@@ -1951,6 +1968,7 @@ export class RadioOperatorManager {
     }
     
     const epoch = this.intentCoordinator.abortOperator(operatorId, 'operator stopped');
+    this._pluginManager?.suspendQueueExecution?.(operatorId);
     this.pendingTransmissions = this.pendingTransmissions.filter((request) => request.operatorId !== operatorId);
     this.releaseTargetReservation(operatorId, epoch);
     this.requestStrategyStop(operatorId, 'operator stopped');
@@ -1970,6 +1988,7 @@ export class RadioOperatorManager {
     this.operators.forEach((operator, operatorId) => {
       if (operator.isTransmitting) {
         const epoch = this.intentCoordinator.abortOperator(operatorId, 'all operators stopped');
+        this._pluginManager?.suspendQueueExecution?.(operatorId);
         this.releaseTargetReservation(operatorId, epoch);
         this.requestStrategyStop(operatorId, 'all operators stopped');
         operator.stop();
@@ -2330,13 +2349,13 @@ export class RadioOperatorManager {
    * 关键字段：
    * - isActive, isTransmitting, currentSlot（核心状态）
    * - context（完整上下文）
-   * - strategy.state（策略状态）
+   * - strategy.name, strategy.state（策略模式和状态）
    * - slots（时隙内容）
    * - transmitCycles（发射周期）
    *
    * 排除字段：
    * - id（标识符，非状态）
-   * - strategy.name, strategy.availableSlots（基本不变）
+   * - strategy.availableSlots（基本不变）
    */
   private hashOperatorStatus(status: any): string {
     // 提取关键字段进行哈希
@@ -2344,9 +2363,12 @@ export class RadioOperatorManager {
       isActive: status.isActive,
       isTransmitting: status.isTransmitting,
       isInActivePTT: status.isInActivePTT,
+      hasTransmitIntent: status.hasTransmitIntent,
       currentSlot: status.currentSlot,
       context: status.context,
+      strategyName: status.strategy?.name,
       strategyState: status.strategy?.state,
+      runtimeQueue: status.runtime?.queue,
       slots: status.slots,
       transmitCycles: status.transmitCycles,
     };
@@ -2384,6 +2406,7 @@ export class RadioOperatorManager {
     for (const [operatorId, operator] of this.operators.entries()) {
       // 跳过自己
       if (operatorId === currentOperatorId) continue;
+      if (!operator.isTransmitting) continue;
 
       // 只检查同呼号的操作者
       if (operator.config.myCallsign.toUpperCase() !== normalizedMyCall) continue;

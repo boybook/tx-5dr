@@ -1489,6 +1489,62 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     }
   });
 
+  it('passes late decodes to a stopped queue strategy without starting a transmission', async () => {
+    const encodeQueue = { push: vi.fn() };
+    const { manager } = createManager({
+      logBook: {
+        id: 'log-1',
+        name: 'Test Log',
+        provider: {
+          addQSO: vi.fn(async (record: QSORecord) => record),
+          updateQSO: vi.fn(),
+          getQSO: vi.fn(),
+          getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+          getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 0 }),
+          hasWorkedCallsign: vi.fn().mockResolvedValue(false),
+        },
+      },
+      callsign: 'BG4IAJ',
+      clockNow: 64_500,
+      encodeQueue,
+    });
+    await manager.addOperator({
+      id: 'op1',
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      frequency: 7_074_000,
+      transmitCycles: [0],
+      mode: MODES.FT8,
+    });
+    const reDecideOperator = vi.fn().mockResolvedValue(false);
+    manager.setPluginManager({
+      reDecideOperator,
+      shouldProcessStoppedOperatorReDecision: vi.fn(() => true),
+      getCurrentTransmission: vi.fn(() => null),
+      getOperatorRuntimeStatus: vi.fn(() => null),
+      notifyTransmissionQueued: vi.fn(),
+    } as any);
+
+    try {
+      manager.start();
+      const lateDecodePack = buildSlotPack('slot-45000', 45_000, [{
+        message: 'BG4IAJ JA1AAA PM95',
+        snr: -6,
+        dt: 0,
+        freq: 1400,
+        confidence: 0.95,
+      }]);
+      manager.reDecideOnLateDecodes(lateDecodePack);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(manager.getOperatorById('op1')?.isTransmitting).toBe(false);
+      expect(reDecideOperator).toHaveBeenCalledWith('op1', lateDecodePack);
+      expect(encodeQueue.push).not.toHaveBeenCalled();
+    } finally {
+      manager.stop();
+    }
+  });
+
   it('uses the double-click request target before changing transmit cycle and refreshing the panel status', async () => {
     const encodeQueue = { push: vi.fn() };
     const { manager, eventEmitter } = createManager({
@@ -1933,6 +1989,41 @@ describe('RadioOperatorManager operator status payloads', () => {
     expect(statusSpy.mock.calls[0]?.[0]).not.toHaveProperty('cycleInfo');
   });
 
+  it('projects strategy transmit intent separately from the TX permission switch', async () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      clockNow: 0,
+    });
+    await manager.addOperator({
+      id: 'op1',
+      myCallsign: 'BG5DRB',
+      myGrid: 'PM01',
+      frequency: 1000,
+      transmitCycles: [0],
+    } as RadioOperatorConfig);
+    manager.setPluginManager({
+      getOperatorRuntimeStatus: vi.fn(() => ({
+        strategyName: 'assisted-qso-queue',
+        currentSlot: 'TX6',
+        slots: { TX6: 'CQ BG5DRB PM01' },
+      })),
+      getCurrentTransmission: vi.fn(() => 'CQ BG5DRB PM01'),
+      isQueueExecutionSuspended: vi.fn(() => false),
+    } as any);
+    manager.start();
+
+    expect(manager.getOperatorsStatus()[0]).toMatchObject({
+      isTransmitting: false,
+      hasTransmitIntent: false,
+    });
+
+    manager.getOperatorById('op1')!.start();
+    expect(manager.getOperatorsStatus()[0]).toMatchObject({
+      isTransmitting: true,
+      hasTransmitIntent: true,
+    });
+  });
+
   it('does not rebroadcast operator status only because the clock moved to another slot', async () => {
     const { manager, eventEmitter, clockSource } = createManager({
       logBook: { id: 'log-1', name: 'Test Log', provider: {} },
@@ -2280,6 +2371,100 @@ describe('RadioOperatorManager transmission acceptance notification', () => {
       slotStartMs: 0,
       timeSinceSlotStartMs: 4_500,
     });
+  });
+
+  it('waits for queue target revalidation before encoding a resumed active entry', async () => {
+    mockMaxSameTransmissionCount(20);
+    const encodeQueue = { push: vi.fn() };
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 4_500,
+      encodeQueue,
+    });
+    await addBasicOperator(manager, 'op1');
+    let resolveResume!: (value: boolean) => void;
+    manager.setPluginManager({
+      hasTargetQueue: vi.fn(() => true),
+      resumeQueueExecution: vi.fn(() => new Promise<boolean>((resolve) => { resolveResume = resolve; })),
+      getCurrentTransmission: vi.fn(() => 'JA1AAA BG4IAJ -10'),
+      getOperatorRuntimeStatus: vi.fn(() => undefined),
+    } as any);
+    manager.start();
+
+    manager.startOperator('op1');
+    expect(encodeQueue.push).not.toHaveBeenCalled();
+    resolveResume(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(encodeQueue.push).toHaveBeenCalledTimes(1);
+  });
+
+  it('includes the authoritative queue projection in operator-status deduplication', () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+    });
+    const base = {
+      id: 'op1',
+      isActive: true,
+      isTransmitting: false,
+      currentSlot: 'TX6',
+      context: {},
+      strategy: { state: 'TX6' },
+      slots: {},
+      transmitCycles: [0],
+      runtime: { queue: { version: 1, rows: [] } },
+    };
+    expect((manager as any).hashOperatorStatus(base)).not.toBe((manager as any).hashOperatorStatus({
+      ...base,
+      runtime: { queue: { version: 2, rows: [] } },
+    }));
+  });
+
+  it('includes the active strategy in operator-status deduplication', () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+    });
+    const base = {
+      id: 'op1',
+      isActive: true,
+      isTransmitting: false,
+      currentSlot: 'TX6',
+      context: {},
+      strategy: { name: 'standard-qso', state: 'TX6' },
+      slots: {},
+      transmitCycles: [0],
+    };
+
+    expect((manager as any).hashOperatorStatus(base)).not.toBe((manager as any).hashOperatorStatus({
+      ...base,
+      strategy: { name: 'assisted-qso-queue', state: 'TX6' },
+    }));
+  });
+
+  it('includes current transmit intent in operator-status deduplication', () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+    });
+    const base = {
+      id: 'op1',
+      isActive: true,
+      isTransmitting: true,
+      isInActivePTT: false,
+      hasTransmitIntent: false,
+      currentSlot: 'TX6',
+      context: {},
+      strategy: { name: 'assisted-qso-queue', state: 'TX6' },
+      slots: { TX6: 'CQ BG4IAJ OM96' },
+      transmitCycles: [0],
+    };
+
+    expect((manager as any).hashOperatorStatus(base)).not.toBe((manager as any).hashOperatorStatus({
+      ...base,
+      hasTransmitIntent: true,
+    }));
   });
 
   it('anchors the mid-slot waveform cursor to the compensated transmit start', async () => {

@@ -23,6 +23,7 @@ import {
     StrategyRuntime,
     StrategyRuntimeCheckpoint,
     StrategyRuntimeContext,
+    StrategyRuntimeSlot,
     StrategyRuntimeSnapshot,
     StrategyRuntimeSlotContentUpdate,
     QSOFailureInfo,
@@ -102,6 +103,17 @@ export interface StandardQSOPluginOperator {
     isTargetBeingWorkedByOthers(targetCallsign: string): boolean;
     notifySlotsUpdated?(slots: OperatorSlots): void;
     notifyStateChanged?(state: string): void;
+}
+
+export interface StandardQSOActivationRequest {
+    callsign: string;
+    lastMessage?: { message: FrameMessage; slotInfo: SlotInfo };
+}
+
+export interface StandardQSOActivationResult {
+    accepted: boolean;
+    lifecycleEpoch: number;
+    initialSlot?: StrategyRuntimeSlot;
 }
 
 interface StandardState {
@@ -604,6 +616,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
         },
         onTimeout(strategy: StandardQSOPluginRuntime): StateHandleResult {
             strategy.logger.debug(`TX2 timeout: target=${strategy.context.targetCallsign}, autoResumeCQAfterFail=${strategy.operator.config.autoResumeCQAfterFail}`);
+            const qsoFailure = strategy.buildProtocolTimeoutFailure('TX2');
 
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
@@ -614,11 +627,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
             // QSO失败，检查是否自动恢复CQ
             if (strategy.operator.config.autoResumeCQAfterFail) {
                 strategy.logger.debug('TX2 timeout: autoResumeCQAfterFail=true, switching to TX6');
-                return { changeState: 'TX6' };
+                return { changeState: 'TX6', qsoFailure };
             }
 
             strategy.logger.debug('TX2 timeout: autoResumeCQAfterFail=false, stopping');
-            return { changeState: 'TX6', stop: true };
+            return { changeState: 'TX6', stop: true, qsoFailure };
         }
     },
     TX3: {
@@ -715,6 +728,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
         },
         onTimeout(strategy: StandardQSOPluginRuntime): StateHandleResult {
             strategy.logger.debug(`TX3 timeout: target=${strategy.context.targetCallsign}, autoResumeCQAfterFail=${strategy.operator.config.autoResumeCQAfterFail}`);
+            const qsoFailure = strategy.buildProtocolTimeoutFailure('TX3');
 
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
@@ -725,11 +739,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
             // QSO失败，检查是否自动恢复CQ
             if (strategy.operator.config.autoResumeCQAfterFail) {
                 strategy.logger.debug('TX3 timeout: autoResumeCQAfterFail=true, switching to TX6');
-                return { changeState: 'TX6' };
+                return { changeState: 'TX6', qsoFailure };
             }
 
             strategy.logger.debug('TX3 timeout: autoResumeCQAfterFail=false, stopping');
-            return { changeState: 'TX6', stop: true };
+            return { changeState: 'TX6', stop: true, qsoFailure };
         }
     },
     TX4: {
@@ -795,6 +809,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
         },
         onTimeout(strategy: StandardQSOPluginRuntime): StateHandleResult {
             strategy.logger.debug(`TX4 timeout: target=${strategy.context.targetCallsign}, autoResumeCQAfterFail=${strategy.operator.config.autoResumeCQAfterFail}`);
+            const qsoFailure = strategy.buildProtocolTimeoutFailure('TX4');
 
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
@@ -805,11 +820,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
             // QSO失败，检查是否自动恢复CQ
             if (strategy.operator.config.autoResumeCQAfterFail) {
                 strategy.logger.debug('TX4 timeout: autoResumeCQAfterFail=true, switching to TX6');
-                return { changeState: 'TX6' };
+                return { changeState: 'TX6', qsoFailure };
             }
 
             strategy.logger.debug('TX4 timeout: autoResumeCQAfterFail=false, stopping');
-            return { changeState: 'TX6', stop: true };
+            return { changeState: 'TX6', stop: true, qsoFailure };
         }
     },
     TX5: {
@@ -1137,6 +1152,17 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         };
     }
 
+    public buildProtocolTimeoutFailure(stage: 'TX2' | 'TX3' | 'TX4'): QSOFailureInfo | undefined {
+        const targetCallsign = this.context.targetCallsign;
+        if (!targetCallsign) return undefined;
+        return {
+            targetCallsign,
+            reason: `${stage.toLowerCase()}_timeout`,
+            stage,
+            hadTargetReply: true,
+        };
+    }
+
     async changeState(state: SlotsIndex): Promise<void> {
         const oldState = this.state;
         this.state = state;
@@ -1310,7 +1336,20 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         return this.operator.config.skipTx1 === true ? 'TX2' : 'TX1';
     }
 
+    activateTarget(request: StandardQSOActivationRequest): StandardQSOActivationResult {
+        const accepted = this.requestCallInternal(request.callsign, request.lastMessage);
+        return {
+            accepted,
+            lifecycleEpoch: this.qsoLifecycleEpoch,
+            initialSlot: accepted ? this.state : undefined,
+        };
+    }
+
     requestCall(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): boolean {
+        return this.activateTarget({ callsign, lastMessage }).accepted;
+    }
+
+    private requestCallInternal(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): boolean {
         if (this.hasUnsettledQSOCompletion()) {
             this.logger.warn('requestCall ignored while QSO durability is unsettled', { callsign });
             return false;
@@ -1509,6 +1548,16 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     getTransmitText(): string | null {
         this.syncOperatorConfig();
         return this.handleTransmitSlot();
+    }
+
+    getIdleCQText(): string | null {
+        this.syncOperatorConfig();
+        if (this.state !== 'TX6'
+            || this.context.targetCallsign
+            || this.hasUnsettledQSOCompletion()) {
+            return null;
+        }
+        return this.slots.TX6 || null;
     }
 
     getSnapshot(): StrategyRuntimeSnapshot {

@@ -1,4 +1,9 @@
-import { definePlugin, type TargetSelectionPriorityMode } from '@tx5dr/plugin-api';
+import {
+  definePlugin,
+  type PluginQuickSetting,
+  type PluginSettingDescriptor,
+  type TargetSelectionPriorityMode,
+} from '@tx5dr/plugin-api';
 import type {
   OperatorConfig,
 } from '@tx5dr/contracts';
@@ -26,7 +31,7 @@ import jaLocale from './locales/ja.json' with { type: 'json' };
 
 export const BUILTIN_STANDARD_QSO_PLUGIN_NAME = 'standard-qso';
 
-function getStandardQSOConfig(ctx: {
+export function getStandardQSOConfig(ctx: {
   config: Record<string, unknown>;
   operator: {
     id: string;
@@ -67,6 +72,41 @@ function getStandardQSOConfig(ctx: {
   };
 }
 
+export const standardQSOSettings: Record<string, PluginSettingDescriptor> = {
+  strategyOverview: { type: 'info', default: '', label: 'strategyOverview', description: 'strategyOverviewDesc', scope: 'operator' },
+  autoReplyToCQ: { type: 'boolean', default: false, label: 'autoReplyToCQ', description: 'autoReplyToCQDesc', scope: 'operator' },
+  autoReplyToDirectCallWhenStopped: { type: 'boolean', default: false, label: 'autoReplyToDirectCallWhenStopped', description: 'autoReplyToDirectCallWhenStoppedDesc', scope: 'operator' },
+  autoResumeCQAfterFail: { type: 'boolean', default: false, label: 'autoResumeCQAfterFail', description: 'autoResumeCQAfterFailDesc', scope: 'operator' },
+  autoResumeCQAfterSuccess: { type: 'boolean', default: false, label: 'autoResumeCQAfterSuccess', description: 'autoResumeCQAfterSuccessDesc', scope: 'operator' },
+  replyToWorkedStations: { type: 'boolean', default: false, label: 'replyToWorkedStations', description: 'replyToWorkedStationsDesc', scope: 'operator' },
+  distinguishWorkedStationsByBand: { type: 'boolean', default: true, label: 'distinguishWorkedStationsByBand', description: 'distinguishWorkedStationsByBandDesc', scope: 'operator' },
+  skipTx1: { type: 'boolean', default: false, label: 'skipTx1', description: 'skipTx1Desc', scope: 'operator' },
+  targetSelectionPriorityMode: {
+    type: 'string',
+    default: 'dxcc_first',
+    label: 'targetSelectionPriorityMode',
+    description: 'targetSelectionPriorityModeDesc',
+    scope: 'operator',
+    options: [
+      { label: 'dxcc_first', value: 'dxcc_first' },
+      { label: 'new_callsign_first', value: 'new_callsign_first' },
+      { label: 'balanced', value: 'balanced' },
+    ],
+  },
+  maxQSOTimeoutCycles: { type: 'number', default: 6, label: 'maxQSOTimeoutCycles', description: 'maxQSOTimeoutCyclesDesc', scope: 'operator', min: 1, max: 20 },
+  maxCallAttempts: { type: 'number', default: 5, label: 'maxCallAttempts', description: 'maxCallAttemptsDesc', scope: 'operator', min: 1, max: 20 },
+  [STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING]: { type: 'string', default: '', label: STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING, scope: 'operator', hidden: true },
+};
+
+export const standardQSOQuickSettings: PluginQuickSetting[] = [
+  { settingKey: 'autoReplyToCQ' },
+  { settingKey: 'autoReplyToDirectCallWhenStopped' },
+  { settingKey: 'autoResumeCQAfterFail' },
+  { settingKey: 'autoResumeCQAfterSuccess' },
+  { settingKey: 'replyToWorkedStations' },
+  { settingKey: 'skipTx1' },
+];
+
 export const standardQSOStrategyPlugin = definePlugin({
   apiVersion: 2,
   name: BUILTIN_STANDARD_QSO_PLUGIN_NAME,
@@ -74,113 +114,12 @@ export const standardQSOStrategyPlugin = definePlugin({
   type: 'strategy',
   description: 'Built-in FT8/FT4 standard QSO automation strategy',
 
-  settings: {
-    strategyOverview: {
-      type: 'info',
-      default: '',
-      label: 'strategyOverview',
-      description: 'strategyOverviewDesc',
-      scope: 'operator',
-    },
-    autoReplyToCQ: {
-      type: 'boolean',
-      default: false,
-      label: 'autoReplyToCQ',
-      description: 'autoReplyToCQDesc',
-      scope: 'operator',
-    },
-    autoReplyToDirectCallWhenStopped: {
-      type: 'boolean',
-      default: false,
-      label: 'autoReplyToDirectCallWhenStopped',
-      description: 'autoReplyToDirectCallWhenStoppedDesc',
-      scope: 'operator',
-    },
-    autoResumeCQAfterFail: {
-      type: 'boolean',
-      default: false,
-      label: 'autoResumeCQAfterFail',
-      description: 'autoResumeCQAfterFailDesc',
-      scope: 'operator',
-    },
-    autoResumeCQAfterSuccess: {
-      type: 'boolean',
-      default: false,
-      label: 'autoResumeCQAfterSuccess',
-      description: 'autoResumeCQAfterSuccessDesc',
-      scope: 'operator',
-    },
-    replyToWorkedStations: {
-      type: 'boolean',
-      default: false,
-      label: 'replyToWorkedStations',
-      description: 'replyToWorkedStationsDesc',
-      scope: 'operator',
-    },
-    distinguishWorkedStationsByBand: {
-      type: 'boolean',
-      default: true,
-      label: 'distinguishWorkedStationsByBand',
-      description: 'distinguishWorkedStationsByBandDesc',
-      scope: 'operator',
-    },
-    skipTx1: {
-      type: 'boolean',
-      default: false,
-      label: 'skipTx1',
-      description: 'skipTx1Desc',
-      scope: 'operator',
-    },
-    targetSelectionPriorityMode: {
-      type: 'string',
-      default: 'dxcc_first',
-      label: 'targetSelectionPriorityMode',
-      description: 'targetSelectionPriorityModeDesc',
-      scope: 'operator',
-      options: [
-        { label: 'dxcc_first', value: 'dxcc_first' },
-        { label: 'new_callsign_first', value: 'new_callsign_first' },
-        { label: 'balanced', value: 'balanced' },
-      ],
-    },
-    maxQSOTimeoutCycles: {
-      type: 'number',
-      default: 6,
-      label: 'maxQSOTimeoutCycles',
-      description: 'maxQSOTimeoutCyclesDesc',
-      scope: 'operator',
-      min: 1,
-      max: 20,
-    },
-    maxCallAttempts: {
-      type: 'number',
-      default: 5,
-      label: 'maxCallAttempts',
-      description: 'maxCallAttemptsDesc',
-      scope: 'operator',
-      min: 1,
-      max: 20,
-    },
-    [STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING]: {
-      type: 'string',
-      default: '',
-      label: STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING,
-      scope: 'operator',
-      hidden: true,
-    },
-  },
+  settings: standardQSOSettings,
 
   /**
    * 快捷设置 — 在右上角自动化下拉面板中直接渲染 operator-scope setting
    */
-  quickSettings: [
-    { settingKey: 'autoReplyToCQ' },
-    { settingKey: 'autoReplyToDirectCallWhenStopped' },
-    { settingKey: 'autoResumeCQAfterFail' },
-    { settingKey: 'autoResumeCQAfterSuccess' },
-    { settingKey: 'replyToWorkedStations' },
-    { settingKey: 'skipTx1' },
-  ],
+  quickSettings: standardQSOQuickSettings,
 
   createStrategyRuntime(ctx) {
     const operatorId = ctx.operator.id;
