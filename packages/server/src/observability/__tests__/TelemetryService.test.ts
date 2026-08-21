@@ -94,6 +94,18 @@ describe('TelemetryService', () => {
     });
   });
 
+  it('provides a diagnostic identity without registering or sending telemetry', async () => {
+    const service = new TelemetryService();
+    services.push(service);
+
+    const context = await service.getDiagnosticGatewayContext();
+
+    expect(context.endpoint).toBe('https://telemetry.example.invalid');
+    expect(context.installationId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(context.app).toMatchObject({ version: '2.4.6', distribution: 'electron' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('reports build metadata and completed WebSocket connections after consent', async () => {
     mocks.settings = { enabled: true, noticeVersion: 1 };
     mocks.activeConnections = 4;

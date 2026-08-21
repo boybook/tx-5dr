@@ -54,6 +54,12 @@ interface AppMetadata {
   arch: 'x64' | 'arm64' | 'arm' | 'other';
 }
 
+export interface DiagnosticGatewayContext {
+  endpoint: string;
+  installationId: string;
+  app: AppMetadata;
+}
+
 function validatePrivateState(value: unknown): PrivateState {
   if (!value || typeof value !== 'object') throw new Error('observability state must be an object');
   const state = value as Partial<PrivateState>;
@@ -102,7 +108,7 @@ export class TelemetryService {
     return (process.env.TX5DR_OBSERVABILITY_ENDPOINT || DEFAULT_OBSERVABILITY_ENDPOINT).replace(/\/$/, '');
   }
 
-  async initialize(): Promise<void> {
+  private async ensureIdentityContext(): Promise<void> {
     if (!this.store) {
       const filePath = await getDataFilePath('observability-state.json');
       this.store = new JsonFileStore<PrivateState>(filePath, {
@@ -123,7 +129,21 @@ export class TelemetryService {
         arch: normalizeArch(),
       };
     }
+  }
+
+  async initialize(): Promise<void> {
+    await this.ensureIdentityContext();
     await this.applySettings();
+  }
+
+  async getDiagnosticGatewayContext(): Promise<DiagnosticGatewayContext> {
+    await this.ensureIdentityContext();
+    if (!this.state || !this.metadata) throw new Error('observability identity is unavailable');
+    return {
+      endpoint: this.endpoint,
+      installationId: this.state.installationId,
+      app: { ...this.metadata },
+    };
   }
 
   getStatus(): ObservabilityStatus {

@@ -14,10 +14,11 @@ import {
   Tab
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faSave } from '@fortawesome/free-solid-svg-icons';
+import { faHeart, faSave } from '@fortawesome/free-solid-svg-icons';
 import { OperatorSettings, type OperatorSettingsRef } from './OperatorSettings';
 import { DisplayNotificationSettings, type DisplayNotificationSettingsRef } from './DisplayNotificationSettings';
 import { SystemSettings, type SystemSettingsRef } from './SystemSettings';
+import { HelpImproveSettings, type HelpImproveSettingsRef } from './HelpImproveSettings';
 import { RigctldBridgeSettings, type RigctldBridgeSettingsRef } from './RigctldBridgeSettings';
 import { FrequencyPresetSettings, type FrequencyPresetSettingsRef } from './FrequencyPresetSettings';
 import { TokenManagement } from '../auth/TokenManagement';
@@ -42,7 +43,7 @@ interface SettingsModalProps {
 }
 
 // 设置标签页类型（radio 和 audio 已迁移到 ProfileModal，logbook_sync 已迁移到 SyncConfigModal）
-export type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'rigctld' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx' | 'plugins' | 'shortcuts' | 'about';
+export type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'help_improve' | 'rigctld' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx' | 'plugins' | 'shortcuts' | 'about';
 
 const DEFAULT_USES_MODAL_FOOTER_SAVE: Record<SettingsTab, boolean> = {
   radio: false,
@@ -51,6 +52,7 @@ const DEFAULT_USES_MODAL_FOOTER_SAVE: Record<SettingsTab, boolean> = {
   display: true,
   radio_profile: false,
   system: true,
+  help_improve: true,
   rigctld: true,
   frequency_presets: true,
   tokens: false,
@@ -72,7 +74,11 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
   // Viewers cannot access the operator tab; fall back to display
   const defaultTab: SettingsTab = isOperator ? 'operator' : 'display';
   // radio/audio 已迁移到 ProfileModal，默认 Tab 改为 operator（或 display 对 viewer）
-  const effectiveInitialTab = (initialTab === 'radio' || initialTab === 'audio') ? defaultTab : (initialTab || defaultTab);
+  const effectiveInitialTab = (
+    initialTab === 'radio'
+    || initialTab === 'audio'
+    || (initialTab === 'help_improve' && !isAdmin)
+  ) ? defaultTab : (initialTab || defaultTab);
   const [activeTab, setActiveTab] = useState<SettingsTab>(effectiveInitialTab);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isConfirmDialogOpen, setIsConfirmDialogOpen] = useState(false);
@@ -85,6 +91,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
   const operatorSettingsRef = useRef<OperatorSettingsRef | null>(null);
   const displaySettingsRef = useRef<DisplayNotificationSettingsRef | null>(null);
   const systemSettingsRef = useRef<SystemSettingsRef | null>(null);
+  const helpImproveSettingsRef = useRef<HelpImproveSettingsRef | null>(null);
   const rigctldSettingsRef = useRef<RigctldBridgeSettingsRef | null>(null);
   const frequencyPresetSettingsRef = useRef<FrequencyPresetSettingsRef | null>(null);
   const stationInfoSettingsRef = useRef<StationInfoSettingsRef | null>(null);
@@ -94,12 +101,16 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
   // 当弹窗打开时，重置到初始标签页
   useEffect(() => {
     if (isOpen) {
-      const tab = (initialTab === 'radio' || initialTab === 'audio') ? defaultTab : (initialTab || defaultTab);
+      const tab = (
+        initialTab === 'radio'
+        || initialTab === 'audio'
+        || (initialTab === 'help_improve' && !isAdmin)
+      ) ? defaultTab : (initialTab || defaultTab);
       setActiveTab(tab);
       setHasUnsavedChanges(false);
       setFooterSaveOverrides({});
     }
-  }, [isOpen, initialTab, defaultTab]);
+  }, [isOpen, initialTab, defaultTab, isAdmin]);
 
   const usesModalFooterSave = footerSaveOverrides[activeTab]
     ?? DEFAULT_USES_MODAL_FOOTER_SAVE[activeTab];
@@ -141,6 +152,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         return displaySettingsRef.current?.hasUnsavedChanges() || false;
       case 'system':
         return systemSettingsRef.current?.hasUnsavedChanges() || false;
+      case 'help_improve':
+        return helpImproveSettingsRef.current?.hasUnsavedChanges() || false;
       case 'rigctld':
         return rigctldSettingsRef.current?.hasUnsavedChanges() || false;
       case 'frequency_presets':
@@ -200,6 +213,11 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         case 'system':
           if (systemSettingsRef.current) {
             await systemSettingsRef.current.save();
+          }
+          break;
+        case 'help_improve':
+          if (helpImproveSettingsRef.current) {
+            await helpImproveSettingsRef.current.save();
           }
           break;
         case 'rigctld':
@@ -300,6 +318,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
           return '📻';
         case 'system':
           return '⚙️';
+        case 'help_improve':
+          return <FontAwesomeIcon icon={faHeart} aria-label={t('modal.tabHelpImprove')} />;
         case 'rigctld':
           return '🔗';
         case 'frequency_presets':
@@ -331,6 +351,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         return `📻 ${t('modal.tabRadioProfile')}`;
       case 'system':
         return `⚙️ ${t('modal.tabSystem')}`;
+      case 'help_improve':
+        return <span className="flex items-center gap-2"><FontAwesomeIcon icon={faHeart} />{t('modal.tabHelpImprove')}</span>;
       case 'rigctld':
         return `🔗 ${t('modal.tabRigctld')}`;
       case 'frequency_presets':
@@ -375,6 +397,13 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
             ref={systemSettingsRef}
             onUnsavedChanges={setHasUnsavedChanges}
             initialRemoteAccessPreset={initialRemoteAccessPreset}
+          />
+        );
+      case 'help_improve':
+        return (
+          <HelpImproveSettings
+            ref={helpImproveSettingsRef}
+            onUnsavedChanges={setHasUnsavedChanges}
           />
         );
       case 'rigctld':
@@ -572,6 +601,12 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                     <Tab
                       key="plugins"
                       title={getTabTitle('plugins', isMobile)}
+                    />
+                  )}
+                  {isAdmin && (
+                    <Tab
+                      key="help_improve"
+                      title={getTabTitle('help_improve', isMobile)}
                     />
                   )}
                   <Tab
