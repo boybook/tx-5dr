@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo } from 'react';
 import { Card, CardBody } from '@heroui/react';
 import { api, ApiError, getBandFromFrequency } from '@tx5dr/core';
+import { formatFrequencyMHz } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
 import { useAbility, useAuth, useCan } from '../../store/authStore';
 import { useConnection, useOperators, useProfiles, useRadioConnectionState, useRadioState, useSplitState } from '../../store/radioStore';
@@ -134,7 +135,7 @@ export const CWFrequencyControl: React.FC = () => {
 
     const freq = pending.intendedFrequency;
     const band = getBandFromFrequency(freq);
-    const description = `${(freq / 1_000_000).toFixed(3)} MHz`;
+    const description = `${formatFrequencyMHz(freq)} MHz`;
     pendingFreqRef.current = { intendedFrequency: freq, sentAt: Date.now() };
 
     try {

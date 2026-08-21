@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Select, SelectItem, Spinner } from '@heroui/react';
-import { getGridBounds, type LogBookWorkedGridItem, type OperatorStatus, type QSORecord, type StationInfo } from '@tx5dr/contracts';
+import { getGridBounds, formatFrequencyMHz, type LogBookWorkedGridItem, type OperatorStatus, type QSORecord, type StationInfo } from '@tx5dr/contracts';
 import { api } from '@tx5dr/core';
 import Globe, { type GlobeMethods } from 'react-globe.gl';
 import * as THREE from 'three';
@@ -795,7 +795,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         arcDashAnimateTime="dashAnimateTime"
         arcLabel={(arc) => {
           const globeArc = arc as GlobeArc;
-          return `${globeArc.callsign} · ${globeArc.grid}<br/>${globeArc.mode} · ${(globeArc.frequency / 1_000_000).toFixed(3)} MHz<br/>${formatUtcTime(globeArc.startTime)} UTC`;
+          return `${globeArc.callsign} · ${globeArc.grid}<br/>${globeArc.mode} · ${formatFrequencyMHz(globeArc.frequency)} MHz<br/>${formatUtcTime(globeArc.startTime)} UTC`;
         }}
         ringsData={visibleRings}
         ringLat="lat"

@@ -13,7 +13,7 @@ import { addToast } from '@heroui/toast';
 import { api, ApiError } from '@tx5dr/core';
 import { useCapabilityDescriptor, useCapabilityState, useConnection, useOperators, useProfiles, useRadioConnectionState, useRadioState, useSplitState } from '../../store/radioStore';
 import { useAuth, useHasMinRole, useCan, useAbility } from '../../store/authStore';
-import { UserRole, type PresetFrequency } from '@tx5dr/contracts';
+import { UserRole, formatFrequencyMHz, type PresetFrequency } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
@@ -181,7 +181,7 @@ export const VoiceFrequencyControl: React.FC = () => {
         frequency: freq,
         mode: 'VOICE',
         band: overrides?.band ?? 'Custom',
-        description: overrides?.description ?? `${(freq / 1000000).toFixed(3)} MHz`,
+        description: overrides?.description ?? `${formatFrequencyMHz(freq)} MHz`,
       };
       if (typeof overrides?.radioMode === 'string' && overrides.radioMode.trim().length > 0) {
         request.radioMode = overrides.radioMode;
@@ -231,7 +231,7 @@ export const VoiceFrequencyControl: React.FC = () => {
     () => deriveVoiceRadioModeOptions(radioModeDescriptor, radioModeCapabilityState),
     [radioModeDescriptor, radioModeCapabilityState],
   );
-  const formatFrequencyLabel = useCallback((frequency: number) => `${(frequency / 1000000).toFixed(3)} MHz`, []);
+  const formatFrequencyLabel = useCallback((frequency: number) => `${formatFrequencyMHz(frequency)} MHz`, []);
   const formatBandLabel = useCallback((band?: string | null) => {
     if (!band || band.toLowerCase() === CUSTOM_BAND) {
       return t('frequency.customBand');
@@ -270,7 +270,7 @@ export const VoiceFrequencyControl: React.FC = () => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           .map((p: any) => ({
             key: String(p.frequency),
-            label: p.description || `${formatBandLabel(p.band)} ${(p.frequency / 1000000).toFixed(3)} MHz`,
+            label: p.description || `${formatBandLabel(p.band)} ${formatFrequencyMHz(p.frequency)} MHz`,
             frequency: p.frequency,
             band: p.band,
             mode: p.mode,
@@ -598,7 +598,7 @@ export const VoiceFrequencyControl: React.FC = () => {
         resetOperatorsAfterOperatingStateChange();
         addToast({
           title: t('frequency.switchSuccess'),
-          description: t('frequency.switched', { freq: (preset.frequency / 1000000).toFixed(3) }),
+          description: t('frequency.switched', { freq: formatFrequencyMHz(preset.frequency) }),
           color: 'success',
           timeout: 3000,
         });

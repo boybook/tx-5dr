@@ -10,6 +10,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useDisplayNotificationSettings } from '../../../hooks/useDisplayNotificationSettings';
 import { type FrameTableCycleBackgrounds, getHighlightTypeLabels, HighlightType } from '../../../utils/displayNotificationSettings';
 import { useTranslation } from 'react-i18next';
+import { formatFrequencyMHz } from '@tx5dr/contracts';
 import { getBadgeColors, hexToRgba } from '../../../utils/colorUtils';
 import { FlagDisplay } from '../../common/FlagDisplay';
 import { CallsignInfoPopover } from './CallsignInfoPopover';
@@ -169,7 +170,7 @@ const formatGroupHeaderLabel = (
   const context = group.frequencyContext;
   if (context) {
     const frequencyLabel = typeof context.frequency === 'number' && Number.isFinite(context.frequency)
-      ? `${(context.frequency / 1_000_000).toFixed(3)} MHz`
+      ? `${formatFrequencyMHz(context.frequency)} MHz`
       : context.description;
     const parts = [frequencyLabel, context.band, context.mode, timeLabel].filter(Boolean);
     return parts.length > 0

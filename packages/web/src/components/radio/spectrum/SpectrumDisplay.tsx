@@ -4,7 +4,7 @@ import { addToast } from '@heroui/toast';
 import { ArrowsPointingOutIcon, ChevronDownIcon, ChevronUpIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
 import type { AudioInputSignalType, EngineMode, SpectrumFrame, SpectrumKind, SpectrumSessionVoiceState, SystemStatus } from '@tx5dr/contracts';
-import { UserRole } from '@tx5dr/contracts';
+import { UserRole, formatFrequencyMHz } from '@tx5dr/contracts';
 import { api, getBandFromFrequency } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useRadioState, useCapabilityState, useCapabilityDescriptor, useSpectrum, useSplitState } from '../../../store/radioStore';
 import { useAbility, useCan, useHasMinRole } from '../../../store/authStore';
@@ -383,7 +383,7 @@ export function buildRadioSdrFrequencyRequest({
 }): SetRadioFrequencyParams | null {
   const snappedFrequency = snapFrequencyToStep(frequency, stepHz);
   const roundedFrequency = Math.round(snappedFrequency);
-  const description = `${(snappedFrequency / 1_000_000).toFixed(3)} MHz`;
+  const description = `${formatFrequencyMHz(snappedFrequency)} MHz`;
 
   if (engineMode === 'voice') {
     return {

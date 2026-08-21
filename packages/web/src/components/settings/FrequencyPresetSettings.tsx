@@ -22,6 +22,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus, faTrash, faArrowUp, faArrowDown, faUndo, faEdit } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
 import type { PresetFrequency } from '@tx5dr/contracts';
+import { formatFrequencyMHz } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
 import { createLogger } from '../../utils/logger';
 import { FrequencyPresetAddModal } from './FrequencyPresetAddModal';
@@ -266,7 +267,7 @@ export const FrequencyPresetSettings = forwardRef<
   };
 
   const formatFrequency = (hz: number): string => {
-    return (hz / 1000000).toFixed(3);
+    return formatFrequencyMHz(hz);
   };
   const formatBandLabel = (band?: string | null): string => (
     !band || band.toLowerCase() === CUSTOM_BAND ? t('freqPresets.customBand') : band

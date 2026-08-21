@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 import type { ReactNode } from 'react';
 import type { SpectrumCapabilities, SlotPackFrequencyContext } from '@tx5dr/contracts';
+import { formatFrequencyMHz } from '@tx5dr/contracts';
 import { api, getBandFromFrequency } from '@tx5dr/core';
 import { createLogger } from '../../utils/logger';
 import { getWebSocketClientInstanceId } from '../../utils/wsClientInstance';
@@ -72,7 +73,7 @@ function buildFrequencyContext(
     ...(currentMode ? { mode: currentMode } : {}),
     ...(currentRadioMode ? { radioMode: currentRadioMode } : {}),
     ...(band && band !== 'Unknown' ? { band } : {}),
-    description: `${(currentRadioFrequency / 1_000_000).toFixed(3)} MHz`,
+    description: `${formatFrequencyMHz(currentRadioFrequency)} MHz`,
   };
 }
 

@@ -1,6 +1,6 @@
 import type { EventEmitter } from 'eventemitter3';
 import type { CoreRadioCapabilities, DigitalRadioEngineEvents, EngineMode, PresetFrequency } from '@tx5dr/contracts';
-import { RadioConnectionStatus } from '@tx5dr/contracts';
+import { RadioConnectionStatus, formatFrequencyMHz } from '@tx5dr/contracts';
 import { getBandFromFrequency } from '@tx5dr/core';
 import { RadioError } from '../utils/errors/RadioError.js';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
@@ -154,7 +154,7 @@ export class RadioBridge {
     // 监听电台频率变化（自动同步）
     this.lm.listen(radioManager, 'radioFrequencyChanged', async (...args: unknown[]) => {
       const frequency = args[0] as number;
-      logger.debug(`Radio frequency changed: ${(frequency / 1000000).toFixed(3)} MHz`);
+      logger.debug(`Radio frequency changed: ${formatFrequencyMHz(frequency)} MHz`);
 
       try {
         const frequencyInfo = this.resolveFrequencyInfo(frequency, frequencyManager);
@@ -263,7 +263,7 @@ export class RadioBridge {
         mode: preset.mode,
         band: preset.band,
         radioMode: preset.radioMode,
-        description: preset.description || `${(preset.frequency / 1000000).toFixed(3)} MHz`,
+        description: preset.description || `${formatFrequencyMHz(preset.frequency)} MHz`,
         repeaterShift: supportsFmOptions ? preset.repeaterShift : undefined,
         repeaterOffsetHz: supportsFmOptions ? preset.repeaterOffsetHz : undefined,
         toneMode: supportsFmOptions ? preset.toneMode : undefined,
@@ -286,7 +286,7 @@ export class RadioBridge {
       mode: isVoiceMode ? 'VOICE' : isCWMode ? 'CW' : digitalModeName,
       band,
       radioMode: isVoiceMode ? lastVoiceFrequency?.radioMode : isCWMode ? (lastCWFrequency?.radioMode || 'CW') : undefined,
-      description: `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`,
+      description: `${formatFrequencyMHz(frequency)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`,
       repeaterShift: supportsFmOptions ? lastVoiceFrequency?.repeaterShift : undefined,
       repeaterOffsetHz: supportsFmOptions ? lastVoiceFrequency?.repeaterOffsetHz : undefined,
       toneMode: supportsFmOptions ? lastVoiceFrequency?.toneMode : undefined,
