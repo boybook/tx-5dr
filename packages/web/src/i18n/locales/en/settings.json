@@ -424,6 +424,7 @@
     "tabDisplay": "Display",
     "tabRadioProfile": "Radio Config",
     "tabSystem": "System",
+    "tabHelpImprove": "Help Improve",
     "tabRigctld": "Rigctld Bridge",
     "tabFrequencyPresets": "Frequencies",
     "tabTokens": "Users",
@@ -433,6 +434,61 @@
     "goToRadioProfile": "Go to Radio Config",
     "saveSettings": "Save Settings",
     "tabAbout": "About"
+  },
+  "helpImprove": {
+    "title": "Help improve TX-5DR",
+    "description": "Choose to share anonymous runtime information over time, or submit a log once when something goes wrong. The two are independent.",
+    "telemetryTitle": "Share anonymous runtime information",
+    "telemetryDescription": "When enabled, TX-5DR regularly shares a small amount of runtime information so we can understand version adoption and common environments. You can turn this off at any time.",
+    "uploadTitle": "Submit problem logs",
+    "uploadDescription": "This is a one-time submission. Choose where and when the problem happened. Nothing is sent until you press the button below.",
+    "privacyNotice": "Logs may contain callsigns, frequencies, network addresses, host information, and local paths. Credentials and registered tokens are removed again before upload.",
+    "logSource": "Log",
+    "timeRange": "Time range",
+    "customFrom": "From",
+    "customTo": "To",
+    "coverageTitle": "Available coverage",
+    "coverageValue": "{{from}} to {{to}} · {{files}} file(s) · {{size}} on disk",
+    "coverageUnknown": "This log exists, but its time coverage could not be estimated.",
+    "selectionTitle": "This submission includes",
+    "selectionSummary": "{{source}} · {{from}} to {{to}}",
+    "selectionPresetSummary": "{{source}} · {{range}} (ending when you press upload)",
+    "selectionUnavailable": "Choose a valid log and time range first.",
+    "selectionOutsideCoverage": "The selected time is outside the available log coverage. Choose another range.",
+    "feedbackLabel": "What happened? (optional)",
+    "feedbackPlaceholder": "What were you doing, and what went wrong?",
+    "feedbackCount": "{{count}} / 2,000 characters",
+    "uploadButton": "Upload selected log",
+    "uploading": "Preparing and uploading",
+    "retry": "Reload",
+    "sources": {
+      "server": "TX-5DR server",
+      "electron-main": "Desktop app",
+      "client-tools": "Browser gateway"
+    },
+    "sourceDescriptions": {
+      "server": "Best for operation, decoding, radio connection, and most runtime problems",
+      "electron-main": "Best for startup, window, update, and desktop app problems",
+      "client-tools": "Best for browser access and local proxy problems"
+    },
+    "time": {
+      "15m": "Last 15 minutes",
+      "1h": "Last hour",
+      "6h": "Last 6 hours",
+      "24h": "Last 24 hours",
+      "custom": "Custom range"
+    },
+    "status": {
+      "success": "Log submitted",
+      "receipt": "Receipt {{id}} · {{lines}} lines · retained until {{until}}",
+      "noLogs": "No log entries were found in that time range. Try a wider range or another log.",
+      "rangeTooLarge": "That range contains too much log data. Choose a shorter time range.",
+      "networkFailed": "The upload did not finish. Check the network connection and try again.",
+      "serviceUnavailable": "The diagnostic service is temporarily unavailable. Please try again later.",
+      "invalidRange": "Choose a valid range of no more than 7 days that ends before the current time.",
+      "sourcesUnavailable": "Log sources could not be loaded. Reopen settings and try again.",
+      "noSources": "No supported log files are available on this installation."
+    }
   },
   "qsoNotifications": {
     "title": "QSO System Notifications",

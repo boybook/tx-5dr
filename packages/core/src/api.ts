@@ -83,6 +83,9 @@ import type {
   UpdateSystemLoggingSettingsRequest,
   ObservabilityStatus,
   UpdateObservabilitySettingsRequest,
+  DiagnosticLogSourcesResponse,
+  CreateDiagnosticUploadRequest,
+  DiagnosticUploadReceipt,
   ClockStatusDetail,
   NtpServerListSettings,
   SetClockAutoApplyRequest,
@@ -2018,6 +2021,21 @@ export const api = {
     );
   },
 
+  async getDiagnosticLogSources(apiBase?: string): Promise<DiagnosticLogSourcesResponse> {
+    return apiRequest<DiagnosticLogSourcesResponse>('/diagnostics/log-sources', undefined, apiBase);
+  },
+
+  async uploadDiagnosticLogs(
+    data: CreateDiagnosticUploadRequest,
+    apiBase?: string,
+  ): Promise<DiagnosticUploadReceipt> {
+    return apiRequest<DiagnosticUploadReceipt>(
+      '/diagnostics/uploads',
+      { method: 'POST', body: JSON.stringify(data) },
+      apiBase,
+    );
+  },
+
   async getClockStatus(apiBase?: string): Promise<ClockStatusDetail> {
     return apiRequest<ClockStatusDetail>('/system/clock', undefined, apiBase);
   },
@@ -2674,6 +2692,8 @@ export const {
   ,updateSystemLoggingSettings
   ,getObservabilityStatus
   ,updateObservabilitySettings
+  ,getDiagnosticLogSources
+  ,uploadDiagnosticLogs
   ,getNtpServerListSettings
   ,updateNtpServerListSettings
   ,setClockAutoApply
