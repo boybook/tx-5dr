@@ -143,6 +143,7 @@ function emptyRouteModule(exportName: string) {
 vi.mock('../routes/profiles.js', () => emptyRouteModule('profileRoutes'));
 vi.mock('../routes/audio.js', () => emptyRouteModule('audioRoutes'));
 vi.mock('../routes/settings.js', () => emptyRouteModule('settingsRoutes'));
+vi.mock('../routes/diagnostics.js', () => emptyRouteModule('diagnosticRoutes'));
 vi.mock('../routes/storage.js', () => emptyRouteModule('storageRoutes'));
 vi.mock('../routes/pskreporter.js', () => emptyRouteModule('pskreporterRoutes'));
 vi.mock('../routes/system.js', () => emptyRouteModule('systemRoutes'));

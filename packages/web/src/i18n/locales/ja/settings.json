@@ -422,6 +422,7 @@
     "tabDisplay": "通知を表示する",
     "tabRadioProfile": "無線機設定",
     "tabSystem": "システム設定",
+    "tabHelpImprove": "改善に協力",
     "tabRigctld": "Rigctld ブリッジ",
     "tabFrequencyPresets": "周波数プリセット",
     "tabTokens": "ユーザー管理",
@@ -431,6 +432,61 @@
     "goToRadioProfile": "無線設定に移動します",
     "saveSettings": "設定を保存する",
     "tabAbout": "について"
+  },
+  "helpImprove": {
+    "title": "TX-5DR の改善に協力",
+    "description": "匿名の実行情報を継続的に共有するか、問題が起きたときに一度だけログを送信できます。この 2 つは独立しています。",
+    "telemetryTitle": "匿名の実行情報を共有",
+    "telemetryDescription": "有効にすると、バージョンの利用状況や一般的な実行環境を把握するため、少量の実行情報を定期的に共有します。いつでも無効にできます。",
+    "uploadTitle": "問題のログを送信",
+    "uploadDescription": "これは一度だけの送信です。問題が起きた場所と時間を選びます。下のボタンを押すまで何も送信されません。",
+    "privacyNotice": "ログにはコールサイン、周波数、ネットワークアドレス、ホスト情報、ローカルパスが含まれる場合があります。認証情報と登録済み Token は送信前に再度削除されます。",
+    "logSource": "ログ",
+    "timeRange": "時間範囲",
+    "customFrom": "開始",
+    "customTo": "終了",
+    "coverageTitle": "利用可能な範囲",
+    "coverageValue": "{{from}} から {{to}} · {{files}} ファイル · ディスク上 {{size}}",
+    "coverageUnknown": "ログはありますが、時間範囲を推定できませんでした。",
+    "selectionTitle": "今回送信する内容",
+    "selectionSummary": "{{source}} · {{from}} から {{to}}",
+    "selectionPresetSummary": "{{source}} · {{range}}（送信ボタンを押した時点まで）",
+    "selectionUnavailable": "有効なログと時間範囲を選択してください。",
+    "selectionOutsideCoverage": "選択した時間は現在のログ範囲外です。別の範囲を選択してください。",
+    "feedbackLabel": "問題の説明（任意）",
+    "feedbackPlaceholder": "何をしているときに、どのような問題が起きましたか？",
+    "feedbackCount": "{{count}} / 2,000 文字",
+    "uploadButton": "選択したログを送信",
+    "uploading": "準備して送信中",
+    "retry": "再読み込み",
+    "sources": {
+      "server": "TX-5DR サーバー",
+      "electron-main": "デスクトップアプリ",
+      "client-tools": "ブラウザーゲートウェイ"
+    },
+    "sourceDescriptions": {
+      "server": "操作、デコード、無線機接続など、多くの実行時の問題に適しています",
+      "electron-main": "起動、ウィンドウ、更新、デスクトップアプリの問題に適しています",
+      "client-tools": "ブラウザーアクセスやローカルプロキシの問題に適しています"
+    },
+    "time": {
+      "15m": "直近 15 分",
+      "1h": "直近 1 時間",
+      "6h": "直近 6 時間",
+      "24h": "直近 24 時間",
+      "custom": "期間を指定"
+    },
+    "status": {
+      "success": "ログを送信しました",
+      "receipt": "受付番号 {{id}} · {{lines}} 行 · {{until}} まで保持",
+      "noLogs": "この時間範囲にはログがありません。範囲を広げるか、別のログを選んでください。",
+      "rangeTooLarge": "ログの量が多すぎます。時間範囲を短くしてください。",
+      "networkFailed": "送信を完了できませんでした。ネットワークを確認して再試行してください。",
+      "serviceUnavailable": "診断サービスは一時的に利用できません。後でもう一度お試しください。",
+      "invalidRange": "現在時刻以前で、7 日以内の有効な範囲を選んでください。",
+      "sourcesUnavailable": "ログ一覧を読み込めませんでした。設定を開き直してお試しください。",
+      "noSources": "このインストールには送信可能なログがありません。"
+    }
   },
   "qsoNotifications": {
     "title": "QSOシステムリマインダー",
