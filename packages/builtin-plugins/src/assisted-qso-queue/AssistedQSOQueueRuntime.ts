@@ -33,6 +33,7 @@ import {
 const MAX_QUEUE_SIZE = 64;
 const STALE_AFTER_MODE_SLOTS = 6;
 const INACTIVE_AFTER_MODE_SLOTS = 12;
+const FINAL_73_RETRY_WINDOW_SLOTS = 2;
 
 type PendingSlot = Exclude<StrategyRuntimeSlot, 'TX6'>;
 type QueueEntryState = 'queued' | 'active' | 'engaged' | 'closing' | 'paused' | 'no-response' | 'review';
@@ -65,6 +66,20 @@ interface QueueEntry {
   pendingSettlement?: { lifecycleEpoch: number; recordId: string };
 }
 
+interface Final73Lease {
+  targetKey: string;
+  callsign: string;
+  transmission: string;
+  targetGrid?: string;
+  reportSent?: number;
+  reportReceived?: number;
+  actualFrequency?: number;
+  lifecycleEpoch: number;
+  expiresAtSlotStartMs: number;
+  pendingMessage?: { message: FrameMessage; slotInfo: SlotInfo };
+  scheduled: boolean;
+}
+
 interface QueueCheckpoint {
   version: number;
   nextEntrySequence: number;
@@ -72,6 +87,7 @@ interface QueueCheckpoint {
   activeEntryId?: string;
   lastQueueFullWarningAt: number;
   latestSlotStartMs: number;
+  final73Lease?: Final73Lease;
   delegate: StrategyRuntimeCheckpoint;
 }
 
@@ -185,6 +201,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
   private nextEntrySequence = 0;
   private lastQueueFullWarningAt = Number.NEGATIVE_INFINITY;
   private latestSlotStartMs = 0;
+  private final73Lease?: Final73Lease;
 
   constructor(options: AssistedQSOQueueRuntimeOptions) {
     this.operator = options.operator;
@@ -201,6 +218,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
       activeEntryId: this.activeEntryId,
       lastQueueFullWarningAt: this.lastQueueFullWarningAt,
       latestSlotStartMs: this.latestSlotStartMs,
+      final73Lease: this.final73Lease ? structuredClone(this.final73Lease) : undefined,
       delegate: structuredClone(this.delegate.checkpoint()),
     } satisfies QueueCheckpoint;
   }
@@ -214,6 +232,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
     this.activeEntryId = state.activeEntryId;
     this.lastQueueFullWarningAt = state.lastQueueFullWarningAt ?? Number.NEGATIVE_INFINITY;
     this.latestSlotStartMs = state.latestSlotStartMs ?? 0;
+    this.final73Lease = state.final73Lease ? structuredClone(state.final73Lease) : undefined;
     this.delegate.restore(state.delegate);
   }
 
@@ -221,6 +240,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
     if (meta.signal.aborted) return false;
     const before = this.queueProjectionFingerprint();
     this.latestSlotStartMs = Math.max(this.latestSlotStartMs, meta.slotInfo.startMs);
+    this.expireFinal73Lease(meta.slotInfo.startMs);
     this.updatePauseStates(meta.slotInfo.startMs);
     const mode = this.operator.config.mode;
     const fallback = this.operator.config.skipTx1 === true ? 'TX2' : 'TX1';
@@ -230,6 +250,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
       const sender = senderOf(message);
       if (!sender || !isValidCallsign(sender) || isUndecodedCallsignPlaceholder(sender)) continue;
       if (callsignMatches(sender, this.operator.config.myCallsign)) continue;
+      this.observeFinal73Retry(message, meta.slotInfo);
       const key = normalized(sender);
       const direct = isDirectedTo(message, this.operator.config.myCallsign);
       let entry = this.entries.find((candidate) => candidate.targetKey === key);
@@ -501,6 +522,16 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
       return this.resultSnapshot(null);
     }
 
+    this.expireFinal73Lease(this.latestSlotStartMs);
+    const final73Retry = this.final73Lease;
+    if (final73Retry?.scheduled || (final73Retry?.pendingMessage && this.canScheduleFinal73Retry())) {
+      final73Retry.scheduled = true;
+      const requestedTransmitCycle = final73Retry.pendingMessage
+        ? (final73Retry.pendingMessage.slotInfo.cycleNumber + 1) % 2
+        : undefined;
+      return this.resultSnapshot(final73Retry.transmission, { requestedTransmitCycle });
+    }
+
     let requestedTransmitCycle: number | undefined;
     const active = this.getActiveEntry();
     if (active && active.state === 'active' && this.canPreemptActive(active)) {
@@ -535,6 +566,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
         || message.rawMessage.toUpperCase().includes(current.callsign.toUpperCase())
       );
     });
+    const final73LeaseCandidate = this.captureFinal73Lease(current);
     const decision = await this.delegate.decide(relevant, meta);
     if (pendingMessage) current.delegateAppliedPendingRevision = current.pending.revision;
     const snapshot = decision.snapshot;
@@ -554,6 +586,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
       return this.resultSnapshot(this.getTransmitText(), { qsoFailure: decision.qsoFailure });
     }
     if (decision.stop && !snapshot.context?.targetCallsign) {
+      if (final73LeaseCandidate) this.final73Lease = final73LeaseCandidate;
       current.delegateReleased = true;
       if (current.logCommitted) {
         this.completeActive(current);
@@ -582,6 +615,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
 
   getTransmitText(): string | null {
     if (!this.isTransmitting()) return null;
+    if (this.final73Lease?.scheduled) return this.final73Lease.transmission;
     if (!this.activeEntryId) return this.getIdleCQText();
     const entry = this.getActiveEntry();
     if (!entry
@@ -598,6 +632,23 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
 
   getSnapshot(): StrategyRuntimeSnapshot {
     const delegate = this.delegate.getSnapshot();
+    const final73Lease = this.final73Lease;
+    if (final73Lease?.scheduled) {
+      return {
+        ...delegate,
+        currentState: 'TX5',
+        slots: { ...delegate.slots, TX5: final73Lease.transmission },
+        context: {
+          ...delegate.context,
+          targetCallsign: final73Lease.callsign,
+          targetGrid: final73Lease.targetGrid,
+          reportSent: final73Lease.reportSent,
+          reportReceived: final73Lease.reportReceived,
+          actualFrequency: final73Lease.actualFrequency,
+        },
+        queue: this.getQueueSnapshot(),
+      };
+    }
     return { ...delegate, queue: this.getQueueSnapshot() };
   }
 
@@ -624,6 +675,14 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
   }
 
   onTransmissionQueued(transmission: string): void {
+    const final73Lease = this.final73Lease;
+    if (final73Lease?.scheduled && transmission === final73Lease.transmission) {
+      final73Lease.scheduled = false;
+      final73Lease.pendingMessage = undefined;
+      final73Lease.expiresAtSlotStartMs = this.final73LeaseExpiryFrom(this.latestSlotStartMs);
+      this.logger.debug('Final 73 retry reached physical success', { callsign: final73Lease.callsign });
+      return;
+    }
     const entry = this.getActiveEntry();
     const snapshot = this.delegate.getSnapshot();
     if (entry) {
@@ -644,6 +703,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
     this.nextEntrySequence = 0;
     this.lastQueueFullWarningAt = Number.NEGATIVE_INFINITY;
     this.latestSlotStartMs = 0;
+    this.final73Lease = undefined;
     this.delegate.reset(reason);
   }
 
@@ -717,6 +777,86 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
 
   private async selectEligibleDirectOpportunity(excludeEntryId: string): Promise<QueueEntry | undefined> {
     return this.selectEligibleEntry(() => this.selectDirectOpportunity(excludeEntryId));
+  }
+
+  private observeFinal73Retry(message: ParsedFT8Message, slotInfo: SlotInfo): void {
+    const lease = this.final73Lease;
+    if (!lease
+      || lease.scheduled
+      || message.message.type !== FT8MessageType.RRR
+      || !callsignMatches(senderOf(message), lease.callsign)
+      || !callsignMatches(targetOf(message), this.operator.config.myCallsign)
+      || slotInfo.startMs > lease.expiresAtSlotStartMs) {
+      return;
+    }
+
+    const lastMessage = lastMessageFromParsed(
+      message,
+      this.operator.config.mode.name,
+      this.operator.config.mode.slotMs,
+    );
+    if (lease.pendingMessage?.message.message === lastMessage.message.message
+      && lease.pendingMessage.slotInfo.startMs === lastMessage.slotInfo.startMs) {
+      return;
+    }
+    lease.pendingMessage = lastMessage;
+    this.logger.debug('Observed correlated RR73 for a completed queue target', {
+      callsign: lease.callsign,
+      slotStartMs: slotInfo.startMs,
+    });
+  }
+
+  private captureFinal73Lease(entry: QueueEntry): Final73Lease | undefined {
+    const snapshot = this.delegate.getSnapshot();
+    const lifecycleEpoch = snapshot.qsoLifecycleEpoch;
+    const transmission = snapshot.slots?.TX5;
+    const targetCallsign = snapshot.context?.targetCallsign;
+    if (snapshot.currentState !== 'TX5'
+      || !transmission
+      || !targetCallsign
+      || !callsignMatches(targetCallsign, entry.callsign)
+      || entry.lastOnAirSlot !== 'TX5'
+      || entry.lastOnAirLifecycleEpoch !== lifecycleEpoch
+      || lifecycleEpoch === undefined) {
+      return undefined;
+    }
+
+    return {
+      targetKey: entry.targetKey,
+      callsign: entry.callsign,
+      transmission,
+      targetGrid: snapshot.context?.targetGrid,
+      reportSent: snapshot.context?.reportSent,
+      reportReceived: snapshot.context?.reportReceived,
+      actualFrequency: snapshot.context?.actualFrequency,
+      lifecycleEpoch,
+      expiresAtSlotStartMs: this.final73LeaseExpiryFrom(this.latestSlotStartMs),
+      scheduled: false,
+    };
+  }
+
+  private canScheduleFinal73Retry(): boolean {
+    const active = this.getActiveEntry();
+    if (!active) return true;
+    if (active.delegateReleased && callsignMatches(active.callsign, this.final73Lease?.callsign)) {
+      return true;
+    }
+    return active.state === 'active' && this.canPreemptActive(active);
+  }
+
+  private expireFinal73Lease(slotStartMs: number): void {
+    const lease = this.final73Lease;
+    if (!lease || lease.scheduled || slotStartMs <= lease.expiresAtSlotStartMs) return;
+    this.logger.debug('Final 73 retry lease expired', { callsign: lease.callsign });
+    this.final73Lease = undefined;
+  }
+
+  private final73LeaseExpiryFrom(slotStartMs: number): number {
+    const slotMs = this.operator.config.mode.slotMs;
+    const referenceSlotStartMs = slotStartMs > 0
+      ? slotStartMs
+      : Math.floor(Date.now() / slotMs) * slotMs;
+    return referenceSlotStartMs + slotMs * FINAL_73_RETRY_WINDOW_SLOTS;
   }
 
   private async selectEligibleEntry(select: () => QueueEntry | undefined): Promise<QueueEntry | undefined> {
