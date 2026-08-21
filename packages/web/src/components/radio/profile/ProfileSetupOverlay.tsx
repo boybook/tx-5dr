@@ -20,10 +20,7 @@ import type { HamlibConfig, AudioDeviceSettings as AudioDeviceSettingsType, Supp
 import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceSettings';
 import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
 import { matchAudioDeviceForRig } from './radioAudioDeviceMapping';
-
-const NEW_PROFILE_AUDIO_DEFAULTS: AudioDeviceSettingsType = {
-  outputSampleFormat: 'int16',
-};
+import { NEW_PROFILE_AUDIO_DEFAULTS, NEW_PROFILE_RADIO_DEFAULTS } from './profileDefaults';
 
 interface ProfileSetupOverlayProps {
   isOpen: boolean;
@@ -42,7 +39,7 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
   ], [t]);
   const [step, setStep] = useState(0); // 0=选类型, 1=填配置, 2=选音频, 3=命名
   const [selectedType, setSelectedType] = useState<RadioType | null>(null);
-  const [radioConfig, setRadioConfig] = useState<HamlibConfig>({ type: 'none' });
+  const [radioConfig, setRadioConfig] = useState<HamlibConfig>(NEW_PROFILE_RADIO_DEFAULTS);
   const [audioConfig, setAudioConfig] = useState<AudioDeviceSettingsType>(NEW_PROFILE_AUDIO_DEFAULTS);
   const [profileName, setProfileName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
@@ -104,10 +101,13 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
   // 步骤1：选择类型后
   const handleSelectType = (type: RadioType) => {
     setSelectedType(type);
-    setRadioConfig(type === 'tci' ? {
+    setRadioConfig({
+      ...NEW_PROFILE_RADIO_DEFAULTS,
       type,
-      tci: { host: '127.0.0.1', port: 40001, receiver: 0, trx: 0, vfo: 0, audioEnabled: true, audioSampleRate: 12000 },
-    } as HamlibConfig : { type } as HamlibConfig);
+      ...(type === 'tci' && {
+        tci: { host: '127.0.0.1', port: 40001, receiver: 0, trx: 0, vfo: 0, audioEnabled: true, audioSampleRate: 12000 },
+      }),
+    });
     autoAudioAppliedRef.current = null;
     userManuallyChangedAudioRef.current = false;
     // Radio-audio modes default to their virtual radio audio device

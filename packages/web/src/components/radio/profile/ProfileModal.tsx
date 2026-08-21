@@ -27,10 +27,7 @@ import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceS
 import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
 import { PowerControlButton } from './PowerControlButton';
 import { matchAudioDeviceForRig } from './radioAudioDeviceMapping';
-
-const NEW_PROFILE_AUDIO_DEFAULTS: AudioDeviceSettingsType = {
-  outputSampleFormat: 'int16',
-};
+import { NEW_PROFILE_AUDIO_DEFAULTS, NEW_PROFILE_RADIO_DEFAULTS } from './profileDefaults';
 
 interface ProfileModalProps {
   isOpen: boolean;
@@ -68,7 +65,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   // 编辑模式状态
   const [editName, setEditName] = useState('');
   const [editDescription, setEditDescription] = useState('');
-  const [editRadioConfig, setEditRadioConfig] = useState<HamlibConfig>({ type: 'none' });
+  const [editRadioConfig, setEditRadioConfig] = useState<HamlibConfig>(NEW_PROFILE_RADIO_DEFAULTS);
   const [editAudioConfig, setEditAudioConfig] = useState<AudioDeviceSettingsType>({});
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -252,7 +249,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     if (!canManageProfiles) return;
     setEditName('');
     setEditDescription('');
-    setEditRadioConfig({ type: 'none' });
+    setEditRadioConfig(NEW_PROFILE_RADIO_DEFAULTS);
     setEditAudioConfig(NEW_PROFILE_AUDIO_DEFAULTS);
     setEditingProfileId(null);
     autoAudioAppliedRef.current = null;

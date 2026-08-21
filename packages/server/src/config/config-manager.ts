@@ -497,11 +497,6 @@ export class ConfigManager {
       logger.info('Profile migration complete');
     }
 
-    if (this.migrateMissingDigitalModeRadioMode(parsedConfig)) {
-      logger.info('Legacy Profile digital radio mode preferences migrated to USB');
-      migrated = true;
-    }
-
     if (this.migrateLegacyStandardQSOSettings(parsedConfig)) {
       logger.info('Legacy standard-qso operator settings migrated to plugin config');
       migrated = true;
@@ -663,24 +658,6 @@ export class ConfigManager {
       }
     }
 
-    return changed;
-  }
-
-  private migrateMissingDigitalModeRadioMode(parsedConfig: any): boolean {
-    if (!Array.isArray(parsedConfig.profiles)) {
-      return false;
-    }
-
-    let changed = false;
-    for (const profile of parsedConfig.profiles) {
-      if (!isPlainObject(profile) || !isPlainObject(profile.radio)) {
-        continue;
-      }
-      if (profile.radio.digitalModeRadioMode === undefined) {
-        profile.radio.digitalModeRadioMode = 'usb';
-        changed = true;
-      }
-    }
     return changed;
   }
 

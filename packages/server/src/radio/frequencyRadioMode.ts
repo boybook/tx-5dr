@@ -22,7 +22,7 @@ export function normalizeDigitalModeRadioModePreference(
   value: unknown,
 ): DigitalModeRadioModePreference {
   if (value === undefined || value === null) {
-    return 'usb';
+    return 'none';
   }
   return value === 'usb' || value === 'usb-data' ? value : 'none';
 }
