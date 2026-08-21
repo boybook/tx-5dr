@@ -129,6 +129,31 @@ function decision(epoch = 1): StrategyDecisionMetaV2 {
   };
 }
 
+async function prepareFinal73Lease(runtime: AssistedQSOQueueRuntime) {
+  runtime.enqueueTarget({
+    callsign: 'JA1AAA',
+    lastMessage: selected('BG5DRB JA1AAA -08'),
+  });
+  runtime.enqueueTarget({ callsign: 'JA2BBB' });
+  const first = await runtime.decide([], decision());
+  runtime.onTransmissionQueued(first.transmission!);
+
+  const rrr = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs);
+  runtime.observeDecodedMessages([rrr], observation(rrr.timestamp));
+  const completion = await runtime.decide([rrr], decision(2));
+  runtime.settleQSOCompletion({
+    lifecycleEpoch: completion.qsoCompletion!.lifecycleEpoch,
+    recordId: completion.qsoCompletion!.record.id,
+    status: 'committed',
+  });
+  runtime.onTransmissionQueued(completion.transmission!);
+
+  const releaseSlotStartMs = BASE_TIME + MODES.FT8.slotMs * 2;
+  runtime.observeDecodedMessages([], observation(releaseSlotStartMs));
+  const release = await runtime.decide([], decision(3));
+  return { completion, release, releaseSlotStartMs };
+}
+
 describe('AssistedQSOQueueRuntime queue capability', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -638,6 +663,61 @@ describe('AssistedQSOQueueRuntime queue capability', () => {
     expect(runtime.getSnapshot().currentState).toBe('TX3');
     expect(handoff.transmission).toBe('JA2BBB BG5DRB R-15');
     expect(handoff.requestedTransmitCycle).toBe((slotInfo(final73.timestamp).cycleNumber + 1) % 2);
+  });
+
+  it('retries final 73 after the completed row is removed without losing the next target', async () => {
+    const { runtime } = createRuntime({ transmitting: true });
+    const { release, releaseSlotStartMs } = await prepareFinal73Lease(runtime);
+    const nextEntryId = runtime.getQueueSnapshot().activeEntryId;
+
+    expect(release.transmission).toContain('JA2BBB');
+    expect(runtime.getQueueSnapshot().rows).toMatchObject([{ callsign: 'JA2BBB' }]);
+
+    const repeatedRR73 = parsed('BG5DRB JA1AAA RR73', releaseSlotStartMs);
+    runtime.observeDecodedMessages([repeatedRR73], observation(releaseSlotStartMs));
+    expect(() => structuredClone(runtime.checkpoint())).not.toThrow();
+    const retry = await runtime.decide([repeatedRR73], {
+      ...decision(4),
+      source: 'late-decode',
+      isReDecision: true,
+    });
+
+    expect(retry.transmission).toBe('JA1AAA BG5DRB 73');
+    expect(retry.snapshot).toMatchObject({
+      currentState: 'TX5',
+      context: { targetCallsign: 'JA1AAA' },
+    });
+    expect(retry.qsoCompletion).toBeUndefined();
+    expect(runtime.getQueueSnapshot()).toMatchObject({
+      activeEntryId: nextEntryId,
+      rows: [{ callsign: 'JA2BBB' }],
+    });
+
+    runtime.onTransmissionQueued(retry.transmission!);
+    const nextSlotStartMs = releaseSlotStartMs + MODES.FT8.slotMs;
+    runtime.observeDecodedMessages([], observation(nextSlotStartMs));
+    const resumed = await runtime.decide([], decision(5));
+    expect(resumed.transmission).toContain('JA2BBB');
+    expect(runtime.getQueueSnapshot().activeEntryId).toBe(nextEntryId);
+  });
+
+  it('does not let a completed target retry preempt an engaged next QSO', async () => {
+    const { runtime } = createRuntime({ transmitting: true });
+    const { releaseSlotStartMs } = await prepareFinal73Lease(runtime);
+    const nextEntryId = runtime.getQueueSnapshot().activeEntryId;
+    const nextSlotStartMs = releaseSlotStartMs + MODES.FT8.slotMs;
+    const nextReport = parsed('BG5DRB JA2BBB -05', nextSlotStartMs, { snr: -7 });
+    const repeatedRR73 = parsed('BG5DRB JA1AAA RR73', nextSlotStartMs);
+
+    runtime.observeDecodedMessages([nextReport, repeatedRR73], observation(nextSlotStartMs));
+    const decisionResult = await runtime.decide([nextReport, repeatedRR73], decision(4));
+
+    expect(decisionResult.transmission).toContain('JA2BBB');
+    expect(decisionResult.transmission).not.toBe('JA1AAA BG5DRB 73');
+    expect(runtime.getQueueSnapshot()).toMatchObject({
+      activeEntryId: nextEntryId,
+      rows: [{ callsign: 'JA2BBB', displayState: 'engaged' }],
+    });
   });
 
   it('holds a delegate-released completion until asynchronous log settlement arrives', async () => {
