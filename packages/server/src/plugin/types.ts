@@ -132,6 +132,18 @@ export interface DecisionOrchestratorDeps {
   ) => Promise<void>;
   isSnrPriorityEnabled?: (operatorId: string) => boolean;
   isStoppedDirectCallAutoReplyEnabled?: (operatorId: string) => boolean;
+  hasTargetQueue?: (operatorId: string) => boolean;
+  observeStrategyMessages?: (
+    operatorId: string,
+    messages: import('@tx5dr/contracts').ParsedFT8Message[],
+    slotInfo: import('@tx5dr/contracts').SlotInfo,
+    source: import('@tx5dr/plugin-api').StrategyDecisionSource,
+    token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken,
+    signal: AbortSignal,
+  ) => boolean;
+  notifyOperatorStatusChanged?: (operatorId: string) => void;
+  isQueueExecutionSuspended?: (operatorId: string) => boolean;
+  markQueueExecutionValidated?: (operatorId: string) => void;
   getStrategyRuntime: (operatorId: string) => import('@tx5dr/plugin-api').StrategyRuntime | undefined;
   getStrategyRuntimeGeneration: (operatorId: string) => number | undefined;
   invokeStrategyRuntime: <T>(
@@ -178,6 +190,7 @@ export interface PluginManagerDeps {
     callsign: string,
     lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo },
   ) => void;
+  notifyOperatorStatusChanged?: (operatorId: string) => void;
   getRadioFrequency: () => Promise<number | null>;
   getKnownRadioFrequency?: () => number | null;
   getEngineMode?: () => EngineMode;
@@ -272,6 +285,7 @@ export function toPluginStatus(plugin: LoadedPlugin, instance?: PluginInstance):
   return {
     name: plugin.definition.name,
     type: plugin.definition.type,
+    strategyFeatures: plugin.definition.strategyFeatures,
     instanceScope: plugin.definition.instanceScope ?? 'operator',
     version: plugin.definition.version,
     description: plugin.definition.description,

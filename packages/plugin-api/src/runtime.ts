@@ -46,6 +46,77 @@ export interface StrategyRuntimeSnapshot {
   availableSlots?: string[];
   /** Host correlation token for QSO persistence; it is not an RF decision epoch. */
   qsoLifecycleEpoch?: number;
+  /** Optional compact projection exposed by queue-capable strategies. */
+  queue?: AssistedQueueSnapshot;
+}
+
+export type AssistedQueueDisplayState =
+  | 'TX1' | 'TX2' | 'TX3' | 'TX4' | 'TX5'
+  | 'engaged' | 'closing' | 'paused' | 'no-response' | 'later' | 'review';
+
+export type AssistedQueuePauseReason = 'target-busy' | 'stale';
+
+export type AssistedQueueTone = 'neutral' | 'active' | 'success' | 'warning' | 'danger';
+
+export type AssistedQueueIcon =
+  | 'circle' | 'radio' | 'check-circle' | 'loader-circle' | 'clock' | 'pause' | 'triangle-alert';
+
+export interface AssistedQueueRow {
+  entryId: string;
+  callsign: string;
+  order: number;
+  draggable: boolean;
+  displayState: AssistedQueueDisplayState;
+  tone: AssistedQueueTone;
+  icon: AssistedQueueIcon;
+  pauseReason?: AssistedQueuePauseReason;
+  noResponseCycles?: number;
+  targetGrid?: string;
+  lastSnr?: number;
+  lastHeardCyclesAgo?: number;
+}
+
+export interface AssistedQueueSnapshot {
+  version: number;
+  activeEntryId?: string;
+  rows: AssistedQueueRow[];
+}
+
+export interface QueuedStrategyObservationMeta {
+  slotInfo: SlotInfo;
+  source: StrategyDecisionSource;
+  signal: AbortSignal;
+}
+
+export interface QueuedStrategyTargetRequest {
+  callsign: string;
+  lastMessage?: { message: FrameMessage; slotInfo: SlotInfo };
+}
+
+export interface QueuedStrategyMutationResult {
+  outcome: 'accepted' | 'duplicate' | 'rejected';
+  reason?: 'queue_full' | 'invalid_target' | 'entry_not_found' | 'entry_not_retryable' | 'active_entry' | 'version_conflict';
+  snapshot: AssistedQueueSnapshot;
+}
+
+/** Optional capability implemented by strategies that own a target queue. */
+export interface QueuedStrategyRuntime extends StrategyRuntime {
+  observeDecodedMessages(messages: ParsedFT8Message[], meta: QueuedStrategyObservationMeta): boolean;
+  enqueueTarget(request: QueuedStrategyTargetRequest): QueuedStrategyMutationResult;
+  reorderTarget(entryId: string, beforeEntryId: string | null, expectedVersion: number): QueuedStrategyMutationResult;
+  removeTarget(entryId: string, expectedVersion: number): QueuedStrategyMutationResult;
+  retryTarget?(entryId: string, expectedVersion: number): QueuedStrategyMutationResult;
+  clearTargets?(expectedVersion: number): QueuedStrategyMutationResult;
+  getQueueSnapshot(): AssistedQueueSnapshot;
+}
+
+export function isQueuedStrategyRuntime(runtime: StrategyRuntime): runtime is QueuedStrategyRuntime {
+  const candidate = runtime as Partial<QueuedStrategyRuntime>;
+  return typeof candidate.observeDecodedMessages === 'function'
+    && typeof candidate.enqueueTarget === 'function'
+    && typeof candidate.reorderTarget === 'function'
+    && typeof candidate.removeTarget === 'function'
+    && typeof candidate.getQueueSnapshot === 'function';
 }
 
 /**
@@ -85,6 +156,8 @@ export interface StrategyDecisionResult extends StrategyDecision {
   transmission: string | null;
   snapshot: StrategyRuntimeSnapshot;
   qsoCompletion?: StrategyQSOCompletionEffect;
+  /** Optional cycle selected from the triggering RX frame; applied by the host after target reservation. */
+  requestedTransmitCycle?: number;
 }
 
 /**

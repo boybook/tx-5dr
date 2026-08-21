@@ -1,0 +1,6 @@
+{
+  "pluginName": "Assisted Queue",
+  "pluginDescription": "Queue selected targets and direct callers while using the standard FT8/FT4 QSO flow",
+  "strategyOverview": "Assisted Queue",
+  "strategyOverviewDesc": "Double-click a target in the message list to add it manually. Reliable direct callers join automatically, and the queue works each target using the standard FT8/FT4 QSO flow."
+}

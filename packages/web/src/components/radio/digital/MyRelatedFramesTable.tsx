@@ -9,6 +9,12 @@ import {
   useMyRelatedTimeline,
   useOperators,
 } from '../../../store/radioStore';
+import { usePluginSnapshot } from '../../../hooks/usePluginSnapshot';
+import {
+  buildQueueCallsignOrder,
+  resolveOperatorTargetAction,
+  submitOperatorTarget,
+} from '../operators/operatorQueuePresentation';
 
 interface MyRelatedFT8TableProps {
   className?: string;
@@ -40,7 +46,22 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
   const { operators } = useOperators();
   const { currentOperatorId } = useCurrentOperatorId();
   const timeline = useMyRelatedTimeline();
+  const pluginSnapshot = usePluginSnapshot();
   const groups = timeline.groups;
+  const selectedOperator = useMemo(
+    () => operators.find((operator) => operator.id === currentOperatorId),
+    [currentOperatorId, operators],
+  );
+  const targetAction = useMemo(
+    () => resolveOperatorTargetAction(selectedOperator, pluginSnapshot.plugins),
+    [pluginSnapshot.plugins, selectedOperator],
+  );
+  const queueCallsignOrder = useMemo(
+    () => targetAction === 'enqueue'
+      ? buildQueueCallsignOrder(selectedOperator?.runtime?.queue)
+      : {},
+    [selectedOperator?.runtime?.queue, targetAction],
+  );
 
   const activeOperatorCallsigns = useMemo(
     () => operators
@@ -93,11 +114,15 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
       group,
     });
 
-    connection.state.radioService?.sendRequestCall(
-      currentOperatorId,
-      callsign,
-      buildSelectedFrame(message, group),
-    );
+    if (connection.state.radioService) {
+      submitOperatorTarget(
+        connection.state.radioService,
+        targetAction,
+        currentOperatorId,
+        callsign,
+        buildSelectedFrame(message, group),
+      );
+    }
   };
 
   return (
@@ -114,6 +139,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
           className="h-full"
           myCallsigns={selectedOperatorCallsigns}
           targetCallsign={targetCallsign}
+          queueCallsignOrder={queueCallsignOrder}
           showLogbookAnalysisVisuals={false}
           onRowDoubleClick={handleRowDoubleClick}
           showGroupHeader

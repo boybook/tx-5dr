@@ -504,6 +504,31 @@ export class RadioService {
     }
   }
 
+  enqueueQueueTarget(
+    operatorId: string,
+    callsign: string,
+    selectedFrame?: WSSelectedFrame,
+    options?: { startIfIdle?: boolean },
+  ): void {
+    if (this.isConnected) this.wsClient.enqueueOperatorQueueTarget(operatorId, callsign, selectedFrame, options);
+  }
+
+  reorderQueueTarget(operatorId: string, entryId: string, beforeEntryId: string | null, version: number): void {
+    if (this.isConnected) this.wsClient.reorderOperatorQueueTarget(operatorId, entryId, beforeEntryId, version);
+  }
+
+  retryQueueTarget(operatorId: string, entryId: string, version: number): void {
+    if (this.isConnected) this.wsClient.retryOperatorQueueTarget(operatorId, entryId, version);
+  }
+
+  removeQueueTarget(operatorId: string, entryId: string, version: number): void {
+    if (this.isConnected) this.wsClient.removeOperatorQueueTarget(operatorId, entryId, version);
+  }
+
+  clearQueue(operatorId: string, version: number): void {
+    if (this.isConnected) this.wsClient.clearOperatorQueue(operatorId, version);
+  }
+
   /**
    * 手动重连电台
    */

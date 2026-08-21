@@ -448,7 +448,41 @@
     "pauseAllAutoCall": "Pause all auto-call",
     "resumeAllAutoCall": "Resume all auto-call",
     "autoCallPauseFailed": "Failed to pause auto-call",
-    "autoCallResumeFailed": "Failed to resume auto-call"
+    "autoCallResumeFailed": "Failed to resume auto-call",
+    "queue": {
+      "title": "QSO queue",
+      "callsign": "Callsign",
+      "status": "Status",
+      "remove": "Remove",
+      "interruptAndRemove": "Interrupt and remove",
+      "retry": "Retry call",
+      "clear": "Clear queue",
+      "emptyHint": "Double-click a callsign on the left to add it"
+    },
+    "queueStatus": {
+      "engaged": "Active",
+      "closing": "Closing",
+      "paused": "Paused",
+      "no-response": "Inactive",
+      "noResponseCycles": "Inactive · no reply for {{count}} cycles",
+      "later": "Later",
+      "review": "Review"
+    },
+    "queuePauseReason": {
+      "targetBusy": "Station busy",
+      "stale": "Not heard"
+    },
+    "queueMeta": {
+      "cyclesAgo": "{{count}} cycles ago"
+    },
+    "queueErrors": {
+      "queueFull": "The queue is full",
+      "invalidTarget": "This callsign cannot be added to the queue",
+      "entryNotFound": "The queue changed; try again",
+      "entryNotRetryable": "This entry is not eligible for another call",
+      "activeEntry": "The active QSO target cannot be moved",
+      "versionConflict": "The queue was updated elsewhere; retry using the latest order"
+    }
   },
   "profile": {
     "reconnecting": "Reconnecting to \"{{name}}\"",

@@ -71,4 +71,48 @@ describe('radioReducer global slot state', () => {
     expect(next.currentSlotInfo).toBe(slotInfo);
     expect(next.operators[0]).toEqual(updated);
   });
+
+  it('applies strategy-only and runtime-only operator updates', () => {
+    const state = {
+      ...initialRadioState,
+      operators: [createOperatorStatus()],
+    };
+    const switched = createOperatorStatus({
+      strategy: {
+        name: 'assisted-qso-queue',
+        state: 'TX6',
+        availableSlots: ['TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'TX6'],
+      },
+      runtime: {
+        currentState: 'TX6',
+        queue: { version: 1, rows: [] },
+      },
+    });
+
+    const next = radioReducer(state, { type: 'operatorStatusUpdate', payload: switched });
+
+    expect(next.operators[0]).toBe(switched);
+    expect(next.operators[0]?.strategy.name).toBe('assisted-qso-queue');
+    expect(next.operators[0]?.runtime?.queue?.version).toBe(1);
+  });
+
+  it('applies an operator update when only transmit intent changes', () => {
+    const current = createOperatorStatus({
+      isTransmitting: true,
+      hasTransmitIntent: false,
+    });
+    const state = {
+      ...initialRadioState,
+      operators: [current],
+    };
+    const updated = createOperatorStatus({
+      isTransmitting: true,
+      hasTransmitIntent: true,
+    });
+
+    const next = radioReducer(state, { type: 'operatorStatusUpdate', payload: updated });
+
+    expect(next.operators[0]).toBe(updated);
+    expect(next.operators[0]?.hasTransmitIntent).toBe(true);
+  });
 });
