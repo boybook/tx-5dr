@@ -437,7 +437,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
         </div>
         <Select
           label={t('radio.digitalModeRadioModeLabel')}
-          selectedKeys={[config.digitalModeRadioMode ?? 'usb']}
+          selectedKeys={[config.digitalModeRadioMode ?? 'none']}
           onSelectionChange={(keys) => {
             const selected = Array.from(keys)[0] as DigitalModeRadioModePreference | undefined;
             if (!selected) return;

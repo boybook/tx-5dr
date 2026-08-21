@@ -718,7 +718,7 @@ describe('DigitalRadioEngine mode switching', () => {
         description: '14.074 MHz 20m',
       })),
       getCustomFrequencyPresets: vi.fn(() => null),
-      getRadioConfig: vi.fn(() => ({ type: 'none' })),
+      getRadioConfig: vi.fn(() => ({ type: 'none', digitalModeRadioMode: 'usb' })),
       updateLastSelectedFrequency,
     };
     vi.spyOn(ConfigManager, 'getInstance').mockReturnValue(configManager as unknown as ConfigManager);
@@ -768,7 +768,7 @@ describe('DigitalRadioEngine mode switching', () => {
         description: '14.074 MHz 20m',
       })),
       getCustomFrequencyPresets: vi.fn(() => null),
-      getRadioConfig: vi.fn(() => ({ type: 'none' })),
+      getRadioConfig: vi.fn(() => ({ type: 'none', digitalModeRadioMode: 'usb' })),
       updateLastSelectedFrequency: vi.fn(async () => undefined),
     };
     vi.spyOn(ConfigManager, 'getInstance').mockReturnValue(configManager as unknown as ConfigManager);
@@ -860,6 +860,7 @@ describe('DigitalRadioEngine mode switching', () => {
       initialMode: MODES.FT8,
       knownFrequency: 14_074_000,
       radioConnected: true,
+      digitalModeRadioMode: 'usb',
     });
     setPhysicalPhase('active');
 
@@ -919,7 +920,7 @@ describe('DigitalRadioEngine mode switching', () => {
     expect(exitTransmissionMaintenance).toHaveBeenCalledOnce();
   });
 
-  it('migrates a missing digital radio mode preference to USB when switching presets', async () => {
+  it('does not write a radio mode for a missing digital mode preference', async () => {
     const { fakeEngine, applyOperatingState } = createDigitalSwitchHarness({
       initialMode: MODES.FT4,
       knownFrequency: 14_080_000,
@@ -932,9 +933,6 @@ describe('DigitalRadioEngine mode switching', () => {
 
     expect(applyOperatingState).toHaveBeenCalledWith({
       frequency: 14_074_000,
-      mode: 'USB',
-      bandwidth: 'nochange',
-      options: { intent: 'voice' },
       tolerateModeFailure: true,
     });
   });
