@@ -2400,6 +2400,54 @@ describe('RadioOperatorManager transmission acceptance notification', () => {
       message: 'BG5AAA BG4IAJ RR73',
     });
   });
+
+  it('requeues an on-air frame after severe output loss without mutating the physical frame', async () => {
+    mockMaxSameTransmissionCount(20);
+    const encodeQueue = { push: vi.fn() };
+    const { manager, clockSource } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 0,
+      encodeQueue,
+    });
+    await addBasicOperator(manager, 'op1');
+    manager.start();
+
+    const coordinator = (manager as any).digitalFrameCoordinator;
+    const decisionEpoch = (manager as any).intentCoordinator.getCurrentEpoch('op1');
+    const physical = coordinator.prepareFrame({
+      slotId: 'slot-0',
+      intents: [{
+        operatorId: 'op1',
+        source: 'standard-qso',
+        reason: 'RR73',
+        text: 'BG5AAA BG4IAJ RR73',
+        decisionEpoch,
+      }],
+    });
+    coordinator.beginEncoding(physical.frame.frameId);
+    coordinator.acceptEncodeResult({
+      frameId: physical.frame.frameId,
+      operatorId: 'op1',
+      decisionEpoch: physical.intents[0].decisionEpoch,
+      revision: physical.frame.revision,
+    });
+    coordinator.prepareFrameForHandover(physical.frame.frameId, ['op1']);
+    coordinator.commitFrame(physical.frame.frameId);
+    coordinator.markOnAir(physical.frame.frameId);
+
+    expect(manager.requeuePhysicalFrameAfterOutputFailure(physical.frame.frameId, 'audio device loss'))
+      .toEqual(['op1']);
+    expect(coordinator.getFrame(physical.frame.frameId)).toMatchObject({ phase: 'on_air' });
+    coordinator.completeFrame(physical.frame.frameId, 'audio device loss');
+
+    clockSource.now.mockReturnValue(MODES.FT8.slotMs * 2);
+    manager.processPendingTransmissions(createSlotInfo(MODES.FT8.slotMs * 2));
+    expect(encodeQueue.push).toHaveBeenCalledWith(expect.objectContaining({
+      operatorId: 'op1',
+      message: 'BG5AAA BG4IAJ RR73',
+    }));
+  });
 });
 
 describe('RadioOperatorManager fake frequency dial shift', () => {

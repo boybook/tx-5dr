@@ -1,4 +1,5 @@
 import { EventEmitter } from 'eventemitter3';
+import type { AudioPlaybackReadiness } from '../../audio/AudioStreamManager.js';
 import { describe, expect, it, vi } from 'vitest';
 import { DigitalFrameCoordinator } from '../../transmission/DigitalFrameCoordinator.js';
 import { OperatorIntentCoordinator } from '../../transmission/OperatorIntentCoordinator.js';
@@ -51,7 +52,10 @@ function createHarness(options: {
     if (options.stopPlayback) await options.stopPlayback;
     return 0;
   });
-  const prepareAudioPlayback = vi.fn(async () => false);
+  const prepareAudioPlayback = vi.fn(async (): Promise<AudioPlaybackReadiness> => ({
+    ready: true,
+    waitedForDrain: false,
+  }));
   let frameSequence = 0;
   const digitalFrameCoordinator = new DigitalFrameCoordinator({ idFactory: () => `frame-${++frameSequence}` });
   const frameMixes = new Map<string, Record<string, any>>();
@@ -106,6 +110,7 @@ function createHarness(options: {
     deferPreparedFrameToNextSlot: vi.fn((frameId: string, reason: string) => {
       return digitalFrameCoordinator.deferFrame(frameId, reason)?.phase === 'cancelled';
     }),
+    requeuePhysicalFrameAfterOutputFailure: vi.fn((): string[] => []),
   };
   const intentCoordinator = new OperatorIntentCoordinator();
   const transmissionTracker = {
@@ -220,6 +225,33 @@ describe('TransmissionPipeline lifecycle integration', () => {
     });
     expect(harness.deps.operatorManager.notifyPhysicalTransmissionComplete)
       .toHaveBeenCalledWith('operator-a', 'A B 73');
+  });
+
+  it('requeues a severe output failure for the next transmit cycle without reporting success', () => {
+    const harness = createHarness();
+    harness.deps.operatorManager.requeuePhysicalFrameAfterOutputFailure.mockReturnValue(['operator-a']);
+    harness.deps.digitalFrameCoordinator.prepareFrameForHandover('frame-1', ['operator-a']);
+    harness.deps.digitalFrameCoordinator.commitFrame('frame-1');
+    harness.deps.digitalFrameCoordinator.markOnAir('frame-1');
+
+    (harness.pipeline as any).finishDigitalFramePlayback('frame-1', harness.mixedAudio, {
+      success: false,
+      reason: 'audio transmission failed',
+      error: 'No such device',
+      physicalConfirmed: true,
+      retryDisposition: 'next-transmit-cycle',
+      audioIssue: {
+        issueId: 'issue-device-loss',
+        streamGeneration: 4,
+        kind: 'device-loss',
+      },
+    });
+
+    expect(harness.deps.operatorManager.requeuePhysicalFrameAfterOutputFailure)
+      .toHaveBeenCalledWith('frame-1', 'audio transmission failed');
+    expect(harness.deps.operatorManager.notifyPhysicalTransmissionComplete).not.toHaveBeenCalled();
+    expect(harness.deps.digitalFrameCoordinator.getFrame('frame-1'))
+      .toMatchObject({ phase: 'terminal' });
   });
 
   it('does not display on-air or start audio while PTT is still starting', async () => {
@@ -504,7 +536,7 @@ describe('TransmissionPipeline lifecycle integration', () => {
     });
 
     const delayedMix = deferred<Record<string, any>>();
-    const outputDrain = deferred<boolean>();
+    const outputDrain = deferred<AudioPlaybackReadiness>();
     harness.deps.audioMixer.mixFrameById.mockReturnValueOnce(delayedMix.promise);
     harness.prepareAudioPlayback.mockReturnValueOnce(outputDrain.promise);
     const replacementHandling = (harness.pipeline as any).handleMixedAudioReady({
@@ -526,7 +558,7 @@ describe('TransmissionPipeline lifecycle integration', () => {
     await vi.waitFor(() => expect(harness.prepareAudioPlayback).toHaveBeenCalledTimes(2));
 
     harness.setNow(1_750);
-    outputDrain.resolve(true);
+    outputDrain.resolve({ ready: true, waitedForDrain: true });
     await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(2));
     expect(harness.playAudio.mock.calls[1]?.[0]).toHaveLength(2_250);
     expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true]);
@@ -661,7 +693,7 @@ describe('TransmissionPipeline lifecycle integration', () => {
   });
 
   it('rechecks waveform position and slot budget after a delayed output drain', async () => {
-    const outputDrain = deferred<boolean>();
+    const outputDrain = deferred<AudioPlaybackReadiness>();
     const harness = createHarness({
       nowMs: 1_000,
       slotEndMs: 3_000,
@@ -673,7 +705,7 @@ describe('TransmissionPipeline lifecycle integration', () => {
     const handling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
     await vi.waitFor(() => expect(harness.prepareAudioPlayback).toHaveBeenCalledOnce());
     harness.setNow(2_500);
-    outputDrain.resolve(true);
+    outputDrain.resolve({ ready: true, waitedForDrain: true });
     await handling;
 
     expect(harness.deps.audioMixer.mixFrameById).toHaveBeenCalledWith('frame-1', 1, 2_000);

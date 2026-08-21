@@ -46,6 +46,7 @@ export interface AudioSidecarDeps {
   engineEmitter: EventEmitter<DigitalRadioEngineEvents>;
   audioStreamManager: AudioStreamManager;
   audioVolumeController: AudioVolumeController;
+  onOutputIssue?: (error: Error) => Promise<unknown> | unknown;
 }
 
 /**
@@ -60,7 +61,7 @@ export interface AudioSidecarDeps {
  * 不负责：
  * - 电台 CAT 连接与状态机。
  * - ICOM WLAN / OpenWebRX 音频适配器的启停（仍在 ResourceManager 中作为可选资源）。
- * - 发射链路的音频就绪前置检查（TransmissionPipeline 保持现状，未就绪时 playAudio 会自动空操作）。
+ * - 发射链路的音频就绪判定与物理 lease 控制。
  */
 export class AudioSidecarController {
   private status: AudioSidecarStatus = AudioSidecarStatus.IDLE;
@@ -332,6 +333,23 @@ export class AudioSidecarController {
     if (this.audioStreamErrorHandler) return;
     const handler = (error: Error) => {
       if (this.status !== AudioSidecarStatus.CONNECTED) return;
+      const issue = getAudioRuntimeIssue(error);
+      if (issue?.disposition === 'continue') {
+        logger.debug('continuing after non-fatal audio output issue', {
+          issueId: issue.issueId,
+          streamGeneration: issue.streamGeneration,
+          kind: issue.kind,
+        });
+        return;
+      }
+      if (issue?.direction === 'output' && issue.disposition === 'restart-required') {
+        void Promise.resolve(this.deps.onOutputIssue?.(error)).catch((notifyError) => {
+          logger.warn('failed to notify physical transmitter about audio output loss', {
+            issueId: issue.issueId,
+            error: notifyError instanceof Error ? notifyError.message : String(notifyError),
+          });
+        });
+      }
       if (this.isHandlingRuntimeLoss) {
         logger.debug('runtime audio loss already being handled, ignoring duplicate error', { message: error.message });
         return;

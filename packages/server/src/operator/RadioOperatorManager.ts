@@ -1860,6 +1860,35 @@ export class RadioOperatorManager {
     return true;
   }
 
+  requeuePhysicalFrameAfterOutputFailure(frameId: string, reason: string): string[] {
+    const requests = this.digitalFrameCoordinator.getIntentRequests(frameId).flatMap((intent) => {
+      if (!intent.text) return [];
+      const operator = this.operators.get(intent.operatorId);
+      if (!operator?.isTransmitting) return [];
+      if (intent.decisionEpoch !== this.intentCoordinator.getCurrentEpoch(intent.operatorId)) {
+        logger.debug('Discarded stale physical retry intent', {
+          frameId,
+          operatorId: intent.operatorId,
+          intentEpoch: intent.decisionEpoch,
+          currentEpoch: this.intentCoordinator.getCurrentEpoch(intent.operatorId),
+        });
+        return [];
+      }
+      return [{
+        operatorId: intent.operatorId,
+        transmission: intent.text,
+        replaceExisting: true,
+        source: intent.source === 'persistence' || intent.source === 'device'
+          ? 'plugin' as const
+          : intent.source,
+        reason,
+        decisionEpoch: intent.decisionEpoch,
+      }];
+    });
+    this.requeueForNextSlot(requests, reason);
+    return requests.map((request) => request.operatorId);
+  }
+
   private requeueForNextSlot(requests: QueuedTransmitRequest[], reason: string): void {
     const byOperator = new Map(
       this.pendingTransmissions.map((request) => [request.operatorId, request]),
