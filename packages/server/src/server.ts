@@ -25,6 +25,7 @@ import { radioRoutes } from './routes/radio.js';
 import { powerRoutes } from './routes/power.js';
 import { rigctldRoutes } from './routes/rigctld.js';
 import { settingsRoutes } from './routes/settings.js';
+import { diagnosticRoutes } from './routes/diagnostics.js';
 import { profileRoutes } from './routes/profiles.js';
 import { systemRoutes } from './routes/system.js';
 import { WSServer } from './websocket/WSServer.js';
@@ -676,6 +677,7 @@ export async function createServer() {
   await registerRoleScope(fastify, UserRole.ADMIN, async (scope) => {
     await scope.register(audioRoutes, { prefix: '/api/audio' });
     await scope.register(settingsRoutes, { prefix: '/api/settings' });
+    await scope.register(diagnosticRoutes, { prefix: '/api/diagnostics' });
     const { storageRoutes } = await import('./routes/storage.js');
     await scope.register(storageRoutes, { prefix: '/api/storage' });
     const { pskreporterRoutes } = await import('./routes/pskreporter.js');

@@ -424,6 +424,7 @@
     "tabDisplay": "显示通知",
     "tabRadioProfile": "电台配置",
     "tabSystem": "系统设置",
+    "tabHelpImprove": "帮助改进",
     "tabRigctld": "Rigctld 桥接",
     "tabFrequencyPresets": "频率预设",
     "tabTokens": "用户管理",
@@ -433,6 +434,61 @@
     "goToRadioProfile": "前往电台配置",
     "saveSettings": "保存设置",
     "tabAbout": "关于"
+  },
+  "helpImprove": {
+    "title": "帮助改进 TX-5DR",
+    "description": "选择持续分享匿名运行信息，或在遇到问题时主动提交一次日志。两者相互独立。",
+    "telemetryTitle": "分享匿名运行信息",
+    "telemetryDescription": "开启后会持续分享少量运行信息，帮助我们判断版本分布和常见运行环境。此设置可随时关闭。",
+    "uploadTitle": "提交问题日志",
+    "uploadDescription": "这是一次性提交。选择问题发生的位置和时间，只有点击下方上传按钮后才会发送。",
+    "privacyNotice": "日志可能包含呼号、频率、网络地址、主机信息和本地路径。上传前会再次移除凭证及已登记的 Token。",
+    "logSource": "日志",
+    "timeRange": "时间范围",
+    "customFrom": "开始时间",
+    "customTo": "结束时间",
+    "coverageTitle": "可用日志范围",
+    "coverageValue": "{{from}} 至 {{to}} · {{files}} 个文件 · 磁盘占用 {{size}}",
+    "coverageUnknown": "日志文件存在，但暂时无法估算其中的时间范围。",
+    "selectionTitle": "本次将发送",
+    "selectionSummary": "{{source}} · {{from}} 至 {{to}}",
+    "selectionPresetSummary": "{{source}} · {{range}}（以点击上传的时间为准）",
+    "selectionUnavailable": "请先选择有效的日志和时间范围。",
+    "selectionOutsideCoverage": "所选时间不在当前日志覆盖范围内，请换一个时间范围。",
+    "feedbackLabel": "问题描述（可选）",
+    "feedbackPlaceholder": "当时正在做什么？遇到了什么现象？",
+    "feedbackCount": "{{count}} / 2,000 字",
+    "uploadButton": "上传所选日志",
+    "uploading": "正在整理并上传",
+    "retry": "重新加载",
+    "sources": {
+      "server": "TX-5DR 服务端",
+      "electron-main": "桌面应用",
+      "client-tools": "浏览器网关"
+    },
+    "sourceDescriptions": {
+      "server": "适合排查操作、解码、电台连接和大多数运行问题",
+      "electron-main": "适合排查启动、窗口、更新和桌面应用问题",
+      "client-tools": "适合排查浏览器访问和本地代理问题"
+    },
+    "time": {
+      "15m": "最近 15 分钟",
+      "1h": "最近 1 小时",
+      "6h": "最近 6 小时",
+      "24h": "最近 24 小时",
+      "custom": "自定义范围"
+    },
+    "status": {
+      "success": "日志已提交",
+      "receipt": "回执 {{id}} · {{lines}} 行 · 保留至 {{until}}",
+      "noLogs": "这个时段内没有日志。请扩大时间范围或换一个日志。",
+      "rangeTooLarge": "这个时段的日志过多，请缩短时间范围后重试。",
+      "networkFailed": "上传未完成，请检查网络后重试。",
+      "serviceUnavailable": "诊断服务暂时不可用，请稍后再试。",
+      "invalidRange": "请选择不超过 7 天、且结束时间不晚于现在的有效范围。",
+      "sourcesUnavailable": "暂时无法读取日志列表，请重新打开设置后再试。",
+      "noSources": "当前安装中没有可提交的日志文件。"
+    }
   },
   "qsoNotifications": {
     "title": "QSO 系统提醒",
