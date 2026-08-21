@@ -46,3 +46,53 @@ index 73cee2b7c3977ecc973d8370c75976b24ae6fe12..01b2a8051c88bd66716b6b9d62eb2349
    }
  
    // Fill stream data
+@@ -9065,19 +9069,35 @@ void RtApiAlsa::callbackEvent()
+     if ( stream_.doByteSwap[0] )
+       byteSwapBuffer(buffer, stream_.bufferSize * channels, format);
+-
++
+-    // Write samples to device in interleaved/non-interleaved format.
+-    if ( stream_.deviceInterleaved[0] )
+-      result = snd_pcm_writei( handle[0], buffer, stream_.bufferSize );
+-    else {
+-      void *bufs[channels];
+-      size_t offset = stream_.bufferSize * formatBytes( format );
+-      for ( int i=0; i<channels; i++ )
+-        bufs[i] = (void *) (buffer + (i * offset));
+-      result = snd_pcm_writen( handle[0], bufs, stream_.bufferSize );
+-    }
++    // Write the complete callback buffer. ALSA may accept fewer frames than
++    // requested without returning an error, especially with USB devices.
++    snd_pcm_uframes_t framesWritten = 0;
++    while ( framesWritten < stream_.bufferSize ) {
++      snd_pcm_uframes_t framesRemaining = stream_.bufferSize - framesWritten;
++      if ( stream_.deviceInterleaved[0] ) {
++        size_t byteOffset = framesWritten * channels * formatBytes( format );
++        result = snd_pcm_writei( handle[0], buffer + byteOffset, framesRemaining );
++      }
++      else {
++        void *bufs[channels];
++        size_t channelBytes = stream_.bufferSize * formatBytes( format );
++        size_t frameByteOffset = framesWritten * formatBytes( format );
++        for ( int i=0; i<channels; i++ )
++          bufs[i] = (void *) (buffer + (i * channelBytes) + frameByteOffset);
++        result = snd_pcm_writen( handle[0], bufs, framesRemaining );
++      }
+-
++
+-    if ( result < (int) stream_.bufferSize ) {
+-      // Either an error or underrun occurred.
++      if ( result > 0 ) {
++        framesWritten += result;
++        continue;
++      }
++      if ( result == 0 ) {
++        errorText_ = "RtApiAlsa::callbackEvent: audio write made no progress.";
++        error( RTAUDIO_WARNING );
++        goto unlock;
++      }
++
++      // Negative results are ALSA error codes.
+       if ( result == -EPIPE ) {
+         snd_pcm_state_t state = snd_pcm_state( handle[0] );
+         if ( state == SND_PCM_STATE_XRUN ) {

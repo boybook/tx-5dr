@@ -319,7 +319,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       setPTT: (active) => this.radioManager.setPTT(active),
       playAudio: (audioData, sampleRate, options) => this.audioStreamManager.playAudio(audioData, sampleRate, options),
       stopCurrentPlayback: (options) => this.audioStreamManager.stopCurrentPlayback(options),
-      prepareAudioPlayback: () => this.audioStreamManager.waitForOutputDrain(),
+      prepareAudioPlayback: (kind) => this.audioStreamManager.prepareAudioPlayback(kind),
+      getAudioPlaybackReadiness: (kind) => this.audioStreamManager.getAudioPlaybackReadiness(kind),
       isAudioPlaying: (kind) => this.audioStreamManager.isPlaying(kind),
       setTxDialOffset: (shiftHz) => this.radioManager.setTxDialOffset(shiftHz),
       clearTxDialOffset: () => this.radioManager.clearTxDialOffset(),
@@ -585,6 +586,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       engineEmitter: this,
       audioStreamManager: this.audioStreamManager,
       audioVolumeController: this.audioVolumeController,
+      onOutputIssue: (error) => this.physicalTxCoordinator.handleAudioOutputIssue(error),
     });
 
     this.transmissionPipeline = new TransmissionPipeline({

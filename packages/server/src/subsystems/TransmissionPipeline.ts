@@ -51,9 +51,6 @@ export interface TransmissionPipelineDeps {
  */
 export class TransmissionPipeline {
   private readonly lm = new ListenerManager();
-  private currentSlotExpectedEncodes = 0;
-  private currentSlotCompletedEncodes = 0;
-  private currentSlotId = '';
   private readonly terminalOperatorsByFrame = new Map<string, Set<string>>();
   private readonly onAirTransmissionKeys = new Set<string>();
   private operatorRemovalTransition: Promise<void> = Promise.resolve();
@@ -125,20 +122,11 @@ export class TransmissionPipeline {
   }
 
   onEncodeStart(slotInfo: { id: string; startMs?: number }): void {
-    this.currentSlotId = slotInfo.id;
-    this.currentSlotExpectedEncodes = this.deps.operatorManager.getPendingTransmissionsCount();
-    this.currentSlotCompletedEncodes = 0;
     this.deps.operatorManager.processPendingTransmissions(slotInfo);
   }
 
-  onTransmitStart(_slotInfo: { id: string }): void {
-    if (this.currentSlotExpectedEncodes > this.currentSlotCompletedEncodes) {
-      logger.warn('encode deadline reached before all frame members completed', {
-        slotId: this.currentSlotId,
-        expected: this.currentSlotExpectedEncodes,
-        completed: this.currentSlotCompletedEncodes,
-      });
-    }
+  onTransmitStart(slotInfo: { id: string }): void {
+    logger.debug('nominal transmit boundary reached', { slotId: slotInfo.id });
   }
 
   async forceStopPTT(): Promise<void> {
@@ -361,7 +349,6 @@ export class TransmissionPipeline {
     });
     if (!accepted) return;
 
-    this.currentSlotCompletedEncodes += 1;
     this.deps.transmissionTracker.updatePhase(result.operatorId, TransmissionPhase.MIXING, {});
     this.deps.transmissionTracker.updatePhase(result.operatorId, TransmissionPhase.READY, {
       audioData: result.audioData,
@@ -784,6 +771,12 @@ export class TransmissionPipeline {
       error?: string;
       physicalConfirmed: boolean;
       leaseContinues?: boolean;
+      retryDisposition?: 'none' | 'next-transmit-cycle';
+      audioIssue?: {
+        issueId: string;
+        streamGeneration: number;
+        kind: string;
+      };
     },
   ): void {
     if (result.leaseContinues) {
@@ -799,6 +792,23 @@ export class TransmissionPipeline {
         error: result.error,
         physicalConfirmed: result.physicalConfirmed,
         leaseContinues: result.leaseContinues,
+        issueId: result.audioIssue?.issueId,
+        streamGeneration: result.audioIssue?.streamGeneration,
+        audioIssueKind: result.audioIssue?.kind,
+      });
+    }
+    if (!result.success
+      && !result.leaseContinues
+      && result.retryDisposition === 'next-transmit-cycle') {
+      const requeuedOperatorIds = this.deps.operatorManager.requeuePhysicalFrameAfterOutputFailure(
+        frameId,
+        result.reason,
+      );
+      logger.warn('Deferred valid transmission intents after severe audio output failure', {
+        frameId,
+        issueId: result.audioIssue?.issueId,
+        streamGeneration: result.audioIssue?.streamGeneration,
+        operatorIds: requeuedOperatorIds,
       });
     }
     this.deps.digitalFrameCoordinator.completeFrame(frameId, result.reason);

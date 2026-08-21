@@ -41,7 +41,7 @@ vi.mock('../../utils/audioUtils.js', () => ({
   resampleAudioProfessional: mockResampleAudioProfessional,
 }));
 
-import { AudioStreamManager } from '../AudioStreamManager.js';
+import { AudioStreamManager, getAudioRuntimeIssue } from '../AudioStreamManager.js';
 
 type MockIcomAdapter = {
   sendAudio: ReturnType<typeof vi.fn>;
@@ -146,6 +146,27 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
     firstWrite.resolve();
     await expect(playback).resolves.toBeUndefined();
     expect(onPlaybackStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it('classifies an ICOM output send failure as restart-required', async () => {
+    const adapter: MockIcomAdapter = {
+      sendAudio: vi.fn().mockRejectedValue(new Error('UDP audio transport closed')),
+      getSampleRate: vi.fn().mockReturnValue(12000),
+    };
+    const manager = createIcomManager(adapter);
+    const emittedErrors: Error[] = [];
+    manager.on('error', (error) => emittedErrors.push(error));
+
+    const failure = await manager.playAudio(new Float32Array(1024), 12000).catch((error) => error);
+
+    expect(getAudioRuntimeIssue(failure)).toMatchObject({
+      kind: 'driver-failure',
+      disposition: 'restart-required',
+      direction: 'output',
+      backend: 'ICOM WLAN',
+    });
+    expect(emittedErrors).toEqual([failure]);
+    expect(manager.getAudioPlaybackReadiness('digital')).toMatchObject({ ready: false });
   });
 
   it('keeps stopCurrentPlayback responsive while ICOM WLAN pacing waits', async () => {

@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'eventemitter3';
-import type { PlaybackKind, PlayAudioOptions } from '../audio/AudioStreamManager.js';
+import {
+  AudioRuntimeIssueError,
+  getAudioRuntimeIssue,
+  type AudioOutputIssue,
+  type AudioPlaybackReadiness,
+  type PlaybackKind,
+  type PlayAudioOptions,
+} from '../audio/AudioStreamManager.js';
 import type {
   PhysicalTxPhase,
   PhysicalTxSnapshot,
@@ -21,7 +28,8 @@ export interface PhysicalTxCoordinatorDeps {
   setPTT: (active: boolean) => Promise<void>;
   playAudio: (audioData: Float32Array, sampleRate: number, options?: PlayAudioOptions) => Promise<void>;
   stopCurrentPlayback: (options?: { kind?: PlaybackKind }) => Promise<number>;
-  prepareAudioPlayback?: (kind: PlaybackKind) => Promise<boolean>;
+  prepareAudioPlayback?: (kind: PlaybackKind) => Promise<AudioPlaybackReadiness>;
+  getAudioPlaybackReadiness?: (kind: PlaybackKind) => AudioPlaybackReadiness;
   isAudioPlaying?: (kind?: PlaybackKind) => boolean;
   setTxDialOffset?: (shiftHz: number) => Promise<unknown>;
   clearTxDialOffset?: () => Promise<unknown>;
@@ -102,6 +110,8 @@ export interface PhysicalTxResult {
   physicalConfirmed: boolean;
   /** A newer audio generation owns the same physical PTT lease. */
   leaseContinues?: boolean;
+  retryDisposition?: 'none' | 'next-transmit-cycle';
+  audioIssue?: AudioOutputIssue;
 }
 
 export interface PhysicalTxMaintenanceRequest {
@@ -361,6 +371,15 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
       }
 
       if (lease.assertPtt) {
+        if (request.playbackKind && this.deps.getAudioPlaybackReadiness) {
+          const readiness = this.deps.getAudioPlaybackReadiness(request.playbackKind);
+          if (!readiness.ready) {
+            throw new PhysicalTxPreparationError(
+              `audio output became unavailable before PTT: ${readiness.reason ?? 'unknown reason'}`,
+              readiness.issue ? new AudioRuntimeIssueError(readiness.issue) : undefined,
+            );
+          }
+        }
         const rawStart = this.deps.setPTT(true);
         lease.pttStartPromise = rawStart;
         lease.pttStartSettlementPromise = rawStart.then(
@@ -552,7 +571,13 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
       return started.completion;
     } catch (error) {
       if (this.isCurrent(lease)) {
-        return this.ensureReleased(lease, 'audio replacement failed', false, error);
+        return this.ensureReleased(
+          lease,
+          'audio replacement failed',
+          false,
+          error,
+          this.retryDispositionForAudioError(error),
+        );
       }
       return this.toPlaybackResult(
         lease,
@@ -579,17 +604,23 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
       () => { preparationSettled = true; },
     );
 
-    let waitedForDrain: boolean;
+    let readiness: AudioPlaybackReadiness;
     try {
-      waitedForDrain = await this.withTimeout(preparationPromise, 'audio output preparation');
+      readiness = await this.withTimeout(preparationPromise, 'audio output preparation');
     } catch (error) {
       if (!preparationSettled) this.trackPendingOperation(preparationPromise);
       const message = error instanceof Error ? error.message : String(error);
       throw new PhysicalTxPreparationError(`audio output preparation failed: ${message}`, error);
     }
     this.assertLeaseCanContinue(lease, 'interrupted during audio output preparation');
+    if (!readiness.ready) {
+      throw new PhysicalTxPreparationError(
+        `audio output is not ready: ${readiness.reason ?? 'unknown reason'}`,
+        readiness.issue ? new AudioRuntimeIssueError(readiness.issue) : undefined,
+      );
+    }
 
-    if (waitedForDrain && afterAudioDrain) {
+    if (readiness.waitedForDrain && afterAudioDrain) {
       let refreshSettled = false;
       const refreshPromise = Promise.resolve()
         .then(afterAudioDrain)
@@ -603,7 +634,7 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
       this.assertLeaseCanContinue(lease, 'interrupted during post-drain audio refresh');
     }
 
-    return waitedForDrain;
+    return readiness.waitedForDrain;
   }
 
   private resynchronizeReplacementAudio(
@@ -722,7 +753,13 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
       }
       return {
         started: false,
-        completion: this.ensureReleased(lease, 'audio transmission failed', false, error),
+        completion: this.ensureReleased(
+          lease,
+          'audio transmission failed',
+          false,
+          error,
+          this.retryDispositionForAudioError(error),
+        ),
       };
     }
   }
@@ -759,7 +796,13 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
           this.trackPendingOperation(stopPromise);
         }
       }
-      return this.ensureReleased(lease, 'audio transmission failed', false, error);
+      return this.ensureReleased(
+        lease,
+        'audio transmission failed',
+        false,
+        error,
+        this.retryDispositionForAudioError(error),
+      );
     }
 
     if (!this.isPlaybackCurrent(lease, playback)) {
@@ -783,6 +826,9 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
     this.emitPhase(lease);
     if ((request.tailHoldMs ?? 0) > 0) {
       await this.sleep(request.tailHoldMs!);
+    }
+    if (lease.releasePromise) {
+      return lease.releasePromise;
     }
     if (!this.isCurrent(lease)
       || lease.playbackGeneration !== playback.generation
@@ -816,6 +862,7 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
     error?: unknown,
     leaseContinues = false,
   ): PhysicalTxResult {
+    const audioIssue = getAudioRuntimeIssue(error);
     return {
       leaseId: lease.leaseId,
       frameId: playback.frameId,
@@ -827,7 +874,17 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
       error: error instanceof Error ? error.message : error === undefined ? undefined : String(error),
       physicalConfirmed: lease.everPttConfirmed,
       leaseContinues: leaseContinues || undefined,
+      audioIssue: audioIssue ?? undefined,
     };
+  }
+
+  private retryDispositionForAudioError(error: unknown): 'none' | 'next-transmit-cycle' {
+    const issue = getAudioRuntimeIssue(
+      error instanceof PhysicalTxPreparationError ? error.preparationCause : error,
+    );
+    return issue?.direction === 'output' && issue.disposition === 'restart-required'
+      ? 'next-transmit-cycle'
+      : 'none';
   }
 
   async releaseLease(leaseId: string, reason: string): Promise<PhysicalTxResult> {
@@ -917,14 +974,34 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
     return this.ensureReleased(lease, reason, false);
   }
 
+  handleAudioOutputIssue(error: unknown): Promise<PhysicalTxResult> | null {
+    const issue = getAudioRuntimeIssue(error);
+    const lease = this.activeLease;
+    if (issue?.direction !== 'output'
+      || issue.disposition !== 'restart-required'
+      || !lease?.playbackKind
+      || lease.phase !== 'draining'
+      || lease.activePlayback) {
+      return null;
+    }
+    return this.ensureReleased(
+      lease,
+      'audio output failed while draining',
+      false,
+      error,
+      'next-transmit-cycle',
+    );
+  }
+
   private ensureReleased(
     lease: MutablePhysicalLease,
     reason: string,
     success: boolean,
     cause?: unknown,
+    retryDisposition: 'none' | 'next-transmit-cycle' = 'none',
   ): Promise<PhysicalTxResult> {
     if (lease.releasePromise) return lease.releasePromise;
-    lease.releasePromise = this.releaseInternal(lease, reason, success, cause);
+    lease.releasePromise = this.releaseInternal(lease, reason, success, cause, retryDisposition);
     return lease.releasePromise;
   }
 
@@ -933,6 +1010,7 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
     reason: string,
     success: boolean,
     cause?: unknown,
+    retryDisposition: 'none' | 'next-transmit-cycle' = 'none',
   ): Promise<PhysicalTxResult> {
     lease.stopRequested = true;
     this.rejectLeaseActivation(lease, new PhysicalTxInterruptedError(reason));
@@ -1040,7 +1118,7 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
 
     lease.pttConfirmed = false;
     lease.reason = reason;
-    const result = this.toResult(lease, success && !cause, reason, cause);
+    const result = this.toResult(lease, success && !cause, reason, cause, retryDisposition);
     this.emitTerminalOnce(lease, result);
     if (this.isCurrent(lease)) {
       this.activeLease = null;
@@ -1169,7 +1247,12 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
     success: boolean,
     reason: string,
     error?: unknown,
+    retryDisposition: 'none' | 'next-transmit-cycle' = 'none',
   ): PhysicalTxResult {
+    const underlyingError = error instanceof PhysicalTxPreparationError
+      ? error.preparationCause ?? error
+      : error;
+    const audioIssue = getAudioRuntimeIssue(underlyingError);
     return {
       leaseId: lease.leaseId,
       frameId: lease.frameId,
@@ -1180,6 +1263,8 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
       reason,
       error: error instanceof Error ? error.message : error === undefined ? undefined : String(error),
       physicalConfirmed: lease.everPttConfirmed,
+      retryDisposition: retryDisposition === 'none' ? undefined : retryDisposition,
+      audioIssue: audioIssue ?? undefined,
     };
   }
 

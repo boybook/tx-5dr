@@ -70,6 +70,10 @@ function temporaryDeviceNotFound(): RadioError {
 
 function coreAudioRuntimeLoss(sampleRate = 48000, type = 1): AudioRuntimeIssueError {
   const issue: RtAudioRuntimeIssue = {
+    issueId: 'issue-core-audio-loss',
+    streamGeneration: 1,
+    kind: 'device-loss',
+    disposition: 'restart-required',
     phase: 'runtime',
     direction: 'output',
     deviceName: 'C-Media Electronics Inc.: USB Audio Device',
@@ -83,6 +87,30 @@ function coreAudioRuntimeLoss(sampleRate = 48000, type = 1): AudioRuntimeIssueEr
     runtimeLoss: true,
     type,
     typeName: type === 1 ? 'DEBUG_WARNING' : `UNKNOWN_${type}`,
+    at: Date.now(),
+  };
+  return new AudioRuntimeIssueError(issue);
+}
+
+function recoverableShortWrite(): AudioRuntimeIssueError {
+  const issue: RtAudioRuntimeIssue = {
+    issueId: 'issue-short-write',
+    streamGeneration: 1,
+    kind: 'short-write',
+    disposition: 'continue',
+    phase: 'runtime',
+    direction: 'output',
+    deviceName: 'USB Audio',
+    backend: 'ALSA',
+    message: 'RtApiAlsa::callbackEvent: audio write error, Unknown error 256.',
+    sampleRate: 48000,
+    bufferSize: 512,
+    elapsedSinceOpenMs: 500,
+    framesConsumed: 12,
+    fatal: false,
+    runtimeLoss: false,
+    type: 1,
+    typeName: 'DEBUG_WARNING',
     at: Date.now(),
   };
   return new AudioRuntimeIssueError(issue);
@@ -244,6 +272,45 @@ describe('AudioSidecarController', () => {
     await flushAsync();
 
     expect(statuses).toContain(AudioSidecarStatus.RETRYING);
+    expect(sidecar.getStatus()).toBe(AudioSidecarStatus.RETRYING);
+  });
+
+  it('keeps the sidecar connected for a structured recoverable output issue', async () => {
+    const { engineEmitter, audioStreamManager, audioVolumeController } = makeDeps();
+    const sidecar = new AudioSidecarController({
+      engineEmitter: engineEmitter as any,
+      audioStreamManager: audioStreamManager as any,
+      audioVolumeController: audioVolumeController as any,
+    });
+
+    await sidecar.start();
+    await flushAsync();
+    audioStreamManager.emit('error', recoverableShortWrite());
+    await flushAsync();
+
+    expect(sidecar.getStatus()).toBe(AudioSidecarStatus.CONNECTED);
+    expect(audioStreamManager.stopOutput).not.toHaveBeenCalled();
+    expect(audioStreamManager.stopStream).not.toHaveBeenCalled();
+  });
+
+  it('notifies the physical transmitter before restarting after severe output loss', async () => {
+    const { engineEmitter, audioStreamManager, audioVolumeController } = makeDeps();
+    const onOutputIssue = vi.fn();
+    const sidecar = new AudioSidecarController({
+      engineEmitter: engineEmitter as any,
+      audioStreamManager: audioStreamManager as any,
+      audioVolumeController: audioVolumeController as any,
+      onOutputIssue,
+    });
+
+    await sidecar.start();
+    await flushAsync();
+    const failure = coreAudioRuntimeLoss();
+    audioStreamManager.emit('error', failure);
+    await flushAsync();
+
+    expect(onOutputIssue).toHaveBeenCalledOnce();
+    expect(onOutputIssue).toHaveBeenCalledWith(failure);
     expect(sidecar.getStatus()).toBe(AudioSidecarStatus.RETRYING);
   });
 

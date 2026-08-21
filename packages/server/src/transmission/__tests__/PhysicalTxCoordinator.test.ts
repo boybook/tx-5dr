@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PhysicalTxCoordinator } from '../PhysicalTxCoordinator.js';
+import {
+  AudioRuntimeIssueError,
+  type AudioPlaybackReadiness,
+  type RtAudioRuntimeIssue,
+} from '../../audio/AudioStreamManager.js';
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -9,6 +14,28 @@ function deferred<T = void>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function severeOutputFailure(): AudioRuntimeIssueError {
+  const issue: RtAudioRuntimeIssue = {
+    issueId: 'issue-device-loss',
+    streamGeneration: 3,
+    kind: 'device-loss',
+    disposition: 'restart-required',
+    phase: 'runtime',
+    direction: 'output',
+    deviceName: 'USB Audio',
+    backend: 'ALSA',
+    message: 'RtAudio output runtime error: No such device',
+    sampleRate: 48_000,
+    bufferSize: 512,
+    elapsedSinceOpenMs: 1_000,
+    framesConsumed: 20,
+    fatal: true,
+    runtimeLoss: true,
+    at: 1_000,
+  };
+  return new AudioRuntimeIssueError(issue);
 }
 
 function createHarness(options: {
@@ -21,7 +48,7 @@ function createHarness(options: {
   clearTxDialOffset?: () => Promise<void>;
   operationTimeoutMs?: number;
   cleanupTimeoutMs?: number;
-  audioPreparation?: Promise<boolean>;
+  audioPreparation?: Promise<AudioPlaybackReadiness>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 } = {}) {
@@ -53,7 +80,7 @@ function createHarness(options: {
   });
   const prepareAudioPlayback = vi.fn(async () => options.audioPreparation
     ? options.audioPreparation
-    : false);
+    : { ready: true, waitedForDrain: false });
   const coordinator = new PhysicalTxCoordinator({
     isRadioConnected: () => true,
     setPTT,
@@ -151,7 +178,7 @@ describe('PhysicalTxCoordinator', () => {
   });
 
   it('waits for previous output drain before asserting PTT for an audio lease', async () => {
-    const audioPreparation = deferred<boolean>();
+    const audioPreparation = deferred<AudioPlaybackReadiness>();
     const harness = createHarness({ audioPreparation: audioPreparation.promise });
 
     const transmission = harness.coordinator.transmitAudio({
@@ -167,7 +194,7 @@ describe('PhysicalTxCoordinator', () => {
     expect(harness.setPTT).not.toHaveBeenCalledWith(true);
     expect(harness.playAudio).not.toHaveBeenCalled();
 
-    audioPreparation.resolve(true);
+    audioPreparation.resolve({ ready: true, waitedForDrain: true });
     await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(1));
     harness.audio.resolve();
     await expect(transmission).resolves.toMatchObject({ success: true });
@@ -175,7 +202,7 @@ describe('PhysicalTxCoordinator', () => {
   });
 
   it('does not pulse PTT when audio output preparation fails', async () => {
-    const audioPreparation = deferred<boolean>();
+    const audioPreparation = deferred<AudioPlaybackReadiness>();
     const harness = createHarness({ audioPreparation: audioPreparation.promise });
     const transmission = harness.coordinator.transmitAudio({
       source: 'digital',
@@ -192,6 +219,71 @@ describe('PhysicalTxCoordinator', () => {
     expect(harness.setPTT).not.toHaveBeenCalled();
     expect(harness.playAudio).not.toHaveBeenCalled();
     expect(harness.coordinator.getSnapshot().phase).toBe('idle');
+  });
+
+  it('does not pulse PTT when audio output is explicitly not ready', async () => {
+    const harness = createHarness({
+      audioPreparation: Promise.resolve({
+        ready: false,
+        waitedForDrain: false,
+        reason: 'audio sidecar is retrying',
+      }),
+    });
+
+    await expect(harness.coordinator.transmitAudio({
+      source: 'digital',
+      frameId: 'frame-output-unavailable',
+      reason: 'slot',
+      audioData: new Float32Array(12),
+      sampleRate: 12_000,
+      playbackKind: 'digital',
+    })).rejects.toThrow('audio output is not ready');
+    expect(harness.setPTT).not.toHaveBeenCalled();
+    expect(harness.playAudio).not.toHaveBeenCalled();
+  });
+
+  it('requests next-cycle retry only after severe output failure is safely released', async () => {
+    const harness = createHarness();
+    const transmission = harness.coordinator.transmitAudio({
+      source: 'digital',
+      frameId: 'frame-device-loss',
+      operatorIds: ['operator-a'],
+      reason: 'slot',
+      audioData: new Float32Array(12),
+      sampleRate: 12_000,
+      playbackKind: 'digital',
+    });
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledOnce());
+    harness.audio.reject(severeOutputFailure());
+
+    await expect(transmission).resolves.toMatchObject({
+      success: false,
+      retryDisposition: 'next-transmit-cycle',
+      audioIssue: expect.objectContaining({ kind: 'device-loss', issueId: 'issue-device-loss' }),
+    });
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
+    expect(harness.coordinator.getSnapshot().phase).toBe('idle');
+  });
+
+  it('keeps severe output retry fenced when PTT release is unconfirmed', async () => {
+    const pttStop = deferred<void>();
+    const harness = createHarness({ pttStop: pttStop.promise });
+    const transmission = harness.coordinator.transmitAudio({
+      source: 'digital',
+      frameId: 'frame-device-loss-unknown',
+      operatorIds: ['operator-a'],
+      reason: 'slot',
+      audioData: new Float32Array(12),
+      sampleRate: 12_000,
+      playbackKind: 'digital',
+    });
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledOnce());
+    harness.audio.reject(severeOutputFailure());
+
+    await expect(transmission).resolves.toMatchObject({ success: false });
+    const result = await transmission;
+    expect(result.retryDisposition).toBeUndefined();
+    expect(harness.coordinator.getSnapshot().phase).toBe('unknown');
   });
 
   it('publishes active only after PTT is confirmed and audio starts', async () => {
@@ -272,7 +364,7 @@ describe('PhysicalTxCoordinator', () => {
 
   it('drains the stopped output and resynchronizes prepared audio before replacing on the same lease', async () => {
     let nowMs = 1_000;
-    const outputDrain = deferred<boolean>();
+    const outputDrain = deferred<AudioPlaybackReadiness>();
     const harness = createHarness({ now: () => nowMs });
     const leaseId = await harness.coordinator.acquireLease({
       source: 'digital',
@@ -308,7 +400,7 @@ describe('PhysicalTxCoordinator', () => {
     expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true]);
 
     nowMs = 1_250;
-    outputDrain.resolve(true);
+    outputDrain.resolve({ ready: true, waitedForDrain: true });
     await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(2));
     expect(harness.playAudio.mock.calls[1]?.[0]).toHaveLength(9_000);
     await expect(first).resolves.toMatchObject({ frameId: 'frame-1', leaseContinues: true });
@@ -507,6 +599,39 @@ describe('PhysicalTxCoordinator', () => {
     harness.getAudio(1).resolve();
     await expect(replacement).resolves.toMatchObject({ frameId: 'frame-2', success: true });
     expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
+  });
+
+  it('fails and releases a draining lease when severe output loss arrives during tail hold', async () => {
+    const tail = deferred<void>();
+    const harness = createHarness({ sleep: () => tail.promise });
+    const transmission = harness.coordinator.transmitAudio({
+      source: 'digital',
+      frameId: 'frame-tail-loss',
+      operatorIds: ['operator-a'],
+      reason: 'slot',
+      audioData: new Float32Array(12),
+      sampleRate: 12_000,
+      playbackKind: 'digital',
+      tailHoldMs: 500,
+    });
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledOnce());
+    harness.audio.resolve();
+    await vi.waitFor(() => expect(harness.coordinator.getSnapshot().phase).toBe('draining'));
+
+    const release = harness.coordinator.handleAudioOutputIssue(severeOutputFailure());
+    expect(release).not.toBeNull();
+    await expect(release).resolves.toMatchObject({
+      success: false,
+      retryDisposition: 'next-transmit-cycle',
+      audioIssue: { kind: 'device-loss' },
+    });
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
+
+    tail.resolve();
+    await expect(transmission).resolves.toMatchObject({
+      success: false,
+      retryDisposition: 'next-transmit-cycle',
+    });
   });
 
   it('bounds a playback backend that never acknowledges its first write', async () => {
