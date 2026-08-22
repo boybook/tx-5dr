@@ -8,6 +8,7 @@ import {
   Listbox,
   ListboxItem,
   ListboxSection,
+  Tooltip,
 } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { api, ApiError } from '@tx5dr/core';
@@ -70,7 +71,18 @@ export const VoiceFrequencyControl: React.FC = () => {
   const canWriteTargetFrequency = useCallback((frequency: number) => (
     canWriteFrequency && canExecuteRadioFrequency(ability, frequency)
   ), [ability, canWriteFrequency]);
-  const canWriteRadioMode = canSetFrequency && isCoreCapabilityAvailable(radioConnection.coreCapabilities, 'writeRadioMode');
+  const writeRadioModeAvailable = isCoreCapabilityAvailable(radioConnection.coreCapabilities, 'writeRadioMode');
+  // The radio_mode capability poll calls conn.getMode() directly, so a poll failure marks
+  // the capability unavailable (value=null) but does NOT touch the core readRadioMode
+  // capability. Use the capability's availability/value as the accurate "can read mode"
+  // signal instead of the core capability.
+  const readRadioModeAvailable = radioModeCapabilityState?.supported !== false
+    && radioModeCapabilityState?.availability !== 'unavailable';
+  const actualRadioMode = radioModeCapabilityState?.value ?? null;
+  // When the radio rejects a mode write (e.g. mode not supported on the current band),
+  // the backend marks writeRadioMode unsupported. We surface this as a warning state
+  // (yellow border) instead of disabling the buttons, so the user can retry.
+  const modeWriteWarning = !writeRadioModeAvailable;
 
   const [presets, setPresets] = useState<FrequencyPreset[]>([]);
   const [isLoadingPresets, setIsLoadingPresets] = useState(false);
@@ -231,6 +243,18 @@ export const VoiceFrequencyControl: React.FC = () => {
     () => deriveVoiceRadioModeOptions(radioModeDescriptor, radioModeCapabilityState),
     [radioModeDescriptor, radioModeCapabilityState],
   );
+
+  // Which mode is highlighted:
+  // - writeRadioMode available: follow the (optimistic, event-synced) local selection.
+  // - writeRadioMode unavailable + can still read mode: revert to the radio's actual mode.
+  // - writeRadioMode unavailable + cannot read mode: deselect everything.
+  const selectedRadioMode = writeRadioModeAvailable
+    ? currentRadioMode
+    : (readRadioModeAvailable && actualRadioMode ? actualRadioMode : null);
+
+  const modeWarningTooltip = readRadioModeAvailable
+    ? t('radioMode.warningReverted')
+    : t('radioMode.warningUnknown');
   const formatFrequencyLabel = useCallback((frequency: number) => `${(frequency / 1000000).toFixed(3)} MHz`, []);
   const formatBandLabel = useCallback((band?: string | null) => {
     if (!band || band.toLowerCase() === CUSTOM_BAND) {
@@ -564,6 +588,7 @@ export const VoiceFrequencyControl: React.FC = () => {
     // Immediately update UI + register pending intent so any stale server echo
     // (incl. in-flight debounced digit edits) is suppressed until preset confirms.
     setCurrentFrequency(preset.frequency);
+    const previousRadioMode = currentRadioMode;
     if (preset.radioMode) setCurrentRadioMode(preset.radioMode);
     pendingFreqRef.current = { intendedFrequency: preset.frequency, sentAt: Date.now() };
     if (freqDebounceTimerRef.current) {
@@ -595,6 +620,11 @@ export const VoiceFrequencyControl: React.FC = () => {
         if (pendingFreqRef.current) {
           pendingFreqRef.current = { intendedFrequency: preset.frequency, sentAt: Date.now() };
         }
+        if (response.radioMode) {
+          setCurrentRadioMode(response.radioMode);
+        } else {
+          setCurrentRadioMode(previousRadioMode);
+        }
         resetOperatorsAfterOperatingStateChange();
         addToast({
           title: t('frequency.switchSuccess'),
@@ -612,10 +642,33 @@ export const VoiceFrequencyControl: React.FC = () => {
   };
 
   // Handle radio mode change
-  const handleRadioModeChange = (mode: string) => {
-    if (!canWriteRadioMode) return;
+  const handleRadioModeChange = async (mode: string) => {
+    if (!canSetFrequency) return;
     setCurrentRadioMode(mode);
-    connection.state.radioService?.setVoiceRadioMode(mode);
+    if (modeWriteWarning) {
+      // writeRadioMode is unsupported, so a plain setMode would be short-circuited by
+      // the backend. Re-route through applyOperatingState (frequency + mode), which
+      // still attempts the write and can recover the capability on success.
+      try {
+        await setRadioFrequencyWithIntent({
+          frequency: currentFrequencyRef.current,
+          mode: 'VOICE',
+          radioMode: mode,
+        });
+      } catch (error) {
+        logger.error('Failed to retry radio mode via operating state', error);
+        if (error instanceof ApiError) {
+          showErrorToast({
+            userMessage: error.userMessage,
+            suggestions: error.suggestions,
+            severity: error.severity,
+            code: error.code,
+          });
+        }
+      }
+    } else {
+      connection.state.radioService?.setVoiceRadioMode(mode);
+    }
   };
 
   const handleOpenVoicePresetSettings = useCallback(() => {
@@ -812,20 +865,29 @@ export const VoiceFrequencyControl: React.FC = () => {
 
         {/* Radio mode buttons */}
         <div className="flex-shrink-0 flex justify-center">
-          <ButtonGroup size="sm" variant="flat">
-            {radioModeOptions.map((mode) => (
-              <Button
-                key={mode}
-                color={currentRadioMode === mode ? 'primary' : 'default'}
-                variant={currentRadioMode === mode ? 'solid' : 'flat'}
-                onPress={() => handleRadioModeChange(mode)}
-                isDisabled={!canWriteRadioMode}
-                className="min-w-12"
-              >
-                {mode}
-              </Button>
-            ))}
-          </ButtonGroup>
+          <Tooltip content={modeWarningTooltip} isDisabled={!modeWriteWarning} placement="top">
+            <ButtonGroup
+              size="sm"
+              variant="flat"
+              className={modeWriteWarning ? 'border-medium border-warning rounded-[calc(theme(borderRadius.small)_+_theme(borderWidth.medium))]' : undefined}
+            >
+              {radioModeOptions.map((mode) => {
+                const isSelected = selectedRadioMode === mode;
+                return (
+                  <Button
+                    key={mode}
+                    color={isSelected ? 'primary' : 'default'}
+                    variant={isSelected ? 'solid' : 'flat'}
+                    onPress={() => handleRadioModeChange(mode)}
+                    isDisabled={!canSetFrequency}
+                    className="min-w-12"
+                  >
+                    {mode}
+                  </Button>
+                );
+              })}
+            </ButtonGroup>
+          </Tooltip>
         </div>
 
         {/* Preset frequency list - fills remaining space */}
