@@ -1,6 +1,11 @@
 {
   "name": "@tx5dr/core",
   "version": "1.7.12",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/boybook/tx-5dr",
+    "directory": "packages/core"
+  },
   "description": "TX-5DR Core Package",
   "type": "module",
   "main": "dist/index.js",
