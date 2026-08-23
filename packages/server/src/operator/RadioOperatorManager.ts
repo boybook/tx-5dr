@@ -2492,7 +2492,7 @@ export class RadioOperatorManager {
     const grid = qsoRecord.grid
       || this.callsignTracker?.getGrid(targetCallsign);
 
-    const messageHistory = this.rebuildQSOMessageHistory(historySlotPacks, {
+    const history = this.rebuildQSOMessageHistory(historySlotPacks, {
       operatorId,
       myCallsign,
       targetCallsign,
@@ -2500,16 +2500,10 @@ export class RadioOperatorManager {
       endMs: historyEndMs,
     });
 
-    // Prefer physically confirmed air history over the speculative runtime
-    // context captured before Host-side persistence begins.
-    const fromHistory = this.extractReportsFromMessageHistory(
-      messageHistory,
-      myCallsign,
-      targetCallsign,
-    );
-
-    let reportSent = preferSignalReport(fromHistory.reportSent, qsoRecord.reportSent);
-    let reportReceived = preferSignalReport(fromHistory.reportReceived, qsoRecord.reportReceived);
+    // Only a local on-air TX frame may refine reportSent. RX frames remain
+    // decoder candidates; reportReceived comes from the strategy-accepted effect.
+    let reportSent = preferSignalReport(history.reportSent, qsoRecord.reportSent);
+    let reportReceived = qsoRecord.reportReceived;
 
     // Recover remaining gaps from CallsignContextTracker.
     // Do not use truthiness checks: "0" is a valid FT8 report.
@@ -2535,7 +2529,7 @@ export class RadioOperatorManager {
       grid,
       reportSent: preferSignalReport(reportSent, qsoRecord.reportSent),
       reportReceived: preferSignalReport(reportReceived, qsoRecord.reportReceived),
-      messageHistory,
+      messageHistory: history.messages,
     };
     return {
       ...completedRecord,
@@ -2587,8 +2581,9 @@ export class RadioOperatorManager {
   private rebuildQSOMessageHistory(
     slotPacks: SlotPack[],
     options: { operatorId: string; myCallsign: string; targetCallsign: string; startMs: number; endMs: number }
-  ): string[] {
+  ): { messages: string[]; reportSent?: string } {
     const messages: string[] = [];
+    let reportSent: string | undefined;
 
     for (const slotPack of slotPacks) {
       if (slotPack.startMs > options.endMs || slotPack.endMs < options.startMs) {
@@ -2600,50 +2595,43 @@ export class RadioOperatorManager {
           continue;
         }
         messages.push(frame.message);
+        if (frame.snr === -999 && frame.operatorId === options.operatorId) {
+          reportSent = this.extractTransmittedReport(
+            frame.message,
+            options.myCallsign,
+            options.targetCallsign,
+          ) ?? reportSent;
+        }
       }
     }
 
-    return messages;
+    return { messages, reportSent };
   }
 
-  /**
-   * Extract directed SNR reports exchanged between myCallsign and targetCallsign.
-   * Later messages win so the final report in the QSO is preferred.
-   */
-  private extractReportsFromMessageHistory(
-    messages: string[],
+  private extractTransmittedReport(
+    message: string,
     myCallsign: string,
     targetCallsign: string,
-  ): { reportSent?: string; reportReceived?: string } {
-    let reportSent: string | undefined;
-    let reportReceived: string | undefined;
+  ): string | undefined {
     const me = myCallsign.toUpperCase();
     const them = targetCallsign.toUpperCase();
 
-    for (const message of messages) {
-      try {
-        const parsed = FT8MessageParser.parseMessage(message);
-        if (parsed.type !== 'signal_report' && parsed.type !== 'roger_report') {
-          continue;
-        }
-        if (typeof parsed.report !== 'number' || !Number.isFinite(parsed.report)) {
-          continue;
-        }
-        const sender = parsed.senderCallsign?.toUpperCase();
-        const target = parsed.targetCallsign?.toUpperCase();
-        // Keep WSJT-X style two-digit reports (e.g. "-09") instead of bare "-9".
-        const report = FT8MessageParser.generateSignalReport(parsed.report);
-        if (sender === me && target === them) {
-          reportSent = report;
-        } else if (sender === them && target === me) {
-          reportReceived = report;
-        }
-      } catch (error) {
-        logger.warn(`Failed to parse frame while extracting QSO reports: "${message}"`, error);
+    try {
+      const parsed = FT8MessageParser.parseMessage(message);
+      if (parsed.type !== 'signal_report' && parsed.type !== 'roger_report') {
+        return undefined;
       }
+      if (typeof parsed.report !== 'number' || !Number.isFinite(parsed.report)) {
+        return undefined;
+      }
+      const sender = parsed.senderCallsign?.toUpperCase();
+      const target = parsed.targetCallsign?.toUpperCase();
+      if (sender !== me || target !== them) return undefined;
+      return FT8MessageParser.generateSignalReport(parsed.report);
+    } catch (error) {
+      logger.warn(`Failed to parse local TX frame while extracting its QSO report: "${message}"`, error);
+      return undefined;
     }
-
-    return { reportSent, reportReceived };
   }
 
   private isFrameRelatedToQSO(
