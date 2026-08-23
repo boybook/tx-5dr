@@ -13,6 +13,8 @@ export interface MixedAudio {
   audioData: Float32Array;
   sampleRate: number;
   duration: number;
+  /** Waveform time already removed from the front of this mix. */
+  playbackOffsetMs?: number;
   operatorIds: string[];
   txDialShiftHz: number;
   frameId: string;
@@ -171,6 +173,7 @@ export class AudioMixer extends EventEmitter {
       audioData,
       sampleRate: targetSampleRate,
       duration: audioData.length / targetSampleRate,
+      playbackOffsetMs: Math.max(0, elapsedTimeMs),
       operatorIds: audible.map((track) => track.operatorId),
       txDialShiftHz: snapshot.txDialShiftHz,
       frameId: snapshot.frameId,
