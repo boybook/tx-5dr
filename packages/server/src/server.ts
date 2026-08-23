@@ -304,6 +304,7 @@ export function getHttpStatusCode(code: RadioErrorCode): number {
       return 409; // Conflict
 
     case RadioErrorCode.LOGBOOK_IDEMPOTENCY_CONFLICT:
+    case RadioErrorCode.LOGBOOK_REVISION_CONFLICT:
       return 409; // Conflict
 
     case RadioErrorCode.LOGBOOK_REVISION_MISMATCH:

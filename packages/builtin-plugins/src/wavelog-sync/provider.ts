@@ -24,6 +24,14 @@ import {
   sanitizeSyncFailureText,
 } from '@tx5dr/plugin-api';
 import { getBandFromFrequency } from '@tx5dr/core';
+import {
+  reconcileLogbookBatch,
+  WorkingLogbookIndex,
+  type BatchLogbookAccess,
+  type LogbookBatchMutation,
+  type LogbookSnapshot,
+  type ReconcileResult,
+} from '../_shared/logbook-sync-reconcile.js';
 
 /**
  * Per-callsign WaveLog configuration stored in plugin KVStore.
@@ -362,61 +370,9 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
     }
     const logbook = this.ctx.logbook.forCallsign(callsign);
 
+    let records: QSORecord[];
     try {
-      const records = await this.downloadQSOs(config);
-      let matched = 0;
-      let updated = 0;
-      let imported = 0;
-      const failures: SyncFailure[] = [];
-
-      for (const remoteQSO of records) {
-        try {
-          const localMatch = await this.findBestLocalMatch(logbook, remoteQSO, callsign);
-
-          if (localMatch) {
-            matched++;
-            const statusUpdates = buildWavelogQslStatusUpdates(localMatch, remoteQSO);
-            if (statusUpdates) {
-              await logbook.updateQSO(localMatch.id, statusUpdates);
-              updated++;
-            }
-          } else {
-            await logbook.addQSO(remoteQSO);
-            imported++;
-          }
-        } catch (err) {
-          failures.push(createSyncFailure({
-            code: 'wavelog_download_logbook_failed',
-            message: err instanceof Error ? err.message : 'Failed to process downloaded QSO',
-            source: 'logbook',
-            operation: 'download',
-            providerId: this.id,
-            qsoId: remoteQSO.id,
-            qsoCallsign: remoteQSO.callsign,
-            secrets: [config.apiKey],
-          }));
-          this.ctx.log.warn('Failed to process downloaded QSO', {
-            callsign: remoteQSO.callsign,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          // Local durability is the commit boundary. Once one record cannot be
-          // persisted, stop this download pass instead of continuing through a
-          // large remote set and presenting a misleading partial success.
-          break;
-        }
-      }
-
-      if (updated > 0 || imported > 0) {
-        await logbook.notifyUpdated();
-      }
-
-      return {
-        downloaded: records.length,
-        matched,
-        updated,
-        imported,
-        failures: failures.length > 0 ? failures : undefined,
-      };
+      records = await this.downloadQSOs(config);
     } catch (err) {
       return {
         downloaded: 0,
@@ -425,6 +381,87 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
         failures: [this.errorFailure(err, 'download', 'wavelog_download_failed', config)],
       };
     }
+
+    let reconciled: ReconcileResult<{ matched: number }>;
+    try {
+      reconciled = await reconcileLogbookBatch(
+        logbook as BatchLogbookAccess,
+        snapshot => this.planDownload(snapshot, records, callsign),
+      );
+    } catch (err) {
+      const failure = createSyncFailure({
+        code: 'wavelog_download_logbook_failed',
+        message: err instanceof Error ? err.message : 'Failed to commit downloaded QSOs',
+        source: 'logbook',
+        operation: 'download',
+        providerId: this.id,
+        secrets: [config.apiKey],
+      });
+      this.ctx.log.warn('Failed to commit downloaded QSO batch', {
+        count: records.length,
+        error: failure.message,
+      });
+      return {
+        downloaded: records.length,
+        matched: 0,
+        updated: 0,
+        imported: 0,
+        failures: [failure],
+      };
+    }
+
+    const updated = reconciled.batch.outcomes.filter(outcome => outcome.status === 'updated').length;
+    const imported = reconciled.batch.outcomes.filter(outcome => outcome.status === 'added').length;
+    let notifyFailure: SyncFailure | undefined;
+    if (updated > 0 || imported > 0) {
+      try {
+        await logbook.notifyUpdated();
+      } catch (err) {
+        notifyFailure = createSyncFailure({
+          code: 'wavelog_download_notify_failed',
+          message: err instanceof Error ? err.message : 'Failed to notify the logbook update',
+          source: 'host',
+          operation: 'download',
+          providerId: this.id,
+          secrets: [config.apiKey],
+        });
+      }
+    }
+
+    return {
+      downloaded: records.length,
+      matched: reconciled.value.matched,
+      updated,
+      imported,
+      failures: notifyFailure ? [notifyFailure] : undefined,
+    };
+  }
+
+  private planDownload(
+    snapshot: LogbookSnapshot,
+    records: readonly QSORecord[],
+    fallbackCallsign: string,
+  ): { mutations: LogbookBatchMutation[]; value: { matched: number } } {
+    const index = new WorkingLogbookIndex(snapshot.records);
+    const mutations: LogbookBatchMutation[] = [];
+    let matched = 0;
+
+    for (const remoteQSO of records) {
+      const localMatch = this.findBestLocalMatch(index, remoteQSO, fallbackCallsign);
+      if (!localMatch) {
+        mutations.push({ type: 'add', record: remoteQSO });
+        index.add(remoteQSO);
+        continue;
+      }
+
+      matched += 1;
+      const statusUpdates = buildWavelogQslStatusUpdates(localMatch, remoteQSO);
+      if (!statusUpdates) continue;
+      mutations.push({ type: 'update', qsoId: localMatch.id, updates: statusUpdates });
+      index.replace({ ...localMatch, ...statusUpdates, id: localMatch.id });
+    }
+
+    return { mutations, value: { matched } };
   }
 
   /**
@@ -434,19 +471,17 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
    * record never stamps QSL status onto multiple local QSOs (same convention
    * as lotw-sync's findLotwLocalMatch).
    */
-  private async findBestLocalMatch(
-    logbook: ReturnType<PluginContext['logbook']['forCallsign']>,
+  private findBestLocalMatch(
+    index: WorkingLogbookIndex,
     remote: QSORecord,
     fallbackCallsign: string,
-  ): Promise<QSORecord | null> {
-    const candidates = await logbook.queryQSOs({
-      callsign: remote.callsign,
-      timeRange: {
-        start: remote.startTime - WAVELOG_DOWNLOAD_MATCH_TOLERANCE_MS,
-        end: (remote.endTime || remote.startTime) + WAVELOG_DOWNLOAD_MATCH_TOLERANCE_MS,
-      },
-      limit: 25,
-    });
+  ): QSORecord | null {
+    const candidates = index.queryCallsignTimeRange(
+      remote.callsign,
+      remote.startTime - WAVELOG_DOWNLOAD_MATCH_TOLERANCE_MS,
+      (remote.endTime || remote.startTime) + WAVELOG_DOWNLOAD_MATCH_TOLERANCE_MS,
+      25,
+    );
 
     if (candidates.length === 0) {
       return null;

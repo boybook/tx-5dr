@@ -38,6 +38,11 @@ import {
   parseADIFContent,
   sanitizeSyncFailureText,
 } from '@tx5dr/plugin-api';
+import {
+  WorkingLogbookIndex,
+  reconcileLogbookBatch,
+  type LogbookBatchMutation,
+} from '../_shared/logbook-sync-reconcile.js';
 
 // ===== Types (plugin-internal, formerly in contracts/lotw.schema.ts) =====
 
@@ -329,6 +334,8 @@ const LOTW_DOWNLOAD_RETRY_BACKOFF_MS = process.env.NODE_ENV === 'test' || proces
 const LOTW_UPLOAD_BATCH_SIZE = 100;
 const LOTW_PREFLIGHT_DETAIL_LIMIT = 20;
 const LOTW_DOWNLOAD_MATCH_TOLERANCE_MS = 15 * 60 * 1000;
+const LOTW_SENT_PRIORITY: Record<string, number> = { I: 1, N: 2, R: 3, Q: 4, Y: 5 };
+const LOTW_RECEIVED_PRIORITY: Record<string, number> = { I: 1, N: 2, R: 3, Y: 4, V: 5 };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function toMillis(dateLike: string): number {
@@ -516,6 +523,28 @@ function lotwQsoKey(qso: QSORecord, fallbackStationCallsign?: string): string {
   const mode = lotwMatchMode(qso);
   const minute = Math.floor(qso.startTime / 60000);
   return [station, call, band, mode, String(minute)].join('|');
+}
+
+function changedLotwDownloadUpdates(local: QSORecord, remote: QSORecord, fallbackDate: number): Partial<QSORecord> {
+  const updates: Partial<QSORecord> = {};
+  const sentStatus = [local.lotwQslSent, remote.lotwQslSent, 'Y' as const]
+    .filter((status): status is NonNullable<QSORecord['lotwQslSent']> => !!status)
+    .sort((left, right) => (LOTW_SENT_PRIORITY[right] ?? 0) - (LOTW_SENT_PRIORITY[left] ?? 0))[0] ?? 'Y';
+  const receivedStatus = [local.lotwQslReceived, remote.lotwQslReceived, 'Y' as const]
+    .filter((status): status is NonNullable<QSORecord['lotwQslReceived']> => !!status)
+    .sort((left, right) => (LOTW_RECEIVED_PRIORITY[right] ?? 0) - (LOTW_RECEIVED_PRIORITY[left] ?? 0))[0] ?? 'Y';
+  const sentDate = local.lotwQslSentDate
+    ?? remote.lotwQslSentDate
+    ?? remote.lotwQslReceivedDate
+    ?? fallbackDate;
+  const receivedDate = remote.lotwQslReceivedDate
+    ?? local.lotwQslReceivedDate
+    ?? fallbackDate;
+  if (local.lotwQslSent !== sentStatus) updates.lotwQslSent = sentStatus;
+  if (local.lotwQslSentDate !== sentDate) updates.lotwQslSentDate = sentDate;
+  if (local.lotwQslReceived !== receivedStatus) updates.lotwQslReceived = receivedStatus;
+  if (local.lotwQslReceivedDate !== receivedDate) updates.lotwQslReceivedDate = receivedDate;
+  return updates;
 }
 
 function dedupeIssues(issues: LoTWUploadIssue[]): LoTWUploadIssue[] {
@@ -1034,7 +1063,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     let submitted = 0;
     let rejected = 0;
     let updateFailed = 0;
-    const acceptedQsoIds: string[] = [];
+    const acceptedQsoDates = new Map<string, number>();
     const failures: SyncFailure[] = [];
     const uploadBatches = this.splitPreparedBatches(preparation.batches);
     this.emitUploadProgress(options, {
@@ -1076,7 +1105,9 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
         });
         const accepted = await this.uploadBatch(batch, location);
         submitted += batch.qsos.length;
-        acceptedQsoIds.push(...batch.qsos.map((qso) => qso.id));
+        for (const qso of batch.qsos) {
+          acceptedQsoDates.set(qso.id, accepted.acceptedAt);
+        }
         this.ctx.log.info('LoTW upload batch accepted', {
           callsign,
           batchIndex: batchIndex + 1,
@@ -1136,33 +1167,56 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       skipped: preparation.blockedCount,
       failureCount: failures.length,
     });
-    for (const qsoId of acceptedQsoIds) {
+    if (acceptedQsoDates.size > 0) {
+      let localStatusChanged = false;
       try {
-        await logbook.updateQSO(qsoId, {
-          lotwQslSent: 'Y',
-          lotwQslSentDate: Date.now(),
+        const reconciled = await reconcileLogbookBatch(logbook, (snapshot) => {
+          const byId = new Map(snapshot.records.map((record) => [record.id, record]));
+          const mutations: LogbookBatchMutation[] = [];
+          for (const [qsoId, acceptedAt] of acceptedQsoDates) {
+            const local = byId.get(qsoId);
+            if (!local) {
+              // Keep the missing ID in the atomic batch so the Host reports a
+              // real logbook failure instead of silently losing sent state.
+              mutations.push({
+                type: 'update',
+                qsoId,
+                updates: { lotwQslSent: 'Y', lotwQslSentDate: acceptedAt },
+              });
+              continue;
+            }
+            const updates: Partial<QSORecord> = {};
+            if (local.lotwQslSent !== 'Y') updates.lotwQslSent = 'Y';
+            if (!local.lotwQslSentDate) updates.lotwQslSentDate = acceptedAt;
+            if (Object.keys(updates).length > 0) {
+              mutations.push({ type: 'update', qsoId, updates });
+            }
+          }
+          return { mutations, value: undefined };
         });
+        localStatusChanged = reconciled.batch.outcomes.some((outcome) => outcome.status === 'updated');
       } catch (err) {
-        updateFailed += 1;
+        updateFailed = acceptedQsoDates.size;
         failures.push(this.createFailure('lotw_update_qsl_status_failed', err instanceof Error ? err.message : 'Failed to update QSL sent status', {
           source: 'logbook',
           operation: 'upload',
-          qsoId,
         }));
-        this.ctx.log.warn('Failed to update QSL sent status', {
-          qsoId,
+        this.ctx.log.warn('Failed to update LoTW sent status batch', {
+          qsoCount: acceptedQsoDates.size,
           error: err instanceof Error ? err.message : String(err),
         });
+      }
+      if (localStatusChanged) {
+        await logbook.notifyUpdated();
       }
     }
 
     // Update lastUploadTime
     if (submitted > 0) {
       this.setConfig(callsign, { ...config, lastUploadTime: Date.now() });
-      await logbook.notifyUpdated();
     }
 
-    const uploaded = Math.max(0, acceptedQsoIds.length - updateFailed);
+    const uploaded = Math.max(0, acceptedQsoDates.size - updateFailed);
     const failed = rejected + updateFailed;
 
     this.ctx.log.info('LoTW upload finished', {
@@ -1408,19 +1462,17 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     return { records: [], failures: [failure], shouldSplit };
   }
 
-  private async findLotwLocalMatch(
-    logbook: ReturnType<PluginContext['logbook']['forCallsign']>,
+  private findLotwLocalMatch(
+    index: WorkingLogbookIndex,
     remote: QSORecord,
     fallbackCallsign: string,
-  ): Promise<QSORecord | null> {
-    const candidates = await logbook.queryQSOs({
-      callsign: remote.callsign,
-      timeRange: {
-        start: remote.startTime - LOTW_DOWNLOAD_MATCH_TOLERANCE_MS,
-        end: (remote.endTime || remote.startTime) + LOTW_DOWNLOAD_MATCH_TOLERANCE_MS,
-      },
-      limit: 25,
-    });
+  ): QSORecord | null {
+    const candidates = index.queryCallsignTimeRange(
+      remote.callsign,
+      remote.startTime - LOTW_DOWNLOAD_MATCH_TOLERANCE_MS,
+      (remote.endTime || remote.startTime) + LOTW_DOWNLOAD_MATCH_TOLERANCE_MS,
+      25,
+    );
 
     if (candidates.length === 0) {
       return null;
@@ -1459,52 +1511,58 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     logbook: ReturnType<PluginContext['logbook']['forCallsign']>,
     callsign: string,
     records: QSORecord[],
-    importedKeys: Set<string>,
-    failures: SyncFailure[],
   ): Promise<{ matched: number; updated: number; imported: number }> {
-    let matched = 0;
-    let updated = 0;
-    let imported = 0;
+    const fallbackDate = Date.now();
+    const reconciled = await reconcileLogbookBatch(logbook, (snapshot) => {
+      const index = new WorkingLogbookIndex(snapshot.records);
+      const importedKeys = new Set<string>();
+      const mutations: LogbookBatchMutation[] = [];
+      const updateMutationIndexes = new Map<string, number>();
+      const addMutationIndexes = new Map<string, number>();
+      let matched = 0;
 
-    for (const remote of records) {
-      try {
-        const localMatch = await this.findLotwLocalMatch(logbook, remote, callsign);
-
+      for (const remote of records) {
+        const localMatch = this.findLotwLocalMatch(index, remote, callsign);
         if (localMatch) {
-          // Download sync is the source of truth for LoTW confirmation and
-          // also backfills sent status for records uploaded elsewhere.
-          await logbook.updateQSO(localMatch.id, {
-            lotwQslSent: 'Y',
-            lotwQslSentDate: localMatch.lotwQslSentDate ?? remote.lotwQslSentDate ?? remote.lotwQslReceivedDate ?? Date.now(),
-            lotwQslReceived: 'Y',
-            lotwQslReceivedDate: remote.lotwQslReceivedDate ?? Date.now(),
-          });
-          matched++;
-          updated++;
-        } else {
-          const remoteKey = lotwQsoKey(remote, callsign);
-          if (importedKeys.has(remoteKey)) {
-            continue;
+          matched += 1;
+          const updates = changedLotwDownloadUpdates(localMatch, remote, fallbackDate);
+          if (Object.keys(updates).length > 0) {
+            const addMutationIndex = addMutationIndexes.get(localMatch.id);
+            const addMutation = addMutationIndex === undefined ? undefined : mutations[addMutationIndex];
+            if (addMutation?.type === 'add') {
+              addMutation.record = { ...addMutation.record, ...updates, id: localMatch.id };
+            } else {
+              const mutationIndex = updateMutationIndexes.get(localMatch.id);
+              if (mutationIndex === undefined) {
+                updateMutationIndexes.set(localMatch.id, mutations.length);
+                mutations.push({ type: 'update', qsoId: localMatch.id, updates });
+              } else {
+                const existingMutation = mutations[mutationIndex];
+                if (existingMutation?.type === 'update') {
+                  existingMutation.updates = { ...existingMutation.updates, ...updates };
+                }
+              }
+            }
+            index.replace({ ...localMatch, ...updates, id: localMatch.id });
           }
-          await logbook.addQSO(remote);
-          importedKeys.add(remoteKey);
-          imported++;
+          continue;
         }
-      } catch (err) {
-        failures.push(this.createFailure('lotw_download_logbook_failed', err instanceof Error ? err.message : 'Failed to process downloaded LoTW record', {
-          source: 'logbook',
-          operation: 'download',
-          qsoId: remote.id,
-          qsoCallsign: remote.callsign,
-        }));
-        this.ctx.log.warn('Failed to process downloaded LoTW record', {
-          callsign: remote.callsign,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
 
-    return { matched, updated, imported };
+        const remoteKey = lotwQsoKey(remote, callsign);
+        if (importedKeys.has(remoteKey)) continue;
+        addMutationIndexes.set(remote.id, mutations.length);
+        mutations.push({ type: 'add', record: remote });
+        index.add(remote);
+        importedKeys.add(remoteKey);
+      }
+
+      return { mutations, value: { matched } };
+    });
+    return {
+      matched: reconciled.value.matched,
+      updated: reconciled.batch.outcomes.filter((outcome) => outcome.status === 'updated').length,
+      imported: reconciled.batch.outcomes.filter((outcome) => outcome.status === 'added').length,
+    };
   }
 
   async download(callsign: string, options?: SyncDownloadOptions): Promise<SyncDownloadResult> {
@@ -1552,7 +1610,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
         failureCount: 0,
       };
       const failures: SyncFailure[] = [];
-      const importedKeys = new Set<string>();
+      let stopAfterLocalFailure = false;
 
       this.emitDownloadProgress(options, {
         stage: 'preparing',
@@ -1592,11 +1650,46 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
             failed: counters.failed,
             failureCount: counters.failureCount,
           });
-          const processed = await this.processDownloadedRecords(logbook, callsign, result.records, importedKeys, failures);
-          counters.matched += processed.matched;
-          counters.updated += processed.updated;
-          counters.imported += processed.imported;
+          try {
+            const processed = await this.processDownloadedRecords(logbook, callsign, result.records);
+            counters.matched += processed.matched;
+            counters.updated += processed.updated;
+            counters.imported += processed.imported;
+          } catch (error) {
+            const failure = this.createFailure(
+              'lotw_download_logbook_failed',
+              error instanceof Error ? error.message : 'Failed to commit downloaded LoTW window',
+              { source: 'logbook', operation: 'download', detail: `range=${range}` },
+            );
+            failures.push(failure);
+            counters.failureCount = failures.length;
+            counters.failed += 1;
+            completedWindows += 1;
+            stopAfterLocalFailure = true;
+            this.ctx.log.warn('Failed to commit downloaded LoTW window', {
+              callsign,
+              range,
+              recordCount: result.records.length,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            this.emitDownloadProgress(options, {
+              stage: 'window_failed',
+              callsign,
+              windowIndex: completedWindows,
+              windowCount: totalWindows,
+              range,
+              downloaded: counters.downloaded,
+              matched: counters.matched,
+              updated: counters.updated,
+              imported: counters.imported,
+              failed: counters.failed,
+              failureCount: counters.failureCount,
+              message: failure.message,
+            });
+          }
         }
+
+        if (stopAfterLocalFailure) break;
 
         if (result.failures.length > 0 && result.shouldSplit && canSplitDownloadWindow(window)) {
           const splitWindows = splitDownloadWindow(window);
@@ -1654,7 +1747,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       if (failures.length === 0) {
         this.setConfig(callsign, { ...config, lastDownloadTime: Date.now() });
       }
-      if (counters.matched > 0 || counters.imported > 0) {
+      if (counters.updated > 0 || counters.imported > 0) {
         await logbook.notifyUpdated();
       }
 

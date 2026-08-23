@@ -20,16 +20,28 @@ import {
   createSyncFailure,
   errorToSyncFailure,
   parseADIFFields,
+  parseADIFDateTime,
   parseADIFRecord,
   normalizeCallsign,
   sanitizeSyncFailureText,
 } from '@tx5dr/plugin-api';
+import { getBandFromFrequency } from '@tx5dr/core';
+import {
+  reconcileLogbookBatch,
+  WorkingLogbookIndex,
+  type BatchLogbookAccess,
+  type LogbookBatchMutation,
+  type LogbookSnapshot,
+  type ReconcileResult,
+} from '../_shared/logbook-sync-reconcile.js';
 
 const QRZ_API_URL = 'https://logbook.qrz.com/api';
 const QRZ_USER_AGENT = 'TX5DR-QRZSync/1.0';
 const QRZ_REQUEST_TIMEOUT_MS = 15000;
 const QRZ_FETCH_TIMEOUT_MS = 30000;
 const QRZ_FETCH_PAGE_SIZE = 250;
+const QRZ_DOWNLOAD_MATCH_TOLERANCE_MS = 2 * 60 * 1000;
+const QRZ_DOWNLOAD_FREQUENCY_TOLERANCE_HZ = 3000;
 
 /**
  * Per-callsign QRZ configuration stored in plugin KVStore.
@@ -55,6 +67,20 @@ type QRZFetchPage = {
 };
 
 const CONFIG_KEY_PREFIX = 'config:';
+
+function normalizeExactCallsign(value?: string): string {
+  return (value || '').trim().toUpperCase();
+}
+
+function normalizeQsoMode(value?: string): string {
+  const mode = (value || '').trim().toUpperCase();
+  return mode === 'USB' || mode === 'LSB' ? 'SSB' : mode;
+}
+
+function qsoBand(qso: QSORecord): string {
+  const band = getBandFromFrequency(qso.frequency);
+  return band === 'Unknown' ? '' : band.toUpperCase();
+}
 
 /**
  * QRZ.com sync provider — implements LogbookSyncProvider.
@@ -156,20 +182,15 @@ export class QRZSyncProvider implements LogbookSyncProvider {
       return { uploaded: 0, skipped: 0, failed: 0 };
     }
 
-    let uploaded = 0;
     let failed = 0;
     const failures: SyncFailure[] = [];
+    const accepted: Array<{ qso: QSORecord; acceptedAt: number }> = [];
 
     for (const qso of qsos) {
       try {
         const result = await this.uploadSingleQSO(config.apiKey, qso);
         if (result.status === 'created' || result.status === 'replaced') {
-          uploaded++;
-          // Update QSL sent status
-          await logbook.updateQSO(qso.id, {
-            qrzQslSent: 'Y',
-            qrzQslSentDate: Date.now(),
-          });
+          accepted.push({ qso, acceptedAt: Date.now() });
         } else {
           failed++;
           failures.push(this.createQsoFailure(qso, 'qrz_upload_rejected', result.message, config));
@@ -185,17 +206,86 @@ export class QRZSyncProvider implements LogbookSyncProvider {
       }
     }
 
-    if (uploaded > 0) {
+    if (accepted.length === 0) {
+      return {
+        submitted: qsos.length,
+        uploaded: 0,
+        skipped: 0,
+        failed,
+        failures: failures.length > 0 ? failures : undefined,
+      };
+    }
+
+    let localUpdates = 0;
+    try {
+      const reconciled = await reconcileLogbookBatch(
+        logbook as BatchLogbookAccess,
+        snapshot => this.planUploadStatusUpdates(snapshot, accepted),
+      );
+      localUpdates = reconciled.batch.outcomes.filter(outcome => outcome.status === 'updated').length;
+    } catch (err) {
+      failures.push(createSyncFailure({
+        code: 'qrz_upload_logbook_failed',
+        message: err instanceof Error ? err.message : 'Failed to persist QRZ upload status',
+        source: 'logbook',
+        operation: 'upload',
+        providerId: this.id,
+        secrets: [config.apiKey],
+      }));
+      return {
+        submitted: qsos.length,
+        uploaded: 0,
+        skipped: 0,
+        failed: failed + accepted.length,
+        failures,
+      };
+    }
+
+    if (localUpdates > 0) {
+      try {
+        await logbook.notifyUpdated();
+      } catch (err) {
+        failures.push(createSyncFailure({
+          code: 'qrz_upload_notify_failed',
+          message: err instanceof Error ? err.message : 'Failed to notify the logbook update',
+          source: 'host',
+          operation: 'upload',
+          providerId: this.id,
+          secrets: [config.apiKey],
+        }));
+      }
+    }
+    if (failed === 0) {
       this.setConfig(callsign, { ...config, lastSyncTime: Date.now() });
-      await logbook.notifyUpdated();
     }
 
     return {
-      uploaded,
+      submitted: qsos.length,
+      uploaded: accepted.length,
       skipped: 0,
       failed,
       failures: failures.length > 0 ? failures : undefined,
     };
+  }
+
+  private planUploadStatusUpdates(
+    snapshot: LogbookSnapshot,
+    accepted: ReadonlyArray<{ qso: QSORecord; acceptedAt: number }>,
+  ): { mutations: LogbookBatchMutation[]; value: undefined } {
+    const index = new WorkingLogbookIndex(snapshot.records);
+    const mutations: LogbookBatchMutation[] = [];
+    for (const { qso, acceptedAt } of accepted) {
+      const current = index.get(qso.id);
+      if (!current) throw new Error(`QSO with id ${qso.id} not found after QRZ upload`);
+      if (current.qrzQslSent === 'Y') continue;
+      const updates: Partial<QSORecord> = {
+        qrzQslSent: 'Y',
+        qrzQslSentDate: acceptedAt,
+      };
+      mutations.push({ type: 'update', qsoId: qso.id, updates });
+      index.replace({ ...current, ...updates, id: current.id });
+    }
+    return { mutations, value: undefined };
   }
 
   private async queryPendingQsos(
@@ -222,63 +312,9 @@ export class QRZSyncProvider implements LogbookSyncProvider {
     }
     const logbook = this.ctx.logbook.forCallsign(callsign);
 
+    let records: QSORecord[];
     try {
-      const records = await this.downloadQSOs(config.apiKey);
-      let stored = 0;
-      let matched = 0;
-      const failures: SyncFailure[] = [];
-
-      for (const remoteQSO of records) {
-        try {
-          // Check for existing QSO with same callsign and time
-          const existing = await logbook.queryQSOs({
-            callsign: remoteQSO.callsign,
-            timeRange: {
-              start: remoteQSO.startTime,
-              end: remoteQSO.endTime || remoteQSO.startTime,
-            },
-            limit: 1,
-          });
-
-          if (existing.length > 0) {
-            // Update QSL received status on matched QSO
-            await logbook.updateQSO(existing[0].id, {
-              qrzQslReceived: 'Y',
-              qrzQslReceivedDate: Date.now(),
-            });
-            matched++;
-          } else {
-            await logbook.addQSO(remoteQSO);
-            stored++;
-          }
-        } catch (err) {
-          failures.push(createSyncFailure({
-            code: 'qrz_download_logbook_failed',
-            message: err instanceof Error ? err.message : 'Failed to process downloaded QSO',
-            source: 'logbook',
-            operation: 'download',
-            providerId: this.id,
-            qsoId: remoteQSO.id,
-            qsoCallsign: remoteQSO.callsign,
-            secrets: [config.apiKey],
-          }));
-          this.ctx.log.warn('Failed to process downloaded QSO', {
-            callsign: remoteQSO.callsign,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-
-      if (stored > 0 || matched > 0) {
-        await logbook.notifyUpdated();
-      }
-
-      return {
-        downloaded: records.length,
-        matched,
-        updated: stored,
-        failures: failures.length > 0 ? failures : undefined,
-      };
+      records = await this.downloadQSOs(config.apiKey);
     } catch (err) {
       return {
         downloaded: 0,
@@ -287,6 +323,117 @@ export class QRZSyncProvider implements LogbookSyncProvider {
         failures: [this.errorFailure(err, 'download', 'qrz_download_failed', config)],
       };
     }
+
+    let reconciled: ReconcileResult<{ matched: number }>;
+    try {
+      reconciled = await reconcileLogbookBatch(
+        logbook as BatchLogbookAccess,
+        snapshot => this.planDownload(snapshot, records),
+      );
+    } catch (err) {
+      const failure = createSyncFailure({
+        code: 'qrz_download_logbook_failed',
+        message: err instanceof Error ? err.message : 'Failed to commit downloaded QSOs',
+        source: 'logbook',
+        operation: 'download',
+        providerId: this.id,
+        secrets: [config.apiKey],
+      });
+      return {
+        downloaded: records.length,
+        matched: 0,
+        updated: 0,
+        imported: 0,
+        failures: [failure],
+      };
+    }
+
+    const updated = reconciled.batch.outcomes.filter(outcome => outcome.status === 'updated').length;
+    const imported = reconciled.batch.outcomes.filter(outcome => outcome.status === 'added').length;
+    let notifyFailure: SyncFailure | undefined;
+    if (updated > 0 || imported > 0) {
+      try {
+        await logbook.notifyUpdated();
+      } catch (err) {
+        notifyFailure = createSyncFailure({
+          code: 'qrz_download_notify_failed',
+          message: err instanceof Error ? err.message : 'Failed to notify the logbook update',
+          source: 'host',
+          operation: 'download',
+          providerId: this.id,
+          secrets: [config.apiKey],
+        });
+      }
+    }
+    return {
+      downloaded: records.length,
+      matched: reconciled.value.matched,
+      updated,
+      imported,
+      failures: notifyFailure ? [notifyFailure] : undefined,
+    };
+  }
+
+  private planDownload(
+    snapshot: LogbookSnapshot,
+    records: readonly QSORecord[],
+  ): { mutations: LogbookBatchMutation[]; value: { matched: number } } {
+    const index = new WorkingLogbookIndex(snapshot.records);
+    const mutations: LogbookBatchMutation[] = [];
+    let matched = 0;
+
+    for (const remoteQSO of records) {
+      const localMatch = this.findBestLocalMatch(index, remoteQSO);
+      if (!localMatch) {
+        mutations.push({ type: 'add', record: remoteQSO });
+        index.add(remoteQSO);
+        continue;
+      }
+
+      matched += 1;
+      if (remoteQSO.qrzQslReceived !== 'Y' || localMatch.qrzQslReceived === 'Y') continue;
+      const updates: Partial<QSORecord> = { qrzQslReceived: 'Y' };
+      if (Number.isFinite(remoteQSO.qrzQslReceivedDate)) {
+        updates.qrzQslReceivedDate = remoteQSO.qrzQslReceivedDate;
+      }
+      mutations.push({ type: 'update', qsoId: localMatch.id, updates });
+      index.replace({ ...localMatch, ...updates, id: localMatch.id });
+    }
+
+    return { mutations, value: { matched } };
+  }
+
+  private findBestLocalMatch(index: WorkingLogbookIndex, remote: QSORecord): QSORecord | null {
+    const candidates = index.queryCallsignTimeRange(
+      remote.callsign,
+      remote.startTime - QRZ_DOWNLOAD_MATCH_TOLERANCE_MS,
+      (remote.endTime || remote.startTime) + QRZ_DOWNLOAD_MATCH_TOLERANCE_MS,
+      25,
+    );
+    const remoteStation = normalizeExactCallsign(remote.myCallsign);
+    const remoteBand = qsoBand(remote);
+    const remoteMode = normalizeQsoMode(remote.mode);
+
+    const scored = candidates
+      .filter((local) => {
+        const localStation = normalizeExactCallsign(local.myCallsign);
+        if (remoteStation && localStation && remoteStation !== localStation) return false;
+        if (remoteBand && qsoBand(local) && remoteBand !== qsoBand(local)) return false;
+        if (remoteMode && normalizeQsoMode(local.mode) && remoteMode !== normalizeQsoMode(local.mode)) return false;
+        return Math.abs((local.frequency || 0) - (remote.frequency || 0)) <= QRZ_DOWNLOAD_FREQUENCY_TOLERANCE_HZ;
+      })
+      .map((local) => {
+        const timeDelta = Math.abs(local.startTime - remote.startTime);
+        let score = 0;
+        if (remoteStation && normalizeExactCallsign(local.myCallsign) === remoteStation) score += 8;
+        if (remoteBand && qsoBand(local) === remoteBand) score += 5;
+        if (remoteMode && normalizeQsoMode(local.mode) === remoteMode) score += 5;
+        score += Math.max(0, 3 - Math.floor(timeDelta / 60_000));
+        return { local, score, timeDelta };
+      })
+      .sort((left, right) => right.score - left.score || left.timeDelta - right.timeDelta);
+
+    return scored[0]?.local ?? null;
   }
 
   // ===== QRZ API methods =====
@@ -518,6 +665,15 @@ export class QRZSyncProvider implements LogbookSyncProvider {
     let highestLogId: number | null = null;
 
     for (const recordStr of recordStrings) {
+      const fields = parseADIFFields(recordStr);
+      const rawLogId = fields.app_qrzlog_logid;
+      if (rawLogId) {
+        const parsedLogId = Number.parseInt(rawLogId, 10);
+        if (Number.isFinite(parsedLogId) && (highestLogId === null || parsedLogId > highestLogId)) {
+          highestLogId = parsedLogId;
+        }
+      }
+
       const parsedRecord = parseADIFRecord(recordStr, 'qrz');
       if (!parsedRecord) {
         continue;
@@ -525,20 +681,18 @@ export class QRZSyncProvider implements LogbookSyncProvider {
 
       records.push(parsedRecord);
 
-      const fields = parseADIFFields(recordStr);
-      const rawLogId = fields.app_qrzlog_logid;
-      if (!rawLogId) {
-        continue;
-      }
-
-      const parsedLogId = Number.parseInt(rawLogId, 10);
-      if (Number.isFinite(parsedLogId) && (highestLogId === null || parsedLogId > highestLogId)) {
-        highestLogId = parsedLogId;
+      const qrzStatus = fields.app_qrzlog_status?.toUpperCase();
+      if ((qrzStatus === 'C' || qrzStatus === 'Y') && fields.app_qrzlog_qsldate) {
+        try {
+          parsedRecord.qrzQslReceivedDate = new Date(
+            parseADIFDateTime(fields.app_qrzlog_qsldate, '000000'),
+          ).getTime();
+        } catch { /* Ignore malformed provider metadata. */ }
       }
     }
 
     return {
-      count: records.length,
+      count: recordStrings.length,
       records,
       nextAfterLogId: highestLogId === null ? null : highestLogId + 1,
     };

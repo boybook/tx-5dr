@@ -1045,6 +1045,11 @@ export class PluginContextFactory {
           if (!logBook) return [];
           return logBook.provider.queryQSOs(buildQuery(filter));
         },
+        async readQsoSnapshot(filter?: QSOQueryFilter) {
+          const logBook = getRequiredLogBook();
+          const result = await logBook.provider.readQsoSnapshot(buildQuery(filter));
+          return snapshotPluginData(result, 'structured');
+        },
         async countQSOs(filter?: QSOQueryFilter) {
           const logBook = getExistingLogBook();
           if (!logBook) return 0;
@@ -1058,6 +1063,18 @@ export class PluginContextFactory {
         async updateQSO(qsoId: string, updates: Partial<import('@tx5dr/contracts').QSORecord>) {
           const logBook = getRequiredLogBook();
           return logBook.provider.updateQSO(qsoId, snapshotPluginData(updates, 'structured'));
+        },
+        async applyQsoBatch(
+          mutations: readonly import('@tx5dr/core').LogbookBatchMutation[],
+          options: { expectedRevision: string },
+        ) {
+          const logBook = getRequiredLogBook();
+          const result = await logBook.provider.applyQsoBatch(
+            snapshotPluginData(mutations, 'structured'),
+            snapshotPluginData(options, 'structured'),
+            operatorId,
+          );
+          return snapshotPluginData(result, 'structured');
         },
         async getStatistics() {
           const logBook = getExistingLogBook();
@@ -1123,6 +1140,12 @@ export class PluginContextFactory {
         return createCallsignAccess(callsign).queryQSOs(filter);
       },
 
+      async readQsoSnapshot(filter?: QSOQueryFilter) {
+        const callsign = getBoundCallsign();
+        if (!callsign) throw new Error('Operator logbook is unavailable');
+        return createCallsignAccess(callsign).readQsoSnapshot(filter);
+      },
+
       async countQSOs(filter?: QSOQueryFilter) {
         const callsign = getBoundCallsign();
         if (!callsign) return 0;
@@ -1147,6 +1170,15 @@ export class PluginContextFactory {
         return createCallsignAccess(callsign).updateQSO(qsoId, updates);
       },
 
+      async applyQsoBatch(
+        mutations: readonly import('@tx5dr/core').LogbookBatchMutation[],
+        options: { expectedRevision: string },
+      ) {
+        const callsign = getBoundCallsign();
+        if (!callsign) throw new Error('Operator logbook is unavailable');
+        return createCallsignAccess(callsign).applyQsoBatch(mutations, options);
+      },
+
       // === Notification ===
 
       async notifyUpdated() {
@@ -1163,6 +1195,7 @@ export class PluginContextFactory {
         hasWorkedDXCC: fullAccess.hasWorkedDXCC,
         hasWorkedGrid: fullAccess.hasWorkedGrid,
         queryQSOs: fullAccess.queryQSOs,
+        readQsoSnapshot: fullAccess.readQsoSnapshot,
         countQSOs: fullAccess.countQSOs,
         forCallsign(callsign: string) {
           const access = createCallsignAccess(callsign);
@@ -1170,6 +1203,7 @@ export class PluginContextFactory {
             callsign: access.callsign,
             getLogBookId: access.getLogBookId,
             queryQSOs: access.queryQSOs,
+            readQsoSnapshot: access.readQsoSnapshot,
             countQSOs: access.countQSOs,
             getStatistics: access.getStatistics,
           };
@@ -1178,6 +1212,7 @@ export class PluginContextFactory {
       commands: {
         addQSO: fullAccess.addQSO,
         updateQSO: fullAccess.updateQSO,
+        applyQsoBatch: fullAccess.applyQsoBatch,
         notifyUpdated: fullAccess.notifyUpdated,
         forCallsign(callsign: string) {
           const access = createCallsignAccess(callsign);
@@ -1185,6 +1220,7 @@ export class PluginContextFactory {
             callsign: access.callsign,
             addQSO: access.addQSO,
             updateQSO: access.updateQSO,
+            applyQsoBatch: access.applyQsoBatch,
             notifyUpdated: access.notifyUpdated,
           };
         },

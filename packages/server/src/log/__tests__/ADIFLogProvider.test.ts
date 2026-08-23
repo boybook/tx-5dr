@@ -8,6 +8,21 @@ import { AdifFileStore } from '../persistence/AdifFileStore.js';
 import { LogbookScanTimeoutError } from '../persistence/LogbookScanWorker.js';
 import { MutationBlockedError, PersistenceCoordinator } from '../../utils/persistence/index.js';
 
+class CountingAdifFileStore extends AdifFileStore {
+  appendCommits = 0;
+  rewriteCommits = 0;
+
+  override commitAppend(...args: Parameters<AdifFileStore['commitAppend']>) {
+    this.appendCommits += 1;
+    return super.commitAppend(...args);
+  }
+
+  override commitRewrite(...args: Parameters<AdifFileStore['commitRewrite']>) {
+    this.rewriteCommits += 1;
+    return super.commitRewrite(...args);
+  }
+}
+
 async function createProvider() {
   const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-import-'));
   const provider = new ADIFLogProvider({
@@ -687,6 +702,212 @@ describe('ADIFLogProvider import', () => {
     expect(qsos[0].notes).toBe('updated durably');
 
     await reloaded.close();
+    await provider.close();
+  });
+
+  it('reads a filtered detached QSO snapshot with its provider revision', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+    await provider.addQSO({
+      id: 'snapshot-20m',
+      callsign: 'BG2AA',
+      frequency: 14_074_000,
+      mode: 'FT8',
+      startTime: 1,
+      messageHistory: ['original'],
+    });
+    await provider.addQSO({
+      id: 'snapshot-40m',
+      callsign: 'BG2BB',
+      frequency: 7_074_000,
+      mode: 'FT8',
+      startTime: 2,
+      messageHistory: [],
+    });
+
+    const snapshot = await provider.readQsoSnapshot({ band: '20m' });
+
+    expect(snapshot.revision).toBe(await provider.getRevision());
+    expect(snapshot.records.map(record => record.id)).toEqual(['snapshot-20m']);
+    snapshot.records[0]!.messageHistory.push('caller mutation');
+    expect(await provider.getQSO('snapshot-20m')).toMatchObject({ messageHistory: ['original'] });
+    await provider.close();
+  });
+
+  it('commits a multi-record add batch with one physical append and remints conflicting ids', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-batch-add-'));
+    tempDirs.push(tempDir);
+    let store!: CountingAdifFileStore;
+    const provider = new ADIFLogProvider({
+      logFilePath: join(tempDir, 'logbook.adi'),
+      fileStoreFactory: (filePath, options) => {
+        store = new CountingAdifFileStore(filePath, options);
+        return store;
+      },
+    });
+    await provider.initialize();
+    const snapshot = await provider.readQsoSnapshot();
+
+    const result = await provider.applyQsoBatch([
+      {
+        type: 'add',
+        record: {
+          id: 'batch-duplicate-id',
+          callsign: 'BG2BA',
+          frequency: 14_074_000,
+          mode: 'FT8',
+          startTime: 1,
+          messageHistory: [],
+        },
+      },
+      {
+        type: 'add',
+        record: {
+          id: 'batch-duplicate-id',
+          callsign: 'BG2BB',
+          frequency: 14_074_000,
+          mode: 'FT8',
+          startTime: 2,
+          messageHistory: [],
+        },
+      },
+    ], { expectedRevision: snapshot.revision });
+
+    expect(store.appendCommits).toBe(1);
+    expect(store.rewriteCommits).toBe(0);
+    expect(result.revision).not.toBe(snapshot.revision);
+    expect(result.outcomes.map(outcome => outcome.status)).toEqual(['added', 'added']);
+    expect(result.outcomes[0]!.record.id).toBe('batch-duplicate-id');
+    expect(result.outcomes[1]!.record.id).toMatch(/^tx5dr-/);
+    expect(result.outcomes[1]!.record.id).not.toBe('batch-duplicate-id');
+    expect((await provider.queryQSOs()).map(record => record.callsign).sort()).toEqual(['BG2BA', 'BG2BB']);
+    await provider.close();
+  });
+
+  it('coalesces mixed updates and additions into one rewrite while preserving no-op outcomes', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-batch-rewrite-'));
+    tempDirs.push(tempDir);
+    const logFilePath = join(tempDir, 'logbook.adi');
+    const untouchedRaw = '<call:5>BG2EX<qso_date:8>20260101<time_on:6>120000<freq:9>14.074000<mode:3>FT8<APP_OTHER:3>RAW<eor>';
+    await writeFile(logFilePath, buildAdif([untouchedRaw]), 'utf8');
+    let store!: CountingAdifFileStore;
+    const provider = new ADIFLogProvider({
+      logFilePath,
+      autoCreateFile: false,
+      fileStoreFactory: (filePath, options) => {
+        store = new CountingAdifFileStore(filePath, options);
+        return store;
+      },
+    });
+    await provider.initialize();
+    await provider.addQSO({
+      id: 'batch-update-target',
+      callsign: 'BG2UP',
+      frequency: 14_074_000,
+      mode: 'FT8',
+      startTime: 2,
+      messageHistory: [],
+    });
+    store.appendCommits = 0;
+    store.rewriteCommits = 0;
+    const snapshot = await provider.readQsoSnapshot();
+
+    const result = await provider.applyQsoBatch([
+      { type: 'update', qsoId: 'batch-update-target', updates: { notes: 'batched' } },
+      { type: 'update', qsoId: 'batch-update-target', updates: { notes: 'batched' } },
+      {
+        type: 'add',
+        record: {
+          id: 'batch-added-with-update',
+          callsign: 'BG2AD',
+          frequency: 7_074_000,
+          mode: 'FT8',
+          startTime: 3,
+          messageHistory: [],
+        },
+      },
+      { type: 'update', qsoId: 'batch-added-with-update', updates: { qrzQslReceived: 'Y' } },
+    ], { expectedRevision: snapshot.revision });
+
+    expect(store.appendCommits).toBe(0);
+    expect(store.rewriteCommits).toBe(1);
+    expect(result.outcomes.map(outcome => outcome.status)).toEqual([
+      'updated',
+      'unchanged',
+      'added',
+      'updated',
+    ]);
+    expect(result.outcomes[0]!.record.notes).toBe('batched');
+    expect(result.outcomes[2]!.record.qrzQslReceived).toBe('Y');
+    expect(await readFile(logFilePath, 'utf8')).toContain(untouchedRaw);
+    await provider.close();
+  }, 15_000);
+
+  it('keeps no-op batches at the same revision and rejects a stale revision once without changing health', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-batch-conflict-'));
+    tempDirs.push(tempDir);
+    let store!: CountingAdifFileStore;
+    const provider = new ADIFLogProvider({
+      logFilePath: join(tempDir, 'logbook.adi'),
+      fileStoreFactory: (filePath, options) => {
+        store = new CountingAdifFileStore(filePath, options);
+        return store;
+      },
+    });
+    await provider.initialize();
+    await provider.addQSO({
+      id: 'batch-noop-target',
+      callsign: 'BG2NO',
+      frequency: 14_074_000,
+      mode: 'FT8',
+      startTime: 1,
+      messageHistory: [],
+      notes: 'same',
+    });
+    const snapshot = await provider.readQsoSnapshot();
+    store.appendCommits = 0;
+    store.rewriteCommits = 0;
+    const failures: Array<{ operation: string; error: { code: string } }> = [];
+    provider.onWriteFailed(failure => failures.push(failure));
+
+    const empty = await provider.applyQsoBatch([], { expectedRevision: snapshot.revision });
+    const noOp = await provider.applyQsoBatch([
+      { type: 'update', qsoId: 'batch-noop-target', updates: { notes: 'same' } },
+    ], { expectedRevision: snapshot.revision });
+
+    expect(empty).toEqual({ revision: snapshot.revision, outcomes: [] });
+    expect(noOp.revision).toBe(snapshot.revision);
+    expect(noOp.outcomes).toEqual([
+      expect.objectContaining({ inputIndex: 0, status: 'unchanged' }),
+    ]);
+    expect(store.appendCommits).toBe(0);
+    expect(store.rewriteCommits).toBe(0);
+
+    await provider.addQSO({
+      id: 'batch-revision-advance',
+      callsign: 'BG2RV',
+      frequency: 14_074_000,
+      mode: 'FT8',
+      startTime: 2,
+      messageHistory: [],
+    });
+    store.appendCommits = 0;
+    await expect(provider.applyQsoBatch([
+      { type: 'update', qsoId: 'batch-noop-target', updates: { notes: 'must-not-apply' } },
+    ], { expectedRevision: snapshot.revision })).rejects.toMatchObject({
+      code: 'LOGBOOK_REVISION_CONFLICT',
+    });
+
+    expect(store.appendCommits).toBe(0);
+    expect(store.rewriteCommits).toBe(0);
+    expect(provider.getHealth().writable).toBe(true);
+    expect(await provider.getQSO('batch-noop-target')).toMatchObject({ notes: 'same' });
+    expect(failures).toEqual([
+      expect.objectContaining({
+        operation: 'batch',
+        error: expect.objectContaining({ code: 'LOGBOOK_REVISION_CONFLICT' }),
+      }),
+    ]);
     await provider.close();
   });
 

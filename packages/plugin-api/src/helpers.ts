@@ -15,6 +15,11 @@ import type {
   RadioPowerTarget,
 } from '@tx5dr/contracts';
 import type { StrategyRuntimeSnapshot } from './runtime.js';
+import type {
+  LogbookBatchMutation,
+  LogbookBatchResult,
+  LogbookQsoSnapshot,
+} from '@tx5dr/core';
 
 /**
  * Simple persistent key-value store exposed to plugins.
@@ -533,6 +538,8 @@ export interface CallsignLogbookReadAccess {
 
   /** Queries QSO records matching the given filter. */
   queryQSOs(filter: QSOQueryFilter): Promise<import('@tx5dr/contracts').QSORecord[]>;
+  /** Reads records and their content revision from one consistent logbook snapshot. */
+  readQsoSnapshot(filter?: QSOQueryFilter): Promise<LogbookQsoSnapshot>;
   /** Counts QSO records matching the given filter. */
   countQSOs(filter?: QSOQueryFilter): Promise<number>;
   /** Returns current statistics for this callsign's logbook. */
@@ -550,6 +557,11 @@ export interface CallsignLogbookCommandPort {
     qsoId: string,
     updates: Partial<import('@tx5dr/contracts').QSORecord>,
   ): Promise<import('@tx5dr/contracts').QSORecord>;
+  /** Applies a revision-guarded set of QSO additions and updates as one durable transaction. */
+  applyQsoBatch(
+    mutations: readonly LogbookBatchMutation[],
+    options: { expectedRevision: string },
+  ): Promise<LogbookBatchResult>;
   /** Notifies the frontend that this callsign's logbook changed. */
   notifyUpdated(operatorId?: string): Promise<void>;
 }
@@ -573,6 +585,8 @@ export interface LogbookReadAccess {
 
   /** Queries QSO records matching the given filter. */
   queryQSOs(filter: QSOQueryFilter): Promise<import('@tx5dr/contracts').QSORecord[]>;
+  /** Reads records and their content revision from one consistent logbook snapshot. */
+  readQsoSnapshot(filter?: QSOQueryFilter): Promise<LogbookQsoSnapshot>;
   /** Counts QSO records matching the given filter. */
   countQSOs(filter?: QSOQueryFilter): Promise<number>;
 
@@ -589,6 +603,11 @@ export interface LogbookCommandPort {
     qsoId: string,
     updates: Partial<import('@tx5dr/contracts').QSORecord>,
   ): Promise<import('@tx5dr/contracts').QSORecord>;
+  /** Applies a revision-guarded set of QSO additions and updates as one durable transaction. */
+  applyQsoBatch(
+    mutations: readonly LogbookBatchMutation[],
+    options: { expectedRevision: string },
+  ): Promise<LogbookBatchResult>;
 
   // === Notification ===
 
