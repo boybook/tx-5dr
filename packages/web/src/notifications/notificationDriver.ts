@@ -261,8 +261,8 @@ export function buildQsoNotificationSummary(qso: Pick<QSORecord, 'callsign' | 'g
     summaryParts.push(qso.mode);
   }
 
-  if (qso.reportSent || qso.reportReceived) {
-    summaryParts.push(`${qso.reportSent || '--'}/${qso.reportReceived || '--'}`);
+  if (qso.reportSent != null && qso.reportSent !== '' || qso.reportReceived != null && qso.reportReceived !== '') {
+    summaryParts.push(`${qso.reportSent != null && qso.reportSent !== '' ? qso.reportSent : '--'}/${qso.reportReceived != null && qso.reportReceived !== '' ? qso.reportReceived : '--'}`);
   }
 
   return summaryParts.join(' • ');

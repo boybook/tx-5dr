@@ -77,6 +77,22 @@ function normalizeOperatorContext(context: any): any {
   };
 }
 
+/** True when a logged RST/SNR field is absent. "0" and "+00" are valid reports. */
+function isMissingSignalReport(value: string | undefined | null): boolean {
+  return value === undefined || value === null || value === '';
+}
+
+function preferSignalReport(
+  ...candidates: Array<string | undefined | null>
+): string | undefined {
+  for (const candidate of candidates) {
+    if (!isMissingSignalReport(candidate)) {
+      return candidate ?? undefined;
+    }
+  }
+  return undefined;
+}
+
 interface SameTransmissionGuardState {
   canonicalMessage: string;
   count: number;
@@ -877,11 +893,19 @@ export class RadioOperatorManager {
         targetGrid = this.callsignTracker.getGrid(targetCall) ?? '';
       }
 
+      const rawReportSent = runtimeState?.context?.reportSent;
+      const rawReportReceived = runtimeState?.context?.reportReceived;
       const targetContext = {
         targetCall,
         targetGrid,
-        reportSent: Number(runtimeState?.context?.reportSent ?? 0),
-        reportReceived: Number(runtimeState?.context?.reportReceived ?? 0),
+        // Keep unset reports as undefined. Coercing to 0 pollutes QSO logs
+        // because FT8 SNR of 0 is valid and UI echoes can write the sentinel back.
+        reportSent: typeof rawReportSent === 'number' && Number.isFinite(rawReportSent)
+          ? rawReportSent
+          : undefined,
+        reportReceived: typeof rawReportReceived === 'number' && Number.isFinite(rawReportReceived)
+          ? rawReportReceived
+          : undefined,
       };
       
       operators.push({
@@ -964,8 +988,12 @@ export class RadioOperatorManager {
     const runtimePatch: Record<string, unknown> = {};
     if (normalizedContext.targetCallsign !== undefined) runtimePatch.targetCallsign = normalizedContext.targetCallsign;
     if (normalizedContext.targetGrid !== undefined) runtimePatch.targetGrid = normalizedContext.targetGrid;
-    if (normalizedContext.reportSent !== undefined) runtimePatch.reportSent = normalizedContext.reportSent;
-    if (normalizedContext.reportReceived !== undefined) runtimePatch.reportReceived = normalizedContext.reportReceived;
+    if (normalizedContext.reportSent !== undefined) {
+      runtimePatch.reportSent = normalizedContext.reportSent ?? undefined;
+    }
+    if (normalizedContext.reportReceived !== undefined) {
+      runtimePatch.reportReceived = normalizedContext.reportReceived ?? undefined;
+    }
     if (Object.keys(runtimePatch).length > 0) {
       this._pluginManager?.patchOperatorRuntimeContext(operatorId, runtimePatch as any);
     }
@@ -2464,25 +2492,7 @@ export class RadioOperatorManager {
     const grid = qsoRecord.grid
       || this.callsignTracker?.getGrid(targetCallsign);
 
-    // Recover signal reports from CallsignContextTracker if missing
-    let reportSent = qsoRecord.reportSent;
-    let reportReceived = qsoRecord.reportReceived;
-    if (this.callsignTracker && myCallsign) {
-      if (!reportSent) {
-        const sent = this.callsignTracker.getReport(myCallsign, targetCallsign);
-        if (sent !== undefined) {
-          reportSent = sent.toString();
-        }
-      }
-      if (!reportReceived) {
-        const received = this.callsignTracker.getReport(targetCallsign, myCallsign);
-        if (received !== undefined) {
-          reportReceived = received.toString();
-        }
-      }
-    }
-
-    const messageHistory = this.rebuildQSOMessageHistory(historySlotPacks, {
+    const history = this.rebuildQSOMessageHistory(historySlotPacks, {
       operatorId,
       myCallsign,
       targetCallsign,
@@ -2490,14 +2500,36 @@ export class RadioOperatorManager {
       endMs: historyEndMs,
     });
 
+    // Only a local on-air TX frame may refine reportSent. RX frames remain
+    // decoder candidates; reportReceived comes from the strategy-accepted effect.
+    let reportSent = preferSignalReport(history.reportSent, qsoRecord.reportSent);
+    let reportReceived = qsoRecord.reportReceived;
+
+    // Recover remaining gaps from CallsignContextTracker.
+    // Do not use truthiness checks: "0" is a valid FT8 report.
+    if (this.callsignTracker && myCallsign) {
+      if (isMissingSignalReport(reportSent)) {
+        const sent = this.callsignTracker.getReport(myCallsign, targetCallsign);
+        if (sent !== undefined) {
+          reportSent = sent.toString();
+        }
+      }
+      if (isMissingSignalReport(reportReceived)) {
+        const received = this.callsignTracker.getReport(targetCallsign, myCallsign);
+        if (received !== undefined) {
+          reportReceived = received.toString();
+        }
+      }
+    }
+
     const completedRecord = {
       ...qsoRecord,
       callsign: targetCallsign,
       myCallsign: myCallsign || qsoRecord.myCallsign,
       grid,
-      reportSent: reportSent || qsoRecord.reportSent,
-      reportReceived: reportReceived || qsoRecord.reportReceived,
-      messageHistory,
+      reportSent: preferSignalReport(reportSent, qsoRecord.reportSent),
+      reportReceived: preferSignalReport(reportReceived, qsoRecord.reportReceived),
+      messageHistory: history.messages,
     };
     return {
       ...completedRecord,
@@ -2549,8 +2581,9 @@ export class RadioOperatorManager {
   private rebuildQSOMessageHistory(
     slotPacks: SlotPack[],
     options: { operatorId: string; myCallsign: string; targetCallsign: string; startMs: number; endMs: number }
-  ): string[] {
+  ): { messages: string[]; reportSent?: string } {
     const messages: string[] = [];
+    let reportSent: string | undefined;
 
     for (const slotPack of slotPacks) {
       if (slotPack.startMs > options.endMs || slotPack.endMs < options.startMs) {
@@ -2562,10 +2595,43 @@ export class RadioOperatorManager {
           continue;
         }
         messages.push(frame.message);
+        if (frame.snr === -999 && frame.operatorId === options.operatorId) {
+          reportSent = this.extractTransmittedReport(
+            frame.message,
+            options.myCallsign,
+            options.targetCallsign,
+          ) ?? reportSent;
+        }
       }
     }
 
-    return messages;
+    return { messages, reportSent };
+  }
+
+  private extractTransmittedReport(
+    message: string,
+    myCallsign: string,
+    targetCallsign: string,
+  ): string | undefined {
+    const me = myCallsign.toUpperCase();
+    const them = targetCallsign.toUpperCase();
+
+    try {
+      const parsed = FT8MessageParser.parseMessage(message);
+      if (parsed.type !== 'signal_report' && parsed.type !== 'roger_report') {
+        return undefined;
+      }
+      if (typeof parsed.report !== 'number' || !Number.isFinite(parsed.report)) {
+        return undefined;
+      }
+      const sender = parsed.senderCallsign?.toUpperCase();
+      const target = parsed.targetCallsign?.toUpperCase();
+      if (sender !== me || target !== them) return undefined;
+      return FT8MessageParser.generateSignalReport(parsed.report);
+    } catch (error) {
+      logger.warn(`Failed to parse local TX frame while extracting its QSO report: "${message}"`, error);
+      return undefined;
+    }
   }
 
   private isFrameRelatedToQSO(
@@ -2647,8 +2713,9 @@ export class RadioOperatorManager {
       startTime: Math.min(existing.startTime, incoming.startTime),
       endTime: Math.max(existingEndTime, incomingEndTime),
       grid: incoming.grid || existing.grid,
-      reportSent: incoming.reportSent || existing.reportSent,
-      reportReceived: incoming.reportReceived || existing.reportReceived,
+      // "0" is a valid FT8 report; do not treat it as missing via ||.
+      reportSent: preferSignalReport(incoming.reportSent, existing.reportSent),
+      reportReceived: preferSignalReport(incoming.reportReceived, existing.reportReceived),
       messageHistory,
       lotwQslSent: existing.lotwQslSent,
       lotwQslReceived: existing.lotwQslReceived,

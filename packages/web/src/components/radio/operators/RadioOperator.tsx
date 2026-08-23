@@ -16,6 +16,7 @@ import {
   getRadioOperatorProgressAnimation,
   shouldRadioOperatorPropsBeEqual,
 } from './radioOperatorProgress';
+import { applyOperatorContextDraft } from './operatorContextDraft';
 import { resolveRadioOperatorCyclePresentation } from './radioOperatorPresentation';
 import {
   OPERATOR_FORCE_STOP_REQUESTED_EVENT,
@@ -128,14 +129,18 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       targetCall: operatorStatus.context.targetCall || '',
       targetGrid: operatorStatus.context.targetGrid || '',
       frequency: operatorStatus.context.frequency, // 频率可选，用于无电台模式设置完整的无线电频率（Hz）
-      reportSent: operatorStatus.context.reportSent ?? 0,
-      reportReceived: operatorStatus.context.reportReceived ?? 0,
+      // Keep unset reports as undefined. FT8 SNR of 0 is valid; defaulting to 0
+      // caused QSO logs to record a sentinel "0" (issue #70).
+      reportSent: operatorStatus.context.reportSent,
+      reportReceived: operatorStatus.context.reportReceived,
     };
   });
 
-  // 报告字段的原始字符串（支持 ""、"-" 等中间态）
+  // 报告字段的原始字符串（支持 ""、"-" 等中间态；未设置时显示空而非哨兵 0）
   const [reportSentRaw, setReportSentRaw] = React.useState(() =>
-    (operatorStatus.context.reportSent ?? 0).toString()
+    operatorStatus.context.reportSent === undefined || operatorStatus.context.reportSent === null
+      ? ''
+      : operatorStatus.context.reportSent.toString()
   );
 
   // 频率字段的原始字符串（支持编辑中间态，失焦时 clamp）
@@ -174,7 +179,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   const [cooldownSlotFields, setCooldownSlotFields] = React.useState<Set<OperatorRuntimeSlot>>(new Set());
 
   // 冷却期缓冲区：存储冷却期间服务端推送的最新值
-  const cooldownBufferRef = React.useRef<Record<string, string | number>>({});
+  const cooldownBufferRef = React.useRef<Record<string, string | number | undefined>>({});
   const cooldownSlotBufferRef = React.useRef<RuntimeSlotContents>({});
 
   // localContext ref，供回调函数读取最新值
@@ -336,13 +341,13 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     if (operatorStatus.context && operatorStatus.context.myCall) {
       const serverCtx = operatorStatus.context;
       const fields = ['myCall', 'myGrid', 'targetCall', 'targetGrid', 'frequency', 'reportSent'] as const;
-      const serverMap: Record<string, string | number> = {
+      const serverMap: Record<string, string | number | undefined> = {
         myCall: serverCtx.myCall || '',
         myGrid: serverCtx.myGrid || '',
         targetCall: serverCtx.targetCall || '',
         targetGrid: serverCtx.targetGrid || '',
         frequency: serverCtx.frequency ?? 0,
-        reportSent: serverCtx.reportSent ?? 0,
+        reportSent: serverCtx.reportSent,
       };
 
       // 冷却中的字段：更新缓冲区
@@ -359,7 +364,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             // 聚焦或冷却中 → 保留本地值
             continue;
           }
-          (newContext as Record<string, string | number>)[field] = serverMap[field];
+          (newContext as Record<string, string | number | undefined>)[field] = serverMap[field];
         }
 
         const hasChanged = fields.some(f =>
@@ -368,7 +373,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
         // 同步原始字符串显示（仅非聚焦/冷却时）
         if (!focusedFields.has('reportSent') && !cooldownFields.has('reportSent')) {
-          const newVal = (newContext.reportSent ?? 0).toString();
+          const newVal = newContext.reportSent === undefined || newContext.reportSent === null
+            ? ''
+            : newContext.reportSent.toString();
           if (reportSentRaw !== newVal) {
             setReportSentRaw(newVal);
           }
@@ -473,15 +480,23 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       targetCallsign: ctx.targetCall,
       targetGrid: ctx.targetGrid,
       frequency: ctx.frequency,
-      reportSent: ctx.reportSent,
-      reportReceived: ctx.reportReceived,
+      // Only send reportSent when explicitly set. Never echo a UI default for
+      // reportReceived — that field is driven by FT8 exchanges on the server.
+      ...(typeof ctx.reportSent === 'number' && Number.isFinite(ctx.reportSent)
+        ? { reportSent: ctx.reportSent }
+        : ctx.reportSent === null
+          ? { reportSent: null }
+          : {}),
     });
   }, [setOperatorContext]);
 
   // 处理上下文更新（用户每次击键）
-  const handleContextUpdate = (field: string, value: string | number) => {
-    const newContext = { ...localContext, [field]: value };
-    setLocalContext(newContext);
+  const handleContextUpdate = (field: string, value: string | number | null) => {
+    const newContext = applyOperatorContextDraft(
+      localContextRef,
+      setLocalContext,
+      { [field]: value },
+    );
 
     // 重置防抖
     if (debounceTimerRef.current) {
@@ -541,7 +556,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
         });
         // 同步原始字符串显示
         if (field === 'reportSent') {
-          setReportSentRaw(bufferedValue.toString());
+          setReportSentRaw(
+            typeof bufferedValue === 'number' ? bufferedValue.toString() : '',
+          );
         } else if (field === 'frequency') {
           setFrequencyRaw(bufferedValue.toString());
         }
@@ -1290,8 +1307,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                     setOperatorContext({
                       targetCallsign: '',
                       targetGrid: '',
-                      reportSent: 0,
-                      reportReceived: 0,
+                      reportSent: null,
+                      reportReceived: null,
                     });
 
                     // 第2步：切换到 TX6 槽位
@@ -1350,11 +1367,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             }}
             onFocus={() => handleInputFocus('reportSent')}
             onBlur={() => {
-              // 失焦时修正中间态
+              // 失焦时修正中间态：空输入表示清除，不再写入哨兵 0
               const num = parseInt(reportSentRaw);
               if (isNaN(num)) {
-                setReportSentRaw('0');
-                handleContextUpdate('reportSent', 0);
+                setReportSentRaw('');
+                handleContextUpdate('reportSent', null);
               }
               handleInputBlur('reportSent');
             }}
