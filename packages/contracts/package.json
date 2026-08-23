@@ -1,6 +1,11 @@
 {
   "name": "@tx5dr/contracts",
   "version": "1.7.12",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/boybook/tx-5dr",
+    "directory": "packages/contracts"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
