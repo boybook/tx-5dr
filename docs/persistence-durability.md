@@ -29,6 +29,7 @@ For each ADIF logbook:
 - `<CALL>.adi` is the sole formal data source and remains readable while TX-5DR is running.
 - A newly created QSO is written with `O_APPEND`, checked for a complete write, and `fsync`ed before the operation reports success.
 - Updates, deletes, and imports that merge existing records are the explicit append-only exception. They require a valid rolling backup when the backup is missing or stale, then stream and validate a complete candidate before atomically replacing the formal file.
+- Parent-directory synchronization after creating, replacing, or restoring an ADIF file is best-effort. An expected platform limitation does not degrade a verified logbook; an unexpected synchronization failure remains visible as a durability warning.
 - Untouched records retain their physical order and original bytes. Unknown fields, duplicate records, headerless files, and complete opaque records are not normalized merely by opening or rewriting a logbook.
 
 Each mutation is prepared against an immutable in-memory document. The document and indexes change only after the file commit succeeds. If an append fails, TX-5DR attempts to truncate back to the previous EOF and sync it. Only a failed rollback or content state that cannot be determined puts that logbook into read-only mode; it never creates an emergency log or reports an in-memory-only success.

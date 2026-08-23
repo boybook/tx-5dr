@@ -511,14 +511,7 @@ export class AdifFileStore {
         await this.injectFault('rewrite-after-main-rename');
         let directorySyncIssue: AdifFileStoreIssue | undefined;
         try {
-          const synchronized = await fsyncDirectory(this.fileSystem, path.dirname(this.filePath));
-          if (!synchronized) {
-            directorySyncIssue = {
-              code: 'DIRECTORY_SYNC_UNSUPPORTED',
-              message: 'The ADIF content is committed, but this platform does not support directory synchronization',
-              path: path.dirname(this.filePath),
-            };
-          }
+          await fsyncDirectory(this.fileSystem, path.dirname(this.filePath));
         } catch (error) {
           directorySyncIssue = toIssue(
             'DIRECTORY_SYNC_FAILED',
@@ -661,14 +654,7 @@ export class AdifFileStore {
         renamed = true;
         let directorySyncIssue: AdifFileStoreIssue | undefined;
         try {
-          const synchronized = await fsyncDirectory(this.fileSystem, path.dirname(this.filePath));
-          if (!synchronized) {
-            directorySyncIssue = {
-              code: 'DIRECTORY_SYNC_UNSUPPORTED',
-              message: 'The restored ADIF content is committed, but this platform does not support directory synchronization',
-              path: path.dirname(this.filePath),
-            };
-          }
+          await fsyncDirectory(this.fileSystem, path.dirname(this.filePath));
         } catch (error) {
           directorySyncIssue = toIssue(
             'DIRECTORY_SYNC_FAILED',
@@ -875,13 +861,8 @@ export class AdifFileStore {
       await handle.close().catch(() => undefined);
     }
     try {
-      const synchronized = await fsyncDirectory(this.fileSystem, path.dirname(this.filePath));
-      if (synchronized) return undefined;
-      return {
-        code: 'DIRECTORY_SYNC_UNSUPPORTED',
-        message: 'The new ADIF file is synced, but this platform does not support directory synchronization',
-        path: path.dirname(this.filePath),
-      };
+      await fsyncDirectory(this.fileSystem, path.dirname(this.filePath));
+      return undefined;
     } catch (error) {
       return toIssue(
         'DIRECTORY_SYNC_FAILED',

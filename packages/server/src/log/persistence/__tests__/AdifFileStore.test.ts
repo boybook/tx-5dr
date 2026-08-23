@@ -758,6 +758,23 @@ describe('AdifFileStore durability', () => {
     expect(await readdir(directory)).toEqual(['new.adi']);
   });
 
+  it('keeps a newly created logbook ready when directory sync is unsupported', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'tx5dr-adif-store-'));
+    tempDirectories.push(directory);
+    const filePath = path.join(directory, 'new.adi');
+    const fileSystem = withOpen(async (target, flags, mode) => {
+      if (target === directory && flags === 'r') {
+        throw Object.assign(new Error('injected unsupported directory sync'), { code: 'EINVAL' });
+      }
+      return nodeAdifFileSystem.open(target, flags, mode);
+    });
+
+    const opened = await new AdifFileStore(filePath, { fileSystem }).open();
+
+    expect(opened).toMatchObject({ status: 'ready', issues: [] });
+    expect(await readFile(filePath, 'utf8')).toContain('<EOH>');
+  });
+
   it('does not create a main when automatic creation is disabled', async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'tx5dr-adif-store-'));
     tempDirectories.push(directory);
@@ -817,9 +834,9 @@ describe('AdifFileStore durability', () => {
   });
 
   it.each([
-    { code: 'EINVAL', issue: 'DIRECTORY_SYNC_UNSUPPORTED' },
-    { code: 'EIO', issue: 'DIRECTORY_SYNC_FAILED' },
-  ])('commits a verified rewrite when directory fsync reports $code', async ({ code, issue }) => {
+    { code: 'EINVAL', status: 'ready', issue: undefined },
+    { code: 'EIO', status: 'degraded', issue: 'DIRECTORY_SYNC_FAILED' },
+  ] as const)('commits a verified rewrite when directory fsync reports $code', async ({ code, status, issue }) => {
     const original = `${adifRecord('BG5MD')}\n`;
     const replacement = `${adifRecord('BG5ME')}\n`;
     const { directory, filePath } = await createLogbook(original);
@@ -836,10 +853,14 @@ describe('AdifFileStore durability', () => {
       .resolves.toMatchObject({ scan: { records: [expect.any(Object)] } });
 
     expect(await readFile(filePath, 'utf8')).toBe(replacement);
-    expect(store.getState()).toMatchObject({
-      status: 'degraded',
-      issues: expect.arrayContaining([expect.objectContaining({ code: issue })]),
-    });
+    expect(store.getState().status).toBe(status);
+    if (issue) {
+      expect(store.getState().issues).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: issue })]),
+      );
+    } else {
+      expect(store.getState().issues).toEqual([]);
+    }
   });
 
   it('streams source ranges and literal bytes into a rewrite and offers consistent reads', async () => {
@@ -941,6 +962,27 @@ describe('AdifFileStore durability', () => {
     expect(committed.scan.records).toHaveLength(1);
     expect(await readFile(filePath, 'utf8')).toBe(replacement);
     expect((await readdir(directory)).sort()).toEqual(['latest.adi', 'station.adi']);
+  });
+
+  it('keeps a restored logbook ready when directory sync is unsupported', async () => {
+    const original = `${adifRecord('BG5PW')}\n`;
+    const replacement = `${adifRecord('BG5PX')}\n`;
+    const { directory, filePath } = await createLogbook(original);
+    const sourcePath = path.join(directory, 'latest.adi');
+    await writeFile(sourcePath, replacement);
+    const fileSystem = withOpen(async (target, flags, mode) => {
+      if (target === directory && flags === 'r') {
+        throw Object.assign(new Error('injected unsupported directory sync'), { code: 'EINVAL' });
+      }
+      return nodeAdifFileSystem.open(target, flags, mode);
+    });
+    const store = new AdifFileStore(filePath, { fileSystem });
+    const opened = await store.open();
+
+    await store.commitReplaceFromFile(sourcePath, opened.generation);
+
+    expect(store.getState()).toMatchObject({ status: 'ready', issues: [] });
+    expect(await readFile(filePath, 'utf8')).toBe(replacement);
   });
 
   it('rejects an incomplete restore source and leaves main unchanged', async () => {
