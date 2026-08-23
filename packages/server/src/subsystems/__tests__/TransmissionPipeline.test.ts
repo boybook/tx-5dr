@@ -166,6 +166,7 @@ function createHarness(options: {
     audioData: new Float32Array(12_000),
     sampleRate: 12_000,
     duration: 1,
+    playbackOffsetMs: 0,
     txDialShiftHz: 681,
     frameId: prepared.frame!.frameId,
     frameRevision: prepared.frame!.revision,
@@ -419,7 +420,7 @@ describe('TransmissionPipeline lifecycle integration', () => {
     expect(harness.playAudio).not.toHaveBeenCalled();
   });
 
-  it('recomputes the waveform offset after a delayed PTT acknowledgement', async () => {
+  it('plays the cursor-aligned remainder after a slow PTT acknowledgement', async () => {
     const pttStart = deferred<void>();
     const harness = createHarness({
       pttStart: pttStart.promise,
@@ -428,28 +429,35 @@ describe('TransmissionPipeline lifecycle integration', () => {
       expectedDurationMs: 12_640,
       playbackStartMs: 500,
     });
+    harness.mixedAudio.audioData = new Float32Array(12_140);
+    harness.mixedAudio.sampleRate = 1_000;
+    harness.mixedAudio.duration = 12.14;
+    harness.mixedAudio.playbackOffsetMs = 500;
     const finalAudio = {
       ...harness.mixedAudio,
-      audioData: new Float32Array([2, 3, 4]),
+      audioData: new Float32Array(9_940),
       sampleRate: 1_000,
-      duration: 10.64,
+      duration: 9.94,
+      playbackOffsetMs: 2_700,
     };
     harness.setFrameMix('frame-1', 1, finalAudio);
 
     const handling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
     await vi.waitFor(() => expect(harness.setPTT).toHaveBeenCalledWith(true));
-    harness.setNow(2_500);
+    harness.setNow(3_200);
     pttStart.resolve();
     await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(1));
 
-    expect(harness.deps.audioMixer.mixFrameById).toHaveBeenCalledWith('frame-1', 1, 2_000);
+    expect(harness.deps.audioMixer.mixFrameById).toHaveBeenCalledWith('frame-1', 1, 2_700);
     expect(harness.playAudio).toHaveBeenCalledWith(
       finalAudio.audioData,
       finalAudio.sampleRate,
       expect.any(Object),
     );
+    expect(harness.setPTT).not.toHaveBeenCalledWith(false);
     harness.audioDone.resolve();
     await handling;
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
   });
 
   it('replaces an on-air correction without toggling the physical PTT lease', async () => {

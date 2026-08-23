@@ -160,5 +160,6 @@ describe('AudioMixer frame identity', () => {
     const mixed = await mix(mixer, { frameId: 'frame-mid-slot', frameRevision: 1 }, 2);
     expect(mixed?.audioData).toEqual(new Float32Array([3, 4, 5]));
     expect(mixed?.duration).toBeCloseTo(0.003, 6);
+    expect(mixed?.playbackOffsetMs).toBe(2);
   });
 });

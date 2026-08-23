@@ -525,10 +525,11 @@ export class TransmissionPipeline {
         },
         deferActiveUntilAudio: true,
         validateStart: () => {
+          const nowMs = this.deps.clockSource.now();
           if (!this.deps.digitalFrameCoordinator.hasCompleteFrameBudget(
             committed.frameId,
-            this.deps.clockSource.now(),
-            audioForTransmission.duration * 1_000,
+            nowMs,
+            this.getRemainingAudioDurationMs(committed.frameId, audioForTransmission, nowMs),
           )) {
             throw new CompleteFrameBudgetExceededError();
           }
@@ -838,7 +839,9 @@ export class TransmissionPipeline {
       currentTimeMs,
     );
     const additionalOffsetMs = Math.max(0, currentOffsetMs - mixedAtOffsetMs);
-    if (additionalOffsetMs === 0) return mixedAudio;
+    if (additionalOffsetMs === 0) {
+      return { ...mixedAudio, playbackOffsetMs: currentOffsetMs };
+    }
 
     const skipSamples = Math.floor((additionalOffsetMs / 1_000) * mixedAudio.sampleRate);
     if (skipSamples >= mixedAudio.audioData.length) return null;
@@ -847,7 +850,24 @@ export class TransmissionPipeline {
       ...mixedAudio,
       audioData,
       duration: audioData.length / mixedAudio.sampleRate,
+      playbackOffsetMs: currentOffsetMs,
     };
+  }
+
+  private getRemainingAudioDurationMs(
+    frameId: string,
+    mixedAudio: MixedAudio,
+    currentTimeMs: number,
+  ): number {
+    const currentOffsetMs = this.deps.digitalFrameCoordinator.getPlaybackOffsetMs(
+      frameId,
+      currentTimeMs,
+    );
+    const additionalOffsetMs = Math.max(
+      0,
+      currentOffsetMs - (mixedAudio.playbackOffsetMs ?? 0),
+    );
+    return Math.max(0, (mixedAudio.duration * 1_000) - additionalOffsetMs);
   }
 
   private failCommittedFrame(frameId: string, mixedAudio: MixedAudio, reason: string): void {
