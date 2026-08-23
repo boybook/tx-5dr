@@ -876,7 +876,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     );
   });
 
-  it('prefers physically confirmed message history over stale runtime reports', async () => {
+  it('uses physical TX history without letting conflicting RX decodes override the accepted effect', async () => {
     const base = Date.parse('2026-07-23T07:43:00.000Z');
     const provider = {
       addQSO: vi.fn(async (record: QSORecord) => record),
@@ -888,13 +888,22 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       logBook: { id: 'log-1', name: 'Test Log', provider },
       callsign: 'BG5FRH',
       activeSlotPacks: [
-        buildSlotPack(`ft8-${base}`, base, [{
-          message: 'BG5FRH RW9HSB -15',
-          snr: -2,
-          dt: 0.1,
-          freq: 2557,
-          confidence: 1,
-        }]),
+        buildSlotPack(`ft8-${base}`, base, [
+          {
+            message: 'BG5FRH RW9HSB -15',
+            snr: -2,
+            dt: 0.1,
+            freq: 2557,
+            confidence: 1,
+          },
+          {
+            message: 'BG5FRH RW9HSB +03',
+            snr: -20,
+            dt: 0.4,
+            freq: 2557,
+            confidence: 0.2,
+          },
+        ]),
         buildSlotPack(`ft8-${base + MODES.FT8.slotMs}`, base + MODES.FT8.slotMs, [{
           message: 'RW9HSB BG5FRH R-02',
           snr: -999,
@@ -918,7 +927,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         startTime: base,
         endTime: base + MODES.FT8.slotMs * 2,
         reportSent: '-4',
-        reportReceived: '0',
+        reportReceived: '-15',
         messageHistory: [],
         myCallsign: 'BG5FRH',
       },
@@ -930,6 +939,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       reportReceived: '-15',
       comment: 'FT8  Sent: -02  Rcvd: -15',
     });
+    expect(provider.addQSO.mock.calls[0]?.[0]?.messageHistory).toContain('BG5FRH RW9HSB +03');
   });
 
   it('preserves a legitimate bare zero report when no air history is available', async () => {
@@ -970,7 +980,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     });
   });
 
-  it('normalizes a physically confirmed zero report to FT8 +00 notation', async () => {
+  it('normalizes a physically confirmed sent zero report to FT8 +00 notation', async () => {
     const base = Date.parse('2026-07-23T08:30:00.000Z');
     const provider = {
       addQSO: vi.fn(async (record: QSORecord) => record),
@@ -1018,8 +1028,8 @@ describe('RadioOperatorManager automatic QSO logging', () => {
 
     expect(provider.addQSO.mock.calls[0]?.[0]).toMatchObject({
       reportSent: '+00',
-      reportReceived: '+00',
-      comment: 'FT8  Sent: +00  Rcvd: +00',
+      reportReceived: '0',
+      comment: 'FT8  Sent: +00  Rcvd: 0',
     });
   });
 

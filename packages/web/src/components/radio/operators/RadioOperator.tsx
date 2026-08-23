@@ -16,6 +16,7 @@ import {
   getRadioOperatorProgressAnimation,
   shouldRadioOperatorPropsBeEqual,
 } from './radioOperatorProgress';
+import { applyOperatorContextDraft } from './operatorContextDraft';
 import { resolveRadioOperatorCyclePresentation } from './radioOperatorPresentation';
 import {
   OPERATOR_FORCE_STOP_REQUESTED_EVENT,
@@ -491,8 +492,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
   // 处理上下文更新（用户每次击键）
   const handleContextUpdate = (field: string, value: string | number | null) => {
-    const newContext = { ...localContext, [field]: value };
-    setLocalContext(newContext);
+    const newContext = applyOperatorContextDraft(
+      localContextRef,
+      setLocalContext,
+      { [field]: value },
+    );
 
     // 重置防抖
     if (debounceTimerRef.current) {
