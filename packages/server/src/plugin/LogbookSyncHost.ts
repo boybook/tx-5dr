@@ -11,6 +11,7 @@ import type {
 import { createSyncFailure } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
+import { snapshotPluginData } from './plugin-data-boundary.js';
 
 const logger = createLogger('LogbookSyncHost');
 
@@ -237,10 +238,16 @@ export class LogbookSyncHost {
     options?: Pick<SyncUploadOptions, 'since' | 'until' | 'includeAlreadyUploaded'>,
   ): Promise<SyncUploadPreflightResult | null> {
     const entry = this.providers.get(providerId);
-    if (!entry?.provider.getUploadPreflight) {
-      return null;
-    }
-    return this.invoke(entry, 'upload-preflight', () => entry.provider.getUploadPreflight!(callsign, options));
+    if (!entry) return null;
+    const detachedOptions = options
+      ? snapshotPluginData(options, 'structured')
+      : undefined;
+    return this.invoke(entry, 'upload-preflight', () => {
+      const getUploadPreflight = entry.provider.getUploadPreflight;
+      return getUploadPreflight
+        ? getUploadPreflight.call(entry.provider, callsign, detachedOptions)
+        : null;
+    });
   }
 
   /**
@@ -270,7 +277,13 @@ export class LogbookSyncHost {
         ],
       };
     }
-    return this.invoke(entry, 'download', () => entry.provider.download(callsign, options));
+    const detachedOptions = options
+      ? {
+          ...snapshotPluginData({ since: options.since, until: options.until }, 'structured'),
+          ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+        }
+      : undefined;
+    return this.invoke(entry, 'download', () => entry.provider.download(callsign, detachedOptions));
   }
 
   /**
@@ -291,7 +304,7 @@ export class LogbookSyncHost {
 
         const key = LogbookSyncHost.uploadKey(id, callsign);
         const queuedRecords = this.pendingAutoRecords.get(key) ?? new Map<string, QSORecord>();
-        queuedRecords.set(qsoRecord.id, qsoRecord);
+        queuedRecords.set(qsoRecord.id, snapshotPluginData(qsoRecord, 'structured'));
         this.pendingAutoRecords.set(key, queuedRecords);
         this.scheduleAutoDrain(key, entry, callsign);
       } catch (err) {

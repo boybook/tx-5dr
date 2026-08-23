@@ -23,10 +23,11 @@ export class PluginFileStoreProvider implements PluginFileStore {
 
   async write(filePath: string, data: Buffer): Promise<void> {
     PersistenceCoordinator.getInstance().assertMutationsAllowed(`plugin-file-store:${filePath}`);
+    const snapshot = Buffer.from(data);
     const resolved = this.resolve(filePath);
     await fs.mkdir(path.dirname(resolved), { recursive: true });
-    await safeWriteFile(resolved, data, { backups: 1 });
-    logger.debug('file written', { path: filePath, size: data.length });
+    await safeWriteFile(resolved, snapshot, { backups: 1 });
+    logger.debug('file written', { path: filePath, size: snapshot.length });
   }
 
   async read(filePath: string): Promise<Buffer | null> {

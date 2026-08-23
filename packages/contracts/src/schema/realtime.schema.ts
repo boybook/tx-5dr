@@ -307,6 +307,13 @@ export const RealtimeSessionResponseSchema = z.object({
 
 export type RealtimeSessionResponse = z.infer<typeof RealtimeSessionResponseSchema>;
 
+/**
+ * Persisted realtime-audio transport preferences.
+ *
+ * `transportPolicy` selects automatic or explicit transport behavior. The
+ * optional public host/UDP port advertise an RTC data-audio endpoint to remote
+ * clients; null/omitted values disable that public candidate.
+ */
 export const RealtimeSettingsSchema = z.object({
   transportPolicy: RealtimeTransportPolicySchema.optional(),
   rtcDataAudioPublicHost: RtcDataAudioPublicHostSchema.optional(),
@@ -333,6 +340,7 @@ export const RealtimeSettingsRuntimeSchema = z.object({
 
 export type RealtimeSettingsRuntime = z.infer<typeof RealtimeSettingsRuntimeSchema>;
 
+/** Realtime settings plus the Host's current resolved runtime projection. */
 export const RealtimeSettingsResponseDataSchema = RealtimeSettingsSchema.extend({
   runtime: RealtimeSettingsRuntimeSchema.optional(),
 });

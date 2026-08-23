@@ -67,7 +67,7 @@ async function createManager(): Promise<{
       name: 'lifecycle-probe',
       version: '1.0.0',
       type: 'utility',
-      permissions: ['operator:transmit-control'],
+      permissions: ['operator:transmit-control', 'host:hamlib'],
       isAutoCallEnabled() { return true; },
       onLoad(ctx) {
         return globalThis.${lifecycleProbeKey}?.onLoad?.(ctx);
@@ -191,6 +191,37 @@ describe('PluginManager instance lifecycle reconciliation', () => {
     expect(onLoad).toHaveBeenCalledTimes(2);
     expect(instance.lifecycle).toBe('active');
     expect(instance.desiredLifecycle).toBe('active');
+    await manager.shutdown();
+  });
+
+  it('allows native-resource and UI cleanup without reopening command capabilities', async () => {
+    const { manager, operator } = await createManager();
+    const instance = getProbeInstance(manager, operator.config.id);
+    let hamlibVersion: string | undefined;
+    let activeSessions: number | undefined;
+    let cleanupOperatorId: string | undefined;
+    let commandError: unknown;
+
+    getLifecycleProbe().onUnload = async (ctx) => {
+      hamlibVersion = ctx.hostDependencies?.hamlib?.Rotator.getHamlibVersion();
+      activeSessions = ctx.ui.listActivePageSessions('cleanup-test').length;
+      cleanupOperatorId = ctx.operator.id;
+      try {
+        await ctx.operatorCommands?.submit({ type: 'start-automation' });
+      } catch (error) {
+        commandError = error;
+      }
+    };
+
+    manager.setPluginEnabled('lifecycle-probe', true);
+    await instance.lifecycleTail;
+    manager.setPluginEnabled('lifecycle-probe', false);
+    await instance.lifecycleTail;
+
+    expect(hamlibVersion).toBeTruthy();
+    expect(activeSessions).toBe(0);
+    expect(cleanupOperatorId).toBe(operator.config.id);
+    expect(commandError).toMatchObject({ code: 'PLUGIN_INVOCATION_EXPIRED' });
     await manager.shutdown();
   });
 });

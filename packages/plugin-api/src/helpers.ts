@@ -26,12 +26,18 @@ export interface KVStore {
   /**
    * Reads a stored value.
    *
-   * When the key is missing, the provided `defaultValue` is returned instead.
+   * Stored values are returned by value, so mutating the result does not update
+   * persistence until {@link set} is called. When the key is missing, the
+   * caller-owned `defaultValue` is returned unchanged.
    */
   get<T = unknown>(key: string, defaultValue?: T): T;
 
   /**
-   * Persists a value under the given key.
+   * Persists a JSON-compatible snapshot under the given key.
+   *
+   * `undefined` follows JSON object semantics and removes the key. Cycles,
+   * BigInt values, functions and Host capabilities are rejected with
+   * `PLUGIN_DATA_NOT_SERIALIZABLE`.
    */
   set(key: string, value: unknown): void;
 
@@ -41,7 +47,7 @@ export interface KVStore {
   delete(key: string): void;
 
   /**
-   * Returns a shallow snapshot of all stored entries in this scope.
+   * Returns an independent snapshot of all stored entries in this scope.
    */
   getAll(): Record<string, unknown>;
 
@@ -96,38 +102,67 @@ export interface PluginTimers {
  * Remote UDP endpoint metadata for datagrams received by plugin-owned sockets.
  */
 export interface PluginUdpRemoteInfo {
+  /** Source IP address reported by the UDP socket. */
   address: string;
+  /** Source UDP port. */
   port: number;
+  /** Address family reported by Node.js, typically `IPv4` or `IPv6`. */
   family: string;
+  /** Datagram size in bytes. */
   size: number;
 }
 
+/** Local endpoint used when binding a plugin-owned UDP socket. */
 export interface PluginUdpBindOptions {
+  /** Local interface/address. Omit to use the Host default. */
   host?: string;
+  /** Local port. Omit or use `0` to let the operating system choose one. */
   port?: number;
 }
 
+/** Options applied when the Host creates a plugin-owned UDP socket. */
 export interface PluginUdpSocketOptions {
+  /** IP family. Defaults to `udp4`. */
   type?: 'udp4' | 'udp6';
+  /** Whether multiple sockets may reuse the local address. */
   reuseAddr?: boolean;
+  /** Whether the socket may send IPv4 broadcast datagrams. */
   broadcast?: boolean;
+  /** Multicast time-to-live applied to outbound multicast packets. */
   multicastTtl?: number;
 }
 
+/**
+ * Host-owned UDP socket capability.
+ *
+ * The handle may be stored by the plugin, but its methods are invocation
+ * guarded. Close it during unload when possible; Host cleanup also closes all
+ * sockets owned by the plugin instance.
+ */
 export interface PluginUdpSocket {
+  /** Binds the socket and resolves when it is ready to receive datagrams. */
   bind(options?: PluginUdpBindOptions): Promise<void>;
+  /** Sends one datagram to the exact remote host and port. */
   send(data: Uint8Array | string, port: number, host: string): Promise<void>;
+  /** Registers the callback used for received datagrams. */
   onMessage(handler: (data: Uint8Array, remote: PluginUdpRemoteInfo) => void | Promise<void>): void;
+  /** Registers the callback used for socket-level errors. */
   onError(handler: (error: Error) => void): void;
+  /** Closes the socket. Calling it again is safe. */
   close(): Promise<void>;
 }
 
+/** Factory and bulk-cleanup surface for UDP sockets owned by one plugin instance. */
 export interface PluginUdpControl {
+  /** Creates an unbound socket with the requested options. */
   createSocket(options?: PluginUdpSocketOptions): PluginUdpSocket;
+  /** Closes every UDP socket created through this control. */
   closeAll(): Promise<void>;
 }
 
+/** Network capability exposed when the plugin declares `network`. */
 export interface PluginNetworkControl {
+  /** UDP socket factory. HTTP requests use the sibling `ctx.fetch` capability. */
   readonly udp: PluginUdpControl;
 }
 
@@ -140,7 +175,10 @@ export interface PluginNetworkControl {
 export interface PluginEventBusMessage {
   /** The topic this message was published to. */
   topic: string;
-  /** Arbitrary payload. The host does not inspect or validate this value. */
+  /**
+   * Structured-clone-compatible payload. The host does not interpret its
+   * business schema, but delivers an independent value to each subscriber.
+   */
   payload: unknown;
   /** Epoch milliseconds when the host dispatched the message. */
   timestamp: number;
@@ -159,9 +197,9 @@ export interface PluginEventBusMessage {
  * Permission-gated pub/sub bus for in-process plugin-to-plugin communication.
  *
  * Topics are plain strings shared across all plugin instances within the same
- * host process. Messages are delivered synchronously to each subscriber in
- * subscription order; async handlers are awaited but their errors are captured
- * and logged by the host rather than propagated to the publisher.
+ * host process. Handlers are started synchronously in subscription order.
+ * Async handlers run independently; their errors are captured and logged by
+ * the host rather than propagated to the publisher.
  *
  * **Lifecycle**: the host automatically removes all subscriptions owned by a
  * plugin instance when it unloads. Individual subscriptions can be cancelled
@@ -176,10 +214,12 @@ export interface PluginEventBus {
    * Publishes a message to all current subscribers of the given topic.
    *
    * This is a fire-and-forget operation. The host guarantees that subscriber
-   * exceptions never propagate back to the caller.
+   * exceptions never propagate back to the caller. The call itself throws
+   * synchronously when the payload is not structured-clone compatible or
+   * contains a Host capability.
    *
    * @param topic - Exact topic string to publish to.
-   * @param payload - Optional arbitrary data. Keep payloads reasonably small.
+   * @param payload - Optional structured-clone-compatible data. Keep payloads reasonably small.
    */
   publish(topic: string, payload?: unknown): void;
 
@@ -201,10 +241,7 @@ export interface PluginEventBus {
 }
 
 /**
- * Control surface for the active operator instance.
- *
- * This interface lets plugins inspect operator state and request host-managed
- * actions such as starting automation, calling a target or notifying the UI.
+ * Read-only summary of another operator in the same Host.
  */
 export interface OtherOperatorSnapshot {
   /** Unique operator identifier used by the host. */
@@ -225,6 +262,11 @@ export interface OtherOperatorSnapshot {
   readonly automation?: StrategyRuntimeSnapshot | null;
 }
 
+/**
+ * Read-only state and query surface for the current operator-scoped plugin
+ * instance. Mutations are submitted through `ctx.operatorCommands` when the
+ * plugin declares `operator:transmit-control`.
+ */
 export interface OperatorSnapshot {
   /** Unique operator identifier used by the host. */
   readonly id: string;
@@ -294,6 +336,7 @@ export type PluginOperatorCommand =
       lastOnly?: boolean;
     };
 
+/** Settlement returned after the Host accepts an operator command. */
 export interface PluginOperatorCommandResult {
   /** Host command epoch allocated before any asynchronous work begins. */
   epoch: number;
@@ -309,11 +352,16 @@ export interface PluginOperatorCommandResult {
  * is invocation-guarded and enters the host's per-operator intent lane.
  */
 export interface OperatorCommandPort {
+  /**
+   * Submits one high-level operator command through the Host intent lane.
+   * Rejects when the invocation expired, the plugin safety gate is disabled,
+   * or the current physical lifecycle cannot accept the command.
+   */
   submit(command: PluginOperatorCommand): Promise<PluginOperatorCommandResult>;
 }
 
 /**
- * Read/write access to radio state that is safe for plugins.
+ * Read-only operating-mode projection that is safe for plugins.
  */
 export interface RadioOperatingMode {
   /**
@@ -342,6 +390,7 @@ export interface RadioOperatingMode {
   readonly descriptor: ModeDescriptor;
 }
 
+/** Read-only frequency, band, mode and connection state for the active radio. */
 export interface RadioView {
   /** Current tuned radio frequency in Hz. */
   readonly frequency: number;
@@ -386,6 +435,7 @@ export type PluginRadioCommand =
  * any other physical device object.
  */
 export interface RadioCommandPort {
+  /** Submits a frequency/band command after Host physical-idle validation. */
   submit(command: PluginRadioCommand): Promise<void>;
 }
 
@@ -394,10 +444,13 @@ export type PluginRadioTunerCommand =
   | { type: 'set-enabled'; enabled: boolean }
   | { type: 'start-manual-tune' };
 
+/** Capability-scoped tuner command port for `radio:tuner-control` plugins. */
 export interface RadioTunerCommandPort {
+  /** Submits one explicit tuner operation after Host safety validation. */
   submit(command: PluginRadioTunerCommand): Promise<void>;
 }
 
+/** Optional target profile and startup behavior for a radio power command. */
 export interface RadioPowerSetOptions {
   /** Profile to target. Defaults to the active profile. */
   profileId?: string;
@@ -416,14 +469,19 @@ export interface RadioPowerView {
   getState(profileId?: string): RadioPowerStateEvent | null;
 }
 
+/** Declarative power-state transition accepted by `ctx.radioPowerCommands`. */
 export type PluginRadioPowerCommand = {
+  /** Command discriminator. */
   type: 'set-power';
+  /** Requested physical/controller power target. */
   state: RadioPowerTarget;
+  /** Optional profile selection and automatic engine startup behavior. */
   options?: RadioPowerSetOptions;
 };
 
 /** Capability-scoped physical power command port for `radio:power` plugins. */
 export interface RadioPowerCommandPort {
+  /** Requests a power transition and resolves with the Host's final state. */
   submit(command: PluginRadioPowerCommand): Promise<RadioPowerResponse>;
 }
 
@@ -481,6 +539,7 @@ export interface CallsignLogbookReadAccess {
   getStatistics(): Promise<import('@tx5dr/contracts').LogBookStatistics | null>;
 }
 
+/** Durable mutation operations scoped to one normalized station callsign. */
 export interface CallsignLogbookCommandPort {
   /** Normalized callsign that scopes this accessor. */
   readonly callsign: string;
@@ -495,16 +554,11 @@ export interface CallsignLogbookCommandPort {
   notifyUpdated(operatorId?: string): Promise<void>;
 }
 
+/** Combined read/write callsign-bound logbook capability. */
 export interface CallsignLogbookAccess
   extends CallsignLogbookReadAccess, CallsignLogbookCommandPort {}
 
-/**
- * Full logbook access for plugins.
- *
- * Extends the original read-only helpers with query, write and notification
- * capabilities so that sync providers can self-orchestrate their entire flow
- * without host-side special handling.
- */
+/** Read-only worked-status and QSO query capability for `logbook:read`. */
 export interface LogbookReadAccess {
   // === Read-only helpers (original) ===
 
@@ -526,6 +580,7 @@ export interface LogbookReadAccess {
   forCallsign(callsign: string): CallsignLogbookReadAccess;
 }
 
+/** Durable mutation operations exposed by the `logbook:write` permission. */
 export interface LogbookCommandPort {
   /** Adds a QSO and resolves with the final record after durable commit. */
   addQSO(record: import('@tx5dr/contracts').QSORecord): Promise<import('@tx5dr/contracts').QSORecord>;
@@ -546,6 +601,7 @@ export interface LogbookCommandPort {
 
 /** @deprecated Prefer capability-specific LogbookReadAccess and LogbookCommandPort. */
 export interface LogbookAccess extends LogbookReadAccess, LogbookCommandPort {
+  /** Returns a combined read/write accessor for the requested station callsign. */
   forCallsign(callsign: string): CallsignLogbookAccess;
 }
 
@@ -615,7 +671,9 @@ export interface BandAccess {
    * decode environment.
    *
    * Returns `null` when the host cannot evaluate the slot or when no suitable
-   * idle window is found.
+   * idle window is found. A successful result also reserves that offset for the
+   * current operator and analyzed slot so later operators avoid selecting the
+   * same window.
    */
   findIdleTransmitFrequency(options?: IdleTransmitFrequencyOptions): number | null;
 
@@ -662,7 +720,8 @@ export interface PanelMeta {
  */
 export interface UIBridge {
   /**
-   * Publishes new panel data for the given declarative panel id.
+   * Publishes a JSON-compatible snapshot for the given declarative panel id.
+   * Mutating the caller's object after this call does not alter panel state.
    */
   send(panelId: string, data: unknown): void;
 
@@ -696,7 +755,7 @@ export interface UIBridge {
   registerPageHandler(handler: PluginUIHandler): void;
 
   /**
-   * Pushes a custom message to the specific page session.
+   * Pushes a JSON-compatible data snapshot to the specific page session.
    *
    * Prefer this API whenever the plugin already knows the target session id
    * (for example from {@link PluginUIRequestContext.pageSessionId} or
@@ -713,7 +772,7 @@ export interface UIBridge {
   listActivePageSessions(pageId: string): PluginUIPageSessionInfo[];
 
   /**
-   * Pushes a custom message to an iframe UI page by page id.
+   * Pushes a JSON-compatible data snapshot to an iframe UI page by page id.
    *
    * This compatibility helper only succeeds when exactly one active session of
    * the current plugin instance matches the page id. If multiple sessions are
@@ -726,8 +785,9 @@ export interface UIBridge {
  * Handler for custom messages sent from iframe UI pages.
  *
  * Plugins register a handler via `ctx.ui.registerPageHandler()` to receive
- * arbitrary invoke requests from their iframe-based UIs. The host acts as a
- * transparent router — it does not inspect or interpret the action or data.
+ * application-defined invoke requests from their iframe-based UIs. The Host
+ * does not interpret the business schema, but it enforces the page/session
+ * authorization and JSON data boundary in both directions.
  */
 export interface PluginUIHandler {
   /**
@@ -735,10 +795,11 @@ export interface PluginUIHandler {
    *
    * @param pageId - The page that sent the message.
    * @param action - Developer-defined action identifier.
-   * @param data - Arbitrary payload from the iframe.
+   * @param data - JSON-compatible snapshot from the iframe; validate it as
+   *   untrusted input before use.
    * @param requestContext - Host-authenticated page context, including any
    * bound resource for this page session.
-   * @returns The response value sent back to the iframe.
+   * @returns A JSON-compatible response snapshot sent back to the iframe.
    */
   onMessage(
     pageId: string,
@@ -748,44 +809,71 @@ export interface PluginUIHandler {
   ): Promise<unknown>;
 }
 
+/** Host-authenticated user identity attached to an iframe invoke request. */
 export interface PluginUIRequestUser {
+  /** Stable token/session identifier; not the raw credential. */
   readonly tokenId: string;
+  /** Effective role at the time the Host authorizes the request. */
   readonly role: 'viewer' | 'operator' | 'admin';
+  /** Operator IDs the current user is allowed to access. */
   readonly operatorIds: string[];
+  /** Fine-grained grants associated with the authenticated user, when present. */
   readonly permissionGrants?: PermissionGrant[];
 }
 
+/** Resource identity resolved and authorized from the page descriptor binding. */
 export interface PluginUIBoundResource {
+  /** Kind declared by `resourceBinding`. */
   readonly kind: 'callsign' | 'operator';
+  /** Normalized callsign or authorized operator ID. */
   readonly value: string;
 }
 
+/** Plugin instance selected by the Host for this page request. */
 export type PluginUIInstanceTarget =
   | { readonly kind: 'global' }
   | { readonly kind: 'operator'; readonly operatorId: string };
 
+/** Read-only identity of one active plugin iframe page session. */
 export interface PluginUIPageSessionInfo {
+  /** Unique ID used for exact session pushes. */
   readonly sessionId: string;
+  /** `PluginDefinition.ui.pages` entry rendered by this session. */
   readonly pageId: string;
+  /** Host-authorized resource binding, when the page declares one. */
   readonly resource?: PluginUIBoundResource;
 }
 
+/** Page-session identity plus an exact push channel back to that iframe. */
 export interface PluginUIPageContext extends PluginUIPageSessionInfo {
+  /** Sends a JSON-compatible snapshot to this exact page session. */
   push(action: string, data?: unknown): void;
 }
 
+/**
+ * Host-authenticated context passed to an iframe page handler.
+ *
+ * Treat `data` from the iframe as untrusted input. Use this context, rather
+ * than caller-supplied IDs, for authorization and storage scoping.
+ */
 export interface PluginUIRequestContext {
+  /** Same exact page session identifier exposed as `page.sessionId`. */
   readonly pageSessionId: string;
+  /** User identity authorized by the Host for this request. */
   readonly user: PluginUIRequestUser;
+  /** Bound callsign/operator, when required by the page descriptor. */
   readonly resource?: PluginUIBoundResource;
+  /** Global or operator plugin instance receiving the request. */
   readonly instanceTarget: PluginUIInstanceTarget;
+  /** Exact page session/push capability, valid only during the current handler invocation. */
   readonly page: PluginUIPageContext;
   /**
    * Page-scoped file storage shared with iframe `tx5dr.file*()` calls.
    *
    * Use this in `registerPageHandler()` handlers to read files uploaded by the
    * current iframe page session without reconstructing host-internal scope
-   * paths.
+   * paths. Both `page` and `files` are exact-invocation capabilities: do not
+   * retain and invoke them after the current `onMessage()` promise settles.
    */
   readonly files: PluginFileStore;
 }
@@ -797,10 +885,10 @@ export interface PluginUIRequestContext {
  * traversal outside the sandbox is rejected by the host.
  */
 export interface PluginFileStore {
-  /** Writes (or overwrites) a file at the given path. */
+  /** Writes a copy of the Buffer, creating or replacing the file. */
   write(path: string, data: Buffer): Promise<void>;
 
-  /** Reads a file. Returns `null` when the path does not exist. */
+  /** Reads a file into a new Buffer. Returns `null` when the path does not exist. */
   read(path: string): Promise<Buffer | null>;
 
   /** Deletes a file. Returns `true` if the file existed and was removed. */

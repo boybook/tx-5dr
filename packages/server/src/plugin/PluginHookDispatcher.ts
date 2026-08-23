@@ -12,6 +12,7 @@ import type { PluginInstance } from './types.js';
 import { PluginErrorTracker } from './PluginErrorTracker.js';
 import { createLogger } from '../utils/logger.js';
 import { PluginInvocationExpiredError, PluginInvocationGuard } from './PluginInvocationGuard.js';
+import { snapshotPluginData } from './plugin-data-boundary.js';
 
 const logger = createLogger('PluginHookDispatcher');
 
@@ -75,10 +76,15 @@ export class PluginHookDispatcher {
 
       try {
         const ctx = getCtx(instance);
-        const proposal = await this.invocationGuard.invoke(
+        const proposal = await this.invocationGuard.invokeData(
           instance,
           'onAutoCallCandidate',
-          () => hook(slotInfo, messages, ctx as never),
+          'structured',
+          () => hook(
+            snapshotPluginData(slotInfo, 'structured'),
+            snapshotPluginData(messages, 'structured'),
+            ctx as never,
+          ),
           { timeoutMs: DECISION_HOOK_TIMEOUT_MS },
         );
 
@@ -131,10 +137,15 @@ export class PluginHookDispatcher {
 
       try {
         const ctx = getCtx(instance);
-        const output = await this.invocationGuard.invoke(
+        const output = await this.invocationGuard.invokeData(
           instance,
           'onConfigureAutoCallExecution',
-          () => hook(request, plan, ctx as never),
+          'structured',
+          () => hook(
+            snapshotPluginData(request, 'structured'),
+            snapshotPluginData(plan, 'structured'),
+            ctx as never,
+          ),
           { timeoutMs: DECISION_HOOK_TIMEOUT_MS },
         );
 
@@ -170,10 +181,11 @@ export class PluginHookDispatcher {
       if (!hook || this.errorTracker.isDisabled(instance)) continue;
       try {
         const ctx = getCtx(instance);
-        const output = await this.invocationGuard.invoke(
+        const output = await this.invocationGuard.invokeData(
           instance,
           'onFilterCandidates',
-          () => hook(result, ctx as never),
+          'structured',
+          () => hook(snapshotPluginData(result, 'structured'), ctx as never),
           { timeoutMs: DECISION_HOOK_TIMEOUT_MS },
         );
         if (!Array.isArray(output)) {
@@ -203,10 +215,11 @@ export class PluginHookDispatcher {
       if (!hook || this.errorTracker.isDisabled(instance)) continue;
       try {
         const ctx = getCtx(instance);
-        const output = await this.invocationGuard.invoke(
+        const output = await this.invocationGuard.invokeData(
           instance,
           'onScoreCandidates',
-          () => hook(result, ctx as never),
+          'structured',
+          () => hook(snapshotPluginData(result, 'structured'), ctx as never),
           { timeoutMs: DECISION_HOOK_TIMEOUT_MS },
         );
         if (Array.isArray(output)) {
@@ -236,9 +249,10 @@ export class PluginHookDispatcher {
 
     try {
       const ctx = getCtx(instance);
-      const result = await this.invocationGuard.invoke(
+      const result = await this.invocationGuard.invokeData(
         instance,
         String(hookName),
+        'structured',
         () => executor(hook, ctx),
         { timeoutMs: DECISION_HOOK_TIMEOUT_MS },
       );

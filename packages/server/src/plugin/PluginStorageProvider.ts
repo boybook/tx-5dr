@@ -1,6 +1,7 @@
 import { createLogger } from '../utils/logger.js';
 import type { FlushableKVStore } from './types.js';
 import { JsonFileStore, PersistenceCoordinator } from '../utils/persistence/index.js';
+import { markDetachedPluginData, snapshotPluginData } from './plugin-data-boundary.js';
 
 const logger = createLogger('PluginStorage');
 
@@ -42,12 +43,19 @@ export class PluginStorageProvider implements FlushableKVStore {
 
   get<T = unknown>(key: string, defaultValue?: T): T {
     const val = this.data[key];
-    return (val !== undefined ? val : defaultValue) as T;
+    return (val !== undefined
+      ? markDetachedPluginData(snapshotPluginData(val, 'json'))
+      : defaultValue) as T;
   }
 
   set(key: string, value: unknown): void {
     PersistenceCoordinator.getInstance().assertMutationsAllowed(`plugin-storage:${this.filePath}`);
-    this.data[key] = value;
+    const clonedEntry = snapshotPluginData({ [key]: value }, 'json');
+    if (!Object.prototype.hasOwnProperty.call(clonedEntry, key)) {
+      delete this.data[key];
+    } else {
+      this.data[key] = clonedEntry[key];
+    }
     this.scheduleSave();
   }
 
@@ -58,7 +66,7 @@ export class PluginStorageProvider implements FlushableKVStore {
   }
 
   getAll(): Record<string, unknown> {
-    return { ...this.data };
+    return markDetachedPluginData(snapshotPluginData(this.data, 'json'));
   }
 
   async flush(): Promise<void> {

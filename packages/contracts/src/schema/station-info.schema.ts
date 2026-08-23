@@ -16,6 +16,11 @@ export const StationQthSchema = z.object({
   longitude: z.number().min(-180).max(180).optional(),
 });
 
+/**
+ * Public station profile shown to clients and exposed through plugin settings.
+ * It contains optional display identity, callsign, Markdown description and QTH
+ * coordinates/grid; it never contains authentication or radio credentials.
+ */
 export const StationInfoSchema = z.object({
   /** Station display name, e.g. "BG7XXX Remote Station" */
   name: z.string().max(100).optional(),

@@ -142,12 +142,14 @@ const NtpServerArraySchema = z.array(NtpServerHostSchema).min(1).superRefine((se
   }
 });
 
+/** Active NTP server list together with the Host-provided default list. */
 export const NtpServerListSettingsSchema = z.object({
   servers: NtpServerArraySchema,
   defaultServers: NtpServerArraySchema,
 });
 export type NtpServerListSettings = z.infer<typeof NtpServerListSettingsSchema>;
 
+/** Complete replacement list accepted by `ctx.settings.ntp.update()`. */
 export const UpdateNtpServerListRequestSchema = z.object({
   servers: NtpServerArraySchema,
 });

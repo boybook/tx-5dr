@@ -285,4 +285,26 @@ describe('PluginContextFactory operator access', () => {
     enabled = true;
     await expect(ctx.operatorCommands!.submit({ type: 'start-automation' })).resolves.toBeDefined();
   });
+
+  it('detaches worked-query options before asynchronous host use', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let observedAnyBand: boolean | undefined;
+    const deps = createDeps({
+      hasWorkedCallsign: async (_operatorId, _callsign, options) => {
+        await gate;
+        observedAnyBand = options?.anyBand;
+        return false;
+      },
+    });
+    const { ctx } = await createOperatorContext(createPlugin(), deps);
+    const options = { anyBand: false };
+
+    const query = ctx.operator.hasWorkedCallsign('W1AW', options);
+    options.anyBand = true;
+    release();
+
+    await expect(query).resolves.toBe(false);
+    expect(observedAnyBand).toBe(false);
+  });
 });

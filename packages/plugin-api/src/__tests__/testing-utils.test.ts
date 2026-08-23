@@ -4,6 +4,7 @@ import {
   createMockLogger,
   createMockTimers,
   createMockUIBridge,
+  createMockFileStore,
   createMockContext,
   createMockSlotInfo,
   createMockParsedMessage,
@@ -30,6 +31,35 @@ describe('plugin-api testing utilities', () => {
 
       store.delete('key1');
       expect(store.getAll()).toEqual({ key2: 42 });
+    });
+
+    it('matches production JSON copy semantics', () => {
+      const initial = { config: { nested: { count: 1 } } };
+      const store = createMockKVStore(initial);
+      initial.config.nested.count = 2;
+      expect(store.get('config')).toEqual({ nested: { count: 1 } });
+
+      const input = { nested: { count: 3 }, omitted: undefined, invalidNumber: Number.NaN };
+      store.set('config', input);
+      store.set('removed', { stale: true });
+      store.set('removed', undefined);
+      input.nested.count = 4;
+      expect(store.get('config')).toEqual({ nested: { count: 3 }, invalidNumber: null });
+
+      const value = store.get<{ nested: { count: number } }>('config');
+      value.nested.count = 5;
+      expect(store.get('config')).toEqual({ nested: { count: 3 }, invalidNumber: null });
+
+      const all = store.getAll() as { config: { nested: { count: number } } };
+      all.config.nested.count = 6;
+      expect(store.getAll()).toEqual({ config: { nested: { count: 3 }, invalidNumber: null } });
+    });
+
+    it('returns a missing key default without cloning it', () => {
+      const store = createMockKVStore();
+      const defaultValue = { nested: { count: 1 } };
+
+      expect(store.get('missing', defaultValue)).toBe(defaultValue);
     });
   });
 
@@ -74,6 +104,56 @@ describe('plugin-api testing utilities', () => {
 
       expect(ui._sentData.get('my-panel')).toEqual([{ count: 1 }, { count: 2 }]);
     });
+
+    it('captures panel data by value', () => {
+      const ui = createMockUIBridge();
+      const data = { nested: { count: 1 } };
+      ui.send('my-panel', data);
+      data.nested.count = 2;
+
+      expect(ui._sentData.get('my-panel')).toEqual([{ nested: { count: 1 } }]);
+    });
+
+    it('captures metadata, contributions, and pushes by value', () => {
+      const ui = createMockUIBridge();
+      const data = { nested: { count: 1 } };
+      const meta = { titleValues: { count: '1' } };
+      const params = { count: '1' };
+      ui.setPanelMeta('panel', meta);
+      ui.setPanelContributions('group', [{
+        id: 'panel', title: 'Panel', component: 'key-value', params,
+      }]);
+      ui.pushToSession('session', 'updated', data);
+      ui.pushToPage('settings', 'updated', data);
+      data.nested.count = 2;
+      meta.titleValues.count = '2';
+      params.count = '2';
+
+      expect(ui._events).toEqual([
+        { type: 'panel-meta', id: 'panel', data: { titleValues: { count: '1' } } },
+        {
+          type: 'panel-contributions',
+          id: 'group',
+          data: [{ id: 'panel', title: 'Panel', component: 'key-value', params: { count: '1' } }],
+        },
+        { type: 'session-push', id: 'session:updated', data: { nested: { count: 1 } } },
+        { type: 'page-push', id: 'settings:updated', data: { nested: { count: 1 } } },
+      ]);
+    });
+  });
+
+  describe('createMockFileStore', () => {
+    it('copies buffers at write and read boundaries', async () => {
+      const files = createMockFileStore();
+      const input = Buffer.from('original');
+      await files.write('value.bin', input);
+      input.fill(0);
+
+      const first = await files.read('value.bin');
+      expect(first?.toString()).toBe('original');
+      first?.fill(1);
+      expect((await files.read('value.bin'))?.toString()).toBe('original');
+    });
   });
 
   describe('createMockContext', () => {
@@ -116,6 +196,21 @@ describe('plugin-api testing utilities', () => {
       expect(ctx.operator.grid).toBe('PM95');
       expect(ctx.config).toEqual({ watchNewDxcc: true });
       expect(ctx.radio.band).toBe('40m');
+    });
+
+    it('provides config snapshots and applies explicit updates', async () => {
+      const initial = { nested: { enabled: true } };
+      const ctx = createMockContext({ config: initial });
+      initial.nested.enabled = false;
+      const snapshot = ctx.config as typeof initial;
+      snapshot.nested.enabled = false;
+
+      expect(ctx.config).toEqual({ nested: { enabled: true } });
+      await ctx.updateConfig({ nested: { enabled: false } });
+      expect(ctx.config).toEqual({ nested: { enabled: false } });
+      await ctx.updateConfig({ updatedAt: new Date('2026-08-23T00:00:00.000Z') });
+      expect(ctx.config.updatedAt).toBe('2026-08-23T00:00:00.000Z');
+      await expect(ctx.updateConfig({ invalid: 1n })).rejects.toThrow();
     });
 
     it('provides typed access to sub-mocks', () => {
@@ -188,6 +283,43 @@ describe('plugin-api testing utilities', () => {
         instanceScope: 'global',
       });
     });
+
+    it('delivers independent payload values', async () => {
+      const eventBus = createMockEventBus();
+      const received: number[] = [];
+      eventBus.subscribe('plugin.topic', (message) => {
+        const payload = message.payload as { nested: { count: number } };
+        payload.nested.count = 2;
+      });
+      eventBus.subscribe('plugin.topic', (message) => {
+        received.push((message.payload as { nested: { count: number } }).nested.count);
+      });
+      const payload = { nested: { count: 1 } };
+
+      eventBus.publish('plugin.topic', payload);
+      payload.nested.count = 3;
+      await Promise.resolve();
+
+      expect(received).toEqual([1]);
+      expect((eventBus._published[0]?.payload as typeof payload).nested.count).toBe(1);
+    });
+
+    it('isolates subscriber failures from publishers and later subscribers', async () => {
+      const eventBus = createMockEventBus();
+      const later = vi.fn();
+      eventBus.subscribe('plugin.topic', () => {
+        throw new Error('sync failure');
+      });
+      eventBus.subscribe('plugin.topic', async () => {
+        throw new Error('async failure');
+      });
+      eventBus.subscribe('plugin.topic', later);
+
+      expect(() => eventBus.publish('plugin.topic', 'value')).not.toThrow();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(later).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('createMockHostSettingsControl', () => {
@@ -198,6 +330,14 @@ describe('plugin-api testing utilities', () => {
       await expect(settings.ntp.update({ servers: ['time.cloudflare.com'] })).resolves.toMatchObject({
         servers: ['time.cloudflare.com'],
       });
+    });
+
+    it('returns settings by value', async () => {
+      const settings = createMockHostSettingsControl();
+      const first = await settings.station.get();
+      first.qth!.grid = 'AA00';
+
+      expect((await settings.station.get()).qth!.grid).toBe('FN31');
     });
 
     it('accepts namespace overrides', async () => {

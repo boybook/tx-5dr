@@ -91,6 +91,13 @@ export const QslSimpleStatusSchema = z.enum(['Y', 'N']).optional();
  * - DXCC enrichment and review metadata;
  * - LoTW / QRZ confirmation state;
  * - station-location metadata used when exporting ADIF-like records.
+ *
+ * `frequency` is the RF frequency in hertz; `startTime`/`endTime` and QSL dates
+ * are Unix epoch milliseconds. `mode` is the ADIF main mode and `submode` is the
+ * optional ADIF submode. `messageHistory` contains the raw digital-mode exchange.
+ * Sync providers update the service-specific LoTW/QRZ fields using ADIF status
+ * codes (`Y`, `N`, `R`, `Q`, `I`, and received-only `V`) rather than a generic
+ * `qslStatus` field.
  */
 export const QSORecordSchema = z.object({
   id: z.string(),
